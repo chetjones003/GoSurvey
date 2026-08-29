@@ -1,0 +1,229 @@
+# REQ-154 (GitHub #126) - UCS and PLAN.
+#
+# What this transcript is FOR: proving that a UCS changes how input is READ without changing the
+# drawing. Counting entities cannot show that, and the command log only echoes what was typed, so
+# almost every assertion here is `EXPECT LINEXYZ` - the world coordinates geometry actually landed
+# at. A UCS bug that misplaces geometry passes every other kind of check in this suite.
+
+NEW
+
+# --- The default is the WCS -----------------------------------------------------------------------
+CMD ID
+PICK 5 7
+EXPECT LOG "UCS (World)"
+
+# --- Origin-only UCS: orientation is preserved, coordinates are offset ------------------------------
+# UCS, one point, then Enter twice to accept "origin only".
+CMD UCS
+EXPECT LOG "Specify origin of UCS"
+CMD 100,200
+EXPECT LOG "Specify point on positive portion of X axis"
+CMD
+EXPECT LOG "UCS = origin (100.0000, 200.0000, 0.0000)"
+
+# 0,0 in this UCS is world (100,200). 10,0 is world (110,200) - the axes did not turn.
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+EXPECT LINES 1
+EXPECT LINEXYZ 0 100 200 0 110 200 0
+
+# The readout follows the frame: the same world point now reads as UCS coordinates.
+CMD ID
+PICK 100 200
+EXPECT LOG "UCS (current)"
+
+# --- UCS Previous walks back ------------------------------------------------------------------------
+CMD UCS
+CMD P
+EXPECT LOG "UCS = World"
+
+# ...and the line did NOT move when the frame did. This is the whole rule: a UCS never touches
+# geometry. If any UCS change ever rewrote stored coordinates, this is the assertion that catches it.
+EXPECT LINEXYZ 0 100 200 0 110 200 0
+
+# --- Rotation about Z: the survey case (a frame squared to a bearing) --------------------------------
+CMD UCS
+CMD Z
+EXPECT LOG "Specify rotation angle about Z axis"
+CMD 90
+EXPECT LOG "Coordinate entry is now in this frame"
+
+# The UCS X axis now points along world +Y, so UCS 10,0 is world (0,10).
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+EXPECT LINES 2
+EXPECT LINEXYZ 1 0 0 0 0 10 0
+
+# A relative point is relative along the UCS axes too, not the world's: @0,5 from world (0,10)
+# steps along the UCS +Y, which is world -X.
+CMD LINE
+CMD 0,0
+CMD @0,5
+ESC
+EXPECT LINEXYZ 2 0 0 0 -5 0 0
+
+CMD UCS
+CMD W
+EXPECT LOG "UCS = World"
+
+# --- Three collinear points define no plane and are refused ------------------------------------------
+CMD UCS
+CMD 0,0
+CMD 1,0
+CMD 2,0
+EXPECT LOG "collinear"
+ESC
+
+# --- Three-point UCS on a VERTICAL plane -------------------------------------------------------------
+# Origin at world (0,0,0), +X east, and a third point straight up (typed as X,Y,Z): the UCS XY plane
+# IS the world XZ plane. Drawing at UCS (5,3) must land 5 east and 3 UP.
+#
+# This is the case a constant work-plane elevation gets wrong. The committed Z is no longer a
+# property of the plane - it varies with the second coordinate - so it has to come from the resolved
+# point itself. Before that channel existed, both endpoints below would have committed at Z = 0.
+CMD UCS
+CMD 0,0,0
+CMD 1,0,0
+CMD 0,0,1
+EXPECT LOG "Coordinate entry is now in this frame"
+
+CMD LINE
+CMD 5,3
+CMD 5,8
+ESC
+EXPECT LINES 4
+EXPECT LINEXYZ 3 5 0 3 5 0 8
+
+# Back to the world frame for the rest of the transcript.
+CMD UCS
+CMD W
+CMD ELEV 0
+
+# --- Named UCS: save, list, restore, delete -----------------------------------------------------------
+CMD UCS
+CMD Z
+CMD 45
+CMD UCS
+CMD N
+EXPECT LOG "Enter an option [Save/Restore/Delete/?]"
+CMD S
+CMD Diagonal
+EXPECT LOG "UCS saved as Diagonal."
+
+CMD UCS
+CMD W
+EXPECT LOG "UCS = World"
+
+CMD UCS
+CMD ?
+EXPECT LOG "Diagonal"
+
+CMD UCS
+CMD N
+CMD R
+CMD Diagonal
+EXPECT LOG "Coordinate entry is now in this frame"
+
+# "World" is reserved and cannot be saved over.
+CMD UCS
+CMD N
+CMD S
+CMD World
+EXPECT LOG "reserved"
+
+# Restoring a name that does not exist is refused, not silently ignored.
+CMD UCS
+CMD N
+CMD R
+CMD Nonexistent
+EXPECT LOG "there is no saved UCS named Nonexistent"
+
+# --- Named UCS definitions survive a save/reload ------------------------------------------------------
+SAVEAS %OUT%/ucs-a.gs
+OPEN %OUT%/ucs-a.gs
+CMD UCS
+CMD ?
+EXPECT LOG "Diagonal"
+SAVEAS %OUT%/ucs-b.gs
+EXPECT SAMEFILE %OUT%/ucs-a.gs %OUT%/ucs-b.gs
+
+CMD UCS
+CMD N
+CMD D
+CMD Diagonal
+EXPECT LOG "UCS Diagonal deleted."
+CMD UCS
+CMD ?
+EXPECT LOG "no saved UCS definitions"
+
+CMD UCS
+CMD W
+
+# --- PLAN changes the VIEW and never the UCS ----------------------------------------------------------
+# Autodesk documents that distinction explicitly, and it is the entire reason PLAN is its own command.
+CMD UCS
+CMD Z
+CMD 30
+CMD PLAN
+CMD W
+EXPECT LOG "The current UCS is unchanged"
+
+# The UCS is still the rotated one, so entry is still in it: UCS 10,0 lands off the world X axis.
+CMD ID
+PICK 0 0
+EXPECT LOG "UCS (current)"
+
+CMD PLAN
+CMD C
+EXPECT LOG "the current UCS's XY plane"
+
+CMD UCS
+CMD W
+
+# --- PLAN of a named UCS ------------------------------------------------------------------------------
+CMD UCS
+CMD Z
+CMD 15
+CMD UCS
+CMD N
+CMD S
+CMD Road
+CMD UCS
+CMD W
+CMD PLAN
+CMD U
+EXPECT LOG "Enter name of UCS:"
+CMD Road
+EXPECT LOG "view set to the XY plane of UCS Road"
+EXPECT LOG "The current UCS is unchanged."
+
+# --- ZAxis ---------------------------------------------------------------------------------------------
+CMD UCS
+CMD ZA
+EXPECT LOG "Specify new origin point"
+CMD 0,0
+EXPECT LOG "Specify point on positive portion of Z axis"
+CMD 0,0
+EXPECT LOG "coincides with the origin"
+ESC
+
+# --- Refusals are refusals, not silent guesses ----------------------------------------------------------
+CMD UCS
+CMD Sideways
+EXPECT LOG "unrecognised option"
+ESC
+EXPECT LOG "UCS canceled"
+
+# --- The drawing is exactly what it was. Four lines, at the world coordinates they were drawn at,
+#     after every frame change above. -------------------------------------------------------------------
+EXPECT LINES 4
+EXPECT LINEXYZ 0 100 200 0 110 200 0
+EXPECT LINEXYZ 1 0 0 0 0 10 0
+EXPECT LINEXYZ 2 0 0 0 -5 0 0
+EXPECT LINEXYZ 3 5 0 3 5 0 8
+
+CHECK ALL

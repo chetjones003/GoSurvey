@@ -151,7 +151,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
                                          false);
       else
-        ApplyOrthoConstrainFromAnchor(cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
                            zc);  // preview at the elevation it will commit to
     }
@@ -183,7 +183,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
                                          false);
       else
-        ApplyOrthoConstrainFromAnchor(cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
                            zc);
     }
@@ -214,7 +214,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       } else {
         float lx = curXf;
         float ly = curYf;
-        ApplyOrthoConstrainFromAnchor(ax, ay, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, ax, ay, &lx, &ly, orthoEnabled);
         PushRubberSegViewRel(rubberLines, ax, ay, lx, ly, 0., 0., az, zc);
       }
     }
@@ -290,7 +290,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     if (cmd.mtextPhase == MPtxt::WaitCorner2) {
       float lx = curXf;
       float ly = curYf;
-      ApplyOrthoConstrainFromAnchor(cmd.mtxtX1, cmd.mtxtY1, &lx, &ly, orthoEnabled);
+      ApplyOrthoConstrainFromAnchor(cmd, cmd.mtxtX1, cmd.mtxtY1, &lx, &ly, orthoEnabled);
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, lx, ly, 0., 0., zc);
     } else if (cmd.mtextPhase == MPtxt::WaitString)
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, cmd.mtxtX2, cmd.mtxtY2, 0., 0.,

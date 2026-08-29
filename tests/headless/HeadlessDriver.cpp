@@ -16,6 +16,7 @@
 //     difference REQ-203's "save a .gs and diff" condition exists to detect.
 
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"  // CadCoord::WorldFromLocal, for EXPECT LINEXYZ (REQ-154)
 #include "DxfIo.hpp"
 #include "GsIo.hpp"
 #include "GsAnnotationJson.hpp"
@@ -1186,6 +1187,53 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "expect", "no log line contains: " + needle, sourceLine);
         return false;
       }
+    } else if (what == "LINEXYZ") {
+      // EXPECT LINEXYZ <index> <x1> <y1> <z1> <x2> <y2> <z2> — one line's endpoints, in WORLD
+      // coordinates, to REQ-101's 0.01 ft.
+      //
+      // Added for the UCS work (REQ-154). Every other EXPECT here counts entities or matches log
+      // text, and neither can state the thing a UCS has to be judged on: that geometry drawn in a
+      // rotated or tilted frame lands at the WORLD position the frame implies. A count passes just
+      // as happily when the line went somewhere else entirely, and the command log reports what was
+      // typed rather than where it ended up — so without this, "drawing commands respect the UCS"
+      // has no failing test available to it.
+      std::istringstream is(arg);
+      long idx = -1;
+      double want[6] = {0, 0, 0, 0, 0, 0};
+      if (!(is >> idx) || !(is >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5])) {
+        Fail(run, "parse", "EXPECT LINEXYZ needs <index> <x1> <y1> <z1> <x2> <y2> <z2>", sourceLine);
+        return false;
+      }
+      const size_t base = static_cast<size_t>(idx) * 6;
+      if (idx < 0 || base + 5 >= run.st.userLinesFlat.size()) {
+        Fail(run, "expect",
+             "EXPECT LINEXYZ: no line at index " + std::to_string(idx) + " (there are " +
+                 std::to_string(run.st.userLinesFlat.size() / 6) + ")",
+             sourceLine);
+        return false;
+      }
+      // Storage is local in XY and absolute in Z (ADR-025 (b)), so the endpoints are lifted back to
+      // world before comparing — otherwise a transcript's expected numbers would silently depend on
+      // whether the drawing happened to have been rebased.
+      double gx1 = 0.;
+      double gy1 = 0.;
+      double gx2 = 0.;
+      double gy2 = 0.;
+      CadCoord::WorldFromLocal(run.st, run.st.userLinesFlat[base], run.st.userLinesFlat[base + 1], &gx1, &gy1);
+      CadCoord::WorldFromLocal(run.st, run.st.userLinesFlat[base + 3], run.st.userLinesFlat[base + 4], &gx2, &gy2);
+      const double got[6] = {gx1, gy1, static_cast<double>(run.st.userLinesFlat[base + 2]),
+                             gx2, gy2, static_cast<double>(run.st.userLinesFlat[base + 5])};
+      const char* names[6] = {"x1", "y1", "z1", "x2", "y2", "z2"};
+      for (int k = 0; k < 6; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "EXPECT LINEXYZ %ld: %s is %.6f, expected %.6f", idx, names[k], got[k],
+                        want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+      return true;
     } else if (what == "LABELANCHOR") {
       // EXPECT LABELANCHOR — every survey label holds the same position relative to its own point,
       // whatever its text says: same LEFT EDGE offset, same VERTICAL CENTRE offset.

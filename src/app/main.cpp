@@ -949,7 +949,7 @@ int main()
       // TRIM's cutting-line points commit through commitX/commitY too (SubmitTrimViewportPick).
       float lx = static_cast<float>(commitCurX);
       float ly = static_cast<float>(commitCurY);
-      ApplyOrthoConstrainFromAnchor(cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled);
+      ApplyOrthoConstrainFromAnchor(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled);
       PushRubberSegViewRel(rubberLines, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, cmd.viewportPanX,
                            cmd.viewportPanY);
       const float midx = (cmd.trimCutInfP1x + lx) * 0.5f;
@@ -1122,6 +1122,9 @@ int main()
     const std::vector<float> &sceneRubber = paperSpace ? kEmptyVerts : rubberLines;
     // The camera is derived from the canonical pan/zoom plus the two orientation angles, so it
     // cannot disagree with the view state (REQ-058 / ADR-025 (c)).
+    // Held in a named local because RenderScene takes a pointer to it and the call outlives any
+    // temporary: the grid frame must still be alive when the renderer reads it.
+    const ucs::Ucs ucsGridFrame = CadActiveUcsStorage(cmd);
     activeRenderer.RenderScene(CadViewCamera(cmd), fbW, fbH, sceneLines,
                                sceneCircles, cmd.cadGpuRevision,
                                sceneRubber, (paperSpace || !snapHit.valid) ? nullptr : &snapHit,
@@ -1151,7 +1154,11 @@ int main()
                                    : &cmd.surfaceDisplayGeometry,
                                (paperSpace || volumeMapGeom.empty()) ? nullptr : &volumeMapGeom,
                                (paperSpace || removalLines.empty()) ? nullptr : &removalLines,
-                               (paperSpace || removalMarkers.empty()) ? nullptr : &removalMarkers);
+                               (paperSpace || removalMarkers.empty()) ? nullptr : &removalMarkers,
+                               // The grid follows the UCS (REQ-154). Storage space, like the camera
+                               // and every vertex the renderer receives. Paper space keeps its own
+                               // 2D sheet grid and is deliberately excluded.
+                               paperSpace ? nullptr : &ucsGridFrame);
 
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.

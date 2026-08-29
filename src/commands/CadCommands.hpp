@@ -11,6 +11,9 @@
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
+// The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
+// util/ray3d beside it, so the coordinate-system rules are testable without a window.
+#include "util/ucs.hpp"
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
@@ -901,6 +904,22 @@ struct DrawingGeometrySnapshot {
 };
 
 
+/// A UCS saved under a name (`UCS Named Save`), persisted with the drawing (REQ-154).
+///
+/// Deliberately a plain name + frame pair: a named UCS *is* those two things, and giving it any
+/// more (a description, an id, a per-viewport binding) would be inventing scope the requirement
+/// does not have.
+struct NamedUcs {
+  std::string name;  ///< As typed, for display; matched case-insensitively.
+  ucs::Ucs frame;
+};
+
+/// How many previous UCSs `UCS Previous` can step back through.
+///
+/// Bounded rather than unbounded because the stack is pushed on every UCS change and would
+/// otherwise grow for the life of the session. Ten matches the depth AutoCAD documents.
+constexpr size_t kUcsPreviousDepth = 10;
+
 /// Snapshot of all per-drawing data.  AppCommandState holds the live (active-tab) copy directly;
 /// switching tabs saves the active fields here and restores the target tab's snapshot.
 struct DrawingDocument {
@@ -910,6 +929,13 @@ struct DrawingDocument {
   double viewportPanZ = 0.0;          ///< Camera target elevation per tab (REQ-058).
   float  viewportAzimuthDeg = 0.f;    ///< Camera orientation per tab (REQ-058); plan view by default.
   float  viewportElevationDeg = 90.f;
+  /// The UCS is per drawing, not per session (REQ-154): switching tabs must not carry one drawing's
+  /// coordinate frame into another's, which is the "UCS state does not leak between viewports"
+  /// condition in as strong a form as a one-model-view-per-tab application can state it.
+  ucs::Ucs activeUcs;
+  std::vector<ucs::Ucs> ucsPrevious;
+  std::vector<NamedUcs> ucsNamed;
+  bool ucsFollow = false;
   double worldDocumentOriginX = 0.0;
   double worldDocumentOriginY = 0.0;
   /// Per-drawing entity-id counter (REQ-076). Saved/restored with the tab so two open drawings
@@ -1256,6 +1282,14 @@ struct AppCommandState {
     /// exits (REQ-084 (c)). Deliberately shaped like \c Kind::Pan, and reuses the same
     /// Shift+middle-drag orbit math, so the shortcut menu's Free Orbit is a real command.
     Orbit,
+    /// UCS: define or restore the active coordinate system (REQ-154). One command with a keyword
+    /// option set, driven through \ref ucsPhase — the phases exist because several options need
+    /// further picks (an origin, three points, an angle, a name) after the keyword.
+    Ucs,
+    /// PLAN: orient the view to the XY plane of a coordinate system, WITHOUT changing the UCS
+    /// (REQ-154). Autodesk documents that distinction explicitly and it is the whole point of the
+    /// command being separate from UCS.
+    Plan,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1301,6 +1335,8 @@ struct AppCommandState {
     case Kind::Rect:          return "RECT";
     case Kind::TrimState:     return "TRIMSTATE";
     case Kind::Orbit:         return "ORBIT";
+    case Kind::Ucs:           return "UCS";
+    case Kind::Plan:          return "PLAN";
     case Kind::SurfaceElevGrade:   return "SURFELEV";
     case Kind::WaterDrop:          return "WATERDROP";
     case Kind::Catchment:          return "CATCHMENT";
@@ -1424,6 +1460,7 @@ struct AppCommandState {
   bool cmdBarVisible = true;          ///< floating bar shown; × hides, Ctrl+9 restores. Persisted.
   bool cmdBarAnchorValid = false;     ///< false → place at the default bottom-left this frame. Persisted.
   float cmdBarAnchorX = 0.f;          ///< persisted floating-bar bottom-LEFT x anchor (screen px); Y is pinned to the bottom.
+  float cmdBarTopYPx = 0.f;           ///< floating bar's top edge this frame (screen px); 0 = not floating/not drawn. NOT persisted — recomputed every frame, and read by the UCS icon so it can stay clear of the bar.
   float cmdBarAnchorY = 0.f;          ///< (legacy/unused: the bar is always pinned to the viewport bottom).
   float cmdBarWidth = 0.f;            ///< user-resized bar width (px); 0 → default. Persisted.
   float cmdConsoleHeight = 0.f;       ///< user-resized F2 console height (px); 0 → default. Persisted.
@@ -1705,19 +1742,80 @@ struct AppCommandState {
   float viewAnimToAz = 0.f, viewAnimToEl = 90.f;
   float viewAnimT = 0.f;  ///< 0..1 progress.
 
-  /// Active work plane / UCS (REQ-058 / ADR-025 (e)). A click resolves as ray × this plane, so it
-  /// is where new geometry lands. The default — origin at Z = 0 with a +Z normal — is the world XY
-  /// plane, under which every pre-3D drawing behaviour is unchanged.
-  double ucsOriginX = 0.0, ucsOriginY = 0.0, ucsOriginZ = 0.0;
-  double ucsNormalX = 0.0, ucsNormalY = 0.0, ucsNormalZ = 1.0;
-  /// Rotation of the active coordinate system about its normal, in degrees. The ViewCube's compass
-  /// letters and its square-up arrows are relative to this, so under a rotated UCS "square with
-  /// north" means the UCS's north (REQ-059). 0 = the WCS, which is the only value anything sets
-  /// today — the UCS command that would change it is still outstanding.
-  float ucsAzimuthDeg = 0.f;
+  /// The active User Coordinate System (REQ-058 / ADR-025 (e); REQ-154, GitHub #126).
+  ///
+  /// One frame, replacing the origin/normal/azimuth triple that stood in for it before the UCS
+  /// command existed: that shape could express a plane and a spin but not a basis, so nothing could
+  /// ask it "which way is UCS +X?". Its XY plane is the work plane a click resolves against, and its
+  /// axes are the frame typed coordinates, ORTHO and the grid are interpreted in. The default is the
+  /// WCS, under which every pre-UCS behaviour is unchanged.
+  ///
+  /// **It never moves geometry.** Entities stay in WCS; this only changes how the user's input is
+  /// read and how coordinates are reported back.
+  ucs::Ucs activeUcs;
+
+  /// `UCS Previous` history, oldest first. Bounded by \ref kUcsPreviousDepth — AutoCAD keeps a
+  /// limited stack too, and an unbounded one would grow for the life of the session.
+  std::vector<ucs::Ucs> ucsPrevious;
+
+  /// Saved UCS definitions (`UCS Named`), persisted with the drawing. "World" is reserved and is
+  /// never stored here — it is always available and can never be redefined or deleted.
+  std::vector<NamedUcs> ucsNamed;
+
+  /// UCSFOLLOW: when set, any change to \ref activeUcs immediately switches the view to a PLAN view
+  /// of the new UCS. 0 leaves the camera alone. Per drawing tab, which is as per-viewport as this
+  /// application currently gets — there is one model view per tab (see the requirement's note).
+  bool ucsFollow = false;
+
+  /// Where the UCS command is in its prompt sequence. Several options need further picks after the
+  /// keyword, and modelling that as an explicit phase (rather than as flags) keeps every prompt's
+  /// valid input in one place — the same shape ARRAY and the other multi-step commands use.
+  enum class UcsPhase : uint8_t {
+    Idle,
+    WaitOriginOrOption,  ///< the top-level prompt: a point, or one of the keywords
+    WaitXAxisPoint,      ///< after an origin: a point on the new +X, or blank to accept origin-only
+    WaitXyPoint,         ///< after an X point: a point in the +Y half of the XY plane, or blank
+    WaitRotationAngle,   ///< X / Y / Z: degrees, right-hand rule about \ref ucsRotationAxis
+    WaitZAxisOrigin,     ///< ZAxis: the origin
+    WaitZAxisPoint,      ///< ZAxis: a point on the positive Z
+    WaitObjectPick,      ///< Object: click an entity to align to
+    WaitNamedAction,     ///< Named: Save / Restore / Delete / ?
+    WaitNamedName,       ///< the name for \ref ucsNamedAction
+  } ucsPhase = UcsPhase::Idle;
+
+  /// Which of Save / Restore / Delete the pending name applies to.
+  enum class UcsNamedAction : uint8_t { None, Save, Restore, Delete } ucsNamedAction = UcsNamedAction::None;
+
+  /// 'X', 'Y' or 'Z' — the axis \ref UcsPhase::WaitRotationAngle will rotate about.
+  char ucsRotationAxis = 'Z';
+
+  /// Picks accumulated across the multi-point UCS options, in WORLD coordinates (not storage-local:
+  /// a coordinate frame is a world-space object, and keeping it local would make it move whenever
+  /// the document origin rebased).
+  ray3d::Vec3 ucsPendingOrigin{0.0, 0.0, 0.0};
+  ray3d::Vec3 ucsPendingXAxisPoint{0.0, 0.0, 0.0};
+
+  /// PLAN's own prompt phase. Kept separate from \ref ucsPhase so neither command can be nudged
+  /// into the other's state machine.
+  enum class PlanPhase : uint8_t { Idle, WaitOption, WaitNamedName } planPhase = PlanPhase::Idle;
   /// Elevation of the cursor's work-plane intersection, published alongside the existing
   /// \c uiCursorWorldX/Y so readouts and future 3D-aware commands can see it.
   float uiCursorWorldZ = 0.f;
+
+  /// The Z of the point CURRENTLY being resolved, when that point carries its own (REQ-154).
+  ///
+  /// On a UCS parallel to world XY every point on the work plane shares one elevation, so the UCS
+  /// origin's Z describes them all — which is why a single constant sufficed before. **A tilted UCS
+  /// breaks that**: the plane's Z varies across it, and a point's elevation is a property of the
+  /// point, not of the plane. Rather than teach ~29 geometry-creation sites about the UCS, the two
+  /// places a point is actually resolved publish its Z here and \ref CadWorkPlaneElevation reads it.
+  ///
+  /// Set at point resolution (a viewport click's ray x plane hit, or a typed UCS coordinate mapped
+  /// through the frame) and cleared when point entry ends, so a stale value can never leak into a
+  /// later command. Under a flat UCS the published value equals the origin's Z, so this channel
+  /// changes nothing there.
+  bool  resolvedPointZValid = false;
+  float resolvedPointZ = 0.f;
   /// Model viewport size in pixels, published by the UI each frame. The command layer needs it to
   /// project geometry to screen for box-selection under an orbited camera (REQ-058); it has no
   /// other way to know the viewport's aspect. Zero means "not yet known" — callers fall back to
@@ -3146,14 +3244,23 @@ inline void CadTickViewAnimation(AppCommandState& st, float dtSeconds) {
   st.viewportElevationDeg = st.viewAnimFromEl + (st.viewAnimToEl - st.viewAnimFromEl) * e;
 }
 
-/// Elevation at which newly drawn geometry lands — the active work plane's Z (REQ-058).
+/// Elevation at which newly drawn geometry lands — the active work plane's Z (REQ-058 / REQ-154).
 ///
-/// Exact while the work plane stays parallel to XY, which is all the UCS command currently
-/// produces. A tilted plane would make Z vary across the plane, and the creation sites would then
-/// need the click's own intersection Z (\c uiCursorWorldZ) rather than this constant — recorded so
-/// the limitation is visible if tilted UCS support is ever added.
+/// Two channels, in order:
+///
+///  1. **The resolved point's own Z**, when point entry has published one. On a tilted UCS the work
+///     plane's Z *varies across the plane*, so a single constant cannot describe where a point
+///     lands — the value has to come from the point that was actually resolved (the click's
+///     ray x plane hit, or the typed UCS coordinate mapped through the frame).
+///  2. Otherwise the UCS origin's Z, which is exactly the old behaviour.
+///
+/// Under any UCS parallel to world XY — every pre-UCS drawing, and every UCS that is a rotation
+/// about Z — the two agree by construction, so this is a strict superset of what ELEV did rather
+/// than a change to it.
 inline float CadWorkPlaneElevation(const AppCommandState& st) {
-  return static_cast<float>(st.ucsOriginZ);
+  if (st.resolvedPointZValid)
+    return st.resolvedPointZ;
+  return static_cast<float>(st.activeUcs.origin.z);
 }
 
 /// Elevation a click should COMMIT at: the snapped point's own Z when an object snap is active,
@@ -3167,19 +3274,40 @@ inline float CadCommitElevation(const AppCommandState& st) {
   return st.viewportSnapPickValid ? st.viewportSnapPickLocalZ : CadWorkPlaneElevation(st);
 }
 
-/// True when the work plane is the world XY plane at Z = 0 — the default, and what the status bar
+/// True when the active UCS is the World Coordinate System — the default, and what the status bar
 /// reports as "World".
-inline bool CadUcsIsWorld(const AppCommandState& st) {
-  return st.ucsOriginZ == 0.0 && st.ucsOriginX == 0.0 && st.ucsOriginY == 0.0 && st.ucsNormalZ == 1.0 &&
-         st.ucsNormalX == 0.0 && st.ucsNormalY == 0.0 && st.ucsAzimuthDeg == 0.f;
+inline bool CadUcsIsWorld(const AppCommandState& st) { return ucs::IsWorld(st.activeUcs); }
+
+/// The active UCS expressed in **storage space** (local XY, absolute Z).
+///
+/// \ref AppCommandState::activeUcs is stored in TRUE WORLD coordinates, so that a document-origin
+/// rebase — which shifts every stored coordinate to keep float precision (REQ-101) — cannot move
+/// the user's coordinate frame out from under them. Nothing has to remember to shift it, because
+/// there is nothing frame-relative to shift.
+///
+/// The camera, the picking rays and the geometry they hit all live in storage space, so anything
+/// that meets a ray converts here first. Only the origin moves; a translation cannot rotate a
+/// basis, so the axes pass through untouched.
+inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
+  ucs::Ucs u = st.activeUcs;
+  u.origin.x -= st.worldDocumentOriginX;
+  u.origin.y -= st.worldDocumentOriginY;
+  return u;
 }
 
-/// The active work plane (UCS) a viewport click resolves against (REQ-058 / ADR-025 (e)).
-inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) {
-  ray3d::Plane p;
-  p.point = {st.ucsOriginX, st.ucsOriginY, st.ucsOriginZ};
-  p.normal = {st.ucsNormalX, st.ucsNormalY, st.ucsNormalZ};
-  return p;
+/// The active work plane (UCS XY) a viewport click resolves against (REQ-058 / ADR-025 (e)).
+/// In storage space, because that is the space the ray is in.
+inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) { return ucs::WorkPlane(CadActiveUcsStorage(st)); }
+
+/// The **camera-azimuth offset** that squares the view with the active UCS's north (REQ-059).
+///
+/// Negated relative to the UCS's own rotation, and that sign is not a detail to gloss: a positive
+/// UCS rotation about Z turns the frame counter-clockwise, while a positive camera azimuth turns
+/// screen-up clockwise (measured against `Camera`, see `ucs::PlanViewAngles`). Handing the ViewCube
+/// the un-negated angle makes its compass square up the wrong way — visibly, but only under a
+/// rotated UCS, which is exactly the case nobody exercises by accident.
+inline float CadUcsViewAzimuthOffsetDeg(const AppCommandState& st) {
+  return -ucs::AzimuthAboutWorldZDeg(st.activeUcs);
 }
 
 
@@ -3591,8 +3719,22 @@ void CancelSegmentAnglePick(AppCommandState& st, std::vector<std::string>* log);
 bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 
 /// Trim and parse absolute "x,y" / "x y" or relative "@dx,dy" when allowed.
-bool ParseStoragePoint(const AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
+///
+/// **Interpreted in the active UCS** (REQ-154): under a rotated UCS `10,0` is 10 units along the UCS
+/// X axis, not the world's. Under the WCS — the default, and every drawing that predates the UCS
+/// command — this is the original world-frame parse, unchanged.
+bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
                        float baseLocalX, float baseLocalY);
+
+/// \ref ParseStoragePoint, additionally reporting the resolved point's world Z. Callers that are
+/// about to commit geometry want this: on a tilted UCS the work plane's elevation varies across it,
+/// so the point's own Z is the only correct answer (see AppCommandState::resolvedPointZ).
+bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, float* ly, double* outWorldZ,
+                        bool allowRelative, float baseLocalX, float baseLocalY);
+
+/// Split a typed point into its two numbers and whether it carried a leading `@`, without deciding
+/// which frame those numbers are in. That separation is what lets one parser serve both frames.
+bool ParsePointComponents(const std::string& raw, double* a, double* b, bool* isRelative, bool allowRelative);
 
 bool ParseWorldPoint(const std::string& raw, float* ox, float* oy, bool allowRelative, float baseX, float baseY);
 
@@ -3604,7 +3746,8 @@ bool ParseWorldPointD(const std::string& raw, double* ox, double* oy, bool allow
                       double baseY);
 
 /// If ortho: snaps dx/dy so segment from anchor is horizontal or vertical (CAD-style).
-void ApplyOrthoConstrainFromAnchor(float anchorX, float anchorY, float* wx, float* wy, bool ortho);
+void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool ortho);
 
 /// Snap pick onto anchor + t*(ux,uy). Negative \p t allowed unless \p forwardOnly.
 void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx, float lockUy, float* wx, float* wy,
@@ -3704,6 +3847,44 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log);
 void StartElevCommand(AppCommandState& st, std::vector<std::string>& log);
 bool ApplyElevValue(AppCommandState& st, double z, std::vector<std::string>& log);
 void ApplyUcsWorld(AppCommandState& st, std::vector<std::string>& log);
+
+// --- UCS and PLAN (REQ-154, GitHub #126) --------------------------------------------------------
+
+/// Make \p next the active UCS: pushes the outgoing frame onto the Previous stack, honours
+/// UCSFOLLOW, and reports the change.
+///
+/// **Every** path that changes the UCS goes through here — that is what makes "Previous" and
+/// UCSFOLLOW work for options added later without each one remembering to maintain them.
+/// \p pushPrevious is false only for `UCS Previous` itself, which must not push the state it is
+/// popping (AutoCAD's rule: restoring a previous UCS does not add a history entry).
+void SetActiveUcs(AppCommandState& st, const ucs::Ucs& next, std::vector<std::string>& log,
+                  bool pushPrevious = true);
+
+/// UCS: the top-level prompt.
+void StartUcsCommand(AppCommandState& st, std::vector<std::string>& log);
+/// PLAN: the view-orientation prompt.
+void StartPlanCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// Feed one typed line to whichever of UCS / PLAN is active. Returns true when the line was
+/// consumed. Shared by the command line and the at-cursor dynamic input (REQ-024), so both accept
+/// exactly the same keywords.
+bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+
+/// Feed a viewport pick (world coordinates) to the UCS command. Returns true when consumed.
+bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log);
+
+/// Orient the view to a PLAN view of \p frame without touching the active UCS.
+void ApplyPlanViewOf(AppCommandState& st, const ucs::Ucs& frame, std::vector<std::string>& log);
+
+/// Find a saved UCS by name, case-insensitively. Returns nullptr when there is none.
+const NamedUcs* FindNamedUcs(const AppCommandState& st, const std::string& name);
+
+/// Apply ORTHO in the active UCS's axes rather than the world's (REQ-047 under REQ-154).
+///
+/// \p anchor and \p target are world 3D points; the constrained target is written back. Under the
+/// WCS this reduces exactly to the world-axis constraint the 2D path always applied.
+ray3d::Vec3 ConstrainToUcsOrtho(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target);
 
 /// RECT (REQ-053): two opposite corners create an axis-aligned rectangle.
 void StartRectCommand(AppCommandState& st, std::vector<std::string>& log);

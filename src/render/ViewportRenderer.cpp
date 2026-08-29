@@ -849,7 +849,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const CadSurfaceDisplayGeometry* surfaceGeometry,
                                    const VolumeMapDisplayGeometry* volumeMap,
                                    const std::vector<float>* removalLines,
-                                   const std::vector<float>* removalMarkers) {
+                                   const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -1080,13 +1080,50 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       gridVerts.push_back(ry1);
       gridVerts.push_back(gz);
     };
-    for (int i = -ni; i <= ni; ++i) {
-      const double x = originX + static_cast<double>(i) * stepD;
-      pushGridSeg(x, viewAnchorY - static_cast<double>(spanH), x, viewAnchorY + static_cast<double>(spanH));
-    }
-    for (int i = -ni; i <= ni; ++i) {
-      const double y = originY + static_cast<double>(i) * stepD;
-      pushGridSeg(viewAnchorX - static_cast<double>(spanW), y, viewAnchorX + static_cast<double>(spanW), y);
+    // A UCS grid is generated in the frame's OWN XY and mapped out to world, so its lines run along
+    // the UCS axes and lie in the UCS plane rather than being a world-XY grid seen from an angle
+    // (REQ-154). Each vertex carries its real Z, which a tilted plane needs and the flat path does
+    // not — hence the separate push rather than a shared one with a constant Z.
+    auto pushUcsGridSeg = [&](const ucs::Ucs& f, double u0, double v0, double u1, double v1) {
+      const ray3d::Vec3 a = ucs::UcsToWorld(f, {u0, v0, 0.0});
+      const ray3d::Vec3 b = ucs::UcsToWorld(f, {u1, v1, 0.0});
+      float rx0 = 0.f;
+      float ry0 = 0.f;
+      float rx1 = 0.f;
+      float ry1 = 0.f;
+      WorldToViewRelativeFloat(a.x, a.y, viewAnchorX, viewAnchorY, &rx0, &ry0);
+      WorldToViewRelativeFloat(b.x, b.y, viewAnchorX, viewAnchorY, &rx1, &ry1);
+      gridVerts.push_back(rx0);
+      gridVerts.push_back(ry0);
+      gridVerts.push_back(static_cast<float>(a.z) + gz);
+      gridVerts.push_back(rx1);
+      gridVerts.push_back(ry1);
+      gridVerts.push_back(static_cast<float>(b.z) + gz);
+    };
+
+    if (gridFrame && !ucs::IsWorld(*gridFrame)) {
+      // Anchor the grid to the view centre projected INTO the frame, so panning still slides the
+      // grid with the drawing instead of leaving it stranded around the UCS origin.
+      const ray3d::Vec3 anchorUcs = ucs::WorldToUcs(*gridFrame, {viewAnchorX, viewAnchorY, gridFrame->origin.z});
+      const double ou = std::floor(anchorUcs.x / stepD) * stepD;
+      const double ov = std::floor(anchorUcs.y / stepD) * stepD;
+      for (int i = -ni; i <= ni; ++i) {
+        const double u = ou + static_cast<double>(i) * stepD;
+        pushUcsGridSeg(*gridFrame, u, ov - static_cast<double>(spanH), u, ov + static_cast<double>(spanH));
+      }
+      for (int i = -ni; i <= ni; ++i) {
+        const double v = ov + static_cast<double>(i) * stepD;
+        pushUcsGridSeg(*gridFrame, ou - static_cast<double>(spanW), v, ou + static_cast<double>(spanW), v);
+      }
+    } else {
+      for (int i = -ni; i <= ni; ++i) {
+        const double x = originX + static_cast<double>(i) * stepD;
+        pushGridSeg(x, viewAnchorY - static_cast<double>(spanH), x, viewAnchorY + static_cast<double>(spanH));
+      }
+      for (int i = -ni; i <= ni; ++i) {
+        const double y = originY + static_cast<double>(i) * stepD;
+        pushGridSeg(viewAnchorX - static_cast<double>(spanW), y, viewAnchorX + static_cast<double>(spanW), y);
+      }
     }
     gridVertexCount_ = static_cast<int>(gridVerts.size() / 3);
 

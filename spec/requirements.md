@@ -4840,6 +4840,110 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-28)
 - Revisions: 2026-08-28 — D-2026-08-28-l.
 
+### REQ-154 — UCS and PLAN: a real coordinate-system service (GitHub issue #126)
+- Purpose: give the user a coordinate frame to work in, and a way to look at it, without ever moving
+  the drawing. Until now `UCS` was an alias for `ELEV`: it could raise the work plane but had no
+  axes, so nothing could ask "which way is UCS +X?" and every command read input in world terms
+- Priority: must
+- Type: functional
+- Statement: A **User Coordinate System** is an origin plus a right-handed orthonormal basis,
+  expressed in WCS and stored per drawing. It is the frame in which the user's input is read and in
+  which coordinates are reported back.
+
+  **A UCS never moves geometry.** Entities remain in WCS. Changing the UCS changes interpretation
+  and presentation only; any code path that rewrites a stored coordinate because the frame changed
+  is a defect.
+
+  **One authoritative implementation.** `WorldToUcs` / `UcsToWorld` and their vector forms live in a
+  single pure module (`src/util/ucs.hpp`, beside `util/ray3d` and for the same ADR-002 reason), and
+  every consumer calls it. No command computes its own frame arithmetic.
+
+  **`UCS` supports:** an origin alone (orientation preserved); origin + X-axis point; the three-point
+  form (origin, +X, a point in the +Y half of the plane); `World`; `Previous` (a bounded history that
+  a restore does not itself extend); `View`; `X` / `Y` / `Z` rotation about the UCS's **own** axes,
+  positive by the right-hand rule; `ZAxis`; `Object`; and `Named` with Save / Restore / Delete / `?`.
+  `World` is reserved: it can be neither redefined nor deleted. Named definitions persist with the
+  drawing.
+
+  **Coordinate entry is in the UCS.** Under a UCS rotated 45° about Z, `10,0` is ten units along the
+  UCS X axis; `@dx,dy` is a delta along the UCS axes. Typed points accept `X,Y,Z` as well as `X,Y`,
+  without which no tilted frame could be defined from the keyboard. Object snaps continue to resolve
+  against real WCS geometry and return the snapped point's own position; the UCS transforms what is
+  *reported* and what is *typed*, never what is *snapped to*.
+
+  **A point carries its own elevation.** On a UCS parallel to world XY every point on the work plane
+  shares one Z, which is why a single work-plane elevation sufficed before. A tilted UCS breaks that:
+  the plane's Z varies across it. New geometry commits at the resolved point's own Z — the click's
+  ray × plane intersection, or the typed UCS coordinate mapped through the frame.
+
+  **ORTHO and the grid follow the UCS.** ORTHO squares to the UCS axes and stays in the UCS plane;
+  the grid is generated in the frame's own XY. A drafting aid still squared to the world while entry
+  has moved is worse than none — it reads as the drawing's alignment.
+
+  **`PLAN` changes the view, never the UCS.** It orients the camera to the XY plane of the current
+  UCS, the WCS, or a named UCS. Autodesk documents that distinction explicitly and it is the whole
+  reason the command is separate. **`UCSFOLLOW`** (0/1, per drawing) makes a UCS change switch to a
+  plan view of the new frame automatically.
+
+  **A UCS icon** in the model viewport shows the active frame's X / Y / Z axes, foreshortened with
+  the camera, with a `W` at its origin when the frame is the WCS. It is driven by the UCS state, not
+  decoration.
+
+  **Documented limitation — PLAN of a tilted UCS.** `Camera` stores azimuth and elevation with no
+  roll axis, a deliberate choice (ADR-025 (c)) that avoids the pole flip a free eye/up pair suffers.
+  For any UCS whose Z is world +Z — every translation, every rotation about Z, and so the whole 2D
+  survey case — PLAN is exact: the UCS +Y comes out up the screen. For a **tilted** UCS the view
+  *direction* is correct but the in-plane rotation cannot also be set, and the command says so when
+  it happens. Making it exact requires adding roll to `Camera`, which is an architectural change
+  (view matrix, `ScreenRay`, `WorldToScreen`, ViewCube, PDF plot, and new persisted per-tab state)
+  and is deliberately **not** in this requirement.
+- Acceptance:
+  - the transform module is pure, orthonormal and right-handed by construction, and unit-tested
+    including every refusal (collinear three-point, coincident picks, zero-length normal);
+  - `WorldToUcs` and `UcsToWorld` invert each other exactly for translated, rotated and tilted
+    frames;
+  - every listed `UCS` option works, and each invalid input is refused with a stated reason rather
+    than producing a degenerate frame (REQ-201);
+  - `Previous` walks back through the history and a restore does not itself become a history entry;
+  - named definitions save, restore, delete, list, and survive a `.gs` round trip byte-identically;
+  - `World` cannot be saved over or deleted;
+  - geometry drawn under a rotated UCS lands at the world coordinates the frame implies, asserted on
+    actual stored coordinates rather than on entity counts;
+  - geometry drawn on a **tilted** UCS commits at the elevation the plane gives at that point;
+  - changing the UCS leaves every stored coordinate untouched;
+  - the coordinate readout and `ID` report in the active UCS and name which frame that is;
+  - ORTHO squares to the UCS axes; the grid is generated in the UCS plane;
+  - `PLAN Current` / `World` / a named UCS orient the view and leave the UCS unchanged;
+  - `UCSFOLLOW=0` preserves the view on a UCS change, `UCSFOLLOW=1` switches to a plan view of it;
+  - the UCS is per drawing: switching tabs does not carry one drawing's frame into another, and a
+    new drawing starts in the WCS with no saved frames;
+  - a drawing saved before this requirement still loads, and a UCS that is a plain elevation change
+    still writes the `ucsElevation` key an older build reads.
+- Owner-layer: Commands (the frame, the commands, coordinate entry), Renderer (grid), UI (icon,
+  readout), IO (`.gs` persistence)
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — initial (D-2026-08-28-n); raised by chetjones003 as issue #126.
+
+#### Not in this requirement — and why
+
+Issue #126's acceptance list includes four items that cannot be honestly met, each blocked on a
+capability that does not exist. They are recorded here rather than quietly dropped:
+
+1. **Exact PLAN of a tilted UCS** — needs camera roll; see the documented limitation above.
+2. **"Polar tracking follows the UCS"** — polar tracking does not exist. It is a status-bar toggle
+   with no drafting behaviour (`CadUi.cpp`, labelled "UI only for now"). The condition asks for the
+   feature to be built first, which is its own requirement.
+3. **Per-viewport UCS and UCSFOLLOW isolation** — a paper-space `Viewport` is 2D (a model centre and
+   a scale); REQ-061's per-viewport camera was never implemented, and multiple simultaneous
+   model-space viewports are an explicitly open scope question (see the REQ-084 note). There is one
+   model view per drawing, so the UCS is scoped per drawing — the strongest form of "does not leak
+   between viewports" this architecture can state.
+4. **`Object` alignment to 3D faces, meshes, surfaces and solids** — resolving a face needs
+   face-level picking, which does not exist: a mesh picks as one object with no face identity, and
+   solids/surfaces as editable entities are issue #120's scope. `Object` covers lines, arcs,
+   circles, ellipses and text, and refuses anything else with a stated reason.
+
+
 ---
 
 ## Performance requirements
@@ -5324,6 +5428,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-151 | Commands | done (TASK-136) — arc breaklines; DESIGNATEBOUNDARY refuses arcs | accepted |
 | REQ-152 | util/Commands | done (TASK-136) — catchment mean Z; `[req152]` | accepted |
 | REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
+| REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126) | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |

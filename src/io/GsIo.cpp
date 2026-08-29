@@ -858,8 +858,40 @@ json BuildRoot(const AppCommandState& st) {
     view["azimuthDeg"] = st.viewportAzimuthDeg;
   if (st.viewportElevationDeg != 90.f)
     view["elevationDeg"] = st.viewportElevationDeg;
-  if (st.ucsOriginZ != 0.0)
-    view["ucsElevation"] = st.ucsOriginZ;
+  // The UCS (REQ-154), additive and omitted at its default for the same reason as the camera keys
+  // above: a drawing that never used UCS still serializes byte-for-byte as before.
+  //
+  // `ucsElevation` is still written whenever the frame is a plain elevation change, so a drawing
+  // saved by this build still opens correctly in one that predates the full UCS. Newer builds
+  // prefer the `ucs` object and only fall back to `ucsElevation` when it is absent.
+  auto writeUcs = [](const ucs::Ucs& u) {
+    json j;
+    j["origin"] = {u.origin.x, u.origin.y, u.origin.z};
+    j["xAxis"] = {u.xAxis.x, u.xAxis.y, u.xAxis.z};
+    j["yAxis"] = {u.yAxis.x, u.yAxis.y, u.yAxis.z};
+    j["zAxis"] = {u.zAxis.x, u.zAxis.y, u.zAxis.z};
+    return j;
+  };
+  if (!ucs::IsWorld(st.activeUcs)) {
+    view["ucs"] = writeUcs(st.activeUcs);
+    // A pure elevation change — world axes, origin only in Z — is exactly what the old key meant,
+    // so that (and only that) case stays readable by an older build.
+    const bool elevationOnly = ucs::IsWorld(ucs::WithOrigin(st.activeUcs, {0.0, 0.0, 0.0})) &&
+                               st.activeUcs.origin.x == 0.0 && st.activeUcs.origin.y == 0.0;
+    if (elevationOnly)
+      view["ucsElevation"] = st.activeUcs.origin.z;
+  }
+  if (st.ucsFollow)
+    view["ucsFollow"] = true;
+  if (!st.ucsNamed.empty()) {
+    json named = json::array();
+    for (const NamedUcs& n : st.ucsNamed) {
+      json entry = writeUcs(n.frame);
+      entry["name"] = n.name;
+      named.push_back(std::move(entry));
+    }
+    view["namedUcs"] = std::move(named);
+  }
   doc["view"] = std::move(view);
 
   root["document"] = std::move(doc);
@@ -1938,7 +1970,53 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.viewportPanZ = view.value("panZ", 0.0);
     st.viewportAzimuthDeg = view.value("azimuthDeg", 0.f);
     st.viewportElevationDeg = std::clamp(view.value("elevationDeg", 90.f), -90.f, 90.f);
-    st.ucsOriginZ = view.value("ucsElevation", 0.0);
+    // The UCS (REQ-154). A full frame wins; `ucsElevation` alone is what every drawing saved before
+    // the UCS command carries, and still loads as the elevated world-parallel plane it described.
+    // A frame that does not survive its own validity check is DISCARDED rather than adopted: a
+    // hand-edited or truncated basis would silently skew every coordinate the user then entered,
+    // and falling back to the WCS is the one outcome that cannot be wrong (REQ-201).
+    auto readVec = [](const json& j, const char* key, ray3d::Vec3 fallback) {
+      const auto it = j.find(key);
+      if (it == j.end() || !it->is_array() || it->size() != 3)
+        return fallback;
+      return ray3d::Vec3{(*it)[0].get<double>(), (*it)[1].get<double>(), (*it)[2].get<double>()};
+    };
+    auto readUcs = [&](const json& j, ucs::Ucs* out) {
+      ucs::Ucs u;
+      u.origin = readVec(j, "origin", {0.0, 0.0, 0.0});
+      u.xAxis = readVec(j, "xAxis", {1.0, 0.0, 0.0});
+      u.yAxis = readVec(j, "yAxis", {0.0, 1.0, 0.0});
+      u.zAxis = readVec(j, "zAxis", {0.0, 0.0, 1.0});
+      if (!std::isfinite(u.origin.x) || !std::isfinite(u.origin.y) || !std::isfinite(u.origin.z))
+        return false;
+      if (!ucs::IsRightHandedOrthonormal(u, 1e-6))
+        return false;
+      *out = u;
+      return true;
+    };
+
+    st.activeUcs = ucs::Ucs{};
+    const auto ucsIt = view.find("ucs");
+    if (ucsIt != view.end() && ucsIt->is_object()) {
+      if (!readUcs(*ucsIt, &st.activeUcs))
+        st.activeUcs = ucs::Ucs{};
+    } else {
+      st.activeUcs.origin.z = view.value("ucsElevation", 0.0);
+    }
+    st.ucsFollow = view.value("ucsFollow", false);
+    st.ucsNamed.clear();
+    const auto namedIt = view.find("namedUcs");
+    if (namedIt != view.end() && namedIt->is_array()) {
+      for (const auto& entry : *namedIt) {
+        if (!entry.is_object())
+          continue;
+        NamedUcs n;
+        n.name = entry.value("name", std::string());
+        if (n.name.empty() || !readUcs(entry, &n.frame))
+          continue;
+        st.ucsNamed.push_back(std::move(n));
+      }
+    }
   } else {
     const int fbW = std::max(st.viewportLastFbW, 1);
     const int fbH = std::max(st.viewportLastFbH, 1);

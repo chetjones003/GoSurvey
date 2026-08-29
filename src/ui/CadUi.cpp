@@ -1,7 +1,8 @@
 #include "CadUi.hpp"
 // REQ-141 Analyze ribbon + contour label overlay.
 #include "CadCoordinateFrame.hpp"
-#include "ViewCube.hpp"  // in-tree orientation widget (REQ-059)
+#include "ViewCube.hpp"
+#include "UcsIcon.hpp"  // in-tree orientation widget (REQ-059)
 #include "ViewportPickPolicy.hpp"
 #include "MtextRichFormat.hpp"
 #include "MtextToolbar.hpp"
@@ -8028,9 +8029,16 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
       ImGui::Text("X %s  Y %s  Z %s  |  UCS: World", FormatLinear(cursorX, p).c_str(),
                   FormatLinear(cursorY, p).c_str(), FormatLinear(cursorZ, p).c_str());
     } else {
-      ImGui::Text("X %s  Y %s  Z %s  |  UCS: Elev %s", FormatLinear(cursorX, p).c_str(),
-                  FormatLinear(cursorY, p).c_str(), FormatLinear(cursorZ, p).c_str(),
-                  FormatLinear(static_cast<double>(CadWorkPlaneElevation(cmd)), p).c_str());
+      // Under a UCS the readout reports UCS coordinates (REQ-154), because those are the numbers the
+      // user would type back in to return here. Reporting world coordinates while entry is read in
+      // the UCS is how a value gets copied off the screen and re-entered somewhere else entirely.
+      // The label says which frame it is, and the world position is kept alongside so the two are
+      // never confused.
+      const ray3d::Vec3 inUcs =
+          ucs::WorldToUcs(cmd.activeUcs, {cursorX, cursorY, static_cast<double>(cursorZ)});
+      ImGui::Text("X %s  Y %s  Z %s  |  UCS: current (world %s, %s)", FormatLinear(inUcs.x, p).c_str(),
+                  FormatLinear(inUcs.y, p).c_str(), FormatLinear(inUcs.z, p).c_str(),
+                  FormatLinear(cursorX, p).c_str(), FormatLinear(cursorY, p).c_str());
     }
   }
 
@@ -8338,6 +8346,10 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     if (floating) ImGui::PopStyleVar(2);
     return;
   }
+  // The bar's height is content-driven (history chips grow it), so its top edge is only knowable
+  // once it has been laid out. Recorded here for the UCS icon, which shares this corner and would
+  // otherwise be drawn underneath the bar (the bar is a separate window painted over the viewport).
+  cmd.cmdBarTopYPx = floating ? ImGui::GetWindowPos().y : 0.f;
   // Taller frames for the floating bar (a roomier input/icons row than the default).
   if (floating)
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 7.f));
@@ -11509,10 +11521,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float v = my / std::max(avail.y, 1.f);
       rawX = worldLeft + static_cast<double>(u) * (worldRight - worldLeft);
       rawY = worldTop - static_cast<double>(v) * (worldTop - worldBottom);
+      // Plan view maps the screen straight to XY, so there is no ray to intersect — but the point
+      // still lies on the work plane, and a TILTED plane's elevation varies across it (REQ-154).
+      // Solve the plane for Z at this XY. For a plane parallel to world XY (every pre-UCS drawing)
+      // the two offset terms vanish and this is exactly the origin's Z, as before.
+      const ray3d::Plane wp = CadActiveWorkPlane(cmd);
+      const ray3d::Vec3 n = ray3d::Normalize(wp.normal);
+      rawZ = (std::fabs(n.z) > 1e-9) ? wp.point.z - (n.x * (rawX - wp.point.x) + n.y * (rawY - wp.point.y)) / n.z
+                                     : wp.point.z;
     }
   }
   if (cursorValid) {
     cmd.uiCursorWorldZ = static_cast<float>(rawZ);
+    // The cursor is on the work plane, so this IS the elevation a click here would commit at
+    // (REQ-154). Published unconditionally so a value left over from a previous typed point can
+    // never survive into a mouse-driven one.
+    cmd.resolvedPointZValid = true;
+    cmd.resolvedPointZ = static_cast<float>(rawZ);
 
     // The cursor's world ray, built once and handed to every pick in this block. Null in plan
     // view and paper space so those keep the exact pre-3D XY test (REQ-058 parity).
@@ -11868,7 +11893,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     float curWx = curWxRaw;
     float curWy = curWyRaw;
     if (!cmd.viewportSnapPickValid)
-      ApplyOrthoConstrainFromAnchor(cmd.entityGripAnchorX, cmd.entityGripAnchorY, &curWx, &curWy, cmd.orthoMode);
+      ApplyOrthoConstrainFromAnchor(cmd, cmd.entityGripAnchorX, cmd.entityGripAnchorY, &curWx, &curWy, cmd.orthoMode);
 
     cmd.entityGripLiveDistance =
         std::hypot(curWx - cmd.entityGripAnchorX, curWy - cmd.entityGripAnchorY);
@@ -15461,9 +15486,35 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const ImVec2 mp = ImGui::GetIO().MousePos;
     const viewcube::Result vc =
         viewcube::Draw(ImGui::GetWindowDrawList(), CadViewCamera(cmd), viewCubeX, viewCubeY, kViewCubeSize, mp.x,
-                       mp.y, ImGui::IsMouseClicked(ImGuiMouseButton_Left), cmd.ucsAzimuthDeg);
+                       mp.y, ImGui::IsMouseClicked(ImGuiMouseButton_Left), CadUcsViewAzimuthOffsetDeg(cmd));
     if (vc.changed)
       CadStartViewAnimation(cmd, vc.azimuthDeg, vc.elevationDeg);  // ease, don't jump (REQ-059)
+  }
+
+  // ---- UCS icon (REQ-154) ------------------------------------------------------------------------
+  // Bottom-left, AutoCAD's corner, and model space only for the same reason the ViewCube is: a paper
+  // sheet is 2D (ADR-025 (g)) and has no coordinate frame to indicate.
+  //
+  // Only the AXES are passed, so the icon sits in a fixed corner rather than at the UCS origin —
+  // which keeps it visible when the origin is off-screen, the case where knowing the frame matters
+  // most. It is purely an indicator: it has no hit region and swallows no clicks.
+  if (modelSpace && avail.x > 80.f && avail.y > 80.f) {
+    constexpr float kUcsIconArm = 26.f;
+    constexpr float kUcsIconInset = 46.f;
+    // What the icon draws BELOW its root: an axis label sits 8 px past a tip, and the "W" marker
+    // one text line under the origin. A horizontal X arm (which is exactly the World case) puts
+    // both at the root's own height.
+    constexpr float kUcsIconDescent = 26.f;
+    float rootY = imgPos.y + avail.y - kUcsIconInset;
+    // Stay clear of the floating command bar (REQ-040). It is a separate window painted OVER this
+    // viewport and shares the bottom-left corner, so without this the World icon's X arm and its
+    // "W" are drawn underneath it — the icon hides exactly the frame it exists to name, and only
+    // in World, because any rotation lifts both arms clear.
+    if (cmd.cmdBarTopYPx > 0.f)
+      rootY = std::min(rootY, cmd.cmdBarTopYPx - kUcsIconDescent - 6.f);
+    rootY = std::max(rootY, imgPos.y + kUcsIconArm + 12.f);  // never climb out of the viewport
+    ucsicon::Draw(ImGui::GetWindowDrawList(), CadViewCamera(cmd), CadActiveUcsStorage(cmd),
+                  imgPos.x + kUcsIconInset, rootY, kUcsIconArm, CadUcsIsWorld(cmd));
   }
 
   if (ImGui::BeginPopup("##drawing1_vp_ctx")) {
