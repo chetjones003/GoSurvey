@@ -15347,9 +15347,28 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
       const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
       const float boxW = 74.f * io.FontGlobalScale;
+      const ImGuiID idDist = ImGui::GetID("##ucsDist");
+      const ImGuiID idAng = ImGui::GetID("##ucsAng");
+      const ImGuiID activeIdP = ImGui::GetActiveID();
+
+      // Type-to-start, the same mechanism the single field has. Without it neither box ever takes
+      // focus, so the pair was READ-ONLY: it tracked the cursor and swallowed nothing, and typing
+      // went to the command bar instead. That is the whole point of the boxes, so this is not a
+      // nicety — it is the feature.
+      //
+      // The first keystroke seeds the DISTANCE box, which is the one you land on. Tab then moves to
+      // the angle (ImGui's own next-item behaviour, so no key handling of ours), which is how you
+      // reach "I only care about the angle".
+      if (activeIdP != idDist && activeIdP != idAng && !io.WantTextInput && io.InputQueueCharacters.Size > 0) {
+        distBuf[0] = '\0';
+        polarLocked = true;
+        RouteQueuedCharsToCmdBuf(distBuf, static_cast<int>(sizeof(distBuf)), io);
+        ImGui::SetKeyboardFocusHere();
+      }
+
       ImGui::SetNextItemWidth(boxW);
       const bool distEnter = ImGui::InputText("##ucsDist", distBuf, sizeof(distBuf), pf, CommandLineInputCallback);
-      if (ImGui::IsItemActivated() && !polarLocked) polarLocked = true;
+      if (ImGui::IsItemActivated() && !polarLocked) { distBuf[0] = '\0'; polarLocked = true; }
       if (ImGui::IsItemEdited()) polarLocked = true;
       ImGui::SameLine(0.f, 6.f);
       // The angle box wears its own "<", so the pair reads as the polar notation it produces rather
@@ -15358,12 +15377,36 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       ImGui::SameLine(0.f, 4.f);
       ImGui::SetNextItemWidth(boxW);
       const bool angEnter = ImGui::InputText("##ucsAng", angBuf, sizeof(angBuf), pf, CommandLineInputCallback);
-      if (ImGui::IsItemActivated() && !polarLocked) polarLocked = true;
+      if (ImGui::IsItemActivated() && !polarLocked) { angBuf[0] = '\0'; polarLocked = true; }
       if (ImGui::IsItemEdited()) polarLocked = true;
 
       if (distEnter || angEnter) {
-        char polarBuf[128];
-        std::snprintf(polarBuf, sizeof(polarBuf), "@%s<%s", distBuf, angBuf);
+        // An angle ALONE is a complete answer at these prompts, and the commonest one: the X-axis
+        // and XY-plane picks define a DIRECTION, so the distance does not affect the resulting frame
+        // at all. Tabbing to the angle, clearing it and typing 27 should work without also having to
+        // supply a length nobody uses — so a blank or unusable distance falls back to the live one,
+        // and to 1.0 if the cursor happens to sit on the origin.
+        double useDist = 0.0;
+        {
+          std::istringstream di{std::string(distBuf)};
+          if (!(di >> useDist) || !std::isfinite(useDist) || useDist == 0.0)
+            useDist = ray3d::Length(dir);
+          if (!std::isfinite(useDist) || useDist == 0.0)
+            useDist = 1.0;
+        }
+        // A blank angle means "the direction I am pointing", so the live value stands in for it.
+        std::string angText = StringUtil::trimCopy(std::string(angBuf));
+        if (angText.empty()) {
+          double liveAng = 0.0;
+          if (ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &liveAng)) {
+            while (liveAng < 0.0) liveAng += 360.0;
+          }
+          char ab[32];
+          std::snprintf(ab, sizeof(ab), "%.4f", liveAng);
+          angText = ab;
+        }
+        char polarBuf[160];
+        std::snprintf(polarBuf, sizeof(polarBuf), "@%.6f<%s", useDist, angText.c_str());
         ProcessCommandLineSubmit(polarBuf, static_cast<int>(sizeof(polarBuf)), cmd, log);
       }
     } else if (pointEntry) {

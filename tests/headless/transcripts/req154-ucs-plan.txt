@@ -379,3 +379,31 @@ EXPECT LOG "enter a point or @distance<angle"
 ESC
 
 CHECK ALL
+
+# --- Only the ANGLE decides the frame; the distance is along for the ride ----------------------
+# This is why the cursor's angle box alone is a complete answer: the X-axis pick defines a
+# DIRECTION, so two polar points at the same angle and wildly different distances must produce the
+# same UCS. The UI leans on this when the user tabs past the distance and types only an angle.
+NEW
+CMD UCS
+CMD 0,0
+CMD @1<27
+CMD
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+EXPECT LINEXYZ 0 0 0 0 89.1007 45.3990 0
+
+NEW
+CMD UCS
+CMD 0,0
+CMD @5280<27
+CMD
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+EXPECT LINEXYZ 0 0 0 0 89.1007 45.3990 0
+
+CHECK ALL
