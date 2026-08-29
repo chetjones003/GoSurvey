@@ -23089,6 +23089,51 @@ static void EndUcsCommand(AppCommandState& st) {
 // options could only ever produce frames rotated about the current Z. A tilted UCS - the thing the
 // whole 3D half of this feature exists for - would be reachable by mouse only. Z defaults to 0
 // (the work plane) when omitted, which is what every 2D entry means.
+/// The point a UCS prompt's polar form names: `@<distance><<angle>`, e.g. `@33.2311<17`.
+///
+/// Relative to \p base — the origin already picked for this frame — with the angle measured in the
+/// current UCS's XY plane from its +X, the same reference \ref ucs::AngleInRotationPlaneDeg uses so
+/// the typed form and the two-point form cannot disagree.
+///
+/// This is the syntax the cursor's distance/angle boxes assemble, so what a user picks with the
+/// mouse is exactly what they could have typed — and it is what the command log then shows them,
+/// which is how the two stay learnable from each other.
+static bool ParseUcsPolarPoint(const AppCommandState& st, const std::string& raw, const ray3d::Vec3& base,
+                               ray3d::Vec3* out) {
+  std::string s = StringUtil::trimCopy(raw);
+  if (s.size() < 2 || s[0] != '@')
+    return false;
+  const size_t lt = s.find('<');
+  if (lt == std::string::npos)
+    return false;
+  const std::string distStr = StringUtil::trimCopy(s.substr(1, lt - 1));
+  const std::string angStr = StringUtil::trimCopy(s.substr(lt + 1));
+  if (distStr.empty() || angStr.empty())
+    return false;
+  double dist = 0., angDeg = 0.;
+  {
+    std::istringstream di(distStr);
+    if (!(di >> dist) || !(di >> std::ws).eof())
+      return false;
+    std::istringstream ai(angStr);
+    if (!(ai >> angDeg) || !(ai >> std::ws).eof())
+      return false;
+  }
+  if (!std::isfinite(dist) || !std::isfinite(angDeg))
+    return false;
+  constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+  // Built in the UCS's own XY plane and then lifted to world, so a polar point on a tilted frame
+  // lands on that frame's plane rather than on the world's.
+  const ray3d::Vec3 baseLocal = ucs::WorldToUcs(st.activeUcs, base);
+  const ray3d::Vec3 p = ucs::UcsToWorld(st.activeUcs, {baseLocal.x + dist * std::cos(angDeg * kDegToRad),
+                                                       baseLocal.y + dist * std::sin(angDeg * kDegToRad),
+                                                       baseLocal.z});
+  if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+    return false;
+  *out = p;
+  return true;
+}
+
 static bool ParseUcsPromptPoint(const AppCommandState& st, const std::string& raw, ray3d::Vec3* out) {
   std::string s = StringUtil::trimCopy(raw);
   if (s.empty())
@@ -23306,8 +23351,11 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
         return true;
       }
       ray3d::Vec3 onX;
-      if (!ParseUcsPromptPoint(st, in, &onX)) {
-        log.push_back("UCS - enter a point, or press Enter to accept the origin alone.");
+      // `@33.2311<17` - distance and angle from the origin just picked, the form the cursor's
+      // distance/angle boxes assemble. Tried first because it is unambiguous: a leading '@' with a
+      // '<' cannot be a coordinate pair.
+      if (!ParseUcsPolarPoint(st, in, st.ucsPendingOrigin, &onX) && !ParseUcsPromptPoint(st, in, &onX)) {
+        log.push_back("UCS - enter a point or @distance<angle, or press Enter to accept the origin alone.");
         return true;
       }
       st.ucsPendingXAxisPoint = onX;
@@ -23332,8 +23380,10 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
         return true;
       }
       ray3d::Vec3 onXy;
-      if (!ParseUcsPromptPoint(st, in, &onXy)) {
-        log.push_back("UCS - enter a point, or press Enter to accept the X axis alone.");
+      // Polar accepted here too, measured from the same origin as the X-axis step so both boxes
+      // read against one reference rather than the second silently changing it.
+      if (!ParseUcsPolarPoint(st, in, st.ucsPendingOrigin, &onXy) && !ParseUcsPromptPoint(st, in, &onXy)) {
+        log.push_back("UCS - enter a point or @distance<angle, or press Enter to accept the X axis alone.");
         return true;
       }
       if (!ucs::FromThreePoints(st.ucsPendingOrigin, st.ucsPendingXAxisPoint, onXy, &next)) {

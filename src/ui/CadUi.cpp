@@ -7743,6 +7743,17 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   case K::MoveTinPoint: return true;
   case K::DelTinLine: return true;
   case K::QuickProfile: return true;
+  // REQ-154. The second of the two lists a point-picking command has to appear in — UCS was missing
+  // from both, so it had neither dynamic input nor a working click. Same phases that
+  // ViewportClickRouteFor routes: everything that takes a coordinate, and nothing that wants a
+  // keyword or a number.
+  case K::Ucs: {
+    using UPh = AppCommandState::UcsPhase;
+    return cmd.ucsPhase == UPh::WaitOriginOrOption || cmd.ucsPhase == UPh::WaitXAxisPoint ||
+           cmd.ucsPhase == UPh::WaitXyPoint || cmd.ucsPhase == UPh::WaitRotationAngleP1 ||
+           cmd.ucsPhase == UPh::WaitRotationAngleP2 || cmd.ucsPhase == UPh::WaitZAxisOrigin ||
+           cmd.ucsPhase == UPh::WaitZAxisPoint;
+  }
   case K::Circle: {
     using CP = AppCommandState::CirclePhase;
     return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||
@@ -7808,6 +7819,35 @@ static std::string OrdinalWord(int n) {
   return std::to_string(n) + suf;
 }
 
+// REQ-154 / REQ-024. The two UCS axis prompts show a POLAR pair — distance and angle — rather than
+// REQ-024's single x,y field, because what those prompts ask for is a DIRECTION. An x,y readout
+// answers "where is my cursor"; the question on screen is "what angle is my axis", and the user
+// should not have to do the subtraction in their head.
+//
+// This is a stated exception, not a reversal: every other point prompt keeps the single field
+// REQ-024's 2026-06-19 revision settled on, and the polar pair assembles `@distance<angle` — real
+// syntax the command line accepts — so the two forms describe the same thing.
+//
+// Returns false, and leaves the outputs alone, for every prompt that is not one of those two.
+static bool CadUcsPolarPromptBase(const AppCommandState& cmd, ray3d::Vec3* baseWorld) {
+  if (cmd.active != AppCommandState::Kind::Ucs || !baseWorld)
+    return false;
+  using UPh = AppCommandState::UcsPhase;
+  switch (cmd.ucsPhase) {
+  case UPh::WaitXAxisPoint:
+  case UPh::WaitXyPoint:
+    // Both measure from the ORIGIN, not from each other — one reference for both boxes, so the
+    // second prompt does not silently re-base the angle the first one showed.
+    *baseWorld = cmd.ucsPendingOrigin;
+    return true;
+  case UPh::WaitRotationAngleP2:
+    *baseWorld = cmd.ucsAngleBasePoint;
+    return true;
+  default:
+    return false;
+  }
+}
+
 // AutoCAD-style "Specify … :" label for the dynamic-input point prompt (REQ-024).
 // Only meaningful when CommandExpectsPointEntry(cmd) is true. Multi-point chains
 // (LINE, POLYLINE) count the point being specified: first, second, third, …
@@ -7864,6 +7904,20 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
     case AppCommandState::DimAngularPhase::WaitRay1:   return "Specify first ray point:";
     case AppCommandState::DimAngularPhase::WaitRay2:   return "Specify second ray point:";
     default:                                          return "Specify point:";
+    }
+  // REQ-154. Wording follows AutoCAD's own UCS prompts, including the `<accept>` on the two axis
+  // steps — both take a bare Enter to accept what has been picked so far, and the label is where a
+  // user learns that.
+  case K::Ucs:
+    switch (cmd.ucsPhase) {
+    case AppCommandState::UcsPhase::WaitOriginOrOption:  return "Specify origin of UCS:";
+    case AppCommandState::UcsPhase::WaitXAxisPoint:      return "Specify point on X-axis or <accept>:";
+    case AppCommandState::UcsPhase::WaitXyPoint:         return "Specify point on the XY plane or <accept>:";
+    case AppCommandState::UcsPhase::WaitRotationAngleP1: return "Specify first point of the angle:";
+    case AppCommandState::UcsPhase::WaitRotationAngleP2: return "Specify second point of the angle:";
+    case AppCommandState::UcsPhase::WaitZAxisOrigin:     return "Specify new origin point:";
+    case AppCommandState::UcsPhase::WaitZAxisPoint:      return "Specify point on positive portion of Z axis:";
+    default:                                             return "Specify point:";
     }
   case K::IdPoint:
     return "Specify point:";
@@ -15183,7 +15237,60 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0.f, 2.f));
 
-    if (pointEntry) {
+    ray3d::Vec3 polarBase{};
+    const bool polarPrompt = pointEntry && CadUcsPolarPromptBase(cmd, &polarBase);
+    if (polarPrompt) {
+      // Distance + angle, AutoCAD's UCS form (REQ-154; the stated exception to REQ-024's single
+      // field). Both track the cursor until typed; either one's Enter commits the pair, assembled
+      // as `@distance<angle` — the same string the command line accepts, so the mouse and the
+      // keyboard produce identical input rather than two parallel code paths.
+      static char distBuf[48] = {0};
+      static char angBuf[48] = {0};
+      static bool polarLocked = false;
+      if (promptChanged) polarLocked = false;
+
+      double liveWx = 0.0, liveWy = 0.0;
+      if (outCursorX && outCursorY)
+        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
+                                 &liveWy);
+      const ray3d::Vec3 cursorWorld{liveWx, liveWy, polarBase.z};
+      const ray3d::Vec3 dir = ray3d::Sub(cursorWorld, polarBase);
+      const int prec = cmd.displayLinearPrecision;
+      if (!polarLocked) {
+        std::snprintf(distBuf, sizeof(distBuf), "%s", FormatLinear(ray3d::Length(dir), prec).c_str());
+        double angDeg = 0.0;
+        // Measured in the ACTIVE frame's XY plane from its +X — the same reference the two-point
+        // form uses, so a number read here and a number typed there mean the same rotation.
+        if (ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &angDeg)) {
+          while (angDeg < 0.0) angDeg += 360.0;
+          std::snprintf(angBuf, sizeof(angBuf), "%.0f", angDeg);
+        } else {
+          std::snprintf(angBuf, sizeof(angBuf), "0");
+        }
+      }
+
+      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
+      const float boxW = 74.f * io.FontGlobalScale;
+      ImGui::SetNextItemWidth(boxW);
+      const bool distEnter = ImGui::InputText("##ucsDist", distBuf, sizeof(distBuf), pf, CommandLineInputCallback);
+      if (ImGui::IsItemActivated() && !polarLocked) polarLocked = true;
+      if (ImGui::IsItemEdited()) polarLocked = true;
+      ImGui::SameLine(0.f, 6.f);
+      // The angle box wears its own "<", so the pair reads as the polar notation it produces rather
+      // than as two unrelated numbers.
+      ImGui::TextUnformatted("<");
+      ImGui::SameLine(0.f, 4.f);
+      ImGui::SetNextItemWidth(boxW);
+      const bool angEnter = ImGui::InputText("##ucsAng", angBuf, sizeof(angBuf), pf, CommandLineInputCallback);
+      if (ImGui::IsItemActivated() && !polarLocked) polarLocked = true;
+      if (ImGui::IsItemEdited()) polarLocked = true;
+
+      if (distEnter || angEnter) {
+        char polarBuf[128];
+        std::snprintf(polarBuf, sizeof(polarBuf), "@%s<%s", distBuf, angBuf);
+        ProcessCommandLineSubmit(polarBuf, static_cast<int>(sizeof(polarBuf)), cmd, log);
+      }
+    } else if (pointEntry) {
       // Single live coordinate field: tracks the crosshair's world X,Y at the
       // display precision until the user types (which locks it). The field accepts
       // absolute "x,y", relative "@dx,dy", bearings, distances, or any other input
@@ -15489,6 +15596,79 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                        mp.y, ImGui::IsMouseClicked(ImGuiMouseButton_Left), CadUcsViewAzimuthOffsetDeg(cmd));
     if (vc.changed)
       CadStartViewAnimation(cmd, vc.azimuthDeg, vc.elevationDeg);  // ease, don't jump (REQ-059)
+  }
+
+  // ---- UCS dropdown (REQ-154) --------------------------------------------------------------------
+  // AutoCAD's little frame selector under the ViewCube. It answers "which frame am I in?" without
+  // reading the status bar, and switching back to World — the thing you do most — becomes one click
+  // instead of `UCS` then `W`.
+  //
+  // Drawn as its OWN overlay window rather than by moving this one's cursor. Reaching outside the
+  // viewport window's content region with SetCursorScreenPos trips ImGui's "code uses
+  // SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries" assertion, which paints
+  // a red banner across the drawing — the same overlay-window shape the cursor's dynamic input above
+  // already uses, and for the same reason.
+  //
+  // Model space only, like the ViewCube and the UCS icon: a paper sheet has no frame.
+  if (modelSpace && avail.x > 200.f && avail.y > 200.f) {
+    // The label names the frame: WCS, the saved name when the active frame IS one of them, and
+    // otherwise "Unnamed" — AutoCAD's own word for a frame that has been built but not saved, and a
+    // useful nudge that `UCS N S` would keep it.
+    const bool isWorld = CadUcsIsWorld(cmd);
+    std::string activeName = isWorld ? "WCS" : "Unnamed";
+    if (!isWorld) {
+      for (const NamedUcs& n : cmd.ucsNamed) {
+        if (ucs::FramesMatch(n.frame, cmd.activeUcs)) {
+          activeName = n.name;
+          break;
+        }
+      }
+    }
+
+    const float dropW = std::max(84.f, ImGui::CalcTextSize(activeName.c_str()).x + 40.f);
+    ImGui::SetNextWindowPos(ImVec2(viewCubeX + kViewCubeSize - dropW, viewCubeY + kViewCubeSize + 6.f),
+                            ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.f);  // the button carries its own fill; the window is just a frame
+    const ImGuiWindowFlags dwf = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    if (ImGui::Begin("##UcsDropdown", nullptr, dwf)) {
+      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.f, 3.f));
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.24f, 0.28f, 0.85f));
+      const bool dropClicked = ImGui::Button((activeName + "  \xe2\x96\xbe##ucsdrop").c_str(), ImVec2(dropW, 22.f));
+      const ImVec2 btnMax = ImGui::GetItemRectMax();
+      if (dropClicked)
+        ImGui::OpenPopup("##ucsdropmenu");
+      ImGui::PopStyleColor();
+      ImGui::PopStyleVar();
+
+      // Right-aligned to the button. The button sits hard against the viewport's right edge (it
+      // tracks the ViewCube), so a popup growing rightward runs off the drawing and under whatever
+      // panel is docked there - which is exactly what it did before this pin.
+      ImGui::SetNextWindowPos(ImVec2(btnMax.x, btnMax.y + 2.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
+      if (ImGui::BeginPopup("##ucsdropmenu")) {
+        if (ImGui::MenuItem("WCS", nullptr, isWorld) && !isWorld)
+          SetActiveUcs(cmd, ucs::Ucs{}, log);
+        // Every frame saved in this drawing, so restoring one is a click rather than `UCS N R <name>`.
+        if (!cmd.ucsNamed.empty()) {
+          ImGui::Separator();
+          for (const NamedUcs& n : cmd.ucsNamed) {
+            const bool isActive = !isWorld && ucs::FramesMatch(n.frame, cmd.activeUcs);
+            if (ImGui::MenuItem(n.name.c_str(), nullptr, isActive) && !isActive)
+              SetActiveUcs(cmd, n.frame, log);
+          }
+        }
+        ImGui::Separator();
+        // Opens the ordinary command, so the dropdown and the command line share one implementation
+        // and cannot drift about what "new UCS" means.
+        if (ImGui::MenuItem("New UCS"))
+          StartUcsCommand(cmd, log);
+        ImGui::EndPopup();
+      }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
   }
 
   // ---- UCS icon (REQ-154) ------------------------------------------------------------------------

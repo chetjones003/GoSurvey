@@ -65,6 +65,18 @@ struct Ucs {
          std::fabs(c.z - u.zAxis.z) <= tol;
 }
 
+/// True when two frames are the same to within \p tol — same origin and same basis.
+///
+/// Used to decide which entry in the UCS dropdown carries the tick. Comparing the WHOLE frame
+/// matters: a saved UCS and the active one can share an origin and differ only in rotation, and
+/// ticking that name would tell the user they are working in a frame they are not.
+[[nodiscard]] inline bool FramesMatch(const Ucs& a, const Ucs& b, double tol = 1e-6) {
+  auto near = [tol](const Vec3& p, const Vec3& q) {
+    return std::fabs(p.x - q.x) <= tol && std::fabs(p.y - q.y) <= tol && std::fabs(p.z - q.z) <= tol;
+  };
+  return near(a.origin, b.origin) && near(a.xAxis, b.xAxis) && near(a.yAxis, b.yAxis) && near(a.zAxis, b.zAxis);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Transformations. These four are the entire public contract the rest of the app codes against.
 // ---------------------------------------------------------------------------------------------

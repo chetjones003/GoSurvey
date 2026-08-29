@@ -1,6 +1,7 @@
 #include "CadRubberPreview.hpp"
 
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "geom2d.hpp"
 
 #include <algorithm>
@@ -295,5 +296,45 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     } else if (cmd.mtextPhase == MPtxt::WaitString)
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, cmd.mtxtX2, cmd.mtxtY2, 0., 0.,
                                    zc);
+  }
+
+  // UCS axis preview (REQ-154). At the two axis prompts, draw the frame the cursor would produce —
+  // the rubber from the origin out to the cursor, plus the perpendicular the frame implies — so the
+  // user sees the resulting axes before committing rather than after.
+  //
+  // The stores are LOCAL, the UCS is WORLD (see CadActiveUcsStorage), so the pending picks are
+  // converted down here rather than the rubber being built in world and converted wholesale.
+  if (cmd.active == AppCommandState::Kind::Ucs) {
+    using UPh = AppCommandState::UcsPhase;
+    auto localOf = [&](const ray3d::Vec3& world, float* lx, float* ly) {
+      CadCoord::LocalFromWorld(cmd, world.x, world.y, lx, ly);
+    };
+    if (cmd.ucsPhase == UPh::WaitXAxisPoint || cmd.ucsPhase == UPh::WaitXyPoint) {
+      float ox = 0.f, oy = 0.f;
+      localOf(cmd.ucsPendingOrigin, &ox, &oy);
+      if (cmd.ucsPhase == UPh::WaitXAxisPoint) {
+        // One rubber: origin to cursor, which IS the X axis being defined.
+        PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
+      } else {
+        // The X axis is settled, so it is drawn solid-length from the origin, and the rubber shows
+        // the second direction the cursor is choosing. Both together are the frame.
+        float xx = 0.f, xy = 0.f;
+        localOf(cmd.ucsPendingXAxisPoint, &xx, &xy);
+        PushRubberSegViewRel(rubberLines, ox, oy, xx, xy, 0., 0., zc, zc);
+        PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
+      }
+    } else if (cmd.ucsPhase == UPh::WaitRotationAngleP1 || cmd.ucsPhase == UPh::WaitRotationAngleP2) {
+      // `2P`: nothing to draw until the first point is down, then the rubber IS the direction whose
+      // angle is being measured.
+      if (cmd.ucsPhase == UPh::WaitRotationAngleP2) {
+        float bx = 0.f, by = 0.f;
+        localOf(cmd.ucsAngleBasePoint, &bx, &by);
+        PushRubberSegViewRel(rubberLines, bx, by, curXf, curYf, 0., 0., zc, zc);
+      }
+    } else if (cmd.ucsPhase == UPh::WaitZAxisPoint) {
+      float ox = 0.f, oy = 0.f;
+      localOf(cmd.ucsPendingOrigin, &ox, &oy);
+      PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
+    }
   }
 }

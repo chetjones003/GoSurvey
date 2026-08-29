@@ -327,6 +327,17 @@ requirements is a planning failure, not a sign of rigor.
   that do not expect a point (bearing/angle/distance/option/command-name entry)
   likewise keep a single input field. There is no Send button; commit is by Enter
   or click.
+
+  **One stated exception — directional prompts (REQ-154).** The UCS X-axis and
+  XY-plane prompts, and the second point of `UCS <axis> 2P`, show a **polar pair**
+  instead: a distance field and an angle field, rendered as `<distance> < <angle>`.
+  Those prompts ask for a DIRECTION, and an `x,y` readout answers a different
+  question — the user would have to do the subtraction themselves to learn the
+  angle the prompt is about. The pair assembles `@<distance><<angle>`, which is
+  real syntax the command line accepts, so the two forms describe the same thing
+  and either can be typed. The angle is measured in the active UCS's XY plane from
+  its +X, the same reference `UCS <axis> 2P` uses. This exception is deliberately
+  narrow: it does not reopen the 2026-06-19 decision for any other prompt.
 - Acceptance: starting LINE shows the "first point" prompt with a single box that
   tracks the cursor's easting/northing as `x,y`; typing locks the field; entering
   `@dx,dy` or a bearing/distance places the relative point; Enter commits the
@@ -336,6 +347,8 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-12 — initial; 2026-06-19 — single coordinate field instead
   of two X/Y boxes, so relative/bearing/distance entry works in the same field.
+  2026-08-29 — a stated exception for the UCS directional prompts (REQ-154): a
+  polar distance/angle pair there, single field everywhere else.
 
 ### REQ-025 — Model and Paper space with layout tabs and a space toggle
 - Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
@@ -4873,6 +4886,18 @@ requirements is a planning failure, not a sign of rigor.
   define no angle in that plane (coincident, or perpendicular to it) are refused and the prompt stands
   (REQ-201).
 
+  **The command shows what it is about to do.** At the two axis prompts and at the second `2P` pick,
+  a rubber preview runs from the origin to the cursor, and the cursor carries a **polar distance and
+  angle pair** (REQ-024's stated exception) reading in the active frame. `@<distance><<angle>` is
+  accepted as typed input at those prompts, so what the mouse produces is exactly what could have
+  been typed.
+
+  **A frame selector sits under the ViewCube**, in model space only. It names the active frame —
+  `WCS`, the saved name when the frame is one of them, or `Unnamed` for a frame built but not saved —
+  and opens a menu of `WCS`, every named UCS in the drawing, and `New UCS`. Selecting a name restores
+  that frame; `New UCS` opens the ordinary command, so the menu and the command line cannot drift
+  about what any of it means.
+
   **Coordinate entry is in the UCS.** Under a UCS rotated 45° about Z, `10,0` is ten units along the
   UCS X axis; `@dx,dy` is a delta along the UCS axes. Typed points accept `X,Y,Z` as well as `X,Y`,
   without which no tilted frame could be defined from the keyboard. Object snaps continue to resolve
@@ -4932,7 +4957,9 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-28)
 - Revisions: 2026-08-28 — initial (D-2026-08-28-n); raised by chetjones003 as issue #126. 2026-08-29 — added `2P`
   to the rotation-angle prompt (take the angle from two picked points), at the user's request during
-  hands-on testing of this branch.
+  hands-on testing of this branch. Same day — live axis preview, the polar
+  distance/angle cursor pair (REQ-024's stated exception) with `@distance<angle` as typed input, and
+  the frame selector under the ViewCube; all three requested from hands-on testing.
 
 #### Not in this requirement — and why
 

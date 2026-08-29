@@ -334,3 +334,48 @@ EXPECT LOG "Coordinate entry is now in this frame"
 CMD UCS
 CMD W
 CHECK ALL
+
+# --- The polar form: @distance<angle -----------------------------------------------------------
+# What the cursor's distance/angle boxes assemble and submit, so the mouse and the keyboard produce
+# identical input rather than two parallel paths. This is also the string AutoCAD echoes on its own
+# command line, which is where the syntax comes from.
+
+NEW
+CMD UCS
+CMD 0,0
+CMD @33.2311<17
+EXPECT LOG "Specify point on positive-Y portion"
+CMD
+EXPECT LOG "Coordinate entry is now in this frame"
+
+# 17 degrees: cos = 0.95630, sin = 0.29237. A line typed as UCS 100,0 lands there in world.
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+EXPECT LINEXYZ 0 0 0 0 95.6305 29.2372 0
+
+CMD UCS
+CMD W
+
+# Measured from the ORIGIN, not from the previous pick, and accepted at the XY prompt too.
+CMD UCS
+CMD 0,0
+CMD @10<0
+CMD @10<90
+EXPECT LOG "Coordinate entry is now in this frame"
+CMD UCS
+CMD W
+
+# A malformed polar form is refused rather than half-read: no angle, no distance, or junk.
+CMD UCS
+CMD 0,0
+CMD @33<
+EXPECT LOG "enter a point or @distance<angle"
+CMD @<17
+EXPECT LOG "enter a point or @distance<angle"
+CMD @abc<def
+EXPECT LOG "enter a point or @distance<angle"
+ESC
+
+CHECK ALL

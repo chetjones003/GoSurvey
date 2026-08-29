@@ -164,6 +164,40 @@ under `UCS Z` — are refused and the prompt **stands at the second point** rath
 whole command, so the pick can simply be retaken (REQ-201). The out-of-plane test scales with the
 picks' own length rather than a fixed distance, so a mile-long pair that is barely off-plane is
 refused for the same reason a short one is.
+
+**Live preview, polar cursor input, and the frame selector — added 2026-08-29 from hands-on
+testing.** Nathan drove the branch, sent AutoCAD screenshots of the three, and asked for them.
+
+**The one thing that needed a decision, not a guess.** REQ-024 is accepted and says a point prompt
+shows a **single** `x,y` field — and its Revisions record that this deliberately *replaced* an
+earlier two-box design on 2026-06-19, "so relative/bearing/distance entry works in the same field".
+The screenshots show AutoCAD's two-box polar pair. Building it silently would have reversed a
+recorded decision, so it was raised: the answer was a **UCS-only exception**, now stated in REQ-024
+itself, leaving every other prompt on the single field. Narrow on purpose.
+
+**The polar pair is real syntax, not a widget.** The boxes assemble `@<distance><<angle>` and submit
+it through `ProcessCommandLineSubmit`, and `ParseUcsPolarPoint` accepts the same string typed. That
+came from the screenshots themselves: AutoCAD's command line echoes `@33.2311<17` after the pick. So
+the mouse path and the keyboard path are one path, and a user can read what they just did and repeat
+it — rather than a UI-only affordance with no textual equivalent.
+
+**UCS was missing from the SECOND of the two lists a point-picking command must appear in.**
+Yesterday's fix added `K::Ucs` to `ViewportClickRouteFor`; it was also absent from
+`CommandExpectsPointEntry`, so the cursor prompt never appeared at all. `CommandExpectsPointEntry`
+carries a comment about SURFELEV hitting exactly this — "the same pre-existing TASK-055 gap, in the
+second of the two lists" — which is now three commands that have fallen into it. Worth a guard that
+makes the pair impossible to half-fill.
+
+**A bug I introduced and caught in the GUI pass.** The frame selector first placed its button with
+`SetCursorScreenPos`, reaching outside the viewport window's content region. ImGui answered with a
+red "code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries" banner painted
+across the drawing. Rebuilt as its own overlay window — the shape the cursor's dynamic input beside
+it already uses. Its popup is also pinned right-aligned to the button, because the button tracks the
+ViewCube against the viewport's right edge and a popup growing rightward ran under the docked panel.
+
+Neither of those two is reachable by any transcript — they are placement, and this repo has no
+render-comparison harness (DEBT-3). Both were found by driving the GUI and reading the capture, which
+is the second time in two days that pass has caught something the suite could not.
 ## 8. Technical debt
 ```
 DEBT-1: PLAN of a tilted UCS sets the view direction but not the in-plane rotation.
