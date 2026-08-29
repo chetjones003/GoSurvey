@@ -1182,6 +1182,9 @@ requirements is a planning failure, not a sign of rigor.
   GoSurvey does not model (the user's decision is that a save **must** preserve them, which Phase 1
   cannot do); first-class blocks; multiple layouts; elevations; and the migration of `.gs` to DWG
   as the native format. All are itemised in `docs/dwg-plan.txt`.
+  2026-08-29 — **Native codec path decided: LibreDWG (REQ-170, ADR-041, D-2026-08-29-g).** Phase 1
+  converter remains until REQ-170 is verified, then leaves the user-facing path. **This epic does
+  not close DM-08** (unknown-object preservation / R2018 write). DWG write is R2000/R2004 only.
 
 ### REQ-053 — RECT command, and polylines survive a DXF/DWG save
 - Purpose: rectangles are the most-drawn shape in survey deliverables (parcels, structures, title-block
@@ -3083,6 +3086,125 @@ requirements is a planning failure, not a sign of rigor.
                path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
                while the driver has no window; that is mitigated by the routing, not solved.
 
+### REQ-170 — LibreDWG is the DXF and DWG codec
+- Purpose: File Format Specs — open and save DWG/DXF in-process with no ODA/AutoCAD converter on
+  the customer machine; write DWG only as far as LibreDWG is trustworthy (R2004)
+- Priority: must
+- Type: functional
+- Statement: **GNU LibreDWG** is the codec for `.dwg` and `.dxf` (ADR-041). GoSurvey links it and
+  is therefore **GPL-3.0-or-later**.
+  **Open:** a DWG or DXF opens without `FindDwgConverter` for the happy path. Version is reported
+  by release name (existing probe may remain). A file that is not DWG/DXF is refused with that
+  reason (REQ-001). Entities and tables LibreDWG decoded are mapped into the GoSurvey domain;
+  every skipped class, exploded INSERT (until REQ-107), extra layout, and proxy is **named in the
+  log** (REQ-201). State-plane coordinates obey REQ-101 (origin subtract in double before float).
+  **Save DWG:** only **R2000** or **R2004**; default **R2004**. R2007+ is refused. The file AutoCAD
+  opens must do so **without a Recover prompt** for the entity set we emit. Before overwrite, the
+  UI lists what this down-convert / domain mapping will drop. Failed write leaves the destination
+  untouched.
+  **Save DXF:** LibreDWG’s DXF writer; binary DXF is included to the extent the library writes it
+  (this **subsumes** proposed REQ-112 when implemented). Types with no representation (TIN, mesh,
+  cloud, PDF) are logged exclusions, not silent drops.
+  Phase 1 converter-based Import/Export remains until these acceptance conditions are met, then is
+  removed from the user-facing path (oracle use is allowed).
+- Acceptance:
+  - an R2018 `.dwg` opens with **no** ODA File Converter and **no** AutoCAD installed in the test
+    environment, and model-space LINE/CIRCLE/LWPOLYLINE/TEXT/MTEXT/HATCH that LibreDWG decoded
+    appear in the drawing;
+  - a non-DWG renamed to `.dwg` is refused and the document is unchanged;
+  - File ▸ Export DWG (default) writes R2004; AutoCAD or ODA File Converter (oracle) opens it
+    **without Recover** and the emitted entity counts match the log;
+  - exporting R2018 is refused by name; the destination file is not created;
+  - a failed encode does not truncate an existing destination;
+  - `GoSurvey` / installer materials state GPL-3.0-or-later.
+- Owner-layer: IO (codec), Domain (mapping), UI (lossy-save list), Build (link LibreDWG, MSVC)
+- Status: accepted
+- Revisions: 2026-08-29 — File Format Specs (D-2026-08-29-g, ADR-041). Does not replace REQ-052
+  Phase 1 until this requirement is verified.
+
+### REQ-171 — Point cloud entity
+- Purpose: File Format Specs — hold laser-scan points without pretending they are a TIN (REQ-068)
+  or a triangle mesh (REQ-063)
+- Priority: must
+- Type: functional
+- Statement: A drawing may contain **point cloud** objects (ADR-042): reference geometry with a
+  `shared_ptr<const>` payload (§11.5), interleaved XYZ, optional RGB and intensity. They are
+  visible, selectable, erasable, layer-controlled, and included in extents. They are **not**
+  grip-edited, not written to DXF/DWG in this epic, and **not** surface definition sources.
+  `.gs` persists them additively. Erase + undo is one step. Legacy `.gs` without the section
+  loads unchanged.
+- Acceptance:
+  - a cloud appears in the viewport, selects as one object, and erase/undo restores it;
+  - extents include the cloud; freeze/off/non-plottable on its layer hides it;
+  - an unrelated line edit does **not** deep-copy the payload (shared immutable pointer);
+  - DXF/DWG export **names** the cloud exclusion in the log;
+  - a pre-REQ-171 `.gs` still opens.
+- Owner-layer: Domain/Renderer/IO
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
+
+### REQ-172 — E57, LAS, LAZ, PTS, and PTX interchange
+- Purpose: File Format Specs — the open scan formats consultants actually send
+- Priority: must
+- Type: functional
+- Statement: GoSurvey **imports and exports** ASTM **E57**, ASPRS **LAS**, **LAZ** (LASzip),
+  Cyclone-style **PTS**, and **PTX** (ADR-042, `spec/file-format-specs.md` §3.2). Import creates
+  REQ-171 cloud(s). Export writes the selected cloud(s) (or all, when none selected — stated in
+  the command). PTS/PTX parsers are in-tree; no delimiter auto-detect. PTX setup transforms are
+  applied so points land in world coordinates within REQ-101. Malformed files refuse and leave
+  the drawing unchanged (REQ-001).
+- Acceptance:
+  - a known-good PTS of N points imports N points (count in the log) at coordinates within
+    REQ-101 of the file;
+  - export of that cloud to PTS, then re-import, preserves count and XYZ within REQ-101;
+  - the same for PTX **including** a non-identity setup transform (hand-checked 4×4);
+  - a LAS and a LAZ of the same points import equal counts and XYZ within REQ-101;
+  - an E57 with XYZ (+ RGB if present) imports; a truncated/malformed E57/LAS/PTS is refused
+    with a specific message and no partial cloud;
+  - missing file / empty path: no crash, drawing unchanged.
+- Owner-layer: IO/Domain/UI
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-g. Delivery order: PTS → PTX → LAS → LAZ → E57
+  (`spec/file-format-specs.md` §6).
+
+### REQ-173 — Raster IMAGE underlays (JPEG, PNG, BMP)
+- Purpose: File Format Specs — photos and scans on the sheet, like PDF attach, not a viewer app
+- Priority: should
+- Type: functional
+- Statement: JPEG, PNG, and BMP attach as **IMAGE** underlays (ADR-042): file path, insertion
+  point, rotation, width/height in drawing units, layer. Decode uses the existing stb_image
+  path. They plot if plottable. `.gs` stores the path and placement; a missing image on reload
+  unloads that underlay and logs it, and the rest of the drawing still loads. IMAGE may be
+  written to DXF/DWG when the LibreDWG mapping exists; until then the export log names the
+  exclusion rather than dropping silently.
+- Acceptance:
+  - attach a PNG, place it, see it in model space; MOVE the underlay; undo restores;
+  - freeze its layer hides it; `.gs` round-trip restores path and placement;
+  - delete the file on disk, reopen `.gs`: drawing loads, IMAGE is unloaded, log says so;
+  - a truncated PNG is refused and no underlay is added.
+- Owner-layer: Domain/IO/Renderer/UI
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
+
+### REQ-174 — IFC view import (no write)
+- Purpose: File Format Specs — see a building model as reference geometry
+- Priority: should
+- Type: functional
+- Statement: An **IFC** file imports as one or more **REQ-063 meshes** (ADR-042). GoSurvey does
+  **not** write IFC, does not store an IFC graph, and does not decode Autodesk vertical objects
+  inside DWG (ADR-026). The parser is IfcPlusPlus unless a later decision records a switch.
+  Skipped/unsupported IFC products are listed in the log (REQ-201). Malformed IFC leaves the
+  drawing unchanged (REQ-001). Meshes remain excluded from DXF/DWG export.
+- Acceptance:
+  - a small IFC2x3 or IFC4 fixture produces a mesh whose triangle count is logged and is > 0;
+  - extents include the mesh; visual style Shaded occludes as REQ-064;
+  - File ▸ Export IFC does not exist (or is disabled with “view only”);
+  - a truncated IFC is refused; the drawing is unchanged;
+  - DXF/DWG export logs the mesh exclusion.
+- Owner-layer: IO/Domain
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
+
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,
                answered without a click and without running a command
@@ -3631,8 +3753,10 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: `DxfIo` detects and reads binary-encoded DXF (the `AutoCAD Binary DXF` sentinel header) alongside the existing ASCII parser.
 - Acceptance (sketch): a binary DXF and its ASCII Save-As of the same drawing import to identical GoSurvey state; a malformed/truncated binary DXF is rejected per REQ-001, not partially absorbed.
 - Owner-layer: IO
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Status: proposed — **subsumed by REQ-170** when LibreDWG’s DXF path is verified (D-2026-08-29-g);
+  do not implement a second binary-DXF parser beside LibreDWG
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-08-29 — File Format Specs: implementation
+  belongs to REQ-170, not a parallel `DxfIo` branch.
 
 ### REQ-113 — DXF paper-space import
 - Purpose: since REQ-037 gave GoSurvey native paper-space geometry, an imported DXF's paper-space entities and title block have somewhere real to go, but import still discards them and only logs a count
@@ -4725,6 +4849,11 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-121 | UI/Commands/Viewport | done (GitHub issue #91, D-2026-08-26-a + D-2026-08-26-d, TASK-115 + TASK-118). Mechanism: `ViewportIsObjectSelectionStep`, derived from `ViewportClickRouteFor`'s `default:`-less switch, so a command cannot be added and silently omitted — `ViewportPickPolicyTests [req121]` (4 cases: ALIGN's unsnapped corners — red before the fix; every selection step recognised; each exclusion asserted; DELETE/JOIN's route, with ZOOM and STRETCH left on the box route). Review follow-ups closed by TASK-118, re-derived while rebasing onto `beta` after issue #103 landed underneath it: rule (3)'s shared prompt was factually wrong for DELETE/JOIN — fixed by giving them D-2026-08-25-l's accumulate-until-Enter shape, covered by `headless.req121-delete-join-accumulate` (proven red on `beta`: the closing box erased, LINES 3 -> 2). Rule (1)'s reported second seam (the snap-OVERRIDE menu bypassing the gate) had its underlying mechanism replaced by #103 between the original review and this rebase — the "cursor jumps mid-selection" symptom no longer reproduces, because the override's consumption already sits behind the same `!ViewportIsObjectSelectionStep` gate the automatic snap uses; what remained was narrower (the menu could still be *opened*, arming a persistent lock off a selection-step pixel that then silently affected the next ordinary snap), and that is what TASK-118's rebase actually gates. The cursor/OSNAP/prompt rules themselves stay GUI-only — there is no headless equivalent for screen-space picking or for a drawn cursor — and both rounds were verified A/B against a control rather than by absence. Paper space is a STATED scope boundary, not coverage: its modify commands are pick-first, so no selection step exists there (GitHub issue #106 — closed by REQ-307, which gives MOVE/COPY/DELETE a real selection step for the one case that needed it, starting with nothing pre-selected). 634/634 ctest green post-rebase. One `CadSnapTests` case (issue #103, unrelated to this task) carried an em-dash in its Catch2 name that CTest's Windows discovery mangles into a filter matching nothing, reporting a false failure in CI on both this branch and unmodified `beta` (`425afa7`'s own CI run) — fixed here by renaming the test to plain ASCII rather than worked around, since it was blocking CI on every branch built from `beta`, not just this one | accepted |
 | REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
 | REQ-123 | Commands/UI | done (GitHub issue #100, D-2026-08-26-e, TASK-119) — **`headless.req123-viewport-zoom-extents`, the first zoom behaviour ever covered by a transcript.** TASK-113's DEBT-1 blocks the others on `ProcessPendingViewportZoom`'s `fbW <= 0` guard; this case needs no framebuffer (its aspect is the viewport's rect in paper inches) so it is handled ahead of that guard. 43 steps: the framing after ZE with hand-computed scales (13.5870 for an 8x4in viewport, 27.1739 for 4x4in — same drawing, different rect, different answer), each viewport independent of the other's zoom, and a layer frozen in the viewport excluded from the extents then restored when thawed. Proven red on `beta`: `expected centre 50, 10 scale 13.587; got 0, 0 scale 50` — the viewport's framing untouched at its creation defaults. Four new driver verbs (VIEWPORT / VPSELECT / CLAYER / VPFREEZE) and `EXPECT VPFRAME`, all REQ-203 gaps of the LAYOUT/CLIPCOPY shape. GUI pass confirmed the numbers against the live status bar (`VP 1" = 40.4'` vs 40.36 computed), the sheet unmoved, REQ-120's gesture working in a viewport for the first time, and middle-drag pan still confined to it. 632/633 ctest (the one failure is `beta`'s own — an em dash in a `CadSnapTests` TEST_CASE name breaks ctest's name round-trip; unrelated and pre-existing) | accepted |
+| REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2004 default write; no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
+| REQ-171 | Domain/Renderer/IO | planned — point cloud entity; shared immutable payload; logged DXF/DWG exclusion | accepted |
+| REQ-172 | IO/Domain/UI | planned — PTS→PTX→LAS→LAZ→E57 read+write; malformed refuse | accepted |
+| REQ-173 | Domain/IO/Renderer/UI | planned — JPEG/PNG/BMP IMAGE underlay; missing file unloads image only | accepted |
+| REQ-174 | IO/Domain | planned — IFC tessellate to mesh; no IFC write | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
@@ -4744,3 +4873,7 @@ requirements is a planning failure, not a sign of rigor.
   Pixel-level tests need an interactive desktop session, are flaky by construction, and mostly
   exercise ImGui rather than GoSurvey. *(accepted 2026-08-16 alongside REQ-203; ADR-031 alt. (1).)*
 - `<…>`
+- We do **not** require native Leica LGS/LGSX/BLK/BLKX/IMP/PTG/BIN or Autodesk RCP/RCS in File
+  Format Specs (D-2026-08-29-g). Interchange for those workflows is E57/LAS from the vendor tool.
+- We do **not** require IFC write, ODA membership, or DWG write past R2004 in this epic.
+- We do **not** require point clouds as TIN data sources (REQ-068 D4 / ADR-042).

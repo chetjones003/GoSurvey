@@ -277,6 +277,11 @@ A lightweight board that complements the milestones. Keep each column honest.
   true on exit** — no cert was obtained; the no-op signing step is still a no-op.
 
 ### Next (accepted, sequenced, not started)
+- **File Format Specs (REQ-170–REQ-174, ADR-041/042, D-2026-08-29-g).** Matrix:
+  `spec/file-format-specs.md`. Order: LibreDWG MSVC link + R2004 write of a tiny drawing →
+  map into CAD stores / retire converter from File open-save → point cloud + PTS → PTX/LAS/LAZ/E57
+  → IMAGE → IFC view. **No code until a Workshop task cites these REQs.** ODA and native scan
+  project formats stay out.
 - **REQ-071 — contour extraction** (EXTRACT bakes displayed contours into unlinked polylines). Moved
   out of "Now" by D-2026-08-21-a so a verification FAIL on styles cannot block it. `util/contourgen`
   (TASK-085) emits the same flat-verts + offsets layout `userPolylineVerts` uses, so the follow-up is
@@ -290,7 +295,8 @@ A lightweight board that complements the milestones. Keep each column honest.
 - REQ-101's reference-dataset half (M2) — the typed-storage half is done; see M2 status above.
 
 ### Later (real but deferred)
-- `<Second file format>` — deferred until a user actually needs it.
+- `<Second file format>` — **closed for the formats in File Format Specs** (D-2026-08-29-g).
+  Remaining vendor natives (LGSX, RCP, BLK, IMP) stay deferred until a new REQ.
 - `<Undo/redo system>` — design only once edit operations stabilize.
 - **Backlog from Known Limitations (REQ-102–REQ-117)** — catalogued
   2026-08-23 from `docs/WikiDocumentation.md`'s Known Limitations page

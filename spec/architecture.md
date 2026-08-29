@@ -672,6 +672,11 @@ A change is rejected if it breaks any of these:
   the unknown-object preservation channel land. Risk acknowledged: users may read "GoSurvey saves DWG" as
   lossless, which is why the confirmation dialog enumerates what is dropped rather than warning vaguely.
 
+#### ADR-024 addendum — native codec is LibreDWG   (2026-08-29, accepted)
+Phase 1 (converter) is unchanged as **shipped history**. The native phase in (d) is **ADR-041 /
+REQ-170**, not a from-scratch codec and not ODA. DWG write in that epic is R2000/R2004 only.
+See `spec/file-format-specs.md` and D-2026-08-29-g.
+
 ### ADR-023 — WYSIWYG MTEXT editing: an offset-carrying rich-span API + an in-tree rich text edit widget   (2026-07-30, accepted)
 - Context:    REQ-051 delivered the "Text Formatting" panel over ImGui's `InputTextMultiline`. That widget
   has **no word wrap**, so the in-place box cannot grow as text reaches the MTEXT's column width, and the
@@ -1680,3 +1685,78 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   lambda-bodied content is unchanged. Manual GUI pass required at multiple window widths (this
   project's own no-UI-automation constraint, ADR-031) to confirm Medium/Narrow read correctly on
   screen, the same pattern increment 1's own GUI pass followed.
+
+### ADR-041 — LibreDWG is the DXF/DWG codec; DWG write stops at R2004   (2026-08-29, accepted)
+- Context:    ADR-024 shipped Phase 1 (DWG↔DXF via ODA File Converter or `accoreconsole`) and left
+  the native codec as later work. `docs/dwg-plan.txt` PART 4 listed Route A (in-tree), B (LibreDWG),
+  C (ODA SDK), D (converter). The user chose **B** for File Format Specs (D-2026-08-29-g): a full
+  DXF/DWG codec in-process, DWG **write up to 2004**, no ODA membership. Linking LibreDWG is GPL-3.0,
+  which the 2026-07-30 open-source decision already allowed. R2018 write still fails CRC upstream;
+  the user accepted down-convert rather than waiting for it.
+- Decision:
+  (a) **GNU LibreDWG is the CAD interchange codec.** IO owns a wrapper (`io/` beside `DwgIo` /
+      `DxfIo`) that talks to LibreDWG. Commands/UI keep the existing File Import/Export entries.
+      ADR-024’s four-function seam may be kept as names; the **implementation** behind Import/Export
+      DWG/DXF becomes LibreDWG, not `DxfIo` + a child process.
+  (b) **Read:** every DWG version LibreDWG decodes (through AC1032 / R2018) and DXF (ASCII and
+      binary as the library supports). No converter required for the happy path.
+  (c) **Write DWG:** R2000 (AC1015) and R2004 (AC1018) only. **Default R2004.** R2007+ emit is
+      refused with a message, not a Recover-bait file. DXF write uses LibreDWG’s DXF writer for
+      versions it supports; the log still names every GoSurvey type that has no DXF/DWG
+      representation (meshes, TIN, clouds, PDF).
+  (d) **Write is synthesized from the GoSurvey document**, not a bit-exact rewrite of an unread
+      R2018 database. Unknown-object preservation (DM-08) remains a **future** requirement.
+      Opening an R2018 file and saving R2004 **must** list what will be dropped (REQ-052 honesty,
+      REQ-201).
+  (e) **Licence:** the application that links LibreDWG is **GPL-3.0-or-later**. Headers, COPYING,
+      and the installer licence text follow. No dual-licence carve-out in this ADR.
+  (f) **Phase 1 converter** remains until REQ-170 acceptance is green, then is removed from the
+      user-facing open/save path. It may stay as a **test oracle** (diff native parse vs converted
+      DXF) without being a runtime dependency for customers.
+  (g) **MSVC:** LibreDWG is built with the pinned `cl` + Ninja presets (project.md §7). If
+      upstream CMake is untested on MSVC, that is integration work in IO/Build, not a second
+      compiler.
+- Alternatives: **(1) Route A in-tree codec** — rejected; months of bit packing for a writer we
+  are capping at R2004 anyway. **(2) ODA Drawings SDK** — rejected by the user (cost + proprietary
+  SDK). **(3) Keep converter forever** — rejected (ADR-024 (d)). **(4) Write R2018 anyway** —
+  rejected; upstream CRC/AUDIT failure is worse than an honest R2004 file.
+- Consequences: REQ-170; `spec/file-format-specs.md`; GPL-3 on the product; a large C dependency
+  in `third_party/` or FetchContent with a **pinned** revision (REQ-200). Domain mapping limits
+  (exploded INSERT until REQ-107, one paper layout, no DM-08) stay visible in the import/export
+  log. REQ-112 (binary DXF) is **subsumed** by LibreDWG’s DXF path when REQ-170 lands.
+
+### ADR-042 — Point clouds, IMAGE underlays, and IFC-as-mesh   (2026-08-29, accepted)
+- Context:    File Format Specs adds E57/LAS/LAZ/PTS/PTX, JPEG/PNG/BMP, and IFC viewing. None of
+  those are CAD entities today. REQ-063 meshes are the only large immutable geometry precedent.
+  Surfaces (ADR-028) are **not** the home for LiDAR (REQ-068 D4). PDF underlays are the precedent
+  for a georeferenced raster that is not draftable CAD.
+- Decision:
+  (a) **Point cloud is a new entity kind** (reference geometry: visible, selectable, erasable,
+      layer-controlled, in extents; **not** grip-edited, not a TIN definition source in this epic).
+      Payload is `shared_ptr<const …>` (§11.5), interleaved XYZ plus optional RGB and intensity.
+      Coordinates obey local storage + `worldDocumentOrigin` (REQ-101). Multiple setups from one
+      PTX become multiple clouds or one cloud with recorded setup metadata — Workshop picks the
+      smaller option that preserves per-setup transforms; it must not invent a “scan project”
+      document type.
+  (b) **IMAGE is a new underlay kind** analogous to PDF attach: path, insertion, rotation, scale
+      in drawing units, layer. Decode via existing stb_image. Not a second renderer. Missing file
+      on open → logged unload, drawing otherwise loads (REQ-001 does not mean abort the whole
+      `.gs`).
+  (c) **IFC import tessellates to REQ-063 meshes.** No IFC object graph in the domain, no IFC
+      write, no second BIM layer. IfcPlusPlus (MIT) is the planned parser; Open CASCADE is **not**
+      added unless a later recorded decision proves tessellation cannot be done without it.
+  (d) **Libraries** per `spec/file-format-specs.md` §5. PTS/PTX and a LAS reader are in-tree unless
+      LAS coverage fails. No “IPointCloudFormat” plugin API (§11.4).
+  (e) **DXF/DWG export** of clouds and IMAGE in this epic: IMAGE may be written when the DWG/DXF
+      mapping exists (IMAGEDEF + IMAGE); clouds are **logged exclusions** (no native point-cloud
+      object in R2004 that we will emit). IFC-sourced meshes follow REQ-063’s DXF/DWG exclusion.
+- Alternatives: **(1) Feed clouds into TIN** — rejected (density + REQ-068 D4). **(2) IFC as
+  native BIM** — rejected (view only). **(3) ODA Scan-to-BIM for RCP/E57** — rejected (this epic
+  uses open libraries). **(4) Reuse mesh entity for clouds** — rejected; a cloud is not indexed
+  triangles and would overload REQ-063.
+- Consequences: REQ-171–REQ-174; renderer gains a point splat or chunked point path (not specified
+  here beyond “must not break REQ-100 line/mesh/surface profiles on drawings **without** a huge
+  cloud”); a later REQ-100 **cloud profile** is required before claiming city-scale E57. `.gs`
+  gains additive sections (no version bump if keys are tolerant, ADR-020 (e) precedent) or a
+  REQ-079 migration if the loader cannot ignore unknown sections — Workshop must not bump
+  `.gs` version without amending REQ-079.
