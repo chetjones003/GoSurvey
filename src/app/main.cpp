@@ -433,7 +433,7 @@ int main()
   // 130 of tools + gutter under panel titles, plus the REQ-302 tab strip and gap
   // (kRibbonTabStripH + kRibbonTabStripGapY). Extra 10px keeps two-line captions
   // above the title strip after the Survey-tab label layout.
-  const float ribbonH = 139.f + 28.f + 4.f + 10.f + 16.f;  // +16: taller rows → more readable icons
+  const float ribbonH = 139.f + 28.f + 4.f + 10.f + 34.f;  // +34: taller rows → more readable icons
   bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.

@@ -3774,39 +3774,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }});
     } // if (!ribbonPaperSpace) — Draw/Modify vs Layout
 
-    // ---- Layers ---------------------------------------------------------
-    // (the current-layer dropdown itself is the persistent RibbonLayerStrip rendered after the
-    // tools row — this panel carries the layer-state tools that are Home-only in Civil 3D.)
-    {
-      const float cLay = colW({"Make Current", "Match Layer"});
-      const float lpW = belowW("Layer Properties");
-      const float w = 8.f + lpW + 4.f + gc * 3.f + 4.f * 2.f + 4.f + cLay;
-      const float mw = 8.f + lpW + 4.f + gc * 3.f + 4.f * 2.f + 4.f + rowH;
-      ribbonSpecs.push_back({w, mw, [&, w, mw, cLay, lpW]() {
-        RibbonSectionBegin("RibbonSecLayersHome", "Layers", curCompact ? mw : w, panelH);
-        if (RibbonButtonEx("##RibbonLayerPropsHome", RibbonIconKind::Layers, "Layer\nProperties",
-                           ImVec2(lpW, colH), RibbonLabel::Below)) {
-          SyncDrawingLayerTableWithGeometry(cmd);
-          cmd.showLayerManagerWindow = true;
-        }
-        RibbonItemHelp("Layer Properties — table of all layers.\nCommand bar: LAYER or LA");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        nyiGrid("##LayOnOff", "c3d_layon", "Layer On/Off");     ImGui::SameLine(0, 4);
-        nyiGrid("##LayFreeze", "c3d_freeze", "Freeze");           ImGui::SameLine(0, 4);
-        nyiGrid("##LayLock", "c3d_lock", "Lock");
-        nyiGrid("##LayIsolate", "c3d_isolate", "Isolate");         ImGui::SameLine(0, 4);
-        nyiGrid("##LayUnisolate", "c3d_unisolate", "Unisolate");     ImGui::SameLine(0, 4);
-        nyiGrid("##LayOff2", "c3d_layoff", "Turn Off");
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        nyiRow("##LayMakeCurrent", "c3d_makecurrent", "Make Current", cLay);
-        nyiRow("##LayMatch", "c3d_matchlayer", "Match Layer", cLay);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
-      }, "Layers", RibbonIconKind::Layers});
-    }
+    // (No Home "Layers" panel — the persistent RibbonLayerStrip after the tools row already
+    // carries the current-layer dropdown on every tab; a second one here was redundant.)
 
     // ---- Clipboard ------------------------------------------------------
     {
