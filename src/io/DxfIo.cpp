@@ -1104,15 +1104,17 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
   };
 
-  // Common entity base fields — layer, ACI color index, and true-color override.
-  // parse() handles group codes 8/62/420; makeAttr() builds EntityAttributes.
+  // Common entity base fields — layer, linetype, ACI color index, and true-color override.
+  // parse() handles group codes 8/6/62/420; makeAttr() builds EntityAttributes.
   struct EntityBase {
     std::string layer{"0"};
+    std::string ltype;  // DXF group 6; empty → EntityAttributes default ByLayer
     int c62{256};
     bool has420{false};
     int rgb420{0};
     void parse(int code, const std::string& v) {
       if      (code ==   8) layer = v;
+      else if (code ==   6) ltype = Trim(v);
       else if (code ==  62) ParseIntFlexible(v, &c62);
       else if (code == 420) has420 = ParseIntFlexible(v, &rgb420);
     }
@@ -1120,12 +1122,15 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       EntityAttributes at{};
       at.layer = layer;
       at.color = EntityColorStorage(c62, has420, rgb420, layer, lrgb);
+      if (!ltype.empty())
+        at.linetype = CadCanonicalLinetypeNameForDxf(ltype);
       return at;
     }
   };
 
   struct PendingLw {
     std::string layer = "0";
+    std::string ltype;
     int c62 = 256;
     bool has420 = false;
     int rgb420 = 0;
@@ -1260,6 +1265,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         const std::string& v = t[k].value;
         if (c == 8)
           lw.layer = v;
+        else if (c == 6)
+          lw.ltype = Trim(v);
         else if (c == 62)
           ParseIntFlexible(v, &lw.c62);
         else if (c == 420)
@@ -1285,6 +1292,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       EntityAttributes at{};
       at.layer = lw.layer;
       at.color = EntityColorStorage(lw.c62, lw.has420, lw.rgb420, lw.layer, layerRgb);
+      if (!lw.ltype.empty())
+        at.linetype = CadCanonicalLinetypeNameForDxf(lw.ltype);
       const int nv = static_cast<int>(lw.vx.size());
       bool anyBulge = false;
       for (double b : lw.vb)
@@ -1435,12 +1444,12 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       continue;
     }
 
-    if (typ == "TEXT") {
+    if (typ == "TEXT" || typ == "ATTDEF") {
       EntityBase base;
       double x = 0, y = 0, ax = 0, ay = 0, h = 2.5, rot = 0;
       int halign = 0, valign = 0;
       bool haveAlign = false;
-      std::string txt, styleName;
+      std::string txt, styleName, attrTag, attrPrompt;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
@@ -1454,7 +1463,27 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c ==  7) styleName = Trim(v);
         else if (c == 72) ParseIntFlexible(v, &halign);
         else if (c == 73) ParseIntFlexible(v, &valign);
+        else if (c == 74) ParseIntFlexible(v, &valign);  // ATTDEF vertical alignment
         else if (c ==  1) txt = v;
+        else if (c ==  2 && typ == "ATTDEF") attrTag = Trim(v);
+        else if (c ==  3) attrPrompt = v;
+      }
+      if (typ == "ATTDEF") {
+        const bool useAlignPt = haveAlign && (halign != 0 || valign != 0);
+        const double px = useAlignPt ? ax : x;
+        const double py = useAlignPt ? ay : y;
+        const AnnXf a = xfAnnotation(px, py, h, rot * kDegToRad);
+        CadBlockAttrDef ad;
+        ad.tag = attrTag.empty() ? std::string("TAG") : attrTag;
+        ad.prompt = attrPrompt;
+        ad.defaultValue = txt;
+        ad.localX = static_cast<float>(a.insX);
+        ad.localY = static_cast<float>(a.insY);
+        ad.height = (a.plottedH > 1.e-6f) ? a.plottedH : 0.125f;
+        ad.rotationRad = a.rotWorld;
+        st.importedDxfAttrDefs.push_back(std::move(ad));
+        i = j;
+        continue;
       }
       // %%u toggles underline; the title-block convention is a leading %%u (underline the whole string).
       auto hasUnderlineCode = [](const std::string& s) {

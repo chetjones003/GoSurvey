@@ -576,6 +576,10 @@ bool SurveyCsvReadPointsOnly(const char* pathUtf8, SurveyCsvLayout layout, bool 
 }
 
 bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.blockEditActive) {  // ADR-043: survey tools are unavailable in a block-edit session
+    log.push_back("IMPORTPOINTS — close the block editor first (BCLOSE).");
+    return false;
+  }
   if (!st.surveyImportCsvPath[0]) {
     log.push_back("IMPORTPOINTS — no file path.");
     return false;

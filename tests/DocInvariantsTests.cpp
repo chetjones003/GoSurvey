@@ -271,11 +271,22 @@ TEST_CASE("selection-in-range fires after the selected entity is erased", "[doci
   REQUIRE(Contains(Fired(st), docinv::kSelectionInRange));
 }
 
-TEST_CASE("selection-in-range accepts a valid selection", "[docinvariants]") {
+TEST_CASE("selection-in-range accepts a valid block reference", "[docinvariants][issue124]") {
   AppCommandState st = GoodDrawing();
-  st.selection.push_back(SelectedEntity{SelectedEntity::Type::LineSeg, 0});
-  st.selection.push_back(SelectedEntity{SelectedEntity::Type::Polyline, 0});
+  CadBlockRef r;
+  r.defName = "TREE";
+  st.cadBlockRefs.push_back(r);
+  st.cadBlockRefAttrs.resize(1);
+  st.cadBlockRefAttrs[0].id = 40;
+  st.nextEntityId = 41;
+  st.selection.push_back(SelectedEntity{SelectedEntity::Type::BlockRef, 0});
   REQUIRE(Fired(st).empty());
+}
+
+TEST_CASE("selection-in-range fires on a block reference past the end", "[docinvariants][issue124]") {
+  AppCommandState st = GoodDrawing();
+  st.selection.push_back(SelectedEntity{SelectedEntity::Type::BlockRef, 0});
+  REQUIRE(Contains(Fired(st), docinv::kSelectionInRange));
 }
 
 // ---------------------------------------------------------------------------

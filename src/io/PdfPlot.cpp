@@ -619,6 +619,16 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
         addSeg(L.paperLines[i], L.paperLines[i + 1], L.paperLines[i + 3], L.paperLines[i + 4]);
       }
+      for (size_t bi = 0; bi < L.paperBlockRefs.size(); ++bi) {
+        const EntityAttributes* a = sheetAttr(L.paperBlockRefAttrs, bi);
+        if (a && !plottable(a->layer))
+          continue;
+        curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        std::vector<CadBlockWorldSeg> segs;
+        CadBlockCollectWorldLines(st.blockDefs, L.paperBlockRefs[bi], a ? *a : EntityAttributes{}, &segs);
+        for (const CadBlockWorldSeg& s : segs)
+          addSeg(s.x0, s.y0, s.x1, s.y1);
+      }
       // Circles (sampled to a polygon).
       for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
         const EntityAttributes* a = sheetAttr(L.paperCircleAttrs, i / 3);

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2C2C2C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Traverse: polyline traverse legs with bearing angle -->
+  <!-- Leg 1 -->
+  <path d="M5 17 L10.5 12" />
+  <!-- Leg 2 -->
+  <path d="M10.5 12 L16 14.2" />
+  <!-- Leg 3 (dashed foresight) -->
+  <path d="M16 14.2 L19.2 8.8" stroke-dasharray="3 2.5"/>
+  <!-- Stations -->
+  <circle cx="5" cy="17" r="1.3" fill="#2C2C2C" stroke="none"/>
+  <circle cx="10.5" cy="12" r="2.0" fill="white" stroke="#2C2C2C" stroke-width="1.6"/>
+  <circle cx="10.5" cy="12" r="0.8" fill="#2C2C2C" stroke="none"/>
+  <circle cx="16" cy="14.2" r="1.3" fill="white" stroke="#2C2C2C" stroke-width="1.5"/>
+  <circle cx="19.2" cy="8.8" r="1.2" fill="#2C2C2C" stroke="none"/>
+  <!-- Bearing angle arc at middle station -->
+  <path d="M10.5 12 m -4.2 0 a 4.2 4.2 0 0 0 3.1 -1.35" fill="none" stroke-width="1.3"/>
+  <path d="M13.2 9.6 L13.8 8.15 L12.1 8.55" fill="none" stroke-width="1.25" stroke-linejoin="miter"/>
+  <!-- North arrow hint -->
+  <path d="M18.6 5.2 L19.2 3.6 L19.8 5.2" fill="none" stroke-width="1.2"/>
+  <line x1="19.2" y1="3.9" x2="19.2" y2="6.6" stroke-width="1.1"/>
+</svg>

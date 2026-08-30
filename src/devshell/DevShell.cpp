@@ -4,6 +4,13 @@
 
 #include "CadUiChrome.hpp"
 #include "CadCommands.hpp"
+#include "AppPaths.hpp"
+
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
+
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -18,11 +25,11 @@
 #include <imgui_te_engine.h>
 #include <imgui_te_ui.h>
 
-#include <GLFW/glfw3.h>
-
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -48,13 +55,74 @@ bool                    g_cliDone = false;
 int                     g_cliExit = 1;
 int                     g_cliWait = 0;
 bool                    g_logDrawPass = false;
+const std::vector<std::string>* g_cmdLog = nullptr;
+std::vector<std::string>* g_cmdLogMut = nullptr;
+char                    g_logFilter[128]{};
+
+std::string LogDirUtf8()
+{
+  const std::filesystem::path d = AppExecutableDirectory();
+  if (!d.empty())
+    return d.u8string();
+  std::error_code ec;
+  const std::filesystem::path cwd = std::filesystem::current_path(ec);
+  if (ec)
+    return std::string(".");
+  return cwd.u8string();
+}
+
+void AppendUtf8Log(const char* fileName, std::string_view line)
+{
+  const std::filesystem::path p = std::filesystem::u8path(LogDirUtf8()) / fileName;
+  std::ofstream f(p, std::ios::app | std::ios::binary);
+  if (!f)
+    return;
+  f.write(line.data(), static_cast<std::streamsize>(line.size()));
+  f.put('\n');
+}
+
+void TruncateDevShellLogFiles()
+{
+  const std::filesystem::path dir = std::filesystem::u8path(LogDirUtf8());
+  const char* files[] = {"devshell-activity.log", "devshell-command.log", "devshell-testengine.log"};
+  for (const char* n : files) {
+    std::ofstream f(dir / n, std::ios::trunc | std::ios::binary);
+    if (f)
+      f << "# GoSurvey " << n << "\n";
+  }
+}
+
+void RewriteCommandLogFile(const std::vector<std::string>& commandLog)
+{
+  const std::filesystem::path p = std::filesystem::u8path(LogDirUtf8()) / "devshell-command.log";
+  std::ofstream f(p, std::ios::trunc | std::ios::binary);
+  if (!f)
+    return;
+  f << "# GoSurvey command log\n";
+  for (const std::string& line : commandLog) {
+    f.write(line.data(), static_cast<std::streamsize>(line.size()));
+    f.put('\n');
+  }
+}
 
 void PushLog(std::string_view channel, std::string_view message)
 {
-  std::lock_guard<std::mutex> lock(g_logMu);
-  if (static_cast<int>(g_log.size()) >= kMaxLog)
-    g_log.erase(g_log.begin(), g_log.begin() + static_cast<int>(g_log.size()) - kMaxLog + 1);
-  g_log.push_back({std::string(channel), std::string(message)});
+  {
+    std::lock_guard<std::mutex> lock(g_logMu);
+    if (static_cast<int>(g_log.size()) >= kMaxLog)
+      g_log.erase(g_log.begin(), g_log.begin() + static_cast<int>(g_log.size()) - kMaxLog + 1);
+    g_log.push_back({std::string(channel), std::string(message)});
+  }
+  if (channel == "te")
+    AppendUtf8Log("devshell-testengine.log", message);
+  else {
+    std::string line;
+    line.reserve(channel.size() + 3 + message.size());
+    line.append(channel);
+    line.append(" | ");
+    line.append(message);
+    AppendUtf8Log("devshell-activity.log", line);
+  }
 }
 
 void ColorU32(const char* label, ImU32* c)
@@ -404,7 +472,7 @@ void DevShell_Create(ImGuiTestEngine** outEngine)
   io.ConfigVerboseLevel = ImGuiTestVerboseLevel_Info;
   io.ConfigVerboseLevelOnError = ImGuiTestVerboseLevel_Debug;
   io.ConfigRunSpeed = ImGuiTestRunSpeed_Fast;
-  io.ConfigLogToTTY = false;
+  io.ConfigLogToTTY = true;
   io.ConfigLogToFunc = [](ImGuiTestEngine*, ImGuiTestContext*, ImGuiTestVerboseLevel, const char* message, void*) {
     if (message)
       DevShell_Log("te", message);
@@ -412,6 +480,7 @@ void DevShell_Create(ImGuiTestEngine** outEngine)
   ImGuiTestEngine_Start(engine, ImGui::GetCurrentContext());
   g_engine = engine;
   *outEngine = engine;
+  TruncateDevShellLogFiles();
 }
 
 void DevShell_RegisterTests(ImGuiTestEngine* engine, AppCommandState* cmd)
@@ -436,6 +505,8 @@ void DevShell_PostSwap(ImGuiTestEngine* engine)
       ImGuiTestEngine_GetResult(engine, tested, success);
       g_cliDone = true;
       g_cliExit = (tested > 0 && tested == success) ? 0 : 1;
+      if (g_cliExit == 0)
+        (void)DevShell_SaveWindowScreenshot("devshell-matchline-insert.bmp");
       if (g_cliWindow)
         glfwSetWindowShouldClose(g_cliWindow, GLFW_TRUE);
     }
@@ -457,15 +528,27 @@ void DevShell_DestroyContext(ImGuiTestEngine* engine)
   g_engine = nullptr;
 }
 
-void DevShell_Draw(AppCommandState& cmd, const std::vector<std::string>& commandLog)
+void DevShell_Draw(AppCommandState& cmd, std::vector<std::string>& commandLog)
 {
-  (void)cmd;
+  g_cmdLog = &commandLog;
+  g_cmdLogMut = &commandLog;
+  if (g_cliQueued)
+    cmd.devShellVisible = true;
+  RewriteCommandLogFile(commandLog);
+  if (!cmd.devShellVisible)
+    return;
+
   ImGui::SetNextWindowSize(ImVec2(420.f, 520.f), ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin("Developer Shell"))
+  bool open = true;
+  if (!ImGui::Begin("Developer Shell", &open))
   {
     ImGui::End();
+    if (!open)
+      cmd.devShellVisible = false;
     return;
   }
+  if (!open)
+    cmd.devShellVisible = false;
 
   if (ImGui::BeginTabBar("DevShellTabs"))
   {
@@ -480,13 +563,18 @@ void DevShell_Draw(AppCommandState& cmd, const std::vector<std::string>& command
       if (g_logDrawPass)
         DevShell_Log("draw", "pass");
       ImGui::Separator();
+      ImGui::InputTextWithHint("##LogFilter", "filter command / activity logs", g_logFilter,
+                               static_cast<int>(sizeof(g_logFilter)));
       ImGui::TextUnformatted("Command log");
       ImGui::SameLine();
       if (ImGui::Button("Copy command log"))
         CopyCommandLogToClipboard(commandLog);
       ImGui::BeginChild("cmdlog", ImVec2(0, 140.f), true);
-      for (const std::string& line : commandLog)
+      for (const std::string& line : commandLog) {
+        if (g_logFilter[0] != '\0' && line.find(g_logFilter) == std::string::npos)
+          continue;
         ImGui::TextUnformatted(line.c_str());
+      }
       if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
         ImGui::SetScrollHereY(1.f);
       ImGui::EndChild();
@@ -500,8 +588,15 @@ void DevShell_Draw(AppCommandState& cmd, const std::vector<std::string>& command
         std::lock_guard<std::mutex> lock(g_logMu);
         snap = g_log;
       }
-      for (const LogLine& L : snap)
+      for (const LogLine& L : snap) {
+        if (g_logFilter[0] != '\0') {
+          const bool inCh = L.channel.find(g_logFilter) != std::string::npos;
+          const bool inMsg = L.message.find(g_logFilter) != std::string::npos;
+          if (!inCh && !inMsg)
+            continue;
+        }
         ImGui::Text("%s | %s", L.channel.c_str(), L.message.c_str());
+      }
       if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
         ImGui::SetScrollHereY(1.f);
       ImGui::EndChild();
@@ -518,6 +613,74 @@ void DevShell_Draw(AppCommandState& cmd, const std::vector<std::string>& command
     ImGui::EndTabBar();
   }
   ImGui::End();
+  if (!open)
+    cmd.devShellVisible = false;
+}
+
+std::string DevShell_LogDirectoryUtf8()
+{
+  return LogDirUtf8();
+}
+
+std::vector<std::string>* DevShell_CommandLog()
+{
+  return g_cmdLogMut;
+}
+
+std::string DevShell_CommandLogText()
+{
+  if (!g_cmdLog)
+    return {};
+  std::string out;
+  for (const std::string& line : *g_cmdLog) {
+    out += line;
+    out += '\n';
+  }
+  return out;
+}
+
+bool DevShell_CommandLogContains(std::string_view needle)
+{
+  if (!g_cmdLog || needle.empty())
+    return false;
+  for (const std::string& line : *g_cmdLog) {
+    if (line.find(needle) != std::string::npos)
+      return true;
+  }
+  return false;
+}
+
+std::string DevShell_ActivityLogText()
+{
+  std::vector<LogLine> snap;
+  {
+    std::lock_guard<std::mutex> lock(g_logMu);
+    snap = g_log;
+  }
+  std::string out;
+  for (const LogLine& L : snap) {
+    out += L.channel;
+    out += " | ";
+    out += L.message;
+    out += '\n';
+  }
+  return out;
+}
+
+bool DevShell_ActivityLogContains(std::string_view needle)
+{
+  if (needle.empty())
+    return false;
+  std::vector<LogLine> snap;
+  {
+    std::lock_guard<std::mutex> lock(g_logMu);
+    snap = g_log;
+  }
+  for (const LogLine& L : snap) {
+    if (L.channel.find(needle) != std::string::npos || L.message.find(needle) != std::string::npos)
+      return true;
+  }
+  return false;
 }
 
 bool DevShell_ParseRunFlag(std::string* outTestName)
@@ -571,6 +734,64 @@ bool DevShell_CliRunFinished(int* outExitCode)
   if (outExitCode)
     *outExitCode = g_cliExit;
   return true;
+}
+
+bool DevShell_SaveWindowScreenshot(const char* pathUtf8)
+{
+  GLFWwindow* win = glfwGetCurrentContext();
+  if (!win && g_cliWindow)
+    win = g_cliWindow;
+  if (!win || !pathUtf8 || pathUtf8[0] == '\0')
+    return false;
+  int fbW = 0;
+  int fbH = 0;
+  glfwGetFramebufferSize(win, &fbW, &fbH);
+  if (fbW < 8 || fbH < 8)
+    return false;
+  std::vector<unsigned char> rgba(static_cast<size_t>(fbW) * static_cast<size_t>(fbH) * 4u);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glReadBuffer(GL_FRONT);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glReadPixels(0, 0, fbW, fbH, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+  const int rowB = (fbW * 3 + 3) & ~3;
+  std::vector<unsigned char> bgr(static_cast<size_t>(rowB) * static_cast<size_t>(fbH));
+  for (int y = 0; y < fbH; ++y) {
+    unsigned char* dst = bgr.data() + static_cast<size_t>(y) * static_cast<size_t>(rowB);
+    const unsigned char* src = rgba.data() + static_cast<size_t>(y) * static_cast<size_t>(fbW) * 4u;
+    for (int x = 0; x < fbW; ++x) {
+      dst[x * 3 + 0] = src[x * 4 + 2];
+      dst[x * 3 + 1] = src[x * 4 + 1];
+      dst[x * 3 + 2] = src[x * 4 + 0];
+    }
+  }
+  FILE* f = nullptr;
+  if (fopen_s(&f, pathUtf8, "wb") != 0 || !f)
+    return false;
+  unsigned char hdr[54] = {};
+  hdr[0] = 'B';
+  hdr[1] = 'M';
+  const int fileSz = 54 + rowB * fbH;
+  hdr[2] = static_cast<unsigned char>(fileSz);
+  hdr[3] = static_cast<unsigned char>(fileSz >> 8);
+  hdr[4] = static_cast<unsigned char>(fileSz >> 16);
+  hdr[5] = static_cast<unsigned char>(fileSz >> 24);
+  hdr[10] = 54;
+  hdr[14] = 40;
+  hdr[18] = static_cast<unsigned char>(fbW);
+  hdr[19] = static_cast<unsigned char>(fbW >> 8);
+  hdr[20] = static_cast<unsigned char>(fbW >> 16);
+  hdr[21] = static_cast<unsigned char>(fbW >> 24);
+  hdr[22] = static_cast<unsigned char>(fbH);
+  hdr[23] = static_cast<unsigned char>(fbH >> 8);
+  hdr[24] = static_cast<unsigned char>(fbH >> 16);
+  hdr[25] = static_cast<unsigned char>(fbH >> 24);
+  hdr[26] = 1;
+  hdr[28] = 24;
+  const bool ok = fwrite(hdr, 1, 54, f) == 54 && fwrite(bgr.data(), 1, bgr.size(), f) == bgr.size();
+  fclose(f);
+  if (ok)
+    DevShell_Logf("te", "screenshot %s %dx%d", pathUtf8, fbW, fbH);
+  return ok;
 }
 
 #endif

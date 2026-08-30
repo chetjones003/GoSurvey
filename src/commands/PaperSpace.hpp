@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CadEntities.hpp"
+#include "util/cadblock.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -12,7 +13,7 @@
 // selection helpers can name it. \c index: Line = segment (flat offset/6); others = index into the matching
 // paper* vector.
 struct PaperEntityRef {
-  enum class Type : std::uint8_t { Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5 };
+  enum class Type : std::uint8_t { Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5, Block = 6 };
   Type type = Type::Line;
   int  index = 0;
 };
@@ -240,6 +241,8 @@ struct PaperLayout {
   std::vector<EntityAttributes> paperPolyAttrs;
   std::vector<CadFilledRegion>  paperFilledRegions;     ///< Solid fills on the sheet, paper inches (REQ-038 addendum)
   std::vector<EntityAttributes> paperFilledRegionAttrs;
+  std::vector<CadBlockRef>      paperBlockRefs;
+  std::vector<EntityAttributes> paperBlockRefAttrs;
   // Current page-setup plot fields (the layout's own setup). Paper size/orientation above are part of it.
   std::string pageSetupName;               // name of the applied named setup, or "" = <None>
   bool  fitToPaper = false;
@@ -297,6 +300,8 @@ inline bool SnapPaperInchPoint(const PaperLayout& L, float px, float py, float t
     consider(e.cx, e.cy);  // ellipse center
   for (size_t v = 0; v + 2 < L.paperPolyVerts.size(); v += 3)
     consider(L.paperPolyVerts[v], L.paperPolyVerts[v + 1]);  // polyline vertices
+  for (const CadBlockRef& br : L.paperBlockRefs)
+    consider(br.xf.x, br.xf.y);
   return found;
 }
 
@@ -369,5 +374,10 @@ inline void SelectPaperEntitiesInBox(const PaperLayout& L, float bx0, float by0,
     }
     if (v1 > v0 && boxSel(ex0, ey0, ex1, ey1))
       out.push_back({PaperEntityRef::Type::Polyline, pi});
+  }
+  for (int bi = 0; bi < static_cast<int>(L.paperBlockRefs.size()); ++bi) {
+    const CadBlockRef& br = L.paperBlockRefs[static_cast<size_t>(bi)];
+    if (boxSel(br.xf.x, br.xf.y, br.xf.x, br.xf.y))
+      out.push_back({PaperEntityRef::Type::Block, bi});
   }
 }

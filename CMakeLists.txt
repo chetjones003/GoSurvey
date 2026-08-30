@@ -223,6 +223,7 @@ target_link_libraries(imgui_backend PUBLIC glfw)
 set(GOSURVEY_DOMAIN_SOURCES
   # Command system
   src/commands/CadCommands.cpp
+  src/commands/CadBlocks.cpp
   src/commands/CadLinetype.cpp
   src/commands/EntityId.cpp
   src/survey/PointGroupRule.cpp
@@ -236,6 +237,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   # what a preview PROMISES: BREAK's preview says which half of an object is about to disappear,
   # and on a closed entity that answer depends on click order, so it can be confidently wrong.
   src/viewport/TransformPreview.cpp
+  # Draft-command rubber (pure geometry; no GL — same rationale as TransformPreview.cpp above).
+  # Moved into the shared list by TASK-146 so the INSERT block-ghost preview can be asserted
+  # headlessly (REQ-107, D-2026-08-29-i).
+  src/viewport/CadRubberPreview.cpp
 
   # Text measurement + font registry. In the domain set because label geometry depends on metrics
   # (ADR-031 (c′)) — these need ImGui core, never a backend.
@@ -336,8 +341,8 @@ add_executable(GoSurvey
   # Application entry
   src/app/main.cpp
 
-  # Viewport system (TransformPreview.cpp is in GOSURVEY_DOMAIN_SOURCES — no GL, headless-testable)
-  src/viewport/CadRubberPreview.cpp
+  # Viewport system (CadRubberPreview.cpp / TransformPreview.cpp are in GOSURVEY_DOMAIN_SOURCES —
+  # no GL, headless-testable)
 
   # Renderer
   src/render/ViewportRenderer.cpp
@@ -366,6 +371,8 @@ add_executable(GoSurvey
   src/ui/RichTextEdit.cpp
   src/ui/ViewCube.cpp
   src/ui/PdfAttachDialog.cpp
+  src/ui/CadUi_InsertBlock.cpp
+  src/ui/CadUi_BlockAuthoring.cpp
 
   # I/O (windowed application only)
   src/io/PdfPlot.cpp
@@ -510,6 +517,7 @@ add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gs"
@@ -519,6 +527,9 @@ add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
   COMMENT "Copy resources beside executable")
 
 # Copy pdfium.dll next to the executable so it can be found at runtime.
@@ -669,6 +680,7 @@ if(GOSURVEY_BUILD_TESTS)
     # self, partial overlap).
     tests/SurfaceVolumeTests.cpp
     tests/CadTableTests.cpp
+    tests/CadBlockTests.cpp
     tests/SurfaceStatsTests.cpp
     tests/WatershedTests.cpp
     tests/TinVolumeTests.cpp
@@ -835,6 +847,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
     tests/GsIoDimAngularTests.cpp
+    tests/CadBlockImportTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
