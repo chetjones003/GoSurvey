@@ -2986,7 +2986,7 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
   }
 
   const bool hasLabel = (label && label[0] && mode != RibbonLabel::None);
-  constexpr float pad = 3.f;
+  constexpr float iconPad = 1.f;  // icons hug the button edge for readability
   std::string wrapped;
   const char* drawLabel = label;
   if (mode == RibbonLabel::Below && hasLabel) {
@@ -3004,20 +3004,20 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
 
   ImVec2 iconMin, iconMax, labelPos;
   if (mode == RibbonLabel::Below && hasLabel) {
-    constexpr float botPad = 5.f;
-    const float iconArea = std::max(18.f, size.y - ts.y - pad - botPad - 1.f);
-    const float sideMax = std::min(size.x - pad * 2.f, iconArea);
-    const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + pad + iconArea * 0.5f + shift);
+    constexpr float botPad = 4.f;
+    const float iconArea = std::max(18.f, size.y - ts.y - iconPad - botPad - 1.f);
+    const float sideMax = std::min(size.x - iconPad * 2.f, iconArea);
+    const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + iconPad + iconArea * 0.5f + shift);
     iconMin = ImVec2(ctr.x - sideMax * 0.5f, ctr.y - sideMax * 0.5f);
     iconMax = ImVec2(ctr.x + sideMax * 0.5f, ctr.y + sideMax * 0.5f);
     labelPos = ImVec2(bb.Min.x + (size.x - ts.x) * 0.5f + shift, bb.Max.y - ts.y - botPad + shift);
   } else if (mode == RibbonLabel::Right && hasLabel) {
-    const float side = size.y - pad * 2.f;
-    iconMin = ImVec2(bb.Min.x + pad + shift, bb.Min.y + pad + shift);
+    const float side = size.y - iconPad * 2.f;
+    iconMin = ImVec2(bb.Min.x + iconPad + shift, bb.Min.y + iconPad + shift);
     iconMax = ImVec2(iconMin.x + side, iconMin.y + side);
-    labelPos = ImVec2(iconMax.x + 4.f + shift, bb.Min.y + (size.y - ts.y) * 0.5f + shift);
+    labelPos = ImVec2(iconMax.x + 3.f + shift, bb.Min.y + (size.y - ts.y) * 0.5f + shift);
   } else {
-    const float side = std::min(size.x, size.y) - pad * 2.f;
+    const float side = std::min(size.x, size.y) - iconPad * 2.f;
     const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + size.y * 0.5f + shift);
     iconMin = ImVec2(ctr.x - side * 0.5f, ctr.y - side * 0.5f);
     iconMax = ImVec2(ctr.x + side * 0.5f, ctr.y + side * 0.5f);
@@ -3452,7 +3452,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // icon (rowH-6) + 3px gaps each side + label; matches RibbonButtonEx Right-mode layout with
     // a small margin. (Was +8 — trimmed once the child-font-scale bug was fixed so the extra
     // slack is no longer needed, which is what lets the wide Home tab fit its full labels.)
-    return rowH + 4.f + m;
+    return rowH + 6.f + m;
   };
 
   // Home-tab helpers. MUST be at DrawRibbonBar function scope (not inside the `if (Home)` block):
@@ -3708,53 +3708,46 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         }, "Draw", RibbonIconKind::Line});
       }
 
-      // ---- Modify ----------------------------------------------------------
+      // ---- Modify (icon-only 4x3 grid, per GUI-pass request) --------------
       {
-        const float c1 = colW({"Move", "Copy", "Stretch"});
-        const float c2 = colW({"Rotate", "Mirror", "Scale"});
-        const float w = 8.f + c1 + 4.f + c2 + 4.f + rowH + 4.f + rowH;
-        const float mw = 8.f + rowH * 4.f + 4.f * 3.f;
-        ribbonSpecs.push_back({w, mw, [&, w, mw]() {
-          RibbonSectionBegin("RibbonSecModify", "Modify", curCompact ? mw : w, panelH);
-          const float m1 = colW({"Move", "Copy", "Stretch"});
-          const float m2 = colW({"Rotate", "Mirror", "Scale"});
-          ImGui::BeginGroup();
-          if (smallBtn("##RibbonMove", RibbonIconKind::Move, "Move", m1)) StartMoveCommand(cmd, log);
+        const float w = 8.f + gcHome * 4.f + 4.f * 3.f;
+        ribbonSpecs.push_back({w, w, [&, w]() {
+          RibbonSectionBegin("RibbonSecModify", "Modify", w, panelH);
+          if (gridBtn3("##RibbonMove", RibbonIconKind::Move)) StartMoveCommand(cmd, log);
           RibbonItemHelp("Move — relocate selected entities by base point and offset.\nCommand bar: MOVE or M");
-          if (smallBtn("##RibbonCopy", RibbonIconKind::Copy, "Copy", m1)) StartCopyCommand(cmd, log);
-          RibbonItemHelp("Copy — duplicate selection with base point and offset.\nCommand bar: COPY or CP");
-          if (smallBtn("##RibbonStretch", RibbonIconKind::Stretch, "Stretch", m1)) StartStretchCommand(cmd, log);
-          RibbonItemHelp("Stretch — crossing/window-select, then base point and destination.\nCommand bar: STRETCH or S");
-          ImGui::EndGroup(); ImGui::SameLine(0, 4);
-          ImGui::BeginGroup();
-          if (smallBtn("##RibbonRotate", RibbonIconKind::Rotate, "Rotate", m2)) StartRotateCommand(cmd, log);
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonRotate", RibbonIconKind::Rotate)) StartRotateCommand(cmd, log);
           RibbonItemHelp("Rotate — turn selection around a base point by angle.\nCommand bar: ROTATE or RO");
-          if (smallBtn("##RibbonMirror", RibbonIconKind::Mirror, "Mirror", m2)) StartMirrorCommand(cmd, log);
-          RibbonItemHelp("Mirror — flip selection across a mirror line.\nCommand bar: MIRROR or MI");
-          if (smallBtn("##RibbonScale", RibbonIconKind::Scale, "Scale", m2)) StartScaleCommand(cmd, log);
-          RibbonItemHelp("Scale — uniform scale about a base point.\nCommand bar: SCALE or SC");
-          ImGui::EndGroup(); ImGui::SameLine(0, 4);
-          ImGui::BeginGroup();
-          if (RibbonButtonEx("##RibbonTrim", RibbonIconKind::Trim, nullptr, ImVec2(rowH, rowH), RibbonLabel::None))
-            StartTrimCommand(cmd, log);
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonTrim", RibbonIconKind::Trim)) StartTrimCommand(cmd, log);
           RibbonItemHelp("Trim — shorten segments to cutting edges.\nCommand bar: TRIM or TR");
-          if (RibbonButtonEx("##RibbonFillet", RibbonIconKind::Fillet, nullptr, ImVec2(rowH, rowH), RibbonLabel::None))
-            StartFilletCommand(cmd, log);
-          RibbonItemHelp("Fillet — tangent arc between two curves.\nCommand bar: FILLET or F");
-          RibbonNyiButton("##RibbonArray", RibbonIconKind::Array, "Array", ImVec2(rowH, rowH), RibbonLabel::None);
-          ImGui::EndGroup(); ImGui::SameLine(0, 4);
-          ImGui::BeginGroup();
-          if (RibbonButtonEx("##RibbonErase", RibbonIconKind::Erase, nullptr, ImVec2(rowH, rowH), RibbonLabel::None))
-            StartDeleteCommand(cmd, log);
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonErase", RibbonIconKind::Erase)) StartDeleteCommand(cmd, log);
           RibbonItemHelp("Erase — remove entities.\nCommand bar: DELETE or DEL");
-          if (RibbonButtonEx("##RibbonOffset", RibbonIconKind::Offset, nullptr, ImVec2(rowH, rowH), RibbonLabel::None))
-            StartOffsetCommand(cmd, log);
+
+          if (gridBtn3("##RibbonCopy", RibbonIconKind::Copy)) StartCopyCommand(cmd, log);
+          RibbonItemHelp("Copy — duplicate selection with base point and offset.\nCommand bar: COPY or CP");
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonMirror", RibbonIconKind::Mirror)) StartMirrorCommand(cmd, log);
+          RibbonItemHelp("Mirror — flip selection across a mirror line.\nCommand bar: MIRROR or MI");
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonFillet", RibbonIconKind::Fillet)) StartFilletCommand(cmd, log);
+          RibbonItemHelp("Fillet — tangent arc between two curves.\nCommand bar: FILLET or F");
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonOffset", RibbonIconKind::Offset)) StartOffsetCommand(cmd, log);
           RibbonItemHelp("Offset — parallel copy at a distance.\nCommand bar: OFFSET or O");
-          if (RibbonButtonEx("##RibbonExtend", RibbonIconKind::Extend, nullptr, ImVec2(rowH, rowH), RibbonLabel::None))
-            StartExtendCommand(cmd, log);
+
+          if (gridBtn3("##RibbonStretch", RibbonIconKind::Stretch)) StartStretchCommand(cmd, log);
+          RibbonItemHelp("Stretch — crossing/window-select, then base point and destination.\nCommand bar: STRETCH or S");
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonScale", RibbonIconKind::Scale)) StartScaleCommand(cmd, log);
+          RibbonItemHelp("Scale — uniform scale about a base point.\nCommand bar: SCALE or SC");
+          ImGui::SameLine(0, 4);
+          RibbonNyiButton("##RibbonArray", RibbonIconKind::Array, "Array", ImVec2(gcHome, gcHome), RibbonLabel::None);
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonExtend", RibbonIconKind::Extend)) StartExtendCommand(cmd, log);
           RibbonItemHelp("Extend — lengthen to a boundary edge.\nCommand bar: EXTEND or EX");
-          ImGui::EndGroup();
-        RibbonSectionEnd();
+          RibbonSectionEnd();
         }, "Modify", RibbonIconKind::Move});
       }
     } else {
@@ -3786,11 +3779,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // tools row — this panel carries the layer-state tools that are Home-only in Civil 3D.)
     {
       const float cLay = colW({"Make Current", "Match Layer"});
-      const float w = 8.f + largeW + 4.f + gc * 3.f + 4.f * 2.f + 4.f + cLay;
-      const float mw = 8.f + largeW + 4.f + gc * 3.f + 4.f * 2.f + 4.f + rowH;
-      ribbonSpecs.push_back({w, mw, [&, w, mw, cLay]() {
+      const float lpW = belowW("Layer Properties");
+      const float w = 8.f + lpW + 4.f + gc * 3.f + 4.f * 2.f + 4.f + cLay;
+      const float mw = 8.f + lpW + 4.f + gc * 3.f + 4.f * 2.f + 4.f + rowH;
+      ribbonSpecs.push_back({w, mw, [&, w, mw, cLay, lpW]() {
         RibbonSectionBegin("RibbonSecLayersHome", "Layers", curCompact ? mw : w, panelH);
-        if (largeBtn("##RibbonLayerPropsHome", RibbonIconKind::Layers, "Layer\nProperties")) {
+        if (RibbonButtonEx("##RibbonLayerPropsHome", RibbonIconKind::Layers, "Layer\nProperties",
+                           ImVec2(lpW, colH), RibbonLabel::Below)) {
           SyncDrawingLayerTableWithGeometry(cmd);
           cmd.showLayerManagerWindow = true;
         }
