@@ -2640,14 +2640,14 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SurfDoc:        return "Layer_Properties";
   case RibbonIconKind::SurfAddData:    return "Convert_to_Surface";
   case RibbonIconKind::SurfEdit:       return "Surface_Sculpt";
-  case RibbonIconKind::SurfLodLow:     return "";  // vector fallback
-  case RibbonIconKind::SurfLodHigh:    return "";  // vector fallback
-  case RibbonIconKind::SurfWaterDrop:  return "";  // vector fallback
+  case RibbonIconKind::SurfLodLow:     return "surflodlow";
+  case RibbonIconKind::SurfLodHigh:    return "surflodhigh";
+  case RibbonIconKind::SurfWaterDrop:  return "surfwaterdrop";
   case RibbonIconKind::SurfBandage:    return "Breakline_Symbol";
-  case RibbonIconKind::SurfEye:        return "";  // vector fallback
-  case RibbonIconKind::SurfCatchment:  return "";  // vector fallback
+  case RibbonIconKind::SurfEye:        return "surfeye";
+  case RibbonIconKind::SurfCatchment:  return "surfcatchment";
   case RibbonIconKind::SurfVolumes:    return "Measure_Volume";
-  case RibbonIconKind::SurfDrape:      return "";  // vector fallback
+  case RibbonIconKind::SurfDrape:      return "surfdrape";
   case RibbonIconKind::SurfExtract:    return "Extract_Data";
   case RibbonIconKind::SurfMoveTo:     return "3D_Move";
   case RibbonIconKind::SurfQuickProfile: return "Setup_Profile";
@@ -2655,16 +2655,16 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SurfDataShortcut: return "Attach";
   case RibbonIconKind::SurfGrading:    return "Gradient";
   // D-2026-08-28-k Civil 3D Survey tab / Survey Point contextual tab.
-  case RibbonIconKind::SvyTripod:      return "";  // vector fallback
-  case RibbonIconKind::SvyQuery:       return "";  // vector fallback
-  case RibbonIconKind::SvyFigure:      return "";  // vector fallback
-  case RibbonIconKind::SvyPda:         return "";  // vector fallback
+  case RibbonIconKind::SvyTripod:      return "svytripod";
+  case RibbonIconKind::SvyQuery:       return "svyquery";
+  case RibbonIconKind::SvyFigure:      return "svyfigure";
+  case RibbonIconKind::SvyPda:         return "svypda";
   case RibbonIconKind::SvyPin:         return "surveypoint";
-  case RibbonIconKind::SvyRefresh:     return "";  // vector fallback
+  case RibbonIconKind::SvyRefresh:     return "svyrefresh";
   case RibbonIconKind::SvyGlobe:       return "UCS_World";
   case RibbonIconKind::SvyGeodetic:    return "Quick_Calculator";
   case RibbonIconKind::SvySun:         return "Sun";
-  case RibbonIconKind::SvyRenumber:    return "";  // vector fallback
+  case RibbonIconKind::SvyRenumber:    return "svyrenumber";
   case RibbonIconKind::SvyLock:        return "Layer_Lock";
   case RibbonIconKind::SvyUnlock:      return "Layer_Unlock";
   case RibbonIconKind::Array:          return "array";
