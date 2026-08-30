@@ -3406,9 +3406,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // Civil 3D-style panel metrics: a button column fills the height above the
   // bottom title; small labeled buttons stack 3 to a column; the icon grid
   // uses 2 rows of square cells.
-  const float colH     = std::max(48.f, RibbonPanelContentH(panelH) - 8.f);
-  const float rowH     = std::floor((colH - 4.f) / 3.f);
-  const float gridCell = std::floor((colH - 2.f) / 2.f);
+  const float colH      = std::max(48.f, RibbonPanelContentH(panelH) - 8.f);
+  const float rowH      = std::floor((colH - 4.f) / 3.f);
+  const float gridCell  = std::floor((colH - 2.f) / 2.f);
+  // Civil 3D's Home-tab icon grids (Draw, Palettes, layer state, Clipboard) are 3 rows of small
+  // cells, not 2 — a 2-row cell clipped the bottom row.
+  const float gridCell3 = std::floor((colH - 6.f) / 3.f);
   constexpr float largeW = 60.f;
   constexpr float kTsLargeW = 76.f;
   auto belowW = [&](const char* label) { return RibbonBelowButtonWidth(label, kTsLargeW); };
@@ -3431,12 +3434,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       DevShell_OnUi(id);
     return hit;
   };
-  auto gridBtn = [&](const char* id, RibbonIconKind ic) {
-    const bool hit = RibbonButtonEx(id, ic, nullptr, ImVec2(gridCell, gridCell), RibbonLabel::None);
+  auto gridBtn3 = [&](const char* id, RibbonIconKind ic) {
+    const bool hit = RibbonButtonEx(id, ic, nullptr, ImVec2(gridCell3, gridCell3), RibbonLabel::None);
     if (hit)
       DevShell_OnUi(id);
     return hit;
   };
+  (void)gridCell;
   // Column width = small icon + gap + the widest label in the column — or, compact, just the icon
   // (REQ-302 increment 2 Medium/Narrow: "switch button labels to icons," issue #83 strategy 3).
   auto colW = [&](std::initializer_list<const char*> labels) {
@@ -3455,7 +3459,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // the ribbonSpecs render closures capture them by reference and are invoked LATER by
   // RenderRibbonFit, after that block has exited. (Declaring them in the block left dangling
   // references that a Release build's stack reuse turned into a crash.)
-  const float gcHome = gridCell;
+  const float gcHome = gridCell3;
   auto nyiGrid = [&](const char* id, const char* ic, const char* label) {
     RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(gcHome, gcHome), RibbonLabel::None, ic);
   };
@@ -3562,22 +3566,24 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
     // ---- Explore -----------------------------------------------------------
     {
-      const float w = 8.f + largeW;
-      ribbonSpecs.push_back({w, w, [&, w]() {
+      const float bw = belowW("Project Explorer");
+      const float w = 8.f + bw;
+      ribbonSpecs.push_back({w, w, [&, w, bw]() {
         RibbonSectionBegin("RibbonSecExplore", "Explore", w, panelH);
         RibbonNyiButton("##ExpProjExplorer", RibbonIconKind::Nyi, "Project\nExplorer",
-                        ImVec2(largeW, colH), RibbonLabel::Below, "c3d_projexplorer");
+                        ImVec2(bw, colH), RibbonLabel::Below, "c3d_projexplorer");
         RibbonSectionEnd();
       }, "Explore", RibbonIconKind::Nyi, "c3d_projexplorer"});
     }
 
     // ---- Optimize ---------------------------------------------------------
     {
-      const float w = 8.f + largeW;
-      ribbonSpecs.push_back({w, w, [&, w]() {
+      const float bw = belowW("Grading Optimization");
+      const float w = 8.f + bw;
+      ribbonSpecs.push_back({w, w, [&, w, bw]() {
         RibbonSectionBegin("RibbonSecOptimize", "Optimize", w, panelH);
         RibbonNyiButton("##OptGrading", RibbonIconKind::Nyi, "Grading\nOptimization",
-                        ImVec2(largeW, colH), RibbonLabel::Below, "c3d_gradingopt");
+                        ImVec2(bw, colH), RibbonLabel::Below, "c3d_gradingopt");
         RibbonSectionEnd();
       }, "Optimize", RibbonIconKind::Nyi, "c3d_gradingopt"});
     }
@@ -3648,7 +3654,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       // ---- Profile & Section Views ---------------------------------------
       {
         const float cP = std::max(colW({"Profile View", "Sample Lines", "Section Views"}),
-                                  capW("Profile & Section Views") - 40.f);
+                                  capW("Profile & Section Views") - 8.f);
         const float w = 8.f + cP;
         const float mw = 8.f + rowH;
         ribbonSpecs.push_back({w, mw, [&, w, mw, cP]() {
@@ -3664,35 +3670,35 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
       // ---- Draw ---------------------------------------------------------
       {
-        const float w = 8.f + gc * 4.f + 4.f * 3.f;
+        const float w = 8.f + gcHome * 4.f + 4.f * 3.f;
         ribbonSpecs.push_back({w, w, [&, w]() {
           RibbonSectionBegin("RibbonSecDraw", "Draw", w, panelH);
-          if (gridBtn("##RibbonLine", RibbonIconKind::Line)) StartLineCommand(cmd, log);
+          if (gridBtn3("##RibbonLine", RibbonIconKind::Line)) StartLineCommand(cmd, log);
           RibbonItemHelp("Line — draw straight segments between points.\nCommand bar: LINE or L");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonArc", RibbonIconKind::Arc)) StartArcCommand(cmd, log);
+          if (gridBtn3("##RibbonArc", RibbonIconKind::Arc)) StartArcCommand(cmd, log);
           RibbonItemHelp("Arc — three-point arc (start, mid, end).\nCommand bar: ARC");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonPLine", RibbonIconKind::Polyline)) StartPolylineCommand(cmd, log);
+          if (gridBtn3("##RibbonPLine", RibbonIconKind::Polyline)) StartPolylineCommand(cmd, log);
           RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
           ImGui::SameLine(0, 4);
           nyiGrid("##RibbonSpline", "c3d_spline", "Spline");
 
-          if (gridBtn("##RibbonCircle", RibbonIconKind::Circle)) StartCircleCommand(cmd, log);
+          if (gridBtn3("##RibbonCircle", RibbonIconKind::Circle)) StartCircleCommand(cmd, log);
           RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonRect", RibbonIconKind::Rect)) StartRectCommand(cmd, log);
+          if (gridBtn3("##RibbonRect", RibbonIconKind::Rect)) StartRectCommand(cmd, log);
           RibbonItemHelp("Rectangle — two opposite corners; stored as a closed polyline.\nCommand bar: RECT");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonEllipse", RibbonIconKind::Ellipse)) StartEllipseCommand(cmd, log);
+          if (gridBtn3("##RibbonEllipse", RibbonIconKind::Ellipse)) StartEllipseCommand(cmd, log);
           RibbonItemHelp("Ellipse — center, axis endpoint, then ratio.\nCommand bar: ELLIPSE or EL");
           ImGui::SameLine(0, 4);
           nyiGrid("##RibbonPoint", "c3d_point", "Point");
 
-          if (gridBtn("##RibbonHatch", RibbonIconKind::Hatch)) StartHatchCommand(cmd, log);
+          if (gridBtn3("##RibbonHatch", RibbonIconKind::Hatch)) StartHatchCommand(cmd, log);
           RibbonItemHelp("Hatch — pick an internal point to fill a closed area.\nCommand bar: HATCH or H");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonPdfAttach", RibbonIconKind::PdfAttach)) StartPdfAttachCommand(cmd, log);
+          if (gridBtn3("##RibbonPdfAttach", RibbonIconKind::PdfAttach)) StartPdfAttachCommand(cmd, log);
           RibbonItemHelp("PDF Attach — attach a PDF page as a raster underlay.\nCommand bar: PDFATTACH");
           ImGui::SameLine(0, 4);
           nyiGrid("##RibbonRevcloud", "c3d_revcloud", "Revision Cloud");

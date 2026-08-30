@@ -417,6 +417,25 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   ImGuiTest* ribbonShots = IM_REGISTER_TEST(engine, "gosurvey", "ribbon-tab-shots");
   ribbonShots->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
+
+    // Home tab at three widths — first, before anything opens overlay windows.
+    s_cmd->showToolspaceWindow = false;
+    ctx->WindowCollapse("//Developer Shell", true);
+    if (RefWindow(ctx, "//GoSurveyHost/RibbonStrip"))
+      ctx->ItemClick("Home");
+    s_cmd->activeRibbonTab = kRibbonTabHome;
+    for (const int wpx : {2560, 1500, 1000}) {
+      DevShell_SetWindowSize(wpx, 1300);
+      ctx->Yield(8);
+      char hp[48];
+      std::snprintf(hp, sizeof(hp), "ribbon-home-%d.bmp", wpx);
+      DevShell_RequestScreenshot(hp);
+      ctx->Yield(3);
+    }
+    DevShell_SetWindowSize(2560, 1300);
+    ctx->Yield(6);
+    ctx->WindowCollapse("//Developer Shell", false);
+
     struct Tab { const char* label; int idx; };
     const Tab tabs[] = {
         {"Home", kRibbonTabHome},       {"Insert", kRibbonTabInsert},
@@ -435,21 +454,6 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
       DevShell_RequestScreenshot(path);
       ctx->Yield(3);
     }
-
-    // Home tab at three widths — responsive per-panel collapse evidence.
-    if (RefWindow(ctx, "//GoSurveyHost/RibbonStrip"))
-      ctx->ItemClick("Home");
-    s_cmd->activeRibbonTab = kRibbonTabHome;
-    for (const int wpx : {2560, 1500, 1000}) {
-      DevShell_SetWindowSize(wpx, 1300);
-      ctx->Yield(8);
-      char p[48];
-      std::snprintf(p, sizeof(p), "ribbon-home-%d.bmp", wpx);
-      DevShell_RequestScreenshot(p);
-      ctx->Yield(3);
-    }
-    DevShell_SetWindowSize(2560, 1300);
-    ctx->Yield(6);
 
     // Block Editor contextual tab — needs an open definition.
     SubmitCad(ctx, "MKLINE -2,0, 2,0");
