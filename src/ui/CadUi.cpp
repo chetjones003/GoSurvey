@@ -1252,27 +1252,18 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
         ExportDxfFile(cmd, dxfPath, log);
     }
     ImGui::Separator();
-    {
-      // DWG needs an external converter in Phase 1 (ADR-024); grey the items out and say why
-      // rather than letting the user hit a failure inside a file dialog.
-      const DwgConverter& conv = FindDwgConverter();
-      if (ImGui::MenuItem("Import DWG...", nullptr, false, conv.available())) {
-        if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath)))
-          ImportDwgFile(cmd, dwgPath, log);
-      }
-      if (ImGui::MenuItem("Export DWG...", nullptr, false, conv.available())) {
-        if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg")) {
-          cmd.dwgPendingExportPath = dwgPath;
-          cmd.dwgLossyExportModal  = true;
-        }
-      }
-      if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip(
-            "DWG needs a converter: install the free ODA File Converter, or set\n"
-            "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
-      else if (conv.available() && ImGui::IsItemHovered())
-        ImGui::SetTooltip("Using %s", conv.displayName.c_str());
+    if (ImGui::MenuItem("Import DWG...", nullptr)) {
+      if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath)))
+        ImportDwgFile(cmd, dwgPath, log);
     }
+    if (ImGui::MenuItem("Export DWG...", nullptr)) {
+      if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg")) {
+        cmd.dwgPendingExportPath = dwgPath;
+        cmd.dwgLossyExportModal  = true;
+      }
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("LibreDWG — R2000 (AC1015) on save.");
     ImGui::Separator();
     if (ImGui::MenuItem("Quit Application", nullptr)) {
       bool anyDirty = (cmd.cadGpuRevision != cmd.activeDocSavedRevision);
@@ -3110,21 +3101,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         }
         RibbonItemHelp("Import a DXF drawing into the current session.\nSame as File menu → Import DXF...");
         {
-          const DwgConverter& conv = FindDwgConverter();
-          if (!conv.available())
-            ImGui::BeginDisabled();
-          if (smallBtn("##RibbonImportDwg", RibbonIconKind::PdfAttach, "Import DWG", cw)) {
+        if (smallBtn("##RibbonImportDwg", RibbonIconKind::PdfAttach, "Import DWG", cw)) {
             if (BrowseOpenFileDwgUtf8(ribbonDwgPath, sizeof(ribbonDwgPath)))
               ImportDwgFile(cmd, ribbonDwgPath, log);
           }
-          if (!conv.available())
-            ImGui::EndDisabled();
-          if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(
-                "DWG needs a converter: install the free ODA File Converter, or set\n"
-                "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
-          else if (conv.available() && ImGui::IsItemHovered())
-            ImGui::SetTooltip("Using %s", conv.displayName.c_str());
+          if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Open DWG with LibreDWG (no converter).");
         }
         ImGui::EndGroup();
       }
@@ -3148,23 +3130,14 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         }
         RibbonItemHelp("Export the current drawing to DXF.\nSame as File menu → Export DXF...");
         {
-          const DwgConverter& conv = FindDwgConverter();
-          if (!conv.available())
-            ImGui::BeginDisabled();
-          if (smallBtn("##RibbonExportDwg", RibbonIconKind::PdfAttach, "Export DWG", cw)) {
+        if (smallBtn("##RibbonExportDwg", RibbonIconKind::PdfAttach, "Export DWG", cw)) {
             if (BrowseSaveFileDwgUtf8(ribbonExpDwgPath, sizeof(ribbonExpDwgPath), "drawing.dwg")) {
               cmd.dwgPendingExportPath = ribbonExpDwgPath;
               cmd.dwgLossyExportModal  = true;
             }
           }
-          if (!conv.available())
-            ImGui::EndDisabled();
-          if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(
-                "DWG needs a converter: install the free ODA File Converter, or set\n"
-                "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
-          else if (conv.available() && ImGui::IsItemHovered())
-            ImGui::SetTooltip("Using %s", conv.displayName.c_str());
+          if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Save DWG as R2000 via LibreDWG.");
         }
         ImGui::EndGroup();
       }
@@ -15417,11 +15390,11 @@ void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log
   const std::filesystem::path dst(cmd.dwgPendingExportPath);
   const bool overwriting = std::filesystem::exists(dst);
 
-  ImGui::TextUnformatted("GoSurvey writes DWG through DXF, so this export drops:");
+  ImGui::TextUnformatted("GoSurvey writes DWG with LibreDWG as AutoCAD 2000 (AC1015). This export drops:");
   ImGui::Spacing();
-  ImGui::BulletText("block definitions and inserts (geometry is written exploded)");
-  ImGui::BulletText("paper-space layouts beyond the first");
-  ImGui::BulletText("elevations, block attributes, multileaders and tables");
+  ImGui::BulletText("hatches, ellipses, meshes, TIN surfaces, and dimensions");
+  ImGui::BulletText("block definitions (inserts are exploded on import; not rebuilt on save)");
+  ImGui::BulletText("paper-space layouts beyond model space");
   ImGui::BulletText("Civil 3D objects, proxies and anything else GoSurvey does not model");
   ImGui::Spacing();
 

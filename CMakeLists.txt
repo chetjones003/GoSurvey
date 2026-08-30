@@ -37,6 +37,8 @@ find_package(OpenGL REQUIRED)
 
 include(FetchContent)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LibreDwg.cmake")
+
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -196,6 +198,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/DxfIo.cpp
   src/io/DwgIo.cpp
   src/io/DwgProbe.cpp
+  src/io/LibreDwg.cpp
+  src/io/LibreDwgCad.cpp
   src/io/DxfColors.cpp
   src/io/DwgMeshConvert.cpp
   src/io/GsMigrate.cpp
@@ -311,7 +315,14 @@ target_link_libraries(GoSurvey PRIVATE
   OpenGL::GL
   glew_static
   pdfium
+  LibreDWG::libredwg
 )
+
+if(TARGET libredwg)
+  set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/io/LibreDwgCad.cpp" APPEND PROPERTY INCLUDE_DIRECTORIES
+    "${libredwg_SOURCE_DIR}/src"
+    "${libredwg_BINARY_DIR}/src")
+endif()
 if(WIN32)
   # winhttp + bcrypt: the REQ-077/078 update check's HTTPS fetch and SHA-256 (ADR-029 (e)).
   # Both ship with Windows, which is why this adds no third-party dependency under REQ-300.
@@ -451,7 +462,7 @@ if(GOSURVEY_BUILD_HEADLESS)
 
   # imgui_core only. Adding imgui_backend here would drag in glfw and OpenGL and silently undo the
   # property this target exists to hold.
-  target_link_libraries(gosurvey_headless PRIVATE imgui_core)
+  target_link_libraries(gosurvey_headless PRIVATE imgui_core LibreDWG::libredwg)
 
   # %DATA% in a transcript resolves to this, so a fixture is named relative to the repository
   # rather than to whoever's checkout the transcript was written in.
@@ -515,8 +526,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
     tests/MtextTextOpsTests.cpp
-    tests/DxfEntityEmitTests.cpp
     tests/DwgProbeTests.cpp
+    tests/LibreDwgTests.cpp
     tests/LinetypeTessellationTests.cpp
     tests/CurveIntersectTests.cpp
     tests/BenchSceneTests.cpp
@@ -604,6 +615,7 @@ if(GOSURVEY_BUILD_TESTS)
     # DWG version detection + converter discovery. Deliberately its own TU (see DwgProbe.cpp):
     # it depends only on <filesystem>, so tests link it without DxfIo and the GUI stack.
     src/io/DwgProbe.cpp
+    src/io/LibreDwg.cpp
     # Linetype dash tessellation, including per-vertex Z (REQ-058). Standalone like DwgProbe.cpp —
     # only <string>/<vector>/<cmath>/<cctype> — so it links without the GUI stack.
     src/commands/CadLinetype.cpp
@@ -680,7 +692,7 @@ if(GOSURVEY_BUILD_TESTS)
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
-  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg)
   if(MSVC)
     target_compile_options(GoSurveyTests PRIVATE /W4 /permissive-)
   else()
@@ -704,6 +716,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
     tests/GsIoDimAngularTests.cpp
+    tests/LibreDwgCadTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -723,7 +736,7 @@ if(GOSURVEY_BUILD_TESTS)
     ${NLOHMANN_JSON_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
-  target_link_libraries(GoSurveySnapTests PRIVATE imgui_core Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveySnapTests PRIVATE imgui_core Catch2::Catch2WithMain LibreDWG::libredwg)
   target_compile_definitions(GoSurveySnapTests PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
   if(WIN32)
