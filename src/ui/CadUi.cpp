@@ -3460,12 +3460,19 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // RenderRibbonFit, after that block has exited. (Declaring them in the block left dangling
   // references that a Release build's stack reuse turned into a crash.)
   const float gcHome = gridCell3;
+  // Labelled Home rows (Create Ground Data / Design / Profile) pack 3 to a column at a compact
+  // height so the rows aren't spread out — the icon still fills most of the button.
+  const float rowHome = std::min(rowH, 34.f);
   auto nyiGrid = [&](const char* id, const char* ic, const char* label) {
     RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(gcHome, gcHome), RibbonLabel::None, ic);
   };
   auto nyiRow = [&](const char* id, const char* ic, const char* label, float w) {
-    RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(curCompact ? rowH : w, rowH),
+    RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(curCompact ? rowHome : w, rowHome),
                     curCompact ? RibbonLabel::None : RibbonLabel::Right, ic);
+  };
+  auto homeRow = [&](const char* id, RibbonIconKind ic, const char* label, float w) {
+    return RibbonButtonEx(id, ic, curCompact ? nullptr : label, ImVec2(curCompact ? rowHome : w, rowHome),
+                          curCompact ? RibbonLabel::None : RibbonLabel::Right);
   };
 
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
@@ -3594,11 +3601,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float cA = std::max(colW({"Points", "Feature Line", "Traverse"}), capW("Create Ground Data") - 60.f);
         const float cB = colW({"Surfaces", "Grading"});
         const float w = 8.f + cA + 4.f + cB;
-        const float mw = 8.f + rowH + 4.f + rowH;
+        const float mw = 8.f + rowHome + 4.f + rowHome;
         ribbonSpecs.push_back({w, mw, [&, w, mw, cA, cB]() {
           RibbonSectionBegin("RibbonSecGroundData", "Create Ground Data", curCompact ? mw : w, panelH);
+          ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 1.f));
           ImGui::BeginGroup();
-          if (smallBtn("##CgdPoints", RibbonIconKind::SurveyPoint, "Points", cA))
+          if (homeRow("##CgdPoints", RibbonIconKind::SurveyPoint, "Points", cA))
             StartCreatePointsCommand(cmd, log);
           RibbonItemHelp("Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS");
           nyiRow("##CgdFeatureLine", "c3d_featureline", "Feature Line", cA);
@@ -3609,6 +3617,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           nyiRow("##CgdSurfaces", "c3d_surfaces", "Surfaces", cB);
           nyiRow("##CgdGrading", "c3d_grading", "Grading", cB);
           ImGui::EndGroup();
+          ImGui::PopStyleVar();
           RibbonSectionEnd();
         }, "Create Ground Data", RibbonIconKind::SurveyPoint});
       }
@@ -3620,9 +3629,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float c3 = colW({"Intersections", "Assembly", "Pipe Network"});
         const float c4 = colW({"Pond", "Underground Storage", "Channel"});
         const float w = 8.f + c1 + 4.f + c2 + 4.f + c3 + 4.f + c4;
-        const float mw = 8.f + rowH * 4.f + 4.f * 3.f;
+        const float mw = 8.f + rowHome * 4.f + 4.f * 3.f;
         ribbonSpecs.push_back({w, mw, [&, w, mw]() {
           RibbonSectionBegin("RibbonSecCreateDesign", "Create Design", curCompact ? mw : w, panelH);
+          ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 1.f));
           const float d1 = colW({"Parcel", "Feature Line", "Grading"});
           const float d2 = colW({"Alignment", "Profile", "Corridor"});
           const float d3 = colW({"Intersections", "Assembly", "Pipe Network"});
@@ -3647,6 +3657,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           nyiRow("##CdUgStorage", "c3d_ugstorage", "Underground Storage", d4);
           nyiRow("##CdChannel", "c3d_channel", "Channel", d4);
           ImGui::EndGroup();
+          ImGui::PopStyleVar();
           RibbonSectionEnd();
         }, "Create Design", RibbonIconKind::Nyi, "c3d_alignment"});
       }
@@ -3656,14 +3667,16 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float cP = std::max(colW({"Profile View", "Sample Lines", "Section Views"}),
                                   capW("Profile & Section Views") - 8.f);
         const float w = 8.f + cP;
-        const float mw = 8.f + rowH;
+        const float mw = 8.f + rowHome;
         ribbonSpecs.push_back({w, mw, [&, w, mw, cP]() {
           RibbonSectionBegin("RibbonSecProfSect", "Profile & Section Views", curCompact ? mw : w, panelH);
+          ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 1.f));
           ImGui::BeginGroup();
           nyiRow("##PsvProfileView", "c3d_profileview", "Profile View", cP);
           nyiRow("##PsvSampleLines", "c3d_samplelines", "Sample Lines", cP);
           nyiRow("##PsvSectionViews", "c3d_sectionviews", "Section Views", cP);
           ImGui::EndGroup();
+          ImGui::PopStyleVar();
           RibbonSectionEnd();
         }, "Profile & Section Views", RibbonIconKind::Nyi, "c3d_profileview"});
       }
