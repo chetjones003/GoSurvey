@@ -1561,6 +1561,28 @@ enum class RibbonIconKind : std::uint8_t {
   ViewportRect,
   ViewportPoly,
   DimStyle,
+  // Insert tab + View tab fixes (previously reused Copy/PdfAttach/Layers placeholders).
+  Block,
+  BlockEditor,
+  BlockInsert,
+  Toolspace,
+  // Block Editor contextual tab — dedicated Block_Authoring_* art (previously all Copy).
+  BeSaveBlock,
+  BeAutoConstrain,
+  BeConstraintShow,
+  BeBlockTable,
+  BeParameters,
+  BePalettes,
+  BeParamPoint,
+  BeParamLinear,
+  BeParamPolar,
+  BeParamXY,
+  BeParamRotation,
+  BeParamAlignment,
+  BeParamFlip,
+  BeParamVisibility,
+  BeParamLookup,
+  BeParamBasepoint,
 };
 
 static ImVec2 RibbonLerp(const ImVec2& a, const ImVec2& b, float u, float v) {
@@ -2608,40 +2630,43 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::ClipboardCopy:  return "clipboardcopy";
   case RibbonIconKind::ClipboardPaste: return "clipboardpaste";
   case RibbonIconKind::Traverse:       return "traverse";
-  case RibbonIconKind::SurfLabel:      return "surflabel";
-  case RibbonIconKind::SurfLegend:     return "surflegend";
-  case RibbonIconKind::SurfPropsHand:  return "surfpropshand";
-  case RibbonIconKind::SurfInquiry:    return "surfinquiry";
-  case RibbonIconKind::SurfIsolate:    return "surfisolate";
-  case RibbonIconKind::SurfDoc:        return "surfdoc";
-  case RibbonIconKind::SurfAddData:    return "surfadddata";
-  case RibbonIconKind::SurfEdit:       return "surfedit";
-  case RibbonIconKind::SurfLodLow:     return "surflodlow";
-  case RibbonIconKind::SurfLodHigh:    return "surflodhigh";
-  case RibbonIconKind::SurfWaterDrop:  return "surfwaterdrop";
-  case RibbonIconKind::SurfBandage:    return "surfbandage";
-  case RibbonIconKind::SurfEye:        return "surfeye";
-  case RibbonIconKind::SurfCatchment:  return "surfcatchment";
-  case RibbonIconKind::SurfVolumes:    return "surfvolumes";
-  case RibbonIconKind::SurfDrape:      return "surfdrape";
-  case RibbonIconKind::SurfExtract:    return "surfextract";
-  case RibbonIconKind::SurfMoveTo:     return "surfmoveto";
-  case RibbonIconKind::SurfQuickProfile: return "surfquickprofile";
-  case RibbonIconKind::SurfProfile:    return "surfprofile";
-  case RibbonIconKind::SurfDataShortcut: return "surfdatashortcut";
-  case RibbonIconKind::SurfGrading:    return "surfgrading";
-  case RibbonIconKind::SvyTripod:      return "svytripod";
-  case RibbonIconKind::SvyQuery:       return "svyquery";
-  case RibbonIconKind::SvyFigure:      return "svyfigure";
-  case RibbonIconKind::SvyPda:         return "svypda";
-  case RibbonIconKind::SvyPin:         return "svypin";
-  case RibbonIconKind::SvyRefresh:     return "svyrefresh";
-  case RibbonIconKind::SvyGlobe:       return "svyglobe";
-  case RibbonIconKind::SvyGeodetic:    return "svygeodetic";
-  case RibbonIconKind::SvySun:         return "svysun";
-  case RibbonIconKind::SvyRenumber:    return "svyrenumber";
-  case RibbonIconKind::SvyLock:        return "svylock";
-  case RibbonIconKind::SvyUnlock:      return "svyunlock";
+  // REQ-143 TIN Surface contextual tab. Matched to library art where one fits; the
+  // rest keep their hand-drawn vector fallback (return "" → PaintRibbonIcon).
+  case RibbonIconKind::SurfLabel:      return "Add_Leader";
+  case RibbonIconKind::SurfLegend:     return "Table";
+  case RibbonIconKind::SurfPropsHand:  return "Layer_Properties";
+  case RibbonIconKind::SurfInquiry:    return "Measure_Area";
+  case RibbonIconKind::SurfIsolate:    return "Isolate_Objects";
+  case RibbonIconKind::SurfDoc:        return "Layer_Properties";
+  case RibbonIconKind::SurfAddData:    return "Convert_to_Surface";
+  case RibbonIconKind::SurfEdit:       return "Surface_Sculpt";
+  case RibbonIconKind::SurfLodLow:     return "";  // vector fallback
+  case RibbonIconKind::SurfLodHigh:    return "";  // vector fallback
+  case RibbonIconKind::SurfWaterDrop:  return "";  // vector fallback
+  case RibbonIconKind::SurfBandage:    return "Breakline_Symbol";
+  case RibbonIconKind::SurfEye:        return "";  // vector fallback
+  case RibbonIconKind::SurfCatchment:  return "";  // vector fallback
+  case RibbonIconKind::SurfVolumes:    return "Measure_Volume";
+  case RibbonIconKind::SurfDrape:      return "";  // vector fallback
+  case RibbonIconKind::SurfExtract:    return "Extract_Data";
+  case RibbonIconKind::SurfMoveTo:     return "3D_Move";
+  case RibbonIconKind::SurfQuickProfile: return "Setup_Profile";
+  case RibbonIconKind::SurfProfile:    return "Setup_Profile";
+  case RibbonIconKind::SurfDataShortcut: return "Attach";
+  case RibbonIconKind::SurfGrading:    return "Gradient";
+  // D-2026-08-28-k Civil 3D Survey tab / Survey Point contextual tab.
+  case RibbonIconKind::SvyTripod:      return "";  // vector fallback
+  case RibbonIconKind::SvyQuery:       return "";  // vector fallback
+  case RibbonIconKind::SvyFigure:      return "";  // vector fallback
+  case RibbonIconKind::SvyPda:         return "";  // vector fallback
+  case RibbonIconKind::SvyPin:         return "surveypoint";
+  case RibbonIconKind::SvyRefresh:     return "";  // vector fallback
+  case RibbonIconKind::SvyGlobe:       return "UCS_World";
+  case RibbonIconKind::SvyGeodetic:    return "Quick_Calculator";
+  case RibbonIconKind::SvySun:         return "Sun";
+  case RibbonIconKind::SvyRenumber:    return "";  // vector fallback
+  case RibbonIconKind::SvyLock:        return "Layer_Lock";
+  case RibbonIconKind::SvyUnlock:      return "Layer_Unlock";
   case RibbonIconKind::Array:          return "array";
   case RibbonIconKind::Plot:           return "plot";
   case RibbonIconKind::Export:         return "export";
@@ -2650,17 +2675,39 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::ViewportRect:   return "viewportrect";
   case RibbonIconKind::ViewportPoly:   return "viewportpoly";
   case RibbonIconKind::DimStyle:       return "dimstyle";
+  // Insert/View placeholder fixes.
+  case RibbonIconKind::Block:          return "block";
+  case RibbonIconKind::BlockEditor:    return "Block_Editor";
+  case RibbonIconKind::BlockInsert:    return "Insert_Block";
+  case RibbonIconKind::Toolspace:      return "toolspace";
+  // Block Editor contextual tab.
+  case RibbonIconKind::BeSaveBlock:       return "Write_Block";
+  case RibbonIconKind::BeAutoConstrain:   return "AutoConstrain";
+  case RibbonIconKind::BeConstraintShow:  return "Show_Geometric_Constraints";
+  case RibbonIconKind::BeBlockTable:      return "Block_Authoring_Actions_Table";
+  case RibbonIconKind::BeParameters:      return "Block_Authoring_Parameters_Linear";
+  case RibbonIconKind::BePalettes:        return "Blocks_Palette";
+  case RibbonIconKind::BeParamPoint:      return "Block_Authoring_Parameters_Point";
+  case RibbonIconKind::BeParamLinear:     return "Block_Authoring_Parameters_Linear";
+  case RibbonIconKind::BeParamPolar:      return "Block_Authoring_Parameters_Polar";
+  case RibbonIconKind::BeParamXY:         return "Block_Authoring_Parameters_XY";
+  case RibbonIconKind::BeParamRotation:   return "Block_Authoring_Parameters_Rotation";
+  case RibbonIconKind::BeParamAlignment:  return "Block_Authoring_Parameters_Alignment";
+  case RibbonIconKind::BeParamFlip:       return "Block_Authoring_Parameters_Flip";
+  case RibbonIconKind::BeParamVisibility: return "Block_Authoring_Parameters_Visibility";
+  case RibbonIconKind::BeParamLookup:     return "Block_Authoring_Parameters_Lookup";
+  case RibbonIconKind::BeParamBasepoint:  return "Block_Authoring_Parameters_Base_Point";
   }
   return "";
 }
 
-static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::DimStyle) + 1] = {};
+static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::BeParamBasepoint) + 1] = {};
 static bool g_ribbonIconsLoaded = false;
 
 static void EnsureRibbonIconsLoaded() {
   if (g_ribbonIconsLoaded) return;
   g_ribbonIconsLoaded = true;  // attempt once; missing files fall back to vector art
-  for (int i = 0; i <= static_cast<int>(RibbonIconKind::DimStyle); ++i) {
+  for (int i = 0; i <= static_cast<int>(RibbonIconKind::BeParamBasepoint); ++i) {
     const std::string nm = RibbonIconName(static_cast<RibbonIconKind>(i));
     if (nm.empty()) continue;
     const std::filesystem::path p =
@@ -4145,7 +4192,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           StartViewPointsCommand(cmd, log);
         RibbonItemHelp("Edit/List Points — the survey point list.\nCommand bar: VIEWPOINTS");
         ImGui::SameLine(0, 4);
-        if (RibbonButtonEx("##SpPgProps", RibbonIconKind::Copy, "Point Group\nProperties", ImVec2(wGrp, colH),
+        if (RibbonButtonEx("##SpPgProps", RibbonIconKind::SurfPropsHand, "Point Group\nProperties", ImVec2(wGrp, colH),
                            RibbonLabel::Below))
           cmd.showPointGroupManagerWindow = true;
         RibbonItemHelp("Point Group Properties — create and edit point groups.");
@@ -4185,13 +4232,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float cell = colW({"Import Points", "Export Points", "Transfer Points"});
         RibbonSectionBegin("RibbonSecSpTools", "SURVEY Point Tools", 8.f + cell + 8.f, panelH);
         ImGui::BeginGroup();
-        if (smallBtn("##SpImport", RibbonIconKind::PdfAttach, "Import Points", cell))
+        if (smallBtn("##SpImport", RibbonIconKind::Import, "Import Points", cell))
           StartImportPointsCommand(cmd, log);
         RibbonItemHelp("Import Points — load a point file.\nCommand bar: IMPORTPOINTS");
         if (smallBtn("##SpExport", RibbonIconKind::ClipboardCopy, "Export Points", cell))
           StartExportPointsCommand(cmd, log);
         RibbonItemHelp("Export Points — write selected or all points.\nCommand bar: EXPORTPOINTS");
-        RibbonNyiButton("##SpTransfer", RibbonIconKind::Copy, "Transfer Points", ImVec2(cell, rowH),
+        RibbonNyiButton("##SpTransfer", RibbonIconKind::SurfMoveTo, "Transfer Points", ImVec2(cell, rowH),
                         RibbonLabel::Right);
         ImGui::EndGroup();
         RibbonSectionEnd();
@@ -4212,10 +4259,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         RibbonItemHelp("Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS");
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
-        if (smallBtn("##SpCreateGrp", RibbonIconKind::Copy, "Create Point Group", cell))
+        if (smallBtn("##SpCreateGrp", RibbonIconKind::Layers, "Create Point Group", cell))
           cmd.showPointGroupManagerWindow = true;
         RibbonItemHelp("Create Point Group — the Point Groups window.");
-        if (smallBtn("##SpImport2", RibbonIconKind::PdfAttach, "Import Points", cell))
+        if (smallBtn("##SpImport2", RibbonIconKind::Import, "Import Points", cell))
           StartImportPointsCommand(cmd, log);
         RibbonItemHelp("Import Points — load a point file.\nCommand bar: IMPORTPOINTS");
         if (smallBtn("##SpCreateSurf", RibbonIconKind::SurfAddData, "Create Surface", cell))
@@ -4237,22 +4284,22 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ribbonSpecs.push_back({wOpen, wOpen, [&]() {
       const float cw = colW({"Edit Block", "Save Block", "Test Block"});
       RibbonSectionBegin("RibbonSecBeOpen", "Open/Save", wOpen, panelH);
-      if (smallBtn("##BeEdit", RibbonIconKind::Copy, "Edit Block", cw))
+      if (smallBtn("##BeEdit", RibbonIconKind::BlockEditor, "Edit Block", cw))
         CadBlocksOpenEditPicker(cmd, log);
       RibbonItemHelp("Edit Block — BEDIT the selected INSERT, or the definition already open.");
-      if (smallBtn("##BeSave", RibbonIconKind::Copy, "Save Block", cw))
+      if (smallBtn("##BeSave", RibbonIconKind::BeSaveBlock, "Save Block", cw))
         beditSubmit("BSAVE");
       RibbonItemHelp("Save Block — BSAVE. References update immediately.");
-      RibbonNyiButton("##BeTest", RibbonIconKind::Copy, "Test Block", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BeTest", RibbonIconKind::BlockEditor, "Test Block", ImVec2(cw, rowH), RibbonLabel::Right);
       RibbonSectionEnd();
     }});
     const float wGeom = 8.f + colW({"Auto Constrain", "Show/Hide", "Show All"});
     ribbonSpecs.push_back({wGeom, wGeom, [&]() {
       const float cw = colW({"Auto Constrain", "Show/Hide", "Show All"});
       RibbonSectionBegin("RibbonSecBeGeom", "Geometric", wGeom, panelH);
-      RibbonNyiButton("##BeAutoC", RibbonIconKind::Copy, "Auto Constrain", ImVec2(cw, rowH), RibbonLabel::Right);
-      RibbonNyiButton("##BeShHide", RibbonIconKind::Copy, "Show/Hide", ImVec2(cw, rowH), RibbonLabel::Right);
-      RibbonNyiButton("##BeShAll", RibbonIconKind::Copy, "Show All", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BeAutoC", RibbonIconKind::BeAutoConstrain, "Auto Constrain", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BeShHide", RibbonIconKind::BeConstraintShow, "Show/Hide", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BeShAll", RibbonIconKind::BeConstraintShow, "Show All", ImVec2(cw, rowH), RibbonLabel::Right);
       RibbonSectionEnd();
     }});
     const float wDim = 8.f + colW({"Linear", "Aligned"});
@@ -4267,9 +4314,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ribbonSpecs.push_back({wMan, wMan, [&]() {
       const float cw = colW({"Block Table", "Parameters", "Palettes"});
       RibbonSectionBegin("RibbonSecBeMan", "Manage", wMan, panelH);
-      RibbonNyiButton("##BeBTable", RibbonIconKind::Copy, "Block Table", ImVec2(cw, rowH), RibbonLabel::Right);
-      RibbonNyiButton("##BePMan", RibbonIconKind::Copy, "Parameters", ImVec2(cw, rowH), RibbonLabel::Right);
-      if (smallBtn("##BePalettes", RibbonIconKind::Copy, "Palettes", cw))
+      RibbonNyiButton("##BeBTable", RibbonIconKind::BeBlockTable, "Block Table", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BePMan", RibbonIconKind::BeParameters, "Parameters", ImVec2(cw, rowH), RibbonLabel::Right);
+      if (smallBtn("##BePalettes", RibbonIconKind::BePalettes, "Palettes", cw))
         cmd.blockAuthoringPaletteOpen = !cmd.blockAuthoringPaletteOpen;
       RibbonItemHelp("Authoring Palettes — Parameters, Actions, Parameter Sets, Constraints.");
       RibbonSectionEnd();
@@ -4282,33 +4329,33 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       const float c2 = colW({"Flip", "Visibility", "Lookup"});
       const float c3 = colW({"Basepoint"});
       RibbonSectionBegin("RibbonSecBeAct", "Action Parameters", wAct, panelH);
-      auto addP = [&](const char* kind, const char* id, const char* label, float cw) {
-        if (smallBtn(id, RibbonIconKind::Copy, label, cw)) {
+      auto addP = [&](const char* kind, RibbonIconKind icon, const char* id, const char* label, float cw) {
+        if (smallBtn(id, icon, label, cw)) {
           char line[96];
           std::snprintf(line, sizeof(line), "BPARAM %s1, %s", label, kind);
           ProcessCommandLineSubmit(line, static_cast<int>(sizeof(line)), cmd, log);
         }
       };
       ImGui::BeginGroup();
-      addP("point", "##BePPoint", "Point", c0);
-      addP("linear", "##BePLin", "Linear", c0);
-      addP("polar", "##BePPol", "Polar", c0);
+      addP("point", RibbonIconKind::BeParamPoint, "##BePPoint", "Point", c0);
+      addP("linear", RibbonIconKind::BeParamLinear, "##BePLin", "Linear", c0);
+      addP("polar", RibbonIconKind::BeParamPolar, "##BePPol", "Polar", c0);
       ImGui::EndGroup();
       ImGui::SameLine(0, 4);
       ImGui::BeginGroup();
-      addP("move", "##BePXY", "XY", c1);
-      addP("rotation", "##BePRot", "Rotation", c1);
-      addP("linear", "##BePAln", "Align", c1);
+      addP("move", RibbonIconKind::BeParamXY, "##BePXY", "XY", c1);
+      addP("rotation", RibbonIconKind::BeParamRotation, "##BePRot", "Rotation", c1);
+      addP("linear", RibbonIconKind::BeParamAlignment, "##BePAln", "Align", c1);
       ImGui::EndGroup();
       ImGui::SameLine(0, 4);
       ImGui::BeginGroup();
-      addP("flip", "##BePFlip", "Flip", c2);
-      addP("visibility", "##BePVis", "Visibility", c2);
-      addP("lookup", "##BePLook", "Lookup", c2);
+      addP("flip", RibbonIconKind::BeParamFlip, "##BePFlip", "Flip", c2);
+      addP("visibility", RibbonIconKind::BeParamVisibility, "##BePVis", "Visibility", c2);
+      addP("lookup", RibbonIconKind::BeParamLookup, "##BePLook", "Lookup", c2);
       ImGui::EndGroup();
       ImGui::SameLine(0, 4);
       ImGui::BeginGroup();
-      addP("point", "##BePBase", "Basepoint", c3);
+      addP("point", RibbonIconKind::BeParamBasepoint, "##BePBase", "Basepoint", c3);
       ImGui::EndGroup();
       RibbonSectionEnd();
     }});
@@ -4389,7 +4436,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           cmd.showSettingsWindow = true;
         RibbonItemHelp("Open application settings (same as View menu → Settings...).");
         ImGui::SameLine(0, 4);
-        if (smallBtn("##RibbonToolspace", RibbonIconKind::Layers, "Toolspace", colW({"Toolspace"})))
+        if (smallBtn("##RibbonToolspace", RibbonIconKind::Toolspace, "Toolspace", colW({"Toolspace"})))
           cmd.showToolspaceWindow = true;
         RibbonItemHelp("Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE");
       }
@@ -4427,18 +4474,18 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ribbonSpecs.push_back({90.f, 70.f, [&]() {
       RibbonSectionBegin("RibbonSecBlocks", "Block", 90.f, panelH);
       const float cw = colW({"Block", "Insert"});
-      if (smallBtn("##RibbonBlock", RibbonIconKind::Copy, "Block", cw)) {
+      if (smallBtn("##RibbonBlock", RibbonIconKind::Block, "Block", cw)) {
         char buf[16] = "BLOCKLIST";
         ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
       }
       RibbonItemHelp("List block definitions. Create one with BLOCK <name>, <x>, <y> after selecting geometry.");
-      if (smallBtn("##RibbonInsert", RibbonIconKind::PdfAttach, "Insert", cw))
+      if (smallBtn("##RibbonInsert", RibbonIconKind::BlockInsert, "Insert", cw))
         StartInsertBlockCommand(cmd, log);
       RibbonItemHelp("Insert a block. Opens the Insert dialog (same as INSERT).");
-      if (smallBtn("##RibbonBedit", RibbonIconKind::Copy, "BEDIT", cw))
+      if (smallBtn("##RibbonBedit", RibbonIconKind::BlockEditor, "BEDIT", cw))
         CadBlocksOpenEditPicker(cmd, log);
       RibbonItemHelp("Block Editor — choose a definition from the drawing or block library.");
-      if (smallBtn("##RibbonBlockImport", RibbonIconKind::PdfAttach, "Import", cw))
+      if (smallBtn("##RibbonBlockImport", RibbonIconKind::Import, "Import", cw))
         CadBlocksImportWithPicker(cmd, log);
       RibbonItemHelp("Import a block definition from a .gs, .dxf, or .dwg file.\nSame as BLOCKIMPORT.");
       RibbonSectionEnd();
