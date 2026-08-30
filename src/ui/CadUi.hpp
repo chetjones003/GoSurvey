@@ -155,8 +155,8 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd);
 /// resolved; never re-opens later in the same session (e.g. after a manual sign-out).
 void DrawSignInGate(AppCommandState& cmd);
 
-/// Confirms a DWG export before anything is written, stating what the Phase 1 converter route
-/// drops (REQ-052). Writes to \c cmd.dwgPendingExportPath only when the user accepts.
+/// Confirms a DWG export before anything is written, stating LibreDWG R2000 encode limits
+/// (REQ-170). Writes to \c cmd.dwgPendingExportPath only when the user accepts.
 void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log);

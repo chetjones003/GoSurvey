@@ -1186,30 +1186,29 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, boo
 }
 
 void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
-  char gsPath[4096]{};
+  char dwgPath[4096]{};
   const std::string& path = cmd.activeDocFilePath;
   if (!path.empty()) {
-    if (SaveGoSurveyFile(cmd, path.c_str(), log))
+    if (SaveDrawingDocument(cmd, path.c_str(), log))
       cmd.activeDocSavedRevision = cmd.cadGpuRevision;
     return;
   }
-  // No path yet (a New drawing, or one opened by the `.gs` file association — see BUG-027). Browse,
+  // No path yet (a New drawing, or one opened by file association — see BUG-027). Browse,
   // then ADOPT the destination: the tab takes the file's name and every later save is silent, which
   // is what makes a second Ctrl+S mean "save" rather than "ask again".
-  if (!BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), "drawing.gs"))
+  if (!BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg"))
     return;
-  if (!SaveGoSurveyFile(cmd, gsPath, log))
+  if (!SaveDrawingDocument(cmd, dwgPath, log))
     return;
   cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-  cmd.activeDocFilePath      = std::string(gsPath);
+  cmd.activeDocFilePath      = std::string(dwgPath);
   if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
-    cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::path(gsPath).stem().string();
+    cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::path(dwgPath).stem().string();
 }
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   static char dxfPath[4096]{};
   static char dwgPath[4096]{};
-  static char gsPath[4096]{};
 #if !defined(_WIN32)
   if (g_menuBarLogoTex && g_menuBarLogoDims.x > 0.f && g_menuBarLogoDims.y > 0.f) {
     const ImGuiStyle& st = ImGui::GetStyle();
@@ -1239,16 +1238,16 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.pendingViewportFocus    = true;
     }
     if (ImGui::MenuItem("Open", nullptr)) {
-      if (BrowseOpenFileGsUtf8(gsPath, sizeof(gsPath))) {
+      if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath))) {
         SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
-        const std::string tabName = std::filesystem::path(gsPath).stem().string();
+        const std::string tabName = std::filesystem::path(dwgPath).stem().string();
         const int newIdx = static_cast<int>(cmd.drawingTabs.size());
         cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++});
         cmd.documents.emplace_back();
         RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
-        if (LoadGoSurveyFile(cmd, gsPath, log)) {
+        if (OpenDrawingDocument(cmd, dwgPath, log)) {
           cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-          cmd.activeDocFilePath      = std::string(gsPath);
+          cmd.activeDocFilePath      = std::string(dwgPath);
         }
         cmd.activeDrawingIdx        = newIdx;
         cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
@@ -1262,16 +1261,16 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Save As...")) {
       const std::string defName = cmd.activeDocFilePath.empty()
           ? (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size())
-                 ? cmd.drawingTabs[cmd.activeDrawingIdx].name + ".gs"
-                 : std::string("drawing.gs"))
+                 ? cmd.drawingTabs[cmd.activeDrawingIdx].name + ".dwg"
+                 : std::string("drawing.dwg"))
           : std::filesystem::path(cmd.activeDocFilePath).filename().string();
-      if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), defName.c_str())) {
-        if (SaveGoSurveyFile(cmd, gsPath, log)) {
+      if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), defName.c_str())) {
+        if (SaveDrawingDocument(cmd, dwgPath, log)) {
           cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-          cmd.activeDocFilePath      = std::string(gsPath);
+          cmd.activeDocFilePath      = std::string(dwgPath);
           if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
             cmd.drawingTabs[cmd.activeDrawingIdx].name =
-                std::filesystem::path(gsPath).stem().string();
+                std::filesystem::path(dwgPath).stem().string();
         }
       }
     }
@@ -1288,27 +1287,18 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
         ExportDxfFile(cmd, dxfPath, log);
     }
     ImGui::Separator();
-    {
-      // DWG needs an external converter in Phase 1 (ADR-024); grey the items out and say why
-      // rather than letting the user hit a failure inside a file dialog.
-      const DwgConverter& conv = FindDwgConverter();
-      if (ImGui::MenuItem("Import DWG...", nullptr, false, conv.available())) {
-        if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath)))
-          ImportDwgFile(cmd, dwgPath, log);
-      }
-      if (ImGui::MenuItem("Export DWG...", nullptr, false, conv.available())) {
-        if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg")) {
-          cmd.dwgPendingExportPath = dwgPath;
-          cmd.dwgLossyExportModal  = true;
-        }
-      }
-      if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip(
-            "DWG needs a converter: install the free ODA File Converter, or set\n"
-            "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
-      else if (conv.available() && ImGui::IsItemHovered())
-        ImGui::SetTooltip("Using %s", conv.displayName.c_str());
+    if (ImGui::MenuItem("Import DWG...", nullptr)) {
+      if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath)))
+        ImportDwgFile(cmd, dwgPath, log);
     }
+    if (ImGui::MenuItem("Export DWG...", nullptr)) {
+      if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg")) {
+        cmd.dwgPendingExportPath = dwgPath;
+        cmd.dwgLossyExportModal  = true;
+      }
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("LibreDWG — R2000 (AC1015) on save.");
     ImGui::Separator();
     if (ImGui::MenuItem("Quit Application", nullptr)) {
       bool anyDirty = (cmd.cadGpuRevision != cmd.activeDocSavedRevision);
@@ -4397,21 +4387,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         }
         RibbonItemHelp("Import a DXF drawing into the current session.\nSame as File menu → Import DXF...");
         {
-          const DwgConverter& conv = FindDwgConverter();
-          if (!conv.available())
-            ImGui::BeginDisabled();
-          if (smallBtn("##RibbonImportDwg", RibbonIconKind::PdfAttach, "Import DWG", cw)) {
+        if (smallBtn("##RibbonImportDwg", RibbonIconKind::PdfAttach, "Import DWG", cw)) {
             if (BrowseOpenFileDwgUtf8(ribbonDwgPath, sizeof(ribbonDwgPath)))
               ImportDwgFile(cmd, ribbonDwgPath, log);
           }
-          if (!conv.available())
-            ImGui::EndDisabled();
-          if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(
-                "DWG needs a converter: install the free ODA File Converter, or set\n"
-                "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
-          else if (conv.available() && ImGui::IsItemHovered())
-            ImGui::SetTooltip("Using %s", conv.displayName.c_str());
+          if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Open DWG with LibreDWG (no converter).");
         }
         ImGui::EndGroup();
       }
@@ -4454,23 +4435,14 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         }
         RibbonItemHelp("Export the current drawing to DXF.\nSame as File menu → Export DXF...");
         {
-          const DwgConverter& conv = FindDwgConverter();
-          if (!conv.available())
-            ImGui::BeginDisabled();
-          if (smallBtn("##RibbonExportDwg", RibbonIconKind::PdfAttach, "Export DWG", cw)) {
+        if (smallBtn("##RibbonExportDwg", RibbonIconKind::PdfAttach, "Export DWG", cw)) {
             if (BrowseSaveFileDwgUtf8(ribbonExpDwgPath, sizeof(ribbonExpDwgPath), "drawing.dwg")) {
               cmd.dwgPendingExportPath = ribbonExpDwgPath;
               cmd.dwgLossyExportModal  = true;
             }
           }
-          if (!conv.available())
-            ImGui::EndDisabled();
-          if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(
-                "DWG needs a converter: install the free ODA File Converter, or set\n"
-                "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
-          else if (conv.available() && ImGui::IsItemHovered())
-            ImGui::SetTooltip("Using %s", conv.displayName.c_str());
+          if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Save DWG as R2000 via LibreDWG.");
         }
         ImGui::EndGroup();
       }
@@ -17612,11 +17584,11 @@ void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log
   const std::filesystem::path dst(cmd.dwgPendingExportPath);
   const bool overwriting = std::filesystem::exists(dst);
 
-  ImGui::TextUnformatted("GoSurvey writes DWG through DXF, so this export drops:");
+  ImGui::TextUnformatted("GoSurvey writes DWG with LibreDWG as AutoCAD 2000 (AC1015). This export drops:");
   ImGui::Spacing();
-  ImGui::BulletText("block definitions and inserts (geometry is written exploded)");
-  ImGui::BulletText("paper-space layouts beyond the first");
-  ImGui::BulletText("elevations, block attributes, multileaders and tables");
+  ImGui::BulletText("hatches, ellipses, meshes, TIN surfaces, and dimensions");
+  ImGui::BulletText("block definitions (inserts are exploded on import; not rebuilt on save)");
+  ImGui::BulletText("paper-space layouts beyond model space");
   ImGui::BulletText("Civil 3D objects, proxies and anything else GoSurvey does not model");
   ImGui::Spacing();
 
@@ -17695,11 +17667,11 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
       }
       std::string path = cmd.activeDocFilePath;
       if (path.empty()) {
-        const std::string def = e.name + ".gs";
-        if (BrowseSaveFileGsUtf8(s_savePath, sizeof(s_savePath), def.c_str()))
+        const std::string def = e.name + ".dwg";
+        if (BrowseSaveFileDwgUtf8(s_savePath, sizeof(s_savePath), def.c_str()))
           path = s_savePath;
       }
-      if (!path.empty() && SaveGoSurveyFile(cmd, path.c_str(), log)) {
+      if (!path.empty() && SaveDrawingDocument(cmd, path.c_str(), log)) {
         cmd.activeDocSavedRevision = cmd.cadGpuRevision;
         cmd.activeDocFilePath      = path;
         if (!isActive) {

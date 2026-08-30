@@ -3270,6 +3270,36 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
 
+### REQ-175 — DWG is the drawing document; GoSurvey state is preserved in the file
+- Purpose: File → Open/Save and headless OPEN/SAVEAS treat DWG as the drawing, without dropping
+  survey-specific data that today lives in `.gs`
+- Priority: must
+- Type: functional
+- Statement: The **drawing document** is a `.dwg`. File → Open, Save, and Save As default to DWG
+  and do not list `.gs` as a drawing type. Headless `OPEN` and `SAVEAS` use DWG the same way.
+  A GoSurvey save writes LibreDWG CAD entities (REQ-170) **and** embeds the existing GoSurvey
+  JSON document (the same tree `.gs` writes) so survey points, traverse, layouts, text/surface
+  styles, `worldDocumentOrigin`, and the rest of that tree survive Open → Save → Open.
+  A DWG without that payload is a **foreign** drawing and imports through REQ-170 CAD mapping.
+  `.gs` read/write remains in the tree (workspace template, explicit `.gs` paths, future
+  project file) and is not the File drawing chooser. Existing `.gs` files still open when a
+  path ending in `.gs` is given (command line, template, transcript `OPEN samples/…`).
+  This does **not** claim unknown-object preservation (DM-08).
+- Acceptance:
+  - a new drawing, File → Save, writes a `.dwg` (not `.gs`);
+  - File → Open’s default filter is DWG; `.gs` is not listed as a drawing type;
+  - File → Save As defaults to `.dwg`; the file reopens in GoSurvey with CAD and survey state
+    that were in the document at save;
+  - opening an existing GoSurvey `.dwg` and Save updates that DWG, not a sidecar `.gs`;
+  - a survey point (id, N/E/elev, description) survives Export DWG / Open DWG within REQ-101;
+  - a foreign DWG with no GoSurvey payload still imports model-space LINE/CIRCLE as REQ-170;
+  - `SaveGoSurveyFile` / `LoadGoSurveyFile` remain callable;
+  - headless `SAVEAS`/`OPEN` of `%OUT%/*.dwg` round-trips that document.
+- Owner-layer: IO (payload + LibreDWG), UI (dialogs), Commands/headless (OPEN/SAVEAS)
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-j, ADR-044 (renumbered from D-2026-08-29-h / ADR-043 on the
+  beta merge; those identifiers were taken by the REQ-107 block-editor decision).
+
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,
                answered without a click and without running a command
@@ -5540,6 +5570,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-172 | IO/Domain/UI | planned — PTS→PTX→LAS→LAZ→E57 read+write; malformed refuse | accepted |
 | REQ-173 | Domain/IO/Renderer/UI | planned — JPEG/PNG/BMP IMAGE underlay; missing file unloads image only | accepted |
 | REQ-174 | IO/Domain | planned — IFC tessellate to mesh; no IFC write | accepted |
+| REQ-175 | IO/UI/Commands | `LibreDwgCadTests` (survey point survives DWG save/load; foreign DWG without payload still imports a LINE) + headless `%OUT%/*.dwg` OPEN/SAVEAS | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |

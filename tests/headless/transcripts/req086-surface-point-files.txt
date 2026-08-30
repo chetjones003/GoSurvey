@@ -52,12 +52,12 @@ EXPECT LOG "Surface "Pad": 510 points"
 
 # --- the link survives a .gs round trip -------------------------------------------------------------
 CMD SURFACEADDFILE Pad, samples/pad-points.csv
-SAVEAS %OUT%/pf-a.gs
-OPEN %OUT%/pf-a.gs
+SAVEAS %OUT%/pf-a.dwg
+OPEN %OUT%/pf-a.dwg
 CMD SURFACELIST
 EXPECT LOG "point file 1: "samples/pad-points.csv" (PNEZD)"
-SAVEAS %OUT%/pf-b.gs
-EXPECT SAMEFILE %OUT%/pf-a.gs %OUT%/pf-b.gs
+SAVEAS %OUT%/pf-b.dwg
+EXPECT SAMEFILE %OUT%/pf-a.dwg %OUT%/pf-b.dwg
 
 CHECK ALL
 

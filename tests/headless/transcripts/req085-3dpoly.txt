@@ -48,11 +48,11 @@ EXPECT LOG "elevation must be a number"
 ESC
 
 # --- the elevations survive a .gs round trip -------------------------------------------------------
-SAVEAS %OUT%/p3d-a.gs
-OPEN %OUT%/p3d-a.gs
+SAVEAS %OUT%/p3d-a.dwg
+OPEN %OUT%/p3d-a.dwg
 EXPECT POLYLINES 3
-SAVEAS %OUT%/p3d-b.gs
-EXPECT SAMEFILE %OUT%/p3d-a.gs %OUT%/p3d-b.gs
+SAVEAS %OUT%/p3d-b.dwg
+EXPECT SAMEFILE %OUT%/p3d-a.dwg %OUT%/p3d-b.dwg
 
 CHECK ALL
 

@@ -21,7 +21,7 @@ ESC
 
 CHECK ALL
 EXPECT LINES 1
-SAVEAS %OUT%/lengthen-delta-a.gs
+SAVEAS %OUT%/lengthen-delta-a.dwg
 
 CMD LENGTHEN
 CMD DE
@@ -32,22 +32,22 @@ EXPECT LOG "LENGTHEN — length 100"
 EXPECT LINES 1
 CHECK ALL
 
-SAVEAS %OUT%/lengthen-delta-b.gs
-EXPECT DIFFERENTFILE %OUT%/lengthen-delta-a.gs %OUT%/lengthen-delta-b.gs
+SAVEAS %OUT%/lengthen-delta-b.dwg
+EXPECT DIFFERENTFILE %OUT%/lengthen-delta-a.dwg %OUT%/lengthen-delta-b.dwg
 
 UNDO
 EXPECT LINES 1
 CHECK ALL
 
-SAVEAS %OUT%/lengthen-delta-c.gs
-EXPECT SAMEFILE %OUT%/lengthen-delta-a.gs %OUT%/lengthen-delta-c.gs
+SAVEAS %OUT%/lengthen-delta-c.dwg
+EXPECT SAMEFILE %OUT%/lengthen-delta-a.dwg %OUT%/lengthen-delta-c.dwg
 
 REDO
 EXPECT LINES 1
 CHECK ALL
 
-SAVEAS %OUT%/lengthen-delta-d.gs
-EXPECT SAMEFILE %OUT%/lengthen-delta-b.gs %OUT%/lengthen-delta-d.gs
+SAVEAS %OUT%/lengthen-delta-d.dwg
+EXPECT SAMEFILE %OUT%/lengthen-delta-b.dwg %OUT%/lengthen-delta-d.dwg
 
 # Shorten by -20 (150 -> 130), still picking near the far end. DoUndo/DoRedo both cancel the
 # active command deliberately (st.active = Kind::None — pre-existing behavior, not LENGTHEN-

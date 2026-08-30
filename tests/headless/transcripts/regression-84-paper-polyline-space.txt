@@ -70,12 +70,12 @@ EXPECT PAPERPOLYLINES 2
 
 # Round-trip: both spaces survive a save/load, so the paper polylines are really in the layout's
 # store and not an artifact of the live session (REQ-039 (7)).
-SAVEAS %OUT%/r84.gs
+SAVEAS %OUT%/r84.dwg
 NEW
 CHECK ALL
 EXPECT POLYLINES 0
 EXPECT PAPERPOLYLINES 0
-OPEN %OUT%/r84.gs
+OPEN %OUT%/r84.dwg
 CHECK ALL
 EXPECT POLYLINES 1
 EXPECT PAPERPOLYLINES 2

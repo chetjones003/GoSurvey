@@ -20,7 +20,8 @@ Autodesk ODA membership and **without** Leica/Autodesk native scan-project SDKs.
 | Rasters | JPEG, PNG, BMP | drawing **IMAGE** underlays; file read/write |
 | BIM | IFC | **view only** (tessellate to REQ-063 meshes) |
 
-`.gs` remains the native document until a later REQ makes DWG native (`docs/dwg-plan.txt` PART 11).
+`.dwg` is the drawing document (REQ-175 / ADR-044). `.gs` remains for workspace templates and a
+future project file; its JSON document is also the GoSurvey payload inside a saved DWG.
 
 ---
 
@@ -150,6 +151,6 @@ libraries.
 - DM-08 pass-through / R2018 write
 - REQ-107 blocks as INSERT on import/export
 - Multiple paper layouts
-- DWG as native format
+- DWG as native format — **done as REQ-175** (JSON payload trailer; not per-field EED/XRECORD)
 - REQ-100 point-cloud frame-budget profile (needed before huge E57 files are a product claim)
 - LGSX read via Leica SDK, RCP via Autodesk Reality SDK

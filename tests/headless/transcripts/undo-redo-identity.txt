@@ -79,7 +79,7 @@ EXPECT ARCS 1
 EXPECT POLYLINES 1
 EXPECT ANNOTATIONS 1
 
-SAVEAS %OUT%/ur-a.gs
+SAVEAS %OUT%/ur-a.dwg
 
 # Wind all the way back. Undo granularity is per COMMITTED ENTITY, not per command invocation, so
 # the two-segment LINE above accounts for two undo steps — measured, not assumed.
@@ -112,8 +112,8 @@ EXPECT POLYLINES 1
 EXPECT ANNOTATIONS 1
 CHECK ALL
 
-SAVEAS %OUT%/ur-b.gs
-EXPECT SAMEFILE %OUT%/ur-a.gs %OUT%/ur-b.gs
+SAVEAS %OUT%/ur-b.dwg
+EXPECT SAMEFILE %OUT%/ur-a.dwg %OUT%/ur-b.dwg
 
 # ---------------------------------------------------------------------------
 # Scenario 2 — a MODIFY command, which is the half of the defect class creation cannot reach. An
@@ -136,7 +136,7 @@ ESC
 
 CHECK ALL
 EXPECT LINES 2
-SAVEAS %OUT%/ur-mod-a.gs
+SAVEAS %OUT%/ur-mod-a.dwg
 
 BOX -10 -10 200 200
 EXPECT SELECTED 2
@@ -148,5 +148,5 @@ UNDO
 EXPECT LINES 2
 CHECK ALL
 
-SAVEAS %OUT%/ur-mod-b.gs
-EXPECT SAMEFILE %OUT%/ur-mod-a.gs %OUT%/ur-mod-b.gs
+SAVEAS %OUT%/ur-mod-b.dwg
+EXPECT SAMEFILE %OUT%/ur-mod-a.dwg %OUT%/ur-mod-b.dwg

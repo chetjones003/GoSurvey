@@ -54,14 +54,14 @@ EXPECT LOG "Feature line 1: "Toe of slope""
 REDO
 
 # --- .gs round trip preserves vertices, elevations, elevation points and the name ------------------
-SAVEAS %OUT%/fl-a.gs
-OPEN %OUT%/fl-a.gs
+SAVEAS %OUT%/fl-a.dwg
+OPEN %OUT%/fl-a.dwg
 CMD FEATURELINELIST
 EXPECT LOG "Feature line 1: "Toe of slope" — 4 vertices (3 PI, 1 elevation point(s))"
 EXPECT LOG "elev pt 3: 150.000, 0.000, elevation 103.000"
 EXPECT LOG "Feature line 2: "Ditch""
-SAVEAS %OUT%/fl-b.gs
-EXPECT SAMEFILE %OUT%/fl-a.gs %OUT%/fl-b.gs
+SAVEAS %OUT%/fl-b.dwg
+EXPECT SAMEFILE %OUT%/fl-a.dwg %OUT%/fl-b.dwg
 
 # --- a drawing written before REQ-087 has none of these arrays and must load unchanged -------------
 # samples/surface-demo.gs predates feature lines entirely.

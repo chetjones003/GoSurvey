@@ -1871,6 +1871,29 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   REQ-079 migration if the loader cannot ignore unknown sections — Workshop must not bump
   `.gs` version without amending REQ-079.
 
+### ADR-044 — DWG drawing document with a GoSurvey JSON trailer   (2026-08-29, accepted)
+- Context:    dwg-plan PART 11 listed per-field EED + GOSURVEY dictionary XRECORDs + native LAYOUT
+  objects as the native-format design, blocked on DM-08 and layout/block mapping. The user asked
+  to make File Open/Save DWG **now**, keep `.gs` code, and preserve survey-specific data. LibreDWG
+  already synthesizes R2000 from the domain (ADR-041 (d)).
+- Decision:
+  (a) **The drawing file is `.dwg`.** File Open/Save/Save As and headless OPEN/SAVEAS use it.
+      Drawing choosers do not list `.gs`.
+  (b) **Preservation is the existing `.gs` JSON** (`BuildRoot` / `LoadGoSurveyFromJsonUtf8`),
+      appended after a valid LibreDWG file as a versioned trailer (`GOSURVEY_DOC` magic + length +
+      UTF-8 JSON). GoSurvey Open prefers the trailer when present; otherwise REQ-170 CAD import.
+  (c) **No second schema and no new dictionary/EED mapping in this increment.** Per-field EED /
+      XRECORD (dwg-plan P-01..P-05) remains a later option. DM-08 is still not claimed.
+  (d) **`.gs` APIs stay.** Workspace template and an explicit `.gs` path still use `GsIo`.
+  (e) **Headless SAMEFILE** on two GoSurvey DWGs compares **trailer JSON**, not the synthesized CAD
+      body, because LibreDWG encode is not the document-identity oracle (REQ-079 still applies to
+      the JSON tree).
+- Alternatives: **(1) Wait for EED/XRECORD + DM-08** — rejected by the user (ship DWG save now).
+  **(2) Dual-write sidecar `.gs`** — rejected; one drawing file. **(3) JSON-only `.dwg` with no
+  CAD entities** — rejected; AutoCAD must still see LINE/CIRCLE/etc.
+- Consequences: REQ-175; `io/DwgIo` owns trailer attach/extract; UI uses DWG dialogs; fuzz and
+  transcript SAVEAS paths become `.dwg`.
+
 ### ADR-043 — Block editing in place: a model-store swap, not a fourth active space   (2026-08-29, accepted)
 - Context:    REQ-107's block-editor slice requires editing a `CadBlockDefinition`'s geometry in
   **isolation** — the block's entities only, model and paper space hidden and unpickable — with the

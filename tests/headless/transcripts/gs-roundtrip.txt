@@ -41,13 +41,13 @@ ESC
 
 CHECK ALL
 
-SAVEAS %OUT%/roundtrip-a.gs
-OPEN %OUT%/roundtrip-a.gs
+SAVEAS %OUT%/roundtrip-a.dwg
+OPEN %OUT%/roundtrip-a.dwg
 CHECK ALL
-SAVEAS %OUT%/roundtrip-b.gs
-OPEN %OUT%/roundtrip-b.gs
+SAVEAS %OUT%/roundtrip-b.dwg
+OPEN %OUT%/roundtrip-b.dwg
 CHECK ALL
-SAVEAS %OUT%/roundtrip-c.gs
+SAVEAS %OUT%/roundtrip-c.dwg
 
 # REQ-079 as amended 2026-08-17 (decision D-2026-08-17-a): a file at the current version loads with
 # no migration OR NORMALIZATION and is byte-identical on resave.
@@ -61,4 +61,4 @@ SAVEAS %OUT%/roundtrip-c.gs
 # are all identical. The comparison is written as B vs C anyway, so this transcript states the same
 # rule as the generator's oracle rather than a weaker special case of it — a reader should not have
 # to notice that two spellings of the round trip exist.
-EXPECT SAMEFILE %OUT%/roundtrip-b.gs %OUT%/roundtrip-c.gs
+EXPECT SAMEFILE %OUT%/roundtrip-b.dwg %OUT%/roundtrip-c.dwg
