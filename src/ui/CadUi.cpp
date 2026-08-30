@@ -1,5 +1,6 @@
 #include "CadUi.hpp"
 #include "CadUiChrome.hpp"
+#include "CadBlocks.hpp"
 #include "DevShellHooks.hpp"
 // REQ-141 Analyze ribbon + contour label overlay.
 #include "CadCoordinateFrame.hpp"
@@ -145,6 +146,8 @@ static void DrawHatchThumbnail(ImDrawList* dl, ImVec2 mn, ImVec2 mx, const hatch
 
 // True when a font name refers to an SHX stroke font (rendered from the real .shx, not a TrueType).
 static bool CadIsShxFontName(const std::string& s) { return cadfont::IsShxFontName(s); }
+
+static std::string CadDrawFontFamily(const std::string& stored) { return TextStyles::EffectiveFontFamily(stored); }
 
 static ImTextureID g_menuBarLogoTex{};
 static ImVec2 g_menuBarLogoDims{};
@@ -1229,6 +1232,7 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.drawingTabs.push_back({"Drawing " + std::to_string(cmd.nextDrawingNumber++), cmd.nextTabUid++});
       cmd.documents.emplace_back();
       RestoreDocumentFromSnapshot(cmd, newIdx);  // load empty state into cmd
+      LoadBundledBlockLibrary(cmd, log);
       cmd.activeDrawingIdx        = newIdx;
       cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
       cmd.pendingDrawingTabSwitch = true;
@@ -1275,6 +1279,9 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Import DXF...", nullptr)) {
       if (BrowseOpenFileDxfUtf8(dxfPath, sizeof(dxfPath)))
         ImportDxfFile(cmd, dxfPath, log);
+    }
+    if (ImGui::MenuItem("Import Block...", nullptr)) {
+      CadBlocksImportWithPicker(cmd, log);
     }
     if (ImGui::MenuItem("Export DXF...", nullptr)) {
       if (BrowseSaveFileDxfUtf8(dxfPath, sizeof(dxfPath), "drawing.dxf"))
@@ -3158,6 +3165,24 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     cmd.surveyPointContextualRibbonArmed = false;
   }
 
+  const bool inBedit = !cmd.blockEditorName.empty();
+  if (inBedit) {
+    if (!cmd.blockEditorContextualRibbonArmed) {
+      if (cmd.activeRibbonTab >= 0 && cmd.activeRibbonTab < kRibbonTabCount)
+        cmd.ribbonTabBeforeBlockEditor = cmd.activeRibbonTab;
+      cmd.activeRibbonTab = kRibbonTabBlockEditor;
+      cmd.blockEditorContextualRibbonArmed = true;
+    }
+  } else if (cmd.blockEditorContextualRibbonArmed) {
+    if (cmd.activeRibbonTab == kRibbonTabBlockEditor) {
+      int prev = cmd.ribbonTabBeforeBlockEditor;
+      if (prev < 0 || prev >= kRibbonTabCount)
+        prev = kRibbonTabHome;
+      cmd.activeRibbonTab = prev;
+    }
+    cmd.blockEditorContextualRibbonArmed = false;
+  }
+
   // REQ-302 tab strip: Home/Insert/Annotate/View/Manage/Output/Survey. Reuses the Model/Layout
   // tab toggle styling (PushModeToggleButtonColors, ~CadUi.cpp:6308, REQ-025/026 precedent) so the
   // active tab reads the same way the active space tab already does, rather than a second style.
@@ -3212,6 +3237,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
       if (ImGui::Button(ptTab, ImVec2(0.f, kRibbonTabStripH)))
         cmd.activeRibbonTab = kRibbonTabSurveyPointCtx;
+      ImGui::PopStyleColor(4);
+      ImGui::SameLine(0, 2);
+    }
+    if (inBedit) {
+      const bool beOn = cmd.activeRibbonTab == kRibbonTabBlockEditor;
+      ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0, 120, 215, beOn ? 255 : 180));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(30, 144, 255, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0, 90, 180, 255));
+      ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
+      if (ImGui::Button("Block Editor", ImVec2(0.f, kRibbonTabStripH)))
+        cmd.activeRibbonTab = kRibbonTabBlockEditor;
       ImGui::PopStyleColor(4);
       ImGui::SameLine(0, 2);
     }
@@ -4175,6 +4211,125 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     }
   } // kRibbonTabSurveyPointCtx
 
+  if (cmd.activeRibbonTab == kRibbonTabBlockEditor && inBedit) {
+    auto beditSubmit = [&](const char* line) {
+      char buf[192];
+      std::snprintf(buf, sizeof(buf), "%s", line);
+      ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+    };
+    const float wOpen = 8.f + colW({"Edit Block", "Save Block", "Test Block"});
+    ribbonSpecs.push_back({wOpen, wOpen, [&]() {
+      const float cw = colW({"Edit Block", "Save Block", "Test Block"});
+      RibbonSectionBegin("RibbonSecBeOpen", "Open/Save", wOpen, panelH);
+      if (smallBtn("##BeEdit", RibbonIconKind::Copy, "Edit Block", cw))
+        CadBlocksOpenEditPicker(cmd, log);
+      RibbonItemHelp("Edit Block — BEDIT the selected INSERT, or the definition already open.");
+      if (smallBtn("##BeSave", RibbonIconKind::Copy, "Save Block", cw))
+        beditSubmit("BSAVE");
+      RibbonItemHelp("Save Block — BSAVE. References update immediately.");
+      RibbonNyiButton("##BeTest", RibbonIconKind::Copy, "Test Block", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonSectionEnd();
+    }});
+    const float wGeom = 8.f + colW({"Auto Constrain", "Show/Hide", "Show All"});
+    ribbonSpecs.push_back({wGeom, wGeom, [&]() {
+      const float cw = colW({"Auto Constrain", "Show/Hide", "Show All"});
+      RibbonSectionBegin("RibbonSecBeGeom", "Geometric", wGeom, panelH);
+      RibbonNyiButton("##BeAutoC", RibbonIconKind::Copy, "Auto Constrain", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BeShHide", RibbonIconKind::Copy, "Show/Hide", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BeShAll", RibbonIconKind::Copy, "Show All", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonSectionEnd();
+    }});
+    const float wDim = 8.f + colW({"Linear", "Aligned"});
+    ribbonSpecs.push_back({wDim, wDim, [&]() {
+      const float cw = colW({"Linear", "Aligned"});
+      RibbonSectionBegin("RibbonSecBeDim", "Dimensional", wDim, panelH);
+      RibbonNyiButton("##BeDimL", RibbonIconKind::DimLinear, "Linear", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BeDimA", RibbonIconKind::Dim, "Aligned", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonSectionEnd();
+    }});
+    const float wMan = 8.f + colW({"Block Table", "Parameters", "Palettes"});
+    ribbonSpecs.push_back({wMan, wMan, [&]() {
+      const float cw = colW({"Block Table", "Parameters", "Palettes"});
+      RibbonSectionBegin("RibbonSecBeMan", "Manage", wMan, panelH);
+      RibbonNyiButton("##BeBTable", RibbonIconKind::Copy, "Block Table", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BePMan", RibbonIconKind::Copy, "Parameters", ImVec2(cw, rowH), RibbonLabel::Right);
+      if (smallBtn("##BePalettes", RibbonIconKind::Copy, "Palettes", cw))
+        cmd.blockAuthoringPaletteOpen = !cmd.blockAuthoringPaletteOpen;
+      RibbonItemHelp("Authoring Palettes — Parameters, Actions, Parameter Sets, Constraints.");
+      RibbonSectionEnd();
+    }});
+    const float wAct = 8.f + colW({"Point", "Linear", "Polar"}) + 4.f + colW({"XY", "Rotation", "Align"}) + 4.f +
+                       colW({"Flip", "Visibility", "Lookup"}) + 4.f + colW({"Basepoint"});
+    ribbonSpecs.push_back({wAct, wAct, [&]() {
+      const float c0 = colW({"Point", "Linear", "Polar"});
+      const float c1 = colW({"XY", "Rotation", "Align"});
+      const float c2 = colW({"Flip", "Visibility", "Lookup"});
+      const float c3 = colW({"Basepoint"});
+      RibbonSectionBegin("RibbonSecBeAct", "Action Parameters", wAct, panelH);
+      auto addP = [&](const char* kind, const char* id, const char* label, float cw) {
+        if (smallBtn(id, RibbonIconKind::Copy, label, cw)) {
+          char line[96];
+          std::snprintf(line, sizeof(line), "BPARAM %s1, %s", label, kind);
+          ProcessCommandLineSubmit(line, static_cast<int>(sizeof(line)), cmd, log);
+        }
+      };
+      ImGui::BeginGroup();
+      addP("point", "##BePPoint", "Point", c0);
+      addP("linear", "##BePLin", "Linear", c0);
+      addP("polar", "##BePPol", "Polar", c0);
+      ImGui::EndGroup();
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      addP("move", "##BePXY", "XY", c1);
+      addP("rotation", "##BePRot", "Rotation", c1);
+      addP("linear", "##BePAln", "Align", c1);
+      ImGui::EndGroup();
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      addP("flip", "##BePFlip", "Flip", c2);
+      addP("visibility", "##BePVis", "Visibility", c2);
+      addP("lookup", "##BePLook", "Lookup", c2);
+      ImGui::EndGroup();
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      addP("point", "##BePBase", "Basepoint", c3);
+      ImGui::EndGroup();
+      RibbonSectionEnd();
+    }});
+    ribbonSpecs.push_back({110.f, 90.f, [&]() {
+      RibbonSectionBegin("RibbonSecBeVis", "Visibility", 110.f, panelH);
+      const int di = CadBlockFindDef(cmd.blockDefs, cmd.blockEditorName);
+      const char* vis = "VisibilityState0";
+      if (di >= 0 && !cmd.blockDefs[static_cast<size_t>(di)].visibilityStates.empty())
+        vis = cmd.blockDefs[static_cast<size_t>(di)].visibilityStates[0].c_str();
+      ImGui::SetNextItemWidth(96.f);
+      if (ImGui::BeginCombo("##BeVisCombo", vis)) {
+        if (di >= 0) {
+          for (const std::string& s : cmd.blockDefs[static_cast<size_t>(di)].visibilityStates) {
+            if (ImGui::Selectable(s.c_str(), s == vis)) {
+              char line[192];
+              std::snprintf(line, sizeof(line), "BSETVIS %s", s.c_str());
+              ProcessCommandLineSubmit(line, static_cast<int>(sizeof(line)), cmd, log);
+            }
+          }
+        }
+        ImGui::EndCombo();
+      }
+      RibbonSectionEnd();
+    }});
+    ribbonSpecs.push_back({100.f, 80.f, [&]() {
+      RibbonSectionBegin("RibbonSecBeClose", "Close", 100.f, panelH);
+      ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(180, 40, 40, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(210, 50, 50, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(140, 20, 20, 255));
+      if (ImGui::Button("Close Block Editor", ImVec2(92.f, colH)))
+        beditSubmit("BCLOSE");
+      ImGui::PopStyleColor(3);
+      RibbonItemHelp("Close Block Editor — BCLOSE. Prompts to save if there are unsaved edits.");
+      RibbonSectionEnd();
+    }});
+  }
+
   // REQ-302: View tab.
   if (cmd.activeRibbonTab == kRibbonTabView) {
     ribbonSpecs.push_back({W.wView, M.wView, [&]() {
@@ -4260,6 +4415,25 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         }
         ImGui::EndGroup();
       }
+      RibbonSectionEnd();
+    }});
+    ribbonSpecs.push_back({90.f, 70.f, [&]() {
+      RibbonSectionBegin("RibbonSecBlocks", "Block", 90.f, panelH);
+      const float cw = colW({"Block", "Insert"});
+      if (smallBtn("##RibbonBlock", RibbonIconKind::Copy, "Block", cw)) {
+        char buf[16] = "BLOCKLIST";
+        ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+      }
+      RibbonItemHelp("List block definitions. Create one with BLOCK <name>, <x>, <y> after selecting geometry.");
+      if (smallBtn("##RibbonInsert", RibbonIconKind::PdfAttach, "Insert", cw))
+        StartInsertBlockCommand(cmd, log);
+      RibbonItemHelp("Insert a block. Opens the Insert dialog (same as INSERT).");
+      if (smallBtn("##RibbonBedit", RibbonIconKind::Copy, "BEDIT", cw))
+        CadBlocksOpenEditPicker(cmd, log);
+      RibbonItemHelp("Block Editor — choose a definition from the drawing or block library.");
+      if (smallBtn("##RibbonBlockImport", RibbonIconKind::PdfAttach, "Import", cw))
+        CadBlocksImportWithPicker(cmd, log);
+      RibbonItemHelp("Import a block definition from a .gs, .dxf, or .dwg file.\nSame as BLOCKIMPORT.");
       RibbonSectionEnd();
     }});
   } // if (activeRibbonTab == kRibbonTabInsert)
@@ -4865,7 +5039,7 @@ void CollectGeneralAttrs(const AppCommandState& cmd, const std::vector<SelectedE
 // Font choices offered by the STYLE dialog and the MTEXT "Text Formatting" panel's font picker
 // (REQ-044 / REQ-051). "" = the application default font. Defined here so both use sites see it.
 static const char* kTextStyleFonts[] = {
-    "",          "romans.shx", "romand.shx", "romanc.shx", "txt.shx",         "simplex.shx",
+    "romans.shx", "romand.shx", "romanc.shx", "txt.shx",         "simplex.shx",
     "isocp.shx", "italic.shx", "Arial",      "Times New Roman", "Consolas",   "Tahoma",
 };
 
@@ -5157,6 +5331,11 @@ void ApplyLayerToSelection(AppCommandState& cmd, const std::string& v) {
           static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
         continue;
       cmd.cadTableAttrs[static_cast<size_t>(e.index)].layer = v;
+    } else if (e.type == SelectedEntity::Type::BlockRef) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadBlockRefs.size() ||
+          static_cast<size_t>(e.index) >= cmd.cadBlockRefAttrs.size())
+        continue;
+      cmd.cadBlockRefAttrs[static_cast<size_t>(e.index)].layer = v;
     } else if (e.type == SelectedEntity::Type::Arc) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
           static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
@@ -5205,6 +5384,11 @@ void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
           static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
         continue;
       cmd.cadTableAttrs[static_cast<size_t>(e.index)].color = v;
+    } else if (e.type == SelectedEntity::Type::BlockRef) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadBlockRefs.size() ||
+          static_cast<size_t>(e.index) >= cmd.cadBlockRefAttrs.size())
+        continue;
+      cmd.cadBlockRefAttrs[static_cast<size_t>(e.index)].color = v;
     } else if (e.type == SelectedEntity::Type::Arc) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
           static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
@@ -6738,6 +6922,7 @@ static void DrawPaperEntityProps(AppCommandState& cmd) {
       case T::Arc:      return static_cast<int>(L.paperArcs.size());
       case T::Ellipse:  return static_cast<int>(L.paperEllipses.size());
       case T::Polyline: return static_cast<int>(L.paperPolyOffsets.size()) - 1;
+      case T::Block:    return static_cast<int>(L.paperBlockRefs.size());
     }
     return 0;
   };
@@ -6756,16 +6941,17 @@ static void DrawPaperEntityProps(AppCommandState& cmd) {
       case T::Arc:      return i < L.paperArcAttrs.size() ? &L.paperArcAttrs[i] : nullptr;
       case T::Ellipse:  return i < L.paperEllAttrs.size() ? &L.paperEllAttrs[i] : nullptr;
       case T::Polyline: return i < L.paperPolyAttrs.size() ? &L.paperPolyAttrs[i] : nullptr;
+      case T::Block:    return i < L.paperBlockRefAttrs.size() ? &L.paperBlockRefAttrs[i] : nullptr;
     }
     return nullptr;
   };
 
-  int n[6] = {0, 0, 0, 0, 0, 0};
+  int n[7] = {0, 0, 0, 0, 0, 0, 0};
   for (const auto& r : selp)
     ++n[static_cast<int>(r.type)];
   ImGui::Text("Selected: %d paper object(s)", static_cast<int>(selp.size()));
-  const int kinds = (n[0] > 0) + (n[1] > 0) + (n[2] > 0) + (n[3] > 0) + (n[4] > 0) + (n[5] > 0);
-  static const char* kPaperTypeName[6] = {"Line", "Text", "Circle", "Arc", "Ellipse", "Polyline"};
+  const int kinds = (n[0] > 0) + (n[1] > 0) + (n[2] > 0) + (n[3] > 0) + (n[4] > 0) + (n[5] > 0) + (n[6] > 0);
+  static const char* kPaperTypeName[7] = {"Line", "Text", "Circle", "Arc", "Ellipse", "Polyline", "Block"};
   if (kinds > 1)
     ImGui::TextDisabled("(Mixed: L %d, T %d, C %d, A %d, E %d, P %d)", n[0], n[1], n[2], n[3], n[4], n[5]);
   else if (selp.size() == 1)
@@ -7031,6 +7217,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int nCirc = 0;
   int nAnn  = 0;
   int nTable = 0;
+  int nBlock = 0;
   int nPdf  = 0;
   int nSurf = 0;
   int firstSurfIx = -1;
@@ -7039,6 +7226,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     else if (e.type == SelectedEntity::Type::Circle)     ++nCirc;
     else if (e.type == SelectedEntity::Type::Annotation) ++nAnn;
     else if (e.type == SelectedEntity::Type::Table) ++nTable;
+    else if (e.type == SelectedEntity::Type::BlockRef) ++nBlock;
     else if (e.type == SelectedEntity::Type::PdfUnderlay)++nPdf;
     else if (e.type == SelectedEntity::Type::Surface) {
       ++nSurf;
@@ -7164,6 +7352,30 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     }
     if (nTable == 1 && tblIdx >= 0)
       DrawSingleTableGeometryEditable(cmd, tblIdx);
+  } else if (nLine == 0 && nCirc == 0 && nAnn == 0 && nTable == 0 && nBlock > 0) {
+    int brIdx = -1;
+    for (const auto& e : sel) {
+      if (e.type == SelectedEntity::Type::BlockRef) {
+        brIdx = e.index;
+        break;
+      }
+    }
+    if (nBlock == 1 && brIdx >= 0 && static_cast<size_t>(brIdx) < cmd.cadBlockRefs.size()) {
+      CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(brIdx)];
+      if (PropSectionHeader("Block reference")) {
+        ImGui::TextUnformatted(r.defName.c_str());
+        ImGui::DragFloat("X##blk", &r.xf.x, 0.01f);
+        ImGui::DragFloat("Y##blk", &r.xf.y, 0.01f);
+        ImGui::DragFloat("Z##blk", &r.xf.z, 0.01f);
+        ImGui::DragFloat("Scale X##blk", &r.xf.sx, 0.01f);
+        ImGui::DragFloat("Scale Y##blk", &r.xf.sy, 0.01f);
+        ImGui::DragFloat("Scale Z##blk", &r.xf.sz, 0.01f);
+        float deg = r.xf.rotZ * 57.2957795f;
+        if (ImGui::DragFloat("Rotation##blk", &deg, 0.1f))
+          r.xf.rotZ = deg * 0.01745329252f;
+        BumpCadGpuCache(cmd);
+      }
+    }
   } else if (nCirc == 0 && nAnn == 0 && nLine > 0) {
     std::vector<SelectedEntity> linesOnly;
     linesOnly.reserve(static_cast<size_t>(nLine));
@@ -7790,6 +8002,10 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
     using MP = AppCommandState::ModifyPhase;
     return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
   }
+  case K::InsertBlock: {
+    using IPh = AppCommandState::InsertBlockPhase;
+    return cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale;
+  }
   default:
     return false;
   }
@@ -7890,6 +8106,16 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   case K::Stretch:
     return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:"
                                                                      : "Specify second point:";
+  case K::InsertBlock: {
+    using IPh = AppCommandState::InsertBlockPhase;
+    if (cmd.insertBlockPhase == IPh::WaitInsertPoint)
+      return "Specify insertion point:";
+    if (cmd.insertBlockPhase == IPh::WaitScale)
+      return "Specify scale point:";
+    if (cmd.insertBlockPhase == IPh::WaitRotation)
+      return "Specify rotation angle <0d0'0\">:";
+    return "Specify point:";
+  }
   default:
     return "Specify point:";
   }
@@ -8050,6 +8276,9 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
                                : (cmd.activeSpaceIndex != kModelSpaceIndex ? "PAPER" : "MODEL");
     constexpr float sp = 4.f;
     const float rightW = bw(spaceLbl) + bw("VPLOCK") + bw("OSNAP") + bw("ORTHO") + bw("GRID") + bw("POLAR") +
+#ifdef GOSURVEY_DEVELOPER_SHELL
+                         bw("DEV") +
+#endif
                          140.f /*plot scale combo*/ + bw("SEL") + sp * 8.f + 24.f;
     ImGui::SameLine(0, 8);
     const float rx = ImGui::GetWindowContentRegionMax().x - rightW;
@@ -8138,6 +8367,18 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
       ItemHelpTooltip("Polar tracking (UI only for now)");
       ImGui::SameLine(0, sp);
     }
+#ifdef GOSURVEY_DEVELOPER_SHELL
+    {
+      const bool on = cmd.devShellVisible;
+      PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
+      if (ImGui::Button("DEV", ImVec2(0.f, statusBtnH)))
+        cmd.devShellVisible = !cmd.devShellVisible;
+      PopModeToggleButtonColors(on);
+      ItemHelpTooltip("Developer Shell — Debug only. Off by default. Activity, command, and Test Engine logs "
+                      "are always written next to the executable.");
+      ImGui::SameLine(0, sp);
+    }
+#endif
     DrawPlotScaleCombo(cmd);
     ImGui::SameLine(0, sp);
     {
@@ -8975,8 +9216,9 @@ static void DrawDimLabelText(ImDrawList* dl, const CadAnnotation& a, ImFont* fal
                              const ImVec2& pivotSp, float screenAngRad, ImU32 textCol) {
   if (!dl || a.text.empty())
     return;
-  if (cadfont::PreferShxStrokes(a.fontFamily, a.text)) {
-    Shx::Font* sf = Shx::Resolve(a.fontFamily);
+  const std::string fam = CadDrawFontFamily(a.fontFamily);
+  if (cadfont::PreferShxStrokes(fam, a.text)) {
+    Shx::Font* sf = Shx::Resolve(fam);
     if (sf && sf->valid()) {
       const float thick = std::max(1.f, fontPx * 0.05f);
       const float w = Shx::MeasureWidthPx(*sf, a.text, fontPx);
@@ -8988,8 +9230,23 @@ static void DrawDimLabelText(ImDrawList* dl, const CadAnnotation& a, ImFont* fal
       return;
     }
   }
-  ImFont* dimFont = ResolveCadTtf(a.fontFamily, false, false, fallback, nullptr, nullptr);
+  ImFont* dimFont = ResolveCadTtf(fam, false, false, fallback, nullptr, nullptr);
   AddAlignedDimText(dl, dimFont, fontPx, pivotSp, screenAngRad, textCol, a.text.c_str());
+}
+
+static void RotateDrawListVertsAround(ImDrawList* dl, int vtx0, ImVec2 pivot, float rotationRad) {
+  if (!dl || rotationRad == 0.f)
+    return;
+  const float ang = -rotationRad;
+  const float ca = std::cos(ang);
+  const float sa = std::sin(ang);
+  for (int vi = vtx0; vi < dl->VtxBuffer.Size; ++vi) {
+    ImVec2& p = dl->VtxBuffer[static_cast<size_t>(vi)].pos;
+    const float dx = p.x - pivot.x;
+    const float dy = p.y - pivot.y;
+    p.x = pivot.x + dx * ca - dy * sa;
+    p.y = pivot.y + dx * sa + dy * ca;
+  }
 }
 
 static void DrawCadSingleLineText(ImDrawList* dl, const CadAnnotation& a, ImFont* fallback, ImVec2 topLeft,
@@ -8997,7 +9254,8 @@ static void DrawCadSingleLineText(ImDrawList* dl, const CadAnnotation& a, ImFont
   if (!dl || a.text.empty())
     return;
   const int vtx0 = dl->VtxBuffer.Size;
-  Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+  const std::string fam = CadDrawFontFamily(a.fontFamily);
+  Shx::Font* sf = CadIsShxFontName(fam) ? Shx::Resolve(fam) : nullptr;
   if (sf && sf->valid()) {
     const float thick = std::max(1.f, fontPx * 0.05f);
     const ImVec2 baselinePt(topLeft.x, topLeft.y + fontPx);
@@ -9009,7 +9267,7 @@ static void DrawCadSingleLineText(ImDrawList* dl, const CadAnnotation& a, ImFont
     }
   } else {
     bool realBold = false, realItalic = false;
-    ImFont* tf = ResolveCadTtf(a.fontFamily, a.bold, a.italic, fallback, &realBold, &realItalic);
+    ImFont* tf = ResolveCadTtf(fam, a.bold, a.italic, fallback, &realBold, &realItalic);
     const ImVec2 ext = tf->CalcTextSizeA(fontPx, FLT_MAX, 0.f, a.text.c_str());
     if (a.bold && !realBold) {
       dl->AddText(tf, fontPx, ImVec2(topLeft.x + 0.6f, topLeft.y), col, a.text.c_str());
@@ -9023,16 +9281,7 @@ static void DrawCadSingleLineText(ImDrawList* dl, const CadAnnotation& a, ImFont
       dl->AddLine(ImVec2(topLeft.x, uy), ImVec2(topLeft.x + ext.x, uy), col, std::max(1.f, fontPx * 0.06f));
     }
   }
-  if (a.rotationRad != 0.f) {
-    const float ang = -a.rotationRad;
-    const float ca = std::cos(ang), sa = std::sin(ang);
-    for (int vi = vtx0; vi < dl->VtxBuffer.Size; ++vi) {
-      ImVec2& p = dl->VtxBuffer[static_cast<size_t>(vi)].pos;
-      const float dx = p.x - topLeft.x, dy = p.y - topLeft.y;
-      p.x = topLeft.x + dx * ca - dy * sa;
-      p.y = topLeft.y + dx * sa + dy * ca;
-    }
-  }
+  RotateDrawListVertsAround(dl, vtx0, topLeft, a.rotationRad);
 }
 
 template <typename WorldToScreen>
@@ -9695,13 +9944,15 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     // is selected (also the only way to go back to the default font, which has no run tag).
     const std::string baseFont = target ? target->fontFamily : std::string();
     ImGui::SetNextItemWidth(150.f);
-    if (ImGui::BeginCombo("##font", baseFont.empty() ? "(default)" : baseFont.c_str())) {
+    if (ImGui::BeginCombo("##font",
+                          baseFont.empty() ? TextStyles::kDefaultFontFamily : baseFont.c_str())) {
       for (const char* fn : kTextStyleFonts) {
         const std::string f(fn);
-        const char* label = f.empty() ? "(default)" : fn;
+        const char* label = fn;
         // Preview each choice in its own typeface, as the STYLE dialog's picker does.
         const ImVec2 rowTL = ImGui::GetCursorScreenPos();
-        const bool picked = ImGui::Selectable(label, f == baseFont, 0, ImVec2(0.f, rowH));
+        const bool picked = ImGui::Selectable(
+            label, f == baseFont || (baseFont.empty() && f == TextStyles::kDefaultFontFamily), 0, ImVec2(0.f, rowH));
         if (!f.empty()) {
           TextStyle preview;
           preview.fontFamily = f;
@@ -10199,6 +10450,24 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
       CadTableWorldCorner(t, c, &gx, &gy);
       offer(gx, gy);
     }
+  } else if (cmd.selection[0].type == SelectedEntity::Type::BlockRef) {
+    const int ix = cmd.selection[0].index;
+    if (ix < 0 || static_cast<size_t>(ix) >= cmd.cadBlockRefs.size())
+      return;
+    const CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(ix)];
+    offer(r.xf.x, r.xf.y);
+    const int di = CadBlockFindDef(cmd.blockDefs, r.defName);
+    if (di >= 0) {
+      const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+      const int nG = CadBlockDynGripCount(def);
+      for (int g = 1; g < nG; ++g) {
+        if (!CadBlockDynGripShownOnInsert(g))
+          continue;
+        float gx = 0.f, gy = 0.f, gz = 0.f;
+        if (CadBlockDynGripWorld(def, r, g, &gx, &gy, &gz))
+          offer(gx, gy);
+      }
+    }
   } else if (cmd.selection[0].type != SelectedEntity::Type::Annotation) {
     return;
   } else {
@@ -10239,6 +10508,45 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
       out_snap->y = by;
     }
   }
+}
+
+static void DrawCadGripMarker(ImDrawList* dl, const ImVec2& gp, float half, CadBlockDynGripShape shape, float sdx,
+                              float sdy, ImU32 fill, ImU32 border) {
+  assert(dl != nullptr);
+  if (shape == CadBlockDynGripShape::Square) {
+    dl->AddRectFilled(ImVec2(gp.x - half, gp.y - half), ImVec2(gp.x + half, gp.y + half), fill);
+    dl->AddRect(ImVec2(gp.x - half, gp.y - half), ImVec2(gp.x + half, gp.y + half), border, 0.f, 0, 1.f);
+    return;
+  }
+  float len = std::hypot(sdx, sdy);
+  if (len < 1.e-4f) {
+    sdx = 1.f;
+    sdy = 0.f;
+    len = 1.f;
+  }
+  sdx /= len;
+  sdy /= len;
+  if (shape == CadBlockDynGripShape::FlipArrow) {
+    const float L = half * 2.4f;
+    const float W = half * 1.2f;
+    const ImVec2 n(-sdy * W, sdx * W);
+    const ImVec2 tipA(gp.x + sdx * L, gp.y + sdy * L);
+    const ImVec2 tipB(gp.x - sdx * L, gp.y - sdy * L);
+    const ImVec2 midA(gp.x + sdx * L * 0.15f, gp.y + sdy * L * 0.15f);
+    const ImVec2 midB(gp.x - sdx * L * 0.15f, gp.y - sdy * L * 0.15f);
+    dl->AddTriangleFilled(tipA, ImVec2(midA.x + n.x, midA.y + n.y), ImVec2(midA.x - n.x, midA.y - n.y), fill);
+    dl->AddTriangle(tipA, ImVec2(midA.x + n.x, midA.y + n.y), ImVec2(midA.x - n.x, midA.y - n.y), border, 1.f);
+    dl->AddTriangleFilled(tipB, ImVec2(midB.x + n.x, midB.y + n.y), ImVec2(midB.x - n.x, midB.y - n.y), fill);
+    dl->AddTriangle(tipB, ImVec2(midB.x + n.x, midB.y + n.y), ImVec2(midB.x - n.x, midB.y - n.y), border, 1.f);
+    return;
+  }
+  const float L = half * 2.6f;
+  const float W = half * (shape == CadBlockDynGripShape::StretchArrow ? 1.55f : 1.35f);
+  const ImVec2 tip(gp.x + sdx * L, gp.y + sdy * L);
+  const ImVec2 base(gp.x - sdx * L * 0.4f, gp.y - sdy * L * 0.4f);
+  const ImVec2 n(-sdy * W, sdx * W);
+  dl->AddTriangleFilled(tip, ImVec2(base.x + n.x, base.y + n.y), ImVec2(base.x - n.x, base.y - n.y), fill);
+  dl->AddTriangle(tip, ImVec2(base.x + n.x, base.y + n.y), ImVec2(base.x - n.x, base.y - n.y), border, 1.f);
 }
 
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
@@ -11272,6 +11580,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                 case T::Ellipse:      return at(cmd.userEllAttrs, e.index);
                 case T::Annotation:   return at(cmd.cadAnnotationAttrs, e.index);
                 case T::Table:        return at(cmd.cadTableAttrs, e.index);
+                case T::BlockRef:     return at(cmd.cadBlockRefAttrs, e.index);
                 case T::FilledRegion: return at(cmd.cadFilledRegionAttrs, e.index);
                 default:              return std::string();
                 }
@@ -11936,6 +12245,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       el.ratio = cmd.entityGripOrigEllRatio;
       break;
     }
+    case SelectedEntity::Type::BlockRef: {
+      if (idx >= 0 && static_cast<size_t>(idx) < cmd.cadBlockRefs.size())
+        CadBlockRestoreDynGripOrig(cmd, &cmd.cadBlockRefs[static_cast<size_t>(idx)]);
+      break;
+    }
     default:
       break;
     }
@@ -12080,6 +12394,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       break;
     case ViewportClickRoute::PdfAttachInsertPoint:
       SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);
+      break;
+    case ViewportClickRoute::InsertBlockPick:
+      SubmitInsertBlockPick(cmd, commitX, commitY, log);
       break;
     case ViewportClickRoute::HatchPick: {
       // HATCH (REQ-043): trace the region under the click and fill it; the command stays active on a miss
@@ -12229,7 +12546,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     case ViewportClickRoute::Ignore:
       // PAN/ORBIT (drag-driven), TRIMSTATE/ELEV (text prompts), VPFREEZE/VPTHAW (floating
       // viewports only), PaperRectViewport (paper space only), PDFATTACH outside its
-      // insertion-point phase. Each is a decision, not an omission — see ViewportClickRouteFor.
+      // insertion-point phase, INSERT while the dialog is open. Each is a decision, not an omission
+      // — see ViewportClickRouteFor.
       break;
     case ViewportClickRoute::IdleSelection: {
       bool handled = false;
@@ -12412,27 +12730,58 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             }
             break;
           }
+          case SelectedEntity::Type::BlockRef: {
+            if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {
+              const CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(sel.index)];
+              const int di = CadBlockFindDef(cmd.blockDefs, r.defName);
+              if (di >= 0) {
+                const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+                const int nG = CadBlockDynGripCount(def);
+                for (int g = 0; g < nG; ++g) {
+                  if (!CadBlockDynGripShownOnInsert(g))
+                    continue;
+                  float gx = 0.f, gy = 0.f, gz = 0.f;
+                  if (CadBlockDynGripWorld(def, r, g, &gx, &gy, &gz))
+                    tryGrip(sel, gx, gy, gz, g);
+                }
+              }
+            }
+            break;
+          }
           default:
             break;
           }
         }
 
         if (bestWhich >= 0) {
-          // Snapshot the pre-drag state, as the floating-viewport grab already does
-          // (TryBeginEntityGripAtLocal) — one undo takes the entity back to where the stretch started,
-          // whether it was placed by dragging or by typing a distance.
           PushUndoSnapshot(cmd, "Grip edit");
+          if (bestSel.type == SelectedEntity::Type::BlockRef) {
+            if (!CadBlockArmDynGrip(cmd, bestSel.index, bestWhich)) {
+              BumpCadGpuCache(cmd);
+              AbortMtextGripInteraction(cmd);
+              ClearDimGripInteraction(cmd);
+              handled = true;
+            } else {
+              cmd.entityGripMoveActive = true;
+              cmd.entityGripType = bestSel.type;
+              cmd.entityGripEntityIndex = bestSel.index;
+              cmd.entityGripWhich = bestWhich;
+              cmd.entityGripAnchorX = bestGripX;
+              cmd.entityGripAnchorY = bestGripY;
+              cmd.entityGripTypedDistanceValid = false;
+              AbortMtextGripInteraction(cmd);
+              ClearDimGripInteraction(cmd);
+              handled = true;
+            }
+          } else {
           cmd.entityGripMoveActive = true;
           cmd.entityGripType = bestSel.type;
           cmd.entityGripEntityIndex = bestSel.index;
           cmd.entityGripWhich = bestWhich;
-          // The grip's own starting position is the base of the stretch: ORTHO constrains the new point to
-          // the H/V line through it, and a typed distance runs along that axis (REQ-047).
           cmd.entityGripAnchorX = bestGripX;
           cmd.entityGripAnchorY = bestGripY;
           cmd.entityGripTypedDistanceValid = false;
 
-          // Store originals for RMB cancel.
           switch (bestSel.type) {
           case SelectedEntity::Type::LineSeg: {
             const size_t k = static_cast<size_t>(bestSel.index) * 6;
@@ -12483,6 +12832,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
           handled = true;
+          }
         }
       }
 
@@ -13315,6 +13665,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             }
             break;
           }
+          case SelectedEntity::Type::BlockRef: {
+            if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {
+              const CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(sel.index)];
+              const int di = CadBlockFindDef(cmd.blockDefs, r.defName);
+              if (di >= 0) {
+                const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+                const int nG = CadBlockDynGripCount(def);
+                for (int g = 0; g < nG; ++g) {
+                  if (!CadBlockDynGripShownOnInsert(g))
+                    continue;
+                  float gx = 0.f, gy = 0.f, gz = 0.f;
+                  if (CadBlockDynGripWorld(def, r, g, &gx, &gy, &gz))
+                    drawGrip(gx, gy, hot(g));
+                }
+              } else
+                drawGrip(r.xf.x, r.xf.y, hot(0));
+            }
+            break;
+          }
           default:
             break;
           }
@@ -13390,6 +13759,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         case PaperEntityRef::Type::Arc:      return at(L.paperArcAttrs, idx);
         case PaperEntityRef::Type::Ellipse:  return at(L.paperEllAttrs, idx);
         case PaperEntityRef::Type::Polyline: return at(L.paperPolyAttrs, idx);
+        case PaperEntityRef::Type::Block:    return at(L.paperBlockRefAttrs, idx);
         }
         return nullptr;
       };
@@ -13468,6 +13838,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const bool sel = isPaperSel(PaperEntityRef::Type::Line, idx);
         sdl->AddLine(w2s(L.paperLines[i], L.paperLines[i + 1]), w2s(L.paperLines[i + 3], L.paperLines[i + 4]),
                      paperCol(sel, PaperEntityRef::Type::Line, idx), paperWid(sel, PaperEntityRef::Type::Line, idx));
+      }
+      for (size_t bi = 0; bi < L.paperBlockRefs.size(); ++bi) {
+        const int idx = static_cast<int>(bi);
+        const bool sel = isPaperSel(PaperEntityRef::Type::Block, idx);
+        EntityAttributes ia{};
+        if (bi < L.paperBlockRefAttrs.size())
+          ia = L.paperBlockRefAttrs[bi];
+        std::vector<CadBlockWorldSeg> segs;
+        CadBlockCollectWorldLines(cmd.blockDefs, L.paperBlockRefs[bi], ia, &segs);
+        const ImU32 col = paperCol(sel, PaperEntityRef::Type::Block, idx);
+        const float th = paperWid(sel, PaperEntityRef::Type::Block, idx);
+        for (const CadBlockWorldSeg& s : segs)
+          sdl->AddLine(w2s(s.x0, s.y0), w2s(s.x1, s.y1), col, th);
       }
       // Circles / arcs / ellipses / polylines (REQ-038, ADR-013), paper inches → screen via w2s (handles the
       // y-flip), so arcs/ellipses are tessellated through w2s rather than ImGui's screen-space PathArcTo.
@@ -13567,7 +13950,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const int acol = (a.mtextAttach - 1) % 3;
           const int arow = (a.mtextAttach - 1) / 3;
           float pw = 8.f, ph = hPx * 1.22f;
-          MtextRichNaturalContentPx(paperFont, hPx, a.text, &pw, &ph, a.fontFamily);
+          const std::string paperFam = CadDrawFontFamily(a.fontFamily);
+          MtextRichNaturalContentPx(paperFont, hPx, a.text, &pw, &ph, paperFam);
           float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
           // Anchor to the box without clamping back inside it — see the model-space path.
           if (acol == 1)      drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
@@ -13577,7 +13961,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           float wrapPx = std::max(8.f, (brc.x - tl.x) - 8.f);
           if (acol != 0)
             wrapPx = std::max(pw, 8.f);
-          Shx::Font* sfm = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+          Shx::Font* sfm = CadIsShxFontName(paperFam) ? Shx::Resolve(paperFam) : nullptr;
           // Box wraps, box does not hide (mirrors model space): clip to the viewport, not to the box.
           sdl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
           if (sfm && sfm->valid()) {
@@ -13610,7 +13994,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               ly += lineH;
             }
           } else {
-            MtextRichDrawWrapped(sdl, paperFont, hPx, ImVec2(drawX, drawY), wrapPx, col, a.text, a.fontFamily);
+            MtextRichDrawWrapped(sdl, paperFont, hPx, ImVec2(drawX, drawY), wrapPx, col, a.text, paperFam);
           }
           sdl->PopClipRect();
           if (sel)
@@ -13623,11 +14007,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         DrawCadSingleLineText(sdl, a, paperFont, p, hPx, col);
         if (sel) {
           float w = hPx * 0.6f, h = hPx;
-          if (CadIsShxFontName(a.fontFamily)) {
-            if (Shx::Font* sf = Shx::Resolve(a.fontFamily); sf && sf->valid())
+          const std::string paperTextFam = CadDrawFontFamily(a.fontFamily);
+          if (CadIsShxFontName(paperTextFam)) {
+            if (Shx::Font* sf = Shx::Resolve(paperTextFam); sf && sf->valid())
               w = std::max(Shx::MeasureWidthPx(*sf, a.text, hPx), w);
           } else {
-            ImFont* tf = ResolveCadTtf(a.fontFamily, a.bold, a.italic, paperFont, nullptr, nullptr);
+            ImFont* tf = ResolveCadTtf(paperTextFam, a.bold, a.italic, paperFont, nullptr, nullptr);
             const ImVec2 ext = tf->CalcTextSizeA(hPx, FLT_MAX, 0.f, a.text.c_str());
             w = std::max(ext.x, w);
             h = std::max(ext.y, h);
@@ -13839,6 +14224,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (r.index >= 0 && static_cast<size_t>(r.index) < L.paperTexts.size()) {
             const CadAnnotation& a = L.paperTexts[static_cast<size_t>(r.index)];
             sdl->AddCircleFilled(xf(a.insX, a.insY), 3.f, ghostCol);
+          }
+          break;
+        }
+        case PaperEntityRef::Type::Block: {
+          if (r.index >= 0 && static_cast<size_t>(r.index) < L.paperBlockRefs.size()) {
+            EntityAttributes ia{};
+            if (static_cast<size_t>(r.index) < L.paperBlockRefAttrs.size())
+              ia = L.paperBlockRefAttrs[static_cast<size_t>(r.index)];
+            std::vector<CadBlockWorldSeg> segs;
+            CadBlockCollectWorldLines(cmd.blockDefs, L.paperBlockRefs[static_cast<size_t>(r.index)], ia, &segs);
+            for (const CadBlockWorldSeg& s : segs)
+              sdl->AddLine(xf(s.x0, s.y0), xf(s.x1, s.y1), ghostCol, 1.5f);
           }
           break;
         }
@@ -14067,8 +14464,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   if (modelAnnotationsVisible &&
-      (!cmd.cadAnnotations.empty() || !cmd.cadTables.empty() || !transformAnnPreviews.empty() ||
-       !transformTablePreviews.empty() || showMtextCmdDraft || showDimCmdDraft)) {
+      (CadNeedsAnnotationOverlay(cmd.cadAnnotations.size(), cmd.cadTables.size(), cmd.cadBlockRefs.size(),
+                                 showMtextCmdDraft, showDimCmdDraft) ||
+       !transformAnnPreviews.empty() || !transformTablePreviews.empty())) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // Clip model annotations to the drawing viewport so they cannot bleed into surrounding UI (issue #101).
     dl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
@@ -14396,6 +14794,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float mtextMaxPx = (a.surveyPointLabelForId >= 0) ? cmd.viewportMtextMaxPx : 8192.f;
         const float fontPx =
             std::clamp(hWorldMtext / std::max(worldPerPxY, 1.e-6f), mtextMinPx, mtextMaxPx);
+        const std::string mtextFam = CadDrawFontFamily(a.fontFamily);
         ImU32 col = colFallback;
         if (attrPtr) {
           float rgba[4];
@@ -14409,7 +14808,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (a.surveyPointLabelForId >= 0) {
           float pw = 8.f;
           float ph = fontPx * 1.22f;
-          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
+          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, mtextFam);
           drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
           drawY = ry0 + 0.5f * ((ry1 - ry0) - ph);
           wrapW = std::max(pw, 8.f);
@@ -14472,7 +14871,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const int acol = (a.mtextAttach - 1) % 3;
           const int arow = (a.mtextAttach - 1) / 3;
           float pw = 8.f, ph = fontPx * 1.22f;
-          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
+          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, mtextFam);
           // Anchor to the box, but never clamp back inside it: content taller or wider than the box
           // must overhang rather than be shoved in (and then clipped away).
           if (acol == 1)      drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
@@ -14481,12 +14880,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           else if (arow == 2) drawY = ry1 - ph - 4.f;
           if (acol != 0) wrapW = std::max(pw, 8.f);
         }
-        // The box governs where lines WRAP (wrapW above) and nothing else — it must never hide text.
-        // Clipping to it dropped every line past the box's height, so a box that was short (or that the
-        // user had dragged narrow) silently swallowed content. Clip to the viewport instead, purely so
-        // overhanging text cannot paint over the surrounding UI.
+        const bool rotateMtext = a.surveyPointLabelForId < 0 && std::fabs(a.rotationRad) > 1.e-5f;
+        ImVec2 mtextPivot{rx0, ry0};
+        if (rotateMtext) {
+          worldToScreen(a.insX, a.insY, &mtextPivot, a.insZ);
+          drawX = mtextPivot.x;
+          drawY = mtextPivot.y;
+          wrapW = 1.e8f;
+        }
         dl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
-        Shx::Font* sfm = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+        const int mtextVtx0 = dl->VtxBuffer.Size;
+        Shx::Font* sfm = CadIsShxFontName(mtextFam) ? Shx::Resolve(mtextFam) : nullptr;
         if (sfm && sfm->valid()) {
           // Render MTEXT as SHX strokes (exact AutoCAD match), line by line, honoring the attachment.
           const std::string plain = MtextRichFlattenToPlain(a.text);
@@ -14504,11 +14908,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             lines.push_back(ln);
           }
           float ly = drawY;
+          const float left0 = rotateMtext ? mtextPivot.x : rx0;
           for (const std::string& ln : lines) {
             const float w = Shx::MeasureWidthPx(*sfm, ln, fontPx);
-            float lx = rx0 + 4.f;
-            if (acol == 1)      lx = rx0 + 0.5f * ((rx1 - rx0) - w);
-            else if (acol == 2) lx = std::max(rx0 + 4.f, rx1 - w - 4.f);
+            float lx = left0 + 4.f;
+            if (!rotateMtext) {
+              if (acol == 1)      lx = rx0 + 0.5f * ((rx1 - rx0) - w);
+              else if (acol == 2) lx = std::max(rx0 + 4.f, rx1 - w - 4.f);
+            }
             const ImVec2 base(lx, ly + fontPx);
             Shx::DrawText(dl, *sfm, base, fontPx, 0.f, col, ln, thick);
             if (underline) {
@@ -14518,8 +14925,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             ly += lineH;
           }
         } else {
-          MtextRichDrawWrapped(dl, font, fontPx, ImVec2(drawX, drawY), wrapW, col, a.text, a.fontFamily);
+          MtextRichDrawWrapped(dl, font, fontPx, ImVec2(drawX, drawY), wrapW, col, a.text, mtextFam);
         }
+        if (rotateMtext)
+          RotateDrawListVertsAround(dl, mtextVtx0, mtextPivot, a.rotationRad);
         dl->PopClipRect();
       }
     };
@@ -14601,6 +15010,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (ap && CadEntityIdHidden(&cmd.hiddenEntityIds, ap->id))
         continue;
       drawAnnotationVisual(cmd.cadAnnotations[ai], ap, kAnnCol);
+    }
+    for (size_t bi = 0; bi < cmd.cadBlockRefs.size(); ++bi) {
+      const EntityAttributes* bp =
+          bi < cmd.cadBlockRefAttrs.size() ? &cmd.cadBlockRefAttrs[bi] : nullptr;
+      if (bp && CadEntityIdHidden(&cmd.hiddenEntityIds, bp->id))
+        continue;
+      std::vector<CadAnnotation> blockAnns;
+      CadBlockCollectWorldAnnotations(cmd.blockDefs, cmd.cadBlockRefs[bi], &blockAnns);
+      for (const CadAnnotation& a : blockAnns)
+        drawAnnotationVisual(a, bp, kAnnCol);
     }
 
     for (const CadAnnotation& ap : transformAnnPreviews)
@@ -14735,12 +15154,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       ImVec2 sp{};
       worldToScreen(a.insX, a.insY, &sp, a.insZ);
       float tw = 0.f;
-      Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+      const std::string hitFam = CadDrawFontFamily(a.fontFamily);
+      Shx::Font* sf = CadIsShxFontName(hitFam) ? Shx::Resolve(hitFam) : nullptr;
       if (sf && sf->valid()) {
         tw = Shx::MeasureWidthPx(*sf, a.text, fpx);
       } else {
         bool rb = false, ri = false;
-        ImFont* tf = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, a.bold, a.italic, &rb, &ri);
+        ImFont* tf = FontReg::Resolve(hitFam, a.bold, a.italic, &rb, &ri);
         if (!tf) tf = font;
         tw = tf->CalcTextSizeA(fpx, FLT_MAX, 0.f, a.text.c_str()).x;
       }
@@ -14758,12 +15178,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       ImVec2 sp{};
       worldToScreen(a.insX, a.insY, &sp, a.insZ);
       float tw = 0.f;
-      Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+      const std::string hitFam = CadDrawFontFamily(a.fontFamily);
+      Shx::Font* sf = CadIsShxFontName(hitFam) ? Shx::Resolve(hitFam) : nullptr;
       if (sf && sf->valid()) {
         tw = Shx::MeasureWidthPx(*sf, a.text, fpx);
       } else {
         bool rb = false, ri = false;
-        ImFont* tf = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, a.bold, a.italic, &rb, &ri);
+        ImFont* tf = FontReg::Resolve(hitFam, a.bold, a.italic, &rb, &ri);
         if (!tf) tf = font;
         tw = tf->CalcTextSizeA(fpx, FLT_MAX, 0.f, a.text.c_str()).x;
       }
@@ -15049,6 +15470,34 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const float perpX = -el.majVy;
           const float perpY = el.majVx;
           drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z);
+        }
+      } else if (sel.type == SelectedEntity::Type::BlockRef) {
+        if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {
+          const CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(sel.index)];
+          const int di = CadBlockFindDef(cmd.blockDefs, r.defName);
+          if (di >= 0) {
+            const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+            const int nG = CadBlockDynGripCount(def);
+            for (int g = 0; g < nG; ++g) {
+              if (!CadBlockDynGripShownOnInsert(g))
+                continue;
+              float gx = 0.f, gy = 0.f, gz = r.xf.z;
+              if (!CadBlockDynGripWorld(def, r, g, &gx, &gy, &gz))
+                continue;
+              ImVec2 gp{};
+              wts(gx, gy, &gp, gz);
+              float ldx = 0.f, ldy = 0.f, wdx = 0.f, wdy = 0.f;
+              CadBlockDynGripLocalAxis(g, &ldx, &ldy);
+              CadBlockXformDelta(r.xf, ldx, ldy, &wdx, &wdy);
+              ImVec2 gp2{};
+              wts(gx + wdx, gy + wdy, &gp2, gz);
+              const CadBlockDynGripShape sh = CadBlockDynGripShapeOf(g);
+              const ImU32 fill = (sh == CadBlockDynGripShape::Square) ? kGripFillE : IM_COL32(0, 220, 230, 255);
+              const ImU32 bord = (sh == CadBlockDynGripShape::Square) ? kGripBorderE : IM_COL32(0, 140, 160, 255);
+              DrawCadGripMarker(dlG, gp, gripHalf, sh, gp2.x - gp.x, gp2.y - gp.y, fill, bord);
+            }
+          } else
+            drawGrip(r.xf.x, r.xf.y, r.xf.z);
         }
       } else if (sel.type == SelectedEntity::Type::Table) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadTables.size()) {
@@ -15743,6 +16192,7 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
     case T::Polyline:   return (size_t)e.index < cmd.userPolylineAttrs.size()   ? &cmd.userPolylineAttrs[(size_t)e.index]   : nullptr;
     case T::Annotation: return (size_t)e.index < cmd.cadAnnotationAttrs.size()  ? &cmd.cadAnnotationAttrs[(size_t)e.index]  : nullptr;
     case T::Table:      return (size_t)e.index < cmd.cadTableAttrs.size()       ? &cmd.cadTableAttrs[(size_t)e.index]       : nullptr;
+    case T::BlockRef:   return (size_t)e.index < cmd.cadBlockRefAttrs.size()    ? &cmd.cadBlockRefAttrs[(size_t)e.index]    : nullptr;
     default:            return nullptr;
     }
   };
@@ -15771,6 +16221,10 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
       break;
     }
     case T::Table:
+      if (cmd.qsObjectType != OT::All)
+        return false;
+      break;
+    case T::BlockRef:
       if (cmd.qsObjectType != OT::All)
         return false;
       break;
@@ -15886,6 +16340,7 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
     for (int i = 0; i < nPoly; ++i)   addCad({SelectedEntity::Type::Polyline, i});
     for (int i = 0; i < (int)cmd.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});
     for (int i = 0; i < (int)cmd.cadTables.size(); ++i)      addCad({SelectedEntity::Type::Table, i});
+    for (int i = 0; i < (int)cmd.cadBlockRefs.size(); ++i)   addCad({SelectedEntity::Type::BlockRef, i});
     for (int i = 0; i < (int)cmd.surveyPoints.size(); ++i)   addSurvey(i);
   } else {
     for (const auto& e : cmd.selection)           addCad(e);
@@ -16193,6 +16648,9 @@ static void FormatSelectedEntityLabel(const AppCommandState& cmd, const Selected
   case T::Table:
     std::snprintf(buf, bufSize, "Table %d", e.index + 1);
     break;
+  case T::BlockRef:
+    std::snprintf(buf, bufSize, "Block %d", e.index + 1);
+    break;
   case T::PdfUnderlay:
     std::snprintf(buf, bufSize, "PDF Underlay %d", e.index + 1);
     break;
@@ -16378,9 +16836,10 @@ static void DrawTextStyleSample(ImDrawList* dl, ImVec2 tl, ImVec2 sz, const Text
   const float maxW = std::max(6.f, sz.x - 2.f * pad);
   // Cap the glyph height so a tall preview box doesn't balloon the sample; then shrink to fit the width.
   float capPx = std::min(maxH, 48.f);
-  Shx::Font* sf = CadIsShxFontName(s.fontFamily) ? Shx::Resolve(s.fontFamily) : nullptr;
+  const std::string previewFam = TextStyles::EffectiveFontFamily(s.fontFamily);
+  Shx::Font* sf = CadIsShxFontName(previewFam) ? Shx::Resolve(previewFam) : nullptr;
   bool rb = false, ri = false;
-  ImFont* tf = s.fontFamily.empty() ? ImGui::GetFont() : FontReg::Resolve(s.fontFamily, s.bold, s.italic, &rb, &ri);
+  ImFont* tf = FontReg::Resolve(previewFam, s.bold, s.italic, &rb, &ri);
   if (!tf) tf = ImGui::GetFont();
   auto measure = [&](float cp) -> float {
     if (sf && sf->valid()) return Shx::MeasureWidthPx(*sf, sample, cp);
@@ -16480,10 +16939,11 @@ void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* 
   ImGui::SeparatorText("Font");
   ImGui::TextUnformatted("Font Name:");
   ImGui::SetNextItemWidth(230.f);
-  if (ImGui::BeginCombo("##fontname", s.fontFamily.empty() ? "(default)" : s.fontFamily.c_str())) {
+  if (ImGui::BeginCombo("##fontname",
+                        s.fontFamily.empty() ? TextStyles::kDefaultFontFamily : s.fontFamily.c_str())) {
     for (const char* fn : kTextStyleFonts) {
-      const char* label = (fn[0] == '\0') ? "(default)" : fn;
-      if (ImGui::Selectable(label, s.fontFamily == fn)) {
+      const char* label = fn;
+      if (ImGui::Selectable(label, s.fontFamily == fn || (s.fontFamily.empty() && std::strcmp(fn, TextStyles::kDefaultFontFamily) == 0))) {
         s.fontFamily = fn;
         styleChanged = true;
       }

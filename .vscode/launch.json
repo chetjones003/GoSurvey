@@ -5,7 +5,7 @@
       "name": "Debug GoSurvey (Ninja)",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/debug/GoSurvey-0.4.0.exe",
+      "program": "${workspaceFolder}/build/debug/GoSurvey.exe",
       "args": [],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}/build/debug",

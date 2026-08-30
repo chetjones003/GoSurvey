@@ -296,4 +296,14 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, cmd.mtxtX2, cmd.mtxtY2, 0., 0.,
                                    zc);
   }
+
+  if (cmd.active == AppCommandState::Kind::InsertBlock) {
+    using IPh = AppCommandState::InsertBlockPhase;
+    if (cmd.insertBlockPhase == IPh::WaitRotation || cmd.insertBlockPhase == IPh::WaitScale) {
+      float lx = curXf;
+      float ly = curYf;
+      ApplyOrthoConstrainFromAnchor(cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled);
+      PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0., zc, zc);
+    }
+  }
 }

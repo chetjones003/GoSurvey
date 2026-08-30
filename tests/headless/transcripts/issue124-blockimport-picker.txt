@@ -1,0 +1,10 @@
+# Bare BLOCKIMPORT uses the file-dialog seam (same as IMPORTMODEL).
+NEW
+DIALOG OPEN %DATA%/blockimport-wblock.dxf
+CMD BLOCKIMPORT
+EXPECT LOG "BLOCKIMPORT — imported"
+EXPECT LOG blockimport-wblock
+
+DIALOG CANCEL
+CMD BLOCKIMPORT
+EXPECT LOG "BLOCKIMPORT — cancelled"

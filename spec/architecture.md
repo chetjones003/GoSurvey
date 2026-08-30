@@ -1870,3 +1870,60 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   gains additive sections (no version bump if keys are tolerant, ADR-020 (e) precedent) or a
   REQ-079 migration if the loader cannot ignore unknown sections — Workshop must not bump
   `.gs` version without amending REQ-079.
+
+### ADR-043 — Block editing in place: a model-store swap, not a fourth active space   (2026-08-29, accepted)
+- Context:    REQ-107's block-editor slice requires editing a `CadBlockDefinition`'s geometry in
+  **isolation** — the block's entities only, model and paper space hidden and unpickable — with the
+  full draw/modify/snap command set operating on that content, and a Save/Don't-Save/Cancel prompt
+  on close that returns to the ribbon tab and camera the user left. Today BEDIT sets
+  `blockEditorName` and edits `blockDefs[i].content` through dedicated `BEDITADD`/authoring commands
+  only; `main.cpp` does not know a session is open and no ordinary draw/modify command can reach
+  block content. Adding an editing surface + hiding the other spaces + a close gate touches the
+  command/coordinate flow and session lifecycle — architectural, not a Workshop choice (§3, §11).
+- Decision:   (a) **A block-edit session swaps the model store, it does not add a routing branch.**
+  On enter, the live model geometry (lines, circles, arcs, ellipses, polylines, model TEXT/MTEXT,
+  filled regions, selection, camera) is saved to an off-document **stash** on `AppCommandState`
+  (session-only, never serialized), the model arrays are cleared, and the definition's
+  `CadBlockContent` primitives are loaded **into the model arrays** in the block's local
+  coordinates (base point already baked to the origin, `CadBlockBakeBasePoint`). Every existing
+  draw, modify, and object-snap command then operates unchanged — there is **no per-command
+  `activeSpaceIndex` branch** for block edit, unlike ADR-009's paper routing. Rationale: the paper
+  branch is ~15 scattered call sites and growing; a store swap is one enter path and one close
+  path and cannot drift per command (CLAUDE.md "prefer simple").
+  (b) **The other spaces are hidden by the same swap** — model geometry is gone from the arrays
+  while the session is open, so the viewport, picking, and snapping already show and hit only the
+  block content. `main.cpp` gains one guard: while `blockEditorName` is non-empty, paper-space
+  entry (`PSPACE`/layout tabs) and survey-only tools are refused, and block INSERT overlays are
+  not drawn (the definition being edited is the scene, not a reference).
+  (c) **Close is a gate.** `BCLOSE` with `blockEditorDirty` raises a modal
+  (Save / Don't Save / Cancel). Save harvests the model arrays back into
+  `blockDefs[i].content`, restores the stash, and re-renders every `CadBlockRef`. Don't Save
+  restores `blockEditorSnapshot` (already captured on enter) into the definition, then restores the
+  stash. Cancel dismisses the modal, session stays open. Either completion restores the saved
+  camera and `ribbonTabBeforeBlockEditor` (both already partly wired).
+  (d) **Scope of the round-trip is primitive geometry.** Nested blocks, meshes, attribute
+  definitions, parameters, and actions on the definition are stashed on enter and restored on close
+  **unchanged** — this slice edits drawable primitives, not the dynamic-block authoring model
+  (which keeps its existing `BPARAM`/`BACTION` commands). A session is **model-space only**:
+  entered from model space, and BEDIT is refused while a paper layout is active.
+  (e) **Session state lives on `AppCommandState`**, beside the existing `blockEditor*` and
+  `floatingViewportIndex` fields — the established pattern for interactive-mode state (ADR-008/009).
+  No new file-scope global (§11.3), no new abstraction (§11.4 — the stash is a value struct with
+  one use), no new dependency, no `.gs` format change.
+- Alternatives: **(1) A fourth `activeSpaceIndex` value with per-command routing** (the literal
+  "fourth active space" framing) — rejected: replicates ADR-009's scattered-branch cost across
+  every draw/modify/snap handler for no behaviour the store swap does not already give, and each
+  new command becomes another integration point that can forget the branch.
+  **(2) A separate MDI drawing tab** (the user's first framing) — rejected by the user: grafts
+  non-document state onto `drawingTabs`/`documents[]` and their per-tab renderers, a new ownership
+  model for a resource that is not a drawing.
+  **(3) Keep in-place `BEDITADD`-only editing** — rejected: no isolation, no ordinary draw tools,
+  fails the requirement.
+- Consequences: `AppCommandState` gains a `blockEditModelStash` value struct + a saved-camera
+  field; `CadBlocksEnterNamedEditor` / `BCLOSE` gain the swap and harvest logic; `main.cpp` gains
+  one visibility/entry guard; the block-editor contextual ribbon (already built) gets the close
+  modal. Undo inside a session operates on the model arrays as usual; the enter/close swap itself
+  pushes an undo boundary so a mis-started session is recoverable. A crash mid-session loses the
+  session (stash is not persisted) but never corrupts the `.gs` — the definition is only written on
+  an explicit Save. If a later requirement needs simultaneous multi-block editing or editing a
+  block from a paper layout, this swap does not extend to it and a new decision is required.

@@ -3767,9 +3767,31 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: Add BLOCK (define from selection), INSERT (place with position/scale/rotation), WBLOCK (write to its own file), and ATTDEF/block attributes. Dynamic blocks and a block-library browser are explicitly out of scope — see roadmap Someday.
 - Acceptance (sketch): a block definition stores its entities once; each INSERT is a lightweight reference, not a geometry copy; editing a definition updates every insert; DWG/DXF export writes real INSERT/BLOCK records; erasing a definition with live inserts is handled per REQ-201, never silently.
-- Owner-layer: Domain/Commands/IO/UI — likely architectural (new entity kind + indirection); expect a SPEC GAP/ADR before implementation, the way REQ-069's breaklines forced REQ-076 first
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Acceptance (block editor — BEDIT in-place isolated editing, D-2026-08-29-h / ADR-043):
+  - BEDIT with a block name from model space enters an **edit session** for that definition; BEDIT
+    is refused while a paper layout is active; a second BEDIT for the block already open is a no-op.
+  - While a session is open the viewport shows **only that block's geometry** in the block's local
+    coordinates; model-space and paper-space entities are not drawn and not pickable/snappable;
+    the block's own INSERT overlays are not drawn.
+  - Draw commands (LINE, PLINE, CIRCLE, ARC, ELLIPSE, TEXT/MTEXT) and modify commands (MOVE, COPY,
+    ROTATE, SCALE, DELETE, TRIM, OFFSET, MIRROR) operate on the block's content; survey-point and
+    CSV tools are unavailable in the session.
+  - Any content change marks the session dirty.
+  - `BCLOSE` (or the ribbon Close Block Editor) with a dirty session raises a modal **Save /
+    Don't Save / Cancel**: Save writes the edited geometry into the definition and every INSERT of
+    that block re-renders; Don't Save restores the definition as it was at BEDIT; Cancel keeps the
+    session open. A clean session closes with no prompt.
+  - On close (Save or Don't Save) the ribbon tab and the viewport camera that were active when
+    BEDIT was invoked are restored.
+  - Nested blocks, meshes, attribute definitions, parameters and actions on the definition are
+    preserved unchanged across an edit session.
+- Owner-layer: Domain/Commands/IO/UI — architectural; block entity model recorded across the
+  issue-#124 work, the in-place editor recorded as ADR-043
+- Status: accepted
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i).
+  2026-08-29 — accepted for the block-editor slice (D-2026-08-29-h, ADR-043): in-place isolated
+  editing via a model-store swap, with a Save/Don't-Save/Cancel close gate. Dynamic blocks and a
+  block-library browser remain out of scope (roadmap Someday).
 
 ### REQ-108 — Polar and tracking input aids
 - Purpose: the POLAR status-bar toggle lights up with no behavior behind it, there is no object-snap tracking, and there's no typed polar-coordinate entry

@@ -1083,6 +1083,15 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         PushSnapPickerEntry(L[i + 3], L[i + 4], Kind::Endpoint, sortWorldX, sortWorldY, out, L[i + 5]);
       }
     }
+    for (const CadBlockRef& br : cmd.cadBlockRefs) {
+      PushSnapPickerEntry(br.xf.x, br.xf.y, Kind::Endpoint, sortWorldX, sortWorldY, out, br.xf.z);
+      std::vector<CadBlockWorldSeg> segs;
+      CadBlockCollectWorldLines(cmd.blockDefs, br, EntityAttributes{}, &segs);
+      for (const CadBlockWorldSeg& s : segs) {
+        PushSnapPickerEntry(s.x0, s.y0, Kind::Endpoint, sortWorldX, sortWorldY, out, s.z0);
+        PushSnapPickerEntry(s.x1, s.y1, Kind::Endpoint, sortWorldX, sortWorldY, out, s.z1);
+      }
+    }
     const int polyCount =
         static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
     for (int pi = 0; pi < polyCount; ++pi) {
@@ -1127,6 +1136,13 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out,
                             0.5f * (L[i + 2] + L[i + 5]));
       }
+    }
+    for (const CadBlockRef& br : cmd.cadBlockRefs) {
+      std::vector<CadBlockWorldSeg> segs;
+      CadBlockCollectWorldLines(cmd.blockDefs, br, EntityAttributes{}, &segs);
+      for (const CadBlockWorldSeg& s : segs)
+        PushSnapPickerEntry(0.5f * (s.x0 + s.x1), 0.5f * (s.y0 + s.y1), Kind::Midpoint, sortWorldX, sortWorldY,
+                            out, 0.5f * (s.z0 + s.z1));
     }
     const int polyCount =
         static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);

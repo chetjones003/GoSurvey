@@ -223,6 +223,7 @@ target_link_libraries(imgui_backend PUBLIC glfw)
 set(GOSURVEY_DOMAIN_SOURCES
   # Command system
   src/commands/CadCommands.cpp
+  src/commands/CadBlocks.cpp
   src/commands/CadLinetype.cpp
   src/commands/EntityId.cpp
   src/survey/PointGroupRule.cpp
@@ -366,6 +367,8 @@ add_executable(GoSurvey
   src/ui/RichTextEdit.cpp
   src/ui/ViewCube.cpp
   src/ui/PdfAttachDialog.cpp
+  src/ui/CadUi_InsertBlock.cpp
+  src/ui/CadUi_BlockAuthoring.cpp
 
   # I/O (windowed application only)
   src/io/PdfPlot.cpp
@@ -510,6 +513,7 @@ add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gs"
@@ -519,6 +523,9 @@ add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
   COMMENT "Copy resources beside executable")
 
 # Copy pdfium.dll next to the executable so it can be found at runtime.
@@ -669,6 +676,7 @@ if(GOSURVEY_BUILD_TESTS)
     # self, partial overlap).
     tests/SurfaceVolumeTests.cpp
     tests/CadTableTests.cpp
+    tests/CadBlockTests.cpp
     tests/SurfaceStatsTests.cpp
     tests/WatershedTests.cpp
     tests/TinVolumeTests.cpp
@@ -835,6 +843,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
     tests/GsIoDimAngularTests.cpp
+    tests/CadBlockImportTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

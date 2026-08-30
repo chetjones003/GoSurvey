@@ -220,6 +220,18 @@ TEST_CASE("Ignore is a decision, not an omission", "[viewport][pick][task099]") 
   REQUIRE(ViewportClickRouteFor(pdf) == ViewportClickRoute::Ignore);
   pdf.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitInsertPoint;
   REQUIRE(ViewportClickRouteFor(pdf) == ViewportClickRoute::PdfAttachInsertPoint);
+
+  AppCommandState ins = AtFirstPrompt(K::InsertBlock);
+  ins.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
+  REQUIRE(ViewportClickRouteFor(ins) == ViewportClickRoute::Ignore);
+  ins.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  REQUIRE(ViewportClickRouteFor(ins) == ViewportClickRoute::InsertBlockPick);
+  ins.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitScale;
+  REQUIRE(ViewportClickRouteFor(ins) == ViewportClickRoute::InsertBlockPick);
+  ins.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitRotation;
+  REQUIRE(ViewportClickRouteFor(ins) == ViewportClickRoute::InsertBlockPick);
+  ins.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitAttributes;
+  REQUIRE(ViewportClickRouteFor(ins) == ViewportClickRoute::Ignore);
 }
 
 TEST_CASE("No active command means idle selection, not nothing", "[viewport][pick][task099]") {

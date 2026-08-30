@@ -130,6 +130,14 @@ void PlotActiveLayout(AppCommandState& cmd, std::vector<std::string>& log);
 /// PDFATTACH configuration dialog + pick-phase hint overlay.
 bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log);
 
+/// INSERT configuration dialog + pick-phase hint overlay (GitHub issue #124).
+void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log);
+/// Civil 3D-style Edit Block Definition picker (BEDIT with no name).
+void DrawEditBlockDefinitionDialog(AppCommandState& cmd, std::vector<std::string>& log);
+
+/// BEDIT Block Authoring Palettes (Parameters / Actions / Parameter Sets / Constraints).
+void DrawBlockAuthoringPalettes(AppCommandState& cmd, std::vector<std::string>& log);
+
 /// ALIGN results window: editable pair list, live Helmert solution, Apply button, report generation.
 void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log);
 

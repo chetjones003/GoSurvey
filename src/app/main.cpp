@@ -12,6 +12,7 @@
 #endif
 
 #include "CadCommands.hpp"
+#include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadRubberPreview.hpp"
 #include "TransformPreview.hpp"
@@ -128,6 +129,7 @@ namespace
         if (LoadGoSurveyFile(cmd, u8.c_str(), boot))
         {
           appendLines(boot);
+          LoadBundledBlockLibrary(cmd, cmdLog);
           return;
         }
         appendLines(boot);
@@ -139,9 +141,12 @@ namespace
       }
     }
 
-    if (tryLoadPath(ResolveDefaultWorkspaceTemplateGsPath()))
+    if (tryLoadPath(ResolveDefaultWorkspaceTemplateGsPath())) {
+      LoadBundledBlockLibrary(cmd, cmdLog);
       return;
+    }
     cmdLog.push_back("Startup: bundled default-template.gs not found; starting with an empty drawing.");
+    LoadBundledBlockLibrary(cmd, cmdLog);
   }
 
 } // namespace
@@ -291,6 +296,10 @@ int main()
     DevShell_RegisterTests(devEngine, &cmd);
 #endif
   LoadUserStartupPrefs(cmd);
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  if (devshellCli)
+    cmd.authGateResolved = true;
+#endif
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
 
   // Shown only now (GlfwApplySplashStageWindowHints set GLFW_VISIBLE false) so it never flashes
@@ -300,7 +309,11 @@ int main()
   // REQ-093: hardcoded 5 s regardless of how fast the real preload below finishes — the app is
   // still low-resource enough that the actual load is imperceptible, so the splash's duration is
   // deliberately decoupled from it rather than trying to track real progress.
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  RunStartupSplash(window, devshellCli ? 0.0 : 5.0);
+#else
   RunStartupSplash(window, 5.0);
+#endif
   GlfwApplyMainStageWindowChrome(window);
   // glfwMaximizeWindow (inside the call above) posts an async resize on Windows; pump events so
   // the window's real (maximized) size has landed before the first docked-layout frame reads it.
@@ -313,6 +326,9 @@ int main()
   updateState.prefs = cmd.updatePrefs;
   // Runs on EVERY launch (no throttle) and gates the session: the dialog stays modal until it
   // resolves. Does nothing at all when the user has switched the check off.
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  if (!devshellCli)
+#endif
   update::BeginStartupCheck(updateState, "chetjones003/GoSurvey");
   /// Set once the user has confirmed an update and the app is exiting to hand over to the
   /// installer, so the normal quit path can tell the two cases apart.
@@ -827,9 +843,19 @@ int main()
     // cmd.prevDrawingIdx is the authoritative last-active index (also written by menu New/Open handlers).
     if (cmd.activeDrawingIdx != cmd.prevDrawingIdx)
     {
-      SaveDocumentToSnapshot(cmd, cmd.prevDrawingIdx);
-      RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
-      cmd.prevDrawingIdx = cmd.activeDrawingIdx;
+      if (cmd.blockEditActive)
+      {
+        // ADR-043: a block-edit session holds the block's geometry in the model arrays; snapshotting
+        // that as the tab's document would corrupt it. Refuse the switch until BCLOSE.
+        cmd.activeDrawingIdx = cmd.prevDrawingIdx;
+        cmdLog.push_back("Close the block editor (BCLOSE) before switching drawings.");
+      }
+      else
+      {
+        SaveDocumentToSnapshot(cmd, cmd.prevDrawingIdx);
+        RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
+        cmd.prevDrawingIdx = cmd.activeDrawingIdx;
+      }
     }
 
     const size_t activeRendIdx = static_cast<size_t>(cmd.activeDrawingIdx);
@@ -913,6 +939,9 @@ int main()
     DrawPageSetupEditor(cmd, cmdLog);
     DrawBatchPlotDialog(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
+    DrawInsertBlockDialog(cmd, cmdLog);
+    DrawEditBlockDefinitionDialog(cmd, cmdLog);
+    DrawBlockAuthoringPalettes(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);
     DrawUpdateDialog(cmd, updateState);
@@ -1023,6 +1052,9 @@ int main()
     ext.featureLineAttrs = &cmd.featureLineAttrs;
     ext.drawingLayers = &cmd.drawingLayerTable;
     ext.hiddenEntityIds = &cmd.hiddenEntityIds;  // object isolation (REQ-084 (d) / ADR-034)
+    ext.blockDefs = &cmd.blockDefs;
+    ext.blockRefs = &cmd.cadBlockRefs;
+    ext.blockRefAttrs = &cmd.cadBlockRefAttrs;
 
     activeRenderer.SetSize(fbW, fbH);
     RenderTuning tuning{};

@@ -34,3 +34,6 @@ bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap);
 
 /// glTF / GLB 3D model for import (REQ-065).
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap);
+
+/// Block definition import — `.gs`, `.dxf`, or `.dwg` (WBLOCK drawings included).
+bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap);

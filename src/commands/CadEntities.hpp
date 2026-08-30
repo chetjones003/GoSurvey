@@ -85,7 +85,7 @@ struct EntityAttributes {
 /// with per-property override flags (bake-on-write resolution — see TextStyle.hpp).
 struct TextStyle {
   std::string name;            ///< Unique within the drawing; "Standard" always exists and is not deletable.
-  std::string fontFamily;      ///< "" = app default; a TrueType family ("Arial") or an SHX name ("romans.shx").
+  std::string fontFamily;  ///< "" = app default (`romans.shx`); TrueType family or SHX file name.
   float heightInches = 0.125f; ///< Plotted text height in inches (model height = this × drawing scale).
   float obliqueDeg = 0.f;      ///< Slant angle in degrees (>0 shears glyph tops to the right).
   bool bold = false;
