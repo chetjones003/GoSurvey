@@ -18,6 +18,12 @@
 
 namespace {
 
+/// INSERT rotation is entered in the app's angle convention — 0° = north, **clockwise positive**
+/// (CadCommands.hpp; same as ROTATE, which negates for the same reason). The block frame is the
+/// internal CCW-from-east math frame, so a clockwise bearing negates. `xf.rotZ = 0` therefore
+/// inserts the definition exactly as authored.
+float InsertRotZFromCwNorthDeg(float deg) { return -deg * 0.01745329252f; }
+
 EntityAttributes NewBlockAttr(const AppCommandState& st) {
   EntityAttributes a;
   a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
@@ -586,10 +592,11 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
 }
 
 void CadBlocksApplyInsertNameDefaults(AppCommandState& st) {
-  if (!CadBlockNameIsMatchline(st.insertBlockName))
-    return;
-  st.insertBlockRotDeg = 90.f;
-  std::snprintf(st.insertBlockAngleBuf, sizeof(st.insertBlockAngleBuf), "90");
+  // Previously forced 90° for matchline blocks — a workaround for INSERT applying rotation
+  // counter-clockwise. The bundled matchline definitions are authored pointing north, and INSERT
+  // now honours the clockwise-from-north convention (InsertRotZFromCwNorthDeg), so rotation 0
+  // places them exactly as authored. No name needs a non-zero default any more.
+  (void)st;
 }
 
 namespace {
@@ -602,7 +609,7 @@ CadBlockXform InsertDialogXform(const AppCommandState& st) {
   xf.sx = st.insertBlockSx;
   xf.sy = st.insertBlockSy;
   xf.sz = st.insertBlockSz;
-  xf.rotZ = st.insertBlockRotDeg * 0.01745329252f;
+  xf.rotZ = InsertRotZFromCwNorthDeg(st.insertBlockRotDeg);
   return xf;
 }
 
@@ -819,7 +826,9 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, std::vector<
     const float dx = lx - st.insertBlockX;
     const float dy = ly - st.insertBlockY;
     if (dx * dx + dy * dy > 1.e-10f)
-      st.insertBlockRotDeg = std::atan2(dy, dx) * (180.f / 3.14159265f);
+      // Store the pick direction in the same clockwise-from-north convention the typed field uses,
+      // so InsertRotZFromCwNorthDeg converts it consistently (pick north → rotation 0 → as authored).
+      st.insertBlockRotDeg = BearingCwNorthDegFromMathAngleRad(std::atan2(dy, dx));
     if (CadBlockPlaceInsert(st, st.insertBlockName, InsertDialogXform(st), st.insertBlockExplode, log))
       CadBlocksAfterPlace(st, log);
   }
@@ -1070,7 +1079,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
         xf.sy = std::stof(f[4]);
       }
       if (f.size() >= 6)
-        xf.rotZ = std::stof(f[5]) * 0.01745329252f;
+        xf.rotZ = InsertRotZFromCwNorthDeg(std::stof(f[5]));
       if (f.size() >= 7)
         xf.sz = std::stof(f[6]);
       if (f.size() >= 8)

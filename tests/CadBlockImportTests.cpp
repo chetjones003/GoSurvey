@@ -316,7 +316,9 @@ TEST_CASE("INSERT matchline at 90 degrees opens attributes and lays the line hor
   char ang[32] = "90";
   ProcessCommandLineSubmit(ang, static_cast<int>(sizeof(ang)), st, log);
   REQUIRE(st.cadBlockRefs.size() == 1);
-  CHECK(st.cadBlockRefs[0].xf.rotZ == Catch::Approx(1.5707963f).margin(0.01f));
+  // 90 = 90° clockwise from north (the app convention); the block frame is CCW-from-east, so rotZ
+  // is −π/2. A north-authored matchline rotated 90° CW lands east — horizontal, asserted below.
+  CHECK(st.cadBlockRefs[0].xf.rotZ == Catch::Approx(-1.5707963f).margin(0.01f));
   CHECK(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitAttributes);
   CHECK(st.insertBlockAttrDialogOpen);
 
@@ -357,4 +359,41 @@ TEST_CASE("BEDIT with a name skips the picker", "[issue124][block][bedit]") {
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", args, log));
   CHECK(st.blockEditorName == "HYDRANT");
   CHECK_FALSE(st.blockEditPickerOpen);
+}
+
+// Bug: INSERT rotation must follow the app-wide angle convention (0deg = north, clockwise
+// positive -- CadCommands.hpp), the same as ROTATE. A block whose geometry points north
+// must come in pointing north at rotation 0, and pointing east at rotation 90.
+TEST_CASE("INSERT rotation is clockwise from north", "[issue124][block][rotation]") {
+  AppCommandState st;
+  st.blockDefs.emplace_back();
+  st.blockDefs[0].name = "ML";
+  st.blockDefs[0].units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate rotation from unit scaling
+  st.blockDefs[0].content.lines = {0.f, 0.f, 0.f, 0.f, 2.f, 0.f};  // points NORTH (+Y)
+  st.blockDefs[0].content.lineAttrs.resize(1);
+  st.blockDefs[0].content.lineVis.resize(1);
+
+  auto dirAt = [&](const char* deg) {
+    st.cadBlockRefs.clear();
+    std::istringstream args(std::string("ML, 10, 10, 1, 1, ") + deg);
+    std::vector<std::string> log;
+    REQUIRE(CadBlocksTryIdleCommand(st, "insert", args, log));
+    REQUIRE(st.cadBlockRefs.size() == 1);
+    std::vector<CadBlockWorldSeg> segs;
+    CadBlockCollectWorldLines(st.blockDefs, st.cadBlockRefs[0], EntityAttributes{}, &segs);
+    REQUIRE(segs.size() == 1);
+    return std::pair<float, float>{segs[0].x1 - segs[0].x0, segs[0].y1 - segs[0].y0};
+  };
+
+  const auto d0 = dirAt("0");
+  CHECK(d0.first == Catch::Approx(0.f).margin(2e-3));
+  CHECK(d0.second == Catch::Approx(2.f).margin(2e-3));  // rotation 0 -> unchanged (north)
+
+  const auto d90 = dirAt("90");
+  CHECK(d90.first == Catch::Approx(2.f).margin(2e-3));   // 90 clockwise from north -> east
+  CHECK(d90.second == Catch::Approx(0.f).margin(2e-3));
+
+  const auto d180 = dirAt("180");
+  CHECK(d180.first == Catch::Approx(0.f).margin(2e-3));
+  CHECK(d180.second == Catch::Approx(-2.f).margin(2e-3));  // 180 -> south
 }
