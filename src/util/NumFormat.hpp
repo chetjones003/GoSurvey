@@ -29,3 +29,10 @@
   std::snprintf(buf, sizeof(buf), DisplayFloatFmt(precision).c_str(), value);
   return buf;
 }
+
+/// Earthwork display unit (REQ-073): 1 yd³ = 27 ft³. Compute stays in cubic feet.
+inline constexpr double kCubicFeetPerCubicYard = 27.0;
+
+[[nodiscard]] inline std::string FormatVolumeYd3(double volumeFt3, int precision) {
+  return FormatLinear(volumeFt3 / kCubicFeetPerCubicYard, precision) + " yd3";
+}

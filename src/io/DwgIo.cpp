@@ -14,7 +14,7 @@
 
 namespace {
 
-// REQ-175 / ADR-043: after a valid LibreDWG file, JSON document + uint64 LE length + 16-byte magic.
+// REQ-175 / ADR-044: after a valid LibreDWG file, JSON document + uint64 LE length + 16-byte magic.
 constexpr char kMagic[16] = {'G', 'O', 'S', 'U', 'R', 'V', 'E', 'Y', '_', 'D', 'O', 'C', 'v', '1', '\n', '\0'};
 constexpr size_t kMagicLen = 16;
 constexpr size_t kLenLen = 8;

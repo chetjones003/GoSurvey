@@ -8,6 +8,7 @@
 #include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
 #include "CadFontName.hpp"
 #include "CadDimStroke.hpp"
+#include "util/cadtable.hpp"
 
 #include <cctype>
 
@@ -22,6 +23,7 @@
 #include <fstream>
 #include <filesystem>
 #include <map>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -69,6 +71,22 @@ bool ClipSeg(float xmin, float ymin, float xmax, float ymax, float& x0, float& y
   return false;
 }
 
+void SplitPlainTextLines(const std::string& plain, std::vector<std::string>* lines) {
+  if (!lines)
+    return;
+  lines->clear();
+  std::string ln;
+  for (const char ch : plain) {
+    if (ch == '\n') {
+      lines->push_back(ln);
+      ln.clear();
+    } else {
+      ln += ch;
+    }
+  }
+  lines->push_back(ln);
+}
+
 // Resolve a TrueType family name (REQ-049) to its .ttf file under the Windows Fonts directory, probing the
 // pure candidate list (alias, then de-spaced) from PlotFont.hpp. Returns "" if none exists (caller then
 // substitutes a base-14 font). The Fonts path matches the FontRegistry / CadCommands convention.
@@ -84,7 +102,7 @@ std::string ResolveTtfPath(const std::string& family) {
 
 }  // namespace
 
-bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutIndices, const char* pathUtf8,
+bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices, const char* pathUtf8,
                       std::vector<std::string>& log) {
   if (!pathUtf8 || !pathUtf8[0]) {
     log.push_back("PLOT — no output path.");
@@ -94,6 +112,8 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
     log.push_back("PLOT — no layouts selected.");
     return false;
   }
+
+  RefreshSurfaceDisplayGeometry(st);
 
   // Layer → plottable lookup (excludes off / frozen / non-plottable layers). Unknown layer → plottable.
   std::unordered_map<std::string, bool> layerPlot;
@@ -305,6 +325,47 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         if (ClipSeg(vx0, vy0, vx1, vy1, cx2, cy2, dx2, dy2))
           addSeg(cx2, cy2, dx2, dy2);
       }
+      // Surfaces (REQ-135): stroke the same display-geometry batches as the viewport.
+      for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+        if (!SurfaceVisible(st, si) || si >= st.cadSurfaceAttrs.size())
+          continue;
+        const EntityAttributes& attr = st.cadSurfaceAttrs[si];
+        if (!plottable(attr.layer) || IsLayerFrozenInViewport(vp, attr.layer))
+          continue;
+        const std::uint64_t id = attr.id;
+        auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
+                               [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
+        if (it == st.surfaceDisplayCache.end())
+          continue;
+        curColor = resolveRgb(attr.layer, attr.color);
+        auto emitSurf = [&](const std::vector<float>& verts) {
+          for (size_t i = 0; i + 5 < verts.size(); i += 6)
+            emitModelSeg(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
+                         static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY);
+        };
+        emitSurf(it->triangleEdges);
+        emitSurf(it->minorContours);
+        emitSurf(it->majorContours);
+        emitSurf(it->borderEdges);
+        for (const auto& ab : it->arrowLineBuffers)
+          emitSurf(ab);
+        auto wit = std::find_if(st.surfaceWatershedCache.begin(), st.surfaceWatershedCache.end(),
+                                [&](const AppCommandState::SurfaceWatershedCacheEntry& e) {
+                                  return e.surfaceId == id;
+                                });
+        if (wit != st.surfaceWatershedCache.end()) {
+          emitSurf(wit->basinOutlines);
+        }
+      }
+      {
+        auto emitPreview = [&](const std::vector<float>& verts) {
+          for (size_t i = 0; i + 5 < verts.size(); i += 6)
+            emitModelSeg(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
+                         static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY);
+        };
+        emitPreview(st.catchmentPreviewLines);
+        emitPreview(st.waterDropPreviewLines);
+      }
       CadDimStrokeParams dsp;
       dsp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
       dsp.arrowSizeInches = st.activeDimensionStyle.arrowSizeInches;
@@ -346,18 +407,87 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       }
       for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
         const CadAnnotation& ann = st.cadAnnotations[ai];
-        if (CadAnnotationIsDimension(ann) || (ann.kind != CadAnnotation::Kind::Text && ann.kind != CadAnnotation::Kind::Mtext) ||
-            ann.text.empty())
+        if (CadAnnotationIsDimension(ann) ||
+            (ann.kind != CadAnnotation::Kind::Text && ann.kind != CadAnnotation::Kind::Mtext &&
+             ann.kind != CadAnnotation::Kind::Table) ||
+            (ann.kind != CadAnnotation::Kind::Table && ann.text.empty()))
           continue;
         const EntityAttributes* aa =
             (ai < st.cadAnnotationAttrs.size()) ? &st.cadAnnotationAttrs[ai] : nullptr;
         const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
         if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
           continue;
+        if (ann.kind == CadAnnotation::Kind::Table && ann.tableCols > 0) {
+          std::vector<CadTableCellRect> cells;
+          CadTableLayoutCells(ann.boxMinX, ann.boxMinY, ann.boxMaxX, ann.boxMaxY, ann.tableCols, ann.tableCells,
+                              &cells);
+          for (size_t ci = 0; ci < cells.size() && ci < ann.tableCells.size(); ++ci) {
+            float cpx = 0.f, cpy = 0.f;
+            m2p(static_cast<double>(cells[ci].x0) + oX, static_cast<double>(cells[ci].y0) + oY, &cpx, &cpy);
+            if (cpx < vx0 || cpx > vx1 || cpy < vy0 || cpy > vy1)
+              continue;
+            VpDimLabel tlab;
+            tlab.px = cpx;
+            tlab.py = cpy;
+            tlab.rot = 0.f;
+            tlab.Hin =
+                (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
+            tlab.text = ann.tableCells[ci];
+            tlab.fontFamily = ann.fontFamily;
+            tlab.rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+            vpDimLabels.push_back(std::move(tlab));
+          }
+          continue;
+        }
+        if (ann.kind == CadAnnotation::Kind::Mtext) {
+          const std::string plain = MtextRichFlattenToPlain(ann.text);
+          std::vector<std::string> lines;
+          SplitPlainTextLines(plain, &lines);
+          const float Hm = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
+          const float lineHm = Hm * 1.4f;
+          int attach = ann.mtextAttach;
+          if (attach < 1 || attach > 9)
+            attach = 1;
+          const int acol = (attach - 1) % 3;
+          const int arow = (attach - 1) / 3;
+          const float boxW = ann.boxMaxX - ann.boxMinX;
+          const float boxH = ann.boxMaxY - ann.boxMinY;
+          const float blockH = static_cast<float>(lines.size()) * lineHm;
+          float blockTopY = ann.boxMaxY;
+          if (arow == 1)
+            blockTopY = ann.boxMinY + 0.5f * (boxH + blockH);
+          else if (arow == 2)
+            blockTopY = ann.boxMinY + blockH;
+          float baseY = blockTopY - Hm;
+          const float Hin =
+              (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
+          const uint32_t rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+          for (const std::string& ln : lines) {
+            float x = ann.boxMinX;
+            const float estW = static_cast<float>(ln.size()) * Hm * 0.6f;
+            if (acol == 1)
+              x = ann.boxMinX + 0.5f * (boxW - estW);
+            else if (acol == 2)
+              x = ann.boxMaxX - estW;
+            float lpx = 0.f, lpy = 0.f;
+            m2p(static_cast<double>(x) + oX, static_cast<double>(baseY) + oY, &lpx, &lpy);
+            if (lpx >= vx0 && lpx <= vx1 && lpy >= vy0 && lpy <= vy1 && !ln.empty()) {
+              VpDimLabel lab;
+              lab.px = lpx;
+              lab.py = lpy;
+              lab.rot = ann.rotationRad;
+              lab.Hin = Hin;
+              lab.text = ln;
+              lab.fontFamily = ann.fontFamily;
+              lab.rgb = rgb;
+              vpDimLabels.push_back(std::move(lab));
+            }
+            baseY -= lineHm;
+          }
+          continue;
+        }
         float lpx = 0.f, lpy = 0.f;
-        const float wx = (ann.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (ann.boxMinX + ann.boxMaxX) : ann.insX;
-        const float wy = (ann.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (ann.boxMinY + ann.boxMaxY) : ann.insY;
-        m2p(static_cast<double>(wx) + oX, static_cast<double>(wy) + oY, &lpx, &lpy);
+        m2p(static_cast<double>(ann.insX) + oX, static_cast<double>(ann.insY) + oY, &lpx, &lpy);
         if (lpx < vx0 || lpx > vx1 || lpy < vy0 || lpy > vy1)
           continue;
         VpDimLabel lab;
@@ -365,10 +495,35 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         lab.py = lpy;
         lab.rot = ann.rotationRad;
         lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
-        lab.text = (ann.kind == CadAnnotation::Kind::Mtext) ? MtextRichFlattenToPlain(ann.text) : ann.text;
+        lab.text = ann.text;
         lab.fontFamily = ann.fontFamily;
         lab.rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
         vpDimLabels.push_back(std::move(lab));
+      }
+      for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+        const CadTable& tbl = st.cadTables[ti];
+        const EntityAttributes* ta =
+            (ti < st.cadTableAttrs.size()) ? &st.cadTableAttrs[ti] : nullptr;
+        const std::string layer = ta ? (ta->layer.empty() ? std::string("0") : ta->layer) : std::string("0");
+        if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
+          continue;
+        std::vector<CadTableCellRect> cells;
+        CadTableLayoutWorldCells(tbl, &cells);
+        for (size_t ci = 0; ci < cells.size() && ci < tbl.cells.size(); ++ci) {
+          float cpx = 0.f, cpy = 0.f;
+          m2p(static_cast<double>(cells[ci].x0) + oX, static_cast<double>(cells[ci].y1) + oY, &cpx, &cpy);
+          if (cpx < vx0 || cpx > vx1 || cpy < vy0 || cpy > vy1)
+            continue;
+          VpDimLabel tlab;
+          tlab.px = cpx;
+          tlab.py = cpy;
+          tlab.rot = tbl.rotationRad;
+          tlab.Hin = (std::max)(0.01f, tbl.plottedHeightInches);
+          tlab.text = tbl.cells[ci];
+          tlab.fontFamily = tbl.fontFamily;
+          tlab.rgb = (ta) ? resolveRgb(layer, ta->color) : resolveRgb(layer, "ByLayer");
+          vpDimLabels.push_back(std::move(tlab));
+        }
       }
       // Viewport border — only if the viewport's layer is plottable. Always black.
       if (plottable(vp.layer)) {
@@ -463,6 +618,16 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         if (a && !plottable(a->layer)) continue;
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
         addSeg(L.paperLines[i], L.paperLines[i + 1], L.paperLines[i + 3], L.paperLines[i + 4]);
+      }
+      for (size_t bi = 0; bi < L.paperBlockRefs.size(); ++bi) {
+        const EntityAttributes* a = sheetAttr(L.paperBlockRefAttrs, bi);
+        if (a && !plottable(a->layer))
+          continue;
+        curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        std::vector<CadBlockWorldSeg> segs;
+        CadBlockCollectWorldLines(st.blockDefs, L.paperBlockRefs[bi], a ? *a : EntityAttributes{}, &segs);
+        for (const CadBlockWorldSeg& s : segs)
+          addSeg(s.x0, s.y0, s.x1, s.y1);
       }
       // Circles (sampled to a polygon).
       for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
@@ -616,14 +781,7 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
           const std::string plain = MtextRichFlattenToPlain(a.text);
           const float lineH = H * 1.4f;
           std::vector<std::string> lines;
-          {
-            std::string ln;
-            for (char ch : plain) {
-              if (ch == '\n') { lines.push_back(ln); ln.clear(); }
-              else ln += ch;
-            }
-            lines.push_back(ln);
-          }
+          SplitPlainTextLines(plain, &lines);
           // Honor MTEXT attachment (group 71) exactly like the on-screen paper overlay: col 0/1/2 =
           // left/center/right, row 0/1/2 = top/middle/bottom. Without this, center/middle title-block values
           // (e.g. "DRY COOLER") plot at the box's top-left and collide with their labels.

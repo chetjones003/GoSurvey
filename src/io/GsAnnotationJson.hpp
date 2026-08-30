@@ -4,6 +4,7 @@
 #include <string>
 
 #include "CadEntities.hpp"
+#include "util/cadtable.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -22,6 +23,8 @@
     return "dimlinear";
   case CadAnnotation::Kind::DimAngular:
     return "dimangular";
+  case CadAnnotation::Kind::Table:
+    return "table";
   }
   return "text";
 }
@@ -35,6 +38,8 @@
     return CadAnnotation::Kind::DimLinear;
   if (s == "dimangular")
     return CadAnnotation::Kind::DimAngular;
+  if (s == "table")
+    return CadAnnotation::Kind::Table;
   return CadAnnotation::Kind::Text;
 }
 
@@ -90,6 +95,10 @@ inline void CadAnnotationToJson(const CadAnnotation& a, nlohmann::json& o) {
     o["surveyLabelUserOffsetEast"] = a.surveyLabelUserOffsetEast;
     o["surveyLabelUserOffsetNorth"] = a.surveyLabelUserOffsetNorth;
   }
+  if (a.kind == CadAnnotation::Kind::Table) {
+    o["tableCols"] = a.tableCols;
+    o["tableCells"] = a.tableCells;
+  }
 }
 
 inline CadAnnotation CadAnnotationFromJson(const nlohmann::json& o) {
@@ -133,5 +142,42 @@ inline CadAnnotation CadAnnotationFromJson(const nlohmann::json& o) {
   a.surveyLabelHasUserOffset = o.value("surveyLabelHasUserOffset", a.surveyLabelHasUserOffset);
   a.surveyLabelUserOffsetEast = o.value("surveyLabelUserOffsetEast", a.surveyLabelUserOffsetEast);
   a.surveyLabelUserOffsetNorth = o.value("surveyLabelUserOffsetNorth", a.surveyLabelUserOffsetNorth);
+  a.tableCols = o.value("tableCols", a.tableCols);
+  if (o.contains("tableCells") && o["tableCells"].is_array())
+    a.tableCells = o["tableCells"].get<std::vector<std::string>>();
   return a;
+}
+
+inline void CadTableToJson(const CadTable& t, nlohmann::json& o) {
+  o["insX"] = t.insX;
+  o["insY"] = t.insY;
+  if (t.insZ != 0.f)
+    o["insZ"] = t.insZ;
+  o["width"] = t.width;
+  o["height"] = t.height;
+  o["rotationRad"] = t.rotationRad;
+  if (t.localYFlipped)
+    o["localYFlipped"] = true;
+  o["cols"] = t.cols;
+  o["cells"] = t.cells;
+  o["plottedHeightInches"] = t.plottedHeightInches;
+  if (!t.fontFamily.empty())
+    o["fontFamily"] = t.fontFamily;
+}
+
+[[nodiscard]] inline CadTable CadTableFromJson(const nlohmann::json& o) {
+  CadTable t;
+  t.insX = o.value("insX", t.insX);
+  t.insY = o.value("insY", t.insY);
+  t.insZ = o.value("insZ", t.insZ);
+  t.width = o.value("width", t.width);
+  t.height = o.value("height", t.height);
+  t.rotationRad = o.value("rotationRad", t.rotationRad);
+  t.localYFlipped = o.value("localYFlipped", t.localYFlipped);
+  t.cols = o.value("cols", t.cols);
+  if (o.contains("cells") && o["cells"].is_array())
+    t.cells = o["cells"].get<std::vector<std::string>>();
+  t.plottedHeightInches = o.value("plottedHeightInches", t.plottedHeightInches);
+  t.fontFamily = o.value("fontFamily", t.fontFamily);
+  return t;
 }

@@ -1,0 +1,12 @@
+# REQ-140 — VOLREPORT after VOLUMES inserts MTEXT.
+
+NEW
+
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE Base, Existing Ground
+CMD SURFACECREATE Comp, Existing Ground
+CMD VOLUMES Base, Comp
+EXPECT LOG "cut"
+CMD VOLREPORT
+EXPECT LOG "MTEXT inserted"
+CHECK ALL

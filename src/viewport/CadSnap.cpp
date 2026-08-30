@@ -2,6 +2,7 @@
 
 #include "SurveyPoints.hpp"
 #include "geom2d.hpp"
+#include "util/cadblock.hpp"
 #include "util/curveintersect.hpp"
 
 #include <algorithm>
@@ -634,6 +635,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   const bool wantApparentIntersection = want(Kind::ApparentIntersection, cmd.objectSnapApparentIntersection);
   const bool wantSurveyPoint = want(Kind::SurveyCenter, cmd.objectSnapSurveyPoint);
   const bool wantPerpendicular = want(Kind::Perpendicular, cmd.objectSnapPerpendicular);
+  const bool wantSurface = want(Kind::Surface, cmd.objectSnapSurface);
 
   float refPx = 0.f;
   float refPy = 0.f;
@@ -851,6 +853,46 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float p2 = MinDistSqToSurveyMarker(wx, wy, sp.easting, sp.northing, arm);
       ConsiderSnap(&acc, wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, p2, tolWorld, sp.elevation);  // elevation IS the point's Z (REQ-057)
     }
+  }
+
+  // --- Placed block instances (REQ-107, D-2026-08-29-i) ---
+  // Expand each INSERT to world geometry and offer Endpoint on its segment ends and its insertion
+  // point, Midpoint on its segment midpoints, and Center on its circles/arcs/ellipses — same
+  // Consider/ConsiderSnap path, tolerance and ranking as native entities. The ghost being inserted
+  // lives only in the rubber preview, never in cadBlockRefs, so it cannot snap to itself.
+  if (wantEndpoint || wantMidpoint || wantCenter) {
+    std::vector<CadBlockWorldSeg> bsegs;
+    std::vector<CadBlockWorldPoint> bctr;
+    for (const CadBlockRef& br : cmd.cadBlockRefs) {
+      if (wantEndpoint)
+        Consider(&acc, wx, wy, br.xf.x, br.xf.y, Kind::Endpoint, tolWorld, br.xf.z);
+      if (wantEndpoint || wantMidpoint) {
+        bsegs.clear();
+        CadBlockCollectWorldLines(cmd.blockDefs, br, EntityAttributes{}, &bsegs);
+        for (const CadBlockWorldSeg& s : bsegs) {
+          if (wantEndpoint) {
+            Consider(&acc, wx, wy, s.x0, s.y0, Kind::Endpoint, tolWorld, s.z0);
+            Consider(&acc, wx, wy, s.x1, s.y1, Kind::Endpoint, tolWorld, s.z1);
+          }
+          if (wantMidpoint)
+            Consider(&acc, wx, wy, 0.5f * (s.x0 + s.x1), 0.5f * (s.y0 + s.y1), Kind::Midpoint, tolWorld,
+                     0.5f * (s.z0 + s.z1));
+        }
+      }
+      if (wantCenter) {
+        bctr.clear();
+        CadBlockCollectWorldCenters(cmd.blockDefs, br, &bctr);
+        for (const CadBlockWorldPoint& p : bctr)
+          Consider(&acc, wx, wy, p.x, p.y, Kind::Center, tolWorld, p.z);
+      }
+    }
+  }
+
+  if (wantSurface) {
+    float z = 0.f;
+    if (SurfaceSnapElevation(cmd, wx, wy, &z))
+      Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(wx),
+               static_cast<float>(wy), Kind::Surface, tolWorld, z);
   }
 
   // --- PDF underlay snap points ---
@@ -1075,6 +1117,15 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         PushSnapPickerEntry(L[i + 3], L[i + 4], Kind::Endpoint, sortWorldX, sortWorldY, out, L[i + 5]);
       }
     }
+    for (const CadBlockRef& br : cmd.cadBlockRefs) {
+      PushSnapPickerEntry(br.xf.x, br.xf.y, Kind::Endpoint, sortWorldX, sortWorldY, out, br.xf.z);
+      std::vector<CadBlockWorldSeg> segs;
+      CadBlockCollectWorldLines(cmd.blockDefs, br, EntityAttributes{}, &segs);
+      for (const CadBlockWorldSeg& s : segs) {
+        PushSnapPickerEntry(s.x0, s.y0, Kind::Endpoint, sortWorldX, sortWorldY, out, s.z0);
+        PushSnapPickerEntry(s.x1, s.y1, Kind::Endpoint, sortWorldX, sortWorldY, out, s.z1);
+      }
+    }
     const int polyCount =
         static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
     for (int pi = 0; pi < polyCount; ++pi) {
@@ -1119,6 +1170,13 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out,
                             0.5f * (L[i + 2] + L[i + 5]));
       }
+    }
+    for (const CadBlockRef& br : cmd.cadBlockRefs) {
+      std::vector<CadBlockWorldSeg> segs;
+      CadBlockCollectWorldLines(cmd.blockDefs, br, EntityAttributes{}, &segs);
+      for (const CadBlockWorldSeg& s : segs)
+        PushSnapPickerEntry(0.5f * (s.x0 + s.x1), 0.5f * (s.y0 + s.y1), Kind::Midpoint, sortWorldX, sortWorldY,
+                            out, 0.5f * (s.z0 + s.z1));
     }
     const int polyCount =
         static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
@@ -1326,6 +1384,12 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   }
   case Kind::Grip:
     break; // grip snap points are per-selection, not gathered globally
+  case Kind::Surface: {
+    float z = 0.f;
+    if (SurfaceSnapElevation(cmd, static_cast<double>(sortWorldX), static_cast<double>(sortWorldY), &z))
+      PushSnapPickerEntry(sortWorldX, sortWorldY, Kind::Surface, sortWorldX, sortWorldY, out, z);
+    break;
+  }
   }
   SortDedupeSnapPicker(out);
 }

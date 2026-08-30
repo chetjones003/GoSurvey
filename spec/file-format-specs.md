@@ -20,7 +20,7 @@ Autodesk ODA membership and **without** Leica/Autodesk native scan-project SDKs.
 | Rasters | JPEG, PNG, BMP | drawing **IMAGE** underlays; file read/write |
 | BIM | IFC | **view only** (tessellate to REQ-063 meshes) |
 
-`.dwg` is the drawing document (REQ-175 / ADR-043). `.gs` remains for workspace templates and a
+`.dwg` is the drawing document (REQ-175 / ADR-044). `.gs` remains for workspace templates and a
 future project file; its JSON document is also the GoSurvey payload inside a saved DWG.
 
 ---

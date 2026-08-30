@@ -238,3 +238,15 @@ TEST_CASE("Banding by elevation and by slope use the same rule", "[surface][req0
   const std::vector<double> slopeBounds{5.0, 10.0, 15.0};
   CHECK(AssignBand(TrianglePlaneSlopePct(t), slopeBounds) == 2);  // exactly 10% -> the band above
 }
+
+TEST_CASE("Downhill aspect is azimuth from +Y toward +X", "[surface][req130][analysis]") {
+  const AnalysisTriangle west{0.0, 0.0, 0.0, 10.0, 0.0, 5.0, 0.0, 10.0, 0.0};  // z = x/2, falls west
+  double deg = -1.0;
+  REQUIRE(TriangleDownhillAspectDeg(west, kFlatGradePctDefault, &deg));
+  CHECK(deg == Approx(270.0).margin(1.0e-6));
+
+  const AnalysisTriangle flat{0.0, 0.0, 5.0, 10.0, 0.0, 5.0, 0.0, 10.0, 5.0};
+  double untouched = 42.0;
+  CHECK_FALSE(TriangleDownhillAspectDeg(flat, kFlatGradePctDefault, &untouched));
+  CHECK(untouched == 42.0);
+}

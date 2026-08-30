@@ -34,5 +34,5 @@ bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<
 bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 
-/// Trailer JSON for SAMEFILE (ADR-043 (e)). Empty if this is not a GoSurvey DWG.
+/// Trailer JSON for SAMEFILE (ADR-044 (e)). Empty if this is not a GoSurvey DWG.
 bool TryGoSurveyDwgPayloadFromBytes(std::string_view fileBytes, std::string& jsonOut);

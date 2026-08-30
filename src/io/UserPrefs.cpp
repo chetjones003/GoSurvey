@@ -241,6 +241,7 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   b  ("objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
   b  ("objectSnapIntersection", &st.objectSnapIntersection);
   b  ("objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
+  b  ("objectSnapSurface",             &st.objectSnapSurface);
   num("objectSnapAperturePx",      &st.objectSnapAperturePx,  4.f, 64.f);
   num("objectSnapGlyphHalfPx",     &st.objectSnapGlyphHalfPx, 3.f, 48.f);
   num("gripSizePx",                &st.gripSizePx,            2.f, 20.f);
@@ -389,7 +390,14 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["prefsSchemaVersion"] = 1;
 
   s["trimState"] = st.trimState;
-  s["activeRibbonTab"] = st.activeRibbonTab;
+  {
+    int tab = st.activeRibbonTab;
+    if (tab == kRibbonTabSurfaceCtx)
+      tab = st.ribbonTabBeforeSurfaceCtx;
+    if (tab == kRibbonTabSurveyPointCtx)
+      tab = st.ribbonTabBeforeSurveyPointCtx;
+    s["activeRibbonTab"] = std::clamp(tab, 0, kRibbonTabCount - 1);
+  }
   s["filletRadius"] = st.filletRadius;
   s["cornerTrimMode"] = st.cornerTrimMode;
   s["chamferDist1"] = st.chamferDist1;
@@ -445,6 +453,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["viewportVisualStyle"]        = static_cast<int>(st.viewportVisualStyle);
   s["objectSnapIntersection"]     = st.objectSnapIntersection;
   s["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
+  s["objectSnapSurface"]              = st.objectSnapSurface;
   s["objectSnapAperturePx"]       = st.objectSnapAperturePx;
   s["objectSnapGlyphHalfPx"]      = st.objectSnapGlyphHalfPx;
   s["gripSizePx"]                 = st.gripSizePx;

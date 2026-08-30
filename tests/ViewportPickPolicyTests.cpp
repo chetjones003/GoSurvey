@@ -47,7 +47,8 @@ TEST_CASE("Every pick-driven command is routed by the model-space viewport", "[v
       K::Line, K::Circle, K::Polyline, K::FeatureLine, K::Rect, K::Arc, K::Ellipse,
       K::Text, K::Mtext, K::DimAligned, K::DimLinear, K::DimAngular,
       // Inquiry / placement.
-      K::IdPoint, K::SurveyInverse, K::SurfaceElevGrade, K::Paste,
+      K::IdPoint, K::SurveyInverse, K::SurfaceElevGrade, K::WaterDrop, K::Catchment, K::SwapTinEdge,
+      K::AddTinPoint, K::DelTinPoint, K::MoveTinPoint, K::DelTinLine, K::QuickProfile, K::Paste,
       // Modify commands.
       K::Move, K::Copy, K::Rotate, K::Scale, K::Array, K::Delete, K::Join, K::Trim, K::Offset, K::Align,
       // REQ-103 — the five this test was written for.
@@ -219,6 +220,18 @@ TEST_CASE("Ignore is a decision, not an omission", "[viewport][pick][task099]") 
   REQUIRE(ViewportClickRouteFor(pdf) == ViewportClickRoute::Ignore);
   pdf.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitInsertPoint;
   REQUIRE(ViewportClickRouteFor(pdf) == ViewportClickRoute::PdfAttachInsertPoint);
+
+  AppCommandState ins = AtFirstPrompt(K::InsertBlock);
+  ins.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
+  REQUIRE(ViewportClickRouteFor(ins) == ViewportClickRoute::Ignore);
+  ins.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  REQUIRE(ViewportClickRouteFor(ins) == ViewportClickRoute::InsertBlockPick);
+  ins.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitScale;
+  REQUIRE(ViewportClickRouteFor(ins) == ViewportClickRoute::InsertBlockPick);
+  ins.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitRotation;
+  REQUIRE(ViewportClickRouteFor(ins) == ViewportClickRoute::InsertBlockPick);
+  ins.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitAttributes;
+  REQUIRE(ViewportClickRouteFor(ins) == ViewportClickRoute::Ignore);
 }
 
 TEST_CASE("No active command means idle selection, not nothing", "[viewport][pick][task099]") {

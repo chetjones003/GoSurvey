@@ -37,9 +37,15 @@ TEST_CASE("EnsureStandard creates a Standard style when missing") {
   TextStyle& s = TextStyles::EnsureStandard(styles);
   REQUIRE(styles.size() == 1);
   REQUIRE(s.name == std::string(TextStyles::kStandardName));
+  REQUIRE(s.fontFamily == std::string(TextStyles::kDefaultFontFamily));
   // Idempotent: a second call does not duplicate it.
   TextStyles::EnsureStandard(styles);
   REQUIRE(styles.size() == 1);
+}
+
+TEST_CASE("EffectiveFontFamily maps empty to romans.shx") {
+  REQUIRE(TextStyles::EffectiveFontFamily("") == std::string(TextStyles::kDefaultFontFamily));
+  REQUIRE(TextStyles::EffectiveFontFamily("Arial") == "Arial");
 }
 
 TEST_CASE("Find locates a style by exact name, or returns nullptr") {

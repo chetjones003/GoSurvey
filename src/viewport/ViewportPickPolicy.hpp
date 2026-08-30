@@ -79,6 +79,8 @@ enum class ViewportClickRoute : std::uint8_t {
   HatchPick,
   /// PDFATTACH's insertion point has its own commit function.
   PdfAttachInsertPoint,
+  /// INSERT's on-screen insertion point, scale, or rotation pick.
+  InsertBlockPick,
 };
 
 /// \see ViewportClickRoute. Model space (and floating model space) only — pure paper space has its
@@ -109,6 +111,14 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::SurveyInverse:
   case K::Paste:
   case K::SurfaceElevGrade:
+  case K::WaterDrop:
+  case K::Catchment:
+  case K::SwapTinEdge:
+  case K::AddTinPoint:
+  case K::DelTinPoint:
+  case K::MoveTinPoint:
+  case K::DelTinLine:
+  case K::QuickProfile:
     return R::SnappedPointPick;
 
   // --- Entity-pick commands: raw cursor, hit-tested by PickClosestCadEntity. ---
@@ -211,6 +221,13 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     return cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint
                ? R::PdfAttachInsertPoint
                : R::Ignore;  // dialog / async build / scale / rotation phases take no viewport click
+  case K::InsertBlock: {
+    using IPh = AppCommandState::InsertBlockPhase;
+    return (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
+            cmd.insertBlockPhase == IPh::WaitRotation)
+               ? R::InsertBlockPick
+               : R::Ignore;  // dialog / attribute prompt — clicks go to ImGui
+  }
 
   // --- Deliberately click-less in model space. ---
   case K::Pan:
@@ -291,6 +308,7 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::SnappedPointPick:
   case R::HatchPick:
   case R::PdfAttachInsertPoint:
+  case R::InsertBlockPick:
   case R::Ignore:
     return false;
   }

@@ -16,6 +16,7 @@
 //     difference REQ-203's "save a .gs and diff" condition exists to detect.
 
 #include "CadCommands.hpp"
+#include "CadBlocks.hpp"
 #include "DxfIo.hpp"
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
@@ -361,6 +362,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
 
   if (verb == "NEW") {
     run.st = AppCommandState{};
+    LoadBundledBlockLibrary(run.st, run.log);
     run.log.push_back("[driver] NEW");
   } else if (verb == "SPACE") {
     // SPACE PAPER | SPACE MODEL — switch the active space, so a transcript can exercise the
@@ -577,12 +579,20 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       SubmitTrimViewportPick(run.st, x, y, 1.f, run.log);
       break;
     case ViewportClickRoute::HatchPick:
-    case ViewportClickRoute::PdfAttachInsertPoint:
       Fail(run, "state",
-           "CLICK cannot drive this command yet (HATCH boundary tracing / PDFATTACH insertion are "
-           "not wired into the driver); add the route here when a transcript needs it",
+           "CLICK cannot drive this command yet (HATCH boundary tracing is not wired into the "
+           "driver); add the route here when a transcript needs it",
            sourceLine);
       return false;
+    case ViewportClickRoute::PdfAttachInsertPoint:
+      Fail(run, "state",
+           "CLICK cannot drive this command yet (PDFATTACH insertion is not wired into the "
+           "driver); add the route here when a transcript needs it",
+           sourceLine);
+      return false;
+    case ViewportClickRoute::InsertBlockPick:
+      SubmitInsertBlockPick(run.st, x, y, run.log);
+      break;
     case ViewportClickRoute::Ignore:
       // The whole point of this verb: a command the UI does not route is a failure, not a no-op.
       Fail(run, "state",
@@ -1317,6 +1327,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         got = static_cast<long>(run.st.userEllipses.size());
       else if (what == "ANNOTATIONS")
         got = static_cast<long>(run.st.cadAnnotations.size());
+      else if (what == "TABLES")
+        got = static_cast<long>(run.st.cadTables.size());
       else if (what == "SURVEYPOINTS")
         got = static_cast<long>(run.st.surveyPoints.size());
       // Not a geometry count: what the drawing currently considers picked. It is the only way to
@@ -1383,7 +1395,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       else {
         Fail(run, "parse",
              "EXPECT: unknown quantity " + what +
-                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED"
+                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS TABLES SURVEYPOINTS SELECTED"
                  " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
                  " EXTRACTMATCHESDISPLAY"
                  " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN SURFACEBANDTRIS SURFACEARROWSEGS"

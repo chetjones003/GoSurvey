@@ -46,6 +46,260 @@ EntityAttributes EntityAttributesFromJson(const json& o) {
   return e;
 }
 
+void CadBlockXformToJson(const CadBlockXform& xf, json& o) {
+  o["x"] = xf.x;
+  o["y"] = xf.y;
+  o["z"] = xf.z;
+  o["sx"] = xf.sx;
+  o["sy"] = xf.sy;
+  o["sz"] = xf.sz;
+  o["rotX"] = xf.rotX;
+  o["rotY"] = xf.rotY;
+  o["rotZ"] = xf.rotZ;
+}
+
+CadBlockXform CadBlockXformFromJson(const json& o) {
+  CadBlockXform xf;
+  xf.x = o.value("x", xf.x);
+  xf.y = o.value("y", xf.y);
+  xf.z = o.value("z", xf.z);
+  xf.sx = o.value("sx", xf.sx);
+  xf.sy = o.value("sy", xf.sy);
+  xf.sz = o.value("sz", xf.sz);
+  xf.rotX = o.value("rotX", xf.rotX);
+  xf.rotY = o.value("rotY", xf.rotY);
+  xf.rotZ = o.value("rotZ", xf.rotZ);
+  return xf;
+}
+
+json CadBlockContentToJson(const CadBlockContent& c) {
+  json o;
+  o["lines"] = c.lines;
+  json la = json::array();
+  for (const auto& a : c.lineAttrs) {
+    json e;
+    EntityAttributesToJson(a, e);
+    la.push_back(std::move(e));
+  }
+  o["lineAttrs"] = std::move(la);
+  o["lineVis"] = c.lineVis;
+  o["circles"] = c.circles;
+  json ca = json::array();
+  for (const auto& a : c.circleAttrs) {
+    json e;
+    EntityAttributesToJson(a, e);
+    ca.push_back(std::move(e));
+  }
+  o["circleAttrs"] = std::move(ca);
+  json nested = json::array();
+  for (const CadBlockNested& n : c.nested) {
+    json nj;
+    nj["defName"] = n.defName;
+    json xf;
+    CadBlockXformToJson(n.xf, xf);
+    nj["xf"] = std::move(xf);
+    nj["visState"] = n.visState;
+    nested.push_back(std::move(nj));
+  }
+  o["nested"] = std::move(nested);
+  json texts = json::array();
+  for (const CadAnnotation& t : c.texts) {
+    json tj;
+    CadAnnotationToJson(t, tj);
+    texts.push_back(std::move(tj));
+  }
+  o["texts"] = std::move(texts);
+  return o;
+}
+
+CadBlockContent CadBlockContentFromJson(const json& o) {
+  CadBlockContent c;
+  if (o.contains("lines") && o["lines"].is_array())
+    c.lines = o["lines"].get<std::vector<float>>();
+  if (o.contains("lineAttrs") && o["lineAttrs"].is_array()) {
+    for (const auto& e : o["lineAttrs"])
+      c.lineAttrs.push_back(EntityAttributesFromJson(e));
+  }
+  if (o.contains("lineVis") && o["lineVis"].is_array())
+    c.lineVis = o["lineVis"].get<std::vector<std::string>>();
+  if (o.contains("circles") && o["circles"].is_array())
+    c.circles = o["circles"].get<std::vector<float>>();
+  if (o.contains("circleAttrs") && o["circleAttrs"].is_array()) {
+    for (const auto& e : o["circleAttrs"])
+      c.circleAttrs.push_back(EntityAttributesFromJson(e));
+  }
+  if (o.contains("nested") && o["nested"].is_array()) {
+    for (const auto& nj : o["nested"]) {
+      CadBlockNested n;
+      n.defName = nj.value("defName", "");
+      if (nj.contains("xf"))
+        n.xf = CadBlockXformFromJson(nj["xf"]);
+      n.visState = nj.value("visState", "");
+      c.nested.push_back(std::move(n));
+    }
+  }
+  if (o.contains("texts") && o["texts"].is_array()) {
+    for (const auto& t : o["texts"])
+      c.texts.push_back(CadAnnotationFromJson(t));
+  }
+  return c;
+}
+
+json CadBlockDefToJson(const CadBlockDefinition& d) {
+  json o;
+  o["id"] = d.id;
+  o["name"] = d.name;
+  o["description"] = d.description;
+  o["baseX"] = d.baseX;
+  o["baseY"] = d.baseY;
+  o["baseZ"] = d.baseZ;
+  o["units"] = d.units;
+  o["metadata"] = d.metadata;
+  o["content"] = CadBlockContentToJson(d.content);
+  json ads = json::array();
+  for (const CadBlockAttrDef& a : d.attrDefs) {
+    json aj;
+    aj["tag"] = a.tag;
+    aj["prompt"] = a.prompt;
+    aj["defaultValue"] = a.defaultValue;
+    aj["localX"] = a.localX;
+    aj["localY"] = a.localY;
+    aj["localZ"] = a.localZ;
+    aj["height"] = a.height;
+    aj["rotationRad"] = a.rotationRad;
+    ads.push_back(std::move(aj));
+  }
+  o["attrDefs"] = std::move(ads);
+  json pars = json::array();
+  for (const CadBlockParameter& p : d.parameters) {
+    json pj;
+    pj["name"] = p.name;
+    pj["kind"] = static_cast<int>(p.kind);
+    pj["value"] = p.value;
+    pars.push_back(std::move(pj));
+  }
+  o["parameters"] = std::move(pars);
+  json acts = json::array();
+  for (const CadBlockAction& a : d.actions) {
+    json aj;
+    aj["kind"] = static_cast<int>(a.kind);
+    aj["paramName"] = a.paramName;
+    aj["originX"] = a.originX;
+    aj["originY"] = a.originY;
+    aj["dirX"] = a.dirX;
+    aj["dirY"] = a.dirY;
+    aj["threshold"] = a.threshold;
+    aj["applyTo"] = a.applyTo;
+    aj["labelGroup"] = a.labelGroup;
+    acts.push_back(std::move(aj));
+  }
+  o["actions"] = std::move(acts);
+  o["visibilityStates"] = d.visibilityStates;
+  return o;
+}
+
+CadBlockDefinition CadBlockDefFromJson(const json& o) {
+  CadBlockDefinition d;
+  d.id = o.value("id", d.id);
+  d.name = o.value("name", d.name);
+  d.description = o.value("description", d.description);
+  d.baseX = o.value("baseX", d.baseX);
+  d.baseY = o.value("baseY", d.baseY);
+  d.baseZ = o.value("baseZ", d.baseZ);
+  d.units = o.value("units", d.units);
+  d.metadata = o.value("metadata", d.metadata);
+  if (o.contains("content"))
+    d.content = CadBlockContentFromJson(o["content"]);
+  if (o.contains("attrDefs") && o["attrDefs"].is_array()) {
+    for (const auto& aj : o["attrDefs"]) {
+      CadBlockAttrDef a;
+      a.tag = aj.value("tag", "");
+      a.prompt = aj.value("prompt", "");
+      a.defaultValue = aj.value("defaultValue", "");
+      a.localX = aj.value("localX", 0.f);
+      a.localY = aj.value("localY", 0.f);
+      a.localZ = aj.value("localZ", 0.f);
+      a.height = aj.value("height", 0.125f);
+      a.rotationRad = aj.value("rotationRad", 0.f);
+      d.attrDefs.push_back(std::move(a));
+    }
+  }
+  if (o.contains("parameters") && o["parameters"].is_array()) {
+    for (const auto& pj : o["parameters"]) {
+      CadBlockParameter p;
+      p.name = pj.value("name", "");
+      p.kind = static_cast<CadBlockParamKind>(pj.value("kind", 0));
+      p.value = pj.value("value", 0.f);
+      d.parameters.push_back(std::move(p));
+    }
+  }
+  if (o.contains("actions") && o["actions"].is_array()) {
+    for (const auto& aj : o["actions"]) {
+      CadBlockAction a;
+      a.kind = static_cast<CadBlockActionKind>(aj.value("kind", 0));
+      a.paramName = aj.value("paramName", "");
+      a.originX = aj.value("originX", 0.f);
+      a.originY = aj.value("originY", 0.f);
+      a.dirX = aj.value("dirX", 1.f);
+      a.dirY = aj.value("dirY", 0.f);
+      a.threshold = aj.value("threshold", 0.f);
+      a.applyTo = aj.value("applyTo", "");
+      a.labelGroup = aj.value("labelGroup", "");
+      d.actions.push_back(std::move(a));
+    }
+  }
+  if (o.contains("visibilityStates") && o["visibilityStates"].is_array())
+    d.visibilityStates = o["visibilityStates"].get<std::vector<std::string>>();
+  return d;
+}
+
+json CadBlockRefToJson(const CadBlockRef& r) {
+  json o;
+  o["defName"] = r.defName;
+  json xf;
+  CadBlockXformToJson(r.xf, xf);
+  o["xf"] = std::move(xf);
+  o["visState"] = r.visState;
+  json av = json::array();
+  for (const CadBlockAttrValue& v : r.attributes) {
+    json e;
+    e["tag"] = v.tag;
+    e["value"] = v.value;
+    av.push_back(std::move(e));
+  }
+  o["attributes"] = std::move(av);
+  json ps = json::array();
+  for (const CadBlockParameter& p : r.paramState) {
+    json e;
+    e["name"] = p.name;
+    e["value"] = p.value;
+    ps.push_back(std::move(e));
+  }
+  o["paramState"] = std::move(ps);
+  return o;
+}
+
+CadBlockRef CadBlockRefFromJson(const json& o) {
+  CadBlockRef r;
+  r.defName = o.value("defName", "");
+  if (o.contains("xf"))
+    r.xf = CadBlockXformFromJson(o["xf"]);
+  r.visState = o.value("visState", "");
+  if (o.contains("attributes") && o["attributes"].is_array()) {
+    for (const auto& e : o["attributes"])
+      r.attributes.push_back(CadBlockAttrValue{e.value("tag", ""), e.value("value", "")});
+  }
+  if (o.contains("paramState") && o["paramState"].is_array()) {
+    for (const auto& e : o["paramState"]) {
+      CadBlockParameter p;
+      p.name = e.value("name", "");
+      p.value = e.value("value", 0.f);
+      r.paramState.push_back(std::move(p));
+    }
+  }
+  return r;
+}
+
 void CadLayerRowToJson(const CadLayerRow& r, json& o) {
   o["name"] = r.name;
   o["on"] = r.on;
@@ -261,11 +515,18 @@ json BuildRoot(const AppCommandState& st) {
         // style: a key that appears on every file the moment it is opened is what BUG-015 and
         // BUG-019 were both made of.
         if (s.analysisMode != SurfaceAnalysisMode::None || s.slopeArrowsOn || !s.bands.empty() ||
-            !s.arrowBands.empty()) {
+            !s.arrowBands.empty() || !s.userContourFt.empty() || s.contourSmoothPasses != 0 ||
+            s.contourLabelSpacingFt != 0.0) {
           o["analysisMode"] = static_cast<int>(s.analysisMode);
           o["slopeArrowsOn"] = s.slopeArrowsOn;
           o["bands"] = bandsToJson(s.bands);
           o["arrowBands"] = bandsToJson(s.arrowBands);
+          if (!s.userContourFt.empty())
+            o["userContourFt"] = s.userContourFt;
+          if (s.contourSmoothPasses != 0)
+            o["contourSmoothPasses"] = s.contourSmoothPasses;
+          if (s.contourLabelSpacingFt != 0.0)
+            o["contourLabelSpacingFt"] = s.contourLabelSpacingFt;
         }
         styles.push_back(std::move(o));
       }
@@ -411,6 +672,11 @@ json BuildRoot(const AppCommandState& st) {
         }
         o["paperFilledRegions"] = std::move(pfills);
         o["paperFilledRegionAttrs"] = attrsToJson(l.paperFilledRegionAttrs);
+        json pbr = json::array();
+        for (const CadBlockRef& r : l.paperBlockRefs)
+          pbr.push_back(CadBlockRefToJson(r));
+        o["paperBlockRefs"] = std::move(pbr);
+        o["paperBlockRefAttrs"] = attrsToJson(l.paperBlockRefAttrs);
       }
       layouts.push_back(o);
     }
@@ -558,6 +824,47 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["annotationAttrs"] = std::move(annAttrs);
 
+  json tables = json::array();
+  for (const auto& t : st.cadTables) {
+    json o;
+    CadTableToJson(t, o);
+    tables.push_back(std::move(o));
+  }
+  if (!tables.empty())
+    doc["tables"] = std::move(tables);
+  json tableAttrs = json::array();
+  for (const auto& a : st.cadTableAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    tableAttrs.push_back(std::move(o));
+  }
+  if (!tableAttrs.empty())
+    doc["tableAttrs"] = std::move(tableAttrs);
+
+  doc["drawingInsUnits"] = st.drawingInsUnits;
+  json blockDefs = json::array();
+  for (const CadBlockDefinition& d : st.blockDefs)
+    blockDefs.push_back(CadBlockDefToJson(d));
+  if (!blockDefs.empty())
+    doc["blockDefs"] = std::move(blockDefs);
+  json blockRefs = json::array();
+  for (const CadBlockRef& r : st.cadBlockRefs)
+    blockRefs.push_back(CadBlockRefToJson(r));
+  if (!blockRefs.empty())
+    doc["blockRefs"] = std::move(blockRefs);
+  json blockRefAttrs = json::array();
+  for (const auto& a : st.cadBlockRefAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    blockRefAttrs.push_back(std::move(o));
+  }
+  if (!blockRefAttrs.empty())
+    doc["blockRefAttrs"] = std::move(blockRefAttrs);
+  if (!st.blockFavorites.empty())
+    doc["blockFavorites"] = st.blockFavorites;
+  if (!st.blockRecent.empty())
+    doc["blockRecent"] = st.blockRecent;
+
   // Filled regions (ADR-011): each is {verts:[x,y,…], loops:[startPairIdx,…]} + a parallel attribute object.
   json fills = json::array();
   for (const auto& fr : st.cadFilledRegions) {
@@ -673,17 +980,101 @@ json BuildRoot(const AppCommandState& st) {
         breaklines.push_back(std::move(blo));
       }
       o["breaklines"] = std::move(breaklines);
+      json contours = json::array();
+      for (const CadSurfaceBreakline& c : s.contourSources) {
+        json co;
+        co["entityId"] = c.entityId;
+        co["description"] = c.description;
+        contours.push_back(std::move(co));
+      }
+      o["contourSources"] = std::move(contours);
       json boundaries = json::array();
       for (const CadSurfaceBoundary& b : s.boundaries) {
         json bo;
         bo["entityId"] = b.entityId;
         bo["kind"] = b.kind == CadBoundaryKind::Outer ? "outer"
                     : b.kind == CadBoundaryKind::Hide  ? "hide"
-                                                        : "show";
+                    : b.kind == CadBoundaryKind::Show  ? "show"
+                    : b.kind == CadBoundaryKind::Mask  ? "mask"
+                                                       : "clip";
         bo["name"] = b.name;
         boundaries.push_back(std::move(bo));
       }
       o["boundaries"] = std::move(boundaries);
+      if (s.kind != SurfaceKind::Tin)
+        o["kind"] = s.kind == SurfaceKind::Grid         ? "grid"
+                    : s.kind == SurfaceKind::TinVolume  ? "tinVolume"
+                    : s.kind == SurfaceKind::GridVolume ? "gridVolume"
+                                                        : "corridor";
+      if (!s.description.empty())
+        o["description"] = s.description;
+      if (s.kind == SurfaceKind::Grid || s.kind == SurfaceKind::GridVolume) {
+        o["gridOriginX"] = s.gridOriginX;
+        o["gridOriginY"] = s.gridOriginY;
+        o["gridSpacingX"] = s.gridSpacingX;
+        o["gridSpacingY"] = s.gridSpacingY;
+        o["gridCols"] = s.gridCols;
+        o["gridRows"] = s.gridRows;
+        o["gridZ"] = s.gridZ;
+      }
+      if (!s.swappedEdgePicks.empty()) {
+        json swaps = json::array();
+        for (const auto& p : s.swappedEdgePicks) {
+          json sp;
+          sp["x"] = p.first;
+          sp["y"] = p.second;
+          swaps.push_back(std::move(sp));
+        }
+        o["swappedEdgePicks"] = std::move(swaps);
+      }
+      if (!s.deletedEdgePicks.empty()) {
+        json delsE = json::array();
+        for (const auto& p : s.deletedEdgePicks) {
+          json sp;
+          sp["x"] = p.first;
+          sp["y"] = p.second;
+          delsE.push_back(std::move(sp));
+        }
+        o["deletedEdgePicks"] = std::move(delsE);
+      }
+      if (!s.addedPointXyz.empty())
+        o["addedPointXyz"] = s.addedPointXyz;
+      if (!s.deletedPointPicks.empty()) {
+        json dels = json::array();
+        for (const auto& p : s.deletedPointPicks) {
+          json dp;
+          dp["x"] = p.first;
+          dp["y"] = p.second;
+          dels.push_back(std::move(dp));
+        }
+        o["deletedPointPicks"] = std::move(dels);
+      }
+      if (!s.movedPoints.empty()) {
+        json moves = json::array();
+        for (const auto& m : s.movedPoints) {
+          json mo;
+          mo["fromX"] = m.fromX;
+          mo["fromY"] = m.fromY;
+          mo["toX"] = m.toX;
+          mo["toY"] = m.toY;
+          mo["toZ"] = m.toZ;
+          moves.push_back(std::move(mo));
+        }
+        o["movedPoints"] = std::move(moves);
+      }
+      json corr = json::array();
+      for (const CadSurfaceBreakline& fl : s.corridorFeatureLines) {
+        json flo;
+        flo["entityId"] = fl.entityId;
+        flo["description"] = fl.description;
+        corr.push_back(std::move(flo));
+      }
+      if (!corr.empty())
+        o["corridorFeatureLines"] = std::move(corr);
+      if (!s.volumeBaseName.empty())
+        o["volumeBaseName"] = s.volumeBaseName;
+      if (!s.volumeComparisonName.empty())
+        o["volumeComparisonName"] = s.volumeComparisonName;
       if (s.tin) {
         o["verts"] = s.tin->vertsXyz;
         o["indices"] = s.tin->indices;
@@ -803,6 +1194,7 @@ json BuildRoot(const AppCommandState& st) {
   settings["viewportVisualStyle"] = static_cast<int>(st.viewportVisualStyle);
   settings["objectSnapIntersection"] = st.objectSnapIntersection;
   settings["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
+  settings["objectSnapSurface"] = st.objectSnapSurface;
   settings["objectSnapAperturePx"] = st.objectSnapAperturePx;
   settings["objectSnapGlyphHalfPx"] = st.objectSnapGlyphHalfPx;
 
@@ -982,6 +1374,7 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   b(s, "objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
   b(s, "objectSnapIntersection", &st.objectSnapIntersection);
   b(s, "objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
+  b(s, "objectSnapSurface", &st.objectSnapSurface);
   num(s, "objectSnapAperturePx", &st.objectSnapAperturePx);
   num(s, "objectSnapGlyphHalfPx", &st.objectSnapGlyphHalfPx);
   st.objectSnapAperturePx = std::clamp(st.objectSnapAperturePx, 4.f, 64.f);
@@ -1185,6 +1578,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             }
         readAttrs("paperFilledRegionAttrs", l.paperFilledRegionAttrs);
         l.paperFilledRegionAttrs.resize(l.paperFilledRegions.size());
+        if (o.contains("paperBlockRefs") && o["paperBlockRefs"].is_array())
+          for (const auto& br : o["paperBlockRefs"])
+            if (br.is_object())
+              l.paperBlockRefs.push_back(CadBlockRefFromJson(br));
+        readAttrs("paperBlockRefAttrs", l.paperBlockRefAttrs);
+        l.paperBlockRefAttrs.resize(l.paperBlockRefs.size());
       }
       st.paperLayouts.push_back(l);
     }
@@ -1314,9 +1713,15 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         const int mode = o.value("analysisMode", 0);
         s.analysisMode = mode == 1   ? SurfaceAnalysisMode::Elevation
                          : mode == 2 ? SurfaceAnalysisMode::Slope
+                         : mode == 3 ? SurfaceAnalysisMode::Direction
+                         : mode == 4 ? SurfaceAnalysisMode::SlopeAngle
                                      : SurfaceAnalysisMode::None;
       }
       s.slopeArrowsOn = o.value("slopeArrowsOn", s.slopeArrowsOn);
+      if (o.contains("userContourFt") && o["userContourFt"].is_array())
+        s.userContourFt = o["userContourFt"].get<std::vector<double>>();
+      s.contourSmoothPasses = o.value("contourSmoothPasses", s.contourSmoothPasses);
+      s.contourLabelSpacingFt = o.value("contourLabelSpacingFt", s.contourLabelSpacingFt);
       if (o.contains("bands"))
         bandsFromJson(o["bands"], &s.bands);
       if (o.contains("arrowBands"))
@@ -1444,6 +1849,41 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   for (const auto& o : doc["annotationAttrs"])
     st.cadAnnotationAttrs.push_back(EntityAttributesFromJson(o));
 
+  st.cadTables.clear();
+  st.cadTableAttrs.clear();
+  if (doc.contains("tables") && doc["tables"].is_array()) {
+    for (const auto& o : doc["tables"])
+      st.cadTables.push_back(CadTableFromJson(o));
+  }
+  if (doc.contains("tableAttrs") && doc["tableAttrs"].is_array()) {
+    for (const auto& o : doc["tableAttrs"])
+      st.cadTableAttrs.push_back(EntityAttributesFromJson(o));
+  }
+  st.cadTableAttrs.resize(st.cadTables.size());
+  MigrateLegacyAnnotationTables(st);
+
+  st.drawingInsUnits = doc.value("drawingInsUnits", st.drawingInsUnits);
+  st.blockDefs.clear();
+  st.cadBlockRefs.clear();
+  st.cadBlockRefAttrs.clear();
+  if (doc.contains("blockDefs") && doc["blockDefs"].is_array()) {
+    for (const auto& o : doc["blockDefs"])
+      st.blockDefs.push_back(CadBlockDefFromJson(o));
+  }
+  if (doc.contains("blockRefs") && doc["blockRefs"].is_array()) {
+    for (const auto& o : doc["blockRefs"])
+      st.cadBlockRefs.push_back(CadBlockRefFromJson(o));
+  }
+  if (doc.contains("blockRefAttrs") && doc["blockRefAttrs"].is_array()) {
+    for (const auto& o : doc["blockRefAttrs"])
+      st.cadBlockRefAttrs.push_back(EntityAttributesFromJson(o));
+  }
+  st.cadBlockRefAttrs.resize(st.cadBlockRefs.size());
+  if (doc.contains("blockFavorites") && doc["blockFavorites"].is_array())
+    st.blockFavorites = doc["blockFavorites"].get<std::vector<std::string>>();
+  if (doc.contains("blockRecent") && doc["blockRecent"].is_array())
+    st.blockRecent = doc["blockRecent"].get<std::vector<std::string>>();
+
   // Imported meshes (REQ-063). Guarded with contains(), so a pre-REQ-063 drawing simply has none —
   // the "legacy .gs loads unchanged" acceptance condition.
   //
@@ -1527,6 +1967,71 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       // written and falls back at draw time, so re-pointing the surface at a style with that name
       // later restores it instead of finding the reference silently rewritten.
       s.styleName = el.value("styleName", std::string());
+      {
+        const std::string ks = el.value("kind", std::string());
+        s.kind = ks == "grid"          ? SurfaceKind::Grid
+                 : ks == "tinVolume"   ? SurfaceKind::TinVolume
+                 : ks == "gridVolume"  ? SurfaceKind::GridVolume
+                 : ks == "corridor"    ? SurfaceKind::Corridor
+                                       : SurfaceKind::Tin;
+      }
+      s.description = el.value("description", std::string());
+      s.gridOriginX = el.value("gridOriginX", 0.0);
+      s.gridOriginY = el.value("gridOriginY", 0.0);
+      s.gridSpacingX = el.value("gridSpacingX", 1.0);
+      s.gridSpacingY = el.value("gridSpacingY", 1.0);
+      s.gridCols = el.value("gridCols", 0);
+      s.gridRows = el.value("gridRows", 0);
+      if (el.contains("gridZ") && el["gridZ"].is_array())
+        s.gridZ = el["gridZ"].get<std::vector<float>>();
+      if (el.contains("swappedEdgePicks") && el["swappedEdgePicks"].is_array()) {
+        for (const auto& sp : el["swappedEdgePicks"]) {
+          if (!sp.is_object())
+            continue;
+          s.swappedEdgePicks.emplace_back(sp.value("x", 0.0), sp.value("y", 0.0));
+        }
+      }
+      if (el.contains("deletedEdgePicks") && el["deletedEdgePicks"].is_array()) {
+        for (const auto& sp : el["deletedEdgePicks"]) {
+          if (!sp.is_object())
+            continue;
+          s.deletedEdgePicks.emplace_back(sp.value("x", 0.0), sp.value("y", 0.0));
+        }
+      }
+      if (el.contains("addedPointXyz") && el["addedPointXyz"].is_array())
+        s.addedPointXyz = el["addedPointXyz"].get<std::vector<float>>();
+      if (el.contains("deletedPointPicks") && el["deletedPointPicks"].is_array()) {
+        for (const auto& dp : el["deletedPointPicks"]) {
+          if (!dp.is_object())
+            continue;
+          s.deletedPointPicks.emplace_back(dp.value("x", 0.0), dp.value("y", 0.0));
+        }
+      }
+      if (el.contains("movedPoints") && el["movedPoints"].is_array()) {
+        for (const auto& mo : el["movedPoints"]) {
+          if (!mo.is_object())
+            continue;
+          CadSurface::MovedPoint m;
+          m.fromX = mo.value("fromX", 0.0);
+          m.fromY = mo.value("fromY", 0.0);
+          m.toX = mo.value("toX", 0.f);
+          m.toY = mo.value("toY", 0.f);
+          m.toZ = mo.value("toZ", 0.f);
+          s.movedPoints.push_back(m);
+        }
+      }
+      if (el.contains("corridorFeatureLines") && el["corridorFeatureLines"].is_array()) {
+        for (const auto& flo : el["corridorFeatureLines"]) {
+          if (!flo.is_object() || !flo.contains("entityId"))
+            continue;
+          CadSurfaceBreakline fl;
+          fl.entityId = flo["entityId"].get<std::uint64_t>();
+          fl.description = flo.value("description", std::string());
+          s.corridorFeatureLines.push_back(std::move(fl));
+        }
+      }
+      s.volumeBaseName = el.value("volumeBaseName", std::string());
+      s.volumeComparisonName = el.value("volumeComparisonName", std::string());
       if (el.contains("sourcePointGroups") && el["sourcePointGroups"].is_array())
         for (const auto& g : el["sourcePointGroups"])
           if (g.is_string())
@@ -1569,6 +2074,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             s.breaklines.push_back(std::move(bl));  // legacy: no description existed to carry
           }
       }
+      if (el.contains("contourSources") && el["contourSources"].is_array()) {
+        for (const auto& co : el["contourSources"]) {
+          if (!co.is_object() || !co.contains("entityId") || !co["entityId"].is_number_unsigned())
+            continue;
+          CadSurfaceBreakline c;
+          c.entityId = co["entityId"].get<std::uint64_t>();
+          c.description = co.value("description", std::string());
+          s.contourSources.push_back(std::move(c));
+        }
+      }
       if (el.contains("boundaries") && el["boundaries"].is_array())
         for (const auto& bo : el["boundaries"]) {
           if (!bo.is_object() || !bo.contains("entityId") || !bo["entityId"].is_number_unsigned())
@@ -1578,6 +2093,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           const std::string kindStr = bo.value("kind", std::string("outer"));
           b.kind = kindStr == "hide" ? CadBoundaryKind::Hide
                  : kindStr == "show" ? CadBoundaryKind::Show
+                 : kindStr == "clip" ? CadBoundaryKind::Clip
+                 : kindStr == "mask" ? CadBoundaryKind::Mask
                                      : CadBoundaryKind::Outer;
           b.name = bo.value("name", std::string());  // absent in a pre-REQ-075 file
           s.boundaries.push_back(std::move(b));

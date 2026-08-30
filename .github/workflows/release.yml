@@ -1,10 +1,12 @@
 # GoSurvey build / package / release pipeline — REQ-202, ADR-029.
 #
-# One job, three outcomes, decided by where the push landed:
+# Two jobs, three publish outcomes, decided by where the push landed:
 #
-#   any other branch  build + test; installer kept as a workflow artifact; nothing published
-#   beta              installer published to the ROLLING `channel-beta` prerelease (assets replaced)
-#   master            stable release, VERSION-GATED: tagged v<version> only if that tag is new
+#   build             compile + ctest on every push (REQ-202 gate)
+#   package           Inno installer from the build artifacts; then:
+#     any other branch  installer kept as a workflow artifact; nothing published
+#     beta              installer published to the ROLLING `channel-beta` prerelease (assets replaced)
+#     master            stable release, VERSION-GATED: tagged v<version> only if that tag is new
 #
 # The version gate is what makes "push to master" safe to repeat. The release step is a no-op
 # while project(VERSION) still matches the newest tag, so a docs push to master does not
@@ -20,8 +22,14 @@ on:
     branches: ['**']
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Do not cancel a publish in flight on the release branches.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/beta' }}
+
 permissions:
   contents: write   # required to create tags, releases, and upload assets
+  actions: write    # sccache GitHub Actions cache backend
 
 env:
   # Where FetchContent puts its dependencies; matches the ninja-release preset's binaryDir.
@@ -30,13 +38,24 @@ env:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      full: ${{ steps.ver.outputs.full }}
+      suffix: ${{ steps.ver.outputs.suffix }}
+      quad: ${{ steps.ver.outputs.quad }}
+      channel: ${{ steps.ver.outputs.channel }}
+      tag: ${{ steps.ver.outputs.tag }}
+      publish: ${{ steps.gate.outputs.publish }}
 
     steps:
       - name: Check out
         uses: actions/checkout@v4
         with:
-          # Full history + tags: the version gate asks whether v<version> already exists.
-          fetch-depth: 0
+          # Full history only on master (version-gate / tag inspection). Feature and beta
+          # pushes do not need it; the gate itself asks the remote via git ls-remote.
+          fetch-depth: ${{ github.ref_name == 'master' && '0' || '1' }}
 
       - name: Set up MSVC
         # Puts cl.exe, the linker and the Windows SDK on PATH. Required: CMakePresets pins the
@@ -45,11 +64,27 @@ jobs:
         # quietly picking up some other compiler. That loud failure is deliberate (see below).
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install Ninja
-        # The repo's CMakePresets.json uses the Ninja generator. Installing it rather than
-        # adding a CI-only Visual Studio preset keeps the CI build and the developer build
-        # the same build — a second generator is a second set of behaviours to debug.
-        run: choco install ninja -y --no-progress
+      - name: Ensure Ninja
+        # The repo's CMakePresets.json uses the Ninja generator. windows-latest already ships
+        # ninja; only download the official zip if PATH does not have it. Chocolatey is not used
+        # — it added ~15–20s to every run for a tool that is already on the image.
+        shell: pwsh
+        run: |
+          if (Get-Command ninja -ErrorAction SilentlyContinue) {
+            Write-Host "Using $((Get-Command ninja).Source) ($(ninja --version))"
+            exit 0
+          }
+          $ver = '1.12.1'
+          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+          Write-Host "Installed ninja $ver to $dir"
+
+      - name: Run sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Cache FetchContent dependencies
         uses: actions/cache@v4
@@ -142,6 +177,8 @@ jobs:
         # diverged from CI (cl) until the build failed on a construct only one of them rejects.
         run: >
           cmake --preset ninja-release
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           -DGOSURVEY_VERSION_SUFFIX="${{ steps.ver.outputs.suffix }}"
           -DGOSURVEY_VERSION_BUILD=${{ github.run_number }}
 
@@ -149,8 +186,45 @@ jobs:
         run: cmake --build build
 
       - name: Test
-        # Gates publication: a failing suite fails the job before any release step runs.
+        # Gates publication: a failing suite fails the job before any package/release step runs.
         run: ctest --test-dir build --output-on-failure
+
+      - name: sccache stats
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:SCCACHE_PATH) { & $env:SCCACHE_PATH --show-stats }
+          else { sccache --show-stats }
+
+      - name: Upload binaries for packaging
+        uses: actions/upload-artifact@v4
+        with:
+          name: gosurvey-bin
+          path: |
+            build/GoSurvey.exe
+            build/pdfium.dll
+            build/resources/
+          if-no-files-found: error
+          retention-days: 1
+
+  package:
+    needs: build
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download binaries
+        # upload-artifact@v4 strips the shared `build/` prefix from the uploaded
+        # paths, so the archive contains GoSurvey.exe at its root. Unpack into
+        # build/ so installer/GoSurvey.iss still finds {#BuildDir}\GoSurvey.exe.
+        uses: actions/download-artifact@v4
+        with:
+          name: gosurvey-bin
+          path: build
 
       # ---------------------------------------------------------------------
       # Package
@@ -158,6 +232,9 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
+          if (-not (Test-Path 'build\GoSurvey.exe')) {
+            throw "Expected build\GoSurvey.exe after artifact download (Inno Source)."
+          }
           $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $iscc) {
             Write-Host "Inno Setup not present on the runner image - installing."
@@ -167,8 +244,8 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found after install attempt" }
           Write-Host "Using $($iscc.FullName)"
           & $iscc.FullName `
-            "/DAppVersion=${{ steps.ver.outputs.full }}" `
-            "/DAppVersionQuad=${{ steps.ver.outputs.quad }}" `
+            "/DAppVersion=${{ needs.build.outputs.full }}" `
+            "/DAppVersionQuad=${{ needs.build.outputs.quad }}" `
             installer\GoSurvey.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
@@ -201,7 +278,7 @@ jobs:
           $installer = Get-ChildItem installer\Output\*.exe | Select-Object -First 1
           if (-not $installer) { throw "No installer produced in installer\Output" }
           $sha = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower()
-          $tag = "${{ steps.ver.outputs.tag }}"
+          $tag = "${{ needs.build.outputs.tag }}"
           $repo = "${{ github.repository }}"
 
           # The URL is built from the tag the asset will be published under, so the manifest is
@@ -230,7 +307,7 @@ jobs:
           # process, so a variable set in the resolve step is empty here. It failed silently the
           # first time -- the regex became "^##\s+\s*$", matched nothing, and every release got the
           # fallback line. Safe to interpolate: this value is a [0-9.]+ string from a regex.
-          $version = "${{ steps.ver.outputs.version }}"
+          $version = "${{ needs.build.outputs.version }}"
           $notes = ""
           if (Test-Path RELEASE_NOTES.md) {
             $lines = Get-Content RELEASE_NOTES.md
@@ -274,8 +351,8 @@ jobs:
           }
 
           $manifest = [ordered]@{
-            version     = "${{ steps.ver.outputs.full }}"
-            channel     = "${{ steps.ver.outputs.channel }}"
+            version     = "${{ needs.build.outputs.full }}"
+            channel     = "${{ needs.build.outputs.channel }}"
             installerUrl= $url
             sha256      = $sha
             size        = $installer.Length
@@ -304,7 +381,7 @@ jobs:
         if: github.ref_name != 'master' && github.ref_name != 'beta'
         uses: actions/upload-artifact@v4
         with:
-          name: GoSurvey-${{ steps.ver.outputs.full }}
+          name: GoSurvey-${{ needs.build.outputs.full }}
           path: |
             installer/Output/*.exe
             installer/Output/latest.json
@@ -345,11 +422,11 @@ jobs:
           # Title AND body refreshed each push, so the rolling release page describes the build
           # currently attached to it rather than whichever one created it.
           gh release edit channel-beta `
-            --title "GoSurvey ${{ steps.ver.outputs.full }} (beta)" `
+            --title "GoSurvey ${{ needs.build.outputs.full }} (beta)" `
             --notes-file installer\Output\release-body.md
 
       - name: Publish the stable release
-        if: github.ref_name == 'master' && steps.gate.outputs.publish == 'true'
+        if: github.ref_name == 'master' && needs.build.outputs.publish == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -363,12 +440,12 @@ jobs:
           # from. The manifest step wrote the notes to a file; files persist across steps in a
           # job, which avoids both the multi-line step-output delimiter dance and any chance of
           # notes text being interpolated into this script.
-          gh release create "v${{ steps.ver.outputs.version }}" `
+          gh release create "v${{ needs.build.outputs.version }}" `
             "installer\Output\${{ steps.manifest.outputs.name }}" `
             "installer\Output\latest.json" `
-            --title "GoSurvey ${{ steps.ver.outputs.version }}" `
+            --title "GoSurvey ${{ needs.build.outputs.version }}" `
             --notes-file installer\Output\release-body.md
 
       - name: Report that the version gate held
-        if: github.ref_name == 'master' && steps.gate.outputs.publish == 'false'
-        run: echo "v${{ steps.ver.outputs.version }} is already released. Bump project(VERSION) in CMakeLists.txt to ship a new one."
+        if: github.ref_name == 'master' && needs.build.outputs.publish == 'false'
+        run: echo "v${{ needs.build.outputs.version }} is already released. Bump project(VERSION) in CMakeLists.txt to ship a new one."

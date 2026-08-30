@@ -53,6 +53,12 @@ void DrawPointGroupManagerWindow(AppCommandState& cmd, std::vector<std::string>*
   cmd.showPointGroupManagerWindow = open;
 
   static int selIdx = 0;
+  if (!cmd.pointGroupManagerFocusName.empty()) {
+    const int focused = FindPointGroupIndex(cmd, cmd.pointGroupManagerFocusName);
+    if (focused >= 0)
+      selIdx = focused;
+    cmd.pointGroupManagerFocusName.clear();
+  }
   if (selIdx >= static_cast<int>(cmd.pointGroups.size()))
     selIdx = static_cast<int>(cmd.pointGroups.size()) - 1;
   if (selIdx < 0)

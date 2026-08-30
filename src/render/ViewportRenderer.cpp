@@ -512,9 +512,10 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     AppendSnapDiagonalCross(out, f, mh);
     break;
   case CadSnap::Kind::ApparentIntersection:
-    // The same X inside a diamond: it reads as "an intersection, qualified" — the objects line up
-    // in this view but need not touch, so the marker should not be mistaken for a real one.
     AppendSnapDiagonalCross(out, f, mh * 0.62f);
+    AppendSnapDiamondOutline(out, f, mh);
+    break;
+  case CadSnap::Kind::Surface:
     AppendSnapDiamondOutline(out, f, mh);
     break;
   case CadSnap::Kind::Grip:
@@ -1555,6 +1556,20 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                          extended->polylineAttrs);
         appendChainStore(extended->featureLineVerts, extended->featureLineOffsets,
                          extended->featureLineClosed, extended->featureLineAttrs);
+        if (extended->blockRefs && extended->blockDefs) {
+          for (size_t bi = 0; bi < extended->blockRefs->size(); ++bi) {
+            EntityAttributes ia{};
+            if (extended->blockRefAttrs && bi < extended->blockRefAttrs->size())
+              ia = (*extended->blockRefAttrs)[bi];
+            if (CadEntityIdHidden(hiddenIds, ia.id))
+              continue;
+            std::vector<CadBlockWorldSeg> segs;
+            CadBlockCollectWorldLines(*extended->blockDefs, (*extended->blockRefs)[bi], ia, &segs);
+            for (const CadBlockWorldSeg& s : segs)
+              appendUserLineSeg(s.attr, s.x0, s.y0, s.z0, s.x1, s.y1, s.z1, kLineDefaultR, kLineDefaultG,
+                                kLineDefaultB);
+          }
+        }
         if (lineVertTotal > lineBatchStart && lineBatchPx >= 0.f)
           vcLineBatches_.push_back(VcLineBatch{lineBatchStart, lineVertTotal - lineBatchStart, lineBatchPx});
       }
