@@ -108,9 +108,4 @@ EXPECT ARCS 1
 # ---------------------------------------------------------------------------
 
 EXPORT DXF %OUT%/dxfstable-b.dxf
-# LibreDWG ASCII is not byte-identical across import→export (extents / float text). Survival
-# of entity counts is the REQ-204 half that still applies.
-EXPECT LINES 2
-EXPECT CIRCLES 1
-EXPECT POLYLINES 1
-EXPECT ARCS 1
+EXPECT SAMEFILE %OUT%/dxfstable-a.dxf %OUT%/dxfstable-b.dxf

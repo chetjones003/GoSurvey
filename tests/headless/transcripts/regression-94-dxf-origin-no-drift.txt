@@ -93,15 +93,15 @@ EXPECT CIRCLES 1
 EXPECT POLYLINES 1
 EXPECT ARCS 1
 EXPORT DXF %OUT%/r94-b.dxf
-EXPECT LINES 2
-EXPECT CIRCLES 1
-EXPECT POLYLINES 1
-EXPECT ARCS 1
+
+# The first cycle must already be a fixed point. This is stronger than REQ-079's `.gs` rule, and it
+# holds because a small drawing now never normalizes at all rather than normalizing once.
+EXPECT SAMEFILE %OUT%/r94-a.dxf %OUT%/r94-b.dxf
 
 NEW
 IMPORT DXF %OUT%/r94-b.dxf
 EXPORT DXF %OUT%/r94-c.dxf
-EXPECT LINES 2
-EXPECT CIRCLES 1
-EXPECT POLYLINES 1
-EXPECT ARCS 1
+
+# A third cycle, because a ratchet of -2e-6 per cycle is exactly what a single comparison can miss
+# if the first two happen to round the same way.
+EXPECT SAMEFILE %OUT%/r94-b.dxf %OUT%/r94-c.dxf
