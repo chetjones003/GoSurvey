@@ -20,7 +20,7 @@ ESC
 
 CHECK ALL
 EXPECT LINES 2
-SAVEAS %OUT%/fillet-toolarge-a.gs
+SAVEAS %OUT%/fillet-toolarge-a.dwg
 
 CMD FILLET
 CMD R
@@ -32,8 +32,8 @@ EXPECT LOG "FILLET — radius 20.000000 is too large for the selected objects; r
 EXPECT LINES 2
 EXPECT ARCS 0
 CHECK ALL
-SAVEAS %OUT%/fillet-toolarge-b.gs
-EXPECT SAMEFILE %OUT%/fillet-toolarge-a.gs %OUT%/fillet-toolarge-b.gs
+SAVEAS %OUT%/fillet-toolarge-b.dwg
+EXPECT SAMEFILE %OUT%/fillet-toolarge-a.dwg %OUT%/fillet-toolarge-b.dwg
 
 CMD
 

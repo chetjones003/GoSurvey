@@ -37,13 +37,13 @@ EXPECT LOG "6 total instance(s) (3 x 2)"
 EXPECT LINES 6
 CHECK ALL
 
-SAVEAS %OUT%/array-rect-fwd.gs
+SAVEAS %OUT%/array-rect-fwd.dwg
 
 UNDO
 EXPECT LINES 1
 CHECK ALL
-SAVEAS %OUT%/array-rect-undo.gs
-EXPECT DIFFERENTFILE %OUT%/array-rect-fwd.gs %OUT%/array-rect-undo.gs
+SAVEAS %OUT%/array-rect-undo.dwg
+EXPECT DIFFERENTFILE %OUT%/array-rect-fwd.dwg %OUT%/array-rect-undo.dwg
 
 REDO
 EXPECT LINES 6
@@ -98,12 +98,12 @@ EXPECT LOG "4 total instance(s) (polar)"
 EXPECT CIRCLES 4
 CHECK ALL
 
-SAVEAS %OUT%/array-polar-fwd.gs
+SAVEAS %OUT%/array-polar-fwd.dwg
 UNDO
 EXPECT CIRCLES 1
 CHECK ALL
-SAVEAS %OUT%/array-polar-undo.gs
-EXPECT DIFFERENTFILE %OUT%/array-polar-fwd.gs %OUT%/array-polar-undo.gs
+SAVEAS %OUT%/array-polar-undo.dwg
+EXPECT DIFFERENTFILE %OUT%/array-polar-fwd.dwg %OUT%/array-polar-undo.dwg
 REDO
 EXPECT CIRCLES 4
 CHECK ALL

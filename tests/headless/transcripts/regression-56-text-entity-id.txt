@@ -30,8 +30,8 @@ ESC
 
 EXPECT ANNOTATIONS 1
 
-SAVEAS %OUT%/text-a.gs
-OPEN %OUT%/text-a.gs
+SAVEAS %OUT%/text-a.dwg
+OPEN %OUT%/text-a.dwg
 EXPECT ANNOTATIONS 1
-SAVEAS %OUT%/text-b.gs
-EXPECT SAMEFILE %OUT%/text-a.gs %OUT%/text-b.gs
+SAVEAS %OUT%/text-b.dwg
+EXPECT SAMEFILE %OUT%/text-a.dwg %OUT%/text-b.dwg

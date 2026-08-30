@@ -105,7 +105,7 @@ class Runner {
     // and the failure still reproduces — for the wrong reason. Observed, not hypothetical: the first
     // version of this minimizer reduced a 116-line transcript to
     //     NEW
-    //     EXPECT SAMEFILE %OUT%/rt-a.gs %OUT%/rt-b.gs
+    //     EXPECT SAMEFILE %OUT%/rt-a.dwg %OUT%/rt-b.dwg
     // and reported 98% reduction, which is a perfect score for a reproducer describing no bug at
     // all. State leaking between candidates is the way a minimizer lies to you.
     fs::remove_all(outDir, ec);

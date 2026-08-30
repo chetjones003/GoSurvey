@@ -23,6 +23,7 @@
 #include "SurveyPoints.hpp"
 #include "AppIcon.hpp"
 #include "GsIo.hpp"
+#include "DwgIo.hpp"
 #include "SplashScreen.hpp"
 #include "UserPrefs.hpp"
 #include "ImGuiLayout.hpp"
@@ -340,7 +341,7 @@ int main()
     if (!startupFile.empty())
     {
       std::vector<std::string> boot;
-      openedFromCommandLine = LoadGoSurveyFile(cmd, startupFile.c_str(), boot);
+      openedFromCommandLine = OpenDrawingDocument(cmd, startupFile.c_str(), boot);
       for (auto &s : boot)
         cmdLog.push_back(std::move(s));
       // A file that will not open falls back to the normal startup path rather than leaving the

@@ -69,12 +69,12 @@ CMD SURFACELIST
 EXPECT LOG "Surface "Renamed EG""
 
 # --- a surface survives a .gs round trip ----------------------------------------------------------
-SAVEAS %OUT%/surf-a.gs
-OPEN %OUT%/surf-a.gs
+SAVEAS %OUT%/surf-a.dwg
+OPEN %OUT%/surf-a.dwg
 CMD SURFACELIST
 EXPECT LOG "Surface "Renamed EG""
-SAVEAS %OUT%/surf-b.gs
-EXPECT SAMEFILE %OUT%/surf-a.gs %OUT%/surf-b.gs
+SAVEAS %OUT%/surf-b.dwg
+EXPECT SAMEFILE %OUT%/surf-a.dwg %OUT%/surf-b.dwg
 
 # --- delete ---------------------------------------------------------------------------------------
 CMD SURFACEDELETE Renamed EG

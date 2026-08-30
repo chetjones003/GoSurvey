@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -1818,19 +1819,22 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 
 } // namespace
 
+std::string SerializeGoSurveyJson(const AppCommandState& st) {
+  return BuildRoot(st).dump(2);
+}
+
 bool SaveGoSurveyFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || !pathUtf8[0]) {
     log.push_back("Save .gs: empty path.");
     return false;
   }
   try {
-    const json root = BuildRoot(st);
     std::ofstream f(std::filesystem::path(pathUtf8), std::ios::binary);
     if (!f) {
       log.push_back(std::string("Could not open for write: ") + pathUtf8);
       return false;
     }
-    f << root.dump(2);
+    f << SerializeGoSurveyJson(st);
     log.push_back(std::string("Saved GoSurvey workspace (.gs): ") + pathUtf8);
     return true;
   } catch (const std::exception& e) {
@@ -1839,21 +1843,12 @@ bool SaveGoSurveyFile(const AppCommandState& st, const char* pathUtf8, std::vect
   }
 }
 
-bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
-  if (!pathUtf8 || !pathUtf8[0]) {
-    log.push_back("Open .gs: empty path.");
-    return false;
-  }
-  std::ifstream f(std::filesystem::path(pathUtf8), std::ios::binary);
-  if (!f) {
-    log.push_back(std::string("Could not open: ") + pathUtf8);
-    return false;
-  }
+bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, std::vector<std::string>& log) {
   json root;
   try {
-    f >> root;
+    root = json::parse(std::string(jsonUtf8));
   } catch (const std::exception& e) {
-    log.push_back(std::string("Parse .gs failed: ") + e.what());
+    log.push_back(std::string("Parse GoSurvey document failed: ") + e.what());
     return false;
   }
   if (!root.is_object() || !root.contains("format") || root["format"] != "gosurvey") {
@@ -1921,10 +1916,27 @@ bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std
                     " survey-point label(s) whose link did not resolve on load.");
     RepositionAllSurveyPointLabels(st);
     BumpCadGpuCache(st);
-    log.push_back(std::string("Opened GoSurvey workspace (.gs): ") + pathUtf8);
+    log.push_back("Opened GoSurvey document.");
     return true;
   } catch (const std::exception& e) {
-    log.push_back(std::string("Load .gs failed: ") + e.what());
+    log.push_back(std::string("Load GoSurvey document failed: ") + e.what());
     return false;
   }
+}
+
+bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+  if (!pathUtf8 || !pathUtf8[0]) {
+    log.push_back("Open .gs: empty path.");
+    return false;
+  }
+  std::ifstream f(std::filesystem::path(pathUtf8), std::ios::binary);
+  if (!f) {
+    log.push_back(std::string("Could not open: ") + pathUtf8);
+    return false;
+  }
+  const std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  if (!LoadGoSurveyFromJsonUtf8(st, bytes, log))
+    return false;
+  log.push_back(std::string("Opened GoSurvey workspace (.gs): ") + pathUtf8);
+  return true;
 }

@@ -46,7 +46,7 @@ CMD END
 CHECK ALL
 EXPECT LINES 4
 EXPECT POLYLINES 1
-SAVEAS %OUT%/extend-line-poly-a.gs
+SAVEAS %OUT%/extend-line-poly-a.dwg
 
 CMD EXTEND
 PICK 100 0
@@ -62,8 +62,8 @@ EXPECT LINES 4
 EXPECT POLYLINES 1
 CHECK ALL
 
-SAVEAS %OUT%/extend-line-poly-b.gs
-EXPECT DIFFERENTFILE %OUT%/extend-line-poly-a.gs %OUT%/extend-line-poly-b.gs
+SAVEAS %OUT%/extend-line-poly-b.dwg
+EXPECT DIFFERENTFILE %OUT%/extend-line-poly-a.dwg %OUT%/extend-line-poly-b.dwg
 
 UNDO
 UNDO
@@ -72,8 +72,8 @@ EXPECT LINES 4
 EXPECT POLYLINES 1
 CHECK ALL
 
-SAVEAS %OUT%/extend-line-poly-c.gs
-EXPECT SAMEFILE %OUT%/extend-line-poly-a.gs %OUT%/extend-line-poly-c.gs
+SAVEAS %OUT%/extend-line-poly-c.dwg
+EXPECT SAMEFILE %OUT%/extend-line-poly-a.dwg %OUT%/extend-line-poly-c.dwg
 
 REDO
 REDO
@@ -82,5 +82,5 @@ EXPECT LINES 4
 EXPECT POLYLINES 1
 CHECK ALL
 
-SAVEAS %OUT%/extend-line-poly-d.gs
-EXPECT SAMEFILE %OUT%/extend-line-poly-b.gs %OUT%/extend-line-poly-d.gs
+SAVEAS %OUT%/extend-line-poly-d.dwg
+EXPECT SAMEFILE %OUT%/extend-line-poly-b.dwg %OUT%/extend-line-poly-d.dwg

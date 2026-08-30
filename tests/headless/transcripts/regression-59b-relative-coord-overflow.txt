@@ -58,6 +58,6 @@ CHECK ALL
 
 # The whole document is still storable after three refused commands — nothing was
 # half-committed on the way out.
-SAVEAS %OUT%/relcoord.gs
-OPEN %OUT%/relcoord.gs
+SAVEAS %OUT%/relcoord.dwg
+OPEN %OUT%/relcoord.dwg
 CHECK ALL

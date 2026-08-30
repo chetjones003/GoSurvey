@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct AppCommandState;
@@ -28,3 +29,10 @@ std::string DwgVersionName(const char* pathUtf8);
 
 bool ImportDwgFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
+
+/// REQ-175: Open/Save a drawing path. `.gs` uses GsIo; otherwise DWG (payload when present).
+bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
+bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
+
+/// Trailer JSON for SAMEFILE (ADR-043 (e)). Empty if this is not a GoSurvey DWG.
+bool TryGoSurveyDwgPayloadFromBytes(std::string_view fileBytes, std::string& jsonOut);

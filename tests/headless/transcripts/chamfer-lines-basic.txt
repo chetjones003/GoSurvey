@@ -40,7 +40,7 @@ ESC
 
 CHECK ALL
 EXPECT LINES 2
-SAVEAS %OUT%/chamfer-lines-a.gs
+SAVEAS %OUT%/chamfer-lines-a.dwg
 
 CMD CHAMFER
 CMD D
@@ -53,21 +53,21 @@ EXPECT LOG "CHAMFER — corner chamfered."
 EXPECT LINES 3
 CHECK ALL
 
-SAVEAS %OUT%/chamfer-lines-b.gs
-EXPECT DIFFERENTFILE %OUT%/chamfer-lines-a.gs %OUT%/chamfer-lines-b.gs
+SAVEAS %OUT%/chamfer-lines-b.dwg
+EXPECT DIFFERENTFILE %OUT%/chamfer-lines-a.dwg %OUT%/chamfer-lines-b.dwg
 
 UNDO
 EXPECT LINES 2
 CHECK ALL
-SAVEAS %OUT%/chamfer-lines-c.gs
+SAVEAS %OUT%/chamfer-lines-c.dwg
 # Not SAMEFILE against "a": the chamfer connector minted a fresh entity id (REQ-076), and undo does
 # not roll the next-entity-id counter itself back — same reasoning fillet-lines-basic.txt documents.
 
 REDO
 EXPECT LINES 3
 CHECK ALL
-SAVEAS %OUT%/chamfer-lines-d.gs
-EXPECT SAMEFILE %OUT%/chamfer-lines-b.gs %OUT%/chamfer-lines-d.gs
+SAVEAS %OUT%/chamfer-lines-d.dwg
+EXPECT SAMEFILE %OUT%/chamfer-lines-b.dwg %OUT%/chamfer-lines-d.dwg
 
 UNDO
 
@@ -82,8 +82,8 @@ PICK 0 -5
 EXPECT LOG "CHAMFER — corner trimmed to a point (distance 0)."
 EXPECT LINES 2
 CHECK ALL
-SAVEAS %OUT%/chamfer-lines-e.gs
-EXPECT DIFFERENTFILE %OUT%/chamfer-lines-a.gs %OUT%/chamfer-lines-e.gs
+SAVEAS %OUT%/chamfer-lines-e.dwg
+EXPECT DIFFERENTFILE %OUT%/chamfer-lines-a.dwg %OUT%/chamfer-lines-e.dwg
 
 UNDO
 

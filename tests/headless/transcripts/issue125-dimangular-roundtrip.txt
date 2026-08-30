@@ -18,11 +18,11 @@ EXPECT ANNOTATIONS 1
 EXPECT ANNKIND 0 dimangular
 EXPECT LOG DIMANGULAR complete.
 
-SAVEAS %OUT%/dimangular-a.gs
-OPEN %OUT%/dimangular-a.gs
+SAVEAS %OUT%/dimangular-a.dwg
+OPEN %OUT%/dimangular-a.dwg
 CHECK ALL
 EXPECT ANNOTATIONS 1
 EXPECT ANNKIND 0 dimangular
 
-SAVEAS %OUT%/dimangular-b.gs
-EXPECT SAMEFILE %OUT%/dimangular-a.gs %OUT%/dimangular-b.gs
+SAVEAS %OUT%/dimangular-b.dwg
+EXPECT SAMEFILE %OUT%/dimangular-a.dwg %OUT%/dimangular-b.dwg

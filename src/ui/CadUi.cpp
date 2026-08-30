@@ -1154,30 +1154,29 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, boo
 }
 
 void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
-  char gsPath[4096]{};
+  char dwgPath[4096]{};
   const std::string& path = cmd.activeDocFilePath;
   if (!path.empty()) {
-    if (SaveGoSurveyFile(cmd, path.c_str(), log))
+    if (SaveDrawingDocument(cmd, path.c_str(), log))
       cmd.activeDocSavedRevision = cmd.cadGpuRevision;
     return;
   }
-  // No path yet (a New drawing, or one opened by the `.gs` file association — see BUG-027). Browse,
+  // No path yet (a New drawing, or one opened by file association — see BUG-027). Browse,
   // then ADOPT the destination: the tab takes the file's name and every later save is silent, which
   // is what makes a second Ctrl+S mean "save" rather than "ask again".
-  if (!BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), "drawing.gs"))
+  if (!BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg"))
     return;
-  if (!SaveGoSurveyFile(cmd, gsPath, log))
+  if (!SaveDrawingDocument(cmd, dwgPath, log))
     return;
   cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-  cmd.activeDocFilePath      = std::string(gsPath);
+  cmd.activeDocFilePath      = std::string(dwgPath);
   if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
-    cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::path(gsPath).stem().string();
+    cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::path(dwgPath).stem().string();
 }
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   static char dxfPath[4096]{};
   static char dwgPath[4096]{};
-  static char gsPath[4096]{};
 #if !defined(_WIN32)
   if (g_menuBarLogoTex && g_menuBarLogoDims.x > 0.f && g_menuBarLogoDims.y > 0.f) {
     const ImGuiStyle& st = ImGui::GetStyle();
@@ -1206,16 +1205,16 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.pendingViewportFocus    = true;
     }
     if (ImGui::MenuItem("Open", nullptr)) {
-      if (BrowseOpenFileGsUtf8(gsPath, sizeof(gsPath))) {
+      if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath))) {
         SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
-        const std::string tabName = std::filesystem::path(gsPath).stem().string();
+        const std::string tabName = std::filesystem::path(dwgPath).stem().string();
         const int newIdx = static_cast<int>(cmd.drawingTabs.size());
         cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++});
         cmd.documents.emplace_back();
         RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
-        if (LoadGoSurveyFile(cmd, gsPath, log)) {
+        if (OpenDrawingDocument(cmd, dwgPath, log)) {
           cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-          cmd.activeDocFilePath      = std::string(gsPath);
+          cmd.activeDocFilePath      = std::string(dwgPath);
         }
         cmd.activeDrawingIdx        = newIdx;
         cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
@@ -1229,16 +1228,16 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Save As...")) {
       const std::string defName = cmd.activeDocFilePath.empty()
           ? (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size())
-                 ? cmd.drawingTabs[cmd.activeDrawingIdx].name + ".gs"
-                 : std::string("drawing.gs"))
+                 ? cmd.drawingTabs[cmd.activeDrawingIdx].name + ".dwg"
+                 : std::string("drawing.dwg"))
           : std::filesystem::path(cmd.activeDocFilePath).filename().string();
-      if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), defName.c_str())) {
-        if (SaveGoSurveyFile(cmd, gsPath, log)) {
+      if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), defName.c_str())) {
+        if (SaveDrawingDocument(cmd, dwgPath, log)) {
           cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-          cmd.activeDocFilePath      = std::string(gsPath);
+          cmd.activeDocFilePath      = std::string(dwgPath);
           if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
             cmd.drawingTabs[cmd.activeDrawingIdx].name =
-                std::filesystem::path(gsPath).stem().string();
+                std::filesystem::path(dwgPath).stem().string();
         }
       }
     }
@@ -15473,11 +15472,11 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
       }
       std::string path = cmd.activeDocFilePath;
       if (path.empty()) {
-        const std::string def = e.name + ".gs";
-        if (BrowseSaveFileGsUtf8(s_savePath, sizeof(s_savePath), def.c_str()))
+        const std::string def = e.name + ".dwg";
+        if (BrowseSaveFileDwgUtf8(s_savePath, sizeof(s_savePath), def.c_str()))
           path = s_savePath;
       }
-      if (!path.empty() && SaveGoSurveyFile(cmd, path.c_str(), log)) {
+      if (!path.empty() && SaveDrawingDocument(cmd, path.c_str(), log)) {
         cmd.activeDocSavedRevision = cmd.cadGpuRevision;
         cmd.activeDocFilePath      = path;
         if (!isActive) {

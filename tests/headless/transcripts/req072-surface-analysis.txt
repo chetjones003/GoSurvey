@@ -167,8 +167,8 @@ EXPECT SURFACEBANDTRIS 982
 EXPECT SURFACEBANDBATCHES 2
 EXPECT SURFACEARROWSEGS 2946
 
-SAVEAS %OUT%/analysis-a.gs
-OPEN %OUT%/analysis-a.gs
+SAVEAS %OUT%/analysis-a.dwg
+OPEN %OUT%/analysis-a.dwg
 EXPECT SURFACES 1
 EXPECT SURFACEBANDTRIS 982
 EXPECT SURFACEBANDBATCHES 2
@@ -177,5 +177,5 @@ CHECK ALL
 
 # ...and the file is byte-identical on resave (REQ-079, ADR-020 (d)) — the same idempotence check
 # req070's own round-trip step ends on.
-SAVEAS %OUT%/analysis-b.gs
-EXPECT SAMEFILE %OUT%/analysis-a.gs %OUT%/analysis-b.gs
+SAVEAS %OUT%/analysis-b.dwg
+EXPECT SAMEFILE %OUT%/analysis-a.dwg %OUT%/analysis-b.dwg
