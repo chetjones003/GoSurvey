@@ -1429,6 +1429,12 @@ static void RibbonSectionBegin(const char* childId, const char* title, float wid
   ImGui::BeginChild(childId, ImVec2(width, height), false,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleVar();
+  // A child window keeps its own FontWindowScale (defaults to 1.0) — SetWindowFontScale on the
+  // ribbon strip does NOT propagate in. Without this the section body renders text 25% larger
+  // than colW()/computeTabWidths measured it (those run in the parent scope at 0.80), so every
+  // two-word button label clipped a character and the whole tools row overran into the Layers
+  // strip. Match the measurement scale here.
+  ImGui::SetWindowFontScale(g_chrome.ribbonBodyFontScale);
   s_ribbonPanelTitle = title;
 }
 
@@ -3326,7 +3332,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // it is symmetric, and adding it at the top too would waste the band's height.
   const float panelH = height - kRibbonTabStripH - g_chrome.ribbonTabStripGapY - st.WindowPadding.y * 2.f -
                         g_chrome.ribbonBottomGutter;
-  constexpr float kLayerPanelW = 500.f;
+  constexpr float kLayerPanelW = 320.f;
 
   // Civil 3D-style panel metrics: a button column fills the height above the
   // bottom title; small labeled buttons stack 3 to a column; the icon grid
@@ -3423,7 +3429,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     w.wLayout = 8.f + largeW + 4.f + colW({"Poly VP"});
     // REQ-302 increment 3 (content audit): Insert/View/Output real content.
     w.wInsert = 8.f + colW({"Import DXF", "Import DWG"});
-    w.wViewSettings = 8.f + colW({"Settings"});
+    w.wViewSettings = 8.f + colW({"Settings"}) + 4.f + colW({"Toolspace"});
     w.wOutExport = 8.f + colW({"Export DXF", "Export DWG"});
     w.wOutPlot = 8.f + largeW + 4.f + colW({"Batch"});  // same shape Layout's Plot/Batch used to be
     return w;
@@ -4359,13 +4365,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::EndGroup();
       RibbonSectionEnd();
     }});
-    ribbonSpecs.push_back({110.f, 90.f, [&]() {
-      RibbonSectionBegin("RibbonSecBeVis", "Visibility", 110.f, panelH);
+    ribbonSpecs.push_back({160.f, 160.f, [&]() {
+      RibbonSectionBegin("RibbonSecBeVis", "Visibility", 160.f, panelH);
       const int di = CadBlockFindDef(cmd.blockDefs, cmd.blockEditorName);
       const char* vis = "VisibilityState0";
       if (di >= 0 && !cmd.blockDefs[static_cast<size_t>(di)].visibilityStates.empty())
         vis = cmd.blockDefs[static_cast<size_t>(di)].visibilityStates[0].c_str();
-      ImGui::SetNextItemWidth(96.f);
+      ImGui::SetNextItemWidth(148.f);
       if (ImGui::BeginCombo("##BeVisCombo", vis)) {
         if (di >= 0) {
           for (const std::string& s : cmd.blockDefs[static_cast<size_t>(di)].visibilityStates) {
@@ -4380,12 +4386,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }
       RibbonSectionEnd();
     }});
-    ribbonSpecs.push_back({100.f, 80.f, [&]() {
-      RibbonSectionBegin("RibbonSecBeClose", "Close", 100.f, panelH);
+    ribbonSpecs.push_back({136.f, 136.f, [&]() {
+      RibbonSectionBegin("RibbonSecBeClose", "Close", 136.f, panelH);
       ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(180, 40, 40, 255));
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(210, 50, 50, 255));
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(140, 20, 20, 255));
-      if (ImGui::Button("Close Block Editor", ImVec2(92.f, colH)))
+      if (ImGui::Button("Close Block Editor", ImVec2(128.f, colH)))
         beditSubmit("BCLOSE");
       ImGui::PopStyleColor(3);
       RibbonItemHelp("Close Block Editor — BCLOSE. Prompts to save if there are unsaved edits.");
@@ -4471,25 +4477,36 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }
       RibbonSectionEnd();
     }});
-    ribbonSpecs.push_back({90.f, 70.f, [&]() {
-      RibbonSectionBegin("RibbonSecBlocks", "Block", 90.f, panelH);
-      const float cw = colW({"Block", "Insert"});
-      if (smallBtn("##RibbonBlock", RibbonIconKind::Block, "Block", cw)) {
-        char buf[16] = "BLOCKLIST";
-        ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
-      }
-      RibbonItemHelp("List block definitions. Create one with BLOCK <name>, <x>, <y> after selecting geometry.");
-      if (smallBtn("##RibbonInsert", RibbonIconKind::BlockInsert, "Insert", cw))
-        StartInsertBlockCommand(cmd, log);
-      RibbonItemHelp("Insert a block. Opens the Insert dialog (same as INSERT).");
-      if (smallBtn("##RibbonBedit", RibbonIconKind::BlockEditor, "BEDIT", cw))
-        CadBlocksOpenEditPicker(cmd, log);
-      RibbonItemHelp("Block Editor — choose a definition from the drawing or block library.");
-      if (smallBtn("##RibbonBlockImport", RibbonIconKind::Import, "Import", cw))
-        CadBlocksImportWithPicker(cmd, log);
-      RibbonItemHelp("Import a block definition from a .gs, .dxf, or .dwg file.\nSame as BLOCKIMPORT.");
-      RibbonSectionEnd();
-    }});
+    {
+      // Two columns of two — a small-button column is only three rows (colH) tall, so four
+      // stacked buttons spilled past the panel into its title strip.
+      const float wBlk = 8.f + colW({"Block", "BEDIT"}) + 4.f + colW({"Insert", "Import"});
+      ribbonSpecs.push_back({wBlk, wBlk, [&]() {
+        RibbonSectionBegin("RibbonSecBlocks", "Block", wBlk, panelH);
+        const float cA = colW({"Block", "BEDIT"});
+        const float cB = colW({"Insert", "Import"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonBlock", RibbonIconKind::Block, "Block", cA)) {
+          char buf[16] = "BLOCKLIST";
+          ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+        }
+        RibbonItemHelp("List block definitions. Create one with BLOCK <name>, <x>, <y> after selecting geometry.");
+        if (smallBtn("##RibbonBedit", RibbonIconKind::BlockEditor, "BEDIT", cA))
+          CadBlocksOpenEditPicker(cmd, log);
+        RibbonItemHelp("Block Editor — choose a definition from the drawing or block library.");
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonInsert", RibbonIconKind::BlockInsert, "Insert", cB))
+          StartInsertBlockCommand(cmd, log);
+        RibbonItemHelp("Insert a block. Opens the Insert dialog (same as INSERT).");
+        if (smallBtn("##RibbonBlockImport", RibbonIconKind::Import, "Import", cB))
+          CadBlocksImportWithPicker(cmd, log);
+        RibbonItemHelp("Import a block definition from a .gs, .dxf, or .dwg file.\nSame as BLOCKIMPORT.");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
   } // if (activeRibbonTab == kRibbonTabInsert)
 
   // REQ-302 increment 3 (content audit, D-2026-08-25-h): Output tab — Export DXF/DWG (relocated
@@ -4553,6 +4570,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(ribbonToolsW, panelH), false,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
+  ImGui::SetWindowFontScale(g_chrome.ribbonBodyFontScale);  // child keeps its own scale — see RibbonSectionBegin
 
   RenderRibbonFit(ribbonSpecs, ribbonFit, secGap, colH, curCompact, "RibbonMorePopup");
 
