@@ -436,6 +436,21 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
       ctx->Yield(3);
     }
 
+    // Home tab at three widths — responsive per-panel collapse evidence.
+    if (RefWindow(ctx, "//GoSurveyHost/RibbonStrip"))
+      ctx->ItemClick("Home");
+    s_cmd->activeRibbonTab = kRibbonTabHome;
+    for (const int wpx : {2560, 1500, 1000}) {
+      DevShell_SetWindowSize(wpx, 1300);
+      ctx->Yield(8);
+      char p[48];
+      std::snprintf(p, sizeof(p), "ribbon-home-%d.bmp", wpx);
+      DevShell_RequestScreenshot(p);
+      ctx->Yield(3);
+    }
+    DevShell_SetWindowSize(2560, 1300);
+    ctx->Yield(6);
+
     // Block Editor contextual tab — needs an open definition.
     SubmitCad(ctx, "MKLINE -2,0, 2,0");
     SubmitCad(ctx, "SELLINE");

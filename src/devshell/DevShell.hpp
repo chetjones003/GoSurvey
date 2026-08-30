@@ -47,4 +47,7 @@ bool DevShell_CliRunFinished(int* outExitCode);
 /// safe to call from a Test Engine coroutine). Yield at least 2 frames after calling.
 void DevShell_RequestScreenshot(const char* pathUtf8);
 
+/// Resize the GLFW window (Debug driver / responsive-layout evidence). Yield a few frames after.
+void DevShell_SetWindowSize(int w, int h);
+
 #endif

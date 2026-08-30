@@ -51,6 +51,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -2727,6 +2728,24 @@ static void EnsureRibbonIconsLoaded() {
   }
 }
 
+// Load (once, cached) an arbitrary resources/icons/<name>.png as a texture. Used by ribbon buttons
+// that carry a bespoke icon not in the RibbonIconKind enum (e.g. the greyed Civil 3D placeholders).
+static ImTextureID RibbonNamedIconTex(const char* name) {
+  static std::unordered_map<std::string, ImTextureID> cache;
+  if (!name || !name[0]) return 0;
+  auto it = cache.find(name);
+  if (it != cache.end()) return it->second;
+  ImTextureID tex = 0;
+  const std::filesystem::path p =
+      ResolveBundledAssetPath(std::filesystem::path("resources") / "icons" / (std::string(name) + ".png"));
+  if (!p.empty()) {
+    if (unsigned int gl = LoadIconTextureRgba(p))
+      tex = static_cast<ImTextureID>(static_cast<intptr_t>(gl));
+  }
+  cache.emplace(name, tex);
+  return tex;
+}
+
 // Map an UPPERCASE command name to a ribbon icon, for the command autocomplete list.
 static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
   struct M { const char* n; RibbonIconKind k; };
@@ -2776,11 +2795,14 @@ static void DrawRibbonButtonBevel(ImDrawList* dl, const ImRect& bb, bool sunken)
 
 // Draw an icon (bitmap if loaded, else procedural fallback) centered as a
 // square inside [iconMin, iconMax], dimmed by the current style alpha.
-static void DrawRibbonIconArt(ImDrawList* dl, RibbonIconKind icon, const ImVec2& iconMin, const ImVec2& iconMax) {
+static void DrawRibbonIconArt(ImDrawList* dl, RibbonIconKind icon, const ImVec2& iconMin, const ImVec2& iconMax,
+                              const char* iconNameOverride = nullptr) {
   if (iconMax.y <= iconMin.y + 2.f || iconMax.x <= iconMin.x + 2.f)
     return;
   EnsureRibbonIconsLoaded();
-  const ImTextureID tex = g_ribbonIconTex[static_cast<int>(icon)];
+  const ImTextureID tex = (iconNameOverride && iconNameOverride[0])
+                              ? RibbonNamedIconTex(iconNameOverride)
+                              : g_ribbonIconTex[static_cast<int>(icon)];
   if (tex) {
     const float side = std::min(iconMax.x - iconMin.x, iconMax.y - iconMin.y);
     const ImVec2 ctr((iconMin.x + iconMax.x) * 0.5f, (iconMin.y + iconMax.y) * 0.5f);
@@ -2935,7 +2957,7 @@ enum class RibbonLabel { None, Right, Below };
 // or a large icon with the label centered below (Below). Shares the 3D bevel
 // and icon art with every ribbon button so states stay consistent.
 static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* label,
-                           const ImVec2& size, RibbonLabel mode) {
+                           const ImVec2& size, RibbonLabel mode, const char* iconNameOverride = nullptr) {
   assert(str_id != nullptr);
   assert(size.x > 0.f && size.y > 0.f);
   ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -3001,7 +3023,7 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
     iconMax = ImVec2(ctr.x + side * 0.5f, ctr.y + side * 0.5f);
   }
 
-  DrawRibbonIconArt(dl, icon, iconMin, iconMax);
+  DrawRibbonIconArt(dl, icon, iconMin, iconMax, iconNameOverride);
   if (hasLabel) {
     if (mode == RibbonLabel::Below)
       RibbonAddCaption(dl, labelPos, textCol, drawLabel);
@@ -3023,11 +3045,11 @@ static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
 }
 
 static void RibbonNyiButton(const char* id, RibbonIconKind ic, const char* label, const ImVec2& size,
-                            RibbonLabel mode) {
+                            RibbonLabel mode, const char* iconNameOverride = nullptr) {
   assert(id != nullptr);
   assert(label != nullptr);
   ImGui::BeginDisabled();
-  (void)RibbonButtonEx(id, ic, label, size, mode);
+  (void)RibbonButtonEx(id, ic, label, size, mode, iconNameOverride);
   char flat[160];
   size_t o = 0;
   for (const char* p = label; *p != '\0' && o + 1 < sizeof(flat); ++p) {
@@ -3091,13 +3113,22 @@ struct RibbonSectionSpec {
   float wideW = 0.f;
   float mediumW = 0.f;
   std::function<void()> render;
+  // For the collapsed-panel button shown when this section doesn't fit inline (Civil 3D-style:
+  // one titled flyout button per collapsed panel, not a shared "More"). Optional — a section
+  // with no name collapses to an icon-only button.
+  const char* name = "";
+  RibbonIconKind icon = RibbonIconKind::Nyi;
+  const char* iconName = nullptr;  // resources/icons/<iconName>.png; overrides `icon` when set
 };
+
+// Width of a collapsed-panel flyout button (icon + short title + chevron).
+constexpr float kRibbonCollapsedW = 72.f;
 
 struct RibbonFitResult {
   RibbonBreakpoint breakpoint = RibbonBreakpoint::Wide;
   std::vector<size_t> inlineIdx;    // section indices rendered in the ribbon row, in order
-  std::vector<size_t> overflowIdx;  // section indices rendered inside the "More" popup, in order
-  float width = 0.f;                // total width actually consumed (inline sections + gaps [+ More])
+  std::vector<size_t> overflowIdx;  // section indices collapsed to a flyout button, in order
+  float width = 0.f;                // total width actually consumed (inline sections + gaps + collapsed)
 };
 
 // Decides which of `specs` (in order) fit inline at `availW` and which overflow into a popup
@@ -3127,23 +3158,41 @@ static RibbonFitResult DecideRibbonFit(const std::vector<RibbonSectionSpec>& spe
     return r;
   }
   r.breakpoint = RibbonBreakpoint::Narrow;
+  // Civil 3D behaviour: collapse panels from the RIGHT, one at a time, each into a titled
+  // flyout button (kRibbonCollapsedW wide). Once a panel collapses, every panel to its right
+  // stays collapsed too — the row never has a collapsed panel left of an inline one.
   float used = 0.f;
+  bool collapsing = false;
   for (size_t i = 0; i < specs.size(); ++i) {
-    const float need = specs[i].mediumW + (r.inlineIdx.empty() ? 0.f : gap);
+    const float needInline = specs[i].mediumW + (i ? gap : 0.f);
+    const float needCollapsed = kRibbonCollapsedW + (i ? gap : 0.f);
     // The first section always renders inline even if it alone would overflow `availW`
-    // (TASK-105 ASSUMPTION-2) — an empty-looking tab with only a "More" button reads as broken.
-    if (r.inlineIdx.empty() || used + need <= availW) {
+    // (TASK-105 ASSUMPTION-2) — an empty-looking tab reads as broken.
+    if (!collapsing && (r.inlineIdx.empty() || used + needInline <= availW)) {
       r.inlineIdx.push_back(i);
-      used += need;
+      used += needInline;
     } else {
+      collapsing = true;
       r.overflowIdx.push_back(i);
+      used += needCollapsed;
     }
   }
-  constexpr float kMoreW = 46.f;
-  if (!r.overflowIdx.empty())
-    used += kMoreW + gap;
   r.width = used;
   return r;
+}
+
+// Trim `s` to fit `maxW` px at the current font, appending "…" when shortened.
+static std::string RibbonTruncate(const char* s, float maxW) {
+  if (ImGui::CalcTextSize(s).x <= maxW)
+    return s;
+  std::string out;
+  for (const char* p = s; *p; ++p) {
+    std::string cand = out + *p + "\xE2\x80\xA6";
+    if (ImGui::CalcTextSize(cand.c_str()).x > maxW)
+      break;
+    out.push_back(*p);
+  }
+  return out + "\xE2\x80\xA6";
 }
 
 // Renders a tab's sections per `fit` — inline sections at Medium metrics when the breakpoint isn't
@@ -3159,18 +3208,35 @@ static void RenderRibbonFit(const std::vector<RibbonSectionSpec>& specs, const R
       ImGui::SameLine(0, gap);
     specs[fit.inlineIdx[k]].render();
   }
-  if (!fit.overflowIdx.empty()) {
+  // Each overflowed panel collapses to its own titled flyout button (Civil 3D-style).
+  (void)morePopupId;
+  for (size_t k = 0; k < fit.overflowIdx.size(); ++k) {
+    const size_t si = fit.overflowIdx[k];
+    const RibbonSectionSpec& s = specs[si];
     ImGui::SameLine(0, gap);
-    if (ImGui::Button("More", ImVec2(46.f, colH)))
-      ImGui::OpenPopup(morePopupId);
-    RibbonItemHelp("More — additional tools that don't fit at the current window width.");
-    if (ImGui::BeginPopup(morePopupId)) {
+    char pid[32];
+    std::snprintf(pid, sizeof(pid), "##ribcol%zu", si);
+    const bool hasName = s.name && s.name[0];
+    const std::string label = hasName ? RibbonTruncate(s.name, kRibbonCollapsedW - 12.f) : std::string();
+    ImVec2 cur = ImGui::GetCursorScreenPos();
+    if (RibbonButtonEx(pid, s.icon, hasName ? label.c_str() : nullptr, ImVec2(kRibbonCollapsedW, colH),
+                       hasName ? RibbonLabel::Below : RibbonLabel::None, s.iconName))
+      ImGui::OpenPopup(pid);
+    // Down-chevron affordance, bottom-centre.
+    ImGui::GetWindowDrawList()->AddTriangleFilled(
+        ImVec2(cur.x + kRibbonCollapsedW * 0.5f - 3.f, cur.y + colH - 7.f),
+        ImVec2(cur.x + kRibbonCollapsedW * 0.5f + 3.f, cur.y + colH - 7.f),
+        ImVec2(cur.x + kRibbonCollapsedW * 0.5f, cur.y + colH - 3.f),
+        ImGui::GetColorU32(ImGuiCol_Text));
+    if (hasName) {
+      char tip[96];
+      std::snprintf(tip, sizeof(tip), "%s panel", s.name);
+      RibbonItemHelp(tip);
+    }
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, FLT_MAX));
+    if (ImGui::BeginPopup(pid)) {
       curCompact = false;
-      for (size_t k = 0; k < fit.overflowIdx.size(); ++k) {
-        if (k)
-          ImGui::SameLine(0, gap);
-        specs[fit.overflowIdx[k]].render();
-      }
+      s.render();
       ImGui::EndPopup();
     }
   }
@@ -3335,7 +3401,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // it is symmetric, and adding it at the top too would waste the band's height.
   const float panelH = height - kRibbonTabStripH - g_chrome.ribbonTabStripGapY - st.WindowPadding.y * 2.f -
                         g_chrome.ribbonBottomGutter;
-  constexpr float kLayerPanelW = 320.f;
+  constexpr float kLayerPanelW = 288.f;
 
   // Civil 3D-style panel metrics: a button column fills the height above the
   // bottom title; small labeled buttons stack 3 to a column; the icon grid
@@ -3379,7 +3445,23 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     float m = 0.f;
     for (const char* l : labels)
       m = std::max(m, ImGui::CalcTextSize(l).x);
-    return rowH + 8.f + m;
+    // icon (rowH-6) + 3px gaps each side + label; matches RibbonButtonEx Right-mode layout with
+    // a small margin. (Was +8 — trimmed once the child-font-scale bug was fixed so the extra
+    // slack is no longer needed, which is what lets the wide Home tab fit its full labels.)
+    return rowH + 4.f + m;
+  };
+
+  // Home-tab helpers. MUST be at DrawRibbonBar function scope (not inside the `if (Home)` block):
+  // the ribbonSpecs render closures capture them by reference and are invoked LATER by
+  // RenderRibbonFit, after that block has exited. (Declaring them in the block left dangling
+  // references that a Release build's stack reuse turned into a crash.)
+  const float gcHome = gridCell;
+  auto nyiGrid = [&](const char* id, const char* ic, const char* label) {
+    RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(gcHome, gcHome), RibbonLabel::None, ic);
+  };
+  auto nyiRow = [&](const char* id, const char* ic, const char* label, float w) {
+    RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(curCompact ? rowH : w, rowH),
+                    curCompact ? RibbonLabel::None : RibbonLabel::Right, ic);
   };
 
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
@@ -3446,7 +3528,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // before RibbonToolsLeft's BeginChild needs a size), then size RibbonToolsLeft to exactly what
   // will be placed (inline sections, plus a "More" button in Narrow) — never wider than available,
   // so nothing can clip. No section's own body changes below; only what wraps it.
-  const float secGap = 8.f;
+  const float secGap = 6.f;
   std::vector<RibbonSectionSpec> ribbonSpecs;
 
   // REQ-302 / GUI-pass 2026-08-30: the Home tab mirrors Civil 3D's Home ribbon 1:1 — Palettes,
@@ -3455,58 +3537,49 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // slot; every other button is greyed with an automatic "… — not implemented yet." tooltip
   // (RibbonNyiButton). Responsive per-panel collapse (the C3D flyout behaviour) is a follow-up.
   if (cmd.activeRibbonTab == kRibbonTabHome) {
-    const float gc = gridCell;
-    // icon-only NYI cell, gridBtn-sized
-    auto nyiGrid = [&](const char* id, const char* label) {
-      RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(gc, gc), RibbonLabel::None);
-    };
-    // labelled NYI row, smallBtn-sized
-    auto nyiRow = [&](const char* id, const char* label, float w) {
-      RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(curCompact ? rowH : w, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
-    };
+    const float gc = gcHome;
 
     // ---- Palettes -----------------------------------------------------------
     {
       const float w = 8.f + largeW + 4.f + gc * 3.f + 4.f * 2.f;
-      ribbonSpecs.push_back({w, w, [&]() {
+      ribbonSpecs.push_back({w, w, [&, w]() {
         RibbonSectionBegin("RibbonSecPalettes", "Palettes", w, panelH);
         if (largeBtn("##RibbonToolspaceHome", RibbonIconKind::Toolspace, "Toolspace"))
           cmd.showToolspaceWindow = true;
         RibbonItemHelp("Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE");
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
-        nyiGrid("##PalPanorama", "Panorama");           ImGui::SameLine(0, 4);
-        nyiGrid("##PalProps", "Properties");             ImGui::SameLine(0, 4);
-        nyiGrid("##PalRefMgr", "Reference Manager");
-        nyiGrid("##PalCompEd", "Component Editor");       ImGui::SameLine(0, 4);
-        nyiGrid("##PalSettings", "Drawing Settings");     ImGui::SameLine(0, 4);
-        nyiGrid("##PalWorkFolder", "Set Working Folder");
+        nyiGrid("##PalPanorama", "c3d_panorama", "Panorama");           ImGui::SameLine(0, 4);
+        nyiGrid("##PalProps", "c3d_properties", "Properties");             ImGui::SameLine(0, 4);
+        nyiGrid("##PalRefMgr", "c3d_refmgr", "Reference Manager");
+        nyiGrid("##PalCompEd", "c3d_comped", "Component Editor");       ImGui::SameLine(0, 4);
+        nyiGrid("##PalSettings", "c3d_dwgsettings", "Drawing Settings");     ImGui::SameLine(0, 4);
+        nyiGrid("##PalWorkFolder", "c3d_workfolder", "Set Working Folder");
         ImGui::EndGroup();
         RibbonSectionEnd();
-      }});
+      }, "Palettes", RibbonIconKind::Toolspace});
     }
 
     // ---- Explore -----------------------------------------------------------
     {
       const float w = 8.f + largeW;
-      ribbonSpecs.push_back({w, w, [&]() {
+      ribbonSpecs.push_back({w, w, [&, w]() {
         RibbonSectionBegin("RibbonSecExplore", "Explore", w, panelH);
         RibbonNyiButton("##ExpProjExplorer", RibbonIconKind::Nyi, "Project\nExplorer",
-                        ImVec2(largeW, colH), RibbonLabel::Below);
+                        ImVec2(largeW, colH), RibbonLabel::Below, "c3d_projexplorer");
         RibbonSectionEnd();
-      }});
+      }, "Explore", RibbonIconKind::Nyi, "c3d_projexplorer"});
     }
 
     // ---- Optimize ---------------------------------------------------------
     {
       const float w = 8.f + largeW;
-      ribbonSpecs.push_back({w, w, [&]() {
+      ribbonSpecs.push_back({w, w, [&, w]() {
         RibbonSectionBegin("RibbonSecOptimize", "Optimize", w, panelH);
         RibbonNyiButton("##OptGrading", RibbonIconKind::Nyi, "Grading\nOptimization",
-                        ImVec2(largeW, colH), RibbonLabel::Below);
+                        ImVec2(largeW, colH), RibbonLabel::Below, "c3d_gradingopt");
         RibbonSectionEnd();
-      }});
+      }, "Optimize", RibbonIconKind::Nyi, "c3d_gradingopt"});
     }
 
     if (!ribbonPaperSpace) {
@@ -3515,22 +3588,23 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float cA = std::max(colW({"Points", "Feature Line", "Traverse"}), capW("Create Ground Data") - 60.f);
         const float cB = colW({"Surfaces", "Grading"});
         const float w = 8.f + cA + 4.f + cB;
-        ribbonSpecs.push_back({w, w, [&]() {
-          RibbonSectionBegin("RibbonSecGroundData", "Create Ground Data", w, panelH);
+        const float mw = 8.f + rowH + 4.f + rowH;
+        ribbonSpecs.push_back({w, mw, [&, w, mw, cA, cB]() {
+          RibbonSectionBegin("RibbonSecGroundData", "Create Ground Data", curCompact ? mw : w, panelH);
           ImGui::BeginGroup();
           if (smallBtn("##CgdPoints", RibbonIconKind::SurveyPoint, "Points", cA))
             StartCreatePointsCommand(cmd, log);
           RibbonItemHelp("Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS");
-          nyiRow("##CgdFeatureLine", "Feature Line", cA);
-          nyiRow("##CgdTraverse", "Traverse", cA);
+          nyiRow("##CgdFeatureLine", "c3d_featureline", "Feature Line", cA);
+          nyiRow("##CgdTraverse", "c3d_traverse2", "Traverse", cA);
           ImGui::EndGroup();
           ImGui::SameLine(0, 4);
           ImGui::BeginGroup();
-          nyiRow("##CgdSurfaces", "Surfaces", cB);
-          nyiRow("##CgdGrading", "Grading", cB);
+          nyiRow("##CgdSurfaces", "c3d_surfaces", "Surfaces", cB);
+          nyiRow("##CgdGrading", "c3d_grading", "Grading", cB);
           ImGui::EndGroup();
           RibbonSectionEnd();
-        }});
+        }, "Create Ground Data", RibbonIconKind::SurveyPoint});
       }
 
       // ---- Create Design ---------------------------------------------------
@@ -3540,34 +3614,35 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float c3 = colW({"Intersections", "Assembly", "Pipe Network"});
         const float c4 = colW({"Pond", "Underground Storage", "Channel"});
         const float w = 8.f + c1 + 4.f + c2 + 4.f + c3 + 4.f + c4;
-        ribbonSpecs.push_back({w, w, [&]() {
-          RibbonSectionBegin("RibbonSecCreateDesign", "Create Design", w, panelH);
+        const float mw = 8.f + rowH * 4.f + 4.f * 3.f;
+        ribbonSpecs.push_back({w, mw, [&, w, mw]() {
+          RibbonSectionBegin("RibbonSecCreateDesign", "Create Design", curCompact ? mw : w, panelH);
           const float d1 = colW({"Parcel", "Feature Line", "Grading"});
           const float d2 = colW({"Alignment", "Profile", "Corridor"});
           const float d3 = colW({"Intersections", "Assembly", "Pipe Network"});
           const float d4 = colW({"Pond", "Underground Storage", "Channel"});
           ImGui::BeginGroup();
-          nyiRow("##CdParcel", "Parcel", d1);
-          nyiRow("##CdFeatureLine", "Feature Line", d1);
-          nyiRow("##CdGrading", "Grading", d1);
+          nyiRow("##CdParcel", "c3d_parcel", "Parcel", d1);
+          nyiRow("##CdFeatureLine", "c3d_featureline", "Feature Line", d1);
+          nyiRow("##CdGrading", "c3d_grading", "Grading", d1);
           ImGui::EndGroup(); ImGui::SameLine(0, 4);
           ImGui::BeginGroup();
-          nyiRow("##CdAlignment", "Alignment", d2);
-          nyiRow("##CdProfile", "Profile", d2);
-          nyiRow("##CdCorridor", "Corridor", d2);
+          nyiRow("##CdAlignment", "c3d_alignment", "Alignment", d2);
+          nyiRow("##CdProfile", "c3d_profile", "Profile", d2);
+          nyiRow("##CdCorridor", "c3d_corridor", "Corridor", d2);
           ImGui::EndGroup(); ImGui::SameLine(0, 4);
           ImGui::BeginGroup();
-          nyiRow("##CdIntersections", "Intersections", d3);
-          nyiRow("##CdAssembly", "Assembly", d3);
-          nyiRow("##CdPipeNetwork", "Pipe Network", d3);
+          nyiRow("##CdIntersections", "c3d_intersections", "Intersections", d3);
+          nyiRow("##CdAssembly", "c3d_assembly", "Assembly", d3);
+          nyiRow("##CdPipeNetwork", "c3d_pipenet", "Pipe Network", d3);
           ImGui::EndGroup(); ImGui::SameLine(0, 4);
           ImGui::BeginGroup();
-          nyiRow("##CdPond", "Pond", d4);
-          nyiRow("##CdUgStorage", "Underground Storage", d4);
-          nyiRow("##CdChannel", "Channel", d4);
+          nyiRow("##CdPond", "c3d_pond", "Pond", d4);
+          nyiRow("##CdUgStorage", "c3d_ugstorage", "Underground Storage", d4);
+          nyiRow("##CdChannel", "c3d_channel", "Channel", d4);
           ImGui::EndGroup();
           RibbonSectionEnd();
-        }});
+        }, "Create Design", RibbonIconKind::Nyi, "c3d_alignment"});
       }
 
       // ---- Profile & Section Views ---------------------------------------
@@ -3575,21 +3650,22 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float cP = std::max(colW({"Profile View", "Sample Lines", "Section Views"}),
                                   capW("Profile & Section Views") - 40.f);
         const float w = 8.f + cP;
-        ribbonSpecs.push_back({w, w, [&]() {
-          RibbonSectionBegin("RibbonSecProfSect", "Profile & Section Views", w, panelH);
+        const float mw = 8.f + rowH;
+        ribbonSpecs.push_back({w, mw, [&, w, mw, cP]() {
+          RibbonSectionBegin("RibbonSecProfSect", "Profile & Section Views", curCompact ? mw : w, panelH);
           ImGui::BeginGroup();
-          nyiRow("##PsvProfileView", "Profile View", cP);
-          nyiRow("##PsvSampleLines", "Sample Lines", cP);
-          nyiRow("##PsvSectionViews", "Section Views", cP);
+          nyiRow("##PsvProfileView", "c3d_profileview", "Profile View", cP);
+          nyiRow("##PsvSampleLines", "c3d_samplelines", "Sample Lines", cP);
+          nyiRow("##PsvSectionViews", "c3d_sectionviews", "Section Views", cP);
           ImGui::EndGroup();
           RibbonSectionEnd();
-        }});
+        }, "Profile & Section Views", RibbonIconKind::Nyi, "c3d_profileview"});
       }
 
       // ---- Draw ---------------------------------------------------------
       {
         const float w = 8.f + gc * 4.f + 4.f * 3.f;
-        ribbonSpecs.push_back({w, w, [&]() {
+        ribbonSpecs.push_back({w, w, [&, w]() {
           RibbonSectionBegin("RibbonSecDraw", "Draw", w, panelH);
           if (gridBtn("##RibbonLine", RibbonIconKind::Line)) StartLineCommand(cmd, log);
           RibbonItemHelp("Line — draw straight segments between points.\nCommand bar: LINE or L");
@@ -3600,7 +3676,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           if (gridBtn("##RibbonPLine", RibbonIconKind::Polyline)) StartPolylineCommand(cmd, log);
           RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
           ImGui::SameLine(0, 4);
-          nyiGrid("##RibbonSpline", "Spline");
+          nyiGrid("##RibbonSpline", "c3d_spline", "Spline");
 
           if (gridBtn("##RibbonCircle", RibbonIconKind::Circle)) StartCircleCommand(cmd, log);
           RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
@@ -3611,7 +3687,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           if (gridBtn("##RibbonEllipse", RibbonIconKind::Ellipse)) StartEllipseCommand(cmd, log);
           RibbonItemHelp("Ellipse — center, axis endpoint, then ratio.\nCommand bar: ELLIPSE or EL");
           ImGui::SameLine(0, 4);
-          nyiGrid("##RibbonPoint", "Point");
+          nyiGrid("##RibbonPoint", "c3d_point", "Point");
 
           if (gridBtn("##RibbonHatch", RibbonIconKind::Hatch)) StartHatchCommand(cmd, log);
           RibbonItemHelp("Hatch — pick an internal point to fill a closed area.\nCommand bar: HATCH or H");
@@ -3619,11 +3695,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           if (gridBtn("##RibbonPdfAttach", RibbonIconKind::PdfAttach)) StartPdfAttachCommand(cmd, log);
           RibbonItemHelp("PDF Attach — attach a PDF page as a raster underlay.\nCommand bar: PDFATTACH");
           ImGui::SameLine(0, 4);
-          nyiGrid("##RibbonRevcloud", "Revision Cloud");
+          nyiGrid("##RibbonRevcloud", "c3d_revcloud", "Revision Cloud");
           ImGui::SameLine(0, 4);
-          nyiGrid("##RibbonWipeout", "Wipeout");
+          nyiGrid("##RibbonWipeout", "c3d_wipeout", "Wipeout");
           RibbonSectionEnd();
-        }});
+        }, "Draw", RibbonIconKind::Line});
       }
 
       // ---- Modify ----------------------------------------------------------
@@ -3631,8 +3707,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float c1 = colW({"Move", "Copy", "Stretch"});
         const float c2 = colW({"Rotate", "Mirror", "Scale"});
         const float w = 8.f + c1 + 4.f + c2 + 4.f + rowH + 4.f + rowH;
-        ribbonSpecs.push_back({w, w, [&]() {
-          RibbonSectionBegin("RibbonSecModify", "Modify", w, panelH);
+        const float mw = 8.f + rowH * 4.f + 4.f * 3.f;
+        ribbonSpecs.push_back({w, mw, [&, w, mw]() {
+          RibbonSectionBegin("RibbonSecModify", "Modify", curCompact ? mw : w, panelH);
           const float m1 = colW({"Move", "Copy", "Stretch"});
           const float m2 = colW({"Rotate", "Mirror", "Scale"});
           ImGui::BeginGroup();
@@ -3672,7 +3749,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           RibbonItemHelp("Extend — lengthen to a boundary edge.\nCommand bar: EXTEND or EX");
           ImGui::EndGroup();
         RibbonSectionEnd();
-        }});
+        }, "Modify", RibbonIconKind::Move});
       }
     } else {
       // Layout contextual ribbon (REQ-032): paper-space viewport-authoring tools. Plot/Batch Plot
@@ -3704,8 +3781,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     {
       const float cLay = colW({"Make Current", "Match Layer"});
       const float w = 8.f + largeW + 4.f + gc * 3.f + 4.f * 2.f + 4.f + cLay;
-      ribbonSpecs.push_back({w, w, [&]() {
-        RibbonSectionBegin("RibbonSecLayersHome", "Layers", w, panelH);
+      const float mw = 8.f + largeW + 4.f + gc * 3.f + 4.f * 2.f + 4.f + rowH;
+      ribbonSpecs.push_back({w, mw, [&, w, mw, cLay]() {
+        RibbonSectionBegin("RibbonSecLayersHome", "Layers", curCompact ? mw : w, panelH);
         if (largeBtn("##RibbonLayerPropsHome", RibbonIconKind::Layers, "Layer\nProperties")) {
           SyncDrawingLayerTableWithGeometry(cmd);
           cmd.showLayerManagerWindow = true;
@@ -3713,20 +3791,20 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         RibbonItemHelp("Layer Properties — table of all layers.\nCommand bar: LAYER or LA");
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
-        nyiGrid("##LayOnOff", "Layer On/Off");     ImGui::SameLine(0, 4);
-        nyiGrid("##LayFreeze", "Freeze");           ImGui::SameLine(0, 4);
-        nyiGrid("##LayLock", "Lock");
-        nyiGrid("##LayIsolate", "Isolate");         ImGui::SameLine(0, 4);
-        nyiGrid("##LayUnisolate", "Unisolate");     ImGui::SameLine(0, 4);
-        nyiGrid("##LayOff2", "Turn Off");
+        nyiGrid("##LayOnOff", "c3d_layon", "Layer On/Off");     ImGui::SameLine(0, 4);
+        nyiGrid("##LayFreeze", "c3d_freeze", "Freeze");           ImGui::SameLine(0, 4);
+        nyiGrid("##LayLock", "c3d_lock", "Lock");
+        nyiGrid("##LayIsolate", "c3d_isolate", "Isolate");         ImGui::SameLine(0, 4);
+        nyiGrid("##LayUnisolate", "c3d_unisolate", "Unisolate");     ImGui::SameLine(0, 4);
+        nyiGrid("##LayOff2", "c3d_layoff", "Turn Off");
         ImGui::EndGroup();
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
-        nyiRow("##LayMakeCurrent", "Make Current", cLay);
-        nyiRow("##LayMatch", "Match Layer", cLay);
+        nyiRow("##LayMakeCurrent", "c3d_makecurrent", "Make Current", cLay);
+        nyiRow("##LayMatch", "c3d_matchlayer", "Match Layer", cLay);
         ImGui::EndGroup();
         RibbonSectionEnd();
-      }});
+      }, "Layers", RibbonIconKind::Layers});
     }
 
     // ---- Clipboard ------------------------------------------------------
@@ -3734,7 +3812,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       const bool hasClip = !cmd.clipboard.empty();
       const bool hasSel = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
       const float w = 8.f + largeW + 4.f + gc * 2.f + 4.f;
-      ribbonSpecs.push_back({w, w, [&]() {
+      ribbonSpecs.push_back({w, w, [&, w, hasClip, hasSel]() {
         RibbonSectionBegin("RibbonSecClipboard", "Clipboard", w, panelH);
         if (!hasClip) ImGui::BeginDisabled();
         if (largeBtn("##RibbonPasteHome", RibbonIconKind::ClipboardPaste, "Paste"))
@@ -3751,12 +3829,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         RibbonItemHelp("Copy (Ctrl+C) — copy selected objects to clipboard.",
                        hasSel ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
         ImGui::SameLine(0, 4);
-        nyiGrid("##ClipCut", "Cut");
-        nyiGrid("##ClipMatchProps", "Match Properties");   ImGui::SameLine(0, 4);
-        nyiGrid("##ClipPasteSpecial", "Paste Special");
+        nyiGrid("##ClipCut", "c3d_cut", "Cut");
+        nyiGrid("##ClipMatchProps", "c3d_matchprops", "Match Properties");   ImGui::SameLine(0, 4);
+        nyiGrid("##ClipPasteSpecial", "c3d_pastespecial", "Paste Special");
         ImGui::EndGroup();
         RibbonSectionEnd();
-      }});
+      }, "Clipboard", RibbonIconKind::ClipboardPaste});
     }
   } // if (activeRibbonTab == kRibbonTabHome)
 
