@@ -237,6 +237,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   # what a preview PROMISES: BREAK's preview says which half of an object is about to disappear,
   # and on a closed entity that answer depends on click order, so it can be confidently wrong.
   src/viewport/TransformPreview.cpp
+  # Draft-command rubber (pure geometry; no GL — same rationale as TransformPreview.cpp above).
+  # Moved into the shared list by TASK-146 so the INSERT block-ghost preview can be asserted
+  # headlessly (REQ-107, D-2026-08-29-i).
+  src/viewport/CadRubberPreview.cpp
 
   # Text measurement + font registry. In the domain set because label geometry depends on metrics
   # (ADR-031 (c′)) — these need ImGui core, never a backend.
@@ -337,8 +341,8 @@ add_executable(GoSurvey
   # Application entry
   src/app/main.cpp
 
-  # Viewport system (TransformPreview.cpp is in GOSURVEY_DOMAIN_SOURCES — no GL, headless-testable)
-  src/viewport/CadRubberPreview.cpp
+  # Viewport system (CadRubberPreview.cpp / TransformPreview.cpp are in GOSURVEY_DOMAIN_SOURCES —
+  # no GL, headless-testable)
 
   # Renderer
   src/render/ViewportRenderer.cpp

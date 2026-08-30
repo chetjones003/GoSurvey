@@ -3785,6 +3785,20 @@ requirements is a planning failure, not a sign of rigor.
     BEDIT was invoked are restored.
   - Nested blocks, meshes, attribute definitions, parameters and actions on the definition are
     preserved unchanged across an edit session.
+- Acceptance (INSERT on-screen interaction, D-2026-08-29-i):
+  - When any of insertion point / scale / rotation is "Specify On-screen", a **live ghost** of the
+    block definition (its lines, arcs, circles, polylines and nested blocks, tessellated) is drawn
+    at the pending transform and follows the cursor: rotating live during the rotation pick (angle
+    in the clockwise-from-north convention, pick-north ⇒ rotation 0 ⇒ block as authored), scaling
+    live and uniformly during the scale pick (factor = distance from insertion point to cursor).
+    The ghost is drawn at the **snapped** commit point, honours the block-unit scale factor and
+    base point, and the committed insert matches the last previewed transform within REQ-101.
+  - Object snapping is active for the insertion-point, scale and rotation picks, subject to the
+    running OSNAP toggles and the master object-snap switch.
+  - The geometry of an **already-placed block instance** (including nested) is an object-snap
+    target for all commands: Endpoint on its segment ends and its insertion point, Midpoint on its
+    segment midpoints, Center on its circles/arcs — same tolerance and ranking as native entities.
+    The ghost being inserted is never itself a snap target.
 - Owner-layer: Domain/Commands/IO/UI — architectural; block entity model recorded across the
   issue-#124 work, the in-place editor recorded as ADR-043
 - Status: accepted
@@ -3792,6 +3806,7 @@ requirements is a planning failure, not a sign of rigor.
   2026-08-29 — accepted for the block-editor slice (D-2026-08-29-h, ADR-043): in-place isolated
   editing via a model-store swap, with a Save/Don't-Save/Cancel close gate. Dynamic blocks and a
   block-library browser remain out of scope (roadmap Someday).
+  2026-08-29 — D-2026-08-29-i: live INSERT rubber-band preview + object snapping to placed inserts.
 
 ### REQ-108 — Polar and tracking input aids
 - Purpose: the POLAR status-bar toggle lights up with no behavior behind it, there is no object-snap tracking, and there's no typed polar-coordinate entry

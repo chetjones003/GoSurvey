@@ -543,6 +543,56 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
   }
 }
 
+/// Circle / arc / ellipse centre points of a placed INSERT (and its nested blocks) in world
+/// space. Used for the Center object snap on block instances (REQ-107, D-2026-08-29-i).
+inline void CadBlockCollectWorldCenters(const std::vector<CadBlockDefinition>& defs, const CadBlockRef& rootRef,
+                                        std::vector<CadBlockWorldPoint>* out) {
+  assert(out != nullptr);
+  const int root = CadBlockFindDef(defs, rootRef.defName);
+  if (root < 0)
+    return;
+  std::array<CadBlockWalkFrame, kCadBlockMaxNest> stack{};
+  int n = 0;
+  stack[static_cast<size_t>(n++)] = CadBlockWalkFrame{root, rootRef.xf, rootRef.visState, &rootRef};
+  int steps = 0;
+  while (n > 0 && steps < kCadBlockMaxWalk) {
+    ++steps;
+    const CadBlockWalkFrame fr = stack[static_cast<size_t>(--n)];
+    if (fr.defIndex < 0)
+      continue;
+    const CadBlockDefinition& def = defs[static_cast<size_t>(fr.defIndex)];
+    const CadBlockRef localRef = fr.ref ? *fr.ref : CadBlockRef{};
+    const CadBlockContent& c = def.content;
+    auto emit = [&](float lx, float ly, float lz) {
+      float ax = lx;
+      float ay = ly;
+      CadBlockApplyActionsToPoint(def, localRef, &ax, &ay, "geom", {});
+      CadBlockWorldPoint p;
+      CadBlockXformPoint(fr.xf, ax, ay, lz, &p.x, &p.y, &p.z);
+      out->push_back(p);
+    };
+    for (size_t i = 0; i + 3 < c.circles.size(); i += 4)
+      emit(c.circles[i], c.circles[i + 1], c.circles[i + 2]);
+    for (const CadArc& a : c.arcs)
+      emit(a.cx, a.cy, a.z);
+    for (const CadEllipse& e : c.ellipses)
+      emit(e.cx, e.cy, e.z);
+    for (const CadBlockNested& child : c.nested) {
+      if (n >= kCadBlockMaxNest)
+        break;
+      const int ci = CadBlockFindDef(defs, child.defName);
+      if (ci < 0)
+        continue;
+      CadBlockWalkFrame nf;
+      nf.defIndex = ci;
+      nf.xf = CadBlockCompose(fr.xf, child.xf);
+      nf.vis = child.visState.empty() ? fr.vis : child.visState;
+      nf.ref = nullptr;
+      stack[static_cast<size_t>(n++)] = nf;
+    }
+  }
+}
+
 inline void CadBlockCollectWorldAnnotations(const std::vector<CadBlockDefinition>& defs, const CadBlockRef& rootRef,
                                             std::vector<CadAnnotation>* out) {
   assert(out != nullptr);

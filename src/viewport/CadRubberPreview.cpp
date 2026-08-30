@@ -1,7 +1,10 @@
 #include "CadRubberPreview.hpp"
 
+#include "CadBlocks.hpp"
 #include "CadCommands.hpp"
 #include "geom2d.hpp"
+
+#include <vector>
 
 #include <algorithm>
 #include <cmath>
@@ -299,11 +302,26 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
 
   if (cmd.active == AppCommandState::Kind::InsertBlock) {
     using IPh = AppCommandState::InsertBlockPhase;
-    if (cmd.insertBlockPhase == IPh::WaitRotation || cmd.insertBlockPhase == IPh::WaitScale) {
-      float lx = curXf;
-      float ly = curYf;
-      ApplyOrthoConstrainFromAnchor(cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled);
-      PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0., zc, zc);
+    if (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
+        cmd.insertBlockPhase == IPh::WaitRotation) {
+      // Drag indicator from the fixed insertion point to the cursor during the scale/rotation picks.
+      if (cmd.insertBlockPhase != IPh::WaitInsertPoint) {
+        float lx = curXf;
+        float ly = curYf;
+        ApplyOrthoConstrainFromAnchor(cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled);
+        PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0., zc, zc);
+      }
+      // Live ghost of the block at the transform this pick would commit (REQ-107, D-2026-08-29-i).
+      CadBlockXform gxf;
+      if (CadBlockInsertPreviewXform(cmd, curXf, curYf, &gxf)) {
+        CadBlockRef ghost;
+        ghost.defName = cmd.insertBlockName;
+        ghost.xf = gxf;
+        std::vector<CadBlockWorldSeg> segs;
+        CadBlockCollectWorldLines(cmd.blockDefs, ghost, EntityAttributes{}, &segs);
+        for (const CadBlockWorldSeg& s : segs)
+          PushRubberSegViewRel(rubberLines, s.x0, s.y0, s.x1, s.y1, 0., 0., s.z0, s.z1);
+      }
     }
   }
 }

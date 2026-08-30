@@ -2,6 +2,7 @@
 
 #include "SurveyPoints.hpp"
 #include "geom2d.hpp"
+#include "util/cadblock.hpp"
 #include "util/curveintersect.hpp"
 
 #include <algorithm>
@@ -851,6 +852,39 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     for (const SurveyPoint& sp : cmd.surveyPoints) {
       const float p2 = MinDistSqToSurveyMarker(wx, wy, sp.easting, sp.northing, arm);
       ConsiderSnap(&acc, wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, p2, tolWorld, sp.elevation);  // elevation IS the point's Z (REQ-057)
+    }
+  }
+
+  // --- Placed block instances (REQ-107, D-2026-08-29-i) ---
+  // Expand each INSERT to world geometry and offer Endpoint on its segment ends and its insertion
+  // point, Midpoint on its segment midpoints, and Center on its circles/arcs/ellipses — same
+  // Consider/ConsiderSnap path, tolerance and ranking as native entities. The ghost being inserted
+  // lives only in the rubber preview, never in cadBlockRefs, so it cannot snap to itself.
+  if (wantEndpoint || wantMidpoint || wantCenter) {
+    std::vector<CadBlockWorldSeg> bsegs;
+    std::vector<CadBlockWorldPoint> bctr;
+    for (const CadBlockRef& br : cmd.cadBlockRefs) {
+      if (wantEndpoint)
+        Consider(&acc, wx, wy, br.xf.x, br.xf.y, Kind::Endpoint, tolWorld, br.xf.z);
+      if (wantEndpoint || wantMidpoint) {
+        bsegs.clear();
+        CadBlockCollectWorldLines(cmd.blockDefs, br, EntityAttributes{}, &bsegs);
+        for (const CadBlockWorldSeg& s : bsegs) {
+          if (wantEndpoint) {
+            Consider(&acc, wx, wy, s.x0, s.y0, Kind::Endpoint, tolWorld, s.z0);
+            Consider(&acc, wx, wy, s.x1, s.y1, Kind::Endpoint, tolWorld, s.z1);
+          }
+          if (wantMidpoint)
+            Consider(&acc, wx, wy, 0.5f * (s.x0 + s.x1), 0.5f * (s.y0 + s.y1), Kind::Midpoint, tolWorld,
+                     0.5f * (s.z0 + s.z1));
+        }
+      }
+      if (wantCenter) {
+        bctr.clear();
+        CadBlockCollectWorldCenters(cmd.blockDefs, br, &bctr);
+        for (const CadBlockWorldPoint& p : bctr)
+          Consider(&acc, wx, wy, p.x, p.y, Kind::Center, tolWorld, p.z);
+      }
     }
   }
 

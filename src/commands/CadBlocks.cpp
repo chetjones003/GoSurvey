@@ -24,6 +24,31 @@ namespace {
 /// inserts the definition exactly as authored.
 float InsertRotZFromCwNorthDeg(float deg) { return -deg * 0.01745329252f; }
 
+/// Distance from the committed insertion point to \p wx,\p wy after ORTHO, used for the live
+/// on-screen scale pick. Shared by the commit path and the preview ghost so they cannot drift.
+float InsertLiveScaleDist(const AppCommandState& st, float wx, float wy) {
+  float lx = wx;
+  float ly = wy;
+  ApplyOrthoConstrainFromAnchor(st.insertBlockX, st.insertBlockY, &lx, &ly, st.orthoMode);
+  const float dx = lx - st.insertBlockX;
+  const float dy = ly - st.insertBlockY;
+  return std::sqrt(dx * dx + dy * dy);
+}
+
+/// Bearing from the committed insertion point to \p wx,\p wy in the clockwise-from-north
+/// convention (after ORTHO), used for the live on-screen rotation pick. Returns the current stored
+/// angle when the cursor sits on the insertion point. Shared by commit and preview.
+float InsertLiveRotDeg(const AppCommandState& st, float wx, float wy) {
+  float lx = wx;
+  float ly = wy;
+  ApplyOrthoConstrainFromAnchor(st.insertBlockX, st.insertBlockY, &lx, &ly, st.orthoMode);
+  const float dx = lx - st.insertBlockX;
+  const float dy = ly - st.insertBlockY;
+  if (dx * dx + dy * dy <= 1.e-10f)
+    return st.insertBlockRotDeg;
+  return BearingCwNorthDegFromMathAngleRad(std::atan2(dy, dx));
+}
+
 EntityAttributes NewBlockAttr(const AppCommandState& st) {
   EntityAttributes a;
   a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
@@ -773,6 +798,56 @@ void CadBlockRestoreDynGripOrig(AppCommandState& st, CadBlockRef* r) {
   r->xf.y = st.entityGripOrigCy;
 }
 
+bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float curY, CadBlockXform* out) {
+  assert(out != nullptr);
+  using Ph = AppCommandState::InsertBlockPhase;
+  if (st.insertBlockPhase != Ph::WaitInsertPoint && st.insertBlockPhase != Ph::WaitScale &&
+      st.insertBlockPhase != Ph::WaitRotation)
+    return false;
+  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+  if (di < 0)
+    return false;
+
+  CadBlockXform xf;
+  if (st.insertBlockPhase == Ph::WaitInsertPoint) {
+    xf.x = curX;
+    xf.y = curY;
+  } else {
+    xf.x = st.insertBlockX;
+    xf.y = st.insertBlockY;
+  }
+  xf.z = st.insertBlockZ;
+
+  float sx = st.insertBlockSx;
+  float sy = st.insertBlockSy;
+  float sz = st.insertBlockSz;
+  if (st.insertBlockPhase == Ph::WaitScale && st.insertBlockSpecifyScale) {
+    const float d = InsertLiveScaleDist(st, curX, curY);
+    if (d > 1.e-8f) {
+      sx = d;
+      if (st.insertBlockUniformScale) {
+        sy = d;
+        sz = d;
+      }
+    }
+  }
+
+  float rotDeg = st.insertBlockRotDeg;
+  if (st.insertBlockPhase == Ph::WaitRotation && st.insertBlockSpecifyRot)
+    rotDeg = InsertLiveRotDeg(st, curX, curY);
+
+  // CadBlockPlaceInsert multiplies the transform by the block-unit scale after building it from
+  // the dialog; fold the same factor in here so the ghost matches the commit within REQ-101.
+  const float us = CadBlockUnitsScale(st.blockDefs[static_cast<size_t>(di)].units,
+                                      CadDrawingInsUnitsName(st.drawingInsUnits));
+  xf.sx = sx * us;
+  xf.sy = sy * us;
+  xf.sz = sz * us;
+  xf.rotZ = InsertRotZFromCwNorthDeg(rotDeg);
+  *out = xf;
+  return true;
+}
+
 void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   using Ph = AppCommandState::InsertBlockPhase;
   if (st.active != AppCommandState::Kind::InsertBlock)
@@ -795,12 +870,7 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, std::vector<
     return;
   }
   if (st.insertBlockPhase == Ph::WaitScale) {
-    float lx = wx;
-    float ly = wy;
-    ApplyOrthoConstrainFromAnchor(st.insertBlockX, st.insertBlockY, &lx, &ly, st.orthoMode);
-    const float dx = lx - st.insertBlockX;
-    const float dy = ly - st.insertBlockY;
-    const float dist = std::sqrt(dx * dx + dy * dy);
+    const float dist = InsertLiveScaleDist(st, wx, wy);
     if (dist < 1.e-8f) {
       log.push_back("INSERT — scale point must be away from the insertion point.");
       return;
@@ -820,15 +890,9 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, std::vector<
     return;
   }
   if (st.insertBlockPhase == Ph::WaitRotation) {
-    float lx = wx;
-    float ly = wy;
-    ApplyOrthoConstrainFromAnchor(st.insertBlockX, st.insertBlockY, &lx, &ly, st.orthoMode);
-    const float dx = lx - st.insertBlockX;
-    const float dy = ly - st.insertBlockY;
-    if (dx * dx + dy * dy > 1.e-10f)
-      // Store the pick direction in the same clockwise-from-north convention the typed field uses,
-      // so InsertRotZFromCwNorthDeg converts it consistently (pick north → rotation 0 → as authored).
-      st.insertBlockRotDeg = BearingCwNorthDegFromMathAngleRad(std::atan2(dy, dx));
+    // Store the pick direction in the same clockwise-from-north convention the typed field uses,
+    // so InsertRotZFromCwNorthDeg converts it consistently (pick north → rotation 0 → as authored).
+    st.insertBlockRotDeg = InsertLiveRotDeg(st, wx, wy);
     if (CadBlockPlaceInsert(st, st.insertBlockName, InsertDialogXform(st), st.insertBlockExplode, log))
       CadBlocksAfterPlace(st, log);
   }

@@ -1,5 +1,6 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
+#include "CadRubberPreview.hpp"
 #include "HeadlessFileDialogs.hpp"
 
 #include <catch2/catch_approx.hpp>
@@ -89,6 +90,7 @@ TEST_CASE("CadBlockPlaceInsert places a BlockRef", "[issue124][block][insert]") 
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TREE";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
   def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   CadBlockXform xf;
@@ -105,6 +107,7 @@ TEST_CASE("CadBlockPlaceInsert explode writes primitives", "[issue124][block][in
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TREE";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
   def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   CadBlockXform xf;
@@ -131,6 +134,7 @@ TEST_CASE("Insert dialog OK places when Specify On-screen is off", "[issue124][b
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "TREE";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
   def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   st.blockDefs.push_back(def);
   std::vector<std::string> log;
@@ -396,4 +400,105 @@ TEST_CASE("INSERT rotation is clockwise from north", "[issue124][block][rotation
   const auto d180 = dirAt("180");
   CHECK(d180.first == Catch::Approx(0.f).margin(2e-3));
   CHECK(d180.second == Catch::Approx(-2.f).margin(2e-3));  // 180 -> south
+}
+
+// REQ-107 (D-2026-08-29-i): the live INSERT preview transform must match what the pick commits.
+TEST_CASE("INSERT rotation preview transform matches the committed insert", "[issue124][block][insert][preview]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "TREE";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "TREE");
+  st.insertBlockSpecifyPoint = true;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockSpecifyRot = true;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+
+  SubmitInsertBlockPick(st, 5.f, 6.f, log);  // insertion point
+  REQUIRE(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitRotation);
+
+  CadBlockXform pv;
+  REQUIRE(CadBlockInsertPreviewXform(st, 15.f, 6.f, &pv));  // cursor due east -> 90 deg cw-from-north
+
+  SubmitInsertBlockPick(st, 15.f, 6.f, log);  // commit rotation
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].xf.rotZ == Catch::Approx(pv.rotZ).margin(1e-4));
+  CHECK(pv.rotZ == Catch::Approx(-1.57079633f).margin(1e-4));
+}
+
+TEST_CASE("INSERT scale preview transform matches the committed insert", "[issue124][block][insert][preview]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "TREE";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "TREE");
+  st.insertBlockSpecifyPoint = true;
+  st.insertBlockSpecifyScale = true;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockUniformScale = true;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+
+  SubmitInsertBlockPick(st, 0.f, 0.f, log);  // insertion point
+  REQUIRE(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitScale);
+
+  CadBlockXform pv;
+  REQUIRE(CadBlockInsertPreviewXform(st, 3.f, 4.f, &pv));  // distance 5
+  CHECK(pv.sx == Catch::Approx(5.f));
+
+  SubmitInsertBlockPick(st, 3.f, 4.f, log);  // commit scale (rotation off -> places)
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].xf.sx == Catch::Approx(pv.sx));
+}
+
+TEST_CASE("INSERT preview emits a rotated block ghost into the rubber lines", "[issue124][block][insert][preview]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "TREE";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);  // isolate from unit rescale
+  def.content.lines = {0.f, 0.f, 0.f, 0.f, 2.f, 0.f};  // one segment pointing north
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "TREE");
+  st.insertBlockSpecifyPoint = true;
+  st.insertBlockSpecifyRot = true;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  SubmitInsertBlockPick(st, 10.f, 10.f, log);
+  REQUIRE(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitRotation);
+
+  std::vector<float> rubber;
+  // Cursor due east of the insertion point -> 90 deg cw-from-north -> ghost segment points east.
+  AppendCadDraftRubberLines(st, 20.0, 10.0, /*orthoEnabled=*/false, 0.0, 0.0, 50.f, 800, rubber);
+  REQUIRE(rubber.size() >= 12u);  // drag indicator (6) + at least one ghost segment (6)
+  // Find the ghost segment anchored at the insertion point (10,10).
+  bool foundEastGhost = false;
+  for (size_t i = 0; i + 5 < rubber.size(); i += 6) {
+    if (std::fabs(rubber[i] - 10.f) < 1e-2f && std::fabs(rubber[i + 1] - 10.f) < 1e-2f &&
+        std::fabs(rubber[i + 3] - 12.f) < 1e-2f && std::fabs(rubber[i + 4] - 10.f) < 1e-2f)
+      foundEastGhost = true;
+  }
+  CHECK(foundEastGhost);
+}
+
+TEST_CASE("INSERT preview is inert with no definition selected", "[issue124][block][insert][preview]") {
+  AppCommandState st;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitRotation;
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "MISSING");
+  CadBlockXform pv;
+  CHECK_FALSE(CadBlockInsertPreviewXform(st, 1.f, 1.f, &pv));
 }
