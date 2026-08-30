@@ -75,3 +75,11 @@ desktop.ini
 
 # --- Wrangler (Cloudflare Workers CLI local cache) ---
 .wrangler/
+
+# --- Crash / debug scratch (never commit) ---
+/ErrorReports/
+*.rdbg
+
+# --- DevShell test scratch outputs (written at runtime by src/devshell) ---
+/issue124-roundtrip.gs
+/issue124-wblock.gs
