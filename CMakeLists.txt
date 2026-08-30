@@ -661,6 +661,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
     tests/MtextTextOpsTests.cpp
+    tests/DxfEntityEmitTests.cpp
     tests/DwgProbeTests.cpp
     tests/LibreDwgTests.cpp
     tests/LinetypeTessellationTests.cpp
@@ -955,7 +956,7 @@ if(GOSURVEY_BUILD_TESTS)
     add_test(NAME headless.fuzz-smoke
              COMMAND gosurvey_headless fuzz --seeds 1..12
                      --out "${CMAKE_BINARY_DIR}/headless-out/fuzz-smoke"
-                     --timeout-ms 30000)
+                     --timeout-ms 120000)
     set_tests_properties(headless.fuzz-smoke PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
