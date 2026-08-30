@@ -338,14 +338,11 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip"));
     ctx->ItemClick("Insert");
     ctx->Yield(8);
-    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecBlocks"));
-    IM_CHECK(ctx->ItemExists("##RibbonBlock"));
-    ctx->ItemClick("##RibbonBlock");
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecInsBlock"));
+    IM_CHECK(ctx->ItemExists("##RibbonInsInsert"));
+    ctx->ItemClick("##RibbonInsCreate");
     ctx->Yield(2);
-    IM_CHECK(CadLogHas("BLOCKLIST"));
-    ctx->ItemClick("##RibbonInsert");
-    ctx->Yield(2);
-    IM_CHECK(CadLogHas("BLOCKLIB"));
+    IM_CHECK(CadLogHas("BLOCK"));
     IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip"));
     ctx->ItemClick("Home");
     ctx->Yield(4);
@@ -434,7 +431,6 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     }
     DevShell_SetWindowSize(2560, 1300);
     ctx->Yield(6);
-    ctx->WindowCollapse("//Developer Shell", false);
 
     struct Tab { const char* label; int idx; };
     const Tab tabs[] = {
@@ -454,6 +450,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
       DevShell_RequestScreenshot(path);
       ctx->Yield(3);
     }
+    ctx->WindowCollapse("//Developer Shell", false);
 
     // Block Editor contextual tab — needs an open definition.
     SubmitCad(ctx, "MKLINE -2,0, 2,0");

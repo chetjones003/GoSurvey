@@ -1,4 +1,5 @@
 #include "CadUi.hpp"
+#include "AppIcon.hpp"
 #include "FontRegistry.hpp"
 #include "ToolspaceCatalog.hpp"
 #include "WinFileDialogs.hpp"
@@ -10,6 +11,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -25,16 +28,56 @@ constexpr ImGuiTreeNodeFlags kFolder =
 
 constexpr int kTsPopupColors = 7;
 
-// Light paper + ink (tree) vs steel chrome (frame). Text is near-black on paper for WCAG contrast.
-const ImVec4 kTsPaper(0.94f, 0.95f, 0.96f, 1.f);
-const ImVec4 kTsInk(0.08f, 0.09f, 0.11f, 1.f);
-const ImVec4 kTsInkMuted(0.28f, 0.30f, 0.34f, 1.f);
-const ImVec4 kTsLines(0.32f, 0.34f, 0.38f, 1.f);
-const ImVec4 kTsChrome(0.18f, 0.20f, 0.23f, 1.f);
-const ImVec4 kTsChromeHi(0.22f, 0.24f, 0.28f, 1.f);
-const ImVec4 kTsAccent(0.00f, 0.47f, 0.84f, 1.f);
-const ImVec4 kTsSel(0.00f, 0.47f, 0.84f, 0.28f);
-const ImVec4 kTsSelHov(0.00f, 0.47f, 0.84f, 0.42f);
+// Neutral light panel — no blue cast. Near-black ink on light-gray paper for the tree; the frame
+// and side-tab strip are the app's own achromatic chrome grays; selection is the app amber accent.
+const ImVec4 kTsPaper(0.949f, 0.949f, 0.949f, 1.f);
+const ImVec4 kTsInk(0.13f, 0.13f, 0.13f, 1.f);
+const ImVec4 kTsInkMuted(0.42f, 0.42f, 0.42f, 1.f);
+const ImVec4 kTsLines(0.58f, 0.58f, 0.58f, 1.f);       // thin gray tree connector rules
+const ImVec4 kTsChrome(0.184f, 0.184f, 0.184f, 1.f);   // #2F2F2F — app ground
+const ImVec4 kTsChromeHi(0.205f, 0.205f, 0.205f, 1.f); // #343434 — app title/tab strip
+const ImVec4 kTsAccent(0.878f, 0.682f, 0.369f, 1.f);   // #E0AE5E — app accent
+const ImVec4 kTsSel(0.878f, 0.682f, 0.369f, 0.30f);
+const ImVec4 kTsSelHov(0.878f, 0.682f, 0.369f, 0.44f);
+
+// Load-once cache of resources/icons/<name>.png as a GL texture. 0 on failure (row falls back to
+// text only). Needs a live GL context — true during UI draw.
+ImTextureID TsIcon(const char* name) {
+  static std::map<std::string, ImTextureID> cache;
+  auto it = cache.find(name);
+  if (it != cache.end())
+    return it->second;
+  ImTextureID tex = 0;
+  const std::filesystem::path p =
+      ResolveBundledAssetPath(std::filesystem::path("resources") / "icons" / (std::string(name) + ".png"));
+  if (!p.empty()) {
+    if (unsigned int gl = LoadIconTextureRgba(p))
+      tex = static_cast<ImTextureID>(static_cast<intptr_t>(gl));
+  }
+  cache.emplace(name, tex);
+  return tex;
+}
+
+constexpr float kTsIconSz = 30.f;
+
+// TreeNodeEx with a 22px icon painted in the gutter between the expand arrow and the label. The row
+// is grown to fit the icon so it never crops against the row above/below.
+bool TsTreeNode(const char* strId, ImGuiTreeNodeFlags flags, const char* icon, const char* label) {
+  const float pad = std::max(0.f, (kTsIconSz + 4.f - ImGui::GetTextLineHeight()) * 0.5f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, pad));
+  const bool open = ImGui::TreeNodeEx(strId, flags, "           %s", label);
+  ImGui::PopStyleVar();
+  if (ImTextureID tex = TsIcon(icon)) {
+    const ImVec2 mn = ImGui::GetItemRectMin();
+    const float x = mn.x + ImGui::GetTreeNodeToLabelSpacing() + 1.f;
+    const float y = mn.y + (ImGui::GetItemRectSize().y - kTsIconSz) * 0.5f;
+    // Slight darkening multiply — lifts the pale Civil-3D line art to a contrast that reads on white
+    // (RGB scaled, alpha kept at 255 so nothing goes more transparent).
+    ImGui::GetWindowDrawList()->AddImage(tex, ImVec2(x, y), ImVec2(x + kTsIconSz, y + kTsIconSz),
+                                         ImVec2(0, 0), ImVec2(1, 1), IM_COL32(150, 150, 150, 255));
+  }
+  return open;
+}
 
 struct TsPending {
   enum class Kind { None, AddPointFile, AddPointGroup };
@@ -76,12 +119,12 @@ bool SideTab(const char* id, const char* label, bool selected, float stripW) {
   const bool pressed = ImGui::IsItemClicked();
   const bool hovered = ImGui::IsItemHovered();
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  const ImU32 bg = selected ? IM_COL32(240, 242, 245, 255)
-                            : (hovered ? IM_COL32(62, 70, 82, 255) : IM_COL32(38, 43, 50, 255));
-  const ImU32 fg = selected ? IM_COL32(18, 22, 28, 255) : IM_COL32(236, 238, 242, 255);
+  const ImU32 bg = selected ? IM_COL32(242, 242, 242, 255)
+                            : (hovered ? IM_COL32(72, 72, 72, 255) : IM_COL32(52, 52, 52, 255));
+  const ImU32 fg = selected ? IM_COL32(20, 20, 20, 255) : IM_COL32(215, 215, 215, 255);
   dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bg);
   if (selected)
-    dl->AddRectFilled(ImVec2(pos.x, pos.y), ImVec2(pos.x + 3.f, pos.y + size.y), IM_COL32(0, 120, 215, 255));
+    dl->AddRectFilled(ImVec2(pos.x, pos.y), ImVec2(pos.x + 3.f, pos.y + size.y), IM_COL32(224, 174, 94, 255));
   DrawTextBottomToTop(dl, pos, ImVec2(pos.x + size.x, pos.y + size.y), fg, label);
   return pressed;
 }
@@ -123,13 +166,13 @@ std::string NextSurfaceName(const AppCommandState& cmd) {
 }
 
 void PushTsPopupColors() {
-  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.97f, 0.97f, 0.98f, 0.99f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.97f, 0.97f, 0.98f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.97f, 0.97f, 0.97f, 0.99f));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.97f, 0.97f, 0.97f, 1.f));
   ImGui::PushStyleColor(ImGuiCol_Text, kTsInk);
   ImGui::PushStyleColor(ImGuiCol_TextDisabled, kTsInkMuted);
   ImGui::PushStyleColor(ImGuiCol_Header, kTsSel);
   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kTsSelHov);
-  ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.62f, 0.64f, 0.68f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.66f, 0.66f, 0.66f, 1.f));
 }
 
 bool BeginTsContext(const char* id) {
@@ -482,7 +525,7 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
 
   ImGui::PushID(static_cast<int>(si));
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  const bool open = ImGui::TreeNodeEx("##surf", kFolder, "%s", s.name.c_str());
+  const bool open = TsTreeNode("##surf", kFolder, "c3d_surfaces", s.name.c_str());
   DrawNamedSurfaceContext(cmd, si, log, pending);
   if (!open) {
     ImGui::PopID();
@@ -490,7 +533,7 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
   }
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  const bool masksOpen = ImGui::TreeNodeEx("Masks", kFolder);
+  const bool masksOpen = TsTreeNode("Masks", kFolder, "Boundary", "Masks");
   DrawDefFolderAddRefresh("##masksfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Mask);
   if (masksOpen) {
     for (size_t bi = 0; bi < s.boundaries.size(); ++bi) {
@@ -510,7 +553,7 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
   }
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  const bool shedsOpen = ImGui::TreeNodeEx("Watersheds", kFolder);
+  const bool shedsOpen = TsTreeNode("Watersheds", kFolder, "surfcatchment", "Watersheds");
   if (BeginTsContext("##shedctx")) {
     if (ImGui::MenuItem("Analyze..."))
       SubmitLine(cmd, log, "WATERSHED " + s.name);
@@ -534,14 +577,14 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
   }
 
   ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-  const bool defOpen = ImGui::TreeNodeEx("Definition", kFolder);
+  const bool defOpen = TsTreeNode("Definition", kFolder, "c3d_dwgsettings", "Definition");
   if (BeginTsContext("##deffolder")) {
     if (ImGui::MenuItem("Refresh"))
       SubmitLine(cmd, log, "SURFACEREBUILD " + s.name);
     EndTsContext();
   }
   if (defOpen) {
-    const bool bdOpen = ImGui::TreeNodeEx("Boundaries", kFolder);
+    const bool bdOpen = TsTreeNode("Boundaries", kFolder, "Boundary", "Boundaries");
     DrawDefFolderAddRefresh("##bdfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Boundary);
     if (bdOpen) {
       for (size_t bi = 0; bi < s.boundaries.size(); ++bi) {
@@ -559,7 +602,7 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
       }
       ImGui::TreePop();
     }
-    const bool blOpen = ImGui::TreeNodeEx("Breaklines", kFolder);
+    const bool blOpen = TsTreeNode("Breaklines", kFolder, "Breakline_Symbol", "Breaklines");
     DrawDefFolderAddRefresh("##blfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Breakline);
     if (blOpen) {
       for (size_t i = 0; i < s.breaklines.size(); ++i) {
@@ -576,7 +619,7 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
       }
       ImGui::TreePop();
     }
-    const bool ctOpen = ImGui::TreeNodeEx("Contours", kFolder);
+    const bool ctOpen = TsTreeNode("Contours", kFolder, "c3d_surfaces", "Contours");
     DrawDefFolderAddRefresh("##ctfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Contour);
     if (ctOpen) {
       for (size_t i = 0; i < s.contourSources.size(); ++i) {
@@ -594,7 +637,7 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
       }
       ImGui::TreePop();
     }
-    const bool pfOpen = ImGui::TreeNodeEx("Point Files", kFolder);
+    const bool pfOpen = TsTreeNode("Point Files", kFolder, "Import", "Point Files");
     DrawDefFolderAddRefresh("##pffolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::PointFile);
     if (pfOpen) {
       for (size_t i = 0; i < s.sourcePointFiles.size(); ++i) {
@@ -609,7 +652,7 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
       }
       ImGui::TreePop();
     }
-    const bool pgOpen = ImGui::TreeNodeEx("Point Groups", kFolder);
+    const bool pgOpen = TsTreeNode("Point Groups", kFolder, "Group", "Point Groups");
     DrawDefFolderAddRefresh("##pgdefolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::PointGroup);
     if (pgOpen) {
       for (size_t i = 0; i < s.sourcePointGroups.size(); ++i) {
@@ -624,7 +667,7 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
       }
       ImGui::TreePop();
     }
-    const bool edOpen = ImGui::TreeNodeEx("Edits", kFolder);
+    const bool edOpen = TsTreeNode("Edits", kFolder, "c3d_surfedit", "Edits");
     DrawDefFolderAddRefresh("##edfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Edit);
     if (edOpen) {
       for (size_t i = 0; i < s.swappedEdgePicks.size(); ++i) {
@@ -699,19 +742,19 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
 void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsPending& pending) {
   const std::string drawing = ToolspaceActiveDrawingName(cmd);
   ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-  if (!ImGui::TreeNodeEx(drawing.c_str(), ImGuiTreeNodeFlags_DefaultOpen | kFolder))
+  if (!TsTreeNode("##ts_prosp_root", ImGuiTreeNodeFlags_DefaultOpen | kFolder, "New_Drawing", drawing.c_str()))
     return;
 
-  ImGui::TreeNodeEx("Points", kLeaf);
+  TsTreeNode("##ts_points", kLeaf, "c3d_point", "Points");
   DrawPointsContext(cmd, log);
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  const bool pgFoldOpen = ImGui::TreeNodeEx("Point Groups", kFolder);
+  const bool pgFoldOpen = TsTreeNode("##ts_pgfold", kFolder, "Group", "Point Groups");
   DrawPointGroupsFolderContext(cmd, log);
   if (pgFoldOpen) {
     for (const PointGroup& g : cmd.pointGroups) {
       ImGui::PushID(g.name.c_str());
-      ImGui::TreeNodeEx(g.name.c_str(), kLeaf);
+      TsTreeNode("##pg", kLeaf, "Group", g.name.c_str());
       if (BeginTsContext("##pgitemctx")) {
         if (ImGui::MenuItem("Properties")) {
           cmd.pointGroupManagerFocusName = g.name;
@@ -725,7 +768,7 @@ void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsP
   }
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  const bool surfFoldOpen = ImGui::TreeNodeEx("Surfaces", kFolder);
+  const bool surfFoldOpen = TsTreeNode("##ts_surffold", kFolder, "c3d_surfaces", "Surfaces");
   DrawSurfacesFolderContext(cmd, log);
   if (surfFoldOpen) {
     for (size_t i = 0; i < cmd.cadSurfaces.size(); ++i)
@@ -734,7 +777,7 @@ void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsP
   }
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  const bool flFoldOpen = ImGui::TreeNodeEx("Feature Lines", kFolder);
+  const bool flFoldOpen = TsTreeNode("##ts_flfold", kFolder, "c3d_featureline", "Feature Lines");
   DrawFeatureLinesFolderContext(cmd, log);
   if (flFoldOpen) {
     const size_t nFl = ToolspaceFeatureLineCount(cmd);
@@ -744,7 +787,7 @@ void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsP
               ? cmd.featureLineInfo[i].name
               : ("Feature Line " + std::to_string(i + 1));
       ImGui::PushID(static_cast<int>(i));
-      ImGui::TreeNodeEx(label.c_str(), kLeaf);
+      TsTreeNode("##fl", kLeaf, "c3d_featureline", label.c_str());
       if (BeginTsContext("##flitemctx")) {
         if (ImGui::MenuItem("Properties")) {
           cmd.featureLineElevIndex = static_cast<int>(i);
@@ -763,20 +806,20 @@ void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsP
 void DrawSettingsTree(AppCommandState& cmd) {
   const std::string drawing = ToolspaceActiveDrawingName(cmd);
   ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-  if (!ImGui::TreeNodeEx(drawing.c_str(), ImGuiTreeNodeFlags_DefaultOpen | kFolder))
+  if (!TsTreeNode("##ts_set_root", ImGuiTreeNodeFlags_DefaultOpen | kFolder, "New_Drawing", drawing.c_str()))
     return;
 
   ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-  if (ImGui::TreeNodeEx("General", kFolder)) {
+  if (TsTreeNode("General", kFolder, "settings", "General")) {
     ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-    if (ImGui::TreeNodeEx("Text Styles", kFolder)) {
+    if (TsTreeNode("Text Styles", kFolder, "Text_Style", "Text Styles")) {
       if (BeginTsContext("##tsstyles")) {
         if (ImGui::MenuItem("Properties"))
           cmd.showTextStyleManagerWindow = true;
         EndTsContext();
       }
       for (const TextStyle& ts : cmd.textStyles) {
-        ImGui::TreeNodeEx(ts.name.c_str(), kLeaf);
+        TsTreeNode(ts.name.c_str(), kLeaf, "SHX_Text", ts.name.c_str());
         if (BeginTsContext("##tsstyleitem")) {
           if (ImGui::MenuItem("Properties"))
             cmd.showTextStyleManagerWindow = true;
@@ -786,14 +829,14 @@ void DrawSettingsTree(AppCommandState& cmd) {
       ImGui::TreePop();
     }
     ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-    if (ImGui::TreeNodeEx("Layers", kFolder)) {
+    if (TsTreeNode("Layers", kFolder, "layers", "Layers")) {
       if (BeginTsContext("##tslayers")) {
         if (ImGui::MenuItem("Properties"))
           cmd.showLayerManagerWindow = true;
         EndTsContext();
       }
       for (const CadLayerRow& row : cmd.drawingLayerTable) {
-        ImGui::TreeNodeEx(row.name.c_str(), kLeaf);
+        TsTreeNode(row.name.c_str(), kLeaf, "Layer_Properties", row.name.c_str());
         if (BeginTsContext("##tslayeritem")) {
           if (ImGui::MenuItem("Properties"))
             cmd.showLayerManagerWindow = true;
@@ -802,7 +845,7 @@ void DrawSettingsTree(AppCommandState& cmd) {
       }
       ImGui::TreePop();
     }
-    ImGui::TreeNodeEx("Dimension Style", kLeaf);
+    TsTreeNode("Dimension Style", kLeaf, "dimstyle", "Dimension Style");
     if (BeginTsContext("##tsdim")) {
       if (ImGui::MenuItem("Properties"))
         cmd.showDimStyleDialog = true;
@@ -812,16 +855,16 @@ void DrawSettingsTree(AppCommandState& cmd) {
   }
 
   ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-  if (ImGui::TreeNodeEx("Surface", kFolder)) {
+  if (TsTreeNode("Surface", kFolder, "c3d_surfaces", "Surface")) {
     ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-    if (ImGui::TreeNodeEx("Surface Styles", kFolder)) {
+    if (TsTreeNode("Surface Styles", kFolder, "c3d_surfaces", "Surface Styles")) {
       if (BeginTsContext("##tssurfstyles")) {
         if (ImGui::MenuItem("Properties"))
           cmd.showSurfaceStyleWindow = true;
         EndTsContext();
       }
       for (const SurfaceStyle& ss : cmd.surfaceStyles) {
-        ImGui::TreeNodeEx(ss.name.c_str(), kLeaf);
+        TsTreeNode(ss.name.c_str(), kLeaf, "c3d_surfaces", ss.name.c_str());
         if (BeginTsContext("##tssurfstyleitem")) {
           if (ImGui::MenuItem("Properties")) {
             cmd.surfaceStyleEditorFocusName = ss.name;
@@ -1238,9 +1281,9 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
 
   ImGui::SetNextWindowSize(ImVec2(300.f, 640.f), ImGuiCond_FirstUseEver);
   bool open = cmd.showToolspaceWindow;
-  ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.12f, 0.13f, 0.15f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.10f, 0.11f, 0.13f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, ImVec4(0.12f, 0.13f, 0.15f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.12f, 0.12f, 0.12f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.10f, 0.10f, 0.10f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, ImVec4(0.12f, 0.12f, 0.12f, 1.f));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, kTsChrome);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.f, 6.f));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.f, 6.f));
@@ -1264,11 +1307,11 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::BeginChild("##ts_main", ImVec2(-tabW - 4.f, 0.f), false);
 
   ImGui::PushStyleColor(ImGuiCol_FrameBg, kTsPaper);
-  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.90f, 0.92f, 0.94f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.88f, 0.90f, 0.93f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.91f, 0.91f, 0.91f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.89f, 0.89f, 0.89f, 1.f));
   ImGui::PushStyleColor(ImGuiCol_Text, kTsInk);
-  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.97f, 0.97f, 0.98f, 0.99f));
-  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.22f, 0.24f, 0.28f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.97f, 0.97f, 0.97f, 0.99f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.24f, 0.24f, 1.f));
   ImGui::PushStyleColor(ImGuiCol_Header, kTsSel);
   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kTsSelHov);
   ImGui::PushStyleColor(ImGuiCol_HeaderActive, kTsAccent);
@@ -1300,17 +1343,17 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::PushStyleColor(ImGuiCol_Header, kTsSel);
   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kTsSelHov);
   ImGui::PushStyleColor(ImGuiCol_HeaderActive, kTsAccent);
-  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.22f, 0.24f, 0.28f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.24f, 0.24f, 1.f));
   ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.f);
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 5.f));
-  ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 18.f);
-  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 3.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 6.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 20.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 4.f));
   ImGuiStyle& treeStyle = ImGui::GetStyle();
   const ImGuiTreeNodeFlags prevTreeLines = treeStyle.TreeLinesFlags;
   const float prevTreeLinesSize = treeStyle.TreeLinesSize;
   const float prevTreeLinesRound = treeStyle.TreeLinesRounding;
   treeStyle.TreeLinesFlags = ImGuiTreeNodeFlags_DrawLinesToNodes;
-  treeStyle.TreeLinesSize = 1.25f;
+  treeStyle.TreeLinesSize = 1.f;
   treeStyle.TreeLinesRounding = 0.f;
   ImGui::BeginChild("##ts_tree", ImVec2(0.f, treeH), true);
   if (cmd.toolspaceTab == AppCommandState::ToolspaceTab::Settings)
@@ -1331,7 +1374,7 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::PopStyleColor(8);
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kTsChromeHi);
-  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.12f, 0.13f, 0.15f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.12f, 0.12f, 0.12f, 1.f));
   ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.f);
   ImGui::BeginChild("##ts_preview", ImVec2(0.f, 0.f), true);
   ImGui::EndChild();
@@ -1341,7 +1384,7 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::EndChild();
 
   ImGui::SameLine(0.f, 4.f);
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.16f, 0.18f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.14f, 0.14f, 1.f));
   ImGui::BeginChild("##ts_tabs", ImVec2(tabW, 0.f), false, ImGuiWindowFlags_NoScrollbar);
   if (SideTab("##tab_prospector", "Prospector", cmd.toolspaceTab == AppCommandState::ToolspaceTab::Prospector,
               tabW))

@@ -2641,14 +2641,16 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Traverse:       return "traverse";
   // REQ-143 TIN Surface contextual tab. Matched to library art where one fits; the
   // rest keep their hand-drawn vector fallback (return "" → PaintRibbonIcon).
-  case RibbonIconKind::SurfLabel:      return "Add_Leader";
+  // GUI-pass 2026-08-30: repointed off the old baked-text Autodesk library art onto the c3d_*
+  // blue line-art set so the Survey / contextual tabs match Home/Insert/Annotate/Manage/Output.
+  case RibbonIconKind::SurfLabel:      return "c3d_addlabels";
   case RibbonIconKind::SurfLegend:     return "Table";
-  case RibbonIconKind::SurfPropsHand:  return "Layer_Properties";
+  case RibbonIconKind::SurfPropsHand:  return "c3d_properties";
   case RibbonIconKind::SurfInquiry:    return "Measure_Area";
-  case RibbonIconKind::SurfIsolate:    return "Isolate_Objects";
-  case RibbonIconKind::SurfDoc:        return "Layer_Properties";
-  case RibbonIconKind::SurfAddData:    return "Convert_to_Surface";
-  case RibbonIconKind::SurfEdit:       return "Surface_Sculpt";
+  case RibbonIconKind::SurfIsolate:    return "c3d_isolate";
+  case RibbonIconKind::SurfDoc:        return "c3d_properties";
+  case RibbonIconKind::SurfAddData:    return "c3d_surfaces";
+  case RibbonIconKind::SurfEdit:       return "c3d_surfedit";
   case RibbonIconKind::SurfLodLow:     return "surflodlow";
   case RibbonIconKind::SurfLodHigh:    return "surflodhigh";
   case RibbonIconKind::SurfWaterDrop:  return "surfwaterdrop";
@@ -2659,10 +2661,10 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SurfDrape:      return "surfdrape";
   case RibbonIconKind::SurfExtract:    return "Extract_Data";
   case RibbonIconKind::SurfMoveTo:     return "3D_Move";
-  case RibbonIconKind::SurfQuickProfile: return "Setup_Profile";
-  case RibbonIconKind::SurfProfile:    return "Setup_Profile";
+  case RibbonIconKind::SurfQuickProfile: return "c3d_quickprofile";
+  case RibbonIconKind::SurfProfile:    return "c3d_quickprofile";
   case RibbonIconKind::SurfDataShortcut: return "Attach";
-  case RibbonIconKind::SurfGrading:    return "Gradient";
+  case RibbonIconKind::SurfGrading:    return "c3d_grading";
   // D-2026-08-28-k Civil 3D Survey tab / Survey Point contextual tab.
   case RibbonIconKind::SvyTripod:      return "svytripod";
   case RibbonIconKind::SvyQuery:       return "svyquery";
@@ -2670,9 +2672,9 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SvyPda:         return "svypda";
   case RibbonIconKind::SvyPin:         return "surveypoint";
   case RibbonIconKind::SvyRefresh:     return "svyrefresh";
-  case RibbonIconKind::SvyGlobe:       return "UCS_World";
-  case RibbonIconKind::SvyGeodetic:    return "Quick_Calculator";
-  case RibbonIconKind::SvySun:         return "Sun";
+  case RibbonIconKind::SvyGlobe:       return "c3d_mapcheck";
+  case RibbonIconKind::SvyGeodetic:    return "c3d_geodetic";
+  case RibbonIconKind::SvySun:         return "c3d_astro";
   case RibbonIconKind::SvyRenumber:    return "svyrenumber";
   case RibbonIconKind::SvyLock:        return "Layer_Lock";
   case RibbonIconKind::SvyUnlock:      return "Layer_Unlock";
@@ -3475,7 +3477,41 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                           curCompact ? RibbonLabel::None : RibbonLabel::Right);
   };
 
+  // Insert-tab helpers — MUST be at function scope for the same reason the Home ones are (captured
+  // by reference, invoked later by RenderRibbonFit). `iconName` is a resources/icons/<name>.png that
+  // is not in the RibbonIconKind enum (library art reused for a not-yet-enumerated command).
+  auto insRow = [&](const char* id, const char* iconName, const char* label, float w) {
+    return RibbonButtonEx(id, RibbonIconKind::Nyi, curCompact ? nullptr : label,
+                          ImVec2(curCompact ? rowH : w, rowH),
+                          curCompact ? RibbonLabel::None : RibbonLabel::Right, iconName);
+  };
+  auto insNyi = [&](const char* id, const char* iconName, const char* label, float w) {
+    // label stays non-null even when compact (RibbonNyiButton asserts on it and still needs it for
+    // the auto NYI tooltip); RibbonLabel::None is what hides the text. Matches the Home `nyiRow`.
+    RibbonNyiButton(id, RibbonIconKind::Nyi, label,
+                    ImVec2(curCompact ? rowH : w, rowH),
+                    curCompact ? RibbonLabel::None : RibbonLabel::Right, iconName);
+  };
+
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
+  // Civil 3D Annotate tab shows a style/scale combo in most panels. Where GoSurvey has no picker
+  // yet, render a disabled combo-shaped placeholder with the automatic NYI tooltip. MUST be at
+  // function scope — the ribbonSpecs closures capture it and run after the tab block exits (the
+  // fc0669c dangling-reference crash).
+  auto annNyiCombo = [&](const char* id, const char* text) {
+    ImGui::BeginDisabled();
+    ImGui::Button((std::string(text) + "  \xE2\x96\xBC" + id).c_str(), ImVec2(annStyleW, 0.f));
+    ImGui::EndDisabled();
+    char tip[96];
+    std::snprintf(tip, sizeof(tip), "%s \xE2\x80\x94 not implemented yet.", text);
+    RibbonItemHelp(tip, ImGuiHoveredFlags_AllowWhenDisabled);
+  };
+  // Large (icon-above-label) NYI button using a resources/icons/<name>.png. Function scope for the
+  // same reason as insRow/insNyi — captured by the deferred ribbonSpecs closures. Used by the
+  // Annotate and Manage tab rebuilds.
+  auto nyiLarge = [&](const char* id, const char* iconName, const char* label) {
+    RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(belowW(label), colH), RibbonLabel::Below, iconName);
+  };
   // Visual-style combo width measured from its longest option text, not a guessed constant — a
   // hardcoded 132px clipped "2D Wireframe" (user GUI-pass feedback, 2026-08-25).
   const float visualStyleComboW = ImGui::CalcTextSize("2D Wireframe").x + 40.f;
@@ -3487,8 +3523,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // metrics (`W`) and once at Medium (`M`) — same formulas as increment 1 shipped, since colW()
   // above already resolves compact vs. not; nothing here duplicates a button-sizing decision.
   struct RibbonTabWidths {
-    float wEdit, wDraw, wMod, wAnnText, wAnnDim, wInq, wSrv, wAnalyze, wView, wLayout;
-    float wInsert, wViewSettings, wOutExport, wOutPlot;  // REQ-302 increment 3
+    float wEdit, wDraw, wMod, wInq, wSrv, wAnalyze, wView, wLayout;
+    float wViewSettings;  // REQ-302 increment 3 (Insert/Output tabs now size their sections inline)
   };
   auto computeTabWidths = [&](bool compact) {
     curCompact = compact;
@@ -3502,10 +3538,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     w.wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
               colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"}) + 4.f +
               colW({"Extend", "Break", "Stretch"}) + 4.f + colW({"Fillet", "Chamfer"});
-    w.wAnnText = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
-    // REQ-302 follow-up: Aligned/Linear moved here from Survey's Inquiry section (user GUI-pass
-    // feedback, 2026-08-25) — a Dimensions group belongs under Annotate, not Survey.
-    w.wAnnDim  = 8.f + colW({"Aligned", "Linear", "Angular"});
+    // Annotate tab sections compute their own widths inline (GUI-pass 2026-08-30, C3D 8-panel
+    // rebuild) — no wAnnText/wAnnDim entries here.
     // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
     // Aligned/Linear moved to Annotate's new Dimensions section above (2026-08-25 follow-up) — ID
     // Point/Elev-Grade are the two that remain genuinely survey-scoped inquiry tools.
@@ -3523,11 +3557,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // only the viewport-authoring tools (Rect VP is a largeBtn placed outside colW; Poly VP is
     // the one column here).
     w.wLayout = 8.f + largeW + 4.f + colW({"Poly VP"});
-    // REQ-302 increment 3 (content audit): Insert/View/Output real content.
-    w.wInsert = 8.f + colW({"Import DXF", "Import DWG"});
+    // REQ-302 increment 3 (content audit): View tab Settings section. Insert/Output/Annotate/Manage
+    // tabs size their sections inline (GUI-pass 2026-08-30 C3D rebuilds).
     w.wViewSettings = 8.f + colW({"Settings"}) + 4.f + colW({"Toolspace"});
-    w.wOutExport = 8.f + colW({"Export DXF", "Export DWG"});
-    w.wOutPlot = 8.f + largeW + 4.f + colW({"Batch"});  // same shape Layout's Plot/Batch used to be
     return w;
   };
   const RibbonTabWidths W = computeTabWidths(false);
@@ -3823,17 +3855,40 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   // REQ-302: Annotate tab. Unchanged condition (model space only, same as before this task).
   if (cmd.activeRibbonTab == kRibbonTabAnnotate && !ribbonPaperSpace) {
-    ribbonSpecs.push_back({W.wAnnText, M.wAnnText, [&]() {
-      RibbonSectionBegin("RibbonSecAnnotate", "Text", curCompact ? M.wAnnText : W.wAnnText, panelH);
-      {
-        const float cw = colW({"Text", "Mtext"});
+    // REQ-302 / GUI-pass 2026-08-30: the Annotate tab mirrors Civil 3D's Annotate ribbon 1:1 —
+    // Labels & Tables, Text, Dimensions, Centerlines, Leaders, Tables, Markup, Annotation Scaling.
+    // Commands GoSurvey implements (TEXT, MTEXT, DIMLINEAR/ALIGNED/ANGULAR, DIMSTYLE) are wired into
+    // their C3D-equivalent slot; every other button is greyed with an automatic
+    // "… — not implemented yet." tooltip (RibbonNyiButton / annNyiCombo).
+
+    // ---- Labels & Tables --------------------------------------------------
+    {
+      const float w = 8.f + belowW("Add\nLabels") + 4.f + belowW("Add\nTables");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecAnnLabels", "Labels & Tables", w, panelH);
+        nyiLarge("##AnnAddLabels", "Annotation_Add", "Add\nLabels");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##AnnAddTables", "Table", "Add\nTables");
+        RibbonSectionEnd();
+      }, "Labels & Tables", RibbonIconKind::Nyi, "Annotation_Add"});
+    }
+
+    // ---- Text -----------------------------------------------------------
+    {
+      const float cw = colW({"Text", "Find text"});
+      const float w = 8.f + belowW("Multiline\nText") + 4.f + cw + 4.f + annStyleW;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnotate", "Text", w, panelH);
+        if (RibbonButtonEx("##RibbonMtextLarge", RibbonIconKind::Mtext, "Multiline\nText",
+                           ImVec2(belowW("Multiline\nText"), colH), RibbonLabel::Below))
+          StartMtextCommand(cmd, log);
+        RibbonItemHelp("Multiline Text — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT");
+        ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
         if (smallBtn("##RibbonText", RibbonIconKind::Text, "Text", cw))
           StartTextCommand(cmd, log);
         RibbonItemHelp("Text — single-line annotation at insertion.\nCommand bar: TEXT");
-        if (smallBtn("##RibbonMtext", RibbonIconKind::Mtext, "Mtext", cw))
-          StartMtextCommand(cmd, log);
-        RibbonItemHelp("Mtext — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT");
+        insNyi("##RibbonFindText", "Find", "Find text", cw);
         ImGui::EndGroup();
         // Active text style for new TEXT/MTEXT (REQ-044): an AutoCAD-style flyout of thumbnail previews.
         ImGui::SameLine(0, 4);
@@ -3885,31 +3940,289 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           }
         }
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        RibbonSectionEnd();
+      }});
+    }
 
-    // REQ-302 follow-up (user GUI-pass feedback, 2026-08-25): Aligned/Linear moved here from
-    // Survey's Inquiry section — a Dimensions group belongs under Annotate.
-    ribbonSpecs.push_back({W.wAnnDim, M.wAnnDim, [&]() {
-      RibbonSectionBegin("RibbonSecAnnDim", "Dimensions", curCompact ? M.wAnnDim : W.wAnnDim, panelH);
-      {
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", colW({"Aligned", "Linear"})))
-          StartDimAlignedCommand(cmd, log);
-        RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
-        if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", colW({"Aligned", "Linear", "Angular"})))
+    // ---- Dimensions ---------------------------------------------------------
+    // REQ-302 follow-up (2026-08-25): a Dimensions group belongs under Annotate. GUI-pass
+    // 2026-08-30: expanded to the C3D shape — a large Dimension button plus Linear/Aligned/
+    // Angular and greyed Quick/Continue, with a style combo.
+    {
+      const float cA = colW({"Aligned", "Angular"});
+      const float cB = colW({"Continue"});
+      const float w = 8.f + belowW("Dimension") + 4.f + cA + 4.f + cB + 4.f + annStyleW;
+      ribbonSpecs.push_back({w, w, [&, cA, cB, w]() {
+        RibbonSectionBegin("RibbonSecAnnDim", "Dimensions", w, panelH);
+        if (RibbonButtonEx("##RibbonDimLarge", RibbonIconKind::DimLinear, "Dimension",
+                           ImVec2(belowW("Dimension"), colH), RibbonLabel::Below))
           StartDimLinearCommand(cmd, log);
         RibbonItemHelp(
-            "Linear dimension — horizontal or vertical distance in X or Y; third pick sets line position (cursor or H/V).\nCommand bar: DIMLINEAR or DLI");
-        if (smallBtn("##RibbonDimAng", RibbonIconKind::DimAngular, "Angular", colW({"Aligned", "Linear", "Angular"})))
+            "Dimension — horizontal or vertical distance in X or Y; third pick sets line position.\nCommand bar: DIMLINEAR or DLI");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", cA))
+          StartDimLinearCommand(cmd, log);
+        RibbonItemHelp("Linear dimension — horizontal or vertical distance in X or Y.\nCommand bar: DIMLINEAR or DLI");
+        if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", cA))
+          StartDimAlignedCommand(cmd, log);
+        RibbonItemHelp("Aligned dimension — extension lines parallel to the picked points.\nCommand bar: DIMALIGNED or DAL");
+        if (smallBtn("##RibbonDimAng", RibbonIconKind::DimAngular, "Angular", cA))
           StartDimAngularCommand(cmd, log);
         RibbonItemHelp("Angular dimension — vertex, two ray points, then arc position.\nCommand bar: DIMANGULAR or DAN");
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonDimQuick", "Quick_Dimension", "Quick", cB);
+        insNyi("##RibbonDimCont", "Dim_Continue", "Continue", cB);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Dimension style");
+        if (ImGui::Button("Standard##RibbonDimStyle", ImVec2(annStyleW, 0.f)))
+          StartDimStyleCommand(cmd, log);
+        RibbonItemHelp("Dimension style — opens the dimension style manager.\nCommand bar: DIMSTYLE or D");
+        annNyiCombo("##RibbonDimLayer", "Use current");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Dimensions", RibbonIconKind::DimLinear});
+    }
+
+    // ---- Centerlines ------------------------------------------------------
+    {
+      const float cw = colW({"Center Mark", "Centerline"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnCenterlines", "Centerlines", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##AnnCenterMark", "Center_Mark", "Center Mark", cw);
+        insNyi("##AnnCenterline", "Centerline", "Centerline", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Centerlines", RibbonIconKind::Nyi, "Center_Mark"});
+    }
+
+    // ---- Leaders --------------------------------------------------------
+    {
+      const float cw = colW({"Remove Leader"});
+      const float w = 8.f + belowW("Multi\nleader") + 4.f + cw + 4.f + annStyleW;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnLeaders", "Leaders", w, panelH);
+        nyiLarge("##AnnMultileader", "Multileader", "Multi\nleader");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##AnnAddLeader", "Add_Leader", "Add Leader", cw);
+        insNyi("##AnnRemoveLeader", "Remove_Leader", "Remove Leader", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Multileader style");
+        annNyiCombo("##AnnMleaderStyle", "Standard");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Leaders", RibbonIconKind::Nyi, "Multileader"});
+    }
+
+    // ---- Tables --------------------------------------------------------
+    {
+      const float cw = colW({"Extract Data", "Link Data"});
+      const float w = 8.f + belowW("Table") + 4.f + cw + 4.f + annStyleW;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnTables", "Tables", w, panelH);
+        nyiLarge("##AnnTable", "Table", "Table");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##AnnExtractData", "Extract_Data", "Extract Data", cw);
+        insNyi("##AnnLinkData", "Data_Link", "Link Data", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Table style");
+        annNyiCombo("##AnnTableStyle", "Standard");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Tables", RibbonIconKind::Nyi, "Table"});
+    }
+
+    // ---- Markup --------------------------------------------------------
+    {
+      const float cw = colW({"Revision Cloud"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnMarkup", "Markup", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##AnnWipeout", "Wipeout", "Wipeout", cw);
+        insNyi("##AnnRevcloud", "c3d_revcloud", "Revision Cloud", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Markup", RibbonIconKind::Nyi, "Wipeout"});
+    }
+
+    // ---- Annotation Scaling --------------------------------------------
+    {
+      const float cw = colW({"Add/Delete Scales", "Sync Positions"});
+      const float w = 8.f + belowW("Add Current\nScale") + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnScaling", "Annotation Scaling", w, panelH);
+        nyiLarge("##AnnAddScale", "Add_Current_Scale", "Add Current\nScale");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##AnnAddDeleteScales", "Add_Delete_Scales", "Add/Delete Scales", cw);
+        insNyi("##AnnScaleList", "Scale_List", "Scale List", cw);
+        insNyi("##AnnSyncScale", "Sync_Scale_Positions", "Sync Positions", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Annotation Scaling", RibbonIconKind::Nyi, "Add_Current_Scale"});
+    }
   } // if (activeRibbonTab == kRibbonTabAnnotate)
+
+  // REQ-302 / GUI-pass 2026-08-30: Manage tab mirrors Civil 3D's Manage ribbon 1:1 — Data
+  // Shortcuts, Action Recorder, Customization, Applications, CAD Standards, Styles, Property Set
+  // Data, Performance, Visual Programming. GoSurvey implements none of these yet, so every button
+  // is greyed with the automatic "… — not implemented yet." tooltip (RibbonNyiButton), same as the
+  // Home tab's Civil 3D placeholders. `c3d_*` icons with no library match are generated by
+  // tools/gen_c3d_icons.cpp in the set's blue/gray line-art style.
+  if (cmd.activeRibbonTab == kRibbonTabManage) {
+    // ---- Data Shortcuts -------------------------------------------------
+    {
+      const float cw = colW({"Synchronize References", "Validate Data Shortcuts"});
+      const float w = 8.f + belowW("Create Data\nShortcuts") + 4.f + cw + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgManageDS", "Data Shortcuts", w, panelH);
+        nyiLarge("##MgCreateDS", "c3d_datashortcut", "Create Data\nShortcuts");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##MgNewDSFolder", "c3d_newfolder", "New Shortcuts Folder", cw);
+        insNyi("##MgSetDSFolder", "c3d_setfolder", "Set Shortcuts Folder", cw);
+        insNyi("##MgSetWorkFolder", "c3d_workfolder", "Set Working Folder", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##MgManageDS", "c3d_managedata", "Manage Data Shortcuts", cw);
+        insNyi("##MgValidateDS", "c3d_validatedata", "Validate Data Shortcuts", cw);
+        insNyi("##MgSyncRefs", "c3d_syncref", "Synchronize References", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Data Shortcuts", RibbonIconKind::Nyi, "c3d_datashortcut"});
+    }
+
+    // ---- Action Recorder ----------------------------------------------
+    {
+      const float cw = colW({"Insert Message", "Preferences"});
+      const float w = 8.f + belowW("Record") + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgActionRec", "Action Recorder", w, panelH);
+        nyiLarge("##MgRecord", "c3d_record", "Record");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##MgPlay", "c3d_play", "Play", cw);
+        insNyi("##MgInsertMsg", "Annotation", "Insert Message", cw);
+        insNyi("##MgInsertVal", "Field", "Insert Value", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Action Recorder", RibbonIconKind::Nyi, "c3d_record"});
+    }
+
+    // ---- Customization ----------------------------------------------
+    {
+      const float cw = colW({"Edit Aliases"});
+      const float w = 8.f + belowW("User\nInterface") + 4.f + belowW("Tool\nPalettes") + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgCustomize", "Customization", w, panelH);
+        nyiLarge("##MgCui", "c3d_cui", "User\nInterface");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##MgToolPalettes", "c3d_toolpalette", "Tool\nPalettes");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##MgCuiImport", "Import", "Import", cw);
+        insNyi("##MgCuiExport", "Export", "Export", cw);
+        insNyi("##MgEditAliases", "c3d_editalias", "Edit Aliases", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Customization", RibbonIconKind::Nyi, "c3d_cui"});
+    }
+
+    // ---- Applications ----------------------------------------------
+    {
+      const float cw = colW({"Visual Basic Editor", "Visual LISP Editor"});
+      const float w = 8.f + belowW("Load\nApplication") + 4.f + belowW("Run\nScript") + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgApps", "Applications", w, panelH);
+        nyiLarge("##MgLoadApp", "c3d_loadapp", "Load\nApplication");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##MgRunScript", "c3d_runscript", "Run\nScript");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##MgVbEditor", "c3d_vbeditor", "Visual Basic Editor", cw);
+        insNyi("##MgLispEditor", "c3d_lispeditor", "Visual LISP Editor", cw);
+        insNyi("##MgVbaMacro", "c3d_vbamacro", "Run VBA Macro", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Applications", RibbonIconKind::Nyi, "c3d_runscript"});
+    }
+
+    // ---- CAD Standards ----------------------------------------------
+    {
+      const float cw = colW({"Layer Translator", "Configure"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgStandards", "CAD Standards", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##MgLayerTrans", "c3d_layertranslator", "Layer Translator", cw);
+        insNyi("##MgStdCheck", "Check", "Check", cw);
+        insNyi("##MgStdConfigure", "c3d_cadstd_config", "Configure", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "CAD Standards", RibbonIconKind::Nyi, "Check"});
+    }
+
+    // ---- Styles ----------------------------------------------
+    {
+      const float cw = colW({"Reference", "Purge"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgStyles", "Styles", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##MgStylesImport", "Import", "Import", cw);
+        insNyi("##MgStylesPurge", "Purge", "Purge", cw);
+        insNyi("##MgStylesReference", "Attach", "Reference", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Styles", RibbonIconKind::Nyi, "Purge"});
+    }
+
+    // ---- Property Set Data ----------------------------------------------
+    {
+      const float w = 8.f + belowW("Define\nProperty Sets");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecMgPropSets", "Property Set Data", w, panelH);
+        nyiLarge("##MgDefinePropSets", "c3d_propsets", "Define\nProperty Sets");
+        RibbonSectionEnd();
+      }, "Property Set Data", RibbonIconKind::Nyi, "c3d_propsets"});
+    }
+
+    // ---- Performance ----------------------------------------------
+    {
+      const float w = 8.f + belowW("Performance\nAnalyzer");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecMgPerf", "Performance", w, panelH);
+        nyiLarge("##MgPerfAnalyzer", "c3d_perfanalyzer", "Performance\nAnalyzer");
+        RibbonSectionEnd();
+      }, "Performance", RibbonIconKind::Nyi, "c3d_perfanalyzer"});
+    }
+
+    // ---- Visual Programming ----------------------------------------------
+    {
+      const float w = 8.f + belowW("Dynamo") + 4.f + belowW("Dynamo\nPlayer");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecMgVisProg", "Visual Programming", w, panelH);
+        nyiLarge("##MgDynamo", "c3d_dynamo", "Dynamo");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##MgDynamoPlayer", "c3d_dynamoplayer", "Dynamo\nPlayer");
+        RibbonSectionEnd();
+      }, "Visual Programming", RibbonIconKind::Nyi, "c3d_dynamo"});
+    }
+  } // if (activeRibbonTab == kRibbonTabManage)
 
   // D-2026-08-28-k / REQ-141: Civil 3D Survey tab (screenshot 2). No Object Viewer.
   if (cmd.activeRibbonTab == kRibbonTabSurvey && !ribbonPaperSpace) {
@@ -4612,112 +4925,257 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     }});
   } // if (activeRibbonTab == kRibbonTabView)
 
-  // REQ-302 increment 3 (content audit, D-2026-08-25-h): Insert tab — Import DXF/DWG, relocated
-  // from the File menu (which keeps its own copy — second entry point, not a move).
+  // REQ-302 / GUI-pass 2026-08-30: Insert tab laid out like the Home tab — sections Import, Block,
+  // Reference, Point Cloud, Data. Commands GoSurvey implements are wired to their slot; everything
+  // else is greyed with an automatic "… — not implemented yet." tooltip (RibbonNyiButton), same as
+  // the Home tab's Civil 3D placeholders. Import DXF/DWG/PDF also live on the File menu (second
+  // entry point, not a move).
   if (cmd.activeRibbonTab == kRibbonTabInsert) {
-    ribbonSpecs.push_back({W.wInsert, M.wInsert, [&]() {
-      RibbonSectionBegin("RibbonSecInsert", "Import", curCompact ? M.wInsert : W.wInsert, panelH);
-      {
+    // ---- Import ---------------------------------------------------------
+    {
+      const float cA = colW({"Import DXF", "Import DWG", "Import PDF"});
+      const float cB = colW({"LandXML", "Points From File", "Import Survey Data"});
+      const float w = 8.f + (curCompact ? rowH * 2.f + 4.f : cA + 4.f + cB);
+      const float mw = 8.f + rowH * 2.f + 4.f;
+      ribbonSpecs.push_back({8.f + cA + 4.f + cB, mw, [&, cA, cB]() {
         static char ribbonDxfPath[4096]{};
         static char ribbonDwgPath[4096]{};
-        const float cw = colW({"Import DXF", "Import DWG"});
+        const float wSec = curCompact ? mw : 8.f + cA + 4.f + cB;
+        RibbonSectionBegin("RibbonSecInsImport", "Import", wSec, panelH);
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonImportDxf", RibbonIconKind::Import, "Import DXF", cw)) {
+        if (smallBtn("##RibbonImportDxf", RibbonIconKind::Import, "Import DXF", cA)) {
           if (BrowseOpenFileDxfUtf8(ribbonDxfPath, sizeof(ribbonDxfPath)))
             ImportDxfFile(cmd, ribbonDxfPath, log);
         }
         RibbonItemHelp("Import a DXF drawing into the current session.\nSame as File menu → Import DXF...");
-        {
-        if (smallBtn("##RibbonImportDwg", RibbonIconKind::Import, "Import DWG", cw)) {
-            if (BrowseOpenFileDwgUtf8(ribbonDwgPath, sizeof(ribbonDwgPath)))
-              ImportDwgFile(cmd, ribbonDwgPath, log);
-          }
-          if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Open DWG with LibreDWG (no converter).");
+        if (smallBtn("##RibbonImportDwg", RibbonIconKind::Import, "Import DWG", cA)) {
+          if (BrowseOpenFileDwgUtf8(ribbonDwgPath, sizeof(ribbonDwgPath)))
+            ImportDwgFile(cmd, ribbonDwgPath, log);
         }
-        ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
-    {
-      // Two columns of two — a small-button column is only three rows (colH) tall, so four
-      // stacked buttons spilled past the panel into its title strip.
-      const float wBlk = 8.f + colW({"Block", "BEDIT"}) + 4.f + colW({"Insert", "Import"});
-      ribbonSpecs.push_back({wBlk, wBlk, [&]() {
-        RibbonSectionBegin("RibbonSecBlocks", "Block", wBlk, panelH);
-        const float cA = colW({"Block", "BEDIT"});
-        const float cB = colW({"Insert", "Import"});
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonBlock", RibbonIconKind::Block, "Block", cA)) {
-          char buf[16] = "BLOCKLIST";
-          ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
-        }
-        RibbonItemHelp("List block definitions. Create one with BLOCK <name>, <x>, <y> after selecting geometry.");
-        if (smallBtn("##RibbonBedit", RibbonIconKind::BlockEditor, "BEDIT", cA))
-          CadBlocksOpenEditPicker(cmd, log);
-        RibbonItemHelp("Block Editor — choose a definition from the drawing or block library.");
+        RibbonItemHelp("Import a DWG drawing (LibreDWG, no converter).\nSame as File menu → Import DWG...");
+        if (insRow("##RibbonImportPdf", "PDF_Import", "Import PDF", cA))
+          StartPdfAttachCommand(cmd, log);
+        RibbonItemHelp("Attach a PDF page as a raster underlay.\nCommand bar: PDFATTACH");
         ImGui::EndGroup();
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonInsert", RibbonIconKind::BlockInsert, "Insert", cB))
+        insNyi("##RibbonInsLandXml", "DGN_Import", "LandXML", cB);
+        insNyi("##RibbonInsPointsFile", "Import", "Points From File", cB);
+        insNyi("##RibbonInsSurveyData", "svytripod", "Import Survey Data", cB);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+      (void)w;
+    }
+
+    // ---- Block ---------------------------------------------------------
+    {
+      const float cA = colW({"Insert", "Create"});
+      const float cB = colW({"Edit", "Edit Attributes"});
+      const float w = 8.f + cA + 4.f + cB;
+      ribbonSpecs.push_back({w, w, [&, cA, cB]() {
+        RibbonSectionBegin("RibbonSecInsBlock", "Block", w, panelH);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonInsInsert", RibbonIconKind::BlockInsert, "Insert", cA))
           StartInsertBlockCommand(cmd, log);
         RibbonItemHelp("Insert a block. Opens the Insert dialog (same as INSERT).");
-        if (smallBtn("##RibbonBlockImport", RibbonIconKind::Import, "Import", cB))
-          CadBlocksImportWithPicker(cmd, log);
-        RibbonItemHelp("Import a block definition from a .gs, .dxf, or .dwg file.\nSame as BLOCKIMPORT.");
+        if (insRow("##RibbonInsCreate", "Make_Block", "Create", cA)) {
+          char buf[8] = "BLOCK";
+          ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+        }
+        RibbonItemHelp("Create a block definition from the selection.\nCommand bar: BLOCK <name>, <x>, <y>");
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (insRow("##RibbonInsEdit", "Block_Editor", "Edit", cB))
+          CadBlocksOpenEditPicker(cmd, log);
+        RibbonItemHelp("Block Editor — choose a definition from the drawing or block library.\nCommand bar: BEDIT");
+        insNyi("##RibbonInsEditAttr", "Multiple_Attributes", "Edit Attributes", cB);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+
+    // ---- Reference ---------------------------------------------------------
+    {
+      const float cw = colW({"Attach", "Clip", "Adjust"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw]() {
+        RibbonSectionBegin("RibbonSecInsReference", "Reference", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##RibbonRefAttach", "Attach", "Attach", cw);
+        insNyi("##RibbonRefClip", "Clip", "Clip", cw);
+        insNyi("##RibbonRefAdjust", "Adjust", "Adjust", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+
+    // ---- Point Cloud ---------------------------------------------------------
+    {
+      const float cw = colW({"Attach"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw]() {
+        RibbonSectionBegin("RibbonSecInsPointCloud", "Point Cloud", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##RibbonPcAttach", "Attach", "Attach", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+
+    // ---- Data ---------------------------------------------------------
+    {
+      const float cw = colW({"Field", "Hyperlink"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw]() {
+        RibbonSectionBegin("RibbonSecInsData", "Data", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##RibbonDataField", "Field", "Field", cw);
+        insNyi("##RibbonDataHyperlink", "Hyperlink", "Hyperlink", cw);
         ImGui::EndGroup();
         RibbonSectionEnd();
       }});
     }
   } // if (activeRibbonTab == kRibbonTabInsert)
 
-  // REQ-302 increment 3 (content audit, D-2026-08-25-h): Output tab — Export DXF/DWG (relocated
-  // from the File menu) and Plot/Batch Plot (moved from Home's Layout section, not duplicated).
+  // REQ-302 / GUI-pass 2026-08-30: Output tab mirrors Civil 3D's Output ribbon 1:1 — Plan
+  // Production, Plot, Export, Publish, Export to DWF/PDF. GoSurvey's real commands (Export DXF/DWG,
+  // Plot, Batch Plot, Export Points) are wired to their C3D-equivalent slot; every other button is
+  // greyed with the automatic "… — not implemented yet." tooltip. `c3d_*` icons with no library
+  // match come from tools/gen_c3d_icons.cpp.
   if (cmd.activeRibbonTab == kRibbonTabOutput) {
-    ribbonSpecs.push_back({W.wOutExport, M.wOutExport, [&]() {
-      RibbonSectionBegin("RibbonSecOutExport", "Export", curCompact ? M.wOutExport : W.wOutExport, panelH);
-      {
-        static char ribbonExpDxfPath[4096]{};
-        static char ribbonExpDwgPath[4096]{};
-        const float cw = colW({"Export DXF", "Export DWG"});
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonExportDxf", RibbonIconKind::Export, "Export DXF", cw)) {
-          if (BrowseSaveFileDxfUtf8(ribbonExpDxfPath, sizeof(ribbonExpDxfPath), "drawing.dxf"))
-            ExportDxfFile(cmd, ribbonExpDxfPath, log);
-        }
-        RibbonItemHelp("Export the current drawing to DXF.\nSame as File menu → Export DXF...");
-        {
-        if (smallBtn("##RibbonExportDwg", RibbonIconKind::Export, "Export DWG", cw)) {
-            if (BrowseSaveFileDwgUtf8(ribbonExpDwgPath, sizeof(ribbonExpDwgPath), "drawing.dwg")) {
-              cmd.dwgPendingExportPath = ribbonExpDwgPath;
-              cmd.dwgLossyExportModal  = true;
-            }
-          }
-          if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Save DWG as R2000 via LibreDWG.");
-        }
-        ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+    // ---- Plan Production ---------------------------------------------------
+    {
+      const float w = 8.f + belowW("Create View\nFrames") + 4.f + belowW("Create\nSheets") + 4.f +
+                      belowW("Create Section\nSheets");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecOutPlanProd", "Plan Production", w, panelH);
+        nyiLarge("##OutViewFrames", "c3d_viewframes", "Create View\nFrames");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##OutCreateSheets", "c3d_createsheets", "Create\nSheets");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##OutSectionSheets", "c3d_sectionsheets", "Create Section\nSheets");
+        RibbonSectionEnd();
+      }, "Plan Production", RibbonIconKind::Nyi, "c3d_createsheets"});
+    }
 
-    ribbonSpecs.push_back({W.wOutPlot, M.wOutPlot, [&]() {
-      RibbonSectionBegin("RibbonSecOutPlot", "Plot", curCompact ? M.wOutPlot : W.wOutPlot, panelH);
-      {
-        if (largeBtn("##RibbonPlot", RibbonIconKind::Plot, "Plot"))
+    // ---- Plot -----------------------------------------------------------
+    {
+      const float cw = colW({"Page Setup Manager", "Plotter Manager"});
+      const float w = 8.f + belowW("Plot") + 4.f + cw + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecOutPlot", "Plot", w, panelH);
+        if (RibbonButtonEx("##RibbonPlot", RibbonIconKind::Plot, "Plot",
+                           ImVec2(belowW("Plot"), colH), RibbonLabel::Below))
           PlotActiveLayout(cmd, log);
         RibbonItemHelp("Plot the current layout to a vector PDF.\nCommand bar: PLOT");
         ImGui::SameLine(0, 4);
-        if (smallBtn("##RibbonBatchPlot", RibbonIconKind::Plot, "Batch", colW({"Batch"}))) {
+        ImGui::BeginGroup();
+        if (insRow("##RibbonBatchPlot", "Plot", "Batch Plot", cw)) {
           cmd.batchPlotSelected.clear();
           if (cmd.activeSpaceIndex >= 0)
             cmd.batchPlotSelected.push_back(cmd.activeSpaceIndex);
           cmd.showBatchPlotDialog = true;
         }
         RibbonItemHelp("Batch plot — pick layouts to plot into one multi-page PDF.");
-      }
-      RibbonSectionEnd();
-    }});
+        insNyi("##RibbonPlotPreview", "c3d_plotpreview", "Preview", cw);
+        if (insRow("##RibbonPageSetupMgr", "Page_Setup", "Page Setup Manager", cw)) {
+          EnsureStandardPageSetup(cmd);
+          cmd.pageSetupLayoutIdx  = cmd.activeSpaceIndex >= 0 ? cmd.activeSpaceIndex : 0;
+          cmd.pageSetupManagerSel = -1;
+          cmd.showPageSetupManager = true;
+        }
+        RibbonItemHelp("Page Setup Manager — named paper size / plot settings for the active layout.");
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonViewDetails", "Display_and_Plot_Frames", "View Details", cw);
+        insNyi("##RibbonPlotterMgr", "c3d_plottermgr", "Plotter Manager", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Plot", RibbonIconKind::Plot});
+    }
+
+    // ---- Export -------------------------------------------------------
+    {
+      static char ribbonExpDxfPath[4096]{};
+      static char ribbonExpDwgPath[4096]{};
+      const float cw = colW({"Export Civil 3D Drawing", "Export Civil Objects to SDF"});
+      const float w = 8.f + colW({"Export DXF"}) + 4.f + cw * 4.f + 4.f * 3.f;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecOutExport", "Export", w, panelH);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonExportDxf", RibbonIconKind::Export, "Export DXF", colW({"Export DXF"}))) {
+          if (BrowseSaveFileDxfUtf8(ribbonExpDxfPath, sizeof(ribbonExpDxfPath), "drawing.dxf"))
+            ExportDxfFile(cmd, ribbonExpDxfPath, log);
+        }
+        RibbonItemHelp("Export the current drawing to DXF.\nSame as File menu → Export DXF...");
+        if (smallBtn("##RibbonExportDwg", RibbonIconKind::Export, "Export DWG", colW({"Export DXF"}))) {
+          if (BrowseSaveFileDwgUtf8(ribbonExpDwgPath, sizeof(ribbonExpDwgPath), "drawing.dwg")) {
+            cmd.dwgPendingExportPath = ribbonExpDwgPath;
+            cmd.dwgLossyExportModal  = true;
+          }
+        }
+        RibbonItemHelp("Save DWG as R2000 via LibreDWG.\nSame as File menu → Export DWG...");
+        if (insRow("##RibbonExportPoints", "c3d_exportpoints", "Export Points", colW({"Export DXF"})))
+          cmd.showExportPointsWindow = true;
+        RibbonItemHelp("Export survey points to a point file (PNEZD / user format).");
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonExpImx", "c3d_exportto", "Export IMX", cw);
+        insNyi("##RibbonExpLandXml", "c3d_landxml", "Export to LandXML", cw);
+        insNyi("##RibbonExpC3dDwg", "c3d_exportto", "Export Civil 3D Drawing", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonExpFgdb", "c3d_exportto", "Export to FGDB", cw);
+        insNyi("##RibbonRehabMgr", "c3d_exportto", "Rehab Manager", cw);
+        insNyi("##RibbonTransferPoints", "c3d_transferpoints", "Transfer Points", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonExpHecRas", "c3d_exportto", "Export to HEC RAS", cw);
+        insNyi("##RibbonExpSdf", "c3d_exportto", "Export Civil Objects to SDF", cw);
+        insNyi("##RibbonExpStorm", "c3d_exportto", "Export to Storm Sewers", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonExp3dsMax", "c3d_exportto", "Export to 3ds Max", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Export", RibbonIconKind::Export});
+    }
+
+    // ---- Publish -----------------------------------------------------
+    {
+      const float w = 8.f + belowW("Publish\nSurfaces") + 4.f + belowW("Publish to\nArcGIS");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecOutPublish", "Publish", w, panelH);
+        nyiLarge("##OutPublishSurf", "c3d_publishsurf", "Publish\nSurfaces");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##OutPublishGis", "c3d_publishgis", "Publish to\nArcGIS");
+        RibbonSectionEnd();
+      }, "Publish", RibbonIconKind::Nyi, "c3d_publishgis"});
+    }
+
+    // ---- Export to DWF/PDF -----------------------------------------
+    {
+      const float w = 8.f + belowW("Export") + 4.f + annStyleW;
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecOutDwfPdf", "Export to DWF/PDF", w, panelH);
+        nyiLarge("##OutDwfxExport", "c3d_dwfx", "Export");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Export");
+        annNyiCombo("##OutDwfExportArea", "Display");
+        ImGui::TextUnformatted("Page Setup");
+        annNyiCombo("##OutDwfPageSetup", "Current");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Export to DWF/PDF", RibbonIconKind::Nyi, "c3d_dwfx"});
+    }
   } // if (activeRibbonTab == kRibbonTabOutput)
 
   // REQ-302 increment 2 (ADR-038 (a)): decide breakpoint from the width RibbonToolsLeft and
