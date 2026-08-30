@@ -410,6 +410,43 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CadNeedsAnnotationOverlay(s_cmd->cadAnnotations.size(), s_cmd->cadTables.size(),
                                        s_cmd->cadBlockRefs.size(), false, false));
   };
+
+  // Screenshot every ribbon tab (evidence for the icon-wiring pass). Run with:
+  //   GoSurvey.exe --devshell-run ribbon-tab-shots
+  // BMPs land next to the executable as ribbon-<n>-<tab>.bmp.
+  ImGuiTest* ribbonShots = IM_REGISTER_TEST(engine, "gosurvey", "ribbon-tab-shots");
+  ribbonShots->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    struct Tab { const char* label; int idx; };
+    const Tab tabs[] = {
+        {"Home", kRibbonTabHome},       {"Insert", kRibbonTabInsert},
+        {"Annotate", kRibbonTabAnnotate}, {"View", kRibbonTabView},
+        {"Manage", kRibbonTabManage},    {"Output", kRibbonTabOutput},
+        {"Survey", kRibbonTabSurvey},
+    };
+    int n = 0;
+    for (const Tab& t : tabs) {
+      if (RefWindow(ctx, "//GoSurveyHost/RibbonStrip"))
+        ctx->ItemClick(t.label);
+      s_cmd->activeRibbonTab = t.idx;  // belt-and-suspenders if the label click missed
+      ctx->Yield(4);
+      char path[64];
+      std::snprintf(path, sizeof(path), "ribbon-%d-%s.bmp", ++n, t.label);
+      DevShell_RequestScreenshot(path);
+      ctx->Yield(3);
+    }
+
+    // Block Editor contextual tab — needs an open definition.
+    SubmitCad(ctx, "MKLINE -2,0, 2,0");
+    SubmitCad(ctx, "SELLINE");
+    SubmitCad(ctx, "MAKEBLOCK SHOTBLK");
+    SubmitCad(ctx, "BEDIT SHOTBLK");
+    ctx->Yield(6);
+    DevShell_RequestScreenshot("ribbon-8-BlockEditor.bmp");
+    ctx->Yield(3);
+    SubmitCad(ctx, "BCLOSE");
+    ctx->Yield(2);
+  };
 }
 
 #endif

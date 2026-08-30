@@ -43,4 +43,8 @@ bool DevShell_CliRunFinished(int* outExitCode);
 /// Read the GL front buffer of the current GLFW window into a 24-bit BMP (Debug driver evidence).
 [[nodiscard]] bool DevShell_SaveWindowScreenshot(const char* pathUtf8);
 
+/// Queue a screenshot to be written on the next presented frame (from the main thread, so it is
+/// safe to call from a Test Engine coroutine). Yield at least 2 frames after calling.
+void DevShell_RequestScreenshot(const char* pathUtf8);
+
 #endif
