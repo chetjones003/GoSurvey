@@ -338,14 +338,11 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip"));
     ctx->ItemClick("Insert");
     ctx->Yield(8);
-    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecBlocks"));
-    IM_CHECK(ctx->ItemExists("##RibbonBlock"));
-    ctx->ItemClick("##RibbonBlock");
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecInsBlock"));
+    IM_CHECK(ctx->ItemExists("##RibbonInsInsert"));
+    ctx->ItemClick("##RibbonInsCreate");
     ctx->Yield(2);
-    IM_CHECK(CadLogHas("BLOCKLIST"));
-    ctx->ItemClick("##RibbonInsert");
-    ctx->Yield(2);
-    IM_CHECK(CadLogHas("BLOCKLIB"));
+    IM_CHECK(CadLogHas("BLOCK"));
     IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip"));
     ctx->ItemClick("Home");
     ctx->Yield(4);
@@ -409,6 +406,62 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(sawAttr);
     IM_CHECK(CadNeedsAnnotationOverlay(s_cmd->cadAnnotations.size(), s_cmd->cadTables.size(),
                                        s_cmd->cadBlockRefs.size(), false, false));
+  };
+
+  // Screenshot every ribbon tab (evidence for the icon-wiring pass). Run with:
+  //   GoSurvey.exe --devshell-run ribbon-tab-shots
+  // BMPs land next to the executable as ribbon-<n>-<tab>.bmp.
+  ImGuiTest* ribbonShots = IM_REGISTER_TEST(engine, "gosurvey", "ribbon-tab-shots");
+  ribbonShots->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+
+    // Home tab at three widths — first, before anything opens overlay windows.
+    s_cmd->showToolspaceWindow = false;
+    ctx->WindowCollapse("//Developer Shell", true);
+    if (RefWindow(ctx, "//GoSurveyHost/RibbonStrip"))
+      ctx->ItemClick("Home");
+    s_cmd->activeRibbonTab = kRibbonTabHome;
+    for (const int wpx : {2560, 1500, 1000}) {
+      DevShell_SetWindowSize(wpx, 1300);
+      ctx->Yield(8);
+      char hp[48];
+      std::snprintf(hp, sizeof(hp), "ribbon-home-%d.bmp", wpx);
+      DevShell_RequestScreenshot(hp);
+      ctx->Yield(3);
+    }
+    DevShell_SetWindowSize(2560, 1300);
+    ctx->Yield(6);
+
+    struct Tab { const char* label; int idx; };
+    const Tab tabs[] = {
+        {"Home", kRibbonTabHome},       {"Insert", kRibbonTabInsert},
+        {"Annotate", kRibbonTabAnnotate}, {"View", kRibbonTabView},
+        {"Manage", kRibbonTabManage},    {"Output", kRibbonTabOutput},
+        {"Survey", kRibbonTabSurvey},
+    };
+    int n = 0;
+    for (const Tab& t : tabs) {
+      if (RefWindow(ctx, "//GoSurveyHost/RibbonStrip"))
+        ctx->ItemClick(t.label);
+      s_cmd->activeRibbonTab = t.idx;  // belt-and-suspenders if the label click missed
+      ctx->Yield(4);
+      char path[64];
+      std::snprintf(path, sizeof(path), "ribbon-%d-%s.bmp", ++n, t.label);
+      DevShell_RequestScreenshot(path);
+      ctx->Yield(3);
+    }
+    ctx->WindowCollapse("//Developer Shell", false);
+
+    // Block Editor contextual tab — needs an open definition.
+    SubmitCad(ctx, "MKLINE -2,0, 2,0");
+    SubmitCad(ctx, "SELLINE");
+    SubmitCad(ctx, "MAKEBLOCK SHOTBLK");
+    SubmitCad(ctx, "BEDIT SHOTBLK");
+    ctx->Yield(6);
+    DevShell_RequestScreenshot("ribbon-8-BlockEditor.bmp");
+    ctx->Yield(3);
+    SubmitCad(ctx, "BCLOSE");
+    ctx->Yield(2);
   };
 }
 

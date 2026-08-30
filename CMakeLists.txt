@@ -529,9 +529,13 @@ set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-tem
 add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
+  # `copy_directory` never removes files that were deleted or renamed in the source tree, so a
+  # rebuild after dropping an old icon left the stale copy beside the exe (and in the installer
+  # payload) forever. Wipe the mirrored dirs first so the deploy is an exact copy of source.
+  COMMAND ${CMAKE_COMMAND} -E rm -rf
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gs"

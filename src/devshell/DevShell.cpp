@@ -50,6 +50,9 @@ std::vector<LogLine>    g_log;
 ImGuiTestEngine*        g_engine = nullptr;
 std::string             g_cliTest;
 GLFWwindow*             g_cliWindow = nullptr;
+std::string             g_shotPending;  // path set by DevShell_RequestScreenshot; serviced in PostSwap
+int                     g_resizeW = 0;  // set by DevShell_SetWindowSize; serviced in PostSwap
+int                     g_resizeH = 0;
 bool                    g_cliQueued = false;
 bool                    g_cliDone = false;
 int                     g_cliExit = 1;
@@ -495,6 +498,19 @@ void DevShell_PostSwap(ImGuiTestEngine* engine)
   if (!engine)
     return;
   ImGuiTestEngine_PostSwap(engine);
+  if (g_resizeW > 0 && g_resizeH > 0) {
+    GLFWwindow* win = glfwGetCurrentContext();
+    if (!win)
+      win = g_cliWindow;
+    if (win)
+      glfwSetWindowSize(win, g_resizeW, g_resizeH);
+    g_resizeW = g_resizeH = 0;
+  }
+  if (!g_shotPending.empty()) {
+    const std::string p = g_shotPending;
+    g_shotPending.clear();
+    (void)DevShell_SaveWindowScreenshot(p.c_str());
+  }
   if (g_cliQueued && !g_cliDone)
   {
     ++g_cliWait;
@@ -792,6 +808,20 @@ bool DevShell_SaveWindowScreenshot(const char* pathUtf8)
   if (ok)
     DevShell_Logf("te", "screenshot %s %dx%d", pathUtf8, fbW, fbH);
   return ok;
+}
+
+void DevShell_RequestScreenshot(const char* pathUtf8)
+{
+  if (pathUtf8 && pathUtf8[0] != '\0')
+    g_shotPending = pathUtf8;
+}
+
+void DevShell_SetWindowSize(int w, int h)
+{
+  if (w > 200 && h > 200) {
+    g_resizeW = w;
+    g_resizeH = h;
+  }
 }
 
 #endif
