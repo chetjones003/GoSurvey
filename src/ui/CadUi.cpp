@@ -1553,6 +1553,14 @@ enum class RibbonIconKind : std::uint8_t {
   SvyRenumber,
   SvyLock,
   SvyUnlock,
+  Array,
+  Plot,
+  Export,
+  Import,
+  Settings,
+  ViewportRect,
+  ViewportPoly,
+  DimStyle,
 };
 
 static ImVec2 RibbonLerp(const ImVec2& a, const ImVec2& b, float u, float v) {
@@ -2537,6 +2545,15 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     }
     break;
   }
+  case RibbonIconKind::Array:
+  case RibbonIconKind::Plot:
+  case RibbonIconKind::Export:
+  case RibbonIconKind::Import:
+  case RibbonIconKind::Settings:
+  case RibbonIconKind::ViewportRect:
+  case RibbonIconKind::ViewportPoly:
+  case RibbonIconKind::DimStyle:
+    break;
   default:
     break;
   }
@@ -2625,17 +2642,25 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SvyRenumber:    return "svyrenumber";
   case RibbonIconKind::SvyLock:        return "svylock";
   case RibbonIconKind::SvyUnlock:      return "svyunlock";
+  case RibbonIconKind::Array:          return "array";
+  case RibbonIconKind::Plot:           return "plot";
+  case RibbonIconKind::Export:         return "export";
+  case RibbonIconKind::Import:         return "import";
+  case RibbonIconKind::Settings:       return "settings";
+  case RibbonIconKind::ViewportRect:   return "viewportrect";
+  case RibbonIconKind::ViewportPoly:   return "viewportpoly";
+  case RibbonIconKind::DimStyle:       return "dimstyle";
   }
   return "";
 }
 
-static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::SvyUnlock) + 1] = {};
+static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::DimStyle) + 1] = {};
 static bool g_ribbonIconsLoaded = false;
 
 static void EnsureRibbonIconsLoaded() {
   if (g_ribbonIconsLoaded) return;
   g_ribbonIconsLoaded = true;  // attempt once; missing files fall back to vector art
-  for (int i = 0; i <= static_cast<int>(RibbonIconKind::SvyUnlock); ++i) {
+  for (int i = 0; i <= static_cast<int>(RibbonIconKind::DimStyle); ++i) {
     const std::string nm = RibbonIconName(static_cast<RibbonIconKind>(i));
     if (nm.empty()) continue;
     const std::filesystem::path p =
@@ -2654,13 +2679,14 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"RECT", RibbonIconKind::Rect},
     {"ARC", RibbonIconKind::Arc}, {"ELLIPSE", RibbonIconKind::Ellipse}, {"HATCH", RibbonIconKind::Hatch},
     {"TEXT", RibbonIconKind::Text},
-    {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear}, {"DIMANGULAR", RibbonIconKind::DimAngular}, {"DIMSTY", RibbonIconKind::DimAngular},
+    {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear}, {"DIMANGULAR", RibbonIconKind::DimAngular}, {"DIMSTY", RibbonIconKind::DimStyle},
     {"ID", RibbonIconKind::Id}, {"INVERSE", RibbonIconKind::SurveyInverse}, {"MOVE", RibbonIconKind::Move},
     {"COPY", RibbonIconKind::Copy}, {"ROTATE", RibbonIconKind::Rotate}, {"SCALE", RibbonIconKind::Scale},
     {"MIRROR", RibbonIconKind::Mirror},
-    // REQ-305: no dedicated ARRAY icon yet — reuses Copy's, the same "no icon art yet" precedent
-    // Import/Export/Settings set (D-2026-08-25-h) rather than growing the bounded PNG-load loop.
-    {"ARRAY", RibbonIconKind::Copy},
+    {"ARRAY", RibbonIconKind::Array},
+    {"PLOT", RibbonIconKind::Plot},
+    {"IMPORT", RibbonIconKind::Import},
+    {"EXPORT", RibbonIconKind::Export},
     {"LENGTHEN", RibbonIconKind::Lengthen},
     {"EXTEND", RibbonIconKind::Extend},
     {"BREAK", RibbonIconKind::Break},
@@ -3562,14 +3588,14 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ribbonSpecs.push_back({W.wLayout, M.wLayout, [&]() {
         RibbonSectionBegin("RibbonSecLayout", "Layout", curCompact ? M.wLayout : W.wLayout, panelH);
         {
-          if (largeBtn("##RibbonRectVp", RibbonIconKind::ZoomWindow, "Rect VP"))
+          if (largeBtn("##RibbonRectVp", RibbonIconKind::ViewportRect, "Rect VP"))
             StartPaperRectViewportCommand(cmd, log);
           RibbonItemHelp("Rectangular viewport — two clicks define a viewport on the sheet.\nCommand bar: MVIEW / RECTVP");
           ImGui::SameLine(0, 4);
           ImGui::BeginGroup();
           const float cwL = colW({"Poly VP"});
           ImGui::BeginDisabled();
-          smallBtn("##RibbonPolyVp", RibbonIconKind::Polyline, "Poly VP", cwL);
+          smallBtn("##RibbonPolyVp", RibbonIconKind::ViewportPoly, "Poly VP", cwL);
           ImGui::EndDisabled();
           RibbonItemHelp("Polygonal viewport — coming in a later increment (REQ-034).",
                          ImGuiHoveredFlags_AllowWhenDisabled);
@@ -4359,7 +4385,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ribbonSpecs.push_back({W.wViewSettings, M.wViewSettings, [&]() {
       RibbonSectionBegin("RibbonSecViewSettings", "Settings", curCompact ? M.wViewSettings : W.wViewSettings, panelH);
       {
-        if (smallBtn("##RibbonSettings", RibbonIconKind::Layers, "Settings", colW({"Settings"})))
+        if (smallBtn("##RibbonSettings", RibbonIconKind::Settings, "Settings", colW({"Settings"})))
           cmd.showSettingsWindow = true;
         RibbonItemHelp("Open application settings (same as View menu → Settings...).");
         ImGui::SameLine(0, 4);
@@ -4381,13 +4407,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         static char ribbonDwgPath[4096]{};
         const float cw = colW({"Import DXF", "Import DWG"});
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonImportDxf", RibbonIconKind::PdfAttach, "Import DXF", cw)) {
+        if (smallBtn("##RibbonImportDxf", RibbonIconKind::Import, "Import DXF", cw)) {
           if (BrowseOpenFileDxfUtf8(ribbonDxfPath, sizeof(ribbonDxfPath)))
             ImportDxfFile(cmd, ribbonDxfPath, log);
         }
         RibbonItemHelp("Import a DXF drawing into the current session.\nSame as File menu → Import DXF...");
         {
-        if (smallBtn("##RibbonImportDwg", RibbonIconKind::PdfAttach, "Import DWG", cw)) {
+        if (smallBtn("##RibbonImportDwg", RibbonIconKind::Import, "Import DWG", cw)) {
             if (BrowseOpenFileDwgUtf8(ribbonDwgPath, sizeof(ribbonDwgPath)))
               ImportDwgFile(cmd, ribbonDwgPath, log);
           }
@@ -4429,13 +4455,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         static char ribbonExpDwgPath[4096]{};
         const float cw = colW({"Export DXF", "Export DWG"});
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonExportDxf", RibbonIconKind::PdfAttach, "Export DXF", cw)) {
+        if (smallBtn("##RibbonExportDxf", RibbonIconKind::Export, "Export DXF", cw)) {
           if (BrowseSaveFileDxfUtf8(ribbonExpDxfPath, sizeof(ribbonExpDxfPath), "drawing.dxf"))
             ExportDxfFile(cmd, ribbonExpDxfPath, log);
         }
         RibbonItemHelp("Export the current drawing to DXF.\nSame as File menu → Export DXF...");
         {
-        if (smallBtn("##RibbonExportDwg", RibbonIconKind::PdfAttach, "Export DWG", cw)) {
+        if (smallBtn("##RibbonExportDwg", RibbonIconKind::Export, "Export DWG", cw)) {
             if (BrowseSaveFileDwgUtf8(ribbonExpDwgPath, sizeof(ribbonExpDwgPath), "drawing.dwg")) {
               cmd.dwgPendingExportPath = ribbonExpDwgPath;
               cmd.dwgLossyExportModal  = true;
@@ -4452,11 +4478,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ribbonSpecs.push_back({W.wOutPlot, M.wOutPlot, [&]() {
       RibbonSectionBegin("RibbonSecOutPlot", "Plot", curCompact ? M.wOutPlot : W.wOutPlot, panelH);
       {
-        if (largeBtn("##RibbonPlot", RibbonIconKind::PdfAttach, "Plot"))
+        if (largeBtn("##RibbonPlot", RibbonIconKind::Plot, "Plot"))
           PlotActiveLayout(cmd, log);
         RibbonItemHelp("Plot the current layout to a vector PDF.\nCommand bar: PLOT");
         ImGui::SameLine(0, 4);
-        if (smallBtn("##RibbonBatchPlot", RibbonIconKind::PdfAttach, "Batch", colW({"Batch"}))) {
+        if (smallBtn("##RibbonBatchPlot", RibbonIconKind::Plot, "Batch", colW({"Batch"}))) {
           cmd.batchPlotSelected.clear();
           if (cmd.activeSpaceIndex >= 0)
             cmd.batchPlotSelected.push_back(cmd.activeSpaceIndex);
@@ -9039,7 +9065,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   // --- nanoCAD-style command autocomplete popup (anchored at the drawing crosshair) ---
   s_cmdSugPopupOpen = false;
   if (cmdShowSug && !cmdSug.empty()) {
-    const float rowH  = ImGui::GetTextLineHeight() + 7.f;
+    const float rowH  = 40.f;
     const float padY  = 3.f;
     // Cap the visible height; if there are more suggestions than fit, the popup scrolls.
     const int   kMaxRows = 8;
