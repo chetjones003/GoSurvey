@@ -329,7 +329,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${NLOHMANN_JSON_INCLUDE}
   ${CMAKE_BINARY_DIR}/generated
 )
-target_link_libraries(gosurvey_domain PUBLIC imgui_core)
+target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
@@ -448,7 +448,10 @@ else()
 endif()
 
 if(TARGET libredwg)
-  set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/io/LibreDwgCad.cpp" APPEND PROPERTY INCLUDE_DIRECTORIES
+  set_property(SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io/LibreDwgCad.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/io/LibreDwg.cpp"
+    APPEND PROPERTY INCLUDE_DIRECTORIES
     "${libredwg_SOURCE_DIR}/src"
     "${libredwg_BINARY_DIR}/src")
 endif()
