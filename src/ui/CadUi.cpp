@@ -2589,16 +2589,16 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
 static const char* RibbonIconName(RibbonIconKind k) {
   switch (k) {
   case RibbonIconKind::Line:           return "line";
-  case RibbonIconKind::Circle:         return "circle";
+  case RibbonIconKind::Circle:         return "Circle_Center_Radius";
   case RibbonIconKind::Polyline:       return "polyline";
   case RibbonIconKind::Rect:           return "rect";
   case RibbonIconKind::Arc:            return "arc";
   case RibbonIconKind::Ellipse:        return "ellipse";
   case RibbonIconKind::Hatch:          return "hatch";
-  case RibbonIconKind::Dim:            return "dim";
-  case RibbonIconKind::DimLinear:      return "dimlinear";
+  case RibbonIconKind::Dim:            return "Dim_Aligned";
+  case RibbonIconKind::DimLinear:      return "Dim_Linear";
   case RibbonIconKind::DimAngular:     return "dimangular";
-  case RibbonIconKind::Id:             return "id";
+  case RibbonIconKind::Id:             return "Single_Point";
   case RibbonIconKind::Text:           return "text";
   case RibbonIconKind::Mtext:          return "mtext";
   case RibbonIconKind::Move:           return "move";
@@ -2608,8 +2608,8 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Join:           return "join";
   case RibbonIconKind::Trim:           return "trim";
   case RibbonIconKind::Offset:         return "offset";
-  case RibbonIconKind::ZoomExtents:    return "zoomextents";
-  case RibbonIconKind::ZoomWindow:     return "zoomwindow";
+  case RibbonIconKind::ZoomExtents:    return "Zoom_Extensis";
+  case RibbonIconKind::ZoomWindow:     return "Zoom_Window";
   case RibbonIconKind::Scale:          return "scale";
   case RibbonIconKind::Mirror:         return "mirror";
   case RibbonIconKind::Lengthen:       return "lengthen";
@@ -2618,17 +2618,17 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Stretch:        return "stretch";
   case RibbonIconKind::Fillet:         return "fillet";
   case RibbonIconKind::Chamfer:        return "chamfer";
-  case RibbonIconKind::SurveyPoint:    return "surveypoint";
+  case RibbonIconKind::SurveyPoint:    return "Point_Style";
   case RibbonIconKind::SurveyInverse:  return "surveyinverse";
   case RibbonIconKind::Layers:         return "layers";
-  case RibbonIconKind::PdfAttach:      return "pdfattach";
+  case RibbonIconKind::PdfAttach:      return "PDF";
   case RibbonIconKind::PdfShowBg:      return "pdfshowbg";
   case RibbonIconKind::PdfHideBg:      return "pdfhidebg";
-  case RibbonIconKind::PdfVectorize:   return "pdfvectorize";
+  case RibbonIconKind::PdfVectorize:   return "PDF_Import";
   case RibbonIconKind::Undo:           return "undo";
   case RibbonIconKind::Redo:           return "redo";
-  case RibbonIconKind::ClipboardCopy:  return "clipboardcopy";
-  case RibbonIconKind::ClipboardPaste: return "clipboardpaste";
+  case RibbonIconKind::ClipboardCopy:  return "Copy_Clip";
+  case RibbonIconKind::ClipboardPaste: return "Paste";
   case RibbonIconKind::Traverse:       return "traverse";
   // REQ-143 TIN Surface contextual tab. Matched to library art where one fits; the
   // rest keep their hand-drawn vector fallback (return "" → PaintRibbonIcon).

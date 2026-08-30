@@ -93,6 +93,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; upgraded install keeps a stale GoSurvey-0.4.0.exe beside the new GoSurvey.exe, and any
 ; shortcut still pointing at it would launch a version that can never update itself again.
 Type: files; Name: "{app}\GoSurvey-*.exe"
+; Clear the bundled resource trees before laying down the new payload so an icon/hatch/block
+; that was renamed or removed between releases does not linger in the installed copy. These are
+; app assets only — user data lives in %APPDATA%\GoSurvey and is untouched.
+Type: filesandordirs; Name: "{app}\resources\icons"
+Type: filesandordirs; Name: "{app}\resources\hatches"
+Type: filesandordirs; Name: "{app}\resources\blocks"
 
 [Files]
 Source: "{#BuildDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
