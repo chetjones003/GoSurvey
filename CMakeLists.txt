@@ -374,6 +374,9 @@ add_executable(GoSurvey
 
   # UI panels
   src/ui/CadUi.cpp
+  # Cohesive panels split out of the CadUi.cpp mega-TU (TASK-150 Phase 2, issue
+  # #142). Shared helpers go through src/ui/CadUiInternal.hpp.
+  src/ui/CadUi_Modals.cpp
   src/ui/CadUiSettings.cpp
   src/ui/CadUi_CopySurveyModal.cpp
   src/ui/CadUi_DxfPointConflictModal.cpp

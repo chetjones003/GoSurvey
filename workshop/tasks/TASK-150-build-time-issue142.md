@@ -46,16 +46,22 @@
     needs the layer-name helper cluster (`ValidNewLayerNameChars`, `LayerNameExistsCi`, …) plus
     surface helpers. Each is one more helper-promotion pass on `CadCommandsInternal.hpp` before
     the slice.
-  - `src/ui/CadUi.cpp` (~19 k) — analysed: the big `Draw*` panels are global and declared in
-    `CadUi.hpp`, so the seams exist. Best first slice = the Properties panel: the `5735–7831`
-    anonymous namespace + `DrawPaperEntityProps` + `DrawPropertiesPanel` (~2665 ln, contiguous).
-    It calls ~30 non-ImGui helpers (`ActiveTextStyle`, `AnnAttr`/`ArcAttr`/… attr accessors,
-    `Apply*ToSelection`, `Collect*`, `DrawColorPickerRow`, `FillPropPanelEmpty`, …) — need to
-    sort which are `CadUiStyleWidgets.hpp` / other-header vs. CadUi.cpp file-local statics, and
-    promote the latter to a `CadUi_internal.hpp` the same way `CadCommandsInternal.hpp` was built.
-    That mapping is the next session's task.
+  - **`src/ui/CadUi.cpp` split — started.** New `src/ui/CadUiInternal.hpp` = the UI-layer shared
+    helper surface (same idea as `CadCommandsInternal.hpp`). Seeded with: `FillPropPanelEmpty`,
+    `PropSectionHeader`, `PropValueCellBg`, `PlateTopHilite`, `CollectAllDrawingLayers`,
+    `PushGridCellStyle` / `PopGridCellStyle`, and `kGridTableFlags` (moved to an `inline constexpr`).
+    First slice: **`CadUi_Modals.cpp`** — `DrawDwgLossyExportModal`, `DrawCloseConfirmModal`,
+    `DrawAlignResultsWindow`, `DrawViewPointsPanel` (416 ln). Build green (PCH on), 844/844 tests.
+    `CadUi.cpp`: 19489 → 19069 lines.
+  - Attempted the Properties panel first (5735–8400, ~2665 ln) and reverted: it shares ~10 helpers
+    (`LineAttr`/`CircleAttr`/… attr accessors, `TrimUi`, `CollectQsColorOptions`,
+    `ColorStorageToPreviewLabel`, `LayerLinetypeComboIndex`, `PickSurveyPointAtCursor`,
+    `kTextStyleFonts[]`) with `DrawDrawingViewport` — several of them living inside the 5735–7831
+    anonymous namespace. Splitting Properties (or the ViewManager/LayerManager pair) needs those
+    ~10 promoted to `CadUiInternal.hpp` first (attr accessors + `TrimUi` are simple; the array and
+    the anon-ns ones need relocating). That is the next CadUi increment.
   - `DrawDrawingViewport` (~6200 ln, the single largest region) and `DrawRibbonBar` (~2400 ln)
-    are the biggest prizes but the most entangled — after Properties proves the CadUi pattern.
+    are the biggest prizes but the most entangled — after the mid-size panels prove the pattern.
 - Out of scope (own follow-up tasks):
   - Phase 3 — `OBJECT`-library de-duplication of `GOSURVEY_DOMAIN_SOURCES` compiled by
     `GoSurveyTests` etc. Touches the ADR-002/031/040 link boundaries; separate task + review.
