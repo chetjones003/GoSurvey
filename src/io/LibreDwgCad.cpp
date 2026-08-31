@@ -8,6 +8,7 @@
 #include "TextStyle.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
@@ -30,6 +31,47 @@ extern "C" {
 #include "out_dxf.h"
 }
 
+namespace libredwgcad_detail {
+
+std::string DecodeDwgString(const void* raw, bool utf16le) {
+  if (raw == nullptr)
+    return {};
+  if (utf16le) {
+    char* u8 = bit_convert_TU(reinterpret_cast<BITCODE_TU>(const_cast<void*>(raw)));
+    if (u8 == nullptr)
+      return {};
+    std::string s(u8);
+    std::free(u8);
+    return s;
+  }
+  return std::string(reinterpret_cast<const char*>(raw));
+}
+
+std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
+  if (method == 0xc0)
+    return "ByLayer";
+  if (method == 0xc1)
+    return "ByBlock";
+  if (method == 0xc3) {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "#%06X", rgb & 0xFFFFFFu);
+    return std::string(buf);
+  }
+  // A negative ACI encodes "layer turned off" (dwg.h); the on/off state is captured separately,
+  // so recover the real ACI here rather than discarding the colour.
+  if (index < 0)
+    index = -index;
+  if (index == 256)
+    return "ByLayer";
+  if (index == 0)
+    return "ByBlock";
+  char buf[16];
+  std::snprintf(buf, sizeof(buf), "#%06X", static_cast<unsigned>(DxfRgbPackedFromAci(index) & 0xFFFFFFu));
+  return std::string(buf);
+}
+
+}  // namespace libredwgcad_detail
+
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -48,10 +90,11 @@ struct Xf2 {
   }
 };
 
-std::string FromT(BITCODE_T t) {
-  if (t == nullptr)
-    return {};
-  return std::string(t);
+// LibreDWG keeps table/entity strings in the file's *native* encoding. For R2007+ DWGs that is
+// UTF-16LE (BITCODE_TU); casting straight to char* truncates the name at the first NUL byte
+// (issue #140). IS_FROM_TU_DWG is LibreDWG's own decode-side gate for this.
+std::string FromT(const Dwg_Data* dwg, BITCODE_T t) {
+  return libredwgcad_detail::DecodeDwgString(t, dwg != nullptr && IS_FROM_TU_DWG(dwg));
 }
 
 std::string LayerName(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
@@ -63,25 +106,13 @@ std::string LayerName(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
   const Dwg_Object_LAYER* ly = o->tio.object->tio.LAYER;
   if (ly == nullptr)
     return "0";
-  const std::string n = FromT(ly->name);
+  const std::string n = FromT(dwg, ly->name);
   return n.empty() ? std::string("0") : n;
 }
 
 std::string ColorStorage(const Dwg_Color& c) {
-  if (c.method == 0xc3 && c.rgb != 0)
-    return [&]() {
-      char buf[16];
-      std::snprintf(buf, sizeof(buf), "#%06X", static_cast<unsigned>(c.rgb & 0xFFFFFFu));
-      return std::string(buf);
-    }();
-  const int idx = static_cast<int>(c.index);
-  if (idx == 256 || idx < 0)
-    return "ByLayer";
-  if (idx == 0)
-    return "ByBlock";
-  char buf[16];
-  std::snprintf(buf, sizeof(buf), "#%06X", static_cast<unsigned>(DxfRgbPackedFromAci(idx) & 0xFFFFFFu));
-  return std::string(buf);
+  return libredwgcad_detail::ColorToStorage(static_cast<int>(c.index), c.method,
+                                            static_cast<unsigned>(c.rgb));
 }
 
 EntityAttributes AttrFromEnt(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
@@ -305,7 +336,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     const Dwg_Entity_TEXT* e = ent->tio.TEXT;
     double x = 0, y = 0;
     xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
-    LocalText(st, x, y, e->elevation, e->height, e->rotation + xf.ang, FromT(e->text_value),
+    LocalText(st, x, y, e->elevation, e->height, e->rotation + xf.ang, FromT(dwg, e->text_value),
               CadAnnotation::Kind::Text, at);
     return;
   }
@@ -314,7 +345,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     double x = 0, y = 0;
     xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
     const double rot = std::atan2(e->x_axis_dir.y, e->x_axis_dir.x);
-    LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(e->text),
+    LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
               CadAnnotation::Kind::Mtext, at);
     return;
   }
@@ -338,24 +369,53 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
   NoteSkip(skipHist, obj->dxfname != nullptr ? obj->dxfname : "UNKNOWN");
 }
 
-void ImportLayers(AppCommandState& st, Dwg_Data* dwg) {
+// Resolve a layer's linetype handle (DXF 6) to its LTYPE table name. CONTINUOUS / ByLayer / an
+// unresolved handle all collapse to the canonical "Continuous".
+std::string LayerLinetypeName(Dwg_Data* dwg, const Dwg_Object_LAYER* ly) {
+  if (dwg == nullptr || ly == nullptr || ly->ltype == nullptr)
+    return "Continuous";
+  Dwg_Object* o = dwg_resolve_handle_silent(dwg, ly->ltype->absolute_ref);
+  if (o == nullptr || o->fixedtype != DWG_TYPE_LTYPE || o->tio.object == nullptr ||
+      o->tio.object->tio.LTYPE == nullptr)
+    return "Continuous";
+  std::string n = FromT(dwg, o->tio.object->tio.LTYPE->name);
+  std::string lower = n;
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  if (n.empty() || lower == "continuous" || lower == "bylayer")
+    return "Continuous";
+  return n;
+}
+
+void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log) {
   st.drawingLayerTable = DefaultDrawingLayerTable();
+  int imported = 0;
+  int undecoded = 0;
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
     Dwg_Object* o = &dwg->object[i];
     if (o->fixedtype != DWG_TYPE_LAYER || o->tio.object == nullptr || o->tio.object->tio.LAYER == nullptr)
       continue;
     const Dwg_Object_LAYER* ly = o->tio.object->tio.LAYER;
-    const std::string name = FromT(ly->name);
-    if (name.empty() || name == "0")
+    const std::string name = FromT(dwg, ly->name);
+    if (name == "0")
       continue;
+    if (name.empty()) {
+      ++undecoded;
+      continue;
+    }
     CadLayerRow row{};
     row.name = name;
     row.on = ly->on != 0;
     row.frozen = ly->frozen != 0;
     row.locked = ly->locked != 0;
     row.color = ColorStorage(ly->color);
+    row.linetype = LayerLinetypeName(dwg, ly);
     st.drawingLayerTable.push_back(row);
+    ++imported;
   }
+  log.push_back("DWG import — " + std::to_string(imported) + " layer(s).");
+  if (undecoded > 0)
+    log.push_back("  skipped " + std::to_string(undecoded) + " layer(s) whose name could not be decoded");
 }
 
 void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
@@ -365,14 +425,14 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
     if (o->fixedtype != DWG_TYPE_STYLE || o->tio.object == nullptr || o->tio.object->tio.STYLE == nullptr)
       continue;
     const Dwg_Object_STYLE* s = o->tio.object->tio.STYLE;
-    const std::string name = FromT(s->name);
+    const std::string name = FromT(dwg, s->name);
     if (name.empty())
       continue;
     if (TextStyles::Find(st.textStyles, name) != nullptr)
       continue;
     TextStyle ts;
     ts.name = name;
-    ts.fontFamily = FromT(s->font_file);
+    ts.fontFamily = FromT(dwg, s->font_file);
     st.textStyles.push_back(ts);
   }
 }
@@ -678,7 +738,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (span < 1e6 && mag >= CadCoord::kLargeCoordinateRebaseThreshold)
     CadCoord::ApplyDocumentOriginRebase(st, 0.5 * (minX + maxX), 0.5 * (minY + maxY), &log);
 
-  ImportLayers(st, &dwg);
+  ImportLayers(st, &dwg, log);
   ImportStyles(st, &dwg);
 
   std::unordered_map<std::string, int> skipHist;
