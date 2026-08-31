@@ -72,6 +72,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.viewportPanZ           = cmd.viewportPanZ;
   doc.viewportAzimuthDeg     = cmd.viewportAzimuthDeg;    // camera orientation is per-drawing (REQ-058)
   doc.viewportElevationDeg   = cmd.viewportElevationDeg;
+  doc.viewportProjection     = cmd.viewportProjection;    // projection likewise (REQ-309)
+  doc.viewportFovDeg         = cmd.viewportFovDeg;
   // The coordinate system is per-drawing (REQ-154). Without this, switching tabs would carry one
   // drawing's UCS into another's — and every coordinate typed afterwards would be read in a frame
   // belonging to a different drawing, with nothing on screen to say so.
@@ -143,6 +145,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.viewportPanZ               = doc.viewportPanZ;
   cmd.viewportAzimuthDeg         = doc.viewportAzimuthDeg;
   cmd.viewportElevationDeg       = doc.viewportElevationDeg;
+  cmd.viewportProjection         = doc.viewportProjection;  // REQ-309
+  cmd.viewportFovDeg             = doc.viewportFovDeg;
   cmd.viewAnimActive             = false;  // never resume another tab's animation
   cmd.activeUcs                  = doc.activeUcs;  // per-drawing coordinate system (REQ-154)
   cmd.ucsPrevious                = doc.ucsPrevious;
@@ -6191,6 +6195,8 @@ const CmdEntry kRegistry[] = {
     {"bench", "",
      "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE [points] | BENCH MESH [triangles]"},
     {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
+    {"perspective", "projection, persp", "View projection: ON (perspective) / OFF (orthographic)"},
+    {"fov", "lens", "Perspective field of view, in degrees"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
@@ -23192,6 +23198,71 @@ bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vec
   return true;
 }
 
+/// Canonical name of a projection, for the command line, the ribbon and `.gs` (REQ-309).
+const char* ProjectionName(Camera::Projection p) {
+  return p == Camera::Projection::Perspective ? "Perspective" : "Orthographic";
+}
+
+/// Parse a user-typed projection name. Case-insensitive and tolerant of the spellings someone
+/// actually types, mirroring \ref VisualStyleFromName — including the raw ordinals, and the two
+/// senses of the bare command (`PERSPECTIVE ON`).
+bool ProjectionFromName(const std::string& raw, Camera::Projection* out) {
+  if (!out)
+    return false;
+  std::string v;
+  v.reserve(raw.size());
+  for (char c : raw) {
+    if (c == ' ' || c == '\t')
+      continue;
+    v.push_back(static_cast<char>((c >= 'A' && c <= 'Z') ? (c - 'A' + 'a') : c));
+  }
+  if (v == "o" || v == "ortho" || v == "orthographic" || v == "parallel" || v == "off" || v == "0")
+    *out = Camera::Projection::Orthographic;
+  else if (v == "p" || v == "persp" || v == "perspective" || v == "on" || v == "1")
+    *out = Camera::Projection::Perspective;
+  else
+    return false;
+  return true;
+}
+
+/// Shared by the prompt and the inline `PERSPECTIVE ON` form so neither can set a value the other
+/// would reject (REQ-201) — the same reason \ref ApplyVisualStyleValue exists.
+///
+/// Switching projection touches no stored coordinate: it changes only how the drawing is looked
+/// at, the rule REQ-154 states for the UCS and REQ-309 restates here.
+bool ApplyProjectionValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
+  Camera::Projection p = st.viewportProjection;
+  if (!ProjectionFromName(StringUtil::trimCopy(raw), &p)) {
+    log.push_back("PERSPECTIVE - enter ON (perspective) or OFF (orthographic).");
+    return false;
+  }
+  st.viewportProjection = p;
+  log.push_back(std::string("Projection = ") + ProjectionName(p) + ".");
+  return true;
+}
+
+/// Set the perspective field of view (REQ-309).
+///
+/// Refuses anything outside [kMinFovDeg, kMaxFovDeg] rather than clamping, because a clamp would
+/// silently accept a typo: `FOV 400` is not a request for 179 degrees, it is a mistake, and
+/// REQ-201 wants it refused with the previous value intact. Non-finite input is caught by the same
+/// bound test, which is why it is written as a positive range check.
+bool ApplyFovValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
+  float v = 0.f;
+  if (!ParseOneFloat(raw, &v) || !std::isfinite(v) || !(v >= kMinFovDeg && v <= kMaxFovDeg)) {
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "FOV - enter an angle between %.0f and %.0f degrees.",
+                  static_cast<double>(kMinFovDeg), static_cast<double>(kMaxFovDeg));
+    log.push_back(buf);
+    return false;
+  }
+  st.viewportFovDeg = v;
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "FOV = %.4g degrees.", static_cast<double>(st.viewportFovDeg));
+  log.push_back(buf);
+  return true;
+}
+
 // ================================================================================================
 // UCS and PLAN (REQ-154, GitHub #126)
 //
@@ -23248,6 +23319,13 @@ const NamedView* CurrentNamedView(const AppCommandState& st) {
     if (std::fabs(v.azimuthDeg - st.viewportAzimuthDeg) > kAngTol ||
         std::fabs(v.elevationDeg - st.viewportElevationDeg) > kAngTol)
       continue;
+    // Projection is part of the view for the same reason the UCS is (REQ-309): the same camera
+    // angles under a different projection are not the view that was saved.
+    if (v.projection != st.viewportProjection)
+      continue;
+    if (v.projection == Camera::Projection::Perspective &&
+        std::fabs(v.fovDeg - st.viewportFovDeg) > kAngTol)
+      continue;
     if (!ucs::FramesMatch(v.ucs, st.activeUcs))
       continue;
     return &v;
@@ -23268,6 +23346,8 @@ NamedView CaptureCurrentView(const AppCommandState& st, const std::string& name)
   v.zoom = st.viewportZoom;
   v.azimuthDeg = st.viewportAzimuthDeg;
   v.elevationDeg = st.viewportElevationDeg;
+  v.projection = st.viewportProjection;  // REQ-309
+  v.fovDeg = st.viewportFovDeg;
   v.ucs = st.activeUcs;
   return v;
 }
@@ -23287,6 +23367,11 @@ void RestoreNamedView(AppCommandState& st, const NamedView& v, std::vector<std::
   // the camera returns but the coordinate frame does not, because the numbers you type afterwards
   // would mean something different from the ones you typed when you saved it.
   SetActiveUcs(st, v.ucs, log);
+  // Projection is set directly rather than eased (REQ-309). There is no meaningful interpolation
+  // between a parallel and a perspective projection, and the orientation animation beside it
+  // already carries the sense of movement.
+  st.viewportProjection = v.projection;
+  st.viewportFovDeg = v.fovDeg;
   CadStartViewAnimation(st, v.azimuthDeg, v.elevationDeg);
   st.activeViewName = v.name;
   log.push_back("VIEW - restored " + v.name + ".");
@@ -25612,6 +25697,32 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       } else {
         log.push_back(std::string("Visual style = ") + VisualStyleName(st.viewportVisualStyle) +
                       ". Usage: VS 2D | HIDDEN | SHADED.");
+      }
+      return;
+    }
+    // `PERSPECTIVE ON` in one line; a bare `PERSPECTIVE` reports the current projection — the same
+    // report-or-set shape as VS above (REQ-309). The maths behind this has existed since REQ-058;
+    // until now nothing could select it.
+    if (plotTok == "perspective" || plotTok == "projection" || plotTok == "persp") {
+      std::string projArg;
+      if (issIdle >> projArg) {
+        ApplyProjectionValue(st, projArg, log);
+      } else {
+        log.push_back(std::string("Projection = ") + ProjectionName(st.viewportProjection) +
+                      ". Usage: PERSPECTIVE ON | OFF.");
+      }
+      return;
+    }
+    if (plotTok == "fov" || plotTok == "lens") {
+      std::string fovArg;
+      if (issIdle >> fovArg) {
+        ApplyFovValue(st, fovArg, log);
+      } else {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "FOV = %.4g degrees. Usage: FOV <%.0f-%.0f>.",
+                      static_cast<double>(st.viewportFovDeg), static_cast<double>(kMinFovDeg),
+                      static_cast<double>(kMaxFovDeg));
+        log.push_back(buf);
       }
       return;
     }

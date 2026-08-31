@@ -286,3 +286,92 @@ TEST_CASE("Block-instance snapping expands nested blocks", "[CadSnap][issue124][
   CHECK(hit.x == Catch::Approx(16.f));
   CHECK(hit.y == Catch::Approx(25.f));
 }
+
+// ================================================================================================
+// REQ-309 — object snapping under a PERSPECTIVE camera (GitHub #144, Phase 1 of #120).
+//
+// REQ-309's acceptance requires snapping to resolve to the correct world coordinates under
+// perspective, verified against hand-computed values within REQ-101 (0.01 ft).
+//
+// This is the test that could not be written as a headless transcript: the transcript driver's
+// CLICK verb takes WORLD coordinates, so it never exercises the screen-pixel -> world-ray step
+// that perspective actually changes. Here the pick ray is built the way the viewport builds it —
+// Camera::ScreenRay through a real pixel — so the perspective path is genuinely under test.
+//
+// Perspective is the interesting case because its rays DIVERGE from an eye point. Under
+// orthographic every ray shares the view direction, so a snap that is correct at the centre of the
+// screen is correct everywhere; under perspective it need not be, which is why the endpoint used
+// here sits well off-axis rather than at the camera target.
+
+TEST_CASE("REQ-309 endpoint snap resolves under a perspective camera", "[CadSnap][req309]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+
+  // A line whose FAR endpoint is the hand-computed target: (140, 90, 25).
+  st.userLinesFlat = {10.f, 5.f, 25.f, 140.f, 90.f, 25.f};
+
+  constexpr float kW = 1200.f, kH = 800.f;
+  Camera cam = Camera::Plan(60.0, 40.0, 120.f);
+  cam.targetZ = 10.0;
+  cam.azimuthDeg = 28.f;
+  cam.elevationDeg = 52.f;
+  cam.projection = Camera::Projection::Perspective;
+  cam.fovDeg = 55.f;
+
+  // Project the endpoint to the pixel a user would be pointing at, then pick from that pixel.
+  float px = 0.f, py = 0.f;
+  cam.WorldToScreen(140.0, 90.0, 25.0, kW, kH, &px, &py);
+  REQUIRE(px > 0.f);
+  REQUIRE(px < kW);
+  REQUIRE(py > 0.f);
+  REQUIRE(py < kH);
+
+  const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+
+  // The XY the viewport would hand FindBest is where that ray meets the work plane; the ray itself
+  // is what disambiguates in 3D. Use the endpoint's own XY as the cursor position, which is what
+  // pointing at it means.
+  const CadSnap::Hit hit =
+      CadSnap::FindBest(140.0, 90.0, st, /*commandActive=*/true, kTol, {}, &ray);
+
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Endpoint);
+  // REQ-101 is 0.01 ft; these are hand-computed, not read back from the same code under test.
+  CHECK(hit.x == Approx(140.0).margin(0.01));
+  CHECK(hit.y == Approx(90.0).margin(0.01));
+  CHECK(hit.z == Approx(25.0).margin(0.01));
+}
+
+TEST_CASE("REQ-309 perspective and orthographic snap to the same endpoint", "[CadSnap][req309]") {
+  // Changing projection changes how the drawing is LOOKED AT, never what it is (REQ-309), so the
+  // same endpoint must be returned either way — the snap result is a property of the geometry.
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  st.userLinesFlat = {0.f, 0.f, 0.f, 75.f, 45.f, 12.f};
+
+  constexpr float kW = 1000.f, kH = 700.f;
+  Camera cam = Camera::Plan(30.0, 20.0, 90.f);
+  cam.azimuthDeg = 15.f;
+  cam.elevationDeg = 65.f;
+
+  float ox = 0.f, oy = 0.f;
+  cam.WorldToScreen(75.0, 45.0, 12.0, kW, kH, &ox, &oy);
+  const ray3d::Ray orthoRay = cam.ScreenRay(ox, oy, kW, kH);
+  const CadSnap::Hit orthoHit =
+      CadSnap::FindBest(75.0, 45.0, st, /*commandActive=*/true, kTol, {}, &orthoRay);
+
+  cam.projection = Camera::Projection::Perspective;
+  cam.fovDeg = 50.f;
+  float ppx = 0.f, ppy = 0.f;
+  cam.WorldToScreen(75.0, 45.0, 12.0, kW, kH, &ppx, &ppy);
+  const ray3d::Ray perspRay = cam.ScreenRay(ppx, ppy, kW, kH);
+  const CadSnap::Hit perspHit =
+      CadSnap::FindBest(75.0, 45.0, st, /*commandActive=*/true, kTol, {}, &perspRay);
+
+  REQUIRE(orthoHit.valid);
+  REQUIRE(perspHit.valid);
+  CHECK(orthoHit.kind == perspHit.kind);
+  CHECK(perspHit.x == Approx(orthoHit.x).margin(0.01));
+  CHECK(perspHit.y == Approx(orthoHit.y).margin(0.01));
+  CHECK(perspHit.z == Approx(orthoHit.z).margin(0.01));
+}

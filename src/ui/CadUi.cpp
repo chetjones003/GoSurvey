@@ -4986,6 +4986,32 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                        "Shaded — filled surfaces lit from the camera.\n"
                        "Command bar: VISUALSTYLE (VS) 2D | HIDDEN | SHADED");
         ImGui::EndGroup();
+        // Projection (REQ-309). Beside visual style for the same reason it is in View at all: both
+        // describe how this viewport draws, and neither changes a stored coordinate.
+        ImGui::SameLine(0, 8);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Projection");
+        ImGui::SetNextItemWidth(visualStyleComboW);
+        int projIdx = cmd.viewportProjection == Camera::Projection::Perspective ? 1 : 0;
+        const char* kProjItems[] = {"Orthographic", "Perspective"};
+        if (ImGui::Combo("##RibbonProjection", &projIdx, kProjItems, IM_ARRAYSIZE(kProjItems)))
+          cmd.viewportProjection =
+              projIdx == 1 ? Camera::Projection::Perspective : Camera::Projection::Orthographic;
+        RibbonItemHelp("How the view projects.\n"
+                       "Orthographic — parallel projection; the engineering-drawing view.\n"
+                       "Perspective — converging projection, for visually inspecting a 3D model.\n"
+                       "Switching does not change the drawing.\n"
+                       "Command bar: PERSPECTIVE ON | OFF, and FOV to set the angle");
+        // The field of view only means something under perspective, so it appears only there
+        // rather than sitting permanently greyed out.
+        if (cmd.viewportProjection == Camera::Projection::Perspective) {
+          ImGui::SetNextItemWidth(visualStyleComboW);
+          float fov = cmd.viewportFovDeg;
+          if (ImGui::SliderFloat("##RibbonFov", &fov, kMinFovDeg, kMaxFovDeg, "FOV %.0f°"))
+            cmd.viewportFovDeg = std::clamp(fov, kMinFovDeg, kMaxFovDeg);
+          RibbonItemHelp("Perspective field of view, in degrees.\nCommand bar: FOV <1-179>");
+        }
+        ImGui::EndGroup();
       }
       RibbonSectionEnd();
     }});

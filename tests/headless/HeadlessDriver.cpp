@@ -1222,6 +1222,50 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "expect", "no log line contains: " + needle, sourceLine);
         return false;
       }
+    } else if (what == "PROJECTION") {
+      // EXPECT PROJECTION <ORTHOGRAPHIC|PERSPECTIVE> — the LIVE projection (REQ-309).
+      //
+      // Needed because `EXPECT LOG` is a substring match over the WHOLE accumulated log, so once a
+      // transcript has switched to perspective even once, every later `EXPECT LOG "Projection =
+      // Perspective"` passes whether or not it is still true. That makes exactly the assertions
+      // this requirement most needs — the ones after a save/reopen and after restoring a named
+      // view — silently vacuous. Proven, not assumed: suppressing the named-view projection write
+      // in `GsIo` left the log-based transcript green.
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      bool wantPersp = false;
+      if (wantS == "PERSPECTIVE" || wantS == "P")
+        wantPersp = true;
+      else if (wantS == "ORTHOGRAPHIC" || wantS == "ORTHO" || wantS == "O")
+        wantPersp = false;
+      else {
+        Fail(run, "parse", "EXPECT PROJECTION needs ORTHOGRAPHIC or PERSPECTIVE", sourceLine);
+        return false;
+      }
+      const bool isPersp = run.st.viewportProjection == Camera::Projection::Perspective;
+      if (isPersp != wantPersp) {
+        Fail(run, "expect",
+             std::string("EXPECT PROJECTION: is ") + (isPersp ? "Perspective" : "Orthographic") +
+                 ", expected " + (wantPersp ? "Perspective" : "Orthographic"),
+             sourceLine);
+        return false;
+      }
+    } else if (what == "FOV") {
+      // EXPECT FOV <degrees> — the LIVE field of view (REQ-309). Same reason as EXPECT PROJECTION.
+      std::istringstream is(arg);
+      double want = 0.0;
+      if (!(is >> want)) {
+        Fail(run, "parse", "EXPECT FOV needs <degrees>", sourceLine);
+        return false;
+      }
+      const double got = static_cast<double>(run.st.viewportFovDeg);
+      if (std::fabs(got - want) > 1e-3) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "EXPECT FOV: is %.6g, expected %.6g", got, want);
+        Fail(run, "expect", buf, sourceLine);
+        return false;
+      }
     } else if (what == "LINEXYZ") {
       // EXPECT LINEXYZ <index> <x1> <y1> <z1> <x2> <y2> <z2> — one line's endpoints, in WORLD
       // coordinates, to REQ-101's 0.01 ft.

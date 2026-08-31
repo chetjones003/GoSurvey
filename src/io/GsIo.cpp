@@ -1297,6 +1297,13 @@ json BuildRoot(const AppCommandState& st) {
     view["azimuthDeg"] = st.viewportAzimuthDeg;
   if (st.viewportElevationDeg != 90.f)
     view["elevationDeg"] = st.viewportElevationDeg;
+  // Projection (REQ-309), additive and omitted at its default for the same reason as the camera
+  // keys above: a drawing that was never switched to perspective still serializes exactly as
+  // before, and a build that predates this key reads such a file unchanged.
+  if (st.viewportProjection != Camera::Projection::Orthographic)
+    view["projection"] = "perspective";
+  if (st.viewportFovDeg != kDefaultFovDeg)
+    view["fovDeg"] = st.viewportFovDeg;
   // The UCS (REQ-154), additive and omitted at its default for the same reason as the camera keys
   // above: a drawing that never used UCS still serializes byte-for-byte as before.
   //
@@ -1346,6 +1353,12 @@ json BuildRoot(const AppCommandState& st) {
       e["zoom"] = v.zoom;
       e["azimuthDeg"] = v.azimuthDeg;
       e["elevationDeg"] = v.elevationDeg;
+      // Projection rides with the view too (REQ-309) — without it a view saved in perspective
+      // would silently restore as orthographic. Omitted at the default, like the keys above.
+      if (v.projection != Camera::Projection::Orthographic)
+        e["projection"] = "perspective";
+      if (v.fovDeg != kDefaultFovDeg)
+        e["fovDeg"] = v.fovDeg;
       // The frame rides with the view (REQ-106). Omitted at World so the common case stays compact.
       if (!ucs::IsWorld(v.ucs))
         e["ucs"] = writeUcs(v.ucs);
@@ -2461,6 +2474,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.viewportPanZ = view.value("panZ", 0.0);
     st.viewportAzimuthDeg = view.value("azimuthDeg", 0.f);
     st.viewportElevationDeg = std::clamp(view.value("elevationDeg", 90.f), -90.f, 90.f);
+    // Projection (REQ-309). An absent key — every drawing saved before this build — is
+    // orthographic, which is what makes a legacy file render identically to pre-change. Anything
+    // other than the one recognised spelling is treated as orthographic rather than rejected: a
+    // hand-edited value should degrade to the safe default, not refuse the file (REQ-201).
+    st.viewportProjection = (view.value("projection", std::string()) == "perspective")
+                                ? Camera::Projection::Perspective
+                                : Camera::Projection::Orthographic;
+    st.viewportFovDeg = std::clamp(view.value("fovDeg", kDefaultFovDeg), kMinFovDeg, kMaxFovDeg);
+    if (!std::isfinite(st.viewportFovDeg))
+      st.viewportFovDeg = kDefaultFovDeg;
     // The UCS (REQ-154). A full frame wins; `ucsElevation` alone is what every drawing saved before
     // the UCS command carries, and still loads as the elevated world-parallel plane it described.
     // A frame that does not survive its own validity check is DISCARDED rather than adopted: a
@@ -2528,6 +2551,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         v.zoom = entry.value("zoom", 1.f);
         v.azimuthDeg = entry.value("azimuthDeg", 0.f);
         v.elevationDeg = std::clamp(entry.value("elevationDeg", 90.f), -90.f, 90.f);
+        // REQ-309, same defaulting rule as the active view above.
+        v.projection = (entry.value("projection", std::string()) == "perspective")
+                           ? Camera::Projection::Perspective
+                           : Camera::Projection::Orthographic;
+        v.fovDeg = std::clamp(entry.value("fovDeg", kDefaultFovDeg), kMinFovDeg, kMaxFovDeg);
+        if (!std::isfinite(v.fovDeg))
+          v.fovDeg = kDefaultFovDeg;
         if (!std::isfinite(v.panX) || !std::isfinite(v.panY) || !std::isfinite(v.panZ) ||
             !std::isfinite(v.zoom) || v.zoom <= 0.f || !std::isfinite(v.azimuthDeg))
           continue;
