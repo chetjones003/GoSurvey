@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -413,7 +414,11 @@ void EraseSelectedSources(AppCommandState& st) {
     }
   };
   dropLines(lines);
-  std::sort(circles.begin(), circles.end());
+  auto dedup = [](std::vector<int>& v) {
+    std::sort(v.begin(), v.end());
+    v.erase(std::unique(v.begin(), v.end()), v.end());
+  };
+  dedup(circles);
   for (int i = static_cast<int>(circles.size()) - 1; i >= 0; --i) {
     const int k = circles[static_cast<size_t>(i)];
     const size_t o = static_cast<size_t>(k) * 4;
@@ -423,7 +428,7 @@ void EraseSelectedSources(AppCommandState& st) {
     if (static_cast<size_t>(k) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + k);
   }
-  std::sort(anns.begin(), anns.end());
+  dedup(anns);
   for (int i = static_cast<int>(anns.size()) - 1; i >= 0; --i) {
     const int k = anns[static_cast<size_t>(i)];
     if (k >= 0 && static_cast<size_t>(k) < st.cadAnnotations.size())
@@ -431,7 +436,7 @@ void EraseSelectedSources(AppCommandState& st) {
     if (k >= 0 && static_cast<size_t>(k) < st.cadAnnotationAttrs.size())
       st.cadAnnotationAttrs.erase(st.cadAnnotationAttrs.begin() + k);
   }
-  std::sort(arcs.begin(), arcs.end());
+  dedup(arcs);
   for (int i = static_cast<int>(arcs.size()) - 1; i >= 0; --i) {
     const int k = arcs[static_cast<size_t>(i)];
     if (k >= 0 && static_cast<size_t>(k) < st.userArcs.size())
@@ -625,6 +630,24 @@ void CadBlocksApplyInsertNameDefaults(AppCommandState& st) {
 }
 
 namespace {
+
+// Parse a float without throwing. Returns false (and leaves out untouched) when
+// the token is not a clean number — callers report a usage error instead of
+// letting std::invalid_argument/out_of_range escape the command dispatcher.
+bool TryParseF(const std::string& s, float& out) {
+  try {
+    size_t used = 0;
+    const float v = std::stof(s, &used);
+    while (used < s.size() && std::isspace(static_cast<unsigned char>(s[used])))
+      ++used;
+    if (used != s.size())
+      return false;
+    out = v;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
 
 CadBlockXform InsertDialogXform(const AppCommandState& st) {
   CadBlockXform xf;
@@ -1303,9 +1326,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BLOCKREDEF — no block named \"" + f[0] + "\".");
       return true;
     }
+    float bx = 0.f, by = 0.f;
+    if (!TryParseF(f[1], bx) || !TryParseF(f[2], by)) {
+      log.push_back("BLOCKREDEF — base point must be numbers.");
+      return true;
+    }
     PushUndoSnapshot(st, "Blockredef");
-    float bx = std::stof(f[1]);
-    float by = std::stof(f[2]);
     CadBlockContent c;
     CaptureSelectionInto(st, &c, bx, by, 0.f);
     st.blockDefs[static_cast<size_t>(di)].content = std::move(c);
@@ -1334,8 +1360,10 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     d.prompt = f[1];
     d.defaultValue = f[2];
     if (f.size() >= 5) {
-      d.localX = std::stof(f[3]);
-      d.localY = std::stof(f[4]);
+      if (!TryParseF(f[3], d.localX) || !TryParseF(f[4], d.localY)) {
+        log.push_back("ATTDEF — x and y must be numbers.");
+        return true;
+      }
     }
     st.blockDefs[static_cast<size_t>(di)].attrDefs.push_back(std::move(d));
     st.blockEditorDirty = true;
@@ -1514,8 +1542,10 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     CadBlockParameter p;
     p.name = f[0];
     p.kind = ParseParamKind(f[1]);
-    if (f.size() >= 3)
-      p.value = std::stof(f[2]);
+    if (f.size() >= 3 && !TryParseF(f[2], p.value)) {
+      log.push_back("BPARAM — value must be a number.");
+      return true;
+    }
     st.blockDefs[static_cast<size_t>(di)].parameters.push_back(std::move(p));
     log.push_back("BPARAM — added " + f[0] + ".");
     return true;
@@ -1538,11 +1568,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     a.kind = ParseActionKind(f[0]);
     a.paramName = f[1];
     if (f.size() >= 7) {
-      a.originX = std::stof(f[2]);
-      a.originY = std::stof(f[3]);
-      a.dirX = std::stof(f[4]);
-      a.dirY = std::stof(f[5]);
-      a.threshold = std::stof(f[6]);
+      if (!TryParseF(f[2], a.originX) || !TryParseF(f[3], a.originY) ||
+          !TryParseF(f[4], a.dirX) || !TryParseF(f[5], a.dirY) ||
+          !TryParseF(f[6], a.threshold)) {
+        log.push_back("BACTION — ox, oy, dx, dy and thresh must be numbers.");
+        return true;
+      }
     }
     st.blockDefs[static_cast<size_t>(di)].actions.push_back(std::move(a));
     log.push_back("BACTION — bound to " + f[1] + ".");
@@ -1590,7 +1621,11 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BSETPARAM — usage: BSETPARAM <name>, <value> (selected references).");
       return true;
     }
-    const float v = std::stof(f[1]);
+    float v = 0.f;
+    if (!TryParseF(f[1], v)) {
+      log.push_back("BSETPARAM — value must be a number.");
+      return true;
+    }
     for (const SelectedEntity& e : st.selection) {
       if (e.type != SelectedEntity::Type::BlockRef)
         continue;
@@ -1615,7 +1650,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
     if (di < 0)
       return true;
-    const float x1 = std::stof(f[1]), y1 = std::stof(f[2]), x2 = std::stof(f[3]), y2 = std::stof(f[4]);
+    float x1 = 0.f, y1 = 0.f, x2 = 0.f, y2 = 0.f;
+    if (!TryParseF(f[1], x1) || !TryParseF(f[2], y1) || !TryParseF(f[3], x2) ||
+        !TryParseF(f[4], y2)) {
+      log.push_back("BEDITADD — x1, y1, x2, y2 must be numbers.");
+      return true;
+    }
     if (st.blockEditActive) {
       // ADR-043: an active session keeps the geometry in the model arrays; add there so it survives
       // the harvest on Save (and shows in the isolated view like any other draw).

@@ -72,6 +72,86 @@ CadBlockXform CadBlockXformFromJson(const json& o) {
   return xf;
 }
 
+// Defined further down (with the main-drawing entity IO); forward-declared so block
+// content can round-trip the same geometry kinds.
+void CadArcToJson(const CadArc& a, json& o);
+CadArc CadArcFromJson(const json& o);
+void CadEllipseToJson(const CadEllipse& e, json& o);
+CadEllipse CadEllipseFromJson(const json& o);
+
+json CadMeshToJson(const CadMesh& m) {
+  json o;
+  o["verts"] = m.vertsXyz;
+  o["normals"] = m.normalsXyz;
+  o["indices"] = m.indices;
+  if (!m.sourceName.empty())
+    o["source"] = m.sourceName;
+  json parts = json::array();
+  for (const CadMeshPart& p : m.parts) {
+    json jp;
+    jp["name"] = p.name;
+    jp["begin"] = p.indexBegin;
+    jp["count"] = p.indexCount;
+    jp["rgb"] = json::array({p.r, p.g, p.b});
+    parts.push_back(std::move(jp));
+  }
+  o["parts"] = std::move(parts);
+  return o;
+}
+
+std::shared_ptr<const CadMesh> CadMeshFromJson(const json& o) {
+  if (!o.is_object())
+    return nullptr;
+  auto m = std::make_shared<CadMesh>();
+  if (o.contains("verts"))
+    m->vertsXyz = o["verts"].get<std::vector<float>>();
+  if (o.contains("normals"))
+    m->normalsXyz = o["normals"].get<std::vector<float>>();
+  if (o.contains("indices"))
+    m->indices = o["indices"].get<std::vector<std::uint32_t>>();
+  if (o.contains("source"))
+    m->sourceName = o["source"].get<std::string>();
+  if (o.contains("parts") && o["parts"].is_array()) {
+    for (const auto& jp : o["parts"]) {
+      CadMeshPart p;
+      if (jp.contains("name"))
+        p.name = jp["name"].get<std::string>();
+      if (jp.contains("begin"))
+        p.indexBegin = jp["begin"].get<int>();
+      if (jp.contains("count"))
+        p.indexCount = jp["count"].get<int>();
+      if (jp.contains("rgb") && jp["rgb"].is_array() && jp["rgb"].size() == 3) {
+        p.r = jp["rgb"][0].get<float>();
+        p.g = jp["rgb"][1].get<float>();
+        p.b = jp["rgb"][2].get<float>();
+      }
+      m->parts.push_back(std::move(p));
+    }
+  }
+  if (m->parts.empty() && !m->indices.empty()) {
+    CadMeshPart p;
+    p.indexBegin = 0;
+    p.indexCount = static_cast<int>(m->indices.size());
+    m->parts.push_back(std::move(p));
+  }
+  return m;
+}
+
+void EntityAttrArrayToJson(const std::vector<EntityAttributes>& v, json& out) {
+  out = json::array();
+  for (const auto& a : v) {
+    json e;
+    EntityAttributesToJson(a, e);
+    out.push_back(std::move(e));
+  }
+}
+
+void EntityAttrArrayFromJson(const json& o, const char* key, std::vector<EntityAttributes>& v) {
+  if (o.contains(key) && o[key].is_array())
+    for (const auto& e : o[key])
+      v.push_back(EntityAttributesFromJson(e));
+}
+
 json CadBlockContentToJson(const CadBlockContent& c) {
   json o;
   o["lines"] = c.lines;
@@ -91,6 +171,50 @@ json CadBlockContentToJson(const CadBlockContent& c) {
     ca.push_back(std::move(e));
   }
   o["circleAttrs"] = std::move(ca);
+  o["circleVis"] = c.circleVis;
+
+  json arcs = json::array();
+  for (const CadArc& a : c.arcs) {
+    json aj;
+    CadArcToJson(a, aj);
+    arcs.push_back(std::move(aj));
+  }
+  o["arcs"] = std::move(arcs);
+  json arcAttrs;
+  EntityAttrArrayToJson(c.arcAttrs, arcAttrs);
+  o["arcAttrs"] = std::move(arcAttrs);
+
+  json ellipses = json::array();
+  for (const CadEllipse& e : c.ellipses) {
+    json ej;
+    CadEllipseToJson(e, ej);
+    ellipses.push_back(std::move(ej));
+  }
+  o["ellipses"] = std::move(ellipses);
+  json ellAttrs;
+  EntityAttrArrayToJson(c.ellAttrs, ellAttrs);
+  o["ellAttrs"] = std::move(ellAttrs);
+
+  o["polyOffsets"] = c.polyOffsets;
+  o["polyVerts"] = c.polyVerts;
+  json polyClosed = json::array();
+  for (std::uint8_t v : c.polyClosed)
+    polyClosed.push_back(static_cast<int>(v));
+  o["polyClosed"] = std::move(polyClosed);
+  json polyAttrs;
+  EntityAttrArrayToJson(c.polyAttrs, polyAttrs);
+  o["polyAttrs"] = std::move(polyAttrs);
+
+  json meshes = json::array();
+  for (const auto& mp : c.meshes) {
+    if (mp)
+      meshes.push_back(CadMeshToJson(*mp));
+  }
+  o["meshes"] = std::move(meshes);
+  json meshAttrs;
+  EntityAttrArrayToJson(c.meshAttrs, meshAttrs);
+  o["meshAttrs"] = std::move(meshAttrs);
+
   json nested = json::array();
   for (const CadBlockNested& n : c.nested) {
     json nj;
@@ -109,6 +233,9 @@ json CadBlockContentToJson(const CadBlockContent& c) {
     texts.push_back(std::move(tj));
   }
   o["texts"] = std::move(texts);
+  json textAttrs;
+  EntityAttrArrayToJson(c.textAttrs, textAttrs);
+  o["textAttrs"] = std::move(textAttrs);
   return o;
 }
 
@@ -124,10 +251,37 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
     c.lineVis = o["lineVis"].get<std::vector<std::string>>();
   if (o.contains("circles") && o["circles"].is_array())
     c.circles = o["circles"].get<std::vector<float>>();
-  if (o.contains("circleAttrs") && o["circleAttrs"].is_array()) {
-    for (const auto& e : o["circleAttrs"])
-      c.circleAttrs.push_back(EntityAttributesFromJson(e));
-  }
+  EntityAttrArrayFromJson(o, "circleAttrs", c.circleAttrs);
+  if (o.contains("circleVis") && o["circleVis"].is_array())
+    c.circleVis = o["circleVis"].get<std::vector<std::string>>();
+
+  if (o.contains("arcs") && o["arcs"].is_array())
+    for (const auto& aj : o["arcs"])
+      c.arcs.push_back(CadArcFromJson(aj));
+  EntityAttrArrayFromJson(o, "arcAttrs", c.arcAttrs);
+
+  if (o.contains("ellipses") && o["ellipses"].is_array())
+    for (const auto& ej : o["ellipses"])
+      c.ellipses.push_back(CadEllipseFromJson(ej));
+  EntityAttrArrayFromJson(o, "ellAttrs", c.ellAttrs);
+
+  if (o.contains("polyOffsets") && o["polyOffsets"].is_array())
+    c.polyOffsets = o["polyOffsets"].get<std::vector<int>>();
+  if (o.contains("polyVerts") && o["polyVerts"].is_array())
+    c.polyVerts = o["polyVerts"].get<std::vector<float>>();
+  if (o.contains("polyClosed") && o["polyClosed"].is_array())
+    for (const auto& v : o["polyClosed"])
+      c.polyClosed.push_back(static_cast<std::uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+  EntityAttrArrayFromJson(o, "polyAttrs", c.polyAttrs);
+
+  if (o.contains("meshes") && o["meshes"].is_array())
+    for (const auto& mj : o["meshes"]) {
+      auto m = CadMeshFromJson(mj);
+      if (m)
+        c.meshes.push_back(std::move(m));
+    }
+  EntityAttrArrayFromJson(o, "meshAttrs", c.meshAttrs);
+
   if (o.contains("nested") && o["nested"].is_array()) {
     for (const auto& nj : o["nested"]) {
       CadBlockNested n;
@@ -142,6 +296,7 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
     for (const auto& t : o["texts"])
       c.texts.push_back(CadAnnotationFromJson(t));
   }
+  EntityAttrArrayFromJson(o, "textAttrs", c.textAttrs);
   return c;
 }
 
