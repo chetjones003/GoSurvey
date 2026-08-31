@@ -335,7 +335,8 @@ normal" — no new command is needed.
   - the mirror re-anchor: the pre-fix numbers recorded above ARE its negative test. They were
     measured from a real run, before the fix existed.
 
-  Suite: **861/861 ctest green.**
+  Suite: **862/862 ctest green** (after `cmake -S . -B build` -- the transcript glob has no
+  CONFIGURE_DEPENDS, so a new transcript is invisible to ctest until the project is reconfigured).
 
   Still open for step 5 onward: DXF group 210 (the writer emits a hard-coded +Z at all eight sites
   and the reader ignores it), and `.gs` persistence — a tilted arc's normal is held in memory and
