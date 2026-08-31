@@ -213,6 +213,57 @@ TEST_CASE("LibreDWG imports a multi-layer table end to end", "[dwg][libredwg][is
   CHECK_FALSE(row("FROZEN LAYER")->locked);
 }
 
+// DEBT-151-b — the DWG writer must emit the layer table and wire each entity to its layer /
+// colour / linetype, not just the geometry.
+TEST_CASE("DWG export writes the layer table and per-entity layer (DEBT-151-b)",
+          "[dwg][libredwg][issue140]") {
+  ScratchDir dir("layerexport");
+  const auto p = (dir.path / "out.dwg").string();
+
+  AppCommandState st;
+  CadLayerRow contour;
+  contour.name = "V-CONTOUR";
+  contour.color = "#00FF00";
+  contour.linetype = "DASHED";
+  contour.locked = true;
+  st.drawingLayerTable.push_back(contour);
+  CadLayerRow border;
+  border.name = "BORDER";
+  border.color = "Red";
+  st.drawingLayerTable.push_back(border);
+
+  st.userLinesFlat = {0.f, 0.f, 0.f, 10.f, 5.f, 0.f};
+  EntityAttributes at;
+  at.layer = "V-CONTOUR";
+  at.color = "ByLayer";
+  at.linetype = "ByLayer";
+  st.userLineAttrs = {at};
+
+  std::vector<std::string> log;
+  // Bypass the GoSurvey payload so this exercises the CAD-level layer writer (the path a foreign
+  // reader / a non-GoSurvey DWG hits).
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+
+  auto row = [&](const char* n) -> const CadLayerRow* {
+    for (const CadLayerRow& r : in.drawingLayerTable)
+      if (r.name == n)
+        return &r;
+    return nullptr;
+  };
+  REQUIRE(row("V-CONTOUR") != nullptr);
+  REQUIRE(row("BORDER") != nullptr);
+  CHECK(row("V-CONTOUR")->color == "#00FF00");
+  CHECK(row("V-CONTOUR")->linetype == "DASHED");
+  CHECK(row("V-CONTOUR")->locked);
+  CHECK(row("BORDER")->color == "#FF0000");
+
+  REQUIRE(in.userLineAttrs.size() == 1);
+  CHECK(in.userLineAttrs[0].layer == "V-CONTOUR");
+}
+
 TEST_CASE("Foreign DWG without payload still imports a LINE (REQ-175)", "[dwg][libredwg][req175]") {
   ScratchDir dir("foreign");
   const auto p = (dir.path / "cad-only.dwg").string();

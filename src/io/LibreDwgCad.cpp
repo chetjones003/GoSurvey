@@ -81,6 +81,12 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
+std::string LowerAscii(std::string s) {
+  std::transform(s.begin(), s.end(), s.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return s;
+}
+
 struct Xf2 {
   double ox = 0, oy = 0;
   double ang = 0;
@@ -120,11 +126,34 @@ std::string ColorStorage(const Dwg_Color& c) {
                                             static_cast<unsigned>(c.rgb));
 }
 
+std::string EntityLinetypeName(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
+  if (dwg == nullptr || ent == nullptr)
+    return "ByLayer";
+  // ltype_flags: 0 ByLayer, 1 ByBlock, 2 Continuous, 3 has explicit handle.
+  if (ent->ltype_flags == 1)
+    return "ByBlock";
+  if (ent->ltype_flags != 3 || ent->ltype == nullptr)
+    return "ByLayer";
+  Dwg_Object* o = dwg_resolve_handle_silent(dwg, ent->ltype->absolute_ref);
+  if (o == nullptr || o->fixedtype != DWG_TYPE_LTYPE || o->tio.object == nullptr ||
+      o->tio.object->tio.LTYPE == nullptr)
+    return "ByLayer";
+  std::string n = FromT(dwg, o->tio.object->tio.LTYPE->name);
+  const std::string l = LowerAscii(n);
+  if (l.empty() || l == "bylayer")
+    return "ByLayer";
+  if (l == "continuous")
+    return "Continuous";
+  return n;
+}
+
 EntityAttributes AttrFromEnt(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
   EntityAttributes a{};
   a.layer = LayerName(dwg, ent);
-  if (ent != nullptr)
+  if (ent != nullptr) {
     a.color = ColorStorage(ent->color);
+    a.linetype = EntityLinetypeName(dwg, ent);
+  }
   return a;
 }
 
@@ -466,6 +495,91 @@ Dwg_Object_BLOCK_HEADER* ModelHeader(Dwg_Data* dwg) {
   return m->tio.object->tio.BLOCK_HEADER;
 }
 
+// Builds the DWG LAYER and LTYPE tables from the GoSurvey layer table and wires each exported
+// entity to its layer / colour / linetype (issue #140 / DEBT-151-b — the DWG writer previously
+// emitted geometry only, so a saved drawing lost every layer).
+struct TableWriter {
+  Dwg_Data* dwg = nullptr;
+  std::unordered_map<std::string, Dwg_Object*> layers;   // lower(name) -> LAYER object
+  std::unordered_map<std::string, Dwg_Object*> ltypes;   // lower(name) -> LTYPE object
+
+  static bool IsPlainLinetype(const std::string& n) {
+    const std::string l = LowerAscii(n);
+    return l.empty() || l == "continuous" || l == "bylayer" || l == "byblock";
+  }
+
+  Dwg_Object* EnsureLtype(const std::string& name) {
+    if (IsPlainLinetype(name))
+      return nullptr;
+    const std::string key = LowerAscii(name);
+    auto it = ltypes.find(key);
+    if (it != ltypes.end())
+      return it->second;
+    Dwg_Object_LTYPE* lt = dwg_add_LTYPE(dwg, name.c_str());
+    Dwg_Object* o = lt != nullptr ? &dwg->object[lt->parent->objid] : nullptr;
+    ltypes[key] = o;
+    return o;
+  }
+
+  BITCODE_H Ref(Dwg_Object* o) {
+    return o != nullptr ? dwg_add_handleref(dwg, 5, o->handle.value, o) : nullptr;
+  }
+
+  void BuildLayerTable(const AppCommandState& st) {
+    for (const CadLayerRow& row : st.drawingLayerTable) {
+      if (row.name.empty() || LowerAscii(row.name) == "0")
+        continue;
+      Dwg_Object_LAYER* ly = dwg_add_LAYER(dwg, row.name.c_str());
+      if (ly == nullptr)
+        continue;
+      uint32_t rgb = 0;
+      const int aci = DxfColorStringToRgbPacked(row.color, &rgb) ? DxfNearestAciFromRgbPacked(rgb) : 7;
+      ly->color.index = static_cast<BITCODE_BSd>(row.on ? aci : -aci);
+      ly->color.method = 0xc2;
+      ly->color.rgb = 0;
+      ly->on = row.on ? 1 : 0;
+      ly->frozen = row.frozen ? 1 : 0;
+      ly->locked = row.locked ? 1 : 0;
+      ly->flag0 = static_cast<BITCODE_BS>((row.frozen ? 1 : 0) | (row.on ? 2 : 0) |
+                                         (row.locked ? 8 : 0) | 16);
+      if (Dwg_Object* lt = EnsureLtype(row.linetype))
+        ly->ltype = Ref(lt);
+      layers[LowerAscii(row.name)] = &dwg->object[ly->parent->objid];
+    }
+  }
+
+  void Apply(Dwg_Object_Entity* ent, const EntityAttributes& a) {
+    if (ent == nullptr)
+      return;
+    if (!a.layer.empty() && LowerAscii(a.layer) != "0") {
+      auto it = layers.find(LowerAscii(a.layer));
+      if (it != layers.end() && it->second != nullptr)
+        ent->layer = Ref(it->second);
+    }
+    if (a.color == "ByBlock") {
+      ent->color.index = 0;
+      ent->color.method = 0xc1;
+    } else if (a.color.empty() || a.color == "ByLayer") {
+      ent->color.index = 256;
+      ent->color.method = 0xc0;
+    } else {
+      uint32_t rgb = 0;
+      if (DxfColorStringToRgbPacked(a.color, &rgb)) {
+        ent->color.index = static_cast<BITCODE_BSd>(DxfNearestAciFromRgbPacked(rgb));
+        ent->color.method = 0xc2;
+      }
+    }
+    if (Dwg_Object* lt = EnsureLtype(a.linetype)) {
+      ent->ltype = Ref(lt);
+      ent->ltype_flags = 3;  // has explicit handle
+    }
+  }
+};
+
+const EntityAttributes* AttrAt(const std::vector<EntityAttributes>& v, size_t i) {
+  return i < v.size() ? &v[i] : nullptr;
+}
+
 void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr,
                    std::vector<std::string>& log) {
   auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
@@ -474,25 +588,48 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     p->z = z;
   };
 
+  TableWriter tw;
+  tw.dwg = dwg;
+  tw.BuildLayerTable(st);
+  // Register every linetype the entities reference up front, so no LTYPE table object is created
+  // after the entity records have started going into the object array.
+  for (const std::vector<EntityAttributes>* v :
+       {&st.userLineAttrs, &st.userCircleAttrs, &st.userArcAttrs, &st.userPolylineAttrs,
+        &st.cadAnnotationAttrs, &st.userEllAttrs}) {
+    for (const EntityAttributes& a : *v)
+      tw.EnsureLtype(a.linetype);
+  }
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+
   const size_t nSeg = st.userLinesFlat.size() / 6;
   for (size_t i = 0; i < nSeg; ++i) {
     dwg_point_3d a{}, b{};
     world(st.userLinesFlat[i * 6 + 0], st.userLinesFlat[i * 6 + 1], st.userLinesFlat[i * 6 + 2], &a);
     world(st.userLinesFlat[i * 6 + 3], st.userLinesFlat[i * 6 + 4], st.userLinesFlat[i * 6 + 5], &b);
-    dwg_add_LINE(hdr, &a, &b);
+    Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &a, &b);
+    if (e != nullptr)
+      apply(e->parent, AttrAt(st.userLineAttrs, i));
   }
   const size_t nC = st.userCirclesCxCyZR.size() / 4;
   for (size_t i = 0; i < nC; ++i) {
     dwg_point_3d c{};
     world(st.userCirclesCxCyZR[i * 4 + 0], st.userCirclesCxCyZR[i * 4 + 1], st.userCirclesCxCyZR[i * 4 + 2], &c);
-    dwg_add_CIRCLE(hdr, &c, static_cast<double>(st.userCirclesCxCyZR[i * 4 + 3]));
+    Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, static_cast<double>(st.userCirclesCxCyZR[i * 4 + 3]));
+    if (e != nullptr)
+      apply(e->parent, AttrAt(st.userCircleAttrs, i));
   }
-  for (const CadArc& arc : st.userArcs) {
+  for (size_t i = 0; i < st.userArcs.size(); ++i) {
+    const CadArc& arc = st.userArcs[i];
     dwg_point_3d c{};
     world(arc.cx, arc.cy, arc.z, &c);
     const double a0 = static_cast<double>(arc.startRad);
     const double a1 = a0 + static_cast<double>(arc.sweepRad);
-    dwg_add_ARC(hdr, &c, static_cast<double>(arc.r), a0, a1);
+    Dwg_Entity_ARC* e = dwg_add_ARC(hdr, &c, static_cast<double>(arc.r), a0, a1);
+    if (e != nullptr)
+      apply(e->parent, AttrAt(st.userArcAttrs, i));
   }
   for (size_t i = 0; i + 1 < st.userPolylineOffsets.size(); ++i) {
     const int a = st.userPolylineOffsets[i];
@@ -511,6 +648,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, nv, pts.data());
     if (lw != nullptr && i < st.userPolylineClosed.size() && st.userPolylineClosed[i])
       lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
+    if (lw != nullptr)
+      apply(lw->parent, AttrAt(st.userPolylineAttrs, i));
   }
   for (size_t i = 0; i < st.cadAnnotations.size(); ++i) {
     const CadAnnotation& an = st.cadAnnotations[i];
@@ -520,12 +659,19 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     world(an.insX, an.insY, an.insZ, &p);
     const double h = static_cast<double>(an.plottedHeightInches) *
                      std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
-    if (an.kind == CadAnnotation::Kind::Mtext)
-      dwg_add_MTEXT(hdr, &p, std::max(h * 10.0, 1.0), an.text.c_str());
-    else if (an.kind == CadAnnotation::Kind::Text)
-      dwg_add_TEXT(hdr, an.text.c_str(), &p, h);
+    const EntityAttributes* at = AttrAt(st.cadAnnotationAttrs, i);
+    if (an.kind == CadAnnotation::Kind::Mtext) {
+      Dwg_Entity_MTEXT* e = dwg_add_MTEXT(hdr, &p, std::max(h * 10.0, 1.0), an.text.c_str());
+      if (e != nullptr)
+        apply(e->parent, at);
+    } else if (an.kind == CadAnnotation::Kind::Text) {
+      Dwg_Entity_TEXT* e = dwg_add_TEXT(hdr, an.text.c_str(), &p, h);
+      if (e != nullptr)
+        apply(e->parent, at);
+    }
   }
-  for (const CadEllipse& el : st.userEllipses) {
+  for (size_t i = 0; i < st.userEllipses.size(); ++i) {
+    const CadEllipse& el = st.userEllipses[i];
     dwg_point_3d c{};
     world(el.cx, el.cy, el.z, &c);
     const double majLen =
@@ -538,6 +684,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     Dwg_Entity_ELLIPSE* e = dwg_add_ELLIPSE(hdr, &c, majLen, ratio);
     if (e == nullptr)
       continue;
+    apply(e->parent, AttrAt(st.userEllAttrs, i));
     e->sm_axis.x = static_cast<double>(el.majVx);
     e->sm_axis.y = static_cast<double>(el.majVy);
     e->sm_axis.z = 0.0;

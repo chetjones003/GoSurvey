@@ -1,6 +1,7 @@
 #include "DxfColors.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 
 // AutoCAD 2020 model-space palette — copied from ezdxf DXF_DEFAULT_COLORS (MIT License, mozman/ezdxf).
 namespace {
@@ -306,4 +307,30 @@ void DxfRgbPackedToHex(uint32_t rgbPacked, char* out, size_t cap) {
     return;
   rgbPacked &= 0xFFFFFFu;
   std::snprintf(out, cap, "#%06X", static_cast<unsigned>(rgbPacked));
+}
+
+bool DxfColorStringToRgbPacked(const std::string& color, uint32_t* rgbPacked) {
+  if (rgbPacked == nullptr || color.empty() || color == "ByLayer" || color == "ByBlock")
+    return false;
+  if (color[0] == '#' && (color.size() == 7)) {
+    char* end = nullptr;
+    const unsigned long v = std::strtoul(color.c_str() + 1, &end, 16);
+    if (end != color.c_str() + 7)
+      return false;
+    *rgbPacked = static_cast<uint32_t>(v) & 0xFFFFFFu;
+    return true;
+  }
+  static const struct {
+    const char* name;
+    uint32_t rgb;
+  } kNamed[] = {{"Red", 0xFF0000},  {"Yellow", 0xFFFF00}, {"Green", 0x00FF00},   {"Cyan", 0x00FFFF},
+                {"Blue", 0x0000FF}, {"Magenta", 0xFF00FF}, {"White", 0xFFFFFF},   {"Gray", 0x808080},
+                {"Black", 0x000000}, {"Orange", 0xFF8000}};
+  for (const auto& e : kNamed) {
+    if (color == e.name) {
+      *rgbPacked = e.rgb;
+      return true;
+    }
+  }
+  return false;
 }

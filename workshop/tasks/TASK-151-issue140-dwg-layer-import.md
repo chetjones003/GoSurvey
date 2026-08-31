@@ -74,9 +74,16 @@ build-project / code-review / testing skills, loop to PASS, completion report.
   mechanism) to exercise the UTF-16LE (`from_version >= R_2007`) path end to end — that path is
   currently covered only by the `DecodeDwgString` unit case. LibreDWG also does not round-trip
   the layer on/off bit through R2000, so that one flag is not asserted in the fixture.
-- DEBT-151-b: `ExportLibreCadFile` still writes only model-space geometry — it does not emit the
-  layer table or per-entity layer/colour/linetype. Foreign-DWG round-trip therefore loses layers
-  on save. Out of scope for issue #140 (import bug); track as its own task under REQ-170.
+- DEBT-151-b (addressed 2026-08-31): `LibreDwgCad.cpp` `FillFromState` now builds the DWG LAYER
+  and LTYPE tables from `st.drawingLayerTable` (name, ACI colour incl. off-layer negative index,
+  freeze/lock flag bits, linetype handle) via a `TableWriter` helper, and wires each exported
+  entity to its layer / colour / linetype handle from the parallel `*Attrs` arrays. Entity
+  linetype is now also read back on import (`EntityLinetypeName`, `ltype_flags` aware). Colour
+  string -> RGB moved to a shared `DxfColorStringToRgbPacked` in `DxfColors`. Test
+  `[issue140]` "DWG export writes the layer table and per-entity layer" round-trips through
+  `ExportLibreCadFile` (payload bypassed) and asserts the imported table + entity layer.
+  Note: not verified against AutoCAD ("open without Recover", REQ-170) — no AutoCAD in the env;
+  the handleref pattern is the standard `dwg_add_*` one.
 
 COMPLETION REPORT — TASK-151 — 2026-08-31
 - Requirements satisfied:  REQ-170 (table mapping; Acceptance met for the layer table via unit
@@ -90,6 +97,6 @@ COMPLETION REPORT — TASK-151 — 2026-08-31
 - Assumptions:             ASSUMPTION-1 (IS_FROM_TU_DWG is the right gate) — validated by test
 - Architectural decisions: none (populated existing `CadLayerRow.linetype`; no new abstraction)
 - Dependencies:            none (LibreDWG pin unchanged)
-- Technical debt noted:    DEBT-151-a (no R2018 fixture), DEBT-151-b (export omits layer table)
-- Build:                   clean, MSVC/Ninja release
+- Technical debt noted:    DEBT-151-a (real R2018 binary fixture still owed); DEBT-151-b resolved
+- Build:                   clean, MSVC/Ninja release; ctest 848/848
 - Docs updated:            this task log
