@@ -53,9 +53,14 @@ std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   if (method == 0xc1)
     return "ByBlock";
   if (method == 0xc3) {
-    char buf[16];
-    std::snprintf(buf, sizeof(buf), "#%06X", rgb & 0xFFFFFFu);
-    return std::string(buf);
+    // 0xc3 is truecolor, except for the documented sentinels (dwg.h): rgb 0 = ByBlock,
+    // 0x100 = ByLayer, 0x101 = none. Fall through to the index path for those.
+    const unsigned c = rgb & 0xFFFFFFu;
+    if (c != 0 && c != 0x100u && c != 0x101u) {
+      char buf[16];
+      std::snprintf(buf, sizeof(buf), "#%06X", c);
+      return std::string(buf);
+    }
   }
   // A negative ACI encodes "layer turned off" (dwg.h); the on/off state is captured separately,
   // so recover the real ACI here rather than discarding the colour.

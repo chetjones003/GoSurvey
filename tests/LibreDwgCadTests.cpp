@@ -122,6 +122,8 @@ TEST_CASE("LibreDWG layer colour: negative ACI keeps its colour", "[dwg][libredw
   CHECK(libredwgcad_detail::ColorToStorage(256, 0xc0, 0) == "ByLayer");
   CHECK(libredwgcad_detail::ColorToStorage(0, 0xc1, 0) == "ByBlock");
   CHECK(libredwgcad_detail::ColorToStorage(0, 0xc3, 0x1E90FFu) == "#1E90FF"); // true colour
+  CHECK(libredwgcad_detail::ColorToStorage(0, 0xc3, 0) == "ByBlock");         // 0xc3 sentinel
+  CHECK(libredwgcad_detail::ColorToStorage(256, 0xc3, 0x100u) == "ByLayer");  // 0xc3 sentinel
 }
 
 TEST_CASE("Foreign DWG without payload still imports a LINE (REQ-175)", "[dwg][libredwg][req175]") {
