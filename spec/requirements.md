@@ -5697,8 +5697,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - `GoSurveyTests` / `GoSurveySnapTests` / `gosurvey_headless` still contain no UI/GL/Win32 TU
     (existing checks unaffected).
 - Owner-layer: Build/Platform
-- Status: proposed (2026-08-31) — GitHub issue #142; see D-2026-08-31-a and the decision log.
-- Revisions: 2026-08-31 — initial.
+- Status: accepted (2026-08-31) — GitHub issue #142; see D-2026-08-31-a and the decision log.
+- Revisions: 2026-08-31 — initial. Accepted the same day (D-2026-08-31-a) after Phase 1 (PCH,
+  CI gating) and the first Phase 2 slices landed green.
 
 ---
 

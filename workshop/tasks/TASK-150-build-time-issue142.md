@@ -111,7 +111,7 @@
   ALIGN / UCS / Bench. Remaining: the erase-helper family (`ErasePolylineByIndex`,
   `EraseFeatureLineByIndex`, …) needs the same treatment before OVERKILL / EXTRACT / SURFSTYLE can
   be split. `src/ui/CadUi.cpp` has not been analysed yet.
-- DEBT-3: REQ-205 / D-2026-08-31-a are **proposed**, not accepted. This task ships against a
+- DEBT-3: RETIRED 2026-08-31 — REQ-205 and D-2026-08-31-a are now `accepted`. This task ships against a
   proposed requirement at the user's direction; needs the recorded decision to be finalised.
 
 ## 7. Workflow-specific notes
