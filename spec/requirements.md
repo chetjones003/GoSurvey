@@ -5531,9 +5531,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
   | Push target | Result |
   |---|---|
-  | any other branch | build + test; installer kept as a workflow artifact; nothing published |
-  | `beta` | installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
-  | `master` | version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
+  | any other branch | build + test only; the installer job is skipped (run it on demand via `workflow_dispatch`) |
+  | `beta` | build + test, then installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
+  | `master` | build + test, then version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
+
+  A push touching only documentation or governance (`**/*.md`, `docs/**`, `spec/**`, `workshop/**`,
+  `verification/**`) does not run the pipeline. The `build`/`test` gate still runs on every push
+  that touches code, on every branch (D-2026-08-31-a).
 
   The version gate is what makes "push to master" safe to do repeatedly: the release step is a no-op
   when `project(VERSION)` still matches the newest release, so a documentation push to master does
@@ -5547,8 +5551,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   this says the artifact users actually receive **is** that build, rather than whatever happened to
   be in a developer's `build/` directory.
 - Acceptance:
-  - a push to a feature branch produces a downloadable installer artifact and creates no release
-    and no tag;
+  - a push to a feature branch runs build + test, creates no release and no tag, and does not run
+    the installer job; `workflow_dispatch` on that branch still produces a downloadable installer;
+  - a docs/spec/workshop/verification-only push runs no pipeline job;
   - a push to `beta` leaves exactly one `channel-beta` prerelease in the releases list regardless of
     how many times it is pushed, carrying the newest installer;
   - a push to `master` with an unchanged version publishes nothing and fails nothing;
@@ -5560,6 +5565,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Build/Platform
 - Status: accepted (2026-08-15)
 - Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
+               2026-08-31 — D-2026-08-31-a (issue #142): installer job gated to beta/master/
+               workflow_dispatch; docs/spec-only pushes skip the pipeline. The build+test gate is
+               unchanged.
 
 ### REQ-203 — The command layer is drivable without a window
 - Purpose: debuggability, maintainability — the interactive surface is the largest part of the
@@ -5650,6 +5658,47 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. See ADR-031 and the decision log. Delivery is staged
   (`docs/fuzz-harness.md` §8) and begins with the file parsers rather than the command driver.
+
+### REQ-205 — Build stays fast enough to iterate on
+- Purpose: maintainability — a build slow enough that developers batch changes or skip the local
+  test run is a correctness risk, not just an annoyance (GitHub issue #142)
+- Priority: should
+- Type: quality
+- Statement: The build is kept within a budget so the edit → build → test loop stays usable.
+  Targets, on the reference dev machine and on the CI `windows-latest` runner with a warm
+  dependency cache:
+
+  | Measure | Budget |
+  |---|---|
+  | Clean `ninja-release` local build | ≤ ~2 min |
+  | CI `build` job (warm dep cache) | ≤ ~6 min; ≤ ~10 min on a cold cache |
+  | Incremental rebuild after touching one `src/ui/*.cpp` or `src/commands/*.cpp` | ≤ ~20 s |
+
+  The means are not mandated, but the following are explicitly permitted and do **not**, on their
+  own, require a further decision: splitting an oversized translation unit into cohesive units
+  within the same subsystem and the same source list; a per-target precompiled header for stable
+  heavy headers (`<Windows.h>`, `<filesystem>`, `nlohmann/json.hpp`, `imgui.h`); compiling a source
+  file at most once per configuration by sharing objects rather than re-listing the file; and
+  CI-side caching and path/branch filtering. A precompiled header is a build-time device only: it
+  changes no artifact, and a source must still compile with the PCH disabled (the CI determinism
+  check in REQ-200 builds without it, or an equivalent guard exists).
+
+  This requirement never overrides REQ-200 (identical artifacts) or ADR-002 / ADR-031 (the test and
+  headless targets link no UI/GL/Win32 translation unit): a build-time optimisation that would
+  change a produced binary or pull a UI/GL unit into a pure target is out of bounds.
+- Acceptance:
+  - a clean `ninja-release` build on the reference machine completes within the budget above,
+    measured (e.g. Ninja `-d stats` / `ninjatracing`, `sccache --show-stats`) and the figure
+    recorded in the task log;
+  - the CI `build` job on `beta` completes within budget on a warm cache;
+  - touching one `src/ui/*.cpp` and rebuilding relinks only that unit and the binaries that use it,
+    within budget;
+  - two clean builds of the same commit still produce matching binaries (REQ-200 unaffected);
+  - `GoSurveyTests` / `GoSurveySnapTests` / `gosurvey_headless` still contain no UI/GL/Win32 TU
+    (existing checks unaffected).
+- Owner-layer: Build/Platform
+- Status: proposed (2026-08-31) — GitHub issue #142; see D-2026-08-31-a and the decision log.
+- Revisions: 2026-08-31 — initial.
 
 ---
 

@@ -42,6 +42,18 @@ file(WRITE "${CMAKE_BINARY_DIR}/generated/version.iss"
 
 find_package(OpenGL REQUIRED)
 
+# REQ-205 / D-2026-08-31-a (issue #142): a per-target precompiled header for the
+# stable heavy headers. A build-time device only — see cmake/gosurvey_pch.hpp.
+# Turn OFF to prove every TU still compiles without it (portability / REQ-200).
+option(GOSURVEY_USE_PCH
+  "Precompiled header for stable heavy headers (REQ-205). OFF = determinism/portability check." ON)
+function(gosurvey_enable_pch tgt)
+  if(GOSURVEY_USE_PCH)
+    target_precompile_headers(${tgt} PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/gosurvey_pch.hpp")
+  endif()
+endfunction()
+
 include(FetchContent)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LibreDwg.cmake")
@@ -225,6 +237,11 @@ target_link_libraries(imgui_backend PUBLIC glfw)
 set(GOSURVEY_DOMAIN_SOURCES
   # Command system
   src/commands/CadCommands.cpp
+  # Cohesive slices split out of the CadCommands.cpp mega-TU (TASK-150 Phase 2,
+  # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
+  src/commands/CadCommands_Align.cpp
+  src/commands/CadCommands_Ucs.cpp
+  src/commands/CadCommands_Bench.cpp
   src/commands/CadBlocks.cpp
   src/commands/CadLinetype.cpp
   src/commands/EntityId.cpp
@@ -343,6 +360,7 @@ if(MSVC)
 else()
   target_compile_options(gosurvey_domain PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+gosurvey_enable_pch(gosurvey_domain)
 
 add_executable(GoSurvey
   # Application entry
@@ -529,6 +547,10 @@ if(MSVC)
 else()
   target_compile_options(GoSurvey PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+gosurvey_enable_pch(GoSurvey)
+# PdfAttach.cpp is compiled at /std:c++20 (C++/WinRT); the PCH is built at the
+# project default (C++17), so it cannot consume it (D-2026-08-31-a).
+set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gs")
 add_custom_command(TARGET GoSurvey POST_BUILD
@@ -864,6 +886,7 @@ if(GOSURVEY_BUILD_TESTS)
   else()
     target_compile_options(GoSurveyTests PRIVATE -Wall -Wextra)
   endif()
+  gosurvey_enable_pch(GoSurveyTests)
 
   include(Catch)
   catch_discover_tests(GoSurveyTests)
@@ -910,6 +933,7 @@ if(GOSURVEY_BUILD_TESTS)
   else()
     target_compile_options(GoSurveySnapTests PRIVATE -Wall -Wextra)
   endif()
+  gosurvey_enable_pch(GoSurveySnapTests)
   catch_discover_tests(GoSurveySnapTests)
 
   if(NOT GOSURVEY_DEVELOPER_SHELL)

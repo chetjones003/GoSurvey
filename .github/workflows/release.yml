@@ -20,6 +20,15 @@ name: release
 on:
   push:
     branches: ['**']
+    # REQ-202 / D-2026-08-31-a (issue #142): a push that touches only docs or
+    # governance runs no pipeline. Anything under src/, cmake/, tests/, the
+    # CMake files, or the workflow itself still runs the full build+test gate.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'spec/**'
+      - 'workshop/**'
+      - 'verification/**'
   workflow_dispatch:
 
 concurrency:
@@ -100,7 +109,10 @@ jobs:
           # `deps-<os>-*` entry, which is almost always the right tree. Narrowing the key to just
           # the FetchContent block would need that block in its own file; not worth it while the
           # fallback keeps a miss at seconds rather than minutes.
-          key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          # cmake/LibreDwg.cmake holds the LibreDWG pin (0.13.3 + peeled commit);
+          # hashing it too means a LibreDWG bump busts the key instead of being
+          # silently served a stale tree by restore-keys (issue #142 §6).
+          key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'cmake/LibreDwg.cmake') }}
           restore-keys: deps-${{ runner.os }}-
 
       # ---------------------------------------------------------------------
@@ -209,6 +221,11 @@ jobs:
 
   package:
     needs: build
+    # REQ-202 / D-2026-08-31-a (issue #142): the installer is built only where it
+    # is published (beta, master) or explicitly asked for (workflow_dispatch).
+    # A feature-branch push runs build+test only; use "Run workflow" to get an
+    # installer artifact on demand.
+    if: github.ref_name == 'beta' || github.ref_name == 'master' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
 
     steps:
