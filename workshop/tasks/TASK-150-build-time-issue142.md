@@ -93,6 +93,50 @@
   `GOSURVEY_USE_PCH=OFF` (proves no `#include` was silently dropped) + a second clean build for
   REQ-200.
 
+## 8b. Clean-build benchmark — 2026-08-31, after Phase 1 + Phase 2 (16-core, MSVC 14.50, Ninja -j, no sccache)
+
+`rm -rf build` then `cmake --preset ninja-release` then `cmake --build build`:
+
+| Step | Time |
+|------|------|
+| configure (cold `_deps`: fetch + populate glfw/imgui/glew/pdfium/LibreDWG/Catch2 + LibreDWG's own configure) | ~2m00s |
+| build, PCH ON  | **~1m45–1m52s** (382 edges) |
+| build, PCH OFF | ~1m50s |
+| ctest (844 tests) | ~20s |
+| incremental: touch one command slice (`CadCommands_Ucs.cpp`) → relink | **2.4s** |
+| incremental: touch `CadCommands.hpp` (63 dependent TUs) | 25.6s |
+
+Longest compile edges (PCH ON), from `build/.ninja_log`:
+
+```
+103s  _deps/libredwg  decode.c
+103s  _deps/libredwg  out_dxfb.c
+100s  _deps/libredwg  in_dxf.c
+ 94s  _deps/libredwg  encode.c
+ 79s  glew_static     glew.c
+ 77s  gosurvey_domain src/commands/CadCommands.cpp
+ 59s  gosurvey_domain src/io/GsIo.cpp
+ 55s  GoSurvey        src/ui/CadUi.cpp
+```
+
+**Finding: LibreDWG is now the wall.** Its four big C files (~100s each) run in parallel with
+everything else, so the critical path ≈ `decode.c` ≈ 103s ≈ the whole build. PCH ON vs OFF is a
+wash on the *clean* wall (1m45 vs 1m50) because the C++ front-end it accelerates is no longer on
+the critical path — LibreDWG's C compile is. PCH's payoff is real on **incremental** builds and in
+CI (where sccache caches C++ objects but not the parallel critical path).
+
+Against the REQ-205 budget (~2 min clean local): **met at ~1m45–1m52s** for the compile, though
+the cold `_deps` configure adds ~2 min on top. Incremental after touching a `src/**` slice: 2.4s
+(budget ≤ 20s), **met**.
+
+Next lever for the clean build is LibreDWG itself (issue #142 §5): cache `build/_deps` locally, or
+vendor a prebuilt `libredwg.lib` for `windows-latest` — an OBJECT-library / TU-split cannot beat a
+100s vendored C file on the critical path. The `decode.c`/`encode.c`/`in_dxf.c`/`out_dxfb.c` set
+is where any further clean-build win now lives.
+
+The PCH-OFF build surfaced one real defect — `CadCommands_Ucs.cpp` was missing `#include <sstream>`
+(it got it transitively from the PCH). Fixed. This is exactly the DEBT-1 guard working.
+
 ## 8. Results / measurements (reference machine, MSVC 14.50, Ninja, sccache NOT active locally)
 - Clean `ninja-release` build, PCH ON:  **~3m21s** (cold; dominated by ~200 LibreDWG C files,
   which the PCH does not touch). PCH OFF clean build: comparable. The C++-TU front-end saving from
