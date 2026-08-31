@@ -1,0 +1,42 @@
+# Regression test for issue #117 — TEXT must not store a non-finite insertion /
+# box coordinate, and must not let a bad height rebase the drawing origin to inf.
+#
+# REQ-204: "No coordinate is NaN or infinite." REQ-201: a refusal is reported
+# rather than silently swallowed. REQ-101: a value that cannot be represented is
+# a failure, not a tolerance question.
+#
+# This transcript is the fuzzer's own minimized reproducer (seed 437896, from the
+# 1,000,000-seed REQ-204 sweep), kept verbatim rather than tidied.
+#
+# The insertion point (120,120) and every typed token are finite and legitimately
+# parsed. The height 1e+38 is finite too — but once scaled by the plot scale and
+# the text length it drives CadAnnotationRoughBounds past FLT_MAX, so the
+# annotation's world extent is inf. Before the fix TEXT reported "TEXT placed.",
+# SAVEAS wrote the file, and OPEN then read those inf rough bounds in
+# MaybeRebaseLargeCoordinates and shifted worldDocumentOrigin to (-inf, inf) —
+# persisted corruption spread across every coordinate in the drawing.
+#
+# Fails before the fix with (all at the OPEN step):
+#   finite-coords: cadAnnotations[0].insX = inf
+#   finite-coords: cadAnnotations[0].boxMinX/boxMinY/boxMaxX/boxMaxY = inf/-inf
+
+NEW
+CMD TEXT
+PICK 120 120 SUBTRACT
+CMD 1e+38
+CMD -0,inf
+CMD -inf,-0
+
+# Nothing was stored. The refusal is the correct outcome and REQ-201 requires it
+# to be reported, so assert both — without the log assertion this would also pass
+# if the command silently did nothing, the exact failure mode REQ-201 guards.
+EXPECT ANNOTATIONS 0
+EXPECT LOG "TEXT rejected"
+
+# The original bug only surfaced on the round trip, so drive it: a save/open must
+# stay clean, with the origin never rebased.
+SAVEAS %OUT%/rt-117.gs
+OPEN %OUT%/rt-117.gs
+EXPECT ANNOTATIONS 0
+
+CHECK ALL

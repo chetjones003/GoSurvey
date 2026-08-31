@@ -55,10 +55,22 @@ std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   if (method == 0xc3) {
     // 0xc3 is truecolor, except for the documented sentinels (dwg.h): rgb 0 = ByBlock,
     // 0x100 = ByLayer, 0x101 = none. Fall through to the index path for those.
+    //
+    // AutoCAD 2018 (AC1032) also writes an *indexed* layer/entity colour as a 0xc3 CMC whose
+    // rgb payload is just the ACI in the low byte (e.g. 0xc3000007 == ACI 7). LibreDWG does not
+    // resolve that to RGB the way it does for 0xc2. A real 24-bit truecolour always has a
+    // non-zero red or green byte; when only the low byte is set, treat it as an ACI index so a
+    // 0xc3-encoded "layer 0 white" does not import as near-black #000007.
     const unsigned c = rgb & 0xFFFFFFu;
-    if (c != 0 && c != 0x100u && c != 0x101u) {
+    if (c != 0 && c != 0x100u && c != 0x101u && (c & 0xFFFF00u) != 0) {
       char buf[16];
       std::snprintf(buf, sizeof(buf), "#%06X", c);
+      return std::string(buf);
+    }
+    if ((c & 0xFFFF00u) == 0 && c >= 1 && c <= 255) {
+      char buf[16];
+      std::snprintf(buf, sizeof(buf), "#%06X",
+                    static_cast<unsigned>(DxfRgbPackedFromAci(static_cast<int>(c)) & 0xFFFFFFu));
       return std::string(buf);
     }
   }
