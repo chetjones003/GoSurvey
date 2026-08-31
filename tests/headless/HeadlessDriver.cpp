@@ -724,6 +724,24 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     run.st.currentLayer = name;
     // Registers the name in the drawing's layer table, exactly as the Layer manager's OK does.
     SyncDrawingLayerTableWithGeometry(run.st);
+  } else if (verb == "UCSNAMED") {
+    // UCSNAMED RESTORE|DELETE <name> — the View Manager's two named-UCS buttons.
+    //
+    // `UCS Named` saves and only saves; restoring and deleting a saved frame are the View Manager's,
+    // because choosing among saved frames wants a list a command prompt cannot show. So there is no
+    // typed route to them, exactly as CLAYER above has none, and this calls the same
+    // RestoreNamedUcs / DeleteNamedUcs the dialog's buttons call rather than a second copy.
+    std::string name;
+    const std::string what = UpperAscii(FirstWord(rest, &name));
+    name = Trim(name);
+    if (name.empty() || (what != "RESTORE" && what != "DELETE")) {
+      Fail(run, "parse", "UCSNAMED expects RESTORE <name> | DELETE <name>, got: " + rest, sourceLine);
+      return false;
+    }
+    if (what == "RESTORE")
+      RestoreNamedUcs(run.st, name, run.log);
+    else
+      DeleteNamedUcs(run.st, name, run.log);
   } else if (verb == "VPFREEZE") {
     // VPFREEZE <layer> — freeze a layer in the SELECTED viewport (REQ-028 / REQ-046).
     //

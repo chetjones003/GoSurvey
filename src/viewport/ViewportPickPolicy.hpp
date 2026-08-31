@@ -199,12 +199,11 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     // coordinate — the same shape OFFSET and DESIGNATEBREAKLINE use.
     case UPh::WaitObjectPick:
       return R::RawEntityPick;
-    // Typed-only prompts. The rotation angle is a number or the `2P` keyword; Named wants an action
-    // letter and then a name. SubmitViewportPickImpl has no branch for any of them, so routing
-    // anything but Ignore would be a click that goes nowhere.
+    // Typed-only prompts. The rotation angle is a number or the `2P` keyword; Named wants a name.
+    // SubmitViewportPickImpl has no branch for either, so routing anything but Ignore would be a
+    // click that goes nowhere.
     case UPh::Idle:
     case UPh::WaitRotationAngle:
-    case UPh::WaitNamedAction:
     case UPh::WaitNamedName:
       return R::Ignore;
     }

@@ -3115,7 +3115,7 @@ static void ProcessCommandLineSubmitStr(AppCommandState& cmd, const char* text,
 ///
 /// Shared by the ViewCube dropdown and the Coordinates ribbon panel. Two widgets naming the same
 /// thing must not be able to name it differently — and "Unnamed" is AutoCAD's own word, carrying the
-/// useful hint that `UCS N S` would keep this frame.
+/// useful hint that `UCS N` would keep this frame.
 static std::string CadUcsFrameLabel(const AppCommandState& cmd) {
   if (CadUcsIsWorld(cmd))
     return "WCS";
@@ -4298,7 +4298,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         RibbonItemHelp("Save the current camera and coordinate frame under a name.\nCommand bar: VIEW S <name>");
         if (smallBtn("##RibbonViewMgr", RibbonIconKind::Layers, "Manager", cwv))
           cmd.showViewManagerWindow = true;
-        RibbonItemHelp("View Manager — rename, restore and delete saved views.\nCommand bar: VIEW");
+        RibbonItemHelp("View Manager — restore and delete saved views, and the drawing's saved\n"
+                       "coordinate systems.\nCommand bar: VIEW");
         ImGui::EndGroup();
       }
       RibbonSectionEnd();
@@ -4370,7 +4371,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           ImGui::EndCombo();
         }
         RibbonItemHelp("The active coordinate system: WCS, a saved name, or Unnamed for a frame\n"
-                       "built but not saved. Save one with UCS N S <name>.");
+                       "built but not saved. Save one with UCS N <name>; rename, restore and\n"
+                       "delete saved frames in the View Manager.");
         ImGui::EndGroup();
       }
       RibbonSectionEnd();
@@ -15839,7 +15841,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (modelSpace && avail.x > 200.f && avail.y > 200.f) {
     // The label names the frame: WCS, the saved name when the active frame IS one of them, and
     // otherwise "Unnamed" — AutoCAD's own word for a frame that has been built but not saved, and a
-    // useful nudge that `UCS N S` would keep it.
+    // useful nudge that `UCS N` would keep it.
     const bool isWorld = CadUcsIsWorld(cmd);
     const std::string activeName = CadUcsFrameLabel(cmd);
 
@@ -15868,7 +15870,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (ImGui::BeginPopup("##ucsdropmenu")) {
         if (ImGui::MenuItem("WCS", nullptr, isWorld) && !isWorld)
           SetActiveUcs(cmd, ucs::Ucs{}, log);
-        // Every frame saved in this drawing, so restoring one is a click rather than `UCS N R <name>`.
+        // Every frame saved in this drawing, so restoring one is a click. It is the only way to
+        // restore by name besides the View Manager - the UCS command's Named option only saves.
         if (!cmd.ucsNamed.empty()) {
           ImGui::Separator();
           for (const NamedUcs& n : cmd.ucsNamed) {
@@ -17347,9 +17350,15 @@ void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log) {
 
 // REQ-106 — the View Manager, the dialog half of "a VIEW command/dialog".
 //
-// Deliberately small: list, restore, delete, and save-the-current-view. Everything it does is
-// something `VIEW` can do from the command line, and it calls the same functions — so the dialog
-// cannot drift from the command, which is the failure the DIMSTY/UNITS pair already shows is real.
+// Deliberately small: list, restore, delete, and save-the-current-view. Everything it does to a
+// VIEW is something `VIEW` can do from the command line, and it calls the same functions — so the
+// dialog cannot drift from the command, which is the failure the DIMSTY/UNITS pair already shows is
+// real.
+//
+// It also owns restore and delete for named coordinate systems, which `UCS Named` deliberately does
+// NOT offer (REQ-154). Not an exception to the rule above: those two still go through the shared
+// RestoreNamedUcs / DeleteNamedUcs, so there is one implementation — it is only the *prompt* for
+// them that the command line no longer has, because choosing among saved frames wants a list.
 void DrawViewManagerWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   std::vector<std::string> discard;
   if (!log)
@@ -17383,7 +17392,7 @@ void DrawViewManagerWindow(AppCommandState& cmd, std::vector<std::string>* log) 
 
   if (!cmd.showViewManagerWindow)
     return;
-  ImGui::SetNextWindowSize(ImVec2(520.f, 380.f), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(560.f, 480.f), ImGuiCond_FirstUseEver);
   bool open = cmd.showViewManagerWindow;
   if (!ImGui::Begin("View Manager", &open)) {
     ImGui::End();
@@ -17439,6 +17448,63 @@ void DrawViewManagerWindow(AppCommandState& cmd, std::vector<std::string>* log) 
     }
     if (deleteIdx >= 0)
       ProcessViewCommandLine(cmd, std::string("D ") + cmd.namedViews[static_cast<size_t>(deleteIdx)].name, *log);
+  }
+
+  // ---- Named coordinate systems (REQ-154) ------------------------------------------------------
+  // Restoring and deleting a saved UCS live HERE and nowhere else. `UCS Named` saves and only saves,
+  // because saving is the one of the three that needs no list: you already have the frame in front
+  // of you. The other two need to know what exists, and a command prompt cannot show you that - it
+  // can only ask you to remember a name. So they moved to the place that already lists things.
+  ImGui::Separator();
+  ImGui::TextUnformatted("Named coordinate systems");
+  if (cmd.ucsNamed.empty()) {
+    ImGui::TextDisabled("No saved coordinate systems in this drawing. Save one with UCS N <name>.");
+  } else {
+    // Same deferred-delete shape as the views table above, and for the same reason: erasing from
+    // the vector being iterated is how a manager dialog crashes on the row you are looking at.
+    int ucsDeleteIdx = -1;
+    if (ImGui::BeginTable("##ucsTable", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+      // The button column is sized to actually HOLD both buttons. A window this dialog has been
+      // opened in before keeps its remembered size, not the 560 default, so the layout has to
+      // survive the old 520 — and a Delete button clipped off the right edge is a function the user
+      // cannot reach at all.
+      ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 120.f);
+      ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 145.f);
+      ImGui::TableHeadersRow();
+      for (size_t i = 0; i < cmd.ucsNamed.size(); ++i) {
+        const NamedUcs& n = cmd.ucsNamed[i];
+        ImGui::TableNextRow();
+        ImGui::PushID(static_cast<int>(1000 + i));
+        ImGui::TableNextColumn();
+        const bool isCur = ucs::FramesMatch(n.frame, cmd.activeUcs);
+        if (isCur)
+          ImGui::TextColored(ImVec4(0.55f, 0.80f, 1.f, 1.f), "%s", n.name.c_str());
+        else
+          ImGui::TextUnformatted(n.name.c_str());
+        ImGui::TableNextColumn();
+        // Clipped by the column, so hovering gives the whole thing back rather than making the user
+        // widen the window to read six numbers.
+        const std::string desc = DescribeUcs(n.frame);
+        ImGui::TextUnformatted(desc.c_str());
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("%s", desc.c_str());
+        ImGui::TableNextColumn();
+        // Restoring the frame you are already in would do nothing but write a log line, so the
+        // button says so rather than pretending to act.
+        ImGui::BeginDisabled(isCur);
+        if (ImGui::SmallButton("Restore"))
+          RestoreNamedUcs(cmd, n.name, *log);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Delete"))
+          ucsDeleteIdx = static_cast<int>(i);
+        ImGui::PopID();
+      }
+      ImGui::EndTable();
+    }
+    if (ucsDeleteIdx >= 0)
+      DeleteNamedUcs(cmd, cmd.ucsNamed[static_cast<size_t>(ucsDeleteIdx)].name, *log);
   }
 
   ImGui::Separator();

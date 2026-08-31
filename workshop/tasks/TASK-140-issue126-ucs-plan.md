@@ -302,6 +302,57 @@ and the repair was mechanical — but the general rule stands and is now proven 
 that could plausibly appear more than once, locate the line, assert the occurrence count, and rewrite
 by index.** The repair script that fixed it does exactly that, and is the shape to reach for first.
 
+## 7c. Third GUI pass, 2026-08-31 — `Named` asks for a name, and nothing else
+
+**The user's report, in their words:** "when you type n for the named command ... it asks you if you
+want to save, restore, or delete. i want to skip that section of the command."
+
+**Why they are right, stated as a rule.** The three named-UCS operations do not need the same thing
+from the user. **Save** needs nothing but a name: the frame is already built and on screen, and by
+the time someone has constructed it and typed `N` they have answered "which of the three?" by
+getting there at all. **Restore** and **delete** need the opposite — they need to know *what exists*,
+and a command prompt structurally cannot show that. It can only ask the user to recall a name they
+cannot see. So the sub-prompt was charging every save two keystrokes to offer two operations that the
+prompt was the wrong place for.
+
+**What changed.**
+
+- `UCS N` goes straight to `Enter name to save current UCS as:`. `?` still lists from that prompt —
+  it cannot collide with a name, since blank and `World` are refused anyway.
+- `ApplyUcsNamed` + the `UcsNamedAction` enum are **deleted**, not bypassed, and replaced by three
+  named functions — `SaveNamedUcs`, `RestoreNamedUcs`, `DeleteNamedUcs`. A dead enum arm that no
+  input can reach is a worse outcome than the sub-prompt was.
+- The `WaitNamedAction` phase is gone from `UcsPhase`, which the compiler then required be removed
+  from `ViewportPickPolicy`'s exhaustive switch and its test. That exhaustiveness is the feature
+  working: a phase cannot be deleted while some click-routing decision still silently depends on it.
+- The **View Manager gains a "Named coordinate systems" table** — name, the frame's world
+  description, Restore and Delete per row — and is now the only place a saved frame can be restored
+  by name or deleted. Its buttons call the three shared functions, so this is not a second
+  implementation; it is the same one, reached from the widget that can show a list.
+- Restore is **disabled on the row that is already the active frame**. Restoring the frame you are in
+  would do nothing but write a log line, and a button that pretends to act is worse than a grey one.
+
+**Two things the GUI pass caught that no test would have.**
+
+1. The Delete button was **clipped off the right edge**. The dialog's 560px default only applies
+   `ImGuiCond_FirstUseEver`, so anyone who had opened the View Manager before — which is everyone the
+   feature ships to — keeps the remembered 520. The layout has to survive the old width, not the new
+   default. Button column widened to 145px; the frame description now clips inside its column with a
+   hover tooltip carrying the full text.
+2. The first click-driving attempt hit nothing, because `SetCursorPos` coordinates land at 1.25× in
+   the captured bitmap on this display. Worth recording: **measure the mapping from a screenshot of a
+   known cursor position rather than assuming it**, or a GUI pass reports "the button does nothing"
+   when the button was never pressed.
+
+**Verified in the running app**, not only headless: `UCS N` prompting for a name; two frames saved
+and listed; clicking Restore on the inactive row (the ribbon combo, ViewCube label and UCS icon all
+followed); clicking Delete (row gone, no crash on the deferred-erase path).
+
+**Test route for the moved half.** Restore and delete no longer have a typed route, so the transcript
+could not reach them. `HeadlessDriver` gained a `UCSNAMED RESTORE|DELETE <name>` verb that calls the
+same two functions the dialog's buttons call — the same shape, and for the same reason, as the
+existing `CLAYER` verb, whose command is also dialog-only.
+
 ## 8. Technical debt
 ```
 DEBT-1: PLAN of a tilted UCS sets the view direction but not the in-plane rotation.

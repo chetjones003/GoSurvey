@@ -3605,8 +3605,14 @@ requirements is a planning failure, not a sign of rigor.
   its frame puts the camera back but changes what the next typed coordinate means.
 
   `VIEW [Save/Restore/Delete/?] <name>` is inline in every form, and `VIEW` alone opens the View
-  Manager. The option letters and the case-insensitive name matching deliberately mirror `UCS Named`,
-  so learning one teaches the other.
+  Manager. The case-insensitive name matching deliberately mirrors `UCS Named`, so learning one
+  teaches the other.
+
+  **The View Manager also lists the drawing's named coordinate systems, and is the only place a
+  saved frame can be restored by name or deleted** (REQ-154). That is not a second home for a
+  command's options: `UCS Named` saves and nothing more, precisely because restoring and deleting
+  need a list of what exists, which a command prompt cannot show. The dialog's two buttons call the
+  same shared functions any other caller would, so there is still one implementation.
 
   **The View tab carries a Named Views panel**: a combo naming the current view — the saved name when
   the camera and frame match one, `Unsaved View` otherwise — listing the ten standard orientations
@@ -4898,9 +4904,16 @@ requirements is a planning failure, not a sign of rigor.
   **`UCS` supports:** an origin alone (orientation preserved); origin + X-axis point; the three-point
   form (origin, +X, a point in the +Y half of the plane); `World`; `Previous` (a bounded history that
   a restore does not itself extend); `View`; `X` / `Y` / `Z` rotation about the UCS's **own** axes,
-  positive by the right-hand rule; `ZAxis`; `Object`; and `Named` with Save / Restore / Delete / `?`.
-  `World` is reserved: it can be neither redefined nor deleted. Named definitions persist with the
-  drawing.
+  positive by the right-hand rule; `ZAxis`; `Object`; and `Named`.
+
+  **`Named` saves, and only saves.** `UCS N` asks for a name immediately - there is no
+  Save / Restore / Delete question in front of it, because by the time a user has built a frame and
+  typed `N` they have already answered it. `?` still lists at that prompt, and an existing name is
+  redefined rather than duplicated. **Restoring and deleting a saved frame belong to the View
+  Manager**, which lists them: choosing among saved frames needs to show what there is to choose
+  from, and a command prompt can only ask the user to recall a name they cannot see. Both halves call
+  one shared implementation, so the dialog and any other caller cannot drift apart. `World` is
+  reserved: it can be neither redefined nor deleted. Named definitions persist with the drawing.
 
   **A rotation angle can be typed or measured.** At the `X` / `Y` / `Z` angle prompt, `2P` takes two
   points — typed or clicked — and uses the angle of the direction between them, measured in the plane

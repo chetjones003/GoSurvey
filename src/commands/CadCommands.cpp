@@ -6131,7 +6131,7 @@ const CmdEntry kRegistry[] = {
     {"zoomwindow", "zw", "Zoom to a window"},
     {"pan", "p", "Pan the view (drag with the left mouse button)"},
     {"ucsfollow", "", "0 = changing the UCS leaves the view alone; 1 = it switches to a plan view"},
-    {"ucs", "", "Define or restore the User Coordinate System"},
+    {"ucs", "", "Define the User Coordinate System (N names one; restore/delete in the View Manager)"},
     {"plan", "", "View the XY plane of a coordinate system (does not change the UCS)"},
     {"orbit", "3dorbit, 3do", "Free orbit the model view (drag with the left mouse button)"},
     {"isolateobjects", "isolate", "Hide everything except the selection"},
@@ -6346,7 +6346,6 @@ static void ResetAllCadDraftTools(AppCommandState& st) {
   st.resolvedPointZValid = false;
   st.resolvedPointZ = 0.f;
   st.ucsPhase = AppCommandState::UcsPhase::Idle;
-  st.ucsNamedAction = AppCommandState::UcsNamedAction::None;
   st.planPhase = AppCommandState::PlanPhase::Idle;
   ResetCircleDraft(st);
   ResetPolylineDraft(st);
@@ -23048,7 +23047,7 @@ ray3d::Vec3 ConstrainToUcsOrtho(const ucs::Ucs& frame, const ray3d::Vec3& anchor
 // A one-line description of a frame, for the command log. Coordinates are reported in WORLD, the
 // only frame a UCS description can sensibly be stated in - describing a UCS in its own coordinates
 // would report every UCS alike as "origin 0,0,0".
-static std::string DescribeUcs(const ucs::Ucs& u) {
+std::string DescribeUcs(const ucs::Ucs& u) {
   if (ucs::IsWorld(u))
     return "World";
   char buf[224];
@@ -23225,7 +23224,6 @@ void StartUcsCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Ucs;
   st.ucsPhase = AppCommandState::UcsPhase::WaitOriginOrOption;
-  st.ucsNamedAction = AppCommandState::UcsNamedAction::None;
   log.push_back(kUcsPrompt);
 }
 
@@ -23239,7 +23237,6 @@ void StartPlanCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 static void EndUcsCommand(AppCommandState& st) {
   st.ucsPhase = AppCommandState::UcsPhase::Idle;
-  st.ucsNamedAction = AppCommandState::UcsNamedAction::None;
   st.active = AppCommandState::Kind::None;
 }
 
@@ -23361,61 +23358,75 @@ static void CommitUcsRotationFromTwoPoints(AppCommandState& st, const ray3d::Vec
   ApplyUcsRotation(st, deg, log);
 }
 
-// Apply the Named sub-action once its name has been typed.
-static void ApplyUcsNamed(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log) {
-  const std::string name = StringUtil::trimCopy(rawName);
-  if (name.empty()) {
-    log.push_back("UCS Named - enter a name.");
-    return;
+// The three named-UCS operations. Split apart deliberately: `UCS Named` now reaches only the first
+// of them - it asks for a name and saves - while restore and delete are the View Manager's, which
+// lists the saved frames so a user picks from what they can see rather than recalling a name. One
+// function each keeps that split honest: the dialog and the command line call the same code.
+//
+// The name check they share: blank is refused, and "World" is reserved. World is always available
+// and can be neither redefined nor deleted, which is what makes `UCS World` a guaranteed way back
+// to a known frame.
+static bool ValidUcsName(const std::string& rawName, const char* what, std::string* out,
+                         std::vector<std::string>& log) {
+  *out = StringUtil::trimCopy(rawName);
+  if (out->empty()) {
+    log.push_back(std::string("UCS ") + what + " - enter a name.");
+    return false;
   }
-  // "World" is reserved: it is always available and can be neither redefined nor deleted, which is
-  // what makes UCS World a guaranteed way back to a known frame.
-  if (StringUtil::toLowerAsciiCopy(name) == "world") {
-    log.push_back("UCS Named - \"World\" is reserved and cannot be saved over or deleted.");
-    return;
+  if (StringUtil::toLowerAsciiCopy(*out) == "world") {
+    log.push_back(std::string("UCS ") + what + " - \"World\" is reserved and cannot be saved over or deleted.");
+    return false;
   }
-  switch (st.ucsNamedAction) {
-    case AppCommandState::UcsNamedAction::Save: {
-      for (NamedUcs& n : st.ucsNamed) {
-        if (StringUtil::toLowerAsciiCopy(n.name) == StringUtil::toLowerAsciiCopy(name)) {
-          n.frame = st.activeUcs;  // redefining an existing name, which AutoCAD allows
-          log.push_back("UCS " + n.name + " redefined.");
-          return;
-        }
-      }
-      NamedUcs n;
-      n.name = name;
-      n.frame = st.activeUcs;
-      st.ucsNamed.push_back(std::move(n));
-      log.push_back("UCS saved as " + name + ".");
-      return;
-    }
-    case AppCommandState::UcsNamedAction::Restore: {
-      const NamedUcs* found = FindNamedUcs(st, name);
-      if (!found) {
-        log.push_back("UCS Restore - there is no saved UCS named " + name + ".");
-        return;
-      }
-      SetActiveUcs(st, found->frame, log);
-      return;
-    }
-    case AppCommandState::UcsNamedAction::Delete: {
-      for (size_t i = 0; i < st.ucsNamed.size(); ++i) {
-        if (StringUtil::toLowerAsciiCopy(st.ucsNamed[i].name) == StringUtil::toLowerAsciiCopy(name)) {
-          log.push_back("UCS " + st.ucsNamed[i].name + " deleted.");
-          st.ucsNamed.erase(st.ucsNamed.begin() + static_cast<std::ptrdiff_t>(i));
-          return;
-        }
-      }
-      log.push_back("UCS Delete - there is no saved UCS named " + name + ".");
-      return;
-    }
-    default:
-      return;
-  }
+  return true;
 }
 
-static void ListNamedUcs(const AppCommandState& st, std::vector<std::string>& log) {
+void SaveNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log) {
+  std::string name;
+  if (!ValidUcsName(rawName, "Named", &name, log))
+    return;
+  for (NamedUcs& n : st.ucsNamed) {
+    if (StringUtil::toLowerAsciiCopy(n.name) == StringUtil::toLowerAsciiCopy(name)) {
+      n.frame = st.activeUcs;  // redefining an existing name, which AutoCAD allows
+      log.push_back("UCS " + n.name + " redefined.");
+      return;
+    }
+  }
+  NamedUcs n;
+  n.name = name;
+  n.frame = st.activeUcs;
+  st.ucsNamed.push_back(std::move(n));
+  log.push_back("UCS saved as " + name + ".");
+}
+
+bool RestoreNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log) {
+  std::string name;
+  if (!ValidUcsName(rawName, "Restore", &name, log))
+    return false;
+  const NamedUcs* found = FindNamedUcs(st, name);
+  if (!found) {
+    log.push_back("UCS Restore - there is no saved UCS named " + name + ".");
+    return false;
+  }
+  SetActiveUcs(st, found->frame, log);
+  return true;
+}
+
+bool DeleteNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log) {
+  std::string name;
+  if (!ValidUcsName(rawName, "Delete", &name, log))
+    return false;
+  for (size_t i = 0; i < st.ucsNamed.size(); ++i) {
+    if (StringUtil::toLowerAsciiCopy(st.ucsNamed[i].name) == StringUtil::toLowerAsciiCopy(name)) {
+      log.push_back("UCS " + st.ucsNamed[i].name + " deleted.");
+      st.ucsNamed.erase(st.ucsNamed.begin() + static_cast<std::ptrdiff_t>(i));
+      return true;
+    }
+  }
+  log.push_back("UCS Delete - there is no saved UCS named " + name + ".");
+  return false;
+}
+
+void ListNamedUcs(const AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("Named coordinate systems:");
   log.push_back("  World (current)" + std::string(ucs::IsWorld(st.activeUcs) ? "" : ""));
   if (st.ucsNamed.empty()) {
@@ -23485,8 +23496,12 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
         return true;
       }
       if (low == "n" || low == "named") {
-        st.ucsPhase = AppCommandState::UcsPhase::WaitNamedAction;
-        log.push_back("Enter an option [Save/Restore/Delete/?]:");
+        // Straight to the name. Named's only job here is to keep the frame you have just built, so
+        // a Save/Restore/Delete question in front of it asked something the user had already
+        // answered by getting this far. Restoring and deleting are the View Manager's, where the
+        // saved frames are listed - see SaveNamedUcs in the header.
+        st.ucsPhase = AppCommandState::UcsPhase::WaitNamedName;
+        log.push_back("Enter name to save current UCS as:");
         return true;
       }
       if (low == "?") {
@@ -23643,31 +23658,15 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
       return true;
     }
 
-    case AppCommandState::UcsPhase::WaitNamedAction: {
+    case AppCommandState::UcsPhase::WaitNamedName: {
+      // `?` still lists, so the one keyboard shortcut for "what is already saved?" works at this
+      // prompt too - and it cannot be a name, since a blank-or-World check would reject it anyway.
       if (low == "?") {
         ListNamedUcs(st, log);
         EndUcsCommand(st);
         return true;
       }
-      if (low == "s" || low == "save")
-        st.ucsNamedAction = AppCommandState::UcsNamedAction::Save;
-      else if (low == "r" || low == "restore")
-        st.ucsNamedAction = AppCommandState::UcsNamedAction::Restore;
-      else if (low == "d" || low == "delete")
-        st.ucsNamedAction = AppCommandState::UcsNamedAction::Delete;
-      else {
-        log.push_back("UCS Named - enter Save, Restore, Delete or ?.");
-        return true;
-      }
-      st.ucsPhase = AppCommandState::UcsPhase::WaitNamedName;
-      log.push_back(st.ucsNamedAction == AppCommandState::UcsNamedAction::Save
-                        ? "Enter name to save current UCS as:"
-                        : "Enter name of UCS:");
-      return true;
-    }
-
-    case AppCommandState::UcsPhase::WaitNamedName: {
-      ApplyUcsNamed(st, in, log);
+      SaveNamedUcs(st, in, log);
       EndUcsCommand(st);
       return true;
     }

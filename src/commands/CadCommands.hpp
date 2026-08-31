@@ -1811,12 +1811,8 @@ struct AppCommandState {
     WaitRotationAngleP2, ///< X/Y/Z + 2P: second point; the angle is p1->p2 in the rotation plane
     WaitZAxisPoint,      ///< ZAxis: a point on the positive Z
     WaitObjectPick,      ///< Object: click an entity to align to
-    WaitNamedAction,     ///< Named: Save / Restore / Delete / ?
-    WaitNamedName,       ///< the name for \ref ucsNamedAction
+    WaitNamedName,       ///< Named: the name to save the current frame under
   } ucsPhase = UcsPhase::Idle;
-
-  /// Which of Save / Restore / Delete the pending name applies to.
-  enum class UcsNamedAction : uint8_t { None, Save, Restore, Delete } ucsNamedAction = UcsNamedAction::None;
 
   /// 'X', 'Y' or 'Z' — the axis \ref UcsPhase::WaitRotationAngle will rotate about.
   char ucsRotationAxis = 'Z';
@@ -3922,6 +3918,28 @@ void ApplyPlanViewOf(AppCommandState& st, const ucs::Ucs& frame, std::vector<std
 
 /// Find a saved UCS by name, case-insensitively. Returns nullptr when there is none.
 const NamedUcs* FindNamedUcs(const AppCommandState& st, const std::string& name);
+
+/// Save / restore / delete a named UCS (REQ-154).
+///
+/// Only \ref SaveNamedUcs is reachable from the `UCS` command: `UCS Named` asks for a name and
+/// nothing else. Restore and delete live in the View Manager, where the saved frames are listed and
+/// a user can see what they are choosing between - having to recall a name you cannot see was the
+/// weakest part of the old Save/Restore/Delete sub-prompt. The dialog calls these functions, so the
+/// two halves still share one implementation and cannot drift.
+///
+/// All three refuse the reserved name "World". Restore and delete return false, and say so in
+/// \p log, when no such name is saved.
+void SaveNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log);
+bool RestoreNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log);
+bool DeleteNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log);
+
+/// List the saved UCS definitions to \p log - what `UCS ?` prints.
+void ListNamedUcs(const AppCommandState& st, std::vector<std::string>& log);
+
+/// A one-line description of a frame, in WORLD coordinates - the only frame a UCS can sensibly be
+/// stated in. Shared by the command log and the View Manager so the two cannot describe a saved
+/// frame differently.
+std::string DescribeUcs(const ucs::Ucs& u);
 
 /// Named views (REQ-106). Same shape as the UCS Named helpers above, deliberately.
 const NamedView* FindNamedView(const AppCommandState& st, const std::string& name);

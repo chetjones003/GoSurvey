@@ -103,14 +103,15 @@ CMD UCS
 CMD W
 CMD ELEV 0
 
-# --- Named UCS: save, list, restore, delete -----------------------------------------------------------
+# --- Named UCS: N goes straight to the name, and saves ------------------------------------------------
+# There is no Save/Restore/Delete question in front of it any more: Named's only job on the command
+# line is to keep the frame you just built. Restore and delete are the View Manager's.
 CMD UCS
 CMD Z
 CMD 45
 CMD UCS
 CMD N
-EXPECT LOG "Enter an option [Save/Restore/Delete/?]"
-CMD S
+EXPECT LOG "Enter name to save current UCS as:"
 CMD Diagonal
 EXPECT LOG "UCS saved as Diagonal."
 
@@ -122,25 +123,32 @@ CMD UCS
 CMD ?
 EXPECT LOG "Diagonal"
 
+# `?` still lists from inside the name prompt, so the one shortcut for "what is saved?" works there.
 CMD UCS
 CMD N
-CMD R
-CMD Diagonal
-EXPECT LOG "Coordinate entry is now in this frame"
+CMD ?
+EXPECT LOG "Diagonal"
 
 # "World" is reserved and cannot be saved over.
 CMD UCS
 CMD N
-CMD S
 CMD World
 EXPECT LOG "reserved"
 
-# Restoring a name that does not exist is refused, not silently ignored.
+# Saving over an existing name redefines it rather than adding a second row.
+CMD UCS
+CMD Z
+CMD 30
 CMD UCS
 CMD N
-CMD R
-CMD Nonexistent
-EXPECT LOG "there is no saved UCS named Nonexistent"
+CMD Diagonal
+EXPECT LOG "UCS Diagonal redefined."
+
+# A blank name is refused rather than silently saving nothing.
+CMD UCS
+CMD N
+CMD
+EXPECT LOG "UCS Named - enter a name."
 
 # --- Named UCS definitions survive a save/reload ------------------------------------------------------
 SAVEAS %OUT%/ucs-a.gs
@@ -151,14 +159,31 @@ EXPECT LOG "Diagonal"
 SAVEAS %OUT%/ucs-b.gs
 EXPECT SAMEFILE %OUT%/ucs-a.gs %OUT%/ucs-b.gs
 
+# --- Restore and delete: the View Manager's, not the command's ----------------------------------------
+# UCSNAMED is the driver's stand-in for the dialog's two buttons; it calls the same functions they do.
 CMD UCS
-CMD N
-CMD D
-CMD Diagonal
+CMD W
+EXPECT LOG "UCS = World"
+UCSNAMED RESTORE Diagonal
+EXPECT LOG "Coordinate entry is now in this frame"
+
+# Restoring a name that does not exist is refused, not silently ignored.
+UCSNAMED RESTORE Nonexistent
+EXPECT LOG "there is no saved UCS named Nonexistent"
+
+UCSNAMED DELETE Diagonal
 EXPECT LOG "UCS Diagonal deleted."
 CMD UCS
 CMD ?
 EXPECT LOG "no saved UCS definitions"
+
+# `UCS N` never reaches them: Restore and Delete are just names now, and get saved as such.
+CMD UCS
+CMD N
+CMD Restore
+EXPECT LOG "UCS saved as Restore."
+UCSNAMED DELETE Restore
+EXPECT LOG "UCS Restore deleted."
 
 CMD UCS
 CMD W
@@ -190,7 +215,6 @@ CMD Z
 CMD 15
 CMD UCS
 CMD N
-CMD S
 CMD Road
 CMD UCS
 CMD W

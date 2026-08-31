@@ -370,9 +370,9 @@ TEST_CASE("UCS routes a click in every phase that asks for one", "[viewport][pic
   }
 
   // Typed-only prompts route to Ignore deliberately, not by omission: the rotation angle is a number
-  // or the `2P` keyword, and Named wants an action letter then a name. SubmitViewportPickImpl has no
-  // branch for any of them, so anything else would be a click that goes nowhere.
-  const UPh typedPhases[] = {UPh::WaitRotationAngle, UPh::WaitNamedAction, UPh::WaitNamedName};
+  // or the `2P` keyword, and Named wants a name. SubmitViewportPickImpl has no branch for either, so
+  // anything else would be a click that goes nowhere.
+  const UPh typedPhases[] = {UPh::WaitRotationAngle, UPh::WaitNamedName};
   for (const UPh p : typedPhases) {
     AppCommandState st;
     st.active = K::Ucs;
