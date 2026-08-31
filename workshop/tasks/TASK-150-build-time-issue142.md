@@ -168,3 +168,27 @@ The PCH-OFF build surfaced one real defect — `CadCommands_Ucs.cpp` was missing
 - Verification skills run: build-project ✔ (clean + incremental + PCH-off), testing ✔ (844/844).
   architecture-review: no boundary crossed (no source moved; test/headless link sets unchanged).
   Not yet submitted to a full Verification review — Status stays `submitted`.
+
+## 8c. Fresh-configure "hang" + build warnings (user report, 2026-08-31)
+
+Symptoms: a fresh build (wiped `build/`) sits silently after `-- Found OpenGL`, then a
+long run of `-- Looking for ...`, then a pause at LibreDWG's WIN32 winsock check; and
+the compile prints many warnings.
+
+- **"Hang" after Found OpenGL** = `FetchContent` cloning glfw / imgui / glew / pdfium /
+  LibreDWG (network, silent because `FETCHCONTENT_QUIET` defaults ON). Only on a wiped
+  `build/`. Not addressed (could `set(FETCHCONTENT_QUIET OFF)` to show progress — noisy
+  trade). The `_deps` cache / prebuilt-LibreDWG work in §8b removes it entirely.
+- **"Looking for ..." / WIN32 pause** = LibreDWG's ~30 `CHECK_INCLUDE_FILE` /
+  `check_symbol_exists` probes, each a `try_compile`. Fixed: `cmake/LibreDwg.cmake` now
+  sets `CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY` for the `add_subdirectory`, so each
+  probe skips the link step. **Configure 118s → 77s.**
+- **Warnings**: glew.c and libredwg are now `/w` (vendored, `DISABLE_WERROR` already).
+  The remaining ~200 are **ours** — ~150 are C4244 (double→float, "possible loss of
+  data") in `src/viewport/CadSnap.cpp` (78) and `src/ui/CadUi.cpp` (84). These flag the
+  REQ-101 / local-storage precision boundary (a snapped world-local coord narrowed into a
+  float field), so they are NOT blanket-suppressed. Options for a follow-up:
+    (a) a cleanup task that fixes or `static_cast`-annotates each site;
+    (b) `/wd4244` scoped to `CadUi.cpp` only (UI pixel math is benign) + audit CadSnap;
+    (c) add `/WX` and clear them for real (matches coding-standards §11 "warnings are
+        errors in CI", which is currently not enforced).
