@@ -1048,6 +1048,7 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
   st.blockEditCamZoom = st.viewportZoom;
   st.blockEditCamAz = st.viewportAzimuthDeg;
   st.blockEditCamEl = st.viewportElevationDeg;
+  st.blockEditCamRoll = st.viewportRollDeg;  // #153
   ClearCadSelection(st);
   st.blockEditorName = st.blockDefs[static_cast<size_t>(di)].name;
   st.blockEditorSnapshot = st.blockDefs[static_cast<size_t>(di)];
@@ -1279,6 +1280,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       st.viewportZoom = st.blockEditCamZoom;
       st.viewportAzimuthDeg = st.blockEditCamAz;
       st.viewportElevationDeg = st.blockEditCamEl;
+      st.viewportRollDeg = st.blockEditCamRoll;  // #153
       CadTruncateActiveUndoStack(st, st.blockEditUndoMark);  // drop session block-geometry snapshots
       st.blockEditActive = false;
     }

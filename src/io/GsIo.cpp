@@ -1297,6 +1297,8 @@ json BuildRoot(const AppCommandState& st) {
     view["azimuthDeg"] = st.viewportAzimuthDeg;
   if (st.viewportElevationDeg != 90.f)
     view["elevationDeg"] = st.viewportElevationDeg;
+  if (st.viewportRollDeg != 0.f)  // #153: screen roll under a tilted-UCS PLAN
+    view["rollDeg"] = st.viewportRollDeg;
   // The UCS (REQ-154), additive and omitted at its default for the same reason as the camera keys
   // above: a drawing that never used UCS still serializes byte-for-byte as before.
   //
@@ -1346,6 +1348,8 @@ json BuildRoot(const AppCommandState& st) {
       e["zoom"] = v.zoom;
       e["azimuthDeg"] = v.azimuthDeg;
       e["elevationDeg"] = v.elevationDeg;
+      if (v.rollDeg != 0.f)  // #153
+        e["rollDeg"] = v.rollDeg;
       // The frame rides with the view (REQ-106). Omitted at World so the common case stays compact.
       if (!ucs::IsWorld(v.ucs))
         e["ucs"] = writeUcs(v.ucs);
@@ -2461,6 +2465,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.viewportPanZ = view.value("panZ", 0.0);
     st.viewportAzimuthDeg = view.value("azimuthDeg", 0.f);
     st.viewportElevationDeg = std::clamp(view.value("elevationDeg", 90.f), -90.f, 90.f);
+    st.viewportRollDeg = view.value("rollDeg", 0.f);  // #153
+    if (!std::isfinite(st.viewportRollDeg))
+      st.viewportRollDeg = 0.f;
     // The UCS (REQ-154). A full frame wins; `ucsElevation` alone is what every drawing saved before
     // the UCS command carries, and still loads as the elevated world-parallel plane it described.
     // A frame that does not survive its own validity check is DISCARDED rather than adopted: a
@@ -2528,8 +2535,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         v.zoom = entry.value("zoom", 1.f);
         v.azimuthDeg = entry.value("azimuthDeg", 0.f);
         v.elevationDeg = std::clamp(entry.value("elevationDeg", 90.f), -90.f, 90.f);
+        v.rollDeg = entry.value("rollDeg", 0.f);  // #153
         if (!std::isfinite(v.panX) || !std::isfinite(v.panY) || !std::isfinite(v.panZ) ||
-            !std::isfinite(v.zoom) || v.zoom <= 0.f || !std::isfinite(v.azimuthDeg))
+            !std::isfinite(v.zoom) || v.zoom <= 0.f || !std::isfinite(v.azimuthDeg) ||
+            !std::isfinite(v.rollDeg))
           continue;
         const auto vu = entry.find("ucs");
         if (vu != entry.end() && vu->is_object() && !readUcs(*vu, &v.ucs))

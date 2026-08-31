@@ -953,6 +953,7 @@ struct NamedView {
   float zoom = 1.f;
   float azimuthDeg = 0.f;
   float elevationDeg = 90.f;
+  float rollDeg = 0.f;  ///< Screen roll (#153); nonzero only for a view saved on a tilted-UCS PLAN.
   ucs::Ucs ucs;
 };
 
@@ -971,6 +972,7 @@ struct DrawingDocument {
   double viewportPanZ = 0.0;          ///< Camera target elevation per tab (REQ-058).
   float  viewportAzimuthDeg = 0.f;    ///< Camera orientation per tab (REQ-058); plan view by default.
   float  viewportElevationDeg = 90.f;
+  float  viewportRollDeg = 0.f;       ///< Screen roll per tab (#153); nonzero only after PLAN of a tilted UCS.
   /// The UCS is per drawing, not per session (REQ-154): switching tabs must not carry one drawing's
   /// coordinate frame into another's, which is the "UCS state does not leak between viewports"
   /// condition in as strong a form as a one-model-view-per-tab application can state it.
@@ -1598,6 +1600,7 @@ struct AppCommandState {
     VisualStyle savedVisualStyle = VisualStyle::Wireframe2D;
     float savedAzimuthDeg = 0.f;
     float savedElevationDeg = 90.f;
+    float savedRollDeg = 0.f;  // #153
     float savedZoom = 1.f;
     double savedPanX = 0.0;
     double savedPanY = 0.0;
@@ -1785,14 +1788,18 @@ struct AppCommandState {
   /// Defaults are plan view, which reproduces the pre-3D pipeline exactly.
   float viewportAzimuthDeg = 0.f;
   float viewportElevationDeg = 90.f;
+  /// Screen roll about the view axis (GitHub #153). Zero for plan view, every ViewCube orientation
+  /// and every hand orbit; set only by `PLAN` of a UCS whose Z is tilted off world +Z, so that the
+  /// UCS +Y comes out up the screen. Persisted per drawing alongside azimuth/elevation.
+  float viewportRollDeg = 0.f;
 
   /// ViewCube orientation animation (REQ-059). A face/arrow/home press sets a target and the view
   /// eases to it over \ref kViewAnimSeconds instead of snapping, so the user keeps their bearings —
   /// a hard jump makes it easy to lose track of which way the model turned. Orbiting by hand
   /// cancels any animation in flight so the drag is never fighting an interpolation.
   bool  viewAnimActive = false;
-  float viewAnimFromAz = 0.f, viewAnimFromEl = 90.f;
-  float viewAnimToAz = 0.f, viewAnimToEl = 90.f;
+  float viewAnimFromAz = 0.f, viewAnimFromEl = 90.f, viewAnimFromRoll = 0.f;
+  float viewAnimToAz = 0.f, viewAnimToEl = 90.f, viewAnimToRoll = 0.f;
   float viewAnimT = 0.f;  ///< 0..1 progress.
 
   /// The active User Coordinate System (REQ-058 / ADR-025 (e); REQ-154, GitHub #126).
@@ -2110,7 +2117,7 @@ struct AppCommandState {
   bool blockEditCloseAsked = false;   ///< UI shows the close modal while true.
   /// Camera to restore when the session closes (the view BEDIT was invoked from).
   double blockEditCamPanX = 0.0, blockEditCamPanY = 0.0, blockEditCamPanZ = 0.0;
-  float  blockEditCamZoom = 1.f, blockEditCamAz = 0.f, blockEditCamEl = 90.f;
+  float  blockEditCamZoom = 1.f, blockEditCamAz = 0.f, blockEditCamEl = 90.f, blockEditCamRoll = 0.f;
   /// Debug Developer Shell (REQ-161). Default off; status-bar DEV toggles it. Release ignores it.
   bool devShellVisible = false;
   std::vector<std::string> blockRecent;
@@ -3341,6 +3348,7 @@ inline Camera CadViewCamera(const AppCommandState& st) {
   c.targetZ = st.viewportPanZ;
   c.azimuthDeg = st.viewportAzimuthDeg;
   c.elevationDeg = st.viewportElevationDeg;
+  c.rollDeg = st.viewportRollDeg;  // #153: nonzero only under a tilted-UCS PLAN
   c.nearZ = -100000.f;
   c.farZ = 100000.f;
   return c;
@@ -3359,12 +3367,16 @@ inline constexpr float kViewAnimSeconds = 0.28f;
 
 /// Begin easing the view to \p az / \p el (REQ-059). Azimuth travels the SHORT way around, so a
 /// move from 350° to 45° turns 55° forward rather than 305° backward.
-inline void CadStartViewAnimation(AppCommandState& st, float az, float el) {
+inline void CadStartViewAnimation(AppCommandState& st, float az, float el, float roll = 0.f) {
   st.viewAnimFromAz = st.viewportAzimuthDeg;
   st.viewAnimFromEl = st.viewportElevationDeg;
+  st.viewAnimFromRoll = st.viewportRollDeg;
   // Unwrapped target, so the lerp below cannot take the long way round (Camera::ShortestAzimuthDelta).
   st.viewAnimToAz = st.viewportAzimuthDeg + Camera::ShortestAzimuthDelta(st.viewportAzimuthDeg, az);
   st.viewAnimToEl = el;
+  // Roll wraps like azimuth, so ease it the short way too (#153). Callers that do not pass a roll
+  // get 0 here, which returns a rolled view to upright — the correct move for every non-PLAN caller.
+  st.viewAnimToRoll = st.viewportRollDeg + Camera::ShortestAzimuthDelta(st.viewportRollDeg, roll);
   st.viewAnimT = 0.f;
   st.viewAnimActive = true;
 }
@@ -3387,6 +3399,12 @@ inline void CadTickViewAnimation(AppCommandState& st, float dtSeconds) {
     az -= 360.f;
   st.viewportAzimuthDeg = az;
   st.viewportElevationDeg = st.viewAnimFromEl + (st.viewAnimToEl - st.viewAnimFromEl) * e;
+  float roll = st.viewAnimFromRoll + (st.viewAnimToRoll - st.viewAnimFromRoll) * e;
+  while (roll < 0.f)
+    roll += 360.f;
+  while (roll >= 360.f)
+    roll -= 360.f;
+  st.viewportRollDeg = roll;
 }
 
 /// Elevation at which newly drawn geometry lands — the active work plane's Z (REQ-058 / REQ-154).

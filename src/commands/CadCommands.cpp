@@ -73,6 +73,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.viewportPanZ           = cmd.viewportPanZ;
   doc.viewportAzimuthDeg     = cmd.viewportAzimuthDeg;    // camera orientation is per-drawing (REQ-058)
   doc.viewportElevationDeg   = cmd.viewportElevationDeg;
+  doc.viewportRollDeg        = cmd.viewportRollDeg;       // screen roll under a tilted-UCS PLAN (#153)
   // The coordinate system is per-drawing (REQ-154). Without this, switching tabs would carry one
   // drawing's UCS into another's — and every coordinate typed afterwards would be read in a frame
   // belonging to a different drawing, with nothing on screen to say so.
@@ -144,6 +145,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.viewportPanZ               = doc.viewportPanZ;
   cmd.viewportAzimuthDeg         = doc.viewportAzimuthDeg;
   cmd.viewportElevationDeg       = doc.viewportElevationDeg;
+  cmd.viewportRollDeg            = doc.viewportRollDeg;  // #153
   cmd.viewAnimActive             = false;  // never resume another tab's animation
   cmd.activeUcs                  = doc.activeUcs;  // per-drawing coordinate system (REQ-154)
   cmd.ucsPrevious                = doc.ucsPrevious;

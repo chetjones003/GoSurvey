@@ -17,6 +17,7 @@
 #include <cstring>
 
 #include "render/Camera.hpp"
+#include "util/ucs.hpp"
 
 using Catch::Approx;
 
@@ -364,6 +365,75 @@ TEST_CASE("Azimuth is left alone at the poles rather than snapped", "[camera]") 
   dst.SetFromViewRotation(m);
   REQUIRE(dst.elevationDeg == Approx(90.f).margin(1e-3));
   REQUIRE(dst.azimuthDeg == Approx(45.f));  // preserved, not overwritten
+}
+
+// ---------------------------------------------------------------------------
+// Screen roll — PLAN of a tilted UCS (GitHub #153).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Roll defaults to zero and leaves plan view an identity rotation", "[camera][roll]") {
+  Camera c = Camera::Plan(0.0, 0.0, 50.f);
+  REQUIRE(c.rollDeg == Approx(0.f));
+  float m[16];
+  c.ViewRotation(m);
+  const float ident[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  for (int i = 0; i < 16; ++i)
+    REQUIRE(m[i] == Approx(ident[i]).margin(1e-6));
+}
+
+TEST_CASE("Roll turns screen-up but not the view direction", "[camera][roll]") {
+  Camera c;
+  c.azimuthDeg = 20.f;
+  c.elevationDeg = 35.f;
+  const ray3d::Vec3 fwd0 = c.ForwardWorld();
+  c.rollDeg = 40.f;
+  const ray3d::Vec3 fwd1 = c.ForwardWorld();
+  REQUIRE(fwd1.x == Approx(fwd0.x).margin(1e-6));
+  REQUIRE(fwd1.y == Approx(fwd0.y).margin(1e-6));
+  REQUIRE(fwd1.z == Approx(fwd0.z).margin(1e-6));
+  // right/up must stay orthonormal to forward under the roll.
+  const ray3d::Vec3 up = c.UpWorld();
+  const ray3d::Vec3 right = c.RightWorld();
+  REQUIRE(ray3d::Dot(up, fwd1) == Approx(0.f).margin(1e-6));
+  REQUIRE(ray3d::Dot(right, up) == Approx(0.f).margin(1e-6));
+  REQUIRE(ray3d::Length(up) == Approx(1.f).margin(1e-6));
+}
+
+TEST_CASE("PLAN of a 45-degree UCS places its +Y up the screen exactly", "[camera][roll][plan]") {
+  // A UCS built from three points on a plane tilted 45 degrees about the Y axis (issue #153's
+  // regression case). PLAN must look straight down its +Z AND put its +Y up the screen.
+  const ucs::Ucs u = ucs::RotatedAboutY(ucs::Ucs{}, 45.0);
+  float az = 0.f, el = 0.f;
+  ucs::PlanViewAngles(u, &az, &el);
+  Camera c;
+  c.azimuthDeg = az;
+  c.elevationDeg = el;
+  c.rollDeg = Camera::RollToPlaceUp(az, el, u.yAxis);
+  REQUIRE(c.rollDeg != Approx(0.f).margin(1e-3));  // a genuinely tilted frame needs a real roll
+
+  const ray3d::Vec3 fwd = c.ForwardWorld();
+  REQUIRE(fwd.x == Approx(-u.zAxis.x).margin(1e-6));
+  REQUIRE(fwd.y == Approx(-u.zAxis.y).margin(1e-6));
+  REQUIRE(fwd.z == Approx(-u.zAxis.z).margin(1e-6));
+
+  const ray3d::Vec3 up = c.UpWorld();
+  const ray3d::Vec3 want = ray3d::Normalize(u.yAxis);
+  REQUIRE(up.x == Approx(want.x).margin(1e-6));
+  REQUIRE(up.y == Approx(want.y).margin(1e-6));
+  REQUIRE(up.z == Approx(want.z).margin(1e-6));
+}
+
+TEST_CASE("A bare view matrix carries no roll back", "[camera][roll]") {
+  Camera c;
+  c.azimuthDeg = 30.f;
+  c.elevationDeg = 20.f;
+  c.rollDeg = 15.f;
+  float m[16];
+  c.ViewRotation(m);
+  Camera d;
+  d.rollDeg = 99.f;
+  d.SetFromViewRotation(m);
+  REQUIRE(d.rollDeg == Approx(0.f));
 }
 
 // ---------------------------------------------------------------------------

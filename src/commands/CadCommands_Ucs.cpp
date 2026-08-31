@@ -73,7 +73,8 @@ const NamedView* CurrentNamedView(const AppCommandState& st) {
     if (std::fabs(v.zoom - st.viewportZoom) > 1e-6f)
       continue;
     if (std::fabs(v.azimuthDeg - st.viewportAzimuthDeg) > kAngTol ||
-        std::fabs(v.elevationDeg - st.viewportElevationDeg) > kAngTol)
+        std::fabs(v.elevationDeg - st.viewportElevationDeg) > kAngTol ||
+        std::fabs(v.rollDeg - st.viewportRollDeg) > kAngTol)
       continue;
     if (!ucs::FramesMatch(v.ucs, st.activeUcs))
       continue;
@@ -95,6 +96,7 @@ NamedView CaptureCurrentView(const AppCommandState& st, const std::string& name)
   v.zoom = st.viewportZoom;
   v.azimuthDeg = st.viewportAzimuthDeg;
   v.elevationDeg = st.viewportElevationDeg;
+  v.rollDeg = st.viewportRollDeg;  // #153
   v.ucs = st.activeUcs;
   return v;
 }
@@ -114,7 +116,7 @@ void RestoreNamedView(AppCommandState& st, const NamedView& v, std::vector<std::
   // the camera returns but the coordinate frame does not, because the numbers you type afterwards
   // would mean something different from the ones you typed when you saved it.
   SetActiveUcs(st, v.ucs, log);
-  CadStartViewAnimation(st, v.azimuthDeg, v.elevationDeg);
+  CadStartViewAnimation(st, v.azimuthDeg, v.elevationDeg, v.rollDeg);
   st.activeViewName = v.name;
   log.push_back("VIEW - restored " + v.name + ".");
 }
@@ -230,15 +232,11 @@ void ApplyPlanViewOf(AppCommandState& st, const ucs::Ucs& frame, std::vector<std
   float az = st.viewportAzimuthDeg;
   float el = st.viewportElevationDeg;
   ucs::PlanViewAngles(frame, &az, &el);
-  CadStartViewAnimation(st, az, el);  // ease, never jump (REQ-059)
-  if (!ucs::PlanViewIsExact(frame)) {
-    // Said out loud at the moment it bites rather than buried in a document nobody reads. The view
-    // DIRECTION is correct; only the spin about it cannot be set, because Camera stores azimuth and
-    // elevation with no roll axis (see ucs::PlanViewAngles).
-    log.push_back("PLAN - looking square at this UCS's XY plane, but its +Y cannot also be placed up "
-                  "the screen: the camera has no roll axis. The view direction is correct; the "
-                  "in-plane rotation is not.");
-  }
+  // The roll that also places the UCS +Y up the screen (#153). Zero whenever the frame's Z is world
+  // +Z, so the flat survey case animates exactly as it did before this existed.
+  const float roll = Camera::RollToPlaceUp(az, el, frame.yAxis);
+  CadStartViewAnimation(st, az, el, roll);  // ease, never jump (REQ-059)
+  (void)log;
 }
 
 void SetActiveUcs(AppCommandState& st, const ucs::Ucs& next, std::vector<std::string>& log, bool pushPrevious) {

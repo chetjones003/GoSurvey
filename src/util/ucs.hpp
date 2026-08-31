@@ -347,11 +347,11 @@ inline void SpinPair(Vec3* a, Vec3* b, double deg) {
 /// a lot line is a pure rotation about world Z, and it is precisely there that the eye direction
 /// carries no azimuth information at all.
 ///
-/// **This orients the camera, it does not roll it.** `Camera` stores azimuth and elevation only —
-/// a deliberate choice (Camera.hpp) that avoids the pole flip a free eye/up pair suffers. So for a
-/// UCS whose Z is tilted away from world Z, the resulting view looks squarely at the UCS XY plane
-/// but its screen-up is the azimuth/elevation convention's up rather than the UCS's own +Y. Callers
-/// that care use \ref PlanViewIsExact to say so; see the requirement's documented limitation.
+/// **This derives azimuth/elevation only; it does not compute the roll.** For a UCS whose Z is
+/// world +Z the roll is zero and screen-up is already the UCS +Y. For a tilted UCS the caller pairs
+/// this with `Camera::RollToPlaceUp(az, el, u.yAxis)` to turn screen-up onto the UCS +Y — the two
+/// steps together make PLAN exact for every frame (GitHub #153). Kept split so this stays pure of
+/// the `Camera` convention.
 inline void PlanViewAngles(const Ucs& u, float* azimuthDeg, float* elevationDeg) {
   const Vec3 eye = Normalize(u.zAxis);
   if (Dot(eye, eye) < 0.5)  // degenerate: leave the caller's values alone
@@ -379,14 +379,15 @@ inline void PlanViewAngles(const Ucs& u, float* azimuthDeg, float* elevationDeg)
   *azimuthDeg = static_cast<float>(az);
 }
 
-/// True when \ref PlanViewAngles can reproduce \p u's in-plane orientation exactly — that is, when
-/// the UCS +Y really will point up the screen.
+/// True when PLAN of \p u can place the UCS +Y up the screen exactly — now the case for every valid
+/// frame (GitHub #153).
 ///
-/// Holds for every UCS whose Z axis is world +Z (any translation, any rotation about Z), which is
-/// the whole 2D survey case and the default. It fails only for a genuinely tilted UCS, where the
-/// missing degree of freedom is camera roll.
+/// Before `Camera` gained a roll axis this held only for a UCS whose Z was world +Z; a tilted frame
+/// was oriented correctly but its in-plane spin could not be set. `Camera::RollToPlaceUp` supplies
+/// that missing degree of freedom, so the only frame this now rejects is a degenerate one — which
+/// `ucs` construction refuses to produce in the first place.
 [[nodiscard]] inline bool PlanViewIsExact(const Ucs& u, double tol = 1e-6) {
-  return std::fabs(u.zAxis.x) <= tol && std::fabs(u.zAxis.y) <= tol && u.zAxis.z > 0.0;
+  return IsRightHandedOrthonormal(u, tol);
 }
 
 /// The UCS's rotation about world +Z, in degrees — what the ViewCube's compass and square-up arrows

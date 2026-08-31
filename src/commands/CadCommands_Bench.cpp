@@ -50,6 +50,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.savedVisualStyle = st.viewportVisualStyle;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
+  b.savedRollDeg = st.viewportRollDeg;  // #153
   b.savedZoom = st.viewportZoom;
   b.savedPanX = st.viewportPanX;
   b.savedPanY = st.viewportPanY;
@@ -171,6 +172,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   st.viewportZoom = static_cast<float>(50.0 / halfH);
   st.viewportAzimuthDeg = 0.f;
   st.viewportElevationDeg = 55.f;
+  st.viewportRollDeg = 0.f;  // #153
 
   b.frameMs.clear();
   b.frameMs.reserve(static_cast<size_t>(frames));
@@ -225,6 +227,7 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
     b.savedSurfaceAttrs.clear();
     st.viewportAzimuthDeg = b.savedAzimuthDeg;
     st.viewportElevationDeg = b.savedElevationDeg;
+    st.viewportRollDeg = b.savedRollDeg;  // #153
     st.viewportZoom = b.savedZoom;
     st.viewportPanX = b.savedPanX;
     st.viewportPanY = b.savedPanY;

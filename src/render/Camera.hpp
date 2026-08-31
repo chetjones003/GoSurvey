@@ -36,6 +36,14 @@ struct Camera {
   /// Clamped to [-90, +90] by \ref Orbit so the camera cannot roll over the pole.
   float elevationDeg = 90.f;
 
+  /// Roll about the camera's own view axis (screen roll), in degrees, applied AFTER azimuth and
+  /// elevation. Zero for the entire plan-view default, every ViewCube orientation and every hand
+  /// orbit — it is set only by `PLAN` of a UCS whose Z is tilted off world +Z, where it is the
+  /// degree of freedom that places that UCS's +Y up the screen (GitHub #153). Keeping it an explicit
+  /// third angle rather than moving to a free eye/up pair preserves the load-bearing property below:
+  /// plan view is still an identity rotation, and orbiting through the pole still does not flip.
+  float rollDeg = 0.f;
+
   /// Half-height of the orthographic view volume in world units. Mirrors the existing
   /// `halfH = (1/zoom) * 50` relationship, so `zoom` and this are two views of one quantity.
   float orthoHalfH = 50.f;
@@ -82,9 +90,12 @@ struct Camera {
 
   /// The 3×3 view rotation, written into a column-major 4×4 (the convention `MulMat4`/`Ortho` use).
   ///
-  /// `R = Rx(elevation − 90°) · Rz(azimuth)`: azimuth spins the world about Z, then the tilt drops
-  /// the horizon into place. At elevation 90 / azimuth 0 both factors are identity, so plan view is
-  /// exactly the previous pipeline — asserted by a parity test, not assumed.
+  /// `R = Rroll · Rx(elevation − 90°) · Rz(azimuth)`: azimuth spins the world about Z, the tilt
+  /// drops the horizon into place, then roll turns screen-up about the view axis (#153). At
+  /// elevation 90 / azimuth 0 / roll 0 every factor is identity, so plan view is exactly the
+  /// previous pipeline — asserted by a parity test, not assumed. Roll mixes only the camera
+  /// right/up rows; the backward row (the view axis) is untouched, so \ref ForwardWorld and every
+  /// ray direction are independent of roll.
   void ViewRotation(float* out16) const {
     const double kDeg = 3.14159265358979323846 / 180.0;
     const double az = static_cast<double>(azimuthDeg) * kDeg;
@@ -98,13 +109,19 @@ struct Camera {
     const double r1[3] = {ct * sa, ct * ca, -st};
     const double r2[3] = {st * sa, st * ca, ct};
 
+    // Roll about the view axis (#153): rotate the right/up rows in their own plane. r2 is unchanged.
+    const double rr = static_cast<double>(rollDeg) * kDeg;
+    const double cr = std::cos(rr), sr = std::sin(rr);
+    const double e0[3] = {cr * r0[0] + sr * r1[0], cr * r0[1] + sr * r1[1], cr * r0[2] + sr * r1[2]};
+    const double e1[3] = {-sr * r0[0] + cr * r1[0], -sr * r0[1] + cr * r1[1], -sr * r0[2] + cr * r1[2]};
+
     std::memset(out16, 0, sizeof(float) * 16);
-    out16[0] = static_cast<float>(r0[0]);
-    out16[4] = static_cast<float>(r0[1]);
-    out16[8] = static_cast<float>(r0[2]);
-    out16[1] = static_cast<float>(r1[0]);
-    out16[5] = static_cast<float>(r1[1]);
-    out16[9] = static_cast<float>(r1[2]);
+    out16[0] = static_cast<float>(e0[0]);
+    out16[4] = static_cast<float>(e0[1]);
+    out16[8] = static_cast<float>(e0[2]);
+    out16[1] = static_cast<float>(e1[0]);
+    out16[5] = static_cast<float>(e1[1]);
+    out16[9] = static_cast<float>(e1[2]);
     out16[2] = static_cast<float>(r2[0]);
     out16[6] = static_cast<float>(r2[1]);
     out16[10] = static_cast<float>(r2[2]);
@@ -156,6 +173,29 @@ struct Camera {
     return ray3d::Normalize(ray3d::Vec3{r[1], r[5], r[9]});
   }
 
+  /// The roll (in degrees) that places world direction \p worldUp up the screen at the given
+  /// azimuth and elevation — the value `PLAN` of a tilted UCS needs to also put that UCS's +Y up
+  /// (GitHub #153). Built from the same \ref ViewRotation rows the rest of the class uses (via a
+  /// scratch roll-0 camera), so it cannot drift from the sign convention. Returns 0 when \p worldUp
+  /// is degenerate or lies along the view axis, where no roll changes screen-up.
+  static float RollToPlaceUp(float azimuthDeg, float elevationDeg, ray3d::Vec3 worldUp) {
+    Camera c;
+    c.azimuthDeg = azimuthDeg;
+    c.elevationDeg = elevationDeg;
+    c.rollDeg = 0.f;
+    const ray3d::Vec3 w = ray3d::Normalize(worldUp);
+    if (ray3d::Dot(w, w) < 0.5)
+      return 0.f;
+    const ray3d::Vec3 right0 = c.RightWorld();
+    const ray3d::Vec3 up0 = c.UpWorld();
+    const double b = ray3d::Dot(w, right0);
+    const double a = ray3d::Dot(w, up0);
+    if (a * a + b * b < 1e-18)
+      return 0.f;
+    const double kRad = 180.0 / 3.14159265358979323846;
+    return static_cast<float>(std::atan2(-b, a) * kRad);
+  }
+
   /// Signed shortest turn from \p fromDeg to \p toDeg, in (-180, 180].
   ///
   /// Animating an orientation change has to take the short way around: interpolating raw degrees
@@ -184,6 +224,9 @@ struct Camera {
   void SetFromViewRotation(const float* m16) {
     if (!m16)
       return;
+    // A bare 3x3 carries no roll, and the view gizmo that produces one is a world-referenced
+    // re-orientation — so adopting its matrix means returning to an un-rolled camera (#153).
+    rollDeg = 0.f;
     const double kRad = 180.0 / 3.14159265358979323846;
     double ct = static_cast<double>(m16[10]);
     if (ct > 1.0)
