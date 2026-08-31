@@ -68,17 +68,7 @@ when" and the requirements it closes.
 A lightweight board that complements the milestones. Keep each column honest.
 
 ### Now (in flight — keep short)
-- **M-Surfaces steps 6 + 7 — REQ-068 (selection), REQ-070, REQ-072.** Resequenced by
-  **D-2026-08-21-a**: the user asked for surface styles and a selectable surface together, so step 7
-  (REQ-072 banding + arrows) is pulled forward beside step 6 and **REQ-071 (contour EXTRACT) is
-  pushed back** to its own task. Three tasks, in this order — each blocked on the one before it:
-  - **TASK-084 — REQ-068's selection half**, never implemented. It also gives surfaces the stable
-    entity id (`EntityKind::Surface`) that everything below depends on.
-  - **TASK-085 — REQ-070 surface styles**: the style table, `util/contourgen`, the display-geometry
-    cache, the Surface Style dialog.
-  - **TASK-086 — REQ-072 analysis**: elevation/slope banding, slope arrows, the legend.
-  Step 5 (REQ-069) is done (see M-Surfaces status below). ADR-036 records the shape; it **amends
-  ADR-028 (h)** on the band-shading path.
+- *(empty)*
 
 ### M-PaperSpace — Paper space & plotting (incremental)
 - **Goal:** compose the model onto sheets and plot them.
@@ -282,14 +272,15 @@ A lightweight board that complements the milestones. Keep each column honest.
   map into CAD stores / retire converter from File open-save → point cloud + PTS → PTX/LAS/LAZ/E57
   → IMAGE → IFC view. **No code until a Workshop task cites these REQs.** ODA and native scan
   project formats stay out.
+- **M-Surfaces-119 — Issue #119 remainder** (D-2026-08-27-a, ADR-039, D-2026-08-27-b). Phases 1–3
+  (REQ-124…135) implemented on the 119 branch. REQ-136 TIN volume surface in progress. Grid /
+  corridor / contour smoothing and labels / TIN swap remain out of scope.
 - **REQ-071 — contour extraction** (EXTRACT bakes displayed contours into unlinked polylines). Moved
   out of "Now" by D-2026-08-21-a so a verification FAIL on styles cannot block it. `util/contourgen`
   (TASK-085) emits the same flat-verts + offsets layout `userPolylineVerts` uses, so the follow-up is
   small by construction rather than by hope.
-- **Surface plotting** — `src/io/PdfPlot.cpp` handles no surfaces at all, so REQ-068's "a surface on
-  a non-plottable layer is not plotted" is satisfied vacuously. Invisible today; the first thing a
-  user hits once styled contours exist. **No requirement covers it** — recorded as TASK-085 DEBT-1
-  and needing a REQ decision, not a quiet fix.
+- **Surface plotting (REQ-135)** — `PdfPlot.cpp` currently draws no surfaces (TASK-085 DEBT-1).
+  REQ-135 is the requirement that gap was waiting for.
 - Re-run the REQ-100 surface bench case per the roadmap's own sequencing note — and note ADR-036 (e):
   it must prove the display cache **holds across frames**, not merely that one regeneration is fast.
 - REQ-101's reference-dataset half (M2) — the typed-storage half is done; see M2 status above.

@@ -12,6 +12,7 @@
 #endif
 
 #include "CadCommands.hpp"
+#include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadRubberPreview.hpp"
 #include "TransformPreview.hpp"
@@ -23,7 +24,11 @@
 #include "SurveyPoints.hpp"
 #include "AppIcon.hpp"
 #include "GsIo.hpp"
+#include "DwgIo.hpp"
 #include "SplashScreen.hpp"
+#ifdef GOSURVEY_DEVELOPER_SHELL
+#include "DevShell.hpp"
+#endif
 #include "UserPrefs.hpp"
 #include "ImGuiLayout.hpp"
 #include "UpdateService.hpp"
@@ -125,6 +130,7 @@ namespace
         if (LoadGoSurveyFile(cmd, u8.c_str(), boot))
         {
           appendLines(boot);
+          LoadBundledBlockLibrary(cmd, cmdLog);
           return;
         }
         appendLines(boot);
@@ -136,9 +142,12 @@ namespace
       }
     }
 
-    if (tryLoadPath(ResolveDefaultWorkspaceTemplateGsPath()))
+    if (tryLoadPath(ResolveDefaultWorkspaceTemplateGsPath())) {
+      LoadBundledBlockLibrary(cmd, cmdLog);
       return;
+    }
     cmdLog.push_back("Startup: bundled default-template.gs not found; starting with an empty drawing.");
+    LoadBundledBlockLibrary(cmd, cmdLog);
   }
 
 } // namespace
@@ -255,6 +264,12 @@ int main()
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  ImGuiTestEngine* devEngine = nullptr;
+  DevShell_Create(&devEngine);
+  std::string devshellRunName;
+  const bool devshellCli = DevShell_ParseRunFlag(&devshellRunName);
+#endif
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
@@ -277,7 +292,15 @@ int main()
   // auto-load fired once, found nothing, and never looked again — the saved dock layout was
   // silently discarded every launch, which is what "my layout isn't respected" actually was.
   AppCommandState cmd;
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  if (devEngine)
+    DevShell_RegisterTests(devEngine, &cmd);
+#endif
   LoadUserStartupPrefs(cmd);
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  if (devshellCli)
+    cmd.authGateResolved = true;
+#endif
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
 
   // Shown only now (GlfwApplySplashStageWindowHints set GLFW_VISIBLE false) so it never flashes
@@ -287,12 +310,25 @@ int main()
   // REQ-093: hardcoded 5 s regardless of how fast the real preload below finishes — the app is
   // still low-resource enough that the actual load is imperceptible, so the splash's duration is
   // deliberately decoupled from it rather than trying to track real progress.
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  RunStartupSplash(window, devshellCli ? 0.0 : 5.0);
+#else
   RunStartupSplash(window, 5.0);
+#endif
+  // The splash ran in a small (~440x320) window. Maximizing it for the main stage leaves the stale
+  // splash front buffer stretched fullscreen for the frames it takes DWM to catch up — the "glitchy
+  // maximized splash". Fix: hide the window across the maximize and the entire pre-loop setup, and
+  // only reveal it once the first REAL UI frame has been rendered and swapped (see mainWindowShown
+  // below). A hidden window composites nothing, so there is no stale content to stretch — the user
+  // sees the splash, then the finished app, with nothing in between.
+  glfwHideWindow(window);
   GlfwApplyMainStageWindowChrome(window);
-  // glfwMaximizeWindow (inside the call above) posts an async resize on Windows; pump events so
-  // the window's real (maximized) size has landed before the first docked-layout frame reads it.
+  glfwHideWindow(window);  // GlfwApplyMainStageWindowChrome may transiently show it while maximizing
+  // glfwMaximizeWindow posts an async resize on Windows; pump events so the window's real size has
+  // landed before the first docked-layout frame reads it.
   glfwPollEvents();
   glfwPollEvents();
+  bool mainWindowShown = false;
 
   // REQ-077: the update check. Only the persisted settings live in AppCommandState; the worker
   // state is owned here, so no drawing state is ever touched from a background thread.
@@ -300,6 +336,9 @@ int main()
   updateState.prefs = cmd.updatePrefs;
   // Runs on EVERY launch (no throttle) and gates the session: the dialog stays modal until it
   // resolves. Does nothing at all when the user has switched the check off.
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  if (!devshellCli)
+#endif
   update::BeginStartupCheck(updateState, "chetjones003/GoSurvey");
   /// Set once the user has confirmed an update and the app is exiting to hand over to the
   /// installer, so the normal quit path can tell the two cases apart.
@@ -340,7 +379,7 @@ int main()
     if (!startupFile.empty())
     {
       std::vector<std::string> boot;
-      openedFromCommandLine = LoadGoSurveyFile(cmd, startupFile.c_str(), boot);
+      openedFromCommandLine = OpenDrawingDocument(cmd, startupFile.c_str(), boot);
       for (auto &s : boot)
         cmdLog.push_back(std::move(s));
       // A file that will not open falls back to the normal startup path rather than leaving the
@@ -369,15 +408,30 @@ int main()
         // u8string, not string: the tab label is drawn by ImGui, which reads UTF-8, and this path
         // may contain characters the process ANSI codepage cannot spell.
         const std::string tabName = argPath.stem().u8string();
-        if (!tabName.empty() && cmd.activeDrawingIdx >= 0 &&
-            cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
-          cmd.drawingTabs[cmd.activeDrawingIdx].name = tabName;
+        // REQ-308: the loaded drawing is the first real drawing tab, not the Start sentinel (0).
+        if (!tabName.empty())
+          cmd.drawingTabs[FirstDrawingTabIndex()].name = tabName;
       }
     }
   }
   if (!openedFromCommandLine)
     TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
   cmd.activeDocSavedRevision = cmd.cadGpuRevision; // loaded drawing/template counts as "clean"
+  // REQ-308: the template / command-line drawing was just loaded into the live cmd fields while the
+  // Start tab (index 0) is active. Persist it into its own tab's slot so switching to it restores
+  // the drawing rather than an empty document. A double-clicked drawing opens straight onto that
+  // tab; a normal launch lands on the Start screen.
+  {
+    const int drawIdx = FirstDrawingTabIndex();
+    SaveDocumentToSnapshot(cmd, drawIdx);
+    cmd.documents[drawIdx].savedRevision = cmd.cadGpuRevision;
+    if (openedFromCommandLine) {
+      cmd.activeDrawingIdx        = drawIdx;
+      cmd.prevDrawingIdx          = drawIdx;
+      cmd.pendingDrawingTabSwitch = true;
+      RecordRecentDrawing(cmd, cmd.activeDocFilePath);
+    }
+  }
   // Re-apply user preferences so they override any template defaults (crosshair, snap, survey, etc.).
   LoadUserStartupPrefSettings(cmd);
   // Re-apply theme now that displayColorThemeIdx is known from saved prefs.
@@ -400,11 +454,10 @@ int main()
   int fbH = 650;
 
   bool dockLayoutDone = haveSavedDockIni;
-  // 130 of tools + the 9px gutter DrawRibbonBar leaves under the panel titles,
-  // so the buttons keep the size they had before the gutter was added, plus the REQ-302 tab
-  // strip's own height and its gap row (kRibbonTabStripH + kRibbonTabStripGapY in CadUi.cpp) so
-  // panel content height is unaffected.
-  const float ribbonH = 139.f + 28.f + 4.f;
+  // 130 of tools + gutter under panel titles, plus the REQ-302 tab strip and gap
+  // (kRibbonTabStripH + kRibbonTabStripGapY). Extra 10px keeps two-line captions
+  // above the title strip after the Survey-tab label layout.
+  const float ribbonH = 139.f + 28.f + 4.f + 10.f + 34.f;  // +34: taller rows → more readable icons
   bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
@@ -412,6 +465,9 @@ int main()
   // REQ-100 bench state that belongs to the loop rather than to the command layer.
   bool benchVsyncOff = false;
   double benchPrevTime = 0.0;
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  int devshellFrames = 0;
+#endif
 
   while (true)
   {
@@ -594,7 +650,7 @@ int main()
     {
       const ImGuiIO &ioSave = ImGui::GetIO();
       if (ioSave.KeyCtrl && !ioSave.KeyShift && !ioSave.KeyAlt &&
-          ImGui::IsKeyPressed(ImGuiKey_S, false))
+          ImGui::IsKeyPressed(ImGuiKey_S, false) && cmd.activeDrawingIdx != 0)  // REQ-308: not on Start
         SaveActiveDocument(cmd, cmdLog);
     }
 
@@ -608,6 +664,11 @@ int main()
       else if (cmd.mtextRichEditorOpen)
       {
         CancelMtextRichEditor(cmd, &cmdLog);
+        cmdBuf[0] = '\0';
+      }
+      else if (cmd.tableCellEditorOpen)
+      {
+        CancelTableCellEditor(cmd);
         cmdBuf[0] = '\0';
       }
       else if (cmd.mtextGripMoveActive)
@@ -772,7 +833,21 @@ int main()
     ImGui::End();
     ImGui::PopStyleVar(3);
 
-    DrawPropertiesPanel(cmd, &cmdLog);
+    // REQ-308: the Start tab is a full-bleed landing page — the docked Properties/Reports/Toolspace
+    // panels are not submitted while it is active, so their dock nodes collapse and the Start screen
+    // fills the work area. Switching to a drawing tab submits them again and ImGui re-docks each to
+    // its remembered node.
+    const bool showDrawingPanels = (cmd.activeDrawingIdx != 0);
+    // Leaving the Start tab for a drawing re-submits the side panels; focus Properties (not
+    // whichever tab ImGui last had selected in that dock node, e.g. Reports).
+    static bool prevShowDrawingPanels = false;
+    if (showDrawingPanels && !prevShowDrawingPanels)
+      cmd.pendingPropertiesFocus = true;
+    prevShowDrawingPanels = showDrawingPanels;
+    if (showDrawingPanels) {
+      DrawPropertiesPanel(cmd, &cmdLog);
+      DrawToolspaceWindow(cmd, &cmdLog);
+    }
 
     // Keep documents vector in sync with the tab list.
     while (cmd.documents.size() < cmd.drawingTabs.size())
@@ -806,9 +881,23 @@ int main()
     // cmd.prevDrawingIdx is the authoritative last-active index (also written by menu New/Open handlers).
     if (cmd.activeDrawingIdx != cmd.prevDrawingIdx)
     {
-      SaveDocumentToSnapshot(cmd, cmd.prevDrawingIdx);
-      RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
-      cmd.prevDrawingIdx = cmd.activeDrawingIdx;
+      if (cmd.blockEditActive)
+      {
+        // ADR-043: a block-edit session holds the block's geometry in the model arrays; snapshotting
+        // that as the tab's document would corrupt it. Refuse the switch until BCLOSE.
+        cmd.activeDrawingIdx = cmd.prevDrawingIdx;
+        cmdLog.push_back("Close the block editor (BCLOSE) before switching drawings.");
+      }
+      else
+      {
+        SaveDocumentToSnapshot(cmd, cmd.prevDrawingIdx);
+        // REQ-308: the Start tab (index 0) backs no document — leave the live cmd fields holding
+        // the drawing the user just left, so switching back to it needs no reload. Switching FROM
+        // Start to a drawing restores that drawing normally.
+        if (cmd.activeDrawingIdx != 0)
+          RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
+        cmd.prevDrawingIdx = cmd.activeDrawingIdx;
+      }
     }
 
     const size_t activeRendIdx = static_cast<size_t>(cmd.activeDrawingIdx);
@@ -831,7 +920,8 @@ int main()
           CadDimLinearApplyHVHotkey(cmd, true, cmdLog);
       }
     }
-    DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd);
+    if (showDrawingPanels)  // REQ-308: no command line on the Start tab
+      DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd);
     // Z was hard-coded 0 while the readout claimed to show a coordinate — it now reports the
     // cursor's real elevation (the work plane, or the snapped point's own Z). Absolute, never
     // rebased: the document origin is X/Y-only (ADR-025 D2).
@@ -857,17 +947,26 @@ int main()
     DrawRightClickCustomizationDialog(cmd, &cmdLog);  // REQ-084 (a)
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
+    DrawViewManagerWindow(cmd, &cmdLog);
     DrawTextStyleManagerWindow(cmd, &cmdLog);
     DrawDimStyleWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawSurfaceStyleWindow(cmd, &cmdLog);
     DrawVolumeDashboardWindow(cmd, &cmdLog);  // REQ-073 amendment (TASK-095)
+    DrawQuickProfileWindow(cmd, &cmdLog);     // REQ-145
     DrawFeatureLineElevationWindow(cmd, &cmdLog);  // REQ-088
+#ifdef GOSURVEY_DEVELOPER_SHELL
+    DevShell_Draw(cmd, cmdLog);
+    ++devshellFrames;
+    if (devshellCli && devshellFrames == 4 && devEngine)
+      DevShell_BeginCliRun(devEngine, window, devshellRunName.c_str());
+#endif
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);
-    DrawSurveyReportsPanel(cmd);
+    if (showDrawingPanels)  // REQ-308: hidden on the Start tab, same as Properties/Toolspace above
+      DrawSurveyReportsPanel(cmd);
     DrawTraverseEditorPanel(cmd, cmdLog);
     // After all panels have called Begin() their DockNode is set, so SetWindowFocus
     // can correctly update the dock node's SelectedTabId for the next frame.
@@ -885,6 +984,9 @@ int main()
     DrawPageSetupEditor(cmd, cmdLog);
     DrawBatchPlotDialog(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
+    DrawInsertBlockDialog(cmd, cmdLog);
+    DrawEditBlockDefinitionDialog(cmd, cmdLog);
+    DrawBlockAuthoringPalettes(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);
     DrawUpdateDialog(cmd, updateState);
@@ -943,7 +1045,7 @@ int main()
       // TRIM's cutting-line points commit through commitX/commitY too (SubmitTrimViewportPick).
       float lx = static_cast<float>(commitCurX);
       float ly = static_cast<float>(commitCurY);
-      ApplyOrthoConstrainFromAnchor(cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled);
+      ApplyOrthoConstrainFromAnchor(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled);
       PushRubberSegViewRel(rubberLines, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, cmd.viewportPanX,
                            cmd.viewportPanY);
       const float midx = (cmd.trimCutInfP1x + lx) * 0.5f;
@@ -995,6 +1097,9 @@ int main()
     ext.featureLineAttrs = &cmd.featureLineAttrs;
     ext.drawingLayers = &cmd.drawingLayerTable;
     ext.hiddenEntityIds = &cmd.hiddenEntityIds;  // object isolation (REQ-084 (d) / ADR-034)
+    ext.blockDefs = &cmd.blockDefs;
+    ext.blockRefs = &cmd.cadBlockRefs;
+    ext.blockRefAttrs = &cmd.cadBlockRefAttrs;
 
     activeRenderer.SetSize(fbW, fbH);
     RenderTuning tuning{};
@@ -1076,6 +1181,11 @@ int main()
       }
     }
 
+    // Viewport picks land during DrawDrawingViewport, which is AFTER the refresh at the top of
+    // the frame. WATERDROP/CATCHMENT write lastWaterDropPathXyz there; a second assemble pass
+    // (cache early-out, cheap) is what puts the preview in this frame's GL batches (REQ-133).
+    RefreshSurfaceDisplayGeometry(cmd);
+
     // Paper space (REQ-025) renders a blank sheet this increment; model geometry shows through
     // viewports in a later increment. The sheet outline itself is drawn as a UI overlay.
     // Paper space (incl. floating-viewport editing) renders a blank model scene; the sheet, viewports,
@@ -1105,12 +1215,20 @@ int main()
       }
     }
 
+    // REQ-308: the Start tab owns no drawing — nothing to render into its (phantom) FBO, and the
+    // start screen is drawn by DrawDrawingViewport as ImGui. Skip the scene pass entirely.
+    const bool startTab = (cmd.activeDrawingIdx == 0);
+
     static const std::vector<float> kEmptyVerts;
     const std::vector<float> &sceneLines = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
     const std::vector<float> &sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyZR;
     const std::vector<float> &sceneRubber = paperSpace ? kEmptyVerts : rubberLines;
     // The camera is derived from the canonical pan/zoom plus the two orientation angles, so it
     // cannot disagree with the view state (REQ-058 / ADR-025 (c)).
+    if (!startTab) {
+    // Held in a named local because RenderScene takes a pointer to it and the call outlives any
+    // temporary: the grid frame must still be alive when the renderer reads it.
+    const ucs::Ucs ucsGridFrame = CadActiveUcsStorage(cmd);
     activeRenderer.RenderScene(CadViewCamera(cmd), fbW, fbH, sceneLines,
                                sceneCircles, cmd.cadGpuRevision,
                                sceneRubber, (paperSpace || !snapHit.valid) ? nullptr : &snapHit,
@@ -1140,7 +1258,16 @@ int main()
                                    : &cmd.surfaceDisplayGeometry,
                                (paperSpace || volumeMapGeom.empty()) ? nullptr : &volumeMapGeom,
                                (paperSpace || removalLines.empty()) ? nullptr : &removalLines,
-                               (paperSpace || removalMarkers.empty()) ? nullptr : &removalMarkers);
+                               (paperSpace || removalMarkers.empty()) ? nullptr : &removalMarkers,
+                               // The grid follows the UCS (REQ-154). Storage space, like the camera
+                               // and every vertex the renderer receives. Paper space keeps its own
+                               // 2D sheet grid and is deliberately excluded.
+                               paperSpace ? nullptr : &ucsGridFrame);
+
+    // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
+    // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
+    ServicePendingThumbnail(cmd, activeRenderer);
+    }
 
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.
@@ -1156,6 +1283,17 @@ int main()
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
+
+    // Reveal the main window only after its first real frame is on screen (see the hide in the
+    // startup sequence) — this is what makes the splash -> app hand-off show no stretched splash.
+    if (!mainWindowShown) {
+      glfwShowWindow(window);
+      glfwFocusWindow(window);
+      mainWindowShown = true;
+    }
+#ifdef GOSURVEY_DEVELOPER_SHELL
+    DevShell_PostSwap(devEngine);
+#endif
   }
 
   // Join any in-flight surface rebuild (REQ-069) here rather than leaving it to `cmd`'s destructor.
@@ -1172,11 +1310,19 @@ int main()
       ImGui::SaveIniSettingsToDisk(ioSave.IniFilename);
   }
 
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  int devshellExit = 0;
+  const bool devshellCliDone = DevShell_CliRunFinished(&devshellExit);
+  DevShell_Stop(devEngine);
+#endif
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   CadUiClearMenuBarLogo();
   DestroyAppLogoGpu(&appLogo);
   ImGui::DestroyContext();
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  DevShell_DestroyContext(devEngine);
+#endif
 
   // Release PDF textures before GL context is destroyed.
   for (auto &att : cmd.pdfAttachments)
@@ -1192,5 +1338,9 @@ int main()
   PdfAttach_Shutdown();
   glfwDestroyWindow(window);
   glfwTerminate();
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  if (devshellCliDone)
+    return devshellExit;
+#endif
   return 0;
 }

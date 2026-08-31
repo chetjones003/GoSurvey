@@ -97,9 +97,22 @@ public:
                    // when washed over a full-opacity line underneath. Drawn opaque, in a warning
                    // colour, at highlight width — "this is what disappears" has to be unmistakable.
                    const std::vector<float>* removalLines = nullptr,
-                   const std::vector<float>* removalMarkers = nullptr);
+                   const std::vector<float>* removalMarkers = nullptr,
+                   // The active UCS, for the grid (REQ-154). The grid is a drafting aid, and a
+                   // drafting aid that stays squared to the world while entry, ORTHO and the
+                   // crosshair have all moved to a rotated frame is actively misleading — it reads
+                   // as the drawing's alignment.
+                   //
+                   // Null means the WCS and takes the original world-XY code path unchanged, which
+                   // is what every drawing that never touches UCS continues to get.
+                   const ucs::Ucs* gridFrame = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
+
+  /// REQ-308 — write the last-rendered viewport image as a 24-bit BMP, downscaled so its longer
+  /// side is at most \p maxDim. Best-effort: returns false and writes nothing on any failure.
+  /// Call right after RenderScene for the drawing being pictured.
+  [[nodiscard]] bool CaptureThumbnailBmp(const char* pathUtf8, int maxDim) const;
 
 private:
   bool EnsureFramebuffer(int w, int h);

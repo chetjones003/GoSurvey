@@ -64,7 +64,7 @@ ESC
 
 EXPECT LINES 2
 CHECK ALL
-SAVEAS %OUT%/font-matrix-model.gs
+SAVEAS %OUT%/font-matrix-model.dwg
 
 # --- paper space: native text, and TWO viewports over the same model -------------------------------
 # ZOOMEXTENTS frames each viewport on the model. tools/Make-FontDemoGs.ps1 then sets the scales to
@@ -92,4 +92,4 @@ CHECK ALL
 CMD PSPACE
 
 CHECK ALL
-SAVEAS %OUT%/font-matrix-full.gs
+SAVEAS %OUT%/font-matrix-full.dwg

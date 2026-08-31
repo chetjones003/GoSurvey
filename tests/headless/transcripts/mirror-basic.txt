@@ -40,18 +40,18 @@ EXPECT LOG "MIRROR complete."
 EXPECT LINES 2
 CHECK ALL
 
-SAVEAS %OUT%/mirror-basic-fwd-a.gs
+SAVEAS %OUT%/mirror-basic-fwd-a.dwg
 
 UNDO
 EXPECT LINES 1
 CHECK ALL
 
-SAVEAS %OUT%/mirror-basic-undo.gs
-EXPECT DIFFERENTFILE %OUT%/mirror-basic-fwd-a.gs %OUT%/mirror-basic-undo.gs
+SAVEAS %OUT%/mirror-basic-undo.dwg
+EXPECT DIFFERENTFILE %OUT%/mirror-basic-fwd-a.dwg %OUT%/mirror-basic-undo.dwg
 
 REDO
 EXPECT LINES 2
 CHECK ALL
 
-SAVEAS %OUT%/mirror-basic-fwd-b.gs
-EXPECT SAMEFILE %OUT%/mirror-basic-fwd-a.gs %OUT%/mirror-basic-fwd-b.gs
+SAVEAS %OUT%/mirror-basic-fwd-b.dwg
+EXPECT SAMEFILE %OUT%/mirror-basic-fwd-a.dwg %OUT%/mirror-basic-fwd-b.dwg

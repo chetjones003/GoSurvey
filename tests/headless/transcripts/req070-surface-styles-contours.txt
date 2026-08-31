@@ -164,8 +164,8 @@ CHECK ALL
 # REQ-070's last acceptance condition. The reopened drawing must resolve the same styles to the same
 # geometry — a table that failed to persist would fall back to Standard and quietly redraw every
 # surface at the default interval, which looks like nothing went wrong.
-SAVEAS %OUT%/styles-a.gs
-OPEN %OUT%/styles-a.gs
+SAVEAS %OUT%/styles-a.dwg
+OPEN %OUT%/styles-a.dwg
 EXPECT SURFACES 2
 EXPECT SURFACEMINORSEGS 0
 EXPECT SURFACEMAJORSEGS 418
@@ -173,5 +173,5 @@ EXPECT SURFACETRISEGS 0
 CHECK ALL
 
 # --- and the file is byte-identical on resave (REQ-079, ADR-020 (d)) ---------------------------------
-SAVEAS %OUT%/styles-b.gs
-EXPECT SAMEFILE %OUT%/styles-a.gs %OUT%/styles-b.gs
+SAVEAS %OUT%/styles-b.dwg
+EXPECT SAMEFILE %OUT%/styles-a.dwg %OUT%/styles-b.dwg

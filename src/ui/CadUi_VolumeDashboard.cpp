@@ -86,6 +86,50 @@ void DrawVolumeDashboardWindow(AppCommandState& cmd, std::vector<std::string>* l
   ImGui::TextUnformatted("Comparison");
   SurfacePicker("##vdcomp", cmd, &dash.comparisonSurfaceId);
 
+  ImGui::TextUnformatted("Clip (optional)");
+  {
+    const char* clipPreview = "(none)";
+    std::string clipLabel;
+    const int nPoly =
+        static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+    for (int pi = 0; pi < nPoly; ++pi) {
+      if (static_cast<size_t>(pi) >= cmd.userPolylineClosed.size() || !cmd.userPolylineClosed[static_cast<size_t>(pi)])
+        continue;
+      if (static_cast<size_t>(pi) >= cmd.userPolylineAttrs.size())
+        continue;
+      const std::uint64_t id = cmd.userPolylineAttrs[static_cast<size_t>(pi)].id;
+      if (id != 0 && id == dash.clipEntityId) {
+        clipLabel = "Polyline " + std::to_string(id);
+        clipPreview = clipLabel.c_str();
+        break;
+      }
+    }
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##vdclip", clipPreview)) {
+      if (ImGui::Selectable("(none)", dash.clipEntityId == 0))
+        dash.clipEntityId = 0;
+      for (int pi = 0; pi < nPoly; ++pi) {
+        if (static_cast<size_t>(pi) >= cmd.userPolylineClosed.size() ||
+            !cmd.userPolylineClosed[static_cast<size_t>(pi)])
+          continue;
+        if (static_cast<size_t>(pi) >= cmd.userPolylineAttrs.size())
+          continue;
+        const std::uint64_t id = cmd.userPolylineAttrs[static_cast<size_t>(pi)].id;
+        if (id == 0)
+          continue;
+        const std::string label = "Polyline " + std::to_string(id);
+        const bool sel = (id == dash.clipEntityId);
+        if (ImGui::Selectable(label.c_str(), sel))
+          dash.clipEntityId = id;
+        if (sel)
+          ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    ItemHelpTooltip("Limit the sample to cells whose centres fall inside a closed polyline (REQ-131). "
+                    "No clip uses the full common overlap.");
+  }
+
   ImGui::Spacing();
   ImGui::Checkbox("Show cut/fill map", &dash.showMap);
   ItemHelpTooltip("Colours the common area orange where Base sits above Comparison (cut) and blue "
@@ -141,14 +185,16 @@ void DrawVolumeDashboardWindow(AppCommandState& cmd, std::vector<std::string>* l
   // now for exactly one frame — the tick that changed it, before TickVolumeDashboard has run again.
   const bool stale = dash.resultForRevision != cmd.cadGpuRevision ||
                      dash.resultForBaseSurfaceId != dash.baseSurfaceId ||
-                     dash.resultForComparisonSurfaceId != dash.comparisonSurfaceId;
+                     dash.resultForComparisonSurfaceId != dash.comparisonSurfaceId ||
+                     dash.resultForClipEntityId != dash.clipEntityId;
   if (stale)
     ImGui::TextColored(kWaitingColor, "Out of date - recomputing...");
 
   const int p = cmd.displayLinearPrecision;
   const SurfaceVolumeResult& r = dash.lastResult;
   if (!r.overlapped) {
-    ImGui::TextUnformatted("No common area between these surfaces.");
+    ImGui::TextUnformatted(dash.clipEntityId != 0 ? "No overlap inside the clip."
+                                                  : "No common area between these surfaces.");
   } else if (ImGui::BeginTable("##vdresult", 2, ImGuiTableFlags_SizingStretchProp)) {
     const auto row = [](const char* label, const std::string& value) {
       ImGui::TableNextRow();
@@ -157,10 +203,38 @@ void DrawVolumeDashboardWindow(AppCommandState& cmd, std::vector<std::string>* l
       ImGui::TableNextColumn();
       ImGui::TextUnformatted(value.c_str());
     };
-    row("Cut", FormatLinear(r.cutFt3, p) + " ft3");
-    row("Fill", FormatLinear(r.fillFt3, p) + " ft3");
-    row("Net", FormatLinear(r.netFt3, p) + " ft3");
+    row("Cut", FormatVolumeYd3(r.cutFt3, p));
+    row("Fill", FormatVolumeYd3(r.fillFt3, p));
+    row("Net", FormatVolumeYd3(r.netFt3, p));
+    row("Cut area", FormatLinear(r.cutAreaFt2, p) + " ft2");
+    row("Fill area", FormatLinear(r.fillAreaFt2, p) + " ft2");
     row("Common area", FormatLinear(r.commonAreaFt2, p) + " ft2");
+    ImGui::EndTable();
+  }
+
+  if (ImGui::Button("Add row")) {
+    char buf[32] = "VOLDASH ADD";
+    ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, *log);
+  }
+  ItemHelpTooltip("Snapshot the current comparison into the dashboard list (REQ-149).");
+
+  if (!dash.rows.empty() && ImGui::BeginTable("##vdrows", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+    ImGui::TableSetupColumn("Label");
+    ImGui::TableSetupColumn("Cut");
+    ImGui::TableSetupColumn("Fill");
+    ImGui::TableSetupColumn("Net");
+    ImGui::TableHeadersRow();
+    for (const auto& row : dash.rows) {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(row.label.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(row.hasResult ? FormatVolumeYd3(row.result.cutFt3, p).c_str() : "—");
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(row.hasResult ? FormatVolumeYd3(row.result.fillFt3, p).c_str() : "—");
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(row.hasResult ? FormatVolumeYd3(row.result.netFt3, p).c_str() : "—");
+    }
     ImGui::EndTable();
   }
 

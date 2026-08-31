@@ -118,6 +118,8 @@ enum class TinBoundaryKind : std::uint8_t {
   Outer,  ///< Clips the surface to inside this ring.
   Hide,   ///< Removes surface inside this ring, leaving a void.
   Show,   ///< Restores surface inside this ring — meaningful inside a Hide.
+  Clip,   ///< REQ-128: same triangle cull as Outer, plus input-point filter before BuildTin.
+  Mask,   ///< REQ-139: same triangle cull as Hide (hide from calculations and display).
 };
 
 /// A boundary ring: an ordered, implicitly-closed polygon in plan (X/Y). Vertex order does not need
@@ -139,6 +141,9 @@ struct TinBoundaryLoop {
 /// unreferenced, exactly as convex-hull exclusion already works in \ref BuildTin).
 void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz,
                          const std::vector<TinBoundaryLoop>& loops);
+
+/// Plan containment by ray casting (winding-independent). Empty ring is outside.
+[[nodiscard]] bool TinPointInPolygon(double px, double py, const std::vector<std::pair<double, double>>& ring);
 
 /// Interpolated surface elevation at plan position (\p x, \p y) — REQ-074's spot elevation.
 ///
@@ -192,6 +197,16 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
 ///            and the highlight buffer both already consume. Cleared first.
 void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
                     std::vector<float>* out);
+
+/// Flip the interior edge nearest (\p x, \p y) in plan. Writes a new index array when successful.
+/// False when the pick is not on an interior edge (REQ-139).
+[[nodiscard]] bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std::uint32_t>& indices,
+                                           double x, double y);
+
+/// Remove the two triangles that share the interior edge nearest (\p x, \p y) in plan (REQ-150).
+/// False when the pick is not on an interior edge.
+[[nodiscard]] bool TinDeleteInteriorEdgeNear(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz,
+                                             double x, double y);
 
 // --- Predicates, exposed for testing -----------------------------------------------------------
 // These are the two functions the whole triangulation rests on, and a sign error in either is

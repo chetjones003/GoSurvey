@@ -31,8 +31,8 @@ ESC
 
 # ComputeWorldExtents runs over stored geometry, and the rebase happens on load,
 # so the drawing has to make the round trip for the threshold to be consulted.
-SAVEAS %OUT%/maxy.gs
-OPEN %OUT%/maxy.gs
+SAVEAS %OUT%/maxy.dwg
+OPEN %OUT%/maxy.dwg
 
 # The rebase fired. Before the fix this message was absent — the drawing loaded
 # with worldDocumentOrigin still (0,0) and every local coordinate still at

@@ -327,6 +327,17 @@ requirements is a planning failure, not a sign of rigor.
   that do not expect a point (bearing/angle/distance/option/command-name entry)
   likewise keep a single input field. There is no Send button; commit is by Enter
   or click.
+
+  **One stated exception — directional prompts (REQ-154).** The UCS X-axis and
+  XY-plane prompts, and the second point of `UCS <axis> 2P`, show a **polar pair**
+  instead: a distance field and an angle field, rendered as `<distance> < <angle>`.
+  Those prompts ask for a DIRECTION, and an `x,y` readout answers a different
+  question — the user would have to do the subtraction themselves to learn the
+  angle the prompt is about. The pair assembles `@<distance><<angle>`, which is
+  real syntax the command line accepts, so the two forms describe the same thing
+  and either can be typed. The angle is measured in the active UCS's XY plane from
+  its +X, the same reference `UCS <axis> 2P` uses. This exception is deliberately
+  narrow: it does not reopen the 2026-06-19 decision for any other prompt.
 - Acceptance: starting LINE shows the "first point" prompt with a single box that
   tracks the cursor's easting/northing as `x,y`; typing locks the field; entering
   `@dx,dy` or a bearing/distance places the relative point; Enter commits the
@@ -336,6 +347,8 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-12 — initial; 2026-06-19 — single coordinate field instead
   of two X/Y boxes, so relative/bearing/distance entry works in the same field.
+  2026-08-29 — a stated exception for the UCS directional prompts (REQ-154): a
+  polar distance/angle pair there, single field everywhere else.
 
 ### REQ-025 — Model and Paper space with layout tabs and a space toggle
 - Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
@@ -2126,13 +2139,16 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: must
 - Type: functional
 - Statement: A surface stores an **ordered, editable definition** whose items are **point groups**
-  (REQ-067), **breaklines** (existing 3D lines and polylines designated as such), and **boundaries**
-  (closed polylines typed **outer**, **hide** or **show**). Breaklines and boundaries are referenced
+  (REQ-067), **breaklines** (existing 3D lines and polylines designated as such), **contour
+  polylines** (REQ-129), and **boundaries** (closed polylines typed **outer**, **hide**, **show**, or
+  **clip** — REQ-128). Breaklines, contour sources and boundaries are referenced
   by **stable entity id** (REQ-076), never by array index. Triangulation is **constrained**: no
-  triangle edge crosses a breakline. Boundaries apply in definition order — an outer boundary clips
-  the surface to itself, a hide boundary removes surface inside it, and a show boundary restores
-  surface inside a hide. Standard breaklines only; proximity, wall and non-destructive breaklines are
-  out of scope.
+  triangle edge crosses a breakline or contour source. Boundaries apply in definition order — an
+  outer boundary clips the surface to itself, a hide boundary removes surface inside it, a show
+  boundary restores surface inside a hide, and a **clip** boundary excludes input points outside it
+  before triangulation (REQ-128). Standard breaklines only; proximity, wall and non-destructive
+  breaklines are out of scope. A named surface with too little data to triangulate is still a
+  surface (REQ-124): the definition exists, `tin` is null, and the next source edit rebuilds.
 
   The surface is **dynamic**: when a definition source changes — a consumed point moves or is
   deleted, a breakline or boundary polyline is edited, a group's membership changes — the surface is
@@ -2160,11 +2176,12 @@ requirements is a planning failure, not a sign of rigor.
     without it, with no dangling id;
   - crossing breaklines at different elevations produce a named diagnostic and a stated outcome;
   - a definition of fewer than three non-collinear points fails with a specific message and leaves no
-    partial surface;
+    partial TIN — the named surface object remains (REQ-124);
   - the definition round-trips `.gs`, ids intact.
 - Owner-layer: Domain (definition, rebuild), util (triangulation), Commands (designate/edit)
 - Status: accepted (2026-08-12)
-- Revisions: 2026-08-12 — initial.
+- Revisions: 2026-08-12 — initial. 2026-08-27 — D-2026-08-27-a: contour sources (REQ-129), clip
+  (REQ-128), and empty named surfaces (REQ-124).
 
 ### REQ-070 — Surface styles
 - Purpose: control what a surface looks like without changing what it is
@@ -2218,10 +2235,11 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: must
 - Type: functional
 - Statement: A surface style carries an editable **range table** — band count, breakpoints, and a
-  colour per band — driving per-triangle colouring by **elevation** or by **slope**, with an on-screen
-  **legend** whose ranges are the table's. Separately, **slope arrows** draw per triangle in the
-  downhill direction of that triangle's plane, coloured by grade. Banding, arrows and the plain style
-  display are independent toggles.
+  colour per band — driving per-triangle colouring by **elevation**, by **slope**, or by **direction /
+  aspect** (REQ-130), with an on-screen **legend** whose ranges are the table's. Separately, **slope
+  arrows** draw per triangle in the downhill direction of that triangle's plane, coloured by grade.
+  Banding, arrows and the plain style display are independent toggles. One table, one mode at a time
+  — a triangle has one colour.
 - Acceptance:
   - a triangle of known elevation and of known slope each take the colour their band prescribes,
     including at an exact breakpoint, where the band a value falls into is defined and tested rather
@@ -2234,7 +2252,8 @@ requirements is a planning failure, not a sign of rigor.
   - turning banding off restores the style's plain display unchanged.
 - Owner-layer: Domain (band assignment), Renderer (draw), UI (table + legend)
 - Status: accepted (2026-08-12)
-- Revisions: 2026-08-12 — initial.
+- Revisions: 2026-08-12 — initial. 2026-08-27 — D-2026-08-27-a: direction/aspect is REQ-130's third
+  mode; this requirement's elevation/slope/arrow conditions are unchanged.
 
 ### REQ-073 — Surface-to-surface volumes, and a live Volume Dashboard
 - Purpose: earthwork — the number a grading design is judged by, kept current as either surface
@@ -2244,7 +2263,10 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: Given two surfaces, GoSurvey reports **cut**, **fill** and **net** volume over the area
   the two have **in common**, together with that common area, and offers a cut/fill colour map over
   the same region. The comparison region is stated explicitly in the result, because a volume quoted
-  without the area it covers is not a result.
+  without the area it covers is not a result. **Cut, fill and net are reported in cubic yards**
+  (computed in cubic feet, displayed as ft³ / 27). Common area remains square feet.
+
+  **Bounded volumes** (REQ-131) use the same comparison, limited to a closed clip region.
 
   A **Volume Dashboard** panel (2026-08-23 amendment) picks two surfaces from the drawing and holds
   the report on screen: cut, fill, net, the common area, and the cut/fill map toggle, all in one
@@ -2283,7 +2305,8 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-12)
 - Revisions: 2026-08-12 — initial. 2026-08-23 — amended (D-2026-08-23-k) to add the Volume Dashboard
   panel and make it live: recompute-on-rebuild, staleness marking, and discard-of-stale-results,
-  mirroring REQ-069's own pattern rather than inventing a second one.
+  mirroring REQ-069's own pattern rather than inventing a second one. 2026-08-27 — cut/fill/net
+  display is cubic yards (ft³/27); compute unchanged.
 
 ### REQ-074 — Spot elevation and grade readout
 - Purpose: the constant, small question while grading — how high is it here, and what is the grade
@@ -2307,20 +2330,26 @@ requirements is a planning failure, not a sign of rigor.
 - Purpose: one place to see and edit every surface in the drawing
 - Priority: should
 - Type: functional
-- Statement: A panel lists the drawing's surfaces and supports create, rename, delete, **edit the
-  definition** (add, remove and reorder point groups, breaklines and boundaries — REQ-069), assign a
-  style (REQ-070), and force a rebuild. For each surface it shows point count, triangle count,
-  elevation range, and whether the surface is currently out of date or rebuilding.
+- Statement: Toolspace Prospector is the place to **edit the definition** (add, remove point groups,
+  breaklines, contour sources, boundaries, point-file links — REQ-069). The **Surfaces** window
+  (Survey ribbon / left-click a named surface) edits **style and analysis** (REQ-070 / REQ-072), not
+  the definition tree. A surface can still be created empty from Toolspace (REQ-124). Force rebuild
+  is on the Surfaces collection menu and on each surface. For each surface the old manager still
+  shows point count, triangle count, elevation range, and stale/rebuilding state when that panel is
+  opened.
 - Acceptance:
-  - every REQ-069 definition operation is reachable from the panel;
-  - a rebuild is reflected in the displayed counts and elevation range;
+  - every REQ-069 definition operation is reachable from Toolspace Prospector on the surface's
+    Definition (and Masks) nodes;
+  - a rebuild is reflected in displayed counts where those readouts exist;
   - a surface that is out of date or rebuilding is shown as such, and the state clears when the
     rebuild lands;
   - deleting a surface from the panel is undoable in one step;
   - renaming to a name already in use is refused with a specific message.
 - Owner-layer: UI, Commands
 - Status: accepted (2026-08-12)
-- Revisions: 2026-08-12 — initial.
+- Revisions: 2026-08-12 — initial. 2026-08-27 — D-2026-08-27-a: empty create (REQ-124) and contour
+  sources (REQ-129) are reachable from the panel. 2026-08-28 — D-2026-08-28-c: definition editing
+  moves to Toolspace; the Surfaces window is style/analysis.
 
 ### REQ-076 — Stable entity identity
 - Purpose: let one object reference another and survive an erase
@@ -3086,6 +3115,55 @@ requirements is a planning failure, not a sign of rigor.
                path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
                while the driver has no window; that is mitigated by the routing, not solved.
 
+### REQ-161 — Developer Shell (Debug-only chrome tuner, activity log, GUI driver)
+- Purpose: let developers tune ImGui chrome live, see what the GUI and command path are doing, and
+           drive the **real** ImGui UI from code — without shipping any of that in Release
+- Priority: must
+- Type: functional
+- Statement: A **Developer Shell** exists only when CMake option `GOSURVEY_DEVELOPER_SHELL` is ON.
+  That option **defaults ON** if and only if `CMAKE_BUILD_TYPE` is `Debug`, and is **forced OFF**
+  for Release (and for any configuration that builds the shipped installer). It is a compile-time
+  gate, not a runtime hide.
+
+  When ON, the windowed `GoSurvey` binary:
+
+  - shows a Developer Shell (dockable ImGui window): **chrome tuner** that writes the existing
+    ADR-033 `UiChrome` instance and relevant `ImGuiStyle` metrics so padding, sizes, and chrome
+    colours change **this frame** with no rebuild;
+  - shows an **activity log** of discrete events: ribbon/tool/item activations, Test Engine
+    injected mouse/key, viewport **picks/clicks** (not GL draw calls), command-line input and
+    output / log lines;
+  - links **Dear ImGui Test Engine** (`imgui_test_engine/`, FetchContent, GIT_TAG pinned — REQ-200)
+    and compiles ImGui **for this executable only** with `IMGUI_ENABLE_TEST_ENGINE`. Registered
+    tests and a Debug-only CLI (`--devshell-run <test_name>`) queue and run those tests against
+    the live UI (full GUI driver).
+
+  When OFF (Release): `src/devshell/` is not a source of `GoSurvey`; Test Engine is not fetched
+  into that target's link line; `IMGUI_ENABLE_TEST_ENGINE` is not defined on any ImGui objects
+  that executable links; there is no Developer Shell menu/window.
+
+  **REQ-203 is unchanged:** `gosurvey_headless` never links Test Engine, never defines
+  `IMGUI_ENABLE_TEST_ENGINE`, and never includes `src/devshell/`. Domain/headless keep measuring
+  fonts through ImGui **core without** Test Engine hooks.
+
+  Activity logging must not run on the REQ-100 measured hot path as an unbounded per-primitive
+  stream. A one-line-per-frame “draw submitted” toggle may exist in the Shell, default **off**.
+- Acceptance:
+  - `ninja-release` `GoSurvey.exe`: `dumpbin /SYMBOLS` (or `/DEPENDENTS` plus strings) shows **no**
+    `ImGuiTestEngine`, **no** `DevShell`, **no** `GOSURVEY_DEVELOPER_SHELL` as a live feature —
+    proven by a ctest that fails if those symbols are present;
+  - `ninja-debug` with the option ON: Developer Shell is reachable; moving a chrome tuner control
+    changes on-screen chrome the same session;
+  - a Debug Test Engine script performs a ribbon/tool activation, a viewport click (or item click
+    that issues a pick), and command-line in/out; each appears as a **distinct log line**;
+  - `--devshell-run` of that script exits 0 with drawing/command state matching the same steps
+    done by hand (entity counts / command log), without requiring a human at the mouse;
+  - Release behaviour with the Shell absent matches today's app (commands, viewport, chrome).
+- Owner-layer: Application (flag, `main` wiring), UI (`src/devshell/`, chrome accessors), Build
+- Status: accepted (2026-08-29)
+- Revisions: 2026-08-29 — initial. D-2026-08-29-f, ADR-040. Amends the 2026-08-16 GUI-automation
+  anti-requirement for **Debug only**.
+
 ### REQ-170 — LibreDWG is the DXF and DWG codec
 - Purpose: File Format Specs — open and save DWG/DXF in-process with no ODA/AutoCAD converter on
   the customer machine; write DWG only as far as LibreDWG is trustworthy (R2004)
@@ -3204,6 +3282,36 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: IO/Domain
 - Status: accepted
 - Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
+
+### REQ-175 — DWG is the drawing document; GoSurvey state is preserved in the file
+- Purpose: File → Open/Save and headless OPEN/SAVEAS treat DWG as the drawing, without dropping
+  survey-specific data that today lives in `.gs`
+- Priority: must
+- Type: functional
+- Statement: The **drawing document** is a `.dwg`. File → Open, Save, and Save As default to DWG
+  and do not list `.gs` as a drawing type. Headless `OPEN` and `SAVEAS` use DWG the same way.
+  A GoSurvey save writes LibreDWG CAD entities (REQ-170) **and** embeds the existing GoSurvey
+  JSON document (the same tree `.gs` writes) so survey points, traverse, layouts, text/surface
+  styles, `worldDocumentOrigin`, and the rest of that tree survive Open → Save → Open.
+  A DWG without that payload is a **foreign** drawing and imports through REQ-170 CAD mapping.
+  `.gs` read/write remains in the tree (workspace template, explicit `.gs` paths, future
+  project file) and is not the File drawing chooser. Existing `.gs` files still open when a
+  path ending in `.gs` is given (command line, template, transcript `OPEN samples/…`).
+  This does **not** claim unknown-object preservation (DM-08).
+- Acceptance:
+  - a new drawing, File → Save, writes a `.dwg` (not `.gs`);
+  - File → Open’s default filter is DWG; `.gs` is not listed as a drawing type;
+  - File → Save As defaults to `.dwg`; the file reopens in GoSurvey with CAD and survey state
+    that were in the document at save;
+  - opening an existing GoSurvey `.dwg` and Save updates that DWG, not a sidecar `.gs`;
+  - a survey point (id, N/E/elev, description) survives Export DWG / Open DWG within REQ-101;
+  - a foreign DWG with no GoSurvey payload still imports model-space LINE/CIRCLE as REQ-170;
+  - `SaveGoSurveyFile` / `LoadGoSurveyFile` remain callable;
+  - headless `SAVEAS`/`OPEN` of `%OUT%/*.dwg` round-trips that document.
+- Owner-layer: IO (payload + LibreDWG), UI (dialogs), Commands/headless (OPEN/SAVEAS)
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-j, ADR-044 (renumbered from D-2026-08-29-h / ADR-043 on the
+  beta merge; those identifiers were taken by the REQ-107 block-editor decision).
 
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,
@@ -3691,20 +3799,87 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: could
 - Type: functional
 - Statement: Add ZOOM PREVIOUS (pan/zoom/orbit history), named views (save/restore a camera state by name), a VIEW command/dialog to manage them, and one-click NE/NW/SE/SW isometric presets.
+
+  **A named view records the camera's inputs and the active frame** — pan, zoom, azimuth, elevation
+  and the UCS — not a derived matrix, so a saved view cannot mean something different from what the
+  live view would do with the same numbers. The UCS travels with it because a view restored without
+  its frame puts the camera back but changes what the next typed coordinate means.
+
+  `VIEW [Save/Restore/Delete/?] <name>` is inline in every form, and `VIEW` alone opens the View
+  Manager. The case-insensitive name matching deliberately mirrors `UCS Named`, so learning one
+  teaches the other.
+
+  **The View Manager also lists the drawing's named coordinate systems, and is the only place a
+  saved frame can be restored by name or deleted** (REQ-154). That is not a second home for a
+  command's options: `UCS Named` saves and nothing more, precisely because restoring and deleting
+  need a list of what exists, which a command prompt cannot show. The dialog's two buttons call the
+  same shared functions any other caller would, so there is still one implementation.
+
+  **The View tab carries a Named Views panel**: a combo naming the current view — the saved name when
+  the camera and frame match one, `Unsaved View` otherwise — listing the ten standard orientations
+  (Top / Bottom / Left / Right / Front / Back and the four isometrics), then this drawing's saved
+  views, then the View Manager. The orientation presets set direction only, keeping pan and zoom,
+  because "show me this from the south-west" should not also move what you were looking at. Their
+  angles come from the ViewCube's own face table and isometric constant, not a second copy.
+
+  Which view is current is **derived** from the live camera each time, never stored as a flag: a
+  remembered name goes stale the moment the user pans, and a label naming a view you have already
+  left is worse than no label, since `Unsaved View` is precisely the warning that what you see would
+  be lost.
 - Acceptance (sketch): ZOOM PREVIOUS steps back through recent view changes; a named view restores camera position/target/UCS exactly; isometric presets set the standard 3D-isometric angle in one action. DVIEW and multiple simultaneous model-space viewports are noted as open scope questions, not committed here, given their size.
 - Owner-layer: UI/Renderer
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
-
+- Status: **partially delivered** (2026-08-29) — named views, the `VIEW` command, the View Manager
+  and the ten orientation presets are built and persist in `.gs`. **ZOOM PREVIOUS is NOT built**, so
+  this requirement is not closed; the view-history half remains as originally catalogued.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-08-29 — named views, VIEW, the View
+  Manager and the orientation presets delivered at the user's request during hands-on testing;
+  Statement expanded to describe what was built. ZOOM PREVIOUS deliberately left out of that pass.
 ### REQ-107 — Block support (foundational)
 - Purpose: GoSurvey has no block/insert mechanism, which blocks title-block reuse, standard symbols, and any future TABLE/annotation work; DWG export always explodes geometry for exactly this reason
 - Priority: should
 - Type: functional
 - Statement: Add BLOCK (define from selection), INSERT (place with position/scale/rotation), WBLOCK (write to its own file), and ATTDEF/block attributes. Dynamic blocks and a block-library browser are explicitly out of scope — see roadmap Someday.
 - Acceptance (sketch): a block definition stores its entities once; each INSERT is a lightweight reference, not a geometry copy; editing a definition updates every insert; DWG/DXF export writes real INSERT/BLOCK records; erasing a definition with live inserts is handled per REQ-201, never silently.
-- Owner-layer: Domain/Commands/IO/UI — likely architectural (new entity kind + indirection); expect a SPEC GAP/ADR before implementation, the way REQ-069's breaklines forced REQ-076 first
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Acceptance (block editor — BEDIT in-place isolated editing, D-2026-08-29-h / ADR-043):
+  - BEDIT with a block name from model space enters an **edit session** for that definition; BEDIT
+    is refused while a paper layout is active; a second BEDIT for the block already open is a no-op.
+  - While a session is open the viewport shows **only that block's geometry** in the block's local
+    coordinates; model-space and paper-space entities are not drawn and not pickable/snappable;
+    the block's own INSERT overlays are not drawn.
+  - Draw commands (LINE, PLINE, CIRCLE, ARC, ELLIPSE, TEXT/MTEXT) and modify commands (MOVE, COPY,
+    ROTATE, SCALE, DELETE, TRIM, OFFSET, MIRROR) operate on the block's content; survey-point and
+    CSV tools are unavailable in the session.
+  - Any content change marks the session dirty.
+  - `BCLOSE` (or the ribbon Close Block Editor) with a dirty session raises a modal **Save /
+    Don't Save / Cancel**: Save writes the edited geometry into the definition and every INSERT of
+    that block re-renders; Don't Save restores the definition as it was at BEDIT; Cancel keeps the
+    session open. A clean session closes with no prompt.
+  - On close (Save or Don't Save) the ribbon tab and the viewport camera that were active when
+    BEDIT was invoked are restored.
+  - Nested blocks, meshes, attribute definitions, parameters and actions on the definition are
+    preserved unchanged across an edit session.
+- Acceptance (INSERT on-screen interaction, D-2026-08-29-i):
+  - When any of insertion point / scale / rotation is "Specify On-screen", a **live ghost** of the
+    block definition (its lines, arcs, circles, polylines and nested blocks, tessellated) is drawn
+    at the pending transform and follows the cursor: rotating live during the rotation pick (angle
+    in the clockwise-from-north convention, pick-north ⇒ rotation 0 ⇒ block as authored), scaling
+    live and uniformly during the scale pick (factor = distance from insertion point to cursor).
+    The ghost is drawn at the **snapped** commit point, honours the block-unit scale factor and
+    base point, and the committed insert matches the last previewed transform within REQ-101.
+  - Object snapping is active for the insertion-point, scale and rotation picks, subject to the
+    running OSNAP toggles and the master object-snap switch.
+  - The geometry of an **already-placed block instance** (including nested) is an object-snap
+    target for all commands: Endpoint on its segment ends and its insertion point, Midpoint on its
+    segment midpoints, Center on its circles/arcs — same tolerance and ranking as native entities.
+    The ghost being inserted is never itself a snap target.
+- Owner-layer: Domain/Commands/IO/UI — architectural; block entity model recorded across the
+  issue-#124 work, the in-place editor recorded as ADR-043
+- Status: accepted
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i).
+  2026-08-29 — accepted for the block-editor slice (D-2026-08-29-h, ADR-043): in-place isolated
+  editing via a model-store swap, with a Save/Don't-Save/Cancel close gate. Dynamic blocks and a
+  block-library browser remain out of scope (roadmap Someday).
+  2026-08-29 — D-2026-08-29-i: live INSERT rubber-band preview + object snapping to placed inserts.
 
 ### REQ-108 — Polar and tracking input aids
 - Purpose: the POLAR status-bar toggle lights up with no behavior behind it, there is no object-snap tracking, and there's no typed polar-coordinate entry
@@ -4264,6 +4439,80 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-26 — accepted (D-2026-08-26-g), TASK-120; GitHub issue #106, split from #91
   during REQ-121's own review.
 
+### REQ-308 — Start screen tab
+- Purpose: GoSurvey launches straight into a blank "Drawing 1" with no landing surface for
+  reopening recent work, reaching the project website, or seeing sign-in state. Every CAD-class
+  tool has a start page and users expect one. This adds a persistent first tab that serves that
+  role without disturbing the tab/document model or the REQ-091 launch sign-in gate.
+- Priority: should
+- Type: functional
+- Statement: A **"Start" tab** is the first tab in the drawing tab bar (index 0), selected on
+  launch, and **cannot be closed or dragged behind another tab**. It is not a drawing: it owns no
+  document, geometry, layers, or viewport, and is skipped by save-on-switch, dirty-tab
+  enumeration, and the close path. The first real drawing remains **"Drawing 1"** and sits
+  immediately after Start; File > New, the tab bar's "+", and File > Open all create/append
+  drawings after Start and focus them (REQ-055 is unchanged for drawing tabs).
+
+  The Start tab's content is three columns:
+
+  1. **Left** — the title **"GoSurvey <version>"** (the running build's `GOSURVEY_VERSION_FULL`,
+     ADR-029 (a)), an **Open…** button (same action as File > Open) and a **New** button (same as
+     File > New), and a text link reading **"Visit The Website"** (the URL itself is not shown) that
+     opens **https://chetjones003.github.io/GoSurvey** in the system browser. There is **no**
+     "Autodesk Projects" and **no** "Learning & Insights" entry.
+  2. **Middle** — **"Recent"**: a list of recently opened drawings, each with a **thumbnail**, the
+     drawing name, and its last-opened date. It offers a **grid view and a list view**, a **sort
+     control** (at least Last Opened and Name), and a **search box** that filters by name. Clicking
+     an entry opens that drawing in a new focused tab (a missing file logs REQ-201-style and is
+     offered for removal from the list). A drawing's thumbnail is **captured when it is saved or
+     opened**; an entry with no captured thumbnail shows the **default DWG file icon**.
+  3. **Right** — **"Connect"**: when signed in, **"Welcome <name>"** and the account email, exactly
+     as the Settings panel shows today. When **not signed in** (only reachable when the launch gate
+     was skipped for lack of any network — REQ-091 as amended), a short offline notice and a
+     **"Sign In"** button that starts the existing interactive sign-in flow
+     (`cmd.authSignInRequested`). Below that, a **"Help Me Improve This Product"** section with a
+     **"Send Feedback"** button that opens
+     **https://github.com/chetjones003/GoSurvey/issues** in the system browser.
+
+  The recent-drawings list persists across sessions in a new user-scoped store
+  (`gosurvey-recent.json`, D-2026-08-30-b); a missing or corrupt store yields an empty list, never
+  an error. Thumbnails are cached BMPs under the user data directory with a bounded, LRU-evicted
+  size (D-2026-08-30-c).
+
+  **Full-bleed.** While the Start tab is active the docked Properties, Reports and Toolspace panels
+  and the command line are not shown, so the Start screen fills the whole work area. Switching to
+  (or opening) a drawing restores those panels and the command line to their layout positions.
+- Acceptance:
+  - fresh launch: the tab bar reads **"Start"** then **"Drawing 1"**, with Start active and the
+    Start content (not a viewport) shown;
+  - the Start tab has no close button and cannot be closed by any path; with Start + one drawing
+    open, the drawing is still closeable;
+  - File > New / "+" append "Drawing N" **after** Start and focus it; File > Open does likewise;
+  - the left column shows "GoSurvey " followed by the exact `GOSURVEY_VERSION_FULL` string, an
+    Open… and a New button that invoke the same actions as the File menu items, and a "Visit The
+    Website" link (no URL text) that opens `https://chetjones003.github.io/GoSurvey` in the browser;
+  - with the Start tab active, the Properties, Reports and Toolspace panels and the command line are
+    not visible; opening a drawing or switching to a drawing tab brings them all back in place;
+  - no "Autodesk Projects" or "Learning & Insights" text appears anywhere on the tab;
+  - save a drawing, relaunch: it is listed under Recent with a bitmap thumbnail of its last view;
+  - a recent entry whose thumbnail was never captured shows the DWG file icon, not a broken image;
+  - Recent offers a grid view, a list view, a sort control, and a search box that filters the list
+    by typed text;
+  - clicking a recent entry opens that drawing in a new tab which becomes the active tab;
+  - a recent entry pointing at a now-missing file does not crash and reports the miss;
+  - signed in: the right column reads "Welcome <name>" with the account email;
+  - not signed in (simulated): the right column shows the offline notice and a Sign In button that
+    sets `cmd.authSignInRequested`;
+  - a deleted/corrupt `gosurvey-recent.json` results in an empty Recent list and a normal launch.
+- Owner-layer: UI (`CadUi_StartScreen.cpp`, the tab bar's Start-tab special-casing in `CadUi.cpp`,
+  the viewport-vs-start branch in `DrawDrawingViewport`); IO (`RecentDrawings` store, capture hook
+  in the save/open paths); Platform (`ThumbnailCache` FBO readback + BMP encode, `ShellExecuteA`
+  URL open — already used by `auth`)
+- Status: accepted (2026-08-30)
+- Revisions: 2026-08-30 — accepted (D-2026-08-30-a/b/c). Start tab as a non-document sentinel at
+  index 0 (architecture §11.5 amended); new `gosurvey-recent.json` MRU store; thumbnail capture
+  from the drawing `ViewportRenderer` FBO stored as BMP (in-tree writer, no new dependency).
+
 ### REQ-122 — ZOOMEXTENTS frames the drawing safely: margin, aspect, degenerate extents, no invalid camera (GitHub issue #88)
 - Purpose: REQ-120 gave the middle double-click its gesture and reused the existing framing path
   untouched, which left the larger half of issue #88 — everything the framing itself promises —
@@ -4394,6 +4643,694 @@ requirements is a planning failure, not a sign of rigor.
   headless transcript can drive end to end
 - Status: accepted (2026-08-26); closes GitHub issue #100
 - Revisions: 2026-08-26 — accepted (D-2026-08-26-e); reported by chetjones003 as issue #100.
+
+### REQ-124 — Empty named TIN surface (GitHub issue #119)
+- Purpose: let the user create the surface object first and add data afterwards, matching Civil 3D
+- Priority: must
+- Type: functional
+- Statement: `SURFACECREATE <name>` with no point groups, and the Surface Manager's New Surface
+  action, create a named drawing-owned surface whose triangulation is **null**. Duplicate names are
+  refused (REQ-075). Adding sources later rebuilds as REQ-069. A create that *names* groups which
+  cannot triangulate still **creates the object** and reports why there is no TIN (REQ-201) — it
+  does not leave a bogus triangle set. Hover, SURFELEV, OSNAP and zoom-extents skip a null TIN.
+- Acceptance:
+  - `SURFACECREATE Empty` adds one surface; `SURFACELIST` reports it as not built; triangle count 0;
+  - creating a surface from groups that resolve to fewer than three non-collinear points still adds
+    the named surface, logs a specific message, and leaves `tin` null;
+  - the empty surface round-trips `.gs` (name, empty definition, no verts/indices);
+  - `SURFELEV` on a drawing that contains only an empty surface reports outside / no elevation, and
+    does not crash.
+- Owner-layer: Domain, Commands, UI, IO
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-125 — Surface statistics
+- Purpose: the numbers a surveyor reads off a surface without running a volume comparison
+- Priority: should
+- Type: functional
+- Statement: A pure `util/surfacestats` module reports, from a triangulation: point count, triangle
+  count, plan extents (min/max easting and northing), elevation min/max, 2D area (sum of triangle
+  plan areas), 3D area (sum of triangle face areas), and slope min / max / mean (percent grade of
+  each triangle's plane, area-weighted for the mean, excluding degenerates). `SURFACESTATS [<name>]`
+  prints them; omit the name to list every surface. An empty / null TIN reports zeros and says it is
+  not built. Statistics are **not persisted**.
+- Acceptance:
+  - a 100×100 square planar pad at z=10 reports 2D area 10,000 and 3D area 10,000 within REQ-101;
+  - a 100×100 pad at 100% grade (rise=run) reports 3D area 100×100×√2 within REQ-101;
+  - a null TIN reports not-built rather than inventing numbers;
+  - `SURFACESTATS` names a missing surface rather than printing another surface's figures.
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-126 — Indexed surface elevation queries
+- Purpose: SURFELEV, rollover, OSNAP and volumes must not scan every triangle on a REQ-100 surface
+- Priority: must
+- Type: performance / functional
+- Statement: Elevation at XY uses `TinElevationAtIndexed` through a live-only spatial index cached on
+  `AppCommandState` (ADR-039 (c)). The index is rebuilt when the TIN pointer changes. Indexed and
+  full-scan answers agree, including misses, concave notches, and hide-boundary voids. Large
+  coordinates (state-plane magnitude) stay within REQ-101 of the triangle plane.
+- Acceptance:
+  - for a committed fixture, indexed and scan elevations match within REQ-101 at interior samples
+    and both miss the same exterior / notch / void samples;
+  - a query against a null TIN is a miss;
+  - SURFELEV and REQ-089 rollover use the indexed path (one walk, as today).
+- Owner-layer: util (`tinbuild` / `surfacevolume` index), Commands (cache)
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-127 — Surface elevation object snap
+- Purpose: pick a point *on the ground* while drawing, not only on triangle vertices
+- Priority: should
+- Type: functional
+- Statement: A new object-snap kind interpolates the covering visible surface's triangle plane at the
+  cursor's plan position and returns XYZ. If several surfaces cover the point, the **topmost in the
+  drawing's surface list** wins (last-created if appended) — stated, not guessed. A miss, a null TIN,
+  or an invisible surface produces no snap. Running OSNAP has an independent toggle, default **on**.
+- Acceptance:
+  - on the REQ-074 test plane, a snap at a known interior XY returns that plane's Z within REQ-101;
+  - a cursor outside every surface produces no surface snap;
+  - with the toggle off, no surface snap is offered.
+- Owner-layer: Viewport (CadSnap), Commands, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-128 — Data-clip surface boundary
+- Purpose: keep shots *outside* a site from pulling the TIN, which outer-cull after the fact cannot
+- Priority: must
+- Type: functional
+- Statement: `CadBoundaryKind::Clip` / `TinBoundaryKind::Clip`. If a surface has one or more clip
+  rings, an input point is used **only if it lies inside at least one clip** (union). Clip rings are
+  constrained edges. After the build, triangles whose centroids fall outside every clip are culled
+  (same centroid rule as Outer). Hide/show still apply in definition order among themselves. No clip
+  present means "do not filter points". `DESIGNATEBOUNDARY` accepts CLIP. Legacy `.gs` without the
+  kind string still loads as outer/hide/show.
+- Acceptance:
+  - points outside a clip do not appear as TIN vertices; a point inside does;
+  - two clips union: a point inside either is used;
+  - a clip round-trips `.gs` as `"clip"`;
+  - an unclosed polyline is refused as a clip (same as other boundary kinds).
+- Owner-layer: util (tinbuild), Domain, Commands, IO
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-129 — Contour geometry as a surface data source
+- Purpose: build or densify a surface from existing contour polylines without treating them as
+  ordinary breaklines in the Manager tree
+- Priority: should
+- Type: functional
+- Statement: A surface definition may list **contour sources** by stable entity id (line, polyline,
+  3D polyline, feature line). Each vertex and each segment is a triangulation constraint at the
+  entity's stored Z. They rebuild dynamically like breaklines (REQ-069). Display contours remain
+  style-generated (REQ-070); this is input, not EXTRACT. `DESIGNATECONTOUR` / `UNDESIGNATE … CONTOUR`
+  and a Surface Manager Contours node. Additive `.gs` array, omitted when empty.
+- Acceptance:
+  - a closed 3D polyline at z=100 around a pad forces TIN edges along it at z=100;
+  - deleting the polyline drops it from the definition and rebuilds;
+  - a drawing without the array loads unchanged.
+- Owner-layer: Domain, Commands, UI, IO
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-130 — Direction / aspect banding
+- Purpose: colour triangles by downhill azimuth — drainage aspect, not just grade
+- Priority: should
+- Type: functional
+- Statement: `SurfaceAnalysisMode::Direction` uses the style's existing band table in **degrees**.
+  Aspect is downhill azimuth: 0 = +Y (northing), increasing toward +X (easting), in [0, 360). A
+  flat or degenerate triangle (REQ-072's flat-grade test) is unbanded, not assigned an arbitrary
+  compass. `.gs` stores mode 3. A pre-REQ-130 file with mode 0/1/2 is unchanged.
+- Acceptance:
+  - a plane that falls due east (+X) bands into the range that contains 90°;
+  - a plane that falls due north (+Y) bands into the range that contains 0°;
+  - a flat triangle is unbanded;
+  - switching mode to None restores the plain style display.
+- Owner-layer: util (surfaceanalysis), Renderer, UI, IO
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-131 — Bounded volumes
+- Purpose: earthwork inside a site boundary, not the whole overlapping hull
+- Priority: must
+- Type: functional
+- Statement: Volume comparison (REQ-073) may be limited to a closed polyline in plan. Sample cells
+  whose centres fall outside the ring contribute neither volume nor common area. `VOLUMES <base>,
+  <comparison>[, <clip entity>]` and a dashboard clip picker. No new surface type. Analytical check:
+  two planar surfaces 5 ft apart over a 1-acre clip report 21,780 ft³ (806.67 yd³) cut or fill
+  according to which is higher, within a stated relative tolerance of 1%.
+- Acceptance:
+  - the 5 ft × 1 acre fixture matches 21,780 ft³ within 1%;
+  - a clip that misses both surfaces reports zero and says there is no overlap inside the clip;
+  - omitting the clip preserves today's full-overlap behaviour.
+- Owner-layer: util (surfacevolume), Commands, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a). **Phase 2 — not in the first implementation
+  increment.**
+
+### REQ-132 — Watershed analysis
+- Purpose: name the drainage basins on a TIN
+- Priority: must
+- Type: functional
+- Statement: A pure `util/watershed` module, given a TIN, produces drain targets (boundary, internal
+  depression, or flat) and a per-triangle basin id, plus each basin's plan area. Display is
+  style-generated cache geometry, not entities, not stored in `.gs`. `WATERSHED <surface>` reports
+  counts; the Surface Manager can inspect a basin. Algorithm and termination rules (flats, pits)
+  are specified in the task that implements this REQ, with synthetic fixtures: single basin, two
+  basins, ridge, saddle, boundary drain, internal depression.
+- Acceptance:
+  - the synthetic single-basin fixture yields one basin draining to the designed target;
+  - the two-basin / ridge fixture yields two basins that do not cross the ridge;
+  - an internal depression is classified as such, not silently merged into a neighbour;
+  - a null TIN is refused with a specific message.
+- Owner-layer: util, Commands, Renderer, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a). **Phase 3.**
+
+### REQ-133 — Water-drop path
+- Purpose: trace where water goes from a picked point
+- Priority: must
+- Type: functional
+- Statement: `WATERDROP` picks a plan position on a surface, finds elevation (REQ-074/126), and
+  traces downhill across triangle planes until a REQ-132 drain target. The path is previewed as 3D
+  geometry and may be baked to an unlinked 3D polyline (EXTRACT pattern). A start outside the
+  surface is refused (no extrapolation).
+- Acceptance:
+  - on a constant-grade plane the path is a straight downhill line to the designed boundary;
+  - a start in a designed pit terminates at that pit;
+  - a start outside the TIN reports outside and draws nothing.
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a). **Phase 3; depends on REQ-132.**
+
+### REQ-134 — Catchment from an outlet
+- Purpose: the contributing area upstream of a structure
+- Priority: should
+- Type: functional
+- Statement: `CATCHMENT` picks an outlet on a surface and reports the upstream triangle set's plan
+  area, elevation min/max, and a display boundary (cache geometry, optional EXTRACT bake). Uses the
+  REQ-132 drain graph in reverse. An outlet outside the TIN is refused.
+- Acceptance:
+  - an outlet at a designed basin pour-point reports that basin's area within REQ-101 of the
+    synthetic fixture;
+  - an outlet on a ridge that drains both ways reports the union of contributing triangles, or a
+    stated split rule documented in the implementing task — not a silent half;
+  - a null TIN / miss is a named refusal.
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a). **Phase 3; depends on REQ-132.**
+
+### REQ-135 — Surfaces in paper-space viewports and PDF plot
+- Purpose: a surface that exists in the model must appear where the user looks at the model
+- Priority: must
+- Type: functional
+- Statement: Display-geometry batches already built for model space (contours, border, triangles,
+  bands, arrows) are drawn through paper-space viewports subject to the same layer / VP-freeze /
+  non-plottable rules as other model entities, and are stroked by `PdfPlot` on plot. No second
+  contour engine. A surface on a non-plottable layer is omitted from the PDF and the omission is
+  not silent if the export log already names excluded kinds — plot skip follows layer plottable
+  the way other entities do (REQ-068).
+- Acceptance:
+  - a floating viewport whose layer freeze does not hide the surface shows its contours (manual
+    GUI; paper overlay path);
+  - PLOT of a layout that sees the surface includes contour/border strokes in the PDF;
+  - a surface on a non-plottable layer does not appear in the PDF.
+- Owner-layer: UI (viewport overlay), IO (PdfPlot), Renderer
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a). Closes the TASK-085 DEBT-1 / roadmap "Surface
+  plotting" gap.
+
+### REQ-136 — TIN volume surface from two TINs
+- Purpose: a surface whose elevations are the difference between two existing TINs, so cut/fill
+  can be contoured, styled, and queried like any other surface
+- Priority: must
+- Type: functional
+- Statement: The user can create a named `CadSurface` whose definition is two other TIN surfaces
+  (base and comparison, by name). Its triangulation is derived: at each unique plan vertex of
+  either parent that both TINs cover, Z is **comparison minus base**. Those points are
+  unconstrained Delaunay (same `BuildTin` as REQ-068). Grid and corridor kinds are REQ-137, not this
+  object's job.
+  Parents that are themselves volume surfaces are refused. Missing names, identical parents, or
+  no overlapping samples are named refusals (REQ-201). The object rebuilds when a parent TIN is
+  replaced (REQ-069 dirty). `.gs` stores the two names plus the derived verts/indices like any
+  other surface. `VOLUMESURFACE <name>, <base>, <comparison>` and Surface Manager "New volume
+  surface…". REQ-073 `VOLUMES` remains the numeric cut/fill report; this requirement does not
+  replace it.
+- Acceptance:
+  - two planar TINs 5 ft apart over the same square produce a volume TIN whose vertex Z values
+    are 5 ft within REQ-101;
+  - two TINs with no plan overlap refuse with a specific message and add no usable triangulation;
+  - a missing parent name is a named refusal;
+  - the created object appears in SURFACELIST as a volume surface naming both parents.
+- Owner-layer: util (tinvolume), Domain, Commands, UI, IO
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-b). 2026-08-28 — D-2026-08-28-a: drop the
+  "no ISurface / no grid" sentence; those kinds are REQ-137.
+
+### REQ-137 — Surface kinds and shared query interface (GitHub issue #119)
+- Purpose: TIN, grid, grid-volume, and corridor surfaces share elevation / slope / aspect queries
+- Priority: must
+- Type: functional
+- Statement: `CadSurface` carries a `SurfaceKind` (`Tin`, `Grid`, `TinVolume`, `GridVolume`,
+  `Corridor`). Query and analysis go through `ISurfaceQuery` in `util/` with **two implementations**
+  (TIN triangle interpolation and grid bilinear — REQ-301). Corridor surfaces build a TIN from
+  designated feature-line vertices. Grid surfaces store origin, spacing, column/row counts and Z
+  samples; they also produce a display TIN (two triangles per cell). Grid-volume Z is comparison
+  minus base at shared nodes. `SURFACECREATE` accepts an optional kind; `SURFACECREATEGRID` /
+  `SURFACECREATECORR` name the other kinds. Missing data yields a named empty surface (REQ-124).
+- Acceptance:
+  - a 2×2 grid with known corner Z interpolates the cell centre within REQ-101;
+  - a TIN query and `ISurfaceQuery` on the same TIN agree within REQ-101;
+  - a corridor surface with no feature lines is named and not built;
+  - a grid-volume with no overlapping nodes is a named refusal.
+- Owner-layer: util, Domain, Commands, IO
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-a.
+
+### REQ-138 — Contour extras, slope angle, and XY aspect (issue #119)
+- Purpose: user-defined contour elevations, Chaikin smoothing, contour labels, slope in degrees,
+  query slope/aspect at a plan point
+- Priority: must
+- Type: functional
+- Statement: A style may list extra contour elevations, a Chaikin pass count (0–5) on **display**
+  contours, and a label spacing in feet along major contours (0 = off). Labels are live overlay
+  text, not entities. `SurfaceAnalysisMode::SlopeAngle` bands by `atan(grade/100)` in degrees.
+  `SURFELEV` reports elevation, percent grade, slope angle, and aspect degrees (or "outside").
+- Acceptance:
+  - a user elevation appears in the generated contour level list;
+  - smoothing with passes > 0 increases vertex count of an open contour;
+  - labels are omitted when spacing is 0;
+  - a due-east plane reports aspect 90° and a non-zero slope angle;
+  - a miss reports outside and does not invent a slope.
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-28)
+
+### REQ-139 — Masks and TIN edge swap (issue #119)
+- Purpose: mask rings exclude area from calculations; swapped edges survive rebuild
+- Priority: must
+- Type: functional
+- Statement: `CadBoundaryKind::Mask` is a closed polyline that hides triangles (same cull as Hide)
+  and is listed under Masks in the Surface Manager. `SURFSWAPEDGE <surface>, <x>, <y>` records an
+  interior edge flip in the definition; rebuild reapplies flips to a new `shared_ptr<const CadTin>`.
+  A pick that is not on an interior edge is a named refusal.
+- Acceptance:
+  - a mask removes triangles from area stats versus the unmasked twin;
+  - a successful swap changes two triangle index triples and survives SURFACEREBUILD;
+  - a miss pick does not mutate the TIN.
+- Owner-layer: util, Domain, Commands, UI, IO
+- Status: accepted (2026-08-28)
+
+### REQ-140 — Volume MTEXT report and extended statistics (issue #119)
+- Purpose: put cut/fill on the sheet; TIN and volume-surface stats match the issue
+- Priority: must
+- Type: functional
+- Statement: `VOLREPORT` inserts an MTEXT of the last successful `VOLUMES` / dashboard cut, fill,
+  net (yd³) and common area (ft²). `SURFACESTATS` adds min/max triangle area, unique edge count,
+  breakline-edge count, min/max/mean slope in **degrees**, and for a volume surface the integrated
+  positive/negative Z (cut/fill) over the difference TIN.
+- Acceptance:
+  - VOLREPORT with no prior volume result is a named refusal and adds no entity;
+  - after VOLUMES, VOLREPORT increases the annotation count by one;
+  - stats on a 1-triangle surface report that triangle's area as min and max.
+- Owner-layer: Commands, util, UI
+- Status: accepted (2026-08-28)
+
+### REQ-141 — Analyze ribbon and water-drop feature line (issue #119)
+- Purpose: the issue's Analyze tools are reachable from the Survey ribbon; a drop can be a feature line
+- Priority: must
+- Type: functional
+- Statement: The Survey ribbon tab chrome matches Civil 3D's Survey tab (D-2026-08-28-k):
+  Labels & Tables, General Tools (no Object Viewer), Survey (Toolspace), Modify, Analyze, Launch Pad.
+  Unimplemented Civil 3D tools are disabled with a **not implemented yet** tooltip (REQ-084).
+  Implemented actions: Add Tables (`VOLREPORT` / `VOLREPORT TABLE`), Properties, Isolate Objects,
+  Survey Toolspace (`TOOLSPACE`), Survey Point Properties, Edit Elevations (feature-line elevations),
+  Quick Profile, Create Surface. Surfaces, volume create, breaklines, elevations, slopes, watershed,
+  water drop, catchment, dashboard, VOLREPORT, statistics, and rebuild remain invokable from the
+  command line; the TIN Surface contextual tab (REQ-143) also exposes the surface Analyze/Modify set.
+  `WATERDROP EXTRACT FL` bakes the last path as a feature line (unlinked).
+- Acceptance:
+  - each named command remains invokable from the command line;
+  - EXTRACT FL with a path adds one feature line; with no path is a named refusal.
+- Owner-layer: UI, Commands
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-a. 2026-08-28 — D-2026-08-28-k: Survey tab chrome.
+
+### REQ-142 — Toolspace (Prospector and Settings)
+- Purpose: a drawing explorer whose chrome matches Civil 3D Toolspace, listing only objects GoSurvey implements
+- Priority: must
+- Type: functional
+- Statement: A dockable **TOOLSPACE** window has a dark title, a view combo, a light
+  tree, a right-edge pair of **readable** vertical tabs (**Prospector**, **Settings**), and an empty
+  preview strip. There is **no** decorative toolbar (D-2026-08-28-m). Tree labels use Segoe UI when
+  installed (else the app UI font), near-black ink on off-white paper, and darker hierarchy lines. Prospector is rooted at the active drawing name and lists Points (light context menu:
+  Create, Import, Export, Edit, Select, Zoom to, Pan to), Point Groups, Surfaces, and Feature Lines.
+  Left-click on a **collection** folder does nothing; right-click shows that collection's Civil 3D
+  command list, with unimplemented items **disabled**. Named point groups, surfaces, and feature lines
+  are children of those folders. Left-click does not open editors; right-click menus do (Style and
+  Analysis on a named surface, Properties on a named group or feature line). Hierarchy uses thin grey
+  tree lines. Definition add/remove is on the expanded surface tree (Masks, Watersheds, Definition: Boundaries,
+  Breaklines, Contours, Point Files, Point Groups, Edits). Folders Civil 3D shows that GoSurvey does
+  not implement (DEM Files, Drawing Objects, Alignments, …) stay **absent**. Settings
+  lists only implemented style tables: General (Text Styles, Layers, Dimension Style) and Surface
+  (Surface Styles). The panel reads existing stores; it does not invent document types. `TOOLSPACE`
+  opens it; `TOOLSPACE SETTINGS` / `PROSPECTOR` switch tabs; `TOOLSPACE LIST` prints the tree;
+  `TOOLSPACE CLOSE` hides it. An unknown verb is a named refusal.
+- Acceptance:
+  - `TOOLSPACE LIST` on an empty drawing names Points, Point Groups, Surfaces, and Feature Lines and
+    does not name Alignments, Pipe Networks, or Parcel;
+  - after creating a named surface and a named point group, `LIST` includes those names plus
+    Definition, Masks, and Watersheds, and does not name DEM Files;
+  - `TOOLSPACE SETTINGS` then `LIST` names Text Styles and Surface Styles and does not name Parcel
+    or Grading;
+  - `TOOLSPACE NOSUCH` is a named refusal and does not change the tab.
+- Owner-layer: UI, Commands
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-c: collection left-click, Civil 3D menus, definition from tree.
+  2026-08-28 — D-2026-08-28-m: omit dummy toolbar; Segoe UI tree face; stronger text/line contrast.
+
+### REQ-143 — Contextual TIN Surface ribbon tab
+- Purpose: Civil 3D-shaped tools appear when a surface is selected, without inventing unimplemented objects
+- Priority: must
+- Type: functional
+- Statement: When at least one `SelectedEntity::Type::Surface` is selected in model space (or floating model space), the ribbon tab strip gains a contextual tab titled `Tin Surface: <surface name>` (the first selected surface). Selecting a surface the first time in a stretch switches to that tab; deselecting restores the previous permanent tab only if the contextual tab is still active. The tab contains the screenshot panels **Labels & Tables**, **General Tools**, **Modify**, **Level of Detail**, **Analyze**, **Surface Tools**, and **Launch Pad**. Implemented actions target that selected surface: Properties (side Properties panel), Inquiry (`SURFELEV`), Isolate Objects (`ISOLATEOBJECTS` / `HIDEOBJECTS` / `UNISOLATEOBJECTS`), Surface Properties, Add Data (breakline / contour / boundary designate), Edit Surface (`SURFACEADDPOINT`, `SURFACEDELPOINT`, `SURFSWAPEDGE`, `SURFACEREBUILD`), Water Drop, Catchment, Volumes Dashboard, Extract (`EXTRACT`, `WATERDROP EXTRACT`, `WATERDROP EXTRACT FL`, `CATCHMENT EXTRACT`). **Object Viewer is omitted** (D-2026-08-28-f): the 3D viewport is the viewer. Other controls with no GoSurvey command are **disabled** and their tooltip includes **not implemented yet**. REQ-084 still forbids a disabled control from acting. The contextual tab index is not a persisted prefs slot (`kRibbonTabCount` stays the permanent tabs).
+- Acceptance:
+  - with no surface selected, the tab strip does not include a `Tin Surface:` tab;
+  - selecting a named surface shows a tab whose label contains that surface's name;
+  - `SURFELEV`, `WATERDROP`, `CATCHMENT`, `SURFACEREBUILD`, and `EXTRACT` remain invokable from the command line (this tab does not replace them);
+  - unimplemented buttons on the tab cannot be activated (disabled);
+  - Object Viewer is not present on the tab.
+- Owner-layer: UI, Commands
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-d. 2026-08-28 — D-2026-08-28-f: omit Object Viewer.
+
+### REQ-144 — Add and delete TIN definition points (issue #119)
+- Purpose: a TIN can gain or lose vertices without mutating the live triangulation pointer
+- Priority: must
+- Type: functional
+- Statement: `CadSurface` stores `addedPointXyz` (local XYZ, stride 3) and `deletedPointPicks`
+  (local XY). `SURFACEADDPOINT <surface>[, <x>, <y>, <z>]` appends an add (name-only starts a pick
+  at the work-plane elevation). `SURFACEDELPOINT <surface>[, <x>, <y>]` appends a delete pick
+  (name-only starts a pick). `ResolveSurfaceInputs` appends added points after groups and files,
+  then for each delete pick removes the nearest remaining input point. Rebuild replaces
+  `shared_ptr<const CadTin>` (architecture §11.5). Non-TIN kinds and a delete on a surface with no
+  assembled points are named refusals (REQ-201). Both lists persist in `.gs`.
+- Acceptance:
+  - four added corners on an empty TIN rebuild to 4 points;
+  - deleting the nearest corner then rebuilding yields 3 points;
+  - `SURFACEADDPOINT` on a grid surface is a named refusal and adds no vertex;
+  - a missing surface name is a named refusal.
+- Owner-layer: Domain, Commands, IO, UI
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-e.
+
+### REQ-145 — Quick Profile along two plan points (no alignments)
+- Purpose: inspect a surface as a station/elevation graph without Alignment or Profile entities
+- Priority: must
+- Type: functional
+- Statement: `QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>]` samples the named surface along the
+  plan segment using `ISurfaceQuery::elevationAt` (existing TIN and grid implementations). Name-only
+  starts a two-point pick. Samples include both endpoints, step 1 ft, at most 4096 points. Hits and
+  misses are stored; a line with no on-surface sample is a named refusal (REQ-201). Zero-length and
+  missing/unbuilt surfaces are named refusals. The graph is **session UI**, never written to `.gs`
+  and not a document entity. Alignments and Civil 3D Profile / Profile View objects are out of scope.
+- Acceptance:
+  - on a plane Z = X, the sample at the midpoint of (0,0)–(10,0) is 5 within REQ-101;
+  - a segment that misses the surface is a named refusal and does not invent elevations;
+  - a zero-length segment is a named refusal;
+  - `QUICKPROFILE` remains invokable from the command line (the ribbon does not replace it).
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-g.
+
+### REQ-146 — Cut area and fill area (issue #119 AC-V5)
+- Purpose: volume reports name the plan area of cut separately from fill
+- Priority: must
+- Type: functional
+- Statement: `ComputeSurfaceVolume` accumulates `cutAreaFt2` (Base above Comparison) and
+  `fillAreaFt2` (Comparison above Base) alongside cut/fill/net volumes and common area.
+  `VOLUMES`, the Volume Dashboard, `VOLREPORT`, and `VOLCSV` print both areas.
+- Acceptance:
+  - two planar TINs 10 ft apart over a 100×100 square report cut area 10,000 ft² and fill area 0
+    (or the reverse when the pair is swapped);
+  - a report with no prior volume result still refuses `VOLREPORT` without adding an entity.
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-147 — Mixed-sign volume cells split on the zero contour (issue #119 AC-V6)
+- Purpose: cut and fill are not collapsed when two surfaces cross inside a sample cell
+- Priority: must
+- Type: functional
+- Statement: Each volume sample cell queries both TINs at its four corners. A cell whose ΔZ does not
+  change sign integrates as a prism. A mixed-sign cell splits each half-triangle on the ΔZ = 0
+  contour and accumulates cut and fill separately. The 250,000-sample budget remains. Corner misses
+  fall back to a centre sample.
+- Acceptance:
+  - Base Z = X and Comparison Z = 5 over [0,10]×[0,10] report cut volume and fill volume each 125 ft³
+    within 5%, and cut/fill areas each 50 ft² within 5%.
+- Owner-layer: util
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-148 — Drawing TABLE for volume summaries
+- Purpose: volume numbers can sit in the drawing as an AutoCAD-style table, not only as MTEXT
+- Priority: must
+- Type: functional
+- Statement: A TABLE is a first-class entity (`CadTable` in `cadTables` / `cadTableAttrs`,
+  `EntityKind::Table` appended after Surface). It stores insertion (top-left of the unrotated table),
+  width, height, rotation, column count, and row-major `cells`. MOVE, COPY, ROTATE, SCALE, MIRROR,
+  STRETCH, ARRAY, and ALIGN apply to the whole table. Double-clicking a cell opens an in-place editor
+  (Enter commits, Esc cancels). `.gs` round-trips a `"tables"` array. Load migrates leftover
+  `CadAnnotation::Kind::Table` into `cadTables`. The viewport and paper overlay stroke the grid and
+  cell text.   `VOLREPORT TABLE` (alias `VOLTABLE`) inserts a 2-column table of the last volume result
+  (and dashboard rows when present). The grid auto-fits cell text (`CadTableFitToContent`):
+  equal columns, height from row count × text height; insert and each committed cell edit
+  refit. `VOLREPORT` with no argument still inserts MTEXT (REQ-140). DXF
+  export emits cell TEXT (no ACAD_TABLE object).
+- Acceptance:
+  - `VOLREPORT TABLE` after `VOLUMES` adds one TABLE entity (not an annotation);
+  - a TABLE with 2 columns and 4 cells lays out four non-empty rectangles inside its box;
+  - `VOLREPORT TABLE` with no volume result is a named refusal;
+  - MOVE of a TABLE changes its insertion; a cell hit-test returns the row-major index of a point
+    inside that cell;
+  - `CadTableFitToContent` makes `width` at least as wide as the longest cell string at the
+    table's plotted height, and `height` at least one text-height per row; a longer cell
+    string after a fit increases `width`.
+- Owner-layer: Domain, Commands, UI, IO
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h; 2026-08-28 — D-2026-08-28-i (entity store + modify + cell edit);
+  2026-08-28 — D-2026-08-28-j (auto-fit grid to cell text).
+
+### REQ-149 — Multi-row Volume Dashboard and CSV
+- Purpose: several base/comparison/clip analyses share one dashboard and one export
+- Priority: must
+- Type: functional
+- Statement: The Volume Dashboard keeps a list of named analysis rows (`VOLDASH ADD <label>` snapshots
+  the current pick and result). The live pickers remain the working row. `VOLCSV <path>` writes a UTF-8
+  CSV of every row plus the live result: label, base, comparison, cut, fill, net, cut area, fill area,
+  common area. Missing path opens the existing CSV save dialog.
+- Acceptance:
+  - `VOLDASH ADD` with a landed result increases the row count by one;
+  - `VOLCSV` with no volume data is a named refusal;
+  - `VOLCSV tests/tmp-vol.csv` after `VOLUMES` writes a file containing `cut`.
+- Owner-layer: Commands, UI
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-150 — Move TIN point and delete TIN line
+- Purpose: the issue's remaining TIN edits are definition operations, like REQ-144
+- Priority: must
+- Type: functional
+- Statement: `SURFACEMOVEPOINT <surface>[, <x1>, <y1>, <x2>, <y2>, <z2>]` records a local from-XY and
+  to-XYZ; rebuild replaces the nearest assembled point. Name-only is two picks (from, then to; to-Z is
+  the work plane). `SURFDELLINE <surface>[, <x>, <y>]` records a pick; rebuild deletes the two
+  triangles of the nearest interior edge (`TinDeleteInteriorEdgeNear`). Live `CadTin` is never mutated
+  except via pointer swap after a copied mesh edit. Grid/corridor/volume kinds refuse.
+- Acceptance:
+  - moving the only extra add-point of a three-point TIN relocates that vertex after rebuild;
+  - deleting an interior edge of a two-triangle quad leaves fewer than six indices;
+  - a miss more than 1 ft from any interior edge is a named refusal.
+- Owner-layer: Domain, Commands, IO, util
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-151 — Arcs as surface breaklines
+- Purpose: 3D geometry used as breaklines includes arcs
+- Priority: must
+- Type: functional
+- Statement: `ResolveDefinitionChain` tessellates a `CadArc` into at least 8 chords (≤1 ft or 5°
+  whichever is finer, cap 256) at the arc's Z, and treats that chain as an open breakline. Closed
+  boundaries still require a polyline or feature line.
+- Acceptance:
+  - designating an arc as a breakline rebuilds the TIN with a constraint along the chord chain;
+  - `DESIGNATEBOUNDARY` on an arc is a named refusal.
+- Owner-layer: Commands
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-152 — Catchment mean elevation
+- Purpose: catchment elevation statistics include an average, not only min/max
+- Priority: must
+- Type: functional
+- Statement: `CatchmentResult::meanZ` is the area-weighted mean of triangle vertex elevations in the
+  catchment. `CATCHMENT` logs it with min/max.
+- Acceptance:
+  - a planar catchment reports mean Z equal to that plane within REQ-101;
+  - an outside pick still reports outside and does not invent a mean.
+- Owner-layer: util, Commands
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-153 — Contextual SURVEY Point(s) ribbon tab
+- Purpose: Civil 3D-shaped tools appear when survey points are selected, without inventing unimplemented COGO objects
+- Priority: must
+- Type: functional
+- Statement: When `selectedSurveyPointIndices` contains at least one valid survey-point index in model space (or floating model space), the ribbon tab strip gains a contextual tab. One valid selected point: title `SURVEY Point: <point id>`. More than one: title `SURVEY Points`. First selection in a stretch switches to that tab **unless** the TIN Surface contextual tab is already active (both tabs stay visible). Deselecting the last point restores the previous permanent tab, or the TIN Surface tab if a surface is still selected. Panels match the screenshots: **Labels & Tables** (single) / **Tables** (multi) with Add Tables; **Edit Label Text** only when one point is selected; **General Tools** (Inquiry, Properties, Isolate Objects — **no Object Viewer**); **Modify**; **Analyze**; **SURVEY Point Tools**; **Launch Pad**. Wired actions: Inquiry (`ID`), Properties, Isolate Objects, Edit/List Points (`VIEWPOINTS`), Point Group Properties (Point Groups window), Import Points, Export Points, Create Points, Create Point Group, Create Surface. Unimplemented Civil 3D leftovers (Add Tables as a point table, Edit Label Text, Renumber, Datum, Elevations from Surface, Lock/Unlock Points, Geodetic Calculator, Transfer Points) are **disabled** and tooltip **not implemented yet**. The tab index is not a persisted prefs slot (`kRibbonTabCount` stays the permanent tabs).
+- Acceptance:
+  - with no survey point selected, the tab strip does not include a `SURVEY Point` tab;
+  - selecting one survey point shows `SURVEY Point:` plus that point's id;
+  - selecting more than one survey point shows `SURVEY Points`;
+  - Object Viewer is not present on the tab;
+  - unimplemented buttons on the tab cannot be activated (disabled);
+  - `CREATEPOINTS`, `VIEWPOINTS`, `IMPORTPOINTS`, `EXPORTPOINTS`, and `ID` remain invokable from the command line.
+- Owner-layer: UI, Commands
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-l.
+
+### REQ-154 — UCS and PLAN: a real coordinate-system service (GitHub issue #126)
+- Purpose: give the user a coordinate frame to work in, and a way to look at it, without ever moving
+  the drawing. Until now `UCS` was an alias for `ELEV`: it could raise the work plane but had no
+  axes, so nothing could ask "which way is UCS +X?" and every command read input in world terms
+- Priority: must
+- Type: functional
+- Statement: A **User Coordinate System** is an origin plus a right-handed orthonormal basis,
+  expressed in WCS and stored per drawing. It is the frame in which the user's input is read and in
+  which coordinates are reported back.
+
+  **A UCS never moves geometry.** Entities remain in WCS. Changing the UCS changes interpretation
+  and presentation only; any code path that rewrites a stored coordinate because the frame changed
+  is a defect.
+
+  **One authoritative implementation.** `WorldToUcs` / `UcsToWorld` and their vector forms live in a
+  single pure module (`src/util/ucs.hpp`, beside `util/ray3d` and for the same ADR-002 reason), and
+  every consumer calls it. No command computes its own frame arithmetic.
+
+  **`UCS` supports:** an origin alone (orientation preserved); origin + X-axis point; the three-point
+  form (origin, +X, a point in the +Y half of the plane); `World`; `Previous` (a bounded history that
+  a restore does not itself extend); `View`; `X` / `Y` / `Z` rotation about the UCS's **own** axes,
+  positive by the right-hand rule; `ZAxis`; `Object`; and `Named`.
+
+  **`Named` saves, and only saves.** `UCS N` asks for a name immediately - there is no
+  Save / Restore / Delete question in front of it, because by the time a user has built a frame and
+  typed `N` they have already answered it. `?` still lists at that prompt, and an existing name is
+  redefined rather than duplicated. **Restoring and deleting a saved frame belong to the View
+  Manager**, which lists them: choosing among saved frames needs to show what there is to choose
+  from, and a command prompt can only ask the user to recall a name they cannot see. Both halves call
+  one shared implementation, so the dialog and any other caller cannot drift apart. `World` is
+  reserved: it can be neither redefined nor deleted. Named definitions persist with the drawing.
+
+  **A rotation angle can be typed or measured.** At the `X` / `Y` / `Z` angle prompt, `2P` takes two
+  points — typed or clicked — and uses the angle of the direction between them, measured in the plane
+  that rotation spins and reported back so the user can see the number that was used. Feeding that
+  angle to the rotation is what aligns the axis with the picked direction, so "square my frame to this
+  lot line" is two picks rather than a bearing read off the drawing and typed back in. Two points that
+  define no angle in that plane (coincident, or perpendicular to it) are refused and the prompt stands
+  (REQ-201).
+
+  **The command shows what it is about to do.** At the two axis prompts and at the second `2P` pick,
+  a rubber preview runs from the origin to the cursor, and the cursor carries a **polar distance and
+  angle pair** (REQ-024's stated exception) reading in the active frame. `@<distance><<angle>` is
+  accepted as typed input at those prompts, so what the mouse produces is exactly what could have
+  been typed.
+
+  **A frame selector sits under the ViewCube**, in model space only. It names the active frame —
+  `WCS`, the saved name when the frame is one of them, or `Unnamed` for a frame built but not saved —
+  and opens a menu of `WCS`, every named UCS in the drawing, and `New UCS`. Selecting a name restores
+  that frame; `New UCS` opens the ordinary command, so the menu and the command line cannot drift
+  about what any of it means.
+
+  **Coordinate entry is in the UCS.** Under a UCS rotated 45° about Z, `10,0` is ten units along the
+  UCS X axis; `@dx,dy` is a delta along the UCS axes. Typed points accept `X,Y,Z` as well as `X,Y`,
+  without which no tilted frame could be defined from the keyboard. Object snaps continue to resolve
+  against real WCS geometry and return the snapped point's own position; the UCS transforms what is
+  *reported* and what is *typed*, never what is *snapped to*.
+
+  **A point carries its own elevation.** On a UCS parallel to world XY every point on the work plane
+  shares one Z, which is why a single work-plane elevation sufficed before. A tilted UCS breaks that:
+  the plane's Z varies across it. New geometry commits at the resolved point's own Z — the click's
+  ray × plane intersection, or the typed UCS coordinate mapped through the frame.
+
+  **ORTHO and the grid follow the UCS.** ORTHO squares to the UCS axes and stays in the UCS plane;
+  the grid is generated in the frame's own XY. A drafting aid still squared to the world while entry
+  has moved is worse than none — it reads as the drawing's alignment.
+
+  **`PLAN` changes the view, never the UCS.** It orients the camera to the XY plane of the current
+  UCS, the WCS, or a named UCS. Autodesk documents that distinction explicitly and it is the whole
+  reason the command is separate. **`UCSFOLLOW`** (0/1, per drawing) makes a UCS change switch to a
+  plan view of the new frame automatically.
+
+  **A UCS icon** in the model viewport shows the active frame's X / Y / Z axes, foreshortened with
+  the camera, with a `W` at its origin when the frame is the WCS. It is driven by the UCS state, not
+  decoration.
+
+  **Documented limitation — PLAN of a tilted UCS.** `Camera` stores azimuth and elevation with no
+  roll axis, a deliberate choice (ADR-025 (c)) that avoids the pole flip a free eye/up pair suffers.
+  For any UCS whose Z is world +Z — every translation, every rotation about Z, and so the whole 2D
+  survey case — PLAN is exact: the UCS +Y comes out up the screen. For a **tilted** UCS the view
+  *direction* is correct but the in-plane rotation cannot also be set, and the command says so when
+  it happens. Making it exact requires adding roll to `Camera`, which is an architectural change
+  (view matrix, `ScreenRay`, `WorldToScreen`, ViewCube, PDF plot, and new persisted per-tab state)
+  and is deliberately **not** in this requirement.
+- Acceptance:
+  - the transform module is pure, orthonormal and right-handed by construction, and unit-tested
+    including every refusal (collinear three-point, coincident picks, zero-length normal);
+  - `WorldToUcs` and `UcsToWorld` invert each other exactly for translated, rotated and tilted
+    frames;
+  - every listed `UCS` option works, and each invalid input is refused with a stated reason rather
+    than producing a degenerate frame (REQ-201);
+  - `Previous` walks back through the history and a restore does not itself become a history entry;
+  - named definitions save, restore, delete, list, and survive a `.gs` round trip byte-identically;
+  - `World` cannot be saved over or deleted;
+  - geometry drawn under a rotated UCS lands at the world coordinates the frame implies, asserted on
+    actual stored coordinates rather than on entity counts;
+  - geometry drawn on a **tilted** UCS commits at the elevation the plane gives at that point;
+  - changing the UCS leaves every stored coordinate untouched;
+  - the coordinate readout and `ID` report in the active UCS and name which frame that is;
+  - ORTHO squares to the UCS axes; the grid is generated in the UCS plane;
+  - `PLAN Current` / `World` / a named UCS orient the view and leave the UCS unchanged;
+  - `UCSFOLLOW=0` preserves the view on a UCS change, `UCSFOLLOW=1` switches to a plan view of it;
+  - the UCS is per drawing: switching tabs does not carry one drawing's frame into another, and a
+    new drawing starts in the WCS with no saved frames;
+  - a drawing saved before this requirement still loads, and a UCS that is a plain elevation change
+    still writes the `ucsElevation` key an older build reads.
+- Owner-layer: Commands (the frame, the commands, coordinate entry), Renderer (grid), UI (icon,
+  readout), IO (`.gs` persistence)
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — initial (D-2026-08-28-n); raised by chetjones003 as issue #126. 2026-08-29 — added `2P`
+  to the rotation-angle prompt (take the angle from two picked points), at the user's request during
+  hands-on testing of this branch. Same day — live axis preview, the polar
+  distance/angle cursor pair (REQ-024's stated exception) with `@distance<angle` as typed input, and
+  the frame selector under the ViewCube; all three requested from hands-on testing.
+
+#### Not in this requirement — and why
+
+Issue #126's acceptance list includes four items that cannot be honestly met, each blocked on a
+capability that does not exist. They are recorded here rather than quietly dropped:
+
+1. **Exact PLAN of a tilted UCS** — needs camera roll; see the documented limitation above.
+2. **"Polar tracking follows the UCS"** — polar tracking does not exist. It is a status-bar toggle
+   with no drafting behaviour (`CadUi.cpp`, labelled "UI only for now"). The condition asks for the
+   feature to be built first, which is its own requirement.
+3. **Per-viewport UCS and UCSFOLLOW isolation** — a paper-space `Viewport` is 2D (a model centre and
+   a scale); REQ-061's per-viewport camera was never implemented, and multiple simultaneous
+   model-space viewports are an explicitly open scope question (see the REQ-084 note). There is one
+   model view per drawing, so the UCS is scoped per drawing — the strongest form of "does not leak
+   between viewports" this architecture can state.
+4. **`Object` alignment to 3D faces, meshes, surfaces and solids** — resolving a face needs
+   face-level picking, which does not exist: a mesh picks as one object with no face identity, and
+   solids/surfaces as editable entities are issue #120's scope. `Object` covers lines, arcs,
+   circles, ellipses and text, and refuses anything else with a stated reason.
+
 
 ---
 
@@ -4565,12 +5502,16 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: must
 - Type: quality
 - Statement: A clean build from a fixed commit produces identical artifacts and
-  emits them to the build directory, never the source tree.
+  emits them to the build directory, never the source tree. Build dependencies
+  are vendored in `third_party/` (D-2026-08-31-b) — their bytes are in the tree,
+  not a ref resolved by a host at configure time.
 - Acceptance: two clean builds of the same commit yield matching binaries
   (modulo timestamps).
 - Owner-layer: Build/Platform
 - Status: accepted
 - Revisions: `<date>` — initial.
+               2026-08-31 — D-2026-08-31-b: FetchContent dropped; deps vendored in `third_party/`
+               (strengthens this requirement — the pins are now exact source, not refs).
 
 ### REQ-201 — No silent failures
 - Purpose: debuggability
@@ -4594,9 +5535,13 @@ requirements is a planning failure, not a sign of rigor.
 
   | Push target | Result |
   |---|---|
-  | any other branch | build + test; installer kept as a workflow artifact; nothing published |
-  | `beta` | installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
-  | `master` | version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
+  | any other branch | build + test only; the installer job is skipped (run it on demand via `workflow_dispatch`) |
+  | `beta` | build + test, then installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
+  | `master` | build + test, then version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
+
+  A push touching only documentation or governance (`**/*.md`, `docs/**`, `spec/**`, `workshop/**`,
+  `verification/**`) does not run the pipeline. The `build`/`test` gate still runs on every push
+  that touches code, on every branch (D-2026-08-31-a).
 
   The version gate is what makes "push to master" safe to do repeatedly: the release step is a no-op
   when `project(VERSION)` still matches the newest release, so a documentation push to master does
@@ -4610,8 +5555,9 @@ requirements is a planning failure, not a sign of rigor.
   this says the artifact users actually receive **is** that build, rather than whatever happened to
   be in a developer's `build/` directory.
 - Acceptance:
-  - a push to a feature branch produces a downloadable installer artifact and creates no release
-    and no tag;
+  - a push to a feature branch runs build + test, creates no release and no tag, and does not run
+    the installer job; `workflow_dispatch` on that branch still produces a downloadable installer;
+  - a docs/spec/workshop/verification-only push runs no pipeline job;
   - a push to `beta` leaves exactly one `channel-beta` prerelease in the releases list regardless of
     how many times it is pushed, carrying the newest installer;
   - a push to `master` with an unchanged version publishes nothing and fails nothing;
@@ -4623,6 +5569,9 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: Build/Platform
 - Status: accepted (2026-08-15)
 - Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
+               2026-08-31 — D-2026-08-31-a (issue #142): installer job gated to beta/master/
+               workflow_dispatch; docs/spec-only pushes skip the pipeline. The build+test gate is
+               unchanged.
 
 ### REQ-203 — The command layer is drivable without a window
 - Purpose: debuggability, maintainability — the interactive surface is the largest part of the
@@ -4714,6 +5663,48 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-16 — initial. See ADR-031 and the decision log. Delivery is staged
   (`docs/fuzz-harness.md` §8) and begins with the file parsers rather than the command driver.
 
+### REQ-205 — Build stays fast enough to iterate on
+- Purpose: maintainability — a build slow enough that developers batch changes or skip the local
+  test run is a correctness risk, not just an annoyance (GitHub issue #142)
+- Priority: should
+- Type: quality
+- Statement: The build is kept within a budget so the edit → build → test loop stays usable.
+  Targets, on the reference dev machine and on the CI `windows-latest` runner with a warm
+  dependency cache:
+
+  | Measure | Budget |
+  |---|---|
+  | Clean `ninja-release` local build | ≤ ~2 min |
+  | CI `build` job (warm dep cache) | ≤ ~6 min; ≤ ~10 min on a cold cache |
+  | Incremental rebuild after touching one `src/ui/*.cpp` or `src/commands/*.cpp` | ≤ ~20 s |
+
+  The means are not mandated, but the following are explicitly permitted and do **not**, on their
+  own, require a further decision: splitting an oversized translation unit into cohesive units
+  within the same subsystem and the same source list; a per-target precompiled header for stable
+  heavy headers (`<Windows.h>`, `<filesystem>`, `nlohmann/json.hpp`, `imgui.h`); compiling a source
+  file at most once per configuration by sharing objects rather than re-listing the file; and
+  CI-side caching and path/branch filtering. A precompiled header is a build-time device only: it
+  changes no artifact, and a source must still compile with the PCH disabled (the CI determinism
+  check in REQ-200 builds without it, or an equivalent guard exists).
+
+  This requirement never overrides REQ-200 (identical artifacts) or ADR-002 / ADR-031 (the test and
+  headless targets link no UI/GL/Win32 translation unit): a build-time optimisation that would
+  change a produced binary or pull a UI/GL unit into a pure target is out of bounds.
+- Acceptance:
+  - a clean `ninja-release` build on the reference machine completes within the budget above,
+    measured (e.g. Ninja `-d stats` / `ninjatracing`, `sccache --show-stats`) and the figure
+    recorded in the task log;
+  - the CI `build` job on `beta` completes within budget on a warm cache;
+  - touching one `src/ui/*.cpp` and rebuilding relinks only that unit and the binaries that use it,
+    within budget;
+  - two clean builds of the same commit still produce matching binaries (REQ-200 unaffected);
+  - `GoSurveyTests` / `GoSurveySnapTests` / `gosurvey_headless` still contain no UI/GL/Win32 TU
+    (existing checks unaffected).
+- Owner-layer: Build/Platform
+- Status: accepted (2026-08-31) — GitHub issue #142; see D-2026-08-31-a and the decision log.
+- Revisions: 2026-08-31 — initial. Accepted the same day (D-2026-08-31-a) after Phase 1 (PCH,
+  CI gating) and the first Phase 2 slices landed green.
+
 ---
 
 ## Constraint requirements
@@ -4725,8 +5716,12 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: must
 - Statement: A new third-party dependency enters the build only after the
   three-question policy in `project.md` is answered affirmatively and recorded
-  in the decision log.
-- Acceptance: each dependency maps to a decision-log entry.
+  in the decision log. Dependencies are **vendored in `third_party/`**
+  (D-2026-08-31-b), each with a `VENDORED.md` recording its upstream URL,
+  tag/commit, and trim/rebuild recipe. Updating one is a deliberate commit that
+  replaces the files under its directory.
+- Acceptance: each dependency maps to a decision-log entry; each `third_party/`
+  subtree has a `VENDORED.md` with a resolvable upstream ref.
 - Status: accepted
 
 ### REQ-301 — Minimal abstraction
@@ -4846,14 +5841,48 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-119 | UI/Commands | **increment 1 done** (TASK-111) + **increment 2 done** (TASK-112) — `CommandLineTests [req119]` (the prompt→variants rule as a pure function: inline, grouped, mixed-case shortcut extraction incl. `No trim`→`N`, unclosed bracket, empty group, and a round-trip so parsing loses no text) + `headless.regression-119-variant-token-accepted` (the mechanism's three prompts) + `headless.regression-119-variant-coverage` (one assertion per marked-up token across CIRCLE/ROTATE/SCALE/TRIM/POLYLINE/FEATURELINE/ELEV, **plus a live refusal assertion for CIRCLE's bare `d`** — a value prefix, not a token, deliberately left unmarked so markup cannot manufacture a dead link) + manual GUI (links render, hover and click in BOTH the floating bar and the classic dock; a wrapping dock prompt keeps its links on the correct line with no horizontal overflow; **no log line is clickable**) | accepted |
 | REQ-120 | UI | **manual GUI only, and that is a real limitation, not a shortcut.** The headless driver models no framebuffer and never calls `ProcessPendingViewportZoom` (which early-returns on `fbW <= 0`), so it cannot reach any zoom behaviour — there is no existing zoom transcript in the corpus for the same reason. Covering this by transcript would mean giving the harness a synthetic viewport, which is harness work this requirement did not take on (recorded as TASK-113 DEBT-1). Verified instead by driving the real window: middle double-click frames the drawing in model space; it works MID-COMMAND with the active LINE's placed point surviving; the typed route still does not zoom mid-command (its text is consumed by the active command as point input — unchanged); paper space frames the sheet; middle-DRAG still pans. Leaves GitHub issue #88 open — covers only #88's Middle Mouse/Architecture sections, not its ZOOMEXTENTS acceptance list | accepted |
 | REQ-307 | UI/Commands | done (GitHub issue #106, D-2026-08-26-g, TASK-120). Closes REQ-121's own stated paper-space scope boundary for the one case that needed it: `StartPaperMoveCopyViewports`/`StartDeleteCommand`'s paper branch, on an empty selection, now sets `paperMoveWaitingSelection`/`paperDeleteWaitingSelection` and opens a real selection step instead of refusing — pick-first (act on an existing selection) is unchanged, above. `PaperIsObjectSelectionStep` (`ViewportPickPolicy.hpp`) is the paper-space counterpart of REQ-121's own predicate, consulted alongside it at every one of REQ-121's three call sites: the pickbox cursor (`CadUi.cpp`'s crosshair draw), the pre-existing (previously unconditional) paper snap glyph, and `CommandInputHint`'s prompt — all three now return REQ-121's own `kSelectObjectsPrompt` for this step, reusing the string rather than declaring a second one. Enter is handled by two free functions, `ProcessPaperMoveWaitingSelectionEnter`/`ProcessPaperDeleteWaitingSelectionEnter` (`CadCommands.cpp`), called from BOTH the raw viewport `ImGui::IsKeyPressed(Enter)` check (mouse-only entry, the same shape EXTEND's own paper phase already needed since paper commands never set `cmd.active` and so are unreachable from `ProcessCommandLineSubmit`'s Kind-keyed dispatch) AND a new branch at the top of `ProcessCommandLineSubmit`'s blank-line handler — the second call site is what gives this a headless transcript path EXTEND's raw-only precedent does not have, and the two call sites are guarded against double-firing on one keypress with `ImGui::GetActiveID() == 0` (the raw check only fires when no ImGui widget, e.g. the command-line box, currently holds keyboard focus). Click/box accumulation reuses `SelectViewport`/`TogglePaperEntitySelection`'s own pre-existing `additive=true` parameter verbatim — no new toggle logic — and a new `closePaperSelBoxMerge` lambda (a union variant of the pre-existing `closePaperSelBox`) merges a closed box into the accumulating selection rather than replacing it, mirroring REQ-305's model-space `SelectionAccumulate` (D-2026-08-25-l). Tests: `ViewportPickPolicyTests [req307]` (the predicate, pure and header-only); `headless.req307-paper-selection-step`, driven through the real `CMD DELETE`/`CMD MOVE`/`CMD COPY` and blank-`CMD` command dispatch (not CLICK/BOX — paper space's ambient click block is screen-space/ImGui-hover driven with no headless equivalent, the same limitation REQ-121's own paper DELETE/JOIN branch already had), proving the old flat refusal is gone and REQ-201's "Nothing selected" refusal holds on repeated blank Enter. The click-toggle/box-merge accumulation itself, the pickbox rendering, and the snap-glyph suppression are GUI-only verification, same category REQ-121 itself already established for its own three rules — this session cannot simulate mouse hover or screen-space picking. 637/637 ctest green | accepted |
+| REQ-308 | UI/IO/Platform | planned (D-2026-08-30-a/b/c, TASK-147). Start tab as a non-document sentinel at drawing-tab index 0 — non-closable, non-reorderable, skipped by save-on-switch / dirty enumeration / close; `FirstDrawingTabIndex()` mediates drawing-tab indexing. `DrawDrawingViewport` branches to `DrawStartScreen` for index 0. New `gosurvey-recent.json` MRU store (`RecentDrawings`, best-effort, corruption = empty). Thumbnails captured from the drawing `ViewportRenderer` FBO on save/open, stored as BMP under the user data dir with LRU eviction (`ThumbnailCache`); missing thumbnail falls back to the DWG icon. GitHub Pages link via `ShellExecuteA` (already used by `auth`). Signed-out branch reuses `cmd.authSignInRequested` | accepted |
 | REQ-121 | UI/Commands/Viewport | done (GitHub issue #91, D-2026-08-26-a + D-2026-08-26-d, TASK-115 + TASK-118). Mechanism: `ViewportIsObjectSelectionStep`, derived from `ViewportClickRouteFor`'s `default:`-less switch, so a command cannot be added and silently omitted — `ViewportPickPolicyTests [req121]` (4 cases: ALIGN's unsnapped corners — red before the fix; every selection step recognised; each exclusion asserted; DELETE/JOIN's route, with ZOOM and STRETCH left on the box route). Review follow-ups closed by TASK-118, re-derived while rebasing onto `beta` after issue #103 landed underneath it: rule (3)'s shared prompt was factually wrong for DELETE/JOIN — fixed by giving them D-2026-08-25-l's accumulate-until-Enter shape, covered by `headless.req121-delete-join-accumulate` (proven red on `beta`: the closing box erased, LINES 3 -> 2). Rule (1)'s reported second seam (the snap-OVERRIDE menu bypassing the gate) had its underlying mechanism replaced by #103 between the original review and this rebase — the "cursor jumps mid-selection" symptom no longer reproduces, because the override's consumption already sits behind the same `!ViewportIsObjectSelectionStep` gate the automatic snap uses; what remained was narrower (the menu could still be *opened*, arming a persistent lock off a selection-step pixel that then silently affected the next ordinary snap), and that is what TASK-118's rebase actually gates. The cursor/OSNAP/prompt rules themselves stay GUI-only — there is no headless equivalent for screen-space picking or for a drawn cursor — and both rounds were verified A/B against a control rather than by absence. Paper space is a STATED scope boundary, not coverage: its modify commands are pick-first, so no selection step exists there (GitHub issue #106 — closed by REQ-307, which gives MOVE/COPY/DELETE a real selection step for the one case that needed it, starting with nothing pre-selected). 634/634 ctest green post-rebase. One `CadSnapTests` case (issue #103, unrelated to this task) carried an em-dash in its Catch2 name that CTest's Windows discovery mangles into a filter matching nothing, reporting a false failure in CI on both this branch and unmodified `beta` (`425afa7`'s own CI run) — fixed here by renaming the test to plain ASCII rather than worked around, since it was blocking CI on every branch built from `beta`, not just this one | accepted |
 | REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
 | REQ-123 | Commands/UI | done (GitHub issue #100, D-2026-08-26-e, TASK-119) — **`headless.req123-viewport-zoom-extents`, the first zoom behaviour ever covered by a transcript.** TASK-113's DEBT-1 blocks the others on `ProcessPendingViewportZoom`'s `fbW <= 0` guard; this case needs no framebuffer (its aspect is the viewport's rect in paper inches) so it is handled ahead of that guard. 43 steps: the framing after ZE with hand-computed scales (13.5870 for an 8x4in viewport, 27.1739 for 4x4in — same drawing, different rect, different answer), each viewport independent of the other's zoom, and a layer frozen in the viewport excluded from the extents then restored when thawed. Proven red on `beta`: `expected centre 50, 10 scale 13.587; got 0, 0 scale 50` — the viewport's framing untouched at its creation defaults. Four new driver verbs (VIEWPORT / VPSELECT / CLAYER / VPFREEZE) and `EXPECT VPFRAME`, all REQ-203 gaps of the LAYOUT/CLIPCOPY shape. GUI pass confirmed the numbers against the live status bar (`VP 1" = 40.4'` vs 40.36 computed), the sheet unmoved, REQ-120's gesture working in a viewport for the first time, and middle-drag pan still confined to it. 632/633 ctest (the one failure is `beta`'s own — an em dash in a `CadSnapTests` TEST_CASE name breaks ctest's name round-trip; unrelated and pre-existing) | accepted |
+| REQ-124 | Domain/Commands/UI/IO | done (TASK-125) — `headless.req124-empty-surface`; SURFACELIST not-built; SURFELEV outside; SURFACESTATS not-built | accepted |
+| REQ-125 | util/Commands | done (TASK-125) — `SurfaceStatsTests`; `SURFACESTATS` / `sfstats` | accepted |
+| REQ-126 | util/Commands | done (TASK-125) — live `surfaceQueryCache` on `AppCommandState`; indexed SURFELEV path | accepted |
+| REQ-127 | Viewport/Commands | done (TASK-125) — `CadSnapTests [req127]`; OSNAP toggle default on | accepted |
+| REQ-128 | util/Domain/IO | done (TASK-125) — `TinConstraintTests [req128]`; DESIGNATEBOUNDARY CLIP; `.gs` `"clip"` | accepted |
+| REQ-129 | Domain/Commands/IO | done (TASK-125) — `DESIGNATECONTOUR` / `dcon`; `contourSources` in `.gs` | accepted |
+| REQ-130 | util/Renderer/UI/IO | done (TASK-125) — `SurfaceAnalysisTests [req130]`; SURFSTYLE ANALYSIS direction | accepted |
+| REQ-131 | util/Commands | done (TASK-126) — `SurfaceVolumeTests [req131]`; VOLUMES optional clip id; VOLDASH CLIP | accepted |
+| REQ-132 | util/Commands | done (TASK-127) — WatershedTests; WATERSHED; cache outlines | accepted |
+| REQ-133 | util/Commands | done (TASK-127) — water-drop plane/pit/outside; WATERDROP EXTRACT | accepted |
+| REQ-134 | util/Commands | done (TASK-127) — catchment pour-point and ridge union; CATCHMENT | accepted |
+| REQ-135 | UI/IO | done (TASK-125) — paper overlay + `PdfPlot` stroke of display batches; non-plottable omitted | accepted |
+| REQ-136 | util/Domain/Commands/UI/IO | done (TASK-128) — `TinVolumeTests [req136]`; `VOLUMESURFACE`; Surface Manager volume create; `req136-volume-surface` | accepted |
+| REQ-137 | util/Domain/Commands/IO | done (TASK-129) — `Issue119SurfaceTests [req137]`; `SURFACECREATEGRID` / `CORR`; `req137-grid-corridor-volreport` | accepted |
+| REQ-138 | util/Commands/UI | done (TASK-129) — `[req138]` Chaikin, labels, aspect | accepted |
+| REQ-139 | util/Domain/Commands | done (TASK-129) — `[req139]` SURFSWAPEDGE miss/hit | accepted |
+| REQ-140 | Commands/util | done (TASK-129) — `[req140]` stats; `VOLREPORT`; `req140-volreport` | accepted |
+| REQ-141 | UI/Commands | done (TASK-129) — Survey Analyze ribbon; `WATERDROP EXTRACT FL` | accepted |
+| REQ-142 | UI/Commands | done (TASK-130) — Toolspace Prospector + Settings | accepted |
+| REQ-143 | UI/Commands | done (TASK-133) — contextual TIN Surface ribbon tab | accepted |
+| REQ-144 | Domain/Commands/IO/UI | done (TASK-134) — `req144-surface-add-del-point`; SURFACEADDPOINT / SURFACEDELPOINT | accepted |
+| REQ-145 | util/Commands/UI | done (TASK-135) — `SurfaceProfileTests [req145]`; `req145-quick-profile` | accepted |
+| REQ-146 | util/Commands | done (TASK-136) — cut/fill areas; `SurfaceVolumeTests [req146]`; VOLUMES/VOLCSV | accepted |
+| REQ-147 | util | done (TASK-136) — mixed-sign cell split `[req147]` | accepted |
+| REQ-148 | Domain/Commands/UI/IO | TASK-137 entity; TASK-138 auto-fit | accepted |
+| REQ-149 | Commands/UI | done (TASK-136) — VOLDASH ADD; VOLCSV; dashboard rows | accepted |
+| REQ-150 | Domain/Commands/util | done (TASK-136) — SURFACEMOVEPOINT / SURFDELLINE; `[req150]` | accepted |
+| REQ-151 | Commands | done (TASK-136) — arc breaklines; DESIGNATEBOUNDARY refuses arcs | accepted |
+| REQ-152 | util/Commands | done (TASK-136) — catchment mean Z; `[req152]` | accepted |
+| REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
+| REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126) | accepted |
+| REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
 | REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2004 default write; no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
 | REQ-171 | Domain/Renderer/IO | planned — point cloud entity; shared immutable payload; logged DXF/DWG exclusion | accepted |
 | REQ-172 | IO/Domain/UI | planned — PTS→PTX→LAS→LAZ→E57 read+write; malformed refuse | accepted |
 | REQ-173 | Domain/IO/Renderer/UI | planned — JPEG/PNG/BMP IMAGE underlay; missing file unloads image only | accepted |
 | REQ-174 | IO/Domain | planned — IFC tessellate to mesh; no IFC write | accepted |
+| REQ-175 | IO/UI/Commands | `LibreDwgCadTests` (survey point survives DWG save/load; foreign DWG without payload still imports a LINE) + headless `%OUT%/*.dwg` OPEN/SAVEAS | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
@@ -4868,10 +5897,13 @@ requirements is a planning failure, not a sign of rigor.
 
 - "We do **not** require pluggable rendering backends — OpenGL only until a
   second backend is a real requirement (avoids speculative abstraction)."
-- We do **not** require automated testing of the rendered GUI — no UI-automation driver, no
-  screenshot diffing, no golden images. REQ-203 tests the Commands layer beneath the UI instead.
-  Pixel-level tests need an interactive desktop session, are flaky by construction, and mostly
-  exercise ImGui rather than GoSurvey. *(accepted 2026-08-16 alongside REQ-203; ADR-031 alt. (1).)*
+- We do **not** require screenshot diffing or golden images of the framebuffer. Pixel-level visual
+  tests stay out (flaky; they mostly exercise ImGui/GPU, not GoSurvey).
+- We do **not** require a UI-automation driver on **Release** or on `gosurvey_headless`. REQ-203
+  transcripts remain the CI-default, windowless command driver. **Debug-only** Dear ImGui Test
+  Engine + Developer Shell (REQ-161, ADR-040, D-2026-08-29-f) is the recorded exception: it drives
+  the real ImGui tree and is compile-excluded from Release. *(Anti-requirement amended 2026-08-29;
+  original “no UI-automation at all” accepted 2026-08-16 with ADR-031 alt. (1).)*
 - `<…>`
 - We do **not** require native Leica LGS/LGSX/BLK/BLKX/IMP/PTG/BIN or Autodesk RCP/RCS in File
   Format Specs (D-2026-08-29-g). Interchange for those workflows is E57/LAS from the vendor tool.

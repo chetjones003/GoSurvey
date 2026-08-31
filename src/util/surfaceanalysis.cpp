@@ -68,6 +68,20 @@ bool TriangleDownhillDirection(const AnalysisTriangle& t, double flatGradePct, d
   return true;
 }
 
+bool TriangleDownhillAspectDeg(const AnalysisTriangle& t, double flatGradePct, double* outDeg) {
+  if (!outDeg)
+    return false;
+  double dx = 0.0, dy = 0.0;
+  if (!TriangleDownhillDirection(t, flatGradePct, &dx, &dy))
+    return false;
+  // atan2(east, north): 0 along +Y, +90 along +X.
+  double deg = std::atan2(dx, dy) * (180.0 / 3.14159265358979323846);
+  if (deg < 0.0)
+    deg += 360.0;
+  *outDeg = deg;
+  return true;
+}
+
 int AssignBand(double value, const std::vector<double>& upperBounds) {
   if (upperBounds.empty())
     return -1;

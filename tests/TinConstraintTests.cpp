@@ -482,3 +482,57 @@ TEST_CASE("Constraint insertion holds up at scale and leaves a consistent mesh",
   const int unused = static_cast<int>(std::count(used.begin(), used.end(), 0));
   CHECK(unused == 0);
 }
+
+TEST_CASE("A clip boundary culls like an outer ring", "[tin][req128]") {
+  const TinBuildResult tin = FlatGrid();
+  REQUIRE(tin.ok());
+  std::vector<std::uint32_t> indices = tin.indices;
+
+  TinBoundaryLoop clip;
+  clip.kind = TinBoundaryKind::Clip;
+  clip.ring = {{20, 20}, {80, 20}, {80, 80}, {20, 80}};
+  TinCullByBoundaries(indices, tin.vertsXyz, {clip});
+
+  REQUIRE(!indices.empty());
+  for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+    const std::uint32_t a = indices[t], b = indices[t + 1], c = indices[t + 2];
+    const double cx = (tin.vertsXyz[a * 3] + tin.vertsXyz[b * 3] + tin.vertsXyz[c * 3]) / 3.0;
+    const double cy =
+        (tin.vertsXyz[a * 3 + 1] + tin.vertsXyz[b * 3 + 1] + tin.vertsXyz[c * 3 + 1]) / 3.0;
+    CHECK(cx >= 20.0);
+    CHECK(cx <= 80.0);
+    CHECK(cy >= 20.0);
+    CHECK(cy <= 80.0);
+  }
+}
+
+TEST_CASE("Two clip rings union: a centroid in either survives", "[tin][req128]") {
+  const TinBuildResult tin = FlatGrid();
+  REQUIRE(tin.ok());
+  std::vector<std::uint32_t> indices = tin.indices;
+
+  TinBoundaryLoop left;
+  left.kind = TinBoundaryKind::Clip;
+  left.ring = {{0, 0}, {40, 0}, {40, 100}, {0, 100}};
+  TinBoundaryLoop right;
+  right.kind = TinBoundaryKind::Clip;
+  right.ring = {{60, 0}, {100, 0}, {100, 100}, {60, 100}};
+  TinCullByBoundaries(indices, tin.vertsXyz, {left, right});
+
+  bool anyLeft = false;
+  bool anyRight = false;
+  bool anyMiddle = false;
+  for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+    const std::uint32_t a = indices[t], b = indices[t + 1], c = indices[t + 2];
+    const double cx = (tin.vertsXyz[a * 3] + tin.vertsXyz[b * 3] + tin.vertsXyz[c * 3]) / 3.0;
+    if (cx < 40.0)
+      anyLeft = true;
+    else if (cx > 60.0)
+      anyRight = true;
+    else
+      anyMiddle = true;
+  }
+  CHECK(anyLeft);
+  CHECK(anyRight);
+  CHECK_FALSE(anyMiddle);
+}

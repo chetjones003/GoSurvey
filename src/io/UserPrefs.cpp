@@ -166,9 +166,9 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   if (s.contains("trimState") && s["trimState"].is_number_integer())
     st.trimState = std::clamp(s["trimState"].get<int>(), 0, 1);
 
-  // --- Active ribbon tab (REQ-302): same shape as trimState above ---
-  if (s.contains("activeRibbonTab") && s["activeRibbonTab"].is_number_integer())
-    st.activeRibbonTab = std::clamp(s["activeRibbonTab"].get<int>(), 0, kRibbonTabCount - 1);
+  // --- Active ribbon tab (REQ-302): intentionally NOT restored. The Home tab is
+  // always focused on launch regardless of which tab was active at exit.
+  st.activeRibbonTab = kRibbonTabHome;
 
   // --- FILLET/CHAMFER (REQ-103 step 6): app-level, not per-drawing — same shape as trimState above
   // (D-2026-08-24-g: a generalized "registry" was considered and explicitly declined) ---
@@ -241,6 +241,7 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   b  ("objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
   b  ("objectSnapIntersection", &st.objectSnapIntersection);
   b  ("objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
+  b  ("objectSnapSurface",             &st.objectSnapSurface);
   num("objectSnapAperturePx",      &st.objectSnapAperturePx,  4.f, 64.f);
   num("objectSnapGlyphHalfPx",     &st.objectSnapGlyphHalfPx, 3.f, 48.f);
   num("gripSizePx",                &st.gripSizePx,            2.f, 20.f);
@@ -389,7 +390,14 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["prefsSchemaVersion"] = 1;
 
   s["trimState"] = st.trimState;
-  s["activeRibbonTab"] = st.activeRibbonTab;
+  {
+    int tab = st.activeRibbonTab;
+    if (tab == kRibbonTabSurfaceCtx)
+      tab = st.ribbonTabBeforeSurfaceCtx;
+    if (tab == kRibbonTabSurveyPointCtx)
+      tab = st.ribbonTabBeforeSurveyPointCtx;
+    s["activeRibbonTab"] = std::clamp(tab, 0, kRibbonTabCount - 1);
+  }
   s["filletRadius"] = st.filletRadius;
   s["cornerTrimMode"] = st.cornerTrimMode;
   s["chamferDist1"] = st.chamferDist1;
@@ -445,6 +453,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["viewportVisualStyle"]        = static_cast<int>(st.viewportVisualStyle);
   s["objectSnapIntersection"]     = st.objectSnapIntersection;
   s["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
+  s["objectSnapSurface"]              = st.objectSnapSurface;
   s["objectSnapAperturePx"]       = st.objectSnapAperturePx;
   s["objectSnapGlyphHalfPx"]      = st.objectSnapGlyphHalfPx;
   s["gripSizePx"]                 = st.gripSizePx;

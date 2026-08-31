@@ -79,6 +79,8 @@ enum class ViewportClickRoute : std::uint8_t {
   HatchPick,
   /// PDFATTACH's insertion point has its own commit function.
   PdfAttachInsertPoint,
+  /// INSERT's on-screen insertion point, scale, or rotation pick.
+  InsertBlockPick,
 };
 
 /// \see ViewportClickRoute. Model space (and floating model space) only — pure paper space has its
@@ -109,6 +111,14 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::SurveyInverse:
   case K::Paste:
   case K::SurfaceElevGrade:
+  case K::WaterDrop:
+  case K::Catchment:
+  case K::SwapTinEdge:
+  case K::AddTinPoint:
+  case K::DelTinPoint:
+  case K::MoveTinPoint:
+  case K::DelTinLine:
+  case K::QuickProfile:
     return R::SnappedPointPick;
 
   // --- Entity-pick commands: raw cursor, hit-tested by PickClosestCadEntity. ---
@@ -163,6 +173,49 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     return R::Ignore;
   }
 
+
+  // --- UCS: most phases take a point; Object takes an entity; the rest are typed only. ---
+  //
+  // REQ-154. Without this branch every UCS phase fell to the default and its clicks were discarded,
+  // so the whole mouse half of the command was dead — origin picks, the three-point form, ZAxis and
+  // Object included — while `PICK`-driven transcripts stayed green, because PICK calls
+  // SubmitViewportPick directly and never consults this table. That is the same way RECT,
+  // FEATURELINE and REQ-103's five modify commands each shipped ignoring real clicks; the CLICK verb
+  // exists to make it fail loudly instead, and it did.
+  //
+  // SnappedPointPick rather than a raw cursor because an object snap is exactly what a UCS pick
+  // wants: putting the origin on a real endpoint, or taking a rotation angle from the two ends of a
+  // line that is already drawn, is the case the command is for.
+  case K::Ucs: {
+    using UPh = AppCommandState::UcsPhase;
+    switch (cmd.ucsPhase) {
+    case UPh::WaitOriginOrOption:
+    case UPh::WaitXAxisPoint:
+    case UPh::WaitXyPoint:
+    case UPh::WaitRotationAngleP1:
+    case UPh::WaitRotationAngleP2:
+    case UPh::WaitZAxisOrigin:
+    case UPh::WaitZAxisPoint:
+      return R::SnappedPointPick;
+    // `Object` aligns the frame to an entity, so it needs the entity under the cursor rather than a
+    // coordinate — the same shape OFFSET and DESIGNATEBREAKLINE use.
+    case UPh::WaitObjectPick:
+      return R::RawEntityPick;
+    // Typed-only prompts. The rotation angle is a number or the `2P` keyword; Named wants a name.
+    // SubmitViewportPickImpl has no branch for either, so routing anything but Ignore would be a
+    // click that goes nowhere.
+    case UPh::Idle:
+    case UPh::WaitRotationAngle:
+    case UPh::WaitNamedName:
+      return R::Ignore;
+    }
+    return R::Ignore;
+  }
+
+  // PLAN is keyword-only at every phase — an option letter, then possibly a UCS name. It moves the
+  // camera and never reads a coordinate, so a click has nothing to land on.
+  case K::Plan:
+    return R::Ignore;
   // --- DELETE / JOIN: select objects, ENTER to act on them. ---
   case K::Delete:
   case K::Join:
@@ -211,6 +264,13 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     return cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint
                ? R::PdfAttachInsertPoint
                : R::Ignore;  // dialog / async build / scale / rotation phases take no viewport click
+  case K::InsertBlock: {
+    using IPh = AppCommandState::InsertBlockPhase;
+    return (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
+            cmd.insertBlockPhase == IPh::WaitRotation)
+               ? R::InsertBlockPick
+               : R::Ignore;  // dialog / attribute prompt — clicks go to ImGui
+  }
 
   // --- Deliberately click-less in model space. ---
   case K::Pan:
@@ -291,6 +351,7 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::SnappedPointPick:
   case R::HatchPick:
   case R::PdfAttachInsertPoint:
+  case R::InsertBlockPick:
   case R::Ignore:
     return false;
   }

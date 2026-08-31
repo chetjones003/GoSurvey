@@ -77,12 +77,16 @@ unsigned int LoadIconTextureRgba(const std::filesystem::path& pngPath, int* outW
   glGenTextures(1, &tex);
   if (!tex) { stbi_image_free(rgba); return 0; }
   glBindTexture(GL_TEXTURE_2D, tex);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  // These PNGs are authored large (128-150 px) and drawn small (16-32 px in the toolspace tree,
+  // ribbon, palettes). A plain GL_LINEAR minify takes only 4 taps and drops the thin line art;
+  // a mipmap chain gives a properly box-filtered downscale so small icons stay legible.
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);  // top-down, no flip
+  glGenerateMipmap(GL_TEXTURE_2D);
   glBindTexture(GL_TEXTURE_2D, 0);
   stbi_image_free(rgba);
   if (outW) *outW = w;
@@ -152,6 +156,14 @@ bool LoadAppLogoFromPngFile(GLFWwindow* window, const std::filesystem::path& png
 
 bool LoadAppTextureFromPngFile(const std::filesystem::path& pngPath, AppLogoGpu* out, bool keyNearWhiteBackground) {
   return LoadPngToGpuTexture(pngPath, nullptr, out, keyNearWhiteBackground);
+}
+
+void DestroyIconTexture(unsigned int& tex) {
+  if (!tex)
+    return;
+  GLuint t = static_cast<GLuint>(tex);
+  glDeleteTextures(1, &t);
+  tex = 0;
 }
 
 void DestroyAppLogoGpu(AppLogoGpu* io) {

@@ -317,20 +317,20 @@ std::vector<std::string> Generate(std::uint64_t seed, const std::vector<std::str
     // transcript "fail" on a file the previous candidate left behind, which is how a minimizer
     // produces a confident lie. Two oracles in one transcript are the same hazard at a smaller
     // scale.
-    lines.push_back("SAVEAS %OUT%/ur-a.gs");
+    lines.push_back("SAVEAS %OUT%/ur-a.dwg");
     lines.push_back("UNDO");
     lines.push_back("CHECK ALL");
-    lines.push_back("SAVEAS %OUT%/ur-mid.gs");
+    lines.push_back("SAVEAS %OUT%/ur-mid.dwg");
 
     // Two-sided: prove the document MOVED before proving it came back. Without this line the whole
     // block passes on a no-op undo, which is exactly how the first version of this oracle managed
     // to be both green and meaningless.
-    lines.push_back("EXPECT DIFFERENTFILE %OUT%/ur-a.gs %OUT%/ur-mid.gs");
+    lines.push_back("EXPECT DIFFERENTFILE %OUT%/ur-a.dwg %OUT%/ur-mid.dwg");
 
     lines.push_back("REDO");
     lines.push_back("CHECK ALL");
-    lines.push_back("SAVEAS %OUT%/ur-b.gs");
-    lines.push_back("EXPECT SAMEFILE %OUT%/ur-a.gs %OUT%/ur-b.gs");
+    lines.push_back("SAVEAS %OUT%/ur-b.dwg");
+    lines.push_back("EXPECT SAMEFILE %OUT%/ur-a.dwg %OUT%/ur-b.dwg");
   }
 
   if (opt.emitRoundTrip) {
@@ -342,14 +342,14 @@ std::vector<std::string> Generate(std::uint64_t seed, const std::vector<std::str
     // nothing, so B and C must match exactly. Comparing B to C therefore still catches every defect
     // A-vs-B caught (a field written but not read, or read but not written) while no longer failing
     // on the one transformation the format is entitled to perform. Issue #61.
-    lines.push_back("SAVEAS %OUT%/rt-a.gs");
-    lines.push_back("OPEN %OUT%/rt-a.gs");
+    lines.push_back("SAVEAS %OUT%/rt-a.dwg");
+    lines.push_back("OPEN %OUT%/rt-a.dwg");
     lines.push_back("CHECK ALL");
-    lines.push_back("SAVEAS %OUT%/rt-b.gs");
-    lines.push_back("OPEN %OUT%/rt-b.gs");
+    lines.push_back("SAVEAS %OUT%/rt-b.dwg");
+    lines.push_back("OPEN %OUT%/rt-b.dwg");
     lines.push_back("CHECK ALL");
-    lines.push_back("SAVEAS %OUT%/rt-c.gs");
-    lines.push_back("EXPECT SAMEFILE %OUT%/rt-b.gs %OUT%/rt-c.gs");
+    lines.push_back("SAVEAS %OUT%/rt-c.dwg");
+    lines.push_back("EXPECT SAMEFILE %OUT%/rt-b.dwg %OUT%/rt-c.dwg");
   }
 
   return lines;

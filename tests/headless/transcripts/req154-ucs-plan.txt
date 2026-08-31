@@ -1,0 +1,479 @@
+# REQ-154 (GitHub #126) - UCS and PLAN.
+#
+# What this transcript is FOR: proving that a UCS changes how input is READ without changing the
+# drawing. Counting entities cannot show that, and the command log only echoes what was typed, so
+# almost every assertion here is `EXPECT LINEXYZ` - the world coordinates geometry actually landed
+# at. A UCS bug that misplaces geometry passes every other kind of check in this suite.
+
+NEW
+
+# --- The default is the WCS -----------------------------------------------------------------------
+CMD ID
+PICK 5 7
+EXPECT LOG "UCS (World)"
+
+# --- Origin-only UCS: orientation is preserved, coordinates are offset ------------------------------
+# UCS, one point, then Enter twice to accept "origin only".
+CMD UCS
+EXPECT LOG "Specify origin of UCS"
+CMD 100,200
+EXPECT LOG "Specify point on positive portion of X axis"
+CMD
+EXPECT LOG "UCS = origin (100.0000, 200.0000, 0.0000)"
+
+# 0,0 in this UCS is world (100,200). 10,0 is world (110,200) - the axes did not turn.
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+EXPECT LINES 1
+EXPECT LINEXYZ 0 100 200 0 110 200 0
+
+# The readout follows the frame: the same world point now reads as UCS coordinates.
+CMD ID
+PICK 100 200
+EXPECT LOG "UCS (current)"
+
+# --- UCS Previous walks back ------------------------------------------------------------------------
+CMD UCS
+CMD P
+EXPECT LOG "UCS = World"
+
+# ...and the line did NOT move when the frame did. This is the whole rule: a UCS never touches
+# geometry. If any UCS change ever rewrote stored coordinates, this is the assertion that catches it.
+EXPECT LINEXYZ 0 100 200 0 110 200 0
+
+# --- Rotation about Z: the survey case (a frame squared to a bearing) --------------------------------
+CMD UCS
+CMD Z
+EXPECT LOG "Specify rotation angle about Z axis"
+CMD 90
+EXPECT LOG "Coordinate entry is now in this frame"
+
+# The UCS X axis now points along world +Y, so UCS 10,0 is world (0,10).
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+EXPECT LINES 2
+EXPECT LINEXYZ 1 0 0 0 0 10 0
+
+# A relative point is relative along the UCS axes too, not the world's: @0,5 from world (0,10)
+# steps along the UCS +Y, which is world -X.
+CMD LINE
+CMD 0,0
+CMD @0,5
+ESC
+EXPECT LINEXYZ 2 0 0 0 -5 0 0
+
+CMD UCS
+CMD W
+EXPECT LOG "UCS = World"
+
+# --- Three collinear points define no plane and are refused ------------------------------------------
+CMD UCS
+CMD 0,0
+CMD 1,0
+CMD 2,0
+EXPECT LOG "collinear"
+ESC
+
+# --- Three-point UCS on a VERTICAL plane -------------------------------------------------------------
+# Origin at world (0,0,0), +X east, and a third point straight up (typed as X,Y,Z): the UCS XY plane
+# IS the world XZ plane. Drawing at UCS (5,3) must land 5 east and 3 UP.
+#
+# This is the case a constant work-plane elevation gets wrong. The committed Z is no longer a
+# property of the plane - it varies with the second coordinate - so it has to come from the resolved
+# point itself. Before that channel existed, both endpoints below would have committed at Z = 0.
+CMD UCS
+CMD 0,0,0
+CMD 1,0,0
+CMD 0,0,1
+EXPECT LOG "Coordinate entry is now in this frame"
+
+CMD LINE
+CMD 5,3
+CMD 5,8
+ESC
+EXPECT LINES 4
+EXPECT LINEXYZ 3 5 0 3 5 0 8
+
+# Back to the world frame for the rest of the transcript.
+CMD UCS
+CMD W
+CMD ELEV 0
+
+# --- Named UCS: N goes straight to the name, and saves ------------------------------------------------
+# There is no Save/Restore/Delete question in front of it any more: Named's only job on the command
+# line is to keep the frame you just built. Restore and delete are the View Manager's.
+CMD UCS
+CMD Z
+CMD 45
+CMD UCS
+CMD N
+EXPECT LOG "Enter name to save current UCS as:"
+CMD Diagonal
+EXPECT LOG "UCS saved as Diagonal."
+
+CMD UCS
+CMD W
+EXPECT LOG "UCS = World"
+
+CMD UCS
+CMD ?
+EXPECT LOG "Diagonal"
+
+# `?` still lists from inside the name prompt, so the one shortcut for "what is saved?" works there.
+CMD UCS
+CMD N
+CMD ?
+EXPECT LOG "Diagonal"
+
+# "World" is reserved and cannot be saved over.
+CMD UCS
+CMD N
+CMD World
+EXPECT LOG "reserved"
+
+# Saving over an existing name redefines it rather than adding a second row.
+CMD UCS
+CMD Z
+CMD 30
+CMD UCS
+CMD N
+CMD Diagonal
+EXPECT LOG "UCS Diagonal redefined."
+
+# A blank name is refused rather than silently saving nothing.
+CMD UCS
+CMD N
+CMD
+EXPECT LOG "UCS Named - enter a name."
+
+# --- Named UCS definitions survive a save/reload ------------------------------------------------------
+SAVEAS %OUT%/ucs-a.gs
+OPEN %OUT%/ucs-a.gs
+CMD UCS
+CMD ?
+EXPECT LOG "Diagonal"
+SAVEAS %OUT%/ucs-b.gs
+EXPECT SAMEFILE %OUT%/ucs-a.gs %OUT%/ucs-b.gs
+
+# --- Restore and delete: the View Manager's, not the command's ----------------------------------------
+# UCSNAMED is the driver's stand-in for the dialog's two buttons; it calls the same functions they do.
+CMD UCS
+CMD W
+EXPECT LOG "UCS = World"
+UCSNAMED RESTORE Diagonal
+EXPECT LOG "Coordinate entry is now in this frame"
+
+# Restoring a name that does not exist is refused, not silently ignored.
+UCSNAMED RESTORE Nonexistent
+EXPECT LOG "there is no saved UCS named Nonexistent"
+
+UCSNAMED DELETE Diagonal
+EXPECT LOG "UCS Diagonal deleted."
+CMD UCS
+CMD ?
+EXPECT LOG "no saved UCS definitions"
+
+# `UCS N` never reaches them: Restore and Delete are just names now, and get saved as such.
+CMD UCS
+CMD N
+CMD Restore
+EXPECT LOG "UCS saved as Restore."
+UCSNAMED DELETE Restore
+EXPECT LOG "UCS Restore deleted."
+
+CMD UCS
+CMD W
+
+# --- PLAN changes the VIEW and never the UCS ----------------------------------------------------------
+# Autodesk documents that distinction explicitly, and it is the entire reason PLAN is its own command.
+CMD UCS
+CMD Z
+CMD 30
+CMD PLAN
+CMD W
+EXPECT LOG "The current UCS is unchanged"
+
+# The UCS is still the rotated one, so entry is still in it: UCS 10,0 lands off the world X axis.
+CMD ID
+PICK 0 0
+EXPECT LOG "UCS (current)"
+
+CMD PLAN
+CMD C
+EXPECT LOG "the current UCS's XY plane"
+
+CMD UCS
+CMD W
+
+# --- PLAN of a named UCS ------------------------------------------------------------------------------
+CMD UCS
+CMD Z
+CMD 15
+CMD UCS
+CMD N
+CMD Road
+CMD UCS
+CMD W
+CMD PLAN
+CMD U
+EXPECT LOG "Enter name of UCS:"
+CMD Road
+EXPECT LOG "view set to the XY plane of UCS Road"
+EXPECT LOG "The current UCS is unchanged."
+
+# --- ZAxis ---------------------------------------------------------------------------------------------
+CMD UCS
+CMD ZA
+EXPECT LOG "Specify new origin point"
+CMD 0,0
+EXPECT LOG "Specify point on positive portion of Z axis"
+CMD 0,0
+EXPECT LOG "coincides with the origin"
+ESC
+
+# --- Refusals are refusals, not silent guesses ----------------------------------------------------------
+CMD UCS
+CMD Sideways
+EXPECT LOG "unrecognised option"
+ESC
+EXPECT LOG "UCS canceled"
+
+# --- The drawing is exactly what it was. Four lines, at the world coordinates they were drawn at,
+#     after every frame change above. -------------------------------------------------------------------
+EXPECT LINES 4
+EXPECT LINEXYZ 0 100 200 0 110 200 0
+EXPECT LINEXYZ 1 0 0 0 0 10 0
+EXPECT LINEXYZ 2 0 0 0 -5 0 0
+EXPECT LINEXYZ 3 5 0 3 5 0 8
+
+CHECK ALL
+
+# --- UCS <axis> 2P: the angle taken from two picked points ------------------------------------
+# A surveyor working to a lot line knows the LINE, not its bearing. Picking two points along it and
+# letting the app do the trigonometry is exact; reading a bearing off the drawing and typing it back
+# is not.
+CMD UCS
+CMD W
+
+# Two points running due north-east: 45 degrees about Z.
+CMD UCS
+CMD Z
+EXPECT LOG "2P"
+CMD 2P
+EXPECT LOG "Specify first point of the angle"
+CMD 0,0
+EXPECT LOG "Specify second point of the angle"
+CMD 10,10
+EXPECT LOG "angle from the two points: 45.0000 degrees"
+EXPECT LOG "Coordinate entry is now in this frame"
+
+# The frame really did turn 45: UCS 10,0 now lands on the world diagonal.
+CMD LINE
+CMD 0,0
+CMD 14.142136,0
+ESC
+EXPECT LINEXYZ 4 0 0 0 10 10 0
+
+CMD UCS
+CMD W
+
+# The picks do not have to start at the origin - it is the DIRECTION between them that matters.
+CMD UCS
+CMD Z
+CMD 2P
+CMD 500,500
+CMD 500,600
+EXPECT LOG "angle from the two points: 90.0000 degrees"
+
+CMD UCS
+CMD W
+
+# Two points that define no angle in the rotation plane are refused, and the prompt stays put so
+# the second pick can be retaken rather than losing the command (REQ-201).
+CMD UCS
+CMD Z
+CMD 2P
+CMD 0,0
+CMD 0,0
+EXPECT LOG "define no angle"
+ESC
+EXPECT LOG "UCS canceled"
+
+# And the typed form still works exactly as before.
+CMD UCS
+CMD Z
+CMD 30
+EXPECT LOG "Coordinate entry is now in this frame"
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- Real viewport clicks, not PICK ------------------------------------------------------------
+# PICK calls SubmitViewportPick directly and never consults ViewportClickRouteFor, so a transcript
+# built only from PICK proves nothing about whether the mouse works. CLICK goes through the routing
+# layer the GUI uses. Until K::Ucs was added to that table every UCS click was discarded while these
+# same steps passed under PICK — the exact way RECT, FEATURELINE and REQ-103's five modify commands
+# each shipped mouse-dead. Every phase that accepts a point is clicked here at least once.
+
+NEW
+CMD UCS
+CMD W
+
+# Origin by click, then the X-axis and XY points by click: the three-point form, mouse only.
+CMD UCS
+CLICK 100 100
+EXPECT LOG "Specify point on positive portion of X axis"
+CLICK 200 100
+EXPECT LOG "Specify point on positive-Y portion"
+CLICK 200 200
+EXPECT LOG "Coordinate entry is now in this frame"
+
+CMD UCS
+CMD W
+
+# The rotation angle from two CLICKED points.
+CMD UCS
+CMD Z
+CMD 2P
+CLICK 0 0
+EXPECT LOG "Specify second point of the angle"
+CLICK 10 10
+EXPECT LOG "angle from the two points: 45.0000 degrees"
+
+CMD UCS
+CMD W
+
+# ZAxis, both points clicked.
+CMD UCS
+CMD ZA
+CLICK 0 0
+EXPECT LOG "Specify point on positive portion of Z axis"
+CLICK 50 0
+EXPECT LOG "Coordinate entry is now in this frame"
+
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- The polar form: @distance<angle -----------------------------------------------------------
+# What the cursor's distance/angle boxes assemble and submit, so the mouse and the keyboard produce
+# identical input rather than two parallel paths. This is also the string AutoCAD echoes on its own
+# command line, which is where the syntax comes from.
+
+NEW
+CMD UCS
+CMD 0,0
+CMD @33.2311<17
+EXPECT LOG "Specify point on positive-Y portion"
+CMD
+EXPECT LOG "Coordinate entry is now in this frame"
+
+# 17 degrees: cos = 0.95630, sin = 0.29237. A line typed as UCS 100,0 lands there in world.
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+EXPECT LINEXYZ 0 0 0 0 95.6305 29.2372 0
+
+CMD UCS
+CMD W
+
+# Measured from the ORIGIN, not from the previous pick, and accepted at the XY prompt too.
+CMD UCS
+CMD 0,0
+CMD @10<0
+CMD @10<90
+EXPECT LOG "Coordinate entry is now in this frame"
+CMD UCS
+CMD W
+
+# A malformed polar form is refused rather than half-read: no angle, no distance, or junk.
+CMD UCS
+CMD 0,0
+CMD @33<
+EXPECT LOG "enter a point or @distance<angle"
+CMD @<17
+EXPECT LOG "enter a point or @distance<angle"
+CMD @abc<def
+EXPECT LOG "enter a point or @distance<angle"
+ESC
+
+CHECK ALL
+
+# --- Only the ANGLE decides the frame; the distance is along for the ride ----------------------
+# This is why the cursor's angle box alone is a complete answer: the X-axis pick defines a
+# DIRECTION, so two polar points at the same angle and wildly different distances must produce the
+# same UCS. The UI leans on this when the user tabs past the distance and types only an angle.
+NEW
+CMD UCS
+CMD 0,0
+CMD @1<27
+CMD
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+EXPECT LINEXYZ 0 0 0 0 89.1007 45.3990 0
+
+NEW
+CMD UCS
+CMD 0,0
+CMD @5280<27
+CMD
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+EXPECT LINEXYZ 0 0 0 0 89.1007 45.3990 0
+
+CHECK ALL
+
+# --- UCS Object: aligning the frame to an entity the user clicks --------------------------------
+# This option had NO transcript when it shipped, and it could not succeed: the pick was handed a
+# null out-distance pointer, which PickClosestCadEntity rejected before it looked at a single
+# entity. Every click, at every zoom, on every drawing, answered "no object found at that point".
+# The assertions below are on the resulting GEOMETRY rather than on the log, because a log line
+# only proves the message changed - it does not prove the frame is the one the line describes.
+NEW
+CMD LINE
+CMD 0,0
+CMD 100,50
+ESC
+EXPECT LINES 1
+
+# Click the midpoint. The nearer endpoint becomes the origin - equidistant resolves to the first,
+# so the frame is origin (0,0) with +X running toward (100,50): a unit X of (0.8944, 0.4472).
+CMD UCS
+EXPECT LOG "Specify origin of UCS"
+CMD OB
+EXPECT LOG "Select object to align UCS with"
+CLICK 50 25
+EXPECT LOG "UCS = origin (0.0000, 0.0000, 0.0000), X axis (0.8944, 0.4472, 0.0000)"
+
+# 10 units along the frame's own X is 10 units along the line it was aligned to.
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+EXPECT LINES 2
+EXPECT LINEXYZ 1 0 0 0 8.9443 4.4721 0
+
+# Clicking the OTHER end reverses the frame: origin at (100,50), +X back toward (0,0).
+CMD UCS
+CMD OB
+CLICK 95 47.5
+EXPECT LOG "UCS = origin (100.0000, 50.0000, 0.0000), X axis (-0.8944, -0.4472, 0.0000)"
+
+# A miss still reports honestly and leaves the command in its pick phase, so the next click works.
+CMD UCS
+CMD OB
+CLICK 900 900
+EXPECT LOG "UCS Object - no object found at that point"
+CLICK 50 25
+EXPECT LOG "UCS = origin (0.0000, 0.0000, 0.0000), X axis (0.8944, 0.4472, 0.0000)"
+
+CHECK ALL

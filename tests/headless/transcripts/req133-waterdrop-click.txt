@@ -1,0 +1,16 @@
+# REQ-133 — WATERDROP viewport click must be routed (TASK-128).
+#
+# PICK calls SubmitViewportPick directly and would pass even if ViewportClickRouteFor returned
+# Ignore — the TASK-099 failure mode. CLICK asks the same question the GUI asks.
+
+NEW
+
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE EG, Existing Ground
+CMD WATERDROP EG
+CLICK -1e9 -1e9
+EXPECT LOG "outside surface"
+CMD CATCHMENT EG
+CLICK -1e9 -1e9
+EXPECT LOG "outside surface"
+CHECK ALL

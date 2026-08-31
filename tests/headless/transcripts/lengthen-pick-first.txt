@@ -40,7 +40,7 @@ CMD 100
 EXPECT LOG "LENGTHEN — length 50.000000 -> 100.000000."
 CHECK ALL
 EXPECT LINES 1
-SAVEAS %OUT%/lengthen-pick-first-a.gs
+SAVEAS %OUT%/lengthen-pick-first-a.dwg
 
 # The mode now carries a value, and it persists across invocations — so a later pick applies it
 # straight away instead of re-prompting, which is the looping behaviour REQ-103 requires ("the
@@ -61,8 +61,8 @@ CMD LENGTHEN
 CLICK 49 100
 EXPECT LOG "LENGTHEN — length 50.000000 -> 100.000000."
 CHECK ALL
-SAVEAS %OUT%/lengthen-pick-first-b.gs
-EXPECT DIFFERENTFILE %OUT%/lengthen-pick-first-a.gs %OUT%/lengthen-pick-first-b.gs
+SAVEAS %OUT%/lengthen-pick-first-b.dwg
+EXPECT DIFFERENTFILE %OUT%/lengthen-pick-first-a.dwg %OUT%/lengthen-pick-first-b.dwg
 
 UNDO
 CHECK ALL

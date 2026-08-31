@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <cstring>
@@ -512,9 +513,10 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     AppendSnapDiagonalCross(out, f, mh);
     break;
   case CadSnap::Kind::ApparentIntersection:
-    // The same X inside a diamond: it reads as "an intersection, qualified" — the objects line up
-    // in this view but need not touch, so the marker should not be mistaken for a real one.
     AppendSnapDiagonalCross(out, f, mh * 0.62f);
+    AppendSnapDiamondOutline(out, f, mh);
+    break;
+  case CadSnap::Kind::Surface:
     AppendSnapDiamondOutline(out, f, mh);
     break;
   case CadSnap::Kind::Grip:
@@ -848,7 +850,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const CadSurfaceDisplayGeometry* surfaceGeometry,
                                    const VolumeMapDisplayGeometry* volumeMap,
                                    const std::vector<float>* removalLines,
-                                   const std::vector<float>* removalMarkers) {
+                                   const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -1079,13 +1081,50 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       gridVerts.push_back(ry1);
       gridVerts.push_back(gz);
     };
-    for (int i = -ni; i <= ni; ++i) {
-      const double x = originX + static_cast<double>(i) * stepD;
-      pushGridSeg(x, viewAnchorY - static_cast<double>(spanH), x, viewAnchorY + static_cast<double>(spanH));
-    }
-    for (int i = -ni; i <= ni; ++i) {
-      const double y = originY + static_cast<double>(i) * stepD;
-      pushGridSeg(viewAnchorX - static_cast<double>(spanW), y, viewAnchorX + static_cast<double>(spanW), y);
+    // A UCS grid is generated in the frame's OWN XY and mapped out to world, so its lines run along
+    // the UCS axes and lie in the UCS plane rather than being a world-XY grid seen from an angle
+    // (REQ-154). Each vertex carries its real Z, which a tilted plane needs and the flat path does
+    // not — hence the separate push rather than a shared one with a constant Z.
+    auto pushUcsGridSeg = [&](const ucs::Ucs& f, double u0, double v0, double u1, double v1) {
+      const ray3d::Vec3 a = ucs::UcsToWorld(f, {u0, v0, 0.0});
+      const ray3d::Vec3 b = ucs::UcsToWorld(f, {u1, v1, 0.0});
+      float rx0 = 0.f;
+      float ry0 = 0.f;
+      float rx1 = 0.f;
+      float ry1 = 0.f;
+      WorldToViewRelativeFloat(a.x, a.y, viewAnchorX, viewAnchorY, &rx0, &ry0);
+      WorldToViewRelativeFloat(b.x, b.y, viewAnchorX, viewAnchorY, &rx1, &ry1);
+      gridVerts.push_back(rx0);
+      gridVerts.push_back(ry0);
+      gridVerts.push_back(static_cast<float>(a.z) + gz);
+      gridVerts.push_back(rx1);
+      gridVerts.push_back(ry1);
+      gridVerts.push_back(static_cast<float>(b.z) + gz);
+    };
+
+    if (gridFrame && !ucs::IsWorld(*gridFrame)) {
+      // Anchor the grid to the view centre projected INTO the frame, so panning still slides the
+      // grid with the drawing instead of leaving it stranded around the UCS origin.
+      const ray3d::Vec3 anchorUcs = ucs::WorldToUcs(*gridFrame, {viewAnchorX, viewAnchorY, gridFrame->origin.z});
+      const double ou = std::floor(anchorUcs.x / stepD) * stepD;
+      const double ov = std::floor(anchorUcs.y / stepD) * stepD;
+      for (int i = -ni; i <= ni; ++i) {
+        const double u = ou + static_cast<double>(i) * stepD;
+        pushUcsGridSeg(*gridFrame, u, ov - static_cast<double>(spanH), u, ov + static_cast<double>(spanH));
+      }
+      for (int i = -ni; i <= ni; ++i) {
+        const double v = ov + static_cast<double>(i) * stepD;
+        pushUcsGridSeg(*gridFrame, ou - static_cast<double>(spanW), v, ou + static_cast<double>(spanW), v);
+      }
+    } else {
+      for (int i = -ni; i <= ni; ++i) {
+        const double x = originX + static_cast<double>(i) * stepD;
+        pushGridSeg(x, viewAnchorY - static_cast<double>(spanH), x, viewAnchorY + static_cast<double>(spanH));
+      }
+      for (int i = -ni; i <= ni; ++i) {
+        const double y = originY + static_cast<double>(i) * stepD;
+        pushGridSeg(viewAnchorX - static_cast<double>(spanW), y, viewAnchorX + static_cast<double>(spanW), y);
+      }
     }
     gridVertexCount_ = static_cast<int>(gridVerts.size() / 3);
 
@@ -1555,6 +1594,20 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                          extended->polylineAttrs);
         appendChainStore(extended->featureLineVerts, extended->featureLineOffsets,
                          extended->featureLineClosed, extended->featureLineAttrs);
+        if (extended->blockRefs && extended->blockDefs) {
+          for (size_t bi = 0; bi < extended->blockRefs->size(); ++bi) {
+            EntityAttributes ia{};
+            if (extended->blockRefAttrs && bi < extended->blockRefAttrs->size())
+              ia = (*extended->blockRefAttrs)[bi];
+            if (CadEntityIdHidden(hiddenIds, ia.id))
+              continue;
+            std::vector<CadBlockWorldSeg> segs;
+            CadBlockCollectWorldLines(*extended->blockDefs, (*extended->blockRefs)[bi], ia, &segs);
+            for (const CadBlockWorldSeg& s : segs)
+              appendUserLineSeg(s.attr, s.x0, s.y0, s.z0, s.x1, s.y1, s.z1, kLineDefaultR, kLineDefaultG,
+                                kLineDefaultB);
+          }
+        }
         if (lineVertTotal > lineBatchStart && lineBatchPx >= 0.f)
           vcLineBatches_.push_back(VcLineBatch{lineBatchStart, lineVertTotal - lineBatchStart, lineBatchPx});
       }
@@ -1961,4 +2014,75 @@ finish_render:
   }
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// REQ-308 / D-2026-08-30-c — write the current resolved viewport image as a 24-bit BMP thumbnail,
+// downscaled so the longer side is at most \p maxDim. Reads from fbo_ (colorTex_ is its colour
+// attachment), which holds the last RenderScene output — so the caller invokes this right after
+// RenderScene for the drawing it wants pictured. Best-effort: returns false on any failure and
+// writes nothing. This is the only gl* path for the feature; keeping it here holds invariant §11.6.
+bool ViewportRenderer::CaptureThumbnailBmp(const char* pathUtf8, int maxDim) const {
+  if (!pathUtf8 || !pathUtf8[0] || fbo_ == 0 || fbW_ < 4 || fbH_ < 4 || maxDim < 8)
+    return false;
+
+  const int srcW = fbW_;
+  const int srcH = fbH_;
+  std::vector<unsigned char> src(static_cast<size_t>(srcW) * static_cast<size_t>(srcH) * 4u);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
+  glReadBuffer(GL_COLOR_ATTACHMENT0);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glReadPixels(0, 0, srcW, srcH, GL_RGBA, GL_UNSIGNED_BYTE, src.data());
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+
+  // Target size: preserve aspect, longer side == maxDim (never upscale).
+  double scale = static_cast<double>(maxDim) / std::max(srcW, srcH);
+  if (scale > 1.0)
+    scale = 1.0;
+  const int dstW = std::max(1, static_cast<int>(srcW * scale));
+  const int dstH = std::max(1, static_cast<int>(srcH * scale));
+
+  // Bottom-up 24-bit BGR rows, DWORD-aligned — the exact layout a Windows BMP stores, and the same
+  // bottom-up order glReadPixels already returns, so no vertical flip is needed.
+  const int rowB = (dstW * 3 + 3) & ~3;
+  std::vector<unsigned char> bmp(static_cast<size_t>(rowB) * static_cast<size_t>(dstH), 0);
+  for (int dy = 0; dy < dstH; ++dy) {
+    const int sy = std::min(srcH - 1, static_cast<int>(dy / scale));
+    unsigned char* dstRow = bmp.data() + static_cast<size_t>(dy) * rowB;
+    for (int dx = 0; dx < dstW; ++dx) {
+      const int sx = std::min(srcW - 1, static_cast<int>(dx / scale));
+      const unsigned char* s = src.data() + (static_cast<size_t>(sy) * srcW + sx) * 4u;
+      dstRow[dx * 3 + 0] = s[2];  // B
+      dstRow[dx * 3 + 1] = s[1];  // G
+      dstRow[dx * 3 + 2] = s[0];  // R
+    }
+  }
+
+  std::FILE* f = nullptr;
+#if defined(_WIN32)
+  if (fopen_s(&f, pathUtf8, "wb") != 0)
+    f = nullptr;
+#else
+  f = std::fopen(pathUtf8, "wb");
+#endif
+  if (!f)
+    return false;
+
+  const unsigned int dataSz = static_cast<unsigned int>(bmp.size());
+  const unsigned int fileSz = 54u + dataSz;
+  unsigned char hdr[54] = {};
+  hdr[0] = 'B';
+  hdr[1] = 'M';
+  std::memcpy(&hdr[2], &fileSz, 4);
+  hdr[10] = 54;
+  hdr[14] = 40;
+  const int w = dstW, h = dstH;
+  std::memcpy(&hdr[18], &w, 4);
+  std::memcpy(&hdr[22], &h, 4);
+  hdr[26] = 1;
+  hdr[28] = 24;
+  std::memcpy(&hdr[34], &dataSz, 4);
+  const bool ok = std::fwrite(hdr, 1, 54, f) == 54 &&
+                  std::fwrite(bmp.data(), 1, bmp.size(), f) == bmp.size();
+  std::fclose(f);
+  return ok;
 }

@@ -1,3 +1,17 @@
+The GoSurvey application, when linked with GNU LibreDWG (REQ-170 / ADR-041),
+is licensed under the GNU General Public License v3.0 or later. Source for
+LibreDWG is at https://github.com/LibreDWG/libredwg ; the GPL text is at
+https://www.gnu.org/licenses/gpl-3.0.html
+
+-------------------------------------------------------------------------------
+THIRD-PARTY — GNU LibreDWG
+-------------------------------------------------------------------------------
+LibreDWG is Copyright (C) Free Software Foundation, Inc. and contributors.
+License: GPL-3.0-or-later.
+
+The remainder of this file records other third-party components and the
+historical MIT grant for GoSurvey sources that do not include LibreDWG.
+
 MIT License
 
 Copyright (c) 2026 Chet Jones
@@ -27,6 +41,12 @@ THIRD-PARTY COMPONENTS
 GoSurvey incorporates the following open-source libraries.  Their licenses are
 reproduced below or can be found in the "licenses" folder of the installation
 directory.
+
+GNU LibreDWG
+  Copyright (C) Free Software Foundation, Inc. and contributors.
+  GPL-3.0-or-later.
+  Source: https://github.com/LibreDWG/libredwg
+  Pin: 0.13.3 (REQ-170). Linking this library makes the GoSurvey binary GPL-3.0-or-later.
 
 PDFium
   Copyright 2014 The PDFium Authors.

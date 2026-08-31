@@ -10,6 +10,7 @@
 namespace {
 
 ImFont* g_default = nullptr;
+ImFont* g_toolspace = nullptr;
 // Cache key "family|b|i" → resolved font + which styles it actually carries (so callers can apply faux
 // bold/italic). A null font means "tried, unavailable" → use default. Cached to avoid per-frame disk I/O.
 struct CachedFont {
@@ -195,6 +196,14 @@ ImFont* Resolve(const std::string& fontNameOrShx, bool bold, bool italic, bool* 
   if (outRealBold) *outRealBold = cf.realBold;
   if (outRealItalic) *outRealItalic = cf.realItalic;
   return font ? font : g_default;
+}
+
+void SetToolspace(ImFont* f) {
+  g_toolspace = f;
+}
+
+ImFont* Toolspace() {
+  return g_toolspace ? g_toolspace : g_default;
 }
 
 }  // namespace FontReg

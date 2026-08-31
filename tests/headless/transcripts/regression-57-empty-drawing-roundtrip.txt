@@ -15,7 +15,7 @@
 # first did not.
 
 NEW
-SAVEAS %OUT%/rt-a.gs
-OPEN %OUT%/rt-a.gs
-SAVEAS %OUT%/rt-b.gs
-EXPECT SAMEFILE %OUT%/rt-a.gs %OUT%/rt-b.gs
+SAVEAS %OUT%/rt-a.dwg
+OPEN %OUT%/rt-a.dwg
+SAVEAS %OUT%/rt-b.dwg
+EXPECT SAMEFILE %OUT%/rt-a.dwg %OUT%/rt-b.dwg

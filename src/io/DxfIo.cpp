@@ -7,6 +7,7 @@
 #include "DxfEntityEmit.hpp"
 #include "MtextRichFormat.hpp"
 #include "TextStyle.hpp"
+#include "util/cadtable.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1103,15 +1104,17 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
   };
 
-  // Common entity base fields — layer, ACI color index, and true-color override.
-  // parse() handles group codes 8/62/420; makeAttr() builds EntityAttributes.
+  // Common entity base fields — layer, linetype, ACI color index, and true-color override.
+  // parse() handles group codes 8/6/62/420; makeAttr() builds EntityAttributes.
   struct EntityBase {
     std::string layer{"0"};
+    std::string ltype;  // DXF group 6; empty → EntityAttributes default ByLayer
     int c62{256};
     bool has420{false};
     int rgb420{0};
     void parse(int code, const std::string& v) {
       if      (code ==   8) layer = v;
+      else if (code ==   6) ltype = Trim(v);
       else if (code ==  62) ParseIntFlexible(v, &c62);
       else if (code == 420) has420 = ParseIntFlexible(v, &rgb420);
     }
@@ -1119,12 +1122,15 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       EntityAttributes at{};
       at.layer = layer;
       at.color = EntityColorStorage(c62, has420, rgb420, layer, lrgb);
+      if (!ltype.empty())
+        at.linetype = CadCanonicalLinetypeNameForDxf(ltype);
       return at;
     }
   };
 
   struct PendingLw {
     std::string layer = "0";
+    std::string ltype;
     int c62 = 256;
     bool has420 = false;
     int rgb420 = 0;
@@ -1259,6 +1265,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         const std::string& v = t[k].value;
         if (c == 8)
           lw.layer = v;
+        else if (c == 6)
+          lw.ltype = Trim(v);
         else if (c == 62)
           ParseIntFlexible(v, &lw.c62);
         else if (c == 420)
@@ -1284,6 +1292,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       EntityAttributes at{};
       at.layer = lw.layer;
       at.color = EntityColorStorage(lw.c62, lw.has420, lw.rgb420, lw.layer, layerRgb);
+      if (!lw.ltype.empty())
+        at.linetype = CadCanonicalLinetypeNameForDxf(lw.ltype);
       const int nv = static_cast<int>(lw.vx.size());
       bool anyBulge = false;
       for (double b : lw.vb)
@@ -1434,12 +1444,12 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       continue;
     }
 
-    if (typ == "TEXT") {
+    if (typ == "TEXT" || typ == "ATTDEF") {
       EntityBase base;
       double x = 0, y = 0, ax = 0, ay = 0, h = 2.5, rot = 0;
       int halign = 0, valign = 0;
       bool haveAlign = false;
-      std::string txt, styleName;
+      std::string txt, styleName, attrTag, attrPrompt;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
@@ -1453,7 +1463,27 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c ==  7) styleName = Trim(v);
         else if (c == 72) ParseIntFlexible(v, &halign);
         else if (c == 73) ParseIntFlexible(v, &valign);
+        else if (c == 74) ParseIntFlexible(v, &valign);  // ATTDEF vertical alignment
         else if (c ==  1) txt = v;
+        else if (c ==  2 && typ == "ATTDEF") attrTag = Trim(v);
+        else if (c ==  3) attrPrompt = v;
+      }
+      if (typ == "ATTDEF") {
+        const bool useAlignPt = haveAlign && (halign != 0 || valign != 0);
+        const double px = useAlignPt ? ax : x;
+        const double py = useAlignPt ? ay : y;
+        const AnnXf a = xfAnnotation(px, py, h, rot * kDegToRad);
+        CadBlockAttrDef ad;
+        ad.tag = attrTag.empty() ? std::string("TAG") : attrTag;
+        ad.prompt = attrPrompt;
+        ad.defaultValue = txt;
+        ad.localX = static_cast<float>(a.insX);
+        ad.localY = static_cast<float>(a.insY);
+        ad.height = (a.plottedH > 1.e-6f) ? a.plottedH : 0.125f;
+        ad.rotationRad = a.rotWorld;
+        st.importedDxfAttrDefs.push_back(std::move(ad));
+        i = j;
+        continue;
       }
       // %%u toggles underline; the title-block convention is a leading %%u (underline the whole string).
       auto hasUnderlineCode = [](const std::string& s) {
@@ -2288,6 +2318,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     addLayerName(st.userCircleAttrs[i].layer);
   for (size_t i = 0; i < st.cadAnnotationAttrs.size(); ++i)
     addLayerName(st.cadAnnotationAttrs[i].layer.empty() ? std::string("0") : st.cadAnnotationAttrs[i].layer);
+  for (size_t i = 0; i < st.cadTableAttrs.size(); ++i)
+    addLayerName(st.cadTableAttrs[i].layer);
   // Polylines (#72) and filled regions (the same omission, unreported) — the two entity branches
   // added to the writer without being added here. Every layer this sweep misses is a layer some
   // entity's group 8 can name with no LAYER table row behind it: an invalid file, written silently.
@@ -2447,6 +2479,13 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     CadAnnotationRoughBounds(an, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
     accExt(static_cast<double>(amnX), static_cast<double>(amnY));
     accExt(static_cast<double>(amxX), static_cast<double>(amxY));
+  }
+  for (const CadTable& t : st.cadTables) {
+    float tmnX = 0.f, tmnY = 0.f, tmxX = 0.f, tmxY = 0.f;
+    CadTableWorldAabb(t, &tmnX, &tmnY, &tmxX, &tmxY);
+    accExt(static_cast<double>(tmnX), static_cast<double>(tmnY));
+    accExt(static_cast<double>(tmxX), static_cast<double>(tmxY));
+    accExtZ(static_cast<double>(t.insZ));
   }
   for (const SurveyPoint& p : st.surveyPoints) {
     accExt(static_cast<double>(p.easting), static_cast<double>(p.northing));
@@ -3534,6 +3573,31 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       rec.rotationDeg = std::to_string(rotRad * (180.0 / kPi)); // DXF group 50 is DEGREES
       emitTextRecord(rec);
       ++nTextOut;
+    } else if (an.kind == CadAnnotation::Kind::Table && an.tableCols > 0) {
+      std::vector<CadTableCellRect> cells;
+      CadTableLayoutCells(an.boxMinX, an.boxMinY, an.boxMaxX, an.boxMaxY, an.tableCols, an.tableCells, &cells);
+      const double hWorld = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
+      for (size_t ci = 0; ci < cells.size() && ci < an.tableCells.size(); ++ci) {
+        char hb[24];
+        std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+        DxfTextRecord rec;
+        rec.handleHex = hb;
+        rec.ownerHandleHex = hBrModel;
+        rec.layer = layer;
+        rec.linetype = DxfExportEntityLtype6(at);
+        rec.colorAci = std::to_string(entAci);
+        rec.lineweight370 = dxfEntityLineweight370Str(at);
+        rec.hasTransparency = dxfTransparency440Str(EffectiveEntityTransparency01(at, annLyr),
+                                                    &rec.transparency440);
+        rec.x = std::to_string(worldX(cells[ci].x0));
+        rec.y = std::to_string(worldY(static_cast<float>(static_cast<double>(cells[ci].y1) - hWorld)));
+        rec.z = std::to_string(static_cast<double>(an.insZ));
+        rec.height = std::to_string(hWorld);
+        rec.text = sanitizeDxfText(an.tableCells[ci]);
+        rec.rotationDeg = "0";
+        emitTextRecord(rec);
+        ++nTextOut;
+      }
     } else if (an.kind == CadAnnotation::Kind::DimAligned || an.kind == CadAnnotation::Kind::DimLinear) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
       if (!CadDimAnyGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
@@ -3641,6 +3705,43 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       if (an.surveyPointLabelForId >= 0)
         emitPair(1001, "GOSURVEY");
       ++nMtextOut;
+    }
+  }
+
+  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+    const CadTable& t = st.cadTables[ti];
+    if (t.cols <= 0)
+      continue;
+    EntityAttributes at{};
+    if (ti < st.cadTableAttrs.size())
+      at = st.cadTableAttrs[ti];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+    const std::string layer = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* tblLyr = FindLayerRowDxfExport(st, layer);
+    std::vector<CadTableCellRect> cells;
+    CadTableLayoutWorldCells(t, &cells);
+    const double hWorld = static_cast<double>(CadTableHeightWorld(t, st.modelUnitsPerPlottedInch));
+    const double rotDeg = static_cast<double>(t.rotationRad) * (180.0 / kPi);
+    for (size_t ci = 0; ci < cells.size() && ci < t.cells.size(); ++ci) {
+      char hb[24];
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+      DxfTextRecord rec;
+      rec.handleHex = hb;
+      rec.ownerHandleHex = hBrModel;
+      rec.layer = layer;
+      rec.linetype = DxfExportEntityLtype6(at);
+      rec.colorAci = std::to_string(entAci);
+      rec.lineweight370 = dxfEntityLineweight370Str(at);
+      rec.hasTransparency = dxfTransparency440Str(EffectiveEntityTransparency01(at, tblLyr), &rec.transparency440);
+      rec.x = std::to_string(worldX(cells[ci].x0));
+      rec.y = std::to_string(worldY(static_cast<float>(static_cast<double>(cells[ci].y1) - hWorld)));
+      rec.z = std::to_string(static_cast<double>(t.insZ));
+      rec.height = std::to_string(hWorld);
+      rec.text = sanitizeDxfText(t.cells[ci]);
+      rec.rotationDeg = std::to_string(rotDeg);
+      emitTextRecord(rec);
+      ++nTextOut;
     }
   }
 

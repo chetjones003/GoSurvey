@@ -38,7 +38,7 @@ Central mutable state for the entire application. One instance lives in `main.cp
 - **ALIGN** — see section below.
 - **Viewport** — pan/zoom, snap settings, crosshair style, GPU revision counter (`cadGpuRevision`).
 - **UI toggles** — `showCreatePointsWindow`, `showAlignResultsWindow`, `showLayerManagerWindow`, `showTraverseEditorWindow`, `showImportPointsWindow`, etc.
-- **Multi-document** — the open drawings are kept as document snapshots; switching tabs saves/restores the full `AppCommandState` (geometry, layers, survey points, coordinate frame, viewport).
+- **Multi-document** — the open drawings are kept as document snapshots; switching tabs saves/restores the full `AppCommandState` (geometry, layers, survey points, coordinate frame, viewport). The first tab (`drawingTabs[0]`) is the **Start screen** (REQ-308, D-2026-08-30-a) — a non-closable UI sentinel that backs no document; real drawings are index ≥ `FirstDrawingTabIndex()`.
 - **Reports** — `surveyReportTabs` (vector of title/body pairs), `surveyReportSelectLatestPending`.
 
 ### `PdfAttachment` (`src/pdf/PdfAttach.hpp`)

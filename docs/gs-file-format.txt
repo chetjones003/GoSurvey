@@ -160,6 +160,45 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
     — Active space: -1 = model space; >= 0 = index into paperLayouts. An
       out-of-range value loads as model space (-1).
 
+3.1a The "view" object — camera and coordinate system
+  view (object, optional)
+    — Saved view state. Every key is optional and every one is OMITTED at its
+      default, so a drawing that was never orbited and never used UCS writes no
+      "view" object at all and serialises exactly as it did before these existed.
+
+    panX, panY   (numbers)  camera target in LOCAL coordinates
+    panZ         (number, default 0)     camera target elevation (REQ-058)
+    zoom         (number)                orthographic half-height scale
+    azimuthDeg   (number, default 0)     camera orientation about world +Z (REQ-058)
+    elevationDeg (number, default 90)    angle above the horizon; 90 = plan view.
+                                         Clamped to [-90, 90] on load.
+
+    ucs (object, optional) — the active User Coordinate System (REQ-154).
+        origin (array of 3 numbers)  frame origin, in TRUE WORLD coordinates —
+                                     NOT local. Deliberate: a document-origin
+                                     rebase shifts stored geometry for precision,
+                                     and the user's coordinate frame must not move
+                                     with it. Z is absolute (ADR-025 D2).
+        xAxis, yAxis, zAxis (arrays of 3 numbers) the frame's basis, in world.
+        A frame that is not orthonormal and right-handed to within 1e-6 is
+        DISCARDED on load and the WCS is used instead: a skewed basis would
+        silently misplace every coordinate entered under it (REQ-201).
+
+    ucsElevation (number, optional) — legacy, and still written when the active
+        UCS is a plain elevation change (world axes, origin only in Z), so a
+        drawing saved by this build still opens correctly in one that predates the
+        full UCS. Read ONLY when "ucs" is absent; every file written before
+        REQ-154 carries this key alone.
+
+    ucsFollow (bool, default false) — UCSFOLLOW. When true, changing the UCS
+        switches the view to a plan view of the new frame.
+
+    namedUcs (array of objects, optional) — saved UCS definitions (UCS Named).
+        Each object is a "ucs" object plus:
+            name (string)  as typed; matched case-insensitively.
+        An entry with no name, or whose basis fails the check above, is skipped
+        rather than loaded. "World" is reserved and never appears here.
+
 3.2 Lines — flat array + parallel attributes
   lineVerts   (array of numbers)
     Flat list of line segment vertices in LOCAL coordinates (world = local +

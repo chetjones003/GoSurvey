@@ -108,7 +108,7 @@ ESC
 CHECK ALL
 EXPECT CIRCLES 2
 EXPECT ELLIPSES 1
-SAVEAS %OUT%/stretch-cea-actual.gs
+SAVEAS %OUT%/stretch-cea-actual.dwg
 
 NEW
 
@@ -135,8 +135,8 @@ CLICK 907.0710678 7.0710678
 CLICK 900 10
 
 CHECK ALL
-SAVEAS %OUT%/stretch-cea-expected.gs
-EXPECT SAMEFILE %OUT%/stretch-cea-actual.gs %OUT%/stretch-cea-expected.gs
+SAVEAS %OUT%/stretch-cea-expected.dwg
+EXPECT SAMEFILE %OUT%/stretch-cea-actual.dwg %OUT%/stretch-cea-expected.dwg
 
 # --- T4: arc true partial stretch (count/no-crash only; formula pinned by StretchGeomTests.cpp) ---
 CMD STRETCH
@@ -148,5 +148,5 @@ ESC
 CHECK ALL
 EXPECT ARCS 1
 EXPECT CIRCLES 2
-SAVEAS %OUT%/stretch-cea-arc.gs
-EXPECT DIFFERENTFILE %OUT%/stretch-cea-actual.gs %OUT%/stretch-cea-arc.gs
+SAVEAS %OUT%/stretch-cea-arc.dwg
+EXPECT DIFFERENTFILE %OUT%/stretch-cea-actual.dwg %OUT%/stretch-cea-arc.dwg

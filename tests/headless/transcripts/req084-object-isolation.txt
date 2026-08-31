@@ -82,8 +82,8 @@ CMD SELECT
 BOX -10 40 110 60
 CMD ISOLATEOBJECTS
 EXPECT LOG "1 object(s) isolated, 2 hidden"
-SAVEAS %OUT%/isolated.gs
-OPEN %OUT%/isolated.gs
+SAVEAS %OUT%/isolated.dwg
+OPEN %OUT%/isolated.dwg
 CHECK ALL
 BOX -10 -10 110 110
 EXPECT SELECTED 3

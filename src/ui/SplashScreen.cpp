@@ -1,6 +1,5 @@
 #include "SplashScreen.hpp"
 
-#include "AppIcon.hpp"
 #include "CadUi.hpp"
 #include "Version.hpp"
 #include "WinFrameControls.hpp"
@@ -15,7 +14,40 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
+#include <string>
+
+namespace {
+
+// Same steel-blue accent the Start screen uses, so launch → landing reads as one product (REQ-308).
+constexpr ImVec4 kAccent  {0.26f, 0.56f, 0.86f, 1.f};
+constexpr ImVec4 kAccentHi{0.34f, 0.64f, 0.95f, 1.f};
+
+ImVec4 MixV(const ImVec4& a, const ImVec4& b, float t) {
+  return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1.f};
+}
+
+// Crisp vector "GS" badge — matches DrawGsBadge on the Start screen. Vector, so sharp at any size.
+void SplashGsBadge(ImDrawList* dl, ImVec2 c, float sz, float alpha) {
+  const ImVec2 a(c.x - sz * 0.5f, c.y - sz * 0.5f);
+  const ImVec2 b(c.x + sz * 0.5f, c.y + sz * 0.5f);
+  const float rnd = sz * 0.24f;
+  auto A = [&](ImVec4 v) { v.w *= alpha; return ImGui::ColorConvertFloat4ToU32(v); };
+  dl->AddRectFilled(ImVec2(a.x + 2.f, a.y + 3.f), ImVec2(b.x + 3.f, b.y + 4.f), A({0.f, 0.f, 0.f, 0.40f}), rnd);
+  dl->AddRectFilled(a, b, A({kAccent.x, kAccent.y, kAccent.z, 1.f}), rnd);
+  // Smooth top-down sheen, clipped to the rounded body — no hard midline.
+  dl->PushClipRect(a, b, true);
+  dl->AddRectFilledMultiColor(a, b, A({1.f, 1.f, 1.f, 0.16f}), A({1.f, 1.f, 1.f, 0.16f}),
+                              A({1.f, 1.f, 1.f, 0.f}), A({1.f, 1.f, 1.f, 0.f}));
+  dl->PopClipRect();
+  dl->AddRect(a, b, A({1.f, 1.f, 1.f, 0.30f}), rnd, 0, 1.5f);
+  const float fs = sz / ImGui::GetFontSize() * 0.52f;
+  ImGui::SetWindowFontScale(fs);
+  const ImVec2 t = ImGui::CalcTextSize("GS");
+  dl->AddText(ImVec2(c.x - t.x * 0.5f, c.y - t.y * 0.5f), A({1.f, 1.f, 1.f, 1.f}), "GS");
+  ImGui::SetWindowFontScale(1.f);
+}
+
+}  // namespace
 
 void GlfwApplySplashStageWindowHints() {
   glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
@@ -112,7 +144,7 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
   const ImGuiStyle& st = ImGui::GetStyle();
   float rowH = ImGui::GetFrameHeight() + 8.f;
   // Title bar is always dark regardless of the active application theme.
-  const ImVec4 barBg     = ImVec4(0.090f, 0.102f, 0.122f, 1.f);  // #171A1F dark secondary
+  const ImVec4 barBg     = ImVec4(0.10f, 0.10f, 0.10f, 1.f);  // neutral gray — matches the viewport background
   const ImU32  iconCol   = IM_COL32(199, 207, 219, 255);           // resting icon color
   const ImU32  iconColHov = IM_COL32(255, 255, 255, 255);          // brighter on hover / press
 
@@ -220,10 +252,6 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
   if (!window || durationSec <= 0.0)
     return;
 
-  namespace fs = std::filesystem;
-  const fs::path logoPath = ResolveAppLogoPngPath();
-  AppLogoGpu splashTex{};
-  const bool haveLogo = !logoPath.empty() && LoadAppTextureFromPngFile(logoPath, &splashTex, true);
 
   // REQ-093 (amended): per-pixel window transparency is not reliable across compositors/drivers —
   // where it isn't actually honored, clearing alpha 0 paints solid black instead of showing the
@@ -272,18 +300,20 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     const ImVec2 card0(workPos.x + 1.f, workPos.y + 1.f);
     const ImVec2 card1(workPos.x + work.x - 1.f, workPos.y + work.y - 1.f);
 
-    const ImVec4 topL = themeWinBg;
-    const ImVec4 topR = ImVec4(themeMenuBg.x * 0.65f + themeWinBg.x * 0.35f, themeMenuBg.y * 0.65f + themeWinBg.y * 0.35f,
-                               themeMenuBg.z * 0.65f + themeWinBg.z * 0.35f, 1.f);
-    const ImVec4 botR = ImVec4(themeDockBg.x * 0.55f + themeMenuBg.x * 0.45f, themeDockBg.y * 0.55f + themeMenuBg.y * 0.45f,
-                               themeDockBg.z * 0.55f + themeMenuBg.z * 0.45f, 1.f);
-    const ImVec4 botL = ImVec4(themeDockBg.x * 0.75f + themeWinBg.x * 0.25f, themeDockBg.y * 0.75f + themeWinBg.y * 0.25f,
-                               themeDockBg.z * 0.75f + themeWinBg.z * 0.25f, 1.f);
+    // Blue-tinted gradient matching the Start screen: accent glow top, darkening toward the base.
+    (void)themeMenuBg;
+    (void)themeDockBg;
+    const ImVec4 topL = MixV(themeWinBg, kAccent, 0.20f);
+    const ImVec4 topR = MixV(themeWinBg, kAccent, 0.11f);
+    const ImVec4 botR = MixV(themeWinBg, ImVec4(0.f, 0.f, 0.f, 1.f), 0.30f);
+    const ImVec4 botL = MixV(themeWinBg, ImVec4(0.f, 0.f, 0.f, 1.f), 0.22f);
     bg->AddRectFilledMultiColor(card0, card1, ImGui::ColorConvertFloat4ToU32(topL), ImGui::ColorConvertFloat4ToU32(topR),
                                 ImGui::ColorConvertFloat4ToU32(botR), ImGui::ColorConvertFloat4ToU32(botL));
 
-    const ImU32 rim = ImGui::ColorConvertFloat4ToU32(themeBorder);
-    bg->AddRect(card0, card1, rim, 8.f, ImDrawFlags_RoundCornersAll, 2.f);
+    // Bright accent bar across the top, plus a subtle theme rim.
+    bg->AddRectFilled(card0, ImVec2(card1.x, card0.y + 4.f), ImGui::ColorConvertFloat4ToU32(kAccent),
+                      8.f, ImDrawFlags_RoundCornersTop);
+    bg->AddRect(card0, card1, ImGui::ColorConvertFloat4ToU32(themeBorder), 8.f, ImDrawFlags_RoundCornersAll, 2.f);
 
     ImGui::SetNextWindowPos(card0);
     ImGui::SetNextWindowSize(card1 - card0);
@@ -297,24 +327,19 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     const ImVec2 ws = ImGui::GetWindowSize();
     const float intro = static_cast<float>(std::min(1.0, elapsed / 0.35));
 
-    // Small corner mark, drawn at its NATIVE pixel size — the bundled app.png is only 32x32, and
-    // stretching a source that small to fill a fraction of the card (the previous design) is what
-    // made it look pixelated. Un-scaled in a corner reads as a mark, not a hero image, and stays
-    // crisp at any card size. "GoSurvey" is the dominant visual now instead (below).
-    if (haveLogo && splashTex.texture) {
-      const ImVec2 savedCursor = ImGui::GetCursorPos();
-      const float pad = 14.f;
-      const float logoFade = std::min(1.f, static_cast<float>(elapsed / 0.12));
-      ImGui::SetCursorPos(ImVec2(pad, pad));
-      const ImTextureRef logoRef((ImTextureID)(intptr_t)(uintptr_t)splashTex.texture);
-      ImGui::ImageWithBg(logoRef, ImVec2(static_cast<float>(splashTex.width), static_cast<float>(splashTex.height)),
-                         ImVec2(0.f, 1.f), ImVec2(1.f, 0.f), ImVec4(0.f, 0.f, 0.f, 0.f),
-                         ImVec4(logoFade, logoFade, logoFade, 1.f));
-      ImGui::SetCursorPos(savedCursor);
+    // Crisp vector "GS" badge, centered — matches the Start-screen hero mark. Replaces the old
+    // upscaled 32px app.png, which is what made the previous splash look pixelated.
+    {
+      const float badgeFade = std::min(1.f, static_cast<float>(elapsed / 0.14));
+      const float badge = std::min(96.f, ws.y * 0.20f);
+      SplashGsBadge(ImGui::GetWindowDrawList(),
+                    ImVec2(ImGui::GetWindowPos().x + ws.x * 0.5f,
+                           ImGui::GetWindowPos().y + ws.y * 0.24f),
+                    badge, badgeFade);
     }
 
-    ImGui::Dummy(ImVec2(1, ws.y * 0.30f));
-
+    // --- Title block, centered under the badge ---
+    ImGui::SetCursorPosY(ws.y * 0.42f);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f * intro, 0.93f * intro, 0.96f * intro, intro));
     ImGui::SetWindowFontScale(2.6f);
     const char* title = "GoSurvey";
@@ -325,15 +350,28 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     ImGui::PopStyleColor();
 
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.62f, 0.72f, 0.85f * intro));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.62f, 0.74f, 0.90f, 0.85f * intro));
     const char* subtitle = "Precision Survey CAD";
     tw = ImGui::CalcTextSize(subtitle).x;
     ImGui::SetCursorPosX((ws.x - tw) * 0.5f);
     ImGui::TextUnformatted(subtitle);
     ImGui::PopStyleColor();
 
-    ImGui::Dummy(ImVec2(1, ws.y * 0.10f));
+    // Version pill, centered — same treatment as the Start-screen hero.
+    {
+      const std::string ver = std::string("v") + GOSURVEY_VERSION_FULL;
+      const ImVec2 vts = ImGui::CalcTextSize(ver.c_str());
+      ImGui::Dummy(ImVec2(1.f, 5.f));
+      const ImVec2 pc = ImGui::GetCursorScreenPos();
+      const float px0 = pc.x + (ws.x - vts.x - 16.f) * 0.5f;
+      ImVec4 pf = kAccent; pf.w = 0.32f * intro;
+      ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(px0, pc.y), ImVec2(px0 + vts.x + 16.f, pc.y + vts.y + 6.f),
+                                                ImGui::ColorConvertFloat4ToU32(pf), 9.f);
+      ImVec4 pt{0.85f, 0.90f, 0.97f, intro};
+      ImGui::GetWindowDrawList()->AddText(ImVec2(px0 + 8.f, pc.y + 3.f), ImGui::ColorConvertFloat4ToU32(pt), ver.c_str());
+    }
 
+    // --- Phase text + progress bar, anchored to the bottom of the card so they never clip ---
     // REQ-093: cosmetic only — text cycles purely on elapsed-time fraction, not on any real load
     // step finishing. Linetypes have no data table to load and text styles are already resident in
     // memory the instant AppCommandState is constructed, so neither has real work to gate on; the
@@ -342,19 +380,21 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
                              "Preparing workspace…",    "Loading blocks…",    "Almost ready…"};
     constexpr int kPhaseCount = static_cast<int>(sizeof(phases) / sizeof(phases[0]));
     const int phaseIdx = std::min(kPhaseCount - 1, static_cast<int>(raw * static_cast<float>(kPhaseCount)));
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.48f, 0.55f, 0.64f, 0.92f * intro));
+
+    ImGui::SetCursorPosY(ws.y - 52.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.63f, 0.74f, 0.92f * intro));
     tw = ImGui::CalcTextSize(phases[phaseIdx]).x;
     ImGui::SetCursorPosX((ws.x - tw) * 0.5f);
     ImGui::TextUnformatted(phases[phaseIdx]);
     ImGui::PopStyleColor();
 
-    ImGui::Dummy(ImVec2(1, 18.f));
+    ImGui::SetCursorPosY(ws.y - 26.f);
     const float barW = std::min(400.f, ws.x * 0.82f);
     ImGui::SetCursorPosX((ws.x - barW) * 0.5f);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.f);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyle().Colors[ImGuiCol_FrameBg]);
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImGui::GetStyle().Colors[ImGuiCol_CheckMark]);
-    ImGui::ProgressBar(bar, ImVec2(barW, 11.f), "");
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(1.f, 1.f, 1.f, 0.08f));
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAccentHi);
+    ImGui::ProgressBar(bar, ImVec2(barW, 8.f), "");
     ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 
@@ -378,6 +418,4 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(window);
   }
-
-  DestroyAppLogoGpu(&splashTex);
 }

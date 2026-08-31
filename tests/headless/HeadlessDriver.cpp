@@ -16,7 +16,10 @@
 //     difference REQ-203's "save a .gs and diff" condition exists to detect.
 
 #include "CadCommands.hpp"
+#include "CadBlocks.hpp"
+#include "CadCoordinateFrame.hpp"  // CadCoord::WorldFromLocal, for EXPECT LINEXYZ (REQ-154)
 #include "DxfIo.hpp"
+#include "DwgIo.hpp"
 #include "GsIo.hpp"
 #include "GsAnnotationJson.hpp"
 #include "HeadlessFileDialogs.hpp"
@@ -360,6 +363,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
 
   if (verb == "NEW") {
     run.st = AppCommandState{};
+    LoadBundledBlockLibrary(run.st, run.log);
     run.log.push_back("[driver] NEW");
   } else if (verb == "SPACE") {
     // SPACE PAPER | SPACE MODEL — switch the active space, so a transcript can exercise the
@@ -388,13 +392,13 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     }
   } else if (verb == "OPEN") {
     const std::string path = ExpandVars(run, rest);
-    if (!LoadGoSurveyFile(run.st, path.c_str(), run.log)) {
+    if (!OpenDrawingDocument(run.st, path.c_str(), run.log)) {
       Fail(run, "io", "OPEN failed: " + path, sourceLine);
       return false;
     }
   } else if (verb == "SAVEAS") {
     const std::string path = ExpandVars(run, rest);
-    if (!SaveGoSurveyFile(run.st, path.c_str(), run.log)) {
+    if (!SaveDrawingDocument(run.st, path.c_str(), run.log)) {
       Fail(run, "io", "SAVEAS failed: " + path, sourceLine);
       return false;
     }
@@ -576,12 +580,20 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       SubmitTrimViewportPick(run.st, x, y, 1.f, run.log);
       break;
     case ViewportClickRoute::HatchPick:
-    case ViewportClickRoute::PdfAttachInsertPoint:
       Fail(run, "state",
-           "CLICK cannot drive this command yet (HATCH boundary tracing / PDFATTACH insertion are "
-           "not wired into the driver); add the route here when a transcript needs it",
+           "CLICK cannot drive this command yet (HATCH boundary tracing is not wired into the "
+           "driver); add the route here when a transcript needs it",
            sourceLine);
       return false;
+    case ViewportClickRoute::PdfAttachInsertPoint:
+      Fail(run, "state",
+           "CLICK cannot drive this command yet (PDFATTACH insertion is not wired into the "
+           "driver); add the route here when a transcript needs it",
+           sourceLine);
+      return false;
+    case ViewportClickRoute::InsertBlockPick:
+      SubmitInsertBlockPick(run.st, x, y, run.log);
+      break;
     case ViewportClickRoute::Ignore:
       // The whole point of this verb: a command the UI does not route is a failure, not a no-op.
       Fail(run, "state",
@@ -723,6 +735,24 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     run.st.currentLayer = name;
     // Registers the name in the drawing's layer table, exactly as the Layer manager's OK does.
     SyncDrawingLayerTableWithGeometry(run.st);
+  } else if (verb == "UCSNAMED") {
+    // UCSNAMED RESTORE|DELETE <name> — the View Manager's two named-UCS buttons.
+    //
+    // `UCS Named` saves and only saves; restoring and deleting a saved frame are the View Manager's,
+    // because choosing among saved frames wants a list a command prompt cannot show. So there is no
+    // typed route to them, exactly as CLAYER above has none, and this calls the same
+    // RestoreNamedUcs / DeleteNamedUcs the dialog's buttons call rather than a second copy.
+    std::string name;
+    const std::string what = UpperAscii(FirstWord(rest, &name));
+    name = Trim(name);
+    if (name.empty() || (what != "RESTORE" && what != "DELETE")) {
+      Fail(run, "parse", "UCSNAMED expects RESTORE <name> | DELETE <name>, got: " + rest, sourceLine);
+      return false;
+    }
+    if (what == "RESTORE")
+      RestoreNamedUcs(run.st, name, run.log);
+    else
+      DeleteNamedUcs(run.st, name, run.log);
   } else if (verb == "VPFREEZE") {
     // VPFREEZE <layer> — freeze a layer in the SELECTED viewport (REQ-028 / REQ-046).
     //
@@ -970,8 +1000,14 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "io", "EXPECT " + what + ": cannot open " + (!fa ? pa : pb), sourceLine);
         return false;
       }
-      const std::string sa((std::istreambuf_iterator<char>(fa)), std::istreambuf_iterator<char>());
-      const std::string sb((std::istreambuf_iterator<char>(fb)), std::istreambuf_iterator<char>());
+      const std::string saRaw((std::istreambuf_iterator<char>(fa)), std::istreambuf_iterator<char>());
+      const std::string sbRaw((std::istreambuf_iterator<char>(fb)), std::istreambuf_iterator<char>());
+      std::string saPayload;
+      std::string sbPayload;
+      const std::string& sa =
+          TryGoSurveyDwgPayloadFromBytes(saRaw, saPayload) ? saPayload : saRaw;
+      const std::string& sb =
+          TryGoSurveyDwgPayloadFromBytes(sbRaw, sbPayload) ? sbPayload : sbRaw;
       if (wantSame && sa != sb) {
         // Report the first differing offset: on a JSON document that is usually enough to name the
         // field, and it keeps the failure line short enough to read in a summary.
@@ -1186,6 +1222,53 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "expect", "no log line contains: " + needle, sourceLine);
         return false;
       }
+    } else if (what == "LINEXYZ") {
+      // EXPECT LINEXYZ <index> <x1> <y1> <z1> <x2> <y2> <z2> — one line's endpoints, in WORLD
+      // coordinates, to REQ-101's 0.01 ft.
+      //
+      // Added for the UCS work (REQ-154). Every other EXPECT here counts entities or matches log
+      // text, and neither can state the thing a UCS has to be judged on: that geometry drawn in a
+      // rotated or tilted frame lands at the WORLD position the frame implies. A count passes just
+      // as happily when the line went somewhere else entirely, and the command log reports what was
+      // typed rather than where it ended up — so without this, "drawing commands respect the UCS"
+      // has no failing test available to it.
+      std::istringstream is(arg);
+      long idx = -1;
+      double want[6] = {0, 0, 0, 0, 0, 0};
+      if (!(is >> idx) || !(is >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5])) {
+        Fail(run, "parse", "EXPECT LINEXYZ needs <index> <x1> <y1> <z1> <x2> <y2> <z2>", sourceLine);
+        return false;
+      }
+      const size_t base = static_cast<size_t>(idx) * 6;
+      if (idx < 0 || base + 5 >= run.st.userLinesFlat.size()) {
+        Fail(run, "expect",
+             "EXPECT LINEXYZ: no line at index " + std::to_string(idx) + " (there are " +
+                 std::to_string(run.st.userLinesFlat.size() / 6) + ")",
+             sourceLine);
+        return false;
+      }
+      // Storage is local in XY and absolute in Z (ADR-025 (b)), so the endpoints are lifted back to
+      // world before comparing — otherwise a transcript's expected numbers would silently depend on
+      // whether the drawing happened to have been rebased.
+      double gx1 = 0.;
+      double gy1 = 0.;
+      double gx2 = 0.;
+      double gy2 = 0.;
+      CadCoord::WorldFromLocal(run.st, run.st.userLinesFlat[base], run.st.userLinesFlat[base + 1], &gx1, &gy1);
+      CadCoord::WorldFromLocal(run.st, run.st.userLinesFlat[base + 3], run.st.userLinesFlat[base + 4], &gx2, &gy2);
+      const double got[6] = {gx1, gy1, static_cast<double>(run.st.userLinesFlat[base + 2]),
+                             gx2, gy2, static_cast<double>(run.st.userLinesFlat[base + 5])};
+      const char* names[6] = {"x1", "y1", "z1", "x2", "y2", "z2"};
+      for (int k = 0; k < 6; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "EXPECT LINEXYZ %ld: %s is %.6f, expected %.6f", idx, names[k], got[k],
+                        want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+      return true;
     } else if (what == "LABELANCHOR") {
       // EXPECT LABELANCHOR — every survey label holds the same position relative to its own point,
       // whatever its text says: same LEFT EDGE offset, same VERTICAL CENTRE offset.
@@ -1310,6 +1393,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         got = static_cast<long>(run.st.userEllipses.size());
       else if (what == "ANNOTATIONS")
         got = static_cast<long>(run.st.cadAnnotations.size());
+      else if (what == "TABLES")
+        got = static_cast<long>(run.st.cadTables.size());
       else if (what == "SURVEYPOINTS")
         got = static_cast<long>(run.st.surveyPoints.size());
       // Not a geometry count: what the drawing currently considers picked. It is the only way to
@@ -1376,7 +1461,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       else {
         Fail(run, "parse",
              "EXPECT: unknown quantity " + what +
-                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED"
+                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS TABLES SURVEYPOINTS SELECTED"
                  " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
                  " EXTRACTMATCHESDISPLAY"
                  " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN SURFACEBANDTRIS SURFACEARROWSEGS"

@@ -37,7 +37,7 @@ ESC
 CHECK ALL
 EXPECT LINES 2
 EXPECT ARCS 0
-SAVEAS %OUT%/fillet-lines-a.gs
+SAVEAS %OUT%/fillet-lines-a.dwg
 
 CMD FILLET
 CMD R
@@ -50,14 +50,14 @@ EXPECT LINES 2
 EXPECT ARCS 1
 CHECK ALL
 
-SAVEAS %OUT%/fillet-lines-b.gs
-EXPECT DIFFERENTFILE %OUT%/fillet-lines-a.gs %OUT%/fillet-lines-b.gs
+SAVEAS %OUT%/fillet-lines-b.dwg
+EXPECT DIFFERENTFILE %OUT%/fillet-lines-a.dwg %OUT%/fillet-lines-b.dwg
 
 UNDO
 EXPECT LINES 2
 EXPECT ARCS 0
 CHECK ALL
-SAVEAS %OUT%/fillet-lines-c.gs
+SAVEAS %OUT%/fillet-lines-c.dwg
 # Not SAMEFILE against "a": the fillet arc minted a fresh entity id (REQ-076), and undo does not
 # roll the next-entity-id counter itself back — same reasoning break-circle-and-closed-polyline.txt
 # already documents for BREAK's Circle->Arc conversion. Geometry/counts are already verified above;
@@ -67,8 +67,8 @@ REDO
 EXPECT LINES 2
 EXPECT ARCS 1
 CHECK ALL
-SAVEAS %OUT%/fillet-lines-d.gs
-EXPECT SAMEFILE %OUT%/fillet-lines-b.gs %OUT%/fillet-lines-d.gs
+SAVEAS %OUT%/fillet-lines-d.dwg
+EXPECT SAMEFILE %OUT%/fillet-lines-b.dwg %OUT%/fillet-lines-d.dwg
 
 UNDO
 
@@ -83,8 +83,8 @@ EXPECT LOG "FILLET — corner trimmed to a point (radius 0)."
 EXPECT LINES 2
 EXPECT ARCS 0
 CHECK ALL
-SAVEAS %OUT%/fillet-lines-e.gs
-EXPECT DIFFERENTFILE %OUT%/fillet-lines-a.gs %OUT%/fillet-lines-e.gs
+SAVEAS %OUT%/fillet-lines-e.dwg
+EXPECT DIFFERENTFILE %OUT%/fillet-lines-a.dwg %OUT%/fillet-lines-e.dwg
 
 UNDO
 
@@ -102,7 +102,7 @@ EXPECT LOG "FILLET — corner filleted."
 EXPECT LINES 2
 EXPECT ARCS 1
 CHECK ALL
-SAVEAS %OUT%/fillet-lines-f.gs
-EXPECT DIFFERENTFILE %OUT%/fillet-lines-b.gs %OUT%/fillet-lines-f.gs
+SAVEAS %OUT%/fillet-lines-f.dwg
+EXPECT DIFFERENTFILE %OUT%/fillet-lines-b.dwg %OUT%/fillet-lines-f.dwg
 
 UNDO

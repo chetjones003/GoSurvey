@@ -11,6 +11,9 @@
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
+// The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
+// util/ray3d beside it, so the coordinate-system rules are testable without a window.
+#include "util/ucs.hpp"
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
@@ -20,6 +23,8 @@
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
 #include "util/tinbuild.hpp"       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
 #include "util/surfacevolume.hpp"  // SurfaceVolumeResult, for AppCommandState::VolumeDashboardState (REQ-073)
+#include "util/surfacequery.hpp"   // SurfaceProfileSample, Quick Profile (REQ-145)
+#include "util/watershed.hpp"      // WatershedResult, for AppCommandState::SurfaceWatershedCacheEntry (REQ-132)
 // curveisect::Vec2/Seg/Conic + Intersect*, for FILLET's tangent-arc solve (REQ-103 step 6a) below.
 // Dependency-free by its own design (curveintersect.hpp's own doc comment), so this adds no cycle.
 #include "util/curveintersect.hpp"
@@ -27,6 +32,8 @@
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
 #include "util/hoverdwell.hpp"
+#include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
+#include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.
@@ -60,7 +67,14 @@ struct SelectedEntity {
     /// surface. Component-level selection is forbidden by REQ-070 ("contours ... never appear in
     /// selection") and has nothing to be selected *by*: a contour is regenerated display geometry
     /// with no identity.
-    Surface = 10
+    Surface = 10,
+    /// Drawing TABLE (REQ-148 / D-2026-08-28-i). **Appended** after Surface so existing type values
+    /// and switch order stay stable. Editable: MOVE/COPY/ROTATE/SCALE/MIRROR apply to the whole table;
+    /// cells are edited in place, not as child entities.
+    Table = 11,
+    /// Block INSERT (GitHub issue #124). Appended after Table so existing type values stay stable.
+    /// Lightweight: transform + attributes; geometry lives on the named definition.
+    BlockRef = 12
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -133,6 +147,10 @@ void ResolveStoredColorForViewport(const std::string& colorStorage, float transp
                                    float defaultG, float defaultB, float* outRgba);
 
 struct AppCommandState;
+
+/// REQ-308 / D-2026-08-30-a: index of the first real drawing tab. drawingTabs[0] is the Start
+/// screen sentinel, so drawing-tab iteration and "select the first drawing" both start here.
+inline constexpr int FirstDrawingTabIndex() { return 1; }
 
 const CadLayerRow* FindDrawingLayerRowCi(const AppCommandState& st, const std::string& layerName);
 
@@ -702,6 +720,9 @@ struct CadExtendedGeometryInput {
   /// signature is already long, and this struct is exactly "the extra per-entity data the renderer
   /// needs", which is what the hidden set is.
   const std::vector<std::uint64_t>* hiddenEntityIds = nullptr;
+  const std::vector<CadBlockDefinition>* blockDefs = nullptr;
+  const std::vector<CadBlockRef>* blockRefs = nullptr;
+  const std::vector<EntityAttributes>* blockRefAttrs = nullptr;
 };
 
 /// True when a CSR chain store (polylines, feature lines) holds at least one entity.
@@ -731,6 +752,8 @@ struct CadExtendedGeometryInput {
   if (CadChainHasEntities(e.polylineVerts, e.polylineOffsets))
     return true;
   if (CadChainHasEntities(e.featureLineVerts, e.featureLineOffsets))
+    return true;
+  if (e.blockRefs != nullptr && !e.blockRefs->empty())
     return true;
   return false;
 }
@@ -782,6 +805,14 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
 /// Top-most annotation under point; -1 if none. Uses pixel tolerance from viewport half-height.
 int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
                         float viewportHeightPx);
+int PickCadTableAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
+                   float viewportHeightPx);
+void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
+                                      std::vector<CadTable>* out);
+void OpenTableCellEditor(AppCommandState& st, int tableIndex, int cellIndex);
+void CommitTableCellEditor(AppCommandState& st, std::vector<std::string>& log);
+void CancelTableCellEditor(AppCommandState& st);
+void MigrateLegacyAnnotationTables(AppCommandState& st);
 
 /// ROTATE live preview angle (rad) about \ref AppCommandState::rotateBase when cursor drives preview.
 bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, float* outThetaRad);
@@ -816,6 +847,10 @@ struct CadClipboard {
   std::vector<EntityAttributes> polyAttrs;
   std::vector<CadAnnotation>    annotations;
   std::vector<EntityAttributes> annotationAttrs;
+  std::vector<CadTable>         tables;
+  std::vector<EntityAttributes> tableAttrs;
+  std::vector<CadBlockRef>      blockRefs;
+  std::vector<EntityAttributes> blockRefAttrs;
   std::vector<CadFilledRegion>  filledRegions;     ///< Solid fills enclosed by the copy selection (REQ-038 addendum).
   std::vector<EntityAttributes> filledRegionAttrs;
   /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
@@ -824,7 +859,8 @@ struct CadClipboard {
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && annotations.empty() && filledRegions.empty();
+           (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && blockRefs.empty() &&
+           filledRegions.empty();
   }
 };
 
@@ -861,6 +897,11 @@ struct DrawingGeometrySnapshot {
   /// TIN surfaces (REQ-068). Shared payload, not copied — see CadTin and architecture §11.5.
   std::vector<CadSurface>       cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
+  std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
+  std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadBlockDefinition> blockDefs;
+  std::vector<CadBlockRef>        cadBlockRefs;
+  std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   /// Named point groups (REQ-067). Undoable, like textStyles — creating or editing one is a
   /// single-step undo. Rules only; membership is never stored.
@@ -882,6 +923,45 @@ struct DrawingGeometrySnapshot {
 };
 
 
+/// A UCS saved under a name (`UCS Named Save`), persisted with the drawing (REQ-154).
+///
+/// Deliberately a plain name + frame pair: a named UCS *is* those two things, and giving it any
+/// more (a description, an id, a per-viewport binding) would be inventing scope the requirement
+/// does not have.
+struct NamedUcs {
+  std::string name;  ///< As typed, for display; matched case-insensitively.
+  ucs::Ucs frame;
+};
+
+/// One saved view (REQ-106): where the camera is, which way it looks, and which coordinate frame
+/// was active.
+///
+/// The UCS is part of the record, not an afterthought — REQ-106's acceptance says a named view
+/// "restores camera position/target/UCS exactly". A view saved while working to a lot line is
+/// useless if restoring it puts the camera back but leaves you in the world frame, because the
+/// coordinates you then type mean something different from the ones you typed when you saved it.
+///
+/// Pan/zoom/azimuth/elevation are exactly the four things `AppCommandState` uses to build a
+/// `Camera` (see CadViewCamera), so this stores the camera's inputs rather than a derived matrix —
+/// one source of truth, and a saved view cannot drift from what the live view would do with the
+/// same numbers.
+struct NamedView {
+  std::string name;  ///< As typed, for display; matched case-insensitively, like NamedUcs.
+  double panX = 0.0;
+  double panY = 0.0;
+  double panZ = 0.0;
+  float zoom = 1.f;
+  float azimuthDeg = 0.f;
+  float elevationDeg = 90.f;
+  ucs::Ucs ucs;
+};
+
+/// How many previous UCSs `UCS Previous` can step back through.
+///
+/// Bounded rather than unbounded because the stack is pushed on every UCS change and would
+/// otherwise grow for the life of the session. Ten matches the depth AutoCAD documents.
+constexpr size_t kUcsPreviousDepth = 10;
+
 /// Snapshot of all per-drawing data.  AppCommandState holds the live (active-tab) copy directly;
 /// switching tabs saves the active fields here and restores the target tab's snapshot.
 struct DrawingDocument {
@@ -891,6 +971,15 @@ struct DrawingDocument {
   double viewportPanZ = 0.0;          ///< Camera target elevation per tab (REQ-058).
   float  viewportAzimuthDeg = 0.f;    ///< Camera orientation per tab (REQ-058); plan view by default.
   float  viewportElevationDeg = 90.f;
+  /// The UCS is per drawing, not per session (REQ-154): switching tabs must not carry one drawing's
+  /// coordinate frame into another's, which is the "UCS state does not leak between viewports"
+  /// condition in as strong a form as a one-model-view-per-tab application can state it.
+  ucs::Ucs activeUcs;
+  std::vector<ucs::Ucs> ucsPrevious;
+  std::vector<NamedUcs> ucsNamed;
+  std::vector<NamedView> namedViews;
+  std::string activeViewName;
+  bool ucsFollow = false;
   double worldDocumentOriginX = 0.0;
   double worldDocumentOriginY = 0.0;
   /// Per-drawing entity-id counter (REQ-076). Saved/restored with the tab so two open drawings
@@ -924,6 +1013,11 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadMeshAttrs;
   std::vector<CadSurface>       cadSurfaces;       ///< TIN surfaces (REQ-068).
   std::vector<EntityAttributes> cadSurfaceAttrs;
+  std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
+  std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadBlockDefinition> blockDefs;
+  std::vector<CadBlockRef>        cadBlockRefs;
+  std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
@@ -1026,7 +1120,8 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);
 // Native paper-space geometry selection + edit (REQ-037). Indices are into the ACTIVE layout's stores.
 void ClearPaperEntitySelection(AppCommandState& st);
 /// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
-bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out);
+bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out,
+                       const std::vector<CadBlockDefinition>* blockDefs = nullptr);
 void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);
 void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log);
 void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
@@ -1119,6 +1214,12 @@ constexpr int kRibbonTabManage   = 4;
 constexpr int kRibbonTabOutput   = 5;
 constexpr int kRibbonTabSurvey   = 6;
 constexpr int kRibbonTabCount    = 7;
+/// REQ-143: contextual TIN Surface tab. Not counted in \c kRibbonTabCount and not written to prefs.
+constexpr int kRibbonTabSurfaceCtx = 7;
+/// REQ-153: contextual SURVEY Point(s) tab. Session-only, not a prefs slot.
+constexpr int kRibbonTabSurveyPointCtx = 8;
+/// Contextual Block Editor tab while BEDIT is open. Not counted in \c kRibbonTabCount / prefs.
+constexpr int kRibbonTabBlockEditor = 9;
 
 struct AppCommandState {
   enum class Kind {
@@ -1186,6 +1287,22 @@ struct AppCommandState {
     SurveyInverse,
     /// REQ-074: one pick reports interpolated surface elevation, a second reports grade between them.
     SurfaceElevGrade,
+    /// REQ-133: one pick traces a water-drop path on a named surface.
+    WaterDrop,
+    /// REQ-134: one pick reports the catchment upstream of an outlet.
+    Catchment,
+    /// REQ-139: one pick swaps an interior TIN edge on a named surface.
+    SwapTinEdge,
+    /// REQ-144: one pick adds a definition vertex on a named TIN (Z = work plane).
+    AddTinPoint,
+    /// REQ-144: one pick deletes the nearest definition point on a named TIN.
+    DelTinPoint,
+    /// REQ-150: two picks move a definition point (from, then to).
+    MoveTinPoint,
+    /// REQ-150: one pick deletes the nearest interior TIN edge.
+    DelTinLine,
+    /// REQ-145: two picks sample a named surface into a session Quick Profile graph.
+    QuickProfile,
     /// REQ-069: one pick designates a Line/Polyline as a breakline on a named surface.
     DesignateBreakline,
     /// REQ-069: one pick designates a closed Polyline as a boundary ring (outer/hide/show) on a named surface.
@@ -1215,6 +1332,16 @@ struct AppCommandState {
     /// exits (REQ-084 (c)). Deliberately shaped like \c Kind::Pan, and reuses the same
     /// Shift+middle-drag orbit math, so the shortcut menu's Free Orbit is a real command.
     Orbit,
+    /// UCS: define or restore the active coordinate system (REQ-154). One command with a keyword
+    /// option set, driven through \ref ucsPhase — the phases exist because several options need
+    /// further picks (an origin, three points, an angle, a name) after the keyword.
+    Ucs,
+    /// PLAN: orient the view to the XY plane of a coordinate system, WITHOUT changing the UCS
+    /// (REQ-154). Autodesk documents that distinction explicitly and it is the whole point of the
+    /// command being separate from UCS.
+    Plan,
+    /// INSERT dialog (GitHub issue #124): pick a definition, then optional on-screen point/scale/rotation.
+    InsertBlock,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1260,9 +1387,20 @@ struct AppCommandState {
     case Kind::Rect:          return "RECT";
     case Kind::TrimState:     return "TRIMSTATE";
     case Kind::Orbit:         return "ORBIT";
+    case Kind::Ucs:           return "UCS";
+    case Kind::Plan:          return "PLAN";
     case Kind::SurfaceElevGrade:   return "SURFELEV";
+    case Kind::WaterDrop:          return "WATERDROP";
+    case Kind::Catchment:          return "CATCHMENT";
+    case Kind::SwapTinEdge:        return "SURFSWAPEDGE";
+    case Kind::AddTinPoint:        return "SURFACEADDPOINT";
+    case Kind::DelTinPoint:        return "SURFACEDELPOINT";
+    case Kind::MoveTinPoint:       return "SURFACEMOVEPOINT";
+    case Kind::DelTinLine:         return "SURFDELLINE";
+    case Kind::QuickProfile:       return "QUICKPROFILE";
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
+    case Kind::InsertBlock:        return "INSERT";
     default:                  return "";
     }
   }
@@ -1375,6 +1513,7 @@ struct AppCommandState {
   bool cmdBarVisible = true;          ///< floating bar shown; × hides, Ctrl+9 restores. Persisted.
   bool cmdBarAnchorValid = false;     ///< false → place at the default bottom-left this frame. Persisted.
   float cmdBarAnchorX = 0.f;          ///< persisted floating-bar bottom-LEFT x anchor (screen px); Y is pinned to the bottom.
+  float cmdBarTopYPx = 0.f;           ///< floating bar's top edge this frame (screen px); 0 = not floating/not drawn. NOT persisted — recomputed every frame, and read by the UCS icon so it can stay clear of the bar.
   float cmdBarAnchorY = 0.f;          ///< (legacy/unused: the bar is always pinned to the viewport bottom).
   float cmdBarWidth = 0.f;            ///< user-resized bar width (px); 0 → default. Persisted.
   float cmdConsoleHeight = 0.f;       ///< user-resized F2 console height (px); 0 → default. Persisted.
@@ -1481,6 +1620,7 @@ struct AppCommandState {
   /// Snap where two objects only *appear* to meet in the current view (REQ-062). Off by default,
   /// as in AutoCAD: it fires on objects that do not touch, which is surprising unless asked for.
   bool objectSnapApparentIntersection = false;
+  bool objectSnapSurface = true;
   /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
   float objectSnapAperturePx = 14.f;
   /// Half-size in screen pixels for green object-snap glyphs (square / triangle / circle overlay).
@@ -1655,19 +1795,87 @@ struct AppCommandState {
   float viewAnimToAz = 0.f, viewAnimToEl = 90.f;
   float viewAnimT = 0.f;  ///< 0..1 progress.
 
-  /// Active work plane / UCS (REQ-058 / ADR-025 (e)). A click resolves as ray × this plane, so it
-  /// is where new geometry lands. The default — origin at Z = 0 with a +Z normal — is the world XY
-  /// plane, under which every pre-3D drawing behaviour is unchanged.
-  double ucsOriginX = 0.0, ucsOriginY = 0.0, ucsOriginZ = 0.0;
-  double ucsNormalX = 0.0, ucsNormalY = 0.0, ucsNormalZ = 1.0;
-  /// Rotation of the active coordinate system about its normal, in degrees. The ViewCube's compass
-  /// letters and its square-up arrows are relative to this, so under a rotated UCS "square with
-  /// north" means the UCS's north (REQ-059). 0 = the WCS, which is the only value anything sets
-  /// today — the UCS command that would change it is still outstanding.
-  float ucsAzimuthDeg = 0.f;
+  /// The active User Coordinate System (REQ-058 / ADR-025 (e); REQ-154, GitHub #126).
+  ///
+  /// One frame, replacing the origin/normal/azimuth triple that stood in for it before the UCS
+  /// command existed: that shape could express a plane and a spin but not a basis, so nothing could
+  /// ask it "which way is UCS +X?". Its XY plane is the work plane a click resolves against, and its
+  /// axes are the frame typed coordinates, ORTHO and the grid are interpreted in. The default is the
+  /// WCS, under which every pre-UCS behaviour is unchanged.
+  ///
+  /// **It never moves geometry.** Entities stay in WCS; this only changes how the user's input is
+  /// read and how coordinates are reported back.
+  ucs::Ucs activeUcs;
+
+  /// `UCS Previous` history, oldest first. Bounded by \ref kUcsPreviousDepth — AutoCAD keeps a
+  /// limited stack too, and an unbounded one would grow for the life of the session.
+  std::vector<ucs::Ucs> ucsPrevious;
+
+  /// Saved UCS definitions (`UCS Named`), persisted with the drawing. "World" is reserved and is
+  /// never stored here — it is always available and can never be redefined or deleted.
+  std::vector<NamedUcs> ucsNamed;
+  /// Saved views for this drawing (REQ-106), and which one the view currently matches. The name is
+  /// empty whenever the camera has been moved since a restore — that is the "Unsaved View" the
+  /// ribbon shows, and it is a statement about the CAMERA, not about whether the drawing is dirty.
+  std::vector<NamedView> namedViews;
+  std::string activeViewName;
+
+  /// UCSFOLLOW: when set, any change to \ref activeUcs immediately switches the view to a PLAN view
+  /// of the new UCS. 0 leaves the camera alone. Per drawing tab, which is as per-viewport as this
+  /// application currently gets — there is one model view per tab (see the requirement's note).
+  bool ucsFollow = false;
+
+  /// Where the UCS command is in its prompt sequence. Several options need further picks after the
+  /// keyword, and modelling that as an explicit phase (rather than as flags) keeps every prompt's
+  /// valid input in one place — the same shape ARRAY and the other multi-step commands use.
+  enum class UcsPhase : uint8_t {
+    Idle,
+    WaitOriginOrOption,  ///< the top-level prompt: a point, or one of the keywords
+    WaitXAxisPoint,      ///< after an origin: a point on the new +X, or blank to accept origin-only
+    WaitXyPoint,         ///< after an X point: a point in the +Y half of the XY plane, or blank
+    WaitRotationAngle,   ///< X / Y / Z: degrees, right-hand rule about \ref ucsRotationAxis
+    WaitZAxisOrigin,     ///< ZAxis: the origin
+    WaitRotationAngleP1, ///< X/Y/Z + 2P: first point of the pair that defines the angle
+    WaitRotationAngleP2, ///< X/Y/Z + 2P: second point; the angle is p1->p2 in the rotation plane
+    WaitZAxisPoint,      ///< ZAxis: a point on the positive Z
+    WaitObjectPick,      ///< Object: click an entity to align to
+    WaitNamedName,       ///< Named: the name to save the current frame under
+  } ucsPhase = UcsPhase::Idle;
+
+  /// 'X', 'Y' or 'Z' — the axis \ref UcsPhase::WaitRotationAngle will rotate about.
+  char ucsRotationAxis = 'Z';
+
+  /// Picks accumulated across the multi-point UCS options, in WORLD coordinates (not storage-local:
+  /// a coordinate frame is a world-space object, and keeping it local would make it move whenever
+  /// the document origin rebased).
+  ray3d::Vec3 ucsPendingOrigin{0.0, 0.0, 0.0};
+  ray3d::Vec3 ucsPendingXAxisPoint{0.0, 0.0, 0.0};
+  /// First of the two picks that define a rotation angle (`UCS Z` then `2P`). Kept separate from the
+  /// two above because it means something different — not a corner of the new frame, but one end of
+  /// a direction being measured — and sharing a field would make that read as the same thing.
+  ray3d::Vec3 ucsAngleBasePoint{0.0, 0.0, 0.0};
+
+  /// PLAN's own prompt phase. Kept separate from \ref ucsPhase so neither command can be nudged
+  /// into the other's state machine.
+  enum class PlanPhase : uint8_t { Idle, WaitOption, WaitNamedName } planPhase = PlanPhase::Idle;
   /// Elevation of the cursor's work-plane intersection, published alongside the existing
   /// \c uiCursorWorldX/Y so readouts and future 3D-aware commands can see it.
   float uiCursorWorldZ = 0.f;
+
+  /// The Z of the point CURRENTLY being resolved, when that point carries its own (REQ-154).
+  ///
+  /// On a UCS parallel to world XY every point on the work plane shares one elevation, so the UCS
+  /// origin's Z describes them all — which is why a single constant sufficed before. **A tilted UCS
+  /// breaks that**: the plane's Z varies across it, and a point's elevation is a property of the
+  /// point, not of the plane. Rather than teach ~29 geometry-creation sites about the UCS, the two
+  /// places a point is actually resolved publish its Z here and \ref CadWorkPlaneElevation reads it.
+  ///
+  /// Set at point resolution (a viewport click's ray x plane hit, or a typed UCS coordinate mapped
+  /// through the frame) and cleared when point entry ends, so a stale value can never leak into a
+  /// later command. Under a flat UCS the published value equals the origin's Z, so this channel
+  /// changes nothing there.
+  bool  resolvedPointZValid = false;
+  float resolvedPointZ = 0.f;
   /// Model viewport size in pixels, published by the UI each frame. The command layer needs it to
   /// project geometry to screen for box-selection under an orbited camera (REQ-058); it has no
   /// other way to know the viewport's aspect. Zero means "not yet known" — callers fall back to
@@ -1802,7 +2010,21 @@ struct AppCommandState {
   /// REQ-302: which top-level ribbon tab is showing. Persisted in user prefs, same shape as
   /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabSurvey below; an out-of-range value
   /// loaded from a hand-edited prefs file is clamped back into range rather than left invalid.
+  /// REQ-143 / REQ-153 may set this to a contextual tab for the session only.
   int activeRibbonTab = 0;
+  /// Permanent tab to restore when the last selected surface is cleared (REQ-143). Session-only.
+  int ribbonTabBeforeSurfaceCtx = 0;
+  /// True while a surface selection has already switched (or could switch) to the contextual tab.
+  bool surfaceContextualRibbonArmed = false;
+  /// Permanent tab to restore when the last selected survey point is cleared (REQ-153). Session-only.
+  int ribbonTabBeforeSurveyPointCtx = 0;
+  /// True while a survey-point selection has armed the SURVEY Point(s) contextual tab.
+  bool surveyPointContextualRibbonArmed = false;
+  /// Permanent tab to restore when BEDIT closes. Session-only.
+  int ribbonTabBeforeBlockEditor = 0;
+  bool blockEditorContextualRibbonArmed = false;
+  bool blockAuthoringPaletteOpen = false;
+  int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
@@ -1861,6 +2083,49 @@ struct AppCommandState {
   std::vector<CadSurface> cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
 
+  /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
+  std::vector<CadTable> cadTables;
+  std::vector<EntityAttributes> cadTableAttrs;
+
+  std::vector<CadBlockDefinition> blockDefs;
+  std::vector<CadBlockRef> cadBlockRefs;
+  std::vector<EntityAttributes> cadBlockRefAttrs;
+  std::string blockEditorName;
+  CadBlockDefinition blockEditorSnapshot;
+  bool blockEditorDirty = false;
+  bool blockEditPickerOpen = false;
+  char blockEditPickerName[256]{};
+  /// In-place block editing (REQ-107 / ADR-043). While active, the model arrays hold the
+  /// definition's primitive geometry in local coords and \c blockEditModelStash holds the real
+  /// drawing. Session-only — never in \ref DrawingDocument, never in `.gs`.
+  bool blockEditActive = false;
+  DrawingGeometrySnapshot blockEditModelStash;
+  /// \c cadGpuRevision at the last clean point of the session (enter / BSAVE). A different value
+  /// means unsaved edits — drives the BCLOSE Save/Don't-Save/Cancel prompt.
+  std::uint32_t blockEditCleanRevision = 0;
+  /// \c undoStack size when the session was entered. Session edits push snapshots of the block's
+  /// geometry (not the drawing's); those are dropped on close so a later Undo cannot restore block
+  /// content into model space.
+  std::size_t blockEditUndoMark = 0;
+  bool blockEditCloseAsked = false;   ///< UI shows the close modal while true.
+  /// Camera to restore when the session closes (the view BEDIT was invoked from).
+  double blockEditCamPanX = 0.0, blockEditCamPanY = 0.0, blockEditCamPanZ = 0.0;
+  float  blockEditCamZoom = 1.f, blockEditCamAz = 0.f, blockEditCamEl = 90.f;
+  /// Debug Developer Shell (REQ-161). Default off; status-bar DEV toggles it. Release ignores it.
+  bool devShellVisible = false;
+  std::vector<std::string> blockRecent;
+  std::vector<std::string> blockFavorites;
+  std::string blockLibraryFilter;
+  /// ATTDEF records collected by the last DXF/DWG import. Transient — not saved, not undo.
+  std::vector<CadBlockAttrDef> importedDxfAttrDefs;
+
+  /// In-place TABLE cell editor (viewport overlay). Not a command; Enter commits, Esc cancels.
+  bool tableCellEditorOpen = false;
+  int tableCellEditorIndex = -1;
+  int tableCellEditorCell = -1;
+  std::string tableCellEditorBuf;
+  bool tableCellEditorFocusRequest = false;
+
   /// One in-flight background rebuild per surface currently being retriangulated (REQ-069's dynamic
   /// rebuild — architecture §8's one-shot worker pattern, its second concrete use after
   /// \ref pdfAttachAsync and the first to implement the full contract: rules 4 and 5, generation
@@ -1908,6 +2173,7 @@ struct AppCommandState {
   struct VolumeDashboardAsync {
     std::uint64_t baseSurfaceId = 0;
     std::uint64_t comparisonSurfaceId = 0;
+    std::uint64_t clipEntityId = 0;
     /// Strong references to the exact triangulations this job computes against — captured on the UI
     /// thread at dispatch, read only on the worker thread. Safe with no locking because a `CadTin` is
     /// immutable once built and only ever REPLACED, never written through (architecture §11.5): the
@@ -1915,6 +2181,8 @@ struct AppCommandState {
     /// surface's OWN pointer while this runs.
     std::shared_ptr<const CadTin> tinBase;
     std::shared_ptr<const CadTin> tinComparison;
+    /// REQ-131 clip ring in TIN-local XY, captured at dispatch. Empty = no clip.
+    std::vector<std::pair<double, double>> clipRingXy;
     /// Whether the cut/fill map was wanted AT DISPATCH — captured so toggling the map on after a
     /// mapless result already landed is detected as staleness (the landed result has no map to show).
     bool wantMap = false;
@@ -1948,6 +2216,8 @@ struct AppCommandState {
     /// \ref SurfaceRebuildAsync keys on id rather than a name that a rename could orphan.
     std::uint64_t baseSurfaceId = 0;
     std::uint64_t comparisonSurfaceId = 0;
+    /// 0 = no clip (full overlap). Otherwise a closed polyline's entity id (REQ-131).
+    std::uint64_t clipEntityId = 0;
 
     /// The last landed result, and what it was computed FOR — a revision plus the two ids, so a
     /// change to EITHER a surface's triangulation OR the panel's own pick is detected as staleness by
@@ -1958,14 +2228,43 @@ struct AppCommandState {
     std::uint32_t resultForRevision = 0xFFFFFFFFu;
     std::uint64_t resultForBaseSurfaceId = 0;
     std::uint64_t resultForComparisonSurfaceId = 0;
+    std::uint64_t resultForClipEntityId = 0;
     bool resultHasMap = false;  ///< was `showMap` on when `lastResult` was computed?
     /// REQ-073's cut/fill map for `lastResult`, `GL_TRIANGLES` layout — empty unless `resultHasMap`.
     std::vector<float> mapCutTrianglesXyz;
     std::vector<float> mapFillTrianglesXyz;
 
+    struct AnalysisRow {
+      std::string label;
+      std::uint64_t baseSurfaceId = 0;
+      std::uint64_t comparisonSurfaceId = 0;
+      std::uint64_t clipEntityId = 0;
+      SurfaceVolumeResult result;
+      bool hasResult = false;
+    };
+    std::vector<AnalysisRow> rows;
+
     std::unique_ptr<VolumeDashboardAsync> job;  ///< null when nothing is in flight
   };
   VolumeDashboardState volumeDashboard;
+  std::string lastVolumeReportText;  ///< Last successful VOLUMES / dashboard numbers for VOLREPORT.
+  bool hasLastVolumeResult = false;
+  SurfaceVolumeResult lastVolumeResult;
+  std::string lastVolumeBaseName;
+  std::string lastVolumeComparisonName;
+
+  /// REQ-145 Quick Profile — session graph only, never `.gs` (same rule as Volume Dashboard).
+  struct QuickProfileState {
+    bool open = false;
+    bool hasResult = false;
+    std::string surfaceName;
+    double length = 0.0;
+    int onSurfaceCount = 0;
+    double minZ = 0.0;
+    double maxZ = 0.0;
+    std::vector<SurfaceProfileSample> samples;
+  };
+  QuickProfileState quickProfile;
 
   /// Generated display geometry for one surface — ADR-036 (e).
   ///
@@ -2008,6 +2307,11 @@ struct AppCommandState {
     std::vector<float> borderEdges;    ///< The outline: edges belonging to one triangle (\c TinBorderEdges).
     std::vector<float> minorContours;  ///< Minor levels, excluding those that are also major.
     std::vector<float> majorContours;
+    struct ContourLabel {
+      float x = 0.f, y = 0.f, z = 0.f;
+      double level = 0.0;
+    };
+    std::vector<ContourLabel> contourLabels;
 
     /// The style asked for more contour levels than the display path will generate, so the contour
     /// buffers above are empty for a reason that has nothing to do with the style's toggles.
@@ -2039,6 +2343,43 @@ struct AppCommandState {
   /// \ref DrawingDocument, never in `.gs` — which is what makes REQ-070's "never stored in `.gs`"
   /// and "adds no entity to the drawing" structurally true rather than a rule someone must remember.
   std::vector<SurfaceDisplayCacheEntry> surfaceDisplayCache;
+
+  /// REQ-126 / ADR-039 (c): per-surface spatial index for elevation queries. Live-only, same
+  /// staleness key as the display cache (id + TIN pointer). `mutable` because SURFELEV/hover take a
+  /// const state and the index is derived, not document content.
+  struct SurfaceQueryCacheEntry {
+    std::uint64_t surfaceId = 0;
+    std::weak_ptr<const CadTin> builtFrom;
+    TinSpatialIndex index;
+  };
+  mutable std::vector<SurfaceQueryCacheEntry> surfaceQueryCache;
+
+  /// REQ-132…134 / ADR-039 (j): live-only drain graph and preview lines. Never in `.gs`.
+  struct SurfaceWatershedCacheEntry {
+    std::uint64_t surfaceId = 0;
+    std::weak_ptr<const CadTin> builtFrom;
+    WatershedResult analysis;
+    std::vector<float> basinOutlines;
+    std::vector<float> waterDropLines;
+    std::vector<float> catchmentLines;
+  };
+  std::vector<SurfaceWatershedCacheEntry> surfaceWatershedCache;
+  std::string waterDropSurfaceName;
+  std::string catchmentSurfaceName;
+  std::string swapEdgeSurfaceName;
+  std::string addPointSurfaceName;
+  std::string delPointSurfaceName;
+  std::string movePointSurfaceName;
+  std::string delLineSurfaceName;
+  enum class MoveTinPointPhase { WaitFrom, WaitTo } moveTinPointPhase = MoveTinPointPhase::WaitFrom;
+  double moveTinFromX = 0.0;
+  double moveTinFromY = 0.0;
+  std::vector<float> lastWaterDropPathXyz;
+  std::vector<float> lastCatchmentPathXyz;
+  /// GL_LINES preview rebuilt each display pass from the last* paths. Not tied to TIN identity, so
+  /// a REQ-069 rebuild cannot erase a water-drop the user just computed (REQ-133).
+  std::vector<float> waterDropPreviewLines;
+  std::vector<float> catchmentPreviewLines;
 
   /// What the renderer is handed for surfaces this frame — batches borrowing the buffers above,
   /// filtered for layer/isolation visibility and carrying each component's resolved colour and
@@ -2389,6 +2730,10 @@ struct AppCommandState {
   /// one surface (existing and proposed) and a grade must be computed within one surface, never
   /// across two (Q1, TASK-055).
   enum class SurfaceElevPhase { WaitFirst, WaitSecond } surfaceElevPhase = SurfaceElevPhase::WaitFirst;
+  enum class QuickProfilePhase { WaitFirst, WaitSecond } quickProfilePhase = QuickProfilePhase::WaitFirst;
+  std::string quickProfileSurfaceName;
+  double quickProfileFromX = 0.0;
+  double quickProfileFromY = 0.0;
   double surfaceElevFromX = 0.0;
   double surfaceElevFromY = 0.0;
   std::vector<std::pair<std::string, double>> surfaceElevFromZ;
@@ -2403,6 +2748,7 @@ struct AppCommandState {
   /// than started from the panel, which is the ordinary case for the command line.
   std::string designateBreaklineDescription;
   std::string designateBoundaryName;
+  bool designateContourSource = false;
 
   /// REQ-085: the active polyline draft is a **3D polyline** — vertices may carry a typed elevation.
   ///
@@ -2442,9 +2788,31 @@ struct AppCommandState {
   bool showTextStyleManagerWindow = false;
   /// Surface Style editor (REQ-070 / ADR-036 (i)) — opened by SURFSTYLE and by the Surface Manager.
   bool showSurfaceStyleWindow = false;
+  /// When set, the next Surface Style window draw selects this named row (Surface Manager Edit...).
+  std::string surfaceStyleEditorFocusName;
+  /// When true, the style/analysis editor uses the title "Surfaces" (Toolspace / Survey ribbon).
+  bool surfaceStyleUseSurfacesTitle = false;
   bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
-  bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068).
+  /// When set, the Point Group manager selects this named group on the next draw.
+  std::string pointGroupManagerFocusName;
+  bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068). definition edits live in Toolspace.
+  /// Create Surface dialog (Toolspace Surfaces ▸ Create Surface...). Session-only.
+  bool showCreateSurfaceWindow = false;
+  /// Surface Properties (Toolspace named surface ▸ Surface Properties...). Session-only.
+  bool showSurfacePropertiesWindow = false;
+  int surfacePropertiesIndex = -1;
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
+  /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
+  enum class ToolspaceTab : int { Prospector = 0, Settings = 1 };
+  bool showToolspaceWindow = true;
+  /// View Manager (REQ-106) — the dialog half of "a VIEW command/dialog". Session-only, like the
+  /// other manager windows: which panels are open is not a property of the drawing.
+  bool showViewManagerWindow = false;
+  /// The New View name prompt, raised from the ribbon button. Separate from the manager window so
+  /// "save what I am looking at" stays one click rather than opening a dialog to find a button.
+  bool showViewManagerNewPrompt = false;
+  char newViewNameBuf[96] = {};
+  ToolspaceTab toolspaceTab = ToolspaceTab::Prospector;
   /// Which feature line the elevation editor is showing, 0-based. Held here rather than as a static
   /// in the panel so that opening the editor from a selected feature line can aim it, and so it
   /// survives the window being closed and reopened.
@@ -2647,8 +3015,11 @@ struct AppCommandState {
     std::string  name;
     uint32_t     uid = 0;  ///< Stable per-tab ID used in ImGui label suffix to prevent ID collisions.
   };
-  std::vector<DrawingTab>     drawingTabs{{"Drawing 1", 1u}};
-  int      activeDrawingIdx   = 0;
+  /// REQ-308 / D-2026-08-30-a: drawingTabs[0] is the **Start screen** — a non-closable, pinned-first
+  /// sentinel that backs no document. documents[0]/viewportRenderers[0] exist for index alignment
+  /// but are never meaningful. Real drawings start at FirstDrawingTabIndex().
+  std::vector<DrawingTab>     drawingTabs{{"Start", 0u}, {"Drawing 1", 1u}};
+  int      activeDrawingIdx   = 0;   ///< 0 = Start screen on launch.
   int      nextDrawingNumber  = 2;    ///< Auto-incremented for "Drawing N" naming.
   uint32_t nextTabUid         = 2u;   ///< Monotonically increasing; each new tab gets a unique uid.
   bool pendingDrawingTabSwitch = false; ///< Set for one frame after a programmatic tab change.
@@ -2657,9 +3028,14 @@ struct AppCommandState {
   bool propertiesPanelActive  = false; ///< True when Properties is the selected tab in its dock node.
   int  prevDrawingIdx         = 0;     ///< Authoritative "last active" idx; used by main.cpp for switch detection.
   int  pendingTabErase        = -1;    ///< If >= 0, main.cpp must shut down + erase viewportRenderers[this index].
+  /// REQ-308: after a drawing is opened or saved, the main loop renders it once then captures a
+  /// thumbnail for the Recent list. Set together; serviced and cleared after RenderScene when
+  /// pendingThumbnailTabIdx == activeDrawingIdx.
+  std::string pendingThumbnailPath;
+  int         pendingThumbnailTabIdx = -1;
   /// Per-drawing snapshots — one entry per open tab.  Active tab's live data lives in the fields
   /// above; this vector is read/written by SaveDocumentToSnapshot / RestoreDocumentFromSnapshot.
-  std::vector<DrawingDocument> documents{1};
+  std::vector<DrawingDocument> documents{2};  ///< [0] pairs with the Start sentinel tab (unused); see drawingTabs.
 
   // --- Active-document dirty/path tracking (mirrors DrawingDocument fields for the live tab) ---
   uint32_t    activeDocSavedRevision = 0;   ///< cadGpuRevision when the active doc was last saved.
@@ -2713,6 +3089,39 @@ struct AppCommandState {
   } pdfAttachPhase = PdfAttachPhase::WaitDialog;
 
   bool pdfAttachDialogOpen = false;
+
+  // -------------------------------------------------------------------------
+  // INSERT dialog (issue #124)
+  // -------------------------------------------------------------------------
+  enum class InsertBlockPhase {
+    WaitDialog,
+    WaitInsertPoint,
+    WaitScale,
+    WaitRotation,
+    WaitAttributes,
+  } insertBlockPhase = InsertBlockPhase::WaitDialog;
+
+  bool insertBlockDialogOpen = false;
+  char insertBlockName[256]{};
+  char insertBlockPath[4096]{};
+  char insertBlockAngleBuf[64]{};
+  float insertBlockX = 0.f;
+  float insertBlockY = 0.f;
+  float insertBlockZ = 0.f;
+  float insertBlockSx = 1.f;
+  float insertBlockSy = 1.f;
+  float insertBlockSz = 1.f;
+  float insertBlockRotDeg = 0.f;
+  bool insertBlockSpecifyPoint = true;
+  bool insertBlockSpecifyScale = false;
+  bool insertBlockSpecifyRot = true;
+  bool insertBlockUniformScale = true;
+  bool insertBlockExplode = false;
+  bool insertBlockAttrDialogOpen = false;
+  int insertBlockAttrRefIndex = -1;
+  bool insertBlockAttrPaper = false;
+  char insertBlockAttrBuf[8][128]{};
+
   char pdfAttachFilePath[1024]{};
   int  pdfAttachSelectedPage = 0;
   float pdfAttachInsertX  = 0.f;
@@ -2980,14 +3389,23 @@ inline void CadTickViewAnimation(AppCommandState& st, float dtSeconds) {
   st.viewportElevationDeg = st.viewAnimFromEl + (st.viewAnimToEl - st.viewAnimFromEl) * e;
 }
 
-/// Elevation at which newly drawn geometry lands — the active work plane's Z (REQ-058).
+/// Elevation at which newly drawn geometry lands — the active work plane's Z (REQ-058 / REQ-154).
 ///
-/// Exact while the work plane stays parallel to XY, which is all the UCS command currently
-/// produces. A tilted plane would make Z vary across the plane, and the creation sites would then
-/// need the click's own intersection Z (\c uiCursorWorldZ) rather than this constant — recorded so
-/// the limitation is visible if tilted UCS support is ever added.
+/// Two channels, in order:
+///
+///  1. **The resolved point's own Z**, when point entry has published one. On a tilted UCS the work
+///     plane's Z *varies across the plane*, so a single constant cannot describe where a point
+///     lands — the value has to come from the point that was actually resolved (the click's
+///     ray x plane hit, or the typed UCS coordinate mapped through the frame).
+///  2. Otherwise the UCS origin's Z, which is exactly the old behaviour.
+///
+/// Under any UCS parallel to world XY — every pre-UCS drawing, and every UCS that is a rotation
+/// about Z — the two agree by construction, so this is a strict superset of what ELEV did rather
+/// than a change to it.
 inline float CadWorkPlaneElevation(const AppCommandState& st) {
-  return static_cast<float>(st.ucsOriginZ);
+  if (st.resolvedPointZValid)
+    return st.resolvedPointZ;
+  return static_cast<float>(st.activeUcs.origin.z);
 }
 
 /// Elevation a click should COMMIT at: the snapped point's own Z when an object snap is active,
@@ -3001,19 +3419,40 @@ inline float CadCommitElevation(const AppCommandState& st) {
   return st.viewportSnapPickValid ? st.viewportSnapPickLocalZ : CadWorkPlaneElevation(st);
 }
 
-/// True when the work plane is the world XY plane at Z = 0 — the default, and what the status bar
+/// True when the active UCS is the World Coordinate System — the default, and what the status bar
 /// reports as "World".
-inline bool CadUcsIsWorld(const AppCommandState& st) {
-  return st.ucsOriginZ == 0.0 && st.ucsOriginX == 0.0 && st.ucsOriginY == 0.0 && st.ucsNormalZ == 1.0 &&
-         st.ucsNormalX == 0.0 && st.ucsNormalY == 0.0 && st.ucsAzimuthDeg == 0.f;
+inline bool CadUcsIsWorld(const AppCommandState& st) { return ucs::IsWorld(st.activeUcs); }
+
+/// The active UCS expressed in **storage space** (local XY, absolute Z).
+///
+/// \ref AppCommandState::activeUcs is stored in TRUE WORLD coordinates, so that a document-origin
+/// rebase — which shifts every stored coordinate to keep float precision (REQ-101) — cannot move
+/// the user's coordinate frame out from under them. Nothing has to remember to shift it, because
+/// there is nothing frame-relative to shift.
+///
+/// The camera, the picking rays and the geometry they hit all live in storage space, so anything
+/// that meets a ray converts here first. Only the origin moves; a translation cannot rotate a
+/// basis, so the axes pass through untouched.
+inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
+  ucs::Ucs u = st.activeUcs;
+  u.origin.x -= st.worldDocumentOriginX;
+  u.origin.y -= st.worldDocumentOriginY;
+  return u;
 }
 
-/// The active work plane (UCS) a viewport click resolves against (REQ-058 / ADR-025 (e)).
-inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) {
-  ray3d::Plane p;
-  p.point = {st.ucsOriginX, st.ucsOriginY, st.ucsOriginZ};
-  p.normal = {st.ucsNormalX, st.ucsNormalY, st.ucsNormalZ};
-  return p;
+/// The active work plane (UCS XY) a viewport click resolves against (REQ-058 / ADR-025 (e)).
+/// In storage space, because that is the space the ray is in.
+inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) { return ucs::WorkPlane(CadActiveUcsStorage(st)); }
+
+/// The **camera-azimuth offset** that squares the view with the active UCS's north (REQ-059).
+///
+/// Negated relative to the UCS's own rotation, and that sign is not a detail to gloss: a positive
+/// UCS rotation about Z turns the frame counter-clockwise, while a positive camera azimuth turns
+/// screen-up clockwise (measured against `Camera`, see `ucs::PlanViewAngles`). Handing the ViewCube
+/// the un-negated angle makes its compass square up the wrong way — visibly, but only under a
+/// rotated UCS, which is exactly the case nobody exercises by accident.
+inline float CadUcsViewAzimuthOffsetDeg(const AppCommandState& st) {
+  return -ucs::AzimuthAboutWorldZDeg(st.activeUcs);
 }
 
 
@@ -3028,7 +3467,11 @@ enum class EntityKind : std::uint8_t {
   /// end would renumber every entity in every existing drawing on its next load — and REQ-069's
   /// breakline and boundary references are stored by exactly those ids. Appending is what keeps a
   /// legacy `.gs` loading with the ids it loaded with yesterday.
-  Surface
+  Surface,
+  /// REQ-148 / D-2026-08-28-i. Appended after Surface so the id sweep does not renumber legacy drawings.
+  Table,
+  /// GitHub issue #124. Appended after Table so the id sweep does not renumber legacy drawings.
+  BlockRef
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -3129,6 +3572,9 @@ enum class SurfaceState { Current, Stale, Rebuilding };
 void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
                            std::vector<SurfaceHoverRow>* out);
 
+/// REQ-127: interpolated Z of the last covering visible surface at plan (x,y), or false if none.
+[[nodiscard]] bool SurfaceSnapElevation(const AppCommandState& st, double x, double y, float* outZ);
+
 /// Index of the surface named \p name (case-insensitive), or -1 (REQ-068).
 ///
 /// For a name the **user** typed — a command argument, a panel selection. For a reference held
@@ -3155,6 +3601,15 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
 int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
                                  const std::vector<std::string>& groupNames,
                                  std::vector<std::string>& log);
+
+/// REQ-136: named TIN volume surface (comparison minus base). Returns the new index, or -1.
+int CreateSurfaceFromVolumeParents(AppCommandState& st, const std::string& name, const std::string& baseName,
+                                   const std::string& comparisonName, std::vector<std::string>& log);
+
+/// If more than one surface draws with this surface's resolved style, copy that style to a unique
+/// name and point only this surface at the copy. Named-style sharing (REQ-070) stays available via
+/// SURFSTYLE ASSIGN. Returns true when a copy was made.
+bool DetachSurfaceStyleIfShared(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>* log);
 
 /// Erase a surface by index, keeping its attribute array in step. Callers own the undo snapshot.
 void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
@@ -3193,6 +3648,14 @@ void EnsureEntityIds(AppCommandState& st);
 
 /// Capture the active tab's current geometry into the undo stack; clears redo stack; trims to undoHistoryMaxSize.
 void PushUndoSnapshot(AppCommandState& st, const std::string& description);
+
+/// Capture / restore the whole model-geometry set as a value (same fields the undo stack uses).
+/// Public so the block editor (ADR-043) can stash the drawing while a definition is edited in place.
+[[nodiscard]] DrawingGeometrySnapshot CadCaptureGeometrySnapshot(const AppCommandState& st,
+                                                                 const std::string& description);
+void CadRestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot& snap);
+[[nodiscard]] std::size_t CadActiveUndoStackSize(const AppCommandState& st);
+void CadTruncateActiveUndoStack(AppCommandState& st, std::size_t n);
 /// Undo: restore previous geometry snapshot; push current to redo stack. Returns true if an undo was performed.
 bool DoUndo(AppCommandState& st, std::vector<std::string>& log);
 /// Redo: restore next geometry snapshot; push current to undo stack. Returns true if a redo was performed.
@@ -3390,6 +3853,19 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     el.ratio = st.entityGripOrigEllRatio;
     break;
   }
+  case SelectedEntity::Type::BlockRef: {
+    if (idx < 0 || static_cast<size_t>(idx) >= st.cadBlockRefs.size())
+      return;
+    CadBlockRef& r = st.cadBlockRefs[static_cast<size_t>(idx)];
+    CadBlockParamSet(&r, "DistNeg", st.entityGripOrigX0);
+    CadBlockParamSet(&r, "DistPos", st.entityGripOrigY0);
+    CadBlockParamSet(&r, "SheetOff", st.entityGripOrigX1);
+    CadBlockParamSet(&r, "NorthOff", st.entityGripOrigY1);
+    CadBlockParamSet(&r, "Flip", st.entityGripOrigR);
+    r.xf.x = st.entityGripOrigCx;
+    r.xf.y = st.entityGripOrigCy;
+    break;
+  }
   default:
     break;
   }
@@ -3411,8 +3887,22 @@ void CancelSegmentAnglePick(AppCommandState& st, std::vector<std::string>* log);
 bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 
 /// Trim and parse absolute "x,y" / "x y" or relative "@dx,dy" when allowed.
-bool ParseStoragePoint(const AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
+///
+/// **Interpreted in the active UCS** (REQ-154): under a rotated UCS `10,0` is 10 units along the UCS
+/// X axis, not the world's. Under the WCS — the default, and every drawing that predates the UCS
+/// command — this is the original world-frame parse, unchanged.
+bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
                        float baseLocalX, float baseLocalY);
+
+/// \ref ParseStoragePoint, additionally reporting the resolved point's world Z. Callers that are
+/// about to commit geometry want this: on a tilted UCS the work plane's elevation varies across it,
+/// so the point's own Z is the only correct answer (see AppCommandState::resolvedPointZ).
+bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, float* ly, double* outWorldZ,
+                        bool allowRelative, float baseLocalX, float baseLocalY);
+
+/// Split a typed point into its two numbers and whether it carried a leading `@`, without deciding
+/// which frame those numbers are in. That separation is what lets one parser serve both frames.
+bool ParsePointComponents(const std::string& raw, double* a, double* b, bool* isRelative, bool allowRelative);
 
 bool ParseWorldPoint(const std::string& raw, float* ox, float* oy, bool allowRelative, float baseX, float baseY);
 
@@ -3424,7 +3914,8 @@ bool ParseWorldPointD(const std::string& raw, double* ox, double* oy, bool allow
                       double baseY);
 
 /// If ortho: snaps dx/dy so segment from anchor is horizontal or vertical (CAD-style).
-void ApplyOrthoConstrainFromAnchor(float anchorX, float anchorY, float* wx, float* wy, bool ortho);
+void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool ortho);
 
 /// Snap pick onto anchor + t*(ux,uy). Negative \p t allowed unless \p forwardOnly.
 void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx, float lockUy, float* wx, float* wy,
@@ -3525,6 +4016,75 @@ void StartElevCommand(AppCommandState& st, std::vector<std::string>& log);
 bool ApplyElevValue(AppCommandState& st, double z, std::vector<std::string>& log);
 void ApplyUcsWorld(AppCommandState& st, std::vector<std::string>& log);
 
+// --- UCS and PLAN (REQ-154, GitHub #126) --------------------------------------------------------
+
+/// Make \p next the active UCS: pushes the outgoing frame onto the Previous stack, honours
+/// UCSFOLLOW, and reports the change.
+///
+/// **Every** path that changes the UCS goes through here — that is what makes "Previous" and
+/// UCSFOLLOW work for options added later without each one remembering to maintain them.
+/// \p pushPrevious is false only for `UCS Previous` itself, which must not push the state it is
+/// popping (AutoCAD's rule: restoring a previous UCS does not add a history entry).
+void SetActiveUcs(AppCommandState& st, const ucs::Ucs& next, std::vector<std::string>& log,
+                  bool pushPrevious = true);
+
+/// UCS: the top-level prompt.
+void StartUcsCommand(AppCommandState& st, std::vector<std::string>& log);
+/// PLAN: the view-orientation prompt.
+void StartPlanCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// Feed one typed line to whichever of UCS / PLAN is active. Returns true when the line was
+/// consumed. Shared by the command line and the at-cursor dynamic input (REQ-024), so both accept
+/// exactly the same keywords.
+bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+
+/// Feed a viewport pick (world coordinates) to the UCS command. Returns true when consumed.
+bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log);
+
+/// Orient the view to a PLAN view of \p frame without touching the active UCS.
+void ApplyPlanViewOf(AppCommandState& st, const ucs::Ucs& frame, std::vector<std::string>& log);
+
+/// Find a saved UCS by name, case-insensitively. Returns nullptr when there is none.
+const NamedUcs* FindNamedUcs(const AppCommandState& st, const std::string& name);
+
+/// Save / restore / delete a named UCS (REQ-154).
+///
+/// Only \ref SaveNamedUcs is reachable from the `UCS` command: `UCS Named` asks for a name and
+/// nothing else. Restore and delete live in the View Manager, where the saved frames are listed and
+/// a user can see what they are choosing between - having to recall a name you cannot see was the
+/// weakest part of the old Save/Restore/Delete sub-prompt. The dialog calls these functions, so the
+/// two halves still share one implementation and cannot drift.
+///
+/// All three refuse the reserved name "World". Restore and delete return false, and say so in
+/// \p log, when no such name is saved.
+void SaveNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log);
+bool RestoreNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log);
+bool DeleteNamedUcs(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log);
+
+/// List the saved UCS definitions to \p log - what `UCS ?` prints.
+void ListNamedUcs(const AppCommandState& st, std::vector<std::string>& log);
+
+/// A one-line description of a frame, in WORLD coordinates - the only frame a UCS can sensibly be
+/// stated in. Shared by the command log and the View Manager so the two cannot describe a saved
+/// frame differently.
+std::string DescribeUcs(const ucs::Ucs& u);
+
+/// Named views (REQ-106). Same shape as the UCS Named helpers above, deliberately.
+const NamedView* FindNamedView(const AppCommandState& st, const std::string& name);
+/// The saved view the camera is currently in, or nullptr — derived, never remembered.
+const NamedView* CurrentNamedView(const AppCommandState& st);
+NamedView CaptureCurrentView(const AppCommandState& st, const std::string& name);
+void RestoreNamedView(AppCommandState& st, const NamedView& v, std::vector<std::string>& log);
+void ListNamedViews(const AppCommandState& st, std::vector<std::string>& log);
+bool ProcessViewCommandLine(AppCommandState& st, const std::string& rest, std::vector<std::string>& log);
+
+/// Apply ORTHO in the active UCS's axes rather than the world's (REQ-047 under REQ-154).
+///
+/// \p anchor and \p target are world 3D points; the constrained target is written back. Under the
+/// WCS this reduces exactly to the world-axis constraint the 2D path always applied.
+ray3d::Vec3 ConstrainToUcsOrtho(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target);
+
 /// RECT (REQ-053): two opposite corners create an axis-aligned rectangle.
 void StartRectCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Store the rectangle spanned by the two corners as a 4-vertex closed polyline, ending the command.
@@ -3546,12 +4106,22 @@ void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
 /// REQ-074: pick a point for its interpolated surface elevation; pick a second for the grade
 /// between them. Reports every surface covering the pick, by name.
 void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartWaterDropCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfAddPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfMovePointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfDelLineCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartQuickProfileCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 
 /// REQ-069: designate one picked Line/Polyline as a breakline on the named surface, appended to its
 /// definition by stable entity id. Refuses to start when \p surfaceName does not name an existing
 /// surface, reported before the pick rather than after it (REQ-201).
 void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surfaceName,
                                     std::vector<std::string>& log);
+void StartDesignateContourCommand(AppCommandState& st, const std::string& surfaceName,
+                                  std::vector<std::string>& log);
 
 /// REQ-069: designate one picked CLOSED Polyline as a boundary ring of kind \p kind on the named
 /// surface, applied in the order it was added. Same refuse-before-pick rule as above.
@@ -3631,6 +4201,7 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
                                         float fenceP2y, float pickPreviewX, float pickPreviewY,
                                         std::vector<float>* previewLinesOut);
 /// Closest CAD entity within tolerance (later draw order wins on tie). False if none.
+/// \param outDistSq Optional: pass null when only the entity matters, not how near the pick was.
 /// \param pickRay When non-null AND valid, entities are measured against this world ray in 3D
 ///        instead of against \p wx,\p wy in plan (REQ-058). Pass it whenever the camera is
 ///        orbited: the ray crosses the work plane at one XY and an elevated entity at another, so

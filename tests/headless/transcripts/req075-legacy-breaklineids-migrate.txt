@@ -20,13 +20,13 @@ CMD SURFACELIST
 EXPECT LOG "1 breakline(s)"
 
 # Saving migrates it to the current form, once, with no separate step; it survives that trip...
-SAVEAS %OUT%/mig-a.gs
-OPEN %OUT%/mig-a.gs
+SAVEAS %OUT%/mig-a.dwg
+OPEN %OUT%/mig-a.dwg
 CMD SURFACELIST
 EXPECT LOG "1 breakline(s)"
 
 # ...and the migration is idempotent, which is REQ-079's rule for every other normalisation.
-SAVEAS %OUT%/mig-b.gs
-EXPECT SAMEFILE %OUT%/mig-a.gs %OUT%/mig-b.gs
+SAVEAS %OUT%/mig-b.dwg
+EXPECT SAMEFILE %OUT%/mig-a.dwg %OUT%/mig-b.dwg
 
 CHECK ALL
