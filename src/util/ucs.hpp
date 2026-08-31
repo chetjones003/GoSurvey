@@ -324,6 +324,53 @@ inline void SpinPair(Vec3* a, Vec3* b, double deg) {
   return true;
 }
 
+/// POLAR tracking: snap \p target onto the nearest polar ray around \p anchor (issue #154, REQ-154).
+///
+/// A polar ray is a direction in \p u's XY plane at a multiple of \p incrementDeg from the UCS +X,
+/// plus any one-off bearings passed in \p extraDeg (\p extraCount entries; pass nullptr / 0 for
+/// none). The angle is measured with the *same* reference \ref AngleInRotationPlaneDeg and the UCS
+/// `2P` option use — from +X, positive toward +Y — so a frame rotated about Z carries the rays with
+/// it: a 90 deg pull under a 45 deg UCS lands on the UCS axis, not the world axis.
+///
+/// The distance from the anchor and any out-of-plane (UCS Z) component of \p target are preserved;
+/// only the in-plane bearing is quantised. Returns \p target unchanged when it sits on \p anchor
+/// (no direction to snap) or when \p incrementDeg is not positive and no extra angles are given.
+[[nodiscard]] inline Vec3 SnapToPolarRay(const Ucs& u, const Vec3& anchor, const Vec3& target,
+                                         double incrementDeg, const double* extraDeg = nullptr,
+                                         int extraCount = 0) {
+  const Vec3 d = WorldVectorToUcs(u, ray3d::Sub(target, anchor));
+  const double planar = std::sqrt(d.x * d.x + d.y * d.y);
+  if (planar < 1e-9)
+    return target;
+  const double kRad = detail::kDegToRad;
+  const double cur = std::atan2(d.y, d.x) / kRad;  // degrees, UCS +X reference
+  auto wrap180 = [](double deg) {
+    double w = std::fmod(deg + 180.0, 360.0);
+    if (w < 0.0)
+      w += 360.0;
+    return w - 180.0;
+  };
+  bool have = false;
+  double best = 0.0, bestErr = 0.0;
+  auto consider = [&](double cand) {
+    const double err = std::fabs(wrap180(cur - cand));
+    if (!have || err < bestErr) {
+      have = true;
+      best = cand;
+      bestErr = err;
+    }
+  };
+  if (incrementDeg >= 1e-6)
+    consider(std::round(cur / incrementDeg) * incrementDeg);
+  for (int i = 0; i < extraCount && extraDeg; ++i)
+    consider(extraDeg[i]);
+  if (!have)
+    return target;
+  const double r = best * kRad;
+  const Vec3 snapped{planar * std::cos(r), planar * std::sin(r), d.z};
+  return ray3d::Add(anchor, UcsVectorToWorld(u, snapped));
+}
+
 // ---------------------------------------------------------------------------------------------
 // PLAN support.
 // ---------------------------------------------------------------------------------------------

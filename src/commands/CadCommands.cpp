@@ -17485,10 +17485,37 @@ bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, f
   return ParseStoragePointZ(st, raw, lx, ly, nullptr, allowRelative, baseLocalX, baseLocalY);
 }
 
+void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool polar) {
+  if (!polar || !st.polarMode || !wx || !wy)
+    return;
+  const ucs::Ucs frame = CadActiveUcsStorage(st);
+  // Lift both points onto the UCS work plane first, the same reason ConstrainToUcsOrtho does: polar
+  // is a constraint within that plane and a tilted plane's Z varies across it.
+  auto onWorkPlane = [&](double x, double y) {
+    const ray3d::Vec3 n = frame.zAxis;
+    const double z = (std::fabs(n.z) > 1e-9)
+                         ? frame.origin.z - (n.x * (x - frame.origin.x) + n.y * (y - frame.origin.y)) / n.z
+                         : frame.origin.z;
+    return ray3d::Vec3{x, y, z};
+  };
+  const std::vector<double>& extra = st.polarExtraAnglesDeg;
+  const ray3d::Vec3 snapped = ucs::SnapToPolarRay(frame, onWorkPlane(anchorX, anchorY), onWorkPlane(*wx, *wy),
+                                                  st.polarIncrementDeg, extra.empty() ? nullptr : extra.data(),
+                                                  static_cast<int>(extra.size()));
+  if (!std::isfinite(snapped.x) || !std::isfinite(snapped.y))
+    return;  // leave the point alone rather than move it somewhere undefined (REQ-201)
+  *wx = static_cast<float>(snapped.x);
+  *wy = static_cast<float>(snapped.y);
+}
+
 void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
                                    bool ortho) {
-  if (!ortho || !wx || !wy)
+  if (!ortho || !wx || !wy) {
+    // ORTHO and POLAR are mutually exclusive; when ORTHO is off, POLAR (if on) constrains instead.
+    ApplyPolarConstrainFromAnchor(st, anchorX, anchorY, wx, wy, !ortho);
     return;
+  }
   // Under the WCS this is the original world-axis constraint, byte for byte — REQ-047's one tested
   // implementation, still reached by every drawing that never touches UCS.
   if (CadUcsIsWorld(st)) {
