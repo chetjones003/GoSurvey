@@ -29,3 +29,9 @@ dev/_common.sh  text eol=lf
 *.shx   binary
 *.rsc   binary
 *.rdbg  binary
+
+# --- Vendored dependencies (D-2026-08-31-b): keep upstream bytes verbatim ---
+third_party/** -text
+third_party/**/*.lib binary
+third_party/**/*.dll binary
+third_party/**/*.a   binary

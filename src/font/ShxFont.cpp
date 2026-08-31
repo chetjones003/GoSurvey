@@ -1,5 +1,4 @@
-#define _CRT_SECURE_NO_WARNINGS  // std::getenv for USERPROFILE
-#include "ShxFont.hpp"
+#include "ShxFont.hpp"  // _CRT_SECURE_NO_WARNINGS (std::getenv) comes from the build target
 
 #include <algorithm>
 #include <cctype>
