@@ -25553,7 +25553,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       const std::string tr = StringUtil::trimCopy(line);
       if (tr.empty())
         st.textHeightDraft = paperText ? st.defaultPlottedTextHeightInches : DefaultAnnotationTextHeightWorld(st);
-      else if (!ParseSingleFloatToken(tr, &st.textHeightDraft) || st.textHeightDraft <= 0.f) {
+      else if (!ParseSingleFloatToken(tr, &st.textHeightDraft) || !std::isfinite(st.textHeightDraft) ||
+               st.textHeightDraft <= 0.f) {
         log.push_back("TEXT — invalid height.");
         return;
       }
@@ -25566,7 +25567,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // Bearing convention (clockwise from north): 0 = north (text runs up), 90 = east (reads
       // left-to-right). Enter defaults to 90 (horizontal), matching AutoCAD's default text orientation.
       float deg = 90.f;
-      if (!tr.empty() && !ParseAngleDegrees(tr, &deg)) {
+      if (!tr.empty() && (!ParseAngleDegrees(tr, &deg) || !std::isfinite(deg))) {
         log.push_back("TEXT — could not parse angle.");
         return;
       }
@@ -25583,16 +25584,40 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       ann.rotationRad = st.textRotDraft;
       ann.text = line;
       if (!ann.text.empty()) {
+        const bool paperTarget = ActivePaperGeometryTarget(st) != nullptr;
+        // Paper-space TEXT (REQ-037): textHeightDraft is already in paper (plotted) inches — store it
+        // directly. Model-space TEXT divides by the plot scale to reach plotted inches.
+        const float plottedHeightInches =
+            paperTarget ? st.textHeightDraft
+                        : st.textHeightDraft / std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+        const float insZ = paperTarget ? 0.f : CadCommitElevation(st);
+        ann.plottedHeightInches = plottedHeightInches;
+        // REQ-204 finite-coords / REQ-201: a non-finite insertion, elevation, rotation, or height —
+        // and any height that drives the annotation's world extent past FLT_MAX — must be refused and
+        // reported, never stored. It must never reach SAVEAS or the load-time origin rebase, which
+        // reads CadAnnotationRoughBounds for every annotation: one inf corner there rebases the whole
+        // drawing's origin to inf and every coordinate in the file follows. The RESULT is what is
+        // checked, not the typed input — a finite but huge height (e.g. 1e38) passes std::isfinite on
+        // the way in and overflows to inf only once scaled by the text length. Issue #117; same shape
+        // as the CIRCLE infinite-radius guard (REQ-204, issue #59).
+        float rbMnX = 0.f, rbMnY = 0.f, rbMxX = 0.f, rbMxY = 0.f;
+        CadAnnotationRoughBounds(ann, st.modelUnitsPerPlottedInch, &rbMnX, &rbMnY, &rbMxX, &rbMxY);
+        if (!std::isfinite(ann.insX) || !std::isfinite(ann.insY) || !std::isfinite(insZ) ||
+            !std::isfinite(ann.rotationRad) || !std::isfinite(plottedHeightInches) ||
+            plottedHeightInches <= 0.f || !std::isfinite(rbMnX) || !std::isfinite(rbMnY) ||
+            !std::isfinite(rbMxX) || !std::isfinite(rbMxY)) {
+          log.push_back(
+              "TEXT rejected - the insertion point, elevation, rotation, or height is not a finite number.");
+          st.active = K::None;
+          ResetTextCmdDraft(st);
+          return;
+        }
         PushUndoSnapshot(st, "Text");
         if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
-          // Paper-space TEXT (REQ-037): insX/insY are paper inches; textHeightDraft is already in
-          // paper (plotted) inches — store it directly, no model-scale division.
-          ann.plottedHeightInches = st.textHeightDraft;
           L->paperTexts.push_back(std::move(ann));
           L->paperTextAttrs.push_back(MakeNewEntityAttrs(st));
         } else {
-          ann.plottedHeightInches = st.textHeightDraft / std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
-          ann.insZ = CadCommitElevation(st);  // model TEXT: snap overrides ELEV (REQ-058)
+          ann.insZ = insZ;  // model TEXT: snap overrides ELEV (REQ-058)
           StampActiveTextStyleOnNewText(st, ann);  // REQ-044: new TEXT adopts the active text style
           st.cadAnnotations.push_back(std::move(ann));
           st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
