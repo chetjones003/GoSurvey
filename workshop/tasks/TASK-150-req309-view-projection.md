@@ -132,3 +132,64 @@ Handing this one check back rather than claiming it. Everything else is verified
 - 2026-08-31 — Implemented: state fields, camera threading, doc sync, `PERSPECTIVE`/`FOV`, named
   views, `.gs` persistence, ribbon control. Tests written, negative-tested, 851/851 green.
   **Paused before PR** pending the user's GUI pass (acceptance 9 + the ribbon control's appearance).
+
+---
+
+# Addendum — REQ-310, the 3D crosshair cursor
+
+Added 2026-08-31 at the user's request mid-task, with an AutoCAD reference screenshot. Issue #144
+was edited to carry it as Gap 4 so the PR still matches its issue (one issue = one complete PR).
+
+## Authority
+- **REQ-310** — 3D crosshair cursor showing the UCS axes. Status: accepted.
+- **D-2026-08-31-b** — pure projection header; axis hues shared with the UCS icon.
+
+## Architectural-boundary check
+
+| Question | Answer |
+|---|---|
+| New abstraction? | **No.** One pure function and three constants, both with two present-day consumers (crosshair + UCS icon) — CLAUDE.md rule 2 satisfied by removing a duplicate, not adding an indirection. |
+| New dependency? | **No.** |
+| Public API / data format change? | **Yes** — one additive `.gs` settings key. Settled by D-2026-08-31-b before implementation. |
+| Crosses an architecture §11 invariant? | **No.** `Crosshair3d.hpp` is GL- and ImGui-free; drawing stays in the UI layer. |
+
+## What the tests caught
+
+Two real defects, both before the code could ship:
+
+1. **A `.gs` round-trip bug.** The setting was originally written only when ON, copying the REQ-309
+   *view* block's omit-at-default rule. But the settings block's reader (`b()`) assigns only when
+   the key is **present**, so an absent key left whatever the current session already had: opening
+   a drawing saved with the crosshair OFF, from a session with it ON, kept it ON — the file
+   silently failed to describe its own state. Fixed by writing unconditionally, which is what every
+   other key in that block already does. The REQ-309 view keys do **not** share the flaw: their
+   reader is `view.value(key, default)`, which assigns unconditionally.
+2. **The sign conventions are genuinely pinned.** Flipping the screen-Y negation in `ProjectAxis`
+   turns 3 of the 7 test cases red. Without that check the arms could have been mirrored and still
+   looked like a plausible 3D cursor.
+
+## Deliberately not included
+
+**Axis labels in the crosshair** (AutoCAD's "Label axes in crosshairs" option). The reference image
+has them off, and they are purely additive later. Noted in REQ-310's revisions.
+
+## Verification
+
+| Acceptance | Status | Evidence |
+|---|---|---|
+| `CROSSHAIR3D` reports / sets / refuses | **Met** | `headless.req310-crosshair-3d` |
+| Plan view: X right, Y up, equal length | **Met** | `Crosshair3dTests [req310]` |
+| Rotated UCS: arms follow the UCS | **Met** | same |
+| Orbit rotates the triad, arms stay perpendicular | **Met** | same — full azimuth sweep at 17° steps |
+| Tilt reveals Z and foreshortens | **Met** | same |
+| Viewer-facing axis not drawn; plan view still valid | **Met** | same |
+| Degenerate frame falls back | **Met** | same (`Degenerate`, zero-arm case) |
+| Survives `.gs` round trip including OFF | **Met** | transcript — and this is the assertion that found defect 1 |
+| Setting changes no coordinate | **Met** | transcript `EXPECT LINEXYZ` across toggles |
+| Off = unchanged cursor | **Met by construction** | the 2D arm path is byte-identical; default is off; 859/859 green |
+
+Suite: **859/859 ctest green** (844 at branch point; +15 across REQ-309 and REQ-310).
+
+**Still pending the user's GUI pass** — now two items: the REQ-309 `BENCH` run under perspective,
+and a look at the 3D crosshair actually rendering (its drawing is ImGui and has no headless path;
+only its geometry is machine-checked).

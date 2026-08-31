@@ -2871,6 +2871,11 @@ struct AppCommandState {
   float viewportCrosshairPickHalfPxX = 4.f;
   float viewportCrosshairPickHalfPxY = 4.f;
   float viewportCrosshairHairPx = 1.f;
+  /// 3D crosshair cursor (REQ-310): draw the active UCS's X/Y/Z axes instead of two screen-aligned
+  /// arms, so the cursor shows which way the drawing plane runs under an orbited view or a rotated
+  /// UCS. **Off by default** — on, the cursor changes colour and orientation, and a display change
+  /// no one asked for is the one thing REQ-064 was careful to avoid when it added visual styles.
+  bool viewportCrosshair3d = false;
   /// Viewport background (model-space clear color): RGB 0–1. Default #1F1F2A dark gray.
   float viewportBgR = 0.1f;
   float viewportBgG = 0.1f;

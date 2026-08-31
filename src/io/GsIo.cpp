@@ -1396,6 +1396,15 @@ json BuildRoot(const AppCommandState& st) {
   settings["viewportCrosshairPickHalfPxX"] = st.viewportCrosshairPickHalfPxX;
   settings["viewportCrosshairPickHalfPxY"] = st.viewportCrosshairPickHalfPxY;
   settings["viewportCrosshairHairPx"] = st.viewportCrosshairHairPx;
+  // REQ-310. Written UNCONDITIONALLY, like every other key in this settings block — and unlike the
+  // REQ-309 camera keys in the view block, which are omitted at their defaults to keep an un-orbited
+  // drawing byte-identical.
+  //
+  // The difference matters and was found by a test, not by reading: `b()` below only assigns when
+  // the key is PRESENT, so a conditionally-written key that is absent leaves whatever the current
+  // session already had. Opening a drawing saved with the 3D crosshair OFF, from a session with it
+  // ON, then kept it ON — the file silently failed to describe its own state.
+  settings["viewportCrosshair3d"] = st.viewportCrosshair3d;
 
   settings["viewportTextMinPx"] = st.viewportTextMinPx;
   settings["viewportTextMaxPx"] = st.viewportTextMaxPx;
@@ -1568,6 +1577,7 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   num(s, "viewportCrosshairPickHalfPxX", &st.viewportCrosshairPickHalfPxX);
   num(s, "viewportCrosshairPickHalfPxY", &st.viewportCrosshairPickHalfPxY);
   num(s, "viewportCrosshairHairPx", &st.viewportCrosshairHairPx);
+  b(s, "viewportCrosshair3d", &st.viewportCrosshair3d);  // REQ-310; absent = off, as before
 
   num(s, "viewportTextMinPx", &st.viewportTextMinPx);
   num(s, "viewportTextMaxPx", &st.viewportTextMaxPx);

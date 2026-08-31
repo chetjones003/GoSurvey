@@ -6197,6 +6197,7 @@ const CmdEntry kRegistry[] = {
     {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
     {"perspective", "projection, persp", "View projection: ON (perspective) / OFF (orthographic)"},
     {"fov", "lens", "Perspective field of view, in degrees"},
+    {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
@@ -23198,6 +23199,32 @@ bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vec
   return true;
 }
 
+/// Shared by the prompt and the inline `CROSSHAIR3D ON` form (REQ-310), like the two above.
+///
+/// Reuses \ref ProjectionFromName's ON/OFF spellings via its own small table rather than borrowing
+/// that function: the two settings are unrelated, and a shared parser would make `CROSSHAIR3D
+/// PERSPECTIVE` legal.
+bool ApplyCrosshair3dValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
+  std::string v;
+  for (char c : StringUtil::trimCopy(raw)) {
+    if (c == ' ' || c == '\t')
+      continue;
+    v.push_back(static_cast<char>((c >= 'A' && c <= 'Z') ? (c - 'A' + 'a') : c));
+  }
+  if (v == "on" || v == "1" || v == "3d" || v == "yes")
+    st.viewportCrosshair3d = true;
+  else if (v == "off" || v == "0" || v == "2d" || v == "no")
+    st.viewportCrosshair3d = false;
+  else {
+    log.push_back("CROSSHAIR3D - enter ON or OFF.");
+    return false;
+  }
+  log.push_back(st.viewportCrosshair3d
+                    ? "3D crosshair = ON - the cursor shows the UCS X/Y/Z axes."
+                    : "3D crosshair = OFF - the cursor is the standard two-arm crosshair.");
+  return true;
+}
+
 /// Canonical name of a projection, for the command line, the ribbon and `.gs` (REQ-309).
 const char* ProjectionName(Camera::Projection p) {
   return p == Camera::Projection::Perspective ? "Perspective" : "Orthographic";
@@ -25710,6 +25737,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       } else {
         log.push_back(std::string("Projection = ") + ProjectionName(st.viewportProjection) +
                       ". Usage: PERSPECTIVE ON | OFF.");
+      }
+      return;
+    }
+    // `CROSSHAIR3D ON` in one line; bare reports (REQ-310), same shape as VS and PERSPECTIVE.
+    if (plotTok == "crosshair3d" || plotTok == "cursor3d" || plotTok == "xhair3d") {
+      std::string chArg;
+      if (issIdle >> chArg) {
+        ApplyCrosshair3dValue(st, chArg, log);
+      } else {
+        log.push_back(std::string("3D crosshair = ") + (st.viewportCrosshair3d ? "ON" : "OFF") +
+                      ". Usage: CROSSHAIR3D ON | OFF.");
       }
       return;
     }

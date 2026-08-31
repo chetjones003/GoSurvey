@@ -1251,6 +1251,29 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              sourceLine);
         return false;
       }
+    } else if (what == "CROSSHAIR3D") {
+      // EXPECT CROSSHAIR3D <ON|OFF> — the LIVE setting (REQ-310). Same reason as EXPECT PROJECTION:
+      // EXPECT LOG matches the whole accumulated log, so it cannot assert a toggle's CURRENT value
+      // once that value has been reported at least once.
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      bool want = false;
+      if (wantS == "ON" || wantS == "1")
+        want = true;
+      else if (wantS == "OFF" || wantS == "0")
+        want = false;
+      else {
+        Fail(run, "parse", "EXPECT CROSSHAIR3D needs ON or OFF", sourceLine);
+        return false;
+      }
+      if (run.st.viewportCrosshair3d != want) {
+        Fail(run, "expect",
+             std::string("EXPECT CROSSHAIR3D: is ") + (run.st.viewportCrosshair3d ? "ON" : "OFF") +
+                 ", expected " + (want ? "ON" : "OFF"),
+             sourceLine);
+        return false;
+      }
     } else if (what == "FOV") {
       // EXPECT FOV <degrees> — the LIVE field of view (REQ-309). Same reason as EXPECT PROJECTION.
       std::istringstream is(arg);
