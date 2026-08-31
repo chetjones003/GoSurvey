@@ -112,6 +112,32 @@ TEST_CASE("GoSurvey DWG preserves a survey point (REQ-175)", "[dwg][libredwg][re
   REQUIRE(in.userLinesFlat.size() == 6);
 }
 
+// issue #167 — save staged the file beside the target then replaced it; the reopen-append race on
+// the final (possibly sync-locked) path is gone, and no staging file is left behind.
+TEST_CASE("DWG save overwrites an existing file with a full GoSurvey document (issue #167)",
+          "[dwg][libredwg][issue167]") {
+  ScratchDir dir("resave");
+  const auto p = (dir.path / "resave.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  SurveyPoint pt;
+  pt.id = 7;
+  pt.description = "REBAR";
+  pt.labelStyle = SurveyPointLabelStyle::None;
+  st.surveyPoints.push_back(pt);
+  std::vector<std::string> log;
+
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  st.surveyPoints[0].description = "IPF";
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));  // overwrite the existing target
+
+  CHECK_FALSE(std::filesystem::exists(p + ".gosurvey-save.tmp"));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.surveyPoints.size() == 1);
+  CHECK(in.surveyPoints[0].description == "IPF");
+}
+
 // issue #140 — the DWG layer table imported with garbled names / wrong colours / no linetypes.
 TEST_CASE("LibreDWG decodes UTF-16LE (R2007+) table strings", "[dwg][libredwg][issue140]") {
   // The pre-fix code did std::string((char*)buf), which truncates a TU buffer at the first
