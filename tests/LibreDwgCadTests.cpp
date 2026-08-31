@@ -14,6 +14,14 @@
 #include <string>
 #include <vector>
 
+#if defined(__cplusplus) && !defined(restrict)
+#define restrict
+#endif
+extern "C" {
+#include <dwg.h>
+#include <dwg_api.h>
+}
+
 namespace {
 
 struct ScratchDir {
@@ -124,6 +132,85 @@ TEST_CASE("LibreDWG layer colour: negative ACI keeps its colour", "[dwg][libredw
   CHECK(libredwgcad_detail::ColorToStorage(0, 0xc3, 0x1E90FFu) == "#1E90FF"); // true colour
   CHECK(libredwgcad_detail::ColorToStorage(0, 0xc3, 0) == "ByBlock");         // 0xc3 sentinel
   CHECK(libredwgcad_detail::ColorToStorage(256, 0xc3, 0x100u) == "ByLayer");  // 0xc3 sentinel
+}
+
+// issue #140 / DEBT-151-a — end-to-end against a real LibreDWG-decoded file: a multi-layer table
+// must import names, colours (incl. off-layer negative ACI), assigned linetypes and freeze/lock
+// flags intact. Fixture is R2000 because LibreDWG 0.13.3's own encoder does not round-trip
+// R2004+ (a real R2018 fixture is the remaining half of DEBT-151-a); the UTF-16LE name path is
+// covered by the DecodeDwgString case above.
+TEST_CASE("LibreDWG imports a multi-layer table end to end", "[dwg][libredwg][issue140]") {
+  ScratchDir dir("layers");
+  const auto p = (dir.path / "layers.dwg").string();
+
+  {
+    Dwg_Data* dwg = dwg_new_Document(R_2000, /*imperial=*/0, /*loglevel=*/0);
+    REQUIRE(dwg != nullptr);
+
+    Dwg_Object_LTYPE* dashed = dwg_add_LTYPE(dwg, "DASHED");
+    REQUIRE(dashed != nullptr);
+    Dwg_Object* dashedObj = &dwg->object[dashed->parent->objid];
+
+    struct Spec {
+      const char* name;
+      int16_t aci;      // signed: negative == layer off
+      bool on;
+      bool frozen;
+      bool locked;
+      bool dashed;
+    };
+    const Spec specs[] = {
+        {"Parcel Line", 3, true, false, false, true},
+        {"EXISTING-CONTOUR", 8, true, false, true, false},
+        {"Utilities", -1, false, false, false, false},  // off -> negative ACI
+        {"FROZEN LAYER", 5, true, true, false, false},
+    };
+    for (const Spec& s : specs) {
+      Dwg_Object_LAYER* ly = dwg_add_LAYER(dwg, s.name);
+      REQUIRE(ly != nullptr);
+      ly->color.index = s.aci;
+      ly->color.method = 0xc2;
+      ly->on = s.on ? 1 : 0;
+      ly->frozen = s.frozen ? 1 : 0;
+      ly->locked = s.locked ? 1 : 0;
+      // R2000 encode serialises the packed flag0 bits, not the decoded booleans.
+      ly->flag0 = static_cast<BITCODE_BS>((s.frozen ? 1 : 0) | (s.on ? 2 : 0) | (s.locked ? 8 : 0) | 16);
+      if (s.dashed)
+        ly->ltype = dwg_add_handleref(dwg, 5, dashedObj->handle.value, dashedObj);
+    }
+
+    const int werr = dwg_write_file(p.c_str(), dwg);
+    dwg_free(dwg);
+    std::free(dwg);
+    REQUIRE(werr == 0);
+  }
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  const bool ok = ImportDwgFile(in, p.c_str(), log);
+  for (const std::string& l : log)
+    UNSCOPED_INFO(l);
+  REQUIRE(ok);
+
+  auto row = [&](const char* n) -> const CadLayerRow* {
+    for (const CadLayerRow& r : in.drawingLayerTable)
+      if (r.name == n)
+        return &r;
+    return nullptr;
+  };
+
+  REQUIRE(row("Parcel Line") != nullptr);        // TU name decoded, not truncated to "P"
+  REQUIRE(row("EXISTING-CONTOUR") != nullptr);
+  REQUIRE(row("Utilities") != nullptr);
+  REQUIRE(row("FROZEN LAYER") != nullptr);
+
+  CHECK(row("Parcel Line")->color == "#00FF00");
+  CHECK(row("Parcel Line")->linetype == "DASHED");   // resolved from the LTYPE handle
+  CHECK(row("EXISTING-CONTOUR")->locked);
+  CHECK(row("EXISTING-CONTOUR")->linetype == "Continuous");
+  CHECK(row("Utilities")->color == "#FF0000");        // ACI 1, recovered from the negative index
+  CHECK(row("FROZEN LAYER")->frozen);
+  CHECK_FALSE(row("FROZEN LAYER")->locked);
 }
 
 TEST_CASE("Foreign DWG without payload still imports a LINE (REQ-175)", "[dwg][libredwg][req175]") {

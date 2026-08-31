@@ -65,10 +65,15 @@ build-project / code-review / testing skills, loop to PASS, completion report.
 - Build clean (MSVC/Ninja release). `ctest`: 846/846 pass.
 
 ### Technical debt / follow-ups (not blocking this fix)
-- DEBT-151-a: no committed binary R2018 `.dwg` fixture, so the end-to-end "open a real 20-layer
-  AutoCAD DWG" path (REQ-170 acceptance) is covered only by unit tests of the decode helpers.
-  Removal condition: a fixtures mechanism exists in `tests/`. Follow-up: add an R2018 fixture +
-  full-table assertion.
+- DEBT-151-a (partly addressed 2026-08-31): added an end-to-end test that builds a multi-layer
+  drawing with the LibreDWG C API, writes it, re-imports via `ImportDwgFile`, and asserts the
+  full `drawingLayerTable` (names, ACI + negative-ACI colour, `DASHED` linetype resolved from the
+  LTYPE handle, freeze/lock flags). Fixture is **R2000**: LibreDWG 0.13.3's own encoder returns
+  `0x100` (critical) when re-reading its R2004+ output, so an in-test R2007+ fixture is not
+  possible. Still open: a committed real R2018 `.dwg` fixture (needs a `tests/` fixtures
+  mechanism) to exercise the UTF-16LE (`from_version >= R_2007`) path end to end — that path is
+  currently covered only by the `DecodeDwgString` unit case. LibreDWG also does not round-trip
+  the layer on/off bit through R2000, so that one flag is not asserted in the fixture.
 - DEBT-151-b: `ExportLibreCadFile` still writes only model-space geometry — it does not emit the
   layer table or per-entity layer/colour/linetype. Foreign-DWG round-trip therefore loses layers
   on save. Out of scope for issue #140 (import bug); track as its own task under REQ-170.
