@@ -32,6 +32,7 @@
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
 #include "util/hoverdwell.hpp"
+#include "util/hoverpickgate.hpp"  // per-frame viewport hover-pick throttle (GitHub issue #166)
 #include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
 #include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
@@ -1474,6 +1475,11 @@ struct AppCommandState {
   /// Drawing viewport: CAD entity under cursor when idle (no command active), for hover highlight feedback.
   bool viewportHoverEntityValid = false;
   SelectedEntity viewportHoverEntity{};
+  /// Throttle for the per-frame hover pick above (GitHub issue #166). The pick is a full entity
+  /// scan; it runs both when idle and during TRIM/EXTEND/BREAK/LENGTHEN entity selection (REQ-056).
+  /// This gate lets the call site reuse the previous result while the cursor, view and geometry are
+  /// unchanged, and caps the re-run rate while the cursor sweeps. See `util/hoverpickgate.hpp`.
+  HoverPickGate viewportHoverPickGate{};
   /// Paper layout: native paper-space entity under the cursor when idle, for hover highlight parity (REQ-039).
   bool paperHoverValid = false;
   PaperEntityRef paperHover{};

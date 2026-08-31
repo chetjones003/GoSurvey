@@ -12944,7 +12944,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // during a TRIM entity pick: TRIM wants to show what a click will take, and a four-row panel
       // over the cursor would cover the very geometry that pick is choosing between.
       surfaceReadoutAllowed = !blockEntityHover && modelSpace && cmd.active == AK::None;
-      if (!blockEntityHover) {
+      // Issue #166: the hover pick below is a full entity scan and runs every rendered frame the
+      // cursor is over the viewport — both idle and through the TRIM/EXTEND/BREAK/LENGTHEN entity
+      // phases (REQ-056). Its result only changes when the cursor, the view, or the geometry moves,
+      // so re-run it only then; while the cursor sweeps, cap the rate to ~30 Hz (a highlight that
+      // lags the cursor by a frame is invisible, a stuttering viewport is not). The 0.25 s idle
+      // ceiling re-runs it anyway for any input not tracked here (a UCS change, a layer freeze).
+      const HoverPickView hoverView{cmd.viewportPanX,       cmd.viewportPanY,
+                                    cmd.viewportPanZ,        cmd.viewportZoom,
+                                    cmd.viewportAzimuthDeg,  cmd.viewportElevationDeg,
+                                    cmd.viewportRollDeg};
+      const bool runHoverPick =
+          !blockEntityHover &&
+          HoverPickGateShouldRun(&cmd.viewportHoverPickGate, mx, my, ImGui::GetTime(), hoverView,
+                                 cmd.cadGpuRevision, /*moveTolPx=*/1.f, /*minIntervalSec=*/1.0 / 30.0,
+                                 /*maxIdleSec=*/0.25);
+      if (blockEntityHover) {
+        cmd.viewportHoverEntityValid = false;
+        cmd.viewportHoverPickGate.primed = false;
+      } else if (runHoverPick) {
         // Text annotations are picked by bounding box and take priority over geometry, mirroring
         // click-to-select (the annotation pick runs before the entity pick on a click). Hovering text
         // pre-highlights it in model space, matching the paper-space hover (REQ-039). Dims keep their
@@ -12988,9 +13006,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             }
           }
         }
-      } else {
-        cmd.viewportHoverEntityValid = false;
       }
+      // else: the gate says skip this frame — keep last frame's cmd.viewportHoverEntity{,Valid},
+      // which persist across frames, until the cursor / view / geometry actually change (issue #166).
     }
 
     // GitHub #91 review, D-2026-08-26-d, re-derived post-#103 (D-2026-08-26-e). The override menu

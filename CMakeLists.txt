@@ -753,6 +753,11 @@ if(GOSURVEY_BUILD_TESTS)
     # SurfaceStyleTests' already-pinned calls — and the one-shot it asserts is what keeps the
     # per-rest surface query off the per-frame path REQ-100 profile (c) measures.
     tests/HoverDwellTests.cpp
+    # GitHub issue #166. Header-only and pure, like HoverDwellTests above. The gate is the only new
+    # logic in the fix for the TRIM frame-rate drop — it decides whether the per-frame entity hover
+    # scan re-runs — and both failure directions (scans too often / highlight goes stale) are the
+    # ones a user would report, so both are pinned here with no GL context.
+    tests/HoverPickGateTests.cpp
     tests/UpdateCheckTests.cpp
     # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the
     # tab-index sentinel invariant and the thumbnail-cache naming/eviction (header-only, pure).
