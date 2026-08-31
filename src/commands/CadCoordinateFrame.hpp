@@ -23,6 +23,17 @@ constexpr double kLargeCoordinateRebaseThreshold = 100000.0;
 /// than by one typed token, and by the commit-site finiteness guards when they are not.
 constexpr double kMaxEstablishableOriginMagnitude = 1.0e9;
 
+/// Upper bound on the magnitude of a coordinate a command's commit path will write into the
+/// geometry stores. This is NOT `kMaxEstablishableOriginMagnitude`: a coordinate between that and
+/// here (e.g. an easting of 1e12) is a legitimate value that the load-time normalization (REQ-079)
+/// still rebases into a precise local frame. What is refused here is a magnitude past which
+/// `float` squared-distance math itself overflows — `x*x` exceeds `FLT_MAX` (~3.4e38) once `|x|`
+/// exceeds ~1.8e19, so OFFSET's signed-side projection produced inf and wrote `-nan(ind)` into
+/// `userLinesFlat` (issue #122, REQ-204 `finite-coords`). 1e18 sits an order of magnitude below
+/// that overflow point and ~1e6× above any real or stress-test coordinate, so nothing legitimate
+/// is refused; what is caught is reported (REQ-201) rather than propagating as inf/NaN.
+constexpr double kMaxStorableCoordinateMagnitude = 1.0e18;
+
 inline double WorldOriginX(const AppCommandState& st) { return st.worldDocumentOriginX; }
 inline double WorldOriginY(const AppCommandState& st) { return st.worldDocumentOriginY; }
 
