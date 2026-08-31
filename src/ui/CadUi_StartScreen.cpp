@@ -223,6 +223,23 @@ void DrawDwgPlaceholder(ImDrawList* dl, ImVec2 a, ImVec2 b) {
   dl->AddText(ImVec2(c.x - ts.x * 0.5f, p1.y - ts.y - 3.f), label, t);
 }
 
+// End-truncate `s` with a trailing ellipsis until it fits `maxW` pixels at the current font.
+// Steps back over UTF-8 continuation bytes so a multi-byte glyph is never split.
+std::string EllipsizeToWidth(const std::string& s, float maxW) {
+  if (s.empty() || ImGui::CalcTextSize(s.c_str()).x <= maxW)
+    return s;
+  const char* ell = "\xE2\x80\xA6";  // …
+  std::string cut = s;
+  while (!cut.empty()) {
+    do {
+      cut.pop_back();
+    } while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80);
+    if (ImGui::CalcTextSize((cut + ell).c_str()).x <= maxW)
+      break;
+  }
+  return cut + ell;
+}
+
 std::string RelativeTimeText(std::int64_t unix) {
   if (unix <= 0)
     return "";
@@ -378,13 +395,15 @@ void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
       dl->PopClipRect();
       dl->AddLine(ImVec2(t0.x, t1.y), ImVec2(t1.x, t1.y), ImGui::GetColorU32(CardBorder()), 1.f);
 
-      dl->AddText(ImVec2(p0.x + 12.f, t1.y + 8.f), ImGui::GetColorU32(ImGuiCol_Text), e.name.c_str());
+      const float textW = tileW - 24.f;
+      dl->AddText(ImVec2(p0.x + 12.f, t1.y + 8.f), ImGui::GetColorU32(ImGuiCol_Text),
+                  EllipsizeToWidth(e.name, textW).c_str());
       dl->AddText(ImVec2(p0.x + 12.f, t1.y + 27.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                  RelativeTimeText(e.lastOpenedUnix).c_str());
+                  EllipsizeToWidth(RelativeTimeText(e.lastOpenedUnix), textW).c_str());
 
       dl->AddRect(p0, p1, ImGui::GetColorU32(hov ? Accent() : CardBorder()), 8.f, 0, hov ? 2.f : 1.f);
       if (hov)
-        ImGui::SetTooltip("%s", e.path.c_str());
+        ImGui::SetTooltip("%s\n%s", e.name.c_str(), e.path.c_str());
       ImGui::PopID();
       if (++col < perRow)
         ImGui::SameLine(0.f, gap);
@@ -416,12 +435,14 @@ void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
       dl->PopClipRect();
       dl->AddRect(th0, th1, ImGui::GetColorU32(CardBorder()), 3.f);
 
-      dl->AddText(ImVec2(th1.x + 12.f, p0.y + 11.f), ImGui::GetColorU32(ImGuiCol_Text), e.name.c_str());
+      const float textW = std::max(40.f, p1.x - (th1.x + 12.f) - 12.f);
+      dl->AddText(ImVec2(th1.x + 12.f, p0.y + 11.f), ImGui::GetColorU32(ImGuiCol_Text),
+                  EllipsizeToWidth(e.name, textW).c_str());
       dl->AddText(ImVec2(th1.x + 12.f, p0.y + 31.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                  RelativeTimeText(e.lastOpenedUnix).c_str());
+                  EllipsizeToWidth(RelativeTimeText(e.lastOpenedUnix), textW).c_str());
       dl->AddLine(ImVec2(p0.x, p1.y), ImVec2(p1.x, p1.y), ImGui::GetColorU32(CardBorder()), 1.f);
       if (hov)
-        ImGui::SetTooltip("%s", e.path.c_str());
+        ImGui::SetTooltip("%s\n%s", e.name.c_str(), e.path.c_str());
       ImGui::PopID();
     }
   }
