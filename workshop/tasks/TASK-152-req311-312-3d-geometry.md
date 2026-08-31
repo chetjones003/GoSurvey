@@ -113,7 +113,7 @@ normal" — no new command is needed.
   - [x] 2. Normal on `CadArc` and the circle side-car; invariant check; default +Z everywhere.
   - [x] 3. Author on the active UCS work plane (CIRCLE, ARC).
   - [x] 4. Render / hit test / snap through the one parametrisation.
-  - [ ] 5. DXF group 210 out and in.
+  - [x] 5. DXF group 210 out and in.
   - [ ] 6. `.gs` persistence, omitted when +Z; legacy byte-identity test.
   - [ ] 7. Headless transcripts; full ctest; completion report.
 
@@ -342,6 +342,91 @@ normal" — no new command is needed.
   and the reader ignores it), and `.gs` persistence — a tilted arc's normal is held in memory and
   dropped on save today, which is why the probes behind these tests read a plane through
   `EXPECT ARCPOINTS` rather than out of the file.
+
+- 2026-08-31 Step 5 done. DXF group 210 out and in, for ARC and CIRCLE.
+
+  **Group 210 is not an annotation — it changes what groups 10/20/30 MEAN.** With a non-+Z
+  extrusion, an entity's own coordinates are OBJECT-coordinate values in the Arbitrary Axis
+  Algorithm frame the normal defines, not world ones. So writing the real normal was only half the
+  change: the centre has to be written in that frame too, or the file round-trips perfectly through
+  GoSurvey while describing a different circle to every other consumer. `ucs::FromNormal` IS that
+  algorithm (REQ-311 / D-2026-08-31-e), and it returns the world axes exactly for a +Z normal — so a
+  flat curve's OCS point is its world point bit for bit, and the flat path is untouched.
+
+  **The measurement that decided the implementation.** Group 210 is the one value in a DXF whose
+  error is ANGULAR rather than positional: the reader rebuilds the entity's whole frame from it, and
+  an angular error dTheta moves a point R from the world origin by about R * dTheta. At state-plane
+  magnitude R is ~1e6. A standalone probe over 400,000 random normals with centres out to +/-2e6
+  (`gosurvey-dxf-roundtrip-family`'s rule — measure, do not reason about the float bands):
+
+  | group 210 written as | worst centre error | worst rim error |
+  |---|---|---|
+  | six decimals (`std::to_string`, what the writer does to every other number) | **65.39 ft** | 65.40 ft |
+  | `%.9g` (round-trips a float) | 0.008997 ft | 0.008996 ft |
+  | `%.17g` (round-trips a double) | **0.00000086 ft** | 0.00000086 ft |
+
+  REQ-101 is +/-0.01 ft, so six decimals fails by ~6500x and `%.9g` passes with no margin at all —
+  it spends the entire budget. `%.9g` is not enough because the READER parses to double: nine digits
+  identify the float but not the double the reader ends up holding, and that residual is an angle
+  too. The writer now formats 210/220/230 with `%.17g` and every other number the way it always has.
+  Had this gone in as "replace the hard-coded 0.0/0.0/1.0 with `std::to_string(nx)`", it would have
+  shipped misplacing tilted curves by tens of feet with a green suite — every test near the origin
+  passes, because there the lever arm is short.
+
+  **Export.** `extrusionText` and `ocsPointOf` beside `worldX`/`worldY`. CIRCLE and ARC branch on
+  `IsFlatNormal`: flat emits the literal `"0.0"/"0.0"/"1.0"` it always has, tilted emits the real
+  normal and an OCS centre. Groups 50/51 need NO adjustment — `DxfArcToWrite` measures them in the
+  arc's own frame, and the OCS shares that frame's axes; the two differ only in where the origin
+  sits, which an angle about the centre cannot see.
+
+  The header extents sweep walks a tilted arc in its own plane, for the same reason it already takes
+  its angles from `DxfArcToWrite` rather than from memory: the box has to be the one a READER
+  computes from this file, or the origin the header asks for is not the origin the import settles on
+  and the round trip never stabilises (issue #94's failure). Z is accumulated per sample there too —
+  a tilted arc spans elevations and its centre's Z is not its extent. That does not disturb the
+  agreement the note in that function depends on: `ShiftAllStorageBy` is XY-only.
+
+  **Import.** `DxfOcsToWorld` and `DxfExtrusionIsFlat` beside `DxfArcToWrite`. Both parse branches
+  read 210/220/230, defaulting to +Z when absent (which is what every flat DXF omits), resolve the
+  OCS point to world, and hand the normal to `appendCircleXF` / `appendArcXF` — which now store it,
+  and which walk a tilted curve in its own plane in the non-identity-INSERT branch where the curve
+  degrades to segments. A zero-length 210 is a malformed file: the entity is REFUSED and counted,
+  and the count is reported once at the end in the shape the other four skip counters already use,
+  rather than being quietly taken as flat (REQ-201). That needed a fifth counter pointer on
+  `ParseEntityRegion`, threaded through its three call sites.
+
+  This half also closes the live silent-import defect D-2026-08-31-f named: until now the reader
+  never looked at group 210 at all, so a tilted ARC or CIRCLE from any other program arrived flat
+  and misplaced with no message.
+
+  **Tests.** `tests/headless/transcripts/req312-dxf-arbitrary-plane-roundtrip.txt` (71 steps), three
+  sections: a flat drawing's round trip unchanged; a tilted circle and arc surviving with their
+  plane; and the same at state-plane magnitude on a deliberately messy plane.
+
+  That third section took two attempts, and the first one is worth recording. A 45-degree plane does
+  NOT catch a coarsely-written 210: its normal is (0, -0.7071068, 0.7071068), and rounding both
+  components to six decimals scales the vector without TURNING it — `FromNormal` normalises the
+  length away and the error cancels. The transcript passed against a writer that was plainly wrong.
+  The plane is now stated by `UCS ZAxis` along (1, 2, 3), whose unit normal has three unrelated
+  components that six decimals genuinely rotates, with the circle on the UCS origin ~2,150,000 ft
+  out so the rotation has a lever arm.
+
+  Negative-tested, both halves, against that file:
+  - 210 written at six decimals instead of `%.17g`: `cz is 0.933466, expected 0.000000`.
+  - the reader not parsing group 210 (its pre-step-5 state): the OCS point is taken for a world
+    point and `cx is 1431083.500000, expected 2000000.000000` — 569,000 ft out.
+
+  **What that transcript cannot catch, stated plainly:** if the writer and the reader both skipped
+  the OCS conversion they would agree with each other, every assertion would pass, and the file
+  would still describe a different circle to every other DXF consumer. The guard against that is not
+  a test here — it is that both sides go through one named helper built on `ucs::FromNormal`, the
+  algorithm the DXF specification itself names for group 210. A real cross-consumer check wants a
+  fixture written by AutoCAD or LibreDWG; noted, not built.
+
+  Suite: **863/863 ctest green** (after `cmake -S . -B build` for the new transcript).
+
+  Still open: step 6, `.gs` persistence — the normal is held in memory and dropped on save, so a
+  tilted curve currently survives a DXF round trip but not a save and reopen.
 
 ## 9. Self-verification
 - [ ] build-project

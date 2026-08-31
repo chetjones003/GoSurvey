@@ -1,0 +1,154 @@
+# REQ-312 (GitHub #145, Phase 2 of #120) - an arbitrary-plane arc or circle survives a DXF round
+# trip, through group 210.
+#
+# Step 5 of TASK-152. Before it, the writer emitted a hard-coded `210 0.0 / 220 0.0 / 230 1.0` at
+# all eight of its emit sites and the reader never looked at group 210 at all - so a tilted ARC or
+# CIRCLE, from GoSurvey or from anywhere else, arrived FLAT and MISPLACED with no message (REQ-201).
+#
+# ## What group 210 actually means, and why this file exists
+#
+# 210 is not an annotation on a world point. It makes the entity's own groups 10/20/30 OBJECT
+# coordinates, in the Arbitrary Axis Algorithm frame the normal defines. So writing the real normal
+# is only half the change; the centre has to be written in that frame too, or the file describes a
+# different circle to every other DXF consumer while round-tripping perfectly through GoSurvey.
+#
+# ## The precision case is the whole point of section 3
+#
+# 210 is the one value in a DXF whose error is ANGULAR rather than positional: the reader rebuilds
+# the entity's frame from it, and an angular error dTheta moves a point R from the world origin by
+# about R * dTheta. Measured over 400,000 random normals with centres out to +/-2e6, worst case:
+#
+#     six decimals (std::to_string - what the writer does to every other number)  65.4 ft
+#     %.9g          (round-trips a float)                                          0.009 ft
+#     %.17g         (round-trips a double, which is what the reader parses to)     0.00000086 ft
+#
+# Section 3 is at state-plane magnitude for exactly that reason. Every assertion in sections 1 and 2
+# passes with the normal written at six decimals, because near the origin the lever arm is short -
+# so a test that stayed near the origin would have shipped a 65-foot error looking green.
+
+NEW
+
+# --- Section 1: a FLAT drawing's DXF is untouched by any of this ---------------------------------
+# Flat curves take the literal "0.0"/"0.0"/"1.0" the writer has always emitted, and the reader's
+# +Z path resolves an OCS point to itself exactly, because the Arbitrary Axis Algorithm returns the
+# world axes for a +Z normal (REQ-311, proved exactly in UcsTests [req312]).
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+
+CMD CIRCLE
+CMD 50,50
+CMD 10
+ESC
+
+CMD ARC
+PICK 220 0
+PICK 200 20
+PICK 180 0
+ESC
+
+EXPECT CIRCLES 1
+EXPECT ARCS 1
+EXPECT CIRCLEXYZ 0 50 50 0 10 0 0 1
+EXPORT DXF %OUT%/req312-flat.dxf
+EXPECT HANDLESUNIQUE %OUT%/req312-flat.dxf
+
+NEW
+IMPORT DXF %OUT%/req312-flat.dxf
+CHECK ALL
+EXPECT LINES 1
+EXPECT CIRCLES 1
+EXPECT ARCS 1
+EXPECT CIRCLEXYZ 0 50 50 0 10 0 0 1
+
+# --- Section 2: a tilted circle and arc survive, plane and all ------------------------------------
+# UCS X 90 makes the work plane the world plane y = 0 - a wall - with normal (0, -1, 0). A UCS pick
+# (u, v) is world (u, 0, v).
+NEW
+CMD UCS
+CMD X
+CMD 90
+
+# Centre world (100, 0, 0), radius 20, standing on the wall. Its rim pick differs from its centre
+# only in world Z, which is why this circle could not even be DRAWN before step 3.
+CMD CIRCLE
+CLICKUCS 100 0
+CLICKUCS 100 20
+ESC
+
+# A half circle about world (200, 0, 0), radius 10: from (210, 0, 0) up through (200, 0, 10) and
+# down to (190, 0, 0).
+CMD ARC
+CLICKUCS 210 0
+CLICKUCS 200 10
+CLICKUCS 190 0
+
+CMD UCS
+CMD W
+EXPECT CIRCLEXYZ 0 100 0 0 20 0 -1 0
+EXPECT ARCPOINTS 0 210 0 0 190 0 0
+
+EXPORT DXF %OUT%/req312-tilted.dxf
+EXPECT HANDLESUNIQUE %OUT%/req312-tilted.dxf
+EXPECT LAYERSDEFINED %OUT%/req312-tilted.dxf
+
+NEW
+IMPORT DXF %OUT%/req312-tilted.dxf
+CHECK ALL
+EXPECT CIRCLES 1
+EXPECT ARCS 1
+# The plane is the half no count can see. Without the writer's 210 the normal comes back (0, 0, 1);
+# without the reader's, the same. Without the OCS conversion on either side the normal is right and
+# the CENTRE is somewhere else entirely.
+EXPECT CIRCLEXYZ 0 100 0 0 20 0 -1 0
+EXPECT ARCPOINTS 0 210 0 0 190 0 0
+
+# --- Section 3: the same thing at state-plane magnitude, on a MESSY plane -------------------------
+# This is the section the precision note at the top is about, and getting it to actually bite took
+# two attempts worth recording.
+#
+# A 45-degree plane does NOT catch a coarsely-written 210. Its normal is (0, -0.7071068, 0.7071068):
+# rounding both components to six decimals scales the vector without TURNING it, and `FromNormal`
+# normalises the length away. The error cancels, and the drawing comes back correct on a writer that
+# is plainly wrong. A test is only worth its assertion if the assertion can fail.
+#
+# So the plane here is stated by UCS ZAxis with the direction (1, 2, 3), whose unit normal
+# (0.2672612, 0.5345225, 0.8017837) has three unrelated components that six decimals genuinely
+# rotates. The circle sits on the UCS origin, ~2,150,000 ft from the world origin, so that rotation
+# has a lever arm.
+#
+# Negative-tested, both halves, against this exact file:
+#   - group 210 written at six decimals instead of %.17g:  cz comes back 0.933466, expected 0
+#   - the reader not parsing group 210 at all (its pre-step-5 state): the OCS point is taken for a
+#     world point and cx comes back 1431083.5, expected 2000000 - 569,000 ft out
+#
+# What this file CANNOT catch, stated plainly: if the writer and the reader both skipped the OCS
+# conversion, they would agree with each other and every assertion here would pass while the file
+# described a different circle to every other DXF consumer. The guard against that is not a test
+# here - it is that both sides go through one named helper built on `ucs::FromNormal`, which is the
+# Arbitrary Axis Algorithm the DXF specification names for group 210.
+NEW
+CMD UCS
+CMD ZA
+CMD 2000000,800000,0
+CMD 2000001,800002,3
+
+# The centre is the UCS origin itself, so its world position is stated rather than derived.
+CMD CIRCLE
+CLICKUCS 0 0
+CLICKUCS 25 0
+ESC
+
+CMD UCS
+CMD W
+EXPECT CIRCLES 1
+EXPECT CIRCLEXYZ 0 2000000 800000 0 25 0.2672612 0.5345225 0.8017837
+
+EXPORT DXF %OUT%/req312-tilted-far.dxf
+
+NEW
+IMPORT DXF %OUT%/req312-tilted-far.dxf
+CHECK ALL
+EXPECT CIRCLES 1
+EXPECT CIRCLEXYZ 0 2000000 800000 0 25 0.2672612 0.5345225 0.8017837
