@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -262,6 +263,102 @@ TEST_CASE("DWG export writes the layer table and per-entity layer (DEBT-151-b)",
 
   REQUIRE(in.userLineAttrs.size() == 1);
   CHECK(in.userLineAttrs[0].layer == "V-CONTOUR");
+}
+
+// issue #160 / DEBT-151-a — end-to-end against a genuine AutoCAD 2018 (AC1032, from_version
+// R_2018) file, committed as samples/duke-main-clean-r2018.dwg (a real survey/topo drawing:
+// 154 named layers, ~2300 lines, ~1500 polylines). LibreDWG 0.13.3's own encoder cannot produce
+// an R2004+ file its decoder can re-read, so a real committed fixture is the only way to run the
+// UTF-16LE (BITCODE_TU) name-decode path (IS_FROM_TU_DWG, from_version >= R_2007) end to end
+// rather than via the hand-built uint16_t buffer in the DecodeDwgString unit case above.
+//
+// Fixture path: GOSURVEY_SAMPLES_DIR is defined on this target by CMakeLists.txt.
+// Note: this drawing has no off / frozen / locked layers — those flags stay covered by the
+// R2000 "multi-layer table end to end" case. AutoCAD-visual verification of the colours is out
+// of scope here (no AutoCAD/ODA in the build env; REQ-170).
+namespace {
+std::string SamplePath(const char* name) {
+  return std::string(GOSURVEY_SAMPLES_DIR) + "/" + name;
+}
+}  // namespace
+
+TEST_CASE("LibreDWG imports the full layer table of a real R2018 DWG (issue #160)",
+          "[dwg][libredwg][issue140][issue160]") {
+  const std::string p = SamplePath("duke-main-clean-r2018.dwg");
+  REQUIRE(std::filesystem::exists(p));
+
+  // Criterion 4: the fixture really is R2007+, so the BITCODE_TU decode branch runs.
+  CHECK(DwgVersionName(p.c_str()) == "AutoCAD 2018");
+  {
+    Dwg_Data dwg;
+    std::memset(&dwg, 0, sizeof(dwg));
+    REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+    CHECK(dwg.header.from_version >= R_2007);
+    CHECK(dwg.header.from_version == R_2018);
+    dwg_free(&dwg);
+  }
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  const bool ok = ImportDwgFile(in, p.c_str(), log);
+  for (const std::string& l : log) UNSCOPED_INFO(l);
+  REQUIRE(ok);
+
+  bool sawVersion = false, sawCount = false;
+  for (const std::string& l : log) {
+    if (l.find("AutoCAD 2018") != std::string::npos) sawVersion = true;
+    if (l.find("154 layer(s)") != std::string::npos) sawCount = true;
+  }
+  CHECK(sawVersion);
+  CHECK(sawCount);
+
+  // 154 imported + the always-present default layer "0".
+  CHECK(in.drawingLayerTable.size() == 155);
+
+  auto row = [&](const char* n) -> const CadLayerRow* {
+    for (const CadLayerRow& r : in.drawingLayerTable)
+      if (r.name == n) return &r;
+    return nullptr;
+  };
+
+  // Names: multi-word and punctuated names decode intact (not truncated at the first UTF-16 NUL).
+  REQUIRE(row("1 Node") != nullptr);
+  REQUIRE(row("0 Center Lines") != nullptr);
+  REQUIRE(row("JM- Ehouse 4") != nullptr);
+  REQUIRE(row("CJ-TOPO-DRAINLINE") != nullptr);
+  REQUIRE(row("C-FIRE-PIPE-12IN") != nullptr);
+
+  // Colours: 0xc3-encoded indexed colours resolve through the ACI palette (regression: they used
+  // to import as near-black #0000NN); 0xc2 colours keep their true-colour RGB.
+  CHECK(row("1 Node")->color == "#FF0000");             // ACI 10
+  CHECK(row("0 Center Lines")->color == "#BFFF00");     // ACI 60
+  CHECK(row("CJ-TOPO-DRAINLINE")->color == "#FF007F");  // ACI 230
+  CHECK(row("C-FIRE-PIPE-12IN")->color == "#00BFFF");   // ACI 140
+  CHECK(row("C-TOPO-MAJR")->color == "#0000FF");        // 0xc2 true colour, unchanged
+  CHECK(row("V-SSWR-PIPE")->color == "#BF00FF");        // 0xc2 true colour
+  CHECK(row("C-PRKG-STRP")->color == "ByLayer");
+
+  // Linetypes: the layer's assigned LTYPE name is imported, not forced to Continuous.
+  CHECK(row("0 Center Lines")->linetype == "CENTER2");
+  CHECK(row("CJ-TOPO-DRAINLINE")->linetype == "PHANTOM2");
+  CHECK(row("C-FIRE-PIPE-12IN")->linetype == "UT-FIRE12''");
+  CHECK(row("C-FENC")->linetype == "Fence");
+  CHECK(row("1 Node")->linetype == "Continuous");
+
+  // Flags: every layer in this drawing is on / thawed / unlocked.
+  for (const CadLayerRow& r : in.drawingLayerTable) {
+    CHECK(r.on);
+    CHECK_FALSE(r.frozen);
+    CHECK_FALSE(r.locked);
+  }
+
+  // A sample entity resolves to the correct (named, non-"0") layer.
+  int firePipe12 = 0;
+  for (const EntityAttributes& a : in.userLineAttrs)
+    if (a.layer == "C-FIRE-PIPE-12IN") ++firePipe12;
+  for (const EntityAttributes& a : in.userPolylineAttrs)
+    if (a.layer == "C-FIRE-PIPE-12IN") ++firePipe12;
+  CHECK(firePipe12 > 100);
 }
 
 TEST_CASE("Foreign DWG without payload still imports a LINE (REQ-175)", "[dwg][libredwg][req175]") {

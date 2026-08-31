@@ -24,6 +24,7 @@ dev/_common.sh  text eol=lf
 
 # --- Binary: never touch ---
 *.ico   binary
+*.dwg   binary
 *.png   binary
 *.pfb   binary
 *.shx   binary
