@@ -1915,8 +1915,16 @@ requirements is a planning failure, not a sign of rigor.
   - a legacy `.gs` loads with every viewport in plan view and renders identically to
     pre-change.
 - Owner-layer: Domain (data), Renderer (draw), IO (`.gs` + plot)
-- Status: accepted
-- Revisions: 2026-08-11 — initial.
+- Status: accepted — **implemented 2026-08-31** (GitHub issue #175, split from #155). `Viewport`
+  carries `cam{Azimuth,Elevation,Roll}Deg` + `camPerspective`/`camFovDeg`, defaulting to the
+  straight-down orthographic plan view; `render/ViewportProjection.hpp`
+  (`ModelToPaperInThroughCamera`) is the one projection, delegating to `ModelToPaperIn` bit-for-bit
+  in plan view. The on-screen viewport overlay (`CadUi.cpp`) and the PDF plot (`PdfPlot.cpp`) both
+  route model linework through it; the Viewports window offers Plan / iso / elevation standard
+  views. `.gs` persists the camera additively (no version bump); a legacy file loads all-plan.
+  **Deferred to follow-up:** viewport TEXT/dimension/table glyphs still project their anchor at
+  Z = 0, and interactive draw-inside-a-viewport (floating model space) assumes a plan camera.
+- Revisions: 2026-08-11 — initial. 2026-08-31 — implemented (issue #175).
 
 ### REQ-062 — Intersection and apparent-intersection object snaps
 - Purpose: snap to where objects meet — and, in a 3D view, to where they only *look* like they meet
@@ -5321,11 +5329,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
 2. **"Polar tracking follows the UCS"** — polar tracking does not exist. It is a status-bar toggle
    with no drafting behaviour (`CadUi.cpp`, labelled "UI only for now"). The condition asks for the
    feature to be built first, which is its own requirement.
-3. **Per-viewport UCS and UCSFOLLOW isolation** — a paper-space `Viewport` is 2D (a model centre and
-   a scale); REQ-061's per-viewport camera was never implemented, and multiple simultaneous
-   model-space viewports are an explicitly open scope question (see the REQ-084 note). There is one
-   model view per drawing, so the UCS is scoped per drawing — the strongest form of "does not leak
-   between viewports" this architecture can state.
+3. **Per-viewport UCS and UCSFOLLOW isolation** (GitHub issue #155) — REQ-061's per-viewport camera
+   now exists (issue #175, 2026-08-31), so a paper-space `Viewport` carries an orientation. What is
+   still missing is a per-viewport *active UCS* + UCSFOLLOW and geometry entry routed through a
+   viewport's frame; multiple simultaneous model-space viewports remain an open scope question (see
+   the REQ-084 note). There is one model view per drawing, so the active UCS is still scoped per
+   drawing. Issue #155 stays open on the remaining work.
 4. **`Object` alignment to 3D faces, meshes, surfaces and solids** — resolving a face needs
    face-level picking, which does not exist: a mesh picks as one object with no face identity, and
    solids/surfaces as editable entities are issue #120's scope. `Object` covers lines, arcs,
@@ -5788,7 +5797,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-058 | Renderer/UI/Commands | `CameraTests` (plan-view parity, anchor-before-rotation composition, billboard basis) + `Ray3dTests` + `LinetypeTessellationTests` (per-vertex Z) + `CurveIntersectTests` + `BenchSceneTests`; manual/scripted in-app before/after for the render, overlay and glyph stages that no test target can link (TASK-036/037/039) | accepted — signed off 2026-08-12 |
 | REQ-059 | UI | planned — manual (+Z / −Y / an off-axis handle animate correctly and settle < 0.5 s; gizmo tracks the camera after orbit; clicks outside the gizmo still pick geometry). Appearance is ImOGuizmo stock — the mockup is not the target (amended 2026-08-11) | accepted |
 | REQ-060 | UI/Commands | planned — manual (translate/rotate/scale each apply and undo in one step; gizmo result matches the typed command within REQ-101; no gizmo with an empty selection) | accepted |
-| REQ-061 | Domain/Renderer/IO | planned — manual (two viewports, one plan one isometric, correct on screen and in the PDF plot; legacy `.gs` opens all-plan and renders unchanged) | accepted |
+| REQ-061 | Domain/Renderer/IO | `ViewportCameraTests` (plan-view projection == `ModelToPaperIn` bit-for-bit over a grid; SW-iso hand-computed sheet point; rect-centre invariant; sibling independence) + `GsIoViewportCameraTests` (camera round-trips `.gs`; legacy file with the keys stripped loads all-plan) + manual (two viewports one plan one isometric, on screen and in the PDF plot) | accepted — implemented 2026-08-31 (issue #175) |
 | REQ-063 | Domain/IO/Renderer | planned — `.gs` round-trip bit-identical; legacy `.gs` loads; extents include meshes; erase undoable in one step; layer freeze/off/non-plottable honoured; 2M-triangle model loads without index overflow | accepted |
 | REQ-064 | Renderer/UI/IO | planned — 2D Wireframe **pixel-identical** to pre-change (the parity gate, as REQ-058 had); occlusion correct in Hidden/Shaded; lighting follows the camera; style change does not alter geometry/selection/snap/plot; REQ-100 met in Shaded | accepted |
 | REQ-065 | IO/Domain/UI | planned — exact triangle count; bbox within REQ-101 after unit scale; doubly-nested node transform hand-verified; names + base colours survive; skipped features reported not silent (REQ-201); malformed file leaves drawing unchanged; state-plane precision within REQ-101 | accepted |

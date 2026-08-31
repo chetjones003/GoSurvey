@@ -64,8 +64,45 @@ struct Viewport {
   std::vector<std::string> vpColorLayers;
   std::vector<std::string> vpColorValues;
 
+  // REQ-061: the camera this viewport views model space through. The defaults — azimuth 0,
+  // elevation 90 (straight down), no roll, orthographic — reproduce the historical flat plan
+  // projection (ModelToPaperIn) to the last bit, so every legacy drawing and every legacy .gs
+  // is unchanged. Orientation is measured exactly as the model-viewport Camera measures it
+  // (azimuth about world +Z, 0 = looking north; elevation above the horizon, +90 = plan).
+  // Persisted additively in .gs (GsIo). Named UCS/view definitions stay per-drawing (issue #155):
+  // only this active orientation is per-viewport.
+  float camAzimuthDeg = 0.f;
+  float camElevationDeg = 90.f;
+  float camRollDeg = 0.f;
+  bool  camPerspective = false;
+  float camFovDeg = 45.f;
+
   float safeScale() const { return scaleModelPerPaperIn > 1.e-6f ? scaleModelPerPaperIn : 1.e-6f; }
+
+  // REQ-061: true when the camera is the historical straight-down orthographic plan view. Callers
+  // keep the exact pre-change 2D path (ModelToPaperIn, ImGui AddCircle, uniform px/model) on this.
+  [[nodiscard]] bool cameraIsPlan() const {
+    return !camPerspective && std::fabs(camAzimuthDeg) < 1.e-4f &&
+           std::fabs(camElevationDeg - 90.f) < 1.e-4f && std::fabs(camRollDeg) < 1.e-4f;
+  }
 };
+
+// REQ-061: the standard views a user can point a paper-space viewport at from the Viewports window.
+// Azimuth/elevation match the model-viewport Camera and the ViewCube (REQ-059): SW isometric is the
+// ViewCube home — azimuth 45 deg, elevation atan(1/sqrt(2)) ~= 35.264 deg.
+struct ViewportStandardView {
+  const char* name;
+  float azimuthDeg;
+  float elevationDeg;
+};
+inline const ViewportStandardView kViewportStandardViews[] = {
+    {"Plan (Top)", 0.f, 90.f},   {"Bottom", 0.f, -90.f},        {"Front", 0.f, 0.f},
+    {"Back", 180.f, 0.f},        {"Left", 90.f, 0.f},          {"Right", 270.f, 0.f},
+    {"SW Isometric", 45.f, 35.26439f},  {"SE Isometric", 315.f, 35.26439f},
+    {"NE Isometric", 225.f, 35.26439f}, {"NW Isometric", 135.f, 35.26439f},
+};
+constexpr int kViewportStandardViewCount =
+    static_cast<int>(sizeof(kViewportStandardViews) / sizeof(kViewportStandardViews[0]));
 
 // Pure transform (REQ-027): a model-space point → paper-space inches within \p vp.
 inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outPaperX, float* outPaperY) {

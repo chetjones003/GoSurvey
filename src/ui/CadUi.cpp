@@ -34,6 +34,7 @@
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"  // REQ-072 analysis legend (TASK-086 §6 (4))
 #include "CadDimStroke.hpp"
+#include "render/ViewportProjection.hpp"  // REQ-061: per-viewport camera projection
 #include "CadFontName.hpp"
 #include "StringUtil.hpp"
 #include "imgui.h"
@@ -14340,12 +14341,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const ImVec2 r1 = w2s(vp.paperXIn + vp.paperWIn, vp.paperYIn + vp.paperHIn);
       const ImVec2 rmin(std::min(r0.x, r1.x), std::min(r0.y, r1.y));
       const ImVec2 rmax(std::max(r0.x, r1.x), std::max(r0.y, r1.y));
-      // World (model, in world coords) → screen, through this viewport.
-      auto m2s = [&](double wx, double wy) {
+      // World (model, in world coords) → screen, through this viewport's camera (REQ-061). In plan
+      // view ModelToPaperInThroughCamera is exactly the pre-change ModelToPaperIn; a rotated camera
+      // gives the axonometric/perspective projection onto the sheet. m2s keeps the 2-arg call sites
+      // working (Z assumed 0 — text, tables, grips); m2sz carries a real elevation for linework.
+      auto m2sz = [&](double wx, double wy, double wz) {
         float px = 0.f, py = 0.f;
-        ModelToPaperIn(vp, wx, wy, &px, &py);
+        ModelToPaperInThroughCamera(vp, wx, wy, wz, &px, &py);
         return w2s(px, py);
       };
+      auto m2s = [&](double wx, double wy) { return m2sz(wx, wy, 0.0); };
       const float pxPerWorld = avail.x / static_cast<float>(denx);  // screen px per paper inch (uniform)
       const float pxPerModel = pxPerWorld / vp.safeScale();
       sdl->PushClipRect(rmin, rmax, true);
@@ -14395,8 +14400,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const EntityAttributes& attr = LineAttr(cmd, static_cast<int>(lineIdx));
         if (IsLayerFrozenInViewport(vp, attr.layer))
           continue;
-        const ImVec2 s0 = m2s(cmd.userLinesFlat[i] + oX, cmd.userLinesFlat[i + 1] + oY);
-        const ImVec2 s1 = m2s(cmd.userLinesFlat[i + 3] + oX, cmd.userLinesFlat[i + 4] + oY);
+        const ImVec2 s0 = m2sz(cmd.userLinesFlat[i] + oX, cmd.userLinesFlat[i + 1] + oY, cmd.userLinesFlat[i + 2]);
+        const ImVec2 s1 =
+            m2sz(cmd.userLinesFlat[i + 3] + oX, cmd.userLinesFlat[i + 4] + oY, cmd.userLinesFlat[i + 5]);
         ImU32 lc;
         float lw;
         entStyle(SelectedEntity::Type::LineSeg, static_cast<int>(lineIdx), vpBaseCol(attr.layer, attr.color), lc, lw);
@@ -14417,8 +14423,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImVec2 prev{};
         bool have = false;
         for (int k = start; k < end; ++k) {
-          const ImVec2 s = m2s(cmd.userPolylineVerts[static_cast<size_t>(k) * 3] + oX,
-                               cmd.userPolylineVerts[static_cast<size_t>(k) * 3 + 1] + oY);
+          const ImVec2 s = m2sz(cmd.userPolylineVerts[static_cast<size_t>(k) * 3] + oX,
+                                cmd.userPolylineVerts[static_cast<size_t>(k) * 3 + 1] + oY,
+                                cmd.userPolylineVerts[static_cast<size_t>(k) * 3 + 2]);
           if (have)
             sdl->AddLine(prev, s, pc, pw);
           prev = s;
@@ -14431,13 +14438,28 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const EntityAttributes& attr = CircleAttr(cmd, static_cast<int>(circleIdx));
         if (IsLayerFrozenInViewport(vp, attr.layer))
           continue;
-        const ImVec2 c = m2s(cmd.userCirclesCxCyZR[i] + oX, cmd.userCirclesCxCyZR[i + 1] + oY);
-        const float rPx = cmd.userCirclesCxCyZR[i + 3] * pxPerModel;
+        const double ccx = cmd.userCirclesCxCyZR[i] + oX, ccy = cmd.userCirclesCxCyZR[i + 1] + oY;
+        const double ccz = cmd.userCirclesCxCyZR[i + 2];
+        const float cr = cmd.userCirclesCxCyZR[i + 3];
         ImU32 cc2;
         float cw;
         entStyle(SelectedEntity::Type::Circle, static_cast<int>(circleIdx), vpBaseCol(attr.layer, attr.color), cc2, cw);
-        if (rPx >= 0.5f)
-          sdl->AddCircle(c, rPx, cc2, 0, cw);
+        if (vp.cameraIsPlan()) {
+          const ImVec2 c = m2s(ccx, ccy);
+          const float rPx = cr * pxPerModel;
+          if (rPx >= 0.5f)
+            sdl->AddCircle(c, rPx, cc2, 0, cw);
+        } else {  // REQ-061: a rotated camera turns the circle into an ellipse on the sheet — sample it.
+          constexpr double kTwoPi = 6.283185307179586;
+          ImVec2 prev{};
+          for (int k = 0; k <= 48; ++k) {
+            const double t = kTwoPi * static_cast<double>(k) / 48.0;
+            const ImVec2 s = m2sz(ccx + cr * std::cos(t), ccy + cr * std::sin(t), ccz);
+            if (k > 0)
+              sdl->AddLine(prev, s, cc2, cw);
+            prev = s;
+          }
+        }
       }
       // Arcs (REQ-028: skip frozen layers, sampled).
       for (size_t arcIdx = 0; arcIdx < cmd.userArcs.size(); ++arcIdx) {
@@ -14452,8 +14474,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImVec2 prev{};
         for (int k = 0; k <= segs; ++k) {
           const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(segs));
-          const ImVec2 s = m2s(static_cast<double>(arc.cx + arc.r * std::cos(t)) + oX,
-                               static_cast<double>(arc.cy + arc.r * std::sin(t)) + oY);
+          const ImVec2 s = m2sz(static_cast<double>(arc.cx + arc.r * std::cos(t)) + oX,
+                                static_cast<double>(arc.cy + arc.r * std::sin(t)) + oY, arc.z);
           if (k > 0)
             sdl->AddLine(prev, s, ac, aw);
           prev = s;
@@ -14481,7 +14503,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const double s0 = std::sin(u);
           const double wx = static_cast<double>(el.cx) + static_cast<double>(el.majVx) * c0 + static_cast<double>(px) * s0;
           const double wy = static_cast<double>(el.cy) + static_cast<double>(el.majVy) * c0 + static_cast<double>(py) * s0;
-          const ImVec2 s = m2s(wx + oX, wy + oY);
+          const ImVec2 s = m2sz(wx + oX, wy + oY, el.z);
           if (k > 0) sdl->AddLine(prev, s, ec, ew);
           prev = s;
         }
@@ -14492,7 +14514,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (IsLayerFrozenInViewport(vp, sp.layer))
           continue;
         const ImU32 spCol = vpBaseCol(sp.layer, "ByLayer");  // REQ-046/048: VP override, else layer color
-        const ImVec2 c = m2s(static_cast<double>(sp.easting) + oX, static_cast<double>(sp.northing) + oY);
+        const ImVec2 c = m2sz(static_cast<double>(sp.easting) + oX, static_cast<double>(sp.northing) + oY,
+                              static_cast<double>(sp.elevation));
         sdl->AddLine(ImVec2(c.x - crossPx, c.y), ImVec2(c.x + crossPx, c.y), spCol, 1.0f);
         sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), spCol, 1.0f);
       }
@@ -14500,16 +14523,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       {
         auto emitSurfLines = [&](const std::vector<float>& verts, ImU32 col, float wid) {
           for (size_t i = 0; i + 5 < verts.size(); i += 6) {
-            const ImVec2 s0 = m2s(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY);
-            const ImVec2 s1 = m2s(static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY);
+            const ImVec2 s0 = m2sz(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
+                                   static_cast<double>(verts[i + 2]));
+            const ImVec2 s1 = m2sz(static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY,
+                                   static_cast<double>(verts[i + 5]));
             sdl->AddLine(s0, s1, col, wid);
           }
         };
         auto emitSurfTris = [&](const std::vector<float>& verts, ImU32 col) {
           for (size_t i = 0; i + 8 < verts.size(); i += 9) {
-            const ImVec2 a = m2s(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY);
-            const ImVec2 b = m2s(static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY);
-            const ImVec2 c = m2s(static_cast<double>(verts[i + 6]) + oX, static_cast<double>(verts[i + 7]) + oY);
+            const ImVec2 a = m2sz(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
+                                  static_cast<double>(verts[i + 2]));
+            const ImVec2 b = m2sz(static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY,
+                                  static_cast<double>(verts[i + 5]));
+            const ImVec2 c = m2sz(static_cast<double>(verts[i + 6]) + oX, static_cast<double>(verts[i + 7]) + oY,
+                                  static_cast<double>(verts[i + 8]));
             sdl->AddTriangleFilled(a, b, c, col);
           }
         };

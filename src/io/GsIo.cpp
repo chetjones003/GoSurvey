@@ -743,6 +743,11 @@ json BuildRoot(const AppCommandState& st) {
         vo["modelCenterX"] = v.modelCenterX;
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
+        vo["camAzimuthDeg"] = v.camAzimuthDeg;      // REQ-061: per-viewport camera (additive)
+        vo["camElevationDeg"] = v.camElevationDeg;
+        vo["camRollDeg"] = v.camRollDeg;
+        vo["camPerspective"] = v.camPerspective;
+        vo["camFovDeg"] = v.camFovDeg;
         vo["layer"] = v.layer;
         vo["frozenLayers"] = v.frozenLayers;
         vo["vpColorLayers"] = v.vpColorLayers;    // REQ-046: per-viewport layer color override (parallel arrays)
@@ -1665,6 +1670,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
+          // REQ-061: per-viewport camera. Absent in a legacy .gs -> the defaults (plan view) stand,
+          // and ModelToPaperInThroughCamera then reproduces the pre-change projection exactly.
+          v.camAzimuthDeg = vo.value("camAzimuthDeg", v.camAzimuthDeg);
+          v.camElevationDeg = vo.value("camElevationDeg", v.camElevationDeg);
+          v.camRollDeg = vo.value("camRollDeg", v.camRollDeg);
+          v.camPerspective = vo.value("camPerspective", v.camPerspective);
+          v.camFovDeg = vo.value("camFovDeg", v.camFovDeg);
           if (vo.contains("layer") && vo["layer"].is_string())
             v.layer = vo["layer"].get<std::string>();
           if (vo.contains("frozenLayers") && vo["frozenLayers"].is_array()) {
