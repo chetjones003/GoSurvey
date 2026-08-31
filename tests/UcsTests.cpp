@@ -334,17 +334,24 @@ TEST_CASE("PLAN of a vertical UCS looks horizontally along its normal", "[ucs][p
   ucs::PlanViewAngles(u, &az, &el);
   REQUIRE(el == Approx(0.0f).margin(1e-4));  // on the horizon
   REQUIRE(az == Approx(0.0f).margin(1e-4));  // eye to the south, looking north
-  // ...and this is the case camera roll cannot express exactly: the view direction is right, but
-  // nothing in an azimuth/elevation camera can also put the UCS +Y (world +Z here) up the screen.
-  REQUIRE_FALSE(ucs::PlanViewIsExact(u));
+  // Now that Camera has a roll axis (#153) even this frame is exact: the caller adds the roll that
+  // places the UCS +Y (world +Z here) up the screen. Here the azimuth/elevation up is already +Z,
+  // so the roll is zero.
+  REQUIRE(ucs::PlanViewIsExact(u));
 }
 
-TEST_CASE("PlanViewIsExact separates flat UCSs from tilted ones", "[ucs][plan]") {
+TEST_CASE("PlanViewIsExact holds for every valid frame (#153)", "[ucs][plan]") {
   REQUIRE(ucs::PlanViewIsExact(ucs::RotatedAboutZ(Ucs{}, 217.0)));
   REQUIRE(ucs::PlanViewIsExact(ucs::WithOrigin(Ucs{}, {1.0, 2.0, 3.0})));
-  REQUIRE_FALSE(ucs::PlanViewIsExact(ucs::RotatedAboutX(Ucs{}, 10.0)));
-  // Upside down is not "flat": Z must point up, or the view is from underneath.
-  REQUIRE_FALSE(ucs::PlanViewIsExact(ucs::RotatedAboutX(Ucs{}, 180.0)));
+  REQUIRE(ucs::PlanViewIsExact(ucs::RotatedAboutX(Ucs{}, 10.0)));
+  REQUIRE(ucs::PlanViewIsExact(ucs::RotatedAboutX(Ucs{}, 180.0)));  // upside down is still a valid frame
+  Ucs tilted;
+  REQUIRE(ucs::FromThreePoints({0, 0, 0}, {1, 0, 0}, {0, 1, 1}, &tilted));
+  REQUIRE(ucs::PlanViewIsExact(tilted));
+  // Only a degenerate basis is rejected.
+  Ucs bad;
+  bad.yAxis = bad.xAxis;  // X and Y collinear: not an orthonormal frame
+  REQUIRE_FALSE(ucs::PlanViewIsExact(bad));
 }
 
 // ---------------------------------------------------------------------------

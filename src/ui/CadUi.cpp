@@ -11771,6 +11771,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.viewAnimActive = false;  // a hand orbit wins over any ViewCube animation still easing
       cmd.viewportAzimuthDeg = c.azimuthDeg;
       cmd.viewportElevationDeg = c.elevationDeg;
+      cmd.viewportRollDeg = 0.f;  // a free orbit is world-referenced; drop any tilted-PLAN roll (#153)
     }
 
     // PAN command (REQ-045): while pan mode is active, a LEFT-drag pans the view exactly like the
