@@ -15747,8 +15747,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           float lenS = std::hypot(dxS,dyS);
           if (lenS < 1.e-3f) return;
           dxS/=lenS; dyS/=lenS;
-          float hwS = (arrowLenUse / std::max(worldPerPxY, 1.e-6f)) * 0.42f * 0.48f / 0.42f; // keep same as linear's 0.48*arrowLen
-          // Simpler: use same as linear's hw = alenUse*0.48 but in screen: hwScreen = (alenUse/worldPerPxY)*0.48
+          // hw = alenUse*0.48, expressed in screen px: (alenUse / worldPerPxY) * 0.48
           float hwScreen = (arrowLenUse / std::max(worldPerPxY, 1.e-6f)) * 0.48f;
           float oxS = -dyS*hwScreen, oyS = dxS*hwScreen;
           ImVec2 tt1{baseS.x + oxS, baseS.y + oyS}, tt2{baseS.x - oxS, baseS.y - oyS};

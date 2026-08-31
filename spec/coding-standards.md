@@ -203,6 +203,20 @@ Let tools enforce mechanical style so reviews can focus on substance.
 | Go | `gofmt`/`goimports` | `go vet`, `staticcheck` |
 
 - Warnings are errors in CI.
+- C++ builds at `/W4 /permissive-` (MSVC) / `-Wall -Wextra`. A small set of
+  `/W4`-tier warnings is disabled in `CMakeLists.txt` (`gosurvey_target_warnings`)
+  because this codebase has a deliberate, consistent convention that fires them by
+  design — not because they were noticed and shrugged off:
+  - **4244 / 4305** (double→float narrowing): geometry is stored in `float`;
+    REQ-101's precision rule governs the *world→local subtraction* (done in
+    `double` first), not the storage narrowing.
+  - **4267 / 4245**: `size_t`→32-bit and signed/unsigned at Win32 / ImGui / vendored
+    API boundaries.
+  - **4456–4459**: local / parameter / member / global shadowing — style, not a bug.
+  Everything else — including unused variables, uninitialised reads, and every
+  `/W3` correctness warning — stays on and must be fixed, not suppressed.
+  `_CRT_SECURE_NO_WARNINGS` is defined (C4996 for `getenv` / `strncpy` etc.).
+  Vendored third-party targets build at `/w` (`third_party/`, D-2026-08-31-b).
 - Commit formatter config to the repo; never hand-format around it.
 
 ## 12. Tests

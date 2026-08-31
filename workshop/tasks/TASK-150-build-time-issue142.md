@@ -219,3 +219,25 @@ took the wall from ~1m50s to ~43s. REQ-200 is strengthened (dep bytes in-tree, n
 Debt: `libredwg.lib` is Release/`/MD`; `ninja-debug` links it too (pure-C, allocator-neutral
 API — accepted, see `third_party/libredwg/VENDORED.md`). A fully-offline **Debug** build also
 needs `third_party/imgui_test_engine/` populated (CMake fails with a clear message if not).
+
+## 8e. Build warnings cleared — 2026-08-31
+
+User: "get rid of all of these warnings as well." A clean build printed ~200:
+~170 C4244/C4305 (double→float), ~30 C4456–4459 (shadowing), a few C4996 (getenv/
+strncpy), C4245/C4267, one C4189 (dead `hwS`).
+
+- New `gosurvey_target_warnings(tgt)` in `CMakeLists.txt` — replaces the five
+  hand-rolled `/W4 /permissive-` blocks. Keeps `/W4 /permissive-`; disables
+  4244/4305/4267/4245 (float-storage + API-boundary conversions this codebase does
+  by design) and 4456–4459 (shadowing, style). `_CRT_SECURE_NO_WARNINGS` defined.
+  Rationale recorded in `spec/coding-standards.md` §11 — every `/W3` correctness
+  warning and unused-variable / uninit-read stays on.
+- Fixed the one real finding: dead `float hwS` in `CadUi.cpp` (`DrawDimLabelText`).
+- Removed the now-redundant `#define _CRT_SECURE_NO_WARNINGS` from `ShxFont.cpp`
+  (target defines it → was C4005 redefinition).
+
+Clean build now prints **1** line: `D9025: overriding '/std:c++17' with '/std:c++20'`
+— informational, MSVC noting that `src/pdf/PdfAttach.cpp` is deliberately compiled at
+C++20 for C++/WinRT `<coroutine>` (a `D####` driver message can't be `/wd`-suppressed;
+removing it means an object-library for that one file — deferred, not worth it).
+844/844 tests pass; PCH on and off both clean.

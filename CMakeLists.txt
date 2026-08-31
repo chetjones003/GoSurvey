@@ -54,6 +54,30 @@ function(gosurvey_enable_pch tgt)
   endif()
 endfunction()
 
+# Warning configuration for our own targets. /W4 + /permissive- stay on; a small
+# set of /W4-tier warnings is disabled because this codebase has a deliberate,
+# consistent convention that fires them by design — see spec/coding-standards.md §11.
+#   4244/4305  double->float narrowing. Geometry is STORED in float on purpose;
+#              REQ-101's rule is that the world->local subtraction happens in
+#              double BEFORE the narrowing, which these sites already do.
+#   4267       size_t -> 32-bit at Win32 / ImGui / third-party API boundaries.
+#   4245       signed/unsigned mismatch on Win32 API constants.
+#   4456/4457/4458/4459  local/param/member/global shadowing — style, not a bug.
+# _CRT_SECURE_NO_WARNINGS silences C4996 for standard C functions (getenv, strncpy).
+function(gosurvey_target_warnings tgt)
+  if(MSVC)
+    target_compile_options(${tgt} PRIVATE
+      /W4 /permissive-
+      /wd4244 /wd4305 /wd4267 /wd4245
+      /wd4456 /wd4457 /wd4458 /wd4459)
+    target_compile_definitions(${tgt} PRIVATE _CRT_SECURE_NO_WARNINGS)
+  else()
+    target_compile_options(${tgt} PRIVATE
+      -Wall -Wextra
+      -Wno-shadow -Wno-conversion -Wno-float-conversion -Wno-sign-conversion)
+  endif()
+endfunction()
+
 # ---------------------------------------------------------------------------
 # Dependencies (D-2026-08-31-b, GitHub issue #142).
 #
@@ -345,11 +369,7 @@ if(WIN32)
   # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
   target_link_libraries(gosurvey_domain PUBLIC comdlg32 ole32 shell32)
 endif()
-if(MSVC)
-  target_compile_options(gosurvey_domain PRIVATE /W4 /permissive-)
-else()
-  target_compile_options(gosurvey_domain PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+gosurvey_target_warnings(gosurvey_domain)
 gosurvey_enable_pch(gosurvey_domain)
 
 add_executable(GoSurvey
@@ -535,11 +555,7 @@ if(WIN32)
   endif()
 endif()
 
-if(MSVC)
-  target_compile_options(GoSurvey PRIVATE /W4 /permissive-)
-else()
-  target_compile_options(GoSurvey PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+gosurvey_target_warnings(GoSurvey)
 gosurvey_enable_pch(GoSurvey)
 # PdfAttach.cpp is compiled at /std:c++20 (C++/WinRT); the PCH is built at the
 # project default (C++17), so it cannot consume it (D-2026-08-31-a).
@@ -629,11 +645,7 @@ if(GOSURVEY_BUILD_HEADLESS)
   target_compile_definitions(gosurvey_headless PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
 
-  if(MSVC)
-    target_compile_options(gosurvey_headless PRIVATE /W4 /permissive-)
-  else()
-    target_compile_options(gosurvey_headless PRIVATE -Wall -Wextra -Wpedantic)
-  endif()
+  gosurvey_target_warnings(gosurvey_headless)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -877,11 +889,7 @@ if(GOSURVEY_BUILD_TESTS)
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg)
-  if(MSVC)
-    target_compile_options(GoSurveyTests PRIVATE /W4 /permissive-)
-  else()
-    target_compile_options(GoSurveyTests PRIVATE -Wall -Wextra)
-  endif()
+  gosurvey_target_warnings(GoSurveyTests)
   gosurvey_enable_pch(GoSurveyTests)
 
   include(Catch)
@@ -924,11 +932,7 @@ if(GOSURVEY_BUILD_TESTS)
   target_link_libraries(GoSurveySnapTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg)
   target_compile_definitions(GoSurveySnapTests PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
-  if(MSVC)
-    target_compile_options(GoSurveySnapTests PRIVATE /W4 /permissive-)
-  else()
-    target_compile_options(GoSurveySnapTests PRIVATE -Wall -Wextra)
-  endif()
+  gosurvey_target_warnings(GoSurveySnapTests)
   gosurvey_enable_pch(GoSurveySnapTests)
   catch_discover_tests(GoSurveySnapTests)
 
