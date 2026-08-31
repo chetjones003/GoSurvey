@@ -146,6 +146,12 @@ add_library(glew_static STATIC ${GLEW_ROOT}/src/glew.c)
 target_include_directories(glew_static PUBLIC ${GLEW_ROOT}/include)
 target_compile_definitions(glew_static PUBLIC GLEW_STATIC)
 target_link_libraries(glew_static PUBLIC OpenGL::GL)
+# Vendored: silence glew.c's warnings so ours stay visible (same call as LibreDWG).
+if(MSVC)
+  target_compile_options(glew_static PRIVATE /w)
+else()
+  target_compile_options(glew_static PRIVATE -w)
+endif()
 
 # ---------------------------------------------------------------------------
 # ImGui, split into core and backends (ADR-031 (c′)).

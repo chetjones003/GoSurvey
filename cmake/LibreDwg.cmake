@@ -35,7 +35,18 @@ if(NOT libredwg_POPULATED)
 
   set(_gosurvey_saved_build_shared "${BUILD_SHARED_LIBS}")
   set(BUILD_SHARED_LIBS OFF)
+
+  # LibreDWG's CMakeLists runs ~30 CHECK_INCLUDE_FILE / check_symbol_exists probes.
+  # Each is a try_compile that, by default, also LINKS an executable — on Windows
+  # that roughly doubles the per-probe cost (this is what makes a fresh configure
+  # sit for a minute-plus at "Looking for ..."). Building a static lib instead
+  # skips the link step; the probe answers are identical. Scoped: restored below.
+  set(_gosurvey_saved_try_type "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
   add_subdirectory("${libredwg_SOURCE_DIR}" "${libredwg_BINARY_DIR}" EXCLUDE_FROM_ALL)
+
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE "${_gosurvey_saved_try_type}")
   set(BUILD_SHARED_LIBS "${_gosurvey_saved_build_shared}")
 endif()
 
@@ -49,6 +60,14 @@ endif()
 
 if(WIN32)
   target_link_libraries(libredwg PUBLIC ws2_32)
+endif()
+
+# Vendored third-party C: we do not act on its warnings (DISABLE_WERROR above says
+# as much), so silence them rather than let them scroll past on every build.
+if(MSVC)
+  target_compile_options(libredwg PRIVATE /w)
+else()
+  target_compile_options(libredwg PRIVATE -w)
 endif()
 
 target_compile_definitions(libredwg INTERFACE
