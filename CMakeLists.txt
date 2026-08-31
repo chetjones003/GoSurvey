@@ -54,9 +54,24 @@ function(gosurvey_enable_pch tgt)
   endif()
 endfunction()
 
-include(FetchContent)
+# ---------------------------------------------------------------------------
+# Dependencies (D-2026-08-31-b, GitHub issue #142).
+#
+# Every build dependency is VENDORED in third_party/ — no FetchContent, no
+# network, no per-configure git clone or dependency configure. Each subtree has
+# a VENDORED.md with its upstream URL + pinned tag/commit + rebuild recipe.
+# REQ-200 is strengthened: the dependency bytes are in the tree, not a ref a
+# host resolves. To update one: replace its files and bump its VENDORED.md.
+# ---------------------------------------------------------------------------
+set(GOSURVEY_TP "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LibreDwg.cmake")
+# The old FetchContent variable names are reused so the target definitions below
+# stay untouched — only the source of the bytes changed.
+set(imgui_SOURCE_DIR              "${GOSURVEY_TP}/imgui")
+set(imgui_test_engine_SOURCE_DIR  "${GOSURVEY_TP}/imgui_test_engine")
+set(pdfium_binaries_SOURCE_DIR    "${GOSURVEY_TP}/pdfium")
+set(GLEW_ROOT                     "${GOSURVEY_TP}/glew")
+set(NLOHMANN_JSON_INCLUDE         "${GOSURVEY_TP}")   # resolves <nlohmann/json.hpp>
 
 # REQ-161 / ADR-040: Developer Shell is compile-gated. Release cannot turn it on.
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -71,76 +86,45 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" AND GOSURVEY_DEVELOPER_SHELL)
   message(WARNING "REQ-161: GOSURVEY_DEVELOPER_SHELL forced OFF for CMAKE_BUILD_TYPE=Release")
   set(GOSURVEY_DEVELOPER_SHELL OFF CACHE BOOL "" FORCE)
 endif()
+if(GOSURVEY_DEVELOPER_SHELL AND NOT EXISTS "${imgui_test_engine_SOURCE_DIR}/imgui_test_engine/imgui_te_engine.cpp")
+  message(FATAL_ERROR
+    "GOSURVEY_DEVELOPER_SHELL is ON but third_party/imgui_test_engine/ is not populated. "
+    "See third_party/imgui_test_engine/VENDORED.md to vendor it (Debug-only dep).")
+endif()
 
+# --- GLFW: vendored 3.4 source, built in-tree (GLFW_BUILD_* off) ---
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory("${GOSURVEY_TP}/glfw" "${CMAKE_BINARY_DIR}/glfw-build" EXCLUDE_FROM_ALL)
 
-FetchContent_Declare(glfw
-  GIT_REPOSITORY https://github.com/glfw/glfw.git
-  GIT_TAG 3.4
-)
-
-# PDFium prebuilt binaries (Windows x64).
-# Update the URL to the latest release from:
-#   https://github.com/bblanchon/pdfium-binaries/releases
-FetchContent_Declare(pdfium_binaries
-  URL https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7857/pdfium-win-x64.tgz
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-
-# Pinned to a COMMIT, not the `docking` branch: a moving branch means two clean builds of the
-# same GoSurvey commit compile different ImGui, which violates REQ-200 (deterministic build).
-# This SHA is v1.92.9 on `docking` (2026-07-30) — the commit already in use when the pin landed,
-# so pinning changed nothing about the produced binary. ImGuizmo (REQ-060) compiles against ImGui
-# internals, so a floating ImGui would turn an upstream change into a mystery build break.
-# To update: bump the SHA deliberately, rebuild, and re-run the test suite.
-FetchContent_Declare(imgui
-  GIT_REPOSITORY https://github.com/ocornut/imgui.git
-  GIT_TAG 81cfcb8c1fed1e4dac8bcdc059ce811c17b6194c
-)
-
-FetchContent_Declare(glew
-  URL https://github.com/nigels-com/glew/releases/download/glew-2.2.0/glew-2.2.0.zip
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-
-FetchContent_MakeAvailable(glfw imgui glew pdfium_binaries)
-
-if(GOSURVEY_DEVELOPER_SHELL)
-  # SOURCE_SUBDIR is the engine sources (no CMakeLists there), so MakeAvailable
-  # populates the pin without add_subdirectory of the upstream test-suite app (CMP0169).
-  FetchContent_Declare(imgui_test_engine
-    GIT_REPOSITORY https://github.com/ocornut/imgui_test_engine.git
-    GIT_TAG v1.92.9
-    SOURCE_SUBDIR imgui_test_engine
-  )
-  FetchContent_MakeAvailable(imgui_test_engine)
+# --- LibreDWG: vendored headers + prebuilt static lib (REQ-170 / ADR-041) ---
+# The 0.13.3 tag's headers (public + the src/*.h that LibreDwgCad.cpp includes:
+# bits.h, out_dxf.h, …) and the generated config.h, plus a prebuilt MSVC x64
+# Release /MD static lib. Building LibreDWG from source cost ~30 try_compile
+# probes + ~400 s of C compile on every clean build (issue #142 §5).
+set(libredwg_SOURCE_DIR "${GOSURVEY_TP}/libredwg")
+set(libredwg_BINARY_DIR "${GOSURVEY_TP}/libredwg")   # config.h lives beside src/*.h
+add_library(libredwg STATIC IMPORTED GLOBAL)
+set_target_properties(libredwg PROPERTIES
+  IMPORTED_LOCATION "${GOSURVEY_TP}/libredwg/lib/win-x64/libredwg.lib"
+  INTERFACE_INCLUDE_DIRECTORIES "${GOSURVEY_TP}/libredwg/include")
+if(WIN32)
+  set_property(TARGET libredwg APPEND PROPERTY INTERFACE_LINK_LIBRARIES ws2_32)
 endif()
+set_property(TARGET libredwg APPEND PROPERTY
+  INTERFACE_COMPILE_DEFINITIONS "GOSURVEY_LIBREDWG_VERSION=\"0.13.3\"")
+add_library(LibreDWG::libredwg ALIAS libredwg)
+message(STATUS "LibreDWG 0.13.3 vendored (prebuilt third_party/libredwg/lib/win-x64/libredwg.lib)")
 
-# Create an imported target for the pdfium DLL.
+# --- pdfium: vendored prebuilt (chromium/7857, Windows x64) ---
 add_library(pdfium SHARED IMPORTED)
 set_target_properties(pdfium PROPERTIES
   IMPORTED_LOCATION "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll"
   IMPORTED_IMPLIB   "${pdfium_binaries_SOURCE_DIR}/lib/pdfium.dll.lib"
   INTERFACE_INCLUDE_DIRECTORIES "${pdfium_binaries_SOURCE_DIR}/include"
 )
-
-set(NLOHMANN_JSON_INCLUDE "${CMAKE_BINARY_DIR}/_deps")
-set(NLOHMANN_JSON_FILE "${NLOHMANN_JSON_INCLUDE}/nlohmann/json.hpp")
-if(NOT EXISTS "${NLOHMANN_JSON_FILE}")
-  file(MAKE_DIRECTORY "${NLOHMANN_JSON_INCLUDE}/nlohmann")
-  file(DOWNLOAD
-    "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp"
-    "${NLOHMANN_JSON_FILE}"
-    TLS_VERIFY ON
-  )
-endif()
-
-set(GLEW_ROOT "${glew_SOURCE_DIR}")
-if(EXISTS "${glew_SOURCE_DIR}/glew-2.2.0/src/glew.c")
-  set(GLEW_ROOT "${glew_SOURCE_DIR}/glew-2.2.0")
-endif()
 
 add_library(glew_static STATIC ${GLEW_ROOT}/src/glew.c)
 target_include_directories(glew_static PUBLIC ${GLEW_ROOT}/include)
@@ -660,16 +644,19 @@ endif()
 # ---------------------------------------------------------------------------
 option(GOSURVEY_BUILD_TESTS "Build the GoSurvey domain test suite" ON)
 if(GOSURVEY_BUILD_TESTS)
-  set(CATCH_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-  set(CATCH_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(CATCH_BUILD_EXTRA_TESTS OFF CACHE BOOL "" FORCE)
-  set(CATCH_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
-  FetchContent_Declare(Catch2
-    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG v3.5.2
-  )
-  FetchContent_MakeAvailable(Catch2)
-  list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
+  # Catch2 v3.5.2 — vendored AMALGAMATED distribution (D-2026-08-31-b): one .hpp +
+  # one .cpp instead of the whole Catch2 CMake project. `Catch2::Catch2WithMain`
+  # is our own tiny static lib built from catch_amalgamated.cpp (which defines
+  # main()); ctest integration uses the vendored Catch.cmake / CatchAddTests.cmake.
+  set(GOSURVEY_CATCH2_DIR "${GOSURVEY_TP}/catch2")
+  add_library(Catch2_amalgamated STATIC "${GOSURVEY_CATCH2_DIR}/catch_amalgamated.cpp")
+  target_include_directories(Catch2_amalgamated PUBLIC "${GOSURVEY_CATCH2_DIR}")
+  target_compile_features(Catch2_amalgamated PUBLIC cxx_std_17)
+  if(MSVC)
+    target_compile_options(Catch2_amalgamated PRIVATE /w)
+  endif()
+  add_library(Catch2::Catch2WithMain ALIAS Catch2_amalgamated)
+  list(APPEND CMAKE_MODULE_PATH "${GOSURVEY_CATCH2_DIR}")
 
   enable_testing()
   add_executable(GoSurveyTests

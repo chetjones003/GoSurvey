@@ -5502,12 +5502,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: must
 - Type: quality
 - Statement: A clean build from a fixed commit produces identical artifacts and
-  emits them to the build directory, never the source tree.
+  emits them to the build directory, never the source tree. Build dependencies
+  are vendored in `third_party/` (D-2026-08-31-b) — their bytes are in the tree,
+  not a ref resolved by a host at configure time.
 - Acceptance: two clean builds of the same commit yield matching binaries
   (modulo timestamps).
 - Owner-layer: Build/Platform
 - Status: accepted
 - Revisions: `<date>` — initial.
+               2026-08-31 — D-2026-08-31-b: FetchContent dropped; deps vendored in `third_party/`
+               (strengthens this requirement — the pins are now exact source, not refs).
 
 ### REQ-201 — No silent failures
 - Purpose: debuggability
@@ -5712,8 +5716,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: must
 - Statement: A new third-party dependency enters the build only after the
   three-question policy in `project.md` is answered affirmatively and recorded
-  in the decision log.
-- Acceptance: each dependency maps to a decision-log entry.
+  in the decision log. Dependencies are **vendored in `third_party/`**
+  (D-2026-08-31-b), each with a `VENDORED.md` recording its upstream URL,
+  tag/commit, and trim/rebuild recipe. Updating one is a deliberate commit that
+  replaces the files under its directory.
+- Acceptance: each dependency maps to a decision-log entry; each `third_party/`
+  subtree has a `VENDORED.md` with a resolvable upstream ref.
 - Status: accepted
 
 ### REQ-301 — Minimal abstraction

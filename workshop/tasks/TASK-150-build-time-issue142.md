@@ -192,3 +192,30 @@ the compile prints many warnings.
     (b) `/wd4244` scoped to `CadUi.cpp` only (UI pixel math is benign) + audit CadSnap;
     (c) add `/WX` and clear them for real (matches coding-standards §11 "warnings are
         errors in CI", which is currently not enforced).
+
+## 8d. Vendored all deps, dropped FetchContent — 2026-08-31 (D-2026-08-31-b)
+
+User: "package GoSurvey with the needed code, I don't want the slow FetchContent."
+
+`third_party/` now holds every dependency (imgui, imgui_test_engine [Debug-only, may be
+absent], glfw 3.4 source, glew, Catch2 amalgamated + `catch2/` shims, LibreDWG headers +
+**prebuilt** `lib/win-x64/libredwg.lib`, pdfium prebuilt, nlohmann/json.hpp). Each has a
+`VENDORED.md`. `cmake/LibreDwg.cmake` deleted; `include(FetchContent)` gone; the CI dep-cache
+step removed. ~56 MB / 181 files added.
+
+**Before → after (16-core, fresh `rm -rf build`):**
+
+| | before (FetchContent) | after (vendored) |
+|---|---|---|
+| configure | ~118 s (git clones + LibreDWG probes) | **~3 s** |
+| build (PCH on) | ~1m45–1m52s | **~43 s** |
+| build (PCH off) | ~1m50s | ~54 s |
+| ctest | ~20 s | ~19 s (844/844) |
+| **fresh build total** | **~4 min** | **~46 s** |
+
+LibreDWG's four ~100 s C files are gone from the graph (prebuilt `.lib`), which is what
+took the wall from ~1m50s to ~43s. REQ-200 is strengthened (dep bytes in-tree, not a ref).
+
+Debt: `libredwg.lib` is Release/`/MD`; `ninja-debug` links it too (pure-C, allocator-neutral
+API — accepted, see `third_party/libredwg/VENDORED.md`). A fully-offline **Debug** build also
+needs `third_party/imgui_test_engine/` populated (CMake fails with a clear message if not).
