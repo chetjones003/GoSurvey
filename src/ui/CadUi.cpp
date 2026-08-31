@@ -42,6 +42,7 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <chrono>
 #include <set>
 #include <cmath>
 #include <cctype>
@@ -11536,10 +11537,106 @@ static void DrawCadGripMarker(ImDrawList* dl, const ImVec2& gp, float half, CadB
   dl->AddTriangle(tip, ImVec2(base.x + n.x, base.y + n.y), ImVec2(base.x - n.x, base.y - n.y), border, 1.f);
 }
 
+// Frame-time diagnostic overlay (issue #166 investigation). Toggled by the PERFHUD command. Shows
+// the current / rolling-average / rolling-max of the whole frame and the sections most likely to
+// scale with drawing size during a modify command, plus whether the issue-#166 hover-pick gate
+// actually skipped this frame. Deliberately a throwaway tool, not a shipped feature.
+void DrawPerfHud(const AppCommandState& cmd) {
+  if (!cmd.perfHudVisible)
+    return;
+
+  constexpr int kWin = 120;  // ~1-2 s of frames
+  struct Ring {
+    double v[kWin] = {};
+    int n = 0, head = 0;
+    void push(double x) {
+      v[head] = x;
+      head = (head + 1) % kWin;
+      if (n < kWin)
+        ++n;
+    }
+    double avg() const {
+      if (!n)
+        return 0.0;
+      double s = 0.0;
+      for (int i = 0; i < n; ++i)
+        s += v[i];
+      return s / n;
+    }
+    double max() const {
+      double m = 0.0;
+      for (int i = 0; i < n; ++i)
+        m = v[i] > m ? v[i] : m;
+      return m;
+    }
+  };
+  static Ring frame, vpUi, hover, snap, render, ranHist;
+
+  frame.push(cmd.perfFrameMs);
+  vpUi.push(cmd.perfViewportUiMs);
+  hover.push(cmd.perfHoverPickMs);
+  snap.push(cmd.perfSnapMs);
+  render.push(cmd.perfRenderMs);
+  ranHist.push(cmd.perfHoverPickRan ? 1.0 : 0.0);
+  int hoverRan = 0;
+  for (int i = 0; i < ranHist.n; ++i)
+    hoverRan += ranHist.v[i] > 0.5 ? 1 : 0;
+
+  // Pin it to the top-centre of the whole window every frame so it can't hide behind a panel or a
+  // stale docked position — this is a diagnostic that has to be found instantly.
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowBgAlpha(0.92f);
+  ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + 140.f),
+                          ImGuiCond_Always, ImVec2(0.5f, 0.f));
+  if (ImGui::Begin("Frame profiler (PERFHUD)", nullptr,
+                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing |
+                       ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoCollapse |
+                       ImGuiWindowFlags_NoSavedSettings)) {
+    const double favg = frame.avg();
+    ImGui::Text("FPS  %6.1f      frame  %5.2f / %5.2f / %5.2f ms  (cur/avg/max)",
+                favg > 1e-6 ? 1000.0 / favg : 0.0, cmd.perfFrameMs, favg, frame.max());
+    ImGui::Separator();
+    auto row = [](const char* name, const Ring& r, double cur) {
+      ImGui::Text("%-11s %5.2f / %5.2f / %5.2f ms", name, cur, r.avg(), r.max());
+    };
+    row("viewportUI", vpUi, cmd.perfViewportUiMs);
+    row("  hoverPick", hover, cmd.perfHoverPickMs);
+    row("  snap", snap, cmd.perfSnapMs);
+    row("render", render, cmd.perfRenderMs);
+    ImGui::Separator();
+    const int win = frame.n ? frame.n : 1;
+    ImGui::Text("hoverPick this frame: %s     ran %d / last %d frames",
+                cmd.perfHoverPickRan ? "RAN" : "cached", hoverRan, win);
+    const char* act = "none";
+    switch (cmd.active) {
+      case AppCommandState::Kind::Trim: act = "TRIM"; break;
+      case AppCommandState::Kind::Extend: act = "EXTEND"; break;
+      case AppCommandState::Kind::Break: act = "BREAK"; break;
+      case AppCommandState::Kind::Lengthen: act = "LENGTHEN"; break;
+      default: break;
+    }
+    ImGui::Text("command: %-9s   lines %zu  polylines %zu  arcs %zu  circles %zu", act,
+                cmd.userLinesFlat.size() / 6, cmd.userPolylineOffsets.size(), cmd.userArcs.size(),
+                cmd.userCirclesCxCyZR.size() / 4);
+    ImGui::TextDisabled("PERFHUD again to hide. Numbers are wall-clock; vsync caps 'frame'.");
+  }
+  ImGui::End();
+}
+
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
                          char* cmdBuf, int cmdBufSize, double* panX, double* panY, float* zoom, double* outCursorX,
                          double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
                          CadSnap::Hit* out_snap) {
+  // PERFHUD (issue #166 investigation): time the whole viewport-UI pass, every return path.
+  struct PerfVpScope {
+    AppCommandState& c;
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    ~PerfVpScope() {
+      c.perfViewportUiMs =
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    }
+  } perfVpScope{cmd};
+
   ImGui::SetNextWindowSize(ImVec2(900, 650), ImGuiCond_FirstUseEver);
   if (cmd.pendingViewportFocus) {
     ImGui::SetNextWindowFocus();
@@ -12959,6 +13056,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           HoverPickGateShouldRun(&cmd.viewportHoverPickGate, mx, my, ImGui::GetTime(), hoverView,
                                  cmd.cadGpuRevision, /*moveTolPx=*/1.f, /*minIntervalSec=*/1.0 / 30.0,
                                  /*maxIdleSec=*/0.25);
+      cmd.perfHoverPickRan = runHoverPick;
+      const auto perfHoverT0 = std::chrono::steady_clock::now();
       if (blockEntityHover) {
         cmd.viewportHoverEntityValid = false;
         cmd.viewportHoverPickGate.primed = false;
@@ -13009,6 +13108,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       // else: the gate says skip this frame — keep last frame's cmd.viewportHoverEntity{,Valid},
       // which persist across frames, until the cursor / view / geometry actually change (issue #166).
+      cmd.perfHoverPickMs =
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfHoverT0).count();
     }
 
     // GitHub #91 review, D-2026-08-26-d, re-derived post-#103 (D-2026-08-26-e). The override menu
@@ -13020,6 +13121,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // to gate here post-#103: `pendingOneShotSnapValid`'s one-shot-value mechanism was replaced by a
     // persistent per-kind lock, consumed every frame at the one place FindBest is called, which is
     // already behind the selection-step check. A second gate here would be redundant, not defensive.
+    const auto perfSnapT0 = std::chrono::steady_clock::now();
     {
       cmd.viewportSnapPickValid = false;
       const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
@@ -13087,6 +13189,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         *outCursorY = rawY;
       }
     }
+    cmd.perfSnapMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfSnapT0).count();
     if (!cmd.objectSnapKindOverrideValid && outCursorX && outCursorY &&
         !cmd.dimGripMoveActive && !cmd.entityGripMoveActive && !cmd.mtextGripMoveActive) {
       ApplyGripMagnetToGrips(cmd, rawX, rawY, halfH, avail.y, outCursorX, outCursorY, out_snap);

@@ -36,6 +36,7 @@
 #include "AuthService.hpp"
 #include "Version.hpp"
 
+#include <chrono>
 #include <ctime>
 
 #ifdef _WIN32
@@ -469,9 +470,18 @@ int main()
   int devshellFrames = 0;
 #endif
 
+  auto perfPrevFrame = std::chrono::steady_clock::now();
   while (true)
   {
     glfwPollEvents();
+
+    // Frame-time HUD (issue #166 investigation, PERFHUD command). Frame-to-frame wall clock,
+    // measured at the top so it is the whole cost — poll, UI, render, swap, vsync wait.
+    {
+      const auto now = std::chrono::steady_clock::now();
+      cmd.perfFrameMs = std::chrono::duration<double, std::milli>(now - perfPrevFrame).count();
+      perfPrevFrame = now;
+    }
 
     // --- REQ-100 frame-budget benchmark ---------------------------------------------------------
     // Timed at the TOP of the iteration, so each sample is the full frame-to-frame cost the user
@@ -1229,6 +1239,7 @@ int main()
     // Held in a named local because RenderScene takes a pointer to it and the call outlives any
     // temporary: the grid frame must still be alive when the renderer reads it.
     const ucs::Ucs ucsGridFrame = CadActiveUcsStorage(cmd);
+    const auto perfRenderT0 = std::chrono::steady_clock::now();
     activeRenderer.RenderScene(CadViewCamera(cmd), fbW, fbH, sceneLines,
                                sceneCircles, cmd.cadGpuRevision,
                                sceneRubber, (paperSpace || !snapHit.valid) ? nullptr : &snapHit,
@@ -1263,11 +1274,18 @@ int main()
                                // and every vertex the renderer receives. Paper space keeps its own
                                // 2D sheet grid and is deliberately excluded.
                                paperSpace ? nullptr : &ucsGridFrame);
+    cmd.perfRenderMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfRenderT0).count();
 
     // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
     }
+
+    // Frame profiler overlay (PERFHUD) — after the render so its render-ms is this frame's, not
+    // last frame's. No-op unless toggled on. Before DrawFloatingWindowChrome for the same reason
+    // every other window is.
+    DrawPerfHud(cmd);
 
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.

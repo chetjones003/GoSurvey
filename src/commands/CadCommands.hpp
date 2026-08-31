@@ -2959,6 +2959,17 @@ struct AppCommandState {
   bool systemOpenTablesReadOnly = false;
   int systemLayoutRegenOption = 0; ///< 0=Regen on switch, 1=Cache model+last, 2=Cache model+all.
 
+  /// Frame-time diagnostic HUD (issue #166 investigation). Toggled by the `PERFHUD` command. The
+  /// millisecond fields are written each frame by whoever owns that section — `perfRenderMs` in the
+  /// app frame loop, the rest in the viewport draw — and read only by the overlay.
+  bool   perfHudVisible = false;
+  double perfFrameMs = 0.0;        ///< whole frame, wall-clock frame-to-frame
+  double perfRenderMs = 0.0;       ///< the GL RenderScene call
+  double perfHoverPickMs = 0.0;    ///< the viewport entity hover-pick block (issue #166)
+  bool   perfHoverPickRan = false; ///< did the hover pick actually run this frame, or reuse cache
+  double perfSnapMs = 0.0;         ///< the object-snap FindBest block
+  double perfViewportUiMs = 0.0;   ///< the whole DrawDrawingViewport call
+
   // System → Graphics Performance sub-dialog.
   bool showGraphicsPerformanceDialog = false;
   bool gfxSmoothLineDisplay = true;            ///< Wired: GL_LINE_SMOOTH + MSAA when systemHardwareAcceleration on.
