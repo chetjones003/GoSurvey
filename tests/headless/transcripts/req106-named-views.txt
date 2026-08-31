@@ -1,0 +1,78 @@
+# REQ-106 — named views.
+#
+# A view is the camera's INPUTS plus the active frame: pan, zoom, azimuth, elevation and the UCS.
+# The UCS half is the part worth testing hardest, because it is the half a user does not see restore
+# and the half that changes what their next typed coordinate means — REQ-106's acceptance says a
+# named view "restores camera position/target/UCS exactly", and a restore that moved the camera back
+# while leaving the frame behind would look correct and be wrong.
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 100,100
+ESC
+
+# Nothing saved yet, and the command says so rather than showing an empty list.
+CMD VIEW ?
+EXPECT LOG "no saved views"
+
+# --- Save, list, restore -----------------------------------------------------------------------
+CMD VIEW S Site Overview
+EXPECT LOG "saved as Site Overview"
+CMD VIEW ?
+EXPECT LOG "Site Overview"
+
+# A second view saved under a ROTATED frame. This is the one that proves the UCS travels.
+CMD UCS
+CMD Z
+CMD 30
+CMD VIEW S Road Frame
+EXPECT LOG "saved as Road Frame"
+
+# Back to World, then restore the rotated view: the FRAME must come back too.
+CMD UCS
+CMD W
+CMD VIEW R Road Frame
+EXPECT LOG "restored Road Frame"
+EXPECT LOG "Coordinate entry is now in this frame"
+
+# And it really is the rotated frame: 100,0 typed in it lands on the 30-degree bearing.
+# cos30 = 0.866025, sin30 = 0.5
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+EXPECT LINEXYZ 1 0 0 0 86.6025 50 0
+
+# --- Refusals are refusals ------------------------------------------------------------------
+CMD VIEW R Nonexistent
+EXPECT LOG "there is no saved view named Nonexistent"
+CMD VIEW D Nonexistent
+EXPECT LOG "there is no saved view named Nonexistent"
+CMD VIEW S
+EXPECT LOG "name the view"
+CMD VIEW sideways
+EXPECT LOG "unrecognised option"
+
+# --- Re-saving a name updates it in place rather than duplicating -----------------------------
+CMD UCS
+CMD W
+CMD VIEW S Site Overview
+EXPECT LOG "Site Overview updated to the current view"
+
+# --- Views survive a .gs round trip, frames included -------------------------------------------
+SAVEAS %OUT%/nv.gs
+OPEN %OUT%/nv.gs
+CMD VIEW ?
+EXPECT LOG "Site Overview"
+CMD VIEW R Road Frame
+EXPECT LOG "restored Road Frame"
+EXPECT LOG "Coordinate entry is now in this frame"
+
+# --- Delete ------------------------------------------------------------------------------------
+CMD VIEW D Road Frame
+EXPECT LOG "Road Frame deleted"
+CMD VIEW R Road Frame
+EXPECT LOG "there is no saved view named Road Frame"
+
+CHECK ALL

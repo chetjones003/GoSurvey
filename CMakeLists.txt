@@ -374,6 +374,7 @@ add_executable(GoSurvey
   src/ui/ImGuiLayout.cpp
   src/ui/RichTextEdit.cpp
   src/ui/ViewCube.cpp
+  src/ui/UcsIcon.cpp
   src/ui/PdfAttachDialog.cpp
   src/ui/CadUi_InsertBlock.cpp
   src/ui/CadUi_BlockAuthoring.cpp
@@ -650,6 +651,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PointFileExtTests.cpp
     tests/HatchGeomTests.cpp
     tests/ZStoreTests.cpp
+    tests/UcsTests.cpp
     tests/Ray3dTests.cpp
     tests/CameraTests.cpp
     # REQ-122 zoom framing (GitHub issue #88, TASK-117). Header-only and pure, like OrthoConstrain

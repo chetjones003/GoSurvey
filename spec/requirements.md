@@ -327,6 +327,17 @@ requirements is a planning failure, not a sign of rigor.
   that do not expect a point (bearing/angle/distance/option/command-name entry)
   likewise keep a single input field. There is no Send button; commit is by Enter
   or click.
+
+  **One stated exception — directional prompts (REQ-154).** The UCS X-axis and
+  XY-plane prompts, and the second point of `UCS <axis> 2P`, show a **polar pair**
+  instead: a distance field and an angle field, rendered as `<distance> < <angle>`.
+  Those prompts ask for a DIRECTION, and an `x,y` readout answers a different
+  question — the user would have to do the subtraction themselves to learn the
+  angle the prompt is about. The pair assembles `@<distance><<angle>`, which is
+  real syntax the command line accepts, so the two forms describe the same thing
+  and either can be typed. The angle is measured in the active UCS's XY plane from
+  its +X, the same reference `UCS <axis> 2P` uses. This exception is deliberately
+  narrow: it does not reopen the 2026-06-19 decision for any other prompt.
 - Acceptance: starting LINE shows the "first point" prompt with a single box that
   tracks the cursor's easting/northing as `x,y`; typing locks the field; entering
   `@dx,dy` or a bearing/distance places the relative point; Enter commits the
@@ -336,6 +347,8 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-12 — initial; 2026-06-19 — single coordinate field instead
   of two X/Y boxes, so relative/bearing/distance entry works in the same field.
+  2026-08-29 — a stated exception for the UCS directional prompts (REQ-154): a
+  polar distance/angle pair there, single field everywhere else.
 
 ### REQ-025 — Model and Paper space with layout tabs and a space toggle
 - Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
@@ -3786,11 +3799,41 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: could
 - Type: functional
 - Statement: Add ZOOM PREVIOUS (pan/zoom/orbit history), named views (save/restore a camera state by name), a VIEW command/dialog to manage them, and one-click NE/NW/SE/SW isometric presets.
+
+  **A named view records the camera's inputs and the active frame** — pan, zoom, azimuth, elevation
+  and the UCS — not a derived matrix, so a saved view cannot mean something different from what the
+  live view would do with the same numbers. The UCS travels with it because a view restored without
+  its frame puts the camera back but changes what the next typed coordinate means.
+
+  `VIEW [Save/Restore/Delete/?] <name>` is inline in every form, and `VIEW` alone opens the View
+  Manager. The case-insensitive name matching deliberately mirrors `UCS Named`, so learning one
+  teaches the other.
+
+  **The View Manager also lists the drawing's named coordinate systems, and is the only place a
+  saved frame can be restored by name or deleted** (REQ-154). That is not a second home for a
+  command's options: `UCS Named` saves and nothing more, precisely because restoring and deleting
+  need a list of what exists, which a command prompt cannot show. The dialog's two buttons call the
+  same shared functions any other caller would, so there is still one implementation.
+
+  **The View tab carries a Named Views panel**: a combo naming the current view — the saved name when
+  the camera and frame match one, `Unsaved View` otherwise — listing the ten standard orientations
+  (Top / Bottom / Left / Right / Front / Back and the four isometrics), then this drawing's saved
+  views, then the View Manager. The orientation presets set direction only, keeping pan and zoom,
+  because "show me this from the south-west" should not also move what you were looking at. Their
+  angles come from the ViewCube's own face table and isometric constant, not a second copy.
+
+  Which view is current is **derived** from the live camera each time, never stored as a flag: a
+  remembered name goes stale the moment the user pans, and a label naming a view you have already
+  left is worse than no label, since `Unsaved View` is precisely the warning that what you see would
+  be lost.
 - Acceptance (sketch): ZOOM PREVIOUS steps back through recent view changes; a named view restores camera position/target/UCS exactly; isometric presets set the standard 3D-isometric angle in one action. DVIEW and multiple simultaneous model-space viewports are noted as open scope questions, not committed here, given their size.
 - Owner-layer: UI/Renderer
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
-
+- Status: **partially delivered** (2026-08-29) — named views, the `VIEW` command, the View Manager
+  and the ten orientation presets are built and persist in `.gs`. **ZOOM PREVIOUS is NOT built**, so
+  this requirement is not closed; the view-history half remains as originally catalogued.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-08-29 — named views, VIEW, the View
+  Manager and the orientation presets delivered at the user's request during hands-on testing;
+  Statement expanded to describe what was built. ZOOM PREVIOUS deliberately left out of that pass.
 ### REQ-107 — Block support (foundational)
 - Purpose: GoSurvey has no block/insert mechanism, which blocks title-block reuse, standard symbols, and any future TABLE/annotation work; DWG export always explodes geometry for exactly this reason
 - Priority: should
@@ -5080,6 +5123,141 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-28)
 - Revisions: 2026-08-28 — D-2026-08-28-l.
 
+### REQ-154 — UCS and PLAN: a real coordinate-system service (GitHub issue #126)
+- Purpose: give the user a coordinate frame to work in, and a way to look at it, without ever moving
+  the drawing. Until now `UCS` was an alias for `ELEV`: it could raise the work plane but had no
+  axes, so nothing could ask "which way is UCS +X?" and every command read input in world terms
+- Priority: must
+- Type: functional
+- Statement: A **User Coordinate System** is an origin plus a right-handed orthonormal basis,
+  expressed in WCS and stored per drawing. It is the frame in which the user's input is read and in
+  which coordinates are reported back.
+
+  **A UCS never moves geometry.** Entities remain in WCS. Changing the UCS changes interpretation
+  and presentation only; any code path that rewrites a stored coordinate because the frame changed
+  is a defect.
+
+  **One authoritative implementation.** `WorldToUcs` / `UcsToWorld` and their vector forms live in a
+  single pure module (`src/util/ucs.hpp`, beside `util/ray3d` and for the same ADR-002 reason), and
+  every consumer calls it. No command computes its own frame arithmetic.
+
+  **`UCS` supports:** an origin alone (orientation preserved); origin + X-axis point; the three-point
+  form (origin, +X, a point in the +Y half of the plane); `World`; `Previous` (a bounded history that
+  a restore does not itself extend); `View`; `X` / `Y` / `Z` rotation about the UCS's **own** axes,
+  positive by the right-hand rule; `ZAxis`; `Object`; and `Named`.
+
+  **`Named` saves, and only saves.** `UCS N` asks for a name immediately - there is no
+  Save / Restore / Delete question in front of it, because by the time a user has built a frame and
+  typed `N` they have already answered it. `?` still lists at that prompt, and an existing name is
+  redefined rather than duplicated. **Restoring and deleting a saved frame belong to the View
+  Manager**, which lists them: choosing among saved frames needs to show what there is to choose
+  from, and a command prompt can only ask the user to recall a name they cannot see. Both halves call
+  one shared implementation, so the dialog and any other caller cannot drift apart. `World` is
+  reserved: it can be neither redefined nor deleted. Named definitions persist with the drawing.
+
+  **A rotation angle can be typed or measured.** At the `X` / `Y` / `Z` angle prompt, `2P` takes two
+  points — typed or clicked — and uses the angle of the direction between them, measured in the plane
+  that rotation spins and reported back so the user can see the number that was used. Feeding that
+  angle to the rotation is what aligns the axis with the picked direction, so "square my frame to this
+  lot line" is two picks rather than a bearing read off the drawing and typed back in. Two points that
+  define no angle in that plane (coincident, or perpendicular to it) are refused and the prompt stands
+  (REQ-201).
+
+  **The command shows what it is about to do.** At the two axis prompts and at the second `2P` pick,
+  a rubber preview runs from the origin to the cursor, and the cursor carries a **polar distance and
+  angle pair** (REQ-024's stated exception) reading in the active frame. `@<distance><<angle>` is
+  accepted as typed input at those prompts, so what the mouse produces is exactly what could have
+  been typed.
+
+  **A frame selector sits under the ViewCube**, in model space only. It names the active frame —
+  `WCS`, the saved name when the frame is one of them, or `Unnamed` for a frame built but not saved —
+  and opens a menu of `WCS`, every named UCS in the drawing, and `New UCS`. Selecting a name restores
+  that frame; `New UCS` opens the ordinary command, so the menu and the command line cannot drift
+  about what any of it means.
+
+  **Coordinate entry is in the UCS.** Under a UCS rotated 45° about Z, `10,0` is ten units along the
+  UCS X axis; `@dx,dy` is a delta along the UCS axes. Typed points accept `X,Y,Z` as well as `X,Y`,
+  without which no tilted frame could be defined from the keyboard. Object snaps continue to resolve
+  against real WCS geometry and return the snapped point's own position; the UCS transforms what is
+  *reported* and what is *typed*, never what is *snapped to*.
+
+  **A point carries its own elevation.** On a UCS parallel to world XY every point on the work plane
+  shares one Z, which is why a single work-plane elevation sufficed before. A tilted UCS breaks that:
+  the plane's Z varies across it. New geometry commits at the resolved point's own Z — the click's
+  ray × plane intersection, or the typed UCS coordinate mapped through the frame.
+
+  **ORTHO and the grid follow the UCS.** ORTHO squares to the UCS axes and stays in the UCS plane;
+  the grid is generated in the frame's own XY. A drafting aid still squared to the world while entry
+  has moved is worse than none — it reads as the drawing's alignment.
+
+  **`PLAN` changes the view, never the UCS.** It orients the camera to the XY plane of the current
+  UCS, the WCS, or a named UCS. Autodesk documents that distinction explicitly and it is the whole
+  reason the command is separate. **`UCSFOLLOW`** (0/1, per drawing) makes a UCS change switch to a
+  plan view of the new frame automatically.
+
+  **A UCS icon** in the model viewport shows the active frame's X / Y / Z axes, foreshortened with
+  the camera, with a `W` at its origin when the frame is the WCS. It is driven by the UCS state, not
+  decoration.
+
+  **Documented limitation — PLAN of a tilted UCS.** `Camera` stores azimuth and elevation with no
+  roll axis, a deliberate choice (ADR-025 (c)) that avoids the pole flip a free eye/up pair suffers.
+  For any UCS whose Z is world +Z — every translation, every rotation about Z, and so the whole 2D
+  survey case — PLAN is exact: the UCS +Y comes out up the screen. For a **tilted** UCS the view
+  *direction* is correct but the in-plane rotation cannot also be set, and the command says so when
+  it happens. Making it exact requires adding roll to `Camera`, which is an architectural change
+  (view matrix, `ScreenRay`, `WorldToScreen`, ViewCube, PDF plot, and new persisted per-tab state)
+  and is deliberately **not** in this requirement.
+- Acceptance:
+  - the transform module is pure, orthonormal and right-handed by construction, and unit-tested
+    including every refusal (collinear three-point, coincident picks, zero-length normal);
+  - `WorldToUcs` and `UcsToWorld` invert each other exactly for translated, rotated and tilted
+    frames;
+  - every listed `UCS` option works, and each invalid input is refused with a stated reason rather
+    than producing a degenerate frame (REQ-201);
+  - `Previous` walks back through the history and a restore does not itself become a history entry;
+  - named definitions save, restore, delete, list, and survive a `.gs` round trip byte-identically;
+  - `World` cannot be saved over or deleted;
+  - geometry drawn under a rotated UCS lands at the world coordinates the frame implies, asserted on
+    actual stored coordinates rather than on entity counts;
+  - geometry drawn on a **tilted** UCS commits at the elevation the plane gives at that point;
+  - changing the UCS leaves every stored coordinate untouched;
+  - the coordinate readout and `ID` report in the active UCS and name which frame that is;
+  - ORTHO squares to the UCS axes; the grid is generated in the UCS plane;
+  - `PLAN Current` / `World` / a named UCS orient the view and leave the UCS unchanged;
+  - `UCSFOLLOW=0` preserves the view on a UCS change, `UCSFOLLOW=1` switches to a plan view of it;
+  - the UCS is per drawing: switching tabs does not carry one drawing's frame into another, and a
+    new drawing starts in the WCS with no saved frames;
+  - a drawing saved before this requirement still loads, and a UCS that is a plain elevation change
+    still writes the `ucsElevation` key an older build reads.
+- Owner-layer: Commands (the frame, the commands, coordinate entry), Renderer (grid), UI (icon,
+  readout), IO (`.gs` persistence)
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — initial (D-2026-08-28-n); raised by chetjones003 as issue #126. 2026-08-29 — added `2P`
+  to the rotation-angle prompt (take the angle from two picked points), at the user's request during
+  hands-on testing of this branch. Same day — live axis preview, the polar
+  distance/angle cursor pair (REQ-024's stated exception) with `@distance<angle` as typed input, and
+  the frame selector under the ViewCube; all three requested from hands-on testing.
+
+#### Not in this requirement — and why
+
+Issue #126's acceptance list includes four items that cannot be honestly met, each blocked on a
+capability that does not exist. They are recorded here rather than quietly dropped:
+
+1. **Exact PLAN of a tilted UCS** — needs camera roll; see the documented limitation above.
+2. **"Polar tracking follows the UCS"** — polar tracking does not exist. It is a status-bar toggle
+   with no drafting behaviour (`CadUi.cpp`, labelled "UI only for now"). The condition asks for the
+   feature to be built first, which is its own requirement.
+3. **Per-viewport UCS and UCSFOLLOW isolation** — a paper-space `Viewport` is 2D (a model centre and
+   a scale); REQ-061's per-viewport camera was never implemented, and multiple simultaneous
+   model-space viewports are an explicitly open scope question (see the REQ-084 note). There is one
+   model view per drawing, so the UCS is scoped per drawing — the strongest form of "does not leak
+   between viewports" this architecture can state.
+4. **`Object` alignment to 3D faces, meshes, surfaces and solids** — resolving a face needs
+   face-level picking, which does not exist: a mesh picks as one object with no face identity, and
+   solids/surfaces as editable entities are issue #120's scope. `Object` covers lines, arcs,
+   circles, ellipses and text, and refuses anything else with a stated reason.
+
+
 ---
 
 ## Performance requirements
@@ -5564,6 +5742,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-151 | Commands | done (TASK-136) — arc breaklines; DESIGNATEBOUNDARY refuses arcs | accepted |
 | REQ-152 | util/Commands | done (TASK-136) — catchment mean Z; `[req152]` | accepted |
 | REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
+| REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126) | accepted |
 | REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
 | REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2004 default write; no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
 | REQ-171 | Domain/Renderer/IO | planned — point cloud entity; shared immutable payload; logged DXF/DWG exclusion | accepted |

@@ -72,6 +72,86 @@ CadBlockXform CadBlockXformFromJson(const json& o) {
   return xf;
 }
 
+// Defined further down (with the main-drawing entity IO); forward-declared so block
+// content can round-trip the same geometry kinds.
+void CadArcToJson(const CadArc& a, json& o);
+CadArc CadArcFromJson(const json& o);
+void CadEllipseToJson(const CadEllipse& e, json& o);
+CadEllipse CadEllipseFromJson(const json& o);
+
+json CadMeshToJson(const CadMesh& m) {
+  json o;
+  o["verts"] = m.vertsXyz;
+  o["normals"] = m.normalsXyz;
+  o["indices"] = m.indices;
+  if (!m.sourceName.empty())
+    o["source"] = m.sourceName;
+  json parts = json::array();
+  for (const CadMeshPart& p : m.parts) {
+    json jp;
+    jp["name"] = p.name;
+    jp["begin"] = p.indexBegin;
+    jp["count"] = p.indexCount;
+    jp["rgb"] = json::array({p.r, p.g, p.b});
+    parts.push_back(std::move(jp));
+  }
+  o["parts"] = std::move(parts);
+  return o;
+}
+
+std::shared_ptr<const CadMesh> CadMeshFromJson(const json& o) {
+  if (!o.is_object())
+    return nullptr;
+  auto m = std::make_shared<CadMesh>();
+  if (o.contains("verts"))
+    m->vertsXyz = o["verts"].get<std::vector<float>>();
+  if (o.contains("normals"))
+    m->normalsXyz = o["normals"].get<std::vector<float>>();
+  if (o.contains("indices"))
+    m->indices = o["indices"].get<std::vector<std::uint32_t>>();
+  if (o.contains("source"))
+    m->sourceName = o["source"].get<std::string>();
+  if (o.contains("parts") && o["parts"].is_array()) {
+    for (const auto& jp : o["parts"]) {
+      CadMeshPart p;
+      if (jp.contains("name"))
+        p.name = jp["name"].get<std::string>();
+      if (jp.contains("begin"))
+        p.indexBegin = jp["begin"].get<int>();
+      if (jp.contains("count"))
+        p.indexCount = jp["count"].get<int>();
+      if (jp.contains("rgb") && jp["rgb"].is_array() && jp["rgb"].size() == 3) {
+        p.r = jp["rgb"][0].get<float>();
+        p.g = jp["rgb"][1].get<float>();
+        p.b = jp["rgb"][2].get<float>();
+      }
+      m->parts.push_back(std::move(p));
+    }
+  }
+  if (m->parts.empty() && !m->indices.empty()) {
+    CadMeshPart p;
+    p.indexBegin = 0;
+    p.indexCount = static_cast<int>(m->indices.size());
+    m->parts.push_back(std::move(p));
+  }
+  return m;
+}
+
+void EntityAttrArrayToJson(const std::vector<EntityAttributes>& v, json& out) {
+  out = json::array();
+  for (const auto& a : v) {
+    json e;
+    EntityAttributesToJson(a, e);
+    out.push_back(std::move(e));
+  }
+}
+
+void EntityAttrArrayFromJson(const json& o, const char* key, std::vector<EntityAttributes>& v) {
+  if (o.contains(key) && o[key].is_array())
+    for (const auto& e : o[key])
+      v.push_back(EntityAttributesFromJson(e));
+}
+
 json CadBlockContentToJson(const CadBlockContent& c) {
   json o;
   o["lines"] = c.lines;
@@ -91,6 +171,50 @@ json CadBlockContentToJson(const CadBlockContent& c) {
     ca.push_back(std::move(e));
   }
   o["circleAttrs"] = std::move(ca);
+  o["circleVis"] = c.circleVis;
+
+  json arcs = json::array();
+  for (const CadArc& a : c.arcs) {
+    json aj;
+    CadArcToJson(a, aj);
+    arcs.push_back(std::move(aj));
+  }
+  o["arcs"] = std::move(arcs);
+  json arcAttrs;
+  EntityAttrArrayToJson(c.arcAttrs, arcAttrs);
+  o["arcAttrs"] = std::move(arcAttrs);
+
+  json ellipses = json::array();
+  for (const CadEllipse& e : c.ellipses) {
+    json ej;
+    CadEllipseToJson(e, ej);
+    ellipses.push_back(std::move(ej));
+  }
+  o["ellipses"] = std::move(ellipses);
+  json ellAttrs;
+  EntityAttrArrayToJson(c.ellAttrs, ellAttrs);
+  o["ellAttrs"] = std::move(ellAttrs);
+
+  o["polyOffsets"] = c.polyOffsets;
+  o["polyVerts"] = c.polyVerts;
+  json polyClosed = json::array();
+  for (std::uint8_t v : c.polyClosed)
+    polyClosed.push_back(static_cast<int>(v));
+  o["polyClosed"] = std::move(polyClosed);
+  json polyAttrs;
+  EntityAttrArrayToJson(c.polyAttrs, polyAttrs);
+  o["polyAttrs"] = std::move(polyAttrs);
+
+  json meshes = json::array();
+  for (const auto& mp : c.meshes) {
+    if (mp)
+      meshes.push_back(CadMeshToJson(*mp));
+  }
+  o["meshes"] = std::move(meshes);
+  json meshAttrs;
+  EntityAttrArrayToJson(c.meshAttrs, meshAttrs);
+  o["meshAttrs"] = std::move(meshAttrs);
+
   json nested = json::array();
   for (const CadBlockNested& n : c.nested) {
     json nj;
@@ -109,6 +233,9 @@ json CadBlockContentToJson(const CadBlockContent& c) {
     texts.push_back(std::move(tj));
   }
   o["texts"] = std::move(texts);
+  json textAttrs;
+  EntityAttrArrayToJson(c.textAttrs, textAttrs);
+  o["textAttrs"] = std::move(textAttrs);
   return o;
 }
 
@@ -124,10 +251,37 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
     c.lineVis = o["lineVis"].get<std::vector<std::string>>();
   if (o.contains("circles") && o["circles"].is_array())
     c.circles = o["circles"].get<std::vector<float>>();
-  if (o.contains("circleAttrs") && o["circleAttrs"].is_array()) {
-    for (const auto& e : o["circleAttrs"])
-      c.circleAttrs.push_back(EntityAttributesFromJson(e));
-  }
+  EntityAttrArrayFromJson(o, "circleAttrs", c.circleAttrs);
+  if (o.contains("circleVis") && o["circleVis"].is_array())
+    c.circleVis = o["circleVis"].get<std::vector<std::string>>();
+
+  if (o.contains("arcs") && o["arcs"].is_array())
+    for (const auto& aj : o["arcs"])
+      c.arcs.push_back(CadArcFromJson(aj));
+  EntityAttrArrayFromJson(o, "arcAttrs", c.arcAttrs);
+
+  if (o.contains("ellipses") && o["ellipses"].is_array())
+    for (const auto& ej : o["ellipses"])
+      c.ellipses.push_back(CadEllipseFromJson(ej));
+  EntityAttrArrayFromJson(o, "ellAttrs", c.ellAttrs);
+
+  if (o.contains("polyOffsets") && o["polyOffsets"].is_array())
+    c.polyOffsets = o["polyOffsets"].get<std::vector<int>>();
+  if (o.contains("polyVerts") && o["polyVerts"].is_array())
+    c.polyVerts = o["polyVerts"].get<std::vector<float>>();
+  if (o.contains("polyClosed") && o["polyClosed"].is_array())
+    for (const auto& v : o["polyClosed"])
+      c.polyClosed.push_back(static_cast<std::uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+  EntityAttrArrayFromJson(o, "polyAttrs", c.polyAttrs);
+
+  if (o.contains("meshes") && o["meshes"].is_array())
+    for (const auto& mj : o["meshes"]) {
+      auto m = CadMeshFromJson(mj);
+      if (m)
+        c.meshes.push_back(std::move(m));
+    }
+  EntityAttrArrayFromJson(o, "meshAttrs", c.meshAttrs);
+
   if (o.contains("nested") && o["nested"].is_array()) {
     for (const auto& nj : o["nested"]) {
       CadBlockNested n;
@@ -142,6 +296,7 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
     for (const auto& t : o["texts"])
       c.texts.push_back(CadAnnotationFromJson(t));
   }
+  EntityAttrArrayFromJson(o, "textAttrs", c.textAttrs);
   return c;
 }
 
@@ -1142,8 +1297,64 @@ json BuildRoot(const AppCommandState& st) {
     view["azimuthDeg"] = st.viewportAzimuthDeg;
   if (st.viewportElevationDeg != 90.f)
     view["elevationDeg"] = st.viewportElevationDeg;
-  if (st.ucsOriginZ != 0.0)
-    view["ucsElevation"] = st.ucsOriginZ;
+  // The UCS (REQ-154), additive and omitted at its default for the same reason as the camera keys
+  // above: a drawing that never used UCS still serializes byte-for-byte as before.
+  //
+  // `ucsElevation` is still written whenever the frame is a plain elevation change, so a drawing
+  // saved by this build still opens correctly in one that predates the full UCS. Newer builds
+  // prefer the `ucs` object and only fall back to `ucsElevation` when it is absent.
+  auto writeUcs = [](const ucs::Ucs& u) {
+    json j;
+    j["origin"] = {u.origin.x, u.origin.y, u.origin.z};
+    j["xAxis"] = {u.xAxis.x, u.xAxis.y, u.xAxis.z};
+    j["yAxis"] = {u.yAxis.x, u.yAxis.y, u.yAxis.z};
+    j["zAxis"] = {u.zAxis.x, u.zAxis.y, u.zAxis.z};
+    return j;
+  };
+  if (!ucs::IsWorld(st.activeUcs)) {
+    view["ucs"] = writeUcs(st.activeUcs);
+    // A pure elevation change — world axes, origin only in Z — is exactly what the old key meant,
+    // so that (and only that) case stays readable by an older build.
+    const bool elevationOnly = ucs::IsWorld(ucs::WithOrigin(st.activeUcs, {0.0, 0.0, 0.0})) &&
+                               st.activeUcs.origin.x == 0.0 && st.activeUcs.origin.y == 0.0;
+    if (elevationOnly)
+      view["ucsElevation"] = st.activeUcs.origin.z;
+  }
+  if (st.ucsFollow)
+    view["ucsFollow"] = true;
+  if (!st.ucsNamed.empty()) {
+    json named = json::array();
+    for (const NamedUcs& n : st.ucsNamed) {
+      json entry = writeUcs(n.frame);
+      entry["name"] = n.name;
+      named.push_back(std::move(entry));
+    }
+    view["namedUcs"] = std::move(named);
+  }
+  // Named views (REQ-106), additive and omitted when empty for the same reason as the keys above: a
+  // drawing that never saved a view serializes byte-for-byte as it did before this existed, so no
+  // format-version bump is needed (the ADR-020 (d) / ADR-025 (g) precedent).
+  if (!st.namedViews.empty()) {
+    json views = json::array();
+    for (const NamedView& v : st.namedViews) {
+      json e;
+      e["name"] = v.name;
+      e["panX"] = v.panX;
+      e["panY"] = v.panY;
+      if (v.panZ != 0.0)
+        e["panZ"] = v.panZ;
+      e["zoom"] = v.zoom;
+      e["azimuthDeg"] = v.azimuthDeg;
+      e["elevationDeg"] = v.elevationDeg;
+      // The frame rides with the view (REQ-106). Omitted at World so the common case stays compact.
+      if (!ucs::IsWorld(v.ucs))
+        e["ucs"] = writeUcs(v.ucs);
+      views.push_back(std::move(e));
+    }
+    view["namedViews"] = std::move(views);
+  }
+  if (!st.activeViewName.empty())
+    view["activeViewName"] = st.activeViewName;
   doc["view"] = std::move(view);
 
   root["document"] = std::move(doc);
@@ -2250,7 +2461,87 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.viewportPanZ = view.value("panZ", 0.0);
     st.viewportAzimuthDeg = view.value("azimuthDeg", 0.f);
     st.viewportElevationDeg = std::clamp(view.value("elevationDeg", 90.f), -90.f, 90.f);
-    st.ucsOriginZ = view.value("ucsElevation", 0.0);
+    // The UCS (REQ-154). A full frame wins; `ucsElevation` alone is what every drawing saved before
+    // the UCS command carries, and still loads as the elevated world-parallel plane it described.
+    // A frame that does not survive its own validity check is DISCARDED rather than adopted: a
+    // hand-edited or truncated basis would silently skew every coordinate the user then entered,
+    // and falling back to the WCS is the one outcome that cannot be wrong (REQ-201).
+    auto readVec = [](const json& j, const char* key, ray3d::Vec3 fallback) {
+      const auto it = j.find(key);
+      if (it == j.end() || !it->is_array() || it->size() != 3)
+        return fallback;
+      return ray3d::Vec3{(*it)[0].get<double>(), (*it)[1].get<double>(), (*it)[2].get<double>()};
+    };
+    auto readUcs = [&](const json& j, ucs::Ucs* out) {
+      ucs::Ucs u;
+      u.origin = readVec(j, "origin", {0.0, 0.0, 0.0});
+      u.xAxis = readVec(j, "xAxis", {1.0, 0.0, 0.0});
+      u.yAxis = readVec(j, "yAxis", {0.0, 1.0, 0.0});
+      u.zAxis = readVec(j, "zAxis", {0.0, 0.0, 1.0});
+      if (!std::isfinite(u.origin.x) || !std::isfinite(u.origin.y) || !std::isfinite(u.origin.z))
+        return false;
+      if (!ucs::IsRightHandedOrthonormal(u, 1e-6))
+        return false;
+      *out = u;
+      return true;
+    };
+
+    st.activeUcs = ucs::Ucs{};
+    const auto ucsIt = view.find("ucs");
+    if (ucsIt != view.end() && ucsIt->is_object()) {
+      if (!readUcs(*ucsIt, &st.activeUcs))
+        st.activeUcs = ucs::Ucs{};
+    } else {
+      st.activeUcs.origin.z = view.value("ucsElevation", 0.0);
+    }
+    st.ucsFollow = view.value("ucsFollow", false);
+    st.ucsNamed.clear();
+    const auto namedIt = view.find("namedUcs");
+    if (namedIt != view.end() && namedIt->is_array()) {
+      for (const auto& entry : *namedIt) {
+        if (!entry.is_object())
+          continue;
+        NamedUcs n;
+        n.name = entry.value("name", std::string());
+        if (n.name.empty() || !readUcs(entry, &n.frame))
+          continue;
+        st.ucsNamed.push_back(std::move(n));
+      }
+    }
+
+    // Named views (REQ-106). A view whose numbers are not finite is DISCARDED rather than loaded:
+    // restoring it would send the camera somewhere it cannot come back from, and losing one saved
+    // bookmark is a far smaller harm than a drawing you cannot look at (REQ-201).
+    st.namedViews.clear();
+    const auto nvIt = view.find("namedViews");
+    if (nvIt != view.end() && nvIt->is_array()) {
+      for (const auto& entry : *nvIt) {
+        if (!entry.is_object())
+          continue;
+        NamedView v;
+        v.name = entry.value("name", std::string());
+        if (v.name.empty())
+          continue;
+        v.panX = entry.value("panX", 0.0);
+        v.panY = entry.value("panY", 0.0);
+        v.panZ = entry.value("panZ", 0.0);
+        v.zoom = entry.value("zoom", 1.f);
+        v.azimuthDeg = entry.value("azimuthDeg", 0.f);
+        v.elevationDeg = std::clamp(entry.value("elevationDeg", 90.f), -90.f, 90.f);
+        if (!std::isfinite(v.panX) || !std::isfinite(v.panY) || !std::isfinite(v.panZ) ||
+            !std::isfinite(v.zoom) || v.zoom <= 0.f || !std::isfinite(v.azimuthDeg))
+          continue;
+        const auto vu = entry.find("ucs");
+        if (vu != entry.end() && vu->is_object() && !readUcs(*vu, &v.ucs))
+          v.ucs = ucs::Ucs{};  // a broken frame falls back to World, as the active one does
+        st.namedViews.push_back(std::move(v));
+      }
+    }
+    st.activeViewName = view.value("activeViewName", std::string());
+    // A name that no longer resolves is dropped rather than shown: the ribbon would otherwise claim
+    // the camera is sitting in a view the drawing does not contain.
+    if (!st.activeViewName.empty() && !FindNamedView(st, st.activeViewName))
+      st.activeViewName.clear();
   } else {
     const int fbW = std::max(st.viewportLastFbW, 1);
     const int fbH = std::max(st.viewportLastFbH, 1);

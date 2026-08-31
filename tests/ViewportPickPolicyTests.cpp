@@ -347,3 +347,59 @@ TEST_CASE("REQ-307: PaperIsObjectSelectionStep is true only in the two new paper
   deleteSelecting.paperDeleteWaitingSelection = true;
   REQUIRE(PaperIsObjectSelectionStep(deleteSelecting));
 }
+
+// ---------------------------------------------------------------------------
+// REQ-154 — UCS and PLAN.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("UCS routes a click in every phase that asks for one", "[viewport][pick][req154]") {
+  // The whole mouse half of UCS was dead until this branch existed: K::Ucs was absent from
+  // ViewportClickRouteFor, so every phase fell to the default and its clicks were discarded, while
+  // PICK-driven transcripts stayed green because PICK never consults this table. These cases are
+  // what stop that recurring.
+  using K = AppCommandState::Kind;
+  using UPh = AppCommandState::UcsPhase;
+  using R = ViewportClickRoute;
+
+  const UPh pointPhases[] = {UPh::WaitOriginOrOption, UPh::WaitXAxisPoint,      UPh::WaitXyPoint,
+                             UPh::WaitRotationAngleP1, UPh::WaitRotationAngleP2, UPh::WaitZAxisOrigin,
+                             UPh::WaitZAxisPoint};
+  for (const UPh p : pointPhases) {
+    AppCommandState st;
+    st.active = K::Ucs;
+    st.ucsPhase = p;
+    // Snapped, not raw: putting the origin on a real endpoint, or taking an angle from the two ends
+    // of a line already drawn, is exactly the case the command exists for.
+    REQUIRE(ViewportClickRouteFor(st) == R::SnappedPointPick);
+  }
+
+  // Object aligns the frame to an entity, so it needs the thing under the cursor, not a coordinate.
+  {
+    AppCommandState st;
+    st.active = K::Ucs;
+    st.ucsPhase = UPh::WaitObjectPick;
+    REQUIRE(ViewportClickRouteFor(st) == R::RawEntityPick);
+  }
+
+  // Typed-only prompts route to Ignore deliberately, not by omission: the rotation angle is a number
+  // or the `2P` keyword, and Named wants a name. SubmitViewportPickImpl has no branch for either, so
+  // anything else would be a click that goes nowhere.
+  const UPh typedPhases[] = {UPh::WaitRotationAngle, UPh::WaitNamedName};
+  for (const UPh p : typedPhases) {
+    AppCommandState st;
+    st.active = K::Ucs;
+    st.ucsPhase = p;
+    REQUIRE(ViewportClickRouteFor(st) == R::Ignore);
+  }
+}
+
+TEST_CASE("PLAN takes no viewport click at all", "[viewport][pick][req154]") {
+  // PLAN is keyword-only at every phase. It moves the camera and never reads a coordinate, so a
+  // click has nothing to land on — Ignore is the correct answer here, not a gap.
+  AppCommandState st;
+  st.active = AppCommandState::Kind::Plan;
+  st.planPhase = AppCommandState::PlanPhase::WaitOption;
+  REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::Ignore);
+  st.planPhase = AppCommandState::PlanPhase::WaitNamedName;
+  REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::Ignore);
+}

@@ -2,6 +2,7 @@
 
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "geom2d.hpp"
 
 #include <vector>
@@ -154,7 +155,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
                                          false);
       else
-        ApplyOrthoConstrainFromAnchor(cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
                            zc);  // preview at the elevation it will commit to
     }
@@ -186,7 +187,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
                                          false);
       else
-        ApplyOrthoConstrainFromAnchor(cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
                            zc);
     }
@@ -217,7 +218,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       } else {
         float lx = curXf;
         float ly = curYf;
-        ApplyOrthoConstrainFromAnchor(ax, ay, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, ax, ay, &lx, &ly, orthoEnabled);
         PushRubberSegViewRel(rubberLines, ax, ay, lx, ly, 0., 0., az, zc);
       }
     }
@@ -293,11 +294,76 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     if (cmd.mtextPhase == MPtxt::WaitCorner2) {
       float lx = curXf;
       float ly = curYf;
-      ApplyOrthoConstrainFromAnchor(cmd.mtxtX1, cmd.mtxtY1, &lx, &ly, orthoEnabled);
+      ApplyOrthoConstrainFromAnchor(cmd, cmd.mtxtX1, cmd.mtxtY1, &lx, &ly, orthoEnabled);
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, lx, ly, 0., 0., zc);
     } else if (cmd.mtextPhase == MPtxt::WaitString)
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, cmd.mtxtX2, cmd.mtxtY2, 0., 0.,
                                    zc);
+  }
+
+  // UCS axis preview (REQ-154). At the two axis prompts, draw the frame the cursor would produce —
+  // the rubber from the origin out to the cursor, plus the perpendicular the frame implies — so the
+  // user sees the resulting axes before committing rather than after.
+  //
+  // The stores are LOCAL, the UCS is WORLD (see CadActiveUcsStorage), so the pending picks are
+  // converted down here rather than the rubber being built in world and converted wholesale.
+  if (cmd.active == AppCommandState::Kind::Ucs) {
+    using UPh = AppCommandState::UcsPhase;
+    auto localOf = [&](const ray3d::Vec3& world, float* lx, float* ly) {
+      CadCoord::LocalFromWorld(cmd, world.x, world.y, lx, ly);
+    };
+    if (cmd.ucsPhase == UPh::WaitXAxisPoint || cmd.ucsPhase == UPh::WaitXyPoint) {
+      float ox = 0.f, oy = 0.f;
+      localOf(cmd.ucsPendingOrigin, &ox, &oy);
+      if (cmd.ucsPhase == UPh::WaitXAxisPoint) {
+        // One rubber: origin to cursor, which IS the X axis being defined.
+        PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
+      } else {
+        // The X axis is settled, so it is drawn at its own length from the origin. The second arm
+        // is the Y AXIS THE CURSOR IS CHOOSING — not a rubber to the cursor itself.
+        //
+        // That distinction is the whole point: FromThreePoints takes the PERPENDICULAR component of
+        // the third pick as +Y, so the frame that commits depends only on which SIDE of the X axis
+        // the cursor is on, not how far along it. Drawing a line to the cursor would show an arm
+        // that swings as the cursor slides parallel to X while the committed frame does not move at
+        // all, and would give no hint that crossing the axis flips the frame over. Projecting out
+        // the perpendicular makes the preview flip exactly when the result flips.
+        float xx = 0.f, xy = 0.f;
+        localOf(cmd.ucsPendingXAxisPoint, &xx, &xy);
+        const float axx = xx - ox, axy = xy - oy;
+        const float alen = std::hypot(axx, axy);
+        PushRubberSegViewRel(rubberLines, ox, oy, xx, xy, 0., 0., zc, zc);
+        if (alen > 1e-9f) {
+          const float ux = axx / alen, uy = axy / alen;
+          const float vx = curXf - ox, vy = curYf - oy;
+          // Component of the cursor offset perpendicular to X: this is +Y, sign included.
+          const float dot = vx * ux + vy * uy;
+          float px = vx - dot * ux, py = vy - dot * uy;
+          const float plen = std::hypot(px, py);
+          // Dead on the axis defines no plane, so nothing is drawn rather than an arbitrary arm —
+          // the same case FromThreePoints refuses as collinear.
+          if (plen > 1e-6f) {
+            px /= plen;
+            py /= plen;
+            // Same length as the X arm, so the two read as one frame rather than as a long axis and
+            // a rubber band that happens to be near it.
+            PushRubberSegViewRel(rubberLines, ox, oy, ox + px * alen, oy + py * alen, 0., 0., zc, zc);
+          }
+        }
+      }
+    } else if (cmd.ucsPhase == UPh::WaitRotationAngleP1 || cmd.ucsPhase == UPh::WaitRotationAngleP2) {
+      // `2P`: nothing to draw until the first point is down, then the rubber IS the direction whose
+      // angle is being measured.
+      if (cmd.ucsPhase == UPh::WaitRotationAngleP2) {
+        float bx = 0.f, by = 0.f;
+        localOf(cmd.ucsAngleBasePoint, &bx, &by);
+        PushRubberSegViewRel(rubberLines, bx, by, curXf, curYf, 0., 0., zc, zc);
+      }
+    } else if (cmd.ucsPhase == UPh::WaitZAxisPoint) {
+      float ox = 0.f, oy = 0.f;
+      localOf(cmd.ucsPendingOrigin, &ox, &oy);
+      PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
+    }
   }
 
   if (cmd.active == AppCommandState::Kind::InsertBlock) {
@@ -308,7 +374,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       if (cmd.insertBlockPhase != IPh::WaitInsertPoint) {
         float lx = curXf;
         float ly = curYf;
-        ApplyOrthoConstrainFromAnchor(cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled);
         PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0., zc, zc);
       }
       // Live ghost of the block at the transform this pick would commit (REQ-107, D-2026-08-29-i).
