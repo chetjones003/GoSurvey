@@ -1043,6 +1043,48 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              sourceLine);
         return false;
       }
+    } else if (what == "FILECONTAINS" || what == "FILELACKS") {
+      // EXPECT FILECONTAINS <path> "<text>"   /   EXPECT FILELACKS <path> "<text>"
+      //
+      // A literal substring test over a saved document, reading the `.gs` JSON out of a DWG trailer
+      // exactly as SAMEFILE above does, so it works on either extension.
+      //
+      // It exists for a shape of acceptance condition no count and no byte comparison can state:
+      // that a key is ABSENT. REQ-312 requires a flat drawing to save with NO plane-normal key at
+      // all — that omission is the whole mechanism by which a legacy drawing re-saves byte for byte
+      // — and a save/reopen/re-save round trip passes just as happily with the key written on every
+      // circle in the file. FILELACKS is the half that can fail.
+      const std::string expanded = ExpandVars(run, arg);
+      std::istringstream fs3(expanded);
+      std::string path;
+      if (!(fs3 >> path)) {
+        Fail(run, "parse", "EXPECT " + what + " needs <path> then the text to look for", sourceLine);
+        return false;
+      }
+      std::string needle = Trim(expanded.substr(std::min(expanded.size(), expanded.find(path) + path.size())));
+      if (needle.size() >= 2 && needle.front() == '"' && needle.back() == '"')
+        needle = needle.substr(1, needle.size() - 2);
+      if (needle.empty()) {
+        Fail(run, "parse", "EXPECT " + what + ": the text to look for is empty", sourceLine);
+        return false;
+      }
+      std::ifstream ff(path, std::ios::binary);
+      if (!ff) {
+        Fail(run, "io", "EXPECT " + what + ": cannot open " + path, sourceLine);
+        return false;
+      }
+      const std::string rawBytes((std::istreambuf_iterator<char>(ff)), std::istreambuf_iterator<char>());
+      std::string payload;
+      const std::string& hay = TryGoSurveyDwgPayloadFromBytes(rawBytes, payload) ? payload : rawBytes;
+      const bool found = hay.find(needle) != std::string::npos;
+      if (what == "FILECONTAINS" && !found) {
+        Fail(run, "expect", "FILECONTAINS: " + path + " does not contain: " + needle, sourceLine);
+        return false;
+      }
+      if (what == "FILELACKS" && found) {
+        Fail(run, "expect", "FILELACKS: " + path + " contains: " + needle, sourceLine);
+        return false;
+      }
     } else if (what == "LAYERSDEFINED") {
       // EXPECT LAYERSDEFINED <dxf> — every layer an ENTITIES-section group 8 names has an
       // AcDbLayerTableRecord in the same file.

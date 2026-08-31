@@ -199,6 +199,17 @@ json CadBlockContentToJson(const CadBlockContent& c) {
   o["lineAttrs"] = std::move(la);
   o["lineVis"] = c.lineVis;
   o["circles"] = c.circles;
+  // Block circle normals (REQ-312), omitted when every one is flat so an existing block definition
+  // serializes unchanged. BLOCK and BEDIT both round-trip through here, which is why the field
+  // exists on CadBlockContent at all — without it, editing a block would flatten a tilted circle
+  // inside it on the way out.
+  {
+    bool anyTilted = false;
+    for (size_t i = 0; i * 4 + 3 < c.circles.size(); ++i)
+      anyTilted = anyTilted || !CircleIsFlat(c.circleNormals, i);
+    if (anyTilted)
+      o["circleNormals"] = c.circleNormals;
+  }
   json ca = json::array();
   for (const auto& a : c.circleAttrs) {
     json e;
@@ -289,7 +300,9 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
   EntityAttrArrayFromJson(o, "circleAttrs", c.circleAttrs);
   if (o.contains("circleVis") && o["circleVis"].is_array())
     c.circleVis = o["circleVis"].get<std::vector<std::string>>();
-  EnsureCircleNormals(c.circleNormals, c.circles.size() / 4);   // REQ-312, flat default
+  if (o.contains("circleNormals") && o["circleNormals"].is_array())
+    c.circleNormals = o["circleNormals"].get<std::vector<float>>();   // REQ-312
+  EnsureCircleNormals(c.circleNormals, c.circles.size() / 4);   // absent or short → flat default
 
   if (o.contains("arcs") && o["arcs"].is_array())
     for (const auto& aj : o["arcs"])
@@ -527,6 +540,19 @@ void CadArcToJson(const CadArc& a, json& o) {
   // serializes byte-identically to a pre-3D one, and older builds ignore the key.
   if (a.z != 0.f)
     o["z"] = a.z;
+  // The plane normal (REQ-312, D-2026-08-31-f), under the same rule and for the same reason: it is
+  // world +Z on every arc that predates the field and on every arc in a flat drawing, so omitting
+  // it there is what makes a legacy drawing re-save byte for byte. `IsFlatNormal` compares exactly,
+  // deliberately — a tolerance here would let a normal 1e-9 off +Z save as flat, which is a silent
+  // edit to the user's file.
+  //
+  // An older build reading this back gets the arc without its plane, which is the ADR-020 (d)
+  // tolerant-key bargain: it draws the arc flat rather than refusing the file.
+  if (!IsFlatNormal(a.nx, a.ny, a.nz)) {
+    o["nx"] = a.nx;
+    o["ny"] = a.ny;
+    o["nz"] = a.nz;
+  }
 }
 
 CadArc CadArcFromJson(const json& o) {
@@ -537,6 +563,9 @@ CadArc CadArcFromJson(const json& o) {
   a.startRad = o.value("startRad", a.startRad);
   a.sweepRad = o.value("sweepRad", a.sweepRad);
   a.z        = o.value("z",        a.z);  // absent → 0: legacy arcs load flat (REQ-057)
+  a.nx       = o.value("nx",       a.nx);  // absent → world +Z: legacy arcs load flat (REQ-312)
+  a.ny       = o.value("ny",       a.ny);
+  a.nz       = o.value("nz",       a.nz);
   return a;
 }
 
@@ -930,17 +959,32 @@ json BuildRoot(const AppCommandState& st) {
   {
     json cxyr = json::array();
     json cz = json::array();
+    json cn = json::array();
     bool anyZ = false;
+    bool anyTilted = false;
     for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {
       cxyr.push_back(st.userCirclesCxCyZR[i + 0]);
       cxyr.push_back(st.userCirclesCxCyZR[i + 1]);
       cxyr.push_back(st.userCirclesCxCyZR[i + 3]);  // radius
       cz.push_back(st.userCirclesCxCyZR[i + 2]);    // z
       anyZ = anyZ || st.userCirclesCxCyZR[i + 2] != 0.f;
+      // The plane normal (REQ-312), in an additive "circlesN" of 3 floats per circle — the same
+      // shape and the same bargain as "circlesZ" above. Omitted when every circle is flat, which is
+      // every drawing that predates the field, so those still save byte-identically.
+      float nx = kFlatNormalX;
+      float ny = kFlatNormalY;
+      float nz = kFlatNormalZ;
+      CircleNormalAt(st.userCircleNormals, i / 4, &nx, &ny, &nz);
+      cn.push_back(nx);
+      cn.push_back(ny);
+      cn.push_back(nz);
+      anyTilted = anyTilted || !IsFlatNormal(nx, ny, nz);
     }
     doc["circles"] = std::move(cxyr);
     if (anyZ)
       doc["circlesZ"] = std::move(cz);
+    if (anyTilted)
+      doc["circlesN"] = std::move(cn);
   }
   json circleAttrs = json::array();
   for (const auto& a : st.userCircleAttrs) {
@@ -2061,9 +2105,20 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.userCirclesCxCyZR.push_back(cxyr[i + 2].get<float>());          // r
     }
   }
-  // The plane normals (REQ-312) are read back in their own key below; this establishes the flat
-  // default first, so a drawing written before that key existed loads as the world-XY circles it
-  // has always been, and the side-car count matches the circle count either way (REQ-204).
+  // The plane normals (REQ-312), from the additive "circlesN" written beside "circles". Absent
+  // means every circle is flat, which is exactly how a drawing written before that key existed
+  // loads — as the world-XY circles it has always been.
+  //
+  // CLEARED first, not merely resized. `EnsureCircleNormals` only grows or truncates, so loading a
+  // second document over a first would have kept the first document's normals for every index the
+  // new one also has. Invisible while every normal in every file was +Z; a real cross-document leak
+  // the moment one is not.
+  st.userCircleNormals.clear();
+  if (doc.contains("circlesN") && doc["circlesN"].is_array())
+    for (const auto& v : doc["circlesN"])
+      st.userCircleNormals.push_back(v.get<float>());
+  // Short, long or absent, the side-car ends up matching the circle count, so `docinvariants`
+  // cannot fire on a freshly loaded document (REQ-204).
   EnsureCircleNormals(st.userCircleNormals, st.userCirclesCxCyZR.size() / 4);
   st.userCircleAttrs.clear();
   for (const auto& o : doc["circleAttrs"])

@@ -114,7 +114,7 @@ normal" — no new command is needed.
   - [x] 3. Author on the active UCS work plane (CIRCLE, ARC).
   - [x] 4. Render / hit test / snap through the one parametrisation.
   - [x] 5. DXF group 210 out and in.
-  - [ ] 6. `.gs` persistence, omitted when +Z; legacy byte-identity test.
+  - [x] 6. `.gs` persistence, omitted when +Z; legacy byte-identity test.
   - [ ] 7. Headless transcripts; full ctest; completion report.
 
 ## 7. Workflow-specific notes
@@ -427,6 +427,55 @@ normal" — no new command is needed.
 
   Still open: step 6, `.gs` persistence — the normal is held in memory and dropped on save, so a
   tilted curve currently survives a DXF round trip but not a save and reopen.
+
+- 2026-08-31 Step 6 done. `.gs` persistence for a curve's plane.
+
+  The normal is an ADDITIVE key that is OMITTED when it is world +Z (D-2026-08-31-f) — the same
+  tolerant-key bargain `circlesZ` and the arc's own `z` already make (ADR-020 (d)), and no
+  `kGsFormatVersion` bump. That omission is not a space optimisation: it is the entire mechanism by
+  which a legacy drawing re-saves byte for byte. Written unconditionally, every drawing in existence
+  would come back from its next save as a different file.
+
+  - `CadArcToJson` / `CadArcFromJson`: `nx`/`ny`/`nz`, absent meaning world +Z. `IsFlatNormal`
+    compares exactly, deliberately — a tolerance there would let a normal 1e-9 off +Z save as flat,
+    which is a silent edit to the user's file.
+  - The document's circle side-car rides in `circlesN`, three floats per circle, beside the existing
+    `circles` and `circlesZ`. Omitted when every circle in the drawing is flat.
+  - `CadBlockContent::circleNormals` likewise, under `circleNormals`, omitted when every block
+    circle is flat. BLOCK and BEDIT both round-trip through there, which is why the field exists on
+    the struct at all.
+
+  **A cross-document leak, found while wiring the loader.** `EnsureCircleNormals` only grows or
+  truncates, so the side-car was never CLEARED on load — opening a second document over a first kept
+  the first document's normals for every index the new one also had. Invisible while every normal in
+  every file was +Z, and a real defect the moment one is not. The loader clears first now.
+
+  **Scoped out, recorded rather than left silent: the DWG ENTITY layer does not carry the plane.**
+  `LibreDwgCad.cpp` neither writes nor reads an extrusion direction (its own note has said so since
+  step 2). Since D-2026-08-29-j made DWG the drawing document, a tilted curve saved as `.dwg`
+  round-trips correctly *through GoSurvey* — the `.gs` JSON trailer carries it and wins on reload —
+  but AutoCAD opening that same file sees a flat circle, and a tilted circle in a foreign DWG
+  imports flat. REQ-312's acceptance names DXF and `.gs`, both of which are now met; the DWG entity
+  layer is REQ-175 / ADR-044 territory and wants its own issue.
+
+  **Tests.** `tests/headless/transcripts/req312-gs-plane-persistence.txt` (61 steps): a flat drawing
+  saving with no plane key anywhere and re-saving byte-identically, and a MIXED drawing — tilted
+  circle, tilted arc, flat circle — surviving save and reopen with a byte-identical re-save. The
+  mixture is deliberate: a side-car written only for the tilted entries, or indexed off by one, puts
+  the wall's plane on the flat circle.
+
+  This needed one new oracle. A save/reopen/re-save round trip **cannot state acceptance condition
+  2**: it compares the file only to itself, so it passes just as happily with a normal written on
+  every circle in the file. The property that matters is that the key is not there at all, which is
+  a check on CONTENT — `EXPECT FILELACKS <path> "<text>"`, with `EXPECT FILECONTAINS` as its
+  counterpart so the absence check cannot pass by naming a key that never exists under any
+  circumstances. Both read the `.gs` JSON out of a DWG trailer the same way `SAMEFILE` does.
+
+  Negative-tested, each against the line that makes it pass:
+  - the arc normal written unconditionally: `FILELACKS: ...req312-flat-a.gs contains: nx`.
+  - `circlesN` not read back: `EXPECT CIRCLEXYZ 0: ny is 0.000000, expected -1.000000`.
+
+  Suite: **864/864 ctest green.**
 
 ## 9. Self-verification
 - [ ] build-project
