@@ -497,3 +497,112 @@ TEST_CASE("A direction with no component in the rotation plane is refused", "[uc
   // An unknown axis letter is refused rather than silently treated as Z.
   REQUIRE_FALSE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Q', Vec3{1.0, 0.0, 0.0}, &deg));
 }
+
+// ---------------------------------------------------------------------------
+// The plane contract (REQ-311).
+//
+// A `Ucs` is the plane abstraction: origin, normal, and an in-plane axis pair. These cases prove
+// the 2D <-> world conversion is a true inverse and that the off-plane component is REPORTED rather
+// than dropped, which is the failure the explicit offset output exists to prevent.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("On the world frame, plane coordinates are just X and Y", "[ucs][req311]") {
+  const Ucs w;
+  double off = 99.0;
+  const ucs::Point2D p = ucs::WorldToPlane(w, Vec3{3.0, -4.0, 7.5}, &off);
+  REQUIRE(p.x == Approx(3.0));
+  REQUIRE(p.y == Approx(-4.0));
+  // The Z is the OFFSET, not a third plane coordinate, and not silently discarded.
+  REQUIRE(off == Approx(7.5));
+  RequireVec(ucs::PlaneToWorld(w, p, off), 3.0, -4.0, 7.5);
+  // Without the offset the point lands on the plane itself.
+  RequireVec(ucs::PlaneToWorld(w, p), 3.0, -4.0, 0.0);
+}
+
+TEST_CASE("A tilted plane round-trips a survey-magnitude point well inside REQ-101", "[ucs][req311]") {
+  Ucs tilted;
+  // A 3-4-5 normal, so nothing here is axis-aligned and a dropped or swapped axis cannot pass.
+  REQUIRE(ucs::FromNormal(Vec3{1200.0, -800.0, 42.0}, Vec3{3.0, 4.0, 5.0}, &tilted));
+  REQUIRE(ucs::IsRightHandedOrthonormal(tilted));
+
+  const Vec3 world{2143.75, -1288.5, 311.25};
+  double off = 0.0;
+  const ucs::Point2D p = ucs::WorldToPlane(tilted, world, &off);
+  const Vec3 back = ucs::PlaneToWorld(tilted, p, off);
+  // REQ-101 is +/-0.01 ft; the plane maths is in double, so the real error is ~1e-12. Asserting the
+  // tight bound is the point - a round trip that merely scrapes under 0.01 ft would mean something
+  // had been narrowed to float on the way through.
+  REQUIRE(back.x == Approx(world.x).margin(1e-9));
+  REQUIRE(back.y == Approx(world.y).margin(1e-9));
+  REQUIRE(back.z == Approx(world.z).margin(1e-9));
+}
+
+TEST_CASE("Signed distance is positive on the plane's +Z side", "[ucs][req311]") {
+  Ucs w;
+  w.origin = {0.0, 0.0, 10.0};
+  REQUIRE(ucs::SignedDistanceToPlane(w, Vec3{5.0, 5.0, 12.0}) == Approx(2.0));
+  REQUIRE(ucs::SignedDistanceToPlane(w, Vec3{5.0, 5.0, 8.0}) == Approx(-2.0));
+  REQUIRE(ucs::SignedDistanceToPlane(w, Vec3{-100.0, 250.0, 10.0}) == Approx(0.0).margin(1e-12));
+
+  // A 45-degree plane through the origin: the distance from (1,0,0) is cos(45).
+  Ucs tilt;
+  REQUIRE(ucs::FromNormal(Vec3{0.0, 0.0, 0.0}, Vec3{1.0, 0.0, 1.0}, &tilt));
+  REQUIRE(ucs::SignedDistanceToPlane(tilt, Vec3{1.0, 0.0, 0.0}) == Approx(std::sqrt(0.5)));
+  REQUIRE(ucs::SignedDistanceToPlane(tilt, Vec3{-1.0, 0.0, 0.0}) == Approx(-std::sqrt(0.5)));
+}
+
+TEST_CASE("Projecting onto a plane leaves a point with no offset", "[ucs][req311]") {
+  Ucs tilt;
+  REQUIRE(ucs::FromNormal(Vec3{5.0, 5.0, 5.0}, Vec3{-2.0, 1.0, 3.0}, &tilt));
+  const Vec3 world{101.0, -37.5, 63.25};
+  const Vec3 flat = ucs::ProjectOntoPlane(tilt, world);
+  REQUIRE(ucs::SignedDistanceToPlane(tilt, flat) == Approx(0.0).margin(1e-9));
+  // What was removed is exactly the normal component - the projection moves the point along the
+  // normal and in no other direction.
+  const Vec3 removed = ray3d::Sub(world, flat);
+  const double d = ucs::SignedDistanceToPlane(tilt, world);
+  RequireVec(removed, tilt.zAxis.x * d, tilt.zAxis.y * d, tilt.zAxis.z * d);
+  // A point already on the plane is left where it is.
+  RequireVec(ucs::ProjectOntoPlane(tilt, flat), flat.x, flat.y, flat.z);
+}
+
+TEST_CASE("A circle parametrised on the world plane is the familiar cos/sin", "[ucs][req311]") {
+  Ucs w;
+  w.origin = {10.0, 20.0, 3.0};
+  const double r = 4.0;
+  RequireVec(ucs::PointOnPlaneCircle(w, r, 0.0), 14.0, 20.0, 3.0);
+  RequireVec(ucs::PointOnPlaneCircle(w, r, 3.14159265358979323846 / 2.0), 10.0, 24.0, 3.0);
+  RequireVec(ucs::PointOnPlaneCircle(w, r, 3.14159265358979323846), 6.0, 20.0, 3.0);
+}
+
+TEST_CASE("A circle on a vertical plane stays in that plane at a constant radius", "[ucs][req311]") {
+  Ucs vert;
+  // Normal along world +X: the circle lives in the YZ plane, the case a flat-only arc store cannot
+  // represent at all.
+  REQUIRE(ucs::FromNormal(Vec3{50.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0}, &vert));
+  const double r = 7.5;
+  for (int i = 0; i < 16; ++i) {
+    const double a = (2.0 * 3.14159265358979323846) * static_cast<double>(i) / 16.0;
+    const Vec3 p = ucs::PointOnPlaneCircle(vert, r, a);
+    // Every point is on the plane...
+    REQUIRE(ucs::SignedDistanceToPlane(vert, p) == Approx(0.0).margin(1e-9));
+    REQUIRE(p.x == Approx(50.0).margin(1e-9));
+    // ...and exactly the radius from the centre.
+    REQUIRE(ray3d::Length(ray3d::Sub(p, vert.origin)) == Approx(r));
+  }
+}
+
+TEST_CASE("The circle parametrisation and the plane conversion agree", "[ucs][req311]") {
+  // The renderer, the hit test and the DXF writer all go through PointOnPlaneCircle; this is the
+  // assertion that its angle really is measured in the frame's own 2D coordinates, so a consumer
+  // that reconstructs the frame from the normal alone lands on the same points.
+  Ucs plane;
+  REQUIRE(ucs::FromNormal(Vec3{-3.0, 8.0, 1.5}, Vec3{2.0, -3.0, 6.0}, &plane));
+  const double r = 12.25;
+  const double a = 1.1;
+  double off = 1.0;
+  const ucs::Point2D p = ucs::WorldToPlane(plane, ucs::PointOnPlaneCircle(plane, r, a), &off);
+  REQUIRE(off == Approx(0.0).margin(1e-9));
+  REQUIRE(p.x == Approx(r * std::cos(a)));
+  REQUIRE(p.y == Approx(r * std::sin(a)));
+}

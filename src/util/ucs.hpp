@@ -120,6 +120,61 @@ struct Ucs {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The plane contract (REQ-311). A `Ucs` IS the plane abstraction #120 asks for: an origin, a
+// normal, and an in-plane X/Y axis pair are exactly the four members it already carries. Rather
+// than add a second type saying the same thing -- which could then disagree with the UCS about what
+// a plane is, the very failure the requirement exists to prevent -- the plane operations live here,
+// on the frame the UCS already uses. `ray3d::Plane` stays the origin+normal form used for ray
+// casting; it carries no in-plane axes and so cannot express a 2D coordinate at all.
+// ---------------------------------------------------------------------------------------------
+
+/// A point in a plane's own 2D coordinates: signed distances along its X and Y axes from its origin.
+struct Point2D {
+  double x = 0.0;
+  double y = 0.0;
+};
+
+/// World XYZ -> \p u's 2D plane coordinates, with the off-plane part reported separately.
+///
+/// \p outOffset is the signed distance along the normal, positive on the +Z side. It is an explicit
+/// output rather than something quietly dropped: flattening a point onto a plane and measuring how
+/// far off it a point sits are different operations, and discarding the third component in silence
+/// is how a point gets treated as lying on a plane it does not lie on.
+[[nodiscard]] inline Point2D WorldToPlane(const Ucs& u, const Vec3& world, double* outOffset = nullptr) {
+  const Vec3 local = WorldToUcs(u, world);
+  if (outOffset)
+    *outOffset = local.z;
+  return {local.x, local.y};
+}
+
+/// \p u's 2D plane coordinates -> world XYZ. The exact inverse of \ref WorldToPlane: for a point on
+/// the plane with the default \p offset, and for the (point, offset) pair otherwise.
+[[nodiscard]] inline Vec3 PlaneToWorld(const Ucs& u, const Point2D& p, double offset = 0.0) {
+  return UcsToWorld(u, Vec3{p.x, p.y, offset});
+}
+
+/// The signed distance from \p world to \p u's XY plane, positive on the +Z side.
+[[nodiscard]] inline double SignedDistanceToPlane(const Ucs& u, const Vec3& world) {
+  return Dot(ray3d::Sub(world, u.origin), u.zAxis);
+}
+
+/// \p world dropped onto \p u's XY plane along the normal.
+[[nodiscard]] inline Vec3 ProjectOntoPlane(const Ucs& u, const Vec3& world) {
+  return ray3d::Sub(world, ray3d::Scale(u.zAxis, SignedDistanceToPlane(u, world)));
+}
+
+/// The point at \p angleRad around a circle of \p radius centred on \p u's origin, measured from
+/// \p u's +X axis toward its +Y.
+///
+/// The single place a planar curve's parametrisation is written down. A circle or arc carrying a
+/// normal is rendered, hit-tested, snapped to and exported through this one function, so those four
+/// cannot disagree about which way a tilted curve winds -- and with the frame built by
+/// \ref FromNormal, that winding is the one a DXF consumer reconstructs from group 210.
+[[nodiscard]] inline Vec3 PointOnPlaneCircle(const Ucs& u, double radius, double angleRad) {
+  return PlaneToWorld(u, Point2D{radius * std::cos(angleRad), radius * std::sin(angleRad)});
+}
+
+// ---------------------------------------------------------------------------------------------
 // Construction. Each returns false rather than producing a degenerate frame (REQ-201): a UCS that
 // is silently garbage would misplace every subsequent coordinate, so a refusal the user can see is
 // always the better outcome.

@@ -5397,6 +5397,91 @@ capability that does not exist. They are recorded here rather than quietly dropp
   deferred per-viewport item; raised by TASK-157 after REQ-061 (issue #175) removed the blocker.
 
 
+### REQ-311 — A plane is a coordinate frame, not a second type (GitHub issue #145)
+- Purpose: issue #120 names a `Plane` abstraction — origin, normal, X axis, Y axis, converting both
+  ways between world XYZ and plane 2D coordinates — as the prerequisite for faces, extrusions,
+  revolves, booleans, sketches and arbitrary-plane drawing. `ucs::Ucs` (REQ-154) already **is** that
+  shape: an origin plus a right-handed orthonormal basis, with world<->frame conversion for both
+  points and vectors. What is missing is the 2D half of the contract and a written rule about which
+  type owns it. Adding a parallel `Plane` type would create exactly the failure the requirement
+  exists to prevent: two definitions of "plane" in one program, free to disagree about handedness,
+  about which way a normal points, or about where a tilted circle starts — a disagreement that does
+  not crash, it silently mis-places geometry (REQ-301, CLAUDE.md rule 2).
+- Priority: must
+- Type: functional
+- Statement: `ucs::Ucs` is the project's plane abstraction. It exposes conversion between world XYZ
+  and the plane's own 2D coordinates in both directions, reports the off-plane component rather
+  than discarding it, projects a world point onto the plane, and parametrises a circle in the
+  plane. No second plane type is introduced. `ray3d::Plane` remains the origin+normal form used for
+  ray/plane intersection; it carries no in-plane axes and therefore cannot express a 2D coordinate.
+
+  The frame for a plane given only a normal comes from `ucs::FromNormal` — AutoCAD's Arbitrary Axis
+  Algorithm, which is the algorithm DXF specifies for the group 210 extrusion vector. This is what
+  makes REQ-312 round-trip: a consumer that rebuilds the frame from the normal alone lands on the
+  same points GoSurvey drew.
+- Acceptance:
+  - World XYZ -> plane 2D -> world XYZ returns the original point. At survey magnitude on a plane
+    tilted off every axis the error is within REQ-101, and in fact within 1e-9 — the conversion is
+    `double` throughout, so a result that merely scraped under 0.01 ft would mean something had been
+    narrowed to `float` on the way through.
+  - The off-plane distance is an explicit output of the world->2D conversion, not a dropped
+    component; it is positive on the +Z side of the frame.
+  - Projecting a world point onto the plane leaves it at zero off-plane distance, and what was
+    removed is exactly the normal component — the projection moves a point along the normal and in
+    no other direction. A point already on the plane is unchanged.
+  - A circle parametrised in the plane has every point at exactly the radius from the centre and at
+    zero off-plane distance, including on a vertical plane — the case a flat-only store cannot
+    represent at all. On the world frame it reduces to the familiar cos/sin.
+  - The UCS uses this type. There is no second plane type and no parallel implementation of the
+    conversion.
+- Owner-layer: Domain (`src/util/ucs.hpp`)
+- Status: accepted
+- Revisions: 2026-08-31 — proposed and accepted (D-2026-08-31-e, TASK-152). Phase 2 of GitHub #120,
+  filed as #145.
+
+### REQ-312 — Arcs and circles in arbitrary planes (GitHub issue #145)
+- Purpose: GoSurvey's arcs and circles are 2D entities that happen to carry a Z: `CadArc` stores a
+  centre, radius and a single elevation, and a circle is four floats (cx, cy, z, r). Both are
+  parallel to world XY by construction — `CadArc`'s own comment says so — so a circle standing on a
+  wall, an arc in a vertical pipe run, or any curve drawn on a tilted UCS cannot be represented at
+  all. The gap is also silently lossy on import: DXF's group 210 extrusion vector says which plane
+  an ARC or CIRCLE lies in, and the importer does not read it, so a tilted arc arrives flat and in
+  the wrong place with no warning (REQ-201).
+- Priority: must
+- Type: functional
+- Statement: An arc and a circle each carry a plane **normal** alongside their existing centre,
+  radius and elevation. The normal is world +Z by default, which is every entity that exists today,
+  and the flat case must stay behaviourally and byte-for-byte unchanged. A curve with any other
+  normal lies in the plane `ucs::FromNormal(centre, normal)` (REQ-311), and that one frame governs
+  how it is rendered, hit-tested, snapped to, saved and exported — a second derivation anywhere is
+  a defect, not an optimisation.
+
+  Authoring: `CIRCLE` and `ARC` run on the active UCS's work plane, so drawing on a tilted UCS
+  produces a curve whose normal is that UCS's Z axis. This is the AutoCAD behaviour and needs no
+  new command.
+
+  Interchange: DXF export writes the real normal to group 210/220/230 instead of the hard-coded
+  (0,0,1) it writes today, and DXF import reads it. `.gs` persists the normal, omitting the key
+  when it is world +Z so that a legacy drawing re-saves byte-identically.
+- Acceptance:
+  - A circle created with a centre, a radius and an arbitrary normal renders in that plane and its
+    points lie within REQ-101 of the true circle.
+  - An arc created on a tilted UCS has endpoints within REQ-101 of the hand-computed positions.
+  - Arbitrary-plane arcs and circles survive DXF export -> import with centre, radius, angles and
+    normal preserved within REQ-101, via group 210.
+  - Arbitrary-plane arcs and circles survive `.gs` save -> reopen with every stored coordinate
+    bit-identical.
+  - A drawing containing only XY-plane arcs and circles loads and re-saves **byte-identically** to
+    its pre-change form: no normal key appears, and no existing test changes its expected output.
+  - Object snapping (centre, quadrant, endpoint, nearest) resolves on an arbitrary-plane curve from
+    an orbited camera, not only in plan view.
+  - `docinvariants` checks the normal side-car against the entity count, so a desynchronised insert
+    or erase fails loudly (REQ-204) rather than mis-orienting a curve.
+- Owner-layer: Domain/Commands/Render/IO
+- Status: accepted
+- Revisions: 2026-08-31 — proposed and accepted (D-2026-08-31-f, TASK-152). Phase 2 of GitHub #120,
+  filed as #145.
+
 ---
 
 ## Performance requirements
@@ -5907,6 +5992,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-120 | UI | **manual GUI only, and that is a real limitation, not a shortcut.** The headless driver models no framebuffer and never calls `ProcessPendingViewportZoom` (which early-returns on `fbW <= 0`), so it cannot reach any zoom behaviour — there is no existing zoom transcript in the corpus for the same reason. Covering this by transcript would mean giving the harness a synthetic viewport, which is harness work this requirement did not take on (recorded as TASK-113 DEBT-1). Verified instead by driving the real window: middle double-click frames the drawing in model space; it works MID-COMMAND with the active LINE's placed point surviving; the typed route still does not zoom mid-command (its text is consumed by the active command as point input — unchanged); paper space frames the sheet; middle-DRAG still pans. Leaves GitHub issue #88 open — covers only #88's Middle Mouse/Architecture sections, not its ZOOMEXTENTS acceptance list | accepted |
 | REQ-307 | UI/Commands | done (GitHub issue #106, D-2026-08-26-g, TASK-120). Closes REQ-121's own stated paper-space scope boundary for the one case that needed it: `StartPaperMoveCopyViewports`/`StartDeleteCommand`'s paper branch, on an empty selection, now sets `paperMoveWaitingSelection`/`paperDeleteWaitingSelection` and opens a real selection step instead of refusing — pick-first (act on an existing selection) is unchanged, above. `PaperIsObjectSelectionStep` (`ViewportPickPolicy.hpp`) is the paper-space counterpart of REQ-121's own predicate, consulted alongside it at every one of REQ-121's three call sites: the pickbox cursor (`CadUi.cpp`'s crosshair draw), the pre-existing (previously unconditional) paper snap glyph, and `CommandInputHint`'s prompt — all three now return REQ-121's own `kSelectObjectsPrompt` for this step, reusing the string rather than declaring a second one. Enter is handled by two free functions, `ProcessPaperMoveWaitingSelectionEnter`/`ProcessPaperDeleteWaitingSelectionEnter` (`CadCommands.cpp`), called from BOTH the raw viewport `ImGui::IsKeyPressed(Enter)` check (mouse-only entry, the same shape EXTEND's own paper phase already needed since paper commands never set `cmd.active` and so are unreachable from `ProcessCommandLineSubmit`'s Kind-keyed dispatch) AND a new branch at the top of `ProcessCommandLineSubmit`'s blank-line handler — the second call site is what gives this a headless transcript path EXTEND's raw-only precedent does not have, and the two call sites are guarded against double-firing on one keypress with `ImGui::GetActiveID() == 0` (the raw check only fires when no ImGui widget, e.g. the command-line box, currently holds keyboard focus). Click/box accumulation reuses `SelectViewport`/`TogglePaperEntitySelection`'s own pre-existing `additive=true` parameter verbatim — no new toggle logic — and a new `closePaperSelBoxMerge` lambda (a union variant of the pre-existing `closePaperSelBox`) merges a closed box into the accumulating selection rather than replacing it, mirroring REQ-305's model-space `SelectionAccumulate` (D-2026-08-25-l). Tests: `ViewportPickPolicyTests [req307]` (the predicate, pure and header-only); `headless.req307-paper-selection-step`, driven through the real `CMD DELETE`/`CMD MOVE`/`CMD COPY` and blank-`CMD` command dispatch (not CLICK/BOX — paper space's ambient click block is screen-space/ImGui-hover driven with no headless equivalent, the same limitation REQ-121's own paper DELETE/JOIN branch already had), proving the old flat refusal is gone and REQ-201's "Nothing selected" refusal holds on repeated blank Enter. The click-toggle/box-merge accumulation itself, the pickbox rendering, and the snap-glyph suppression are GUI-only verification, same category REQ-121 itself already established for its own three rules — this session cannot simulate mouse hover or screen-space picking. 637/637 ctest green | accepted |
 | REQ-308 | UI/IO/Platform | planned (D-2026-08-30-a/b/c, TASK-147). Start tab as a non-document sentinel at drawing-tab index 0 — non-closable, non-reorderable, skipped by save-on-switch / dirty enumeration / close; `FirstDrawingTabIndex()` mediates drawing-tab indexing. `DrawDrawingViewport` branches to `DrawStartScreen` for index 0. New `gosurvey-recent.json` MRU store (`RecentDrawings`, best-effort, corruption = empty). Thumbnails captured from the drawing `ViewportRenderer` FBO on save/open, stored as BMP under the user data dir with LRU eviction (`ThumbnailCache`); missing thumbnail falls back to the DWG icon. GitHub Pages link via `ShellExecuteA` (already used by `auth`). Signed-out branch reuses `cmd.authSignInRequested` | accepted |
+| REQ-311 | Domain | done (GitHub issue #145, D-2026-08-31-e, TASK-152). `ucs::Ucs` IS the plane abstraction #120 asks for — no second type was added (REQ-301). `src/util/ucs.hpp` gains `Point2D`, `WorldToPlane` (off-plane distance an explicit output, never dropped), `PlaneToWorld`, `SignedDistanceToPlane`, `ProjectOntoPlane`, and `PointOnPlaneCircle` — the one place a planar curve's parametrisation is written down, so renderer, hit test, snap and DXF writer cannot disagree about which way a tilted curve winds. `ray3d::Plane` stays the origin+normal ray-casting form. Tests: `UcsTests [req311]` (7 cases, 90 assertions: world-frame reduction, tilted survey-magnitude round trip to 1e-9, signed-distance sign on a 45° plane, projection residual is exactly the normal component, a circle on a vertical plane, and the parametrisation/conversion agreement) — negative-tested by flipping the sin sign, which goes red | accepted |
+| REQ-312 | Domain/Commands/Render/IO | planned (GitHub issue #145, D-2026-08-31-f, TASK-152). Arcs and circles gain a plane normal, defaulting to world +Z so every existing entity and every existing test is unchanged. Normals ride in a side-car array next to `userCircleAttrs`/`userArcs` rather than widening the 4-float circle stride, which ~300 call sites read directly; `docinvariants` checks the side-car count the way it already checks the attribute count. The plane of a curve is `ucs::FromNormal(centre, normal)` (REQ-311) — the Arbitrary Axis Algorithm DXF itself specifies for group 210, so export/import agree by construction. DXF export replaces its hard-coded `210 0.0 / 220 0.0 / 230 1.0` with the real normal and import reads it (today it is ignored, so a tilted ARC lands flat and silently misplaced — REQ-201). `.gs` omits the key when the normal is world +Z so legacy drawings re-save byte-identically | accepted |
 | REQ-121 | UI/Commands/Viewport | done (GitHub issue #91, D-2026-08-26-a + D-2026-08-26-d, TASK-115 + TASK-118). Mechanism: `ViewportIsObjectSelectionStep`, derived from `ViewportClickRouteFor`'s `default:`-less switch, so a command cannot be added and silently omitted — `ViewportPickPolicyTests [req121]` (4 cases: ALIGN's unsnapped corners — red before the fix; every selection step recognised; each exclusion asserted; DELETE/JOIN's route, with ZOOM and STRETCH left on the box route). Review follow-ups closed by TASK-118, re-derived while rebasing onto `beta` after issue #103 landed underneath it: rule (3)'s shared prompt was factually wrong for DELETE/JOIN — fixed by giving them D-2026-08-25-l's accumulate-until-Enter shape, covered by `headless.req121-delete-join-accumulate` (proven red on `beta`: the closing box erased, LINES 3 -> 2). Rule (1)'s reported second seam (the snap-OVERRIDE menu bypassing the gate) had its underlying mechanism replaced by #103 between the original review and this rebase — the "cursor jumps mid-selection" symptom no longer reproduces, because the override's consumption already sits behind the same `!ViewportIsObjectSelectionStep` gate the automatic snap uses; what remained was narrower (the menu could still be *opened*, arming a persistent lock off a selection-step pixel that then silently affected the next ordinary snap), and that is what TASK-118's rebase actually gates. The cursor/OSNAP/prompt rules themselves stay GUI-only — there is no headless equivalent for screen-space picking or for a drawn cursor — and both rounds were verified A/B against a control rather than by absence. Paper space is a STATED scope boundary, not coverage: its modify commands are pick-first, so no selection step exists there (GitHub issue #106 — closed by REQ-307, which gives MOVE/COPY/DELETE a real selection step for the one case that needed it, starting with nothing pre-selected). 634/634 ctest green post-rebase. One `CadSnapTests` case (issue #103, unrelated to this task) carried an em-dash in its Catch2 name that CTest's Windows discovery mangles into a filter matching nothing, reporting a false failure in CI on both this branch and unmodified `beta` (`425afa7`'s own CI run) — fixed here by renaming the test to plain ASCII rather than worked around, since it was blocking CI on every branch built from `beta`, not just this one | accepted |
 | REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
 | REQ-123 | Commands/UI | done (GitHub issue #100, D-2026-08-26-e, TASK-119) — **`headless.req123-viewport-zoom-extents`, the first zoom behaviour ever covered by a transcript.** TASK-113's DEBT-1 blocks the others on `ProcessPendingViewportZoom`'s `fbW <= 0` guard; this case needs no framebuffer (its aspect is the viewport's rect in paper inches) so it is handled ahead of that guard. 43 steps: the framing after ZE with hand-computed scales (13.5870 for an 8x4in viewport, 27.1739 for 4x4in — same drawing, different rect, different answer), each viewport independent of the other's zoom, and a layer frozen in the viewport excluded from the extents then restored when thawed. Proven red on `beta`: `expected centre 50, 10 scale 13.587; got 0, 0 scale 50` — the viewport's framing untouched at its creation defaults. Four new driver verbs (VIEWPORT / VPSELECT / CLAYER / VPFREEZE) and `EXPECT VPFRAME`, all REQ-203 gaps of the LAYOUT/CLIPCOPY shape. GUI pass confirmed the numbers against the live status bar (`VP 1" = 40.4'` vs 40.36 computed), the sheet unmoved, REQ-120's gesture working in a viewport for the first time, and middle-drag pan still confined to it. 632/633 ctest (the one failure is `beta`'s own — an em dash in a `CadSnapTests` TEST_CASE name breaks ctest's name round-trip; unrelated and pre-existing) | accepted |
