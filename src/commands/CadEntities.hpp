@@ -1,11 +1,13 @@
 #pragma once
 
-#include <cstddef>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "util/ucs.hpp"
 
 /// How the model viewport draws (REQ-064 / ADR-026 (e)).
 ///
@@ -490,6 +492,41 @@ inline void ReflectNormalAcrossLine(float x0, float y0, float x1, float y1, floa
   const float dy = *ny;
   *nx = c * dx + s * dy;
   *ny = s * dx - c * dy;
+}
+
+/// The plane a curve carrying a normal lies in (REQ-311 / REQ-312): `ucs::FromNormal` at its centre.
+///
+/// **One function, deliberately.** The renderer, the hit test, the object snap, the DXF writer and
+/// the tests all need to turn (centre, normal) into a frame they can measure an angle in, and any
+/// two of them choosing a different zero direction for the same arc is a defect that looks like
+/// nothing until a tilted arc is drawn. `ucs::FromNormal` is AutoCAD's Arbitrary Axis Algorithm —
+/// the one DXF specifies for the group 210 extrusion vector — so this frame is also the frame a
+/// DXF consumer reconstructs from the file.
+///
+/// For the flat case the algorithm returns the world X and Y axes exactly, so `startRad` and
+/// `sweepRad` on every arc that predates REQ-312 keep the meaning they have always had.
+///
+/// A degenerate normal falls back to world XY rather than producing a garbage frame. The refusal
+/// belongs where the curve is created (REQ-201); by the time anything draws one, the normal has
+/// already been checked.
+[[nodiscard]] inline ucs::Ucs CurvePlane(double cx, double cy, double cz, double nx, double ny, double nz) {
+  ucs::Ucs p;
+  if (ucs::FromNormal({cx, cy, cz}, {nx, ny, nz}, &p))
+    return p;
+  p = ucs::Ucs{};
+  p.origin = {cx, cy, cz};
+  return p;
+}
+
+/// The plane an arc lies in — \ref CurvePlane at its centre and elevation.
+[[nodiscard]] inline ucs::Ucs CurvePlane(const CadArc& a) {
+  return CurvePlane(static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.z),
+                    static_cast<double>(a.nx), static_cast<double>(a.ny), static_cast<double>(a.nz));
+}
+
+/// A point at \p angleRad around an arc or circle, in the same space its centre is stored in.
+[[nodiscard]] inline ray3d::Vec3 CurvePointAt(const ucs::Ucs& plane, double radius, double angleRad) {
+  return ucs::PointOnPlaneCircle(plane, radius, angleRad);
 }
 
 /// Axis-aligned ellipse: center + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1].

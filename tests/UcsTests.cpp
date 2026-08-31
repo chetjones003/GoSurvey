@@ -606,3 +606,42 @@ TEST_CASE("The circle parametrisation and the plane conversion agree", "[ucs][re
   REQUIRE(p.x == Approx(r * std::cos(a)));
   REQUIRE(p.y == Approx(r * std::sin(a)));
 }
+
+TEST_CASE("A +Z normal reproduces the world X and Y axes exactly", "[ucs][req312]") {
+  // The property the whole flat-case guarantee rests on. An arc or circle whose normal is world +Z
+  // measures startRad and sweepRad from world +X toward world +Y - exactly as every arc did before
+  // REQ-312 gave it a normal at all - so no existing drawing shifts.
+  //
+  // Exact equality, not a tolerance: the Arbitrary Axis Algorithm on a +Z normal is arithmetic on
+  // zeros and ones, and "close enough" here would mean every legacy arc rotated by a hair.
+  ucs::Ucs f;
+  REQUIRE(ucs::FromNormal(Vec3{12.5, -7.25, 3.0}, Vec3{0.0, 0.0, 1.0}, &f));
+  REQUIRE(f.xAxis.x == 1.0);
+  REQUIRE(f.xAxis.y == 0.0);
+  REQUIRE(f.xAxis.z == 0.0);
+  REQUIRE(f.yAxis.x == 0.0);
+  REQUIRE(f.yAxis.y == 1.0);
+  REQUIRE(f.yAxis.z == 0.0);
+  REQUIRE(f.zAxis.x == 0.0);
+  REQUIRE(f.zAxis.y == 0.0);
+  REQUIRE(f.zAxis.z == 1.0);
+  // So angle 0 on a flat curve is the centre offset along world +X, which is where every existing
+  // renderer and DXF writer already starts one.
+  RequireVec(ucs::PointOnPlaneCircle(f, 4.0, 0.0), 16.5, -7.25, 3.0);
+}
+
+TEST_CASE("A vertical plane keeps a stable frame either side of the pole", "[ucs][req312]") {
+  // A wall: the normal is horizontal, and this is the case a flat-only arc store cannot express.
+  // The 1/64 pole test in FromNormal does not fire here, so the X axis comes from world Z.
+  ucs::Ucs f;
+  REQUIRE(ucs::FromNormal(Vec3{100.0, 0.0, 0.0}, Vec3{0.0, -1.0, 0.0}, &f));
+  REQUIRE(ucs::IsRightHandedOrthonormal(f));
+  RequireVec(f.zAxis, 0.0, -1.0, 0.0);
+  RequireVec(f.xAxis, 1.0, 0.0, 0.0);
+  RequireVec(f.yAxis, 0.0, 0.0, 1.0);
+  // Half a turn about that plane from +X lands the far side of the circle, still on the wall.
+  RequireVec(ucs::PointOnPlaneCircle(f, 10.0, 0.0), 110.0, 0.0, 0.0);
+  RequireVec(ucs::PointOnPlaneCircle(f, 10.0, 3.14159265358979323846), 90.0, 0.0, 0.0);
+  // A quarter turn goes UP, which is the whole point: no XY-plane store can put a curve there.
+  RequireVec(ucs::PointOnPlaneCircle(f, 10.0, 3.14159265358979323846 / 2.0), 100.0, 0.0, 10.0);
+}

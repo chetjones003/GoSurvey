@@ -1678,6 +1678,7 @@ struct AppCommandState {
 
   float arcAx = 0.f, arcAy = 0.f;
   float arcBx = 0.f, arcBy = 0.f;
+  float arcAz = 0.f, arcBz = 0.f;   ///< work-plane elevation of each pick (REQ-312), as circleCz
 
   enum class EllipsePhase { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
 
@@ -1960,6 +1961,15 @@ struct AppCommandState {
 
   float c3p1x = 0.f, c3p1y = 0.f;
   float c3p2x = 0.f, c3p2y = 0.f;
+  /// Each draft pick keeps the work-plane elevation it was made at (REQ-312).
+  ///
+  /// A tilted work plane makes Z vary from point to point, and a VERTICAL one makes (x, y) stop
+  /// determining Z at all -- two picks on a wall can share an (x, y) and differ only in height. So
+  /// the elevation cannot be recovered at commit time from the coordinates; it has to be kept with
+  /// the pick that produced it. Under the WCS every one of these is the single commit elevation and
+  /// nothing reads them.
+  float circleCz = 0.f;
+  float c3p1z = 0.f, c3p2z = 0.f;
 
   /// Each circle: center X, center Y, center Z, radius (world units) — stride 4 (REQ-057 /
   /// ADR-025 (a)). The centre's XYZ is contiguous so it reads like a point; the radius trails it.
@@ -3516,6 +3526,15 @@ inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
 /// The active work plane (UCS XY) a viewport click resolves against (REQ-058 / ADR-025 (e)).
 /// In storage space, because that is the space the ray is in.
 inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) { return ucs::WorkPlane(CadActiveUcsStorage(st)); }
+
+/// True when the active work plane is parallel to world XY and faces up (REQ-312).
+///
+/// Every UCS that is a translation and/or a rotation about Z satisfies this - which is the whole
+/// 2D survey case, and the default. It is the branch guard for the arbitrary-plane drawing paths,
+/// and it is deliberately NOT ef CadUcsIsWorld: a UCS squared to a road centreline is still a
+/// flat drawing, and it must keep the exact float path every existing drawing, transcript and test
+/// already goes through. That is REQ-154s own reasoning for its WCS branch, applied one level out.
+inline bool CadWorkPlaneIsWorldXy(const AppCommandState& st) { return ucs::PlanViewIsExact(st.activeUcs); }
 
 /// The **camera-azimuth offset** that squares the view with the active UCS's north (REQ-059).
 ///
