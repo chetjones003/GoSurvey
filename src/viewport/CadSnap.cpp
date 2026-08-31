@@ -47,6 +47,40 @@ constexpr float kHugePickDistSq = 1.e30f;
   return std::min(d1, d2);
 }
 
+/// An arc's plane, and whether it is the flat one (REQ-312).
+///
+/// True means the arc lies in a plane parallel to world XY -- every arc that predates the normal --
+/// and \p outPlane is left alone so the caller keeps its existing two-dimensional arithmetic, bit
+/// for bit. Otherwise the arc's own frame is built here, once per arc rather than once per sample.
+[[nodiscard]] bool ArcSnapPlane(const CadArc& a, ucs::Ucs* outPlane) {
+  if (IsFlatNormal(a.nx, a.ny, a.nz))
+    return true;
+  if (outPlane)
+    *outPlane = CurvePlane(a);
+  return false;
+}
+
+/// The point at angle \p t on an arc, in the plane the arc actually lies in.
+///
+/// A snap has to offer points that are ON the drawn curve. A tilted arc walked in the XY projection
+/// puts every candidate somewhere the curve does not go, so the glyph marks empty space and a click
+/// commits to a point that is not on the object it claims to have snapped to (REQ-062, REQ-201).
+void ArcSnapPoint(const CadArc& a, const ucs::Ucs& plane, bool flat, double t, float* ox, float* oy, float* oz) {
+  if (flat) {
+    double x = 0.;
+    double y = 0.;
+    CirclePointWorld(static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.r), t, &x, &y);
+    *ox = static_cast<float>(x);
+    *oy = static_cast<float>(y);
+    *oz = a.z;
+    return;
+  }
+  const ray3d::Vec3 p = CurvePointAt(plane, static_cast<double>(a.r), t);
+  *ox = static_cast<float>(p.x);
+  *oy = static_cast<float>(p.y);
+  *oz = static_cast<float>(p.z);
+}
+
 [[nodiscard]] float CircleCenterPickDistSq(float wx, float wy, float cx, float cy, float r, float tolWorld) {
   if (r <= 1.e-6f)
     return kHugePickDistSq;
@@ -339,7 +373,15 @@ struct IsectSeg {
   [[nodiscard]] double zAt(double t) const { return z0 + (z1 - z0) * t; }
 };
 
-/// A circle, arc or ellipse. These are planar and parallel to XY (ADR-025), so one elevation.
+/// A circle, arc or ellipse in a plane parallel to XY, so one elevation describes it.
+///
+/// REQ-312 lets an arc or circle lie in an arbitrary plane, and such a curve is NOT representable
+/// here: a tilted circle projects to an ellipse whose intersection with another curve is a
+/// different problem from the planar one this type solves. Tilted curves are therefore left out of
+/// the candidate set by the collector below rather than flattened into it -- flattening would offer
+/// an intersection point that is not on either curve, which is a wrong answer presented as a
+/// correct one (REQ-201). True 3D curve-curve intersection belongs with the modelling kernel
+/// (issue #146).
 struct IsectConic {
   curveisect::Conic k;
   double z = 0.0;
@@ -412,6 +454,10 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
     for (size_t i = 0; i + 3 < C.size(); i += 4) {
       if (C[i + 3] <= 1.e-6f)
         continue;
+      // A tilted circle (REQ-312) is not a planar-XY conic; see IsectConic. Skipped, so INTERSECTION
+      // offers nothing on it rather than offering a point that lies on neither curve.
+      if (!CircleIsFlat(cmd.userCircleNormals, i / 4))
+        continue;
       if (NearCursor(ray, wx, wy, C[i], C[i + 1], C[i + 2], C[i + 3], tol))
         conics->push_back(IsectConic{curveisect::MakeCircle(C[i], C[i + 1], C[i + 3]), C[i + 2]});
     }
@@ -419,6 +465,8 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
 
   for (const CadArc& a : cmd.userArcs) {
     if (a.r <= 1.e-6f)
+      continue;
+    if (!IsFlatNormal(a.nx, a.ny, a.nz))  // same exclusion as tilted circles above
       continue;
     if (NearCursor(ray, wx, wy, a.cx, a.cy, a.z, a.r, tol))
       conics->push_back(IsectConic{curveisect::MakeArc(a.cx, a.cy, a.r, a.startRad, a.sweepRad), a.z});
@@ -753,35 +801,38 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     const CadArc& a = cmd.userArcs[arcIdx];
     if (a.r <= 1e-6f || kArcSnapSeg < 1)
       continue;
-    const double dcx = static_cast<double>(a.cx);
-    const double dcy = static_cast<double>(a.cy);
-    const double dr = static_cast<double>(a.r);
+    ucs::Ucs arcPlane;
+    const bool arcFlat = ArcSnapPlane(a, &arcPlane);
     const double tEnd = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad);
     if (wantEndpoint) {
-      double ex = 0.;
-      double ey = 0.;
-      CirclePointWorld(dcx, dcy, dr, static_cast<double>(a.startRad), &ex, &ey);
-      Consider(&acc, wx, wy, static_cast<float>(ex), static_cast<float>(ey), Kind::Endpoint, tolWorld, a.z);
-      CirclePointWorld(dcx, dcy, dr, tEnd, &ex, &ey);
-      Consider(&acc, wx, wy, static_cast<float>(ex), static_cast<float>(ey), Kind::Endpoint, tolWorld, a.z);
+      float ex = 0.f;
+      float ey = 0.f;
+      float ez = 0.f;
+      ArcSnapPoint(a, arcPlane, arcFlat, static_cast<double>(a.startRad), &ex, &ey, &ez);
+      Consider(&acc, wx, wy, ex, ey, Kind::Endpoint, tolWorld, ez);
+      ArcSnapPoint(a, arcPlane, arcFlat, tEnd, &ex, &ey, &ez);
+      Consider(&acc, wx, wy, ex, ey, Kind::Endpoint, tolWorld, ez);
     }
     for (int i = 0; i < kArcSnapSeg; ++i) {
-      const double u0 = static_cast<double>(i) / static_cast<double>(kArcSnapSeg);
-      const double u1 = static_cast<double>(i + 1) / static_cast<double>(kArcSnapSeg);
-      const double t0 = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u0;
-      const double t1 = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u1;
-      double x0 = 0.;
-      double y0 = 0.;
-      double x1 = 0.;
-      double y1 = 0.;
-      CirclePointWorld(dcx, dcy, dr, t0, &x0, &y0);
-      CirclePointWorld(dcx, dcy, dr, t1, &x1, &y1);
+      const double t0 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i,
+                                         kArcSnapSeg);
+      const double t1 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i + 1,
+                                         kArcSnapSeg);
+      float x0 = 0.f;
+      float y0 = 0.f;
+      float z0 = 0.f;
+      float x1 = 0.f;
+      float y1 = 0.f;
+      float z1 = 0.f;
+      ArcSnapPoint(a, arcPlane, arcFlat, t0, &x0, &y0, &z0);
+      ArcSnapPoint(a, arcPlane, arcFlat, t1, &x1, &y1, &z1);
       if (wantMidpoint)
-        Consider(&acc, wx, wy, static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
-                 tolWorld, a.z);  // the arc's plane, same as its endpoint candidates above
+        // The chord's own midpoint, elevation included. On a flat arc both ends share a.z and this
+        // is the previous value exactly; on a tilted one the two ends genuinely differ in Z.
+        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld,
+                 0.5f * (z0 + z1));
       if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, static_cast<float>(x0), static_cast<float>(y0),
-                                   static_cast<float>(x1), static_cast<float>(y1), tolWorld, &acc, a.z, a.z);
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
     }
   }
 
@@ -1151,11 +1202,19 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     for (const CadArc& a : cmd.userArcs) {
       if (a.r <= 1e-6f)
         continue;
-      const float tEnd = a.startRad + a.sweepRad;
-      PushSnapPickerEntry(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), Kind::Endpoint,
-                          sortWorldX, sortWorldY, out, a.z);
-      PushSnapPickerEntry(a.cx + a.r * std::cos(tEnd), a.cy + a.r * std::sin(tEnd), Kind::Endpoint, sortWorldX,
-                          sortWorldY, out, a.z);
+      // Through the arc's own plane (REQ-312), and through the same walk the live snap uses. This
+      // list and the live accumulator previously computed the same two endpoints in different
+      // precisions, which is the shape of defect the shared parametrisation exists to remove.
+      ucs::Ucs arcPlane;
+      const bool arcFlat = ArcSnapPlane(a, &arcPlane);
+      float ex = 0.f;
+      float ey = 0.f;
+      float ez = 0.f;
+      ArcSnapPoint(a, arcPlane, arcFlat, static_cast<double>(a.startRad), &ex, &ey, &ez);
+      PushSnapPickerEntry(ex, ey, Kind::Endpoint, sortWorldX, sortWorldY, out, ez);
+      ArcSnapPoint(a, arcPlane, arcFlat, static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad), &ex,
+                   &ey, &ez);
+      PushSnapPickerEntry(ex, ey, Kind::Endpoint, sortWorldX, sortWorldY, out, ez);
     }
     break;
   }
@@ -1203,22 +1262,23 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     for (const CadArc& a : cmd.userArcs) {
       if (a.r <= 1e-6f || kArcSnapSeg < 1)
         continue;
-      const double dcx = static_cast<double>(a.cx);
-      const double dcy = static_cast<double>(a.cy);
-      const double dr = static_cast<double>(a.r);
+      ucs::Ucs arcPlane;
+      const bool arcFlat = ArcSnapPlane(a, &arcPlane);
       for (int i = 0; i < kArcSnapSeg; ++i) {
-        const double u0 = static_cast<double>(i) / static_cast<double>(kArcSnapSeg);
-        const double u1 = static_cast<double>(i + 1) / static_cast<double>(kArcSnapSeg);
-        const double t0 = static_cast<double>(a.startRad + a.sweepRad * static_cast<float>(u0));
-        const double t1 = static_cast<double>(a.startRad + a.sweepRad * static_cast<float>(u1));
-        double x0 = 0.;
-        double y0 = 0.;
-        double x1 = 0.;
-        double y1 = 0.;
-        CirclePointWorld(dcx, dcy, dr, t0, &x0, &y0);
-        CirclePointWorld(dcx, dcy, dr, t1, &x1, &y1);
-        PushSnapPickerEntry(static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
-                            sortWorldX, sortWorldY, out, a.z);
+        const double t0 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i,
+                                           kArcSnapSeg);
+        const double t1 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i + 1,
+                                           kArcSnapSeg);
+        float x0 = 0.f;
+        float y0 = 0.f;
+        float z0 = 0.f;
+        float x1 = 0.f;
+        float y1 = 0.f;
+        float z1 = 0.f;
+        ArcSnapPoint(a, arcPlane, arcFlat, t0, &x0, &y0, &z0);
+        ArcSnapPoint(a, arcPlane, arcFlat, t1, &x1, &y1, &z1);
+        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out,
+                            0.5f * (z0 + z1));
       }
     }
     constexpr int kEllSnapSeg = 36;
@@ -1299,16 +1359,22 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     for (const CadArc& a : cmd.userArcs) {
       if (a.r <= 1e-6f || kArcSnapSeg < 1)
         continue;
+      ucs::Ucs arcPlane;
+      const bool arcFlat = ArcSnapPlane(a, &arcPlane);
       for (int i = 0; i < kArcSnapSeg; ++i) {
-        const float u0 = static_cast<float>(i) / static_cast<float>(kArcSnapSeg);
-        const float u1 = static_cast<float>(i + 1) / static_cast<float>(kArcSnapSeg);
-        const float t0 = a.startRad + a.sweepRad * u0;
-        const float t1 = a.startRad + a.sweepRad * u1;
-        const float x0 = a.cx + a.r * std::cos(t0);
-        const float y0 = a.cy + a.r * std::sin(t0);
-        const float x1 = a.cx + a.r * std::cos(t1);
-        const float y1 = a.cy + a.r * std::sin(t1);
-        PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out, a.z, a.z);
+        const double t0 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i,
+                                           kArcSnapSeg);
+        const double t1 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i + 1,
+                                           kArcSnapSeg);
+        float x0 = 0.f;
+        float y0 = 0.f;
+        float z0 = 0.f;
+        float x1 = 0.f;
+        float y1 = 0.f;
+        float z1 = 0.f;
+        ArcSnapPoint(a, arcPlane, arcFlat, t0, &x0, &y0, &z0);
+        ArcSnapPoint(a, arcPlane, arcFlat, t1, &x1, &y1, &z1);
+        PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out, z0, z1);
       }
     }
     constexpr int kEllSnapSeg = 36;

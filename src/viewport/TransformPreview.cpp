@@ -54,14 +54,50 @@ float g_previewOrthoHalfH = -1.f;
 int g_previewFbHeightPx = 0;
 int g_previewSmoothnessCap = 20000;
 
-void appendArcPolylineStrip(std::vector<float>* out, float z, const CadArc& a, int fallbackN) {
-  int n = fallbackN;
+/// Segment count for a curve of radius \p r at the current preview zoom.
+[[nodiscard]] int previewCurveSegments(float r, int fallbackN) {
   if (g_previewOrthoHalfH > 0.f && g_previewFbHeightPx > 0)
-    n = std::max(8, CircleTessellationSegmentCount(static_cast<double>(a.r),
-                                                   static_cast<double>(g_previewOrthoHalfH),
-                                                   g_previewFbHeightPx, g_previewSmoothnessCap));
+    return std::max(8, CircleTessellationSegmentCount(static_cast<double>(r),
+                                                      static_cast<double>(g_previewOrthoHalfH),
+                                                      g_previewFbHeightPx, g_previewSmoothnessCap));
+  return fallbackN;
+}
+
+void appendArcPolylineStrip(std::vector<float>* out, float z, const CadArc& a, int fallbackN) {
+  const int n = previewCurveSegments(a.r, fallbackN);
+  // A tilted arc (REQ-312) is walked in its own plane; every sample then carries its own Z, which
+  // the flat AppendArcLineSegments cannot express -- it takes one elevation for the whole strip.
+  if (!IsFlatNormal(a.nx, a.ny, a.nz)) {
+    AppendCurveWorldSegs(*out, CurvePlane(a), static_cast<double>(a.r), static_cast<double>(a.startRad),
+                         static_cast<double>(a.sweepRad), n);
+    return;
+  }
   AppendArcLineSegments(*out, static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.r),
                         static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), n, z);
+}
+
+/// One circle into the preview buffers, in the plane it actually lies in (REQ-312).
+///
+/// A flat circle goes into the circle buffer exactly as before, so every existing preview is
+/// unchanged. A tilted one is emitted as a tessellated strip into the LINE buffer instead: the
+/// preview circle buffer is a (cx, cy, z, r) quad with nowhere to put a normal, and this is the
+/// choice arcs have always made -- they have no circle buffer either and have always previewed as
+/// strips. Adding a fifth to seventh float to the quad would touch every producer and consumer of
+/// four separate preview buffers to carry a value that is +Z in every drawing that exists.
+void appendPreviewCircle(std::vector<float>* prevLines, std::vector<float>* prevCircles, float cx, float cy,
+                         float z, float r, float nx, float ny, float nz) {
+  if (IsFlatNormal(nx, ny, nz)) {
+    prevCircles->push_back(cx);
+    prevCircles->push_back(cy);
+    prevCircles->push_back(z);
+    prevCircles->push_back(r);
+    return;
+  }
+  constexpr double kTwoPiD = 6.283185307179586;
+  AppendCurveWorldSegs(*prevLines,
+                       CurvePlane(static_cast<double>(cx), static_cast<double>(cy), static_cast<double>(z),
+                                  static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)),
+                       static_cast<double>(r), 0.0, kTwoPiD, previewCurveSegments(r, 64));
 }
 
 void appendEllipsePolylineStrip(std::vector<float>* out, float z, const CadEllipse& el, int fallbackN) {
@@ -359,10 +395,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
         if (k + 3 >= cmd.userCirclesCxCyZR.size())
           continue;
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k] + dx);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 1] + dy);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);  // z rides along unchanged
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+        float cnx = kFlatNormalX;
+        float cny = kFlatNormalY;
+        float cnz = kFlatNormalZ;
+        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);  // a translation cannot tilt a plane
+        appendPreviewCircle(prevLines, prevCircles, cmd.userCirclesCxCyZR[k] + dx,
+                            cmd.userCirclesCxCyZR[k + 1] + dy,
+                            cmd.userCirclesCxCyZR[k + 2],  // z rides along unchanged
+                            cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -435,10 +475,13 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           const size_t k = static_cast<size_t>(e.index) * 4;
           if (k + 3 >= cmd.userCirclesCxCyZR.size())
             continue;
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k] + dx);
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 1] + dy);
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+          float cnx = kFlatNormalX;
+          float cny = kFlatNormalY;
+          float cnz = kFlatNormalZ;
+          CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+          appendPreviewCircle(prevLines, prevCircles, cmd.userCirclesCxCyZR[k] + dx,
+                              cmd.userCirclesCxCyZR[k + 1] + dy, cmd.userCirclesCxCyZR[k + 2],
+                              cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
         } else if (e.type == SelectedEntity::Type::Arc) {
           const size_t k = static_cast<size_t>(e.index);
           if (k >= cmd.userArcs.size())
@@ -508,17 +551,31 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           float x = cmd.userCirclesCxCyZR[k];
           float y = cmd.userCirclesCxCyZR[k + 1];
           rotatePreviewPt(bx, by, theta, &x, &y);
-          prevCircles->push_back(x);
-          prevCircles->push_back(y);
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+          float cnx = kFlatNormalX;
+          float cny = kFlatNormalY;
+          float cnz = kFlatNormalZ;
+          CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+          RotateNormalAboutZ(theta, &cnx, &cny);  // the plane turns with the circle (REQ-312)
+          appendPreviewCircle(prevLines, prevCircles, x, y, cmd.userCirclesCxCyZR[k + 2],
+                              cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
         } else if (e.type == SelectedEntity::Type::Arc) {
           const size_t k = static_cast<size_t>(e.index);
           if (k >= cmd.userArcs.size())
             continue;
           CadArc a = cmd.userArcs[k];
+          // The same three steps the commit takes (REQ-312): move the arc, turn its plane, then
+          // re-anchor the sweep onto where the start point actually went. The ghost has to be the
+          // shape the commit will produce, and on a tilted arc `startRad += theta` is not it.
+          ray3d::Vec3 startPt = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
+          float spx = static_cast<float>(startPt.x);
+          float spy = static_cast<float>(startPt.y);
+          rotatePreviewPt(bx, by, theta, &spx, &spy);
+          startPt.x = static_cast<double>(spx);
+          startPt.y = static_cast<double>(spy);
           rotatePreviewPt(bx, by, theta, &a.cx, &a.cy);
           a.startRad += theta;
+          RotateNormalAboutZ(theta, &a.nx, &a.ny);
+          CadReanchorArcStart(&a, startPt);
           appendArcPolylineStrip(prevLines, a.z, a, 48);
         } else if (e.type == SelectedEntity::Type::Ellipse) {
           const size_t k = static_cast<size_t>(e.index);
@@ -652,10 +709,12 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           continue;
         float cx = cmd.userCirclesCxCyZR[k], cy = cmd.userCirclesCxCyZR[k + 1];
         if (inBox(cx, cy)) { cx += dx; cy += dy; }
-        prevCircles->push_back(cx);
-        prevCircles->push_back(cy);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+        float cnx = kFlatNormalX;
+        float cny = kFlatNormalY;
+        float cnz = kFlatNormalZ;
+        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);  // STRETCH moves, so the plane holds
+        appendPreviewCircle(prevLines, prevCircles, cx, cy, cmd.userCirclesCxCyZR[k + 2],
+                            cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -725,10 +784,12 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     }
     // Circles
     for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size() + 1; i += 4) {  // cx,cy,z,r
-      prevCircles->push_back(cb.circlesCxCyZR[i + 0] + dx);
-      prevCircles->push_back(cb.circlesCxCyZR[i + 1] + dy);
-      prevCircles->push_back(cb.circlesCxCyZR[i + 2]);
-      prevCircles->push_back(cb.circlesCxCyZR[i + 3]);
+      float cnx = kFlatNormalX;
+      float cny = kFlatNormalY;
+      float cnz = kFlatNormalZ;
+      CircleNormalAt(cb.circleNormals, i / 4, &cnx, &cny, &cnz);
+      appendPreviewCircle(prevLines, prevCircles, cb.circlesCxCyZR[i + 0] + dx, cb.circlesCxCyZR[i + 1] + dy,
+                          cb.circlesCxCyZR[i + 2], cb.circlesCxCyZR[i + 3], cnx, cny, cnz);
     }
     // Arcs
     for (const auto& a : cb.arcs) {
@@ -819,10 +880,13 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         float r = cmd.userCirclesCxCyZR[k + 3];
         scalePreviewPt(bx, by, sc, &x, &y);
         r *= sc;
-        prevCircles->push_back(x);
-        prevCircles->push_back(y);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);  // SCALE is planar here — z unscaled
-        prevCircles->push_back(r);
+        float cnx = kFlatNormalX;
+        float cny = kFlatNormalY;
+        float cnz = kFlatNormalZ;
+        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);  // a uniform scale keeps the normal
+        appendPreviewCircle(prevLines, prevCircles, x, y,
+                            cmd.userCirclesCxCyZR[k + 2],  // SCALE is planar here - z unscaled
+                            r, cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -921,10 +985,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         float x = cmd.userCirclesCxCyZR[k];
         float y = cmd.userCirclesCxCyZR[k + 1];
         mirrorPreviewPt(x0, y0, x1, y1, &x, &y);
-        prevCircles->push_back(x);
-        prevCircles->push_back(y);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);  // radius preserved (isometry)
+        float cnx = kFlatNormalX;
+        float cny = kFlatNormalY;
+        float cnz = kFlatNormalZ;
+        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+        ReflectNormalAcrossLine(x0, y0, x1, y1, &cnx, &cny);  // the plane is mirrored too (REQ-312)
+        appendPreviewCircle(prevLines, prevCircles, x, y, cmd.userCirclesCxCyZR[k + 2],
+                            cmd.userCirclesCxCyZR[k + 3],  // radius preserved (isometry)
+                            cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -932,9 +1000,18 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         CadArc a = cmd.userArcs[k];
         // Same reflect-the-old-end-angle-into-the-new-start rule as the committed path
         // (CadCommands.cpp's DuplicateCadSelectionReflected) — a reflection reverses handedness.
+        ray3d::Vec3 farEnd = CurveWorldPointOnArc(a, static_cast<double>(a.startRad) +
+                                                         static_cast<double>(a.sweepRad));
+        float fex = static_cast<float>(farEnd.x);
+        float fey = static_cast<float>(farEnd.y);
+        mirrorPreviewPt(x0, y0, x1, y1, &fex, &fey);
+        farEnd.x = static_cast<double>(fex);
+        farEnd.y = static_cast<double>(fey);
         const float newStart = mirrorPreviewAngle(x0, y0, x1, y1, a.startRad + a.sweepRad);
         mirrorPreviewPt(x0, y0, x1, y1, &a.cx, &a.cy);
         a.startRad = newStart;
+        ReflectNormalAcrossLine(x0, y0, x1, y1, &a.nx, &a.ny);  // REQ-312, as the commit does
+        CadReanchorArcStart(&a, farEnd);
         appendArcPolylineStrip(prevLines, a.z, a, 48);
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
@@ -1103,10 +1180,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       float x = cmd.userCirclesCxCyZR[k];
       float y = cmd.userCirclesCxCyZR[k + 1];
       rotatePreviewPt(bx, by, theta, &x, &y);
-      prevCircles->push_back(x);
-      prevCircles->push_back(y);
-      prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);  // rotation is about the Z axis
-      prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+      float cnx = kFlatNormalX;
+      float cny = kFlatNormalY;
+      float cnz = kFlatNormalZ;
+      CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+      RotateNormalAboutZ(theta, &cnx, &cny);  // rotation is about the Z axis, and so is the normal's
+      appendPreviewCircle(prevLines, prevCircles, x, y,
+                          cmd.userCirclesCxCyZR[k + 2],  // rotation is about the Z axis
+                          cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= cmd.userArcs.size())
@@ -1190,10 +1271,14 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
     if (k + 3 >= cmd.userCirclesCxCyZR.size())
       return;
-    hlCircles->push_back(cmd.userCirclesCxCyZR[k]);
-    hlCircles->push_back(cmd.userCirclesCxCyZR[k + 1]);
-    hlCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
-    hlCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+    // Through the same emitter the previews use, so a selected tilted circle is highlighted on the
+    // plane it is drawn on rather than ringed flat beside itself (REQ-312).
+    float cnx = kFlatNormalX;
+    float cny = kFlatNormalY;
+    float cnz = kFlatNormalZ;
+    CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+    appendPreviewCircle(hlLines, hlCircles, cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1],
+                        cmd.userCirclesCxCyZR[k + 2], cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
   } else if (e.type == SelectedEntity::Type::Arc) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.userArcs.size())

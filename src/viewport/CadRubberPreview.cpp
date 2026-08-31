@@ -34,87 +34,37 @@ void AppendWorldRectRubberViewRel(std::vector<float>& o, float xa, float ya, flo
 
 namespace {
 
-bool ComputeCircumcircleRubber(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
-                               float* r) {
-  const float d = 2.f * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-  if (std::fabs(d) < 1e-6f)
-    return false;
-  const float a2 = ax * ax + ay * ay;
-  const float b2 = bx * bx + by * by;
-  const float c2 = cx * cx + cy * cy;
-  const float ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
-  const float uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
-  const float dx = ux - ax;
-  const float dy = uy - ay;
-  *ox = ux;
-  *oy = uy;
-  *r = std::sqrt(dx * dx + dy * dy);
-  return true;
-}
-
-void AppendArcRubberWorld(std::vector<float>& out, float ax, float ay, float bx, float by, float cx, float cy,
-                          float orthoHalfH, int fbHeightPx, int maxSegmentCap, float z) {
-  float ox = 0.f;
-  float oy = 0.f;
-  float r = 0.f;
-  if (!ComputeCircumcircleRubber(ax, ay, bx, by, cx, cy, &ox, &oy, &r) || r <= 1e-6f)
+/// A curve as rubber-band segments, walked in the plane it will COMMIT into (REQ-312).
+///
+/// The preview and the commit now share their geometry: the caller solves the picks with the same
+/// CadSolve* function the commit calls, and this only turns that answer into segments. What used to
+/// be here -- a second circumcircle, a second sweep rule and a second XY tessellation -- was a
+/// parallel implementation of the commit, and the file's own note at `commitCurX` explains what
+/// that costs: a preview that draws a shape the commit does not produce.
+void AppendCurveRubber(std::vector<float>& out, const ucs::Ucs& plane, double r, double startRad,
+                       double sweepRad, float orthoHalfH, int fbHeightPx, int maxSegmentCap) {
+  if (!(r > 1e-6))
     return;
-  constexpr double twopi = 6.28318530717958647692;
-  auto normPos = [](double x) {
-    double t = std::fmod(x, twopi);
-    if (t < 0)
-      t += twopi;
-    return t;
-  };
-  const double ta = std::atan2(static_cast<double>(ay - oy), static_cast<double>(ax - ox));
-  const double tb = std::atan2(static_cast<double>(by - oy), static_cast<double>(bx - ox));
-  const double tc = std::atan2(static_cast<double>(cy - oy), static_cast<double>(cx - ox));
-  const double arc_ab = normPos(tb - ta);
-  const double arc_ac = normPos(tc - ta);
-  const bool useCcw = arc_ab <= arc_ac + 1e-10;
-  double sweep = useCcw ? arc_ac : arc_ac - twopi;
-  if (std::fabs(sweep) < 1e-12)
-    sweep = twopi;
-  const double sr = ta;
-  // Sweep-scaled cap for arc rubber: keep chord-pixel target consistent with the cached arc tessellation.
-  const double sweepFrac = std::clamp(std::fabs(sweep) / twopi, 0.05, 1.0);
-  const int arcCap = std::max(8, static_cast<int>(std::ceil(maxSegmentCap * sweepFrac)));
-  const int nseg = std::max(
-      8, CircleTessellationSegmentCount(r, static_cast<double>(orthoHalfH), fbHeightPx, arcCap));
-  for (int i = 0; i < nseg; ++i) {
-    const double t0 = sr + sweep * static_cast<double>(i) / static_cast<double>(nseg);
-    const double t1 = sr + sweep * static_cast<double>(i + 1) / static_cast<double>(nseg);
-    double wx0 = 0.;
-    double wy0 = 0.;
-    double wx1 = 0.;
-    double wy1 = 0.;
-    CirclePointWorld(ox, oy, r, t0, &wx0, &wy0);
-    CirclePointWorld(ox, oy, r, t1, &wx1, &wy1);
-    PushRubberSegViewRel(out, wx0, wy0, wx1, wy1, 0., 0., z, z);
-  }
-}
-
-void AppendCircleRubberWorld(std::vector<float>& out, float cx, float cy, float r, float orthoHalfH, int fbHeightPx,
-                             int maxSegmentCap, float z) {
-  if (r <= 1e-6f)
-    return;
-  const int segments =
-      CircleTessellationSegmentCount(static_cast<double>(r), static_cast<double>(orthoHalfH), fbHeightPx, maxSegmentCap);
-  const double dcx = static_cast<double>(cx);
-  const double dcy = static_cast<double>(cy);
-  const double dr = static_cast<double>(r);
   constexpr double kTwoPi = 6.283185307179586;
-  for (int i = 0; i < segments; ++i) {
-    const double t0 = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
-    const double t1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(segments);
-    double wx0 = 0.;
-    double wy0 = 0.;
-    double wx1 = 0.;
-    double wy1 = 0.;
-    CirclePointWorld(dcx, dcy, dr, t0, &wx0, &wy0);
-    CirclePointWorld(dcx, dcy, dr, t1, &wx1, &wy1);
-    PushRubberSegViewRel(out, wx0, wy0, wx1, wy1, 0., 0., z, z);
-  }
+  // Sweep-scaled cap, so the chord-pixel target matches the cached arc/circle tessellation.
+  const double sweepFrac = std::clamp(std::fabs(sweepRad) / kTwoPi, 0.05, 1.0);
+  const int cap = std::max(8, static_cast<int>(std::ceil(static_cast<double>(maxSegmentCap) * sweepFrac)));
+  const int n = std::max(8, CircleTessellationSegmentCount(r, static_cast<double>(orthoHalfH), fbHeightPx, cap));
+  AppendCurveWorldSegs(out, plane, r, startRad, sweepRad, n);
+}
+
+/// The plane a solved circle lies in.
+[[nodiscard]] ucs::Ucs CircleSolutionPlane(const CadCircleSolution& s) {
+  return CurvePlane(static_cast<double>(s.cx), static_cast<double>(s.cy), static_cast<double>(s.cz),
+                    static_cast<double>(s.nx), static_cast<double>(s.ny), static_cast<double>(s.nz));
+}
+
+/// A solved circle as rubber-band segments.
+void AppendCircleSolutionRubber(std::vector<float>& out, const CadCircleSolution& s, float orthoHalfH,
+                                int fbHeightPx, int maxSegmentCap) {
+  constexpr double kTwoPi = 6.283185307179586;
+  AppendCurveRubber(out, CircleSolutionPlane(s), static_cast<double>(s.r), 0.0, kTwoPi, orthoHalfH, fbHeightPx,
+                    maxSegmentCap);
 }
 
 } // namespace
@@ -133,6 +83,10 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
   // elevation (CadArc::z / CadEllipse::z), and their draft state keeps no Z for the first pick, so
   // both ends of their construction rubber sit on the plane the entity will land on.
   const float zc = CadCommitElevation(cmd);
+  // Whether the work plane is world XY (REQ-312). Under it, every construction rubber keeps the
+  // single-elevation behaviour above; off it, a pick's own Z is the only thing that says where on
+  // the plane it sat.
+  const bool planeIsFlat = CadWorkPlaneIsWorldXy(cmd);
 
   if (cmd.active == AppCommandState::Kind::Line && cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
@@ -234,10 +188,19 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
   if (cmd.active == AppCommandState::Kind::Arc) {
     using AP = AppCommandState::ArcPhase;
     if (cmd.arcPhase == AP::WaitMid)
-      PushRubberSegViewRel(rubberLines, cmd.arcAx, cmd.arcAy, curXf, curYf, 0., 0., zc, zc);
-    else if (cmd.arcPhase == AP::WaitEnd)
-      AppendArcRubberWorld(rubberLines, cmd.arcAx, cmd.arcAy, cmd.arcBx, cmd.arcBy, curXf, curYf, orthoHalfH,
-                           fbHeightPx, cmd.displayArcCircleSmoothness, zc);
+      // On a tilted work plane the first pick's own elevation is not the cursor's: two picks on a
+      // wall differ only in height, and drawing both ends at zc would flatten the construction line
+      // onto one contour of the wall.
+      PushRubberSegViewRel(rubberLines, cmd.arcAx, cmd.arcAy, curXf, curYf, 0., 0.,
+                           planeIsFlat ? zc : cmd.arcAz, zc);
+    else if (cmd.arcPhase == AP::WaitEnd) {
+      CadArc a{};
+      if (CadSolveArcThreePoints(cmd, cmd.arcAx, cmd.arcAy, cmd.arcAz, cmd.arcBx, cmd.arcBy, cmd.arcBz, curXf,
+                                 curYf, zc, &a))
+        AppendCurveRubber(rubberLines, CurvePlane(a), static_cast<double>(a.r), static_cast<double>(a.startRad),
+                          static_cast<double>(a.sweepRad), orthoHalfH, fbHeightPx,
+                          cmd.displayArcCircleSmoothness);
+    }
   }
 
   if (cmd.active == AppCommandState::Kind::Ellipse && cmd.ellPhase == AppCommandState::EllipsePhase::WaitMajorEnd)
@@ -267,25 +230,28 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
   if (cmd.active == AppCommandState::Kind::Circle) {
     using CP = AppCommandState::CirclePhase;
     if (cmd.circlePhase == CP::WaitRadius) {
-      const float dx = curXf - cmd.circleCx;
-      const float dy = curYf - cmd.circleCy;
-      AppendCircleRubberWorld(rubberLines, cmd.circleCx, cmd.circleCy, std::sqrt(dx * dx + dy * dy), orthoHalfH,
-                              fbHeightPx, cmd.displayArcCircleSmoothness, zc);
+      // Solved by the function CIRCLE itself commits with, so the ring under the cursor is the ring
+      // that lands -- including the radius, which on a tilted plane is the 3D distance to the rim
+      // pick and not its XY projection (REQ-312).
+      AppendCircleSolutionRubber(
+          rubberLines,
+          CadSolveCircleFromRimPick(cmd, cmd.circleCx, cmd.circleCy, cmd.circleCz, curXf, curYf, zc), orthoHalfH,
+          fbHeightPx, cmd.displayArcCircleSmoothness);
     } else if (cmd.circlePhase == CP::ThreeP_WaitP2) {
-      const float dx = curXf - cmd.c3p1x;
-      const float dy = curYf - cmd.c3p1y;
-      const float chord = std::sqrt(dx * dx + dy * dy);
-      const float rPrev = 0.5f * chord;
-      if (rPrev > 1e-6f)
-        AppendCircleRubberWorld(rubberLines, (cmd.c3p1x + curXf) * 0.5f, (cmd.c3p1y + curYf) * 0.5f, rPrev, orthoHalfH,
-                                fbHeightPx, cmd.displayArcCircleSmoothness, zc);
+      // Two picks so far, so the preview is the circle on the diameter between them: centre at their
+      // midpoint IN SPACE, radius the distance from there to the cursor. Routed through the rim-pick
+      // solver, which is where the work-plane normal and the 3D radius come from.
+      const float mx = (cmd.c3p1x + curXf) * 0.5f;
+      const float my = (cmd.c3p1y + curYf) * 0.5f;
+      const float mz = (cmd.c3p1z + zc) * 0.5f;
+      const CadCircleSolution s = CadSolveCircleFromRimPick(cmd, mx, my, mz, curXf, curYf, zc);
+      if (s.r > 1e-6f)
+        AppendCircleSolutionRubber(rubberLines, s, orthoHalfH, fbHeightPx, cmd.displayArcCircleSmoothness);
     } else if (cmd.circlePhase == CP::ThreeP_WaitP3) {
-      float ox = 0.f;
-      float oy = 0.f;
-      float rCirc = 0.f;
-      if (ComputeCircumcircle(cmd.c3p1x, cmd.c3p1y, cmd.c3p2x, cmd.c3p2y, curXf, curYf, &ox, &oy, &rCirc))
-        AppendCircleRubberWorld(rubberLines, ox, oy, rCirc, orthoHalfH, fbHeightPx, cmd.displayArcCircleSmoothness,
-                                zc);
+      CadCircleSolution s;
+      if (CadSolveCircleThreePoints(cmd, cmd.c3p1x, cmd.c3p1y, cmd.c3p1z, cmd.c3p2x, cmd.c3p2y, cmd.c3p2z, curXf,
+                                    curYf, zc, &s))
+        AppendCircleSolutionRubber(rubberLines, s, orthoHalfH, fbHeightPx, cmd.displayArcCircleSmoothness);
     }
   }
 

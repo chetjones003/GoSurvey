@@ -1165,6 +1165,7 @@ int main()
     CadExtendedGeometryInput ext{};
     ext.arcs = &cmd.userArcs;
     ext.arcAttrs = &cmd.userArcAttrs;
+    ext.circleNormals = &cmd.userCircleNormals;  // REQ-312
     ext.ellipses = &cmd.userEllipses;
     ext.ellAttrs = &cmd.userEllAttrs;
     ext.polylineVerts = &cmd.userPolylineVerts;

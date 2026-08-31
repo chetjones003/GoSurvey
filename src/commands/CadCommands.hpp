@@ -703,6 +703,15 @@ inline bool ChamferRayIntersect(const FilletCurve& c, float fromX, float fromY, 
 struct CadExtendedGeometryInput {
   const std::vector<CadArc>* arcs = nullptr;
   const std::vector<EntityAttributes>* arcAttrs = nullptr;
+  /// Plane normals for the circle store, three floats per circle (REQ-312, D-2026-08-31-f).
+  ///
+  /// An arc carries its normal inside `CadArc`, so `arcs` above needs no companion; a circle
+  /// cannot, and the renderer has to know a circle's plane or it draws a tilted one flat. Carried
+  /// here rather than as another `RenderScene` parameter for the reason this struct already
+  /// states: it is exactly "the extra per-entity data the renderer needs". Null, or shorter than
+  /// the circle store, means the missing entries are flat -- which is what every circle that
+  /// predates REQ-312 is.
+  const std::vector<float>* circleNormals = nullptr;
   const std::vector<CadEllipse>* ellipses = nullptr;
   const std::vector<EntityAttributes>* ellAttrs = nullptr;
   const std::vector<float>* polylineVerts = nullptr;
@@ -3535,6 +3544,67 @@ inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) { return ucs::
 /// flat drawing, and it must keep the exact float path every existing drawing, transcript and test
 /// already goes through. That is REQ-154s own reasoning for its WCS branch, applied one level out.
 inline bool CadWorkPlaneIsWorldXy(const AppCommandState& st) { return ucs::PlanViewIsExact(st.activeUcs); }
+
+/// The work plane, moved so its origin sits on \p ox,\p oy,\p oz (REQ-312).
+///
+/// Anchoring on the first pick rather than on the UCS origin keeps the 2D coordinates that come out
+/// of it small. The planar maths the draw commands use (circumcircle, swept angle) runs in float,
+/// and at state-plane magnitude a float has a quarter-foot of resolution - the same REQ-101
+/// narrowing hazard the document origin exists to avoid, arriving through a different door.
+inline ucs::Ucs CadWorkPlaneAnchoredAt(const AppCommandState& st, float ox, float oy, float oz) {
+  return ucs::WithOrigin(CadActiveUcsStorage(st),
+                         {static_cast<double>(ox), static_cast<double>(oy), static_cast<double>(oz)});
+}
+
+/// The normal of the plane a new curve commits into: the active UCS's Z axis (REQ-312).
+inline void CadActiveDrawPlaneNormal(const AppCommandState& st, float* nx, float* ny, float* nz) {
+  const ucs::Ucs u = st.activeUcs;  // a translation cannot rotate a basis, so storage vs world is moot
+  if (nx)
+    *nx = static_cast<float>(u.zAxis.x);
+  if (ny)
+    *ny = static_cast<float>(u.zAxis.y);
+  if (nz)
+    *nz = static_cast<float>(u.zAxis.z);
+}
+
+/// A circle solved from picks: where its centre is, how big it is, and which way its plane faces.
+///
+/// The return type of the CIRCLE solvers below. It exists so the geometry a set of picks defines can
+/// be computed WITHOUT committing it -- the rubber-band preview needs exactly that, and computing it
+/// a second way in the preview is how a preview comes to show a shape the commit does not produce.
+struct CadCircleSolution {
+  float cx = 0.f;
+  float cy = 0.f;
+  float cz = 0.f;
+  float r = 0.f;
+  float nx = kFlatNormalX;
+  float ny = kFlatNormalY;
+  float nz = kFlatNormalZ;
+};
+
+/// CIRCLE centre-and-radius: the circle a centre pick and a rim pick define on the work plane.
+///
+/// On a flat work plane this is the pre-REQ-312 arithmetic to the bit. On a tilted one the rim pick
+/// is displaced in Z as well, so the radius is the 3D distance to it -- its XY projection is short
+/// by cos(tilt), and on a vertical plane it collapses to nothing at all.
+[[nodiscard]] CadCircleSolution CadSolveCircleFromRimPick(const AppCommandState& st, float cx, float cy, float cz,
+                                                          float px, float py, float pz);
+
+/// CIRCLE 3P: the circle through three picks on the active work plane.
+///
+/// False when the picks are collinear -- in the plane, which on a tilted plane is not the same
+/// question as collinear in the XY projection.
+[[nodiscard]] bool CadSolveCircleThreePoints(const AppCommandState& st, float ax, float ay, float az, float bx,
+                                             float by, float bz, float cx, float cy, float cz,
+                                             CadCircleSolution* out);
+
+/// ARC 3P: the arc through three picks on the active work plane, angles measured in the arc's own
+/// frame (`ucs::FromNormal`), which is where CadArc::startRad and CadArc::sweepRad live.
+///
+/// False when the picks are collinear. \p out is left untouched on failure. The caller decides what
+/// a failure means -- the commit reports it and resets the draft, the preview just draws nothing.
+[[nodiscard]] bool CadSolveArcThreePoints(const AppCommandState& st, float ax, float ay, float az, float bx,
+                                          float by, float bz, float cx, float cy, float cz, CadArc* out);
 
 /// The **camera-azimuth offset** that squares the view with the active UCS's north (REQ-059).
 ///

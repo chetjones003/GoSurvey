@@ -112,7 +112,7 @@ normal" — no new command is needed.
   - [x] 1. Plane contract on `ucs::Ucs` + `[req311]` tests, negative-tested.
   - [x] 2. Normal on `CadArc` and the circle side-car; invariant check; default +Z everywhere.
   - [x] 3. Author on the active UCS work plane (CIRCLE, ARC).
-  - [ ] 4. Render / hit test / snap through the one parametrisation.
+  - [x] 4. Render / hit test / snap through the one parametrisation.
   - [ ] 5. DXF group 210 out and in.
   - [ ] 6. `.gs` persistence, omitted when +Z; legacy byte-identity test.
   - [ ] 7. Headless transcripts; full ctest; completion report.
@@ -158,6 +158,12 @@ normal" — no new command is needed.
   - Risk if wrong: a mirrored tilted arc renders on the right plane but sweeps the wrong way.
   - Validate by:   step 4's tilted-arc mirror case, which cannot be written until step 3 makes a
                    tilted arc authorable.
+  - **INVALIDATED, step 4.** The case was built and the assumption is wrong; the risk above is
+                   exactly what happened. `ReflectAngleAcrossLine` reflects the angle in WORLD XY,
+                   but a tilted arc's `startRad` is measured in the arc's own frame, which is
+                   REBUILT from the normal - so once the normal is reflected the new frame is not
+                   the reflection of the old one, and the two rules describe different arcs. See the
+                   step 4 log entry for the measured numbers and the replacement rule.
 
   First run: 5 red — the `docinvariants` fixtures that hand-build a circle. That is the new check
   doing its job (`circle normals: 1 entities but 0 attribute rows`), not a regression; the shared
@@ -233,6 +239,108 @@ normal" — no new command is needed.
   Still flat, and moving to step 4 with the renderer: the CIRCLE/ARC **rubber-band preview**
   (`CadRubberPreview.cpp`) and the committed-geometry draw path both still tessellate in XY, so a
   tilted curve is stored correctly and drawn wrongly. That is the next step, not a gap in this one.
+
+- 2026-08-31 Step 4 done. Everything that turns a stored curve back into points now does it through
+  the one parametrisation: the renderer, the rubber-band preview, the transform ghost, the selection
+  highlight, block flattening, four object-snap walks, and the two bounds walks. `CadEntities.hpp`
+  gained the shared half of that — `CurveSampleAngle`, `SampleCurveWorld`, `AppendCurveWorldSegs`,
+  `CurveEndpointsWorld`, `CurveWorldPointOnArc` — beside `CurvePlane` and `CurvePointAt`, which step
+  3 had already made the single place a curve's frame is built.
+
+  Every call site keeps its pre-REQ-312 two-dimensional arithmetic behind an `IsFlatNormal` guard.
+  Not for correctness — `ucs::FromNormal` reproduces the world X and Y axes exactly for a +Z normal,
+  so the two paths agree to the bit — but because this is the per-vertex loop for every curve on
+  screen, and a flat drawing should not pay for a frame transform whose answer it already knows.
+
+  **Rendering.** `AppendArcVcDashed` and `AppendCircleVcDashed` build a tilted curve's chain in
+  view-relative XY plus a per-vertex Z array, and hand it to the `zPerPt` parameter
+  `CadTessellateLinetypeChainVc` already had for sloped polylines — so a tilted curve is dashed and
+  linetyped like any other rather than needing a path of its own. Circle normals reach the renderer
+  as `CadExtendedGeometryInput::circleNormals`, not as another `RenderScene` parameter: that struct
+  already describes itself as "the extra per-entity data the renderer needs", which is what this is.
+
+  **Preview and commit now share their geometry.** The rubber preview had its own circumcircle, its
+  own sweep rule and its own tessellation — a parallel implementation of the commit, which is what
+  the note at `commitCurX` warns produces a preview of a shape the commit will not make. On a tilted
+  plane it would have been wrong in three separate ways at once. So the geometry was split out of
+  the three commit functions into `CadSolveCircleFromRimPick`, `CadSolveCircleThreePoints` and
+  `CadSolveArcThreePoints` (declared in `CadCommands.hpp`, defined at file scope in
+  `CadCommands.cpp` below the anonymous namespace, since the preview calls them from another TU).
+  The commits are now solve-plus-commit, the preview is solve-plus-tessellate, and
+  `ComputeCircumcircleRubber` / `AppendArcRubberWorld` / `AppendCircleRubberWorld` are gone.
+
+  The arc solver also fills `arc.z` for the flat case, which the commit used to patch in afterwards.
+  A solver that returns an incomplete arc is a trap for the preview, which has no second chance to
+  remember which field somebody else was going to fill in later.
+
+  **ASSUMPTION-3 is wrong, and step 4's test is what proved it.** Mirroring the wall arc (centre
+  (200, 0, 0), radius 10, normal (0, -1, 0), ends at (210, 0, 0) and (190, 0, 0)) across the world
+  line y = x should give ends at (0, 190, 0) and (0, 210, 0). Measured, before the fix:
+  **(0, 200, -10) and (0, 200, 10)** — the right plane, the right centre, the right radius, and the
+  arc turned a quarter turn inside its own plane.
+
+  The cause is the one the assumption did not consider. `ReflectAngleAcrossLine` reflects the angle
+  in WORLD XY, and that tracks the arc's frame only while the frame IS world XY. A tilted arc's
+  `startRad` lives in `ucs::FromNormal(centre, normal)`, which is REBUILT from the normal — so
+  reflecting the normal generally turns the frame by a further rotation about it, and an angle rule
+  written for the old frame lands somewhere else in the new one. `a.startRad += rad` under ROTATE
+  has the same flaw for the same reason.
+
+  The fix does not transform the angle at all. `CadReanchorArcStart` re-measures `startRad` from
+  where a KNOWN point of the arc actually went — the moved start point for a rotation, the moved END
+  point for a reflection, since a mirror reverses the traversal and the existing flat rule already
+  names that point as the new start. It is a no-op on a flat arc, so every flat drawing keeps the
+  old arithmetic exactly. Applied at four sites: MIRROR and ROTATE in `CadCommands.cpp`, and the
+  matching two in `TransformPreview.cpp`, whose ghost had drifted the same way.
+
+  **Found while writing that test, and fixed here:** `ApplyRotationToSelection` — ROTATE with copy
+  mode off, the IN-PLACE path — carried no normal at all, for arcs or for circles. Step 2 threaded
+  the normal through the copying paths and missed this one, and nothing could show it while every
+  normal in every store was +Z. A tilted circle rotated in place kept a plane that no longer
+  contained it.
+
+  **Scoped out of step 4, each recorded rather than left silent:**
+  - **INTERSECTION and APPARENT INTERSECTION on a tilted curve.** `IsectConic` is a planar-XY conic
+    by construction, and a tilted circle is not one — it projects to an ellipse, whose intersection
+    with another curve is a different problem. Tilted arcs and circles are now EXCLUDED from the
+    candidate set rather than flattened into it: flattening offers a point that lies on neither
+    curve, which is a wrong answer presented as a right one (REQ-201). True 3D curve-curve
+    intersection belongs with the kernel in #146.
+  - **TRIM and BREAK against a tilted curve.** `CollectCutSegments` flattens a cutting edge to 2D
+    segments. Same reasoning: planar boolean geometry, Phase 3's problem, not this requirement's.
+  - **OFFSET of a tilted curve** derives its distance from a projected pick, so the offset comes out
+    short by cos(tilt). The normal is already carried (step 2); the distance is not. Left alone.
+  - **Box selection's bounding box for a tilted CIRCLE** stays the conservative `cx +/- r` square.
+    It is larger than the true footprint, never smaller, so a crossing selection cannot lose one and
+    a window selection is merely stricter than it needs to be. Arcs needed the real fix and got it,
+    because their XY walk produced bounds that were too SMALL, which loses geometry.
+
+  **REQ-312's acceptance names a snap GoSurvey does not have.** The bullet reads "centre, quadrant,
+  endpoint, nearest". `CadSnap::Kind` has Endpoint, Midpoint, Center, Perpendicular, Intersection,
+  ApparentIntersection, Grip and Surface — there is no QUADRANT and no NEAREST, and adding them is a
+  REQ-062 change, not a REQ-312 one. Every mode that does exist is now plane-aware. Raised with the
+  user; the acceptance bullet wants rewording to name the modes the app actually has.
+
+  **Tests.** `tests/headless/transcripts/req312-tilted-curves-drawn-and-edited.txt` (57 steps): a
+  tilted arc found by a tight WINDOW selection, the two mirror cases above, and ROTATE carrying a
+  circle's plane. `tests/CadSnapTests.cpp` gains four `[CadSnap][req312]` cases driving
+  `CadSnap::FindBest` with a pick RAY — the orbited path, where a candidate at the wrong elevation is
+  genuinely far away rather than coincidentally on top of the right one.
+
+  All negative-tested, each against the specific line that makes it pass:
+  - flat-only `ArcRoughBounds`: the WINDOW select finds nothing (`expected 1, got 0`).
+  - the normal not carried through `ApplyRotationToSelection`: `nx is 0.000000, expected -1.000000`.
+  - `ArcSnapPoint` forced to its flat branch: 3 of the 4 snap cases fail, and the flat-arc
+    regression guard stays green — which is the half of that result worth having.
+  - the mirror re-anchor: the pre-fix numbers recorded above ARE its negative test. They were
+    measured from a real run, before the fix existed.
+
+  Suite: **861/861 ctest green.**
+
+  Still open for step 5 onward: DXF group 210 (the writer emits a hard-coded +Z at all eight sites
+  and the reader ignores it), and `.gs` persistence — a tilted arc's normal is held in memory and
+  dropped on save today, which is why the probes behind these tests read a plane through
+  `EXPECT ARCPOINTS` rather than out of the file.
 
 ## 9. Self-verification
 - [ ] build-project

@@ -6628,27 +6628,9 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   log.push_back("DIMANGULAR — vertex, two ray points, then arc position. ESC to exit.");
 }
 
-/// The active work plane as a frame anchored at (\p ox, \p oy, \p oz) — REQ-311 / REQ-312.
-///
-/// Anchoring on the first pick rather than on the UCS origin keeps the 2D coordinates that come out
-/// of it small. The planar maths the draw commands already use (circumcircle, swept angle) runs in
-/// float, and at state-plane magnitude a float has a quarter-foot of resolution — the same REQ-101
-/// narrowing hazard the document origin exists to avoid, arriving through a different door.
-static ucs::Ucs WorkPlaneAnchoredAt(const AppCommandState& st, float ox, float oy, float oz) {
-  return ucs::WithOrigin(CadActiveUcsStorage(st),
-                         {static_cast<double>(ox), static_cast<double>(oy), static_cast<double>(oz)});
-}
-
-/// The normal of the plane a new curve commits into: the active UCS's Z axis (REQ-312).
-static void ActiveDrawPlaneNormal(const AppCommandState& st, float* nx, float* ny, float* nz) {
-  const ucs::Ucs u = st.activeUcs;  // a translation cannot rotate a basis, so storage vs world is moot
-  if (nx)
-    *nx = static_cast<float>(u.zAxis.x);
-  if (ny)
-    *ny = static_cast<float>(u.zAxis.y);
-  if (nz)
-    *nz = static_cast<float>(u.zAxis.z);
-}
+// WorkPlaneAnchoredAt and ActiveDrawPlaneNormal moved to CadCommands.hpp as
+// CadWorkPlaneAnchoredAt / CadActiveDrawPlaneNormal (REQ-312). The rubber-band preview has to
+// resolve the same plane the commit will, and it lives in another translation unit.
 
 void CommitCircle(AppCommandState& st, float cx, float cy, float cz, float r, float nx, float ny, float nz,
                   std::vector<std::string>& log) {
@@ -6706,16 +6688,8 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float cz, float r, fl
 /// cos(tilt), and on a vertical plane it collapses to nothing at all.
 static void CommitCircleFromRimPick(AppCommandState& st, float cx, float cy, float cz, float px, float py,
                                     float pz, std::vector<std::string>& log) {
-  const float dx = px - cx;
-  const float dy = py - cy;
-  float nx = 0.f, ny = 0.f, nz = 1.f;
-  if (CadWorkPlaneIsWorldXy(st)) {
-    CommitCircle(st, cx, cy, CadCommitElevation(st), std::sqrt(dx * dx + dy * dy), nx, ny, nz, log);
-    return;
-  }
-  ActiveDrawPlaneNormal(st, &nx, &ny, &nz);
-  const float dz = pz - cz;
-  CommitCircle(st, cx, cy, cz, std::sqrt(dx * dx + dy * dy + dz * dz), nx, ny, nz, log);
+  const CadCircleSolution s = CadSolveCircleFromRimPick(st, cx, cy, cz, px, py, pz);
+  CommitCircle(st, s.cx, s.cy, s.cz, s.r, s.nx, s.ny, s.nz, log);
 }
 
 /// CIRCLE 3P: the circle through three picks on the active work plane (REQ-312).
@@ -6724,24 +6698,10 @@ static void CommitCircleFromRimPick(AppCommandState& st, float cx, float cy, flo
 /// same question as collinear in the XY projection.
 static bool CommitCircleThreePoints(AppCommandState& st, float ax, float ay, float az, float bx, float by,
                                     float bz, float cx, float cy, float cz, std::vector<std::string>& log) {
-  float ox = 0.f, oy = 0.f, r = 0.f;
-  if (CadWorkPlaneIsWorldXy(st)) {
-    if (!ComputeCircumcircle(ax, ay, bx, by, cx, cy, &ox, &oy, &r))
-      return false;
-    CommitCircle(st, ox, oy, CadCommitElevation(st), r, 0.f, 0.f, 1.f, log);
-    return true;
-  }
-  const ucs::Ucs plane = WorkPlaneAnchoredAt(st, ax, ay, az);
-  const ucs::Point2D pb = ucs::WorldToPlane(plane, {bx, by, static_cast<double>(bz)});
-  const ucs::Point2D pc = ucs::WorldToPlane(plane, {cx, cy, static_cast<double>(cz)});
-  if (!ComputeCircumcircle(0.f, 0.f, static_cast<float>(pb.x), static_cast<float>(pb.y),
-                           static_cast<float>(pc.x), static_cast<float>(pc.y), &ox, &oy, &r))
+  CadCircleSolution s;
+  if (!CadSolveCircleThreePoints(st, ax, ay, az, bx, by, bz, cx, cy, cz, &s))
     return false;
-  const ray3d::Vec3 centre = ucs::PlaneToWorld(plane, {ox, oy});
-  float nx = 0.f, ny = 0.f, nz = 1.f;
-  ActiveDrawPlaneNormal(st, &nx, &ny, &nz);
-  CommitCircle(st, static_cast<float>(centre.x), static_cast<float>(centre.y), static_cast<float>(centre.z), r,
-               nx, ny, nz, log);
+  CommitCircle(st, s.cx, s.cy, s.cz, s.r, s.nx, s.ny, s.nz, log);
   return true;
 }
 
@@ -7137,7 +7097,7 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
     float nx = 0.f, ny = 0.f, nz = 1.f;
     const bool flat = CadWorkPlaneIsWorldXy(st);
     if (!flat)
-      ActiveDrawPlaneNormal(st, &nx, &ny, &nz);
+      CadActiveDrawPlaneNormal(st, &nx, &ny, &nz);
     CommitCircle(st, st.circleCx, st.circleCy, flat ? CadCommitElevation(st) : st.circleCz, rad, nx, ny, nz,
                  log);
     return true;
@@ -7186,11 +7146,21 @@ bool SelectedEntityEqual(const SelectedEntity& a, const SelectedEntity& b) {
 
 void ArcRoughBounds(const CadArc& a, float* outMnX, float* outMxX, float* outMnY, float* outMxY, bool* any) {
   const int n = std::max(8, static_cast<int>(std::fabs(static_cast<double>(a.sweepRad)) / (3.14159265 / 16.0)) + 1);
+  // A tilted arc (REQ-312) does not pass through the points its XY parametrisation names, so bounds
+  // taken from those are not bounds at all -- they can be SMALLER than the arc, which crops it out
+  // of a window selection and out of ZOOM EXTENTS.
+  const bool flat = IsFlatNormal(a.nx, a.ny, a.nz);
+  const ucs::Ucs plane = flat ? ucs::Ucs{} : CurvePlane(a);
   for (int i = 0; i <= n; ++i) {
     const float u = static_cast<float>(i) / static_cast<float>(n);
     const float t = a.startRad + a.sweepRad * u;
-    const float x = a.cx + a.r * std::cos(t);
-    const float y = a.cy + a.r * std::sin(t);
+    float x = a.cx + a.r * std::cos(t);
+    float y = a.cy + a.r * std::sin(t);
+    if (!flat) {
+      const ray3d::Vec3 p = CurvePointAt(plane, static_cast<double>(a.r), static_cast<double>(t));
+      x = static_cast<float>(p.x);
+      y = static_cast<float>(p.y);
+    }
     if (!*any) {
       *outMnX = *outMxX = x;
       *outMnY = *outMxY = y;
@@ -8513,9 +8483,17 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.userArcs.size()) {
         CadArc a = st.userArcs[k];
+        // The start point, through the arc's own plane, before the arc moves (REQ-312).
+        ray3d::Vec3 startPt = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
+        float spx = static_cast<float>(startPt.x);
+        float spy = static_cast<float>(startPt.y);
+        RotateAroundBase(bx, by, rad, &spx, &spy);  // a rotation about Z leaves the point's Z alone
+        startPt.x = static_cast<double>(spx);
+        startPt.y = static_cast<double>(spy);
         RotateAroundBase(bx, by, rad, &a.cx, &a.cy);
         a.startRad += rad;
         RotateNormalAboutZ(rad, &a.nx, &a.ny);   // REQ-312: the arc plane turns with the arc
+        CadReanchorArcStart(&a, startPt);  // REQ-312: a no-op on a flat arc, where += rad is exact
         newArcs.push_back(a);
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
@@ -8871,10 +8849,20 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         // say which way the arc now sweeps. Reflect the OLD END angle into the NEW START angle and
         // keep sweepRad's magnitude — this is the CCW-from-start arc that covers the identical
         // reflected point set (verified by hand for axis-aligned and symmetric cases; see TASK-094).
+        // Where the far end lands, taken through the arc's OWN plane before anything moves. A
+        // mirror line lies in plan, so it reflects X and Y and leaves Z alone.
+        ray3d::Vec3 farEnd = CurveWorldPointOnArc(a, static_cast<double>(a.startRad) +
+                                                         static_cast<double>(a.sweepRad));
+        float fex = static_cast<float>(farEnd.x);
+        float fey = static_cast<float>(farEnd.y);
+        ReflectPtAcrossLine(x0, y0, x1, y1, &fex, &fey);
+        farEnd.x = static_cast<double>(fex);
+        farEnd.y = static_cast<double>(fey);
         const float newStart = ReflectAngleAcrossLine(x0, y0, x1, y1, a.startRad + a.sweepRad);
         ReflectPtAcrossLine(x0, y0, x1, y1, &a.cx, &a.cy);
         a.startRad = newStart;
         ReflectNormalAcrossLine(x0, y0, x1, y1, &a.nx, &a.ny);   // REQ-312: so does the plane
+        CadReanchorArcStart(&a, farEnd);  // REQ-312: a no-op on a flat arc, so newStart stands there
         newArcs.push_back(a);
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
@@ -8986,6 +8974,13 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     size_t k = static_cast<size_t>(e.index) * 4;
     if (k + 3 < st.userCirclesCxCyZR.size()) {
       RotateAroundBase(bx, by, rad, &st.userCirclesCxCyZR[k], &st.userCirclesCxCyZR[k + 1]);
+      // REQ-312: the plane turns with the circle. This function rotates the selection IN PLACE and
+      // was missed when the normal was threaded through the copying paths -- with every normal +Z
+      // there was nothing here to see, and a tilted circle rotated by ROTATESEL kept the plane it
+      // used to be in while its centre moved to a place that plane no longer explains.
+      const size_t n = static_cast<size_t>(e.index) * 3;
+      if (n + 2 < st.userCircleNormals.size())
+        RotateNormalAboutZ(rad, &st.userCircleNormals[n], &st.userCircleNormals[n + 1]);
     }
   }
   for (const auto& e : st.selection) {
@@ -8995,8 +8990,16 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     if (k >= st.userArcs.size())
       continue;
     CadArc& a = st.userArcs[k];
+    ray3d::Vec3 startPt = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
+    float spx = static_cast<float>(startPt.x);
+    float spy = static_cast<float>(startPt.y);
+    RotateAroundBase(bx, by, rad, &spx, &spy);
+    startPt.x = static_cast<double>(spx);
+    startPt.y = static_cast<double>(spy);
     RotateAroundBase(bx, by, rad, &a.cx, &a.cy);
     a.startRad += rad;
+    RotateNormalAboutZ(rad, &a.nx, &a.ny);  // REQ-312, same omission as the circles above
+    CadReanchorArcStart(&a, startPt);
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Ellipse)
@@ -10253,66 +10256,15 @@ static void ComputeArcSweepRad(double ox, double oy, double ax, double ay, doubl
 
 static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float az, float bx, float by, float bz,
                                  float cx, float cy, float cz, std::vector<std::string>& log) {
-  const bool flat = CadWorkPlaneIsWorldXy(st);
-  float ox = 0.f, oy = 0.f, r = 0.f;
   CadArc arc{};
-
-  if (flat) {
-    if (!ComputeCircumcircle(ax, ay, bx, by, cx, cy, &ox, &oy, &r) || r < 1e-8f) {
-      log.push_back("ARC — points are collinear.");
-      st.active = AppCommandState::Kind::None;
-      ResetArcDraft(st);
-      return;
-    }
-    double sr = 0.;
-    double sw = 0.;
-    ComputeArcSweepRad(ox, oy, ax, ay, bx, by, cx, cy, &sr, &sw);
-    arc.cx = ox;
-    arc.cy = oy;
-    arc.r = r;
-    arc.startRad = static_cast<float>(sr);
-    arc.sweepRad = static_cast<float>(sw);
-  } else {
-    // Solve in the work plane's own 2D coordinates, anchored on the first pick so the numbers going
-    // into the float circumcircle stay small (REQ-101). The three picks lie in that plane, so the
-    // planar maths below is exactly the same maths — it is only the coordinates that change.
-    const ucs::Ucs plane = WorkPlaneAnchoredAt(st, ax, ay, az);
-    const ucs::Point2D pb = ucs::WorldToPlane(plane, {bx, by, static_cast<double>(bz)});
-    const ucs::Point2D pc = ucs::WorldToPlane(plane, {cx, cy, static_cast<double>(cz)});
-    if (!ComputeCircumcircle(0.f, 0.f, static_cast<float>(pb.x), static_cast<float>(pb.y),
-                             static_cast<float>(pc.x), static_cast<float>(pc.y), &ox, &oy, &r) ||
-        r < 1e-8f) {
-      log.push_back("ARC — points are collinear.");
-      st.active = AppCommandState::Kind::None;
-      ResetArcDraft(st);
-      return;
-    }
-    const ray3d::Vec3 centre = ucs::PlaneToWorld(plane, {ox, oy});
-
-    // startRad and sweepRad are stored in the arc's OWN frame — `ucs::FromNormal(centre, normal)`,
-    // the Arbitrary Axis Algorithm (REQ-312) — not in the UCS frame, which is generally rotated
-    // about the normal relative to it. Measuring the angles in the storage frame here is what stops
-    // the renderer, the DXF writer and this commit from each picking a different zero direction.
-    ucs::Ucs frame;
-    if (!ucs::FromNormal(centre, plane.zAxis, &frame)) {
-      log.push_back("ARC rejected — the work plane is not a valid plane.");
-      st.active = AppCommandState::Kind::None;
-      ResetArcDraft(st);
-      return;
-    }
-    const ucs::Point2D fa = ucs::WorldToPlane(frame, {ax, ay, static_cast<double>(az)});
-    const ucs::Point2D fb = ucs::WorldToPlane(frame, {bx, by, static_cast<double>(bz)});
-    const ucs::Point2D fc = ucs::WorldToPlane(frame, {cx, cy, static_cast<double>(cz)});
-    double sr = 0.;
-    double sw = 0.;
-    ComputeArcSweepRad(0., 0., fa.x, fa.y, fb.x, fb.y, fc.x, fc.y, &sr, &sw);
-    arc.cx = static_cast<float>(centre.x);
-    arc.cy = static_cast<float>(centre.y);
-    arc.r = r;
-    arc.startRad = static_cast<float>(sr);
-    arc.sweepRad = static_cast<float>(sw);
-    arc.z = static_cast<float>(centre.z);
-    ActiveDrawPlaneNormal(st, &arc.nx, &arc.ny, &arc.nz);
+  if (!CadSolveArcThreePoints(st, ax, ay, az, bx, by, bz, cx, cy, cz, &arc)) {
+    // One message for both refusals the solver can make: three picks that do not define an arc,
+    // and a work plane that is not a plane. Either way the user sees the same outcome - no arc was
+    // created - and REQ-201 asks for a refusal that is reported, which this is.
+    log.push_back("ARC - points are collinear, or the work plane is not valid.");
+    st.active = AppCommandState::Kind::None;
+    ResetArcDraft(st);
+    return;
   }
 
   PushUndoSnapshot(st, "Arc");
@@ -10328,9 +10280,7 @@ static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float 
     L->paperArcs.push_back(arc);
     L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    if (flat)
-      arc.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
-    st.userArcs.push_back(arc);
+    st.userArcs.push_back(arc);  // arc.z already carries the work plane (set by the solver)
     st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
@@ -12075,6 +12025,129 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------------------------
+// Curve solvers (REQ-312).
+//
+// The geometry a set of picks defines, separated from the act of committing it. They live at file
+// scope rather than in the anonymous namespace above because the rubber-band preview calls them
+// from another translation unit: it has to draw the curve the commit is going to store, and the
+// only way to guarantee that is for both to ask the same function.
+// ---------------------------------------------------------------------------------------------
+
+CadCircleSolution CadSolveCircleFromRimPick(const AppCommandState& st, float cx, float cy, float cz, float px,
+                                            float py, float pz) {
+  CadCircleSolution s;
+  s.cx = cx;
+  s.cy = cy;
+  const float dx = px - cx;
+  const float dy = py - cy;
+  if (CadWorkPlaneIsWorldXy(st)) {
+    s.cz = CadCommitElevation(st);
+    s.r = std::sqrt(dx * dx + dy * dy);
+    return s;
+  }
+  CadActiveDrawPlaneNormal(st, &s.nx, &s.ny, &s.nz);
+  const float dz = pz - cz;
+  s.cz = cz;
+  s.r = std::sqrt(dx * dx + dy * dy + dz * dz);
+  return s;
+}
+
+bool CadSolveCircleThreePoints(const AppCommandState& st, float ax, float ay, float az, float bx, float by,
+                               float bz, float cx, float cy, float cz, CadCircleSolution* out) {
+  if (!out)
+    return false;
+  CadCircleSolution s;
+  float ox = 0.f, oy = 0.f, r = 0.f;
+  if (CadWorkPlaneIsWorldXy(st)) {
+    if (!ComputeCircumcircle(ax, ay, bx, by, cx, cy, &ox, &oy, &r))
+      return false;
+    s.cx = ox;
+    s.cy = oy;
+    s.cz = CadCommitElevation(st);
+    s.r = r;
+    *out = s;
+    return true;
+  }
+  const ucs::Ucs plane = CadWorkPlaneAnchoredAt(st, ax, ay, az);
+  const ucs::Point2D pb = ucs::WorldToPlane(plane, {bx, by, static_cast<double>(bz)});
+  const ucs::Point2D pc = ucs::WorldToPlane(plane, {cx, cy, static_cast<double>(cz)});
+  if (!ComputeCircumcircle(0.f, 0.f, static_cast<float>(pb.x), static_cast<float>(pb.y),
+                           static_cast<float>(pc.x), static_cast<float>(pc.y), &ox, &oy, &r))
+    return false;
+  const ray3d::Vec3 centre = ucs::PlaneToWorld(plane, {ox, oy});
+  s.cx = static_cast<float>(centre.x);
+  s.cy = static_cast<float>(centre.y);
+  s.cz = static_cast<float>(centre.z);
+  s.r = r;
+  CadActiveDrawPlaneNormal(st, &s.nx, &s.ny, &s.nz);
+  *out = s;
+  return true;
+}
+
+bool CadSolveArcThreePoints(const AppCommandState& st, float ax, float ay, float az, float bx, float by, float bz,
+                            float cx, float cy, float cz, CadArc* out) {
+  if (!out)
+    return false;
+  const bool flat = CadWorkPlaneIsWorldXy(st);
+  float ox = 0.f, oy = 0.f, r = 0.f;
+  CadArc arc{};
+
+  if (flat) {
+    if (!ComputeCircumcircle(ax, ay, bx, by, cx, cy, &ox, &oy, &r) || r < 1e-8f)
+      return false;
+    double sr = 0.;
+    double sw = 0.;
+    ComputeArcSweepRad(ox, oy, ax, ay, bx, by, cx, cy, &sr, &sw);
+    arc.cx = ox;
+    arc.cy = oy;
+    arc.r = r;
+    arc.startRad = static_cast<float>(sr);
+    arc.sweepRad = static_cast<float>(sw);
+    // The work plane's elevation (REQ-058), set here rather than by the caller so the solver hands
+    // back a COMPLETE arc -- the rubber preview draws what it returns and has no second chance to
+    // remember which field the commit was going to fill in afterwards. Paper space overrides it to
+    // zero at the commit, where that boundary belongs (ADR-025 (g)).
+    arc.z = CadCommitElevation(st);
+  } else {
+    // Solve in the work plane's own 2D coordinates, anchored on the first pick so the numbers going
+    // into the float circumcircle stay small (REQ-101). The three picks lie in that plane, so the
+    // planar maths below is exactly the same maths — it is only the coordinates that change.
+    const ucs::Ucs plane = CadWorkPlaneAnchoredAt(st, ax, ay, az);
+    const ucs::Point2D pb = ucs::WorldToPlane(plane, {bx, by, static_cast<double>(bz)});
+    const ucs::Point2D pc = ucs::WorldToPlane(plane, {cx, cy, static_cast<double>(cz)});
+    if (!ComputeCircumcircle(0.f, 0.f, static_cast<float>(pb.x), static_cast<float>(pb.y),
+                             static_cast<float>(pc.x), static_cast<float>(pc.y), &ox, &oy, &r) ||
+        r < 1e-8f)
+      return false;
+    const ray3d::Vec3 centre = ucs::PlaneToWorld(plane, {ox, oy});
+
+    // startRad and sweepRad are stored in the arc's OWN frame — `ucs::FromNormal(centre, normal)`,
+    // the Arbitrary Axis Algorithm (REQ-312) — not in the UCS frame, which is generally rotated
+    // about the normal relative to it. Measuring the angles in the storage frame here is what stops
+    // the renderer, the DXF writer and this commit from each picking a different zero direction.
+    ucs::Ucs frame;
+    if (!ucs::FromNormal(centre, plane.zAxis, &frame))
+      return false;
+    const ucs::Point2D fa = ucs::WorldToPlane(frame, {ax, ay, static_cast<double>(az)});
+    const ucs::Point2D fb = ucs::WorldToPlane(frame, {bx, by, static_cast<double>(bz)});
+    const ucs::Point2D fc = ucs::WorldToPlane(frame, {cx, cy, static_cast<double>(cz)});
+    double sr = 0.;
+    double sw = 0.;
+    ComputeArcSweepRad(0., 0., fa.x, fa.y, fb.x, fb.y, fc.x, fc.y, &sr, &sw);
+    arc.cx = static_cast<float>(centre.x);
+    arc.cy = static_cast<float>(centre.y);
+    arc.r = r;
+    arc.startRad = static_cast<float>(sr);
+    arc.sweepRad = static_cast<float>(sw);
+    arc.z = static_cast<float>(centre.z);
+    CadActiveDrawPlaneNormal(st, &arc.nx, &arc.ny, &arc.nz);
+  }
+
+  *out = arc;
+  return true;
+}
 
 // Public surface rollover entry point (REQ-089): the readout for the plan position under the cursor,
 // one row per visible surface covering it. Calls the file-local SurfacesCovering — the same walk
@@ -17095,9 +17168,17 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     if (dr <= 1e-12)
       continue;
     const int n = std::max(8, static_cast<int>(std::fabs(static_cast<double>(a.sweepRad)) / (3.14159265 / 16.0)) + 1);
+    // Sampled in the arc's own plane (REQ-312); see ArcRoughBounds for why the XY walk understates
+    // a tilted arc rather than merely approximating it.
+    const bool arcFlat = IsFlatNormal(a.nx, a.ny, a.nz);
+    const ucs::Ucs arcPlane = arcFlat ? ucs::Ucs{} : CurvePlane(a);
     for (int i = 0; i <= n; ++i) {
-      const double u = static_cast<double>(i) / static_cast<double>(n);
-      const double t = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
+      const double t = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i, n);
+      if (!arcFlat) {
+        const ray3d::Vec3 p = CurvePointAt(arcPlane, dr, t);
+        consider(p.x, p.y);
+        continue;
+      }
       double wx = 0.;
       double wy = 0.;
       CirclePointWorld(dcx, dcy, dr, t, &wx, &wy);
