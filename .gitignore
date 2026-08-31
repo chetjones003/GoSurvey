@@ -33,6 +33,11 @@ gosurvey_imgui.ini
 *.pdb
 *.ilk
 *.idb
+
+# ...but the vendored prebuilt dependency binaries ARE tracked (D-2026-08-31-b).
+!third_party/**/*.dll
+!third_party/**/*.lib
+!third_party/**/*.a
 *.pch
 
 # --- Visual Studio / MSVC ---
