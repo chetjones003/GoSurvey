@@ -3290,6 +3290,14 @@ struct AppCommandState {
   // the paper layout (sheet + viewports stay visible); model edit/snap/draw is routed through the viewport.
   int    floatingViewportLayout = -1;   ///< paper layout of the floating viewport, or -1 if not floating.
   int    floatingViewportIndex = -1;    ///< viewport being edited in place, or -1.
+  /// REQ-155 (issue #155): while floating model space is entered, \ref activeUcs holds that
+  /// VIEWPORT's active UCS (so coordinate entry / grid / ORTHO / readout / UCSFOLLOW resolve
+  /// against the viewport's frame). The drawing-scoped UCS is parked here for the duration and
+  /// restored on exit. \ref CadDrawingScopedUcs reads the right one; persistence (`.gs` save,
+  /// per-tab snapshot) must go through it so a save/tab-switch WHILE floating records the
+  /// drawing's frame, not the viewport's. Session-only — never written to `.gs`.
+  ucs::Ucs drawingActiveUcsStash;
+  bool     floatingUcsSwapActive = false;
   /// Viewport zoom lock (user request): when ON, pan/zoom always targets the sheet; when OFF and editing a
   /// viewport in place, pan/zoom adjusts that viewport's model framing (scale/center).
   bool   viewportZoomLocked = false;
@@ -3464,6 +3472,14 @@ inline float CadCommitElevation(const AppCommandState& st) {
 /// True when the active UCS is the World Coordinate System — the default, and what the status bar
 /// reports as "World".
 inline bool CadUcsIsWorld(const AppCommandState& st) { return ucs::IsWorld(st.activeUcs); }
+
+/// The DRAWING-scoped active UCS (REQ-154), correct even while a per-viewport frame is live in
+/// \ref AppCommandState::activeUcs because floating model space is entered (REQ-155). Persistence —
+/// the `.gs` save and the per-tab document snapshot — must read this, never `activeUcs` directly,
+/// or a save/tab-switch performed while floating would record the viewport's frame as the drawing's.
+inline const ucs::Ucs& CadDrawingScopedUcs(const AppCommandState& st) {
+  return st.floatingUcsSwapActive ? st.drawingActiveUcsStash : st.activeUcs;
+}
 
 /// The active UCS expressed in **storage space** (local XY, absolute Z).
 ///
