@@ -289,6 +289,7 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
   EntityAttrArrayFromJson(o, "circleAttrs", c.circleAttrs);
   if (o.contains("circleVis") && o["circleVis"].is_array())
     c.circleVis = o["circleVis"].get<std::vector<std::string>>();
+  EnsureCircleNormals(c.circleNormals, c.circles.size() / 4);   // REQ-312, flat default
 
   if (o.contains("arcs") && o["arcs"].is_array())
     for (const auto& aj : o["arcs"])
@@ -2060,6 +2061,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.userCirclesCxCyZR.push_back(cxyr[i + 2].get<float>());          // r
     }
   }
+  // The plane normals (REQ-312) are read back in their own key below; this establishes the flat
+  // default first, so a drawing written before that key existed loads as the world-XY circles it
+  // has always been, and the side-car count matches the circle count either way (REQ-204).
+  EnsureCircleNormals(st.userCircleNormals, st.userCirclesCxCyZR.size() / 4);
   st.userCircleAttrs.clear();
   for (const auto& o : doc["circleAttrs"])
     st.userCircleAttrs.push_back(EntityAttributesFromJson(o));

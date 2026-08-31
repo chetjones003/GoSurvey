@@ -838,6 +838,9 @@ struct CadClipboard {
   /// boundary rather than silently riding along.
   std::vector<float>            circlesCxCyZR;
   std::vector<EntityAttributes> circleAttrs;
+  /// Circle plane normals, 3 floats each (REQ-312). A paste into paper space flattens them back
+  /// to world +Z, the same boundary where z collapses -- the sheet is 2D (ADR-025 (g)).
+  std::vector<float>            circleNormals;
   std::vector<CadArc>           arcs;
   std::vector<EntityAttributes> arcAttrs;
   std::vector<CadEllipse>       ellipses;
@@ -872,6 +875,8 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> userLineAttrs;
   std::vector<float>            userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
+  /// Circle plane normals, 3 floats each (REQ-312) - see AppCommandState::userCircleNormals.
+  std::vector<float>            userCircleNormals;
   std::vector<CadArc>           userArcs;
   std::vector<EntityAttributes> userArcAttrs;
   std::vector<CadEllipse>       userEllipses;
@@ -993,6 +998,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> userLineAttrs;
   std::vector<float>            userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
+  /// Circle plane normals, 3 floats each (REQ-312) - see AppCommandState::userCircleNormals.
+  std::vector<float>            userCircleNormals;
   std::vector<CadArc>           userArcs;
   std::vector<EntityAttributes> userArcAttrs;
   std::vector<CadEllipse>       userEllipses;
@@ -1956,9 +1963,17 @@ struct AppCommandState {
 
   /// Each circle: center X, center Y, center Z, radius (world units) — stride 4 (REQ-057 /
   /// ADR-025 (a)). The centre's XYZ is contiguous so it reads like a point; the radius trails it.
-  /// Z is absolute (ADR-025 D2) and the circle's plane stays parallel to XY, matching CadArc::z.
+  /// Z is absolute (ADR-025 D2). The circle lies in world XY unless `userCircleNormals`
+  /// says otherwise (REQ-312), matching CadArc.
   std::vector<float> userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
+  /// Plane normal per circle, 3 floats each (REQ-312) - parallel to `userCirclesCxCyZR` the way
+  /// `userCircleAttrs` already is, and maintained at the same sites. A side-car rather than a
+  /// wider stride because that 4-float stride is read directly at roughly 300 call sites and a
+  /// stride mistake in a flat float array is silent (D-2026-08-31-f). World +Z is the default,
+  /// which is every circle that existed before this field; `docinvariants` checks the count, so a
+  /// desynchronised insert or erase fails loudly rather than mis-orienting a circle (REQ-204).
+  std::vector<float> userCircleNormals;
   std::vector<CadArc> userArcs;
   std::vector<EntityAttributes> userArcAttrs;
   std::vector<CadEllipse> userEllipses;

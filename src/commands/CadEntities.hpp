@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -364,11 +366,131 @@ struct CadArc {
   float r = 0.f;
   float startRad = 0.f;
   float sweepRad = 0.f;
-  /// Elevation of the arc's plane (REQ-057 / ADR-025). The arc stays parallel to XY — a
-  /// tilted arc would need a plane normal, which no accepted requirement asks for. Absolute
-  /// (ADR-025 D2). Always 0 in paper space (ADR-025 (g)).
+  /// Elevation of the arc plane (REQ-057 / ADR-025). Absolute (ADR-025 D2), always 0 in paper
+  /// space (ADR-025 (g)). On a tilted arc this is the CENTRE point of the plane, not an
+  /// elevation every point on the arc shares.
   float z = 0.f;
+  /// Plane normal (REQ-312). World +Z is the flat case, which is every arc that existed before
+  /// this field, and `ucs::FromNormal` maps a +Z normal onto the world X and Y axes exactly -- so
+  /// `startRad` and `sweepRad` keep the meaning they have always had and a flat arc stays
+  /// bit-identical through save and reload. A tilted arc measures those same two angles in the
+  /// plane `ucs::FromNormal({cx, cy, z}, {nx, ny, nz})` gives -- the Arbitrary Axis Algorithm, so a
+  /// DXF consumer that rebuilds the frame from group 210 lands on the same points. Paper space is
+  /// 2D (ADR-025 (g)) and stays +Z there.
+  float nx = 0.f;
+  float ny = 0.f;
+  float nz = 1.f;
 };
+
+// ---------------------------------------------------------------------------------------------
+// Curve plane normals (REQ-312).
+//
+// An arc carries its normal in the struct above. A circle cannot: the circle store is a flat
+// 4-float quad read directly at roughly 300 call sites, so the normal rides in a side-car
+// std::vector<float> of 3 floats per circle, parallel to the quads the way the attribute array
+// already is (D-2026-08-31-f). Roughly forty call sites append or erase a circle and every one of
+// them has to keep the pairing, so the helpers below exist to make that one line rather than three.
+// ---------------------------------------------------------------------------------------------
+
+/// World +Z: the plane every arc and circle lay in before REQ-312, and the default for a new one.
+inline constexpr float kFlatNormalX = 0.f;
+inline constexpr float kFlatNormalY = 0.f;
+inline constexpr float kFlatNormalZ = 1.f;
+
+/// True when a normal is world +Z exactly.
+///
+/// Exact comparison, deliberately. This is the test that decides whether `.gs` writes a normal key
+/// at all, and a legacy drawing has to re-save byte-identically -- a tolerance here would let a
+/// normal that is 1e-9 off +Z re-save as flat, which is a silent edit to the user's file.
+[[nodiscard]] inline bool IsFlatNormal(float nx, float ny, float nz) {
+  return nx == kFlatNormalX && ny == kFlatNormalY && nz == kFlatNormalZ;
+}
+
+/// Append one circle's normal. Call wherever a quad is appended to the circle store.
+inline void PushCircleNormal(std::vector<float>& normals, float nx = kFlatNormalX,
+                             float ny = kFlatNormalY, float nz = kFlatNormalZ) {
+  normals.push_back(nx);
+  normals.push_back(ny);
+  normals.push_back(nz);
+}
+
+/// Erase circle \p index's normal. Call wherever a quad is erased from the circle store.
+inline void EraseCircleNormal(std::vector<float>& normals, size_t index) {
+  if (index * 3 + 3 > normals.size())
+    return;
+  const auto begin = normals.begin() + static_cast<std::ptrdiff_t>(index * 3);
+  normals.erase(begin, begin + 3);
+}
+
+/// Circle \p index's normal components, or world +Z when the side-car is short.
+///
+/// A short side-car is a defect, and `docinvariants` reports it loudly (REQ-204). Returning the
+/// flat default here means a READ never faults on one, so the invariant check stays the thing that
+/// tells you about it rather than a crash somewhere unrelated.
+inline void CircleNormalAt(const std::vector<float>& normals, size_t index, float* nx, float* ny,
+                           float* nz) {
+  const bool have = index * 3 + 3 <= normals.size();
+  if (nx)
+    *nx = have ? normals[index * 3 + 0] : kFlatNormalX;
+  if (ny)
+    *ny = have ? normals[index * 3 + 1] : kFlatNormalY;
+  if (nz)
+    *nz = have ? normals[index * 3 + 2] : kFlatNormalZ;
+}
+
+/// True when circle \p index lies in a plane parallel to world XY.
+[[nodiscard]] inline bool CircleIsFlat(const std::vector<float>& normals, size_t index) {
+  float nx = 0.f, ny = 0.f, nz = 1.f;
+  CircleNormalAt(normals, index, &nx, &ny, &nz);
+  return IsFlatNormal(nx, ny, nz);
+}
+
+/// Grow or shrink the side-car to match \p circleCount circles, filling new entries with world +Z.
+///
+/// The migration path for a `.gs` written before REQ-312, and the repair a loader applies before
+/// the document is handed to anything that reads a normal.
+inline void EnsureCircleNormals(std::vector<float>& normals, size_t circleCount) {
+  const size_t want = circleCount * 3;
+  if (normals.size() > want) {
+    normals.resize(want);
+    return;
+  }
+  while (normals.size() < want)
+    PushCircleNormal(normals);
+}
+
+/// A curve plane normal (REQ-312) put through the same planar transform its entity centre gets.
+///
+/// A normal is a direction, so it ignores the translation half of the transform: the rotation runs
+/// about the origin, and the reflection is about a line through the origin at the mirror line's own
+/// angle. The reflection uses the SAME 2*phi - theta rule the arc sweep already reflects by, written
+/// as its matrix -- so a mirrored arc's plane and its swept range cannot end up disagreeing about
+/// which way the mirror faced.
+///
+/// World +Z is a fixed point of both, which is why nothing needed either of these until arcs and
+/// circles could tilt.
+inline void RotateNormalAboutZ(float rad, float* nx, float* ny) {
+  if (!nx || !ny)
+    return;
+  const float c = std::cos(rad);
+  const float s = std::sin(rad);
+  const float dx = *nx;
+  const float dy = *ny;
+  *nx = c * dx - s * dy;
+  *ny = s * dx + c * dy;
+}
+
+inline void ReflectNormalAcrossLine(float x0, float y0, float x1, float y1, float* nx, float* ny) {
+  if (!nx || !ny)
+    return;
+  const float phi = std::atan2(y1 - y0, x1 - x0);
+  const float c = std::cos(2.f * phi);
+  const float s = std::sin(2.f * phi);
+  const float dx = *nx;
+  const float dy = *ny;
+  *nx = c * dx + s * dy;
+  *ny = s * dx - c * dy;
+}
 
 /// Axis-aligned ellipse: center + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1].
 struct CadEllipse {

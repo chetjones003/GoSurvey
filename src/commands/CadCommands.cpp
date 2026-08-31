@@ -93,6 +93,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.userLineAttrs          = cmd.userLineAttrs;
   doc.userCirclesCxCyZR       = cmd.userCirclesCxCyZR;
   doc.userCircleAttrs        = cmd.userCircleAttrs;
+  doc.userCircleNormals      = cmd.userCircleNormals;
   doc.userArcs               = cmd.userArcs;
   doc.userArcAttrs           = cmd.userArcAttrs;
   doc.userEllipses           = cmd.userEllipses;
@@ -176,6 +177,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.userLineAttrs              = doc.userLineAttrs;
   cmd.userCirclesCxCyZR           = doc.userCirclesCxCyZR;
   cmd.userCircleAttrs            = doc.userCircleAttrs;
+  cmd.userCircleNormals          = doc.userCircleNormals;
   cmd.userArcs                   = doc.userArcs;
   cmd.userArcAttrs               = doc.userArcAttrs;
   cmd.userEllipses               = doc.userEllipses;
@@ -1477,6 +1479,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.userLineAttrs        = st.userLineAttrs;
   snap.userCirclesCxCyZR     = st.userCirclesCxCyZR;
   snap.userCircleAttrs      = st.userCircleAttrs;
+  snap.userCircleNormals    = st.userCircleNormals;
   snap.userArcs             = st.userArcs;
   snap.userArcAttrs         = st.userArcAttrs;
   snap.userEllipses         = st.userEllipses;
@@ -1517,6 +1520,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.userLineAttrs        = snap.userLineAttrs;
   st.userCirclesCxCyZR     = snap.userCirclesCxCyZR;
   st.userCircleAttrs      = snap.userCircleAttrs;
+  st.userCircleNormals    = snap.userCircleNormals;
   st.userArcs             = snap.userArcs;
   st.userArcAttrs         = snap.userArcAttrs;
   st.userEllipses         = snap.userEllipses;
@@ -6653,6 +6657,7 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
     st.userCirclesCxCyZR.push_back(CadCommitElevation(st));
     st.userCirclesCxCyZR.push_back(r);
     st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+    PushCircleNormal(st.userCircleNormals);
   }
   BumpCadGpuCache(st);
   ResetCircleDraft(st);
@@ -7847,6 +7852,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
   std::vector<EntityAttributes> newCircleAttrs;
+  std::vector<float> newCircleNormals;   // REQ-312, one 3-float normal per new circle
   std::vector<CadAnnotation> newAnn;
   std::vector<EntityAttributes> newAnnAttrs;
   std::vector<CadTable> newTables;
@@ -7895,6 +7901,9 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
+        float nnx = 0.f, nny = 0.f, nnz = 1.f;
+        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        PushCircleNormal(newCircleNormals, nnx, nny, nnz);
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -7998,6 +8007,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
   st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(),
+                              newCircleNormals.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
   st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
@@ -8051,6 +8062,9 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
     st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 2]);
     st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 3]);
     st.userCircleAttrs.push_back(cb.circleAttrs[i / 4]);
+    float pnx = 0.f, pny = 0.f, pnz = 1.f;
+    CircleNormalAt(cb.circleNormals, i / 4, &pnx, &pny, &pnz);
+    PushCircleNormal(st.userCircleNormals, pnx, pny, pnz);
     st.selection.push_back({ST::Circle, static_cast<int>(st.userCircleAttrs.size()) - 1});
   }
   for (size_t i = 0; i < cb.arcs.size(); ++i) {
@@ -8291,6 +8305,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
   std::vector<EntityAttributes> newCircleAttrs;
+  std::vector<float> newCircleNormals;   // REQ-312, one 3-float normal per new circle
   std::vector<CadAnnotation> newAnn;
   std::vector<EntityAttributes> newAnnAttrs;
   std::vector<CadTable> newTables;
@@ -8340,6 +8355,10 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
+        float nnx = 0.f, nny = 0.f, nnz = 1.f;
+        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        RotateNormalAboutZ(rad, &nnx, &nny);   // REQ-312: the plane turns with the circle
+        PushCircleNormal(newCircleNormals, nnx, nny, nnz);
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -8412,6 +8431,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         CadArc a = st.userArcs[k];
         RotateAroundBase(bx, by, rad, &a.cx, &a.cy);
         a.startRad += rad;
+        RotateNormalAboutZ(rad, &a.nx, &a.ny);   // REQ-312: the arc plane turns with the arc
         newArcs.push_back(a);
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
@@ -8470,6 +8490,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
   st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(),
+                              newCircleNormals.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
   st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
@@ -8617,6 +8639,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
   std::vector<EntityAttributes> newCircleAttrs;
+  std::vector<float> newCircleNormals;   // REQ-312, one 3-float normal per new circle
   std::vector<CadAnnotation> newAnn;
   std::vector<EntityAttributes> newAnnAttrs;
   std::vector<CadTable> newTables;
@@ -8666,6 +8689,10 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
+        float nnx = 0.f, nny = 0.f, nnz = 1.f;
+        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        ReflectNormalAcrossLine(x0, y0, x1, y1, &nnx, &nny);   // REQ-312: the plane mirrors too
+        PushCircleNormal(newCircleNormals, nnx, nny, nnz);
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -8763,6 +8790,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         const float newStart = ReflectAngleAcrossLine(x0, y0, x1, y1, a.startRad + a.sweepRad);
         ReflectPtAcrossLine(x0, y0, x1, y1, &a.cx, &a.cy);
         a.startRad = newStart;
+        ReflectNormalAcrossLine(x0, y0, x1, y1, &a.nx, &a.ny);   // REQ-312: so does the plane
         newArcs.push_back(a);
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
@@ -8821,6 +8849,8 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
   st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
   st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(),
+                              newCircleNormals.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
   st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
@@ -10655,6 +10685,9 @@ static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::
   st.userCirclesCxCyZR.push_back(cz);  // the offset copy stays on the source circle's plane
   st.userCirclesCxCyZR.push_back(nr);
   PushOffsetCopyAttrs(st, st.userCircleAttrs, ci);
+  float onx = 0.f, ony = 0.f, onz = 1.f;
+  CircleNormalAt(st.userCircleNormals, static_cast<size_t>(ci), &onx, &ony, &onz);
+  PushCircleNormal(st.userCircleNormals, onx, ony, onz);   // concentric: same plane (REQ-312)
   BumpCadGpuCache(st);
   return true;
 }
@@ -12039,6 +12072,7 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
       cb.circlesCxCyZR.push_back(0.f);
       cb.circlesCxCyZR.push_back(L.paperCircles[k + 2]);  // radius
       cb.circleAttrs.push_back(attrAt(L.paperCircleAttrs, r.index));
+      PushCircleNormal(cb.circleNormals);   // a sheet is 2D (ADR-025 (g)): the plane is world XY
       expandBbox(L.paperCircles[k], L.paperCircles[k + 1]);
       break;
     }
@@ -12162,6 +12196,9 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       cb.circlesCxCyZR.push_back(st.userCirclesCxCyZR[k + 3]);
       cb.circleAttrs.push_back(static_cast<size_t>(e.index) < st.userCircleAttrs.size()
                                    ? st.userCircleAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
+      float ccx = 0.f, ccy = 0.f, ccz = 1.f;
+      CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &ccx, &ccy, &ccz);
+      PushCircleNormal(cb.circleNormals, ccx, ccy, ccz);
       expandBbox(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1]);
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
@@ -13628,6 +13665,8 @@ static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint&
     return;
   const float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
   const float z = st.userCirclesCxCyZR[k + 2], r = st.userCirclesCxCyZR[k + 3];
+  float bnx = 0.f, bny = 0.f, bnz = 1.f;   // read before the erase below drops the side-car entry
+  CircleNormalAt(st.userCircleNormals, static_cast<size_t>(index), &bnx, &bny, &bnz);
   float startRad = 0.f, sweepRad = 0.f;
   CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
   const EntityAttributes srcAttrs =
@@ -13639,11 +13678,15 @@ static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint&
                              st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
   if (static_cast<size_t>(index) < st.userCircleAttrs.size())
     st.userCircleAttrs.erase(st.userCircleAttrs.begin() + index);
+  EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(index));
   CadArc a{};
   a.cx = cx;
   a.cy = cy;
   a.r = r;
   a.z = z;
+  a.nx = bnx;   // the arc inherits the circle plane it was cut out of (REQ-312)
+  a.ny = bny;
+  a.nz = bnz;
   a.startRad = startRad;
   a.sweepRad = sweepRad;
   st.userArcs.push_back(a);
@@ -18993,6 +19036,9 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  // The normal side-car is repaired the same way, but growing it is not a NEW attribute: a
+  // missing normal is the flat default, not a fresh entity, so it does not set grew.
+  EnsureCircleNormals(st.userCircleNormals, nc);
   while (st.userArcAttrs.size() < st.userArcs.size()) {
     st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -19728,6 +19774,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.userLineAttrs.clear();
   st.userCirclesCxCyZR.clear();
   st.userCircleAttrs.clear();
+  st.userCircleNormals.clear();
   st.userArcs.clear();
   st.userArcAttrs.clear();
   st.userEllipses.clear();
@@ -20095,6 +20142,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
                                st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
     if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(idx));
   }
 
   std::vector<int> av(annIx.begin(), annIx.end());
@@ -20282,6 +20330,7 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
                                st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
     if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(idx));
   }
 
   std::vector<int> av(annIx.begin(), annIx.end());
@@ -22550,13 +22599,15 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // =========================================================================
   {
     const size_t nC = st.userCirclesCxCyZR.size() / 4;
-    struct Circ { float cx, cy, z, r; EntityAttributes attr; };
+    struct Circ { float cx, cy, z, r, nx, ny, nz; EntityAttributes attr; };
     std::vector<Circ> cs;
     cs.reserve(nC);
     for (size_t i = 0; i < nC; ++i) {
       const size_t k = i * 4;
+      float cnx = 0.f, cny = 0.f, cnz = 1.f;
+      CircleNormalAt(st.userCircleNormals, i, &cnx, &cny, &cnz);
       cs.push_back({ st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 2],
-                     st.userCirclesCxCyZR[k + 3],
+                     st.userCirclesCxCyZR[k + 3], cnx, cny, cnz,
                      i < st.userCircleAttrs.size() ? st.userCircleAttrs[i] : MakeNewEntityAttrs(st) });
     }
     // Sort by radius then center; allows early break on radius mismatch
@@ -22575,11 +22626,15 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
         // elevations are distinct objects in 3D, not duplicates (REQ-057).
         const float dx = cs[j].cx - cs[i].cx, dy = cs[j].cy - cs[i].cy, dz = cs[j].z - cs[i].z;
         const float dr = cs[j].r  - cs[i].r;
+        // Two circles sharing a centre and a radius but lying in different planes are distinct
+        // objects, not duplicates (REQ-312) - the same reasoning Z already gets just above.
+        if (cs[j].nx != cs[i].nx || cs[j].ny != cs[i].ny || cs[j].nz != cs[i].nz) continue;
         if (dx * dx + dy * dy + dz * dz < tolSq && dr * dr < tolSq) { dead[j] = true; ++nRemoved; }
       }
     }
     st.userCirclesCxCyZR.clear();
     st.userCircleAttrs.clear();
+    st.userCircleNormals.clear();
     for (size_t i = 0; i < cs.size(); ++i) {
       if (!dead[i]) {
         st.userCirclesCxCyZR.push_back(cs[i].cx);
@@ -22587,6 +22642,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
         st.userCirclesCxCyZR.push_back(cs[i].z);
         st.userCirclesCxCyZR.push_back(cs[i].r);
         st.userCircleAttrs.push_back(cs[i].attr);
+        PushCircleNormal(st.userCircleNormals, cs[i].nx, cs[i].ny, cs[i].nz);
       }
     }
   }

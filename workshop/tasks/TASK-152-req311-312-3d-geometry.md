@@ -110,7 +110,7 @@ normal" — no new command is needed.
     zero diff.
 - Steps:
   - [x] 1. Plane contract on `ucs::Ucs` + `[req311]` tests, negative-tested.
-  - [ ] 2. Normal on `CadArc` and the circle side-car; invariant check; default +Z everywhere.
+  - [x] 2. Normal on `CadArc` and the circle side-car; invariant check; default +Z everywhere.
   - [ ] 3. Author on the active UCS work plane (CIRCLE, ARC).
   - [ ] 4. Render / hit test / snap through the one parametrisation.
   - [ ] 5. DXF group 210 out and in.
@@ -131,6 +131,50 @@ normal" — no new command is needed.
 - 2026-08-31 Step 1 done. Plane contract added to `src/util/ucs.hpp`; 7 cases / 90 assertions in
   `UcsTests [req311]` green. Negative-tested by flipping the sign in the parametrisation-agreement
   case: it fails with `10.9172901608 == Approx( -10.9172901608 )`, then restored.
+
+- 2026-08-31 Step 2 done. `CadArc` gains `nx/ny/nz` (default +Z); circles gain a `userCircleNormals`
+  side-car in all four stores (`AppCommandState`, `DrawingDocument`, `DrawingGeometrySnapshot`,
+  `CadClipboard`) plus `CadBlockContent::circleNormals`, so BLOCK/BEDIT cannot silently flatten a
+  tilted circle. Helpers live beside `CadArc` in `CadEntities.hpp`: `PushCircleNormal`,
+  `EraseCircleNormal`, `CircleNormalAt`, `CircleIsFlat`, `EnsureCircleNormals`, and `IsFlatNormal`
+  — exact comparison, deliberately: a tolerance there would let a normal 1e-9 off +Z re-save as
+  flat, which is a silent edit to the user's file. Plus the two transforms `RotateNormalAboutZ` and
+  `ReflectNormalAcrossLine`.
+
+  Wired at every site that already maintains `userCircleAttrs`: document↔state, undo snapshot,
+  CIRCLE commit, clipboard copy/paste (both spaces), COPY/ROTATE/MIRROR duplication, OFFSET, BREAK
+  (the arc inherits the circle plane it was cut out of), ALIGN, OVERKILL, both DELETE paths, BEDIT,
+  `EnsureAttrCounts`, `.gs` load, and the DXF/DWG importers. ROTATE, MIRROR and ALIGN **transform**
+  the normal rather than copying it — invisible today because every normal is +Z, and a defect the
+  moment step 3 lands.
+
+  OVERKILL now treats two circles sharing a centre and radius but lying in different planes as
+  distinct objects rather than duplicates — the same reasoning Z already got there.
+
+  ASSUMPTION-3: the reflection helper uses the same `2*phi - theta` rule `ReflectAngleAcrossLine`
+  already reflects an arc sweep by, written as its matrix.
+  - Because:       a mirrored arc's plane and its swept range must agree about which way the mirror
+                   faced; deriving them separately is how they drift apart.
+  - Risk if wrong: a mirrored tilted arc renders on the right plane but sweeps the wrong way.
+  - Validate by:   step 4's tilted-arc mirror case, which cannot be written until step 3 makes a
+                   tilted arc authorable.
+
+  First run: 5 red — the `docinvariants` fixtures that hand-build a circle. That is the new check
+  doing its job (`circle normals: 1 entities but 0 attribute rows`), not a regression; the shared
+  `GoodDrawing()` fixture now carries a +Z normal. Three negative tests added for the side-car
+  itself: a short stride, a circle with no normal, and a normal outliving its circle.
+
+  Suite: **854/854 ctest green**, including `headless.fuzz-smoke` (REQ-204) and
+  `headless.undo-redo-identity`.
+
+  Deferred out of this step, deliberately: block circle tessellation (`cadblock.hpp`,
+  `CadBlockFlattenToWorldSegs`) still draws a block circle in the XY plane. It moves to the shared
+  parametrisation in step 4 alongside the model renderer, so that decision is made in one place.
+
+- 2026-08-31 Found while wiring ALIGN, **not part of this task**: `CadCommands_Align.cpp`'s
+  selective filter tests `sCircles.count(i / 3)` against a stride-4 circle store, so a selective
+  ALIGN transforms the wrong circles. Pre-existing and unrelated to REQ-312; left alone to keep this
+  PR to one issue. Raised with the user for a call on where it gets filed.
 
 ## 9. Self-verification
 - [ ] build-project

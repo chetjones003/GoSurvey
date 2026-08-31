@@ -111,6 +111,11 @@ struct CadBlockContent {
   std::vector<float> circles;
   std::vector<EntityAttributes> circleAttrs;
   std::vector<std::string> circleVis;
+  /// Plane normal per circle, 3 floats each (REQ-312) - the block-definition counterpart of
+  /// AppCommandState::userCircleNormals, and a third parallel array beside circleAttrs/circleVis
+  /// exactly as those two already are. Stored so that BLOCK and BEDIT cannot silently flatten a
+  /// tilted circle on the way in or out (REQ-201).
+  std::vector<float> circleNormals;
   std::vector<CadArc> arcs;
   std::vector<EntityAttributes> arcAttrs;
   std::vector<CadEllipse> ellipses;

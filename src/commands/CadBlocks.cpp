@@ -119,6 +119,9 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
       if (static_cast<size_t>(e.index) < st.userCircleAttrs.size())
         a = st.userCircleAttrs[static_cast<size_t>(e.index)];
       c->circleAttrs.push_back(a);
+      float bnx = 0.f, bny = 0.f, bnz = 1.f;
+      CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &bnx, &bny, &bnz);
+      PushCircleNormal(c->circleNormals, bnx, bny, bnz);
       c->circleVis.push_back("");
     } else if (e.type == SelectedEntity::Type::Annotation) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadAnnotations.size())
@@ -173,6 +176,8 @@ void CadBlockCaptureDrawing(const AppCommandState& st, CadBlockContent* c) {
   c->circles = st.userCirclesCxCyZR;
   c->circleAttrs = st.userCircleAttrs;
   c->circleVis.assign(st.userCircleAttrs.size(), "");
+  c->circleNormals = st.userCircleNormals;
+  EnsureCircleNormals(c->circleNormals, st.userCirclesCxCyZR.size() / 4);
   c->arcs = st.userArcs;
   c->arcAttrs = st.userArcAttrs;
   c->ellipses = st.userEllipses;
@@ -205,6 +210,8 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.userCirclesCxCyZR    = c.circles;
   st.userCircleAttrs      = c.circleAttrs;
   st.userCircleAttrs.resize(c.circles.size() / 4);
+  st.userCircleNormals    = c.circleNormals;
+  EnsureCircleNormals(st.userCircleNormals, c.circles.size() / 4);
   st.userArcs             = c.arcs;
   st.userArcAttrs         = c.arcAttrs;
   st.userArcAttrs.resize(c.arcs.size());
@@ -251,6 +258,8 @@ void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockCont
   c->circleAttrs = st.userCircleAttrs;
   c->circleAttrs.resize(st.userCirclesCxCyZR.size() / 4);
   c->circleVis.assign(st.userCirclesCxCyZR.size() / 4, "");
+  c->circleNormals = st.userCircleNormals;
+  EnsureCircleNormals(c->circleNormals, st.userCirclesCxCyZR.size() / 4);
   c->arcs = st.userArcs;
   c->arcAttrs = st.userArcAttrs;
   c->arcAttrs.resize(st.userArcs.size());
@@ -427,6 +436,7 @@ void EraseSelectedSources(AppCommandState& st) {
                                  st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(o + 4));
     if (static_cast<size_t>(k) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + k);
+    EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(k));
   }
   dedup(anns);
   for (int i = static_cast<int>(anns.size()) - 1; i >= 0; --i) {

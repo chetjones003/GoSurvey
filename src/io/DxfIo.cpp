@@ -866,6 +866,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       st.userCirclesCxCyZR.push_back(static_cast<float>(cz));  // group 30 (REQ-057), unrebased
       st.userCirclesCxCyZR.push_back(static_cast<float>(rad));
       st.userCircleAttrs.push_back(at);
+      PushCircleNormal(st.userCircleNormals);   // REQ-312: group 210 is read below
       return;
     }
     constexpr int nseg = 64;
