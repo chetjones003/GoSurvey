@@ -41,10 +41,21 @@
   - Incremental after touching `CadCommands.cpp`: ~9 s (was the same at 28 k lines; the win grows
     as more slices land — touching one slice recompiles ~500 lines, and the slices compile in
     parallel instead of serialized inside one `cl.exe`).
-  - Not started: `src/ui/CadUi.cpp` (~19 k) split; further `CadCommands.cpp` slices. Next
-    candidates (`ExecuteOverkill`, `ExecuteExtractCommand`, SURFSTYLE) each call the
-    `ErasePolylineByIndex` / erase-helper family — promote that family to `CadCommandsInternal.hpp`
-    the same way before extracting them.
+  - Further `CadCommands.cpp` slices — analysed, deferred: `ExecuteOverkill` (~410 ln) needs
+    `ErasePolylineByIndex` + `MakeNewEntityAttrs` (latter done); `ExecuteExtractCommand` (~215 ln)
+    needs the layer-name helper cluster (`ValidNewLayerNameChars`, `LayerNameExistsCi`, …) plus
+    surface helpers. Each is one more helper-promotion pass on `CadCommandsInternal.hpp` before
+    the slice.
+  - `src/ui/CadUi.cpp` (~19 k) — analysed: the big `Draw*` panels are global and declared in
+    `CadUi.hpp`, so the seams exist. Best first slice = the Properties panel: the `5735–7831`
+    anonymous namespace + `DrawPaperEntityProps` + `DrawPropertiesPanel` (~2665 ln, contiguous).
+    It calls ~30 non-ImGui helpers (`ActiveTextStyle`, `AnnAttr`/`ArcAttr`/… attr accessors,
+    `Apply*ToSelection`, `Collect*`, `DrawColorPickerRow`, `FillPropPanelEmpty`, …) — need to
+    sort which are `CadUiStyleWidgets.hpp` / other-header vs. CadUi.cpp file-local statics, and
+    promote the latter to a `CadUi_internal.hpp` the same way `CadCommandsInternal.hpp` was built.
+    That mapping is the next session's task.
+  - `DrawDrawingViewport` (~6200 ln, the single largest region) and `DrawRibbonBar` (~2400 ln)
+    are the biggest prizes but the most entangled — after Properties proves the CadUi pattern.
 - Out of scope (own follow-up tasks):
   - Phase 3 — `OBJECT`-library de-duplication of `GOSURVEY_DOMAIN_SOURCES` compiled by
     `GoSurveyTests` etc. Touches the ADR-002/031/040 link boundaries; separate task + review.
