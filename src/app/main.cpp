@@ -642,8 +642,16 @@ int main()
     // WantTextInput never interferes with typing a command.
     if (ImGui::IsKeyPressed(ImGuiKey_F3, false))
       cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
-    if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
+    if (ImGui::IsKeyPressed(ImGuiKey_F8, false)) {
       orthoEnabled = !orthoEnabled;
+      if (orthoEnabled)
+        cmd.polarMode = false;  // ORTHO and POLAR are mutually exclusive (issue #154)
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_F10, false)) {
+      cmd.polarMode = !cmd.polarMode;
+      if (cmd.polarMode)
+        orthoEnabled = false;
+    }
     cmd.orthoMode = orthoEnabled;
 
     // Ctrl+S (BUG-026). The File menu has always ADVERTISED this shortcut, but ImGui's MenuItem

@@ -8396,7 +8396,8 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
 
 namespace {
 
-static bool gPolarTrackingEnabled = false;
+// AutoCAD's default polar increments, offered in the POLAR status-bar popup (issue #154).
+constexpr double kPolarIncrementChoices[] = {90.0, 45.0, 30.0, 22.5, 18.0, 15.0, 10.0, 5.0};
 
 void PushModeToggleButtonColors(bool on, int themeIdx) {
   (void)themeIdx;
@@ -9327,8 +9328,11 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
     if (ortho_mode_enabled) {
       const bool on = *ortho_mode_enabled;
       PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
-      if (ImGui::Button("ORTHO", ImVec2(0.f, statusBtnH)))
+      if (ImGui::Button("ORTHO", ImVec2(0.f, statusBtnH))) {
         *ortho_mode_enabled = !*ortho_mode_enabled;
+        if (*ortho_mode_enabled)
+          cmd.polarMode = false;  // ORTHO and POLAR are mutually exclusive (issue #154)
+      }
       PopModeToggleButtonColors(on);
       ItemHelpTooltip("Ortho mode — constrain to horizontal / vertical (F8)");
       ImGui::SameLine(0, sp);
@@ -9343,12 +9347,46 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
       ImGui::SameLine(0, sp);
     }
     {
-      const bool on = gPolarTrackingEnabled;
+      const bool on = cmd.polarMode;
       PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
-      if (ImGui::Button("POLAR", ImVec2(0.f, statusBtnH)))
-        gPolarTrackingEnabled = !gPolarTrackingEnabled;
+      if (ImGui::Button("POLAR", ImVec2(0.f, statusBtnH))) {
+        cmd.polarMode = !cmd.polarMode;
+        if (cmd.polarMode && ortho_mode_enabled)
+          *ortho_mode_enabled = false;  // mutually exclusive (issue #154)
+      }
       PopModeToggleButtonColors(on);
-      ItemHelpTooltip("Polar tracking (UI only for now)");
+      ItemHelpTooltip("Polar tracking — snap to increment angles in the current UCS (F10); "
+                      "right-click to set the angle");
+      // DSETTINGS-style configuration: increment angle + additional one-off angles (issue #154 AC-2).
+      if (ImGui::BeginPopupContextItem("polar_angles", ImGuiPopupFlags_MouseButtonRight)) {
+        ImGui::TextDisabled("Increment angle");
+        ImGui::Separator();
+        for (double choice : kPolarIncrementChoices) {
+          char lbl[16];
+          std::snprintf(lbl, sizeof(lbl), "%g\xC2\xB0", choice);
+          if (ImGui::RadioButton(lbl, std::fabs(cmd.polarIncrementDeg - choice) < 1e-6))
+            cmd.polarIncrementDeg = choice;
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Additional angles");
+        for (size_t i = 0; i < cmd.polarExtraAnglesDeg.size();) {
+          ImGui::PushID(static_cast<int>(i));
+          float v = static_cast<float>(cmd.polarExtraAnglesDeg[i]);
+          ImGui::SetNextItemWidth(80.f);
+          if (ImGui::InputFloat("##ang", &v, 0.f, 0.f, "%.2f"))
+            cmd.polarExtraAnglesDeg[i] = v;
+          ImGui::SameLine();
+          const bool del = ImGui::SmallButton("x");
+          ImGui::PopID();
+          if (del)
+            cmd.polarExtraAnglesDeg.erase(cmd.polarExtraAnglesDeg.begin() + static_cast<std::ptrdiff_t>(i));
+          else
+            ++i;
+        }
+        if (ImGui::SmallButton("Add angle"))
+          cmd.polarExtraAnglesDeg.push_back(0.0);
+        ImGui::EndPopup();
+      }
       ImGui::SameLine(0, sp);
     }
 #ifdef GOSURVEY_DEVELOPER_SHELL
@@ -17139,6 +17177,67 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     wdl->AddLine(ImVec2(r, b), ImVec2(l, b), kCad, hair);
     wdl->AddLine(ImVec2(l, b), ImVec2(l, t), kCad, hair);
     wdl->PopClipRect();
+  }
+
+  // ---- POLAR tracking alignment path + readout (issue #154 AC-3) -------------------------------
+  // Only while POLAR is on and a rubber-band draw has an anchor down. The rubber band itself already
+  // snaps to the ray (ApplyOrthoConstrainFromAnchor's polar fall-through); this adds AutoCAD's dashed
+  // alignment path through the anchor and the "distance < angle" tooltip.
+  if (modelSpace && cmd.polarMode && liveHover && outCursorX && outCursorY && !InFloatingModelSpace(cmd)) {
+    const bool haveAnchor =
+        (cmd.active == AppCommandState::Kind::Line &&
+         cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) ||
+        (cmd.active == AppCommandState::Kind::Polyline &&
+         cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint);
+    if (haveAnchor) {
+      const ucs::Ucs frame = CadActiveUcsStorage(cmd);
+      const ray3d::Vec3 anchor{cmd.anchorX, cmd.anchorY, 0.0};
+      const ray3d::Vec3 cursor{*outCursorX, *outCursorY, 0.0};
+      const std::vector<double>& extra = cmd.polarExtraAnglesDeg;
+      const ray3d::Vec3 snapped =
+          ucs::SnapToPolarRay(frame, anchor, cursor, cmd.polarIncrementDeg,
+                              extra.empty() ? nullptr : extra.data(), static_cast<int>(extra.size()));
+      const ray3d::Vec3 d = ray3d::Sub(snapped, anchor);
+      if (ray3d::Length(d) > 1e-9) {
+        const Camera pcam = CadViewCamera(cmd);
+        auto toScreen = [&](const ray3d::Vec3& p) {
+          float sx = 0.f, sy = 0.f;
+          pcam.WorldToScreen(p.x, p.y, cmd.uiCursorWorldZ, avail.x, avail.y, &sx, &sy);
+          return ImVec2(imgPos.x + sx, imgPos.y + sy);
+        };
+        // Extend the ray well past the cursor both ways so it reads as an infinite alignment path.
+        const double reach = 1e6;
+        const ray3d::Vec3 dn = ray3d::Normalize(d);
+        const ImVec2 a0 = toScreen(ray3d::Sub(anchor, ray3d::Scale(dn, reach)));
+        const ImVec2 a1 = toScreen(ray3d::Add(anchor, ray3d::Scale(dn, reach)));
+        ImDrawList* pdl = ImGui::GetWindowDrawList();
+        pdl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
+        // Dashed: short segments along the screen-space line.
+        const float dx = a1.x - a0.x, dy = a1.y - a0.y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        const int seg = std::clamp(static_cast<int>(len / 12.f), 1, 4000);
+        constexpr ImU32 kPolarCol = IM_COL32(120, 235, 140, 200);
+        for (int i = 0; i < seg; i += 2) {
+          const float t0 = static_cast<float>(i) / static_cast<float>(seg);
+          const float t1 = static_cast<float>(i + 1) / static_cast<float>(seg);
+          pdl->AddLine(ImVec2(a0.x + dx * t0, a0.y + dy * t0), ImVec2(a0.x + dx * t1, a0.y + dy * t1), kPolarCol,
+                       1.0f);
+        }
+        double angDeg = 0.0;
+        (void)ucs::AngleInRotationPlaneDeg(frame, 'Z', d, &angDeg);
+        if (angDeg < 0.0)
+          angDeg += 360.0;
+        char rd[80];
+        std::snprintf(rd, sizeof(rd), "%s < %.2f\xC2\xB0",
+                      FormatLinear(ray3d::Length(d), cmd.displayLinearPrecision).c_str(), angDeg);
+        const ImVec2 tp(mouse.x + 16.f, mouse.y + 16.f);
+        const ImVec2 ts = ImGui::CalcTextSize(rd);
+        pdl->AddRectFilled(ImVec2(tp.x - 3.f, tp.y - 2.f), ImVec2(tp.x + ts.x + 3.f, tp.y + ts.y + 2.f),
+                           IM_COL32(20, 28, 22, 220), 3.f);
+        pdl->AddText(tp, IM_COL32(190, 245, 200, 255), rd);
+        pdl->PopClipRect();
+      }
+    }
   }
 
   // ---- REQ-072 analysis legend (TASK-086 §6 (4)) ------------------------------------------------

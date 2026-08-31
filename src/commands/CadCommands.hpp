@@ -1776,6 +1776,13 @@ struct AppCommandState {
   float anchorZ = 0.f;
   /// From UI — ortho constrains LINE segment picks / typed ortho distances toward cursor.
   bool orthoMode = false;
+  /// POLAR tracking (issue #154, REQ-154). Mutually exclusive with \ref orthoMode, as in AutoCAD:
+  /// enabling one clears the other. When on, rubber-band picks snap to the nearest polar ray —
+  /// a multiple of \ref polarIncrementDeg, or one of \ref polarExtraAnglesDeg — measured in the
+  /// active UCS's XY plane from its +X, so a rotated frame rotates the rays with it.
+  bool polarMode = false;
+  double polarIncrementDeg = 90.0;
+  std::vector<double> polarExtraAnglesDeg;
   /// Last drawing viewport cursor (world), updated each frame for LINE ortho distance entry.
   float uiCursorWorldX = 0.f;
   float uiCursorWorldY = 0.f;
@@ -3949,8 +3956,18 @@ bool ParseWorldPointD(const std::string& raw, double* ox, double* oy, bool allow
                       double baseY);
 
 /// If ortho: snaps dx/dy so segment from anchor is horizontal or vertical (CAD-style).
+/// When \p ortho is false but \p st has POLAR tracking on, applies the polar snap instead — the two
+/// share this one entry point so every existing ortho call site picks up polar with no change
+/// (\ref AppCommandState::polarMode is mutually exclusive with ortho).
 void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
                                    bool ortho);
+
+/// POLAR tracking (issue #154, REQ-154): snap the world pick onto the nearest polar ray around the
+/// anchor, measured in the active UCS's XY plane from +X. No-op unless \p polar and
+/// \ref AppCommandState::polarMode. Called from \ref ApplyOrthoConstrainFromAnchor; exposed for the
+/// preview paths that want it explicitly.
+void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool polar);
 
 /// Snap pick onto anchor + t*(ux,uy). Negative \p t allowed unless \p forwardOnly.
 void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx, float lockUy, float* wx, float* wy,

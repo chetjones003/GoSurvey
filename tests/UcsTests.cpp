@@ -287,6 +287,53 @@ TEST_CASE("A tilted work plane gives a click a varying elevation", "[ucs]") {
 }
 
 // ---------------------------------------------------------------------------
+// POLAR tracking (issue #154, REQ-154): snap a pick onto the nearest polar ray,
+// measured in the active UCS's XY plane from +X.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("POLAR snaps to the nearest increment ray under the WCS", "[ucs][polar]") {
+  const Vec3 anchor{10.0, 10.0, 0.0};
+  // A pick roughly north-east but closer to due east: 90 deg increment -> due east.
+  const Vec3 target{40.0, 15.0, 0.0};
+  const Vec3 got = ucs::SnapToPolarRay(Ucs{}, anchor, target, 90.0);
+  // Snapped to due east: Y collapses to the anchor row, the pick distance is preserved (AutoCAD).
+  RequireVec(got, 10.0 + std::hypot(30.0, 5.0), 10.0, 0.0);
+}
+
+TEST_CASE("POLAR 45-degree increment keeps a diagonal pick on the diagonal", "[ucs][polar]") {
+  const Vec3 anchor{0.0, 0.0, 0.0};
+  const Vec3 got = ucs::SnapToPolarRay(Ucs{}, anchor, {10.0, 9.0, 0.0}, 45.0);
+  REQUIRE(got.x == Approx(got.y));  // landed on the 45 deg ray
+}
+
+TEST_CASE("POLAR additional angles win when nearer than any increment", "[ucs][polar]") {
+  const Vec3 anchor{0.0, 0.0, 0.0};
+  const double extra[] = {30.0};
+  // Pick at ~28 deg: nearest 90 deg multiple is 0, but the 30 deg extra angle is closer.
+  const Vec3 got = ucs::SnapToPolarRay(Ucs{}, anchor, {10.0, 5.32, 0.0}, 90.0, extra, 1);
+  double deg = 0.0;
+  REQUIRE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', got, &deg));
+  REQUIRE(deg == Approx(30.0).margin(1e-6));
+}
+
+// AC-6: the headless regression. Under a UCS rotated 45 deg about Z, a 90 deg polar pull must land
+// along the UCS axis, not the world axis.
+TEST_CASE("POLAR follows a rotated UCS: a 90-degree pull lands on the UCS axis", "[ucs][polar]") {
+  const Ucs u = ucs::RotatedAboutZ(Ucs{}, 45.0);
+  const Vec3 anchor{0.0, 0.0, 0.0};
+  // A pick near the UCS +X direction (world 45 deg) but pulled off it.
+  const Vec3 target{7.0, 8.0, 0.0};
+  const Vec3 got = ucs::SnapToPolarRay(u, anchor, target, 90.0);
+
+  // The committed point lies on the UCS +X ray: its UCS-local Y is zero, X is the planar distance.
+  const Vec3 local = ucs::WorldToUcs(u, got);
+  REQUIRE(local.y == Approx(0.0).margin(1e-9));
+  REQUIRE(local.x == Approx(std::hypot(7.0, 8.0)).margin(1e-9));
+  // And it is emphatically NOT on a world axis (that would be y == 0 in world).
+  REQUIRE(got.y > 1.0);
+}
+
+// ---------------------------------------------------------------------------
 // PLAN camera derivation.
 // ---------------------------------------------------------------------------
 
