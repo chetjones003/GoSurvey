@@ -74,6 +74,7 @@ build-project / code-review / testing skills, loop to PASS, completion report.
   mechanism) to exercise the UTF-16LE (`from_version >= R_2007`) path end to end — that path is
   currently covered only by the `DecodeDwgString` unit case. LibreDWG also does not round-trip
   the layer on/off bit through R2000, so that one flag is not asserted in the fixture.
+  **Follow-up issue #160** tracks the remaining R2018-fixture + `tests/` fixture-mechanism work.
 - DEBT-151-b (addressed 2026-08-31): `LibreDwgCad.cpp` `FillFromState` now builds the DWG LAYER
   and LTYPE tables from `st.drawingLayerTable` (name, ACI colour incl. off-layer negative index,
   freeze/lock flag bits, linetype handle) via a `TableWriter` helper, and wires each exported
