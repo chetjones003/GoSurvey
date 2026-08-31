@@ -101,6 +101,11 @@ public:
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
+  /// REQ-308 — write the last-rendered viewport image as a 24-bit BMP, downscaled so its longer
+  /// side is at most \p maxDim. Best-effort: returns false and writes nothing on any failure.
+  /// Call right after RenderScene for the drawing being pictured.
+  [[nodiscard]] bool CaptureThumbnailBmp(const char* pathUtf8, int maxDim) const;
+
 private:
   bool EnsureFramebuffer(int w, int h);
   void DestroyFramebuffer();

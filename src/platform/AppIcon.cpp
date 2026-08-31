@@ -158,6 +158,14 @@ bool LoadAppTextureFromPngFile(const std::filesystem::path& pngPath, AppLogoGpu*
   return LoadPngToGpuTexture(pngPath, nullptr, out, keyNearWhiteBackground);
 }
 
+void DestroyIconTexture(unsigned int& tex) {
+  if (!tex)
+    return;
+  GLuint t = static_cast<GLuint>(tex);
+  glDeleteTextures(1, &t);
+  tex = 0;
+}
+
 void DestroyAppLogoGpu(AppLogoGpu* io) {
   if (!io || !io->texture)
     return;

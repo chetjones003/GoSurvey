@@ -133,7 +133,7 @@ for permission when an update is applied.
 
 ## Layout at a glance
 
-- **Drawing tabs** — Multiple drawings open at once as tabs above the viewport (`Drawing 1`, `+` to add). Each tab is an independent document with its own geometry, layers, survey points, and scale.
+- **Drawing tabs** — Multiple drawings open at once as tabs above the viewport (`Drawing 1`, `+` to add). Each tab is an independent document with its own geometry, layers, survey points, and scale. The first tab is a persistent **Start** screen (recent drawings, links, sign-in status) that cannot be closed.
 - **Drawing viewport** — Pan with the **middle mouse button**. Zoom with the **mouse wheel** (smooth, cursor-centred). A minor grid follows the view. While a command expects a point, **dynamic input** appears at the cursor (see below).
 - **Ribbon** (under the menu bar) — **Draw**, **Modify**, **Annotate**, **Inquiry**, **Survey**, and **View** blocks; hover a button for a short description and command aliases. Layer dropdown on the right.
 - **Properties / Reports** (docked left) — Properties shows layer, color, linetype, lineweight, transparency, and geometry for the current selection (and **default plotted text height** for new TEXT/MTEXT). The **Reports** tab collects ALIGN, traverse, and exported-points reports.

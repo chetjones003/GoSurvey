@@ -1190,8 +1190,10 @@ void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
   char dwgPath[4096]{};
   const std::string& path = cmd.activeDocFilePath;
   if (!path.empty()) {
-    if (SaveDrawingDocument(cmd, path.c_str(), log))
+    if (SaveDrawingDocument(cmd, path.c_str(), log)) {
       cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+      RecordRecentDrawing(cmd, path);
+    }
     return;
   }
   // No path yet (a New drawing, or one opened by file association — see BUG-027). Browse,
@@ -1205,6 +1207,51 @@ void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
   cmd.activeDocFilePath      = std::string(dwgPath);
   if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
     cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::path(dwgPath).stem().string();
+  RecordRecentDrawing(cmd, cmd.activeDocFilePath);
+}
+
+// REQ-055 / REQ-308: append a fresh empty drawing tab after the Start tab and focus it. Shared by
+// File ▸ New, the tab bar's "+", and the Start screen's New button so they cannot drift apart.
+void NewDrawingInTab(AppCommandState& cmd, std::vector<std::string>& log) {
+  SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
+  const int newIdx = static_cast<int>(cmd.drawingTabs.size());
+  cmd.drawingTabs.push_back({"Drawing " + std::to_string(cmd.nextDrawingNumber++), cmd.nextTabUid++});
+  cmd.documents.emplace_back();
+  RestoreDocumentFromSnapshot(cmd, newIdx);  // load empty state into cmd
+  LoadBundledBlockLibrary(cmd, log);
+  cmd.activeDrawingIdx        = newIdx;
+  cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
+  cmd.pendingDrawingTabSwitch = true;
+  cmd.pendingViewportFocus    = true;
+}
+
+// REQ-055 / REQ-308: open \p dwgPathUtf8 (or browse when null) into a new focused tab. Shared by
+// File ▸ Open and the Start screen's Open button / recent-drawing tiles.
+void OpenDrawingInNewTab(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8) {
+  char browsed[4096]{};
+  if (!dwgPathUtf8) {
+    if (!BrowseOpenFileDwgUtf8(browsed, sizeof(browsed)))
+      return;
+    dwgPathUtf8 = browsed;
+  }
+  SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
+  const std::string tabName = std::filesystem::path(dwgPathUtf8).stem().u8string();
+  const int newIdx = static_cast<int>(cmd.drawingTabs.size());
+  cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++});
+  cmd.documents.emplace_back();
+  RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
+  if (OpenDrawingDocument(cmd, dwgPathUtf8, log)) {
+    cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+    cmd.activeDocFilePath      = std::string(dwgPathUtf8);
+    RecordRecentDrawing(cmd, cmd.activeDocFilePath);
+  } else {
+    // REQ-308: a recent entry that no longer opens is dropped from the list.
+    RemoveRecentDrawing(dwgPathUtf8);
+  }
+  cmd.activeDrawingIdx        = newIdx;
+  cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
+  cmd.pendingDrawingTabSwitch = true;
+  cmd.pendingViewportFocus    = true;
 }
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
@@ -1227,35 +1274,13 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 8.f));
   if (ImGui::BeginMenu("File")) {
     if (ImGui::MenuItem("New", nullptr)) {
-      SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
-      const int newIdx = static_cast<int>(cmd.drawingTabs.size());
-      cmd.drawingTabs.push_back({"Drawing " + std::to_string(cmd.nextDrawingNumber++), cmd.nextTabUid++});
-      cmd.documents.emplace_back();
-      RestoreDocumentFromSnapshot(cmd, newIdx);  // load empty state into cmd
-      LoadBundledBlockLibrary(cmd, log);
-      cmd.activeDrawingIdx        = newIdx;
-      cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
-      cmd.pendingDrawingTabSwitch = true;
-      cmd.pendingViewportFocus    = true;
+      NewDrawingInTab(cmd, log);
     }
     if (ImGui::MenuItem("Open", nullptr)) {
-      if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath))) {
-        SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
-        const std::string tabName = std::filesystem::path(dwgPath).stem().string();
-        const int newIdx = static_cast<int>(cmd.drawingTabs.size());
-        cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++});
-        cmd.documents.emplace_back();
-        RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
-        if (OpenDrawingDocument(cmd, dwgPath, log)) {
-          cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-          cmd.activeDocFilePath      = std::string(dwgPath);
-        }
-        cmd.activeDrawingIdx        = newIdx;
-        cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
-        cmd.pendingDrawingTabSwitch = true;
-        cmd.pendingViewportFocus    = true;
-      }
+      OpenDrawingInNewTab(cmd, log, nullptr);
     }
+    // REQ-308: the Start tab has no document to save.
+    ImGui::BeginDisabled(cmd.activeDrawingIdx == 0);
     if (ImGui::MenuItem("Save", "Ctrl+S")) {
       SaveActiveDocument(cmd, log);
     }
@@ -1272,9 +1297,11 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
           if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
             cmd.drawingTabs[cmd.activeDrawingIdx].name =
                 std::filesystem::path(dwgPath).stem().string();
+          RecordRecentDrawing(cmd, cmd.activeDocFilePath);
         }
       }
     }
+    ImGui::EndDisabled();
     ImGui::Separator();
     if (ImGui::MenuItem("Import DXF...", nullptr)) {
       if (BrowseOpenFileDxfUtf8(dxfPath, sizeof(dxfPath)))
@@ -1418,9 +1445,10 @@ static float RibbonPanelContentH(float panelH) {
 
 static void RibbonSectionBegin(const char* childId, const char* title, float width, float height) {
   ImGui::BeginGroup();
-  // Flat panel: same gray as the band, no border. Buttons float on a uniform
-  // strip; the panel title is pinned at the bottom by RibbonSectionEnd.
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
+  // Transparent panel: the raised "panel tray" painted in DrawRibbonBar shows through, so every
+  // section shares one continuous surface. Buttons float on it; the panel title is pinned at the
+  // bottom by RibbonSectionEnd.
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, 0);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 2.f));
   // NoScrollbar alone only hides the bar — a panel whose content is a hair wider than `width`
   // (rounding in colW(), an extra pixel of text) was still wheel-scrollable with no visible bar,
@@ -3261,6 +3289,18 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   ImGui::BeginChild("RibbonStrip", ImVec2(0, height), true,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
+
+  // Top-lit vertical gradient over the flat band so the strip has depth.
+  {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 rMin = ImGui::GetWindowPos();
+    const ImVec2 rMax = ImVec2(rMin.x + ImGui::GetWindowSize().x, rMin.y + ImGui::GetWindowSize().y);
+    dl->AddRectFilledMultiColor(rMin, rMax, HexU32(0x424242), HexU32(0x424242), HexU32(0x2A2A2A),
+                                HexU32(0x2A2A2A));
+    // Bright hairline along the very top, dark hairline along the bottom — frames the band.
+    dl->AddLine(rMin, ImVec2(rMax.x, rMin.y), HexU32(0x555555), 1.f);
+    dl->AddLine(ImVec2(rMin.x, rMax.y - 1.f), ImVec2(rMax.x, rMax.y - 1.f), HexU32(0x1E1E1E), 1.f);
+  }
 
   const bool ribbonPaperSpaceEarly =
       cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
@@ -5186,7 +5226,26 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const RibbonFitResult ribbonFit = DecideRibbonFit(ribbonSpecs, availForTools, secGap);
   const float ribbonToolsW = ribbonSpecs.empty() ? largeW : ribbonFit.width;
 
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
+  // Raised "panel tray" behind the button row so the ribbon reads as a distinct surface floating
+  // on the gradient band, not painted flat onto it. Spans the full panel row (tools + layer strip)
+  // out to the band's right edge.
+  {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const float trayR = 6.f;
+    const float trayX1 = ImGui::GetWindowPos().x + ImGui::GetWindowSize().x - st.WindowPadding.x;
+    const ImVec2 a(p0.x - 3.f, p0.y - 3.f);
+    const ImVec2 b(trayX1, p0.y + panelH + 3.f);
+    // Drop shadow under the tray.
+    dl->AddRectFilled(ImVec2(a.x + 3.f, b.y), ImVec2(b.x + 3.f, b.y + 4.f), HexU32(0x1C1C1C), trayR);
+    // Raised face: lighter, top-lit.
+    dl->AddRectFilledMultiColor(a, b, HexU32(0x4C4C4C), HexU32(0x4C4C4C), HexU32(0x363636),
+                                HexU32(0x363636));
+    // Inner top highlight + outer border for a crisp bevel.
+    dl->AddLine(ImVec2(a.x + trayR, a.y + 1.f), ImVec2(b.x - trayR, a.y + 1.f), HexU32(0x606060), 1.f);
+    dl->AddRect(a, b, HexU32(0x1F1F1F), trayR, 0, 1.5f);
+  }
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, 0);
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(ribbonToolsW, panelH), false,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
@@ -11249,18 +11308,39 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   // Drawing tab bar — each open drawing is a closeable tab; "+" creates a new one.
-  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 3.f));
+  // Give the strip more presence: taller tabs, rounded tops, an accent-blue active tab and a
+  // separator rule under the whole bar so it reads as a distinct band, not part of the viewport.
+  const ImU32 kTabAccent       = HexU32(0x3B6EA5);
+  const ImU32 kTabAccentHover  = HexU32(0x4E86C2);
+  const ImU32 kTabIdle         = HexU32(0x2C2C2C);
+  const ImU32 kTabIdleHover    = HexU32(0x3A3A3A);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.f, 6.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, 5.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 2.f);
+  ImGui::PushStyleColor(ImGuiCol_Tab, kTabIdle);
+  ImGui::PushStyleColor(ImGuiCol_TabHovered, kTabIdleHover);
+  ImGui::PushStyleColor(ImGuiCol_TabActive, kTabAccent);
+  ImGui::PushStyleColor(ImGuiCol_TabUnfocused, kTabIdle);
+  ImGui::PushStyleColor(ImGuiCol_TabUnfocusedActive, HexU32(0x35597D));
+  ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline, kTabAccentHover);
+  ImGui::PushStyleColor(ImGuiCol_Text, HexU32(0xE8E8E8));
+  const ImVec2 tabBarTL = ImGui::GetCursorScreenPos();
   if (ImGui::BeginTabBar("##DrawingTabs",
                          ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll)) {
     for (int i = 0; i < static_cast<int>(cmd.drawingTabs.size()); ++i) {
       bool tabOpen = true;
+      // REQ-308: drawingTabs[0] is the Start screen — pinned first (Leading) and non-closable
+      // (no p_open, so ImGui draws no close button and tabOpen stays true).
+      const bool isStart = (i == 0);
       // SetSelected only fires on the one frame after a programmatic switch (e.g. "+").
       // Applying it every frame would override ImGui's own click handling.
       const bool wantSelect = cmd.pendingDrawingTabSwitch && (i == cmd.activeDrawingIdx);
-      const ImGuiTabItemFlags tflags = wantSelect ? ImGuiTabItemFlags_SetSelected : 0;
+      ImGuiTabItemFlags tflags = wantSelect ? ImGuiTabItemFlags_SetSelected : 0;
+      if (isStart)
+        tflags |= ImGuiTabItemFlags_Leading | ImGuiTabItemFlags_NoReorder;
       // Append "##<uid>" so each tab has a unique ImGui ID even when two tabs share the same display name.
       const std::string tabLabel = cmd.drawingTabs[i].name + "##dt" + std::to_string(cmd.drawingTabs[i].uid);
-      if (ImGui::BeginTabItem(tabLabel.c_str(), &tabOpen, tflags)) {
+      if (ImGui::BeginTabItem(tabLabel.c_str(), isStart ? nullptr : &tabOpen, tflags)) {
         // While a programmatic switch is pending, ignore the selection ImGui reports for any OTHER tab.
         // Tabs are submitted in index order, so the tab that is still selected this frame is reached
         // BEFORE the newly created one — without this guard it overwrote activeDrawingIdx back to itself
@@ -11271,20 +11351,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
         ImGui::EndTabItem();
       }
-      if (!tabOpen && cmd.drawingTabs.size() > 1) {
+      if (!tabOpen && i >= FirstDrawingTabIndex() && cmd.drawingTabs.size() > 2) {
         const int closeIdx  = i;
         const int tabCount  = static_cast<int>(cmd.drawingTabs.size());
 
         // Which tab becomes active after this one closes?
         int newActive = cmd.activeDrawingIdx;
         if (closeIdx == cmd.activeDrawingIdx) {
-          newActive = (closeIdx > 0) ? closeIdx - 1 : closeIdx + 1;
+          // Prefer the previous drawing; never land on the Start tab (index 0) while another
+          // drawing is still open (REQ-308).
+          newActive = (closeIdx - 1 >= FirstDrawingTabIndex()) ? closeIdx - 1 : closeIdx + 1;
           // Load that tab's snapshot into cmd before we erase anything.
           RestoreDocumentFromSnapshot(cmd, newActive);
         }
         // Adjust for the index shift the erase will produce.
         if (newActive > closeIdx) --newActive;
-        newActive = std::max(0, std::min(newActive, tabCount - 2));
+        newActive = std::max(FirstDrawingTabIndex(), std::min(newActive, tabCount - 2));
 
         // Erase tab + matching document snapshot so indices stay aligned.
         cmd.drawingTabs.erase(cmd.drawingTabs.begin() + closeIdx);
@@ -11300,16 +11382,31 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         --i;
       }
     }
-    // Trailing "+" to open a new empty drawing.
+    // Trailing "+" to open a new empty drawing (same path as File ▸ New).
     if (ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
-      cmd.drawingTabs.push_back({"Drawing " + std::to_string(cmd.nextDrawingNumber++), cmd.nextTabUid++});
-      cmd.activeDrawingIdx        = static_cast<int>(cmd.drawingTabs.size()) - 1;
-      cmd.pendingDrawingTabSwitch = true;
-      cmd.pendingViewportFocus    = true;
+      NewDrawingInTab(cmd, log);
     }
     ImGui::EndTabBar();
   }
-  ImGui::PopStyleVar();
+  // Accent rule under the whole strip so it reads as its own band.
+  {
+    const float y = ImGui::GetCursorScreenPos().y - 1.f;
+    const float x0 = tabBarTL.x - ImGui::GetStyle().WindowPadding.x;
+    const float x1 = x0 + ImGui::GetWindowWidth();
+    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x0, y), ImVec2(x1, y + 2.f), kTabAccent);
+  }
+  ImGui::PopStyleColor(7);
+  ImGui::PopStyleVar(3);
+
+  // REQ-308: the Start tab owns no drawing. Render the start screen and skip every model/paper
+  // viewport interaction below.
+  if (cmd.activeDrawingIdx == 0) {
+    cmd.viewportDrawingHovered = false;
+    cmd.viewportCmdPaletteEngaged = false;
+    DrawStartScreen(cmd, log);
+    ImGui::End();
+    return;
+  }
 
   ImVec2 avail = ImGui::GetContentRegionAvail();
   avail.y = std::max(avail.y, 80.f);

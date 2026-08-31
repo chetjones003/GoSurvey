@@ -268,6 +268,9 @@ set(GOSURVEY_DOMAIN_SOURCES
   # User preferences. In the domain set for UserDataDirectory(), which the BENCH command writes its
   # results through — pure <filesystem>, no window.
   src/io/UserPrefs.cpp
+  # REQ-308 recent-drawings MRU store (D-2026-08-30-b). Pure — <filesystem>/<fstream>/json, path
+  # and clock passed in by the caller — so GoSurveyTests links it directly too (see that target).
+  src/io/RecentDrawings.cpp
   src/io/SurveyCsv.cpp
   src/io/DxfIo.cpp
   src/io/DwgIo.cpp
@@ -370,6 +373,7 @@ add_executable(GoSurvey
   src/ui/CadUi_FeatureLineElev.cpp
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/CadUi_SignInGate.cpp
+  src/ui/CadUi_StartScreen.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
   src/ui/RichTextEdit.cpp
@@ -718,6 +722,11 @@ if(GOSURVEY_BUILD_TESTS)
     # per-rest surface query off the per-frame path REQ-100 profile (c) measures.
     tests/HoverDwellTests.cpp
     tests/UpdateCheckTests.cpp
+    # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the
+    # tab-index sentinel invariant and the thumbnail-cache naming/eviction (header-only, pure).
+    tests/RecentDrawingsTests.cpp
+    tests/StartScreenTests.cpp
+    src/io/RecentDrawings.cpp
     tests/TelemetryPingTests.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
@@ -834,6 +843,8 @@ if(GOSURVEY_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
     ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    # REQ-308 StartScreenTests: ThumbnailCache.hpp (header-only, pure — <filesystem> only).
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
     ${CMAKE_CURRENT_SOURCE_DIR}/src/auth
