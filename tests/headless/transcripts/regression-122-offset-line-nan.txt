@@ -1,0 +1,41 @@
+# Regression test for issue #122 — OFFSET must not write NaN into userLinesFlat after a
+# LINE is given a finite-but-unstorable endpoint (1e38).
+#
+# REQ-204 `finite-coords`: "No coordinate is NaN or infinite." REQ-201: the refusal is
+# reported, not silently swallowed. REQ-101: a value too large to be a coordinate is a
+# failure, not a tolerance question.
+#
+# This transcript is the fuzzer's own minimized reproducer (seed 595175, from the
+# 1,000,000-seed REQ-204 sweep), kept verbatim rather than tidied.
+#
+# 1e+38 parses and is finite (FLT_MAX ~ 3.4e+38), so LINE used to accept it as the first
+# point. The typed 1e+07 second point then established the document origin MID-COMMAND,
+# leaving the first point stranded in the old frame at local ~1e38, and OFFSET's signed-
+# side projection (dx*dx overflows float) wrote `userLinesFlat[6] = -nan(ind)` — persisted
+# corruption.
+#
+# Fails before the fix at the OFFSET step:
+#   finite-coords: userLinesFlat[6] = -nan(ind)
+
+NEW
+CMD LINE
+CMD 1e+38,0
+CMD 1e+07,0
+ESC
+CMD OFFSET
+PICK -251.75 77.25
+PICK 50 15
+
+# The first point is refused, so no segment is ever created and OFFSET has nothing to
+# corrupt. Assert the refusal is reported (REQ-201) — without the log check this would
+# also pass if LINE silently dropped the point.
+EXPECT LINES 0
+EXPECT LOG "LINE rejected"
+CHECK ALL
+
+# The document is still storable after the refused command — nothing was half-committed
+# on the way out, and a save/open round trip stays clean.
+SAVEAS %OUT%/rt-122.gs
+OPEN %OUT%/rt-122.gs
+EXPECT LINES 0
+CHECK ALL

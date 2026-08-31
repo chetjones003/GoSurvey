@@ -10578,6 +10578,14 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   const float oy0 = y0 + ny * signedD;
   const float ox1 = x1 + nx * signedD;
   const float oy1 = y1 + ny * signedD;
+  // Defense in depth (issue #122, REQ-204 `finite-coords`): `signedD` comes from a side test on the
+  // source geometry, so a source coordinate large enough to overflow the projection makes the offset
+  // result inf/NaN even though every input was "finite". Never write that into the store — mirror
+  // CommitCircle's non-finite refusal, and report it (REQ-201).
+  if (!std::isfinite(ox0) || !std::isfinite(oy0) || !std::isfinite(ox1) || !std::isfinite(oy1)) {
+    log.push_back("OFFSET — the offset result is not a finite coordinate.");
+    return false;
+  }
   // The offset copy stays on the source line's plane — offsetting an elevated line must not
   // flatten it (REQ-057). The offset itself is horizontal, so each end keeps its own Z.
   st.userLinesFlat.push_back(ox0);
@@ -23726,6 +23734,18 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
 bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::Line)
     return false;
+
+  // REQ-204 (`finite-coords`) / REQ-201 / issue #122: a point can be finite yet too large to store
+  // without downstream geometry math overflowing `float` to inf/NaN — an OFFSET of a segment whose
+  // endpoint sits near 1e38 wrote `-nan(ind)` into `userLinesFlat`. Refuse it here, at the command
+  // that accepts the point, rather than making every consumer guard — the same place and spirit as
+  // CIRCLE refusing a non-finite derived radius.
+  if (!std::isfinite(x) || !std::isfinite(y) ||
+      std::fabs(x) > static_cast<float>(CadCoord::kMaxStorableCoordinateMagnitude) ||
+      std::fabs(y) > static_cast<float>(CadCoord::kMaxStorableCoordinateMagnitude)) {
+    log.push_back("LINE rejected — a point is not a finite, storable coordinate.");
+    return false;
+  }
 
   if (st.linePhase == AppCommandState::LinePhase::NeedFirstPoint) {
     st.anchorX = x;
