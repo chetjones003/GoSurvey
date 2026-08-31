@@ -4,12 +4,16 @@
 #include "LibreDwgCad.hpp"
 #include "PointFileExt.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -39,7 +43,17 @@ bool ReadU64Le(std::string_view bytes, std::uint64_t* nOut) {
 
 bool AppendGoSurveyPayload(const char* pathUtf8, const AppCommandState& st, std::vector<std::string>& log) {
   const std::string json = SerializeGoSurveyJson(st);
-  std::ofstream f(pathUtf8, std::ios::binary | std::ios::app);
+  // The file was just written by LibreDWG; a sync client / antivirus can still hold it open
+  // briefly (issue #167). Retry the append open with a short bounded backoff before giving up.
+  std::ofstream f;
+  for (int attempt = 0; attempt < 10; ++attempt) {
+    if (attempt > 0)
+      std::this_thread::sleep_for(std::chrono::milliseconds(50 * attempt));
+    f.open(pathUtf8, std::ios::binary | std::ios::app);
+    if (f)
+      break;
+    f.clear();
+  }
   if (!f) {
     log.push_back(std::string("DWG save — could not append GoSurvey document to ") + pathUtf8);
     return false;
@@ -93,9 +107,38 @@ bool ImportDwgFile(AppCommandState& st, const char* pathUtf8, std::vector<std::s
 }
 
 bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
-  if (!ExportLibreCadFile(st, pathUtf8, log, /*asDxf=*/false))
+  // Build the complete file (LibreDWG bytes + GoSurvey trailer) beside the target, then replace the
+  // target in one step. The final path may be a OneDrive placeholder that briefly locks after a
+  // write (issue #167); staging avoids an export-then-reopen race on it.
+  std::error_code ec;
+  const std::filesystem::path dst(pathUtf8);
+  const std::filesystem::path staged = dst.string() + ".gosurvey-save.tmp";
+  std::filesystem::remove(staged, ec);
+  const std::string stagedUtf8 = staged.string();
+
+  if (!ExportLibreCadFile(st, stagedUtf8.c_str(), log, /*asDxf=*/false)) {
+    std::filesystem::remove(staged, ec);
     return false;
-  return AppendGoSurveyPayload(pathUtf8, st, log);
+  }
+  if (!AppendGoSurveyPayload(stagedUtf8.c_str(), st, log)) {
+    std::filesystem::remove(staged, ec);
+    log.push_back("DWG save — file was NOT written; the GoSurvey document could not be embedded.");
+    return false;
+  }
+
+  std::filesystem::rename(staged, dst, ec);
+  if (ec) {
+    ec.clear();
+    std::filesystem::copy_file(staged, dst, std::filesystem::copy_options::overwrite_existing, ec);
+    std::error_code rmEc;
+    std::filesystem::remove(staged, rmEc);
+  }
+  if (ec) {
+    std::filesystem::remove(staged, ec);
+    log.push_back(std::string("DWG save — could not replace ") + pathUtf8 + " with the new drawing.");
+    return false;
+  }
+  return true;
 }
 
 bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
