@@ -68,6 +68,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                          double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
                          CadSnap::Hit* out_snap);
 
+/// Frame-time diagnostic overlay (issue #166 investigation). No-op unless the PERFHUD command has
+/// toggled it on. Call once per frame, after DrawDrawingViewport.
+void DrawPerfHud(const AppCommandState& cmd);
+
 /// REQ-308 — the Start screen shown for drawingTabs[0]: GoSurvey/version, Open/New, the project
 /// website link, the Recent-drawings grid/list, and the sign-in / Welcome column. Drawn in place of
 /// the GL viewport by DrawDrawingViewport when the Start tab is active.

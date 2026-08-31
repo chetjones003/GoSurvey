@@ -21768,73 +21768,55 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
   if (!previewLinesOut)
     return;
 
-  const auto pushRemoved = [&](const TrimTargetEdge& tgt, float ax, float ay, float bx, float by) {
-    std::vector<std::array<float, 4>> cuts;
-    CollectAllDrawingCutSegmentsExceptTarget(st, &tgt, &cuts);
-    if (cuts.empty())
-      return;
-    float ix = 0.f, iy = 0.f;
-    bool trimA = false;
-    if (!TrimSegmentIntersectPickSide(ax, ay, bx, by, pickPreviewX, pickPreviewY, cuts, st, fenceP1x, fenceP1y,
-                                      fenceP2x, fenceP2y, true, &ix, &iy, &trimA, nullptr))
-      return;
-    if (trimA) {
-      previewLinesOut->push_back(ax);
-      previewLinesOut->push_back(ay);
-      previewLinesOut->push_back(0.f);
-      previewLinesOut->push_back(ix);
-      previewLinesOut->push_back(iy);
-      previewLinesOut->push_back(0.f);
-    } else {
-      previewLinesOut->push_back(ix);
-      previewLinesOut->push_back(iy);
-      previewLinesOut->push_back(0.f);
-      previewLinesOut->push_back(bx);
-      previewLinesOut->push_back(by);
-      previewLinesOut->push_back(0.f);
-    }
-  };
+  // The drawn fence line trims the ONE edge nearest it, exactly as ExecuteDrawnSegmentTrimOnce
+  // commits it — so preview only that edge.
+  //
+  // Issue #166: the previous version previewed a hypothetical removal for EVERY line and polyline
+  // edge in the drawing, and for each it re-tessellated the entire drawing's cutting geometry
+  // (CollectAllDrawingCutSegmentsExceptTarget — every circle/arc/ellipse sampled, every polyline
+  // walked). That is O(edges x drawing) with a fresh multi-thousand-element allocation per edge:
+  // on a real survey (hundreds of lines, a thousand polylines) it measured ~2.4 s PER FRAME while
+  // the rubber line was being dragged — a locked viewport, not a stutter. It was also misleading:
+  // it dashed edges the commit would never touch.
+  //
+  // Matching the commit's own target selection collapses this to one O(N) proximity scan, one
+  // tessellation pass and one intersection test — sub-millisecond on the same drawing.
+  float matchTol = std::max(CadSnap::WorldToleranceFromPixels(st.viewportLastSurveyLayoutHeightPx,
+                                                             st.viewportLastSurveyLayoutOrthoHalfH,
+                                                             st.objectSnapAperturePx) *
+                                4.f,
+                            1e-6f);
+  double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
+  if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
+    matchTol = std::max(matchTol, static_cast<float>(2e-5 * std::max(mxX - mnX, mxY - mnY)));
 
-  const auto& Lf = st.userLinesFlat;
-  if (Lf.size() % 6 == 0) {
-    for (size_t li = 0; li + 5 < Lf.size(); li += 6) {
-      TrimTargetEdge tgt{};
-      tgt.kind = TrimTargetEdge::Line;
-      tgt.lineIx = static_cast<int>(li / 6);
-      pushRemoved(tgt, Lf[li], Lf[li + 1], Lf[li + 3], Lf[li + 4]);
-    }
-  }
+  TrimTargetEdge tgt{};
+  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, dEdge = 0.f;
+  if (!PickTrimTargetClosestToDrawnSegment(st, fenceP1x, fenceP1y, fenceP2x, fenceP2y, matchTol, &tgt, &ax, &ay,
+                                           &bx, &by, &dEdge))
+    return;
 
-  const int nPoly =
-      static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
-  for (int pi = 0; pi < nPoly; ++pi) {
-    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-    const bool closed =
-        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
-    for (int vi = v0; vi + 1 < v1; ++vi) {
-      TrimTargetEdge tgt{};
-      tgt.kind = TrimTargetEdge::Poly;
-      tgt.polyIx = pi;
-      tgt.vLo = vi;
-      const float ax = st.userPolylineVerts[static_cast<size_t>(vi * 3)];
-      const float ay = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-      const float bx = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
-      const float by = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
-      pushRemoved(tgt, ax, ay, bx, by);
-    }
-    if (closed && v1 - v0 >= 2) {
-      TrimTargetEdge tgt{};
-      tgt.kind = TrimTargetEdge::Poly;
-      tgt.polyIx = pi;
-      tgt.vLo = v1 - 1;
-      const float ax = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
-      const float ay = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
-      const float bx = st.userPolylineVerts[static_cast<size_t>(v0 * 3)];
-      const float by = st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
-      pushRemoved(tgt, ax, ay, bx, by);
-    }
-  }
+  std::vector<std::array<float, 4>> cuts;
+  CollectAllDrawingCutSegmentsExceptTarget(st, &tgt, &cuts);
+  if (cuts.empty())
+    return;
+
+  float ix = 0.f, iy = 0.f;
+  bool trimA = false;
+  if (!TrimSegmentIntersectPickSide(ax, ay, bx, by, pickPreviewX, pickPreviewY, cuts, st, fenceP1x, fenceP1y,
+                                    fenceP2x, fenceP2y, true, &ix, &iy, &trimA, nullptr))
+    return;
+
+  const float rx = trimA ? ax : ix;
+  const float ry = trimA ? ay : iy;
+  const float sx = trimA ? ix : bx;
+  const float sy = trimA ? iy : by;
+  previewLinesOut->push_back(rx);
+  previewLinesOut->push_back(ry);
+  previewLinesOut->push_back(0.f);
+  previewLinesOut->push_back(sx);
+  previewLinesOut->push_back(sy);
+  previewLinesOut->push_back(0.f);
 }
 
 static void ExecuteDrawnSegmentTrimOnce(AppCommandState& st, float p1x, float p1y, float p2x, float p2y,
@@ -24390,6 +24372,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back(std::string("Visual style = ") + VisualStyleName(st.viewportVisualStyle) +
                       ". Usage: VS 2D | HIDDEN | SHADED.");
       }
+      return;
+    }
+    // `PERFHUD` toggles the frame-time diagnostic overlay (issue #166 investigation). Unlike BENCH
+    // it measures the LIVE drawing and the current command — the actual thing the user is doing —
+    // broken into frame / viewport-UI / hover-pick / snap / render.
+    if (plotTok == "perfhud" || plotTok == "framestats") {
+      st.perfHudVisible = !st.perfHudVisible;
+      log.push_back(std::string("PERFHUD — frame-time overlay ") + (st.perfHudVisible ? "ON." : "OFF."));
       return;
     }
     // `BENCH` runs the REQ-100 frame-budget measurement at the budget's own density; `BENCH <segs>`
