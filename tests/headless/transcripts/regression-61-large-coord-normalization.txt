@@ -32,20 +32,20 @@ CMD 0,-1e+12
 CMD 213.25,-347
 ESC
 
-SAVEAS %OUT%/rt61-a.gs
+SAVEAS %OUT%/rt61-a.dwg
 
 # First load: this is where the normalization happens, and it is reported rather than silent.
-OPEN %OUT%/rt61-a.gs
+OPEN %OUT%/rt61-a.dwg
 EXPECT LOG "Drawing origin shifted for precision"
 CHECK ALL
-SAVEAS %OUT%/rt61-b.gs
+SAVEAS %OUT%/rt61-b.dwg
 
 # Second load: the origin is already established, so nothing moves.
-OPEN %OUT%/rt61-b.gs
+OPEN %OUT%/rt61-b.dwg
 CHECK ALL
-SAVEAS %OUT%/rt61-c.gs
+SAVEAS %OUT%/rt61-c.dwg
 
 # The load-bearing assertion: normalization converges after exactly one round trip. If it ever
 # rebased twice — or rebased by a different amount the second time — this is what would catch it,
 # and it would mean geometry drifting a little further on every open/save cycle.
-EXPECT SAMEFILE %OUT%/rt61-b.gs %OUT%/rt61-c.gs
+EXPECT SAMEFILE %OUT%/rt61-b.dwg %OUT%/rt61-c.dwg

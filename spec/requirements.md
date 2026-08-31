@@ -1195,6 +1195,9 @@ requirements is a planning failure, not a sign of rigor.
   GoSurvey does not model (the user's decision is that a save **must** preserve them, which Phase 1
   cannot do); first-class blocks; multiple layouts; elevations; and the migration of `.gs` to DWG
   as the native format. All are itemised in `docs/dwg-plan.txt`.
+  2026-08-29 — **Native codec path decided: LibreDWG (REQ-170, ADR-041, D-2026-08-29-g).** Phase 1
+  converter remains until REQ-170 is verified, then leaves the user-facing path. **This epic does
+  not close DM-08** (unknown-object preservation / R2018 write). DWG write is R2000/R2004 only.
 
 ### REQ-053 — RECT command, and polylines survive a DXF/DWG save
 - Purpose: rectangles are the most-drawn shape in survey deliverables (parcels, structures, title-block
@@ -3112,6 +3115,204 @@ requirements is a planning failure, not a sign of rigor.
                path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
                while the driver has no window; that is mitigated by the routing, not solved.
 
+### REQ-161 — Developer Shell (Debug-only chrome tuner, activity log, GUI driver)
+- Purpose: let developers tune ImGui chrome live, see what the GUI and command path are doing, and
+           drive the **real** ImGui UI from code — without shipping any of that in Release
+- Priority: must
+- Type: functional
+- Statement: A **Developer Shell** exists only when CMake option `GOSURVEY_DEVELOPER_SHELL` is ON.
+  That option **defaults ON** if and only if `CMAKE_BUILD_TYPE` is `Debug`, and is **forced OFF**
+  for Release (and for any configuration that builds the shipped installer). It is a compile-time
+  gate, not a runtime hide.
+
+  When ON, the windowed `GoSurvey` binary:
+
+  - shows a Developer Shell (dockable ImGui window): **chrome tuner** that writes the existing
+    ADR-033 `UiChrome` instance and relevant `ImGuiStyle` metrics so padding, sizes, and chrome
+    colours change **this frame** with no rebuild;
+  - shows an **activity log** of discrete events: ribbon/tool/item activations, Test Engine
+    injected mouse/key, viewport **picks/clicks** (not GL draw calls), command-line input and
+    output / log lines;
+  - links **Dear ImGui Test Engine** (`imgui_test_engine/`, FetchContent, GIT_TAG pinned — REQ-200)
+    and compiles ImGui **for this executable only** with `IMGUI_ENABLE_TEST_ENGINE`. Registered
+    tests and a Debug-only CLI (`--devshell-run <test_name>`) queue and run those tests against
+    the live UI (full GUI driver).
+
+  When OFF (Release): `src/devshell/` is not a source of `GoSurvey`; Test Engine is not fetched
+  into that target's link line; `IMGUI_ENABLE_TEST_ENGINE` is not defined on any ImGui objects
+  that executable links; there is no Developer Shell menu/window.
+
+  **REQ-203 is unchanged:** `gosurvey_headless` never links Test Engine, never defines
+  `IMGUI_ENABLE_TEST_ENGINE`, and never includes `src/devshell/`. Domain/headless keep measuring
+  fonts through ImGui **core without** Test Engine hooks.
+
+  Activity logging must not run on the REQ-100 measured hot path as an unbounded per-primitive
+  stream. A one-line-per-frame “draw submitted” toggle may exist in the Shell, default **off**.
+- Acceptance:
+  - `ninja-release` `GoSurvey.exe`: `dumpbin /SYMBOLS` (or `/DEPENDENTS` plus strings) shows **no**
+    `ImGuiTestEngine`, **no** `DevShell`, **no** `GOSURVEY_DEVELOPER_SHELL` as a live feature —
+    proven by a ctest that fails if those symbols are present;
+  - `ninja-debug` with the option ON: Developer Shell is reachable; moving a chrome tuner control
+    changes on-screen chrome the same session;
+  - a Debug Test Engine script performs a ribbon/tool activation, a viewport click (or item click
+    that issues a pick), and command-line in/out; each appears as a **distinct log line**;
+  - `--devshell-run` of that script exits 0 with drawing/command state matching the same steps
+    done by hand (entity counts / command log), without requiring a human at the mouse;
+  - Release behaviour with the Shell absent matches today's app (commands, viewport, chrome).
+- Owner-layer: Application (flag, `main` wiring), UI (`src/devshell/`, chrome accessors), Build
+- Status: accepted (2026-08-29)
+- Revisions: 2026-08-29 — initial. D-2026-08-29-f, ADR-040. Amends the 2026-08-16 GUI-automation
+  anti-requirement for **Debug only**.
+
+### REQ-170 — LibreDWG is the DXF and DWG codec
+- Purpose: File Format Specs — open and save DWG/DXF in-process with no ODA/AutoCAD converter on
+  the customer machine; write DWG only as far as LibreDWG is trustworthy (R2004)
+- Priority: must
+- Type: functional
+- Statement: **GNU LibreDWG** is the codec for `.dwg` and `.dxf` (ADR-041). GoSurvey links it and
+  is therefore **GPL-3.0-or-later**.
+  **Open:** a DWG or DXF opens without `FindDwgConverter` for the happy path. Version is reported
+  by release name (existing probe may remain). A file that is not DWG/DXF is refused with that
+  reason (REQ-001). Entities and tables LibreDWG decoded are mapped into the GoSurvey domain;
+  every skipped class, exploded INSERT (until REQ-107), extra layout, and proxy is **named in the
+  log** (REQ-201). State-plane coordinates obey REQ-101 (origin subtract in double before float).
+  **Save DWG:** only **R2000** or **R2004**; default **R2004**. R2007+ is refused. The file AutoCAD
+  opens must do so **without a Recover prompt** for the entity set we emit. Before overwrite, the
+  UI lists what this down-convert / domain mapping will drop. Failed write leaves the destination
+  untouched.
+  **Save DXF:** LibreDWG’s DXF writer; binary DXF is included to the extent the library writes it
+  (this **subsumes** proposed REQ-112 when implemented). Types with no representation (TIN, mesh,
+  cloud, PDF) are logged exclusions, not silent drops.
+  Phase 1 converter-based Import/Export remains until these acceptance conditions are met, then is
+  removed from the user-facing path (oracle use is allowed).
+- Acceptance:
+  - an R2018 `.dwg` opens with **no** ODA File Converter and **no** AutoCAD installed in the test
+    environment, and model-space LINE/CIRCLE/LWPOLYLINE/TEXT/MTEXT/HATCH that LibreDWG decoded
+    appear in the drawing;
+  - a non-DWG renamed to `.dwg` is refused and the document is unchanged;
+  - File ▸ Export DWG (default) writes R2004; AutoCAD or ODA File Converter (oracle) opens it
+    **without Recover** and the emitted entity counts match the log;
+  - exporting R2018 is refused by name; the destination file is not created;
+  - a failed encode does not truncate an existing destination;
+  - `GoSurvey` / installer materials state GPL-3.0-or-later.
+- Owner-layer: IO (codec), Domain (mapping), UI (lossy-save list), Build (link LibreDWG, MSVC)
+- Status: accepted
+- Revisions: 2026-08-29 — File Format Specs (D-2026-08-29-g, ADR-041). Does not replace REQ-052
+  Phase 1 until this requirement is verified.
+
+### REQ-171 — Point cloud entity
+- Purpose: File Format Specs — hold laser-scan points without pretending they are a TIN (REQ-068)
+  or a triangle mesh (REQ-063)
+- Priority: must
+- Type: functional
+- Statement: A drawing may contain **point cloud** objects (ADR-042): reference geometry with a
+  `shared_ptr<const>` payload (§11.5), interleaved XYZ, optional RGB and intensity. They are
+  visible, selectable, erasable, layer-controlled, and included in extents. They are **not**
+  grip-edited, not written to DXF/DWG in this epic, and **not** surface definition sources.
+  `.gs` persists them additively. Erase + undo is one step. Legacy `.gs` without the section
+  loads unchanged.
+- Acceptance:
+  - a cloud appears in the viewport, selects as one object, and erase/undo restores it;
+  - extents include the cloud; freeze/off/non-plottable on its layer hides it;
+  - an unrelated line edit does **not** deep-copy the payload (shared immutable pointer);
+  - DXF/DWG export **names** the cloud exclusion in the log;
+  - a pre-REQ-171 `.gs` still opens.
+- Owner-layer: Domain/Renderer/IO
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
+
+### REQ-172 — E57, LAS, LAZ, PTS, and PTX interchange
+- Purpose: File Format Specs — the open scan formats consultants actually send
+- Priority: must
+- Type: functional
+- Statement: GoSurvey **imports and exports** ASTM **E57**, ASPRS **LAS**, **LAZ** (LASzip),
+  Cyclone-style **PTS**, and **PTX** (ADR-042, `spec/file-format-specs.md` §3.2). Import creates
+  REQ-171 cloud(s). Export writes the selected cloud(s) (or all, when none selected — stated in
+  the command). PTS/PTX parsers are in-tree; no delimiter auto-detect. PTX setup transforms are
+  applied so points land in world coordinates within REQ-101. Malformed files refuse and leave
+  the drawing unchanged (REQ-001).
+- Acceptance:
+  - a known-good PTS of N points imports N points (count in the log) at coordinates within
+    REQ-101 of the file;
+  - export of that cloud to PTS, then re-import, preserves count and XYZ within REQ-101;
+  - the same for PTX **including** a non-identity setup transform (hand-checked 4×4);
+  - a LAS and a LAZ of the same points import equal counts and XYZ within REQ-101;
+  - an E57 with XYZ (+ RGB if present) imports; a truncated/malformed E57/LAS/PTS is refused
+    with a specific message and no partial cloud;
+  - missing file / empty path: no crash, drawing unchanged.
+- Owner-layer: IO/Domain/UI
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-g. Delivery order: PTS → PTX → LAS → LAZ → E57
+  (`spec/file-format-specs.md` §6).
+
+### REQ-173 — Raster IMAGE underlays (JPEG, PNG, BMP)
+- Purpose: File Format Specs — photos and scans on the sheet, like PDF attach, not a viewer app
+- Priority: should
+- Type: functional
+- Statement: JPEG, PNG, and BMP attach as **IMAGE** underlays (ADR-042): file path, insertion
+  point, rotation, width/height in drawing units, layer. Decode uses the existing stb_image
+  path. They plot if plottable. `.gs` stores the path and placement; a missing image on reload
+  unloads that underlay and logs it, and the rest of the drawing still loads. IMAGE may be
+  written to DXF/DWG when the LibreDWG mapping exists; until then the export log names the
+  exclusion rather than dropping silently.
+- Acceptance:
+  - attach a PNG, place it, see it in model space; MOVE the underlay; undo restores;
+  - freeze its layer hides it; `.gs` round-trip restores path and placement;
+  - delete the file on disk, reopen `.gs`: drawing loads, IMAGE is unloaded, log says so;
+  - a truncated PNG is refused and no underlay is added.
+- Owner-layer: Domain/IO/Renderer/UI
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
+
+### REQ-174 — IFC view import (no write)
+- Purpose: File Format Specs — see a building model as reference geometry
+- Priority: should
+- Type: functional
+- Statement: An **IFC** file imports as one or more **REQ-063 meshes** (ADR-042). GoSurvey does
+  **not** write IFC, does not store an IFC graph, and does not decode Autodesk vertical objects
+  inside DWG (ADR-026). The parser is IfcPlusPlus unless a later decision records a switch.
+  Skipped/unsupported IFC products are listed in the log (REQ-201). Malformed IFC leaves the
+  drawing unchanged (REQ-001). Meshes remain excluded from DXF/DWG export.
+- Acceptance:
+  - a small IFC2x3 or IFC4 fixture produces a mesh whose triangle count is logged and is > 0;
+  - extents include the mesh; visual style Shaded occludes as REQ-064;
+  - File ▸ Export IFC does not exist (or is disabled with “view only”);
+  - a truncated IFC is refused; the drawing is unchanged;
+  - DXF/DWG export logs the mesh exclusion.
+- Owner-layer: IO/Domain
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
+
+### REQ-175 — DWG is the drawing document; GoSurvey state is preserved in the file
+- Purpose: File → Open/Save and headless OPEN/SAVEAS treat DWG as the drawing, without dropping
+  survey-specific data that today lives in `.gs`
+- Priority: must
+- Type: functional
+- Statement: The **drawing document** is a `.dwg`. File → Open, Save, and Save As default to DWG
+  and do not list `.gs` as a drawing type. Headless `OPEN` and `SAVEAS` use DWG the same way.
+  A GoSurvey save writes LibreDWG CAD entities (REQ-170) **and** embeds the existing GoSurvey
+  JSON document (the same tree `.gs` writes) so survey points, traverse, layouts, text/surface
+  styles, `worldDocumentOrigin`, and the rest of that tree survive Open → Save → Open.
+  A DWG without that payload is a **foreign** drawing and imports through REQ-170 CAD mapping.
+  `.gs` read/write remains in the tree (workspace template, explicit `.gs` paths, future
+  project file) and is not the File drawing chooser. Existing `.gs` files still open when a
+  path ending in `.gs` is given (command line, template, transcript `OPEN samples/…`).
+  This does **not** claim unknown-object preservation (DM-08).
+- Acceptance:
+  - a new drawing, File → Save, writes a `.dwg` (not `.gs`);
+  - File → Open’s default filter is DWG; `.gs` is not listed as a drawing type;
+  - File → Save As defaults to `.dwg`; the file reopens in GoSurvey with CAD and survey state
+    that were in the document at save;
+  - opening an existing GoSurvey `.dwg` and Save updates that DWG, not a sidecar `.gs`;
+  - a survey point (id, N/E/elev, description) survives Export DWG / Open DWG within REQ-101;
+  - a foreign DWG with no GoSurvey payload still imports model-space LINE/CIRCLE as REQ-170;
+  - `SaveGoSurveyFile` / `LoadGoSurveyFile` remain callable;
+  - headless `SAVEAS`/`OPEN` of `%OUT%/*.dwg` round-trips that document.
+- Owner-layer: IO (payload + LibreDWG), UI (dialogs), Commands/headless (OPEN/SAVEAS)
+- Status: accepted
+- Revisions: 2026-08-29 — D-2026-08-29-j, ADR-044 (renumbered from D-2026-08-29-h / ADR-043 on the
+  beta merge; those identifiers were taken by the REQ-107 block-editor decision).
+
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,
                answered without a click and without running a command
@@ -3639,9 +3840,46 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: Add BLOCK (define from selection), INSERT (place with position/scale/rotation), WBLOCK (write to its own file), and ATTDEF/block attributes. Dynamic blocks and a block-library browser are explicitly out of scope — see roadmap Someday.
 - Acceptance (sketch): a block definition stores its entities once; each INSERT is a lightweight reference, not a geometry copy; editing a definition updates every insert; DWG/DXF export writes real INSERT/BLOCK records; erasing a definition with live inserts is handled per REQ-201, never silently.
-- Owner-layer: Domain/Commands/IO/UI — likely architectural (new entity kind + indirection); expect a SPEC GAP/ADR before implementation, the way REQ-069's breaklines forced REQ-076 first
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Acceptance (block editor — BEDIT in-place isolated editing, D-2026-08-29-h / ADR-043):
+  - BEDIT with a block name from model space enters an **edit session** for that definition; BEDIT
+    is refused while a paper layout is active; a second BEDIT for the block already open is a no-op.
+  - While a session is open the viewport shows **only that block's geometry** in the block's local
+    coordinates; model-space and paper-space entities are not drawn and not pickable/snappable;
+    the block's own INSERT overlays are not drawn.
+  - Draw commands (LINE, PLINE, CIRCLE, ARC, ELLIPSE, TEXT/MTEXT) and modify commands (MOVE, COPY,
+    ROTATE, SCALE, DELETE, TRIM, OFFSET, MIRROR) operate on the block's content; survey-point and
+    CSV tools are unavailable in the session.
+  - Any content change marks the session dirty.
+  - `BCLOSE` (or the ribbon Close Block Editor) with a dirty session raises a modal **Save /
+    Don't Save / Cancel**: Save writes the edited geometry into the definition and every INSERT of
+    that block re-renders; Don't Save restores the definition as it was at BEDIT; Cancel keeps the
+    session open. A clean session closes with no prompt.
+  - On close (Save or Don't Save) the ribbon tab and the viewport camera that were active when
+    BEDIT was invoked are restored.
+  - Nested blocks, meshes, attribute definitions, parameters and actions on the definition are
+    preserved unchanged across an edit session.
+- Acceptance (INSERT on-screen interaction, D-2026-08-29-i):
+  - When any of insertion point / scale / rotation is "Specify On-screen", a **live ghost** of the
+    block definition (its lines, arcs, circles, polylines and nested blocks, tessellated) is drawn
+    at the pending transform and follows the cursor: rotating live during the rotation pick (angle
+    in the clockwise-from-north convention, pick-north ⇒ rotation 0 ⇒ block as authored), scaling
+    live and uniformly during the scale pick (factor = distance from insertion point to cursor).
+    The ghost is drawn at the **snapped** commit point, honours the block-unit scale factor and
+    base point, and the committed insert matches the last previewed transform within REQ-101.
+  - Object snapping is active for the insertion-point, scale and rotation picks, subject to the
+    running OSNAP toggles and the master object-snap switch.
+  - The geometry of an **already-placed block instance** (including nested) is an object-snap
+    target for all commands: Endpoint on its segment ends and its insertion point, Midpoint on its
+    segment midpoints, Center on its circles/arcs — same tolerance and ranking as native entities.
+    The ghost being inserted is never itself a snap target.
+- Owner-layer: Domain/Commands/IO/UI — architectural; block entity model recorded across the
+  issue-#124 work, the in-place editor recorded as ADR-043
+- Status: accepted
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i).
+  2026-08-29 — accepted for the block-editor slice (D-2026-08-29-h, ADR-043): in-place isolated
+  editing via a model-store swap, with a Save/Don't-Save/Cancel close gate. Dynamic blocks and a
+  block-library browser remain out of scope (roadmap Someday).
+  2026-08-29 — D-2026-08-29-i: live INSERT rubber-band preview + object snapping to placed inserts.
 
 ### REQ-108 — Polar and tracking input aids
 - Purpose: the POLAR status-bar toggle lights up with no behavior behind it, there is no object-snap tracking, and there's no typed polar-coordinate entry
@@ -3690,8 +3928,10 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: `DxfIo` detects and reads binary-encoded DXF (the `AutoCAD Binary DXF` sentinel header) alongside the existing ASCII parser.
 - Acceptance (sketch): a binary DXF and its ASCII Save-As of the same drawing import to identical GoSurvey state; a malformed/truncated binary DXF is rejected per REQ-001, not partially absorbed.
 - Owner-layer: IO
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Status: proposed — **subsumed by REQ-170** when LibreDWG’s DXF path is verified (D-2026-08-29-g);
+  do not implement a second binary-DXF parser beside LibreDWG
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-08-29 — File Format Specs: implementation
+  belongs to REQ-170, not a parallel `DxfIo` branch.
 
 ### REQ-113 — DXF paper-space import
 - Purpose: since REQ-037 gave GoSurvey native paper-space geometry, an imported DXF's paper-space entities and title block have somewhere real to go, but import still discards them and only logs a count
@@ -5503,6 +5743,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-152 | util/Commands | done (TASK-136) — catchment mean Z; `[req152]` | accepted |
 | REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
 | REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126) | accepted |
+| REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
+| REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2004 default write; no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
+| REQ-171 | Domain/Renderer/IO | planned — point cloud entity; shared immutable payload; logged DXF/DWG exclusion | accepted |
+| REQ-172 | IO/Domain/UI | planned — PTS→PTX→LAS→LAZ→E57 read+write; malformed refuse | accepted |
+| REQ-173 | Domain/IO/Renderer/UI | planned — JPEG/PNG/BMP IMAGE underlay; missing file unloads image only | accepted |
+| REQ-174 | IO/Domain | planned — IFC tessellate to mesh; no IFC write | accepted |
+| REQ-175 | IO/UI/Commands | `LibreDwgCadTests` (survey point survives DWG save/load; foreign DWG without payload still imports a LINE) + headless `%OUT%/*.dwg` OPEN/SAVEAS | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
@@ -5517,8 +5764,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 - "We do **not** require pluggable rendering backends — OpenGL only until a
   second backend is a real requirement (avoids speculative abstraction)."
-- We do **not** require automated testing of the rendered GUI — no UI-automation driver, no
-  screenshot diffing, no golden images. REQ-203 tests the Commands layer beneath the UI instead.
-  Pixel-level tests need an interactive desktop session, are flaky by construction, and mostly
-  exercise ImGui rather than GoSurvey. *(accepted 2026-08-16 alongside REQ-203; ADR-031 alt. (1).)*
+- We do **not** require screenshot diffing or golden images of the framebuffer. Pixel-level visual
+  tests stay out (flaky; they mostly exercise ImGui/GPU, not GoSurvey).
+- We do **not** require a UI-automation driver on **Release** or on `gosurvey_headless`. REQ-203
+  transcripts remain the CI-default, windowless command driver. **Debug-only** Dear ImGui Test
+  Engine + Developer Shell (REQ-161, ADR-040, D-2026-08-29-f) is the recorded exception: it drives
+  the real ImGui tree and is compile-excluded from Release. *(Anti-requirement amended 2026-08-29;
+  original “no UI-automation at all” accepted 2026-08-16 with ADR-031 alt. (1).)*
 - `<…>`
+- We do **not** require native Leica LGS/LGSX/BLK/BLKX/IMP/PTG/BIN or Autodesk RCP/RCS in File
+  Format Specs (D-2026-08-29-g). Interchange for those workflows is E57/LAS from the vendor tool.
+- We do **not** require IFC write, ODA membership, or DWG write past R2004 in this epic.
+- We do **not** require point clouds as TIN data sources (REQ-068 D4 / ADR-042).

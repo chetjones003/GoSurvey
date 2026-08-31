@@ -38,6 +38,17 @@ bool WideToUtf8(const wchar_t* wstr, char* out, size_t cap) {
   return n > 0;
 }
 
+/// ImGui's command InputText can still hold Win32 mouse capture when Enter submits. GetOpenFileNameW
+/// then returns false with no window. File-menu clicks do not leave capture set, which is why those
+/// pickers appear and a typed BLOCKIMPORT did not.
+void PrepareNativeFileDialog(OPENFILENAMEW* ofn) {
+  ReleaseCapture();
+  HWND owner = GetActiveWindow();
+  if (!owner)
+    owner = GetForegroundWindow();
+  ofn->hwndOwner = owner;
+}
+
 } // namespace
 
 bool BrowseOpenFileCsvUtf8(char* utf8Out, size_t utf8Cap) {
@@ -181,6 +192,28 @@ bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) {
                     L"All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+  if (!GetOpenFileNameW(&ofn))
+    return false;
+  return WideToUtf8(wfile, utf8Out, utf8Cap);
+}
+
+bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap) {
+  if (!utf8Out || utf8Cap < 4)
+    return false;
+  wchar_t wfile[MAX_PATH]{};
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.lpstrFile = wfile;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.lpstrTitle = L"Import Block";
+  ofn.lpstrFilter = L"Blocks (*.gs;*.dxf;*.dwg)\0*.gs;*.dxf;*.dwg\0"
+                    L"GoSurvey (*.gs)\0*.gs\0"
+                    L"Drawing Exchange (*.dxf)\0*.dxf\0"
+                    L"AutoCAD Drawing (*.dwg)\0*.dwg\0"
+                    L"All (*.*)\0*.*\0\0";
+  ofn.nFilterIndex = 1;
+  ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER | OFN_ENABLESIZING;
+  PrepareNativeFileDialog(&ofn);
   if (!GetOpenFileNameW(&ofn))
     return false;
   return WideToUtf8(wfile, utf8Out, utf8Cap);
@@ -388,6 +421,13 @@ bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap) {
 }
 
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) {
+  if (utf8Out && utf8Cap > 0)
+    utf8Out[0] = '\0';
+  (void)utf8Cap;
+  return false;
+}
+
+bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap) {
   if (utf8Out && utf8Cap > 0)
     utf8Out[0] = '\0';
   (void)utf8Cap;

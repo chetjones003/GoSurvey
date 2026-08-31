@@ -17,7 +17,7 @@ CMD END
 CHECK ALL
 EXPECT POLYLINES 1
 EXPECT LINES 0
-SAVEAS %OUT%/chamfer-poly-a.gs
+SAVEAS %OUT%/chamfer-poly-a.dwg
 
 CMD CHAMFER
 CMD D
@@ -31,14 +31,14 @@ EXPECT POLYLINES 1
 EXPECT LINES 1
 CHECK ALL
 
-SAVEAS %OUT%/chamfer-poly-b.gs
-EXPECT DIFFERENTFILE %OUT%/chamfer-poly-a.gs %OUT%/chamfer-poly-b.gs
+SAVEAS %OUT%/chamfer-poly-b.dwg
+EXPECT DIFFERENTFILE %OUT%/chamfer-poly-a.dwg %OUT%/chamfer-poly-b.dwg
 
 UNDO
 EXPECT POLYLINES 1
 EXPECT LINES 0
 CHECK ALL
-SAVEAS %OUT%/chamfer-poly-c.gs
+SAVEAS %OUT%/chamfer-poly-c.dwg
 # Not SAMEFILE against "a": the connector Line minted a fresh entity id (REQ-076) — same reasoning
 # fillet-polyline-corner.txt documents.
 
@@ -46,8 +46,8 @@ REDO
 EXPECT POLYLINES 1
 EXPECT LINES 1
 CHECK ALL
-SAVEAS %OUT%/chamfer-poly-d.gs
-EXPECT SAMEFILE %OUT%/chamfer-poly-b.gs %OUT%/chamfer-poly-d.gs
+SAVEAS %OUT%/chamfer-poly-d.dwg
+EXPECT SAMEFILE %OUT%/chamfer-poly-b.dwg %OUT%/chamfer-poly-d.dwg
 
 UNDO
 

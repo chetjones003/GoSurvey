@@ -61,7 +61,7 @@ CHECK ALL
 EXPECT LINES 3
 EXPECT POLYLINES 1
 EXPECT ELLIPSES 1
-SAVEAS %OUT%/break-line-poly-a.gs
+SAVEAS %OUT%/break-line-poly-a.dwg
 
 # BREAK is typed once; each pick pair loops back to "select object" automatically (whether the
 # break succeeds or is refused), matching TRIM/LENGTHEN/EXTEND's own looping shape — the same
@@ -102,8 +102,8 @@ CHECK ALL
 EXPECT LINES 4
 EXPECT POLYLINES 2
 EXPECT ELLIPSES 1
-SAVEAS %OUT%/break-line-poly-b.gs
-EXPECT DIFFERENTFILE %OUT%/break-line-poly-a.gs %OUT%/break-line-poly-b.gs
+SAVEAS %OUT%/break-line-poly-b.dwg
+EXPECT DIFFERENTFILE %OUT%/break-line-poly-a.dwg %OUT%/break-line-poly-b.dwg
 
 UNDO
 UNDO
@@ -113,7 +113,7 @@ EXPECT POLYLINES 1
 EXPECT ELLIPSES 1
 CHECK ALL
 
-SAVEAS %OUT%/break-line-poly-c.gs
+SAVEAS %OUT%/break-line-poly-c.dwg
 # Not SAMEFILE against "a": T1 and T4 each minted a fresh entity id (REQ-076), and undo does not —
 # and must not — roll the nextEntityId counter itself back ("ids never reused... even after undo/
 # redo"), so the counter value is permanently higher than it was at "a" even though every entity's
@@ -128,5 +128,5 @@ EXPECT POLYLINES 2
 EXPECT ELLIPSES 1
 CHECK ALL
 
-SAVEAS %OUT%/break-line-poly-d.gs
-EXPECT SAMEFILE %OUT%/break-line-poly-b.gs %OUT%/break-line-poly-d.gs
+SAVEAS %OUT%/break-line-poly-d.dwg
+EXPECT SAMEFILE %OUT%/break-line-poly-b.dwg %OUT%/break-line-poly-d.dwg

@@ -108,7 +108,7 @@ ESC
 CHECK ALL
 EXPECT LINES 4
 EXPECT POLYLINES 1
-SAVEAS %OUT%/stretch-lines-actual.gs
+SAVEAS %OUT%/stretch-lines-actual.dwg
 
 NEW
 
@@ -140,5 +140,5 @@ CMD 600,0
 ESC
 
 CHECK ALL
-SAVEAS %OUT%/stretch-lines-expected.gs
-EXPECT SAMEFILE %OUT%/stretch-lines-actual.gs %OUT%/stretch-lines-expected.gs
+SAVEAS %OUT%/stretch-lines-expected.dwg
+EXPECT SAMEFILE %OUT%/stretch-lines-actual.dwg %OUT%/stretch-lines-expected.dwg

@@ -69,7 +69,7 @@ TEST_CASE("The undo-redo oracle is emitted only when asked", "[fuzz][generator]"
   const auto without = fuzzgen::Generate(77, SampleCommands(), off);
   REQUIRE(std::find(without.begin(), without.end(), std::string("REDO ")) == without.end());
   REQUIRE(std::none_of(without.begin(), without.end(), [](const std::string& l) {
-    return l.find("ur-a.gs") != std::string::npos;
+    return l.find("ur-a.dwg") != std::string::npos;
   }));
 
   fuzzgen::Options on = off;
@@ -81,7 +81,7 @@ TEST_CASE("The undo-redo oracle is emitted only when asked", "[fuzz][generator]"
   // writes two files and asserts nothing, which is the vacuous-check failure this harness has
   // already been bitten by (docs/fuzz-harness.md §8).
   REQUIRE(std::find(with.begin(), with.end(),
-                    std::string("EXPECT SAMEFILE %OUT%/ur-a.gs %OUT%/ur-b.gs")) != with.end());
+                    std::string("EXPECT SAMEFILE %OUT%/ur-a.dwg %OUT%/ur-b.dwg")) != with.end());
   REQUIRE(std::find(with.begin(), with.end(), std::string("UNDO")) != with.end());
   REQUIRE(std::find(with.begin(), with.end(), std::string("REDO")) != with.end());
 
@@ -89,9 +89,9 @@ TEST_CASE("The undo-redo oracle is emitted only when asked", "[fuzz][generator]"
   // come back. A block carrying only the SAMEFILE half passes on a no-op undo — the false positive
   // seed 260 produced, and the reason the anchor edit and this assertion both exist.
   const auto moved = std::find(with.begin(), with.end(),
-                               std::string("EXPECT DIFFERENTFILE %OUT%/ur-a.gs %OUT%/ur-mid.gs"));
+                               std::string("EXPECT DIFFERENTFILE %OUT%/ur-a.dwg %OUT%/ur-mid.dwg"));
   const auto restored = std::find(with.begin(), with.end(),
-                                  std::string("EXPECT SAMEFILE %OUT%/ur-a.gs %OUT%/ur-b.gs"));
+                                  std::string("EXPECT SAMEFILE %OUT%/ur-a.dwg %OUT%/ur-b.dwg"));
   REQUIRE(moved != with.end());
   REQUIRE(moved < restored);
 }
@@ -110,10 +110,10 @@ TEST_CASE("The two oracles never share an output file", "[fuzz][generator]") {
   std::set<std::string> undoRedoFiles;
   std::set<std::string> roundTripFiles;
   for (const std::string& l : lines) {
-    for (const char* f : {"ur-a.gs", "ur-mid.gs", "ur-b.gs"})
+    for (const char* f : {"ur-a.dwg", "ur-mid.dwg", "ur-b.dwg"})
       if (l.find(f) != std::string::npos)
         undoRedoFiles.insert(f);
-    for (const char* f : {"rt-a.gs", "rt-b.gs", "rt-c.gs"})
+    for (const char* f : {"rt-a.dwg", "rt-b.dwg", "rt-c.dwg"})
       if (l.find(f) != std::string::npos)
         roundTripFiles.insert(f);
   }

@@ -166,9 +166,9 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   if (s.contains("trimState") && s["trimState"].is_number_integer())
     st.trimState = std::clamp(s["trimState"].get<int>(), 0, 1);
 
-  // --- Active ribbon tab (REQ-302): same shape as trimState above ---
-  if (s.contains("activeRibbonTab") && s["activeRibbonTab"].is_number_integer())
-    st.activeRibbonTab = std::clamp(s["activeRibbonTab"].get<int>(), 0, kRibbonTabCount - 1);
+  // --- Active ribbon tab (REQ-302): intentionally NOT restored. The Home tab is
+  // always focused on launch regardless of which tab was active at exit.
+  st.activeRibbonTab = kRibbonTabHome;
 
   // --- FILLET/CHAMFER (REQ-103 step 6): app-level, not per-drawing — same shape as trimState above
   // (D-2026-08-24-g: a generalized "registry" was considered and explicitly declined) ---

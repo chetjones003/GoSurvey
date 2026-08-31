@@ -44,8 +44,8 @@ CHECK ALL
 
 # And it survives the round trip: the drawing was already normalized when written, so even the first
 # resave is byte-identical (REQ-079 as amended, plus the entry-time establishment above).
-SAVEAS %OUT%/pick-local-a.gs
-OPEN %OUT%/pick-local-a.gs
+SAVEAS %OUT%/pick-local-a.dwg
+OPEN %OUT%/pick-local-a.dwg
 CHECK ALL
-SAVEAS %OUT%/pick-local-b.gs
-EXPECT SAMEFILE %OUT%/pick-local-a.gs %OUT%/pick-local-b.gs
+SAVEAS %OUT%/pick-local-b.dwg
+EXPECT SAMEFILE %OUT%/pick-local-a.dwg %OUT%/pick-local-b.dwg

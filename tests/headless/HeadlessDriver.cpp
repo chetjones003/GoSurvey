@@ -16,8 +16,10 @@
 //     difference REQ-203's "save a .gs and diff" condition exists to detect.
 
 #include "CadCommands.hpp"
+#include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"  // CadCoord::WorldFromLocal, for EXPECT LINEXYZ (REQ-154)
 #include "DxfIo.hpp"
+#include "DwgIo.hpp"
 #include "GsIo.hpp"
 #include "GsAnnotationJson.hpp"
 #include "HeadlessFileDialogs.hpp"
@@ -361,6 +363,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
 
   if (verb == "NEW") {
     run.st = AppCommandState{};
+    LoadBundledBlockLibrary(run.st, run.log);
     run.log.push_back("[driver] NEW");
   } else if (verb == "SPACE") {
     // SPACE PAPER | SPACE MODEL — switch the active space, so a transcript can exercise the
@@ -389,13 +392,13 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     }
   } else if (verb == "OPEN") {
     const std::string path = ExpandVars(run, rest);
-    if (!LoadGoSurveyFile(run.st, path.c_str(), run.log)) {
+    if (!OpenDrawingDocument(run.st, path.c_str(), run.log)) {
       Fail(run, "io", "OPEN failed: " + path, sourceLine);
       return false;
     }
   } else if (verb == "SAVEAS") {
     const std::string path = ExpandVars(run, rest);
-    if (!SaveGoSurveyFile(run.st, path.c_str(), run.log)) {
+    if (!SaveDrawingDocument(run.st, path.c_str(), run.log)) {
       Fail(run, "io", "SAVEAS failed: " + path, sourceLine);
       return false;
     }
@@ -577,12 +580,20 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       SubmitTrimViewportPick(run.st, x, y, 1.f, run.log);
       break;
     case ViewportClickRoute::HatchPick:
-    case ViewportClickRoute::PdfAttachInsertPoint:
       Fail(run, "state",
-           "CLICK cannot drive this command yet (HATCH boundary tracing / PDFATTACH insertion are "
-           "not wired into the driver); add the route here when a transcript needs it",
+           "CLICK cannot drive this command yet (HATCH boundary tracing is not wired into the "
+           "driver); add the route here when a transcript needs it",
            sourceLine);
       return false;
+    case ViewportClickRoute::PdfAttachInsertPoint:
+      Fail(run, "state",
+           "CLICK cannot drive this command yet (PDFATTACH insertion is not wired into the "
+           "driver); add the route here when a transcript needs it",
+           sourceLine);
+      return false;
+    case ViewportClickRoute::InsertBlockPick:
+      SubmitInsertBlockPick(run.st, x, y, run.log);
+      break;
     case ViewportClickRoute::Ignore:
       // The whole point of this verb: a command the UI does not route is a failure, not a no-op.
       Fail(run, "state",
@@ -989,8 +1000,14 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "io", "EXPECT " + what + ": cannot open " + (!fa ? pa : pb), sourceLine);
         return false;
       }
-      const std::string sa((std::istreambuf_iterator<char>(fa)), std::istreambuf_iterator<char>());
-      const std::string sb((std::istreambuf_iterator<char>(fb)), std::istreambuf_iterator<char>());
+      const std::string saRaw((std::istreambuf_iterator<char>(fa)), std::istreambuf_iterator<char>());
+      const std::string sbRaw((std::istreambuf_iterator<char>(fb)), std::istreambuf_iterator<char>());
+      std::string saPayload;
+      std::string sbPayload;
+      const std::string& sa =
+          TryGoSurveyDwgPayloadFromBytes(saRaw, saPayload) ? saPayload : saRaw;
+      const std::string& sb =
+          TryGoSurveyDwgPayloadFromBytes(sbRaw, sbPayload) ? sbPayload : sbRaw;
       if (wantSame && sa != sb) {
         // Report the first differing offset: on a JSON document that is usually enough to name the
         // field, and it keeps the failure line short enough to read in a summary.

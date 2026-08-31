@@ -1,4 +1,5 @@
 #include "CadCommands.hpp"
+#include "CadBlocks.hpp"
 #include "ToolspaceCatalog.hpp"
 #include "OrthoConstrain.hpp"
 #include "TextStyle.hpp"
@@ -111,6 +112,9 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadSurfaceAttrs        = cmd.cadSurfaceAttrs;
   doc.cadTables              = cmd.cadTables;
   doc.cadTableAttrs          = cmd.cadTableAttrs;
+  doc.blockDefs              = cmd.blockDefs;
+  doc.cadBlockRefs           = cmd.cadBlockRefs;
+  doc.cadBlockRefAttrs       = cmd.cadBlockRefAttrs;
   doc.surveyPoints           = cmd.surveyPoints;
   doc.pointGroups            = cmd.pointGroups;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
@@ -181,6 +185,9 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadSurfaceAttrs            = doc.cadSurfaceAttrs;
   cmd.cadTables                  = doc.cadTables;
   cmd.cadTableAttrs              = doc.cadTableAttrs;
+  cmd.blockDefs                  = doc.blockDefs;
+  cmd.cadBlockRefs               = doc.cadBlockRefs;
+  cmd.cadBlockRefAttrs           = doc.cadBlockRefAttrs;
   cmd.surveyPoints               = doc.surveyPoints;
   cmd.pointGroups                = doc.pointGroups;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
@@ -268,6 +275,8 @@ static void FitViewToSheet(AppCommandState& cmd, const PaperLayout& pl) {
 }
 
 void SetActiveSpace(AppCommandState& cmd, int spaceIndex) {
+  if (cmd.blockEditActive)  // ADR-043: a block-edit session is model-space only
+    return;
   const int prev = cmd.activeSpaceIndex;
   // Save the view of the space we're leaving so each space keeps its own pan/zoom.
   if (prev == kModelSpaceIndex) {
@@ -581,7 +590,24 @@ static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx
 // PaperTextBoundsIn (top-left text bounds, REQ-039) now lives in PaperSpace.hpp as an inline helper so the
 // header-only box-select + unit tests can share it.
 
-bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperRef* out) {
+bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperRef* out,
+                       const std::vector<CadBlockDefinition>* blockDefs) {
+  assert(out != nullptr);
+  for (int bi = static_cast<int>(L.paperBlockRefs.size()) - 1; bi >= 0; --bi) {
+    const CadBlockRef& br = L.paperBlockRefs[static_cast<size_t>(bi)];
+    bool hit = false;
+    if (blockDefs)
+      hit = CadBlockHitWorld(*blockDefs, br, x, y, tolIn);
+    const float dx = x - br.xf.x;
+    const float dy = y - br.xf.y;
+    if (!hit)
+      hit = (dx * dx + dy * dy) <= tolIn * tolIn;
+    if (hit) {
+      out->type = PaperRef::Type::Block;
+      out->index = bi;
+      return true;
+    }
+  }
   // Text first (it draws on top); topmost = last in the vector. Then lines by segment distance.
   for (int ti = static_cast<int>(L.paperTexts.size()) - 1; ti >= 0; --ti) {
     float bx0, by0, bx1, by1;
@@ -692,7 +718,7 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
   if (!L || st.selectedPaperEntities.empty())
     return;
   // Group indices by type; erase each type's indices in descending order so earlier indices stay valid.
-  std::vector<int> byType[6];
+  std::vector<int> byType[7];
   for (const PaperRef& r : st.selectedPaperEntities)
     byType[static_cast<int>(r.type)].push_back(r.index);
   auto descUnique = [](std::vector<int>& v) {
@@ -737,6 +763,8 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
   }
   for (int ti : byType[static_cast<int>(PaperRef::Type::Text)])
     eraseElem(L->paperTexts, L->paperTextAttrs, ti);
+  for (int bi : byType[static_cast<int>(PaperRef::Type::Block)])
+    eraseElem(L->paperBlockRefs, L->paperBlockRefAttrs, bi);
   ClearPaperEntitySelection(st);
   BumpCadGpuCache(st);
   log.push_back("DELETE — removed " + std::to_string(n) + " paper object(s).");
@@ -857,6 +885,20 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
       }
       break;
     }
+    case PaperRef::Type::Block: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperBlockRefs.size())
+        break;
+      if (copy) {
+        CadBlockRef c = L->paperBlockRefs[static_cast<size_t>(r.index)];
+        CadBlockTranslate(&c, dxIn, dyIn, 0.f);
+        L->paperBlockRefs.push_back(std::move(c));
+        L->paperBlockRefAttrs.push_back(attrAt(L->paperBlockRefAttrs, r.index));
+        newSel.push_back({PaperRef::Type::Block, static_cast<int>(L->paperBlockRefs.size()) - 1});
+      } else {
+        CadBlockTranslate(&L->paperBlockRefs[static_cast<size_t>(r.index)], dxIn, dyIn, 0.f);
+      }
+      break;
+    }
     }
   }
   if (copy && !newSel.empty())
@@ -926,6 +968,11 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
         rot(L->paperTexts[static_cast<size_t>(r.index)].insX, L->paperTexts[static_cast<size_t>(r.index)].insY);
         L->paperTexts[static_cast<size_t>(r.index)].rotationRad += angRad;
       }
+      break;
+    }
+    case PaperRef::Type::Block: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperBlockRefs.size())
+        CadBlockRotateZ(&L->paperBlockRefs[static_cast<size_t>(r.index)], baseX, baseY, angRad);
       break;
     }
     }
@@ -1054,6 +1101,16 @@ void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, fl
       newSel.push_back({PaperRef::Type::Text, static_cast<int>(L->paperTexts.size()) - 1});
       break;
     }
+    case PaperRef::Type::Block: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperBlockRefs.size())
+        break;
+      CadBlockRef c = L->paperBlockRefs[static_cast<size_t>(r.index)];
+      CadBlockMirror(&c, x0In, y0In, x1In, y1In);
+      L->paperBlockRefs.push_back(std::move(c));
+      L->paperBlockRefAttrs.push_back(attrAt(L->paperBlockRefAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Block, static_cast<int>(L->paperBlockRefs.size()) - 1});
+      break;
+    }
     }
   }
   if (!newSel.empty())
@@ -1136,6 +1193,24 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       }
       break;
     }
+    case SelectedEntity::Type::BlockRef: {
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {
+        const CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(sel.index)];
+        const int di = CadBlockFindDef(cmd.blockDefs, r.defName);
+        if (di >= 0) {
+          const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+          const int nG = CadBlockDynGripCount(def);
+          for (int g = 0; g < nG; ++g) {
+            if (!CadBlockDynGripShownOnInsert(g))
+              continue;
+            float gx = 0.f, gy = 0.f, gz = 0.f;
+            if (CadBlockDynGripWorld(def, r, g, &gx, &gy, &gz))
+              tryGrip(sel, gx, gy, g);
+          }
+        }
+      }
+      break;
+    }
     default:
       break;
     }
@@ -1143,6 +1218,20 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
   if (bestWhich < 0)
     return false;
   PushUndoSnapshot(cmd, "Grip edit");
+  if (bestSel.type == SelectedEntity::Type::BlockRef) {
+    if (!CadBlockArmDynGrip(cmd, bestSel.index, bestWhich)) {
+      BumpCadGpuCache(cmd);
+      return true;
+    }
+    cmd.entityGripMoveActive = true;
+    cmd.entityGripType = bestSel.type;
+    cmd.entityGripEntityIndex = bestSel.index;
+    cmd.entityGripWhich = bestWhich;
+    cmd.entityGripAnchorX = bestGripX;
+    cmd.entityGripAnchorY = bestGripY;
+    cmd.entityGripTypedDistanceValid = false;
+    return true;
+  }
   cmd.entityGripMoveActive = true;
   cmd.entityGripType = bestSel.type;
   cmd.entityGripEntityIndex = bestSel.index;
@@ -1332,7 +1421,7 @@ static void WriteUndoHistoryLogLine(const std::string& msg) {
   f << timeBuf << "  " << msg << "\n";
 }
 
-static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const std::string& description) {
+DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const std::string& description) {
   DrawingGeometrySnapshot snap;
   // Meshes copy as pointers, not payloads (architecture §11.5 as amended 2026-08-12) — this line is
   // O(number of meshes), not O(triangles), which is what makes undo affordable with a model loaded.
@@ -1343,6 +1432,9 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.cadSurfaceAttrs      = st.cadSurfaceAttrs;
   snap.cadTables            = st.cadTables;
   snap.cadTableAttrs        = st.cadTableAttrs;
+  snap.blockDefs            = st.blockDefs;
+  snap.cadBlockRefs         = st.cadBlockRefs;
+  snap.cadBlockRefAttrs     = st.cadBlockRefAttrs;
   snap.userLinesFlat        = st.userLinesFlat;
   snap.userLineAttrs        = st.userLineAttrs;
   snap.userCirclesCxCyZR     = st.userCirclesCxCyZR;
@@ -1382,7 +1474,7 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   return snap;
 }
 
-static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot& snap) {
+void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot& snap) {
   st.userLinesFlat        = snap.userLinesFlat;
   st.userLineAttrs        = snap.userLineAttrs;
   st.userCirclesCxCyZR     = snap.userCirclesCxCyZR;
@@ -1411,6 +1503,9 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.cadSurfaceAttrs      = snap.cadSurfaceAttrs;
   st.cadTables            = snap.cadTables;
   st.cadTableAttrs        = snap.cadTableAttrs;
+  st.blockDefs            = snap.blockDefs;
+  st.cadBlockRefs         = snap.cadBlockRefs;
+  st.cadBlockRefAttrs     = snap.cadBlockRefAttrs;
   st.surveyPoints         = snap.surveyPoints;
   st.pointGroups          = snap.pointGroups;
   st.drawingLayerTable    = snap.drawingLayerTable;
@@ -1425,6 +1520,34 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
 }
 
 } // namespace
+
+// External-linkage wrappers so the block editor (CadBlocks.cpp, ADR-043) can stash/restore the
+// whole model-geometry set — the two functions above have internal linkage.
+DrawingGeometrySnapshot CadCaptureGeometrySnapshot(const AppCommandState& st, const std::string& description) {
+  return CaptureGeometrySnapshot(st, description);
+}
+void CadRestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot& snap) {
+  RestoreGeometrySnapshot(st, snap);
+}
+
+// Undo-stack depth for the active tab. The block editor (ADR-043) marks the depth on enter and
+// truncates back to it on close, so a later Undo cannot pull a block-geometry snapshot (pushed by
+// an ordinary draw command mid-session) into model space.
+std::size_t CadActiveUndoStackSize(const AppCommandState& st) {
+  const int idx = st.activeDrawingIdx;
+  if (idx < 0 || static_cast<std::size_t>(idx) >= st.documents.size())
+    return 0;
+  return st.documents[static_cast<std::size_t>(idx)].undoStack.size();
+}
+void CadTruncateActiveUndoStack(AppCommandState& st, std::size_t n) {
+  const int idx = st.activeDrawingIdx;
+  if (idx < 0 || static_cast<std::size_t>(idx) >= st.documents.size())
+    return;
+  auto& doc = st.documents[static_cast<std::size_t>(idx)];
+  if (n < doc.undoStack.size())
+    doc.undoStack.resize(n);
+  doc.redoStack.clear();
+}
 
 namespace {
 
@@ -1441,7 +1564,8 @@ const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::Polyline,   EntityKind::Annotation,   EntityKind::FilledRegion, EntityKind::Mesh,
     EntityKind::FeatureLine,
     EntityKind::Surface,
-    EntityKind::Table};  ///< REQ-148 — last, so kinds above keep their ids.
+    EntityKind::Table,
+    EntityKind::BlockRef};  ///< issue #124 — last, so kinds above keep their ids.
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -1459,6 +1583,7 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::FeatureLine:  return &st.featureLineAttrs;
   case EntityKind::Surface:      return &st.cadSurfaceAttrs;  // REQ-068 / ADR-036 (a)
   case EntityKind::Table:        return &st.cadTableAttrs;    // REQ-148
+  case EntityKind::BlockRef:     return &st.cadBlockRefAttrs;
   }
   return &st.userLineAttrs;
 }
@@ -6163,6 +6288,39 @@ const CmdEntry kRegistry[] = {
     {"mview",        "rectviewport, rectvp", "Rectangular paper-space viewport (two clicks)"},
     {"mspace",       "ms", "Edit the model through the selected viewport (floating model space)"},
     {"pspace",       "ps", "Return to paper space from a floating viewport"},
+    {"block", "", "Define a block from the selection: BLOCK <name>, <x>, <y>[, CONVERT|DELETE|RETAIN]"},
+    {"insert", "i", "Insert a block (dialog); or INSERT <name>, <x>, <y>[, sx, sy, rotDeg[, sz, z]]"},
+    {"explode", "x", "Explode selected block references"},
+    {"bedit", "", "Open the block editor: BEDIT <name>"},
+    {"bsave", "", "Save the block being edited"},
+    {"bclose", "", "Close the block editor"},
+    {"bsaveas", "", "Save the edited block under a new name"},
+    {"attdef", "", "Attribute definition (in BEDIT)"},
+    {"attedit", "", "Edit attribute values on selected inserts"},
+    {"attsync", "", "Synchronize attributes from definitions"},
+    {"attext", "", "Extract attributes to the command log / file"},
+    {"blocklist", "", "List block definitions"},
+    {"blockstats", "", "Definition statistics"},
+    {"purge", "-purge", "Purge unused block definitions"},
+    {"wblock", "", "Write a block definition to a .gs file"},
+    {"blockimport", "", "Import block definitions (.gs/.dxf/.dwg); omit the path to browse"},
+    {"blocklib", "blockbrowser", "List the drawing block library with previews"},
+    {"blocksearch", "", "Search block names"},
+    {"blockfav", "", "Favorite blocks"},
+    {"blockrecent", "", "Recently used blocks"},
+    {"makeblock", "", "Create an empty block definition: MAKEBLOCK <name>"},
+    {"mkline", "", "Add a line: MKLINE x0, y0, x1, y1"},
+    {"selline", "", "Select the last line"},
+    {"selblock", "", "Select the last block reference"},
+    {"movesel", "", "Move selected inserts: MOVESEL dx, dy"},
+    {"copysel", "", "Copy selected inserts: COPYSEL dx, dy"},
+    {"rotatesel", "", "Rotate selected inserts: ROTATESEL x, y, deg"},
+    {"scalesel", "", "Scale selected inserts: SCALESEL x, y, factor"},
+    {"mirrorsel", "", "Mirror selected inserts: MIRRORSEL x0, y0, x1, y1"},
+    {"copyclip", "", "Copy the selection to the CAD clipboard"},
+    {"pasteblock", "", "Paste clipboard block references: PASTEBLOCK dx, dy"},
+    {"blockmodel", "", "Switch to model space"},
+    {"blockpaper", "", "Switch to the first paper layout"},
 };
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -6371,6 +6529,10 @@ static void ResetAllCadDraftTools(AppCommandState& st) {
   }
   st.pdfAttachDialogOpen = false;
   st.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitDialog;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
+  st.insertBlockAttrDialogOpen = false;
+  st.insertBlockAttrRefIndex = -1;
 }
 
 static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
@@ -6803,6 +6965,14 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
       log.push_back("PSPACE — not in a floating viewport.");
     return true;
   }
+  if (primary == "blockimport") {
+    CadBlocksImportWithPicker(st, log);
+    return true;
+  }
+  if (primary == "insert") {
+    StartInsertBlockCommand(st, log);
+    return true;
+  }
   return false;
 }
 
@@ -7128,6 +7298,22 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Table;
       e.index = static_cast<int>(ti);
+      hits.push_back(e);
+    }
+  }
+  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+    float bmnX = 0.f, bmnY = 0.f, bmxX = 0.f, bmxY = 0.f;
+    CadBlockWorldAabb(st.blockDefs, st.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
+    SPBox(bmnX, bmnY, bmxX, bmxY, &bmnX, &bmnY, &bmxX, &bmxY);
+    bool hit = false;
+    if (windowMode)
+      hit = bmnX >= mnX && bmxX <= mxX && bmnY >= mnY && bmxY <= mxY;
+    else
+      hit = !(bmxX < mnX || bmnX > mxX || bmxY < mnY || bmnY > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::BlockRef;
+      e.index = static_cast<int>(bi);
       hits.push_back(e);
     }
   }
@@ -7619,6 +7805,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   std::vector<EntityAttributes> newAnnAttrs;
   std::vector<CadTable> newTables;
   std::vector<EntityAttributes> newTableAttrs;
+  std::vector<CadBlockRef> newBlockRefs;
+  std::vector<EntityAttributes> newBlockRefAttrs;
   std::vector<CadArc> newArcs;
   std::vector<EntityAttributes> newArcAttrs;
   std::vector<CadEllipse> newEll;
@@ -7697,6 +7885,17 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
           a = st.cadTableAttrs[tk];
         newTableAttrs.push_back(DuplicatedEntityAttrs(a));
       }
+    } else if (e.type == SelectedEntity::Type::BlockRef) {
+      const size_t bk = static_cast<size_t>(e.index);
+      if (bk < st.cadBlockRefs.size()) {
+        CadBlockRef c = st.cadBlockRefs[bk];
+        CadBlockTranslate(&c, dx, dy, 0.f);
+        newBlockRefs.push_back(std::move(c));
+        EntityAttributes a{};
+        if (bk < st.cadBlockRefAttrs.size())
+          a = st.cadBlockRefAttrs[bk];
+        newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.userArcs.size()) {
@@ -7757,6 +7956,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
   st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
   st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
+  st.cadBlockRefs.insert(st.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
+  st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
   st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
   st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
   st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
@@ -7774,7 +7975,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
     });
   });
 
-  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newTables.empty() || !newArcs.empty() || !newEll.empty() ||
+  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newTables.empty() || !newBlockRefs.empty() || !newArcs.empty() || !newEll.empty() ||
       !newFills.empty() || st.userPolylineVerts.size() != polyVertsBefore ||
       st.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
@@ -7876,6 +8077,13 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
     st.cadTables.push_back(std::move(t));
     st.cadTableAttrs.push_back(cb.tableAttrs[i]);
     st.selection.push_back({ST::Table, static_cast<int>(st.cadTables.size()) - 1});
+  }
+  for (size_t i = 0; i < cb.blockRefs.size(); ++i) {
+    CadBlockRef r = cb.blockRefs[i];
+    CadBlockTranslate(&r, dx, dy, 0.f);
+    st.cadBlockRefs.push_back(std::move(r));
+    st.cadBlockRefAttrs.push_back(cb.blockRefAttrs[i]);
+    st.selection.push_back({ST::BlockRef, static_cast<int>(st.cadBlockRefs.size()) - 1});
   }
   for (size_t i = 0; i < cb.filledRegions.size(); ++i) {  // solid fills — now selectable (REQ-042)
     CadFilledRegion fr = cb.filledRegions[i];
@@ -7992,6 +8200,13 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
     L.paperFilledRegions.push_back(std::move(fr));
     L.paperFilledRegionAttrs.push_back(cb.filledRegionAttrs[i]);
   }
+  for (size_t i = 0; i < cb.blockRefs.size(); ++i) {
+    CadBlockRef r = cb.blockRefs[i];
+    CadBlockTranslate(&r, dx, dy, 0.f);
+    L.paperBlockRefs.push_back(std::move(r));
+    L.paperBlockRefAttrs.push_back(i < cb.blockRefAttrs.size() ? cb.blockRefAttrs[i] : EntityAttributes{});
+    st.selectedPaperEntities.push_back({PT::Block, static_cast<int>(L.paperBlockRefs.size()) - 1});
+  }
   BumpCadGpuCache(st);
   return skipped;
 }
@@ -8010,6 +8225,7 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
   ClearEntityIdsFrom(st.clipboard.polyAttrs, 0);
   ClearEntityIdsFrom(st.clipboard.annotationAttrs, 0);
   ClearEntityIdsFrom(st.clipboard.filledRegionAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.blockRefAttrs, 0);
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     st.selection.clear();  // crossing into paper: model selection no longer applies
     const int skipped = CommitPasteIntoPaper(st, *L, dx, dy);
@@ -8033,6 +8249,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   std::vector<EntityAttributes> newAnnAttrs;
   std::vector<CadTable> newTables;
   std::vector<EntityAttributes> newTableAttrs;
+  std::vector<CadBlockRef> newBlockRefs;
+  std::vector<EntityAttributes> newBlockRefAttrs;
   std::vector<CadArc> newArcs;
   std::vector<EntityAttributes> newArcAttrs;
   std::vector<CadEllipse> newEll;
@@ -8131,6 +8349,17 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
           a = st.cadTableAttrs[tk];
         newTableAttrs.push_back(DuplicatedEntityAttrs(a));
       }
+    } else if (e.type == SelectedEntity::Type::BlockRef) {
+      const size_t bk = static_cast<size_t>(e.index);
+      if (bk < st.cadBlockRefs.size()) {
+        CadBlockRef c = st.cadBlockRefs[bk];
+        CadBlockRotateZ(&c, bx, by, rad);
+        newBlockRefs.push_back(std::move(c));
+        EntityAttributes a{};
+        if (bk < st.cadBlockRefAttrs.size())
+          a = st.cadBlockRefAttrs[bk];
+        newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.userArcs.size()) {
@@ -8199,6 +8428,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
   st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
   st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
+  st.cadBlockRefs.insert(st.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
+  st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
   st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
   st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
   st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
@@ -8212,6 +8443,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   });
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
+      !newBlockRefs.empty() ||
       st.userPolylineVerts.size() != polyVertsBefore ||
       st.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
@@ -8343,6 +8575,8 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
   std::vector<EntityAttributes> newAnnAttrs;
   std::vector<CadTable> newTables;
   std::vector<EntityAttributes> newTableAttrs;
+  std::vector<CadBlockRef> newBlockRefs;
+  std::vector<EntityAttributes> newBlockRefAttrs;
   std::vector<CadArc> newArcs;
   std::vector<EntityAttributes> newArcAttrs;
   std::vector<CadEllipse> newEll;
@@ -8461,6 +8695,17 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
           a = st.cadTableAttrs[tk];
         newTableAttrs.push_back(DuplicatedEntityAttrs(a));
       }
+    } else if (e.type == SelectedEntity::Type::BlockRef) {
+      const size_t bk = static_cast<size_t>(e.index);
+      if (bk < st.cadBlockRefs.size()) {
+        CadBlockRef c = st.cadBlockRefs[bk];
+        CadBlockMirror(&c, x0, y0, x1, y1);
+        newBlockRefs.push_back(std::move(c));
+        EntityAttributes a{};
+        if (bk < st.cadBlockRefAttrs.size())
+          a = st.cadBlockRefAttrs[bk];
+        newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.userArcs.size()) {
@@ -8534,6 +8779,8 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
   st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
   st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
+  st.cadBlockRefs.insert(st.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
+  st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
   st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
   st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
   st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
@@ -8547,6 +8794,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
   });
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
+      !newBlockRefs.empty() ||
       st.userPolylineVerts.size() != polyVertsBefore ||
       st.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
@@ -8663,6 +8911,13 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
       continue;
     CadTableRotateAround(&st.cadTables[static_cast<size_t>(e.index)], bx, by, rad);
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::BlockRef)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+      continue;
+    CadBlockRotateZ(&st.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, rad);
   }
   // PDF underlays: rotate insertion point around base; accumulate rotation angle.
   constexpr float kPdfRadToDeg = 180.f / 3.14159265f;
@@ -8786,6 +9041,13 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::v
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
       continue;
     CadTableTranslate(&st.cadTables[static_cast<size_t>(e.index)], dx, dy);
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::BlockRef)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+      continue;
+    CadBlockTranslate(&st.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, 0.f);
   }
   // Feature lines (REQ-087) — see ApplyRotationToSelection.
   TransformSelectedFeatureLinesInPlace(st, [&](float* x, float* y) {
@@ -9203,6 +9465,13 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc, st
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
       continue;
     CadTableScaleAround(&st.cadTables[static_cast<size_t>(e.index)], bx, by, sc);
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::BlockRef)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+      continue;
+    CadBlockScaleAbout(&st.cadBlockRefs[static_cast<size_t>(e.index)], bx, by, sc);
   }
   // PDF underlays: scale insertion point around base; multiply uniform scale factor.
   for (const auto& e : st.selection) {
@@ -11894,6 +12163,13 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       cb.tables.push_back(st.cadTables[k]);
       cb.tableAttrs.push_back(k < st.cadTableAttrs.size() ? st.cadTableAttrs[k] : EntityAttributes{});
       expandBbox(st.cadTables[k].insX, st.cadTables[k].insY);
+    } else if (e.type == SelectedEntity::Type::BlockRef) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.cadBlockRefs.size())
+        continue;
+      cb.blockRefs.push_back(st.cadBlockRefs[k]);
+      cb.blockRefAttrs.push_back(k < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[k] : EntityAttributes{});
+      expandBbox(st.cadBlockRefs[k].xf.x, st.cadBlockRefs[k].xf.y);
     } else if (e.type == SelectedEntity::Type::FilledRegion) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.cadFilledRegions.size())
@@ -16567,6 +16843,15 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     consider(static_cast<double>(tmxX), static_cast<double>(tmxY));
   }
 
+  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+    if (EntityHiddenInViewport(vpFilter, st.cadBlockRefAttrs, bi))
+      continue;
+    float bmnX = 0.f, bmnY = 0.f, bmxX = 0.f, bmxY = 0.f;
+    CadBlockWorldAabb(st.blockDefs, st.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
+    consider(static_cast<double>(bmnX), static_cast<double>(bmnY));
+    consider(static_cast<double>(bmxX), static_cast<double>(bmxY));
+  }
+
   for (size_t arcIx = 0; arcIx < st.userArcs.size(); ++arcIx) {
     if (EntityHiddenInViewport(vpFilter, st.userArcAttrs, arcIx))
       continue;
@@ -18653,6 +18938,10 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.cadTableAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  while (st.cadBlockRefAttrs.size() < st.cadBlockRefs.size()) {
+    st.cadBlockRefAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
   if (grew)
     BumpCadGpuCache(st);
 }
@@ -18676,6 +18965,8 @@ static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::
   for (const auto& a : st.cadAnnotationAttrs)
     add(a.layer);
   for (const auto& a : st.cadTableAttrs)
+    add(a.layer);
+  for (const auto& a : st.cadBlockRefAttrs)
     add(a.layer);
   for (const auto& p : st.surveyPoints)
     add(p.layer);
@@ -19167,6 +19458,16 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
     }
     return;
   }
+  case SelectedEntity::Type::BlockRef: {
+    if (idx < 0 || static_cast<size_t>(idx) >= st.cadBlockRefs.size())
+      return;
+    CadBlockRef& r = st.cadBlockRefs[static_cast<size_t>(idx)];
+    const int di = CadBlockFindDef(st.blockDefs, r.defName);
+    if (di < 0)
+      return;
+    CadBlockApplyDynGripDrag(&r, st.blockDefs[static_cast<size_t>(di)], st.entityGripWhich, x, y);
+    return;
+  }
   default:
     return;
   }
@@ -19204,6 +19505,7 @@ EntityAttributes SelectSimilarAttrsOf(const AppCommandState& st, const SelectedE
   case SelectedEntity::Type::Ellipse:    return pick(st.userEllAttrs, e.index);
   case SelectedEntity::Type::Annotation: return pick(st.cadAnnotationAttrs, e.index);
   case SelectedEntity::Type::Table:      return pick(st.cadTableAttrs, e.index);
+  case SelectedEntity::Type::BlockRef:   return pick(st.cadBlockRefAttrs, e.index);
   default:                               return EntityAttributes{};
   }
 }
@@ -19286,6 +19588,11 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
         consider(SelectedEntity::Type::Table, static_cast<int>(i));
       break;
     }
+    case SelectedEntity::Type::BlockRef: {
+      for (size_t i = 0; i < st.cadBlockRefs.size(); ++i)
+        consider(SelectedEntity::Type::BlockRef, static_cast<int>(i));
+      break;
+    }
     default:
       break;
     }
@@ -19356,6 +19663,11 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadMeshAttrs.clear();
   st.cadTables.clear();
   st.cadTableAttrs.clear();
+  st.blockDefs.clear();
+  st.cadBlockRefs.clear();
+  st.cadBlockRefAttrs.clear();
+  st.blockEditorName.clear();
+  st.importedDxfAttrDefs.clear();
   ClearPendingOneShotObjectSnap(st);
   ClearCadSelection(st);
   // Isolation is keyed on entity ids, and the id space restarts above — so a hidden set kept here
@@ -19628,6 +19940,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::set<int> circIx;
   std::set<int> annIx;
   std::set<int> tableIx;
+  std::set<int> blockIx;
   std::set<int> arcIx;
   std::set<int> ellIx;
   std::set<int> polyIx;
@@ -19649,6 +19962,9 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     else if (e.type == SelectedEntity::Type::Table && e.index >= 0 &&
              static_cast<size_t>(e.index) < st.cadTables.size())
       tableIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::BlockRef && e.index >= 0 &&
+             static_cast<size_t>(e.index) < st.cadBlockRefs.size())
+      blockIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::Arc && e.index >= 0 && static_cast<size_t>(e.index) < nArc)
       arcIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::Ellipse && e.index >= 0 && static_cast<size_t>(e.index) < nEll)
@@ -19709,6 +20025,17 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::sort(tv.begin(), tv.end(), std::greater<int>());
   for (int idx : tv)
     EraseCadTableAtIndex(st, static_cast<size_t>(idx));
+
+  std::vector<int> bv(blockIx.begin(), blockIx.end());
+  std::sort(bv.begin(), bv.end(), std::greater<int>());
+  for (int idx : bv) {
+    const size_t k = static_cast<size_t>(idx);
+    if (k >= st.cadBlockRefs.size())
+      continue;
+    st.cadBlockRefs.erase(st.cadBlockRefs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (k < st.cadBlockRefAttrs.size())
+      st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
 
   std::vector<int> arv(arcIx.begin(), arcIx.end());
   std::sort(arv.begin(), arv.end(), std::greater<int>());
@@ -20823,6 +21150,22 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       }
     }
     consider(e, td2);
+  }
+
+  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::BlockRef;
+    e.index = static_cast<int>(bi);
+    std::vector<CadBlockWorldSeg> segs;
+    EntityAttributes dummy{};
+    if (static_cast<size_t>(bi) < st.cadBlockRefAttrs.size())
+      dummy = st.cadBlockRefAttrs[bi];
+    CadBlockCollectWorldLines(st.blockDefs, st.cadBlockRefs[bi], dummy, &segs);
+    double bd2 = d2Segment(st.cadBlockRefs[bi].xf.x, st.cadBlockRefs[bi].xf.y, st.cadBlockRefs[bi].xf.z,
+                           st.cadBlockRefs[bi].xf.x, st.cadBlockRefs[bi].xf.y, st.cadBlockRefs[bi].xf.z);
+    for (const CadBlockWorldSeg& s : segs)
+      bd2 = std::min(bd2, d2Segment(s.x0, s.y0, s.z0, s.x1, s.y1, s.z1));
+    consider(e, bd2);
   }
 
   if (!any)
@@ -23924,6 +24267,7 @@ const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, con
   // layer/colour, both inherited rather than re-implemented.
   case T::Surface:      return at(st.cadSurfaceAttrs);
   case T::Table:        return at(st.cadTableAttrs);
+  case T::BlockRef:     return at(st.cadBlockRefAttrs);
   // Survey points and PDF underlays carry no EntityAttributes and are out of REQ-084's scope.
   default:              return nullptr;
   }
@@ -23956,6 +24300,7 @@ void CollectIsolatableIds(const AppCommandState& st, std::vector<std::uint64_t>*
   take(st.cadMeshAttrs);
   take(st.cadSurfaceAttrs);
   take(st.cadTableAttrs);
+  take(st.cadBlockRefAttrs);
 }
 
 /// Ids of the current selection that isolation can act on, plus how many picks it had to skip
@@ -24467,6 +24812,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("VPTHAW — exited.");
   else if (st.active == AppCommandState::Kind::PdfAttach)
     log.push_back("PDFATTACH canceled.");
+  else if (st.active == AppCommandState::Kind::InsertBlock)
+    log.push_back("INSERT canceled.");
   else if (st.active == AppCommandState::Kind::Paste)
     log.push_back("PASTE canceled.");
   else if (st.active == AppCommandState::Kind::PaperRectViewport) {
@@ -25197,6 +25544,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     std::string plotTok;
     issIdle >> plotTok;
     plotTok = StringUtil::toLowerAsciiCopy(plotTok);
+    if (CadBlocksTryIdleCommand(st, plotTok, issIdle, log))
+      return;
     // `TRIMSTATE 1` sets it in one line; a bare `TRIMSTATE` falls through to the registry and prompts.
     if (plotTok == "trimstate") {
       int tv = 0;
@@ -25896,6 +26245,44 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     CommitSurveyInverseSecondPoint(st, px, py, log);
+    return;
+  }
+
+  if (st.active == K::InsertBlock) {
+    using IPh = AppCommandState::InsertBlockPhase;
+    if (st.insertBlockPhase == IPh::WaitDialog) {
+      log.push_back("INSERT — complete the Insert dialog, or ESC to cancel.");
+      return;
+    }
+    if (st.insertBlockPhase == IPh::WaitAttributes) {
+      if (line.empty())
+        CadBlocksCommitInsertAttrDialog(st, log);
+      else
+        log.push_back("INSERT — use the Edit Attributes dialog, or press Enter to accept.");
+      return;
+    }
+    if (st.insertBlockPhase == IPh::WaitRotation) {
+      if (line.empty()) {
+        CadBlocksPlacePendingInsert(st, log);
+        return;
+      }
+      if (line.find(',') == std::string::npos) {
+        float ang = 0.f;
+        if (ParseAngleDegrees(line, &ang)) {
+          st.insertBlockRotDeg = ang;
+          CadBlocksPlacePendingInsert(st, log);
+          return;
+        }
+      }
+    }
+    float px = 0.f;
+    float py = 0.f;
+    const bool rel = st.insertBlockPhase != IPh::WaitInsertPoint;
+    if (!ParseStoragePoint(st, line, &px, &py, rel, st.insertBlockX, st.insertBlockY)) {
+      log.push_back("INSERT — type X,Y or pick in the viewport.");
+      return;
+    }
+    SubmitInsertBlockPick(st, px, py, log);
     return;
   }
 
@@ -26998,6 +27385,19 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     if (st.pdfAttachPhase == PAP::WaitRotationPt)
       return "PDFATTACH: Rotation reference point | ESC cancel";
     return "PDFATTACH: Configure in the dialog";
+  }
+
+  if (st.active == K::InsertBlock) {
+    using IPh = AppCommandState::InsertBlockPhase;
+    if (st.insertBlockPhase == IPh::WaitInsertPoint)
+      return "INSERT: Insertion point — click or X,Y | ESC cancel";
+    if (st.insertBlockPhase == IPh::WaitScale)
+      return "INSERT: Scale point — click or X,Y | ESC cancel";
+    if (st.insertBlockPhase == IPh::WaitRotation)
+      return "INSERT: Specify rotation angle <0d0'0\"> — click or type | ESC cancel";
+    if (st.insertBlockPhase == IPh::WaitAttributes)
+      return "INSERT: Enter attribute values in the dialog | ESC cancel";
+    return "INSERT: Configure in the Insert dialog";
   }
 
   if (st.active == K::FeatureLine) {

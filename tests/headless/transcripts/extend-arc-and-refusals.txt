@@ -35,7 +35,7 @@ ESC
 CHECK ALL
 EXPECT LINES 1
 EXPECT ARCS 1
-SAVEAS %OUT%/extend-arc-a.gs
+SAVEAS %OUT%/extend-arc-a.dwg
 
 CMD EXTEND
 CLICK 300 0
@@ -46,22 +46,22 @@ EXPECT LOG "EXTEND — extended to the boundary."
 EXPECT ARCS 1
 CHECK ALL
 
-SAVEAS %OUT%/extend-arc-b.gs
-EXPECT DIFFERENTFILE %OUT%/extend-arc-a.gs %OUT%/extend-arc-b.gs
+SAVEAS %OUT%/extend-arc-b.dwg
+EXPECT DIFFERENTFILE %OUT%/extend-arc-a.dwg %OUT%/extend-arc-b.dwg
 
 UNDO
 EXPECT ARCS 1
 CHECK ALL
 
-SAVEAS %OUT%/extend-arc-c.gs
-EXPECT SAMEFILE %OUT%/extend-arc-a.gs %OUT%/extend-arc-c.gs
+SAVEAS %OUT%/extend-arc-c.dwg
+EXPECT SAMEFILE %OUT%/extend-arc-a.dwg %OUT%/extend-arc-c.dwg
 
 REDO
 EXPECT ARCS 1
 CHECK ALL
 
-SAVEAS %OUT%/extend-arc-d.gs
-EXPECT SAMEFILE %OUT%/extend-arc-b.gs %OUT%/extend-arc-d.gs
+SAVEAS %OUT%/extend-arc-d.dwg
+EXPECT SAMEFILE %OUT%/extend-arc-b.dwg %OUT%/extend-arc-d.dwg
 
 ESC
 
@@ -89,7 +89,7 @@ CHECK ALL
 EXPECT LINES 2
 EXPECT CIRCLES 1
 EXPECT POLYLINES 1
-SAVEAS %OUT%/extend-refusal-a.gs
+SAVEAS %OUT%/extend-refusal-a.dwg
 
 CMD EXTEND
 CLICK 300 0
@@ -111,5 +111,5 @@ EXPECT POLYLINES 1
 ESC
 
 CHECK ALL
-SAVEAS %OUT%/extend-refusal-b.gs
-EXPECT SAMEFILE %OUT%/extend-refusal-a.gs %OUT%/extend-refusal-b.gs
+SAVEAS %OUT%/extend-refusal-b.dwg
+EXPECT SAMEFILE %OUT%/extend-refusal-a.dwg %OUT%/extend-refusal-b.dwg

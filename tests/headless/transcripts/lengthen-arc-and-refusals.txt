@@ -19,7 +19,7 @@ ESC
 
 CHECK ALL
 EXPECT ARCS 1
-SAVEAS %OUT%/lengthen-arc-a.gs
+SAVEAS %OUT%/lengthen-arc-a.dwg
 
 CMD LENGTHEN
 CMD T
@@ -30,22 +30,22 @@ EXPECT LOG "LENGTHEN — length 31.4"
 EXPECT ARCS 1
 CHECK ALL
 
-SAVEAS %OUT%/lengthen-arc-b.gs
-EXPECT DIFFERENTFILE %OUT%/lengthen-arc-a.gs %OUT%/lengthen-arc-b.gs
+SAVEAS %OUT%/lengthen-arc-b.dwg
+EXPECT DIFFERENTFILE %OUT%/lengthen-arc-a.dwg %OUT%/lengthen-arc-b.dwg
 
 UNDO
 EXPECT ARCS 1
 CHECK ALL
 
-SAVEAS %OUT%/lengthen-arc-c.gs
-EXPECT SAMEFILE %OUT%/lengthen-arc-a.gs %OUT%/lengthen-arc-c.gs
+SAVEAS %OUT%/lengthen-arc-c.dwg
+EXPECT SAMEFILE %OUT%/lengthen-arc-a.dwg %OUT%/lengthen-arc-c.dwg
 
 REDO
 EXPECT ARCS 1
 CHECK ALL
 
-SAVEAS %OUT%/lengthen-arc-d.gs
-EXPECT SAMEFILE %OUT%/lengthen-arc-b.gs %OUT%/lengthen-arc-d.gs
+SAVEAS %OUT%/lengthen-arc-d.dwg
+EXPECT SAMEFILE %OUT%/lengthen-arc-b.dwg %OUT%/lengthen-arc-d.dwg
 
 ESC
 
@@ -67,7 +67,7 @@ CMD CLOSE
 CHECK ALL
 EXPECT CIRCLES 1
 EXPECT POLYLINES 1
-SAVEAS %OUT%/lengthen-refusal-a.gs
+SAVEAS %OUT%/lengthen-refusal-a.dwg
 
 CMD LENGTHEN
 CMD DE
@@ -84,5 +84,5 @@ EXPECT POLYLINES 1
 ESC
 
 CHECK ALL
-SAVEAS %OUT%/lengthen-refusal-b.gs
-EXPECT SAMEFILE %OUT%/lengthen-refusal-a.gs %OUT%/lengthen-refusal-b.gs
+SAVEAS %OUT%/lengthen-refusal-b.dwg
+EXPECT SAMEFILE %OUT%/lengthen-refusal-a.dwg %OUT%/lengthen-refusal-b.dwg

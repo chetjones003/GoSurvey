@@ -155,6 +155,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   CheckAttrCount(out, "meshes", st.cadMeshes.size(), st.cadMeshAttrs.size());
   CheckAttrCount(out, "surfaces", st.cadSurfaces.size(), st.cadSurfaceAttrs.size());
   CheckAttrCount(out, "tables", st.cadTables.size(), st.cadTableAttrs.size());
+  CheckAttrCount(out, "block refs", st.cadBlockRefs.size(), st.cadBlockRefAttrs.size());
   CheckAttrCount(out, "polylines", PolylineCount(st), st.userPolylineAttrs.size());
   CheckAttrCount(out, "polyline closed-flags", PolylineCount(st), st.userPolylineClosed.size());
 
@@ -302,6 +303,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     sweep("cadMeshAttrs", st.cadMeshAttrs);
     sweep("cadSurfaceAttrs", st.cadSurfaceAttrs);
     sweep("cadTableAttrs", st.cadTableAttrs);
+    sweep("cadBlockRefAttrs", st.cadBlockRefAttrs);  // GitHub issue #124
     sweep("featureLineAttrs", st.featureLineAttrs);  // REQ-087; a surface references these by id
   }
 
@@ -325,6 +327,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       case T::FeatureLine:  return st.featureLineOffsets.empty() ? 0 : st.featureLineOffsets.size() - 1;
       case T::Surface:      return st.cadSurfaces.size();  // REQ-068 / ADR-036 (b)
       case T::Table:        return st.cadTables.size();
+      case T::BlockRef:     return st.cadBlockRefs.size();  // GitHub issue #124
       }
       return 0;
     };

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -43,6 +44,260 @@ EntityAttributes EntityAttributesFromJson(const json& o) {
   e.lineweightMm = o.value("lineweightMm", e.lineweightMm);
   e.transparency = o.value("transparency", e.transparency);
   return e;
+}
+
+void CadBlockXformToJson(const CadBlockXform& xf, json& o) {
+  o["x"] = xf.x;
+  o["y"] = xf.y;
+  o["z"] = xf.z;
+  o["sx"] = xf.sx;
+  o["sy"] = xf.sy;
+  o["sz"] = xf.sz;
+  o["rotX"] = xf.rotX;
+  o["rotY"] = xf.rotY;
+  o["rotZ"] = xf.rotZ;
+}
+
+CadBlockXform CadBlockXformFromJson(const json& o) {
+  CadBlockXform xf;
+  xf.x = o.value("x", xf.x);
+  xf.y = o.value("y", xf.y);
+  xf.z = o.value("z", xf.z);
+  xf.sx = o.value("sx", xf.sx);
+  xf.sy = o.value("sy", xf.sy);
+  xf.sz = o.value("sz", xf.sz);
+  xf.rotX = o.value("rotX", xf.rotX);
+  xf.rotY = o.value("rotY", xf.rotY);
+  xf.rotZ = o.value("rotZ", xf.rotZ);
+  return xf;
+}
+
+json CadBlockContentToJson(const CadBlockContent& c) {
+  json o;
+  o["lines"] = c.lines;
+  json la = json::array();
+  for (const auto& a : c.lineAttrs) {
+    json e;
+    EntityAttributesToJson(a, e);
+    la.push_back(std::move(e));
+  }
+  o["lineAttrs"] = std::move(la);
+  o["lineVis"] = c.lineVis;
+  o["circles"] = c.circles;
+  json ca = json::array();
+  for (const auto& a : c.circleAttrs) {
+    json e;
+    EntityAttributesToJson(a, e);
+    ca.push_back(std::move(e));
+  }
+  o["circleAttrs"] = std::move(ca);
+  json nested = json::array();
+  for (const CadBlockNested& n : c.nested) {
+    json nj;
+    nj["defName"] = n.defName;
+    json xf;
+    CadBlockXformToJson(n.xf, xf);
+    nj["xf"] = std::move(xf);
+    nj["visState"] = n.visState;
+    nested.push_back(std::move(nj));
+  }
+  o["nested"] = std::move(nested);
+  json texts = json::array();
+  for (const CadAnnotation& t : c.texts) {
+    json tj;
+    CadAnnotationToJson(t, tj);
+    texts.push_back(std::move(tj));
+  }
+  o["texts"] = std::move(texts);
+  return o;
+}
+
+CadBlockContent CadBlockContentFromJson(const json& o) {
+  CadBlockContent c;
+  if (o.contains("lines") && o["lines"].is_array())
+    c.lines = o["lines"].get<std::vector<float>>();
+  if (o.contains("lineAttrs") && o["lineAttrs"].is_array()) {
+    for (const auto& e : o["lineAttrs"])
+      c.lineAttrs.push_back(EntityAttributesFromJson(e));
+  }
+  if (o.contains("lineVis") && o["lineVis"].is_array())
+    c.lineVis = o["lineVis"].get<std::vector<std::string>>();
+  if (o.contains("circles") && o["circles"].is_array())
+    c.circles = o["circles"].get<std::vector<float>>();
+  if (o.contains("circleAttrs") && o["circleAttrs"].is_array()) {
+    for (const auto& e : o["circleAttrs"])
+      c.circleAttrs.push_back(EntityAttributesFromJson(e));
+  }
+  if (o.contains("nested") && o["nested"].is_array()) {
+    for (const auto& nj : o["nested"]) {
+      CadBlockNested n;
+      n.defName = nj.value("defName", "");
+      if (nj.contains("xf"))
+        n.xf = CadBlockXformFromJson(nj["xf"]);
+      n.visState = nj.value("visState", "");
+      c.nested.push_back(std::move(n));
+    }
+  }
+  if (o.contains("texts") && o["texts"].is_array()) {
+    for (const auto& t : o["texts"])
+      c.texts.push_back(CadAnnotationFromJson(t));
+  }
+  return c;
+}
+
+json CadBlockDefToJson(const CadBlockDefinition& d) {
+  json o;
+  o["id"] = d.id;
+  o["name"] = d.name;
+  o["description"] = d.description;
+  o["baseX"] = d.baseX;
+  o["baseY"] = d.baseY;
+  o["baseZ"] = d.baseZ;
+  o["units"] = d.units;
+  o["metadata"] = d.metadata;
+  o["content"] = CadBlockContentToJson(d.content);
+  json ads = json::array();
+  for (const CadBlockAttrDef& a : d.attrDefs) {
+    json aj;
+    aj["tag"] = a.tag;
+    aj["prompt"] = a.prompt;
+    aj["defaultValue"] = a.defaultValue;
+    aj["localX"] = a.localX;
+    aj["localY"] = a.localY;
+    aj["localZ"] = a.localZ;
+    aj["height"] = a.height;
+    aj["rotationRad"] = a.rotationRad;
+    ads.push_back(std::move(aj));
+  }
+  o["attrDefs"] = std::move(ads);
+  json pars = json::array();
+  for (const CadBlockParameter& p : d.parameters) {
+    json pj;
+    pj["name"] = p.name;
+    pj["kind"] = static_cast<int>(p.kind);
+    pj["value"] = p.value;
+    pars.push_back(std::move(pj));
+  }
+  o["parameters"] = std::move(pars);
+  json acts = json::array();
+  for (const CadBlockAction& a : d.actions) {
+    json aj;
+    aj["kind"] = static_cast<int>(a.kind);
+    aj["paramName"] = a.paramName;
+    aj["originX"] = a.originX;
+    aj["originY"] = a.originY;
+    aj["dirX"] = a.dirX;
+    aj["dirY"] = a.dirY;
+    aj["threshold"] = a.threshold;
+    aj["applyTo"] = a.applyTo;
+    aj["labelGroup"] = a.labelGroup;
+    acts.push_back(std::move(aj));
+  }
+  o["actions"] = std::move(acts);
+  o["visibilityStates"] = d.visibilityStates;
+  return o;
+}
+
+CadBlockDefinition CadBlockDefFromJson(const json& o) {
+  CadBlockDefinition d;
+  d.id = o.value("id", d.id);
+  d.name = o.value("name", d.name);
+  d.description = o.value("description", d.description);
+  d.baseX = o.value("baseX", d.baseX);
+  d.baseY = o.value("baseY", d.baseY);
+  d.baseZ = o.value("baseZ", d.baseZ);
+  d.units = o.value("units", d.units);
+  d.metadata = o.value("metadata", d.metadata);
+  if (o.contains("content"))
+    d.content = CadBlockContentFromJson(o["content"]);
+  if (o.contains("attrDefs") && o["attrDefs"].is_array()) {
+    for (const auto& aj : o["attrDefs"]) {
+      CadBlockAttrDef a;
+      a.tag = aj.value("tag", "");
+      a.prompt = aj.value("prompt", "");
+      a.defaultValue = aj.value("defaultValue", "");
+      a.localX = aj.value("localX", 0.f);
+      a.localY = aj.value("localY", 0.f);
+      a.localZ = aj.value("localZ", 0.f);
+      a.height = aj.value("height", 0.125f);
+      a.rotationRad = aj.value("rotationRad", 0.f);
+      d.attrDefs.push_back(std::move(a));
+    }
+  }
+  if (o.contains("parameters") && o["parameters"].is_array()) {
+    for (const auto& pj : o["parameters"]) {
+      CadBlockParameter p;
+      p.name = pj.value("name", "");
+      p.kind = static_cast<CadBlockParamKind>(pj.value("kind", 0));
+      p.value = pj.value("value", 0.f);
+      d.parameters.push_back(std::move(p));
+    }
+  }
+  if (o.contains("actions") && o["actions"].is_array()) {
+    for (const auto& aj : o["actions"]) {
+      CadBlockAction a;
+      a.kind = static_cast<CadBlockActionKind>(aj.value("kind", 0));
+      a.paramName = aj.value("paramName", "");
+      a.originX = aj.value("originX", 0.f);
+      a.originY = aj.value("originY", 0.f);
+      a.dirX = aj.value("dirX", 1.f);
+      a.dirY = aj.value("dirY", 0.f);
+      a.threshold = aj.value("threshold", 0.f);
+      a.applyTo = aj.value("applyTo", "");
+      a.labelGroup = aj.value("labelGroup", "");
+      d.actions.push_back(std::move(a));
+    }
+  }
+  if (o.contains("visibilityStates") && o["visibilityStates"].is_array())
+    d.visibilityStates = o["visibilityStates"].get<std::vector<std::string>>();
+  return d;
+}
+
+json CadBlockRefToJson(const CadBlockRef& r) {
+  json o;
+  o["defName"] = r.defName;
+  json xf;
+  CadBlockXformToJson(r.xf, xf);
+  o["xf"] = std::move(xf);
+  o["visState"] = r.visState;
+  json av = json::array();
+  for (const CadBlockAttrValue& v : r.attributes) {
+    json e;
+    e["tag"] = v.tag;
+    e["value"] = v.value;
+    av.push_back(std::move(e));
+  }
+  o["attributes"] = std::move(av);
+  json ps = json::array();
+  for (const CadBlockParameter& p : r.paramState) {
+    json e;
+    e["name"] = p.name;
+    e["value"] = p.value;
+    ps.push_back(std::move(e));
+  }
+  o["paramState"] = std::move(ps);
+  return o;
+}
+
+CadBlockRef CadBlockRefFromJson(const json& o) {
+  CadBlockRef r;
+  r.defName = o.value("defName", "");
+  if (o.contains("xf"))
+    r.xf = CadBlockXformFromJson(o["xf"]);
+  r.visState = o.value("visState", "");
+  if (o.contains("attributes") && o["attributes"].is_array()) {
+    for (const auto& e : o["attributes"])
+      r.attributes.push_back(CadBlockAttrValue{e.value("tag", ""), e.value("value", "")});
+  }
+  if (o.contains("paramState") && o["paramState"].is_array()) {
+    for (const auto& e : o["paramState"]) {
+      CadBlockParameter p;
+      p.name = e.value("name", "");
+      p.value = e.value("value", 0.f);
+      r.paramState.push_back(std::move(p));
+    }
+  }
+  return r;
 }
 
 void CadLayerRowToJson(const CadLayerRow& r, json& o) {
@@ -417,6 +672,11 @@ json BuildRoot(const AppCommandState& st) {
         }
         o["paperFilledRegions"] = std::move(pfills);
         o["paperFilledRegionAttrs"] = attrsToJson(l.paperFilledRegionAttrs);
+        json pbr = json::array();
+        for (const CadBlockRef& r : l.paperBlockRefs)
+          pbr.push_back(CadBlockRefToJson(r));
+        o["paperBlockRefs"] = std::move(pbr);
+        o["paperBlockRefAttrs"] = attrsToJson(l.paperBlockRefAttrs);
       }
       layouts.push_back(o);
     }
@@ -580,6 +840,30 @@ json BuildRoot(const AppCommandState& st) {
   }
   if (!tableAttrs.empty())
     doc["tableAttrs"] = std::move(tableAttrs);
+
+  doc["drawingInsUnits"] = st.drawingInsUnits;
+  json blockDefs = json::array();
+  for (const CadBlockDefinition& d : st.blockDefs)
+    blockDefs.push_back(CadBlockDefToJson(d));
+  if (!blockDefs.empty())
+    doc["blockDefs"] = std::move(blockDefs);
+  json blockRefs = json::array();
+  for (const CadBlockRef& r : st.cadBlockRefs)
+    blockRefs.push_back(CadBlockRefToJson(r));
+  if (!blockRefs.empty())
+    doc["blockRefs"] = std::move(blockRefs);
+  json blockRefAttrs = json::array();
+  for (const auto& a : st.cadBlockRefAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    blockRefAttrs.push_back(std::move(o));
+  }
+  if (!blockRefAttrs.empty())
+    doc["blockRefAttrs"] = std::move(blockRefAttrs);
+  if (!st.blockFavorites.empty())
+    doc["blockFavorites"] = st.blockFavorites;
+  if (!st.blockRecent.empty())
+    doc["blockRecent"] = st.blockRecent;
 
   // Filled regions (ADR-011): each is {verts:[x,y,…], loops:[startPairIdx,…]} + a parallel attribute object.
   json fills = json::array();
@@ -1350,6 +1634,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             }
         readAttrs("paperFilledRegionAttrs", l.paperFilledRegionAttrs);
         l.paperFilledRegionAttrs.resize(l.paperFilledRegions.size());
+        if (o.contains("paperBlockRefs") && o["paperBlockRefs"].is_array())
+          for (const auto& br : o["paperBlockRefs"])
+            if (br.is_object())
+              l.paperBlockRefs.push_back(CadBlockRefFromJson(br));
+        readAttrs("paperBlockRefAttrs", l.paperBlockRefAttrs);
+        l.paperBlockRefAttrs.resize(l.paperBlockRefs.size());
       }
       st.paperLayouts.push_back(l);
     }
@@ -1627,6 +1917,28 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   st.cadTableAttrs.resize(st.cadTables.size());
   MigrateLegacyAnnotationTables(st);
+
+  st.drawingInsUnits = doc.value("drawingInsUnits", st.drawingInsUnits);
+  st.blockDefs.clear();
+  st.cadBlockRefs.clear();
+  st.cadBlockRefAttrs.clear();
+  if (doc.contains("blockDefs") && doc["blockDefs"].is_array()) {
+    for (const auto& o : doc["blockDefs"])
+      st.blockDefs.push_back(CadBlockDefFromJson(o));
+  }
+  if (doc.contains("blockRefs") && doc["blockRefs"].is_array()) {
+    for (const auto& o : doc["blockRefs"])
+      st.cadBlockRefs.push_back(CadBlockRefFromJson(o));
+  }
+  if (doc.contains("blockRefAttrs") && doc["blockRefAttrs"].is_array()) {
+    for (const auto& o : doc["blockRefAttrs"])
+      st.cadBlockRefAttrs.push_back(EntityAttributesFromJson(o));
+  }
+  st.cadBlockRefAttrs.resize(st.cadBlockRefs.size());
+  if (doc.contains("blockFavorites") && doc["blockFavorites"].is_array())
+    st.blockFavorites = doc["blockFavorites"].get<std::vector<std::string>>();
+  if (doc.contains("blockRecent") && doc["blockRecent"].is_array())
+    st.blockRecent = doc["blockRecent"].get<std::vector<std::string>>();
 
   // Imported meshes (REQ-063). Guarded with contains(), so a pre-REQ-063 drawing simply has none —
   // the "legacy .gs loads unchanged" acceptance condition.
@@ -2160,19 +2472,22 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 
 } // namespace
 
+std::string SerializeGoSurveyJson(const AppCommandState& st) {
+  return BuildRoot(st).dump(2);
+}
+
 bool SaveGoSurveyFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || !pathUtf8[0]) {
     log.push_back("Save .gs: empty path.");
     return false;
   }
   try {
-    const json root = BuildRoot(st);
     std::ofstream f(std::filesystem::path(pathUtf8), std::ios::binary);
     if (!f) {
       log.push_back(std::string("Could not open for write: ") + pathUtf8);
       return false;
     }
-    f << root.dump(2);
+    f << SerializeGoSurveyJson(st);
     log.push_back(std::string("Saved GoSurvey workspace (.gs): ") + pathUtf8);
     return true;
   } catch (const std::exception& e) {
@@ -2181,21 +2496,12 @@ bool SaveGoSurveyFile(const AppCommandState& st, const char* pathUtf8, std::vect
   }
 }
 
-bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
-  if (!pathUtf8 || !pathUtf8[0]) {
-    log.push_back("Open .gs: empty path.");
-    return false;
-  }
-  std::ifstream f(std::filesystem::path(pathUtf8), std::ios::binary);
-  if (!f) {
-    log.push_back(std::string("Could not open: ") + pathUtf8);
-    return false;
-  }
+bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, std::vector<std::string>& log) {
   json root;
   try {
-    f >> root;
+    root = json::parse(std::string(jsonUtf8));
   } catch (const std::exception& e) {
-    log.push_back(std::string("Parse .gs failed: ") + e.what());
+    log.push_back(std::string("Parse GoSurvey document failed: ") + e.what());
     return false;
   }
   if (!root.is_object() || !root.contains("format") || root["format"] != "gosurvey") {
@@ -2263,10 +2569,27 @@ bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std
                     " survey-point label(s) whose link did not resolve on load.");
     RepositionAllSurveyPointLabels(st);
     BumpCadGpuCache(st);
-    log.push_back(std::string("Opened GoSurvey workspace (.gs): ") + pathUtf8);
+    log.push_back("Opened GoSurvey document.");
     return true;
   } catch (const std::exception& e) {
-    log.push_back(std::string("Load .gs failed: ") + e.what());
+    log.push_back(std::string("Load GoSurvey document failed: ") + e.what());
     return false;
   }
+}
+
+bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+  if (!pathUtf8 || !pathUtf8[0]) {
+    log.push_back("Open .gs: empty path.");
+    return false;
+  }
+  std::ifstream f(std::filesystem::path(pathUtf8), std::ios::binary);
+  if (!f) {
+    log.push_back(std::string("Could not open: ") + pathUtf8);
+    return false;
+  }
+  const std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  if (!LoadGoSurveyFromJsonUtf8(st, bytes, log))
+    return false;
+  log.push_back(std::string("Opened GoSurvey workspace (.gs): ") + pathUtf8);
+  return true;
 }

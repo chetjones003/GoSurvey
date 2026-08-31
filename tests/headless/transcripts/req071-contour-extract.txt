@@ -95,12 +95,12 @@ CHECK ALL
 # --- and they are ordinary geometry: they survive save -> reopen ------------------------------------
 # "normal drawing geometry — editable, snappable, exportable". A polyline that was secretly special
 # would not round-trip as one.
-SAVEAS %OUT%/extracted-a.gs
-OPEN %OUT%/extracted-a.gs
+SAVEAS %OUT%/extracted-a.dwg
+OPEN %OUT%/extracted-a.dwg
 EXPECT POLYLINES 52
 EXPECT SURFACES 0
-SAVEAS %OUT%/extracted-b.gs
-EXPECT SAMEFILE %OUT%/extracted-a.gs %OUT%/extracted-b.gs
+SAVEAS %OUT%/extracted-b.dwg
+EXPECT SAMEFILE %OUT%/extracted-a.dwg %OUT%/extracted-b.dwg
 CHECK ALL
 
 # --- contours disabled: creates nothing, and says so -------------------------------------------------

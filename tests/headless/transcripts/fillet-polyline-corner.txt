@@ -22,7 +22,7 @@ CMD END
 CHECK ALL
 EXPECT POLYLINES 1
 EXPECT ARCS 0
-SAVEAS %OUT%/fillet-poly-a.gs
+SAVEAS %OUT%/fillet-poly-a.dwg
 
 CMD FILLET
 CMD R
@@ -35,14 +35,14 @@ EXPECT POLYLINES 1
 EXPECT ARCS 1
 CHECK ALL
 
-SAVEAS %OUT%/fillet-poly-b.gs
-EXPECT DIFFERENTFILE %OUT%/fillet-poly-a.gs %OUT%/fillet-poly-b.gs
+SAVEAS %OUT%/fillet-poly-b.dwg
+EXPECT DIFFERENTFILE %OUT%/fillet-poly-a.dwg %OUT%/fillet-poly-b.dwg
 
 UNDO
 EXPECT POLYLINES 1
 EXPECT ARCS 0
 CHECK ALL
-SAVEAS %OUT%/fillet-poly-c.gs
+SAVEAS %OUT%/fillet-poly-c.dwg
 # Not SAMEFILE against "a": the fillet arc minted a fresh entity id (REQ-076), and undo does not
 # roll the next-entity-id counter itself back — same reasoning fillet-lines-basic.txt and
 # break-circle-and-closed-polyline.txt already document. Geometry/counts are already verified
@@ -52,8 +52,8 @@ REDO
 EXPECT POLYLINES 1
 EXPECT ARCS 1
 CHECK ALL
-SAVEAS %OUT%/fillet-poly-d.gs
-EXPECT SAMEFILE %OUT%/fillet-poly-b.gs %OUT%/fillet-poly-d.gs
+SAVEAS %OUT%/fillet-poly-d.dwg
+EXPECT SAMEFILE %OUT%/fillet-poly-b.dwg %OUT%/fillet-poly-d.dwg
 
 UNDO
 

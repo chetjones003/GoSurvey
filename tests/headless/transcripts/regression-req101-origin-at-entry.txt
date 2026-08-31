@@ -74,8 +74,8 @@ ESC
 
 # The drawing was already normalized when written, so load has nothing to normalize and even the
 # FIRST resave is byte-identical. That is the payoff over the load-time-only behaviour of #61.
-SAVEAS %OUT%/req101-a.gs
-OPEN %OUT%/req101-a.gs
+SAVEAS %OUT%/req101-a.dwg
+OPEN %OUT%/req101-a.dwg
 CHECK ALL
-SAVEAS %OUT%/req101-b.gs
-EXPECT SAMEFILE %OUT%/req101-a.gs %OUT%/req101-b.gs
+SAVEAS %OUT%/req101-b.dwg
+EXPECT SAMEFILE %OUT%/req101-a.dwg %OUT%/req101-b.dwg

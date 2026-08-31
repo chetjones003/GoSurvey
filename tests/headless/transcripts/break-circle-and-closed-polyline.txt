@@ -59,7 +59,7 @@ CHECK ALL
 EXPECT CIRCLES 1
 EXPECT ARCS 0
 EXPECT POLYLINES 2
-SAVEAS %OUT%/break-circle-poly-a.gs
+SAVEAS %OUT%/break-circle-poly-a.dwg
 
 CMD BREAK
 CLICK 610 0
@@ -87,8 +87,8 @@ CHECK ALL
 EXPECT CIRCLES 0
 EXPECT ARCS 1
 EXPECT POLYLINES 2
-SAVEAS %OUT%/break-circle-poly-b.gs
-EXPECT DIFFERENTFILE %OUT%/break-circle-poly-a.gs %OUT%/break-circle-poly-b.gs
+SAVEAS %OUT%/break-circle-poly-b.dwg
+EXPECT DIFFERENTFILE %OUT%/break-circle-poly-a.dwg %OUT%/break-circle-poly-b.dwg
 
 UNDO
 UNDO
@@ -98,7 +98,7 @@ EXPECT ARCS 0
 EXPECT POLYLINES 2
 CHECK ALL
 
-SAVEAS %OUT%/break-circle-poly-c.gs
+SAVEAS %OUT%/break-circle-poly-c.dwg
 # Not SAMEFILE against "a": T6 (Circle -> Arc) minted a fresh entity id (REQ-076), and undo does
 # not roll the nextEntityId counter itself back — same reasoning as break-line-and-polyline.txt.
 # Geometry and counts are already verified above; redo below restores the exact forward snapshot,
@@ -112,5 +112,5 @@ EXPECT ARCS 1
 EXPECT POLYLINES 2
 CHECK ALL
 
-SAVEAS %OUT%/break-circle-poly-d.gs
-EXPECT SAMEFILE %OUT%/break-circle-poly-b.gs %OUT%/break-circle-poly-d.gs
+SAVEAS %OUT%/break-circle-poly-d.dwg
+EXPECT SAMEFILE %OUT%/break-circle-poly-b.dwg %OUT%/break-circle-poly-d.dwg

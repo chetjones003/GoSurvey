@@ -184,3 +184,105 @@ TEST_CASE("Surface snap interpolates the covering TIN and misses outside", "[Cad
   const CadSnap::Hit off = CadSnap::FindBest(250.0, 250.0, st, /*commandActive=*/true, kTol);
   CHECK_FALSE(off.valid);
 }
+
+// REQ-107 (D-2026-08-29-i): the geometry of a placed block instance is an object-snap target —
+// Endpoint on its segment ends and its insertion point, Midpoint on its segment midpoints,
+// Center on its circles.
+TEST_CASE("FindBest snaps to a placed block instance's geometry", "[CadSnap][issue124][block]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  st.objectSnapMidpoint = true;
+  st.objectSnapCenter = true;
+
+  CadBlockDefinition def;
+  def.name = "SQ";
+  // A unit square (0,0)->(2,0)->(2,2)->(0,2) plus a circle centred at (1,1) r=0.5.
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f,
+                       2.f, 0.f, 0.f, 2.f, 2.f, 0.f};
+  def.content.circles = {1.f, 1.f, 0.f, 0.5f};
+  st.blockDefs.push_back(def);
+
+  CadBlockRef r;
+  r.defName = "SQ";
+  r.xf.x = 100.f;
+  r.xf.y = 50.f;
+  st.cadBlockRefs.push_back(r);
+
+  // Corner (2,0) in local -> (102,50) world.
+  const CadSnap::Hit corner = CadSnap::FindBest(102.02, 50.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(corner.valid);
+  CHECK(corner.kind == Kind::Endpoint);
+  CHECK(corner.x == Catch::Approx(102.f));
+  CHECK(corner.y == Catch::Approx(50.f));
+
+  // Insertion point itself.
+  const CadSnap::Hit ins = CadSnap::FindBest(100.01, 50.01, st, /*commandActive=*/true, kTol);
+  REQUIRE(ins.valid);
+  CHECK(ins.kind == Kind::Endpoint);
+  CHECK(ins.x == Catch::Approx(100.f));
+
+  // Midpoint of the bottom edge: local (1,0) -> world (101,50).
+  st.objectSnapEndpoint = false;
+  const CadSnap::Hit mid = CadSnap::FindBest(101.0, 50.03, st, /*commandActive=*/true, kTol);
+  REQUIRE(mid.valid);
+  CHECK(mid.kind == Kind::Midpoint);
+  CHECK(mid.x == Catch::Approx(101.f));
+
+  // Circle centre: local (1,1) -> world (101,51).
+  st.objectSnapMidpoint = false;
+  const CadSnap::Hit ctr = CadSnap::FindBest(101.0, 51.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(ctr.valid);
+  CHECK(ctr.kind == Kind::Center);
+  CHECK(ctr.x == Catch::Approx(101.f));
+  CHECK(ctr.y == Catch::Approx(51.f));
+}
+
+TEST_CASE("Block-instance snapping honours the snap toggles", "[CadSnap][issue124][block]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapMidpoint = false;
+  st.objectSnapCenter = false;
+
+  CadBlockDefinition def;
+  def.name = "SQ";
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  st.blockDefs.push_back(def);
+  CadBlockRef r;
+  r.defName = "SQ";
+  st.cadBlockRefs.push_back(r);
+
+  const CadSnap::Hit off = CadSnap::FindBest(2.0, 0.0, st, /*commandActive=*/true, kTol);
+  CHECK_FALSE(off.valid);
+}
+
+TEST_CASE("Block-instance snapping expands nested blocks", "[CadSnap][issue124][block]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+
+  CadBlockDefinition leaf;
+  leaf.name = "LEAF";
+  leaf.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  st.blockDefs.push_back(leaf);
+
+  CadBlockDefinition parent;
+  parent.name = "PARENT";
+  CadBlockNested n;
+  n.defName = "LEAF";
+  n.xf.x = 5.f;
+  n.xf.y = 5.f;
+  parent.content.nested.push_back(n);
+  st.blockDefs.push_back(parent);
+
+  CadBlockRef r;
+  r.defName = "PARENT";
+  r.xf.x = 10.f;
+  r.xf.y = 20.f;
+  st.cadBlockRefs.push_back(r);
+
+  // Leaf endpoint (1,0) local -> (6,5) in parent -> (16,25) world.
+  const CadSnap::Hit hit = CadSnap::FindBest(16.0, 25.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Endpoint);
+  CHECK(hit.x == Catch::Approx(16.f));
+  CHECK(hit.y == Catch::Approx(25.f));
+}

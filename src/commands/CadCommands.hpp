@@ -33,6 +33,7 @@
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
 #include "util/hoverdwell.hpp"
 #include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
+#include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.
@@ -70,7 +71,10 @@ struct SelectedEntity {
     /// Drawing TABLE (REQ-148 / D-2026-08-28-i). **Appended** after Surface so existing type values
     /// and switch order stay stable. Editable: MOVE/COPY/ROTATE/SCALE/MIRROR apply to the whole table;
     /// cells are edited in place, not as child entities.
-    Table = 11
+    Table = 11,
+    /// Block INSERT (GitHub issue #124). Appended after Table so existing type values stay stable.
+    /// Lightweight: transform + attributes; geometry lives on the named definition.
+    BlockRef = 12
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -712,6 +716,9 @@ struct CadExtendedGeometryInput {
   /// signature is already long, and this struct is exactly "the extra per-entity data the renderer
   /// needs", which is what the hidden set is.
   const std::vector<std::uint64_t>* hiddenEntityIds = nullptr;
+  const std::vector<CadBlockDefinition>* blockDefs = nullptr;
+  const std::vector<CadBlockRef>* blockRefs = nullptr;
+  const std::vector<EntityAttributes>* blockRefAttrs = nullptr;
 };
 
 /// True when a CSR chain store (polylines, feature lines) holds at least one entity.
@@ -741,6 +748,8 @@ struct CadExtendedGeometryInput {
   if (CadChainHasEntities(e.polylineVerts, e.polylineOffsets))
     return true;
   if (CadChainHasEntities(e.featureLineVerts, e.featureLineOffsets))
+    return true;
+  if (e.blockRefs != nullptr && !e.blockRefs->empty())
     return true;
   return false;
 }
@@ -836,6 +845,8 @@ struct CadClipboard {
   std::vector<EntityAttributes> annotationAttrs;
   std::vector<CadTable>         tables;
   std::vector<EntityAttributes> tableAttrs;
+  std::vector<CadBlockRef>      blockRefs;
+  std::vector<EntityAttributes> blockRefAttrs;
   std::vector<CadFilledRegion>  filledRegions;     ///< Solid fills enclosed by the copy selection (REQ-038 addendum).
   std::vector<EntityAttributes> filledRegionAttrs;
   /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
@@ -844,7 +855,8 @@ struct CadClipboard {
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && filledRegions.empty();
+           (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && blockRefs.empty() &&
+           filledRegions.empty();
   }
 };
 
@@ -883,6 +895,9 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadSurfaceAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadBlockDefinition> blockDefs;
+  std::vector<CadBlockRef>        cadBlockRefs;
+  std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   /// Named point groups (REQ-067). Undoable, like textStyles — creating or editing one is a
   /// single-step undo. Rules only; membership is never stored.
@@ -996,6 +1011,9 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadSurfaceAttrs;
   std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadBlockDefinition> blockDefs;
+  std::vector<CadBlockRef>        cadBlockRefs;
+  std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
@@ -1098,7 +1116,8 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);
 // Native paper-space geometry selection + edit (REQ-037). Indices are into the ACTIVE layout's stores.
 void ClearPaperEntitySelection(AppCommandState& st);
 /// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
-bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out);
+bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out,
+                       const std::vector<CadBlockDefinition>* blockDefs = nullptr);
 void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);
 void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log);
 void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
@@ -1195,6 +1214,8 @@ constexpr int kRibbonTabCount    = 7;
 constexpr int kRibbonTabSurfaceCtx = 7;
 /// REQ-153: contextual SURVEY Point(s) tab. Session-only, not a prefs slot.
 constexpr int kRibbonTabSurveyPointCtx = 8;
+/// Contextual Block Editor tab while BEDIT is open. Not counted in \c kRibbonTabCount / prefs.
+constexpr int kRibbonTabBlockEditor = 9;
 
 struct AppCommandState {
   enum class Kind {
@@ -1315,6 +1336,8 @@ struct AppCommandState {
     /// (REQ-154). Autodesk documents that distinction explicitly and it is the whole point of the
     /// command being separate from UCS.
     Plan,
+    /// INSERT dialog (GitHub issue #124): pick a definition, then optional on-screen point/scale/rotation.
+    InsertBlock,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1373,6 +1396,7 @@ struct AppCommandState {
     case Kind::QuickProfile:       return "QUICKPROFILE";
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
+    case Kind::InsertBlock:        return "INSERT";
     default:                  return "";
     }
   }
@@ -1992,6 +2016,11 @@ struct AppCommandState {
   int ribbonTabBeforeSurveyPointCtx = 0;
   /// True while a survey-point selection has armed the SURVEY Point(s) contextual tab.
   bool surveyPointContextualRibbonArmed = false;
+  /// Permanent tab to restore when BEDIT closes. Session-only.
+  int ribbonTabBeforeBlockEditor = 0;
+  bool blockEditorContextualRibbonArmed = false;
+  bool blockAuthoringPaletteOpen = false;
+  int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
@@ -2053,6 +2082,38 @@ struct AppCommandState {
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
   std::vector<EntityAttributes> cadTableAttrs;
+
+  std::vector<CadBlockDefinition> blockDefs;
+  std::vector<CadBlockRef> cadBlockRefs;
+  std::vector<EntityAttributes> cadBlockRefAttrs;
+  std::string blockEditorName;
+  CadBlockDefinition blockEditorSnapshot;
+  bool blockEditorDirty = false;
+  bool blockEditPickerOpen = false;
+  char blockEditPickerName[256]{};
+  /// In-place block editing (REQ-107 / ADR-043). While active, the model arrays hold the
+  /// definition's primitive geometry in local coords and \c blockEditModelStash holds the real
+  /// drawing. Session-only — never in \ref DrawingDocument, never in `.gs`.
+  bool blockEditActive = false;
+  DrawingGeometrySnapshot blockEditModelStash;
+  /// \c cadGpuRevision at the last clean point of the session (enter / BSAVE). A different value
+  /// means unsaved edits — drives the BCLOSE Save/Don't-Save/Cancel prompt.
+  std::uint32_t blockEditCleanRevision = 0;
+  /// \c undoStack size when the session was entered. Session edits push snapshots of the block's
+  /// geometry (not the drawing's); those are dropped on close so a later Undo cannot restore block
+  /// content into model space.
+  std::size_t blockEditUndoMark = 0;
+  bool blockEditCloseAsked = false;   ///< UI shows the close modal while true.
+  /// Camera to restore when the session closes (the view BEDIT was invoked from).
+  double blockEditCamPanX = 0.0, blockEditCamPanY = 0.0, blockEditCamPanZ = 0.0;
+  float  blockEditCamZoom = 1.f, blockEditCamAz = 0.f, blockEditCamEl = 90.f;
+  /// Debug Developer Shell (REQ-161). Default off; status-bar DEV toggles it. Release ignores it.
+  bool devShellVisible = false;
+  std::vector<std::string> blockRecent;
+  std::vector<std::string> blockFavorites;
+  std::string blockLibraryFilter;
+  /// ATTDEF records collected by the last DXF/DWG import. Transient — not saved, not undo.
+  std::vector<CadBlockAttrDef> importedDxfAttrDefs;
 
   /// In-place TABLE cell editor (viewport overlay). Not a command; Enter commits, Esc cancels.
   bool tableCellEditorOpen = false;
@@ -3016,6 +3077,39 @@ struct AppCommandState {
   } pdfAttachPhase = PdfAttachPhase::WaitDialog;
 
   bool pdfAttachDialogOpen = false;
+
+  // -------------------------------------------------------------------------
+  // INSERT dialog (issue #124)
+  // -------------------------------------------------------------------------
+  enum class InsertBlockPhase {
+    WaitDialog,
+    WaitInsertPoint,
+    WaitScale,
+    WaitRotation,
+    WaitAttributes,
+  } insertBlockPhase = InsertBlockPhase::WaitDialog;
+
+  bool insertBlockDialogOpen = false;
+  char insertBlockName[256]{};
+  char insertBlockPath[4096]{};
+  char insertBlockAngleBuf[64]{};
+  float insertBlockX = 0.f;
+  float insertBlockY = 0.f;
+  float insertBlockZ = 0.f;
+  float insertBlockSx = 1.f;
+  float insertBlockSy = 1.f;
+  float insertBlockSz = 1.f;
+  float insertBlockRotDeg = 0.f;
+  bool insertBlockSpecifyPoint = true;
+  bool insertBlockSpecifyScale = false;
+  bool insertBlockSpecifyRot = true;
+  bool insertBlockUniformScale = true;
+  bool insertBlockExplode = false;
+  bool insertBlockAttrDialogOpen = false;
+  int insertBlockAttrRefIndex = -1;
+  bool insertBlockAttrPaper = false;
+  char insertBlockAttrBuf[8][128]{};
+
   char pdfAttachFilePath[1024]{};
   int  pdfAttachSelectedPage = 0;
   float pdfAttachInsertX  = 0.f;
@@ -3363,7 +3457,9 @@ enum class EntityKind : std::uint8_t {
   /// legacy `.gs` loading with the ids it loaded with yesterday.
   Surface,
   /// REQ-148 / D-2026-08-28-i. Appended after Surface so the id sweep does not renumber legacy drawings.
-  Table
+  Table,
+  /// GitHub issue #124. Appended after Table so the id sweep does not renumber legacy drawings.
+  BlockRef
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -3540,6 +3636,14 @@ void EnsureEntityIds(AppCommandState& st);
 
 /// Capture the active tab's current geometry into the undo stack; clears redo stack; trims to undoHistoryMaxSize.
 void PushUndoSnapshot(AppCommandState& st, const std::string& description);
+
+/// Capture / restore the whole model-geometry set as a value (same fields the undo stack uses).
+/// Public so the block editor (ADR-043) can stash the drawing while a definition is edited in place.
+[[nodiscard]] DrawingGeometrySnapshot CadCaptureGeometrySnapshot(const AppCommandState& st,
+                                                                 const std::string& description);
+void CadRestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot& snap);
+[[nodiscard]] std::size_t CadActiveUndoStackSize(const AppCommandState& st);
+void CadTruncateActiveUndoStack(AppCommandState& st, std::size_t n);
 /// Undo: restore previous geometry snapshot; push current to redo stack. Returns true if an undo was performed.
 bool DoUndo(AppCommandState& st, std::vector<std::string>& log);
 /// Redo: restore next geometry snapshot; push current to undo stack. Returns true if a redo was performed.
@@ -3735,6 +3839,19 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     el.majVx = st.entityGripOrigEllMajVx;
     el.majVy = st.entityGripOrigEllMajVy;
     el.ratio = st.entityGripOrigEllRatio;
+    break;
+  }
+  case SelectedEntity::Type::BlockRef: {
+    if (idx < 0 || static_cast<size_t>(idx) >= st.cadBlockRefs.size())
+      return;
+    CadBlockRef& r = st.cadBlockRefs[static_cast<size_t>(idx)];
+    CadBlockParamSet(&r, "DistNeg", st.entityGripOrigX0);
+    CadBlockParamSet(&r, "DistPos", st.entityGripOrigY0);
+    CadBlockParamSet(&r, "SheetOff", st.entityGripOrigX1);
+    CadBlockParamSet(&r, "NorthOff", st.entityGripOrigY1);
+    CadBlockParamSet(&r, "Flip", st.entityGripOrigR);
+    r.xf.x = st.entityGripOrigCx;
+    r.xf.y = st.entityGripOrigCy;
     break;
   }
   default:

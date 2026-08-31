@@ -6,7 +6,7 @@
 # success, and the drawing can never be opened again.
 #
 # NOT the fuzzer's minimized reproducer. The automatic minimizer degenerated on
-# seed 28, reducing to `NEW` + `OPEN %OUT%/rt-a.gs` — a transcript that fails for
+# seed 28, reducing to `NEW` + `OPEN %OUT%/rt-a.dwg` — a transcript that fails for
 # the wrong reason, because a MISSING file also fails with `io|OPEN failed`. The
 # signature is too coarse to tell "file absent" from "file present but rejected".
 # So this reproducer is written by hand to pin the actual mechanism, and the
@@ -64,11 +64,11 @@ CHECK ALL
 
 # The round trip: this is what the user experiences. Before the fix SAVEAS
 # reported success and OPEN refused the file it had just written.
-SAVEAS %OUT%/erase-last-poly.gs
-OPEN %OUT%/erase-last-poly.gs
+SAVEAS %OUT%/erase-last-poly.dwg
+OPEN %OUT%/erase-last-poly.dwg
 EXPECT POLYLINES 0
 
 # And it still resaves byte-identically, so the fix restores REQ-079 in full
 # rather than only making the file openable.
-SAVEAS %OUT%/erase-last-poly-b.gs
-EXPECT SAMEFILE %OUT%/erase-last-poly.gs %OUT%/erase-last-poly-b.gs
+SAVEAS %OUT%/erase-last-poly-b.dwg
+EXPECT SAMEFILE %OUT%/erase-last-poly.dwg %OUT%/erase-last-poly-b.dwg

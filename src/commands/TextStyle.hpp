@@ -15,6 +15,13 @@
 namespace TextStyles {
 
 inline constexpr const char* kStandardName = "Standard";
+/// Application default typeface (REQ-044 empty `fontFamily` = this file). Stroke font, not ImGui TTF.
+inline constexpr const char* kDefaultFontFamily = "romans.shx";
+
+/// Empty family means the app default (Standard's font). Non-empty is used as stored.
+inline std::string EffectiveFontFamily(const std::string& fontFamily) {
+  return fontFamily.empty() ? std::string(kDefaultFontFamily) : fontFamily;
+}
 
 /// Find a style by exact name, or nullptr.
 inline const TextStyle* Find(const std::vector<TextStyle>& styles, const std::string& name) {
@@ -30,9 +37,14 @@ inline TextStyle* Find(std::vector<TextStyle>& styles, const std::string& name) 
 
 /// Guarantee a "Standard" style exists (inserted at the front if missing). Returns it.
 inline TextStyle& EnsureStandard(std::vector<TextStyle>& styles) {
-  if (TextStyle* s = Find(styles, kStandardName)) return *s;
+  if (TextStyle* s = Find(styles, kStandardName)) {
+    if (s->fontFamily.empty())
+      s->fontFamily = kDefaultFontFamily;
+    return *s;
+  }
   TextStyle standard;
   standard.name = kStandardName;
+  standard.fontFamily = kDefaultFontFamily;
   styles.insert(styles.begin(), standard);
   return styles.front();
 }

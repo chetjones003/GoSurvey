@@ -1,4 +1,7 @@
 #include "CadUi.hpp"
+#include "CadUiChrome.hpp"
+#include "CadBlocks.hpp"
+#include "DevShellHooks.hpp"
 // REQ-141 Analyze ribbon + contour label overlay.
 #include "CadCoordinateFrame.hpp"
 #include "ViewCube.hpp"
@@ -49,6 +52,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -59,9 +63,17 @@
 static void SubmitRibbonCommand(AppCommandState& cmd, std::vector<std::string>& log, const std::string& line) {
   assert(!line.empty());
   assert(line.size() < 4096);
+  DevShell_OnCommand(line.c_str());
   std::vector<char> buf(line.begin(), line.end());
   buf.push_back('\0');
   ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, log);
+}
+
+static void UiSubmitViewportPick(AppCommandState& cmd, float x, float y, std::vector<std::string>& log,
+                                 bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false)
+{
+  DevShell_OnPick(x, y);
+  SubmitViewportPick(cmd, x, y, log, windowSelectionSubtract, fenceLeftToRightWindowMode);
 }
 
 // Render a sample string in a text style's font/bold/italic, fit into box [tl, tl+sz] (REQ-044). Shared by
@@ -136,6 +148,8 @@ static void DrawHatchThumbnail(ImDrawList* dl, ImVec2 mn, ImVec2 mx, const hatch
 
 // True when a font name refers to an SHX stroke font (rendered from the real .shx, not a TrueType).
 static bool CadIsShxFontName(const std::string& s) { return cadfont::IsShxFontName(s); }
+
+static std::string CadDrawFontFamily(const std::string& stored) { return TextStyles::EffectiveFontFamily(stored); }
 
 static ImTextureID g_menuBarLogoTex{};
 static ImVec2 g_menuBarLogoDims{};
@@ -265,42 +279,12 @@ static ImU32 HexU32(unsigned rgb, int a = 255) {
 // One instance, written by whichever ApplyCad*Theme() runs, read everywhere
 // else. Every theme entry point must fill EVERY field: a field left unwritten is
 // a piece of the previous theme still on screen after the user switches themes.
-struct UiChrome {
-  ImU32 bandFace;        // toolbar / ribbon strip background
-  ImU32 bandHilite;      // button bevel, light edge
-  ImU32 bandShadow;      // button bevel, dark edge; also the gripper's dark line
-  ImU32 bandSunken;      // pressed button face
-  ImU32 bandRaised;      // hovered button face
-  ImU32 statusBarFace;   // status bar window background
-  ImU32 statusStripFace; // the button strip inside it
-  ImU32 panelFill;       // fill under a property panel's last row
-  ImU32 propValueBg;     // recessed property VALUE cell
-  ImU32 headerFaceL;     // property section header bar, at rest, left of gradient
-  ImU32 headerFaceR;     // ... right of gradient (== left for a flat bar)
-  ImU32 headerHoverL;    // ... hovered
-  ImU32 headerHoverR;
-  ImU32 headerText;      // section header label
-  ImU32 headerEdgeTop;   // 1px edge along the bar's top (0 alpha = none)
-  ImU32 headerEdgeBot;   // 1px edge along its bottom
-  ImU32 headerGlyphBg;   // fill behind the collapse mark (box style only)
-  ImU32 headerGlyphEdge; // its outline (box style only)
-  ImU32 headerGlyph;     // the collapse mark itself
-  bool  headerBoxGlyph;  // true: classic [-]/[+] box; false: a disclosure triangle
-  ImU32 popupFace;       // command autocomplete popup background
-  ImU32 popupBorder;     // ... and its border
-  // Elevation. A flat palette has no bevels to lean on, so "this plate is above
-  // that surface" is carried by two marks: a 1px lit edge along the top of the
-  // raised plate, and a soft shadow the plate casts DOWN onto the surface below
-  // it. Zero alpha in either disables that half — which is how the classic
-  // theme, whose 3D look comes from its own bevels, opts out entirely.
-  ImU32 plateHilite;     // 1px lit edge along a raised plate's top
-  ImU32 plateShadow;     // cast shadow at full strength; fades to transparent
-  ImU32 windowShadow;    // halo around a FLOATING window, so it lifts off the shell
-  bool  axisBadges;      // draw the X/Y/Z badge on Properties coordinate rows
-  ImU32 axisX, axisY, axisZ; // badge fills
-  ImU32 axisText;        // badge letter
-};
 static UiChrome g_chrome;
+
+UiChrome& CadUiChrome()
+{
+  return g_chrome;
+}
 
 void ApplyCadDarkTheme() {
   // Hazel-editor look (REQ-081): a light-ish panel surface floating on a darker
@@ -494,6 +478,22 @@ void ApplyCadDarkTheme() {
   g_chrome.axisY           = ImGui::ColorConvertFloat4ToU32(success);
   g_chrome.axisZ           = ImGui::ColorConvertFloat4ToU32(info);
   g_chrome.axisText        = HexU32(0xF2F2F2);
+  g_chrome.ribbonPanelRule = IM_COL32(0, 0, 0, 26);
+  g_chrome.ribbonPanelTitle = HexU32(0xC7C7C7);
+  g_chrome.ribbonTabOn         = HexU32(0xE0AE5E);
+  g_chrome.ribbonTabOnHovered  = HexU32(0xF0C67C);
+  g_chrome.ribbonTabOnActive   = HexU32(0xC08F43);
+  g_chrome.ribbonTabOnText     = HexU32(0x161616);
+  g_chrome.ribbonCtxTab        = IM_COL32(0, 120, 215, 255);
+  g_chrome.ribbonCtxTabDim     = IM_COL32(0, 120, 215, 180);
+  g_chrome.ribbonCtxTabHovered = IM_COL32(30, 144, 255, 255);
+  g_chrome.ribbonCtxTabActive  = IM_COL32(0, 90, 180, 255);
+  g_chrome.ribbonCtxTabText    = IM_COL32(255, 255, 255, 255);
+  g_chrome.ribbonTabPadY       = 5.f;
+  g_chrome.ribbonTabStripGapY  = 4.f;
+  g_chrome.ribbonBottomGutter  = 12.f;
+  g_chrome.ribbonTitleH        = 20.f;
+  g_chrome.ribbonBodyFontScale = 0.80f;
 }
 
 void ApplyCadLightTheme() {
@@ -629,6 +629,22 @@ void ApplyCadLightTheme() {
   // REQ-081's "the Light theme renders exactly as it does today" wins here.
   g_chrome.axisBadges      = false;
   g_chrome.axisX = g_chrome.axisY = g_chrome.axisZ = g_chrome.axisText = 0;
+  g_chrome.ribbonPanelRule     = IM_COL32(0, 0, 0, 26);
+  g_chrome.ribbonPanelTitle    = IM_COL32(160, 160, 160, 255);
+  g_chrome.ribbonTabOn         = IM_COL32(59, 130, 246, 255);
+  g_chrome.ribbonTabOnHovered  = IM_COL32(79, 144, 250, 255);
+  g_chrome.ribbonTabOnActive   = IM_COL32(46, 110, 212, 255);
+  g_chrome.ribbonTabOnText     = IM_COL32(229, 231, 235, 255);
+  g_chrome.ribbonCtxTab        = IM_COL32(0, 120, 215, 255);
+  g_chrome.ribbonCtxTabDim     = IM_COL32(0, 120, 215, 180);
+  g_chrome.ribbonCtxTabHovered = IM_COL32(30, 144, 255, 255);
+  g_chrome.ribbonCtxTabActive  = IM_COL32(0, 90, 180, 255);
+  g_chrome.ribbonCtxTabText    = IM_COL32(255, 255, 255, 255);
+  g_chrome.ribbonTabPadY       = 5.f;
+  g_chrome.ribbonTabStripGapY  = 4.f;
+  g_chrome.ribbonBottomGutter  = 12.f;
+  g_chrome.ribbonTitleH        = 20.f;
+  g_chrome.ribbonBodyFontScale = 0.80f;
 }
 
 // ---------------------------------------------------------------------------
@@ -1172,30 +1188,29 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, boo
 }
 
 void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
-  char gsPath[4096]{};
+  char dwgPath[4096]{};
   const std::string& path = cmd.activeDocFilePath;
   if (!path.empty()) {
-    if (SaveGoSurveyFile(cmd, path.c_str(), log))
+    if (SaveDrawingDocument(cmd, path.c_str(), log))
       cmd.activeDocSavedRevision = cmd.cadGpuRevision;
     return;
   }
-  // No path yet (a New drawing, or one opened by the `.gs` file association — see BUG-027). Browse,
+  // No path yet (a New drawing, or one opened by file association — see BUG-027). Browse,
   // then ADOPT the destination: the tab takes the file's name and every later save is silent, which
   // is what makes a second Ctrl+S mean "save" rather than "ask again".
-  if (!BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), "drawing.gs"))
+  if (!BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg"))
     return;
-  if (!SaveGoSurveyFile(cmd, gsPath, log))
+  if (!SaveDrawingDocument(cmd, dwgPath, log))
     return;
   cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-  cmd.activeDocFilePath      = std::string(gsPath);
+  cmd.activeDocFilePath      = std::string(dwgPath);
   if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
-    cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::path(gsPath).stem().string();
+    cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::path(dwgPath).stem().string();
 }
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   static char dxfPath[4096]{};
   static char dwgPath[4096]{};
-  static char gsPath[4096]{};
 #if !defined(_WIN32)
   if (g_menuBarLogoTex && g_menuBarLogoDims.x > 0.f && g_menuBarLogoDims.y > 0.f) {
     const ImGuiStyle& st = ImGui::GetStyle();
@@ -1218,22 +1233,23 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.drawingTabs.push_back({"Drawing " + std::to_string(cmd.nextDrawingNumber++), cmd.nextTabUid++});
       cmd.documents.emplace_back();
       RestoreDocumentFromSnapshot(cmd, newIdx);  // load empty state into cmd
+      LoadBundledBlockLibrary(cmd, log);
       cmd.activeDrawingIdx        = newIdx;
       cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
       cmd.pendingDrawingTabSwitch = true;
       cmd.pendingViewportFocus    = true;
     }
     if (ImGui::MenuItem("Open", nullptr)) {
-      if (BrowseOpenFileGsUtf8(gsPath, sizeof(gsPath))) {
+      if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath))) {
         SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
-        const std::string tabName = std::filesystem::path(gsPath).stem().string();
+        const std::string tabName = std::filesystem::path(dwgPath).stem().string();
         const int newIdx = static_cast<int>(cmd.drawingTabs.size());
         cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++});
         cmd.documents.emplace_back();
         RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
-        if (LoadGoSurveyFile(cmd, gsPath, log)) {
+        if (OpenDrawingDocument(cmd, dwgPath, log)) {
           cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-          cmd.activeDocFilePath      = std::string(gsPath);
+          cmd.activeDocFilePath      = std::string(dwgPath);
         }
         cmd.activeDrawingIdx        = newIdx;
         cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
@@ -1247,16 +1263,16 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Save As...")) {
       const std::string defName = cmd.activeDocFilePath.empty()
           ? (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size())
-                 ? cmd.drawingTabs[cmd.activeDrawingIdx].name + ".gs"
-                 : std::string("drawing.gs"))
+                 ? cmd.drawingTabs[cmd.activeDrawingIdx].name + ".dwg"
+                 : std::string("drawing.dwg"))
           : std::filesystem::path(cmd.activeDocFilePath).filename().string();
-      if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), defName.c_str())) {
-        if (SaveGoSurveyFile(cmd, gsPath, log)) {
+      if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), defName.c_str())) {
+        if (SaveDrawingDocument(cmd, dwgPath, log)) {
           cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-          cmd.activeDocFilePath      = std::string(gsPath);
+          cmd.activeDocFilePath      = std::string(dwgPath);
           if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
             cmd.drawingTabs[cmd.activeDrawingIdx].name =
-                std::filesystem::path(gsPath).stem().string();
+                std::filesystem::path(dwgPath).stem().string();
         }
       }
     }
@@ -1265,32 +1281,26 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       if (BrowseOpenFileDxfUtf8(dxfPath, sizeof(dxfPath)))
         ImportDxfFile(cmd, dxfPath, log);
     }
+    if (ImGui::MenuItem("Import Block...", nullptr)) {
+      CadBlocksImportWithPicker(cmd, log);
+    }
     if (ImGui::MenuItem("Export DXF...", nullptr)) {
       if (BrowseSaveFileDxfUtf8(dxfPath, sizeof(dxfPath), "drawing.dxf"))
         ExportDxfFile(cmd, dxfPath, log);
     }
     ImGui::Separator();
-    {
-      // DWG needs an external converter in Phase 1 (ADR-024); grey the items out and say why
-      // rather than letting the user hit a failure inside a file dialog.
-      const DwgConverter& conv = FindDwgConverter();
-      if (ImGui::MenuItem("Import DWG...", nullptr, false, conv.available())) {
-        if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath)))
-          ImportDwgFile(cmd, dwgPath, log);
-      }
-      if (ImGui::MenuItem("Export DWG...", nullptr, false, conv.available())) {
-        if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg")) {
-          cmd.dwgPendingExportPath = dwgPath;
-          cmd.dwgLossyExportModal  = true;
-        }
-      }
-      if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip(
-            "DWG needs a converter: install the free ODA File Converter, or set\n"
-            "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
-      else if (conv.available() && ImGui::IsItemHovered())
-        ImGui::SetTooltip("Using %s", conv.displayName.c_str());
+    if (ImGui::MenuItem("Import DWG...", nullptr)) {
+      if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath)))
+        ImportDwgFile(cmd, dwgPath, log);
     }
+    if (ImGui::MenuItem("Export DWG...", nullptr)) {
+      if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg")) {
+        cmd.dwgPendingExportPath = dwgPath;
+        cmd.dwgLossyExportModal  = true;
+      }
+    }
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("LibreDWG — R2000 (AC1015) on save.");
     ImGui::Separator();
     if (ImGui::MenuItem("Quit Application", nullptr)) {
       bool anyDirty = (cmd.cadGpuRevision != cmd.activeDocSavedRevision);
@@ -1399,13 +1409,12 @@ static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std:
 // constants in the classic theme's grays and so ignored the Dark theme entirely.
 
 // Height of the bottom title strip inside each ribbon panel (Civil 3D-style).
-constexpr float kRibbonTitleH = 20.f;
 // Carries the active panel's title from Begin to End (panels never nest).
 static const char* s_ribbonPanelTitle = nullptr;
 
 // Usable content height above the bottom title strip, for sizing buttons.
 static float RibbonPanelContentH(float panelH) {
-  return std::max(24.f, panelH - kRibbonTitleH);
+  return std::max(24.f, panelH - g_chrome.ribbonTitleH);
 }
 
 static void RibbonSectionBegin(const char* childId, const char* title, float width, float height) {
@@ -1422,6 +1431,12 @@ static void RibbonSectionBegin(const char* childId, const char* title, float wid
   ImGui::BeginChild(childId, ImVec2(width, height), false,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleVar();
+  // A child window keeps its own FontWindowScale (defaults to 1.0) — SetWindowFontScale on the
+  // ribbon strip does NOT propagate in. Without this the section body renders text 25% larger
+  // than colW()/computeTabWidths measured it (those run in the parent scope at 0.80), so every
+  // two-word button label clipped a character and the whole tools row overran into the Layers
+  // strip. Match the measurement scale here.
+  ImGui::SetWindowFontScale(g_chrome.ribbonBodyFontScale);
   s_ribbonPanelTitle = title;
 }
 
@@ -1435,22 +1450,21 @@ static void RibbonSectionEnd() {
   const char* title = s_ribbonPanelTitle ? s_ribbonPanelTitle : "";
   const ImVec2 ts = ImGui::CalcTextSize(title);
 
-  const float titleTop = wp.y + wh - kRibbonTitleH;
-  dl->AddLine(ImVec2(wp.x + 3.f, titleTop), ImVec2(wp.x + ww - 3.f, titleTop), IM_COL32(0, 0, 0, 26), 1.f);
+  const float titleTop = wp.y + wh - g_chrome.ribbonTitleH;
+  dl->AddLine(ImVec2(wp.x + 3.f, titleTop), ImVec2(wp.x + ww - 3.f, titleTop), g_chrome.ribbonPanelRule, 1.f);
 
-  const ImVec4 t4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-  const ImVec4 d4 = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
-  const ImU32 tcol = ImGui::GetColorU32(
-      ImVec4(t4.x * 0.5f + d4.x * 0.5f, t4.y * 0.5f + d4.y * 0.5f, t4.z * 0.5f + d4.z * 0.5f, 1.f));
+  const ImU32 tcol = g_chrome.ribbonPanelTitle;
 
   constexpr float chevSz = 3.f;
   constexpr float gap = 5.f;
   const float totalW = ts.x + gap + chevSz * 2.f;
-  const float tx = wp.x + (ww - totalW) * 0.5f;
-  const float ty = titleTop + (kRibbonTitleH - ts.y) * 0.5f;
+  float tx = wp.x + (ww - totalW) * 0.5f;
+  if (tx < wp.x + 3.f)
+    tx = wp.x + 3.f;
+  const float ty = titleTop + (g_chrome.ribbonTitleH - ts.y) * 0.5f;
   dl->AddText(ImVec2(tx, ty), tcol, title);
   const float cx = tx + ts.x + gap + chevSz;
-  const float cy = titleTop + kRibbonTitleH * 0.5f;
+  const float cy = titleTop + g_chrome.ribbonTitleH * 0.5f;
   dl->AddTriangleFilled(ImVec2(cx - chevSz, cy - chevSz * 0.55f), ImVec2(cx + chevSz, cy - chevSz * 0.55f),
                         ImVec2(cx, cy + chevSz * 0.75f), tcol);
 
@@ -1547,6 +1561,38 @@ enum class RibbonIconKind : std::uint8_t {
   SvyRenumber,
   SvyLock,
   SvyUnlock,
+  Array,
+  Plot,
+  Export,
+  Import,
+  Settings,
+  ViewportRect,
+  ViewportPoly,
+  DimStyle,
+  // Insert tab + View tab fixes (previously reused Copy/PdfAttach/Layers placeholders).
+  Block,
+  BlockEditor,
+  BlockInsert,
+  Toolspace,
+  // Block Editor contextual tab — dedicated Block_Authoring_* art (previously all Copy).
+  BeSaveBlock,
+  BeAutoConstrain,
+  BeConstraintShow,
+  BeBlockTable,
+  BeParameters,
+  BePalettes,
+  BeParamPoint,
+  BeParamLinear,
+  BeParamPolar,
+  BeParamXY,
+  BeParamRotation,
+  BeParamAlignment,
+  BeParamFlip,
+  BeParamVisibility,
+  BeParamLookup,
+  BeParamBasepoint,
+  // Generic placeholder for greyed "not implemented yet" ribbon buttons.
+  Nyi,
 };
 
 static ImVec2 RibbonLerp(const ImVec2& a, const ImVec2& b, float u, float v) {
@@ -2531,6 +2577,15 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     }
     break;
   }
+  case RibbonIconKind::Array:
+  case RibbonIconKind::Plot:
+  case RibbonIconKind::Export:
+  case RibbonIconKind::Import:
+  case RibbonIconKind::Settings:
+  case RibbonIconKind::ViewportRect:
+  case RibbonIconKind::ViewportPoly:
+  case RibbonIconKind::DimStyle:
+    break;
   default:
     break;
   }
@@ -2544,16 +2599,16 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
 static const char* RibbonIconName(RibbonIconKind k) {
   switch (k) {
   case RibbonIconKind::Line:           return "line";
-  case RibbonIconKind::Circle:         return "circle";
+  case RibbonIconKind::Circle:         return "Circle_Center_Radius";
   case RibbonIconKind::Polyline:       return "polyline";
   case RibbonIconKind::Rect:           return "rect";
   case RibbonIconKind::Arc:            return "arc";
   case RibbonIconKind::Ellipse:        return "ellipse";
   case RibbonIconKind::Hatch:          return "hatch";
-  case RibbonIconKind::Dim:            return "dim";
-  case RibbonIconKind::DimLinear:      return "dimlinear";
+  case RibbonIconKind::Dim:            return "Dim_Aligned";
+  case RibbonIconKind::DimLinear:      return "Dim_Linear";
   case RibbonIconKind::DimAngular:     return "dimangular";
-  case RibbonIconKind::Id:             return "id";
+  case RibbonIconKind::Id:             return "Single_Point";
   case RibbonIconKind::Text:           return "text";
   case RibbonIconKind::Mtext:          return "mtext";
   case RibbonIconKind::Move:           return "move";
@@ -2563,8 +2618,8 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Join:           return "join";
   case RibbonIconKind::Trim:           return "trim";
   case RibbonIconKind::Offset:         return "offset";
-  case RibbonIconKind::ZoomExtents:    return "zoomextents";
-  case RibbonIconKind::ZoomWindow:     return "zoomwindow";
+  case RibbonIconKind::ZoomExtents:    return "Zoom_Extensis";
+  case RibbonIconKind::ZoomWindow:     return "Zoom_Window";
   case RibbonIconKind::Scale:          return "scale";
   case RibbonIconKind::Mirror:         return "mirror";
   case RibbonIconKind::Lengthen:       return "lengthen";
@@ -2573,63 +2628,99 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Stretch:        return "stretch";
   case RibbonIconKind::Fillet:         return "fillet";
   case RibbonIconKind::Chamfer:        return "chamfer";
-  case RibbonIconKind::SurveyPoint:    return "surveypoint";
+  case RibbonIconKind::SurveyPoint:    return "Point_Style";
   case RibbonIconKind::SurveyInverse:  return "surveyinverse";
   case RibbonIconKind::Layers:         return "layers";
-  case RibbonIconKind::PdfAttach:      return "pdfattach";
+  case RibbonIconKind::PdfAttach:      return "PDF";
   case RibbonIconKind::PdfShowBg:      return "pdfshowbg";
   case RibbonIconKind::PdfHideBg:      return "pdfhidebg";
-  case RibbonIconKind::PdfVectorize:   return "pdfvectorize";
+  case RibbonIconKind::PdfVectorize:   return "PDF_Import";
   case RibbonIconKind::Undo:           return "undo";
   case RibbonIconKind::Redo:           return "redo";
-  case RibbonIconKind::ClipboardCopy:  return "clipboardcopy";
-  case RibbonIconKind::ClipboardPaste: return "clipboardpaste";
+  case RibbonIconKind::ClipboardCopy:  return "Copy_Clip";
+  case RibbonIconKind::ClipboardPaste: return "Paste";
   case RibbonIconKind::Traverse:       return "traverse";
-  case RibbonIconKind::SurfLabel:      return "surflabel";
-  case RibbonIconKind::SurfLegend:     return "surflegend";
-  case RibbonIconKind::SurfPropsHand:  return "surfpropshand";
-  case RibbonIconKind::SurfInquiry:    return "surfinquiry";
-  case RibbonIconKind::SurfIsolate:    return "surfisolate";
-  case RibbonIconKind::SurfDoc:        return "surfdoc";
-  case RibbonIconKind::SurfAddData:    return "surfadddata";
-  case RibbonIconKind::SurfEdit:       return "surfedit";
+  // REQ-143 TIN Surface contextual tab. Matched to library art where one fits; the
+  // rest keep their hand-drawn vector fallback (return "" → PaintRibbonIcon).
+  // GUI-pass 2026-08-30: repointed off the old baked-text Autodesk library art onto the c3d_*
+  // blue line-art set so the Survey / contextual tabs match Home/Insert/Annotate/Manage/Output.
+  case RibbonIconKind::SurfLabel:      return "c3d_addlabels";
+  case RibbonIconKind::SurfLegend:     return "Table";
+  case RibbonIconKind::SurfPropsHand:  return "c3d_properties";
+  case RibbonIconKind::SurfInquiry:    return "Measure_Area";
+  case RibbonIconKind::SurfIsolate:    return "c3d_isolate";
+  case RibbonIconKind::SurfDoc:        return "c3d_properties";
+  case RibbonIconKind::SurfAddData:    return "c3d_surfaces";
+  case RibbonIconKind::SurfEdit:       return "c3d_surfedit";
   case RibbonIconKind::SurfLodLow:     return "surflodlow";
   case RibbonIconKind::SurfLodHigh:    return "surflodhigh";
   case RibbonIconKind::SurfWaterDrop:  return "surfwaterdrop";
-  case RibbonIconKind::SurfBandage:    return "surfbandage";
+  case RibbonIconKind::SurfBandage:    return "Breakline_Symbol";
   case RibbonIconKind::SurfEye:        return "surfeye";
   case RibbonIconKind::SurfCatchment:  return "surfcatchment";
-  case RibbonIconKind::SurfVolumes:    return "surfvolumes";
+  case RibbonIconKind::SurfVolumes:    return "Measure_Volume";
   case RibbonIconKind::SurfDrape:      return "surfdrape";
-  case RibbonIconKind::SurfExtract:    return "surfextract";
-  case RibbonIconKind::SurfMoveTo:     return "surfmoveto";
-  case RibbonIconKind::SurfQuickProfile: return "surfquickprofile";
-  case RibbonIconKind::SurfProfile:    return "surfprofile";
-  case RibbonIconKind::SurfDataShortcut: return "surfdatashortcut";
-  case RibbonIconKind::SurfGrading:    return "surfgrading";
+  case RibbonIconKind::SurfExtract:    return "Extract_Data";
+  case RibbonIconKind::SurfMoveTo:     return "3D_Move";
+  case RibbonIconKind::SurfQuickProfile: return "c3d_quickprofile";
+  case RibbonIconKind::SurfProfile:    return "c3d_quickprofile";
+  case RibbonIconKind::SurfDataShortcut: return "Attach";
+  case RibbonIconKind::SurfGrading:    return "c3d_grading";
+  // D-2026-08-28-k Civil 3D Survey tab / Survey Point contextual tab.
   case RibbonIconKind::SvyTripod:      return "svytripod";
   case RibbonIconKind::SvyQuery:       return "svyquery";
   case RibbonIconKind::SvyFigure:      return "svyfigure";
   case RibbonIconKind::SvyPda:         return "svypda";
-  case RibbonIconKind::SvyPin:         return "svypin";
+  case RibbonIconKind::SvyPin:         return "surveypoint";
   case RibbonIconKind::SvyRefresh:     return "svyrefresh";
-  case RibbonIconKind::SvyGlobe:       return "svyglobe";
-  case RibbonIconKind::SvyGeodetic:    return "svygeodetic";
-  case RibbonIconKind::SvySun:         return "svysun";
+  case RibbonIconKind::SvyGlobe:       return "c3d_mapcheck";
+  case RibbonIconKind::SvyGeodetic:    return "c3d_geodetic";
+  case RibbonIconKind::SvySun:         return "c3d_astro";
   case RibbonIconKind::SvyRenumber:    return "svyrenumber";
-  case RibbonIconKind::SvyLock:        return "svylock";
-  case RibbonIconKind::SvyUnlock:      return "svyunlock";
+  case RibbonIconKind::SvyLock:        return "Layer_Lock";
+  case RibbonIconKind::SvyUnlock:      return "Layer_Unlock";
+  case RibbonIconKind::Array:          return "array";
+  case RibbonIconKind::Plot:           return "plot";
+  case RibbonIconKind::Export:         return "export";
+  case RibbonIconKind::Import:         return "import";
+  case RibbonIconKind::Settings:       return "settings";
+  case RibbonIconKind::ViewportRect:   return "viewportrect";
+  case RibbonIconKind::ViewportPoly:   return "viewportpoly";
+  case RibbonIconKind::DimStyle:       return "dimstyle";
+  // Insert/View placeholder fixes.
+  case RibbonIconKind::Block:          return "block";
+  case RibbonIconKind::BlockEditor:    return "Block_Editor";
+  case RibbonIconKind::BlockInsert:    return "Insert_Block";
+  case RibbonIconKind::Toolspace:      return "toolspace";
+  // Block Editor contextual tab.
+  case RibbonIconKind::BeSaveBlock:       return "Write_Block";
+  case RibbonIconKind::BeAutoConstrain:   return "AutoConstrain";
+  case RibbonIconKind::BeConstraintShow:  return "Show_Geometric_Constraints";
+  case RibbonIconKind::BeBlockTable:      return "Block_Authoring_Actions_Table";
+  case RibbonIconKind::BeParameters:      return "Block_Authoring_Parameters_Linear";
+  case RibbonIconKind::BePalettes:        return "Blocks_Palette";
+  case RibbonIconKind::BeParamPoint:      return "Block_Authoring_Parameters_Point";
+  case RibbonIconKind::BeParamLinear:     return "Block_Authoring_Parameters_Linear";
+  case RibbonIconKind::BeParamPolar:      return "Block_Authoring_Parameters_Polar";
+  case RibbonIconKind::BeParamXY:         return "Block_Authoring_Parameters_XY";
+  case RibbonIconKind::BeParamRotation:   return "Block_Authoring_Parameters_Rotation";
+  case RibbonIconKind::BeParamAlignment:  return "Block_Authoring_Parameters_Alignment";
+  case RibbonIconKind::BeParamFlip:       return "Block_Authoring_Parameters_Flip";
+  case RibbonIconKind::BeParamVisibility: return "Block_Authoring_Parameters_Visibility";
+  case RibbonIconKind::BeParamLookup:     return "Block_Authoring_Parameters_Lookup";
+  case RibbonIconKind::BeParamBasepoint:  return "Block_Authoring_Parameters_Base_Point";
+  case RibbonIconKind::Nyi:               return "nyi";
   }
   return "";
 }
 
-static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::SvyUnlock) + 1] = {};
+static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::Nyi) + 1] = {};
 static bool g_ribbonIconsLoaded = false;
 
 static void EnsureRibbonIconsLoaded() {
   if (g_ribbonIconsLoaded) return;
   g_ribbonIconsLoaded = true;  // attempt once; missing files fall back to vector art
-  for (int i = 0; i <= static_cast<int>(RibbonIconKind::SvyUnlock); ++i) {
+  for (int i = 0; i <= static_cast<int>(RibbonIconKind::Nyi); ++i) {
     const std::string nm = RibbonIconName(static_cast<RibbonIconKind>(i));
     if (nm.empty()) continue;
     const std::filesystem::path p =
@@ -2640,6 +2731,24 @@ static void EnsureRibbonIconsLoaded() {
   }
 }
 
+// Load (once, cached) an arbitrary resources/icons/<name>.png as a texture. Used by ribbon buttons
+// that carry a bespoke icon not in the RibbonIconKind enum (e.g. the greyed Civil 3D placeholders).
+static ImTextureID RibbonNamedIconTex(const char* name) {
+  static std::unordered_map<std::string, ImTextureID> cache;
+  if (!name || !name[0]) return 0;
+  auto it = cache.find(name);
+  if (it != cache.end()) return it->second;
+  ImTextureID tex = 0;
+  const std::filesystem::path p =
+      ResolveBundledAssetPath(std::filesystem::path("resources") / "icons" / (std::string(name) + ".png"));
+  if (!p.empty()) {
+    if (unsigned int gl = LoadIconTextureRgba(p))
+      tex = static_cast<ImTextureID>(static_cast<intptr_t>(gl));
+  }
+  cache.emplace(name, tex);
+  return tex;
+}
+
 // Map an UPPERCASE command name to a ribbon icon, for the command autocomplete list.
 static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
   struct M { const char* n; RibbonIconKind k; };
@@ -2648,13 +2757,14 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"RECT", RibbonIconKind::Rect},
     {"ARC", RibbonIconKind::Arc}, {"ELLIPSE", RibbonIconKind::Ellipse}, {"HATCH", RibbonIconKind::Hatch},
     {"TEXT", RibbonIconKind::Text},
-    {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear}, {"DIMANGULAR", RibbonIconKind::DimAngular}, {"DIMSTY", RibbonIconKind::DimAngular},
+    {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear}, {"DIMANGULAR", RibbonIconKind::DimAngular}, {"DIMSTY", RibbonIconKind::DimStyle},
     {"ID", RibbonIconKind::Id}, {"INVERSE", RibbonIconKind::SurveyInverse}, {"MOVE", RibbonIconKind::Move},
     {"COPY", RibbonIconKind::Copy}, {"ROTATE", RibbonIconKind::Rotate}, {"SCALE", RibbonIconKind::Scale},
     {"MIRROR", RibbonIconKind::Mirror},
-    // REQ-305: no dedicated ARRAY icon yet — reuses Copy's, the same "no icon art yet" precedent
-    // Import/Export/Settings set (D-2026-08-25-h) rather than growing the bounded PNG-load loop.
-    {"ARRAY", RibbonIconKind::Copy},
+    {"ARRAY", RibbonIconKind::Array},
+    {"PLOT", RibbonIconKind::Plot},
+    {"IMPORT", RibbonIconKind::Import},
+    {"EXPORT", RibbonIconKind::Export},
     {"LENGTHEN", RibbonIconKind::Lengthen},
     {"EXTEND", RibbonIconKind::Extend},
     {"BREAK", RibbonIconKind::Break},
@@ -2688,11 +2798,14 @@ static void DrawRibbonButtonBevel(ImDrawList* dl, const ImRect& bb, bool sunken)
 
 // Draw an icon (bitmap if loaded, else procedural fallback) centered as a
 // square inside [iconMin, iconMax], dimmed by the current style alpha.
-static void DrawRibbonIconArt(ImDrawList* dl, RibbonIconKind icon, const ImVec2& iconMin, const ImVec2& iconMax) {
+static void DrawRibbonIconArt(ImDrawList* dl, RibbonIconKind icon, const ImVec2& iconMin, const ImVec2& iconMax,
+                              const char* iconNameOverride = nullptr) {
   if (iconMax.y <= iconMin.y + 2.f || iconMax.x <= iconMin.x + 2.f)
     return;
   EnsureRibbonIconsLoaded();
-  const ImTextureID tex = g_ribbonIconTex[static_cast<int>(icon)];
+  const ImTextureID tex = (iconNameOverride && iconNameOverride[0])
+                              ? RibbonNamedIconTex(iconNameOverride)
+                              : g_ribbonIconTex[static_cast<int>(icon)];
   if (tex) {
     const float side = std::min(iconMax.x - iconMin.x, iconMax.y - iconMin.y);
     const ImVec2 ctr((iconMin.x + iconMax.x) * 0.5f, (iconMin.y + iconMax.y) * 0.5f);
@@ -2847,7 +2960,7 @@ enum class RibbonLabel { None, Right, Below };
 // or a large icon with the label centered below (Below). Shares the 3D bevel
 // and icon art with every ribbon button so states stay consistent.
 static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* label,
-                           const ImVec2& size, RibbonLabel mode) {
+                           const ImVec2& size, RibbonLabel mode, const char* iconNameOverride = nullptr) {
   assert(str_id != nullptr);
   assert(size.x > 0.f && size.y > 0.f);
   ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -2876,7 +2989,7 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
   }
 
   const bool hasLabel = (label && label[0] && mode != RibbonLabel::None);
-  constexpr float pad = 3.f;
+  constexpr float iconPad = 1.f;  // icons hug the button edge for readability
   std::string wrapped;
   const char* drawLabel = label;
   if (mode == RibbonLabel::Below && hasLabel) {
@@ -2894,26 +3007,26 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
 
   ImVec2 iconMin, iconMax, labelPos;
   if (mode == RibbonLabel::Below && hasLabel) {
-    constexpr float botPad = 5.f;
-    const float iconArea = std::max(18.f, size.y - ts.y - pad - botPad - 1.f);
-    const float sideMax = std::min(size.x - pad * 2.f, iconArea);
-    const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + pad + iconArea * 0.5f + shift);
+    constexpr float botPad = 4.f;
+    const float iconArea = std::max(18.f, size.y - ts.y - iconPad - botPad - 1.f);
+    const float sideMax = std::min(size.x - iconPad * 2.f, iconArea);
+    const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + iconPad + iconArea * 0.5f + shift);
     iconMin = ImVec2(ctr.x - sideMax * 0.5f, ctr.y - sideMax * 0.5f);
     iconMax = ImVec2(ctr.x + sideMax * 0.5f, ctr.y + sideMax * 0.5f);
     labelPos = ImVec2(bb.Min.x + (size.x - ts.x) * 0.5f + shift, bb.Max.y - ts.y - botPad + shift);
   } else if (mode == RibbonLabel::Right && hasLabel) {
-    const float side = size.y - pad * 2.f;
-    iconMin = ImVec2(bb.Min.x + pad + shift, bb.Min.y + pad + shift);
+    const float side = size.y - iconPad * 2.f;
+    iconMin = ImVec2(bb.Min.x + iconPad + shift, bb.Min.y + iconPad + shift);
     iconMax = ImVec2(iconMin.x + side, iconMin.y + side);
-    labelPos = ImVec2(iconMax.x + 4.f + shift, bb.Min.y + (size.y - ts.y) * 0.5f + shift);
+    labelPos = ImVec2(iconMax.x + 3.f + shift, bb.Min.y + (size.y - ts.y) * 0.5f + shift);
   } else {
-    const float side = std::min(size.x, size.y) - pad * 2.f;
+    const float side = std::min(size.x, size.y) - iconPad * 2.f;
     const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + size.y * 0.5f + shift);
     iconMin = ImVec2(ctr.x - side * 0.5f, ctr.y - side * 0.5f);
     iconMax = ImVec2(ctr.x + side * 0.5f, ctr.y + side * 0.5f);
   }
 
-  DrawRibbonIconArt(dl, icon, iconMin, iconMax);
+  DrawRibbonIconArt(dl, icon, iconMin, iconMax, iconNameOverride);
   if (hasLabel) {
     if (mode == RibbonLabel::Below)
       RibbonAddCaption(dl, labelPos, textCol, drawLabel);
@@ -2935,11 +3048,11 @@ static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
 }
 
 static void RibbonNyiButton(const char* id, RibbonIconKind ic, const char* label, const ImVec2& size,
-                            RibbonLabel mode) {
+                            RibbonLabel mode, const char* iconNameOverride = nullptr) {
   assert(id != nullptr);
   assert(label != nullptr);
   ImGui::BeginDisabled();
-  (void)RibbonButtonEx(id, ic, label, size, mode);
+  (void)RibbonButtonEx(id, ic, label, size, mode, iconNameOverride);
   char flat[160];
   size_t o = 0;
   for (const char* p = label; *p != '\0' && o + 1 < sizeof(flat); ++p) {
@@ -3003,13 +3116,22 @@ struct RibbonSectionSpec {
   float wideW = 0.f;
   float mediumW = 0.f;
   std::function<void()> render;
+  // For the collapsed-panel button shown when this section doesn't fit inline (Civil 3D-style:
+  // one titled flyout button per collapsed panel, not a shared "More"). Optional — a section
+  // with no name collapses to an icon-only button.
+  const char* name = "";
+  RibbonIconKind icon = RibbonIconKind::Nyi;
+  const char* iconName = nullptr;  // resources/icons/<iconName>.png; overrides `icon` when set
 };
+
+// Width of a collapsed-panel flyout button (icon + short title + chevron).
+constexpr float kRibbonCollapsedW = 72.f;
 
 struct RibbonFitResult {
   RibbonBreakpoint breakpoint = RibbonBreakpoint::Wide;
   std::vector<size_t> inlineIdx;    // section indices rendered in the ribbon row, in order
-  std::vector<size_t> overflowIdx;  // section indices rendered inside the "More" popup, in order
-  float width = 0.f;                // total width actually consumed (inline sections + gaps [+ More])
+  std::vector<size_t> overflowIdx;  // section indices collapsed to a flyout button, in order
+  float width = 0.f;                // total width actually consumed (inline sections + gaps + collapsed)
 };
 
 // Decides which of `specs` (in order) fit inline at `availW` and which overflow into a popup
@@ -3039,23 +3161,41 @@ static RibbonFitResult DecideRibbonFit(const std::vector<RibbonSectionSpec>& spe
     return r;
   }
   r.breakpoint = RibbonBreakpoint::Narrow;
+  // Civil 3D behaviour: collapse panels from the RIGHT, one at a time, each into a titled
+  // flyout button (kRibbonCollapsedW wide). Once a panel collapses, every panel to its right
+  // stays collapsed too — the row never has a collapsed panel left of an inline one.
   float used = 0.f;
+  bool collapsing = false;
   for (size_t i = 0; i < specs.size(); ++i) {
-    const float need = specs[i].mediumW + (r.inlineIdx.empty() ? 0.f : gap);
+    const float needInline = specs[i].mediumW + (i ? gap : 0.f);
+    const float needCollapsed = kRibbonCollapsedW + (i ? gap : 0.f);
     // The first section always renders inline even if it alone would overflow `availW`
-    // (TASK-105 ASSUMPTION-2) — an empty-looking tab with only a "More" button reads as broken.
-    if (r.inlineIdx.empty() || used + need <= availW) {
+    // (TASK-105 ASSUMPTION-2) — an empty-looking tab reads as broken.
+    if (!collapsing && (r.inlineIdx.empty() || used + needInline <= availW)) {
       r.inlineIdx.push_back(i);
-      used += need;
+      used += needInline;
     } else {
+      collapsing = true;
       r.overflowIdx.push_back(i);
+      used += needCollapsed;
     }
   }
-  constexpr float kMoreW = 46.f;
-  if (!r.overflowIdx.empty())
-    used += kMoreW + gap;
   r.width = used;
   return r;
+}
+
+// Trim `s` to fit `maxW` px at the current font, appending "…" when shortened.
+static std::string RibbonTruncate(const char* s, float maxW) {
+  if (ImGui::CalcTextSize(s).x <= maxW)
+    return s;
+  std::string out;
+  for (const char* p = s; *p; ++p) {
+    std::string cand = out + *p + "\xE2\x80\xA6";
+    if (ImGui::CalcTextSize(cand.c_str()).x > maxW)
+      break;
+    out.push_back(*p);
+  }
+  return out + "\xE2\x80\xA6";
 }
 
 // Renders a tab's sections per `fit` — inline sections at Medium metrics when the breakpoint isn't
@@ -3071,18 +3211,35 @@ static void RenderRibbonFit(const std::vector<RibbonSectionSpec>& specs, const R
       ImGui::SameLine(0, gap);
     specs[fit.inlineIdx[k]].render();
   }
-  if (!fit.overflowIdx.empty()) {
+  // Each overflowed panel collapses to its own titled flyout button (Civil 3D-style).
+  (void)morePopupId;
+  for (size_t k = 0; k < fit.overflowIdx.size(); ++k) {
+    const size_t si = fit.overflowIdx[k];
+    const RibbonSectionSpec& s = specs[si];
     ImGui::SameLine(0, gap);
-    if (ImGui::Button("More", ImVec2(46.f, colH)))
-      ImGui::OpenPopup(morePopupId);
-    RibbonItemHelp("More — additional tools that don't fit at the current window width.");
-    if (ImGui::BeginPopup(morePopupId)) {
+    char pid[32];
+    std::snprintf(pid, sizeof(pid), "##ribcol%zu", si);
+    const bool hasName = s.name && s.name[0];
+    const std::string label = hasName ? RibbonTruncate(s.name, kRibbonCollapsedW - 12.f) : std::string();
+    ImVec2 cur = ImGui::GetCursorScreenPos();
+    if (RibbonButtonEx(pid, s.icon, hasName ? label.c_str() : nullptr, ImVec2(kRibbonCollapsedW, colH),
+                       hasName ? RibbonLabel::Below : RibbonLabel::None, s.iconName))
+      ImGui::OpenPopup(pid);
+    // Down-chevron affordance, bottom-centre.
+    ImGui::GetWindowDrawList()->AddTriangleFilled(
+        ImVec2(cur.x + kRibbonCollapsedW * 0.5f - 3.f, cur.y + colH - 7.f),
+        ImVec2(cur.x + kRibbonCollapsedW * 0.5f + 3.f, cur.y + colH - 7.f),
+        ImVec2(cur.x + kRibbonCollapsedW * 0.5f, cur.y + colH - 3.f),
+        ImGui::GetColorU32(ImGuiCol_Text));
+    if (hasName) {
+      char tip[96];
+      std::snprintf(tip, sizeof(tip), "%s panel", s.name);
+      RibbonItemHelp(tip);
+    }
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, FLT_MAX));
+    if (ImGui::BeginPopup(pid)) {
       curCompact = false;
-      for (size_t k = 0; k < fit.overflowIdx.size(); ++k) {
-        if (k)
-          ImGui::SameLine(0, gap);
-        specs[fit.overflowIdx[k]].render();
-      }
+      s.render();
       ImGui::EndPopup();
     }
   }
@@ -3178,16 +3335,32 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     cmd.surveyPointContextualRibbonArmed = false;
   }
 
+  const bool inBedit = !cmd.blockEditorName.empty();
+  if (inBedit) {
+    if (!cmd.blockEditorContextualRibbonArmed) {
+      if (cmd.activeRibbonTab >= 0 && cmd.activeRibbonTab < kRibbonTabCount)
+        cmd.ribbonTabBeforeBlockEditor = cmd.activeRibbonTab;
+      cmd.activeRibbonTab = kRibbonTabBlockEditor;
+      cmd.blockEditorContextualRibbonArmed = true;
+    }
+  } else if (cmd.blockEditorContextualRibbonArmed) {
+    if (cmd.activeRibbonTab == kRibbonTabBlockEditor) {
+      int prev = cmd.ribbonTabBeforeBlockEditor;
+      if (prev < 0 || prev >= kRibbonTabCount)
+        prev = kRibbonTabHome;
+      cmd.activeRibbonTab = prev;
+    }
+    cmd.blockEditorContextualRibbonArmed = false;
+  }
+
   // REQ-302 tab strip: Home/Insert/Annotate/View/Manage/Output/Survey. Reuses the Model/Layout
   // tab toggle styling (PushModeToggleButtonColors, ~CadUi.cpp:6308, REQ-025/026 precedent) so the
   // active tab reads the same way the active space tab already does, rather than a second style.
   // Extra vertical FramePadding (user GUI-pass feedback, 2026-08-25: tab text sat flush against
   // the button's bottom edge) plus a gap row below the strip so it doesn't crowd the panels.
-  constexpr float kRibbonTabFramePadY = 5.f;
-  constexpr float kRibbonTabStripH    = 18.f + kRibbonTabFramePadY * 2.f;
-  constexpr float kRibbonTabStripGapY = 4.f;
+  const float kRibbonTabStripH = 18.f + g_chrome.ribbonTabPadY * 2.f;
   {
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f, kRibbonTabFramePadY));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f, g_chrome.ribbonTabPadY));
     auto ribbonTab = [&](const char* label, int tabIdx) {
       const bool active = cmd.activeRibbonTab == tabIdx;
       PushModeToggleButtonColors(active, cmd.displayColorThemeIdx);
@@ -3237,25 +3410,40 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::PopStyleColor(4);
       ImGui::SameLine(0, 2);
     }
+    if (inBedit) {
+      const bool beOn = cmd.activeRibbonTab == kRibbonTabBlockEditor;
+      ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0, 120, 215, beOn ? 255 : 180));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(30, 144, 255, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0, 90, 180, 255));
+      ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
+      if (ImGui::Button("Block Editor", ImVec2(0.f, kRibbonTabStripH)))
+        cmd.activeRibbonTab = kRibbonTabBlockEditor;
+      ImGui::PopStyleColor(4);
+      ImGui::SameLine(0, 2);
+    }
     ImGui::PopStyleVar();
-    ImGui::Dummy(ImVec2(1.f, kRibbonTabStripGapY));  // gap between the tab strip and the panels below
+    ImGui::Dummy(ImVec2(1.f, g_chrome.ribbonTabStripGapY));
   }
+
+  ImGui::SetWindowFontScale(g_chrome.ribbonBodyFontScale);
 
   const ImGuiStyle& st = ImGui::GetStyle();
   // Gutter below the sections so the panel titles ("Draw", "Modify", …) are not
   // flush against the ribbon's bottom edge. WindowPadding cannot express this —
   // it is symmetric, and adding it at the top too would waste the band's height.
-  constexpr float kRibbonBottomGutter = 12.f;
-  const float panelH = height - kRibbonTabStripH - kRibbonTabStripGapY - st.WindowPadding.y * 2.f -
-                        kRibbonBottomGutter;
-  constexpr float kLayerPanelW = 500.f;
+  const float panelH = height - kRibbonTabStripH - g_chrome.ribbonTabStripGapY - st.WindowPadding.y * 2.f -
+                        g_chrome.ribbonBottomGutter;
+  constexpr float kLayerPanelW = 288.f;
 
   // Civil 3D-style panel metrics: a button column fills the height above the
   // bottom title; small labeled buttons stack 3 to a column; the icon grid
   // uses 2 rows of square cells.
-  const float colH     = std::max(48.f, RibbonPanelContentH(panelH) - 8.f);
-  const float rowH     = std::floor((colH - 4.f) / 3.f);
-  const float gridCell = std::floor((colH - 2.f) / 2.f);
+  const float colH      = std::max(48.f, RibbonPanelContentH(panelH) - 8.f);
+  const float rowH      = std::floor((colH - 4.f) / 3.f);
+  const float gridCell  = std::floor((colH - 2.f) / 2.f);
+  // Civil 3D's Home-tab icon grids (Draw, Palettes, layer state, Clipboard) are 3 rows of small
+  // cells, not 2 — a 2-row cell clipped the bottom row.
+  const float gridCell3 = std::floor((colH - 6.f) / 3.f);
   constexpr float largeW = 60.f;
   constexpr float kTsLargeW = 76.f;
   auto belowW = [&](const char* label) { return RibbonBelowButtonWidth(label, kTsLargeW); };
@@ -3266,15 +3454,25 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // (grid cells are already icon-only; a large button's label-below layout doesn't shrink further).
   bool curCompact = false;
   auto largeBtn = [&](const char* id, RibbonIconKind ic, const char* label) {
-    return RibbonButtonEx(id, ic, label, ImVec2(largeW, colH), RibbonLabel::Below);
+    const bool hit = RibbonButtonEx(id, ic, label, ImVec2(largeW, colH), RibbonLabel::Below);
+    if (hit)
+      DevShell_OnUi(id);
+    return hit;
   };
   auto smallBtn = [&](const char* id, RibbonIconKind ic, const char* label, float w) {
     const RibbonLabel mode = curCompact ? RibbonLabel::None : RibbonLabel::Right;
-    return RibbonButtonEx(id, ic, curCompact ? nullptr : label, ImVec2(curCompact ? rowH : w, rowH), mode);
+    const bool hit = RibbonButtonEx(id, ic, curCompact ? nullptr : label, ImVec2(curCompact ? rowH : w, rowH), mode);
+    if (hit)
+      DevShell_OnUi(id);
+    return hit;
   };
-  auto gridBtn = [&](const char* id, RibbonIconKind ic) {
-    return RibbonButtonEx(id, ic, nullptr, ImVec2(gridCell, gridCell), RibbonLabel::None);
+  auto gridBtn3 = [&](const char* id, RibbonIconKind ic) {
+    const bool hit = RibbonButtonEx(id, ic, nullptr, ImVec2(gridCell3, gridCell3), RibbonLabel::None);
+    if (hit)
+      DevShell_OnUi(id);
+    return hit;
   };
+  (void)gridCell;
   // Column width = small icon + gap + the widest label in the column — or, compact, just the icon
   // (REQ-302 increment 2 Medium/Narrow: "switch button labels to icons," issue #83 strategy 3).
   auto colW = [&](std::initializer_list<const char*> labels) {
@@ -3283,10 +3481,67 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     float m = 0.f;
     for (const char* l : labels)
       m = std::max(m, ImGui::CalcTextSize(l).x);
-    return rowH + 8.f + m;
+    // icon (rowH-6) + 3px gaps each side + label; matches RibbonButtonEx Right-mode layout with
+    // a small margin. (Was +8 — trimmed once the child-font-scale bug was fixed so the extra
+    // slack is no longer needed, which is what lets the wide Home tab fit its full labels.)
+    return rowH + 6.f + m;
+  };
+
+  // Home-tab helpers. MUST be at DrawRibbonBar function scope (not inside the `if (Home)` block):
+  // the ribbonSpecs render closures capture them by reference and are invoked LATER by
+  // RenderRibbonFit, after that block has exited. (Declaring them in the block left dangling
+  // references that a Release build's stack reuse turned into a crash.)
+  const float gcHome = gridCell3;
+  // Labelled Home rows (Create Ground Data / Design / Profile) pack 3 to a column at a compact
+  // height so the rows aren't spread out — the icon still fills most of the button.
+  const float rowHome = std::min(rowH, 34.f);
+  auto nyiGrid = [&](const char* id, const char* ic, const char* label) {
+    RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(gcHome, gcHome), RibbonLabel::None, ic);
+  };
+  auto nyiRow = [&](const char* id, const char* ic, const char* label, float w) {
+    RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(curCompact ? rowHome : w, rowHome),
+                    curCompact ? RibbonLabel::None : RibbonLabel::Right, ic);
+  };
+  auto homeRow = [&](const char* id, RibbonIconKind ic, const char* label, float w) {
+    return RibbonButtonEx(id, ic, curCompact ? nullptr : label, ImVec2(curCompact ? rowHome : w, rowHome),
+                          curCompact ? RibbonLabel::None : RibbonLabel::Right);
+  };
+
+  // Insert-tab helpers — MUST be at function scope for the same reason the Home ones are (captured
+  // by reference, invoked later by RenderRibbonFit). `iconName` is a resources/icons/<name>.png that
+  // is not in the RibbonIconKind enum (library art reused for a not-yet-enumerated command).
+  auto insRow = [&](const char* id, const char* iconName, const char* label, float w) {
+    return RibbonButtonEx(id, RibbonIconKind::Nyi, curCompact ? nullptr : label,
+                          ImVec2(curCompact ? rowH : w, rowH),
+                          curCompact ? RibbonLabel::None : RibbonLabel::Right, iconName);
+  };
+  auto insNyi = [&](const char* id, const char* iconName, const char* label, float w) {
+    // label stays non-null even when compact (RibbonNyiButton asserts on it and still needs it for
+    // the auto NYI tooltip); RibbonLabel::None is what hides the text. Matches the Home `nyiRow`.
+    RibbonNyiButton(id, RibbonIconKind::Nyi, label,
+                    ImVec2(curCompact ? rowH : w, rowH),
+                    curCompact ? RibbonLabel::None : RibbonLabel::Right, iconName);
   };
 
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
+  // Civil 3D Annotate tab shows a style/scale combo in most panels. Where GoSurvey has no picker
+  // yet, render a disabled combo-shaped placeholder with the automatic NYI tooltip. MUST be at
+  // function scope — the ribbonSpecs closures capture it and run after the tab block exits (the
+  // fc0669c dangling-reference crash).
+  auto annNyiCombo = [&](const char* id, const char* text) {
+    ImGui::BeginDisabled();
+    ImGui::Button((std::string(text) + "  \xE2\x96\xBC" + id).c_str(), ImVec2(annStyleW, 0.f));
+    ImGui::EndDisabled();
+    char tip[96];
+    std::snprintf(tip, sizeof(tip), "%s \xE2\x80\x94 not implemented yet.", text);
+    RibbonItemHelp(tip, ImGuiHoveredFlags_AllowWhenDisabled);
+  };
+  // Large (icon-above-label) NYI button using a resources/icons/<name>.png. Function scope for the
+  // same reason as insRow/insNyi — captured by the deferred ribbonSpecs closures. Used by the
+  // Annotate and Manage tab rebuilds.
+  auto nyiLarge = [&](const char* id, const char* iconName, const char* label) {
+    RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(belowW(label), colH), RibbonLabel::Below, iconName);
+  };
   // Visual-style combo width measured from its longest option text, not a guessed constant — a
   // hardcoded 132px clipped "2D Wireframe" (user GUI-pass feedback, 2026-08-25).
   const float visualStyleComboW = ImGui::CalcTextSize("2D Wireframe").x + 40.f;
@@ -3303,8 +3558,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // metrics (`W`) and once at Medium (`M`) — same formulas as increment 1 shipped, since colW()
   // above already resolves compact vs. not; nothing here duplicates a button-sizing decision.
   struct RibbonTabWidths {
-    float wEdit, wDraw, wMod, wAnnText, wAnnDim, wInq, wSrv, wAnalyze, wView, wLayout;
-    float wInsert, wViewSettings, wOutExport, wOutPlot;  // REQ-302 increment 3
+    float wEdit, wDraw, wMod, wInq, wSrv, wAnalyze, wView, wLayout;
+    float wViewSettings;  // REQ-302 increment 3 (Insert/Output tabs now size their sections inline)
     float wNamedViews = 0.f;  // REQ-106
     float wCoords = 0.f;      // REQ-154
   };
@@ -3320,10 +3575,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     w.wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
               colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"}) + 4.f +
               colW({"Extend", "Break", "Stretch"}) + 4.f + colW({"Fillet", "Chamfer"});
-    w.wAnnText = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
-    // REQ-302 follow-up: Aligned/Linear moved here from Survey's Inquiry section (user GUI-pass
-    // feedback, 2026-08-25) — a Dimensions group belongs under Annotate, not Survey.
-    w.wAnnDim  = 8.f + colW({"Aligned", "Linear", "Angular"});
+    // Annotate tab sections compute their own widths inline (GUI-pass 2026-08-30, C3D 8-panel
+    // rebuild) — no wAnnText/wAnnDim entries here.
     // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
     // Aligned/Linear moved to Annotate's new Dimensions section above (2026-08-25 follow-up) — ID
     // Point/Elev-Grade are the two that remain genuinely survey-scoped inquiry tools.
@@ -3346,11 +3599,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // only the viewport-authoring tools (Rect VP is a largeBtn placed outside colW; Poly VP is
     // the one column here).
     w.wLayout = 8.f + largeW + 4.f + colW({"Poly VP"});
-    // REQ-302 increment 3 (content audit): Insert/View/Output real content.
-    w.wInsert = 8.f + colW({"Import DXF", "Import DWG"});
-    w.wViewSettings = 8.f + colW({"Settings"});
-    w.wOutExport = 8.f + colW({"Export DXF", "Export DWG"});
-    w.wOutPlot = 8.f + largeW + 4.f + colW({"Batch"});  // same shape Layout's Plot/Batch used to be
+    // REQ-302 increment 3 (content audit): View tab Settings section. Insert/Output/Annotate/Manage
+    // tabs size their sections inline (GUI-pass 2026-08-30 C3D rebuilds).
+    w.wViewSettings = 8.f + colW({"Settings"}) + 4.f + colW({"Toolspace"});
     return w;
   };
   const RibbonTabWidths W = computeTabWidths(false);
@@ -3362,197 +3613,230 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // before RibbonToolsLeft's BeginChild needs a size), then size RibbonToolsLeft to exactly what
   // will be placed (inline sections, plus a "More" button in Narrow) — never wider than available,
   // so nothing can clip. No section's own body changes below; only what wraps it.
-  const float secGap = 8.f;
+  const float secGap = 6.f;
   std::vector<RibbonSectionSpec> ribbonSpecs;
 
-  // REQ-302: Edit/Draw/Modify/Layout are the Home tab's content — no change to any of their own
-  // conditions or bodies below, only the tab gate wrapped around them.
+  // REQ-302 / GUI-pass 2026-08-30: the Home tab mirrors Civil 3D's Home ribbon 1:1 — Palettes,
+  // Explore, Optimize, Create Ground Data, Create Design, Profile & Section Views, Draw, Modify,
+  // Layers, Clipboard. Commands GoSurvey already implements are wired into their C3D-equivalent
+  // slot; every other button is greyed with an automatic "… — not implemented yet." tooltip
+  // (RibbonNyiButton). Responsive per-panel collapse (the C3D flyout behaviour) is a follow-up.
   if (cmd.activeRibbonTab == kRibbonTabHome) {
-    ribbonSpecs.push_back({W.wEdit, M.wEdit, [&]() {
-      RibbonSectionBegin("RibbonSecUndo", "Edit", curCompact ? M.wEdit : W.wEdit, panelH);
-      {
-        const bool canUndo = CanUndo(cmd);
-        const bool canRedo = CanRedo(cmd);
-        const bool hasSelection = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
-        const bool hasClipboard = !cmd.clipboard.empty();
-        const float cw = colW({"Copy", "Undo", "Redo"});
+    const float gc = gcHome;
 
-        if (!hasClipboard)
-          ImGui::BeginDisabled();
-        if (largeBtn("##RibbonClipPaste", RibbonIconKind::ClipboardPaste, "Paste"))
-          StartPasteCommand(cmd, log);
-        if (!hasClipboard)
-          ImGui::EndDisabled();
-        RibbonItemHelp("Paste (Ctrl+V) — place clipboard objects at cursor position.\nRight-click Edit menu for Paste at Original Coordinates.",
-                       hasClipboard ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-
+    // ---- Palettes -----------------------------------------------------------
+    {
+      const float w = 8.f + largeW + 4.f + gc * 3.f + 4.f * 2.f;
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecPalettes", "Palettes", w, panelH);
+        if (largeBtn("##RibbonToolspaceHome", RibbonIconKind::Toolspace, "Toolspace"))
+          cmd.showToolspaceWindow = true;
+        RibbonItemHelp("Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE");
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
-        if (!hasSelection)
-          ImGui::BeginDisabled();
-        if (smallBtn("##RibbonClipCopy", RibbonIconKind::ClipboardCopy, "Copy", cw))
-          CopySelectionToClipboard(cmd, log);
-        if (!hasSelection)
-          ImGui::EndDisabled();
-        RibbonItemHelp("Copy (Ctrl+C) — copy selected objects to clipboard.\nPaste later with Ctrl+V or the Paste button.",
-                       hasSelection ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-        if (!canUndo)
-          ImGui::BeginDisabled();
-        if (smallBtn("##RibbonUndo", RibbonIconKind::Undo, "Undo", cw))
-          DoUndo(cmd, log);
-        if (!canUndo)
-          ImGui::EndDisabled();
-        RibbonItemHelp("Undo (Ctrl+Z) — restore previous state.", canUndo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-        if (!canRedo)
-          ImGui::BeginDisabled();
-        if (smallBtn("##RibbonRedo", RibbonIconKind::Redo, "Redo", cw))
-          DoRedo(cmd, log);
-        if (!canRedo)
-          ImGui::EndDisabled();
-        RibbonItemHelp("Redo (Ctrl+Shift+Z) — restore next state.", canRedo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        nyiGrid("##PalPanorama", "c3d_panorama", "Panorama");           ImGui::SameLine(0, 4);
+        nyiGrid("##PalProps", "c3d_properties", "Properties");             ImGui::SameLine(0, 4);
+        nyiGrid("##PalRefMgr", "c3d_refmgr", "Reference Manager");
+        nyiGrid("##PalCompEd", "c3d_comped", "Component Editor");       ImGui::SameLine(0, 4);
+        nyiGrid("##PalSettings", "c3d_dwgsettings", "Drawing Settings");     ImGui::SameLine(0, 4);
+        nyiGrid("##PalWorkFolder", "c3d_workfolder", "Set Working Folder");
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        RibbonSectionEnd();
+      }, "Palettes", RibbonIconKind::Toolspace});
+    }
+
+    // ---- Explore -----------------------------------------------------------
+    {
+      const float bw = belowW("Project Explorer");
+      const float w = 8.f + bw;
+      ribbonSpecs.push_back({w, w, [&, w, bw]() {
+        RibbonSectionBegin("RibbonSecExplore", "Explore", w, panelH);
+        RibbonNyiButton("##ExpProjExplorer", RibbonIconKind::Nyi, "Project\nExplorer",
+                        ImVec2(bw, colH), RibbonLabel::Below, "c3d_projexplorer");
+        RibbonSectionEnd();
+      }, "Explore", RibbonIconKind::Nyi, "c3d_projexplorer"});
+    }
+
+    // ---- Optimize ---------------------------------------------------------
+    {
+      const float bw = belowW("Grading Optimization");
+      const float w = 8.f + bw;
+      ribbonSpecs.push_back({w, w, [&, w, bw]() {
+        RibbonSectionBegin("RibbonSecOptimize", "Optimize", w, panelH);
+        RibbonNyiButton("##OptGrading", RibbonIconKind::Nyi, "Grading\nOptimization",
+                        ImVec2(bw, colH), RibbonLabel::Below, "c3d_gradingopt");
+        RibbonSectionEnd();
+      }, "Optimize", RibbonIconKind::Nyi, "c3d_gradingopt"});
+    }
 
     if (!ribbonPaperSpace) {
-      ribbonSpecs.push_back({W.wDraw, M.wDraw, [&]() {
-        RibbonSectionBegin("RibbonSecDraw", "Draw", curCompact ? M.wDraw : W.wDraw, panelH);
-        {
-          if (gridBtn("##RibbonLine", RibbonIconKind::Line))
-            StartLineCommand(cmd, log);
+      // ---- Create Ground Data -------------------------------------------
+      {
+        const float cA = std::max(colW({"Points", "Feature Line", "Traverse"}), capW("Create Ground Data") - 60.f);
+        const float cB = colW({"Surfaces", "Grading"});
+        const float w = 8.f + cA + 4.f + cB;
+        const float mw = 8.f + rowHome + 4.f + rowHome;
+        ribbonSpecs.push_back({w, mw, [&, w, mw, cA, cB]() {
+          RibbonSectionBegin("RibbonSecGroundData", "Create Ground Data", curCompact ? mw : w, panelH);
+          ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 1.f));
+          ImGui::BeginGroup();
+          if (homeRow("##CgdPoints", RibbonIconKind::SurveyPoint, "Points", cA))
+            StartCreatePointsCommand(cmd, log);
+          RibbonItemHelp("Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS");
+          nyiRow("##CgdFeatureLine", "c3d_featureline", "Feature Line", cA);
+          nyiRow("##CgdTraverse", "c3d_traverse2", "Traverse", cA);
+          ImGui::EndGroup();
+          ImGui::SameLine(0, 4);
+          ImGui::BeginGroup();
+          nyiRow("##CgdSurfaces", "c3d_surfaces", "Surfaces", cB);
+          nyiRow("##CgdGrading", "c3d_grading", "Grading", cB);
+          ImGui::EndGroup();
+          ImGui::PopStyleVar();
+          RibbonSectionEnd();
+        }, "Create Ground Data", RibbonIconKind::SurveyPoint});
+      }
+
+      // ---- Create Design ---------------------------------------------------
+      {
+        const float c1 = colW({"Parcel", "Feature Line", "Grading"});
+        const float c2 = colW({"Alignment", "Profile", "Corridor"});
+        const float c3 = colW({"Intersections", "Assembly", "Pipe Network"});
+        const float c4 = colW({"Pond", "Underground Storage", "Channel"});
+        const float w = 8.f + c1 + 4.f + c2 + 4.f + c3 + 4.f + c4;
+        const float mw = 8.f + rowHome * 4.f + 4.f * 3.f;
+        ribbonSpecs.push_back({w, mw, [&, w, mw]() {
+          RibbonSectionBegin("RibbonSecCreateDesign", "Create Design", curCompact ? mw : w, panelH);
+          ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 1.f));
+          const float d1 = colW({"Parcel", "Feature Line", "Grading"});
+          const float d2 = colW({"Alignment", "Profile", "Corridor"});
+          const float d3 = colW({"Intersections", "Assembly", "Pipe Network"});
+          const float d4 = colW({"Pond", "Underground Storage", "Channel"});
+          ImGui::BeginGroup();
+          nyiRow("##CdParcel", "c3d_parcel", "Parcel", d1);
+          nyiRow("##CdFeatureLine", "c3d_featureline", "Feature Line", d1);
+          nyiRow("##CdGrading", "c3d_grading", "Grading", d1);
+          ImGui::EndGroup(); ImGui::SameLine(0, 4);
+          ImGui::BeginGroup();
+          nyiRow("##CdAlignment", "c3d_alignment", "Alignment", d2);
+          nyiRow("##CdProfile", "c3d_profile", "Profile", d2);
+          nyiRow("##CdCorridor", "c3d_corridor", "Corridor", d2);
+          ImGui::EndGroup(); ImGui::SameLine(0, 4);
+          ImGui::BeginGroup();
+          nyiRow("##CdIntersections", "c3d_intersections", "Intersections", d3);
+          nyiRow("##CdAssembly", "c3d_assembly", "Assembly", d3);
+          nyiRow("##CdPipeNetwork", "c3d_pipenet", "Pipe Network", d3);
+          ImGui::EndGroup(); ImGui::SameLine(0, 4);
+          ImGui::BeginGroup();
+          nyiRow("##CdPond", "c3d_pond", "Pond", d4);
+          nyiRow("##CdUgStorage", "c3d_ugstorage", "Underground Storage", d4);
+          nyiRow("##CdChannel", "c3d_channel", "Channel", d4);
+          ImGui::EndGroup();
+          ImGui::PopStyleVar();
+          RibbonSectionEnd();
+        }, "Create Design", RibbonIconKind::Nyi, "c3d_alignment"});
+      }
+
+      // ---- Profile & Section Views ---------------------------------------
+      {
+        const float cP = std::max(colW({"Profile View", "Sample Lines", "Section Views"}),
+                                  capW("Profile & Section Views") - 8.f);
+        const float w = 8.f + cP;
+        const float mw = 8.f + rowHome;
+        ribbonSpecs.push_back({w, mw, [&, w, mw, cP]() {
+          RibbonSectionBegin("RibbonSecProfSect", "Profile & Section Views", curCompact ? mw : w, panelH);
+          ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 1.f));
+          ImGui::BeginGroup();
+          nyiRow("##PsvProfileView", "c3d_profileview", "Profile View", cP);
+          nyiRow("##PsvSampleLines", "c3d_samplelines", "Sample Lines", cP);
+          nyiRow("##PsvSectionViews", "c3d_sectionviews", "Section Views", cP);
+          ImGui::EndGroup();
+          ImGui::PopStyleVar();
+          RibbonSectionEnd();
+        }, "Profile & Section Views", RibbonIconKind::Nyi, "c3d_profileview"});
+      }
+
+      // ---- Draw ---------------------------------------------------------
+      {
+        const float w = 8.f + gcHome * 4.f + 4.f * 3.f;
+        ribbonSpecs.push_back({w, w, [&, w]() {
+          RibbonSectionBegin("RibbonSecDraw", "Draw", w, panelH);
+          if (gridBtn3("##RibbonLine", RibbonIconKind::Line)) StartLineCommand(cmd, log);
           RibbonItemHelp("Line — draw straight segments between points.\nCommand bar: LINE or L");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonCircle", RibbonIconKind::Circle))
-            StartCircleCommand(cmd, log);
-          RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
+          if (gridBtn3("##RibbonArc", RibbonIconKind::Arc)) StartArcCommand(cmd, log);
+          RibbonItemHelp("Arc — three-point arc (start, mid, end).\nCommand bar: ARC");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonPLine", RibbonIconKind::Polyline))
-            StartPolylineCommand(cmd, log);
+          if (gridBtn3("##RibbonPLine", RibbonIconKind::Polyline)) StartPolylineCommand(cmd, log);
           RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonRect", RibbonIconKind::Rect))
-            StartRectCommand(cmd, log);
-          RibbonItemHelp("Rectangle — two opposite corners; stored as a closed polyline.\nCommand bar: RECT, RECTANG or RECTANGLE");
+          nyiGrid("##RibbonSpline", "c3d_spline", "Spline");
+
+          if (gridBtn3("##RibbonCircle", RibbonIconKind::Circle)) StartCircleCommand(cmd, log);
+          RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonArc", RibbonIconKind::Arc))
-            StartArcCommand(cmd, log);
-          RibbonItemHelp("Arc — three-point arc (start, mid, end).\nCommand bar: ARC");
-          if (gridBtn("##RibbonEllipse", RibbonIconKind::Ellipse))  // wraps to the second row
-            StartEllipseCommand(cmd, log);
-          RibbonItemHelp("Ellipse — center, axis endpoint, then ratio on command line.\nCommand bar: ELLIPSE or EL");
+          if (gridBtn3("##RibbonRect", RibbonIconKind::Rect)) StartRectCommand(cmd, log);
+          RibbonItemHelp("Rectangle — two opposite corners; stored as a closed polyline.\nCommand bar: RECT");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonHatch", RibbonIconKind::Hatch))
-            StartHatchCommand(cmd, log);
+          if (gridBtn3("##RibbonEllipse", RibbonIconKind::Ellipse)) StartEllipseCommand(cmd, log);
+          RibbonItemHelp("Ellipse — center, axis endpoint, then ratio.\nCommand bar: ELLIPSE or EL");
+          ImGui::SameLine(0, 4);
+          nyiGrid("##RibbonPoint", "c3d_point", "Point");
+
+          if (gridBtn3("##RibbonHatch", RibbonIconKind::Hatch)) StartHatchCommand(cmd, log);
           RibbonItemHelp("Hatch — pick an internal point to fill a closed area.\nCommand bar: HATCH or H");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonPdfAttach", RibbonIconKind::PdfAttach))
-            StartPdfAttachCommand(cmd, log);
-          RibbonItemHelp("PDF Attach — attach a PDF page as a raster underlay with snap recognition.\nCommand bar: PDFATTACH");
-        }
-        RibbonSectionEnd();
-      }});
+          if (gridBtn3("##RibbonPdfAttach", RibbonIconKind::PdfAttach)) StartPdfAttachCommand(cmd, log);
+          RibbonItemHelp("PDF Attach — attach a PDF page as a raster underlay.\nCommand bar: PDFATTACH");
+          ImGui::SameLine(0, 4);
+          nyiGrid("##RibbonRevcloud", "c3d_revcloud", "Revision Cloud");
+          ImGui::SameLine(0, 4);
+          nyiGrid("##RibbonWipeout", "c3d_wipeout", "Wipeout");
+          RibbonSectionEnd();
+        }, "Draw", RibbonIconKind::Line});
+      }
 
-      ribbonSpecs.push_back({W.wMod, M.wMod, [&]() {
-        RibbonSectionBegin("RibbonSecModify", "Modify", curCompact ? M.wMod : W.wMod, panelH);
-        {
-          if (largeBtn("##RibbonMove", RibbonIconKind::Move, "Move"))
-            StartMoveCommand(cmd, log);
+      // ---- Modify (icon-only 4x3 grid, per GUI-pass request) --------------
+      {
+        const float w = 8.f + gcHome * 4.f + 4.f * 3.f;
+        ribbonSpecs.push_back({w, w, [&, w]() {
+          RibbonSectionBegin("RibbonSecModify", "Modify", w, panelH);
+          if (gridBtn3("##RibbonMove", RibbonIconKind::Move)) StartMoveCommand(cmd, log);
           RibbonItemHelp("Move — relocate selected entities by base point and offset.\nCommand bar: MOVE or M");
-
           ImGui::SameLine(0, 4);
-          const float c1 = colW({"Copy", "Rotate", "Scale"});
-          ImGui::BeginGroup();
-          if (smallBtn("##RibbonCopy", RibbonIconKind::Copy, "Copy", c1))
-            StartCopyCommand(cmd, log);
-          RibbonItemHelp("Copy — duplicate selection with base point and offset.\nCommand bar: COPY or CP");
-          if (smallBtn("##RibbonRotate", RibbonIconKind::Rotate, "Rotate", c1))
-            StartRotateCommand(cmd, log);
+          if (gridBtn3("##RibbonRotate", RibbonIconKind::Rotate)) StartRotateCommand(cmd, log);
           RibbonItemHelp("Rotate — turn selection around a base point by angle.\nCommand bar: ROTATE or RO");
-          if (smallBtn("##RibbonScale", RibbonIconKind::Scale, "Scale", c1))
-            StartScaleCommand(cmd, log);
-          RibbonItemHelp("Scale — uniform scale about a base point (window-select like Move).\nAfter base: pick scale, "
-                           "type factor (>0), or R / REFERENCE for two-point reference length then new length (type or two "
-                           "picks).\nCommand bar: SCALE or SC");
-          ImGui::EndGroup();
-
           ImGui::SameLine(0, 4);
-          const float c2 = colW({"Erase", "Trim", "Offset"});
-          ImGui::BeginGroup();
-          if (smallBtn("##RibbonErase", RibbonIconKind::Erase, "Erase", c2))
-            StartDeleteCommand(cmd, log);
-          RibbonItemHelp("Erase — remove entities (window or crossing selection).\nCommand bar: DELETE or DEL");
-          if (smallBtn("##RibbonTrim", RibbonIconKind::Trim, "Trim", c2))
-            StartTrimCommand(cmd, log);
-          RibbonItemHelp("Trim — shorten segments to cutting edges or drawn trim line.\nCommand bar: TRIM or TR");
-          if (smallBtn("##RibbonOffset", RibbonIconKind::Offset, "Offset", c2))
-            StartOffsetCommand(cmd, log);
-          RibbonItemHelp(
-              "Offset — parallel lines, concentric circles/arcs, offset polylines and ellipses.\nCommand bar: OFFSET or O");
-          ImGui::EndGroup();
-
+          if (gridBtn3("##RibbonTrim", RibbonIconKind::Trim)) StartTrimCommand(cmd, log);
+          RibbonItemHelp("Trim — shorten segments to cutting edges.\nCommand bar: TRIM or TR");
           ImGui::SameLine(0, 4);
-          const float c3 = colW({"Join", "Mirror", "Lengthen"});
-          ImGui::BeginGroup();
-          if (smallBtn("##RibbonJoin", RibbonIconKind::Join, "Join", c3))
-            StartJoinCommand(cmd, log);
-          RibbonItemHelp("Join — merge colinear line segments.\nCommand bar: JOIN or J");
-          if (smallBtn("##RibbonMirror", RibbonIconKind::Mirror, "Mirror", c3))
-            StartMirrorCommand(cmd, log);
+          if (gridBtn3("##RibbonErase", RibbonIconKind::Erase)) StartDeleteCommand(cmd, log);
+          RibbonItemHelp("Erase — remove entities.\nCommand bar: DELETE or DEL");
+
+          if (gridBtn3("##RibbonCopy", RibbonIconKind::Copy)) StartCopyCommand(cmd, log);
+          RibbonItemHelp("Copy — duplicate selection with base point and offset.\nCommand bar: COPY or CP");
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonMirror", RibbonIconKind::Mirror)) StartMirrorCommand(cmd, log);
           RibbonItemHelp("Mirror — flip selection across a mirror line.\nCommand bar: MIRROR or MI");
-          if (smallBtn("##RibbonLengthen", RibbonIconKind::Lengthen, "Lengthen", c3))
-            StartLengthenCommand(cmd, log);
-          RibbonItemHelp("Lengthen — change a line/open polyline/arc's length at the end nearest your "
-                         "pick (DElta/Percent/Total/DYnamic).\nCommand bar: LENGTHEN or LEN");
-          ImGui::EndGroup();
-
-          // Second column: a small-button column is 3 tall (colH) — Join/Mirror/Lengthen above already
-          // fills it, so Extend (and now Break) need their own column, not a 4th/5th slot stacked into
-          // the same BeginGroup, which the child window's own clip rect would cut off entirely (this
-          // was, in fact, a real bug: EXTEND shipped as a 4th item in the group above and was invisible/
-          // unclickable — found and fixed while adding BREAK here).
           ImGui::SameLine(0, 4);
-          // Three items exactly fills this column's 3-row limit (colH) — a 4th here would repeat the
-          // clipping bug the comment above already documents; STRETCH needs its own column if a 4th
-          // command is ever added to this group.
-          const float c4 = colW({"Extend", "Break", "Stretch"});
-          ImGui::BeginGroup();
-          if (smallBtn("##RibbonExtend", RibbonIconKind::Extend, "Extend", c4))
-            StartExtendCommand(cmd, log);
-          RibbonItemHelp("Extend — pick boundary edges, then stretch a line/open polyline/arc's end "
-                         "nearest your pick out to the nearest one.\nCommand bar: EXTEND or EX");
-          if (smallBtn("##RibbonBreak", RibbonIconKind::Break, "Break", c4))
-            StartBreakCommand(cmd, log);
-          RibbonItemHelp("Break — pick an object (the pick is break point 1), then a second point; the "
-                         "material between them is removed.\nCommand bar: BREAK or BR");
-          if (smallBtn("##RibbonStretch", RibbonIconKind::Stretch, "Stretch", c4))
-            StartStretchCommand(cmd, log);
-          RibbonItemHelp("Stretch — crossing/window-select, then base point and destination; only the "
-                         "vertices inside the box move.\nCommand bar: STRETCH or S");
-          ImGui::EndGroup();
-
-          // Fifth column: the fourth column above (Extend/Break/Stretch) already fills its 3-row limit —
-          // FILLET/CHAMFER need their own column, not a 4th slot stacked into that BeginGroup (the exact
-          // clipping bug the comment above documents for EXTEND's own first landing). Two items here
-          // stays within the 3-row limit.
+          if (gridBtn3("##RibbonFillet", RibbonIconKind::Fillet)) StartFilletCommand(cmd, log);
+          RibbonItemHelp("Fillet — tangent arc between two curves.\nCommand bar: FILLET or F");
           ImGui::SameLine(0, 4);
-          const float c5 = colW({"Fillet", "Chamfer"});
-          ImGui::BeginGroup();
-          if (smallBtn("##RibbonFillet", RibbonIconKind::Fillet, "Fillet", c5))
-            StartFilletCommand(cmd, log);
-          RibbonItemHelp("Fillet — pick two curves (line/arc/polyline segment); joins them with a tangent "
-                         "arc at the current radius, trimming/extending each to meet it. Type R to set "
-                         "radius, T for Trim/No-trim.\nCommand bar: FILLET or F");
-          if (smallBtn("##RibbonChamfer", RibbonIconKind::Chamfer, "Chamfer", c5))
-            StartChamferCommand(cmd, log);
-          RibbonItemHelp("Chamfer — pick two curves (line/polyline segment); connects them with a "
-                         "straight bevel at Distance/Distance or Distance/Angle from their intersection. "
-                         "Type D for distances, A for distance+angle, T for Trim/No-trim.\nCommand bar: "
-                         "CHAMFER or CHA");
-          ImGui::EndGroup();
-        }
-        RibbonSectionEnd();
-      }});
+          if (gridBtn3("##RibbonOffset", RibbonIconKind::Offset)) StartOffsetCommand(cmd, log);
+          RibbonItemHelp("Offset — parallel copy at a distance.\nCommand bar: OFFSET or O");
+
+          if (gridBtn3("##RibbonStretch", RibbonIconKind::Stretch)) StartStretchCommand(cmd, log);
+          RibbonItemHelp("Stretch — crossing/window-select, then base point and destination.\nCommand bar: STRETCH or S");
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonScale", RibbonIconKind::Scale)) StartScaleCommand(cmd, log);
+          RibbonItemHelp("Scale — uniform scale about a base point.\nCommand bar: SCALE or SC");
+          ImGui::SameLine(0, 4);
+          RibbonNyiButton("##RibbonArray", RibbonIconKind::Array, "Array", ImVec2(gcHome, gcHome), RibbonLabel::None);
+          ImGui::SameLine(0, 4);
+          if (gridBtn3("##RibbonExtend", RibbonIconKind::Extend)) StartExtendCommand(cmd, log);
+          RibbonItemHelp("Extend — lengthen to a boundary edge.\nCommand bar: EXTEND or EX");
+          RibbonSectionEnd();
+        }, "Modify", RibbonIconKind::Move});
+      }
     } else {
       // Layout contextual ribbon (REQ-032): paper-space viewport-authoring tools. Plot/Batch Plot
       // moved to the Output tab's "Plot" section (REQ-302 increment 3, D-2026-08-25-h) — this
@@ -3560,14 +3844,14 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ribbonSpecs.push_back({W.wLayout, M.wLayout, [&]() {
         RibbonSectionBegin("RibbonSecLayout", "Layout", curCompact ? M.wLayout : W.wLayout, panelH);
         {
-          if (largeBtn("##RibbonRectVp", RibbonIconKind::ZoomWindow, "Rect VP"))
+          if (largeBtn("##RibbonRectVp", RibbonIconKind::ViewportRect, "Rect VP"))
             StartPaperRectViewportCommand(cmd, log);
           RibbonItemHelp("Rectangular viewport — two clicks define a viewport on the sheet.\nCommand bar: MVIEW / RECTVP");
           ImGui::SameLine(0, 4);
           ImGui::BeginGroup();
           const float cwL = colW({"Poly VP"});
           ImGui::BeginDisabled();
-          smallBtn("##RibbonPolyVp", RibbonIconKind::Polyline, "Poly VP", cwL);
+          smallBtn("##RibbonPolyVp", RibbonIconKind::ViewportPoly, "Poly VP", cwL);
           ImGui::EndDisabled();
           RibbonItemHelp("Polygonal viewport — coming in a later increment (REQ-034).",
                          ImGuiHoveredFlags_AllowWhenDisabled);
@@ -3576,21 +3860,77 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         RibbonSectionEnd();
       }});
     } // if (!ribbonPaperSpace) — Draw/Modify vs Layout
+
+    // (No Home "Layers" panel — the persistent RibbonLayerStrip after the tools row already
+    // carries the current-layer dropdown on every tab; a second one here was redundant.)
+
+    // ---- Clipboard ------------------------------------------------------
+    {
+      const bool hasClip = !cmd.clipboard.empty();
+      const bool hasSel = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
+      const float w = 8.f + largeW + 4.f + gc * 2.f + 4.f;
+      ribbonSpecs.push_back({w, w, [&, w, hasClip, hasSel]() {
+        RibbonSectionBegin("RibbonSecClipboard", "Clipboard", w, panelH);
+        if (!hasClip) ImGui::BeginDisabled();
+        if (largeBtn("##RibbonPasteHome", RibbonIconKind::ClipboardPaste, "Paste"))
+          StartPasteCommand(cmd, log);
+        if (!hasClip) ImGui::EndDisabled();
+        RibbonItemHelp("Paste (Ctrl+V) — place clipboard objects at cursor position.",
+                       hasClip ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (!hasSel) ImGui::BeginDisabled();
+        if (RibbonButtonEx("##RibbonCopyClipHome", RibbonIconKind::ClipboardCopy, nullptr, ImVec2(gc, gc), RibbonLabel::None))
+          CopySelectionToClipboard(cmd, log);
+        if (!hasSel) ImGui::EndDisabled();
+        RibbonItemHelp("Copy (Ctrl+C) — copy selected objects to clipboard.",
+                       hasSel ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        ImGui::SameLine(0, 4);
+        nyiGrid("##ClipCut", "c3d_cut", "Cut");
+        nyiGrid("##ClipMatchProps", "c3d_matchprops", "Match Properties");   ImGui::SameLine(0, 4);
+        nyiGrid("##ClipPasteSpecial", "c3d_pastespecial", "Paste Special");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Clipboard", RibbonIconKind::ClipboardPaste});
+    }
   } // if (activeRibbonTab == kRibbonTabHome)
 
   // REQ-302: Annotate tab. Unchanged condition (model space only, same as before this task).
   if (cmd.activeRibbonTab == kRibbonTabAnnotate && !ribbonPaperSpace) {
-    ribbonSpecs.push_back({W.wAnnText, M.wAnnText, [&]() {
-      RibbonSectionBegin("RibbonSecAnnotate", "Text", curCompact ? M.wAnnText : W.wAnnText, panelH);
-      {
-        const float cw = colW({"Text", "Mtext"});
+    // REQ-302 / GUI-pass 2026-08-30: the Annotate tab mirrors Civil 3D's Annotate ribbon 1:1 —
+    // Labels & Tables, Text, Dimensions, Centerlines, Leaders, Tables, Markup, Annotation Scaling.
+    // Commands GoSurvey implements (TEXT, MTEXT, DIMLINEAR/ALIGNED/ANGULAR, DIMSTYLE) are wired into
+    // their C3D-equivalent slot; every other button is greyed with an automatic
+    // "… — not implemented yet." tooltip (RibbonNyiButton / annNyiCombo).
+
+    // ---- Labels & Tables --------------------------------------------------
+    {
+      const float w = 8.f + belowW("Add\nLabels") + 4.f + belowW("Add\nTables");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecAnnLabels", "Labels & Tables", w, panelH);
+        nyiLarge("##AnnAddLabels", "Annotation_Add", "Add\nLabels");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##AnnAddTables", "Table", "Add\nTables");
+        RibbonSectionEnd();
+      }, "Labels & Tables", RibbonIconKind::Nyi, "Annotation_Add"});
+    }
+
+    // ---- Text -----------------------------------------------------------
+    {
+      const float cw = colW({"Text", "Find text"});
+      const float w = 8.f + belowW("Multiline\nText") + 4.f + cw + 4.f + annStyleW;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnotate", "Text", w, panelH);
+        if (RibbonButtonEx("##RibbonMtextLarge", RibbonIconKind::Mtext, "Multiline\nText",
+                           ImVec2(belowW("Multiline\nText"), colH), RibbonLabel::Below))
+          StartMtextCommand(cmd, log);
+        RibbonItemHelp("Multiline Text — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT");
+        ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
         if (smallBtn("##RibbonText", RibbonIconKind::Text, "Text", cw))
           StartTextCommand(cmd, log);
         RibbonItemHelp("Text — single-line annotation at insertion.\nCommand bar: TEXT");
-        if (smallBtn("##RibbonMtext", RibbonIconKind::Mtext, "Mtext", cw))
-          StartMtextCommand(cmd, log);
-        RibbonItemHelp("Mtext — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT");
+        insNyi("##RibbonFindText", "Find", "Find text", cw);
         ImGui::EndGroup();
         // Active text style for new TEXT/MTEXT (REQ-044): an AutoCAD-style flyout of thumbnail previews.
         ImGui::SameLine(0, 4);
@@ -3642,31 +3982,289 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           }
         }
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        RibbonSectionEnd();
+      }});
+    }
 
-    // REQ-302 follow-up (user GUI-pass feedback, 2026-08-25): Aligned/Linear moved here from
-    // Survey's Inquiry section — a Dimensions group belongs under Annotate.
-    ribbonSpecs.push_back({W.wAnnDim, M.wAnnDim, [&]() {
-      RibbonSectionBegin("RibbonSecAnnDim", "Dimensions", curCompact ? M.wAnnDim : W.wAnnDim, panelH);
-      {
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", colW({"Aligned", "Linear"})))
-          StartDimAlignedCommand(cmd, log);
-        RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
-        if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", colW({"Aligned", "Linear", "Angular"})))
+    // ---- Dimensions ---------------------------------------------------------
+    // REQ-302 follow-up (2026-08-25): a Dimensions group belongs under Annotate. GUI-pass
+    // 2026-08-30: expanded to the C3D shape — a large Dimension button plus Linear/Aligned/
+    // Angular and greyed Quick/Continue, with a style combo.
+    {
+      const float cA = colW({"Aligned", "Angular"});
+      const float cB = colW({"Continue"});
+      const float w = 8.f + belowW("Dimension") + 4.f + cA + 4.f + cB + 4.f + annStyleW;
+      ribbonSpecs.push_back({w, w, [&, cA, cB, w]() {
+        RibbonSectionBegin("RibbonSecAnnDim", "Dimensions", w, panelH);
+        if (RibbonButtonEx("##RibbonDimLarge", RibbonIconKind::DimLinear, "Dimension",
+                           ImVec2(belowW("Dimension"), colH), RibbonLabel::Below))
           StartDimLinearCommand(cmd, log);
         RibbonItemHelp(
-            "Linear dimension — horizontal or vertical distance in X or Y; third pick sets line position (cursor or H/V).\nCommand bar: DIMLINEAR or DLI");
-        if (smallBtn("##RibbonDimAng", RibbonIconKind::DimAngular, "Angular", colW({"Aligned", "Linear", "Angular"})))
+            "Dimension — horizontal or vertical distance in X or Y; third pick sets line position.\nCommand bar: DIMLINEAR or DLI");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", cA))
+          StartDimLinearCommand(cmd, log);
+        RibbonItemHelp("Linear dimension — horizontal or vertical distance in X or Y.\nCommand bar: DIMLINEAR or DLI");
+        if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", cA))
+          StartDimAlignedCommand(cmd, log);
+        RibbonItemHelp("Aligned dimension — extension lines parallel to the picked points.\nCommand bar: DIMALIGNED or DAL");
+        if (smallBtn("##RibbonDimAng", RibbonIconKind::DimAngular, "Angular", cA))
           StartDimAngularCommand(cmd, log);
         RibbonItemHelp("Angular dimension — vertex, two ray points, then arc position.\nCommand bar: DIMANGULAR or DAN");
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonDimQuick", "Quick_Dimension", "Quick", cB);
+        insNyi("##RibbonDimCont", "Dim_Continue", "Continue", cB);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Dimension style");
+        if (ImGui::Button("Standard##RibbonDimStyle", ImVec2(annStyleW, 0.f)))
+          StartDimStyleCommand(cmd, log);
+        RibbonItemHelp("Dimension style — opens the dimension style manager.\nCommand bar: DIMSTYLE or D");
+        annNyiCombo("##RibbonDimLayer", "Use current");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Dimensions", RibbonIconKind::DimLinear});
+    }
+
+    // ---- Centerlines ------------------------------------------------------
+    {
+      const float cw = colW({"Center Mark", "Centerline"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnCenterlines", "Centerlines", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##AnnCenterMark", "Center_Mark", "Center Mark", cw);
+        insNyi("##AnnCenterline", "Centerline", "Centerline", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Centerlines", RibbonIconKind::Nyi, "Center_Mark"});
+    }
+
+    // ---- Leaders --------------------------------------------------------
+    {
+      const float cw = colW({"Remove Leader"});
+      const float w = 8.f + belowW("Multi\nleader") + 4.f + cw + 4.f + annStyleW;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnLeaders", "Leaders", w, panelH);
+        nyiLarge("##AnnMultileader", "Multileader", "Multi\nleader");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##AnnAddLeader", "Add_Leader", "Add Leader", cw);
+        insNyi("##AnnRemoveLeader", "Remove_Leader", "Remove Leader", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Multileader style");
+        annNyiCombo("##AnnMleaderStyle", "Standard");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Leaders", RibbonIconKind::Nyi, "Multileader"});
+    }
+
+    // ---- Tables --------------------------------------------------------
+    {
+      const float cw = colW({"Extract Data", "Link Data"});
+      const float w = 8.f + belowW("Table") + 4.f + cw + 4.f + annStyleW;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnTables", "Tables", w, panelH);
+        nyiLarge("##AnnTable", "Table", "Table");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##AnnExtractData", "Extract_Data", "Extract Data", cw);
+        insNyi("##AnnLinkData", "Data_Link", "Link Data", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Table style");
+        annNyiCombo("##AnnTableStyle", "Standard");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Tables", RibbonIconKind::Nyi, "Table"});
+    }
+
+    // ---- Markup --------------------------------------------------------
+    {
+      const float cw = colW({"Revision Cloud"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnMarkup", "Markup", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##AnnWipeout", "Wipeout", "Wipeout", cw);
+        insNyi("##AnnRevcloud", "c3d_revcloud", "Revision Cloud", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Markup", RibbonIconKind::Nyi, "Wipeout"});
+    }
+
+    // ---- Annotation Scaling --------------------------------------------
+    {
+      const float cw = colW({"Add/Delete Scales", "Sync Positions"});
+      const float w = 8.f + belowW("Add Current\nScale") + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecAnnScaling", "Annotation Scaling", w, panelH);
+        nyiLarge("##AnnAddScale", "Add_Current_Scale", "Add Current\nScale");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##AnnAddDeleteScales", "Add_Delete_Scales", "Add/Delete Scales", cw);
+        insNyi("##AnnScaleList", "Scale_List", "Scale List", cw);
+        insNyi("##AnnSyncScale", "Sync_Scale_Positions", "Sync Positions", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Annotation Scaling", RibbonIconKind::Nyi, "Add_Current_Scale"});
+    }
   } // if (activeRibbonTab == kRibbonTabAnnotate)
+
+  // REQ-302 / GUI-pass 2026-08-30: Manage tab mirrors Civil 3D's Manage ribbon 1:1 — Data
+  // Shortcuts, Action Recorder, Customization, Applications, CAD Standards, Styles, Property Set
+  // Data, Performance, Visual Programming. GoSurvey implements none of these yet, so every button
+  // is greyed with the automatic "… — not implemented yet." tooltip (RibbonNyiButton), same as the
+  // Home tab's Civil 3D placeholders. `c3d_*` icons with no library match are generated by
+  // tools/gen_c3d_icons.cpp in the set's blue/gray line-art style.
+  if (cmd.activeRibbonTab == kRibbonTabManage) {
+    // ---- Data Shortcuts -------------------------------------------------
+    {
+      const float cw = colW({"Synchronize References", "Validate Data Shortcuts"});
+      const float w = 8.f + belowW("Create Data\nShortcuts") + 4.f + cw + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgManageDS", "Data Shortcuts", w, panelH);
+        nyiLarge("##MgCreateDS", "c3d_datashortcut", "Create Data\nShortcuts");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##MgNewDSFolder", "c3d_newfolder", "New Shortcuts Folder", cw);
+        insNyi("##MgSetDSFolder", "c3d_setfolder", "Set Shortcuts Folder", cw);
+        insNyi("##MgSetWorkFolder", "c3d_workfolder", "Set Working Folder", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##MgManageDS", "c3d_managedata", "Manage Data Shortcuts", cw);
+        insNyi("##MgValidateDS", "c3d_validatedata", "Validate Data Shortcuts", cw);
+        insNyi("##MgSyncRefs", "c3d_syncref", "Synchronize References", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Data Shortcuts", RibbonIconKind::Nyi, "c3d_datashortcut"});
+    }
+
+    // ---- Action Recorder ----------------------------------------------
+    {
+      const float cw = colW({"Insert Message", "Preferences"});
+      const float w = 8.f + belowW("Record") + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgActionRec", "Action Recorder", w, panelH);
+        nyiLarge("##MgRecord", "c3d_record", "Record");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##MgPlay", "c3d_play", "Play", cw);
+        insNyi("##MgInsertMsg", "Annotation", "Insert Message", cw);
+        insNyi("##MgInsertVal", "Field", "Insert Value", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Action Recorder", RibbonIconKind::Nyi, "c3d_record"});
+    }
+
+    // ---- Customization ----------------------------------------------
+    {
+      const float cw = colW({"Edit Aliases"});
+      const float w = 8.f + belowW("User\nInterface") + 4.f + belowW("Tool\nPalettes") + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgCustomize", "Customization", w, panelH);
+        nyiLarge("##MgCui", "c3d_cui", "User\nInterface");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##MgToolPalettes", "c3d_toolpalette", "Tool\nPalettes");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##MgCuiImport", "Import", "Import", cw);
+        insNyi("##MgCuiExport", "Export", "Export", cw);
+        insNyi("##MgEditAliases", "c3d_editalias", "Edit Aliases", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Customization", RibbonIconKind::Nyi, "c3d_cui"});
+    }
+
+    // ---- Applications ----------------------------------------------
+    {
+      const float cw = colW({"Visual Basic Editor", "Visual LISP Editor"});
+      const float w = 8.f + belowW("Load\nApplication") + 4.f + belowW("Run\nScript") + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgApps", "Applications", w, panelH);
+        nyiLarge("##MgLoadApp", "c3d_loadapp", "Load\nApplication");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##MgRunScript", "c3d_runscript", "Run\nScript");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##MgVbEditor", "c3d_vbeditor", "Visual Basic Editor", cw);
+        insNyi("##MgLispEditor", "c3d_lispeditor", "Visual LISP Editor", cw);
+        insNyi("##MgVbaMacro", "c3d_vbamacro", "Run VBA Macro", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Applications", RibbonIconKind::Nyi, "c3d_runscript"});
+    }
+
+    // ---- CAD Standards ----------------------------------------------
+    {
+      const float cw = colW({"Layer Translator", "Configure"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgStandards", "CAD Standards", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##MgLayerTrans", "c3d_layertranslator", "Layer Translator", cw);
+        insNyi("##MgStdCheck", "Check", "Check", cw);
+        insNyi("##MgStdConfigure", "c3d_cadstd_config", "Configure", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "CAD Standards", RibbonIconKind::Nyi, "Check"});
+    }
+
+    // ---- Styles ----------------------------------------------
+    {
+      const float cw = colW({"Reference", "Purge"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecMgStyles", "Styles", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##MgStylesImport", "Import", "Import", cw);
+        insNyi("##MgStylesPurge", "Purge", "Purge", cw);
+        insNyi("##MgStylesReference", "Attach", "Reference", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Styles", RibbonIconKind::Nyi, "Purge"});
+    }
+
+    // ---- Property Set Data ----------------------------------------------
+    {
+      const float w = 8.f + belowW("Define\nProperty Sets");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecMgPropSets", "Property Set Data", w, panelH);
+        nyiLarge("##MgDefinePropSets", "c3d_propsets", "Define\nProperty Sets");
+        RibbonSectionEnd();
+      }, "Property Set Data", RibbonIconKind::Nyi, "c3d_propsets"});
+    }
+
+    // ---- Performance ----------------------------------------------
+    {
+      const float w = 8.f + belowW("Performance\nAnalyzer");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecMgPerf", "Performance", w, panelH);
+        nyiLarge("##MgPerfAnalyzer", "c3d_perfanalyzer", "Performance\nAnalyzer");
+        RibbonSectionEnd();
+      }, "Performance", RibbonIconKind::Nyi, "c3d_perfanalyzer"});
+    }
+
+    // ---- Visual Programming ----------------------------------------------
+    {
+      const float w = 8.f + belowW("Dynamo") + 4.f + belowW("Dynamo\nPlayer");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecMgVisProg", "Visual Programming", w, panelH);
+        nyiLarge("##MgDynamo", "c3d_dynamo", "Dynamo");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##MgDynamoPlayer", "c3d_dynamoplayer", "Dynamo\nPlayer");
+        RibbonSectionEnd();
+      }, "Visual Programming", RibbonIconKind::Nyi, "c3d_dynamo"});
+    }
+  } // if (activeRibbonTab == kRibbonTabManage)
 
   // D-2026-08-28-k / REQ-141: Civil 3D Survey tab (screenshot 2). No Object Viewer.
   if (cmd.activeRibbonTab == kRibbonTabSurvey && !ribbonPaperSpace) {
@@ -4117,7 +4715,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           StartViewPointsCommand(cmd, log);
         RibbonItemHelp("Edit/List Points — the survey point list.\nCommand bar: VIEWPOINTS");
         ImGui::SameLine(0, 4);
-        if (RibbonButtonEx("##SpPgProps", RibbonIconKind::Copy, "Point Group\nProperties", ImVec2(wGrp, colH),
+        if (RibbonButtonEx("##SpPgProps", RibbonIconKind::SurfPropsHand, "Point Group\nProperties", ImVec2(wGrp, colH),
                            RibbonLabel::Below))
           cmd.showPointGroupManagerWindow = true;
         RibbonItemHelp("Point Group Properties — create and edit point groups.");
@@ -4157,13 +4755,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float cell = colW({"Import Points", "Export Points", "Transfer Points"});
         RibbonSectionBegin("RibbonSecSpTools", "SURVEY Point Tools", 8.f + cell + 8.f, panelH);
         ImGui::BeginGroup();
-        if (smallBtn("##SpImport", RibbonIconKind::PdfAttach, "Import Points", cell))
+        if (smallBtn("##SpImport", RibbonIconKind::Import, "Import Points", cell))
           StartImportPointsCommand(cmd, log);
         RibbonItemHelp("Import Points — load a point file.\nCommand bar: IMPORTPOINTS");
         if (smallBtn("##SpExport", RibbonIconKind::ClipboardCopy, "Export Points", cell))
           StartExportPointsCommand(cmd, log);
         RibbonItemHelp("Export Points — write selected or all points.\nCommand bar: EXPORTPOINTS");
-        RibbonNyiButton("##SpTransfer", RibbonIconKind::Copy, "Transfer Points", ImVec2(cell, rowH),
+        RibbonNyiButton("##SpTransfer", RibbonIconKind::SurfMoveTo, "Transfer Points", ImVec2(cell, rowH),
                         RibbonLabel::Right);
         ImGui::EndGroup();
         RibbonSectionEnd();
@@ -4184,10 +4782,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         RibbonItemHelp("Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS");
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
-        if (smallBtn("##SpCreateGrp", RibbonIconKind::Copy, "Create Point Group", cell))
+        if (smallBtn("##SpCreateGrp", RibbonIconKind::Layers, "Create Point Group", cell))
           cmd.showPointGroupManagerWindow = true;
         RibbonItemHelp("Create Point Group — the Point Groups window.");
-        if (smallBtn("##SpImport2", RibbonIconKind::PdfAttach, "Import Points", cell))
+        if (smallBtn("##SpImport2", RibbonIconKind::Import, "Import Points", cell))
           StartImportPointsCommand(cmd, log);
         RibbonItemHelp("Import Points — load a point file.\nCommand bar: IMPORTPOINTS");
         if (smallBtn("##SpCreateSurf", RibbonIconKind::SurfAddData, "Create Surface", cell))
@@ -4198,6 +4796,125 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }});
     }
   } // kRibbonTabSurveyPointCtx
+
+  if (cmd.activeRibbonTab == kRibbonTabBlockEditor && inBedit) {
+    auto beditSubmit = [&](const char* line) {
+      char buf[192];
+      std::snprintf(buf, sizeof(buf), "%s", line);
+      ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+    };
+    const float wOpen = 8.f + colW({"Edit Block", "Save Block", "Test Block"});
+    ribbonSpecs.push_back({wOpen, wOpen, [&]() {
+      const float cw = colW({"Edit Block", "Save Block", "Test Block"});
+      RibbonSectionBegin("RibbonSecBeOpen", "Open/Save", wOpen, panelH);
+      if (smallBtn("##BeEdit", RibbonIconKind::BlockEditor, "Edit Block", cw))
+        CadBlocksOpenEditPicker(cmd, log);
+      RibbonItemHelp("Edit Block — BEDIT the selected INSERT, or the definition already open.");
+      if (smallBtn("##BeSave", RibbonIconKind::BeSaveBlock, "Save Block", cw))
+        beditSubmit("BSAVE");
+      RibbonItemHelp("Save Block — BSAVE. References update immediately.");
+      RibbonNyiButton("##BeTest", RibbonIconKind::BlockEditor, "Test Block", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonSectionEnd();
+    }});
+    const float wGeom = 8.f + colW({"Auto Constrain", "Show/Hide", "Show All"});
+    ribbonSpecs.push_back({wGeom, wGeom, [&]() {
+      const float cw = colW({"Auto Constrain", "Show/Hide", "Show All"});
+      RibbonSectionBegin("RibbonSecBeGeom", "Geometric", wGeom, panelH);
+      RibbonNyiButton("##BeAutoC", RibbonIconKind::BeAutoConstrain, "Auto Constrain", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BeShHide", RibbonIconKind::BeConstraintShow, "Show/Hide", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BeShAll", RibbonIconKind::BeConstraintShow, "Show All", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonSectionEnd();
+    }});
+    const float wDim = 8.f + colW({"Linear", "Aligned"});
+    ribbonSpecs.push_back({wDim, wDim, [&]() {
+      const float cw = colW({"Linear", "Aligned"});
+      RibbonSectionBegin("RibbonSecBeDim", "Dimensional", wDim, panelH);
+      RibbonNyiButton("##BeDimL", RibbonIconKind::DimLinear, "Linear", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BeDimA", RibbonIconKind::Dim, "Aligned", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonSectionEnd();
+    }});
+    const float wMan = 8.f + colW({"Block Table", "Parameters", "Palettes"});
+    ribbonSpecs.push_back({wMan, wMan, [&]() {
+      const float cw = colW({"Block Table", "Parameters", "Palettes"});
+      RibbonSectionBegin("RibbonSecBeMan", "Manage", wMan, panelH);
+      RibbonNyiButton("##BeBTable", RibbonIconKind::BeBlockTable, "Block Table", ImVec2(cw, rowH), RibbonLabel::Right);
+      RibbonNyiButton("##BePMan", RibbonIconKind::BeParameters, "Parameters", ImVec2(cw, rowH), RibbonLabel::Right);
+      if (smallBtn("##BePalettes", RibbonIconKind::BePalettes, "Palettes", cw))
+        cmd.blockAuthoringPaletteOpen = !cmd.blockAuthoringPaletteOpen;
+      RibbonItemHelp("Authoring Palettes — Parameters, Actions, Parameter Sets, Constraints.");
+      RibbonSectionEnd();
+    }});
+    const float wAct = 8.f + colW({"Point", "Linear", "Polar"}) + 4.f + colW({"XY", "Rotation", "Align"}) + 4.f +
+                       colW({"Flip", "Visibility", "Lookup"}) + 4.f + colW({"Basepoint"});
+    ribbonSpecs.push_back({wAct, wAct, [&]() {
+      const float c0 = colW({"Point", "Linear", "Polar"});
+      const float c1 = colW({"XY", "Rotation", "Align"});
+      const float c2 = colW({"Flip", "Visibility", "Lookup"});
+      const float c3 = colW({"Basepoint"});
+      RibbonSectionBegin("RibbonSecBeAct", "Action Parameters", wAct, panelH);
+      auto addP = [&](const char* kind, RibbonIconKind icon, const char* id, const char* label, float cw) {
+        if (smallBtn(id, icon, label, cw)) {
+          char line[96];
+          std::snprintf(line, sizeof(line), "BPARAM %s1, %s", label, kind);
+          ProcessCommandLineSubmit(line, static_cast<int>(sizeof(line)), cmd, log);
+        }
+      };
+      ImGui::BeginGroup();
+      addP("point", RibbonIconKind::BeParamPoint, "##BePPoint", "Point", c0);
+      addP("linear", RibbonIconKind::BeParamLinear, "##BePLin", "Linear", c0);
+      addP("polar", RibbonIconKind::BeParamPolar, "##BePPol", "Polar", c0);
+      ImGui::EndGroup();
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      addP("move", RibbonIconKind::BeParamXY, "##BePXY", "XY", c1);
+      addP("rotation", RibbonIconKind::BeParamRotation, "##BePRot", "Rotation", c1);
+      addP("linear", RibbonIconKind::BeParamAlignment, "##BePAln", "Align", c1);
+      ImGui::EndGroup();
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      addP("flip", RibbonIconKind::BeParamFlip, "##BePFlip", "Flip", c2);
+      addP("visibility", RibbonIconKind::BeParamVisibility, "##BePVis", "Visibility", c2);
+      addP("lookup", RibbonIconKind::BeParamLookup, "##BePLook", "Lookup", c2);
+      ImGui::EndGroup();
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      addP("point", RibbonIconKind::BeParamBasepoint, "##BePBase", "Basepoint", c3);
+      ImGui::EndGroup();
+      RibbonSectionEnd();
+    }});
+    ribbonSpecs.push_back({160.f, 160.f, [&]() {
+      RibbonSectionBegin("RibbonSecBeVis", "Visibility", 160.f, panelH);
+      const int di = CadBlockFindDef(cmd.blockDefs, cmd.blockEditorName);
+      const char* vis = "VisibilityState0";
+      if (di >= 0 && !cmd.blockDefs[static_cast<size_t>(di)].visibilityStates.empty())
+        vis = cmd.blockDefs[static_cast<size_t>(di)].visibilityStates[0].c_str();
+      ImGui::SetNextItemWidth(148.f);
+      if (ImGui::BeginCombo("##BeVisCombo", vis)) {
+        if (di >= 0) {
+          for (const std::string& s : cmd.blockDefs[static_cast<size_t>(di)].visibilityStates) {
+            if (ImGui::Selectable(s.c_str(), s == vis)) {
+              char line[192];
+              std::snprintf(line, sizeof(line), "BSETVIS %s", s.c_str());
+              ProcessCommandLineSubmit(line, static_cast<int>(sizeof(line)), cmd, log);
+            }
+          }
+        }
+        ImGui::EndCombo();
+      }
+      RibbonSectionEnd();
+    }});
+    ribbonSpecs.push_back({136.f, 136.f, [&]() {
+      RibbonSectionBegin("RibbonSecBeClose", "Close", 136.f, panelH);
+      ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(180, 40, 40, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(210, 50, 50, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(140, 20, 20, 255));
+      if (ImGui::Button("Close Block Editor", ImVec2(128.f, colH)))
+        beditSubmit("BCLOSE");
+      ImGui::PopStyleColor(3);
+      RibbonItemHelp("Close Block Editor — BCLOSE. Prompts to save if there are unsaved edits.");
+      RibbonSectionEnd();
+    }});
+  }
 
   // REQ-302: View tab.
   if (cmd.activeRibbonTab == kRibbonTabView) {
@@ -4381,11 +5098,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ribbonSpecs.push_back({W.wViewSettings, M.wViewSettings, [&]() {
       RibbonSectionBegin("RibbonSecViewSettings", "Settings", curCompact ? M.wViewSettings : W.wViewSettings, panelH);
       {
-        if (smallBtn("##RibbonSettings", RibbonIconKind::Layers, "Settings", colW({"Settings"})))
+        if (smallBtn("##RibbonSettings", RibbonIconKind::Settings, "Settings", colW({"Settings"})))
           cmd.showSettingsWindow = true;
         RibbonItemHelp("Open application settings (same as View menu → Settings...).");
         ImGui::SameLine(0, 4);
-        if (smallBtn("##RibbonToolspace", RibbonIconKind::Layers, "Toolspace", colW({"Toolspace"})))
+        if (smallBtn("##RibbonToolspace", RibbonIconKind::Toolspace, "Toolspace", colW({"Toolspace"})))
           cmd.showToolspaceWindow = true;
         RibbonItemHelp("Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE");
       }
@@ -4393,100 +5110,257 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     }});
   } // if (activeRibbonTab == kRibbonTabView)
 
-  // REQ-302 increment 3 (content audit, D-2026-08-25-h): Insert tab — Import DXF/DWG, relocated
-  // from the File menu (which keeps its own copy — second entry point, not a move).
+  // REQ-302 / GUI-pass 2026-08-30: Insert tab laid out like the Home tab — sections Import, Block,
+  // Reference, Point Cloud, Data. Commands GoSurvey implements are wired to their slot; everything
+  // else is greyed with an automatic "… — not implemented yet." tooltip (RibbonNyiButton), same as
+  // the Home tab's Civil 3D placeholders. Import DXF/DWG/PDF also live on the File menu (second
+  // entry point, not a move).
   if (cmd.activeRibbonTab == kRibbonTabInsert) {
-    ribbonSpecs.push_back({W.wInsert, M.wInsert, [&]() {
-      RibbonSectionBegin("RibbonSecInsert", "Import", curCompact ? M.wInsert : W.wInsert, panelH);
-      {
+    // ---- Import ---------------------------------------------------------
+    {
+      const float cA = colW({"Import DXF", "Import DWG", "Import PDF"});
+      const float cB = colW({"LandXML", "Points From File", "Import Survey Data"});
+      const float w = 8.f + (curCompact ? rowH * 2.f + 4.f : cA + 4.f + cB);
+      const float mw = 8.f + rowH * 2.f + 4.f;
+      ribbonSpecs.push_back({8.f + cA + 4.f + cB, mw, [&, cA, cB]() {
         static char ribbonDxfPath[4096]{};
         static char ribbonDwgPath[4096]{};
-        const float cw = colW({"Import DXF", "Import DWG"});
+        const float wSec = curCompact ? mw : 8.f + cA + 4.f + cB;
+        RibbonSectionBegin("RibbonSecInsImport", "Import", wSec, panelH);
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonImportDxf", RibbonIconKind::PdfAttach, "Import DXF", cw)) {
+        if (smallBtn("##RibbonImportDxf", RibbonIconKind::Import, "Import DXF", cA)) {
           if (BrowseOpenFileDxfUtf8(ribbonDxfPath, sizeof(ribbonDxfPath)))
             ImportDxfFile(cmd, ribbonDxfPath, log);
         }
         RibbonItemHelp("Import a DXF drawing into the current session.\nSame as File menu → Import DXF...");
-        {
-          const DwgConverter& conv = FindDwgConverter();
-          if (!conv.available())
-            ImGui::BeginDisabled();
-          if (smallBtn("##RibbonImportDwg", RibbonIconKind::PdfAttach, "Import DWG", cw)) {
-            if (BrowseOpenFileDwgUtf8(ribbonDwgPath, sizeof(ribbonDwgPath)))
-              ImportDwgFile(cmd, ribbonDwgPath, log);
-          }
-          if (!conv.available())
-            ImGui::EndDisabled();
-          if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(
-                "DWG needs a converter: install the free ODA File Converter, or set\n"
-                "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
-          else if (conv.available() && ImGui::IsItemHovered())
-            ImGui::SetTooltip("Using %s", conv.displayName.c_str());
+        if (smallBtn("##RibbonImportDwg", RibbonIconKind::Import, "Import DWG", cA)) {
+          if (BrowseOpenFileDwgUtf8(ribbonDwgPath, sizeof(ribbonDwgPath)))
+            ImportDwgFile(cmd, ribbonDwgPath, log);
         }
+        RibbonItemHelp("Import a DWG drawing (LibreDWG, no converter).\nSame as File menu → Import DWG...");
+        if (insRow("##RibbonImportPdf", "PDF_Import", "Import PDF", cA))
+          StartPdfAttachCommand(cmd, log);
+        RibbonItemHelp("Attach a PDF page as a raster underlay.\nCommand bar: PDFATTACH");
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonInsLandXml", "DGN_Import", "LandXML", cB);
+        insNyi("##RibbonInsPointsFile", "Import", "Points From File", cB);
+        insNyi("##RibbonInsSurveyData", "svytripod", "Import Survey Data", cB);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+      (void)w;
+    }
+
+    // ---- Block ---------------------------------------------------------
+    {
+      const float cA = colW({"Insert", "Create"});
+      const float cB = colW({"Edit", "Edit Attributes"});
+      const float w = 8.f + cA + 4.f + cB;
+      ribbonSpecs.push_back({w, w, [&, cA, cB]() {
+        RibbonSectionBegin("RibbonSecInsBlock", "Block", w, panelH);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonInsInsert", RibbonIconKind::BlockInsert, "Insert", cA))
+          StartInsertBlockCommand(cmd, log);
+        RibbonItemHelp("Insert a block. Opens the Insert dialog (same as INSERT).");
+        if (insRow("##RibbonInsCreate", "Make_Block", "Create", cA)) {
+          char buf[8] = "BLOCK";
+          ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+        }
+        RibbonItemHelp("Create a block definition from the selection.\nCommand bar: BLOCK <name>, <x>, <y>");
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (insRow("##RibbonInsEdit", "Block_Editor", "Edit", cB))
+          CadBlocksOpenEditPicker(cmd, log);
+        RibbonItemHelp("Block Editor — choose a definition from the drawing or block library.\nCommand bar: BEDIT");
+        insNyi("##RibbonInsEditAttr", "Multiple_Attributes", "Edit Attributes", cB);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+
+    // ---- Reference ---------------------------------------------------------
+    {
+      const float cw = colW({"Attach", "Clip", "Adjust"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw]() {
+        RibbonSectionBegin("RibbonSecInsReference", "Reference", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##RibbonRefAttach", "Attach", "Attach", cw);
+        insNyi("##RibbonRefClip", "Clip", "Clip", cw);
+        insNyi("##RibbonRefAdjust", "Adjust", "Adjust", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+
+    // ---- Point Cloud ---------------------------------------------------------
+    {
+      const float cw = colW({"Attach"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw]() {
+        RibbonSectionBegin("RibbonSecInsPointCloud", "Point Cloud", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##RibbonPcAttach", "Attach", "Attach", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+
+    // ---- Data ---------------------------------------------------------
+    {
+      const float cw = colW({"Field", "Hyperlink"});
+      const float w = 8.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw]() {
+        RibbonSectionBegin("RibbonSecInsData", "Data", w, panelH);
+        ImGui::BeginGroup();
+        insNyi("##RibbonDataField", "Field", "Field", cw);
+        insNyi("##RibbonDataHyperlink", "Hyperlink", "Hyperlink", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
   } // if (activeRibbonTab == kRibbonTabInsert)
 
-  // REQ-302 increment 3 (content audit, D-2026-08-25-h): Output tab — Export DXF/DWG (relocated
-  // from the File menu) and Plot/Batch Plot (moved from Home's Layout section, not duplicated).
+  // REQ-302 / GUI-pass 2026-08-30: Output tab mirrors Civil 3D's Output ribbon 1:1 — Plan
+  // Production, Plot, Export, Publish, Export to DWF/PDF. GoSurvey's real commands (Export DXF/DWG,
+  // Plot, Batch Plot, Export Points) are wired to their C3D-equivalent slot; every other button is
+  // greyed with the automatic "… — not implemented yet." tooltip. `c3d_*` icons with no library
+  // match come from tools/gen_c3d_icons.cpp.
   if (cmd.activeRibbonTab == kRibbonTabOutput) {
-    ribbonSpecs.push_back({W.wOutExport, M.wOutExport, [&]() {
-      RibbonSectionBegin("RibbonSecOutExport", "Export", curCompact ? M.wOutExport : W.wOutExport, panelH);
-      {
-        static char ribbonExpDxfPath[4096]{};
-        static char ribbonExpDwgPath[4096]{};
-        const float cw = colW({"Export DXF", "Export DWG"});
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonExportDxf", RibbonIconKind::PdfAttach, "Export DXF", cw)) {
-          if (BrowseSaveFileDxfUtf8(ribbonExpDxfPath, sizeof(ribbonExpDxfPath), "drawing.dxf"))
-            ExportDxfFile(cmd, ribbonExpDxfPath, log);
-        }
-        RibbonItemHelp("Export the current drawing to DXF.\nSame as File menu → Export DXF...");
-        {
-          const DwgConverter& conv = FindDwgConverter();
-          if (!conv.available())
-            ImGui::BeginDisabled();
-          if (smallBtn("##RibbonExportDwg", RibbonIconKind::PdfAttach, "Export DWG", cw)) {
-            if (BrowseSaveFileDwgUtf8(ribbonExpDwgPath, sizeof(ribbonExpDwgPath), "drawing.dwg")) {
-              cmd.dwgPendingExportPath = ribbonExpDwgPath;
-              cmd.dwgLossyExportModal  = true;
-            }
-          }
-          if (!conv.available())
-            ImGui::EndDisabled();
-          if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(
-                "DWG needs a converter: install the free ODA File Converter, or set\n"
-                "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
-          else if (conv.available() && ImGui::IsItemHovered())
-            ImGui::SetTooltip("Using %s", conv.displayName.c_str());
-        }
-        ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+    // ---- Plan Production ---------------------------------------------------
+    {
+      const float w = 8.f + belowW("Create View\nFrames") + 4.f + belowW("Create\nSheets") + 4.f +
+                      belowW("Create Section\nSheets");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecOutPlanProd", "Plan Production", w, panelH);
+        nyiLarge("##OutViewFrames", "c3d_viewframes", "Create View\nFrames");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##OutCreateSheets", "c3d_createsheets", "Create\nSheets");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##OutSectionSheets", "c3d_sectionsheets", "Create Section\nSheets");
+        RibbonSectionEnd();
+      }, "Plan Production", RibbonIconKind::Nyi, "c3d_createsheets"});
+    }
 
-    ribbonSpecs.push_back({W.wOutPlot, M.wOutPlot, [&]() {
-      RibbonSectionBegin("RibbonSecOutPlot", "Plot", curCompact ? M.wOutPlot : W.wOutPlot, panelH);
-      {
-        if (largeBtn("##RibbonPlot", RibbonIconKind::PdfAttach, "Plot"))
+    // ---- Plot -----------------------------------------------------------
+    {
+      const float cw = colW({"Page Setup Manager", "Plotter Manager"});
+      const float w = 8.f + belowW("Plot") + 4.f + cw + 4.f + cw;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecOutPlot", "Plot", w, panelH);
+        if (RibbonButtonEx("##RibbonPlot", RibbonIconKind::Plot, "Plot",
+                           ImVec2(belowW("Plot"), colH), RibbonLabel::Below))
           PlotActiveLayout(cmd, log);
         RibbonItemHelp("Plot the current layout to a vector PDF.\nCommand bar: PLOT");
         ImGui::SameLine(0, 4);
-        if (smallBtn("##RibbonBatchPlot", RibbonIconKind::PdfAttach, "Batch", colW({"Batch"}))) {
+        ImGui::BeginGroup();
+        if (insRow("##RibbonBatchPlot", "Plot", "Batch Plot", cw)) {
           cmd.batchPlotSelected.clear();
           if (cmd.activeSpaceIndex >= 0)
             cmd.batchPlotSelected.push_back(cmd.activeSpaceIndex);
           cmd.showBatchPlotDialog = true;
         }
         RibbonItemHelp("Batch plot — pick layouts to plot into one multi-page PDF.");
-      }
-      RibbonSectionEnd();
-    }});
+        insNyi("##RibbonPlotPreview", "c3d_plotpreview", "Preview", cw);
+        if (insRow("##RibbonPageSetupMgr", "Page_Setup", "Page Setup Manager", cw)) {
+          EnsureStandardPageSetup(cmd);
+          cmd.pageSetupLayoutIdx  = cmd.activeSpaceIndex >= 0 ? cmd.activeSpaceIndex : 0;
+          cmd.pageSetupManagerSel = -1;
+          cmd.showPageSetupManager = true;
+        }
+        RibbonItemHelp("Page Setup Manager — named paper size / plot settings for the active layout.");
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonViewDetails", "Display_and_Plot_Frames", "View Details", cw);
+        insNyi("##RibbonPlotterMgr", "c3d_plottermgr", "Plotter Manager", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Plot", RibbonIconKind::Plot});
+    }
+
+    // ---- Export -------------------------------------------------------
+    {
+      static char ribbonExpDxfPath[4096]{};
+      static char ribbonExpDwgPath[4096]{};
+      const float cw = colW({"Export Civil 3D Drawing", "Export Civil Objects to SDF"});
+      const float w = 8.f + colW({"Export DXF"}) + 4.f + cw * 4.f + 4.f * 3.f;
+      ribbonSpecs.push_back({w, w, [&, cw, w]() {
+        RibbonSectionBegin("RibbonSecOutExport", "Export", w, panelH);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonExportDxf", RibbonIconKind::Export, "Export DXF", colW({"Export DXF"}))) {
+          if (BrowseSaveFileDxfUtf8(ribbonExpDxfPath, sizeof(ribbonExpDxfPath), "drawing.dxf"))
+            ExportDxfFile(cmd, ribbonExpDxfPath, log);
+        }
+        RibbonItemHelp("Export the current drawing to DXF.\nSame as File menu → Export DXF...");
+        if (smallBtn("##RibbonExportDwg", RibbonIconKind::Export, "Export DWG", colW({"Export DXF"}))) {
+          if (BrowseSaveFileDwgUtf8(ribbonExpDwgPath, sizeof(ribbonExpDwgPath), "drawing.dwg")) {
+            cmd.dwgPendingExportPath = ribbonExpDwgPath;
+            cmd.dwgLossyExportModal  = true;
+          }
+        }
+        RibbonItemHelp("Save DWG as R2000 via LibreDWG.\nSame as File menu → Export DWG...");
+        if (insRow("##RibbonExportPoints", "c3d_exportpoints", "Export Points", colW({"Export DXF"})))
+          cmd.showExportPointsWindow = true;
+        RibbonItemHelp("Export survey points to a point file (PNEZD / user format).");
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonExpImx", "c3d_exportto", "Export IMX", cw);
+        insNyi("##RibbonExpLandXml", "c3d_landxml", "Export to LandXML", cw);
+        insNyi("##RibbonExpC3dDwg", "c3d_exportto", "Export Civil 3D Drawing", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonExpFgdb", "c3d_exportto", "Export to FGDB", cw);
+        insNyi("##RibbonRehabMgr", "c3d_exportto", "Rehab Manager", cw);
+        insNyi("##RibbonTransferPoints", "c3d_transferpoints", "Transfer Points", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonExpHecRas", "c3d_exportto", "Export to HEC RAS", cw);
+        insNyi("##RibbonExpSdf", "c3d_exportto", "Export Civil Objects to SDF", cw);
+        insNyi("##RibbonExpStorm", "c3d_exportto", "Export to Storm Sewers", cw);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        insNyi("##RibbonExp3dsMax", "c3d_exportto", "Export to 3ds Max", cw);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Export", RibbonIconKind::Export});
+    }
+
+    // ---- Publish -----------------------------------------------------
+    {
+      const float w = 8.f + belowW("Publish\nSurfaces") + 4.f + belowW("Publish to\nArcGIS");
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecOutPublish", "Publish", w, panelH);
+        nyiLarge("##OutPublishSurf", "c3d_publishsurf", "Publish\nSurfaces");
+        ImGui::SameLine(0, 4);
+        nyiLarge("##OutPublishGis", "c3d_publishgis", "Publish to\nArcGIS");
+        RibbonSectionEnd();
+      }, "Publish", RibbonIconKind::Nyi, "c3d_publishgis"});
+    }
+
+    // ---- Export to DWF/PDF -----------------------------------------
+    {
+      const float w = 8.f + belowW("Export") + 4.f + annStyleW;
+      ribbonSpecs.push_back({w, w, [&, w]() {
+        RibbonSectionBegin("RibbonSecOutDwfPdf", "Export to DWF/PDF", w, panelH);
+        nyiLarge("##OutDwfxExport", "c3d_dwfx", "Export");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Export");
+        annNyiCombo("##OutDwfExportArea", "Display");
+        ImGui::TextUnformatted("Page Setup");
+        annNyiCombo("##OutDwfPageSetup", "Current");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }, "Export to DWF/PDF", RibbonIconKind::Nyi, "c3d_dwfx"});
+    }
   } // if (activeRibbonTab == kRibbonTabOutput)
 
   // REQ-302 increment 2 (ADR-038 (a)): decide breakpoint from the width RibbonToolsLeft and
@@ -4501,6 +5375,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(ribbonToolsW, panelH), false,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
+  ImGui::SetWindowFontScale(g_chrome.ribbonBodyFontScale);  // child keeps its own scale — see RibbonSectionBegin
 
   RenderRibbonFit(ribbonSpecs, ribbonFit, secGap, colH, curCompact, "RibbonMorePopup");
 
@@ -4794,6 +5669,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   }
 
   ImGui::EndChild();
+  ImGui::SetWindowFontScale(1.f);
   ImGui::PopStyleVar(2);
 }
 
@@ -5031,7 +5907,7 @@ void CollectGeneralAttrs(const AppCommandState& cmd, const std::vector<SelectedE
 // Font choices offered by the STYLE dialog and the MTEXT "Text Formatting" panel's font picker
 // (REQ-044 / REQ-051). "" = the application default font. Defined here so both use sites see it.
 static const char* kTextStyleFonts[] = {
-    "",          "romans.shx", "romand.shx", "romanc.shx", "txt.shx",         "simplex.shx",
+    "romans.shx", "romand.shx", "romanc.shx", "txt.shx",         "simplex.shx",
     "isocp.shx", "italic.shx", "Arial",      "Times New Roman", "Consolas",   "Tahoma",
 };
 
@@ -5323,6 +6199,11 @@ void ApplyLayerToSelection(AppCommandState& cmd, const std::string& v) {
           static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
         continue;
       cmd.cadTableAttrs[static_cast<size_t>(e.index)].layer = v;
+    } else if (e.type == SelectedEntity::Type::BlockRef) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadBlockRefs.size() ||
+          static_cast<size_t>(e.index) >= cmd.cadBlockRefAttrs.size())
+        continue;
+      cmd.cadBlockRefAttrs[static_cast<size_t>(e.index)].layer = v;
     } else if (e.type == SelectedEntity::Type::Arc) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
           static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
@@ -5371,6 +6252,11 @@ void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
           static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
         continue;
       cmd.cadTableAttrs[static_cast<size_t>(e.index)].color = v;
+    } else if (e.type == SelectedEntity::Type::BlockRef) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadBlockRefs.size() ||
+          static_cast<size_t>(e.index) >= cmd.cadBlockRefAttrs.size())
+        continue;
+      cmd.cadBlockRefAttrs[static_cast<size_t>(e.index)].color = v;
     } else if (e.type == SelectedEntity::Type::Arc) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
           static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
@@ -6904,6 +7790,7 @@ static void DrawPaperEntityProps(AppCommandState& cmd) {
       case T::Arc:      return static_cast<int>(L.paperArcs.size());
       case T::Ellipse:  return static_cast<int>(L.paperEllipses.size());
       case T::Polyline: return static_cast<int>(L.paperPolyOffsets.size()) - 1;
+      case T::Block:    return static_cast<int>(L.paperBlockRefs.size());
     }
     return 0;
   };
@@ -6922,16 +7809,17 @@ static void DrawPaperEntityProps(AppCommandState& cmd) {
       case T::Arc:      return i < L.paperArcAttrs.size() ? &L.paperArcAttrs[i] : nullptr;
       case T::Ellipse:  return i < L.paperEllAttrs.size() ? &L.paperEllAttrs[i] : nullptr;
       case T::Polyline: return i < L.paperPolyAttrs.size() ? &L.paperPolyAttrs[i] : nullptr;
+      case T::Block:    return i < L.paperBlockRefAttrs.size() ? &L.paperBlockRefAttrs[i] : nullptr;
     }
     return nullptr;
   };
 
-  int n[6] = {0, 0, 0, 0, 0, 0};
+  int n[7] = {0, 0, 0, 0, 0, 0, 0};
   for (const auto& r : selp)
     ++n[static_cast<int>(r.type)];
   ImGui::Text("Selected: %d paper object(s)", static_cast<int>(selp.size()));
-  const int kinds = (n[0] > 0) + (n[1] > 0) + (n[2] > 0) + (n[3] > 0) + (n[4] > 0) + (n[5] > 0);
-  static const char* kPaperTypeName[6] = {"Line", "Text", "Circle", "Arc", "Ellipse", "Polyline"};
+  const int kinds = (n[0] > 0) + (n[1] > 0) + (n[2] > 0) + (n[3] > 0) + (n[4] > 0) + (n[5] > 0) + (n[6] > 0);
+  static const char* kPaperTypeName[7] = {"Line", "Text", "Circle", "Arc", "Ellipse", "Polyline", "Block"};
   if (kinds > 1)
     ImGui::TextDisabled("(Mixed: L %d, T %d, C %d, A %d, E %d, P %d)", n[0], n[1], n[2], n[3], n[4], n[5]);
   else if (selp.size() == 1)
@@ -7197,6 +8085,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int nCirc = 0;
   int nAnn  = 0;
   int nTable = 0;
+  int nBlock = 0;
   int nPdf  = 0;
   int nSurf = 0;
   int firstSurfIx = -1;
@@ -7205,6 +8094,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     else if (e.type == SelectedEntity::Type::Circle)     ++nCirc;
     else if (e.type == SelectedEntity::Type::Annotation) ++nAnn;
     else if (e.type == SelectedEntity::Type::Table) ++nTable;
+    else if (e.type == SelectedEntity::Type::BlockRef) ++nBlock;
     else if (e.type == SelectedEntity::Type::PdfUnderlay)++nPdf;
     else if (e.type == SelectedEntity::Type::Surface) {
       ++nSurf;
@@ -7330,6 +8220,30 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     }
     if (nTable == 1 && tblIdx >= 0)
       DrawSingleTableGeometryEditable(cmd, tblIdx);
+  } else if (nLine == 0 && nCirc == 0 && nAnn == 0 && nTable == 0 && nBlock > 0) {
+    int brIdx = -1;
+    for (const auto& e : sel) {
+      if (e.type == SelectedEntity::Type::BlockRef) {
+        brIdx = e.index;
+        break;
+      }
+    }
+    if (nBlock == 1 && brIdx >= 0 && static_cast<size_t>(brIdx) < cmd.cadBlockRefs.size()) {
+      CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(brIdx)];
+      if (PropSectionHeader("Block reference")) {
+        ImGui::TextUnformatted(r.defName.c_str());
+        ImGui::DragFloat("X##blk", &r.xf.x, 0.01f);
+        ImGui::DragFloat("Y##blk", &r.xf.y, 0.01f);
+        ImGui::DragFloat("Z##blk", &r.xf.z, 0.01f);
+        ImGui::DragFloat("Scale X##blk", &r.xf.sx, 0.01f);
+        ImGui::DragFloat("Scale Y##blk", &r.xf.sy, 0.01f);
+        ImGui::DragFloat("Scale Z##blk", &r.xf.sz, 0.01f);
+        float deg = r.xf.rotZ * 57.2957795f;
+        if (ImGui::DragFloat("Rotation##blk", &deg, 0.1f))
+          r.xf.rotZ = deg * 0.01745329252f;
+        BumpCadGpuCache(cmd);
+      }
+    }
   } else if (nCirc == 0 && nAnn == 0 && nLine > 0) {
     std::vector<SelectedEntity> linesOnly;
     linesOnly.reserve(static_cast<size_t>(nLine));
@@ -7431,25 +8345,13 @@ namespace {
 static bool gPolarTrackingEnabled = false;
 
 void PushModeToggleButtonColors(bool on, int themeIdx) {
+  (void)themeIdx;
   if (!on)
     return;
-  if (themeIdx == 0) {
-    // Dark mode: the accent ladder, the same one that marks a selected tab, so
-    // "on" means one thing across the shell (REQ-081). Label is the seam tone
-    // rather than black — 8.96:1 on the accent fill.
-    ImGui::PushStyleColor(ImGuiCol_Button,        Hex(0xE0AE5E));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Hex(0xF0C67C));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Hex(0xC08F43));
-    ImGui::PushStyleColor(ImGuiCol_Text,          Hex(0x161616));
-  } else {
-    // Light mode: Primary Blue fills — clearly active against light gray
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.231f, 0.510f, 0.965f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.310f, 0.565f, 0.980f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.180f, 0.431f, 0.831f, 1.f));
-    // This theme's own text color, pushed only so both branches pop the same
-    // count — the light branch's appearance is unchanged.
-    ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(0.898f, 0.906f, 0.922f, 1.f));
-  }
+  ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::ColorConvertU32ToFloat4(g_chrome.ribbonTabOn));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::ColorConvertU32ToFloat4(g_chrome.ribbonTabOnHovered));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImGui::ColorConvertU32ToFloat4(g_chrome.ribbonTabOnActive));
+  ImGui::PushStyleColor(ImGuiCol_Text,          ImGui::ColorConvertU32ToFloat4(g_chrome.ribbonTabOnText));
 }
 
 void PopModeToggleButtonColors(bool on) {
@@ -7979,6 +8881,10 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
     using MP = AppCommandState::ModifyPhase;
     return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
   }
+  case K::InsertBlock: {
+    using IPh = AppCommandState::InsertBlockPhase;
+    return cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale;
+  }
   default:
     return false;
   }
@@ -8123,6 +9029,16 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   case K::Stretch:
     return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:"
                                                                      : "Specify second point:";
+  case K::InsertBlock: {
+    using IPh = AppCommandState::InsertBlockPhase;
+    if (cmd.insertBlockPhase == IPh::WaitInsertPoint)
+      return "Specify insertion point:";
+    if (cmd.insertBlockPhase == IPh::WaitScale)
+      return "Specify scale point:";
+    if (cmd.insertBlockPhase == IPh::WaitRotation)
+      return "Specify rotation angle <0d0'0\">:";
+    return "Specify point:";
+  }
   default:
     return "Specify point:";
   }
@@ -8290,6 +9206,9 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
                                : (cmd.activeSpaceIndex != kModelSpaceIndex ? "PAPER" : "MODEL");
     constexpr float sp = 4.f;
     const float rightW = bw(spaceLbl) + bw("VPLOCK") + bw("OSNAP") + bw("ORTHO") + bw("GRID") + bw("POLAR") +
+#ifdef GOSURVEY_DEVELOPER_SHELL
+                         bw("DEV") +
+#endif
                          140.f /*plot scale combo*/ + bw("SEL") + sp * 8.f + 24.f;
     ImGui::SameLine(0, 8);
     const float rx = ImGui::GetWindowContentRegionMax().x - rightW;
@@ -8378,6 +9297,18 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
       ItemHelpTooltip("Polar tracking (UI only for now)");
       ImGui::SameLine(0, sp);
     }
+#ifdef GOSURVEY_DEVELOPER_SHELL
+    {
+      const bool on = cmd.devShellVisible;
+      PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
+      if (ImGui::Button("DEV", ImVec2(0.f, statusBtnH)))
+        cmd.devShellVisible = !cmd.devShellVisible;
+      PopModeToggleButtonColors(on);
+      ItemHelpTooltip("Developer Shell — Debug only. Off by default. Activity, command, and Test Engine logs "
+                      "are always written next to the executable.");
+      ImGui::SameLine(0, sp);
+    }
+#endif
     DrawPlotScaleCombo(cmd);
     ImGui::SameLine(0, sp);
     {
@@ -8982,10 +9913,10 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       cmdShowSug = false;
       s_cmdSugVisible = false;
       s_cmdHighlight.clear();
+      DevShell_OnCommand(cmdBuf);
       ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
     }
   } else {
-    // Match the input box's vertical footprint so the footer hints below don't shift.
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("Command input follows the cursor on the drawing (viewport).");
   }
@@ -9070,7 +10001,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   // --- nanoCAD-style command autocomplete popup (anchored at the drawing crosshair) ---
   s_cmdSugPopupOpen = false;
   if (cmdShowSug && !cmdSug.empty()) {
-    const float rowH  = ImGui::GetTextLineHeight() + 7.f;
+    const float rowH  = 40.f;
     const float padY  = 3.f;
     // Cap the visible height; if there are more suggestions than fit, the popup scrolls.
     const int   kMaxRows = 8;
@@ -9219,8 +10150,9 @@ static void DrawDimLabelText(ImDrawList* dl, const CadAnnotation& a, ImFont* fal
                              const ImVec2& pivotSp, float screenAngRad, ImU32 textCol) {
   if (!dl || a.text.empty())
     return;
-  if (cadfont::PreferShxStrokes(a.fontFamily, a.text)) {
-    Shx::Font* sf = Shx::Resolve(a.fontFamily);
+  const std::string fam = CadDrawFontFamily(a.fontFamily);
+  if (cadfont::PreferShxStrokes(fam, a.text)) {
+    Shx::Font* sf = Shx::Resolve(fam);
     if (sf && sf->valid()) {
       const float thick = std::max(1.f, fontPx * 0.05f);
       const float w = Shx::MeasureWidthPx(*sf, a.text, fontPx);
@@ -9232,8 +10164,23 @@ static void DrawDimLabelText(ImDrawList* dl, const CadAnnotation& a, ImFont* fal
       return;
     }
   }
-  ImFont* dimFont = ResolveCadTtf(a.fontFamily, false, false, fallback, nullptr, nullptr);
+  ImFont* dimFont = ResolveCadTtf(fam, false, false, fallback, nullptr, nullptr);
   AddAlignedDimText(dl, dimFont, fontPx, pivotSp, screenAngRad, textCol, a.text.c_str());
+}
+
+static void RotateDrawListVertsAround(ImDrawList* dl, int vtx0, ImVec2 pivot, float rotationRad) {
+  if (!dl || rotationRad == 0.f)
+    return;
+  const float ang = -rotationRad;
+  const float ca = std::cos(ang);
+  const float sa = std::sin(ang);
+  for (int vi = vtx0; vi < dl->VtxBuffer.Size; ++vi) {
+    ImVec2& p = dl->VtxBuffer[static_cast<size_t>(vi)].pos;
+    const float dx = p.x - pivot.x;
+    const float dy = p.y - pivot.y;
+    p.x = pivot.x + dx * ca - dy * sa;
+    p.y = pivot.y + dx * sa + dy * ca;
+  }
 }
 
 static void DrawCadSingleLineText(ImDrawList* dl, const CadAnnotation& a, ImFont* fallback, ImVec2 topLeft,
@@ -9241,7 +10188,8 @@ static void DrawCadSingleLineText(ImDrawList* dl, const CadAnnotation& a, ImFont
   if (!dl || a.text.empty())
     return;
   const int vtx0 = dl->VtxBuffer.Size;
-  Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+  const std::string fam = CadDrawFontFamily(a.fontFamily);
+  Shx::Font* sf = CadIsShxFontName(fam) ? Shx::Resolve(fam) : nullptr;
   if (sf && sf->valid()) {
     const float thick = std::max(1.f, fontPx * 0.05f);
     const ImVec2 baselinePt(topLeft.x, topLeft.y + fontPx);
@@ -9253,7 +10201,7 @@ static void DrawCadSingleLineText(ImDrawList* dl, const CadAnnotation& a, ImFont
     }
   } else {
     bool realBold = false, realItalic = false;
-    ImFont* tf = ResolveCadTtf(a.fontFamily, a.bold, a.italic, fallback, &realBold, &realItalic);
+    ImFont* tf = ResolveCadTtf(fam, a.bold, a.italic, fallback, &realBold, &realItalic);
     const ImVec2 ext = tf->CalcTextSizeA(fontPx, FLT_MAX, 0.f, a.text.c_str());
     if (a.bold && !realBold) {
       dl->AddText(tf, fontPx, ImVec2(topLeft.x + 0.6f, topLeft.y), col, a.text.c_str());
@@ -9267,16 +10215,7 @@ static void DrawCadSingleLineText(ImDrawList* dl, const CadAnnotation& a, ImFont
       dl->AddLine(ImVec2(topLeft.x, uy), ImVec2(topLeft.x + ext.x, uy), col, std::max(1.f, fontPx * 0.06f));
     }
   }
-  if (a.rotationRad != 0.f) {
-    const float ang = -a.rotationRad;
-    const float ca = std::cos(ang), sa = std::sin(ang);
-    for (int vi = vtx0; vi < dl->VtxBuffer.Size; ++vi) {
-      ImVec2& p = dl->VtxBuffer[static_cast<size_t>(vi)].pos;
-      const float dx = p.x - topLeft.x, dy = p.y - topLeft.y;
-      p.x = topLeft.x + dx * ca - dy * sa;
-      p.y = topLeft.y + dx * sa + dy * ca;
-    }
-  }
+  RotateDrawListVertsAround(dl, vtx0, topLeft, a.rotationRad);
 }
 
 template <typename WorldToScreen>
@@ -9939,13 +10878,15 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     // is selected (also the only way to go back to the default font, which has no run tag).
     const std::string baseFont = target ? target->fontFamily : std::string();
     ImGui::SetNextItemWidth(150.f);
-    if (ImGui::BeginCombo("##font", baseFont.empty() ? "(default)" : baseFont.c_str())) {
+    if (ImGui::BeginCombo("##font",
+                          baseFont.empty() ? TextStyles::kDefaultFontFamily : baseFont.c_str())) {
       for (const char* fn : kTextStyleFonts) {
         const std::string f(fn);
-        const char* label = f.empty() ? "(default)" : fn;
+        const char* label = fn;
         // Preview each choice in its own typeface, as the STYLE dialog's picker does.
         const ImVec2 rowTL = ImGui::GetCursorScreenPos();
-        const bool picked = ImGui::Selectable(label, f == baseFont, 0, ImVec2(0.f, rowH));
+        const bool picked = ImGui::Selectable(
+            label, f == baseFont || (baseFont.empty() && f == TextStyles::kDefaultFontFamily), 0, ImVec2(0.f, rowH));
         if (!f.empty()) {
           TextStyle preview;
           preview.fontFamily = f;
@@ -10443,6 +11384,24 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
       CadTableWorldCorner(t, c, &gx, &gy);
       offer(gx, gy);
     }
+  } else if (cmd.selection[0].type == SelectedEntity::Type::BlockRef) {
+    const int ix = cmd.selection[0].index;
+    if (ix < 0 || static_cast<size_t>(ix) >= cmd.cadBlockRefs.size())
+      return;
+    const CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(ix)];
+    offer(r.xf.x, r.xf.y);
+    const int di = CadBlockFindDef(cmd.blockDefs, r.defName);
+    if (di >= 0) {
+      const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+      const int nG = CadBlockDynGripCount(def);
+      for (int g = 1; g < nG; ++g) {
+        if (!CadBlockDynGripShownOnInsert(g))
+          continue;
+        float gx = 0.f, gy = 0.f, gz = 0.f;
+        if (CadBlockDynGripWorld(def, r, g, &gx, &gy, &gz))
+          offer(gx, gy);
+      }
+    }
   } else if (cmd.selection[0].type != SelectedEntity::Type::Annotation) {
     return;
   } else {
@@ -10483,6 +11442,45 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
       out_snap->y = by;
     }
   }
+}
+
+static void DrawCadGripMarker(ImDrawList* dl, const ImVec2& gp, float half, CadBlockDynGripShape shape, float sdx,
+                              float sdy, ImU32 fill, ImU32 border) {
+  assert(dl != nullptr);
+  if (shape == CadBlockDynGripShape::Square) {
+    dl->AddRectFilled(ImVec2(gp.x - half, gp.y - half), ImVec2(gp.x + half, gp.y + half), fill);
+    dl->AddRect(ImVec2(gp.x - half, gp.y - half), ImVec2(gp.x + half, gp.y + half), border, 0.f, 0, 1.f);
+    return;
+  }
+  float len = std::hypot(sdx, sdy);
+  if (len < 1.e-4f) {
+    sdx = 1.f;
+    sdy = 0.f;
+    len = 1.f;
+  }
+  sdx /= len;
+  sdy /= len;
+  if (shape == CadBlockDynGripShape::FlipArrow) {
+    const float L = half * 2.4f;
+    const float W = half * 1.2f;
+    const ImVec2 n(-sdy * W, sdx * W);
+    const ImVec2 tipA(gp.x + sdx * L, gp.y + sdy * L);
+    const ImVec2 tipB(gp.x - sdx * L, gp.y - sdy * L);
+    const ImVec2 midA(gp.x + sdx * L * 0.15f, gp.y + sdy * L * 0.15f);
+    const ImVec2 midB(gp.x - sdx * L * 0.15f, gp.y - sdy * L * 0.15f);
+    dl->AddTriangleFilled(tipA, ImVec2(midA.x + n.x, midA.y + n.y), ImVec2(midA.x - n.x, midA.y - n.y), fill);
+    dl->AddTriangle(tipA, ImVec2(midA.x + n.x, midA.y + n.y), ImVec2(midA.x - n.x, midA.y - n.y), border, 1.f);
+    dl->AddTriangleFilled(tipB, ImVec2(midB.x + n.x, midB.y + n.y), ImVec2(midB.x - n.x, midB.y - n.y), fill);
+    dl->AddTriangle(tipB, ImVec2(midB.x + n.x, midB.y + n.y), ImVec2(midB.x - n.x, midB.y - n.y), border, 1.f);
+    return;
+  }
+  const float L = half * 2.6f;
+  const float W = half * (shape == CadBlockDynGripShape::StretchArrow ? 1.55f : 1.35f);
+  const ImVec2 tip(gp.x + sdx * L, gp.y + sdy * L);
+  const ImVec2 base(gp.x - sdx * L * 0.4f, gp.y - sdy * L * 0.4f);
+  const ImVec2 n(-sdy * W, sdx * W);
+  dl->AddTriangleFilled(tip, ImVec2(base.x + n.x, base.y + n.y), ImVec2(base.x - n.x, base.y - n.y), fill);
+  dl->AddTriangle(tip, ImVec2(base.x + n.x, base.y + n.y), ImVec2(base.x - n.x, base.y - n.y), border, 1.f);
 }
 
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
@@ -11516,6 +12514,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                 case T::Ellipse:      return at(cmd.userEllAttrs, e.index);
                 case T::Annotation:   return at(cmd.cadAnnotationAttrs, e.index);
                 case T::Table:        return at(cmd.cadTableAttrs, e.index);
+                case T::BlockRef:     return at(cmd.cadBlockRefAttrs, e.index);
                 case T::FilledRegion: return at(cmd.cadFilledRegionAttrs, e.index);
                 default:              return std::string();
                 }
@@ -11539,10 +12538,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             BumpCadGpuCache(cmd);
             log.push_back("Grip edit committed.");
           } else if (cmd.active != AppCommandState::Kind::None) {
-            SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log);
+            UiSubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log);
           } else if (cmd.selBoxWaitingSecond) {
             const bool fenceWindowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;  // L→R window, R→L crossing
-            SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log,
+            UiSubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log,
                                ImGui::GetIO().KeyShift, fenceWindowMode);
           } else if (TryBeginEntityGripAtLocal(cmd, static_cast<float>(curMX), static_cast<float>(curMY),
                                                gripTolWorld)) {
@@ -12193,6 +13192,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       el.ratio = cmd.entityGripOrigEllRatio;
       break;
     }
+    case SelectedEntity::Type::BlockRef: {
+      if (idx >= 0 && static_cast<size_t>(idx) < cmd.cadBlockRefs.size())
+        CadBlockRestoreDynGripOrig(cmd, &cmd.cadBlockRefs[static_cast<size_t>(idx)]);
+      break;
+    }
     default:
       break;
     }
@@ -12333,10 +13337,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Entity-pick commands (OFFSET, REQ-069's designators, REQ-103's LENGTHEN/EXTEND/BREAK):
       // the raw, unsnapped cursor position is what PickClosestCadEntity hit-tests against, not an
       // OSNAP-adjusted commit point.
-      SubmitViewportPick(cmd, rawPickX, rawPickY, log);
+      UiSubmitViewportPick(cmd, rawPickX, rawPickY, log);
       break;
     case ViewportClickRoute::PdfAttachInsertPoint:
       SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);
+      break;
+    case ViewportClickRoute::InsertBlockPick:
+      SubmitInsertBlockPick(cmd, commitX, commitY, log);
       break;
     case ViewportClickRoute::HatchPick: {
       // HATCH (REQ-043): trace the region under the click and fill it; the command stays active on a miss
@@ -12355,14 +13362,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Point-picking commands (draw commands, and every modify command past its selection
       // phase): the click is a coordinate, handed straight to the command state machine at the
       // OSNAP-adjusted commit point.
-      SubmitViewportPick(cmd, commitX, commitY, log);
+      UiSubmitViewportPick(cmd, commitX, commitY, log);
       break;
     case ViewportClickRoute::SelectionBox:
       // Fence: arm the first corner, or close the box on the second click.
       if (!cmd.selBoxWaitingSecond)
         BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
       else
-        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+        UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
       break;
     case ViewportClickRoute::SelectionAccumulate: {
       // MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY's "select objects" step (this fix). A click on an
@@ -12378,7 +13385,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // exclusive/clear-on-pick semantics for annotations or survey points — those are idle-only
       // behaviors this accumulating multi-type selection has no use for.
       if (cmd.selBoxWaitingSecond) {
-        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+        UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         break;
       }
       bool handled = false;
@@ -12486,12 +13493,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     case ViewportClickRoute::Ignore:
       // PAN/ORBIT (drag-driven), TRIMSTATE/ELEV (text prompts), VPFREEZE/VPTHAW (floating
       // viewports only), PaperRectViewport (paper space only), PDFATTACH outside its
-      // insertion-point phase. Each is a decision, not an omission — see ViewportClickRouteFor.
+      // insertion-point phase, INSERT while the dialog is open. Each is a decision, not an omission
+      // — see ViewportClickRouteFor.
       break;
     case ViewportClickRoute::IdleSelection: {
       bool handled = false;
       if (cmd.selBoxWaitingSecond) {
-        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+        UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         for (int svi : cmd.selectedSurveyPointIndices) {
           if (svi >= 0 && static_cast<size_t>(svi) < cmd.surveyPoints.size())
             SyncSurveyPointLinkedMtextSelection(cmd, svi);
@@ -12669,27 +13677,58 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             }
             break;
           }
+          case SelectedEntity::Type::BlockRef: {
+            if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {
+              const CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(sel.index)];
+              const int di = CadBlockFindDef(cmd.blockDefs, r.defName);
+              if (di >= 0) {
+                const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+                const int nG = CadBlockDynGripCount(def);
+                for (int g = 0; g < nG; ++g) {
+                  if (!CadBlockDynGripShownOnInsert(g))
+                    continue;
+                  float gx = 0.f, gy = 0.f, gz = 0.f;
+                  if (CadBlockDynGripWorld(def, r, g, &gx, &gy, &gz))
+                    tryGrip(sel, gx, gy, gz, g);
+                }
+              }
+            }
+            break;
+          }
           default:
             break;
           }
         }
 
         if (bestWhich >= 0) {
-          // Snapshot the pre-drag state, as the floating-viewport grab already does
-          // (TryBeginEntityGripAtLocal) — one undo takes the entity back to where the stretch started,
-          // whether it was placed by dragging or by typing a distance.
           PushUndoSnapshot(cmd, "Grip edit");
+          if (bestSel.type == SelectedEntity::Type::BlockRef) {
+            if (!CadBlockArmDynGrip(cmd, bestSel.index, bestWhich)) {
+              BumpCadGpuCache(cmd);
+              AbortMtextGripInteraction(cmd);
+              ClearDimGripInteraction(cmd);
+              handled = true;
+            } else {
+              cmd.entityGripMoveActive = true;
+              cmd.entityGripType = bestSel.type;
+              cmd.entityGripEntityIndex = bestSel.index;
+              cmd.entityGripWhich = bestWhich;
+              cmd.entityGripAnchorX = bestGripX;
+              cmd.entityGripAnchorY = bestGripY;
+              cmd.entityGripTypedDistanceValid = false;
+              AbortMtextGripInteraction(cmd);
+              ClearDimGripInteraction(cmd);
+              handled = true;
+            }
+          } else {
           cmd.entityGripMoveActive = true;
           cmd.entityGripType = bestSel.type;
           cmd.entityGripEntityIndex = bestSel.index;
           cmd.entityGripWhich = bestWhich;
-          // The grip's own starting position is the base of the stretch: ORTHO constrains the new point to
-          // the H/V line through it, and a typed distance runs along that axis (REQ-047).
           cmd.entityGripAnchorX = bestGripX;
           cmd.entityGripAnchorY = bestGripY;
           cmd.entityGripTypedDistanceValid = false;
 
-          // Store originals for RMB cancel.
           switch (bestSel.type) {
           case SelectedEntity::Type::LineSeg: {
             const size_t k = static_cast<size_t>(bestSel.index) * 6;
@@ -12740,6 +13779,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
           handled = true;
+          }
         }
       }
 
@@ -12928,12 +13968,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           } else if (!cmd.selBoxWaitingSecond)
             BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
           else
-            SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+            UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         } else {
           if (!cmd.selBoxWaitingSecond)
             BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
           else
-            SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+            UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         }
       }
       break;
@@ -13572,6 +14612,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             }
             break;
           }
+          case SelectedEntity::Type::BlockRef: {
+            if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {
+              const CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(sel.index)];
+              const int di = CadBlockFindDef(cmd.blockDefs, r.defName);
+              if (di >= 0) {
+                const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+                const int nG = CadBlockDynGripCount(def);
+                for (int g = 0; g < nG; ++g) {
+                  if (!CadBlockDynGripShownOnInsert(g))
+                    continue;
+                  float gx = 0.f, gy = 0.f, gz = 0.f;
+                  if (CadBlockDynGripWorld(def, r, g, &gx, &gy, &gz))
+                    drawGrip(gx, gy, hot(g));
+                }
+              } else
+                drawGrip(r.xf.x, r.xf.y, hot(0));
+            }
+            break;
+          }
           default:
             break;
           }
@@ -13647,6 +14706,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         case PaperEntityRef::Type::Arc:      return at(L.paperArcAttrs, idx);
         case PaperEntityRef::Type::Ellipse:  return at(L.paperEllAttrs, idx);
         case PaperEntityRef::Type::Polyline: return at(L.paperPolyAttrs, idx);
+        case PaperEntityRef::Type::Block:    return at(L.paperBlockRefAttrs, idx);
         }
         return nullptr;
       };
@@ -13725,6 +14785,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const bool sel = isPaperSel(PaperEntityRef::Type::Line, idx);
         sdl->AddLine(w2s(L.paperLines[i], L.paperLines[i + 1]), w2s(L.paperLines[i + 3], L.paperLines[i + 4]),
                      paperCol(sel, PaperEntityRef::Type::Line, idx), paperWid(sel, PaperEntityRef::Type::Line, idx));
+      }
+      for (size_t bi = 0; bi < L.paperBlockRefs.size(); ++bi) {
+        const int idx = static_cast<int>(bi);
+        const bool sel = isPaperSel(PaperEntityRef::Type::Block, idx);
+        EntityAttributes ia{};
+        if (bi < L.paperBlockRefAttrs.size())
+          ia = L.paperBlockRefAttrs[bi];
+        std::vector<CadBlockWorldSeg> segs;
+        CadBlockCollectWorldLines(cmd.blockDefs, L.paperBlockRefs[bi], ia, &segs);
+        const ImU32 col = paperCol(sel, PaperEntityRef::Type::Block, idx);
+        const float th = paperWid(sel, PaperEntityRef::Type::Block, idx);
+        for (const CadBlockWorldSeg& s : segs)
+          sdl->AddLine(w2s(s.x0, s.y0), w2s(s.x1, s.y1), col, th);
       }
       // Circles / arcs / ellipses / polylines (REQ-038, ADR-013), paper inches → screen via w2s (handles the
       // y-flip), so arcs/ellipses are tessellated through w2s rather than ImGui's screen-space PathArcTo.
@@ -13824,7 +14897,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const int acol = (a.mtextAttach - 1) % 3;
           const int arow = (a.mtextAttach - 1) / 3;
           float pw = 8.f, ph = hPx * 1.22f;
-          MtextRichNaturalContentPx(paperFont, hPx, a.text, &pw, &ph, a.fontFamily);
+          const std::string paperFam = CadDrawFontFamily(a.fontFamily);
+          MtextRichNaturalContentPx(paperFont, hPx, a.text, &pw, &ph, paperFam);
           float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
           // Anchor to the box without clamping back inside it — see the model-space path.
           if (acol == 1)      drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
@@ -13834,7 +14908,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           float wrapPx = std::max(8.f, (brc.x - tl.x) - 8.f);
           if (acol != 0)
             wrapPx = std::max(pw, 8.f);
-          Shx::Font* sfm = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+          Shx::Font* sfm = CadIsShxFontName(paperFam) ? Shx::Resolve(paperFam) : nullptr;
           // Box wraps, box does not hide (mirrors model space): clip to the viewport, not to the box.
           sdl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
           if (sfm && sfm->valid()) {
@@ -13867,7 +14941,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               ly += lineH;
             }
           } else {
-            MtextRichDrawWrapped(sdl, paperFont, hPx, ImVec2(drawX, drawY), wrapPx, col, a.text, a.fontFamily);
+            MtextRichDrawWrapped(sdl, paperFont, hPx, ImVec2(drawX, drawY), wrapPx, col, a.text, paperFam);
           }
           sdl->PopClipRect();
           if (sel)
@@ -13880,11 +14954,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         DrawCadSingleLineText(sdl, a, paperFont, p, hPx, col);
         if (sel) {
           float w = hPx * 0.6f, h = hPx;
-          if (CadIsShxFontName(a.fontFamily)) {
-            if (Shx::Font* sf = Shx::Resolve(a.fontFamily); sf && sf->valid())
+          const std::string paperTextFam = CadDrawFontFamily(a.fontFamily);
+          if (CadIsShxFontName(paperTextFam)) {
+            if (Shx::Font* sf = Shx::Resolve(paperTextFam); sf && sf->valid())
               w = std::max(Shx::MeasureWidthPx(*sf, a.text, hPx), w);
           } else {
-            ImFont* tf = ResolveCadTtf(a.fontFamily, a.bold, a.italic, paperFont, nullptr, nullptr);
+            ImFont* tf = ResolveCadTtf(paperTextFam, a.bold, a.italic, paperFont, nullptr, nullptr);
             const ImVec2 ext = tf->CalcTextSizeA(hPx, FLT_MAX, 0.f, a.text.c_str());
             w = std::max(ext.x, w);
             h = std::max(ext.y, h);
@@ -14096,6 +15171,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (r.index >= 0 && static_cast<size_t>(r.index) < L.paperTexts.size()) {
             const CadAnnotation& a = L.paperTexts[static_cast<size_t>(r.index)];
             sdl->AddCircleFilled(xf(a.insX, a.insY), 3.f, ghostCol);
+          }
+          break;
+        }
+        case PaperEntityRef::Type::Block: {
+          if (r.index >= 0 && static_cast<size_t>(r.index) < L.paperBlockRefs.size()) {
+            EntityAttributes ia{};
+            if (static_cast<size_t>(r.index) < L.paperBlockRefAttrs.size())
+              ia = L.paperBlockRefAttrs[static_cast<size_t>(r.index)];
+            std::vector<CadBlockWorldSeg> segs;
+            CadBlockCollectWorldLines(cmd.blockDefs, L.paperBlockRefs[static_cast<size_t>(r.index)], ia, &segs);
+            for (const CadBlockWorldSeg& s : segs)
+              sdl->AddLine(xf(s.x0, s.y0), xf(s.x1, s.y1), ghostCol, 1.5f);
           }
           break;
         }
@@ -14324,8 +15411,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   if (modelAnnotationsVisible &&
-      (!cmd.cadAnnotations.empty() || !cmd.cadTables.empty() || !transformAnnPreviews.empty() ||
-       !transformTablePreviews.empty() || showMtextCmdDraft || showDimCmdDraft)) {
+      (CadNeedsAnnotationOverlay(cmd.cadAnnotations.size(), cmd.cadTables.size(), cmd.cadBlockRefs.size(),
+                                 showMtextCmdDraft, showDimCmdDraft) ||
+       !transformAnnPreviews.empty() || !transformTablePreviews.empty())) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // Clip model annotations to the drawing viewport so they cannot bleed into surrounding UI (issue #101).
     dl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
@@ -14653,6 +15741,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float mtextMaxPx = (a.surveyPointLabelForId >= 0) ? cmd.viewportMtextMaxPx : 8192.f;
         const float fontPx =
             std::clamp(hWorldMtext / std::max(worldPerPxY, 1.e-6f), mtextMinPx, mtextMaxPx);
+        const std::string mtextFam = CadDrawFontFamily(a.fontFamily);
         ImU32 col = colFallback;
         if (attrPtr) {
           float rgba[4];
@@ -14666,7 +15755,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (a.surveyPointLabelForId >= 0) {
           float pw = 8.f;
           float ph = fontPx * 1.22f;
-          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
+          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, mtextFam);
           drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
           drawY = ry0 + 0.5f * ((ry1 - ry0) - ph);
           wrapW = std::max(pw, 8.f);
@@ -14729,7 +15818,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const int acol = (a.mtextAttach - 1) % 3;
           const int arow = (a.mtextAttach - 1) / 3;
           float pw = 8.f, ph = fontPx * 1.22f;
-          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
+          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, mtextFam);
           // Anchor to the box, but never clamp back inside it: content taller or wider than the box
           // must overhang rather than be shoved in (and then clipped away).
           if (acol == 1)      drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
@@ -14738,12 +15827,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           else if (arow == 2) drawY = ry1 - ph - 4.f;
           if (acol != 0) wrapW = std::max(pw, 8.f);
         }
-        // The box governs where lines WRAP (wrapW above) and nothing else — it must never hide text.
-        // Clipping to it dropped every line past the box's height, so a box that was short (or that the
-        // user had dragged narrow) silently swallowed content. Clip to the viewport instead, purely so
-        // overhanging text cannot paint over the surrounding UI.
+        const bool rotateMtext = a.surveyPointLabelForId < 0 && std::fabs(a.rotationRad) > 1.e-5f;
+        ImVec2 mtextPivot{rx0, ry0};
+        if (rotateMtext) {
+          worldToScreen(a.insX, a.insY, &mtextPivot, a.insZ);
+          drawX = mtextPivot.x;
+          drawY = mtextPivot.y;
+          wrapW = 1.e8f;
+        }
         dl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
-        Shx::Font* sfm = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+        const int mtextVtx0 = dl->VtxBuffer.Size;
+        Shx::Font* sfm = CadIsShxFontName(mtextFam) ? Shx::Resolve(mtextFam) : nullptr;
         if (sfm && sfm->valid()) {
           // Render MTEXT as SHX strokes (exact AutoCAD match), line by line, honoring the attachment.
           const std::string plain = MtextRichFlattenToPlain(a.text);
@@ -14761,11 +15855,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             lines.push_back(ln);
           }
           float ly = drawY;
+          const float left0 = rotateMtext ? mtextPivot.x : rx0;
           for (const std::string& ln : lines) {
             const float w = Shx::MeasureWidthPx(*sfm, ln, fontPx);
-            float lx = rx0 + 4.f;
-            if (acol == 1)      lx = rx0 + 0.5f * ((rx1 - rx0) - w);
-            else if (acol == 2) lx = std::max(rx0 + 4.f, rx1 - w - 4.f);
+            float lx = left0 + 4.f;
+            if (!rotateMtext) {
+              if (acol == 1)      lx = rx0 + 0.5f * ((rx1 - rx0) - w);
+              else if (acol == 2) lx = std::max(rx0 + 4.f, rx1 - w - 4.f);
+            }
             const ImVec2 base(lx, ly + fontPx);
             Shx::DrawText(dl, *sfm, base, fontPx, 0.f, col, ln, thick);
             if (underline) {
@@ -14775,8 +15872,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             ly += lineH;
           }
         } else {
-          MtextRichDrawWrapped(dl, font, fontPx, ImVec2(drawX, drawY), wrapW, col, a.text, a.fontFamily);
+          MtextRichDrawWrapped(dl, font, fontPx, ImVec2(drawX, drawY), wrapW, col, a.text, mtextFam);
         }
+        if (rotateMtext)
+          RotateDrawListVertsAround(dl, mtextVtx0, mtextPivot, a.rotationRad);
         dl->PopClipRect();
       }
     };
@@ -14858,6 +15957,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (ap && CadEntityIdHidden(&cmd.hiddenEntityIds, ap->id))
         continue;
       drawAnnotationVisual(cmd.cadAnnotations[ai], ap, kAnnCol);
+    }
+    for (size_t bi = 0; bi < cmd.cadBlockRefs.size(); ++bi) {
+      const EntityAttributes* bp =
+          bi < cmd.cadBlockRefAttrs.size() ? &cmd.cadBlockRefAttrs[bi] : nullptr;
+      if (bp && CadEntityIdHidden(&cmd.hiddenEntityIds, bp->id))
+        continue;
+      std::vector<CadAnnotation> blockAnns;
+      CadBlockCollectWorldAnnotations(cmd.blockDefs, cmd.cadBlockRefs[bi], &blockAnns);
+      for (const CadAnnotation& a : blockAnns)
+        drawAnnotationVisual(a, bp, kAnnCol);
     }
 
     for (const CadAnnotation& ap : transformAnnPreviews)
@@ -14992,12 +16101,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       ImVec2 sp{};
       worldToScreen(a.insX, a.insY, &sp, a.insZ);
       float tw = 0.f;
-      Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+      const std::string hitFam = CadDrawFontFamily(a.fontFamily);
+      Shx::Font* sf = CadIsShxFontName(hitFam) ? Shx::Resolve(hitFam) : nullptr;
       if (sf && sf->valid()) {
         tw = Shx::MeasureWidthPx(*sf, a.text, fpx);
       } else {
         bool rb = false, ri = false;
-        ImFont* tf = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, a.bold, a.italic, &rb, &ri);
+        ImFont* tf = FontReg::Resolve(hitFam, a.bold, a.italic, &rb, &ri);
         if (!tf) tf = font;
         tw = tf->CalcTextSizeA(fpx, FLT_MAX, 0.f, a.text.c_str()).x;
       }
@@ -15015,12 +16125,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       ImVec2 sp{};
       worldToScreen(a.insX, a.insY, &sp, a.insZ);
       float tw = 0.f;
-      Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+      const std::string hitFam = CadDrawFontFamily(a.fontFamily);
+      Shx::Font* sf = CadIsShxFontName(hitFam) ? Shx::Resolve(hitFam) : nullptr;
       if (sf && sf->valid()) {
         tw = Shx::MeasureWidthPx(*sf, a.text, fpx);
       } else {
         bool rb = false, ri = false;
-        ImFont* tf = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, a.bold, a.italic, &rb, &ri);
+        ImFont* tf = FontReg::Resolve(hitFam, a.bold, a.italic, &rb, &ri);
         if (!tf) tf = font;
         tw = tf->CalcTextSizeA(fpx, FLT_MAX, 0.f, a.text.c_str()).x;
       }
@@ -15306,6 +16417,34 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const float perpX = -el.majVy;
           const float perpY = el.majVx;
           drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z);
+        }
+      } else if (sel.type == SelectedEntity::Type::BlockRef) {
+        if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {
+          const CadBlockRef& r = cmd.cadBlockRefs[static_cast<size_t>(sel.index)];
+          const int di = CadBlockFindDef(cmd.blockDefs, r.defName);
+          if (di >= 0) {
+            const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+            const int nG = CadBlockDynGripCount(def);
+            for (int g = 0; g < nG; ++g) {
+              if (!CadBlockDynGripShownOnInsert(g))
+                continue;
+              float gx = 0.f, gy = 0.f, gz = r.xf.z;
+              if (!CadBlockDynGripWorld(def, r, g, &gx, &gy, &gz))
+                continue;
+              ImVec2 gp{};
+              wts(gx, gy, &gp, gz);
+              float ldx = 0.f, ldy = 0.f, wdx = 0.f, wdy = 0.f;
+              CadBlockDynGripLocalAxis(g, &ldx, &ldy);
+              CadBlockXformDelta(r.xf, ldx, ldy, &wdx, &wdy);
+              ImVec2 gp2{};
+              wts(gx + wdx, gy + wdy, &gp2, gz);
+              const CadBlockDynGripShape sh = CadBlockDynGripShapeOf(g);
+              const ImU32 fill = (sh == CadBlockDynGripShape::Square) ? kGripFillE : IM_COL32(0, 220, 230, 255);
+              const ImU32 bord = (sh == CadBlockDynGripShape::Square) ? kGripBorderE : IM_COL32(0, 140, 160, 255);
+              DrawCadGripMarker(dlG, gp, gripHalf, sh, gp2.x - gp.x, gp2.y - gp.y, fill, bord);
+            }
+          } else
+            drawGrip(r.xf.x, r.xf.y, r.xf.z);
         }
       } else if (sel.type == SelectedEntity::Type::Table) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadTables.size()) {
@@ -16265,6 +17404,7 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
     case T::Polyline:   return (size_t)e.index < cmd.userPolylineAttrs.size()   ? &cmd.userPolylineAttrs[(size_t)e.index]   : nullptr;
     case T::Annotation: return (size_t)e.index < cmd.cadAnnotationAttrs.size()  ? &cmd.cadAnnotationAttrs[(size_t)e.index]  : nullptr;
     case T::Table:      return (size_t)e.index < cmd.cadTableAttrs.size()       ? &cmd.cadTableAttrs[(size_t)e.index]       : nullptr;
+    case T::BlockRef:   return (size_t)e.index < cmd.cadBlockRefAttrs.size()    ? &cmd.cadBlockRefAttrs[(size_t)e.index]    : nullptr;
     default:            return nullptr;
     }
   };
@@ -16293,6 +17433,10 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
       break;
     }
     case T::Table:
+      if (cmd.qsObjectType != OT::All)
+        return false;
+      break;
+    case T::BlockRef:
       if (cmd.qsObjectType != OT::All)
         return false;
       break;
@@ -16408,6 +17552,7 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
     for (int i = 0; i < nPoly; ++i)   addCad({SelectedEntity::Type::Polyline, i});
     for (int i = 0; i < (int)cmd.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});
     for (int i = 0; i < (int)cmd.cadTables.size(); ++i)      addCad({SelectedEntity::Type::Table, i});
+    for (int i = 0; i < (int)cmd.cadBlockRefs.size(); ++i)   addCad({SelectedEntity::Type::BlockRef, i});
     for (int i = 0; i < (int)cmd.surveyPoints.size(); ++i)   addSurvey(i);
   } else {
     for (const auto& e : cmd.selection)           addCad(e);
@@ -16715,6 +17860,9 @@ static void FormatSelectedEntityLabel(const AppCommandState& cmd, const Selected
   case T::Table:
     std::snprintf(buf, bufSize, "Table %d", e.index + 1);
     break;
+  case T::BlockRef:
+    std::snprintf(buf, bufSize, "Block %d", e.index + 1);
+    break;
   case T::PdfUnderlay:
     std::snprintf(buf, bufSize, "PDF Underlay %d", e.index + 1);
     break;
@@ -16900,9 +18048,10 @@ static void DrawTextStyleSample(ImDrawList* dl, ImVec2 tl, ImVec2 sz, const Text
   const float maxW = std::max(6.f, sz.x - 2.f * pad);
   // Cap the glyph height so a tall preview box doesn't balloon the sample; then shrink to fit the width.
   float capPx = std::min(maxH, 48.f);
-  Shx::Font* sf = CadIsShxFontName(s.fontFamily) ? Shx::Resolve(s.fontFamily) : nullptr;
+  const std::string previewFam = TextStyles::EffectiveFontFamily(s.fontFamily);
+  Shx::Font* sf = CadIsShxFontName(previewFam) ? Shx::Resolve(previewFam) : nullptr;
   bool rb = false, ri = false;
-  ImFont* tf = s.fontFamily.empty() ? ImGui::GetFont() : FontReg::Resolve(s.fontFamily, s.bold, s.italic, &rb, &ri);
+  ImFont* tf = FontReg::Resolve(previewFam, s.bold, s.italic, &rb, &ri);
   if (!tf) tf = ImGui::GetFont();
   auto measure = [&](float cp) -> float {
     if (sf && sf->valid()) return Shx::MeasureWidthPx(*sf, sample, cp);
@@ -17002,10 +18151,11 @@ void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* 
   ImGui::SeparatorText("Font");
   ImGui::TextUnformatted("Font Name:");
   ImGui::SetNextItemWidth(230.f);
-  if (ImGui::BeginCombo("##fontname", s.fontFamily.empty() ? "(default)" : s.fontFamily.c_str())) {
+  if (ImGui::BeginCombo("##fontname",
+                        s.fontFamily.empty() ? TextStyles::kDefaultFontFamily : s.fontFamily.c_str())) {
     for (const char* fn : kTextStyleFonts) {
-      const char* label = (fn[0] == '\0') ? "(default)" : fn;
-      if (ImGui::Selectable(label, s.fontFamily == fn)) {
+      const char* label = fn;
+      if (ImGui::Selectable(label, s.fontFamily == fn || (s.fontFamily.empty() && std::strcmp(fn, TextStyles::kDefaultFontFamily) == 0))) {
         s.fontFamily = fn;
         styleChanged = true;
       }
@@ -17842,11 +18992,11 @@ void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log
   const std::filesystem::path dst(cmd.dwgPendingExportPath);
   const bool overwriting = std::filesystem::exists(dst);
 
-  ImGui::TextUnformatted("GoSurvey writes DWG through DXF, so this export drops:");
+  ImGui::TextUnformatted("GoSurvey writes DWG with LibreDWG as AutoCAD 2000 (AC1015). This export drops:");
   ImGui::Spacing();
-  ImGui::BulletText("block definitions and inserts (geometry is written exploded)");
-  ImGui::BulletText("paper-space layouts beyond the first");
-  ImGui::BulletText("elevations, block attributes, multileaders and tables");
+  ImGui::BulletText("hatches, ellipses, meshes, TIN surfaces, and dimensions");
+  ImGui::BulletText("block definitions (inserts are exploded on import; not rebuilt on save)");
+  ImGui::BulletText("paper-space layouts beyond model space");
   ImGui::BulletText("Civil 3D objects, proxies and anything else GoSurvey does not model");
   ImGui::Spacing();
 
@@ -17925,11 +19075,11 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
       }
       std::string path = cmd.activeDocFilePath;
       if (path.empty()) {
-        const std::string def = e.name + ".gs";
-        if (BrowseSaveFileGsUtf8(s_savePath, sizeof(s_savePath), def.c_str()))
+        const std::string def = e.name + ".dwg";
+        if (BrowseSaveFileDwgUtf8(s_savePath, sizeof(s_savePath), def.c_str()))
           path = s_savePath;
       }
-      if (!path.empty() && SaveGoSurveyFile(cmd, path.c_str(), log)) {
+      if (!path.empty() && SaveDrawingDocument(cmd, path.c_str(), log)) {
         cmd.activeDocSavedRevision = cmd.cadGpuRevision;
         cmd.activeDocFilePath      = path;
         if (!isActive) {
