@@ -241,6 +241,10 @@ A change is rejected if it breaks any of these:
    enforces the immutability the exemption rests on, and "editing" such a resource means
    **replacing the pointer**, never writing through it. A `shared_ptr<T>` to mutable data
    is still a blocking finding.
+   *Amended 2026-08-30 (D-2026-08-30-a):* the **Start tab** (`cmd.drawingTabs[0]`, REQ-308) is
+   exempt — it is a UI sentinel that owns **no** mutable document resource (no entry in
+   `documents[]`/`viewportRenderers[]` is used for it), so there is no ownership to make single.
+   Every real drawing tab (index ≥ `FirstDrawingTabIndex()`) still obeys the rule.
    *Raised by TASK-041:* `DrawingGeometrySnapshot` deep-copies every geometry array and
    50 frames are kept, so a 2M-triangle mesh (REQ-063's own ceiling, ~53 MB) would cost
    ~2.6 GB of undo stack — and would be re-copied by every unrelated edit. ADR-026 (c)

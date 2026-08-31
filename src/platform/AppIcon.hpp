@@ -31,6 +31,10 @@ void DestroyAppLogoGpu(AppLogoGpu* io);
 /// or 0 on failure. Intended for small UI icons. Requires a current GL context.
 unsigned int LoadIconTextureRgba(const std::filesystem::path& pngPath, int* outW = nullptr, int* outH = nullptr);
 
+/// Frees a texture created by \ref LoadIconTextureRgba and sets \p tex to 0. Requires a current GL
+/// context. Keeps gl* deletion inside the platform boundary (architecture §11.6).
+void DestroyIconTexture(unsigned int& tex);
+
 /// Directory containing the executable (Windows), or empty if unknown.
 std::filesystem::path AppExecutableDirectory();
 

@@ -27,6 +27,15 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, boo
 /// otherwise browses for a destination (adopting it, so the next save is silent).
 void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log);
 
+/// Append a fresh empty drawing after the Start tab and focus it (File ▸ New, tab-bar "+",
+/// Start screen New). REQ-055 / REQ-308.
+void NewDrawingInTab(AppCommandState& cmd, std::vector<std::string>& log);
+/// Open \p dwgPathUtf8 (or browse when null) into a new focused tab; a path that fails to open is
+/// dropped from the recent list. REQ-055 / REQ-308.
+void OpenDrawingInNewTab(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8);
+/// REQ-308 — drop a drawing from the recent-drawings store (used when a recent tile fails to open).
+void RemoveRecentDrawing(const std::string& absDrawingPath);
+
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
 /// Ribbon under the menu bar: sectioned icon toolbars (Draw, Modify, View, …) plus a fixed-width layer strip; hover for tooltips.
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log);
@@ -58,6 +67,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                          char* cmdBuf, int cmdBufSize, double* panX, double* panY, float* zoom, double* outCursorX,
                          double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
                          CadSnap::Hit* out_snap);
+
+/// REQ-308 — the Start screen shown for drawingTabs[0]: GoSurvey/version, Open/New, the project
+/// website link, the Recent-drawings grid/list, and the sign-in / Welcome column. Drawn in place of
+/// the GL viewport by DrawDrawingViewport when the Start tab is active.
+void DrawStartScreen(AppCommandState& cmd, std::vector<std::string>& log);
+
+/// REQ-308 — record \p absDrawingPath at the front of the recent-drawings store and queue a
+/// thumbnail capture for the active tab. Call after a successful open or save.
+void RecordRecentDrawing(AppCommandState& cmd, const std::string& absDrawingPath);
+
+class ViewportRenderer;
+/// REQ-308 — if a thumbnail capture is pending for \p renderer's tab, grab it now (called from the
+/// main loop right after RenderScene) and attach it to the recent-drawings entry.
+void ServicePendingThumbnail(AppCommandState& cmd, const ViewportRenderer& renderer);
 
 void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 

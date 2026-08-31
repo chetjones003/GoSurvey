@@ -8,10 +8,14 @@
 /// Labels for the REQ-142 Toolspace trees. Header-only so Catch2 can check them without linking UI.
 
 [[nodiscard]] inline std::string ToolspaceActiveDrawingName(const AppCommandState& st) {
-  if (st.activeDrawingIdx >= 0 &&
-      static_cast<size_t>(st.activeDrawingIdx) < st.drawingTabs.size() &&
-      !st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].name.empty()) {
-    return st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].name;
+  // REQ-308: drawingTabs[0] is the Start screen, not a drawing — when it is active the Toolspace
+  // still describes the first real drawing rather than showing "Start".
+  int idx = st.activeDrawingIdx;
+  if (idx < FirstDrawingTabIndex())
+    idx = FirstDrawingTabIndex();
+  if (idx >= 0 && static_cast<size_t>(idx) < st.drawingTabs.size() &&
+      !st.drawingTabs[static_cast<size_t>(idx)].name.empty()) {
+    return st.drawingTabs[static_cast<size_t>(idx)].name;
   }
   return "Drawing 1";
 }

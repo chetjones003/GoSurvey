@@ -4439,6 +4439,80 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-26 — accepted (D-2026-08-26-g), TASK-120; GitHub issue #106, split from #91
   during REQ-121's own review.
 
+### REQ-308 — Start screen tab
+- Purpose: GoSurvey launches straight into a blank "Drawing 1" with no landing surface for
+  reopening recent work, reaching the project website, or seeing sign-in state. Every CAD-class
+  tool has a start page and users expect one. This adds a persistent first tab that serves that
+  role without disturbing the tab/document model or the REQ-091 launch sign-in gate.
+- Priority: should
+- Type: functional
+- Statement: A **"Start" tab** is the first tab in the drawing tab bar (index 0), selected on
+  launch, and **cannot be closed or dragged behind another tab**. It is not a drawing: it owns no
+  document, geometry, layers, or viewport, and is skipped by save-on-switch, dirty-tab
+  enumeration, and the close path. The first real drawing remains **"Drawing 1"** and sits
+  immediately after Start; File > New, the tab bar's "+", and File > Open all create/append
+  drawings after Start and focus them (REQ-055 is unchanged for drawing tabs).
+
+  The Start tab's content is three columns:
+
+  1. **Left** — the title **"GoSurvey <version>"** (the running build's `GOSURVEY_VERSION_FULL`,
+     ADR-029 (a)), an **Open…** button (same action as File > Open) and a **New** button (same as
+     File > New), and a text link reading **"Visit The Website"** (the URL itself is not shown) that
+     opens **https://chetjones003.github.io/GoSurvey** in the system browser. There is **no**
+     "Autodesk Projects" and **no** "Learning & Insights" entry.
+  2. **Middle** — **"Recent"**: a list of recently opened drawings, each with a **thumbnail**, the
+     drawing name, and its last-opened date. It offers a **grid view and a list view**, a **sort
+     control** (at least Last Opened and Name), and a **search box** that filters by name. Clicking
+     an entry opens that drawing in a new focused tab (a missing file logs REQ-201-style and is
+     offered for removal from the list). A drawing's thumbnail is **captured when it is saved or
+     opened**; an entry with no captured thumbnail shows the **default DWG file icon**.
+  3. **Right** — **"Connect"**: when signed in, **"Welcome <name>"** and the account email, exactly
+     as the Settings panel shows today. When **not signed in** (only reachable when the launch gate
+     was skipped for lack of any network — REQ-091 as amended), a short offline notice and a
+     **"Sign In"** button that starts the existing interactive sign-in flow
+     (`cmd.authSignInRequested`). Below that, a **"Help Me Improve This Product"** section with a
+     **"Send Feedback"** button that opens
+     **https://github.com/chetjones003/GoSurvey/issues** in the system browser.
+
+  The recent-drawings list persists across sessions in a new user-scoped store
+  (`gosurvey-recent.json`, D-2026-08-30-b); a missing or corrupt store yields an empty list, never
+  an error. Thumbnails are cached BMPs under the user data directory with a bounded, LRU-evicted
+  size (D-2026-08-30-c).
+
+  **Full-bleed.** While the Start tab is active the docked Properties, Reports and Toolspace panels
+  and the command line are not shown, so the Start screen fills the whole work area. Switching to
+  (or opening) a drawing restores those panels and the command line to their layout positions.
+- Acceptance:
+  - fresh launch: the tab bar reads **"Start"** then **"Drawing 1"**, with Start active and the
+    Start content (not a viewport) shown;
+  - the Start tab has no close button and cannot be closed by any path; with Start + one drawing
+    open, the drawing is still closeable;
+  - File > New / "+" append "Drawing N" **after** Start and focus it; File > Open does likewise;
+  - the left column shows "GoSurvey " followed by the exact `GOSURVEY_VERSION_FULL` string, an
+    Open… and a New button that invoke the same actions as the File menu items, and a "Visit The
+    Website" link (no URL text) that opens `https://chetjones003.github.io/GoSurvey` in the browser;
+  - with the Start tab active, the Properties, Reports and Toolspace panels and the command line are
+    not visible; opening a drawing or switching to a drawing tab brings them all back in place;
+  - no "Autodesk Projects" or "Learning & Insights" text appears anywhere on the tab;
+  - save a drawing, relaunch: it is listed under Recent with a bitmap thumbnail of its last view;
+  - a recent entry whose thumbnail was never captured shows the DWG file icon, not a broken image;
+  - Recent offers a grid view, a list view, a sort control, and a search box that filters the list
+    by typed text;
+  - clicking a recent entry opens that drawing in a new tab which becomes the active tab;
+  - a recent entry pointing at a now-missing file does not crash and reports the miss;
+  - signed in: the right column reads "Welcome <name>" with the account email;
+  - not signed in (simulated): the right column shows the offline notice and a Sign In button that
+    sets `cmd.authSignInRequested`;
+  - a deleted/corrupt `gosurvey-recent.json` results in an empty Recent list and a normal launch.
+- Owner-layer: UI (`CadUi_StartScreen.cpp`, the tab bar's Start-tab special-casing in `CadUi.cpp`,
+  the viewport-vs-start branch in `DrawDrawingViewport`); IO (`RecentDrawings` store, capture hook
+  in the save/open paths); Platform (`ThumbnailCache` FBO readback + BMP encode, `ShellExecuteA`
+  URL open — already used by `auth`)
+- Status: accepted (2026-08-30)
+- Revisions: 2026-08-30 — accepted (D-2026-08-30-a/b/c). Start tab as a non-document sentinel at
+  index 0 (architecture §11.5 amended); new `gosurvey-recent.json` MRU store; thumbnail capture
+  from the drawing `ViewportRenderer` FBO stored as BMP (in-tree writer, no new dependency).
+
 ### REQ-122 — ZOOMEXTENTS frames the drawing safely: margin, aspect, degenerate extents, no invalid camera (GitHub issue #88)
 - Purpose: REQ-120 gave the middle double-click its gesture and reused the existing framing path
   untouched, which left the larger half of issue #88 — everything the framing itself promises —
@@ -5709,6 +5783,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-119 | UI/Commands | **increment 1 done** (TASK-111) + **increment 2 done** (TASK-112) — `CommandLineTests [req119]` (the prompt→variants rule as a pure function: inline, grouped, mixed-case shortcut extraction incl. `No trim`→`N`, unclosed bracket, empty group, and a round-trip so parsing loses no text) + `headless.regression-119-variant-token-accepted` (the mechanism's three prompts) + `headless.regression-119-variant-coverage` (one assertion per marked-up token across CIRCLE/ROTATE/SCALE/TRIM/POLYLINE/FEATURELINE/ELEV, **plus a live refusal assertion for CIRCLE's bare `d`** — a value prefix, not a token, deliberately left unmarked so markup cannot manufacture a dead link) + manual GUI (links render, hover and click in BOTH the floating bar and the classic dock; a wrapping dock prompt keeps its links on the correct line with no horizontal overflow; **no log line is clickable**) | accepted |
 | REQ-120 | UI | **manual GUI only, and that is a real limitation, not a shortcut.** The headless driver models no framebuffer and never calls `ProcessPendingViewportZoom` (which early-returns on `fbW <= 0`), so it cannot reach any zoom behaviour — there is no existing zoom transcript in the corpus for the same reason. Covering this by transcript would mean giving the harness a synthetic viewport, which is harness work this requirement did not take on (recorded as TASK-113 DEBT-1). Verified instead by driving the real window: middle double-click frames the drawing in model space; it works MID-COMMAND with the active LINE's placed point surviving; the typed route still does not zoom mid-command (its text is consumed by the active command as point input — unchanged); paper space frames the sheet; middle-DRAG still pans. Leaves GitHub issue #88 open — covers only #88's Middle Mouse/Architecture sections, not its ZOOMEXTENTS acceptance list | accepted |
 | REQ-307 | UI/Commands | done (GitHub issue #106, D-2026-08-26-g, TASK-120). Closes REQ-121's own stated paper-space scope boundary for the one case that needed it: `StartPaperMoveCopyViewports`/`StartDeleteCommand`'s paper branch, on an empty selection, now sets `paperMoveWaitingSelection`/`paperDeleteWaitingSelection` and opens a real selection step instead of refusing — pick-first (act on an existing selection) is unchanged, above. `PaperIsObjectSelectionStep` (`ViewportPickPolicy.hpp`) is the paper-space counterpart of REQ-121's own predicate, consulted alongside it at every one of REQ-121's three call sites: the pickbox cursor (`CadUi.cpp`'s crosshair draw), the pre-existing (previously unconditional) paper snap glyph, and `CommandInputHint`'s prompt — all three now return REQ-121's own `kSelectObjectsPrompt` for this step, reusing the string rather than declaring a second one. Enter is handled by two free functions, `ProcessPaperMoveWaitingSelectionEnter`/`ProcessPaperDeleteWaitingSelectionEnter` (`CadCommands.cpp`), called from BOTH the raw viewport `ImGui::IsKeyPressed(Enter)` check (mouse-only entry, the same shape EXTEND's own paper phase already needed since paper commands never set `cmd.active` and so are unreachable from `ProcessCommandLineSubmit`'s Kind-keyed dispatch) AND a new branch at the top of `ProcessCommandLineSubmit`'s blank-line handler — the second call site is what gives this a headless transcript path EXTEND's raw-only precedent does not have, and the two call sites are guarded against double-firing on one keypress with `ImGui::GetActiveID() == 0` (the raw check only fires when no ImGui widget, e.g. the command-line box, currently holds keyboard focus). Click/box accumulation reuses `SelectViewport`/`TogglePaperEntitySelection`'s own pre-existing `additive=true` parameter verbatim — no new toggle logic — and a new `closePaperSelBoxMerge` lambda (a union variant of the pre-existing `closePaperSelBox`) merges a closed box into the accumulating selection rather than replacing it, mirroring REQ-305's model-space `SelectionAccumulate` (D-2026-08-25-l). Tests: `ViewportPickPolicyTests [req307]` (the predicate, pure and header-only); `headless.req307-paper-selection-step`, driven through the real `CMD DELETE`/`CMD MOVE`/`CMD COPY` and blank-`CMD` command dispatch (not CLICK/BOX — paper space's ambient click block is screen-space/ImGui-hover driven with no headless equivalent, the same limitation REQ-121's own paper DELETE/JOIN branch already had), proving the old flat refusal is gone and REQ-201's "Nothing selected" refusal holds on repeated blank Enter. The click-toggle/box-merge accumulation itself, the pickbox rendering, and the snap-glyph suppression are GUI-only verification, same category REQ-121 itself already established for its own three rules — this session cannot simulate mouse hover or screen-space picking. 637/637 ctest green | accepted |
+| REQ-308 | UI/IO/Platform | planned (D-2026-08-30-a/b/c, TASK-147). Start tab as a non-document sentinel at drawing-tab index 0 — non-closable, non-reorderable, skipped by save-on-switch / dirty enumeration / close; `FirstDrawingTabIndex()` mediates drawing-tab indexing. `DrawDrawingViewport` branches to `DrawStartScreen` for index 0. New `gosurvey-recent.json` MRU store (`RecentDrawings`, best-effort, corruption = empty). Thumbnails captured from the drawing `ViewportRenderer` FBO on save/open, stored as BMP under the user data dir with LRU eviction (`ThumbnailCache`); missing thumbnail falls back to the DWG icon. GitHub Pages link via `ShellExecuteA` (already used by `auth`). Signed-out branch reuses `cmd.authSignInRequested` | accepted |
 | REQ-121 | UI/Commands/Viewport | done (GitHub issue #91, D-2026-08-26-a + D-2026-08-26-d, TASK-115 + TASK-118). Mechanism: `ViewportIsObjectSelectionStep`, derived from `ViewportClickRouteFor`'s `default:`-less switch, so a command cannot be added and silently omitted — `ViewportPickPolicyTests [req121]` (4 cases: ALIGN's unsnapped corners — red before the fix; every selection step recognised; each exclusion asserted; DELETE/JOIN's route, with ZOOM and STRETCH left on the box route). Review follow-ups closed by TASK-118, re-derived while rebasing onto `beta` after issue #103 landed underneath it: rule (3)'s shared prompt was factually wrong for DELETE/JOIN — fixed by giving them D-2026-08-25-l's accumulate-until-Enter shape, covered by `headless.req121-delete-join-accumulate` (proven red on `beta`: the closing box erased, LINES 3 -> 2). Rule (1)'s reported second seam (the snap-OVERRIDE menu bypassing the gate) had its underlying mechanism replaced by #103 between the original review and this rebase — the "cursor jumps mid-selection" symptom no longer reproduces, because the override's consumption already sits behind the same `!ViewportIsObjectSelectionStep` gate the automatic snap uses; what remained was narrower (the menu could still be *opened*, arming a persistent lock off a selection-step pixel that then silently affected the next ordinary snap), and that is what TASK-118's rebase actually gates. The cursor/OSNAP/prompt rules themselves stay GUI-only — there is no headless equivalent for screen-space picking or for a drawn cursor — and both rounds were verified A/B against a control rather than by absence. Paper space is a STATED scope boundary, not coverage: its modify commands are pick-first, so no selection step exists there (GitHub issue #106 — closed by REQ-307, which gives MOVE/COPY/DELETE a real selection step for the one case that needed it, starting with nothing pre-selected). 634/634 ctest green post-rebase. One `CadSnapTests` case (issue #103, unrelated to this task) carried an em-dash in its Catch2 name that CTest's Windows discovery mangles into a filter matching nothing, reporting a false failure in CI on both this branch and unmodified `beta` (`425afa7`'s own CI run) — fixed here by renaming the test to plain ASCII rather than worked around, since it was blocking CI on every branch built from `beta`, not just this one | accepted |
 | REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
 | REQ-123 | Commands/UI | done (GitHub issue #100, D-2026-08-26-e, TASK-119) — **`headless.req123-viewport-zoom-extents`, the first zoom behaviour ever covered by a transcript.** TASK-113's DEBT-1 blocks the others on `ProcessPendingViewportZoom`'s `fbW <= 0` guard; this case needs no framebuffer (its aspect is the viewport's rect in paper inches) so it is handled ahead of that guard. 43 steps: the framing after ZE with hand-computed scales (13.5870 for an 8x4in viewport, 27.1739 for 4x4in — same drawing, different rect, different answer), each viewport independent of the other's zoom, and a layer frozen in the viewport excluded from the extents then restored when thawed. Proven red on `beta`: `expected centre 50, 10 scale 13.587; got 0, 0 scale 50` — the viewport's framing untouched at its creation defaults. Four new driver verbs (VIEWPORT / VPSELECT / CLAYER / VPFREEZE) and `EXPECT VPFRAME`, all REQ-203 gaps of the LAYOUT/CLIPCOPY shape. GUI pass confirmed the numbers against the live status bar (`VP 1" = 40.4'` vs 40.36 computed), the sheet unmoved, REQ-120's gesture working in a viewport for the first time, and middle-drag pan still confined to it. 632/633 ctest (the one failure is `beta`'s own — an em dash in a `CadSnapTests` TEST_CASE name breaks ctest's name round-trip; unrelated and pre-existing) | accepted |

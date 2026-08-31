@@ -148,6 +148,10 @@ void ResolveStoredColorForViewport(const std::string& colorStorage, float transp
 
 struct AppCommandState;
 
+/// REQ-308 / D-2026-08-30-a: index of the first real drawing tab. drawingTabs[0] is the Start
+/// screen sentinel, so drawing-tab iteration and "select the first drawing" both start here.
+inline constexpr int FirstDrawingTabIndex() { return 1; }
+
 const CadLayerRow* FindDrawingLayerRowCi(const AppCommandState& st, const std::string& layerName);
 
 float EffectiveEntityTransparency01(const EntityAttributes& e, const CadLayerRow* layer);
@@ -3011,8 +3015,11 @@ struct AppCommandState {
     std::string  name;
     uint32_t     uid = 0;  ///< Stable per-tab ID used in ImGui label suffix to prevent ID collisions.
   };
-  std::vector<DrawingTab>     drawingTabs{{"Drawing 1", 1u}};
-  int      activeDrawingIdx   = 0;
+  /// REQ-308 / D-2026-08-30-a: drawingTabs[0] is the **Start screen** — a non-closable, pinned-first
+  /// sentinel that backs no document. documents[0]/viewportRenderers[0] exist for index alignment
+  /// but are never meaningful. Real drawings start at FirstDrawingTabIndex().
+  std::vector<DrawingTab>     drawingTabs{{"Start", 0u}, {"Drawing 1", 1u}};
+  int      activeDrawingIdx   = 0;   ///< 0 = Start screen on launch.
   int      nextDrawingNumber  = 2;    ///< Auto-incremented for "Drawing N" naming.
   uint32_t nextTabUid         = 2u;   ///< Monotonically increasing; each new tab gets a unique uid.
   bool pendingDrawingTabSwitch = false; ///< Set for one frame after a programmatic tab change.
@@ -3021,9 +3028,14 @@ struct AppCommandState {
   bool propertiesPanelActive  = false; ///< True when Properties is the selected tab in its dock node.
   int  prevDrawingIdx         = 0;     ///< Authoritative "last active" idx; used by main.cpp for switch detection.
   int  pendingTabErase        = -1;    ///< If >= 0, main.cpp must shut down + erase viewportRenderers[this index].
+  /// REQ-308: after a drawing is opened or saved, the main loop renders it once then captures a
+  /// thumbnail for the Recent list. Set together; serviced and cleared after RenderScene when
+  /// pendingThumbnailTabIdx == activeDrawingIdx.
+  std::string pendingThumbnailPath;
+  int         pendingThumbnailTabIdx = -1;
   /// Per-drawing snapshots — one entry per open tab.  Active tab's live data lives in the fields
   /// above; this vector is read/written by SaveDocumentToSnapshot / RestoreDocumentFromSnapshot.
-  std::vector<DrawingDocument> documents{1};
+  std::vector<DrawingDocument> documents{2};  ///< [0] pairs with the Start sentinel tab (unused); see drawingTabs.
 
   // --- Active-document dirty/path tracking (mirrors DrawingDocument fields for the live tab) ---
   uint32_t    activeDocSavedRevision = 0;   ///< cadGpuRevision when the active doc was last saved.

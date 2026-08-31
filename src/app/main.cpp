@@ -315,11 +315,20 @@ int main()
 #else
   RunStartupSplash(window, 5.0);
 #endif
+  // The splash ran in a small (~440x320) window. Maximizing it for the main stage leaves the stale
+  // splash front buffer stretched fullscreen for the frames it takes DWM to catch up — the "glitchy
+  // maximized splash". Fix: hide the window across the maximize and the entire pre-loop setup, and
+  // only reveal it once the first REAL UI frame has been rendered and swapped (see mainWindowShown
+  // below). A hidden window composites nothing, so there is no stale content to stretch — the user
+  // sees the splash, then the finished app, with nothing in between.
+  glfwHideWindow(window);
   GlfwApplyMainStageWindowChrome(window);
-  // glfwMaximizeWindow (inside the call above) posts an async resize on Windows; pump events so
-  // the window's real (maximized) size has landed before the first docked-layout frame reads it.
+  glfwHideWindow(window);  // GlfwApplyMainStageWindowChrome may transiently show it while maximizing
+  // glfwMaximizeWindow posts an async resize on Windows; pump events so the window's real size has
+  // landed before the first docked-layout frame reads it.
   glfwPollEvents();
   glfwPollEvents();
+  bool mainWindowShown = false;
 
   // REQ-077: the update check. Only the persisted settings live in AppCommandState; the worker
   // state is owned here, so no drawing state is ever touched from a background thread.
@@ -399,15 +408,30 @@ int main()
         // u8string, not string: the tab label is drawn by ImGui, which reads UTF-8, and this path
         // may contain characters the process ANSI codepage cannot spell.
         const std::string tabName = argPath.stem().u8string();
-        if (!tabName.empty() && cmd.activeDrawingIdx >= 0 &&
-            cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
-          cmd.drawingTabs[cmd.activeDrawingIdx].name = tabName;
+        // REQ-308: the loaded drawing is the first real drawing tab, not the Start sentinel (0).
+        if (!tabName.empty())
+          cmd.drawingTabs[FirstDrawingTabIndex()].name = tabName;
       }
     }
   }
   if (!openedFromCommandLine)
     TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
   cmd.activeDocSavedRevision = cmd.cadGpuRevision; // loaded drawing/template counts as "clean"
+  // REQ-308: the template / command-line drawing was just loaded into the live cmd fields while the
+  // Start tab (index 0) is active. Persist it into its own tab's slot so switching to it restores
+  // the drawing rather than an empty document. A double-clicked drawing opens straight onto that
+  // tab; a normal launch lands on the Start screen.
+  {
+    const int drawIdx = FirstDrawingTabIndex();
+    SaveDocumentToSnapshot(cmd, drawIdx);
+    cmd.documents[drawIdx].savedRevision = cmd.cadGpuRevision;
+    if (openedFromCommandLine) {
+      cmd.activeDrawingIdx        = drawIdx;
+      cmd.prevDrawingIdx          = drawIdx;
+      cmd.pendingDrawingTabSwitch = true;
+      RecordRecentDrawing(cmd, cmd.activeDocFilePath);
+    }
+  }
   // Re-apply user preferences so they override any template defaults (crosshair, snap, survey, etc.).
   LoadUserStartupPrefSettings(cmd);
   // Re-apply theme now that displayColorThemeIdx is known from saved prefs.
@@ -626,7 +650,7 @@ int main()
     {
       const ImGuiIO &ioSave = ImGui::GetIO();
       if (ioSave.KeyCtrl && !ioSave.KeyShift && !ioSave.KeyAlt &&
-          ImGui::IsKeyPressed(ImGuiKey_S, false))
+          ImGui::IsKeyPressed(ImGuiKey_S, false) && cmd.activeDrawingIdx != 0)  // REQ-308: not on Start
         SaveActiveDocument(cmd, cmdLog);
     }
 
@@ -809,8 +833,21 @@ int main()
     ImGui::End();
     ImGui::PopStyleVar(3);
 
-    DrawPropertiesPanel(cmd, &cmdLog);
-    DrawToolspaceWindow(cmd, &cmdLog);
+    // REQ-308: the Start tab is a full-bleed landing page — the docked Properties/Reports/Toolspace
+    // panels are not submitted while it is active, so their dock nodes collapse and the Start screen
+    // fills the work area. Switching to a drawing tab submits them again and ImGui re-docks each to
+    // its remembered node.
+    const bool showDrawingPanels = (cmd.activeDrawingIdx != 0);
+    // Leaving the Start tab for a drawing re-submits the side panels; focus Properties (not
+    // whichever tab ImGui last had selected in that dock node, e.g. Reports).
+    static bool prevShowDrawingPanels = false;
+    if (showDrawingPanels && !prevShowDrawingPanels)
+      cmd.pendingPropertiesFocus = true;
+    prevShowDrawingPanels = showDrawingPanels;
+    if (showDrawingPanels) {
+      DrawPropertiesPanel(cmd, &cmdLog);
+      DrawToolspaceWindow(cmd, &cmdLog);
+    }
 
     // Keep documents vector in sync with the tab list.
     while (cmd.documents.size() < cmd.drawingTabs.size())
@@ -854,7 +891,11 @@ int main()
       else
       {
         SaveDocumentToSnapshot(cmd, cmd.prevDrawingIdx);
-        RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
+        // REQ-308: the Start tab (index 0) backs no document — leave the live cmd fields holding
+        // the drawing the user just left, so switching back to it needs no reload. Switching FROM
+        // Start to a drawing restores that drawing normally.
+        if (cmd.activeDrawingIdx != 0)
+          RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
         cmd.prevDrawingIdx = cmd.activeDrawingIdx;
       }
     }
@@ -879,7 +920,8 @@ int main()
           CadDimLinearApplyHVHotkey(cmd, true, cmdLog);
       }
     }
-    DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd);
+    if (showDrawingPanels)  // REQ-308: no command line on the Start tab
+      DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd);
     // Z was hard-coded 0 while the readout claimed to show a coordinate — it now reports the
     // cursor's real elevation (the work plane, or the snapped point's own Z). Absolute, never
     // rebased: the document origin is X/Y-only (ADR-025 D2).
@@ -923,7 +965,8 @@ int main()
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);
-    DrawSurveyReportsPanel(cmd);
+    if (showDrawingPanels)  // REQ-308: hidden on the Start tab, same as Properties/Toolspace above
+      DrawSurveyReportsPanel(cmd);
     DrawTraverseEditorPanel(cmd, cmdLog);
     // After all panels have called Begin() their DockNode is set, so SetWindowFocus
     // can correctly update the dock node's SelectedTabId for the next frame.
@@ -1172,12 +1215,17 @@ int main()
       }
     }
 
+    // REQ-308: the Start tab owns no drawing — nothing to render into its (phantom) FBO, and the
+    // start screen is drawn by DrawDrawingViewport as ImGui. Skip the scene pass entirely.
+    const bool startTab = (cmd.activeDrawingIdx == 0);
+
     static const std::vector<float> kEmptyVerts;
     const std::vector<float> &sceneLines = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
     const std::vector<float> &sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyZR;
     const std::vector<float> &sceneRubber = paperSpace ? kEmptyVerts : rubberLines;
     // The camera is derived from the canonical pan/zoom plus the two orientation angles, so it
     // cannot disagree with the view state (REQ-058 / ADR-025 (c)).
+    if (!startTab) {
     // Held in a named local because RenderScene takes a pointer to it and the call outlives any
     // temporary: the grid frame must still be alive when the renderer reads it.
     const ucs::Ucs ucsGridFrame = CadActiveUcsStorage(cmd);
@@ -1216,6 +1264,11 @@ int main()
                                // 2D sheet grid and is deliberately excluded.
                                paperSpace ? nullptr : &ucsGridFrame);
 
+    // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
+    // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
+    ServicePendingThumbnail(cmd, activeRenderer);
+    }
+
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.
     DrawFloatingWindowChrome();
@@ -1230,6 +1283,14 @@ int main()
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
+
+    // Reveal the main window only after its first real frame is on screen (see the hide in the
+    // startup sequence) — this is what makes the splash -> app hand-off show no stretched splash.
+    if (!mainWindowShown) {
+      glfwShowWindow(window);
+      glfwFocusWindow(window);
+      mainWindowShown = true;
+    }
 #ifdef GOSURVEY_DEVELOPER_SHELL
     DevShell_PostSwap(devEngine);
 #endif
