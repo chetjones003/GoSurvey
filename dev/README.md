@@ -24,6 +24,7 @@ with running the Windows tool directly, the Windows tool wins — fix the wrappe
 | `./dev/help` | no | List these commands |
 | `./dev/status` | no — native `git` | Branch, upstream delta, working tree, last commit, build-tree state |
 | `./dev/build [args]` | yes — `cmd.exe` → `build.bat` | Canonical release build. Args are forwarded to `cmake --build build` (e.g. `--target GoSurveyTests`, `--clean-first`, `-- -v`) |
+| `./dev/run [target] [args]` | yes — `cmd.exe` → `run.bat` | Launches the built `GoSurvey.exe`. `target` is `release` / `debug` (default: whichever is present, newer one if both). Does not build. Starts a GUI process — no window from a headless shell |
 | `./dev/clean [--all]` | no | `rm -rf build/`. `--all` also removes `build-debug/ build-release/ out/`. `build.bat` re-configures on the next build |
 | `./dev/test [args]` | yes — `build.bat` + `ctest` | Builds the test targets, then `ctest --test-dir build --output-on-failure`. Args forwarded to `ctest` (e.g. `-R headless`, `--rerun-failed`). Non-zero exit if the build **or** any test fails |
 | `./dev/gh <args>` | yes — Windows `gh.exe` | Pass-through to the user's existing Windows GitHub CLI. Args, stdout, stderr and exit code preserved. Auth comes from the Windows `gh` |

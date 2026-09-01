@@ -11,6 +11,7 @@ and GitHub tooling. They do not replace any of it.
 
 Build & test  (bridge into Windows: cmd.exe -> build.bat -> CMake/MSVC/Ninja)
   ./dev/build [cmake-build args]   Canonical release build (build.bat)
+  ./dev/run   [release|debug]      Launch the built GoSurvey.exe (run.bat; does not build)
   ./dev/clean [--all]              Delete build tree(s); build.bat re-configures
   ./dev/test  [ctest args]         Build test targets, then ctest --output-on-failure
 

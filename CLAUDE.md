@@ -54,6 +54,7 @@ Claude may run under WSL/Linux/Git Bash. Use `./dev/` for Windows tooling:
 | Task            | Command           |
 | --------------- | ----------------- |
 | Build           | `./dev/build`     |
+| Run             | `./dev/run`       |
 | Test            | `./dev/test`      |
 | Clean           | `./dev/clean`     |
 | Status          | `./dev/status`    |
