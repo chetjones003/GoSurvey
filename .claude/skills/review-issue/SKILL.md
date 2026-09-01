@@ -1,26 +1,26 @@
 ---
 
 name: github-issue-review
-description: Rigorously review a GitHub issue and its associated PR(s). Treat the issue as the specification and independently verify correctness, completeness, tests, bugs, and regressions. Use when reviewing an issue/PR or determining whether an issue is ready to close.
---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+description: Rigorously review a GitHub issue and its associated PR(s). Treat the issue as the specification and independently verify that the implementation is correct, complete, tested, and free of significant bugs or regressions. Use when reviewing an issue/PR, validating an implementation, or determining whether an issue is ready to close.
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # GitHub Issue & PR Review
 
-Act as a skeptical senior engineer performing a pre-merge verification.
+Act as a skeptical senior engineer performing a **pre-merge verification**.
 
-**The issue is the specification. The PR is the implementation.**
+The GitHub **issue is the specification**. The PR is the implementation.
 
-Determine:
+Your job is to determine:
 
 > Does the implementation correctly and completely solve the issue without introducing bugs or regressions?
 
-Do not trust PR descriptions, commit messages, author claims, or passing tests without independently verifying them. Do not invent requirements. Prefer executable verification and concrete evidence.
+Do not optimize for making the PR look good. Do not invent requirements. Prefer executable verification and concrete evidence over assumptions.
 
 ---
 
-## 1. Repository Context
+## 1. Establish Repository Context
 
-Start by inspecting:
+Inspect the repository before reviewing:
 
 ```bash
 git status
@@ -28,16 +28,17 @@ git branch --show-current
 git remote -v
 ```
 
-Determine the project's:
+Identify:
 
-* Language(s)
+* Project language(s)
 * Build system
 * Test framework
 * Repository structure
-* Architecture relevant to the issue
+* Relevant architecture
 * Normal build/test commands
+* Project conventions
 
-Read applicable project instructions, especially:
+Read applicable instructions such as:
 
 ```text
 CLAUDE.md
@@ -46,7 +47,7 @@ CONTRIBUTING.md
 README.md
 ```
 
-Follow those instructions throughout the review.
+Follow `CLAUDE.md` and other project instructions.
 
 ---
 
@@ -61,20 +62,25 @@ gh issue view <issue-number> --comments
 
 Treat the issue as the source of truth.
 
-Extract and normalize:
+Extract:
 
-* Requirements
+* Explicit requirements
 * Acceptance criteria
 * Expected behavior
 * Constraints
 * Examples
 * Edge cases
-* UI/API requirements
-* Performance/compatibility requirements
-* Documentation/testing requirements
+* UI requirements
+* API requirements
+* Performance requirements
+* Compatibility requirements
+* Documentation requirements
+* Testing requirements
 * Referenced documentation
 
-Convert them into an explicit checklist:
+Normalize the issue into an explicit checklist.
+
+Example:
 
 ```text
 AC-1: ...
@@ -82,22 +88,26 @@ AC-2: ...
 AC-3: ...
 ```
 
-Include clearly implied requirements, but do not invent requirements.
+Also identify **implicit requirements** when they are clearly required by the issue.
 
-If the issue contains contradictions, identify them explicitly.
+Do not lose requirements simply because they are buried in prose.
+
+If the issue contains contradictory requirements, explicitly identify the contradiction instead of silently choosing an interpretation.
 
 ---
 
-## 3. Find Associated PRs
+## 3. Find All Associated PRs
 
-Search for all PRs related to the issue:
+Search for every PR related to the issue.
+
+Use:
 
 ```bash
 gh pr list --state all
 gh pr list --search "<issue-number>"
 ```
 
-Check likely PRs with:
+Inspect likely candidates:
 
 ```bash
 gh pr view <pr-number>
@@ -109,15 +119,17 @@ Look for:
 * `Closes #123`
 * `Resolves #123`
 * `Refs #123`
-* Issue number in title, branch, or commits
+* Issue number in title
+* Issue number in branch
+* Issue number in commits
 
 Do not assume the first matching PR is the only relevant PR.
 
-For multiple PRs, review each individually and then verify their combined state.
+If multiple PRs contribute to the issue, review them individually and collectively.
 
 ---
 
-## 4. Inspect Each PR
+## 4. Understand Each PR
 
 For every relevant PR:
 
@@ -129,21 +141,31 @@ gh pr view <pr-number> --json commits
 
 Determine:
 
-* Changed files
-* Added/removed/modified behavior
-* Tests added/changed
-* Important assumptions
+* Files changed
+* Functionality added/removed/modified
+* Tests added/modified
+* Important implementation assumptions
 * Dependencies on other PRs
 
-Read relevant files and surrounding code. Do not limit the review to the diff.
+Do not rely on PR descriptions or commit messages as proof that something works.
 
-Trace affected:
+---
+
+## 5. Inspect the Actual Implementation
+
+Read relevant changed files and surrounding code.
+
+Do not restrict the review to the diff.
+
+Trace important behavior through:
 
 * Callers
-* State/data structures
+* State management
+* Data structures
 * Interfaces
 * Event handling
-* Parsing/serialization
+* Parsing
+* Serialization
 * Rendering
 * Error handling
 * Configuration
@@ -158,44 +180,44 @@ rg "ClassName"
 rg "CommandName"
 ```
 
-For every requirement, determine:
+For each requirement determine:
 
 1. Where is it implemented?
 2. What code path executes it?
 3. What inputs are accepted?
-4. What result is produced?
+4. What outputs/results are produced?
 5. What happens with invalid input?
 6. What happens at boundaries?
 7. What happens with missing state?
 8. What happens when repeated?
-9. Does it integrate correctly with existing behavior?
+9. Does it integrate correctly with existing functionality?
 
 ---
 
-## 5. Acceptance Criteria Verification
+# 6. Verify Every Acceptance Criterion
 
 Every acceptance criterion must receive exactly one status:
 
 * **PASS** — Correctly implemented and verified.
-* **PARTIAL** — Incomplete or incorrect in some cases.
-* **FAIL** — Not satisfied.
-* **NOT VERIFIABLE** — Cannot reasonably establish correctness.
+* **PARTIAL** — Some required behavior works, but the requirement is incomplete.
+* **FAIL** — Requirement is not satisfied.
+* **NOT VERIFIABLE** — Insufficient evidence remains after reasonable investigation.
 
-Use `NOT VERIFIABLE` sparingly.
+Prefer PASS/PARTIAL/FAIL. Use NOT VERIFIABLE sparingly.
 
-Produce:
+Create an explicit matrix:
 
-| ID   | Requirement | Status  | Evidence    | Problem |
-| ---- | ----------- | ------- | ----------- | ------- |
-| AC-1 | ...         | PASS    | `file:line` | None    |
-| AC-2 | ...         | PARTIAL | `file:line` | ...     |
-| AC-3 | ...         | FAIL    | `file:line` | ...     |
+| ID   | Requirement | Status  | Evidence    | Problems |
+| ---- | ----------- | ------- | ----------- | -------- |
+| AC-1 | ...         | PASS    | `file:line` | None     |
+| AC-2 | ...         | PARTIAL | `file:line` | ...      |
+| AC-3 | ...         | FAIL    | `file:line` | ...      |
 
-Never combine multiple criteria into one assessment.
+Never combine multiple acceptance criteria into one vague assessment.
 
 ---
 
-## 6. Hunt for Bugs
+# 7. Hunt for Bugs
 
 Actively try to break the implementation.
 
@@ -203,60 +225,79 @@ Check:
 
 ### Logic
 
-* Incorrect conditions/calculations
+* Incorrect conditions
+* Incorrect calculations
 * Off-by-one errors
 * Wrong units
+* Incorrect coordinate systems
 * Incorrect defaults
 * Invalid state transitions
-* Incorrect coordinate systems
 
 ### Boundaries
 
+Test or inspect:
+
 * Zero
 * One
-* Minimum/maximum values
+* Minimum values
+* Maximum values
 * Negative values
 * Empty input
 * Very large input
 * Duplicate input
-* Missing/null/nil input
+* Missing input
+* Null/nil values
 * Invalid input
 
-### Error Handling
+### Error handling
 
-* Errors detected and propagated
-* No silently ignored errors
-* Useful user-facing errors
-* Failed operations leave state intact
-* Invalid operations do not corrupt existing data
+Verify:
 
-### State/Lifecycle
+* Errors are detected
+* Errors are propagated
+* Errors are not silently ignored
+* User-facing errors are understandable
+* Failed operations do not corrupt state
+* Invalid operations do not modify existing data
 
-* Initialization/reset
+### State/lifecycle
+
+Check:
+
+* Initialization
+* Reset
 * Repeated execution
 * Cancellation
 * Undo/redo
 * Selection state
 * Cleanup
-* Persistence
+* Persistent state
 
-### Concurrency/Resources
+### Concurrency
 
-Where applicable inspect:
+Where applicable:
 
 * Race conditions
 * Shared mutable state
-* Locking/deadlocks
+* Locking
+* Deadlocks
 * Thread/goroutine lifecycle
 * Async ordering
-* Resource leaks
+
+### Resource safety
+
+Check for:
+
+* Leaks
 * Invalid references
 * Use-after-free
 * Double cleanup
-* Unclosed resources
 * Unbounded allocations
+* Unclosed resources
 
-### API/Interface
+### API/interface
+
+Check:
 
 * Contracts
 * Validation
@@ -265,13 +306,13 @@ Where applicable inspect:
 * Backward compatibility
 * Existing callers
 
-### UI/Application
+### User-facing behavior
 
-Verify:
+For application/UI changes verify:
 
 * Feature is accessible
 * Commands are registered
-* Controls are connected
+* UI controls are connected
 * Input works
 * Feedback is provided
 * State updates correctly
@@ -279,52 +320,57 @@ Verify:
 
 ---
 
-## 7. CAD / GoSurvey Checks
+# 8. CAD / GoSurvey Verification
 
-For CAD functionality, explicitly verify:
+For CAD functionality, explicitly check:
 
 ### Geometry
 
 * Coordinates
 * Transformations
-* Rotation/translation/scaling
-* Angles/distances
+* Rotation
+* Translation
+* Scaling
+* Angles
+* Distances
 * Intersections
 * Tolerances
 * Floating-point behavior
 
-### Coordinate Systems
+### Coordinate systems
 
-Check transformations between:
+Verify transformations between:
 
 * World
 * Local
 * Screen
 * Model
 * Paper space
-* Viewport
+* Viewport coordinates
 
-Explicitly inspect degrees/radians conversions.
+Never assume degrees and radians are interchangeable. Inspect conversions.
 
 ### Arrays
 
-For rectangular/polar/path arrays verify:
+For rectangular/polar/path arrays check:
 
 * Item count
 * Rows/columns
-* Original preservation
+* Original object preservation
 * Spacing
 * Rotation
 * Base point
-* Direction/orientation
+* Direction
+* Orientation
 * Angular spacing
-* Full/partial circle behavior
-* Single/zero-item behavior
-* Invalid input
+* Full-circle behavior
+* Partial-circle behavior
+* Single-item behavior
+* Zero/invalid input
 * Duplicate geometry
 * Floating-point accumulation
 
-### Zoom/Camera
+### Zoom/camera
 
 Check:
 
@@ -333,67 +379,73 @@ Check:
 * Very large/small coordinates
 * Entire drawing visibility
 * Camera state
-* Mouse/navigation behavior
+* Mouse interaction
+* Existing navigation behavior
 
 ### Commands
 
 Verify:
 
-* Registration/invocation
-* Aliases where required
+* Registration
+* Invocation
+* Aliases when required
 * Argument parsing
 * Invalid arguments
 * State reset
-* Undo/redo
+* Undo/redo integration
 * No invalid leftover command state
 
 ---
 
-## 8. Regression Analysis
+# 9. Regression Analysis
 
 Inspect callers and dependencies of modified code.
 
-Check whether the PR could:
+Determine whether the PR could:
 
 * Change existing APIs
 * Alter existing command behavior
-* Break existing functionality
-* Break serialization/file compatibility
+* Break old functionality
+* Break serialization
+* Break file compatibility
 * Corrupt existing drawings/data
 * Break UI state
 * Cause performance regressions
 
-Run existing tests, not only new tests.
+Run existing tests, not only newly added tests.
 
 ---
 
-## 9. Test Review
+# 10. Review Tests
 
-Inspect every added or modified test.
+Inspect every test added or modified.
 
-Verify:
+Determine whether the tests actually prove correctness.
+
+Check for:
 
 * Meaningful assertions
-* Boundary coverage
-* Error coverage
+* Boundary cases
+* Error cases
 * Regression coverage
 * Integration coverage
 * End-to-end coverage where appropriate
-* No false-positive tests
+* False-positive tests
+* Tests that merely execute code without checking results
 
 Ask:
 
-> If the implementation were subtly wrong, would this test fail?
+> If this implementation were subtly wrong, would this test fail?
 
 If not, identify the weakness.
 
-Passing tests are evidence, not proof.
+Passing tests are evidence, not proof of completeness.
 
 ---
 
-## 10. Run Verification
+# 11. Run Verification
 
-Determine the project's actual verification commands from its documentation/configuration. Do not invent commands.
+Determine the project's actual verification commands from its documentation/configuration.
 
 Examples:
 
@@ -403,12 +455,23 @@ go vet ./...
 go build ./...
 ```
 
+or:
+
 ```bash
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Record every command and result.
+or the project's equivalent.
+
+Do not invent commands that do not apply to the repository.
+
+Record:
+
+* Command
+* PASS/FAIL
+* Relevant output
+* Whether failure is PR-related
 
 Distinguish:
 
@@ -419,9 +482,9 @@ Distinguish:
 
 ---
 
-## 11. Completeness Check
+# 12. Check for Missing Work
 
-Perform a second pass after acceptance-criteria verification.
+Perform a second completeness pass after acceptance criteria verification.
 
 Look for:
 
@@ -433,12 +496,13 @@ Look for:
 * Missing documentation
 * Missing error handling
 * TODOs/placeholders
-* Dead/commented-out code
-* Unreachable paths
+* Dead code
+* Commented-out implementation
+* Unreachable code
 * Disabled feature flags
 * Unimplemented paths
 
-Useful search:
+Search where useful:
 
 ```bash
 rg "TODO|FIXME|XXX|HACK|not implemented|NotImplemented"
@@ -446,23 +510,36 @@ rg "TODO|FIXME|XXX|HACK|not implemented|NotImplemented"
 
 Use judgment; not every match is a defect.
 
-Also review PR scope for unnecessary refactoring, generated files, debugging code, unrelated changes, or scope creep.
+---
+
+# 13. Review PR Scope
+
+Identify:
+
+* Unrelated changes
+* Excessive refactoring
+* Unnecessary generated files
+* Debugging code
+* Scope creep
+* Changes that increase regression risk
+
+Do not reject harmless cleanup merely because it is unrelated.
 
 ---
 
-## 12. Severity
+# Severity
 
-Classify findings accurately:
+Classify findings accurately.
 
-**CRITICAL**
+### CRITICAL
 
 * Data corruption
 * Severe security issue
 * Normal-use crash
 * Fundamentally unusable feature
-* Serious irreversible consequence
+* Serious irreversible consequences
 
-**HIGH**
+### HIGH
 
 * Important acceptance criterion violated
 * Incorrect results
@@ -470,48 +547,60 @@ Classify findings accurately:
 * Frequent crashes
 * Major functionality unusable
 
-**MEDIUM**
+### MEDIUM
 
 * Meaningful edge-case defect
 * Partial requirement
 * Significant regression risk
-* Incorrect behavior in certain conditions
+* Incorrect behavior under certain conditions
 
-**LOW**
+### LOW
 
 * Limited-impact defect
 * Uncommon edge case
 * Minor usability problem
 
-**INFO**
+### INFO
 
-* Non-blocking observation or suggestion
+* Observation
+* Suggestion
+* Non-blocking improvement
 
 Do not inflate severity.
 
-For each substantive finding provide:
+---
+
+# Finding Requirements
+
+Every substantive finding should include:
 
 ```text
 ### [SEVERITY] Short description
 
 **Location:** `path/to/file.ext:123`
 
-**Problem:** What is wrong.
+**Problem:**
+What is wrong.
 
-**Why it matters:** Consequence.
+**Why it matters:**
+What consequence it causes.
 
-**Expected behavior:** What should happen.
+**Expected behavior:**
+What should happen.
 
-**Recommendation:** Reasonable fix direction.
+**Recommendation:**
+A reasonable direction for fixing it.
 ```
 
-Only report style issues when they violate project conventions, materially hurt maintainability, or create realistic bug risk.
+Only report style issues when they violate project conventions, significantly hurt maintainability, or create realistic bug risk.
+
+Do not invent requirements.
 
 ---
 
-## 13. Final Report
+# Final Report
 
-Return exactly:
+Return exactly this structure:
 
 # GitHub Issue Review
 
@@ -522,6 +611,7 @@ Return exactly:
 ## PRs Reviewed
 
 * `#456 — PR title`
+* `#457 — PR title`
 
 ## Overall Verdict
 
@@ -532,7 +622,7 @@ Choose exactly one:
 * **REQUEST CHANGES**
 * **CANNOT VERIFY**
 
-Briefly explain.
+Briefly explain the verdict.
 
 ## Acceptance Criteria
 
@@ -542,11 +632,15 @@ Briefly explain.
 | AC-2 | ...         | PARTIAL | `file:line` |
 | AC-3 | ...         | FAIL    | `file:line` |
 
+Then state:
+
 > **X/Y acceptance criteria pass.**
 
-Explain failed/partial criteria.
+Explain any failed/partial criteria.
 
 ## Findings
+
+Order by severity:
 
 ### CRITICAL
 
@@ -568,7 +662,7 @@ None.
 
 None.
 
-List actual findings using the required finding format.
+Use the required finding format for actual findings.
 
 ## Verification Results
 
@@ -589,11 +683,11 @@ Choose:
 * **INSUFFICIENT**
 * **NONE**
 
-Explain.
+Explain why.
 
 ## Completeness Assessment
 
-Answer:
+Explicitly answer:
 
 * Are all acceptance criteria implemented?
 * Are all issue requirements addressed?
@@ -611,17 +705,19 @@ Choose:
 * **MEDIUM**
 * **HIGH**
 
-Explain.
+Explain why.
 
 ## Final Recommendation
 
-End with a clear plain English (like the user knows nothing about programming) recommendation. Use analogies and examples if needed.
+End with a clear recommendation.
 
 ---
 
-## Verdict Rules
+# Verdict Rules
 
-**APPROVE** only if:
+### APPROVE
+
+Only when:
 
 * All acceptance criteria pass
 * No critical/high/medium correctness issues remain
@@ -630,39 +726,49 @@ End with a clear plain English (like the user knows nothing about programming) r
 * No obvious missing functionality exists
 * Regression risk is acceptable
 
-**APPROVE WITH NOTES** if:
+### APPROVE WITH NOTES
+
+When:
 
 * All requirements pass
 * No meaningful correctness defects remain
-* Only low/info findings exist
+* Only low-severity or informational issues exist
 
-**REQUEST CHANGES** if:
+### REQUEST CHANGES
 
-* Any criterion fails
-* An important criterion is partial
+When:
+
+* Any acceptance criterion FAILs
+* An important criterion is PARTIAL
 * A critical/high/medium bug exists
 * Required functionality is missing
 * Relevant tests fail
 * Significant regression risk exists
 
-**CANNOT VERIFY** only if required repository/PR information or verification cannot reasonably be obtained.
+### CANNOT VERIFY
 
-Do not use it merely because a test is difficult to run.
+Only when:
+
+* Repository/PR information cannot reasonably be obtained
+* Implementation cannot be inspected
+* Required verification cannot reasonably be performed
+
+Do not use this merely because a test is difficult to run.
 
 ---
 
-## Multi-PR Issues
+# Multi-PR Issues
 
-When PRs are cumulative:
+When multiple PRs contribute to one issue:
 
 1. Review each PR individually.
-2. Identify dependencies.
+2. Identify dependencies between PRs.
 3. Determine the combined implementation state.
-4. Do not mark functionality missing if another cumulative PR provides it.
+4. Do not call functionality missing if another intentionally cumulative PR provides it.
 5. Identify which PR introduces each defect.
-6. Verify the combined result against the issue.
+6. Verify the final combined state against the issue.
 
-Report:
+Include:
 
 ```text
 PR #123
@@ -677,31 +783,40 @@ Combined Issue Status
 
 ---
 
-## GitHub Review Comments
+# GitHub Review Comments
 
 Only post to GitHub when explicitly requested.
 
 Before posting:
 
-1. Verify current issue and PR numbers.
-2. Re-check current PR state.
-3. Base findings on current code.
-4. Avoid duplicating existing reviews.
-5. Distinguish blocking findings from suggestions.
-6. Place comments on specific lines when possible.
-7. Use the appropriate GitHub CLI/API mechanism.
+1. Verify the current PR number.
+2. Verify the issue number.
+3. Re-check the current PR state.
+4. Ensure findings are based on current code.
+5. Avoid duplicating an existing review.
+6. Distinguish blocking findings from suggestions.
+7. Place findings on specific lines when possible.
 
----
+## Use the GitHub CLI/API appropriate to the repository.
 
-# Review Mindset
+## Review Mindset
 
-Be skeptical but fair.
+Be skeptical, but fair.
 
-Do not search for problems merely to find problems. Do not trust claims until independently verified.
+Do not try to find problems merely for the sake of finding them.
 
-Prefer:
+Do not trust:
 
-**issue requirements → code inspection → executable verification → evidence → verdict**
+* PR descriptions
+* Commit messages
+* Author claims
+* Passing tests
+
+until independently verified.
+
+Do not assume something is implemented because the code looks reasonable.
+
+Trace behavior and verify it.
 
 The goal is not:
 
@@ -711,5 +826,7 @@ The goal is:
 
 > **"Does this implementation correctly and completely solve the issue?"**
 
-If yes, say so. If no, identify exactly why.
+If yes, say so.
+
+If no, identify exactly why.
 
