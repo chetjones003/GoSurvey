@@ -243,6 +243,10 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   b  ("objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   b  ("objectSnapSurface",             &st.objectSnapSurface);
   b  ("objectSnapSolid",               &st.objectSnapSolid);
+  // ISOLINES (REQ-313 as amended). Range-checked on read for the same reason the visual style below
+  // is: a bad value should fall back to the default, not strip every curved solid to its edges.
+  if (s.contains("viewportSolidIsolines") && s["viewportSolidIsolines"].is_number_integer())
+    st.viewportSolidIsolines = std::clamp(s["viewportSolidIsolines"].get<int>(), 0, kSolidMaxIsolines);
   num("objectSnapAperturePx",      &st.objectSnapAperturePx,  4.f, 64.f);
   num("objectSnapGlyphHalfPx",     &st.objectSnapGlyphHalfPx, 3.f, 48.f);
   num("gripSizePx",                &st.gripSizePx,            2.f, 20.f);
@@ -456,6 +460,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   s["objectSnapSurface"]              = st.objectSnapSurface;
   s["objectSnapSolid"]                = st.objectSnapSolid;
+  s["viewportSolidIsolines"]          = st.viewportSolidIsolines;
   s["objectSnapAperturePx"]       = st.objectSnapAperturePx;
   s["objectSnapGlyphHalfPx"]      = st.objectSnapGlyphHalfPx;
   s["gripSizePx"]                 = st.gripSizePx;

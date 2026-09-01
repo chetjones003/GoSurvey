@@ -48,6 +48,9 @@ struct CadSolidTessellation {
   /// The chord tolerance these triangles were generated at. Part of the staleness key, so changing
   /// quality regenerates and changing nothing else does not.
   double chordTolerance = 0.0;
+  /// The isoline count the wireframe was generated at — also part of the staleness key, for the
+  /// same reason: turning ISOLINES up has to redraw the wireframe and nothing else.
+  int isolineCount = -1;
 
   /// Shaded faces: `GL_TRIANGLES`, nine floats per triangle, storage coordinates. Expanded rather
   /// than indexed — a primitive's tessellation is thousands of triangles, not millions, so the
@@ -116,3 +119,11 @@ struct CadSolidDisplayGeometry {
 /// departure from the true surface is smaller than the accuracy the drawing claims anywhere else,
 /// so a finer setting would be drawing detail the rest of the program does not promise.
 inline constexpr double kSolidChordToleranceFt = 0.01;
+
+/// Default number of isolines drawn around a curved face, per full turn (AutoCAD names this setting
+/// ISOLINES and defaults it to 4). Four is enough for a cylinder to read as round and few enough
+/// that a drawing full of solids stays legible.
+inline constexpr int kSolidDefaultIsolines = 4;
+/// Ceiling, so a hand-edited file or a mistyped command cannot ask for a wireframe dense enough to
+/// cost the frame budget (REQ-100). AutoCAD caps ISOLINES at 2047; this is well past useful.
+inline constexpr int kSolidMaxIsolines = 256;

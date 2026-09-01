@@ -2068,6 +2068,14 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // Triangles in the whole solid tessellation cache. #120 asks that the render mesh not be
       // regenerated every frame; this is what lets a transcript assert the cache HAS content and,
       // paired with SOLIDTESSGEN below, that it is not being rebuilt behind the scenes.
+      // Segments in the solid wireframe the renderer is handed - edges PLUS isolines, which share one
+      // buffer. This is how a transcript can say that ISOLINES actually reaches the display rather
+      // than only being stored.
+      else if (what == "SOLIDEDGESEGS") {
+        got = 0;
+        for (const CadSolidTessellation& e : run.st.solidDisplayCache)
+          got += static_cast<long>(e.edgeVerts.size() / 6);
+      }
       else if (what == "SOLIDTRIS") {
         got = 0;
         for (const CadSolidTessellation& e : run.st.solidDisplayCache)
@@ -2105,7 +2113,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
                  " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
                  " EXTRACTMATCHESDISPLAY"
                  " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN SURFACEBANDTRIS SURFACEARROWSEGS"
-                 " SURFACEBANDBATCHES SOLIDS SOLIDBATCHES SOLIDTRIS)",
+                 " SURFACEBANDBATCHES SOLIDS SOLIDBATCHES SOLIDTRIS SOLIDEDGESEGS)",
              sourceLine);
         return false;
       }

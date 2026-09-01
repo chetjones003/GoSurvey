@@ -1,0 +1,55 @@
+# REQ-313 as amended - ISOLINES: the curves that make a curved solid read as curved.
+#
+# A solid's EDGES alone are a poor picture of it. A cylinder's edges are two rims and two seams, so
+# in wireframe it draws as two circles joined by two lines; a sphere's are two meridians, which is a
+# lens rather than a ball. Every CAD package adds these, and AutoCAD calls the count ISOLINES.
+#
+# The GEOMETRY is pinned by BrepTests (which curve goes where, on which surface kinds, and never on
+# a seam). What this file covers is the half the kernel cannot: that the setting reaches the display,
+# that changing it redraws the wireframe and nothing else, and that it survives a save.
+
+NEW
+CMD CYLINDER 0,0 5 10
+EXPECT SOLIDS 1
+
+# --- The default draws more than the bare edges -----------------------------------------------------
+EXPECT LOG "Cylinder created"
+CMD ISOLINES
+EXPECT LOG "ISOLINES = 4"
+
+# --- Turning them off leaves the edges alone ---------------------------------------------------------
+CMD ISOLINES 0
+EXPECT LOG "ISOLINES = 0"
+EXPECT SOLIDBATCHES 1
+# Two rim circles and two seam lines, and nothing else. The counts here are exact rather than
+# approximate because the tessellation is deterministic: same solid, same tolerance, same segments.
+# ISOLINES 4 adds exactly two rulings (one inside each half-face - the other two grid lines fall on
+# the seams, which are already edges), and ISOLINES 16 adds fourteen.
+EXPECT SOLIDEDGESEGS 102
+
+# --- Turning them up adds curves, and only curves -----------------------------------------------------
+CMD ISOLINES 4
+EXPECT SOLIDEDGESEGS 104
+CMD ISOLINES 16
+EXPECT SOLIDEDGESEGS 116
+# The TRIANGLES are untouched by any of it - isolines are wireframe, not tessellation quality.
+EXPECT SOLIDTRIS 200
+
+# --- Bad values are refused and the setting stands (REQ-201) -------------------------------------------
+CMD ISOLINES -1
+EXPECT LOG "enter a whole number between 0 and 256"
+CMD ISOLINES 9999
+EXPECT LOG "enter a whole number between 0 and 256"
+CMD ISOLINES banana
+EXPECT LOG "enter a whole number between 0 and 256"
+CMD ISOLINES
+EXPECT LOG "ISOLINES = 16"
+
+# --- It survives a .gs round trip -----------------------------------------------------------------------
+SAVEAS %OUT%/iso.gs
+OPEN %OUT%/iso.gs
+CMD ISOLINES
+EXPECT LOG "ISOLINES = 16"
+EXPECT SOLIDEDGESEGS 116
+
+CHECK ALL

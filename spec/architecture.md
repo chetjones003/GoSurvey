@@ -2106,7 +2106,8 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   "Hidden" would mean nothing for a solid — there would be nothing to hide behind. A polygon offset
   separates an edge from the face it bounds; that is load-bearing, not a tweak, because an edge lies
   exactly ON its face and without a bias half of every silhouette drops out in speckles.
-  (d) **The tessellation cache is keyed on `(solid pointer, chord tolerance)` and nothing else.** A
+  (d) **The tessellation cache is keyed on `(solid pointer, chord tolerance, isoline count)` and
+  nothing else** (isoline count added 2026-09-01, D-2026-09-01-g, per (j) below). A
   solid is immutable, so an unchanged pointer means unchanged geometry; the early-out sits before any
   allocation (the §11 invariant 7 lesson the surface cache already learned). The cache lives on
   `AppCommandState` and is **outside every undo snapshot**, exactly as ADR-036 (e) put the surface
@@ -2150,9 +2151,30 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (i) **Solids are not captured into block definitions**, matching surfaces, tables and feature lines,
   which are not either. They ARE cleared when the block editor isolates the model (ADR-043's store
   swap), so a solid from the drawing cannot leak into a block being edited.
-- Consequences: `.gs` grows one additive section and one settings key (`objectSnapSolid`); no
-  `kGsFormatVersion` bump. `RenderScene` gains one parameter, not four — the faces and edges of a
+  (j) **A curved face's wireframe carries ISOLINES, generated in the kernel and appended to the EDGE
+  buffer** (added 2026-09-01, D-2026-09-01-g). They live in `brep::TessellateIsolines` rather than in
+  the renderer because they are geometry: they come from the same analytic `SurfacePointAt` the shaded
+  triangles use, so an isoline and the shading beside it cannot disagree about where the surface is,
+  and putting them in the render layer would be a second surface evaluator to keep in step. **The
+  directions are per surface kind** — cylinder and cone rulings along the axis only, sphere meridians
+  and latitudes, torus tube and ring circles, plane none — because one blanket rule would draw a ring
+  part way up a cylinder, which reads as an edge that is not there: a seam, or the join of two stacked
+  solids. **The grid is global to the surface's own frame and sampled strictly inside each face's
+  span**, since every curved primitive here is seamed into half-faces per the parent ADR: a per-face
+  grid bunches the lines where two faces meet, and a non-strict test doubles a seam edge that is
+  already drawn. They go into the **same** vertex buffer as the edges rather than a batch of their
+  own, because they are the same colour and weight as the object — a separate stream would be another
+  thing to keep in step for no visible difference, and the evidence the seam is in the right place is
+  that **the renderer needed no change at all**. The count is per full turn (AutoCAD's `ISOLINES`
+  semantics), is a viewport setting rather than a per-solid property — it is a display preference like
+  the visual style, and per-solid would mean a `.gs` change and a property no one asked to vary — and
+  it joins the cache key in (d) because a derived representation that ignores an input that changes it
+  is a stale one.
+- Consequences: `.gs` grows one additive section and two settings keys (`objectSnapSolid`,
+  `viewportSolidIsolines`); no `kGsFormatVersion` bump. `RenderScene` gains one parameter, not four — the faces and edges of a
   solid are always built together and always consumed together, the same argument
   `CadSurfaceDisplayGeometry` records for itself. **Still not addressed**, each waiting for a caller:
   interactive placement and 3D grips (#120 Phase 5), transforming a solid (same), booleans (Phase 4),
-  centroid and moments (Phase 6), and any interchange format for solids.
+  centroid and moments (Phase 6), any interchange format for solids, and **view-dependent silhouette
+  curves** — AutoCAD draws those too, they move as the view orbits, and being a render pass rather
+  than geometry they do not belong in the kernel alongside (j)'s isolines.
