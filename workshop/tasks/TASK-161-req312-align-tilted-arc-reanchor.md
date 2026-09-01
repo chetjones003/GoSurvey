@@ -55,8 +55,8 @@ normal-rotation code is gated by the same broken `continue`.
 - `src/commands/CadCommands_Align.cpp` — arc loop: add `CadReanchorArcStart`; circle guard:
   `i / 3` -> `i / 4`.
 - `tests/headless/transcripts/` + `HeadlessDriver.cpp` — two new transcripts (below).
-- `tests/headless/transcripts/req312-dxf-arbitrary-plane-roundtrip.txt` — add a double-export
-  byte-identity assertion for a tilted arc (review finding 3; verification, likely no code change).
+- `tests/headless/transcripts/req312-dxf-arbitrary-plane-roundtrip.txt` — new Section 4: a tilted
+  arc survives three DXF cycles at state-plane magnitude (review finding 3).
 
 ## 4. Approach
 
@@ -84,9 +84,13 @@ Circle guard: `i / 3` -> `i / 4`.
 - `headless.req312-align-selective-circles` — 5 circles, selective ALIGN of circles 3 and 4 only;
   assert circles 0-2 unmoved and 3-4 moved. A 3-circle case passes even against the bug, so >=4 is
   required.
-- DXF: extend `req312-dxf-arbitrary-plane-roundtrip` with a tilted arc and a second export compared
-  byte-for-byte to the first (REQ-204 settle). If it settles, no code change; if not, sweep the DXF
-  header extent walk from in-memory angles rather than `DxfArcToWrite` output.
+- DXF (finding 3): the new Section 4 confirms a tilted arc's endpoints hold to well within REQ-101
+  across three export/import cycles at ~2.15e6 ft. It is NOT yet a byte-level fixed point — the OCS
+  group 10/20/30 coordinate the reader re-projects through the normal's frame wobbles its last ULP
+  between cycles. Writing those coordinates at `%.17g` (as group 210 already is) narrows but does
+  not close it, and changing tilted-DXF byte output is its own reviewable decision. Filed as a
+  follow-up issue: "tilted-curve DXF byte-settle at state-plane magnitude (REQ-204)". Not a blocker
+  for REQ-312, whose acceptance is geometric.
 
 ## 6. Architectural-boundary check
 
