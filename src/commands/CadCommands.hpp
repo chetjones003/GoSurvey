@@ -35,6 +35,7 @@
 #include "util/hoverpickgate.hpp"  // per-frame viewport hover-pick throttle (GitHub issue #166)
 #include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
 #include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
+#include "util/cadsolid.hpp"   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.
@@ -75,7 +76,17 @@ struct SelectedEntity {
     Table = 11,
     /// Block INSERT (GitHub issue #124). Appended after Table so existing type values stay stable.
     /// Lightweight: transform + attributes; geometry lives on the named definition.
-    BlockRef = 12
+    BlockRef = 12,
+    /// B-rep solid (REQ-313 / ADR-045). Appended after BlockRef so existing type values stay stable.
+    ///
+    /// **Display-and-erase only in this increment, like Mesh** — it selects, highlights, erases and
+    /// reports its volume, and no transform command moves it. That is a stated boundary rather than
+    /// an oversight: moving a solid means transforming every surface frame and every arc-edge frame
+    /// in its topology, which is the same class of work REQ-312 found for a single tilted arc, and
+    /// it belongs with #120's Phase 5 direct-modelling requirement. Every transform command refuses
+    /// a solid with a stated reason (REQ-201) rather than silently dropping it from the operation —
+    /// the rule Surface already established.
+    Solid = 13
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -912,6 +923,9 @@ struct DrawingGeometrySnapshot {
   /// TIN surfaces (REQ-068). Shared payload, not copied — see CadTin and architecture §11.5.
   std::vector<CadSurface>       cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
+  /// B-rep solids (REQ-313 / ADR-045). Shared, not copied — see CadSolidPtr's note.
+  std::vector<CadSolidPtr>      cadSolids;
+  std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
   std::vector<CadBlockDefinition> blockDefs;
@@ -1041,6 +1055,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadMeshAttrs;
   std::vector<CadSurface>       cadSurfaces;       ///< TIN surfaces (REQ-068).
   std::vector<EntityAttributes> cadSurfaceAttrs;
+  std::vector<CadSolidPtr>      cadSolids;         ///< B-rep solids (REQ-313); shared, not copied.
+  std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
   std::vector<CadBlockDefinition> blockDefs;
@@ -1617,6 +1633,18 @@ struct AppCommandState {
     /// this and \ref surfacePointCount is non-zero; both zero means the line-segment profile.
     int meshTriangleCount = 0;
 
+    /// Solids in the B-rep profile (REQ-313 / REQ-100). 0 = not the solid profile; at most one
+    /// of this, ef meshTriangleCount and ef surfacePointCount is non-zero.
+    ///
+    /// A profile of its OWN rather than an assumption that the mesh number covers it, for the
+    /// same reason the surface profile is not implied by the mesh one: a solid's cost is not one
+    /// big indexed upload. It is N stream-uploaded batches plus N edge batches plus a per-frame
+    /// cache lookup, and #120's "do not regenerate a solid's render mesh every frame" is a claim
+    /// about exactly that per-frame work. Measuring it is the only way to know.
+    int solidCount = 0;
+    /// Total tessellated triangles across the solid scene, filled in when the scene is built.
+    int solidTriangleCount = 0;
+
     std::vector<float> savedPolyVerts;
     std::vector<int> savedPolyOffsets;
     std::vector<std::uint8_t> savedPolyClosed;
@@ -1625,6 +1653,8 @@ struct AppCommandState {
     std::vector<EntityAttributes> savedSurfaceAttrs;
     std::vector<std::shared_ptr<const CadMesh>> savedMeshes;  ///< restored verbatim after a mesh run
     std::vector<EntityAttributes> savedMeshAttrs;
+    std::vector<CadSolidPtr> savedSolids;             ///< restored verbatim after a solid run
+    std::vector<EntityAttributes> savedSolidAttrs;
     /// The mesh profile forces Shaded (REQ-100 (b) measures *shaded* meshes, and REQ-064's budget
     /// condition is stated in Shaded). Saved so a bench run cannot leave the user in a style they
     /// did not choose — which would also silently invalidate ADR-026 (e)'s 2D Wireframe parity.
@@ -1655,6 +1685,12 @@ struct AppCommandState {
   /// as in AutoCAD: it fires on objects that do not touch, which is surprising unless asked for.
   bool objectSnapApparentIntersection = false;
   bool objectSnapSurface = true;
+  /// Snap to a B-rep solid's faces and edges (REQ-313). ONE toggle for both kinds, not two: they
+  /// are the two halves of "snap to a solid", and no requirement asks to enable one without the
+  /// other, so a second preference would be an unearned option (REQ-301). A solid's VERTICES and its
+  /// edge MIDPOINTS answer to the ordinary Endpoint and Midpoint toggles instead — they are exactly
+  /// what those snaps already mean, and a user who has Endpoint on expects a corner to snap.
+  bool objectSnapSolid = true;
   /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
   float objectSnapAperturePx = 14.f;
   /// Half-size in screen pixels for green object-snap glyphs (square / triangle / circle overlay).
@@ -2158,6 +2194,23 @@ struct AppCommandState {
   /// so copying this vector — which every undo snapshot does — is strings and refcount bumps.
   std::vector<CadSurface> cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
+
+  /// B-rep solids (REQ-313 / ADR-045). `shared_ptr<const>` for the same reason meshes are: an undo
+  /// snapshot shares the payload instead of copying it, and immutability is what makes that safe.
+  /// A solid is REPLACED, never written through.
+  std::vector<CadSolidPtr> cadSolids;
+  std::vector<EntityAttributes> cadSolidAttrs;
+
+  /// The per-solid tessellation cache (#120: "do not regenerate a solid's render mesh every
+  /// frame"). Rebuilt by \ref RefreshSolidDisplayGeometry only when a solid or the tessellation
+  /// quality has actually changed, and — like the surface display cache it is modelled on (ADR-036
+  /// (e)) — deliberately **outside** every undo snapshot, because it is derived from the solids.
+  std::vector<CadSolidTessellation> solidDisplayCache;
+  /// What the renderer is handed for solids this frame: batches BORROWING the buffers above, already
+  /// filtered for layer visibility and object isolation and with colours resolved, so the renderer
+  /// draws what it is given and decides nothing. Rebuilt every refresh — it copies pointers and
+  /// colours, never vertices.
+  CadSolidDisplayGeometry solidDisplayGeometry;
 
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
@@ -3673,7 +3726,11 @@ enum class EntityKind : std::uint8_t {
   /// REQ-148 / D-2026-08-28-i. Appended after Surface so the id sweep does not renumber legacy drawings.
   Table,
   /// GitHub issue #124. Appended after Table so the id sweep does not renumber legacy drawings.
-  BlockRef
+  BlockRef,
+  /// REQ-313 / ADR-045. Appended after BlockRef, for the reason Surface's note above spells out:
+  /// the id sweep walks the attribute arrays in `kEntityKindsInSweepOrder`, so inserting anywhere
+  /// but the end would renumber every entity in every existing drawing on its next load.
+  Solid
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -3748,6 +3805,42 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st);
 /// predicate is that "invisible" and "unclickable" cannot disagree — which is exactly what REQ-084
 /// (d) requires of every entity kind.
 [[nodiscard]] bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex);
+
+// ---------------------------------------------------------------------------------------------
+// B-rep solids (REQ-313 / ADR-045, GitHub issue #146).
+// ---------------------------------------------------------------------------------------------
+
+/// True when solid \p solidIndex is drawn AND clickable. One predicate for both, for the reason
+/// \ref SurfaceVisible gives for itself: "invisible" and "unclickable" must not be able to disagree
+/// (REQ-084 (d)).
+[[nodiscard]] bool SolidVisible(const AppCommandState& st, size_t solidIndex);
+
+/// Bring \ref AppCommandState::solidDisplayCache and \ref AppCommandState::solidDisplayGeometry up
+/// to date. Called once a frame, beside \ref RefreshSurfaceDisplayGeometry.
+///
+/// Regenerates a solid's triangles and edges only when its staleness key — the solid pointer plus
+/// the chord tolerance — has moved, which is #120's "do not regenerate a solid's render mesh every
+/// frame" stated as a property of what the function does rather than as an intention. Entries whose
+/// solid no longer exists are reaped in the same pass, so an erased solid's triangles do not outlive
+/// it. The batch list at the end is rebuilt every call — it copies pointers and colours, never
+/// vertices — because layer visibility and object isolation change with no solid changing at all.
+void RefreshSolidDisplayGeometry(AppCommandState& st);
+
+/// Create one of the seven primitives from a typed command line (REQ-313). \p verb is the
+/// already-lowercased command token; \p rest is everything after it.
+///
+/// Every failure is reported by name and creates nothing (REQ-201): a bad dimension, a bad base
+/// point, a wrong argument count, or a solid the kernel refuses to build.
+void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const std::string& rest,
+                             std::vector<std::string>& log);
+
+/// True when \p verb names one of the seven primitive commands. Used by the command dispatch and by
+/// the help registry, so the two cannot disagree about which commands exist.
+[[nodiscard]] bool CadIsSolidPrimitiveVerb(const std::string& verb);
+
+/// Report a solid's properties into \p log — kind, dimensions, volume, surface area, and its
+/// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.
+void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need

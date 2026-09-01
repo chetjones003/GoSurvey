@@ -232,6 +232,8 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadMeshAttrs.clear();
   st.cadSurfaces.clear();
   st.cadSurfaceAttrs.clear();
+  st.cadSolids.clear();
+  st.cadSolidAttrs.clear();
   st.cadTables.clear();
   st.cadTableAttrs.clear();
   st.cadBlockRefs.clear();

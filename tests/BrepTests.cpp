@@ -684,6 +684,177 @@ TEST_CASE("Tessellation quality does not change the solid", "[brep][req313]") {
   REQUIRE(fineErr < coarseErr);
 }
 
+// ---------------------------------------------------------------------------
+// Closest-point queries — what object snapping is built on. The failure these
+// pin is not a crash: it is a snap that lands on the CHORD instead of on the
+// surface, wrong by the sagitta, plausible on screen, and smaller every time
+// the user zooms in to check it.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ClosestPointOnSurface lands exactly on the surface", "[brep][req313]") {
+  Problem why = Problem::Ok;
+
+  SECTION("cylinder") {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 4.0, 20.0, &s, &why));
+    const brep::Surface& side = [&]() -> const brep::Surface& {
+      for (const brep::Face& f : s.faces)
+        if (f.surface.kind == brep::SurfaceKind::Cylinder)
+          return f.surface;
+      return s.faces[0].surface;
+    }();
+    // A point well outside the cylinder comes back on the wall: same height, radius exactly 4.
+    const Vec3 got = brep::ClosestPointOnSurface(side, Vec3{30.0, 40.0, 7.5});
+    REQUIRE(std::sqrt(got.x * got.x + got.y * got.y) == Approx(4.0).epsilon(1e-12));
+    REQUIRE(got.z == Approx(7.5).margin(1e-12));
+    // A point on the axis has no nearest point; it must come back unchanged rather than as a NaN
+    // or as an arbitrary direction (REQ-201).
+    const Vec3 axis = brep::ClosestPointOnSurface(side, Vec3{0.0, 0.0, 3.0});
+    REQUIRE(axis.x == Approx(0.0).margin(1e-12));
+    REQUIRE(axis.z == Approx(3.0).margin(1e-12));
+  }
+
+  SECTION("sphere on a tilted frame at survey magnitude") {
+    const ucs::Ucs frame = TiltedAt(3'500'000.0, 12'400'000.0, 500.0);
+    Solid s;
+    REQUIRE(brep::MakeSphere(frame, 5.0, &s, &why));
+    const brep::Surface& sf = s.faces[0].surface;
+    const Vec3 probe = ray3d::Add(frame.origin, Vec3{100.0, -40.0, 60.0});
+    const Vec3 got = brep::ClosestPointOnSurface(sf, probe);
+    REQUIRE(ray3d::Length(ray3d::Sub(got, frame.origin)) == Approx(5.0).margin(1e-6));
+  }
+
+  SECTION("cone — the taper is respected, not treated as a cylinder") {
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 10.0, 2.0, 8.0, &s, &why));
+    const brep::Surface& side = [&]() -> const brep::Surface& {
+      for (const brep::Face& f : s.faces)
+        if (f.surface.kind == brep::SurfaceKind::Cone)
+          return f.surface;
+      return s.faces[0].surface;
+    }();
+    // Straight out from the mid-height point: the radius there is (10+2)/2 = 6.
+    const Vec3 got = brep::ClosestPointOnSurface(side, Vec3{50.0, 0.0, 4.0});
+    // The nearest point on a slanted wall is not at the same z as the probe, so the check is that
+    // the point is ON the cone: its radius matches the cone's radius at its own height.
+    const double rho = std::sqrt(got.x * got.x + got.y * got.y);
+    const double expected = 10.0 + (2.0 - 10.0) * (got.z / 8.0);
+    REQUIRE(rho == Approx(expected).margin(1e-9));
+  }
+
+  SECTION("torus") {
+    Solid s;
+    REQUIRE(brep::MakeTorus(World(), 10.0, 3.0, &s, &why));
+    const brep::Surface& sf = s.faces[0].surface;
+    const Vec3 got = brep::ClosestPointOnSurface(sf, Vec3{40.0, 0.0, 0.0});
+    // On the tube: distance from the tube's centre circle is exactly the minor radius.
+    const double rho = std::sqrt(got.x * got.x + got.y * got.y);
+    const double dRing = std::sqrt((rho - 10.0) * (rho - 10.0) + got.z * got.z);
+    REQUIRE(dRing == Approx(3.0).margin(1e-9));
+  }
+}
+
+TEST_CASE("ClosestPointOnEdge stays on the edge, not on the line behind it", "[brep][req313]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10.0, 10.0, 10.0, &box, &why));
+
+  // A point far beyond a line edge's end clamps to that end — the whole reason this is not just a
+  // projection onto the infinite line.
+  for (const brep::Edge& e : box.edges) {
+    const Vec3 a = box.vertices[e.v0].p;
+    const Vec3 b = box.vertices[e.v1].p;
+    const Vec3 beyond = ray3d::Add(b, ray3d::Scale(ray3d::Sub(b, a), 5.0));
+    const Vec3 got = brep::ClosestPointOnEdge(box, e, beyond);
+    REQUIRE(ray3d::Length(ray3d::Sub(got, b)) == Approx(0.0).margin(1e-9));
+  }
+
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), 6.0, 10.0, &cyl, &why));
+  for (const brep::Edge& e : cyl.edges) {
+    if (e.kind != brep::CurveKind::Arc)
+      continue;
+    // Every answer is ON the arc's circle, at the arc's own radius from its own centre.
+    const Vec3 got = brep::ClosestPointOnEdge(cyl, e, Vec3{100.0, 55.0, -20.0});
+    const Vec3 rel = ray3d::Sub(got, e.frame.origin);
+    REQUIRE(ray3d::Length(rel) == Approx(e.radius).margin(1e-9));
+    REQUIRE(ray3d::Dot(rel, e.frame.zAxis) == Approx(0.0).margin(1e-9));
+    // And it is within the SWEPT half, not on the other half of the circle: the point nearest a
+    // probe outside the far half would otherwise come back there, which is the clamp's whole job.
+    const ucs::Point2D flat = ucs::WorldToPlane(e.frame, got);
+    const double angle = std::atan2(flat.y, flat.x);
+    const double lo = std::min(0.0, e.sweep) - 1e-9;
+    const double hi = std::max(0.0, e.sweep) + 1e-9;
+    REQUIRE(angle >= lo);
+    REQUIRE(angle <= hi);
+  }
+}
+
+TEST_CASE("Every triangle knows which face it came from", "[brep][req313]") {
+  // Without this the face snap could find the right triangle and then project onto the wrong
+  // surface — a point exactly on a face the user was not pointing at.
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), 4.0, 12.0, &s, &why));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.01, &t, &why));
+  REQUIRE(t.triFace.size() == static_cast<size_t>(t.triangleCount()));
+
+  std::vector<int> seen(s.faces.size(), 0);
+  for (size_t i = 0; i < t.triFace.size(); ++i) {
+    const int f = t.triFace[i];
+    REQUIRE(f >= 0);
+    REQUIRE(f < static_cast<int>(s.faces.size()));
+    seen[static_cast<size_t>(f)] = 1;
+    // Every vertex of the triangle must lie on the surface its face claims — which is the property
+    // the snap projection depends on and the one a mismatched id would break.
+    for (int k = 0; k < 3; ++k) {
+      const std::uint32_t vi = t.indices[i * 3 + static_cast<size_t>(k)];
+      const Vec3 p{t.vertsXyz[vi * 3], t.vertsXyz[vi * 3 + 1], t.vertsXyz[vi * 3 + 2]};
+      const Vec3 on = brep::ClosestPointOnSurface(s.faces[static_cast<size_t>(f)].surface, p);
+      REQUIRE(ray3d::Length(ray3d::Sub(on, p)) == Approx(0.0).margin(1e-9));
+    }
+  }
+  for (size_t f = 0; f < seen.size(); ++f) {
+    INFO("face " << f);
+    REQUIRE(seen[f] == 1);  // every face contributes triangles; none is silently dropped
+  }
+}
+
+TEST_CASE("Edge tessellation follows the same chord rule as the faces", "[brep][req313]") {
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), 5.0, 9.0, &s, &why));
+
+  std::vector<double> coarse;
+  std::vector<double> fine;
+  REQUIRE(brep::TessellateEdges(s, 0.5, &coarse, &why));
+  REQUIRE(brep::TessellateEdges(s, 0.001, &fine, &why));
+  REQUIRE(coarse.size() % 6 == 0);
+  REQUIRE(fine.size() > coarse.size());
+
+  // Every emitted point is on the solid: each segment endpoint lies on one of its edges. Checked
+  // against the arcs' own radius, because a wireframe that floats off the shading it outlines is
+  // exactly what a divergent chord rule looks like.
+  for (size_t i = 0; i + 5 < fine.size(); i += 6) {
+    const Vec3 a{fine[i], fine[i + 1], fine[i + 2]};
+    double best = 1e300;
+    for (const brep::Edge& e : s.edges)
+      best = std::min(best, ray3d::Length(ray3d::Sub(brep::ClosestPointOnEdge(s, e, a), a)));
+    REQUIRE(best == Approx(0.0).margin(1e-6));
+  }
+
+  REQUIRE_FALSE(brep::TessellateEdges(s, 0.0, &fine, &why));
+  REQUIRE(why == Problem::NonPositiveTolerance);
+
+  Solid broken = s;
+  broken.faces.pop_back();
+  broken.shells[0].faces.pop_back();
+  REQUIRE_FALSE(brep::TessellateEdges(broken, 0.01, &fine, &why));
+  REQUIRE(why == Problem::EdgeNotUsedTwice);
+}
+
 TEST_CASE("Tessellation refuses a bad tolerance and a bad solid", "[brep][req313]") {
   Solid s;
   Problem why = Problem::Ok;

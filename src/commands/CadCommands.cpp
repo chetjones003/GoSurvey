@@ -118,6 +118,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadMeshAttrs           = cmd.cadMeshAttrs;
   doc.cadSurfaces            = cmd.cadSurfaces;
   doc.cadSurfaceAttrs        = cmd.cadSurfaceAttrs;
+  doc.cadSolids              = cmd.cadSolids;      // pointers, not payloads (REQ-313)
+  doc.cadSolidAttrs          = cmd.cadSolidAttrs;
   doc.cadTables              = cmd.cadTables;
   doc.cadTableAttrs          = cmd.cadTableAttrs;
   doc.blockDefs              = cmd.blockDefs;
@@ -204,6 +206,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadMeshAttrs               = doc.cadMeshAttrs;
   cmd.cadSurfaces                = doc.cadSurfaces;
   cmd.cadSurfaceAttrs            = doc.cadSurfaceAttrs;
+  cmd.cadSolids                  = doc.cadSolids;
+  cmd.cadSolidAttrs              = doc.cadSolidAttrs;
   cmd.cadTables                  = doc.cadTables;
   cmd.cadTableAttrs              = doc.cadTableAttrs;
   cmd.blockDefs                  = doc.blockDefs;
@@ -1474,6 +1478,9 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   // Surfaces copy as strings + a refcount bump, never as triangles (REQ-068, architecture §11.5).
   snap.cadSurfaces          = st.cadSurfaces;
   snap.cadSurfaceAttrs      = st.cadSurfaceAttrs;
+  // Solids copy as pointers too (REQ-313 / ADR-045) - the topology payload is shared, never cloned.
+  snap.cadSolids            = st.cadSolids;
+  snap.cadSolidAttrs        = st.cadSolidAttrs;
   snap.cadTables            = st.cadTables;
   snap.cadTableAttrs        = st.cadTableAttrs;
   snap.blockDefs            = st.blockDefs;
@@ -1547,6 +1554,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadMeshAttrs         = snap.cadMeshAttrs;
   st.cadSurfaces          = snap.cadSurfaces;
   st.cadSurfaceAttrs      = snap.cadSurfaceAttrs;
+  st.cadSolids            = snap.cadSolids;
+  st.cadSolidAttrs        = snap.cadSolidAttrs;
   st.cadTables            = snap.cadTables;
   st.cadTableAttrs        = snap.cadTableAttrs;
   st.blockDefs            = snap.blockDefs;
@@ -1611,7 +1620,8 @@ const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::FeatureLine,
     EntityKind::Surface,
     EntityKind::Table,
-    EntityKind::BlockRef};  ///< issue #124 — last, so kinds above keep their ids.
+    EntityKind::BlockRef,
+    EntityKind::Solid};  ///< REQ-313 — last, so kinds above keep their ids.
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -1630,6 +1640,7 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::Surface:      return &st.cadSurfaceAttrs;  // REQ-068 / ADR-036 (a)
   case EntityKind::Table:        return &st.cadTableAttrs;    // REQ-148
   case EntityKind::BlockRef:     return &st.cadBlockRefAttrs;
+  case EntityKind::Solid:        return &st.cadSolidAttrs;     // REQ-313 / ADR-045
   }
   return &st.userLineAttrs;
 }
@@ -6363,12 +6374,22 @@ const CmdEntry kRegistry[] = {
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
     {"bench", "",
-     "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE [points] | BENCH MESH [triangles]"},
+     "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE [points] | BENCH MESH [triangles] | BENCH SOLID [count]"},
     {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
     {"perspective", "projection, persp", "View projection: ON (perspective) / OFF (orthographic)"},
     {"fov", "lens", "Perspective field of view, in degrees"},
     {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
+    // The seven primitive solids (REQ-313 / ADR-045). Each takes a base point in the active UCS and
+    // then its exact dimensions; the UCS supplies the orientation.
+    {"box", "", "Create a box solid: BOX <X,Y[,Z]> <length> <width> <height>"},
+    {"wedge", "we", "Create a wedge solid: WEDGE <X,Y[,Z]> <length> <width> <height>"},
+    {"pyramid", "pyr", "Create a pyramid solid: PYRAMID <X,Y[,Z]> <sides> <base r> <top r> <height>"},
+    {"cylinder", "cyl", "Create a cylinder solid: CYLINDER <X,Y[,Z]> <radius> <height>"},
+    {"cone", "", "Create a cone solid: CONE <X,Y[,Z]> <base radius> <top radius> <height>"},
+    {"sphere", "sph", "Create a sphere solid: SPHERE <X,Y[,Z]> <radius>"},
+    {"torus", "tor", "Create a torus solid: TORUS <X,Y[,Z]> <radius> <tube radius>"},
+    {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
@@ -7536,6 +7557,34 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
       hits.push_back(e);
     }
   }
+  // B-rep solids (REQ-313): hit-test the ANALYTIC bounding box, the same window/crossing rule every
+  // bbox-tested kind above uses.
+  //
+  // The analytic bounds and not the stored vertices, for the reason the extents walk gives: a sphere
+  // has two stored vertices and a torus four, so a bbox built from points would enclose almost none
+  // of the solid — a window drag right around a sphere would select it, and one around a quarter of
+  // it would too.
+  for (size_t soi = 0; soi < st.cadSolids.size(); ++soi) {
+    if (!SolidVisible(st, soi))
+      continue;
+    const brep::Bounds bb = brep::ComputeBounds(*st.cadSolids[soi]);
+    if (!bb.valid)
+      continue;
+    float bmnX = static_cast<float>(bb.mn.x);
+    float bmnY = static_cast<float>(bb.mn.y);
+    float bmxX = static_cast<float>(bb.mx.x);
+    float bmxY = static_cast<float>(bb.mx.y);
+    SPBox(bmnX, bmnY, bmxX, bmxY, &bmnX, &bmnY, &bmxX, &bmxY);  // screen space when orbited
+    const bool hit = windowMode ? (bmnX >= mnX && bmxX <= mxX && bmnY >= mnY && bmxY <= mxY)
+                                : !(bmxX < mnX || bmnX > mxX || bmxY < mnY || bmnY > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Solid;
+      e.index = static_cast<int>(soi);
+      hits.push_back(e);
+    }
+  }
+
   // Filled regions (REQ-042): hit-test the outer-loop bounding box, matching annotations/arcs/PDF — window
   // requires the bbox fully inside; crossing requires the bbox to intersect the rect.
   for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
@@ -8631,6 +8680,34 @@ void DropSurfacesFromSelectionForTransform(AppCommandState& st, const char* comm
                 " Edit its definition in the Surfaces panel instead.");
 }
 
+/// REQ-313 / ADR-045: drop B-rep solids from a transform selection, and SAY SO (REQ-201).
+///
+/// Called at every site \ref DropSurfacesFromSelectionForTransform is, immediately after it. A
+/// separate function rather than a second `remove_if` inside that one, because the two exclusions
+/// have different reasons and a user who moved a surface and a solid together deserves to be told
+/// which of the two was which — a single merged message could only give one reason for both.
+///
+/// The exclusion itself is a stated boundary, not an oversight: transforming a solid means
+/// transforming every surface frame and every arc-edge frame in its topology, which is the same
+/// class of work REQ-312 needed for a single tilted arc, and it belongs with #120's Phase 5
+/// direct-modelling requirement. Refusing loudly is what keeps the alternative — a solid silently
+/// left behind while everything selected with it moves — off the table.
+void DropSolidsFromSelectionForTransform(AppCommandState& st, const char* commandName,
+                                         std::vector<std::string>& log) {
+  const size_t before = st.selection.size();
+  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                    [](const SelectedEntity& e) {
+                                      return e.type == SelectedEntity::Type::Solid;
+                                    }),
+                     st.selection.end());
+  const size_t dropped = before - st.selection.size();
+  if (dropped == 0)
+    return;
+  log.push_back(std::string(commandName) + " — " + std::to_string(dropped) +
+                " solid(s) excluded: transforming a solid is not supported yet. Erase and re-create it"
+                " at the position you want.");
+}
+
 /// REQ-103 MIRROR. Drops the three entity kinds a mirror cannot represent, and says why (REQ-201)
 /// rather than silently doing nothing to them: `FilledRegion` (hatches) — already out of scope for
 /// rotate/scale/mirror, requirements.md's REQ-042 fills note; `Mesh` — never edited by any existing
@@ -8670,6 +8747,7 @@ static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<
 /// built for.
 static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ARRAY", log);
+  DropSolidsFromSelectionForTransform(st, "ARRAY", log);
   size_t mesh = 0, pdf = 0;
   st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
                                     [&](const SelectedEntity& e) {
@@ -8700,6 +8778,7 @@ static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<s
 static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
                                            std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
+  DropSolidsFromSelectionForTransform(st, "MIRROR", log);
   DropMirrorUnsupportedFromSelection(st, log);
 
   const size_t polyVertsBefore = st.userPolylineVerts.size();
@@ -8957,6 +9036,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
 
 void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
+  DropSolidsFromSelectionForTransform(st, "ROTATE", log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -9110,6 +9190,7 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
 
 void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MOVE", log);
+  DropSolidsFromSelectionForTransform(st, "MOVE", log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 &&
@@ -9520,6 +9601,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc, st
   if (!(sc > 0.f) || !std::isfinite(sc))
     return;
   DropSurfacesFromSelectionForTransform(st, "SCALE", log);
+  DropSolidsFromSelectionForTransform(st, "SCALE", log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -14642,6 +14724,7 @@ void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, floa
 void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX, float mxX, float mnY,
                              float mxY, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "STRETCH", log);
+  DropSolidsFromSelectionForTransform(st, "STRETCH", log);
   auto inBox = [&](float x, float y) { return PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY); };
 
   for (const auto& e : st.selection) {
@@ -17285,6 +17368,22 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     consider(static_cast<double>(mb.mxX), static_cast<double>(mb.mxY));
   }
 
+  // B-rep solids (REQ-313). Their ANALYTIC bounds, not their tessellation: a sphere has two
+  // vertices and a torus four, so a bounds walk over stored points would miss almost the whole
+  // solid, and the tessellation may not have been generated yet at all.
+  for (size_t soi = 0; soi < st.cadSolids.size(); ++soi) {
+    if (EntityHiddenInViewport(vpFilter, st.cadSolidAttrs, soi))
+      continue;
+    const CadSolidPtr& sp = st.cadSolids[soi];
+    if (!sp)
+      continue;
+    const brep::Bounds sb = brep::ComputeBounds(*sp);
+    if (!sb.valid)
+      continue;
+    consider(sb.mn.x, sb.mn.y);
+    consider(sb.mx.x, sb.mx.y);
+  }
+
   // TIN surfaces (REQ-068: "surfaces are included in zoom-extents and in the drawing's bounding
   // box"). Their bounds, not their vertices, for the same reason meshes use theirs above — a single
   // surface can hold 200k triangles.
@@ -17533,6 +17632,27 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = static_cast<double>(mb.mxX);
     b.mnY = static_cast<double>(mb.mnY);
     b.mxY = static_cast<double>(mb.mxY);
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+
+  // B-rep solids (REQ-313), one box per solid — from the analytic bounds, for the reason the
+  // zoom-extents walk gives: a sphere's two stored vertices describe almost none of it.
+  for (size_t soi = 0; soi < st.cadSolids.size(); ++soi) {
+    if (EntityHiddenInViewport(vpFilter, st.cadSolidAttrs, soi))
+      continue;
+    const CadSolidPtr& sp = st.cadSolids[soi];
+    if (!sp)
+      continue;
+    const brep::Bounds bb = brep::ComputeBounds(*sp);
+    if (!bb.valid)
+      continue;
+    EntityBox b{};
+    b.mnX = bb.mn.x;
+    b.mxX = bb.mx.x;
+    b.mnY = bb.mn.y;
+    b.mxY = bb.mx.y;
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -20013,6 +20133,10 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadFilledRegionAttrs.clear();
   st.cadMeshes.clear();
   st.cadMeshAttrs.clear();
+  st.cadSolids.clear();
+  st.cadSolidAttrs.clear();
+  st.solidDisplayCache.clear();
+  st.solidDisplayGeometry.solids.clear();
   st.cadTables.clear();
   st.cadTableAttrs.clear();
   st.blockDefs.clear();
@@ -20441,6 +20565,24 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     st.cadMeshes.erase(st.cadMeshes.begin() + static_cast<std::ptrdiff_t>(idx));
     if (static_cast<size_t>(idx) < st.cadMeshAttrs.size())
       st.cadMeshAttrs.erase(st.cadMeshAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  // B-rep solids (REQ-313) — the caller has already pushed one snapshot for this whole erase, so
+  // removing the pointer here is that one undo step, exactly as it is for a mesh above. The
+  // tessellation cache is NOT touched: its entries key on a weak_ptr, so the erased solid's entry
+  // simply expires and is reaped by the next refresh.
+  std::set<int> solidIx;
+  const size_t nSolid = st.cadSolids.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && static_cast<size_t>(e.index) < nSolid)
+      solidIx.insert(e.index);
+  }
+  std::vector<int> sov(solidIx.begin(), solidIx.end());
+  std::sort(sov.begin(), sov.end(), std::greater<int>());
+  for (int idx : sov) {
+    st.cadSolids.erase(st.cadSolids.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadSolidAttrs.size())
+      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
@@ -21479,6 +21621,43 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       bestD2 = std::min(bestD2, d2Segment(V[a], V[a + 1], V[a + 2], V[b], V[b + 1], V[b + 2]));
       bestD2 = std::min(bestD2, d2Segment(V[b], V[b + 1], V[b + 2], V[c], V[c + 1], V[c + 2]));
       bestD2 = std::min(bestD2, d2Segment(V[c], V[c + 1], V[c + 2], V[a], V[a + 1], V[a + 2]));
+    }
+    consider(e, bestD2);
+  }
+
+  // B-rep solids (REQ-313 / ADR-045) — a click near any EDGE selects the whole solid, which is the
+  // same "click a visible component, get the object" rule surfaces use above.
+  //
+  // Edges and not triangles, deliberately. A solid's edges are what is drawn in every visual style,
+  // so picking them is picking what the user can actually see — and in 2D Wireframe, the default,
+  // the edges are the ONLY thing on screen. Picking against the tessellation instead would make a
+  // solid clickable across its whole silhouette in Shaded and nowhere at all in wireframe.
+  //
+  // Layer and isolation are filtered here rather than in `consider`, for the reason the surface loop
+  // above gives: `SolidVisible` carries the layer rule the renderer applies, which `consider` does
+  // not know about.
+  for (size_t soi = 0; soi < st.cadSolids.size(); ++soi) {
+    if (!SolidVisible(st, soi))
+      continue;
+    const CadSolidPtr& sp = st.cadSolids[soi];
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Solid;
+    e.index = static_cast<int>(soi);
+    double bestD2 = 1e300;
+    for (const brep::Edge& ed : sp->edges) {
+      // A line is one segment; an arc is walked in a fixed number of chords. Fixed and not
+      // tolerance-derived because this runs on hover: a solid's edge count is tens, not the 600k a
+      // surface can reach, so the cost is nowhere near the frame budget and a constant keeps the
+      // pick distance stable as the user zooms (REQ-100).
+      const int steps = ed.kind == brep::CurveKind::Arc ? 24 : 1;
+      ray3d::Vec3 prev = brep::EdgePointAt(*sp, ed, 0.0);
+      for (int i = 1; i <= steps; ++i) {
+        const ray3d::Vec3 next = brep::EdgePointAt(*sp, ed, static_cast<double>(i) / steps);
+        bestD2 = std::min(bestD2, d2Segment(static_cast<float>(prev.x), static_cast<float>(prev.y),
+                                            static_cast<float>(prev.z), static_cast<float>(next.x),
+                                            static_cast<float>(next.y), static_cast<float>(next.z)));
+        prev = next;
+      }
     }
     consider(e, bestD2);
   }
@@ -23213,6 +23392,385 @@ bool ImportGltfModel(AppCommandState& st, const std::string& path, double unitSc
   return true;
 }
 
+
+// =================================================================================================
+// B-rep solids (REQ-313 / ADR-045, GitHub issue #146 — Phase 3 of #120)
+// =================================================================================================
+
+bool SolidVisible(const AppCommandState& st, size_t solidIndex) {
+  if (solidIndex >= st.cadSolids.size())
+    return false;
+  if (!st.cadSolids[solidIndex])
+    return false;
+  if (solidIndex >= st.cadSolidAttrs.size())
+    return true;  // attrs are length-locked to cadSolids; a short array means defaults, not hidden
+  const EntityAttributes& a = st.cadSolidAttrs[solidIndex];
+  // REQ-084 (d): an isolated-out solid is invisible, so it must not be drawn OR answer a click.
+  if (CadEntityIdHidden(&st.hiddenEntityIds, a.id))
+    return false;
+  const CadLayerRow* lr = FindDrawingLayerRowCi(st, a.layer);
+  return !(lr && (!lr->on || lr->frozen));
+}
+
+namespace {
+
+/// The default colour a solid draws in when nothing overrides it — a mid grey that reads as a
+/// physical object against both the light and dark viewport grounds, distinct from a surface's blue.
+constexpr float kSolidDefaultR = 0.72f;
+constexpr float kSolidDefaultG = 0.72f;
+constexpr float kSolidDefaultB = 0.74f;
+
+/// Narrow a run of kernel doubles into the float buffer the GPU wants.
+///
+/// This is the ONE place the narrowing happens, and it happens here rather than in the kernel for
+/// the reason ADR-045 (g) gives: the solid's own coordinates stay `double` so its volume stays
+/// exact, and only the derived triangles — which really are GPU-bound — pay the narrowing. The
+/// values narrowed are storage coordinates, so they are already at local magnitude (REQ-101).
+void NarrowInto(const std::vector<double>& src, std::vector<float>* dst) {
+  dst->clear();
+  dst->reserve(src.size());
+  for (double v : src)
+    dst->push_back(static_cast<float>(v));
+}
+
+/// Expand an indexed tessellation into the flat triangle layout the renderer streams.
+///
+/// Indexed drawing is what makes a two-million-triangle IMPORTED mesh affordable (REQ-063); a
+/// primitive's tessellation is a few thousand triangles, so a second indexed GPU path here would
+/// cost more in code than it saves in bandwidth. Expanding also lets the solid path share the
+/// stream-upload shape the surface band fills already use.
+void ExpandTessellation(const brep::Tessellation& t, std::vector<float>* verts, std::vector<float>* normals,
+                        std::vector<int>* faceIds) {
+  faceIds->clear();
+  faceIds->reserve(t.triFace.size());
+  for (int f : t.triFace)
+    faceIds->push_back(f);
+  verts->clear();
+  normals->clear();
+  verts->reserve(t.indices.size() * 3);
+  normals->reserve(t.indices.size() * 3);
+  for (std::uint32_t idx : t.indices) {
+    const size_t v = static_cast<size_t>(idx) * 3;
+    if (v + 2 >= t.vertsXyz.size())
+      continue;  // Validate has already ruled this out; belt and braces before a GPU upload
+    verts->push_back(static_cast<float>(t.vertsXyz[v]));
+    verts->push_back(static_cast<float>(t.vertsXyz[v + 1]));
+    verts->push_back(static_cast<float>(t.vertsXyz[v + 2]));
+    if (v + 2 < t.normalsXyz.size()) {
+      normals->push_back(static_cast<float>(t.normalsXyz[v]));
+      normals->push_back(static_cast<float>(t.normalsXyz[v + 1]));
+      normals->push_back(static_cast<float>(t.normalsXyz[v + 2]));
+    } else {
+      normals->push_back(0.f);
+      normals->push_back(0.f);
+      normals->push_back(1.f);
+    }
+  }
+}
+
+} // namespace
+
+void RefreshSolidDisplayGeometry(AppCommandState& st) {
+  // Reap first: an entry whose weak key has expired belongs to a solid that has been erased or
+  // replaced. A weak_ptr and not a raw pointer, because a raw key could be matched by a NEW solid
+  // allocated at the freed address — the cache would then draw the wrong shape and look plausible.
+  st.solidDisplayCache.erase(std::remove_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
+                                            [](const CadSolidTessellation& e) { return e.key.expired(); }),
+                             st.solidDisplayCache.end());
+
+  const double tol = kSolidChordToleranceFt;
+
+  for (const CadSolidPtr& sp : st.cadSolids) {
+    if (!sp)
+      continue;
+    auto it = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
+                           [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+    // The staleness key is (solid, tolerance) and nothing else. That is #120's "do not regenerate a
+    // solid's render mesh every frame" expressed as a property of the code rather than an intention:
+    // a solid is immutable, so an unchanged pointer means unchanged geometry, and the early-out here
+    // is before any allocation — a `clear()` above it would still cost the frame it was written to
+    // save (the §11 invariant 7 lesson the surface cache already learned).
+    if (it != st.solidDisplayCache.end() && it->chordTolerance == tol)
+      continue;
+
+    if (it == st.solidDisplayCache.end()) {
+      st.solidDisplayCache.push_back(CadSolidTessellation{});
+      it = st.solidDisplayCache.end() - 1;
+      it->key = sp;
+    }
+    it->chordTolerance = tol;
+    it->triVerts.clear();
+    it->triNormals.clear();
+    it->triFaceIds.clear();
+    it->edgeVerts.clear();
+
+    brep::Tessellation tess;
+    brep::Problem why = brep::Problem::Ok;
+    if (brep::Tessellate(*sp, tol, &tess, &why))
+      ExpandTessellation(tess, &it->triVerts, &it->triNormals, &it->triFaceIds);
+    std::vector<double> edges;
+    if (brep::TessellateEdges(*sp, tol, &edges, &why))
+      NarrowInto(edges, &it->edgeVerts);
+    // A solid that fails to tessellate leaves EMPTY buffers rather than stale ones. It cannot
+    // normally happen — nothing stores a solid that does not validate (REQ-201) — and drawing the
+    // previous solid's triangles under this one's identity would be far worse than drawing nothing.
+  }
+
+  // Assemble what the renderer is handed. Cheap by construction: the batches BORROW the buffers
+  // above (see CadSolidDisplayBatch), so this copies pointers and colours, never vertices, and is
+  // therefore safe to redo every frame — which it must be, because layer visibility and isolation
+  // change without any solid changing at all.
+  st.solidDisplayGeometry.solids.clear();
+  for (size_t i = 0; i < st.cadSolids.size(); ++i) {
+    if (!SolidVisible(st, i))
+      continue;  // filtered here, so the renderer stays ignorant of layers and isolation
+    const CadSolidPtr& sp = st.cadSolids[i];
+    const auto it = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
+                                 [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+    if (it == st.solidDisplayCache.end() || it->empty())
+      continue;
+    const EntityAttributes& attr =
+        i < st.cadSolidAttrs.size() ? st.cadSolidAttrs[i] : st.cadSolidAttrs.emplace_back();
+    const CadLayerRow* lr = FindDrawingLayerRowCi(st, attr.layer);
+    CadSolidDisplayBatch b;
+    b.triVerts = &it->triVerts;
+    b.triNormals = &it->triNormals;
+    b.edgeVerts = &it->edgeVerts;
+    ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, b.rgba);
+    b.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
+    st.solidDisplayGeometry.solids.push_back(b);
+  }
+}
+
+// -------------------------------------------------------------------------------------------------
+// The seven primitive commands.
+//
+// One typed line each, which is exactly what REQ-313's acceptance asks for ("exact dimensions typed
+// at the command line") and no more. There is deliberately NO interactive pick-and-drag flow in this
+// increment: rubber-banding a solid needs a 3D draft preview, and that belongs with #120's Phase 5
+// direct-modelling work rather than being invented here. Stated in the usage text, so a user who
+// types a bare `BOX` is told what the command wants rather than left in a prompt that never comes.
+// -------------------------------------------------------------------------------------------------
+
+namespace {
+
+struct SolidVerbSpec {
+  const char* verb;
+  const char* alias;
+  brep::PrimitiveKind kind;
+  int dimensionCount;   ///< numbers required AFTER the base point
+  const char* usage;
+};
+
+const SolidVerbSpec kSolidVerbs[] = {
+    {"box", "", brep::PrimitiveKind::Box, 3, "BOX <X,Y[,Z]> <length> <width> <height>"},
+    {"wedge", "we", brep::PrimitiveKind::Wedge, 3, "WEDGE <X,Y[,Z]> <length> <width> <height>"},
+    {"pyramid", "pyr", brep::PrimitiveKind::Pyramid, 4,
+     "PYRAMID <X,Y[,Z]> <sides> <base radius> <top radius> <height>"},
+    {"cylinder", "cyl", brep::PrimitiveKind::Cylinder, 2, "CYLINDER <X,Y[,Z]> <radius> <height>"},
+    {"cone", "", brep::PrimitiveKind::Cone, 3, "CONE <X,Y[,Z]> <base radius> <top radius> <height>"},
+    {"sphere", "sph", brep::PrimitiveKind::Sphere, 1, "SPHERE <X,Y[,Z]> <radius>"},
+    {"torus", "tor", brep::PrimitiveKind::Torus, 2, "TORUS <X,Y[,Z]> <radius> <tube radius>"},
+};
+
+const SolidVerbSpec* FindSolidVerb(const std::string& verb) {
+  for (const SolidVerbSpec& s : kSolidVerbs) {
+    if (verb == s.verb || (*s.alias && verb == s.alias))
+      return &s;
+  }
+  return nullptr;
+}
+
+/// Resolve the typed base point into STORAGE coordinates: local X/Y, absolute Z.
+///
+/// `X,Y` are read in the active UCS like every other coordinate in the program (REQ-154), and an
+/// optional third component is the point's world ELEVATION — the same rule 3DPOLY and FEATURELINE
+/// already use, peeled off before the shared 2D parser sees it so that REQ-101-critical parser is
+/// not widened to three components for one feature.
+bool ParseSolidBasePoint(AppCommandState& st, const std::string& raw, ray3d::Vec3* out,
+                         std::vector<std::string>& log, const char* verbUpper) {
+  const std::string trimmed = StringUtil::trimCopy(raw);
+  std::string xy = trimmed;
+  bool haveZ = false;
+  double typedZ = 0.0;
+
+  const size_t c1 = trimmed.find(',');
+  const size_t c2 = (c1 == std::string::npos) ? std::string::npos : trimmed.find(',', c1 + 1);
+  if (c2 != std::string::npos) {
+    // Strict about the field count, because the shared 2D parser is not: it reads two numbers and
+    // ignores the rest, so `1,2,3,4` would otherwise land silently at (1,2).
+    if (trimmed.find(',', c2 + 1) != std::string::npos) {
+      log.push_back(std::string(verbUpper) + " — too many coordinates: X,Y or X,Y,Z.");
+      return false;
+    }
+    const std::string zText = StringUtil::trimCopy(trimmed.substr(c2 + 1));
+    char* zEnd = nullptr;
+    const double zv = std::strtod(zText.c_str(), &zEnd);
+    if (zText.empty() || !zEnd || *zEnd != '\0' || !std::isfinite(zv)) {
+      log.push_back(std::string(verbUpper) + " — elevation must be a number: X,Y,Z.");
+      return false;
+    }
+    typedZ = zv;
+    haveZ = true;
+    xy = trimmed.substr(0, c2);
+  }
+
+  float lx = 0.f;
+  float ly = 0.f;
+  double worldZ = 0.0;
+  if (!ParseStoragePointZ(st, xy, &lx, &ly, &worldZ, /*allowRelative=*/false, 0.f, 0.f)) {
+    log.push_back(std::string(verbUpper) + " — could not read the base point. Use X,Y or X,Y,Z.");
+    return false;
+  }
+  out->x = static_cast<double>(lx);
+  out->y = static_cast<double>(ly);
+  out->z = haveZ ? typedZ : worldZ;
+  return std::isfinite(out->x) && std::isfinite(out->y) && std::isfinite(out->z);
+}
+
+/// The placement frame: the active UCS's orientation, moved to the base point.
+///
+/// Reusing the UCS is what gives a cylinder or cone an arbitrary 3D axis without a new command or a
+/// new axis argument (#120: "the cylinder should support arbitrary 3D axis orientation") — set the
+/// work plane, then draw, exactly the rule REQ-312 settled for tilted arcs and circles. The axes are
+/// directions, so the local/world translation of the origin does not touch them.
+ucs::Ucs SolidPlacementFrame(const AppCommandState& st, const ray3d::Vec3& storageOrigin) {
+  ucs::Ucs f = st.activeUcs;
+  f.origin = storageOrigin;
+  if (!ucs::IsRightHandedOrthonormal(f, 1e-9))
+    f = ucs::Ucs{};  // a corrupt active UCS must not silently skew a solid; the builder refuses it
+  f.origin = storageOrigin;
+  return f;
+}
+
+} // namespace
+
+bool CadIsSolidPrimitiveVerb(const std::string& verb) { return FindSolidVerb(verb) != nullptr; }
+
+void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const std::string& rest,
+                             std::vector<std::string>& log) {
+  const SolidVerbSpec* spec = FindSolidVerb(verb);
+  if (!spec)
+    return;
+  std::string verbUpper = spec->verb;
+  for (char& c : verbUpper)
+    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+  std::istringstream args(rest);
+  std::string pointText;
+  if (!(args >> pointText)) {
+    log.push_back(std::string("Usage: ") + spec->usage + ".");
+    return;
+  }
+
+  ray3d::Vec3 origin{};
+  if (!ParseSolidBasePoint(st, pointText, &origin, log, verbUpper.c_str()))
+    return;
+
+  double dims[5] = {0, 0, 0, 0, 0};
+  for (int i = 0; i < spec->dimensionCount; ++i) {
+    std::string tok;
+    if (!(args >> tok)) {
+      log.push_back(std::string("Usage: ") + spec->usage + ".");
+      return;
+    }
+    char* end = nullptr;
+    dims[i] = std::strtod(tok.c_str(), &end);
+    if (tok.empty() || !end || *end != '\0' || !std::isfinite(dims[i])) {
+      log.push_back(verbUpper + " — \"" + tok + "\" is not a number.");
+      return;
+    }
+  }
+  std::string extra;
+  if (args >> extra) {
+    log.push_back(verbUpper + " — too many values. Usage: " + spec->usage + ".");
+    return;
+  }
+
+  const ucs::Ucs frame = SolidPlacementFrame(st, origin);
+  brep::Solid solid;
+  brep::Problem why = brep::Problem::Ok;
+  bool built = false;
+  switch (spec->kind) {
+  case brep::PrimitiveKind::Box:
+    built = brep::MakeBox(frame, dims[0], dims[1], dims[2], &solid, &why);
+    break;
+  case brep::PrimitiveKind::Wedge:
+    built = brep::MakeWedge(frame, dims[0], dims[1], dims[2], &solid, &why);
+    break;
+  case brep::PrimitiveKind::Pyramid: {
+    const double sidesD = dims[0];
+    // Checked here rather than left to a silent truncation: `PYRAMID ... 4.5 ...` must be refused,
+    // not quietly built as a square (REQ-201).
+    if (sidesD != std::floor(sidesD)) {
+      log.push_back(verbUpper + " — the side count must be a whole number.");
+      return;
+    }
+    built = brep::MakePyramid(frame, static_cast<int>(sidesD), dims[1], dims[2], dims[3], &solid, &why);
+    break;
+  }
+  case brep::PrimitiveKind::Cylinder:
+    built = brep::MakeCylinder(frame, dims[0], dims[1], &solid, &why);
+    break;
+  case brep::PrimitiveKind::Cone:
+    built = brep::MakeCone(frame, dims[0], dims[1], dims[2], &solid, &why);
+    break;
+  case brep::PrimitiveKind::Sphere:
+    built = brep::MakeSphere(frame, dims[0], &solid, &why);
+    break;
+  case brep::PrimitiveKind::Torus:
+    built = brep::MakeTorus(frame, dims[0], dims[1], &solid, &why);
+    break;
+  case brep::PrimitiveKind::None:
+    break;
+  }
+
+  if (!built) {
+    // The kernel's own reason, verbatim. Nothing is stored, and nothing is repaired (REQ-201).
+    log.push_back(verbUpper + " — " + brep::ProblemText(why));
+    return;
+  }
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(solid);
+
+  PushUndoSnapshot(st, std::string("Create ") + brep::PrimitiveKindName(spec->kind));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+
+  char msg[240];
+  std::snprintf(msg, sizeof(msg), "%s created — volume %.4f, surface area %.4f.",
+                brep::PrimitiveKindName(spec->kind), mp.volume, mp.surfaceArea);
+  log.push_back(msg);
+}
+
+void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log) {
+  if (st.cadSolids.empty()) {
+    log.push_back("No solids in this drawing.");
+    return;
+  }
+  log.push_back("Solids: " + std::to_string(st.cadSolids.size()));
+  for (size_t i = 0; i < st.cadSolids.size(); ++i) {
+    const CadSolidPtr& sp = st.cadSolids[i];
+    if (!sp)
+      continue;
+    const brep::MassProperties mp = brep::ComputeMassProperties(*sp);
+    const char* layer = (i < st.cadSolidAttrs.size() && !st.cadSolidAttrs[i].layer.empty())
+                            ? st.cadSolidAttrs[i].layer.c_str()
+                            : "0";
+    char buf[420];
+    // Volume and area come from the topology, never from the recipe (ADR-045 (c)) — so a solid whose
+    // recipe somehow disagreed with its geometry reports what it actually IS.
+    std::snprintf(buf, sizeof(buf),
+                  "  [%d] %s on layer %s — volume %.4f, area %.4f, %d vertices, %d edges, %d faces%s",
+                  static_cast<int>(i), brep::PrimitiveKindName(sp->recipe.kind), layer, mp.volume,
+                  mp.surfaceArea, static_cast<int>(sp->vertices.size()),
+                  static_cast<int>(sp->edges.size()), static_cast<int>(sp->faces.size()),
+                  mp.valid ? "." : " — INVALID.");
+    log.push_back(buf);
+  }
+}
+
 /// Shared by the prompt and the inline `VS SHADED` form, so neither can set a value the other would
 /// reject (REQ-201). Accepts the AutoCAD-ish spellings a user is likely to try.
 bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
@@ -24814,6 +25372,22 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       log.push_back(std::string("PERFHUD — frame-time overlay ") + (st.perfHudVisible ? "ON." : "OFF."));
       return;
     }
+    // The seven solid primitives (REQ-313 / ADR-045). One typed line each — base point in the active
+    // UCS, then exact dimensions — which is what REQ-313's acceptance asks for and no more. The
+    // active UCS supplies the orientation, so a cylinder gets an arbitrary 3D axis without a new
+    // command or an axis argument (#120), the same rule REQ-312 settled for tilted arcs.
+    if (CadIsSolidPrimitiveVerb(plotTok)) {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      CadCreateSolidPrimitive(st, plotTok, restOfLine, log);
+      return;
+    }
+    // `SOLIDLIST` reports every solid's kind, layer, volume, surface area and topology counts —
+    // the numbers #120's Solid Properties section asks for, on the surface that exists today.
+    if (plotTok == "solidlist" || plotTok == "solids") {
+      CadReportSolids(st, log);
+      return;
+    }
     // `PERSPECTIVE ON` in one line; a bare `PERSPECTIVE` reports the current projection — the same
     // report-or-set shape as VS above (REQ-309). The maths behind this has existed since REQ-058;
     // until now nothing could select it.
@@ -24859,6 +25433,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.bench.surfacePointCount = 0;
       st.bench.surfaceTriangleCount = 0;
       st.bench.meshTriangleCount = 0;
+      st.bench.solidCount = 0;
+      st.bench.solidTriangleCount = 0;
 
       // `BENCH SURFACE [points] [frames]` selects the surface cost profile (REQ-100 as amended,
       // ADR-028), `BENCH MESH [triangles] [frames]` the shaded-mesh one (REQ-100 (b)). All three
@@ -24878,6 +25454,20 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           if (issIdle >> v)
             frames = v;
           st.bench.surfacePointCount = pts;
+          StartFrameBudgetBench(st, 1, frames, log);
+          return;
+        }
+        // `BENCH SOLID [count] [frames]` — the B-rep solid profile (REQ-313). Its own keyword and
+        // not a mode of the mesh one, because it measures a different shape of work: many small
+        // stream-uploaded batches with a cache lookup each, rather than one big indexed upload.
+        if (lower == "solid" || lower == "solids") {
+          int count = 400;  // a few hundred objects is what a real site model looks like
+          int v = 0;
+          if (issIdle >> v)
+            count = v;
+          if (issIdle >> v)
+            frames = v;
+          st.bench.solidCount = count;
           StartFrameBudgetBench(st, 1, frames, log);
           return;
         }

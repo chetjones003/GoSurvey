@@ -9359,6 +9359,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
         ImGui::Checkbox("Intersection", &cmd.objectSnapIntersection);
         ImGui::Checkbox("Apparent intersection", &cmd.objectSnapApparentIntersection);
         ImGui::Checkbox("Surface elevation", &cmd.objectSnapSurface);
+        ImGui::Checkbox("Solid face / edge", &cmd.objectSnapSolid);
         ImGui::EndPopup();
       }
       ImGui::SameLine(0, sp);
@@ -11471,6 +11472,10 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Apparent int";
   case CadSnap::Kind::Surface:
     return "Surface";
+  case CadSnap::Kind::Edge:
+    return "Solid edge";
+  case CadSnap::Kind::Face:
+    return "Solid face";
   case CadSnap::Kind::Grip:
     return "Grip";
   }
@@ -17741,6 +17746,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       armOverride(CadSnap::Kind::ApparentIntersection);
     if (ImGui::Selectable("Surface"))
       armOverride(CadSnap::Kind::Surface);
+    if (ImGui::Selectable("Solid edge"))
+      armOverride(CadSnap::Kind::Edge);
+    if (ImGui::Selectable("Solid face"))
+      armOverride(CadSnap::Kind::Face);
     ImGui::EndPopup();
   }
 

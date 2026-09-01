@@ -386,6 +386,9 @@ struct FaceIntegrals {
 
 struct MeshBuilder {
   Tessellation* out = nullptr;
+  /// Which face the triangles being emitted belong to. Set once per face by the loop below, so no
+  /// emit site has to remember to pass it and none can pass the wrong one.
+  int face = -1;
 
   std::uint32_t Push(const Vec3& p, const Vec3& n) {
     out->vertsXyz.push_back(p.x);
@@ -403,6 +406,7 @@ struct MeshBuilder {
     out->indices.push_back(a);
     out->indices.push_back(b);
     out->indices.push_back(c);
+    out->triFace.push_back(face);
   }
 };
 
@@ -508,6 +512,91 @@ Vec3 EdgePointAt(const Solid& s, const Edge& e, double t) {
     return ray3d::Add(a, ray3d::Scale(ray3d::Sub(b, a), t));
   }
   return ucs::PointOnPlaneCircle(e.frame, e.radius, e.sweep * t);
+}
+
+Vec3 ClosestPointOnSurface(const Surface& sf, const Vec3& p) {
+  const Vec3 local = ucs::WorldToUcs(sf.frame, p);
+  auto toWorld = [&sf](const Vec3& v) { return ucs::UcsToWorld(sf.frame, v); };
+  // The radial direction in the frame's XY plane. Degenerate exactly on the axis, which is the one
+  // input for which "nearest point" has no single answer.
+  const double rho = std::sqrt(local.x * local.x + local.y * local.y);
+
+  switch (sf.kind) {
+  case SurfaceKind::Plane:
+    return toWorld(Vec3{local.x, local.y, 0.0});
+  case SurfaceKind::Cylinder: {
+    if (!(rho > 1e-12))
+      return p;
+    const double k = sf.radius / rho;
+    return toWorld(Vec3{local.x * k, local.y * k, local.z});
+  }
+  case SurfaceKind::Cone: {
+    if (!(rho > 1e-12))
+      return p;
+    // Work in the (rho, z) half-plane, where the cone is the straight segment from (r0, 0) to
+    // (r1, h) — so this is a point-to-line projection, and the taper is handled by the same
+    // arithmetic that handles a cylinder rather than by a special case.
+    const Vec3 a{sf.radius, 0.0, 0.0};
+    const Vec3 b{sf.radius2, 0.0, sf.height};
+    const Vec3 ab = ray3d::Sub(b, a);
+    const double denom = ray3d::Dot(ab, ab);
+    if (!(denom > 1e-24))
+      return p;
+    const Vec3 ap{rho - a.x, 0.0, local.z - a.z};
+    const double t = ray3d::Dot(ap, ab) / denom;
+    const double rhoOn = a.x + ab.x * t;
+    const double zOn = a.z + ab.z * t;
+    const double k = rhoOn / rho;
+    return toWorld(Vec3{local.x * k, local.y * k, zOn});
+  }
+  case SurfaceKind::Sphere: {
+    const double len = ray3d::Length(local);
+    if (!(len > 1e-12))
+      return p;
+    return toWorld(ray3d::Scale(local, sf.radius / len));
+  }
+  case SurfaceKind::Torus: {
+    if (!(rho > 1e-12))
+      return p;  // on the axis: every point of the ring is equidistant
+    // Walk to the tube's centre circle first, then out along the tube.
+    const Vec3 ring{local.x * (sf.radius / rho), local.y * (sf.radius / rho), 0.0};
+    const Vec3 out = ray3d::Sub(local, ring);
+    const double outLen = ray3d::Length(out);
+    if (!(outLen > 1e-12))
+      return p;  // exactly on the tube's centre circle
+    return toWorld(ray3d::Add(ring, ray3d::Scale(out, sf.radius2 / outLen)));
+  }
+  }
+  return p;
+}
+
+Vec3 ClosestPointOnEdge(const Solid& s, const Edge& e, const Vec3& p) {
+  if (e.kind == CurveKind::Line) {
+    const Vec3& a = s.vertices[static_cast<std::size_t>(e.v0)].p;
+    const Vec3& b = s.vertices[static_cast<std::size_t>(e.v1)].p;
+    const Vec3 ab = ray3d::Sub(b, a);
+    const double denom = ray3d::Dot(ab, ab);
+    if (!(denom > 1e-24))
+      return a;
+    const double t = std::clamp(ray3d::Dot(ray3d::Sub(p, a), ab) / denom, 0.0, 1.0);
+    return ray3d::Add(a, ray3d::Scale(ab, t));
+  }
+  // An arc: drop onto its plane, take the angle there, then clamp that angle to the swept range —
+  // which is what keeps the answer on the arc rather than somewhere on the full circle behind it.
+  const ucs::Point2D flat = ucs::WorldToPlane(e.frame, p);
+  if (!(std::fabs(flat.x) > 1e-12 || std::fabs(flat.y) > 1e-12))
+    return EdgePointAt(s, e, 0.0);  // on the centre: no angle is defined
+  double angle = std::atan2(flat.y, flat.x);
+  const double lo = std::min(0.0, e.sweep);
+  const double hi = std::max(0.0, e.sweep);
+  // atan2 lands in (-pi, pi]; shift it by whole turns into the neighbourhood of the swept range
+  // before clamping, or an arc crossing the branch cut would clamp to the wrong end.
+  while (angle < lo - kPi)
+    angle += kTwoPi;
+  while (angle > hi + kPi)
+    angle -= kTwoPi;
+  const double clamped = std::clamp(angle, lo, hi);
+  return ucs::PointOnPlaneCircle(e.frame, e.radius, clamped);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1259,7 +1348,9 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
   Tessellation mesh;
   MeshBuilder mb{&mesh};
 
-  for (const Face& f : s.faces) {
+  for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
+    const Face& f = s.faces[fi];
+    mb.face = static_cast<int>(fi);
     const Surface& sf = f.surface;
     switch (sf.kind) {
     case SurfaceKind::Plane: {
@@ -1347,6 +1438,34 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
   }
 
   *out = std::move(mesh);
+  return Succeed(outWhy);
+}
+
+bool TessellateEdges(const Solid& s, double chordTolerance, std::vector<double>* out, Problem* outWhy) {
+  if (!out)
+    return false;
+  if (!std::isfinite(chordTolerance) || !(chordTolerance > 0.0))
+    return Fail(Problem::NonPositiveTolerance, outWhy);
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return Fail(why, outWhy);
+
+  std::vector<double> segs;
+  for (const Edge& e : s.edges) {
+    const int n = e.kind == CurveKind::Arc ? SegmentsForArc(e.radius, e.sweep, chordTolerance) : 1;
+    Vec3 prev = EdgePointAt(s, e, 0.0);
+    for (int i = 1; i <= n; ++i) {
+      const Vec3 next = EdgePointAt(s, e, static_cast<double>(i) / static_cast<double>(n));
+      segs.push_back(prev.x);
+      segs.push_back(prev.y);
+      segs.push_back(prev.z);
+      segs.push_back(next.x);
+      segs.push_back(next.y);
+      segs.push_back(next.z);
+      prev = next;
+    }
+  }
+  *out = std::move(segs);
   return Succeed(outWhy);
 }
 

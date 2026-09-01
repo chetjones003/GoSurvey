@@ -19,7 +19,16 @@ enum class Kind {
   /// points differ, the one nearer the camera is returned (REQ-062).
   ApparentIntersection,
   Grip,
-  Surface
+  Surface,
+  /// A point on a B-rep solid's EDGE (REQ-313). The nearest point along the edge itself, clamped to
+  /// its extent — so on a cylinder's rim the answer is on the circle, not on the chord the
+  /// tessellator drew across it.
+  Edge,
+  /// A point on a B-rep solid's FACE (REQ-313). The cursor ray is tested against the face's
+  /// triangles to decide WHICH face is under it, and the hit is then projected onto that face's
+  /// analytic surface — so the returned point lies exactly on the cylinder, not on a chord that is
+  /// a sagitta short of it (#120: "the resulting point should lie exactly on the selected face").
+  Face
 };
 
 struct Hit {
@@ -97,6 +106,10 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 0;
   case Kind::Surface:
     return 0;  ///< Weaker than endpoints so vertices still win (REQ-127).
+  case Kind::Edge:
+    return 1;  ///< As strong a claim as a midpoint: a real curve, but any point along it (REQ-313).
+  case Kind::Face:
+    return 0;  ///< The weakest solid claim — a vertex or an edge under the same cursor must win.
   case Kind::Grip:
     return 4; ///< Beats all geometry snaps; no glyph is drawn for this kind.
   }

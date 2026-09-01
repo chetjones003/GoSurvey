@@ -554,6 +554,16 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
   case CadSnap::Kind::Surface:
     AppendSnapDiamondOutline(out, f, mh);
     break;
+  // A solid's edge and face get glyphs of their own rather than borrowing the surface diamond: they
+  // are the only two snaps that can land on the SAME pixel as each other, so a shared glyph would
+  // leave the user unable to tell which one they are about to commit (REQ-313).
+  case CadSnap::Kind::Edge:
+    AppendSnapSquareOutline(out, f, mh * 0.55f);
+    break;
+  case CadSnap::Kind::Face:
+    AppendSnapDiamondOutline(out, f, mh * 0.62f);
+    AppendSnapSquareOutline(out, f, mh);
+    break;
   case CadSnap::Kind::Grip:
     break; // grip snap is silent — no glyph drawn
   }
@@ -882,6 +892,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<EntityAttributes>* filledRegionAttrs,
                                    const std::vector<std::shared_ptr<const CadMesh>>* meshes,
                                    const std::vector<EntityAttributes>* meshAttrs,
+                                   const CadSolidDisplayGeometry* solidGeometry,
                                    const CadSurfaceDisplayGeometry* surfaceGeometry,
                                    const VolumeMapDisplayGeometry* volumeMap,
                                    const std::vector<float>* removalLines,
@@ -1318,6 +1329,95 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glBindVertexArray(0);
     glUseProgram(lineProgram_);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+  }
+
+  // --- B-rep solids (REQ-313 / ADR-045) ------------------------------------------------------------
+  // Drawn in EVERY visual style, which is the opposite of the mesh rule above and for the reason
+  // ADR-026 (c) records: a solid HAS real edges, where a mesh's "edges" are artefacts of whatever
+  // resolution an exporter chose. What each style means for a solid:
+  //
+  //   2D Wireframe  edges only, depth test off — every edge visible, the pre-3D reading.
+  //   Hidden        the faces go into the DEPTH buffer with colour writes OFF, then the edges on
+  //                 top. That is real hidden-line removal; without the depth-only pass "Hidden"
+  //                 would mean nothing for a solid, because there would be nothing to hide behind.
+  //   Shaded        lit faces, then the edges on top.
+  //
+  // The polygon offset is load-bearing, not a tweak: an edge lies EXACTLY on the face it bounds, so
+  // without a depth bias half of every silhouette drops out in speckles as the two z-fight.
+  //
+  // Placed with the meshes, before the linework, so CAD geometry at the same elevation reads on top
+  // of a solid rather than being z-fought by it.
+  if (solidGeometry && !solidGeometry->empty()) {
+    if (depthOn) {
+      glUseProgram(shadedProgram_);
+      const ray3d::Vec3 solidFwd = cam.ForwardWorld();
+      glUniform3f(glGetUniformLocation(shadedProgram_, "uViewDir"), static_cast<float>(solidFwd.x),
+                  static_cast<float>(solidFwd.y), static_cast<float>(solidFwd.z));
+      glUniform1f(glGetUniformLocation(shadedProgram_, "uAmbient"), kShadedAmbient);
+      const GLint locSolidColor = glGetUniformLocation(shadedProgram_, "uColor");
+      glUniformMatrix4fv(glGetUniformLocation(shadedProgram_, "uMVP"), 1, GL_FALSE, mvp);
+      glDisable(GL_BLEND);
+      glEnable(GL_POLYGON_OFFSET_FILL);
+      glPolygonOffset(1.f, 1.f);
+      // Hidden: occlude, do not paint. The faces still write depth, which is the whole point.
+      if (!shadeSurfaces)
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+      glBindVertexArray(vaoShaded_);
+      glBindBuffer(GL_ARRAY_BUFFER, vboShaded_);
+      for (const CadSolidDisplayBatch& b : solidGeometry->solids) {
+        if (!b.triVerts || b.triVerts->empty() || b.triVerts->size() % 9 != 0)
+          continue;
+        const size_t vcount = b.triVerts->size() / 3;
+        const bool haveNormals = b.triNormals && b.triNormals->size() == b.triVerts->size();
+        cpuShadedTris_.clear();
+        cpuShadedTris_.resize(vcount * 6);
+        for (size_t v = 0; v < vcount; ++v) {
+          float rx = 0.f;
+          float ry = 0.f;
+          WorldToViewRelativeFloat(static_cast<double>((*b.triVerts)[v * 3]),
+                                   static_cast<double>((*b.triVerts)[v * 3 + 1]), viewAnchorX, viewAnchorY,
+                                   &rx, &ry);
+          float* o = &cpuShadedTris_[v * 6];
+          o[0] = rx;
+          o[1] = ry;
+          o[2] = (*b.triVerts)[v * 3 + 2];  // Z is absolute (ADR-025 D2)
+          o[3] = haveNormals ? (*b.triNormals)[v * 3] : 0.f;
+          o[4] = haveNormals ? (*b.triNormals)[v * 3 + 1] : 0.f;
+          o[5] = haveNormals ? (*b.triNormals)[v * 3 + 2] : 1.f;
+        }
+        glUniform4f(locSolidColor, b.rgba[0], b.rgba[1], b.rgba[2], 1.f);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cpuShadedTris_.size() * sizeof(float)),
+                     cpuShadedTris_.data(), GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vcount));
+      }
+      glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+      glDisable(GL_POLYGON_OFFSET_FILL);
+      glBindVertexArray(0);
+    }
+
+    // The edges, in every style — including 2D Wireframe, where they are the only thing a solid
+    // draws at all.
+    {
+      std::vector<float> solidRel;
+      glUseProgram(lineProgram_);
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+      glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
+      glBindVertexArray(vaoLines_);
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
+      for (const CadSolidDisplayBatch& b : solidGeometry->solids) {
+        if (!b.edgeVerts || b.edgeVerts->empty() || b.edgeVerts->size() % 6 != 0)
+          continue;
+        ConvertLineVertsWorldToView(*b.edgeVerts, viewAnchorX, viewAnchorY, &solidRel);
+        glUniform4f(locCol, b.rgba[0], b.rgba[1], b.rgba[2], b.rgba[3]);
+        glLineWidth(b.lineweightMm >= 0.f ? LineweightMmToDevicePx(b.lineweightMm) : kLwMain);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(solidRel.size() * sizeof(float)),
+                     solidRel.data(), GL_STREAM_DRAW);
+        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(solidRel.size() / 3));
+      }
+      glLineWidth(kLwMain);
+      glBindVertexArray(0);
+    }
   }
 
   // --- Solid-filled regions (ADR-011): even-odd stencil fill, drawn under the linework so it is plottable

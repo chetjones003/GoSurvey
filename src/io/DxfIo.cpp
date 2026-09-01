@@ -4024,6 +4024,18 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
                   " TIN surface(s) (no DXF representation): " + names +
                   ". Extract contours first if they are needed in the DXF.");
   }
+
+  // REQ-313 / ADR-045 (i): solids are excluded, and the exclusion is NAMED and COUNTED. A real
+  // solid in DXF is an ACIS 3DSOLID — a proprietary binary B-rep GoSurvey cannot write without a
+  // third-party kernel REQ-300 does not permit — and a tessellated approximation was considered and
+  // rejected: it hands the user a picture of their solid that round-trips back as an uneditable bag
+  // of triangles with an approximate volume. Same treatment, and the same reason, as the meshes and
+  // surfaces above: a drawing that quietly lost its solids on export and one that never had any
+  // look identical in the resulting file (REQ-201).
+  if (!st.cadSolids.empty()) {
+    log.push_back("DXF export — skipped " + std::to_string(st.cadSolids.size()) +
+                  " solid(s): DXF has no lossless representation for a B-rep solid (ADR-045).");
+  }
   return true;
 }
 

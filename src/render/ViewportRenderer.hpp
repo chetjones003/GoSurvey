@@ -67,6 +67,16 @@ public:
                    // is no "mesh wireframe" behaviour any requirement asks for.
                    const std::vector<std::shared_ptr<const CadMesh>>* meshes = nullptr,
                    const std::vector<EntityAttributes>* meshAttrs = nullptr,
+                   // B-rep solids (REQ-313 / ADR-045), as caller-assembled batches: the cached
+                   // tessellation for the faces and the solid's real edges for the wireframe, both
+                   // already filtered for layer visibility and isolation with colours resolved.
+                   //
+                   // Solids draw in EVERY visual style — the opposite of the mesh rule above, and
+                   // for the reason ADR-026 (c) records: a solid HAS edges, where a mesh's "edges"
+                   // are artefacts of an exporter's resolution. In Hidden the faces are written to
+                   // the depth buffer only, which is what makes "Hidden" mean anything for a solid
+                   // rather than being wireframe with extra steps.
+                   const CadSolidDisplayGeometry* solidGeometry = nullptr,
                    // Generated surface display geometry (REQ-068 / REQ-070, ADR-036 (h)) — the
                    // triangle edges, contours and border each visible surface's style asks for, as
                    // coloured batches of flat world-space line vertices (x,y,z per endpoint, two

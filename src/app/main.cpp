@@ -841,6 +841,10 @@ int main()
     // from regenerating every surface's geometry (REQ-070: a style change must not retriangulate,
     // and a line drawn elsewhere must not re-contour).
     RefreshSurfaceDisplayGeometry(cmd);
+    // The solid tessellation cache (REQ-313). Same placement and the same reason as the surface
+    // refresh above: keyed on its own staleness key, so an unrelated edit does not retessellate a
+    // solid, and #120's "do not regenerate a solid's render mesh every frame" holds by construction.
+    RefreshSolidDisplayGeometry(cmd);
 
     const ImGuiViewport *mainVp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainVp->WorkPos);
@@ -1332,6 +1336,11 @@ int main()
                                // Meshes are model-space only, like every other GL entity (REQ-063).
                                (paperSpace || cmd.cadMeshes.empty()) ? nullptr : &cmd.cadMeshes,
                                (paperSpace || cmd.cadMeshAttrs.empty()) ? nullptr : &cmd.cadMeshAttrs,
+                               // B-rep solids (REQ-313), model space only like every GL entity. The
+                               // batches borrow buffers owned by `cmd`, which outlives this call.
+                               (paperSpace || cmd.solidDisplayGeometry.empty())
+                                   ? nullptr
+                                   : &cmd.solidDisplayGeometry,
                                // Generated surface geometry (REQ-068/REQ-070), model space only like
                                // every GL entity. The batches borrow buffers owned by `cmd`, which
                                // outlives this call — and nothing between the refresh above and here
