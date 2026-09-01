@@ -35,6 +35,7 @@ void NewDrawingInTab(AppCommandState& cmd, std::vector<std::string>& log);
 void OpenDrawingInNewTab(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8);
 /// REQ-308 — drop a drawing from the recent-drawings store (used when a recent tile fails to open).
 void RemoveRecentDrawing(const std::string& absDrawingPath);
+void ClearRecentDrawings();
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
 /// Ribbon under the menu bar: sectioned icon toolbars (Draw, Modify, View, …) plus a fixed-width layer strip; hover for tooltips.

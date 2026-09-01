@@ -39,4 +39,8 @@ void Note(const std::filesystem::path& jsonFile, const std::string& drawingPath,
 /// A path that is not in the store is a silent no-op.
 void Remove(const std::filesystem::path& jsonFile, const std::string& drawingPath);
 
+/// Empties the store (writes an empty array). A missing store stays effectively empty.
+/// Best-effort, like the writers above — a write failure is swallowed.
+void Clear(const std::filesystem::path& jsonFile);
+
 }  // namespace recent

@@ -98,6 +98,24 @@ void InvalidateThumbTex(const std::string& drawingPath) {
   }
 }
 
+void InvalidateAllThumbTex() {
+  for (auto& [path, slot] : g_thumbTex)
+    DestroyIconTexture(slot.tex);
+  g_thumbTex.clear();
+}
+
+// Open the system file manager with `utf8Path` selected. UI-layer glue (like OpenUrl below) — it
+// must not live in the pure RecentDrawings module.
+void RevealInFileManager(const std::string& utf8Path) {
+#if defined(_WIN32)
+  const std::wstring w = std::filesystem::u8path(utf8Path).make_preferred().wstring();
+  const std::wstring params = L"/select,\"" + w + L"\"";
+  ::ShellExecuteW(nullptr, L"open", L"explorer.exe", params.c_str(), nullptr, SW_SHOWNORMAL);
+#else
+  (void)utf8Path;
+#endif
+}
+
 std::string DisplayNameFromEmail(const std::string& email) {
   const auto at = email.find('@');
   std::string name = (at == std::string::npos) ? email : email.substr(0, at);
@@ -363,6 +381,27 @@ void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
   }
 
   const char* clickedPath = nullptr;
+  // Context-menu actions that mutate the recent store are deferred until after EndChild(), so the
+  // `entries` vector this loop iterates is never invalidated mid-frame (same rule as clickedPath).
+  std::string revealPath, copyPath, removePath;
+  bool        clearAllRequested = false;
+  auto entryContextMenu = [&](const recent::Entry& e, bool fileExists) {
+    if (!ImGui::BeginPopupContextItem("##recentctx"))
+      return;
+    if (ImGui::MenuItem("Open", nullptr, false, fileExists))
+      clickedPath = e.path.c_str();
+    if (ImGui::MenuItem("Open Containing Folder", nullptr, false, fileExists))
+      revealPath = e.path;
+    if (ImGui::MenuItem("Copy Full Path"))
+      copyPath = e.path;
+    ImGui::Separator();
+    if (ImGui::MenuItem("Remove From List"))
+      removePath = e.path;
+    if (ImGui::MenuItem("Clear All Recent\xE2\x80\xA6"))
+      clearAllRequested = true;
+    ImGui::EndPopup();
+  };
+
   ImDrawList* dl = ImGui::GetWindowDrawList();
 
   if (gridView) {
@@ -404,6 +443,7 @@ void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
       dl->AddRect(p0, p1, ImGui::GetColorU32(hov ? Accent() : CardBorder()), 8.f, 0, hov ? 2.f : 1.f);
       if (hov)
         ImGui::SetTooltip("%s\n%s", e.name.c_str(), e.path.c_str());
+      entryContextMenu(e, std::filesystem::exists(std::filesystem::u8path(e.path)));
       ImGui::PopID();
       if (++col < perRow)
         ImGui::SameLine(0.f, gap);
@@ -443,12 +483,39 @@ void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
       dl->AddLine(ImVec2(p0.x, p1.y), ImVec2(p1.x, p1.y), ImGui::GetColorU32(CardBorder()), 1.f);
       if (hov)
         ImGui::SetTooltip("%s\n%s", e.name.c_str(), e.path.c_str());
+      entryContextMenu(e, std::filesystem::exists(std::filesystem::u8path(e.path)));
       ImGui::PopID();
     }
   }
 
   ImGui::EndChild();
   ImGui::PopStyleColor();
+
+  if (!copyPath.empty())
+    ImGui::SetClipboardText(AbsPathUtf8(copyPath).c_str());
+  if (!revealPath.empty())
+    RevealInFileManager(AbsPathUtf8(revealPath));
+  if (!removePath.empty()) {
+    RemoveRecentDrawing(removePath);
+    InvalidateThumbTex(removePath);  // texture cache is keyed by the stored entry path
+    log.push_back("Removed from Recent: " + removePath);
+  }
+  if (clearAllRequested)
+    ImGui::OpenPopup("Clear Recent Drawings?");
+
+  if (ImGui::BeginPopupModal("Clear Recent Drawings?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Remove every drawing from the Recent list?\nThis cannot be undone.");
+    ImGui::Dummy(ImVec2(0.f, 8.f));
+    if (ImGui::Button("Clear All", ImVec2(120.f, 0.f))) {
+      ClearRecentDrawings();
+      log.push_back("Cleared the Recent Drawings list");
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.f, 0.f)))
+      ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
 
   if (clickedPath) {
     // Copy — OpenDrawingInNewTab mutates the recent store, invalidating `entries`.
@@ -631,6 +698,11 @@ void RecordRecentDrawing(AppCommandState& cmd, const std::string& absDrawingPath
 
 void RemoveRecentDrawing(const std::string& absDrawingPath) {
   recent::Remove(RecentJsonPath(), AbsPathUtf8(absDrawingPath));
+}
+
+void ClearRecentDrawings() {
+  recent::Clear(RecentJsonPath());
+  InvalidateAllThumbTex();
 }
 
 void ServicePendingThumbnail(AppCommandState& cmd, const ViewportRenderer& renderer) {
