@@ -8,8 +8,8 @@ rem   run.bat release         force the release build  (build\GoSurvey.exe)
 rem   run.bat debug           force the debug build     (build\debug\GoSurvey.exe)
 rem   run.bat [target] ARGS   forward ARGS to GoSurvey.exe
 rem
-rem This does not build. Use build.bat first (build.bat configures/builds the
-rem ninja-release preset; the debug tree comes from `cmake --preset ninja-debug`).
+rem This does not build. Use build.bat first:  build.bat  (release)  or
+rem build.bat debug  (debug).
 
 cd /d "%~dp0"
 
@@ -72,5 +72,5 @@ exit /b 1
 
 :nodbg
 echo ERROR: debug build not found at "%CD%\%DBG%".
-echo   Configure and build it first:  cmake --preset ninja-debug ^&^& cmake --build build\debug
+echo   Build it first:  build.bat debug
 exit /b 1
