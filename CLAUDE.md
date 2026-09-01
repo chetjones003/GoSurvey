@@ -1,249 +1,271 @@
-# CLAUDE.md — Master Governance
+# CLAUDE.md — Project Governance
 
-This file governs the **entire** system. It is the authoritative entry point for
-any work in this repository. Every change passes through a three-layer process,
-and this document defines that process and the rules that bind it.
+This file defines **how Claude works in this repository**.
 
-> The detailed C++/Rust/Zig/Go coding standards that previously lived in this
-> file now live in **`spec/coding-standards.md`** (preserved and authoritative).
-> This file governs *how work happens*; `spec/` governs *what is true*.
+## Authority
 
----
+The repository has three layers:
 
-## Environment note for AI agents (read first)
+1. **SPEC** (`spec/`) — defines what is true and what must be built.
+2. **VERIFICATION** (`verification/`) — checks work against the SPEC.
+3. **WORKSHOP** (`workshop/`) — implements approved work.
 
-This is a **Windows-native repository**. The application targets Windows and
-builds with MSVC (`cl`) + CMake + the Ninja generator via `build.bat` /
-`CMakePresets.json`. That build system is authoritative and must not be
-replaced with Linux equivalents.
+**Authority flows down:** SPEC → VERIFICATION → WORKSHOP
+**Evidence flows up:** WORKSHOP → VERIFICATION → SPEC
 
-The AI agent may run under **WSL / Linux / Git Bash**. To interact with the
-Windows build, test and GitHub environment from there, use the **`dev/`
-commands** — a thin adapter over the existing tooling (see `dev/README.md`):
-
-| Task | Command |
-|------|---------|
-| Build (canonical release) | `./dev/build` |
-| Clean build artifacts | `./dev/clean` |
-| Build + run the full test suite | `./dev/test` |
-| Repository state | `./dev/status` |
-| GitHub CLI (Windows `gh.exe`) | `./dev/gh …`, `./dev/issue …`, `./dev/pr …` |
-| Arbitrary Windows command | `./dev/win …` |
-| List commands | `./dev/help` |
-
-Rules:
-
-- **Do not replace Windows tooling with Linux tooling merely because the agent
-  is running under WSL.** WSL is the agent environment, not the target platform.
-- Do not add a Bash/CMake path that duplicates `build.bat`; extend the `dev/`
-  wrapper instead.
-- `dev/gh` uses the user's existing Windows `gh.exe` and its authentication — do
-  not install a Linux GitHub CLI.
-- The canonical build/test commands (what CI runs) are
-  `cmake --build build` after `cmake --preset ninja-release`, then
-  `ctest --test-dir build --output-on-failure`. `dev/build` and `dev/test` wrap
-  exactly these.
+`spec/` is the single source of truth. Never invent requirements or change the SPEC merely to make implementation pass.
 
 ---
 
-## The system
+## Git Workflow
 
-Work is organized into three layers with a strict separation of authority.
+* `master` = latest stable release. **Keep it clean and release-ready.**
+* `beta` = current development branch. It may contain changes not yet fully tested for release.
+* **Never work directly on `master` or `beta`.**
+* Create focused branches from `beta`:
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│ 1. SPECIFICATION   (spec/)        — defines truth              │
-│      project.md · requirements.md · architecture.md           │
-│      coding-standards.md · roadmap.md                         │
-├──────────────────────────────────────────────────────────────┤
-│ 2. VERIFICATION    (verification/) — reviews and gates work    │
-│      verification.md · *-checklist.md · skills/               │
-├──────────────────────────────────────────────────────────────┤
-│ 3. WORKSHOP        (workshop/)     — implements approved work   │
-│      workflow.md · task-template.md · implementation-rules.md │
-└──────────────────────────────────────────────────────────────┘
+  * `feat/<name>`
+  * `fix/<name>`
+  * `docs/<name>`
+  * `refactor/<name>`
+  * `test/<name>`
+  * `chore/<name>`
+* Merge all development branches into `beta` through a PR.
+* When `beta` is fully tested and ready for release, merge `beta` → `master` through a release PR.
+* Never merge development branches directly into `master`.
 
-   Authority flows DOWN (spec → workshop).
-   Evidence flows UP (workshop → verification → spec).
-   The spec changes ONLY by a recorded decision — never to excuse code.
-```
+**Normal flow:**
 
----
-
-## Layer behavior rules
-
-These are binding. Each layer does its job and **does not** do another layer's
-job.
-
-### 1. SPECIFICATION — defines truth (`spec/`)
-
-- **Defines truth.** It is the single source of truth; all other layers obey it.
-- **Defines requirements.** Numbered, testable `REQ-NNN` with Acceptance
-  conditions (`spec/requirements.md`).
-- **Defines architecture.** Layers, boundaries, ownership, data flow
-  (`spec/architecture.md`).
-- **Defines standards.** Coding standards and conventions
-  (`spec/coding-standards.md`).
-- **Does NOT implement code.** It describes outcomes and rules, never function
-  bodies.
-- Changes only through a deliberate, recorded decision (decision log in
-  `spec/project.md`).
-
-### 2. VERIFICATION — reviews everything (`verification/`)
-
-- **Reviews all proposed work** against the Specification — nothing ships
-  unreviewed.
-- **Uses skills to validate work** (`verification/skills/`): build-project,
-  testing, debugging, code-review, architecture-review, performance-review,
-  dependency-audit, release-review.
-- **Identifies risks** (correctness, architecture, dependency, performance).
-- **Identifies missing requirements** — work with no `REQ-NNN` behind it is
-  flagged.
-- **Rejects work that violates specifications.** It is empowered to FAIL.
-  Correctness and safety findings are never waivable.
-- **Asks questions when uncertainty exists** (`verification.md` §7).
-- **Does NOT implement** and **does NOT invent requirements** — it escalates a
-  SPEC GAP instead.
-
-### 3. WORKSHOP — implements (`workshop/`)
-
-- **Implements approved tasks** — only tasks citing an `accepted` `REQ-NNN`.
-- **Follows specifications** — builds within `spec/architecture.md` and to
-  `spec/coding-standards.md`.
-- **Responds to verification findings** — loops until PASS.
-- **Produces code and deliverables** — plus tests, task logs, and docs.
-- **Does NOT make architectural decisions.** New abstractions, layers,
-  dependencies, ownership changes, global state, public-API or data-format
-  changes, or algorithm swaps are **architectural** → escalate as SPEC GAP
-  (`workshop/workflow.md` §4).
-- **Does NOT edit the spec** to make failing code pass.
+`feature/fix/docs branch → PR → beta → release PR → master`
 
 ---
 
-## The mandatory workflow
+## 1. Environment
 
-Every unit of work — feature, bug, refactor, test, or docs — follows these seven
-steps in order. Do not skip a step; do not reorder.
+This is a **Windows-native repository** using MSVC (`cl`), CMake, and Ninja.
 
-### 1. Read specification
-Locate the authority. Find the `GOAL-NN`, `REQ-NNN` (must be `accepted`), and
-applicable `CON-NN` in `spec/`. Restate each Acceptance condition. **If no
-requirement exists, stop** — this is a Specification task; escalate, do not
-build.
+The authoritative build system is:
 
-### 2. Generate implementation plan
-Open a task from `workshop/task-template.md` into `workshop/tasks/`. Fill
-**Authority**, run the **architectural-boundary check**, and write the **Plan**
-(approach, files to touch, test approach, steps). **No code yet.** A plan that
-requires an architectural decision is a SPEC GAP, not a plan.
+* `build.bat`
+* `CMakePresets.json`
 
-### 3. Run verification review
-Submit the plan to Verification. It checks the approach against the spec —
-architecture, scope, missing requirements, risks — **before** implementation.
-Cheapest place to catch drift.
+Claude may run under WSL/Linux/Git Bash. Use `./dev/` for Windows tooling:
 
-### 4. Ask user questions if needed
-If the requirement is ambiguous, requirements conflict, a failure mode is
-unspecified, an architectural decision is implied, or the change is irreversible/
-outward-facing → **ask one specific question with options and a recommendation.**
-Record the question and answer in the task log. Do not proceed on a guess.
+| Task            | Command           |
+| --------------- | ----------------- |
+| Build           | `./dev/build`     |
+| Test            | `./dev/test`      |
+| Clean           | `./dev/clean`     |
+| Status          | `./dev/status`    |
+| GitHub          | `./dev/gh ...`    |
+| Issues          | `./dev/issue ...` |
+| PRs             | `./dev/pr ...`    |
+| Windows command | `./dev/win ...`   |
 
-### 5. Implement work
-Build to `workshop/implementation-rules.md`: the smallest sufficient change,
-inside the owning subsystem, with tests (happy path + failure mode). Document
-assumptions as you go. Make no architectural decision — escalate if one appears.
-
-### 6. Run verification skills
-Self-run the relevant `verification/skills/` checklists, then submit for review:
-`build-project` → `architecture-review` → `code-review` → `dependency-audit` →
-`performance-review` → `testing`. Resolve every blocking finding. Verdict is
-**PASS**, **FAIL** (loop to step 5), or **SPEC GAP** (escalate to `spec/`). For a
-release, also run `release-review` — which requires explicit user authorization.
-
-### 7. Produce completion report
-On PASS, write the completion report (template below) and record the deliverable.
-The task is **done** only when the report is complete and honest.
-
-```
-COMPLETION REPORT — TASK-NNN — <date>
-- Requirements satisfied:  REQ-NNN (Acceptance met: yes)
-- Summary:                 <what was delivered, 1–2 lines>
-- Tests:                   <ids> (happy + failure-mode, run green)
-- Verification verdict:    PASS  (findings resolved: <ids/none>)
-- Assumptions:             <ids documented in task log, validated/open>
-- Architectural decisions: none made by Workshop (escalated: <ids/none>)
-- Dependencies:            <added/none> (each recorded in decision log)
-- Technical debt noted:    <ids/none — see Technical debt rule>
-- Build:                   reproducible, clean on target platform
-- Docs updated:            <files/none>
-```
+Do not replace the Windows build system with Linux equivalents or install a separate Linux `gh`.
 
 ---
 
-## Additional rules (binding on all layers)
+## 2. Specification
 
-These apply to every plan, review, and implementation. Verification enforces
-them; the Workshop obeys them; the Specification embodies them.
+Read the relevant files in `spec/` before making changes:
 
-1. **Prefer simple solutions.** The simplest version that is fast enough and
-   correct wins. When in doubt, choose simpler.
-2. **Avoid unnecessary abstractions.** No interface/trait/template/generic
-   without **two or more** present-day concrete uses. Duplication is cheaper than
-   the wrong abstraction. (Adding an abstraction is an architectural decision —
-   Workshop escalates it.)
-3. **Minimize dependencies.** Before adding one, answer: can it be done simply
-   in-tree? is it maintained and worth the build cost? does it solve a problem we
-   have today? Any "no" → don't add it. Every dependency is recorded in the
-   decision log.
-4. **Prefer maintainable code over clever code.** Code is read far more than
-   written. Readability and debuggability outrank cleverness at every review
-   tier.
-5. **Maintain architectural consistency.** Dependencies flow downward only; each
-   change lives in the subsystem that owns it; one visible owner per resource. No
-   change crosses a `spec/architecture.md` §11 invariant.
-6. **Preserve build reproducibility.** Clean builds of a fixed commit produce
-   identical artifacts; lockfiles committed; artifacts go to the build directory,
-   never the source tree (REQ-200, CON-07).
-7. **Identify technical debt.** When a constraint forces a compromise, name it
-   explicitly in the completion report and the task log, with a removal condition
-   and a follow-up task. Never let debt hide.
-8. **Document assumptions.** Every assumption is written in the task log
-   (`ASSUMPTION-N`: what / because / risk-if-wrong / validate-by). Assumptions
-   about architecture or the spec are not the Workshop's to settle — convert them
-   to a question or SPEC GAP.
+* `project.md`
+* `requirements.md`
+* `architecture.md`
+* `coding-standards.md`
+* `roadmap.md`
+
+Every task must have:
+
+* an applicable **accepted `REQ-NNN`**
+* the relevant **Acceptance Criteria**
+* any applicable constraints (`CON-NN`)
+
+If the required specification does not exist or is unclear, stop and raise a **SPEC GAP**.
+
+Specification changes require a deliberate, recorded decision.
 
 ---
 
-## Escalation: the SPEC GAP
+## 3. Workflow
 
-The mechanism that keeps the system honest. When work reveals the spec is
-missing, ambiguous, contradictory, or wrong — or when an architectural decision
-is required — **do not** edit code to an unwritten rule and **do not** edit the
-spec to excuse code. Instead:
+Every feature, bug fix, refactor, test, or documentation change follows this order:
 
-1. Stop. Mark the task **blocked: SPEC GAP**.
-2. File a proposed change against the relevant `spec/` file (its change
-   protocol).
-3. Get a recorded decision (decision log in `spec/project.md`).
-4. Resume only after the spec is updated by that decision.
+### 1. Understand
 
-> **The spec changes through a deliberate, visible decision — never as a side
-> effect of implementation.** This single rule prevents implementation drift.
+Read the relevant SPEC and identify the applicable:
+
+* `GOAL-NN`
+* accepted `REQ-NNN`
+* `CON-NN`
+* Acceptance Criteria
+
+### 2. Plan
+
+Create/update the task in `workshop/tasks/`.
+
+Include:
+
+* Requirement authority
+* Files/subsystems affected
+* Implementation approach
+* Test approach
+* Architectural-boundary check
+
+**Do not code yet.**
+
+### 3. Verify the plan
+
+Check the plan against the SPEC, architecture, scope, risks, and missing requirements.
+
+### 4. Resolve uncertainty
+
+If requirements are ambiguous, contradictory, incomplete, architecturally significant, irreversible, or outward-facing:
+
+**Stop and ask the user. Never guess.**
+
+Ask one clear question at a time, provide options, and recommend one.
+
+### 5. Implement
+
+Implement the **smallest correct solution** that satisfies the approved requirement.
+
+Follow:
+
+* `spec/architecture.md`
+* `spec/coding-standards.md`
+* `workshop/implementation-rules.md`
+
+Add appropriate happy-path and failure/edge-case tests.
+
+### 6. Verify
+
+Run the applicable verification skills:
+
+* `build-project`
+* `architecture-review`
+* `code-review`
+* `dependency-audit`
+* `performance-review`
+* `testing`
+
+Resolve all blocking findings.
+
+The result must be:
+
+**PASS**, **FAIL**, or **SPEC GAP**.
+
+### 7. Complete
+
+A task is complete only when its required completion report, tests, verification, assumptions, technical debt, build status, and documentation updates are recorded.
 
 ---
 
-## Quick reference
+## 4. Layer Responsibilities
 
-| I want to… | Go to |
-|------------|-------|
-| Know what is true / required | `spec/` (`project.md`, `requirements.md`) |
-| Know the architecture / standards | `spec/architecture.md`, `spec/coding-standards.md` |
-| Start a task | `workshop/task-template.md` → `workshop/tasks/` |
-| Know the implementation rules | `workshop/implementation-rules.md` |
-| Review or gate work | `verification/verification.md` + `verification/skills/` |
-| Ship a release | `verification/skills/release-review/` (needs user sign-off) |
-| Change the spec | File a SPEC GAP; record the decision in `spec/project.md` |
+### SPEC
 
-**Guiding principle:** the best code is easy to read, easy to debug, easy to
-modify, fast enough, and free of unnecessary abstraction. When in doubt, choose
-the simpler solution — and when the spec is unclear, ask.
+Defines requirements, architecture, standards, and project decisions.
+
+**Does not implement code.**
+
+### VERIFICATION
+
+Reviews work against the SPEC and identifies correctness, architecture, testing, dependency, performance, and completeness problems.
+
+**Does not implement fixes or invent requirements.**
+
+### WORKSHOP
+
+Implements approved requirements and responds to verification findings.
+
+**Does not make architectural decisions or modify the SPEC to justify implementation.**
+
+Detailed procedures belong in each layer's own documentation.
+
+---
+
+## 5. SPEC GAP
+
+A **SPEC GAP** exists when the repository does not provide enough information to safely determine what should happen.
+
+Examples:
+
+* Missing requirement
+* Missing or incomplete Acceptance Criteria
+* Contradictory requirements
+* Unclear expected behavior
+* Undefined architectural boundary
+* Required architectural decision
+
+When a SPEC GAP occurs:
+
+1. Stop.
+2. Explain the problem to the user.
+3. Explain why it matters.
+4. Present the available choices.
+5. Recommend the best choice.
+6. Record the decision.
+7. Update the appropriate SPEC.
+8. Resume only after the SPEC is resolved.
+
+**Never solve a SPEC GAP by guessing.**
+
+---
+
+## 6. Explaining REQ / SPEC / AC Problems
+
+**When explaining a problem involving a REQ, SPEC, Acceptance Criteria, architecture, or SPEC GAP, assume the user knows absolutely nothing about programming.**
+
+Explain it in plain English before using technical terminology. Assume the user knows nothing about software engineering.
+
+Always explain:
+
+1. **What the SPEC currently says**
+2. **What is missing, unclear, or contradictory**
+3. **Why Claude cannot safely decide on its own**
+4. **What choices the user has**
+5. **Claude's recommendation**
+
+Use simple real-world analogies when they make the problem easier to understand.
+
+**Do not ask the user to make a technical decision without first explaining what the decision means and why it matters.**
+
+---
+
+## 7. Coding Principles
+
+Prefer:
+
+* Simple solutions
+* Readable, maintainable code
+* Easy debugging
+* Existing patterns
+* Minimal dependencies
+* Small, focused changes
+
+Avoid:
+
+* Clever or unnecessarily complex code
+* Unnecessary abstractions
+* Unnecessary dependencies
+* Duplicate architecture
+* Global state
+* Unapproved architectural changes
+
+Do not introduce an abstraction without **at least two current concrete uses**.
+
+Document assumptions and technical debt. If an assumption affects the SPEC or architecture, ask the user instead of deciding it yourself.
+
+---
+
+## Guiding Principle
+
+> **Build the simplest correct thing that the specification actually requires.**
+
+**If the SPEC is clear, implement it.
+If the SPEC is unclear, ask.
+If the implementation conflicts with the SPEC, fix the implementation.
+If the SPEC must change, get a recorded decision first.**
+
