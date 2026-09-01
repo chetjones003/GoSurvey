@@ -153,6 +153,11 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
                                         view, identical to the pre-REQ-061 flat projection.
             camPerspective            (bool, optional)   — REQ-061; false (default) = orthographic
             camFovDeg                 (number, optional) — REQ-061; perspective vertical FOV
+            ucs                       (object, optional) — REQ-155; this viewport's active UCS frame
+                                        ({origin,xAxis,yAxis,zAxis}, each a 3-number array), used
+                                        while editing the model through it in floating model space
+                                        (REQ-036). Absent = World (every pre-REQ-155 file). A frame
+                                        that fails its orthonormal check on load falls back to World.
             layer                     (string)  viewport's layer (for plotting)
             frozenLayers              (array of strings, optional) — REQ-028; layers hidden only in this viewport
             vpColorLayers             (array of strings, optional) — REQ-046; layers with a per-viewport color

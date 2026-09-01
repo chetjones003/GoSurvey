@@ -5329,16 +5329,72 @@ capability that does not exist. They are recorded here rather than quietly dropp
 2. **"Polar tracking follows the UCS"** — polar tracking does not exist. It is a status-bar toggle
    with no drafting behaviour (`CadUi.cpp`, labelled "UI only for now"). The condition asks for the
    feature to be built first, which is its own requirement.
-3. **Per-viewport UCS and UCSFOLLOW isolation** (GitHub issue #155) — REQ-061's per-viewport camera
-   now exists (issue #175, 2026-08-31), so a paper-space `Viewport` carries an orientation. What is
-   still missing is a per-viewport *active UCS* + UCSFOLLOW and geometry entry routed through a
-   viewport's frame; multiple simultaneous model-space viewports remain an open scope question (see
-   the REQ-084 note). There is one model view per drawing, so the active UCS is still scoped per
-   drawing. Issue #155 stays open on the remaining work.
+3. **Per-viewport UCS and UCSFOLLOW isolation** (GitHub issue #155) — **promoted to its own
+   requirement REQ-155** (accepted 2026-08-31, decision D-2026-08-31-c), once REQ-061's per-viewport
+   camera (issue #175, 2026-08-31) removed the blocker. REQ-155 scopes the per-viewport *active UCS*
+   to paper-space viewports and the floating model space (REQ-036) inside them; a viewport holds a
+   `ucs::Ucs` frame value while named definitions stay shared on `ucsNamed`. Multiple simultaneous
+   model-space viewports (`VPORTS` split) remain an explicitly open scope question and are **not**
+   part of REQ-155.
 4. **`Object` alignment to 3D faces, meshes, surfaces and solids** — resolving a face needs
    face-level picking, which does not exist: a mesh picks as one object with no face identity, and
    solids/surfaces as editable entities are issue #120's scope. `Object` covers lines, arcs,
    circles, ellipses and text, and refuses anything else with a stated reason.
+
+### REQ-155 — Per-viewport active UCS and UCSFOLLOW (GitHub issue #155)
+- Purpose: a paper-space viewport (and the floating model space inside it) resolves coordinate
+  entry, the grid, ORTHO, the readout and UCSFOLLOW against its OWN active work plane, so two
+  viewports on one sheet can present two different frames without leaking into each other or into
+  the drawing's model view. Completes the per-viewport half of issue #126 / REQ-154, deferred there.
+- Priority: should
+- Type: functional
+- Statement:
+  - Each paper-space `Viewport` carries an **active UCS frame** — a `ucs::Ucs` value, default the
+    World Coordinate System. It is typically set to one of the drawing's named UCSs, but may also
+    hold an ad-hoc frame built while floating inside that viewport (AutoCAD `UCSVP`). It is
+    separate from the drawing-scoped `activeUcs`, which continues to govern the (single,
+    non-floating) model-space view.
+  - **Named UCS definitions and named views stay per drawing.** Only the *active frame* is per
+    viewport; the shared `ucsNamed` list is the single owner of named definitions. `World` still
+    cannot be saved over or deleted.
+  - On entering **floating model space** (REQ-036) for a viewport, that viewport's active UCS
+    selection becomes the frame that draw / edit / snap / the grid / ORTHO / the coordinate readout
+    / `ID` all resolve against, and the readout names which frame that is (REQ-154). On leaving
+    floating model space the drawing's model view is unchanged.
+  - **`UCSFOLLOW=1`**: while floating model space is entered, changing that viewport's active UCS
+    re-plans **only that viewport's camera** (REQ-061) to a plan view of the new frame; no other
+    viewport and not the drawing's model view is re-planned or otherwise altered. `UCSFOLLOW`
+    itself remains a single per-drawing flag (0/1).
+  - Changing one viewport's active UCS **leaves every stored coordinate untouched** and leaves
+    every other viewport's frame, camera and displayed geometry untouched (REQ-154's "changing the
+    UCS leaves every stored coordinate untouched", scoped per viewport).
+  - The per-viewport active UCS frame **persists per viewport in `.gs`** (origin + axes), additively (no
+    `kGsFormatVersion` bump): a file written before this requirement loads with every viewport
+    referring to the drawing's frame (unchanged behaviour), and a file written after it that an
+    older build reads simply ignores the key.
+  - **Out of scope:** multiple simultaneous model-space viewports (`VPORTS`-style split model
+    space). Until that is a separate accepted requirement, the two-viewport acceptance below is
+    satisfied by entering each viewport's floating model space in turn.
+- Acceptance:
+  - a layout with two viewports, viewport A's active UCS set to a rotated named UCS and viewport B
+    left in World: entering A's floating model space and typing a point lands it at the world
+    coordinates A's frame implies (asserted on the stored coordinate, not on entity counts);
+    entering B's floating model space and typing the same relative input lands it at B's
+    (World-frame) world coordinates;
+  - with `UCSFOLLOW=1`, changing viewport A's active UCS while A's floating model space is entered
+    re-plans A's camera to a plan of the new frame and leaves viewport B's camera, the drawing's
+    model-view camera, and all stored geometry byte-identical;
+  - changing viewport A's active UCS while nothing is floating changes no camera and no coordinate;
+  - a pre-REQ-155 `.gs` loads with both viewports resolving against the drawing frame and renders
+    identically to pre-change; a `.gs` saved after REQ-155 round-trips the per-viewport selection
+    byte-identically and still carries every key an older build needs;
+  - the coordinate readout inside a floating viewport names that viewport's frame (extends
+    REQ-154's readout condition).
+- Owner-layer: Commands (the per-viewport frame + coordinate entry + UCSFOLLOW re-plan), Renderer
+  (grid in the viewport frame), UI (readout), IO (`.gs` persistence)
+- Status: accepted (2026-08-31)
+- Revisions: 2026-08-31 — initial (D-2026-08-31-c). Split from REQ-154 / GitHub issue #126 as the
+  deferred per-viewport item; raised by TASK-157 after REQ-061 (issue #175) removed the blocker.
 
 
 ---
@@ -5885,6 +5941,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-152 | util/Commands | done (TASK-136) — catchment mean Z; `[req152]` | accepted |
 | REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
 | REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126) | accepted |
+| REQ-155 | Commands/Renderer/UI/IO | done (TASK-157) — `ViewportUcsTests` T1–T6: point typed while floating resolves in the viewport frame; `UCSFOLLOW=1` re-plans only the active viewport (sibling + model-view camera unchanged); viewport-UCS field independence; `.gs` round-trip + legacy load all-World; readout resolves in the viewport frame; save-while-floating records the drawing frame. Manual GUI spot-check (float a viewport, `UCS`, grid/crosshair rotate in that viewport only) pending — headless cannot render. (GitHub issue #155, D-2026-08-31-c) | accepted |
 | REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
 | REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2004 default write; no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
 | REQ-171 | Domain/Renderer/IO | planned — point cloud entity; shared immutable payload; logged DXF/DWG exclusion | accepted |

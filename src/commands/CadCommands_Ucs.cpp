@@ -235,6 +235,20 @@ void ApplyPlanViewOf(AppCommandState& st, const ucs::Ucs& frame, std::vector<std
   // The roll that also places the UCS +Y up the screen (#153). Zero whenever the frame's Z is world
   // +Z, so the flat survey case animates exactly as it did before this existed.
   const float roll = Camera::RollToPlaceUp(az, el, frame.yAxis);
+  // REQ-155 (issue #155): UCSFOLLOW inside floating model space re-plans ONLY that viewport's
+  // REQ-061 camera — never the drawing's model-view camera, and no sibling viewport. A paper
+  // viewport does not animate, so the angles are written straight onto it.
+  if (InFloatingModelSpace(st)) {
+    if (Viewport* vp = CurrentViewport(st)) {
+      vp->camAzimuthDeg = az;
+      vp->camElevationDeg = el;
+      vp->camRollDeg = roll;
+      vp->camPerspective = false;
+      BumpCadGpuCache(st);
+    }
+    (void)log;
+    return;
+  }
   CadStartViewAnimation(st, az, el, roll);  // ease, never jump (REQ-059)
   (void)log;
 }

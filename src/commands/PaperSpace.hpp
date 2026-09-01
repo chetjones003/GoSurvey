@@ -2,6 +2,7 @@
 
 #include "CadEntities.hpp"
 #include "util/cadblock.hpp"
+#include "util/ucs.hpp"  // REQ-155: per-viewport active UCS frame (pure value type, ray3d only)
 
 #include <cmath>
 #include <cstdint>
@@ -76,6 +77,15 @@ struct Viewport {
   float camRollDeg = 0.f;
   bool  camPerspective = false;
   float camFovDeg = 45.f;
+
+  // REQ-155 (issue #155, D-2026-08-31-c): the active work plane (UCS) this viewport resolves
+  // coordinate entry / grid / ORTHO / the readout / UCSFOLLOW against while the user is in
+  // FLOATING MODEL SPACE (REQ-036) inside it. A `ucs::Ucs` VALUE, not a name — so an ad-hoc UCS
+  // built while floating (3-point / ZAxis / rotate) persists to the viewport, matching AutoCAD's
+  // UCSVP. The default is World, under which every pre-REQ-155 drawing and .gs is unchanged.
+  // Named UCS *definitions* stay per-drawing on AppCommandState::ucsNamed (single owner); this is
+  // only the per-viewport *active frame*. Persisted additively in .gs (GsIo).
+  ucs::Ucs activeUcs;
 
   float safeScale() const { return scaleModelPerPaperIn > 1.e-6f ? scaleModelPerPaperIn : 1.e-6f; }
 

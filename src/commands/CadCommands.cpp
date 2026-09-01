@@ -77,7 +77,10 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   // The coordinate system is per-drawing (REQ-154). Without this, switching tabs would carry one
   // drawing's UCS into another's — and every coordinate typed afterwards would be read in a frame
   // belonging to a different drawing, with nothing on screen to say so.
-  doc.activeUcs              = cmd.activeUcs;
+  // REQ-155: while floating model space is entered, cmd.activeUcs is a VIEWPORT's frame; the
+  // drawing's own UCS is parked in the stash. Snapshot the drawing-scoped one (and patch the
+  // floating viewport's frame into doc.paperLayouts below).
+  doc.activeUcs              = CadDrawingScopedUcs(cmd);
   doc.ucsPrevious            = cmd.ucsPrevious;
   doc.ucsNamed               = cmd.ucsNamed;
   doc.namedViews             = cmd.namedViews;
@@ -129,6 +132,15 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.selection              = cmd.selection;
   doc.hiddenEntityIds        = cmd.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   doc.paperLayouts           = cmd.paperLayouts;
+  // REQ-155: fold the live floating-viewport UCS into the snapshot's copy of that viewport, so a
+  // tab switch while floating does not lose a UCS change made in the viewport.
+  if (cmd.floatingUcsSwapActive && cmd.floatingViewportLayout >= 0 &&
+      static_cast<size_t>(cmd.floatingViewportLayout) < doc.paperLayouts.size()) {
+    PaperLayout& dl = doc.paperLayouts[static_cast<size_t>(cmd.floatingViewportLayout)];
+    if (cmd.floatingViewportIndex >= 0 &&
+        static_cast<size_t>(cmd.floatingViewportIndex) < dl.viewports.size())
+      dl.viewports[static_cast<size_t>(cmd.floatingViewportIndex)].activeUcs = cmd.activeUcs;
+  }
   doc.savedPageSetups        = cmd.savedPageSetups;
   doc.activeSpaceIndex       = cmd.activeSpaceIndex;
   doc.cadGpuRevision         = cmd.cadGpuRevision;
@@ -214,6 +226,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.paperSelBoxActive = false;
   cmd.floatingViewportLayout = -1;  // floating model space is transient, not per-document
   cmd.floatingViewportIndex = -1;
+  cmd.floatingUcsSwapActive = false;  // REQ-155: no viewport-UCS swap outside floating model space
   cmd.modelViewSaved = false;       // restored view belongs to the restored active space
   cmd.cadGpuRevision             = doc.cadGpuRevision;
   cmd.activeDocSavedRevision     = doc.savedRevision;
@@ -1302,6 +1315,15 @@ void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std
   cmd.paperMovePhase = 0;
   cmd.paperGripCorner = -2;
   cmd.paperSelBoxActive = false;
+  // REQ-155 (issue #155): adopt this viewport's active UCS as the working frame while editing
+  // through it — coordinate entry, the grid, ORTHO, the readout and UCSFOLLOW all read cmd.activeUcs,
+  // so the swap makes every one of them viewport-scoped with no per-site change. The drawing's own
+  // UCS is parked in the stash and restored on exit.
+  if (!cmd.floatingUcsSwapActive) {  // guard against a double-enter leaking the stash
+    cmd.drawingActiveUcsStash = cmd.activeUcs;
+    cmd.activeUcs = L.viewports[static_cast<size_t>(vpIdx)].activeUcs;
+    cmd.floatingUcsSwapActive = true;
+  }
   log.push_back("Floating model space — editing viewport " + std::to_string(vpIdx + 1) +
                 " in place; Esc / FLOAT button / PSPACE returns to paper editing.");
   BumpCadGpuCache(cmd);
@@ -1310,6 +1332,19 @@ void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std
 void ExitFloatingModelSpace(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.floatingViewportIndex < 0)
     return;
+  // REQ-155: fold the working frame back into the viewport, restore the drawing's UCS. Done before
+  // the indices are cleared because it needs them to find the viewport.
+  if (cmd.floatingUcsSwapActive) {
+    if (cmd.floatingViewportLayout >= 0 &&
+        static_cast<size_t>(cmd.floatingViewportLayout) < cmd.paperLayouts.size()) {
+      PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.floatingViewportLayout)];
+      if (cmd.floatingViewportIndex >= 0 &&
+          static_cast<size_t>(cmd.floatingViewportIndex) < L.viewports.size())
+        L.viewports[static_cast<size_t>(cmd.floatingViewportIndex)].activeUcs = cmd.activeUcs;
+    }
+    cmd.activeUcs = cmd.drawingActiveUcsStash;
+    cmd.floatingUcsSwapActive = false;
+  }
   cmd.floatingViewportLayout = -1;
   cmd.floatingViewportIndex = -1;
   cmd.active = AppCommandState::Kind::None;

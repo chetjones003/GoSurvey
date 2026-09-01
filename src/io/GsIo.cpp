@@ -72,6 +72,41 @@ CadBlockXform CadBlockXformFromJson(const json& o) {
   return xf;
 }
 
+// REQ-155: a UCS frame (origin + basis) as JSON. Shared by the drawing's active UCS, named UCS
+// definitions, saved views, and the per-viewport active UCS (issue #155). A broken/non-orthonormal
+// frame on read is DISCARDED back to World — the one fallback that cannot silently skew coordinates
+// (REQ-201). Kept as free functions (not a BuildRoot-local lambda) so the viewport loop, which runs
+// before that lambda, can call it too.
+inline json UcsFrameToJson(const ucs::Ucs& u) {
+  json j;
+  j["origin"] = {u.origin.x, u.origin.y, u.origin.z};
+  j["xAxis"] = {u.xAxis.x, u.xAxis.y, u.xAxis.z};
+  j["yAxis"] = {u.yAxis.x, u.yAxis.y, u.yAxis.z};
+  j["zAxis"] = {u.zAxis.x, u.zAxis.y, u.zAxis.z};
+  return j;
+}
+inline bool UcsFrameFromJson(const json& j, ucs::Ucs* out) {
+  if (!j.is_object() || !out)
+    return false;
+  auto readVec = [](const json& o, const char* key, ray3d::Vec3 fallback) {
+    const auto it = o.find(key);
+    if (it == o.end() || !it->is_array() || it->size() != 3)
+      return fallback;
+    return ray3d::Vec3{(*it)[0].get<double>(), (*it)[1].get<double>(), (*it)[2].get<double>()};
+  };
+  ucs::Ucs u;
+  u.origin = readVec(j, "origin", {0.0, 0.0, 0.0});
+  u.xAxis = readVec(j, "xAxis", {1.0, 0.0, 0.0});
+  u.yAxis = readVec(j, "yAxis", {0.0, 1.0, 0.0});
+  u.zAxis = readVec(j, "zAxis", {0.0, 0.0, 1.0});
+  if (!std::isfinite(u.origin.x) || !std::isfinite(u.origin.y) || !std::isfinite(u.origin.z))
+    return false;
+  if (!ucs::IsRightHandedOrthonormal(u, 1e-6))
+    return false;
+  *out = u;
+  return true;
+}
+
 // Defined further down (with the main-drawing entity IO); forward-declared so block
 // content can round-trip the same geometry kinds.
 void CadArcToJson(const CadArc& a, json& o);
@@ -714,6 +749,19 @@ json BuildRoot(const AppCommandState& st) {
   }
   // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
   {
+    // REQ-155: while floating model space is entered, the floating viewport's active UCS is held
+    // live in st.activeUcs and has not yet been folded back into its Viewport — serialize the live
+    // one for that viewport so a save mid-float records what the user sees.
+    auto liveViewportUcs = [&](const PaperLayout& l, const Viewport& v) -> const ucs::Ucs& {
+      if (st.floatingUcsSwapActive && st.floatingViewportLayout >= 0 &&
+          static_cast<size_t>(st.floatingViewportLayout) < st.paperLayouts.size() &&
+          &st.paperLayouts[static_cast<size_t>(st.floatingViewportLayout)] == &l &&
+          st.floatingViewportIndex >= 0 &&
+          static_cast<size_t>(st.floatingViewportIndex) < l.viewports.size() &&
+          &l.viewports[static_cast<size_t>(st.floatingViewportIndex)] == &v)
+        return st.activeUcs;
+      return v.activeUcs;
+    };
     json layouts = json::array();
     for (const PaperLayout& l : st.paperLayouts) {
       json o;
@@ -748,6 +796,11 @@ json BuildRoot(const AppCommandState& st) {
         vo["camRollDeg"] = v.camRollDeg;
         vo["camPerspective"] = v.camPerspective;
         vo["camFovDeg"] = v.camFovDeg;
+        {
+          const ucs::Ucs& vUcs = liveViewportUcs(l, v);  // REQ-155: per-viewport active UCS
+          if (!ucs::IsWorld(vUcs))  // additive; absent on read = World (every legacy .gs)
+            vo["ucs"] = UcsFrameToJson(vUcs);
+        }
         vo["layer"] = v.layer;
         vo["frozenLayers"] = v.frozenLayers;
         vo["vpColorLayers"] = v.vpColorLayers;    // REQ-046: per-viewport layer color override (parallel arrays)
@@ -1310,22 +1363,18 @@ json BuildRoot(const AppCommandState& st) {
   // `ucsElevation` is still written whenever the frame is a plain elevation change, so a drawing
   // saved by this build still opens correctly in one that predates the full UCS. Newer builds
   // prefer the `ucs` object and only fall back to `ucsElevation` when it is absent.
-  auto writeUcs = [](const ucs::Ucs& u) {
-    json j;
-    j["origin"] = {u.origin.x, u.origin.y, u.origin.z};
-    j["xAxis"] = {u.xAxis.x, u.xAxis.y, u.xAxis.z};
-    j["yAxis"] = {u.yAxis.x, u.yAxis.y, u.yAxis.z};
-    j["zAxis"] = {u.zAxis.x, u.zAxis.y, u.zAxis.z};
-    return j;
-  };
-  if (!ucs::IsWorld(st.activeUcs)) {
-    view["ucs"] = writeUcs(st.activeUcs);
+  auto writeUcs = [](const ucs::Ucs& u) { return UcsFrameToJson(u); };
+  // REQ-155: while floating model space is entered, st.activeUcs is a VIEWPORT's frame — the
+  // drawing's own UCS is parked in the stash. Persist the drawing-scoped one.
+  const ucs::Ucs& drawUcs = CadDrawingScopedUcs(st);
+  if (!ucs::IsWorld(drawUcs)) {
+    view["ucs"] = writeUcs(drawUcs);
     // A pure elevation change — world axes, origin only in Z — is exactly what the old key meant,
     // so that (and only that) case stays readable by an older build.
-    const bool elevationOnly = ucs::IsWorld(ucs::WithOrigin(st.activeUcs, {0.0, 0.0, 0.0})) &&
-                               st.activeUcs.origin.x == 0.0 && st.activeUcs.origin.y == 0.0;
+    const bool elevationOnly = ucs::IsWorld(ucs::WithOrigin(drawUcs, {0.0, 0.0, 0.0})) &&
+                               drawUcs.origin.x == 0.0 && drawUcs.origin.y == 0.0;
     if (elevationOnly)
-      view["ucsElevation"] = st.activeUcs.origin.z;
+      view["ucsElevation"] = drawUcs.origin.z;
   }
   if (st.ucsFollow)
     view["ucsFollow"] = true;
@@ -1677,6 +1726,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.camRollDeg = vo.value("camRollDeg", v.camRollDeg);
           v.camPerspective = vo.value("camPerspective", v.camPerspective);
           v.camFovDeg = vo.value("camFovDeg", v.camFovDeg);
+          // REQ-155: per-viewport active UCS. Absent (legacy .gs) or broken -> World, so every
+          // pre-REQ-155 file loads with each viewport on the drawing frame, unchanged.
+          {
+            const auto vu = vo.find("ucs");
+            if (vu != vo.end() && !UcsFrameFromJson(*vu, &v.activeUcs))
+              v.activeUcs = ucs::Ucs{};
+          }
           if (vo.contains("layer") && vo["layer"].is_string())
             v.layer = vo["layer"].get<std::string>();
           if (vo.contains("frozenLayers") && vo["frozenLayers"].is_array()) {

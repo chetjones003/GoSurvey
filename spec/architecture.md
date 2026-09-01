@@ -765,6 +765,19 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   so there is one transform, not two that can disagree.
   (e) **Drawing resolves against an active work plane (UCS)** stored on `AppCommandState` (the settings
   pattern — no new global), defaulting to world XY so plan-view behaviour is unchanged.
+  (e·2) **Per-viewport active UCS (REQ-155, D-2026-08-31-c).** The drawing-scoped `activeUcs` on
+  `AppCommandState` continues to own the frame for the single non-floating model-space view. In
+  addition, each paper-space `Viewport` carries an **active UCS frame** — a `ucs::Ucs` value,
+  default World, typically one of the drawing's named UCSs but able to hold an ad-hoc frame built
+  while floating (AutoCAD `UCSVP`). While **floating model space** (REQ-036) is entered for a
+  viewport, that frame is what coordinate entry, the grid, ORTHO, the readout and `UCSFOLLOW`
+  resolve against; `UCSFOLLOW=1` re-plans that viewport's REQ-061 camera only. Named UCS
+  **definitions** and named views stay per drawing — one owner, `AppCommandState.ucsNamed` (§10.1).
+  This is a value field on an existing owned type (`Viewport`, owned by `PaperLayout`) — the
+  viewport holds a working frame exactly as the drawing holds `activeUcs` — not a new abstraction
+  (§11.4) and not a new owner.
+  Persisted additively in `.gs`. **Split model space (multiple simultaneous model viewports) stays
+  out of scope** — a future decision, not this one.
   (f) **Two vendored dependencies** (REQ-300, decision log 2026-08-11): **ImGuizmo** (MIT) for the REQ-060
   manipulator and **ImOGuizmo** for the REQ-059 orientation gizmo. Both consume the matrices (c) produces
   and neither introduces a rendering abstraction. They are `third_party/` code and are not modified in
