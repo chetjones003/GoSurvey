@@ -121,6 +121,7 @@ void DrawFeatureLineElevationWindow(AppCommandState& cmd, std::vector<std::strin
     return;
   }
   cmd.showFeatureLineElevWindow = open;
+  BeginStyledDialog();
 
   const int flCount =
       cmd.featureLineOffsets.empty() ? 0 : static_cast<int>(cmd.featureLineOffsets.size()) - 1;

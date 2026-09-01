@@ -110,6 +110,37 @@ ASSUMPTION-2: "Import Points" (issue text) == the "Import points" window
   the new helpers is a reasonable ask but is its own (cosmetic, non-regressing)
   change and was not bundled into this issue's fix.
 
+## 7a. Post-review follow-ups (user visual pass, 2026-09-01)
+The user ran a Debug build and gave three rounds of visual feedback; all
+addressed on the same branch:
+- **Dark-theme tab contrast** — `titlebar` vs `surface` was only 4.5 L*, and
+  the new dialog gradient made the whole tab row read as one flat strip.
+  `ImGuiCol_Tab`/`TabUnfocused` moved to `seam` (13 L* below the active tab).
+  Dark only — REQ-081's "the Light theme renders exactly as it does today" is
+  an acceptance condition, so the classic theme's tab colours are untouched.
+- **Bare intro paragraphs** — a description string sitting straight on the
+  (now gradient) dialog body read as "laid over" it, and its wrap looked
+  mis-sized. New file-local `DrawSettingsNote()` in `CadUiSettings.cpp` boxes
+  it like every other section, wrapping to the box's own width and sizing its
+  height from that wrapped text each frame. Used by the Files tab and every
+  placeholder tab.
+- **More dialogs migrated** — Account Details, Create Surface, Surface
+  Properties, Feature Line Elevations onto `BeginStyledDialog()` + their
+  primary buttons onto `StyledButton()`. Checklist in `CadUi.hpp` updated.
+- **Pale-yellow property grids** — the user asked for the hard-coded cream
+  Civil-3D row fill in Create Surface / Surface Properties → Definition (three
+  `PushStyleColor` sites that ignored the theme) to become a white paper sheet
+  with dark text. New `PushPropertyPaperColors` / `PushPropertyPaperBodyText`
+  helpers in `CadUi.cpp`: Dark theme → light-gray rows, white 1 px-bordered
+  fields, dark body text, dark header strip kept with light labels; classic
+  theme → every value resolves to the current style colour, so it is a true
+  no-op (REQ-081's "Light theme renders as today").
+- **Invisible text caret** — the fields' caret was still light-on-white.
+  Cause: this ImGui build draws the caret with a dedicated
+  `ImGuiCol_InputTextCursor`, seeded from `ImGuiCol_Text` once at theme-build
+  time, so a runtime Text push never reached it. `PushPropertyPaperBodyText`
+  now pushes `ImGuiCol_InputTextCursor` too.
+
 ## 8. Implementation log
 - 2026-09-01 — `ImGuiWindow::TitleBarHeight` is a field, not a method, as of the
   vendored ImGui version (`imgui_internal.h`'s own comment: "used to be a

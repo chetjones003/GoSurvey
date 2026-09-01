@@ -2803,6 +2803,19 @@ requirements is a planning failure, not a sign of rigor.
     new colours needed for it;
   - every new colour is a `g_chrome` field, filled for both Dark and Light, and
     a Dark → Light → Dark switch leaves no stale dialog/button colour.
+  Delivered against a live user visual pass, which pulled in three corrections
+  on the same requirement (all Dark-theme only — the classic theme still renders
+  as it did):
+  - a styled dialog's **tab bar** reads as tabs, not a flat strip: the
+    unselected tab sits a full ladder step (`seam`) below the active one, which
+    still merges into the body it belongs to;
+  - a **bare description paragraph** at the top of a dialog tab is boxed like
+    every other section (it no longer floats on the gradient body), and wraps
+    to its own width so it is never clipped;
+  - the surface dialogs' **property grids** are a white "paper" sheet — light
+    rows, white bordered edit fields, dark body text, dark caret — with the
+    dark header strip and its light labels kept; the old hard-coded pale-yellow
+    Civil-3D row fill (which ignored the theme entirely) is gone.
   See TASK-165 for the one issue clause ("one shared helper used by both the
   Start screen and the dialogs") this revision does not fully satisfy, and why.
 

@@ -428,10 +428,17 @@ void ApplyCadDarkTheme() {
   colors[ImGuiCol_ResizeGrip]            = Hex(0xE0AE5E, 0.16f);
   colors[ImGuiCol_ResizeGripHovered]     = Hex(0xE0AE5E, 0.47f);
   colors[ImGuiCol_ResizeGripActive]      = accent;
-  colors[ImGuiCol_Tab]                   = titlebar;
+  // issue #183 follow-up: titlebar (21.7 L*) vs surface (26.2 L*) was only a
+  // 4.5 L* gap — the same distance as "header over panel", which reads fine
+  // for a bar with its own label but was too close once dialogs gained their
+  // own gradient body (D-2026-09-01-a), making the whole tab row look like one
+  // flat strip. `seam` widens the unselected tab to a full 13 L* below the
+  // active one so the row reads as tabs, not wallpaper; the active tab keeps
+  // `surface` so it still merges into the (now gradient) body it belongs to.
+  colors[ImGuiCol_Tab]                   = seam;
   colors[ImGuiCol_TabHovered]            = raised;
   colors[ImGuiCol_TabActive]             = surface;  // selected tab == its panel, so the two read as one piece
-  colors[ImGuiCol_TabUnfocused]          = titlebar;
+  colors[ImGuiCol_TabUnfocused]          = seam;
   colors[ImGuiCol_TabUnfocusedActive]    = surface;
   // Keep the overline accent explicitly — ImGui may copy HeaderActive into it and ours changed.
   colors[ImGuiCol_TabSelectedOverline]        = accentHi;
@@ -1060,6 +1067,59 @@ bool StyledButton(const char* label, const ImVec2& sizeArg, bool primary) {
                             label, labelDisplayEnd, &labelSize, style.ButtonTextAlign, &bb);
   return pressed;
 }
+
+// The surface-dialog property grids (Create Surface, Surface Properties) used to
+// hard-code a pale-yellow Civil-3D row fill in both themes. In the Dark theme
+// that put low-contrast light text on near-white, which the user asked to
+// replace with a plain white "paper" sheet — the look of a property sheet
+// dropped into the dialog: a light-gray cell fill, pure-white edit fields with
+// a visible 1 px border, and dark text in the body. The header row keeps the
+// theme's dark strip + light text (it is not "paper"), so the body text colour
+// is pushed separately, after TableHeadersRow — see PushPropertyPaperBodyText.
+// The classic theme keeps its cream grid and dark fields unchanged (REQ-081:
+// "the Light theme renders exactly as it does today"): every value below
+// resolves to the current style colour for it, so the push is a no-op there.
+//
+// Call order: PushPropertyPaperColors → BeginTable → TableSetupColumn(s) →
+// TableHeadersRow → PushPropertyPaperBodyText → rows → PopPropertyPaperBodyText
+// → EndTable → PopPropertyPaperColors. Pushes 6 colours + 1 style var.
+void PushPropertyPaperColors(int themeIdx) {
+  const bool dark = (themeIdx == 0);
+  const ImVec4 rowBg   = dark ? ImVec4(0.90f, 0.90f, 0.90f, 1.f) : ImVec4(1.f, 0.97f, 0.82f, 1.f);
+  const ImVec4 rowAlt  = dark ? ImVec4(0.90f, 0.90f, 0.90f, 1.f) : ImVec4(1.f, 0.99f, 0.90f, 1.f);
+  const ImVec4 frame   = dark ? ImVec4(1.00f, 1.00f, 1.00f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+  const ImVec4 frameHi = dark ? ImVec4(0.93f, 0.95f, 1.00f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered);
+  const ImVec4 frameAc = dark ? ImVec4(0.88f, 0.92f, 1.00f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_FrameBgActive);
+  const ImVec4 border  = dark ? ImVec4(0.45f, 0.45f, 0.45f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_Border);
+  const float  bsize   = dark ? 1.f : ImGui::GetStyle().FrameBorderSize;
+  ImGui::PushStyleColor(ImGuiCol_TableRowBg, rowBg);
+  ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, rowAlt);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, frame);
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, frameHi);
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, frameAc);
+  ImGui::PushStyleColor(ImGuiCol_Border, border);
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, bsize);
+}
+
+void PopPropertyPaperColors() {
+  ImGui::PopStyleVar(1);
+  ImGui::PopStyleColor(6);
+}
+
+// Dark body text for the white "paper" rows — pushed AFTER TableHeadersRow so
+// the dark header strip keeps its light label text. Also darkens the InputText
+// caret: `ImGuiCol_InputTextCursor` is seeded from `ImGuiCol_Text` ONCE when the
+// theme is built, so a runtime PushStyleColor on Text alone leaves the caret at
+// the dark theme's light colour — invisible on a white field. No-op in classic.
+void PushPropertyPaperBodyText(int themeIdx) {
+  const bool dark = (themeIdx == 0);
+  const ImVec4 text = dark ? ImVec4(0.11f, 0.11f, 0.11f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+  const ImVec4 caret = dark ? ImVec4(0.06f, 0.06f, 0.06f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_InputTextCursor);
+  ImGui::PushStyleColor(ImGuiCol_Text, text);
+  ImGui::PushStyleColor(ImGuiCol_InputTextCursor, caret);
+}
+
+void PopPropertyPaperBodyText() { ImGui::PopStyleColor(2); }
 
 void DrawFloatingWindowChrome() {
   if ((g_chrome.windowShadow >> IM_COL32_A_SHIFT) == 0)
