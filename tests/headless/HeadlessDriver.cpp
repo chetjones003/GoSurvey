@@ -535,7 +535,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       //
       // CLICK and PICK hand storage coordinates straight through, which cannot express a click on
       // a TILTED work plane at all: the GUI resolves one by intersecting the cursor ray with that
-      // plane and publishing the hit points own Z (AppCommandState::resolvedPointZ), and a pair
+      // plane and publishing the hit point's own Z (AppCommandState::resolvedPointZ), and a pair
       // of storage X/Y carries none of that. On a VERTICAL work plane it is not even well posed:
       // two points on a wall share an (x, y) and differ only in height. So this states the pick
       // where the user actually made it, in the plane being drawn on. Under the WCS it is CLICK.

@@ -3540,9 +3540,9 @@ inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) { return ucs::
 ///
 /// Every UCS that is a translation and/or a rotation about Z satisfies this - which is the whole
 /// 2D survey case, and the default. It is the branch guard for the arbitrary-plane drawing paths,
-/// and it is deliberately NOT ef CadUcsIsWorld: a UCS squared to a road centreline is still a
+/// and it is deliberately NOT `CadUcsIsWorld`: a UCS squared to a road centreline is still a
 /// flat drawing, and it must keep the exact float path every existing drawing, transcript and test
-/// already goes through. That is REQ-154s own reasoning for its WCS branch, applied one level out.
+/// already goes through. That is REQ-154's own reasoning for its WCS branch, applied one level out.
 inline bool CadWorkPlaneIsWorldXy(const AppCommandState& st) { return ucs::PlanViewIsExact(st.activeUcs); }
 
 /// The work plane, moved so its origin sits on \p ox,\p oy,\p oz (REQ-312).
