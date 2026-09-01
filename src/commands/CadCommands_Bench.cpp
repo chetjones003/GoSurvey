@@ -194,8 +194,6 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
       b.surfaceMinorIntervalFt = bstyle->minorIntervalFt;
       b.surfaceMajorIntervalFt = bstyle->majorIntervalFt;
     }
-    b.regenBaselineTaken = false;
-    b.regenDuringRun = 0;
   } else {
     b.segmentCount = benchscene::BuildContourScene(segments, &st.userPolylineVerts, &st.userPolylineOffsets,
                                                    &st.userPolylineClosed);
@@ -261,6 +259,16 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.framesTotal = frames;
   b.warmupFrames = 60;
   b.frameIndex = 0;
+  // Reset the cache-regeneration baseline for EVERY profile, not just the surface one. `frameIndex`
+  // is zeroed just above, so a second `BENCH` in the same session re-enters warmup — but
+  // `regenBaselineTaken` / `regenAtStart` persist on `AppCommandState::bench`, and
+  // `solidDisplayRegenCount` (like `surfaceDisplayRegenCount`) is cumulative across the session. Left
+  // stale, the second run's baseline is the FIRST run's, so its own scene-build tessellation is
+  // counted as "regenerated during the run" and the report cries NOT HELD on a cache that held fine.
+  // (GitHub issue #194: this was the whole of the apparent 400/1200-regen failure.)
+  b.regenBaselineTaken = false;
+  b.regenAtStart = 0;
+  b.regenDuringRun = 0;
   b.orbitDegPerFrame = 0.5;  // a full turn every 720 frames — continuous, and never repeats a frame
   b.sceneInstalled = true;
   b.active = true;
