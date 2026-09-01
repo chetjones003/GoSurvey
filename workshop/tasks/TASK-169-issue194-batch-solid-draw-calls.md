@@ -1,9 +1,9 @@
 # TASK-169 — Coalesce the solid render path so REQ-100 profile (d) can pass
 
 - Type:    perf
-- Status:  PR #198 — profile (d) MET on the RTX 5060 (1.43 / 1.80 / 4.38 ms at 100 / 400 / 800
-  solids, cache held). Batching + persistent GPU buffers + a BENCH baseline-reset fix. Awaiting
-  final review / merge. See §7.
+- Status:  DONE. PR #198 merged to beta (2026-09-01, commit 1c203a5); issue #194 closed. REQ-100
+  profile (d) MET on the RTX 5060 (1.43 / 1.80 / 4.38 ms at 100 / 400 / 800 solids, cache held).
+  Batching + persistent GPU buffers + a BENCH baseline-reset fix. See §7.
 - Opened:  2026-09-01
 - Owner:   chetjones003
 - Follows: GitHub issue #194 (a REQ-313 / issue #120 Phase 3 follow-up, filed from the PR #193
