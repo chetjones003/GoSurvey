@@ -5659,7 +5659,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   filed as #145. 2026-09-01 — the object-snap acceptance bullet reworded to name the snap modes
   GoSurvey actually has; QUADRANT and NEAREST do not exist in `CadSnap::Kind` and belong to
   no accepted requirement at all, so the original wording could not be met without first
-  writing a new one.
+  writing a new one. 2026-09-01 — D-2026-09-01-c (GitHub issue #188): a tilted ARC's DXF
+  `$EXTMIN/$EXTMAX` sweep now walks the arc from the centre a reader reconstructs (OCS point →
+  six decimals → projected back) rather than the in-memory centre, so export → import → export
+  reaches a byte-level fixed point at state-plane magnitude the way flat curves already did
+  (REQ-204). No emitted coordinate, angle or normal changed; geometry was always well inside
+  REQ-101. This closes the stability concern the `req312-dxf-arbitrary-plane-roundtrip` transcript
+  had recorded as open.
 
 ### REQ-313 — The B-rep solid kernel and the seven primitive solids (GitHub issue #146)
 - Purpose: GoSurvey has no solids. `CadMesh` (REQ-063 / ADR-026 (c)) is import-only reference
