@@ -152,6 +152,17 @@ IMPORT DXF %OUT%/req312-tilted-far.dxf
 CHECK ALL
 EXPECT CIRCLES 1
 EXPECT CIRCLEXYZ 0 2000000 800000 0 25 0.2672612 0.5345225 0.8017837
+EXPORT DXF %OUT%/req312-tilted-far-2.dxf
+
+NEW
+IMPORT DXF %OUT%/req312-tilted-far-2.dxf
+EXPORT DXF %OUT%/req312-tilted-far-3.dxf
+# Byte-level fixed point for a tilted CIRCLE (issue #188). A circle's $EXTMIN/$EXTMAX is the
+# conservative `cx +/- r` box, and here `cx` lands on a round number, so `snapToWritePrecision`
+# absorbs the six-decimal OCS re-projection error and the box is already stable - export 2 and
+# export 3 are byte-identical with no code change. This is the guard that keeps it that way; the
+# arc in section 4 is the case that needed the fix.
+EXPECT SAMEFILE %OUT%/req312-tilted-far-2.dxf %OUT%/req312-tilted-far-3.dxf
 
 # --- Section 4: a tilted ARC's geometry survives repeated DXF cycles at state-plane magnitude -----
 # Section 3 proved a tilted CIRCLE round-trips once on a messy plane far from the origin. This is
@@ -160,11 +171,18 @@ EXPECT CIRCLEXYZ 0 2000000 800000 0 25 0.2672612 0.5345225 0.8017837
 # and again on the re-import RebaseDrawingToLocalOrigin re-centres against (ComputeWorldExtents) -
 # two sweeps that must not drift apart, or the rebase would spread a shift through every coordinate.
 #
-# Asserted on the arc's endpoints - REQ-312's stated acceptance - not on byte identity: a tilted
-# arc's group 10/20/30 is an OCS coordinate the reader re-projects through the normal's frame, and
-# at ~2,150,000 ft the last ULP of that re-projection wobbles between cycles. The geometry holds to
-# well within REQ-101; the file is not yet a byte-level fixed point (see issue: tilted-curve DXF
-# byte-settle at state-plane magnitude). Flat curves are unaffected - Section 1, regression-111/94.
+# Asserted on the arc's endpoints - REQ-312's stated acceptance - AND, since issue #188
+# (D-2026-09-01-c), on byte identity from the second cycle on. A tilted arc's group 10/20/30 is an
+# OCS coordinate `std::to_string` rounds to six decimals; at ~2,150,000 ft that rounding, projected
+# back through the group-210 frame, moves the reader's centre ~5e-7 ft off the in-memory one. The
+# arc's $EXTMIN/$EXTMAX is SWEPT (unlike a circle's round `cx +/- r` box), so that shift crosses a
+# sixth-decimal boundary, the header describes a drawing the entity records don't contain, and the
+# import RebaseDrawingToLocalOrigin smears ~1e-6 ft through every coordinate - the file never
+# settled. The fix: the export sweep now reconstructs the centre the READER will hold (our OCS
+# point, rounded to six decimals, projected back) and walks the arc from THAT, so the rebase delta
+# is zero and its `< 1e-9` early-out fires. The FIRST export (a) is still swept before the first
+# round trip; from b on the input is a fixed point and the bytes are identical: EXPECT SAMEFILE b c.
+# Flat curves are unaffected - Section 1, regression-111/94.
 NEW
 CMD UCS
 CMD ZA
@@ -197,6 +215,11 @@ CHECK ALL
 EXPECT ARCS 1
 EXPECT ARCPOINTS 0 1999964.222912 800017.888544 0 2000035.777088 799982.111456 0
 EXPORT DXF %OUT%/req312-arc-settle-c.dxf
+
+# The byte-level fixed point (issue #188). Before D-2026-09-01-c, b and c differed at $EXTMIN Y and
+# at the arc's group 50 angle - the OCS re-projection error smeared through RebaseDrawingToLocalOrigin.
+# With the export sweep reconstructing the reader's centre, the rebase delta is zero and the files match.
+EXPECT SAMEFILE %OUT%/req312-arc-settle-b.dxf %OUT%/req312-arc-settle-c.dxf
 
 NEW
 IMPORT DXF %OUT%/req312-arc-settle-c.dxf
