@@ -391,6 +391,26 @@ struct Tessellation {
 /// Lives here rather than in the display layer so the chord rule is written down once: an edge and
 /// the face it bounds must be subdivided by the same rule, or the wireframe visibly floats off the
 /// shading it outlines.
+/// **Isolines**: extra curves drawn ACROSS a curved face so it reads as curved in a wireframe view.
+///
+/// A solid's edges alone are a poor picture of it. A cylinder's edges are two rims and two seams, so
+/// in wireframe it looks like two circles joined by two lines; a sphere's are two meridians, which
+/// is a lens rather than a ball. Every CAD package draws these, and AutoCAD calls the count
+/// `ISOLINES` — this is that, and \p isolineCount is that number, measured **around a full turn** so
+/// a face that is half the solid gets half of them.
+///
+/// They are placed on a grid fixed to the surface's own frame rather than to each face's span, which
+/// is what stops one landing on top of a seam edge and what keeps them evenly spaced around the
+/// whole solid instead of bunching where two faces meet.
+///
+/// Which directions get them is per surface kind, and follows what the shape needs rather than a
+/// rule applied blindly: a cylinder and a cone get lines ALONG the axis only (rings around them
+/// would be read as edges that are not there); a sphere gets meridians and latitude circles; a torus
+/// gets circles round the tube and round the ring. A plane gets none — it is flat, and its boundary
+/// already says everything about it.
+[[nodiscard]] bool TessellateIsolines(const Solid& s, int isolineCount, double chordTolerance,
+                                      std::vector<double>* out, Problem* outWhy);
+
 [[nodiscard]] bool TessellateEdges(const Solid& s, double chordTolerance, std::vector<double>* out,
                                    Problem* outWhy);
 

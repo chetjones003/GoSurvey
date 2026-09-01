@@ -1766,6 +1766,7 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   settings["objectSnapSurface"] = st.objectSnapSurface;
   settings["objectSnapSolid"] = st.objectSnapSolid;  // REQ-313
+  settings["viewportSolidIsolines"] = st.viewportSolidIsolines;
   settings["objectSnapAperturePx"] = st.objectSnapAperturePx;
   settings["objectSnapGlyphHalfPx"] = st.objectSnapGlyphHalfPx;
 
@@ -1948,6 +1949,12 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   b(s, "objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   b(s, "objectSnapSurface", &st.objectSnapSurface);
   b(s, "objectSnapSolid", &st.objectSnapSolid);
+  // ISOLINES (REQ-313 as amended). Clamped on read, so a hand-edited file cannot ask for a wireframe
+  // dense enough to cost the frame budget, and an absent key keeps the default rather than zero -
+  // which would silently strip every curved solid back to its edges.
+  if (s.contains("viewportSolidIsolines") && s["viewportSolidIsolines"].is_number_integer())
+    st.viewportSolidIsolines =
+        std::clamp(s["viewportSolidIsolines"].get<int>(), 0, kSolidMaxIsolines);
   num(s, "objectSnapAperturePx", &st.objectSnapAperturePx);
   num(s, "objectSnapGlyphHalfPx", &st.objectSnapGlyphHalfPx);
   st.objectSnapAperturePx = std::clamp(st.objectSnapAperturePx, 4.f, 64.f);

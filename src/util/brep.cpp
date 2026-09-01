@@ -1487,6 +1487,150 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
   return Succeed(outWhy);
 }
 
+
+namespace {
+
+/// A point on a curved face at parameters (u, v), in world.
+///
+/// One evaluator for every surface kind, so an isoline and the shaded triangles beside it cannot
+/// disagree about where the surface is. `v` is ignored for the ruled kinds, where the second
+/// parameter is a height rather than an angle.
+[[nodiscard]] Vec3 SurfacePointAt(const Surface& sf, double u, double v) {
+  switch (sf.kind) {
+  case SurfaceKind::Plane:
+    return sf.frame.origin;
+  case SurfaceKind::Cylinder:
+    return ConicalPoint(sf, sf.radius, sf.radius, u, v);
+  case SurfaceKind::Cone:
+    return ConicalPoint(sf, sf.radius, sf.radius2, u, v);
+  case SurfaceKind::Sphere:
+    return SphericalPoint(sf, u, v);
+  case SurfaceKind::Torus:
+    return ToroidalPoint(sf, u, v);
+  }
+  return sf.frame.origin;
+}
+
+/// Walk one iso-curve and emit it as `GL_LINES` segments.
+///
+/// \p fixedIsU says which parameter is held constant: the curve runs along the other one.
+void AppendIsoCurve(const Surface& sf, bool fixedIsU, double fixed, double from, double to, int steps,
+                    std::vector<double>* out) {
+  if (steps < 1)
+    return;
+  Vec3 prev = fixedIsU ? SurfacePointAt(sf, fixed, from) : SurfacePointAt(sf, from, fixed);
+  for (int i = 1; i <= steps; ++i) {
+    const double t = from + (to - from) * static_cast<double>(i) / static_cast<double>(steps);
+    const Vec3 cur = fixedIsU ? SurfacePointAt(sf, fixed, t) : SurfacePointAt(sf, t, fixed);
+    out->push_back(prev.x);
+    out->push_back(prev.y);
+    out->push_back(prev.z);
+    out->push_back(cur.x);
+    out->push_back(cur.y);
+    out->push_back(cur.z);
+    prev = cur;
+  }
+}
+
+/// The angles of a global grid of \p count divisions of a full turn that fall STRICTLY inside
+/// (\p lo, \p hi).
+///
+/// Strictly, so an isoline never lands on a seam and doubles an edge that is already drawn. Global,
+/// so the lines are evenly spaced around the whole solid rather than around each face — the
+/// difference is visible the moment a solid is split into two half-faces, which every curved
+/// primitive here is.
+void GridAnglesInside(int count, double lo, double hi, std::vector<double>* out) {
+  out->clear();
+  if (count < 1)
+    return;
+  const double step = kTwoPi / static_cast<double>(count);
+  // Walk a window wide enough to cover any face span, including a full turn.
+  const int first = static_cast<int>(std::floor(lo / step)) - 1;
+  const int last = static_cast<int>(std::ceil(hi / step)) + 1;
+  const double eps = 1e-9;
+  for (int k = first; k <= last; ++k) {
+    const double a = static_cast<double>(k) * step;
+    if (a > lo + eps && a < hi - eps)
+      out->push_back(a);
+  }
+}
+
+} // namespace
+
+bool TessellateIsolines(const Solid& s, int isolineCount, double chordTolerance, std::vector<double>* out,
+                        Problem* outWhy) {
+  if (!out)
+    return false;
+  if (!std::isfinite(chordTolerance) || !(chordTolerance > 0.0))
+    return Fail(Problem::NonPositiveTolerance, outWhy);
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return Fail(why, outWhy);
+
+  std::vector<double> segs;
+  if (isolineCount < 1) {
+    *out = std::move(segs);  // zero is a legal setting: it means "edges only"
+    return Succeed(outWhy);
+  }
+
+  std::vector<double> angles;
+  for (const Face& f : s.faces) {
+    const Surface& sf = f.surface;
+    if (sf.kind == SurfaceKind::Plane)
+      continue;  // flat: its boundary already says everything
+
+    const double uLo = std::min(f.uStart, f.uEnd);
+    const double uHi = std::max(f.uStart, f.uEnd);
+
+    // --- Lines along the face, at constant u -----------------------------------------------------
+    GridAnglesInside(isolineCount, uLo, uHi, &angles);
+    for (double u : angles) {
+      if (sf.kind == SurfaceKind::Cylinder || sf.kind == SurfaceKind::Cone) {
+        // A straight ruling from base to top: one segment is exact, since the surface is ruled.
+        AppendIsoCurve(sf, /*fixedIsU=*/true, u, 0.0, sf.height, 1, &segs);
+      } else {
+        const double vLo = std::min(f.vStart, f.vEnd);
+        const double vHi = std::max(f.vStart, f.vEnd);
+        const double r = sf.kind == SurfaceKind::Sphere ? sf.radius : sf.radius2;
+        AppendIsoCurve(sf, true, u, vLo, vHi, SegmentsForArc(r, vHi - vLo, chordTolerance), &segs);
+      }
+    }
+
+    // --- Rings across the face, at constant v ----------------------------------------------------
+    //
+    // Skipped for the ruled kinds on purpose. A horizontal ring part way up a cylinder is not
+    // something AutoCAD draws, and it reads as an edge that is not there — a seam, or the join of
+    // two stacked solids.
+    if (sf.kind == SurfaceKind::Cylinder || sf.kind == SurfaceKind::Cone)
+      continue;
+
+    const double vLo = std::min(f.vStart, f.vEnd);
+    const double vHi = std::max(f.vStart, f.vEnd);
+    if (sf.kind == SurfaceKind::Torus) {
+      GridAnglesInside(isolineCount, vLo, vHi, &angles);
+    } else {
+      // A sphere's v is a LATITUDE over [-pi/2, pi/2], not a full turn, so the global-grid rule does
+      // not apply: half of that grid's lines would fall outside the surface entirely. Evenly spaced
+      // interior latitudes instead, at half the count — a sphere with four meridians and four
+      // latitude circles reads as a net rather than as a ball.
+      angles.clear();
+      const int nv = std::max(1, isolineCount / 2);
+      for (int i = 1; i <= nv; ++i)
+        angles.push_back(vLo + (vHi - vLo) * static_cast<double>(i) / static_cast<double>(nv + 1));
+    }
+    for (double v : angles) {
+      const double ringR = sf.kind == SurfaceKind::Sphere
+                               ? sf.radius * std::cos(v)
+                               : sf.radius + sf.radius2 * std::cos(v);
+      AppendIsoCurve(sf, /*fixedIsU=*/false, v, uLo, uHi,
+                     SegmentsForArc(std::fabs(ringR), uHi - uLo, chordTolerance), &segs);
+    }
+  }
+
+  *out = std::move(segs);
+  return Succeed(outWhy);
+}
+
 bool TessellateEdges(const Solid& s, double chordTolerance, std::vector<double>* out, Problem* outWhy) {
   if (!out)
     return false;

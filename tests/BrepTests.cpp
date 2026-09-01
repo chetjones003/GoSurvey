@@ -960,3 +960,116 @@ TEST_CASE("A torus whose tube exceeds its ring is built, and reports no volume",
   REQUIRE(okMp.valid);
   REQUIRE(okMp.volume == Approx(2.0 * kPi * kPi * 10.0 * 4.0).epsilon(1e-12));
 }
+
+TEST_CASE("Isolines make a curved face read as curved", "[brep][req313]") {
+  // A solid's EDGES alone are a poor picture of it: a cylinder's are two rims and two seams, which
+  // draws as two circles joined by two lines. These are the extra curves every CAD package adds,
+  // and the counts below are what AutoCAD's ISOLINES = 4 produces.
+  Problem why = Problem::Ok;
+
+  // How many distinct iso-curves a buffer holds, counted by their start points — each curve is
+  // emitted as a run of segments, so counting segments would count tessellation instead.
+  auto curveCount = [](const std::vector<double>& segs) {
+    int runs = 0;
+    for (std::size_t i = 0; i + 5 < segs.size(); i += 6) {
+      const bool continues = i >= 6 && std::fabs(segs[i] - segs[i - 3]) < 1e-9 &&
+                             std::fabs(segs[i + 1] - segs[i - 2]) < 1e-9 &&
+                             std::fabs(segs[i + 2] - segs[i - 1]) < 1e-9;
+      if (!continues)
+        ++runs;
+    }
+    return runs;
+  };
+
+  SECTION("a cylinder gets four rulings and no rings") {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &iso, &why));
+    // Four lines around the turn. The two at 0 and pi land on the seams and are excluded, so the
+    // grid contributes the two at pi/2 and 3pi/2 — one inside each half-face — plus the seams which
+    // are already real edges. Four vertical lines on screen, which is what AutoCAD shows.
+    REQUIRE(curveCount(iso) == 2);
+    // Every ruling is a single straight segment: the surface is ruled, so a chord is exact.
+    REQUIRE(iso.size() == 2 * 6);
+    // And they are ON the cylinder — at the radius, spanning the full height.
+    for (std::size_t i = 0; i + 5 < iso.size(); i += 6) {
+      REQUIRE(std::sqrt(iso[i] * iso[i] + iso[i + 1] * iso[i + 1]) == Approx(5.0).margin(1e-9));
+      REQUIRE(std::fabs(iso[i + 5] - iso[i + 2]) == Approx(10.0).margin(1e-9));
+    }
+  }
+
+  SECTION("a sphere gets meridians AND latitude circles") {
+    Solid s;
+    REQUIRE(brep::MakeSphere(World(), 5.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &iso, &why));
+    // Two meridians from the global grid (the other two are the seams), plus two latitude circles
+    // per half — a net rather than a lens.
+    REQUIRE(curveCount(iso) == 6);
+    // Every point is on the sphere.
+    for (std::size_t i = 0; i + 2 < iso.size(); i += 3)
+      REQUIRE(std::sqrt(iso[i] * iso[i] + iso[i + 1] * iso[i + 1] + iso[i + 2] * iso[i + 2]) ==
+              Approx(5.0).margin(1e-6));
+  }
+
+  SECTION("a torus gets tube circles and ring circles") {
+    Solid s;
+    REQUIRE(brep::MakeTorus(World(), 10.0, 2.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &iso, &why));
+    REQUIRE(curveCount(iso) > 0);
+    // Every point is on the tube: its distance from the ring's centre circle is the minor radius.
+    for (std::size_t i = 0; i + 2 < iso.size(); i += 3) {
+      const double rho = std::sqrt(iso[i] * iso[i] + iso[i + 1] * iso[i + 1]);
+      const double dRing = std::sqrt((rho - 10.0) * (rho - 10.0) + iso[i + 2] * iso[i + 2]);
+      REQUIRE(dRing == Approx(2.0).margin(1e-6));
+    }
+  }
+
+  SECTION("a box gets none — it is flat, and its edges already say everything") {
+    Solid s;
+    REQUIRE(brep::MakeBox(World(), 4.0, 4.0, 4.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &iso, &why));
+    REQUIRE(iso.empty());
+  }
+
+  SECTION("zero is a legal setting and means edges only") {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE(brep::TessellateIsolines(s, 0, 0.01, &iso, &why));
+    REQUIRE(iso.empty());
+  }
+
+  SECTION("more isolines means more curves, and never one on a seam") {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &s, &why));
+    std::vector<double> four;
+    std::vector<double> sixteen;
+    REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &four, &why));
+    REQUIRE(brep::TessellateIsolines(s, 16, 0.01, &sixteen, &why));
+    REQUIRE(curveCount(sixteen) > curveCount(four));
+    // A ruling exactly on a seam would double an edge that is already drawn. The seams are at
+    // angle 0 and pi, so no isoline may sit at either.
+    for (std::size_t i = 0; i + 1 < sixteen.size(); i += 6) {
+      const double a = std::atan2(sixteen[i + 1], sixteen[i]);
+      REQUIRE(std::fabs(a) > 1e-6);
+      REQUIRE(std::fabs(std::fabs(a) - kPi) > 1e-6);
+    }
+  }
+
+  SECTION("refuses a bad tolerance and an invalid solid, like the other tessellators") {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE_FALSE(brep::TessellateIsolines(s, 4, 0.0, &iso, &why));
+    REQUIRE(why == Problem::NonPositiveTolerance);
+    Solid broken = s;
+    broken.faces.pop_back();
+    broken.shells[0].faces.pop_back();
+    REQUIRE_FALSE(brep::TessellateIsolines(broken, 4, 0.01, &iso, &why));
+    REQUIRE(why == Problem::EdgeNotUsedTwice);
+  }
+}

@@ -1700,6 +1700,9 @@ struct AppCommandState {
   /// edge MIDPOINTS answer to the ordinary Endpoint and Midpoint toggles instead — they are exactly
   /// what those snaps already mean, and a user who has Endpoint on expects a corner to snap.
   bool objectSnapSolid = true;
+  /// Isolines drawn around a curved solid face, per full turn (AutoCAD calls this ISOLINES).
+  /// Per drawing, persisted in `.gs` and in user preferences like every other display setting.
+  int viewportSolidIsolines = kSolidDefaultIsolines;
   /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
   float objectSnapAperturePx = 14.f;
   /// Half-size in screen pixels for green object-snap glyphs (square / triangle / circle overlay).

@@ -6390,6 +6390,7 @@ const CmdEntry kRegistry[] = {
     {"sphere", "sph", "Create a sphere solid: SPHERE <X,Y[,Z]> <radius>"},
     {"torus", "tor", "Create a torus solid: TORUS <X,Y[,Z]> <radius> <tube radius>"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
+    {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
@@ -23491,6 +23492,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
                              st.solidDisplayCache.end());
 
   const double tol = kSolidChordToleranceFt;
+  const int isolines = std::clamp(st.viewportSolidIsolines, 0, kSolidMaxIsolines);
 
   for (const CadSolidPtr& sp : st.cadSolids) {
     if (!sp)
@@ -23502,7 +23504,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // a solid is immutable, so an unchanged pointer means unchanged geometry, and the early-out here
     // is before any allocation — a `clear()` above it would still cost the frame it was written to
     // save (the §11 invariant 7 lesson the surface cache already learned).
-    if (it != st.solidDisplayCache.end() && it->chordTolerance == tol)
+    if (it != st.solidDisplayCache.end() && it->chordTolerance == tol && it->isolineCount == isolines)
       continue;
 
     if (it == st.solidDisplayCache.end()) {
@@ -23511,6 +23513,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
       it->key = sp;
     }
     it->chordTolerance = tol;
+    it->isolineCount = isolines;
     it->triVerts.clear();
     it->triNormals.clear();
     it->triFaceIds.clear();
@@ -23521,8 +23524,15 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     if (brep::Tessellate(*sp, tol, &tess, &why))
       ExpandTessellation(tess, &it->triVerts, &it->triNormals, &it->triFaceIds);
     std::vector<double> edges;
-    if (brep::TessellateEdges(*sp, tol, &edges, &why))
+    if (brep::TessellateEdges(*sp, tol, &edges, &why)) {
+      // ISOLINES go into the SAME buffer as the edges, not a batch of their own. They are the same
+      // colour and the same weight as the object - AutoCAD draws them as part of it - so a second
+      // batch would be a second thing to keep in step for no visible difference.
+      std::vector<double> isos;
+      if (brep::TessellateIsolines(*sp, isolines, tol, &isos, &why))
+        edges.insert(edges.end(), isos.begin(), isos.end());
       NarrowInto(edges, &it->edgeVerts);
+    }
     ++st.solidDisplayRegenCount;  // past the early-out: this frame actually retessellated a solid
     // A solid that fails to tessellate leaves EMPTY buffers rather than stale ones. It cannot
     // normally happen — nothing stores a solid that does not validate (REQ-201) — and drawing the
@@ -26124,6 +26134,28 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // `SOLIDLIST` reports every solid's kind, layer, volume, surface area and topology counts —
     // the numbers #120's Solid Properties section asks for, on the surface that exists today.
+    // `ISOLINES 8` sets how many curves are drawn around a curved solid face; a bare `ISOLINES`
+    // reports it. The report-or-set shape `VS` and `PERSPECTIVE` use, and AutoCAD's own name for the
+    // setting, so someone who knows the variable finds it where they expect.
+    if (plotTok == "isolines") {
+      std::string isoArg;
+      if (issIdle >> isoArg) {
+        char* end = nullptr;
+        const long v = std::strtol(isoArg.c_str(), &end, 10);
+        if (isoArg.empty() || !end || *end != '\0' || v < 0 || v > kSolidMaxIsolines) {
+          log.push_back("ISOLINES — enter a whole number between 0 and " +
+                        std::to_string(kSolidMaxIsolines) + " (0 draws edges only).");
+          return;
+        }
+        st.viewportSolidIsolines = static_cast<int>(v);
+        BumpCadGpuCache(st);
+        log.push_back("ISOLINES = " + std::to_string(st.viewportSolidIsolines) + ".");
+      } else {
+        log.push_back("ISOLINES = " + std::to_string(st.viewportSolidIsolines) +
+                      ". Usage: ISOLINES <0-" + std::to_string(kSolidMaxIsolines) + ">.");
+      }
+      return;
+    }
     if (plotTok == "solidlist" || plotTok == "solids") {
       CadReportSolids(st, log);
       return;
