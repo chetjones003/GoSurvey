@@ -1,9 +1,9 @@
-# TASK-169 — A prompted form for the seven solid primitives (issue #146, REQ-313 amended)
+# TASK-170 — A prompted form for the seven solid primitives (issue #146, REQ-313 amended)
 
 ## Requirement authority
 
 - **REQ-313** as amended — the increment-2 acceptance gains the prompted form.
-- **D-2026-09-01-d** — the recorded decision, because this AMENDS an accepted requirement's stated
+- **D-2026-09-01-e** — the recorded decision, because this AMENDS an accepted requirement's stated
   scope and changes an observable behaviour.
 - **REQ-304** (every command Kind carries a live prompt), **REQ-201** (no silent failures),
   **REQ-301** (no unearned abstraction), **REQ-154** (the active UCS).

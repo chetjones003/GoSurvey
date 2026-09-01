@@ -574,13 +574,17 @@ int main()
           // work that recurred while orbiting. It must stay 0.
           if (!cmd.bench.regenBaselineTaken)
           {
-            cmd.bench.regenAtStart      = cmd.surfaceDisplayRegenCount;
+            // Both caches, summed: the surface profile grows surfaceDisplayRegenCount and the solid
+            // profile grows solidDisplayRegenCount, only one profile runs at a time, and the other
+            // term is constant across the run — so the delta is whichever cache the profile exercises.
+            cmd.bench.regenAtStart      = cmd.surfaceDisplayRegenCount + cmd.solidDisplayRegenCount;
             cmd.bench.regenBaselineTaken = true;
             // Captured here, not at FinishFrameBudgetBench: by then the bench scene has already been
             // swapped back out for the user's drawing and the cache holds their surfaces, not this one.
             cmd.bench.surfaceContourSegs = SurfaceDisplayContourSegs(cmd);
           }
-          cmd.bench.regenDuringRun = cmd.surfaceDisplayRegenCount - cmd.bench.regenAtStart;
+          cmd.bench.regenDuringRun =
+              (cmd.surfaceDisplayRegenCount + cmd.solidDisplayRegenCount) - cmd.bench.regenAtStart;
         }
         benchPrevTime = nowT;
       }

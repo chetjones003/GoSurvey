@@ -23520,16 +23520,33 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     std::vector<double> edges;
     if (brep::TessellateEdges(*sp, tol, &edges, &why))
       NarrowInto(edges, &it->edgeVerts);
+    ++st.solidDisplayRegenCount;  // past the early-out: this frame actually retessellated a solid
     // A solid that fails to tessellate leaves EMPTY buffers rather than stale ones. It cannot
     // normally happen — nothing stores a solid that does not validate (REQ-201) — and drawing the
     // previous solid's triangles under this one's identity would be far worse than drawing nothing.
   }
 
-  // Assemble what the renderer is handed. Cheap by construction: the batches BORROW the buffers
-  // above (see CadSolidDisplayBatch), so this copies pointers and colours, never vertices, and is
-  // therefore safe to redo every frame — which it must be, because layer visibility and isolation
-  // change without any solid changing at all.
-  st.solidDisplayGeometry.solids.clear();
+  // ----- Assembly: coalesce visible solids into a handful of draw batches (GitHub issue #194) -----
+  //
+  // One batch per (resolved colour, edge lineweight): every visible solid that would draw identically
+  // is merged into a shared vertex buffer, so a 400-solid site model is a few draw calls, not 400
+  // face uploads + 400 edge uploads + 400 cache lookups. Unlike the surface path this concatenation
+  // copies vertices, so it is gated: an assembly signature over exactly the inputs read below lets an
+  // orbit — which changes only the camera — reuse last frame's merged buffers untouched (§11
+  // invariant 7, the lesson the surface cache already learned).
+  static const EntityAttributes kDefaultSolidAttrs{};
+  struct VisibleSolid {
+    const CadSolidTessellation* tess;
+    float rgba[4];
+    float lineweightMm;
+  };
+  std::vector<VisibleSolid> visible;
+  visible.reserve(st.cadSolids.size());
+  std::uint64_t sig = 1469598103934665603ull;  // FNV-1a offset basis
+  const auto mix = [&sig](std::uint64_t v) {
+    sig = (sig ^ v) * 1099511628211ull;
+  };
+  mix(st.solidDisplayRegenCount);
   for (size_t i = 0; i < st.cadSolids.size(); ++i) {
     if (!SolidVisible(st, i))
       continue;  // filtered here, so the renderer stays ignorant of layers and isolation
@@ -23542,16 +23559,52 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // owns that repair, and appending mid-walk would both invalidate this loop's own references and
     // create an entity attribute — with a fresh id — from a display refresh, which is the last place
     // that should be minting them.
-    static const EntityAttributes kDefaultSolidAttrs{};
     const EntityAttributes& attr = i < st.cadSolidAttrs.size() ? st.cadSolidAttrs[i] : kDefaultSolidAttrs;
     const CadLayerRow* lr = FindDrawingLayerRowCi(st, attr.layer);
-    CadSolidDisplayBatch b;
-    b.triVerts = &it->triVerts;
-    b.triNormals = &it->triNormals;
-    b.edgeVerts = &it->edgeVerts;
-    ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, b.rgba);
-    b.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
-    st.solidDisplayGeometry.solids.push_back(b);
+    VisibleSolid vs;
+    vs.tess = &*it;
+    ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
+    vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
+    visible.push_back(vs);
+    mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
+    mix(it->triVerts.size());
+    mix(it->edgeVerts.size());
+    for (float c : vs.rgba) {
+      std::uint32_t bits;
+      std::memcpy(&bits, &c, sizeof(bits));
+      mix(bits);
+    }
+    std::uint32_t lwBits;
+    std::memcpy(&lwBits, &vs.lineweightMm, sizeof(lwBits));
+    mix(lwBits);
+  }
+
+  st.solidDisplayGeometry.assemblySig = sig;  // set even on the early-out — the renderer keys on it
+  if (sig == st.solidDisplayAssemblySig && !st.solidDisplayGeometry.solids.empty() == !visible.empty())
+    return;  // inputs unchanged since last assembly — the merged buffers are still current
+  st.solidDisplayAssemblySig = sig;
+
+  st.solidDisplayGeometry.solids.clear();
+  const auto quant = [](float v) { return static_cast<int>(std::lround(v * 4096.f)); };
+  for (const VisibleSolid& vs : visible) {
+    CadSolidDisplayBatch* dst = nullptr;
+    for (CadSolidDisplayBatch& b : st.solidDisplayGeometry.solids) {
+      const bool sameColour = quant(b.rgba[0]) == quant(vs.rgba[0]) && quant(b.rgba[1]) == quant(vs.rgba[1]) &&
+                              quant(b.rgba[2]) == quant(vs.rgba[2]) && quant(b.rgba[3]) == quant(vs.rgba[3]);
+      if (sameColour && quant(b.lineweightMm) == quant(vs.lineweightMm)) {
+        dst = &b;
+        break;
+      }
+    }
+    if (!dst) {
+      st.solidDisplayGeometry.solids.push_back(CadSolidDisplayBatch{});
+      dst = &st.solidDisplayGeometry.solids.back();
+      std::memcpy(dst->rgba, vs.rgba, sizeof(dst->rgba));
+      dst->lineweightMm = vs.lineweightMm;
+    }
+    dst->triVerts.insert(dst->triVerts.end(), vs.tess->triVerts.begin(), vs.tess->triVerts.end());
+    dst->triNormals.insert(dst->triNormals.end(), vs.tess->triNormals.begin(), vs.tess->triNormals.end());
+    dst->edgeVerts.insert(dst->edgeVerts.end(), vs.tess->edgeVerts.begin(), vs.tess->edgeVerts.end());
   }
 }
 

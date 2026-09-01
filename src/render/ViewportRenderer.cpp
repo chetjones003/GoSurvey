@@ -606,6 +606,17 @@ void ViewportRenderer::ReleaseMeshGpu() {
   meshGpu_.clear();
 }
 
+void ViewportRenderer::ReleaseSolidGpu() {
+  for (SolidGpuBatch& e : solidGpu_) {
+    if (e.faceVbo) glDeleteBuffers(1, &e.faceVbo);
+    if (e.faceVao) glDeleteVertexArrays(1, &e.faceVao);
+    if (e.edgeVbo) glDeleteBuffers(1, &e.edgeVbo);
+    if (e.edgeVao) glDeleteVertexArrays(1, &e.edgeVao);
+  }
+  solidGpu_.clear();
+  solidGpuSig_ = 0;
+}
+
 bool ViewportRenderer::EnsureShader() {
   if (lineProgram_)
     return true;
@@ -736,6 +747,7 @@ void ViewportRenderer::DestroyShader() {
   }
   gridProgram_ = 0;
   ReleaseMeshGpu();
+  ReleaseSolidGpu();
   if (shadedProgram_) {
     glDeleteProgram(shadedProgram_);
     shadedProgram_ = 0;
@@ -1348,6 +1360,101 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // Placed with the meshes, before the linework, so CAD geometry at the same elevation reads on top
   // of a solid rather than being z-fought by it.
   if (solidGeometry && !solidGeometry->empty()) {
+    // Persistent GPU residency for the coalesced solid batches (GitHub issue #194). Batching the
+    // draw calls was not enough for REQ-100 profile (d): the per-frame CPU vertex transform + stream
+    // upload cost ~38 ms at 400 solids on its own. The fix is the mesh path's fix — upload once,
+    // then let the MVP do the work every frame — keyed on the assembly signature (the batch list is
+    // immutable within one signature) with the same view-anchor-drift re-upload as the mesh cache.
+    const size_t nBatches = solidGeometry->solids.size();
+    const bool rebuild =
+        solidGpuSig_ != solidGeometry->assemblySig || solidGpu_.size() != nBatches;
+    if (rebuild) {
+      ReleaseSolidGpu();
+      solidGpu_.resize(nBatches);
+      for (size_t i = 0; i < nBatches; ++i) {
+        const CadSolidDisplayBatch& b = solidGeometry->solids[i];
+        SolidGpuBatch& e = solidGpu_[i];
+        std::memcpy(e.rgba, b.rgba, sizeof(e.rgba));
+        e.lineweightMm = b.lineweightMm;
+        e.faceVertCount = (!b.triVerts.empty() && b.triVerts.size() % 9 == 0)
+                              ? static_cast<int>(b.triVerts.size() / 3)
+                              : 0;
+        e.edgeVertCount = (!b.edgeVerts.empty() && b.edgeVerts.size() % 6 == 0)
+                              ? static_cast<int>(b.edgeVerts.size() / 3)
+                              : 0;
+        if (e.faceVertCount > 0) {
+          glGenVertexArrays(1, &e.faceVao);
+          glGenBuffers(1, &e.faceVbo);
+          glBindVertexArray(e.faceVao);
+          glBindBuffer(GL_ARRAY_BUFFER, e.faceVbo);
+          const GLsizei shStride = static_cast<GLsizei>(6 * sizeof(float));
+          glEnableVertexAttribArray(0);
+          glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, shStride, nullptr);
+          glEnableVertexAttribArray(1);
+          glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, shStride,
+                                reinterpret_cast<const void*>(sizeof(float) * 3));
+        }
+        if (e.edgeVertCount > 0) {
+          glGenVertexArrays(1, &e.edgeVao);
+          glGenBuffers(1, &e.edgeVbo);
+          glBindVertexArray(e.edgeVao);
+          glBindBuffer(GL_ARRAY_BUFFER, e.edgeVbo);
+          glEnableVertexAttribArray(0);
+          glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(3 * sizeof(float)), nullptr);
+        }
+        glBindVertexArray(0);
+        e.anchorX = std::numeric_limits<double>::quiet_NaN();  // force the vertex upload below
+      }
+      solidGpuSig_ = solidGeometry->assemblySig;
+    }
+
+    // Same drift budget as the mesh/linework caches: vertices are stored relative to the anchor they
+    // were built with, and the residual pan is absorbed by the MVP until it grows large enough to
+    // matter for float precision. An orbit changes only the camera rotation, so the anchor holds and
+    // this loop uploads nothing.
+    const double solidDriftBudget = std::max(halfHd * 0.5, 1.e-12);
+    std::vector<float> solidRel;
+    for (size_t i = 0; i < solidGpu_.size(); ++i) {
+      SolidGpuBatch& e = solidGpu_[i];
+      const bool anchorStale = !(std::fabs(viewAnchorX - e.anchorX) <= solidDriftBudget &&
+                                 std::fabs(viewAnchorY - e.anchorY) <= solidDriftBudget);
+      if (!anchorStale)
+        continue;
+      const CadSolidDisplayBatch& b = solidGeometry->solids[i];
+      if (e.faceVertCount > 0) {
+        const bool haveNormals = b.triNormals.size() == b.triVerts.size();
+        cpuShadedTris_.clear();
+        cpuShadedTris_.resize(static_cast<size_t>(e.faceVertCount) * 6);
+        for (int v = 0; v < e.faceVertCount; ++v) {
+          float rx = 0.f;
+          float ry = 0.f;
+          WorldToViewRelativeFloat(static_cast<double>(b.triVerts[static_cast<size_t>(v) * 3]),
+                                   static_cast<double>(b.triVerts[static_cast<size_t>(v) * 3 + 1]),
+                                   viewAnchorX, viewAnchorY, &rx, &ry);
+          float* o = &cpuShadedTris_[static_cast<size_t>(v) * 6];
+          o[0] = rx;
+          o[1] = ry;
+          o[2] = b.triVerts[static_cast<size_t>(v) * 3 + 2];  // Z is absolute (ADR-025 D2)
+          o[3] = haveNormals ? b.triNormals[static_cast<size_t>(v) * 3] : 0.f;
+          o[4] = haveNormals ? b.triNormals[static_cast<size_t>(v) * 3 + 1] : 0.f;
+          o[5] = haveNormals ? b.triNormals[static_cast<size_t>(v) * 3 + 2] : 1.f;
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, e.faceVbo);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cpuShadedTris_.size() * sizeof(float)),
+                     cpuShadedTris_.data(), GL_STATIC_DRAW);
+      }
+      if (e.edgeVertCount > 0) {
+        ConvertLineVertsWorldToView(b.edgeVerts, viewAnchorX, viewAnchorY, &solidRel);
+        glBindBuffer(GL_ARRAY_BUFFER, e.edgeVbo);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(solidRel.size() * sizeof(float)),
+                     solidRel.data(), GL_STATIC_DRAW);
+      }
+      e.anchorX = viewAnchorX;
+      e.anchorY = viewAnchorY;
+    }
+
+    // Faces. Depth-on styles only: 2D Wireframe draws no faces (there would be nothing to hide
+    // behind). Hidden occludes without painting; Shaded lights them.
     if (depthOn) {
       glUseProgram(shadedProgram_);
       const ray3d::Vec3 solidFwd = cam.ForwardWorld();
@@ -1355,40 +1462,24 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                   static_cast<float>(solidFwd.y), static_cast<float>(solidFwd.z));
       glUniform1f(glGetUniformLocation(shadedProgram_, "uAmbient"), kShadedAmbient);
       const GLint locSolidColor = glGetUniformLocation(shadedProgram_, "uColor");
-      glUniformMatrix4fv(glGetUniformLocation(shadedProgram_, "uMVP"), 1, GL_FALSE, mvp);
+      const GLint locSolidMvp = glGetUniformLocation(shadedProgram_, "uMVP");
       glDisable(GL_BLEND);
       glEnable(GL_POLYGON_OFFSET_FILL);
       glPolygonOffset(1.f, 1.f);
-      // Hidden: occlude, do not paint. The faces still write depth, which is the whole point.
       if (!shadeSurfaces)
         glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-      glBindVertexArray(vaoShaded_);
-      glBindBuffer(GL_ARRAY_BUFFER, vboShaded_);
-      for (const CadSolidDisplayBatch& b : solidGeometry->solids) {
-        if (!b.triVerts || b.triVerts->empty() || b.triVerts->size() % 9 != 0)
+      for (const SolidGpuBatch& e : solidGpu_) {
+        if (e.faceVertCount <= 0)
           continue;
-        const size_t vcount = b.triVerts->size() / 3;
-        const bool haveNormals = b.triNormals && b.triNormals->size() == b.triVerts->size();
-        cpuShadedTris_.clear();
-        cpuShadedTris_.resize(vcount * 6);
-        for (size_t v = 0; v < vcount; ++v) {
-          float rx = 0.f;
-          float ry = 0.f;
-          WorldToViewRelativeFloat(static_cast<double>((*b.triVerts)[v * 3]),
-                                   static_cast<double>((*b.triVerts)[v * 3 + 1]), viewAnchorX, viewAnchorY,
-                                   &rx, &ry);
-          float* o = &cpuShadedTris_[v * 6];
-          o[0] = rx;
-          o[1] = ry;
-          o[2] = (*b.triVerts)[v * 3 + 2];  // Z is absolute (ADR-025 D2)
-          o[3] = haveNormals ? (*b.triNormals)[v * 3] : 0.f;
-          o[4] = haveNormals ? (*b.triNormals)[v * 3 + 1] : 0.f;
-          o[5] = haveNormals ? (*b.triNormals)[v * 3 + 2] : 1.f;
-        }
-        glUniform4f(locSolidColor, b.rgba[0], b.rgba[1], b.rgba[2], 1.f);
-        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cpuShadedTris_.size() * sizeof(float)),
-                     cpuShadedTris_.data(), GL_STREAM_DRAW);
-        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vcount));
+        float solidModel[16];
+        TranslateMat(static_cast<float>(e.anchorX - panX), static_cast<float>(e.anchorY - panY), -panZf,
+                     solidModel);
+        float solidMvp[16];
+        MulMat4(projRot, solidModel, solidMvp);
+        glUniformMatrix4fv(locSolidMvp, 1, GL_FALSE, solidMvp);
+        glUniform4f(locSolidColor, e.rgba[0], e.rgba[1], e.rgba[2], 1.f);
+        glBindVertexArray(e.faceVao);
+        glDrawArrays(GL_TRIANGLES, 0, e.faceVertCount);
       }
       glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
       glDisable(GL_POLYGON_OFFSET_FILL);
@@ -1398,26 +1489,29 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     // The edges, in every style — including 2D Wireframe, where they are the only thing a solid
     // draws at all.
     {
-      std::vector<float> solidRel;
       glUseProgram(lineProgram_);
-      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-      glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
-      glBindVertexArray(vaoLines_);
-      glEnableVertexAttribArray(0);
-      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
-      for (const CadSolidDisplayBatch& b : solidGeometry->solids) {
-        if (!b.edgeVerts || b.edgeVerts->empty() || b.edgeVerts->size() % 6 != 0)
+      for (const SolidGpuBatch& e : solidGpu_) {
+        if (e.edgeVertCount <= 0)
           continue;
-        ConvertLineVertsWorldToView(*b.edgeVerts, viewAnchorX, viewAnchorY, &solidRel);
-        glUniform4f(locCol, b.rgba[0], b.rgba[1], b.rgba[2], b.rgba[3]);
-        glLineWidth(b.lineweightMm >= 0.f ? LineweightMmToDevicePx(b.lineweightMm) : kLwMain);
-        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(solidRel.size() * sizeof(float)),
-                     solidRel.data(), GL_STREAM_DRAW);
-        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(solidRel.size() / 3));
+        float solidModel[16];
+        TranslateMat(static_cast<float>(e.anchorX - panX), static_cast<float>(e.anchorY - panY), -panZf,
+                     solidModel);
+        float solidMvp[16];
+        MulMat4(projRot, solidModel, solidMvp);
+        glUniformMatrix4fv(locMvp, 1, GL_FALSE, solidMvp);
+        glUniform4f(locCol, e.rgba[0], e.rgba[1], e.rgba[2], e.rgba[3]);
+        glLineWidth(e.lineweightMm >= 0.f ? LineweightMmToDevicePx(e.lineweightMm) : kLwMain);
+        glBindVertexArray(e.edgeVao);
+        glDrawArrays(GL_LINES, 0, e.edgeVertCount);
       }
       glLineWidth(kLwMain);
       glBindVertexArray(0);
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);  // restore the shared MVP for later line passes
     }
+  } else if (!solidGpu_.empty()) {
+    // No solids to draw this frame (all erased, all hidden, or the drawing was replaced). Free the
+    // GPU buffers rather than hold megabytes of a closed drawing's solids until the next rebuild.
+    ReleaseSolidGpu();
   }
 
   // --- Solid-filled regions (ADR-011): even-odd stencil fill, drawn under the linework so it is plottable
