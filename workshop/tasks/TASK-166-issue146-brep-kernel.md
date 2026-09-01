@@ -1,4 +1,4 @@
-# TASK-165 — B-rep solid kernel and the seven primitives (GitHub issue #146, increment 1 of 2)
+# TASK-166 — B-rep solid kernel and the seven primitives (GitHub issue #146, increment 1 of 2)
 
 ## Requirement authority
 
