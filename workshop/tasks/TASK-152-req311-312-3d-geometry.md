@@ -1,7 +1,7 @@
 # TASK-152 — 3D geometry: a plane abstraction, and arcs/circles in arbitrary planes
 
 - Type:    feature
-- Status:  implement
+- Status:  submitted (automated verification PASS, 864/864; manual GUI pass with user outstanding)
 - Opened:  2026-08-31
 - Owner:   nrjohnson2604
 
@@ -115,7 +115,7 @@ normal" — no new command is needed.
   - [x] 4. Render / hit test / snap through the one parametrisation.
   - [x] 5. DXF group 210 out and in.
   - [x] 6. `.gs` persistence, omitted when +Z; legacy byte-identity test.
-  - [ ] 7. Headless transcripts; full ctest; completion report.
+  - [x] 7. Headless transcripts; full ctest; completion report.
 
 ## 7. Workflow-specific notes
 - Feature: pre-flight answered (Q1, Q2 above, both settled as recorded decisions before any code).
@@ -477,22 +477,161 @@ normal" — no new command is needed.
 
   Suite: **864/864 ctest green.**
 
+- 2026-08-31 Step 7 done. The transcripts were written with the steps that needed them, so what this
+  step actually contained was the whole-branch sweep, the full suite, and this report.
+
+  **Suite: 864/864 ctest green**, zero build warnings under `/W4 /permissive-` (TASK-150 cleared the
+  ~200 that were there; this branch adds none). Reconfigured first -- `file(GLOB)` has no
+  `CONFIGURE_DEPENDS`, so the four new transcripts are invisible to ctest until `cmake -S . -B build`
+  runs.
+
+  **The sweep found three defects, all in what the branch had already written, none behavioural.**
+  Fixed in `76b3f20`:
+  - `src/commands/CadCommands.hpp` was **stored** as CRLF from step 3 (`786cd53`) onward, against
+    `.gitattributes`' `* text=auto`. Every other file on the branch stores LF, so the one header
+    carrying the new API read as 4493 insertions / 4389 deletions against `beta` -- the whole file --
+    hiding the 105 lines that actually changed. `git add --renormalize` restores LF storage; the
+    working tree keeps CRLF, which is what `core.autocrlf=true` checks out. The branch diff against
+    `upstream/beta` drops from **7357/4663 to 2969/275**. Worth stating how it hid: the working copy
+    was *correct* the whole time, so every check short of `git show HEAD:<path>` said the file was
+    fine.
+  - The same write left a bare CR **inside** line 3485, which is why `CadWorkPlaneIsWorldXy`'s
+    comment read `deliberately NOT <CR>ef CadUcsIsWorld`. Restored to the contrast the paragraph is
+    actually drawing: deliberately NOT `CadUcsIsWorld`.
+  - Two dropped apostrophes beside it: `REQ-154s own reasoning`, and `the hit points own Z` in
+    `HeadlessDriver.cpp`'s CLICKUCS note. A scan of every added line on the branch for mojibake,
+    mid-line CRs and dropped possessives found nothing else.
+
+  **Checked, and correct as it stands:** every one of the 38 mutation sites on `userCirclesCxCyZR`
+  maintains the side-car; `ucs::Ucs` is the only plane type in `src/` besides the `ray3d::Plane`
+  REQ-311 scopes out loud; the new `TEST_CASE` names are pure ASCII (a non-ASCII one fails under
+  ctest while passing when run directly); and every `CMD CIRCLE` in the transcripts is followed by
+  `ESC`, which a persistent command needs.
+
+  **Re-derived rather than taken on trust -- the mirror rule.** A reflection is orientation-reversing,
+  so in the frame `ucs::FromNormal` rebuilds from the reflected normal the arc's angle runs as
+  `phi - t`: the traversal reverses, the new start is the moved END point, and `sweepRad` keeps its
+  sign. That is what `CadReanchorArcStart` does at the MIRROR sites, so step 4's replacement for the
+  invalidated ASSUMPTION-3 is right for the reason it claims, not only in the one case measured.
+
+  **One more scope note, recorded rather than left silent.** The DXF header extents sweep walks a
+  tilted ARC in its own plane (step 5) but leaves a tilted CIRCLE as the conservative `cx +/- r`
+  square, contributing no Z at all. That is deliberate and should stay: `ComputeWorldExtents` uses
+  the identical square for circles, so writer and reader still agree and issue #94's ratchet
+  condition holds; and making circles contribute Z would change `$EXTMIN`/`$EXTMAX` for every
+  existing flat drawing, which is exactly the byte-identity REQ-312 promises not to disturb. Arcs
+  needed the plane walk because their XY-projected bounds come out too SMALL, which crops geometry;
+  the circle square errs the other way, so it is safe where the arc box was not.
+
+  **Carried into the PR as open questions rather than answered here:** REQ-312's snap acceptance
+  bullet names QUADRANT and NEAREST, which `CadSnap::Kind` does not have (step 4's log); and the
+  pre-existing selective-ALIGN stride bug found while wiring the normals, which stays out of this PR
+  under one-issue-one-PR and wants filing on its own.
+
 ## 9. Self-verification
-- [ ] build-project
-- [ ] architecture-review
-- [ ] code-review
-- [ ] dependency-audit
-- [ ] performance-review
-- [ ] testing
+- [x] build-project        — PASS. `./dev/build` (MSVC/Ninja release, the authoritative build under
+      CON-07). Zero warnings under `/W4 /permissive-`.
+- [x] architecture-review  — PASS. Both architectural decisions were recorded BEFORE any code
+      (D-2026-08-31-e, D-2026-08-31-f) and no third one was made inside the implementation. There is
+      one plane type: a search of `src/` for a second `struct`/`class Plane` returns only
+      `ray3d::Plane`, which REQ-311 scopes out loud as the origin+normal ray-casting form. Circle
+      normals reach the renderer through `CadExtendedGeometryInput` — the struct that already
+      describes itself as the extra per-entity data the renderer needs — rather than as another
+      `RenderScene` parameter, so the Render boundary is unchanged.
+- [x] code-review          — PASS, with the three defects above found and fixed (`76b3f20`; comments
+      and line endings only). The property worth naming: a curve's frame is built in one place
+      (`CurvePlane`) and sampled in one place (`CurvePointAt`), so the renderer, the preview, the
+      snap, the two extents sweeps and the DXF writer cannot hold different opinions about where a
+      tilted curve goes. Step 4 deleted a parallel implementation rather than adding one.
+- [x] dependency-audit     — n/a. No dependency added. The only new include is in-tree
+      (`util/ucs.hpp` into `commands/CadEntities.hpp`), and it flows downward.
+- [x] performance-review   — PASS by construction, not by measurement, and said plainly: every
+      per-vertex loop keeps its pre-REQ-312 two-dimensional arithmetic behind an `IsFlatNormal` /
+      `CadWorkPlaneIsWorldXy` guard, so a flat drawing executes the same instructions it did before
+      plus one well-predicted branch per entity. No benchmark was run, because there is no new work
+      on the flat path to measure and the tilted path is new capability with no prior number to beat.
+- [x] testing              — PASS. 16 new Catch2 cases and 4 headless transcripts (244 steps), full
+      suite 864/864. Every new assertion was negative-tested against the specific line that makes it
+      pass, and the resulting failure messages are quoted in the step logs above — an assertion that
+      cannot fail is worse than none.
+- [ ] MANUAL GUI (not run) — REQ-312's first acceptance bullet is about RENDERING, and the tilted
+      draw path (`AppendArcVcDashed` / `AppendCircleVcDashed`'s per-vertex-Z chains) plus the
+      rubber-band preview are the one part of this work no transcript reaches: the transcripts
+      assert geometry, not pixels. Drawing on a tilted UCS and orbiting is a GUI check. Raised with
+      the user rather than assumed either way.
 
 ## 10. Verification result
-- Submitted:  —
+- Submitted:  — (pending the PR against `chetjones003:beta`; the merge is the verification act)
 - Verdict:    —
 - Findings:   —
 
 ## 11. Outcome
-- Requirements satisfied: —
-- Tests added:            `UcsTests [req311]` (7 cases)
-- Refactors:              none
-- Docs updated:           `spec/requirements.md`, `spec/project.md`
-- Done:                   —
+- Requirements satisfied: REQ-311 (Acceptance met: yes). REQ-312 (Acceptance met: yes for six of the
+                          seven bullets; the snap bullet names QUADRANT and NEAREST, which
+                          `CadSnap::Kind` does not have — every mode that DOES exist is now
+                          plane-aware. The bullet wants rewording, or a REQ-062 issue of its own.)
+- Tests added:            `UcsTests [req311]` (7 cases, 90 assertions) and `[req312]` (2);
+                          `CadSnapTests [CadSnap][req312]` (4, driven through `FindBest` with a pick
+                          RAY — the orbited path); `DocInvariantsTests [docinvariants][req312]` (3:
+                          a short stride, a circle with no normal, a normal outliving its circle);
+                          `headless.req312-arbitrary-plane-curves` (55 steps),
+                          `headless.req312-tilted-curves-drawn-and-edited` (57),
+                          `headless.req312-dxf-arbitrary-plane-roundtrip` (71),
+                          `headless.req312-gs-plane-persistence` (61). New driver verbs: `CLICKUCS`,
+                          `EXPECT CIRCLEXYZ`, `EXPECT ARCPOINTS`, `EXPECT FILECONTAINS`,
+                          `EXPECT FILELACKS`.
+- Refactors:              one, and it removed code rather than adding it: the CIRCLE/ARC geometry was
+                          lifted out of the three commit functions into `CadSolveCircleFromRimPick`,
+                          `CadSolveCircleThreePoints` and `CadSolveArcThreePoints`, deleting the
+                          rubber-band preview's parallel circumcircle, sweep rule and tessellation
+                          (`ComputeCircumcircleRubber`, `AppendArcRubberWorld`,
+                          `AppendCircleRubberWorld`).
+- Docs updated:           `spec/requirements.md` (REQ-311, REQ-312, both traceability rows),
+                          `spec/project.md` (D-2026-08-31-e, D-2026-08-31-f), this task log.
+- Done:                   2026-08-31
+
+## 12. Completion report (CLAUDE.md workflow step 7)
+
+```
+COMPLETION REPORT — TASK-152 — 2026-08-31
+- Requirements satisfied:  REQ-311 (Acceptance met: yes)
+                           REQ-312 (Acceptance met: 6 of 7 — the snap bullet names QUADRANT and
+                             NEAREST, which CadSnap::Kind does not have; every mode that exists is
+                             plane-aware. Bullet wants rewording, or a REQ-062 issue.)
+- Summary:                 ucs::Ucs becomes the project's one plane type (no second Plane), and
+                           arcs and circles carry a plane normal defaulting to world +Z — authored
+                           on the active UCS, drawn/picked/snapped/bounded through one
+                           parametrisation, written and read through DXF group 210, and persisted
+                           in .gs with the key omitted when flat so legacy drawings re-save byte
+                           for byte.
+- Tests:                   16 Catch2 cases (UcsTests [req311] x7 / [req312] x2, CadSnapTests
+                           [req312] x4, DocInvariantsTests [req312] x3) + 4 headless transcripts
+                           (244 steps). Happy path and failure mode both; every new assertion
+                           negative-tested against the line that makes it pass. 864/864 green.
+- Verification verdict:    self-verification PASS (findings resolved: the three defects the branch
+                           sweep found — one CRLF-stored header and two mangled comments, 76b3f20).
+                           External verdict pending the PR; chet's merge is the verification act.
+- Assumptions:             ASSUMPTION-1 validated (byte-identical flat re-save, asserted by
+                           transcript). ASSUMPTION-2 validated (authoring on the active UCS is the
+                           whole of "an arbitrary normal"). ASSUMPTION-3 INVALIDATED by its own
+                           step-4 test and replaced by CadReanchorArcStart — recorded, not quietly
+                           dropped.
+- Architectural decisions: none made by Workshop. Both were escalated and recorded before any code:
+                           D-2026-08-31-e (one plane type) and D-2026-08-31-f (side-car normal,
+                           .gs omits it when +Z).
+- Dependencies:            none added.
+- Technical debt noted:    (1) the tilted DRAW path and rubber-band preview have no automated
+                           coverage — pixels, not geometry; removal condition is a GUI pass or a
+                           framebuffer-capable harness. (2) INTERSECTION/TRIM/BREAK/OFFSET against
+                           a tilted curve are excluded rather than wrong; removal condition is the
+                           #146 kernel. (3) the DWG entity layer carries no extrusion direction, so
+                           a tilted curve saved as .dwg reads flat in AutoCAD; wants its own issue
+                           under REQ-175 / ADR-044. (4) found while wiring ALIGN and deliberately
+                           NOT fixed here: CadCommands_Align.cpp tests sCircles.count(i / 3) against
+                           a stride-4 store, so a selective ALIGN transforms the wrong circles —
+                           pre-existing, unrelated to REQ-312, wants filing on its own.
+- Build:                   reproducible; ./dev/build (MSVC/Ninja release, authoritative under
+                           CON-07), zero warnings under /W4 /permissive-.
+- Docs updated:            spec/requirements.md (REQ-311, REQ-312, both traceability rows),
+                           spec/project.md (D-2026-08-31-e, D-2026-08-31-f), this task log.
+```
