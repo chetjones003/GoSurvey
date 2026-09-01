@@ -428,10 +428,17 @@ void ApplyCadDarkTheme() {
   colors[ImGuiCol_ResizeGrip]            = Hex(0xE0AE5E, 0.16f);
   colors[ImGuiCol_ResizeGripHovered]     = Hex(0xE0AE5E, 0.47f);
   colors[ImGuiCol_ResizeGripActive]      = accent;
-  colors[ImGuiCol_Tab]                   = titlebar;
+  // issue #183 follow-up: titlebar (21.7 L*) vs surface (26.2 L*) was only a
+  // 4.5 L* gap — the same distance as "header over panel", which reads fine
+  // for a bar with its own label but was too close once dialogs gained their
+  // own gradient body (D-2026-09-01-a), making the whole tab row look like one
+  // flat strip. `seam` widens the unselected tab to a full 13 L* below the
+  // active one so the row reads as tabs, not wallpaper; the active tab keeps
+  // `surface` so it still merges into the (now gradient) body it belongs to.
+  colors[ImGuiCol_Tab]                   = seam;
   colors[ImGuiCol_TabHovered]            = raised;
   colors[ImGuiCol_TabActive]             = surface;  // selected tab == its panel, so the two read as one piece
-  colors[ImGuiCol_TabUnfocused]          = titlebar;
+  colors[ImGuiCol_TabUnfocused]          = seam;
   colors[ImGuiCol_TabUnfocusedActive]    = surface;
   // Keep the overline accent explicitly — ImGui may copy HeaderActive into it and ours changed.
   colors[ImGuiCol_TabSelectedOverline]        = accentHi;
@@ -477,6 +484,20 @@ void ApplyCadDarkTheme() {
   g_chrome.plateHilite     = IM_COL32(255, 255, 255, 20);  // a hint of light, not a visible white line
   g_chrome.plateShadow     = IM_COL32(0, 0, 0, 115);       // fades to 0 over kPlateShadowPx
   g_chrome.windowShadow    = IM_COL32(0, 0, 0, 150);       // innermost ring; fades out over 12px
+  // REQ-081 rev 7 — dialog-only depth, dialled down from the Start screen's own
+  // gradient/card language. Window fill brackets `surface` by one ladder step
+  // each way rather than reusing raised/titlebar outright, so a dialog with no
+  // buttons still reads as subtly lit without stealing either neighbour's tone.
+  g_chrome.dlgWindowFillTop      = HexU32(0x454545);
+  g_chrome.dlgWindowFillBottom   = HexU32(0x363636);
+  g_chrome.dlgBtnFaceTop         = HexU32(0x565656);
+  g_chrome.dlgBtnFaceBottom      = HexU32(0x3C3C3C);
+  g_chrome.dlgBtnFaceHoverTop    = HexU32(0x616161);
+  g_chrome.dlgBtnFaceHoverBottom = HexU32(0x454545);
+  g_chrome.dlgBtnFaceSunkenTop    = HexU32(0x333333);  // inverted gradient direction reads as pressed
+  g_chrome.dlgBtnFaceSunkenBottom = HexU32(0x3E3E3E);
+  g_chrome.dlgBtnBevelLight      = HexU32(0x707070);
+  g_chrome.dlgBtnBevelDark       = HexU32(0x1C1C1C);
   g_chrome.axisBadges      = true;
   g_chrome.axisX           = ImGui::ColorConvertFloat4ToU32(danger);
   g_chrome.axisY           = ImGui::ColorConvertFloat4ToU32(success);
@@ -629,6 +650,21 @@ void ApplyCadLightTheme() {
   g_chrome.plateHilite     = IM_COL32(0, 0, 0, 0);
   g_chrome.plateShadow     = IM_COL32(0, 0, 0, 0);
   g_chrome.windowShadow    = IM_COL32(0, 0, 0, 0);
+  // REQ-081 rev 7 — same dialog-only depth as Dark, in this theme's own palette.
+  // Window fill brackets `face` by the classic ladder's own two neighbours
+  // (face/faceDk already used for panel vs. button); primary buttons pick up
+  // the steel-blue accent already used for headers/selection, so OK/Apply reads
+  // as the one 3D, "press me" surface in the dialog instead of another gray box.
+  g_chrome.dlgWindowFillTop      = ImGui::ColorConvertFloat4ToU32(face);
+  g_chrome.dlgWindowFillBottom   = ImGui::ColorConvertFloat4ToU32(faceDk);
+  g_chrome.dlgBtnFaceTop         = ImGui::ColorConvertFloat4ToU32(steelHi);
+  g_chrome.dlgBtnFaceBottom      = ImGui::ColorConvertFloat4ToU32(steel);
+  g_chrome.dlgBtnFaceHoverTop    = ImGui::ColorConvertFloat4ToU32(capBlue);
+  g_chrome.dlgBtnFaceHoverBottom = ImGui::ColorConvertFloat4ToU32(steelHi);
+  g_chrome.dlgBtnFaceSunkenTop    = ImGui::ColorConvertFloat4ToU32(steel);     // inverted gradient direction
+  g_chrome.dlgBtnFaceSunkenBottom = ImGui::ColorConvertFloat4ToU32(steelHi);   // reads as pressed
+  g_chrome.dlgBtnBevelLight      = ImGui::ColorConvertFloat4ToU32(hilite);
+  g_chrome.dlgBtnBevelDark       = ImGui::ColorConvertFloat4ToU32(dkShadow);
   // nanoCAD 5 has no axis badges, and this theme is a reproduction of it —
   // REQ-081's "the Light theme renders exactly as it does today" wins here.
   g_chrome.axisBadges      = false;
@@ -954,6 +990,136 @@ static void CastShadowInto(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, b
     dl->AddRectFilledMultiColor(mn, ImVec2(mn.x + d, mx.y), s, clear, clear, s);
   dl->PopClipRect();
 }
+
+// REQ-081 revision 7 — one shared dialog-body gradient, painted right after
+// Begin() so it lands BEHIND whatever content the caller submits next (draw
+// lists are append-only, so timing is what keeps this off the widgets). This
+// is per-dialog opt-in, unlike DrawFloatingWindowChrome's automatic shadow
+// pass: the shadow generalises to every floating window with no per-dialog
+// judgement call, but "which windows are dialogs that want this much depth"
+// is exactly the kind of call the issue asked to start with a named list
+// (Settings, Layer Manager, Viewpoints, Import/Export points, PDF Attach) and
+// grow deliberately — see the migration checklist in CadUi.hpp.
+void BeginStyledDialog() {
+  if ((g_chrome.dlgWindowFillTop | g_chrome.dlgWindowFillBottom) == 0)
+    return;  // theme opts out (kept symmetric with DrawFloatingWindowChrome's own opt-out)
+  ImGuiWindow* w = ImGui::GetCurrentWindow();
+  if (!w)
+    return;
+  const float titleH = w->TitleBarHeight;
+  const ImVec2 mn(w->Pos.x, w->Pos.y + titleH);
+  const ImVec2 mx(w->Pos.x + w->Size.x, w->Pos.y + w->Size.y);
+  if (mx.x <= mn.x || mx.y <= mn.y)
+    return;
+  w->DrawList->AddRectFilledMultiColor(mn, mx, g_chrome.dlgWindowFillTop, g_chrome.dlgWindowFillTop,
+                                        g_chrome.dlgWindowFillBottom, g_chrome.dlgWindowFillBottom);
+}
+
+// A 3D-bevelled button for dialog primary/secondary actions (REQ-081 rev 7):
+// gradient face, lit top-left edge, dark bottom-right edge, inset on press.
+// Drawn the same way DrawRibbonButtonBevel is — over an ItemAdd'd rect via
+// ButtonBehavior, not a themed ImGui::Button — because a flat-colour Button
+// cannot paint a gradient face. `primary` picks the accented gradient fields
+// above; secondary buttons reuse the existing ribbon bevel (bandFace/bandRaised/
+// bandSunken/bandHilite/bandShadow), which is already the "quieter version of
+// the same" bevel language the issue asked for, with nothing new to fill in.
+bool StyledButton(const char* label, const ImVec2& sizeArg, bool primary) {
+  ImGuiWindow* window = ImGui::GetCurrentWindow();
+  if (window->SkipItems)
+    return false;
+  const ImGuiID id = window->GetID(label);
+  const ImVec2 labelSize = ImGui::CalcTextSize(label, nullptr, true);
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const ImVec2 size = ImGui::CalcItemSize(sizeArg, labelSize.x + style.FramePadding.x * 2.f,
+                                           labelSize.y + style.FramePadding.y * 2.f);
+  const ImVec2 pos = window->DC.CursorPos;
+  const ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
+  ImGui::ItemSize(size, style.FramePadding.y);
+  if (!ImGui::ItemAdd(bb, id))
+    return false;
+  bool hovered = false, held = false;
+  const bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
+  ImGui::RenderNavCursor(bb, id);
+
+  ImDrawList* dl = window->DrawList;
+  const bool sunken = held && hovered;
+  ImU32 faceTop, faceBot, bevelTL, bevelBR;
+  if (primary) {
+    faceTop = sunken ? g_chrome.dlgBtnFaceSunkenTop : (hovered ? g_chrome.dlgBtnFaceHoverTop : g_chrome.dlgBtnFaceTop);
+    faceBot = sunken ? g_chrome.dlgBtnFaceSunkenBottom : (hovered ? g_chrome.dlgBtnFaceHoverBottom : g_chrome.dlgBtnFaceBottom);
+    bevelTL = sunken ? g_chrome.dlgBtnBevelDark : g_chrome.dlgBtnBevelLight;
+    bevelBR = sunken ? g_chrome.dlgBtnBevelLight : g_chrome.dlgBtnBevelDark;
+  } else {
+    faceTop = faceBot = sunken ? g_chrome.bandSunken : (hovered ? g_chrome.bandRaised : g_chrome.bandFace);
+    bevelTL = sunken ? g_chrome.bandShadow : g_chrome.bandHilite;
+    bevelBR = sunken ? g_chrome.bandHilite : g_chrome.bandShadow;
+  }
+  dl->AddRectFilledMultiColor(bb.Min, bb.Max, faceTop, faceTop, faceBot, faceBot);
+  dl->AddLine(ImVec2(bb.Min.x, bb.Min.y + 0.5f), ImVec2(bb.Max.x - 1.f, bb.Min.y + 0.5f), bevelTL, 1.f);
+  dl->AddLine(ImVec2(bb.Min.x + 0.5f, bb.Min.y), ImVec2(bb.Min.x + 0.5f, bb.Max.y - 1.f), bevelTL, 1.f);
+  dl->AddLine(ImVec2(bb.Min.x, bb.Max.y - 0.5f), ImVec2(bb.Max.x, bb.Max.y - 0.5f), bevelBR, 1.f);
+  dl->AddLine(ImVec2(bb.Max.x - 0.5f, bb.Min.y), ImVec2(bb.Max.x - 0.5f, bb.Max.y), bevelBR, 1.f);
+
+  const ImVec2 shift = sunken ? ImVec2(1.f, 1.f) : ImVec2(0.f, 0.f);  // pressed face reads as sinking in
+  const char* labelDisplayEnd = ImGui::FindRenderedTextEnd(label);  // stop at "##id", like ImGui::Button
+  ImGui::RenderTextClipped(ImVec2(bb.Min.x + shift.x, bb.Min.y + shift.y),
+                            ImVec2(bb.Max.x + shift.x, bb.Max.y + shift.y),
+                            label, labelDisplayEnd, &labelSize, style.ButtonTextAlign, &bb);
+  return pressed;
+}
+
+// The surface-dialog property grids (Create Surface, Surface Properties) used to
+// hard-code a pale-yellow Civil-3D row fill in both themes. In the Dark theme
+// that put low-contrast light text on near-white, which the user asked to
+// replace with a plain white "paper" sheet — the look of a property sheet
+// dropped into the dialog: a light-gray cell fill, pure-white edit fields with
+// a visible 1 px border, and dark text in the body. The header row keeps the
+// theme's dark strip + light text (it is not "paper"), so the body text colour
+// is pushed separately, after TableHeadersRow — see PushPropertyPaperBodyText.
+// The classic theme keeps its cream grid and dark fields unchanged (REQ-081:
+// "the Light theme renders exactly as it does today"): every value below
+// resolves to the current style colour for it, so the push is a no-op there.
+//
+// Call order: PushPropertyPaperColors → BeginTable → TableSetupColumn(s) →
+// TableHeadersRow → PushPropertyPaperBodyText → rows → PopPropertyPaperBodyText
+// → EndTable → PopPropertyPaperColors. Pushes 6 colours + 1 style var.
+void PushPropertyPaperColors(int themeIdx) {
+  const bool dark = (themeIdx == 0);
+  const ImVec4 rowBg   = dark ? ImVec4(0.90f, 0.90f, 0.90f, 1.f) : ImVec4(1.f, 0.97f, 0.82f, 1.f);
+  const ImVec4 rowAlt  = dark ? ImVec4(0.90f, 0.90f, 0.90f, 1.f) : ImVec4(1.f, 0.99f, 0.90f, 1.f);
+  const ImVec4 frame   = dark ? ImVec4(1.00f, 1.00f, 1.00f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+  const ImVec4 frameHi = dark ? ImVec4(0.93f, 0.95f, 1.00f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered);
+  const ImVec4 frameAc = dark ? ImVec4(0.88f, 0.92f, 1.00f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_FrameBgActive);
+  const ImVec4 border  = dark ? ImVec4(0.45f, 0.45f, 0.45f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_Border);
+  const float  bsize   = dark ? 1.f : ImGui::GetStyle().FrameBorderSize;
+  ImGui::PushStyleColor(ImGuiCol_TableRowBg, rowBg);
+  ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, rowAlt);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, frame);
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, frameHi);
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, frameAc);
+  ImGui::PushStyleColor(ImGuiCol_Border, border);
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, bsize);
+}
+
+void PopPropertyPaperColors() {
+  ImGui::PopStyleVar(1);
+  ImGui::PopStyleColor(6);
+}
+
+// Dark body text for the white "paper" rows — pushed AFTER TableHeadersRow so
+// the dark header strip keeps its light label text. Also darkens the InputText
+// caret: `ImGuiCol_InputTextCursor` is seeded from `ImGuiCol_Text` ONCE when the
+// theme is built, so a runtime PushStyleColor on Text alone leaves the caret at
+// the dark theme's light colour — invisible on a white field. No-op in classic.
+void PushPropertyPaperBodyText(int themeIdx) {
+  const bool dark = (themeIdx == 0);
+  const ImVec4 text = dark ? ImVec4(0.11f, 0.11f, 0.11f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+  const ImVec4 caret = dark ? ImVec4(0.06f, 0.06f, 0.06f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_InputTextCursor);
+  ImGui::PushStyleColor(ImGuiCol_Text, text);
+  ImGui::PushStyleColor(ImGuiCol_InputTextCursor, caret);
+}
+
+void PopPropertyPaperBodyText() { ImGui::PopStyleColor(2); }
 
 void DrawFloatingWindowChrome() {
   if ((g_chrome.windowShadow >> IM_COL32_A_SHIFT) == 0)
@@ -19098,6 +19264,7 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
     ImGui::End();
     return;
   }
+  BeginStyledDialog();
   cmd.showLayerManagerWindow = open;
 
   ImGui::TextWrapped(
@@ -19108,7 +19275,7 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
   static char newLayerBuf[160] = "NewLayer";
   ImGui::InputText("New layer name", newLayerBuf, IM_ARRAYSIZE(newLayerBuf));
   ImGui::SameLine();
-  if (ImGui::Button("Add layer")) {
+  if (StyledButton("Add layer", ImVec2(0, 0), /*primary=*/true)) {
     std::string err;
     if (CadAddDrawingLayer(cmd, std::string(newLayerBuf), &err))
       log->push_back("Layer added: " + TrimUi(std::string(newLayerBuf)));

@@ -30,6 +30,17 @@ struct UiChrome {
   ImU32 plateHilite;
   ImU32 plateShadow;
   ImU32 windowShadow;
+
+  /// REQ-081 revision 7 — floating DIALOGS only (Settings, Layer Manager,
+  /// Viewpoints, Import/Export points, PDF Attach, …), painted by
+  /// BeginStyledDialog()/StyledButton(). Docked panels, the ribbon and popups
+  /// are unaffected — they keep the flat/bevel treatment ADR-033 already set.
+  ImU32 dlgWindowFillTop, dlgWindowFillBottom;       // body gradient, top->bottom
+  ImU32 dlgBtnFaceTop, dlgBtnFaceBottom;             // primary button, at rest
+  ImU32 dlgBtnFaceHoverTop, dlgBtnFaceHoverBottom;   // primary button, hovered
+  ImU32 dlgBtnFaceSunkenTop, dlgBtnFaceSunkenBottom; // primary button, pressed
+  ImU32 dlgBtnBevelLight, dlgBtnBevelDark;           // shared edge colours (light source top-left)
+
   bool  axisBadges;
   ImU32 axisX, axisY, axisZ;
   ImU32 axisText;

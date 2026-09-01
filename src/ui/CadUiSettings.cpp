@@ -30,6 +30,25 @@ static void BoxBegin(const char* label, float height = 0.f) {
 
 static void BoxEnd() { ImGui::EndChild(); }
 
+// A bare description paragraph at the top of a tab used to sit directly on the
+// dialog body — fine while that body was one flat colour, but once dialogs
+// gained their own gradient fill (REQ-081 rev 7 / issue #183) unboxed text
+// read as "just laid over" the background instead of belonging to the dialog.
+// This gives it the same bordered, recessed treatment every other section in
+// this dialog already has (see BoxBegin), sized to fit: the box's own width
+// drives the wrap (so it always matches the current window width, never a
+// stale one), and its height is computed from that wrapped text every frame,
+// so the paragraph is never clipped and never leaves dead space either.
+static void DrawSettingsNote(const char* text) {
+  const float wrapW = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().WindowPadding.x * 2.f;
+  const ImVec2 textSize = ImGui::CalcTextSize(text, nullptr, false, wrapW);
+  const float boxH = textSize.y + ImGui::GetStyle().WindowPadding.y * 2.f;
+  ImGui::BeginChild("##settings_note", ImVec2(0.f, boxH), true);
+  ImGui::TextWrapped("%s", text);
+  ImGui::EndChild();
+  ImGui::Spacing();
+}
+
 static void DrawSettingsHeader(const AppCommandState& cmd) {
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.85f, 0.85f, 1.f));
   ImGui::Text("Current profile:   <<GoSurvey>>");
@@ -203,11 +222,10 @@ static void DrawSettingsDisplayTab(AppCommandState& cmd) {
 }
 
 static void DrawSettingsFilesTab(AppCommandState& cmd, std::vector<std::string>* log) {
-  ImGui::TextWrapped(
+  DrawSettingsNote(
       "Search paths, file locations, and startup template. GoSurvey loads a workspace .gs at startup; an empty "
       "Custom path uses the bundled resources/default-template.gs next to the executable. Preferences are saved "
       "in gosurvey-user.json beside the executable.");
-  ImGui::Separator();
   BoxBegin("Startup template (.gs)", 140.f);
   ImGui::InputText("Custom .gs path (UTF-8)##startup_gs", cmd.defaultWorkspaceTemplatePathUtf8,
                    IM_ARRAYSIZE(cmd.defaultWorkspaceTemplatePathUtf8));
@@ -765,7 +783,7 @@ static void DrawSettingsSelectionTab(AppCommandState& cmd) {
 
 static void DrawSettingsPlaceholderTab(const char* title, const char* description) {
   ImGui::TextUnformatted(title); ImGui::Separator();
-  ImGui::TextWrapped("%s", description); ImGui::Spacing();
+  DrawSettingsNote(description);
   ImGui::BeginDisabled(); ImGui::TextDisabled("(No GoSurvey-specific controls in this section yet.)"); ImGui::EndDisabled();
 }
 
@@ -777,6 +795,7 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   if (!ImGui::Begin("Options", &open, ImGuiWindowFlags_NoCollapse)) {
     cmd.showSettingsWindow = open; ImGui::End(); return;
   }
+  BeginStyledDialog();
   cmd.showSettingsWindow = open;
   DrawSettingsHeader(cmd);
 
@@ -822,13 +841,13 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::EndChild();
 
   ImGui::Separator();
-  if (ImGui::Button("OK", ImVec2(90.f, 0.f)))     { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings saved (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } cmd.showSettingsWindow = false; }
+  if (StyledButton("OK", ImVec2(90.f, 0.f), /*primary=*/true))     { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings saved (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } cmd.showSettingsWindow = false; }
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(90.f, 0.f))) cmd.showSettingsWindow = false;
+  if (StyledButton("Cancel", ImVec2(90.f, 0.f))) cmd.showSettingsWindow = false;
   ImGui::SameLine();
-  if (ImGui::Button("Apply", ImVec2(90.f, 0.f)))  { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings applied (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } }
+  if (StyledButton("Apply", ImVec2(90.f, 0.f), /*primary=*/true))  { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings applied (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } }
   ImGui::SameLine();
-  ImGui::BeginDisabled(); ImGui::Button("Help", ImVec2(90.f, 0.f)); ImGui::EndDisabled();
+  ImGui::BeginDisabled(); StyledButton("Help", ImVec2(90.f, 0.f)); ImGui::EndDisabled();
   ImGui::End();
 
   DrawGraphicsPerformanceDialog(cmd, log);
