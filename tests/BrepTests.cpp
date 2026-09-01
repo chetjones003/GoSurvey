@@ -381,6 +381,72 @@ TEST_CASE("Invalid dimensions are refused with a specific reason", "[brep][req31
   REQUIRE(std::string(brep::ProblemText(Problem::NotClosed)).size() > 0);
 }
 
+TEST_CASE("Every failure reason and every primitive has its own name", "[brep][req313]") {
+  // Both of these are `switch`es over an enum, and both fail the same silent way: a missing case
+  // falls through to the default and every value starts reporting the same string. The command
+  // layer would then refuse a torus and tell the user its length was wrong.
+  const Problem all[] = {
+      Problem::Ok,
+      Problem::NonFiniteParameter,
+      Problem::NonPositiveLength,
+      Problem::NonPositiveWidth,
+      Problem::NonPositiveHeight,
+      Problem::NonPositiveRadius,
+      Problem::NegativeTopRadius,
+      Problem::TopRadiusNotBelowBase,
+      Problem::MinorRadiusNotBelowMajor,
+      Problem::SideCountOutOfRange,
+      Problem::DegenerateFrame,
+      Problem::NoShell,
+      Problem::EmptyShell,
+      Problem::IndexOutOfRange,
+      Problem::LoopNotClosed,
+      Problem::EmptyLoop,
+      Problem::EdgeNotUsedTwice,
+      Problem::EdgeOrientationInconsistent,
+      Problem::FaceHasNoLoop,
+      Problem::DegenerateFace,
+      Problem::DegenerateEdge,
+      Problem::NonFiniteCoordinate,
+      Problem::NotClosed,
+      Problem::UnusedVertex,
+      Problem::PlaneFaceNotSimple,
+      Problem::NonPositiveTolerance,
+  };
+  std::vector<std::string> seen;
+  for (Problem p : all) {
+    const std::string text = brep::ProblemText(p);
+    INFO(text);
+    REQUIRE_FALSE(text.empty());
+    // The distinctness check alone would not catch a *single* missing case, because the first
+    // value to fall through picks up the default sentence and nothing has claimed it yet. Naming
+    // the sentinel closes that: no enumerated value is allowed to reach the fallthrough.
+    REQUIRE(text != "The solid is not valid.");
+    REQUIRE(std::find(seen.begin(), seen.end(), text) == seen.end());
+    seen.push_back(text);
+  }
+
+  const brep::PrimitiveKind kinds[] = {
+      brep::PrimitiveKind::None,     brep::PrimitiveKind::Box,      brep::PrimitiveKind::Wedge,
+      brep::PrimitiveKind::Pyramid,  brep::PrimitiveKind::Cylinder, brep::PrimitiveKind::Cone,
+      brep::PrimitiveKind::Sphere,   brep::PrimitiveKind::Torus,
+  };
+  std::vector<std::string> names;
+  for (brep::PrimitiveKind k : kinds) {
+    const std::string name = brep::PrimitiveKindName(k);
+    INFO(name);
+    REQUIRE_FALSE(name.empty());
+    REQUIRE(std::find(names.begin(), names.end(), name) == names.end());
+    names.push_back(name);
+  }
+
+  // And the name a built solid reports is the one for the kind it actually is.
+  Solid built;
+  Problem builtWhy = Problem::Ok;
+  REQUIRE(brep::MakeTorus(World(), 5.0, 1.0, &built, &builtWhy));
+  REQUIRE(std::string(brep::PrimitiveKindName(built.recipe.kind)) == "Torus");
+}
+
 TEST_CASE("A skewed or mirrored placement frame is refused", "[brep][req313]") {
   ucs::Ucs mirrored;
   mirrored.xAxis = {1.0, 0.0, 0.0};

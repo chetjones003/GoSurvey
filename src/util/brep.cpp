@@ -473,7 +473,9 @@ const char* ProblemText(Problem p) {
   case Problem::TopRadiusNotBelowBase: return "Top radius must be smaller than the base radius.";
   case Problem::MinorRadiusNotBelowMajor:
     return "Tube radius must be smaller than the torus radius, or the tube would pass through the axis.";
-  case Problem::SideCountOutOfRange: return "A pyramid needs between 3 and 64 sides.";
+  case Problem::SideCountOutOfRange:
+    static_assert(kMaxPyramidSides == 64, "the sentence below names this limit");
+    return "A pyramid needs between 3 and 64 sides.";
   case Problem::DegenerateFrame: return "The placement frame is not a valid right-handed coordinate system.";
   case Problem::NoShell: return "The solid has no shell.";
   case Problem::EmptyShell: return "The solid has a shell with no faces.";
@@ -514,7 +516,7 @@ Vec3 EdgePointAt(const Solid& s, const Edge& e, double t) {
 
 bool MakeBox(const ucs::Ucs& frame, double length, double width, double height, Solid* out, Problem* outWhy) {
   if (!out)
-    return Fail(Problem::IndexOutOfRange, outWhy);
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!AllFinite({length, width, height}))
     return Fail(Problem::NonFiniteParameter, outWhy);
   if (!(length > 0.0))
@@ -583,7 +585,7 @@ bool MakeBox(const ucs::Ucs& frame, double length, double width, double height, 
 bool MakeWedge(const ucs::Ucs& frame, double length, double width, double height, Solid* out,
                Problem* outWhy) {
   if (!out)
-    return Fail(Problem::IndexOutOfRange, outWhy);
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!AllFinite({length, width, height}))
     return Fail(Problem::NonFiniteParameter, outWhy);
   if (!(length > 0.0))
@@ -649,7 +651,7 @@ bool MakeWedge(const ucs::Ucs& frame, double length, double width, double height
 bool MakePyramid(const ucs::Ucs& frame, int sides, double baseRadius, double topRadius, double height,
                  Solid* out, Problem* outWhy) {
   if (!out)
-    return Fail(Problem::IndexOutOfRange, outWhy);
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!AllFinite({baseRadius, topRadius, height}))
     return Fail(Problem::NonFiniteParameter, outWhy);
   if (sides < 3 || sides > kMaxPyramidSides)
@@ -852,7 +854,7 @@ namespace {
 
 bool MakeCylinder(const ucs::Ucs& frame, double radius, double height, Solid* out, Problem* outWhy) {
   if (!out)
-    return Fail(Problem::IndexOutOfRange, outWhy);
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!AllFinite({radius, height}))
     return Fail(Problem::NonFiniteParameter, outWhy);
   if (!(radius > 0.0))
@@ -867,7 +869,7 @@ bool MakeCylinder(const ucs::Ucs& frame, double radius, double height, Solid* ou
 bool MakeCone(const ucs::Ucs& frame, double baseRadius, double topRadius, double height, Solid* out,
               Problem* outWhy) {
   if (!out)
-    return Fail(Problem::IndexOutOfRange, outWhy);
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!AllFinite({baseRadius, topRadius, height}))
     return Fail(Problem::NonFiniteParameter, outWhy);
   if (!(baseRadius > 0.0))
@@ -885,7 +887,7 @@ bool MakeCone(const ucs::Ucs& frame, double baseRadius, double topRadius, double
 
 bool MakeSphere(const ucs::Ucs& frame, double radius, Solid* out, Problem* outWhy) {
   if (!out)
-    return Fail(Problem::IndexOutOfRange, outWhy);
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!AllFinite({radius}))
     return Fail(Problem::NonFiniteParameter, outWhy);
   if (!(radius > 0.0))
@@ -933,7 +935,7 @@ bool MakeSphere(const ucs::Ucs& frame, double radius, Solid* out, Problem* outWh
 
 bool MakeTorus(const ucs::Ucs& frame, double majorRadius, double minorRadius, Solid* out, Problem* outWhy) {
   if (!out)
-    return Fail(Problem::IndexOutOfRange, outWhy);
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!AllFinite({majorRadius, minorRadius}))
     return Fail(Problem::NonFiniteParameter, outWhy);
   if (!(majorRadius > 0.0) || !(minorRadius > 0.0))
@@ -1247,7 +1249,7 @@ Bounds ComputeBounds(const Solid& s) {
 
 bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy) {
   if (!out)
-    return Fail(Problem::IndexOutOfRange, outWhy);
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!std::isfinite(chordTolerance) || !(chordTolerance > 0.0))
     return Fail(Problem::NonPositiveTolerance, outWhy);
   const Problem why = Validate(s);
