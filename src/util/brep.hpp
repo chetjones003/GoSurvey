@@ -402,4 +402,16 @@ struct Tessellation {
 /// itself, never on the infinite line or full circle it lies along.
 [[nodiscard]] Vec3 ClosestPointOnEdge(const Solid& s, const Edge& e, const Vec3& p);
 
+/// \p s moved by \p delta, leaving its shape and orientation alone.
+///
+/// **Lives here because only this header knows every place a coordinate hides in a `Solid`** — the
+/// vertices, each arc edge's centre, each face's surface origin, and the recipe's placement frame.
+/// Open-coded at a call site, adding a field to \ref Surface later would silently miss it, and a
+/// solid that half-moved is not a shape at all.
+///
+/// The axes are directions and the radii are lengths, so neither moves. The first caller is the
+/// document-origin rebase (REQ-101), where a store that does not follow the origin is a solid that
+/// silently jumps by the origin's whole magnitude.
+[[nodiscard]] Solid Translate(const Solid& s, const Vec3& delta);
+
 } // namespace brep

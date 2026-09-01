@@ -514,6 +514,20 @@ Vec3 EdgePointAt(const Solid& s, const Edge& e, double t) {
   return ucs::PointOnPlaneCircle(e.frame, e.radius, e.sweep * t);
 }
 
+Solid Translate(const Solid& s, const Vec3& delta) {
+  Solid out = s;
+  for (Vertex& v : out.vertices)
+    v.p = ray3d::Add(v.p, delta);
+  for (Edge& e : out.edges) {
+    if (e.kind == CurveKind::Arc)
+      e.frame.origin = ray3d::Add(e.frame.origin, delta);
+  }
+  for (Face& f : out.faces)
+    f.surface.frame.origin = ray3d::Add(f.surface.frame.origin, delta);
+  out.recipe.frame.origin = ray3d::Add(out.recipe.frame.origin, delta);
+  return out;
+}
+
 Vec3 ClosestPointOnSurface(const Surface& sf, const Vec3& p) {
   const Vec3 local = ucs::WorldToUcs(sf.frame, p);
   auto toWorld = [&sf](const Vec3& v) { return ucs::UcsToWorld(sf.frame, v); };
@@ -581,22 +595,36 @@ Vec3 ClosestPointOnEdge(const Solid& s, const Edge& e, const Vec3& p) {
     const double t = std::clamp(ray3d::Dot(ray3d::Sub(p, a), ab) / denom, 0.0, 1.0);
     return ray3d::Add(a, ray3d::Scale(ab, t));
   }
-  // An arc: drop onto its plane, take the angle there, then clamp that angle to the swept range —
-  // which is what keeps the answer on the arc rather than somewhere on the full circle behind it.
+  // An arc: drop onto its plane, take the angle there, and if that angle is outside the swept range,
+  // answer with whichever END is nearer **round the circle**.
+  //
+  // A plain `clamp` on the raw `atan2` result is wrong and quietly so, which is worth spelling out
+  // because it is what this function did until a review caught it. `atan2` returns (-pi, pi], so for
+  // a half-arc spanning [0, pi] a probe at -2.0 rad is 2.0 rad from the start and only 1.14 rad from
+  // the end — but it clamps to the start, because -2.0 is simply the smaller number. The answer is
+  // still ON the arc, which is why nothing crashed and why a test that only checked "is it on the
+  // arc" passed: it is just the wrong end of it.
+  //
+  // Measuring the angle FORWARD from the start, in the sweep's own direction, removes the branch cut
+  // entirely — both senses then share one comparison, and a full-circle edge (sweep = 2*pi) falls out
+  // as the case where nothing is ever outside.
   const ucs::Point2D flat = ucs::WorldToPlane(e.frame, p);
   if (!(std::fabs(flat.x) > 1e-12 || std::fabs(flat.y) > 1e-12))
     return EdgePointAt(s, e, 0.0);  // on the centre: no angle is defined
-  double angle = std::atan2(flat.y, flat.x);
-  const double lo = std::min(0.0, e.sweep);
-  const double hi = std::max(0.0, e.sweep);
-  // atan2 lands in (-pi, pi]; shift it by whole turns into the neighbourhood of the swept range
-  // before clamping, or an arc crossing the branch cut would clamp to the wrong end.
-  while (angle < lo - kPi)
-    angle += kTwoPi;
-  while (angle > hi + kPi)
-    angle -= kTwoPi;
-  const double clamped = std::clamp(angle, lo, hi);
-  return ucs::PointOnPlaneCircle(e.frame, e.radius, clamped);
+  const double angle = std::atan2(flat.y, flat.x);
+  const double span = std::fabs(e.sweep);
+  const bool forward = e.sweep >= 0.0;
+
+  double t = std::fmod(forward ? angle : -angle, kTwoPi);
+  if (t < 0.0)
+    t += kTwoPi;  // now in [0, 2*pi): how far round from the start, the way the arc runs
+
+  double param = t;
+  if (t > span) {
+    // Outside the sweep. Two gaps: past the end, and back round to the start. Nearer wins.
+    param = (t - span <= kTwoPi - t) ? span : 0.0;
+  }
+  return ucs::PointOnPlaneCircle(e.frame, e.radius, forward ? param : -param);
 }
 
 // ---------------------------------------------------------------------------------------------

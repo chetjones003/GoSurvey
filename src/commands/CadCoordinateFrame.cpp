@@ -61,6 +61,18 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
       add2(&fr.vertsXyz[i], &fr.vertsXyz[i + 1]);
   for (SurveyPoint& p : st.surveyPoints)
     add2(&p.easting, &p.northing);
+  // B-rep solids (REQ-313). A solid is an immutable shared payload, so it is REPLACED with a moved
+  // copy rather than written through — the same rule that makes an undo snapshot a refcount bump.
+  // The copy is cheap because a solid's B-rep is a handful of vertices and frames, not a mesh.
+  //
+  // `brep::Translate` and not a loop over the vertices here: a solid also carries a centre on every
+  // arc edge, an origin on every face's surface, and a placement frame on its recipe. Shifting only
+  // the vertices would leave a box correct and a cylinder inside out, which is exactly the sort of
+  // half-move that looks fine until someone orbits. Z is absolute and never rebases (ADR-025 D2).
+  for (CadSolidPtr& sp : st.cadSolids) {
+    if (sp)
+      sp = std::make_shared<const brep::Solid>(brep::Translate(*sp, ray3d::Vec3{dx, dy, 0.0}));
+  }
 }
 
 void ApplyDocumentOriginRebase(AppCommandState& st, double newOriginX, double newOriginY,

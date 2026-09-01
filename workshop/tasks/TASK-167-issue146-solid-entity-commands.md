@@ -152,3 +152,68 @@ issue #146's acceptance bullet 8. `CadSnapTests [CadSnap][req313]` now drives it
 at exactly radius 10 from the cylinder's axis, and removing the analytic projection returns
 **9.9928632694** — the chord's sagitta, precisely. Rejecting every solid from the bounds test turns
 the same case red the other way, so the optimisation added in (3) is itself pinned.
+
+## Pre-merge review pass (`/review-issue 146`)
+
+Two real defects, both found by going after the claims rather than re-reading the code, and both
+invisible to every assertion that existed at the time.
+
+### FINDING-1 — `ClosestPointOnEdge` returned the wrong end of an arc
+
+`src/util/brep.cpp`. The angle from `atan2` lands in `(-pi, pi]` and was clamped straight to the
+swept range. For a half-arc spanning `[0, pi]`, a probe at `-2.0` rad is 2.0 rad from the start and
+1.14 rad from the end — but `-2.0` is the smaller number, so it clamped to the **start**.
+
+The answer was still *on* the arc, which is exactly why it survived: the existing test asked "is the
+returned point within the swept range?" and it always was. Proved with a throwaway probe that got
+`(10, 0, 0)` where `(-10, 0, 0)` was correct, then fixed by measuring the angle **forward from the
+start in the sweep's own direction** — which removes the branch cut, makes both senses share one
+comparison, and makes a full-circle edge (`sweep = 2*pi`) the case where nothing is ever outside.
+
+Masked in the snap path, and the masking is now a pinned property rather than a lucky one: a rim is
+split into two arcs that tile the circle, so one of them always contains any probe. The new test
+sweeps 72 directions and requires that at least one arc returns the exact point.
+
+### FINDING-2 — solids did not follow the document-origin rebase (HIGH)
+
+`src/commands/CadCoordinateFrame.cpp`. `ShiftAllStorageBy` had no `cadSolids` case. The origin is
+established the first time a large coordinate is **typed**, which is not gated on the drawing being
+empty — so a solid drawn at small coordinates and then joined by a state-plane line was left behind
+and silently jumped by the origin's whole magnitude. Confirmed by saving: the box's vertices were
+still `±5` while `worldDocumentOriginX` had become 2,000,000.
+
+Nothing caught it because volume, surface area and topology are all **translation-invariant** —
+every assertion in the corpus stayed green while the solid sat 2.8 million feet from where the user
+put it, and the wrong position went into the `.gs`.
+
+Fixed with `brep::Translate`, deliberately in the kernel: only it knows every place a coordinate
+hides in a solid — the vertices, each arc edge's centre, each face's surface origin, and the
+recipe's placement frame. Shifting the vertices alone would leave a box right and a cylinder inside
+out. Solids are immutable shared payloads, so the solid is replaced with a moved copy rather than
+written through; the copy is cheap because a B-rep is a handful of frames, not a mesh.
+
+**The root cause was a missing observable, not a missing line.** Every verb said what SHAPE a solid
+was; none said WHERE it was. `EXPECT SOLIDBOUNDS` now does, in world coordinates, and reverting the
+fix reports `mnX is 1999995.000000, expected -5.000000`.
+
+### Coverage added while reviewing
+
+- The rebase regression above.
+- **A cylinder authored on a vertical work plane.** Every other solid in the corpus is built on the
+  world frame, which cannot tell a frame being used from one being ignored. This one asserts the
+  axis runs along world -Y (40 deep in Y, 8 across in X and Z) *and* that the volume does not care.
+- **Undo/redo across solid creation**, and the block-editor round trip (solids hidden inside a
+  `BEDIT` session, all restored on `BCLOSE` with volume and topology intact) — the path that would
+  have destroyed every solid in the drawing had the stash not carried them.
+- Every advertised alias (`CYL`, `SPH`, `TOR`, `PYR`, `WE`, `SOLIDS`) proven to dispatch.
+
+964/964 ctest green.
+
+### Not fixed, reported instead
+
+**LOW — the verb table is written twice.** `kRegistry` (help text) and `kSolidVerbs` (behaviour)
+each carry the name, the alias and the usage string. They can drift: an alias added to one and not
+the other is either a command that works but is undocumented, or one that is advertised and does not
+exist. Every alias is currently proven to dispatch, so nothing is wrong today. Deriving the help
+entries from `kSolidVerbs` would close it, the way `ViewportIsObjectSelectionStep` is derived from
+`ViewportClickRouteFor` for the same reason.

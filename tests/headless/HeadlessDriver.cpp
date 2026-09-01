@@ -1454,6 +1454,49 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "expect", buf, sourceLine);
         return false;
       }
+    } else if (what == "SOLIDBOUNDS") {
+      // EXPECT SOLIDBOUNDS <index> <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ> — the solid's analytic bounds
+      // in WORLD coordinates, to REQ-101's 0.01 ft.
+      //
+      // The only verb here that says WHERE a solid is. Every other one says what shape it is, and a
+      // review found exactly the defect that gap allows: a solid that did not follow the document
+      // origin when it was established silently moved by the origin's whole magnitude, with correct
+      // volume, correct area and correct topology the entire time.
+      std::istringstream is(arg);
+      long idx = -1;
+      double want[6] = {0, 0, 0, 0, 0, 0};
+      if (!(is >> idx >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5])) {
+        Fail(run, "parse", "EXPECT SOLIDBOUNDS needs <index> <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ>",
+             sourceLine);
+        return false;
+      }
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.cadSolids.size() ||
+          !run.st.cadSolids[static_cast<size_t>(idx)]) {
+        Fail(run, "expect", "EXPECT SOLIDBOUNDS: no solid at index " + std::to_string(idx), sourceLine);
+        return false;
+      }
+      const brep::Bounds b = brep::ComputeBounds(*run.st.cadSolids[static_cast<size_t>(idx)]);
+      if (!b.valid) {
+        Fail(run, "expect", "EXPECT SOLIDBOUNDS: the solid has no bounds", sourceLine);
+        return false;
+      }
+      // Storage is local in XY and absolute in Z (ADR-025 D2), so the box is lifted back to world
+      // before comparing — otherwise the expected numbers would depend on where the origin happens
+      // to sit, which is the very thing this verb exists to check.
+      const double got[6] = {b.mn.x + run.st.worldDocumentOriginX, b.mn.y + run.st.worldDocumentOriginY,
+                             b.mn.z,
+                             b.mx.x + run.st.worldDocumentOriginX, b.mx.y + run.st.worldDocumentOriginY,
+                             b.mx.z};
+      const char* names[6] = {"mnX", "mnY", "mnZ", "mxX", "mxY", "mxZ"};
+      for (int k = 0; k < 6; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[160];
+          std::snprintf(msg, sizeof(msg), "EXPECT SOLIDBOUNDS %ld: %s is %.6f, expected %.6f", idx,
+                        names[k], got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
     } else if (what == "SOLIDKIND") {
       // EXPECT SOLIDKIND <index> <name> — the recipe the solid remembers (ADR-045 (c)). Separate
       // from SOLIDPROPS on purpose: the recipe is NOT the geometry, and a test that could only

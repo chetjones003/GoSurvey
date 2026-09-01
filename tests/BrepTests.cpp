@@ -34,6 +34,7 @@ using brep::Vec3;
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+constexpr double kTwoPiTest = 2.0 * kPi;
 
 ucs::Ucs World() { return ucs::Ucs{}; }
 
@@ -787,6 +788,62 @@ TEST_CASE("ClosestPointOnEdge stays on the edge, not on the line behind it", "[b
     const double hi = std::max(0.0, e.sweep) + 1e-9;
     REQUIRE(angle >= lo);
     REQUIRE(angle <= hi);
+  }
+}
+
+TEST_CASE("A probe outside an arc gets the NEARER end, not the smaller angle", "[brep][req313]") {
+  // The case a review found, and the reason "is the answer on the arc?" is not a sufficient test.
+  //
+  // A half-arc runs from angle 0 to pi. A probe at -2.0 rad is 2.0 rad from the start and only
+  // 1.14 rad from the end, so the end is the nearest point on that arc. Clamping the raw `atan2`
+  // value picks the START instead — because -2.0 is the smaller number — and the result is still
+  // ON the arc, which is exactly why it went unnoticed.
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), 10.0, 5.0, &s, &why));
+
+  const brep::Edge* rim = nullptr;
+  for (const brep::Edge& e : s.edges) {
+    if (e.kind != brep::CurveKind::Arc)
+      continue;
+    // The bottom rim half that runs (10,0,0) -> (-10,0,0) counter-clockwise, through +Y.
+    if (s.vertices[e.v0].p.x > 9.0 && s.vertices[e.v1].p.x < -9.0 &&
+        std::fabs(s.vertices[e.v0].p.z) < 1e-9) {
+      rim = &e;
+      break;
+    }
+  }
+  REQUIRE(rim != nullptr);
+
+  auto probeAt = [&](double angleRad) {
+    return brep::ClosestPointOnEdge(s, *rim, Vec3{30.0 * std::cos(angleRad), 30.0 * std::sin(angleRad), 0.0});
+  };
+
+  // -2.0 rad: nearer to the pi end.
+  REQUIRE(probeAt(-2.0).x == Approx(-10.0).margin(1e-9));
+  REQUIRE(probeAt(-2.0).y == Approx(0.0).margin(1e-9));
+  // -0.5 rad: nearer to the 0 end.
+  REQUIRE(probeAt(-0.5).x == Approx(10.0).margin(1e-9));
+  // Just inside either end stays inside, and the midpoint of the sweep is returned exactly.
+  REQUIRE(probeAt(0.1).y > 0.0);
+  REQUIRE(probeAt(kPi * 0.5).x == Approx(0.0).margin(1e-9));
+  REQUIRE(probeAt(kPi * 0.5).y == Approx(10.0).margin(1e-9));
+
+  // The two halves of a rim tile the whole circle, so for EVERY direction at least one of them
+  // returns the exact point rather than an end. That is what masked the defect in the snap path,
+  // and it is worth pinning so the masking is a stated property rather than a lucky one.
+  for (int i = 0; i < 72; ++i) {
+    const double a = -kPi + (kTwoPiTest * i) / 72.0;
+    const Vec3 target{10.0 * std::cos(a), 10.0 * std::sin(a), 0.0};
+    double best = 1e300;
+    for (const brep::Edge& e : s.edges) {
+      if (e.kind != brep::CurveKind::Arc || std::fabs(s.vertices[e.v0].p.z) > 1e-9)
+        continue;
+      const Vec3 got = brep::ClosestPointOnEdge(s, e, ray3d::Scale(target, 3.0));
+      best = std::min(best, ray3d::Length(ray3d::Sub(got, target)));
+    }
+    INFO("direction " << a);
+    REQUIRE(best == Approx(0.0).margin(1e-9));
   }
 }
 

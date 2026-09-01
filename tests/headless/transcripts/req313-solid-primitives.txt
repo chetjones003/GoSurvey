@@ -227,3 +227,70 @@ EXPECT SOLIDS 2
 EXPECT SOLIDBATCHES 2
 
 CHECK ALL
+
+# --- A solid follows the document origin when it is established (REQ-101) --------------------------
+# The case a review caught. The origin is established the first time a large coordinate is TYPED,
+# which is not necessarily before anything has been drawn: a solid created at small coordinates and
+# then joined by a state-plane line has to be shifted with everything else, or it silently jumps by
+# the origin's whole magnitude - keeping its volume, its area and its topology the whole way, so
+# every other assertion in this file would still have passed.
+#
+# EXPECT SOLIDBOUNDS is the only verb here that says WHERE a solid is, which is why the defect
+# survived until someone went looking for it.
+NEW
+CMD BOX 0,0 10 10 10
+EXPECT SOLIDBOUNDS 0 -5 -5 0 5 5 10
+
+CMD LINE
+CMD 2000000,2000000
+CMD 2000010,2000000
+ESC
+EXPECT LINEXYZ 0 2000000 2000000 0 2000010 2000000 0
+
+# The box has NOT moved in world terms, even though every stored coordinate under it has.
+EXPECT SOLIDBOUNDS 0 -5 -5 0 5 5 10
+EXPECT SOLIDPROPS 0 1000 600 8 12 6
+
+# And it survives the round trip in the rebased frame.
+SAVEAS %OUT%/rebased.gs
+OPEN %OUT%/rebased.gs
+EXPECT SOLIDBOUNDS 0 -5 -5 0 5 5 10
+EXPECT SOLIDPROPS 0 1000 600 8 12 6
+
+CHECK ALL
+
+# --- The active UCS supplies the orientation (#120's "arbitrary 3D axis") --------------------------
+# Every other solid in this file is built on the world frame, which cannot tell a frame that is
+# being used from one that is being ignored. A cylinder on a VERTICAL work plane can: its axis has
+# to run along world -Y, and its volume must not care either way.
+NEW
+CMD UCS ZA
+CMD 0,0
+CMD 0,-1
+CMD CYLINDER 0,0 4 20
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1005.3096491487338 603.1857894892403 4 6 4
+# 40 deep in Y and 8 across in X and Z - a cylinder lying down, not standing up.
+EXPECT SOLIDBOUNDS 0 -4 -20 -4 4 0 4
+SAVEAS %OUT%/ucssolid.gs
+OPEN %OUT%/ucssolid.gs
+EXPECT SOLIDPROPS 0 1005.3096491487338 603.1857894892403 4 6 4
+EXPECT SOLIDBOUNDS 0 -4 -20 -4 4 0 4
+
+# --- Creating a solid is one undo step -------------------------------------------------------------
+NEW
+CMD BOX 0,0 4 4 4
+CMD SPHERE 40,0 3
+EXPECT SOLIDS 2
+UNDO
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Box
+EXPECT SOLIDBATCHES 1
+UNDO
+EXPECT SOLIDS 0
+EXPECT SOLIDBATCHES 0
+REDO
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 64 96 8 12 6
+
+CHECK ALL
