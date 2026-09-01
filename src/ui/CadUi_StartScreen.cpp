@@ -702,9 +702,15 @@ void DrawAccountDetailsWindow(AppCommandState& cmd) {
     cmd.showAccountDetailsWindow = false;
     return;
   }
-  ImGui::SetNextWindowSize(ImVec2(380.f, 0.f), ImGuiCond_Appearing);
+  // Fixed 800x400, centered in the main viewport every frame it opens.
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowSize(ImVec2(800.f, 400.f), ImGuiCond_Always);
+  ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f),
+                          ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
   bool open = cmd.showAccountDetailsWindow;
-  if (ImGui::Begin("Account Details", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
+  if (ImGui::Begin("Account Details", &open,
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
+                       ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
     ImGui::TextDisabled("Email");
     ImGui::TextUnformatted(cmd.authEmail.empty() ? "(no email on file)" : cmd.authEmail.c_str());
     ImGui::Spacing();
