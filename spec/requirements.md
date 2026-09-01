@@ -5815,11 +5815,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   and Viewport for increment 2
 - Status: accepted (2026-09-01) — see D-2026-09-01-b and ADR-045.
 - Revisions: 2026-09-01 — proposed and accepted (D-2026-09-01-b, TASK-166); increment 2 delivered the
-  same day (TASK-167). **Amended the same day (D-2026-09-01-d, TASK-169): a bare verb now opens a
-  prompted form** — base point then named dimensions by letter — at the user's request; the one-line
-  form is unchanged. The original "no interactive placement" boundary was about rubber-band drag
-  preview, which stays out of scope.
-  same day (TASK-167, ADR-045 addendum). Phase 3 of GitHub #120,
+  same day (TASK-167, ADR-045 addendum). **Amended the same day (D-2026-09-01-d, TASK-169): a bare
+  verb now opens a prompted form** — base point then named dimensions by letter — at the user's
+  request; the one-line form is unchanged. The original "no interactive placement" boundary was about
+  rubber-band drag preview, which stays out of scope. Phase 3 of GitHub #120,
   filed as #146. Representation, DXF/DWG export and the two-increment split each confirmed with the
   user before any code was written.
 
