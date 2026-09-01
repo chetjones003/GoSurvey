@@ -337,6 +337,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/surfacequery.cpp
   src/util/gridsurface.cpp
   src/util/benchscene.cpp
+  # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). Pure by that ADR — no GL, no ImGui, no
+  # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
+  # expectation rather than by looking at a shaded viewport.
+  src/util/brep.cpp
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
   src/util/docinvariants.cpp
@@ -714,6 +718,12 @@ if(GOSURVEY_BUILD_TESTS)
     tests/BenchSceneTests.cpp
     tests/VisualStyleTests.cpp
     tests/MeshGeomTests.cpp
+    # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). The whole point of the kernel being
+    # graphics-free is that this suite can exist: every primitive's topology, its closed-form volume
+    # and surface area, its refusals, and its behaviour at state-plane coordinate magnitudes are all
+    # decided here, with no window and no document.
+    tests/BrepTests.cpp
+    src/util/brep.cpp
     tests/MeshGsRoundTripTests.cpp
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp

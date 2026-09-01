@@ -217,6 +217,8 @@ src/
                 tinanalysis — slope, downhill direction, surface-to-surface volumes (ADR-028)
                 surfacestats — 2D/3D area, slope extrema, extents from a TIN (ADR-039)
                 watershed — drain graph, basins, water-drop, catchment (ADR-039; Phase 3)
+                brep — B-rep solid kernel: topology, the seven primitives, validity,
+                       exact mass properties, tessellation (ADR-045)
   update/       version ordering + manifest parse — pure, no network (ADR-029)
   platform/     window, files, GL context, WinHTTP fetch + SHA-256 (ADR-029)
 third_party/    vendored dependencies (each recorded in the decision log; REQ-300)
@@ -1967,3 +1969,102 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   session (stash is not persisted) but never corrupts the `.gs` — the definition is only written on
   an explicit Save. If a later requirement needs simultaneous multi-block editing or editing a
   block from a paper layout, this swap does not extend to it and a new decision is required.
+
+### ADR-045 — The B-rep solid kernel: analytic faces, a remembered recipe, derived tessellation   (2026-09-01, accepted)
+- Context:    GitHub issue #146 (Phase 3 of #120) asks for a boundary-representation kernel and the
+  seven primitive solids on top of it. There was no solid kernel in GoSurvey at all: no B-rep, no
+  face or edge topology, no solid entity. `CadMesh` (ADR-026 (c)) is explicitly import-only
+  reference geometry and cannot answer any of the questions a solid must — it has no volume, no
+  centre, and no faces that mean anything. Everything in issue #120's Phases 4–6 (extrude, revolve,
+  sweep, loft, boolean union/subtract/intersect, slice, fillet, chamfer, sectioning, mass
+  properties) is built on whatever is decided here, so this is the decision the rest of the epic
+  inherits. Issue #120 states one constraint directly: *"do not tightly couple geometric
+  calculations to the renderer. The geometry engine should be usable without a graphics context."*
+  ADR-026 (b) already recorded the counterpart fact — that a B-rep format "needs a geometry kernel
+  to tessellate, which is a larger project than everything else here combined."
+- Decision:
+  (a) **Topology is the stored truth, and it is a real B-rep**: solid → shells → faces → loops →
+  edges → vertices, exactly the hierarchy issue #146 names. Edge uses are directed, so a loop is an
+  ordered ring of (edge, reversed) pairs. This is what gives a Phase 4 boolean somewhere to write its
+  result: a subtraction produces a shape that is not any of the seven primitives, and no parametric
+  description can express it.
+  (b) **Every face carries an ANALYTIC surface, never a facet**: `Plane`, `Cylinder`, `Cone`,
+  `Sphere`, `Torus`, each with the frame it lives in. A whole sphere is ONE face. Every edge
+  likewise carries a `Line` or an `Arc`. Three things follow, and each is a requirement rather than
+  a nicety: volume and surface area are *integrated in closed form*, so a sphere reports
+  `4/3 pi r^3` rather than a facet sum that drifts with display settings (REQ-101 is ±0.01 and a
+  faceted sphere cannot meet it without an absurd facet count); a stored solid is a handful of faces
+  rather than megabytes of triangles; and tessellation quality becomes a pure display setting, which
+  is what issue #120 means by *"changing tessellation quality should not modify the underlying
+  solid."*
+  (c) **A primitive also remembers the recipe it was built from** — kind, placement frame, and its
+  dimensions. It is *not* the geometry: `Validate`, `ComputeMassProperties` and `Tessellate` all read
+  the topology and never the recipe, so a recipe that disagreed with its solid could not silently
+  change an answer. It exists so the Properties panel can say "Radius 12" instead of "one
+  cylindrical face", and so #120's parametric-modelling section is not designed out. A solid with no
+  recipe (`PrimitiveKind::None`) is a first-class citizen, which is the case that proves the
+  topology and not the recipe is the truth.
+  (d) **Curved surfaces are split at seams into faces that each bound normally.** A cylinder side is
+  two half-faces, a sphere two half-spheres cut by a meridian, a torus four patches. The alternative
+  — one face with a seam edge used twice by itself — makes "every edge bounds exactly two faces" a
+  special case rather than an invariant, and that invariant is the single most useful thing
+  `Validate` has.
+  (e) **`Validate` proves manifoldness, orientability and closure — including GEOMETRIC closure.**
+  Beyond the index/ring/tally checks, the volume integral is taken about two different reference
+  points and required to agree. On a closed surface it must (the closed integral of `n dA` vanishes);
+  on a face whose parametric span disagrees with its own boundary loop it does not. That case is
+  topologically flawless and geometrically a hole, it is exactly what a Phase 4 trim can produce,
+  and nothing else in the check can see it.
+  (f) **Self-intersection is refused at construction, not detected afterwards.** For the seven
+  primitives the only route to a self-intersecting shell is a bad parameter — a torus whose tube
+  swallows its own axis — and each such parameter is refused by name (REQ-201). A general
+  surface-surface intersection test belongs with the Phase 4 booleans, which are the first operation
+  that can actually produce one; building it now would be an untested engine with no caller.
+  (g) **The kernel is `double`, frame-agnostic, and knows nothing about the document.** It is a pure
+  `util/` module beside `ray3d`, `ucs` and `tinbuild` — no GL, no ImGui, no `AppCommandState` — which
+  is the ADR-002 layering that makes the whole suite reachable without a window. Narrowing to the
+  `float` local storage the GPU wants happens **above** this layer, once, where the document origin
+  is known (REQ-101, architecture §11.8). Numerical stability at state-plane magnitudes comes from
+  integrating every face about a reference point ON the solid, so no term is a difference of two
+  large nearly-equal numbers.
+  (h) **`ucs::Ucs` is the frame type throughout** — for a surface, for an arc edge, and for
+  placement. REQ-311 already settled that there is exactly one plane/frame type in this project, and
+  a kernel that introduced a second would reopen the disagreement that decision closed.
+  (i) **Solids are EXCLUDED from DXF/DWG export, with an explicit message naming what was skipped.**
+  A real solid in DXF/DWG is an ACIS `3DSOLID` — a proprietary binary B-rep we cannot write without
+  a large third-party kernel that REQ-300 does not permit. This is the same boundary ADR-026 (c)
+  drew for `CadMesh` and for the same reason, and it is stated out loud rather than dropped
+  silently (REQ-201). Writing a tessellated approximation instead was considered and rejected by the
+  user: it hands back a picture of the solid that round-trips as an uneditable bag of triangles with
+  an approximate volume. If that is wanted it is an explicit opt-in export and its own issue.
+- Alternatives: **(1) Recipe-only parametric primitives** (no topology; faces generated on demand) —
+  smallest possible kernel, exact volumes for free, tiny files. Rejected because Phase 4 has nowhere
+  to put a boolean result, so the real kernel would have to be built anyway, *and* every solid
+  already saved in a customer's file would then need migrating. The saving is borrowed, not earned.
+  **(2) Faceted B-rep** (real topology, curved surfaces baked to triangles at creation) — simplest
+  maths, and booleans are conceptually easier. Rejected on three counts, any one of which is fatal:
+  a faceted sphere's volume misses REQ-101 unless the facet count is enormous; the file grows by
+  orders of magnitude; and the tessellation quality becomes part of the model, which #120 explicitly
+  forbids.
+  **(3) Vendor an existing kernel** (OpenCASCADE, or ACIS/Parasolid under licence) — the honest
+  comparison, and the reason it is not taken is REQ-300 and project.md §7: OCCT is a dependency an
+  order of magnitude larger than everything in `third_party/` combined, and the commercial kernels
+  are not licensable on this project's terms. Recorded so the choice is not re-litigated from
+  scratch; the trigger to revisit is Phase 4 booleans proving intractable in-tree, which is a real
+  possibility and a far better place to make that call than here, with a working primitive kernel
+  already in hand.
+  **(4) Reuse `CadMesh`** — a mesh has no faces, no edges and no volume; ADR-026 (c) already ruled it
+  reference geometry precisely so that mesh editing, mesh snapping and mesh export stayed out of
+  scope. Nothing about it is closer to a solid than starting from nothing.
+- Consequences: a new pure `util/brep` module (header + one TU) and its Catch2 suite. **Increment 1
+  changes no existing source file at all**, which is what makes it unable to regress anything — the
+  only edits outside `src/util/brep.*` are two CMake source-list entries. Increment 2 is where the
+  blast radius lands: a `CadSolid` entity and its store, seven commands, `.gs` persistence, the
+  REQ-064 shaded/hidden render path, a tessellation cache keyed so it is not rebuilt per frame
+  (REQ-100), face and edge snapping in `CadSnap`, and the DXF/DWG exclusion message from (i).
+  **Deliberately not addressed here**, each to be decided when it has a caller: general polygon
+  triangulation for non-convex or holed plane faces (the centroid fan used now is correct for every
+  face the seven primitives make, and is refused rather than guessed for anything else); centroid and
+  moments of inertia (#120 Phase 6); a general self-intersection test (Phase 4, per (f)); and any
+  interchange format for solids (STEP/STL/OBJ), which ADR-026's interchange discussion covers and
+  which no accepted requirement asks for.
