@@ -1508,6 +1508,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glBindVertexArray(0);
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);  // restore the shared MVP for later line passes
     }
+  } else if (!solidGpu_.empty()) {
+    // No solids to draw this frame (all erased, all hidden, or the drawing was replaced). Free the
+    // GPU buffers rather than hold megabytes of a closed drawing's solids until the next rebuild.
+    ReleaseSolidGpu();
   }
 
   // --- Solid-filled regions (ADR-011): even-odd stencil fill, drawn under the linework so it is plottable
