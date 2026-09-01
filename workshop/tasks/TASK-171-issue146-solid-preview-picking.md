@@ -131,6 +131,33 @@ both a cylinder and a box.
 - **DEBT-4 — no dimension text at the cursor.** The screenshots show AutoCAD's live value box; this
   increment draws the geometry and the measuring line, and the value is in the prompt. Its own work.
 
+## Pre-merge review fixes
+
+The review found two places where the prompted form and the one-line form built a *different*
+solid from the *same* numbers — which REQ-313's "the same numbers through either route produce the
+identical solid" does not permit (D-2026-09-01-e, restated in this increment).
+
+1. **Pyramid base-radius reading (HIGH).** The prompted form converts the base radius from apothem
+   to circumradius when circumscribed (the default); the one-line form passed it straight to the
+   kernel as a circumradius. `PYRAMID 0,0 4 6 0 15` built a pyramid half the size of the prompted
+   equivalent. Fixed by a shared `PyramidCircumradius(baseRadius, sides, inscribed)` that both
+   `CadCreateSolidPrimitive` and `CadBuildSolidFromCommand` call. The one-line `PYRAMID x,y S R T H`
+   keeps its argument order and count; `R` and `T` are now the apothem, as at the prompt.
+   `req313-solid-prompted` gains a pyramid-built-both-ways assertion; `req313-solid-primitives`'
+   circumscribed one-line pyramid volume moved 360 → 720.
+2. **Typed corner anchoring (MEDIUM).** A prompted BOX/WEDGE prompt says "first corner", but a
+   *typed* length/width centred the box on that point (only a *picked* opposite corner anchored it).
+   `CadBuildSolidFromCommand`'s placement now takes the offset magnitude from the committed
+   length/width and only the sign from a pick, so typed and picked agree. `req313-solid-prompted`
+   asserts the bounds of a typed prompted box.
+3. **Tidy-ups.** The diameter → radius halving now lives in one code path (`D 10` arms the parameter
+   and falls through the armed-value branch); a duplicate `EXPECT SOLIDS 7` line was removed;
+   `spec/requirements.md`'s stale "tube would pass through its own axis" refusal wording was updated
+   to the exactly-equal case.
+
+SPEC: `spec/project.md` D-2026-09-01-f amended in place (review sub-points 1a/1b); `spec/requirements.md`
+REQ-313 bullets and the picked-dimensions row updated.
+
 ## Status
 
 Complete and verified. Goes to review, not done; the issue is not closed here.

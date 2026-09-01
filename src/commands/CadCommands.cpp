@@ -23745,6 +23745,22 @@ std::string SolidCreatedMessage(brep::PrimitiveKind kind, const brep::MassProper
   return msg;
 }
 
+/// The circumradius `brep::MakePyramid` needs, from the base radius the user gave.
+///
+/// A pyramid's base radius is read as the polygon's APOTHEM by default — "circumscribed", the way
+/// AutoCAD's PYRAMID reads it — so the circumradius the kernel takes is larger by `1/cos(pi/sides)`.
+/// `inscribed` (the prompted form's `I` toggle) reads the given value as the circumradius directly.
+///
+/// BOTH authoring forms call this, so the same numbers through either route describe the same
+/// pyramid (REQ-313: "the same numbers through either route produce the identical solid"). A value
+/// of zero (a cone/pyramid apex) and a side count below three pass straight through.
+static double PyramidCircumradius(double baseRadius, int sides, bool inscribed) {
+  if (inscribed || sides < 3 || baseRadius == 0.0)
+    return baseRadius;
+  const double k = std::cos(3.14159265358979323846 / static_cast<double>(sides));
+  return k > 1e-9 ? baseRadius / k : baseRadius;
+}
+
 void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const std::string& rest,
                              std::vector<std::string>& log) {
   const SolidVerbSpec* spec = FindSolidVerb(verb);
@@ -23804,7 +23820,13 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
       log.push_back(verbUpper + " — the side count must be a whole number.");
       return;
     }
-    built = brep::MakePyramid(frame, static_cast<int>(sidesD), dims[1], dims[2], dims[3], &solid, &why);
+    // The base radius is the APOTHEM (circumscribed, AutoCAD's default) — the same reading the
+    // prompted form uses when its `I` toggle is not set, so `PYRAMID x,y 4 6 0 15` and the prompted
+    // pyramid with base radius 6 build one identical solid.
+    const int sides = static_cast<int>(sidesD);
+    const double baseR = PyramidCircumradius(dims[1], sides, /*inscribed=*/false);
+    const double topR = PyramidCircumradius(dims[2], sides, /*inscribed=*/false);
+    built = brep::MakePyramid(frame, sides, baseR, topR, dims[3], &solid, &why);
     break;
   }
   case brep::PrimitiveKind::Cylinder:
@@ -24141,9 +24163,19 @@ bool CadBuildSolidFromCommand(const AppCommandState& st, bool applyPick, brep::S
 
   // Placement. A box or wedge's base point is the first CORNER, so the frame origin moves to the
   // midpoint of the two corners; every other primitive is placed on its base centre already.
+  //
+  // The offset magnitude is always the committed length / width — a picked opposite corner only
+  // supplies the SIGN (which way it was dragged, which `length` and `width` cannot say). Typed
+  // dimensions carry no sign, so they anchor at the first corner in the positive direction; without
+  // this the "first corner" prompt would be a lie for the typed path and the box would land centred
+  // on that point instead.
   ray3d::Vec3 origin = st.solidBase;
   ucs::Ucs frame = SolidPlacementFrame(st, origin);
   if (st.solidBaseIsCorner) {
+    const double sx = cornerDx < 0.0 ? -1.0 : 1.0;
+    const double sy = cornerDy < 0.0 ? -1.0 : 1.0;
+    cornerDx = sx * v[0];
+    cornerDy = sy * v[1];
     origin = ray3d::Add(origin, ray3d::Add(ray3d::Scale(frame.xAxis, cornerDx * 0.5),
                                            ray3d::Scale(frame.yAxis, cornerDy * 0.5)));
     frame.origin = origin;
@@ -24169,16 +24201,10 @@ bool CadBuildSolidFromCommand(const AppCommandState& st, bool applyPick, brep::S
     baseFrame.origin = frame.origin;
     // Inscribed means the given radius IS the circumradius (the polygon sits inside that circle);
     // circumscribed — AutoCAD's default — means it is the apothem, so the circumradius is larger.
-    // The kernel takes a circumradius, so the conversion happens once, here.
-    double baseR = v[1];
-    double topR = v[2];
-    if (!st.solidInscribed && sides >= 3) {
-      const double k = std::cos(3.14159265358979323846 / static_cast<double>(sides));
-      if (k > 1e-9) {
-        baseR /= k;
-        topR /= k;
-      }
-    }
+    // `PyramidCircumradius` is the one place that conversion lives, and the one-line form calls it
+    // too, so the same numbers through either route build one identical pyramid.
+    const double baseR = PyramidCircumradius(v[1], sides, st.solidInscribed);
+    const double topR = PyramidCircumradius(v[2], sides, st.solidInscribed);
     built = brep::MakePyramid(baseFrame, sides, baseR, topR, v[3], out, &why);
     break;
   }
@@ -24330,8 +24356,9 @@ bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::v
       log.push_back(CadSolidPromptText(st));
       return true;
     }
-    // `D` armed a DIAMETER, so it is halved into the radius it names - the conversion happens here
-    // and nowhere else, so a diameter can never reach the kernel as a radius.
+    // `D` armed a DIAMETER, so it is halved into the radius it names. This is the ONE place the
+    // halving happens — `D <value>` on a single line arms the parameter and falls through to here
+    // too — so a diameter can never reach the kernel as a radius.
     if (st.solidPendingIsDiameter)
       v *= 0.5;
     st.solidPendingIsDiameter = false;
@@ -24370,8 +24397,13 @@ bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::v
         log.push_back(CadSolidPromptText(st));
         return true;
       }
-      SetSolidParam(st, target, d * 0.5, log);
-      return true;
+      // Halved in the ONE place a diameter is ever halved — the armed-value branch above — reached
+      // by arming the parameter and handing it the value, so `D 10` and `D` then `10` are one path.
+      st.solidPendingParam = target;
+      st.solidPendingIsDiameter = true;
+      char buf[64];
+      std::snprintf(buf, sizeof(buf), "%.17g", d);
+      return HandleSolidTextInput(buf, st, log);
     }
   }
 
