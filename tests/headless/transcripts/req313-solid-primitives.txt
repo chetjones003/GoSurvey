@@ -65,14 +65,15 @@ EXPECT SOLIDKIND 5 Wedge
 EXPECT SOLIDPROPS 5 270 288 6 9 5
 
 # --- PYRAMID --------------------------------------------------------------------------------------
-# 4 sides, base circumradius 6, apex, height 15.
-# base area = 0.5*4*36*sin(pi/2) = 72,  V = 72*15/3 = 360
-# side = 2*6*sin(pi/4) = 8.485281374238571; apothem = 6*cos(pi/4) = 4.242640687119285
-# slant = sqrt(225 + 18) = 15.588457268119896;  lateral = 0.5*4*side*slant = 264.5448913
-# A = 72 + 264.5448913 = 336.5448913
+# 4 sides, base radius 6 read as the APOTHEM (circumscribed - AutoCAD's default, and the same reading
+# the prompted form uses unless its `I` toggle is set), apex, height 15. The kernel takes a
+# circumradius: 6/cos(pi/4) = 8.485281374238571.
+# base area = 0.5*4*8.485281374238571^2*sin(pi/2) = 144,  V = 144*15/3 = 720
+# side = 2*8.485281374238571*sin(pi/4) = 12;  slant = sqrt(225 + 36) = 16.15549442140351
+# lateral = 0.5*4*12*16.15549442140351 = 387.7318661;  A = 144 + 387.7318661 = 531.7318661
 CMD PYRAMID 700,100 4 6 0 15
 EXPECT SOLIDKIND 6 Pyramid
-EXPECT SOLIDPROPS 6 360 336.5448913 5 8 5
+EXPECT SOLIDPROPS 6 720 531.7318661 5 8 5
 
 EXPECT SOLIDS 7
 
@@ -108,7 +109,6 @@ EXPECT SOLIDS 7
 # its own case at the end of this file.
 CMD TORUS 800,100 4 4
 EXPECT LOG "cannot exactly equal the torus radius"
-EXPECT SOLIDS 7
 EXPECT SOLIDS 7
 
 CMD CONE 800,100 5 5 5
@@ -171,7 +171,7 @@ EXPECT SOLIDPROPS 4 103.67255756846318 135.7333360 3 4 3
 EXPECT SOLIDKIND 5 Wedge
 EXPECT SOLIDPROPS 5 270 288 6 9 5
 EXPECT SOLIDKIND 6 Pyramid
-EXPECT SOLIDPROPS 6 360 336.5448913 5 8 5
+EXPECT SOLIDPROPS 6 720 531.7318661 5 8 5
 
 # And they are still drawable after the round trip — still one coalesced batch, still all visible.
 EXPECT SOLIDVISIBLE 7

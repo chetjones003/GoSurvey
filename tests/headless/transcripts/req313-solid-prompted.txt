@@ -38,6 +38,34 @@ EXPECT SOLIDS 2
 EXPECT SOLIDPROPS 1 1256.6370614359172 728.849495632832 4 6 4
 EXPECT SOLIDBOUNDS 1 96 96 0 104 104 25
 
+# The PYRAMID is the one where the two forms could disagree on what a number MEANS: its base radius
+# is read as the apothem (circumscribed) by default, and both forms have to apply that one reading or
+# the same `6` builds two different pyramids. 4 sides, base radius 6, apex, height 15 -> V = 720.
+NEW
+CMD PYRAMID
+CMD 0,0
+CMD R 6
+CMD H 15
+CMD
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 720 531.7318661 5 8 5
+# ... and the one-line form with the identical numbers builds the identical solid.
+CMD PYRAMID 0,0 4 6 0 15
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 1 720 531.7318661 5 8 5
+
+# INSCRIBED reads the same `6` as the circumradius instead, so it is the smaller pyramid - and the
+# one that matches passing 6 straight to the kernel.
+NEW
+CMD PYRAMID
+CMD 0,0
+CMD I
+EXPECT LOG "now INSCRIBED"
+CMD R 6
+CMD H 15
+CMD
+EXPECT SOLIDPROPS 0 360 336.5448913 5 8 5
+
 # --- A letter on its own arms it; the next line is the value ---------------------------------------
 NEW
 CMD SPHERE
@@ -75,6 +103,10 @@ EXPECT LOG "width = 5"
 CMD
 # 20 x 5 x 8 = 800 and area 2(100+160+40) = 600 - not the 1600 the first W would have given.
 EXPECT SOLIDPROPS 0 800 600 8 12 6
+# The base point was the FIRST CORNER (that is what the prompt said), so a typed length and width
+# anchor the box there in the positive direction - not centred on the point. A picked opposite
+# corner does the same thing; the only difference is that a pick can carry a negative direction.
+EXPECT SOLIDBOUNDS 0 0 0 0 20 5 8
 
 CHECK ALL
 
