@@ -688,6 +688,44 @@ ray3d::Vec3 ClosestRayPointToEdge(const ray3d::Ray& ray, const brep::Solid& s, c
   return ray.at(t > 0.0 ? t : 0.0);
 }
 
+/// Does \p ray come near \p b at all? A slab test, used to reject a whole solid before its triangles
+/// are walked.
+///
+/// This is not a micro-optimisation. Object snapping runs on HOVER, every frame, and the triangle
+/// walk below is O(triangles) per solid — a few hundred solids at a couple of thousand triangles
+/// each is most of a million ray-triangle tests per frame, which is REQ-100's budget gone on a
+/// cursor that is not near any of them. Four compares that discard a solid first is the difference.
+///
+/// The box is padded by \p pad so a ray passing just outside a solid still reaches the triangles: a
+/// snap that silently misses is worse than a slow one, which is the same call the surface pick makes
+/// about its own plan-AABB reject.
+[[nodiscard]] bool RayNearBounds(const ray3d::Ray& ray, const brep::Bounds& b, double pad) {
+  if (!b.valid)
+    return false;
+  const double mn[3] = {b.mn.x - pad, b.mn.y - pad, b.mn.z - pad};
+  const double mx[3] = {b.mx.x + pad, b.mx.y + pad, b.mx.z + pad};
+  const double o[3] = {ray.origin.x, ray.origin.y, ray.origin.z};
+  const double d[3] = {ray.dir.x, ray.dir.y, ray.dir.z};
+  double tNear = -std::numeric_limits<double>::max();
+  double tFar = std::numeric_limits<double>::max();
+  for (int i = 0; i < 3; ++i) {
+    if (std::fabs(d[i]) < 1e-12) {
+      if (o[i] < mn[i] || o[i] > mx[i])
+        return false;  // parallel to this slab and outside it
+      continue;
+    }
+    double t0 = (mn[i] - o[i]) / d[i];
+    double t1 = (mx[i] - o[i]) / d[i];
+    if (t0 > t1)
+      std::swap(t0, t1);
+    tNear = std::max(tNear, t0);
+    tFar = std::min(tFar, t1);
+    if (tNear > tFar)
+      return false;
+  }
+  return tFar >= 0.0;
+}
+
 /// Nearest front-facing triangle hit along \p ray, over the flat 9-floats-per-triangle buffer the
 /// solid display cache holds. Writes the hit point and the FACE the triangle belongs to.
 ///
@@ -1027,7 +1065,6 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   // Face snapping needs a pick ray and is skipped without one: in a plan view with no ray there is
   // no "under the cursor" to resolve, and answering with the work-plane point would be an invention.
   if (!cmd.cadSolids.empty()) {
-    const bool wantSolid = want(Kind::Edge, cmd.objectSnapSolid) || want(Kind::Face, cmd.objectSnapSolid);
     const bool wantSolidEdge = want(Kind::Edge, cmd.objectSnapSolid);
     const bool wantSolidFace = want(Kind::Face, cmd.objectSnapSolid);
     const ray3d::Vec3 cursor{wx, wy, acc.ray ? acc.ray->origin.z : 0.0};
@@ -1057,6 +1094,13 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
           if (wantSolidEdge) {
             // Measured from the cursor RAY where there is one, so an orbited view snaps to the edge
             // the user is pointing at rather than to whatever passes under the same plan XY.
+            //
+            // With no ray — a plan view — the probe is the cursor at the datum, and the answer is
+            // still a point ON the edge; `ConsiderSnap` then ranks it by plan XY distance, which is
+            // what plan view does for every other kind. For the horizontal and vertical edges every
+            // primitive is mostly made of, that lands on the same point a proper 2D projection
+            // would; on a slanted edge it can favour the lower end, which is a bias in WHICH point
+            // of the edge is offered, never in whether the point is on it.
             const ray3d::Vec3 probe = acc.ray ? ClosestRayPointToEdge(*acc.ray, *sp, e) : cursor;
             const ray3d::Vec3 on = brep::ClosestPointOnEdge(*sp, e, probe);
             Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(on.x),
@@ -1066,6 +1110,10 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       }
 
       if (wantSolidFace && acc.ray) {
+        // Reject the whole solid before touching its triangles — see RayNearBounds. Hover runs this
+        // every frame, and the walk below is O(triangles).
+        if (!RayNearBounds(*acc.ray, brep::ComputeBounds(*sp), static_cast<double>(tolWorld)))
+          continue;
         const auto it = std::find_if(cmd.solidDisplayCache.begin(), cmd.solidDisplayCache.end(),
                                      [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
         if (it == cmd.solidDisplayCache.end() || it->triVerts.empty())
@@ -1081,7 +1129,6 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
         }
       }
     }
-    (void)wantSolid;
   }
 
   if (wantSurface) {

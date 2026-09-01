@@ -534,3 +534,123 @@ TEST_CASE("REQ-309 perspective and orthographic snap to the same endpoint", "[Ca
   CHECK(perspHit.y == Approx(orthoHit.y).margin(0.01));
   CHECK(perspHit.z == Approx(orthoHit.z).margin(0.01));
 }
+
+// ---------------------------------------------------------------------------------------------
+// B-rep solid snapping (REQ-313 / ADR-045 addendum (g)).
+//
+// Driven through the real `FindBest` with a pick ray, the same way the REQ-312 arc cases above are.
+// The failure that matters here is not "no snap": it is a snap that returns a point NEAR the solid
+// instead of ON it. A face hit taken straight off the tessellation is short of a curved surface by
+// the chord's sagitta — small, plausible, and smaller every time the user zooms in to check it.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// Put one solid in the drawing and bring the display cache up to date, which is what the frame loop
+/// does before any pick can happen. Face snapping reads that cache, so a test that skipped this
+/// would be testing a solid that has not been drawn yet.
+void InstallSolid(AppCommandState& st, brep::Solid s) {
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+  st.cadSolidAttrs.push_back(EntityAttributes{});
+  RefreshSolidDisplayGeometry(st);
+}
+
+}  // namespace
+
+TEST_CASE("A solid's corner answers Endpoint and its edge answers Edge", "[CadSnap][req313]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  st.objectSnapMidpoint = false;
+  st.objectSnapSolid = true;
+
+  // A 20 x 20 x 20 box on the origin: x and y span +/-10, z runs 0 to 20.
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 20.0, 20.0, &box, &why));
+  InstallSolid(st, std::move(box));
+
+  SECTION("a corner is an Endpoint") {
+    const ray3d::Ray ray = RayAt(-10.0, -10.0, 20.0);
+    const CadSnap::Hit hit = CadSnap::FindBest(-10.0, -10.0, st, false, kTol, {}, &ray);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Endpoint);
+    CHECK(hit.x == Approx(-10.f).margin(1e-4));
+    CHECK(hit.y == Approx(-10.f).margin(1e-4));
+    CHECK(hit.z == Approx(20.f).margin(1e-4));
+  }
+
+  SECTION("mid-way up a vertical edge is an Edge, and Endpoint does not reach it") {
+    // Half way up the corner post at (-10, -10): 10 feet from either end, so no vertex is anywhere
+    // near the cursor and the only honest answer is a point along the edge.
+    const ray3d::Ray ray = RayAt(-10.0, -10.0, 10.0);
+    const CadSnap::Hit hit = CadSnap::FindBest(-10.0, -10.0, st, false, /*tolWorld=*/2.f, {}, &ray);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Edge);
+    CHECK(hit.x == Approx(-10.f).margin(1e-6));
+    CHECK(hit.y == Approx(-10.f).margin(1e-6));
+    CHECK(hit.z == Approx(10.f).margin(1e-6));
+  }
+
+  SECTION("a point in mid-air near nothing offers nothing") {
+    const ray3d::Ray ray = RayAt(500.0, 500.0, 500.0);
+    const CadSnap::Hit hit = CadSnap::FindBest(500.0, 500.0, st, false, kTol, {}, &ray);
+    CHECK_FALSE(hit.valid);
+  }
+}
+
+TEST_CASE("A face snap lands on the surface, not on the tessellator's chord", "[CadSnap][req313]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapMidpoint = false;
+  st.objectSnapSolid = true;
+
+  // A cylinder of radius 10 rising 20 from the origin.
+  brep::Solid cyl;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeCylinder(ucs::Ucs{}, 10.0, 20.0, &cyl, &why));
+  InstallSolid(st, std::move(cyl));
+
+  // Aimed at the wall half way up, along a direction that is not one of the tessellation's own
+  // vertex angles — so the ray meets a chord strictly inside the true surface, which is exactly the
+  // case a raw triangle hit would get wrong.
+  ray3d::Ray ray;
+  ray.origin = {-70.0, -103.0, 10.0};
+  ray.dir = ray3d::Normalize(ray3d::Vec3{0.55, 0.835, 0.0});
+
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, false, /*tolWorld=*/60.f, {}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Face);
+  // ON the cylinder: exactly radius 10 from the axis. A point taken off the chord would be up to a
+  // sagitta short of this — the chord tolerance is 0.01 ft, four orders of magnitude outside the
+  // margin below, so this assertion can only pass if the analytic projection happened.
+  const double r = std::sqrt(static_cast<double>(hit.x) * hit.x + static_cast<double>(hit.y) * hit.y);
+  CHECK(r == Approx(10.0).margin(1e-6));
+  // And the projection moves a point radially only — the height it was found at is kept.
+  CHECK(hit.z == Approx(10.f).margin(1e-6));
+}
+
+TEST_CASE("A solid on an off layer offers no snap at all", "[CadSnap][req313]") {
+  // The rule every kind is held to: invisible and unclickable must not be able to disagree
+  // (REQ-084 (d)). Snapping is the third surface that rule has to hold on, after drawing and
+  // picking, and it is the easiest one to forget.
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  st.objectSnapSolid = true;
+
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 20.0, 20.0, &box, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  EntityAttributes attr{};
+  attr.layer = "HIDDEN-LAYER";
+  st.cadSolidAttrs.push_back(attr);
+  CadLayerRow row;
+  row.name = "HIDDEN-LAYER";
+  row.on = false;
+  st.drawingLayerTable.push_back(row);
+  RefreshSolidDisplayGeometry(st);
+
+  const ray3d::Ray ray = RayAt(-10.0, -10.0, 20.0);
+  const CadSnap::Hit hit = CadSnap::FindBest(-10.0, -10.0, st, false, kTol, {}, &ray);
+  CHECK_FALSE(hit.valid);
+}

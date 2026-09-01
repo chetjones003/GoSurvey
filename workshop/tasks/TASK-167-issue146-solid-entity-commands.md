@@ -76,7 +76,7 @@ triangle's vertices lie on the surface its face claims — the property the face
 ## Verification
 
 - Build: clean, no new warnings.
-- `ctest`: **960/960 green.** No pre-existing test changed.
+- `ctest`: **963/963 green.** No pre-existing test changed.
 - REQ-204: `docinvariants` gained the solids parallel-array check and the selection-index case, so a
   desynced attribute array is caught by the fuzz harness like every other kind.
 
@@ -126,3 +126,29 @@ with profile (d)'s measurement and the pixel-level style verification named abov
 reviewer has to confirm rather than take on trust.
 
 Per the project convention this goes to review, not done — and the issue is not closed here.
+
+## Review pass (second reading, as someone else's PR)
+
+Five findings, all fixed here rather than left:
+
+1. **`RefreshSolidDisplayGeometry` could mint an entity attribute.** A short attribute array fell
+   through to `emplace_back()`, which grows a vector mid-walk (invalidating the loop's own
+   references) and creates an attribute — with a fresh id — from a *display refresh*, which is the
+   last place that should be doing it. Now a shared default; `EnsureAttrCounts` owns the repair.
+2. **`EnsureAttrCounts` did not repair the solid attributes at all**, so the parallel arrays could
+   desync and REQ-204 would fire. Added beside the surface and table cases.
+3. **Face snapping ray-tested every triangle of every solid, every hover frame.** A few hundred
+   solids at a couple of thousand triangles each is most of a million ray-triangle tests per frame —
+   REQ-100's budget spent on a cursor near none of them. A padded ray/AABB slab reject now discards a
+   whole solid first, the same call the surface pick already makes for its own plan-AABB reject.
+4. **A dead `wantSolid` local** with a `(void)` to silence it. Removed.
+5. **Edge snapping in a plan view** used the cursor at the datum as its probe with no comment. The
+   answer is still always ON the edge and is ranked by plan XY distance like every other kind, but on
+   a slanted edge it can favour the lower end — now written down rather than left to be rediscovered.
+
+And the coverage gap the review found: **face and edge snapping had no test at all**, which is
+issue #146's acceptance bullet 8. `CadSnapTests [CadSnap][req313]` now drives it through the real
+`FindBest` with a pick ray. The face case is the one worth reading: it asserts the returned point is
+at exactly radius 10 from the cylinder's axis, and removing the analytic projection returns
+**9.9928632694** — the chord's sagitta, precisely. Rejecting every solid from the bounds test turns
+the same case red the other way, so the optimisation added in (3) is itself pinned.

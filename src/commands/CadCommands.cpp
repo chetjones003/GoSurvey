@@ -19405,6 +19405,10 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.cadSurfaceAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  while (st.cadSolidAttrs.size() < st.cadSolids.size()) {  // REQ-313
+    st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
   while (st.cadTableAttrs.size() < st.cadTables.size()) {
     st.cadTableAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -23529,8 +23533,12 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
                                  [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
     if (it == st.solidDisplayCache.end() || it->empty())
       continue;
-    const EntityAttributes& attr =
-        i < st.cadSolidAttrs.size() ? st.cadSolidAttrs[i] : st.cadSolidAttrs.emplace_back();
+    // A short attribute array means defaults, not a reason to grow one here: `EnsureAttrCounts`
+    // owns that repair, and appending mid-walk would both invalidate this loop's own references and
+    // create an entity attribute — with a fresh id — from a display refresh, which is the last place
+    // that should be minting them.
+    static const EntityAttributes kDefaultSolidAttrs{};
+    const EntityAttributes& attr = i < st.cadSolidAttrs.size() ? st.cadSolidAttrs[i] : kDefaultSolidAttrs;
     const CadLayerRow* lr = FindDrawingLayerRowCi(st, attr.layer);
     CadSolidDisplayBatch b;
     b.triVerts = &it->triVerts;
