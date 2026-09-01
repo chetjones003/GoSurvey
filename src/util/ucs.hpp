@@ -119,6 +119,19 @@ struct Ucs {
   return p;
 }
 
+/// Elevation of \p plane at world (x, y) -- the Z a viewport click at that XY commits at when the
+/// plane is the active work plane (REQ-058 / REQ-154). For a plane parallel to world XY (every
+/// pre-UCS drawing) the two offset terms vanish and this is exactly the plane origin's Z.
+///
+/// Falls back to the plane origin's Z for a near-vertical plane (`|n.z| < 1e-9`), where XY does not
+/// determine Z. Single definition so the viewport's plan-view branch and the headless test driver
+/// cannot silently drift (issue #201).
+[[nodiscard]] inline double WorkPlaneZAt(const ray3d::Plane& plane, double x, double y) {
+  const ray3d::Vec3 n = ray3d::Normalize(plane.normal);
+  if (!(std::fabs(n.z) > 1e-9)) return plane.point.z;
+  return plane.point.z - (n.x * (x - plane.point.x) + n.y * (y - plane.point.y)) / n.z;
+}
+
 // ---------------------------------------------------------------------------------------------
 // The plane contract (REQ-311). A `Ucs` IS the plane abstraction #120 asks for: an origin, a
 // normal, and an in-plane X/Y axis pair are exactly the four members it already carries. Rather

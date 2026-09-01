@@ -595,12 +595,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // driver rather than duplicating the arithmetic in a verb is the point: a test that resolved
       // the pick its own way would be a test of its own arithmetic.
       if (run.st.active == AppCommandState::Kind::Solid) {
-        const ray3d::Plane wp = CadActiveWorkPlane(run.st);
-        const ray3d::Vec3 n = ray3d::Normalize(wp.normal);
-        double z = wp.point.z;
-        if (std::fabs(n.z) > 1e-9)
-          z = wp.point.z - (n.x * (static_cast<double>(x) - wp.point.x) +
-                            n.y * (static_cast<double>(y) - wp.point.y)) / n.z;
+        double z = ucs::WorkPlaneZAt(CadActiveWorkPlane(run.st), static_cast<double>(x),
+                                     static_cast<double>(y));
         // An explicit third coordinate aims the ray at a point OFF the work plane, which is the only
         // way a transcript can say "point at the spot 25 feet up the axis". A height is the closest
         // approach between the cursor ray and that axis, so aiming at a plan XY resolves to whatever
@@ -714,13 +710,9 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // so leaving them at zero would build the bug into the test.
     {
       const ray3d::Plane wp = CadActiveWorkPlane(run.st);
-      const ray3d::Vec3 n = ray3d::Normalize(wp.normal);
       auto planeZ = [&](float x, float y) {
-        if (!(std::fabs(n.z) > 1e-9))
-          return static_cast<float>(wp.point.z);  // vertical plane: XY does not determine Z
-        return static_cast<float>(wp.point.z -
-                                  (n.x * (static_cast<double>(x) - wp.point.x) +
-                                   n.y * (static_cast<double>(y) - wp.point.y)) / n.z);
+        return static_cast<float>(
+            ucs::WorkPlaneZAt(wp, static_cast<double>(x), static_cast<double>(y)));
       };
       run.st.selBoxAnchorZ = planeZ(x0, y0);
       run.st.uiCursorWorldZ = planeZ(x1, y1);
@@ -912,12 +904,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     bool hasHz = false;
     if (is >> hz)
       hasHz = true;
-    const ray3d::Plane hwp = CadActiveWorkPlane(run.st);
-    const ray3d::Vec3 hn = ray3d::Normalize(hwp.normal);
-    double hzWorld = hwp.point.z;
-    if (std::fabs(hn.z) > 1e-9)
-      hzWorld = hwp.point.z - (hn.x * (static_cast<double>(hx) - hwp.point.x) +
-                               hn.y * (static_cast<double>(hy) - hwp.point.y)) / hn.z;
+    double hzWorld = ucs::WorkPlaneZAt(CadActiveWorkPlane(run.st), static_cast<double>(hx),
+                                       static_cast<double>(hy));
     if (hasHz)
       hzWorld = static_cast<double>(hz);
     ray3d::Ray hray;
