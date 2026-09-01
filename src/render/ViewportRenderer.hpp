@@ -172,6 +172,29 @@ private:
   };
   std::vector<MeshGpuEntry> meshGpu_;
   void ReleaseMeshGpu();
+
+  /// One coalesced solid batch's GPU residency (REQ-313 / GitHub issue #194). Unlike a mesh, a solid
+  /// batch has no stable pointer identity — `RefreshSolidDisplayGeometry` rebuilds the batch list
+  /// whenever a solid, its appearance or its visibility changes — so the whole set is keyed on the
+  /// assembly signature (\ref solidGpuSig_) rather than per-entry. Within one signature the batches
+  /// are immutable, so the vertex buffers only re-upload when the view ANCHOR drifts far enough to
+  /// cost float precision, exactly as the mesh path does — which is what keeps a 400-solid orbit off
+  /// the per-frame CPU-transform + stream-upload path that missed REQ-100 profile (d).
+  struct SolidGpuBatch {
+    unsigned int faceVao = 0;
+    unsigned int faceVbo = 0;
+    unsigned int edgeVao = 0;
+    unsigned int edgeVbo = 0;
+    int faceVertCount = 0;
+    int edgeVertCount = 0;
+    double anchorX = 0.0;
+    double anchorY = 0.0;
+    float rgba[4] = {1.f, 1.f, 1.f, 1.f};
+    float lineweightMm = -1.f;
+  };
+  std::vector<SolidGpuBatch> solidGpu_;
+  std::uint64_t solidGpuSig_ = 0;  ///< assembly signature solidGpu_ was built from; 0 = not built
+  void ReleaseSolidGpu();
   unsigned int vaoLines_ = 0;
   unsigned int vboLines_ = 0;
 

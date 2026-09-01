@@ -77,9 +77,12 @@ EXPECT SOLIDPROPS 6 360 336.5448913 5 8 5
 EXPECT SOLIDS 7
 
 # --- The solids are DRAWN -------------------------------------------------------------------------
-# One batch per visible solid, and the tessellation cache has real triangles in it. This is what
-# separates "the document has seven solids" from "seven solids reach the renderer".
-EXPECT SOLIDBATCHES 7
+# All seven reach the renderer (SOLIDVISIBLE), and the tessellation cache has real triangles in it.
+# This is what separates "the document has seven solids" from "seven solids reach the renderer".
+# They share a layer and colour, so GitHub #194's assembly COALESCES them into a single draw batch —
+# a few-hundred-solid site model is a handful of draw calls, not one upload + one draw per solid.
+EXPECT SOLIDVISIBLE 7
+EXPECT SOLIDBATCHES 1
 CHECK ALL
 
 # --- SOLIDLIST reports the properties -------------------------------------------------------------
@@ -163,8 +166,9 @@ EXPECT SOLIDPROPS 5 270 288 6 9 5
 EXPECT SOLIDKIND 6 Pyramid
 EXPECT SOLIDPROPS 6 360 336.5448913 5 8 5
 
-# And they are still drawable after the round trip.
-EXPECT SOLIDBATCHES 7
+# And they are still drawable after the round trip — still one coalesced batch, still all visible.
+EXPECT SOLIDVISIBLE 7
+EXPECT SOLIDBATCHES 1
 
 # --- DXF/DWG export says what it skipped, out loud (ADR-045 (i), REQ-201) --------------------------
 EXPORT DXF %OUT%/solids.dxf
@@ -190,40 +194,59 @@ CHECK ALL
 
 # --- A solid on an off layer is not drawn, and a frozen one is not either -------------------------
 # The rule every entity kind is held to (REQ-084 (d) / REQ-068): what is invisible must also be
-# unclickable, which is why one predicate answers both. SOLIDS counts the DOCUMENT and SOLIDBATCHES
-# counts what reaches the renderer, so the gap between them is the filter doing its job. Without
-# this pair, deleting the visibility check entirely would leave the suite green.
+# unclickable, which is why one predicate answers both. SOLIDS counts the DOCUMENT, SOLIDVISIBLE
+# counts what survives the visibility filter, and SOLIDBATCHES counts the coalesced draw calls the
+# renderer is handed. Without this triple, deleting the visibility check entirely would leave the
+# suite green.
 NEW
 CLAYER SOLIDS-A
 CMD BOX 0,0 4 4 4
+CMD BOX 20,0 4 4 4
+# Two solids, one layer, one colour — GitHub #194 merges them into a SINGLE draw batch.
+EXPECT SOLIDVISIBLE 2
+EXPECT SOLIDBATCHES 1
+
+# Put a third solid on another layer and give that layer a different colour: the batch SPLITS,
+# because coalescing only merges solids that would draw identically anyway.
 CLAYER SOLIDS-B
+LAYERSTATE SOLIDS-B COLOR Red
 CMD SPHERE 50,0 3
-EXPECT SOLIDS 2
+EXPECT SOLIDS 3
+EXPECT SOLIDVISIBLE 3
 EXPECT SOLIDBATCHES 2
 
 LAYERSTATE SOLIDS-A OFF
-EXPECT SOLIDS 2
+EXPECT SOLIDS 3
+EXPECT SOLIDVISIBLE 1
 EXPECT SOLIDBATCHES 1
 
 LAYERSTATE SOLIDS-B FREEZE
-EXPECT SOLIDS 2
+EXPECT SOLIDS 3
+EXPECT SOLIDVISIBLE 0
 EXPECT SOLIDBATCHES 0
 
 LAYERSTATE SOLIDS-A ON
 LAYERSTATE SOLIDS-B THAW
+EXPECT SOLIDVISIBLE 3
 EXPECT SOLIDBATCHES 2
+
+# The tessellation cache held throughout: three solids, three tessellations, and none of the
+# visibility or colour changes above retessellated anything (#120 / issue #194 acceptance).
+EXPECT SOLIDTESSGEN 3
+EXPECT SOLIDTESSGEN 3
 
 # --- Erase takes a solid out in one undo step, and undo brings it back ----------------------------
 # Through the real selection flow (CMD SELECT + a crossing box), not a direct store poke: the point
 # is that a solid answers a box selection like any other entity and that ERASE removes it.
 CMD SELECT
 BOX -500 -500 500 500
-EXPECT SELECTED 2
+EXPECT SELECTED 3
 CMD DELETE
 EXPECT SOLIDS 0
 EXPECT SOLIDBATCHES 0
 UNDO
-EXPECT SOLIDS 2
+EXPECT SOLIDS 3
+EXPECT SOLIDVISIBLE 3
 EXPECT SOLIDBATCHES 2
 
 CHECK ALL

@@ -9,6 +9,7 @@
 
 #include "brep.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -71,30 +72,40 @@ struct CadSolidTessellation {
   [[nodiscard]] bool empty() const { return triVerts.empty() && edgeVerts.empty(); }
 };
 
-/// One solid's drawable geometry plus the appearance to draw it with.
+/// One *coalesced* draw batch: the merged geometry of every visible solid that shares GPU-relevant
+/// state (resolved colour and edge lineweight), plus the appearance to draw it with.
 ///
-/// **The vertex buffers are BORROWED, never owned** — they point into the entries of
-/// `AppCommandState::solidDisplayCache`, which is where the generated geometry lives. The batch list
-/// and the cache it points into are rebuilt together and consumed in the same frame, so a batch
-/// never outlives its buffer. **Nothing may hold one across a cache refresh.** Same ownership rule,
-/// and the same reason, as `SurfaceDisplayBatch`.
+/// **The vertex buffers are OWNED here**, unlike `SurfaceDisplayBatch` and unlike this type before
+/// GitHub issue #194. The reason is the whole point of the change: a few-hundred-solid scene drawn
+/// as one batch per solid is one stream upload and one draw call per solid — ~40 µs of fixed cost
+/// each, linear in object count, which blows REQ-100's frame budget at a realistic density long
+/// before the triangle total would. Merging solids that would draw identically anyway into a shared
+/// buffer turns hundreds of draw calls into a handful. The concatenation is not redone every frame:
+/// \ref RefreshSolidDisplayGeometry keeps an assembly signature and rebuilds these buffers only when
+/// the set of visible solids, their resolved appearance, or the tessellation actually changes — an
+/// orbit (camera only) reuses them untouched, which is the case REQ-100 profile (d) measures.
 struct CadSolidDisplayBatch {
-  const std::vector<float>* triVerts = nullptr;
-  const std::vector<float>* triNormals = nullptr;
-  const std::vector<float>* edgeVerts = nullptr;
+  std::vector<float> triVerts;    ///< `GL_TRIANGLES`, nine floats per triangle, storage coordinates.
+  std::vector<float> triNormals;  ///< one unit normal per vertex, parallel to \ref triVerts.
+  std::vector<float> edgeVerts;   ///< `GL_LINES`, six floats per segment, storage coordinates.
   /// Resolved entity colour (REQ-048) — shading multiplies it, the wireframe edges use it directly.
   float rgba[4] = {1.f, 1.f, 1.f, 1.f};
   /// Millimetres on paper for the edges, or -1 for the renderer's default width.
   float lineweightMm = -1.f;
 };
 
-/// Everything drawn for the drawing's solids this frame.
+/// Everything drawn for the drawing's solids this frame, as a small number of coalesced batches.
 ///
 /// One struct rather than three parameters on a `RenderScene` signature that is already 30 long —
 /// the faces and the edges of a solid are always built together and always consumed together, which
 /// is the same argument `CadSurfaceDisplayGeometry` records for itself.
 struct CadSolidDisplayGeometry {
   std::vector<CadSolidDisplayBatch> solids;
+  /// The assembly signature these batches were built from (mirrors
+  /// `AppCommandState::solidDisplayAssemblySig`). The renderer keys its persistent solid vertex
+  /// buffers on this: an unchanged signature means the batch list is byte-for-byte what it drew last
+  /// frame, so nothing needs re-uploading — the orbit case REQ-100 profile (d) measures.
+  std::uint64_t assemblySig = 0;
   [[nodiscard]] bool empty() const { return solids.empty(); }
 };
 

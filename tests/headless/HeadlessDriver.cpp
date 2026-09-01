@@ -765,9 +765,10 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // stopped working would otherwise have no failing test available to it.
     std::string stateRaw;
     const std::string name = Trim(FirstWord(rest, &stateRaw));
-    const std::string state = UpperAscii(Trim(stateRaw));
+    std::string stateArgRaw;
+    const std::string state = UpperAscii(Trim(FirstWord(Trim(stateRaw), &stateArgRaw)));
     if (name.empty() || state.empty()) {
-      Fail(run, "parse", "LAYERSTATE expects <name> ON|OFF|FREEZE|THAW", sourceLine);
+      Fail(run, "parse", "LAYERSTATE expects <name> ON|OFF|FREEZE|THAW|COLOR <name>", sourceLine);
       return false;
     }
     CadLayerRow* row = nullptr;
@@ -789,8 +790,18 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       row->frozen = true;
     else if (state == "THAW")
       row->frozen = false;
-    else {
-      Fail(run, "parse", "LAYERSTATE: unknown state " + state + " (ON|OFF|FREEZE|THAW)", sourceLine);
+    else if (state == "COLOR") {
+      // LAYERSTATE <name> COLOR <colorname> — the Layer manager's swatch. Here so a transcript can
+      // give two layers different resolved colours, which is what GitHub #194's draw-batch
+      // coalescing splits on (same colour/lineweight merges, a colour difference does not).
+      const std::string colorName = Trim(stateArgRaw);
+      if (colorName.empty()) {
+        Fail(run, "parse", "LAYERSTATE ... COLOR expects a colour name", sourceLine);
+        return false;
+      }
+      row->color = colorName;
+    } else {
+      Fail(run, "parse", "LAYERSTATE: unknown state " + state + " (ON|OFF|FREEZE|THAW|COLOR)", sourceLine);
       return false;
     }
   } else if (verb == "UCSNAMED") {
@@ -1837,6 +1848,27 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // which is the only way a transcript can state REQ-084 (d) for a solid.
       else if (what == "SOLIDBATCHES")
         got = static_cast<long>(run.st.solidDisplayGeometry.solids.size());
+      // How many visible solids feed the batches this frame — the visibility filter's output BEFORE
+      // GitHub #194's coalescing merges solids that share an appearance. SOLIDBATCHES went from "one
+      // per drawn solid" to "one per resolved colour/lineweight"; this is what still lets a transcript
+      // count what layer off/freeze removed. Derived the same way the assembly pass does it.
+      else if (what == "SOLIDVISIBLE") {
+        got = 0;
+        for (size_t si = 0; si < run.st.cadSolids.size(); ++si) {
+          if (!SolidVisible(run.st, si))
+            continue;
+          const CadSolidPtr& sp = run.st.cadSolids[si];
+          const auto ce = std::find_if(run.st.solidDisplayCache.begin(), run.st.solidDisplayCache.end(),
+                                       [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+          if (ce != run.st.solidDisplayCache.end() && !ce->empty())
+            ++got;
+        }
+      }
+      // Distinct (re)tessellations across the run — #120's "do not regenerate a solid's render mesh
+      // every frame" expressed as a count. Paired with SOLIDTRIS: the cache HAS content and is not
+      // being silently rebuilt behind an orbit.
+      else if (what == "SOLIDTESSGEN")
+        got = static_cast<long>(run.st.solidDisplayRegenCount);
       // Triangles in the whole solid tessellation cache. #120 asks that the render mesh not be
       // regenerated every frame; this is what lets a transcript assert the cache HAS content and,
       // paired with SOLIDTESSGEN below, that it is not being rebuilt behind the scenes.

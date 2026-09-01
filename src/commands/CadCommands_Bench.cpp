@@ -194,8 +194,6 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
       b.surfaceMinorIntervalFt = bstyle->minorIntervalFt;
       b.surfaceMajorIntervalFt = bstyle->majorIntervalFt;
     }
-    b.regenBaselineTaken = false;
-    b.regenDuringRun = 0;
   } else {
     b.segmentCount = benchscene::BuildContourScene(segments, &st.userPolylineVerts, &st.userPolylineOffsets,
                                                    &st.userPolylineClosed);
@@ -261,6 +259,16 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.framesTotal = frames;
   b.warmupFrames = 60;
   b.frameIndex = 0;
+  // Reset the cache-regeneration baseline for EVERY profile, not just the surface one. `frameIndex`
+  // is zeroed just above, so a second `BENCH` in the same session re-enters warmup — but
+  // `regenBaselineTaken` / `regenAtStart` persist on `AppCommandState::bench`, and
+  // `solidDisplayRegenCount` (like `surfaceDisplayRegenCount`) is cumulative across the session. Left
+  // stale, the second run's baseline is the FIRST run's, so its own scene-build tessellation is
+  // counted as "regenerated during the run" and the report cries NOT HELD on a cache that held fine.
+  // (GitHub issue #194: this was the whole of the apparent 400/1200-regen failure.)
+  b.regenBaselineTaken = false;
+  b.regenAtStart = 0;
+  b.regenDuringRun = 0;
   b.orbitDegPerFrame = 0.5;  // a full turn every 720 frames — continuous, and never repeats a frame
   b.sceneInstalled = true;
   b.active = true;
@@ -375,6 +383,16 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
                   static_cast<unsigned long long>(b.regenDuringRun), s.frames,
                   cacheHeld ? "HELD" : "NOT HELD, contours are being regenerated per frame");
     log.push_back(msg);
+  } else if (b.solidCount > 0) {
+    // ADR-036 (e)'s obligation for the solid profile: #120 asks that a solid's render mesh not be
+    // regenerated every frame, and on a fast machine the p95 above cannot tell a held cache from one
+    // silently rebuilding. Reported as its own claim, exactly as the surface line is.
+    std::snprintf(msg, sizeof(msg),
+                  "BENCH — solid tessellation cache regenerated %llu time(s) across %d timed frames "
+                  "(expected 0) — %s.",
+                  static_cast<unsigned long long>(b.regenDuringRun), s.frames,
+                  cacheHeld ? "HELD" : "NOT HELD, solids are being retessellated per frame");
+    log.push_back(msg);
   }
 
   // Also written to a file: a benchmark's value is in the record, and reading six figures off a
@@ -414,6 +432,10 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
           << " ft, major " << SurfaceStyles::FormatFt(b.surfaceMajorIntervalFt) << " ft\n"
           << "  contour segs      " << b.surfaceContourSegs << "\n"
           << "  cache regens      " << b.regenDuringRun << " during the timed frames (expected 0)  => "
+          << (cacheHeld ? "HELD" : "NOT HELD") << "\n";
+      }
+      if (b.solidCount > 0) {
+        f << "  cache regens      " << b.regenDuringRun << " during the timed frames (expected 0)  => "
           << (cacheHeld ? "HELD" : "NOT HELD") << "\n";
       }
       f << "\n";
