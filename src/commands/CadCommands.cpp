@@ -11743,6 +11743,11 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::Solid) {
+    SubmitSolidViewportPick(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::Circle) {
     switch (st.circlePhase) {
     case AppCommandState::CirclePhase::WaitCenterOrMode:
@@ -23832,6 +23837,336 @@ void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log) {
   }
 }
 
+// -------------------------------------------------------------------------------------------------
+// The prompted form of the seven primitives (REQ-313 as amended).
+//
+// `CYLINDER` on its own asks for the base point, then for its dimensions by letter — R for radius,
+// H for height — which is the shape CIRCLE already uses for its own radius prompt ("click, type a
+// value, or D + diameter") and which LENGTHEN and UCS use for their keyword sets.
+//
+// `CYLINDER 0,0 4 25` still works and means exactly the same thing. The two forms share the same
+// parameter table and the same commit, so neither can accept a solid the other would refuse.
+// -------------------------------------------------------------------------------------------------
+
+namespace {
+
+/// The named dimensions of each primitive, in the order a bare typed number fills them.
+///
+/// The ORDER is load-bearing twice over: it is the order the one-line form reads its arguments, and
+/// it is the order the prompted form assigns bare numbers to. Those two being one list is what makes
+/// `CYLINDER 0,0 4 25` and typing `4` then `25` at the prompt produce the same solid.
+const SolidParamSpec kBoxParams[] = {{'L', "length", false}, {'W', "width", false}, {'H', "height", false}};
+const SolidParamSpec kPyramidParams[] = {
+    {'S', "sides", false}, {'R', "base radius", false}, {'T', "top radius", true}, {'H', "height", false}};
+const SolidParamSpec kCylinderParams[] = {{'R', "radius", false}, {'H', "height", false}};
+const SolidParamSpec kConeParams[] = {
+    {'R', "base radius", false}, {'T', "top radius", true}, {'H', "height", false}};
+const SolidParamSpec kSphereParams[] = {{'R', "radius", false}};
+const SolidParamSpec kTorusParams[] = {{'R', "radius", false}, {'T', "tube radius", false}};
+
+} // namespace
+
+const SolidParamSpec* CadSolidParamSpecs(brep::PrimitiveKind kind, int* outCount) {
+  auto give = [&](const SolidParamSpec* p, int n) {
+    if (outCount)
+      *outCount = n;
+    return p;
+  };
+  switch (kind) {
+  case brep::PrimitiveKind::Box:      return give(kBoxParams, 3);
+  case brep::PrimitiveKind::Wedge:    return give(kBoxParams, 3);  // same three, same order
+  case brep::PrimitiveKind::Pyramid:  return give(kPyramidParams, 4);
+  case brep::PrimitiveKind::Cylinder: return give(kCylinderParams, 2);
+  case brep::PrimitiveKind::Cone:     return give(kConeParams, 3);
+  case brep::PrimitiveKind::Sphere:   return give(kSphereParams, 1);
+  case brep::PrimitiveKind::Torus:    return give(kTorusParams, 2);
+  case brep::PrimitiveKind::None:     break;
+  }
+  return give(nullptr, 0);
+}
+
+void CancelSolidCommand(AppCommandState& st) {
+  st.solidKind = brep::PrimitiveKind::None;
+  st.solidPhase = AppCommandState::SolidPhase::WaitBasePoint;
+  st.solidBase = ray3d::Vec3{};
+  st.solidPendingParam = -1;
+  for (int i = 0; i < AppCommandState::kMaxSolidParams; ++i) {
+    st.solidParamValue[i] = 0.0;
+    st.solidParamSet[i] = false;
+  }
+}
+
+namespace {
+
+/// Upper-case name of the running primitive, for prompts and messages.
+std::string SolidVerbUpper(brep::PrimitiveKind kind) {
+  std::string s = brep::PrimitiveKindName(kind);
+  for (char& c : s)
+    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  return s;
+}
+
+/// `4` -> "4", `4.5` -> "4.5" — a value echoed back the way it was meant, not as "4.000000".
+std::string TrimNumber(double v) {
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%.6g", v);
+  return buf;
+}
+
+} // namespace
+
+std::string CadSolidPromptText(const AppCommandState& st) {
+  if (st.solidKind == brep::PrimitiveKind::None)
+    return {};
+  const std::string verb = SolidVerbUpper(st.solidKind);
+  if (st.solidPhase == AppCommandState::SolidPhase::WaitBasePoint) {
+    const bool centred = st.solidKind == brep::PrimitiveKind::Sphere ||
+                         st.solidKind == brep::PrimitiveKind::Torus;
+    return verb + " — " + (centred ? "centre point" : "base centre point") +
+           " (click, or type X,Y or X,Y,Z):";
+  }
+
+  int n = 0;
+  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+  if (st.solidPendingParam >= 0 && st.solidPendingParam < n)
+    return verb + " — " + specs[st.solidPendingParam].label + ":";
+
+  // Show every option, with the ones already set echoed back. A prompt that only listed the letters
+  // would make the user hold four numbers in their head; showing them is what lets a value be
+  // re-typed to correct it.
+  std::string s = verb + " — ";
+  for (int i = 0; i < n; ++i) {
+    if (i)
+      s += ", ";
+    s += specs[i].letter;
+    s += " ";
+    s += specs[i].label;
+    if (st.solidParamSet[i])
+      s += " = " + TrimNumber(st.solidParamValue[i]);
+  }
+  s += ". Type a letter + value, a value for the next one, or Enter to create.";
+  return s;
+}
+
+void StartSolidPrimitiveCommand(AppCommandState& st, const std::string& verb,
+                                std::vector<std::string>& log) {
+  const SolidVerbSpec* spec = FindSolidVerb(verb);
+  if (!spec)
+    return;
+  CancelSolidCommand(st);
+  st.active = AppCommandState::Kind::Solid;
+  st.solidKind = spec->kind;
+  st.solidPhase = AppCommandState::SolidPhase::WaitBasePoint;
+  log.push_back(CadSolidPromptText(st));
+}
+
+namespace {
+
+/// Build and store the solid from the base point and the parameters gathered so far.
+///
+/// Routes through the SAME `MakeX` call the one-line form uses, so the two forms cannot disagree
+/// about what a set of numbers means, and every refusal is the kernel's own (REQ-201).
+void CommitPromptedSolid(AppCommandState& st, std::vector<std::string>& log) {
+  int n = 0;
+  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+  const std::string verb = SolidVerbUpper(st.solidKind);
+
+  // Refuse a half-specified solid by NAMING what is missing, rather than assuming a size for it.
+  std::string missing;
+  for (int i = 0; i < n; ++i) {
+    if (st.solidParamSet[i] || specs[i].optional)
+      continue;
+    if (!missing.empty())
+      missing += ", ";
+    missing += specs[i].label;
+  }
+  if (!missing.empty()) {
+    log.push_back(verb + " — still need: " + missing + ".");
+    return;
+  }
+
+  const double p0 = st.solidParamValue[0];
+  const double p1 = st.solidParamValue[1];
+  const double p2 = st.solidParamValue[2];
+  const double p3 = st.solidParamValue[3];
+  const ucs::Ucs frame = SolidPlacementFrame(st, st.solidBase);
+
+  brep::Solid solid;
+  brep::Problem why = brep::Problem::Ok;
+  bool built = false;
+  switch (st.solidKind) {
+  case brep::PrimitiveKind::Box:
+    built = brep::MakeBox(frame, p0, p1, p2, &solid, &why);
+    break;
+  case brep::PrimitiveKind::Wedge:
+    built = brep::MakeWedge(frame, p0, p1, p2, &solid, &why);
+    break;
+  case brep::PrimitiveKind::Pyramid:
+    if (p0 != std::floor(p0)) {
+      log.push_back(verb + " — the side count must be a whole number.");
+      return;
+    }
+    built = brep::MakePyramid(frame, static_cast<int>(p0), p1, p2, p3, &solid, &why);
+    break;
+  case brep::PrimitiveKind::Cylinder:
+    built = brep::MakeCylinder(frame, p0, p1, &solid, &why);
+    break;
+  case brep::PrimitiveKind::Cone:
+    built = brep::MakeCone(frame, p0, p1, p2, &solid, &why);
+    break;
+  case brep::PrimitiveKind::Sphere:
+    built = brep::MakeSphere(frame, p0, &solid, &why);
+    break;
+  case brep::PrimitiveKind::Torus:
+    built = brep::MakeTorus(frame, p0, p1, &solid, &why);
+    break;
+  case brep::PrimitiveKind::None:
+    break;
+  }
+
+  if (!built) {
+    // The command stays open on a refusal, deliberately: the user has typed a base point and three
+    // dimensions, and throwing all of it away because one was wrong would be the worse outcome.
+    // They can retype the offending letter and press Enter again.
+    log.push_back(verb + " — " + brep::ProblemText(why));
+    return;
+  }
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(solid);
+  PushUndoSnapshot(st, std::string("Create ") + brep::PrimitiveKindName(st.solidKind));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+
+  char msg[240];
+  std::snprintf(msg, sizeof(msg), "%s created — volume %.4f, surface area %.4f.",
+                brep::PrimitiveKindName(st.solidKind), mp.volume, mp.surfaceArea);
+  log.push_back(msg);
+
+  CancelSolidCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+/// Store \p value in parameter \p index and report it back.
+void SetSolidParam(AppCommandState& st, int index, double value, std::vector<std::string>& log) {
+  int n = 0;
+  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+  if (index < 0 || index >= n)
+    return;
+  st.solidParamValue[index] = value;
+  st.solidParamSet[index] = true;
+  st.solidPendingParam = -1;
+  log.push_back(SolidVerbUpper(st.solidKind) + " — " + specs[index].label + " = " + TrimNumber(value) +
+                ".");
+  log.push_back(CadSolidPromptText(st));
+}
+
+} // namespace
+
+bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  if (st.solidKind == brep::PrimitiveKind::None)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  const std::string verb = SolidVerbUpper(st.solidKind);
+
+  if (st.solidPhase == AppCommandState::SolidPhase::WaitBasePoint) {
+    if (line.empty())
+      return false;  // a bare Enter here has nothing to act on; the prompt stands
+    ray3d::Vec3 base{};
+    if (!ParseSolidBasePoint(st, line, &base, log, verb.c_str()))
+      return true;  // the reason has been reported; stay on this prompt rather than cancel
+    st.solidBase = base;
+    st.solidPhase = AppCommandState::SolidPhase::WaitParameters;
+    log.push_back(CadSolidPromptText(st));
+    return true;
+  }
+
+  int n = 0;
+  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+
+  // Enter creates it.
+  if (line.empty()) {
+    CommitPromptedSolid(st, log);
+    return true;
+  }
+
+  auto parseNumber = [](const std::string& text, double* out) {
+    char* end = nullptr;
+    const double v = std::strtod(text.c_str(), &end);
+    if (text.empty() || !end || *end != '\0' || !std::isfinite(v))
+      return false;
+    *out = v;
+    return true;
+  };
+
+  // A letter was armed on the previous line: this one is its value.
+  if (st.solidPendingParam >= 0) {
+    double v = 0.0;
+    if (!parseNumber(line, &v)) {
+      log.push_back(verb + " — \"" + line + "\" is not a number.");
+      log.push_back(CadSolidPromptText(st));
+      return true;
+    }
+    SetSolidParam(st, st.solidPendingParam, v, log);
+    return true;
+  }
+
+  // `R 4` / `R4` / `R` — a leading letter naming one of this primitive's dimensions.
+  const char first = static_cast<char>(std::toupper(static_cast<unsigned char>(line[0])));
+  for (int i = 0; i < n; ++i) {
+    if (specs[i].letter != first)
+      continue;
+    const std::string rest = StringUtil::trimCopy(line.substr(1));
+    if (rest.empty()) {
+      st.solidPendingParam = i;  // arm it; the next line is the value
+      log.push_back(CadSolidPromptText(st));
+      return true;
+    }
+    double v = 0.0;
+    if (!parseNumber(rest, &v)) {
+      log.push_back(verb + " — \"" + rest + "\" is not a number.");
+      log.push_back(CadSolidPromptText(st));
+      return true;
+    }
+    SetSolidParam(st, i, v, log);
+    return true;
+  }
+
+  // A bare number fills the next dimension that has not been set — which is what makes typing
+  // `4` then `25` at a CYLINDER prompt mean radius then height, the same order the one-line form
+  // takes them in.
+  double v = 0.0;
+  if (parseNumber(line, &v)) {
+    for (int i = 0; i < n; ++i) {
+      if (!st.solidParamSet[i]) {
+        SetSolidParam(st, i, v, log);
+        return true;
+      }
+    }
+    log.push_back(verb + " — every dimension is already set. Press Enter to create, or type a letter"
+                         " + value to change one.");
+    return true;
+  }
+
+  log.push_back(verb + " — \"" + line + "\" is not a dimension. " + CadSolidPromptText(st));
+  return true;
+}
+
+void SubmitSolidViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  if (st.solidKind == brep::PrimitiveKind::None)
+    return;
+  if (st.solidPhase != AppCommandState::SolidPhase::WaitBasePoint) {
+    // Past the base point the command wants numbers, not places. Saying so beats swallowing the
+    // click, which is how a command comes to look like it has hung (the TASK-099 lesson).
+    log.push_back(SolidVerbUpper(st.solidKind) + " — type the dimensions, or Esc to cancel.");
+    return;
+  }
+  st.solidBase = ray3d::Vec3{static_cast<double>(wx), static_cast<double>(wy),
+                             static_cast<double>(CadCommitElevation(st))};
+  st.solidPhase = AppCommandState::SolidPhase::WaitParameters;
+  log.push_back(CadSolidPromptText(st));
+}
+
 /// Shared by the prompt and the inline `VS SHADED` form, so neither can set a value the other would
 /// reject (REQ-201). Accepts the AutoCAD-ish spellings a user is likely to try.
 bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
@@ -24538,6 +24873,12 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("LINE canceled.");
   else if (st.active == AppCommandState::Kind::Circle)
     log.push_back("CIRCLE canceled.");
+  else if (st.active == AppCommandState::Kind::Solid) {
+    // Named, like every other cancel here (REQ-201) - a solid command abandoned in silence looks
+    // exactly like one that quietly created something.
+    log.push_back(SolidVerbUpper(st.solidKind) + " canceled.");
+    CancelSolidCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
   else if (st.active == AppCommandState::Kind::FeatureLine)
@@ -25100,6 +25441,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       ProcessPlanCommandLine(st, line, log);
       return;
     }
+    // The prompted solid primitives (REQ-313 as amended): Enter is what CREATES the solid, so it is
+    // the most meaningful blank line of the lot. Handled here for exactly the reason FEATURELINE's
+    // and UCS's notes above give — this block consumes a blank line and the Kind-keyed branch
+    // further down never sees one.
+    if (st.active == K::Solid) {
+      (void)HandleSolidTextInput(line, st, log);
+      return;
+    }
     if (st.active == K::Pan) {
       // Enter (or right-click in Enter mode) exits PAN; Esc exits via CancelActiveCommand.
       st.active = K::None;
@@ -25440,7 +25789,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (CadIsSolidPrimitiveVerb(plotTok)) {
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
-      CadCreateSolidPrimitive(st, plotTok, restOfLine, log);
+      // Arguments mean the one-line form; a bare verb opens the prompted one (REQ-313 as amended).
+      // The same report-or-set split `VS` and `PERSPECTIVE` use, and it is what keeps every existing
+      // transcript and the typed-dimensions acceptance working unchanged.
+      if (StringUtil::trimCopy(restOfLine).empty())
+        StartSolidPrimitiveCommand(st, plotTok, log);
+      else
+        CadCreateSolidPrimitive(st, plotTok, restOfLine, log);
       return;
     }
     // `SOLIDLIST` reports every solid's kind, layer, volume, surface area and topology counts —
@@ -26850,6 +27205,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     log.push_back("Could not parse input for current CIRCLE step — see hint below.");
+    return;
+  }
+
+  // The prompted solid primitives (REQ-313 as amended). Placed with CIRCLE's branch because it is
+  // the same shape of command: a point, then a value that also answers to a keyword.
+  if (st.active == AppCommandState::Kind::Solid) {
+    if (HandleSolidTextInput(line, st, log))
+      return;
+    log.push_back(CadSolidPromptText(st));
     return;
   }
 

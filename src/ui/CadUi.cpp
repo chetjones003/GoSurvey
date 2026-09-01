@@ -8828,6 +8828,19 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
       return "INVERSE — first point X,Y (Easting, Northing):";
     return "INVERSE — second point X,Y or @ from first:";
   }
+  // The prompted solid primitives (REQ-313 as amended). REQ-304 requires every Kind to carry a live
+  // prompt; this one is COMPUTED rather than a literal, because it echoes the dimensions already set
+  // back to the user, and there are seven primitives with four different parameter sets between them.
+  //
+  // The buffer is static because this function returns `const char*` and every other branch returns
+  // a string literal. Safe here and only here: the hint is built and consumed on the UI thread
+  // within one frame, by this call and the cursor-text call that shares it — the same string, which
+  // is REQ-304's actual requirement (the command line and the cursor must not disagree).
+  if (cmd.active == AppCommandState::Kind::Solid) {
+    static std::string solidHint;
+    solidHint = CadSolidPromptText(cmd);
+    return solidHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Circle) {
     using CP = AppCommandState::CirclePhase;
     switch (cmd.circlePhase) {

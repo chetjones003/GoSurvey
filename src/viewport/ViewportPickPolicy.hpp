@@ -97,6 +97,10 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   // --- Point-picking draw commands: the click is a coordinate, handed to the state machine. ---
   case K::Line:
   case K::Circle:
+  // The prompted solid primitives (REQ-313 as amended): the base point is an ordinary snapped
+  // coordinate pick, exactly like CIRCLE's centre. Past that the command wants typed numbers and
+  // says so rather than swallowing the click — see SubmitSolidViewportPick.
+  case K::Solid:
   case K::Polyline:
   case K::FeatureLine:
   case K::Rect:

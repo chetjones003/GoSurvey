@@ -138,8 +138,13 @@ CMD BOX 800,100,50,7 20 10 8
 EXPECT LOG "too many coordinates"
 EXPECT SOLIDS 7
 
+# A BARE verb no longer prints usage - it opens the prompted form (REQ-313 as amended), which is
+# covered end to end in req313-solid-prompted.txt. What matters here is that it creates nothing on
+# its own and that Esc leaves the drawing exactly as it was.
 CMD SPHERE
-EXPECT LOG "Usage: SPHERE"
+EXPECT LOG "SPHERE — centre point"
+EXPECT SOLIDS 7
+ESC
 EXPECT SOLIDS 7
 
 # --- The whole set survives .gs save and reopen ----------------------------------------------------
