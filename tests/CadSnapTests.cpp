@@ -410,3 +410,38 @@ TEST_CASE("A flat arc's endpoint snap is unchanged", "[CadSnap][req312]") {
   CHECK(hit.y == Approx(0.f).margin(1e-5));
   CHECK(hit.z == Approx(0.f).margin(1e-5));
 }
+
+// TASK-161: ALIGN (2D Helmert) must carry a tilted arc's plane AND re-anchor its start angle, the
+// same pairing ROTATE and MIRROR already do. `startRad` lives in the arc's own `ucs::FromNormal`
+// frame, which turns when the normal turns, so the `startRad += rad` the ALIGN path applied on its
+// own left the arc in the right plane at the right centre but swept a quarter turn off inside it.
+TEST_CASE("ALIGN re-anchors a tilted arc's start after rotating its plane", "[CadSnap][req312]") {
+  AppCommandState st;
+  // Quarter arc on the wall y = 0: frame X = (1,0,0), Y = (0,0,1); start (10,0,0), end (0,0,10).
+  st.userArcs.push_back(WallArc(0.f, kPi * 0.5f));
+
+  // Two control pairs that solve to a pure +90 deg rotation about the origin (no scale, no shift).
+  st.alignHasSelection = false;
+  st.alignControlPts = {{1.f, 0.f, 0.f, 1.f}, {0.f, 1.f, -1.f, 0.f}};
+  RecalcAlignResult(st);
+  REQUIRE(st.alignLastResult.valid);
+
+  std::vector<std::string> log;
+  ApplyAlignCommand(st, log, /*applyScale=*/true);
+
+  REQUIRE(st.userArcs.size() == 1);
+  // Plane turned: normal (0,-1,0) -> (1,0,0), the plane x = 0.
+  CHECK(st.userArcs[0].nx == Approx(1.f).margin(1e-5));
+  CHECK(st.userArcs[0].ny == Approx(0.f).margin(1e-5));
+
+  ray3d::Vec3 s{}, e{};
+  CurveEndpointsWorld(st.userArcs[0], &s, &e);
+  // Start (10,0,0) rotates to (0,10,0); end (0,0,10) is on the rotation axis and stays put.
+  // Without the re-anchor the start lands at (0,0,10) and the end at (0,-10,0).
+  CHECK(s.x == Approx(0.0).margin(1e-4));
+  CHECK(s.y == Approx(10.0).margin(1e-4));
+  CHECK(s.z == Approx(0.0).margin(1e-4));
+  CHECK(e.x == Approx(0.0).margin(1e-4));
+  CHECK(e.y == Approx(0.0).margin(1e-4));
+  CHECK(e.z == Approx(10.0).margin(1e-4));
+}
