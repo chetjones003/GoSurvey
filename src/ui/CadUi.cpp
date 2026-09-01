@@ -1054,9 +1054,10 @@ bool StyledButton(const char* label, const ImVec2& sizeArg, bool primary) {
   dl->AddLine(ImVec2(bb.Max.x - 0.5f, bb.Min.y), ImVec2(bb.Max.x - 0.5f, bb.Max.y), bevelBR, 1.f);
 
   const ImVec2 shift = sunken ? ImVec2(1.f, 1.f) : ImVec2(0.f, 0.f);  // pressed face reads as sinking in
+  const char* labelDisplayEnd = ImGui::FindRenderedTextEnd(label);  // stop at "##id", like ImGui::Button
   ImGui::RenderTextClipped(ImVec2(bb.Min.x + shift.x, bb.Min.y + shift.y),
                             ImVec2(bb.Max.x + shift.x, bb.Max.y + shift.y),
-                            label, nullptr, &labelSize, style.ButtonTextAlign, &bb);
+                            label, labelDisplayEnd, &labelSize, style.ButtonTextAlign, &bb);
   return pressed;
 }
 
