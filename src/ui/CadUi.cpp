@@ -16786,9 +16786,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (modelSpace && cmd.selBoxWaitingSecond) {
     const Camera selCam = CadViewCamera(cmd);
     float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
-    selCam.WorldToScreen(static_cast<double>(cmd.selBoxAnchorX), static_cast<double>(cmd.selBoxAnchorY), 0.0,
-                         avail.x, avail.y, &ax, &ay);
-    selCam.WorldToScreen(rawX, rawY, 0.0, avail.x, avail.y, &bx, &by);
+    // Each corner at its OWN elevation — the anchor's captured work-plane Z, and the live cursor's.
+    // Z = 0 for both is invisible in plan view (Z does not move a plan projection) and on the world
+    // XY plane at elevation zero, but as soon as the work plane is TILTED by a UCS or raised by
+    // ELEV, it draws the box at pixels the mouse never visited. The same two values go to
+    // `ComputeSelectionFromRect`, so the box still shows exactly what it will select — which is the
+    // property this block was written to guarantee and which Z = 0 was quietly breaking.
+    selCam.WorldToScreen(static_cast<double>(cmd.selBoxAnchorX), static_cast<double>(cmd.selBoxAnchorY),
+                         static_cast<double>(cmd.selBoxAnchorZ), avail.x, avail.y, &ax, &ay);
+    selCam.WorldToScreen(rawX, rawY, static_cast<double>(cmd.uiCursorWorldZ), avail.x, avail.y, &bx, &by);
     const ImVec2 mnSel(imgPos.x + std::min(ax, bx), imgPos.y + std::min(ay, by));
     const ImVec2 mxSel(imgPos.x + std::max(ax, bx), imgPos.y + std::max(ay, by));
     ImDrawList* dlSel = ImGui::GetWindowDrawList();

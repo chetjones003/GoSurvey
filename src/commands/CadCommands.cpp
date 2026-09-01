@@ -7288,9 +7288,9 @@ bool ChainHitsRect(const std::vector<int>& OFF, const std::vector<float>& V,
   return false;
 }
 
-void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb, float yb, bool subtract,
-                              bool windowMode, bool includeSurveyPoints, const Camera* cam, float vpW,
-                              float vpH) {
+void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za, float xb, float yb,
+                              float zb, bool subtract, bool windowMode, bool includeSurveyPoints,
+                              const Camera* cam, float vpW, float vpH) {
   // Under an orbited camera a screen rectangle is NOT a world-axis-aligned rectangle — it projects
   // to a rotated quad — so testing world bounds against a world AABB selects the wrong objects
   // (REQ-058). When \p cam is supplied the whole test moves to SCREEN space: the drag corners and
@@ -7332,8 +7332,11 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
   const std::function<void(float, float, float, float*, float*)> projFn =
       [&](float wx, float wy, float wz, float* sx, float* sy) { SP(wx, wy, wz, sx, sy); };
   if (proj) {  // the drag corners arrive in world coords; move them to screen too
-    SP(xa, ya, 0.f, &xa, &ya);
-    SP(xb, yb, 0.f, &xb, &yb);
+    // At their OWN elevations, not the datum. A fence drawn on a tilted work plane (a UCS) or a
+    // raised one (ELEV) does not sit at Z = 0, and projecting it as if it did puts both the drawn
+    // rectangle and the region that selects at pixels the mouse never visited.
+    SP(xa, ya, za, &xa, &ya);
+    SP(xb, yb, zb, &xb, &yb);
   }
   float mnX = std::min(xa, xb);
   float mxX = std::max(xa, xb);
@@ -11334,9 +11337,9 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
                              // REQ-305: included so DropArrayUnsupportedFromSelection can log the
                              // exclusion by name (REQ-201) rather than silently never selecting them.
                              st.active == K::Array);
-    ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
-                             fenceLeftToRightWindowMode, inclSurvey, boxSelCam, st.uiViewportWidthPx,
-                             st.uiViewportHeightPx);
+    ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, st.selBoxAnchorZ, wx, wy,
+                             st.uiCursorWorldZ, windowSelectionSubtract, fenceLeftToRightWindowMode,
+                             inclSurvey, boxSelCam, st.uiViewportWidthPx, st.uiViewportHeightPx);
     if (st.active == K::Stretch) {
       // Captured in plain world XY, not camera-projected — REQ-103 STRETCH's stated simplification;
       // entity CANDIDACY above still goes through ComputeSelectionFromRect's own camera-aware test.
@@ -24331,6 +24334,13 @@ void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anch
   ClearDimGripInteraction(st);
   st.selBoxAnchorX = wx;
   st.selBoxAnchorY = wy;
+  // The corner's ELEVATION, taken from the cursor's published work-plane Z rather than threaded
+  // through all five call sites — the same seam `resolvedPointZ` uses, and for the same reason: a
+  // parameter added to five signatures is a parameter one of them eventually forgets to pass.
+  //
+  // Zero here is what put the fence on the wrong pixels under a tilted UCS: a fence is projected to
+  // screen when the view is orbited, and a projection needs all three coordinates.
+  st.selBoxAnchorZ = st.uiCursorWorldZ;
   st.selBoxAnchorScreenX = anchorScreenX;
   st.selBoxAnchorScreenY = anchorScreenY;
   st.selBoxWaitingSecond = true;

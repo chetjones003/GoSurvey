@@ -2558,6 +2558,15 @@ struct AppCommandState {
   bool selBoxWaitingSecond = false;
   float selBoxAnchorX = 0.f;
   float selBoxAnchorY = 0.f;
+  /// Elevation of the fence's first corner — the WORK PLANE's Z there, not the datum.
+  ///
+  /// Carried because a fence is projected to screen under an orbited camera, and a projection needs
+  /// all three coordinates. Both the drawn rectangle and the hit test used to project the two drag
+  /// corners at Z = 0, which is invisible in plan view (Z does not move a plan projection) and
+  /// invisible on the world XY plane at elevation zero — but as soon as the work plane is TILTED by
+  /// a UCS, or merely raised by `ELEV`, the corners project to pixels the mouse is nowhere near, and
+  /// the box both draws and selects in the wrong place (user report, 2026-09-01).
+  float selBoxAnchorZ = 0.f;
   /// Viewport-image XY (Drawing1 content coords) at fence first corner — compares with second-click mx for
   /// window vs crossing mode.
   float selBoxAnchorScreenX = 0.f;

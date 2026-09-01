@@ -657,6 +657,23 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     run.st.selBoxWaitingSecond = true;
     run.st.selBoxAnchorX = x0;
     run.st.selBoxAnchorY = y0;
+    // Each corner's ELEVATION, solved on the active work plane the way the viewport's own plan-view
+    // branch does. Without these both corners default to Z = 0, and the fence is then projected from
+    // a plane the drag never happened on — which is the defect this verb exists to be able to catch,
+    // so leaving them at zero would build the bug into the test.
+    {
+      const ray3d::Plane wp = CadActiveWorkPlane(run.st);
+      const ray3d::Vec3 n = ray3d::Normalize(wp.normal);
+      auto planeZ = [&](float x, float y) {
+        if (!(std::fabs(n.z) > 1e-9))
+          return static_cast<float>(wp.point.z);  // vertical plane: XY does not determine Z
+        return static_cast<float>(wp.point.z -
+                                  (n.x * (static_cast<double>(x) - wp.point.x) +
+                                   n.y * (static_cast<double>(y) - wp.point.y)) / n.z);
+      };
+      run.st.selBoxAnchorZ = planeZ(x0, y0);
+      run.st.uiCursorWorldZ = planeZ(x1, y1);
+    }
     SubmitViewportPick(run.st, x1, y1, run.log, subtract, windowMode);
   } else if (verb == "TRIMPICK") {
     // TRIMPICK <x> <y> — one object pick while TRIM is active.
@@ -755,6 +772,29 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     run.st.currentLayer = name;
     // Registers the name in the drawing's layer table, exactly as the Layer manager's OK does.
     SyncDrawingLayerTableWithGeometry(run.st);
+  } else if (verb == "VIEWANGLES") {
+    // VIEWANGLES <azimuthDeg> <elevationDeg> — orbit the model view.
+    //
+    // Here for the same reason CLAYER and LAYERSTATE are: the only routes to these in the product
+    // are the ViewCube and a mouse drag, so without this verb NO transcript can exercise anything
+    // that only happens once the view is orbited — and that is a whole class of behaviour, because
+    // picking, snapping and box-selection all switch from the plan-view XY path to a camera
+    // PROJECTION there (REQ-058). A defect that only appears off plan view had no failing test
+    // available to it, which is exactly how the Z = 0 fence projection survived.
+    std::istringstream is(rest);
+    float az = 0.f;
+    float el = 90.f;
+    if (!(is >> az >> el)) {
+      Fail(run, "parse", "VIEWANGLES expects <azimuthDeg> <elevationDeg>", sourceLine);
+      return false;
+    }
+    run.st.viewportAzimuthDeg = az;
+    run.st.viewportElevationDeg = el;
+    // The projection needs a viewport size; a transcript has no window, so give it a definite one.
+    if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+      run.st.uiViewportWidthPx = 1200.f;
+      run.st.uiViewportHeightPx = 700.f;
+    }
   } else if (verb == "LAYERSTATE") {
     // LAYERSTATE <name> ON|OFF|FREEZE|THAW — flip a layer's visibility, exactly as the Layer
     // manager's checkboxes do.
