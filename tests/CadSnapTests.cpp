@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <cmath>
 #include <memory>
 
 #include "CadCommands.hpp"
@@ -285,4 +286,127 @@ TEST_CASE("Block-instance snapping expands nested blocks", "[CadSnap][issue124][
   CHECK(hit.kind == Kind::Endpoint);
   CHECK(hit.x == Catch::Approx(16.f));
   CHECK(hit.y == Catch::Approx(25.f));
+}
+
+// ---------------------------------------------------------------------------------------------
+// REQ-312 (GitHub issue #145) - object snapping on an ARBITRARY-PLANE curve, from an orbited view.
+//
+// A snap has one job: hand back a point that is on the object. A tilted arc walked in the XY
+// projection fails that at the first step - every candidate it produces lies somewhere the curve
+// does not go - and in plan view the error is invisible, because the projection is all the user can
+// see. Orbit, and the glyph is plainly floating in space beside the arc it claims to have found.
+//
+// So these cases pass a pick RAY, which is the orbited path (REQ-058): candidates are then ranked by
+// distance to the ray in 3D rather than by distance in plan, and a candidate at the wrong elevation
+// is genuinely far away instead of coincidentally on top of the right one.
+//
+// The arc below stands on the wall y = 0: centre at the origin, radius 10, normal (0, -1, 0). Its
+// own frame (`ucs::FromNormal`, the Arbitrary Axis Algorithm) is X = (1, 0, 0), Y = (0, 0, 1), so
+// the point at angle t is (10 cos t, 0, 10 sin t) and the top of the arc is (0, 0, 10).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// One arc standing on the wall y = 0, swept from \p startRad through \p sweepRad.
+CadArc WallArc(float startRad, float sweepRad) {
+  CadArc a;
+  a.cx = 0.f;
+  a.cy = 0.f;
+  a.z = 0.f;
+  a.r = 10.f;
+  a.startRad = startRad;
+  a.sweepRad = sweepRad;
+  a.nx = 0.f;
+  a.ny = -1.f;
+  a.nz = 0.f;  // the wall y = 0, normal (0, -1, 0)
+  return a;
+}
+
+/// A pick ray aimed along +Y at \p target - the shape an orbited camera looking at the wall gives.
+ray3d::Ray RayAt(double tx, double ty, double tz) {
+  ray3d::Ray r;
+  r.origin = {tx, ty - 100.0, tz};
+  r.dir = {0.0, 1.0, 0.0};
+  return r;
+}
+
+constexpr float kPi = 3.14159265358979f;
+
+} // namespace
+
+TEST_CASE("A tilted arc's endpoint snap lands on the arc, not on its XY shadow", "[CadSnap][req312]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  st.objectSnapMidpoint = false;
+  st.objectSnapCenter = false;
+  // Swept from the top of the arc round to (-10, 0, 0), so the START point is (0, 0, 10) - a point
+  // the XY parametrisation puts at (0, 10, 0) instead, ten feet away and in the wrong plane.
+  st.userArcs.push_back(WallArc(kPi * 0.5f, kPi * 0.5f));
+
+  const ray3d::Ray ray = RayAt(0.0, 0.0, 10.0);
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, /*commandActive=*/false, kTol,
+                                             /*exclude=*/{}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Endpoint);
+  CHECK(hit.x == Approx(0.f).margin(1e-4));
+  CHECK(hit.y == Approx(0.f).margin(1e-4));
+  CHECK(hit.z == Approx(10.f).margin(1e-4));
+}
+
+TEST_CASE("A tilted arc's midpoint candidates rise with the arc", "[CadSnap][req312]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapMidpoint = true;
+  st.objectSnapCenter = false;
+  st.userArcs.push_back(WallArc(0.f, kPi));  // a half circle over the wall, apex at (0, 0, 10)
+
+  // Aimed at the apex. The nearest chord midpoint sits a chord-sagitta below it - the walk uses 24
+  // segments over the half circle - so this is close to 10 without being exactly 10.
+  const ray3d::Ray ray = RayAt(0.0, 0.0, 10.0);
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, /*commandActive=*/false, kTol,
+                                             /*exclude=*/{}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Midpoint);
+  CHECK(hit.y == Approx(0.f).margin(1e-4));  // on the wall, which the XY walk never is
+  CHECK(hit.z > 9.5f);
+
+  // And the point it returned is genuinely ON the circle: 10 from the centre, and in the plane.
+  const float d = std::sqrt(hit.x * hit.x + hit.y * hit.y + hit.z * hit.z);
+  CHECK(d == Approx(10.f).margin(0.05f));  // 0.05 covers the chord's own sagitta, nothing more
+}
+
+TEST_CASE("A tilted arc offers nothing where only its XY shadow would be", "[CadSnap][req312]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  st.objectSnapMidpoint = true;
+  st.objectSnapCenter = false;
+  st.userArcs.push_back(WallArc(kPi * 0.5f, kPi * 0.5f));
+
+  // (0, 10, 0) is where the XY parametrisation puts this arc's start. Nothing is there, and the
+  // snap must say so rather than offering the point it used to compute.
+  const ray3d::Ray ray = RayAt(0.0, 10.0, 0.0);
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 10.0, st, /*commandActive=*/false, kTol,
+                                             /*exclude=*/{}, &ray);
+  CHECK_FALSE(hit.valid);
+}
+
+TEST_CASE("A flat arc's endpoint snap is unchanged", "[CadSnap][req312]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  st.objectSnapMidpoint = false;
+  st.objectSnapCenter = false;
+  CadArc a;  // world +Z normal by default: the arc every drawing that predates REQ-312 holds
+  a.cx = 0.f;
+  a.cy = 0.f;
+  a.r = 10.f;
+  a.startRad = 0.f;
+  a.sweepRad = kPi * 0.5f;
+  st.userArcs.push_back(a);
+
+  const CadSnap::Hit hit = CadSnap::FindBest(10.0, 0.0, st, /*commandActive=*/false, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Endpoint);
+  CHECK(hit.x == Approx(10.f));
+  CHECK(hit.y == Approx(0.f).margin(1e-5));
+  CHECK(hit.z == Approx(0.f).margin(1e-5));
 }

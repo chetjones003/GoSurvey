@@ -308,6 +308,23 @@ void AppendArcVcDashed(std::vector<float>& out, const CadArc& a, int n, float z,
   const double rcx = dcx - viewAnchorX;
   const double rcy = dcy - viewAnchorY;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(n) + 1u) * 2u));
+  // A tilted arc (REQ-312) leaves the XY plane, so no single elevation describes it: each sample
+  // carries its own Z and the chain is dashed against the per-vertex array a sloped POLYLINE
+  // already uses. Sampled through CurvePointAt, so the drawn curve is the curve the snap picks
+  // and the DXF writer emits, not a fourth opinion about where it goes.
+  if (!IsFlatNormal(a.nx, a.ny, a.nz)) {
+    const ucs::Ucs plane = CurvePlane(a);
+    std::vector<float> zs(static_cast<size_t>(n) + 1u);
+    for (int i = 0; i <= n; ++i) {
+      const ray3d::Vec3 p = CurvePointAt(
+          plane, dr, CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i, n));
+      xy[static_cast<size_t>(i * 2)] = static_cast<float>(p.x - viewAnchorX);
+      xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(p.y - viewAnchorY);
+      zs[static_cast<size_t>(i)] = static_cast<float>(p.z);
+    }
+    CadTessellateLinetypeChainVc(xy.data(), n + 1, z, false, lt, dashPatScale, rgba, &out, zs.data());
+    return;
+  }
   for (int i = 0; i <= n; ++i) {
     const float u = static_cast<float>(i) / static_cast<float>(n);
     const double ang = static_cast<double>(a.startRad + a.sweepRad * u);
@@ -352,8 +369,9 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
 
 void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
                           float dashPatScale, const EntityAttributes& attr, const CadLayerRow* lr, float defR,
-                          float defG, float defB, double viewAnchorX, double viewAnchorY) {
-  if (r <= 1e-6f)
+                          float defG, float defB, double viewAnchorX, double viewAnchorY, float nx = kFlatNormalX,
+                          float ny = kFlatNormalY, float nz = kFlatNormalZ) {
+  if (r <= 1e-6f || segments < 1)
     return;
   float rgba[4];
   ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
@@ -363,6 +381,23 @@ void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, 
   const double dr = static_cast<double>(r);
   constexpr double kTwoPi = 6.283185307179586;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(segments) + 1u) * 2u));
+  // Tilted (REQ-312): same per-vertex-Z chain as a tilted arc, sampled through the same
+  // parametrisation. The circle's plane is built from its centre and normal, so the ring closes
+  // where the frame says it does rather than where a flat projection would put it.
+  if (!IsFlatNormal(nx, ny, nz)) {
+    const ucs::Ucs plane =
+        CurvePlane(dcx, dcy, static_cast<double>(z), static_cast<double>(nx), static_cast<double>(ny),
+                   static_cast<double>(nz));
+    std::vector<float> zs(static_cast<size_t>(segments) + 1u);
+    for (int i = 0; i <= segments; ++i) {
+      const ray3d::Vec3 p = CurvePointAt(plane, dr, CurveSampleAngle(0.0, kTwoPi, i, segments));
+      xy[static_cast<size_t>(i * 2)] = static_cast<float>(p.x - viewAnchorX);
+      xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(p.y - viewAnchorY);
+      zs[static_cast<size_t>(i)] = static_cast<float>(p.z);
+    }
+    CadTessellateLinetypeChainVc(xy.data(), segments + 1, z, true, lt, dashPatScale, rgba, &out, zs.data());
+    return;
+  }
   for (int i = 0; i <= segments; ++i) {
     const double t = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
     float rx = 0.f;
@@ -1641,9 +1676,16 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           const float cr = circlesCxCyZR[ci * 4 + 3];
           const int circSegs = CircleTessellationSegmentCount(static_cast<double>(cr), static_cast<double>(halfH),
                                                               fbHeight, tuning.arcCircleSmoothnessCap);
+          // The circle's plane (REQ-312). Absent side-car means flat, which is every circle drawn
+          // before the normal existed.
+          float cnx = kFlatNormalX;
+          float cny = kFlatNormalY;
+          float cnz = kFlatNormalZ;
+          if (extended && extended->circleNormals)
+            CircleNormalAt(*extended->circleNormals, ci, &cnx, &cny, &cnz);
           AppendCircleVcDashed(cpuVcCircles_, circlesCxCyZR[ci * 4], circlesCxCyZR[ci * 4 + 1], cr,
                                circSegs, circlesCxCyZR[ci * 4 + 2], dashPatScale, attr, lr, kCircDefaultR,
-                               kCircDefaultG, kCircDefaultB, viewAnchorX, viewAnchorY);
+                               kCircDefaultG, kCircDefaultB, viewAnchorX, viewAnchorY, cnx, cny, cnz);
           circVert = static_cast<int>(cpuVcCircles_.size() / 7);
         }
         if (circVert > circBatchStart && circBatchPx >= 0.f)

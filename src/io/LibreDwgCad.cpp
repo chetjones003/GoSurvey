@@ -192,6 +192,7 @@ void LocalCircle(AppCommandState& st, double cx, double cy, double r, double z, 
   st.userCirclesCxCyZR.push_back(static_cast<float>(z));
   st.userCirclesCxCyZR.push_back(static_cast<float>(r));
   st.userCircleAttrs.push_back(at);
+  PushCircleNormal(st.userCircleNormals);   // REQ-312: DWG extrusion not yet read
 }
 
 void ArcFromAngles(double a0, double a1, float* startRad, float* sweepRad) {

@@ -71,6 +71,34 @@ struct DxfArcAsWritten {
   float sweepRad = 0.f;
 };
 
+/// The WORLD point a curve's group 10/20/30 names, given its group 210 (REQ-312).
+///
+/// Group 210 does not merely annotate a world point with a direction: it makes the entity's own
+/// coordinates OBJECT-coordinate values, in the Arbitrary Axis Algorithm frame the normal defines.
+/// Reading 10/20/30 as world coordinates when 210 is not +Z - which is what this importer did until
+/// now, by never reading 210 at all - lands a tilted ARC or CIRCLE flat and misplaced, with no
+/// message (REQ-201).
+///
+/// `ucs::FromNormal` IS that algorithm (REQ-311), and for a +Z normal it returns the world axes
+/// exactly, so a flat entity's OCS point is its world point unchanged.
+///
+/// False for a degenerate 210, which is a malformed file. The caller reports it rather than
+/// adopting a garbage frame.
+[[nodiscard]] bool DxfOcsToWorld(double x, double y, double z, double nx, double ny, double nz,
+                                 ray3d::Vec3* out) {
+  ucs::Ucs frame;
+  if (!ucs::FromNormal({0.0, 0.0, 0.0}, {nx, ny, nz}, &frame))
+    return false;
+  if (out)
+    *out = ucs::UcsToWorld(frame, {x, y, z});
+  return true;
+}
+
+/// True when a parsed group 210 is the default world +Z, i.e. the entity is flat.
+[[nodiscard]] bool DxfExtrusionIsFlat(double nx, double ny, double nz) {
+  return nx == 0.0 && ny == 0.0 && nz == 1.0;
+}
+
 DxfArcAsWritten DxfArcToWrite(const CadArc& arc) {
   auto normDeg = [](double rad) {
     double d = rad * (180.0 / kPi);
@@ -642,7 +670,13 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
                        int insertDepth, double* coordMagMax, int* skippedPaper, int* skippedViewport,
                        int* skippedUnknown, std::unordered_map<std::string, int>* skipCounts,
                        std::vector<SurveyPoint>* embeddedPointsLocal,
-                       const std::unordered_map<std::string, DxfTextStyle>* textStyles) {
+                       const std::unordered_map<std::string, DxfTextStyle>* textStyles,
+                       int* degenerateExtrusionsOut) {
+  // Counted here, reported once by the caller, in the shape the other four counters already use.
+  const auto refuseDegenerateExtrusion = [&]() {
+    if (degenerateExtrusionsOut)
+      ++*degenerateExtrusionsOut;
+  };
 
   constexpr int kMaxInsertDepth = 64;
 
@@ -853,9 +887,13 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
   };
 
-  auto appendCircleXF = [&](double cx, double cy, double rad, const EntityAttributes& at, double cz = 0.0) {
+  // \p cx,\p cy,\p cz are WORLD, already resolved out of the OCS by the caller (REQ-312); \p nx..nz
+  // is the plane the circle lies in, world +Z for every flat one.
+  auto appendCircleXF = [&](double cx, double cy, double rad, const EntityAttributes& at, double cz = 0.0,
+                            double nx = 0.0, double ny = 0.0, double nz = 1.0) {
     if (rad <= 1e-9)
       return;
+    const bool flat = DxfExtrusionIsFlat(nx, ny, nz);
     if (xf.isIdentity()) {
       double ocx = 0, ocy = 0;
       xf.apply(cx, cy, &ocx, &ocy);
@@ -866,17 +904,27 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       st.userCirclesCxCyZR.push_back(static_cast<float>(cz));  // group 30 (REQ-057), unrebased
       st.userCirclesCxCyZR.push_back(static_cast<float>(rad));
       st.userCircleAttrs.push_back(at);
+      PushCircleNormal(st.userCircleNormals, static_cast<float>(nx), static_cast<float>(ny),
+                       static_cast<float>(nz));  // REQ-312: group 210
       return;
     }
+    // Under a non-identity INSERT transform the circle loses its identity and becomes segments (see
+    // appendArcXF's note). A tilted one is walked in its own plane first, so what degrades to
+    // segments is the ring the file states rather than its XY shadow.
     constexpr int nseg = 64;
+    const ucs::Ucs plane =
+        flat ? ucs::Ucs{} : CurvePlane(cx, cy, cz, nx, ny, nz);
     for (int s = 0; s < nseg; ++s) {
       const double u0 = (kPi * 2.0) * (static_cast<double>(s) / static_cast<double>(nseg));
       const double u1 = (kPi * 2.0) * (static_cast<double>(s + 1) / static_cast<double>(nseg));
-      const double lx0 = cx + rad * std::cos(u0);
-      const double ly0 = cy + rad * std::sin(u0);
-      const double lx1 = cx + rad * std::cos(u1);
-      const double ly1 = cy + rad * std::sin(u1);
-      appendSegXF(lx0, ly0, lx1, ly1, at, cz, cz);  // the tessellated ring stays on its own plane
+      if (flat) {
+        appendSegXF(cx + rad * std::cos(u0), cy + rad * std::sin(u0), cx + rad * std::cos(u1),
+                    cy + rad * std::sin(u1), at, cz, cz);  // the tessellated ring stays on its own plane
+        continue;
+      }
+      const ray3d::Vec3 p0 = CurvePointAt(plane, rad, u0);
+      const ray3d::Vec3 p1 = CurvePointAt(plane, rad, u1);
+      appendSegXF(p0.x, p0.y, p1.x, p1.y, at, p0.z, p1.z);
     }
   };
 
@@ -892,10 +940,15 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
   // DXF guarantees. That canonicalizes direction: a clockwise arc drawn here, exported and
   // re-imported comes back as the same geometry described CCW. The shape is identical and the
   // re-export is byte-identical — only the internal sign convention settles to one form.
+  // \p cx,\p cy,\p cz are WORLD, already resolved out of the OCS by the caller (REQ-312); \p a0 and
+  // \p sweep are measured in the arc's own frame, which is the frame group 210 defines - so they
+  // need no adjustment, only the centre does.
   auto appendArcXF = [&](double cx, double cy, double rad, double a0, double sweep,
-                         const EntityAttributes& at, double cz = 0.0) {
+                         const EntityAttributes& at, double cz = 0.0, double nx = 0.0, double ny = 0.0,
+                         double nz = 1.0) {
     if (rad <= 1e-9)
       return;
+    const bool flat = DxfExtrusionIsFlat(nx, ny, nz);
     if (xf.isIdentity()) {
       double ocx = 0, ocy = 0;
       xf.apply(cx, cy, &ocx, &ocy);
@@ -908,16 +961,26 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       arc.startRad = static_cast<float>(a0);
       arc.sweepRad = static_cast<float>(sweep);
       arc.z = static_cast<float>(cz);  // group 30 (REQ-057), unrebased
+      arc.nx = static_cast<float>(nx);  // REQ-312: group 210
+      arc.ny = static_cast<float>(ny);
+      arc.nz = static_cast<float>(nz);
       st.userArcs.push_back(arc);
       st.userArcAttrs.push_back(at);
       return;
     }
     constexpr int nseg = 48;
+    const ucs::Ucs plane = flat ? ucs::Ucs{} : CurvePlane(cx, cy, cz, nx, ny, nz);
     for (int s = 0; s < nseg; ++s) {
       const double u0 = a0 + sweep * (static_cast<double>(s) / static_cast<double>(nseg));
       const double u1 = a0 + sweep * (static_cast<double>(s + 1) / static_cast<double>(nseg));
-      appendSegXF(cx + rad * std::cos(u0), cy + rad * std::sin(u0), cx + rad * std::cos(u1),
-                  cy + rad * std::sin(u1), at, cz, cz);  // the arc stays on its group-30 plane
+      if (flat) {
+        appendSegXF(cx + rad * std::cos(u0), cy + rad * std::sin(u0), cx + rad * std::cos(u1),
+                    cy + rad * std::sin(u1), at, cz, cz);  // the arc stays on its group-30 plane
+        continue;
+      }
+      const ray3d::Vec3 p0 = CurvePointAt(plane, rad, u0);
+      const ray3d::Vec3 p1 = CurvePointAt(plane, rad, u1);
+      appendSegXF(p0.x, p0.y, p1.x, p1.y, at, p0.z, p1.z);
     }
   };
 
@@ -1323,6 +1386,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     if (typ == "CIRCLE") {
       EntityBase base;
       double cx = 0, cy = 0, cz = 0, rad = 0;
+      // Group 210 defaults to world +Z when absent, which is what every flat DXF omits.
+      double nx = 0, ny = 0, nz = 1;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
@@ -1331,8 +1396,17 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 20) ParseDouble(v, &cy);
         else if (c == 30) ParseDouble(v, &cz);
         else if (c == 40) ParseDouble(v, &rad);
+        else if (c == 210) ParseDouble(v, &nx);   // REQ-312
+        else if (c == 220) ParseDouble(v, &ny);
+        else if (c == 230) ParseDouble(v, &nz);
       }
-      appendCircleXF(cx, cy, rad, base.makeAttr(layerRgb), cz);  // group 30 (REQ-057)
+      ray3d::Vec3 w{cx, cy, cz};
+      if (!DxfExtrusionIsFlat(nx, ny, nz) && !DxfOcsToWorld(cx, cy, cz, nx, ny, nz, &w)) {
+        refuseDegenerateExtrusion();  // a zero-length 210: refused, not silently taken as flat (REQ-201)
+        i = j;
+        continue;
+      }
+      appendCircleXF(w.x, w.y, rad, base.makeAttr(layerRgb), w.z, nx, ny, nz);  // group 30 (REQ-057)
       i = j;
       continue;
     }
@@ -1340,6 +1414,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     if (typ == "ARC") {
       EntityBase base;
       double cx = 0, cy = 0, cz = 0, rad = 0, a0deg = 0, a1deg = 0;
+      double nx = 0, ny = 0, nz = 1;   // group 210 default (REQ-312)
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
@@ -1350,13 +1425,22 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 40) ParseDouble(v, &rad);
         else if (c == 50) ParseDouble(v, &a0deg);
         else if (c == 51) ParseDouble(v, &a1deg);
+        else if (c == 210) ParseDouble(v, &nx);
+        else if (c == 220) ParseDouble(v, &ny);
+        else if (c == 230) ParseDouble(v, &nz);
       }
       const auto at = base.makeAttr(layerRgb);
+      ray3d::Vec3 w{cx, cy, cz};
+      if (!DxfExtrusionIsFlat(nx, ny, nz) && !DxfOcsToWorld(cx, cy, cz, nx, ny, nz, &w)) {
+        refuseDegenerateExtrusion();
+        i = j;
+        continue;
+      }
       if (rad > 1e-9) {
         float startRadF = 0.f, sweepRadF = 0.f;
         DxfArcAnglesFromDegrees(a0deg, a1deg, &startRadF, &sweepRadF);
-        appendArcXF(cx, cy, rad, static_cast<double>(startRadF), static_cast<double>(sweepRadF), at,
-                    cz);  // group 30 (REQ-057)
+        appendArcXF(w.x, w.y, rad, static_cast<double>(startRadF), static_cast<double>(sweepRadF), at,
+                    w.z, nx, ny, nz);  // group 30 (REQ-057)
       }
       i = j;
       continue;
@@ -1773,7 +1857,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       const Affine2D ins = Affine2D::FromInsert(ix, iy, sx, sy, rot);
       const Affine2D nest = xf.compose(ins);
       ParseEntityRegion(t, br.first, br.second, st, layerRgb, blockDefs, nest, insertDepth + 1, coordMagMax, skippedPaper,
-                        skippedViewport, skippedUnknown, skipCounts, embeddedPointsLocal, textStyles);
+                        skippedViewport, skippedUnknown, skipCounts, embeddedPointsLocal, textStyles,
+                        degenerateExtrusionsOut);
       // Store the INSERT insertion point as a zero-length segment so snap can hit the exact
       // world coordinate — Civil 3D COGO points use INSERT entities whose center must be snap-able.
       appendSegXF(ix, iy, ix, iy, base.makeAttr(layerRgb));
@@ -2165,12 +2250,17 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   int skippedPaper = 0;
   int skippedViewport = 0;
   int skipped = 0;
+  // Curves whose group 210 is a zero-length vector (REQ-312). A malformed file: the extrusion names
+  // no plane, so there is no frame to read the entity's coordinates in. Refused and counted rather
+  // than quietly taken as flat, which would place the curve somewhere it is not (REQ-201).
+  int degenerateExtrusions = 0;
   std::unordered_map<std::string, int> skipHist;
   std::vector<SurveyPoint> embeddedPoints;  // GOSURVEY XDATA points, local coords (rel. parse-time origin)
   const Affine2D xfRoot{};
   if (hasEntitiesSec)
     ParseEntityRegion(pairs, eb, ee, st, layerRgb, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
-                      &skippedViewport, &skipped, &skipHist, &embeddedPoints, &textStyles);
+                      &skippedViewport, &skipped, &skipHist, &embeddedPoints, &textStyles,
+                      &degenerateExtrusions);
 
   // Polylines count as geometry. Before they had a sink of their own, a file holding nothing but
   // polylines still filled userLinesFlat; now it does not, and without this a polyline-only DXF
@@ -2188,7 +2278,8 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     else if (noGeom)
       log.push_back("DXF import — ENTITIES empty after model-space filter; reading geometry from *MODEL_SPACE block.");
     ParseEntityRegion(pairs, mb, me, st, layerRgb, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
-                      &skippedViewport, &skipped, &skipHist, &embeddedPoints, &textStyles);
+                      &skippedViewport, &skipped, &skipHist, &embeddedPoints, &textStyles,
+                      &degenerateExtrusions);
   }
 
   const size_t nLines = st.userLinesFlat.size() / 6;
@@ -2203,6 +2294,9 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
                   " paper-space-only ENTITIES (group 67); layouts/title blocks not imported.");
   if (skippedViewport > 0)
     log.push_back("DXF import — skipped " + std::to_string(skippedViewport) + " VIEWPORT record(s).");
+  if (degenerateExtrusions > 0)
+    log.push_back("DXF import — refused " + std::to_string(degenerateExtrusions) +
+                  " ARC/CIRCLE record(s) whose group 210 extrusion is a zero-length vector.");
   if (skipped > 0) {
     log.push_back("DXF import — skipped " + std::to_string(skipped) + " unsupported ENTITIES record(s).");
     int printed = 0;
@@ -2537,10 +2631,22 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       continue;
     const int n =
         std::max(8, static_cast<int>(std::fabs(static_cast<double>(aw.sweepRad)) / (3.14159265 / 16.0)) + 1);
+    // A tilted arc (REQ-312) is walked in its own plane here for the same reason the angles come
+    // from `aw`: the box has to be the one a READER computes from this file, and a reader holds the
+    // arc's plane. Walking it in the XY projection instead gives a box that is too SMALL, and the
+    // agreement the note above depends on is then lost in the direction that crops geometry.
+    const bool arcFlat = IsFlatNormal(a.nx, a.ny, a.nz);
+    const ucs::Ucs arcPlane = arcFlat ? ucs::Ucs{} : CurvePlane(a);
     for (int i = 0; i <= n; ++i) {
       const double u = static_cast<double>(i) / static_cast<double>(n);
       const double t = static_cast<double>(aw.startRad) + static_cast<double>(aw.sweepRad) * u;
-      accExt(dcx + dr * std::cos(t), dcy + dr * std::sin(t));
+      if (arcFlat) {
+        accExt(dcx + dr * std::cos(t), dcy + dr * std::sin(t));
+        continue;
+      }
+      const ray3d::Vec3 p = CurvePointAt(arcPlane, dr, t);
+      accExt(p.x, p.y);
+      accExtZ(p.z);  // a tilted arc spans elevations; its centre's Z is not its extent
     }
     accExtZ(static_cast<double>(a.z));
   }
@@ -3279,6 +3385,43 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   const double oy = st.worldDocumentOriginY;
   auto worldX = [&](float lx) { return static_cast<double>(lx) + ox; };
   auto worldY = [&](float ly) { return static_cast<double>(ly) + oy; };
+
+  // Group 210 is written at FULL double precision, not through `std::to_string` like every other
+  // number here (REQ-312). It is the one value in a DXF whose error is ANGULAR rather than
+  // positional: the reader rebuilds the entity's whole coordinate frame from it, and an angular
+  // error of dTheta moves a point R from the world origin by about R * dTheta. At state-plane
+  // magnitude R is ~1e6, so the six decimals that are ample for a coordinate are not remotely
+  // enough for a direction.
+  //
+  // Measured over 400,000 random normals with centres out to +/-2e6, worst case:
+  //     six decimals (std::to_string)          65.4       ft   - fails REQ-101 by ~6500x
+  //     %.9g          (round-trips a float)     0.009     ft   - inside +/-0.01, with no margin
+  //     %.17g         (round-trips a double)    0.00000086 ft  - what this uses
+  // %.9g is not enough because the READER parses to double: nine digits identify the float but not
+  // the double the reader ends up holding, and that residual is an angle too.
+  //
+  // Flat curves never reach this - they emit the literal "0.0"/"0.0"/"1.0" below, unchanged, so no
+  // existing DXF changes by a byte.
+  auto extrusionText = [](double v) {
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%.17g", v);
+    return std::string(buf);
+  };
+
+  // A curve's group 10/20/30 in the OCS its group 210 implies (REQ-312).
+  //
+  // Group 210 does not merely annotate a world point with a direction: it makes the entity's own
+  // coordinates OBJECT-coordinate values, in the Arbitrary Axis Algorithm frame built from the
+  // normal. Writing world coordinates alongside a non-+Z 210 would describe a different circle to
+  // every other DXF consumer. `ucs::FromNormal` IS that algorithm (REQ-311, D-2026-08-31-e), and
+  // for a +Z normal it returns the world axes exactly - so a flat curve's OCS point is its world
+  // point, bit for bit, and the flat path below is unchanged.
+  auto ocsPointOf = [](double wx, double wy, double wz, double nx, double ny, double nz) {
+    ucs::Ucs frame;
+    if (!ucs::FromNormal({0.0, 0.0, 0.0}, {nx, ny, nz}, &frame))
+      return ray3d::Vec3{wx, wy, wz};  // refused upstream; never a silent garbage frame (REQ-201)
+    return ucs::WorldToUcs(frame, {wx, wy, wz});
+  };
   // Common DXF entity header: handle, model-space owner, AcDbEntity subclass, layer, linetype, color, lineweight, transparency.
   auto emitEntityHeader = [&](const char* hb, const std::string& layer8, const EntityAttributes& at,
                                int aci, const CadLayerRow* lyr) {
@@ -3343,16 +3486,32 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
     const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
 
+    float cnx = kFlatNormalX;
+    float cny = kFlatNormalY;
+    float cnz = kFlatNormalZ;
+    CircleNormalAt(st.userCircleNormals, ci, &cnx, &cny, &cnz);
+    const bool circFlat = IsFlatNormal(cnx, cny, cnz);
+    const ray3d::Vec3 p10 =
+        circFlat ? ray3d::Vec3{worldX(cx), worldY(cy), static_cast<double>(cz)}
+                 : ocsPointOf(worldX(cx), worldY(cy), static_cast<double>(cz), static_cast<double>(cnx),
+                              static_cast<double>(cny), static_cast<double>(cnz));
+
     emitPair(0, "CIRCLE");
     emitEntityHeader(hb, layer8, at, entAci, lyr);
     emitPair(100, "AcDbCircle");
-    emitPair(10, std::to_string(worldX(cx)));
-    emitPair(20, std::to_string(worldY(cy)));
-    emitPair(30, std::to_string(static_cast<double>(cz)));  // elevation (REQ-057), absolute
+    emitPair(10, std::to_string(p10.x));
+    emitPair(20, std::to_string(p10.y));
+    emitPair(30, std::to_string(p10.z));  // elevation (REQ-057), absolute; OCS Z when tilted
     emitPair(40, std::to_string(static_cast<double>(rr)));
-    emitPair(210, "0.0");
-    emitPair(220, "0.0");
-    emitPair(230, "1.0");
+    if (circFlat) {
+      emitPair(210, "0.0");
+      emitPair(220, "0.0");
+      emitPair(230, "1.0");
+    } else {
+      emitPair(210, extrusionText(static_cast<double>(cnx)));
+      emitPair(220, extrusionText(static_cast<double>(cny)));
+      emitPair(230, extrusionText(static_cast<double>(cnz)));
+    }
   }
 
   // Arcs (#63). The exporter named `userArcs` nowhere, so every arc GoSurvey ever wrote to a DXF was
@@ -3378,16 +3537,32 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     // swept from (issue #111).
     const DxfArcAsWritten aw = DxfArcToWrite(arc);
 
+    // Groups 50/51 need no adjustment for a tilted arc: `DxfArcToWrite` measures them in the arc's
+    // own frame, `ucs::FromNormal(centre, normal)`, and the OCS shares that frame's AXES - it
+    // differs only in where its origin sits, which an angle about the centre cannot see.
+    const bool arcFlat = IsFlatNormal(arc.nx, arc.ny, arc.nz);
+    const ray3d::Vec3 a10 =
+        arcFlat ? ray3d::Vec3{worldX(arc.cx), worldY(arc.cy), static_cast<double>(arc.z)}
+                : ocsPointOf(worldX(arc.cx), worldY(arc.cy), static_cast<double>(arc.z),
+                             static_cast<double>(arc.nx), static_cast<double>(arc.ny),
+                             static_cast<double>(arc.nz));
+
     emitPair(0, "ARC");
     emitEntityHeader(hb, layer8, at, entAci, lyr);
     emitPair(100, "AcDbCircle");
-    emitPair(10, std::to_string(worldX(arc.cx)));
-    emitPair(20, std::to_string(worldY(arc.cy)));
-    emitPair(30, std::to_string(static_cast<double>(arc.z)));  // elevation (REQ-057), absolute
+    emitPair(10, std::to_string(a10.x));
+    emitPair(20, std::to_string(a10.y));
+    emitPair(30, std::to_string(a10.z));  // elevation (REQ-057), absolute; OCS Z when tilted
     emitPair(40, std::to_string(static_cast<double>(arc.r)));
-    emitPair(210, "0.0");
-    emitPair(220, "0.0");
-    emitPair(230, "1.0");
+    if (arcFlat) {
+      emitPair(210, "0.0");
+      emitPair(220, "0.0");
+      emitPair(230, "1.0");
+    } else {
+      emitPair(210, extrusionText(static_cast<double>(arc.nx)));
+      emitPair(220, extrusionText(static_cast<double>(arc.ny)));
+      emitPair(230, extrusionText(static_cast<double>(arc.nz)));
+    }
     emitPair(100, "AcDbArc");
     emitPair(50, aw.startDeg);
     emitPair(51, aw.endDeg);

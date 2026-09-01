@@ -100,6 +100,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   // --- Flat store strides (architecture §11.8) -----------------------------------------------
   CheckStride(out, "userLinesFlat", st.userLinesFlat.size(), 6);       // two XYZ endpoints
   CheckStride(out, "userCirclesCxCyZR", st.userCirclesCxCyZR.size(), 4);
+  CheckStride(out, "userCircleNormals", st.userCircleNormals.size(), 3);   // REQ-312
   CheckStride(out, "userPolylineVerts", st.userPolylineVerts.size(), 3);
   CheckStride(out, "featureLineVerts", st.featureLineVerts.size(), 3);   // REQ-087, §11.8
   for (size_t i = 0; i < st.cadFilledRegions.size(); ++i) {
@@ -110,6 +111,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   // --- Finite coordinates ---------------------------------------------------------------------
   CheckFinite(out, "userLinesFlat", st.userLinesFlat);
   CheckFinite(out, "userCirclesCxCyZR", st.userCirclesCxCyZR);
+  CheckFinite(out, "userCircleNormals", st.userCircleNormals);
   CheckFinite(out, "userPolylineVerts", st.userPolylineVerts);
   CheckFinite(out, "featureLineVerts", st.featureLineVerts);
   for (size_t i = 0; i < st.userArcs.size(); ++i) {
@@ -121,6 +123,9 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     CheckFiniteScalar(out, (p + "startRad").c_str(), a.startRad, static_cast<int>(i));
     CheckFiniteScalar(out, (p + "sweepRad").c_str(), a.sweepRad, static_cast<int>(i));
     CheckFiniteScalar(out, (p + "z").c_str(), a.z, static_cast<int>(i));
+    CheckFiniteScalar(out, (p + "nx").c_str(), a.nx, static_cast<int>(i));
+    CheckFiniteScalar(out, (p + "ny").c_str(), a.ny, static_cast<int>(i));
+    CheckFiniteScalar(out, (p + "nz").c_str(), a.nz, static_cast<int>(i));
   }
   for (size_t i = 0; i < st.userEllipses.size(); ++i) {
     const CadEllipse& e = st.userEllipses[i];
@@ -148,6 +153,8 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   // --- Parallel attribute arrays ----------------------------------------------------------------
   CheckAttrCount(out, "lines", st.userLinesFlat.size() / 6, st.userLineAttrs.size());
   CheckAttrCount(out, "circles", st.userCirclesCxCyZR.size() / 4, st.userCircleAttrs.size());
+  CheckAttrCount(out, "circle normals", st.userCirclesCxCyZR.size() / 4,
+                 st.userCircleNormals.size() / 3);   // REQ-312 side-car (D-2026-08-31-f)
   CheckAttrCount(out, "arcs", st.userArcs.size(), st.userArcAttrs.size());
   CheckAttrCount(out, "ellipses", st.userEllipses.size(), st.userEllAttrs.size());
   CheckAttrCount(out, "annotations", st.cadAnnotations.size(), st.cadAnnotationAttrs.size());

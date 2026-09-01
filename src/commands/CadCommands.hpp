@@ -703,6 +703,15 @@ inline bool ChamferRayIntersect(const FilletCurve& c, float fromX, float fromY, 
 struct CadExtendedGeometryInput {
   const std::vector<CadArc>* arcs = nullptr;
   const std::vector<EntityAttributes>* arcAttrs = nullptr;
+  /// Plane normals for the circle store, three floats per circle (REQ-312, D-2026-08-31-f).
+  ///
+  /// An arc carries its normal inside `CadArc`, so `arcs` above needs no companion; a circle
+  /// cannot, and the renderer has to know a circle's plane or it draws a tilted one flat. Carried
+  /// here rather than as another `RenderScene` parameter for the reason this struct already
+  /// states: it is exactly "the extra per-entity data the renderer needs". Null, or shorter than
+  /// the circle store, means the missing entries are flat -- which is what every circle that
+  /// predates REQ-312 is.
+  const std::vector<float>* circleNormals = nullptr;
   const std::vector<CadEllipse>* ellipses = nullptr;
   const std::vector<EntityAttributes>* ellAttrs = nullptr;
   const std::vector<float>* polylineVerts = nullptr;
@@ -838,6 +847,9 @@ struct CadClipboard {
   /// boundary rather than silently riding along.
   std::vector<float>            circlesCxCyZR;
   std::vector<EntityAttributes> circleAttrs;
+  /// Circle plane normals, 3 floats each (REQ-312). A paste into paper space flattens them back
+  /// to world +Z, the same boundary where z collapses -- the sheet is 2D (ADR-025 (g)).
+  std::vector<float>            circleNormals;
   std::vector<CadArc>           arcs;
   std::vector<EntityAttributes> arcAttrs;
   std::vector<CadEllipse>       ellipses;
@@ -872,6 +884,8 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> userLineAttrs;
   std::vector<float>            userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
+  /// Circle plane normals, 3 floats each (REQ-312) - see AppCommandState::userCircleNormals.
+  std::vector<float>            userCircleNormals;
   std::vector<CadArc>           userArcs;
   std::vector<EntityAttributes> userArcAttrs;
   std::vector<CadEllipse>       userEllipses;
@@ -993,6 +1007,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> userLineAttrs;
   std::vector<float>            userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
+  /// Circle plane normals, 3 floats each (REQ-312) - see AppCommandState::userCircleNormals.
+  std::vector<float>            userCircleNormals;
   std::vector<CadArc>           userArcs;
   std::vector<EntityAttributes> userArcAttrs;
   std::vector<CadEllipse>       userEllipses;
@@ -1671,6 +1687,7 @@ struct AppCommandState {
 
   float arcAx = 0.f, arcAy = 0.f;
   float arcBx = 0.f, arcBy = 0.f;
+  float arcAz = 0.f, arcBz = 0.f;   ///< work-plane elevation of each pick (REQ-312), as circleCz
 
   enum class EllipsePhase { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
 
@@ -1953,12 +1970,29 @@ struct AppCommandState {
 
   float c3p1x = 0.f, c3p1y = 0.f;
   float c3p2x = 0.f, c3p2y = 0.f;
+  /// Each draft pick keeps the work-plane elevation it was made at (REQ-312).
+  ///
+  /// A tilted work plane makes Z vary from point to point, and a VERTICAL one makes (x, y) stop
+  /// determining Z at all -- two picks on a wall can share an (x, y) and differ only in height. So
+  /// the elevation cannot be recovered at commit time from the coordinates; it has to be kept with
+  /// the pick that produced it. Under the WCS every one of these is the single commit elevation and
+  /// nothing reads them.
+  float circleCz = 0.f;
+  float c3p1z = 0.f, c3p2z = 0.f;
 
   /// Each circle: center X, center Y, center Z, radius (world units) — stride 4 (REQ-057 /
   /// ADR-025 (a)). The centre's XYZ is contiguous so it reads like a point; the radius trails it.
-  /// Z is absolute (ADR-025 D2) and the circle's plane stays parallel to XY, matching CadArc::z.
+  /// Z is absolute (ADR-025 D2). The circle lies in world XY unless `userCircleNormals`
+  /// says otherwise (REQ-312), matching CadArc.
   std::vector<float> userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
+  /// Plane normal per circle, 3 floats each (REQ-312) - parallel to `userCirclesCxCyZR` the way
+  /// `userCircleAttrs` already is, and maintained at the same sites. A side-car rather than a
+  /// wider stride because that 4-float stride is read directly at roughly 300 call sites and a
+  /// stride mistake in a flat float array is silent (D-2026-08-31-f). World +Z is the default,
+  /// which is every circle that existed before this field; `docinvariants` checks the count, so a
+  /// desynchronised insert or erase fails loudly rather than mis-orienting a circle (REQ-204).
+  std::vector<float> userCircleNormals;
   std::vector<CadArc> userArcs;
   std::vector<EntityAttributes> userArcAttrs;
   std::vector<CadEllipse> userEllipses;
@@ -3501,6 +3535,87 @@ inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
 /// The active work plane (UCS XY) a viewport click resolves against (REQ-058 / ADR-025 (e)).
 /// In storage space, because that is the space the ray is in.
 inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) { return ucs::WorkPlane(CadActiveUcsStorage(st)); }
+
+/// True when the active work plane is parallel to world XY and faces up (REQ-312).
+///
+/// Every UCS that is a translation and/or a rotation about Z satisfies this - which is the whole
+/// 2D survey case, and the default. It is the branch guard for the arbitrary-plane drawing paths,
+/// and it is deliberately NOT `CadUcsIsWorld`: a UCS squared to a road centreline is still a
+/// flat drawing, and it must keep the exact float path every existing drawing, transcript and test
+/// already goes through. That is REQ-154's own reasoning for its WCS branch, applied one level out.
+inline bool CadWorkPlaneIsWorldXy(const AppCommandState& st) {
+  // States the condition directly rather than borrowing `ucs::PlanViewIsExact`, which this used to
+  // call. That predicate answers the CAMERA's question - "can PLAN put UCS +Y up the screen
+  // exactly?" - and issue #153 gave `Camera` a roll axis, after which the answer became yes for
+  // EVERY valid frame. The name did not change and neither did the call site, so a tilted drawing
+  // silently began taking the flat branch here: the guard inverted without a compiler error, and
+  // the four REQ-312 transcripts are what caught it. A predicate named for another subsystem's
+  // concern is not a safe way to ask whether a plane is parallel to world XY, so this asks.
+  const ucs::Ucs& u = st.activeUcs;
+  constexpr double kTol = 1e-6;
+  return std::fabs(u.zAxis.x) <= kTol && std::fabs(u.zAxis.y) <= kTol && u.zAxis.z > 0.0;
+}
+
+/// The work plane, moved so its origin sits on \p ox,\p oy,\p oz (REQ-312).
+///
+/// Anchoring on the first pick rather than on the UCS origin keeps the 2D coordinates that come out
+/// of it small. The planar maths the draw commands use (circumcircle, swept angle) runs in float,
+/// and at state-plane magnitude a float has a quarter-foot of resolution - the same REQ-101
+/// narrowing hazard the document origin exists to avoid, arriving through a different door.
+inline ucs::Ucs CadWorkPlaneAnchoredAt(const AppCommandState& st, float ox, float oy, float oz) {
+  return ucs::WithOrigin(CadActiveUcsStorage(st),
+                         {static_cast<double>(ox), static_cast<double>(oy), static_cast<double>(oz)});
+}
+
+/// The normal of the plane a new curve commits into: the active UCS's Z axis (REQ-312).
+inline void CadActiveDrawPlaneNormal(const AppCommandState& st, float* nx, float* ny, float* nz) {
+  const ucs::Ucs u = st.activeUcs;  // a translation cannot rotate a basis, so storage vs world is moot
+  if (nx)
+    *nx = static_cast<float>(u.zAxis.x);
+  if (ny)
+    *ny = static_cast<float>(u.zAxis.y);
+  if (nz)
+    *nz = static_cast<float>(u.zAxis.z);
+}
+
+/// A circle solved from picks: where its centre is, how big it is, and which way its plane faces.
+///
+/// The return type of the CIRCLE solvers below. It exists so the geometry a set of picks defines can
+/// be computed WITHOUT committing it -- the rubber-band preview needs exactly that, and computing it
+/// a second way in the preview is how a preview comes to show a shape the commit does not produce.
+struct CadCircleSolution {
+  float cx = 0.f;
+  float cy = 0.f;
+  float cz = 0.f;
+  float r = 0.f;
+  float nx = kFlatNormalX;
+  float ny = kFlatNormalY;
+  float nz = kFlatNormalZ;
+};
+
+/// CIRCLE centre-and-radius: the circle a centre pick and a rim pick define on the work plane.
+///
+/// On a flat work plane this is the pre-REQ-312 arithmetic to the bit. On a tilted one the rim pick
+/// is displaced in Z as well, so the radius is the 3D distance to it -- its XY projection is short
+/// by cos(tilt), and on a vertical plane it collapses to nothing at all.
+[[nodiscard]] CadCircleSolution CadSolveCircleFromRimPick(const AppCommandState& st, float cx, float cy, float cz,
+                                                          float px, float py, float pz);
+
+/// CIRCLE 3P: the circle through three picks on the active work plane.
+///
+/// False when the picks are collinear -- in the plane, which on a tilted plane is not the same
+/// question as collinear in the XY projection.
+[[nodiscard]] bool CadSolveCircleThreePoints(const AppCommandState& st, float ax, float ay, float az, float bx,
+                                             float by, float bz, float cx, float cy, float cz,
+                                             CadCircleSolution* out);
+
+/// ARC 3P: the arc through three picks on the active work plane, angles measured in the arc's own
+/// frame (`ucs::FromNormal`), which is where CadArc::startRad and CadArc::sweepRad live.
+///
+/// False when the picks are collinear. \p out is left untouched on failure. The caller decides what
+/// a failure means -- the commit reports it and resets the draft, the preview just draws nothing.
+[[nodiscard]] bool CadSolveArcThreePoints(const AppCommandState& st, float ax, float ay, float az, float bx,
+                                          float by, float bz, float cx, float cy, float cz, CadArc* out);
 
 /// The **camera-azimuth offset** that squares the view with the active UCS's north (REQ-059).
 ///

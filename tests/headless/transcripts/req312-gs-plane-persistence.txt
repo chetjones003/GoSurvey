@@ -1,0 +1,113 @@
+# REQ-312 (GitHub #145, Phase 2 of #120) - a curve's PLANE survives save and reopen, and a flat
+# drawing's file does not change at all.
+#
+# Step 6 of TASK-159. Two acceptance conditions, and they pull in opposite directions:
+#
+#   1. "Arbitrary-plane arcs and circles survive `.gs` save/reopen with every stored coordinate
+#      bit-identical."
+#   2. "A drawing of only XY-plane arcs and circles loads and re-saves byte-identically; no normal
+#      key appears and no existing test changes its expected output."
+#
+# The second is the harder one and it is why the normal is written as an ADDITIVE key that is
+# OMITTED when it is world +Z (D-2026-08-31-f) - the same tolerant-key bargain `circlesZ` and the
+# arc's own `z` already make (ADR-020 (d)). Written unconditionally, every drawing in existence
+# would come back from its next save as a different file.
+#
+# ## Why FILELACKS exists
+#
+# A save/reopen/re-save round trip cannot state condition 2. It passes just as happily with a normal
+# written on every circle in the file, because it only compares the file to ITSELF. The property
+# that actually matters - the key is not there at all - needs a check on the file's CONTENT, which
+# is what `EXPECT FILELACKS` was added to this driver for. `EXPECT FILECONTAINS` is its counterpart,
+# and it is here so that the absence check below cannot pass by naming a key that never exists under
+# any circumstances.
+
+NEW
+
+# --- A flat drawing writes no plane at all ---------------------------------------------------------
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+
+CMD CIRCLE
+CMD 50,50
+CMD 10
+ESC
+
+CMD ARC
+PICK 220 0
+PICK 200 20
+PICK 180 0
+ESC
+
+EXPECT CIRCLES 1
+EXPECT ARCS 1
+SAVEAS %OUT%/req312-flat-a.gs
+
+# The circles are there, and their plane is not - because it is the plane every circle has always
+# had, and saying so would rewrite every file in existence on its next save.
+EXPECT FILECONTAINS %OUT%/req312-flat-a.gs "circles"
+EXPECT FILELACKS %OUT%/req312-flat-a.gs "circlesN"
+EXPECT FILELACKS %OUT%/req312-flat-a.gs "nx"
+
+# Reopen and re-save: byte for byte the same file. This is the stability half; the absence checks
+# above are the half it cannot see.
+OPEN %OUT%/req312-flat-a.gs
+EXPECT CIRCLES 1
+EXPECT ARCS 1
+EXPECT CIRCLEXYZ 0 50 50 0 10 0 0 1
+SAVEAS %OUT%/req312-flat-b.gs
+EXPECT SAMEFILE %OUT%/req312-flat-a.gs %OUT%/req312-flat-b.gs
+
+# --- A tilted drawing writes its planes, and gets them back --------------------------------------
+# UCS X 90 makes the work plane the world plane y = 0 - a wall - with normal (0, -1, 0). A UCS pick
+# (u, v) is world (u, 0, v).
+NEW
+CMD UCS
+CMD X
+CMD 90
+
+CMD CIRCLE
+CLICKUCS 100 0
+CLICKUCS 100 20
+ESC
+
+CMD ARC
+CLICKUCS 210 0
+CLICKUCS 200 10
+CLICKUCS 190 0
+
+# A second circle back on the world plane, so the file has to carry a MIXTURE. A side-car written
+# only for the tilted entries, or indexed off by one, puts the wall's plane on the flat circle.
+CMD UCS
+CMD W
+CMD CIRCLE
+CMD 500,500
+CMD 30
+ESC
+
+EXPECT CIRCLES 2
+EXPECT ARCS 1
+EXPECT CIRCLEXYZ 0 100 0 0 20 0 -1 0
+EXPECT CIRCLEXYZ 1 500 500 0 30 0 0 1
+EXPECT ARCPOINTS 0 210 0 0 190 0 0
+
+SAVEAS %OUT%/req312-tilted-a.gs
+EXPECT FILECONTAINS %OUT%/req312-tilted-a.gs "circlesN"
+EXPECT FILECONTAINS %OUT%/req312-tilted-a.gs "nx"
+
+OPEN %OUT%/req312-tilted-a.gs
+EXPECT CIRCLES 2
+EXPECT ARCS 1
+EXPECT CIRCLEXYZ 0 100 0 0 20 0 -1 0
+EXPECT CIRCLEXYZ 1 500 500 0 30 0 0 1
+EXPECT ARCPOINTS 0 210 0 0 190 0 0
+
+# Bit-identical, not merely within tolerance. `EXPECT CIRCLEXYZ` holds coordinates to REQ-101's
+# 0.01 ft, which a serializer that dropped the last bits of every float would still satisfy; a
+# byte-identical re-save is what says nothing was lost at all.
+SAVEAS %OUT%/req312-tilted-b.gs
+EXPECT SAMEFILE %OUT%/req312-tilted-a.gs %OUT%/req312-tilted-b.gs
+
+CHECK ALL

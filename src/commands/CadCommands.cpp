@@ -93,6 +93,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.userLineAttrs          = cmd.userLineAttrs;
   doc.userCirclesCxCyZR       = cmd.userCirclesCxCyZR;
   doc.userCircleAttrs        = cmd.userCircleAttrs;
+  doc.userCircleNormals      = cmd.userCircleNormals;
   doc.userArcs               = cmd.userArcs;
   doc.userArcAttrs           = cmd.userArcAttrs;
   doc.userEllipses           = cmd.userEllipses;
@@ -176,6 +177,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.userLineAttrs              = doc.userLineAttrs;
   cmd.userCirclesCxCyZR           = doc.userCirclesCxCyZR;
   cmd.userCircleAttrs            = doc.userCircleAttrs;
+  cmd.userCircleNormals          = doc.userCircleNormals;
   cmd.userArcs                   = doc.userArcs;
   cmd.userArcAttrs               = doc.userArcAttrs;
   cmd.userEllipses               = doc.userEllipses;
@@ -1477,6 +1479,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.userLineAttrs        = st.userLineAttrs;
   snap.userCirclesCxCyZR     = st.userCirclesCxCyZR;
   snap.userCircleAttrs      = st.userCircleAttrs;
+  snap.userCircleNormals    = st.userCircleNormals;
   snap.userArcs             = st.userArcs;
   snap.userArcAttrs         = st.userArcAttrs;
   snap.userEllipses         = st.userEllipses;
@@ -1517,6 +1520,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.userLineAttrs        = snap.userLineAttrs;
   st.userCirclesCxCyZR     = snap.userCirclesCxCyZR;
   st.userCircleAttrs      = snap.userCircleAttrs;
+  st.userCircleNormals    = snap.userCircleNormals;
   st.userArcs             = snap.userArcs;
   st.userArcAttrs         = snap.userArcAttrs;
   st.userEllipses         = snap.userEllipses;
@@ -6177,6 +6181,7 @@ void ResetCircleDraft(AppCommandState& st) {
   st.circlePhase = AppCommandState::CirclePhase::WaitCenterOrMode;
   st.circleCx = st.circleCy = 0.f;
   st.c3p1x = st.c3p1y = st.c3p2x = st.c3p2y = 0.f;
+  st.circleCz = st.c3p1z = st.c3p2z = 0.f;
 }
 
 void ResetPolylineDraft(AppCommandState& st) {
@@ -6206,6 +6211,7 @@ void ResetFeatureLineDraft(AppCommandState& st) {
 void ResetArcDraft(AppCommandState& st) {
   st.arcPhase = AppCommandState::ArcPhase::WaitStart;
   st.arcAx = st.arcAy = st.arcBx = st.arcBy = 0.f;
+  st.arcAz = st.arcBz = 0.f;
 }
 
 void ResetEllipseDraft(AppCommandState& st) {
@@ -6622,7 +6628,12 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   log.push_back("DIMANGULAR — vertex, two ray points, then arc position. ESC to exit.");
 }
 
-void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<std::string>& log) {
+// WorkPlaneAnchoredAt and ActiveDrawPlaneNormal moved to CadCommands.hpp as
+// CadWorkPlaneAnchoredAt / CadActiveDrawPlaneNormal (REQ-312). The rubber-band preview has to
+// resolve the same plane the commit will, and it lives in another translation unit.
+
+void CommitCircle(AppCommandState& st, float cx, float cy, float cz, float r, float nx, float ny, float nz,
+                  std::vector<std::string>& log) {
   // The radius is DERIVED from the distance between two points the user supplied, so it can overflow
   // float while both of those points are perfectly representable: a centre at state-plane magnitude
   // and a picked point far from it make dx*dx + dy*dy infinite, and sqrt(inf) is inf. Issue #59,
@@ -6634,6 +6645,14 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
     log.push_back("Circle rejected — the center or radius is not a finite number.");
     return;
   }
+  // The plane gets the same treatment, and for the same reason: a normal that is NaN or zero-length
+  // does not fail loudly, it makes `ucs::FromNormal` refuse and every consumer silently fall back to
+  // a different plane than the one the user drew on (REQ-201).
+  if (!std::isfinite(cz) || !std::isfinite(nx) || !std::isfinite(ny) || !std::isfinite(nz) ||
+      (nx * nx + ny * ny + nz * nz) < 1e-12f) {
+    log.push_back("Circle rejected — the work plane is not a valid plane.");
+    return;
+  }
   if (r < 1e-5f) {
     log.push_back("Circle radius too small.");
     return;
@@ -6642,6 +6661,7 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     // Paper-space CIRCLE (REQ-039): centre + radius are paper inches; commit to the layout's
     // paper store, matching the shape CommitPolylineDraft uses for POLYLINE (issue #84/#86).
+    // A sheet is 2D (ADR-025 (g)), so the plane never reaches it.
     L->paperCircles.push_back(cx);
     L->paperCircles.push_back(cy);
     L->paperCircles.push_back(r);
@@ -6650,14 +6670,39 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
     st.userCirclesCxCyZR.push_back(cx);
     st.userCirclesCxCyZR.push_back(cy);
     // A new circle lands on the active work plane (REQ-058) — the ELEV command moves it.
-    st.userCirclesCxCyZR.push_back(CadCommitElevation(st));
+    st.userCirclesCxCyZR.push_back(cz);
     st.userCirclesCxCyZR.push_back(r);
     st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+    PushCircleNormal(st.userCircleNormals, nx, ny, nz);
   }
   BumpCadGpuCache(st);
   ResetCircleDraft(st);
   log.push_back("Circle complete.");
   log.push_back("CIRCLE — center + radius (or 3P). ESC to exit.");
+}
+
+/// CIRCLE's centre-and-radius commit, given the centre pick and the rim pick (REQ-312).
+///
+/// On a flat work plane this is the pre-REQ-312 arithmetic to the bit. On a tilted one the rim pick
+/// is displaced in Z as well, so the radius is the 3D distance to it — its XY projection is short by
+/// cos(tilt), and on a vertical plane it collapses to nothing at all.
+static void CommitCircleFromRimPick(AppCommandState& st, float cx, float cy, float cz, float px, float py,
+                                    float pz, std::vector<std::string>& log) {
+  const CadCircleSolution s = CadSolveCircleFromRimPick(st, cx, cy, cz, px, py, pz);
+  CommitCircle(st, s.cx, s.cy, s.cz, s.r, s.nx, s.ny, s.nz, log);
+}
+
+/// CIRCLE 3P: the circle through three picks on the active work plane (REQ-312).
+///
+/// Returns false when the picks are collinear — in the plane, which on a tilted plane is not the
+/// same question as collinear in the XY projection.
+static bool CommitCircleThreePoints(AppCommandState& st, float ax, float ay, float az, float bx, float by,
+                                    float bz, float cx, float cy, float cz, std::vector<std::string>& log) {
+  CadCircleSolution s;
+  if (!CadSolveCircleThreePoints(st, ax, ay, az, bx, by, bz, cx, cy, cz, &s))
+    return false;
+  CommitCircle(st, s.cx, s.cy, s.cz, s.r, s.nx, s.ny, s.nz, log);
+  return true;
 }
 
 bool ParseRadiusOrDiameter(const std::string& raw, float* radiusOut, std::vector<std::string>& log) {
@@ -7039,6 +7084,7 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
       return false;
     st.circleCx = px;
     st.circleCy = py;
+    st.circleCz = CadCommitElevation(st);
     st.circlePhase = AppCommandState::CirclePhase::WaitRadius;
     log.push_back("Center set — radius (click), type value, or D + diameter.");
     return true;
@@ -7047,7 +7093,13 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
     float rad = 0.f;
     if (!ParseRadiusOrDiameter(line, &rad, log))
       return false;
-    CommitCircle(st, st.circleCx, st.circleCy, rad, log);
+    // A typed radius is already measured in the work plane, so the plane itself is all that is new.
+    float nx = 0.f, ny = 0.f, nz = 1.f;
+    const bool flat = CadWorkPlaneIsWorldXy(st);
+    if (!flat)
+      CadActiveDrawPlaneNormal(st, &nx, &ny, &nz);
+    CommitCircle(st, st.circleCx, st.circleCy, flat ? CadCommitElevation(st) : st.circleCz, rad, nx, ny, nz,
+                 log);
     return true;
   }
   case AppCommandState::CirclePhase::ThreeP_WaitP1: {
@@ -7057,6 +7109,7 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
       return false;
     st.c3p1x = px;
     st.c3p1y = py;
+    st.c3p1z = CadCommitElevation(st);
     st.circlePhase = AppCommandState::CirclePhase::ThreeP_WaitP2;
     log.push_back("Second point:");
     return true;
@@ -7068,6 +7121,7 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
       return false;
     st.c3p2x = px;
     st.c3p2y = py;
+    st.c3p2z = CadCommitElevation(st);
     st.circlePhase = AppCommandState::CirclePhase::ThreeP_WaitP3;
     log.push_back("Third point:");
     return true;
@@ -7077,14 +7131,9 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
     float py = 0.f;
     if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
-    float ox = 0.f;
-    float oy = 0.f;
-    float r = 0.f;
-    if (!ComputeCircumcircle(st.c3p1x, st.c3p1y, st.c3p2x, st.c3p2y, px, py, &ox, &oy, &r)) {
+    if (!CommitCircleThreePoints(st, st.c3p1x, st.c3p1y, st.c3p1z, st.c3p2x, st.c3p2y, st.c3p2z, px, py,
+                                 CadCommitElevation(st), log))
       log.push_back("Points are collinear — no circle.");
-      return true;
-    }
-    CommitCircle(st, ox, oy, r, log);
     return true;
   }
   }
@@ -7097,11 +7146,21 @@ bool SelectedEntityEqual(const SelectedEntity& a, const SelectedEntity& b) {
 
 void ArcRoughBounds(const CadArc& a, float* outMnX, float* outMxX, float* outMnY, float* outMxY, bool* any) {
   const int n = std::max(8, static_cast<int>(std::fabs(static_cast<double>(a.sweepRad)) / (3.14159265 / 16.0)) + 1);
+  // A tilted arc (REQ-312) does not pass through the points its XY parametrisation names, so bounds
+  // taken from those are not bounds at all -- they can be SMALLER than the arc, which crops it out
+  // of a window selection and out of ZOOM EXTENTS.
+  const bool flat = IsFlatNormal(a.nx, a.ny, a.nz);
+  const ucs::Ucs plane = flat ? ucs::Ucs{} : CurvePlane(a);
   for (int i = 0; i <= n; ++i) {
     const float u = static_cast<float>(i) / static_cast<float>(n);
     const float t = a.startRad + a.sweepRad * u;
-    const float x = a.cx + a.r * std::cos(t);
-    const float y = a.cy + a.r * std::sin(t);
+    float x = a.cx + a.r * std::cos(t);
+    float y = a.cy + a.r * std::sin(t);
+    if (!flat) {
+      const ray3d::Vec3 p = CurvePointAt(plane, static_cast<double>(a.r), static_cast<double>(t));
+      x = static_cast<float>(p.x);
+      y = static_cast<float>(p.y);
+    }
     if (!*any) {
       *outMnX = *outMxX = x;
       *outMnY = *outMxY = y;
@@ -7847,6 +7906,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
   std::vector<EntityAttributes> newCircleAttrs;
+  std::vector<float> newCircleNormals;   // REQ-312, one 3-float normal per new circle
   std::vector<CadAnnotation> newAnn;
   std::vector<EntityAttributes> newAnnAttrs;
   std::vector<CadTable> newTables;
@@ -7895,6 +7955,9 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
+        float nnx = 0.f, nny = 0.f, nnz = 1.f;
+        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        PushCircleNormal(newCircleNormals, nnx, nny, nnz);
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -7998,6 +8061,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
   st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(),
+                              newCircleNormals.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
   st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
@@ -8051,6 +8116,9 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
     st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 2]);
     st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 3]);
     st.userCircleAttrs.push_back(cb.circleAttrs[i / 4]);
+    float pnx = 0.f, pny = 0.f, pnz = 1.f;
+    CircleNormalAt(cb.circleNormals, i / 4, &pnx, &pny, &pnz);
+    PushCircleNormal(st.userCircleNormals, pnx, pny, pnz);
     st.selection.push_back({ST::Circle, static_cast<int>(st.userCircleAttrs.size()) - 1});
   }
   for (size_t i = 0; i < cb.arcs.size(); ++i) {
@@ -8291,6 +8359,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
   std::vector<EntityAttributes> newCircleAttrs;
+  std::vector<float> newCircleNormals;   // REQ-312, one 3-float normal per new circle
   std::vector<CadAnnotation> newAnn;
   std::vector<EntityAttributes> newAnnAttrs;
   std::vector<CadTable> newTables;
@@ -8340,6 +8409,10 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
+        float nnx = 0.f, nny = 0.f, nnz = 1.f;
+        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        RotateNormalAboutZ(rad, &nnx, &nny);   // REQ-312: the plane turns with the circle
+        PushCircleNormal(newCircleNormals, nnx, nny, nnz);
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -8410,8 +8483,17 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.userArcs.size()) {
         CadArc a = st.userArcs[k];
+        // The start point, through the arc's own plane, before the arc moves (REQ-312).
+        ray3d::Vec3 startPt = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
+        float spx = static_cast<float>(startPt.x);
+        float spy = static_cast<float>(startPt.y);
+        RotateAroundBase(bx, by, rad, &spx, &spy);  // a rotation about Z leaves the point's Z alone
+        startPt.x = static_cast<double>(spx);
+        startPt.y = static_cast<double>(spy);
         RotateAroundBase(bx, by, rad, &a.cx, &a.cy);
         a.startRad += rad;
+        RotateNormalAboutZ(rad, &a.nx, &a.ny);   // REQ-312: the arc plane turns with the arc
+        CadReanchorArcStart(&a, startPt);  // REQ-312: a no-op on a flat arc, where += rad is exact
         newArcs.push_back(a);
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
@@ -8470,6 +8552,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
   st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(),
+                              newCircleNormals.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
   st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
@@ -8617,6 +8701,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
   std::vector<EntityAttributes> newCircleAttrs;
+  std::vector<float> newCircleNormals;   // REQ-312, one 3-float normal per new circle
   std::vector<CadAnnotation> newAnn;
   std::vector<EntityAttributes> newAnnAttrs;
   std::vector<CadTable> newTables;
@@ -8666,6 +8751,10 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
         newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
+        float nnx = 0.f, nny = 0.f, nnz = 1.f;
+        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        ReflectNormalAcrossLine(x0, y0, x1, y1, &nnx, &nny);   // REQ-312: the plane mirrors too
+        PushCircleNormal(newCircleNormals, nnx, nny, nnz);
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -8760,9 +8849,20 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         // say which way the arc now sweeps. Reflect the OLD END angle into the NEW START angle and
         // keep sweepRad's magnitude — this is the CCW-from-start arc that covers the identical
         // reflected point set (verified by hand for axis-aligned and symmetric cases; see TASK-094).
+        // Where the far end lands, taken through the arc's OWN plane before anything moves. A
+        // mirror line lies in plan, so it reflects X and Y and leaves Z alone.
+        ray3d::Vec3 farEnd = CurveWorldPointOnArc(a, static_cast<double>(a.startRad) +
+                                                         static_cast<double>(a.sweepRad));
+        float fex = static_cast<float>(farEnd.x);
+        float fey = static_cast<float>(farEnd.y);
+        ReflectPtAcrossLine(x0, y0, x1, y1, &fex, &fey);
+        farEnd.x = static_cast<double>(fex);
+        farEnd.y = static_cast<double>(fey);
         const float newStart = ReflectAngleAcrossLine(x0, y0, x1, y1, a.startRad + a.sweepRad);
         ReflectPtAcrossLine(x0, y0, x1, y1, &a.cx, &a.cy);
         a.startRad = newStart;
+        ReflectNormalAcrossLine(x0, y0, x1, y1, &a.nx, &a.ny);   // REQ-312: so does the plane
+        CadReanchorArcStart(&a, farEnd);  // REQ-312: a no-op on a flat arc, so newStart stands there
         newArcs.push_back(a);
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
@@ -8821,6 +8921,8 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
   st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
   st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(),
+                              newCircleNormals.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
   st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
@@ -8872,6 +8974,13 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     size_t k = static_cast<size_t>(e.index) * 4;
     if (k + 3 < st.userCirclesCxCyZR.size()) {
       RotateAroundBase(bx, by, rad, &st.userCirclesCxCyZR[k], &st.userCirclesCxCyZR[k + 1]);
+      // REQ-312: the plane turns with the circle. This function rotates the selection IN PLACE and
+      // was missed when the normal was threaded through the copying paths -- with every normal +Z
+      // there was nothing here to see, and a tilted circle rotated by ROTATESEL kept the plane it
+      // used to be in while its centre moved to a place that plane no longer explains.
+      const size_t n = static_cast<size_t>(e.index) * 3;
+      if (n + 2 < st.userCircleNormals.size())
+        RotateNormalAboutZ(rad, &st.userCircleNormals[n], &st.userCircleNormals[n + 1]);
     }
   }
   for (const auto& e : st.selection) {
@@ -8881,8 +8990,16 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     if (k >= st.userArcs.size())
       continue;
     CadArc& a = st.userArcs[k];
+    ray3d::Vec3 startPt = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
+    float spx = static_cast<float>(startPt.x);
+    float spy = static_cast<float>(startPt.y);
+    RotateAroundBase(bx, by, rad, &spx, &spy);
+    startPt.x = static_cast<double>(spx);
+    startPt.y = static_cast<double>(spy);
     RotateAroundBase(bx, by, rad, &a.cx, &a.cy);
     a.startRad += rad;
+    RotateNormalAboutZ(rad, &a.nx, &a.ny);  // REQ-312, same omission as the circles above
+    CadReanchorArcStart(&a, startPt);
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Ellipse)
@@ -10137,34 +10254,33 @@ static void ComputeArcSweepRad(double ox, double oy, double ax, double ay, doubl
   *sweepRad = sweep;
 }
 
-static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float bx, float by, float cx, float cy,
-                                 std::vector<std::string>& log) {
-  float ox = 0.f, oy = 0.f, r = 0.f;
-  if (!ComputeCircumcircle(ax, ay, bx, by, cx, cy, &ox, &oy, &r) || r < 1e-8f) {
-    log.push_back("ARC — points are collinear.");
+static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float az, float bx, float by, float bz,
+                                 float cx, float cy, float cz, std::vector<std::string>& log) {
+  CadArc arc{};
+  if (!CadSolveArcThreePoints(st, ax, ay, az, bx, by, bz, cx, cy, cz, &arc)) {
+    // One message for both refusals the solver can make: three picks that do not define an arc,
+    // and a work plane that is not a plane. Either way the user sees the same outcome - no arc was
+    // created - and REQ-201 asks for a refusal that is reported, which this is.
+    log.push_back("ARC - points are collinear, or the work plane is not valid.");
     st.active = AppCommandState::Kind::None;
     ResetArcDraft(st);
     return;
   }
-  double sr = 0.;
-  double sw = 0.;
-  ComputeArcSweepRad(ox, oy, ax, ay, bx, by, cx, cy, &sr, &sw);
-  CadArc arc{};
-  arc.cx = ox;
-  arc.cy = oy;
-  arc.r = r;
-  arc.startRad = static_cast<float>(sr);
-  arc.sweepRad = static_cast<float>(sw);
+
   PushUndoSnapshot(st, "Arc");
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     // Paper-space ARC (REQ-039): the three points are paper inches; commit to the layout's paper
     // store. arc.z stays 0 (ADR-025 (g): always 0 in paper space), matching the shape
-    // CommitPolylineDraft uses for POLYLINE (issue #84/#86).
+    // CommitPolylineDraft uses for POLYLINE (issue #84/#86). A sheet has no work plane, so the
+    // normal stays world +Z there too.
+    arc.z = 0.f;
+    arc.nx = 0.f;
+    arc.ny = 0.f;
+    arc.nz = 1.f;
     L->paperArcs.push_back(arc);
     L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    arc.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
-    st.userArcs.push_back(arc);
+    st.userArcs.push_back(arc);  // arc.z already carries the work plane (set by the solver)
     st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
@@ -10655,6 +10771,9 @@ static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::
   st.userCirclesCxCyZR.push_back(cz);  // the offset copy stays on the source circle's plane
   st.userCirclesCxCyZR.push_back(nr);
   PushOffsetCopyAttrs(st, st.userCircleAttrs, ci);
+  float onx = 0.f, ony = 0.f, onz = 1.f;
+  CircleNormalAt(st.userCircleNormals, static_cast<size_t>(ci), &onx, &ony, &onz);
+  PushCircleNormal(st.userCircleNormals, onx, ony, onz);   // concentric: same plane (REQ-312)
   BumpCadGpuCache(st);
   return true;
 }
@@ -11220,17 +11339,20 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     case AP::WaitStart:
       st.arcAx = wx;
       st.arcAy = wy;
+      st.arcAz = CadCommitElevation(st);
       st.arcPhase = AP::WaitMid;
       log.push_back("ARC — pick middle point on arc:");
       break;
     case AP::WaitMid:
       st.arcBx = wx;
       st.arcBy = wy;
+      st.arcBz = CadCommitElevation(st);
       st.arcPhase = AP::WaitEnd;
       log.push_back("ARC — pick end point:");
       break;
     case AP::WaitEnd:
-      CommitArcThreePoints(st, st.arcAx, st.arcAy, st.arcBx, st.arcBy, wx, wy, log);
+      CommitArcThreePoints(st, st.arcAx, st.arcAy, st.arcAz, st.arcBx, st.arcBy, st.arcBz, wx, wy,
+                           CadCommitElevation(st), log);
       break;
     }
     return;
@@ -11537,36 +11659,33 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     case AppCommandState::CirclePhase::WaitCenterOrMode:
       st.circleCx = wx;
       st.circleCy = wy;
+      st.circleCz = CadCommitElevation(st);
       st.circlePhase = AppCommandState::CirclePhase::WaitRadius;
       log.push_back("Center set — specify radius (click near edge), type radius, or D + diameter.");
       break;
     case AppCommandState::CirclePhase::WaitRadius: {
-      const float dx = wx - st.circleCx;
-      const float dy = wy - st.circleCy;
-      const float r = std::sqrt(dx * dx + dy * dy);
-      CommitCircle(st, st.circleCx, st.circleCy, r, log);
+      CommitCircleFromRimPick(st, st.circleCx, st.circleCy, st.circleCz, wx, wy, CadCommitElevation(st),
+                              log);
       break;
     }
     case AppCommandState::CirclePhase::ThreeP_WaitP1:
       st.c3p1x = wx;
       st.c3p1y = wy;
+      st.c3p1z = CadCommitElevation(st);
       st.circlePhase = AppCommandState::CirclePhase::ThreeP_WaitP2;
       log.push_back("Second point of circle:");
       break;
     case AppCommandState::CirclePhase::ThreeP_WaitP2:
       st.c3p2x = wx;
       st.c3p2y = wy;
+      st.c3p2z = CadCommitElevation(st);
       st.circlePhase = AppCommandState::CirclePhase::ThreeP_WaitP3;
       log.push_back("Third point of circle:");
       break;
     case AppCommandState::CirclePhase::ThreeP_WaitP3: {
-      float ox = 0.f;
-      float oy = 0.f;
-      float r = 0.f;
-      if (!ComputeCircumcircle(st.c3p1x, st.c3p1y, st.c3p2x, st.c3p2y, wx, wy, &ox, &oy, &r))
+      if (!CommitCircleThreePoints(st, st.c3p1x, st.c3p1y, st.c3p1z, st.c3p2x, st.c3p2y, st.c3p2z, wx, wy,
+                                   CadCommitElevation(st), log))
         log.push_back("Points are collinear — pick a non-collinear third point.");
-      else
-        CommitCircle(st, ox, oy, r, log);
       break;
     }
     }
@@ -11907,6 +12026,129 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 
 } // namespace
 
+// ---------------------------------------------------------------------------------------------
+// Curve solvers (REQ-312).
+//
+// The geometry a set of picks defines, separated from the act of committing it. They live at file
+// scope rather than in the anonymous namespace above because the rubber-band preview calls them
+// from another translation unit: it has to draw the curve the commit is going to store, and the
+// only way to guarantee that is for both to ask the same function.
+// ---------------------------------------------------------------------------------------------
+
+CadCircleSolution CadSolveCircleFromRimPick(const AppCommandState& st, float cx, float cy, float cz, float px,
+                                            float py, float pz) {
+  CadCircleSolution s;
+  s.cx = cx;
+  s.cy = cy;
+  const float dx = px - cx;
+  const float dy = py - cy;
+  if (CadWorkPlaneIsWorldXy(st)) {
+    s.cz = CadCommitElevation(st);
+    s.r = std::sqrt(dx * dx + dy * dy);
+    return s;
+  }
+  CadActiveDrawPlaneNormal(st, &s.nx, &s.ny, &s.nz);
+  const float dz = pz - cz;
+  s.cz = cz;
+  s.r = std::sqrt(dx * dx + dy * dy + dz * dz);
+  return s;
+}
+
+bool CadSolveCircleThreePoints(const AppCommandState& st, float ax, float ay, float az, float bx, float by,
+                               float bz, float cx, float cy, float cz, CadCircleSolution* out) {
+  if (!out)
+    return false;
+  CadCircleSolution s;
+  float ox = 0.f, oy = 0.f, r = 0.f;
+  if (CadWorkPlaneIsWorldXy(st)) {
+    if (!ComputeCircumcircle(ax, ay, bx, by, cx, cy, &ox, &oy, &r))
+      return false;
+    s.cx = ox;
+    s.cy = oy;
+    s.cz = CadCommitElevation(st);
+    s.r = r;
+    *out = s;
+    return true;
+  }
+  const ucs::Ucs plane = CadWorkPlaneAnchoredAt(st, ax, ay, az);
+  const ucs::Point2D pb = ucs::WorldToPlane(plane, {bx, by, static_cast<double>(bz)});
+  const ucs::Point2D pc = ucs::WorldToPlane(plane, {cx, cy, static_cast<double>(cz)});
+  if (!ComputeCircumcircle(0.f, 0.f, static_cast<float>(pb.x), static_cast<float>(pb.y),
+                           static_cast<float>(pc.x), static_cast<float>(pc.y), &ox, &oy, &r))
+    return false;
+  const ray3d::Vec3 centre = ucs::PlaneToWorld(plane, {ox, oy});
+  s.cx = static_cast<float>(centre.x);
+  s.cy = static_cast<float>(centre.y);
+  s.cz = static_cast<float>(centre.z);
+  s.r = r;
+  CadActiveDrawPlaneNormal(st, &s.nx, &s.ny, &s.nz);
+  *out = s;
+  return true;
+}
+
+bool CadSolveArcThreePoints(const AppCommandState& st, float ax, float ay, float az, float bx, float by, float bz,
+                            float cx, float cy, float cz, CadArc* out) {
+  if (!out)
+    return false;
+  const bool flat = CadWorkPlaneIsWorldXy(st);
+  float ox = 0.f, oy = 0.f, r = 0.f;
+  CadArc arc{};
+
+  if (flat) {
+    if (!ComputeCircumcircle(ax, ay, bx, by, cx, cy, &ox, &oy, &r) || r < 1e-8f)
+      return false;
+    double sr = 0.;
+    double sw = 0.;
+    ComputeArcSweepRad(ox, oy, ax, ay, bx, by, cx, cy, &sr, &sw);
+    arc.cx = ox;
+    arc.cy = oy;
+    arc.r = r;
+    arc.startRad = static_cast<float>(sr);
+    arc.sweepRad = static_cast<float>(sw);
+    // The work plane's elevation (REQ-058), set here rather than by the caller so the solver hands
+    // back a COMPLETE arc -- the rubber preview draws what it returns and has no second chance to
+    // remember which field the commit was going to fill in afterwards. Paper space overrides it to
+    // zero at the commit, where that boundary belongs (ADR-025 (g)).
+    arc.z = CadCommitElevation(st);
+  } else {
+    // Solve in the work plane's own 2D coordinates, anchored on the first pick so the numbers going
+    // into the float circumcircle stay small (REQ-101). The three picks lie in that plane, so the
+    // planar maths below is exactly the same maths — it is only the coordinates that change.
+    const ucs::Ucs plane = CadWorkPlaneAnchoredAt(st, ax, ay, az);
+    const ucs::Point2D pb = ucs::WorldToPlane(plane, {bx, by, static_cast<double>(bz)});
+    const ucs::Point2D pc = ucs::WorldToPlane(plane, {cx, cy, static_cast<double>(cz)});
+    if (!ComputeCircumcircle(0.f, 0.f, static_cast<float>(pb.x), static_cast<float>(pb.y),
+                             static_cast<float>(pc.x), static_cast<float>(pc.y), &ox, &oy, &r) ||
+        r < 1e-8f)
+      return false;
+    const ray3d::Vec3 centre = ucs::PlaneToWorld(plane, {ox, oy});
+
+    // startRad and sweepRad are stored in the arc's OWN frame — `ucs::FromNormal(centre, normal)`,
+    // the Arbitrary Axis Algorithm (REQ-312) — not in the UCS frame, which is generally rotated
+    // about the normal relative to it. Measuring the angles in the storage frame here is what stops
+    // the renderer, the DXF writer and this commit from each picking a different zero direction.
+    ucs::Ucs frame;
+    if (!ucs::FromNormal(centre, plane.zAxis, &frame))
+      return false;
+    const ucs::Point2D fa = ucs::WorldToPlane(frame, {ax, ay, static_cast<double>(az)});
+    const ucs::Point2D fb = ucs::WorldToPlane(frame, {bx, by, static_cast<double>(bz)});
+    const ucs::Point2D fc = ucs::WorldToPlane(frame, {cx, cy, static_cast<double>(cz)});
+    double sr = 0.;
+    double sw = 0.;
+    ComputeArcSweepRad(0., 0., fa.x, fa.y, fb.x, fb.y, fc.x, fc.y, &sr, &sw);
+    arc.cx = static_cast<float>(centre.x);
+    arc.cy = static_cast<float>(centre.y);
+    arc.r = r;
+    arc.startRad = static_cast<float>(sr);
+    arc.sweepRad = static_cast<float>(sw);
+    arc.z = static_cast<float>(centre.z);
+    CadActiveDrawPlaneNormal(st, &arc.nx, &arc.ny, &arc.nz);
+  }
+
+  *out = arc;
+  return true;
+}
+
 // Public surface rollover entry point (REQ-089): the readout for the plan position under the cursor,
 // one row per visible surface covering it. Calls the file-local SurfacesCovering — the same walk
 // SURFELEV uses — which is visible here via the anonymous namespace's using-directive, exactly as
@@ -12039,6 +12281,7 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
       cb.circlesCxCyZR.push_back(0.f);
       cb.circlesCxCyZR.push_back(L.paperCircles[k + 2]);  // radius
       cb.circleAttrs.push_back(attrAt(L.paperCircleAttrs, r.index));
+      PushCircleNormal(cb.circleNormals);   // a sheet is 2D (ADR-025 (g)): the plane is world XY
       expandBbox(L.paperCircles[k], L.paperCircles[k + 1]);
       break;
     }
@@ -12162,6 +12405,9 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       cb.circlesCxCyZR.push_back(st.userCirclesCxCyZR[k + 3]);
       cb.circleAttrs.push_back(static_cast<size_t>(e.index) < st.userCircleAttrs.size()
                                    ? st.userCircleAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
+      float ccx = 0.f, ccy = 0.f, ccz = 1.f;
+      CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &ccx, &ccy, &ccz);
+      PushCircleNormal(cb.circleNormals, ccx, ccy, ccz);
       expandBbox(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1]);
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
@@ -13628,6 +13874,8 @@ static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint&
     return;
   const float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
   const float z = st.userCirclesCxCyZR[k + 2], r = st.userCirclesCxCyZR[k + 3];
+  float bnx = 0.f, bny = 0.f, bnz = 1.f;   // read before the erase below drops the side-car entry
+  CircleNormalAt(st.userCircleNormals, static_cast<size_t>(index), &bnx, &bny, &bnz);
   float startRad = 0.f, sweepRad = 0.f;
   CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
   const EntityAttributes srcAttrs =
@@ -13639,11 +13887,15 @@ static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint&
                              st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
   if (static_cast<size_t>(index) < st.userCircleAttrs.size())
     st.userCircleAttrs.erase(st.userCircleAttrs.begin() + index);
+  EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(index));
   CadArc a{};
   a.cx = cx;
   a.cy = cy;
   a.r = r;
   a.z = z;
+  a.nx = bnx;   // the arc inherits the circle plane it was cut out of (REQ-312)
+  a.ny = bny;
+  a.nz = bnz;
   a.startRad = startRad;
   a.sweepRad = sweepRad;
   st.userArcs.push_back(a);
@@ -16916,9 +17168,17 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     if (dr <= 1e-12)
       continue;
     const int n = std::max(8, static_cast<int>(std::fabs(static_cast<double>(a.sweepRad)) / (3.14159265 / 16.0)) + 1);
+    // Sampled in the arc's own plane (REQ-312); see ArcRoughBounds for why the XY walk understates
+    // a tilted arc rather than merely approximating it.
+    const bool arcFlat = IsFlatNormal(a.nx, a.ny, a.nz);
+    const ucs::Ucs arcPlane = arcFlat ? ucs::Ucs{} : CurvePlane(a);
     for (int i = 0; i <= n; ++i) {
-      const double u = static_cast<double>(i) / static_cast<double>(n);
-      const double t = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
+      const double t = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i, n);
+      if (!arcFlat) {
+        const ray3d::Vec3 p = CurvePointAt(arcPlane, dr, t);
+        consider(p.x, p.y);
+        continue;
+      }
       double wx = 0.;
       double wy = 0.;
       CirclePointWorld(dcx, dcy, dr, t, &wx, &wy);
@@ -18993,6 +19253,9 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  // The normal side-car is repaired the same way, but growing it is not a NEW attribute: a
+  // missing normal is the flat default, not a fresh entity, so it does not set grew.
+  EnsureCircleNormals(st.userCircleNormals, nc);
   while (st.userArcAttrs.size() < st.userArcs.size()) {
     st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -19728,6 +19991,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.userLineAttrs.clear();
   st.userCirclesCxCyZR.clear();
   st.userCircleAttrs.clear();
+  st.userCircleNormals.clear();
   st.userArcs.clear();
   st.userArcAttrs.clear();
   st.userEllipses.clear();
@@ -20095,6 +20359,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
                                st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
     if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(idx));
   }
 
   std::vector<int> av(annIx.begin(), annIx.end());
@@ -20282,6 +20547,7 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
                                st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
     if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    EraseCircleNormal(st.userCircleNormals, static_cast<size_t>(idx));
   }
 
   std::vector<int> av(annIx.begin(), annIx.end());
@@ -22550,13 +22816,15 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // =========================================================================
   {
     const size_t nC = st.userCirclesCxCyZR.size() / 4;
-    struct Circ { float cx, cy, z, r; EntityAttributes attr; };
+    struct Circ { float cx, cy, z, r, nx, ny, nz; EntityAttributes attr; };
     std::vector<Circ> cs;
     cs.reserve(nC);
     for (size_t i = 0; i < nC; ++i) {
       const size_t k = i * 4;
+      float cnx = 0.f, cny = 0.f, cnz = 1.f;
+      CircleNormalAt(st.userCircleNormals, i, &cnx, &cny, &cnz);
       cs.push_back({ st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 2],
-                     st.userCirclesCxCyZR[k + 3],
+                     st.userCirclesCxCyZR[k + 3], cnx, cny, cnz,
                      i < st.userCircleAttrs.size() ? st.userCircleAttrs[i] : MakeNewEntityAttrs(st) });
     }
     // Sort by radius then center; allows early break on radius mismatch
@@ -22575,11 +22843,15 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
         // elevations are distinct objects in 3D, not duplicates (REQ-057).
         const float dx = cs[j].cx - cs[i].cx, dy = cs[j].cy - cs[i].cy, dz = cs[j].z - cs[i].z;
         const float dr = cs[j].r  - cs[i].r;
+        // Two circles sharing a centre and a radius but lying in different planes are distinct
+        // objects, not duplicates (REQ-312) - the same reasoning Z already gets just above.
+        if (cs[j].nx != cs[i].nx || cs[j].ny != cs[i].ny || cs[j].nz != cs[i].nz) continue;
         if (dx * dx + dy * dy + dz * dz < tolSq && dr * dr < tolSq) { dead[j] = true; ++nRemoved; }
       }
     }
     st.userCirclesCxCyZR.clear();
     st.userCircleAttrs.clear();
+    st.userCircleNormals.clear();
     for (size_t i = 0; i < cs.size(); ++i) {
       if (!dead[i]) {
         st.userCirclesCxCyZR.push_back(cs[i].cx);
@@ -22587,6 +22859,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
         st.userCirclesCxCyZR.push_back(cs[i].z);
         st.userCirclesCxCyZR.push_back(cs[i].r);
         st.userCircleAttrs.push_back(cs[i].attr);
+        PushCircleNormal(st.userCircleNormals, cs[i].nx, cs[i].ny, cs[i].nz);
       }
     }
   }

@@ -54,6 +54,7 @@ AppCommandState GoodDrawing() {
   st.userCirclesCxCyZR = {50.f, 25.f, 0.f, 10.f};
   st.userCircleAttrs.resize(1);
   st.userCircleAttrs[0].id = 2;
+  st.userCircleNormals = {0.f, 0.f, 1.f};   // world +Z, the flat plane (REQ-312)
 
   // One polyline, CSR: 3 vertices, offsets {0, 3}.
   st.userPolylineVerts = {0.f, 100.f, 0.f, 50.f, 150.f, 0.f, 100.f, 100.f, 0.f};
@@ -108,6 +109,28 @@ TEST_CASE("flat-strides fires on a partial polyline vertex", "[docinvariants]") 
   AppCommandState st = GoodDrawing();
   st.userPolylineVerts.push_back(1.f);  // 10 floats against stride 3
   REQUIRE(Contains(Fired(st), docinv::kFlatStrides));
+}
+
+TEST_CASE("flat-strides fires on a partial circle normal", "[docinvariants][req312]") {
+  AppCommandState st = GoodDrawing();
+  st.userCircleNormals.push_back(1.f);  // 4 floats against stride 3
+  REQUIRE(Contains(Fired(st), docinv::kFlatStrides));
+}
+
+TEST_CASE("attr-counts fires when a circle has no plane normal", "[docinvariants][req312]") {
+  // The desync the REQ-312 side-car exists to make loud: an appended circle whose normal was not
+  // appended with it. Unreported, that circle would silently take its NEIGHBOUR's plane.
+  AppCommandState st = GoodDrawing();
+  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), {0.f, 0.f, 0.f, 5.f});
+  st.userCircleAttrs.resize(2);
+  REQUIRE(Contains(Fired(st), docinv::kAttrCounts));
+}
+
+TEST_CASE("attr-counts fires when a normal outlives its circle", "[docinvariants][req312]") {
+  // The other direction: an erase that dropped the quad but not the side-car entry.
+  AppCommandState st = GoodDrawing();
+  PushCircleNormal(st.userCircleNormals);
+  REQUIRE(Contains(Fired(st), docinv::kAttrCounts));
 }
 
 // ---------------------------------------------------------------------------

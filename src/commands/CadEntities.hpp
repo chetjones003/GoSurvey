@@ -1,9 +1,13 @@
 #pragma once
 
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "util/ucs.hpp"
 
 /// How the model viewport draws (REQ-064 / ADR-026 (e)).
 ///
@@ -364,11 +368,277 @@ struct CadArc {
   float r = 0.f;
   float startRad = 0.f;
   float sweepRad = 0.f;
-  /// Elevation of the arc's plane (REQ-057 / ADR-025). The arc stays parallel to XY — a
-  /// tilted arc would need a plane normal, which no accepted requirement asks for. Absolute
-  /// (ADR-025 D2). Always 0 in paper space (ADR-025 (g)).
+  /// Elevation of the arc plane (REQ-057 / ADR-025). Absolute (ADR-025 D2), always 0 in paper
+  /// space (ADR-025 (g)). On a tilted arc this is the CENTRE point of the plane, not an
+  /// elevation every point on the arc shares.
   float z = 0.f;
+  /// Plane normal (REQ-312). World +Z is the flat case, which is every arc that existed before
+  /// this field, and `ucs::FromNormal` maps a +Z normal onto the world X and Y axes exactly -- so
+  /// `startRad` and `sweepRad` keep the meaning they have always had and a flat arc stays
+  /// bit-identical through save and reload. A tilted arc measures those same two angles in the
+  /// plane `ucs::FromNormal({cx, cy, z}, {nx, ny, nz})` gives -- the Arbitrary Axis Algorithm, so a
+  /// DXF consumer that rebuilds the frame from group 210 lands on the same points. Paper space is
+  /// 2D (ADR-025 (g)) and stays +Z there.
+  float nx = 0.f;
+  float ny = 0.f;
+  float nz = 1.f;
 };
+
+// ---------------------------------------------------------------------------------------------
+// Curve plane normals (REQ-312).
+//
+// An arc carries its normal in the struct above. A circle cannot: the circle store is a flat
+// 4-float quad read directly at roughly 300 call sites, so the normal rides in a side-car
+// std::vector<float> of 3 floats per circle, parallel to the quads the way the attribute array
+// already is (D-2026-08-31-f). Roughly forty call sites append or erase a circle and every one of
+// them has to keep the pairing, so the helpers below exist to make that one line rather than three.
+// ---------------------------------------------------------------------------------------------
+
+/// World +Z: the plane every arc and circle lay in before REQ-312, and the default for a new one.
+inline constexpr float kFlatNormalX = 0.f;
+inline constexpr float kFlatNormalY = 0.f;
+inline constexpr float kFlatNormalZ = 1.f;
+
+/// True when a normal is world +Z exactly.
+///
+/// Exact comparison, deliberately. This is the test that decides whether `.gs` writes a normal key
+/// at all, and a legacy drawing has to re-save byte-identically -- a tolerance here would let a
+/// normal that is 1e-9 off +Z re-save as flat, which is a silent edit to the user's file.
+[[nodiscard]] inline bool IsFlatNormal(float nx, float ny, float nz) {
+  return nx == kFlatNormalX && ny == kFlatNormalY && nz == kFlatNormalZ;
+}
+
+/// Append one circle's normal. Call wherever a quad is appended to the circle store.
+inline void PushCircleNormal(std::vector<float>& normals, float nx = kFlatNormalX,
+                             float ny = kFlatNormalY, float nz = kFlatNormalZ) {
+  normals.push_back(nx);
+  normals.push_back(ny);
+  normals.push_back(nz);
+}
+
+/// Erase circle \p index's normal. Call wherever a quad is erased from the circle store.
+inline void EraseCircleNormal(std::vector<float>& normals, size_t index) {
+  if (index * 3 + 3 > normals.size())
+    return;
+  const auto begin = normals.begin() + static_cast<std::ptrdiff_t>(index * 3);
+  normals.erase(begin, begin + 3);
+}
+
+/// Circle \p index's normal components, or world +Z when the side-car is short.
+///
+/// A short side-car is a defect, and `docinvariants` reports it loudly (REQ-204). Returning the
+/// flat default here means a READ never faults on one, so the invariant check stays the thing that
+/// tells you about it rather than a crash somewhere unrelated.
+inline void CircleNormalAt(const std::vector<float>& normals, size_t index, float* nx, float* ny,
+                           float* nz) {
+  const bool have = index * 3 + 3 <= normals.size();
+  if (nx)
+    *nx = have ? normals[index * 3 + 0] : kFlatNormalX;
+  if (ny)
+    *ny = have ? normals[index * 3 + 1] : kFlatNormalY;
+  if (nz)
+    *nz = have ? normals[index * 3 + 2] : kFlatNormalZ;
+}
+
+/// True when circle \p index lies in a plane parallel to world XY.
+[[nodiscard]] inline bool CircleIsFlat(const std::vector<float>& normals, size_t index) {
+  float nx = 0.f, ny = 0.f, nz = 1.f;
+  CircleNormalAt(normals, index, &nx, &ny, &nz);
+  return IsFlatNormal(nx, ny, nz);
+}
+
+/// Grow or shrink the side-car to match \p circleCount circles, filling new entries with world +Z.
+///
+/// The migration path for a `.gs` written before REQ-312, and the repair a loader applies before
+/// the document is handed to anything that reads a normal.
+inline void EnsureCircleNormals(std::vector<float>& normals, size_t circleCount) {
+  const size_t want = circleCount * 3;
+  if (normals.size() > want) {
+    normals.resize(want);
+    return;
+  }
+  while (normals.size() < want)
+    PushCircleNormal(normals);
+}
+
+/// A curve plane normal (REQ-312) put through the same planar transform its entity centre gets.
+///
+/// A normal is a direction, so it ignores the translation half of the transform: the rotation runs
+/// about the origin, and the reflection is about a line through the origin at the mirror line's own
+/// angle. The reflection uses the SAME 2*phi - theta rule the arc sweep already reflects by, written
+/// as its matrix -- so a mirrored arc's plane and its swept range cannot end up disagreeing about
+/// which way the mirror faced.
+///
+/// World +Z is a fixed point of both, which is why nothing needed either of these until arcs and
+/// circles could tilt.
+inline void RotateNormalAboutZ(float rad, float* nx, float* ny) {
+  if (!nx || !ny)
+    return;
+  const float c = std::cos(rad);
+  const float s = std::sin(rad);
+  const float dx = *nx;
+  const float dy = *ny;
+  *nx = c * dx - s * dy;
+  *ny = s * dx + c * dy;
+}
+
+inline void ReflectNormalAcrossLine(float x0, float y0, float x1, float y1, float* nx, float* ny) {
+  if (!nx || !ny)
+    return;
+  const float phi = std::atan2(y1 - y0, x1 - x0);
+  const float c = std::cos(2.f * phi);
+  const float s = std::sin(2.f * phi);
+  const float dx = *nx;
+  const float dy = *ny;
+  *nx = c * dx + s * dy;
+  *ny = s * dx - c * dy;
+}
+
+/// The plane a curve carrying a normal lies in (REQ-311 / REQ-312): `ucs::FromNormal` at its centre.
+///
+/// **One function, deliberately.** The renderer, the hit test, the object snap, the DXF writer and
+/// the tests all need to turn (centre, normal) into a frame they can measure an angle in, and any
+/// two of them choosing a different zero direction for the same arc is a defect that looks like
+/// nothing until a tilted arc is drawn. `ucs::FromNormal` is AutoCAD's Arbitrary Axis Algorithm —
+/// the one DXF specifies for the group 210 extrusion vector — so this frame is also the frame a
+/// DXF consumer reconstructs from the file.
+///
+/// For the flat case the algorithm returns the world X and Y axes exactly, so `startRad` and
+/// `sweepRad` on every arc that predates REQ-312 keep the meaning they have always had.
+///
+/// A degenerate normal falls back to world XY rather than producing a garbage frame. The refusal
+/// belongs where the curve is created (REQ-201); by the time anything draws one, the normal has
+/// already been checked.
+[[nodiscard]] inline ucs::Ucs CurvePlane(double cx, double cy, double cz, double nx, double ny, double nz) {
+  ucs::Ucs p;
+  if (ucs::FromNormal({cx, cy, cz}, {nx, ny, nz}, &p))
+    return p;
+  p = ucs::Ucs{};
+  p.origin = {cx, cy, cz};
+  return p;
+}
+
+/// The plane an arc lies in — \ref CurvePlane at its centre and elevation.
+[[nodiscard]] inline ucs::Ucs CurvePlane(const CadArc& a) {
+  return CurvePlane(static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.z),
+                    static_cast<double>(a.nx), static_cast<double>(a.ny), static_cast<double>(a.nz));
+}
+
+/// A point at \p angleRad around an arc or circle, in the same space its centre is stored in.
+[[nodiscard]] inline ray3d::Vec3 CurvePointAt(const ucs::Ucs& plane, double radius, double angleRad) {
+  return ucs::PointOnPlaneCircle(plane, radius, angleRad);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Walking a curve (REQ-312).
+//
+// A circle or arc is drawn, hit-tested, snapped to, measured for extents and exported by walking
+// it. Every one of those walks goes through \ref CurvePointAt above, so a tilted curve cannot be
+// drawn in one place and picked in another -- what differs between the call sites is only what
+// each does with the point (world triplets here; view-relative pairs plus a per-vertex Z in the
+// renderer, which needs the view anchor subtracted in double before the cast), never where the
+// point is.
+//
+// Each call site keeps its pre-REQ-312 two-dimensional arithmetic for a flat (+Z) curve.
+// `ucs::FromNormal` reproduces the world X and Y axes exactly for a +Z normal, so the two paths
+// agree to the bit and the branch is not needed for correctness -- it is here because this is the
+// per-vertex loop for every curve on screen, and a flat drawing should not pay for a frame
+// transform whose answer it already knows. That is the same reasoning as step 3's
+// `CadWorkPlaneIsWorldXy` guard, one level further out.
+// ---------------------------------------------------------------------------------------------
+
+/// The angle of sample \p i of \p segments across a sweep.
+///
+/// Trivial, and named anyway: the renderer, the snap walk and the extents walk each sampled a
+/// curve with their own spelling of this, and three sequences that agree only approximately put
+/// the snap point somewhere the drawn curve does not go.
+[[nodiscard]] inline double CurveSampleAngle(double startRad, double sweepRad, int i, int segments) {
+  const double u = static_cast<double>(i) / static_cast<double>(segments < 1 ? 1 : segments);
+  return startRad + sweepRad * u;
+}
+
+/// \p segments + 1 world points along a curve, endpoints included.
+///
+/// A full circle is \p sweepRad = 2*pi, which repeats the start point as the last sample. That is
+/// deliberate: the closed-chain consumers already expect the repeat, and an arc's true endpoint is
+/// what REQ-312's acceptance is written about.
+inline void SampleCurveWorld(std::vector<ray3d::Vec3>& out, const ucs::Ucs& plane, double radius,
+                             double startRad, double sweepRad, int segments) {
+  out.clear();
+  if (!(radius > 1e-12) || segments < 1)
+    return;
+  out.reserve(static_cast<size_t>(segments) + 1u);
+  for (int i = 0; i <= segments; ++i)
+    out.push_back(CurvePointAt(plane, radius, CurveSampleAngle(startRad, sweepRad, i, segments)));
+}
+
+/// A curve as world-space GL_LINES triplets -- the shape the snap walk, the block flattener and
+/// the rubber-band preview all want.
+inline void AppendCurveWorldSegs(std::vector<float>& out, const ucs::Ucs& plane, double radius,
+                                 double startRad, double sweepRad, int segments) {
+  if (!(radius > 1e-12) || segments < 1)
+    return;
+  ray3d::Vec3 prev = CurvePointAt(plane, radius, startRad);
+  for (int i = 1; i <= segments; ++i) {
+    const ray3d::Vec3 p = CurvePointAt(plane, radius, CurveSampleAngle(startRad, sweepRad, i, segments));
+    out.push_back(static_cast<float>(prev.x));
+    out.push_back(static_cast<float>(prev.y));
+    out.push_back(static_cast<float>(prev.z));
+    out.push_back(static_cast<float>(p.x));
+    out.push_back(static_cast<float>(p.y));
+    out.push_back(static_cast<float>(p.z));
+    prev = p;
+  }
+}
+
+/// Re-measure a transformed arc's start angle in the frame its NEW normal gives it (REQ-312).
+///
+/// `startRad` and `sweepRad` are measured in the arc's own frame, `ucs::FromNormal(centre, normal)`,
+/// and that frame is rebuilt from the normal -- so a transform that moves the normal generally turns
+/// the frame by a further rotation about it. The world-XY angle rules (add the rotation; reflect the
+/// angle across the mirror line) track the frame only while the frame IS world XY, which is to say
+/// only while the arc is flat. Off that plane they leave an arc with the right centre, the right
+/// radius and the right plane, swept from the wrong place.
+///
+/// That was ASSUMPTION-3 in TASK-159 -- that the sweep rule and the normal rule agree -- and it is
+/// wrong. Mirroring a half circle standing on the wall y = 0 across the world line y = x should give
+/// one standing on x = 0 with its ends at (0, 190, 0) and (0, 210, 0); with the angle reflected in
+/// world XY its ends come out at (0, 200, -10) and (0, 200, 10) instead: the same circle, turned a
+/// quarter turn inside its own plane.
+///
+/// So the angle is not transformed at all. \p anchorWorld is where a KNOWN point of the arc has
+/// moved to, and the new start angle is measured from it: for a rotation the moved START point; for
+/// a reflection the moved END point, because a mirror reverses the traversal and the flat rule
+/// already names that point as the new start.
+///
+/// A flat arc is left untouched, so its caller's existing arithmetic stands bit for bit.
+inline void CadReanchorArcStart(CadArc* a, const ray3d::Vec3& anchorWorld) {
+  if (!a || IsFlatNormal(a->nx, a->ny, a->nz))
+    return;
+  const ucs::Point2D p = ucs::WorldToPlane(CurvePlane(*a), anchorWorld);
+  a->startRad = static_cast<float>(std::atan2(p.y, p.x));
+}
+
+/// The world point at \p angleRad on \p a, through the arc's own plane.
+///
+/// The anchor \ref CadReanchorArcStart wants, taken BEFORE the transform: on a tilted arc this is
+/// not the point the XY parametrisation names, so a caller that reaches for `cx + r*cos(t)` here
+/// re-anchors the arc onto a point it never passed through.
+[[nodiscard]] inline ray3d::Vec3 CurveWorldPointOnArc(const CadArc& a, double angleRad) {
+  return CurvePointAt(CurvePlane(a), static_cast<double>(a.r), angleRad);
+}
+
+/// An arc's two endpoints, resolved through its own plane.
+///
+/// The pair REQ-312's acceptance conditions are written about, and what the endpoint snap offers.
+inline void CurveEndpointsWorld(const CadArc& a, ray3d::Vec3* outStart, ray3d::Vec3* outEnd) {
+  const ucs::Ucs plane = CurvePlane(a);
+  const double r = static_cast<double>(a.r);
+  if (outStart)
+    *outStart = CurvePointAt(plane, r, static_cast<double>(a.startRad));
+  if (outEnd)
+    *outEnd = CurvePointAt(plane, r, static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad));
+}
 
 /// Axis-aligned ellipse: center + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1].
 struct CadEllipse {

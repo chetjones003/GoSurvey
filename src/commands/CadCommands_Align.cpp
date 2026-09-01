@@ -130,6 +130,14 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
     if (selective && !sCircles.count(static_cast<int>(i / 3))) continue;
     HelmertPt(a, b, tx, ty, &st.userCirclesCxCyZR[i], &st.userCirclesCxCyZR[i + 1]);
     st.userCirclesCxCyZR[i + 3] *= sc;
+    float anx = 0.f, any = 0.f, anz = 1.f;   // REQ-312: the plane turns with the circle
+    CircleNormalAt(st.userCircleNormals, i / 4, &anx, &any, &anz);
+    RotateNormalAboutZ(rad, &anx, &any);
+    if (i / 4 * 3 + 2 < st.userCircleNormals.size()) {
+      st.userCircleNormals[i / 4 * 3 + 0] = anx;
+      st.userCircleNormals[i / 4 * 3 + 1] = any;
+      st.userCircleNormals[i / 4 * 3 + 2] = anz;
+    }
   }
 
   // Arcs
@@ -139,6 +147,7 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
     HelmertPt(a, b, tx, ty, &arc.cx, &arc.cy);
     arc.r        *= sc;
     arc.startRad += rad;
+    RotateNormalAboutZ(rad, &arc.nx, &arc.ny);   // REQ-312: so does the arc plane
   }
 
   // Ellipses

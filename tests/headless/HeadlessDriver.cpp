@@ -512,7 +512,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       }
     }
     SubmitViewportPick(run.st, x, y, run.log, windowSelectionSubtract, fenceLeftToRightWindowMode);
-  } else if (verb == "CLICK") {
+  } else if (verb == "CLICK" || verb == "CLICKUCS") {
     // CLICK <x> <y> [SUBTRACT] [CROSSING] — a viewport click routed the way the GUI routes it.
     //
     // TASK-099. PICK above hands its coordinates straight to SubmitViewportPick, which skips the
@@ -529,6 +529,21 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     if (!(is >> x >> y)) {
       Fail(run, "parse", "CLICK expects two world coordinates, got: " + rest, sourceLine);
       return false;
+    }
+    if (verb == "CLICKUCS") {
+      // CLICKUCS <u> <v> - a viewport click at (u, v) in the ACTIVE UCS XY plane (REQ-312).
+      //
+      // CLICK and PICK hand storage coordinates straight through, which cannot express a click on
+      // a TILTED work plane at all: the GUI resolves one by intersecting the cursor ray with that
+      // plane and publishing the hit point's own Z (AppCommandState::resolvedPointZ), and a pair
+      // of storage X/Y carries none of that. On a VERTICAL work plane it is not even well posed:
+      // two points on a wall share an (x, y) and differ only in height. So this states the pick
+      // where the user actually made it, in the plane being drawn on. Under the WCS it is CLICK.
+      const ray3d::Vec3 world =
+          ucs::UcsToWorld(run.st.activeUcs, {static_cast<double>(x), static_cast<double>(y), 0.0});
+      CadCoord::LocalFromWorld(run.st, world.x, world.y, &x, &y);
+      run.st.resolvedPointZValid = true;
+      run.st.resolvedPointZ = static_cast<float>(world.z);
     }
     std::string mod;
     bool windowSelectionSubtract = false;
@@ -1028,6 +1043,48 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              sourceLine);
         return false;
       }
+    } else if (what == "FILECONTAINS" || what == "FILELACKS") {
+      // EXPECT FILECONTAINS <path> "<text>"   /   EXPECT FILELACKS <path> "<text>"
+      //
+      // A literal substring test over a saved document, reading the `.gs` JSON out of a DWG trailer
+      // exactly as SAMEFILE above does, so it works on either extension.
+      //
+      // It exists for a shape of acceptance condition no count and no byte comparison can state:
+      // that a key is ABSENT. REQ-312 requires a flat drawing to save with NO plane-normal key at
+      // all — that omission is the whole mechanism by which a legacy drawing re-saves byte for byte
+      // — and a save/reopen/re-save round trip passes just as happily with the key written on every
+      // circle in the file. FILELACKS is the half that can fail.
+      const std::string expanded = ExpandVars(run, arg);
+      std::istringstream fs3(expanded);
+      std::string path;
+      if (!(fs3 >> path)) {
+        Fail(run, "parse", "EXPECT " + what + " needs <path> then the text to look for", sourceLine);
+        return false;
+      }
+      std::string needle = Trim(expanded.substr(std::min(expanded.size(), expanded.find(path) + path.size())));
+      if (needle.size() >= 2 && needle.front() == '"' && needle.back() == '"')
+        needle = needle.substr(1, needle.size() - 2);
+      if (needle.empty()) {
+        Fail(run, "parse", "EXPECT " + what + ": the text to look for is empty", sourceLine);
+        return false;
+      }
+      std::ifstream ff(path, std::ios::binary);
+      if (!ff) {
+        Fail(run, "io", "EXPECT " + what + ": cannot open " + path, sourceLine);
+        return false;
+      }
+      const std::string rawBytes((std::istreambuf_iterator<char>(ff)), std::istreambuf_iterator<char>());
+      std::string payload;
+      const std::string& hay = TryGoSurveyDwgPayloadFromBytes(rawBytes, payload) ? payload : rawBytes;
+      const bool found = hay.find(needle) != std::string::npos;
+      if (what == "FILECONTAINS" && !found) {
+        Fail(run, "expect", "FILECONTAINS: " + path + " does not contain: " + needle, sourceLine);
+        return false;
+      }
+      if (what == "FILELACKS" && found) {
+        Fail(run, "expect", "FILELACKS: " + path + " contains: " + needle, sourceLine);
+        return false;
+      }
     } else if (what == "LAYERSDEFINED") {
       // EXPECT LAYERSDEFINED <dxf> — every layer an ENTITIES-section group 8 names has an
       // AcDbLayerTableRecord in the same file.
@@ -1264,6 +1321,106 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
           char msg[256];
           std::snprintf(msg, sizeof(msg), "EXPECT LINEXYZ %ld: %s is %.6f, expected %.6f", idx, names[k], got[k],
                         want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+      return true;
+    } else if (what == "CIRCLEXYZ") {
+      // EXPECT CIRCLEXYZ <index> <cx> <cy> <cz> <r> <nx> <ny> <nz> — one circle's centre in WORLD
+      // coordinates, its radius, and its PLANE NORMAL (REQ-312).
+      //
+      // The normal is the half no count and no log line can see. A circle drawn on a tilted UCS
+      // whose normal came out world +Z is a flat circle in the wrong plane, and it passes every
+      // other oracle in this file — which is exactly how the gap this requirement closes survived.
+      std::istringstream is(arg);
+      long idx = -1;
+      double want[7] = {0, 0, 0, 0, 0, 0, 1};
+      if (!(is >> idx) || !(is >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5] >> want[6])) {
+        Fail(run, "parse", "EXPECT CIRCLEXYZ needs <index> <cx> <cy> <cz> <r> <nx> <ny> <nz>", sourceLine);
+        return false;
+      }
+      const size_t base = static_cast<size_t>(idx) * 4;
+      if (idx < 0 || base + 3 >= run.st.userCirclesCxCyZR.size()) {
+        Fail(run, "expect",
+             "EXPECT CIRCLEXYZ: no circle at index " + std::to_string(idx) + " (there are " +
+                 std::to_string(run.st.userCirclesCxCyZR.size() / 4) + ")",
+             sourceLine);
+        return false;
+      }
+      double gcx = 0.;
+      double gcy = 0.;
+      CadCoord::WorldFromLocal(run.st, run.st.userCirclesCxCyZR[base], run.st.userCirclesCxCyZR[base + 1], &gcx,
+                               &gcy);
+      float nx = 0.f;
+      float ny = 0.f;
+      float nz = 1.f;
+      CircleNormalAt(run.st.userCircleNormals, static_cast<size_t>(idx), &nx, &ny, &nz);
+      const double got[7] = {gcx,
+                             gcy,
+                             static_cast<double>(run.st.userCirclesCxCyZR[base + 2]),
+                             static_cast<double>(run.st.userCirclesCxCyZR[base + 3]),
+                             static_cast<double>(nx),
+                             static_cast<double>(ny),
+                             static_cast<double>(nz)};
+      const char* names[7] = {"cx", "cy", "cz", "r", "nx", "ny", "nz"};
+      for (int k = 0; k < 7; ++k) {
+        // The first four are lengths and get REQ-101's 0.01 ft. The normal is a unit direction with
+        // no unit of length at all, so it is held to 1e-4 — loose enough for the float round trip
+        // through the store, tight enough that a plane off by a fifth of a degree still fails.
+        const double tol = k < 4 ? 0.01 : 1e-4;
+        if (std::fabs(got[k] - want[k]) > tol) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "EXPECT CIRCLEXYZ %ld: %s is %.6f, expected %.6f", idx, names[k],
+                        got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+      return true;
+    } else if (what == "ARCPOINTS") {
+      // EXPECT ARCPOINTS <index> <sx> <sy> <sz> <ex> <ey> <ez> — where an arc actually STARTS and
+      // ENDS, in WORLD coordinates, to REQ-101's 0.01 ft.
+      //
+      // The arc counterpart of LINEXYZ, and deliberately expressed as endpoints rather than as
+      // centre/start/sweep: REQ-312's acceptance is written about where an arc's ends land, and a
+      // centre, a start angle and a sweep can each be individually plausible while the plane they
+      // are measured in is the wrong one. Resolved through the one shared parametrisation
+      // (`CurvePlane` + `CurvePointAt`), so this asserts the same maths the renderer draws with.
+      std::istringstream is(arg);
+      long idx = -1;
+      double want[6] = {0, 0, 0, 0, 0, 0};
+      if (!(is >> idx) || !(is >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5])) {
+        Fail(run, "parse", "EXPECT ARCPOINTS needs <index> <sx> <sy> <sz> <ex> <ey> <ez>", sourceLine);
+        return false;
+      }
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.userArcs.size()) {
+        Fail(run, "expect",
+             "EXPECT ARCPOINTS: no arc at index " + std::to_string(idx) + " (there are " +
+                 std::to_string(run.st.userArcs.size()) + ")",
+             sourceLine);
+        return false;
+      }
+      const CadArc& a = run.st.userArcs[static_cast<size_t>(idx)];
+      const ucs::Ucs plane = CurvePlane(a);
+      const ray3d::Vec3 s = CurvePointAt(plane, static_cast<double>(a.r), static_cast<double>(a.startRad));
+      const ray3d::Vec3 e =
+          CurvePointAt(plane, static_cast<double>(a.r), static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad));
+      // Storage is local in XY, absolute in Z (ADR-025 (b)) — lifted to world so a transcript's
+      // numbers do not silently depend on whether the drawing happened to have been rebased.
+      double sx = 0.;
+      double sy = 0.;
+      double ex = 0.;
+      double ey = 0.;
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(s.x), static_cast<float>(s.y), &sx, &sy);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(e.x), static_cast<float>(e.y), &ex, &ey);
+      const double got[6] = {sx, sy, s.z, ex, ey, e.z};
+      const char* names[6] = {"sx", "sy", "sz", "ex", "ey", "ez"};
+      for (int k = 0; k < 6; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "EXPECT ARCPOINTS %ld: %s is %.6f, expected %.6f", idx, names[k],
+                        got[k], want[k]);
           Fail(run, "expect", msg, sourceLine);
           return false;
         }
