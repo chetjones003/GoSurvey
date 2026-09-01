@@ -777,6 +777,7 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   if (!ImGui::Begin("Options", &open, ImGuiWindowFlags_NoCollapse)) {
     cmd.showSettingsWindow = open; ImGui::End(); return;
   }
+  BeginStyledDialog();
   cmd.showSettingsWindow = open;
   DrawSettingsHeader(cmd);
 
@@ -822,13 +823,13 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::EndChild();
 
   ImGui::Separator();
-  if (ImGui::Button("OK", ImVec2(90.f, 0.f)))     { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings saved (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } cmd.showSettingsWindow = false; }
+  if (StyledButton("OK", ImVec2(90.f, 0.f), /*primary=*/true))     { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings saved (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } cmd.showSettingsWindow = false; }
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(90.f, 0.f))) cmd.showSettingsWindow = false;
+  if (StyledButton("Cancel", ImVec2(90.f, 0.f))) cmd.showSettingsWindow = false;
   ImGui::SameLine();
-  if (ImGui::Button("Apply", ImVec2(90.f, 0.f)))  { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings applied (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } }
+  if (StyledButton("Apply", ImVec2(90.f, 0.f), /*primary=*/true))  { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings applied (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } }
   ImGui::SameLine();
-  ImGui::BeginDisabled(); ImGui::Button("Help", ImVec2(90.f, 0.f)); ImGui::EndDisabled();
+  ImGui::BeginDisabled(); StyledButton("Help", ImVec2(90.f, 0.f)); ImGui::EndDisabled();
   ImGui::End();
 
   DrawGraphicsPerformanceDialog(cmd, log);

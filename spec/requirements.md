@@ -2776,6 +2776,35 @@ requirements is a planning failure, not a sign of rigor.
   general — not of the named dialogs — because a per-dialog fix would have to be
   repeated for every dialog written afterwards and would be forgotten. See
   TASK-061.
+  2026-09-01 (revision 7) — GitHub issue #183 asked that dialogs read with the
+  same depth as the Start screen tab: a top/bottom gradient on the window body,
+  and primary/secondary buttons rendered as 3D bevelled buttons (gradient face,
+  lit top-left edge, dark bottom-right edge, sunken pressed state) rather than
+  flat rectangles. The issue flagged its own SPEC GAP — this is new outward-
+  facing appearance, and the **Dark** theme's flat button face is a deliberate
+  choice from ADR-033, not an oversight, so a blanket "add bevels everywhere"
+  would have silently reversed it. Put to the user before any code (D-2026-09-
+  01-a): **both the Dark and Light themes gain the gradient/bevel treatment, but
+  only on floating DIALOGS** — Options, Layer Manager, Viewpoints, Import
+  points, Export points, PDF Attach to start, tracked as a checklist for the
+  rest (`BeginStyledDialog()`'s doc comment in `CadUi.hpp`). Docked panels, the
+  ribbon, and popups/tooltips/menus are unchanged — they keep the flat/bevel
+  treatment revisions 1–6 already settled for them. Acceptance:
+  - a styled dialog's body carries a visible top-lighter/bottom-darker
+    gradient, one ladder step each way from its theme's own panel surface —
+    not applied to any docked panel, ribbon element or popup;
+  - a primary action button (OK/Import/Apply/Add layer/Save/Load/Export/Attach)
+    in a styled dialog renders as a raised 3D button: gradient face, a light
+    top-left bevel and a dark bottom-right bevel, both bevels swapping sides on
+    press so the button reads as sinking in;
+  - a secondary button (Cancel, Help) in a styled dialog keeps the existing
+    ribbon-bevel treatment (flat face, same swap-on-press bevel) rather than
+    gaining a new gradient — the "quieter version" the issue asked for, with no
+    new colours needed for it;
+  - every new colour is a `g_chrome` field, filled for both Dark and Light, and
+    a Dark → Light → Dark switch leaves no stale dialog/button colour.
+  See TASK-165 for the one issue clause ("one shared helper used by both the
+  Start screen and the dialogs") this revision does not fully satisfy, and why.
 
 ### REQ-082 — Tabular data windows behave like a spreadsheet
 - Purpose: the Viewpoints and Layer Manager windows are the two places a surveyor

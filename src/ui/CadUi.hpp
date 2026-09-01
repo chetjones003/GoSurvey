@@ -47,6 +47,24 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 /// sets no window shadow.
 void DrawFloatingWindowChrome();
 
+/// REQ-081 revision 7 — call once, immediately after a successful ImGui::Begin()
+/// on a dialog, to paint a subtle top/bottom gradient into its body (behind
+/// whatever the caller draws next). No matching End call — nothing to pop yet;
+/// keep calling ImGui::End() as normal. No-op in a theme that sets no dialog
+/// fill. Migration checklist (issue #183) — styled: Settings (Options), Layer
+/// Manager, Viewpoints, Import points, Export points, PDF Attach. Still flat:
+/// every other CadUi_*.cpp dialog/modal (Quick Select, Selection, Create points,
+/// Text Style, Dimension Style, View Manager, ALIGN, the save-before-close
+/// prompt, …) — migrate opportunistically, each call is one line.
+void BeginStyledDialog();
+
+/// A 3D-bevelled button for dialog actions (REQ-081 rev 7): gradient face, lit
+/// top-left edge, dark bottom-right edge, sunken pressed state. `primary` picks
+/// the accented gradient (OK/Import/Apply); false draws the quieter existing
+/// ribbon-bevel treatment (Cancel/secondary actions). Same call shape as
+/// ImGui::Button.
+bool StyledButton(const char* label, const ImVec2& size = ImVec2(0, 0), bool primary = false);
+
 void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 /// REQ-142 Civil 3D-shaped drawing explorer (Prospector + Settings).

@@ -271,6 +271,7 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
     ImGui::End();
     return;
   }
+  BeginStyledDialog();
   cmd.showViewPointsWindow = open;
 
   cmd.surveyPointIdBuffers.resize(cmd.surveyPoints.size());
@@ -282,10 +283,10 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::Text("%zu point(s)", cmd.surveyPoints.size());
   static char pathBuf[512] = "gosurvey_points.json";
   ImGui::InputText("File##vp_path", pathBuf, sizeof(pathBuf));
-  if (ImGui::Button("Save##vp"))
+  if (StyledButton("Save##vp", ImVec2(0, 0), /*primary=*/true))
     SaveSurveyPointsToJsonFile(cmd, pathBuf, log);
   ImGui::SameLine();
-  if (ImGui::Button("Load##vp"))
+  if (StyledButton("Load##vp", ImVec2(0, 0), /*primary=*/true))
     LoadSurveyPointsFromJsonFile(cmd, pathBuf, log);
 
   ImGui::Separator();
