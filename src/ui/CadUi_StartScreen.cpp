@@ -540,7 +540,7 @@ void DrawConnectColumn(AppCommandState& cmd) {
 
   if (cmd.authSignedIn) {
     const std::string name = DisplayNameFromEmail(cmd.authEmail);
-    const float cardH = 108.f;
+    const float cardH = 156.f;  // grew from 108 to seat the Sign Out button (issue #182)
     const ImVec2 c1(c0.x + cardW, c0.y + cardH);
     SoftShadow(dl, c0, c1, 8.f, 8.f);
     dl->AddRectFilled(c0, c1, ImGui::GetColorU32(CardBg()), 8.f);
@@ -548,7 +548,7 @@ void DrawConnectColumn(AppCommandState& cmd) {
 
     // Avatar: accent disc with the first initial.
     const float r = 24.f;
-    const ImVec2 ac(c0.x + 20.f + r, c0.y + cardH * 0.5f);
+    const ImVec2 ac(c0.x + 20.f + r, c0.y + 52.f);
     dl->AddCircleFilled(ac, r, ImGui::GetColorU32(Accent()), 32);
     const std::string initial(1, name.empty() ? 'G' : static_cast<char>(std::toupper(
                                                           static_cast<unsigned char>(name[0]))));
@@ -559,12 +559,20 @@ void DrawConnectColumn(AppCommandState& cmd) {
 
     const float tx = c0.x + 20.f + r * 2.f + 16.f;
     ImGui::SetWindowFontScale(1.15f);
-    dl->AddText(ImVec2(tx, c0.y + 30.f), ImGui::GetColorU32(ImGuiCol_Text),
+    dl->AddText(ImVec2(tx, c0.y + 40.f), ImGui::GetColorU32(ImGuiCol_Text),
                 (std::string("Welcome ") + (name.empty() ? "back" : name) + "!").c_str());
     ImGui::SetWindowFontScale(1.f);
     if (!cmd.authEmail.empty())
-      dl->AddText(ImVec2(tx, c0.y + 54.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+      dl->AddText(ImVec2(tx, c0.y + 64.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
                   cmd.authEmail.c_str());
+
+    // Sign Out — same request path Settings uses (main.cpp: auth::SignOut()).
+    ImGui::SetCursorScreenPos(ImVec2(c0.x + 20.f, c0.y + cardH - 44.f));
+    ImGui::BeginDisabled(cmd.authBusy);
+    if (StyledButton("Sign Out", false, ImVec2(cardW - 40.f, 0.f)))
+      cmd.authSignOutRequested = true;
+    ImGui::EndDisabled();
+    ImGui::SetCursorScreenPos(c0);
     ImGui::Dummy(ImVec2(cardW, cardH));
   } else {
     const float cardH = 150.f;
@@ -684,6 +692,28 @@ void DrawStartScreen(AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::PopStyleColor();
 
   ImGui::Unindent(hpad);
+}
+
+void DrawAccountDetailsWindow(AppCommandState& cmd) {
+  if (!cmd.showAccountDetailsWindow)
+    return;
+  // Only meaningful while signed in; a sign-out with the window open just closes it.
+  if (!cmd.authSignedIn) {
+    cmd.showAccountDetailsWindow = false;
+    return;
+  }
+  ImGui::SetNextWindowSize(ImVec2(380.f, 0.f), ImGuiCond_Appearing);
+  bool open = cmd.showAccountDetailsWindow;
+  if (ImGui::Begin("Account Details", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
+    ImGui::TextDisabled("Email");
+    ImGui::TextUnformatted(cmd.authEmail.empty() ? "(no email on file)" : cmd.authEmail.c_str());
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextWrapped("More account settings are coming soon.");
+  }
+  ImGui::End();
+  cmd.showAccountDetailsWindow = open;
 }
 
 void RecordRecentDrawing(AppCommandState& cmd, const std::string& absDrawingPath) {

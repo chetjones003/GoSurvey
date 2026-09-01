@@ -2112,7 +2112,10 @@ struct AppCommandState {
   std::string authEmail;                ///< display only; the accounts-worker is the trust boundary
   std::string authError;                ///< set only after a user-initiated sign-in attempt fails
   bool        authSignInRequested  = false;  ///< set by the Settings panel's Sign In button
-  bool        authSignOutRequested = false;  ///< set by the Settings panel's Sign Out button
+  bool        authSignOutRequested = false;  ///< set by a Sign Out button (Settings, Start screen, or
+                                             ///< the menu-bar account dropdown — REQ-091 amendment)
+  bool        showAccountDetailsWindow = false;  ///< REQ-091 amendment: menu-bar "Account Details"
+                                                 ///< opens a small read-only placeholder window
   /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
   /// launch until this is true. Set true on a successful sign-in (interactive or silent) OR when
   /// there is no internet connectivity at all (same offline exception REQ-077's update gate

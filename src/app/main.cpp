@@ -1023,6 +1023,7 @@ int main()
     DrawSelectionCyclingPanel(cmd);
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd, &cmdLog);
+    DrawAccountDetailsWindow(cmd);
     DrawUnitsDialog(cmd, &cmdLog);
     DrawRightClickCustomizationDialog(cmd, &cmdLog);  // REQ-084 (a)
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);

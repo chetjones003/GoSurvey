@@ -3476,6 +3476,13 @@ requirements is a planning failure, not a sign of rigor.
     normally;
   - **(added 2026-08-23)** signing out from the Settings panel later in the same
     session does not reopen the launch gate.
+  - **(added 2026-09-01, D-2026-09-01-a, issue #182)** while signed in, a **Sign Out**
+    control is available on the Start-screen "Connect" card and from a dropdown on the
+    far-right menu-bar email; each performs the same sign-out as Settings ▸ Account;
+  - **(added 2026-09-01)** the far-right menu-bar email opens a dropdown offering
+    **Account Details** and **Sign Out**; nothing is shown there while signed out;
+  - **(added 2026-09-01)** **Account Details** opens a small read-only window showing
+    the signed-in email and a "more coming soon" note — no tier, no editable fields.
 - Owner-layer: Platform (loopback listener, Credential Manager, connectivity check), Auth
   (pure logic, mirrors Telemetry's split), UI (sign-in entry point/status, launch gate)
 - Status:      accepted
@@ -3485,6 +3492,10 @@ requirements is a planning failure, not a sign of rigor.
                (D-2026-08-23-d), reversing the original "no application feature is
                gated" condition for session access specifically (not for individual
                features/tiers, which remain ungated).
+               2026-09-01 — added Sign Out on the Start screen and a menu-bar account
+               dropdown (Account Details + Sign Out) plus a read-only Account Details
+               placeholder window (D-2026-09-01-a, GitHub issue #182). No new identity
+               or sign-out mechanism; reuses existing request flags.
 
 ### REQ-092 — License-tier lookup endpoint
 - Purpose: give the application a place to learn a signed-in user's entitlement, ahead
