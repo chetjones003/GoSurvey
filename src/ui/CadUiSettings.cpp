@@ -142,11 +142,20 @@ static void DrawDisplayCrosshair(AppCommandState& cmd) {
     cmd.viewportCrosshairArmFracY = std::clamp(f, 0.002f, 0.5f);
   }
   ImGui::Spacing();
+  // REQ-310. Sits with the crosshair settings rather than under the 3D placeholders below, because
+  // it is a real, working property of the cursor and those are not.
+  ImGui::Checkbox("3D crosshair (show UCS axes)##xhair3d", &cmd.viewportCrosshair3d);
+  ItemHelpTooltip("Draw the cursor as the active UCS's X (red), Y (green) and Z (blue) axes instead "
+                  "of two screen-aligned arms, so it shows which way the drawing plane runs under "
+                  "an orbited view. Model space only. Command bar: CROSSHAIR3D ON | OFF.");
+  ImGui::Spacing();
   if (ImGui::TreeNode("Crosshair details##xhairDetail")) {
     float xc[3] = {cmd.viewportCrosshairR, cmd.viewportCrosshairG, cmd.viewportCrosshairB};
     if (ImGui::ColorEdit3("Color##xhair", xc)) {
       cmd.viewportCrosshairR = xc[0]; cmd.viewportCrosshairG = xc[1]; cmd.viewportCrosshairB = xc[2];
     }
+    ItemHelpTooltip("The 2D crosshair's colour. The 3D crosshair uses fixed per-axis colours "
+                    "matching the UCS icon, so the two always agree about which axis is which.");
     ImGui::DragFloat("Line thickness (px)##xhairThick", &cmd.viewportCrosshairHairPx, 0.05f, 0.75f, 4.f, "%.2f");
     ImGui::TreePop();
   }

@@ -7,6 +7,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "ViewCube.hpp"
 #include "UcsIcon.hpp"  // in-tree orientation widget (REQ-059)
+#include "viewport/Crosshair3d.hpp"  // 3D crosshair axis projection (REQ-310)
 #include "ViewportPickPolicy.hpp"
 #include "MtextRichFormat.hpp"
 #include "MtextToolbar.hpp"
@@ -4981,6 +4982,32 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                        "Hidden — near geometry hides far geometry.\n"
                        "Shaded — filled surfaces lit from the camera.\n"
                        "Command bar: VISUALSTYLE (VS) 2D | HIDDEN | SHADED");
+        ImGui::EndGroup();
+        // Projection (REQ-309). Beside visual style for the same reason it is in View at all: both
+        // describe how this viewport draws, and neither changes a stored coordinate.
+        ImGui::SameLine(0, 8);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Projection");
+        ImGui::SetNextItemWidth(visualStyleComboW);
+        int projIdx = cmd.viewportProjection == Camera::Projection::Perspective ? 1 : 0;
+        const char* kProjItems[] = {"Orthographic", "Perspective"};
+        if (ImGui::Combo("##RibbonProjection", &projIdx, kProjItems, IM_ARRAYSIZE(kProjItems)))
+          cmd.viewportProjection =
+              projIdx == 1 ? Camera::Projection::Perspective : Camera::Projection::Orthographic;
+        RibbonItemHelp("How the view projects.\n"
+                       "Orthographic — parallel projection; the engineering-drawing view.\n"
+                       "Perspective — converging projection, for visually inspecting a 3D model.\n"
+                       "Switching does not change the drawing.\n"
+                       "Command bar: PERSPECTIVE ON | OFF, and FOV to set the angle");
+        // The field of view only means something under perspective, so it appears only there
+        // rather than sitting permanently greyed out.
+        if (cmd.viewportProjection == Camera::Projection::Perspective) {
+          ImGui::SetNextItemWidth(visualStyleComboW);
+          float fov = cmd.viewportFovDeg;
+          if (ImGui::SliderFloat("##RibbonFov", &fov, kMinFovDeg, kMaxFovDeg, "FOV %.0f°"))
+            cmd.viewportFovDeg = std::clamp(fov, kMinFovDeg, kMaxFovDeg);
+          RibbonItemHelp("Perspective field of view, in degrees.\nCommand bar: FOV <1-179>");
+        }
         ImGui::EndGroup();
       }
       RibbonSectionEnd();
@@ -17190,7 +17217,45 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float yt = std::max(imgMin.y, cy - phy - armY);
     const float yb = std::min(imgMax.y, cy + phy + armY);
     // The arms are what make it a crosshair; a pickbox is the box on its own (REQ-121 rule 2).
-    if (!pickboxCursor) {
+    //
+    // REQ-310: with the 3D crosshair on, the two screen-aligned arms are replaced by the active
+    // UCS's three axes projected into the view. Model space only — a paper sheet is 2D by
+    // definition (ADR-009/013), so there is no frame there for the axes to describe.
+    const bool hair3d = cmd.viewportCrosshair3d && modelSpace && !InFloatingModelSpace(cmd);
+    bool drew3d = false;
+    if (!pickboxCursor && hair3d) {
+      // One arm length for all three axes, so the triad reads as a triad rather than as an ellipse.
+      // Taken from the vertical setting because that is what CURSORSIZE maps to directly
+      // (`viewportCrosshairArmFracY` == the percentage; the X fraction is a 0.6 derivative of it).
+      const float arm3d = fry * avail.y;
+      const crosshair3d::Triad tri = crosshair3d::Compute(CadViewCamera(cmd), cmd.activeUcs, arm3d);
+      if (!crosshair3d::Degenerate(tri)) {
+        auto col = [](const crosshair3d::AxisRgb& c) { return IM_COL32(c.r, c.g, c.b, 255); };
+        // Each axis is a FULL line through the centre, gapped by the pickbox so the square stays
+        // readable — the same gap the 2D arms leave.
+        auto drawAxis = [&](const crosshair3d::Arm& a, ImU32 c) {
+          if (!a.visible)
+            return;
+          const float len = std::sqrt(a.dx * a.dx + a.dy * a.dy);
+          const float ux = a.dx / len, uy = a.dy / len;
+          // Gap = the pickbox half-extent along this arm's own direction, so the square is cleared
+          // whatever angle the axis arrives at.
+          const float gap = std::sqrt((phx * ux) * (phx * ux) + (phy * uy) * (phy * uy));
+          if (len <= gap)
+            return;
+          wdl->AddLine(ImVec2(cx + ux * gap, cy + uy * gap), ImVec2(cx + a.dx, cy + a.dy), c, hair);
+          wdl->AddLine(ImVec2(cx - ux * gap, cy - uy * gap), ImVec2(cx - a.dx, cy - a.dy), c, hair);
+        };
+        // Z first so an in-plane X or Y arm draws over it, matching the UCS icon's own ordering —
+        // in plan view Z is a dot under the centre and must not sit on top of the pickbox.
+        drawAxis(tri.z, col(crosshair3d::kAxisColorZ));
+        drawAxis(tri.x, col(crosshair3d::kAxisColorX));
+        drawAxis(tri.y, col(crosshair3d::kAxisColorY));
+        drew3d = true;
+      }
+      // A degenerate frame falls through to the 2D arms below rather than leaving no cursor.
+    }
+    if (!pickboxCursor && !drew3d) {
       wdl->AddLine(ImVec2(xl, cy), ImVec2(cx - phx, cy), kCad, hair);
       wdl->AddLine(ImVec2(cx + phx, cy), ImVec2(xr, cy), kCad, hair);
       wdl->AddLine(ImVec2(cx, yt), ImVec2(cx, cy - phy), kCad, hair);

@@ -74,6 +74,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.viewportAzimuthDeg     = cmd.viewportAzimuthDeg;    // camera orientation is per-drawing (REQ-058)
   doc.viewportElevationDeg   = cmd.viewportElevationDeg;
   doc.viewportRollDeg        = cmd.viewportRollDeg;       // screen roll under a tilted-UCS PLAN (#153)
+  doc.viewportProjection     = cmd.viewportProjection;    // projection likewise (REQ-309)
+  doc.viewportFovDeg         = cmd.viewportFovDeg;
   // The coordinate system is per-drawing (REQ-154). Without this, switching tabs would carry one
   // drawing's UCS into another's — and every coordinate typed afterwards would be read in a frame
   // belonging to a different drawing, with nothing on screen to say so.
@@ -159,6 +161,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.viewportAzimuthDeg         = doc.viewportAzimuthDeg;
   cmd.viewportElevationDeg       = doc.viewportElevationDeg;
   cmd.viewportRollDeg            = doc.viewportRollDeg;  // #153
+  cmd.viewportProjection         = doc.viewportProjection;  // REQ-309
+  cmd.viewportFovDeg             = doc.viewportFovDeg;
   cmd.viewAnimActive             = false;  // never resume another tab's animation
   cmd.activeUcs                  = doc.activeUcs;  // per-drawing coordinate system (REQ-154)
   cmd.ucsPrevious                = doc.ucsPrevious;
@@ -6361,6 +6365,9 @@ const CmdEntry kRegistry[] = {
     {"bench", "",
      "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE [points] | BENCH MESH [triangles]"},
     {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
+    {"perspective", "projection, persp", "View projection: ON (perspective) / OFF (orthographic)"},
+    {"fov", "lens", "Perspective field of view, in degrees"},
+    {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
@@ -23219,6 +23226,96 @@ bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vec
   return true;
 }
 
+/// Shared by the prompt and the inline `CROSSHAIR3D ON` form (REQ-310), like the two above.
+///
+/// Reuses \ref ProjectionFromName's ON/OFF spellings via its own small table rather than borrowing
+/// that function: the two settings are unrelated, and a shared parser would make `CROSSHAIR3D
+/// PERSPECTIVE` legal.
+bool ApplyCrosshair3dValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
+  std::string v;
+  for (char c : StringUtil::trimCopy(raw)) {
+    if (c == ' ' || c == '\t')
+      continue;
+    v.push_back(static_cast<char>((c >= 'A' && c <= 'Z') ? (c - 'A' + 'a') : c));
+  }
+  if (v == "on" || v == "1" || v == "3d" || v == "yes")
+    st.viewportCrosshair3d = true;
+  else if (v == "off" || v == "0" || v == "2d" || v == "no")
+    st.viewportCrosshair3d = false;
+  else {
+    log.push_back("CROSSHAIR3D - enter ON or OFF.");
+    return false;
+  }
+  log.push_back(st.viewportCrosshair3d
+                    ? "3D crosshair = ON - the cursor shows the UCS X/Y/Z axes."
+                    : "3D crosshair = OFF - the cursor is the standard two-arm crosshair.");
+  return true;
+}
+
+/// Canonical name of a projection, for the command line, the ribbon and `.gs` (REQ-309).
+const char* ProjectionName(Camera::Projection p) {
+  return p == Camera::Projection::Perspective ? "Perspective" : "Orthographic";
+}
+
+/// Parse a user-typed projection name. Case-insensitive and tolerant of the spellings someone
+/// actually types, mirroring \ref VisualStyleFromName — including the raw ordinals, and the two
+/// senses of the bare command (`PERSPECTIVE ON`).
+bool ProjectionFromName(const std::string& raw, Camera::Projection* out) {
+  if (!out)
+    return false;
+  std::string v;
+  v.reserve(raw.size());
+  for (char c : raw) {
+    if (c == ' ' || c == '\t')
+      continue;
+    v.push_back(static_cast<char>((c >= 'A' && c <= 'Z') ? (c - 'A' + 'a') : c));
+  }
+  if (v == "o" || v == "ortho" || v == "orthographic" || v == "parallel" || v == "off" || v == "0")
+    *out = Camera::Projection::Orthographic;
+  else if (v == "p" || v == "persp" || v == "perspective" || v == "on" || v == "1")
+    *out = Camera::Projection::Perspective;
+  else
+    return false;
+  return true;
+}
+
+/// Shared by the prompt and the inline `PERSPECTIVE ON` form so neither can set a value the other
+/// would reject (REQ-201) — the same reason \ref ApplyVisualStyleValue exists.
+///
+/// Switching projection touches no stored coordinate: it changes only how the drawing is looked
+/// at, the rule REQ-154 states for the UCS and REQ-309 restates here.
+bool ApplyProjectionValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
+  Camera::Projection p = st.viewportProjection;
+  if (!ProjectionFromName(StringUtil::trimCopy(raw), &p)) {
+    log.push_back("PERSPECTIVE - enter ON (perspective) or OFF (orthographic).");
+    return false;
+  }
+  st.viewportProjection = p;
+  log.push_back(std::string("Projection = ") + ProjectionName(p) + ".");
+  return true;
+}
+
+/// Set the perspective field of view (REQ-309).
+///
+/// Refuses anything outside [kMinFovDeg, kMaxFovDeg] rather than clamping, because a clamp would
+/// silently accept a typo: `FOV 400` is not a request for 179 degrees, it is a mistake, and
+/// REQ-201 wants it refused with the previous value intact. Non-finite input is caught by the same
+/// bound test, which is why it is written as a positive range check.
+bool ApplyFovValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
+  float v = 0.f;
+  if (!ParseOneFloat(raw, &v) || !std::isfinite(v) || !(v >= kMinFovDeg && v <= kMaxFovDeg)) {
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "FOV - enter an angle between %.0f and %.0f degrees.",
+                  static_cast<double>(kMinFovDeg), static_cast<double>(kMaxFovDeg));
+    log.push_back(buf);
+    return false;
+  }
+  st.viewportFovDeg = v;
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "FOV = %.4g degrees.", static_cast<double>(st.viewportFovDeg));
+  log.push_back(buf);
+  return true;
+}
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper space: geometry + viewports
     const bool hadEntities = !st.selectedPaperEntities.empty();
@@ -24715,6 +24812,43 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (plotTok == "perfhud" || plotTok == "framestats") {
       st.perfHudVisible = !st.perfHudVisible;
       log.push_back(std::string("PERFHUD — frame-time overlay ") + (st.perfHudVisible ? "ON." : "OFF."));
+      return;
+    }
+    // `PERSPECTIVE ON` in one line; a bare `PERSPECTIVE` reports the current projection — the same
+    // report-or-set shape as VS above (REQ-309). The maths behind this has existed since REQ-058;
+    // until now nothing could select it.
+    if (plotTok == "perspective" || plotTok == "projection" || plotTok == "persp") {
+      std::string projArg;
+      if (issIdle >> projArg) {
+        ApplyProjectionValue(st, projArg, log);
+      } else {
+        log.push_back(std::string("Projection = ") + ProjectionName(st.viewportProjection) +
+                      ". Usage: PERSPECTIVE ON | OFF.");
+      }
+      return;
+    }
+    // `CROSSHAIR3D ON` in one line; bare reports (REQ-310), same shape as VS and PERSPECTIVE.
+    if (plotTok == "crosshair3d" || plotTok == "cursor3d" || plotTok == "xhair3d") {
+      std::string chArg;
+      if (issIdle >> chArg) {
+        ApplyCrosshair3dValue(st, chArg, log);
+      } else {
+        log.push_back(std::string("3D crosshair = ") + (st.viewportCrosshair3d ? "ON" : "OFF") +
+                      ". Usage: CROSSHAIR3D ON | OFF.");
+      }
+      return;
+    }
+    if (plotTok == "fov" || plotTok == "lens") {
+      std::string fovArg;
+      if (issIdle >> fovArg) {
+        ApplyFovValue(st, fovArg, log);
+      } else {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "FOV = %.4g degrees. Usage: FOV <%.0f-%.0f>.",
+                      static_cast<double>(st.viewportFovDeg), static_cast<double>(kMinFovDeg),
+                      static_cast<double>(kMaxFovDeg));
+        log.push_back(buf);
+      }
       return;
     }
     // `BENCH` runs the REQ-100 frame-budget measurement at the budget's own density; `BENCH <segs>`
