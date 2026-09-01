@@ -1365,25 +1365,25 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glBindVertexArray(vaoShaded_);
       glBindBuffer(GL_ARRAY_BUFFER, vboShaded_);
       for (const CadSolidDisplayBatch& b : solidGeometry->solids) {
-        if (!b.triVerts || b.triVerts->empty() || b.triVerts->size() % 9 != 0)
+        if (b.triVerts.empty() || b.triVerts.size() % 9 != 0)
           continue;
-        const size_t vcount = b.triVerts->size() / 3;
-        const bool haveNormals = b.triNormals && b.triNormals->size() == b.triVerts->size();
+        const size_t vcount = b.triVerts.size() / 3;
+        const bool haveNormals = b.triNormals.size() == b.triVerts.size();
         cpuShadedTris_.clear();
         cpuShadedTris_.resize(vcount * 6);
         for (size_t v = 0; v < vcount; ++v) {
           float rx = 0.f;
           float ry = 0.f;
-          WorldToViewRelativeFloat(static_cast<double>((*b.triVerts)[v * 3]),
-                                   static_cast<double>((*b.triVerts)[v * 3 + 1]), viewAnchorX, viewAnchorY,
+          WorldToViewRelativeFloat(static_cast<double>(b.triVerts[v * 3]),
+                                   static_cast<double>(b.triVerts[v * 3 + 1]), viewAnchorX, viewAnchorY,
                                    &rx, &ry);
           float* o = &cpuShadedTris_[v * 6];
           o[0] = rx;
           o[1] = ry;
-          o[2] = (*b.triVerts)[v * 3 + 2];  // Z is absolute (ADR-025 D2)
-          o[3] = haveNormals ? (*b.triNormals)[v * 3] : 0.f;
-          o[4] = haveNormals ? (*b.triNormals)[v * 3 + 1] : 0.f;
-          o[5] = haveNormals ? (*b.triNormals)[v * 3 + 2] : 1.f;
+          o[2] = b.triVerts[v * 3 + 2];  // Z is absolute (ADR-025 D2)
+          o[3] = haveNormals ? b.triNormals[v * 3] : 0.f;
+          o[4] = haveNormals ? b.triNormals[v * 3 + 1] : 0.f;
+          o[5] = haveNormals ? b.triNormals[v * 3 + 2] : 1.f;
         }
         glUniform4f(locSolidColor, b.rgba[0], b.rgba[1], b.rgba[2], 1.f);
         glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cpuShadedTris_.size() * sizeof(float)),
@@ -1406,9 +1406,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glEnableVertexAttribArray(0);
       glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
       for (const CadSolidDisplayBatch& b : solidGeometry->solids) {
-        if (!b.edgeVerts || b.edgeVerts->empty() || b.edgeVerts->size() % 6 != 0)
+        if (b.edgeVerts.empty() || b.edgeVerts.size() % 6 != 0)
           continue;
-        ConvertLineVertsWorldToView(*b.edgeVerts, viewAnchorX, viewAnchorY, &solidRel);
+        ConvertLineVertsWorldToView(b.edgeVerts, viewAnchorX, viewAnchorY, &solidRel);
         glUniform4f(locCol, b.rgba[0], b.rgba[1], b.rgba[2], b.rgba[3]);
         glLineWidth(b.lineweightMm >= 0.f ? LineweightMmToDevicePx(b.lineweightMm) : kLwMain);
         glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(solidRel.size() * sizeof(float)),

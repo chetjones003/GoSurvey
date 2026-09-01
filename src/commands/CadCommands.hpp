@@ -2206,11 +2206,22 @@ struct AppCommandState {
   /// quality has actually changed, and — like the surface display cache it is modelled on (ADR-036
   /// (e)) — deliberately **outside** every undo snapshot, because it is derived from the solids.
   std::vector<CadSolidTessellation> solidDisplayCache;
-  /// What the renderer is handed for solids this frame: batches BORROWING the buffers above, already
-  /// filtered for layer visibility and object isolation and with colours resolved, so the renderer
-  /// draws what it is given and decides nothing. Rebuilt every refresh — it copies pointers and
-  /// colours, never vertices.
+  /// What the renderer is handed for solids this frame: a small number of COALESCED batches, each the
+  /// merged geometry of every visible solid sharing a resolved colour and edge lineweight, already
+  /// filtered for layer visibility and object isolation. Turns a per-solid draw call (GitHub #194)
+  /// into a per-appearance one. Rebuilt only when \ref solidDisplayAssemblySig changes.
   CadSolidDisplayGeometry solidDisplayGeometry;
+  /// A fingerprint of everything \ref RefreshSolidDisplayGeometry's assembly pass reads — the visible
+  /// solids in order, their cache buffer sizes, their resolved colours and lineweights, and the
+  /// regen count. Unchanged means the merged buffers in \ref solidDisplayGeometry are still current
+  /// and the (now vertex-copying) concatenation can be skipped — the §11 invariant 7 early-out, so
+  /// an orbit that changes only the camera does not re-merge a million triangles every frame.
+  std::uint64_t solidDisplayAssemblySig = 0;
+  /// How many times \ref RefreshSolidDisplayGeometry has actually (re)tessellated a solid — the solid
+  /// twin of \ref surfaceDisplayRegenCount. #120 asks that the render mesh not be regenerated every
+  /// frame; `BENCH SOLID` takes a baseline at the first timed frame and this must not grow during a
+  /// scripted orbit.
+  std::uint64_t solidDisplayRegenCount = 0;
 
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;

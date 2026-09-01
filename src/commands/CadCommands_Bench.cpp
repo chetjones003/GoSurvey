@@ -375,6 +375,16 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
                   static_cast<unsigned long long>(b.regenDuringRun), s.frames,
                   cacheHeld ? "HELD" : "NOT HELD, contours are being regenerated per frame");
     log.push_back(msg);
+  } else if (b.solidCount > 0) {
+    // ADR-036 (e)'s obligation for the solid profile: #120 asks that a solid's render mesh not be
+    // regenerated every frame, and on a fast machine the p95 above cannot tell a held cache from one
+    // silently rebuilding. Reported as its own claim, exactly as the surface line is.
+    std::snprintf(msg, sizeof(msg),
+                  "BENCH — solid tessellation cache regenerated %llu time(s) across %d timed frames "
+                  "(expected 0) — %s.",
+                  static_cast<unsigned long long>(b.regenDuringRun), s.frames,
+                  cacheHeld ? "HELD" : "NOT HELD, solids are being retessellated per frame");
+    log.push_back(msg);
   }
 
   // Also written to a file: a benchmark's value is in the record, and reading six figures off a
@@ -414,6 +424,10 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
           << " ft, major " << SurfaceStyles::FormatFt(b.surfaceMajorIntervalFt) << " ft\n"
           << "  contour segs      " << b.surfaceContourSegs << "\n"
           << "  cache regens      " << b.regenDuringRun << " during the timed frames (expected 0)  => "
+          << (cacheHeld ? "HELD" : "NOT HELD") << "\n";
+      }
+      if (b.solidCount > 0) {
+        f << "  cache regens      " << b.regenDuringRun << " during the timed frames (expected 0)  => "
           << (cacheHeld ? "HELD" : "NOT HELD") << "\n";
       }
       f << "\n";
