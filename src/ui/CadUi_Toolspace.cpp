@@ -1047,6 +1047,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
     ImGui::End();
     return;
   }
+  BeginStyledDialog();
 
   ImGui::TextUnformatted("Type");
   ImGui::SameLine(140.f);
@@ -1141,13 +1142,13 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
     ImGui::SetTooltip("Layer manager");
 
   ImGui::Spacing();
-  ImGui::PushStyleColor(ImGuiCol_TableRowBg, ImVec4(1.f, 0.97f, 0.82f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, ImVec4(1.f, 0.99f, 0.90f, 1.f));
+  PushPropertyPaperColors(cmd.displayColorThemeIdx);
   if (ImGui::BeginTable("##csprops", 2,
                         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
     ImGui::TableSetupColumn("Properties", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.62f);
     ImGui::TableHeadersRow();
+    PushPropertyPaperBodyText(cmd.displayColorThemeIdx);
 
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
@@ -1190,9 +1191,10 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
       }
       ImGui::EndCombo();
     }
+    PopPropertyPaperBodyText();
     ImGui::EndTable();
   }
-  ImGui::PopStyleColor(2);
+  PopPropertyPaperColors();
 
   ImGui::Spacing();
   ImGui::TextWrapped("Selecting OK will create a new surface which will appear in the list of surfaces in Prospector.");
@@ -1205,7 +1207,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   const float bw = 88.f;
   ImGui::SetCursorPosX(ImGui::GetWindowWidth() - (bw + 8.f) * 2.f);
   ImGui::BeginDisabled(name.empty());
-  if (ImGui::Button("OK", ImVec2(bw, 0.f))) {
+  if (StyledButton("OK", ImVec2(bw, 0.f), /*primary=*/true)) {
     if (FindSurfaceIndex(cmd, name) >= 0) {
       error = "A surface named \"" + name + "\" already exists.";
     } else if (kind == CreateSurfaceKind::TinVolume || kind == CreateSurfaceKind::GridVolume) {
@@ -1265,7 +1267,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(bw, 0.f)))
+  if (StyledButton("Cancel", ImVec2(bw, 0.f)))
     cmd.showCreateSurfaceWindow = false;
 
   ImGui::End();

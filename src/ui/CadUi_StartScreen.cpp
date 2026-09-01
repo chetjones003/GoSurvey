@@ -711,6 +711,7 @@ void DrawAccountDetailsWindow(AppCommandState& cmd) {
   if (ImGui::Begin("Account Details", &open,
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
                        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
+    BeginStyledDialog();
     ImGui::TextDisabled("Email");
     ImGui::TextUnformatted(cmd.authEmail.empty() ? "(no email on file)" : cmd.authEmail.c_str());
     ImGui::Spacing();

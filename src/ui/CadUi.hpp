@@ -47,6 +47,38 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 /// sets no window shadow.
 void DrawFloatingWindowChrome();
 
+/// REQ-081 revision 7 — call once, immediately after a successful ImGui::Begin()
+/// on a dialog, to paint a subtle top/bottom gradient into its body (behind
+/// whatever the caller draws next). No matching End call — nothing to pop yet;
+/// keep calling ImGui::End() as normal. No-op in a theme that sets no dialog
+/// fill. Migration checklist (issue #183) — styled: Settings (Options), Layer
+/// Manager, Viewpoints, Import points, Export points, PDF Attach, Account
+/// Details, Create Surface, Surface Properties, Feature Line Elevations. Still
+/// flat: every other CadUi_*.cpp dialog/modal (Quick Select, Selection, Create
+/// points, Text Style, Dimension Style, View Manager, ALIGN, the traverse
+/// editor, the save-before-close prompt, the small BeginPopupModal popups, …)
+/// — migrate opportunistically, each call is one line.
+void BeginStyledDialog();
+
+/// A 3D-bevelled button for dialog actions (REQ-081 rev 7): gradient face, lit
+/// top-left edge, dark bottom-right edge, sunken pressed state. `primary` picks
+/// the accented gradient (OK/Import/Apply); false draws the quieter existing
+/// ribbon-bevel treatment (Cancel/secondary actions). Same call shape as
+/// ImGui::Button.
+bool StyledButton(const char* label, const ImVec2& size = ImVec2(0, 0), bool primary = false);
+
+/// Property-grid "paper" styling for the surface dialogs (Create Surface,
+/// Surface Properties). Dark theme → light-gray rows, white bordered fields,
+/// dark body text, dark header strip kept as-is; classic theme → its existing
+/// cream grid, unchanged. `themeIdx` is `cmd.displayColorThemeIdx` (0 = Dark).
+/// Call order: PushPropertyPaperColors → BeginTable → TableSetupColumn(s) →
+/// TableHeadersRow → PushPropertyPaperBodyText → rows → PopPropertyPaperBodyText
+/// → EndTable → PopPropertyPaperColors.
+void PushPropertyPaperColors(int themeIdx);
+void PopPropertyPaperColors();
+void PushPropertyPaperBodyText(int themeIdx);
+void PopPropertyPaperBodyText();
+
 void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 /// REQ-142 Civil 3D-shaped drawing explorer (Prospector + Settings).
