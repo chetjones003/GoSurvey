@@ -1386,6 +1386,14 @@ struct AppCommandState {
     Plan,
     /// INSERT dialog (GitHub issue #124): pick a definition, then optional on-screen point/scale/rotation.
     InsertBlock,
+    /// The seven B-rep primitives, driven as a prompted command (REQ-313 as amended): pick or type
+    /// the base point, then set each named dimension by its letter — `R` radius, `H` height, and so
+    /// on — before Enter creates it.
+    ///
+    /// **One Kind for all seven**, not seven Kinds. They differ only in which named parameters they
+    /// carry, and that difference is data (\ref SolidParamSpec), not control flow — seven near-identical
+    /// state machines is exactly the duplication that lets one of them quietly miss a fix.
+    Solid,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1445,6 +1453,7 @@ struct AppCommandState {
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     case Kind::InsertBlock:        return "INSERT";
+    case Kind::Solid:              return "SOLID";  // REQ-313: one Kind, all seven primitives
     default:                  return "";
     }
   }
@@ -2011,6 +2020,27 @@ struct AppCommandState {
 
   // --- Circle ---
   enum class CircleStyle { CenterRadius, ThreePoint } circleStyle = CircleStyle::CenterRadius;
+
+  // --- The prompted solid-primitive command (REQ-313 as amended) ---------------------------------
+
+  /// The most named dimensions any primitive has (PYRAMID: sides, base radius, top radius, height).
+  static constexpr int kMaxSolidParams = 4;
+
+  enum class SolidPhase {
+    WaitBasePoint,   ///< Click, or type X,Y[,Z]. The base centre — or the centre, for sphere/torus.
+    WaitParameters,  ///< Base set: type a letter + value, a bare value for the next unset one, or Enter.
+  } solidPhase = SolidPhase::WaitBasePoint;
+
+  /// Which primitive is being built. `None` means no solid command is running.
+  brep::PrimitiveKind solidKind = brep::PrimitiveKind::None;
+  /// The base point, in STORAGE coordinates (X/Y local, Z absolute) — the same convention the store
+  /// itself uses, so the commit needs no second conversion.
+  ray3d::Vec3 solidBase;
+  double solidParamValue[kMaxSolidParams] = {0.0, 0.0, 0.0, 0.0};
+  bool solidParamSet[kMaxSolidParams] = {false, false, false, false};
+  /// A letter typed on its own arms the parameter and waits for the value on the next line, which is
+  /// what makes `R` then `4` work as well as `R 4`. -1 = nothing armed.
+  int solidPendingParam = -1;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -3837,6 +3867,49 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
 /// True when \p verb names one of the seven primitive commands. Used by the command dispatch and by
 /// the help registry, so the two cannot disagree about which commands exist.
 [[nodiscard]] bool CadIsSolidPrimitiveVerb(const std::string& verb);
+
+/// One named dimension of a primitive: the letter that sets it, and what to call it in a prompt.
+///
+/// `optional` marks a parameter the primitive can be built without — only a cone's and a pyramid's
+/// top radius, which default to zero and give an apex. Everything else must be set before Enter will
+/// create anything, so a half-specified solid is refused with the missing names rather than built at
+/// some assumed size (REQ-201).
+struct SolidParamSpec {
+  char letter = '\0';
+  const char* label = "";
+  bool optional = false;
+};
+
+/// The named dimensions of \p kind, in the order a bare typed number fills them — which is also the
+/// order the one-line form takes its arguments, so `CYLINDER 0,0 4 25` and `CYLINDER` / `0,0` /
+/// `4` / `25` mean the same thing.
+///
+/// **The single table both the prompt and the commit read.** A prompt that offered a letter the
+/// commit did not know, or a commit that needed a value the prompt never asked for, is the failure
+/// this exists to make impossible.
+[[nodiscard]] const SolidParamSpec* CadSolidParamSpecs(brep::PrimitiveKind kind, int* outCount);
+
+/// Begin the prompted form of a primitive command: `CYLINDER` with no arguments. \p verb is the
+/// already-lowercased command token.
+void StartSolidPrimitiveCommand(AppCommandState& st, const std::string& verb, std::vector<std::string>& log);
+
+/// The prompt for whatever the solid command is waiting for — the base point, or the named
+/// dimensions with the ones already set shown back. Shared by the command line and the at-cursor
+/// dynamic input so the two cannot say different things (REQ-304).
+[[nodiscard]] std::string CadSolidPromptText(const AppCommandState& st);
+
+/// Feed one typed line to the running solid command. Returns false when the text was not understood,
+/// which leaves the command where it was rather than cancelling it.
+[[nodiscard]] bool HandleSolidTextInput(const std::string& line, AppCommandState& st,
+                                        std::vector<std::string>& log);
+
+/// Feed a picked point (storage X/Y, at the current work-plane elevation) to the running solid
+/// command.
+void SubmitSolidViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Clear the prompted solid command's state. Called by Esc and by every other command start, so a
+/// half-built solid cannot leak into the next command.
+void CancelSolidCommand(AppCommandState& st);
 
 /// Report a solid's properties into \p log — kind, dimensions, volume, surface area, and its
 /// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.

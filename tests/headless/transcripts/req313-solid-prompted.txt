@@ -1,0 +1,153 @@
+# REQ-313 as amended - the PROMPTED form of the solid primitives.
+#
+# `CYLINDER 0,0 4 25` was the whole authoring story until now, and it is still there: the one-line
+# form is what the "exact dimensions typed at the command line" acceptance rests on, and every
+# assertion in req313-solid-primitives.txt still drives it.
+#
+# What this file covers is the form a user actually reaches for: type the command, get asked for the
+# point, then set the dimensions by letter. Both forms share one parameter table and one commit, so
+# the thing worth proving is that they AGREE - the same numbers through either route have to produce
+# the same solid, or there are two authoring paths that can drift.
+
+NEW
+
+# --- The flow: command, coordinates, then R and H -------------------------------------------------
+CMD CYLINDER
+EXPECT LOG "CYLINDER — base centre point"
+EXPECT SOLIDS 0
+
+CMD 100,100
+EXPECT LOG "R radius, H height"
+
+CMD R 4
+EXPECT LOG "radius = 4"
+CMD H 25
+EXPECT LOG "height = 25"
+# Nothing exists until Enter.
+EXPECT SOLIDS 0
+CMD
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1256.6370614359172 728.849495632832 4 6 4
+EXPECT SOLIDBOUNDS 0 96 96 0 104 104 25
+
+# --- The two forms agree ---------------------------------------------------------------------------
+# The same cylinder through the one-line form. If the prompted path had picked up the arguments in a
+# different order, or applied the base point differently, these two would not match.
+CMD CYLINDER 100,100 4 25
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 1 1256.6370614359172 728.849495632832 4 6 4
+EXPECT SOLIDBOUNDS 1 96 96 0 104 104 25
+
+# --- A letter on its own arms it; the next line is the value ---------------------------------------
+NEW
+CMD SPHERE
+CMD 0,0,50
+EXPECT LOG "R radius"
+CMD R
+EXPECT LOG "SPHERE — radius:"
+CMD 5
+EXPECT LOG "radius = 5"
+CMD
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 523.5987755982989 314.1592653589793 2 2 2
+EXPECT SOLIDBOUNDS 0 -5 -5 45 5 5 55
+
+# --- A bare number fills the next unset dimension, in the one-line form's own order -----------------
+# This is what makes `4` then `25` mean radius then height without typing a letter at all.
+NEW
+CMD CYLINDER
+CMD 0,0
+CMD 4
+CMD 25
+CMD
+EXPECT SOLIDPROPS 0 1256.6370614359172 728.849495632832 4 6 4
+
+# --- A dimension can be corrected before Enter -------------------------------------------------------
+NEW
+CMD BOX
+CMD 0,0
+CMD L 20
+CMD W 10
+CMD H 8
+# Changed my mind about the width.
+CMD W 5
+EXPECT LOG "width = 5"
+CMD
+# 20 x 5 x 8 = 800 and area 2(100+160+40) = 600 - not the 1600 the first W would have given.
+EXPECT SOLIDPROPS 0 800 600 8 12 6
+
+CHECK ALL
+
+# --- The base point can be CLICKED --------------------------------------------------------------
+# Through CLICK, which routes the pick the same way the application does (ViewportClickRouteFor),
+# rather than by poking the state. A command missing from that route silently discards every click
+# and looks like it has hung - the failure TASK-099 documents happening three times.
+NEW
+CMD CONE
+CLICK 30 40
+EXPECT LOG "R base radius"
+CMD R 3
+CMD H 11
+CMD
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 103.67255756846318 135.7333360 3 4 3
+EXPECT SOLIDBOUNDS 0 27 37 0 33 43 11
+
+# --- Enter with a dimension still missing NAMES it, and creates nothing --------------------------
+NEW
+CMD CYLINDER
+CMD 0,0
+CMD R 4
+CMD
+EXPECT LOG "still need: height"
+EXPECT SOLIDS 0
+# The command is still open, so the missing value can just be supplied.
+CMD H 10
+CMD
+EXPECT SOLIDS 1
+
+# --- A dimension the kernel refuses leaves the command OPEN, not discarded -----------------------
+# Throwing away a base point and two good dimensions because the third was wrong is the worse
+# outcome; the user retypes the offending letter and presses Enter again.
+NEW
+CMD TORUS
+CMD 0,0
+CMD R 4
+CMD T 4
+CMD
+EXPECT LOG "would pass through the axis"
+EXPECT SOLIDS 0
+CMD T 1
+CMD
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Torus
+
+# --- Bad input is reported and the prompt stands --------------------------------------------------
+NEW
+CMD SPHERE
+CMD not-a-point
+EXPECT LOG "could not read the base point"
+EXPECT SOLIDS 0
+CMD 0,0
+CMD R banana
+EXPECT LOG "is not a number"
+CMD R 5
+CMD
+EXPECT SOLIDS 1
+
+# --- Esc cancels, says so, and leaves nothing behind ----------------------------------------------
+NEW
+CMD BOX
+CMD 0,0
+CMD L 5
+ESC
+EXPECT LOG "BOX canceled"
+EXPECT SOLIDS 0
+# And the next command starts clean rather than inheriting the abandoned L.
+CMD BOX
+CMD 0,0
+CMD
+EXPECT LOG "still need: length, width, height"
+EXPECT SOLIDS 0
+
+CHECK ALL

@@ -45,6 +45,8 @@ TEST_CASE("Every pick-driven command is routed by the model-space viewport", "[v
   const K kPickDriven[] = {
       // Draw commands.
       K::Line, K::Circle, K::Polyline, K::FeatureLine, K::Rect, K::Arc, K::Ellipse,
+      // REQ-313 as amended: the prompted solid primitives take a click at their base-point prompt.
+      K::Solid,
       K::Text, K::Mtext, K::DimAligned, K::DimLinear, K::DimAngular,
       // Inquiry / placement.
       K::IdPoint, K::SurveyInverse, K::SurfaceElevGrade, K::WaterDrop, K::Catchment, K::SwapTinEdge,
