@@ -136,4 +136,8 @@ void Remove(const std::filesystem::path& jsonFile, const std::string& drawingPat
     WriteRaw(jsonFile, v);
 }
 
+void Clear(const std::filesystem::path& jsonFile) {
+  WriteRaw(jsonFile, {});
+}
+
 }  // namespace recent
