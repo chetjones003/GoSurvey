@@ -94,6 +94,23 @@ struct DxfArcAsWritten {
   return true;
 }
 
+/// The OCS group 10/20/30 a curve's WORLD centre is written as, given its group 210 (REQ-312) — the
+/// inverse of `DxfOcsToWorld`, through the same `ucs::FromNormal` frame. False for a degenerate 210.
+///
+/// Used on export to reconstruct the centre a READER will hold: our OCS point, rounded to the six
+/// decimals `std::to_string` writes, projected back. Sweeping `$EXTMIN/$EXTMAX` from that rather
+/// than from the in-memory centre is what lets a tilted arc's DXF byte-settle at state-plane
+/// magnitude (issue #188) — the same writer/reader agreement the flat and angle paths already keep.
+[[nodiscard]] bool DxfWorldToOcs(double wx, double wy, double wz, double nx, double ny, double nz,
+                                 ray3d::Vec3* out) {
+  ucs::Ucs frame;
+  if (!ucs::FromNormal({0.0, 0.0, 0.0}, {nx, ny, nz}, &frame))
+    return false;
+  if (out)
+    *out = ucs::WorldToUcs(frame, {wx, wy, wz});
+  return true;
+}
+
 /// True when a parsed group 210 is the default world +Z, i.e. the entity is flat.
 [[nodiscard]] bool DxfExtrusionIsFlat(double nx, double ny, double nz) {
   return nx == 0.0 && ny == 0.0 && nz == 1.0;
@@ -2624,8 +2641,6 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // its `ComputeWorldExtents` matches this sweep rather than merely coming close.
   for (const CadArc& a : st.userArcs) {
     const DxfArcAsWritten aw = DxfArcToWrite(a);
-    const double dcx = static_cast<double>(a.cx);
-    const double dcy = static_cast<double>(a.cy);
     const double dr = std::fabs(static_cast<double>(a.r));
     if (dr <= 1e-12)
       continue;
@@ -2636,7 +2651,38 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     // arc's plane. Walking it in the XY projection instead gives a box that is too SMALL, and the
     // agreement the note above depends on is then lost in the direction that crops geometry.
     const bool arcFlat = IsFlatNormal(a.nx, a.ny, a.nz);
-    const ucs::Ucs arcPlane = arcFlat ? ucs::Ucs{} : CurvePlane(a);
+
+    // The centre is the one THIS FILE STATES too (issue #188), for the same reason `aw` gives the
+    // angles: a tilted arc's group 10/20/30 is an OCS coordinate `std::to_string` rounds to six
+    // decimals, and at state-plane magnitude that rounding, projected back through the group-210
+    // frame, lands the reader's centre a sub-micron off the in-memory one. Sweeping from the
+    // in-memory centre then makes `$EXTMIN/$EXTMAX` describe a drawing the entity records do not
+    // contain, the import rebase shifts every coordinate through `float`, and the file never
+    // byte-settles. Reconstructing the reader's centre here makes the rebase delta zero — its own
+    // `< 1e-9` early-out then fires and nothing shifts. A flat arc's OCS point is its world point
+    // unchanged, so this is a no-op for it.
+    double dcx = static_cast<double>(a.cx);
+    double dcy = static_cast<double>(a.cy);
+    double dcz = static_cast<double>(a.z);
+    if (!arcFlat) {
+      const auto snap6 = [](double v) {
+        return std::isfinite(v) ? std::stod(std::to_string(v)) : v;
+      };
+      ray3d::Vec3 ocs{}, wc{};
+      if (DxfWorldToOcs(dcx + st.worldDocumentOriginX, dcy + st.worldDocumentOriginY, dcz,
+                        static_cast<double>(a.nx), static_cast<double>(a.ny),
+                        static_cast<double>(a.nz), &ocs) &&
+          DxfOcsToWorld(snap6(ocs.x), snap6(ocs.y), snap6(ocs.z), static_cast<double>(a.nx),
+                        static_cast<double>(a.ny), static_cast<double>(a.nz), &wc)) {
+        dcx = wc.x - st.worldDocumentOriginX;
+        dcy = wc.y - st.worldDocumentOriginY;
+        dcz = wc.z;
+      }
+    }
+    const ucs::Ucs arcPlane =
+        arcFlat ? ucs::Ucs{}
+                : CurvePlane(dcx, dcy, dcz, static_cast<double>(a.nx), static_cast<double>(a.ny),
+                             static_cast<double>(a.nz));
     for (int i = 0; i <= n; ++i) {
       const double u = static_cast<double>(i) / static_cast<double>(n);
       const double t = static_cast<double>(aw.startRad) + static_cast<double>(aw.sweepRad) * u;
