@@ -2068,3 +2068,84 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   moments of inertia (#120 Phase 6); a general self-intersection test (Phase 4, per (f)); and any
   interchange format for solids (STEP/STL/OBJ), which ADR-026's interchange discussion covers and
   which no accepted requirement asks for.
+
+#### ADR-045 addendum — the document-facing half   (2026-09-01, accepted)
+- Context: ADR-045 settled the kernel and named increment 2's blast radius without deciding its
+  shape. These are the calls made building it, recorded here rather than left in the code, because
+  four of them are visible to the user and one changes the `.gs` format.
+- Decision:
+  (a) **A solid is a `shared_ptr<const brep::Solid>` in the store, in STORAGE coordinates** — X/Y
+  local, Z absolute, the ADR-025 D2 convention every geometry store uses. Shared and immutable for
+  the reason `CadMesh` and `CadTin` are (architecture §11.5): an undo snapshot is a refcount bump.
+  It is the one store held in `double` rather than `float`, and the exception is narrow and earned:
+  §11.8's float convention exists for arrays with millions of entries headed for a vertex buffer,
+  where a solid's B-rep is a handful of vertices — narrowing would throw away the exactness the
+  closed-form volume depends on and buy nothing. The **tessellation**, which really is GPU-bound and
+  really can be large, is narrowed to float in exactly one place.
+  (b) **Authoring is one typed line per primitive, with the active UCS supplying the orientation.**
+  `BOX <X,Y[,Z]> <length> <width> <height>` and its six siblings. This is what REQ-313's acceptance
+  asks for — "exact dimensions typed at the command line" — and no more. Reusing the UCS is what
+  gives a cylinder or cone an arbitrary 3D axis with no new command and no axis argument, which is
+  the rule REQ-312 already settled for tilted arcs and circles. **No interactive pick-and-drag flow**
+  in this increment: rubber-banding a solid needs a 3D draft preview, that is #120's Phase 5
+  direct-modelling work, and inventing it here would be scope no requirement asks for. The usage
+  text says so, so a bare `BOX` explains what the command wants rather than opening a prompt that
+  never comes.
+  (c) **Solids render in EVERY visual style, and "Hidden" means hidden-line.** This is the opposite
+  of ADR-026 (e)'s mesh rule and for the reason ADR-026 (c) itself gives: a solid HAS real edges,
+  where a mesh's "edges" are artefacts of an exporter's resolution. 2D Wireframe draws the edges
+  only; **Hidden writes the faces into the depth buffer with colour writes off** and then draws the
+  edges on top; Shaded lights the faces and draws the edges over them. Without the depth-only pass,
+  "Hidden" would mean nothing for a solid — there would be nothing to hide behind. A polygon offset
+  separates an edge from the face it bounds; that is load-bearing, not a tweak, because an edge lies
+  exactly ON its face and without a bias half of every silhouette drops out in speckles.
+  (d) **The tessellation cache is keyed on `(solid pointer, chord tolerance)` and nothing else.** A
+  solid is immutable, so an unchanged pointer means unchanged geometry; the early-out sits before any
+  allocation (the §11 invariant 7 lesson the surface cache already learned). The cache lives on
+  `AppCommandState` and is **outside every undo snapshot**, exactly as ADR-036 (e) put the surface
+  display cache outside one, and for the same reason: it is derived. Entries key on a `weak_ptr`, so
+  an erased solid's entry expires and is reaped rather than being matched by a new solid allocated at
+  the freed address.
+  (e) **REQ-100 gains a fourth profile, `BENCH SOLID`.** Not implied by the mesh profile: a solid
+  scene is many small stream-uploaded batches with a cache lookup each, where the mesh profile is one
+  large indexed upload, and those are different frames. It is also the only instrument that can catch
+  the failure #120 names directly — a tessellation being regenerated per frame would show up here and
+  nowhere else. The scene is many solids rather than one big one for exactly that reason.
+  (f) **`.gs` gains a `solids` section carrying the TOPOLOGY, not the recipe.** Rebuilding from the
+  recipe on load would mean a Phase 4 boolean result — which has no recipe — could not be saved at
+  all. Additive and omitted when there are none, so every pre-REQ-313 drawing still serializes
+  byte-identically (the ADR-020 (d) tolerant-key precedent). Every solid is **validated on load** and
+  refused with the kernel's own reason (REQ-201): an invalid solid does not crash, it quietly reports
+  a wrong volume and hands Phase 4 a shape that is not closed. Frames are written through the
+  `UcsFrameToJson` pair REQ-154 already defined, and that reuse is worth more than the saved lines —
+  its reader refuses a frame that is not right-handed orthonormal, so a hand-edited file cannot
+  present a skewed surface frame that would silently shear a solid.
+  (g) **Two new object-snap kinds, `Edge` and `Face`, behind ONE `objectSnapSolid` preference.** A
+  solid's VERTICES answer the existing Endpoint toggle and its edge MIDDLES answer Midpoint — those
+  snaps already mean exactly that, and a user with Endpoint on expects a box corner to snap. Edge and
+  Face are the two halves of "snap to a solid" and no requirement asks to enable one without the
+  other, so a second preference would be an unearned option (REQ-301). **The face answer is projected
+  onto the analytic surface**: the ray finds the triangle, `Tessellation::triFace` says which face it
+  belongs to, and `ClosestPointOnSurface` puts the point on the real surface — so on a cylinder it
+  lands on the cylinder rather than a sagitta short of it on the tessellator's chord (#120: "the
+  resulting point should lie exactly on the selected face"). Face snapping needs a pick ray and is
+  skipped without one; in a plan view there is no "under the cursor" to resolve, and answering with
+  the work-plane point would be an invention.
+  (h) **A solid is selectable and erasable; every transform REFUSES it with a stated reason.** The
+  click funnel picks against the solid's EDGES — what is drawn in every style, and in 2D Wireframe
+  the only thing on screen — and the box-selection walk uses the analytic bounds, because a sphere's
+  two stored vertices describe almost none of it. MOVE/COPY/ROTATE/SCALE/MIRROR/ARRAY/STRETCH each
+  drop solids from the selection and say how many and why, the rule Surface already established:
+  a solid silently left behind while everything selected with it moves is the outcome that must not
+  happen (REQ-201). Transforming a solid means transforming every surface frame and every arc-edge
+  frame in its topology — the same class of work REQ-312 needed for one tilted arc — and belongs with
+  #120's Phase 5.
+  (i) **Solids are not captured into block definitions**, matching surfaces, tables and feature lines,
+  which are not either. They ARE cleared when the block editor isolates the model (ADR-043's store
+  swap), so a solid from the drawing cannot leak into a block being edited.
+- Consequences: `.gs` grows one additive section and one settings key (`objectSnapSolid`); no
+  `kGsFormatVersion` bump. `RenderScene` gains one parameter, not four — the faces and edges of a
+  solid are always built together and always consumed together, the same argument
+  `CadSurfaceDisplayGeometry` records for itself. **Still not addressed**, each waiting for a caller:
+  interactive placement and 3D grips (#120 Phase 5), transforming a solid (same), booleans (Phase 4),
+  centroid and moments (Phase 6), and any interchange format for solids.

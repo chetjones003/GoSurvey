@@ -500,6 +500,7 @@ static void DrawSettingsDraftingTab(AppCommandState& cmd) {
                   "whichever object is nearer the camera. Off by default: it fires on objects that do "
                   "not meet.");
   ImGui::Checkbox("Surface elevation (interpolated TIN at the cursor)", &cmd.objectSnapSurface);
+  ImGui::Checkbox("Solid face and edge (REQ-313)", &cmd.objectSnapSolid);
   ItemHelpTooltip("Snaps to the covering visible surface's triangle plane at the cursor (REQ-127). "
                   "Weaker than endpoints so vertices still win. Off: no surface snap.");
   ImGui::Separator();

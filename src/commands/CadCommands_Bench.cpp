@@ -47,6 +47,8 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.savedSurfaceAttrs = st.cadSurfaceAttrs;
   b.savedMeshes = st.cadMeshes;
   b.savedMeshAttrs = st.cadMeshAttrs;
+  b.savedSolids = st.cadSolids;
+  b.savedSolidAttrs = st.cadSolidAttrs;
   b.savedVisualStyle = st.viewportVisualStyle;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
@@ -56,7 +58,69 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.savedPanY = st.viewportPanY;
   b.savedPanZ = st.viewportPanZ;
 
-  if (b.meshTriangleCount > 0) {
+  if (b.solidCount > 0) {
+    // B-rep solid profile (REQ-313 / REQ-100). The line, surface and mesh stores are emptied for the
+    // same reason the other large profiles empty them: the number has to be the solids' cost and
+    // nothing else.
+    //
+    // The scene is MANY solids rather than one big one, and that is the measurement's whole point. A
+    // solid's per-frame cost is not one large indexed upload — it is a cache lookup, a stream upload
+    // and a draw call per solid for the faces, and another for the edges. Ten thousand triangles in
+    // one solid and in a hundred solids are completely different frames, and the second is what a
+    // real model looks like. This is also the profile that can catch the failure #120 names
+    // directly: if the tessellation were being regenerated per frame, it would show up here and
+    // nowhere else.
+    st.userPolylineVerts.clear();
+    st.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
+    st.userPolylineClosed.clear();
+    st.userPolylineAttrs.clear();
+    st.cadSurfaces.clear();
+    st.cadSurfaceAttrs.clear();
+    st.cadMeshes.clear();
+    st.cadMeshAttrs.clear();
+    st.cadSolids.clear();
+    st.cadSolidAttrs.clear();
+    st.solidDisplayCache.clear();
+    st.solidDisplayGeometry.solids.clear();
+
+    // A grid of alternating cylinders and spheres — the two curved primitives, so the tessellation
+    // is real work rather than a box's twelve triangles.
+    const int side = std::max(1, static_cast<int>(std::ceil(std::sqrt(static_cast<double>(b.solidCount)))));
+    int made = 0;
+    for (int gy = 0; gy < side && made < b.solidCount; ++gy) {
+      for (int gx = 0; gx < side && made < b.solidCount; ++gx) {
+        ucs::Ucs frame;
+        frame.origin = {static_cast<double>(gx) * 30.0, static_cast<double>(gy) * 30.0, 0.0};
+        brep::Solid s;
+        brep::Problem why = brep::Problem::Ok;
+        const bool ok = (made % 2 == 0) ? brep::MakeCylinder(frame, 8.0, 20.0, &s, &why)
+                                        : brep::MakeSphere(frame, 9.0, &s, &why);
+        if (!ok) {
+          log.push_back(std::string("BENCH — solid scene failed to build: ") + brep::ProblemText(why));
+          return false;
+        }
+        st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+        st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+        ++made;
+      }
+    }
+    b.solidCount = made;
+
+    // Count the triangles the profile will actually draw, so the report states a DENSITY rather than
+    // an object count nobody can compare against REQ-100's other profiles.
+    b.solidTriangleCount = 0;
+    for (const CadSolidPtr& sp : st.cadSolids) {
+      brep::Tessellation t;
+      brep::Problem tw = brep::Problem::Ok;
+      if (brep::Tessellate(*sp, kSolidChordToleranceFt, &t, &tw))
+        b.solidTriangleCount += t.triangleCount();
+    }
+
+    // Shaded, for the reason the mesh profile forces it: that is the style REQ-064's budget
+    // condition is stated in, and it is the only style in which a solid's FACES are drawn at all.
+    st.viewportVisualStyle = VisualStyle::Shaded;
+    b.segmentCount = 0;
+  } else if (b.meshTriangleCount > 0) {
     // Shaded-mesh profile (REQ-100 (b), density decided 2026-08-15). The line stores are emptied
     // for the same reason the surface profile empties them: the number has to be the mesh's cost
     // and nothing else. Surfaces are cleared too, so the two large profiles can never overlap.
@@ -152,6 +216,24 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
           : ((b.surfacePointCount > 0 && !st.cadSurfaces.empty() && st.cadSurfaces[0].tin)
                  ? st.cadSurfaces[0].tin->vertsXyz
                  : st.userPolylineVerts);
+  // The solid profile frames from the solids' ANALYTIC bounds instead — there is no vertex array to
+  // walk, and a sphere's two stored vertices would frame a line segment rather than a scene, putting
+  // most of the geometry off screen and measuring a viewport with nothing in it.
+  if (b.solidCount > 0) {
+    for (const CadSolidPtr& sp : st.cadSolids) {
+      if (!sp)
+        continue;
+      const brep::Bounds bb = brep::ComputeBounds(*sp);
+      if (!bb.valid)
+        continue;
+      mnX = std::min(mnX, bb.mn.x);
+      mxX = std::max(mxX, bb.mx.x);
+      mnY = std::min(mnY, bb.mn.y);
+      mxY = std::max(mxY, bb.mx.y);
+      mnZ = std::min(mnZ, bb.mn.z);
+      mxZ = std::max(mxZ, bb.mx.z);
+    }
+  }
   for (size_t i = 0; i + 2 < frameVerts.size(); i += 3) {
     mnX = std::min(mnX, static_cast<double>(frameVerts[i]));
     mxX = std::max(mxX, static_cast<double>(frameVerts[i]));
@@ -216,9 +298,13 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
     st.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
     st.cadMeshes = std::move(b.savedMeshes);
     st.cadMeshAttrs = std::move(b.savedMeshAttrs);
+    st.cadSolids = std::move(b.savedSolids);
+    st.cadSolidAttrs = std::move(b.savedSolidAttrs);
     st.viewportVisualStyle = b.savedVisualStyle;
     b.savedMeshes.clear();
     b.savedMeshAttrs.clear();
+    b.savedSolids.clear();
+    b.savedSolidAttrs.clear();
     b.savedPolyVerts.clear();
     b.savedPolyOffsets.clear();
     b.savedPolyClosed.clear();
@@ -253,7 +339,14 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
   const char* profileName = "line segments";
   char scene[128];
   std::snprintf(scene, sizeof(scene), "%d segments", b.segmentCount);
-  if (b.meshTriangleCount > 0) {
+  if (b.solidCount > 0) {
+    profileName = "B-rep solids";
+    // Both numbers, deliberately: the triangle count is what makes this comparable with the mesh
+    // profile, and the SOLID count is what the per-object cost scales with. A p95 quoted for
+    // "40,000 triangles" alone would not say whether it came from one solid or four hundred.
+    std::snprintf(scene, sizeof(scene), "%d solids, %d triangles, Shaded", b.solidCount,
+                  b.solidTriangleCount);
+  } else if (b.meshTriangleCount > 0) {
     profileName = "shaded meshes";
     std::snprintf(scene, sizeof(scene), "%d triangles, Shaded", b.meshTriangleCount);
   } else if (b.surfacePointCount > 0) {

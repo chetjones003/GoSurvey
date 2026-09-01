@@ -712,6 +712,14 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     log.push_back("CAD export — skipped mesh(es); not written to DXF/DWG.");
   if (!st.cadSurfaces.empty())
     log.push_back("CAD export — skipped TIN surface(s); not written to DXF/DWG.");
+  // B-rep solids (ADR-045 (i)). Named and counted, never dropped in silence (REQ-201). A real solid
+  // in DXF/DWG is an ACIS 3DSOLID — a proprietary binary B-rep GoSurvey cannot write without a
+  // third-party kernel REQ-300 does not permit — and writing a tessellated approximation instead
+  // would hand the user a picture of their solid that round-trips back as an uneditable bag of
+  // triangles with an approximate volume. The same boundary ADR-026 (c) drew for meshes.
+  if (!st.cadSolids.empty())
+    log.push_back("CAD export — skipped " + std::to_string(st.cadSolids.size()) +
+                  " solid(s); DXF/DWG has no lossless representation for them (ADR-045).");
   (void)dwg;
 }
 

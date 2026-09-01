@@ -1,0 +1,296 @@
+# REQ-313 (GitHub #146, Phase 3 of #120) - the seven solid primitives, end to end.
+#
+# What this transcript is FOR. BrepTests already proves the KERNEL: the volumes, the topology, the
+# refusals, the survey-magnitude stability. None of that says a user can reach any of it. This file
+# tests the half the kernel cannot: that a typed command creates the solid the user asked for, that
+# it lands in the document, that it is drawn, that it survives a save and reopen, and that every
+# way of getting it wrong is refused out loud rather than silently.
+#
+# EXPECT SOLIDPROPS asserts volume, area AND topology counts together, deliberately. They are one
+# claim - "this is the shape that was asked for" - and split into separate verbs a transcript could
+# assert the volume of a solid whose topology had changed underneath it.
+
+NEW
+
+EXPECT SOLIDS 0
+CMD SOLIDLIST
+EXPECT LOG "No solids in this drawing"
+
+# --- BOX ------------------------------------------------------------------------------------------
+# 20 x 10 x 8 = 1600. Area = 2(200 + 160 + 80) = 880. A box is 8 vertices, 12 edges, 6 faces.
+CMD BOX 100,100 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Box
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+EXPECT LOG "Box created"
+
+# --- CYLINDER -------------------------------------------------------------------------------------
+# r=4, h=25.  V = pi*16*25 = 1256.6370614359172
+# A = 2*pi*16 + 2*pi*4*25 = 100.53096491487338 + 628.3185307179587 = 728.849495632832
+# Seamed into two half-faces plus two caps: 4 vertices, 6 edges, 4 faces.
+CMD CYLINDER 200,100 4 25
+EXPECT SOLIDS 2
+EXPECT SOLIDKIND 1 Cylinder
+EXPECT SOLIDPROPS 1 1256.6370614359172 728.849495632832 4 6 4
+
+# --- SPHERE ---------------------------------------------------------------------------------------
+# r=5.  V = 4/3*pi*125 = 523.5987755982989,  A = 4*pi*25 = 314.1592653589793
+# ONE face per half-sphere and nothing else: 2 vertices (the poles), 2 edges (the seam meridians),
+# 2 faces. That count IS the analytic-face decision (ADR-045 (b)) - a faceted sphere could not
+# have it, and could not report this volume either.
+CMD SPHERE 300,100,50 5
+EXPECT SOLIDS 3
+EXPECT SOLIDKIND 2 Sphere
+EXPECT SOLIDPROPS 2 523.5987755982989 314.1592653589793 2 2 2
+
+# --- TORUS ----------------------------------------------------------------------------------------
+# R=10, r=2.  V = 2*pi^2*10*4 = 789.5683520871486,  A = 4*pi^2*10*2 = 789.5683520871486
+# Genus 1: 4 vertices, 8 edges, 4 faces (V - E + F = 0, not 2).
+CMD TORUS 400,100 10 2
+EXPECT SOLIDKIND 3 Torus
+EXPECT SOLIDPROPS 3 789.5683520871486 789.5683520871486 4 8 4
+
+# --- CONE (apex) ----------------------------------------------------------------------------------
+# r=3, h=11.  V = pi*9*11/3 = 103.67255756846318
+# A = pi*9 + pi*3*sqrt(130) = 28.274333882308138 + 107.45900211615... = 135.7333360
+CMD CONE 500,100 3 0 11
+EXPECT SOLIDKIND 4 Cone
+EXPECT SOLIDPROPS 4 103.67255756846318 135.7333360 3 4 3
+
+# --- WEDGE ----------------------------------------------------------------------------------------
+# 12 x 5 x 9.  V = 0.5*12*5*9 = 270
+# A = 60 (base) + 5*sqrt(144+81)=75 (slope) + 45 (back) + 108 (two ends) = 288
+CMD WEDGE 600,100 12 5 9
+EXPECT SOLIDKIND 5 Wedge
+EXPECT SOLIDPROPS 5 270 288 6 9 5
+
+# --- PYRAMID --------------------------------------------------------------------------------------
+# 4 sides, base circumradius 6, apex, height 15.
+# base area = 0.5*4*36*sin(pi/2) = 72,  V = 72*15/3 = 360
+# side = 2*6*sin(pi/4) = 8.485281374238571; apothem = 6*cos(pi/4) = 4.242640687119285
+# slant = sqrt(225 + 18) = 15.588457268119896;  lateral = 0.5*4*side*slant = 264.5448913
+# A = 72 + 264.5448913 = 336.5448913
+CMD PYRAMID 700,100 4 6 0 15
+EXPECT SOLIDKIND 6 Pyramid
+EXPECT SOLIDPROPS 6 360 336.5448913 5 8 5
+
+EXPECT SOLIDS 7
+
+# --- The solids are DRAWN -------------------------------------------------------------------------
+# One batch per visible solid, and the tessellation cache has real triangles in it. This is what
+# separates "the document has seven solids" from "seven solids reach the renderer".
+EXPECT SOLIDBATCHES 7
+CHECK ALL
+
+# --- SOLIDLIST reports the properties -------------------------------------------------------------
+CMD SOLIDLIST
+EXPECT LOG "Solids: 7"
+EXPECT LOG "Torus"
+
+# --- Every way to get it wrong is REFUSED, and nothing is created (REQ-201) ------------------------
+CMD BOX 800,100 0 10 8
+EXPECT LOG "Length must be greater than zero"
+EXPECT SOLIDS 7
+
+CMD BOX 800,100 20 -1 8
+EXPECT LOG "Width must be greater than zero"
+EXPECT SOLIDS 7
+
+CMD CYLINDER 800,100 -2 10
+EXPECT LOG "Radius must be greater than zero"
+EXPECT SOLIDS 7
+
+# A torus whose tube swallows its own axis is the ONE way a primitive here can self-intersect, so it
+# is refused at construction rather than left to a validity check afterwards (ADR-045 (f)).
+CMD TORUS 800,100 4 4
+EXPECT LOG "would pass through the axis"
+EXPECT SOLIDS 7
+
+CMD CONE 800,100 5 5 5
+EXPECT LOG "Top radius must be smaller than the base radius"
+EXPECT SOLIDS 7
+
+CMD PYRAMID 800,100 2 5 0 5
+EXPECT LOG "between 3 and 64 sides"
+EXPECT SOLIDS 7
+
+# A fractional side count is refused, not silently truncated to a square.
+CMD PYRAMID 800,100 4.5 5 0 5
+EXPECT LOG "side count must be a whole number"
+EXPECT SOLIDS 7
+
+CMD SPHERE 800,100 banana
+EXPECT LOG "is not a number"
+EXPECT SOLIDS 7
+
+CMD BOX 800,100 20 10
+EXPECT LOG "Usage: BOX"
+EXPECT SOLIDS 7
+
+CMD BOX 800,100 20 10 8 3
+EXPECT LOG "too many values"
+EXPECT SOLIDS 7
+
+CMD BOX 800,100,50,7 20 10 8
+EXPECT LOG "too many coordinates"
+EXPECT SOLIDS 7
+
+CMD SPHERE
+EXPECT LOG "Usage: SPHERE"
+EXPECT SOLIDS 7
+
+# --- The whole set survives .gs save and reopen ----------------------------------------------------
+# Topology, not the recipe: what is written is the faces and edges, so a shape with no recipe (a
+# Phase 4 boolean) will save the same way (ADR-045 (a)). If the reload rebuilt from the recipe
+# instead, every count below would still pass and the claim would be untested - which is why the
+# volumes are asserted to a relative 1e-6 rather than to REQ-101's 0.01.
+SAVEAS %OUT%/solids.gs
+OPEN %OUT%/solids.gs
+
+EXPECT SOLIDS 7
+EXPECT SOLIDKIND 0 Box
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+EXPECT SOLIDKIND 1 Cylinder
+EXPECT SOLIDPROPS 1 1256.6370614359172 728.849495632832 4 6 4
+EXPECT SOLIDKIND 2 Sphere
+EXPECT SOLIDPROPS 2 523.5987755982989 314.1592653589793 2 2 2
+EXPECT SOLIDKIND 3 Torus
+EXPECT SOLIDPROPS 3 789.5683520871486 789.5683520871486 4 8 4
+EXPECT SOLIDKIND 4 Cone
+EXPECT SOLIDPROPS 4 103.67255756846318 135.7333360 3 4 3
+EXPECT SOLIDKIND 5 Wedge
+EXPECT SOLIDPROPS 5 270 288 6 9 5
+EXPECT SOLIDKIND 6 Pyramid
+EXPECT SOLIDPROPS 6 360 336.5448913 5 8 5
+
+# And they are still drawable after the round trip.
+EXPECT SOLIDBATCHES 7
+
+# --- DXF/DWG export says what it skipped, out loud (ADR-045 (i), REQ-201) --------------------------
+EXPORT DXF %OUT%/solids.dxf
+EXPECT LOG "skipped 7 solid(s)"
+
+CHECK ALL
+
+# --- A legacy drawing with no solids round-trips unchanged ------------------------------------------
+# The `solids` key is omitted entirely when there are none, which is what keeps every pre-REQ-313
+# drawing serializing exactly as it did (the ADR-020 (d) tolerant-key precedent).
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,10
+ESC
+SAVEAS %OUT%/nosolids.gs
+EXPECT FILELACKS %OUT%/nosolids.gs "solids"
+OPEN %OUT%/nosolids.gs
+EXPECT SOLIDS 0
+EXPECT LINES 1
+
+CHECK ALL
+
+# --- A solid on an off layer is not drawn, and a frozen one is not either -------------------------
+# The rule every entity kind is held to (REQ-084 (d) / REQ-068): what is invisible must also be
+# unclickable, which is why one predicate answers both. SOLIDS counts the DOCUMENT and SOLIDBATCHES
+# counts what reaches the renderer, so the gap between them is the filter doing its job. Without
+# this pair, deleting the visibility check entirely would leave the suite green.
+NEW
+CLAYER SOLIDS-A
+CMD BOX 0,0 4 4 4
+CLAYER SOLIDS-B
+CMD SPHERE 50,0 3
+EXPECT SOLIDS 2
+EXPECT SOLIDBATCHES 2
+
+LAYERSTATE SOLIDS-A OFF
+EXPECT SOLIDS 2
+EXPECT SOLIDBATCHES 1
+
+LAYERSTATE SOLIDS-B FREEZE
+EXPECT SOLIDS 2
+EXPECT SOLIDBATCHES 0
+
+LAYERSTATE SOLIDS-A ON
+LAYERSTATE SOLIDS-B THAW
+EXPECT SOLIDBATCHES 2
+
+# --- Erase takes a solid out in one undo step, and undo brings it back ----------------------------
+# Through the real selection flow (CMD SELECT + a crossing box), not a direct store poke: the point
+# is that a solid answers a box selection like any other entity and that ERASE removes it.
+CMD SELECT
+BOX -500 -500 500 500
+EXPECT SELECTED 2
+CMD DELETE
+EXPECT SOLIDS 0
+EXPECT SOLIDBATCHES 0
+UNDO
+EXPECT SOLIDS 2
+EXPECT SOLIDBATCHES 2
+
+CHECK ALL
+
+# --- A solid follows the document origin when it is established (REQ-101) --------------------------
+# The case a review caught. The origin is established the first time a large coordinate is TYPED,
+# which is not necessarily before anything has been drawn: a solid created at small coordinates and
+# then joined by a state-plane line has to be shifted with everything else, or it silently jumps by
+# the origin's whole magnitude - keeping its volume, its area and its topology the whole way, so
+# every other assertion in this file would still have passed.
+#
+# EXPECT SOLIDBOUNDS is the only verb here that says WHERE a solid is, which is why the defect
+# survived until someone went looking for it.
+NEW
+CMD BOX 0,0 10 10 10
+EXPECT SOLIDBOUNDS 0 -5 -5 0 5 5 10
+
+CMD LINE
+CMD 2000000,2000000
+CMD 2000010,2000000
+ESC
+EXPECT LINEXYZ 0 2000000 2000000 0 2000010 2000000 0
+
+# The box has NOT moved in world terms, even though every stored coordinate under it has.
+EXPECT SOLIDBOUNDS 0 -5 -5 0 5 5 10
+EXPECT SOLIDPROPS 0 1000 600 8 12 6
+
+# And it survives the round trip in the rebased frame.
+SAVEAS %OUT%/rebased.gs
+OPEN %OUT%/rebased.gs
+EXPECT SOLIDBOUNDS 0 -5 -5 0 5 5 10
+EXPECT SOLIDPROPS 0 1000 600 8 12 6
+
+CHECK ALL
+
+# --- The active UCS supplies the orientation (#120's "arbitrary 3D axis") --------------------------
+# Every other solid in this file is built on the world frame, which cannot tell a frame that is
+# being used from one that is being ignored. A cylinder on a VERTICAL work plane can: its axis has
+# to run along world -Y, and its volume must not care either way.
+NEW
+CMD UCS ZA
+CMD 0,0
+CMD 0,-1
+CMD CYLINDER 0,0 4 20
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1005.3096491487338 603.1857894892403 4 6 4
+# 40 deep in Y and 8 across in X and Z - a cylinder lying down, not standing up.
+EXPECT SOLIDBOUNDS 0 -4 -20 -4 4 0 4
+SAVEAS %OUT%/ucssolid.gs
+OPEN %OUT%/ucssolid.gs
+EXPECT SOLIDPROPS 0 1005.3096491487338 603.1857894892403 4 6 4
+EXPECT SOLIDBOUNDS 0 -4 -20 -4 4 0 4
+
+# --- Creating a solid is one undo step -------------------------------------------------------------
+NEW
+CMD BOX 0,0 4 4 4
+CMD SPHERE 40,0 3
+EXPECT SOLIDS 2
+UNDO
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Box
+EXPECT SOLIDBATCHES 1
+UNDO
+EXPECT SOLIDS 0
+EXPECT SOLIDBATCHES 0
+REDO
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 64 96 8 12 6
+
+CHECK ALL

@@ -340,6 +340,16 @@ struct Tessellation {
   std::vector<double> normalsXyz;
   std::vector<std::uint32_t> indices;
 
+  /// Which \ref Solid::faces entry each triangle came from — one entry per triangle, parallel to
+  /// `indices` in threes.
+  ///
+  /// This is what lets a ray test done against the *triangles* report an answer on the *surface*:
+  /// pick the nearest triangle, look up its face, then project the hit onto that face's analytic
+  /// surface with \ref ClosestPointOnSurface. Without it a face snap would return a point on the
+  /// chord rather than on the cylinder, which is wrong by the sagitta — small, plausible, and
+  /// exactly the kind of error that survives a screenshot review.
+  std::vector<int> triFace;
+
   [[nodiscard]] int vertexCount() const { return static_cast<int>(vertsXyz.size() / 3); }
   [[nodiscard]] int triangleCount() const { return static_cast<int>(indices.size() / 3); }
 };
@@ -357,9 +367,51 @@ struct Tessellation {
 /// and until then it would be an abstraction with no call site.
 [[nodiscard]] bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy);
 
+/// The solid's **edges** as line segments, at the same chord tolerance: six doubles per segment
+/// (both endpoints), the `GL_LINES` layout the rest of the project uses.
+///
+/// A solid has real edges, which is the whole reason it can be drawn as a wireframe at all where an
+/// imported mesh cannot (ADR-026 (c) — a mesh's "edges" are artefacts of an exporter's resolution).
+/// Lives here rather than in the display layer so the chord rule is written down once: an edge and
+/// the face it bounds must be subdivided by the same rule, or the wireframe visibly floats off the
+/// shading it outlines.
+[[nodiscard]] bool TessellateEdges(const Solid& s, double chordTolerance, std::vector<double>* out,
+                                   Problem* outWhy);
+
 /// The point at parameter \p t in [0,1] along \p e, walking from `v0` to `v1`. The one place an
 /// edge's parametrisation is written down, so the tessellator and the validity check cannot
 /// disagree about where an arc runs.
 [[nodiscard]] Vec3 EdgePointAt(const Solid& s, const Edge& e, double t);
+
+// ---------------------------------------------------------------------------------------------
+// Closest-point queries. These are what object snapping is built on: a snap must return a point
+// that lies **on** the geometry, and for a curved face that means on the surface, not on the chord
+// the tessellator drew across it.
+// ---------------------------------------------------------------------------------------------
+
+/// The point on \p sf's *unbounded* analytic surface nearest \p p.
+///
+/// Unbounded deliberately: the caller has already decided which face it is asking about (by ray
+/// testing that face's triangles), so re-imposing the parametric bounds here could only move the
+/// answer off the face the user is pointing at. Returns \p p unchanged where the nearest point is
+/// undefined — a point exactly on a cylinder's axis, or at a sphere's centre — rather than
+/// returning a NaN or picking a direction arbitrarily.
+[[nodiscard]] Vec3 ClosestPointOnSurface(const Surface& sf, const Vec3& p);
+
+/// The point on \p e nearest \p p, clamped to the edge's own extent — so the answer is on the edge
+/// itself, never on the infinite line or full circle it lies along.
+[[nodiscard]] Vec3 ClosestPointOnEdge(const Solid& s, const Edge& e, const Vec3& p);
+
+/// \p s moved by \p delta, leaving its shape and orientation alone.
+///
+/// **Lives here because only this header knows every place a coordinate hides in a `Solid`** — the
+/// vertices, each arc edge's centre, each face's surface origin, and the recipe's placement frame.
+/// Open-coded at a call site, adding a field to \ref Surface later would silently miss it, and a
+/// solid that half-moved is not a shape at all.
+///
+/// The axes are directions and the radii are lengths, so neither moves. The first caller is the
+/// document-origin rebase (REQ-101), where a store that does not follow the origin is a solid that
+/// silently jumps by the origin's whole magnitude.
+[[nodiscard]] Solid Translate(const Solid& s, const Vec3& delta);
 
 } // namespace brep

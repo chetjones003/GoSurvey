@@ -6,6 +6,7 @@
 #include "util/curveintersect.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -663,6 +664,111 @@ void ComputeApparentIntersections(const Camera& cam, const std::vector<IsectSeg>
   return false;
 }
 
+
+/// The point ON THE RAY nearest to \p e — a starting point for the projection back onto the edge.
+///
+/// A coarse scan and then one projection, rather than a closed form. The closed form exists for a
+/// line but not for a general arc-against-a-ray, and a two-code-path version of this would be a
+/// place for the two to disagree about which point is "nearest" — which shows up as a snap that
+/// jumps between a straight edge and a curved one under the same cursor. 32 samples puts the coarse
+/// answer within a hundredth of a turn, and \ref brep::ClosestPointOnEdge does the rest exactly.
+ray3d::Vec3 ClosestRayPointToEdge(const ray3d::Ray& ray, const brep::Solid& s, const brep::Edge& e) {
+  const int n = e.kind == brep::CurveKind::Line ? 1 : 32;
+  double bestD = std::numeric_limits<double>::max();
+  ray3d::Vec3 best = brep::EdgePointAt(s, e, 0.0);
+  for (int i = 0; i <= n; ++i) {
+    const ray3d::Vec3 p = brep::EdgePointAt(s, e, static_cast<double>(i) / static_cast<double>(n));
+    const double d = ray3d::RayPointDistance(ray, p);
+    if (d < bestD) {
+      bestD = d;
+      best = p;
+    }
+  }
+  const double t = ray3d::Dot(ray3d::Sub(best, ray.origin), ray.dir);
+  return ray.at(t > 0.0 ? t : 0.0);
+}
+
+/// Does \p ray come near \p b at all? A slab test, used to reject a whole solid before its triangles
+/// are walked.
+///
+/// This is not a micro-optimisation. Object snapping runs on HOVER, every frame, and the triangle
+/// walk below is O(triangles) per solid — a few hundred solids at a couple of thousand triangles
+/// each is most of a million ray-triangle tests per frame, which is REQ-100's budget gone on a
+/// cursor that is not near any of them. Four compares that discard a solid first is the difference.
+///
+/// The box is padded by \p pad so a ray passing just outside a solid still reaches the triangles: a
+/// snap that silently misses is worse than a slow one, which is the same call the surface pick makes
+/// about its own plan-AABB reject.
+[[nodiscard]] bool RayNearBounds(const ray3d::Ray& ray, const brep::Bounds& b, double pad) {
+  if (!b.valid)
+    return false;
+  const double mn[3] = {b.mn.x - pad, b.mn.y - pad, b.mn.z - pad};
+  const double mx[3] = {b.mx.x + pad, b.mx.y + pad, b.mx.z + pad};
+  const double o[3] = {ray.origin.x, ray.origin.y, ray.origin.z};
+  const double d[3] = {ray.dir.x, ray.dir.y, ray.dir.z};
+  double tNear = -std::numeric_limits<double>::max();
+  double tFar = std::numeric_limits<double>::max();
+  for (int i = 0; i < 3; ++i) {
+    if (std::fabs(d[i]) < 1e-12) {
+      if (o[i] < mn[i] || o[i] > mx[i])
+        return false;  // parallel to this slab and outside it
+      continue;
+    }
+    double t0 = (mn[i] - o[i]) / d[i];
+    double t1 = (mx[i] - o[i]) / d[i];
+    if (t0 > t1)
+      std::swap(t0, t1);
+    tNear = std::max(tNear, t0);
+    tFar = std::min(tFar, t1);
+    if (tNear > tFar)
+      return false;
+  }
+  return tFar >= 0.0;
+}
+
+/// Nearest front-facing triangle hit along \p ray, over the flat 9-floats-per-triangle buffer the
+/// solid display cache holds. Writes the hit point and the FACE the triangle belongs to.
+///
+/// Möller–Trumbore, two-sided: a solid can be viewed from inside (an orbit that puts the camera in
+/// the middle of a box is ordinary), and a one-sided test would report nothing there rather than the
+/// far wall. Nearest hit wins, which is what makes the snap land on the surface facing the user.
+bool RayHitSolidFace(const ray3d::Ray& ray, const std::vector<float>& triVerts,
+                     const std::vector<int>& triFaceIds, ray3d::Vec3* outHit, int* outFace) {
+  const size_t triCount = triVerts.size() / 9;
+  double bestT = std::numeric_limits<double>::max();
+  bool found = false;
+  for (size_t t = 0; t < triCount; ++t) {
+    const size_t b = t * 9;
+    const ray3d::Vec3 v0{triVerts[b], triVerts[b + 1], triVerts[b + 2]};
+    const ray3d::Vec3 v1{triVerts[b + 3], triVerts[b + 4], triVerts[b + 5]};
+    const ray3d::Vec3 v2{triVerts[b + 6], triVerts[b + 7], triVerts[b + 8]};
+    const ray3d::Vec3 e1 = ray3d::Sub(v1, v0);
+    const ray3d::Vec3 e2 = ray3d::Sub(v2, v0);
+    const ray3d::Vec3 pv = ray3d::Cross(ray.dir, e2);
+    const double det = ray3d::Dot(e1, pv);
+    if (std::fabs(det) < 1e-12)
+      continue;  // ray parallel to the triangle's plane
+    const double invDet = 1.0 / det;
+    const ray3d::Vec3 tv = ray3d::Sub(ray.origin, v0);
+    const double u = ray3d::Dot(tv, pv) * invDet;
+    if (u < 0.0 || u > 1.0)
+      continue;
+    const ray3d::Vec3 qv = ray3d::Cross(tv, e1);
+    const double v = ray3d::Dot(ray.dir, qv) * invDet;
+    if (v < 0.0 || u + v > 1.0)
+      continue;
+    const double hitT = ray3d::Dot(e2, qv) * invDet;
+    if (hitT <= 0.0 || hitT >= bestT)
+      continue;
+    bestT = hitT;
+    found = true;
+    if (outHit)
+      *outHit = ray.at(hitT);
+    if (outFace)
+      *outFace = t < triFaceIds.size() ? triFaceIds[t] : -1;
+  }
+  return found;
+}
 } // namespace
 
 Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive, float tolWorld,
@@ -935,6 +1041,92 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
         CadBlockCollectWorldCenters(cmd.blockDefs, br, &bctr);
         for (const CadBlockWorldPoint& p : bctr)
           Consider(&acc, wx, wy, p.x, p.y, Kind::Center, tolWorld, p.z);
+      }
+    }
+  }
+
+  // --- B-rep solid snaps (REQ-313 / ADR-045) ------------------------------------------------------
+  //
+  // Four kinds come off a solid, and which toggle governs which is a deliberate split:
+  //
+  //   Endpoint  its VERTICES     — the ordinary Endpoint toggle. A box corner IS an endpoint, and a
+  //                                user with Endpoint on expects a corner to snap.
+  //   Midpoint  its EDGE MIDDLES — the ordinary Midpoint toggle, same argument.
+  //   Edge      any point ALONG an edge  ) both behind `objectSnapSolid`, the one preference that
+  //   Face      any point ON a face      ) means "snap to solids" (REQ-301: not two options).
+  //
+  // The FACE answer is what needs care. The ray is tested against the cached triangles to decide
+  // which face is under the cursor, and the hit is then projected onto that face's ANALYTIC surface
+  // — so on a cylinder the point comes back on the cylinder rather than a sagitta short of it, on
+  // the chord the tessellator happened to draw (#120: "the resulting point should lie exactly on the
+  // selected face"). Without that projection a face snap would be quietly wrong by an amount that
+  // shrinks as you zoom in, which is the least reportable kind of wrong there is.
+  //
+  // Face snapping needs a pick ray and is skipped without one: in a plan view with no ray there is
+  // no "under the cursor" to resolve, and answering with the work-plane point would be an invention.
+  if (!cmd.cadSolids.empty()) {
+    const bool wantSolidEdge = want(Kind::Edge, cmd.objectSnapSolid);
+    const bool wantSolidFace = want(Kind::Face, cmd.objectSnapSolid);
+    const ray3d::Vec3 cursor{wx, wy, acc.ray ? acc.ray->origin.z : 0.0};
+
+    for (size_t si = 0; si < cmd.cadSolids.size(); ++si) {
+      if (!SolidVisible(cmd, si))
+        continue;  // layer off/frozen or isolated out — invisible and unclickable must not disagree
+      if (exclude.valid && exclude.type == SelectedEntity::Type::Solid &&
+          exclude.index == static_cast<int>(si))
+        continue;
+      const CadSolidPtr& sp = cmd.cadSolids[si];
+      if (!sp)
+        continue;
+
+      if (wantEndpoint || wantMidpoint || wantSolidEdge) {
+        if (wantEndpoint) {
+          for (const brep::Vertex& v : sp->vertices)
+            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(v.p.x),
+                     static_cast<float>(v.p.y), Kind::Endpoint, tolWorld, static_cast<float>(v.p.z));
+        }
+        for (const brep::Edge& e : sp->edges) {
+          if (wantMidpoint) {
+            const ray3d::Vec3 mid = brep::EdgePointAt(*sp, e, 0.5);
+            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(mid.x),
+                     static_cast<float>(mid.y), Kind::Midpoint, tolWorld, static_cast<float>(mid.z));
+          }
+          if (wantSolidEdge) {
+            // Measured from the cursor RAY where there is one, so an orbited view snaps to the edge
+            // the user is pointing at rather than to whatever passes under the same plan XY.
+            //
+            // With no ray — a plan view — the probe is the cursor at the datum, and the answer is
+            // still a point ON the edge; `ConsiderSnap` then ranks it by plan XY distance, which is
+            // what plan view does for every other kind. For the horizontal and vertical edges every
+            // primitive is mostly made of, that lands on the same point a proper 2D projection
+            // would; on a slanted edge it can favour the lower end, which is a bias in WHICH point
+            // of the edge is offered, never in whether the point is on it.
+            const ray3d::Vec3 probe = acc.ray ? ClosestRayPointToEdge(*acc.ray, *sp, e) : cursor;
+            const ray3d::Vec3 on = brep::ClosestPointOnEdge(*sp, e, probe);
+            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(on.x),
+                     static_cast<float>(on.y), Kind::Edge, tolWorld, static_cast<float>(on.z));
+          }
+        }
+      }
+
+      if (wantSolidFace && acc.ray) {
+        // Reject the whole solid before touching its triangles — see RayNearBounds. Hover runs this
+        // every frame, and the walk below is O(triangles).
+        if (!RayNearBounds(*acc.ray, brep::ComputeBounds(*sp), static_cast<double>(tolWorld)))
+          continue;
+        const auto it = std::find_if(cmd.solidDisplayCache.begin(), cmd.solidDisplayCache.end(),
+                                     [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+        if (it == cmd.solidDisplayCache.end() || it->triVerts.empty())
+          continue;  // not tessellated yet; it becomes snappable on the frame after it is drawn
+        ray3d::Vec3 hit{};
+        int faceIndex = -1;
+        if (RayHitSolidFace(*acc.ray, it->triVerts, it->triFaceIds, &hit, &faceIndex) && faceIndex >= 0 &&
+            static_cast<size_t>(faceIndex) < sp->faces.size()) {
+          // The triangle told us WHICH face; the surface tells us WHERE on it.
+          const ray3d::Vec3 exact = brep::ClosestPointOnSurface(sp->faces[static_cast<size_t>(faceIndex)].surface, hit);
+          Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(exact.x),
+                   static_cast<float>(exact.y), Kind::Face, tolWorld, static_cast<float>(exact.z));
+        }
       }
     }
   }
@@ -1450,6 +1642,13 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   }
   case Kind::Grip:
     break; // grip snap points are per-selection, not gathered globally
+  // A solid's edge and face have no global list to gather: both are resolved from the cursor RAY
+  // against the solid under it, so there is no aperture-free "every one of these in the drawing"
+  // for the snap picker to enumerate. Listed explicitly rather than left to a default, so adding
+  // a Kind later is a compile error here rather than a silently missing entry.
+  case Kind::Edge:
+  case Kind::Face:
+    break;
   case Kind::Surface: {
     float z = 0.f;
     if (SurfaceSnapElevation(cmd, static_cast<double>(sortWorldX), static_cast<double>(sortWorldY), &z))

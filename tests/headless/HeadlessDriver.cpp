@@ -209,6 +209,11 @@ void TickFrame(Run& run) {
   // it: after ids, because it is keyed on them. TickSurfaceRebuilds is deliberately NOT called here —
   // see the req069 transcript's header on why this driver uses the synchronous SURFACEREBUILD.
   RefreshSurfaceDisplayGeometry(run.st);
+  // The solid tessellation cache (REQ-313), in main.cpp's own order — right after the surface
+  // refresh. Running it here is what lets a transcript assert the CACHE rather than only the
+  // document: "tessellation is cached" and "a solid is drawn" are claims about this call's output,
+  // and without it the driver would only ever see solids that exist and never solids that draw.
+  RefreshSolidDisplayGeometry(run.st);
 
   // Watch surface 0's triangulation identity, for EXPECT SURFACETINGEN. Compared with
   // `owner_before`-free pointer equality against a locked weak_ptr rather than by holding a
@@ -750,6 +755,44 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     run.st.currentLayer = name;
     // Registers the name in the drawing's layer table, exactly as the Layer manager's OK does.
     SyncDrawingLayerTableWithGeometry(run.st);
+  } else if (verb == "LAYERSTATE") {
+    // LAYERSTATE <name> ON|OFF|FREEZE|THAW — flip a layer's visibility, exactly as the Layer
+    // manager's checkboxes do.
+    //
+    // Here for the same reason CLAYER is: the Layer manager is a DIALOG, so there is no typed route
+    // to this, and without it a transcript cannot state the rule every entity kind is held to —
+    // that what is invisible is also unclickable (REQ-084 (d)). A visibility filter that silently
+    // stopped working would otherwise have no failing test available to it.
+    std::string stateRaw;
+    const std::string name = Trim(FirstWord(rest, &stateRaw));
+    const std::string state = UpperAscii(Trim(stateRaw));
+    if (name.empty() || state.empty()) {
+      Fail(run, "parse", "LAYERSTATE expects <name> ON|OFF|FREEZE|THAW", sourceLine);
+      return false;
+    }
+    CadLayerRow* row = nullptr;
+    for (CadLayerRow& r : run.st.drawingLayerTable) {
+      if (UpperAscii(r.name) == UpperAscii(name)) {
+        row = &r;
+        break;
+      }
+    }
+    if (!row) {
+      Fail(run, "state", "LAYERSTATE: no layer named " + name, sourceLine);
+      return false;
+    }
+    if (state == "ON")
+      row->on = true;
+    else if (state == "OFF")
+      row->on = false;
+    else if (state == "FREEZE")
+      row->frozen = true;
+    else if (state == "THAW")
+      row->frozen = false;
+    else {
+      Fail(run, "parse", "LAYERSTATE: unknown state " + state + " (ON|OFF|FREEZE|THAW)", sourceLine);
+      return false;
+    }
   } else if (verb == "UCSNAMED") {
     // UCSNAMED RESTORE|DELETE <name> — the View Manager's two named-UCS buttons.
     //
@@ -1346,6 +1389,136 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "expect", buf, sourceLine);
         return false;
       }
+    } else if (what == "SOLIDPROPS") {
+      // EXPECT SOLIDPROPS <index> <volume> <area> <vertices> <edges> <faces>
+      //
+      // One verb for all six numbers, because they are one claim: this solid is the shape it was
+      // asked for. Splitting them into six verbs would let a transcript assert the volume of a solid
+      // whose topology had silently changed, which is exactly the failure that must not pass.
+      //
+      // Volume and area are compared to a RELATIVE 1e-6, not to REQ-101's 0.01: these come from
+      // closed-form integrals over analytic faces (REQ-313), so a figure that merely scraped under
+      // 0.01 would mean something had been faceted or narrowed on the way through.
+      std::istringstream is(arg);
+      long idx = -1;
+      double wantVol = 0.0;
+      double wantArea = 0.0;
+      long wantV = 0;
+      long wantE = 0;
+      long wantF = 0;
+      if (!(is >> idx >> wantVol >> wantArea >> wantV >> wantE >> wantF)) {
+        Fail(run, "parse",
+             "EXPECT SOLIDPROPS needs <index> <volume> <area> <vertices> <edges> <faces>", sourceLine);
+        return false;
+      }
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.cadSolids.size() ||
+          !run.st.cadSolids[static_cast<size_t>(idx)]) {
+        Fail(run, "expect",
+             "EXPECT SOLIDPROPS: no solid at index " + std::to_string(idx) + " (there are " +
+                 std::to_string(run.st.cadSolids.size()) + ")",
+             sourceLine);
+        return false;
+      }
+      const brep::Solid& s = *run.st.cadSolids[static_cast<size_t>(idx)];
+      const brep::Problem why = brep::Validate(s);
+      if (why != brep::Problem::Ok) {
+        Fail(run, "expect",
+             std::string("EXPECT SOLIDPROPS: solid ") + std::to_string(idx) + " is not valid — " +
+                 brep::ProblemText(why),
+             sourceLine);
+        return false;
+      }
+      const brep::MassProperties mp = brep::ComputeMassProperties(s);
+      const double volTol = std::max(1e-6, std::fabs(wantVol) * 1e-6);
+      const double areaTol = std::max(1e-6, std::fabs(wantArea) * 1e-6);
+      char buf[220];
+      if (std::fabs(mp.volume - wantVol) > volTol) {
+        std::snprintf(buf, sizeof(buf), "EXPECT SOLIDPROPS %ld: volume is %.9g, expected %.9g", idx,
+                      mp.volume, wantVol);
+        Fail(run, "expect", buf, sourceLine);
+        return false;
+      }
+      if (std::fabs(mp.surfaceArea - wantArea) > areaTol) {
+        std::snprintf(buf, sizeof(buf), "EXPECT SOLIDPROPS %ld: area is %.9g, expected %.9g", idx,
+                      mp.surfaceArea, wantArea);
+        Fail(run, "expect", buf, sourceLine);
+        return false;
+      }
+      const long gotV = static_cast<long>(s.vertices.size());
+      const long gotE = static_cast<long>(s.edges.size());
+      const long gotF = static_cast<long>(s.faces.size());
+      if (gotV != wantV || gotE != wantE || gotF != wantF) {
+        std::snprintf(buf, sizeof(buf),
+                      "EXPECT SOLIDPROPS %ld: topology is %ld/%ld/%ld (v/e/f), expected %ld/%ld/%ld",
+                      idx, gotV, gotE, gotF, wantV, wantE, wantF);
+        Fail(run, "expect", buf, sourceLine);
+        return false;
+      }
+    } else if (what == "SOLIDBOUNDS") {
+      // EXPECT SOLIDBOUNDS <index> <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ> — the solid's analytic bounds
+      // in WORLD coordinates, to REQ-101's 0.01 ft.
+      //
+      // The only verb here that says WHERE a solid is. Every other one says what shape it is, and a
+      // review found exactly the defect that gap allows: a solid that did not follow the document
+      // origin when it was established silently moved by the origin's whole magnitude, with correct
+      // volume, correct area and correct topology the entire time.
+      std::istringstream is(arg);
+      long idx = -1;
+      double want[6] = {0, 0, 0, 0, 0, 0};
+      if (!(is >> idx >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5])) {
+        Fail(run, "parse", "EXPECT SOLIDBOUNDS needs <index> <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ>",
+             sourceLine);
+        return false;
+      }
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.cadSolids.size() ||
+          !run.st.cadSolids[static_cast<size_t>(idx)]) {
+        Fail(run, "expect", "EXPECT SOLIDBOUNDS: no solid at index " + std::to_string(idx), sourceLine);
+        return false;
+      }
+      const brep::Bounds b = brep::ComputeBounds(*run.st.cadSolids[static_cast<size_t>(idx)]);
+      if (!b.valid) {
+        Fail(run, "expect", "EXPECT SOLIDBOUNDS: the solid has no bounds", sourceLine);
+        return false;
+      }
+      // Storage is local in XY and absolute in Z (ADR-025 D2), so the box is lifted back to world
+      // before comparing — otherwise the expected numbers would depend on where the origin happens
+      // to sit, which is the very thing this verb exists to check.
+      const double got[6] = {b.mn.x + run.st.worldDocumentOriginX, b.mn.y + run.st.worldDocumentOriginY,
+                             b.mn.z,
+                             b.mx.x + run.st.worldDocumentOriginX, b.mx.y + run.st.worldDocumentOriginY,
+                             b.mx.z};
+      const char* names[6] = {"mnX", "mnY", "mnZ", "mxX", "mxY", "mxZ"};
+      for (int k = 0; k < 6; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[160];
+          std::snprintf(msg, sizeof(msg), "EXPECT SOLIDBOUNDS %ld: %s is %.6f, expected %.6f", idx,
+                        names[k], got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+    } else if (what == "SOLIDKIND") {
+      // EXPECT SOLIDKIND <index> <name> — the recipe the solid remembers (ADR-045 (c)). Separate
+      // from SOLIDPROPS on purpose: the recipe is NOT the geometry, and a test that could only
+      // check them together could not tell the two apart.
+      std::istringstream is(arg);
+      long idx = -1;
+      std::string wantName;
+      if (!(is >> idx >> wantName)) {
+        Fail(run, "parse", "EXPECT SOLIDKIND needs <index> <kind name>", sourceLine);
+        return false;
+      }
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.cadSolids.size() ||
+          !run.st.cadSolids[static_cast<size_t>(idx)]) {
+        Fail(run, "expect", "EXPECT SOLIDKIND: no solid at index " + std::to_string(idx), sourceLine);
+        return false;
+      }
+      const std::string got = brep::PrimitiveKindName(run.st.cadSolids[static_cast<size_t>(idx)]->recipe.kind);
+      if (got != wantName) {
+        Fail(run, "expect", "EXPECT SOLIDKIND " + std::to_string(idx) + ": is " + got + ", expected " + wantName,
+             sourceLine);
+        return false;
+      }
     } else if (what == "LINEXYZ") {
       // EXPECT LINEXYZ <index> <x1> <y1> <z1> <x2> <y2> <z2> — one line's endpoints, in WORLD
       // coordinates, to REQ-101's 0.01 ft.
@@ -1657,6 +1830,21 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // How many batches the renderer would be handed, across every visible surface. Zero means
       // nothing is drawn for surfaces at all, which is how "a surface on a frozen layer" and "a
       // style with everything switched off" are told apart from a cache that simply never filled.
+      else if (what == "SOLIDS")
+        got = static_cast<long>(run.st.cadSolids.size());
+      // How many solids the renderer would be handed this frame — the cache and the visibility
+      // filter, not the document. A solid on a frozen layer counts in SOLIDS and not in SOLIDBATCHES,
+      // which is the only way a transcript can state REQ-084 (d) for a solid.
+      else if (what == "SOLIDBATCHES")
+        got = static_cast<long>(run.st.solidDisplayGeometry.solids.size());
+      // Triangles in the whole solid tessellation cache. #120 asks that the render mesh not be
+      // regenerated every frame; this is what lets a transcript assert the cache HAS content and,
+      // paired with SOLIDTESSGEN below, that it is not being rebuilt behind the scenes.
+      else if (what == "SOLIDTRIS") {
+        got = 0;
+        for (const CadSolidTessellation& e : run.st.solidDisplayCache)
+          got += static_cast<long>(e.triVerts.size() / 9);
+      }
       else if (what == "SURFACEBATCHES")
         got = static_cast<long>(run.st.surfaceDisplayGeometry.lines.size());
       // REQ-072 band-fill and slope-arrow geometry, surface 0's cache entry only — see
@@ -1689,7 +1877,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
                  " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
                  " EXTRACTMATCHESDISPLAY"
                  " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN SURFACEBANDTRIS SURFACEARROWSEGS"
-                 " SURFACEBANDBATCHES)",
+                 " SURFACEBANDBATCHES SOLIDS SOLIDBATCHES SOLIDTRIS)",
              sourceLine);
         return false;
       }

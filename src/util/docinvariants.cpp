@@ -161,6 +161,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   CheckAttrCount(out, "filled regions", st.cadFilledRegions.size(), st.cadFilledRegionAttrs.size());
   CheckAttrCount(out, "meshes", st.cadMeshes.size(), st.cadMeshAttrs.size());
   CheckAttrCount(out, "surfaces", st.cadSurfaces.size(), st.cadSurfaceAttrs.size());
+  CheckAttrCount(out, "solids", st.cadSolids.size(), st.cadSolidAttrs.size());  // REQ-313
   CheckAttrCount(out, "tables", st.cadTables.size(), st.cadTableAttrs.size());
   CheckAttrCount(out, "block refs", st.cadBlockRefs.size(), st.cadBlockRefAttrs.size());
   CheckAttrCount(out, "polylines", PolylineCount(st), st.userPolylineAttrs.size());
@@ -335,6 +336,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       case T::Surface:      return st.cadSurfaces.size();  // REQ-068 / ADR-036 (b)
       case T::Table:        return st.cadTables.size();
       case T::BlockRef:     return st.cadBlockRefs.size();  // GitHub issue #124
+      case T::Solid:        return st.cadSolids.size();      // REQ-313 / ADR-045
       }
       return 0;
     };

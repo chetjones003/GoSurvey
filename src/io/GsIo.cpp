@@ -642,6 +642,219 @@ SurveyLabelStyleTemplates SurveyLabelTemplatesFromJson(const json& o) {
   return t;
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// B-rep solids (REQ-313 / ADR-045). The TOPOLOGY is what is written, not the recipe: a solid's
+// topology is its stored truth (ADR-045 (a)), and rebuilding it from the recipe on load would mean
+// a Phase 4 boolean result — which has no recipe — could not be saved at all.
+//
+// Additive and omitted when there are none, so a drawing written before solids existed still
+// serializes byte-identically and no `kGsFormatVersion` bump is needed (the ADR-020 (d) tolerant-key
+// precedent the mesh and surface sections above both follow).
+//
+// Nothing is rounded on the way out. `nlohmann::json` writes a double in its shortest
+// round-trip-exact form, so a reloaded solid's volume is the volume that was saved — which is the
+// whole reason the analytic faces were worth having (REQ-101).
+//
+// The frames are written by the `UcsFrameToJson` / `UcsFrameFromJson` pair already defined above
+// for REQ-154 rather than by a second encoding of the same four vectors — and the reuse is worth
+// more than the saved lines: that reader REFUSES a frame that is not right-handed orthonormal, so a
+// hand-edited file cannot present a skewed surface frame that would silently shear a solid.
+// ---------------------------------------------------------------------------------------------
+
+bool ReadVec3(const json& j, ray3d::Vec3* out) {
+  if (!j.is_array() || j.size() != 3)
+    return false;
+  for (const auto& c : j)
+    if (!c.is_number())
+      return false;
+  out->x = j[0].get<double>();
+  out->y = j[1].get<double>();
+  out->z = j[2].get<double>();
+  return std::isfinite(out->x) && std::isfinite(out->y) && std::isfinite(out->z);
+}
+
+
+json SolidToJson(const brep::Solid& s) {
+  json o;
+
+  json verts = json::array();
+  for (const brep::Vertex& v : s.vertices)
+    verts.push_back(json::array({v.p.x, v.p.y, v.p.z}));
+  o["vertices"] = std::move(verts);
+
+  json edges = json::array();
+  for (const brep::Edge& e : s.edges) {
+    json je;
+    je["kind"] = static_cast<int>(e.kind);
+    je["v0"] = e.v0;
+    je["v1"] = e.v1;
+    if (e.kind == brep::CurveKind::Arc) {
+      je["frame"] = UcsFrameToJson(e.frame);
+      je["r"] = e.radius;
+      je["sweep"] = e.sweep;
+    }
+    edges.push_back(std::move(je));
+  }
+  o["edges"] = std::move(edges);
+
+  json faces = json::array();
+  for (const brep::Face& f : s.faces) {
+    json jf;
+    json sf;
+    sf["kind"] = static_cast<int>(f.surface.kind);
+    sf["frame"] = UcsFrameToJson(f.surface.frame);
+    sf["r"] = f.surface.radius;
+    sf["r2"] = f.surface.radius2;
+    sf["h"] = f.surface.height;
+    jf["surface"] = std::move(sf);
+    jf["u"] = json::array({f.uStart, f.uEnd});
+    jf["v"] = json::array({f.vStart, f.vEnd});
+    json loops = json::array();
+    for (const brep::Loop& lp : f.loops) {
+      json jl = json::array();
+      for (const brep::EdgeUse& u : lp.uses)
+        jl.push_back(json::array({u.edge, u.reversed ? 1 : 0}));
+      loops.push_back(std::move(jl));
+    }
+    jf["loops"] = std::move(loops);
+    faces.push_back(std::move(jf));
+  }
+  o["faces"] = std::move(faces);
+
+  json shells = json::array();
+  for (const brep::Shell& sh : s.shells)
+    shells.push_back(sh.faces);
+  o["shells"] = std::move(shells);
+
+  // The recipe rides along for the Properties panel and for future parametric regeneration. It is
+  // NEVER consulted to rebuild the geometry on load — see the section note above.
+  json rc;
+  rc["kind"] = static_cast<int>(s.recipe.kind);
+  rc["frame"] = UcsFrameToJson(s.recipe.frame);
+  rc["length"] = s.recipe.length;
+  rc["width"] = s.recipe.width;
+  rc["height"] = s.recipe.height;
+  rc["radius"] = s.recipe.radius;
+  rc["radius2"] = s.recipe.radius2;
+  rc["sides"] = s.recipe.sides;
+  o["recipe"] = std::move(rc);
+
+  return o;
+}
+
+/// Rebuild one solid. Returns false — writing nothing — on any structural problem, so a hand-edited
+/// or truncated file is refused with a reason rather than partly loaded (REQ-201). The caller
+/// validates the result afterwards; this only has to produce something well-formed enough to check.
+bool SolidFromJson(const json& o, brep::Solid* out) {
+  if (!o.is_object())
+    return false;
+
+  if (o.contains("vertices") && o["vertices"].is_array()) {
+    for (const auto& jv : o["vertices"]) {
+      brep::Vertex v;
+      if (!ReadVec3(jv, &v.p))
+        return false;
+      out->vertices.push_back(v);
+    }
+  }
+
+  if (o.contains("edges") && o["edges"].is_array()) {
+    for (const auto& je : o["edges"]) {
+      if (!je.is_object() || !je.contains("kind") || !je.contains("v0") || !je.contains("v1"))
+        return false;
+      brep::Edge e;
+      const int k = je["kind"].get<int>();
+      if (k != static_cast<int>(brep::CurveKind::Line) && k != static_cast<int>(brep::CurveKind::Arc))
+        return false;
+      e.kind = static_cast<brep::CurveKind>(k);
+      e.v0 = je["v0"].get<int>();
+      e.v1 = je["v1"].get<int>();
+      if (e.kind == brep::CurveKind::Arc) {
+        if (!je.contains("frame") || !UcsFrameFromJson(je["frame"], &e.frame))
+          return false;
+        if (!je.contains("r") || !je.contains("sweep"))
+          return false;
+        e.radius = je["r"].get<double>();
+        e.sweep = je["sweep"].get<double>();
+      }
+      out->edges.push_back(e);
+    }
+  }
+
+  if (o.contains("faces") && o["faces"].is_array()) {
+    for (const auto& jf : o["faces"]) {
+      if (!jf.is_object() || !jf.contains("surface"))
+        return false;
+      brep::Face f;
+      const json& sf = jf["surface"];
+      if (!sf.is_object() || !sf.contains("kind") || !sf.contains("frame"))
+        return false;
+      const int sk = sf["kind"].get<int>();
+      if (sk < static_cast<int>(brep::SurfaceKind::Plane) || sk > static_cast<int>(brep::SurfaceKind::Torus))
+        return false;
+      f.surface.kind = static_cast<brep::SurfaceKind>(sk);
+      if (!UcsFrameFromJson(sf["frame"], &f.surface.frame))
+        return false;
+      f.surface.radius = sf.value("r", 0.0);
+      f.surface.radius2 = sf.value("r2", 0.0);
+      f.surface.height = sf.value("h", 0.0);
+      if (jf.contains("u") && jf["u"].is_array() && jf["u"].size() == 2) {
+        f.uStart = jf["u"][0].get<double>();
+        f.uEnd = jf["u"][1].get<double>();
+      }
+      if (jf.contains("v") && jf["v"].is_array() && jf["v"].size() == 2) {
+        f.vStart = jf["v"][0].get<double>();
+        f.vEnd = jf["v"][1].get<double>();
+      }
+      if (jf.contains("loops") && jf["loops"].is_array()) {
+        for (const auto& jl : jf["loops"]) {
+          if (!jl.is_array())
+            return false;
+          brep::Loop lp;
+          for (const auto& ju : jl) {
+            if (!ju.is_array() || ju.size() != 2)
+              return false;
+            brep::EdgeUse u;
+            u.edge = ju[0].get<int>();
+            u.reversed = ju[1].get<int>() != 0;
+            lp.uses.push_back(u);
+          }
+          f.loops.push_back(std::move(lp));
+        }
+      }
+      out->faces.push_back(std::move(f));
+    }
+  }
+
+  if (o.contains("shells") && o["shells"].is_array()) {
+    for (const auto& js : o["shells"]) {
+      if (!js.is_array())
+        return false;
+      brep::Shell sh;
+      for (const auto& fi : js)
+        sh.faces.push_back(fi.get<int>());
+      out->shells.push_back(std::move(sh));
+    }
+  }
+
+  if (o.contains("recipe") && o["recipe"].is_object()) {
+    const json& rc = o["recipe"];
+    const int rk = rc.value("kind", 0);
+    if (rk >= static_cast<int>(brep::PrimitiveKind::None) && rk <= static_cast<int>(brep::PrimitiveKind::Torus))
+      out->recipe.kind = static_cast<brep::PrimitiveKind>(rk);
+    if (rc.contains("frame"))
+      (void)UcsFrameFromJson(rc["frame"], &out->recipe.frame);  // cosmetic; never rebuilds geometry
+    out->recipe.length = rc.value("length", 0.0);
+    out->recipe.width = rc.value("width", 0.0);
+    out->recipe.height = rc.value("height", 0.0);
+    out->recipe.radius = rc.value("radius", 0.0);
+    out->recipe.radius2 = rc.value("radius2", 0.0);
+    out->recipe.sides = rc.value("sides", 0);
+  }
+  return true;
+}
+
 json BuildRoot(const AppCommandState& st) {
   json root;
   root["format"] = "gosurvey";
@@ -1196,6 +1409,27 @@ json BuildRoot(const AppCommandState& st) {
     doc["meshAttrs"] = std::move(meshAttrs);
   }
 
+  // B-rep solids (REQ-313 / ADR-045). Additive and omitted when there are none, so every drawing
+  // written before solids existed still serializes byte-identically — the same ADR-020 (d)
+  // precedent the mesh section above follows. See SolidToJson for why the topology is written
+  // rather than the recipe.
+  if (!st.cadSolids.empty()) {
+    json solids = json::array();
+    for (const CadSolidPtr& sp : st.cadSolids) {
+      if (!sp)
+        continue;
+      solids.push_back(SolidToJson(*sp));
+    }
+    doc["solids"] = std::move(solids);
+    json solidAttrs = json::array();
+    for (const auto& a : st.cadSolidAttrs) {
+      json o;
+      EntityAttributesToJson(a, o);
+      solidAttrs.push_back(std::move(o));
+    }
+    doc["solidAttrs"] = std::move(solidAttrs);
+  }
+
   // TIN surfaces (REQ-068). Additive and omitted when there are none, so a pre-REQ-068 drawing still
   // serializes byte-identically — the same ADR-020 (d) precedent the mesh section above follows.
   //
@@ -1531,6 +1765,7 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapIntersection"] = st.objectSnapIntersection;
   settings["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   settings["objectSnapSurface"] = st.objectSnapSurface;
+  settings["objectSnapSolid"] = st.objectSnapSolid;  // REQ-313
   settings["objectSnapAperturePx"] = st.objectSnapAperturePx;
   settings["objectSnapGlyphHalfPx"] = st.objectSnapGlyphHalfPx;
 
@@ -1712,6 +1947,7 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   b(s, "objectSnapIntersection", &st.objectSnapIntersection);
   b(s, "objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   b(s, "objectSnapSurface", &st.objectSnapSurface);
+  b(s, "objectSnapSolid", &st.objectSnapSolid);
   num(s, "objectSnapAperturePx", &st.objectSnapAperturePx);
   num(s, "objectSnapGlyphHalfPx", &st.objectSnapGlyphHalfPx);
   st.objectSnapAperturePx = std::clamp(st.objectSnapAperturePx, 4.f, 64.f);
@@ -2315,6 +2551,38 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["meshAttrs"])
       st.cadMeshAttrs.push_back(EntityAttributesFromJson(o));
   st.cadMeshAttrs.resize(st.cadMeshes.size());  // keep the parallel arrays length-locked
+
+  // B-rep solids (REQ-313 / ADR-045). Guarded, so a drawing written before them simply has none.
+  //
+  // Every solid is VALIDATED before it is stored, exactly as a mesh is above and for a sharper
+  // reason: an invalid solid does not crash, it quietly reports a wrong volume and hands a Phase 4
+  // boolean a shape that is not closed. A file that carries one is refused with the kernel's own
+  // reason (REQ-201) rather than partly loaded.
+  st.cadSolids.clear();
+  st.cadSolidAttrs.clear();
+  st.solidDisplayCache.clear();
+  st.solidDisplayGeometry.solids.clear();
+  if (doc.contains("solids") && doc["solids"].is_array()) {
+    int solidIdx = 0;
+    for (const auto& el : doc["solids"]) {
+      ++solidIdx;
+      brep::Solid s;
+      if (!SolidFromJson(el, &s)) {
+        log.push_back("Solid " + std::to_string(solidIdx) + " skipped — the stored topology is malformed.");
+        continue;
+      }
+      const brep::Problem why = brep::Validate(s);
+      if (why != brep::Problem::Ok) {
+        log.push_back("Solid " + std::to_string(solidIdx) + " skipped — " + brep::ProblemText(why));
+        continue;
+      }
+      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    }
+  }
+  if (doc.contains("solidAttrs") && doc["solidAttrs"].is_array())
+    for (const auto& o : doc["solidAttrs"])
+      st.cadSolidAttrs.push_back(EntityAttributesFromJson(o));
+  st.cadSolidAttrs.resize(st.cadSolids.size());  // keep the parallel arrays length-locked
 
   // TIN surfaces (REQ-068). Guarded, so a drawing written before them simply has none.
   st.cadSurfaces.clear();
