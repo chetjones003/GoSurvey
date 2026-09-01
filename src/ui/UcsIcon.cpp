@@ -4,6 +4,8 @@
 
 #include <cmath>
 
+#include "viewport/Crosshair3d.hpp"  // shared axis hues + the direction projection (REQ-310)
+
 namespace ucsicon {
 namespace {
 
@@ -50,9 +52,16 @@ void Draw(ImDrawList* dl, const Camera& cam, const ucs::Ucs& frame, float origin
 
   // Distinct hues per axis, following the near-universal CAD convention (X red, Y green, Z blue) so
   // the icon needs no legend. Alpha is held below full so the icon never competes with the drawing.
-  const ImU32 colX = IM_COL32(226, 96, 96, 235);
-  const ImU32 colY = IM_COL32(112, 198, 112, 235);
-  const ImU32 colZ = IM_COL32(110, 150, 235, 235);
+  //
+  // The hues themselves live in `crosshair3d` (REQ-310) because the 3D crosshair draws the same
+  // three axes: if the icon and the cursor disagreed about which axis is green, both would be
+  // worse than either alone. One definition, two consumers.
+  const ImU32 colX = IM_COL32(crosshair3d::kAxisColorX.r, crosshair3d::kAxisColorX.g,
+                              crosshair3d::kAxisColorX.b, 235);
+  const ImU32 colY = IM_COL32(crosshair3d::kAxisColorY.r, crosshair3d::kAxisColorY.g,
+                              crosshair3d::kAxisColorY.b, 235);
+  const ImU32 colZ = IM_COL32(crosshair3d::kAxisColorZ.r, crosshair3d::kAxisColorZ.g,
+                              crosshair3d::kAxisColorZ.b, 235);
   const ImU32 colInk = IM_COL32(210, 210, 214, 220);
 
   const ImVec2 root(originX, originY);

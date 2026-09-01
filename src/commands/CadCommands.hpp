@@ -969,6 +969,11 @@ struct NamedView {
   float azimuthDeg = 0.f;
   float elevationDeg = 90.f;
   float rollDeg = 0.f;  ///< Screen roll (#153); nonzero only for a view saved on a tilted-UCS PLAN.
+  /// Projection travels with the view (REQ-309). Without these a view saved in perspective would
+  /// restore as orthographic — the same silent-mismatch reason the UCS is stored here rather than
+  /// left to whatever happens to be active at restore time.
+  Camera::Projection projection = Camera::Projection::Orthographic;
+  float fovDeg = kDefaultFovDeg;
   ucs::Ucs ucs;
 };
 
@@ -988,6 +993,10 @@ struct DrawingDocument {
   float  viewportAzimuthDeg = 0.f;    ///< Camera orientation per tab (REQ-058); plan view by default.
   float  viewportElevationDeg = 90.f;
   float  viewportRollDeg = 0.f;       ///< Screen roll per tab (#153); nonzero only after PLAN of a tilted UCS.
+  /// Projection per tab (REQ-309). Saved and restored with the orientation above, so switching
+  /// tabs cannot carry one drawing's projection into another's.
+  Camera::Projection viewportProjection = Camera::Projection::Orthographic;
+  float  viewportFovDeg = kDefaultFovDeg;
   /// The UCS is per drawing, not per session (REQ-154): switching tabs must not carry one drawing's
   /// coordinate frame into another's, which is the "UCS state does not leak between viewports"
   /// condition in as strong a form as a one-model-view-per-tab application can state it.
@@ -1822,6 +1831,16 @@ struct AppCommandState {
   /// and every hand orbit; set only by `PLAN` of a UCS whose Z is tilted off world +Z, so that the
   /// UCS +Y comes out up the screen. Persisted per drawing alongside azimuth/elevation.
   float viewportRollDeg = 0.f;
+
+  /// How the view projects (REQ-309 / D-2026-08-31-g). `Camera` has implemented both projections
+  /// since REQ-058; these two fields are what finally *select* between them — before them nothing
+  /// in the application ever assigned `Camera::projection`, so perspective was unreachable.
+  ///
+  /// They sit here, beside azimuth/elevation, because they share exactly that lifetime: per
+  /// drawing, saved per tab, persisted in `.gs`, restored by a named view. **Orthographic is the
+  /// default everywhere**, which is what keeps REQ-058's plan-view parity guarantee intact.
+  Camera::Projection viewportProjection = Camera::Projection::Orthographic;
+  float viewportFovDeg = kDefaultFovDeg;  ///< Perspective vertical FOV; ignored when orthographic.
 
   /// ViewCube orientation animation (REQ-059). A face/arrow/home press sets a target and the view
   /// eases to it over \ref kViewAnimSeconds instead of snapping, so the user keeps their bearings —
@@ -2906,6 +2925,11 @@ struct AppCommandState {
   float viewportCrosshairPickHalfPxX = 4.f;
   float viewportCrosshairPickHalfPxY = 4.f;
   float viewportCrosshairHairPx = 1.f;
+  /// 3D crosshair cursor (REQ-310): draw the active UCS's X/Y/Z axes instead of two screen-aligned
+  /// arms, so the cursor shows which way the drawing plane runs under an orbited view or a rotated
+  /// UCS. **Off by default** — on, the cursor changes colour and orientation, and a display change
+  /// no one asked for is the one thing REQ-064 was careful to avoid when it added visual styles.
+  bool viewportCrosshair3d = false;
   /// Viewport background (model-space clear color): RGB 0–1. Default #1F1F2A dark gray.
   float viewportBgR = 0.1f;
   float viewportBgG = 0.1f;
@@ -3415,6 +3439,8 @@ inline Camera CadViewCamera(const AppCommandState& st) {
   c.azimuthDeg = st.viewportAzimuthDeg;
   c.elevationDeg = st.viewportElevationDeg;
   c.rollDeg = st.viewportRollDeg;  // #153: nonzero only under a tilted-UCS PLAN
+  c.projection = st.viewportProjection;
+  c.fovDeg = st.viewportFovDeg;
   c.nearZ = -100000.f;
   c.farZ = 100000.f;
   return c;

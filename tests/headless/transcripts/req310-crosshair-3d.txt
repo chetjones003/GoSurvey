@@ -1,0 +1,63 @@
+# REQ-310 (GitHub #144, Phase 1 of #120) - 3D crosshair cursor.
+#
+# What this transcript is FOR: the COMMAND and the SETTING - that CROSSHAIR3D can be turned on and
+# off, refuses bad input safely, and survives a .gs round trip. The projected axis geometry is
+# covered by Crosshair3dTests [req310], which pins the screen-space sign conventions; the drawing
+# itself is ImGui and has no headless path.
+#
+# Assertions use EXPECT CROSSHAIR3D (live state), not EXPECT LOG, for the same reason REQ-309's
+# transcript does: EXPECT LOG substring-matches the whole accumulated log, so it cannot assert a
+# toggle's CURRENT value once that value has been reported once.
+
+NEW
+
+# --- Off by default: an existing drawing's cursor is unchanged ------------------------------------
+EXPECT CROSSHAIR3D OFF
+CMD CROSSHAIR3D
+EXPECT LOG "3D crosshair = OFF"
+
+# --- Turning it on --------------------------------------------------------------------------------
+CMD CROSSHAIR3D ON
+EXPECT CROSSHAIR3D ON
+EXPECT LOG "the cursor shows the UCS X/Y/Z axes"
+
+# --- And off again ---------------------------------------------------------------------------------
+CMD CROSSHAIR3D OFF
+EXPECT CROSSHAIR3D OFF
+CMD CROSSHAIR3D ON
+EXPECT CROSSHAIR3D ON
+
+# --- Bad input is REFUSED and leaves the setting alone (REQ-201) -----------------------------------
+CMD CROSSHAIR3D SIDEWAYS
+EXPECT LOG "CROSSHAIR3D - enter ON or OFF."
+EXPECT CROSSHAIR3D ON
+
+# --- It is a view setting, not geometry: the drawing is untouched ----------------------------------
+CMD ELEV
+CMD 30
+ESC
+CMD LINE
+CMD 0,0
+CMD 10,20
+ESC
+EXPECT LINES 1
+EXPECT LINEXYZ 0 0 0 30 10 20 30
+CMD CROSSHAIR3D OFF
+CMD CROSSHAIR3D ON
+EXPECT LINEXYZ 0 0 0 30 10 20 30
+
+# --- Survives a .gs round trip ----------------------------------------------------------------------
+SAVEAS %OUT%/xhair.gs
+OPEN %OUT%/xhair.gs
+EXPECT CROSSHAIR3D ON
+
+# ...and so does OFF, which is the additive-key case: the key is written only when ON, so this
+# proves the absent key reads as OFF rather than carrying the previous session's value.
+CMD CROSSHAIR3D OFF
+SAVEAS %OUT%/xhair-off.gs
+CMD CROSSHAIR3D ON
+EXPECT CROSSHAIR3D ON
+OPEN %OUT%/xhair-off.gs
+EXPECT CROSSHAIR3D OFF
+
+CHECK ALL

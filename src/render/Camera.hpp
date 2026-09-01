@@ -5,6 +5,17 @@
 
 #include "util/ray3d.hpp"
 
+/// Perspective field-of-view default and bounds (REQ-309).
+///
+/// Bounded rather than merely finite because `ScreenRay` and `WorldToScreen` both divide by
+/// `tan(fov/2)`: at 0 that is a division by zero, and at 180 the view volume inverts. Neither is a
+/// view a user can ask for by accident and recover from, so the command layer refuses them outright
+/// (REQ-201) instead of storing a camera that cannot project. The range is generous — 45 is the
+/// default, and the bounds only exclude the degenerate ends.
+inline constexpr float kDefaultFovDeg = 45.f;
+inline constexpr float kMinFovDeg = 1.f;
+inline constexpr float kMaxFovDeg = 179.f;
+
 /// The model viewport's camera (REQ-058 / ADR-025 (c)).
 ///
 /// A **value type**, not an abstraction: it has three present-day concrete uses — the model
@@ -50,7 +61,7 @@ struct Camera {
 
   enum class Projection { Orthographic = 0, Perspective = 1 };
   Projection projection = Projection::Orthographic;
-  float fovDeg = 45.f;  ///< Perspective vertical field of view.
+  float fovDeg = kDefaultFovDeg;  ///< Perspective vertical field of view.
 
   /// Depth range. Generous because survey drawings span large coordinates and the view volume is
   /// centred on the target rather than fitted to the geometry.

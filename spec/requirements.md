@@ -4521,6 +4521,123 @@ requirements is a planning failure, not a sign of rigor.
   index 0 (architecture §11.5 amended); new `gosurvey-recent.json` MRU store; thumbnail capture
   from the drawing `ViewportRenderer` FBO stored as BMP (in-tree writer, no new dependency).
 
+### REQ-309 — Selectable view projection: orthographic and perspective (GitHub issue #144)
+- Purpose: REQ-058 built a camera that already implements both projections — `Camera::Projection`,
+  `fovDeg`, and the perspective branches of `WorldToScreen` and `ScreenRay` are all present and
+  correct — but **nothing in the application ever selects perspective**. No code path assigns
+  `Camera::projection`, no command reaches it, and `.gs` does not persist it. The projection a
+  drawing is viewed with is therefore fixed at orthographic for the life of the product, and
+  GitHub issue #120's acceptance condition "Perspective view works" cannot be met. This
+  requirement makes the existing capability reachable, persistent and testable; it does not add
+  projection maths.
+- Priority: should
+- Type: functional
+- Statement: The model viewport's **projection is a user-selectable per-drawing view property**
+  with two values, **Orthographic (the default) and Perspective**, plus a perspective **field of
+  view** in degrees. A `PERSPECTIVE` command reports the current projection when given no
+  argument and sets it when given one, following the shape `VS` (REQ-064) already established for
+  visual style; `FOV` reports and sets the field of view. Both are reachable from the View ribbon
+  beside the existing visual-style control.
+
+  Projection is a property of **how the drawing is looked at, never of the drawing itself**: no
+  stored coordinate changes when it is switched, which is the same rule REQ-154 states for the
+  UCS. Switching to perspective and back returns the view to its previous appearance.
+
+  Picking, object snapping and every overlay position must remain correct under perspective.
+  `ScreenRay` builds a **diverging ray from an eye point** there, where the orthographic case
+  builds parallel rays differing only in origin, so every consumer of `ScreenRay` and
+  `WorldToScreen` is affected — this is the same class of breakage REQ-058's own acceptance
+  captured with "every entity type, not only lines".
+
+  Projection and field of view persist in `.gs` for the model viewport and for **named views**
+  (REQ-106), which already carry the camera's azimuth and elevation and would otherwise restore a
+  perspective view as orthographic. A legacy `.gs` carrying neither field loads as orthographic
+  with the default field of view and renders identically to pre-change.
+
+  **Orthographic remains the default everywhere** — at startup, for a new drawing, and for any
+  file that does not say otherwise — so REQ-058's "plan view renders pixel-comparable to the
+  pre-change build" is untouched.
+- Acceptance:
+  - `PERSPECTIVE` with no argument reports the current projection; with an argument it sets it,
+    and an unrecognised argument is refused with the projection unchanged (REQ-201);
+  - `FOV` reports and sets the field of view, and a non-finite or out-of-range value is refused
+    with the value unchanged (REQ-201);
+  - switching orthographic → perspective → orthographic leaves every stored coordinate untouched
+    and returns the view to its prior appearance;
+  - a point projected by `WorldToScreen` under perspective round-trips through `ScreenRay` back
+    to the same world point within REQ-101;
+  - object snapping resolves to the correct world coordinates under perspective, verified against
+    hand-computed values within REQ-101;
+  - projection and field of view survive `.gs` save/reopen for the model viewport;
+  - a named view saved in perspective restores in perspective, with its field of view;
+  - a legacy `.gs` with neither field loads as orthographic at the default field of view;
+  - the REQ-100 frame budget is met while orbiting in perspective.
+- Owner-layer: Commands (`PERSPECTIVE` / `FOV`, `CadViewCamera`, per-drawing state), UI (View
+  ribbon control), IO (`.gs` model viewport + named views)
+- Status: accepted (2026-08-31)
+- Revisions: 2026-08-31 — initial. Raised by the GitHub issue #120 Phase 1 audit, which found the
+  projection maths complete and unreachable. Paper-space per-viewport projection is **explicitly
+  out of scope**: REQ-061's per-viewport camera is not implemented at all — `Viewport`
+  (`PaperSpace.hpp`) carries no camera orientation — so a projection field there would have
+  nothing to compose with. Recorded as a distinct gap, not folded in here.
+
+### REQ-310 — 3D crosshair cursor showing the UCS axes (GitHub issue #144)
+- Purpose: once the camera can orbit (REQ-058) and the UCS can be rotated (REQ-154), a
+  screen-aligned crosshair stops describing the drawing. Its two arms are always horizontal and
+  vertical on screen no matter which way the work plane runs, so the cursor gives the user no cue
+  where a typed X or Y will actually go — the one piece of feedback that matters most while
+  drawing in a tilted view. AutoCAD solves this with a 3D crosshair whose arms are the active
+  UCS's axes; this is that.
+- Priority: should
+- Type: functional
+- Statement: The model-space cursor has a **3D mode** in which its arms are the **active UCS's X,
+  Y and Z axes projected into the current view**, replacing the two screen-aligned arms. The axes
+  are coloured by the near-universal CAD convention — **X red, Y green, Z blue** — using the same
+  values as the REQ-154 UCS icon, so the two indicators can never disagree about which axis is
+  which. Each axis is drawn as a full line through the cursor centre, gapped around the pickbox.
+
+  The arms **foreshorten with the view**: an axis pointing at the viewer collapses, and below a
+  small pixel threshold it is not drawn at all — its absence is the cue that it points out of the
+  screen. In plan view with the world UCS this means two arms, X to screen-right and Y to
+  screen-up, which is how every existing drawing has always been read.
+
+  The mode is **off by default** and is toggled by a `CROSSHAIR3D` command (reporting when given
+  no argument, setting when given one) and by a checkbox beside the other crosshair settings. It
+  persists in `.gs`.
+
+  **Model space only.** A paper sheet is 2D by definition (ADR-009/013), so there is no frame
+  there for the axes to describe and the cursor stays the standard crosshair. The REQ-121
+  object-selection **pickbox rule still wins**: during a selection step the cursor is the box
+  alone, with no arms, in either mode.
+
+  The projection is pure geometry, computable without a graphics context, for the same reason
+  `Camera` is (ADR-002): an arm drawn along the wrong screen direction still looks like a 3D
+  cursor, so the sign conventions need a test that does not depend on a window.
+- Acceptance:
+  - `CROSSHAIR3D` with no argument reports the current mode; with an argument it sets it, and an
+    unrecognised argument is refused with the mode unchanged (REQ-201);
+  - in plan view with the world UCS, the X arm projects to screen-right and the Y arm to
+    screen-up, at equal length;
+  - under a UCS rotated 90° about Z, the arms follow the UCS and not the world;
+  - orbiting rotates the triad with the camera, and the X and Y arms stay perpendicular on screen
+    through a full azimuth sweep;
+  - tilting off plan makes the Z arm appear pointing up the screen, and foreshortens the arm that
+    tips away from the viewer;
+  - an axis pointing at the viewer is not drawn, and plan view — where Z does exactly that — is
+    still treated as a valid 3D crosshair rather than falling back;
+  - a degenerate frame falls back to the standard crosshair rather than leaving no cursor;
+  - the mode survives `.gs` save/reopen, **including OFF** — a file saved with it off must turn it
+    off when opened from a session that had it on;
+  - the setting changes no stored coordinate;
+  - with the mode off, the cursor is unchanged from before this requirement.
+- Owner-layer: viewport (`Crosshair3d.hpp`, pure projection), UI (`CadUi.cpp` draw,
+  `CadUiSettings.cpp` checkbox), Commands (`CROSSHAIR3D`), IO (`.gs` setting)
+- Status: accepted (2026-08-31)
+- Revisions: 2026-08-31 — initial. Requested by the user during the issue #144 work, with an
+  AutoCAD reference screenshot. Axis LABELS in the crosshair (AutoCAD's "Label axes in crosshairs"
+  option) are deliberately **not** included: the reference image has them off, and they are
+  additive later if wanted.
+
 ### REQ-122 — ZOOMEXTENTS frames the drawing safely: margin, aspect, degenerate extents, no invalid camera (GitHub issue #88)
 - Purpose: REQ-120 gave the middle double-click its gesture and reused the existing framing path
   untouched, which left the larger half of issue #88 — everything the framing itself promises —
@@ -6003,6 +6120,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-308 | UI/IO/Platform | planned (D-2026-08-30-a/b/c, TASK-147). Start tab as a non-document sentinel at drawing-tab index 0 — non-closable, non-reorderable, skipped by save-on-switch / dirty enumeration / close; `FirstDrawingTabIndex()` mediates drawing-tab indexing. `DrawDrawingViewport` branches to `DrawStartScreen` for index 0. New `gosurvey-recent.json` MRU store (`RecentDrawings`, best-effort, corruption = empty). Thumbnails captured from the drawing `ViewportRenderer` FBO on save/open, stored as BMP under the user data dir with LRU eviction (`ThumbnailCache`); missing thumbnail falls back to the DWG icon. GitHub Pages link via `ShellExecuteA` (already used by `auth`). Signed-out branch reuses `cmd.authSignInRequested` | accepted |
 | REQ-311 | Domain | done (GitHub issue #145, D-2026-08-31-e, TASK-159). `ucs::Ucs` IS the plane abstraction #120 asks for — no second type was added (REQ-301). `src/util/ucs.hpp` gains `Point2D`, `WorldToPlane` (off-plane distance an explicit output, never dropped), `PlaneToWorld`, `SignedDistanceToPlane`, `ProjectOntoPlane`, and `PointOnPlaneCircle` — the one place a planar curve's parametrisation is written down, so renderer, hit test, snap and DXF writer cannot disagree about which way a tilted curve winds. `ray3d::Plane` stays the origin+normal ray-casting form. Tests: `UcsTests [req311]` (7 cases, 90 assertions: world-frame reduction, tilted survey-magnitude round trip to 1e-9, signed-distance sign on a 45° plane, projection residual is exactly the normal component, a circle on a vertical plane, and the parametrisation/conversion agreement) — negative-tested by flipping the sin sign, which goes red | accepted |
 | REQ-312 | Domain/Commands/Render/IO | done (GitHub issue #145, D-2026-08-31-f, TASK-159). Arcs and circles carry a plane normal, defaulting to world +Z, so every existing entity, call site and test is unchanged — `ucs::FromNormal` reproduces the world X and Y axes EXACTLY for a +Z normal, which is what lets every per-vertex loop keep its pre-REQ-312 float arithmetic behind an `IsFlatNormal` guard and still agree to the bit. An arc carries `nx/ny/nz` in `CadArc`; circles use a `userCircleNormals` side-car (3 floats each) rather than widening the 4-float stride ~300 call sites read directly, maintained at the ~89 sites that already maintain `userCircleAttrs` and checked by `docinvariants` (REQ-204) — including the block-definition counterpart `CadBlockContent::circleNormals`, so BLOCK/BEDIT cannot silently flatten a tilted circle. A curve's frame is built in ONE place (`CurvePlane`) and sampled in one place (`CurvePointAt`), so the renderer, the rubber-band preview, the transform ghost, four object-snap walks, both bounds walks, block flattening and the DXF writer cannot disagree about where a tilted curve goes. Authoring is the active UCS work plane, no new command (ASSUMPTION-2, validated): CIRCLE and ARC were solving the radius, the circumcircle and the commit elevation in the XY PROJECTION, so a vertical work plane collapsed the radius to zero and read three rim picks as collinear. The commit and the preview now share `CadSolveCircleFromRimPick` / `CadSolveCircleThreePoints` / `CadSolveArcThreePoints`, deleting the preview's parallel circumcircle, sweep rule and tessellation. MIRROR/ROTATE/ALIGN transform the normal, and the arc's start angle is RE-MEASURED from a known moved point (`CadReanchorArcStart`) rather than transformed: `startRad` lives in a frame rebuilt from the normal, so the world-XY angle rules track it only while the arc is flat — measured, a mirrored wall arc came back a quarter turn out inside its own plane (TASK-159 ASSUMPTION-3, invalidated by its own test). DXF: export writes the real 210/220/230 **at `%.17g`** and the centre in the OCS frame group 210 implies; import reads them and refuses a zero-length 210 (REQ-201) instead of taking it as flat, which closes a live silent-import defect — until now a tilted ARC or CIRCLE from any other program arrived flat and misplaced with no message. The precision is not a style choice: group 210 is the one DXF value whose error is ANGULAR, and a probe over 400,000 normals with centres to +/-2e6 put six decimals **65.4 ft** out (REQ-101 is +/-0.01) and `%.9g` at 0.009 ft with no margin left. `.gs` persists the normal as additive `nx/ny/nz` on an arc and `circlesN` on the document, OMITTED when world +Z — that omission is the whole mechanism by which a legacy drawing re-saves byte-identically, and `IsFlatNormal` compares EXACTLY so a normal 1e-9 off +Z cannot re-save as flat. Scoped out, each recorded rather than left silent: INTERSECTION/APPARENT INTERSECTION and TRIM/BREAK against a tilted curve (planar-XY conic and planar boolean geometry — tilted curves are EXCLUDED from the candidate set rather than flattened into it, since a flattened answer lies on neither curve); OFFSET of a tilted curve; a tilted circle's box-selection and DXF-header bounds staying the conservative `cx +/- r` square (larger than the true footprint, never smaller, and identical to what `ComputeWorldExtents` computes, so writer and reader still agree — arcs needed the real fix because their XY bounds came out too SMALL); and the DWG entity layer, which carries no extrusion direction (REQ-175 / ADR-044 territory, wants its own issue). **All seven acceptance bullets met**, the snap one after a recorded rewording (2026-09-01): it originally named QUADRANT and NEAREST, which `CadSnap::Kind` does not have at all and which no accepted requirement asks for — they are a NEW requirement in the object-snap family, not a shortfall here. Every mode that does exist (Endpoint, Midpoint, Center, Perpendicular, Intersection, ApparentIntersection, Grip, Surface) is plane-aware and covered from an orbited pick RAY. Tests: `UcsTests [req312]` (2), `CadSnapTests [CadSnap][req312]` (4, driven through `FindBest` with a pick ray), `DocInvariantsTests [docinvariants][req312]` (3), and four transcripts — `headless.req312-arbitrary-plane-curves`, `-tilted-curves-drawn-and-edited`, `-dxf-arbitrary-plane-roundtrip`, `-gs-plane-persistence` (244 steps) — with new driver verbs `CLICKUCS`, `EXPECT CIRCLEXYZ`, `EXPECT ARCPOINTS`, `EXPECT FILECONTAINS`/`FILELACKS`. Every assertion negative-tested against the line that makes it pass. 864/864 ctest green. Not covered by test, stated plainly: the tilted DRAW path (`AppendArcVcDashed`/`AppendCircleVcDashed` per-vertex-Z chains) and the rubber-band preview are pixels, not geometry — GUI verification | accepted |
+| REQ-309 | Commands/UI/IO | planned (GitHub issue #144, D-2026-08-31-g, TASK-162). Makes REQ-058's already-complete perspective maths reachable: nothing in `src/` assigned `Camera::projection`, `PERSPECTIVE` was not a command, and `GsIo` persisted `azimuthDeg`/`elevationDeg` but not `projection`/`fovDeg`. Adds `viewportProjection`/`viewportFovDeg` to `AppCommandState` and `DrawingDocument` (per-drawing, like the azimuth/elevation pair beside them), threaded through `CadViewCamera`; `PERSPECTIVE` and `FOV` commands follow the `VS` report-or-set shape (REQ-064); `NamedView` carries both so REQ-106 cannot restore a perspective view as orthographic. Legacy `.gs` defaults to orthographic. Paper-space projection explicitly out of scope — REQ-061's per-viewport camera does not exist. Tests: `CameraTests [req309]` (WorldToScreen/ScreenRay round-trip under perspective; ortho unchanged), `headless.req309-perspective-projection` | accepted |
+| REQ-310 | Viewport/UI/Commands/IO | planned (GitHub issue #144, D-2026-08-31-h, TASK-162). 3D crosshair: the cursor's arms become the active UCS's X/Y/Z axes projected through `Camera::RightWorld`/`UpWorld`. Projection lives in a new pure header `src/viewport/Crosshair3d.hpp` (no ImGui, no GL, no `AppCommandState`) beside `ViewportPickPolicy.hpp`, so the screen-space sign conventions are testable without a window — a wrong sign still LOOKS like a 3D cursor. Axis hues defined once there and consumed by `UcsIcon.cpp` too, so icon and cursor cannot disagree. `viewportCrosshair3d` on `AppCommandState`, off by default; `CROSSHAIR3D` command in the `VS`/`PERSPECTIVE` report-or-set shape; Settings checkbox. Model space only; REQ-121's pickbox rule still wins. Tests: `Crosshair3dTests [req310]` (plan-view axis directions, rotated UCS, azimuth sweep, foreshortening, collapsed-Z, degenerate guard — negative-tested by flipping the screen-Y sign, 3 cases go red), `headless.req310-crosshair-3d` (command, refusal, `.gs` round trip **including OFF** — which caught a real defect: the key was originally written only when ON, so an absent key left the previous session's value) | accepted |
 | REQ-121 | UI/Commands/Viewport | done (GitHub issue #91, D-2026-08-26-a + D-2026-08-26-d, TASK-115 + TASK-118). Mechanism: `ViewportIsObjectSelectionStep`, derived from `ViewportClickRouteFor`'s `default:`-less switch, so a command cannot be added and silently omitted — `ViewportPickPolicyTests [req121]` (4 cases: ALIGN's unsnapped corners — red before the fix; every selection step recognised; each exclusion asserted; DELETE/JOIN's route, with ZOOM and STRETCH left on the box route). Review follow-ups closed by TASK-118, re-derived while rebasing onto `beta` after issue #103 landed underneath it: rule (3)'s shared prompt was factually wrong for DELETE/JOIN — fixed by giving them D-2026-08-25-l's accumulate-until-Enter shape, covered by `headless.req121-delete-join-accumulate` (proven red on `beta`: the closing box erased, LINES 3 -> 2). Rule (1)'s reported second seam (the snap-OVERRIDE menu bypassing the gate) had its underlying mechanism replaced by #103 between the original review and this rebase — the "cursor jumps mid-selection" symptom no longer reproduces, because the override's consumption already sits behind the same `!ViewportIsObjectSelectionStep` gate the automatic snap uses; what remained was narrower (the menu could still be *opened*, arming a persistent lock off a selection-step pixel that then silently affected the next ordinary snap), and that is what TASK-118's rebase actually gates. The cursor/OSNAP/prompt rules themselves stay GUI-only — there is no headless equivalent for screen-space picking or for a drawn cursor — and both rounds were verified A/B against a control rather than by absence. Paper space is a STATED scope boundary, not coverage: its modify commands are pick-first, so no selection step exists there (GitHub issue #106 — closed by REQ-307, which gives MOVE/COPY/DELETE a real selection step for the one case that needed it, starting with nothing pre-selected). 634/634 ctest green post-rebase. One `CadSnapTests` case (issue #103, unrelated to this task) carried an em-dash in its Catch2 name that CTest's Windows discovery mangles into a filter matching nothing, reporting a false failure in CI on both this branch and unmodified `beta` (`425afa7`'s own CI run) — fixed here by renaming the test to plain ASCII rather than worked around, since it was blocking CI on every branch built from `beta`, not just this one | accepted |
 | REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
 | REQ-123 | Commands/UI | done (GitHub issue #100, D-2026-08-26-e, TASK-119) — **`headless.req123-viewport-zoom-extents`, the first zoom behaviour ever covered by a transcript.** TASK-113's DEBT-1 blocks the others on `ProcessPendingViewportZoom`'s `fbW <= 0` guard; this case needs no framebuffer (its aspect is the viewport's rect in paper inches) so it is handled ahead of that guard. 43 steps: the framing after ZE with hand-computed scales (13.5870 for an 8x4in viewport, 27.1739 for 4x4in — same drawing, different rect, different answer), each viewport independent of the other's zoom, and a layer frozen in the viewport excluded from the extents then restored when thawed. Proven red on `beta`: `expected centre 50, 10 scale 13.587; got 0, 0 scale 50` — the viewport's framing untouched at its creation defaults. Four new driver verbs (VIEWPORT / VPSELECT / CLAYER / VPFREEZE) and `EXPECT VPFRAME`, all REQ-203 gaps of the LAYOUT/CLIPCOPY shape. GUI pass confirmed the numbers against the live status bar (`VP 1" = 40.4'` vs 40.36 computed), the sheet unmoved, REQ-120's gesture working in a viewport for the first time, and middle-drag pan still confined to it. 632/633 ctest (the one failure is `beta`'s own — an em dash in a `CadSnapTests` TEST_CASE name breaks ctest's name round-trip; unrelated and pre-existing) | accepted |

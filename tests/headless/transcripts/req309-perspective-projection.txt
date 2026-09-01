@@ -1,0 +1,98 @@
+# REQ-309 (GitHub #144, Phase 1 of #120) - selectable view projection.
+#
+# What this transcript is FOR: proving that the projection can be SELECTED, is REFUSED safely on
+# bad input, and SURVIVES a .gs round trip - including on a named view, where an unpersisted
+# projection would silently restore a perspective view as orthographic.
+#
+# Almost every assertion here is `EXPECT PROJECTION` / `EXPECT FOV` - the LIVE state - and not
+# `EXPECT LOG`. That is deliberate and was learned the hard way: EXPECT LOG substring-matches the
+# WHOLE accumulated log, so after one switch to perspective every later `EXPECT LOG "Projection =
+# Perspective"` passes whether or not it is still true. Suppressing the named-view projection write
+# in GsIo left a log-based version of this file green, which is what motivated the two new verbs.
+#
+# The projection maths itself is covered by CameraTests [req309]; it has existed since REQ-058.
+# What never existed until now is any way to reach it, which is what this file tests.
+
+NEW
+
+# --- Orthographic is the default -----------------------------------------------------------------
+EXPECT PROJECTION ORTHOGRAPHIC
+EXPECT FOV 45
+CMD PERSPECTIVE
+EXPECT LOG "Projection = Orthographic"
+
+# --- Selecting perspective ------------------------------------------------------------------------
+CMD PERSPECTIVE ON
+EXPECT PROJECTION PERSPECTIVE
+
+# --- Switching does not touch the drawing (REQ-309: how it is looked at, never what it is) --------
+# The line is drawn at a non-zero ELEV so LINEXYZ asserts a real Z, not a zero that would pass
+# even if the projection change had flattened the drawing.
+CMD ELEV
+CMD 30
+ESC
+CMD LINE
+CMD 0,0
+CMD 10,20
+ESC
+EXPECT LINES 1
+EXPECT LINEXYZ 0 0 0 30 10 20 30
+CMD PERSPECTIVE OFF
+EXPECT PROJECTION ORTHOGRAPHIC
+CMD PERSPECTIVE ON
+EXPECT PROJECTION PERSPECTIVE
+# The same coordinates, after two projection changes.
+EXPECT LINEXYZ 0 0 0 30 10 20 30
+
+# --- FOV ------------------------------------------------------------------------------------------
+CMD FOV 60
+EXPECT FOV 60
+
+# --- Bad input is REFUSED and leaves the value alone (REQ-201) -------------------------------------
+CMD PERSPECTIVE SIDEWAYS
+EXPECT LOG "enter ON (perspective) or OFF (orthographic)"
+EXPECT PROJECTION PERSPECTIVE
+
+CMD FOV 400
+EXPECT LOG "enter an angle between 1 and 179 degrees"
+EXPECT FOV 60
+CMD FOV 0
+EXPECT FOV 60
+CMD FOV banana
+EXPECT FOV 60
+# Still 60 - not clamped to 179, not reset to 45.
+
+# --- A named view carries the projection -----------------------------------------------------------
+CMD VIEW S Persp View
+EXPECT LOG "saved as Persp View"
+CMD PERSPECTIVE OFF
+CMD FOV 32
+CMD VIEW S Ortho View
+EXPECT LOG "saved as Ortho View"
+EXPECT PROJECTION ORTHOGRAPHIC
+EXPECT FOV 32
+
+# --- Both survive a .gs round trip ------------------------------------------------------------------
+SAVEAS %OUT%/proj.gs
+OPEN %OUT%/proj.gs
+
+# The active view was orthographic at FOV 32 when saved.
+EXPECT PROJECTION ORTHOGRAPHIC
+EXPECT FOV 32
+
+# Restoring the saved perspective view brings its projection AND its FOV back.
+CMD VIEW R Persp View
+EXPECT LOG "restored Persp View"
+EXPECT PROJECTION PERSPECTIVE
+EXPECT FOV 60
+
+# And back to the orthographic one.
+CMD VIEW R Ortho View
+EXPECT PROJECTION ORTHOGRAPHIC
+EXPECT FOV 32
+
+# The geometry is untouched by all of it.
+EXPECT LINES 1
+EXPECT LINEXYZ 0 0 0 30 10 20 30
+
+CHECK ALL

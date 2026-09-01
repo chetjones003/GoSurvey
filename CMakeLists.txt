@@ -689,6 +689,10 @@ if(GOSURVEY_BUILD_TESTS)
     tests/UcsTests.cpp
     tests/Ray3dTests.cpp
     tests/CameraTests.cpp
+    # REQ-310 3D crosshair (GitHub #144). Header-only and pure for the same reason Camera is: an
+    # axis arm drawn along the wrong screen direction still looks like a 3D cursor, so the sign
+    # conventions need a test that does not depend on a window.
+    tests/Crosshair3dTests.cpp
     # REQ-122 zoom framing (GitHub issue #88, TASK-117). Header-only and pure, like OrthoConstrain
     # above it: the ZOOMEXTENTS acceptance list (margin, aspect, no edge clipping, degenerate extents,
     # never a NaN camera) is decided entirely in this arithmetic, and the deferred consumer that calls

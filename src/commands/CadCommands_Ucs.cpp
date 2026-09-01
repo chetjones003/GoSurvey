@@ -76,6 +76,13 @@ const NamedView* CurrentNamedView(const AppCommandState& st) {
         std::fabs(v.elevationDeg - st.viewportElevationDeg) > kAngTol ||
         std::fabs(v.rollDeg - st.viewportRollDeg) > kAngTol)
       continue;
+    // Projection is part of the view for the same reason the UCS is (REQ-309): the same camera
+    // angles under a different projection are not the view that was saved.
+    if (v.projection != st.viewportProjection)
+      continue;
+    if (v.projection == Camera::Projection::Perspective &&
+        std::fabs(v.fovDeg - st.viewportFovDeg) > kAngTol)
+      continue;
     if (!ucs::FramesMatch(v.ucs, st.activeUcs))
       continue;
     return &v;
@@ -97,6 +104,8 @@ NamedView CaptureCurrentView(const AppCommandState& st, const std::string& name)
   v.azimuthDeg = st.viewportAzimuthDeg;
   v.elevationDeg = st.viewportElevationDeg;
   v.rollDeg = st.viewportRollDeg;  // #153
+  v.projection = st.viewportProjection;  // REQ-309
+  v.fovDeg = st.viewportFovDeg;
   v.ucs = st.activeUcs;
   return v;
 }
@@ -116,6 +125,11 @@ void RestoreNamedView(AppCommandState& st, const NamedView& v, std::vector<std::
   // the camera returns but the coordinate frame does not, because the numbers you type afterwards
   // would mean something different from the ones you typed when you saved it.
   SetActiveUcs(st, v.ucs, log);
+  // Projection is set directly rather than eased (REQ-309). There is no meaningful interpolation
+  // between a parallel and a perspective projection, and the orientation animation beside it
+  // already carries the sense of movement.
+  st.viewportProjection = v.projection;
+  st.viewportFovDeg = v.fovDeg;
   CadStartViewAnimation(st, v.azimuthDeg, v.elevationDeg, v.rollDeg);
   st.activeViewName = v.name;
   log.push_back("VIEW - restored " + v.name + ".");
