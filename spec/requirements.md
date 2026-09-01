@@ -5844,21 +5844,35 @@ capability that does not exist. They are recorded here rather than quietly dropp
   property of a binary, not of source code: the compiler chooses the vectorisation, inlining and
   layout that decide it, so a figure measured with a different compiler is a different result.
 - Owner-layer: Renderer
-- Status: accepted — **profiles (a), (b) and (c) MET, measured 2026-08-15** (TASK-052, TASK-053).
-  **Profile (d), solids, is NOT YET MEASURED** — the `BENCH SOLID` instrument exists (TASK-167) but
-  a frame-budget number can only be produced by running the GUI on the reference machine, which the
-  session that added it could not do. Stated plainly rather than assumed from profile (b): a solid
-  scene is a different shape of work, which is the whole reason it is a separate profile.
-  **2026-09-01 (D-2026-09-01-d, GitHub issue #194):** the first run of the instrument showed profile
-  (d) FAILING at a realistic density — ~40 µs of fixed per-solid cost (one stream upload + one draw
-  call for faces, another for edges, a cache lookup) made the p95 scale with the object count, not
-  the triangle total (~5 ms at 100 solids, 17–20 ms at 400, 35 ms at 800, against the 16 ms budget).
-  The render path now COALESCES: `RefreshSolidDisplayGeometry` merges every visible solid sharing a
-  resolved colour and edge lineweight into one shared vertex buffer, gated on an assembly signature
-  so an orbit reuses it, and `BENCH SOLID` now reports whether the tessellation cache HELD across the
-  timed frames (`solidDisplayRegenCount`, the twin of the surface profile's `regenDuringRun`). The
-  re-measured p95 on the reference machine is still pending a GUI session; the per-solid cost that
-  made the failure structural is gone. Every
+- Status: accepted — **profiles (a), (b) and (c) MET, measured 2026-08-15** (TASK-052, TASK-053);
+  **profile (d), solids, MET, measured 2026-09-01** (TASK-169, D-2026-09-01-d, GitHub issue #194) —
+  1.43 / 1.80 / 4.38 ms at 100 / 400 / 800 solids on the RTX 5060, cache held. The instrument
+  (TASK-167) first showed it failing; coalescing the draw calls and giving the solid batches a
+  persistent GPU buffer (the mesh-path fix) brought it well inside budget. Details below.
+  **2026-09-01 (D-2026-09-01-d, GitHub issue #194): profile (d) MET.** The first run of the new
+  instrument showed profile (d) FAILING — ~40 µs of fixed per-solid cost (one stream upload + one
+  draw call for faces, another for edges, a cache lookup) made the p95 scale with the object count
+  rather than the triangle total. Two things were done: (1) `RefreshSolidDisplayGeometry` now
+  COALESCES — every visible solid sharing a resolved colour and edge lineweight is merged into one
+  vertex buffer, gated on an assembly signature so an orbit reuses it; (2) the renderer keeps a
+  PERSISTENT GPU buffer per coalesced batch, keyed on that signature with the same view-anchor-drift
+  re-upload the imported-mesh path uses, so the timed orbit frames upload nothing and submit one
+  draw call per appearance group. `BENCH SOLID` also now reports whether the tessellation cache HELD
+  (`solidDisplayRegenCount`, the twin of the surface profile's `regenDuringRun`) — and a bug where
+  the regen baseline was not reset between `BENCH` runs in one session was fixed (it had made a
+  second run miscount its own scene-build tessellation as per-frame regeneration).
+
+  On the **RTX 5060**, MSVC build, one `BENCH SOLID` per fresh session:
+
+  | profile (d) | scene | p95 | verdict |
+  |---|---|---|---|
+  | 100 solids | 244,000 triangles, Shaded | **1.43 ms** | MET — cache HELD |
+  | 400 solids ("a real site model") | 976,000 triangles, Shaded | **1.80 ms** | MET — cache HELD |
+  | 800 solids | 1,952,000 triangles, Shaded | **4.38 ms** | MET — cache HELD |
+
+  The per-frame cost is now effectively flat in the solid count, in line with the mesh profile at the
+  same triangle total — which is what a persistent indexed upload buys. Superseded (batching only,
+  cache holding but still re-transforming + re-uploading every frame): 6.29 / 38.06 / 61.93 ms. Every
   figure recorded before 22:42 that day was measured on the **wrong GPU** (TASK-053 FINDING-3).
   GoSurvey exported neither `NvOptimusEnablement` nor `AmdPowerXpressRequestHighPerformance`, so on
   this hybrid laptop it rendered on the integrated Radeon 610M while `project.md` §7 names an

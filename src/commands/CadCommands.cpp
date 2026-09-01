@@ -23474,51 +23474,15 @@ void ExpandTessellation(const brep::Tessellation& t, std::vector<float>* verts, 
 
 } // namespace
 
-// ---- issue #194 diagnostic ------------------------------------------------------------------------
-// The reference-machine BENCH SOLID showed the tessellation cache NOT holding at 400+ solids in the
-// GUI, while a headless repro holds it. This writes a per-refresh line to
-// `%APPDATA%\GoSurvey\solid-cache-debug.txt` whenever anything interesting happens, so a bench run
-// can show WHAT invalidates the cache. Inert unless GOSURVEY_SOLID_CACHE_DEBUG is set. Remove once
-// the cause is found.
-namespace {
-struct SolidCacheDbg {
-  bool on = std::getenv("GOSURVEY_SOLID_CACHE_DEBUG") != nullptr;
-  std::uint64_t call = 0;
-  std::vector<const void*> prevPtrs;      ///< cadSolids[i].get() at the previous call
-  std::uint64_t prevGpuRev = ~0ull;
-  double prevOriginX = 0.0, prevOriginY = 0.0;
-  bool haveGpuRev = false;
-  void emit(const std::string& line) {
-    const std::filesystem::path dir = UserDataDirectory();
-    if (dir.empty())
-      return;
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    std::ofstream f(dir / "solid-cache-debug.txt", std::ios::app);
-    if (f)
-      f << line << "\n";
-  }
-};
-SolidCacheDbg g_solidCacheDbg;
-}  // namespace
-
 void RefreshSolidDisplayGeometry(AppCommandState& st) {
-  SolidCacheDbg& dbg = g_solidCacheDbg;
-  const size_t dbgCacheBefore = st.solidDisplayCache.size();
-
   // Reap first: an entry whose weak key has expired belongs to a solid that has been erased or
   // replaced. A weak_ptr and not a raw pointer, because a raw key could be matched by a NEW solid
   // allocated at the freed address — the cache would then draw the wrong shape and look plausible.
   st.solidDisplayCache.erase(std::remove_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
                                             [](const CadSolidTessellation& e) { return e.key.expired(); }),
                              st.solidDisplayCache.end());
-  const size_t dbgReaped = dbgCacheBefore - st.solidDisplayCache.size();
 
   const double tol = kSolidChordToleranceFt;
-
-  int dbgMiss = 0;        // find_if returned end() — no cache entry for this solid
-  int dbgTolMismatch = 0; // entry found, chordTolerance differs
-  std::string dbgFirstMisses;
 
   for (const CadSolidPtr& sp : st.cadSolids) {
     if (!sp)
@@ -23532,25 +23496,6 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // save (the §11 invariant 7 lesson the surface cache already learned).
     if (it != st.solidDisplayCache.end() && it->chordTolerance == tol)
       continue;
-
-    if (dbg.on) {
-      if (it == st.solidDisplayCache.end()) {
-        ++dbgMiss;
-        if (dbgMiss <= 4) {
-          // Is there a NON-matching live entry (→ solid was replaced), or nothing at all?
-          int liveEntries = 0;
-          for (const CadSolidTessellation& e : st.solidDisplayCache)
-            if (!e.key.expired())
-              ++liveEntries;
-          char buf[96];
-          std::snprintf(buf, sizeof(buf), " miss[sp=%p live=%d]", static_cast<const void*>(sp.get()),
-                        liveEntries);
-          dbgFirstMisses += buf;
-        }
-      } else {
-        ++dbgTolMismatch;
-      }
-    }
 
     if (it == st.solidDisplayCache.end()) {
       st.solidDisplayCache.push_back(CadSolidTessellation{});
@@ -23574,47 +23519,6 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // A solid that fails to tessellate leaves EMPTY buffers rather than stale ones. It cannot
     // normally happen — nothing stores a solid that does not validate (REQ-201) — and drawing the
     // previous solid's triangles under this one's identity would be far worse than drawing nothing.
-  }
-
-  if (dbg.on) {
-    ++dbg.call;
-    // How many cadSolids[i] shared_ptrs changed identity since the previous call?
-    int ptrsChanged = 0, ptrsAdded = 0;
-    std::vector<const void*> nowPtrs;
-    nowPtrs.reserve(st.cadSolids.size());
-    for (const CadSolidPtr& sp : st.cadSolids)
-      nowPtrs.push_back(static_cast<const void*>(sp.get()));
-    for (size_t i = 0; i < nowPtrs.size(); ++i) {
-      if (i < dbg.prevPtrs.size()) {
-        if (nowPtrs[i] != dbg.prevPtrs[i])
-          ++ptrsChanged;
-      } else {
-        ++ptrsAdded;
-      }
-    }
-    const bool gpuRevChanged = dbg.haveGpuRev && dbg.prevGpuRev != st.cadGpuRevision;
-    const bool originChanged = dbg.haveGpuRev && (dbg.prevOriginX != st.worldDocumentOriginX ||
-                                                  dbg.prevOriginY != st.worldDocumentOriginY);
-    const int regenThisCall = dbgMiss + dbgTolMismatch;
-    if (regenThisCall > 0 || dbgReaped > 0 || ptrsChanged > 0 || gpuRevChanged || originChanged ||
-        dbg.call <= 3) {
-      char line[512];
-      std::snprintf(line, sizeof(line),
-                    "call=%llu solids=%zu cache=%zu(before %zu, reaped %zu) regen=%d(miss=%d tol=%d) "
-                    "ptrsChanged=%d ptrsAdded=%d gpuRev=%llu%s origin=(%.3f,%.3f)%s total_regen=%llu%s",
-                    static_cast<unsigned long long>(dbg.call), st.cadSolids.size(),
-                    st.solidDisplayCache.size(), dbgCacheBefore, dbgReaped, regenThisCall, dbgMiss,
-                    dbgTolMismatch, ptrsChanged, ptrsAdded,
-                    static_cast<unsigned long long>(st.cadGpuRevision), gpuRevChanged ? "(CHANGED)" : "",
-                    st.worldDocumentOriginX, st.worldDocumentOriginY, originChanged ? "(CHANGED)" : "",
-                    static_cast<unsigned long long>(st.solidDisplayRegenCount), dbgFirstMisses.c_str());
-      dbg.emit(line);
-    }
-    dbg.prevPtrs = std::move(nowPtrs);
-    dbg.prevGpuRev = st.cadGpuRevision;
-    dbg.prevOriginX = st.worldDocumentOriginX;
-    dbg.prevOriginY = st.worldDocumentOriginY;
-    dbg.haveGpuRev = true;
   }
 
   // ----- Assembly: coalesce visible solids into a handful of draw batches (GitHub issue #194) -----

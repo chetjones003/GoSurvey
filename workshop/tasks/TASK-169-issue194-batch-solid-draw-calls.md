@@ -1,11 +1,9 @@
 # TASK-169 — Coalesce the solid render path so REQ-100 profile (d) can pass
 
 - Type:    perf
-- Status:  in progress — PR #198 (DRAFT). Batching + the cache-held report are done and green, but
-  the first `BENCH SOLID` on the reference machine (RTX 5060) shows profile (d) still FAILS because
-  the new report revealed a **second defect**: the solid tessellation cache is not holding across
-  frames in the GUI (400 regens / 900 frames at 400 solids; headless holds fine). Root cause not yet
-  found — needs GUI-side debugging. See §7.
+- Status:  PR #198 — profile (d) MET on the RTX 5060 (1.43 / 1.80 / 4.38 ms at 100 / 400 / 800
+  solids, cache held). Batching + persistent GPU buffers + a BENCH baseline-reset fix. Awaiting
+  final review / merge. See §7.
 - Opened:  2026-09-01
 - Owner:   chetjones003
 - Follows: GitHub issue #194 (a REQ-313 / issue #120 Phase 3 follow-up, filed from the PR #193
@@ -48,7 +46,15 @@ distinguish a held cache from one silently rebuilding — the gap ADR-036 (e) cl
 ## 3. Files affected
 
 - `src/util/cadsolid.hpp` — `CadSolidDisplayBatch` now OWNS `triVerts` / `triNormals` / `edgeVerts`
-  (`std::vector<float>` members) instead of borrowing cache pointers; doc rewritten.
+  (`std::vector<float>` members) instead of borrowing cache pointers; `CadSolidDisplayGeometry` gains
+  `assemblySig` (the key the renderer's persistent buffers use); docs rewritten.
+- `src/render/ViewportRenderer.{hpp,cpp}` — new `SolidGpuBatch` / `solidGpu_` / `solidGpuSig_` /
+  `ReleaseSolidGpu()`, a persistent per-batch VBO cache modelled on `meshGpu_`: rebuilt on
+  `assemblySig` change, re-uploaded on view-anchor drift, drawn with an MVP translate. Replaces the
+  per-frame `WorldToViewRelativeFloat` + `GL_STREAM_DRAW` in the solid block. Teardown wired into the
+  context-loss path.
+- `src/commands/CadCommands_Bench.cpp` — reset `regenBaselineTaken` / `regenAtStart` /
+  `regenDuringRun` for every profile in `StartFrameBudgetBench`, not just surface.
 - `src/commands/CadCommands.hpp` — `AppCommandState` gains `solidDisplayAssemblySig` (the assembly
   early-out fingerprint) and `solidDisplayRegenCount` (real retessellations, twin of
   `surfaceDisplayRegenCount`).
@@ -96,36 +102,38 @@ against the batches built so far (a real drawing has a few distinct appearances,
 - `BENCH SOLID` p95 on the reference machine: pending a GUI session (REQ-100 status); the per-object
   cost that made the failure structural is removed and the report now states cache-held.
 
-## 7. Reference-machine benchmark (2026-09-01) — profile (d) NOT passing yet
+## 7. How it played out on the reference machine (2026-09-01)
 
+**Run 1 (batching only), three `BENCH SOLID` in one session:**
 ```
-BENCH SOLID 100 : p95  9.31 ms  PASS   cache HELD      (0 regens / 900 frames)   median 5.73
-BENCH SOLID 400 : p95 38.32 ms  FAIL   cache NOT HELD   (400 regens / 900 frames)
-BENCH SOLID 800 : p95 58.89 ms  FAIL   cache NOT HELD   (1200 regens / 900 frames)
+100 : p95  9.31 ms  PASS   HELD        400 : p95 38.32 ms  FAIL "NOT HELD 400"   800 : p95 58.89 ms  FAIL "NOT HELD 1200"
 ```
 
-The cache-held report (AC #2) did its job and surfaced a second, deeper defect. Findings:
+The cache-held report and a temporary diagnostic (`GOSURVEY_SOLID_CACHE_DEBUG`, since removed) found
+**two separate problems**, neither the one first suspected:
 
-- **The core `RefreshSolidDisplayGeometry` staleness logic is sound.** A headless repro — 400
-  cylinders/spheres, 40+ ticked frames — keeps `SOLIDTESSGEN` pinned at 400. The regeneration is
-  triggered by something in the **GUI frame loop / bench-orbit path**, not the `(solid, tol)` key.
-- The regeneration almost certainly **pre-dates this PR** — the generation loop is unchanged except
-  for `++solidDisplayRegenCount` — so beta's 17–20 ms at 400 solids already carried this thrash.
-- Shape of the regen count (400 at 400 solids, ~1200 at 800) ⇒ a roughly **one-time mass
-  invalidation** during the timed run, once for 400, ~1.5× for 800 — not a per-frame rebuild.
-- This PR's assembly signature folds in `solidDisplayRegenCount` (necessary for correctness — a
-  retessellation to the same triangle count would otherwise leave stale verts in the merged buffer),
-  so **while the cache thrashes the per-frame full re-merge cannot be skipped**, which roughly
-  doubles the already-over-budget p95. At 100 solids (cache holds) the change is neutral
-  (median 5.73 vs ~5.2).
+1. **"NOT HELD" was a measurement bug.** `StartFrameBudgetBench` zeroes `frameIndex`/`frameMs` but
+   left `regenBaselineTaken` / `regenAtStart` untouched for every profile except surface.
+   `solidDisplayRegenCount` is cumulative across the session, so `BENCH SOLID 400` after
+   `BENCH SOLID 100` inherited run 1's baseline and counted its own 400-solid scene-build
+   tessellation as "regenerated during the run" (`400`); the 800 run: `500 cumulative + 800 − 100
+   stale baseline = 1200`. The diagnostic confirmed the cache actually held — zero activity across
+   the timed orbit. Fixed by resetting the baseline for all profiles.
 
-Candidates to chase (all GUI-only vs the headless `TickFrame`): a per-frame path that replaces
-`cadSolids` entries (a coordinate rebase / `brep::Translate`, though the bench scene is < 900 ft and
-`ApplyDocumentOriginRebase` early-outs); hover-pick / rollover; `EnsureEntityIds` re-sweep on a
-mid-run `cadGpuRevision` bump; an undo-snapshot interaction from the scene install.
+2. **Batching alone was not enough.** With the cache holding, `BENCH SOLID 400` still measured
+   p95 38 ms because the render path re-ran the CPU double→float view-relative transform and a
+   `GL_STREAM_DRAW` upload for every batch every frame. Fixed by giving the coalesced batches a
+   persistent GPU buffer (`ViewportRenderer::solidGpu_`, mirror of `meshGpu_`), keyed on the
+   assembly signature, re-uploaded only on signature change or view-anchor drift.
 
-**Next step:** find and fix the cache-hold trigger, then re-run `BENCH SOLID` on the reference
-machine. Batching is necessary but not sufficient for profile (d) until the cache holds.
+**Run 2 (both fixes), one `BENCH SOLID` per fresh session:**
+```
+100 : p95 1.43 ms  PASS  HELD     400 : p95 1.80 ms  PASS  HELD     800 : p95 4.38 ms  PASS  HELD
+```
+
+Profile (d) **MET**. The per-frame cost is now flat in the solid count, in line with the mesh
+profile at the same triangle total. GUI visual check: solids render correctly in 2D Wireframe,
+Hidden and Shaded under orbit.
 
 ## 6. Architectural-boundary check
 
