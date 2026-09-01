@@ -16,6 +16,7 @@
 //     difference REQ-203's "save a .gs and diff" condition exists to detect.
 
 #include "CadCommands.hpp"
+#include "viewport/CadRubberPreview.hpp"
 #include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"  // CadCoord::WorldFromLocal, for EXPECT LINEXYZ (REQ-154)
 #include "DxfIo.hpp"
@@ -138,6 +139,9 @@ struct Run {
   /// change here means a retriangulation happened and an unchanged value means one did not — which
   /// is REQ-070's "without rebuilding the triangulation", stated as something a transcript can fail.
   int surfaceTinGeneration = 0;
+  /// Last HOVER position, so EXPECT PREVIEWBOUNDS can rebuild the rubber the viewport would draw.
+  double hoverX = 0.0;
+  double hoverY = 0.0;
   std::weak_ptr<const CadTin> lastSurfaceTin;
   bool sawSurfaceTin = false;
 };
@@ -535,6 +539,19 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       Fail(run, "parse", "CLICK expects two world coordinates, got: " + rest, sourceLine);
       return false;
     }
+    // An optional third coordinate: see the solid-pick note below for what it is for.
+    float clickZ = 0.f;
+    bool clickHasZ = false;
+    {
+      const std::streampos save = is.tellg();
+      if (is >> clickZ) {
+        clickHasZ = true;
+      } else {
+        is.clear();
+        if (save != std::streampos(-1))
+          is.seekg(save);
+      }
+    }
     if (verb == "CLICKUCS") {
       // CLICKUCS <u> <v> - a viewport click at (u, v) in the ACTIVE UCS XY plane (REQ-312).
       //
@@ -571,6 +588,40 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // The GUI's raw-vs-snapped distinction is an OSNAP adjustment, and a transcript has no
       // OSNAP — both land on the coordinates the transcript named. What CLICK is testing here is
       // that the command is routed AT ALL.
+      //
+      // A prompted solid command reads the cursor through `CadResolveSolidPick` rather than from the
+      // click coordinates directly — a radius is a distance, a height is a closest approach — so the
+      // same resolution the viewport performs each frame is performed here first. Doing it in the
+      // driver rather than duplicating the arithmetic in a verb is the point: a test that resolved
+      // the pick its own way would be a test of its own arithmetic.
+      if (run.st.active == AppCommandState::Kind::Solid) {
+        const ray3d::Plane wp = CadActiveWorkPlane(run.st);
+        const ray3d::Vec3 n = ray3d::Normalize(wp.normal);
+        double z = wp.point.z;
+        if (std::fabs(n.z) > 1e-9)
+          z = wp.point.z - (n.x * (static_cast<double>(x) - wp.point.x) +
+                            n.y * (static_cast<double>(y) - wp.point.y)) / n.z;
+        // An explicit third coordinate aims the ray at a point OFF the work plane, which is the only
+        // way a transcript can say "point at the spot 25 feet up the axis". A height is the closest
+        // approach between the cursor ray and that axis, so aiming at a plan XY resolves to whatever
+        // height that sight line happens to cross — geometrically right, and impossible to write an
+        // expectation for.
+        if (clickHasZ)
+          z = static_cast<double>(clickZ);
+        const ray3d::Ray* rayPtr = nullptr;
+        ray3d::Ray camRay;
+        if (!CadViewIsPlan(run.st) && run.st.uiViewportWidthPx > 0.f) {
+          // Off plan view a height IS pickable, and it needs the ray the camera would cast. Aimed
+          // at the cursor point itself, which is what the viewport's own ray does.
+          const Camera cam = CadViewCamera(run.st);
+          float sx = 0.f, sy = 0.f;
+          cam.WorldToScreen(static_cast<double>(x), static_cast<double>(y), z, run.st.uiViewportWidthPx,
+                            run.st.uiViewportHeightPx, &sx, &sy);
+          camRay = cam.ScreenRay(sx, sy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+          rayPtr = &camRay;
+        }
+        CadResolveSolidPick(run.st, ray3d::Vec3{static_cast<double>(x), static_cast<double>(y), z}, rayPtr);
+      }
       SubmitViewportPick(run.st, x, y, run.log);
       break;
     case ViewportClickRoute::SelectionBox:
@@ -843,6 +894,66 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     } else {
       Fail(run, "parse", "LAYERSTATE: unknown state " + state + " (ON|OFF|FREEZE|THAW|COLOR)", sourceLine);
       return false;
+    }
+  } else if (verb == "HOVER") {
+    // HOVER <x> <y> [z] — move the cursor without clicking, so the live preview can be asserted.
+    //
+    // The preview is the whole point of the feature and it is the half a CLICK cannot show: by the
+    // time a click has landed the value is committed and the rubber is gone. This resolves the pick
+    // exactly as the viewport does each frame and stops there.
+    std::istringstream is(rest);
+    float hx = 0.f;
+    float hy = 0.f;
+    if (!(is >> hx >> hy)) {
+      Fail(run, "parse", "HOVER expects <x> <y> [z]", sourceLine);
+      return false;
+    }
+    float hz = 0.f;
+    bool hasHz = false;
+    if (is >> hz)
+      hasHz = true;
+    const ray3d::Plane hwp = CadActiveWorkPlane(run.st);
+    const ray3d::Vec3 hn = ray3d::Normalize(hwp.normal);
+    double hzWorld = hwp.point.z;
+    if (std::fabs(hn.z) > 1e-9)
+      hzWorld = hwp.point.z - (hn.x * (static_cast<double>(hx) - hwp.point.x) +
+                               hn.y * (static_cast<double>(hy) - hwp.point.y)) / hn.z;
+    if (hasHz)
+      hzWorld = static_cast<double>(hz);
+    ray3d::Ray hray;
+    const ray3d::Ray* hrayPtr = nullptr;
+    if (!CadViewIsPlan(run.st) && run.st.uiViewportWidthPx > 0.f) {
+      const Camera hcam = CadViewCamera(run.st);
+      float hsx = 0.f, hsy = 0.f;
+      hcam.WorldToScreen(static_cast<double>(hx), static_cast<double>(hy), hzWorld,
+                         run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &hsx, &hsy);
+      hray = hcam.ScreenRay(hsx, hsy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+      hrayPtr = &hray;
+    }
+    CadResolveSolidPick(run.st, ray3d::Vec3{static_cast<double>(hx), static_cast<double>(hy), hzWorld},
+                        hrayPtr);
+    run.hoverX = static_cast<double>(hx);
+    run.hoverY = static_cast<double>(hy);
+  } else if (verb == "VIEWANGLES") {
+    // VIEWANGLES <azimuthDeg> <elevationDeg> — orbit the model view.
+    //
+    // Here for the same reason CLAYER and LAYERSTATE are: the only routes to this in the product are
+    // the ViewCube and a mouse drag, so without it no transcript can exercise anything that only
+    // happens once the view is orbited. For the solid commands that is not a nicety — a HEIGHT is
+    // read off the cursor RAY, and in plan view there is no ray and no height to read.
+    std::istringstream is(rest);
+    float az = 0.f;
+    float el = 90.f;
+    if (!(is >> az >> el)) {
+      Fail(run, "parse", "VIEWANGLES expects <azimuthDeg> <elevationDeg>", sourceLine);
+      return false;
+    }
+    run.st.viewportAzimuthDeg = az;
+    run.st.viewportElevationDeg = el;
+    // The projection needs a viewport size; a transcript has no window, so give it a definite one.
+    if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+      run.st.uiViewportWidthPx = 1200.f;
+      run.st.uiViewportHeightPx = 700.f;
     }
   } else if (verb == "UCSNAMED") {
     // UCSNAMED RESTORE|DELETE <name> — the View Manager's two named-UCS buttons.
@@ -1504,6 +1615,51 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
                       idx, gotV, gotE, gotF, wantV, wantE, wantF);
         Fail(run, "expect", buf, sourceLine);
         return false;
+      }
+    } else if (what == "PREVIEWBOUNDS") {
+      // EXPECT PREVIEWBOUNDS <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ> — the bounding box of the RUBBER
+      // the viewport would draw right now, in world coordinates, to REQ-101's 0.01 ft.
+      //
+      // This is what makes the live preview a tested claim rather than a screenshot. Asserting a
+      // segment COUNT would prove only that something was drawn; asserting the bounds proves the
+      // preview is the shape the cursor implies — and paired with a CLICK at the same place, that it
+      // is the same shape the commit builds.
+      std::istringstream is(arg);
+      double want[6] = {0, 0, 0, 0, 0, 0};
+      if (!(is >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5])) {
+        Fail(run, "parse", "EXPECT PREVIEWBOUNDS needs <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ>", sourceLine);
+        return false;
+      }
+      std::vector<float> rubber;
+      AppendCadDraftRubberLines(run.st, run.hoverX, run.hoverY, /*orthoEnabled=*/false, 0.0, 0.0,
+                                run.st.viewportZoom > 0.f ? 50.f / run.st.viewportZoom : 50.f, 700,
+                                rubber);
+      if (rubber.size() < 6) {
+        Fail(run, "expect", "EXPECT PREVIEWBOUNDS: the preview is empty", sourceLine);
+        return false;
+      }
+      double got[6] = {1e300, 1e300, 1e300, -1e300, -1e300, -1e300};
+      for (std::size_t i = 0; i + 2 < rubber.size(); i += 3) {
+        for (int k = 0; k < 3; ++k) {
+          const double c = static_cast<double>(rubber[i + static_cast<std::size_t>(k)]) +
+                           (k == 0 ? run.st.worldDocumentOriginX : (k == 1 ? run.st.worldDocumentOriginY : 0.0));
+          got[k] = std::min(got[k], c);
+          got[k + 3] = std::max(got[k + 3], c);
+        }
+      }
+      const char* names[6] = {"mnX", "mnY", "mnZ", "mxX", "mxY", "mxZ"};
+      for (int k = 0; k < 6; ++k) {
+        // Looser than REQ-101 on purpose, and the reason is geometric rather than sloppy: the preview
+        // is CHORDED, so a circle of radius r has its extreme vertex up to a sagitta inside r. Twice
+        // the chord tolerance covers that and still fails on any real error - a wrong radius is out
+        // by feet, not by hundredths.
+        if (std::fabs(got[k] - want[k]) > 2.0 * kSolidChordToleranceFt) {
+          char msg[160];
+          std::snprintf(msg, sizeof(msg), "EXPECT PREVIEWBOUNDS: %s is %.6f, expected %.6f", names[k],
+                        got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
       }
     } else if (what == "SOLIDBOUNDS") {
       // EXPECT SOLIDBOUNDS <index> <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ> — the solid's analytic bounds

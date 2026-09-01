@@ -475,8 +475,8 @@ const char* ProblemText(Problem p) {
   case Problem::NonPositiveRadius: return "Radius must be greater than zero.";
   case Problem::NegativeTopRadius: return "Top radius cannot be negative.";
   case Problem::TopRadiusNotBelowBase: return "Top radius must be smaller than the base radius.";
-  case Problem::MinorRadiusNotBelowMajor:
-    return "Tube radius must be smaller than the torus radius, or the tube would pass through the axis.";
+  case Problem::MinorRadiusEqualsMajor:
+    return "Tube radius cannot exactly equal the torus radius — the inner edge would collapse to a point.";
   case Problem::SideCountOutOfRange:
     static_assert(kMaxPyramidSides == 64, "the sentence below names this limit");
     return "A pyramid needs between 3 and 64 sides.";
@@ -1057,8 +1057,13 @@ bool MakeTorus(const ucs::Ucs& frame, double majorRadius, double minorRadius, So
     return Fail(Problem::NonFiniteParameter, outWhy);
   if (!(majorRadius > 0.0) || !(minorRadius > 0.0))
     return Fail(Problem::NonPositiveRadius, outWhy);
-  if (minorRadius >= majorRadius)
-    return Fail(Problem::MinorRadiusNotBelowMajor, outWhy);
+  // A tube LARGER than the ring is allowed, and self-intersects — the shape AutoCAD builds and that
+  // users draw deliberately (ADR-045 (f) as amended). Only the EXACTLY equal case is refused: there
+  // the inner equator collapses to a point, both inner rim edges have zero radius, and the result is
+  // not a solid at all. `Validate` would reject it a moment later as a degenerate edge, so it is
+  // refused here by name instead of by a symptom.
+  if (minorRadius == majorRadius)
+    return Fail(Problem::MinorRadiusEqualsMajor, outWhy);
   if (!FrameOk(frame))
     return Fail(Problem::DegenerateFrame, outWhy);
 
@@ -1273,9 +1278,22 @@ Problem Validate(const Solid& s) {
 // Mass properties.
 // ---------------------------------------------------------------------------------------------
 
+bool SelfIntersects(const Solid& s) {
+  for (const Face& f : s.faces) {
+    if (f.surface.kind == SurfaceKind::Torus && f.surface.radius2 >= f.surface.radius)
+      return true;
+  }
+  return false;
+}
+
 MassProperties ComputeMassProperties(const Solid& s) {
   MassProperties mp;
   if (Validate(s) != Problem::Ok)
+    return mp;
+  // A self-intersecting solid draws fine and its integrals still evaluate — to a number that is not
+  // its volume, because the surface encloses part of space twice. Reporting that number would be the
+  // silent-wrong-answer failure REQ-201 exists to prevent, so the answer is "unavailable" instead.
+  if (SelfIntersects(s))
     return mp;
 
   const Vec3 q = ReferencePoint(s);

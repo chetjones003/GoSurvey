@@ -23716,6 +23716,25 @@ ucs::Ucs SolidPlacementFrame(const AppCommandState& st, const ray3d::Vec3& stora
 
 bool CadIsSolidPrimitiveVerb(const std::string& verb) { return FindSolidVerb(verb) != nullptr; }
 
+/// What both authoring forms say when a solid is created — one sentence, one place.
+///
+/// A self-intersecting solid (a torus whose tube exceeds its ring, ADR-045 (f) as amended) has no
+/// meaningful volume: its surface encloses part of space twice, so the closed form is a number
+/// rather than an answer. Saying that is the honest report; printing the number would be the silent
+/// wrong answer REQ-201 exists to prevent.
+std::string SolidCreatedMessage(brep::PrimitiveKind kind, const brep::MassProperties& mp) {
+  char msg[240];
+  if (mp.valid) {
+    std::snprintf(msg, sizeof(msg), "%s created — volume %.4f, surface area %.4f.",
+                  brep::PrimitiveKindName(kind), mp.volume, mp.surfaceArea);
+  } else {
+    std::snprintf(msg, sizeof(msg),
+                  "%s created — it passes through itself, so volume and area are not reported.",
+                  brep::PrimitiveKindName(kind));
+  }
+  return msg;
+}
+
 void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const std::string& rest,
                              std::vector<std::string>& log) {
   const SolidVerbSpec* spec = FindSolidVerb(verb);
@@ -23807,10 +23826,7 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
   st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
 
-  char msg[240];
-  std::snprintf(msg, sizeof(msg), "%s created — volume %.4f, surface area %.4f.",
-                brep::PrimitiveKindName(spec->kind), mp.volume, mp.surfaceArea);
-  log.push_back(msg);
+  log.push_back(SolidCreatedMessage(spec->kind, mp));
 }
 
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log) {
@@ -23858,14 +23874,30 @@ namespace {
 /// The ORDER is load-bearing twice over: it is the order the one-line form reads its arguments, and
 /// it is the order the prompted form assigns bare numbers to. Those two being one list is what makes
 /// `CYLINDER 0,0 4 25` and typing `4` then `25` at the prompt produce the same solid.
-const SolidParamSpec kBoxParams[] = {{'L', "length", false}, {'W', "width", false}, {'H', "height", false}};
-const SolidParamSpec kPyramidParams[] = {
-    {'S', "sides", false}, {'R', "base radius", false}, {'T', "top radius", true}, {'H', "height", false}};
-const SolidParamSpec kCylinderParams[] = {{'R', "radius", false}, {'H', "height", false}};
-const SolidParamSpec kConeParams[] = {
-    {'R', "base radius", false}, {'T', "top radius", true}, {'H', "height", false}};
-const SolidParamSpec kSphereParams[] = {{'R', "radius", false}};
-const SolidParamSpec kTorusParams[] = {{'R', "radius", false}, {'T', "tube radius", false}};
+using PK = SolidPickKind;
+
+// Table order is the ONE-LINE form's argument order and must not change — `PYRAMID x,y 4 6 0 15`
+// means sides, base radius, top radius, height, and a transcript asserts it. The PICK order is the
+// subset whose `pick` is not `Typed`, walked in this same order, which is how a pyramid asks for a
+// radius and a height while its side count stays a keyword with a default (AutoCAD's own shape).
+const SolidParamSpec kBoxParams[] = {{'L', "length", false, PK::CornerXY},
+                                     {'W', "width", false, PK::CornerXY},
+                                     {'H', "height", false, PK::Height}};
+const SolidParamSpec kPyramidParams[] = {{'S', "sides", true, PK::Typed, 4.0},
+                                         {'R', "base radius", false, PK::Radius},
+                                         {'T', "top radius", true, PK::Typed, 0.0},
+                                         {'H', "height", false, PK::Height}};
+const SolidParamSpec kCylinderParams[] = {{'R', "radius", false, PK::Radius},
+                                          {'H', "height", false, PK::Height}};
+const SolidParamSpec kConeParams[] = {{'R', "base radius", false, PK::Radius},
+                                      {'T', "top radius", true, PK::Typed, 0.0},
+                                      {'H', "height", false, PK::Height}};
+const SolidParamSpec kSphereParams[] = {{'R', "radius", false, PK::Radius}};
+// The tube is picked as a distance from the CENTRE, like the ring itself — which is what makes a
+// tube larger than the ring reachable by dragging outward, the self-intersecting shape AutoCAD
+// builds (ADR-045 (f) as amended).
+const SolidParamSpec kTorusParams[] = {{'R', "radius", false, PK::Radius},
+                                       {'T', "tube radius", false, PK::Radius}};
 
 } // namespace
 
@@ -23893,6 +23925,13 @@ void CancelSolidCommand(AppCommandState& st) {
   st.solidPhase = AppCommandState::SolidPhase::WaitBasePoint;
   st.solidBase = ray3d::Vec3{};
   st.solidPendingParam = -1;
+  st.solidPendingIsDiameter = false;
+  st.solidPickValid = false;
+  st.solidBaseAngleRad = 0.0;
+  st.solidInscribed = false;
+  st.solidBaseIsCorner = false;
+  st.solidCornerDx = 0.0;
+  st.solidCornerDy = 0.0;
   for (int i = 0; i < AppCommandState::kMaxSolidParams; ++i) {
     st.solidParamValue[i] = 0.0;
     st.solidParamSet[i] = false;
@@ -23923,10 +23962,12 @@ std::string CadSolidPromptText(const AppCommandState& st) {
     return {};
   const std::string verb = SolidVerbUpper(st.solidKind);
   if (st.solidPhase == AppCommandState::SolidPhase::WaitBasePoint) {
-    const bool centred = st.solidKind == brep::PrimitiveKind::Sphere ||
-                         st.solidKind == brep::PrimitiveKind::Torus;
-    return verb + " — " + (centred ? "centre point" : "base centre point") +
-           " (click, or type X,Y or X,Y,Z):";
+    const char* what = "base centre point";
+    if (st.solidBaseIsCorner)
+      what = "first corner";  // BOX / WEDGE are drawn corner-to-corner, like AutoCAD
+    else if (st.solidKind == brep::PrimitiveKind::Sphere || st.solidKind == brep::PrimitiveKind::Torus)
+      what = "centre point";
+    return verb + " — " + std::string(what) + " (click, or type X,Y or X,Y,Z):";
   }
 
   int n = 0;
@@ -23934,10 +23975,26 @@ std::string CadSolidPromptText(const AppCommandState& st) {
   if (st.solidPendingParam >= 0 && st.solidPendingParam < n)
     return verb + " — " + specs[st.solidPendingParam].label + ":";
 
-  // Show every option, with the ones already set echoed back. A prompt that only listed the letters
+  // Lead with the dimension being PICKED, because that is what the cursor is currently changing and
+  // what the rubber band is showing — a prompt that opened with a list would bury it.
+  const int picking = CadSolidCurrentPickParam(st);
+  std::string s = verb + " — ";
+  if (picking >= 0) {
+    s += "specify ";
+    s += specs[picking].label;
+    if (specs[picking].pick == SolidPickKind::CornerXY)
+      s += " (opposite corner)";
+    s += " (click or type)";
+    if (specs[picking].pick == SolidPickKind::Radius)
+      s += ", [D]iameter";
+    if (st.solidKind == brep::PrimitiveKind::Pyramid)
+      s += std::string(", [I]nscribed (now ") + (st.solidInscribed ? "inscribed" : "circumscribed") + ")";
+    s += ". ";
+  }
+
+  // Then every option, with the ones already set echoed back. A prompt that only listed the letters
   // would make the user hold four numbers in their head; showing them is what lets a value be
   // re-typed to correct it.
-  std::string s = verb + " — ";
   for (int i = 0; i < n; ++i) {
     if (i)
       s += ", ";
@@ -23947,8 +24004,192 @@ std::string CadSolidPromptText(const AppCommandState& st) {
     if (st.solidParamSet[i])
       s += " = " + TrimNumber(st.solidParamValue[i]);
   }
-  s += ". Type a letter + value, a value for the next one, or Enter to create.";
+  s += ". Enter creates.";
   return s;
+}
+
+
+ucs::Ucs CadSolidPlacementFrameFor(const AppCommandState& st) { return SolidPlacementFrame(st, st.solidBase); }
+
+int CadSolidCurrentPickParam(const AppCommandState& st) {
+  int n = 0;
+  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+  for (int i = 0; i < n; ++i) {
+    if (specs[i].pick == SolidPickKind::Typed || specs[i].optional)
+      continue;  // keyword-and-default dimensions are never picked, and never block the sequence
+    if (!st.solidParamSet[i])
+      return i;
+  }
+  return -1;
+}
+
+void CadResolveSolidPick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray) {
+  st.solidPickValid = false;
+  if (st.solidKind == brep::PrimitiveKind::None ||
+      st.solidPhase != AppCommandState::SolidPhase::WaitParameters)
+    return;
+  const int picking = CadSolidCurrentPickParam(st);
+  if (picking < 0)
+    return;
+  int specCount = 0;
+  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &specCount);
+
+  const ucs::Ucs f = CadSolidPlacementFrameFor(st);
+  const ray3d::Vec3 d = ray3d::Sub(cursorOnPlane, st.solidBase);
+  const double inPlaneX = ray3d::Dot(d, f.xAxis);
+  const double inPlaneY = ray3d::Dot(d, f.yAxis);
+
+  switch (specs[picking].pick) {
+  case SolidPickKind::Radius:
+    st.solidPickA = std::sqrt(inPlaneX * inPlaneX + inPlaneY * inPlaneY);
+    st.solidPickAngleRad = std::atan2(inPlaneY, inPlaneX);
+    st.solidPickValid = st.solidPickA > 1e-9;
+    break;
+  case SolidPickKind::CornerXY:
+    st.solidPickA = inPlaneX;
+    st.solidPickB = inPlaneY;
+    // Both extents must be real: a corner dragged along one axis alone describes a line, not a box,
+    // and building it would just be refused a moment later as a non-positive width.
+    st.solidPickValid = std::fabs(inPlaneX) > 1e-9 && std::fabs(inPlaneY) > 1e-9;
+    break;
+  case SolidPickKind::Height: {
+    // Height cannot come from the work plane: the cursor is ON it, so its offset along the axis is
+    // always zero. It comes from the point on the solid's AXIS closest to the cursor ray, which is
+    // what makes dragging upward raise the solid.
+    //
+    // Plan view has no ray and therefore no answer here — looking straight down the axis, "how far
+    // up is the cursor" is not a question the screen can answer. The prompt asks for a typed value
+    // instead of inventing one.
+    if (!ray || !ray->valid())
+      break;
+    const ray3d::Vec3 axisDir = f.zAxis;  // unit by construction
+    const ray3d::Vec3 w0 = ray3d::Sub(st.solidBase, ray->origin);
+    const double b = ray3d::Dot(axisDir, ray->dir);
+    const double den = 1.0 - b * b;  // both unit length, so this is sin^2 of the angle between them
+    if (!(den > 1e-9))
+      break;  // the axis and the ray are parallel: every height projects to the same pixel
+    const double dv = ray3d::Dot(axisDir, w0);
+    const double ev = ray3d::Dot(ray->dir, w0);
+    st.solidPickA = (b * ev - dv) / den;
+    st.solidPickValid = std::fabs(st.solidPickA) > 1e-9;
+    break;
+  }
+  case SolidPickKind::Typed:
+    break;
+  }
+  if (!std::isfinite(st.solidPickA) || !std::isfinite(st.solidPickB) ||
+      !std::isfinite(st.solidPickAngleRad))
+    st.solidPickValid = false;
+}
+
+bool CadBuildSolidFromCommand(const AppCommandState& st, bool applyPick, brep::Solid* out,
+                              brep::Problem* outWhy) {
+  if (!out || st.solidKind == brep::PrimitiveKind::None)
+    return false;
+  int n = 0;
+  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+
+  // Effective values: what has been set, an optional dimension's default, and — for the one being
+  // picked right now — the cursor.
+  double v[AppCommandState::kMaxSolidParams] = {0.0, 0.0, 0.0, 0.0};
+  bool have[AppCommandState::kMaxSolidParams] = {false, false, false, false};
+  for (int i = 0; i < n; ++i) {
+    if (st.solidParamSet[i]) {
+      v[i] = st.solidParamValue[i];
+      have[i] = true;
+    } else if (specs[i].optional) {
+      v[i] = specs[i].defaultValue;
+      have[i] = true;
+    }
+  }
+
+  double cornerDx = st.solidCornerDx;
+  double cornerDy = st.solidCornerDy;
+  const int picking = CadSolidCurrentPickParam(st);
+  if (applyPick && st.solidPickValid && picking >= 0) {
+    if (specs[picking].pick == SolidPickKind::CornerXY) {
+      // One pick, two dimensions — and the SIGNED offsets too, because `length` and `width` cannot
+      // say which way the box was dragged and the frame origin has to move to the midpoint.
+      cornerDx = st.solidPickA;
+      cornerDy = st.solidPickB;
+      v[picking] = std::fabs(st.solidPickA);
+      have[picking] = true;
+      if (picking + 1 < n) {
+        v[picking + 1] = std::fabs(st.solidPickB);
+        have[picking + 1] = true;
+      }
+    } else {
+      v[picking] = st.solidPickA;
+      have[picking] = true;
+    }
+  }
+
+  for (int i = 0; i < n; ++i) {
+    if (!have[i])
+      { if (outWhy) *outWhy = brep::Problem::NonFiniteParameter; return false; }  // still being specified
+  }
+
+  // Placement. A box or wedge's base point is the first CORNER, so the frame origin moves to the
+  // midpoint of the two corners; every other primitive is placed on its base centre already.
+  ray3d::Vec3 origin = st.solidBase;
+  ucs::Ucs frame = SolidPlacementFrame(st, origin);
+  if (st.solidBaseIsCorner) {
+    origin = ray3d::Add(origin, ray3d::Add(ray3d::Scale(frame.xAxis, cornerDx * 0.5),
+                                           ray3d::Scale(frame.yAxis, cornerDy * 0.5)));
+    frame.origin = origin;
+  }
+
+  brep::Problem why = brep::Problem::Ok;
+  bool built = false;
+  switch (st.solidKind) {
+  case brep::PrimitiveKind::Box:
+    built = brep::MakeBox(frame, v[0], v[1], v[2], out, &why);
+    break;
+  case brep::PrimitiveKind::Wedge:
+    built = brep::MakeWedge(frame, v[0], v[1], v[2], out, &why);
+    break;
+  case brep::PrimitiveKind::Pyramid: {
+    const double sidesD = v[0];
+    if (sidesD != std::floor(sidesD))
+    { if (outWhy) *outWhy = brep::Problem::SideCountOutOfRange; return false; }
+    const int sides = static_cast<int>(sidesD);
+    // The base turns with the cursor, the way AutoCAD's does: the radius pick's DIRECTION is the
+    // polygon's rotation, not just its size.
+    ucs::Ucs baseFrame = ucs::RotatedAboutZ(frame, st.solidBaseAngleRad * 180.0 / 3.14159265358979323846);
+    baseFrame.origin = frame.origin;
+    // Inscribed means the given radius IS the circumradius (the polygon sits inside that circle);
+    // circumscribed — AutoCAD's default — means it is the apothem, so the circumradius is larger.
+    // The kernel takes a circumradius, so the conversion happens once, here.
+    double baseR = v[1];
+    double topR = v[2];
+    if (!st.solidInscribed && sides >= 3) {
+      const double k = std::cos(3.14159265358979323846 / static_cast<double>(sides));
+      if (k > 1e-9) {
+        baseR /= k;
+        topR /= k;
+      }
+    }
+    built = brep::MakePyramid(baseFrame, sides, baseR, topR, v[3], out, &why);
+    break;
+  }
+  case brep::PrimitiveKind::Cylinder:
+    built = brep::MakeCylinder(frame, v[0], v[1], out, &why);
+    break;
+  case brep::PrimitiveKind::Cone:
+    built = brep::MakeCone(frame, v[0], v[1], v[2], out, &why);
+    break;
+  case brep::PrimitiveKind::Sphere:
+    built = brep::MakeSphere(frame, v[0], out, &why);
+    break;
+  case brep::PrimitiveKind::Torus:
+    built = brep::MakeTorus(frame, v[0], v[1], out, &why);
+    break;
+  case brep::PrimitiveKind::None:
+    break;
+  }
+  if (outWhy)
+    *outWhy = why;
+  return built;
 }
 
 void StartSolidPrimitiveCommand(AppCommandState& st, const std::string& verb,
@@ -23960,6 +24201,11 @@ void StartSolidPrimitiveCommand(AppCommandState& st, const std::string& verb,
   st.active = AppCommandState::Kind::Solid;
   st.solidKind = spec->kind;
   st.solidPhase = AppCommandState::SolidPhase::WaitBasePoint;
+  // BOX and WEDGE are drawn corner-to-corner here, which is what AutoCAD does and what the base
+  // point means at this prompt. The ONE-LINE form is unchanged and still takes a base CENTRE plus
+  // explicit length and width — with the dimensions given outright, a centre is the natural anchor,
+  // and changing it would break the acceptance that rests on it.
+  st.solidBaseIsCorner = spec->kind == brep::PrimitiveKind::Box || spec->kind == brep::PrimitiveKind::Wedge;
   log.push_back(CadSolidPromptText(st));
 }
 
@@ -23988,49 +24234,16 @@ void CommitPromptedSolid(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
 
-  const double p0 = st.solidParamValue[0];
-  const double p1 = st.solidParamValue[1];
-  const double p2 = st.solidParamValue[2];
-  const double p3 = st.solidParamValue[3];
-  const ucs::Ucs frame = SolidPlacementFrame(st, st.solidBase);
-
   brep::Solid solid;
   brep::Problem why = brep::Problem::Ok;
-  bool built = false;
-  switch (st.solidKind) {
-  case brep::PrimitiveKind::Box:
-    built = brep::MakeBox(frame, p0, p1, p2, &solid, &why);
-    break;
-  case brep::PrimitiveKind::Wedge:
-    built = brep::MakeWedge(frame, p0, p1, p2, &solid, &why);
-    break;
-  case brep::PrimitiveKind::Pyramid:
-    if (p0 != std::floor(p0)) {
-      log.push_back(verb + " — the side count must be a whole number.");
-      return;
-    }
-    built = brep::MakePyramid(frame, static_cast<int>(p0), p1, p2, p3, &solid, &why);
-    break;
-  case brep::PrimitiveKind::Cylinder:
-    built = brep::MakeCylinder(frame, p0, p1, &solid, &why);
-    break;
-  case brep::PrimitiveKind::Cone:
-    built = brep::MakeCone(frame, p0, p1, p2, &solid, &why);
-    break;
-  case brep::PrimitiveKind::Sphere:
-    built = brep::MakeSphere(frame, p0, &solid, &why);
-    break;
-  case brep::PrimitiveKind::Torus:
-    built = brep::MakeTorus(frame, p0, p1, &solid, &why);
-    break;
-  case brep::PrimitiveKind::None:
-    break;
-  }
+  // Through the SAME builder the live preview draws from, so the solid that appears on Enter is
+  // exactly the one the user was looking at.
+  const bool built = CadBuildSolidFromCommand(st, /*applyPick=*/false, &solid, &why);
 
   if (!built) {
-    // The command stays open on a refusal, deliberately: the user has typed a base point and three
-    // dimensions, and throwing all of it away because one was wrong would be the worse outcome.
-    // They can retype the offending letter and press Enter again.
+    // The command stays open on a refusal, deliberately: the user has given a base point and two or
+    // three dimensions, and throwing all of it away because one was wrong would be the worse
+    // outcome. They retype the offending letter and press Enter again.
     log.push_back(verb + " — " + brep::ProblemText(why));
     return;
   }
@@ -24041,10 +24254,7 @@ void CommitPromptedSolid(AppCommandState& st, std::vector<std::string>& log) {
   st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
 
-  char msg[240];
-  std::snprintf(msg, sizeof(msg), "%s created — volume %.4f, surface area %.4f.",
-                brep::PrimitiveKindName(st.solidKind), mp.volume, mp.surfaceArea);
-  log.push_back(msg);
+  log.push_back(SolidCreatedMessage(st.solidKind, mp));
 
   CancelSolidCommand(st);
   st.active = AppCommandState::Kind::None;
@@ -24110,12 +24320,52 @@ bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::v
       log.push_back(CadSolidPromptText(st));
       return true;
     }
+    // `D` armed a DIAMETER, so it is halved into the radius it names - the conversion happens here
+    // and nowhere else, so a diameter can never reach the kernel as a radius.
+    if (st.solidPendingIsDiameter)
+      v *= 0.5;
+    st.solidPendingIsDiameter = false;
     SetSolidParam(st, st.solidPendingParam, v, log);
     return true;
   }
 
-  // `R 4` / `R4` / `R` — a leading letter naming one of this primitive's dimensions.
   const char first = static_cast<char>(std::toupper(static_cast<unsigned char>(line[0])));
+
+  // `I` — PYRAMID's inscribed / circumscribed toggle. The base radius means the polygon's
+  // circumradius when inscribed and its apothem when circumscribed (AutoCAD's default), so this
+  // changes what an already-typed radius MEANS and is echoed back with the prompt.
+  if (st.solidKind == brep::PrimitiveKind::Pyramid && first == 'I' &&
+      StringUtil::trimCopy(line.substr(1)).empty()) {
+    st.solidInscribed = !st.solidInscribed;
+    log.push_back(verb + " — base is now " + (st.solidInscribed ? "INSCRIBED" : "CIRCUMSCRIBED") + ".");
+    log.push_back(CadSolidPromptText(st));
+    return true;
+  }
+
+  // `D <value>` — a diameter for whichever radius is being picked, halved into it. AutoCAD offers it
+  // at every radius prompt, and it is the one abbreviation people reach for without thinking.
+  if (first == 'D') {
+    const int target = CadSolidCurrentPickParam(st);
+    if (target >= 0 && specs[target].pick == SolidPickKind::Radius) {
+      const std::string rest = StringUtil::trimCopy(line.substr(1));
+      if (rest.empty()) {
+        st.solidPendingParam = target;
+        st.solidPendingIsDiameter = true;
+        log.push_back(verb + " — " + specs[target].label + " diameter:");
+        return true;
+      }
+      double d = 0.0;
+      if (!parseNumber(rest, &d)) {
+        log.push_back(verb + " — \"" + rest + "\" is not a number.");
+        log.push_back(CadSolidPromptText(st));
+        return true;
+      }
+      SetSolidParam(st, target, d * 0.5, log);
+      return true;
+    }
+  }
+
+  // `R 4` / `R4` / `R` — a leading letter naming one of this primitive's dimensions.
   for (int i = 0; i < n; ++i) {
     if (specs[i].letter != first)
       continue;
@@ -24158,16 +24408,48 @@ bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::v
 void SubmitSolidViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   if (st.solidKind == brep::PrimitiveKind::None)
     return;
-  if (st.solidPhase != AppCommandState::SolidPhase::WaitBasePoint) {
-    // Past the base point the command wants numbers, not places. Saying so beats swallowing the
-    // click, which is how a command comes to look like it has hung (the TASK-099 lesson).
-    log.push_back(SolidVerbUpper(st.solidKind) + " — type the dimensions, or Esc to cancel.");
+  if (st.solidPhase == AppCommandState::SolidPhase::WaitBasePoint) {
+    st.solidBase = ray3d::Vec3{static_cast<double>(wx), static_cast<double>(wy),
+                               static_cast<double>(CadCommitElevation(st))};
+    st.solidPhase = AppCommandState::SolidPhase::WaitParameters;
+    log.push_back(CadSolidPromptText(st));
     return;
   }
-  st.solidBase = ray3d::Vec3{static_cast<double>(wx), static_cast<double>(wy),
-                             static_cast<double>(CadCommitElevation(st))};
-  st.solidPhase = AppCommandState::SolidPhase::WaitParameters;
-  log.push_back(CadSolidPromptText(st));
+
+  // A click at a DIMENSION prompt commits whatever the cursor is currently worth — the same value
+  // the rubber preview has been drawing, republished each frame by the viewport (`solidPickA/B`).
+  const int picking = CadSolidCurrentPickParam(st);
+  if (picking < 0) {
+    log.push_back(SolidVerbUpper(st.solidKind) + " — every dimension is set. Press Enter to create.");
+    return;
+  }
+  if (!st.solidPickValid) {
+    // No value under the cursor. Height needs a pick RAY, which plan view does not have: there is no
+    // "how far up is the cursor" to read, and inventing one would place the solid somewhere the user
+    // never pointed. Say so rather than swallow the click (the TASK-099 lesson).
+    log.push_back(SolidVerbUpper(st.solidKind) +
+                  " — this dimension cannot be picked from here; type a value, or orbit the view.");
+    return;
+  }
+
+  int n = 0;
+  const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
+  if (specs[picking].pick == SolidPickKind::CornerXY) {
+    // One click, two dimensions, plus the signed offsets the frame origin needs (BOX / WEDGE).
+    st.solidCornerDx = st.solidPickA;
+    st.solidCornerDy = st.solidPickB;
+    SetSolidParam(st, picking, std::fabs(st.solidPickA), log);
+    if (picking + 1 < n)
+      SetSolidParam(st, picking + 1, std::fabs(st.solidPickB), log);
+  } else {
+    if (specs[picking].pick == SolidPickKind::Radius)
+      st.solidBaseAngleRad = st.solidPickAngleRad;  // the base turns with the cursor (PYRAMID)
+    SetSolidParam(st, picking, st.solidPickA, log);
+  }
+
+  // Every dimension in: create it, so a fully-picked solid needs no extra Enter — AutoCAD's shape.
+  if (CadSolidCurrentPickParam(st) < 0)
+    CommitPromptedSolid(st, log);
 }
 
 /// Shared by the prompt and the inline `VS SHADED` form, so neither can set a value the other would

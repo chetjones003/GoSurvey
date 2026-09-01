@@ -187,7 +187,10 @@ enum class Problem {
   NonPositiveRadius,
   NegativeTopRadius,         ///< A cone / pyramid top radius below zero.
   TopRadiusNotBelowBase,     ///< A cone / pyramid whose top is at least as wide as its base.
-  MinorRadiusNotBelowMajor,  ///< A torus whose tube would pass through its own axis.
+  /// A torus whose tube radius EQUALS its ring radius. Only the equal case: the inner equator
+  /// collapses to a point there, so the topology has a zero-length edge and is not a solid at all.
+  /// A tube LARGER than the ring is legal and self-intersecting - see ADR-045 (f) as amended.
+  MinorRadiusEqualsMajor,
   SideCountOutOfRange,       ///< A pyramid with fewer than 3 or more than kMaxPyramidSides sides.
   DegenerateFrame,           ///< The placement frame is not right-handed orthonormal.
 
@@ -277,6 +280,19 @@ inline constexpr int kMaxPyramidSides = 64;
 
 /// Convenience predicate over \ref Validate.
 [[nodiscard]] inline bool IsValid(const Solid& s) { return Validate(s) == Problem::Ok; }
+
+/// True when \p s passes through itself.
+///
+/// One case exists today and the check names it rather than pretending to be general: a torus whose
+/// tube radius exceeds its ring radius, which AutoCAD builds and users draw on purpose (ADR-045 (f)
+/// as amended). Such a solid is perfectly valid topology — manifold, orientable, closed — and draws
+/// correctly; what it is NOT is a body whose closed-form volume and area mean anything, because the
+/// surface encloses part of space twice. \ref ComputeMassProperties therefore reports it as
+/// unavailable rather than returning a plausible wrong number (REQ-201).
+///
+/// Read off the FACE's surface, not off the recipe, so a solid that arrived from a `.gs` or from a
+/// future operation is judged on the geometry it actually has (ADR-045 (c)).
+[[nodiscard]] bool SelfIntersects(const Solid& s);
 
 /// Euler characteristic `V - E + F` of the solid's topology: 2 for a sphere-like solid, 0 for a
 /// torus. Reported for the Properties panel and for tests; not a validity criterion, because the

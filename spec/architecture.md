@@ -2015,7 +2015,14 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   on a face whose parametric span disagrees with its own boundary loop it does not. That case is
   topologically flawless and geometrically a hole, it is exactly what a Phase 4 trim can produce,
   and nothing else in the check can see it.
-  (f) **Self-intersection is refused at construction, not detected afterwards.** For the seven
+  (f) **Self-intersection is refused at construction, not detected afterwards.** **Amended
+  2026-09-01 (D-2026-09-01-f): a torus whose tube EXCEEDS its ring radius is now BUILT** - the
+  self-intersecting shape AutoCAD makes and users draw deliberately - and only the exactly-equal case
+  stays refused, where the inner equator collapses to a point and the rim edges have zero radius. Such
+  a solid is valid topology and draws correctly, but reports NO volume or surface area
+  (`brep::SelfIntersects` gates `ComputeMassProperties`): a surface that encloses part of space twice
+  makes the closed form a number rather than an answer, and printing it would be the silent wrong
+  answer REQ-201 exists to prevent. The original clause read: For the seven
   primitives the only route to a self-intersecting shell is a bad parameter — a torus whose tube
   swallows its own axis — and each such parameter is refused by name (REQ-201). A general
   surface-surface intersection test belongs with the Phase 4 booleans, which are the first operation
