@@ -23670,6 +23670,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     mix(lwBits);
   }
 
+  st.solidDisplayGeometry.assemblySig = sig;  // set even on the early-out — the renderer keys on it
   if (sig == st.solidDisplayAssemblySig && !st.solidDisplayGeometry.solids.empty() == !visible.empty())
     return;  // inputs unchanged since last assembly — the merged buffers are still current
   st.solidDisplayAssemblySig = sig;

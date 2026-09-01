@@ -9,6 +9,7 @@
 
 #include "brep.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -100,6 +101,11 @@ struct CadSolidDisplayBatch {
 /// is the same argument `CadSurfaceDisplayGeometry` records for itself.
 struct CadSolidDisplayGeometry {
   std::vector<CadSolidDisplayBatch> solids;
+  /// The assembly signature these batches were built from (mirrors
+  /// `AppCommandState::solidDisplayAssemblySig`). The renderer keys its persistent solid vertex
+  /// buffers on this: an unchanged signature means the batch list is byte-for-byte what it drew last
+  /// frame, so nothing needs re-uploading — the orbit case REQ-100 profile (d) measures.
+  std::uint64_t assemblySig = 0;
   [[nodiscard]] bool empty() const { return solids.empty(); }
 };
 
