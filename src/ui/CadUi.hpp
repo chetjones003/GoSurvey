@@ -99,6 +99,10 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
+/// REQ-091 amendment (GitHub issue #182) — read-only "Account Details" placeholder window opened
+/// from the menu-bar account dropdown. Shows the signed-in email and a "more coming soon" note.
+void DrawAccountDetailsWindow(AppCommandState& cmd);
+
 /// Drawing Units dialog (UNITS command). REQ-020. Owns displayLinearPrecision.
 void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 

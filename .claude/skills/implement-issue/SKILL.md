@@ -136,6 +136,8 @@ Do not declare the issue complete until the final review passes.
 
 Give the user a concise final report containing:
 
+The report should be in plain English like the user has no experience in software engineering. Use clear analogies and examples to help the user understand
+
 * Issue number/title
 * What was implemented
 * Branch name
@@ -158,6 +160,7 @@ Give the user a concise final report containing:
 ### Explaining Problems to the User
 
 When explaining a **REQ, SPEC, Acceptance Criteria, architecture, or SPEC GAP problem**, assume the user knows **nothing about programming**.
+The report should be in plain English like the user has no experience in software engineering. Use clear analogies and examples to help the user understand
 
 Explain:
 

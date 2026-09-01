@@ -4,7 +4,7 @@
 
 - **REQ-313** — The B-rep solid kernel and the seven primitive solids (accepted 2026-09-01).
 - **ADR-045** — The B-rep solid kernel: analytic faces, a remembered recipe, derived tessellation.
-- **D-2026-09-01-a** — the recorded decision behind both.
+- **D-2026-09-01-b** — the recorded decision behind both.
 - Constraints in force: REQ-101 (±0.01 ft), REQ-201 (no silent failures), REQ-300 (dependency
   discipline), REQ-301 (minimal abstraction), REQ-311 (one plane/frame type).
 - GitHub issue #146, Phase 3 of #120.
@@ -29,7 +29,7 @@ changes a customer-facing data format:
    precedent from ADR-026 (c). Rejected: a lossy tessellated approximation.
 3. **Delivery.** Chosen: two increments — kernel first, then document integration.
 
-All three answers were the recommended option. Recorded as D-2026-09-01-a; REQ-313 and ADR-045
+All three answers were the recommended option. Recorded as D-2026-09-01-b; REQ-313 and ADR-045
 written before any code.
 
 ### One deviation from the approved split, and why
@@ -55,7 +55,7 @@ Modified — **only** these, and only as source-list entries:
 SPEC:
 - `spec/requirements.md` — REQ-313 and its traceability row.
 - `spec/architecture.md` — ADR-045, and `brep` in the `util/` module listing.
-- `spec/project.md` — D-2026-09-01-a.
+- `spec/project.md` — D-2026-09-01-b.
 
 ## Implementation approach
 
@@ -87,7 +87,7 @@ true analytic normals inside each curved face and segment counts from a chord-to
 
 ## Test approach
 
-`tests/BrepTests.cpp`, tag `[brep][req313]` — 18 cases, 313,151 assertions, no window and no
+`tests/BrepTests.cpp`, tag `[brep][req313]` — 19 cases, 313,221 assertions, no window and no
 document. Every figure is asserted against the **closed form**, never against a recorded output,
 because a volume that is 3% wrong looks exactly like one that is right.
 
@@ -101,7 +101,7 @@ normal, finer tolerance ⇒ more triangles and less error, bounds contain the me
 ## Verification
 
 - Build: clean, `/W4` warnings-as-errors config, no new warnings.
-- `ctest`: **954/954 green** (18 new cases; no pre-existing test changed).
+- `ctest`: **955/955 green** (19 new cases; no pre-existing test changed).
 - Architecture: the kernel links no GL, ImGui, document or command TU; it is in `util/` beside
   `ray3d`/`ucs`/`tinbuild` and reachable from the test target, satisfying ADR-002 and REQ-313's
   first acceptance bullet by construction.
