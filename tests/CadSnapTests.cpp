@@ -446,6 +446,43 @@ TEST_CASE("ALIGN re-anchors a tilted arc's start after rotating its plane", "[Ca
   CHECK(e.z == Approx(10.0).margin(1e-4));
 }
 
+// GitHub #185: a selective ALIGN filtered the circle store (`userCirclesCxCyZR`, stride 4) with
+// `sCircles.count(i / 3)`. `floor(4k / 3) == k` only for k <= 2, so a drawing with four or more
+// circles transformed the wrong ones. This case must use FIVE circles and select index 4 — a
+// three-circle case passes against the unfixed `i / 3`, which is how the bug shipped.
+TEST_CASE("ALIGN on a selection transforms only the selected circle (#185)", "[CadSnap][regression]") {
+  AppCommandState st;
+  // Five circles on the x axis, centres 100 apart, radius 5, in world XY.
+  for (int k = 0; k < 5; ++k) {
+    st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(),
+                                {100.f * static_cast<float>(k), 0.f, 0.f, 5.f});
+    st.userCircleNormals.insert(st.userCircleNormals.end(), {0.f, 0.f, 1.f});
+  }
+
+  // Select only circle 4 (centre (400, 0)).
+  st.selection = {SelectedEntity{SelectedEntity::Type::Circle, 4}};
+  st.alignSelectionSnapshot = st.selection;
+  st.alignHasSelection      = true;
+
+  // Two control pairs solving to a pure translation of (+100, +50): no rotation, no scale.
+  st.alignControlPts = {{0.f, 0.f, 100.f, 50.f}, {10.f, 0.f, 110.f, 50.f}};
+  RecalcAlignResult(st);
+  REQUIRE(st.alignLastResult.valid);
+
+  std::vector<std::string> log;
+  ApplyAlignCommand(st, log, /*applyScale=*/true);
+
+  REQUIRE(st.userCirclesCxCyZR.size() == 20);
+  // Circle 4 moved by (+100, +50); every other circle stayed exactly where it was.
+  for (int k = 0; k < 5; ++k) {
+    const float expX = 100.f * static_cast<float>(k) + (k == 4 ? 100.f : 0.f);
+    const float expY = (k == 4 ? 50.f : 0.f);
+    CHECK(st.userCirclesCxCyZR[static_cast<size_t>(k) * 4 + 0] == Approx(expX).margin(1e-3));
+    CHECK(st.userCirclesCxCyZR[static_cast<size_t>(k) * 4 + 1] == Approx(expY).margin(1e-3));
+    CHECK(st.userCirclesCxCyZR[static_cast<size_t>(k) * 4 + 3] == Approx(5.f).margin(1e-3));
+  }
+}
+
 // ================================================================================================
 // REQ-309 — object snapping under a PERSPECTIVE camera (GitHub #144, Phase 1 of #120).
 //
