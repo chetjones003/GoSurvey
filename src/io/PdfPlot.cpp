@@ -8,6 +8,7 @@
 #include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
 #include "CadFontName.hpp"
 #include "CadDimStroke.hpp"
+#include "render/ViewportProjection.hpp"  // REQ-061: per-viewport camera projection
 #include "util/cadtable.hpp"
 
 #include <cctype>
@@ -224,16 +225,18 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       };
       const float vx0 = vp.paperXIn, vy0 = vp.paperYIn;
       const float vx1 = vp.paperXIn + vp.paperWIn, vy1 = vp.paperYIn + vp.paperHIn;
-      const float cxp = (vx0 + vx1) * 0.5f, cyp = (vy0 + vy1) * 0.5f;
-      const float s = vp.safeScale();
-      auto m2p = [&](double wx, double wy, float* px, float* py) {
-        *px = cxp + static_cast<float>((wx - vp.modelCenterX) / static_cast<double>(s));
-        *py = cyp + static_cast<float>((wy - vp.modelCenterY) / static_cast<double>(s));
+      // REQ-061: project model geometry through this viewport's camera. In plan view this is the
+      // historical `cxp + (wx - modelCenterX)/s` centre+scale mapping to the bit; a rotated camera
+      // gives the axonometric/perspective view onto the sheet.
+      auto m2pz = [&](double wx, double wy, double wz, float* px, float* py) {
+        ModelToPaperInThroughCamera(vp, wx, wy, wz, px, py);
       };
-      auto emitModelSeg = [&](double w0x, double w0y, double w1x, double w1y) {
+      auto m2p = [&](double wx, double wy, float* px, float* py) { m2pz(wx, wy, 0.0, px, py); };
+      auto emitModelSeg = [&](double w0x, double w0y, double w1x, double w1y, double w0z = 0.0,
+                              double w1z = 0.0) {
         float p0x, p0y, p1x, p1y;
-        m2p(w0x, w0y, &p0x, &p0y);
-        m2p(w1x, w1y, &p1x, &p1y);
+        m2pz(w0x, w0y, w0z, &p0x, &p0y);
+        m2pz(w1x, w1y, w1z, &p1x, &p1y);
         if (ClipSeg(vx0, vy0, vx1, vy1, p0x, p0y, p1x, p1y))
           addSeg(p0x, p0y, p1x, p1y);
       };
@@ -248,7 +251,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                        ? resolveRgb(st.userLineAttrs[idx].layer, st.userLineAttrs[idx].color)
                        : 0x000000u;
         emitModelSeg(st.userLinesFlat[i] + oX, st.userLinesFlat[i + 1] + oY, st.userLinesFlat[i + 3] + oX,
-                     st.userLinesFlat[i + 4] + oY);
+                     st.userLinesFlat[i + 4] + oY, st.userLinesFlat[i + 2], st.userLinesFlat[i + 5]);
       }
       // Polylines.
       for (size_t pi = 0; pi < st.userPolylineOffsets.size(); ++pi) {
@@ -266,7 +269,9 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           emitModelSeg(st.userPolylineVerts[static_cast<size_t>(k) * 3] + oX,
                        st.userPolylineVerts[static_cast<size_t>(k) * 3 + 1] + oY,
                        st.userPolylineVerts[static_cast<size_t>(k + 1) * 3] + oX,
-                       st.userPolylineVerts[static_cast<size_t>(k + 1) * 3 + 1] + oY);
+                       st.userPolylineVerts[static_cast<size_t>(k + 1) * 3 + 1] + oY,
+                       st.userPolylineVerts[static_cast<size_t>(k) * 3 + 2],
+                       st.userPolylineVerts[static_cast<size_t>(k + 1) * 3 + 2]);
       }
       // Circles (sampled to a polygon).
       for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {  // cx,cy,z,r
@@ -278,14 +283,15 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                        ? resolveRgb(st.userCircleAttrs[idx].layer, st.userCircleAttrs[idx].color)
                        : 0x000000u;
         const double cx = st.userCirclesCxCyZR[i] + oX, cy = st.userCirclesCxCyZR[i + 1] + oY;
-        const double r = st.userCirclesCxCyZR[i + 3];  // [i+2] is Z — the plot is a flat projection
+        const double cz = st.userCirclesCxCyZR[i + 2];  // REQ-061: carried through the viewport camera
+        const double r = st.userCirclesCxCyZR[i + 3];
         constexpr int kSeg = 72;
         double pxp = 0, pyp = 0;
         for (int k = 0; k <= kSeg; ++k) {
           const double t = 2.0 * 3.14159265358979 * k / kSeg;
           const double wx = cx + r * std::cos(t), wy = cy + r * std::sin(t);
           if (k > 0)
-            emitModelSeg(pxp, pyp, wx, wy);
+            emitModelSeg(pxp, pyp, wx, wy, cz, cz);
           pxp = wx;
           pyp = wy;
         }
@@ -305,7 +311,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           const double wx = static_cast<double>(a.cx + a.r * std::cos(t)) + oX;
           const double wy = static_cast<double>(a.cy + a.r * std::sin(t)) + oY;
           if (k > 0)
-            emitModelSeg(pxp, pyp, wx, wy);
+            emitModelSeg(pxp, pyp, wx, wy, a.z, a.z);
           pxp = wx;
           pyp = wy;
         }
@@ -341,7 +347,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         auto emitSurf = [&](const std::vector<float>& verts) {
           for (size_t i = 0; i + 5 < verts.size(); i += 6)
             emitModelSeg(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
-                         static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY);
+                         static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY,
+                         static_cast<double>(verts[i + 2]), static_cast<double>(verts[i + 5]));
         };
         emitSurf(it->triangleEdges);
         emitSurf(it->minorContours);
@@ -361,7 +368,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         auto emitPreview = [&](const std::vector<float>& verts) {
           for (size_t i = 0; i + 5 < verts.size(); i += 6)
             emitModelSeg(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
-                         static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY);
+                         static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY,
+                         static_cast<double>(verts[i + 2]), static_cast<double>(verts[i + 5]));
         };
         emitPreview(st.catchmentPreviewLines);
         emitPreview(st.waterDropPreviewLines);

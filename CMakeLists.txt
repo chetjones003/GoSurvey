@@ -677,6 +677,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
     tests/DimViewportTests.cpp
+    tests/ViewportCameraTests.cpp
     tests/CommandLineTests.cpp
     tests/RightClickTests.cpp
     tests/SurveyCsvValidateTests.cpp
@@ -913,6 +914,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
     tests/GsIoDimAngularTests.cpp
+    tests/GsIoViewportCameraTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into

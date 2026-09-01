@@ -147,6 +147,12 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
             paperWIn, paperHIn        (numbers) rect size in paper inches
             modelCenterX, modelCenterY(numbers) model-space (world) point shown at the rect center
             scaleModelPerPaperIn      (number)  model units per paper inch (viewport scale)
+            camAzimuthDeg, camElevationDeg, camRollDeg (numbers, optional) — REQ-061; the camera this
+                                        viewport views model space through (same convention as the
+                                        model viewport). Absent / 0,90,0 = the straight-down plan
+                                        view, identical to the pre-REQ-061 flat projection.
+            camPerspective            (bool, optional)   — REQ-061; false (default) = orthographic
+            camFovDeg                 (number, optional) — REQ-061; perspective vertical FOV
             layer                     (string)  viewport's layer (for plotting)
             frozenLayers              (array of strings, optional) — REQ-028; layers hidden only in this viewport
             vpColorLayers             (array of strings, optional) — REQ-046; layers with a per-viewport color

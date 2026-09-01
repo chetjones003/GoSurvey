@@ -91,6 +91,31 @@ void DrawViewportsWindow(AppCommandState& cmd, std::vector<std::string>& log) {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.f);
     ch |= ImGui::InputDouble("Center Y##vpcy", &V.modelCenterY, 0., 0., "%.4f");
+    // REQ-061: point this viewport's camera at a standard view. "Plan (Top)" is the default and
+    // reproduces the historical flat projection exactly; the isometrics/elevations render model
+    // space in 3D through this viewport only, on screen and in the plot.
+    {
+      int cur = -1;
+      for (int s = 0; s < kViewportStandardViewCount; ++s)
+        if (std::fabs(V.camAzimuthDeg - kViewportStandardViews[s].azimuthDeg) < 1e-3f &&
+            std::fabs(V.camElevationDeg - kViewportStandardViews[s].elevationDeg) < 1e-3f && V.camRollDeg == 0.f) {
+          cur = s;
+          break;
+        }
+      const char* label = (cur >= 0) ? kViewportStandardViews[cur].name : "Custom";
+      ImGui::SetNextItemWidth(150.f);
+      if (ImGui::BeginCombo("View##vpview", label)) {
+        for (int s = 0; s < kViewportStandardViewCount; ++s)
+          if (ImGui::Selectable(kViewportStandardViews[s].name, cur == s)) {
+            V.camAzimuthDeg = kViewportStandardViews[s].azimuthDeg;
+            V.camElevationDeg = kViewportStandardViews[s].elevationDeg;
+            V.camRollDeg = 0.f;
+            V.camPerspective = false;
+            ch = true;
+          }
+        ImGui::EndCombo();
+      }
+    }
     ImGui::SetNextItemWidth(150.f);
     if (ImGui::BeginCombo("Layer##vplayer", V.layer.c_str())) {
       for (const CadLayerRow& lr : cmd.drawingLayerTable)
