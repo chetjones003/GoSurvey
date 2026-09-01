@@ -17229,20 +17229,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // (`viewportCrosshairArmFracY` == the percentage; the X fraction is a 0.6 derivative of it).
       const float arm3d = fry * avail.y;
       const crosshair3d::Triad tri = crosshair3d::Compute(CadViewCamera(cmd), cmd.activeUcs, arm3d);
-      if (!crosshair3d::Degenerate(tri)) {
+      // `Degenerate` is the pure-geometry guard (each axis cleared 6 px). The renderer also gaps
+      // every arm by the pickbox, and with a large CURSORSIZE/pickbox that gap can reach ~32 px and
+      // swallow a near-edge-on axis whole. `DrawableCount` applies that same test, so the fallback
+      // decision matches what actually renders — REQ-201: degrade to the 2D crosshair, never to a
+      // one-armed one.
+      if (!crosshair3d::Degenerate(tri) && crosshair3d::DrawableCount(tri, phx, phy) >= 2) {
         auto col = [](const crosshair3d::AxisRgb& c) { return IM_COL32(c.r, c.g, c.b, 255); };
         // Each axis is a FULL line through the centre, gapped by the pickbox so the square stays
         // readable — the same gap the 2D arms leave.
         auto drawAxis = [&](const crosshair3d::Arm& a, ImU32 c) {
-          if (!a.visible)
+          if (!crosshair3d::ArmDrawable(a, phx, phy))
             return;
           const float len = std::sqrt(a.dx * a.dx + a.dy * a.dy);
           const float ux = a.dx / len, uy = a.dy / len;
-          // Gap = the pickbox half-extent along this arm's own direction, so the square is cleared
-          // whatever angle the axis arrives at.
-          const float gap = std::sqrt((phx * ux) * (phx * ux) + (phy * uy) * (phy * uy));
-          if (len <= gap)
-            return;
+          const float gap = crosshair3d::ArmGapPx(a, phx, phy);
           wdl->AddLine(ImVec2(cx + ux * gap, cy + uy * gap), ImVec2(cx + a.dx, cy + a.dy), c, hair);
           wdl->AddLine(ImVec2(cx - ux * gap, cy - uy * gap), ImVec2(cx - a.dx, cy - a.dy), c, hair);
         };
@@ -17253,7 +17254,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         drawAxis(tri.y, col(crosshair3d::kAxisColorY));
         drew3d = true;
       }
-      // A degenerate frame falls through to the 2D arms below rather than leaving no cursor.
+      // A degenerate frame — or one with fewer than two arms the pickbox does not swallow — falls
+      // through to the 2D arms below rather than leaving no cursor.
     }
     if (!pickboxCursor && !drew3d) {
       wdl->AddLine(ImVec2(xl, cy), ImVec2(cx - phx, cy), kCad, hair);

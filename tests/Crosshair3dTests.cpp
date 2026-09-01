@@ -150,3 +150,32 @@ TEST_CASE("REQ-310 plan view is not degenerate despite the collapsed Z", "[cross
   const crosshair3d::Triad t = crosshair3d::Compute(cam, WorldFrame(), kArm);
   CHECK_FALSE(crosshair3d::Degenerate(t));
 }
+
+// TASK-160: an axis can clear `kMinArmPx` (so `Arm::visible` is true and `Degenerate` is content)
+// yet still be shorter than the pickbox gap it has to bridge, drawing nothing. `DrawableCount` /
+// `ArmDrawable` apply that pickbox test so the renderer's fallback decision matches what renders.
+TEST_CASE("REQ-310 an arm shorter than the pickbox gap is not drawable", "[crosshair3d][req310]") {
+  crosshair3d::Arm a;
+  a.dx = 10.f;  // 10 px projection: clears kMinArmPx = 6...
+  a.dy = 0.f;
+  a.visible = true;
+
+  CHECK(crosshair3d::ArmDrawable(a, /*phx=*/4.f, /*phy=*/4.f));    // ...gap 4, arm shows
+  CHECK_FALSE(crosshair3d::ArmDrawable(a, /*phx=*/32.f, /*phy=*/32.f));  // gap 32 swallows it
+}
+
+TEST_CASE("REQ-310 a large pickbox drops the triad below two drawable arms", "[crosshair3d][req310]") {
+  // Plan view: X and Y project to full length, Z is collapsed. With a big pickbox that still eats
+  // into the arms, but not past them - both stay drawable and the 3D crosshair stands.
+  Camera cam = Camera::Plan(0.0, 0.0, 50.f);
+  const crosshair3d::Triad full = crosshair3d::Compute(cam, WorldFrame(), kArm);
+  CHECK(crosshair3d::DrawableCount(full, 20.f, 20.f) == 2);
+
+  // A near-edge-on view: X foreshortens toward the pickbox size. Past it, only one arm is left and
+  // the renderer must fall back rather than draw a one-armed cross.
+  Camera edge = Camera::Plan(0.0, 0.0, 50.f);
+  edge.azimuthDeg = 88.f;
+  edge.elevationDeg = 2.f;
+  const crosshair3d::Triad t = crosshair3d::Compute(edge, WorldFrame(), 30.f);
+  CHECK(crosshair3d::DrawableCount(t, 32.f, 32.f) < 2);
+}
