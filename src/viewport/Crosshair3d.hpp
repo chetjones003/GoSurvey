@@ -94,9 +94,40 @@ inline Triad Compute(const Camera& cam, const ucs::Ucs& frame, float armPx) {
 /// a guard against a degenerate (non-orthonormal, hand-edited) UCS rather than an expected state.
 /// The caller falls back to the plain 2D crosshair, which is always readable (REQ-201's posture: a
 /// bad value degrades to the safe default rather than leaving the user with no cursor).
+///
+/// This is the pure-geometry guard only. The renderer also gaps each arm by the pickbox, and an
+/// arm shorter than that gap draws nothing — so the renderer must layer \ref DrawableCount on top
+/// of this before it commits to the triad, or a large pickbox can leave a one-armed crosshair with
+/// no fallback.
 inline bool Degenerate(const Triad& t) {
   const int n = (t.x.visible ? 1 : 0) + (t.y.visible ? 1 : 0) + (t.z.visible ? 1 : 0);
   return n < 2;
+}
+
+/// The pickbox half-extent along this arm's own screen direction — the length the renderer leaves
+/// clear at the centre so the selection square stays readable, whatever angle the axis arrives at.
+inline float ArmGapPx(const Arm& a, float pickHalfPxX, float pickHalfPxY) {
+  const float len = std::sqrt(a.dx * a.dx + a.dy * a.dy);
+  if (len <= 0.f)
+    return 0.f;
+  const float ux = a.dx / len;
+  const float uy = a.dy / len;
+  return std::sqrt((pickHalfPxX * ux) * (pickHalfPxX * ux) + (pickHalfPxY * uy) * (pickHalfPxY * uy));
+}
+
+/// True when this arm actually renders: it cleared \ref kMinArmPx (\ref Arm::visible) AND its
+/// projection is longer than the pickbox gap it has to bridge.
+inline bool ArmDrawable(const Arm& a, float pickHalfPxX, float pickHalfPxY) {
+  return a.visible &&
+         std::sqrt(a.dx * a.dx + a.dy * a.dy) > ArmGapPx(a, pickHalfPxX, pickHalfPxY);
+}
+
+/// How many of the three axes will actually be drawn at this pickbox size. Fewer than two and the
+/// triad is not a crosshair any more — the renderer falls back to the 2D arms.
+inline int DrawableCount(const Triad& t, float pickHalfPxX, float pickHalfPxY) {
+  return (ArmDrawable(t.x, pickHalfPxX, pickHalfPxY) ? 1 : 0) +
+         (ArmDrawable(t.y, pickHalfPxX, pickHalfPxY) ? 1 : 0) +
+         (ArmDrawable(t.z, pickHalfPxX, pickHalfPxY) ? 1 : 0);
 }
 
 }  // namespace crosshair3d
