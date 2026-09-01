@@ -5339,7 +5339,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 4. **`Object` alignment to 3D faces, meshes, surfaces and solids** — resolving a face needs
    face-level picking, which does not exist: a mesh picks as one object with no face identity, and
    solids/surfaces as editable entities are issue #120's scope. `Object` covers lines, arcs,
-   circles, ellipses and text, and refuses anything else with a stated reason.
+   circles, ellipses and text, and refuses anything else with a stated reason. Split to GitHub
+   issue #156; reviewed 2026-08-31 (D-2026-08-31-d) and deferred again until face-level / sub-object
+   picking lands (issue #148), then implemented as a thin consumer of it — no requirement change.
 
 ### REQ-155 — Per-viewport active UCS and UCSFOLLOW (GitHub issue #155)
 - Purpose: a paper-space viewport (and the floating model space inside it) resolves coordinate
