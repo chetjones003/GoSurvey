@@ -107,6 +107,8 @@ CMD
 EXPECT SOLIDS 1
 
 # --- A dimension the kernel refuses leaves the command OPEN, not discarded -----------------------
+# A tube EXACTLY equal to the ring radius collapses the inner edge to a point, so it is not a solid.
+# (A tube LARGER than the ring is legal and self-intersecting - see req313-solid-primitives.txt.)
 # Throwing away a base point and two good dimensions because the third was wrong is the worse
 # outcome; the user retypes the offending letter and presses Enter again.
 NEW
@@ -115,7 +117,7 @@ CMD 0,0
 CMD R 4
 CMD T 4
 CMD
-EXPECT LOG "would pass through the axis"
+EXPECT LOG "cannot exactly equal the torus radius"
 EXPECT SOLIDS 0
 CMD T 1
 CMD

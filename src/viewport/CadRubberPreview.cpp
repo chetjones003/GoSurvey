@@ -69,6 +69,82 @@ void AppendCircleSolutionRubber(std::vector<float>& out, const CadCircleSolution
 
 } // namespace
 
+namespace {
+
+/// The BASE outline of the solid being drawn, for the phases where the whole solid is not yet
+/// determined — a cylinder's circle before its height is known, a box's rectangle before it is
+/// raised, a pyramid's polygon as it turns with the cursor.
+///
+/// This is what AutoCAD shows at those prompts, and it is the half of the preview that cannot come
+/// from `CadBuildSolidFromCommand`: there is no solid to build yet. The base is still fully
+/// determined, so drawing it is honest — it is the part the cursor has decided.
+void AppendSolidBaseProfile(const AppCommandState& cmd, std::vector<float>& out) {
+  const int picking = CadSolidCurrentPickParam(cmd);
+  if (picking < 0 || !cmd.solidPickValid)
+    return;
+  int specCount = 0;
+  const SolidParamSpec* specs = CadSolidParamSpecs(cmd.solidKind, &specCount);
+  const ucs::Ucs f = CadSolidPlacementFrameFor(cmd);
+  const ray3d::Vec3 b = cmd.solidBase;
+
+  auto seg = [&](const ray3d::Vec3& p, const ray3d::Vec3& q) {
+    PushRubberSegViewRel(out, p.x, p.y, q.x, q.y, 0., 0., static_cast<float>(p.z),
+                         static_cast<float>(q.z));
+  };
+  auto inPlane = [&](double u, double v) {
+    return ray3d::Add(b, ray3d::Add(ray3d::Scale(f.xAxis, u), ray3d::Scale(f.yAxis, v)));
+  };
+
+  if (specs[picking].pick == SolidPickKind::CornerXY) {
+    // BOX / WEDGE: the rectangle between the two corners.
+    const double dx = cmd.solidPickA;
+    const double dy = cmd.solidPickB;
+    const ray3d::Vec3 p00 = inPlane(0.0, 0.0);
+    const ray3d::Vec3 p10 = inPlane(dx, 0.0);
+    const ray3d::Vec3 p11 = inPlane(dx, dy);
+    const ray3d::Vec3 p01 = inPlane(0.0, dy);
+    seg(p00, p10);
+    seg(p10, p11);
+    seg(p11, p01);
+    seg(p01, p00);
+    return;
+  }
+  if (specs[picking].pick != SolidPickKind::Radius)
+    return;
+
+  const double r = cmd.solidPickA;
+  if (!(r > 1e-9))
+    return;
+  // A pyramid's base is its polygon, turned to follow the cursor — the rotation is as much a part of
+  // what the pick decides as the size is. Everything else previews as a circle.
+  int sides = 0;
+  double startAngle = 0.0;
+  if (cmd.solidKind == brep::PrimitiveKind::Pyramid) {
+    sides = cmd.solidParamSet[0] ? static_cast<int>(cmd.solidParamValue[0]) : 4;
+    if (sides < 3 || sides > brep::kMaxPyramidSides)
+      sides = 4;
+    startAngle = cmd.solidPickAngleRad;
+  } else {
+    sides = 64;  // smooth enough to read as a circle at any working zoom
+  }
+  double drawR = r;
+  if (cmd.solidKind == brep::PrimitiveKind::Pyramid && !cmd.solidInscribed) {
+    const double k = std::cos(3.14159265358979323846 / static_cast<double>(sides));
+    if (k > 1e-9)
+      drawR = r / k;  // the pick is the apothem when circumscribed; the polygon reaches further
+  }
+  ray3d::Vec3 prev = inPlane(drawR * std::cos(startAngle), drawR * std::sin(startAngle));
+  for (int i = 1; i <= sides; ++i) {
+    const double a = startAngle + 2.0 * 3.14159265358979323846 * static_cast<double>(i) /
+                                      static_cast<double>(sides);
+    const ray3d::Vec3 cur = inPlane(drawR * std::cos(a), drawR * std::sin(a));
+    seg(prev, cur);
+    prev = cur;
+  }
+}
+
+} // namespace
+
 void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double curY, bool orthoEnabled,
                                double /*viewAnchorX*/, double /*viewAnchorY*/, float orthoHalfH, int fbHeightPx,
                                std::vector<float>& rubberLines) {
@@ -354,6 +430,58 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         for (const CadBlockWorldSeg& s : segs)
           PushRubberSegViewRel(rubberLines, s.x0, s.y0, s.x1, s.y1, 0., 0., s.z0, s.z1);
       }
+    }
+  }
+
+  // --- The prompted solid primitives (REQ-313 as amended) -----------------------------------------
+  //
+  // The whole candidate solid, drawn as its own wireframe, rebuilt from the cursor every frame. Not
+  // a bespoke ghost per primitive: `CadBuildSolidFromCommand` is the same function the click and
+  // Enter commit through, and `brep::TessellateEdges` is the same edge walk the finished solid is
+  // drawn with. So the preview cannot show a shape the commit would not build, and it cannot draw
+  // its edges by a different rule than the real thing — the two failure modes a hand-written ghost
+  // has, and the reason there is no hand-written ghost here.
+  //
+  // A solid that does not build yet — a radius still zero before the cursor has moved — draws
+  // nothing, which is the honest answer while a value is still being chosen.
+  if (cmd.active == AppCommandState::Kind::Solid &&
+      cmd.solidPhase == AppCommandState::SolidPhase::WaitParameters) {
+    brep::Solid ghost;
+    brep::Problem why = brep::Problem::Ok;
+    if (!CadBuildSolidFromCommand(cmd, /*applyPick=*/true, &ghost, &why)) {
+      // Not enough dimensions yet for a solid - preview the BASE, which the cursor has decided.
+      AppendSolidBaseProfile(cmd, rubberLines);
+    } else {
+      std::vector<double> segs;
+      // A coarser chord tolerance than the committed solid's: this is rebuilt on every mouse move,
+      // and a preview is read for its shape rather than measured.
+      if (brep::TessellateEdges(ghost, kSolidChordToleranceFt, &segs, &why)) {
+        for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+          PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                               static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+      }
+    }
+    // The measuring line from the base point out to the cursor, which is what makes a radius or a
+    // height readable as a DISTANCE rather than just a shape that happens to be that big.
+    const int picking = CadSolidCurrentPickParam(cmd);
+    if (cmd.solidPickValid && picking >= 0) {
+      int specCount = 0;
+      const SolidParamSpec* specs = CadSolidParamSpecs(cmd.solidKind, &specCount);
+      const ucs::Ucs f = CadSolidPlacementFrameFor(cmd);
+      const ray3d::Vec3 b = cmd.solidBase;
+      ray3d::Vec3 tip = b;
+      if (specs[picking].pick == SolidPickKind::Radius) {
+        tip = ray3d::Add(b, ray3d::Scale(ray3d::Add(ray3d::Scale(f.xAxis, std::cos(cmd.solidPickAngleRad)),
+                                                    ray3d::Scale(f.yAxis, std::sin(cmd.solidPickAngleRad))),
+                                         cmd.solidPickA));
+      } else if (specs[picking].pick == SolidPickKind::Height) {
+        tip = ray3d::Add(b, ray3d::Scale(f.zAxis, cmd.solidPickA));
+      } else {
+        tip = ray3d::Add(b, ray3d::Add(ray3d::Scale(f.xAxis, cmd.solidPickA),
+                                       ray3d::Scale(f.yAxis, cmd.solidPickB)));
+      }
+      PushRubberSegViewRel(rubberLines, b.x, b.y, tip.x, tip.y, 0., 0., static_cast<float>(b.z),
+                           static_cast<float>(tip.z));
     }
   }
 }

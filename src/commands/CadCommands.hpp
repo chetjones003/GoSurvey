@@ -2038,9 +2038,37 @@ struct AppCommandState {
   ray3d::Vec3 solidBase;
   double solidParamValue[kMaxSolidParams] = {0.0, 0.0, 0.0, 0.0};
   bool solidParamSet[kMaxSolidParams] = {false, false, false, false};
+
+  // --- What the cursor is currently worth, republished every frame -------------------------------
+  //
+  // Resolved in the viewport, where the pick RAY lives, and read by BOTH the live preview and the
+  // click that commits it. One value, two consumers: a preview computed separately from the commit
+  // is a preview that eventually shows a solid the click does not build, which is worse than no
+  // preview at all.
+  bool solidPickValid = false;
+  double solidPickA = 0.0;      ///< radius, height, or the corner's in-plane X offset.
+  double solidPickB = 0.0;      ///< the corner's in-plane Y offset (CornerXY only).
+  double solidPickAngleRad = 0.0;  ///< direction from the base point — the pyramid's base rotation.
+
+  /// PYRAMID base rotation, radians in the work plane, taken from the radius pick's direction so the
+  /// base turns with the cursor the way AutoCAD's does.
+  double solidBaseAngleRad = 0.0;
+  /// PYRAMID: is the given radius the polygon's circumradius (inscribed in that circle) or its
+  /// apothem (circumscribed about it)? AutoCAD's default is circumscribed, and `I` toggles.
+  bool solidInscribed = false;
+  /// BOX / WEDGE only: the base point is the first CORNER, not the centre, so the commit shifts the
+  /// frame origin to the midpoint of the two corners. Signed, in the work plane's own axes — the
+  /// sign is what says which way the box was dragged, which `length` and `width` cannot.
+  bool solidBaseIsCorner = false;
+  double solidCornerDx = 0.0;
+  double solidCornerDy = 0.0;
   /// A letter typed on its own arms the parameter and waits for the value on the next line, which is
   /// what makes `R` then `4` work as well as `R 4`. -1 = nothing armed.
   int solidPendingParam = -1;
+  /// The armed parameter was reached through `D`, so the next value is a DIAMETER and is halved
+  /// into the radius. Halved in exactly one place, so a diameter can never reach the kernel as a
+  /// radius.
+  bool solidPendingIsDiameter = false;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -3894,10 +3922,25 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
 /// top radius, which default to zero and give an apex. Everything else must be set before Enter will
 /// create anything, so a half-specified solid is refused with the missing names rather than built at
 /// some assumed size (REQ-201).
+/// How the cursor supplies a dimension, which is what the live preview and the click both read.
+///
+/// `Typed` is a real answer, not a gap: a pyramid's side count and a cone's top radius have no
+/// natural mouse gesture, so they stay keyword-and-default and the pick sequence skips them.
+enum class SolidPickKind : std::uint8_t {
+  Typed,     ///< keyword + value only; never picked.
+  Radius,    ///< distance from the base point, measured IN the work plane.
+  Height,    ///< signed distance along the work plane's normal, from the axis nearest the cursor ray.
+  CornerXY,  ///< box / wedge: one pick sets length AND width from the opposite corner.
+};
+
 struct SolidParamSpec {
   char letter = '\0';
   const char* label = "";
   bool optional = false;
+  SolidPickKind pick = SolidPickKind::Typed;
+  /// What an optional parameter is worth when the user never sets it — a cone's apex (0) and a
+  /// pyramid's four sides. Ignored unless \ref optional.
+  double defaultValue = 0.0;
 };
 
 /// The named dimensions of \p kind, in the order a bare typed number fills them — which is also the
@@ -3908,6 +3951,42 @@ struct SolidParamSpec {
 /// commit did not know, or a commit that needed a value the prompt never asked for, is the failure
 /// this exists to make impossible.
 [[nodiscard]] const SolidParamSpec* CadSolidParamSpecs(brep::PrimitiveKind kind, int* outCount);
+
+/// The placement frame the prompted solid command is building in: the active UCS's orientation moved
+/// to the base point. Exposed so the live preview measures its rubber line along the SAME axes the
+/// solid is built on - a measuring line drawn on the world frame would drift off a tilted solid.
+[[nodiscard]] ucs::Ucs CadSolidPlacementFrameFor(const AppCommandState& st);
+
+/// Work out what the cursor is currently worth to the prompted solid command, and publish it on
+/// \p st as `solidPickValid` / `solidPickA` / `solidPickB` / `solidPickAngleRad`.
+///
+/// \p cursorOnPlane is the cursor resolved onto the work plane, in storage coordinates.
+/// \p ray is the pick ray, or null in plan view.
+///
+/// **Domain logic, not viewport logic**, even though the viewport is what calls it every frame: it
+/// is geometry — a distance in a plane, an angle, a closest approach between a ray and an axis — and
+/// putting it here is what lets a transcript drive the same resolution the mouse does. A height
+/// resolved one way for the preview and another for the test would be a test of nothing.
+void CadResolveSolidPick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray);
+
+/// Index of the dimension the prompted command is currently picking — the first required one still
+/// unset whose \ref SolidParamSpec::pick is not `Typed`. -1 when nothing is left to pick.
+[[nodiscard]] int CadSolidCurrentPickParam(const AppCommandState& st);
+
+/// Build the solid the prompted command currently describes.
+///
+/// **The one place a set of numbers becomes a shape**, called by the live preview, by the click that
+/// commits a dimension, and by Enter. A preview computed separately from the commit is a preview
+/// that eventually shows a solid the click does not build, which is worse than no preview at all.
+///
+/// \p applyPick folds `solidPickA`/`solidPickB` into the dimension currently being picked, which is
+/// what makes the preview follow the cursor; false uses only what has been committed.
+///
+/// Returns false with \p outWhy set when the numbers so far do not describe a solid — a zero radius
+/// before the cursor has moved, a dimension still missing. The preview simply draws nothing then,
+/// which is the honest answer while a value is still being chosen.
+[[nodiscard]] bool CadBuildSolidFromCommand(const AppCommandState& st, bool applyPick, brep::Solid* out,
+                                            brep::Problem* outWhy);
 
 /// Begin the prompted form of a primitive command: `CYLINDER` with no arguments. \p verb is the
 /// already-lowercased command token.

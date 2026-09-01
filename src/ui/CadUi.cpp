@@ -13233,6 +13233,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         pickByRay ? CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y) : ray3d::Ray{};
     const ray3d::Ray* cursorRayPtr = pickByRay ? &cursorRay : nullptr;
 
+    // What the cursor is worth to a prompted solid command (REQ-313 as amended). Resolved by the
+    // COMMAND layer, not here: it is geometry, and sharing it is what lets a transcript drive the
+    // same resolution the mouse does. This call site supplies the one thing the command layer cannot
+    // reach — the pick RAY, which is the only way a height can be read off the screen.
+    CadResolveSolidPick(cmd, ray3d::Vec3{rawX, rawY, rawZ}, cursorRayPtr);
+
     if (outCursorRawX)
       *outCursorRawX = rawX;
     if (outCursorRawY)

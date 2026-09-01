@@ -102,11 +102,13 @@ EXPECT SOLIDS 7
 CMD CYLINDER 800,100 -2 10
 EXPECT LOG "Radius must be greater than zero"
 EXPECT SOLIDS 7
-
-# A torus whose tube swallows its own axis is the ONE way a primitive here can self-intersect, so it
-# is refused at construction rather than left to a validity check afterwards (ADR-045 (f)).
+# A torus whose tube EXACTLY equals its ring radius collapses the inner edge to a point, so it is
+# not a solid at all and is refused by name (ADR-045 (f) as amended). A tube LARGER than the ring is
+# legal and self-intersecting - AutoCAD builds it and users draw it on purpose - and is covered in
+# its own case at the end of this file.
 CMD TORUS 800,100 4 4
-EXPECT LOG "would pass through the axis"
+EXPECT LOG "cannot exactly equal the torus radius"
+EXPECT SOLIDS 7
 EXPECT SOLIDS 7
 
 CMD CONE 800,100 5 5 5
@@ -321,4 +323,18 @@ REDO
 EXPECT SOLIDS 1
 EXPECT SOLIDPROPS 0 64 96 8 12 6
 
+CHECK ALL
+
+# --- A torus whose tube exceeds its ring is BUILT, and reports no volume ----------------------------
+# The shape AutoCAD makes and that users draw deliberately: the tube grows through the centre and the
+# surface passes through itself (ADR-045 (f) as amended, D-2026-09-01-f). The topology is sound - it
+# is manifold, orientable and closed, which is why it draws - but the closed-form volume of a surface
+# that encloses part of space twice is a number rather than an answer, so it is not reported at all.
+NEW
+CMD TORUS 0,0 4 9
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Torus
+EXPECT LOG "passes through itself, so volume and area are not reported"
+# It still draws: the display cache has real triangles and the renderer gets a batch.
+EXPECT SOLIDBATCHES 1
 CHECK ALL

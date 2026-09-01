@@ -365,12 +365,11 @@ TEST_CASE("Invalid dimensions are refused with a specific reason", "[brep][req31
   REQUIRE_FALSE(brep::MakeSphere(World(), 0.0, &s, &why));
   REQUIRE(why == Problem::NonPositiveRadius);
 
-  // A tube as fat as the ring would pass through its own axis — the one way a primitive here can
-  // self-intersect, which is why it is caught at construction rather than left to a later check.
+  // A tube EXACTLY as fat as the ring collapses the inner equator to a point — the inner rim edges
+  // have zero radius, so it is not a solid at all and is refused by name rather than left to
+  // surface later as "degenerate edge".
   REQUIRE_FALSE(brep::MakeTorus(World(), 4.0, 4.0, &s, &why));
-  REQUIRE(why == Problem::MinorRadiusNotBelowMajor);
-  REQUIRE_FALSE(brep::MakeTorus(World(), 4.0, 9.0, &s, &why));
-  REQUIRE(why == Problem::MinorRadiusNotBelowMajor);
+  REQUIRE(why == Problem::MinorRadiusEqualsMajor);
 
   REQUIRE_FALSE(brep::MakePyramid(World(), 2, 5.0, 0.0, 5.0, &s, &why));
   REQUIRE(why == Problem::SideCountOutOfRange);
@@ -378,7 +377,7 @@ TEST_CASE("Invalid dimensions are refused with a specific reason", "[brep][req31
   REQUIRE(why == Problem::SideCountOutOfRange);
 
   // Every reason has to be sayable, or the command layer has nothing to print (REQ-201).
-  REQUIRE(std::string(brep::ProblemText(Problem::MinorRadiusNotBelowMajor)).size() > 0);
+  REQUIRE(std::string(brep::ProblemText(Problem::MinorRadiusEqualsMajor)).size() > 0);
   REQUIRE(std::string(brep::ProblemText(Problem::NotClosed)).size() > 0);
 }
 
@@ -395,7 +394,7 @@ TEST_CASE("Every failure reason and every primitive has its own name", "[brep][r
       Problem::NonPositiveRadius,
       Problem::NegativeTopRadius,
       Problem::TopRadiusNotBelowBase,
-      Problem::MinorRadiusNotBelowMajor,
+      Problem::MinorRadiusEqualsMajor,
       Problem::SideCountOutOfRange,
       Problem::DegenerateFrame,
       Problem::NoShell,
@@ -928,4 +927,36 @@ TEST_CASE("Tessellation refuses a bad tolerance and a bad solid", "[brep][req313
   broken.shells[0].faces.pop_back();
   REQUIRE_FALSE(brep::Tessellate(broken, 0.01, &t, &why));
   REQUIRE(why == Problem::EdgeNotUsedTwice);
+}
+
+TEST_CASE("A torus whose tube exceeds its ring is built, and reports no volume", "[brep][req313]") {
+  // AutoCAD builds this and users draw it on purpose (ADR-045 (f) as amended): the tube grows
+  // through the centre and the surface passes through itself.
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeTorus(World(), 4.0, 9.0, &s, &why));
+  REQUIRE(why == Problem::Ok);
+
+  // The TOPOLOGY is perfectly sound — manifold, orientable, closed — which is why it draws.
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::EulerCharacteristic(s) == 0);
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.01, &t, &why));
+  REQUIRE(t.triangleCount() > 0);
+
+  // What it is not is a body with a meaningful volume: the surface encloses part of space twice, so
+  // `2 pi^2 R r^2` is a number rather than an answer. Reported as unavailable, never as that number.
+  REQUIRE(brep::SelfIntersects(s));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE_FALSE(mp.valid);
+  REQUIRE(mp.volume == 0.0);
+  REQUIRE(mp.surfaceArea == 0.0);
+
+  // An ordinary torus is unaffected: still valid, still reports both figures.
+  Solid ok;
+  REQUIRE(brep::MakeTorus(World(), 10.0, 2.0, &ok, &why));
+  REQUIRE_FALSE(brep::SelfIntersects(ok));
+  const brep::MassProperties okMp = brep::ComputeMassProperties(ok);
+  REQUIRE(okMp.valid);
+  REQUIRE(okMp.volume == Approx(2.0 * kPi * kPi * 10.0 * 4.0).epsilon(1e-12));
 }
