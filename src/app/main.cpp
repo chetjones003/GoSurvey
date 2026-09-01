@@ -17,6 +17,7 @@
 #include "CadRubberPreview.hpp"
 #include "TransformPreview.hpp"
 #include "CadUi.hpp"
+#include "util/framewatch.hpp"
 #include "PdfAttachDialog.hpp"
 #include "ViewportRenderer.hpp"
 #include "CadSnap.hpp"
@@ -57,6 +58,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -199,6 +201,54 @@ __declspec(dllexport) DWORD NvOptimusEnablement = 1;
 __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 #endif
+
+// GitHub issue #168 — append one diagnostic line per stall episode to
+// `%APPDATA%\GoSurvey\frame-watch.log`. Written to a file, not the command line, for the same reason
+// BENCH is (CadCommands_Bench.cpp): a stall that forces a kill of the app takes the scrollback with
+// it, and the numbers are what the investigation needs. Best-effort — a failed open is silently
+// skipped rather than allowed to disturb the frame loop it is diagnosing.
+static void AppendFrameWatchLog(const AppCommandState& cmd, const framewatch::Tick& tick)
+{
+  namespace fs = std::filesystem;
+  const fs::path dir = UserDataDirectory();
+  if (dir.empty())
+    return;
+  std::error_code ec;
+  fs::create_directories(dir, ec);
+  std::ofstream f(dir / "frame-watch.log", std::ios::app);
+  if (!f)
+    return;
+
+  const std::time_t t = std::time(nullptr);
+  char timeBuf[32] = "0000-00-00 00:00:00";
+  struct tm tmInfo{};
+  if (localtime_s(&tmInfo, &t) == 0)
+    std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tmInfo);
+
+  const char* phase = tick.event == framewatch::Event::StallBegan ? "STALL BEGAN" : "STALL ENDED";
+  const SelectedEntity& hov = cmd.viewportHoverEntity;
+
+  f << timeBuf << "  " << phase << "  frame=" << tick.frameMs << "ms"
+    << "  episode=" << tick.stalledFrames << "frames/" << tick.stalledMs << "ms\n";
+  f << "    perf: viewportUi=" << cmd.perfViewportUiMs << "  render=" << cmd.perfRenderMs
+    << "  hoverPick=" << cmd.perfHoverPickMs << (cmd.perfHoverPickRan ? "(ran)" : "(cached)")
+    << "  snap=" << cmd.perfSnapMs << "\n";
+  f << "    cmd: active=" << AppCommandState::KindName(cmd.active)
+    << "  last=" << AppCommandState::KindName(cmd.lastCommand)
+    << "  selBoxDrag=" << (cmd.selBoxWaitingSecond ? 1 : 0)
+    << "  selection=" << cmd.selection.size()
+    << "  selSurveyPts=" << cmd.selectedSurveyPointIndices.size()
+    << "  hover=" << (cmd.viewportHoverEntityValid ? static_cast<int>(hov.type) : -1) << "\n";
+  f << "    drawing: tab=" << cmd.activeDrawingIdx << "  space=" << cmd.activeSpaceIndex
+    << "  lines=" << cmd.userLineAttrs.size()
+    << "  polylines=" << (cmd.userPolylineOffsets.empty() ? size_t{0} : cmd.userPolylineOffsets.size() - 1)
+    << "  circles=" << cmd.userCircleAttrs.size() << "  arcs=" << cmd.userArcs.size()
+    << "  ellipses=" << cmd.userEllipses.size() << "  points=" << cmd.surveyPoints.size()
+    << "  annotations=" << cmd.cadAnnotations.size() << "  surfaces=" << cmd.cadSurfaces.size()
+    << "  filledRegions=" << cmd.cadFilledRegions.size()
+    << "  zoom=" << cmd.viewportZoom << "  pan=(" << cmd.viewportPanX << "," << cmd.viewportPanY << ")\n";
+  f.flush();
+}
 
 int main()
 {
@@ -471,6 +521,7 @@ int main()
 #endif
 
   auto perfPrevFrame = std::chrono::steady_clock::now();
+  framewatch::FrameWatch frameWatch;
   while (true)
   {
     glfwPollEvents();
@@ -481,6 +532,17 @@ int main()
       const auto now = std::chrono::steady_clock::now();
       cmd.perfFrameMs = std::chrono::duration<double, std::milli>(now - perfPrevFrame).count();
       perfPrevFrame = now;
+    }
+
+    // GitHub issue #168 — freeze/stall detector. The frame time just measured is the full cost of
+    // the PREVIOUS iteration; on a slow frame `cmd`'s state is still that iteration's (the loop has
+    // not run again yet), so the snapshot names the subsystem that stalled. One line per episode:
+    // the first slow frame and the first healthy frame after it. See util/framewatch.hpp for why
+    // this cannot catch a true never-returning infinite loop.
+    {
+      const framewatch::Tick fwTick = framewatch::FrameWatchTick(&frameWatch, cmd.perfFrameMs);
+      if (fwTick.event == framewatch::Event::StallBegan || fwTick.event == framewatch::Event::StallEnded)
+        AppendFrameWatchLog(cmd, fwTick);
     }
 
     // --- REQ-100 frame-budget benchmark ---------------------------------------------------------

@@ -759,6 +759,11 @@ if(GOSURVEY_BUILD_TESTS)
     # scan re-runs — and both failure directions (scans too often / highlight goes stale) are the
     # ones a user would report, so both are pinned here with no GL context.
     tests/HoverPickGateTests.cpp
+    # GitHub issue #168. Header-only and pure, like HoverPickGateTests above. The stall detector is
+    # the only new logic in the investigation instrument for the multi-select freeze — it decides
+    # where in a stall episode a frame sits — and its edges (began / ended) are what gate the one
+    # diagnostic snapshot per episode, so both are pinned here with no GL context.
+    tests/FrameWatchTests.cpp
     tests/UpdateCheckTests.cpp
     # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the
     # tab-index sentinel invariant and the thumbnail-cache naming/eviction (header-only, pure).
