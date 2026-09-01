@@ -1,7 +1,7 @@
 # REQ-312 (GitHub #145, Phase 2 of #120) - a curve's PLANE survives save and reopen, and a flat
 # drawing's file does not change at all.
 #
-# Step 6 of TASK-152. Two acceptance conditions, and they pull in opposite directions:
+# Step 6 of TASK-159. Two acceptance conditions, and they pull in opposite directions:
 #
 #   1. "Arbitrary-plane arcs and circles survive `.gs` save/reopen with every stored coordinate
 #      bit-identical."

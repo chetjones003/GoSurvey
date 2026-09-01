@@ -1,7 +1,7 @@
-# TASK-152 — 3D geometry: a plane abstraction, and arcs/circles in arbitrary planes
+# TASK-159 — 3D geometry: a plane abstraction, and arcs/circles in arbitrary planes
 
 - Type:    feature
-- Status:  submitted (automated verification PASS, 864/864; manual GUI pass with user outstanding)
+- Status:  submitted (rebased onto beta @ ddc726d; automated verification PASS, 917/917)
 - Opened:  2026-08-31
 - Owner:   nrjohnson2604
 
@@ -31,8 +31,10 @@
       bit-identical.
     - A drawing of only XY-plane arcs and circles loads and re-saves byte-identically; no normal key
       appears and no existing test changes its expected output.
-    - Object snapping (centre, quadrant, endpoint, nearest) resolves on an arbitrary-plane curve
-      from an orbited camera, not only in plan view.
+    - Object snapping resolves on an arbitrary-plane curve from an orbited camera, not only in
+      plan view, for every snap mode GoSurvey has: Endpoint, Midpoint, Center, Perpendicular,
+      Intersection, Apparent Intersection, Grip and Surface. (Revised 2026-09-01; see the step-4
+      log entry and REQ-312's own Revisions line for why the original wording could not be met.)
     - `docinvariants` checks the normal side-car against the entity count.
 - Owning subsystem: Domain (`src/util/ucs.hpp`), then Commands / Render / IO for REQ-312.
 
@@ -321,6 +323,13 @@ normal" — no new command is needed.
   REQ-062 change, not a REQ-312 one. Every mode that does exist is now plane-aware. Raised with the
   user; the acceptance bullet wants rewording to name the modes the app actually has.
 
+  **Reworded 2026-09-01, at the user's direction.** REQ-312's snap bullet now names the eight
+  modes `CadSnap::Kind` has, all of which are plane-aware and covered from an orbited pick ray.
+  QUADRANT and NEAREST turned out to belong to no accepted requirement at all — REQ-062 is
+  specifically the intersection pair, and REQ-039's "quadrants" are GRIP handles, not a snap —
+  so they are a new requirement in the object-snap family rather than a shortfall of this one.
+  Recorded in REQ-312's Revisions line so the change is visible, not silent.
+
   **Tests.** `tests/headless/transcripts/req312-tilted-curves-drawn-and-edited.txt` (57 steps): a
   tilted arc found by a tight WINDOW selection, the two mirror cases above, and ROTATE carrying a
   circle's plane. `tests/CadSnapTests.cpp` gains four `[CadSnap][req312]` cases driving
@@ -480,7 +489,7 @@ normal" — no new command is needed.
 - 2026-08-31 Step 7 done. The transcripts were written with the steps that needed them, so what this
   step actually contained was the whole-branch sweep, the full suite, and this report.
 
-  **Suite: 864/864 ctest green**, zero build warnings under `/W4 /permissive-` (TASK-150 cleared the
+  **Suite at the time: 864/864 ctest green**, zero build warnings under `/W4 /permissive-` (TASK-150 cleared the
   ~200 that were there; this branch adds none). Reconfigured first -- `file(GLOB)` has no
   `CONFIGURE_DEPENDS`, so the four new transcripts are invisible to ctest until `cmake -S . -B build`
   runs.
@@ -528,6 +537,68 @@ normal" — no new command is needed.
   pre-existing selective-ALIGN stride bug found while wiring the normals, which stays out of this PR
   under one-issue-one-PR and wants filing on its own.
 
+- 2026-09-01 Rebased onto `upstream/beta` @ `ddc726d`, which had moved **27 commits** since this
+  branch was cut. Renumbered TASK-152 -> **TASK-159**, reworded REQ-312's snap acceptance bullet, and
+  found one real defect in the process.
+
+  **The identifiers had to be re-checked, and one had gone.** REQ-311, REQ-312, D-2026-08-31-e and
+  D-2026-08-31-f were all still free. `TASK-152` was **not** — upstream now has
+  `TASK-152-issue117-text-nonfinite-coords.md`. Renumbered to the next free number, 159, by named
+  file with an asserted hit count per file rather than a blanket `sed`: both TASK-152 files exist in
+  the tree afterwards, and upstream's references to its own are legitimate.
+
+  **Textual conflicts: one.** `spec/project.md`'s decision-log append region, where beta had added
+  D-2026-08-31-c (per-viewport UCS) at the same spot. Resolved newest-first: f, e, then c. Ten shared
+  code files auto-merged, `src/util/ucs.hpp` and `CadCommands.cpp` among them.
+
+  **The CRLF cost a detour.** Step 3's stored-CRLF header (see the step 7 entry) made every replayed
+  commit conflict as ONE hunk covering the whole file. `merge.renormalize=true` did not help under
+  `git rebase`. What worked: re-run the three-way merge with all three inputs stripped to LF —
+  `git show HEAD:<p>`, `git show REBASE_HEAD^:<p>`, `git show REBASE_HEAD:<p>` through `tr -d '\r'`,
+  then `git merge-file`. Every one resolved with **zero** real conflicts, which is the proof that the
+  whole-file conflict was line endings and nothing else. A side benefit: the replayed history now
+  stores LF from the first commit, so `4a81475` is just the three comment repairs.
+
+  **The defect: a borrowed predicate changed meaning under us.** REQ-312's entire flat-drawing
+  guarantee rests on one branch guard, and it was written as
+
+      inline bool CadWorkPlaneIsWorldXy(const AppCommandState& st) { return ucs::PlanViewIsExact(st.activeUcs); }
+
+  At the branch point `PlanViewIsExact` meant "the UCS Z is world +Z" — exactly the property needed.
+  Upstream `004635b` (issue #153, exact PLAN of a tilted UCS via a camera roll axis) **redefined it**
+  to `IsRightHandedOrthonormal(u)`, which is true for every valid frame. That is a correct change for
+  what the predicate is named after — it answers the CAMERA's question, "can PLAN put UCS +Y up the
+  screen exactly?", and #153 gave `Camera` the roll axis that made the answer yes. But the name, the
+  signature and our call site were all unchanged, so the rebase auto-merged and the build was clean
+  and warning-free while **every tilted drawing silently took the FLAT branch**.
+
+  All four REQ-312 transcripts went red and nothing else in 917 tests noticed:
+  `ARC - points are collinear, or the work plane is not valid` — the three wall picks (210,0,0),
+  (200,0,10), (190,0,0) projected onto one line, which is what a flat solver sees.
+
+  Fixed by making the guard state its own condition inline (`|zAxis.x| <= 1e-6 && |zAxis.y| <= 1e-6
+  && zAxis.z > 0`) instead of borrowing a predicate named for another subsystem's concern. It is the
+  only caller `PlanViewIsExact` had outside `ucs.hpp`. **The lesson worth carrying:** a clean
+  auto-merge says the text did not collide, not that the meaning survived — so after a rebase, diff
+  every borrowed helper across the range and re-run the suite, never just the build. Here the
+  behavioural transcripts were the only thing between this and a merged PR that drew every tilted
+  curve flat.
+
+  **The snap acceptance bullet, reworded (user's decision, 2026-09-01).** It now names the eight
+  modes `CadSnap::Kind` has. QUADRANT and NEAREST turned out to belong to no accepted requirement at
+  all — REQ-062 is specifically the intersection pair, and REQ-039's "quadrants" are GRIP handles,
+  not a snap — so they are a new requirement in the object-snap family, recorded in REQ-312's
+  Revisions line rather than dropped.
+
+  **A bonus from the merge, unasked for:** beta's REQ-155 puts a per-viewport frame into
+  `AppCommandState::activeUcs` while floating model space is entered, and every REQ-312 authoring
+  path reads exactly that. So drawing inside a floating viewport now commits onto that viewport's
+  work plane for free. Checked against REQ-155's own rule that persistence must read
+  `CadDrawingScopedUcs()` instead: none of this task's readers is a persistence path.
+
+  Suite after the rebase and the guard fix: **917/917 ctest green**, zero warnings.
+
+
 ## 9. Self-verification
 - [x] build-project        — PASS. `./dev/build` (MSVC/Ninja release, the authoritative build under
       CON-07). Zero warnings under `/W4 /permissive-`.
@@ -551,9 +622,9 @@ normal" — no new command is needed.
       plus one well-predicted branch per entity. No benchmark was run, because there is no new work
       on the flat path to measure and the tilted path is new capability with no prior number to beat.
 - [x] testing              — PASS. 16 new Catch2 cases and 4 headless transcripts (244 steps), full
-      suite 864/864. Every new assertion was negative-tested against the specific line that makes it
-      pass, and the resulting failure messages are quoted in the step logs above — an assertion that
-      cannot fail is worse than none.
+      suite 917/917 on the rebased tree (864/864 before it). Every new assertion was negative-tested
+      against the specific line that makes it pass, and those failure messages are quoted in the step
+      logs above — an assertion that cannot fail is worse than none.
 - [ ] MANUAL GUI (not run) — REQ-312's first acceptance bullet is about RENDERING, and the tilted
       draw path (`AppendArcVcDashed` / `AppendCircleVcDashed`'s per-vertex-Z chains) plus the
       rubber-band preview are the one part of this work no transcript reaches: the transcripts
@@ -566,10 +637,11 @@ normal" — no new command is needed.
 - Findings:   —
 
 ## 11. Outcome
-- Requirements satisfied: REQ-311 (Acceptance met: yes). REQ-312 (Acceptance met: yes for six of the
-                          seven bullets; the snap bullet names QUADRANT and NEAREST, which
-                          `CadSnap::Kind` does not have — every mode that DOES exist is now
-                          plane-aware. The bullet wants rewording, or a REQ-062 issue of its own.)
+- Requirements satisfied: REQ-311 (Acceptance met: yes). REQ-312 (Acceptance met: yes — the snap
+                          bullet was reworded 2026-09-01 to name the eight modes `CadSnap::Kind`
+                          actually has, every one of them now plane-aware and tested from an
+                          orbited pick ray. QUADRANT and NEAREST belong to no accepted
+                          requirement and are a new one in the object-snap family.)
 - Tests added:            `UcsTests [req311]` (7 cases, 90 assertions) and `[req312]` (2);
                           `CadSnapTests [CadSnap][req312]` (4, driven through `FindBest` with a pick
                           RAY — the orbited path); `DocInvariantsTests [docinvariants][req312]` (3:
@@ -593,11 +665,12 @@ normal" — no new command is needed.
 ## 12. Completion report (CLAUDE.md workflow step 7)
 
 ```
-COMPLETION REPORT — TASK-152 — 2026-08-31
+COMPLETION REPORT — TASK-159 — 2026-08-31
 - Requirements satisfied:  REQ-311 (Acceptance met: yes)
-                           REQ-312 (Acceptance met: 6 of 7 — the snap bullet names QUADRANT and
-                             NEAREST, which CadSnap::Kind does not have; every mode that exists is
-                             plane-aware. Bullet wants rewording, or a REQ-062 issue.)
+                           REQ-312 (Acceptance met: yes — the snap bullet was reworded 2026-09-01
+                             to name the eight modes CadSnap::Kind has, all now plane-aware.
+                             QUADRANT and NEAREST belong to no accepted requirement; they are a
+                             new one in the object-snap family, recorded in REQ-312's Revisions.)
 - Summary:                 ucs::Ucs becomes the project's one plane type (no second Plane), and
                            arcs and circles carry a plane normal defaulting to world +Z — authored
                            on the active UCS, drawn/picked/snapped/bounded through one
@@ -607,7 +680,8 @@ COMPLETION REPORT — TASK-152 — 2026-08-31
 - Tests:                   16 Catch2 cases (UcsTests [req311] x7 / [req312] x2, CadSnapTests
                            [req312] x4, DocInvariantsTests [req312] x3) + 4 headless transcripts
                            (244 steps). Happy path and failure mode both; every new assertion
-                           negative-tested against the line that makes it pass. 864/864 green.
+                           negative-tested against the line that makes it pass. 917/917 green on the
+                           rebased tree (864/864 before the rebase onto beta @ ddc726d).
 - Verification verdict:    self-verification PASS (findings resolved: the three defects the branch
                            sweep found — one CRLF-stored header and two mangled comments, 76b3f20).
                            External verdict pending the PR; chet's merge is the verification act.

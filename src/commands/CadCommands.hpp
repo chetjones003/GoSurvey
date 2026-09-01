@@ -3543,7 +3543,18 @@ inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) { return ucs::
 /// and it is deliberately NOT `CadUcsIsWorld`: a UCS squared to a road centreline is still a
 /// flat drawing, and it must keep the exact float path every existing drawing, transcript and test
 /// already goes through. That is REQ-154's own reasoning for its WCS branch, applied one level out.
-inline bool CadWorkPlaneIsWorldXy(const AppCommandState& st) { return ucs::PlanViewIsExact(st.activeUcs); }
+inline bool CadWorkPlaneIsWorldXy(const AppCommandState& st) {
+  // States the condition directly rather than borrowing `ucs::PlanViewIsExact`, which this used to
+  // call. That predicate answers the CAMERA's question - "can PLAN put UCS +Y up the screen
+  // exactly?" - and issue #153 gave `Camera` a roll axis, after which the answer became yes for
+  // EVERY valid frame. The name did not change and neither did the call site, so a tilted drawing
+  // silently began taking the flat branch here: the guard inverted without a compiler error, and
+  // the four REQ-312 transcripts are what caught it. A predicate named for another subsystem's
+  // concern is not a safe way to ask whether a plane is parallel to world XY, so this asks.
+  const ucs::Ucs& u = st.activeUcs;
+  constexpr double kTol = 1e-6;
+  return std::fabs(u.zAxis.x) <= kTol && std::fabs(u.zAxis.y) <= kTol && u.zAxis.z > 0.0;
+}
 
 /// The work plane, moved so its origin sits on \p ox,\p oy,\p oz (REQ-312).
 ///

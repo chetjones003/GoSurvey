@@ -600,7 +600,7 @@ inline void AppendCurveWorldSegs(std::vector<float>& out, const ucs::Ucs& plane,
 /// only while the arc is flat. Off that plane they leave an arc with the right centre, the right
 /// radius and the right plane, swept from the wrong place.
 ///
-/// That was ASSUMPTION-3 in TASK-152 -- that the sweep rule and the normal rule agree -- and it is
+/// That was ASSUMPTION-3 in TASK-159 -- that the sweep rule and the normal rule agree -- and it is
 /// wrong. Mirroring a half circle standing on the wall y = 0 across the world line y = x should give
 /// one standing on x = 0 with its ends at (0, 190, 0) and (0, 210, 0); with the angle reflected in
 /// world XY its ends come out at (0, 200, -10) and (0, 200, 10) instead: the same circle, turned a
