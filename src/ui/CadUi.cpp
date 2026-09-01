@@ -13212,10 +13212,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // still lies on the work plane, and a TILTED plane's elevation varies across it (REQ-154).
       // Solve the plane for Z at this XY. For a plane parallel to world XY (every pre-UCS drawing)
       // the two offset terms vanish and this is exactly the origin's Z, as before.
-      const ray3d::Plane wp = CadActiveWorkPlane(cmd);
-      const ray3d::Vec3 n = ray3d::Normalize(wp.normal);
-      rawZ = (std::fabs(n.z) > 1e-9) ? wp.point.z - (n.x * (rawX - wp.point.x) + n.y * (rawY - wp.point.y)) / n.z
-                                     : wp.point.z;
+      rawZ = ucs::WorkPlaneZAt(CadActiveWorkPlane(cmd), rawX, rawY);
     }
   }
   if (cursorValid) {
