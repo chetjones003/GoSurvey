@@ -6030,6 +6030,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   2026-09-02 — D-2026-09-02-h (TASK-185): B2b is split into B2b-1 (`CurveKind::Ellipse`, oblique
   plane ∩ cylinder — SLICE then Boolean; bumps `kGsFormatVersion`) and B2b-2 (procedural
   `CurveKind::Intersection` — quartic etc.). ADR-045 (d) amended: `CurveKind` is `{Line, Arc, Ellipse}`.
+  2026-09-02 — D-2026-09-02-i (TASK-186): B2b-1 gains a Steinmetz coda (perpendicular equal-radius
+  cylinders meet along two ellipses — closed-form). ADR-045 (b) amended: a face bounded by a B2b-2
+  procedural intersection curve is integrated by adaptive numerical quadrature (inside REQ-101);
+  every analytic face keeps closed form.
   2026-09-02 — D-2026-09-02-c (TASK-184): increment B2 is split into B2a (adds `Surface::inward`,
   lifts curved SUBTRACT for the pairs B1 already recognises — round hole, blind pocket, spherical
   dimple, counterbore) and B2b (general analytic intersection curve — ellipse / quartic). The
