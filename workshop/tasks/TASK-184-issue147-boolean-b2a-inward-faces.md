@@ -17,10 +17,17 @@ key (no version bump). `BuildBore` in `brep.cpp`; `TryBooleanCylinderThroughPlan
   **blind round pocket** (cylinder stops inside; a planar floor closes it). Volume `vol(P) − π r² L`
   exact, tessellation winding matches the flipped normal, `.gs` + `Translate` carry the flag.
 
+### Slice 2 — the spherical dimple (2026-09-02)
+
+`SUBTRACT(planar solid, sphere)` where one face cuts the sphere: a **spherical dimple**.
+`BuildSphereBoss` gained a `bool inward` — the cap faces are marked `inward` and every half-face
+loop is reversed, with the bored face taking the opposite circle winding. `TryBooleanSpherePlanar`
+gained a `sphIsMinuend` argument. Volume `vol(P) − π h²(3r−h)/3` exact.
+
 ### Deferred to follow-up B2a slices (still refused `BooleanCurvedFace`, by name)
 
 - `SUBTRACT(cylinder, planar solid)` — a box notch cut from a cylinder (`cylIsMinuend`).
-- `SUBTRACT(planar solid, sphere)` — a spherical **dimple** (`BuildSphereBoss` needs an `inward` flag).
+- `SUBTRACT(sphere, planar solid)` — a box corner off a sphere (`sphIsMinuend`).
 - `SUBTRACT(coaxial cylinder, coaxial cylinder)` — a **counterbore / tube** (`BuildCoaxialStack`
   needs a non-zero inner radius per band).
 - A cylinder whose base is inside the solid (a floating pocket).

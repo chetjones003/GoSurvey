@@ -1989,8 +1989,21 @@ TEST_CASE("Curved B1: a sphere cut by one face of a box - cap and boss", "[brep]
     RequireWindingMatchesNormals(t);
   }
 
-  SECTION("SUBTRACT (a spherical dimple) is refused for now - a later B2a slice") {
-    REQUIRE_FALSE(brep::BooleanSubtract(box, sphere, &r, &why));
+  SECTION("SUBTRACT scoops a spherical dimple out of the box face (B2a)") {
+    REQUIRE(brep::BooleanSubtract(box, sphere, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+    // removed = the cap inside the box, height h = r - d = 3: V = pi h^2 (3r - h) / 3
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(4000.0 - kPiT * 9.0 * (15.0 - 3.0) / 3.0).epsilon(1e-6));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("SUBTRACT the other way (sphere - box) is still refused") {
+    REQUIRE_FALSE(brep::BooleanSubtract(sphere, box, &r, &why));
     REQUIRE(why == Problem::BooleanCurvedFace);
   }
 }
