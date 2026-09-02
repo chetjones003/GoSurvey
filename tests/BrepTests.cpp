@@ -1957,6 +1957,60 @@ TEST_CASE("Curved B1: two coaxial cylinders - union and intersect", "[brep][req3
   }
 }
 
+TEST_CASE("Curved B2a: coaxial SUBTRACT bores a tube and a counterbore", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  std::vector<Solid> r;
+
+  SECTION("a narrower cylinder through the whole length is a tube") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &a, &why));           // z[0,10] r4
+    REQUIRE(brep::MakeCylinder(At(0, 0, -1), 2, 12, &b, &why));      // z[-1,11] r2, clears both ends
+    REQUIRE(brep::BooleanSubtract(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(kPiT * (16.0 - 4.0) * 10.0).epsilon(1e-9));  // pi (rA^2 - rB^2) L
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("a narrower cylinder into one end is a counterbore (blind)") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &a, &why));           // z[0,10] r4
+    REQUIRE(brep::MakeCylinder(At(0, 0, -1), 2, 7, &b, &why));       // z[-1,6] r2, opens at z=0 only
+    REQUIRE(brep::BooleanSubtract(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    // removed = the bore inside A: z[0,6] * pi rB^2 = pi 4 * 6
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(kPiT * 16.0 * 10.0 - kPiT * 4.0 * 6.0).epsilon(1e-9));
+  }
+
+  SECTION("a wider cylinder over the middle splits A in two") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 2, 12, &a, &why));           // z[0,12] r2
+    REQUIRE(brep::MakeCylinder(At(0, 0, 4), 3, 4, &b, &why));        // z[4,8] r3 > rA
+    REQUIRE(brep::BooleanSubtract(a, b, &r, &why));
+    REQUIRE(r.size() == 2);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(kPiT * 4.0 * 4.0).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(r[1]).volume == Approx(kPiT * 4.0 * 4.0).epsilon(1e-9));
+  }
+
+  SECTION("a fully-internal narrower cylinder (a sealed cavity) is refused") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &a, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, 3), 2, 4, &b, &why));        // z[3,7], both ends inside A
+    REQUIRE_FALSE(brep::BooleanSubtract(a, b, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
 TEST_CASE("Curved B1: a sphere cut by one face of a box - cap and boss", "[brep][req314]") {
   Problem why = Problem::Ok;
   Solid sphere;

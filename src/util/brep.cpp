@@ -2468,14 +2468,18 @@ struct CylinderShape {
   return true;
 }
 
-/// A coaxial stack of full cylinders: `z` holds `r.size()+1` ascending breakpoints along the axis,
-/// `r[i]` is the radius of the band between `z[i]` and `z[i+1]`. Adjacent radii must differ. Built in
-/// the canonical frame and placed into \p frame (whose origin is the world point at `z.front()`).
+/// A coaxial stack of cylindrical bands: `z` holds `rOut.size()+1` ascending breakpoints along the
+/// axis; band `i` (between `z[i]` and `z[i+1]`) is the annulus `[rIn[i], rOut[i]]`. `rIn` may be
+/// empty (a solid stack) or parallel to `rOut` with a 0 meaning "solid". An `rIn[i] > 0` band gets
+/// an **inward** inner wall — a bore. Built canonically and placed into \p frame (origin at `z[0]`).
 [[nodiscard]] bool BuildCoaxialStack(const ucs::Ucs& frame, const std::vector<double>& z,
-                                     const std::vector<double>& r, Solid* out, Problem* outWhy) {
-  const int n = static_cast<int>(r.size());
-  if (n < 1 || static_cast<int>(z.size()) != n + 1)
+                                     const std::vector<double>& rOut, const std::vector<double>& rIn,
+                                     Solid* out, Problem* outWhy) {
+  const int n = static_cast<int>(rOut.size());
+  if (n < 1 || static_cast<int>(z.size()) != n + 1 ||
+      (!rIn.empty() && static_cast<int>(rIn.size()) != n))
     return Fail(Problem::BooleanResultInvalid, outWhy);
+  auto inAt = [&](int i) { return rIn.empty() ? 0.0 : rIn[static_cast<std::size_t>(i)]; };
   Solid s;
   const Vec3 up{0.0, 0.0, 1.0};
   const double z0 = z.front();
@@ -2505,14 +2509,13 @@ struct CylinderShape {
     const int e1 = AddArc(&s, v.second, v.first, c, up, kPi);   // -x -> +x
     return ec[k] = {e0, e1};
   };
-  for (int i = 0; i < n; ++i) {
-    const double zl = z[static_cast<std::size_t>(i)];
-    const double zh = z[static_cast<std::size_t>(i + 1)];
-    const double rr = r[static_cast<std::size_t>(i)];
-    const auto vb = verts(zl, rr);
-    const auto vt = verts(zh, rr);
+  // A cylinder wall (outer, +radial) or a bore wall (inner, −radial/inward), radius rr, z in
+  // [zl,zh]. `inwardWall` picks which.
+  auto addWall = [&](double zl, double zh, double rr, bool inwardWall) {
     const auto cb = circle(zl, rr);
     const auto ct = circle(zh, rr);
+    const auto vb = verts(zl, rr);
+    const auto vt = verts(zh, rr);
     const int sm0 = AddLine(&s, vb.first, vt.first);
     const int sm1 = AddLine(&s, vb.second, vt.second);
     auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
@@ -2523,6 +2526,7 @@ struct CylinderShape {
       f.surface.radius = rr;
       f.surface.radius2 = rr;
       f.surface.height = zh - zl;
+      f.surface.inward = inwardWall;
       f.uStart = u0;
       f.uEnd = u1;
       Loop lp;
@@ -2530,42 +2534,64 @@ struct CylinderShape {
       f.loops.push_back(std::move(lp));
       s.faces.push_back(std::move(f));
     };
-    wall(0.0, kPi, {{cb.first, false}, {sm1, false}, {ct.first, true}, {sm0, true}});
-    wall(kPi, kTwoPi, {{cb.second, false}, {sm0, false}, {ct.second, true}, {sm1, true}});
+    if (inwardWall) {  // the boundary loop runs the opposite way, so every rim edge is used once each way
+      wall(0.0, kPi, {{sm0, false}, {ct.first, false}, {sm1, true}, {cb.first, true}});
+      wall(kPi, kTwoPi, {{sm1, false}, {ct.second, false}, {sm0, true}, {cb.second, true}});
+    } else {
+      wall(0.0, kPi, {{cb.first, false}, {sm1, false}, {ct.first, true}, {sm0, true}});
+      wall(kPi, kTwoPi, {{cb.second, false}, {sm0, false}, {ct.second, true}, {sm1, true}});
+    }
+  };
+  for (int i = 0; i < n; ++i) {
+    addWall(z[static_cast<std::size_t>(i)], z[static_cast<std::size_t>(i + 1)],
+            rOut[static_cast<std::size_t>(i)], /*inwardWall=*/false);
+    if (inAt(i) > 0.0)
+      addWall(z[static_cast<std::size_t>(i)], z[static_cast<std::size_t>(i + 1)], inAt(i),
+              /*inwardWall=*/true);
   }
+  // A horizontal annular face between radii [inner, outer] at height zz; `matBelow` true when the
+  // material is on the −z side (so the face's outward normal is +z), false for +z-side material.
+  auto addRing = [&](double zz, double inner, double outer, bool matBelow) {
+    if (!(outer - inner > 1e-9))
+      return;
+    const Vec3 nrm = matBelow ? up : Vec3{0.0, 0.0, -1.0};
+    const auto co = circle(zz, outer);
+    Face f = MakePlaneFace(Vec3{0.0, 0.0, zz - z0}, nrm, {});
+    f.loops.clear();
+    Loop outerL;
+    if (matBelow)
+      outerL.uses = {{co.first, false}, {co.second, false}};
+    else
+      outerL.uses = {{co.second, true}, {co.first, true}};
+    f.loops.push_back(std::move(outerL));
+    if (inner > 1e-9) {
+      const auto ci = circle(zz, inner);
+      Loop innerL;
+      if (matBelow)
+        innerL.uses = {{ci.second, true}, {ci.first, true}};
+      else
+        innerL.uses = {{ci.first, false}, {ci.second, false}};
+      f.loops.push_back(std::move(innerL));
+    }
+    s.faces.push_back(std::move(f));
+  };
   for (int k = 0; k <= n; ++k) {
     const double zz = z[static_cast<std::size_t>(k)];
-    const double rl = (k > 0) ? r[static_cast<std::size_t>(k - 1)] : 0.0;
-    const double rh = (k < n) ? r[static_cast<std::size_t>(k)] : 0.0;
+    const double outL = (k > 0) ? rOut[static_cast<std::size_t>(k - 1)] : 0.0;
+    const double outH = (k < n) ? rOut[static_cast<std::size_t>(k)] : 0.0;
+    const double inL = (k > 0) ? inAt(k - 1) : 0.0;
+    const double inH = (k < n) ? inAt(k) : 0.0;
     if (k == 0) {
-      const auto c = circle(zz, rh);
-      s.faces.push_back(
-          MakePlaneFace(Vec3{0.0, 0.0, 0.0}, Vec3{0.0, 0.0, -1.0}, {{c.second, true}, {c.first, true}}));
+      addRing(zz, inH, outH, /*matBelow=*/false);  // bottom cap, material above
     } else if (k == n) {
-      const auto c = circle(zz, rl);
-      s.faces.push_back(
-          MakePlaneFace(Vec3{0.0, 0.0, zz - z0}, up, {{c.first, false}, {c.second, false}}));
+      addRing(zz, inL, outL, /*matBelow=*/true);  // top cap, material below
     } else {
-      const double outer = std::max(rl, rh);
-      const double inner = std::min(rl, rh);
-      const bool faceUp = rh < rl;  // narrowing upward leaves an annulus facing +z
-      const Vec3 nrm = faceUp ? up : Vec3{0.0, 0.0, -1.0};
-      const auto co = circle(zz, outer);
-      const auto ci = circle(zz, inner);
-      Face f = MakePlaneFace(Vec3{0.0, 0.0, zz - z0}, nrm, {});
-      f.loops.clear();
-      Loop outerL;
-      Loop innerL;
-      if (faceUp) {
-        outerL.uses = {{co.first, false}, {co.second, false}};
-        innerL.uses = {{ci.second, true}, {ci.first, true}};
-      } else {
-        outerL.uses = {{co.second, true}, {co.first, true}};
-        innerL.uses = {{ci.first, false}, {ci.second, false}};
-      }
-      f.loops.push_back(std::move(outerL));
-      f.loops.push_back(std::move(innerL));
-      s.faces.push_back(std::move(f));
+      // Outer transition: the wider band's material overhangs the thinner one.
+      if (std::fabs(outL - outH) > 1e-9)
+        addRing(zz, std::min(outL, outH), std::max(outL, outH), /*matBelow=*/outL > outH);
+      // Inner transition: the band with the smaller bore has material where the other is void.
+      if (std::fabs(inL - inH) > 1e-9)
+        addRing(zz, std::min(inL, inH), std::max(inL, inH), /*matBelow=*/inL < inH);
     }
   }
   AddSingleShell(&s);
@@ -2938,10 +2964,6 @@ struct SphereShape {
 [[nodiscard]] bool TryBooleanCoaxialCylinders(const Solid& a, const Solid& b, const CylinderShape& A,
                                               const CylinderShape& B, BoolOp op, std::vector<Solid>* out,
                                               bool* handled, Problem* outWhy) {
-  if (op == BoolOp::Subtract) {
-    *handled = true;
-    return Fail(Problem::BooleanCurvedFace, outWhy);
-  }
   const Vec3 az = A.axis.zAxis;
   const Vec3 d = ray3d::Sub(B.axis.origin, A.axis.origin);
   const double sc = A.radius + A.length + B.length;
@@ -2958,6 +2980,67 @@ struct SphereShape {
   double b1 = b0 + (ray3d::Dot(B.axis.zAxis, az) > 0.0 ? B.length : -B.length);
   if (b0 > b1)
     std::swap(b0, b1);
+
+  if (op == BoolOp::Subtract) {
+    // A − B, coaxial. Overlap along the axis:
+    const double ov0 = std::max(a0, b0);
+    const double ov1 = std::min(a1, b1);
+    if (ov1 - ov0 <= eps) {  // no shared length — A is untouched
+      out->push_back(a);
+      return Succeed(outWhy);
+    }
+    auto oneCyl = [&](double zlo, double zhi, double rr, std::vector<Solid>* dst) {
+      ucs::Ucs fr = A.axis;
+      fr.origin = ray3d::Add(A.axis.origin, ray3d::Scale(az, zlo));
+      Solid r;
+      Problem w = Problem::Ok;
+      if (!MakeCylinder(fr, rr, zhi - zlo, &r, &w))
+        return false;
+      dst->push_back(std::move(r));
+      return true;
+    };
+    if (B.radius >= A.radius - eps) {
+      // B is at least as wide as A: it removes a slab. A shrinks, splits, or vanishes.
+      const bool keepLow = ov0 - a0 > eps;
+      const bool keepHigh = a1 - ov1 > eps;
+      if (!keepLow && !keepHigh)
+        return Fail(Problem::BooleanEmptyResult, outWhy);
+      if (keepLow && !oneCyl(a0, ov0, A.radius, out))
+        return Fail(Problem::BooleanResultInvalid, outWhy);
+      if (keepHigh && !oneCyl(ov1, a1, A.radius, out))
+        return Fail(Problem::BooleanResultInvalid, outWhy);
+      return Succeed(outWhy);
+    }
+    // B is narrower: a bore. It must open at an end of A, else it leaves a sealed cavity.
+    const bool openLow = b0 <= a0 + eps;
+    const bool openHigh = b1 >= a1 - eps;
+    if (!openLow && !openHigh)
+      return Fail(Problem::BooleanCurvedFace, outWhy);  // a floating internal cavity — its own slice
+    std::vector<double> zs;
+    std::vector<double> rOut;
+    std::vector<double> rIn;
+    zs.push_back(a0);
+    if (ov0 - a0 > eps) {  // solid band below the bore
+      rOut.push_back(A.radius);
+      rIn.push_back(0.0);
+      zs.push_back(ov0);
+    }
+    rOut.push_back(A.radius);  // the bored band
+    rIn.push_back(B.radius);
+    zs.push_back(ov1);
+    if (a1 - ov1 > eps) {  // solid band above the bore
+      rOut.push_back(A.radius);
+      rIn.push_back(0.0);
+      zs.push_back(a1);
+    }
+    ucs::Ucs fr = A.axis;
+    fr.origin = ray3d::Add(A.axis.origin, ray3d::Scale(az, zs.front()));
+    Solid r;
+    if (!BuildCoaxialStack(fr, zs, rOut, rIn, &r, outWhy))
+      return false;
+    out->push_back(std::move(r));
+    return Succeed(outWhy);
+  }
 
   if (op == BoolOp::Intersect) {
     const double lo = std::max(a0, b0);
@@ -3024,7 +3107,7 @@ struct SphereShape {
   ucs::Ucs fr = A.axis;
   fr.origin = ray3d::Add(A.axis.origin, ray3d::Scale(az, zs.front()));
   Solid r;
-  if (!BuildCoaxialStack(fr, zs, rs, &r, outWhy))
+  if (!BuildCoaxialStack(fr, zs, rs, /*rIn=*/{}, &r, outWhy))
     return false;
   out->push_back(std::move(r));
   return Succeed(outWhy);
