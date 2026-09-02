@@ -2001,6 +2001,13 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   rather than megabytes of triangles; and tessellation quality becomes a pure display setting, which
   is what issue #120 means by *"changing tessellation quality should not modify the underlying
   solid."*
+  **Amended 2026-09-02 (D-2026-09-02-i): closed-form is the rule for every *analytic* face; a face
+  bounded by a procedural intersection curve (B2b-2, `CurveKind::Intersection`) is integrated by
+  adaptive numerical quadrature** to a tolerance far inside REQ-101's ±0.01 ft. The quartic where two
+  non-coaxial cylinders meet has no elementary integral, so a `T`-pipe's saddle face is the one face
+  type that cannot be exact — every other face still is, and the quadrature tolerance keeps the
+  answer's *error* below the display-drift a facet count would cause anyway. Tessellation quality is
+  still not part of the model: the quadrature grid is independent of the display chord tolerance.
   (c) **A primitive also remembers the recipe it was built from** — kind, placement frame, and its
   dimensions. It is *not* the geometry: `Validate`, `ComputeMassProperties` and `Tessellate` all read
   the topology and never the recipe, so a recipe that disagreed with its solid could not silently
@@ -2331,9 +2338,11 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
      for the pairs B1 already recognises (round hole, blind pocket, spherical dimple, counterbore).
      No new curve type. (D-2026-09-02-c.)
   6. **Booleans Increment B2b-1** — `CurveKind::Ellipse` (closed-form): oblique plane ∩ cylinder, for
-     SLICE then Boolean. Bumps `kGsFormatVersion`. (D-2026-09-02-h.)
+     SLICE then Boolean; plus a **Steinmetz coda** — perpendicular equal-radius cylinders meet along
+     two ellipses (D-2026-09-02-i). Bumps `kGsFormatVersion`. (D-2026-09-02-h.)
   7. **Booleans Increment B2b-2** — procedural `CurveKind::Intersection`: cylinder ∩ cylinder
-     (quartic), sphere ∩ cylinder, non-elliptical cone sections. Refusals lifted pair by pair.
+     (quartic), sphere ∩ cylinder, non-elliptical cone sections. A face bounded by one is integrated
+     numerically (ADR-045 (b) amendment, D-2026-09-02-i). Refusals lifted pair by pair.
   8. *(separate REQ-315, separate ADR revision)* — freeform surfaces, then sweep and loft.
 
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
