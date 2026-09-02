@@ -66,6 +66,31 @@ TEST_CASE("degenerate chord is invalid", "[bulge]") {
   REQUIRE_FALSE(a.valid);
 }
 
+// REQ-316 / ADR-047: ArcBulgeThrough — the bulge grip drags the midpoint. Round-trip: the apex of
+// a known quarter-circle bulge must reproduce that bulge. A positive (CCW) bulge on the chord
+// (0,0)->(1,0) bows the arc to -Y (see the tangency case above), so its apex sits below the chord.
+TEST_CASE("ArcBulgeThrough round-trips a quarter-circle bulge from its apex", "[bulge]") {
+  const double b0 = std::tan(kPi / 8.0);
+  const BulgeArcSpan a = BulgeArc(0.0, 0.0, 1.0, 0.0, b0);
+  REQUIRE(a.valid);
+  const double mid = a.startAngle + a.sweep * 0.5;
+  const double apexX = a.cx + a.radius * std::cos(mid);
+  const double apexY = a.cy + a.radius * std::sin(mid);
+  const double b = ArcBulgeThrough(0.0, 0.0, apexX, apexY, 1.0, 0.0);
+  REQUIRE(b == Approx(b0).margin(1e-6));
+}
+
+TEST_CASE("ArcBulgeThrough: collinear points give a straight segment", "[bulge]") {
+  REQUIRE(ArcBulgeThrough(0.0, 0.0, 5.0, 0.0, 10.0, 0.0) == Approx(0.0));
+}
+
+TEST_CASE("ArcBulgeThrough: apex on the other side flips the sign", "[bulge]") {
+  const double up = ArcBulgeThrough(0.0, 0.0, 0.5, 0.2, 1.0, 0.0);
+  const double dn = ArcBulgeThrough(0.0, 0.0, 0.5, -0.2, 1.0, 0.0);
+  REQUIRE(dn == Approx(-up).margin(1e-6));
+  REQUIRE(std::fabs(up) > 1e-3);
+}
+
 // REQ-316 acceptance: a 3-4-5 straight leg plus a quarter circle of radius 10. Total length is
 // 5 + (10 * pi/2).
 TEST_CASE("polyline length: straight leg plus quarter circle R10", "[bulge]") {

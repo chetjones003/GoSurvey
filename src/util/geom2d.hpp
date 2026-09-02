@@ -44,6 +44,10 @@ struct BulgeArcSpan {
 /// Arc length of the segment p0->p1 carrying `bulge`; the plain chord length when it is straight.
 [[nodiscard]] double BulgeSegmentLength(double x0, double y0, double x1, double y1, double bulge);
 
+/// The DXF bulge for an arc from (ax,ay) to (bx,by) that also passes through (px,py) — used when a
+/// grip drags an arc segment's midpoint. 0 when the three points are collinear or degenerate.
+[[nodiscard]] double ArcBulgeThrough(double ax, double ay, double px, double py, double bx, double by);
+
 void AppendLineSeg3(std::vector<float>& out, double x0, double y0, double z, double x1, double y1);
 
 /// Tessellated arc/ellipse as GL_LINES triplets in world coordinates (double math).

@@ -91,3 +91,27 @@ EXPECT SAMEFILE %OUT%/rect-a.dxf %OUT%/rect-b.dxf
 
 SAVEAS %OUT%/rect.gs
 EXPECT FILELACKS %OUT%/rect.gs "polylineVertsBulge"
+
+# ── 5. box-selection follows the arc, not its chord ───────────────────────────────────────────
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD ARC
+CMD CANGLE 180
+CMD 20,0
+CMD END
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYBULGE 0 0 1
+
+# A crossing box straddling the chord line (y in [-1,1]) but clear of the two endpoints touches
+# nothing that is DRAWN there — the polyline dives to y=-10 between its ends.
+BOX 8 -1 12 1
+EXPECT SELECTED 0
+ESC
+
+# The arc is a semicircle centred (10,0) r 10; its apex is near (10,-10). A crossing box down there
+# selects the polyline ONLY because ChainHitsRect tessellates the bulge (a chord test would miss).
+BOX 6 -12 14 -8
+EXPECT SELECTED 1
+ESC

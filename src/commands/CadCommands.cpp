@@ -1198,6 +1198,9 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
             break;
           tryGrip(sel, cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1], vi);
         }
+        CadForEachPolylineArcMidGrip(cmd, sel.index, [&](int seg, float mx, float my, float) {
+          tryGrip(sel, mx, my, kPolyBulgeGripBase + seg);  // REQ-316 / ADR-047
+        });
       }
       break;
     }
@@ -1285,6 +1288,15 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
   }
   case SelectedEntity::Type::Polyline: {
     const int startV = cmd.userPolylineOffsets[static_cast<size_t>(bestSel.index)];
+    cmd.entityGripOrigPolyBulgeVi = -1;
+    if (bestWhich >= kPolyBulgeGripBase) {  // REQ-316 / ADR-047: arc-segment bulge grip
+      const int va = startV + (bestWhich - kPolyBulgeGripBase);
+      cmd.entityGripOrigPolyBulgeVi = va;
+      cmd.entityGripOrigPolyBulge = static_cast<size_t>(va) < cmd.userPolylineVertsBulge.size()
+                                        ? cmd.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.f;
+      cmd.entityGripOrigPolylineXIdx = -1;
+      break;
+    }
     const size_t xIdx = static_cast<size_t>(startV + bestWhich) * 3;
     cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
     cmd.entityGripOrigPolyVertX = cmd.userPolylineVerts[xIdx];
@@ -7254,7 +7266,8 @@ void EllipseRoughBounds(const CadEllipse& e, float* outMnX, float* outMxX, float
 bool ChainHitsRect(const std::vector<int>& OFF, const std::vector<float>& V,
                    const std::vector<uint8_t>& CLOSED, int pi, float mnX, float mxX, float mnY,
                    float mxY, bool windowMode,
-                   const std::function<void(float, float, float, float*, float*)>* toTest) {
+                   const std::function<void(float, float, float, float*, float*)>* toTest,
+                   const std::vector<float>* BULGE = nullptr) {
   if (pi < 0 || static_cast<size_t>(pi + 1) >= OFF.size())
     return false;
   const int v0 = OFF[static_cast<size_t>(pi)];
@@ -7283,18 +7296,36 @@ bool ChainHitsRect(const std::vector<int>& OFF, const std::vector<float>& V,
     }
     return true;
   }
-  for (int vi = v0; vi + 1 < v1; ++vi) {
+  // REQ-316 / ADR-047: a curved segment is tested against the ARC it draws, tessellated, so a
+  // crossing box over the bulge (and clear of every chord) still selects the polyline.
+  auto segHitsRect = [&](int va, int vb) -> bool {
     float x0, y0, x1, y1;
-    vert(vi, &x0, &y0);
-    vert(vi + 1, &x1, &y1);
-    if (SegIntersectsAABB(x0, y0, x1, y1, mnX, mxX, mnY, mxY))
+    vert(va, &x0, &y0);
+    vert(vb, &x1, &y1);
+    const float bulge = (BULGE && static_cast<size_t>(va) < BULGE->size()) ? (*BULGE)[static_cast<size_t>(va)] : 0.f;
+    const BulgeArcSpan arc = (bulge != 0.f) ? BulgeArc(x0, y0, x1, y1, static_cast<double>(bulge)) : BulgeArcSpan{};
+    if (!arc.valid)
+      return SegIntersectsAABB(x0, y0, x1, y1, mnX, mxX, mnY, mxY);
+    constexpr double kPi = 3.14159265358979323846;
+    const int ns = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 24.0))), 2, 96);
+    double px = x0, py = y0;
+    for (int s = 1; s <= ns; ++s) {
+      const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / ns);
+      const double qx = arc.cx + arc.radius * std::cos(u);
+      const double qy = arc.cy + arc.radius * std::sin(u);
+      if (SegIntersectsAABB(static_cast<float>(px), static_cast<float>(py), static_cast<float>(qx),
+                            static_cast<float>(qy), mnX, mxX, mnY, mxY))
+        return true;
+      px = qx;
+      py = qy;
+    }
+    return false;
+  };
+  for (int vi = v0; vi + 1 < v1; ++vi)
+    if (segHitsRect(vi, vi + 1))
       return true;
-  }
   if (closed && nVert >= 2) {
-    float x0, y0, x1, y1;
-    vert(v1 - 1, &x0, &y0);
-    vert(v0, &x1, &y1);
-    if (SegIntersectsAABB(x0, y0, x1, y1, mnX, mxX, mnY, mxY))
+    if (segHitsRect(v1 - 1, v0))
       return true;
   }
   return false;
@@ -7513,7 +7544,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
     if (ChainHitsRect(st.userPolylineOffsets, st.userPolylineVerts, st.userPolylineClosed, pi, mnX, mxX,
-                      mnY, mxY, windowMode, proj ? &projFn : nullptr)) {
+                      mnY, mxY, windowMode, proj ? &projFn : nullptr, &st.userPolylineVertsBulge)) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Polyline;
       e.index = pi;
@@ -19955,6 +19986,26 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
     if (idx >= np)
       return;
     const int startV = st.userPolylineOffsets[static_cast<size_t>(idx)];
+    const int endV = st.userPolylineOffsets[static_cast<size_t>(idx + 1)];
+    // REQ-316 / ADR-047: an arc-segment midpoint grip drags the bulge so the arc passes through
+    // the cursor. `which` is kPolyBulgeGripBase + segmentIndex.
+    if (st.entityGripWhich >= kPolyBulgeGripBase) {
+      const int seg = st.entityGripWhich - kPolyBulgeGripBase;
+      const int va = startV + seg;
+      const bool closed = static_cast<size_t>(idx) < st.userPolylineClosed.size() &&
+                          st.userPolylineClosed[static_cast<size_t>(idx)];
+      const int vb = (seg == (endV - startV) - 1 && closed) ? startV : va + 1;
+      if (static_cast<size_t>(vb) * 3 + 1 >= st.userPolylineVerts.size())
+        return;
+      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      const double b = ArcBulgeThrough(st.userPolylineVerts[static_cast<size_t>(va) * 3],
+                                       st.userPolylineVerts[static_cast<size_t>(va) * 3 + 1],
+                                       static_cast<double>(x), static_cast<double>(y),
+                                       st.userPolylineVerts[static_cast<size_t>(vb) * 3],
+                                       st.userPolylineVerts[static_cast<size_t>(vb) * 3 + 1]);
+      st.userPolylineVertsBulge[static_cast<size_t>(va)] = static_cast<float>(b);
+      return;
+    }
     const int globalV = startV + st.entityGripWhich;
     const size_t xIdx = static_cast<size_t>(globalV) * 3;
     if (xIdx + 1 >= st.userPolylineVerts.size())
@@ -21608,18 +21659,33 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     e.type = SelectedEntity::Type::Polyline;
     e.index = pi;
     double bestD2 = 1e300;
-    for (int vi = v0; vi + 1 < v1; ++vi) {
-      const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
-      bestD2 = std::min(bestD2, d2Segment(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
-                                          st.userPolylineVerts[A + 2], st.userPolylineVerts[B],
-                                          st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]));
-    }
-    if (closed && v1 - v0 >= 2) {
-      const size_t A = static_cast<size_t>(v1 - 1) * 3, B = static_cast<size_t>(v0) * 3;
-      bestD2 = std::min(bestD2, d2Segment(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
-                                          st.userPolylineVerts[A + 2], st.userPolylineVerts[B],
-                                          st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]));
-    }
+    // REQ-316 / ADR-047: a curved segment is hit-tested against the ARC it draws, not its chord —
+    // so a click or hover on the bulge registers. Arc samples reuse the ARC entity's own metric.
+    auto polySegD2 = [&](int va, int vb) -> double {
+      const size_t A = static_cast<size_t>(va) * 3, B = static_cast<size_t>(vb) * 3;
+      const float bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
+                              ? st.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.f;
+      const BulgeArcSpan arc = (bulge != 0.f)
+                                   ? BulgeArc(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
+                                              st.userPolylineVerts[B], st.userPolylineVerts[B + 1],
+                                              static_cast<double>(bulge))
+                                   : BulgeArcSpan{};
+      if (!arc.valid)
+        return d2Segment(st.userPolylineVerts[A], st.userPolylineVerts[A + 1], st.userPolylineVerts[A + 2],
+                         st.userPolylineVerts[B], st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]);
+      double d2 = 1e300;
+      constexpr int ns = 24;
+      const double za = static_cast<double>(st.userPolylineVerts[A + 2]);
+      for (int s = 0; s <= ns; ++s) {
+        const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / ns);
+        d2 = std::min(d2, d2Point(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), za));
+      }
+      return d2;
+    };
+    for (int vi = v0; vi + 1 < v1; ++vi)
+      bestD2 = std::min(bestD2, polySegD2(vi, vi + 1));
+    if (closed && v1 - v0 >= 2)
+      bestD2 = std::min(bestD2, polySegD2(v1 - 1, v0));
     consider(e, bestD2);
   }
 

@@ -138,6 +138,30 @@ BulgeArcSpan BulgeArc(double x0, double y0, double x1, double y1, double bulge) 
   return r;
 }
 
+double ArcBulgeThrough(double ax, double ay, double px, double py, double bx, double by) {
+  constexpr double kPi = 3.14159265358979323846;
+  const double d = 2.0 * (ax * (py - by) + px * (by - ay) + bx * (ay - py));
+  if (std::fabs(d) < 1e-9)
+    return 0.0;  // collinear
+  const double a2 = ax * ax + ay * ay;
+  const double p2 = px * px + py * py;
+  const double b2 = bx * bx + by * by;
+  const double ux = (a2 * (py - by) + p2 * (by - ay) + b2 * (ay - py)) / d;
+  const double uy = (a2 * (bx - px) + p2 * (ax - bx) + b2 * (px - ax)) / d;
+  const double a0 = std::atan2(ay - uy, ax - ux);
+  const double a1 = std::atan2(by - uy, bx - ux);
+  const double ap = std::atan2(py - uy, px - ux);
+  auto wrap2pi = [](double t) {
+    while (t < 0.0) t += 2.0 * kPi;
+    while (t >= 2.0 * kPi) t -= 2.0 * kPi;
+    return t;
+  };
+  const double ccwEnd = wrap2pi(a1 - a0);   // CCW sweep from A to B
+  const double ccwMid = wrap2pi(ap - a0);   // where P sits along that CCW path
+  const double sweep = (ccwMid <= ccwEnd) ? ccwEnd : ccwEnd - 2.0 * kPi;
+  return std::tan(sweep / 4.0);
+}
+
 double BulgeSegmentLength(double x0, double y0, double x1, double y1, double bulge) {
   const BulgeArcSpan a = BulgeArc(x0, y0, x1, y1, bulge);
   if (!a.valid)
