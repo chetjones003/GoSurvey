@@ -162,6 +162,35 @@ double ArcBulgeThrough(double ax, double ay, double px, double py, double bx, do
   return std::tan(sweep / 4.0);
 }
 
+double PointArcDistanceSq(double px, double py, const BulgeArcSpan& s) {
+  if (!s.valid || s.radius <= 0.0)
+    return 1e300;
+  constexpr double kPi = 3.14159265358979323846;
+  const double dx = px - s.cx;
+  const double dy = py - s.cy;
+  const double dc = std::hypot(dx, dy);
+  // Is the cursor's bearing from the centre inside the arc's angular span?
+  double t = std::atan2(dy, dx) - s.startAngle;
+  const double sweepMag = std::fabs(s.sweep);
+  // Fold `t` into the sweep direction, then to [0, 2pi).
+  if (s.sweep < 0.0)
+    t = -t;
+  while (t < 0.0) t += 2.0 * kPi;
+  while (t >= 2.0 * kPi) t -= 2.0 * kPi;
+  if (t <= sweepMag) {
+    const double radial = dc - s.radius;
+    return radial * radial;  // perpendicular foot lands on the arc
+  }
+  // Outside the span: nearest of the two endpoints.
+  const double e0x = s.cx + s.radius * std::cos(s.startAngle);
+  const double e0y = s.cy + s.radius * std::sin(s.startAngle);
+  const double e1x = s.cx + s.radius * std::cos(s.startAngle + s.sweep);
+  const double e1y = s.cy + s.radius * std::sin(s.startAngle + s.sweep);
+  const double d0 = (px - e0x) * (px - e0x) + (py - e0y) * (py - e0y);
+  const double d1 = (px - e1x) * (px - e1x) + (py - e1y) * (py - e1y);
+  return std::min(d0, d1);
+}
+
 double BulgeSegmentLength(double x0, double y0, double x1, double y1, double bulge) {
   const BulgeArcSpan a = BulgeArc(x0, y0, x1, y1, bulge);
   if (!a.valid)

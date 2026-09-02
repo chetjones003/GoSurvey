@@ -21612,13 +21612,25 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     e.type = SelectedEntity::Type::Arc;
     e.index = static_cast<int>(ai);
     double bestD2 = 1e300;
-    constexpr int n = 36;
-    for (int i = 0; i <= n; ++i) {
-      const double u = static_cast<double>(i) / static_cast<double>(n);
-      const double ang = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
-      const double x = static_cast<double>(a.cx) + static_cast<double>(a.r) * std::cos(ang);
-      const double y = static_cast<double>(a.cy) + static_cast<double>(a.r) * std::sin(ang);
-      bestD2 = std::min(bestD2, d2Point(x, y, static_cast<double>(a.z)));
+    if (!useRay && IsFlatNormal(a.nx, a.ny, a.nz)) {
+      // Exact distance to the arc (REQ-316): a hover/pick aperture is the same on a curve as a line.
+      BulgeArcSpan span;
+      span.valid = true;
+      span.cx = a.cx;
+      span.cy = a.cy;
+      span.radius = a.r;
+      span.startAngle = a.startRad;
+      span.sweep = a.sweepRad;
+      bestD2 = PointArcDistanceSq(wx, wy, span);
+    } else {
+      constexpr int n = 36;
+      for (int i = 0; i <= n; ++i) {
+        const double u = static_cast<double>(i) / static_cast<double>(n);
+        const double ang = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
+        const double x = static_cast<double>(a.cx) + static_cast<double>(a.r) * std::cos(ang);
+        const double y = static_cast<double>(a.cy) + static_cast<double>(a.r) * std::sin(ang);
+        bestD2 = std::min(bestD2, d2Point(x, y, static_cast<double>(a.z)));
+      }
     }
     consider(e, bestD2);
   }
@@ -21673,6 +21685,8 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       if (!arc.valid)
         return d2Segment(st.userPolylineVerts[A], st.userPolylineVerts[A + 1], st.userPolylineVerts[A + 2],
                          st.userPolylineVerts[B], st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]);
+      if (!useRay)
+        return PointArcDistanceSq(wx, wy, arc);  // exact — the aperture means the same on a curve as a line
       double d2 = 1e300;
       constexpr int ns = 24;
       const double za = static_cast<double>(st.userPolylineVerts[A + 2]);

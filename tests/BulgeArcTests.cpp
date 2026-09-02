@@ -91,6 +91,31 @@ TEST_CASE("ArcBulgeThrough: apex on the other side flips the sign", "[bulge]") {
   REQUIRE(std::fabs(up) > 1e-3);
 }
 
+// REQ-316: exact distance to an arc, so a hover/pick aperture behaves the same on a curve as on a
+// line (the sampled approximation made curves need a bigger aperture between samples).
+TEST_CASE("PointArcDistanceSq: perpendicular foot on the arc", "[bulge]") {
+  BulgeArcSpan s;
+  s.valid = true;
+  s.cx = 0.0; s.cy = 0.0; s.radius = 10.0;
+  s.startAngle = 0.0; s.sweep = kPi;  // upper half circle
+  // A point just outside the arc at angle 90 deg: radius 10.5 -> distance 0.5.
+  REQUIRE(PointArcDistanceSq(0.0, 10.5, s) == Approx(0.25));
+  // A point just inside: radius 9.7 -> distance 0.3.
+  REQUIRE(PointArcDistanceSq(0.0, 9.7, s) == Approx(0.09).margin(1e-9));
+  // Exactly on the arc: distance 0.
+  REQUIRE(PointArcDistanceSq(10.0, 0.0, s) == Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("PointArcDistanceSq: outside the span falls back to an endpoint", "[bulge]") {
+  BulgeArcSpan s;
+  s.valid = true;
+  s.cx = 0.0; s.cy = 0.0; s.radius = 10.0;
+  s.startAngle = 0.0; s.sweep = kPi / 2.0;  // first quadrant only
+  // A point at angle -90 deg (below), radius 10: not on the span; nearest endpoint is (10,0).
+  const double got = PointArcDistanceSq(0.0, -10.0, s);
+  REQUIRE(got == Approx(10.0 * 10.0 + 10.0 * 10.0));  // dist to (10,0) squared
+}
+
 // REQ-316 acceptance: a 3-4-5 straight leg plus a quarter circle of radius 10. Total length is
 // 5 + (10 * pi/2).
 TEST_CASE("polyline length: straight leg plus quarter circle R10", "[bulge]") {
