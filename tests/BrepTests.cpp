@@ -1626,3 +1626,86 @@ TEST_CASE("Slice refuses what it cannot do, by name", "[brep][req314]") {
     REQUIRE(why == Problem::SliceCurvedFace);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Feature operations — Booleans, B1 (REQ-314 / ADR-046 increment 4, GitHub issue #147).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Booleans of two overlapping boxes match the hand-computed volumes", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  // A: x[-5,5] y[-5,5] z[0,10].  B: x[-1,9] y[-5,5] z[4,14].  Overlap: 6 x 10 x 6 = 360.
+  Solid a;
+  Solid b;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &a, &why));
+  REQUIRE(brep::MakeBox(At(4, 0, 4), 10, 10, 10, &b, &why));
+
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanIntersect(a, b, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(6.0 * 10.0 * 6.0).epsilon(1e-9));
+
+  r.clear();
+  REQUIRE(brep::BooleanUnion(a, b, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(1000.0 + 1000.0 - 360.0).epsilon(1e-9));
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(1640.0).epsilon(1e-6));
+
+  r.clear();
+  REQUIRE(brep::BooleanSubtract(a, b, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(1000.0 - 360.0).epsilon(1e-9));
+}
+
+TEST_CASE("Booleans report and refuse the cases B1 does not cover", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  Solid farBox;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 4, 4, 4, &box, &why));
+  REQUIRE(brep::MakeBox(At(100, 0, 0), 4, 4, 4, &farBox, &why));
+  REQUIRE(brep::MakeCylinder(World(), 3, 6, &cyl, &why));
+  std::vector<Solid> r;
+
+  SECTION("INTERSECT of solids that do not touch is reported as empty") {
+    REQUIRE_FALSE(brep::BooleanIntersect(box, farBox, &r, &why));
+    REQUIRE(why == Problem::BooleanEmptyResult);
+  }
+  SECTION("UNION of solids that do not touch returns both, untouched") {
+    REQUIRE(brep::BooleanUnion(box, farBox, &r, &why));
+    REQUIRE(r.size() == 2);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(64.0).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(r[1]).volume == Approx(64.0).epsilon(1e-9));
+  }
+  SECTION("SUBTRACT of a solid that is not touched leaves it unchanged") {
+    REQUIRE(brep::BooleanSubtract(box, farBox, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(64.0).epsilon(1e-9));
+  }
+  SECTION("a curved operand is refused") {
+    REQUIRE_FALSE(brep::BooleanUnion(box, cyl, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
+TEST_CASE("SUBTRACT punches a blind hole through one face of a box", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  // A 10-cube from z 0..10, minus a 2x2 bar entering the top and stopping at z = 4.
+  Solid block;
+  Solid bar;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeBox(At(0, 0, 4), 2, 2, 8, &bar, &why));  // z 4..12, pokes out the top
+
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, bar, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  // Removed volume is the bar's part inside the block: 2 x 2 x 6 (z 4..10) = 24.
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(1000.0 - 24.0).epsilon(1e-9));
+  REQUIRE(brep::EulerCharacteristic(r[0]) == 2);  // still genus 0 — a blind pocket, not a tunnel
+}
