@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <map>
 #include <tuple>
 #include <utility>
@@ -526,9 +527,13 @@ const char* ProblemText(Problem p) {
   case Problem::SliceResultComplex:
     return "The cut would split the solid into disjoint pieces, which this release cannot represent.";
   case Problem::BooleanCurvedFace:
-    return "This release combines solids with flat faces only (a box, a wedge, a pyramid).";
+    return "This release cannot combine these curved solids (a curved subtraction, a cone / sphere / "
+           "torus, or a cylinder that only partly enters the other solid).";
   case Problem::BooleanNonConvex:
     return "This release combines convex solids only.";
+  case Problem::BooleanObliqueCylinder:
+    return "The cylinder is set at an angle to the other solid's faces; they would meet along an "
+           "ellipse, which needs the general Boolean (a later release).";
   case Problem::BooleanEmptyResult: return "The solids do not overlap, so there is nothing to keep.";
   case Problem::BooleanResultInvalid:
     return "The combined solid did not pass validation and was not stored.";
@@ -2383,6 +2388,472 @@ void MergeCoplanar(std::vector<PolyFace>* ca, std::vector<PolyFace>* cb, const S
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Curved Boolean operands — the B1 subset, refined by D-2026-09-02-b: a curved operand is handled
+// for UNION and INTERSECT only, and only when it is a right circular cylinder that meets the other
+// solid along full circles. A curved SUBTRACT bores a hole whose wall faces inward, which
+// `Surface` cannot express — deferred to B2, refused `BooleanCurvedFace` here. An oblique cylinder
+// (an ellipse) is refused `BooleanObliqueCylinder`. Two configurations are recognised:
+//   A. the cylinder's axis is perpendicular to two planar faces of the other solid, its circular
+//      footprint clear inside both  — INTERSECT is the plug, UNION is a boss with the two faces bored;
+//   B. two coaxial cylinders — INTERSECT is the shared segment, UNION is a merged or stepped stack.
+// Anything else falls through and is refused by the planar path.
+// ---------------------------------------------------------------------------------------------
+
+struct CylinderShape {
+  ucs::Ucs axis;        ///< origin = base-cap centre, zAxis = axis direction.
+  double radius = 0.0;
+  double length = 0.0;
+};
+
+/// Recognise \p s as one right circular cylinder: two cylinder half-faces at a seam plus two disk
+/// caps. Read from the faces, not the recipe, so an extruded circle qualifies too.
+[[nodiscard]] bool ClassifyCylinder(const Solid& s, CylinderShape* out) {
+  if (s.faces.size() != 4 || s.vertices.size() != 4 || s.edges.size() != 6)
+    return false;
+  int firstCyl = -1;
+  int nCyl = 0;
+  int nPlane = 0;
+  for (int i = 0; i < 4; ++i) {
+    const SurfaceKind k = s.faces[static_cast<std::size_t>(i)].surface.kind;
+    if (k == SurfaceKind::Cylinder) {
+      ++nCyl;
+      if (firstCyl < 0)
+        firstCyl = i;
+    } else if (k == SurfaceKind::Plane) {
+      ++nPlane;
+    } else {
+      return false;
+    }
+  }
+  if (nCyl != 2 || nPlane != 2)
+    return false;
+  const Surface& sf = s.faces[static_cast<std::size_t>(firstCyl)].surface;
+  if (!(sf.radius > 0.0) || !(sf.height > 0.0))
+    return false;
+  const double sc = sf.radius + sf.height;
+  for (int i = 0; i < 4; ++i) {
+    const Surface& g = s.faces[static_cast<std::size_t>(i)].surface;
+    if (g.kind != SurfaceKind::Cylinder)
+      continue;
+    if (std::fabs(g.radius - sf.radius) > 1e-9 * sc || std::fabs(g.height - sf.height) > 1e-9 * sc ||
+        ray3d::Length(ray3d::Sub(g.frame.origin, sf.frame.origin)) > 1e-9 * sc ||
+        std::fabs(std::fabs(ray3d::Dot(g.frame.zAxis, sf.frame.zAxis)) - 1.0) > 1e-9)
+      return false;
+  }
+  ucs::Ucs ax;
+  if (!ucs::FromNormal(sf.frame.origin, sf.frame.zAxis, &ax))
+    return false;
+  out->axis = ax;
+  out->radius = sf.radius;
+  out->length = sf.height;
+  return true;
+}
+
+[[nodiscard]] bool AllFacesPlanar(const Solid& s) {
+  for (const Face& f : s.faces)
+    if (f.surface.kind != SurfaceKind::Plane)
+      return false;
+  for (const Edge& e : s.edges)
+    if (e.kind != CurveKind::Line)
+      return false;
+  return true;
+}
+
+/// A coaxial stack of full cylinders: `z` holds `r.size()+1` ascending breakpoints along the axis,
+/// `r[i]` is the radius of the band between `z[i]` and `z[i+1]`. Adjacent radii must differ. Built in
+/// the canonical frame and placed into \p frame (whose origin is the world point at `z.front()`).
+[[nodiscard]] bool BuildCoaxialStack(const ucs::Ucs& frame, const std::vector<double>& z,
+                                     const std::vector<double>& r, Solid* out, Problem* outWhy) {
+  const int n = static_cast<int>(r.size());
+  if (n < 1 || static_cast<int>(z.size()) != n + 1)
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  Solid s;
+  const Vec3 up{0.0, 0.0, 1.0};
+  const double z0 = z.front();
+  std::map<std::pair<long long, long long>, std::pair<int, int>> vc;
+  std::map<std::pair<long long, long long>, std::pair<int, int>> ec;
+  auto key = [](double a, double b) {
+    return std::make_pair(static_cast<long long>(std::llround(a * 1e7)),
+                          static_cast<long long>(std::llround(b * 1e7)));
+  };
+  auto verts = [&](double zz, double rr) -> std::pair<int, int> {
+    const auto k = key(zz, rr);
+    const auto it = vc.find(k);
+    if (it != vc.end())
+      return it->second;
+    const int p = AddVertex(&s, Vec3{rr, 0.0, zz - z0});
+    const int m = AddVertex(&s, Vec3{-rr, 0.0, zz - z0});
+    return vc[k] = {p, m};
+  };
+  auto circle = [&](double zz, double rr) -> std::pair<int, int> {
+    const auto k = key(zz, rr);
+    const auto it = ec.find(k);
+    if (it != ec.end())
+      return it->second;
+    const auto v = verts(zz, rr);
+    const Vec3 c{0.0, 0.0, zz - z0};
+    const int e0 = AddArc(&s, v.first, v.second, c, up, kPi);   // +x -> -x, CCW about +z
+    const int e1 = AddArc(&s, v.second, v.first, c, up, kPi);   // -x -> +x
+    return ec[k] = {e0, e1};
+  };
+  for (int i = 0; i < n; ++i) {
+    const double zl = z[static_cast<std::size_t>(i)];
+    const double zh = z[static_cast<std::size_t>(i + 1)];
+    const double rr = r[static_cast<std::size_t>(i)];
+    const auto vb = verts(zl, rr);
+    const auto vt = verts(zh, rr);
+    const auto cb = circle(zl, rr);
+    const auto ct = circle(zh, rr);
+    const int sm0 = AddLine(&s, vb.first, vt.first);
+    const int sm1 = AddLine(&s, vb.second, vt.second);
+    auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+      Face f;
+      f.surface.kind = SurfaceKind::Cylinder;
+      f.surface.frame = ucs::Ucs{};
+      f.surface.frame.origin = Vec3{0.0, 0.0, zl - z0};
+      f.surface.radius = rr;
+      f.surface.radius2 = rr;
+      f.surface.height = zh - zl;
+      f.uStart = u0;
+      f.uEnd = u1;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    };
+    wall(0.0, kPi, {{cb.first, false}, {sm1, false}, {ct.first, true}, {sm0, true}});
+    wall(kPi, kTwoPi, {{cb.second, false}, {sm0, false}, {ct.second, true}, {sm1, true}});
+  }
+  for (int k = 0; k <= n; ++k) {
+    const double zz = z[static_cast<std::size_t>(k)];
+    const double rl = (k > 0) ? r[static_cast<std::size_t>(k - 1)] : 0.0;
+    const double rh = (k < n) ? r[static_cast<std::size_t>(k)] : 0.0;
+    if (k == 0) {
+      const auto c = circle(zz, rh);
+      s.faces.push_back(
+          MakePlaneFace(Vec3{0.0, 0.0, 0.0}, Vec3{0.0, 0.0, -1.0}, {{c.second, true}, {c.first, true}}));
+    } else if (k == n) {
+      const auto c = circle(zz, rl);
+      s.faces.push_back(
+          MakePlaneFace(Vec3{0.0, 0.0, zz - z0}, up, {{c.first, false}, {c.second, false}}));
+    } else {
+      const double outer = std::max(rl, rh);
+      const double inner = std::min(rl, rh);
+      const bool faceUp = rh < rl;  // narrowing upward leaves an annulus facing +z
+      const Vec3 nrm = faceUp ? up : Vec3{0.0, 0.0, -1.0};
+      const auto co = circle(zz, outer);
+      const auto ci = circle(zz, inner);
+      Face f = MakePlaneFace(Vec3{0.0, 0.0, zz - z0}, nrm, {});
+      f.loops.clear();
+      Loop outerL;
+      Loop innerL;
+      if (faceUp) {
+        outerL.uses = {{co.first, false}, {co.second, false}};
+        innerL.uses = {{ci.second, true}, {ci.first, true}};
+      } else {
+        outerL.uses = {{co.second, true}, {co.first, true}};
+        innerL.uses = {{ci.first, false}, {ci.second, false}};
+      }
+      f.loops.push_back(std::move(outerL));
+      f.loops.push_back(std::move(innerL));
+      s.faces.push_back(std::move(f));
+    }
+  }
+  AddSingleShell(&s);
+  PlaceInFrame(&s, frame);
+  if (Validate(s) != Problem::Ok)
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+/// One stub of a boss: the planar face to bore, the bore centre on it, the outward direction, and
+/// the stub length.
+struct BossStub {
+  int face = 0;
+  Vec3 centre;
+  Vec3 dir;
+  double length = 0.0;
+};
+
+/// \p planar with a cylindrical \p radius boss added at each stub: the face is bored open (an inner
+/// circular loop) and a cylinder + end cap carry the material outward.
+[[nodiscard]] bool BuildBoss(const Solid& planar, const std::vector<BossStub>& stubs, double radius,
+                             Solid* out, Problem* outWhy) {
+  Solid s = planar;
+  s.recipe = Recipe{};  // a Boolean result carries no recipe (REQ-314)
+  for (const BossStub& stub : stubs) {
+    const Vec3 dir = ray3d::Normalize(stub.dir);
+    Vec3 xa = s.faces[static_cast<std::size_t>(stub.face)].surface.frame.xAxis;
+    xa = ray3d::Sub(xa, ray3d::Scale(dir, ray3d::Dot(xa, dir)));
+    if (!(ray3d::Length(xa) > 1e-9))
+      xa = s.faces[static_cast<std::size_t>(stub.face)].surface.frame.yAxis;
+    xa = ray3d::Normalize(xa);
+    const Vec3 ya = ray3d::Normalize(ray3d::Cross(dir, xa));
+    const Vec3 capC = ray3d::Add(stub.centre, ray3d::Scale(dir, stub.length));
+    const int b0 = AddVertex(&s, ray3d::Add(stub.centre, ray3d::Scale(xa, radius)));
+    const int b1 = AddVertex(&s, ray3d::Add(stub.centre, ray3d::Scale(xa, -radius)));
+    const int t0 = AddVertex(&s, ray3d::Add(capC, ray3d::Scale(xa, radius)));
+    const int t1 = AddVertex(&s, ray3d::Add(capC, ray3d::Scale(xa, -radius)));
+    const int rb0 = AddArc(&s, b0, b1, stub.centre, dir, kPi);
+    const int rb1 = AddArc(&s, b1, b0, stub.centre, dir, kPi);
+    const int rt0 = AddArc(&s, t0, t1, capC, dir, kPi);
+    const int rt1 = AddArc(&s, t1, t0, capC, dir, kPi);
+    const int sm0 = AddLine(&s, b0, t0);
+    const int sm1 = AddLine(&s, b1, t1);
+    s.faces.push_back(MakePlaneFace(capC, dir, {{rt0, false}, {rt1, false}}));
+    auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+      Face f;
+      f.surface.kind = SurfaceKind::Cylinder;
+      f.surface.frame.origin = stub.centre;
+      f.surface.frame.xAxis = xa;
+      f.surface.frame.yAxis = ya;
+      f.surface.frame.zAxis = dir;
+      f.surface.radius = radius;
+      f.surface.radius2 = radius;
+      f.surface.height = stub.length;
+      f.uStart = u0;
+      f.uEnd = u1;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    };
+    wall(0.0, kPi, {{rb0, false}, {sm1, false}, {rt0, true}, {sm0, true}});
+    wall(kPi, kTwoPi, {{rb1, false}, {sm0, false}, {rt1, true}, {sm1, true}});
+    // Bore the face: an inner loop wound opposite the outer one (the missing near-end cap's loop).
+    s.faces[static_cast<std::size_t>(stub.face)].loops.push_back(Loop{{{rb1, true}, {rb0, true}}});
+  }
+  for (int i = static_cast<int>(planar.faces.size()); i < static_cast<int>(s.faces.size()); ++i)
+    s.shells[0].faces.push_back(i);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+[[nodiscard]] bool TryBooleanCoaxialCylinders(const Solid& a, const Solid& b, const CylinderShape& A,
+                                              const CylinderShape& B, BoolOp op, std::vector<Solid>* out,
+                                              bool* handled, Problem* outWhy) {
+  if (op == BoolOp::Subtract) {
+    *handled = true;
+    return Fail(Problem::BooleanCurvedFace, outWhy);
+  }
+  const Vec3 az = A.axis.zAxis;
+  const Vec3 d = ray3d::Sub(B.axis.origin, A.axis.origin);
+  const double sc = A.radius + A.length + B.length;
+  const double perp = ray3d::Length(ray3d::Sub(d, ray3d::Scale(az, ray3d::Dot(d, az))));
+  if (std::fabs(std::fabs(ray3d::Dot(az, B.axis.zAxis)) - 1.0) > 1e-7 || perp > 1e-6 * sc) {
+    *handled = true;  // two cylinders we cannot combine analytically in B1
+    return Fail(Problem::BooleanCurvedFace, outWhy);
+  }
+  *handled = true;
+  const double eps = 1e-7 * sc;
+  const double a0 = 0.0;
+  const double a1 = A.length;
+  double b0 = ray3d::Dot(d, az);
+  double b1 = b0 + (ray3d::Dot(B.axis.zAxis, az) > 0.0 ? B.length : -B.length);
+  if (b0 > b1)
+    std::swap(b0, b1);
+
+  if (op == BoolOp::Intersect) {
+    const double lo = std::max(a0, b0);
+    const double hi = std::min(a1, b1);
+    if (hi - lo <= eps)
+      return Fail(Problem::BooleanEmptyResult, outWhy);
+    ucs::Ucs fr = A.axis;
+    fr.origin = ray3d::Add(A.axis.origin, ray3d::Scale(az, lo));
+    Solid r;
+    Problem w = Problem::Ok;
+    if (!MakeCylinder(fr, std::min(A.radius, B.radius), hi - lo, &r, &w))
+      return Fail(Problem::BooleanResultInvalid, outWhy);
+    out->push_back(std::move(r));
+    return Succeed(outWhy);
+  }
+
+  // UNION.
+  if (std::max(a0, b0) > std::min(a1, b1) + eps) {
+    out->push_back(a);
+    out->push_back(b);
+    return Succeed(outWhy);
+  }
+  const double lo = std::min(a0, b0);
+  const double hi = std::max(a1, b1);
+  auto oneCylinder = [&](double zlo, double zhi, double rr) {
+    ucs::Ucs fr = A.axis;
+    fr.origin = ray3d::Add(A.axis.origin, ray3d::Scale(az, zlo));
+    Solid r;
+    Problem w = Problem::Ok;
+    if (!MakeCylinder(fr, rr, zhi - zlo, &r, &w))
+      return Fail(Problem::BooleanResultInvalid, outWhy);
+    out->push_back(std::move(r));
+    return Succeed(outWhy);
+  };
+  if (std::fabs(A.radius - B.radius) <= 1e-7 * sc)
+    return oneCylinder(lo, hi, A.radius);
+
+  std::vector<double> brk{a0, a1, b0, b1};
+  std::sort(brk.begin(), brk.end());
+  std::vector<double> uniq;
+  for (double v : brk)
+    if (uniq.empty() || v - uniq.back() > eps)
+      uniq.push_back(v);
+  std::vector<double> zs{uniq.front()};
+  std::vector<double> rs;
+  for (std::size_t i = 0; i + 1 < uniq.size(); ++i) {
+    const double m = 0.5 * (uniq[i] + uniq[i + 1]);
+    double rr = 0.0;
+    if (m > a0 - eps && m < a1 + eps)
+      rr = std::max(rr, A.radius);
+    if (m > b0 - eps && m < b1 + eps)
+      rr = std::max(rr, B.radius);
+    if (!(rr > 0.0))
+      continue;
+    if (!rs.empty() && std::fabs(rs.back() - rr) <= 1e-7 * sc)
+      zs.back() = uniq[i + 1];
+    else {
+      rs.push_back(rr);
+      zs.push_back(uniq[i + 1]);
+    }
+  }
+  if (rs.size() == 1)
+    return oneCylinder(zs.front(), zs.back(), rs.front());
+  ucs::Ucs fr = A.axis;
+  fr.origin = ray3d::Add(A.axis.origin, ray3d::Scale(az, zs.front()));
+  Solid r;
+  if (!BuildCoaxialStack(fr, zs, rs, &r, outWhy))
+    return false;
+  out->push_back(std::move(r));
+  return Succeed(outWhy);
+}
+
+[[nodiscard]] bool TryBooleanCylinderThroughPlanar(const Solid& planar, const Solid& cyl,
+                                                   const CylinderShape& C, BoolOp op,
+                                                   std::vector<Solid>* out, bool* handled,
+                                                   Problem* outWhy) {
+  if (op == BoolOp::Subtract) {
+    *handled = true;
+    return Fail(Problem::BooleanCurvedFace, outWhy);
+  }
+  *handled = true;
+  const Vec3 az = C.axis.zAxis;
+  const double scale = std::max(ModelScale(planar), C.radius + C.length);
+  const double eps = 1e-7 * scale;
+
+  struct Hit {
+    int face = -1;
+    double t = 0.0;
+    Vec3 point;
+  };
+  Hit entry;
+  Hit exitH;
+  bool anyPerp = false;
+  for (int fi = 0; fi < static_cast<int>(planar.faces.size()); ++fi) {
+    const Face& f = planar.faces[static_cast<std::size_t>(fi)];
+    if (f.surface.kind != SurfaceKind::Plane)
+      continue;
+    const Vec3 n = f.surface.frame.zAxis;
+    const double dn = ray3d::Dot(n, az);
+    if (std::fabs(std::fabs(dn) - 1.0) > 1e-6)
+      continue;
+    const std::vector<Vec3> ring = FaceRing(planar, f);
+    if (ring.size() < 3)
+      continue;
+    const double t = ray3d::Dot(ray3d::Sub(ring[0], C.axis.origin), n) / dn;
+    const Vec3 hp = ray3d::Add(C.axis.origin, ray3d::Scale(az, t));
+    bool onEdge = false;
+    if (!PointInPolygon3D(hp, ring, n, eps, &onEdge))
+      continue;
+    anyPerp = true;
+    double clr = std::numeric_limits<double>::max();
+    for (std::size_t i = 0; i < ring.size(); ++i) {
+      const Vec3& p0 = ring[i];
+      const Vec3& p1 = ring[(i + 1) % ring.size()];
+      const Vec3 e = ray3d::Sub(p1, p0);
+      const double len2 = ray3d::Dot(e, e);
+      double u = len2 > 1e-24 ? ray3d::Dot(ray3d::Sub(hp, p0), e) / len2 : 0.0;
+      u = std::clamp(u, 0.0, 1.0);
+      clr = std::min(clr, ray3d::Length(ray3d::Sub(hp, ray3d::Add(p0, ray3d::Scale(e, u)))));
+    }
+    if (clr < C.radius + eps)
+      continue;  // the footprint crosses this face's edge — a mixed arc/line intersection (B2)
+    Hit& slot = dn < 0.0 ? entry : exitH;
+    if (slot.face < 0)
+      slot = Hit{fi, t, hp};
+  }
+
+  const bool havePair = entry.face >= 0 && exitH.face >= 0 && exitH.t > entry.t + eps;
+  if (havePair) {
+    const double lo = std::max(entry.t, 0.0);
+    const double hi = std::min(exitH.t, C.length);
+    if (hi - lo <= eps) {  // the cylinder does not actually reach the solid
+      if (op == BoolOp::Intersect)
+        return Fail(Problem::BooleanEmptyResult, outWhy);
+      out->push_back(planar);
+      out->push_back(cyl);
+      return Succeed(outWhy);
+    }
+    if (op == BoolOp::Intersect) {
+      ucs::Ucs fr = C.axis;
+      fr.origin = ray3d::Add(C.axis.origin, ray3d::Scale(az, lo));
+      Solid r;
+      Problem w = Problem::Ok;
+      if (!MakeCylinder(fr, C.radius, hi - lo, &r, &w))
+        return Fail(Problem::BooleanResultInvalid, outWhy);
+      out->push_back(std::move(r));
+      return Succeed(outWhy);
+    }
+    std::vector<BossStub> stubs;
+    if (entry.t > eps)
+      stubs.push_back(BossStub{entry.face, entry.point,
+                               planar.faces[static_cast<std::size_t>(entry.face)].surface.frame.zAxis,
+                               entry.t});
+    if (C.length - exitH.t > eps)
+      stubs.push_back(BossStub{exitH.face, exitH.point,
+                               planar.faces[static_cast<std::size_t>(exitH.face)].surface.frame.zAxis,
+                               C.length - exitH.t});
+    if (stubs.empty()) {
+      out->push_back(planar);
+      return Succeed(outWhy);
+    }
+    Solid r;
+    if (!BuildBoss(planar, stubs, C.radius, &r, outWhy))
+      return false;
+    out->push_back(std::move(r));
+    return Succeed(outWhy);
+  }
+
+  if (!AabbsOverlap(planar, cyl, eps)) {
+    if (op == BoolOp::Intersect)
+      return Fail(Problem::BooleanEmptyResult, outWhy);
+    out->push_back(planar);
+    out->push_back(cyl);
+    return Succeed(outWhy);
+  }
+  if (!anyPerp)
+    return Fail(Problem::BooleanObliqueCylinder, outWhy);
+  return Fail(Problem::BooleanCurvedFace, outWhy);  // partial penetration / a footprint over an edge
+}
+
+/// Try the curved recognisers. `*handled` true means the result (success or a named refusal) is
+/// final; false means no curved recogniser applied and the caller refuses the pair itself.
+[[nodiscard]] bool TryBooleanCurved(const Solid& a, const Solid& b, BoolOp op, std::vector<Solid>* out,
+                                    bool* handled, Problem* outWhy) {
+  *handled = false;
+  CylinderShape ca;
+  CylinderShape cb;
+  const bool aCyl = ClassifyCylinder(a, &ca);
+  const bool bCyl = ClassifyCylinder(b, &cb);
+  if (aCyl && bCyl)
+    return TryBooleanCoaxialCylinders(a, b, ca, cb, op, out, handled, outWhy);
+  if (aCyl && AllFacesPlanar(b))
+    return TryBooleanCylinderThroughPlanar(b, a, ca, op, out, handled, outWhy);
+  if (bCyl && AllFacesPlanar(a))
+    return TryBooleanCylinderThroughPlanar(a, b, cb, op, out, handled, outWhy);
+  return false;
+}
+
 [[nodiscard]] bool BooleanPlanar(const Solid& a, const Solid& b, BoolOp op, std::vector<Solid>* out,
                                  Problem* outWhy) {
   if (!out)
@@ -2394,13 +2865,14 @@ void MergeCoplanar(std::vector<PolyFace>* ca, std::vector<PolyFace>* cb, const S
   const Problem vb = Validate(b);
   if (vb != Problem::Ok)
     return Fail(vb, outWhy);
-  for (const Solid* s : {&a, &b}) {
-    for (const Face& f : s->faces)
-      if (f.surface.kind != SurfaceKind::Plane)
-        return Fail(Problem::BooleanCurvedFace, outWhy);
-    for (const Edge& e : s->edges)
-      if (e.kind != CurveKind::Line)
-        return Fail(Problem::BooleanCurvedFace, outWhy);
+  const bool aCurved = !AllFacesPlanar(a);
+  const bool bCurved = !AllFacesPlanar(b);
+  if (aCurved || bCurved) {
+    bool handled = false;
+    const bool ok = TryBooleanCurved(a, b, op, out, &handled, outWhy);
+    if (handled)
+      return ok;
+    return Fail(Problem::BooleanCurvedFace, outWhy);
   }
   const double scale = std::max(ModelScale(a), ModelScale(b));
   const double eps = 1e-7 * scale;
@@ -2834,23 +3306,107 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     const Surface& sf = f.surface;
     switch (sf.kind) {
     case SurfaceKind::Plane: {
-      if (f.loops.size() != 1)
+      if (f.loops.size() > 2)
         return Fail(Problem::PlaneFaceNotSimple, outWhy);
-      // Walk the boundary into a polyline. Arc edges are subdivided by the same chord rule the
-      // curved faces use, so the cap and the wall it meets do not disagree.
-      std::vector<Vec3> ring;
-      for (const EdgeUse& u : f.loops[0].uses) {
-        const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
-        const int segs =
-            e.kind == CurveKind::Arc ? SegmentsForArc(e.radius, e.sweep, chordTolerance) : 1;
-        for (int i = 0; i < segs; ++i) {
-          const double t = static_cast<double>(i) / static_cast<double>(segs);
-          ring.push_back(EdgePointAt(s, e, u.reversed ? 1.0 - t : t));
+      // Walk each loop into a polyline. Arc edges are subdivided by the same chord rule the curved
+      // faces use, so the cap and the wall it meets do not disagree.
+      auto sampleLoop = [&](const Loop& lp) {
+        std::vector<Vec3> r;
+        for (const EdgeUse& u : lp.uses) {
+          const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+          const int segs =
+              e.kind == CurveKind::Arc ? SegmentsForArc(e.radius, e.sweep, chordTolerance) : 1;
+          for (int i = 0; i < segs; ++i) {
+            const double t = static_cast<double>(i) / static_cast<double>(segs);
+            r.push_back(EdgePointAt(s, e, u.reversed ? 1.0 - t : t));
+          }
         }
+        return r;
+      };
+      const Vec3 n = sf.frame.zAxis;
+
+      if (f.loops.size() == 2) {
+        // An annular face (a bored boss face, a stepped-stack ring — REQ-314 B1): strip it between
+        // the outer and inner loop by angle about the hole centre, which is convex-outer, star-shaped
+        // territory — all B1 produces. Both loops are sampled by the shared chord rule.
+        std::vector<Vec3> outer3 = sampleLoop(f.loops[0]);
+        std::vector<Vec3> inner3 = sampleLoop(f.loops[1]);
+        if (outer3.size() < 3 || inner3.size() < 3)
+          return Fail(Problem::DegenerateFace, outWhy);
+        std::vector<ucs::Point2D> outer2;
+        std::vector<ucs::Point2D> inner2;
+        for (const Vec3& p : outer3)
+          outer2.push_back(ucs::WorldToPlane(sf.frame, p));
+        for (const Vec3& p : inner3)
+          inner2.push_back(ucs::WorldToPlane(sf.frame, p));
+        ucs::Point2D hc{0.0, 0.0};
+        for (const ucs::Point2D& p : inner2) {
+          hc.x += p.x / static_cast<double>(inner2.size());
+          hc.y += p.y / static_cast<double>(inner2.size());
+        }
+        // The far intersection of the ray hc + t*dir (t > 0) with a closed 2D polyline.
+        auto rayHit = [&](const std::vector<ucs::Point2D>& poly, double dx, double dy) {
+          double bestT = 0.0;
+          ucs::Point2D hit{hc.x + dx, hc.y + dy};
+          for (std::size_t i = 0; i < poly.size(); ++i) {
+            const ucs::Point2D& a = poly[i];
+            const ucs::Point2D& b = poly[(i + 1) % poly.size()];
+            const double ex = b.x - a.x;
+            const double ey = b.y - a.y;
+            const double den = dx * ey - dy * ex;
+            if (std::fabs(den) < 1e-15)
+              continue;
+            const double t = ((a.x - hc.x) * ey - (a.y - hc.y) * ex) / den;
+            const double s2 = ((a.x - hc.x) * dy - (a.y - hc.y) * dx) / den;
+            if (t > 1e-12 && s2 >= -1e-9 && s2 <= 1.0 + 1e-9 && t > bestT) {
+              bestT = t;
+              hit = ucs::Point2D{hc.x + dx * t, hc.y + dy * t};
+            }
+          }
+          return hit;
+        };
+        std::vector<double> angs;
+        for (const ucs::Point2D& p : outer2)
+          angs.push_back(std::atan2(p.y - hc.y, p.x - hc.x));
+        for (const ucs::Point2D& p : inner2)
+          angs.push_back(std::atan2(p.y - hc.y, p.x - hc.x));
+        std::sort(angs.begin(), angs.end());
+        angs.erase(std::unique(angs.begin(), angs.end(),
+                               [](double u, double v) { return std::fabs(u - v) < 1e-7; }),
+                   angs.end());
+        const std::size_t m = angs.size();
+        auto backToWorld = [&](const ucs::Point2D& q) { return ucs::PlaneToWorld(sf.frame, q); };
+        for (std::size_t k = 0; k < m; ++k) {
+          const double a0 = angs[k];
+          const double a1 = angs[(k + 1) % m];
+          const double d0x = std::cos(a0);
+          const double d0y = std::sin(a0);
+          const double d1x = std::cos(a1);
+          const double d1y = std::sin(a1);
+          const Vec3 oi = backToWorld(rayHit(outer2, d0x, d0y));
+          const Vec3 oj = backToWorld(rayHit(outer2, d1x, d1y));
+          const Vec3 ii = backToWorld(rayHit(inner2, d0x, d0y));
+          const Vec3 ij = backToWorld(rayHit(inner2, d1x, d1y));
+          const std::uint32_t voi = mb.Push(oi, n);
+          const std::uint32_t voj = mb.Push(oj, n);
+          const std::uint32_t vii = mb.Push(ii, n);
+          const std::uint32_t vij = mb.Push(ij, n);
+          // Orient the first quad against n, then keep that winding for the ring.
+          const Vec3 g = ray3d::Cross(ray3d::Sub(oj, oi), ray3d::Sub(ii, oi));
+          if (ray3d::Dot(g, n) >= 0.0) {
+            mb.Tri(voi, voj, vii);
+            mb.Tri(voj, vij, vii);
+          } else {
+            mb.Tri(voi, vii, voj);
+            mb.Tri(voj, vii, vij);
+          }
+        }
+        break;
       }
+
+      std::vector<Vec3> ring = sampleLoop(f.loops[0]);
       if (ring.size() < 3)
         return Fail(Problem::DegenerateFace, outWhy);
-      const Vec3 n = sf.frame.zAxis;
       std::vector<ucs::Point2D> ring2;
       ring2.reserve(ring.size());
       for (const Vec3& p : ring)

@@ -65,15 +65,26 @@ EXPECT LOG "volume 300"
 CMD UNDO
 EXPECT SOLIDS 2
 
-# --- A curved operand is refused, nothing changes -------------------------------------
+# --- A cylinder through a box: UNION is a boss (curved B1, D-2026-09-02-b) --------------
 NEW
-CMD BOX 0,0 6 6 6
-CMD CYLINDER 0,0 3 10
+CMD BOX 0,0 10 10 10
+CMD CYLINDER 0,0,-5 2 20
 BOX -8 -8 8 8
 EXPECT SELECTED 2
 CMD UNION
-EXPECT LOG "flat faces only"
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 1125"
+
+CMD UNDO
 EXPECT SOLIDS 2
+
+# INTERSECT of the same pair is the plug.
+BOX -8 -8 8 8
+CMD INTERSECT
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 125"
 
 # --- .gs round-trip of a subtract result ---------------------------------------------
 NEW
