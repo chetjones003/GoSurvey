@@ -29,10 +29,18 @@ not the tilted axis — the bug that made the first attempt 1.5% off). `TryBoole
 Planar` grows a tilted branch: the axis crosses two planar faces at an angle, footprint clear →
 **INTERSECT** builds the plug, volume `π r² · axialGap` exact.
 
+### Tilted SUBTRACT — an elliptical-mouthed bore (2026-09-02)
+
+`BuildTiltedBore`: each crossed face bored with an ellipse (arcs built about the face's outward
+normal so the hole winds right), an **inward** cylinder wall spanning the two ellipse planes
+(`CylinderCutZExtent`'s 2-ellipse branch gives its z-bounds). `TryBooleanCylinderThroughPlanar`'s
+tilted branch now routes `box − tilted cylinder`. Volume `vol(P) − π r² · axialGap` exact.
+
 ### Deferred to the next PR / B2b-2
 
-- **UNION / SUBTRACT** with a tilted cylinder (`BooleanObliqueCylinder` still refused for those) —
-  needs the elliptical-mouthed boss / bore.
+- **UNION** with a tilted cylinder (`BooleanObliqueCylinder` still refused) — the elliptical-mouthed
+  *boss* (stub with one elliptical and one circular end).
+- `cylinder − box` tilted (a notch).
 - Isolines on a sliced cylinder face still draw full height (visual only).
 - Everything B2b-2: cylinder ∩ cylinder (quartic), sphere ∩ cylinder, non-elliptical cone sections.
 
