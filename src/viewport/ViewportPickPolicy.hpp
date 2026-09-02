@@ -28,7 +28,10 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
          // list was never extended when ALIGN joined them, so ALIGN alone built its box from SNAPPED
          // coordinates. Nobody decided that; it is the per-command accident an unstated rule
          // produces, and closing it is part of REQ-121 rather than a separate fix.
-         (cmd.active == K::Align && cmd.alignPhase == AppCommandState::AlignPhase::PickSelection);
+         (cmd.active == K::Align && cmd.alignPhase == AppCommandState::AlignPhase::PickSelection) ||
+         // REQ-314: EXTRUDE's SelectProfiles step is the same accumulate-and-Enter selection shape.
+         (cmd.active == K::Extrude &&
+          cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles);
 }
 
 /// What a left-click in the **model-space** viewport means for the currently active command.
@@ -144,6 +147,12 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Rotate:
     return cmd.rotatePhase == AppCommandState::RotatePhase::PickSelection ? R::SelectionAccumulate
                                                                           : R::SnappedPointPick;
+  // EXTRUDE (REQ-314): select closed polylines / circles (the accumulate-and-Enter shape its
+  // siblings use), then a height that is either typed or picked off the cursor ray — a snapped
+  // point pick, resolved to a height by SubmitExtrudeViewportPick.
+  case K::Extrude:
+    return cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles ? R::SelectionAccumulate
+                                                                            : R::SnappedPointPick;
   case K::Align:
     return cmd.alignPhase == AppCommandState::AlignPhase::PickSelection ? R::SelectionAccumulate
                                                                        : R::SnappedPointPick;

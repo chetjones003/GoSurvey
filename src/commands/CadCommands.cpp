@@ -11753,6 +11753,18 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::Extrude) {
+    if (st.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) {
+      // A finished fence merges into the accumulating selection; the phase advances only on Enter —
+      // the same shape MOVE/COPY's PickSelection uses (D-2026-08-25-n).
+      if (st.selBoxWaitingSecond)
+        finishBox();
+      return;
+    }
+    SubmitExtrudeViewportPick(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::Circle) {
     switch (st.circlePhase) {
     case AppCommandState::CirclePhase::WaitCenterOrMode:
@@ -24048,6 +24060,205 @@ void CadExtrudeSelection(AppCommandState& st, const std::string& rest, std::vect
 }
 
 // -------------------------------------------------------------------------------------------------
+// The prompted EXTRUDE command (REQ-314 / ADR-046). A bare EXTRUDE asks for objects (unless some are
+// already selected), then a height — typed, or dragged from the cursor with a live ghost. The ghost
+// and the commit both go through CadBuildExtrudeSolids, so the ghost cannot show a shape the click
+// would not build (the same one-source-of-truth rule the prompted solid primitives follow).
+// -------------------------------------------------------------------------------------------------
+
+namespace {
+
+/// Gather every eligible profile from the current selection. Returns the eligible count; \p skipped
+/// is how many selected objects were not a closed polyline or circle.
+int GatherExtrudeProfiles(const AppCommandState& st, std::vector<brep::Profile>* out, int* skipped) {
+  out->clear();
+  int skip = 0;
+  for (const SelectedEntity& sel : st.selection) {
+    brep::Profile p;
+    if (ExtrudeProfileFromSelection(st, sel, &p))
+      out->push_back(std::move(p));
+    else
+      ++skip;
+  }
+  if (skipped)
+    *skipped = skip;
+  return static_cast<int>(out->size());
+}
+
+} // namespace
+
+void CancelExtrudeCommand(AppCommandState& st) {
+  st.extrudePhase = AppCommandState::ExtrudePhase::SelectProfiles;
+  st.extrudeProfiles.clear();
+  st.extrudeHeightPickValid = false;
+  st.extrudeHeightPick = 0.0;
+}
+
+std::string CadExtrudePromptText(const AppCommandState& st) {
+  if (st.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) {
+    return "EXTRUDE — select closed polylines or circles, Enter when done. ESC cancels.";
+  }
+  std::string s = "EXTRUDE — specify height of extrusion";
+  if (st.extrudeHeightPickValid) {
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), " <%.4g>", st.extrudeHeightPick);
+    s += buf;
+  }
+  s += ": type a value or click. ESC cancels.";
+  return s;
+}
+
+/// Move to the height phase if the selection holds at least one profile; otherwise report and stay.
+static void ExtrudeEnterHeightPhase(AppCommandState& st, std::vector<std::string>& log) {
+  int skipped = 0;
+  const int n = GatherExtrudeProfiles(st, &st.extrudeProfiles, &skipped);
+  if (n == 0) {
+    log.push_back("EXTRUDE — nothing selected can be extruded (need a closed polyline or a circle).");
+    st.extrudePhase = AppCommandState::ExtrudePhase::SelectProfiles;
+    return;
+  }
+  if (skipped > 0)
+    log.push_back("EXTRUDE — " + std::to_string(skipped) + " selected object(s) are not profiles and were ignored.");
+  st.extrudePhase = AppCommandState::ExtrudePhase::WaitHeight;
+  st.extrudeHeightPickValid = false;
+  log.push_back(CadExtrudePromptText(st));
+}
+
+void StartExtrudeCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelExtrudeCommand(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Extrude;
+  st.lastCommand = AppCommandState::Kind::Extrude;
+  st.selBoxWaitingSecond = false;
+
+  if (!st.selection.empty()) {
+    ExtrudeEnterHeightPhase(st, log);
+    if (st.extrudePhase == AppCommandState::ExtrudePhase::WaitHeight)
+      return;
+    // fell back to SelectProfiles — nothing usable was selected; drop that selection and ask.
+    st.selection.clear();
+  }
+  st.extrudePhase = AppCommandState::ExtrudePhase::SelectProfiles;
+  log.push_back(CadExtrudePromptText(st));
+}
+
+bool CadBuildExtrudeSolids(const AppCommandState& st, double height, std::vector<brep::Solid>* out) {
+  out->clear();
+  if (st.extrudeProfiles.empty() || !std::isfinite(height) || height == 0.0)
+    return false;
+  for (const brep::Profile& p : st.extrudeProfiles) {
+    brep::Solid s;
+    brep::Problem why = brep::Problem::Ok;
+    if (!brep::Extrude(p, height, &s, &why)) {
+      out->clear();
+      return false;
+    }
+    out->push_back(std::move(s));
+  }
+  return !out->empty();
+}
+
+void CadResolveExtrudePick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray) {
+  st.extrudeHeightPickValid = false;
+  if (st.active != AppCommandState::Kind::Extrude ||
+      st.extrudePhase != AppCommandState::ExtrudePhase::WaitHeight || st.extrudeProfiles.empty())
+    return;
+
+  // The extrusion axis: the first profile's plane normal, through its plane origin. Height is the
+  // closest approach between that axis and the cursor ray — exactly the maths SolidPickKind::Height
+  // uses, and for the same reason: the cursor sits ON the work plane, so its offset along the axis
+  // is only readable from the ray. Plan view has no ray, so it has no answer; the prompt says so.
+  (void)cursorOnPlane;
+  if (!ray || !ray->valid())
+    return;
+  const ucs::Ucs& plane = st.extrudeProfiles.front().plane;
+  const ray3d::Vec3 axisDir = plane.zAxis;
+  const ray3d::Vec3 w0 = ray3d::Sub(plane.origin, ray->origin);
+  const double b = ray3d::Dot(axisDir, ray->dir);
+  const double den = 1.0 - b * b;
+  if (!(den > 1e-9))
+    return;
+  const double dv = ray3d::Dot(axisDir, w0);
+  const double ev = ray3d::Dot(ray->dir, w0);
+  const double h = (b * ev - dv) / den;
+  if (!std::isfinite(h) || std::fabs(h) <= 1e-9)
+    return;
+  st.extrudeHeightPick = h;
+  st.extrudeHeightPickValid = true;
+}
+
+static void CommitExtrude(AppCommandState& st, double height, std::vector<std::string>& log) {
+  std::vector<brep::Solid> built;
+  if (!CadBuildExtrudeSolids(st, height, &built)) {
+    log.push_back("EXTRUDE — that height does not produce a solid; try another value.");
+    return;
+  }
+  PushUndoSnapshot(st, "Extrude");
+  for (brep::Solid& s : built) {
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+    log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+  }
+  BumpCadGpuCache(st);
+  st.selection.clear();
+  CancelExtrudeCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+bool HandleExtrudeTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Extrude)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+
+  if (st.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) {
+    if (!line.empty())
+      return false;  // a name / coordinate here means nothing; leave the command running
+    if (st.selection.empty()) {
+      log.push_back("EXTRUDE — nothing selected. Click a closed polyline or circle, or ESC.");
+      return true;
+    }
+    ExtrudeEnterHeightPhase(st, log);
+    return true;
+  }
+
+  // WaitHeight.
+  if (line.empty()) {
+    if (st.extrudeHeightPickValid) {
+      CommitExtrude(st, st.extrudeHeightPick, log);
+    } else {
+      log.push_back("EXTRUDE — type a height, or move the cursor to a view where one can be read.");
+    }
+    return true;
+  }
+  char* end = nullptr;
+  const double h = std::strtod(line.c_str(), &end);
+  if (!end || *end != '\0' || !std::isfinite(h) || h == 0.0) {
+    log.push_back("EXTRUDE — \"" + line + "\" is not a height. Type a non-zero number, or ESC.");
+    return true;
+  }
+  CommitExtrude(st, h, log);
+  return true;
+}
+
+void SubmitExtrudeViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  (void)wx;
+  (void)wy;
+  if (st.active != AppCommandState::Kind::Extrude)
+    return;
+  if (st.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) {
+    // Selection accumulation itself is handled by the shared click path; a click here only advances
+    // once the user presses Enter. Nothing to do.
+    return;
+  }
+  if (!st.extrudeHeightPickValid) {
+    log.push_back("EXTRUDE — no height under the cursor here; type a value, or orbit the view.");
+    return;
+  }
+  CommitExtrude(st, st.extrudeHeightPick, log);
+}
+
+// -------------------------------------------------------------------------------------------------
 // The prompted form of the seven primitives (REQ-313 as amended).
 //
 // `CYLINDER` on its own asks for the base point, then for its dimensions by letter — R for radius,
@@ -25372,6 +25583,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back(SolidVerbUpper(st.solidKind) + " canceled.");
     CancelSolidCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Extrude) {
+    log.push_back("EXTRUDE canceled.");
+    CancelExtrudeCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
   else if (st.active == AppCommandState::Kind::FeatureLine)
@@ -26019,6 +26234,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         st.extendBoundaries.clear();
         log.push_back("EXTEND — finished.");
       }
+    } else if (st.active == K::Extrude) {
+      // Enter confirms the selected profiles (SelectProfiles) or commits at the cursor height
+      // (WaitHeight) — HandleExtrudeTextInput handles both, so the empty line is not swallowed here.
+      (void)HandleExtrudeTextInput("", st, log);
     } else if (st.active == K::Offset) {
       using OP = AppCommandState::OffsetPhase;
       if (st.offsetPhase == OP::WaitDistanceOrThrough)
@@ -26326,7 +26545,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (plotTok == "extrude" || plotTok == "ext") {
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
-      CadExtrudeSelection(st, restOfLine, log);
+      // A bare verb opens the prompted form (select objects, then a typed or dragged height); a
+      // height argument is the one-line shortcut. The same report-or-set split the solid primitives
+      // use.
+      if (StringUtil::trimCopy(restOfLine).empty())
+        StartExtrudeCommand(st, log);
+      else
+        CadExtrudeSelection(st, restOfLine, log);
       return;
     }
     // `PERSPECTIVE ON` in one line; a bare `PERSPECTIVE` reports the current projection — the same
@@ -27739,6 +27964,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleSolidTextInput(line, st, log))
       return;
     log.push_back(CadSolidPromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Extrude) {
+    if (HandleExtrudeTextInput(line, st, log))
+      return;
+    log.push_back(CadExtrudePromptText(st));
     return;
   }
 

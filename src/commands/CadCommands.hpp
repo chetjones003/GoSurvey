@@ -1394,6 +1394,11 @@ struct AppCommandState {
     /// carry, and that difference is data (\ref SolidParamSpec), not control flow — seven near-identical
     /// state machines is exactly the duplication that lets one of them quietly miss a fix.
     Solid,
+    /// EXTRUDE (REQ-314 / ADR-046, GitHub #147): select closed polylines / circles, then give a
+    /// height — typed, or dragged from the cursor with a live ghost. Its own Kind because it has a
+    /// select-objects phase and then a height phase, neither of which the primitive `Solid` command
+    /// has.
+    Extrude,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1454,6 +1459,7 @@ struct AppCommandState {
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     case Kind::InsertBlock:        return "INSERT";
     case Kind::Solid:              return "SOLID";  // REQ-313: one Kind, all seven primitives
+    case Kind::Extrude:           return "EXTRUDE";
     default:                  return "";
     }
   }
@@ -2072,6 +2078,23 @@ struct AppCommandState {
   /// into the radius. Halved in exactly one place, so a diameter can never reach the kernel as a
   /// radius.
   bool solidPendingIsDiameter = false;
+
+  // --- The EXTRUDE command (REQ-314 / ADR-046, GitHub #147) --------------------------------------
+
+  enum class ExtrudePhase {
+    SelectProfiles,  ///< Accumulate a selection of closed polylines / circles; Enter confirms.
+    WaitHeight,      ///< Profiles gathered: type a height, or move the cursor and click.
+  } extrudePhase = ExtrudePhase::SelectProfiles;
+
+  /// The profiles gathered when the command left \ref ExtrudePhase::SelectProfiles, in STORAGE
+  /// coordinates — kept so the live ghost and the commit build from exactly the same input, the
+  /// same one-source-of-truth rule the prompted solid command follows.
+  std::vector<brep::Profile> extrudeProfiles;
+  /// What the cursor is currently worth as a height, republished every frame from the viewport (the
+  /// only place the pick ray lives). Read by the ghost and by the click that commits it. Signed
+  /// along the first profile's plane normal; positive is the +normal side.
+  bool extrudeHeightPickValid = false;
+  double extrudeHeightPick = 0.0;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -4017,11 +4040,43 @@ void CancelSolidCommand(AppCommandState& st);
 /// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
 
-/// EXTRUDE (REQ-314 / ADR-046 increment 1b, GitHub issue #147): turn each eligible entity in the
-/// current selection — a closed polyline or a circle — into a B-rep solid, swept \p rest (a signed
-/// height) perpendicular to the profile's plane. One typed line, one undo step; the source
-/// entities are left in place. Every failure is reported by name and stores nothing (REQ-201).
+/// EXTRUDE (REQ-314 / ADR-046, GitHub issue #147): turn each eligible entity in the current
+/// selection — a closed polyline or a circle — into a B-rep solid, swept a signed height
+/// perpendicular to the profile's plane. One undo step; the source entities are left in place.
+/// Every failure is reported by name and stores nothing (REQ-201).
+///
+/// `CadExtrudeSelection` is the one-line shortcut `EXTRUDE <height>`. `StartExtrudeCommand` is the
+/// prompted form a bare `EXTRUDE` opens: select objects (if none are yet), then a height that can
+/// be typed or dragged from the cursor with a live ghost.
 void CadExtrudeSelection(AppCommandState& st, const std::string& rest, std::vector<std::string>& log);
+void StartExtrudeCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelExtrudeCommand(AppCommandState& st);
+
+/// The prompt for whatever the EXTRUDE command is waiting for — the selection, or the height with
+/// the live cursor value shown. Shared by the command line and the at-cursor dynamic input (REQ-304).
+[[nodiscard]] std::string CadExtrudePromptText(const AppCommandState& st);
+
+/// Feed one typed line to a running EXTRUDE command. Returns false when the text was not understood,
+/// which leaves the command where it was rather than cancelling it.
+[[nodiscard]] bool HandleExtrudeTextInput(const std::string& line, AppCommandState& st,
+                                          std::vector<std::string>& log);
+
+/// A viewport click during EXTRUDE: confirms the selection (SelectProfiles) or commits the solid at
+/// the cursor-resolved height (WaitHeight).
+void SubmitExtrudeViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Resolve what the cursor is currently worth as an extrusion height and publish it on \p st as
+/// `extrudeHeightPickValid` / `extrudeHeightPick`. Domain logic, not viewport logic — it is the
+/// closest approach between the cursor ray and the profile's plane normal, the same geometry the
+/// prompted solid command's Height pick uses. \p cursorOnPlane is storage coordinates; \p ray is
+/// the pick ray, or null in plan view (where a height cannot be read off the screen).
+void CadResolveExtrudePick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray);
+
+/// The candidate solids the running EXTRUDE command describes at \p height, for the live ghost and
+/// for the commit — one function, so the ghost cannot show a shape the click would not build.
+/// Returns false (and clears \p out) when the numbers do not yet describe a solid.
+[[nodiscard]] bool CadBuildExtrudeSolids(const AppCommandState& st, double height,
+                                         std::vector<brep::Solid>* out);
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need

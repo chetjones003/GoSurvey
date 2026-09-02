@@ -81,22 +81,39 @@ assertions.
 - The self-intersection screen tests chords, not arc bulges; `Validate` still gates every result,
   so a subtler self-overlap is refused as broken topology rather than stored.
 
-### Increment 1b — the EXTRUDE command (done, 2026-09-02, same branch → PR #NNN)
+### Increment 1b — the EXTRUDE command, prompted + one-line (done, 2026-09-02, PR #208)
 
-`EXTRUDE <height>` operates on the current selection: each **closed polyline** or **circle** in it
-is turned into a B-rep solid swept `<height>` perpendicular to its plane. One typed line, one undo
-step, source entities left in place. Ineligible selections (a line, an open polyline) are reported,
-not silently swallowed (REQ-201). Bad height refused by name.
+**Bare `EXTRUDE`** is the prompted form: if nothing is selected it asks *"select closed polylines
+or circles, Enter when done"* (the accumulate-and-Enter selection shape MOVE/COPY use); then
+*"specify height of extrusion <cursor>:"* — a typed value, or **the cursor height dragged live**
+with a wireframe ghost of the solid and a measuring line along the axis. **`EXTRUDE <height>`** is
+the one-line shortcut on the current selection. `EXT` is an alias. One undo step; source entities
+kept. Ineligible selections and a bad height are reported by name (REQ-201).
 
-- `CadExtrudeSelection` + `ExtrudeProfileFromSelection` in `CadCommands.cpp`; dispatch beside
-  `SOLIDLIST`; header decl beside `CadReportSolids`.
-- Profile plane fitted by Newell's method, oriented "up" for a roughly-horizontal profile so
-  `EXTRUDE 10` rises. Coordinates stay in the storage frame (ADR-025 D2) the `cadSolids` store uses.
-- Reuses REQ-313's solid store, `.gs` serialization (recipe-less solids already round-trip),
-  rendering, snapping and selection — no change to any of them.
-- New transcript `tests/headless/transcripts/req314-extrude.txt`: rectangle == box, circle ==
-  cylinder, undo/redo, line-in-selection reported, `.gs` save/reopen with topology intact.
+Wiring — the "six places" a 3D command touches:
 
-**Not in 1b** (later increments): the interactive "Select objects to extrude / Specify height of
-extrusion" prompt with a drag preview; arc-bulge polylines; multi-loop profiles; DELOBJ (source is
-always kept). `EXT` is an accepted alias.
+- **Kind + state:** `AppCommandState::Kind::Extrude`, `ExtrudePhase`, `extrudeProfiles`,
+  `extrudeHeightPick{,Valid}`.
+- **Command layer** (`CadCommands.cpp`): `StartExtrudeCommand` / `HandleExtrudeTextInput` /
+  `SubmitExtrudeViewportPick` / `CadResolveExtrudePick` / `CadBuildExtrudeSolids` /
+  `CadExtrudePromptText` / `CancelExtrudeCommand`; `ExtrudeProfileFromSelection` (closed polyline or
+  circle → `brep::Profile` in storage coords, plane by Newell's method oriented "up").
+- **Click routing** (`ViewportPickPolicy.hpp`): `SelectProfiles → SelectionAccumulate`,
+  `WaitHeight → SnappedPointPick`; added to `ViewportUseRawWorldForSelectionRectPick`.
+- **Pick dispatch** (`CadCommands.cpp` `SubmitViewportPickImpl`): a fence merges into the selection
+  during SelectProfiles; a click commits at the cursor height during WaitHeight.
+- **Enter handling** (`ProcessCommandLineSubmit`): routes to `HandleExtrudeTextInput("")`.
+- **Prompt + preview** (`CadUi.cpp` `CommandInputHint`, `CadResolveExtrudePick` call site;
+  `CadRubberPreview.cpp` ghost) — the ghost and the commit both go through `CadBuildExtrudeSolids`.
+- **Cancel** (`CancelActiveCommand`): named, `CancelExtrudeCommand`.
+
+Reuses REQ-313's solid store, `.gs` serialization (recipe-less solids already round-trip),
+rendering, snapping and selection unchanged.
+
+Transcript `tests/headless/transcripts/req314-extrude.txt` covers both flows: rectangle == box,
+circle == cylinder, undo/redo, line-in-selection reported, the bare-`EXTRUDE` → select → Enter →
+typed-height flow, and `.gs` save/reopen with topology intact. The **live drag preview** is
+manual-verification only (no headless frame loop / mouse — `project_gui_hover_not_automatable`).
+
+**Not in 1b:** arc-bulge polylines; multi-loop profiles; DELOBJ (source always kept); picking a
+height in plan view (no ray — the prompt says to type one or orbit).

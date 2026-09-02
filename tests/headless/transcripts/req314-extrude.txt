@@ -61,11 +61,30 @@ CMD EXTRUDE 3
 EXPECT LOG "nothing in the selection could be extruded"
 EXPECT SOLIDS 2
 
+# --- The prompted form: bare EXTRUDE, select, Enter, then a typed height ----------------------
+CMD POLYLINE
+CMD 0,100
+CMD 30,100
+CMD 30,120
+CMD 0,120
+CMD CLOSE
+ESC
+CMD EXTRUDE
+BOX -2 98 32 122
+EXPECT SELECTED 1
+CMD
+EXPECT LOG "specify height of extrusion"
+CMD 7
+EXPECT SOLIDS 3
+# 30 x 20 x 7 = 4200. Area 2*600 + perimeter 100 * 7 = 1200 + 700 = 1900.
+EXPECT SOLIDPROPS 2 4200 1900 8 12 6
+
 # --- Solids survive a .gs save and reopen with topology intact --------------------------------
 SAVEAS %OUT%/req314-extrude.gs
 OPEN %OUT%/req314-extrude.gs
-EXPECT SOLIDS 2
+EXPECT SOLIDS 3
 EXPECT SOLIDPROPS 0 1200 800 8 12 6
 EXPECT SOLIDPROPS 1 452.3893421169302 326.7256359733385 4 6 4
+EXPECT SOLIDPROPS 2 4200 1900 8 12 6
 
 CHECK ALL
