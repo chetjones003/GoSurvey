@@ -484,4 +484,30 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
                            static_cast<float>(tip.z));
     }
   }
+
+  // --- EXTRUDE: the candidate solid(s) as a wireframe ghost, rebuilt from the cursor height every
+  //     frame (REQ-314 / ADR-046). Same builder the click commits through, so the ghost cannot show
+  //     a shape the commit would not build.
+  if (cmd.active == AppCommandState::Kind::Extrude &&
+      cmd.extrudePhase == AppCommandState::ExtrudePhase::WaitHeight && cmd.extrudeHeightPickValid) {
+    std::vector<brep::Solid> ghosts;
+    if (CadBuildExtrudeSolids(cmd, cmd.extrudeHeightPick, &ghosts)) {
+      for (const brep::Solid& g : ghosts) {
+        std::vector<double> segs;
+        brep::Problem why = brep::Problem::Ok;
+        if (brep::TessellateEdges(g, kSolidChordToleranceFt, &segs, &why)) {
+          for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+            PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                                 static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+        }
+      }
+    }
+    // The measuring line along the extrusion axis, so the height reads as a distance.
+    if (!cmd.extrudeProfiles.empty()) {
+      const ucs::Ucs& pl = cmd.extrudeProfiles.front().plane;
+      const ray3d::Vec3 tip = ray3d::Add(pl.origin, ray3d::Scale(pl.zAxis, cmd.extrudeHeightPick));
+      PushRubberSegViewRel(rubberLines, pl.origin.x, pl.origin.y, tip.x, tip.y, 0., 0.,
+                           static_cast<float>(pl.origin.z), static_cast<float>(tip.z));
+    }
+  }
 }

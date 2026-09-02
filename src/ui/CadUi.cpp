@@ -8841,6 +8841,11 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     solidHint = CadSolidPromptText(cmd);
     return solidHint.c_str();
   }
+  if (cmd.active == AppCommandState::Kind::Extrude) {
+    static std::string extrudeHint;
+    extrudeHint = CadExtrudePromptText(cmd);
+    return extrudeHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Circle) {
     using CP = AppCommandState::CirclePhase;
     switch (cmd.circlePhase) {
@@ -13235,6 +13240,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // same resolution the mouse does. This call site supplies the one thing the command layer cannot
     // reach — the pick RAY, which is the only way a height can be read off the screen.
     CadResolveSolidPick(cmd, ray3d::Vec3{rawX, rawY, rawZ}, cursorRayPtr);
+    // EXTRUDE's height, resolved the same way and for the same reason (REQ-314).
+    CadResolveExtrudePick(cmd, ray3d::Vec3{rawX, rawY, rawZ}, cursorRayPtr);
 
     if (outCursorRawX)
       *outCursorRawX = rawX;
