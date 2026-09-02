@@ -1258,6 +1258,33 @@ TEST_CASE("A profile winding does not matter and the builder orients the result"
   REQUIRE(brep::Validate(b) == Problem::Ok);
   REQUIRE(brep::ComputeMassProperties(a).volume == Approx(brep::ComputeMassProperties(b).volume).epsilon(1e-9));
   REQUIRE(brep::ComputeMassProperties(a).volume == Approx(24.0).epsilon(1e-9));
+
+  // The same, with an arc in the loop — the reversal path has to permute the edge list and flip
+  // each sweep, which the all-straight case above does not exercise.
+  const double r = 5.0, hgt = 3.0;
+  brep::Profile ccwHalf;
+  ccwHalf.plane = World();
+  ccwHalf.vertices = {Vec3{r, 0, 0}, Vec3{-r, 0, 0}};
+  brep::ProfileEdge topArc;
+  topArc.arc = true;
+  topArc.centre = Vec3{0, 0, 0};
+  topArc.sweep = kPi;
+  ccwHalf.edges = {topArc, brep::ProfileEdge{}};
+
+  brep::Profile cwHalf;
+  cwHalf.plane = World();
+  cwHalf.vertices = {Vec3{r, 0, 0}, Vec3{-r, 0, 0}};
+  brep::ProfileEdge topArcCw = topArc;
+  topArcCw.sweep = -kPi;  // diameter first, then the arc back over the top the CW way
+  cwHalf.edges = {brep::ProfileEdge{}, topArcCw};
+
+  Solid hc, hw;
+  REQUIRE(brep::Extrude(ccwHalf, hgt, &hc, &why));
+  REQUIRE(brep::Extrude(cwHalf, hgt, &hw, &why));
+  REQUIRE(brep::Validate(hw) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(hw).volume ==
+          Approx(brep::ComputeMassProperties(hc).volume).epsilon(1e-9));
+  REQUIRE(brep::ComputeMassProperties(hw).volume == Approx(0.5 * kPi * r * r * hgt).epsilon(1e-9));
 }
 
 TEST_CASE("Extrude refuses bad input by name and stores nothing", "[brep][req314]") {
