@@ -235,7 +235,13 @@ enum class Problem {
   /// (one whose material is on its +radial side) cannot arise — and a hollow revolve is a boolean
   /// SUBTRACT, not a profile shape.
   RevolveProfileMissesAxis,
-  RevolveArcInProfile         ///< An arc edge in a revolved profile (increment 2b — sphere / torus portions).
+  RevolveArcInProfile,        ///< An arc edge in a revolved profile (increment 2b — sphere / torus portions).
+
+  // --- Slice (REQ-314 increment 3). ---
+  SliceDegeneratePlane,  ///< A slicing plane whose normal is zero or not finite.
+  SlicePlaneMissesSolid, ///< The plane does not pass through the solid — nothing to cut.
+  SliceCurvedFace,       ///< The solid has a curved face; increment 3a slices planar-faced solids only.
+  SliceResultComplex     ///< The cut cross-section is not a single loop, or a side splits into pieces.
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -356,6 +362,24 @@ struct Profile {
 /// (\ref Problem::RevolveProfileCrossesAxis), and a bad angle (\ref Problem::NonPositiveAngle).
 [[nodiscard]] bool Revolve(const Profile& profile, const Vec3& axisPoint, const Vec3& axisDir,
                            double angleRad, Solid* out, Problem* outWhy);
+
+/// Which side (or sides) of the cut \ref Slice keeps. "Above" is the `+planeNormal` side.
+enum class SliceKeep : std::uint8_t { Above, Below, Both };
+
+/// Cut \p solid by the unbounded plane through \p planePoint with unit \p planeNormal, and write the
+/// kept piece(s) to \p outAbove and/or \p outBelow (either may be null, and one is left untouched
+/// when \p keep is a single side). Each kept piece is a valid closed solid: the cut adds one new
+/// planar face bounded by the plane's intersection with the solid's faces.
+///
+/// Increment 3 of REQ-314. **Planar-faced solids only** (a box, a straight extrusion, a revolve of a
+/// rectilinear profile) — a curved face is refused (\ref Problem::SliceCurvedFace), as an oblique
+/// plane through a cylinder cuts an ellipse, which the kernel's `{Line, Arc}` curves cannot hold;
+/// that case arrives with the analytic Booleans. A plane that misses the solid, or one that would
+/// split a kept side into disjoint pieces, is refused rather than producing a sliver
+/// (\ref Problem::SlicePlaneMissesSolid, \ref Problem::SliceResultComplex). Nothing is written unless
+/// every kept piece passes \ref Validate (REQ-201). The results carry no recipe.
+[[nodiscard]] bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                         SliceKeep keep, Solid* outAbove, Solid* outBelow, Problem* outWhy);
 
 // ---------------------------------------------------------------------------------------------
 // Validity.

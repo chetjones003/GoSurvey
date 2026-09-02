@@ -1519,3 +1519,110 @@ TEST_CASE("Revolve refuses bad input by name and stores nothing", "[brep][req314
     REQUIRE(why == Problem::RevolveArcInProfile);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Feature operations — Slice (REQ-314 / ADR-046 increment 3, GitHub issue #147).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Slice of a box in half gives two boxes whose volumes sum to the original", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(At(50, 50, 0), 20, 12, 8, &box, &why));
+  const double v0 = brep::ComputeMassProperties(box).volume;
+
+  Solid top, bot;
+  // A horizontal plane at z = 3 (the box rises from z = 0 to z = 8).
+  REQUIRE(brep::Slice(box, Vec3{50, 50, 3}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &top, &bot, &why));
+  REQUIRE(brep::Validate(top) == Problem::Ok);
+  REQUIRE(brep::Validate(bot) == Problem::Ok);
+  const brep::MassProperties mt = brep::ComputeMassProperties(top);
+  const brep::MassProperties mb = brep::ComputeMassProperties(bot);
+  REQUIRE(mt.valid);
+  REQUIRE(mb.valid);
+  REQUIRE(mt.volume + mb.volume == Approx(v0).epsilon(1e-9));
+  REQUIRE(mt.volume == Approx(20.0 * 12.0 * 5.0).epsilon(1e-9));  // z 3..8
+  REQUIRE(mb.volume == Approx(20.0 * 12.0 * 3.0).epsilon(1e-9));  // z 0..3
+}
+
+TEST_CASE("Slice of a box by an oblique plane keeps both wedges", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const double v0 = brep::ComputeMassProperties(box).volume;
+
+  Solid a, b;
+  // MakeBox centres the box in X/Y and rises from z=0, so its centre is (0,0,5).
+  REQUIRE(brep::Slice(box, Vec3{0, 0, 5}, ray3d::Normalize(Vec3{1, 0, 1}), brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(brep::Validate(a) == Problem::Ok);
+  REQUIRE(brep::Validate(b) == Problem::Ok);
+  const double va = brep::ComputeMassProperties(a).volume;
+  const double vb = brep::ComputeMassProperties(b).volume;
+  REQUIRE(va + vb == Approx(v0).epsilon(1e-9));
+  REQUIRE(va == Approx(v0 / 2.0).epsilon(1e-9));  // a plane through the centre halves it
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(a, 0.01, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(va).epsilon(1e-9));
+}
+
+TEST_CASE("Slice keeps only the requested side", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 6, 6, 6, &box, &why));
+
+  Solid above;
+  Solid untouched;
+  brep::Problem w2 = brep::Problem::Ok;
+  REQUIRE(brep::Slice(box, Vec3{0, 0, 2}, Vec3{0, 0, 1}, brep::SliceKeep::Above, &above, &untouched, &why));
+  REQUIRE(brep::Validate(above) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(above).volume == Approx(6.0 * 6.0 * 4.0).epsilon(1e-9));
+  // The `below` output was not requested, so it stays empty.
+  REQUIRE(untouched.faces.empty());
+  (void)w2;
+}
+
+TEST_CASE("Slice of an extruded L is valid and conserves volume", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  // An L, extruded 4.
+  const brep::Profile pr = /* reuse PolyProfile from the extrude section */ [] {
+    brep::Profile p;
+    p.plane = World();
+    for (const ucs::Point2D& q : {ucs::Point2D{0, 0}, {3, 0}, {3, 1}, {1, 1}, {1, 3}, {0, 3}})
+      p.vertices.push_back(ucs::PlaneToWorld(World(), q));
+    p.edges.assign(6, brep::ProfileEdge{});
+    return p;
+  }();
+  Solid solid;
+  REQUIRE(brep::Extrude(pr, 4.0, &solid, &why));
+  const double v0 = brep::ComputeMassProperties(solid).volume;
+
+  Solid a, b;
+  REQUIRE(brep::Slice(solid, Vec3{0, 0, 1.5}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(brep::Validate(a) == Problem::Ok);
+  REQUIRE(brep::Validate(b) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(a).volume + brep::ComputeMassProperties(b).volume ==
+          Approx(v0).epsilon(1e-9));
+}
+
+TEST_CASE("Slice refuses what it cannot do, by name", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 8, 8, 8, &box, &why));
+  Solid a, b;
+
+  SECTION("a plane that misses the solid") {
+    REQUIRE_FALSE(brep::Slice(box, Vec3{0, 0, 20}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+  }
+  SECTION("a degenerate plane normal") {
+    REQUIRE_FALSE(brep::Slice(box, Vec3{0, 0, 4}, Vec3{0, 0, 0}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceDegeneratePlane);
+  }
+  SECTION("a curved solid") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &cyl, &why));
+    REQUIRE_FALSE(brep::Slice(cyl, Vec3{0, 0, 5}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceCurvedFace);
+  }
+}

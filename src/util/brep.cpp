@@ -4,7 +4,10 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <initializer_list>
+#include <map>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -516,6 +519,12 @@ const char* ProblemText(Problem p) {
     return "The profile must touch the revolve axis along one edge or at one point; a hollow revolve is a SUBTRACT.";
   case Problem::RevolveArcInProfile:
     return "This release revolves straight-edged profiles only (an arc would sweep a sphere or torus portion).";
+  case Problem::SliceDegeneratePlane: return "The slicing plane's normal is zero or not a finite number.";
+  case Problem::SlicePlaneMissesSolid: return "The slicing plane does not pass through the solid.";
+  case Problem::SliceCurvedFace:
+    return "This release slices solids with flat faces only (a box or a straight extrusion).";
+  case Problem::SliceResultComplex:
+    return "The cut would split the solid into disjoint pieces, which this release cannot represent.";
   }
   return "The solid is not valid.";
 }
@@ -1700,6 +1709,281 @@ bool Revolve(const Profile& profile, const Vec3& axisPoint, const Vec3& axisDir,
   if (why != Problem::Ok)
     return Fail(why, outWhy);
   *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Feature operations — Slice (REQ-314 / ADR-046 increment 3, GitHub issue #147).
+//
+// The first operation that operates on an existing solid's topology rather than building from a
+// profile, and the machinery the analytic Booleans reuse: classify each vertex against a plane,
+// clip the faces the plane crosses, and stitch the pieces back into closed shells with a new planar
+// cap. Increment 3a handles planar-faced solids; a curved face is refused, because an oblique plane
+// through a cylinder cuts an ellipse the kernel's `{Line, Arc}` curves cannot hold.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// A polygon plus the outward normal of the face it will become — the slice's working form before
+/// shared vertices and edges are welded back together.
+struct PolyFace {
+  std::vector<Vec3> ring;
+  Vec3 normal;
+};
+
+/// Signed area of \p ring about \p n: positive when the ring winds CCW seen from the +n side.
+[[nodiscard]] double RingSignedAreaAbout(const std::vector<Vec3>& ring, const Vec3& n) {
+  Vec3 acc{};
+  const std::size_t m = ring.size();
+  for (std::size_t i = 0; i < m; ++i)
+    acc = ray3d::Add(acc, ray3d::Cross(ring[i], ring[(i + 1) % m]));
+  return 0.5 * ray3d::Dot(acc, n);
+}
+
+/// Weld a set of planar polygons into a `Solid`: vertices merged by position, every undirected edge
+/// used by exactly two polygons once in each direction, each polygon one plane face. False (with a
+/// slice-flavoured \p outWhy) when the result does not `Validate`.
+[[nodiscard]] bool WeldPlanarSolid(const std::vector<PolyFace>& polys, double scale, Solid* out,
+                                   Problem* outWhy) {
+  const double weldEps = std::max(1e-7 * scale, 1e-12);
+  Solid s;
+  std::map<std::tuple<long long, long long, long long>, int> vmap;
+  auto quant = [&](double v) { return static_cast<long long>(std::llround(v / weldEps)); };
+  auto addV = [&](const Vec3& p) {
+    const auto k = std::make_tuple(quant(p.x), quant(p.y), quant(p.z));
+    const auto it = vmap.find(k);
+    if (it != vmap.end())
+      return it->second;
+    const int idx = AddVertex(&s, p);
+    vmap.emplace(k, idx);
+    return idx;
+  };
+  std::map<std::pair<int, int>, int> emap;
+
+  for (const PolyFace& pf : polys) {
+    if (pf.ring.size() < 3)
+      continue;
+    std::vector<int> vidx;
+    for (const Vec3& p : pf.ring) {
+      const int vi = addV(p);
+      if (vidx.empty() || vidx.back() != vi)
+        vidx.push_back(vi);
+    }
+    while (vidx.size() > 1 && vidx.front() == vidx.back())
+      vidx.pop_back();
+    if (vidx.size() < 3)
+      continue;
+
+    Loop lp;
+    const std::size_t m = vidx.size();
+    for (std::size_t i = 0; i < m; ++i) {
+      const int a = vidx[i];
+      const int b = vidx[(i + 1) % m];
+      if (a == b)
+        return Fail(Problem::SliceResultComplex, outWhy);
+      const std::pair<int, int> key{std::min(a, b), std::max(a, b)};
+      const auto it = emap.find(key);
+      int ei;
+      if (it != emap.end())
+        ei = it->second;
+      else {
+        ei = AddLine(&s, key.first, key.second);
+        emap.emplace(key, ei);
+      }
+      lp.uses.push_back(EdgeUse{ei, a > b});
+    }
+    Face f;
+    f.surface = PlaneSurface(pf.ring[0], ray3d::Normalize(pf.normal));
+    f.loops.push_back(std::move(lp));
+    s.faces.push_back(std::move(f));
+  }
+
+  if (s.faces.size() < 4)
+    return Fail(Problem::SliceResultComplex, outWhy);
+  AddSingleShell(&s);
+  const Problem why = Validate(s);
+  if (why != Problem::Ok) {
+    const bool topo = why == Problem::EdgeNotUsedTwice || why == Problem::EdgeOrientationInconsistent ||
+                      why == Problem::NotClosed;
+    return Fail(topo ? Problem::SliceResultComplex : why, outWhy);
+  }
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+} // namespace
+
+bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, SliceKeep keep,
+           Solid* outAbove, Solid* outBelow, Problem* outWhy) {
+  if (!FinitePoint(planePoint) || !FinitePoint(planeNormal) || !(ray3d::Length(planeNormal) > 1e-12))
+    return Fail(Problem::SliceDegeneratePlane, outWhy);
+  const Problem inWhy = Validate(solid);
+  if (inWhy != Problem::Ok)
+    return Fail(inWhy, outWhy);
+  for (const Face& f : solid.faces) {
+    if (f.surface.kind != SurfaceKind::Plane)
+      return Fail(Problem::SliceCurvedFace, outWhy);
+  }
+  for (const Edge& e : solid.edges) {
+    if (e.kind != CurveKind::Line)
+      return Fail(Problem::SliceCurvedFace, outWhy);
+  }
+
+  const Vec3 pn = ray3d::Normalize(planeNormal);
+  const double scale = ModelScale(solid);
+  const double eps = 1e-7 * scale;
+  auto sd = [&](const Vec3& p) { return ray3d::Dot(ray3d::Sub(p, planePoint), pn); };
+
+  bool anyAbove = false;
+  bool anyBelow = false;
+  for (const Vertex& v : solid.vertices) {
+    const double dv = sd(v.p);
+    if (dv > eps)
+      anyAbove = true;
+    else if (dv < -eps)
+      anyBelow = true;
+  }
+  if (!anyAbove || !anyBelow)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+
+  std::vector<PolyFace> above;
+  std::vector<PolyFace> below;
+  std::vector<std::pair<Vec3, Vec3>> cutSegs;
+
+  const double weldEps = std::max(1e-7 * scale, 1e-12);
+  auto same = [&](const Vec3& a, const Vec3& b) { return ray3d::Length(ray3d::Sub(a, b)) <= weldEps; };
+  auto addCutSeg = [&](const Vec3& a, const Vec3& b) {
+    if (same(a, b))
+      return;
+    for (const auto& s : cutSegs) {
+      if ((same(s.first, a) && same(s.second, b)) || (same(s.first, b) && same(s.second, a)))
+        return;  // an on-plane edge is shared by two faces; record it once
+    }
+    cutSegs.push_back({a, b});
+  };
+
+  for (const Face& f : solid.faces) {
+    std::vector<Vec3> P;
+    for (const EdgeUse& u : f.loops[0].uses) {
+      const Edge& e = solid.edges[static_cast<std::size_t>(u.edge)];
+      const int startV = u.reversed ? e.v1 : e.v0;
+      P.push_back(solid.vertices[static_cast<std::size_t>(startV)].p);
+    }
+    const std::size_t m = P.size();
+    std::vector<double> d(m);
+    bool fAbove = false;
+    bool fBelow = false;
+    for (std::size_t i = 0; i < m; ++i) {
+      d[i] = sd(P[i]);
+      if (d[i] > eps)
+        fAbove = true;
+      else if (d[i] < -eps)
+        fBelow = true;
+    }
+    // A boundary edge lying IN the cutting plane is part of the cap loop, whichever side the face is
+    // on. (The common case where the plane clips through a box edge.)
+    for (std::size_t i = 0; i < m; ++i) {
+      if (std::fabs(d[i]) <= eps && std::fabs(d[(i + 1) % m]) <= eps)
+        addCutSeg(P[i], P[(i + 1) % m]);
+    }
+    if (!fBelow) {
+      above.push_back(PolyFace{P, f.surface.frame.zAxis});
+      continue;
+    }
+    if (!fAbove) {
+      below.push_back(PolyFace{P, f.surface.frame.zAxis});
+      continue;
+    }
+
+    std::vector<Vec3> ra;
+    std::vector<Vec3> rb;
+    std::vector<Vec3> cross;
+    for (std::size_t i = 0; i < m; ++i) {
+      const std::size_t j = (i + 1) % m;
+      const double di = d[i];
+      const double dj = d[j];
+      if (di >= -eps)
+        ra.push_back(P[i]);
+      if (di <= eps)
+        rb.push_back(P[i]);
+      if ((di > eps && dj < -eps) || (di < -eps && dj > eps)) {
+        const double t = di / (di - dj);
+        const Vec3 x = ray3d::Add(P[i], ray3d::Scale(ray3d::Sub(P[j], P[i]), t));
+        ra.push_back(x);
+        rb.push_back(x);
+        cross.push_back(x);
+      } else if (std::fabs(di) <= eps && ((dj > eps) != (dj < -eps))) {
+        cross.push_back(P[i]);
+      }
+    }
+    if (cross.size() != 2)
+      return Fail(Problem::SliceResultComplex, outWhy);
+    if (ra.size() >= 3)
+      above.push_back(PolyFace{ra, f.surface.frame.zAxis});
+    if (rb.size() >= 3)
+      below.push_back(PolyFace{rb, f.surface.frame.zAxis});
+    addCutSeg(cross[0], cross[1]);
+  }
+
+  if (cutSegs.size() < 3)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+
+  // Chain the cut segments into one loop.
+  std::vector<Vec3> capRing;
+  std::vector<char> used(cutSegs.size(), 0);
+  capRing.push_back(cutSegs[0].first);
+  capRing.push_back(cutSegs[0].second);
+  used[0] = 1;
+  for (std::size_t guard = 0; guard <= cutSegs.size() + 2; ++guard) {
+    const Vec3 tail = capRing.back();
+    if (capRing.size() > 2 && same(tail, capRing.front())) {
+      capRing.pop_back();
+      break;
+    }
+    bool found = false;
+    for (std::size_t k = 0; k < cutSegs.size() && !found; ++k) {
+      if (used[k])
+        continue;
+      if (same(cutSegs[k].first, tail)) {
+        capRing.push_back(cutSegs[k].second);
+        used[k] = 1;
+        found = true;
+      } else if (same(cutSegs[k].second, tail)) {
+        capRing.push_back(cutSegs[k].first);
+        used[k] = 1;
+        found = true;
+      }
+    }
+    if (!found)
+      break;
+  }
+  for (char c : used) {
+    if (!c)
+      return Fail(Problem::SliceResultComplex, outWhy);  // cross-section is more than one loop
+  }
+  if (capRing.size() < 3)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+
+  std::vector<Vec3> capAbove = capRing;
+  if (RingSignedAreaAbout(capAbove, ray3d::Scale(pn, -1.0)) < 0.0)
+    std::reverse(capAbove.begin(), capAbove.end());
+  const std::vector<Vec3> capBelow(capAbove.rbegin(), capAbove.rend());
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+
+  if (wantAbove && outAbove) {
+    std::vector<PolyFace> a = above;
+    a.push_back(PolyFace{capAbove, ray3d::Scale(pn, -1.0)});
+    if (!WeldPlanarSolid(a, scale, outAbove, outWhy))
+      return false;
+  }
+  if (wantBelow && outBelow) {
+    std::vector<PolyFace> b = below;
+    b.push_back(PolyFace{capBelow, pn});
+    if (!WeldPlanarSolid(b, scale, outBelow, outWhy))
+      return false;
+  }
   return Succeed(outWhy);
 }
 
