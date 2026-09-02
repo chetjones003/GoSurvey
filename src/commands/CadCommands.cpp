@@ -6393,6 +6393,7 @@ const CmdEntry kRegistry[] = {
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
+    {"slice", "sl", "Cut selected solids with a plane (three points), keeping one side or both"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
@@ -11773,6 +11774,16 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       return;
     }
     SubmitRevolveViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Slice) {
+    if (st.slicePhase == AppCommandState::SlicePhase::SelectSolids) {
+      if (st.selBoxWaitingSecond)
+        finishBox();
+      return;
+    }
+    SubmitSliceViewportPick(st, wx, wy, log);
     return;
   }
 
@@ -24480,6 +24491,221 @@ void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vec
 }
 
 // -------------------------------------------------------------------------------------------------
+// The prompted SLICE command (REQ-314 / ADR-046 increment 3b). Select solids, three points for the
+// cutting plane, then a point on the side to keep (or B for both). Each sliced solid is replaced by
+// its kept piece(s) in one undo step; a solid the kernel cannot slice is reported and nothing in
+// the document changes (REQ-201).
+// -------------------------------------------------------------------------------------------------
+
+void CancelSliceCommand(AppCommandState& st) {
+  st.slicePhase = AppCommandState::SlicePhase::SelectSolids;
+  st.sliceSolidIndices.clear();
+}
+
+std::string CadSlicePromptText(const AppCommandState& st) {
+  switch (st.slicePhase) {
+  case AppCommandState::SlicePhase::SelectSolids:
+    return "SLICE — select solids, Enter when done. ESC cancels.";
+  case AppCommandState::SlicePhase::WaitP1:
+    return "SLICE — first point on the cutting plane. ESC cancels.";
+  case AppCommandState::SlicePhase::WaitP2:
+    return "SLICE — second point on the cutting plane. ESC cancels.";
+  case AppCommandState::SlicePhase::WaitP3:
+    return "SLICE — third point on the cutting plane. ESC cancels.";
+  case AppCommandState::SlicePhase::WaitKeepSide:
+    return "SLICE — pick a point on the side to keep, or type B for both. ESC cancels.";
+  }
+  return "SLICE";
+}
+
+static void SliceEnterPlanePhase(AppCommandState& st, std::vector<std::string>& log) {
+  st.sliceSolidIndices.clear();
+  const int nSolid = static_cast<int>(st.cadSolids.size());
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < nSolid)
+      st.sliceSolidIndices.push_back(e.index);
+  }
+  std::sort(st.sliceSolidIndices.begin(), st.sliceSolidIndices.end());
+  st.sliceSolidIndices.erase(std::unique(st.sliceSolidIndices.begin(), st.sliceSolidIndices.end()),
+                             st.sliceSolidIndices.end());
+  if (st.sliceSolidIndices.empty()) {
+    log.push_back("SLICE — no solids selected. Click a solid, or ESC.");
+    st.slicePhase = AppCommandState::SlicePhase::SelectSolids;
+    return;
+  }
+  st.slicePhase = AppCommandState::SlicePhase::WaitP1;
+  log.push_back(CadSlicePromptText(st));
+}
+
+void StartSliceCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelSliceCommand(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Slice;
+  st.lastCommand = AppCommandState::Kind::Slice;
+  st.selBoxWaitingSecond = false;
+  if (!st.selection.empty()) {
+    SliceEnterPlanePhase(st, log);
+    if (st.slicePhase != AppCommandState::SlicePhase::SelectSolids)
+      return;
+    st.selection.clear();
+  }
+  st.slicePhase = AppCommandState::SlicePhase::SelectSolids;
+  log.push_back(CadSlicePromptText(st));
+}
+
+static void CommitSlice(AppCommandState& st, brep::SliceKeep keep, std::vector<std::string>& log) {
+  const ray3d::Vec3 n = ray3d::Cross(ray3d::Sub(st.sliceP2, st.sliceP1), ray3d::Sub(st.sliceP3, st.sliceP1));
+  if (!(ray3d::Length(n) > 1e-9)) {
+    log.push_back("SLICE — the three points are in a line; they do not define a plane.");
+    return;
+  }
+  // Slice every selected solid first; only touch the document if they all succeed (REQ-201).
+  struct Result {
+    int index = 0;
+    std::vector<brep::Solid> pieces;
+  };
+  std::vector<Result> results;
+  for (int idx : st.sliceSolidIndices) {
+    if (idx < 0 || static_cast<size_t>(idx) >= st.cadSolids.size() || !st.cadSolids[static_cast<size_t>(idx)])
+      continue;
+    brep::Solid above;
+    brep::Solid below;
+    brep::Problem why = brep::Problem::Ok;
+    if (!brep::Slice(*st.cadSolids[static_cast<size_t>(idx)], st.sliceP1, n, keep, &above, &below, &why)) {
+      log.push_back(std::string("SLICE — ") + brep::ProblemText(why) + " Nothing changed.");
+      return;
+    }
+    Result r;
+    r.index = idx;
+    if ((keep == brep::SliceKeep::Above || keep == brep::SliceKeep::Both) && !above.faces.empty())
+      r.pieces.push_back(std::move(above));
+    if ((keep == brep::SliceKeep::Below || keep == brep::SliceKeep::Both) && !below.faces.empty())
+      r.pieces.push_back(std::move(below));
+    results.push_back(std::move(r));
+  }
+  if (results.empty()) {
+    log.push_back("SLICE — nothing to slice.");
+    return;
+  }
+
+  PushUndoSnapshot(st, "Slice");
+  // Replace high index first so the lower indices stay valid.
+  std::sort(results.begin(), results.end(), [](const Result& a, const Result& b) { return a.index > b.index; });
+  int made = 0;
+  for (Result& r : results) {
+    EntityAttributes attrs = static_cast<size_t>(r.index) < st.cadSolidAttrs.size()
+                                 ? st.cadSolidAttrs[static_cast<size_t>(r.index)]
+                                 : MakeNewEntityAttrs(st);
+    st.cadSolids.erase(st.cadSolids.begin() + r.index);
+    if (static_cast<size_t>(r.index) < st.cadSolidAttrs.size())
+      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + r.index);
+    for (brep::Solid& piece : r.pieces) {
+      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(piece)));
+      st.cadSolidAttrs.push_back(attrs);
+      ++made;
+    }
+  }
+  BumpCadGpuCache(st);
+  st.selection.clear();
+  log.push_back("SLICE — " + std::to_string(results.size()) + " solid(s) cut into " +
+                std::to_string(made) + " piece(s).");
+  CancelSliceCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+bool HandleSliceTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Slice)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  using SP = AppCommandState::SlicePhase;
+
+  if (st.slicePhase == SP::SelectSolids) {
+    if (!line.empty())
+      return false;
+    if (st.selection.empty()) {
+      log.push_back("SLICE — nothing selected. Click a solid, or ESC.");
+      return true;
+    }
+    SliceEnterPlanePhase(st, log);
+    return true;
+  }
+
+  if (st.slicePhase == SP::WaitKeepSide) {
+    if (line.empty()) {
+      log.push_back("SLICE — pick a point on the side to keep, or type B for both.");
+      return true;
+    }
+    if (line == "B" || line == "b" || line == "Both" || line == "both") {
+      CommitSlice(st, brep::SliceKeep::Both, log);
+      return true;
+    }
+    ray3d::Vec3 q{};
+    if (!ParseSolidBasePoint(st, line, &q, log, "SLICE")) {
+      log.push_back("SLICE — type B for both, or X,Y[,Z] for a point on the side to keep.");
+      return true;
+    }
+    const ray3d::Vec3 nrm = ray3d::Cross(ray3d::Sub(st.sliceP2, st.sliceP1), ray3d::Sub(st.sliceP3, st.sliceP1));
+    const brep::SliceKeep keep =
+        ray3d::Dot(ray3d::Sub(q, st.sliceP1), nrm) >= 0.0 ? brep::SliceKeep::Above : brep::SliceKeep::Below;
+    CommitSlice(st, keep, log);
+    return true;
+  }
+
+  // WaitP1 / WaitP2 / WaitP3.
+  if (line.empty())
+    return true;
+  ray3d::Vec3 p{};
+  if (!ParseSolidBasePoint(st, line, &p, log, "SLICE")) {
+    log.push_back("SLICE — could not read the point. Use X,Y or X,Y,Z.");
+    return true;
+  }
+  if (st.slicePhase == SP::WaitP1) {
+    st.sliceP1 = p;
+    st.slicePhase = SP::WaitP2;
+  } else if (st.slicePhase == SP::WaitP2) {
+    st.sliceP2 = p;
+    st.slicePhase = SP::WaitP3;
+  } else {
+    st.sliceP3 = p;
+    st.slicePhase = SP::WaitKeepSide;
+  }
+  log.push_back(CadSlicePromptText(st));
+  return true;
+}
+
+void SubmitSliceViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Slice)
+    return;
+  using SP = AppCommandState::SlicePhase;
+  const ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
+                      static_cast<double>(CadCommitElevation(st))};
+  switch (st.slicePhase) {
+  case SP::WaitP1:
+    st.sliceP1 = p;
+    st.slicePhase = SP::WaitP2;
+    break;
+  case SP::WaitP2:
+    st.sliceP2 = p;
+    st.slicePhase = SP::WaitP3;
+    break;
+  case SP::WaitP3:
+    st.sliceP3 = p;
+    st.slicePhase = SP::WaitKeepSide;
+    break;
+  case SP::WaitKeepSide: {
+    const ray3d::Vec3 nrm = ray3d::Cross(ray3d::Sub(st.sliceP2, st.sliceP1), ray3d::Sub(st.sliceP3, st.sliceP1));
+    const brep::SliceKeep keep =
+        ray3d::Dot(ray3d::Sub(p, st.sliceP1), nrm) >= 0.0 ? brep::SliceKeep::Above : brep::SliceKeep::Below;
+    CommitSlice(st, keep, log);
+    return;
+  }
+  case SP::SelectSolids:
+    return;
+  }
+  log.push_back(CadSlicePromptText(st));
+}
+
+// -------------------------------------------------------------------------------------------------
 // The prompted form of the seven primitives (REQ-313 as amended).
 //
 // `CYLINDER` on its own asks for the base point, then for its dimensions by letter — R for radius,
@@ -25812,6 +26038,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("REVOLVE canceled.");
     CancelRevolveCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Slice) {
+    log.push_back("SLICE canceled.");
+    CancelSliceCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
   else if (st.active == AppCommandState::Kind::FeatureLine)
@@ -26466,6 +26696,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     } else if (st.active == K::Revolve) {
       // Enter confirms the selection, or (at the angle prompt) commits at the default angle.
       (void)HandleRevolveTextInput("", st, log);
+    } else if (st.active == K::Slice) {
+      (void)HandleSliceTextInput("", st, log);
     } else if (st.active == K::Offset) {
       using OP = AppCommandState::OffsetPhase;
       if (st.offsetPhase == OP::WaitDistanceOrThrough)
@@ -26784,6 +27016,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (plotTok == "revolve" || plotTok == "rev") {
       StartRevolveCommand(st, log);
+      return;
+    }
+    if (plotTok == "slice" || plotTok == "sl") {
+      StartSliceCommand(st, log);
       return;
     }
     // `PERSPECTIVE ON` in one line; a bare `PERSPECTIVE` reports the current projection — the same
@@ -28210,6 +28446,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleRevolveTextInput(line, st, log))
       return;
     log.push_back(CadRevolvePromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Slice) {
+    if (HandleSliceTextInput(line, st, log))
+      return;
+    log.push_back(CadSlicePromptText(st));
     return;
   }
 

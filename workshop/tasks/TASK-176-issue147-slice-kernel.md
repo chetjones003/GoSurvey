@@ -64,7 +64,25 @@ New `Problem` values: `SliceDegeneratePlane`, `SlicePlaneMissesSolid`, `SliceCur
 - A face lying entirely **in** the cutting plane is not specially handled; if it makes the weld
   fail, the generic validity reason is returned rather than a specific one.
 
-### Next: increment 3b
+### Increment 3b — the SLICE command (done, 2026-09-02, PR #NNN)
 
-The `SLICE` command (select solid → plane by 3 points / an entity / an axis → keep side), and
-curved-face slicing (circle cross-sections) alongside the Booleans B1.
+Bare `SLICE` opens a prompted command: select solids (if none selected) → three points that define
+the cutting plane → pick a point on the side to keep, or type `B` for both. Each sliced solid is
+**replaced** by its kept piece(s) in one undo step (a `Both` slice turns one solid into two). A
+solid the kernel refuses (a curved one, a plane that misses) is reported and **nothing in the
+document changes** (REQ-201). `SL` alias.
+
+Wiring mirrors EXTRUDE / REVOLVE — `Kind::Slice` + `SlicePhase`, `StartSliceCommand` /
+`HandleSliceTextInput` / `SubmitSliceViewportPick` / `CadSlicePromptText` / `CancelSliceCommand`;
+click routing, `SubmitViewportPickImpl`, `ProcessCommandLineSubmit` Enter, `CommandInputHint`, a
+`CadRubberPreview` triangle showing the plane, `CancelActiveCommand`, `kRegistry`. Points parse
+`X,Y[,Z]` via the shared `ParseSolidBasePoint`.
+
+Transcript `tests/headless/transcripts/req314-slice.txt`: keep-top of a horizontal cut, undo
+restores the whole box, keep-both makes two solids, a cylinder refused with nothing changed, `.gs`
+round-trip. Full suite **992/992**.
+
+### Still pending: curved-face slicing
+
+A plane ⟂ or ∥ to a cylinder / cone / sphere axis cuts a circle or lines the kernel *can* hold —
+`brep::Slice` still refuses any curved face (`SliceCurvedFace`). This pairs with Booleans B1.
