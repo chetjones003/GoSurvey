@@ -310,6 +310,10 @@ struct FaceIntegrals {
     break;
   }
   }
+  // An inward curved face (REQ-314 B2a) has its normal flipped, so its divergence-theorem term
+  // flips with it: the face then subtracts the void it bounds. Area is a magnitude and does not.
+  if (sf.inward)
+    out.volTerm = -out.volTerm;
   return out;
 }
 
@@ -416,11 +420,13 @@ struct MeshBuilder {
   }
 };
 
-/// The outward unit normal of a cone/cylinder side at longitude \p t, in world.
+/// The outward unit normal of a cone/cylinder side at longitude \p t, in world. `Surface::inward`
+/// (REQ-314 B2a) flips it: the face then bounds a bore, material on the −radial side.
 [[nodiscard]] Vec3 ConicalNormal(const Surface& sf, double r0, double r1, double t) {
   const double k = (r0 - r1) / sf.height;
   const double inv = 1.0 / std::sqrt(1.0 + k * k);
-  const Vec3 local{std::cos(t) * inv, std::sin(t) * inv, k * inv};
+  const double s = sf.inward ? -1.0 : 1.0;
+  const Vec3 local{s * std::cos(t) * inv, s * std::sin(t) * inv, s * k * inv};
   return ucs::UcsVectorToWorld(sf.frame, local);
 }
 
@@ -438,7 +444,8 @@ struct MeshBuilder {
 
 [[nodiscard]] Vec3 SphericalNormal(const Surface& sf, double t, double v) {
   const double cv = std::cos(v);
-  return ucs::UcsVectorToWorld(sf.frame, Vec3{cv * std::cos(t), cv * std::sin(t), std::sin(v)});
+  const double s = sf.inward ? -1.0 : 1.0;
+  return ucs::UcsVectorToWorld(sf.frame, Vec3{s * cv * std::cos(t), s * cv * std::sin(t), s * std::sin(v)});
 }
 
 [[nodiscard]] Vec3 ToroidalPoint(const Surface& sf, double t, double v) {
@@ -448,7 +455,8 @@ struct MeshBuilder {
 
 [[nodiscard]] Vec3 ToroidalNormal(const Surface& sf, double t, double v) {
   const double cv = std::cos(v);
-  return ucs::UcsVectorToWorld(sf.frame, Vec3{cv * std::cos(t), cv * std::sin(t), std::sin(v)});
+  const double s = sf.inward ? -1.0 : 1.0;
+  return ucs::UcsVectorToWorld(sf.frame, Vec3{s * cv * std::cos(t), s * cv * std::sin(t), s * std::sin(v)});
 }
 
 } // namespace
@@ -2633,6 +2641,72 @@ struct BossStub {
   return Succeed(outWhy);
 }
 
+/// \p planar with a cylindrical bore of \p radius removed (REQ-314 B2a — a curved SUBTRACT). The
+/// entry face is bored open at \p entryC; if \p through, the exit face is too and an inward cylinder
+/// wall spans the two; otherwise the bore is blind, \p blindDepth deep, closed by a planar floor.
+/// \p nEntry is the entry face's outward normal; the bore runs along `-nEntry` into the solid.
+[[nodiscard]] bool BuildBore(const Solid& planar, int entryFace, const Vec3& entryC, const Vec3& nEntry,
+                             double radius, bool through, int exitFace, const Vec3& exitC,
+                             double blindDepth, Solid* out, Problem* outWhy) {
+  const Vec3 nE = ray3d::Normalize(nEntry);
+  const Vec3 dir = ray3d::Scale(nE, -1.0);  // into the solid
+  Solid s = planar;
+  s.recipe = Recipe{};
+  Vec3 xa = s.faces[static_cast<std::size_t>(entryFace)].surface.frame.xAxis;
+  xa = ray3d::Sub(xa, ray3d::Scale(nE, ray3d::Dot(xa, nE)));
+  if (!(ray3d::Length(xa) > 1e-9))
+    xa = s.faces[static_cast<std::size_t>(entryFace)].surface.frame.yAxis;
+  xa = ray3d::Normalize(xa);
+  const Vec3 ya = ray3d::Normalize(ray3d::Cross(dir, xa));
+  const double h = through ? ray3d::Length(ray3d::Sub(exitC, entryC)) : blindDepth;
+  if (!(h > 1e-9) || !(radius > 0.0))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 farC = ray3d::Add(entryC, ray3d::Scale(dir, h));
+  const int e0 = AddVertex(&s, ray3d::Add(entryC, ray3d::Scale(xa, radius)));
+  const int e1 = AddVertex(&s, ray3d::Add(entryC, ray3d::Scale(xa, -radius)));
+  const int f0 = AddVertex(&s, ray3d::Add(farC, ray3d::Scale(xa, radius)));
+  const int f1 = AddVertex(&s, ray3d::Add(farC, ray3d::Scale(xa, -radius)));
+  // All four rim arcs are built about the ENTRY face's outward normal, so "forward" means the same
+  // angular sense at both ends — the BuildBoss convention.
+  const int re0 = AddArc(&s, e0, e1, entryC, nE, kPi);
+  const int re1 = AddArc(&s, e1, e0, entryC, nE, kPi);
+  const int rf0 = AddArc(&s, f0, f1, farC, nE, kPi);
+  const int rf1 = AddArc(&s, f1, f0, farC, nE, kPi);
+  const int sm0 = AddLine(&s, e0, f0);
+  const int sm1 = AddLine(&s, e1, f1);
+  auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face fc;
+    fc.surface.kind = SurfaceKind::Cylinder;
+    fc.surface.frame.origin = entryC;
+    fc.surface.frame.xAxis = xa;
+    fc.surface.frame.yAxis = ya;
+    fc.surface.frame.zAxis = dir;
+    fc.surface.radius = radius;
+    fc.surface.radius2 = radius;
+    fc.surface.height = h;
+    fc.surface.inward = true;
+    fc.uStart = u0;
+    fc.uEnd = u1;
+    Loop lp;
+    lp.uses = std::move(uses);
+    fc.loops.push_back(std::move(lp));
+    s.faces.push_back(std::move(fc));
+  };
+  wall(0.0, kPi, {{re0, false}, {sm1, false}, {rf0, true}, {sm0, true}});
+  wall(kPi, kTwoPi, {{re1, false}, {sm0, false}, {rf1, true}, {sm1, true}});
+  s.faces[static_cast<std::size_t>(entryFace)].loops.push_back(Loop{{{re1, true}, {re0, true}}});
+  if (through)
+    s.faces[static_cast<std::size_t>(exitFace)].loops.push_back(Loop{{{rf0, false}, {rf1, false}}});
+  else
+    s.faces.push_back(MakePlaneFace(farC, nE, {{rf0, false}, {rf1, false}}));  // floor faces back out
+  for (int i = static_cast<int>(planar.faces.size()); i < static_cast<int>(s.faces.size()); ++i)
+    s.shells[0].faces.push_back(i);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 struct SphereShape {
   Vec3 centre;
   double radius = 0.0;
@@ -2938,14 +3012,13 @@ struct SphereShape {
 }
 
 [[nodiscard]] bool TryBooleanCylinderThroughPlanar(const Solid& planar, const Solid& cyl,
-                                                   const CylinderShape& C, BoolOp op,
+                                                   const CylinderShape& C, BoolOp op, bool cylIsMinuend,
                                                    std::vector<Solid>* out, bool* handled,
                                                    Problem* outWhy) {
-  if (op == BoolOp::Subtract) {
-    *handled = true;
-    return Fail(Problem::BooleanCurvedFace, outWhy);
-  }
   *handled = true;
+  if (op == BoolOp::Subtract && cylIsMinuend)
+    return Fail(Problem::BooleanCurvedFace, outWhy);  // cylinder − box: a notch, its own B2 slice
+  const bool bore = op == BoolOp::Subtract;  // box − cylinder: drill a hole (B2a)
   const Vec3 az = C.axis.zAxis;
   const double scale = std::max(ModelScale(planar), C.radius + C.length);
   const double eps = 1e-7 * scale;
@@ -3013,6 +3086,28 @@ struct SphereShape {
       out->push_back(std::move(r));
       return Succeed(outWhy);
     }
+    if (bore) {
+      if (entry.t < -eps || entry.t > C.length + eps)
+        return Fail(Problem::BooleanCurvedFace, outWhy);  // cylinder base inside — a floating pocket, defer
+      const Vec3 nE = planar.faces[static_cast<std::size_t>(entry.face)].surface.frame.zAxis;
+      const Vec3 entryC = entry.point;
+      const bool through = exitH.t <= C.length + eps;
+      Solid r;
+      if (through) {
+        if (!BuildBore(planar, entry.face, entryC, nE, C.radius, /*through=*/true, exitH.face,
+                       exitH.point, 0.0, &r, outWhy))
+          return false;
+      } else {
+        const double depth = C.length - std::max(entry.t, 0.0);
+        if (depth <= eps)
+          return Fail(Problem::BooleanCurvedFace, outWhy);
+        if (!BuildBore(planar, entry.face, entryC, nE, C.radius, /*through=*/false, -1, Vec3{}, depth,
+                       &r, outWhy))
+          return false;
+      }
+      out->push_back(std::move(r));
+      return Succeed(outWhy);
+    }
     std::vector<BossStub> stubs;
     if (entry.t > eps)
       stubs.push_back(BossStub{entry.face, entry.point,
@@ -3057,9 +3152,9 @@ struct SphereShape {
   if (aCyl && bCyl)
     return TryBooleanCoaxialCylinders(a, b, ca, cb, op, out, handled, outWhy);
   if (aCyl && AllFacesPlanar(b))
-    return TryBooleanCylinderThroughPlanar(b, a, ca, op, out, handled, outWhy);
+    return TryBooleanCylinderThroughPlanar(b, a, ca, op, /*cylIsMinuend=*/true, out, handled, outWhy);
   if (bCyl && AllFacesPlanar(a))
-    return TryBooleanCylinderThroughPlanar(a, b, cb, op, out, handled, outWhy);
+    return TryBooleanCylinderThroughPlanar(a, b, cb, op, /*cylIsMinuend=*/false, out, handled, outWhy);
 
   SphereShape sa;
   SphereShape sb;
@@ -3683,8 +3778,13 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       for (int i = 0; i < nu; ++i) {
         const std::size_t a = static_cast<std::size_t>(i);
         const std::size_t b = static_cast<std::size_t>(i + 1);
-        mb.Tri(lower[a], lower[b], upper[b]);
-        mb.Tri(lower[a], upper[b], upper[a]);
+        if (sf.inward) {  // REQ-314 B2a: a bore wall — reverse winding to match the flipped normal
+          mb.Tri(lower[a], upper[b], lower[b]);
+          mb.Tri(lower[a], upper[a], upper[b]);
+        } else {
+          mb.Tri(lower[a], lower[b], upper[b]);
+          mb.Tri(lower[a], upper[b], upper[a]);
+        }
       }
       break;
     }
@@ -3711,8 +3811,13 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         for (int j = 0; j < nv; ++j) {
           const std::size_t a = static_cast<std::size_t>(i) * stride + static_cast<std::size_t>(j);
           const std::size_t b = a + stride;
-          mb.Tri(grid[a], grid[b], grid[b + 1]);
-          mb.Tri(grid[a], grid[b + 1], grid[a + 1]);
+          if (sf.inward) {  // REQ-314 B2a: reverse winding to match the flipped normal
+            mb.Tri(grid[a], grid[b + 1], grid[b]);
+            mb.Tri(grid[a], grid[a + 1], grid[b + 1]);
+          } else {
+            mb.Tri(grid[a], grid[b], grid[b + 1]);
+            mb.Tri(grid[a], grid[b + 1], grid[a + 1]);
+          }
         }
       }
       break;

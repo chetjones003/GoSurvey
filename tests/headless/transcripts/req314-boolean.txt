@@ -86,6 +86,9 @@ EXPECT SOLIDS 1
 CMD SOLIDLIST
 EXPECT LOG "volume 125"
 
+# A curved SUBTRACT (drill a round hole) is proven in BrepTests [brep][req314] — the command path
+# is the same CommitBoolean wiring the UNION / INTERSECT sections above exercise.
+
 # --- .gs round-trip of a subtract result ---------------------------------------------
 NEW
 CMD BOX 0,0 20 10 10

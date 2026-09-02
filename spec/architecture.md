@@ -2013,6 +2013,17 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   — one face with a seam edge used twice by itself — makes "every edge bounds exactly two faces" a
   special case rather than an invariant, and that invariant is the single most useful thing
   `Validate` has.
+  **Amended 2026-09-02 (D-2026-09-02-c): a curved face may carry `Surface::inward`.** As originally
+  built, a curved face's outward direction was fixed by its surface (+radial for cylinder/cone/
+  sphere/torus) with no reversed form — "one fewer thing that can disagree with the topology", and
+  `Problem::ProfileArcReflex` refused the extrude shapes that would need one. The Booleans (increment
+  B2a) force the general answer, exactly as this ADR's own alternatives note anticipated: subtracting
+  a cylinder leaves a hole wall whose material is on the −radial side. A single `bool inward` on
+  `Surface`, default false and never set by the seven primitives, marks that. The normal evaluators
+  negate, the tessellator reverses winding, and the volume integrand flips sign, so an inward face
+  correctly *subtracts* the void it bounds; `ClosestPointOnSurface`, `Validate` and `.gs` are
+  unaffected (`.gs` gains an additive tolerant key — no `kGsFormatVersion` bump). `ProfileArcReflex`
+  stays for now; a reflex profile arc in an extrude is a separate feature, now unblocked.
   (e) **`Validate` proves manifoldness, orientability and closure — including GEOMETRIC closure.**
   Beyond the index/ring/tally checks, the volume integral is taken about two different reference
   points and required to agree. On a closed surface it must (the closed integral of `n dA` vanishes);
@@ -2232,10 +2243,15 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
     a cylindrical wall facing *inward*, which ADR-045's `Surface` cannot express (no reversed flag),
     so it moves to B2 — the increment that adds the general answer to inward-curving faces. Curved
     SUBTRACT is refused by name in B1.
-  - **Increment B2** — a **general analytic intersection-curve type** is added to the kernel
-    (a parametric procedural curve evaluated from its two surfaces, tessellated on demand like every
-    other derived representation), and the refusals from B1 are lifted pair by pair as each
-    surface-surface intersection is implemented and tested.
+  - **Increment B2** — lifts B1's refusals. **Split 2026-09-02 (D-2026-09-02-c) into B2a then B2b:**
+    - **B2a** — **inward-facing analytic faces** (`Surface::inward`, see ADR-045 (d) amendment). No
+      new curve type: the operand pairs B1 already recognises geometrically (cylinder / sphere /
+      coaxial-cylinder cut) have circular intersection curves, already `CurveKind::Arc`. This lifts
+      **curved SUBTRACT** — round through-holes, blind pockets, spherical dimples, counterbores —
+      the highest-value refusal, since "subtract a cylinder to drill a hole" is the defining Boolean.
+    - **B2b** — a **general analytic intersection-curve type** (a parametric procedural curve
+      evaluated from its two surfaces, tessellated on demand), lifting the oblique / non-coaxial
+      refusals (ellipse, quartic) pair by pair.
 
   **(d) Operands are consumed only after the result validates.** A feature operation computes its
   result into a fresh `Solid`, runs `brep::Validate` (and, for Booleans, `brep::SelfIntersects`),
@@ -2282,9 +2298,10 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   - `src/util/brep.{hpp,cpp}` grows a feature-operation section: `Extrude`, `Revolve`, `Slice`,
     `BooleanUnion` / `BooleanSubtract` / `BooleanIntersect`, plus internal face-split and
     point-classification helpers. It stays graphics-free and directly unit-tested, per ADR-045.
-  - Increment B2 adds a `CurveKind::Intersection` (or similar) — a procedural curve carrying its two
-    surface references — and a tessellator for it. This is the one anticipated new kernel type; it
-    is not built until B2.
+  - Increment **B2a** adds `Surface::inward` (a `bool`, see ADR-045 (d) amendment) — no new curve
+    type, no `.gs` version bump. Increment **B2b** adds a `CurveKind::Intersection` (or similar) — a
+    procedural curve carrying its two surface references — and a tessellator for it. That is the one
+    anticipated new *curve* type; it is not built until B2b.
   - The command layer gains `EXTRUDE`, `REVOLVE`, `SLICE`, `UNION`, `SUBTRACT`, `INTERSECT`, each in
     the typed / prompted shape the primitive commands already use, each one undo step.
   - No renderer change — feature results tessellate through REQ-313's cached path and REQ-100
@@ -2301,9 +2318,12 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   3. **Slice** — by plane, one side or both.
   4. **Booleans Increment B1** — line/arc-intersection operand pairs only, others refused by name.
      Curved operands: UNION / INTERSECT only (D-2026-09-02-b); curved SUBTRACT deferred to B2.
-  5. **Booleans Increment B2** — general analytic intersection curve *and* inward-facing curved
-     faces (so curved SUBTRACT), refusals lifted pair by pair.
-  6. *(separate REQ-315, separate ADR revision)* — freeform surfaces, then sweep and loft.
+  5. **Booleans Increment B2a** — inward-facing analytic faces (`Surface::inward`): curved SUBTRACT
+     for the pairs B1 already recognises (round hole, blind pocket, spherical dimple, counterbore).
+     No new curve type. (D-2026-09-02-c.)
+  6. **Booleans Increment B2b** — general analytic intersection curve: oblique / non-coaxial pairs
+     (ellipse, quartic), refusals lifted pair by pair.
+  7. *(separate REQ-315, separate ADR revision)* — freeform surfaces, then sweep and loft.
 
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 

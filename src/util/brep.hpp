@@ -54,6 +54,14 @@ struct Surface {
   double radius = 0.0;   ///< Cylinder r; Cone base r; Sphere R; Torus **major** R. Unused for Plane.
   double radius2 = 0.0;  ///< Cone top r; Torus **minor** r. Unused otherwise.
   double height = 0.0;   ///< Cylinder / Cone height along +Z from the frame origin. Unused otherwise.
+
+  /// **Inward-facing** curved face (REQ-314 B2a / ADR-045 (d) amendment, D-2026-09-02-c): the face's
+  /// material is on the **−normal** side — −radial for Cylinder/Cone/Sphere/Torus. This is the wall
+  /// of a bore a Boolean SUBTRACT left behind. The seven primitives never set it, and it is
+  /// meaningless for a Plane (a plane's normal already points wherever the topology needs). When set,
+  /// the normal evaluators negate, the tessellator reverses winding, and the volume integrand flips
+  /// sign, so the face correctly subtracts the void it bounds.
+  bool inward = false;
 };
 
 /// The analytic curve an edge lies on.

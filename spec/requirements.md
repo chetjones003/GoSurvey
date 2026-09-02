@@ -6023,6 +6023,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   2026-09-02 — D-2026-09-02-b (TASK-178): curved-operand Booleans in increment B1 are limited to
   UNION and INTERSECT; a curved SUBTRACT needs an inward-facing curved face that ADR-045's `Surface`
   cannot express, so it moves to B2. Acceptance list annotated accordingly; no requirement removed.
+  2026-09-02 — D-2026-09-02-c (TASK-184): increment B2 is split into B2a (adds `Surface::inward`,
+  lifts curved SUBTRACT for the pairs B1 already recognises — round hole, blind pocket, spherical
+  dimple, counterbore) and B2b (general analytic intersection curve — ellipse / quartic). The
+  curved-SUBTRACT acceptance lines deferred by D-2026-09-02-b are met in B2a. ADR-045 (d) amended.
 
 ### REQ-315 — Sweep and loft (GitHub issue #147, split from REQ-314)
 - Purpose: issue #147's acceptance names sweep and loft alongside extrude and revolve, but a general
