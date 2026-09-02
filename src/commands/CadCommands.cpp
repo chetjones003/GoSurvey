@@ -6208,6 +6208,11 @@ void ResetPolylineDraft(AppCommandState& st) {
   st.polyFirstX = st.polyFirstY = 0.f;
   st.polyDraftSegments = 0;
   st.polylineDraftVerts.clear();
+  st.polylineDraftBulge.clear();       // REQ-316 / ADR-047
+  st.polylineArcMode = false;
+  st.polylineArcRadius = 0.f;
+  st.polylineArcAngleDeg = 0.f;
+  st.polylineArcAngleValid = false;
   st.polylineDraft3d = false;  // REQ-085: the next POLYLINE is 2D unless 3DPOLY says otherwise
   st.polylineTypedZValid = false;
   st.polylineTypedZRelative = false;
@@ -12721,8 +12726,12 @@ static float PolylineOpenLengthOf(const AppCommandState& st, int pi) {
     const size_t b = static_cast<size_t>(vi + 1) * 3;
     if (b + 1 >= st.userPolylineVerts.size())
       break;
-    total += std::hypot(st.userPolylineVerts[b] - st.userPolylineVerts[a],
-                        st.userPolylineVerts[b + 1] - st.userPolylineVerts[a + 1]);
+    // REQ-316 / ADR-047: a curved segment contributes its arc length, not its chord length.
+    const float bulge = static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
+                            ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.f;
+    total += static_cast<float>(BulgeSegmentLength(
+        st.userPolylineVerts[a], st.userPolylineVerts[a + 1], st.userPolylineVerts[b],
+        st.userPolylineVerts[b + 1], static_cast<double>(bulge)));
   }
   return total;
 }
@@ -26064,6 +26073,18 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
     st.userPolylineOffsets.push_back(baseVert + static_cast<int>(nvert));
     st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+    // REQ-316 / ADR-047: carry the draft's per-vertex bulges into the store. Only materialise the
+    // parallel array once a curved segment actually exists (a straight-only drawing keeps it empty
+    // so its .gs re-saves byte-identically).
+    bool draftHasArc = false;
+    for (float b : st.polylineDraftBulge)
+      if (b != 0.f) { draftHasArc = true; break; }
+    if (draftHasArc || !st.userPolylineVertsBulge.empty()) {
+      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      const size_t tail = st.userPolylineVertsBulge.size() >= nvert ? st.userPolylineVertsBulge.size() - nvert : 0;
+      for (size_t k = 0; k < nvert && k < st.polylineDraftBulge.size(); ++k)
+        st.userPolylineVertsBulge[tail + k] = st.polylineDraftBulge[k];
+    }
   }
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
@@ -26127,6 +26148,72 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
   return true;
 }
 
+// REQ-316 / ADR-047: the bulge for the segment leaving the last draft vertex, given a new point
+// (x,y). In LINE mode the answer is always 0. In ARC mode the arc is tangent to the previous
+// segment's end direction unless a radius or an included angle was typed for this pick.
+static float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, float y) {
+  if (!st.polylineArcMode)
+    return 0.f;
+  const size_t nv = st.polylineDraftVerts.size() / 3;
+  if (nv < 1)
+    return 0.f;
+  const size_t li = nv - 1;
+  const float ax = st.polylineDraftVerts[li * 3 + 0];
+  const float ay = st.polylineDraftVerts[li * 3 + 1];
+  const double chx = static_cast<double>(x) - ax;
+  const double chy = static_cast<double>(y) - ay;
+  const double chord = std::hypot(chx, chy);
+  if (chord < 1e-9)
+    return 0.f;
+  constexpr double kPi = 3.14159265358979323846;
+
+  // Incoming direction at the last vertex: the previous arc's end tangent, or the previous chord.
+  double dx = 0.0, dy = 0.0;
+  bool haveDir = false;
+  if (nv >= 2) {
+    const float px = st.polylineDraftVerts[(li - 1) * 3 + 0];
+    const float py = st.polylineDraftVerts[(li - 1) * 3 + 1];
+    const float pb = (li - 1) < st.polylineDraftBulge.size() ? st.polylineDraftBulge[li - 1] : 0.f;
+    const BulgeArcSpan prev = BulgeArc(px, py, ax, ay, static_cast<double>(pb));
+    if (prev.valid) {
+      const double endA = prev.startAngle + prev.sweep;
+      const double s = prev.sweep >= 0.0 ? 1.0 : -1.0;
+      dx = -std::sin(endA) * s;
+      dy = std::cos(endA) * s;
+    } else {
+      dx = static_cast<double>(ax) - px;
+      dy = static_cast<double>(ay) - py;
+    }
+    const double dn = std::hypot(dx, dy);
+    if (dn > 1e-12) { dx /= dn; dy /= dn; haveDir = true; }
+  }
+
+  const double side = haveDir ? (dx * chy - dy * chx) : 0.0;  // + = P is left of the incoming dir
+  const double sgn = side >= 0.0 ? 1.0 : -1.0;
+
+  double theta = 0.0;  // signed included (central) angle; + = CCW
+  if (st.polylineArcAngleValid) {
+    // Typed magnitude; direction follows which side of the tangent the pick is (a negative typed
+    // angle flips it), matching AutoCAD's PLINE Angle option.
+    const double mag = std::fabs(static_cast<double>(st.polylineArcAngleDeg)) * kPi / 180.0;
+    const double flip = st.polylineArcAngleDeg < 0.f ? -1.0 : 1.0;
+    theta = mag * flip * (haveDir ? sgn : 1.0);
+  } else if (st.polylineArcRadius > 1e-9f) {
+    const double r = static_cast<double>(st.polylineArcRadius);
+    const double s = std::min(1.0, chord / (2.0 * r));
+    theta = 2.0 * std::asin(s) * (haveDir ? sgn : 1.0);
+  } else if (haveDir) {
+    // Tangent arc: the tangent/chord angle is half the central angle.
+    const double alpha = std::atan2(dx * chy - dy * chx, dx * chx + dy * chy);
+    theta = 2.0 * alpha;
+  } else {
+    return 0.f;  // first segment, no direction, no radius/angle -> straight
+  }
+  if (std::fabs(theta) < 1e-9)
+    return 0.f;
+  return static_cast<float>(std::tan(theta / 4.0));
+}
+
 bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::Polyline)
     return false;
@@ -26149,6 +26236,7 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
     st.polylineDraftVerts.push_back(x);
     st.polylineDraftVerts.push_back(y);
     st.polylineDraftVerts.push_back(vz);
+    st.polylineDraftBulge.assign(1, 0.f);  // REQ-316 / ADR-047
     st.anchorX = x;
     st.anchorZ = vz;
     st.anchorY = y;
@@ -26185,13 +26273,27 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
   constexpr float kCloseEps = 1e-4f;
   if (st.polylineDraftVerts.size() >= 9 && std::fabs(x - st.polyFirstX) <= kCloseEps &&
       std::fabs(y - st.polyFirstY) <= kCloseEps) {
+    // REQ-316 / ADR-047: an arc-mode close bows the closing segment too.
+    if (!st.polylineDraftBulge.empty())
+      st.polylineDraftBulge.back() = CadPolylineDraftBulgeForNextPoint(st, st.polyFirstX, st.polyFirstY);
     CommitPolylineDraft(st, true, log);
     return true;
   }
 
+  // REQ-316 / ADR-047: the bulge of the segment LEAVING the previous vertex, then a 0 for the new
+  // one (set when the segment after it is drawn, or left 0 at commit). Consume the arc radius/angle.
+  {
+    const float b = CadPolylineDraftBulgeForNextPoint(st, x, y);
+    if (!st.polylineDraftBulge.empty())
+      st.polylineDraftBulge.back() = b;
+    st.polylineArcRadius = 0.f;
+    st.polylineArcAngleValid = false;
+    st.polylineArcAngleDeg = 0.f;
+  }
   st.polylineDraftVerts.push_back(x);
   st.polylineDraftVerts.push_back(y);
   st.polylineDraftVerts.push_back(vz);
+  st.polylineDraftBulge.push_back(0.f);
   ++st.polyDraftSegments;
   st.anchorX = x;
   st.anchorZ = vz;

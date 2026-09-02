@@ -1181,6 +1181,7 @@ int main()
     ext.polylineOffsets = &cmd.userPolylineOffsets;
     ext.polylineClosed = &cmd.userPolylineClosed;
     ext.polylineAttrs = &cmd.userPolylineAttrs;
+    ext.polylineBulge = &cmd.userPolylineVertsBulge;  // REQ-316 / ADR-047
     ext.featureLineVerts = &cmd.featureLineVerts;      // REQ-087
     ext.featureLineOffsets = &cmd.featureLineOffsets;
     ext.featureLineClosed = &cmd.featureLineClosed;

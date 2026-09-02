@@ -729,6 +729,9 @@ struct CadExtendedGeometryInput {
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
   const std::vector<EntityAttributes>* polylineAttrs = nullptr;
+  /// REQ-316 / ADR-047: per-vertex bulge (parallel to polylineVerts, one per vertex). Null or
+  /// empty means every polyline segment is straight — the pre-ADR-047 behaviour.
+  const std::vector<float>* polylineBulge = nullptr;
   // Feature lines (REQ-087). Same four arrays, same shape — the renderer draws both through one
   // function, so a feature line cannot render differently from a polyline by accident.
   const std::vector<float>* featureLineVerts = nullptr;
@@ -2222,6 +2225,16 @@ struct AppCommandState {
 
   /// POLYLINE command draft — XYZ vertices (two or more before commit).
   std::vector<float> polylineDraftVerts;
+  /// REQ-316 / ADR-047: per-draft-vertex bulge, parallel to polylineDraftVerts (one per vertex;
+  /// the bulge of the segment LEAVING that vertex). Same length as the vertex count.
+  std::vector<float> polylineDraftBulge;
+  /// REQ-316: while true, the next POLYLINE segment is a circular arc (keyword `Arc`/`A`; `Line`/`L`
+  /// switches back). The arc is tangent to the previous segment unless a radius or included angle
+  /// is given for the next pick.
+  bool polylineArcMode = false;
+  float polylineArcRadius = 0.f;      ///< REQ-316: radius for the next arc segment (0 = unset)
+  float polylineArcAngleDeg = 0.f;    ///< REQ-316: included angle (deg) for the next arc segment
+  bool polylineArcAngleValid = false; ///< REQ-316: an included angle was typed for the next pick
   /// TRIM has two modes, chosen by the \c TRIMSTATE system variable (REQ-056):
   ///   0 (default) — smart trim: two clicks draw a line across the pieces to remove, no edges to pick;
   ///   1           — classic: pick cutting edges, Enter, then click the pieces to trim.
