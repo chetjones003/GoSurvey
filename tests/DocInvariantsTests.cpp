@@ -117,6 +117,33 @@ TEST_CASE("flat-strides fires on a partial circle normal", "[docinvariants][req3
   REQUIRE(Contains(Fired(st), docinv::kFlatStrides));
 }
 
+TEST_CASE("polyline-bulge accepts an empty bulge array", "[docinvariants][req316]") {
+  AppCommandState st = GoodDrawing();
+  st.userPolylineVertsBulge.clear();  // empty = every segment straight (the pre-ADR-047 default)
+  REQUIRE_FALSE(Contains(Fired(st), docinv::kPolylineBulge));
+}
+
+TEST_CASE("polyline-bulge accepts one finite entry per vertex", "[docinvariants][req316]") {
+  AppCommandState st = GoodDrawing();
+  st.userPolylineVertsBulge = {0.f, 0.4142f, 0.f};  // 3 verts, one arc segment
+  REQUIRE_FALSE(Contains(Fired(st), docinv::kPolylineBulge));
+}
+
+TEST_CASE("polyline-bulge fires on a short bulge array", "[docinvariants][req316]") {
+  // The silent failure the side-car exists to make loud: bulges appended for fewer vertices than
+  // the polyline has. The missing tail would read as "straight", so arcs vanish with the polyline
+  // still looking right in plan view (ADR-035 (a), applied to bulge).
+  AppCommandState st = GoodDrawing();
+  st.userPolylineVertsBulge = {0.f, 0.5f};  // 2 entries against 3 vertices
+  REQUIRE(Contains(Fired(st), docinv::kPolylineBulge));
+}
+
+TEST_CASE("polyline-bulge fires on a non-finite bulge", "[docinvariants][req316]") {
+  AppCommandState st = GoodDrawing();
+  st.userPolylineVertsBulge = {0.f, std::numeric_limits<float>::infinity(), 0.f};
+  REQUIRE(Contains(Fired(st), docinv::kPolylineBulge));
+}
+
 TEST_CASE("attr-counts fires when a circle has no plane normal", "[docinvariants][req312]") {
   // The desync the REQ-312 side-car exists to make loud: an appended circle whose normal was not
   // appended with it. Unreported, that circle would silently take its NEIGHBOUR's plane.

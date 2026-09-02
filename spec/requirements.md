@@ -6051,11 +6051,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Statement: a polyline segment may be a circular arc, recorded as a per-vertex bulge
   (`tan(θ/4)`, 0 = straight) in a parallel `userPolylineVertsBulge` array beside the vertex store
   (ADR-047). The behaviour this enables:
-  1. **POLYLINE arc mode.** While POLYLINE is drawing, the keyword `Arc` (`A`) switches following
-     segments to arc mode and `Line` (`L`) switches back. In arc mode the default arc is tangent to
-     the previous segment with its far end at the next picked or typed point; the sub-options
-     `CEnter`, `Radius` and `Angle` are available (matching AutoCAD PLINE). `Undo` removes the last
-     segment whatever the mode, and restores the previous mode and rubber-band.
+  1. **POLYLINE arc mode.** While POLYLINE is drawing, the keyword `ARC` switches following segments
+     to arc mode and `LINE` switches back. (Full words — `A` and `ANGLE` are the existing
+     segment-bearing lock; D-2026-09-02-c.) In arc mode the default arc is tangent to the previous
+     segment with its far end at the next picked or typed point; the sub-options `RADIUS` and
+     `CANGLE` (included angle) set the next arc segment. `UNDO` removes the last segment whatever the
+     mode, and continues from the previous vertex. `CEnter`, `Second point` and `Direction` are
+     deferred past increment 1.
   2. **The stored entity is one polyline.** A single polyline holds the straight and the arc
      segments together; it is not split into separate entities.
   3. **Every polyline consumer handles arc segments** — rendering (drawn as a true curve),
@@ -6074,12 +6076,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   7. **One undo step.** POLYLINE (however many mode switches) and JOIN each undo in a single step,
      restoring the pre-command drawing state.
 - Acceptance:
-  - Starting POLYLINE, typing `A`, picking a point, typing `L`, picking a point, and finishing
+  - Starting POLYLINE, typing `ARC`, picking a point, typing `LINE`, picking a point, and finishing
     yields exactly one polyline entity with one arc segment followed by one line segment.
   - The arc segment is tangent to the preceding segment at their shared vertex — the angle between
     the incoming segment direction and the arc's tangent there is 0 within 1e-4 rad.
-  - `Undo` during the command removes the most recent segment and the command continues drawing
-    from the previous vertex in the previous mode.
+  - `UNDO` during the command removes the most recent segment and the command continues drawing
+    from the previous vertex.
   - A polyline containing an arc segment: renders as a curve (its tessellation stays within a
     chord-height tolerance of the true arc); is selected by a pick on the curved part; and reports
     endpoint / midpoint / nearest / centre / quadrant snaps on the arc part.

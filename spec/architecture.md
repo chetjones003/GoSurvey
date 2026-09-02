@@ -2367,12 +2367,13 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   speculative abstraction (§11.4). The renderer tessellates each arc segment to a chord-height
   tolerance at draw time and feeds the **existing** line/GL path; **no new GL code, no new shader.**
 
-  **(d) POLYLINE gains `Arc` / `Line` sub-modes.** While drawing (`polylinePhase == NeedNextPoint`)
-  the keywords `Arc`/`A` and `Line`/`L` toggle the mode carried on the polyline draft state. Arc
-  mode's default is an arc **tangent to the previous segment**, its far end at the next pick; the
-  AutoCAD PLINE arc sub-options `CEnter`, `Radius`, `Angle` are supported in phase 1, with `Second
-  point`, `Direction` deferred. `Undo` removes the last segment and restores the prior mode and
-  rubber-band. 3DPOLY stays line-only (arc + independent per-vertex Z is out of scope).
+  **(d) POLYLINE gains `ARC` / `LINE` sub-modes.** While drawing (`polylinePhase == NeedNextPoint`)
+  the keywords `ARC` and `LINE` (full words — `A` / `ANGLE` are the existing segment-bearing lock,
+  D-2026-09-02-c) toggle the mode carried on the polyline draft state. Arc mode's default is an arc
+  **tangent to the previous segment**, its far end at the next pick; `RADIUS` and `CANGLE` (included
+  angle) set the next arc segment. `CEnter`, `Second point`, `Direction` are deferred past increment
+  1. `UNDO` removes the last segment. 3DPOLY stays line-only (arc + independent per-vertex Z is out
+  of scope).
 
   **(e) JOIN becomes arc-aware.** The edge walk in `ExecuteJoinSelection` carries a bulge per edge.
   An `ARC` entity in the selection contributes one bulge segment; a bulge polyline contributes its

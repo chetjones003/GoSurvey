@@ -28062,12 +28062,79 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         }
       }
     }
+    // REQ-316 / ADR-047 / D-2026-09-02-c: arc-mode keywords. Full words — `A`/`ANGLE` are the
+    // segment-bearing lock. 3DPOLY stays line-only.
+    if (!st.polylineDraft3d) {
+      if (low == "arc") {
+        st.polylineArcMode = true;
+        log.push_back("POLYLINE — arc mode. Next segment is a circular arc (LINE to switch back).");
+        return;
+      }
+      if (low == "line") {
+        st.polylineArcMode = false;
+        st.polylineArcRadius = 0.f;
+        st.polylineArcAngleValid = false;
+        log.push_back("POLYLINE — line mode.");
+        return;
+      }
+      if (st.polylineArcMode && (low.rfind("radius", 0) == 0 || low.rfind("rad ", 0) == 0 ||
+                                 (low.size() > 1 && low[0] == 'r' && (std::isdigit((unsigned char)low[1]) ||
+                                                                      low[1] == '-' || low[1] == '.')))) {
+        const size_t sp = low.find_first_of(" 0123456789-.");
+        float rv = 0.f;
+        if (sp != std::string::npos && ParseSingleFloatToken(StringUtil::trimCopy(line.substr(sp)), &rv) && rv > 1e-9f) {
+          st.polylineArcRadius = rv;
+          st.polylineArcAngleValid = false;
+          log.push_back("POLYLINE arc — radius set; pick the arc end point.");
+        } else {
+          log.push_back("POLYLINE arc — RADIUS <value>.");
+        }
+        return;
+      }
+      if (st.polylineArcMode && (low.rfind("cangle", 0) == 0 || low.rfind("ca ", 0) == 0)) {
+        const size_t sp = low.find_first_of(" 0123456789-.");
+        float av = 0.f;
+        if (sp != std::string::npos && ParseSingleFloatToken(StringUtil::trimCopy(line.substr(sp)), &av) &&
+            std::fabs(av) > 1e-6f) {
+          st.polylineArcAngleDeg = av;
+          st.polylineArcAngleValid = true;
+          st.polylineArcRadius = 0.f;
+          log.push_back("POLYLINE arc — included angle set; pick the arc end point.");
+        } else {
+          log.push_back("POLYLINE arc — CANGLE <degrees>.");
+        }
+        return;
+      }
+    }
+    if (low == "undo" || low == "u") {
+      // REQ-316: drop the most recently added vertex and its leaving-segment bulge.
+      if (st.polylinePhase != PP::NeedNextPoint || st.polylineDraftVerts.size() < 6) {
+        log.push_back("POLYLINE — nothing to undo.");
+        return;
+      }
+      st.polylineDraftVerts.resize(st.polylineDraftVerts.size() - 3);
+      if (!st.polylineDraftBulge.empty())
+        st.polylineDraftBulge.pop_back();
+      if (!st.polylineDraftBulge.empty())
+        st.polylineDraftBulge.back() = 0.f;  // the segment that had led to the removed vertex
+      if (st.polyDraftSegments > 0)
+        --st.polyDraftSegments;
+      const size_t n = st.polylineDraftVerts.size();
+      st.anchorX = st.polylineDraftVerts[n - 3];
+      st.anchorY = st.polylineDraftVerts[n - 2];
+      st.anchorZ = st.polylineDraftVerts[n - 1];
+      log.push_back("POLYLINE — last vertex removed.");
+      return;
+    }
     if (low == "close" || low == "cl") {
       CancelSegmentAnglePick(st, nullptr);
-      if (st.polylinePhase != PP::NeedNextPoint || st.polyDraftSegments == 0)
+      if (st.polylinePhase != PP::NeedNextPoint || st.polyDraftSegments == 0) {
         log.push_back("POLYLINE CLOSE — need at least one segment after the start point.");
-      else
+      } else {
+        if (st.polylineArcMode && !st.polylineDraftBulge.empty())
+          st.polylineDraftBulge.back() = CadPolylineDraftBulgeForNextPoint(st, st.polyFirstX, st.polyFirstY);
         CommitPolylineDraft(st, true, log);
+      }
       return;
     }
     if (low == "end") {
@@ -28119,7 +28186,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
     }
 
-    log.push_back("POLYLINE — X,Y / @dx,dy / A or 2P bearing / CLOSE / END / ortho distance.");
+    log.push_back(
+        "POLYLINE — X,Y / @dx,dy / A or 2P bearing / ARC / LINE / UNDO / CLOSE / END / ortho distance.");
     return;
   }
 

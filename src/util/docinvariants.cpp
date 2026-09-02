@@ -123,7 +123,9 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
             " vertices; the bulge array is per vertex (0 = straight)");
   }
   for (size_t i = 0; i < st.userPolylineVertsBulge.size(); ++i)
-    CheckFiniteScalar(out, "userPolylineVertsBulge", st.userPolylineVertsBulge[i], static_cast<int>(i));
+    if (!std::isfinite(st.userPolylineVertsBulge[i]))
+      Add(out, docinv::kPolylineBulge,
+          "userPolylineVertsBulge[" + std::to_string(i) + "] is not finite");
   for (size_t i = 0; i < st.userArcs.size(); ++i) {
     const CadArc& a = st.userArcs[i];
     const std::string p = "userArcs[" + std::to_string(i) + "].";

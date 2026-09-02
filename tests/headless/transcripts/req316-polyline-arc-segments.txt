@@ -1,0 +1,93 @@
+# REQ-316 / ADR-047 — a polyline may contain circular arc segments (per-vertex bulge), POLYLINE
+# draws them with the ARC / LINE sub-modes, and they survive a DXF and a .gs round trip.
+#
+# D-2026-09-02-c: the sub-mode keywords are the full words ARC and LINE — `A` / `ANGLE` are the
+# existing segment-bearing lock. RADIUS and CANGLE set the next arc segment.
+#
+# Before ADR-047 this was impossible in three separate ways: the polyline store carried no bulge,
+# POLYLINE had no arc mode, and the DXF importer flattened every group-42 arc into loose segments.
+
+NEW
+
+# ── 1. ARC / LINE sub-modes, tangent-arc default, and UNDO ─────────────────────────────────────
+CMD POLYLINE
+CMD 0,0
+CMD 10,0
+CMD ARC
+CMD 20,10
+CMD LINE
+CMD 30,10
+CMD UNDO
+CMD 25,10
+CMD END
+
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT LINES 0
+
+# Segment 0 (0,0)->(10,0) is straight.
+EXPECT POLYBULGE 0 0 0
+# Segment 1 (10,0)->(20,10) is an arc TANGENT to the +X segment before it: the tangent/chord angle
+# is 45 deg, the central angle is 90 deg, bulge = tan(90/4 deg) = tan(22.5 deg) = 0.414214, positive
+# because the end point is to the left of the incoming direction (CCW).
+EXPECT POLYBULGE 0 1 0.414214
+# Segment 2 (20,10)->(25,10) is straight again (LINE mode).
+EXPECT POLYBULGE 0 2 0
+EXPECT LOG "POLYLINE — arc mode."
+EXPECT LOG "POLYLINE — line mode."
+EXPECT LOG "POLYLINE — last vertex removed."
+
+# ── 2. CANGLE sets the included angle; a two-vertex arc polyline round-trips through DXF ────────
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD ARC
+CMD CANGLE 90
+CMD 10,0
+CMD END
+
+CHECK ALL
+EXPECT POLYLINES 1
+# 90 deg arc: bulge = tan(22.5 deg) = 0.414214.
+EXPECT POLYBULGE 0 0 0.414214
+
+EXPORT DXF %OUT%/arc-a.dxf
+# The bulge is written as an LWPOLYLINE group 42 (its value, not a tessellated chord fan).
+EXPECT FILECONTAINS %OUT%/arc-a.dxf "0.414214"
+
+# SURVIVAL — the arc polyline comes back as ONE polyline with its bulge intact, not as loose lines.
+NEW
+IMPORT DXF %OUT%/arc-a.dxf
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT LINES 0
+EXPECT POLYBULGE 0 0 0.414214
+
+# STABILITY — re-export is byte-identical (vertices, order, closed flag, bulge all survived).
+EXPORT DXF %OUT%/arc-b.dxf
+EXPECT SAMEFILE %OUT%/arc-a.dxf %OUT%/arc-b.dxf
+
+# ── 3. .gs round trip ─────────────────────────────────────────────────────────────────────────
+SAVEAS %OUT%/arc.gs
+NEW
+OPEN %OUT%/arc.gs
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYBULGE 0 0 0.414214
+
+# ── 4. A straight polyline is unaffected — no group 42, byte-stable, .gs has no bulge key ──────
+NEW
+CMD RECT
+CMD 0,0
+CMD 40,20
+
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYBULGE 0 0 0
+
+EXPORT DXF %OUT%/rect-a.dxf
+EXPORT DXF %OUT%/rect-b.dxf
+EXPECT SAMEFILE %OUT%/rect-a.dxf %OUT%/rect-b.dxf
+
+SAVEAS %OUT%/rect.gs
+EXPECT FILELACKS %OUT%/rect.gs "polylineVertsBulge"
