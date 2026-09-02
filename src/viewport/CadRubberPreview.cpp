@@ -510,4 +510,30 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
                            static_cast<float>(pl.origin.z), static_cast<float>(tip.z));
     }
   }
+
+  // --- REVOLVE: the axis line, and once both ends and a profile are set, a ghost of the solid at
+  //     the current angle (REQ-314 / ADR-046).
+  if (cmd.active == AppCommandState::Kind::Revolve) {
+    if (cmd.revolveAxisStartSet &&
+        cmd.revolvePhase != AppCommandState::RevolvePhase::WaitAxisStart) {
+      const ray3d::Vec3& a = cmd.revolveAxisStart;
+      const ray3d::Vec3& b = cmd.revolveAxisEnd;
+      PushRubberSegViewRel(rubberLines, a.x, a.y, b.x, b.y, 0., 0., static_cast<float>(a.z),
+                           static_cast<float>(b.z));
+    }
+    if (cmd.revolvePhase == AppCommandState::RevolvePhase::WaitAngle) {
+      std::vector<brep::Solid> ghosts;
+      if (CadBuildRevolveSolids(cmd, cmd.revolveAngleDeg, &ghosts)) {
+        for (const brep::Solid& g : ghosts) {
+          std::vector<double> segs;
+          brep::Problem why = brep::Problem::Ok;
+          if (brep::TessellateEdges(g, kSolidChordToleranceFt, &segs, &why)) {
+            for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+              PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                                   static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+          }
+        }
+      }
+    }
+  }
 }

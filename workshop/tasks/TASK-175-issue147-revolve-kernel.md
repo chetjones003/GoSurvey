@@ -79,7 +79,24 @@ function plus `Problem` values.
   generic validity reason rather than a specific one.
 - The axis must lie in the profile plane; an oblique / skew axis is out of scope.
 
-### Next: increment 2b
+### Increment 2b — the REVOLVE command (done, 2026-09-02, PR #NNN)
 
-The `REVOLVE` command (select profile → axis by two points or an entity → angle, typed or dragged
-with a ghost), and arc-profile revolve (sphere / torus portions) in the kernel.
+Bare `REVOLVE` opens a prompted command: select closed polylines / circles (if none selected) →
+pick the two ends of the revolve axis (click or type `X,Y`) → type the angle in degrees (Enter =
+360°). A ghost of the full solid previews once the axis is set. One undo step; source kept.
+
+Wiring mirrors EXTRUDE — `Kind::Revolve` + `RevolvePhase`, `StartRevolveCommand` /
+`HandleRevolveTextInput` / `SubmitRevolveViewportPick` / `CadRevolvePromptText` /
+`CancelRevolveCommand` / `CadBuildRevolveSolids`; click routing, `SubmitViewportPickImpl`,
+`ProcessCommandLineSubmit` Enter, `CommandInputHint`, `CadRubberPreview`, `CancelActiveCommand`,
+`kRegistry` (alias `REV`). Reuses `GatherExtrudeProfiles` and REQ-313's store/.gs/render unchanged.
+
+Transcript `tests/headless/transcripts/req314-revolve.txt`: rectangle → cylinder, undo/redo,
+triangle → 90° quarter-cone, a profile missing the axis refused, `.gs` save/reopen. Full suite
+**986/986**. The **axis-drag / dynamic-angle** preview and **X/Y/Z / Object** axis keywords are
+follow-ups; the ghost currently previews at the default/typed angle only.
+
+### Still pending: arc-profile revolve
+
+A revolved arc sweeps a sphere or torus portion — kernel work not yet done. `RevolveArcInProfile`
+still refuses it. This is the last piece of REQ-314's revolve row.

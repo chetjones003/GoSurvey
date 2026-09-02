@@ -8846,6 +8846,11 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     extrudeHint = CadExtrudePromptText(cmd);
     return extrudeHint.c_str();
   }
+  if (cmd.active == AppCommandState::Kind::Revolve) {
+    static std::string revolveHint;
+    revolveHint = CadRevolvePromptText(cmd);
+    return revolveHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Circle) {
     using CP = AppCommandState::CirclePhase;
     switch (cmd.circlePhase) {

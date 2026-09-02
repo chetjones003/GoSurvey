@@ -6392,6 +6392,7 @@ const CmdEntry kRegistry[] = {
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
+    {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
@@ -11762,6 +11763,16 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       return;
     }
     SubmitExtrudeViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Revolve) {
+    if (st.revolvePhase == AppCommandState::RevolvePhase::SelectProfiles) {
+      if (st.selBoxWaitingSecond)
+        finishBox();
+      return;
+    }
+    SubmitRevolveViewportPick(st, wx, wy, log);
     return;
   }
 
@@ -24259,6 +24270,216 @@ void SubmitExtrudeViewportPick(AppCommandState& st, float wx, float wy, std::vec
 }
 
 // -------------------------------------------------------------------------------------------------
+// The prompted REVOLVE command (REQ-314 / ADR-046 increment 2b). Select a closed polyline or circle,
+// then the two ends of the revolve axis, then an angle in degrees (default a full turn). The ghost
+// and the commit both go through CadBuildRevolveSolids.
+// -------------------------------------------------------------------------------------------------
+
+namespace {
+
+constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+
+} // namespace
+
+void CancelRevolveCommand(AppCommandState& st) {
+  st.revolvePhase = AppCommandState::RevolvePhase::SelectProfiles;
+  st.revolveProfiles.clear();
+  st.revolveAxisStartSet = false;
+  st.revolveAngleDeg = 360.0;
+}
+
+std::string CadRevolvePromptText(const AppCommandState& st) {
+  switch (st.revolvePhase) {
+  case AppCommandState::RevolvePhase::SelectProfiles:
+    return "REVOLVE — select closed polylines or circles, Enter when done. ESC cancels.";
+  case AppCommandState::RevolvePhase::WaitAxisStart:
+    return "REVOLVE — specify axis start point (click or type X,Y). ESC cancels.";
+  case AppCommandState::RevolvePhase::WaitAxisEnd:
+    return "REVOLVE — specify axis end point (click or type X,Y). ESC cancels.";
+  case AppCommandState::RevolvePhase::WaitAngle: {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "REVOLVE — angle of revolution in degrees <%g>: ",
+                  st.revolveAngleDeg);
+    return std::string(buf) + "Enter for the default. ESC cancels.";
+  }
+  }
+  return "REVOLVE";
+}
+
+static void RevolveEnterAxisPhase(AppCommandState& st, std::vector<std::string>& log) {
+  int skipped = 0;
+  const int n = GatherExtrudeProfiles(st, &st.revolveProfiles, &skipped);
+  if (n == 0) {
+    log.push_back("REVOLVE — nothing selected can be revolved (need a closed polyline or a circle).");
+    st.revolvePhase = AppCommandState::RevolvePhase::SelectProfiles;
+    return;
+  }
+  if (skipped > 0)
+    log.push_back("REVOLVE — " + std::to_string(skipped) + " selected object(s) are not profiles and were ignored.");
+  st.revolvePhase = AppCommandState::RevolvePhase::WaitAxisStart;
+  st.revolveAxisStartSet = false;
+  log.push_back(CadRevolvePromptText(st));
+}
+
+void StartRevolveCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelRevolveCommand(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Revolve;
+  st.lastCommand = AppCommandState::Kind::Revolve;
+  st.selBoxWaitingSecond = false;
+
+  if (!st.selection.empty()) {
+    RevolveEnterAxisPhase(st, log);
+    if (st.revolvePhase != AppCommandState::RevolvePhase::SelectProfiles)
+      return;
+    st.selection.clear();
+  }
+  st.revolvePhase = AppCommandState::RevolvePhase::SelectProfiles;
+  log.push_back(CadRevolvePromptText(st));
+}
+
+bool CadBuildRevolveSolids(const AppCommandState& st, double angleDeg, std::vector<brep::Solid>* out) {
+  out->clear();
+  if (st.revolveProfiles.empty() || !st.revolveAxisStartSet)
+    return false;
+  const ray3d::Vec3 dir = ray3d::Sub(st.revolveAxisEnd, st.revolveAxisStart);
+  if (!(ray3d::Length(dir) > 1e-9))
+    return false;
+  double ang = angleDeg * kDegToRad;
+  if (!std::isfinite(ang) || std::fabs(ang) <= 1e-9)
+    return false;
+  if (std::fabs(ang) > 2.0 * 3.14159265358979323846)
+    ang = (ang > 0.0 ? 1.0 : -1.0) * 2.0 * 3.14159265358979323846;
+  for (const brep::Profile& p : st.revolveProfiles) {
+    brep::Solid s;
+    brep::Problem why = brep::Problem::Ok;
+    if (!brep::Revolve(p, st.revolveAxisStart, dir, ang, &s, &why)) {
+      out->clear();
+      return false;
+    }
+    out->push_back(std::move(s));
+  }
+  return !out->empty();
+}
+
+static void CommitRevolve(AppCommandState& st, double angleDeg, std::vector<std::string>& log) {
+  // Report the kernel's own reason when the numbers do not make a solid (REQ-201).
+  const ray3d::Vec3 dir = ray3d::Sub(st.revolveAxisEnd, st.revolveAxisStart);
+  double ang = angleDeg * kDegToRad;
+  if (std::fabs(ang) > 2.0 * 3.14159265358979323846)
+    ang = (ang > 0.0 ? 1.0 : -1.0) * 2.0 * 3.14159265358979323846;
+  std::vector<brep::Solid> built;
+  bool ok = !st.revolveProfiles.empty() && ray3d::Length(dir) > 1e-9;
+  brep::Problem lastWhy = brep::Problem::Ok;
+  if (ok) {
+    for (const brep::Profile& p : st.revolveProfiles) {
+      brep::Solid s;
+      brep::Problem why = brep::Problem::Ok;
+      if (brep::Revolve(p, st.revolveAxisStart, dir, ang, &s, &why))
+        built.push_back(std::move(s));
+      else {
+        lastWhy = why;
+        ok = false;
+      }
+    }
+  }
+  if (!ok || built.empty()) {
+    log.push_back(std::string("REVOLVE — ") +
+                  (lastWhy != brep::Problem::Ok ? brep::ProblemText(lastWhy)
+                                                : "could not build a solid from that axis and angle."));
+    return;
+  }
+  PushUndoSnapshot(st, "Revolve");
+  for (brep::Solid& s : built) {
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+    log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+  }
+  BumpCadGpuCache(st);
+  st.selection.clear();
+  CancelRevolveCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+bool HandleRevolveTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Revolve)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  using RP = AppCommandState::RevolvePhase;
+
+  if (st.revolvePhase == RP::SelectProfiles) {
+    if (!line.empty())
+      return false;
+    if (st.selection.empty()) {
+      log.push_back("REVOLVE — nothing selected. Click a closed polyline or circle, or ESC.");
+      return true;
+    }
+    RevolveEnterAxisPhase(st, log);
+    return true;
+  }
+
+  if (st.revolvePhase == RP::WaitAxisStart || st.revolvePhase == RP::WaitAxisEnd) {
+    if (line.empty())
+      return true;  // a bare Enter has nothing to act on here; the prompt stands
+    float lx = 0.f, ly = 0.f;
+    double wz = 0.0;
+    if (!ParseStoragePointZ(st, line, &lx, &ly, &wz, /*allowRelative=*/false, 0.f, 0.f)) {
+      log.push_back("REVOLVE — could not read the point. Use X,Y or X,Y,Z.");
+      return true;
+    }
+    const ray3d::Vec3 p{static_cast<double>(lx), static_cast<double>(ly), wz};
+    if (st.revolvePhase == RP::WaitAxisStart) {
+      st.revolveAxisStart = p;
+      st.revolveAxisStartSet = true;
+      st.revolvePhase = RP::WaitAxisEnd;
+    } else {
+      st.revolveAxisEnd = p;
+      st.revolvePhase = RP::WaitAngle;
+    }
+    log.push_back(CadRevolvePromptText(st));
+    return true;
+  }
+
+  // WaitAngle.
+  if (line.empty()) {
+    CommitRevolve(st, st.revolveAngleDeg, log);
+    return true;
+  }
+  char* end = nullptr;
+  const double deg = std::strtod(line.c_str(), &end);
+  if (!end || *end != '\0' || !std::isfinite(deg) || std::fabs(deg) <= 1e-9) {
+    log.push_back("REVOLVE — \"" + line + "\" is not an angle. Type degrees, or ESC.");
+    return true;
+  }
+  st.revolveAngleDeg = deg;
+  CommitRevolve(st, deg, log);
+  return true;
+}
+
+void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Revolve)
+    return;
+  using RP = AppCommandState::RevolvePhase;
+  const ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
+                      static_cast<double>(CadCommitElevation(st))};
+  if (st.revolvePhase == RP::WaitAxisStart) {
+    st.revolveAxisStart = p;
+    st.revolveAxisStartSet = true;
+    st.revolvePhase = RP::WaitAxisEnd;
+    log.push_back(CadRevolvePromptText(st));
+    return;
+  }
+  if (st.revolvePhase == RP::WaitAxisEnd) {
+    st.revolveAxisEnd = p;
+    st.revolvePhase = RP::WaitAngle;
+    log.push_back(CadRevolvePromptText(st));
+    return;
+  }
+  // SelectProfiles is handled by the shared click path; WaitAngle takes a typed value.
+}
+
+// -------------------------------------------------------------------------------------------------
 // The prompted form of the seven primitives (REQ-313 as amended).
 //
 // `CYLINDER` on its own asks for the base point, then for its dimensions by letter — R for radius,
@@ -25587,6 +25808,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("EXTRUDE canceled.");
     CancelExtrudeCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Revolve) {
+    log.push_back("REVOLVE canceled.");
+    CancelRevolveCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
   else if (st.active == AppCommandState::Kind::FeatureLine)
@@ -26238,6 +26463,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // Enter confirms the selected profiles (SelectProfiles) or commits at the cursor height
       // (WaitHeight) — HandleExtrudeTextInput handles both, so the empty line is not swallowed here.
       (void)HandleExtrudeTextInput("", st, log);
+    } else if (st.active == K::Revolve) {
+      // Enter confirms the selection, or (at the angle prompt) commits at the default angle.
+      (void)HandleRevolveTextInput("", st, log);
     } else if (st.active == K::Offset) {
       using OP = AppCommandState::OffsetPhase;
       if (st.offsetPhase == OP::WaitDistanceOrThrough)
@@ -26552,6 +26780,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         StartExtrudeCommand(st, log);
       else
         CadExtrudeSelection(st, restOfLine, log);
+      return;
+    }
+    if (plotTok == "revolve" || plotTok == "rev") {
+      StartRevolveCommand(st, log);
       return;
     }
     // `PERSPECTIVE ON` in one line; a bare `PERSPECTIVE` reports the current projection — the same
@@ -27971,6 +28203,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleExtrudeTextInput(line, st, log))
       return;
     log.push_back(CadExtrudePromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Revolve) {
+    if (HandleRevolveTextInput(line, st, log))
+      return;
+    log.push_back(CadRevolvePromptText(st));
     return;
   }
 
