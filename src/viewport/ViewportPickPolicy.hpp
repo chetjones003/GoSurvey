@@ -33,7 +33,9 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
          (cmd.active == K::Extrude &&
           cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) ||
          (cmd.active == K::Revolve &&
-          cmd.revolvePhase == AppCommandState::RevolvePhase::SelectProfiles);
+          cmd.revolvePhase == AppCommandState::RevolvePhase::SelectProfiles) ||
+         (cmd.active == K::Slice &&
+          cmd.slicePhase == AppCommandState::SlicePhase::SelectSolids);
 }
 
 /// What a left-click in the **model-space** viewport means for the currently active command.
@@ -166,6 +168,21 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
       return R::SnappedPointPick;
     case RP::WaitAngle:
       return R::Ignore;  // a typed value; SubmitViewportPickImpl has no branch for it
+    }
+    return R::Ignore;
+  }
+  // SLICE (REQ-314): select solids, then three snapped points for the plane, then a point on the
+  // side to keep (or a typed B).
+  case K::Slice: {
+    using SP = AppCommandState::SlicePhase;
+    switch (cmd.slicePhase) {
+    case SP::SelectSolids:
+      return R::SelectionAccumulate;
+    case SP::WaitP1:
+    case SP::WaitP2:
+    case SP::WaitP3:
+    case SP::WaitKeepSide:
+      return R::SnappedPointPick;
     }
     return R::Ignore;
   }

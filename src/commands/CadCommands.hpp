@@ -1402,6 +1402,9 @@ struct AppCommandState {
     /// REVOLVE (REQ-314 / ADR-046, GitHub #147): select closed polylines / circles, pick the two
     /// ends of the revolve axis, then an angle in degrees.
     Revolve,
+    /// SLICE (REQ-314 / ADR-046, GitHub #147): select solids, define a cutting plane with three
+    /// points, then pick which side to keep (or both).
+    Slice,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1464,6 +1467,7 @@ struct AppCommandState {
     case Kind::Solid:              return "SOLID";  // REQ-313: one Kind, all seven primitives
     case Kind::Extrude:           return "EXTRUDE";
     case Kind::Revolve:          return "REVOLVE";
+    case Kind::Slice:            return "SLICE";
     default:                  return "";
     }
   }
@@ -2114,6 +2118,21 @@ struct AppCommandState {
   bool revolveAxisStartSet = false;
   ray3d::Vec3 revolveAxisEnd;
   double revolveAngleDeg = 360.0;
+
+  // --- The SLICE command (REQ-314 / ADR-046 increment 3, GitHub #147) ---------------------------
+
+  enum class SlicePhase {
+    SelectSolids,   ///< Accumulate a selection of solids; Enter confirms.
+    WaitP1,         ///< First of three points that define the cutting plane.
+    WaitP2,
+    WaitP3,
+    WaitKeepSide,   ///< Pick a point on the side to keep, or [B]oth.
+  } slicePhase = SlicePhase::SelectSolids;
+
+  std::vector<int> sliceSolidIndices;  ///< indices into cadSolids, gathered when SelectSolids ends
+  ray3d::Vec3 sliceP1;
+  ray3d::Vec3 sliceP2;
+  ray3d::Vec3 sliceP3;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -4113,6 +4132,17 @@ void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vec
 /// and the commit. False (and \p out cleared) until a profile and both axis points are set.
 [[nodiscard]] bool CadBuildRevolveSolids(const AppCommandState& st, double angleDeg,
                                          std::vector<brep::Solid>* out);
+
+// --- SLICE (REQ-314 / ADR-046 increment 3b) -------------------------------------------------
+
+/// Begin the prompted SLICE command a bare `SLICE` opens: select solids (if none are selected),
+/// three points for the cutting plane, then a point on the side to keep (or `B` for both).
+void StartSliceCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelSliceCommand(AppCommandState& st);
+[[nodiscard]] std::string CadSlicePromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleSliceTextInput(const std::string& line, AppCommandState& st,
+                                        std::vector<std::string>& log);
+void SubmitSliceViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
