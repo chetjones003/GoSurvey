@@ -24,12 +24,19 @@ key (no version bump). `BuildBore` in `brep.cpp`; `TryBooleanCylinderThroughPlan
 loop is reversed, with the bored face taking the opposite circle winding. `TryBooleanSpherePlanar`
 gained a `sphIsMinuend` argument. Volume `vol(P) − π h²(3r−h)/3` exact.
 
+### Slice 3 — the coaxial counterbore / tube (2026-09-02)
+
+`SUBTRACT(coaxial cylinder A, coaxial cylinder B)`. `BuildCoaxialStack` gained an `rIn` vector — an
+`rIn[i] > 0` band gets an **inward** inner wall, and the horizontal faces handle inner-radius
+transitions. Cases: B wider than A over the overlap → A shrinks / splits / vanishes (planar only);
+B narrower → a **tube** (spans A) or a **counterbore** (opens one end). A bore that opens neither end
+(a sealed internal cavity) is refused.
+
 ### Deferred to follow-up B2a slices (still refused `BooleanCurvedFace`, by name)
 
 - `SUBTRACT(cylinder, planar solid)` — a box notch cut from a cylinder (`cylIsMinuend`).
 - `SUBTRACT(sphere, planar solid)` — a box corner off a sphere (`sphIsMinuend`).
-- `SUBTRACT(coaxial cylinder, coaxial cylinder)` — a **counterbore / tube** (`BuildCoaxialStack`
-  needs a non-zero inner radius per band).
+- A coaxial bore sealed at both ends (an internal cavity — needs a second shell).
 - A cylinder whose base is inside the solid (a floating pocket).
 
 ## The problem this solves
