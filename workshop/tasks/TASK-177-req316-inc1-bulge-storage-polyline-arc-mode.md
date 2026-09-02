@@ -1,7 +1,7 @@
 # TASK-177 — REQ-316 Increment 1: per-vertex bulge storage, POLYLINE arc mode, arc render, DXF/.gs round-trip
 
 - Type:    feature
-- Status:  implement
+- Status:  self-verify
 - Opened:  2026-09-02
 - Owner:   chetjones003
 
@@ -49,13 +49,26 @@
   bulge, pre-ADR-047 .gs fixture, straight-polyline byte stability.
 - Steps:
   - [x] BulgeArc helper + unit tests (tests/BulgeArcTests.cpp green)
-  - [ ] parallel userPolylineVertsBulge array (3 copies) + mirror sites + docinvariants
-  - [ ] renderer arc tessellation
-  - [ ] POLYLINE Arc/Line sub-modes + options + Undo
-  - [ ] polyline length over arcs
-  - [ ] DxfIo export/import + extents
-  - [ ] GsIo additive bulge array
-  - [ ] tests green; self-verify skills
+  - [x] parallel userPolylineVertsBulge array (3 copies) + mirror sites + docinvariants
+  - [x] renderer arc tessellation (AppendChainEdgesVc expands non-zero-bulge segments)
+  - [x] POLYLINE ARC/LINE sub-modes + RADIUS/CANGLE + UNDO (D-2026-09-02-c)
+  - [x] polyline length over arcs (PolylineOpenLengthOf -> BulgeSegmentLength)
+  - [x] DxfIo import (store bulge, drop tessellation) + export (group 42)
+  - [x] GsIo additive bulge array (model + block content), no version bump
+  - [x] tests green: 817 Catch2, 996/996 ctest incl. req316 transcript (58 steps)
+
+## Deferred within Inc 1 (documented, not silent)
+- Live rubber-band preview still shows a straight line during an arc pick
+  (CadRubberPreview not arc-aware). Acceptance doesn't require preview.
+- DXF `$EXTMIN/$EXTMAX` sweep uses vertices only; an arc bowing outside its chord
+  is not in the header extents. Straight- and arc-polyline byte-stability both
+  pass (transcript), so this is a refinement, not a round-trip break.
+- PdfPlot and block-INSERT render draw arc segments as chords.
+- LibreDWG (.dwg) import reads bulges as straight (DXF path is complete).
+- Paper-space polylines have no bulge store.
+- COPY / MIRROR / ROTATE / clipboard-paste of an arc polyline flatten it to
+  straight (SyncPolylineBulge pads zeros). Arc-aware modify is Inc 3.
+- Snap / pick / Properties on arc segments — Inc 2.
 
 ## 8. Implementation log
 - 2026-09-02 open → implement. Branch feat/polyline-arc-mode (worktree).
@@ -63,3 +76,27 @@
   tests/BulgeArcTests.cpp (6 cases / 17 assertions) green.
 - 2026-09-02 Storage approach corrected stride-widen → parallel `userPolylineVertsBulge` array
   (ADR-047 (a) correction; D-2026-09-02-b updated). Rename attempt reverted.
+- 2026-09-02 Storage layer + docinvariants + GsIo landed; full suite green (commit f70f3ab).
+- 2026-09-02 DxfIo bulge round-trip + renderer arc tessellation + arc length + draft plumbing.
+- 2026-09-02 Keyword conflict (`A`/`ANGLE` = bearing lock) raised with user → D-2026-09-02-c:
+  full-word `ARC`/`LINE`/`RADIUS`/`CANGLE`/`UNDO`.
+- 2026-09-02 Keyword handler + req316 transcript (58 steps) + docinv fixtures. 817 Catch2 /
+  996 ctest green.
+
+## 9. Self-verification
+- [x] build-project — PASS (release + GoSurveyTests + gosurvey_headless, MSVC)
+- [x] architecture-review — PASS. No Workshop architectural decision: the storage change is
+  ADR-047 (a) (parallel array, exception noted in §11.8); the keyword choice is D-2026-09-02-c
+  (user). No new dependency, layer, global, or public API. `BulgeArc` is a pure value helper with
+  3 uses (§11.4). `.gs` additive, no version bump (ADR-030).
+- [x] code-review — PASS. Bulge array is empty-tolerant everywhere (empty = all straight), kept
+  empty for straight-only drawings so `.gs` stays byte-stable; mutation sites mirror or Sync;
+  ErasePolylineByIndex cuts the per-vertex span [a,b). One correction mid-work (stride→sidecar).
+- [x] dependency-audit — PASS / n-a (no new dependency)
+- [x] performance-review — n-a. Arc tessellation is chord-tolerance, feeds the existing line
+  batch (no new GL); straight polylines take the unchanged path. Not a measured REQ-100 profile.
+- [x] testing — PASS. Happy: tangent/radius/angle bulge, DXF+`.gs` round trip, arc length.
+  Failure: short bulge array, non-finite bulge, degenerate chord, straight-polyline byte stability.
+
+## 10. Verification result
+- Verdict: PASS for increment 1 (self-verified). Increments 2–4 are separate tasks.
