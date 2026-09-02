@@ -1829,10 +1829,40 @@ TEST_CASE("Curved B1: a cylinder axis-aligned through a box - plug, boss, and th
     REQUIRE(TessellatedVolume(t) == Approx(1000.0 + kPiT * 4.0 * 10.0).epsilon(2e-3));
   }
 
-  SECTION("SUBTRACT is refused — a bore wall faces inward (B2, D-2026-09-02-b)") {
-    REQUIRE_FALSE(brep::BooleanSubtract(box, cyl, &r, &why));
+  SECTION("SUBTRACT drills a round hole through the box (B2a — an inward wall)") {
+    REQUIRE(brep::BooleanSubtract(box, cyl, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(1000.0 - kPiT * 4.0 * 10.0).epsilon(1e-9));
+    // The two bored faces are annuli, not disks, so naive V-E+F is not the genus formula here.
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
+    RequireWindingMatchesNormals(t);  // the bore wall shades as a concave surface
+    REQUIRE(TessellatedVolume(t) == Approx(1000.0 - kPiT * 4.0 * 10.0).epsilon(3e-3));
+  }
+
+  SECTION("SUBTRACT of a cylinder that stops inside is a blind round pocket") {
+    ucs::Ucs down;
+    REQUIRE(ucs::FromNormal(Vec3{0, 0, 12}, Vec3{0, 0, -1}, &down));
+    Solid drill;
+    REQUIRE(brep::MakeCylinder(down, 2, 8, &drill, &why));  // base z=12, axis down, floor at z=4
+    REQUIRE(brep::BooleanSubtract(box, drill, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+    // removed = the cylinder's part inside the box: z[4,10] -> pi r^2 * 6
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(1000.0 - kPiT * 4.0 * 6.0).epsilon(1e-9));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("SUBTRACT the other way (cylinder - box) is still refused - its own slice") {
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &r, &why));
     REQUIRE(why == Problem::BooleanCurvedFace);
-    REQUIRE(r.empty());
   }
 
   SECTION("an oblique cylinder is refused by name") {
@@ -1858,15 +1888,18 @@ TEST_CASE("Curved B1: a failed curved Boolean leaves the operands untouched", "[
   Solid cyl;
   REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
   REQUIRE(brep::MakeCylinder(At(0, 0, -5), 2, 20, &cyl, &why));
+  Solid cone;
+  REQUIRE(brep::MakeCone(At(0, 0, -5), 2, 0, 20, &cone, &why));
   const Solid boxBefore = box;
-  const Solid cylBefore = cyl;
+  const Solid coneBefore = cone;
   std::vector<Solid> r;
-  REQUIRE_FALSE(brep::BooleanSubtract(box, cyl, &r, &why));
+  REQUIRE_FALSE(brep::BooleanSubtract(box, cone, &r, &why));  // a cone operand is still refused
   REQUIRE(box.vertices.size() == boxBefore.vertices.size());
-  REQUIRE(cyl.faces.size() == cylBefore.faces.size());
+  REQUIRE(cone.faces.size() == coneBefore.faces.size());
   REQUIRE(brep::ComputeMassProperties(box).volume == Approx(1000.0).epsilon(1e-12));
-  REQUIRE(brep::ComputeMassProperties(cyl).volume ==
-          Approx(brep::ComputeMassProperties(cylBefore).volume).epsilon(1e-12));
+  REQUIRE(brep::ComputeMassProperties(cone).volume ==
+          Approx(brep::ComputeMassProperties(coneBefore).volume).epsilon(1e-12));
+  (void)cyl;
 }
 
 TEST_CASE("Curved B1: two coaxial cylinders - union and intersect", "[brep][req314]") {
@@ -1956,7 +1989,7 @@ TEST_CASE("Curved B1: a sphere cut by one face of a box - cap and boss", "[brep]
     RequireWindingMatchesNormals(t);
   }
 
-  SECTION("SUBTRACT is refused - a scooped sphere face points inward (B2)") {
+  SECTION("SUBTRACT (a spherical dimple) is refused for now - a later B2a slice") {
     REQUIRE_FALSE(brep::BooleanSubtract(box, sphere, &r, &why));
     REQUIRE(why == Problem::BooleanCurvedFace);
   }
@@ -1996,6 +2029,32 @@ TEST_CASE("Curved B1: a sphere against a box - the refused and trivial cases", "
     REQUIRE(brep::BooleanUnion(sphere, box, &r, &why));
     REQUIRE(r.size() == 2);
   }
+}
+
+TEST_CASE("Curved B2a: a drilled hole stays exact at survey coordinate magnitude, and survives Translate",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(At(3.5e6, 1.24e7, 0), 10, 10, 10, &box, &why));
+  REQUIRE(brep::MakeCylinder(At(3.5e6, 1.24e7, -5), 2, 20, &cyl, &why));
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(box, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+          Approx(1000.0 - kPiT * 4.0 * 10.0).epsilon(1e-6));
+
+  // Translate must carry the inward flag and every coordinate (REQ-101 rebase).
+  const brep::Solid moved = brep::Translate(r[0], Vec3{-3.5e6, -1.24e7, 0});
+  REQUIRE(brep::Validate(moved) == Problem::Ok);
+  bool sawInward = false;
+  for (const auto& f : moved.faces)
+    if (f.surface.inward)
+      sawInward = true;
+  REQUIRE(sawInward);
+  REQUIRE(brep::ComputeMassProperties(moved).volume ==
+          Approx(1000.0 - kPiT * 4.0 * 10.0).epsilon(1e-9));
 }
 
 TEST_CASE("Curved B1: a boss stays exact at survey coordinate magnitude", "[brep][req314]") {

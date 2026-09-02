@@ -716,6 +716,8 @@ json SolidToJson(const brep::Solid& s) {
     sf["r"] = f.surface.radius;
     sf["r2"] = f.surface.radius2;
     sf["h"] = f.surface.height;
+    if (f.surface.inward)  // REQ-314 B2a — additive, tolerant key, no kGsFormatVersion bump
+      sf["inward"] = true;
     jf["surface"] = std::move(sf);
     jf["u"] = json::array({f.uStart, f.uEnd});
     jf["v"] = json::array({f.vStart, f.vEnd});
@@ -807,6 +809,7 @@ bool SolidFromJson(const json& o, brep::Solid* out) {
         return false;
       f.surface.radius = sf.value("r", 0.0);
       f.surface.radius2 = sf.value("r2", 0.0);
+      f.surface.inward = sf.value("inward", false);
       f.surface.height = sf.value("h", 0.0);
       if (jf.contains("u") && jf["u"].is_array() && jf["u"].size() == 2) {
         f.uStart = jf["u"][0].get<double>();
