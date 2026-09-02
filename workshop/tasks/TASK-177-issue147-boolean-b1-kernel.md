@@ -76,7 +76,25 @@ report their own failure names.
 - A tricky corner case can still produce an edge used the wrong number of times → the weld fails →
   the operation is refused with nothing stored (REQ-201 holds; the message is generic).
 
+### Commands — UNION / SUBTRACT / INTERSECT (done, 2026-09-02, PR #NNN)
+
+Selection-driven one-shots, like the EXTRUDE one-liner (no state machine): select **exactly two**
+solids, then `UNION` / `SUBTRACT` / `INTERSECT` (aliases `UNI` / `SU` / `IN`). Both operands are
+replaced by the result in one undo step; SUBTRACT keeps the first-selected solid and removes the
+second. A pair the kernel refuses (curved, non-convex, empty intersect) is reported and the
+document is untouched (REQ-201). `CadBooleanSelection` in `CadCommands.cpp`; dispatch + `kRegistry`
+beside `SLICE`. Reuses REQ-313's store / `.gs` / render unchanged.
+
+Transcript `tests/headless/transcripts/req314-boolean.txt`: union / subtract / intersect of two
+overlapping boxes vs. hand volumes (1640 / 640 / 360), undo restores both operands, >2 selected is
+reported, a curved operand is refused, `.gs` round-trip of a subtract result. Full suite
+**996/996**.
+
+**Not yet:** more than two operands (the result goes non-convex after the first op, which B1
+refuses); a `SUBTRACT` prompt that disambiguates keep-vs-remove by picking; window-selecting a pile
+the way AutoCAD's `UNION` does.
+
 ### Next
 
-The `UNION` / `SUBTRACT` / `INTERSECT` commands (2b), then B1's remaining reach (curved operands
-with line/arc intersections), then B2 (the general analytic intersection curve).
+B1's remaining reach — non-convex planar operands, then curved operands with line/arc
+intersections (paired with curved-face slicing) — then B2 (the general analytic intersection curve).
