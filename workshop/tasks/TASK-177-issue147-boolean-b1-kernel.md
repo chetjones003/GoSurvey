@@ -90,11 +90,27 @@ overlapping boxes vs. hand volumes (1640 / 640 / 360), undo restores both operan
 reported, a curved operand is refused, `.gs` round-trip of a subtract result. Full suite
 **996/996**.
 
-**Not yet:** more than two operands (the result goes non-convex after the first op, which B1
-refuses); a `SUBTRACT` prompt that disambiguates keep-vs-remove by picking; window-selecting a pile
-the way AutoCAD's `UNION` does.
+### Non-convex operands + N-operand commands (done, 2026-09-02, PR #NNN)
+
+The convexity restriction is lifted. Fragment classification switched from a convex half-space test
+to a general **even-odd ray cast** against the operand's planar faces (`PointInPlanarSolid`),
+robust to the ray grazing an edge by retrying along four incommensurate directions. Face fragments
+are still split by *all* of the other operand's face planes — over-splits for a non-convex operand,
+but every fragment still ends up wholly inside or outside because the boundary is a subset of those
+planes. Disjoint routing switched to an AABB test plus vertex/centroid probes (`SolidsOverlap`).
+
+The `UNION` / `SUBTRACT` / `INTERSECT` commands now take **two or more** selected solids and
+left-fold them: UNION keeps disjoint pieces aside and folds later operands against each; a step that
+fails is reported with nothing changed.
+
+Tests: `BrepTests` gains a chain — subtract a corner notch (→ non-convex L), then subtract a second
+bar from the L, both validated with hand volumes. Transcript adds a three-box UNION folding to one
+and a "fewer than two" refusal. Full suite **997/997**.
+
+**Still refused:** curved operands (`BooleanCurvedFace`). `BooleanNonConvex` is now unreachable
+(kept in the enum).
 
 ### Next
 
-B1's remaining reach — non-convex planar operands, then curved operands with line/arc
-intersections (paired with curved-face slicing) — then B2 (the general analytic intersection curve).
+Curved operands with line/arc intersections (perpendicular / parallel cuts → circles), paired with
+curved-face slicing — then B2 (the general analytic intersection curve).

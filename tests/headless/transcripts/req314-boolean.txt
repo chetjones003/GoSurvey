@@ -47,18 +47,27 @@ EXPECT LOG "volume 360"
 CMD UNDO
 EXPECT SOLIDS 2
 
-# --- More than two solids selected: reported, nothing changes -------------------------
-CMD BOX 500,0 4 4 4
+# --- Three solids: UNION folds them into one --------------------------------------------
+CMD BOX 8,0,0 6 10 10
 EXPECT SOLIDS 3
-BOX -600 -8 600 8
+BOX -12 -8 15 8
 EXPECT SELECTED 3
-CMD INTERSECT
-EXPECT LOG "select exactly two solids"
+CMD UNION
+EXPECT SOLIDS 1
+EXPECT LOG "3 solids combined into 1 solid"
+CMD UNDO
 EXPECT SOLIDS 3
 
+# --- Fewer than two solids selected: reported, nothing changes --------------------------
+NEW
+CMD BOX 0,0 4 4 4
+BOX -3 -3 3 3
+EXPECT SELECTED 1
+CMD INTERSECT
+EXPECT LOG "at least two solids"
+EXPECT SOLIDS 1
+
 # --- A curved operand is refused -------------------------------------------------------
-CMD CYLINDER 0,0 3 6
-EXPECT SOLIDS 4
 NEW
 CMD BOX 0,0 6 6 6
 CMD CYLINDER 0,0 3 10

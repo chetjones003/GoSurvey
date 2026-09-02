@@ -1709,3 +1709,29 @@ TEST_CASE("SUBTRACT punches a blind hole through one face of a box", "[brep][req
   REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(1000.0 - 24.0).epsilon(1e-9));
   REQUIRE(brep::EulerCharacteristic(r[0]) == 2);  // still genus 0 — a blind pocket, not a tunnel
 }
+
+TEST_CASE("Booleans chain on a non-convex result", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  // Start with a 10-cube, cut a corner notch out to make a non-convex L, then subtract again.
+  Solid cube;
+  Solid notch;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &cube, &why));       // x,y[-5,5] z[0,10]
+  REQUIRE(brep::MakeBox(At(4, 4, 6), 6, 6, 6, &notch, &why));     // x[1,7] y[1,7] z[6,12]
+  // Removed part inside the cube: x[1,5] y[1,5] z[6,10] = 4 x 4 x 4 = 64.
+  std::vector<Solid> ell;
+  REQUIRE(brep::BooleanSubtract(cube, notch, &ell, &why));
+  REQUIRE(ell.size() == 1);
+  REQUIRE(brep::Validate(ell[0]) == Problem::Ok);
+  const double vEll = brep::ComputeMassProperties(ell[0]).volume;
+  REQUIRE(vEll == Approx(1000.0 - 64.0).epsilon(1e-9));
+
+  // Now subtract a second bar from that NON-CONVEX solid.
+  Solid bar;
+  REQUIRE(brep::MakeBox(At(-3, -3, 5), 2, 2, 20, &bar, &why));  // x[-4,-2] y[-4,-2] z[5,25]
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(ell[0], bar, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  // Bar's part inside the L: x[-4,-2] y[-4,-2] z[5,10] = 2 x 2 x 5 = 20 (that corner is not in the notch).
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(vEll - 20.0).epsilon(1e-9));
+}
