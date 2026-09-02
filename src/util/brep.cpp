@@ -1818,6 +1818,69 @@ struct PolyFace {
   return Succeed(outWhy);
 }
 
+/// Slice a cylinder / cone primitive by a plane PERPENDICULAR to its axis — the "cut a pipe or
+/// shaft to length" case, where the cross-section is a circle the kernel can hold. The two pieces
+/// are rebuilt as fresh primitives (a cylinder into two cylinders, a cone into two frustums).
+/// Returns false (leaving \p handled false) for anything else — an oblique or parallel plane, a
+/// sphere / torus, or a non-primitive curved solid — so the caller falls back to its refusal.
+[[nodiscard]] bool SliceCurvedPrimitive(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                        SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
+                                        Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Cylinder && rc.kind != PrimitiveKind::Cone)
+    return false;
+  const ucs::Ucs& fr = rc.frame;
+  const Vec3 axis = fr.zAxis;
+  // The plane must be perpendicular to the axis (its normal parallel to the axis).
+  if (std::fabs(std::fabs(ray3d::Dot(pn, axis)) - 1.0) > 1e-6)
+    return false;
+
+  *handled = true;
+  const double h = rc.height;
+  const double scale = std::max(h, std::max(rc.radius, rc.radius2));
+  const double eps = 1e-7 * std::max(scale, 1.0);
+  const double d = ray3d::Dot(ray3d::Sub(planePoint, fr.origin), axis);  // cut height above the base
+  if (d <= eps || d >= h - eps)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+
+  const double rCut = rc.kind == PrimitiveKind::Cylinder
+                          ? rc.radius
+                          : rc.radius + (rc.radius2 - rc.radius) * (d / h);
+
+  ucs::Ucs upperFrame = fr;
+  upperFrame.origin = ray3d::Add(fr.origin, ray3d::Scale(axis, d));
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  // "Above" is the +pn side. +pn points along +axis iff their dot is positive.
+  const bool aboveIsUpper = ray3d::Dot(pn, axis) > 0.0;
+
+  Problem why = Problem::Ok;
+  auto buildLower = [&](Solid* o) {
+    return rc.kind == PrimitiveKind::Cylinder ? MakeCylinder(fr, rc.radius, d, o, &why)
+                                              : MakeCone(fr, rc.radius, rCut, d, o, &why);
+  };
+  auto buildUpper = [&](Solid* o) {
+    return rc.kind == PrimitiveKind::Cylinder ? MakeCylinder(upperFrame, rc.radius, h - d, o, &why)
+                                              : MakeCone(upperFrame, rCut, rc.radius2, h - d, o, &why);
+  };
+  // Prove both build before writing either output (REQ-201).
+  Solid probe;
+  if (!buildLower(&probe) || !buildUpper(&probe))
+    return Fail(why, outWhy);
+
+  Solid* upperOut = aboveIsUpper ? outAbove : outBelow;
+  Solid* lowerOut = aboveIsUpper ? outBelow : outAbove;
+  const bool wantUpper = aboveIsUpper ? wantAbove : wantBelow;
+  const bool wantLower = aboveIsUpper ? wantBelow : wantAbove;
+  if (wantUpper && upperOut)
+    (void)buildUpper(upperOut);
+  if (wantLower && lowerOut)
+    (void)buildLower(lowerOut);
+  return Succeed(outWhy);
+}
+
 } // namespace
 
 bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, SliceKeep keep,
@@ -1827,9 +1890,21 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
   const Problem inWhy = Validate(solid);
   if (inWhy != Problem::Ok)
     return Fail(inWhy, outWhy);
-  for (const Face& f : solid.faces) {
-    if (f.surface.kind != SurfaceKind::Plane)
+
+  {
+    bool hasCurved = false;
+    for (const Face& f : solid.faces)
+      if (f.surface.kind != SurfaceKind::Plane)
+        hasCurved = true;
+    if (hasCurved) {
+      // The one curved case B1 can hold: a cut perpendicular to a cylinder / cone axis (a circle).
+      bool handled = false;
+      const bool ok = SliceCurvedPrimitive(solid, planePoint, ray3d::Normalize(planeNormal), keep,
+                                           outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
       return Fail(Problem::SliceCurvedFace, outWhy);
+    }
   }
   for (const Edge& e : solid.edges) {
     if (e.kind != CurveKind::Line)

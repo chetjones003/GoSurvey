@@ -38,22 +38,34 @@ CMD 0,10,5
 CMD B
 EXPECT SOLIDS 2
 
-# --- A curved solid is refused, nothing changes -------------------------------------------
+# --- A cylinder cut PERPENDICULAR to its axis is cut to length (a circle) -----------------
 CMD CYLINDER 100,0 4 10
 EXPECT SOLIDS 3
 BOX 95 -5 105 5
 EXPECT SELECTED 1
 CMD SLICE
-CMD 100,-6,5
-CMD 100,6,5
-CMD 106,0,5
-CMD 100,0,8
+CMD 100,-6,6
+CMD 100,6,6
+CMD 106,0,6
+CMD B
+EXPECT SOLIDS 4
+
+# --- An OBLIQUE cut through a cylinder is refused (an ellipse), nothing changes -----------
+CMD CYLINDER 200,0 4 10
+EXPECT SOLIDS 5
+BOX 195 -5 205 5
+EXPECT SELECTED 1
+CMD SLICE
+CMD 195,0,3
+CMD 205,0,7
+CMD 200,6,5
+CMD 200,0,12
 EXPECT LOG "flat faces only"
-EXPECT SOLIDS 3
+EXPECT SOLIDS 5
 
 # --- Solids survive a .gs save and reopen ------------------------------------------------
 SAVEAS %OUT%/req314-slice.gs
 OPEN %OUT%/req314-slice.gs
-EXPECT SOLIDS 3
+EXPECT SOLIDS 5
 
 CHECK ALL
