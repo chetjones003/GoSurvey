@@ -5855,6 +5855,187 @@ capability that does not exist. They are recorded here rather than quietly dropp
   filed as #146. Representation, DXF/DWG export and the two-increment split each confirmed with the
   user before any code was written.
 
+### REQ-314 — Feature operations on the solid kernel: extrude, revolve, slice, and analytic Booleans (GitHub issue #147)
+- Purpose: REQ-313 gave GoSurvey a B-rep kernel and seven primitive solids, but a kernel that can
+  only make boxes and cylinders is not yet useful for design. Issue #147 (Phase 4 of #120) is the
+  phase that makes it useful: turn a drawn profile into a solid, and combine solids. Issue #147 also
+  states the project's own constraint on the hardest part — *"Booleans are the highest-risk item in
+  all of #120... where solid modellers classically fail on degenerate input"* — and REQ-201's
+  principle governs it directly: an operation that cannot produce a valid solid must fail safely and
+  leave the model unchanged, never store a corrupt one.
+- Priority: must
+- Type: functional
+- Depends on: REQ-313 / ADR-045 (the kernel and its validity invariants), REQ-311 (`ucs::Ucs` as the
+  one frame type), REQ-312 (arbitrary-plane curves as profile sources).
+- Constraints in force: REQ-101 (±0.01 ft), REQ-201 (no silent failure), REQ-300 (dependency
+  discipline — an in-tree kernel, no ACIS/OpenCascade), REQ-301 (minimal abstraction), REQ-100
+  profile (d) (the solid frame budget).
+
+- Statement: The `util/` B-rep kernel (`src/util/brep.{hpp,cpp}`) gains **feature operations** that
+  consume the Phase 2 `ucs::Ucs` and the kernel's own curve types and produce Phase 3 B-rep solids.
+  Every operation is pure geometry — no GL, no ImGui, no document, no `AppCommandState` — and every
+  one returns a named, printable reason on failure (REQ-201, ADR-045). The result of a feature
+  operation is a `Solid` exactly as REQ-313 defines it: real topology (solid → shells → faces →
+  loops → edges → vertices), every face an analytic surface, every edge an analytic curve, volume
+  and area integrated in closed form, triangles derived on demand and never stored.
+
+  **A feature-operation result may carry no recipe.** REQ-313 already established that a recipe is
+  optional and that the topology, not the recipe, is the stored truth — it named "the Phase 4
+  boolean result" as the case that proves it. That case is now real: a Boolean and a slice store
+  topology only. Extrude and revolve **may** record an operation recipe (source-profile reference
+  plus parameters) for future parametric regeneration, but validity, mass properties and
+  tessellation read the topology alone, exactly as for a primitive, and a re-opened `.gs` solid
+  whose recipe cannot be resolved still loads from its stored topology.
+
+  **Profile → solid**
+  - **Extrude** — a single closed, planar, non-self-intersecting profile loop of line and arc
+    segments (a closed `Polyline` per REQ-053, a `Circle`, or an arbitrary-plane circle/closed arc
+    chain per REQ-312) is swept along a direction for a distance. A straight extrusion of a line
+    segment produces a plane face; of a circular arc, a cylinder face; of a full circle, a closed
+    cylinder capped by two planar disks. **Optional taper** offsets the profile as it sweeps, which
+    keeps line segments on planes and turns arc segments into cone faces. The cap faces close the
+    solid at both ends.
+  - **Revolve** — the same profile revolved about an axis (any line in 3D, including a profile edge)
+    through a full or partial angle. A line segment parallel to the axis sweeps a cylinder; a line
+    segment skew to the axis sweeps a cone; a line segment meeting the axis sweeps a plane (a disk
+    sector) or a cone; a circular arc sweeps a portion of a sphere (arc centre on the axis) or a
+    torus (arc centre off the axis, in the axis plane). A partial revolve adds two planar cap faces
+    on the start and end angle; a full revolve closes on itself with none.
+
+  Extrude and revolve are the two feature operations whose every output face falls inside REQ-313's
+  five analytic surface kinds and whose every output edge is a line or an arc. **Sweep along an
+  arbitrary 3D path and loft between profiles are NOT in this requirement** — a general swept or
+  lofted surface is a freeform (spline) surface the current kernel cannot represent, and adding one
+  is a separate architectural decision. They are tracked as REQ-315, blocked on that decision.
+
+  **Slice**
+  Cut a solid by an unbounded plane (a `ucs::Ucs`, or three points, or a planar face of the solid),
+  keeping one side or both. Each kept piece is a valid closed solid: the cut introduces one new
+  planar face per piece, bounded by the intersection of the plane with the solid's faces. A slice
+  that misses the solid entirely, or that meets it only tangentially, is **reported and changes
+  nothing** rather than producing a zero-volume sliver.
+
+  **Booleans — `UNION`, `SUBTRACT`, `INTERSECT`**
+  Two solids are combined by a boundary-representation Boolean: the faces of each operand are split
+  along their intersection curves with the other operand, the pieces are classified inside / outside
+  / on-boundary, and the kept pieces are stitched into a new closed manifold solid. The result is
+  analytic — a face that came through an operation unmodified keeps its original analytic surface;
+  a face split by the operation keeps that same surface with a new boundary loop. **New edges created
+  where two analytic surfaces cross carry an analytic intersection curve.** Where that intersection
+  is a line or an arc (plane ∩ plane, plane ∩ cylinder parallel to the axis, coaxial cylinder ∩
+  cylinder, sphere ∩ plane, and the other conic-section-free cases) the kernel's existing
+  `CurveKind` covers it. Where it is not (a plane cutting a cylinder obliquely gives an ellipse; two
+  non-coaxial cylinders give a quartic curve) the kernel needs a **general intersection-curve
+  representation** — see ADR-046 and the increment plan; the first Boolean increment is scoped to
+  the cases the current `CurveKind` already covers, and an operand pair that would produce a curve
+  outside that set is **refused by name**, never approximated.
+
+  **Boolean robustness is a first-class requirement, not an edge case.** Issue #147 names the
+  hazards and each has a defined outcome:
+  - **Coincident and near-coincident faces** — detected within a stated tolerance and handled as a
+    shared boundary, not double-counted; the tolerance is `ucs`/`brep` epsilon at local magnitude,
+    the same scale REQ-101 works at.
+  - **Tangent surfaces** — where two surfaces touch without crossing, no spurious edge is created.
+  - **Shared edges and vertices** — reused, not duplicated; the result still satisfies "every edge
+    used exactly twice, once in each direction."
+  - **A result that is empty** (e.g. `INTERSECT` of two disjoint solids) or **disjoint** (more than
+    one shell) is **reported as such** — an empty result stores nothing, a disjoint result is either
+    stored as a multi-shell solid if valid or refused, per ADR-046 — never stored as a degenerate
+    single solid.
+  - **A Boolean that cannot produce a solid passing `brep::Validate` leaves both operands exactly as
+    they were** (REQ-201). The operands are not consumed until the result is validated and committed.
+
+- Acceptance:
+  - **The feature operations build and are unit-tested with no graphics context** — the kernel
+    translation unit is linked directly into the test target, exactly as REQ-313's acceptance
+    requires, and no test needs a window, GL, ImGui, or a document.
+  - **Extrude** of a rectangle, a circle, and a closed line+arc polyline each produces a solid that
+    passes `brep::Validate` (manifold, orientable, positive volume, finite coordinates), with the
+    expected vertex/edge/face counts and Euler characteristic. A tapered extrude of the same
+    profiles likewise validates and its side faces are cones where the profile had arcs.
+  - **Revolve** of a line and of an arc, full and partial, about an axis in the profile plane each
+    produces a valid closed solid. A line parallel to the axis revolved a full turn reproduces the
+    REQ-313 cylinder to a relative 1e-9 on volume and area; an arc centred on the axis revolved a
+    full turn reproduces the REQ-313 sphere to the same tolerance. These two assertions tie the
+    feature path to the primitive path so a formula error in either cannot hide.
+  - **Volume and surface area of every feature result are closed-form**, asserted against the
+    textbook expression for the cases that have one (a revolved rectangle is a cylinder or a washer;
+    a revolved right triangle is a cone) to a relative 1e-9, and against Pappus's theorem for the
+    general revolve, all far inside REQ-101's ±0.01.
+  - **Union, subtract and intersect** of two overlapping boxes, a box and a coaxial cylinder, and
+    two coaxial cylinders each produce a solid whose volume matches the hand-computed value to
+    within REQ-101, and which passes `brep::Validate`.
+  - **The degenerate Boolean cases each have the outcome stated above**, each covered by a test: two
+    boxes sharing a full face; a box and a cylinder tangent along a line; two solids sharing one
+    edge; `INTERSECT` of two disjoint solids (empty, reported); `SUBTRACT` that would split the
+    result in two (disjoint, per ADR-046). None of these stores a solid that fails validation.
+  - **A failed Boolean leaves both operands bit-identical** — asserted by comparing the operand
+    topology and every coordinate before and after a deliberately unsatisfiable operation.
+  - **An operand pair that would produce an intersection curve outside `{Line, Arc}`** (a box and an
+    obliquely-oriented cylinder, until the general-curve increment lands) is **refused with a
+    specific reason** naming the surface pair, and stores nothing.
+  - **Slice** of a box and of a cylinder by a plane, keeping one side and keeping both, produces
+    valid closed solids whose volumes sum to the original within REQ-101. A slice that misses the
+    solid reports it and changes nothing.
+  - **Every operation is one undoable step** — a single `AppCommandState` undo snapshot restores the
+    pre-operation document exactly, including when the operation consumed its operands.
+  - **Results survive `.gs` save and reopen** with topology intact — vertex/edge/face counts exactly,
+    volume and area to a relative 1e-6 — using REQ-313's existing solid serialization, since a
+    recipe-less feature result is stored the same way a recipe-less primitive already is. A drawing
+    with no feature-operation solids serializes byte-identically to a pre-REQ-314 build, and
+    `kGsFormatVersion` is not bumped unless the operation recipe is actually persisted (a decision
+    deferred to the increment that first adds it).
+  - **Operations are numerically stable at survey coordinate magnitudes** — a 10 ft feature result
+    modelled at state-plane magnitude (easting 3.5e6, northing 12.4e6), including on a tilted frame,
+    reports its volume and area to within 1e-6, integrating about a reference point on the solid
+    rather than the world origin, exactly as REQ-313 does.
+  - **REQ-100 profile (d) still holds** — feature-operation solids tessellate through the same cached
+    path as primitives and add no per-frame cost; `BENCH SOLID` is unaffected.
+  - DXF and DWG export **name and count** feature-operation solids among the solids they skip, with
+    no new export behaviour — the ADR-045 (i) exclusion already covers every `CadSolid`.
+
+- Scope boundaries, stated rather than left silent:
+  - **Sweep and loft are not here.** They need a freeform surface type in the kernel. Tracked as
+    REQ-315, blocked on ADR-046's freeform-surface question.
+  - **General analytic Boolean intersection curves (ellipse, quartic) are phased.** The first Boolean
+    increment covers only operand pairs whose intersection stays within `{Line, Arc}`; the rest is a
+    later increment that first adds a general intersection-curve representation. This is not a
+    permanent limitation — it is a delivery order chosen so a working, verifiable Boolean ships
+    before the hardest geometry is attempted.
+  - **Profiles are a single closed loop.** Multi-loop profiles (an extruded shape with a hole) are
+    deferred to a later increment; a profile with more than one loop is refused by name.
+  - **Interactive placement, 3D grips, and dragging a feature result are #120 Phase 5**, unchanged
+    from REQ-313's boundary. The Phase 4 commands take typed / picked profiles and parameters and a
+    command-line or prompted form, matching the primitive commands.
+  - **Fillet and chamfer on a solid edge are #120 Phase 5**, and sectioning / centroid / moments are
+    Phase 6 — none are in this requirement.
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`); Commands, IO, Renderer and Viewport for the
+  document-facing increments.
+- Status: **accepted (2026-09-02)** — see D-2026-09-02-a and ADR-046. Implemented in the increments
+  ADR-046 lists, each its own task and PR; extrude first.
+- Revisions: 2026-09-02 — proposed and accepted as written (D-2026-09-02-a, TASK-173). Phase 4 of GitHub #120, filed as
+  #147. The Boolean method (analytic B-rep rather than mesh-based) and the spec-first / sliced
+  delivery were confirmed with the user before this text was written; sweep and loft were split out
+  to REQ-315 because the current kernel has no freeform surface type.
+
+### REQ-315 — Sweep and loft (GitHub issue #147, split from REQ-314)
+- Purpose: issue #147's acceptance names sweep and loft alongside extrude and revolve, but a general
+  swept or lofted surface is a freeform (spline) surface that REQ-313's kernel — five analytic
+  surface kinds, two analytic curve kinds — cannot represent. This requirement holds that scope so
+  it is not lost, and records that it is blocked.
+- Priority: should
+- Type: functional
+- Depends on: REQ-314, and an accepted architectural decision on freeform surfaces in the kernel
+  (raised as an open question in ADR-046).
+- Statement: **To be written once the freeform-surface decision is made.** Sweep runs a closed
+  planar profile along an arbitrary 3D path with controlled orientation; loft blends a closed solid
+  between two or more profiles. Both produce valid closed B-rep solids that satisfy every REQ-313
+  invariant and every REQ-314 robustness and persistence condition.
+- Status: **accepted, blocked (2026-09-02)** — the scope is accepted; the requirement text is
+  blocked on the ADR-046 freeform-surface question. No implementation until that is resolved and
+  this Statement is written and accepted.
+- Revisions: 2026-09-02 — accepted as a parked scope holder (D-2026-09-02-a, TASK-173).
+
 ---
 
 ## Performance requirements

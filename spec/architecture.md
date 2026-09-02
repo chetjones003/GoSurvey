@@ -2178,3 +2178,118 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   centroid and moments (Phase 6), any interchange format for solids, and **view-dependent silhouette
   curves** — AutoCAD draws those too, they move as the view orbits, and being a render pass rather
   than geometry they do not belong in the kernel alongside (j)'s isolines.
+
+### ADR-046 — Feature operations on the solid kernel: analytic extrude / revolve / slice, and phased analytic Booleans   (2026-09-02, accepted)
+
+- **Status:** accepted (2026-09-02, D-2026-09-02-a). The Boolean *method* (analytic B-rep, not
+  mesh-based) and the spec-first, sliced delivery were chosen by the user, who then accepted this
+  ADR text as written. Backs REQ-314 and REQ-315. GitHub issue #147, Phase 4 of #120.
+
+- **Context.** REQ-313 / ADR-045 gave GoSurvey a boundary-representation kernel whose defining
+  choice is *analytic faces*: a face is a plane, cylinder, cone, sphere or torus, an edge is a line
+  or an arc, and volume and area are closed-form integrals so they do not move when the display
+  changes. Phase 4 (issue #147) must build on that kernel: extrude and revolve a profile into a
+  solid, slice a solid with a plane, and union / subtract / intersect two solids. Issue #147 calls
+  the Booleans *"the highest-risk item in all of #120 — where solid modellers classically fail on
+  degenerate input,"* and REQ-201 forbids ever storing a solid that fails validation.
+
+- **Decision.**
+
+  **(a) Extrude and revolve are analytic and exact, and they are first.** Every face an extrude or
+  revolve of a line-and-arc profile can produce is already one of ADR-045's five surface kinds, and
+  every edge is a line or an arc:
+  - extrude: line → plane, arc → cylinder, tapered line → plane, tapered arc → cone;
+  - revolve: line ∥ axis → cylinder, line skew to axis → cone, line meeting axis → plane/cone,
+    arc centred on axis → sphere, arc centred off axis in the axis plane → torus.
+  So these two need **no new surface or curve type** — only a builder that walks the profile,
+  emits the swept face for each segment, and closes the ends with cap faces. They are the first
+  increment because they deliver visible value with zero kernel-representation risk.
+
+  **(b) Slice is next, and it is the stepping stone to Booleans.** Cutting a solid by a plane needs
+  plane-∩-face intersection, face splitting, and inside/outside classification against a
+  half-space — every ingredient a Boolean needs, minus surface-∩-surface intersection between two
+  curved operands. Slice is where that machinery is built and tested against a case whose answer is
+  easy to hand-check (the two pieces' volumes sum to the original).
+
+  **(c) Booleans are analytic B-rep, and phased by intersection-curve difficulty.** The user chose
+  the analytic route over mesh-based Booleans, keeping faith with ADR-045: a subtracted cylinder
+  leaves a true cylindrical hole, not a faceted one, and the result's volume stays closed-form.
+  The cost is that a general analytic Boolean needs to represent the curve where two surfaces
+  cross, and that curve is often **not** a line or an arc — a plane cutting a cylinder obliquely
+  gives an ellipse; two non-coaxial cylinders give a quartic space curve. The kernel's `CurveKind`
+  is `{Line, Arc}` today. Rather than block all Boolean work on a general intersection-curve
+  representation, the Booleans are delivered in two increments:
+  - **Increment B1** — operand pairs whose every intersection curve is already a line or an arc:
+    box ∩ box, box ∩ axis-aligned cylinder, coaxial cylinder ∩ cylinder, sphere ∩ plane, and the
+    like. A pair that would need a curve outside `{Line, Arc}` is **refused by name** (REQ-201),
+    never approximated. This ships a working, verifiable Boolean.
+  - **Increment B2** — a **general analytic intersection-curve type** is added to the kernel
+    (a parametric procedural curve evaluated from its two surfaces, tessellated on demand like every
+    other derived representation), and the refusals from B1 are lifted pair by pair as each
+    surface-surface intersection is implemented and tested.
+
+  **(d) Operands are consumed only after the result validates.** A feature operation computes its
+  result into a fresh `Solid`, runs `brep::Validate` (and, for Booleans, `brep::SelfIntersects`),
+  and only then does the command layer replace the operands in the `CadSolid` store — as one undo
+  snapshot. A failure returns a named reason and the document is untouched. This is REQ-201 applied
+  to geometry that can fail in a hundred subtle ways.
+
+  **(e) A feature result stores topology, and optionally a recipe.** ADR-045 already made the recipe
+  optional and named the Boolean result as the recipe-less case. Extrude and revolve **may** record
+  an operation recipe (source-profile entity id + parameters) for future parametric edit, but it is
+  never consulted by validity, mass properties or tessellation, and a re-opened solid whose recipe
+  will not resolve still loads from its stored topology. Booleans and slice store topology only.
+  `.gs` persistence reuses REQ-313's solid serialization unchanged; `kGsFormatVersion` bumps only
+  in the increment that first actually writes a recipe, if any does.
+
+  **(f) A disjoint Boolean result is a multi-shell solid when valid, else refused.** `SUBTRACT` can
+  split one solid into two. ADR-045's `Solid` already carries *shells* (plural). A result with more
+  than one shell that passes `brep::Validate` is stored as one multi-shell `CadSolid`; one that does
+  not is refused. An **empty** result (`INTERSECT` of disjoint operands) stores nothing and is
+  reported.
+
+- **Rejected alternatives.**
+  - **Mesh-based Booleans** (tessellate both operands, cut the triangle meshes, keep triangles).
+    Far more robust on degenerate input and realistic to ship — but it makes the display mesh part
+    of the model, which ADR-045 and #120 forbid in as many words, turns every Boolean result's
+    faces flat and its volume approximate, and would need its own carve-out from ADR-045. The user
+    weighed this explicitly and chose fidelity.
+  - **A full general analytic Boolean in one step.** This is commercial-CAD-kernel work — years of
+    specialist effort, and the degenerate cases are exactly where it breaks. Phasing by
+    intersection-curve difficulty (c) lets a real Boolean ship and be trusted before the hardest
+    geometry is attempted.
+  - **A third-party kernel (OpenCascade, ACIS).** REQ-300 dependency discipline, and REQ-313 already
+    committed to an in-tree kernel; bolting on a foreign B-rep now would mean two solid
+    representations and a translation layer between them.
+
+- **Open question, not resolved here: freeform surfaces (blocks REQ-315).** Sweep and loft produce
+  surfaces that are none of ADR-045's five kinds. Supporting them means adding a general
+  (NURBS / spline) surface type to the kernel — a significant extension that touches validity,
+  mass-property integration, tessellation, snapping and `.gs`. That decision is deliberately
+  deferred until extrude, revolve, slice and Increment B1 are delivered and the kernel's shape is
+  better understood. Until then REQ-315 is parked and sweep / loft are not built.
+
+- **Consequences.**
+  - `src/util/brep.{hpp,cpp}` grows a feature-operation section: `Extrude`, `Revolve`, `Slice`,
+    `BooleanUnion` / `BooleanSubtract` / `BooleanIntersect`, plus internal face-split and
+    point-classification helpers. It stays graphics-free and directly unit-tested, per ADR-045.
+  - Increment B2 adds a `CurveKind::Intersection` (or similar) — a procedural curve carrying its two
+    surface references — and a tessellator for it. This is the one anticipated new kernel type; it
+    is not built until B2.
+  - The command layer gains `EXTRUDE`, `REVOLVE`, `SLICE`, `UNION`, `SUBTRACT`, `INTERSECT`, each in
+    the typed / prompted shape the primitive commands already use, each one undo step.
+  - No renderer change — feature results tessellate through REQ-313's cached path and REQ-100
+    profile (d) is unaffected.
+  - DXF / DWG export is unchanged: ADR-045 (i) already excludes every `CadSolid` with a counted,
+    named message.
+  - **Still not addressed:** sweep / loft (REQ-315, blocked); multi-loop profiles; fillet / chamfer
+    on a solid edge (#120 Phase 5); sectioning, centroid, moments of inertia (#120 Phase 6);
+    interactive placement and 3D grips for a feature result (#120 Phase 5).
+
+- **Delivery order (increments, each independently shippable and verifiable):**
+  1. **Extrude** — straight, single-loop profile, no taper. (b) of REQ-314.
+  2. **Revolve** — line and arc profiles, full and partial, plus the extrude taper option.
+  3. **Slice** — by plane, one side or both.
+  4. **Booleans Increment B1** — line/arc-intersection operand pairs only, others refused by name.
+  5. **Booleans Increment B2** — general analytic intersection curve, refusals lifted pair by pair.
+  6. *(separate REQ-315, separate ADR revision)* — freeform surfaces, then sweep and loft.
