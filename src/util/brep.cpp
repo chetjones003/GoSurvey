@@ -3243,6 +3243,129 @@ struct CylEllipse {
   return Succeed(outWhy);
 }
 
+/// Append one boss stub for a tilted cylinder poking through planar face \p faceIdx: the piece of
+/// the cylinder between its own circular cap and the elliptical mouth on the face — a faithful port
+/// of `SliceCylinderOblique`'s piece, minus the ellipse cap face (the face's inner loop replaces it).
+/// \p isEntry true = the stub runs from the cylinder base to the face; false = the face to the top.
+[[nodiscard]] bool AddTiltedStub(Solid* s, const Solid& planar, int faceIdx, const Vec3& faceN,
+                                 const CylinderShape& C, bool isEntry, Problem* outWhy) {
+  const ucs::Ucs& fr = C.axis;
+  const Vec3 Z = fr.zAxis;
+  const double r = C.radius;
+  const double h = C.length;  // used only as a fallback; the real bounds come from CylinderCutZExtent
+  const Vec3 pn = faceN;
+  const double dotNZ = ray3d::Dot(pn, Z);
+  if (std::fabs(dotNZ) < 1e-6)
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 facePt =
+      planar.vertices[static_cast<std::size_t>(
+                          planar.edges[static_cast<std::size_t>(
+                                           planar.faces[static_cast<std::size_t>(faceIdx)].loops[0].uses[0].edge)]
+                              .v0)]
+          .p;
+  const Vec3 pl = ucs::WorldToUcs(fr, facePt);
+  const Vec3 nl{ray3d::Dot(pn, fr.xAxis), ray3d::Dot(pn, fr.yAxis), dotNZ};
+  const double a0 = (nl.x * pl.x + nl.y * pl.y + nl.z * pl.z) / nl.z;
+  const double a1 = -r * nl.x / nl.z;
+  const double a2 = -r * nl.y / nl.z;
+  const double amp = std::sqrt(a1 * a1 + a2 * a2);
+  const double capZ = isEntry ? 0.0 : h;
+  // The elliptical mouth must lie strictly between the cap and infinity on the stub side.
+  if (isEntry ? (a0 - amp <= 1e-9) : (a0 + amp >= h - 1e-9))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+
+  const Vec3 ec = ray3d::Add(fr.origin, ray3d::Scale(Z, a0));
+  const Vec3 minorDir = ray3d::Normalize(ray3d::Cross(pn, Z));
+  const Vec3 majorDir = ray3d::Normalize(ray3d::Cross(pn, minorDir));
+  const double ea = r / std::fabs(dotNZ);
+  const double eb = r;
+  const Vec3 eN = dotNZ > 0.0 ? pn : ray3d::Scale(pn, -1.0);
+  auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(fr, Vec3{x, y, z}); };
+  const double zp0 = a0 + a1;
+  const double zpP = a0 - a1;
+  const bool upper = !isEntry;  // "upper" (rim at z = h) mirrors SliceCylinderOblique's exit piece
+
+  const int se0 = AddVertex(s, W(r, 0.0, zp0));
+  const int se1 = AddVertex(s, W(-r, 0.0, zpP));
+  const int rimZ0 = AddVertex(s, W(r, 0.0, capZ));
+  const int rimZ1 = AddVertex(s, W(-r, 0.0, capZ));
+  const Vec3 rimC = W(0.0, 0.0, capZ);
+  const int rr0 = AddArc(s, rimZ0, rimZ1, rimC, Z, kPi);
+  const int rr1 = AddArc(s, rimZ1, rimZ0, rimC, Z, kPi);
+  const int el0 = AddEllipse(s, se0, se1, ec, eN, majorDir, ea, eb, kPi);
+  const int el1 = AddEllipse(s, se1, se0, ec, eN, majorDir, ea, eb, kPi);
+  const int sm0 = AddLine(s, upper ? se0 : rimZ0, upper ? rimZ0 : se0);
+  const int sm1 = AddLine(s, upper ? se1 : rimZ1, upper ? rimZ1 : se1);
+
+  if (upper)
+    s->faces.push_back(MakePlaneFace(rimC, Z, {{rr0, false}, {rr1, false}}));
+  else
+    s->faces.push_back(MakePlaneFace(rimC, ray3d::Scale(Z, -1.0), {{rr1, true}, {rr0, true}}));
+
+  auto side = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame = fr;
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = h;
+    f.uStart = u0;
+    f.uEnd = u1;
+    Loop lp;
+    lp.uses = std::move(uses);
+    f.loops.push_back(std::move(lp));
+    s->faces.push_back(std::move(f));
+  };
+  if (upper) {
+    side(0.0, kPi, {{el0, false}, {sm1, false}, {rr0, true}, {sm0, true}});
+    side(kPi, kTwoPi, {{el1, false}, {sm0, false}, {rr1, true}, {sm1, true}});
+    s->faces[static_cast<std::size_t>(faceIdx)].loops.push_back(Loop{{{el1, true}, {el0, true}}});
+  } else {
+    side(0.0, kPi, {{rr0, false}, {sm1, false}, {el0, true}, {sm0, true}});
+    side(kPi, kTwoPi, {{rr1, false}, {sm0, false}, {el1, true}, {sm1, true}});
+    s->faces[static_cast<std::size_t>(faceIdx)].loops.push_back(Loop{{{el0, false}, {el1, false}}});
+  }
+  return Succeed(outWhy);
+}
+
+/// \p planar UNION a tilted cylinder that crosses faces \p fA / \p fB at params \p tA / \p tB: each
+/// face bored with an ellipse, the cylinder stubs that stick out past each face added (REQ-314 B2b-1).
+[[nodiscard]] bool BuildTiltedBoss(const Solid& planar, int fA, const Vec3& nA, double tA, int fB,
+                                   const Vec3& nB, double tB, const CylinderShape& C,
+                                   std::vector<Solid>* out, Problem* outWhy) {
+  Solid s = planar;
+  s.recipe = Recipe{};
+  const double slack = 1e-7 * (C.radius + C.length);
+  const bool aFirst = tA <= tB;
+  const int f1 = aFirst ? fA : fB;
+  const Vec3 n1 = aFirst ? nA : nB;
+  const double t1 = aFirst ? tA : tB;
+  const int f2 = aFirst ? fB : fA;
+  const Vec3 n2 = aFirst ? nB : nA;
+  const double t2 = aFirst ? tB : tA;
+  int added = 0;
+  if (t1 > slack) {  // a stub from the cylinder base up to face f1
+    if (!AddTiltedStub(&s, planar, f1, n1, C, /*isEntry=*/true, outWhy))
+      return false;
+    ++added;
+  }
+  if (C.length - t2 > slack) {  // a stub from face f2 out to the cylinder top
+    if (!AddTiltedStub(&s, planar, f2, n2, C, /*isEntry=*/false, outWhy))
+      return false;
+    ++added;
+  }
+  if (added == 0) {
+    out->push_back(planar);
+    return Succeed(outWhy);
+  }
+  for (int i = static_cast<int>(planar.faces.size()); i < static_cast<int>(s.faces.size()); ++i)
+    s.shells[0].faces.push_back(i);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  out->push_back(std::move(s));
+  return Succeed(outWhy);
+}
+
 struct SphereShape {
   Vec3 centre;
   double radius = 0.0;
@@ -3809,8 +3932,13 @@ struct SphereShape {
         if (!BuildTiltedBore(planar, hits[0].face, hits[0].n, hits[1].face, hits[1].n, C.axis,
                              C.radius, &r, outWhy))
           return false;
+      } else if (op == BoolOp::Union) {
+        return BuildTiltedBoss(planar, hits[0].face, hits[0].n, t0, hits[1].face, hits[1].n, t1, C,
+                               out, outWhy)
+                   ? Succeed(outWhy)
+                   : false;
       } else {
-        return Fail(Problem::BooleanObliqueCylinder, outWhy);  // tilted UNION / cyl−box — later
+        return Fail(Problem::BooleanObliqueCylinder, outWhy);  // cyl − box tilted — later
       }
       out->push_back(std::move(r));
       return Succeed(outWhy);
