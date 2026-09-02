@@ -24509,36 +24509,65 @@ void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::
         std::find(idx.begin(), idx.end(), e.index) == idx.end())
       idx.push_back(e.index);
   }
-  if (idx.size() != 2) {
-    log.push_back(std::string(verb) + " — select exactly two solids first, then run " + verb + ".");
+  if (idx.size() < 2) {
+    log.push_back(std::string(verb) + " — select at least two solids first, then run " + verb + ".");
     return;
   }
-  if (!st.cadSolids[static_cast<size_t>(idx[0])] || !st.cadSolids[static_cast<size_t>(idx[1])]) {
-    log.push_back(std::string(verb) + " — a selected solid is missing.");
-    return;
+  std::vector<brep::Solid> operands;
+  for (int i : idx) {
+    if (!st.cadSolids[static_cast<size_t>(i)]) {
+      log.push_back(std::string(verb) + " — a selected solid is missing.");
+      return;
+    }
+    operands.push_back(*st.cadSolids[static_cast<size_t>(i)]);
   }
 
-  const brep::Solid& A = *st.cadSolids[static_cast<size_t>(idx[0])];
-  const brep::Solid& B = *st.cadSolids[static_cast<size_t>(idx[1])];
-  std::vector<brep::Solid> result;
+  auto apply = [&](const brep::Solid& x, const brep::Solid& y, std::vector<brep::Solid>* r,
+                   brep::Problem* w) {
+    switch (op) {
+    case CadBooleanOp::Union:
+      return brep::BooleanUnion(x, y, r, w);
+    case CadBooleanOp::Subtract:
+      return brep::BooleanSubtract(x, y, r, w);
+    case CadBooleanOp::Intersect:
+      return brep::BooleanIntersect(x, y, r, w);
+    }
+    return false;
+  };
+
+  // Left-fold the operands. UNION keeps every disjoint piece and folds later operands against each.
+  std::vector<brep::Solid> acc{operands[0]};
   brep::Problem why = brep::Problem::Ok;
-  bool ok = false;
-  switch (op) {
-  case CadBooleanOp::Union:
-    ok = brep::BooleanUnion(A, B, &result, &why);
-    break;
-  case CadBooleanOp::Subtract:
-    ok = brep::BooleanSubtract(A, B, &result, &why);
-    break;
-  case CadBooleanOp::Intersect:
-    ok = brep::BooleanIntersect(A, B, &result, &why);
-    break;
+  for (std::size_t k = 1; k < operands.size(); ++k) {
+    if (op == CadBooleanOp::Union) {
+      std::vector<brep::Solid> nextAcc;
+      brep::Solid pending = operands[k];
+      bool merged = false;
+      for (brep::Solid& piece : acc) {
+        std::vector<brep::Solid> r;
+        if (!apply(piece, pending, &r, &why)) {
+          log.push_back(std::string(verb) + " — " + brep::ProblemText(why) + " Nothing changed.");
+          return;
+        }
+        if (!merged && r.size() == 1) {
+          pending = std::move(r[0]);
+          merged = true;
+        } else {
+          nextAcc.push_back(std::move(piece));  // disjoint from `pending`: keep it aside
+        }
+      }
+      nextAcc.push_back(std::move(pending));
+      acc = std::move(nextAcc);
+    } else {
+      std::vector<brep::Solid> r;
+      if (!apply(acc[0], operands[k], &r, &why) || r.size() != 1) {
+        log.push_back(std::string(verb) + " — " + brep::ProblemText(why) + " Nothing changed.");
+        return;
+      }
+      acc = std::move(r);
+    }
   }
-  if (!ok) {
-    log.push_back(std::string(verb) + " — " + brep::ProblemText(why) + " Nothing changed.");
-    return;
-  }
-  if (result.empty()) {
+  if (acc.empty()) {
     log.push_back(std::string(verb) + " — the result is empty. Nothing changed.");
     return;
   }
@@ -24547,16 +24576,14 @@ void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::
                                      ? st.cadSolidAttrs[static_cast<size_t>(idx[0])]
                                      : MakeNewEntityAttrs(st);
   PushUndoSnapshot(st, verb);
-  // Remove the two operands, highest index first so the other stays valid.
-  const int hi = std::max(idx[0], idx[1]);
-  const int lo = std::min(idx[0], idx[1]);
-  st.cadSolids.erase(st.cadSolids.begin() + hi);
-  if (static_cast<size_t>(hi) < st.cadSolidAttrs.size())
-    st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + hi);
-  st.cadSolids.erase(st.cadSolids.begin() + lo);
-  if (static_cast<size_t>(lo) < st.cadSolidAttrs.size())
-    st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + lo);
-  for (brep::Solid& s : result) {
+  std::vector<int> sorted = idx;
+  std::sort(sorted.begin(), sorted.end(), std::greater<int>());
+  for (int i : sorted) {
+    st.cadSolids.erase(st.cadSolids.begin() + i);
+    if (static_cast<size_t>(i) < st.cadSolidAttrs.size())
+      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + i);
+  }
+  for (brep::Solid& s : acc) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
     st.cadSolidAttrs.push_back(attrs);
@@ -24564,8 +24591,8 @@ void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::
   }
   BumpCadGpuCache(st);
   st.selection.clear();
-  log.push_back(std::string(verb) + " — two solids combined into " + std::to_string(result.size()) +
-                (result.size() == 1 ? " solid." : " solids."));
+  log.push_back(std::string(verb) + " — " + std::to_string(idx.size()) + " solids combined into " +
+                std::to_string(acc.size()) + (acc.size() == 1 ? " solid." : " solids."));
 }
 
 // -------------------------------------------------------------------------------------------------
