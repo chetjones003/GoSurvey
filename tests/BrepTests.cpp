@@ -1720,10 +1720,17 @@ TEST_CASE("Curved B2b-1: a tilted cylinder INTERSECT a box is an oblique ellipti
   REQUIRE(brep::Tessellate(r[0], 0.05, &ts, &why));
   RequireWindingMatchesNormals(ts);
 
-  // A tilted UNION (an elliptical-mouthed boss) is still refused for now.
+  // UNION adds the two slanted stubs that stick out past each face (an elliptical-mouthed boss).
   r.clear();
-  REQUIRE_FALSE(brep::BooleanUnion(box, cyl, &r, &why));
-  REQUIRE(why == Problem::BooleanObliqueCylinder);
+  REQUIRE(brep::BooleanUnion(box, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+          Approx(4000.0 + kPi * 4.0 * (30.0 - 10.0 / dir.z)).epsilon(1e-9));
+  brep::Tessellation tu;
+  REQUIRE(brep::Tessellate(r[0], 0.05, &tu, &why));
+  RequireWindingMatchesNormals(tu);
 }
 
 TEST_CASE("Slice of a cylinder or cone perpendicular to its axis cuts it to length", "[brep][req314]") {

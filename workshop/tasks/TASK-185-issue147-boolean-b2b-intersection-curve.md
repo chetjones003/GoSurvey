@@ -36,10 +36,17 @@ normal so the hole winds right), an **inward** cylinder wall spanning the two el
 (`CylinderCutZExtent`'s 2-ellipse branch gives its z-bounds). `TryBooleanCylinderThroughPlanar`'s
 tilted branch now routes `box − tilted cylinder`. Volume `vol(P) − π r² · axialGap` exact.
 
-### Deferred to the next PR / B2b-2
+### Tilted UNION — an elliptical-mouthed boss (2026-09-02)
 
-- **UNION** with a tilted cylinder (`BooleanObliqueCylinder` still refused) — the elliptical-mouthed
-  *boss* (stub with one elliptical and one circular end).
+`AddTiltedStub` — a faithful port of `SliceCylinderOblique`'s piece (base/top circle cap + wall with
+its exact edge-use pattern), minus the ellipse cap face: the planar face's inner loop replaces it.
+The first hand-rolled attempt failed the geometric volume-closure check (`NotClosed`) because it (1)
+built the ellipse arcs about the *face* normal instead of the axis-oriented plane normal `eN`, and
+(2) flipped `surface.frame.zAxis` to the stub direction. `BuildTiltedBoss` adds a stub before the
+first face and after the second where the cylinder sticks out. Volume `vol(P) + stubs`, exact.
+
+### Deferred to a later PR / B2b-2
+
 - `cylinder − box` tilted (a notch).
 - Isolines on a sliced cylinder face still draw full height (visual only).
 - Everything B2b-2: cylinder ∩ cylinder (quartic), sphere ∩ cylinder, non-elliptical cone sections.
