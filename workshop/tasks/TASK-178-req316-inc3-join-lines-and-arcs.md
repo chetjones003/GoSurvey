@@ -1,7 +1,7 @@
 # TASK-178 — REQ-316 Increment 3: JOIN welds lines and arcs into one polyline
 
 - Type:    feature
-- Status:  implement
+- Status:  self-verify
 - Opened:  2026-09-02
 - Owner:   chetjones003
 
@@ -46,3 +46,32 @@
 
 ## 8. Implementation log
 - 2026-09-02 open. Branch feat/polyline-arc-mode (worktree). Inc 1 (TASK-177) shipped.
+- 2026-09-02 ExecuteJoinSelection: Edge{bulge,arcIx}; arc + polyline edges carry bulge; Eulerian
+  walk records the traversed edge; reversed edge negates bulge; joined polyline writes
+  userPolylineVertsBulge; consumed arcs erased; tilted arcs refused.
+- 2026-09-02 Found while testing: a lone selected line was silently converted to a polyline.
+  Added the `comp.size() < 2` guard so a non-connecting object is left unchanged and reported
+  (REQ-316 acceptance). Pre-existing behaviour changed deliberately; no test relied on it.
+- 2026-09-02 headless EXPECT POLYARCS; req316-join-lines-and-arcs.txt (91 steps). 817 Catch2 /
+  998 ctest green.
+
+## 9. Self-verification
+- [x] build-project — PASS (release / GoSurveyTests / gosurvey_headless, MSVC)
+- [x] architecture-review — PASS. Extends one command's internal algorithm; no new abstraction,
+  layer, dependency, global, API, or data-format change.
+- [x] code-review — PASS. Bulge sign handled per traversal direction; closed-loop bulge trim
+  matches the vertex trim; arc erase mirrors the line-erase block; array stays empty for a
+  straight-only JOIN (byte-stable .gs).
+- [x] dependency-audit — n-a
+- [x] performance-review — n-a (JOIN is a user action, not a per-frame path)
+- [x] testing — PASS. Happy: line+arc, line+polyline-arc, tangency (POLYARCS), DXF round trip.
+  Failure: non-contiguous refusal (unchanged + reported), undo one-step.
+
+## 10. Verification result
+- Verdict: PASS for increment 3 (self-verified). Arc-segment grips remain a follow-up.
+
+## 11. Outcome
+- Requirements satisfied: REQ-316 acceptance items 6, 7 and the JOIN lines (met: yes)
+- Tests added: EXPECT POLYARCS; req316-join-lines-and-arcs.txt
+- Docs updated: this task; TASK-177 unchanged
+- Done: 2026-09-02
