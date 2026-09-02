@@ -1924,6 +1924,80 @@ TEST_CASE("Curved B1: two coaxial cylinders - union and intersect", "[brep][req3
   }
 }
 
+TEST_CASE("Curved B1: a sphere cut by one face of a box - cap and boss", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid sphere;
+  Solid box;
+  REQUIRE(brep::MakeSphere(World(), 5, &sphere, &why));       // centre origin, r 5
+  REQUIRE(brep::MakeBox(At(0, 0, 2), 20, 20, 10, &box, &why)); // z[2,12], x,y[-10,10]
+  std::vector<Solid> r;
+
+  SECTION("INTERSECT is the spherical cap inside the box") {
+    REQUIRE(brep::BooleanIntersect(sphere, box, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    // Cap of height h = r - d = 3 (d = 2): V = pi h^2 (3r - h) / 3.
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(kPiT * 9.0 * (15.0 - 3.0) / 3.0).epsilon(1e-6));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("UNION is a boss - the box plus the cap that pokes out the bored face") {
+    REQUIRE(brep::BooleanUnion(sphere, box, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    // Outside cap height h = r + d = 7: box 4000 + pi 49 (15 - 7) / 3.
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(4000.0 + kPiT * 49.0 * 8.0 / 3.0).epsilon(1e-6));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("SUBTRACT is refused - a scooped sphere face points inward (B2)") {
+    REQUIRE_FALSE(brep::BooleanSubtract(box, sphere, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
+TEST_CASE("Curved B1: a sphere against a box - the refused and trivial cases", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid sphere;
+  std::vector<Solid> r;
+
+  SECTION("a sphere straddling a box corner (many cutting planes) is refused") {
+    REQUIRE(brep::MakeSphere(World(), 5, &sphere, &why));
+    Solid smallBox;
+    REQUIRE(brep::MakeBox(World(), 6, 6, 6, &smallBox, &why));  // x,y[-3,3] z[0,6]
+    REQUIRE_FALSE(brep::BooleanUnion(sphere, smallBox, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+
+  SECTION("a sphere wholly inside a box - intersect is the sphere, union is the box") {
+    REQUIRE(brep::MakeSphere(At(0, 0, 50), 5, &sphere, &why));
+    Solid bigBox;
+    REQUIRE(brep::MakeBox(World(), 100, 100, 100, &bigBox, &why));
+    REQUIRE(brep::BooleanIntersect(sphere, bigBox, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(4.0 / 3.0 * kPiT * 125.0).epsilon(1e-9));
+    r.clear();
+    REQUIRE(brep::BooleanUnion(sphere, bigBox, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(1.0e6).epsilon(1e-9));
+  }
+
+  SECTION("a sphere far from the box - disjoint") {
+    REQUIRE(brep::MakeSphere(At(100, 0, 0), 5, &sphere, &why));
+    Solid box;
+    REQUIRE(brep::MakeBox(World(), 6, 6, 6, &box, &why));
+    REQUIRE(brep::BooleanUnion(sphere, box, &r, &why));
+    REQUIRE(r.size() == 2);
+  }
+}
+
 TEST_CASE("Curved B1: a boss stays exact at survey coordinate magnitude", "[brep][req314]") {
   Problem why = Problem::Ok;
   Solid box;
