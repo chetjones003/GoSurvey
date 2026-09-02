@@ -332,18 +332,38 @@ struct CylinderCut {
 /// If a cylinder face \p f is bounded by a plane cut (an `Ellipse` edge in its loop), fill \p out
 /// with `zLo(u)` and `zHi(u)` and return true. The un-cut rim (base at z=0 or top at z=h) is the
 /// constant bound; the ellipse edge gives the sloped one.
+/// The z-plane `p[3]` (`p0 + p1 cos u + p2 sin u` in the cylinder's local frame) that an `Ellipse`
+/// edge \p e lies on. Returns false if the plane is parallel to the axis (not an ellipse).
+[[nodiscard]] bool EllipsePlaneCoeffs(const Surface& sf, const Edge& e, double p[3]) {
+  const Vec3 nlw = e.frame.zAxis;
+  const Vec3 nl{ray3d::Dot(nlw, sf.frame.xAxis), ray3d::Dot(nlw, sf.frame.yAxis),
+                ray3d::Dot(nlw, sf.frame.zAxis)};
+  if (!(std::fabs(nl.z) > 1e-9))
+    return false;
+  const Vec3 cl = ucs::WorldToUcs(sf.frame, e.frame.origin);
+  const double d = nl.x * cl.x + nl.y * cl.y + nl.z * cl.z;
+  p[0] = d / nl.z;
+  p[1] = -sf.radius * nl.x / nl.z;
+  p[2] = -sf.radius * nl.y / nl.z;
+  return true;
+}
+
 [[nodiscard]] bool CylinderCutZExtent(const Solid& s, const Face& f, CylinderCut* out) {
   const Surface& sf = f.surface;
   const double h = sf.height;
   const double zeps = 1e-7 * (std::fabs(h) + 1.0);
-  int ellipseEdge = -1;
+  int ellA = -1;
+  int ellB = -1;
   bool baseRim = false;
   bool topRim = false;
   for (const Loop& lp : f.loops)
     for (const EdgeUse& u : lp.uses) {
       const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
       if (e.kind == CurveKind::Ellipse) {
-        ellipseEdge = u.edge;
+        if (ellA < 0)
+          ellA = u.edge;
+        else
+          ellB = u.edge;
       } else if (e.kind == CurveKind::Arc) {
         const double z0 = ucs::WorldToUcs(sf.frame, s.vertices[static_cast<std::size_t>(e.v0)].p).z;
         const double z1 = ucs::WorldToUcs(sf.frame, s.vertices[static_cast<std::size_t>(e.v1)].p).z;
@@ -353,17 +373,26 @@ struct CylinderCut {
           topRim = true;
       }
     }
-  if (ellipseEdge < 0 || baseRim == topRim)
+  if (ellB >= 0) {
+    // Two ellipse edges — a segment between two plane cuts (a tilted plug). Lower plane = smaller p0.
+    double pa[3];
+    double pb[3];
+    if (!EllipsePlaneCoeffs(sf, s.edges[static_cast<std::size_t>(ellA)], pa) ||
+        !EllipsePlaneCoeffs(sf, s.edges[static_cast<std::size_t>(ellB)], pb))
+      return false;
+    const double* lo = pa[0] <= pb[0] ? pa : pb;
+    const double* hi = pa[0] <= pb[0] ? pb : pa;
+    for (int i = 0; i < 3; ++i) {
+      out->lo[i] = lo[i];
+      out->hi[i] = hi[i];
+    }
+    return true;
+  }
+  if (ellA < 0 || baseRim == topRim)
     return false;
-  const Edge& e = s.edges[static_cast<std::size_t>(ellipseEdge)];
-  const Vec3 nlw = e.frame.zAxis;
-  const Vec3 nl{ray3d::Dot(nlw, sf.frame.xAxis), ray3d::Dot(nlw, sf.frame.yAxis),
-                ray3d::Dot(nlw, sf.frame.zAxis)};
-  const Vec3 cl = ucs::WorldToUcs(sf.frame, e.frame.origin);
-  if (!(std::fabs(nl.z) > 1e-9))
-    return false;  // the plane is parallel to the axis — not an ellipse
-  const double d = nl.x * cl.x + nl.y * cl.y + nl.z * cl.z;
-  const double p[3] = {d / nl.z, -sf.radius * nl.x / nl.z, -sf.radius * nl.y / nl.z};  // z_plane(u)
+  double p[3];
+  if (!EllipsePlaneCoeffs(sf, s.edges[static_cast<std::size_t>(ellA)], p))
+    return false;
   if (baseRim) {
     out->lo[0] = out->lo[1] = out->lo[2] = 0.0;
     out->hi[0] = p[0];
@@ -3034,6 +3063,93 @@ struct BossStub {
   return Succeed(outWhy);
 }
 
+/// The ellipse where a plane (through \p planePt, unit normal \p pn) cuts the cylinder of radius
+/// \p r about \p axisFrame. Fills the world centre / major direction / oriented normal / semi-axes.
+struct CylEllipse {
+  Vec3 centre;
+  Vec3 majorDir;
+  Vec3 normal;  // oriented so normal·axis > 0
+  double a = 0.0;
+  double b = 0.0;
+  double alpha = 0.0;  // z_plane on the axis, in the axis frame
+};
+[[nodiscard]] bool EllipseFromPlane(const ucs::Ucs& axisFrame, double r, const Vec3& planePt,
+                                    const Vec3& pn, CylEllipse* out) {
+  const Vec3 Z = axisFrame.zAxis;
+  const double dotNZ = ray3d::Dot(pn, Z);
+  if (std::fabs(dotNZ) < 1e-6)
+    return false;
+  const double tAxis = ray3d::Dot(ray3d::Sub(planePt, axisFrame.origin), pn) / dotNZ;
+  out->centre = ray3d::Add(axisFrame.origin, ray3d::Scale(Z, tAxis));
+  out->alpha = tAxis;
+  const Vec3 minorDir = ray3d::Normalize(ray3d::Cross(pn, Z));
+  out->majorDir = ray3d::Normalize(ray3d::Cross(pn, minorDir));
+  out->normal = dotNZ > 0.0 ? pn : ray3d::Scale(pn, -1.0);
+  out->a = r / std::fabs(dotNZ);
+  out->b = r;
+  return true;
+}
+
+/// A cylinder segment of radius \p r about \p axisFrame bounded by two oblique planes — the plug of
+/// an INTERSECT of a tilted cylinder with a planar-faced solid (REQ-314 B2b-1). Both ends are
+/// elliptical; no flat cap.
+[[nodiscard]] bool BuildObliqueCylinderPlug(const ucs::Ucs& axisFrame, double r, const Vec3& p1,
+                                            const Vec3& n1, const Vec3& p2, const Vec3& n2, Solid* out,
+                                            Problem* outWhy) {
+  CylEllipse eA;
+  CylEllipse eB;
+  if (!EllipseFromPlane(axisFrame, r, p1, n1, &eA) || !EllipseFromPlane(axisFrame, r, p2, n2, &eB))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const CylEllipse& lo = eA.alpha <= eB.alpha ? eA : eB;
+  const CylEllipse& hi = eA.alpha <= eB.alpha ? eB : eA;
+  if (hi.alpha - lo.alpha < 1e-9)
+    return Fail(Problem::BooleanEmptyResult, outWhy);
+  const Vec3 Z = axisFrame.zAxis;
+  auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(axisFrame, Vec3{x, y, z}); };
+  // z_plane(u=0) = alpha + beta ; here beta = -r * (n·X)/(n·Z). Recover it for the seam heights.
+  auto zAtSeam = [&](const CylEllipse& e, double sx) {
+    const Vec3 nl{ray3d::Dot(e.normal, axisFrame.xAxis), ray3d::Dot(e.normal, axisFrame.yAxis),
+                  ray3d::Dot(e.normal, Z)};
+    return e.alpha - r * nl.x / nl.z * sx;  // sx = cos u  (±1 at the seam)
+  };
+  Solid s;
+  const int lo0 = AddVertex(&s, W(r, 0.0, zAtSeam(lo, 1.0)));
+  const int lo1 = AddVertex(&s, W(-r, 0.0, zAtSeam(lo, -1.0)));
+  const int hi0 = AddVertex(&s, W(r, 0.0, zAtSeam(hi, 1.0)));
+  const int hi1 = AddVertex(&s, W(-r, 0.0, zAtSeam(hi, -1.0)));
+  const int elLo0 = AddEllipse(&s, lo0, lo1, lo.centre, lo.normal, lo.majorDir, lo.a, lo.b, kPi);
+  const int elLo1 = AddEllipse(&s, lo1, lo0, lo.centre, lo.normal, lo.majorDir, lo.a, lo.b, kPi);
+  const int elHi0 = AddEllipse(&s, hi0, hi1, hi.centre, hi.normal, hi.majorDir, hi.a, hi.b, kPi);
+  const int elHi1 = AddEllipse(&s, hi1, hi0, hi.centre, hi.normal, hi.majorDir, hi.a, hi.b, kPi);
+  const int sm0 = AddLine(&s, lo0, hi0);
+  const int sm1 = AddLine(&s, lo1, hi1);
+  s.faces.push_back(
+      MakePlaneFace(lo.centre, ray3d::Scale(lo.normal, -1.0), {{elLo1, true}, {elLo0, true}}));
+  s.faces.push_back(MakePlaneFace(hi.centre, hi.normal, {{elHi0, false}, {elHi1, false}}));
+  auto side = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame = axisFrame;
+    f.surface.frame.origin = lo.centre;
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = hi.alpha - lo.alpha;
+    f.uStart = u0;
+    f.uEnd = u1;
+    Loop lp;
+    lp.uses = std::move(uses);
+    f.loops.push_back(std::move(lp));
+    s.faces.push_back(std::move(f));
+  };
+  side(0.0, kPi, {{elLo0, false}, {sm1, false}, {elHi0, true}, {sm0, true}});
+  side(kPi, kTwoPi, {{elLo1, false}, {sm0, false}, {elHi1, true}, {sm1, true}});
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 struct SphereShape {
   Vec3 centre;
   double radius = 0.0;
@@ -3538,6 +3654,68 @@ struct SphereShape {
     out->push_back(cyl);
     return Succeed(outWhy);
   }
+
+  // A TILTED cylinder (B2b-1): the axis crosses two planar faces at an angle, cutting an ellipse on
+  // each. INTERSECT -> a plug with two oblique elliptical ends.
+  if (op == BoolOp::Intersect) {
+    struct EHit {
+      int face = -1;
+      double t = 0.0;
+      Vec3 n;
+      Vec3 pt;
+    };
+    std::vector<EHit> hits;
+    bool messy = false;
+    for (int fi = 0; fi < static_cast<int>(planar.faces.size()); ++fi) {
+      const Face& f = planar.faces[static_cast<std::size_t>(fi)];
+      if (f.surface.kind != SurfaceKind::Plane)
+        continue;
+      const Vec3 n = f.surface.frame.zAxis;
+      const double dn = ray3d::Dot(n, az);
+      if (std::fabs(dn) < 1e-6)
+        continue;  // axis parallel to the face — no crossing
+      const std::vector<Vec3> ring = FaceRing(planar, f);
+      if (ring.size() < 3)
+        continue;
+      const double t = ray3d::Dot(ray3d::Sub(ring[0], C.axis.origin), n) / dn;
+      const Vec3 hp = ray3d::Add(C.axis.origin, ray3d::Scale(az, t));
+      bool onEdge = false;
+      if (!PointInPolygon3D(hp, ring, n, eps, &onEdge))
+        continue;
+      double clr = std::numeric_limits<double>::max();
+      for (std::size_t i = 0; i < ring.size(); ++i) {
+        const Vec3& p0 = ring[i];
+        const Vec3& p1 = ring[(i + 1) % ring.size()];
+        const Vec3 e = ray3d::Sub(p1, p0);
+        const double l2 = ray3d::Dot(e, e);
+        double u = l2 > 1e-24 ? ray3d::Dot(ray3d::Sub(hp, p0), e) / l2 : 0.0;
+        u = std::clamp(u, 0.0, 1.0);
+        clr = std::min(clr, ray3d::Length(ray3d::Sub(hp, ray3d::Add(p0, ray3d::Scale(e, u)))));
+      }
+      if (clr < C.radius / std::fabs(dn) + eps) {  // the elliptical footprint runs over a face edge
+        messy = true;
+        continue;
+      }
+      hits.push_back(EHit{fi, t, n, hp});
+    }
+    if (!messy && hits.size() == 2) {
+      double t0 = hits[0].t;
+      double t1 = hits[1].t;
+      if (t0 > t1) {
+        std::swap(t0, t1);
+        std::swap(hits[0], hits[1]);
+      }
+      if (t1 - t0 <= eps || t0 < -eps || t1 > C.length + eps)
+        return Fail(Problem::BooleanCurvedFace, outWhy);  // partial penetration — a later slice
+      Solid r;
+      if (!BuildObliqueCylinderPlug(C.axis, C.radius, hits[0].pt, hits[0].n, hits[1].pt, hits[1].n, &r,
+                                    outWhy))
+        return false;
+      out->push_back(std::move(r));
+      return Succeed(outWhy);
+    }
+  }
+
   if (!anyPerp)
     return Fail(Problem::BooleanObliqueCylinder, outWhy);
   return Fail(Problem::BooleanCurvedFace, outWhy);  // partial penetration / a footprint over an edge
