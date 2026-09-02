@@ -4017,6 +4017,12 @@ void CancelSolidCommand(AppCommandState& st);
 /// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
 
+/// EXTRUDE (REQ-314 / ADR-046 increment 1b, GitHub issue #147): turn each eligible entity in the
+/// current selection — a closed polyline or a circle — into a B-rep solid, swept \p rest (a signed
+/// height) perpendicular to the profile's plane. One typed line, one undo step; the source
+/// entities are left in place. Every failure is reported by name and stores nothing (REQ-201).
+void CadExtrudeSelection(AppCommandState& st, const std::string& rest, std::vector<std::string>& log);
+
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
 /// the identical current/stale/rebuilding classification for a surface, and it has no ImGui

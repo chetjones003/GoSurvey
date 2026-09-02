@@ -1,0 +1,71 @@
+# REQ-314 / ADR-046 increment 1b (GitHub #147, Phase 4 of #120) — EXTRUDE, end to end.
+#
+# BrepTests proves the kernel (brep::Extrude): volumes, topology, refusals, survey-magnitude
+# stability. This transcript tests the half the kernel cannot: that selecting a closed polyline or
+# a circle and typing EXTRUDE <height> puts the swept solid in the document, that it survives a
+# .gs save/reopen with topology intact, that one undo step removes it, and that a non-profile in
+# the selection is reported rather than silently swallowed.
+
+NEW
+EXPECT SOLIDS 0
+
+# --- A closed rectangular polyline, 20 x 12, extruded 5 -> the solid MakeBox would build --------
+# Volume 20*12*5 = 1200. Area 2*240 + perimeter 64 * 5 = 480 + 320 = 800. A box: 8 v, 12 e, 6 f.
+CMD POLYLINE
+CMD 0,0
+CMD 20,0
+CMD 20,12
+CMD 0,12
+CMD CLOSE
+ESC
+EXPECT POLYLINES 1
+
+BOX -2 -2 22 14
+EXPECT SELECTED 1
+CMD EXTRUDE 5
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Solid
+EXPECT SOLIDPROPS 0 1200 800 8 12 6
+EXPECT LOG "Solid created"
+# the source polyline is left in place
+EXPECT POLYLINES 1
+
+# --- One undo step removes it; redo brings it back ---------------------------------------------
+CMD UNDO
+EXPECT SOLIDS 0
+EXPECT POLYLINES 1
+CMD REDO
+EXPECT SOLIDS 1
+
+# --- A circle, r = 4, extruded 9 -> the solid MakeCylinder would build -------------------------
+# Volume pi*16*9 = 452.3893421169302. Area 2*pi*16 + 2*pi*4*9 = 326.7256359733385. 4 v, 6 e, 4 f.
+CMD CIRCLE
+CMD 200,0
+CMD 4
+ESC
+EXPECT CIRCLES 1
+BOX 194 -6 206 6
+EXPECT SELECTED 1
+CMD EXTRUDE 9
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 1 452.3893421169302 326.7256359733385 4 6 4
+
+# --- A line in the selection is reported, not silently swallowed ------------------------------
+CMD LINE
+CMD 300,0
+CMD 320,0
+ESC
+BOX 299 -2 321 2
+EXPECT SELECTED 1
+CMD EXTRUDE 3
+EXPECT LOG "nothing in the selection could be extruded"
+EXPECT SOLIDS 2
+
+# --- Solids survive a .gs save and reopen with topology intact --------------------------------
+SAVEAS %OUT%/req314-extrude.gs
+OPEN %OUT%/req314-extrude.gs
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 0 1200 800 8 12 6
+EXPECT SOLIDPROPS 1 452.3893421169302 326.7256359733385 4 6 4
+
+CHECK ALL

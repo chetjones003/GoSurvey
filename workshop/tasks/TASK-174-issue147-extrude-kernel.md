@@ -81,7 +81,22 @@ assertions.
 - The self-intersection screen tests chords, not arc bulges; `Validate` still gates every result,
   so a subtler self-overlap is refused as broken topology rather than stored.
 
-### Next: increment 1b
+### Increment 1b — the EXTRUDE command (done, 2026-09-02, same branch → PR #NNN)
 
-The `EXTRUDE` command, profile pick from an existing closed polyline / circle, undo, and the
-prompted form — a separate task, no kernel change.
+`EXTRUDE <height>` operates on the current selection: each **closed polyline** or **circle** in it
+is turned into a B-rep solid swept `<height>` perpendicular to its plane. One typed line, one undo
+step, source entities left in place. Ineligible selections (a line, an open polyline) are reported,
+not silently swallowed (REQ-201). Bad height refused by name.
+
+- `CadExtrudeSelection` + `ExtrudeProfileFromSelection` in `CadCommands.cpp`; dispatch beside
+  `SOLIDLIST`; header decl beside `CadReportSolids`.
+- Profile plane fitted by Newell's method, oriented "up" for a roughly-horizontal profile so
+  `EXTRUDE 10` rises. Coordinates stay in the storage frame (ADR-025 D2) the `cadSolids` store uses.
+- Reuses REQ-313's solid store, `.gs` serialization (recipe-less solids already round-trip),
+  rendering, snapping and selection — no change to any of them.
+- New transcript `tests/headless/transcripts/req314-extrude.txt`: rectangle == box, circle ==
+  cylinder, undo/redo, line-in-selection reported, `.gs` save/reopen with topology intact.
+
+**Not in 1b** (later increments): the interactive "Select objects to extrude / Specify height of
+extrusion" prompt with a drag preview; arc-bulge polylines; multi-loop profiles; DELOBJ (source is
+always kept). `EXT` is an accepted alias.
