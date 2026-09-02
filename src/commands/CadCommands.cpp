@@ -22568,8 +22568,11 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     float x0, y0, x1, y1;
     int lineIx;
     int polyIx;
+    float bulge = 0.f;  // REQ-316 / ADR-047: bulge traversing x0,y0 -> x1,y1 (0 = straight)
+    int arcIx = -1;
   };
   std::vector<Edge> edges;
+  int tiltedArcsSkipped = 0;
   float tol = 1e-3f;
   double mnX = 0.;
   double mxX = 0.;
@@ -22589,12 +22592,36 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     return true;
   };
 
+  auto polyBulgeAt = [&](int vi) -> float {
+    return static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
+               ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+               : 0.f;
+  };
+
   for (const auto& se : st.selection) {
     if (se.type == ST::LineSeg && se.index >= 0) {
       float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
       if (!readLine(se.index, &x0, &y0, &x1, &y1))
         continue;
-      edges.push_back({x0, y0, x1, y1, se.index, -1});
+      edges.push_back({x0, y0, x1, y1, se.index, -1, 0.f, -1});
+    } else if (se.type == ST::Arc && se.index >= 0) {
+      // REQ-316 / ADR-047: an ARC contributes one bulge edge. A tilted arc (REQ-312) cannot go
+      // into a 2D polyline without losing its plane, so it is refused by name (REQ-201) — the same
+      // treatment feature lines get above.
+      const size_t k = static_cast<size_t>(se.index);
+      if (k >= st.userArcs.size())
+        continue;
+      const CadArc& a = st.userArcs[k];
+      if (!IsFlatNormal(a.nx, a.ny, a.nz)) {
+        ++tiltedArcsSkipped;
+        continue;
+      }
+      const float x0 = a.cx + a.r * std::cos(a.startRad);
+      const float y0 = a.cy + a.r * std::sin(a.startRad);
+      const float x1 = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
+      const float y1 = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+      const float bulge = std::tan(a.sweepRad * 0.25f);
+      edges.push_back({x0, y0, x1, y1, -1, -1, bulge, static_cast<int>(k)});
     } else if (se.type == ST::Polyline && se.index >= 0) {
       const int pi = se.index;
       if (static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
@@ -22608,20 +22635,23 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
         const float ay = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
         const float bx = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
         const float by = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
-        edges.push_back({ax, ay, bx, by, -1, pi});
+        edges.push_back({ax, ay, bx, by, -1, pi, polyBulgeAt(vi), -1});
       }
       if (closed && v1 - v0 >= 2) {
         const float ax = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
         const float ay = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
         const float bx = st.userPolylineVerts[static_cast<size_t>(v0 * 3)];
         const float by = st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
-        edges.push_back({ax, ay, bx, by, -1, pi});
+        edges.push_back({ax, ay, bx, by, -1, pi, polyBulgeAt(v1 - 1), -1});
       }
     }
   }
+  if (tiltedArcsSkipped > 0)
+    log.push_back("JOIN — " + std::to_string(tiltedArcsSkipped) + " tilted arc" +
+                  (tiltedArcsSkipped == 1 ? "" : "s") + " ignored: cannot fold a non-planar arc into a polyline.");
 
   if (edges.size() < 2) {
-    log.push_back("JOIN — select at least two connected lines or polylines.");
+    log.push_back("JOIN — select at least two connected lines, arcs, or polylines.");
     st.selection.clear();
     return;
   }
@@ -22665,7 +22695,9 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
   std::vector<char> edgeUsed(static_cast<size_t>(n), 0);
   std::unordered_set<int> lineDel;
   std::unordered_set<int> polyDel;
+  std::unordered_set<int> arcDel;  // REQ-316 / ADR-047
   int polysOut = 0;
+  int lonelyEdges = 0;  // REQ-316: selected objects that connect to nothing else
 
   for (int ei = 0; ei < n; ++ei) {
     if (edgeUsed[static_cast<size_t>(ei)])
@@ -22689,6 +22721,14 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
           stk.push_back(ej);
         }
       }
+    }
+
+    // REQ-316 acceptance: a lone object that connects to nothing else in the selection is NOT
+    // silently turned into a polyline — the drawing is left unchanged and the miss is reported.
+    // A single multi-segment polyline is still allowed to normalise itself (comp holds >1 edge).
+    if (comp.size() < 2) {
+      ++lonelyEdges;
+      continue;
     }
 
     std::unordered_map<int, std::pair<float, float>> rep;
@@ -22752,7 +22792,9 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 
     std::vector<std::vector<std::pair<int, int>>> adjW = adj;
     std::vector<int> stkE = {start};
+    std::vector<int> stkVia = {-1};  // edge used to arrive at the matching stkE entry
     std::vector<int> pathVerts;
+    std::vector<int> pathEdges;  // REQ-316: parallel to pathVerts; pathEdges[i>=1] joins i-1 and i
     while (!stkE.empty()) {
       const int v = stkE.back();
       while (!adjW[static_cast<size_t>(v)].empty() &&
@@ -22760,7 +22802,9 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
         adjW[static_cast<size_t>(v)].pop_back();
       if (adjW[static_cast<size_t>(v)].empty()) {
         pathVerts.push_back(v);
+        pathEdges.push_back(stkVia.back());
         stkE.pop_back();
+        stkVia.pop_back();
       } else {
         const auto pr = adjW[static_cast<size_t>(v)].back();
         adjW[static_cast<size_t>(v)].pop_back();
@@ -22770,31 +22814,46 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
           continue;
         eu[static_cast<size_t>(eix)] = 1;
         stkE.push_back(to);
+        stkVia.push_back(eix);
       }
     }
     std::reverse(pathVerts.begin(), pathVerts.end());
+    std::reverse(pathEdges.begin(), pathEdges.end());
     if (pathVerts.size() < 2)
       continue;
 
     std::vector<float> pv;
-    auto appendCluster = [&](int d) {
-      const int cid = clusters[static_cast<size_t>(d)];
+    std::vector<float> pvBulge;  // REQ-316 / ADR-047: bulge of the segment leaving each vertex
+    for (size_t i = 0; i < pathVerts.size(); ++i) {
+      const int cid = clusters[static_cast<size_t>(pathVerts[i])];
       const auto& pt = rep[cid];
-      if (!pv.empty()) {
-        const size_t z = pv.size();
-        if (z >= 3 && pv[z - 3] == pt.first && pv[z - 2] == pt.second)
-          return;
-      }
       pv.push_back(pt.first);
       pv.push_back(pt.second);
       pv.push_back(0.f);
-    };
-    for (const int d : pathVerts)
-      appendCluster(d);
+      // The bulge for the segment LEAVING vertex i is the edge that joins i to i+1 (pathEdges[i+1]),
+      // negated when that edge is traversed against its stored x0->x1 direction.
+      float leave = 0.f;
+      if (i + 1 < pathVerts.size()) {
+        const int e = pathEdges[i + 1];
+        if (e >= 0) {
+          const Edge& E = edges[static_cast<size_t>(e)];
+          const bool forward = clusterOf(2 * e) == cid;  // stored x0 sits at this vertex
+          leave = forward ? E.bulge : -E.bulge;
+        }
+      }
+      pvBulge.push_back(leave);
+    }
 
     bool closed = pathVerts.front() == pathVerts.back();
-    if (closed && pv.size() >= 9)
+    if (closed && pv.size() >= 9) {
+      // Drop the repeated closing vertex; its leaving-bulge (the closing segment) moves onto the
+      // last kept vertex, which is where userPolylineClosed expects the closing arc.
+      const float closeBulge = pvBulge[pvBulge.size() - 2];  // edge from vert n-2 -> repeated last
       pv.resize(pv.size() - 3);
+      pvBulge.resize(pvBulge.size() - 1);
+      if (!pvBulge.empty())
+        pvBulge.back() = closeBulge;
+    }
 
     if (pv.size() < 6)
       continue;
@@ -22807,14 +22866,29 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     st.userPolylineOffsets.push_back(baseVert + nv);
     st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
-    // REQ-316 / ADR-047: Inc 1 JOIN produces straight polylines; arc-aware JOIN is Inc 3.
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+    // REQ-316 / ADR-047: carry the joined bulges through. Only materialise the array when a
+    // segment is actually curved, so a straight-only JOIN keeps .gs byte-stable.
+    {
+      bool anyArc = false;
+      for (float b : pvBulge)
+        if (b != 0.f) { anyArc = true; break; }
+      if (anyArc || !st.userPolylineVertsBulge.empty()) {
+        SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+        const size_t tail = st.userPolylineVertsBulge.size() >= static_cast<size_t>(nv)
+                                ? st.userPolylineVertsBulge.size() - static_cast<size_t>(nv)
+                                : 0;
+        for (size_t k = 0; k < static_cast<size_t>(nv) && k < pvBulge.size(); ++k)
+          st.userPolylineVertsBulge[tail + k] = pvBulge[k];
+      }
+    }
     polysOut++;
 
     for (int ej : comp) {
       const Edge& E = edges[static_cast<size_t>(ej)];
       if (E.lineIx >= 0)
         lineDel.insert(E.lineIx);
+      if (E.arcIx >= 0)
+        arcDel.insert(E.arcIx);
       if (E.polyIx >= 0)
         polyDel.insert(E.polyIx);
     }
@@ -22837,10 +22911,27 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
+  // REQ-316 / ADR-047: arcs consumed by the join. Descending index, mirror the attr array — the
+  // same shape as the line-delete block above.
+  std::vector<int> aDel(arcDel.begin(), arcDel.end());
+  std::sort(aDel.begin(), aDel.end(), std::greater<int>());
+  for (int idx : aDel) {
+    if (static_cast<size_t>(idx) >= st.userArcs.size())
+      continue;
+    st.userArcs.erase(st.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.userArcAttrs.size())
+      st.userArcAttrs.erase(st.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
   st.selection.clear();
   if (polysOut > 0) {
     BumpCadGpuCache(st);
     log.push_back("JOIN — created " + std::to_string(polysOut) + " polyline(s).");
+    if (lonelyEdges > 0)
+      log.push_back("JOIN — " + std::to_string(lonelyEdges) + " object" + (lonelyEdges == 1 ? "" : "s") +
+                    " left unchanged: endpoints do not meet any other selected object.");
+  } else if (lonelyEdges > 0) {
+    log.push_back("JOIN — nothing merged: the selected objects' endpoints do not connect.");
   } else
     log.push_back("JOIN — nothing merged.");
 }
