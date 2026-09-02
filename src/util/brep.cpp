@@ -3150,6 +3150,99 @@ struct CylEllipse {
   return Succeed(outWhy);
 }
 
+/// \p planar with a **tilted** cylindrical bore of radius \p r removed along \p axisFrame — the
+/// elliptical-mouthed SUBTRACT of a tilted cylinder that crosses faces \p fA and \p fB
+/// (REQ-314 B2b-1). Each face is bored with an ellipse; an inward cylinder wall spans the two.
+[[nodiscard]] bool BuildTiltedBore(const Solid& planar, int fA, const Vec3& nA, int fB, const Vec3& nB,
+                                   const ucs::Ucs& axisFrame, double r, Solid* out, Problem* outWhy) {
+  Solid s = planar;
+  s.recipe = Recipe{};
+  const Vec3 Z = axisFrame.zAxis;
+  auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(axisFrame, Vec3{x, y, z}); };
+
+  struct FaceEll {
+    int face;
+    CylEllipse e;
+    Vec3 s0;  // world ellipse ∩ seam at cyl u = 0
+    Vec3 s1;  // ... at u = pi
+    int e0 = -1;
+    int e1 = -1;  // half-ellipse arcs, s0->s1 and s1->s0
+    double sweepSign = 1.0;
+  };
+  auto prep = [&](int face, const Vec3& faceN) -> FaceEll {
+    FaceEll fe{face, {}, {}, {}, -1, -1, 1.0};
+    const Vec3 pt = s.vertices[static_cast<std::size_t>(
+                                   s.edges[static_cast<std::size_t>(s.faces[static_cast<std::size_t>(face)]
+                                                                        .loops[0]
+                                                                        .uses[0]
+                                                                        .edge)]
+                                       .v0)]
+                        .p;
+    (void)EllipseFromPlane(axisFrame, r, pt, faceN, &fe.e);
+    // seam heights in the axis frame: z_plane(u) = alpha + beta cos u ; beta = -r*(n·X)/(n·Z).
+    const Vec3 nl{ray3d::Dot(fe.e.normal, axisFrame.xAxis), ray3d::Dot(fe.e.normal, axisFrame.yAxis),
+                  ray3d::Dot(fe.e.normal, Z)};
+    const double beta = -r * nl.x / nl.z;
+    const double gamma = -r * nl.y / nl.z;
+    fe.s0 = W(r, 0.0, fe.e.alpha + beta);
+    fe.s1 = W(-r, 0.0, fe.e.alpha - beta);
+    (void)gamma;
+    // the ellipse edge is built about the FACE outward normal, so the bored-face hole winds right.
+    fe.sweepSign = ray3d::Dot(faceN, Z) > 0.0 ? 1.0 : -1.0;
+    return fe;
+  };
+  FaceEll a = prep(fA, nA);
+  FaceEll b = prep(fB, nB);
+  // order lo/hi by axis param so the inward wall's two ellipse ends match CylinderCutZExtent.
+  if (a.e.alpha > b.e.alpha)
+    std::swap(a, b);
+
+  auto addArcs = [&](FaceEll& fe, const Vec3& faceN) {
+    const int v0 = AddVertex(&s, fe.s0);
+    const int v1 = AddVertex(&s, fe.s1);
+    fe.e0 = AddEllipse(&s, v0, v1, fe.e.centre, faceN, fe.e.majorDir, fe.e.a, fe.e.b,
+                       fe.sweepSign * kPi);
+    fe.e1 = AddEllipse(&s, v1, v0, fe.e.centre, faceN, fe.e.majorDir, fe.e.a, fe.e.b,
+                       fe.sweepSign * kPi);
+  };
+  addArcs(a, a.face == fA ? nA : nB);
+  addArcs(b, b.face == fA ? nA : nB);
+
+  const int sm0 = AddLine(&s, s.edges[static_cast<std::size_t>(a.e0)].v0,
+                          s.edges[static_cast<std::size_t>(b.e0)].v0);  // +x seam, lo→hi
+  const int sm1 = AddLine(&s, s.edges[static_cast<std::size_t>(a.e1)].v0,
+                          s.edges[static_cast<std::size_t>(b.e1)].v0);  // -x seam
+
+  auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame = axisFrame;
+    f.surface.frame.origin = a.e.centre;
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = b.e.alpha - a.e.alpha;
+    f.surface.inward = true;
+    f.uStart = u0;
+    f.uEnd = u1;
+    Loop lp;
+    lp.uses = std::move(uses);
+    f.loops.push_back(std::move(lp));
+    s.faces.push_back(std::move(f));
+  };
+  // Same edge-use pattern as BuildBore's inward wall.
+  wall(0.0, kPi, {{sm0, false}, {b.e0, false}, {sm1, true}, {a.e0, true}});
+  wall(kPi, kTwoPi, {{sm1, false}, {b.e1, false}, {sm0, true}, {a.e1, true}});
+  // Bore each face with the ellipse, wound opposite the wall's use of that arc.
+  s.faces[static_cast<std::size_t>(a.face)].loops.push_back(Loop{{{a.e0, false}, {a.e1, false}}});
+  s.faces[static_cast<std::size_t>(b.face)].loops.push_back(Loop{{{b.e1, true}, {b.e0, true}}});
+  for (int i = static_cast<int>(planar.faces.size()); i < static_cast<int>(s.faces.size()); ++i)
+    s.shells[0].faces.push_back(i);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 struct SphereShape {
   Vec3 centre;
   double radius = 0.0;
@@ -3656,8 +3749,8 @@ struct SphereShape {
   }
 
   // A TILTED cylinder (B2b-1): the axis crosses two planar faces at an angle, cutting an ellipse on
-  // each. INTERSECT -> a plug with two oblique elliptical ends.
-  if (op == BoolOp::Intersect) {
+  // each. INTERSECT -> a plug with two oblique elliptical ends; SUBTRACT -> an elliptical-mouthed bore.
+  {
     struct EHit {
       int face = -1;
       double t = 0.0;
@@ -3708,9 +3801,17 @@ struct SphereShape {
       if (t1 - t0 <= eps || t0 < -eps || t1 > C.length + eps)
         return Fail(Problem::BooleanCurvedFace, outWhy);  // partial penetration — a later slice
       Solid r;
-      if (!BuildObliqueCylinderPlug(C.axis, C.radius, hits[0].pt, hits[0].n, hits[1].pt, hits[1].n, &r,
-                                    outWhy))
-        return false;
+      if (op == BoolOp::Intersect) {
+        if (!BuildObliqueCylinderPlug(C.axis, C.radius, hits[0].pt, hits[0].n, hits[1].pt, hits[1].n,
+                                      &r, outWhy))
+          return false;
+      } else if (op == BoolOp::Subtract && !cylIsMinuend) {
+        if (!BuildTiltedBore(planar, hits[0].face, hits[0].n, hits[1].face, hits[1].n, C.axis,
+                             C.radius, &r, outWhy))
+          return false;
+      } else {
+        return Fail(Problem::BooleanObliqueCylinder, outWhy);  // tilted UNION / cyl−box — later
+      }
       out->push_back(std::move(r));
       return Succeed(outWhy);
     }
