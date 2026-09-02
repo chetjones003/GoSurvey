@@ -2,23 +2,22 @@
 
 namespace {
 
-// No migrations yet: `.gs` is at version 1, and every change through REQ-044…REQ-076 was additive
-// and handled by the tolerant-key pattern (ADR-030 (f)), which stays the right tool for those.
-//
-// The first entry here will be added by whichever change cannot be expressed additively — a
-// renamed field, a changed unit, a restructured store. When that happens: bump kGsFormatVersion
-// in GsIo.cpp, add a step with fromVersion equal to the OLD version, and add a test that loads a
-// document in the old shape and asserts the new one.
+// v1 -> v2 (REQ-314 B2b-1, D-2026-09-02-h): a `brep` solid edge may now be `CurveKind::Ellipse`
+// (kind 2), carrying a second radius `r2`. A v1 document has no such edge — every solid edge is a
+// line or an arc — so carrying it forward is a pure relabel and the resave is byte-identical. The
+// version bump exists so an *older* GoSurvey refuses an ellipse-edge drawing by name (via the
+// downgrade branch above) rather than silently mis-reading the edge.
+bool MigrateV1ToV2(nlohmann::json& /*doc*/, std::string& /*err*/) { return true; }
+
 const GsMigrationStep kSteps[] = {
-    // { 1, "example: circles gain a Z coordinate", &MigrateV1ToV2 },
-    {0, nullptr, nullptr},   // placeholder so the array is never zero-length; count is 0 below
+    {1, "solids may carry elliptical intersection edges (B2b-1)", &MigrateV1ToV2},
 };
 
 }  // namespace
 
 const GsMigrationStep* GsMigrationTable(size_t& countOut)
 {
-  countOut = 0;   // deliberately 0 — kSteps holds only the placeholder entry
+  countOut = sizeof(kSteps) / sizeof(kSteps[0]);
   return kSteps;
 }
 

@@ -1619,12 +1619,13 @@ TEST_CASE("Slice refuses what it cannot do, by name", "[brep][req314]") {
     REQUIRE_FALSE(brep::Slice(box, Vec3{0, 0, 4}, Vec3{0, 0, 0}, brep::SliceKeep::Both, &a, &b, &why));
     REQUIRE(why == Problem::SliceDegeneratePlane);
   }
-  SECTION("an OBLIQUE cut through a cylinder — an ellipse the kernel cannot hold") {
+  SECTION("an OBLIQUE cut that would clip a cap is reported, not sliced") {
     Solid cyl;
     REQUIRE(brep::MakeCylinder(World(), 4, 10, &cyl, &why));
-    REQUIRE_FALSE(brep::Slice(cyl, Vec3{0, 0, 5}, ray3d::Normalize(Vec3{1, 0, 2}), brep::SliceKeep::Both,
-                              &a, &b, &why));
-    REQUIRE(why == Problem::SliceCurvedFace);
+    // Steep tilt near the top: the ellipse would run off the end of the cylinder.
+    REQUIRE_FALSE(brep::Slice(cyl, Vec3{0, 0, 9.5}, ray3d::Normalize(Vec3{3, 0, 1}),
+                              brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceResultComplex);
   }
   SECTION("a sphere — no primitive pieces") {
     Solid sph;
@@ -1632,6 +1633,56 @@ TEST_CASE("Slice refuses what it cannot do, by name", "[brep][req314]") {
     REQUIRE_FALSE(brep::Slice(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
     REQUIRE(why == Problem::SliceCurvedFace);
   }
+}
+
+TEST_CASE("Curved B2b-1: an oblique plane slices a cylinder into two elliptical-ended pieces",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), 4, 10, &cyl, &why));  // r 4, z 0..10 about +Z
+  Solid up;
+  Solid dn;
+  // Plane through z=4 on the axis, tilted so cos(theta) = 2/sqrt(5) from the axis.
+  REQUIRE(brep::Slice(cyl, Vec3{0, 0, 4}, ray3d::Normalize(Vec3{1, 0, 2}), brep::SliceKeep::Both, &up,
+                      &dn, &why));
+  REQUIRE(brep::Validate(up) == Problem::Ok);
+  REQUIRE(brep::Validate(dn) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(up));
+  REQUIRE_FALSE(brep::SelfIntersects(dn));
+
+  const auto mUp = brep::ComputeMassProperties(up);
+  const auto mDn = brep::ComputeMassProperties(dn);
+  REQUIRE(mUp.valid);
+  REQUIRE(mDn.valid);
+  // A cylinder cut by an oblique plane at mean axis height z-bar has volume pi r^2 z-bar.
+  REQUIRE(mDn.volume == Approx(kPi * 16.0 * 4.0).epsilon(1e-9));
+  REQUIRE(mUp.volume == Approx(kPi * 16.0 * 6.0).epsilon(1e-9));
+  REQUIRE(mUp.volume + mDn.volume == Approx(kPi * 16.0 * 10.0).epsilon(1e-9));
+
+  // After the cut the pieces' lateral areas still sum to the whole cylinder's (2 pi r h), the two
+  // original circular caps are unchanged, and each piece gains one elliptical cap of area pi a b
+  // (b = r, a = r / cos theta).
+  const double a = 4.0 / (2.0 / std::sqrt(5.0));
+  const double wholeCyl = 2.0 * kPi * 16.0 + 2.0 * kPi * 4.0 * 10.0;  // 2 circular caps + lateral
+  REQUIRE(mUp.surfaceArea + mDn.surfaceArea ==
+          Approx(wholeCyl + 2.0 * kPi * a * 4.0).epsilon(1e-6));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(dn, 0.02, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(kPi * 16.0 * 4.0).epsilon(0.01));  // chorded ellipse + slant
+
+  // A .gs round-trip preserves the ellipse edge.
+  Solid reopened = dn;  // Translate is the cheap in-kernel proxy for the store path
+  reopened = brep::Translate(reopened, Vec3{0, 0, 0});
+  bool sawEllipse = false;
+  for (const auto& e : reopened.edges)
+    if (e.kind == brep::CurveKind::Ellipse) {
+      sawEllipse = true;
+      REQUIRE(e.radius > e.radius2);  // semi-major > semi-minor
+      REQUIRE(e.radius2 == Approx(4.0).epsilon(1e-9));
+    }
+  REQUIRE(sawEllipse);
 }
 
 TEST_CASE("Slice of a cylinder or cone perpendicular to its axis cuts it to length", "[brep][req314]") {
