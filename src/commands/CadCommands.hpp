@@ -4133,6 +4133,17 @@ void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vec
 [[nodiscard]] bool CadBuildRevolveSolids(const AppCommandState& st, double angleDeg,
                                          std::vector<brep::Solid>* out);
 
+// --- UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046 increment 4, B1) -----------------------
+
+enum class CadBooleanOp { Union, Subtract, Intersect };
+
+/// Combine the two B-rep solids in the current selection (REQ-314 B1). UNION and INTERSECT do not
+/// care about order; SUBTRACT keeps the first selected solid and removes the second. Both operands
+/// are replaced by the result in one undo step. A pair the kernel refuses (a curved or non-convex
+/// operand, no shared volume for INTERSECT) is reported and nothing in the document changes
+/// (REQ-201). Needs exactly two selected solids.
+void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log);
+
 // --- SLICE (REQ-314 / ADR-046 increment 3b) -------------------------------------------------
 
 /// Begin the prompted SLICE command a bare `SLICE` opens: select solids (if none are selected),

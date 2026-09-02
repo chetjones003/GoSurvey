@@ -6394,6 +6394,9 @@ const CmdEntry kRegistry[] = {
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
     {"slice", "sl", "Cut selected solids with a plane (three points), keeping one side or both"},
+    {"union", "uni", "Combine two selected solids into one"},
+    {"subtract", "su", "Subtract the second selected solid from the first"},
+    {"intersect", "in", "Keep only the volume two selected solids share"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
@@ -24491,6 +24494,81 @@ void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vec
 }
 
 // -------------------------------------------------------------------------------------------------
+// UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046 increment 4, B1). Selection-driven, like the
+// EXTRUDE one-liner: exactly two selected solids are combined and replaced by the result in one
+// undo step. A pair the kernel refuses is reported and the document is untouched (REQ-201).
+// -------------------------------------------------------------------------------------------------
+
+void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log) {
+  const char* verb =
+      op == CadBooleanOp::Union ? "UNION" : op == CadBooleanOp::Subtract ? "SUBTRACT" : "INTERSECT";
+  const int nSolid = static_cast<int>(st.cadSolids.size());
+  std::vector<int> idx;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < nSolid &&
+        std::find(idx.begin(), idx.end(), e.index) == idx.end())
+      idx.push_back(e.index);
+  }
+  if (idx.size() != 2) {
+    log.push_back(std::string(verb) + " — select exactly two solids first, then run " + verb + ".");
+    return;
+  }
+  if (!st.cadSolids[static_cast<size_t>(idx[0])] || !st.cadSolids[static_cast<size_t>(idx[1])]) {
+    log.push_back(std::string(verb) + " — a selected solid is missing.");
+    return;
+  }
+
+  const brep::Solid& A = *st.cadSolids[static_cast<size_t>(idx[0])];
+  const brep::Solid& B = *st.cadSolids[static_cast<size_t>(idx[1])];
+  std::vector<brep::Solid> result;
+  brep::Problem why = brep::Problem::Ok;
+  bool ok = false;
+  switch (op) {
+  case CadBooleanOp::Union:
+    ok = brep::BooleanUnion(A, B, &result, &why);
+    break;
+  case CadBooleanOp::Subtract:
+    ok = brep::BooleanSubtract(A, B, &result, &why);
+    break;
+  case CadBooleanOp::Intersect:
+    ok = brep::BooleanIntersect(A, B, &result, &why);
+    break;
+  }
+  if (!ok) {
+    log.push_back(std::string(verb) + " — " + brep::ProblemText(why) + " Nothing changed.");
+    return;
+  }
+  if (result.empty()) {
+    log.push_back(std::string(verb) + " — the result is empty. Nothing changed.");
+    return;
+  }
+
+  const EntityAttributes attrs = static_cast<size_t>(idx[0]) < st.cadSolidAttrs.size()
+                                     ? st.cadSolidAttrs[static_cast<size_t>(idx[0])]
+                                     : MakeNewEntityAttrs(st);
+  PushUndoSnapshot(st, verb);
+  // Remove the two operands, highest index first so the other stays valid.
+  const int hi = std::max(idx[0], idx[1]);
+  const int lo = std::min(idx[0], idx[1]);
+  st.cadSolids.erase(st.cadSolids.begin() + hi);
+  if (static_cast<size_t>(hi) < st.cadSolidAttrs.size())
+    st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + hi);
+  st.cadSolids.erase(st.cadSolids.begin() + lo);
+  if (static_cast<size_t>(lo) < st.cadSolidAttrs.size())
+    st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + lo);
+  for (brep::Solid& s : result) {
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    st.cadSolidAttrs.push_back(attrs);
+    log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+  }
+  BumpCadGpuCache(st);
+  st.selection.clear();
+  log.push_back(std::string(verb) + " — two solids combined into " + std::to_string(result.size()) +
+                (result.size() == 1 ? " solid." : " solids."));
+}
+
+// -------------------------------------------------------------------------------------------------
 // The prompted SLICE command (REQ-314 / ADR-046 increment 3b). Select solids, three points for the
 // cutting plane, then a point on the side to keep (or B for both). Each sliced solid is replaced by
 // its kept piece(s) in one undo step; a solid the kernel cannot slice is reported and nothing in
@@ -27020,6 +27098,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (plotTok == "slice" || plotTok == "sl") {
       StartSliceCommand(st, log);
+      return;
+    }
+    if (plotTok == "union" || plotTok == "uni") {
+      CadBooleanSelection(st, CadBooleanOp::Union, log);
+      return;
+    }
+    if (plotTok == "subtract" || plotTok == "su") {
+      CadBooleanSelection(st, CadBooleanOp::Subtract, log);
+      return;
+    }
+    if (plotTok == "intersect" || plotTok == "in") {
+      CadBooleanSelection(st, CadBooleanOp::Intersect, log);
       return;
     }
     // `PERSPECTIVE ON` in one line; a bare `PERSPECTIVE` reports the current projection — the same
