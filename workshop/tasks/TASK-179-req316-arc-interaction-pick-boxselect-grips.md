@@ -42,6 +42,14 @@
   so live preview and the selection / hover highlight follow the curve.
 - 2026-09-02 req316-polyline-arc-segments.txt +section 5 (box-select follows the arc). Full suite:
   820 Catch2, 1001 ctest green.
+- 2026-09-02 Found while testing: arc hit-test SAMPLED the curve, so the effective aperture shrank
+  between samples. Added `geom2d::PointArcDistanceSq` (exact analytic distance to an arc), used by
+  PickClosestCadEntity in plan view for polyline bulge segments and flat ARC entities. +3 tests.
+- 2026-09-02 Found while testing (screenshots): the idle hover used a fixed 3 px aperture, so a
+  line inside the visible pickbox did not highlight until it crossed the crosshair centre.
+  D-2026-09-02-d: `CadHoverEntityPickTolWorld` is now the drawn box's half-extent
+  (`clamp(objectSnapAperturePx,4,64)*0.5` px); floating-vp hover path matched. 822 Catch2,
+  1003 ctest green.
 
 ## 9. Self-verification
 - [x] build-project — PASS (release / GoSurveyTests / gosurvey_headless, MSVC)

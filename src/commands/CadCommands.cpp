@@ -22336,12 +22336,14 @@ float CadOffsetEntityPickTolWorld(const AppCommandState& st) {
 }
 
 float CadHoverEntityPickTolWorld(const AppCommandState& st) {
-  // Idle hover highlight is pure visual feedback, so it must require the cursor to actually touch the drawn
-  // stroke — unlike OFFSET/selection picking, which keeps a forgiving aperture. A small fixed pixel aperture
-  // (no scale floor) means the tolerance is constant in screen space at every zoom level.
-  constexpr float kHoverAperturePx = 3.0f;
-  return CadSnap::WorldToleranceFromPixels(st.viewportLastSurveyLayoutHeightPx,
-                                           st.viewportLastSurveyLayoutOrthoHalfH, kHoverAperturePx);
+  // The idle hover highlight activates once geometry is inside the CURSOR APERTURE — the box the
+  // crosshair draws at its centre (CadUi: `ap * 0.5` px half-size, `ap = clamp(objectSnapAperturePx,
+  // 4, 64)`). So the tolerance is that box's half-extent in world units: what the user sees is what
+  // picks. (Was a fixed 3 px, which required the stroke to pass through the crosshair centre — user
+  // GUI pass, 2026-09-02.) Constant in screen space at every zoom; a tiny floor for a degenerate view.
+  const float apPx = std::clamp(st.objectSnapAperturePx, 4.f, 64.f) * 0.5f;
+  return std::max(1e-6f, CadSnap::WorldToleranceFromPixels(st.viewportLastSurveyLayoutHeightPx,
+                                                           st.viewportLastSurveyLayoutOrthoHalfH, apPx));
 }
 
 void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, float cursorWy,

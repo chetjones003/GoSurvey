@@ -12929,7 +12929,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (!midCmd || vpFreezePick) {
           SelectedEntity hoverHit{};
           float hoverD2 = 0.f;
-          const float hoverTol = std::max(1.e-6f, 8.f * worldPerPx);
+          // Match the model-space rule: hover activates once geometry is inside the cursor aperture.
+          const float hoverTol = std::max(1.e-6f, std::clamp(cmd.objectSnapAperturePx, 4.f, 64.f) * 0.5f * worldPerPx);
           if (PickClosestCadEntity(cmd, static_cast<float>(mLocalX), static_cast<float>(mLocalY), hoverTol,
                                    &hoverHit, &hoverD2)) {
             cmd.viewportHoverEntityValid = true;
