@@ -211,7 +211,19 @@ enum class Problem {
 
   // --- Tessellation. ---
   PlaneFaceNotSimple,  ///< A flat face with holes, which the fan triangulation below cannot handle.
-  NonPositiveTolerance
+  NonPositiveTolerance,
+
+  // --- Feature operations (REQ-314 / ADR-046). ---
+  NonPositiveDistance,       ///< An extrusion distance that is zero or not finite.
+  ProfileMalformed,          ///< A profile whose vertex and edge counts disagree.
+  ProfileTooFewEdges,        ///< A profile of fewer than two edges — it bounds no area.
+  ProfilePointOffPlane,      ///< A profile vertex or arc centre that is not on the profile plane.
+  ProfileArcRadiusMismatch,  ///< A profile arc whose two endpoints are not equidistant from its centre.
+  ProfileSelfIntersects,     ///< A profile loop that crosses itself.
+  /// A profile arc that curves inward (a reflex bulge). The face it would sweep has its outward
+  /// normal pointing toward the cylinder axis, which \ref Surface has no way to express — there is
+  /// no "reversed" flag. Supported once the booleans force a general answer to inward-curving faces.
+  ProfileArcReflex
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -262,6 +274,57 @@ inline constexpr int kMaxPyramidSides = 64;
 /// frame origin with the frame Z as its axis of revolution.
 [[nodiscard]] bool MakeTorus(const ucs::Ucs& frame, double majorRadius, double minorRadius, Solid* out,
                              Problem* outWhy);
+
+// ---------------------------------------------------------------------------------------------
+// Feature operations (REQ-314 / ADR-046, GitHub issue #147 — Phase 4 of #120).
+//
+// A feature operation turns a drawn profile into a solid. Every face it produces is still one of
+// the five \ref SurfaceKind values above and every edge still a line or an arc, so the kernel needs
+// no new geometry carrier: a straight profile edge sweeps a plane, a circular-arc edge sweeps a
+// cylinder. Extrude is increment 1; revolve, slice and the analytic booleans follow in the order
+// ADR-046 lists.
+// ---------------------------------------------------------------------------------------------
+
+/// One edge of a \ref Profile: the span from `vertices[i]` to `vertices[(i + 1) % n]`.
+struct ProfileEdge {
+  bool arc = false;    ///< false — a straight chord. true — a circular arc.
+  Vec3 centre;         ///< Arc only: the arc centre, on the profile plane.
+  double sweep = 0.0;  ///< Arc only: signed sweep about the profile-plane normal (`plane.zAxis`),
+                       ///< CCW positive, `0 < |sweep| < 2*pi`.
+};
+
+/// A single closed, planar loop of straight and circular-arc edges — the input to \ref Extrude, and
+/// (from increment 2) to \ref Revolve.
+///
+/// `vertices` are the corner points in order; edge `i` runs from `vertices[i]` to
+/// `vertices[(i + 1) % n]`, so the loop closes implicitly — there is no separate "is it closed"
+/// field to disagree with the geometry. A full circle is expressed the way the cylinder builder
+/// expresses its rims: two opposite vertices and two half-turn arc edges. Every vertex and every
+/// arc centre must lie on `plane` within a scale-relative tolerance; `plane.zAxis` is the loop
+/// normal and fixes what "CCW" means, but the builder accepts either winding and orients the
+/// result itself.
+struct Profile {
+  ucs::Ucs plane;
+  std::vector<Vec3> vertices;
+  std::vector<ProfileEdge> edges;  ///< Exactly `vertices.size()` of them.
+};
+
+/// Extrude \p profile perpendicular to its own plane by \p distance and return the solid in \p out.
+///
+/// The sign of \p distance picks which side of the plane the solid rises on; its magnitude is the
+/// height. A straight profile edge becomes a \ref SurfaceKind::Plane face, a circular arc becomes a
+/// \ref SurfaceKind::Cylinder face, and two cap faces close the ends.
+///
+/// This is increment 1 of REQ-314: one loop, no taper, the sweep always along the plane normal.
+/// Nothing is stored unless the result passes \ref Validate (REQ-201). Refuses — by name, never by
+/// a silent repair — a \p distance that is zero or not finite (\ref Problem::NonPositiveDistance),
+/// a profile whose vertex and edge counts disagree (\ref Problem::ProfileMalformed) or that has
+/// fewer than two edges (\ref Problem::ProfileTooFewEdges), a vertex or arc centre off the plane
+/// (\ref Problem::ProfilePointOffPlane), an arc whose endpoints are not equidistant from its centre
+/// (\ref Problem::ProfileArcRadiusMismatch), a loop that crosses itself
+/// (\ref Problem::ProfileSelfIntersects), and a degenerate placement frame
+/// (\ref Problem::DegenerateFrame).
+[[nodiscard]] bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWhy);
 
 // ---------------------------------------------------------------------------------------------
 // Validity.

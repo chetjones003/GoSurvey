@@ -1073,3 +1073,249 @@ TEST_CASE("Isolines make a curved face read as curved", "[brep][req313]") {
     REQUIRE(why == Problem::EdgeNotUsedTwice);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Feature operations — Extrude (REQ-314 / ADR-046 increment 1, GitHub issue #147).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A straight-edged profile from 2D points in \p plane's own coordinates.
+brep::Profile PolyProfile(const ucs::Ucs& plane, const std::vector<ucs::Point2D>& pts2) {
+  brep::Profile pr;
+  pr.plane = plane;
+  for (const ucs::Point2D& q : pts2)
+    pr.vertices.push_back(ucs::PlaneToWorld(plane, q));
+  pr.edges.assign(pts2.size(), brep::ProfileEdge{});
+  return pr;
+}
+
+/// A full circle expressed the way the cylinder builder expresses its rims: two opposite points,
+/// two half-turn arcs.
+brep::Profile CircleProfile(const ucs::Ucs& plane, double r) {
+  brep::Profile pr;
+  pr.plane = plane;
+  pr.vertices = {ucs::PlaneToWorld(plane, {r, 0.0}), ucs::PlaneToWorld(plane, {-r, 0.0})};
+  brep::ProfileEdge e;
+  e.arc = true;
+  e.centre = plane.origin;
+  e.sweep = kPi;
+  pr.edges = {e, e};
+  return pr;
+}
+
+}  // namespace
+
+TEST_CASE("Extrude of a rectangle is the box the primitive builder makes", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double w = 8.0, d = 5.0, h = 3.0;
+  Solid ex;
+  REQUIRE(brep::Extrude(PolyProfile(World(), {{-w / 2, -d / 2}, {w / 2, -d / 2}, {w / 2, d / 2}, {-w / 2, d / 2}}),
+                        h, &ex, &why));
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), w, d, h, &box, &why));
+
+  REQUIRE(CountOf(ex).v == CountOf(box).v);
+  REQUIRE(CountOf(ex).e == CountOf(box).e);
+  REQUIRE(CountOf(ex).f == CountOf(box).f);
+  REQUIRE(brep::EulerCharacteristic(ex) == 2);
+
+  const brep::MassProperties me = brep::ComputeMassProperties(ex);
+  const brep::MassProperties mb = brep::ComputeMassProperties(box);
+  REQUIRE(me.valid);
+  REQUIRE(me.volume == Approx(mb.volume).epsilon(1e-9));
+  REQUIRE(me.surfaceArea == Approx(mb.surfaceArea).epsilon(1e-9));
+  REQUIRE(me.volume == Approx(w * d * h).epsilon(1e-9));
+}
+
+TEST_CASE("Extrude of a full circle is the cylinder the primitive builder makes", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 4.0, h = 9.0;
+  Solid ex;
+  REQUIRE(brep::Extrude(CircleProfile(World(), r), h, &ex, &why));
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), r, h, &cyl, &why));
+
+  REQUIRE(CountOf(ex).v == CountOf(cyl).v);
+  REQUIRE(CountOf(ex).e == CountOf(cyl).e);
+  REQUIRE(CountOf(ex).f == CountOf(cyl).f);
+
+  const brep::MassProperties me = brep::ComputeMassProperties(ex);
+  REQUIRE(me.valid);
+  REQUIRE(me.volume == Approx(kPi * r * r * h).epsilon(1e-9));
+  REQUIRE(me.surfaceArea == Approx(2.0 * kPi * r * r + 2.0 * kPi * r * h).epsilon(1e-9));
+
+  // The swept face is a real cylinder, so a snap lands on it rather than a chord short of it.
+  for (const brep::Face& f : ex.faces) {
+    if (f.surface.kind != brep::SurfaceKind::Cylinder)
+      continue;
+    const Vec3 probe{100.0, 0.3, h * 0.5};
+    const Vec3 on = brep::ClosestPointOnSurface(f.surface, probe);
+    REQUIRE(std::sqrt(on.x * on.x + on.y * on.y) == Approx(r).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("Extrude of a non-convex L is a valid solid with the hand-computed volume", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double h = 2.0;
+  // An L: 3 wide at the bottom, 1 wide at the top, 3 tall. Area = 3*1 + 1*2 = 5.
+  const brep::Profile pr =
+      PolyProfile(World(), {{0, 0}, {3, 0}, {3, 1}, {1, 1}, {1, 3}, {0, 3}});
+  Solid s;
+  REQUIRE(brep::Extrude(pr, h, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(CountOf(s).v == 12);
+  REQUIRE(CountOf(s).e == 18);
+  REQUIRE(CountOf(s).f == 8);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(5.0 * h).epsilon(1e-9));
+
+  // The tessellation must re-derive the same volume by the divergence theorem — this is what
+  // exercises the ear-clipped non-convex cap.
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.01, &t, &why));
+  REQUIRE(TessellatedVolume(t) == Approx(5.0 * h).epsilon(1e-6));
+  RequireWindingMatchesNormals(t);
+  RequireBoundsContain(brep::ComputeBounds(s), t);
+}
+
+TEST_CASE("Extrude of a half-disk sweeps a cylinder face and a flat face", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 6.0, h = 4.0;
+  brep::Profile pr;
+  pr.plane = World();
+  pr.vertices = {Vec3{r, 0, 0}, Vec3{-r, 0, 0}};
+  brep::ProfileEdge arc;
+  arc.arc = true;
+  arc.centre = Vec3{0, 0, 0};
+  arc.sweep = kPi;  // the semicircle, over the top
+  pr.edges = {arc, brep::ProfileEdge{}};  // then the diameter, straight
+
+  Solid s;
+  REQUIRE(brep::Extrude(pr, h, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(0.5 * kPi * r * r * h).epsilon(1e-9));
+
+  int cyl = 0, plane = 0;
+  for (const brep::Face& f : s.faces)
+    (f.surface.kind == brep::SurfaceKind::Cylinder ? cyl : plane)++;
+  REQUIRE(cyl == 1);
+  REQUIRE(plane == 3);  // two caps + the flat rectangular face
+}
+
+TEST_CASE("Extrude stays accurate on a tilted frame at survey magnitude", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double w = 10.0, d = 4.0, h = 7.0;
+  const std::vector<ucs::Point2D> rect = {{-w / 2, -d / 2}, {w / 2, -d / 2}, {w / 2, d / 2}, {-w / 2, d / 2}};
+
+  Solid flat;
+  REQUIRE(brep::Extrude(PolyProfile(World(), rect), h, &flat, &why));
+  Solid tilted;
+  REQUIRE(brep::Extrude(PolyProfile(TiltedAt(3.5e6, 1.24e7, 250.0), rect), h, &tilted, &why));
+
+  const brep::MassProperties mf = brep::ComputeMassProperties(flat);
+  const brep::MassProperties mt = brep::ComputeMassProperties(tilted);
+  REQUIRE(mt.valid);
+  REQUIRE(mt.volume == Approx(mf.volume).epsilon(1e-6));
+  REQUIRE(mt.surfaceArea == Approx(mf.surfaceArea).epsilon(1e-6));
+  REQUIRE(mt.volume == Approx(w * d * h).epsilon(1e-6));
+}
+
+TEST_CASE("A negative extrude distance sweeps the other way and still validates", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const std::vector<ucs::Point2D> rect = {{0, 0}, {4, 0}, {4, 2}, {0, 2}};
+  Solid up, down;
+  REQUIRE(brep::Extrude(PolyProfile(World(), rect), 3.0, &up, &why));
+  REQUIRE(brep::Extrude(PolyProfile(World(), rect), -3.0, &down, &why));
+  REQUIRE(brep::Validate(down) == Problem::Ok);
+
+  const brep::MassProperties mu = brep::ComputeMassProperties(up);
+  const brep::MassProperties md = brep::ComputeMassProperties(down);
+  REQUIRE(md.valid);
+  REQUIRE(md.volume == Approx(mu.volume).epsilon(1e-9));
+
+  brep::Bounds bd = brep::ComputeBounds(down);
+  REQUIRE(bd.mn.z == Approx(-3.0).margin(1e-9));
+  REQUIRE(bd.mx.z == Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("A profile winding does not matter and the builder orients the result", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const std::vector<ucs::Point2D> ccw = {{0, 0}, {4, 0}, {4, 3}, {0, 3}};
+  std::vector<ucs::Point2D> cw = ccw;
+  std::reverse(cw.begin(), cw.end());
+
+  Solid a, b;
+  REQUIRE(brep::Extrude(PolyProfile(World(), ccw), 2.0, &a, &why));
+  REQUIRE(brep::Extrude(PolyProfile(World(), cw), 2.0, &b, &why));
+  REQUIRE(brep::Validate(a) == Problem::Ok);
+  REQUIRE(brep::Validate(b) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(a).volume == Approx(brep::ComputeMassProperties(b).volume).epsilon(1e-9));
+  REQUIRE(brep::ComputeMassProperties(a).volume == Approx(24.0).epsilon(1e-9));
+}
+
+TEST_CASE("Extrude refuses bad input by name and stores nothing", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const std::vector<ucs::Point2D> rect = {{0, 0}, {4, 0}, {4, 2}, {0, 2}};
+  Solid s;
+
+  SECTION("a zero distance") {
+    REQUIRE_FALSE(brep::Extrude(PolyProfile(World(), rect), 0.0, &s, &why));
+    REQUIRE(why == Problem::NonPositiveDistance);
+  }
+  SECTION("a non-finite distance") {
+    REQUIRE_FALSE(brep::Extrude(PolyProfile(World(), rect), std::nan(""), &s, &why));
+    REQUIRE(why == Problem::NonPositiveDistance);
+  }
+  SECTION("fewer than two edges") {
+    REQUIRE_FALSE(brep::Extrude(PolyProfile(World(), {{0, 0}}), 3.0, &s, &why));
+    REQUIRE(why == Problem::ProfileTooFewEdges);
+  }
+  SECTION("vertex and edge counts disagree") {
+    brep::Profile pr = PolyProfile(World(), rect);
+    pr.edges.pop_back();
+    REQUIRE_FALSE(brep::Extrude(pr, 3.0, &s, &why));
+    REQUIRE(why == Problem::ProfileMalformed);
+  }
+  SECTION("a point off the profile plane") {
+    brep::Profile pr = PolyProfile(World(), rect);
+    pr.vertices[2].z = 1.0;
+    REQUIRE_FALSE(brep::Extrude(pr, 3.0, &s, &why));
+    REQUIRE(why == Problem::ProfilePointOffPlane);
+  }
+  SECTION("an arc whose endpoints are not equidistant from its centre") {
+    brep::Profile pr;
+    pr.plane = World();
+    pr.vertices = {Vec3{6, 0, 0}, Vec3{-4, 0, 0}};
+    brep::ProfileEdge arc;
+    arc.arc = true;
+    arc.centre = Vec3{0, 0, 0};
+    arc.sweep = kPi;
+    pr.edges = {arc, brep::ProfileEdge{}};
+    REQUIRE_FALSE(brep::Extrude(pr, 3.0, &s, &why));
+    REQUIRE(why == Problem::ProfileArcRadiusMismatch);
+  }
+  SECTION("a figure-eight self-intersecting loop") {
+    REQUIRE_FALSE(brep::Extrude(PolyProfile(World(), {{0, 0}, {4, 0}, {0, 3}, {4, 3}}), 2.0, &s, &why));
+    REQUIRE(why == Problem::ProfileSelfIntersects);
+  }
+  SECTION("an inward-curving (reflex) arc") {
+    // A rectangle whose top edge is an arc bulging DOWN into the rectangle. The face it would sweep
+    // has its outward normal pointing toward the cylinder axis, which Surface cannot express.
+    brep::Profile pr;
+    pr.plane = World();
+    pr.vertices = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 6, 0}, Vec3{0, 6, 0}};
+    pr.edges.assign(4, brep::ProfileEdge{});
+    pr.edges[2].arc = true;                 // the top edge, (10,6) -> (0,6)
+    pr.edges[2].centre = Vec3{5, 6, 0};
+    pr.edges[2].sweep = -kPi;               // bulges down through (5,1), into the rectangle
+    REQUIRE_FALSE(brep::Extrude(pr, 3.0, &s, &why));
+    REQUIRE(why == Problem::ProfileArcReflex);
+  }
+}
