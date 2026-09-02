@@ -241,7 +241,13 @@ enum class Problem {
   SliceDegeneratePlane,  ///< A slicing plane whose normal is zero or not finite.
   SlicePlaneMissesSolid, ///< The plane does not pass through the solid — nothing to cut.
   SliceCurvedFace,       ///< The solid has a curved face; increment 3a slices planar-faced solids only.
-  SliceResultComplex     ///< The cut cross-section is not a single loop, or a side splits into pieces.
+  SliceResultComplex,    ///< The cut cross-section is not a single loop, or a side splits into pieces.
+
+  // --- Booleans (REQ-314 increment 4, B1). ---
+  BooleanCurvedFace,    ///< An operand has a curved face; B1 combines planar-faced solids only.
+  BooleanNonConvex,     ///< An operand is not convex; B1 combines convex solids only (B2 is general).
+  BooleanEmptyResult,   ///< The operation produces nothing (an INTERSECT of disjoint solids).
+  BooleanResultInvalid  ///< The stitched result did not pass validation — refused rather than stored.
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -380,6 +386,20 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 /// every kept piece passes \ref Validate (REQ-201). The results carry no recipe.
 [[nodiscard]] bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                          SliceKeep keep, Solid* outAbove, Solid* outBelow, Problem* outWhy);
+
+/// Boolean combination of two solids (REQ-314 increment 4 / ADR-046 — the B1 subset). The result is
+/// written to \p out as one or more solids: usually one, but a UNION of solids that do not touch is
+/// two, and a SUBTRACT that splits its operand is several. Nothing is written unless every piece
+/// passes \ref Validate (REQ-201); \p out is left untouched on failure.
+///
+/// **B1 combines convex, planar-faced solids** — a box, a wedge, a pyramid, a convex extrusion. A
+/// curved face (\ref Problem::BooleanCurvedFace) or a non-convex operand
+/// (\ref Problem::BooleanNonConvex) is refused: those need the general analytic intersection curve
+/// of B2. An INTERSECT with no common volume reports \ref Problem::BooleanEmptyResult. The results
+/// carry no recipe.
+[[nodiscard]] bool BooleanUnion(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy);
+[[nodiscard]] bool BooleanSubtract(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy);
+[[nodiscard]] bool BooleanIntersect(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy);
 
 // ---------------------------------------------------------------------------------------------
 // Validity.

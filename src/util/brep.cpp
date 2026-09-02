@@ -525,6 +525,13 @@ const char* ProblemText(Problem p) {
     return "This release slices solids with flat faces only (a box or a straight extrusion).";
   case Problem::SliceResultComplex:
     return "The cut would split the solid into disjoint pieces, which this release cannot represent.";
+  case Problem::BooleanCurvedFace:
+    return "This release combines solids with flat faces only (a box, a wedge, a pyramid).";
+  case Problem::BooleanNonConvex:
+    return "This release combines convex solids only.";
+  case Problem::BooleanEmptyResult: return "The solids do not overlap, so there is nothing to keep.";
+  case Problem::BooleanResultInvalid:
+    return "The combined solid did not pass validation and was not stored.";
   }
   return "The solid is not valid.";
 }
@@ -1743,8 +1750,8 @@ struct PolyFace {
 /// Weld a set of planar polygons into a `Solid`: vertices merged by position, every undirected edge
 /// used by exactly two polygons once in each direction, each polygon one plane face. False (with a
 /// slice-flavoured \p outWhy) when the result does not `Validate`.
-[[nodiscard]] bool WeldPlanarSolid(const std::vector<PolyFace>& polys, double scale, Solid* out,
-                                   Problem* outWhy) {
+[[nodiscard]] bool WeldPlanarSolid(const std::vector<PolyFace>& polys, double scale,
+                                   Problem complexReason, Solid* out, Problem* outWhy) {
   const double weldEps = std::max(1e-7 * scale, 1e-12);
   Solid s;
   std::map<std::tuple<long long, long long, long long>, int> vmap;
@@ -1780,7 +1787,7 @@ struct PolyFace {
       const int a = vidx[i];
       const int b = vidx[(i + 1) % m];
       if (a == b)
-        return Fail(Problem::SliceResultComplex, outWhy);
+        return Fail(complexReason, outWhy);
       const std::pair<int, int> key{std::min(a, b), std::max(a, b)};
       const auto it = emap.find(key);
       int ei;
@@ -1799,13 +1806,13 @@ struct PolyFace {
   }
 
   if (s.faces.size() < 4)
-    return Fail(Problem::SliceResultComplex, outWhy);
+    return Fail(complexReason, outWhy);
   AddSingleShell(&s);
   const Problem why = Validate(s);
   if (why != Problem::Ok) {
     const bool topo = why == Problem::EdgeNotUsedTwice || why == Problem::EdgeOrientationInconsistent ||
                       why == Problem::NotClosed;
-    return Fail(topo ? Problem::SliceResultComplex : why, outWhy);
+    return Fail(topo ? complexReason : why, outWhy);
   }
   *out = std::move(s);
   return Succeed(outWhy);
@@ -1975,16 +1982,328 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
   if (wantAbove && outAbove) {
     std::vector<PolyFace> a = above;
     a.push_back(PolyFace{capAbove, ray3d::Scale(pn, -1.0)});
-    if (!WeldPlanarSolid(a, scale, outAbove, outWhy))
+    if (!WeldPlanarSolid(a, scale, Problem::SliceResultComplex, outAbove, outWhy))
       return false;
   }
   if (wantBelow && outBelow) {
     std::vector<PolyFace> b = below;
     b.push_back(PolyFace{capBelow, pn});
-    if (!WeldPlanarSolid(b, scale, outBelow, outWhy))
+    if (!WeldPlanarSolid(b, scale, Problem::SliceResultComplex, outBelow, outWhy))
       return false;
   }
   return Succeed(outWhy);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Feature operations — Booleans, the B1 subset (REQ-314 / ADR-046, GitHub issue #147).
+//
+// B1 combines CONVEX, planar-faced solids. Every face of A is split by B's face planes into
+// fragments that are each wholly inside or wholly outside B (which, for a convex B, its face planes
+// alone decide), and vice versa. Then per operation the right fragments are kept — union: the parts
+// of each outside the other; intersect: the parts inside; subtract: A outside B plus B inside A with
+// its normals flipped — and welded into a solid. Coincident faces cancel automatically, because a
+// fragment on a plane classifies as "inside" under the same `<= eps` test. A curved face or a
+// non-convex operand needs B2's general intersection curve and is refused here.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+struct PlaneEq {
+  Vec3 point;
+  Vec3 normal;  // unit, outward
+};
+
+/// Face planes of \p s (one per face; a convex solid has no two faces sharing a plane).
+[[nodiscard]] std::vector<PlaneEq> FacePlanes(const Solid& s) {
+  std::vector<PlaneEq> out;
+  out.reserve(s.faces.size());
+  for (const Face& f : s.faces) {
+    const int v = f.loops[0].uses.empty()
+                      ? 0
+                      : (f.loops[0].uses[0].reversed ? s.edges[static_cast<std::size_t>(f.loops[0].uses[0].edge)].v1
+                                                     : s.edges[static_cast<std::size_t>(f.loops[0].uses[0].edge)].v0);
+    out.push_back(PlaneEq{s.vertices[static_cast<std::size_t>(v)].p, f.surface.frame.zAxis});
+  }
+  return out;
+}
+
+/// True when every vertex of \p s lies on the inside (`<= eps`) of every face plane — i.e. convex.
+[[nodiscard]] bool IsConvexPlanar(const Solid& s, double eps) {
+  const std::vector<PlaneEq> planes = FacePlanes(s);
+  for (const PlaneEq& pl : planes) {
+    for (const Vertex& v : s.vertices) {
+      if (ray3d::Dot(ray3d::Sub(v.p, pl.point), pl.normal) > eps)
+        return false;
+    }
+  }
+  return true;
+}
+
+/// Split \p ring by the plane into an above part (points with `sd >= -eps`) and a below part
+/// (`sd <= eps`). An on-plane point goes to both. Each part is empty or a >= 3 polygon.
+void ClipPolygon(const std::vector<Vec3>& ring, const PlaneEq& pl, double eps, std::vector<Vec3>* above,
+                 std::vector<Vec3>* below) {
+  above->clear();
+  below->clear();
+  const std::size_t m = ring.size();
+  std::vector<double> d(m);
+  double maxAbs = 0.0;
+  for (std::size_t i = 0; i < m; ++i) {
+    d[i] = ray3d::Dot(ray3d::Sub(ring[i], pl.point), pl.normal);
+    maxAbs = std::max(maxAbs, std::fabs(d[i]));
+  }
+  if (maxAbs <= eps) {
+    *above = ring;  // coplanar with the cut plane: one fragment, not two
+    return;
+  }
+  for (std::size_t i = 0; i < m; ++i) {
+    const std::size_t j = (i + 1) % m;
+    if (d[i] >= -eps)
+      above->push_back(ring[i]);
+    if (d[i] <= eps)
+      below->push_back(ring[i]);
+    if ((d[i] > eps && d[j] < -eps) || (d[i] < -eps && d[j] > eps)) {
+      const double t = d[i] / (d[i] - d[j]);
+      const Vec3 x = ray3d::Add(ring[i], ray3d::Scale(ray3d::Sub(ring[j], ring[i]), t));
+      above->push_back(x);
+      below->push_back(x);
+    }
+  }
+  if (above->size() < 3)
+    above->clear();
+  if (below->size() < 3)
+    below->clear();
+}
+
+[[nodiscard]] Vec3 RingCentroid(const std::vector<Vec3>& r) {
+  Vec3 c{};
+  for (const Vec3& p : r)
+    c = ray3d::Add(c, p);
+  return r.empty() ? c : ray3d::Scale(c, 1.0 / static_cast<double>(r.size()));
+}
+
+/// True when \p p is inside the convex solid whose face planes are \p planes (on the boundary counts).
+[[nodiscard]] bool PointInsideConvex(const Vec3& p, const std::vector<PlaneEq>& planes, double eps) {
+  for (const PlaneEq& pl : planes) {
+    if (ray3d::Dot(ray3d::Sub(p, pl.point), pl.normal) > eps)
+      return false;
+  }
+  return true;
+}
+
+/// Separating-axis test on the two solids' face normals: true when they share some volume.
+[[nodiscard]] bool ConvexOverlap(const Solid& a, const Solid& b, double eps) {
+  auto separated = [&](const std::vector<PlaneEq>& planes, const Solid& other) {
+    for (const PlaneEq& pl : planes) {
+      bool allOut = true;
+      for (const Vertex& v : other.vertices) {
+        if (ray3d::Dot(ray3d::Sub(v.p, pl.point), pl.normal) < -eps) {
+          allOut = false;
+          break;
+        }
+      }
+      if (allOut)
+        return true;
+    }
+    return false;
+  };
+  return !separated(FacePlanes(a), b) && !separated(FacePlanes(b), a);
+}
+
+enum class BoolOp { Union, Subtract, Intersect };
+
+/// True when every point of \p ring lies within \p eps of one of \p planes.
+[[nodiscard]] bool RingOnAnyPlane(const std::vector<Vec3>& ring, const std::vector<PlaneEq>& planes,
+                                  double eps) {
+  for (const PlaneEq& pl : planes) {
+    bool on = true;
+    for (const Vec3& p : ring) {
+      if (std::fabs(ray3d::Dot(ray3d::Sub(p, pl.point), pl.normal)) > eps) {
+        on = false;
+        break;
+      }
+    }
+    if (on)
+      return true;
+  }
+  return false;
+}
+
+/// Fragments of \p src's faces, each split by \p cutPlanes until it is wholly inside or wholly
+/// outside the cutter. A fragment that lies ON one of the cutter's planes (a coincident face) is put
+/// in \p coplanar for later op-aware resolution; every other fragment is kept in \p out when
+/// `keepInside == (it is inside the cutter)`. \p flipNormal reverses both the normal and the winding.
+void CollectFragments(const Solid& src, const std::vector<PlaneEq>& cutPlanes, bool keepInside,
+                      bool flipNormal, double eps, std::vector<PolyFace>* out,
+                      std::vector<PolyFace>* coplanar) {
+  for (const Face& f : src.faces) {
+    std::vector<Vec3> ring;
+    for (const EdgeUse& u : f.loops[0].uses) {
+      const Edge& e = src.edges[static_cast<std::size_t>(u.edge)];
+      ring.push_back(src.vertices[static_cast<std::size_t>(u.reversed ? e.v1 : e.v0)].p);
+    }
+    std::vector<std::vector<Vec3>> frags{ring};
+    for (const PlaneEq& pl : cutPlanes) {
+      std::vector<std::vector<Vec3>> next;
+      for (const std::vector<Vec3>& fr : frags) {
+        std::vector<Vec3> a;
+        std::vector<Vec3> bl;
+        ClipPolygon(fr, pl, eps, &a, &bl);
+        if (!a.empty())
+          next.push_back(std::move(a));
+        if (!bl.empty())
+          next.push_back(std::move(bl));
+      }
+      frags = std::move(next);
+    }
+    for (const std::vector<Vec3>& fr : frags) {
+      if (fr.size() < 3)
+        continue;
+      Vec3 nrm = f.surface.frame.zAxis;
+      std::vector<Vec3> r = fr;
+      if (flipNormal) {
+        nrm = ray3d::Scale(nrm, -1.0);
+        std::reverse(r.begin(), r.end());
+      }
+      if (RingOnAnyPlane(fr, cutPlanes, eps)) {
+        coplanar->push_back(PolyFace{std::move(r), nrm});
+        continue;
+      }
+      const bool inside = PointInsideConvex(RingCentroid(fr), cutPlanes, eps);
+      if (inside == keepInside)
+        out->push_back(PolyFace{std::move(r), nrm});
+    }
+  }
+}
+
+/// Resolve the coincident (on-a-cutter-plane) fragments both operands produced. A patch that has a
+/// matching patch from the other operand is a shared face: kept once if the two normals agree,
+/// cancelled entirely if they oppose (an internal wall). A patch with no partner is an ordinary
+/// exterior fragment and is kept when `keepInside` matches its position relative to the cutter.
+void MergeCoplanar(std::vector<PolyFace>* ca, std::vector<PolyFace>* cb, const std::vector<PlaneEq>& cutForA,
+                   const std::vector<PlaneEq>& cutForB, bool keepInsideA, bool keepInsideB, double eps,
+                   std::vector<PolyFace>* out) {
+  std::vector<char> deadB(cb->size(), 0);
+  auto match = [&](const PolyFace& p) {
+    const Vec3 c = RingCentroid(p.ring);
+    for (std::size_t j = 0; j < cb->size(); ++j) {
+      if (deadB[j])
+        continue;
+      const PolyFace& q = (*cb)[j];
+      if (ray3d::Length(ray3d::Sub(c, RingCentroid(q.ring))) > eps)
+        continue;
+      if (std::fabs(std::fabs(ray3d::Dot(ray3d::Normalize(p.normal), ray3d::Normalize(q.normal))) - 1.0) > 1e-6)
+        continue;
+      return static_cast<int>(j);
+    }
+    return -1;
+  };
+  for (PolyFace& p : *ca) {
+    if (p.ring.size() < 3)
+      continue;
+    const int j = match(p);
+    if (j >= 0) {
+      deadB[static_cast<std::size_t>(j)] = 1;
+      if (ray3d::Dot(ray3d::Normalize(p.normal), ray3d::Normalize((*cb)[static_cast<std::size_t>(j)].normal)) > 0.0)
+        out->push_back(std::move(p));  // agree: one shared face
+      // oppose: an internal wall, both drop
+    } else if (PointInsideConvex(RingCentroid(p.ring), cutForA, eps) == keepInsideA) {
+      out->push_back(std::move(p));
+    }
+  }
+  for (std::size_t j = 0; j < cb->size(); ++j) {
+    if (deadB[j] || (*cb)[j].ring.size() < 3)
+      continue;
+    if (PointInsideConvex(RingCentroid((*cb)[j].ring), cutForB, eps) == keepInsideB)
+      out->push_back(std::move((*cb)[j]));
+  }
+}
+
+[[nodiscard]] bool BooleanConvex(const Solid& a, const Solid& b, BoolOp op, std::vector<Solid>* out,
+                                 Problem* outWhy) {
+  if (!out)
+    return false;
+  out->clear();
+  const Problem va = Validate(a);
+  if (va != Problem::Ok)
+    return Fail(va, outWhy);
+  const Problem vb = Validate(b);
+  if (vb != Problem::Ok)
+    return Fail(vb, outWhy);
+  for (const Solid* s : {&a, &b}) {
+    for (const Face& f : s->faces)
+      if (f.surface.kind != SurfaceKind::Plane)
+        return Fail(Problem::BooleanCurvedFace, outWhy);
+    for (const Edge& e : s->edges)
+      if (e.kind != CurveKind::Line)
+        return Fail(Problem::BooleanCurvedFace, outWhy);
+  }
+  const double scale = std::max(ModelScale(a), ModelScale(b));
+  const double eps = 1e-7 * scale;
+  if (!IsConvexPlanar(a, eps) || !IsConvexPlanar(b, eps))
+    return Fail(Problem::BooleanNonConvex, outWhy);
+
+  const std::vector<PlaneEq> pa = FacePlanes(a);
+  const std::vector<PlaneEq> pb = FacePlanes(b);
+  const bool overlap = ConvexOverlap(a, b, eps);
+
+  // Per operation: which side of each operand's surface is kept, and whether B's kept faces flip.
+  bool keepInA = false;  // keep A's fragments that are INSIDE B?
+  bool keepInB = false;  // keep B's fragments that are INSIDE A?
+  bool flipB = false;
+  Problem weldFail = Problem::BooleanResultInvalid;
+  switch (op) {
+  case BoolOp::Intersect:
+    if (!overlap)
+      return Fail(Problem::BooleanEmptyResult, outWhy);
+    keepInA = true;
+    keepInB = true;
+    weldFail = Problem::BooleanEmptyResult;
+    break;
+  case BoolOp::Union:
+    if (!overlap) {
+      out->push_back(a);
+      out->push_back(b);
+      return Succeed(outWhy);
+    }
+    keepInA = false;
+    keepInB = false;
+    break;
+  case BoolOp::Subtract:
+    if (!overlap) {
+      out->push_back(a);
+      return Succeed(outWhy);
+    }
+    keepInA = false;  // A outside B
+    keepInB = true;   // B inside A
+    flipB = true;     // ...with its normals flipped, to bound the removed volume
+    break;
+  }
+
+  std::vector<PolyFace> polys;
+  std::vector<PolyFace> copA;
+  std::vector<PolyFace> copB;
+  CollectFragments(a, pb, keepInA, /*flip=*/false, eps, &polys, &copA);
+  CollectFragments(b, pa, keepInB, flipB, eps, &polys, &copB);
+  MergeCoplanar(&copA, &copB, pb, pa, keepInA, keepInB, eps, &polys);
+
+  Solid r;
+  if (!WeldPlanarSolid(polys, scale, weldFail, &r, outWhy))
+    return false;
+  out->push_back(std::move(r));
+  return Succeed(outWhy);
+}
+
+} // namespace
+
+bool BooleanUnion(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy) {
+  return BooleanConvex(a, b, BoolOp::Union, out, outWhy);
+}
+bool BooleanSubtract(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy) {
+  return BooleanConvex(a, b, BoolOp::Subtract, out, outWhy);
+}
+bool BooleanIntersect(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy) {
+  return BooleanConvex(a, b, BoolOp::Intersect, out, outWhy);
 }
 
 // ---------------------------------------------------------------------------------------------
