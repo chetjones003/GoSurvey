@@ -508,6 +508,14 @@ const char* ProblemText(Problem p) {
   case Problem::ProfileSelfIntersects: return "The profile crosses itself.";
   case Problem::ProfileArcReflex:
     return "A profile arc curves inward; this release can extrude outward-curving arcs only.";
+  case Problem::NonPositiveAngle: return "The revolve angle must be non-zero and no more than a full turn.";
+  case Problem::RevolveAxisDegenerate: return "The revolve axis direction is zero or not a finite number.";
+  case Problem::RevolveAxisNotInPlane: return "The revolve axis must lie in the profile's plane.";
+  case Problem::RevolveProfileCrossesAxis: return "The profile crosses the revolve axis.";
+  case Problem::RevolveProfileMissesAxis:
+    return "The profile must touch the revolve axis along one edge or at one point; a hollow revolve is a SUBTRACT.";
+  case Problem::RevolveArcInProfile:
+    return "This release revolves straight-edged profiles only (an arc would sweep a sphere or torus portion).";
   }
   return "The solid is not valid.";
 }
@@ -1369,6 +1377,324 @@ bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWh
   AddSingleShell(&s);
   // A feature result carries no recipe: the topology is the stored truth (ADR-046 (e)). An extrude
   // recipe is permitted but deferred to the increment that first persists one.
+
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return Fail(why, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Feature operations — Revolve (REQ-314 / ADR-046 increment 2, GitHub issue #147).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// The world point at radius \p r, height \p h, angle \p theta about the axis frame
+/// {\p rad, \p yc, \p adir} anchored at \p axisPoint.
+[[nodiscard]] Vec3 RevolvePoint(const Vec3& axisPoint, const Vec3& rad, const Vec3& yc,
+                                const Vec3& adir, double r, double h, double theta) {
+  const Vec3 radial =
+      ray3d::Add(ray3d::Scale(rad, std::cos(theta)), ray3d::Scale(yc, std::sin(theta)));
+  return ray3d::Add(ray3d::Add(axisPoint, ray3d::Scale(adir, h)), ray3d::Scale(radial, r));
+}
+
+} // namespace
+
+bool Revolve(const Profile& profile, const Vec3& axisPoint, const Vec3& axisDir, double angleRad,
+             Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;
+  const int n = static_cast<int>(profile.vertices.size());
+  if (n != static_cast<int>(profile.edges.size()))
+    return Fail(Problem::ProfileMalformed, outWhy);
+  if (n < 2)
+    return Fail(Problem::ProfileTooFewEdges, outWhy);
+  if (!FrameOk(profile.plane))
+    return Fail(Problem::DegenerateFrame, outWhy);
+  for (const ProfileEdge& pe : profile.edges) {
+    if (pe.arc)
+      return Fail(Problem::RevolveArcInProfile, outWhy);
+  }
+  if (!std::isfinite(angleRad) || std::fabs(angleRad) <= 1e-9 || std::fabs(angleRad) > kTwoPi + 1e-6)
+    return Fail(Problem::NonPositiveAngle, outWhy);
+  if (!FinitePoint(axisPoint) || !FinitePoint(axisDir))
+    return Fail(Problem::RevolveAxisDegenerate, outWhy);
+  if (!(ray3d::Length(axisDir) > 1e-12))
+    return Fail(Problem::RevolveAxisDegenerate, outWhy);
+
+  const ucs::Ucs& pl = profile.plane;
+  for (const Vec3& v : profile.vertices) {
+    if (!FinitePoint(v))
+      return Fail(Problem::NonFiniteCoordinate, outWhy);
+  }
+
+  ucs::Point2D lo = ucs::WorldToPlane(pl, profile.vertices[0]);
+  ucs::Point2D hi = lo;
+  for (const Vec3& v : profile.vertices) {
+    const ucs::Point2D q = ucs::WorldToPlane(pl, v);
+    lo.x = std::min(lo.x, q.x);
+    lo.y = std::min(lo.y, q.y);
+    hi.x = std::max(hi.x, q.x);
+    hi.y = std::max(hi.y, q.y);
+  }
+  const double scale = std::max({hi.x - lo.x, hi.y - lo.y, 1e-9});
+  const double planeEps = 1e-6 * scale;
+  const double lenEps = 1e-9 * scale;
+  const double axisEps = 1e-6 * scale;
+
+  for (const Vec3& v : profile.vertices) {
+    if (std::fabs(ucs::SignedDistanceToPlane(pl, v)) > planeEps)
+      return Fail(Problem::ProfilePointOffPlane, outWhy);
+  }
+  if (ProfileChordsCross(profile))
+    return Fail(Problem::ProfileSelfIntersects, outWhy);
+
+  // Axis: normalised, sweep sense folded into its direction so `ang` is positive.
+  Vec3 adir = ray3d::Normalize(axisDir);
+  double ang = angleRad;
+  if (ang < 0.0) {
+    adir = ray3d::Scale(adir, -1.0);
+    ang = -ang;
+  }
+  ang = std::min(ang, kTwoPi);
+  const bool full = ang >= kTwoPi - 1e-9;
+  if (std::fabs(ucs::SignedDistanceToPlane(pl, axisPoint)) > planeEps ||
+      std::fabs(ray3d::Dot(adir, pl.zAxis)) > 1e-7)
+    return Fail(Problem::RevolveAxisNotInPlane, outWhy);
+
+  Vec3 rad = ray3d::Normalize(ray3d::Cross(pl.zAxis, adir));
+
+  // Profile in (r, h): r = signed distance from the axis along `rad`, h = distance along `adir`.
+  std::vector<double> R(static_cast<std::size_t>(n));
+  std::vector<double> H(static_cast<std::size_t>(n));
+  auto measure = [&]() {
+    double rmn = 1e300;
+    double rmx = -1e300;
+    for (int i = 0; i < n; ++i) {
+      const Vec3 d = ray3d::Sub(profile.vertices[static_cast<std::size_t>(i)], axisPoint);
+      R[static_cast<std::size_t>(i)] = ray3d::Dot(d, rad);
+      H[static_cast<std::size_t>(i)] = ray3d::Dot(d, adir);
+      rmn = std::min(rmn, R[static_cast<std::size_t>(i)]);
+      rmx = std::max(rmx, R[static_cast<std::size_t>(i)]);
+    }
+    return std::pair<double, double>{rmn, rmx};
+  };
+  double rmin = 0.0;
+  double rmax = 0.0;
+  {
+    const auto p = measure();
+    rmin = p.first;
+    rmax = p.second;
+  }
+  if (rmin < -axisEps && rmax > axisEps)
+    return Fail(Problem::RevolveProfileCrossesAxis, outWhy);
+  if (rmax <= axisEps) {
+    rad = ray3d::Scale(rad, -1.0);  // profile sits on the -radial side: flip so radii are positive
+    const auto p = measure();
+    rmin = p.first;
+    rmax = p.second;
+  }
+  if (rmax <= axisEps)
+    return Fail(Problem::RevolveProfileMissesAxis, outWhy);  // entirely on the axis — no volume
+  (void)rmin;
+  for (int i = 0; i < n; ++i) {
+    if (R[static_cast<std::size_t>(i)] < 0.0)
+      R[static_cast<std::size_t>(i)] = 0.0;  // clamp a rounding-sized negative
+  }
+
+  // Increment 2a builds a solid filled from the axis to a single-valued outer curve, so the profile
+  // must touch the axis along ONE contiguous run of vertices — that is what makes an inner (+radial-
+  // outward) face impossible. A profile that misses the axis, or touches it twice, is refused.
+  std::vector<char> onAxis(static_cast<std::size_t>(n), 0);
+  int touchCount = 0;
+  for (int i = 0; i < n; ++i) {
+    if (R[static_cast<std::size_t>(i)] <= axisEps) {
+      onAxis[static_cast<std::size_t>(i)] = 1;
+      ++touchCount;
+    }
+  }
+  if (touchCount == 0)
+    return Fail(Problem::RevolveProfileMissesAxis, outWhy);
+  if (touchCount < n) {
+    int runs = 0;
+    for (int i = 0; i < n; ++i) {
+      if (onAxis[static_cast<std::size_t>(i)] && !onAxis[static_cast<std::size_t>((i + n - 1) % n)])
+        ++runs;
+    }
+    if (runs != 1)
+      return Fail(Problem::RevolveProfileMissesAxis, outWhy);
+  }
+
+  // Orient the profile CCW in (r, h) so the swept faces come out with outward normals.
+  double arh = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const int j = (i + 1) % n;
+    arh += 0.5 * (R[static_cast<std::size_t>(i)] * H[static_cast<std::size_t>(j)] -
+                  R[static_cast<std::size_t>(j)] * H[static_cast<std::size_t>(i)]);
+  }
+  if (std::fabs(arh) <= lenEps * lenEps)
+    return Fail(Problem::ProfileSelfIntersects, outWhy);  // zero enclosed area
+  std::vector<int> order(static_cast<std::size_t>(n));
+  for (int i = 0; i < n; ++i)
+    order[static_cast<std::size_t>(i)] = arh < 0.0 ? (n - i) % n : i;
+
+  std::vector<double> rw(static_cast<std::size_t>(n));
+  std::vector<double> hw(static_cast<std::size_t>(n));
+  std::vector<char> axw(static_cast<std::size_t>(n));
+  for (int k = 0; k < n; ++k) {
+    rw[static_cast<std::size_t>(k)] = R[static_cast<std::size_t>(order[static_cast<std::size_t>(k)])];
+    hw[static_cast<std::size_t>(k)] = H[static_cast<std::size_t>(order[static_cast<std::size_t>(k)])];
+    axw[static_cast<std::size_t>(k)] = onAxis[static_cast<std::size_t>(order[static_cast<std::size_t>(k)])];
+  }
+
+  const Vec3 yc = ray3d::Cross(adir, rad);  // {rad, yc, adir} right-handed
+  const int segs = full ? 2 : 1;
+  const double dth = ang / static_cast<double>(segs);
+
+  Solid s;
+
+  // Vertices: V[k][t] for t in 0..segs. An on-axis vertex does not move — one vertex, reused. A full
+  // revolve wraps t == segs back to t == 0.
+  std::vector<std::array<int, 3>> V(static_cast<std::size_t>(n));  // segs <= 2 so at most 3 stations
+  for (int k = 0; k < n; ++k) {
+    for (int t = 0; t <= segs; ++t) {
+      int idx;
+      if (axw[static_cast<std::size_t>(k)]) {
+        idx = (t == 0) ? AddVertex(&s, RevolvePoint(axisPoint, rad, yc, adir, rw[static_cast<std::size_t>(k)],
+                                                    hw[static_cast<std::size_t>(k)], 0.0))
+                       : V[static_cast<std::size_t>(k)][0];
+      } else if (full && t == segs) {
+        idx = V[static_cast<std::size_t>(k)][0];
+      } else {
+        idx = AddVertex(&s, RevolvePoint(axisPoint, rad, yc, adir, rw[static_cast<std::size_t>(k)],
+                                         hw[static_cast<std::size_t>(k)], static_cast<double>(t) * dth));
+      }
+      V[static_cast<std::size_t>(k)][static_cast<std::size_t>(t)] = idx;
+    }
+  }
+
+  // Meridian edges: the profile edges rotated to each angular station.
+  //   - A non-axis edge gets a distinct edge per station (a full revolve wraps station segs to 0).
+  //   - An on-axis edge does not move, so ONE shared edge serves every station; in a full revolve it
+  //     has no cap to bound it and is dropped entirely.
+  std::vector<std::array<int, 3>> merid(static_cast<std::size_t>(n));
+  for (int k = 0; k < n; ++k) {
+    const int k1 = (k + 1) % n;
+    const bool axisEdge = axw[static_cast<std::size_t>(k)] && axw[static_cast<std::size_t>(k1)];
+    for (int t = 0; t <= segs; ++t) {
+      int idx;
+      if (axisEdge) {
+        idx = full ? -1
+                   : (t == 0 ? AddLine(&s, V[static_cast<std::size_t>(k)][0],
+                                       V[static_cast<std::size_t>(k1)][0])
+                             : merid[static_cast<std::size_t>(k)][0]);
+      } else if (full && t == segs) {
+        idx = merid[static_cast<std::size_t>(k)][0];
+      } else {
+        idx = AddLine(&s, V[static_cast<std::size_t>(k)][static_cast<std::size_t>(t)],
+                      V[static_cast<std::size_t>(k1)][static_cast<std::size_t>(t)]);
+      }
+      merid[static_cast<std::size_t>(k)][static_cast<std::size_t>(t)] = idx;
+    }
+  }
+
+  // Parallel edges: an arc about the axis at each non-axis vertex's radius, one per angular interval.
+  std::vector<std::array<int, 3>> par(static_cast<std::size_t>(n));
+  for (int k = 0; k < n; ++k) {
+    for (int t = 0; t < segs; ++t) {
+      if (axw[static_cast<std::size_t>(k)]) {
+        par[static_cast<std::size_t>(k)][static_cast<std::size_t>(t)] = -1;
+        continue;
+      }
+      const Vec3 c = ray3d::Add(axisPoint, ray3d::Scale(adir, hw[static_cast<std::size_t>(k)]));
+      par[static_cast<std::size_t>(k)][static_cast<std::size_t>(t)] =
+          AddArc(&s, V[static_cast<std::size_t>(k)][static_cast<std::size_t>(t)],
+                 V[static_cast<std::size_t>(k)][static_cast<std::size_t>(t + 1)], c, adir, dth);
+    }
+  }
+
+  // Side faces: one per (profile edge, angular interval), skipping fully-on-axis edges.
+  for (int k = 0; k < n; ++k) {
+    const int k1 = (k + 1) % n;
+    if (axw[static_cast<std::size_t>(k)] && axw[static_cast<std::size_t>(k1)])
+      continue;
+    const double r0 = rw[static_cast<std::size_t>(k)];
+    const double r1 = rw[static_cast<std::size_t>(k1)];
+    const double h0 = hw[static_cast<std::size_t>(k)];
+    const double h1 = hw[static_cast<std::size_t>(k1)];
+
+    for (int t = 0; t < segs; ++t) {
+      const int m0 = merid[static_cast<std::size_t>(k)][static_cast<std::size_t>(t)];
+      const int m1 = merid[static_cast<std::size_t>(k)][static_cast<std::size_t>(t + 1)];
+      const int pk = par[static_cast<std::size_t>(k)][static_cast<std::size_t>(t)];
+      const int pk1 = par[static_cast<std::size_t>(k1)][static_cast<std::size_t>(t)];
+
+      std::vector<EdgeUse> uses;
+      if (pk >= 0)
+        uses.push_back(EdgeUse{pk, false});
+      uses.push_back(EdgeUse{m1, false});
+      if (pk1 >= 0)
+        uses.push_back(EdgeUse{pk1, true});
+      uses.push_back(EdgeUse{m0, true});
+
+      if (std::fabs(h1 - h0) <= lenEps) {
+        // Perpendicular edge -> a planar annular sector at height h0. Outward is along the axis,
+        // away from the profile interior: the interior is on the +h side when r increases.
+        const double sgn = (r1 - r0) > 0.0 ? -1.0 : 1.0;
+        const Vec3 origin = ray3d::Add(axisPoint, ray3d::Scale(adir, h0));
+        Face f = MakePlaneFace(origin, ray3d::Scale(adir, sgn), std::move(uses));
+        s.faces.push_back(std::move(f));
+      } else {
+        Face f;
+        f.surface.kind = std::fabs(r1 - r0) <= lenEps ? SurfaceKind::Cylinder : SurfaceKind::Cone;
+        const double hlo = std::min(h0, h1);
+        ucs::Ucs fr;
+        fr.origin = ray3d::Add(axisPoint, ray3d::Scale(adir, hlo));
+        fr.xAxis = rad;
+        fr.yAxis = yc;
+        fr.zAxis = adir;
+        f.surface.frame = fr;
+        f.surface.radius = (h0 <= h1) ? r0 : r1;   // radius at z = 0 (the lower end)
+        f.surface.radius2 = (h0 <= h1) ? r1 : r0;  // radius at z = height
+        f.surface.height = std::fabs(h1 - h0);
+        f.uStart = static_cast<double>(t) * dth;
+        f.uEnd = static_cast<double>(t + 1) * dth;
+        Loop lp;
+        lp.uses = std::move(uses);
+        f.loops.push_back(std::move(lp));
+        s.faces.push_back(std::move(f));
+      }
+    }
+  }
+
+  // Cap faces (partial revolve only): the profile itself, rotated to the start and end angles.
+  if (!full) {
+    const Vec3 tanStart{-std::sin(0.0) * rad.x + std::cos(0.0) * yc.x,
+                        -std::sin(0.0) * rad.y + std::cos(0.0) * yc.y,
+                        -std::sin(0.0) * rad.z + std::cos(0.0) * yc.z};
+    {
+      std::vector<EdgeUse> uses;
+      uses.reserve(static_cast<std::size_t>(n));
+      for (int k = 0; k < n; ++k)
+        uses.push_back(EdgeUse{merid[static_cast<std::size_t>(k)][0], false});
+      s.faces.push_back(MakePlaneFace(axisPoint, ray3d::Scale(tanStart, -1.0), std::move(uses)));
+    }
+    {
+      const double te = ang;
+      const Vec3 tanEnd{-std::sin(te) * rad.x + std::cos(te) * yc.x,
+                        -std::sin(te) * rad.y + std::cos(te) * yc.y,
+                        -std::sin(te) * rad.z + std::cos(te) * yc.z};
+      std::vector<EdgeUse> uses;
+      uses.reserve(static_cast<std::size_t>(n));
+      for (int k = n - 1; k >= 0; --k)
+        uses.push_back(EdgeUse{merid[static_cast<std::size_t>(k)][static_cast<std::size_t>(segs)], true});
+      s.faces.push_back(MakePlaneFace(axisPoint, tanEnd, std::move(uses)));
+    }
+  }
+
+  AddSingleShell(&s);
 
   const Problem why = Validate(s);
   if (why != Problem::Ok)
