@@ -21,9 +21,18 @@ the cylinder band and fans the elliptical cap; `SegmentsForEdge` subdivides an e
   elliptical rim; volumes sum to `π r² h` exact; elliptical cap area `π a b`. A cut steep enough to
   run a cap is reported `SliceResultComplex`.
 
+### Boolean slice (INTERSECT), 2026-09-02
+
+`CylinderCutZExtent` extended for **two** ellipse edges (a segment between two plane cuts).
+`BuildObliqueCylinderPlug` (two oblique elliptical caps, cap normal = the *cutting-plane* normal,
+not the tilted axis — the bug that made the first attempt 1.5% off). `TryBooleanCylinderThrough
+Planar` grows a tilted branch: the axis crosses two planar faces at an angle, footprint clear →
+**INTERSECT** builds the plug, volume `π r² · axialGap` exact.
+
 ### Deferred to the next PR / B2b-2
 
-- **Booleans** with a tilted cylinder (`BooleanObliqueCylinder` still refused) — next PR, reuses this.
+- **UNION / SUBTRACT** with a tilted cylinder (`BooleanObliqueCylinder` still refused for those) —
+  needs the elliptical-mouthed boss / bore.
 - Isolines on a sliced cylinder face still draw full height (visual only).
 - Everything B2b-2: cylinder ∩ cylinder (quartic), sphere ∩ cylinder, non-elliptical cone sections.
 

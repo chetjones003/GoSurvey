@@ -1685,6 +1685,34 @@ TEST_CASE("Curved B2b-1: an oblique plane slices a cylinder into two elliptical-
   REQUIRE(sawEllipse);
 }
 
+TEST_CASE("Curved B2b-1: a tilted cylinder INTERSECT a box is an oblique elliptical-ended plug",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 20, 20, 10, &box, &why));  // z 0..10, x,y[-10,10]
+  ucs::Ucs axis;
+  const Vec3 dir = ray3d::Normalize(Vec3{0.3, 0.0, 1.0});
+  REQUIRE(ucs::FromNormal(Vec3{-3, 0, -10}, dir, &axis));
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(axis, 2, 30, &cyl, &why));  // long enough to cross both faces
+
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanIntersect(box, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+  // Volume = pi r^2 * (axial gap) = pi * 4 * (10 / dir.z).
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+          Approx(kPi * 4.0 * (10.0 / dir.z)).epsilon(1e-9));
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+  RequireWindingMatchesNormals(t);
+
+  // An UNTILTED-face cut still refuses UNION/SUBTRACT of a tilted cylinder for now.
+  r.clear();
+  REQUIRE_FALSE(brep::BooleanUnion(box, cyl, &r, &why));
+}
+
 TEST_CASE("Slice of a cylinder or cone perpendicular to its axis cuts it to length", "[brep][req314]") {
   Problem why = Problem::Ok;
 
