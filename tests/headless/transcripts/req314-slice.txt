@@ -50,7 +50,7 @@ CMD 106,0,6
 CMD B
 EXPECT SOLIDS 4
 
-# --- An OBLIQUE cut through a cylinder is refused (an ellipse), nothing changes -----------
+# --- An OBLIQUE cut through a cylinder is an elliptical section (B2b-1) -------------------
 CMD CYLINDER 200,0 4 10
 EXPECT SOLIDS 5
 BOX 195 -5 205 5
@@ -59,13 +59,24 @@ CMD SLICE
 CMD 195,0,3
 CMD 205,0,7
 CMD 200,6,5
-CMD 200,0,12
-EXPECT LOG "flat faces only"
-EXPECT SOLIDS 5
+CMD B
+EXPECT SOLIDS 6
+
+# --- ...but an oblique cut that would run off the end of the cylinder is reported --------
+CMD CYLINDER 260,0 4 10
+EXPECT SOLIDS 7
+BOX 255 -5 265 5
+CMD SLICE
+CMD 258,0,-8
+CMD 262,0,18
+CMD 260,6,5
+CMD B
+EXPECT LOG "disjoint pieces"
+EXPECT SOLIDS 7
 
 # --- Solids survive a .gs save and reopen ------------------------------------------------
 SAVEAS %OUT%/req314-slice.gs
 OPEN %OUT%/req314-slice.gs
-EXPECT SOLIDS 5
+EXPECT SOLIDS 7
 
 CHECK ALL

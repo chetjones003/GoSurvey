@@ -5974,12 +5974,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
     result in two (disjoint, per ADR-046). None of these stores a solid that fails validation.
   - **A failed Boolean leaves both operands bit-identical** — asserted by comparing the operand
     topology and every coordinate before and after a deliberately unsatisfiable operation.
-  - **An operand pair that would produce an intersection curve outside `{Line, Arc}`** (a box and an
-    obliquely-oriented cylinder, until the general-curve increment lands) is **refused with a
-    specific reason** naming the surface pair, and stores nothing.
+  - **An operand pair that would produce an intersection curve outside the kernel's `CurveKind` set**
+    is **refused with a specific reason** naming the surface pair, and stores nothing. *(Refined
+    2026-09-02, D-2026-09-02-h: an obliquely-oriented cylinder meets a plane along an ellipse —
+    `CurveKind::Ellipse`, added in increment B2b-1 — so SLICE and the Booleans handle it from B2b-1
+    on; two non-coaxial cylinders (a quartic curve) keep the refusal until B2b-2.)*
   - **Slice** of a box and of a cylinder by a plane, keeping one side and keeping both, produces
     valid closed solids whose volumes sum to the original within REQ-101. A slice that misses the
-    solid reports it and changes nothing.
+    solid reports it and changes nothing. *(An **oblique** cut through a cylinder produces an
+    elliptical cut face — `CurveKind::Ellipse`, increment B2b-1, D-2026-09-02-h; a perpendicular cut
+    stays the circular case from increment 3.)*
   - **Every operation is one undoable step** — a single `AppCommandState` undo snapshot restores the
     pre-operation document exactly, including when the operation consumed its operands.
   - **Results survive `.gs` save and reopen** with topology intact — vertex/edge/face counts exactly,
@@ -6023,6 +6027,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   2026-09-02 — D-2026-09-02-b (TASK-178): curved-operand Booleans in increment B1 are limited to
   UNION and INTERSECT; a curved SUBTRACT needs an inward-facing curved face that ADR-045's `Surface`
   cannot express, so it moves to B2. Acceptance list annotated accordingly; no requirement removed.
+  2026-09-02 — D-2026-09-02-h (TASK-185): B2b is split into B2b-1 (`CurveKind::Ellipse`, oblique
+  plane ∩ cylinder — SLICE then Boolean; bumps `kGsFormatVersion`) and B2b-2 (procedural
+  `CurveKind::Intersection` — quartic etc.). ADR-045 (d) amended: `CurveKind` is `{Line, Arc, Ellipse}`.
   2026-09-02 — D-2026-09-02-c (TASK-184): increment B2 is split into B2a (adds `Surface::inward`,
   lifts curved SUBTRACT for the pairs B1 already recognises — round hole, blind pocket, spherical
   dimple, counterbore) and B2b (general analytic intersection curve — ellipse / quartic). The

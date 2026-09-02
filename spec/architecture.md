@@ -2008,6 +2008,14 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   cylindrical face", and so #120's parametric-modelling section is not designed out. A solid with no
   recipe (`PrimitiveKind::None`) is a first-class citizen, which is the case that proves the
   topology and not the recipe is the truth.
+  **Amended 2026-09-02 (D-2026-09-02-h): `CurveKind` is `{Line, Arc, Ellipse}`.** An oblique plane
+  cutting a cylinder meets it along an ellipse — closed-form (centre, semi-major, semi-minor,
+  parameter span), so an `Ellipse` edge carries the same `frame + radius + sweep` an `Arc` does plus
+  one field, `radius2` (the semi-minor axis). This is Boolean increment B2b-1 (ADR-046). It is the
+  first stored geometry kind an older `.gs` reader cannot tolerate, so it bumps `kGsFormatVersion`
+  (the bump ADR-045 (e) said would land "in the increment that first" needs it); a drawing with no
+  ellipse edges still serializes byte-identically. The general intersection curve (a
+  cylinder∩cylinder quartic) is a *procedural* `CurveKind` still deferred, to B2b-2.
   (d) **Curved surfaces are split at seams into faces that each bound normally.** A cylinder side is
   two half-faces, a sphere two half-spheres cut by a meridian, a torus four patches. The alternative
   — one face with a seam edge used twice by itself — makes "every edge bounds exactly two faces" a
@@ -2298,10 +2306,11 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   - `src/util/brep.{hpp,cpp}` grows a feature-operation section: `Extrude`, `Revolve`, `Slice`,
     `BooleanUnion` / `BooleanSubtract` / `BooleanIntersect`, plus internal face-split and
     point-classification helpers. It stays graphics-free and directly unit-tested, per ADR-045.
-  - Increment **B2a** adds `Surface::inward` (a `bool`, see ADR-045 (d) amendment) — no new curve
-    type, no `.gs` version bump. Increment **B2b** adds a `CurveKind::Intersection` (or similar) — a
-    procedural curve carrying its two surface references — and a tessellator for it. That is the one
-    anticipated new *curve* type; it is not built until B2b.
+  - Increment **B2a** adds `Surface::inward` (a `bool`, ADR-045 (d) amendment) — no new curve type,
+    no `.gs` version bump. Increment **B2b-1** adds `CurveKind::Ellipse` + `Edge::radius2` — closed
+    form, and bumps `kGsFormatVersion` (ADR-045 (d) amendment). Increment **B2b-2** adds a procedural
+    `CurveKind::Intersection` carrying its two surface references, and a tessellator for it — the
+    quartic case; not built until then.
   - The command layer gains `EXTRUDE`, `REVOLVE`, `SLICE`, `UNION`, `SUBTRACT`, `INTERSECT`, each in
     the typed / prompted shape the primitive commands already use, each one undo step.
   - No renderer change — feature results tessellate through REQ-313's cached path and REQ-100
@@ -2321,9 +2330,11 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   5. **Booleans Increment B2a** — inward-facing analytic faces (`Surface::inward`): curved SUBTRACT
      for the pairs B1 already recognises (round hole, blind pocket, spherical dimple, counterbore).
      No new curve type. (D-2026-09-02-c.)
-  6. **Booleans Increment B2b** — general analytic intersection curve: oblique / non-coaxial pairs
-     (ellipse, quartic), refusals lifted pair by pair.
-  7. *(separate REQ-315, separate ADR revision)* — freeform surfaces, then sweep and loft.
+  6. **Booleans Increment B2b-1** — `CurveKind::Ellipse` (closed-form): oblique plane ∩ cylinder, for
+     SLICE then Boolean. Bumps `kGsFormatVersion`. (D-2026-09-02-h.)
+  7. **Booleans Increment B2b-2** — procedural `CurveKind::Intersection`: cylinder ∩ cylinder
+     (quartic), sphere ∩ cylinder, non-elliptical cone sections. Refusals lifted pair by pair.
+  8. *(separate REQ-315, separate ADR revision)* — freeform surfaces, then sweep and loft.
 
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 

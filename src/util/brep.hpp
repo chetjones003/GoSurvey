@@ -64,8 +64,10 @@ struct Surface {
   bool inward = false;
 };
 
-/// The analytic curve an edge lies on.
-enum class CurveKind : std::uint8_t { Line, Arc };
+/// The analytic curve an edge lies on. `Ellipse` was added in REQ-314 B2b-1 (D-2026-09-02-h) — an
+/// oblique plane cutting a cylinder meets it along one. The general procedural intersection curve
+/// (a cylinder∩cylinder quartic) is B2b-2 and not yet a member.
+enum class CurveKind : std::uint8_t { Line, Arc, Ellipse };
 
 /// An edge of the solid, referenced by index from the loops that use it.
 ///
@@ -81,9 +83,13 @@ struct Edge {
   /// Built by `ucs::FromNormal`-style construction, so an edge's parametrisation is the one
   /// `ucs::PointOnPlaneCircle` gives every other curve in the project (REQ-311/REQ-312) — the
   /// tessellator, the validity check and a future renderer cannot disagree about which way it winds.
+  /// Arc: origin is the centre, Z is the arc's normal, X points from the centre toward `v0`.
+  /// Ellipse: origin is the centre, X is the **semi-major** direction, Y the **semi-minor**, Z the
+  /// ellipse-plane normal. The edge starts at the ellipse parameter of `v0` and runs \ref sweep.
   ucs::Ucs frame;
-  double radius = 0.0;  ///< Arc only.
-  double sweep = 0.0;   ///< Arc only: signed sweep about `frame.zAxis`, CCW positive.
+  double radius = 0.0;   ///< Arc: radius. Ellipse: semi-major axis `a`.
+  double radius2 = 0.0;  ///< Ellipse: semi-minor axis `b`. Unused for Line / Arc.
+  double sweep = 0.0;    ///< Arc / Ellipse: signed parameter sweep about `frame.zAxis`, CCW positive.
 };
 
 /// One directed use of an \ref Edge by a \ref Loop.

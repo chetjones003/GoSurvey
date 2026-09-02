@@ -81,6 +81,28 @@ int AddArc(Solid* s, int v0, int v1, const Vec3& centre, const Vec3& normal, dou
   return static_cast<int>(s->edges.size()) - 1;
 }
 
+/// An ellipse edge from `v0` to `v1` on the plane through \p centre with normal \p normal, semi-major
+/// \p a along \p majorDir and semi-minor \p b perpendicular to it in the plane. \p sweep is the
+/// signed parameter span (CCW about \p normal); `v0` fixes the start parameter. `2*pi` is a full rim.
+int AddEllipse(Solid* s, int v0, int v1, const Vec3& centre, const Vec3& normal, const Vec3& majorDir,
+               double a, double b, double sweep) {
+  Edge e;
+  e.kind = CurveKind::Ellipse;
+  e.v0 = v0;
+  e.v1 = v1;
+  const Vec3 z = ray3d::Normalize(normal);
+  const Vec3 x = ray3d::Normalize(ray3d::Sub(majorDir, ray3d::Scale(z, ray3d::Dot(majorDir, z))));
+  e.frame.origin = centre;
+  e.frame.zAxis = z;
+  e.frame.xAxis = x;
+  e.frame.yAxis = ray3d::Normalize(ray3d::Cross(z, x));
+  e.radius = a;
+  e.radius2 = b;
+  e.sweep = sweep;
+  s->edges.push_back(e);
+  return static_cast<int>(s->edges.size()) - 1;
+}
+
 [[nodiscard]] Surface PlaneSurface(const Vec3& origin, const Vec3& outwardNormal) {
   Surface sf;
   sf.kind = SurfaceKind::Plane;
@@ -113,7 +135,7 @@ void PlaceInFrame(Solid* s, const ucs::Ucs& frame) {
   for (Vertex& v : s->vertices)
     v.p = ucs::UcsToWorld(frame, v.p);
   for (Edge& e : s->edges) {
-    if (e.kind == CurveKind::Arc)
+    if (e.kind != CurveKind::Line)
       mapFrame(&e.frame);
   }
   for (Face& f : s->faces)
@@ -169,14 +191,16 @@ void AddSingleShell(Solid* s) {
     const ucs::Point2D a = ucs::WorldToPlane(fr, s.vertices[static_cast<std::size_t>(startV)].p);
     const ucs::Point2D b = ucs::WorldToPlane(fr, s.vertices[static_cast<std::size_t>(endV)].p);
     acc += 0.5 * (a.x * b.y - b.x * a.y);
-    if (e.kind == CurveKind::Arc) {
-      // The bulge between the chord and the arc. Signed about the FACE normal, which is not
-      // necessarily the arc's own normal — a cap rim and its face can be described the opposite way
-      // round, and getting this sign wrong turns a disc into a bow tie.
+    if (e.kind == CurveKind::Arc || e.kind == CurveKind::Ellipse) {
+      // The bulge between the chord and the curve. Signed about the FACE normal, which is not
+      // necessarily the curve's own normal — a cap rim and its face can be described the opposite way
+      // round, and getting this sign wrong turns a disc into a bow tie. For an ellipse the sector
+      // area is `0.5 a b dt`, so the bulge term is the circle's with `a b` for `r^2`.
       double sweep = u.reversed ? -e.sweep : e.sweep;
       if (ray3d::Dot(e.frame.zAxis, fr.zAxis) < 0.0)
         sweep = -sweep;
-      acc += 0.5 * e.radius * e.radius * (sweep - std::sin(sweep));
+      const double rr = e.kind == CurveKind::Ellipse ? e.radius * e.radius2 : e.radius * e.radius;
+      acc += 0.5 * rr * (sweep - std::sin(sweep));
     }
   }
   return acc;
@@ -211,6 +235,35 @@ struct ConeIntegrals {
   r.area = du * slant * iRho;
   r.volTerm = du * iRho2 - q.x * iRho * cT - q.y * iRho * sT + k * du * (iRhoZ - q.z * iRho);
   return r;
+}
+
+/// `integral over [u0,u1] of (A0 + A1 cos u + A2 sin u)(B0 + B1 cos u + B2 sin u) du` — closed form.
+[[nodiscard]] double IntegrateTrigProduct(double A0, double A1, double A2, double B0, double B1,
+                                          double B2, double u0, double u1) {
+  auto F = [&](double u) {
+    const double c = std::cos(u);
+    const double s = std::sin(u);
+    const double sc = s * c;
+    return A0 * B0 * u + (A0 * B1 + A1 * B0) * s - (A0 * B2 + A2 * B0) * c +
+           A1 * B1 * (0.5 * u + 0.5 * sc) + A2 * B2 * (0.5 * u - 0.5 * sc) +
+           (A1 * B2 + A2 * B1) * 0.5 * s * s;
+  };
+  return F(u1) - F(u0);
+}
+
+/// The integrals of a **cylinder** face whose z-extent is `[zLo(u), zHi(u)]`, each a linear function
+/// of `(cos u, sin u)` — a plane cut. `dz` coefficients are `zHi - zLo = d0 + d1 cos u + d2 sin u`.
+/// `q` is the reference point in the surface's own frame. Reduces to \ref ConicalFaceIntegrals for a
+/// cylinder when `(d0,d1,d2) = (h,0,0)`.
+[[nodiscard]] ConeIntegrals CylinderPlaneCutIntegrals(double r, double u0, double u1, double d0,
+                                                      double d1, double d2, const Vec3& q) {
+  ConeIntegrals out;
+  // area = integral of r * (zHi - zLo) du
+  out.area = r * (d0 * (u1 - u0) + d1 * (std::sin(u1) - std::sin(u0)) -
+                  d2 * (std::cos(u1) - std::cos(u0)));
+  // volTerm = integral of (r - qx cos u - qy sin u) * r * (zHi - zLo) du
+  out.volTerm = r * IntegrateTrigProduct(r, -q.x, -q.y, d0, d1, d2, u0, u1);
+  return out;
 }
 
 struct SphereIntegrals {
@@ -270,6 +323,62 @@ struct FaceIntegrals {
   double volTerm = 0.0;
 };
 
+/// The z-bounds of a plane-cut cylinder face, each `c0 + c1 cos u + c2 sin u` in the surface frame.
+struct CylinderCut {
+  double lo[3] = {0.0, 0.0, 0.0};
+  double hi[3] = {0.0, 0.0, 0.0};
+};
+
+/// If a cylinder face \p f is bounded by a plane cut (an `Ellipse` edge in its loop), fill \p out
+/// with `zLo(u)` and `zHi(u)` and return true. The un-cut rim (base at z=0 or top at z=h) is the
+/// constant bound; the ellipse edge gives the sloped one.
+[[nodiscard]] bool CylinderCutZExtent(const Solid& s, const Face& f, CylinderCut* out) {
+  const Surface& sf = f.surface;
+  const double h = sf.height;
+  const double zeps = 1e-7 * (std::fabs(h) + 1.0);
+  int ellipseEdge = -1;
+  bool baseRim = false;
+  bool topRim = false;
+  for (const Loop& lp : f.loops)
+    for (const EdgeUse& u : lp.uses) {
+      const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+      if (e.kind == CurveKind::Ellipse) {
+        ellipseEdge = u.edge;
+      } else if (e.kind == CurveKind::Arc) {
+        const double z0 = ucs::WorldToUcs(sf.frame, s.vertices[static_cast<std::size_t>(e.v0)].p).z;
+        const double z1 = ucs::WorldToUcs(sf.frame, s.vertices[static_cast<std::size_t>(e.v1)].p).z;
+        if (std::fabs(z0) < zeps && std::fabs(z1) < zeps)
+          baseRim = true;
+        if (std::fabs(z0 - h) < zeps && std::fabs(z1 - h) < zeps)
+          topRim = true;
+      }
+    }
+  if (ellipseEdge < 0 || baseRim == topRim)
+    return false;
+  const Edge& e = s.edges[static_cast<std::size_t>(ellipseEdge)];
+  const Vec3 nlw = e.frame.zAxis;
+  const Vec3 nl{ray3d::Dot(nlw, sf.frame.xAxis), ray3d::Dot(nlw, sf.frame.yAxis),
+                ray3d::Dot(nlw, sf.frame.zAxis)};
+  const Vec3 cl = ucs::WorldToUcs(sf.frame, e.frame.origin);
+  if (!(std::fabs(nl.z) > 1e-9))
+    return false;  // the plane is parallel to the axis — not an ellipse
+  const double d = nl.x * cl.x + nl.y * cl.y + nl.z * cl.z;
+  const double p[3] = {d / nl.z, -sf.radius * nl.x / nl.z, -sf.radius * nl.y / nl.z};  // z_plane(u)
+  if (baseRim) {
+    out->lo[0] = out->lo[1] = out->lo[2] = 0.0;
+    out->hi[0] = p[0];
+    out->hi[1] = p[1];
+    out->hi[2] = p[2];
+  } else {
+    out->lo[0] = p[0];
+    out->lo[1] = p[1];
+    out->lo[2] = p[2];
+    out->hi[0] = h;
+    out->hi[1] = out->hi[2] = 0.0;
+  }
+  return true;
+}
+
 /// \p q is the world-frame reference point; each branch transforms it into the surface's own frame.
 [[nodiscard]] FaceIntegrals IntegrateFace(const Solid& s, const Face& f, const Vec3& q) {
   const Surface& sf = f.surface;
@@ -284,7 +393,12 @@ struct FaceIntegrals {
     break;
   }
   case SurfaceKind::Cylinder: {
-    const ConeIntegrals ci = ConicalFaceIntegrals(sf.radius, sf.radius, sf.height, f.uStart, f.uEnd, qLocal);
+    CylinderCut cc;
+    const ConeIntegrals ci =
+        CylinderCutZExtent(s, f, &cc)
+            ? CylinderPlaneCutIntegrals(sf.radius, f.uStart, f.uEnd, cc.hi[0] - cc.lo[0],
+                                        cc.hi[1] - cc.lo[1], cc.hi[2] - cc.lo[2], qLocal)
+            : ConicalFaceIntegrals(sf.radius, sf.radius, sf.height, f.uStart, f.uEnd, qLocal);
     out.area = ci.area;
     out.volTerm = ci.volTerm;
     break;
@@ -392,6 +506,14 @@ struct FaceIntegrals {
     return kMaxArcSegments;
   const int n = static_cast<int>(std::ceil(span / maxStep));
   return std::clamp(n, kMinArcSegments, kMaxArcSegments);
+}
+
+/// Segment count to walk a curved edge (Arc or Ellipse) within \p tol; 1 for a straight edge.
+[[nodiscard]] int SegmentsForEdge(const Edge& e, double tol) {
+  if (e.kind == CurveKind::Line)
+    return 1;
+  const double r = e.kind == CurveKind::Ellipse ? std::max(e.radius, e.radius2) : e.radius;
+  return SegmentsForArc(r, e.sweep, tol);
 }
 
 struct MeshBuilder {
@@ -553,11 +675,26 @@ const char* ProblemText(Problem p) {
 // Edge evaluation — the single parametrisation.
 // ---------------------------------------------------------------------------------------------
 
+/// The ellipse parameter (angle about `frame.zAxis` in the a-normalised, b-normalised space) of a
+/// point that lies on the ellipse edge \p e.
+[[nodiscard]] double EllipseParamOf(const Edge& e, const Vec3& p) {
+  const Vec3 rel = ray3d::Sub(p, e.frame.origin);
+  const double x = ray3d::Dot(rel, e.frame.xAxis) / e.radius;
+  const double y = ray3d::Dot(rel, e.frame.yAxis) / e.radius2;
+  return std::atan2(y, x);
+}
+
 Vec3 EdgePointAt(const Solid& s, const Edge& e, double t) {
   if (e.kind == CurveKind::Line) {
     const Vec3& a = s.vertices[static_cast<std::size_t>(e.v0)].p;
     const Vec3& b = s.vertices[static_cast<std::size_t>(e.v1)].p;
     return ray3d::Add(a, ray3d::Scale(ray3d::Sub(b, a), t));
+  }
+  if (e.kind == CurveKind::Ellipse) {
+    const double th = EllipseParamOf(e, s.vertices[static_cast<std::size_t>(e.v0)].p) + e.sweep * t;
+    return ray3d::Add(e.frame.origin,
+                      ray3d::Add(ray3d::Scale(e.frame.xAxis, e.radius * std::cos(th)),
+                                 ray3d::Scale(e.frame.yAxis, e.radius2 * std::sin(th))));
   }
   return ucs::PointOnPlaneCircle(e.frame, e.radius, e.sweep * t);
 }
@@ -567,7 +704,7 @@ Solid Translate(const Solid& s, const Vec3& delta) {
   for (Vertex& v : out.vertices)
     v.p = ray3d::Add(v.p, delta);
   for (Edge& e : out.edges) {
-    if (e.kind == CurveKind::Arc)
+    if (e.kind != CurveKind::Line)
       e.frame.origin = ray3d::Add(e.frame.origin, delta);
   }
   for (Face& f : out.faces)
@@ -642,6 +779,42 @@ Vec3 ClosestPointOnEdge(const Solid& s, const Edge& e, const Vec3& p) {
       return a;
     const double t = std::clamp(ray3d::Dot(ray3d::Sub(p, a), ab) / denom, 0.0, 1.0);
     return ray3d::Add(a, ray3d::Scale(ab, t));
+  }
+  if (e.kind == CurveKind::Ellipse) {
+    // No closed form for the nearest point on an ellipse; sample the swept range and polish the best
+    // sample with a few Newton steps on d/dt |E(t) - p|^2. Clamped to the edge's own extent.
+    const double t0 = EllipseParamOf(e, s.vertices[static_cast<std::size_t>(e.v0)].p);
+    auto at = [&](double th) {
+      return ray3d::Add(e.frame.origin,
+                        ray3d::Add(ray3d::Scale(e.frame.xAxis, e.radius * std::cos(th)),
+                                   ray3d::Scale(e.frame.yAxis, e.radius2 * std::sin(th))));
+    };
+    double best = 0.0;
+    double bestD = std::numeric_limits<double>::max();
+    for (int i = 0; i <= 64; ++i) {
+      const double u = static_cast<double>(i) / 64.0;
+      const double d = ray3d::Length(ray3d::Sub(at(t0 + e.sweep * u), p));
+      if (d < bestD) {
+        bestD = d;
+        best = u;
+      }
+    }
+    double u = best;
+    for (int it = 0; it < 8; ++it) {
+      const double th = t0 + e.sweep * u;
+      const Vec3 E = at(th);
+      const Vec3 dE = ray3d::Add(ray3d::Scale(e.frame.xAxis, -e.radius * std::sin(th)),
+                                 ray3d::Scale(e.frame.yAxis, e.radius2 * std::cos(th)));
+      const Vec3 ddE = ray3d::Add(ray3d::Scale(e.frame.xAxis, -e.radius * std::cos(th)),
+                                  ray3d::Scale(e.frame.yAxis, -e.radius2 * std::sin(th)));
+      const Vec3 r = ray3d::Sub(E, p);
+      const double g = ray3d::Dot(r, dE) * e.sweep;
+      const double h = (ray3d::Dot(dE, dE) + ray3d::Dot(r, ddE)) * e.sweep * e.sweep;
+      if (!(std::fabs(h) > 1e-18))
+        break;
+      u = std::clamp(u - g / h, 0.0, 1.0);
+    }
+    return at(t0 + e.sweep * u);
   }
   // An arc: drop onto its plane, take the angle there, and if that angle is outside the swept range,
   // answer with whichever END is nearer **round the circle**.
@@ -1894,6 +2067,130 @@ struct PolyFace {
   return Succeed(outWhy);
 }
 
+/// Cut a right circular cylinder by an **oblique** plane — the cross-section is an ellipse
+/// (REQ-314 B2b-1, D-2026-09-02-h). Each piece is a cylinder with one flat rim and one elliptical
+/// rim. Handles only a cut that meets the cylinder side all the way round (the ellipse stays
+/// strictly between the two caps); anything else leaves \p handled false or reports by name.
+[[nodiscard]] bool SliceCylinderOblique(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                        SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
+                                        Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Cylinder)
+    return false;
+  const ucs::Ucs& fr = rc.frame;
+  const Vec3 Z = fr.zAxis;
+  const double r = rc.radius;
+  const double h = rc.height;
+  const double dotNZ = ray3d::Dot(pn, Z);
+  if (std::fabs(dotNZ) < 1e-6 || std::fabs(dotNZ) > 1.0 - 1e-9)
+    return false;  // perpendicular / parallel — not this recogniser
+
+  *handled = true;
+  const double scale = std::max(h, r);
+  const double eps = 1e-7 * std::max(scale, 1.0);
+
+  // z_plane(u) = a0 + a1 cos u + a2 sin u  in the cylinder's local frame.
+  const Vec3 pl = ucs::WorldToUcs(fr, planePoint);
+  const Vec3 nl{ray3d::Dot(pn, fr.xAxis), ray3d::Dot(pn, fr.yAxis), dotNZ};
+  const double a0 = (nl.x * pl.x + nl.y * pl.y + nl.z * pl.z) / nl.z;
+  const double a1 = -r * nl.x / nl.z;
+  const double a2 = -r * nl.y / nl.z;
+  const double amp = std::sqrt(a1 * a1 + a2 * a2);
+  if (a0 - amp <= eps || a0 + amp >= h - eps)
+    return Fail(Problem::SliceResultComplex, outWhy);  // the ellipse would clip a cap
+
+  // Ellipse geometry, in world.
+  const Vec3 ec = ray3d::Add(fr.origin, ray3d::Scale(Z, a0));  // plane ∩ axis
+  const Vec3 minorDir = ray3d::Normalize(ray3d::Cross(pn, Z));
+  const Vec3 majorDir = ray3d::Normalize(ray3d::Cross(pn, minorDir));
+  const double ea = r / std::fabs(dotNZ);  // semi-major
+  const double eb = r;                     // semi-minor
+  const Vec3 eN = dotNZ > 0.0 ? pn : ray3d::Scale(pn, -1.0);  // ellipse normal, +Z-ish
+
+  auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(fr, Vec3{x, y, z}); };
+  const double zp0 = a0 + a1;  // z_plane at u = 0  (local +x)
+  const double zpP = a0 - a1;  // z_plane at u = pi (local -x)
+
+  // Build one piece: `upper` true keeps the material above the plane (rim at z = h), false below.
+  auto build = [&](bool upper, Solid* dst) -> bool {
+    Solid s;
+    const int se0 = AddVertex(&s, W(r, 0.0, zp0));   // ellipse ∩ seam at u = 0
+    const int se1 = AddVertex(&s, W(-r, 0.0, zpP));  // ellipse ∩ seam at u = pi
+    const int rimZ0 = AddVertex(&s, W(r, 0.0, upper ? h : 0.0));
+    const int rimZ1 = AddVertex(&s, W(-r, 0.0, upper ? h : 0.0));
+
+    const Vec3 rimC = W(0.0, 0.0, upper ? h : 0.0);
+    const Vec3 up{0.0, 0.0, 0.0};  // unused
+    (void)up;
+    const int rr0 = AddArc(&s, rimZ0, rimZ1, rimC, Z, kPi);
+    const int rr1 = AddArc(&s, rimZ1, rimZ0, rimC, Z, kPi);
+    const int el0 = AddEllipse(&s, se0, se1, ec, eN, majorDir, ea, eb, kPi);
+    const int el1 = AddEllipse(&s, se1, se0, ec, eN, majorDir, ea, eb, kPi);
+    const int sm0 = AddLine(&s, upper ? se0 : rimZ0, upper ? rimZ0 : se0);  // seam at +x, low→high
+    const int sm1 = AddLine(&s, upper ? se1 : rimZ1, upper ? rimZ1 : se1);  // seam at -x
+
+    // Flat rim cap.
+    if (upper)
+      s.faces.push_back(MakePlaneFace(rimC, Z, {{rr0, false}, {rr1, false}}));
+    else
+      s.faces.push_back(MakePlaneFace(rimC, ray3d::Scale(Z, -1.0), {{rr1, true}, {rr0, true}}));
+    // Elliptical cut cap — outward normal away from this piece's material.
+    const Vec3 cutN = upper ? ray3d::Scale(eN, -1.0) : eN;
+    if (upper)
+      s.faces.push_back(MakePlaneFace(ec, cutN, {{el1, true}, {el0, true}}));
+    else
+      s.faces.push_back(MakePlaneFace(ec, cutN, {{el0, false}, {el1, false}}));
+
+    auto side = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+      Face f;
+      f.surface.kind = SurfaceKind::Cylinder;
+      f.surface.frame = fr;
+      f.surface.radius = r;
+      f.surface.radius2 = r;
+      f.surface.height = h;
+      f.uStart = u0;
+      f.uEnd = u1;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    };
+    if (upper) {
+      side(0.0, kPi, {{el0, false}, {sm1, false}, {rr0, true}, {sm0, true}});
+      side(kPi, kTwoPi, {{el1, false}, {sm0, false}, {rr1, true}, {sm1, true}});
+    } else {
+      side(0.0, kPi, {{rr0, false}, {sm1, false}, {el0, true}, {sm0, true}});
+      side(kPi, kTwoPi, {{rr1, false}, {sm0, false}, {el1, true}, {sm1, true}});
+    }
+
+    AddSingleShell(&s);
+    const Problem why = Validate(s);
+    if (why != Problem::Ok)
+      return Fail(Problem::SliceResultComplex, outWhy);
+    *dst = std::move(s);
+    return true;
+  };
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  // "Above" is the +pn side. The upper piece (rim at z = h) is the +pn side iff pn·Z > 0.
+  const bool upperIsAbove = dotNZ > 0.0;
+  Solid* upperDst = upperIsAbove ? outAbove : outBelow;
+  Solid* lowerDst = upperIsAbove ? outBelow : outAbove;
+  const bool wantUpper = upperIsAbove ? wantAbove : wantBelow;
+  const bool wantLower = upperIsAbove ? wantBelow : wantAbove;
+
+  Solid probe;
+  if (!build(true, &probe) || !build(false, &probe))
+    return false;  // build() already set outWhy
+  if (wantUpper && upperDst && !build(true, upperDst))
+    return false;
+  if (wantLower && lowerDst && !build(false, lowerDst))
+    return false;
+  return Succeed(outWhy);
+}
+
 } // namespace
 
 bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, SliceKeep keep,
@@ -1910,10 +2207,14 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
       if (f.surface.kind != SurfaceKind::Plane)
         hasCurved = true;
     if (hasCurved) {
-      // The one curved case B1 can hold: a cut perpendicular to a cylinder / cone axis (a circle).
+      // Curved cuts the kernel can hold: perpendicular to a cylinder / cone axis (a circle, B1),
+      // or oblique through a cylinder (an ellipse, B2b-1).
+      const Vec3 upn = ray3d::Normalize(planeNormal);
       bool handled = false;
-      const bool ok = SliceCurvedPrimitive(solid, planePoint, ray3d::Normalize(planeNormal), keep,
-                                           outAbove, outBelow, &handled, outWhy);
+      bool ok = SliceCurvedPrimitive(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
+      ok = SliceCylinderOblique(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
       if (handled)
         return ok;
       return Fail(Problem::SliceCurvedFace, outWhy);
@@ -3391,9 +3692,11 @@ Problem Validate(const Solid& s) {
                                    s.vertices[static_cast<std::size_t>(e.v0)].p)) <= lenEps)
         return Problem::DegenerateEdge;
     } else {
-      if (!AllFinite({e.radius, e.sweep}) || !FinitePoint(e.frame.origin))
+      if (!AllFinite({e.radius, e.radius2, e.sweep}) || !FinitePoint(e.frame.origin))
         return Problem::NonFiniteCoordinate;
       if (!(e.radius > lenEps) || !(std::fabs(e.sweep) > 1e-9))
+        return Problem::DegenerateEdge;
+      if (e.kind == CurveKind::Ellipse && !(e.radius2 > lenEps))
         return Problem::DegenerateEdge;
     }
   }
@@ -3576,6 +3879,8 @@ Bounds ComputeBounds(const Solid& s) {
   for (const Edge& e : s.edges) {
     if (e.kind == CurveKind::Arc)
       ExpandCircle(&b, e.frame.origin, e.frame.zAxis, e.radius);
+    else if (e.kind == CurveKind::Ellipse)  // conservative: the semi-major circle bounds the ellipse
+      ExpandCircle(&b, e.frame.origin, e.frame.zAxis, e.radius);
   }
   for (const Face& f : s.faces) {
     const Surface& sf = f.surface;
@@ -3730,7 +4035,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         for (const EdgeUse& u : lp.uses) {
           const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
           const int segs =
-              e.kind == CurveKind::Arc ? SegmentsForArc(e.radius, e.sweep, chordTolerance) : 1;
+              SegmentsForEdge(e, chordTolerance);
           for (int i = 0; i < segs; ++i) {
             const double t = static_cast<double>(i) / static_cast<double>(segs);
             r.push_back(EdgePointAt(s, e, u.reversed ? 1.0 - t : t));
@@ -3869,13 +4174,20 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const double r0 = sf.radius;
       const double r1 = sf.kind == SurfaceKind::Cylinder ? sf.radius : sf.radius2;
       const int nu = SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart, chordTolerance);
+      CylinderCut cc;
+      const bool cut = sf.kind == SurfaceKind::Cylinder && CylinderCutZExtent(s, f, &cc);
+      auto bound = [](const double c[3], double u) {
+        return c[0] + c[1] * std::cos(u) + c[2] * std::sin(u);
+      };
       std::vector<std::uint32_t> lower(static_cast<std::size_t>(nu) + 1);
       std::vector<std::uint32_t> upper(static_cast<std::size_t>(nu) + 1);
       for (int i = 0; i <= nu; ++i) {
         const double t = f.uStart + (f.uEnd - f.uStart) * static_cast<double>(i) / static_cast<double>(nu);
         const Vec3 n = ConicalNormal(sf, r0, r1, t);
-        lower[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r1, t, 0.0), n);
-        upper[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r1, t, sf.height), n);
+        const double zA = cut ? bound(cc.lo, t) : 0.0;
+        const double zB = cut ? bound(cc.hi, t) : sf.height;
+        lower[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r1, t, zA), n);
+        upper[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r1, t, zB), n);
       }
       for (int i = 0; i < nu; ++i) {
         const std::size_t a = static_cast<std::size_t>(i);
@@ -4086,7 +4398,7 @@ bool TessellateEdges(const Solid& s, double chordTolerance, std::vector<double>*
 
   std::vector<double> segs;
   for (const Edge& e : s.edges) {
-    const int n = e.kind == CurveKind::Arc ? SegmentsForArc(e.radius, e.sweep, chordTolerance) : 1;
+    const int n = SegmentsForEdge(e, chordTolerance);
     Vec3 prev = EdgePointAt(s, e, 0.0);
     for (int i = 1; i <= n; ++i) {
       const Vec3 next = EdgePointAt(s, e, static_cast<double>(i) / static_cast<double>(n));

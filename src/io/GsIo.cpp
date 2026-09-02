@@ -698,10 +698,12 @@ json SolidToJson(const brep::Solid& s) {
     je["kind"] = static_cast<int>(e.kind);
     je["v0"] = e.v0;
     je["v1"] = e.v1;
-    if (e.kind == brep::CurveKind::Arc) {
+    if (e.kind == brep::CurveKind::Arc || e.kind == brep::CurveKind::Ellipse) {
       je["frame"] = UcsFrameToJson(e.frame);
       je["r"] = e.radius;
       je["sweep"] = e.sweep;
+      if (e.kind == brep::CurveKind::Ellipse)
+        je["r2"] = e.radius2;  // REQ-314 B2b-1 — bumps kGsFormatVersion
     }
     edges.push_back(std::move(je));
   }
@@ -776,18 +778,24 @@ bool SolidFromJson(const json& o, brep::Solid* out) {
         return false;
       brep::Edge e;
       const int k = je["kind"].get<int>();
-      if (k != static_cast<int>(brep::CurveKind::Line) && k != static_cast<int>(brep::CurveKind::Arc))
+      if (k != static_cast<int>(brep::CurveKind::Line) && k != static_cast<int>(brep::CurveKind::Arc) &&
+          k != static_cast<int>(brep::CurveKind::Ellipse))
         return false;
       e.kind = static_cast<brep::CurveKind>(k);
       e.v0 = je["v0"].get<int>();
       e.v1 = je["v1"].get<int>();
-      if (e.kind == brep::CurveKind::Arc) {
+      if (e.kind == brep::CurveKind::Arc || e.kind == brep::CurveKind::Ellipse) {
         if (!je.contains("frame") || !UcsFrameFromJson(je["frame"], &e.frame))
           return false;
         if (!je.contains("r") || !je.contains("sweep"))
           return false;
         e.radius = je["r"].get<double>();
         e.sweep = je["sweep"].get<double>();
+        if (e.kind == brep::CurveKind::Ellipse) {
+          if (!je.contains("r2"))
+            return false;
+          e.radius2 = je["r2"].get<double>();
+        }
       }
       out->edges.push_back(e);
     }
