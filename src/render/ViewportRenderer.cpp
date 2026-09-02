@@ -281,16 +281,49 @@ void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput&
     const int nv = v1 - v0;
     if (nv < 2)
       continue;
-    std::vector<float> xy(static_cast<size_t>(nv * 2));
-    std::vector<float> zs(static_cast<size_t>(nv));
+    // REQ-316 / ADR-047: a segment whose leaving vertex carries a non-zero bulge is a circular arc,
+    // expanded here into a fan of chord points so the existing linetype-chain path draws it as a
+    // curve. Only applies to the polyline store (feature lines pass a different V and no bulges).
+    const std::vector<float>* B =
+        (V == eg.polylineVerts && eg.polylineBulge && !eg.polylineBulge->empty()) ? eg.polylineBulge : nullptr;
+    std::vector<float> xy;
+    std::vector<float> zs;
+    xy.reserve(static_cast<size_t>(nv * 2));
+    zs.reserve(static_cast<size_t>(nv));
+    auto pushViewRel = [&](double wx, double wy, float z) {
+      float rx = 0.f, ry = 0.f;
+      WorldToViewRelativeFloat(wx, wy, viewAnchorX, viewAnchorY, &rx, &ry);
+      xy.push_back(rx);
+      xy.push_back(ry);
+      zs.push_back(z);
+    };
+    const int lastK = closed ? nv : nv - 1;  // closed adds the wrap segment nv-1 -> 0
     for (int k = 0; k < nv; ++k) {
       const int vi = v0 + k;
-      WorldToViewRelativeFloat(static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 0)]),
-                               static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 1)]), viewAnchorX,
-                               viewAnchorY, &xy[static_cast<size_t>(k * 2)], &xy[static_cast<size_t>(k * 2 + 1)]);
-      zs[static_cast<size_t>(k)] = (*V)[static_cast<size_t>(vi * 3 + 2)];  // absolute, not view-relative (ADR-025 D2)
+      const double wx0 = static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 0)]);
+      const double wy0 = static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 1)]);
+      const float z0 = (*V)[static_cast<size_t>(vi * 3 + 2)];  // absolute, not view-relative (ADR-025 D2)
+      pushViewRel(wx0, wy0, z0);
+      if (k >= lastK)
+        continue;
+      const float bulge = B ? (*B)[static_cast<size_t>(vi)] : 0.f;
+      if (bulge == 0.f)
+        continue;
+      const int nk = (k + 1) % nv;
+      const double wx1 = static_cast<double>((*V)[static_cast<size_t>((v0 + nk) * 3 + 0)]);
+      const double wy1 = static_cast<double>((*V)[static_cast<size_t>((v0 + nk) * 3 + 1)]);
+      const BulgeArcSpan arc = BulgeArc(wx0, wy0, wx1, wy1, static_cast<double>(bulge));
+      if (!arc.valid)
+        continue;
+      constexpr double kPi = 3.14159265358979323846;
+      const int nseg = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 24.0))), 2, 96);
+      for (int s = 1; s < nseg; ++s) {  // interior points only; endpoints are the polyline vertices
+        const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / nseg);
+        pushViewRel(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), z0);
+      }
     }
-    CadTessellateLinetypeChainVc(xy.data(), nv, 0.f, closed, lt, dashPatScale, rgba, &out, zs.data());
+    const int chainN = static_cast<int>(zs.size());
+    CadTessellateLinetypeChainVc(xy.data(), chainN, 0.f, closed, lt, dashPatScale, rgba, &out, zs.data());
   }
 }
 

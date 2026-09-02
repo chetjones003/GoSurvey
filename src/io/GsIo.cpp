@@ -243,6 +243,13 @@ json CadBlockContentToJson(const CadBlockContent& c) {
 
   o["polyOffsets"] = c.polyOffsets;
   o["polyVerts"] = c.polyVerts;
+  {
+    bool anyBulge = false;
+    for (float b : c.polyVertsBulge)
+      if (b != 0.0f) { anyBulge = true; break; }
+    if (anyBulge)
+      o["polyVertsBulge"] = c.polyVertsBulge;  // REQ-316 / ADR-047, additive
+  }
   json polyClosed = json::array();
   for (std::uint8_t v : c.polyClosed)
     polyClosed.push_back(static_cast<int>(v));
@@ -318,6 +325,8 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
     c.polyOffsets = o["polyOffsets"].get<std::vector<int>>();
   if (o.contains("polyVerts") && o["polyVerts"].is_array())
     c.polyVerts = o["polyVerts"].get<std::vector<float>>();
+  if (o.contains("polyVertsBulge") && o["polyVertsBulge"].is_array())  // REQ-316 / ADR-047
+    c.polyVertsBulge = o["polyVertsBulge"].get<std::vector<float>>();
   if (o.contains("polyClosed") && o["polyClosed"].is_array())
     for (const auto& v : o["polyClosed"])
       c.polyClosed.push_back(static_cast<std::uint8_t>(std::clamp(v.get<int>(), 0, 1)));
@@ -1239,6 +1248,15 @@ json BuildRoot(const AppCommandState& st) {
 
   doc["polylineOffsets"] = st.userPolylineOffsets;
   doc["polylineVerts"] = st.userPolylineVerts;
+  // REQ-316 / ADR-047: additive, no kGsFormatVersion bump. Written only when at least one segment
+  // is actually curved, so a drawing with no arcs re-saves byte-identically to a pre-ADR-047 file.
+  {
+    bool anyBulge = false;
+    for (float b : st.userPolylineVertsBulge)
+      if (b != 0.0f) { anyBulge = true; break; }
+    if (anyBulge)
+      doc["polylineVertsBulge"] = st.userPolylineVertsBulge;
+  }
   json polyClosed = json::array();
   for (uint8_t c : st.userPolylineClosed)
     polyClosed.push_back(static_cast<int>(c));
@@ -1869,6 +1887,13 @@ bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
     log.push_back(".gs: polylineAttrs length must match polyline count.");
     return false;
   }
+  // REQ-316 / ADR-047: optional; when present it is one bulge per vertex (pv.size() / 3).
+  if (doc.contains("polylineVertsBulge")) {
+    if (!doc["polylineVertsBulge"].is_array() || doc["polylineVertsBulge"].size() != pv.size() / 3) {
+      log.push_back(".gs: polylineVertsBulge length must be one entry per polyline vertex.");
+      return false;
+    }
+  }
   if (!doc.contains("annotations") || !doc["annotations"].is_array()) {
     log.push_back(".gs: missing annotations array.");
     return false;
@@ -2410,6 +2435,15 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.userPolylineVerts.clear();
   for (const auto& v : doc["polylineVerts"])
     st.userPolylineVerts.push_back(v.get<float>());
+  // REQ-316 / ADR-047: additive, guarded (no kGsFormatVersion bump) — a pre-ADR-047 file has no
+  // "polylineVertsBulge" key and loads with the array left EMPTY, which every reader treats as
+  // "all segments straight". Kept empty (not zero-filled) so a straight drawing re-saves identically.
+  st.userPolylineVertsBulge.clear();
+  if (doc.contains("polylineVertsBulge"))
+    for (const auto& v : doc["polylineVertsBulge"])
+      st.userPolylineVertsBulge.push_back(v.get<float>());
+  if (!st.userPolylineVertsBulge.empty())
+    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
   st.userPolylineClosed.clear();
   for (const auto& v : doc["polylineClosed"])
     st.userPolylineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));

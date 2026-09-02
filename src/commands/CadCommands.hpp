@@ -28,6 +28,7 @@
 // curveisect::Vec2/Seg/Conic + Intersect*, for FILLET's tangent-arc solve (REQ-103 step 6a) below.
 // Dependency-free by its own design (curveintersect.hpp's own doc comment), so this adds no cycle.
 #include "util/curveintersect.hpp"
+#include "util/geom2d.hpp"        // BulgeArc, for the polyline arc-segment grips (REQ-316 / ADR-047)
 // HoverDwell, for AppCommandState's surface rollover timer (REQ-089). Pure and dependency-free
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
@@ -729,6 +730,9 @@ struct CadExtendedGeometryInput {
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
   const std::vector<EntityAttributes>* polylineAttrs = nullptr;
+  /// REQ-316 / ADR-047: per-vertex bulge (parallel to polylineVerts, one per vertex). Null or
+  /// empty means every polyline segment is straight — the pre-ADR-047 behaviour.
+  const std::vector<float>* polylineBulge = nullptr;
   // Feature lines (REQ-087). Same four arrays, same shape — the renderer draws both through one
   // function, so a feature line cannot render differently from a polyline by accident.
   const std::vector<float>* featureLineVerts = nullptr;
@@ -867,6 +871,7 @@ struct CadClipboard {
   std::vector<EntityAttributes> ellAttrs;
   std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
   std::vector<float>            polyVerts;
+  std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
   std::vector<uint8_t>          polyClosed;
   std::vector<EntityAttributes> polyAttrs;
   std::vector<CadAnnotation>    annotations;
@@ -888,6 +893,18 @@ struct CadClipboard {
   }
 };
 
+/// REQ-316 / ADR-047: keep the parallel per-vertex polyline bulge array the right length for the
+/// vertex list (3 floats per vertex). Entries added here default to 0 (a straight segment). Call
+/// after any operation that changes a polyline's vertex count without maintaining bulges itself.
+inline void SyncPolylineBulge(std::vector<float>& bulge, std::size_t vertsFloatCount) {
+  bulge.resize(vertsFloatCount / 3, 0.0f);
+}
+
+/// REQ-316 / ADR-047: grip index base for a polyline ARC segment's midpoint (bulge) grip. Vertex
+/// grips are `0..vertexCount-1`; a bulge grip for segment `s` is `kPolyBulgeGripBase + s`. The base
+/// is far above any realistic vertex count so the two grip families never collide.
+inline constexpr int kPolyBulgeGripBase = 1 << 20;
+
 
 /// Geometry-only snapshot for undo/redo.  PDF glTexId is zeroed to avoid stale GPU references.
 struct DrawingGeometrySnapshot {
@@ -903,6 +920,9 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> userEllAttrs;
   std::vector<int>              userPolylineOffsets;
   std::vector<float>            userPolylineVerts;
+  /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
+  /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
+  std::vector<float>            userPolylineVertsBulge;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
@@ -1038,6 +1058,9 @@ struct DrawingDocument {
   std::vector<EntityAttributes> userEllAttrs;
   std::vector<int>              userPolylineOffsets;
   std::vector<float>            userPolylineVerts;
+  /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
+  /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
+  std::vector<float>            userPolylineVertsBulge;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
@@ -2195,6 +2218,8 @@ struct AppCommandState {
   /// \ref userPolylineVerts.
   std::vector<int> userPolylineOffsets;
   std::vector<float> userPolylineVerts;
+  /// REQ-316 / ADR-047: per-vertex DXF bulge, parallel to userPolylineVerts (size()/3 entries).
+  std::vector<float> userPolylineVertsBulge;
   std::vector<uint8_t> userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
 
@@ -2242,6 +2267,16 @@ struct AppCommandState {
 
   /// POLYLINE command draft — XYZ vertices (two or more before commit).
   std::vector<float> polylineDraftVerts;
+  /// REQ-316 / ADR-047: per-draft-vertex bulge, parallel to polylineDraftVerts (one per vertex;
+  /// the bulge of the segment LEAVING that vertex). Same length as the vertex count.
+  std::vector<float> polylineDraftBulge;
+  /// REQ-316: while true, the next POLYLINE segment is a circular arc (keyword `Arc`/`A`; `Line`/`L`
+  /// switches back). The arc is tangent to the previous segment unless a radius or included angle
+  /// is given for the next pick.
+  bool polylineArcMode = false;
+  float polylineArcRadius = 0.f;      ///< REQ-316: radius for the next arc segment (0 = unset)
+  float polylineArcAngleDeg = 0.f;    ///< REQ-316: included angle (deg) for the next arc segment
+  bool polylineArcAngleValid = false; ///< REQ-316: an included angle was typed for the next pick
   /// TRIM has two modes, chosen by the \c TRIMSTATE system variable (REQ-056):
   ///   0 (default) — smart trim: two clicks draw a line across the pieces to remove, no edges to pick;
   ///   1           — classic: pick cutting edges, Enter, then click the pieces to trim.
@@ -2772,6 +2807,10 @@ struct AppCommandState {
   // Polyline: moved vertex's global index into userPolylineVerts (x coordinate).
   int entityGripOrigPolylineXIdx = -1;
   float entityGripOrigPolyVertX = 0.f, entityGripOrigPolyVertY = 0.f;
+  /// REQ-316 / ADR-047: for an arc-segment (bulge) grip drag — the global vertex index whose bulge
+  /// is being dragged, and its value before the drag, so RMB / Esc restores it.
+  int entityGripOrigPolyBulgeVi = -1;
+  float entityGripOrigPolyBulge = 0.f;
 
   // Ellipse originals.
   float entityGripOrigEllMajVx = 0.f, entityGripOrigEllMajVy = 0.f;
@@ -3632,6 +3671,42 @@ inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {
   return st.defaultPlottedTextHeightInches * st.modelUnitsPerPlottedInch;
 }
 
+/// REQ-316 / ADR-047: call `fn(seg, midX, midY, midZ)` for every ARC segment of polyline `pi`, with
+/// the midpoint at the arc's apex (the point at half sweep). `seg` is the 0-based segment index —
+/// the same one `kPolyBulgeGripBase + seg` encodes. Straight segments are skipped. Shared by the
+/// four grip sites (model + floating-viewport, draw + grab) so they cannot disagree.
+template <class F>
+inline void CadForEachPolylineArcMidGrip(const AppCommandState& st, int pi, F&& fn) {
+  const int np = st.userPolylineOffsets.size() > 0 ? static_cast<int>(st.userPolylineOffsets.size() - 1) : 0;
+  if (pi < 0 || pi >= np)
+    return;
+  const int v0 = st.userPolylineOffsets[static_cast<std::size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<std::size_t>(pi + 1)];
+  const bool closed = static_cast<std::size_t>(pi) < st.userPolylineClosed.size() &&
+                      st.userPolylineClosed[static_cast<std::size_t>(pi)];
+  const int nseg = (v1 - v0) - 1 + (closed && (v1 - v0) >= 2 ? 1 : 0);
+  for (int s = 0; s < nseg; ++s) {
+    const int va = v0 + s;
+    const int vb = (s == (v1 - v0) - 1) ? v0 : v0 + s + 1;  // wrap on the closing segment
+    if (static_cast<std::size_t>(vb) * 3 + 2 >= st.userPolylineVerts.size())
+      break;
+    const float bulge = static_cast<std::size_t>(va) < st.userPolylineVertsBulge.size()
+                            ? st.userPolylineVertsBulge[static_cast<std::size_t>(va)]
+                            : 0.f;
+    if (bulge == 0.f)
+      continue;
+    const std::size_t A = static_cast<std::size_t>(va) * 3, B = static_cast<std::size_t>(vb) * 3;
+    const BulgeArcSpan arc = BulgeArc(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
+                                      st.userPolylineVerts[B], st.userPolylineVerts[B + 1],
+                                      static_cast<double>(bulge));
+    if (!arc.valid)
+      continue;
+    const double mid = arc.startAngle + arc.sweep * 0.5;
+    fn(s, static_cast<float>(arc.cx + arc.radius * std::cos(mid)),
+       static_cast<float>(arc.cy + arc.radius * std::sin(mid)), st.userPolylineVerts[A + 2]);
+  }
+}
+
 /// Build the model viewport's camera from the canonical view state (REQ-058 / ADR-025 (c)).
 ///
 /// The camera is **derived, never stored**: pan is the target, zoom is the ortho half-height, and
@@ -4456,6 +4531,11 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     break;
   }
   case SelectedEntity::Type::Polyline: {
+    if (st.entityGripOrigPolyBulgeVi >= 0) {  // REQ-316 / ADR-047: an arc-segment bulge grip
+      if (static_cast<size_t>(st.entityGripOrigPolyBulgeVi) < st.userPolylineVertsBulge.size())
+        st.userPolylineVertsBulge[static_cast<size_t>(st.entityGripOrigPolyBulgeVi)] = st.entityGripOrigPolyBulge;
+      break;
+    }
     if (st.entityGripOrigPolylineXIdx < 0)
       return;
     const size_t xIdx = static_cast<size_t>(st.entityGripOrigPolylineXIdx);
@@ -4929,6 +5009,12 @@ void ClearPendingOneShotObjectSnap(AppCommandState& st);
 void ApplyCopySurveyDuplicateModalResult(AppCommandState& st, bool applySurveyDup, std::vector<std::string>& log);
 
 bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);
+
+/// REQ-316 / ADR-047: the bulge for the segment leaving the last POLYLINE draft vertex if the next
+/// point were (x,y). 0 in LINE mode; in ARC mode the arc is tangent to the previous segment unless
+/// a radius or included angle was typed. Shared by the vertex-commit path and the live preview so
+/// the drawn arc matches the committed one exactly.
+float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, float y);
 
 /// Viewport left-click during active commands.
 ///

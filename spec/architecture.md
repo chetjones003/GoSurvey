@@ -262,7 +262,11 @@ A change is rejected if it breaks any of these:
    existing store is a blocking finding: it splits one coordinate across two
    allocations (§5) and introduces a desync failure mode that interleaving cannot
    have. Widening a stride is done **with a rename**, so every affected site is a
-   compile error rather than a silent misread (ADR-025 (a)).
+   compile error rather than a silent misread (ADR-025 (a)). *A per-vertex
+   non-coordinate channel — the polyline `userPolylineVertsBulge` array
+   (ADR-047) — is a parallel array by exception: a bulge is not a coordinate, so
+   §11.8's anti-split does not reach it, and it follows the ADR-035 (c) /
+   D-2026-08-31-f side-car pattern (count checked in `docinvariants`).*
 9. **A reference from one object to another is a stable id — never an array index.**
    Entities are stored in flat arrays that **compact on erase**, so an index is not a name: after a
    delete it silently designates a different entity. Storing an index across an object boundary, or
@@ -2300,3 +2304,139 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   5. **Booleans Increment B2** — general analytic intersection curve *and* inward-facing curved
      faces (so curved SUBTRACT), refusals lifted pair by pair.
   6. *(separate REQ-315, separate ADR revision)* — freeform surfaces, then sweep and loft.
+
+### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
+
+- **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —
+  corrected before any storage code from an initially-accepted stride 3→4 rename-widen (see the
+  correction in (a)) — and the phased delivery were chosen by the user, who accepted this ADR text.
+  Backs REQ-316. Paired with a new requirement because the feature request had no accepted
+  `REQ-NNN` behind it. Increments 1 (storage + POLYLINE arc mode + render + DXF/`.gs`), 3 (JOIN of
+  lines + arcs), and the pick/box-select/arc-grip work of increment 2 delivered 2026-09-02
+  (D-2026-09-02-f keyword choice, D-2026-09-02-g hover aperture; TASK-180..183).
+
+- **Context.** A feature request asks for two things that are one thing: (1) POLYLINE should switch
+  between "line mode" and "arc mode" mid-command so a single polyline can contain straight *and*
+  curved segments, and (2) JOIN should weld lines and arcs together into one such polyline. The
+  obstacle is storage. A polyline is `userPolylineVerts` (stride-3 XYZ) + `userPolylineOffsets` +
+  `userPolylineClosed` + `userPolylineAttrs`, and it holds **only corner points** — the renderer,
+  snap engine, pick, extents, length, OFFSET, TRIM and both file writers all assume the piece
+  between vertex *i* and *i+1* is a straight chord. The CAD term for "how much this segment bows"
+  is a **bulge** (`tan(θ/4)`, θ = the arc's included angle; the DXF `LWPOLYLINE` group-42 value,
+  one per vertex, 0 = straight). Nothing in the domain stores it:
+  - `requirements.md` REQ-085 (3DPOLY) states in as many words that the ordinary POLYLINE command
+    is "unchanged" and that adding curvature would be "a storage change" it is avoiding.
+  - `io/DxfIo.cpp` **already parses** group-42 bulges and then discards them — it tessellates each
+    arc into short straight chords on import because "the polyline store carries no per-vertex
+    bulge." The exporter emits no bulges at all (group 72 `0` on HATCH boundaries).
+  - The polyline arrays have ~**922 reference sites across 17 files** (490 in `CadCommands.cpp`
+    alone, 29 in `DxfIo.cpp`); ADR-035's measured count for the comparable `userPolyline*`
+    footprint was **612 sites across 11 files**.
+
+  Choosing the storage layout and the file-format change is an architectural decision (§2, §5,
+  §11.4, §11.8), not a Workshop choice — hence this ADR.
+
+- **Decision.**
+
+  **(a) A per-vertex bulge is a parallel array beside the vertex store** —
+  `std::vector<float> userPolylineVertsBulge`, one entry per vertex, so
+  `userPolylineVertsBulge.size() == userPolylineVerts.size() / 3` always. The vertex store keeps
+  its stride-3 XYZ layout unchanged. The bulge at vertex *i* describes the segment **leaving**
+  vertex *i*; the last vertex's bulge is consulted only when `userPolylineClosed` is set (the
+  closing segment). All three copies of the store — live `AppCommandState`, the undo
+  `DrawingGeometrySnapshot`, and the per-tab `DrawingDocument` — gain the parallel array, mirrored
+  at the handful of vertex-mutation sites (append, erase-polyline, clear, undo restore, `.gs` load,
+  DXF load). `docinvariants` gains `userPolylineVertsBulge.size() * 3 == userPolylineVerts.size()`
+  and "every bulge is finite".
+
+  *Correction (2026-09-02, before any storage code landed).* As first accepted, (a) chose to
+  **widen the vertex stride 3→4 with a rename** (`userPolylineVerts` → `userPolylineVertsXyzB`) on
+  the stated ground that "renaming makes every one of the ~600 access sites a compile error rather
+  than a silently-misread stride." **That ground is false.** The store is `std::vector<float>`;
+  widening it to `x,y,z,bulge` leaves it `std::vector<float>`, so a renamed site that still
+  computes `verts[i*3 + 2]` compiles cleanly and reads the wrong float — the rename catches the
+  *name*, not the *stride arithmetic*. With the rename-widen's only advantage over the parallel
+  array gone, and 401 `userPolylineVerts` reference sites across 16 files to hand-audit with no
+  compiler net, the parallel array is the lower-risk choice: existing XYZ code is untouched, only
+  the ~12 arc-aware sites read the new array, and the ~6 vertex-mutation sites that must mirror it
+  are enumerable and invariant-checked. This is the same call ADR-035 (c) made for feature-line
+  per-vertex data. Recorded rather than silently rewritten, per the ADR-025 correction-note
+  precedent.
+
+  **(b) An all-zero-bulge polyline is bit-for-bit today's behaviour.** Every existing consumer that
+  walks vertex pairs keeps working; it reads a 4th float it can ignore. Curvature-aware behaviour
+  is added as an **`if (bulge != 0)` arc branch** at a fixed, enumerated set of sites — render,
+  snap, pick, extents, length/area, OFFSET, TRIM, FILLET/CHAMFER, transform-preview, `docinvariants`,
+  DXF/DWG/`.gs` IO. That enumeration is an **acceptance condition, not a review habit** (the
+  ADR-035 (g) discipline): a missed site is a curve that silently renders or snaps as a chord.
+
+  **(c) Arc geometry is derived, never stored.** The bulge→(centre, radius, start/end angle, sweep)
+  math already inside `DxfIo.cpp`'s import path is promoted to a pure, unit-tested helper in
+  `util/geom2d` (`BulgeArc(p0, p1, bulge) → ArcSpan`). It has ≥3 present-day uses — the DXF
+  importer, the renderer's tessellation, and the snap engine — so it is a value helper, not a
+  speculative abstraction (§11.4). The renderer tessellates each arc segment to a chord-height
+  tolerance at draw time and feeds the **existing** line/GL path; **no new GL code, no new shader.**
+
+  **(d) POLYLINE gains `ARC` / `LINE` sub-modes.** While drawing (`polylinePhase == NeedNextPoint`)
+  the keywords `ARC` and `LINE` (full words — `A` / `ANGLE` are the existing segment-bearing lock,
+  D-2026-09-02-f) toggle the mode carried on the polyline draft state. Arc mode's default is an arc
+  **tangent to the previous segment**, its far end at the next pick; `RADIUS` and `CANGLE` (included
+  angle) set the next arc segment. `CEnter`, `Second point`, `Direction` are deferred past increment
+  1. `UNDO` removes the last segment. 3DPOLY stays line-only (arc + independent per-vertex Z is out
+  of scope).
+
+  **(e) JOIN becomes arc-aware.** The edge walk in `ExecuteJoinSelection` carries a bulge per edge.
+  An `ARC` entity in the selection contributes one bulge segment; a bulge polyline contributes its
+  per-segment bulges; a `CIRCLE` is refused (no endpoints — the existing pattern). Tangency between
+  joined pieces is **not required** (AutoCAD JOIN does not require it). Non-contiguous selections
+  continue to report which pieces were left out (REQ-201), and the whole operation stays one undo
+  step.
+
+  **(f) File formats.** DXF/DWG export emits group 42 per vertex; the importer **stops
+  tessellating** and stores the parsed bulge directly (removing the straight-chord fallback).
+  `.gs` gains an **additive** per-vertex bulge array read tolerantly with a default of 0 and **no
+  `kGsFormatVersion` bump** (the ADR-020 (d) / ADR-030 precedent) — a legacy drawing loads with
+  every polyline straight. `RECT` and contour/EXTRACT output write bulge 0 and are unaffected.
+
+  **(g) Snapping** on arc segments covers endpoint, midpoint, nearest, **centre** and **quadrant**
+  (the last two new for polylines), plus tangent/perpendicular where the engine already offers them
+  for arcs.
+
+  **(h) Grips:** an arc segment gets a midpoint grip that edits its bulge (AutoCAD behaviour).
+  **Deferred to phase 3.**
+
+- **Rejected alternatives.**
+  - **Widening the vertex stride 3→4 with a rename** (the originally-accepted (a)) — rejected on the
+    correction above: `std::vector<float>` stays `std::vector<float>` through the widening, so the
+    rename does not turn stride arithmetic into compile errors, and 401 reference sites would be
+    hand-audited with no compiler net.
+  - **A distinct `PolyArc` / arc-polyline entity kind with its own store** — rejected: ADR-035 (g)
+    measured this at ~600 sites across 11 files for exactly this store shape, and it still would
+    not satisfy the request, which is lines **and** arcs in **one** entity. A second store makes
+    JOIN's output ambiguous (which store does a mixed join land in?).
+  - **"Faked" arcs — arc mode inserts many short straight segments** — rejected: fails REQ-316's
+    tangent-arc, arc-centre-snap and DXF-bulge-round-trip criteria, bloats every file, and is not
+    editable as a curve. It would be redone as this ADR.
+  - **Bump `kGsFormatVersion`** — rejected: the strict version-equality check would reject older
+    files; additive tolerant keys keep them loadable (the ADR-020 (e) reasoning).
+
+- **Consequences.** The polyline vertex store and its two shadow copies gain a parallel
+  `userPolylineVertsBulge` array, mirrored at the ~6 vertex-mutation sites; one pure `BulgeArc`
+  helper enters `util/geom2d` with tests; ~12 consumer sites gain an `if (bulge != 0)` arc branch,
+  and *every modify command names the arc case or deliberately refuses it* as an acceptance
+  condition; POLYLINE grows `Arc`/`Line` sub-modes and arc-option parsing; JOIN's edge walk carries
+  bulges; the DXF importer's tessellation fallback is removed and the exporter gains group 42;
+  `.gs` gains an additive bulge array with **no version bump**; `docinvariants` gains
+  `userPolylineVertsBulge.size() * 3 == userPolylineVerts.size()` and "every bulge is finite".
+  **Blast radius acknowledged** — this touches
+  the two big command files, the renderer, all of IO, snapping, picking, extents and the invariant
+  checks — which is why it is split into four independently shippable increments, each passing
+  Verification on its own:
+  1. **Storage + POLYLINE arc mode + render + DXF/`.gs` round-trip.**
+  2. **Snap + pick + extents + length/area + Properties** on bulge segments.
+  3. **JOIN of lines + arcs**, and arc-segment grips.
+  4. **TRIM / OFFSET / FILLET / CHAMFER** of bulge polylines.
+
+- **Out of scope and not designed for:** spline / fit-curve / smoothed polylines; polyline segment
+  width and taper (DXF group 40/41); variable global width; arc segments in 3DPOLY; DWG *write* of
+  bulges beyond what ADR-041's R2004 writer already supports.

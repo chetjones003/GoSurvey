@@ -6042,6 +6042,77 @@ capability that does not exist. They are recorded here rather than quietly dropp
   this Statement is written and accepted.
 - Revisions: 2026-09-02 — accepted as a parked scope holder (D-2026-09-02-a, TASK-173).
 
+### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
+
+- Purpose: a polyline today is a chain of straight segments. Real survey and civil linework —
+  road centrelines, edge of pavement, cul-de-sacs, parcel boundaries with curved frontage — mixes
+  straight runs and circular arcs in one connected object. Users need to draw that in one POLYLINE
+  command by switching to an "arc mode", and to build it from existing separate lines and arcs with
+  JOIN. DXF has carried this since the 1980s as the per-vertex **bulge** on an `LWPOLYLINE`; GoSurvey
+  parses the bulge on import and immediately throws it away by breaking the arc into short straight
+  chords, so a curved polyline cannot survive even a round-trip today.
+- Priority: should
+- Type: functional
+- Depends on: ADR-047 (the per-vertex bulge storage decision).
+- Statement: a polyline segment may be a circular arc, recorded as a per-vertex bulge
+  (`tan(θ/4)`, 0 = straight) in a parallel `userPolylineVertsBulge` array beside the vertex store
+  (ADR-047). The behaviour this enables:
+  1. **POLYLINE arc mode.** While POLYLINE is drawing, the keyword `ARC` switches following segments
+     to arc mode and `LINE` switches back. (Full words — `A` and `ANGLE` are the existing
+     segment-bearing lock; D-2026-09-02-f.) In arc mode the default arc is tangent to the previous
+     segment with its far end at the next picked or typed point; the sub-options `RADIUS` and
+     `CANGLE` (included angle) set the next arc segment. `UNDO` removes the last segment whatever the
+     mode, and continues from the previous vertex. `CEnter`, `Second point` and `Direction` are
+     deferred past increment 1.
+  2. **The stored entity is one polyline.** A single polyline holds the straight and the arc
+     segments together; it is not split into separate entities.
+  3. **Every polyline consumer handles arc segments** — rendering (drawn as a true curve),
+     selection by picking on the curve, object snapping (endpoint, midpoint, nearest, centre,
+     quadrant on the arc portion), extents, and length/area.
+  4. **DXF/DWG round-trip.** Exporting a polyline with arc segments writes group-42 bulges on the
+     `LWPOLYLINE`; importing one reads them back without tessellating. A straight polyline is
+     written and read exactly as before.
+  5. **`.gs` round-trip.** A polyline with arc segments saves and reloads unchanged. A `.gs` file
+     written by an older build (no bulge data) loads with every polyline straight.
+  6. **JOIN builds them.** JOIN of two lines sharing an endpoint produces one straight 2-segment
+     polyline (unchanged). JOIN of a line and an arc sharing an endpoint produces one polyline with
+     a straight segment and an arc (bulge) segment. Endpoints must be coincident within the
+     existing JOIN tolerance; pieces that do not connect are left in place and reported by name
+     (REQ-201), never silently dropped.
+  7. **One undo step.** POLYLINE (however many mode switches) and JOIN each undo in a single step,
+     restoring the pre-command drawing state.
+- Acceptance:
+  - Starting POLYLINE, typing `ARC`, picking a point, typing `LINE`, picking a point, and finishing
+    yields exactly one polyline entity with one arc segment followed by one line segment.
+  - The arc segment is tangent to the preceding segment at their shared vertex — the angle between
+    the incoming segment direction and the arc's tangent there is 0 within 1e-4 rad.
+  - `UNDO` during the command removes the most recent segment and the command continues drawing
+    from the previous vertex.
+  - A polyline containing an arc segment: renders as a curve (its tessellation stays within a
+    chord-height tolerance of the true arc); is selected by a pick on the curved part; and reports
+    endpoint / midpoint / nearest / centre / quadrant snaps on the arc part.
+  - Its reported length equals the sum of the straight-segment lengths and the arc-segment arc
+    lengths within REQ-101 tolerance; a hand-computed example (one 3-4-5 leg plus a quarter circle
+    of radius 10) matches.
+  - Saving that polyline to DXF and reloading reproduces every vertex within REQ-101 and every
+    bulge within 1e-6, with no increase in vertex count.
+  - Saving to `.gs` and reloading in a fresh process reproduces the polyline exactly; a pre-ADR-047
+    `.gs` fixture loads with the polyline straight and no error.
+  - JOIN of two lines meeting at a point produces one 2-vertex-pair straight polyline and removes
+    the originals.
+  - JOIN of a line and a tangent arc meeting at a point produces one polyline whose second segment
+    has a non-zero bulge matching the arc's included angle within 1e-6.
+  - JOIN of two objects whose nearest endpoints are farther apart than the JOIN tolerance leaves
+    the drawing unchanged and logs which objects were not joined.
+  - Undo immediately after POLYLINE, and after JOIN, restores the exact pre-command geometry
+    (vertex count, positions, bulges) in one step.
+- Owner-layer: Commands (POLYLINE draft + arc-option parsing, `ExecuteJoinSelection`) / Domain
+  (`util/geom2d` `BulgeArc`, the polyline store rename) / Renderer (arc tessellation into the
+  existing line path) / IO (`DxfIo` group 42, `GsIo` additive bulge array).
+- Status: **accepted (2026-09-02)** — delivered in the four increments ADR-047 lists, each through
+  its own PR and Verification pass.
+- Revisions: 2026-09-02 — proposed and accepted (D-2026-09-02-e, ADR-047, TASK-180).
+
 ---
 
 ## Performance requirements

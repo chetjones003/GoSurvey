@@ -12939,7 +12939,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (!midCmd || vpFreezePick) {
           SelectedEntity hoverHit{};
           float hoverD2 = 0.f;
-          const float hoverTol = std::max(1.e-6f, 8.f * worldPerPx);
+          // Match the model-space rule: hover activates once geometry is inside the cursor aperture.
+          const float hoverTol = std::max(1.e-6f, std::clamp(cmd.objectSnapAperturePx, 4.f, 64.f) * 0.5f * worldPerPx);
           if (PickClosestCadEntity(cmd, static_cast<float>(mLocalX), static_cast<float>(mLocalY), hoverTol,
                                    &hoverHit, &hoverD2)) {
             cmd.viewportHoverEntityValid = true;
@@ -13662,8 +13663,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       break;
     }
     case SelectedEntity::Type::Polyline: {
-      if (cmd.entityGripOrigPolylineXIdx >= 0 &&
-          static_cast<size_t>(cmd.entityGripOrigPolylineXIdx + 1) < cmd.userPolylineVerts.size()) {
+      if (cmd.entityGripOrigPolyBulgeVi >= 0) {  // REQ-316 / ADR-047: arc-segment bulge grip
+        if (static_cast<size_t>(cmd.entityGripOrigPolyBulgeVi) < cmd.userPolylineVertsBulge.size())
+          cmd.userPolylineVertsBulge[static_cast<size_t>(cmd.entityGripOrigPolyBulgeVi)] = cmd.entityGripOrigPolyBulge;
+      } else if (cmd.entityGripOrigPolylineXIdx >= 0 &&
+                 static_cast<size_t>(cmd.entityGripOrigPolylineXIdx + 1) < cmd.userPolylineVerts.size()) {
         cmd.userPolylineVerts[static_cast<size_t>(cmd.entityGripOrigPolylineXIdx)] = cmd.entityGripOrigPolyVertX;
         cmd.userPolylineVerts[static_cast<size_t>(cmd.entityGripOrigPolylineXIdx) + 1] = cmd.entityGripOrigPolyVertY;
       }
@@ -14153,6 +14157,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                 tryGrip(sel, cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1],
                         cmd.userPolylineVerts[xIdx + 2], vi);
               }
+              CadForEachPolylineArcMidGrip(cmd, sel.index, [&](int seg, float mx, float my, float mz) {
+                tryGrip(sel, mx, my, mz, kPolyBulgeGripBase + seg);  // REQ-316 / ADR-047
+              });
             }
             break;
           }
@@ -14246,6 +14253,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           }
           case SelectedEntity::Type::Polyline: {
             const int startV  = cmd.userPolylineOffsets[static_cast<size_t>(bestSel.index)];
+            cmd.entityGripOrigPolyBulgeVi = -1;
+            if (bestWhich >= kPolyBulgeGripBase) {  // REQ-316 / ADR-047: arc-segment bulge grip
+              const int va = startV + (bestWhich - kPolyBulgeGripBase);
+              cmd.entityGripOrigPolyBulgeVi = va;
+              cmd.entityGripOrigPolyBulge = static_cast<size_t>(va) < cmd.userPolylineVertsBulge.size()
+                                                ? cmd.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.f;
+              cmd.entityGripOrigPolylineXIdx = -1;
+              break;
+            }
             const int globalV = startV + bestWhich;
             const size_t xIdx = static_cast<size_t>(globalV) * 3;
             cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
@@ -15115,6 +15131,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                   break;
                 drawGrip(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1], hot(vi2));
               }
+              CadForEachPolylineArcMidGrip(cmd, sel.index, [&](int seg, float mx, float my, float) {
+                drawGrip(mx, my, hot(kPolyBulgeGripBase + seg));  // REQ-316 / ADR-047
+              });
             }
             break;
           }
@@ -16931,6 +16950,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             drawGrip(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1],
                      cmd.userPolylineVerts[xIdx + 2]);
           }
+          // REQ-316 / ADR-047: a midpoint grip on every ARC segment — dragging it changes the bulge.
+          CadForEachPolylineArcMidGrip(cmd, sel.index, [&](int, float mx, float my, float mz) {
+            drawGrip(mx, my, mz);
+          });
         }
       } else if (sel.type == SelectedEntity::Type::Arc) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {

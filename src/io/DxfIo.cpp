@@ -752,6 +752,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
   // be transformed and rebased) and the absolute Z the entity gave it.
   struct ImportPolyVert {
     double x = 0, y = 0, z = 0;
+    double bulge = 0;  // REQ-316 / ADR-047: DXF group 42 on the vertex; 0 = straight
   };
 
   // Store a vertex run AS a polyline (REQ-053's four parallel arrays) rather than as loose segments.
@@ -767,6 +768,13 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     const int baseVert = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back();
     if (st.userPolylineOffsets.empty())
       st.userPolylineOffsets.push_back(baseVert);
+    bool anyBulge = false;
+    for (const ImportPolyVert& p : pts)
+      if (std::fabs(p.bulge) > 1e-12) { anyBulge = true; break; }
+    // REQ-316 / ADR-047: keep the polyline store's bulge array in step. Bulge is preserved verbatim
+    // (the import transform here is rigid + uniform, which maps circular arcs to circular arcs).
+    if (anyBulge && st.userPolylineVertsBulge.size() < st.userPolylineVerts.size() / 3)
+      st.userPolylineVertsBulge.resize(st.userPolylineVerts.size() / 3, 0.0f);
     for (const ImportPolyVert& p : pts) {
       double ox = 0, oy = 0;
       xf.apply(p.x, p.y, &ox, &oy);
@@ -774,6 +782,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       st.userPolylineVerts.push_back(static_cast<float>(ox - st.worldDocumentOriginX));
       st.userPolylineVerts.push_back(static_cast<float>(oy - st.worldDocumentOriginY));
       st.userPolylineVerts.push_back(static_cast<float>(p.z));
+      if (anyBulge || !st.userPolylineVertsBulge.empty())
+        st.userPolylineVertsBulge.push_back(static_cast<float>(p.bulge));
     }
     st.userPolylineOffsets.push_back(baseVert + static_cast<int>(pts.size()));
     st.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
@@ -803,43 +813,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     return r;
   };
 
-  // \p z is the constant elevation the owning polyline sits on (LWPOLYLINE group 38); a bulge arc stays
-  // in that plane, so both the straight and the tessellated path carry it.
-  auto appendBulgeXF = [&](double x0, double y0, double x1, double y1, double bulge, const EntityAttributes& at,
-                           double z = 0.0) {
-    if (std::fabs(bulge) < 1e-12) {
-      appendSegXF(x0, y0, x1, y1, at, z, z);
-      return;
-    }
-    const double thetaMag = 4.0 * std::atan(std::fabs(bulge));
-    const double dx = x1 - x0;
-    const double dy = y1 - y0;
-    const double chord = std::hypot(dx, dy);
-    if (chord < 1e-12 || thetaMag < 1e-12) {
-      appendSegXF(x0, y0, x1, y1, at, z, z);
-      return;
-    }
-    const double R = chord / (2.0 * std::sin(thetaMag * 0.5));
-    const double alpha = std::atan2(dy, dx);
-    const double gamma = (kPi - thetaMag) / 2.0;
-    const double phi = alpha + (bulge >= 0.0 ? gamma : -gamma);
-    const double cx = x0 + R * std::cos(phi);
-    const double cy = y0 + R * std::sin(phi);
-    const double a0 = std::atan2(y0 - cy, x0 - cx);
-    const double a1 = std::atan2(y1 - cy, x1 - cx);
-    double sweep = a1 - a0;
-    if (bulge >= 0.0 && sweep < 0)
-      sweep += 2.0 * kPi;
-    if (bulge < 0.0 && sweep > 0)
-      sweep -= 2.0 * kPi;
-    const int nseg = std::clamp(static_cast<int>(std::ceil(std::fabs(sweep) / (kPi / 24))), 4, 96);
-    for (int s = 0; s < nseg; ++s) {
-      const double u0 = a0 + sweep * (static_cast<double>(s) / static_cast<double>(nseg));
-      const double u1 = a0 + sweep * (static_cast<double>(s + 1) / static_cast<double>(nseg));
-      appendSegXF(cx + R * std::cos(u0), cy + R * std::sin(u0), cx + R * std::cos(u1), cy + R * std::sin(u1), at, z,
-                  z);
-    }
-  };
+  // REQ-316 / ADR-047: the old `appendBulgeXF` lambda that tessellated a bulge arc into loose
+  // segments is gone — POLYLINE/LWPOLYLINE bulges are now stored on the polyline (group 42 ->
+  // per-vertex bulge, see appendPolylineXF), so the arc and the entity both survive the round trip.
 
   auto appendEllipseXF = [&](double cx, double cy, double majx, double majy, double ratio, double t0, double t1,
                              const EntityAttributes& at, double cz = 0.0) {
@@ -1284,27 +1260,14 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
 
       const auto at = base.makeAttr(layerRgb);
       const int nv = static_cast<int>(verts.size());
-      bool anyBulge = false;
-      for (const PolyVtx& pv : verts)
-        anyBulge = anyBulge || std::fabs(pv.bulge) > 1e-12;
-      if (nv >= 2 && !anyBulge) {
-        // The ordinary case: keep the entity's identity (REQ-053, REQ-204's round-trip invariant).
+      if (nv >= 2) {
+        // REQ-316 / ADR-047: bulges are stored on the polyline now (group 42 -> per-vertex bulge),
+        // not tessellated into loose segments — the entity keeps its identity (REQ-053 / REQ-204).
         std::vector<ImportPolyVert> pts;
         pts.reserve(verts.size());
         for (const PolyVtx& pv : verts)
-          pts.push_back(ImportPolyVert{pv.x, pv.y, pv.z});
+          pts.push_back(ImportPolyVert{pv.x, pv.y, pv.z, pv.bulge});
         appendPolylineXF(pts, (flags70 & 1) != 0, at);
-      } else if (nv >= 2) {
-        // A bulge is an arc, and the polyline store carries no per-vertex bulge, so this one is
-        // tessellated into segments as it always was — the shape survives, the object does not
-        // (TASK-083 DEBT-1).
-        for (int vi = 0; vi < nv - 1; ++vi)
-          appendBulgeXF(verts[static_cast<size_t>(vi)].x, verts[static_cast<size_t>(vi)].y,
-                        verts[static_cast<size_t>(vi + 1)].x, verts[static_cast<size_t>(vi + 1)].y,
-                        verts[static_cast<size_t>(vi)].bulge, at);
-        if ((flags70 & 1) != 0)
-          appendBulgeXF(verts[static_cast<size_t>(nv - 1)].x, verts[static_cast<size_t>(nv - 1)].y, verts[0].x, verts[0].y,
-                        verts[static_cast<size_t>(nv - 1)].bulge, at);
       }
 
       i = seqEnd;
@@ -1375,26 +1338,15 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       if (!lw.ltype.empty())
         at.linetype = CadCanonicalLinetypeNameForDxf(lw.ltype);
       const int nv = static_cast<int>(lw.vx.size());
-      bool anyBulge = false;
-      for (double b : lw.vb)
-        anyBulge = anyBulge || std::fabs(b) > 1e-12;
-      if (nv >= 2 && !anyBulge) {
-        // The ordinary case: keep the entity's identity (REQ-053, REQ-204's round-trip invariant).
+      if (nv >= 2) {
+        // REQ-316 / ADR-047: group 42 bulges are stored on the polyline (per-vertex), not
+        // tessellated — the LWPOLYLINE keeps its identity and its arcs (REQ-053 / REQ-204).
         std::vector<ImportPolyVert> pts;
         pts.reserve(lw.vx.size());
         for (int a = 0; a < nv; ++a)
-          pts.push_back(ImportPolyVert{lw.vx[static_cast<size_t>(a)], lw.vy[static_cast<size_t>(a)], lwElev});
+          pts.push_back(ImportPolyVert{lw.vx[static_cast<size_t>(a)], lw.vy[static_cast<size_t>(a)], lwElev,
+                                       lw.vb[static_cast<size_t>(a)]});
         appendPolylineXF(pts, (lw.flags & 1) != 0, at);
-      } else if (nv >= 2) {
-        // Bulges are arcs and the polyline store carries none, so this one tessellates into segments
-        // (TASK-083 DEBT-1). Reading group 42 at all is new: the arcs used to be flattened to their
-        // chords, silently changing the geometry rather than only its object identity.
-        for (int a = 0; a < nv - 1; ++a)
-          appendBulgeXF(lw.vx[static_cast<size_t>(a)], lw.vy[static_cast<size_t>(a)], lw.vx[static_cast<size_t>(a + 1)],
-                        lw.vy[static_cast<size_t>(a + 1)], lw.vb[static_cast<size_t>(a)], at, lwElev);
-        if ((lw.flags & 1) != 0 && nv >= 3)
-          appendBulgeXF(lw.vx[static_cast<size_t>(nv - 1)], lw.vy[static_cast<size_t>(nv - 1)], lw.vx[0], lw.vy[0],
-                        lw.vb[static_cast<size_t>(nv - 1)], at, lwElev);
       }
       i = j;
       continue;
@@ -3694,6 +3646,21 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       for (int vi = v0; vi < v1; ++vi)
         rec.vertices.emplace_back(std::to_string(worldX(st.userPolylineVerts[static_cast<size_t>(vi * 3)])),
                                   std::to_string(worldY(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)])));
+      // REQ-316 / ADR-047: per-vertex bulge (group 42). Only emitted when this polyline has any
+      // curved segment; a straight polyline writes no group 42 and round-trips exactly as before.
+      {
+        bool anyBulge = false;
+        for (int vi = v0; vi < v1 && vi < static_cast<int>(st.userPolylineVertsBulge.size()); ++vi)
+          if (st.userPolylineVertsBulge[static_cast<size_t>(vi)] != 0.0f) { anyBulge = true; break; }
+        if (anyBulge) {
+          rec.bulges.reserve(static_cast<size_t>(v1 - v0));
+          for (int vi = v0; vi < v1; ++vi) {
+            const float b = vi < static_cast<int>(st.userPolylineVertsBulge.size())
+                                ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.0f;
+            rec.bulges.push_back(b == 0.0f ? std::string("0") : std::to_string(static_cast<double>(b)));
+          }
+        }
+      }
       emitLwPolylineRecord(rec);
       ++nPolyOut;
     }

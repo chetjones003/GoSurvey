@@ -119,6 +119,10 @@ struct DxfLwPolylineRecord {
   std::string transparency440;
   /// Vertices in order, each an already-formatted (x, y) pair. Groups 10 / 20, repeated per vertex.
   std::vector<std::pair<std::string, std::string>> vertices;
+  /// REQ-316 / ADR-047: optional per-vertex bulge (already-formatted, group 42, trailing that
+  /// vertex's 10/20 pair). Empty, or exactly one entry per vertex; an entry equal to "0" / "" is
+  /// omitted from the output (AutoCAD's own convention — a straight vertex writes no group 42).
+  std::vector<std::string> bulges;
   /// Group 70 bit 1: the polyline closes back to its first vertex. A rectangle is always closed.
   bool closed = false;
   std::string elevation38 = "0.0";  ///< group 38
@@ -157,9 +161,11 @@ inline void DxfAppendLwPolylineRecord(const DxfLwPolylineRecord& r, std::vector<
   add(90, std::to_string(r.vertices.size()));
   add(70, r.closed ? "1" : "0");
   add(38, r.elevation38);
-  for (const auto& v : r.vertices) {
-    add(10, v.first);
-    add(20, v.second);
+  for (size_t k = 0; k < r.vertices.size(); ++k) {
+    add(10, r.vertices[k].first);
+    add(20, r.vertices[k].second);
+    if (k < r.bulges.size() && !r.bulges[k].empty() && r.bulges[k] != "0")
+      add(42, r.bulges[k]);  // REQ-316 / ADR-047: trails the 10/20 pair of the vertex it bulges
   }
   add(210, r.extrusionX);
   add(220, r.extrusionY);

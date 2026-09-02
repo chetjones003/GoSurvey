@@ -778,6 +778,10 @@ if(GOSURVEY_BUILD_TESTS)
     # where in a stall episode a frame sits — and its edges (began / ended) are what gate the one
     # diagnostic snapshot per episode, so both are pinned here with no GL context.
     tests/FrameWatchTests.cpp
+    # REQ-316 / ADR-047: the bulge -> arc (centre, radius, start, sweep) helper and arc-segment
+    # length. Pure geom2d, double math; the tangency and quarter-circle cases are what POLYLINE arc
+    # mode and JOIN both rest on, and a sign error here is silent in plan view.
+    tests/BulgeArcTests.cpp
     tests/UpdateCheckTests.cpp
     # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the
     # tab-index sentinel invariant and the thumbnail-cache naming/eviction (header-only, pure).
@@ -836,6 +840,9 @@ if(GOSURVEY_BUILD_TESTS)
     # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose:
     # this is where REQ-101 is actually enforced, and it must be testable without a GL context.
     src/util/curveintersect.cpp
+    # REQ-316 / ADR-047 bulge -> arc math (BulgeArcTests). Pure geom2d — <cmath> only — so the
+    # quarter-circle and tangency cases POLYLINE arc mode and JOIN rest on are pinned without GL.
+    src/util/geom2d.cpp
     # REQ-100 bench scene generator + frame statistics. Pure and deterministic by design.
     src/util/benchscene.cpp
     # REQ-063 mesh validation + bounds + normals. Pure; the GPU-facing checks must be testable.

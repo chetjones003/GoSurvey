@@ -197,8 +197,30 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     float ly = curYf;
     using SAP = AppCommandState::SegmentAnglePickPhase;
     const auto& d = cmd.polylineDraftVerts;
-    for (size_t i = 0; i + 5 < d.size(); i += 3)
-      PushRubberSegViewRel(rubberLines, d[i], d[i + 1], d[i + 3], d[i + 4], 0., 0., d[i + 2], d[i + 5]);
+    // REQ-316 / ADR-047: preview an arc-mode segment as a curve, not a chord — both the segments
+    // already committed to the draft and the one being rubber-banded to the cursor.
+    auto pushMaybeArc = [&](double x0, double y0, double x1, double y1, double z0, double z1, float bulge) {
+      const BulgeArcSpan a = (bulge != 0.f) ? BulgeArc(x0, y0, x1, y1, static_cast<double>(bulge)) : BulgeArcSpan{};
+      if (!a.valid) {
+        PushRubberSegViewRel(rubberLines, x0, y0, x1, y1, 0., 0., static_cast<float>(z0), static_cast<float>(z1));
+        return;
+      }
+      constexpr double kPi = 3.14159265358979323846;
+      const int n = std::clamp(static_cast<int>(std::ceil(std::fabs(a.sweep) / (kPi / 24.0))), 2, 96);
+      double px = x0, py = y0;
+      for (int s = 1; s <= n; ++s) {
+        const double u = a.startAngle + a.sweep * (static_cast<double>(s) / n);
+        const double qx = a.cx + a.radius * std::cos(u);
+        const double qy = a.cy + a.radius * std::sin(u);
+        PushRubberSegViewRel(rubberLines, px, py, qx, qy, 0., 0., static_cast<float>(z0), static_cast<float>(z1));
+        px = qx;
+        py = qy;
+      }
+    };
+    for (size_t i = 0, seg = 0; i + 5 < d.size(); i += 3, ++seg) {
+      const float b = seg < cmd.polylineDraftBulge.size() ? cmd.polylineDraftBulge[seg] : 0.f;
+      pushMaybeArc(d[i], d[i + 1], d[i + 3], d[i + 4], d[i + 2], d[i + 5], b);
+    }
 
     if (cmd.segmentAnglePickPhase == SAP::WaitP2)
       PushRubberSegViewRel(rubberLines, cmd.segmentPickRefX1, cmd.segmentPickRefY1, curXf, curYf, 0., 0.,
@@ -218,8 +240,11 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
                                          false);
       else
         ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
-      PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
-                           zc);
+      // REQ-316 / ADR-047: in ARC mode the rubber-band to the cursor previews the pending arc,
+      // computed by the SAME function the commit uses so what is drawn is what will be committed.
+      const float pendBulge =
+          cmd.polylineArcMode ? CadPolylineDraftBulgeForNextPoint(cmd, lx, ly) : 0.f;
+      pushMaybeArc(cmd.anchorX, cmd.anchorY, lx, ly, cmd.anchorZ, zc, pendBulge);
     }
   }
 

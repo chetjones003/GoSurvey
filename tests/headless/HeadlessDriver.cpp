@@ -1761,6 +1761,100 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         }
       }
       return true;
+    } else if (what == "POLYBULGE") {
+      // EXPECT POLYBULGE <polylineIndex> <vertexIndexWithinPolyline> <bulge> — one polyline
+      // segment's per-vertex bulge (REQ-316 / ADR-047). A count or a log line cannot state that a
+      // segment is the RIGHT amount of curved; a wrong sign or a flattened arc is silent in plan
+      // view, the same reason EXPECT LINEXYZ exists for the UCS work. An empty bulge array reads as
+      // 0 for every vertex (a straight polyline).
+      std::istringstream is(arg);
+      long pi = -1, vi = -1;
+      double want = 0.0;
+      if (!(is >> pi) || !(is >> vi) || !(is >> want)) {
+        Fail(run, "parse", "EXPECT POLYBULGE needs <polylineIndex> <vertexIndex> <bulge>", sourceLine);
+        return false;
+      }
+      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.userPolylineOffsets.size()) {
+        Fail(run, "expect", "EXPECT POLYBULGE: no polyline at index " + std::to_string(pi), sourceLine);
+        return false;
+      }
+      const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      if (vi < 0 || vi >= (v1 - v0)) {
+        Fail(run, "expect", "EXPECT POLYBULGE: vertex index out of range for that polyline", sourceLine);
+        return false;
+      }
+      const size_t gv = static_cast<size_t>(v0 + vi);
+      const double got = gv < run.st.userPolylineVertsBulge.size()
+                             ? static_cast<double>(run.st.userPolylineVertsBulge[gv])
+                             : 0.0;
+      if (std::fabs(got - want) > 1e-4) {
+        char msg[192];
+        std::snprintf(msg, sizeof(msg), "EXPECT POLYBULGE %ld %ld: is %.6f, expected %.6f", pi, vi, got, want);
+        Fail(run, "expect", msg, sourceLine);
+        return false;
+      }
+      return true;
+    } else if (what == "PICKAT") {
+      // EXPECT PICKAT <x> <y> <tolWorld> <NONE|LINE|ARC|POLYLINE|CIRCLE|ELLIPSE> — what
+      // PickClosestCadEntity resolves at a world point within a world tolerance. The screen-space
+      // hover/click plumbing has no headless equivalent, but the geometry math (REQ-316: a curved
+      // polyline segment / an arc must be pickable ON the curve, not only near its chord) does.
+      std::istringstream is(arg);
+      double px = 0.0, py = 0.0, tol = 0.0;
+      std::string want;
+      if (!(is >> px >> py >> tol >> want)) {
+        Fail(run, "parse", "EXPECT PICKAT needs <x> <y> <tolWorld> <TYPE>", sourceLine);
+        return false;
+      }
+      SelectedEntity hit{};
+      float d2 = 0.f;
+      const bool got = PickClosestCadEntity(run.st, px, py, static_cast<float>(tol), &hit, &d2, nullptr);
+      const std::string gotType =
+          !got ? "NONE"
+               : (hit.type == SelectedEntity::Type::LineSeg     ? "LINE"
+                  : hit.type == SelectedEntity::Type::Arc        ? "ARC"
+                  : hit.type == SelectedEntity::Type::Polyline   ? "POLYLINE"
+                  : hit.type == SelectedEntity::Type::Circle     ? "CIRCLE"
+                  : hit.type == SelectedEntity::Type::Ellipse    ? "ELLIPSE"
+                                                                 : "OTHER");
+      if (gotType != UpperAscii(want)) {
+        Fail(run, "expect",
+             "EXPECT PICKAT (" + std::to_string(px) + "," + std::to_string(py) + " tol " +
+                 std::to_string(tol) + "): got " + gotType + ", expected " + UpperAscii(want),
+             sourceLine);
+        return false;
+      }
+      return true;
+    } else if (what == "POLYARCS") {
+      // EXPECT POLYARCS <polylineIndex> <count> — how many of a polyline's segments are curved
+      // (non-zero bulge). Direction-independent, so it is the right assertion for a JOIN result
+      // whose Eulerian walk may traverse an arc either way (REQ-316 / ADR-047).
+      std::istringstream is(arg);
+      long pi = -1, want = -1;
+      if (!(is >> pi) || !(is >> want)) {
+        Fail(run, "parse", "EXPECT POLYARCS needs <polylineIndex> <count>", sourceLine);
+        return false;
+      }
+      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.userPolylineOffsets.size()) {
+        Fail(run, "expect", "EXPECT POLYARCS: no polyline at index " + std::to_string(pi), sourceLine);
+        return false;
+      }
+      const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      long got = 0;
+      for (int vi = v0; vi < v1; ++vi)
+        if (static_cast<size_t>(vi) < run.st.userPolylineVertsBulge.size() &&
+            std::fabs(run.st.userPolylineVertsBulge[static_cast<size_t>(vi)]) > 1e-9)
+          ++got;
+      if (got != want) {
+        Fail(run, "expect",
+             "EXPECT POLYARCS " + std::to_string(pi) + ": " + std::to_string(got) +
+                 " curved segments, expected " + std::to_string(want),
+             sourceLine);
+        return false;
+      }
+      return true;
     } else if (what == "CIRCLEXYZ") {
       // EXPECT CIRCLEXYZ <index> <cx> <cy> <cz> <r> <nx> <ny> <nz> — one circle's centre in WORLD
       // coordinates, its radius, and its PLANE NORMAL (REQ-312).

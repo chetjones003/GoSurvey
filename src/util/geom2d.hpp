@@ -28,6 +28,30 @@ void CirclePointViewRel(double localCx, double localCy, double anchorX, double a
 /// Point on a circle in world space (double precision: center + radius * trig).
 void CirclePointWorld(double cx, double cy, double r, double angleRad, double* outX, double* outY);
 
+/// Circular arc that a DXF-style bulge (`tan(theta/4)`) turns a chord p0->p1 into (ADR-047).
+/// `valid` is false for a straight segment (|bulge| ~ 0), a degenerate chord, or a zero sweep —
+/// callers then treat p0->p1 as a line. Angles are radians; `sweep` is signed (CCW positive) and
+/// its magnitude is the arc's included angle. All math is double precision.
+struct BulgeArcSpan {
+  bool valid = false;
+  double cx = 0.0, cy = 0.0;  // arc centre
+  double radius = 0.0;
+  double startAngle = 0.0;  // atan2(p0 - centre)
+  double sweep = 0.0;       // signed; endAngle = startAngle + sweep
+};
+[[nodiscard]] BulgeArcSpan BulgeArc(double x0, double y0, double x1, double y1, double bulge);
+
+/// Arc length of the segment p0->p1 carrying `bulge`; the plain chord length when it is straight.
+[[nodiscard]] double BulgeSegmentLength(double x0, double y0, double x1, double y1, double bulge);
+
+/// The DXF bulge for an arc from (ax,ay) to (bx,by) that also passes through (px,py) — used when a
+/// grip drags an arc segment's midpoint. 0 when the three points are collinear or degenerate.
+[[nodiscard]] double ArcBulgeThrough(double ax, double ay, double px, double py, double bx, double by);
+
+/// Exact squared distance from (px,py) to the circular arc `span` (centre, radius, start, sweep).
+/// Analytic — no sampling — so a hover/pick aperture means the same thing on a curve as on a line.
+[[nodiscard]] double PointArcDistanceSq(double px, double py, const BulgeArcSpan& span);
+
 void AppendLineSeg3(std::vector<float>& out, double x0, double y0, double z, double x1, double y1);
 
 /// Tessellated arc/ellipse as GL_LINES triplets in world coordinates (double math).
