@@ -125,12 +125,41 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
       static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
   auto emit = [&](int a, int b) {
     const size_t A = static_cast<size_t>(a) * 3, B = static_cast<size_t>(b) * 3;
-    out->push_back(cmd.userPolylineVerts[A]);
-    out->push_back(cmd.userPolylineVerts[A + 1]);
-    out->push_back(cmd.userPolylineVerts[A + 2]);
-    out->push_back(cmd.userPolylineVerts[B]);
-    out->push_back(cmd.userPolylineVerts[B + 1]);
-    out->push_back(cmd.userPolylineVerts[B + 2]);
+    const float za = cmd.userPolylineVerts[A + 2];
+    // REQ-316 / ADR-047: a curved segment is traced as an arc, not a chord, so the selection /
+    // hover highlight follows the shape the renderer drew.
+    const float bulge =
+        static_cast<size_t>(a) < cmd.userPolylineVertsBulge.size() ? cmd.userPolylineVertsBulge[static_cast<size_t>(a)] : 0.f;
+    const BulgeArcSpan arc = (bulge != 0.f)
+                                 ? BulgeArc(cmd.userPolylineVerts[A], cmd.userPolylineVerts[A + 1],
+                                            cmd.userPolylineVerts[B], cmd.userPolylineVerts[B + 1],
+                                            static_cast<double>(bulge))
+                                 : BulgeArcSpan{};
+    if (!arc.valid) {
+      out->push_back(cmd.userPolylineVerts[A]);
+      out->push_back(cmd.userPolylineVerts[A + 1]);
+      out->push_back(za);
+      out->push_back(cmd.userPolylineVerts[B]);
+      out->push_back(cmd.userPolylineVerts[B + 1]);
+      out->push_back(cmd.userPolylineVerts[B + 2]);
+      return;
+    }
+    constexpr double kPi = 3.14159265358979323846;
+    const int n = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 24.0))), 2, 96);
+    double px = cmd.userPolylineVerts[A], py = cmd.userPolylineVerts[A + 1];
+    for (int s = 1; s <= n; ++s) {
+      const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / n);
+      const double qx = arc.cx + arc.radius * std::cos(u);
+      const double qy = arc.cy + arc.radius * std::sin(u);
+      out->push_back(static_cast<float>(px));
+      out->push_back(static_cast<float>(py));
+      out->push_back(za);
+      out->push_back(static_cast<float>(qx));
+      out->push_back(static_cast<float>(qy));
+      out->push_back(za);
+      px = qx;
+      py = qy;
+    }
   };
   for (int vi = v0; vi + 1 < v1; ++vi)
     emit(vi, vi + 1);

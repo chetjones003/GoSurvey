@@ -4892,6 +4892,12 @@ void ApplyCopySurveyDuplicateModalResult(AppCommandState& st, bool applySurveyDu
 
 bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);
 
+/// REQ-316 / ADR-047: the bulge for the segment leaving the last POLYLINE draft vertex if the next
+/// point were (x,y). 0 in LINE mode; in ARC mode the arc is tangent to the previous segment unless
+/// a radius or included angle was typed. Shared by the vertex-commit path and the live preview so
+/// the drawn arc matches the committed one exactly.
+float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, float y);
+
 /// Viewport left-click during active commands.
 ///
 /// \param localX,localY  **LOCAL** storage coordinates, NOT world — `world = local +

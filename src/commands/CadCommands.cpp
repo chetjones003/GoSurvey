@@ -26151,7 +26151,7 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
 // REQ-316 / ADR-047: the bulge for the segment leaving the last draft vertex, given a new point
 // (x,y). In LINE mode the answer is always 0. In ARC mode the arc is tangent to the previous
 // segment's end direction unless a radius or an included angle was typed for this pick.
-static float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, float y) {
+float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, float y) {
   if (!st.polylineArcMode)
     return 0.f;
   const size_t nv = st.polylineDraftVerts.size() / 3;
