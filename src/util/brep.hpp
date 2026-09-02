@@ -223,7 +223,19 @@ enum class Problem {
   /// A profile arc that curves inward (a reflex bulge). The face it would sweep has its outward
   /// normal pointing toward the cylinder axis, which \ref Surface has no way to express — there is
   /// no "reversed" flag. Supported once the booleans force a general answer to inward-curving faces.
-  ProfileArcReflex
+  ProfileArcReflex,
+
+  // --- Revolve (REQ-314 increment 2). ---
+  NonPositiveAngle,           ///< A revolve angle that is zero, not finite, or beyond a full turn.
+  RevolveAxisDegenerate,      ///< A revolve axis whose direction is zero or not finite.
+  RevolveAxisNotInPlane,      ///< A revolve axis that does not lie in the profile plane.
+  RevolveProfileCrossesAxis,  ///< A profile that straddles the axis — the revolved solid would pass through itself.
+  /// A revolved profile that does not reach the axis, or touches it in more than one place. Increment
+  /// 2a builds a solid filled from the axis out to a single-valued outer curve, so an inner face
+  /// (one whose material is on its +radial side) cannot arise — and a hollow revolve is a boolean
+  /// SUBTRACT, not a profile shape.
+  RevolveProfileMissesAxis,
+  RevolveArcInProfile         ///< An arc edge in a revolved profile (increment 2b — sphere / torus portions).
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -325,6 +337,25 @@ struct Profile {
 /// (\ref Problem::ProfileSelfIntersects), and a degenerate placement frame
 /// (\ref Problem::DegenerateFrame).
 [[nodiscard]] bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWhy);
+
+/// Revolve \p profile about the axis through \p axisPoint in direction \p axisDir, through
+/// \p angleRad radians (signed; the sign is the sweep sense about \p axisDir, `0 < |angleRad| <=
+/// 2*pi`), and return the solid in \p out.
+///
+/// The axis **must lie in the profile's plane**, and the profile **must not cross it** (touching is
+/// fine — that is how a pole is formed). A straight profile edge sweeps a \ref SurfaceKind::Plane
+/// (edge perpendicular to the axis), a \ref SurfaceKind::Cylinder (parallel), or a
+/// \ref SurfaceKind::Cone (skew). A partial revolve closes with two planar cap faces; a full revolve
+/// closes on itself.
+///
+/// This is increment 2 of REQ-314: straight profile edges only. An **arc** edge is refused
+/// (\ref Problem::RevolveArcInProfile) — a revolved arc sweeps a sphere or torus portion, which is
+/// increment 2b. Nothing is stored unless the result passes \ref Validate (REQ-201). Also refuses a
+/// degenerate axis (\ref Problem::RevolveAxisDegenerate), an axis off the plane
+/// (\ref Problem::RevolveAxisNotInPlane), a profile that straddles the axis
+/// (\ref Problem::RevolveProfileCrossesAxis), and a bad angle (\ref Problem::NonPositiveAngle).
+[[nodiscard]] bool Revolve(const Profile& profile, const Vec3& axisPoint, const Vec3& axisDir,
+                           double angleRad, Solid* out, Problem* outWhy);
 
 // ---------------------------------------------------------------------------------------------
 // Validity.

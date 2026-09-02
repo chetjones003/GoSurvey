@@ -1346,3 +1346,176 @@ TEST_CASE("Extrude refuses bad input by name and stores nothing", "[brep][req314
     REQUIRE(why == Problem::ProfileArcReflex);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Feature operations — Revolve (REQ-314 / ADR-046 increment 2, GitHub issue #147).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Revolve of a rectangle on the axis is the cylinder the primitive builder makes", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 4.0, h = 9.0;
+  // A rectangle with its left edge ON the Z axis: (0,0)-(4,0)-(4,9)-(0,9), in the world XZ plane.
+  brep::Profile pr;
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{0, 1, 0}, &xz));  // plane normal +Y -> plane is XZ
+  pr.plane = xz;
+  pr.vertices = {ucs::PlaneToWorld(xz, {0, 0}), ucs::PlaneToWorld(xz, {r, 0}),
+                 ucs::PlaneToWorld(xz, {r, h}), ucs::PlaneToWorld(xz, {0, h})};
+  pr.edges.assign(4, brep::ProfileEdge{});
+
+  Solid rev;
+  REQUIRE(brep::Revolve(pr, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &rev, &why));
+  REQUIRE(brep::Validate(rev) == Problem::Ok);
+
+  const brep::MassProperties m = brep::ComputeMassProperties(rev);
+  REQUIRE(m.valid);
+  REQUIRE(m.volume == Approx(kPi * r * r * h).epsilon(1e-9));
+  REQUIRE(m.surfaceArea == Approx(2.0 * kPi * r * r + 2.0 * kPi * r * h).epsilon(1e-9));
+}
+
+TEST_CASE("Revolve of a right triangle on the axis is a cone", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 5.0, h = 12.0;
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  // (0,0) base centre, (r,0) base rim, (0,h) apex.
+  pr.vertices = {ucs::PlaneToWorld(xz, {0, 0}), ucs::PlaneToWorld(xz, {r, 0}), ucs::PlaneToWorld(xz, {0, h})};
+  pr.edges.assign(3, brep::ProfileEdge{});
+
+  Solid rev;
+  REQUIRE(brep::Revolve(pr, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &rev, &why));
+  REQUIRE(brep::Validate(rev) == Problem::Ok);
+  const brep::MassProperties m = brep::ComputeMassProperties(rev);
+  REQUIRE(m.valid);
+  REQUIRE(m.volume == Approx(kPi * r * r * h / 3.0).epsilon(1e-9));
+  const double slant = std::sqrt(r * r + h * h);
+  REQUIRE(m.surfaceArea == Approx(kPi * r * r + kPi * r * slant).epsilon(1e-9));
+}
+
+TEST_CASE("Revolve volume obeys Pappus's theorem, partial and full", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  // An L touching the axis: (0,0)-(3,0)-(3,1)-(1,1)-(1,4)-(0,4). Area = 3*1 + 1*3 = 6.
+  // Centroid r = (3*1*1.5 + 1*3*0.5) / 6 = (4.5 + 1.5) / 6 = 1.0.
+  const std::vector<ucs::Point2D> pts = {{0, 0}, {3, 0}, {3, 1}, {1, 1}, {1, 4}, {0, 4}};
+  for (const ucs::Point2D& q : pts)
+    pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  pr.edges.assign(pts.size(), brep::ProfileEdge{});
+  const double area = 6.0, rc = 1.0;
+
+  SECTION("full turn") {
+    Solid rev;
+    REQUIRE(brep::Revolve(pr, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &rev, &why));
+    REQUIRE(brep::ComputeMassProperties(rev).volume == Approx(kTwoPiTest * rc * area).epsilon(1e-9));
+    // A coarse-mesh sanity check: the tessellation tracks the shape (inscribed, so a little under).
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(rev, 0.001, &t, &why));
+    const double want = kTwoPiTest * rc * area;
+    REQUIRE(TessellatedVolume(t) > 0.99 * want);
+    REQUIRE(TessellatedVolume(t) < 1.001 * want);
+  }
+  SECTION("a 90-degree wedge, with its two caps") {
+    Solid rev;
+    REQUIRE(brep::Revolve(pr, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kPi / 2.0, &rev, &why));
+    REQUIRE(brep::Validate(rev) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(rev).volume == Approx((kPi / 2.0) * rc * area).epsilon(1e-9));
+    // The two caps are each the profile area.
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(rev, 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+}
+
+TEST_CASE("Revolve stays accurate on a tilted axis at survey magnitude", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 3.0, h = 8.0;
+  // Axis along a tilted direction, profile plane containing it, anchored at a state-plane point.
+  const Vec3 anchor{3.5e6, 1.24e7, 300.0};
+  const Vec3 axisDir = ray3d::Normalize(Vec3{0.4, -0.2, 1.0});
+  ucs::Ucs plane;
+  // plane normal perpendicular to the axis: any vector orthogonal to axisDir.
+  const Vec3 nrm = ray3d::Normalize(ray3d::Cross(axisDir, Vec3{1, 0, 0}));
+  REQUIRE(ucs::FromNormal(anchor, nrm, &plane));
+  // Rebuild the plane so its X axis is the radial direction and Y is the axis.
+  ucs::Ucs pl2;
+  pl2.origin = anchor;
+  pl2.zAxis = nrm;
+  pl2.yAxis = axisDir;
+  pl2.xAxis = ray3d::Normalize(ray3d::Cross(pl2.yAxis, pl2.zAxis));
+  REQUIRE(ucs::IsRightHandedOrthonormal(pl2, 1e-9));
+
+  brep::Profile pr;
+  pr.plane = pl2;
+  pr.vertices = {ucs::PlaneToWorld(pl2, {0, 0}), ucs::PlaneToWorld(pl2, {r, 0}),
+                 ucs::PlaneToWorld(pl2, {r, h}), ucs::PlaneToWorld(pl2, {0, h})};
+  pr.edges.assign(4, brep::ProfileEdge{});
+
+  Solid rev;
+  REQUIRE(brep::Revolve(pr, anchor, axisDir, kTwoPiTest, &rev, &why));
+  REQUIRE(brep::Validate(rev) == Problem::Ok);
+  const brep::MassProperties m = brep::ComputeMassProperties(rev);
+  REQUIRE(m.valid);
+  REQUIRE(m.volume == Approx(kPi * r * r * h).epsilon(1e-6));
+  REQUIRE(m.surfaceArea == Approx(2.0 * kPi * r * r + 2.0 * kPi * r * h).epsilon(1e-6));
+}
+
+TEST_CASE("Revolve refuses bad input by name and stores nothing", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{0, 1, 0}, &xz));
+  brep::Profile onAxisRect;
+  onAxisRect.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{0, 0}, {4, 0}, {4, 6}, {0, 6}})
+    onAxisRect.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  onAxisRect.edges.assign(4, brep::ProfileEdge{});
+  Solid s;
+
+  SECTION("a zero angle") {
+    REQUIRE_FALSE(brep::Revolve(onAxisRect, Vec3{0, 0, 0}, Vec3{0, 0, 1}, 0.0, &s, &why));
+    REQUIRE(why == Problem::NonPositiveAngle);
+  }
+  SECTION("an angle past a full turn") {
+    REQUIRE_FALSE(brep::Revolve(onAxisRect, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest * 1.5, &s, &why));
+    REQUIRE(why == Problem::NonPositiveAngle);
+  }
+  SECTION("a zero-length axis") {
+    REQUIRE_FALSE(brep::Revolve(onAxisRect, Vec3{0, 0, 0}, Vec3{0, 0, 0}, kPi, &s, &why));
+    REQUIRE(why == Problem::RevolveAxisDegenerate);
+  }
+  SECTION("an axis not in the profile plane") {
+    // The plane normal itself is the most out-of-plane a direction can be.
+    REQUIRE_FALSE(brep::Revolve(onAxisRect, Vec3{0, 0, 0}, Vec3{0, 1, 0}, kPi, &s, &why));
+    REQUIRE(why == Problem::RevolveAxisNotInPlane);
+  }
+  SECTION("a profile that does not touch the axis") {
+    brep::Profile tube;
+    tube.plane = xz;
+    for (const ucs::Point2D& q : {ucs::Point2D{2, 0}, {4, 0}, {4, 6}, {2, 6}})
+      tube.vertices.push_back(ucs::PlaneToWorld(xz, q));
+    tube.edges.assign(4, brep::ProfileEdge{});
+    REQUIRE_FALSE(brep::Revolve(tube, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &s, &why));
+    REQUIRE(why == Problem::RevolveProfileMissesAxis);
+  }
+  SECTION("a profile that straddles the axis") {
+    brep::Profile straddle;
+    straddle.plane = xz;
+    for (const ucs::Point2D& q : {ucs::Point2D{-2, 0}, {3, 0}, {3, 5}, {-2, 5}})
+      straddle.vertices.push_back(ucs::PlaneToWorld(xz, q));
+    straddle.edges.assign(4, brep::ProfileEdge{});
+    REQUIRE_FALSE(brep::Revolve(straddle, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &s, &why));
+    REQUIRE(why == Problem::RevolveProfileCrossesAxis);
+  }
+  SECTION("an arc in the profile") {
+    brep::Profile arced = onAxisRect;
+    arced.edges[1].arc = true;
+    arced.edges[1].centre = ucs::PlaneToWorld(xz, {4, 3});
+    arced.edges[1].sweep = kPi / 4.0;
+    REQUIRE_FALSE(brep::Revolve(arced, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &s, &why));
+    REQUIRE(why == Problem::RevolveArcInProfile);
+  }
+}
