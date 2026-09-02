@@ -2633,6 +2633,215 @@ struct BossStub {
   return Succeed(outWhy);
 }
 
+struct SphereShape {
+  Vec3 centre;
+  double radius = 0.0;
+};
+
+/// Recognise \p s as one sphere (two longitude half-faces, two pole vertices, two meridian seams).
+[[nodiscard]] bool ClassifySphere(const Solid& s, SphereShape* out) {
+  if (s.faces.size() != 2 || s.vertices.size() != 2 || s.edges.size() != 2)
+    return false;
+  for (const Face& f : s.faces)
+    if (f.surface.kind != SurfaceKind::Sphere)
+      return false;
+  const Surface& sf = s.faces[0].surface;
+  if (!(sf.radius > 0.0))
+    return false;
+  out->centre = sf.frame.origin;
+  out->radius = sf.radius;
+  return true;
+}
+
+/// The cap of a sphere of \p radius centred at `frame.origin` on the **+`frame.zAxis`** side of the
+/// plane at height \p cutZ along that axis (`|cutZ| < radius`). Two longitude half-faces of the
+/// sphere plus one planar disk closing the cut. Built canonically and placed into \p frame.
+[[nodiscard]] bool BuildSphericalCap(const ucs::Ucs& frame, double radius, double cutZ, Solid* out,
+                                     Problem* outWhy) {
+  if (!(radius > 0.0) || !(std::fabs(cutZ) < radius))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double vc = std::asin(std::clamp(cutZ / radius, -1.0, 1.0));
+  const double rc = std::sqrt(std::max(0.0, radius * radius - cutZ * cutZ));
+  Solid s;
+  const Vec3 origin{0.0, 0.0, 0.0};
+  const int c0 = AddVertex(&s, Vec3{rc, 0.0, cutZ});
+  const int c1 = AddVertex(&s, Vec3{-rc, 0.0, cutZ});
+  const int np = AddVertex(&s, Vec3{0.0, 0.0, radius});
+  const int cc0 = AddArc(&s, c0, c1, Vec3{0.0, 0.0, cutZ}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int cc1 = AddArc(&s, c1, c0, Vec3{0.0, 0.0, cutZ}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int md0 = AddArc(&s, c0, np, origin, Vec3{0.0, -1.0, 0.0}, kHalfPi - vc);
+  const int md1 = AddArc(&s, c1, np, origin, Vec3{0.0, 1.0, 0.0}, kHalfPi - vc);
+  auto sphereHalf = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Sphere;
+    f.surface.radius = radius;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.vStart = vc;
+    f.vEnd = kHalfPi;
+    Loop lp;
+    lp.uses = std::move(uses);
+    f.loops.push_back(std::move(lp));
+    s.faces.push_back(std::move(f));
+  };
+  sphereHalf(0.0, kPi, {{md1, false}, {md0, true}, {cc0, false}});
+  sphereHalf(kPi, kTwoPi, {{md0, false}, {md1, true}, {cc1, false}});
+  s.faces.push_back(
+      MakePlaneFace(Vec3{0.0, 0.0, cutZ}, Vec3{0.0, 0.0, -1.0}, {{cc1, true}, {cc0, true}}));
+  AddSingleShell(&s);
+  PlaceInFrame(&s, frame);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+/// \p planar with a spherical-cap boss on face \p faceIdx: the face is bored open at the cut circle
+/// and the sphere cap (no disk) carries the material outward. \p axis points out of \p planar (the
+/// face's outward normal); \p cutZ is the plane's height along \p axis from \p centre.
+[[nodiscard]] bool BuildSphereBoss(const Solid& planar, int faceIdx, const Vec3& centre, const Vec3& axis,
+                                   double radius, double cutZ, Solid* out, Problem* outWhy) {
+  if (!(radius > 0.0) || !(std::fabs(cutZ) < radius))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  ucs::Ucs fr;
+  if (!ucs::FromNormal(centre, ray3d::Normalize(axis), &fr))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double vc = std::asin(std::clamp(cutZ / radius, -1.0, 1.0));
+  const double rc = std::sqrt(std::max(0.0, radius * radius - cutZ * cutZ));
+  auto W = [&](double x, double y, double z) {
+    return ray3d::Add(fr.origin, ray3d::Add(ray3d::Add(ray3d::Scale(fr.xAxis, x), ray3d::Scale(fr.yAxis, y)),
+                                            ray3d::Scale(fr.zAxis, z)));
+  };
+  Solid s = planar;
+  s.recipe = Recipe{};
+  const int c0 = AddVertex(&s, W(rc, 0.0, cutZ));
+  const int c1 = AddVertex(&s, W(-rc, 0.0, cutZ));
+  const int np = AddVertex(&s, W(0.0, 0.0, radius));
+  const Vec3 cutC = W(0.0, 0.0, cutZ);
+  const int cc0 = AddArc(&s, c0, c1, cutC, fr.zAxis, kPi);
+  const int cc1 = AddArc(&s, c1, c0, cutC, fr.zAxis, kPi);
+  const int md0 = AddArc(&s, c0, np, fr.origin, ray3d::Scale(fr.yAxis, -1.0), kHalfPi - vc);
+  const int md1 = AddArc(&s, c1, np, fr.origin, fr.yAxis, kHalfPi - vc);
+  auto sphereHalf = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Sphere;
+    f.surface.frame = fr;
+    f.surface.radius = radius;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.vStart = vc;
+    f.vEnd = kHalfPi;
+    Loop lp;
+    lp.uses = std::move(uses);
+    f.loops.push_back(std::move(lp));
+    s.faces.push_back(std::move(f));
+  };
+  sphereHalf(0.0, kPi, {{md1, false}, {md0, true}, {cc0, false}});
+  sphereHalf(kPi, kTwoPi, {{md0, false}, {md1, true}, {cc1, false}});
+  s.faces[static_cast<std::size_t>(faceIdx)].loops.push_back(Loop{{{cc1, true}, {cc0, true}}});
+  for (int i = static_cast<int>(planar.faces.size()); i < static_cast<int>(s.faces.size()); ++i)
+    s.shells[0].faces.push_back(i);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+[[nodiscard]] bool TryBooleanSpherePlanar(const Solid& planar, const Solid& sph, const SphereShape& S,
+                                          BoolOp op, std::vector<Solid>* out, bool* handled,
+                                          Problem* outWhy) {
+  if (op == BoolOp::Subtract) {
+    *handled = true;
+    return Fail(Problem::BooleanCurvedFace, outWhy);
+  }
+  *handled = true;
+  const double scale = std::max(ModelScale(planar), S.radius);
+  const double eps = 1e-7 * scale;
+
+  int cutFace = -1;
+  int cleanCount = 0;
+  bool messy = false;
+  for (int fi = 0; fi < static_cast<int>(planar.faces.size()); ++fi) {
+    const Face& f = planar.faces[static_cast<std::size_t>(fi)];
+    if (f.surface.kind != SurfaceKind::Plane)
+      continue;
+    const std::vector<Vec3> ring = FaceRing(planar, f);
+    if (ring.size() < 3)
+      continue;
+    const Vec3 n = f.surface.frame.zAxis;
+    const double d = ray3d::Dot(ray3d::Sub(S.centre, ring[0]), n);  // centre distance along outward n
+    if (std::fabs(d) >= S.radius - eps)
+      continue;  // this plane does not slice the sphere
+    const Vec3 hp = ray3d::Sub(S.centre, ray3d::Scale(n, d));  // sphere centre projected to the plane
+    const double rc = std::sqrt(std::max(0.0, S.radius * S.radius - d * d));  // cut-circle radius
+    bool onEdge = false;
+    const bool inFace = PointInPolygon3D(hp, ring, n, eps, &onEdge);
+    double nearest = std::numeric_limits<double>::max();
+    for (std::size_t i = 0; i < ring.size(); ++i) {
+      const Vec3& p0 = ring[i];
+      const Vec3& p1 = ring[(i + 1) % ring.size()];
+      const Vec3 e = ray3d::Sub(p1, p0);
+      const double l2 = ray3d::Dot(e, e);
+      double u = l2 > 1e-24 ? ray3d::Dot(ray3d::Sub(hp, p0), e) / l2 : 0.0;
+      u = std::clamp(u, 0.0, 1.0);
+      nearest = std::min(nearest, ray3d::Length(ray3d::Sub(hp, ray3d::Add(p0, ray3d::Scale(e, u)))));
+    }
+    if (!inFace && nearest > rc + eps)
+      continue;  // the sphere sits entirely off to the side of this face — it does not clip it
+    if (inFace && nearest >= rc + eps) {
+      ++cleanCount;  // the cut circle lies wholly inside this face
+      cutFace = fi;
+    } else {
+      messy = true;  // the cut circle crosses a face edge — a mixed arc/line curve (B2)
+    }
+  }
+
+  if (messy)
+    return Fail(Problem::BooleanCurvedFace, outWhy);
+
+  if (cleanCount == 0) {
+    const bool inside = PointInPlanarSolid(S.centre, planar, scale);
+    if (inside) {
+      if (op == BoolOp::Intersect)
+        out->push_back(sph);
+      else
+        out->push_back(planar);
+      return Succeed(outWhy);
+    }
+    if (!AabbsOverlap(planar, sph, eps)) {
+      if (op == BoolOp::Intersect)
+        return Fail(Problem::BooleanEmptyResult, outWhy);
+      out->push_back(planar);
+      out->push_back(sph);
+      return Succeed(outWhy);
+    }
+    return Fail(Problem::BooleanCurvedFace, outWhy);
+  }
+  if (cleanCount != 1 || cutFace < 0)
+    return Fail(Problem::BooleanCurvedFace, outWhy);  // clipped by more than one plane — B2
+
+  const Face& f = planar.faces[static_cast<std::size_t>(cutFace)];
+  const Vec3 n = f.surface.frame.zAxis;
+  const double d = ray3d::Dot(ray3d::Sub(S.centre, FaceRing(planar, f)[0]), n);
+  if (op == BoolOp::Intersect) {
+    // Keep the cap on P's material side: axis points inward (-n), cap sits above the plane at d.
+    ucs::Ucs fr;
+    if (!ucs::FromNormal(S.centre, ray3d::Scale(n, -1.0), &fr))
+      return Fail(Problem::BooleanResultInvalid, outWhy);
+    Solid r;
+    if (!BuildSphericalCap(fr, S.radius, d, &r, outWhy))
+      return false;
+    out->push_back(std::move(r));
+    return Succeed(outWhy);
+  }
+  // UNION: the cap outside P (axis +n, plane at -d) becomes a boss on the bored face.
+  Solid r;
+  if (!BuildSphereBoss(planar, cutFace, S.centre, n, S.radius, -d, &r, outWhy))
+    return false;
+  out->push_back(std::move(r));
+  return Succeed(outWhy);
+}
+
 [[nodiscard]] bool TryBooleanCoaxialCylinders(const Solid& a, const Solid& b, const CylinderShape& A,
                                               const CylinderShape& B, BoolOp op, std::vector<Solid>* out,
                                               bool* handled, Problem* outWhy) {
@@ -2851,6 +3060,15 @@ struct BossStub {
     return TryBooleanCylinderThroughPlanar(b, a, ca, op, out, handled, outWhy);
   if (bCyl && AllFacesPlanar(a))
     return TryBooleanCylinderThroughPlanar(a, b, cb, op, out, handled, outWhy);
+
+  SphereShape sa;
+  SphereShape sb;
+  const bool aSph = ClassifySphere(a, &sa);
+  const bool bSph = ClassifySphere(b, &sb);
+  if (aSph && AllFacesPlanar(b))
+    return TryBooleanSpherePlanar(b, a, sa, op, out, handled, outWhy);
+  if (bSph && AllFacesPlanar(a))
+    return TryBooleanSpherePlanar(a, b, sb, op, out, handled, outWhy);
   return false;
 }
 
