@@ -5964,7 +5964,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
     general revolve, all far inside REQ-101's ±0.01.
   - **Union, subtract and intersect** of two overlapping boxes, a box and a coaxial cylinder, and
     two coaxial cylinders each produce a solid whose volume matches the hand-computed value to
-    within REQ-101, and which passes `brep::Validate`.
+    within REQ-101, and which passes `brep::Validate`. *(Refined 2026-09-02, D-2026-09-02-b: the two
+    curved-operand cases are met for UNION and INTERSECT in increment B1; their SUBTRACT — a round
+    hole, whose wall faces inward — is met in increment B2, which adds inward-facing curved faces.
+    B1 refuses curved SUBTRACT by name.)*
   - **The degenerate Boolean cases each have the outcome stated above**, each covered by a test: two
     boxes sharing a full face; a box and a cylinder tangent along a line; two solids sharing one
     edge; `INTERSECT` of two disjoint solids (empty, reported); `SUBTRACT` that would split the
@@ -6017,6 +6020,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   #147. The Boolean method (analytic B-rep rather than mesh-based) and the spec-first / sliced
   delivery were confirmed with the user before this text was written; sweep and loft were split out
   to REQ-315 because the current kernel has no freeform surface type.
+  2026-09-02 — D-2026-09-02-b (TASK-178): curved-operand Booleans in increment B1 are limited to
+  UNION and INTERSECT; a curved SUBTRACT needs an inward-facing curved face that ADR-045's `Surface`
+  cannot express, so it moves to B2. Acceptance list annotated accordingly; no requirement removed.
 
 ### REQ-315 — Sweep and loft (GitHub issue #147, split from REQ-314)
 - Purpose: issue #147's acceptance names sweep and loft alongside extrude and revolve, but a general

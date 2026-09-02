@@ -244,8 +244,14 @@ enum class Problem {
   SliceResultComplex,    ///< The cut cross-section is not a single loop, or a side splits into pieces.
 
   // --- Booleans (REQ-314 increment 4, B1). ---
-  BooleanCurvedFace,    ///< An operand has a curved face; B1 combines planar-faced solids only.
+  /// A curved operand pair B1 cannot combine: a curved SUBTRACT (the hole wall faces inward, which
+  /// \ref Surface cannot express — B2, per D-2026-09-02-b), a cone / sphere / torus operand, or a
+  /// cylinder that only partly penetrates the other solid.
+  BooleanCurvedFace,
   BooleanNonConvex,     ///< An operand is not convex; B1 combines convex solids only (B2 is general).
+  /// A cylinder set at an angle to the other solid's faces — the two would meet along an ellipse,
+  /// which needs the general Boolean (increment B2). Named so the refusal identifies the surface pair.
+  BooleanObliqueCylinder,
   BooleanEmptyResult,   ///< The operation produces nothing (an INTERSECT of disjoint solids).
   BooleanResultInvalid  ///< The stitched result did not pass validation — refused rather than stored.
 };

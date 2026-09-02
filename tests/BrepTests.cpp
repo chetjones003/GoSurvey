@@ -1789,3 +1789,151 @@ TEST_CASE("Booleans chain on a non-convex result", "[brep][req314]") {
   // Bar's part inside the L: x[-4,-2] y[-4,-2] z[5,10] = 2 x 2 x 5 = 20 (that corner is not in the notch).
   REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(vEll - 20.0).epsilon(1e-9));
 }
+
+namespace {
+constexpr double kPiT = 3.14159265358979323846;
+}
+
+TEST_CASE("Curved B1: a cylinder axis-aligned through a box - plug, boss, and the refused cases",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));       // x,y[-5,5] z[0,10]
+  REQUIRE(brep::MakeCylinder(At(0, 0, -5), 2, 20, &cyl, &why));  // z[-5,15], r 2, clear of the edges
+
+  std::vector<Solid> r;
+
+  SECTION("INTERSECT is the plug where they overlap") {
+    REQUIRE(brep::BooleanIntersect(box, cyl, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(kPiT * 4.0 * 10.0).epsilon(1e-9));
+    // Ties the curved path to the primitive: it must BE a plain cylinder.
+    Solid ref;
+    REQUIRE(brep::MakeCylinder(World(), 2, 10, &ref, &why));
+    REQUIRE(brep::ComputeMassProperties(r[0]).surfaceArea ==
+            Approx(brep::ComputeMassProperties(ref).surfaceArea).epsilon(1e-9));
+  }
+
+  SECTION("UNION is a boss — the box plus the two stubs, no tunnel") {
+    REQUIRE(brep::BooleanUnion(box, cyl, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(1000.0 + kPiT * 4.0 * 10.0).epsilon(1e-6));
+    // A bored face is an annulus, not a disk, so naive V-E+F is not 2 here — Validate is the check.
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(1000.0 + kPiT * 4.0 * 10.0).epsilon(2e-3));
+  }
+
+  SECTION("SUBTRACT is refused — a bore wall faces inward (B2, D-2026-09-02-b)") {
+    REQUIRE_FALSE(brep::BooleanSubtract(box, cyl, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+    REQUIRE(r.empty());
+  }
+
+  SECTION("an oblique cylinder is refused by name") {
+    ucs::Ucs oblique;
+    REQUIRE(ucs::FromNormal(Vec3{0, 0, -4}, Vec3{0.32, 0.19, 0.93}, &oblique));
+    Solid tilted;
+    REQUIRE(brep::MakeCylinder(oblique, 1.5, 20, &tilted, &why));
+    REQUIRE_FALSE(brep::BooleanUnion(box, tilted, &r, &why));
+    REQUIRE(why == Problem::BooleanObliqueCylinder);
+  }
+
+  SECTION("a cone operand is still refused as a curved face") {
+    Solid cone;
+    REQUIRE(brep::MakeCone(At(0, 0, -5), 2, 0, 20, &cone, &why));
+    REQUIRE_FALSE(brep::BooleanUnion(box, cone, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
+TEST_CASE("Curved B1: a failed curved Boolean leaves the operands untouched", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -5), 2, 20, &cyl, &why));
+  const Solid boxBefore = box;
+  const Solid cylBefore = cyl;
+  std::vector<Solid> r;
+  REQUIRE_FALSE(brep::BooleanSubtract(box, cyl, &r, &why));
+  REQUIRE(box.vertices.size() == boxBefore.vertices.size());
+  REQUIRE(cyl.faces.size() == cylBefore.faces.size());
+  REQUIRE(brep::ComputeMassProperties(box).volume == Approx(1000.0).epsilon(1e-12));
+  REQUIRE(brep::ComputeMassProperties(cyl).volume ==
+          Approx(brep::ComputeMassProperties(cylBefore).volume).epsilon(1e-12));
+}
+
+TEST_CASE("Curved B1: two coaxial cylinders - union and intersect", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  std::vector<Solid> r;
+
+  SECTION("equal radius, overlapping — union merges to one cylinder, intersect is the overlap") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 3, 10, &a, &why));       // z[0,10]
+    REQUIRE(brep::MakeCylinder(At(0, 0, 5), 3, 10, &b, &why));   // z[5,15]
+
+    REQUIRE(brep::BooleanUnion(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(kPiT * 9.0 * 15.0).epsilon(1e-9));
+
+    r.clear();
+    REQUIRE(brep::BooleanIntersect(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(kPiT * 9.0 * 5.0).epsilon(1e-9));
+  }
+
+  SECTION("different radius — union is a stepped stack") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &a, &why));       // z[0,10] r4
+    REQUIRE(brep::MakeCylinder(At(0, 0, 4), 2, 10, &b, &why));   // z[4,14] r2
+
+    REQUIRE(brep::BooleanUnion(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(kPiT * 16.0 * 10.0 + kPiT * 4.0 * 4.0).epsilon(1e-9));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
+    RequireWindingMatchesNormals(t);
+
+    r.clear();
+    REQUIRE(brep::BooleanIntersect(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(kPiT * 4.0 * 6.0).epsilon(1e-9));
+  }
+
+  SECTION("disjoint along the axis — union returns both") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 3, 5, &a, &why));         // z[0,5]
+    REQUIRE(brep::MakeCylinder(At(0, 0, 20), 3, 5, &b, &why));    // z[20,25]
+    REQUIRE(brep::BooleanUnion(a, b, &r, &why));
+    REQUIRE(r.size() == 2);
+    r.clear();
+    REQUIRE_FALSE(brep::BooleanIntersect(a, b, &r, &why));
+    REQUIRE(why == Problem::BooleanEmptyResult);
+  }
+}
+
+TEST_CASE("Curved B1: a boss stays exact at survey coordinate magnitude", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(At(3.5e6, 1.24e7, 0), 10, 10, 10, &box, &why));
+  REQUIRE(brep::MakeCylinder(At(3.5e6, 1.24e7, -5), 2, 20, &cyl, &why));
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanUnion(box, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+          Approx(1000.0 + kPiT * 4.0 * 10.0).epsilon(1e-6));
+}
