@@ -1619,11 +1619,65 @@ TEST_CASE("Slice refuses what it cannot do, by name", "[brep][req314]") {
     REQUIRE_FALSE(brep::Slice(box, Vec3{0, 0, 4}, Vec3{0, 0, 0}, brep::SliceKeep::Both, &a, &b, &why));
     REQUIRE(why == Problem::SliceDegeneratePlane);
   }
-  SECTION("a curved solid") {
+  SECTION("an OBLIQUE cut through a cylinder — an ellipse the kernel cannot hold") {
     Solid cyl;
     REQUIRE(brep::MakeCylinder(World(), 4, 10, &cyl, &why));
-    REQUIRE_FALSE(brep::Slice(cyl, Vec3{0, 0, 5}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE_FALSE(brep::Slice(cyl, Vec3{0, 0, 5}, ray3d::Normalize(Vec3{1, 0, 2}), brep::SliceKeep::Both,
+                              &a, &b, &why));
     REQUIRE(why == Problem::SliceCurvedFace);
+  }
+  SECTION("a sphere — no primitive pieces") {
+    Solid sph;
+    REQUIRE(brep::MakeSphere(World(), 5, &sph, &why));
+    REQUIRE_FALSE(brep::Slice(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceCurvedFace);
+  }
+}
+
+TEST_CASE("Slice of a cylinder or cone perpendicular to its axis cuts it to length", "[brep][req314]") {
+  Problem why = Problem::Ok;
+
+  SECTION("cylinder -> two cylinders") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &cyl, &why));  // z 0..10 about +Z
+    Solid top, bot;
+    REQUIRE(brep::Slice(cyl, Vec3{0, 0, 6}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &top, &bot, &why));
+    REQUIRE(brep::Validate(top) == Problem::Ok);
+    REQUIRE(brep::Validate(bot) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(top).volume == Approx(kPi * 16.0 * 4.0).epsilon(1e-9));  // z 6..10
+    REQUIRE(brep::ComputeMassProperties(bot).volume == Approx(kPi * 16.0 * 6.0).epsilon(1e-9));  // z 0..6
+    REQUIRE(top.recipe.kind == brep::PrimitiveKind::Cylinder);
+  }
+
+  SECTION("truncated cone -> two frustums, radius interpolated at the cut") {
+    Solid cone;
+    REQUIRE(brep::MakeCone(World(), 6, 2, 8, &cone, &why));  // base r6 at z0, top r2 at z8
+    Solid top, bot;
+    REQUIRE(brep::Slice(cone, Vec3{0, 0, 2}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &top, &bot, &why));
+    REQUIRE(brep::Validate(top) == Problem::Ok);
+    REQUIRE(brep::Validate(bot) == Problem::Ok);
+    // r at z=2 is 6 + (2-6)*2/8 = 5.  Bottom frustum r6..r5 over h2; top frustum r5..r2 over h6.
+    const double vBot = kPi * 2.0 / 3.0 * (36.0 + 30.0 + 25.0);
+    const double vTop = kPi * 6.0 / 3.0 * (25.0 + 10.0 + 4.0);
+    REQUIRE(brep::ComputeMassProperties(bot).volume == Approx(vBot).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(top).volume == Approx(vTop).epsilon(1e-9));
+  }
+
+  SECTION("keep only one side") {
+    Solid cyl;
+    Solid above, below;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), 3, 12, &cyl, &why));
+    REQUIRE(brep::Slice(cyl, Vec3{0, 0, 5}, Vec3{0, 0, 1}, brep::SliceKeep::Below, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(kPi * 9.0 * 5.0).epsilon(1e-9));  // z 0..5
+    REQUIRE(above.faces.empty());
+  }
+
+  SECTION("a plane that misses the cylinder's height is reported") {
+    Solid cyl;
+    Solid a, b;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &cyl, &why));
+    REQUIRE_FALSE(brep::Slice(cyl, Vec3{0, 0, 20}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
   }
 }
 
