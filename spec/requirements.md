@@ -6011,9 +6011,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
     Phase 6 — none are in this requirement.
 - Owner-layer: Domain (`src/util/brep.{hpp,cpp}`); Commands, IO, Renderer and Viewport for the
   document-facing increments.
-- Status: **proposed (2026-09-02)** — see D-2026-09-02-a and ADR-046. Awaiting the user's review of
-  this text before acceptance.
-- Revisions: 2026-09-02 — proposed (D-2026-09-02-a, TASK-173). Phase 4 of GitHub #120, filed as
+- Status: **accepted (2026-09-02)** — see D-2026-09-02-a and ADR-046. Implemented in the increments
+  ADR-046 lists, each its own task and PR; extrude first.
+- Revisions: 2026-09-02 — proposed and accepted as written (D-2026-09-02-a, TASK-173). Phase 4 of GitHub #120, filed as
   #147. The Boolean method (analytic B-rep rather than mesh-based) and the spec-first / sliced
   delivery were confirmed with the user before this text was written; sweep and loft were split out
   to REQ-315 because the current kernel has no freeform surface type.
@@ -6031,9 +6031,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   planar profile along an arbitrary 3D path with controlled orientation; loft blends a closed solid
   between two or more profiles. Both produce valid closed B-rep solids that satisfy every REQ-313
   invariant and every REQ-314 robustness and persistence condition.
-- Status: **proposed, blocked (2026-09-02)** — blocked on the ADR-046 freeform-surface question. No
-  implementation until this is written and accepted.
-- Revisions: 2026-09-02 — proposed and parked (D-2026-09-02-a, TASK-173).
+- Status: **accepted, blocked (2026-09-02)** — the scope is accepted; the requirement text is
+  blocked on the ADR-046 freeform-surface question. No implementation until that is resolved and
+  this Statement is written and accepted.
+- Revisions: 2026-09-02 — accepted as a parked scope holder (D-2026-09-02-a, TASK-173).
 
 ---
 

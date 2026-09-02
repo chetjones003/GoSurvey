@@ -2179,11 +2179,11 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   curves** — AutoCAD draws those too, they move as the view orbits, and being a render pass rather
   than geometry they do not belong in the kernel alongside (j)'s isolines.
 
-### ADR-046 — Feature operations on the solid kernel: analytic extrude / revolve / slice, and phased analytic Booleans   (2026-09-02, proposed)
+### ADR-046 — Feature operations on the solid kernel: analytic extrude / revolve / slice, and phased analytic Booleans   (2026-09-02, accepted)
 
-- **Status:** proposed. The Boolean *method* (analytic B-rep, not mesh-based) and the spec-first,
-  sliced delivery were chosen by the user before this ADR was written; the ADR text itself awaits
-  the user's review. Backs REQ-314 and REQ-315. GitHub issue #147, Phase 4 of #120.
+- **Status:** accepted (2026-09-02, D-2026-09-02-a). The Boolean *method* (analytic B-rep, not
+  mesh-based) and the spec-first, sliced delivery were chosen by the user, who then accepted this
+  ADR text as written. Backs REQ-314 and REQ-315. GitHub issue #147, Phase 4 of #120.
 
 - **Context.** REQ-313 / ADR-045 gave GoSurvey a boundary-representation kernel whose defining
   choice is *analytic faces*: a face is a plane, cylinder, cone, sphere or torus, an edge is a line

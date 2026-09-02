@@ -72,8 +72,10 @@ Specification only — **no code**.
 
 ## Status
 
-**Proposed, awaiting the user's review of the REQ-314 / REQ-315 / ADR-046 text.** No implementation
-task starts until these are accepted. Issue #147 stays open, now tracked by REQ-314 + REQ-315.
+**Accepted as written by the user, 2026-09-02.** REQ-314 and ADR-046 are accepted; REQ-315 is
+accepted as a parked scope holder (its Statement is still blocked on the freeform-surface question).
+Issue #147 stays open, now tracked by REQ-314 + REQ-315. The first implementation task is extrude
+(increment 1), filed separately.
 
 ## Verification
 
