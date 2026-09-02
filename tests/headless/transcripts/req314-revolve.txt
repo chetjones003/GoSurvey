@@ -1,0 +1,75 @@
+# REQ-314 / ADR-046 increment 2b (GitHub #147, Phase 4 of #120) — REVOLVE, end to end.
+#
+# BrepTests proves the kernel (brep::Revolve): volumes, topology, refusals, survey-magnitude
+# stability. This transcript tests the half the kernel cannot: that selecting a closed polyline,
+# picking a revolve axis and typing an angle puts the solid in the document, that it survives a
+# .gs save/reopen, and that one undo step removes it.
+
+NEW
+EXPECT SOLIDS 0
+
+# --- A 4 x 10 rectangle with its left edge on the Y axis, revolved a full turn -> a cylinder ----
+# radius 4, height 10 about Y. Volume pi*16*10 = 502.6548245743669.
+CMD POLYLINE
+CMD 0,0
+CMD 4,0
+CMD 4,10
+CMD 0,10
+CMD CLOSE
+ESC
+BOX -1 -1 5 11
+EXPECT SELECTED 1
+CMD REVOLVE
+CLICK 0 0
+CLICK 0 10
+CMD 360
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Solid
+EXPECT LOG "Solid created"
+# the source polyline is left in place
+EXPECT POLYLINES 1
+
+# --- One undo removes it; redo brings it back -------------------------------------------------
+CMD UNDO
+EXPECT SOLIDS 0
+CMD REDO
+EXPECT SOLIDS 1
+
+# --- A right triangle revolved 90 degrees -> a quarter cone -----------------------------------
+CMD POLYLINE
+CMD 0,100
+CMD 6,100
+CMD 0,115
+CMD CLOSE
+ESC
+BOX -1 99 7 116
+EXPECT SELECTED 1
+CMD REVOLVE
+CLICK 0 100
+CLICK 0 115
+CMD 90
+EXPECT SOLIDS 2
+
+# --- A profile that misses the axis is refused by name --------------------------------------
+CMD POLYLINE
+CMD 200,0
+CMD 204,0
+CMD 204,8
+CMD 200,8
+CMD CLOSE
+ESC
+BOX 199 -1 205 9
+EXPECT SELECTED 1
+CMD REVOLVE
+CLICK 190 0
+CLICK 190 8
+CMD 360
+EXPECT LOG "must touch the revolve axis"
+EXPECT SOLIDS 2
+
+# --- Solids survive a .gs save and reopen with topology intact -------------------------------
+SAVEAS %OUT%/req314-revolve.gs
+OPEN %OUT%/req314-revolve.gs
+EXPECT SOLIDS 2
+
+CHECK ALL

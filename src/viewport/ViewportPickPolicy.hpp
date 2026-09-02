@@ -29,9 +29,11 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
          // coordinates. Nobody decided that; it is the per-command accident an unstated rule
          // produces, and closing it is part of REQ-121 rather than a separate fix.
          (cmd.active == K::Align && cmd.alignPhase == AppCommandState::AlignPhase::PickSelection) ||
-         // REQ-314: EXTRUDE's SelectProfiles step is the same accumulate-and-Enter selection shape.
+         // REQ-314: EXTRUDE's / REVOLVE's SelectProfiles step is the same accumulate-and-Enter shape.
          (cmd.active == K::Extrude &&
-          cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles);
+          cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) ||
+         (cmd.active == K::Revolve &&
+          cmd.revolvePhase == AppCommandState::RevolvePhase::SelectProfiles);
 }
 
 /// What a left-click in the **model-space** viewport means for the currently active command.
@@ -153,6 +155,20 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Extrude:
     return cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles ? R::SelectionAccumulate
                                                                             : R::SnappedPointPick;
+  // REVOLVE (REQ-314): select profiles, then two snapped points for the axis; the angle is typed.
+  case K::Revolve: {
+    using RP = AppCommandState::RevolvePhase;
+    switch (cmd.revolvePhase) {
+    case RP::SelectProfiles:
+      return R::SelectionAccumulate;
+    case RP::WaitAxisStart:
+    case RP::WaitAxisEnd:
+      return R::SnappedPointPick;
+    case RP::WaitAngle:
+      return R::Ignore;  // a typed value; SubmitViewportPickImpl has no branch for it
+    }
+    return R::Ignore;
+  }
   case K::Align:
     return cmd.alignPhase == AppCommandState::AlignPhase::PickSelection ? R::SelectionAccumulate
                                                                        : R::SnappedPointPick;

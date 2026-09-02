@@ -1399,6 +1399,9 @@ struct AppCommandState {
     /// select-objects phase and then a height phase, neither of which the primitive `Solid` command
     /// has.
     Extrude,
+    /// REVOLVE (REQ-314 / ADR-046, GitHub #147): select closed polylines / circles, pick the two
+    /// ends of the revolve axis, then an angle in degrees.
+    Revolve,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1460,6 +1463,7 @@ struct AppCommandState {
     case Kind::InsertBlock:        return "INSERT";
     case Kind::Solid:              return "SOLID";  // REQ-313: one Kind, all seven primitives
     case Kind::Extrude:           return "EXTRUDE";
+    case Kind::Revolve:          return "REVOLVE";
     default:                  return "";
     }
   }
@@ -2095,6 +2099,21 @@ struct AppCommandState {
   /// along the first profile's plane normal; positive is the +normal side.
   bool extrudeHeightPickValid = false;
   double extrudeHeightPick = 0.0;
+
+  // --- The REVOLVE command (REQ-314 / ADR-046 increment 2, GitHub #147) --------------------------
+
+  enum class RevolvePhase {
+    SelectProfiles,  ///< Accumulate a selection of closed polylines / circles; Enter confirms.
+    WaitAxisStart,   ///< Pick or type the first point of the revolve axis.
+    WaitAxisEnd,     ///< Pick or type the second point of the revolve axis.
+    WaitAngle,       ///< Type the angle in degrees; Enter takes the default (a full turn).
+  } revolvePhase = RevolvePhase::SelectProfiles;
+
+  std::vector<brep::Profile> revolveProfiles;
+  ray3d::Vec3 revolveAxisStart;
+  bool revolveAxisStartSet = false;
+  ray3d::Vec3 revolveAxisEnd;
+  double revolveAngleDeg = 360.0;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -4076,6 +4095,23 @@ void CadResolveExtrudePick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane
 /// for the commit — one function, so the ghost cannot show a shape the click would not build.
 /// Returns false (and clears \p out) when the numbers do not yet describe a solid.
 [[nodiscard]] bool CadBuildExtrudeSolids(const AppCommandState& st, double height,
+                                         std::vector<brep::Solid>* out);
+
+// --- REVOLVE (REQ-314 / ADR-046 increment 2b) -------------------------------------------------
+
+/// Begin the prompted REVOLVE command a bare `REVOLVE` opens: select a closed polyline or circle
+/// (if none is selected), then the two ends of the revolve axis, then an angle. `REVOLVE <deg>`
+/// with a selection and axis is not offered — the axis needs two points.
+void StartRevolveCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelRevolveCommand(AppCommandState& st);
+[[nodiscard]] std::string CadRevolvePromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleRevolveTextInput(const std::string& line, AppCommandState& st,
+                                          std::vector<std::string>& log);
+void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// The candidate solids the running REVOLVE command describes at \p angleDeg — for the live ghost
+/// and the commit. False (and \p out cleared) until a profile and both axis points are set.
+[[nodiscard]] bool CadBuildRevolveSolids(const AppCommandState& st, double angleDeg,
                                          std::vector<brep::Solid>* out);
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
