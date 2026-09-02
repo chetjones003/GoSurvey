@@ -115,3 +115,9 @@ ESC
 BOX 6 -12 14 -8
 EXPECT SELECTED 1
 ESC
+
+# PickClosestCadEntity (hover / click resolution) hits the polyline ON the curve, within aperture,
+# and NOT on the undrawn chord — the exact-distance-to-arc path (REQ-316).
+EXPECT PICKAT 10 -10 1 POLYLINE
+EXPECT PICKAT 10 -10.6 1 POLYLINE
+EXPECT PICKAT 10 0 1 NONE

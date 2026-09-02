@@ -1795,6 +1795,37 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       return true;
+    } else if (what == "PICKAT") {
+      // EXPECT PICKAT <x> <y> <tolWorld> <NONE|LINE|ARC|POLYLINE|CIRCLE|ELLIPSE> — what
+      // PickClosestCadEntity resolves at a world point within a world tolerance. The screen-space
+      // hover/click plumbing has no headless equivalent, but the geometry math (REQ-316: a curved
+      // polyline segment / an arc must be pickable ON the curve, not only near its chord) does.
+      std::istringstream is(arg);
+      double px = 0.0, py = 0.0, tol = 0.0;
+      std::string want;
+      if (!(is >> px >> py >> tol >> want)) {
+        Fail(run, "parse", "EXPECT PICKAT needs <x> <y> <tolWorld> <TYPE>", sourceLine);
+        return false;
+      }
+      SelectedEntity hit{};
+      float d2 = 0.f;
+      const bool got = PickClosestCadEntity(run.st, px, py, static_cast<float>(tol), &hit, &d2, nullptr);
+      const std::string gotType =
+          !got ? "NONE"
+               : (hit.type == SelectedEntity::Type::LineSeg     ? "LINE"
+                  : hit.type == SelectedEntity::Type::Arc        ? "ARC"
+                  : hit.type == SelectedEntity::Type::Polyline   ? "POLYLINE"
+                  : hit.type == SelectedEntity::Type::Circle     ? "CIRCLE"
+                  : hit.type == SelectedEntity::Type::Ellipse    ? "ELLIPSE"
+                                                                 : "OTHER");
+      if (gotType != UpperAscii(want)) {
+        Fail(run, "expect",
+             "EXPECT PICKAT (" + std::to_string(px) + "," + std::to_string(py) + " tol " +
+                 std::to_string(tol) + "): got " + gotType + ", expected " + UpperAscii(want),
+             sourceLine);
+        return false;
+      }
+      return true;
     } else if (what == "POLYARCS") {
       // EXPECT POLYARCS <polylineIndex> <count> — how many of a polyline's segments are curved
       // (non-zero bulge). Direction-independent, so it is the right assertion for a JOIN result
