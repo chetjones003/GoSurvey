@@ -1,10 +1,12 @@
 #include "brep.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <initializer_list>
 #include <utility>
+#include <vector>
 
 namespace brep {
 namespace {
@@ -497,6 +499,15 @@ const char* ProblemText(Problem p) {
   case Problem::PlaneFaceNotSimple:
     return "A flat face has holes or a non-convex boundary, which this build cannot tessellate.";
   case Problem::NonPositiveTolerance: return "Tessellation tolerance must be greater than zero.";
+  case Problem::NonPositiveDistance: return "Extrusion distance must be a non-zero finite number.";
+  case Problem::ProfileMalformed: return "The profile's vertex and edge counts do not match.";
+  case Problem::ProfileTooFewEdges: return "A profile needs at least two edges to enclose an area.";
+  case Problem::ProfilePointOffPlane: return "A profile point does not lie on the profile plane.";
+  case Problem::ProfileArcRadiusMismatch:
+    return "A profile arc's endpoints are not the same distance from its centre.";
+  case Problem::ProfileSelfIntersects: return "The profile crosses itself.";
+  case Problem::ProfileArcReflex:
+    return "A profile arc curves inward; this release can extrude outward-curving arcs only.";
   }
   return "The solid is not valid.";
 }
@@ -1127,6 +1138,246 @@ bool MakeTorus(const ucs::Ucs& frame, double majorRadius, double minorRadius, So
 }
 
 // ---------------------------------------------------------------------------------------------
+// Feature operations — Extrude (REQ-314 / ADR-046 increment 1, GitHub issue #147).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// In-plane distance from \p p to \p centre, both already on \p plane.
+[[nodiscard]] double InPlaneRadius(const ucs::Ucs& plane, const Vec3& centre, const Vec3& p) {
+  const ucs::Point2D c = ucs::WorldToPlane(plane, centre);
+  const ucs::Point2D q = ucs::WorldToPlane(plane, p);
+  return std::sqrt((q.x - c.x) * (q.x - c.x) + (q.y - c.y) * (q.y - c.y));
+}
+
+/// Signed area of the profile in its own plane, about `plane.zAxis`: the shoelace term for every
+/// edge plus, for an arc, the signed bulge between its chord and itself — the same decomposition
+/// \ref PlaneLoopSignedArea uses on a finished face.
+[[nodiscard]] double ProfilePlaneSignedArea(const Profile& pr) {
+  const ucs::Ucs& fr = pr.plane;
+  const int n = static_cast<int>(pr.vertices.size());
+  double acc = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const ucs::Point2D a = ucs::WorldToPlane(fr, pr.vertices[static_cast<std::size_t>(i)]);
+    const ucs::Point2D b = ucs::WorldToPlane(fr, pr.vertices[static_cast<std::size_t>((i + 1) % n)]);
+    acc += 0.5 * (a.x * b.y - b.x * a.y);
+    const ProfileEdge& pe = pr.edges[static_cast<std::size_t>(i)];
+    if (pe.arc) {
+      const double r = InPlaneRadius(fr, pe.centre, pr.vertices[static_cast<std::size_t>(i)]);
+      acc += 0.5 * r * r * (pe.sweep - std::sin(pe.sweep));
+    }
+  }
+  return acc;
+}
+
+/// A cheap self-intersection screen: do any two non-adjacent profile CHORDS cross? It misses an
+/// overlap that only the arc bulges create — which is why \ref Validate still gates the result — but
+/// it turns the common figure-eight into a clear message rather than a puzzling topology error.
+[[nodiscard]] bool ProfileChordsCross(const Profile& pr) {
+  const ucs::Ucs& fr = pr.plane;
+  const int n = static_cast<int>(pr.vertices.size());
+  auto pt = [&](int i) { return ucs::WorldToPlane(fr, pr.vertices[static_cast<std::size_t>(i % n)]); };
+  auto cr = [](const ucs::Point2D& o, const ucs::Point2D& a, const ucs::Point2D& b) {
+    return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  };
+  auto segCross = [&](const ucs::Point2D& p1, const ucs::Point2D& p2, const ucs::Point2D& p3,
+                      const ucs::Point2D& p4) {
+    return ((cr(p3, p4, p1) > 0.0) != (cr(p3, p4, p2) > 0.0)) &&
+           ((cr(p1, p2, p3) > 0.0) != (cr(p1, p2, p4) > 0.0));
+  };
+  for (int i = 0; i < n; ++i) {
+    for (int j = i + 1; j < n; ++j) {
+      if ((i + 1) % n == j || (j + 1) % n == i)
+        continue;  // adjacent chords legitimately share a vertex
+      if (segCross(pt(i), pt(i + 1), pt(j), pt(j + 1)))
+        return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;  // a null output is a caller bug, not a user-facing reason
+  if (!std::isfinite(distance) || distance == 0.0)
+    return Fail(Problem::NonPositiveDistance, outWhy);
+
+  const int n = static_cast<int>(profile.vertices.size());
+  if (n != static_cast<int>(profile.edges.size()))
+    return Fail(Problem::ProfileMalformed, outWhy);
+  if (n < 2)
+    return Fail(Problem::ProfileTooFewEdges, outWhy);
+  if (!FrameOk(profile.plane))
+    return Fail(Problem::DegenerateFrame, outWhy);
+
+  const ucs::Ucs& pl = profile.plane;
+
+  // Model scale from the profile's own extent, so every tolerance below is relative.
+  ucs::Point2D lo = ucs::WorldToPlane(pl, profile.vertices[0]);
+  ucs::Point2D hi = lo;
+  for (const Vec3& v : profile.vertices) {
+    if (!FinitePoint(v))
+      return Fail(Problem::NonFiniteCoordinate, outWhy);
+    const ucs::Point2D q = ucs::WorldToPlane(pl, v);
+    lo.x = std::min(lo.x, q.x);
+    lo.y = std::min(lo.y, q.y);
+    hi.x = std::max(hi.x, q.x);
+    hi.y = std::max(hi.y, q.y);
+  }
+  const double scale = std::max({hi.x - lo.x, hi.y - lo.y, std::fabs(distance), 1e-9});
+  const double planeEps = 1e-6 * scale;
+  const double lenEps = 1e-9 * scale;
+
+  for (const Vec3& v : profile.vertices) {
+    if (std::fabs(ucs::SignedDistanceToPlane(pl, v)) > planeEps)
+      return Fail(Problem::ProfilePointOffPlane, outWhy);
+  }
+  for (int i = 0; i < n; ++i) {
+    const ProfileEdge& pe = profile.edges[static_cast<std::size_t>(i)];
+    if (!pe.arc)
+      continue;
+    if (!FinitePoint(pe.centre) || !std::isfinite(pe.sweep))
+      return Fail(Problem::NonFiniteCoordinate, outWhy);
+    if (std::fabs(ucs::SignedDistanceToPlane(pl, pe.centre)) > planeEps)
+      return Fail(Problem::ProfilePointOffPlane, outWhy);
+    if (!(std::fabs(pe.sweep) > 1e-9) || std::fabs(pe.sweep) >= kTwoPi)
+      return Fail(Problem::DegenerateEdge, outWhy);
+    const double r0 = InPlaneRadius(pl, pe.centre, profile.vertices[static_cast<std::size_t>(i)]);
+    const double r1 =
+        InPlaneRadius(pl, pe.centre, profile.vertices[static_cast<std::size_t>((i + 1) % n)]);
+    if (!(r0 > lenEps))
+      return Fail(Problem::DegenerateEdge, outWhy);
+    if (std::fabs(r0 - r1) > 1e-6 * scale)
+      return Fail(Problem::ProfileArcRadiusMismatch, outWhy);
+  }
+  if (ProfileChordsCross(profile))
+    return Fail(Problem::ProfileSelfIntersects, outWhy);
+
+  const double areaZ = ProfilePlaneSignedArea(profile);
+  if (std::fabs(areaZ) <= lenEps * lenEps)
+    return Fail(Problem::ProfileSelfIntersects, outWhy);  // no enclosed area — not a usable loop
+
+  // Extrusion direction, and whether the walk must be reversed to run CCW about it.
+  const double sgn = distance > 0.0 ? 1.0 : -1.0;
+  const Vec3 up = ray3d::Scale(pl.zAxis, sgn);
+  const double dist = std::fabs(distance);
+  const bool rev = (areaZ * sgn) < 0.0;
+
+  // Walk order W[], and each edge's sweep re-expressed about `up`.
+  std::vector<Vec3> W(static_cast<std::size_t>(n));
+  std::vector<ProfileEdge> E(static_cast<std::size_t>(n));
+  for (int k = 0; k < n; ++k) {
+    if (!rev) {
+      W[static_cast<std::size_t>(k)] = profile.vertices[static_cast<std::size_t>(k)];
+      E[static_cast<std::size_t>(k)] = profile.edges[static_cast<std::size_t>(k)];
+      E[static_cast<std::size_t>(k)].sweep *= sgn;
+    } else {
+      W[static_cast<std::size_t>(k)] = profile.vertices[static_cast<std::size_t>((n - k) % n)];
+      const ProfileEdge& src = profile.edges[static_cast<std::size_t>((2 * n - k - 1) % n)];
+      E[static_cast<std::size_t>(k)] = src;
+      E[static_cast<std::size_t>(k)].sweep = -src.sweep * sgn;
+    }
+  }
+  for (const ProfileEdge& pe : E) {
+    if (pe.arc && !(pe.sweep > 1e-12))
+      return Fail(Problem::ProfileArcReflex, outWhy);
+  }
+
+  Solid s;
+  std::vector<int> baseV(static_cast<std::size_t>(n));
+  std::vector<int> topV(static_cast<std::size_t>(n));
+  for (int k = 0; k < n; ++k) {
+    baseV[static_cast<std::size_t>(k)] = AddVertex(&s, W[static_cast<std::size_t>(k)]);
+    topV[static_cast<std::size_t>(k)] =
+        AddVertex(&s, ray3d::Add(W[static_cast<std::size_t>(k)], ray3d::Scale(up, dist)));
+  }
+  std::vector<int> baseE(static_cast<std::size_t>(n));
+  std::vector<int> topE(static_cast<std::size_t>(n));
+  std::vector<int> vert(static_cast<std::size_t>(n));
+  for (int k = 0; k < n; ++k) {
+    const int k1 = (k + 1) % n;
+    const ProfileEdge& pe = E[static_cast<std::size_t>(k)];
+    if (pe.arc) {
+      baseE[static_cast<std::size_t>(k)] = AddArc(&s, baseV[static_cast<std::size_t>(k)],
+                                                 baseV[static_cast<std::size_t>(k1)], pe.centre, up, pe.sweep);
+      topE[static_cast<std::size_t>(k)] =
+          AddArc(&s, topV[static_cast<std::size_t>(k)], topV[static_cast<std::size_t>(k1)],
+                 ray3d::Add(pe.centre, ray3d::Scale(up, dist)), up, pe.sweep);
+    } else {
+      baseE[static_cast<std::size_t>(k)] =
+          AddLine(&s, baseV[static_cast<std::size_t>(k)], baseV[static_cast<std::size_t>(k1)]);
+      topE[static_cast<std::size_t>(k)] =
+          AddLine(&s, topV[static_cast<std::size_t>(k)], topV[static_cast<std::size_t>(k1)]);
+    }
+    vert[static_cast<std::size_t>(k)] =
+        AddLine(&s, baseV[static_cast<std::size_t>(k)], topV[static_cast<std::size_t>(k)]);
+  }
+
+  // Bottom cap: outward normal -up; CCW about it is CW about up, i.e. the walk backwards, reversed.
+  {
+    std::vector<EdgeUse> uses;
+    uses.reserve(static_cast<std::size_t>(n));
+    for (int k = n - 1; k >= 0; --k)
+      uses.push_back(EdgeUse{baseE[static_cast<std::size_t>(k)], true});
+    s.faces.push_back(MakePlaneFace(pl.origin, ray3d::Scale(up, -1.0), std::move(uses)));
+  }
+  // Top cap: outward normal +up; CCW about it is the walk forwards.
+  {
+    std::vector<EdgeUse> uses;
+    uses.reserve(static_cast<std::size_t>(n));
+    for (int k = 0; k < n; ++k)
+      uses.push_back(EdgeUse{topE[static_cast<std::size_t>(k)], false});
+    s.faces.push_back(
+        MakePlaneFace(ray3d::Add(pl.origin, ray3d::Scale(up, dist)), up, std::move(uses)));
+  }
+  // Side faces: one per profile edge. A straight edge sweeps a plane, an arc sweeps a cylinder.
+  for (int k = 0; k < n; ++k) {
+    const int k1 = (k + 1) % n;
+    std::vector<EdgeUse> uses = {EdgeUse{baseE[static_cast<std::size_t>(k)], false},
+                                EdgeUse{vert[static_cast<std::size_t>(k1)], false},
+                                EdgeUse{topE[static_cast<std::size_t>(k)], true},
+                                EdgeUse{vert[static_cast<std::size_t>(k)], true}};
+    const ProfileEdge& pe = E[static_cast<std::size_t>(k)];
+    if (pe.arc) {
+      Face f;
+      f.surface.kind = SurfaceKind::Cylinder;
+      ucs::Ucs cyl;
+      if (!ucs::FromNormal(pe.centre, up, &cyl))
+        return Fail(Problem::DegenerateFrame, outWhy);
+      const double r = InPlaneRadius(pl, pe.centre, W[static_cast<std::size_t>(k)]);
+      f.surface.frame = cyl;
+      f.surface.radius = r;
+      f.surface.radius2 = r;
+      f.surface.height = dist;
+      const Vec3 toStart = ray3d::Sub(W[static_cast<std::size_t>(k)], pe.centre);
+      const double u0 = std::atan2(ray3d::Dot(toStart, cyl.yAxis), ray3d::Dot(toStart, cyl.xAxis));
+      f.uStart = u0;
+      f.uEnd = u0 + pe.sweep;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    } else {
+      const Vec3 edgeDir = ray3d::Sub(W[static_cast<std::size_t>(k1)], W[static_cast<std::size_t>(k)]);
+      const Vec3 nrm = ray3d::Normalize(ray3d::Cross(edgeDir, up));
+      s.faces.push_back(MakePlaneFace(W[static_cast<std::size_t>(k)], nrm, std::move(uses)));
+    }
+  }
+
+  AddSingleShell(&s);
+  // A feature result carries no recipe: the topology is the stored truth (ADR-046 (e)). An extrude
+  // recipe is permitted but deferred to the increment that first persists one.
+
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return Fail(why, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Validity.
 // ---------------------------------------------------------------------------------------------
 
@@ -1382,6 +1633,98 @@ Bounds ComputeBounds(const Solid& s) {
 // Tessellation.
 // ---------------------------------------------------------------------------------------------
 
+namespace {
+
+/// Signed area of a 2D ring (CCW positive).
+[[nodiscard]] double SignedArea2D(const std::vector<ucs::Point2D>& p) {
+  double a = 0.0;
+  const std::size_t n = p.size();
+  for (std::size_t i = 0; i < n; ++i) {
+    const ucs::Point2D& u = p[i];
+    const ucs::Point2D& v = p[(i + 1) % n];
+    a += u.x * v.y - v.x * u.y;
+  }
+  return 0.5 * a;
+}
+
+/// True when \p p turns the same way at every corner — a convex polygon, for which the centroid fan
+/// below is exact. A straight-through vertex does not count against it.
+[[nodiscard]] bool Polygon2DIsConvex(const std::vector<ucs::Point2D>& p) {
+  const std::size_t n = p.size();
+  if (n < 3)
+    return false;
+  double sign = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    const ucs::Point2D& a = p[i];
+    const ucs::Point2D& b = p[(i + 1) % n];
+    const ucs::Point2D& c = p[(i + 2) % n];
+    const double cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (std::fabs(cross) < 1e-14)
+      continue;
+    if (sign == 0.0)
+      sign = cross;
+    else if ((cross > 0.0) != (sign > 0.0))
+      return false;
+  }
+  return true;
+}
+
+[[nodiscard]] bool PointInTriangle2D(const ucs::Point2D& p, const ucs::Point2D& a, const ucs::Point2D& b,
+                                     const ucs::Point2D& c) {
+  const double d1 = (p.x - b.x) * (a.y - b.y) - (a.x - b.x) * (p.y - b.y);
+  const double d2 = (p.x - c.x) * (b.y - c.y) - (b.x - c.x) * (p.y - c.y);
+  const double d3 = (p.x - a.x) * (c.y - a.y) - (c.x - a.x) * (p.y - a.y);
+  const bool hasNeg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+  const bool hasPos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+  return !(hasNeg && hasPos);
+}
+
+/// Ear-clip a **CCW** 2D ring into triangles, each a triple of indices into \p ring. O(n^2), which
+/// is ample for a profile cap. A profile is the first thing to hand \ref Tessellate a non-convex
+/// plane face — ADR-045 named that "Phase 4's problem, when a boolean first produces a face that
+/// needs one", and an extruded L-shape needs it now.
+void EarClip(const std::vector<ucs::Point2D>& ring, std::vector<std::array<int, 3>>* tris) {
+  const int n = static_cast<int>(ring.size());
+  std::vector<int> idx(static_cast<std::size_t>(n));
+  for (int i = 0; i < n; ++i)
+    idx[static_cast<std::size_t>(i)] = i;
+
+  int guard = 0;
+  while (idx.size() > 3 && guard++ < 4 * n) {
+    const int m = static_cast<int>(idx.size());
+    bool clipped = false;
+    for (int i = 0; i < m; ++i) {
+      const int i0 = idx[static_cast<std::size_t>((i + m - 1) % m)];
+      const int i1 = idx[static_cast<std::size_t>(i)];
+      const int i2 = idx[static_cast<std::size_t>((i + 1) % m)];
+      const ucs::Point2D& a = ring[static_cast<std::size_t>(i0)];
+      const ucs::Point2D& b = ring[static_cast<std::size_t>(i1)];
+      const ucs::Point2D& c = ring[static_cast<std::size_t>(i2)];
+      if ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) <= 0.0)
+        continue;  // reflex or straight — not an ear tip
+      bool contains = false;
+      for (int j = 0; j < m && !contains; ++j) {
+        const int ij = idx[static_cast<std::size_t>(j)];
+        if (ij == i0 || ij == i1 || ij == i2)
+          continue;
+        contains = PointInTriangle2D(ring[static_cast<std::size_t>(ij)], a, b, c);
+      }
+      if (contains)
+        continue;
+      tris->push_back({i0, i1, i2});
+      idx.erase(idx.begin() + i);
+      clipped = true;
+      break;
+    }
+    if (!clipped)
+      break;  // no ear found (degenerate input) — fan whatever is left rather than loop
+  }
+  for (std::size_t i = 1; i + 1 < idx.size(); ++i)
+    tris->push_back({idx[0], idx[i], idx[i + 1]});
+}
+
+} // namespace
+
 bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy) {
   if (!out)
     return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
@@ -1402,8 +1745,8 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     case SurfaceKind::Plane: {
       if (f.loops.size() != 1)
         return Fail(Problem::PlaneFaceNotSimple, outWhy);
-      // Walk the boundary into a polyline, then fan from its centroid. Correct for the convex,
-      // hole-free faces every primitive produces; see the header's note on Phase 4.
+      // Walk the boundary into a polyline. Arc edges are subdivided by the same chord rule the
+      // curved faces use, so the cap and the wall it meets do not disagree.
       std::vector<Vec3> ring;
       for (const EdgeUse& u : f.loops[0].uses) {
         const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
@@ -1416,18 +1759,47 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       }
       if (ring.size() < 3)
         return Fail(Problem::DegenerateFace, outWhy);
-      Vec3 centroid{};
-      for (const Vec3& p : ring)
-        centroid = ray3d::Add(centroid, p);
-      centroid = ray3d::Scale(centroid, 1.0 / static_cast<double>(ring.size()));
       const Vec3 n = sf.frame.zAxis;
-      const std::uint32_t c = mb.Push(centroid, n);
-      std::vector<std::uint32_t> idx;
-      idx.reserve(ring.size());
+      std::vector<ucs::Point2D> ring2;
+      ring2.reserve(ring.size());
       for (const Vec3& p : ring)
-        idx.push_back(mb.Push(p, n));
-      for (std::size_t i = 0; i < idx.size(); ++i)
-        mb.Tri(c, idx[i], idx[(i + 1) % idx.size()]);
+        ring2.push_back(ucs::WorldToPlane(sf.frame, p));
+
+      if (Polygon2DIsConvex(ring2)) {
+        // The centroid fan — unchanged from REQ-313, so every primitive tessellates as it did.
+        Vec3 centroid{};
+        for (const Vec3& p : ring)
+          centroid = ray3d::Add(centroid, p);
+        centroid = ray3d::Scale(centroid, 1.0 / static_cast<double>(ring.size()));
+        const std::uint32_t c = mb.Push(centroid, n);
+        std::vector<std::uint32_t> idx;
+        idx.reserve(ring.size());
+        for (const Vec3& p : ring)
+          idx.push_back(mb.Push(p, n));
+        for (std::size_t i = 0; i < idx.size(); ++i)
+          mb.Tri(c, idx[i], idx[(i + 1) % idx.size()]);
+      } else {
+        // Non-convex cap (REQ-314): ear-clip. The clipper wants a CCW ring; the 2D points are the
+        // same either way, so a triangle it returns is still CCW about `n` once mapped back.
+        const bool ccw = SignedArea2D(ring2) >= 0.0;
+        std::vector<int> order(ring.size());
+        for (std::size_t i = 0; i < ring.size(); ++i)
+          order[i] = static_cast<int>(ccw ? i : ring.size() - 1 - i);
+        std::vector<ucs::Point2D> ccwRing;
+        ccwRing.reserve(ring.size());
+        for (int o : order)
+          ccwRing.push_back(ring2[static_cast<std::size_t>(o)]);
+        std::vector<std::array<int, 3>> tris;
+        EarClip(ccwRing, &tris);
+        std::vector<std::uint32_t> idx;
+        idx.reserve(ring.size());
+        for (const Vec3& p : ring)
+          idx.push_back(mb.Push(p, n));
+        for (const std::array<int, 3>& t : tris)
+          mb.Tri(idx[static_cast<std::size_t>(order[static_cast<std::size_t>(t[0])])],
+                 idx[static_cast<std::size_t>(order[static_cast<std::size_t>(t[1])])],
+                 idx[static_cast<std::size_t>(order[static_cast<std::size_t>(t[2])])]);
+      }
       break;
     }
     case SurfaceKind::Cylinder:
