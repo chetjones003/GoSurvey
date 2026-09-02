@@ -11790,6 +11790,12 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::Boolean) {
+    if (st.selBoxWaitingSecond)
+      finishBox();  // every phase is a selection step; Enter advances it
+    return;
+  }
+
   if (st.active == K::Circle) {
     switch (st.circlePhase) {
     case AppCommandState::CirclePhase::WaitCenterOrMode:
@@ -24494,96 +24500,144 @@ void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vec
 }
 
 // -------------------------------------------------------------------------------------------------
-// UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046 increment 4, B1). Selection-driven, like the
-// EXTRUDE one-liner: exactly two selected solids are combined and replaced by the result in one
-// undo step. A pair the kernel refuses is reported and the document is untouched (REQ-201).
+// UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046 increment 4, B1). SUBTRACT prompts twice — the
+// solids to subtract FROM, then the solids to subtract; UNION and INTERSECT prompt once. A pre-
+// selection answers the first prompt. Every involved solid is replaced by the result in one undo
+// step; a pair the kernel refuses is reported and the document is untouched (REQ-201).
 // -------------------------------------------------------------------------------------------------
 
-void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log) {
-  const char* verb =
-      op == CadBooleanOp::Union ? "UNION" : op == CadBooleanOp::Subtract ? "SUBTRACT" : "INTERSECT";
-  const int nSolid = static_cast<int>(st.cadSolids.size());
+namespace {
+
+const char* BooleanVerb(CadBooleanOp op) {
+  return op == CadBooleanOp::Union ? "UNION" : op == CadBooleanOp::Subtract ? "SUBTRACT" : "INTERSECT";
+}
+
+/// Solid indices in the current selection, de-duplicated, in selection order.
+std::vector<int> SelectedSolidIndices(const AppCommandState& st) {
+  const int n = static_cast<int>(st.cadSolids.size());
   std::vector<int> idx;
   for (const SelectedEntity& e : st.selection) {
-    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < nSolid &&
+    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < n &&
         std::find(idx.begin(), idx.end(), e.index) == idx.end())
       idx.push_back(e.index);
   }
-  if (idx.size() < 2) {
-    log.push_back(std::string(verb) + " — select at least two solids first, then run " + verb + ".");
-    return;
-  }
-  std::vector<brep::Solid> operands;
-  for (int i : idx) {
-    if (!st.cadSolids[static_cast<size_t>(i)]) {
-      log.push_back(std::string(verb) + " — a selected solid is missing.");
-      return;
-    }
-    operands.push_back(*st.cadSolids[static_cast<size_t>(i)]);
-  }
+  return idx;
+}
 
-  auto apply = [&](const brep::Solid& x, const brep::Solid& y, std::vector<brep::Solid>* r,
-                   brep::Problem* w) {
-    switch (op) {
-    case CadBooleanOp::Union:
-      return brep::BooleanUnion(x, y, r, w);
-    case CadBooleanOp::Subtract:
-      return brep::BooleanSubtract(x, y, r, w);
-    case CadBooleanOp::Intersect:
-      return brep::BooleanIntersect(x, y, r, w);
-    }
-    return false;
-  };
+bool ApplyOnePair(CadBooleanOp op, const brep::Solid& x, const brep::Solid& y,
+                  std::vector<brep::Solid>* r, brep::Problem* w) {
+  switch (op) {
+  case CadBooleanOp::Union:
+    return brep::BooleanUnion(x, y, r, w);
+  case CadBooleanOp::Subtract:
+    return brep::BooleanSubtract(x, y, r, w);
+  case CadBooleanOp::Intersect:
+    return brep::BooleanIntersect(x, y, r, w);
+  }
+  return false;
+}
 
-  // Left-fold the operands. UNION keeps every disjoint piece and folds later operands against each.
-  std::vector<brep::Solid> acc{operands[0]};
+/// Fold \p solids left with \p op. UNION keeps disjoint pieces aside; the others must stay one solid.
+/// Returns false (message pushed) on a kernel refusal.
+bool FoldBoolean(CadBooleanOp op, std::vector<brep::Solid> solids, std::vector<brep::Solid>* out,
+                 std::vector<std::string>& log) {
+  const std::string verb = BooleanVerb(op);
+  std::vector<brep::Solid> acc{std::move(solids[0])};
   brep::Problem why = brep::Problem::Ok;
-  for (std::size_t k = 1; k < operands.size(); ++k) {
+  for (std::size_t k = 1; k < solids.size(); ++k) {
     if (op == CadBooleanOp::Union) {
       std::vector<brep::Solid> nextAcc;
-      brep::Solid pending = operands[k];
+      brep::Solid pending = std::move(solids[k]);
       bool merged = false;
       for (brep::Solid& piece : acc) {
         std::vector<brep::Solid> r;
-        if (!apply(piece, pending, &r, &why)) {
-          log.push_back(std::string(verb) + " — " + brep::ProblemText(why) + " Nothing changed.");
-          return;
+        if (!ApplyOnePair(op, piece, pending, &r, &why)) {
+          log.push_back(verb + " — " + brep::ProblemText(why) + " Nothing changed.");
+          return false;
         }
         if (!merged && r.size() == 1) {
           pending = std::move(r[0]);
           merged = true;
         } else {
-          nextAcc.push_back(std::move(piece));  // disjoint from `pending`: keep it aside
+          nextAcc.push_back(std::move(piece));
         }
       }
       nextAcc.push_back(std::move(pending));
       acc = std::move(nextAcc);
     } else {
       std::vector<brep::Solid> r;
-      if (!apply(acc[0], operands[k], &r, &why) || r.size() != 1) {
-        log.push_back(std::string(verb) + " — " + brep::ProblemText(why) + " Nothing changed.");
-        return;
+      if (!ApplyOnePair(op, acc[0], solids[k], &r, &why) || r.size() != 1) {
+        log.push_back(verb + " — " + brep::ProblemText(why) + " Nothing changed.");
+        return false;
       }
       acc = std::move(r);
     }
   }
-  if (acc.empty()) {
-    log.push_back(std::string(verb) + " — the result is empty. Nothing changed.");
+  *out = std::move(acc);
+  return true;
+}
+
+/// Combine the solids at \p minuend (UNION/INTERSECT: all operands; SUBTRACT: the "subtract from"
+/// set) and \p subtrahend (SUBTRACT only) and replace every one of them with the result.
+void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>& minuend,
+                   const std::vector<int>& subtrahend, std::vector<std::string>& log) {
+  const std::string verb = BooleanVerb(op);
+  std::vector<int> all = minuend;
+  all.insert(all.end(), subtrahend.begin(), subtrahend.end());
+  for (int i : all) {
+    if (i < 0 || static_cast<size_t>(i) >= st.cadSolids.size() || !st.cadSolids[static_cast<size_t>(i)]) {
+      log.push_back(verb + " — a selected solid is missing. Nothing changed.");
+      return;
+    }
+  }
+
+  auto grab = [&](const std::vector<int>& v) {
+    std::vector<brep::Solid> s;
+    for (int i : v)
+      s.push_back(*st.cadSolids[static_cast<size_t>(i)]);
+    return s;
+  };
+
+  std::vector<brep::Solid> result;
+  if (op != CadBooleanOp::Subtract) {
+    if (!FoldBoolean(op, grab(minuend), &result, log))
+      return;
+  } else {
+    // Fold-union the minuend set, then subtract each subtrahend solid from every piece.
+    if (!FoldBoolean(CadBooleanOp::Union, grab(minuend), &result, log))
+      return;
+    for (const brep::Solid& sub : grab(subtrahend)) {
+      std::vector<brep::Solid> next;
+      for (const brep::Solid& piece : result) {
+        std::vector<brep::Solid> r;
+        brep::Problem why = brep::Problem::Ok;
+        if (!brep::BooleanSubtract(piece, sub, &r, &why)) {
+          log.push_back(verb + " — " + brep::ProblemText(why) + " Nothing changed.");
+          return;
+        }
+        for (brep::Solid& x : r)
+          next.push_back(std::move(x));
+      }
+      result = std::move(next);
+    }
+  }
+  if (result.empty()) {
+    log.push_back(verb + " — the result is empty. Nothing changed.");
     return;
   }
 
-  const EntityAttributes attrs = static_cast<size_t>(idx[0]) < st.cadSolidAttrs.size()
-                                     ? st.cadSolidAttrs[static_cast<size_t>(idx[0])]
+  const EntityAttributes attrs = static_cast<size_t>(minuend[0]) < st.cadSolidAttrs.size()
+                                     ? st.cadSolidAttrs[static_cast<size_t>(minuend[0])]
                                      : MakeNewEntityAttrs(st);
   PushUndoSnapshot(st, verb);
-  std::vector<int> sorted = idx;
+  std::vector<int> sorted = all;
   std::sort(sorted.begin(), sorted.end(), std::greater<int>());
   for (int i : sorted) {
     st.cadSolids.erase(st.cadSolids.begin() + i);
     if (static_cast<size_t>(i) < st.cadSolidAttrs.size())
       st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + i);
   }
-  for (brep::Solid& s : acc) {
+  for (brep::Solid& s : result) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
     st.cadSolidAttrs.push_back(attrs);
@@ -24591,8 +24645,107 @@ void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::
   }
   BumpCadGpuCache(st);
   st.selection.clear();
-  log.push_back(std::string(verb) + " — " + std::to_string(idx.size()) + " solids combined into " +
-                std::to_string(acc.size()) + (acc.size() == 1 ? " solid." : " solids."));
+  log.push_back(verb + " — " + std::to_string(all.size()) + " solid(s) combined into " +
+                std::to_string(result.size()) + (result.size() == 1 ? " solid." : " solids."));
+}
+
+}  // namespace
+
+void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log) {
+  const std::vector<int> idx = SelectedSolidIndices(st);
+  if (idx.size() < 2) {
+    log.push_back(std::string(BooleanVerb(op)) + " — select at least two solids first.");
+    return;
+  }
+  CommitBoolean(st, op, idx, {}, log);
+}
+
+void CancelBooleanCommand(AppCommandState& st) {
+  st.booleanPhase = AppCommandState::BooleanPhase::SelectOperands;
+  st.booleanMinuend.clear();
+}
+
+std::string CadBooleanPromptText(const AppCommandState& st) {
+  switch (st.booleanPhase) {
+  case AppCommandState::BooleanPhase::SelectOperands:
+    return std::string(BooleanVerb(static_cast<CadBooleanOp>(st.booleanOp))) +
+           " — select solids to combine, Enter when done. ESC cancels.";
+  case AppCommandState::BooleanPhase::SelectMinuend:
+    return "SUBTRACT — select solids to subtract FROM, Enter when done. ESC cancels.";
+  case AppCommandState::BooleanPhase::SelectSubtrahend:
+    return "SUBTRACT — select solids to subtract, Enter when done. ESC cancels.";
+  }
+  return "BOOLEAN";
+}
+
+void StartBooleanCommand(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log) {
+  CancelBooleanCommand(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Boolean;
+  st.lastCommand = AppCommandState::Kind::Boolean;
+  st.booleanOp = static_cast<int>(op);
+  st.selBoxWaitingSecond = false;
+
+  const std::vector<int> pre = SelectedSolidIndices(st);
+  if (op == CadBooleanOp::Subtract) {
+    if (!pre.empty()) {
+      st.booleanMinuend = pre;
+      st.selection.clear();
+      st.booleanPhase = AppCommandState::BooleanPhase::SelectSubtrahend;
+    } else {
+      st.booleanPhase = AppCommandState::BooleanPhase::SelectMinuend;
+    }
+  } else {
+    if (pre.size() >= 2) {
+      CommitBoolean(st, op, pre, {}, log);
+      st.active = AppCommandState::Kind::None;
+      CancelBooleanCommand(st);
+      return;
+    }
+    st.booleanPhase = AppCommandState::BooleanPhase::SelectOperands;
+  }
+  log.push_back(CadBooleanPromptText(st));
+}
+
+bool HandleBooleanTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Boolean)
+    return false;
+  if (!StringUtil::trimCopy(lineIn).empty())
+    return false;  // only Enter means anything at a selection prompt
+  const CadBooleanOp op = static_cast<CadBooleanOp>(st.booleanOp);
+  const std::vector<int> sel = SelectedSolidIndices(st);
+
+  using BP = AppCommandState::BooleanPhase;
+  if (st.booleanPhase == BP::SelectMinuend) {
+    if (sel.empty()) {
+      log.push_back("SUBTRACT — nothing selected. Click a solid, or ESC.");
+      return true;
+    }
+    st.booleanMinuend = sel;
+    st.selection.clear();
+    st.booleanPhase = BP::SelectSubtrahend;
+    log.push_back(CadBooleanPromptText(st));
+    return true;
+  }
+  if (st.booleanPhase == BP::SelectSubtrahend) {
+    if (sel.empty()) {
+      log.push_back("SUBTRACT — select the solids to subtract, or ESC.");
+      return true;
+    }
+    CommitBoolean(st, CadBooleanOp::Subtract, st.booleanMinuend, sel, log);
+    CancelBooleanCommand(st);
+    st.active = AppCommandState::Kind::None;
+    return true;
+  }
+  // SelectOperands (UNION / INTERSECT).
+  if (sel.size() < 2) {
+    log.push_back(std::string(BooleanVerb(op)) + " — select at least two solids, or ESC.");
+    return true;
+  }
+  CommitBoolean(st, op, sel, {}, log);
+  CancelBooleanCommand(st);
+  st.active = AppCommandState::Kind::None;
+  return true;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -26147,6 +26300,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("SLICE canceled.");
     CancelSliceCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Boolean) {
+    log.push_back("Command canceled.");
+    CancelBooleanCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
   else if (st.active == AppCommandState::Kind::FeatureLine)
@@ -26803,6 +26960,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandleRevolveTextInput("", st, log);
     } else if (st.active == K::Slice) {
       (void)HandleSliceTextInput("", st, log);
+    } else if (st.active == K::Boolean) {
+      (void)HandleBooleanTextInput("", st, log);
     } else if (st.active == K::Offset) {
       using OP = AppCommandState::OffsetPhase;
       if (st.offsetPhase == OP::WaitDistanceOrThrough)
@@ -27128,15 +27287,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     if (plotTok == "union" || plotTok == "uni") {
-      CadBooleanSelection(st, CadBooleanOp::Union, log);
+      StartBooleanCommand(st, CadBooleanOp::Union, log);
       return;
     }
     if (plotTok == "subtract" || plotTok == "su") {
-      CadBooleanSelection(st, CadBooleanOp::Subtract, log);
+      StartBooleanCommand(st, CadBooleanOp::Subtract, log);
       return;
     }
     if (plotTok == "intersect" || plotTok == "in") {
-      CadBooleanSelection(st, CadBooleanOp::Intersect, log);
+      StartBooleanCommand(st, CadBooleanOp::Intersect, log);
       return;
     }
     // `PERSPECTIVE ON` in one line; a bare `PERSPECTIVE` reports the current projection — the same
@@ -28570,6 +28729,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleSliceTextInput(line, st, log))
       return;
     log.push_back(CadSlicePromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Boolean) {
+    if (HandleBooleanTextInput(line, st, log))
+      return;
+    log.push_back(CadBooleanPromptText(st));
     return;
   }
 

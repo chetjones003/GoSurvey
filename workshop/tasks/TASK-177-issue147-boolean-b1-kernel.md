@@ -110,7 +110,24 @@ and a "fewer than two" refusal. Full suite **997/997**.
 **Still refused:** curved operands (`BooleanCurvedFace`). `BooleanNonConvex` is now unreachable
 (kept in the enum).
 
+### Interactive command flow (done, 2026-09-02, PR #NNN — user feedback)
+
+`SUBTRACT` was a one-shot on a pre-selection ("first − rest"), which is not how AutoCAD works. It
+is now a real `Kind::Boolean` state machine: **`SUBTRACT` prompts twice** — "select solids to
+subtract FROM", Enter, then "select solids to subtract", Enter. `UNION` / `INTERSECT` prompt once.
+A pre-selection answers the first prompt (for `SUBTRACT`, it becomes the "subtract from" set).
+Every involved solid is replaced by the result in one undo step.
+
+`CommitBoolean` fold-unions the minuend set, then subtracts each subtrahend solid from every piece.
+Wired through the six places (`ViewportPickPolicy` → `SelectionAccumulate` for every phase,
+`SubmitViewportPickImpl`, `ProcessCommandLineSubmit` Enter, `CommandInputHint`,
+`CancelActiveCommand`, dispatch). `CadBooleanSelection` kept as the pre-selection shortcut.
+
+Transcript rewritten around the two-phase flow: `UNION` from a pre-selection, the full two-prompt
+`SUBTRACT`, `SUBTRACT` honouring a pre-selection, `INTERSECT`, a curved refusal, `.gs` round-trip.
+Full suite **998/998**.
+
 ### Next
 
-Curved operands with line/arc intersections (perpendicular / parallel cuts → circles), paired with
-curved-face slicing — then B2 (the general analytic intersection curve).
+Curved operands with line/arc intersections (box ∩ axis-aligned cylinder) — then B2 (the general
+analytic intersection curve).
