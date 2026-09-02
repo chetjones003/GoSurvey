@@ -2226,7 +2226,12 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   - **Increment B1** — operand pairs whose every intersection curve is already a line or an arc:
     box ∩ box, box ∩ axis-aligned cylinder, coaxial cylinder ∩ cylinder, sphere ∩ plane, and the
     like. A pair that would need a curve outside `{Line, Arc}` is **refused by name** (REQ-201),
-    never approximated. This ships a working, verifiable Boolean.
+    never approximated. This ships a working, verifiable Boolean. **Refined 2026-09-02
+    (D-2026-09-02-b):** within B1, curved operands are supported for **UNION and INTERSECT only** —
+    those create only outward-facing curved faces. A curved **SUBTRACT** (a round hole / bore) leaves
+    a cylindrical wall facing *inward*, which ADR-045's `Surface` cannot express (no reversed flag),
+    so it moves to B2 — the increment that adds the general answer to inward-curving faces. Curved
+    SUBTRACT is refused by name in B1.
   - **Increment B2** — a **general analytic intersection-curve type** is added to the kernel
     (a parametric procedural curve evaluated from its two surfaces, tessellated on demand like every
     other derived representation), and the refusals from B1 are lifted pair by pair as each
@@ -2295,15 +2300,20 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   2. **Revolve** — line and arc profiles, full and partial, plus the extrude taper option.
   3. **Slice** — by plane, one side or both.
   4. **Booleans Increment B1** — line/arc-intersection operand pairs only, others refused by name.
-  5. **Booleans Increment B2** — general analytic intersection curve, refusals lifted pair by pair.
+     Curved operands: UNION / INTERSECT only (D-2026-09-02-b); curved SUBTRACT deferred to B2.
+  5. **Booleans Increment B2** — general analytic intersection curve *and* inward-facing curved
+     faces (so curved SUBTRACT), refusals lifted pair by pair.
   6. *(separate REQ-315, separate ADR revision)* — freeform surfaces, then sweep and loft.
 
-### ADR-047 — Curved polyline segments: a per-vertex bulge lane by rename-widen, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
+### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
-- **Status:** accepted (2026-09-02, D-2026-09-02-b). The storage method (rename-widen the vertex
-  stride, not a sidecar array) and the phased delivery were chosen by the user, who then accepted
-  this ADR text as written. Backs REQ-316. Paired with a new proposed requirement because the
-  feature request had no accepted `REQ-NNN` behind it.
+- **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —
+  corrected before any storage code from an initially-accepted stride 3→4 rename-widen (see the
+  correction in (a)) — and the phased delivery were chosen by the user, who accepted this ADR text.
+  Backs REQ-316. Paired with a new requirement because the feature request had no accepted
+  `REQ-NNN` behind it. Increments 1 (storage + POLYLINE arc mode + render + DXF/`.gs`), 3 (JOIN of
+  lines + arcs), and the pick/box-select/arc-grip work of increment 2 delivered 2026-09-02
+  (D-2026-09-02-f keyword choice, D-2026-09-02-g hover aperture; TASK-180..183).
 
 - **Context.** A feature request asks for two things that are one thing: (1) POLYLINE should switch
   between "line mode" and "arc mode" mid-command so a single polyline can contain straight *and*
@@ -2369,7 +2379,7 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
 
   **(d) POLYLINE gains `ARC` / `LINE` sub-modes.** While drawing (`polylinePhase == NeedNextPoint`)
   the keywords `ARC` and `LINE` (full words — `A` / `ANGLE` are the existing segment-bearing lock,
-  D-2026-09-02-c) toggle the mode carried on the polyline draft state. Arc mode's default is an arc
+  D-2026-09-02-f) toggle the mode carried on the polyline draft state. Arc mode's default is an arc
   **tangent to the previous segment**, its far end at the next pick; `RADIUS` and `CANGLE` (included
   angle) set the next arc segment. `CEnter`, `Second point`, `Direction` are deferred past increment
   1. `UNDO` removes the last segment. 3DPOLY stays line-only (arc + independent per-vertex Z is out

@@ -1,0 +1,71 @@
+# REQ-314 / ADR-046 increment 3b (GitHub #147, Phase 4 of #120) — the SLICE command, end to end.
+#
+# BrepTests proves the kernel (brep::Slice): volumes, topology, refusals. This transcript tests the
+# half the kernel cannot: that selecting a solid, defining a plane with three points and choosing a
+# side replaces the solid with its kept piece(s), that it is one undo step, and that a solid the
+# kernel cannot slice is reported with nothing changed.
+
+NEW
+
+# A 20 x 12 x 8 box (volume 1920), centred on the origin, rising z 0..8.
+CMD BOX 0,0 20 12 8
+EXPECT SOLIDS 1
+
+# --- Keep the top half of a horizontal cut at z = 4 -----------------------------------------
+BOX -11 -7 11 7
+EXPECT SELECTED 1
+CMD SLICE
+CMD 0,0,4
+CMD 10,0,4
+CMD 0,10,4
+CMD 0,0,6
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 960 736 8 12 6
+EXPECT LOG "1 solid(s) cut into 1 piece(s)"
+
+# --- One undo restores the whole box --------------------------------------------------------
+CMD UNDO
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1920 992 8 12 6
+
+# --- Keep BOTH halves ----------------------------------------------------------------------
+BOX -11 -7 11 7
+EXPECT SELECTED 1
+CMD SLICE
+CMD 0,0,5
+CMD 10,0,5
+CMD 0,10,5
+CMD B
+EXPECT SOLIDS 2
+
+# --- A cylinder cut PERPENDICULAR to its axis is cut to length (a circle) -----------------
+CMD CYLINDER 100,0 4 10
+EXPECT SOLIDS 3
+BOX 95 -5 105 5
+EXPECT SELECTED 1
+CMD SLICE
+CMD 100,-6,6
+CMD 100,6,6
+CMD 106,0,6
+CMD B
+EXPECT SOLIDS 4
+
+# --- An OBLIQUE cut through a cylinder is refused (an ellipse), nothing changes -----------
+CMD CYLINDER 200,0 4 10
+EXPECT SOLIDS 5
+BOX 195 -5 205 5
+EXPECT SELECTED 1
+CMD SLICE
+CMD 195,0,3
+CMD 205,0,7
+CMD 200,6,5
+CMD 200,0,12
+EXPECT LOG "flat faces only"
+EXPECT SOLIDS 5
+
+# --- Solids survive a .gs save and reopen ------------------------------------------------
+SAVEAS %OUT%/req314-slice.gs
+OPEN %OUT%/req314-slice.gs
+EXPECT SOLIDS 5
+
+CHECK ALL

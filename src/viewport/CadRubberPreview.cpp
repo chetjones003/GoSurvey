@@ -561,4 +561,19 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       }
     }
   }
+
+  // --- SLICE: the triangle the three picked points span, as a hint of the cutting plane.
+  if (cmd.active == AppCommandState::Kind::Slice) {
+    using SP = AppCommandState::SlicePhase;
+    auto seg = [&](const ray3d::Vec3& a, const ray3d::Vec3& b) {
+      PushRubberSegViewRel(rubberLines, a.x, a.y, b.x, b.y, 0., 0., static_cast<float>(a.z),
+                           static_cast<float>(b.z));
+    };
+    if (cmd.slicePhase == SP::WaitP3 || cmd.slicePhase == SP::WaitKeepSide)
+      seg(cmd.sliceP1, cmd.sliceP2);
+    if (cmd.slicePhase == SP::WaitKeepSide) {
+      seg(cmd.sliceP2, cmd.sliceP3);
+      seg(cmd.sliceP3, cmd.sliceP1);
+    }
+  }
 }

@@ -1,0 +1,104 @@
+# REQ-314 / ADR-046 increment 4 B1 (GitHub #147, Phase 4 of #120) — UNION / SUBTRACT / INTERSECT.
+#
+# BrepTests proves the kernel. This transcript tests the commands: UNION / INTERSECT prompt once for
+# the solids to combine; SUBTRACT prompts twice — the solids to subtract FROM, then the solids to
+# subtract. Every involved solid is replaced by the result in one undo step, and a pair the kernel
+# refuses is reported with the document unchanged.
+
+NEW
+
+# A: x[-10,10] y[-5,5] z[0,10] (volume 2000).  B: x[5,25] y[-5,5] z[4,14] (volume 2000).
+# Overlap x[5,10] y[-5,5] z[4,10] = 5 x 10 x 6 = 300.  Union 3700, subtract (A-B) 1700, intersect 300.
+CMD BOX 0,0 20 10 10
+CMD BOX 15,0,4 20 10 10
+EXPECT SOLIDS 2
+
+# --- UNION (one prompt; a pre-selection answers it) --------------------------------------
+BOX -12 -8 28 8
+EXPECT SELECTED 2
+CMD UNION
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 3700"
+
+CMD UNDO
+EXPECT SOLIDS 2
+
+# --- SUBTRACT: two prompts ---------------------------------------------------------------
+CMD SUBTRACT
+EXPECT LOG "select solids to subtract FROM"
+BOX -12 -8 3 8
+EXPECT SELECTED 1
+CMD
+EXPECT LOG "select solids to subtract"
+BOX 12 -8 28 8
+EXPECT SELECTED 1
+CMD
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 1700"
+
+CMD UNDO
+EXPECT SOLIDS 2
+
+# --- SUBTRACT honours a pre-selection as the "subtract from" set ------------------------
+BOX -12 -8 3 8
+EXPECT SELECTED 1
+CMD SUBTRACT
+EXPECT LOG "select solids to subtract"
+BOX 12 -8 28 8
+CMD
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 1700"
+
+CMD UNDO
+EXPECT SOLIDS 2
+
+# --- INTERSECT --------------------------------------------------------------------------
+BOX -12 -8 28 8
+CMD INTERSECT
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 300"
+
+CMD UNDO
+EXPECT SOLIDS 2
+
+# --- A cylinder through a box: UNION is a boss (curved B1, D-2026-09-02-b) --------------
+NEW
+CMD BOX 0,0 10 10 10
+CMD CYLINDER 0,0,-5 2 20
+BOX -8 -8 8 8
+EXPECT SELECTED 2
+CMD UNION
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 1125"
+
+CMD UNDO
+EXPECT SOLIDS 2
+
+# INTERSECT of the same pair is the plug.
+BOX -8 -8 8 8
+CMD INTERSECT
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 125"
+
+# --- .gs round-trip of a subtract result ---------------------------------------------
+NEW
+CMD BOX 0,0 20 10 10
+CMD BOX 15,0,4 20 10 10
+BOX -12 -8 3 8
+CMD SUBTRACT
+BOX 12 -8 28 8
+CMD
+EXPECT SOLIDS 1
+SAVEAS %OUT%/req314-boolean.gs
+OPEN %OUT%/req314-boolean.gs
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 1700"
+
+CHECK ALL

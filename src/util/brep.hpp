@@ -235,7 +235,25 @@ enum class Problem {
   /// (one whose material is on its +radial side) cannot arise — and a hollow revolve is a boolean
   /// SUBTRACT, not a profile shape.
   RevolveProfileMissesAxis,
-  RevolveArcInProfile         ///< An arc edge in a revolved profile (increment 2b — sphere / torus portions).
+  RevolveArcInProfile,        ///< An arc edge in a revolved profile (increment 2b — sphere / torus portions).
+
+  // --- Slice (REQ-314 increment 3). ---
+  SliceDegeneratePlane,  ///< A slicing plane whose normal is zero or not finite.
+  SlicePlaneMissesSolid, ///< The plane does not pass through the solid — nothing to cut.
+  SliceCurvedFace,       ///< The solid has a curved face; increment 3a slices planar-faced solids only.
+  SliceResultComplex,    ///< The cut cross-section is not a single loop, or a side splits into pieces.
+
+  // --- Booleans (REQ-314 increment 4, B1). ---
+  /// A curved operand pair B1 cannot combine: a curved SUBTRACT (the hole wall faces inward, which
+  /// \ref Surface cannot express — B2, per D-2026-09-02-b), a cone / sphere / torus operand, or a
+  /// cylinder that only partly penetrates the other solid.
+  BooleanCurvedFace,
+  BooleanNonConvex,     ///< An operand is not convex; B1 combines convex solids only (B2 is general).
+  /// A cylinder set at an angle to the other solid's faces — the two would meet along an ellipse,
+  /// which needs the general Boolean (increment B2). Named so the refusal identifies the surface pair.
+  BooleanObliqueCylinder,
+  BooleanEmptyResult,   ///< The operation produces nothing (an INTERSECT of disjoint solids).
+  BooleanResultInvalid  ///< The stitched result did not pass validation — refused rather than stored.
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -356,6 +374,38 @@ struct Profile {
 /// (\ref Problem::RevolveProfileCrossesAxis), and a bad angle (\ref Problem::NonPositiveAngle).
 [[nodiscard]] bool Revolve(const Profile& profile, const Vec3& axisPoint, const Vec3& axisDir,
                            double angleRad, Solid* out, Problem* outWhy);
+
+/// Which side (or sides) of the cut \ref Slice keeps. "Above" is the `+planeNormal` side.
+enum class SliceKeep : std::uint8_t { Above, Below, Both };
+
+/// Cut \p solid by the unbounded plane through \p planePoint with unit \p planeNormal, and write the
+/// kept piece(s) to \p outAbove and/or \p outBelow (either may be null, and one is left untouched
+/// when \p keep is a single side). Each kept piece is a valid closed solid: the cut adds one new
+/// planar face bounded by the plane's intersection with the solid's faces.
+///
+/// Increment 3 of REQ-314. **Planar-faced solids only** (a box, a straight extrusion, a revolve of a
+/// rectilinear profile) — a curved face is refused (\ref Problem::SliceCurvedFace), as an oblique
+/// plane through a cylinder cuts an ellipse, which the kernel's `{Line, Arc}` curves cannot hold;
+/// that case arrives with the analytic Booleans. A plane that misses the solid, or one that would
+/// split a kept side into disjoint pieces, is refused rather than producing a sliver
+/// (\ref Problem::SlicePlaneMissesSolid, \ref Problem::SliceResultComplex). Nothing is written unless
+/// every kept piece passes \ref Validate (REQ-201). The results carry no recipe.
+[[nodiscard]] bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                         SliceKeep keep, Solid* outAbove, Solid* outBelow, Problem* outWhy);
+
+/// Boolean combination of two solids (REQ-314 increment 4 / ADR-046 — the B1 subset). The result is
+/// written to \p out as one or more solids: usually one, but a UNION of solids that do not touch is
+/// two, and a SUBTRACT that splits its operand is several. Nothing is written unless every piece
+/// passes \ref Validate (REQ-201); \p out is left untouched on failure.
+///
+/// **B1 combines convex, planar-faced solids** — a box, a wedge, a pyramid, a convex extrusion. A
+/// curved face (\ref Problem::BooleanCurvedFace) or a non-convex operand
+/// (\ref Problem::BooleanNonConvex) is refused: those need the general analytic intersection curve
+/// of B2. An INTERSECT with no common volume reports \ref Problem::BooleanEmptyResult. The results
+/// carry no recipe.
+[[nodiscard]] bool BooleanUnion(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy);
+[[nodiscard]] bool BooleanSubtract(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy);
+[[nodiscard]] bool BooleanIntersect(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy);
 
 // ---------------------------------------------------------------------------------------------
 // Validity.

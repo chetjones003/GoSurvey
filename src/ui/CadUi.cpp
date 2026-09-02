@@ -8851,6 +8851,16 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     revolveHint = CadRevolvePromptText(cmd);
     return revolveHint.c_str();
   }
+  if (cmd.active == AppCommandState::Kind::Slice) {
+    static std::string sliceHint;
+    sliceHint = CadSlicePromptText(cmd);
+    return sliceHint.c_str();
+  }
+  if (cmd.active == AppCommandState::Kind::Boolean) {
+    static std::string boolHint;
+    boolHint = CadBooleanPromptText(cmd);
+    return boolHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Circle) {
     using CP = AppCommandState::CirclePhase;
     switch (cmd.circlePhase) {

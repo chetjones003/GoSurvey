@@ -1,4 +1,4 @@
-# TASK-176 — Specify curved polyline segments (POLYLINE arc mode + JOIN)
+# TASK-180 — Specify curved polyline segments (POLYLINE arc mode + JOIN)
 
 - Type:    docs (specification)
 - Status:  done
@@ -9,7 +9,7 @@
 
 - Requirements: **REQ-316** (proposed → accepted 2026-09-02)
 - ADR:          **ADR-047**
-- Decision:     **D-2026-09-02-b**
+- Decision:     **D-2026-09-02-e**
 - Owning subsystem: Specification layer (`spec/`)
 
 ## 2. Why this is a Specification task, not a Workshop task
@@ -72,20 +72,20 @@ with the user:
 
 - `spec/architecture.md` — added **ADR-047**; amended invariant **§11.8** to record
   the polyline vertex store as stride-4 `x,y,z,bulge`.
-- `spec/project.md` — added decision-log row **D-2026-09-02-b**.
+- `spec/project.md` — added decision-log row **D-2026-09-02-e**.
 - `spec/requirements.md` — added **REQ-316** (accepted), with full acceptance
   criteria; cross-referenced from REQ-315's neighbourhood.
 - `spec/roadmap.md` — added the four-slice item under **Next**.
 
 ## 6. Next
 
-Increment 1 is **TASK-177**. No implementation code lands until that task's
+Increment 1 is **TASK-181**. No implementation code lands until that task's
 Authority + Plan sections pass Verification.
 
 ## 11. Outcome
 
 - Requirements specified: REQ-316 (accepted)
 - ADR: ADR-047 (accepted)
-- Decision: D-2026-09-02-b
+- Decision: D-2026-09-02-e
 - Docs updated: architecture.md, project.md, requirements.md, roadmap.md
 - Done: 2026-09-02

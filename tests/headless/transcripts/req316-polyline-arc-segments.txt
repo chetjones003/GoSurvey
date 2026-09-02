@@ -1,7 +1,7 @@
 # REQ-316 / ADR-047 — a polyline may contain circular arc segments (per-vertex bulge), POLYLINE
 # draws them with the ARC / LINE sub-modes, and they survive a DXF and a .gs round trip.
 #
-# D-2026-09-02-c: the sub-mode keywords are the full words ARC and LINE — `A` / `ANGLE` are the
+# D-2026-09-02-f: the sub-mode keywords are the full words ARC and LINE — `A` / `ANGLE` are the
 # existing segment-bearing lock. RADIUS and CANGLE set the next arc segment.
 #
 # Before ADR-047 this was impossible in three separate ways: the polyline store carried no bulge,

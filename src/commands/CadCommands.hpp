@@ -1425,6 +1425,12 @@ struct AppCommandState {
     /// REVOLVE (REQ-314 / ADR-046, GitHub #147): select closed polylines / circles, pick the two
     /// ends of the revolve axis, then an angle in degrees.
     Revolve,
+    /// SLICE (REQ-314 / ADR-046, GitHub #147): select solids, define a cutting plane with three
+    /// points, then pick which side to keep (or both).
+    Slice,
+    /// UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046, GitHub #147): SUBTRACT prompts twice —
+    /// solids to subtract from, then solids to subtract; UNION and INTERSECT prompt once.
+    Boolean,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1487,6 +1493,8 @@ struct AppCommandState {
     case Kind::Solid:              return "SOLID";  // REQ-313: one Kind, all seven primitives
     case Kind::Extrude:           return "EXTRUDE";
     case Kind::Revolve:          return "REVOLVE";
+    case Kind::Slice:            return "SLICE";
+    case Kind::Boolean:          return "BOOLEAN";
     default:                  return "";
     }
   }
@@ -2137,6 +2145,34 @@ struct AppCommandState {
   bool revolveAxisStartSet = false;
   ray3d::Vec3 revolveAxisEnd;
   double revolveAngleDeg = 360.0;
+
+  // --- The SLICE command (REQ-314 / ADR-046 increment 3, GitHub #147) ---------------------------
+
+  enum class SlicePhase {
+    SelectSolids,   ///< Accumulate a selection of solids; Enter confirms.
+    WaitP1,         ///< First of three points that define the cutting plane.
+    WaitP2,
+    WaitP3,
+    WaitKeepSide,   ///< Pick a point on the side to keep, or [B]oth.
+  } slicePhase = SlicePhase::SelectSolids;
+
+  std::vector<int> sliceSolidIndices;  ///< indices into cadSolids, gathered when SelectSolids ends
+  ray3d::Vec3 sliceP1;
+  ray3d::Vec3 sliceP2;
+  ray3d::Vec3 sliceP3;
+
+  // --- The prompted UNION / SUBTRACT / INTERSECT command (REQ-314 / ADR-046, GitHub #147) --------
+
+  enum class BooleanPhase {
+    SelectOperands,     ///< UNION / INTERSECT: one "select objects" step.
+    SelectMinuend,      ///< SUBTRACT step 1: the solids to subtract from.
+    SelectSubtrahend,   ///< SUBTRACT step 2: the solids to subtract.
+  } booleanPhase = BooleanPhase::SelectOperands;
+
+  /// 0 = Union, 1 = Subtract, 2 = Intersect (matches CadBooleanOp; kept as int so the enum stays in
+  /// the .cpp).
+  int booleanOp = 0;
+  std::vector<int> booleanMinuend;  ///< SUBTRACT: cadSolids indices gathered by step 1.
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -4188,6 +4224,37 @@ void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vec
 /// and the commit. False (and \p out cleared) until a profile and both axis points are set.
 [[nodiscard]] bool CadBuildRevolveSolids(const AppCommandState& st, double angleDeg,
                                          std::vector<brep::Solid>* out);
+
+// --- UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046 increment 4, B1) -----------------------
+
+enum class CadBooleanOp { Union, Subtract, Intersect };
+
+/// Combine the two B-rep solids in the current selection (REQ-314 B1). UNION and INTERSECT do not
+/// care about order; SUBTRACT keeps the first selected solid and removes the second. Both operands
+/// are replaced by the result in one undo step. A pair the kernel refuses (a curved or non-convex
+/// operand, no shared volume for INTERSECT) is reported and nothing in the document changes
+/// (REQ-201). Needs exactly two selected solids.
+void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log);
+
+/// Begin the prompted UNION / SUBTRACT / INTERSECT command. SUBTRACT prompts for the solids to
+/// subtract from, then the solids to subtract; UNION and INTERSECT prompt once. Honors a
+/// pre-selection as the answer to the first prompt.
+void StartBooleanCommand(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log);
+void CancelBooleanCommand(AppCommandState& st);
+[[nodiscard]] std::string CadBooleanPromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleBooleanTextInput(const std::string& line, AppCommandState& st,
+                                          std::vector<std::string>& log);
+
+// --- SLICE (REQ-314 / ADR-046 increment 3b) -------------------------------------------------
+
+/// Begin the prompted SLICE command a bare `SLICE` opens: select solids (if none are selected),
+/// three points for the cutting plane, then a point on the side to keep (or `B` for both).
+void StartSliceCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelSliceCommand(AppCommandState& st);
+[[nodiscard]] std::string CadSlicePromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleSliceTextInput(const std::string& line, AppCommandState& st,
+                                        std::vector<std::string>& log);
+void SubmitSliceViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need

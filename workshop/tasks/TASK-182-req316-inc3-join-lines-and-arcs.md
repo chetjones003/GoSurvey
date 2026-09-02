@@ -1,4 +1,4 @@
-# TASK-178 — REQ-316 Increment 3: JOIN welds lines and arcs into one polyline
+# TASK-182 — REQ-316 Increment 3: JOIN welds lines and arcs into one polyline
 
 - Type:    feature
 - Status:  self-verify
@@ -8,7 +8,7 @@
 ## 1. Authority
 - Requirements: REQ-316 (accepted) — acceptance items 6, 7, and the JOIN acceptance lines
 - ADR:          ADR-047 (increment 3: "JOIN of lines + arcs, and arc-segment grips")
-- Decision:     D-2026-09-02-b
+- Decision:     D-2026-09-02-e
 - Acceptance (verbatim from REQ-316):
   - JOIN of two lines meeting at a point produces one 2-segment straight polyline; originals removed.
   - JOIN of a line and a tangent arc meeting at a point produces one polyline whose arc segment has a
@@ -45,7 +45,7 @@
   extend req316 transcript.
 
 ## 8. Implementation log
-- 2026-09-02 open. Branch feat/polyline-arc-mode (worktree). Inc 1 (TASK-177) shipped.
+- 2026-09-02 open. Branch feat/polyline-arc-mode (worktree). Inc 1 (TASK-181) shipped.
 - 2026-09-02 ExecuteJoinSelection: Edge{bulge,arcIx}; arc + polyline edges carry bulge; Eulerian
   walk records the traversed edge; reversed edge negates bulge; joined polyline writes
   userPolylineVertsBulge; consumed arcs erased; tilted arcs refused.
@@ -73,5 +73,5 @@
 ## 11. Outcome
 - Requirements satisfied: REQ-316 acceptance items 6, 7 and the JOIN lines (met: yes)
 - Tests added: EXPECT POLYARCS; req316-join-lines-and-arcs.txt
-- Docs updated: this task; TASK-177 unchanged
+- Docs updated: this task; TASK-181 unchanged
 - Done: 2026-09-02

@@ -267,7 +267,7 @@ A lightweight board that complements the milestones. Keep each column honest.
   true on exit** — no cert was obtained; the no-op signing step is still a no-op.
 
 ### Next (accepted, sequenced, not started)
-- **Curved polyline segments (REQ-316, ADR-047, D-2026-09-02-b).** Four slices, each its own PR:
+- **Curved polyline segments (REQ-316, ADR-047, D-2026-09-02-e).** Four slices, each its own PR:
   (1) per-vertex bulge storage (parallel `userPolylineVertsBulge` array) +
   POLYLINE `Arc`/`Line` sub-modes + arc render + DXF/`.gs` round-trip; (2) snap / pick / extents /
   length / Properties on arc segments; (3) JOIN of lines + arcs, and arc-segment grips;
