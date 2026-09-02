@@ -2773,8 +2773,11 @@ struct SphereShape {
 /// \p planar with a spherical-cap boss on face \p faceIdx: the face is bored open at the cut circle
 /// and the sphere cap (no disk) carries the material outward. \p axis points out of \p planar (the
 /// face's outward normal); \p cutZ is the plane's height along \p axis from \p centre.
+/// \p planar with a spherical cap on face \p faceIdx: the face is bored open at the cut circle and
+/// the cap (no disk) carries geometry along +\p axis to a pole. `inward` marks the cap faces as a
+/// SUBTRACT dimple (material on the −radial side) and reverses the loop winding to match.
 [[nodiscard]] bool BuildSphereBoss(const Solid& planar, int faceIdx, const Vec3& centre, const Vec3& axis,
-                                   double radius, double cutZ, Solid* out, Problem* outWhy) {
+                                   double radius, double cutZ, bool inward, Solid* out, Problem* outWhy) {
   if (!(radius > 0.0) || !(std::fabs(cutZ) < radius))
     return Fail(Problem::BooleanResultInvalid, outWhy);
   ucs::Ucs fr;
@@ -2801,6 +2804,7 @@ struct SphereShape {
     f.surface.kind = SurfaceKind::Sphere;
     f.surface.frame = fr;
     f.surface.radius = radius;
+    f.surface.inward = inward;
     f.uStart = u0;
     f.uEnd = u1;
     f.vStart = vc;
@@ -2810,9 +2814,17 @@ struct SphereShape {
     f.loops.push_back(std::move(lp));
     s.faces.push_back(std::move(f));
   };
-  sphereHalf(0.0, kPi, {{md1, false}, {md0, true}, {cc0, false}});
-  sphereHalf(kPi, kTwoPi, {{md0, false}, {md1, true}, {cc1, false}});
-  s.faces[static_cast<std::size_t>(faceIdx)].loops.push_back(Loop{{{cc1, true}, {cc0, true}}});
+  if (inward) {
+    // The cap faces the −radial side (a SUBTRACT dimple): reverse each half-face loop, and bore the
+    // planar face with the opposite circle winding so every edge is still used once each way.
+    sphereHalf(0.0, kPi, {{cc0, true}, {md0, false}, {md1, true}});
+    sphereHalf(kPi, kTwoPi, {{cc1, true}, {md1, false}, {md0, true}});
+    s.faces[static_cast<std::size_t>(faceIdx)].loops.push_back(Loop{{{cc0, false}, {cc1, false}}});
+  } else {
+    sphereHalf(0.0, kPi, {{md1, false}, {md0, true}, {cc0, false}});
+    sphereHalf(kPi, kTwoPi, {{md0, false}, {md1, true}, {cc1, false}});
+    s.faces[static_cast<std::size_t>(faceIdx)].loops.push_back(Loop{{{cc1, true}, {cc0, true}}});
+  }
   for (int i = static_cast<int>(planar.faces.size()); i < static_cast<int>(s.faces.size()); ++i)
     s.shells[0].faces.push_back(i);
   if (Validate(s) != Problem::Ok || SelfIntersects(s))
@@ -2822,13 +2834,12 @@ struct SphereShape {
 }
 
 [[nodiscard]] bool TryBooleanSpherePlanar(const Solid& planar, const Solid& sph, const SphereShape& S,
-                                          BoolOp op, std::vector<Solid>* out, bool* handled,
-                                          Problem* outWhy) {
-  if (op == BoolOp::Subtract) {
-    *handled = true;
-    return Fail(Problem::BooleanCurvedFace, outWhy);
-  }
+                                          BoolOp op, bool sphIsMinuend, std::vector<Solid>* out,
+                                          bool* handled, Problem* outWhy) {
   *handled = true;
+  if (op == BoolOp::Subtract && sphIsMinuend)
+    return Fail(Problem::BooleanCurvedFace, outWhy);  // sphere − box: its own slice
+  const bool dimple = op == BoolOp::Subtract;  // box − sphere: a spherical dimple (B2a)
   const double scale = std::max(ModelScale(planar), S.radius);
   const double eps = 1e-7 * scale;
 
@@ -2908,10 +2919,18 @@ struct SphereShape {
     out->push_back(std::move(r));
     return Succeed(outWhy);
   }
-  // UNION: the cap outside P (axis +n, plane at -d) becomes a boss on the bored face.
   Solid r;
-  if (!BuildSphereBoss(planar, cutFace, S.centre, n, S.radius, -d, &r, outWhy))
-    return false;
+  if (dimple) {
+    // box − sphere: the cap on P's material side (axis −n, plane at d) is removed; its sphere face
+    // is inward and there is no disk.
+    if (!BuildSphereBoss(planar, cutFace, S.centre, ray3d::Scale(n, -1.0), S.radius, d, /*inward=*/true,
+                         &r, outWhy))
+      return false;
+  } else {
+    // UNION: the cap outside P (axis +n, plane at −d) becomes a boss on the bored face.
+    if (!BuildSphereBoss(planar, cutFace, S.centre, n, S.radius, -d, /*inward=*/false, &r, outWhy))
+      return false;
+  }
   out->push_back(std::move(r));
   return Succeed(outWhy);
 }
@@ -3161,9 +3180,9 @@ struct SphereShape {
   const bool aSph = ClassifySphere(a, &sa);
   const bool bSph = ClassifySphere(b, &sb);
   if (aSph && AllFacesPlanar(b))
-    return TryBooleanSpherePlanar(b, a, sa, op, out, handled, outWhy);
+    return TryBooleanSpherePlanar(b, a, sa, op, /*sphIsMinuend=*/true, out, handled, outWhy);
   if (bSph && AllFacesPlanar(a))
-    return TryBooleanSpherePlanar(a, b, sb, op, out, handled, outWhy);
+    return TryBooleanSpherePlanar(a, b, sb, op, /*sphIsMinuend=*/false, out, handled, outWhy);
   return false;
 }
 
