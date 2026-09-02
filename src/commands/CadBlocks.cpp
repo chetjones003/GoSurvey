@@ -184,6 +184,7 @@ void CadBlockCaptureDrawing(const AppCommandState& st, CadBlockContent* c) {
   c->ellAttrs = st.userEllAttrs;
   c->polyOffsets = st.userPolylineOffsets;
   c->polyVerts = st.userPolylineVerts;
+  c->polyVertsBulge = st.userPolylineVertsBulge;  // REQ-316 / ADR-047
   c->polyClosed = st.userPolylineClosed;
   c->polyAttrs = st.userPolylineAttrs;
   c->texts = st.cadAnnotations;
@@ -220,6 +221,8 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.userEllAttrs.resize(c.ellipses.size());
   st.userPolylineOffsets  = c.polyOffsets;
   st.userPolylineVerts    = c.polyVerts;
+  st.userPolylineVertsBulge = c.polyVertsBulge;  // REQ-316 / ADR-047
+  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // legacy block defs have none
   st.userPolylineClosed   = c.polyClosed;
   st.userPolylineAttrs    = c.polyAttrs;
   st.cadAnnotations       = c.texts;
@@ -270,6 +273,7 @@ void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockCont
   c->ellAttrs.resize(st.userEllipses.size());
   c->polyOffsets = st.userPolylineOffsets;
   c->polyVerts = st.userPolylineVerts;
+  c->polyVertsBulge = st.userPolylineVertsBulge;  // REQ-316 / ADR-047
   c->polyClosed = st.userPolylineClosed;
   c->polyAttrs = st.userPolylineAttrs;
   c->texts = st.cadAnnotations;

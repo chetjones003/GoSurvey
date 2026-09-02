@@ -114,6 +114,16 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   CheckFinite(out, "userCircleNormals", st.userCircleNormals);
   CheckFinite(out, "userPolylineVerts", st.userPolylineVerts);
   CheckFinite(out, "featureLineVerts", st.featureLineVerts);
+  // REQ-316 / ADR-047: per-vertex bulge array — empty, or exactly one entry per vertex, all finite.
+  if (!st.userPolylineVertsBulge.empty() &&
+      st.userPolylineVertsBulge.size() != st.userPolylineVerts.size() / 3) {
+    Add(out, docinv::kPolylineBulge,
+        "userPolylineVertsBulge holds " + std::to_string(st.userPolylineVertsBulge.size()) +
+            " entries but userPolylineVerts holds " + std::to_string(st.userPolylineVerts.size() / 3) +
+            " vertices; the bulge array is per vertex (0 = straight)");
+  }
+  for (size_t i = 0; i < st.userPolylineVertsBulge.size(); ++i)
+    CheckFiniteScalar(out, "userPolylineVertsBulge", st.userPolylineVertsBulge[i], static_cast<int>(i));
   for (size_t i = 0; i < st.userArcs.size(); ++i) {
     const CadArc& a = st.userArcs[i];
     const std::string p = "userArcs[" + std::to_string(i) + "].";

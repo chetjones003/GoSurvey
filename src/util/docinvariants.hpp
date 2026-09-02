@@ -64,5 +64,9 @@ inline constexpr const char* kSurveyLabelLinks = "survey-label-links";
 /// be exactly one entry per vertex. A short flag array is silent — the missing tail simply reads as
 /// "all PIs", so elevation points vanish with the geometry still looking right (ADR-035 (a)).
 inline constexpr const char* kFeatureLineOffsets = "feature-line-offsets";
+/// REQ-316 / ADR-047: the parallel per-vertex polyline bulge array is either empty (all segments
+/// straight) or exactly one entry per vertex, and every bulge is finite. A short array is silent —
+/// the missing tail reads as "straight", so arcs vanish with the polyline still looking right.
+inline constexpr const char* kPolylineBulge = "polyline-bulge";
 
 }  // namespace docinv

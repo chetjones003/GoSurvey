@@ -102,6 +102,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.userEllAttrs           = cmd.userEllAttrs;
   doc.userPolylineOffsets    = cmd.userPolylineOffsets;
   doc.userPolylineVerts      = cmd.userPolylineVerts;
+  doc.userPolylineVertsBulge = cmd.userPolylineVertsBulge;  // REQ-316 / ADR-047
   doc.userPolylineClosed     = cmd.userPolylineClosed;
   doc.userPolylineAttrs      = cmd.userPolylineAttrs;
   doc.featureLineOffsets     = cmd.featureLineOffsets;   // REQ-087
@@ -190,6 +191,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.userEllAttrs               = doc.userEllAttrs;
   cmd.userPolylineOffsets        = doc.userPolylineOffsets;
   cmd.userPolylineVerts          = doc.userPolylineVerts;
+  cmd.userPolylineVertsBulge     = doc.userPolylineVertsBulge;  // REQ-316 / ADR-047
   cmd.userPolylineClosed         = doc.userPolylineClosed;
   cmd.userPolylineAttrs          = doc.userPolylineAttrs;
   cmd.featureLineOffsets         = doc.featureLineOffsets;   // REQ-087
@@ -1497,6 +1499,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.userEllAttrs         = st.userEllAttrs;
   snap.userPolylineOffsets  = st.userPolylineOffsets;
   snap.userPolylineVerts    = st.userPolylineVerts;
+  snap.userPolylineVertsBulge = st.userPolylineVertsBulge;  // REQ-316 / ADR-047
   snap.userPolylineClosed   = st.userPolylineClosed;
   snap.userPolylineAttrs    = st.userPolylineAttrs;
   snap.featureLineOffsets   = st.featureLineOffsets;   // REQ-087
@@ -1538,6 +1541,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.userEllAttrs         = snap.userEllAttrs;
   st.userPolylineOffsets  = snap.userPolylineOffsets;
   st.userPolylineVerts    = snap.userPolylineVerts;
+  st.userPolylineVertsBulge = snap.userPolylineVertsBulge;  // REQ-316 / ADR-047
   st.userPolylineClosed   = snap.userPolylineClosed;
   st.userPolylineAttrs    = snap.userPolylineAttrs;
   st.featureLineOffsets   = snap.featureLineOffsets;   // REQ-087
@@ -8109,6 +8113,9 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         st.userPolylineVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
       }
       st.userPolylineOffsets.push_back(baseVert + nv);
+      // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
+      // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
+      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
       uint8_t cl = 0;
       if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
         cl = st.userPolylineClosed[static_cast<size_t>(pi)];
@@ -8211,6 +8218,9 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
       st.userPolylineVerts.push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 0)] + dx);
       st.userPolylineVerts.push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
       st.userPolylineVerts.push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 2)]);
+      st.userPolylineVertsBulge.push_back(vi < static_cast<int>(cb.polyVertsBulge.size())  // REQ-316 / ADR-047
+                                              ? cb.polyVertsBulge[static_cast<size_t>(vi)]
+                                              : 0.0f);
     }
     if (st.userPolylineOffsets.empty())
       st.userPolylineOffsets.push_back(baseVert);
@@ -8600,6 +8610,9 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         st.userPolylineVerts.push_back(pz);
       }
       st.userPolylineOffsets.push_back(baseVert + nv);
+      // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
+      // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
+      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
       uint8_t cl = 0;
       if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
         cl = st.userPolylineClosed[static_cast<size_t>(pi)];
@@ -8999,6 +9012,9 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
         st.userPolylineVerts.push_back(pz);
       }
       st.userPolylineOffsets.push_back(baseVert + nv);
+      // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
+      // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
+      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
       uint8_t cl = 0;
       if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
         cl = st.userPolylineClosed[static_cast<size_t>(pi)];
@@ -12561,6 +12577,9 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
         cb.polyVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)]);
         cb.polyVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)]);
         cb.polyVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+        cb.polyVertsBulge.push_back(vi < static_cast<int>(st.userPolylineVertsBulge.size())  // REQ-316 / ADR-047
+                                        ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+                                        : 0.0f);
         expandBbox(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)],
                    st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)]);
       }
@@ -14110,6 +14129,7 @@ static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<
                               flat.end());
   for (size_t oi = static_cast<size_t>(pi + 1); oi < st.userPolylineOffsets.size(); ++oi)
     st.userPolylineOffsets[oi] += delta;
+  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
 }
 
 /// Appends a brand-new polyline to the end of the CSR arrays. Precondition: at least one polyline
@@ -14126,6 +14146,7 @@ static void AppendNewPolyline(AppCommandState& st, const std::vector<std::pair<f
   st.userPolylineOffsets.push_back(base + static_cast<int>(xy.size()));
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
   st.userPolylineAttrs.push_back(std::move(attrs));
+  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
 }
 
 static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
@@ -18763,6 +18784,7 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
       st.userPolylineVerts.push_back(CadCommitElevation(st));
     }
     st.userPolylineOffsets.push_back(baseVert + 4);
+    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316: RECT is straight
     st.userPolylineClosed.push_back(1u);
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
   }
@@ -20161,6 +20183,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.userEllipses.clear();
   st.userEllAttrs.clear();
   st.userPolylineVerts.clear();
+  st.userPolylineVertsBulge.clear();  // REQ-316 / ADR-047
   st.userPolylineOffsets.clear();
   st.userPolylineClosed.clear();
   st.userPolylineAttrs.clear();
@@ -20253,6 +20276,11 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
   const int b = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
   st.userPolylineVerts.erase(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(3 * a),
                              st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(3 * b));
+  // REQ-316 / ADR-047: the parallel bulge array is per-VERTEX, so its cut span is [a, b) — not the
+  // triplet range the vertex array uses. Same reasoning as EraseFeatureLineByIndex's flag array.
+  if (!st.userPolylineVertsBulge.empty() && static_cast<size_t>(b) <= st.userPolylineVertsBulge.size())
+    st.userPolylineVertsBulge.erase(st.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(a),
+                                    st.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(b));
   std::vector<int> newOff;
   newOff.reserve(static_cast<size_t>(std::max(0, np - 1) + 1));
   newOff.push_back(0);
@@ -22770,6 +22798,8 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     st.userPolylineOffsets.push_back(baseVert + nv);
     st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+    // REQ-316 / ADR-047: Inc 1 JOIN produces straight polylines; arc-aware JOIN is Inc 3.
+    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
     polysOut++;
 
     for (int ej : comp) {
@@ -23223,6 +23253,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     // polyToErase is in descending order (loop ran high→low, push_back is stable)
     for (int pi : polyToErase)
       ErasePolylineByIndex(st, pi);
+    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
   }
 
   // ── report ────────────────────────────────────────────────────────────────

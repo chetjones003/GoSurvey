@@ -103,6 +103,48 @@ void CirclePointWorld(double cx, double cy, double r, double angleRad, double* o
   *outY = cy + r * s;
 }
 
+BulgeArcSpan BulgeArc(double x0, double y0, double x1, double y1, double bulge) {
+  BulgeArcSpan r;
+  constexpr double kPi = 3.14159265358979323846;
+  if (std::fabs(bulge) < 1e-12)
+    return r;
+  const double thetaMag = 4.0 * std::atan(std::fabs(bulge));  // included angle, > 0
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double chord = std::hypot(dx, dy);
+  if (chord < 1e-12 || thetaMag < 1e-12)
+    return r;
+  const double R = chord / (2.0 * std::sin(thetaMag * 0.5));
+  const double alpha = std::atan2(dy, dx);
+  const double gamma = (kPi - thetaMag) / 2.0;
+  const double phi = alpha + (bulge >= 0.0 ? gamma : -gamma);
+  const double cx = x0 + R * std::cos(phi);
+  const double cy = y0 + R * std::sin(phi);
+  const double a0 = std::atan2(y0 - cy, x0 - cx);
+  const double a1 = std::atan2(y1 - cy, x1 - cx);
+  double sweep = a1 - a0;
+  if (bulge >= 0.0 && sweep < 0.0)
+    sweep += 2.0 * kPi;
+  if (bulge < 0.0 && sweep > 0.0)
+    sweep -= 2.0 * kPi;
+  if (std::fabs(sweep) < 1e-12)
+    return r;
+  r.valid = true;
+  r.cx = cx;
+  r.cy = cy;
+  r.radius = R;
+  r.startAngle = a0;
+  r.sweep = sweep;
+  return r;
+}
+
+double BulgeSegmentLength(double x0, double y0, double x1, double y1, double bulge) {
+  const BulgeArcSpan a = BulgeArc(x0, y0, x1, y1, bulge);
+  if (!a.valid)
+    return std::hypot(x1 - x0, y1 - y0);
+  return std::fabs(a.sweep) * a.radius;
+}
+
 void AppendLineSeg3(std::vector<float>& out, double x0, double y0, double z, double x1, double y1) {
   out.push_back(static_cast<float>(x0));
   out.push_back(static_cast<float>(y0));

@@ -267,6 +267,12 @@ A lightweight board that complements the milestones. Keep each column honest.
   true on exit** — no cert was obtained; the no-op signing step is still a no-op.
 
 ### Next (accepted, sequenced, not started)
+- **Curved polyline segments (REQ-316, ADR-047, D-2026-09-02-b).** Four slices, each its own PR:
+  (1) per-vertex bulge storage (parallel `userPolylineVertsBulge` array) +
+  POLYLINE `Arc`/`Line` sub-modes + arc render + DXF/`.gs` round-trip; (2) snap / pick / extents /
+  length / Properties on arc segments; (3) JOIN of lines + arcs, and arc-segment grips;
+  (4) TRIM / OFFSET / FILLET / CHAMFER of bulge polylines. **No code past a slice until its
+  Workshop task cites REQ-316 and passes Verification.**
 - **File Format Specs (REQ-170–REQ-174, ADR-041/042, D-2026-08-29-g).** Matrix:
   `spec/file-format-specs.md`. Order: LibreDWG MSVC link + R2004 write of a tiny drawing →
   map into CAD stores / retire converter from File open-save → point cloud + PTS → PTX/LAS/LAZ/E57

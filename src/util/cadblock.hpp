@@ -122,6 +122,9 @@ struct CadBlockContent {
   std::vector<EntityAttributes> ellAttrs;
   std::vector<int> polyOffsets;
   std::vector<float> polyVerts;
+  /// REQ-316 / ADR-047: per-vertex bulge, parallel to polyVerts (size()/3). Empty on a legacy
+  /// block definition, which reads as an all-straight polyline.
+  std::vector<float> polyVertsBulge;
   std::vector<std::uint8_t> polyClosed;
   std::vector<EntityAttributes> polyAttrs;
   std::vector<CadAnnotation> texts;

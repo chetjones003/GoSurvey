@@ -867,6 +867,7 @@ struct CadClipboard {
   std::vector<EntityAttributes> ellAttrs;
   std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
   std::vector<float>            polyVerts;
+  std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
   std::vector<uint8_t>          polyClosed;
   std::vector<EntityAttributes> polyAttrs;
   std::vector<CadAnnotation>    annotations;
@@ -888,6 +889,13 @@ struct CadClipboard {
   }
 };
 
+/// REQ-316 / ADR-047: keep the parallel per-vertex polyline bulge array the right length for the
+/// vertex list (3 floats per vertex). Entries added here default to 0 (a straight segment). Call
+/// after any operation that changes a polyline's vertex count without maintaining bulges itself.
+inline void SyncPolylineBulge(std::vector<float>& bulge, std::size_t vertsFloatCount) {
+  bulge.resize(vertsFloatCount / 3, 0.0f);
+}
+
 
 /// Geometry-only snapshot for undo/redo.  PDF glTexId is zeroed to avoid stale GPU references.
 struct DrawingGeometrySnapshot {
@@ -903,6 +911,9 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> userEllAttrs;
   std::vector<int>              userPolylineOffsets;
   std::vector<float>            userPolylineVerts;
+  /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
+  /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
+  std::vector<float>            userPolylineVertsBulge;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
@@ -1038,6 +1049,9 @@ struct DrawingDocument {
   std::vector<EntityAttributes> userEllAttrs;
   std::vector<int>              userPolylineOffsets;
   std::vector<float>            userPolylineVerts;
+  /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
+  /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
+  std::vector<float>            userPolylineVertsBulge;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
@@ -2159,6 +2173,8 @@ struct AppCommandState {
   /// \ref userPolylineVerts.
   std::vector<int> userPolylineOffsets;
   std::vector<float> userPolylineVerts;
+  /// REQ-316 / ADR-047: per-vertex DXF bulge, parallel to userPolylineVerts (size()/3 entries).
+  std::vector<float> userPolylineVertsBulge;
   std::vector<uint8_t> userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
 
