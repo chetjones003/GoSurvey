@@ -1,73 +1,71 @@
 # REQ-314 / ADR-046 increment 4 B1 (GitHub #147, Phase 4 of #120) — UNION / SUBTRACT / INTERSECT.
 #
-# BrepTests proves the kernel. This transcript tests the commands: two selected solids are combined
-# and replaced by the result in one undo step, and a pair the kernel refuses is reported with the
-# document unchanged.
+# BrepTests proves the kernel. This transcript tests the commands: UNION / INTERSECT prompt once for
+# the solids to combine; SUBTRACT prompts twice — the solids to subtract FROM, then the solids to
+# subtract. Every involved solid is replaced by the result in one undo step, and a pair the kernel
+# refuses is reported with the document unchanged.
 
 NEW
 
-# A: x[-5,5] y[-5,5] z[0,10] (volume 1000).  B: x[-1,9] y[-5,5] z[4,14] (volume 1000).
-# Overlap 6 x 10 x 6 = 360.  Union 1640, subtract (A-B) 640, intersect 360.
-CMD BOX 0,0 10 10 10
-CMD BOX 4,0,4 10 10 10
+# A: x[-10,10] y[-5,5] z[0,10] (volume 2000).  B: x[5,25] y[-5,5] z[4,14] (volume 2000).
+# Overlap x[5,10] y[-5,5] z[4,10] = 5 x 10 x 6 = 300.  Union 3700, subtract (A-B) 1700, intersect 300.
+CMD BOX 0,0 20 10 10
+CMD BOX 15,0,4 20 10 10
 EXPECT SOLIDS 2
 
-# --- UNION ---------------------------------------------------------------------------------
-BOX -12 -8 12 8
+# --- UNION (one prompt; a pre-selection answers it) --------------------------------------
+BOX -12 -8 28 8
 EXPECT SELECTED 2
 CMD UNION
 EXPECT SOLIDS 1
-EXPECT LOG "combined into 1 solid"
 CMD SOLIDLIST
-EXPECT LOG "volume 1640"
+EXPECT LOG "volume 3700"
 
-# --- Undo restores the two operands -------------------------------------------------------
 CMD UNDO
 EXPECT SOLIDS 2
 
-# --- SUBTRACT: A - B ---------------------------------------------------------------------
-BOX -12 -8 12 8
-EXPECT SELECTED 2
+# --- SUBTRACT: two prompts ---------------------------------------------------------------
 CMD SUBTRACT
-EXPECT SOLIDS 1
-CMD SOLIDLIST
-EXPECT LOG "volume 640"
-
-CMD UNDO
-EXPECT SOLIDS 2
-
-# --- INTERSECT ------------------------------------------------------------------------
-BOX -12 -8 12 8
-EXPECT SELECTED 2
-CMD INTERSECT
-EXPECT SOLIDS 1
-CMD SOLIDLIST
-EXPECT LOG "volume 360"
-
-CMD UNDO
-EXPECT SOLIDS 2
-
-# --- Three solids: UNION folds them into one --------------------------------------------
-CMD BOX 8,0,0 6 10 10
-EXPECT SOLIDS 3
-BOX -12 -8 15 8
-EXPECT SELECTED 3
-CMD UNION
-EXPECT SOLIDS 1
-EXPECT LOG "3 solids combined into 1 solid"
-CMD UNDO
-EXPECT SOLIDS 3
-
-# --- Fewer than two solids selected: reported, nothing changes --------------------------
-NEW
-CMD BOX 0,0 4 4 4
-BOX -3 -3 3 3
+EXPECT LOG "select solids to subtract FROM"
+BOX -12 -8 3 8
 EXPECT SELECTED 1
-CMD INTERSECT
-EXPECT LOG "at least two solids"
+CMD
+EXPECT LOG "select solids to subtract"
+BOX 12 -8 28 8
+EXPECT SELECTED 1
+CMD
 EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 1700"
 
-# --- A curved operand is refused -------------------------------------------------------
+CMD UNDO
+EXPECT SOLIDS 2
+
+# --- SUBTRACT honours a pre-selection as the "subtract from" set ------------------------
+BOX -12 -8 3 8
+EXPECT SELECTED 1
+CMD SUBTRACT
+EXPECT LOG "select solids to subtract"
+BOX 12 -8 28 8
+CMD
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 1700"
+
+CMD UNDO
+EXPECT SOLIDS 2
+
+# --- INTERSECT --------------------------------------------------------------------------
+BOX -12 -8 28 8
+CMD INTERSECT
+EXPECT SOLIDS 1
+CMD SOLIDLIST
+EXPECT LOG "volume 300"
+
+CMD UNDO
+EXPECT SOLIDS 2
+
+# --- A curved operand is refused, nothing changes -------------------------------------
 NEW
 CMD BOX 0,0 6 6 6
 CMD CYLINDER 0,0 3 10
@@ -77,17 +75,19 @@ CMD UNION
 EXPECT LOG "flat faces only"
 EXPECT SOLIDS 2
 
-# --- .gs round-trip of a boolean result ---------------------------------------------
+# --- .gs round-trip of a subtract result ---------------------------------------------
 NEW
-CMD BOX 0,0 10 10 10
-CMD BOX 4,0,4 10 10 10
-BOX -12 -8 12 8
+CMD BOX 0,0 20 10 10
+CMD BOX 15,0,4 20 10 10
+BOX -12 -8 3 8
 CMD SUBTRACT
+BOX 12 -8 28 8
+CMD
 EXPECT SOLIDS 1
 SAVEAS %OUT%/req314-boolean.gs
 OPEN %OUT%/req314-boolean.gs
 EXPECT SOLIDS 1
 CMD SOLIDLIST
-EXPECT LOG "volume 640"
+EXPECT LOG "volume 1700"
 
 CHECK ALL

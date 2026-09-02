@@ -8856,6 +8856,11 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     sliceHint = CadSlicePromptText(cmd);
     return sliceHint.c_str();
   }
+  if (cmd.active == AppCommandState::Kind::Boolean) {
+    static std::string boolHint;
+    boolHint = CadBooleanPromptText(cmd);
+    return boolHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Circle) {
     using CP = AppCommandState::CirclePhase;
     switch (cmd.circlePhase) {

@@ -1405,6 +1405,9 @@ struct AppCommandState {
     /// SLICE (REQ-314 / ADR-046, GitHub #147): select solids, define a cutting plane with three
     /// points, then pick which side to keep (or both).
     Slice,
+    /// UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046, GitHub #147): SUBTRACT prompts twice —
+    /// solids to subtract from, then solids to subtract; UNION and INTERSECT prompt once.
+    Boolean,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1468,6 +1471,7 @@ struct AppCommandState {
     case Kind::Extrude:           return "EXTRUDE";
     case Kind::Revolve:          return "REVOLVE";
     case Kind::Slice:            return "SLICE";
+    case Kind::Boolean:          return "BOOLEAN";
     default:                  return "";
     }
   }
@@ -2133,6 +2137,19 @@ struct AppCommandState {
   ray3d::Vec3 sliceP1;
   ray3d::Vec3 sliceP2;
   ray3d::Vec3 sliceP3;
+
+  // --- The prompted UNION / SUBTRACT / INTERSECT command (REQ-314 / ADR-046, GitHub #147) --------
+
+  enum class BooleanPhase {
+    SelectOperands,     ///< UNION / INTERSECT: one "select objects" step.
+    SelectMinuend,      ///< SUBTRACT step 1: the solids to subtract from.
+    SelectSubtrahend,   ///< SUBTRACT step 2: the solids to subtract.
+  } booleanPhase = BooleanPhase::SelectOperands;
+
+  /// 0 = Union, 1 = Subtract, 2 = Intersect (matches CadBooleanOp; kept as int so the enum stays in
+  /// the .cpp).
+  int booleanOp = 0;
+  std::vector<int> booleanMinuend;  ///< SUBTRACT: cadSolids indices gathered by step 1.
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -4143,6 +4160,15 @@ enum class CadBooleanOp { Union, Subtract, Intersect };
 /// operand, no shared volume for INTERSECT) is reported and nothing in the document changes
 /// (REQ-201). Needs exactly two selected solids.
 void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log);
+
+/// Begin the prompted UNION / SUBTRACT / INTERSECT command. SUBTRACT prompts for the solids to
+/// subtract from, then the solids to subtract; UNION and INTERSECT prompt once. Honors a
+/// pre-selection as the answer to the first prompt.
+void StartBooleanCommand(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log);
+void CancelBooleanCommand(AppCommandState& st);
+[[nodiscard]] std::string CadBooleanPromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleBooleanTextInput(const std::string& line, AppCommandState& st,
+                                          std::vector<std::string>& log);
 
 // --- SLICE (REQ-314 / ADR-046 increment 3b) -------------------------------------------------
 

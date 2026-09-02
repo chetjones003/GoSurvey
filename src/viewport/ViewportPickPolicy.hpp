@@ -35,7 +35,8 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
          (cmd.active == K::Revolve &&
           cmd.revolvePhase == AppCommandState::RevolvePhase::SelectProfiles) ||
          (cmd.active == K::Slice &&
-          cmd.slicePhase == AppCommandState::SlicePhase::SelectSolids);
+          cmd.slicePhase == AppCommandState::SlicePhase::SelectSolids) ||
+         cmd.active == K::Boolean;
 }
 
 /// What a left-click in the **model-space** viewport means for the currently active command.
@@ -171,6 +172,9 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     }
     return R::Ignore;
   }
+  // UNION / SUBTRACT / INTERSECT (REQ-314): every phase is a "select solids" step.
+  case K::Boolean:
+    return R::SelectionAccumulate;
   // SLICE (REQ-314): select solids, then three snapped points for the plane, then a point on the
   // side to keep (or a typed B).
   case K::Slice: {
