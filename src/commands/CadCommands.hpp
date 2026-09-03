@@ -1428,6 +1428,10 @@ struct AppCommandState {
     /// SLICE (REQ-314 / ADR-046, GitHub #147): select solids, define a cutting plane with three
     /// points, then pick which side to keep (or both).
     Slice,
+    /// LOFT (REQ-315 / ADR-048, GitHub #241): select two or more closed polylines / circles in
+    /// lofting order, Enter to skin a solid through them (SurfaceKind::Nurbs side faces). One
+    /// select-objects phase and nothing else — no height, no axis.
+    Loft,
     /// UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046, GitHub #147): SUBTRACT prompts twice —
     /// solids to subtract from, then solids to subtract; UNION and INTERSECT prompt once.
     Boolean,
@@ -1494,6 +1498,7 @@ struct AppCommandState {
     case Kind::Extrude:           return "EXTRUDE";
     case Kind::Revolve:          return "REVOLVE";
     case Kind::Slice:            return "SLICE";
+    case Kind::Loft:             return "LOFT";
     case Kind::Boolean:          return "BOOLEAN";
     default:                  return "";
     }
@@ -2155,6 +2160,12 @@ struct AppCommandState {
     WaitP3,
     WaitKeepSide,   ///< Pick a point on the side to keep, or [B]oth.
   } slicePhase = SlicePhase::SelectSolids;
+
+  // --- The LOFT command (REQ-315 / ADR-048, GitHub #241) ---------------------------------------
+
+  enum class LoftPhase {
+    SelectProfiles,  ///< Accumulate an ORDERED selection of closed polylines / circles; Enter builds.
+  } loftPhase = LoftPhase::SelectProfiles;
 
   std::vector<int> sliceSolidIndices;  ///< indices into cadSolids, gathered when SelectSolids ends
   ray3d::Vec3 sliceP1;
@@ -4207,6 +4218,29 @@ void CadResolveExtrudePick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane
 /// Returns false (and clears \p out) when the numbers do not yet describe a solid.
 [[nodiscard]] bool CadBuildExtrudeSolids(const AppCommandState& st, double height,
                                          std::vector<brep::Solid>* out);
+
+// --- LOFT (REQ-315 / ADR-048, GitHub issue #241) ---------------------------------------------
+
+/// Begin the LOFT command: select two or more closed polylines / circles **in lofting order**, then
+/// Enter to skin one B-rep solid through them (`brep::Loft` — freeform `SurfaceKind::Nurbs` side
+/// faces). If two or more eligible profiles are already selected, a bare `LOFT` builds immediately.
+/// One undo step; the source entities are left in place; every failure is reported by name (REQ-201).
+void StartLoftCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelLoftCommand(AppCommandState& st);
+
+/// The prompt for the running LOFT command — always the "select profiles" line, with a count of what
+/// is selected so far. Shared by the command line and the at-cursor dynamic input (REQ-304).
+[[nodiscard]] std::string CadLoftPromptText(const AppCommandState& st);
+
+/// Feed one typed line to a running LOFT command. An empty line (Enter) builds; anything else is not
+/// understood and leaves the command running. Returns false when the command is not LOFT.
+[[nodiscard]] bool HandleLoftTextInput(const std::string& line, AppCommandState& st,
+                                       std::vector<std::string>& log);
+
+/// The candidate solid the running LOFT command describes from the current selection, for the live
+/// ghost and for the commit — one function, so the ghost cannot show a shape the Enter would not
+/// build. Returns false when the selection does not yet hold two loftable profiles.
+[[nodiscard]] bool CadBuildLoftSolid(const AppCommandState& st, brep::Solid* out);
 
 // --- REVOLVE (REQ-314 / ADR-046 increment 2b) -------------------------------------------------
 

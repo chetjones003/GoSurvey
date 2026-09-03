@@ -6415,6 +6415,7 @@ const CmdEntry kRegistry[] = {
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
     {"slice", "sl", "Cut selected solids with a plane (three points), keeping one side or both"},
+    {"loft", "lft", "Loft a solid through two or more selected closed polylines or circles, in pick order"},
     {"union", "uni", "Combine two selected solids into one"},
     {"subtract", "su", "Subtract the second selected solid from the first"},
     {"intersect", "in", "Keep only the volume two selected solids share"},
@@ -11829,6 +11830,14 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       return;
     }
     SubmitRevolveViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Loft) {
+    // One phase, and it is the accumulate-and-Enter shape: a finished fence merges into the
+    // selection, the command advances only on Enter (HandleLoftTextInput).
+    if (st.selBoxWaitingSecond)
+      finishBox();
     return;
   }
 
@@ -24503,6 +24512,97 @@ void SubmitExtrudeViewportPick(AppCommandState& st, float wx, float wy, std::vec
 }
 
 // -------------------------------------------------------------------------------------------------
+// The LOFT command (REQ-315 / ADR-048, GitHub issue #241). Select two or more closed polylines /
+// circles IN LOFTING ORDER, Enter to build. `brep::Loft` skins the solid with SurfaceKind::Nurbs
+// side faces. The ghost and the commit both go through CadBuildLoftSolid — one source of truth, the
+// same rule the other prompted solid commands follow. There is no height / axis phase; a click in
+// the one phase only accumulates the selection, exactly like EXTRUDE's SelectProfiles step.
+// -------------------------------------------------------------------------------------------------
+
+void CancelLoftCommand(AppCommandState& st) {
+  st.loftPhase = AppCommandState::LoftPhase::SelectProfiles;
+}
+
+std::string CadLoftPromptText(const AppCommandState& st) {
+  std::string s = "LOFT — select closed polylines or circles in lofting order";
+  const int have = static_cast<int>(st.selection.size());
+  if (have > 0)
+    s += " (" + std::to_string(have) + " selected)";
+  s += ", Enter when done. ESC cancels.";
+  return s;
+}
+
+bool CadBuildLoftSolid(const AppCommandState& st, brep::Solid* out) {
+  std::vector<brep::Profile> profiles;
+  int skipped = 0;
+  GatherExtrudeProfiles(st, &profiles, &skipped);
+  if (profiles.size() < 2)
+    return false;
+  brep::Problem why = brep::Problem::Ok;
+  return brep::Loft(profiles, out, &why);
+}
+
+static void CommitLoft(AppCommandState& st, std::vector<std::string>& log) {
+  std::vector<brep::Profile> profiles;
+  int skipped = 0;
+  GatherExtrudeProfiles(st, &profiles, &skipped);
+  if (profiles.size() < 2) {
+    log.push_back("LOFT — select at least two closed polylines or circles, in lofting order.");
+    return;
+  }
+  brep::Solid solid;
+  brep::Problem why = brep::Problem::Ok;
+  if (!brep::Loft(profiles, &solid, &why)) {
+    log.push_back(std::string("LOFT — ") + brep::ProblemText(why));
+    return;
+  }
+  PushUndoSnapshot(st, "Loft");
+  const brep::MassProperties mp = brep::ComputeMassProperties(solid);
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+  if (skipped > 0)
+    log.push_back("LOFT — " + std::to_string(skipped) +
+                  " selected object(s) are not profiles and were ignored.");
+  BumpCadGpuCache(st);
+  st.selection.clear();
+  CancelLoftCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+void StartLoftCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelLoftCommand(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Loft;
+  st.lastCommand = AppCommandState::Kind::Loft;
+  st.selBoxWaitingSecond = false;
+  st.loftPhase = AppCommandState::LoftPhase::SelectProfiles;
+
+  // A ready-made selection of two or more profiles builds straight away, the way a bare EXTRUDE on
+  // a selection jumps past the "select objects" prompt.
+  if (st.selection.size() >= 2) {
+    CommitLoft(st, log);
+    if (st.active != AppCommandState::Kind::Loft)
+      return;  // committed (or the selection was cleared on success)
+  }
+  log.push_back(CadLoftPromptText(st));
+}
+
+bool HandleLoftTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Loft)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  if (!line.empty())
+    return false;  // LOFT takes no typed value; leave the command running
+  if (st.selection.size() < 2) {
+    log.push_back("LOFT — select at least two profiles, in lofting order, then Enter. ESC cancels.");
+    return true;
+  }
+  CommitLoft(st, log);
+  return true;
+}
+
+// -------------------------------------------------------------------------------------------------
 // The prompted REVOLVE command (REQ-314 / ADR-046 increment 2b). Select a closed polyline or circle,
 // then the two ends of the revolve axis, then an angle in degrees (default a full turn). The ghost
 // and the commit both go through CadBuildRevolveSolids.
@@ -26513,6 +26613,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("SLICE canceled.");
     CancelSliceCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Loft) {
+    log.push_back("LOFT canceled.");
+    CancelLoftCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Boolean) {
     log.push_back("Command canceled.");
     CancelBooleanCommand(st);
@@ -27264,6 +27368,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     } else if (st.active == K::Revolve) {
       // Enter confirms the selection, or (at the angle prompt) commits at the default angle.
       (void)HandleRevolveTextInput("", st, log);
+    } else if (st.active == K::Loft) {
+      // Enter skins the solid through the selected profiles (in selection order).
+      (void)HandleLoftTextInput("", st, log);
     } else if (st.active == K::Slice) {
       (void)HandleSliceTextInput("", st, log);
     } else if (st.active == K::Boolean) {
@@ -27586,6 +27693,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (plotTok == "revolve" || plotTok == "rev") {
       StartRevolveCommand(st, log);
+      return;
+    }
+    if (plotTok == "loft" || plotTok == "lft") {
+      // A bare verb opens the prompted form (select profiles, Enter to build); with two or more
+      // profiles already selected, StartLoftCommand builds straight away.
+      StartLoftCommand(st, log);
       return;
     }
     if (plotTok == "slice" || plotTok == "sl") {
@@ -29089,6 +29202,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleExtrudeTextInput(line, st, log))
       return;
     log.push_back(CadExtrudePromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Loft) {
+    if (HandleLoftTextInput(line, st, log))
+      return;
+    log.push_back(CadLoftPromptText(st));
     return;
   }
 
