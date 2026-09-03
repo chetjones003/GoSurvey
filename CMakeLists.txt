@@ -341,6 +341,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
   # expectation rather than by looking at a shaded viewport.
   src/util/brep.cpp
+  # REQ-315 / ADR-048: the freeform (NURBS) surface patch — pure math (evaluation, derivatives,
+  # validation, the loft builders), no GL and no brep coupling, so its correctness is pinned against
+  # closed-form circle / plane expectations rather than a viewport.
+  src/util/nurbs.cpp
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
   src/util/docinvariants.cpp
@@ -724,6 +728,11 @@ if(GOSURVEY_BUILD_TESTS)
     # decided here, with no window and no document.
     tests/BrepTests.cpp
     src/util/brep.cpp
+    # REQ-315 / ADR-048: the NURBS patch math. Partition-of-unity, a bilinear patch reproducing a
+    # plane, a rational arc row that is exactly on its circle, and derivative agreement with finite
+    # differences are all decided here, with no window — the same reason BrepTests exists.
+    tests/NurbsTests.cpp
+    src/util/nurbs.cpp
     tests/MeshGsRoundTripTests.cpp
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
