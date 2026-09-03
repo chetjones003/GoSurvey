@@ -103,5 +103,26 @@ on the tessellation; a tilted survey-magnitude frame + `Translate` to 1e-9; reve
 `SUBTRACT`/`UNION` refused; an offset axis refused; a cap-inside-sphere config refused. Full suite
 green.
 
-**Next:** Slice A / SUBTRACT (sphere − cylinder = drilled hole, genus 1; and cylinder − sphere =
-waisted piece), then Slice A / UNION. Then Slice B (the offset quartic).
+**Slice A / SUBTRACT + UNION — implemented (issue #242, feat/issue242-sphere-cylinder-subtract-union).**
+`src/util/brep.cpp`:
+
+- `BuildSphereCylinderSubtractSphere(fr, r, Rs, ...)` — `sphere − cylinder`, the clean drilled ball
+  (genus 1). Kept spherical surface is the equatorial zone `|z| ≤ h`; the bore is an inward cylinder
+  wall `z ∈ [−h, h]`. Zone seams are sphere meridians, bore seams the straight `±x` segments.
+  4v/8e/4f, χ = 0. Volume `(4/3)πRs³ − barrel`, area `4πh(Rs+r)`.
+- `BuildCylinderSphereStub` + `BuildCylinderSphereSubtract(fr, r, Rs, zBot, zTop, out, ...)` —
+  `cylinder − sphere`, two disjoint stubs, each a short cylinder with a flat outer cap and an inward
+  spherical dimple (the sphere's polar cap) on the inner end. 5v/8e/5f, χ = 2 per stub. `out` gets
+  two solids.
+- `BuildSphereCylinderUnion(fr, r, Rs, zBot, zTop, ...)` — `sphere ∪ cylinder`, the ball with a
+  solid cylindrical boss out each side. Equatorial zone + two outward cylinder bands + two flat
+  caps. 8v/14e/8f, χ = 2. Volume `sphere + cyl − barrel`.
+- `TryBooleanSphereCylinder` gained a `sphereIsMinuend` parameter (the SUBTRACT direction) and now
+  `*handled`s all three operations for the centred pair. Every face closed-form — **no `.gs` bump**.
+
+Tests — `BrepTests` "sphere INTERSECT cylinder …" case, new sections: `sphere − cylinder` (counts,
+χ = 0, closed-form volume/area, tessellated-volume, tilted survey frame + `Translate`);
+`cylinder − sphere` (two stubs, per-stub counts/χ/volume/area); `sphere ∪ cylinder` (counts, χ = 2,
+volume/area, tessellation winding, reversed operand order). Full suite green (1114 ctest cases).
+
+**Next:** Slice B (the offset-axis quartic — INTERSECT then SUBTRACT then UNION), then Slice C (skew).
