@@ -2274,13 +2274,14 @@ TEST_CASE("Curved B2b-2 first pair: sphere INTERSECT cylinder, axis through the 
     REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vol).epsilon(1e-12));
   }
 
-  SECTION("an offset axis (a quartic) is still refused - a later slice") {
+  SECTION("an offset axis with d <= r (the pole-covered sub-case) is still refused") {
     Solid sph;
     Solid cyl;
     REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
-    REQUIRE(brep::MakeCylinder(At(1.5, 0, -6), r * 0.5, 12, &cyl, &why));  // axis offset from centre
+    REQUIRE(brep::MakeCylinder(At(1.5, 0, -6), r * 0.5, 12, &cyl, &why));  // d = 1.5 = cyl radius
     std::vector<Solid> out;
     REQUIRE_FALSE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE_FALSE(brep::BooleanSubtract(sph, cyl, &out, &why));  // offset SUBTRACT: a later slice
   }
 
   SECTION("a cylinder cap that reaches into the sphere is refused, not mis-built") {
@@ -2292,6 +2293,96 @@ TEST_CASE("Curved B2b-2 first pair: sphere INTERSECT cylinder, axis through the 
     REQUIRE(brep::MakeCylinder(At(0, 0, -2), r, 12, &cyl, &why));
     std::vector<Solid> out;
     REQUIRE_FALSE(brep::BooleanIntersect(sph, cyl, &out, &why));
+  }
+}
+
+TEST_CASE("Curved B2b-2: sphere INTERSECT cylinder with an offset axis (the quartic)",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double Rs = 10.0;
+  const double r = 2.0;
+  const double d = 5.0;  // axis offset: d > r (misses the pole), d + r < Rs (clears the equator)
+
+  // Reference plug volume: integrate 2*sqrt(Rs^2 - x^2 - y^2) over the disk (x-d)^2 + y^2 <= r^2.
+  auto plugVolume = [&]() {
+    const int nRho = 1400;
+    const int nTh = 1400;
+    double v = 0.0;
+    for (int i = 0; i < nRho; ++i) {
+      const double rho = r * (i + 0.5) / nRho;
+      for (int j = 0; j < nTh; ++j) {
+        const double th = kTwoPiTest * (j + 0.5) / nTh;
+        const double x = d + rho * std::cos(th);
+        const double y = rho * std::sin(th);
+        v += 2.0 * std::sqrt(std::max(0.0, Rs * Rs - x * x - y * y)) * rho * (r / nRho) *
+             (kTwoPiTest / nTh);
+      }
+    }
+    return v;
+  };
+  const double vref = plugVolume();
+
+  SECTION("axis parallel to +z, offset by d in x - a clean through-plug") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));  // caps at z = +/-12 clear the sphere
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 4);
+    REQUIRE(CountOf(out[0]).e == 6);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 4);
+
+    const brep::MassProperties mp = brep::ComputeMassProperties(out[0]);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(vref).epsilon(2e-3));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(8e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(cyl, sph, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vref).epsilon(2e-3));
+  }
+
+  SECTION("the same plug on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{d, 0, -12}), frame.zAxis, &axis));
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(axis, r, 24, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(2e-3));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vref).epsilon(2e-3));
+  }
+
+  SECTION("SUBTRACT and UNION of the offset pair are not built yet - refused, not corrupt") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(sph, cyl, &out, &why));
+    REQUIRE_FALSE(brep::BooleanUnion(sph, cyl, &out, &why));
   }
 }
 
