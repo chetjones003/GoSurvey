@@ -5905,8 +5905,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   Extrude and revolve are the two feature operations whose every output face falls inside REQ-313's
   five analytic surface kinds and whose every output edge is a line or an arc. **Sweep along an
   arbitrary 3D path and loft between profiles are NOT in this requirement** — a general swept or
-  lofted surface is a freeform (spline) surface the current kernel cannot represent, and adding one
-  is a separate architectural decision. They are tracked as REQ-315, blocked on that decision.
+  lofted surface is a freeform (spline) surface the original kernel could not represent, and adding one
+  was a separate architectural decision. They are tracked as REQ-315 (unblocked 2026-09-03 by
+  ADR-048 — a minimal in-tree NURBS surface).
 
   **Slice**
   Cut a solid by an unbounded plane (a `ucs::Ucs`, or three points, or a planar face of the solid),
@@ -6007,7 +6008,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 - Scope boundaries, stated rather than left silent:
   - **Sweep and loft are not here.** They need a freeform surface type in the kernel. Tracked as
-    REQ-315, blocked on ADR-046's freeform-surface question.
+    REQ-315 — unblocked 2026-09-03 by ADR-048 (a minimal in-tree NURBS surface); delivered there,
+    loft first.
   - **General analytic Boolean intersection curves (ellipse, quartic) are phased.** The first Boolean
     increment covers only operand pairs whose intersection stays within `{Line, Arc}`; the rest is a
     later increment that first adds a general intersection-curve representation. This is not a
@@ -6043,23 +6045,89 @@ capability that does not exist. They are recorded here rather than quietly dropp
   dimple, counterbore) and B2b (general analytic intersection curve — ellipse / quartic). The
   curved-SUBTRACT acceptance lines deferred by D-2026-09-02-b are met in B2a. ADR-045 (d) amended.
 
-### REQ-315 — Sweep and loft (GitHub issue #147, split from REQ-314)
-- Purpose: issue #147's acceptance names sweep and loft alongside extrude and revolve, but a general
-  swept or lofted surface is a freeform (spline) surface that REQ-313's kernel — five analytic
-  surface kinds, two analytic curve kinds — cannot represent. This requirement holds that scope so
-  it is not lost, and records that it is blocked.
+### REQ-315 — Sweep and loft on the solid kernel (GitHub issue #147, split from REQ-314)
+- Purpose: issue #147's acceptance names sweep and loft alongside extrude and revolve. A general
+  swept or lofted surface is a freeform surface that REQ-313's original kernel — five analytic
+  surface kinds — cannot represent, so REQ-315 was split from REQ-314 and parked. ADR-048
+  (D-2026-09-03-b) resolves that: the kernel gains a minimal-subset NURBS surface. This requirement
+  is now unblocked and its Statement is written.
 - Priority: should
 - Type: functional
-- Depends on: REQ-314, and an accepted architectural decision on freeform surfaces in the kernel
-  (raised as an open question in ADR-046).
-- Statement: **To be written once the freeform-surface decision is made.** Sweep runs a closed
-  planar profile along an arbitrary 3D path with controlled orientation; loft blends a closed solid
-  between two or more profiles. Both produce valid closed B-rep solids that satisfy every REQ-313
-  invariant and every REQ-314 robustness and persistence condition.
-- Status: **accepted, blocked (2026-09-02)** — the scope is accepted; the requirement text is
-  blocked on the ADR-046 freeform-surface question. No implementation until that is resolved and
-  this Statement is written and accepted.
-- Revisions: 2026-09-02 — accepted as a parked scope holder (D-2026-09-02-a, TASK-173).
+- Depends on: REQ-314 (the feature-operation layer and its robustness / persistence conditions);
+  ADR-048 (the `SurfaceKind::Nurbs` freeform surface and its numerical mass properties); REQ-313 /
+  ADR-045 (the kernel and its validity invariants); REQ-311 (`ucs::Ucs`); REQ-312 (arbitrary-plane
+  curves).
+- Constraints in force: REQ-101 (±0.01 ft), REQ-201 (no silent failure), REQ-300 (in-tree kernel,
+  no third-party geometry library), REQ-301 (minimal abstraction), REQ-100 profile (d).
+- Statement:
+  - **The kernel gains one freeform surface kind, `SurfaceKind::Nurbs`** — a rational tensor-product
+    B-spline patch, degree ≤ 3 per direction, untrimmed, split at seams into faces that each bound
+    normally (ADR-045 (d)). It is evaluated, differentiated and tessellated by hand-written in-tree
+    code; its volume and surface area are computed by adaptive numerical quadrature to a tolerance
+    far inside REQ-101's ±0.01 ft (ADR-045 (b) as widened by D-2026-09-03-b). It serializes to `.gs`
+    as additive keys and bumps `kGsFormatVersion` to 4. A malformed patch is refused on load by name.
+  - **LOFT** builds a closed solid skinned between **two or more planar profiles**. Each profile is a
+    closed loop of line / arc / ellipse edges; the profiles are matched edge-for-edge in order and
+    must have the **same edge count** (a divided-profile or point-capped loft is out of scope). Each
+    corresponding pair of profile edges spans one patch — ruled where the span is straight, rational
+    where a profile edge is an arc — and the two end profiles cap the solid as planar faces.
+  - **SWEEP** runs **one closed planar profile** along a 3D **path** that is a line, an arc, or a
+    bulge polyline. The profile's orientation along the path is carried by a **rotation-minimizing
+    frame**, with an **optional constant twist angle** and an option to hold the profile normal to
+    the path or hold it at a fixed world orientation. A straight path reproduces REQ-314 extrude and
+    a planar circular-arc path reproduces revolve — asserted to agree where the analytic result
+    exists; every other path produces NURBS side faces.
+  - Both commands exist in the **typed** and the **prompted** shape the REQ-313 / REQ-314 commands
+    use, pick their operands in the viewport or by entity id, preview the result, and commit as
+    **one undoable step**. The source profiles and path are consumed only after the result passes
+    `brep::Validate` (and `brep::SelfIntersects`); a failure is refused by name and the document is
+    untouched (REQ-314 / ADR-046 (d), unchanged).
+  - The result stores **topology only** by default; it may optionally record a recipe (profile / path
+    entity ids and parameters) that is never consulted by validity, mass properties or tessellation
+    (ADR-045 (c), ADR-046 (e)).
+- Acceptance:
+  - **Loft and sweep each produce a valid closed solid** from planar profiles — `brep::Validate`
+    passes (manifold, oriented, geometrically closed per ADR-045 (e)) and `brep::SelfIntersects` is
+    false — or the operation is **refused by name** and nothing is stored (REQ-201). Mismatched
+    profile edge counts, a non-planar profile, a self-crossing profile, a degenerate path, and a
+    zero-length span are each refused by name.
+  - **Volumes are within REQ-101 (±0.01 ft, or the documented relative tolerance for large
+    magnitudes) of hand-computed values** for a set of shapes with known answers: a lofted prism
+    (two identical profiles) equals the extrude of that profile; a lofted frustum equals the cone /
+    pyramid frustum formula; a lofted circular barrel and a swept elbow are checked against a fine
+    independent numerical reference. The quadrature converges and its result does not move when the
+    display tessellation quality changes.
+  - **A straight-path sweep equals REQ-314 extrude** and a **planar arc-path sweep of an in-plane
+    profile equals revolve**, to REQ-101, asserted in tests.
+  - **Results survive `.gs` save and reopen** with vertex / edge / face counts identical and volume
+    and area within a relative 1e-6. A drawing with no NURBS face serializes byte-identically to a
+    version-3 build. A version-4 file with a malformed patch is refused with the kernel's reason and
+    not loaded.
+  - **Every operation is a single undoable step**, and undo restores the exact prior document
+    including the consumed profiles and path.
+  - **Operations remain stable at survey-coordinate magnitudes** — a loft / sweep built with its
+    frame origin at a state-plane coordinate reports the same volume and area (to REQ-101) as the
+    same shape built near the origin; no integrand is a difference of two large nearly-equal numbers
+    (ADR-045 (g)).
+  - **Loft and sweep draw in every REQ-064 visual style**, with isolines on the NURBS faces from the
+    same evaluator the shaded triangles use (REQ-313 isoline precedent), and are cached on
+    `(solid, chord tolerance, isoline count)` like every other solid. REQ-100 profile (d) still holds
+    on a scene containing loft / sweep solids.
+  - **Face and edge snapping return accurate XYZ** on a NURBS face — a face snap is projected onto
+    the patch, not the tessellator's chord.
+  - **DXF / DWG export names and counts** the loft / sweep solids it skips, in both writers
+    (ADR-045 (i), unchanged).
+- Out of scope (each its own future decision): trimmed NURBS; a loft / sweep solid as a Boolean
+  operand; multi-loop, divided, or point-capped profiles; NURBS curve edges; fillet / chamfer /
+  section / moments of a freeform result (#120 Phases 5–6); interactive 3D placement and grips.
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`, optionally a new `src/util/nurbs.{hpp,cpp}`;
+  `src/util/cadsolid.hpp`); Commands, IO, Renderer and Viewport.
+- Status: **accepted (2026-09-03)** — see D-2026-09-03-b and ADR-048. Delivered in two increments,
+  each its own task and PR: **loft first**, then sweep.
+- Revisions: 2026-09-02 — accepted as a parked scope holder, Statement blocked on the
+  freeform-surface question (D-2026-09-02-a, TASK-173). 2026-09-03 — unblocked; Statement and
+  Acceptance written and accepted; freeform surface decided as a minimal in-tree NURBS patch
+  (D-2026-09-03-b, ADR-048, TASK-187). Loft-before-sweep order confirmed with the user.
 
 ### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
 

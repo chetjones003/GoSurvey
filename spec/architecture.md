@@ -2003,7 +2003,11 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   solid."*
   **Amended 2026-09-02 (D-2026-09-02-i): closed-form is the rule for every *analytic* face; a face
   bounded by a procedural intersection curve (B2b-2, `CurveKind::Intersection`) is integrated by
-  adaptive numerical quadrature** to a tolerance far inside REQ-101's ±0.01 ft. The quartic where two
+  adaptive numerical quadrature** to a tolerance far inside REQ-101's ±0.01 ft.
+  **Widened 2026-09-03 (D-2026-09-03-b, ADR-048): a face whose surface is `SurfaceKind::Nurbs`
+  (the freeform loft / sweep face) is integrated by the same adaptive quadrature.** The quadrature
+  grid stays independent of the display chord tolerance, so tessellation quality is still not part of
+  the model; every *analytic* face keeps its exact closed form. The quartic where two
   non-coaxial cylinders meet has no elementary integral, so a `T`-pipe's saddle face is the one face
   type that cannot be exact — every other face still is, and the quadrature tolerance keeps the
   answer's *error* below the display-drift a facet count would cause anyway. Tessellation quality is
@@ -2302,12 +2306,14 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
     committed to an in-tree kernel; bolting on a foreign B-rep now would mean two solid
     representations and a translation layer between them.
 
-- **Open question, not resolved here: freeform surfaces (blocks REQ-315).** Sweep and loft produce
-  surfaces that are none of ADR-045's five kinds. Supporting them means adding a general
-  (NURBS / spline) surface type to the kernel — a significant extension that touches validity,
-  mass-property integration, tessellation, snapping and `.gs`. That decision is deliberately
-  deferred until extrude, revolve, slice and Increment B1 are delivered and the kernel's shape is
-  better understood. Until then REQ-315 is parked and sweep / loft are not built.
+- **Open question — RESOLVED 2026-09-03 by ADR-048 (D-2026-09-03-b): freeform surfaces (was blocking
+  REQ-315).** Sweep and loft produce surfaces that are none of ADR-045's five kinds. The resolution:
+  a new `SurfaceKind::Nurbs` — a hand-rolled, in-tree, **minimal-subset** rational B-spline patch
+  (degree ≤ 3, untrimmed, split at seams like the analytic curved faces), its volume and area
+  integrated by the adaptive numerical quadrature D-2026-09-02-i already opened for the
+  procedural-intersection face, `.gs` bumped to version 4. REQ-315 is unblocked; **loft ships before
+  sweep**, each its own increment. Everything below in this ADR is unchanged. See ADR-048 for the
+  full decision.
 
 - **Consequences.**
   - `src/util/brep.{hpp,cpp}` grows a feature-operation section: `Extrude`, `Revolve`, `Slice`,
@@ -2324,7 +2330,7 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
     profile (d) is unaffected.
   - DXF / DWG export is unchanged: ADR-045 (i) already excludes every `CadSolid` with a counted,
     named message.
-  - **Still not addressed:** sweep / loft (REQ-315, blocked); multi-loop profiles; fillet / chamfer
+  - **Still not addressed here** (sweep / loft moved to ADR-048, accepted 2026-09-03): multi-loop profiles; fillet / chamfer
     on a solid edge (#120 Phase 5); sectioning, centroid, moments of inertia (#120 Phase 6);
     interactive placement and 3D grips for a feature result (#120 Phase 5).
 
@@ -2343,7 +2349,8 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   7. **Booleans Increment B2b-2** — procedural `CurveKind::Intersection`: cylinder ∩ cylinder
      (quartic), sphere ∩ cylinder, non-elliptical cone sections. A face bounded by one is integrated
      numerically (ADR-045 (b) amendment, D-2026-09-02-i). Refusals lifted pair by pair.
-  8. *(separate REQ-315, separate ADR revision)* — freeform surfaces, then sweep and loft.
+  8. *(separate REQ-315, ADR-048 — accepted 2026-09-03)* — `SurfaceKind::Nurbs` freeform surface,
+     then **loft**, then **sweep**.
 
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
@@ -2480,3 +2487,147 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
 - **Out of scope and not designed for:** spline / fit-curve / smoothed polylines; polyline segment
   width and taper (DXF group 40/41); variable global width; arc segments in 3DPOLY; DWG *write* of
   bulges beyond what ADR-041's R2004 writer already supports.
+
+### ADR-048 — The kernel's freeform surface: a hand-rolled minimal NURBS patch, numerically integrated; REQ-315 delivers loft then sweep   (2026-09-03, accepted)
+
+- **Status:** accepted (2026-09-03, D-2026-09-03-b). The representation (NURBS), its scope (a minimal
+  subset), its implementation (hand-rolled, in-tree), its mass-property method (numerical quadrature)
+  and the delivery order (loft before sweep) were each explained to the user in plain English and the
+  recommendation accepted. This is the "separate REQ-315, separate ADR revision" ADR-046's delivery
+  order named as item 8, and it resolves ADR-046's open question *"freeform surfaces (blocks
+  REQ-315)"*. Backs **REQ-315**. GitHub issue #147, Phase 4 of #120. No code has landed under this ADR
+  yet — the increments are filed separately, loft first.
+
+- **Context.** REQ-315 (sweep and loft) has been accepted-but-blocked since 2026-09-02. ADR-045 (b)
+  built the kernel on *analytic faces*: every face is a plane, cylinder, cone, sphere or torus, so
+  volume and area are closed-form and do not drift when the display changes. ADR-046 established that
+  extrude and revolve of a line-and-arc profile stay inside those five kinds, and delivered analytic
+  Booleans in increments. But a **general swept or lofted surface is none of the five** — dragging a
+  profile along a curved 3D path, or skinning between two dissimilar profiles, produces a smooth
+  freeform sheet. ADR-046 deferred *how the kernel represents that* as an explicit open question,
+  parked REQ-315, and said sweep / loft are not built until it is answered. This ADR answers it.
+
+  D-2026-09-02-i already opened the one crack in ADR-045 (b)'s closed-form rule: a face bounded by a
+  procedural intersection curve (Boolean increment B2b-2) is integrated by **adaptive numerical
+  quadrature** to a tolerance far inside REQ-101's ±0.01 ft, because the cylinder∩cylinder quartic
+  has no elementary integral. A NURBS face is the second citizen of that same carve-out.
+
+- **Decision.**
+
+  **(a) The freeform surface is a NURBS patch — `SurfaceKind::Nurbs`.** A new sixth `SurfaceKind`
+  carries a **rational tensor-product B-spline patch**: degree `pu, pv` (each ≤ 3), knot vectors
+  `Uu, Uv`, and an `(nu × nv)` grid of control points each with a weight (`std::vector` of
+  `{ucs::Vec3 P; double w;}`, row-major). Its `frame` (an `ucs::Ucs`, per ADR-045 (h)) is the patch's
+  local frame; control points are stored in that frame so a patch at survey-coordinate magnitude is
+  built from small numbers (ADR-045 (g)). Evaluation is Cox–de Boor basis functions and the standard
+  rational patch sum `S(u,v) = Σ Nᵢ(u)Nⱼ(v)wᵢⱼPᵢⱼ / Σ Nᵢ(u)Nⱼ(v)wᵢⱼ`; the first derivatives come from
+  the same recurrence for the surface normal and the tessellation grid.
+
+  **(b) Minimal subset — only what loft and sweep generate.** Degree is capped at 3 per direction;
+  weights are non-unit **only** where a lofted or swept *circular arc* profile edge requires them
+  (a quarter circle is exact as a rational quadratic). Patches are **untrimmed** — a face's boundary
+  is its four patch edges, and the patch is split at any internal seam into faces that each bound
+  normally, exactly as ADR-045 (d) splits a cylinder into two half-faces and a sphere into two.
+  **Explicitly not built:** trimmed NURBS (a hole cut in the middle of a patch), degree > 3,
+  surface–surface intersection *against* a NURBS face (so a NURBS solid is not yet a Boolean
+  operand), and NURBS *curve* edges (`CurveKind` is unchanged — a loft/sweep between line-and-arc
+  profiles has line, arc and ellipse edges only, and the profile-to-profile "rail" edges are lines
+  or arcs of the profiles themselves). Each of these becomes its own decision if a later feature
+  needs it.
+
+  **(c) Hand-rolled, in-tree.** The basis functions, patch evaluation, derivatives, bounding box and
+  adaptive tessellation are written in this repository — either extending `src/util/brep.cpp` or a
+  sibling pure module `src/util/nurbs.{hpp,cpp}` beside it — with direct unit tests, no graphics.
+  **No third-party NURBS or geometry library.** REQ-300, ADR-045's alternative (3) and ADR-046's
+  rejected alternatives all already refused a foreign kernel; a NURBS *evaluator* (as opposed to a
+  NURBS *modeller* with trimming and intersection) is a bounded, well-documented few hundred lines,
+  and the project's dependency policy (project.md §7) answers "can this be done simply in-tree?" with
+  yes.
+
+  **(d) A NURBS face's volume and area are numerically integrated.** ADR-045 (b) as amended by
+  D-2026-09-02-i already says a face bounded by a non-analytic curve falls back to adaptive
+  quadrature; this ADR widens that clause to read *a face whose surface is `SurfaceKind::Nurbs`, or
+  whose boundary loop contains a procedural intersection edge, is integrated by adaptive numerical
+  quadrature* to a tolerance far inside REQ-101's ±0.01 ft. The divergence-theorem volume integrand
+  (∫ x·n dA over the face, summed over the shell) is evaluated on a Gauss–Legendre grid refined
+  until it converges; area is ∫ |Sᵤ × Sᵥ| du dv the same way. **The quadrature grid is independent
+  of the display chord tolerance** — tessellation quality is still not part of the model (#120).
+  ADR-045 (e)'s two-reference-point closure check still applies and still catches a lofted shell
+  that does not actually close.
+
+  **(e) `.gs` gains a `SurfaceKind::Nurbs` encoding and bumps `kGsFormatVersion` 3 → 4.** The patch
+  serializes its degrees, knot vectors and weighted control net as additive JSON keys under the
+  surface object. This is a geometry kind an older reader cannot tolerate (it would not know the
+  face's shape at all), so — as with the B2b-1 ellipse bump (2 → 3) and the B2b-2 procedural-curve
+  bump (already 2 → 3; this is the next integer) — `kGsFormatVersion` goes to **4**. A drawing with
+  no NURBS face still serializes byte-identically to a version-3 build. A malformed patch (knot
+  vector not non-decreasing, control count disagreeing with knots and degree, non-finite weight) is
+  refused on load with the kernel's own reason (REQ-201), not clamped.
+
+  **(f) Loft is delivered before sweep.**
+  - **Loft (increment 1)** — a closed solid skinned between **two or more coplanar-or-not planar
+    profiles**, each a closed loop of line / arc / ellipse edges with the **same edge count**
+    (matched in order; a divided-profile / point-cap loft is out of scope for increment 1). Each
+    corresponding pair of profile edges spans one NURBS patch (a ruled patch for a straight span, a
+    rational patch where a profile edge is an arc); the profiles themselves cap the ends as planar
+    faces. Volume is checked against hand-computed prism / frustum / barrel values within REQ-101.
+  - **Sweep (increment 2)** — a single closed planar profile run along an arbitrary 3D path (a line,
+    an arc, or a bulge polyline), the profile's orientation carried by a **rotation-minimizing frame**
+    (double-reflection method) with an **optional constant twist** and an optional "keep profile
+    normal to path" vs. "keep profile vertical" choice. A straight path is the existing extrude
+    (asserted to agree); a circular-arc path with the profile in the plane of the arc is a torus /
+    revolve (asserted to agree where analytic); every other path produces NURBS side faces.
+  - Each increment is its own `workshop/tasks/` entry and its own PR, exactly as REQ-314's seven
+    increments were.
+
+  **(g) A loft / sweep result stores topology only.** Like the Booleans (ADR-046 (e)), a feature
+  result carries no recipe by default; it may optionally record `{profile entity ids, path entity
+  id, parameters}` for future parametric edit, never consulted by `Validate`, `ComputeMassProperties`
+  or `Tessellate`. Operands (the source profiles / path) are consumed only after the result validates
+  (ADR-046 (d)), as one undo step (REQ-314 acceptance, unchanged).
+
+- **Rejected alternatives.**
+  - **A tessellated freeform surface** (store the loft/sweep as a triangle mesh face). This is the
+    fallback ADR-046's open question named. Rejected for the same three reasons ADR-045 alternative
+    (2) rejected a faceted B-rep: the volume misses REQ-101 without an enormous facet count, the file
+    grows by orders of magnitude, and tessellation quality becomes part of the model — which #120
+    forbids in as many words. The user weighed this and chose NURBS.
+  - **A full general NURBS modeller now** (arbitrary degree, trimmed patches, NURBS–NURBS
+    intersection so a lofted solid is a Boolean operand). Rejected as speculative: loft and sweep
+    generate none of it, it multiplies the test surface, and CLAUDE.md §7 forbids an abstraction
+    without two present uses. Added incrementally if a real feature needs it.
+  - **Vendor a NURBS library** (OpenNURBS, tinynurbs, …). Rejected: REQ-300 dependency discipline and
+    the standing in-tree-kernel commitment (ADR-045, ADR-046). An evaluator is small enough to own.
+  - **Approximate loft with analytic faces** (fit a cone / cylinder frustum between each profile pair
+    and refuse the rest). Rejected: it silently mis-reports a barrel or a twisted hull as a straight
+    frustum, the REQ-201 failure the analytic-Boolean phasing exists to avoid, and it does not
+    generalise to sweep at all.
+
+- **Consequences.**
+  - `SurfaceKind` gains `Nurbs`; `Surface` gains the patch payload (degrees, knot vectors, weighted
+    control net) — additive, defaulted, never set by the seven primitives or by extrude / revolve /
+    slice / Boolean.
+  - `src/util/brep.cpp` (or a new `src/util/nurbs.*`) gains: Cox–de Boor basis, rational patch
+    evaluation + first derivatives, adaptive tessellation, an adaptive Gauss–Legendre area / volume
+    quadrature, and a patch validator. All graphics-free, all directly unit-tested (ADR-045).
+  - `brep::ComputeMassProperties` routes a `Nurbs` face (and, already, a procedural-intersection
+    face) through the quadrature path; every analytic face keeps its exact closed form.
+  - The command layer gains `LOFT` then `SWEEP`, each in the typed / prompted shape the primitive and
+    REQ-314 commands use, each one undo step.
+  - `io/GsMigrate.hpp` `kGsFormatVersion` → **4**; `.gs` reader/writer gain the `Nurbs` surface
+    encoding; CI's format-version check updates.
+  - **No renderer change of substance** — a NURBS face tessellates through REQ-313's cached path and
+    the existing GL; isolines on a NURBS face are iso-parameter curves from the same evaluator
+    (REQ-313 isoline precedent). REQ-100 profile (d) is measured on a scene with loft/sweep solids
+    and must still hold.
+  - DXF / DWG export is unchanged — ADR-045 (i) already excludes every `CadSolid` with a named,
+    counted message.
+  - **Still not addressed:** trimmed NURBS; a NURBS solid as a Boolean operand; multi-loop / divided
+    profiles; point-capped loft; fillet / chamfer / section / moments (#120 Phases 5–6); interactive
+    3D placement and grips for a loft / sweep result (#120 Phase 5).
+
+- **Delivery order:**
+  1. **Loft** — `SurfaceKind::Nurbs`, the evaluator, the quadrature, `.gs` v4, and `LOFT` between
+     two-or-more equal-edge-count planar profiles.
+  2. **Sweep** — a profile along a line / arc / bulge-polyline path with a rotation-minimizing frame
+     and optional twist; agreement asserted against extrude and revolve where the path is analytic.
