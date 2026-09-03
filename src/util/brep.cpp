@@ -763,6 +763,127 @@ struct IsectStrip {
   return out;
 }
 
+/// The latitude extent of a **sphere** face bounded by a procedural `Intersection` edge, as a
+/// function of longitude `u`: at each `u` the meridian spans `[vLo(u), vHi(u)]` between the two
+/// crossings of the *other* surface the edge carries (REQ-314 B2b-2, GitHub issue #242 — the
+/// sphere ∩ cylinder offset quartic). The `v`-analogue of \ref IsectStrip.
+struct SphereIsectStrip {
+  const Surface* sf = nullptr;     ///< the sphere
+  const Surface* other = nullptr;  ///< the surface it crosses (a cylinder)
+  double vSearchLo = 0.0;
+  double vSearchHi = 0.0;
+  [[nodiscard]] bool valid() const { return sf && other && vSearchHi > vSearchLo; }
+};
+
+[[nodiscard]] SphereIsectStrip MakeSphereIsectStrip(const Solid& s, const Face& f) {
+  SphereIsectStrip st;
+  st.sf = &f.surface;
+  double vMin = 1e300;
+  double vMax = -1e300;
+  for (const Loop& lp : f.loops)
+    for (const EdgeUse& u : lp.uses) {
+      const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+      if (e.kind != CurveKind::Intersection || e.isectSurfaces.size() != 2)
+        continue;
+      for (const int vi : {e.v0, e.v1}) {
+        const Vec3 loc = ucs::WorldToUcs(f.surface.frame, s.vertices[static_cast<std::size_t>(vi)].p);
+        const double v = std::asin(std::clamp(loc.z / f.surface.radius, -1.0, 1.0));
+        vMin = std::min(vMin, v);
+        vMax = std::max(vMax, v);
+      }
+      for (std::size_t k = 0; k < 2; ++k)
+        if (!SameSurfaceApprox(e.isectSurfaces[k], f.surface))
+          st.other = &e.isectSurfaces[k];
+    }
+  if (vMax > vMin) {
+    const double margin = 0.35 * (vMax - vMin) + 1e-6;
+    st.vSearchLo = std::max(-kHalfPi, vMin - margin);
+    st.vSearchHi = std::min(kHalfPi, vMax + margin);
+  }
+  return st;
+}
+
+/// `[vLo, vHi]` at longitude \p u, or false where the meridian never enters the other surface (past
+/// an end of the lens-shaped patch). Scans latitude for the two crossings and bisects each.
+[[nodiscard]] bool SphereStripAt(const SphereIsectStrip& st, double u, double* vLo, double* vHi) {
+  const double R = st.sf->radius;
+  auto g = [&](double v) {
+    return SignedDistToSurface(
+        *st.other, ucs::UcsToWorld(st.sf->frame, Vec3{R * std::cos(v) * std::cos(u),
+                                                      R * std::cos(v) * std::sin(u), R * std::sin(v)}));
+  };
+  double first = 0.0;
+  double last = 0.0;
+  int roots = 0;
+  const int scan = 96;
+  double vp = st.vSearchLo;
+  double gp = g(vp);
+  for (int i = 1; i <= scan; ++i) {
+    const double vc = st.vSearchLo + (st.vSearchHi - st.vSearchLo) * i / scan;
+    const double gc = g(vc);
+    if ((gp <= 0.0) != (gc <= 0.0)) {
+      double lo = vp;
+      double hi = vc;
+      double glo = gp;
+      for (int k = 0; k < 46; ++k) {
+        const double m = 0.5 * (lo + hi);
+        const double gm = g(m);
+        if ((glo <= 0.0) != (gm <= 0.0))
+          hi = m;
+        else {
+          lo = m;
+          glo = gm;
+        }
+      }
+      const double root = 0.5 * (lo + hi);
+      if (roots == 0)
+        first = root;
+      last = root;
+      ++roots;
+    }
+    vp = vc;
+    gp = gc;
+  }
+  if (roots < 2)
+    return false;
+  *vLo = first;
+  *vHi = last;
+  return true;
+}
+
+/// Numerical area / volume term of a **sphere** face whose boundary loop contains a procedural
+/// `Intersection` edge (REQ-314 B2b-2, GitHub issue #242) — the sphere analogue of
+/// \ref IntegrateCylinderFaceNumeric. Integrates over the face's own longitude `u`; the per-`u`
+/// latitude integrals are the same ones \ref SphericalFaceIntegrals uses, with the limits found by
+/// bisecting the quartic instead of read from a rectangle.
+[[nodiscard]] FaceIntegrals IntegrateSphereFaceNumeric(const Solid& s, const Face& f, const Vec3& q) {
+  const Vec3 qL = ucs::WorldToUcs(f.surface.frame, q);
+  const double R = f.surface.radius;
+  const SphereIsectStrip st = MakeSphereIsectStrip(s, f);
+  FaceIntegrals out;
+  if (!st.valid())
+    return out;
+  const double u0 = std::min(f.uStart, f.uEnd);
+  const double u1 = std::max(f.uStart, f.uEnd);
+  out.area = GradedGaussIntegrate(u0, u1, 22, [&](double u) {
+    double a = 0.0;
+    double b = 0.0;
+    return SphereStripAt(st, u, &a, &b) ? R * R * (std::sin(b) - std::sin(a)) : 0.0;
+  });
+  out.volTerm = GradedGaussIntegrate(u0, u1, 22, [&](double u) {
+    double a = 0.0;
+    double b = 0.0;
+    if (!SphereStripAt(st, u, &a, &b))
+      return 0.0;
+    const double sV = std::sin(b) - std::sin(a);
+    const double iCos2 = (b - a) * 0.5 + (std::sin(2.0 * b) - std::sin(2.0 * a)) * 0.25;
+    const double iSinCos = (std::sin(b) * std::sin(b) - std::sin(a) * std::sin(a)) * 0.5;
+    return R * R * R * sV - R * R * (qL.x * std::cos(u) + qL.y * std::sin(u)) * iCos2 -
+           R * R * qL.z * iSinCos;
+  });
+  return out;
+}
+
 /// Area and divergence-theorem volume term of a \ref SurfaceKind::Nurbs face, by Gauss–Legendre
 /// quadrature over the patch parameter rectangle the face occupies (ADR-045 (b) as widened by
 /// D-2026-09-03-b — the numerical carve-out for a face with no closed form). The **un-normalised**
@@ -870,6 +991,13 @@ struct IsectStrip {
     break;
   }
   case SurfaceKind::Sphere: {
+    if (FaceLoopHasIntersectionEdge(s, f)) {
+      // ADR-045 (b) numerical carve-out (D-2026-09-02-i), extended to sphere faces for the
+      // sphere ∩ cylinder offset quartic (issue #242). A procedural edge here always bounds the
+      // patch directly (an inner-loop bite out of a sphere face has no operand pair yet).
+      out = IntegrateSphereFaceNumeric(s, f, q);
+      break;
+    }
     const SphereIntegrals si =
         SphericalFaceIntegrals(sf.radius, f.uStart, f.uEnd, f.vStart, f.vEnd, qLocal);
     out.area = si.area;
@@ -4762,6 +4890,103 @@ struct SphereShape {
   return Succeed(outWhy);
 }
 
+/// `sphere ∩ cylinder` with the cylinder axis **parallel to a sphere diameter but offset** by \p d
+/// (REQ-314 B2b-2, GitHub issue #242 — the genuine quartic). `r < d` (the axis misses the pole) and
+/// `d + r < Rs` (the cylinder clears the equator) and both caps clear the sphere: the cylinder then
+/// pierces the sphere in two closed quartic loops, and the INTERSECT is a plug — the cylinder wall
+/// band between the loops, capped by the two lens-shaped sphere patches the cylinder encloses.
+/// Local frame: sphere centre at the origin, `+z` the cylinder axis direction, the cylinder axis
+/// through `(d, 0, 0)`. 4 vertices, 6 edges (4 procedural), 4 faces. Every face integrates
+/// numerically. Placed into \p fr.
+///
+/// The curve: at cylinder longitude `φ`, `z² = Rs² − d² − r² − 2 d r cos φ` (always positive here),
+/// one loop per sign of `z`.
+[[nodiscard]] bool BuildSphereCylinderOffsetIntersection(const ucs::Ucs& fr, double r, double Rs,
+                                                         double d, Solid* out, Problem* outWhy) {
+  if (!(r > 0.0) || !(d > r) || !(d + r < Rs))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+  auto gg = [&](double phi) { return Rs * Rs - d * d - r * r - 2.0 * d * r * std::cos(phi); };
+  auto cyl = [&](double phi, double z) {
+    return W(Vec3{d + r * std::cos(phi), r * std::sin(phi), z});
+  };
+  const double z0 = std::sqrt(std::max(0.0, gg(0.0)));   // φ = 0  (nearest the far wall)
+  const double zP = std::sqrt(std::max(0.0, gg(kPi)));   // φ = π
+
+  Surface cSurf;
+  cSurf.kind = SurfaceKind::Cylinder;
+  cSurf.frame.origin = W(Vec3{d, 0.0, 0.0});
+  cSurf.frame.zAxis = fr.zAxis;
+  cSurf.frame.xAxis = fr.xAxis;
+  cSurf.frame.yAxis = fr.yAxis;
+  cSurf.radius = r;
+  cSurf.height = 4.0 * Rs;
+  Surface sSurf;
+  sSurf.kind = SurfaceKind::Sphere;
+  sSurf.frame = fr;
+  sSurf.radius = Rs;
+
+  Solid s;
+  const int u0 = AddVertex(&s, cyl(0.0, z0));
+  const int uP = AddVertex(&s, cyl(kPi, zP));
+  const int l0 = AddVertex(&s, cyl(0.0, -z0));
+  const int lP = AddVertex(&s, cyl(kPi, -zP));
+
+  auto isect = [&](int a, int b, double witnessPhi, double witnessZsign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = a;
+    e.v1 = b;
+    e.frame.origin = cyl(witnessPhi, witnessZsign * std::sqrt(std::max(0.0, gg(witnessPhi))));
+    e.isectSurfaces = {cSurf, sSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int eUp = isect(u0, uP, 0.5 * kPi, 1.0);   // upper loop, y > 0 (φ 0→π)
+  const int eUn = isect(uP, u0, 1.5 * kPi, 1.0);   // upper loop, y < 0 (φ π→2π)
+  const int eLp = isect(l0, lP, 0.5 * kPi, -1.0);  // lower loop, y > 0
+  const int eLn = isect(lP, l0, 1.5 * kPi, -1.0);  // lower loop, y < 0
+  const int s0 = AddLine(&s, l0, u0);  // seam at φ = 0
+  const int sP = AddLine(&s, lP, uP);  // seam at φ = π
+
+  auto cylFace = [&](double a, double b, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = cSurf;
+    f.uStart = a;
+    f.uEnd = b;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  auto capFace = [&](double uLo, double uHi, double vLo, double vHi, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = sSurf;
+    f.uStart = uLo;
+    f.uEnd = uHi;
+    f.vStart = vLo;
+    f.vEnd = vHi;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  // Cylinder wall: y>0 half (φ 0→π) and y<0 half. Coaxial-outward winding: lower curve forward, up
+  // the seam, upper curve reversed, down the seam.
+  cylFace(0.0, kPi, {{eLp, false}, {sP, false}, {eUp, true}, {s0, true}});
+  cylFace(kPi, kTwoPi, {{eLn, false}, {s0, false}, {eUn, true}, {sP, true}});
+
+  // The two sphere caps. Longitude spans ±asin(r/d) about fr.xAxis (longitude 0); latitude spans the
+  // z-extremes of the loop. The numeric integrator/tessellator find the exact band per longitude.
+  const double uHalf = std::asin(std::clamp(r / d, -1.0, 1.0));
+  const double vLoU = std::asin(std::clamp(z0 / Rs, -1.0, 1.0));
+  const double vHiU = std::asin(std::clamp(zP / Rs, -1.0, 1.0));
+  capFace(-uHalf, uHalf, vLoU, vHiU, {{eUp, false}, {eUn, false}});
+  capFace(-uHalf, uHalf, -vHiU, -vLoU, {{eLp, true}, {eLn, true}});
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// `sphere − cylinder` with the cylinder axis **through the sphere centre** (REQ-314 B2b-2, GitHub
 /// issue #242). A ball with a clean cylindrical hole drilled straight through it — a genus-1 solid.
 /// The kept spherical surface is the equatorial zone `|z| <= h` (`h = √(Rs²−r²)`); the bore is an
@@ -6075,8 +6300,35 @@ struct SphereShape {
   const Vec3 w = ray3d::Sub(S.centre, C.axis.origin);
   const double along = ray3d::Dot(w, C.axis.zAxis);
   const Vec3 foot = ray3d::Add(C.axis.origin, ray3d::Scale(C.axis.zAxis, along));
-  if (ray3d::Length(ray3d::Sub(S.centre, foot)) > eps)
-    return false;  // offset / skew axis — a quartic, a later slice
+  const double offset = ray3d::Length(ray3d::Sub(S.centre, foot));  // axis-to-centre distance
+
+  if (offset > eps) {
+    // The offset quartic (issue #242, slice B). INTERSECT only, and only the sub-case where the
+    // cylinder misses the pole (`r < d`) and clears the equator (`d + r < Rs`) and both caps clear
+    // the sphere — a clean through-plug. Everything else falls through unhandled.
+    const double d = offset;
+    if (op != BoolOp::Intersect || !(d > C.radius + eps) || !(d + C.radius < S.radius - eps))
+      return false;
+    const double e = std::sqrt(std::max(0.0, S.radius * S.radius - d * d));  // axis half-chord
+    if (along - e < eps || C.length - (along + e) < eps)
+      return false;  // a cap sits inside the sphere
+    *handled = true;
+    ucs::Ucs fq;
+    if (!ucs::FromNormal(S.centre, C.axis.zAxis, &fq))
+      return Fail(Problem::BooleanResultInvalid, outWhy);
+    Vec3 x = ray3d::Sub(foot, S.centre);  // from the sphere centre toward the cylinder axis
+    x = ray3d::Sub(x, ray3d::Scale(fq.zAxis, ray3d::Dot(x, fq.zAxis)));
+    if (!(ray3d::Length(x) > 1e-9 * sc))
+      return Fail(Problem::BooleanResultInvalid, outWhy);
+    fq.xAxis = ray3d::Normalize(x);
+    fq.yAxis = ray3d::Normalize(ray3d::Cross(fq.zAxis, fq.xAxis));
+    Solid rq;
+    if (!BuildSphereCylinderOffsetIntersection(fq, C.radius, S.radius, d, &rq, outWhy))
+      return false;
+    out->push_back(std::move(rq));
+    return Succeed(outWhy);
+  }
+
   if (S.radius <= C.radius + eps)
     return false;  // the cylinder does not fit inside the sphere — not this shape
   if (along < S.radius - eps || along > C.length - S.radius + eps)
@@ -7421,13 +7673,24 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const bool sphere = sf.kind == SurfaceKind::Sphere;
       const double uRadius = sphere ? sf.radius : sf.radius + sf.radius2;
       const double vRadius = sphere ? sf.radius : sf.radius2;
-      const int nu = SegmentsForArc(uRadius, f.uEnd - f.uStart, chordTolerance);
+      // A sphere patch bounded by a procedural Intersection edge (REQ-314 B2b-2, issue #242): the
+      // latitude band is a function of longitude, found the same way IntegrateSphereFaceNumeric does.
+      const bool isectSphere = sphere && FaceLoopHasIntersectionEdge(s, f);
+      const SphereIsectStrip sStrip = isectSphere ? MakeSphereIsectStrip(s, f) : SphereIsectStrip{};
+      const int nu = isectSphere
+                         ? std::clamp(SegmentsForArc(uRadius, f.uEnd - f.uStart, 0.25 * chordTolerance),
+                                      24, 256)
+                         : SegmentsForArc(uRadius, f.uEnd - f.uStart, chordTolerance);
       const int nv = SegmentsForArc(vRadius, f.vEnd - f.vStart, chordTolerance);
       std::vector<std::uint32_t> grid(static_cast<std::size_t>(nu + 1) * static_cast<std::size_t>(nv + 1));
       for (int i = 0; i <= nu; ++i) {
         const double t = f.uStart + (f.uEnd - f.uStart) * static_cast<double>(i) / static_cast<double>(nu);
+        double vA = f.vStart;
+        double vB = f.vEnd;
+        if (isectSphere && sStrip.valid() && !SphereStripAt(sStrip, t, &vA, &vB))
+          vA = vB = 0.5 * (sStrip.vSearchLo + sStrip.vSearchHi);  // strip pinched — a sliver
         for (int j = 0; j <= nv; ++j) {
-          const double v = f.vStart + (f.vEnd - f.vStart) * static_cast<double>(j) / static_cast<double>(nv);
+          const double v = vA + (vB - vA) * static_cast<double>(j) / static_cast<double>(nv);
           const Vec3 p = sphere ? SphericalPoint(sf, t, v) : ToroidalPoint(sf, t, v);
           const Vec3 n = sphere ? SphericalNormal(sf, t, v) : ToroidalNormal(sf, t, v);
           grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(nv + 1) +

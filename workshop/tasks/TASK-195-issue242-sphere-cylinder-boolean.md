@@ -125,4 +125,27 @@ Tests — `BrepTests` "sphere INTERSECT cylinder …" case, new sections: `spher
 `cylinder − sphere` (two stubs, per-stub counts/χ/volume/area); `sphere ∪ cylinder` (counts, χ = 2,
 volume/area, tessellation winding, reversed operand order). Full suite green (1114 ctest cases).
 
-**Next:** Slice B (the offset-axis quartic — INTERSECT then SUBTRACT then UNION), then Slice C (skew).
+**Slice B / INTERSECT — implemented (issue #242, feat/issue242-sphere-cylinder-offset-quartic).**
+The offset-axis quartic, sub-case `r < d` (cylinder axis misses the pole) and `d + r < Rs` (clears
+the equator) and both caps clear the sphere — a clean through-plug. `src/util/brep.cpp`:
+
+- **Sphere numeric integration** (new — A2 only did cylinder faces). `SphereIsectStrip` /
+  `MakeSphereIsectStrip` / `SphereStripAt` — the `v`/latitude analogue of `IsectStrip`: at each
+  longitude `u`, bisect the quartic for the two latitude crossings. `IntegrateSphereFaceNumeric`
+  integrates over `u` with the graded Gauss rule, the per-`u` latitude integrals identical to
+  `SphericalFaceIntegrals`'. `IntegrateFace`'s `Sphere` branch routes an Intersection-bounded face
+  there. The tessellator's `Sphere` branch gained the matching per-`u` `v`-band grid.
+- `BuildSphereCylinderOffsetIntersection(fr, r, Rs, d, ...)` — the plug: two cylinder wall
+  half-bands + two lens-shaped sphere caps, bounded by four `CurveKind::Intersection` half-edges
+  (`z² = Rs² − d² − r² − 2dr cos φ`). 4v/6e/4f, χ = 2. `.gs` stays v3 (Intersection edges already
+  serialise).
+- `TryBooleanSphereCylinder` gained the offset branch: `INTERSECT` only, guarded to the sub-case
+  above; every other offset/skew config still falls through to `BooleanCurvedFace`.
+
+Tests — `BrepTests` "sphere INTERSECT cylinder with an offset axis (the quartic)": counts / χ /
+Intersection-edge count; volume vs a 1400×1400 numerical plug reference (2e-3); tessellation winding
++ tessellated volume; tilted survey frame + `Translate`; reversed operand order; SUBTRACT / UNION of
+the offset pair refused; the `d ≤ r` sub-case still refused. Full suite green (1115 ctest cases).
+
+**Next:** Slice B / SUBTRACT then UNION (offset pair); the `d ≤ r` pole-covered sub-case; then
+Slice C (skew axis).
