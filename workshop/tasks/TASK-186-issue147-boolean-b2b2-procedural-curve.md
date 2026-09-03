@@ -163,7 +163,18 @@ cap). The tessellator draws a holed band as a lower + upper sub-strip. `TryBoole
 through. Volume `vol(main) − lens`, to 5e-4 against a fine numerical reference; genus-1 topology,
 tilted survey frame, `Translate` all covered.
 
-`UNION` of the branch pipe is PR C.
+**PROGRESS 2026-09-03 — PR C done. The branch-pipe trilogy is complete.** `UNION` (`main ∪ branch`):
+`BuildBranchPipeUnion` — the solid pipe-tee, **genus 0**, 12 vertices / 18 edges / 10 faces. `B`'s
+wall outside `A` (two halves, each with the branch mouth as an inner loop — identical to `SUBTRACT`'s
+`B` walls but outward) + `B`'s two caps + `A`'s wall outside `B` (four stub halves) + `A`'s two caps.
+`IsectStrip` gained a `oneSided` mode: a face with **one** `Intersection` edge and a flat rim on the
+far side (a stub band) integrates from the curve to `rimZ`. The `-X` branch cap's rim arcs run about
+`−X` so its outward loop winds opposite the `+X` cap's with the tally-forced edge orientation. Volume
+`vol(branch) + vol(main) − lens`, to 5e-4; operand order does not matter.
+
+**B2b-2's first operand pair (a thin cylinder crossing a thicker one at right angles) is complete for
+all three operations.** Remaining B2b-2 sub-slices: sphere∩cylinder, skew / non-perpendicular
+cylinder axes, non-elliptical cone sections.
 
 ### Deferred within B2b-2 (later sub-slices)
 
