@@ -5894,7 +5894,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
     segment produces a plane face; of a circular arc, a cylinder face; of a full circle, a closed
     cylinder capped by two planar disks. **Optional taper** offsets the profile as it sweeps, which
     keeps line segments on planes and turns arc segments into cone faces. The cap faces close the
-    solid at both ends.
+    solid at both ends. An arc may curve **into** the loop as readily as out of it (amended
+    2026-09-03, D-2026-09-03-e): the concave wall it sweeps is a cylinder face whose material is on
+    the far side from its own axis, which is exactly what `Surface::inward` records — so a bay bitten
+    out of a rectangle, and the inner wall of an annular sector, both build.
   - **Revolve** — the same profile revolved about an axis (any line in 3D, including a profile edge)
     through a full or partial angle. A line segment parallel to the axis sweeps a cylinder; a line
     segment skew to the axis sweeps a cone; a line segment meeting the axis sweeps a plane (a disk
