@@ -733,6 +733,10 @@ if(GOSURVEY_BUILD_TESTS)
     # differences are all decided here, with no window — the same reason BrepTests exists.
     tests/NurbsTests.cpp
     src/util/nurbs.cpp
+    # REQ-315 acceptance: a solid survives `.gs` save/reopen with topology counts identical and
+    # volume/area stable. BrepJson.hpp is header-only and pulls in only nlohmann/json + brep.hpp, so
+    # the serializer the saver actually runs is exercised directly here (GsIo.cpp is not linkable).
+    tests/BrepJsonTests.cpp
     tests/MeshGsRoundTripTests.cpp
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp

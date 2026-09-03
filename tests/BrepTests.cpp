@@ -2703,3 +2703,187 @@ TEST_CASE("Curved B1: a boss stays exact at survey coordinate magnitude", "[brep
   REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
           Approx(1000.0 + kPiT * 4.0 * 10.0).epsilon(1e-6));
 }
+
+// ---------------------------------------------------------------------------
+// Feature operations - Loft (REQ-315 / ADR-048, GitHub issue #241). The side faces are
+// SurfaceKind::Nurbs patches integrated by quadrature; every figure below is asserted against the
+// closed form, not a recorded output.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A square profile of side `side`, centred on `plane`'s origin, on `plane`.
+brep::Profile SquareProfile(const ucs::Ucs& plane, double side) {
+  const double h = 0.5 * side;
+  return PolyProfile(plane, {{-h, -h}, {h, -h}, {h, h}, {-h, h}});
+}
+
+/// A plane parallel to `base`, its origin moved `along` up `base`'s normal.
+ucs::Ucs PlaneAlong(const ucs::Ucs& base, double along) {
+  ucs::Ucs u = base;
+  u.origin = {base.origin.x + base.zAxis.x * along, base.origin.y + base.zAxis.y * along,
+              base.origin.z + base.zAxis.z * along};
+  return u;
+}
+
+double ConeFrustumVolume(double ra, double rb, double h) {
+  return kPi * h / 3.0 * (ra * ra + ra * rb + rb * rb);
+}
+
+}  // namespace
+
+TEST_CASE("Loft between two identical squares is the box the primitive builder makes", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double w = 6.0, h = 4.0;
+  Solid lofted;
+  REQUIRE(brep::Loft({SquareProfile(World(), w), SquareProfile(PlaneAlong(World(), h), w)}, &lofted, &why));
+  Solid box;
+  REQUIRE(brep::MakeBox(At(0, 0, h * 0.5), w, w, h, &box, &why));
+
+  REQUIRE(CountOf(lofted).v == CountOf(box).v);
+  REQUIRE(CountOf(lofted).e == CountOf(box).e);
+  REQUIRE(CountOf(lofted).f == CountOf(box).f);
+  REQUIRE(brep::EulerCharacteristic(lofted) == 2);
+  REQUIRE_FALSE(brep::SelfIntersects(lofted));
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(lofted);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(w * w * h).epsilon(1e-7));
+  REQUIRE(mp.surfaceArea == Approx(2.0 * w * w + 4.0 * w * h).epsilon(1e-7));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(lofted, 0.01, &t, &why));
+  REQUIRE(t.triangleCount() > 0);
+  std::vector<double> iso;
+  REQUIRE(brep::TessellateIsolines(lofted, 4, 0.01, &iso, &why));
+}
+
+TEST_CASE("Loft from a square to a smaller square is the pyramid frustum", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double s0 = 8.0, s1 = 3.0, H = 5.0;
+  Solid s;
+  REQUIRE(brep::Loft({SquareProfile(World(), s0), SquareProfile(PlaneAlong(World(), H), s1)}, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const double a0 = s0 * s0, a1 = s1 * s1;
+  const double expected = H / 3.0 * (a0 + a1 + std::sqrt(a0 * a1));
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-6));
+}
+
+TEST_CASE("Loft through three circles is a stack of cone frustums", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double r0 = 5.0, r1 = 8.0, r2 = 3.5;
+  const double z1 = 4.0, z2 = 11.0;
+  Solid s;
+  REQUIRE(brep::Loft({CircleProfile(World(), r0), CircleProfile(PlaneAlong(World(), z1), r1),
+                      CircleProfile(PlaneAlong(World(), z2), r2)},
+                     &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+
+  const double expected = ConeFrustumVolume(r0, r1, z1) + ConeFrustumVolume(r1, r2, z2 - z1);
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(expected).epsilon(1e-5));
+
+  // A face snap lands ON the freeform patch: at mid-height of the lower band the frustum radius is
+  // (r0 + r1) / 2, and a probe far out in +X must snap to exactly that radius.
+  for (const brep::Face& f : s.faces) {
+    if (f.surface.kind != brep::SurfaceKind::Nurbs)
+      continue;
+    const Vec3 on = brep::ClosestPointOnSurface(f.surface, Vec3{100.0, 0.0, z1 * 0.5});
+    if (std::fabs(on.z - z1 * 0.5) < 1e-6) {
+      const double rho = std::sqrt(on.x * on.x + on.y * on.y);
+      REQUIRE(rho == Approx(0.5 * (r0 + r1)).epsilon(1e-6));
+    }
+  }
+}
+
+TEST_CASE("Loft stays accurate on a tilted frame at survey magnitude", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  auto barrel = [&](const ucs::Ucs& base) {
+    Solid s;
+    REQUIRE(brep::Loft({CircleProfile(base, 5.0), CircleProfile(PlaneAlong(base, 4.0), 7.0),
+                        CircleProfile(PlaneAlong(base, 10.0), 4.0)},
+                       &s, &why));
+    return s;
+  };
+  const Solid flat = barrel(World());
+  const Solid tilted = barrel(TiltedAt(3.5e6, 1.24e7, 250.0));
+  REQUIRE(brep::Validate(tilted) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(tilted).volume ==
+          Approx(brep::ComputeMassProperties(flat).volume).epsilon(1e-6));
+}
+
+TEST_CASE("Translate moves every point of a lofted NURBS face by exactly the offset", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::Loft({CircleProfile(World(), 4.0), CircleProfile(PlaneAlong(World(), 6.0), 6.0)}, &s, &why));
+  const Vec3 delta{-3.5e6, 1.24e7, -812.0};
+  const Solid moved = brep::Translate(s, delta);
+  REQUIRE(brep::Validate(moved) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(moved).volume ==
+          Approx(brep::ComputeMassProperties(s).volume).epsilon(1e-9));
+
+  bool checkedNurbs = false;
+  for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
+    if (s.faces[fi].surface.kind != brep::SurfaceKind::Nurbs)
+      continue;
+    checkedNurbs = true;
+    const nurbs::Patch& a = s.faces[fi].surface.patch;
+    const nurbs::Patch& b = moved.faces[fi].surface.patch;
+    for (double u : {0.0, 0.3, 1.0})
+      for (double v : {0.0, 0.7, 1.0}) {
+        const Vec3 pa = nurbs::Evaluate(a, nurbs::UMin(a) + u * (nurbs::UMax(a) - nurbs::UMin(a)),
+                                        nurbs::VMin(a) + v * (nurbs::VMax(a) - nurbs::VMin(a)));
+        const Vec3 pb = nurbs::Evaluate(b, nurbs::UMin(b) + u * (nurbs::UMax(b) - nurbs::UMin(b)),
+                                        nurbs::VMin(b) + v * (nurbs::VMax(b) - nurbs::VMin(b)));
+        REQUIRE(pb.x - pa.x == Approx(delta.x));
+        REQUIRE(pb.y - pa.y == Approx(delta.y));
+        REQUIRE(pb.z - pa.z == Approx(delta.z));
+      }
+  }
+  REQUIRE(checkedNurbs);
+}
+
+TEST_CASE("Loft refuses bad input by name and stores nothing", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  SECTION("fewer than two profiles") {
+    REQUIRE_FALSE(brep::Loft({SquareProfile(World(), 4.0)}, &s, &why));
+    REQUIRE(why == Problem::LoftNeedsTwoProfiles);
+  }
+  SECTION("different edge counts") {
+    REQUIRE_FALSE(brep::Loft({SquareProfile(World(), 4.0),
+                              PolyProfile(PlaneAlong(World(), 3.0), {{0, 0}, {4, 0}, {2, 4}})},
+                             &s, &why));
+    REQUIRE(why == Problem::LoftProfileMismatch);
+  }
+  SECTION("a straight edge paired with an arc") {
+    REQUIRE_FALSE(brep::Loft({SquareProfile(World(), 6.0), CircleProfile(PlaneAlong(World(), 3.0), 3.0)},
+                             &s, &why));
+    REQUIRE(why == Problem::LoftProfileMismatch);
+  }
+  SECTION("a non-planar profile") {
+    brep::Profile bad = SquareProfile(World(), 4.0);
+    bad.vertices[2].z += 1.0;
+    REQUIRE_FALSE(brep::Loft({bad, SquareProfile(PlaneAlong(World(), 3.0), 4.0)}, &s, &why));
+    REQUIRE(why == Problem::ProfilePointOffPlane);
+  }
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("A lofted-prism volume does not move when tessellation quality changes", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAlong(World(), 8.0), 5.0)}, &s, &why));
+  const double v = brep::ComputeMassProperties(s).volume;
+  REQUIRE(v == Approx(kPi * 25.0 * 8.0).epsilon(1e-6));
+
+  brep::Tessellation coarse;
+  brep::Tessellation fine;
+  REQUIRE(brep::Tessellate(s, 0.5, &coarse, &why));
+  REQUIRE(brep::Tessellate(s, 0.002, &fine, &why));
+  REQUIRE(brep::ComputeMassProperties(s).volume == v);  // unchanged by the tessellation calls
+  REQUIRE(TessellatedVolume(fine) == Approx(v).epsilon(0.01));
+}

@@ -458,6 +458,11 @@ struct CylinderCut {
     n = ray3d::Normalize(ray3d::Sub(loc, ring));
     break;
   }
+  case SurfaceKind::Nurbs:
+    // Only ever asked of the two surfaces an Intersection edge lies on, and no Intersection edge
+    // lies on a NURBS patch (loft / sweep produce no procedural edges). Unreachable; the frame Z is
+    // a harmless placeholder rather than a NaN.
+    break;
   }
   return ucs::UcsVectorToWorld(sf.frame, n);
 }
@@ -758,6 +763,34 @@ struct IsectStrip {
   return out;
 }
 
+/// Area and divergence-theorem volume term of a \ref SurfaceKind::Nurbs face, by Gauss–Legendre
+/// quadrature over the patch parameter rectangle the face occupies (ADR-045 (b) as widened by
+/// D-2026-09-03-b — the numerical carve-out for a face with no closed form). The **un-normalised**
+/// cross product `Su x Sv` is exactly the oriented vector area element `n dA`, so the area integrand
+/// is its length and the volume integrand is `(S - q) . (Su x Sv)`. Builders orient the patch so
+/// `Su x Sv` points outward; \ref Surface::inward is applied by the shared flip in \ref IntegrateFace.
+[[nodiscard]] FaceIntegrals IntegrateNurbsFaceNumeric(const Face& f, const Vec3& q) {
+  const nurbs::Patch& patch = f.surface.patch;
+  const double uLo = std::min(f.uStart, f.uEnd);
+  const double uHi = std::max(f.uStart, f.uEnd);
+  const double vLo = std::min(f.vStart, f.vEnd);
+  const double vHi = std::max(f.vStart, f.vEnd);
+  FaceIntegrals out;
+  out.area = GradedGaussIntegrate(uLo, uHi, 8, [&](double u) {
+    return GradedGaussIntegrate(vLo, vHi, 8, [&](double v) {
+      const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
+      return ray3d::Length(ray3d::Cross(sp.du, sp.dv));
+    });
+  });
+  out.volTerm = GradedGaussIntegrate(uLo, uHi, 8, [&](double u) {
+    return GradedGaussIntegrate(vLo, vHi, 8, [&](double v) {
+      const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
+      return ray3d::Dot(ray3d::Sub(sp.p, q), ray3d::Cross(sp.du, sp.dv));
+    });
+  });
+  return out;
+}
+
 /// \p q is the world-frame reference point; each branch transforms it into the surface's own frame.
 [[nodiscard]] FaceIntegrals IntegrateFace(const Solid& s, const Face& f, const Vec3& q) {
   const Surface& sf = f.surface;
@@ -827,6 +860,9 @@ struct IsectStrip {
     out.volTerm = ti.volTerm;
     break;
   }
+  case SurfaceKind::Nurbs:
+    out = IntegrateNurbsFaceNumeric(f, q);
+    break;
   }
   // An inward curved face (REQ-314 B2a) has its normal flipped, so its divergence-theorem term
   // flips with it: the face then subtracts the void it bounds. Area is a magnitude and does not.
@@ -1080,6 +1116,10 @@ const char* ProblemText(Problem p) {
   case Problem::BooleanEmptyResult: return "The solids do not overlap, so there is nothing to keep.";
   case Problem::BooleanResultInvalid:
     return "The combined solid did not pass validation and was not stored.";
+  case Problem::LoftNeedsTwoProfiles: return "A loft needs at least two profiles to skin between.";
+  case Problem::LoftProfileMismatch:
+    return "The loft profiles do not match edge-for-edge (different edge counts, or a straight edge "
+           "paired with an arc).";
   }
   return "The solid is not valid.";
 }
@@ -1134,11 +1174,64 @@ Solid Translate(const Solid& s, const Vec3& delta) {
     for (Surface& sf : e.isectSurfaces)  // Intersection: the stored surfaces travel with the edge
       sf.frame.origin = ray3d::Add(sf.frame.origin, delta);
   }
-  for (Face& f : out.faces)
+  for (Face& f : out.faces) {
     f.surface.frame.origin = ray3d::Add(f.surface.frame.origin, delta);
+    if (f.surface.kind == SurfaceKind::Nurbs)  // a NURBS face's shape IS its control net, in world
+      f.surface.patch = nurbs::Translate(f.surface.patch, delta);
+  }
   out.recipe.frame.origin = ray3d::Add(out.recipe.frame.origin, delta);
   return out;
 }
+
+namespace {
+
+/// The patch parameter `(u, v)` whose surface point is nearest \p p: a coarse grid search to pick a
+/// basin, then Gauss–Newton on `|S(u,v) - p|^2` using the analytic first derivatives. Clamped to the
+/// patch domain. This is what makes a face snap on a lofted surface land **on the patch** rather than
+/// on the tessellator's chord (REQ-315 acceptance).
+void NurbsInvertParam(const nurbs::Patch& patch, const Vec3& p, double* outU, double* outV) {
+  const double u0 = nurbs::UMin(patch);
+  const double u1 = nurbs::UMax(patch);
+  const double v0 = nurbs::VMin(patch);
+  const double v1 = nurbs::VMax(patch);
+  double bu = 0.5 * (u0 + u1);
+  double bv = 0.5 * (v0 + v1);
+  double bd = std::numeric_limits<double>::max();
+  constexpr int kGrid = 12;
+  for (int i = 0; i <= kGrid; ++i)
+    for (int j = 0; j <= kGrid; ++j) {
+      const double u = u0 + (u1 - u0) * i / kGrid;
+      const double v = v0 + (v1 - v0) * j / kGrid;
+      const double d = ray3d::Length(ray3d::Sub(nurbs::Evaluate(patch, u, v), p));
+      if (d < bd) {
+        bd = d;
+        bu = u;
+        bv = v;
+      }
+    }
+  for (int it = 0; it < 16; ++it) {
+    const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, bu, bv);
+    const Vec3 r = ray3d::Sub(sp.p, p);
+    const double a = ray3d::Dot(sp.du, sp.du);
+    const double b = ray3d::Dot(sp.du, sp.dv);
+    const double c = ray3d::Dot(sp.dv, sp.dv);
+    const double det = a * c - b * b;
+    if (!(std::fabs(det) > 1e-20))
+      break;
+    const double g1 = ray3d::Dot(r, sp.du);
+    const double g2 = ray3d::Dot(r, sp.dv);
+    const double du = -(c * g1 - b * g2) / det;
+    const double dv = -(a * g2 - b * g1) / det;
+    bu = std::clamp(bu + du, u0, u1);
+    bv = std::clamp(bv + dv, v0, v1);
+    if (std::fabs(du) + std::fabs(dv) < 1e-13 * (1.0 + std::fabs(bu) + std::fabs(bv)))
+      break;
+  }
+  *outU = bu;
+  *outV = bv;
+}
+
+}  // namespace
 
 Vec3 ClosestPointOnSurface(const Surface& sf, const Vec3& p) {
   const Vec3 local = ucs::WorldToUcs(sf.frame, p);
@@ -1191,6 +1284,12 @@ Vec3 ClosestPointOnSurface(const Surface& sf, const Vec3& p) {
     if (!(outLen > 1e-12))
       return p;  // exactly on the tube's centre circle
     return toWorld(ray3d::Add(ring, ray3d::Scale(out, sf.radius2 / outLen)));
+  }
+  case SurfaceKind::Nurbs: {
+    double u = 0.0;
+    double v = 0.0;
+    NurbsInvertParam(sf.patch, p, &u, &v);
+    return nurbs::Evaluate(sf.patch, u, v);
   }
   }
   return p;
@@ -2023,6 +2122,222 @@ bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWh
   AddSingleShell(&s);
   // A feature result carries no recipe: the topology is the stored truth (ADR-046 (e)). An extrude
   // recipe is permitted but deferred to the increment that first persists one.
+
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return Fail(why, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Feature operations — Loft (REQ-315 / ADR-048, GitHub issue #241). Skin a solid between two or
+// more planar profiles. Each corresponding edge pair spans one SurfaceKind::Nurbs patch — ruled
+// where the edge is straight, rational where it is an arc — and the end profiles cap it flat. The
+// topology is Extrude's, generalised to N profiles; the only new thing is the freeform side face.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// One profile prepared for lofting: its walk order (CCW about the loft axis), each walk edge's arc
+/// flag / re-signed sweep / centre, and the oriented profile normal `up` (pointing along the axis).
+struct LoftProfilePrep {
+  std::vector<Vec3> walk;
+  std::vector<char> arc;
+  std::vector<double> sweep;
+  std::vector<Vec3> centre;
+  Vec3 up{0.0, 0.0, 1.0};
+};
+
+/// Validate one profile exactly the way \ref Extrude does, then order its walk CCW about
+/// \p axisHint. Returns false with a reason on any fault (REQ-201).
+[[nodiscard]] bool PrepLoftProfile(const Profile& pr, const Vec3& axisHint, LoftProfilePrep* out,
+                                   Problem* outWhy) {
+  const int n = static_cast<int>(pr.vertices.size());
+  if (n != static_cast<int>(pr.edges.size()))
+    return Fail(Problem::ProfileMalformed, outWhy);
+  if (n < 2)
+    return Fail(Problem::ProfileTooFewEdges, outWhy);
+  if (!FrameOk(pr.plane))
+    return Fail(Problem::DegenerateFrame, outWhy);
+  const ucs::Ucs& pl = pr.plane;
+
+  ucs::Point2D lo = ucs::WorldToPlane(pl, pr.vertices[0]);
+  ucs::Point2D hi = lo;
+  for (const Vec3& v : pr.vertices) {
+    if (!FinitePoint(v))
+      return Fail(Problem::NonFiniteCoordinate, outWhy);
+    const ucs::Point2D q = ucs::WorldToPlane(pl, v);
+    lo.x = std::min(lo.x, q.x);
+    lo.y = std::min(lo.y, q.y);
+    hi.x = std::max(hi.x, q.x);
+    hi.y = std::max(hi.y, q.y);
+  }
+  const double scale = std::max({hi.x - lo.x, hi.y - lo.y, 1e-9});
+  const double planeEps = 1e-6 * scale;
+  const double lenEps = 1e-9 * scale;
+
+  for (const Vec3& v : pr.vertices)
+    if (std::fabs(ucs::SignedDistanceToPlane(pl, v)) > planeEps)
+      return Fail(Problem::ProfilePointOffPlane, outWhy);
+  for (int i = 0; i < n; ++i) {
+    const ProfileEdge& pe = pr.edges[static_cast<std::size_t>(i)];
+    if (!pe.arc)
+      continue;
+    if (!FinitePoint(pe.centre) || !std::isfinite(pe.sweep))
+      return Fail(Problem::NonFiniteCoordinate, outWhy);
+    if (std::fabs(ucs::SignedDistanceToPlane(pl, pe.centre)) > planeEps)
+      return Fail(Problem::ProfilePointOffPlane, outWhy);
+    if (!(std::fabs(pe.sweep) > 1e-9) || std::fabs(pe.sweep) >= kTwoPi)
+      return Fail(Problem::DegenerateEdge, outWhy);
+    const double r0 = InPlaneRadius(pl, pe.centre, pr.vertices[static_cast<std::size_t>(i)]);
+    const double r1 =
+        InPlaneRadius(pl, pe.centre, pr.vertices[static_cast<std::size_t>((i + 1) % n)]);
+    if (!(r0 > lenEps))
+      return Fail(Problem::DegenerateEdge, outWhy);
+    if (std::fabs(r0 - r1) > 1e-6 * scale)
+      return Fail(Problem::ProfileArcRadiusMismatch, outWhy);
+  }
+  if (ProfileChordsCross(pr))
+    return Fail(Problem::ProfileSelfIntersects, outWhy);
+  const double areaZ = ProfilePlaneSignedArea(pr);
+  if (std::fabs(areaZ) <= lenEps * lenEps)
+    return Fail(Problem::ProfileSelfIntersects, outWhy);
+
+  const double d = ray3d::Dot(pl.zAxis, axisHint);
+  if (!(std::fabs(d) > 1e-9))
+    return Fail(Problem::DegenerateFrame, outWhy);  // a profile edge-on to the loft axis
+  const double sgn = d > 0.0 ? 1.0 : -1.0;
+  out->up = ray3d::Scale(pl.zAxis, sgn);
+  const bool rev = (areaZ * sgn) < 0.0;
+
+  out->walk.resize(static_cast<std::size_t>(n));
+  out->arc.resize(static_cast<std::size_t>(n));
+  out->sweep.resize(static_cast<std::size_t>(n));
+  out->centre.resize(static_cast<std::size_t>(n));
+  for (int k = 0; k < n; ++k) {
+    const int src = rev ? (2 * n - k - 1) % n : k;
+    const ProfileEdge& pe = pr.edges[static_cast<std::size_t>(src)];
+    out->walk[static_cast<std::size_t>(k)] =
+        pr.vertices[static_cast<std::size_t>(rev ? (n - k) % n : k)];
+    out->arc[static_cast<std::size_t>(k)] = pe.arc ? 1 : 0;
+    out->sweep[static_cast<std::size_t>(k)] = (rev ? -pe.sweep : pe.sweep) * sgn;
+    out->centre[static_cast<std::size_t>(k)] = pe.centre;
+  }
+  for (int k = 0; k < n; ++k)
+    if (out->arc[static_cast<std::size_t>(k)] && !(out->sweep[static_cast<std::size_t>(k)] > 1e-12))
+      return Fail(Problem::ProfileArcReflex, outWhy);
+  return true;
+}
+
+}  // namespace
+
+bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;
+  if (profiles.size() < 2)
+    return Fail(Problem::LoftNeedsTwoProfiles, outWhy);
+
+  auto centroid = [](const Profile& p) {
+    Vec3 c{};
+    for (const Vec3& v : p.vertices)
+      c = ray3d::Add(c, v);
+    return ray3d::Scale(c, 1.0 / static_cast<double>(std::max<std::size_t>(1, p.vertices.size())));
+  };
+  Vec3 axisHint = ray3d::Sub(centroid(profiles.back()), centroid(profiles.front()));
+  if (!(ray3d::Length(axisHint) > 1e-9))
+    axisHint = profiles.front().plane.zAxis;
+  axisHint = ray3d::Normalize(axisHint);
+
+  const int n = static_cast<int>(profiles.front().vertices.size());
+  std::vector<LoftProfilePrep> prep(profiles.size());
+  for (std::size_t pi = 0; pi < profiles.size(); ++pi) {
+    if (static_cast<int>(profiles[pi].vertices.size()) != n)
+      return Fail(Problem::LoftProfileMismatch, outWhy);
+    if (!PrepLoftProfile(profiles[pi], axisHint, &prep[pi], outWhy))
+      return false;
+  }
+  for (std::size_t pi = 0; pi + 1 < prep.size(); ++pi)
+    for (int j = 0; j < n; ++j) {
+      const std::size_t jj = static_cast<std::size_t>(j);
+      if (prep[pi].arc[jj] != prep[pi + 1].arc[jj])
+        return Fail(Problem::LoftProfileMismatch, outWhy);
+      if (prep[pi].arc[jj]) {
+        if (std::fabs(prep[pi].sweep[jj] - prep[pi + 1].sweep[jj]) >
+            1e-6 * (1.0 + std::fabs(prep[pi].sweep[jj])))
+          return Fail(Problem::LoftProfileMismatch, outWhy);
+        if (ray3d::Length(ray3d::Sub(prep[pi].up, prep[pi + 1].up)) > 1e-9)
+          return Fail(Problem::LoftProfileMismatch, outWhy);  // an arc ribbon needs a shared axis
+      }
+    }
+
+  Solid s;
+  std::vector<std::vector<int>> ringV(prep.size(), std::vector<int>(static_cast<std::size_t>(n)));
+  for (std::size_t pi = 0; pi < prep.size(); ++pi)
+    for (int j = 0; j < n; ++j)
+      ringV[pi][static_cast<std::size_t>(j)] = AddVertex(&s, prep[pi].walk[static_cast<std::size_t>(j)]);
+
+  std::vector<std::vector<int>> ringE(prep.size(), std::vector<int>(static_cast<std::size_t>(n)));
+  for (std::size_t pi = 0; pi < prep.size(); ++pi)
+    for (int j = 0; j < n; ++j) {
+      const std::size_t jj = static_cast<std::size_t>(j);
+      const int v0 = ringV[pi][jj];
+      const int v1 = ringV[pi][static_cast<std::size_t>((j + 1) % n)];
+      ringE[pi][jj] = prep[pi].arc[jj]
+                          ? AddArc(&s, v0, v1, prep[pi].centre[jj], prep[pi].up, prep[pi].sweep[jj])
+                          : AddLine(&s, v0, v1);
+    }
+
+  std::vector<std::vector<int>> railE(prep.size() - 1, std::vector<int>(static_cast<std::size_t>(n)));
+  for (std::size_t pi = 0; pi + 1 < prep.size(); ++pi)
+    for (int j = 0; j < n; ++j)
+      railE[pi][static_cast<std::size_t>(j)] =
+          AddLine(&s, ringV[pi][static_cast<std::size_t>(j)], ringV[pi + 1][static_cast<std::size_t>(j)]);
+
+  // Bottom cap (profile 0): outward normal -up0; CCW about it is the walk reversed.
+  {
+    std::vector<EdgeUse> uses;
+    for (int k = n - 1; k >= 0; --k)
+      uses.push_back(EdgeUse{ringE.front()[static_cast<std::size_t>(k)], true});
+    s.faces.push_back(
+        MakePlaneFace(prep.front().walk[0], ray3d::Scale(prep.front().up, -1.0), std::move(uses)));
+  }
+  // Top cap (last profile): outward +up; the walk forwards.
+  {
+    std::vector<EdgeUse> uses;
+    for (int k = 0; k < n; ++k)
+      uses.push_back(EdgeUse{ringE.back()[static_cast<std::size_t>(k)], false});
+    s.faces.push_back(MakePlaneFace(prep.back().walk[0], prep.back().up, std::move(uses)));
+  }
+
+  // Side faces: one NURBS patch per (band, edge), oriented so du x dv points outward.
+  for (std::size_t pi = 0; pi + 1 < prep.size(); ++pi)
+    for (int j = 0; j < n; ++j) {
+      const std::size_t jj = static_cast<std::size_t>(j);
+      const std::size_t j1 = static_cast<std::size_t>((j + 1) % n);
+      Face f;
+      f.surface.kind = SurfaceKind::Nurbs;
+      if (prep[pi].arc[jj])
+        f.surface.patch = nurbs::ArcRibbon(prep[pi].centre[jj], prep[pi].walk[jj],
+                                           prep[pi + 1].centre[jj], prep[pi + 1].walk[jj],
+                                           prep[pi].up, prep[pi].sweep[jj]);
+      else
+        f.surface.patch = nurbs::RuledLinear({prep[pi].walk[jj], prep[pi].walk[j1]},
+                                             {prep[pi + 1].walk[jj], prep[pi + 1].walk[j1]});
+      if (nurbs::ValidatePatch(f.surface.patch) != nurbs::PatchProblem::Ok)
+        return Fail(Problem::LoftProfileMismatch, outWhy);
+      f.uStart = nurbs::UMin(f.surface.patch);
+      f.uEnd = nurbs::UMax(f.surface.patch);
+      f.vStart = nurbs::VMin(f.surface.patch);
+      f.vEnd = nurbs::VMax(f.surface.patch);
+      Loop lp;
+      lp.uses = {EdgeUse{ringE[pi][jj], false}, EdgeUse{railE[pi][j1], false},
+                 EdgeUse{ringE[pi + 1][jj], true}, EdgeUse{railE[pi][jj], true}};
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    }
+
+  AddSingleShell(&s);  // one shell, no recipe — the topology is the stored truth (ADR-046 (e))
 
   const Problem why = Validate(s);
   if (why != Problem::Ok)
@@ -5290,6 +5605,13 @@ Problem Validate(const Solid& s) {
     if (f.surface.kind == SurfaceKind::Plane) {
       if (std::fabs(PlaneFaceArea(s, f)) <= areaEps)
         return Problem::DegenerateFace;
+    } else if (f.surface.kind == SurfaceKind::Nurbs) {
+      // A freeform face is judged on its patch (the kernel's own validator is the truth) and on
+      // having a non-empty parameter rectangle in both directions.
+      if (nurbs::ValidatePatch(f.surface.patch) != nurbs::PatchProblem::Ok)
+        return Problem::DegenerateFace;
+      if (!(std::fabs(f.uEnd - f.uStart) > 1e-12) || !(std::fabs(f.vEnd - f.vStart) > 1e-12))
+        return Problem::DegenerateFace;
     } else {
       if (!(std::fabs(f.uEnd - f.uStart) > 1e-12))
         return Problem::DegenerateFace;
@@ -5336,11 +5658,14 @@ Problem Validate(const Solid& s) {
   // not closed form (ADR-045 (b) amendment, D-2026-09-02-i), so the point-invariance residual is a
   // quadrature error rather than zero. Relaxed to `1e-5 * scale^3` for those solids — still three
   // orders inside REQ-101's ±0.01 ft on a model-scale part; every analytic solid keeps `1e-8`.
-  bool hasIsect = false;
+  bool hasNumericFace = false;
   for (const Edge& e : s.edges)
     if (e.kind == CurveKind::Intersection)
-      hasIsect = true;
-  const double closeTol = (hasIsect ? 1e-5 : 1e-8) * scale * scale * scale;
+      hasNumericFace = true;
+  for (const Face& f : s.faces)
+    if (f.surface.kind == SurfaceKind::Nurbs)  // REQ-315: a NURBS face is integrated by quadrature too
+      hasNumericFace = true;
+  const double closeTol = (hasNumericFace ? 1e-5 : 1e-8) * scale * scale * scale;
 
   const Vec3 probe = ray3d::Add(q, Vec3{scale, 0.7 * scale, -1.3 * scale});
   const double probeVolume = VolumeAbout(s, probe, nullptr);
@@ -5457,6 +5782,10 @@ Bounds ComputeBounds(const Solid& s) {
       Expand(&b, ray3d::Add(sf.frame.origin, ext));
       break;
     }
+    case SurfaceKind::Nurbs:
+      for (const Vec3& c : sf.patch.ctrl)  // the convex hull of the control net contains the patch
+        Expand(&b, c);
+      break;
     }
   }
   return b;
@@ -5843,6 +6172,51 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       }
       break;
     }
+    case SurfaceKind::Nurbs: {
+      // A uniform (u, v) grid over the face's parameter rectangle, with the analytic patch normal at
+      // every node so the shading matches the isolines the same evaluator draws. A ruled straight
+      // span is exact at one quad; a rational (arc) span gets a curvature-driven division count.
+      const nurbs::Patch& patch = sf.patch;
+      const double uLo = std::min(f.uStart, f.uEnd);
+      const double uHi = std::max(f.uStart, f.uEnd);
+      const double vLo = std::min(f.vStart, f.vEnd);
+      const double vHi = std::max(f.vStart, f.vEnd);
+      double netStep = 0.0;
+      for (std::size_t k = 0; k + 1 < patch.ctrl.size(); ++k)
+        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(patch.ctrl[k + 1], patch.ctrl[k])));
+      const bool curved = patch.degU > 1 || patch.degV > 1;
+      const int n = curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance),
+                                        8, 128)
+                           : 1;
+      std::vector<std::uint32_t> grid(static_cast<std::size_t>(n + 1) * static_cast<std::size_t>(n + 1));
+      for (int i = 0; i <= n; ++i)
+        for (int j = 0; j <= n; ++j) {
+          const double u = uLo + (uHi - uLo) * static_cast<double>(i) / static_cast<double>(n);
+          const double v = vLo + (vHi - vLo) * static_cast<double>(j) / static_cast<double>(n);
+          const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
+          Vec3 nrm = sp.normal;
+          if (!(ray3d::Dot(nrm, nrm) > 0.25))
+            nrm = Vec3{0.0, 0.0, 1.0};  // a collapsed edge (a pole) — a loft patch has none
+          if (sf.inward)
+            nrm = ray3d::Scale(nrm, -1.0);
+          grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(n + 1) +
+               static_cast<std::size_t>(j)] = mb.Push(sp.p, nrm);
+        }
+      const std::size_t stride = static_cast<std::size_t>(n + 1);
+      for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j) {
+          const std::size_t a = static_cast<std::size_t>(i) * stride + static_cast<std::size_t>(j);
+          const std::size_t b = a + stride;
+          if (sf.inward) {
+            mb.Tri(grid[a], grid[b + 1], grid[b]);
+            mb.Tri(grid[a], grid[a + 1], grid[b + 1]);
+          } else {
+            mb.Tri(grid[a], grid[b], grid[b + 1]);
+            mb.Tri(grid[a], grid[b + 1], grid[a + 1]);
+          }
+        }
+      break;
+    }
     }
   }
 
@@ -5870,6 +6244,8 @@ namespace {
     return SphericalPoint(sf, u, v);
   case SurfaceKind::Torus:
     return ToroidalPoint(sf, u, v);
+  case SurfaceKind::Nurbs:
+    return nurbs::Evaluate(sf.patch, u, v);
   }
   return sf.frame.origin;
 }
@@ -5941,6 +6317,30 @@ bool TessellateIsolines(const Solid& s, int isolineCount, double chordTolerance,
     const Surface& sf = f.surface;
     if (sf.kind == SurfaceKind::Plane)
       continue;  // flat: its boundary already says everything
+
+    if (sf.kind == SurfaceKind::Nurbs) {
+      const nurbs::Patch& patch = sf.patch;
+      if (patch.degU == 1 && patch.degV == 1)
+        continue;  // a straight ruled span is flat — its boundary already says everything
+      // Evenly spaced interior parameter lines both ways — the patch domain is not a full turn, so
+      // the global-angle grid the analytic kinds use does not apply. Same evaluator as the shaded
+      // triangles (SurfacePointAt), so the wireframe cannot float off the shading.
+      const double uA = std::min(f.uStart, f.uEnd);
+      const double uB = std::max(f.uStart, f.uEnd);
+      const double vA = std::min(f.vStart, f.vEnd);
+      const double vB = std::max(f.vStart, f.vEnd);
+      double netStep = 0.0;
+      for (std::size_t k = 0; k + 1 < patch.ctrl.size(); ++k)
+        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(patch.ctrl[k + 1], patch.ctrl[k])));
+      const int steps = std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance),
+                                   8, 128);
+      for (int k = 1; k <= isolineCount; ++k) {
+        const double fr = static_cast<double>(k) / static_cast<double>(isolineCount + 1);
+        AppendIsoCurve(sf, /*fixedIsU=*/true, uA + (uB - uA) * fr, vA, vB, steps, &segs);
+        AppendIsoCurve(sf, /*fixedIsU=*/false, vA + (vB - vA) * fr, uA, uB, steps, &segs);
+      }
+      continue;
+    }
 
     const double uLo = std::min(f.uStart, f.uEnd);
     const double uHi = std::max(f.uStart, f.uEnd);

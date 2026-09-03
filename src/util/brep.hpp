@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nurbs.hpp"
 #include "ucs.hpp"
 
 #include <cstdint>
@@ -32,8 +33,12 @@ using ray3d::Vec3;
 // Geometry carriers. A face's surface and an edge's curve are *described*, never faceted.
 // ---------------------------------------------------------------------------------------------
 
-/// The analytic surface a face lies on.
-enum class SurfaceKind : std::uint8_t { Plane, Cylinder, Cone, Sphere, Torus };
+/// The surface a face lies on. `Nurbs` (REQ-315 / ADR-048, D-2026-09-03-b) is the one **freeform**
+/// kind — a rational tensor-product B-spline patch carried in \ref Surface::patch — that sweep and
+/// loft raise over their profiles. Its volume and area are computed by numerical quadrature rather
+/// than a closed form (ADR-045 (b) as widened), and it is the first surface kind an older `.gs`
+/// reader cannot tolerate, so it bumps `kGsFormatVersion` to 4.
+enum class SurfaceKind : std::uint8_t { Plane, Cylinder, Cone, Sphere, Torus, Nurbs };
 
 /// The surface a \ref Face lies on, plus the frame it is expressed in.
 ///
@@ -54,6 +59,13 @@ struct Surface {
   double radius = 0.0;   ///< Cylinder r; Cone base r; Sphere R; Torus **major** R. Unused for Plane.
   double radius2 = 0.0;  ///< Cone top r; Torus **minor** r. Unused otherwise.
   double height = 0.0;   ///< Cylinder / Cone height along +Z from the frame origin. Unused otherwise.
+
+  /// **Freeform** surface for \ref SurfaceKind::Nurbs (REQ-315 / ADR-048) — a rational tensor-product
+  /// B-spline patch, in the solid's own storage coordinates like every vertex (so \ref Translate
+  /// moves its control points and `.gs` stores them directly). Empty and unused for every analytic
+  /// kind. \ref Face::uStart / uEnd / vStart / vEnd carry the patch **parameter** rectangle the face
+  /// occupies, in place of the angular spans the analytic kinds put there.
+  nurbs::Patch patch;
 
   /// **Inward-facing** curved face (REQ-314 B2a / ADR-045 (d) amendment, D-2026-09-02-c): the face's
   /// material is on the **−normal** side — −radial for Cylinder/Cone/Sphere/Torus. This is the wall
@@ -276,7 +288,14 @@ enum class Problem {
   /// which needs the general Boolean (increment B2). Named so the refusal identifies the surface pair.
   BooleanObliqueCylinder,
   BooleanEmptyResult,   ///< The operation produces nothing (an INTERSECT of disjoint solids).
-  BooleanResultInvalid  ///< The stitched result did not pass validation — refused rather than stored.
+  BooleanResultInvalid, ///< The stitched result did not pass validation — refused rather than stored.
+
+  // --- Loft (REQ-315 / ADR-048, GitHub issue #241). ---
+  LoftNeedsTwoProfiles,  ///< Fewer than two profiles were given — a loft skins between profiles.
+  /// Two consecutive profiles do not match edge-for-edge: a different edge count, or a corresponding
+  /// pair where one edge is straight and the other an arc, or two arcs of unequal sweep. A
+  /// divided-profile or point-capped loft is out of scope (REQ-315).
+  LoftProfileMismatch,
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -397,6 +416,27 @@ struct Profile {
 /// (\ref Problem::RevolveProfileCrossesAxis), and a bad angle (\ref Problem::NonPositiveAngle).
 [[nodiscard]] bool Revolve(const Profile& profile, const Vec3& axisPoint, const Vec3& axisDir,
                            double angleRad, Solid* out, Problem* outWhy);
+
+/// Skin a closed solid between \p profiles — two or more closed, planar loops of line / arc edges —
+/// and return it in \p out (REQ-315 / ADR-048, GitHub issue #241).
+///
+/// The profiles are matched **edge-for-edge in order** and must have the **same edge count**;
+/// corresponding edges must agree on straight-vs-arc, and corresponding arcs on sweep. Each
+/// corresponding edge pair, between each consecutive profile pair, spans one \ref SurfaceKind::Nurbs
+/// face — ruled (degree 1) where the edge is straight, rational (degree 2) where it is an arc — and
+/// the two end profiles cap the solid as planar faces. Two identical profiles offset along the
+/// normal reproduce \ref Extrude; a straight taper between two similar profiles reproduces a frustum.
+///
+/// This is the loft increment of REQ-315 (sweep follows). One outer loop per profile — a
+/// divided-profile, multi-loop or point-capped loft is out of scope. Nothing is stored unless the
+/// result passes \ref Validate (REQ-201); \p out is left untouched on failure. Refuses — by name —
+/// fewer than two profiles (\ref Problem::LoftNeedsTwoProfiles), profiles that do not match
+/// edge-for-edge (\ref Problem::LoftProfileMismatch), a malformed or too-small profile
+/// (\ref Problem::ProfileMalformed, \ref Problem::ProfileTooFewEdges), a vertex or arc centre off its
+/// profile plane (\ref Problem::ProfilePointOffPlane), a self-crossing profile
+/// (\ref Problem::ProfileSelfIntersects), a reflex profile arc (\ref Problem::ProfileArcReflex), and
+/// a degenerate profile frame (\ref Problem::DegenerateFrame). The result carries no recipe.
+[[nodiscard]] bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy);
 
 /// Which side (or sides) of the cut \ref Slice keeps. "Above" is the `+planeNormal` side.
 enum class SliceKeep : std::uint8_t { Above, Below, Both };
