@@ -8,6 +8,15 @@ integrated by adaptive numerical quadrature (only that face — every analytic f
 form). B2b-2 proper (the procedural curve) stays a later increment; this task's first deliverable is
 the **Steinmetz / T-pipe coda to B2b-1**.
 
+**PROGRESS 2026-09-02** — Steinmetz coda increment 1 shipped: **INTERSECT** of two equal-radius
+cylinders whose axes cross at right angles now builds the bicylinder in closed form
+(`BuildSteinmetzIntersection` / `TryBooleanSteinmetz` in `src/util/brep.cpp`) — volume `16 r³/3`,
+area `16 r²`, four `CurveKind::Ellipse` edges, no procedural machinery, no `.gs` version bump.
+`CylinderCutZExtent` gained a mid-`u` tiebreak so its two-ellipse branch can order two cut planes
+that share an axis-intercept. **UNION / SUBTRACT of this pair (the T-pipe)** are still refused
+`BooleanCurvedFace` — the next sub-slice. B2b-2 proper (the procedural curve) is unchanged and not
+started.
+
 ## What is left
 
 After B1, B2a and B2b-1, the curved-Boolean coverage is:

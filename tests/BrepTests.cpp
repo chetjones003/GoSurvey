@@ -2001,6 +2001,87 @@ TEST_CASE("Curved B1: a failed curved Boolean leaves the operands untouched", "[
   (void)cyl;
 }
 
+TEST_CASE("Curved B2b-1: the Steinmetz bicylinder - INTERSECT of two equal perpendicular cylinders",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 3.0;
+
+  SECTION("axes crossing at the origin - volume 16 r^3 / 3, area 16 r^2, four elliptical edges") {
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));  // axis +z, z in [-6, 6]
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(Vec3{-6, 0, 0}, Vec3{1, 0, 0}, &alongX));
+    REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));  // axis +x, x in [-6, 6]
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    RequireSolid(out[0], Counts{2, 4, 4}, 2, 16.0 * r * r * r / 3.0, 16.0 * r * r);
+
+    int ellipses = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Ellipse)
+        ++ellipses;
+    REQUIRE(ellipses == 4);
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.002, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(16.0 * r * r * r / 3.0).epsilon(3e-3));
+  }
+
+  SECTION("the same figure on a tilted frame at survey coordinate magnitude, and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs alongZ = frame;
+    alongZ.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -6});
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-6, 0, 0}), frame.xAxis, &alongX));
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(alongZ, r, 12, &cylZ, &why));
+    REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume ==
+            Approx(16.0 * r * r * r / 3.0).epsilon(1e-9));
+
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume ==
+            Approx(16.0 * r * r * r / 3.0).epsilon(1e-9));
+  }
+
+  SECTION("UNION and SUBTRACT of the same pair (a T-pipe) are refused by name - a later sub-slice") {
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(Vec3{-6, 0, 0}, Vec3{1, 0, 0}, &alongX));
+    REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanUnion(cylZ, cylX, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+    REQUIRE_FALSE(brep::BooleanSubtract(cylZ, cylX, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+
+  SECTION("unequal radii are not this recogniser - still refused, operands untouched") {
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(Vec3{-6, 0, 0}, Vec3{1, 0, 0}, &alongX));
+    REQUIRE(brep::MakeCylinder(alongX, r * 0.5, 12, &cylX, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanIntersect(cylZ, cylX, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
 TEST_CASE("Curved B1: two coaxial cylinders - union and intersect", "[brep][req314]") {
   Problem why = Problem::Ok;
   std::vector<Solid> r;
