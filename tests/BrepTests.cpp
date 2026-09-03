@@ -2887,3 +2887,203 @@ TEST_CASE("A lofted-prism volume does not move when tessellation quality changes
   REQUIRE(brep::ComputeMassProperties(s).volume == v);  // unchanged by the tessellation calls
   REQUIRE(TessellatedVolume(fine) == Approx(v).epsilon(0.01));
 }
+
+// ---------------------------------------------------------------------------
+// Feature operations - Sweep (REQ-315 / ADR-048, GitHub issue #241). One profile along one path
+// segment. A straight path reproduces Extrude; a circular-arc path reproduces the solid of
+// revolution (Pappus volume). Side faces are SurfaceKind::Nurbs.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+brep::SweepPath LinePath(const Vec3& a, const Vec3& b) {
+  brep::SweepPath p;
+  p.arc = false;
+  p.start = a;
+  p.end = b;
+  return p;
+}
+
+brep::SweepPath ArcPath(const Vec3& start, const Vec3& centre, const Vec3& axis, double sweep) {
+  brep::SweepPath p;
+  p.arc = true;
+  p.start = start;
+  p.centre = centre;
+  p.normal = axis;
+  p.sweep = sweep;
+  p.end = start;  // Sweep derives the real end from centre/axis/sweep
+  return p;
+}
+
+}  // namespace
+
+TEST_CASE("Sweep along a straight path is the extrude of the same profile", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double w = 8.0, d = 5.0, h = 4.0;
+  const brep::Profile rect =
+      PolyProfile(World(), {{-w / 2, -d / 2}, {w / 2, -d / 2}, {w / 2, d / 2}, {-w / 2, d / 2}});
+
+  Solid swept;
+  REQUIRE(brep::Sweep(rect, LinePath(Vec3{0, 0, 0}, Vec3{0, 0, h}), brep::SweepOptions{}, &swept, &why));
+  Solid extruded;
+  REQUIRE(brep::Extrude(rect, h, &extruded, &why));
+
+  REQUIRE(CountOf(swept).v == CountOf(extruded).v);
+  REQUIRE(CountOf(swept).e == CountOf(extruded).e);
+  REQUIRE(CountOf(swept).f == CountOf(extruded).f);
+  REQUIRE(brep::EulerCharacteristic(swept) == 2);
+
+  const brep::MassProperties ms = brep::ComputeMassProperties(swept);
+  REQUIRE(ms.valid);
+  REQUIRE(ms.volume == Approx(w * d * h).epsilon(1e-7));
+  REQUIRE(ms.surfaceArea == Approx(brep::ComputeMassProperties(extruded).surfaceArea).epsilon(1e-7));
+}
+
+TEST_CASE("Sweep along an oblique straight path is an extrude perpendicular to the path", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double side = 4.0;
+  const brep::Profile sq =
+      PolyProfile(World(), {{-side / 2, -side / 2}, {side / 2, -side / 2}, {side / 2, side / 2},
+                            {-side / 2, side / 2}});
+  const Vec3 a{0, 0, 0};
+  const Vec3 b{6, 2, 9};  // an arbitrary 3D direction
+  Solid s;
+  REQUIRE(brep::Sweep(sq, LinePath(a, b), brep::SweepOptions{}, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  // alignToPath rotates the profile square onto the plane perpendicular to the path, so the solid is
+  // a right prism of length |b - a|.
+  const double len = std::sqrt(36.0 + 4.0 + 81.0);
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(side * side * len).epsilon(1e-6));
+}
+
+TEST_CASE("Sweep along a circular-arc path is the solid of revolution (Pappus volume)", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // A rectangle in the XZ plane, radius 2..5, height 3 — clear of the Z axis. Area 9, centroid r 3.5.
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{3.5, 0.0, 1.5}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{-1.5, -1.5}, ucs::Point2D{1.5, -1.5},
+                                ucs::Point2D{1.5, 1.5}, ucs::Point2D{-1.5, 1.5}})
+    pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  pr.edges.assign(4, brep::ProfileEdge{});
+
+  const double area = 9.0;
+  const double centroidR = 3.5;
+
+  for (const double ang : {kPi / 2.0, kPi, 1.7 * kPi}) {
+    Solid s;
+    const bool ok = brep::Sweep(pr, ArcPath(xz.origin, Vec3{0, 0, 1.5}, Vec3{0, 0, 1}, ang),
+                                brep::SweepOptions{}, &s, &why);
+    INFO("ang=" << ang << " why=" << brep::ProblemText(why));
+    REQUIRE(ok);
+    REQUIRE(brep::Validate(s) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(s));
+    REQUIRE(brep::ComputeMassProperties(s).volume == Approx(ang * centroidR * area).epsilon(1e-5));
+  }
+}
+
+TEST_CASE("Sweep stays accurate on a tilted arc path at survey magnitude", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  auto build = [&](const ucs::Ucs& base) {
+    // A small square at radius ~10 on a plane containing the base normal, swept 120 deg about base Z.
+    ucs::Ucs prof;
+    const Vec3 o = ucs::UcsToWorld(base, Vec3{10, 0, 0});
+    REQUIRE(ucs::FromNormal(o, ucs::UcsVectorToWorld(base, Vec3{0, 1, 0}), &prof));
+    brep::Profile pr;
+    pr.plane = prof;
+    for (const ucs::Point2D& q :
+         {ucs::Point2D{-1, -1}, ucs::Point2D{1, -1}, ucs::Point2D{1, 1}, ucs::Point2D{-1, 1}})
+      pr.vertices.push_back(ucs::PlaneToWorld(prof, q));
+    pr.edges.assign(4, brep::ProfileEdge{});
+    brep::SweepPath path;
+    path.arc = true;
+    path.start = o;
+    path.centre = base.origin;
+    path.normal = base.zAxis;
+    path.sweep = 2.0 * kPi / 3.0;
+    path.end = o;
+    Solid s;
+    REQUIRE(brep::Sweep(pr, path, brep::SweepOptions{}, &s, &why));
+    return s;
+  };
+  const Solid flat = build(World());
+  const Solid tilted = build(TiltedAt(3.5e6, 1.24e7, 250.0));
+  REQUIRE(brep::Validate(tilted) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(tilted).volume ==
+          Approx(brep::ComputeMassProperties(flat).volume).epsilon(1e-6));
+}
+
+TEST_CASE("A twisted straight sweep is a valid closed solid a little under the untwisted prism", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double side = 4.0, h = 10.0;
+  const brep::Profile sq =
+      PolyProfile(World(), {{-side / 2, -side / 2}, {side / 2, -side / 2}, {side / 2, side / 2},
+                            {-side / 2, side / 2}});
+  brep::SweepOptions opt;
+  opt.twistRad = kPi / 3.0;  // 60 degrees over the length
+  Solid s;
+  REQUIRE(brep::Sweep(sq, LinePath(Vec3{0, 0, 0}, Vec3{0, 0, h}), opt, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  // The ruled side faces pinch as they twist, so the solid is smaller than the straight prism but
+  // still a genuine positive volume. The real invariant is that the analytic integral and an
+  // independent triangle sum agree.
+  const double prism = side * side * h;
+  const double v = brep::ComputeMassProperties(s).volume;
+  REQUIRE(v > 0.6 * prism);
+  REQUIRE(v < prism);
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.002, &t, &why));
+  REQUIRE(TessellatedVolume(t) == Approx(v).epsilon(0.02));
+}
+
+TEST_CASE("Sweep translate at state-plane magnitude matches the origin build", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-2, -2}, {2, -2}, {2, 2}, {-2, 2}});
+  Solid s;
+  REQUIRE(brep::Sweep(sq, LinePath(Vec3{0, 0, 0}, Vec3{1, 0, 5}), brep::SweepOptions{}, &s, &why));
+  const Vec3 delta{3.5e6, -1.24e7, 812.0};
+  const Solid moved = brep::Translate(s, delta);
+  REQUIRE(brep::Validate(moved) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(moved).volume ==
+          Approx(brep::ComputeMassProperties(s).volume).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep refuses bad input by name and stores nothing", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-2, -2}, {2, -2}, {2, 2}, {-2, 2}});
+  Solid s;
+  SECTION("a zero-length line path") {
+    REQUIRE_FALSE(brep::Sweep(sq, LinePath(Vec3{1, 1, 1}, Vec3{1, 1, 1}), brep::SweepOptions{}, &s, &why));
+    REQUIRE(why == Problem::SweepPathDegenerate);
+  }
+  SECTION("a profile that reaches the arc path axis") {
+    ucs::Ucs xz;
+    REQUIRE(ucs::FromNormal(Vec3{2, 0, 0}, Vec3{0, 1, 0}, &xz));
+    brep::Profile pr;
+    pr.plane = xz;
+    for (const ucs::Point2D& q : {ucs::Point2D{-2, -1}, ucs::Point2D{2, -1}, ucs::Point2D{2, 1},
+                                  ucs::Point2D{-2, 1}})  // spans radius 0..4 -> touches the axis
+      pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+    pr.edges.assign(4, brep::ProfileEdge{});
+    REQUIRE_FALSE(brep::Sweep(pr, ArcPath(xz.origin, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kPi / 2.0),
+                              brep::SweepOptions{}, &s, &why));
+    REQUIRE(why == Problem::SweepProfileTouchesAxis);
+  }
+  SECTION("a twist on a curved path") {
+    ucs::Ucs xz;
+    REQUIRE(ucs::FromNormal(Vec3{5, 0, 0}, Vec3{0, 1, 0}, &xz));
+    brep::Profile pr;
+    pr.plane = xz;
+    for (const ucs::Point2D& q :
+         {ucs::Point2D{-1, -1}, ucs::Point2D{1, -1}, ucs::Point2D{1, 1}, ucs::Point2D{-1, 1}})
+      pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+    pr.edges.assign(4, brep::ProfileEdge{});
+    brep::SweepOptions opt;
+    opt.twistRad = 0.3;
+    REQUIRE_FALSE(brep::Sweep(pr, ArcPath(xz.origin, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kPi / 2.0), opt, &s, &why));
+    REQUIRE(why == Problem::SweepUnsupportedOption);
+  }
+  REQUIRE(s.faces.empty());
+}

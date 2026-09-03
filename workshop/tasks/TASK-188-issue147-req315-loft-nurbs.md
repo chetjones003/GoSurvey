@@ -71,6 +71,42 @@ numerical `Validate`) each frame while ≥2 profiles are selected — same shape
 ghosts but heavier per rebuild; fine for the 2–3 simple profiles a loft normally has, revisit if a
 many-edge loft preview ever stutters.
 
+## Sweep (REQ-315, the second increment) — kernel slice *(branch `feat/req315-sweep-kernel`)*
+
+`brep::Sweep(const Profile&, const SweepPath&, const SweepOptions&, ...)` — one closed planar
+profile along **one path segment** (a straight line or a single circular arc; a bulge-polyline path
+is the next slice). `SweepPath` = `{arc, start, end, centre, normal, sweep}`; `SweepOptions` =
+`{twistRad, alignToPath}`.
+
+- **Straight path** → ruled `SurfaceKind::Nurbs` side faces (`nurbs::RuledCurveToCurve` per profile
+  edge) + planar caps; **reproduces `Extrude`** (asserted). `alignToPath` rotates the profile onto
+  the plane perpendicular to the path; a constant `twistRad` rotates the end frame about the path
+  tangent (realized as one ruled band from untwisted to fully twisted — a many-section subdivision is
+  a follow-up for large twists).
+- **Arc path** → each profile edge is **revolved** about the arc's axis (`nurbs::RevolveCurve`, exact
+  degree-2 rational V); **reproduces the solid of revolution** (Pappus volume asserted for 90°, 180°,
+  306°). Rails follow the path as `CurveKind::Arc` edges. Twist / fixed-orientation on a curved path,
+  a full-turn arc, and a profile that reaches the axis are each refused by name
+  (`SweepUnsupportedOption` / `SweepPathDegenerate` / `SweepProfileTouchesAxis`).
+- New `nurbs` builders: `Curve` (a rational B-spline curve), `LineCurve`, `ArcCurve`,
+  `RuledCurveToCurve`, `RevolveCurve` (handles an on-axis control point as a collapsed pole column).
+- **`IntegrateNurbsFaceNumeric` now integrates per knot cell** (a graded Gauss rule inside each,
+  boundaries at the distinct interior knots) — a multi-span rational patch (a >90° revolve, a
+  multi-quarter arc ribbon) is only C^(p-1) at its knots and a panel straddling one lost accuracy;
+  this also tightens loft's `ArcRibbon` faces. `Tessellate` / `TessellateIsolines` gained a
+  control-net planarity test so a **twisted** bilinear patch is subdivided, not drawn as one quad.
+- `.gs`: no format change — a swept solid is `SurfaceKind::Nurbs` faces, already v4.
+
+Tests: 7 in `BrepTests` (extrude-equivalence, oblique straight path, arc-path Pappus volume ×3
+angles, tilted survey-magnitude arc path, twisted straight sweep with a tessellation cross-check,
+`Translate` at state-plane magnitude, every refusal by name) + a swept-solid `.gs` round-trip in
+`BrepJsonTests`. Build green, ctest **1057/1057**.
+
+**Deferred to the next sweep slice**: a bulge-polyline path (multi-segment, needs a
+rotation-minimizing frame carried across joints — the double-reflection method); twist on a curved
+path; a fixed-orientation curved sweep; a full-turn arc path (seams like a revolve); the `SWEEP`
+command + viewport.
+
 ### Slice B (original plan) — the command and the viewport
 
 - `LOFT` (typed + prompted), wired through the six places

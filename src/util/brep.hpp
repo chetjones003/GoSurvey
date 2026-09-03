@@ -296,6 +296,13 @@ enum class Problem {
   /// pair where one edge is straight and the other an arc, or two arcs of unequal sweep. A
   /// divided-profile or point-capped loft is out of scope (REQ-315).
   LoftProfileMismatch,
+
+  // --- Sweep (REQ-315 / ADR-048, GitHub issue #241). ---
+  SweepPathDegenerate,        ///< A zero-length line path, or an arc path with no radius / no sweep.
+  SweepProfileTouchesAxis,    ///< An arc-path sweep whose profile reaches the path's axis of curvature.
+  /// An option combination this increment does not build: a twist on a curved path, or a curved path
+  /// with the profile held at a fixed world orientation. A straight path takes any option.
+  SweepUnsupportedOption,
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -437,6 +444,47 @@ struct Profile {
 /// (\ref Problem::ProfileSelfIntersects), a reflex profile arc (\ref Problem::ProfileArcReflex), and
 /// a degenerate profile frame (\ref Problem::DegenerateFrame). The result carries no recipe.
 [[nodiscard]] bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy);
+
+/// A **sweep path**: a straight segment, or a single circular arc, that \ref Sweep runs a profile
+/// along (REQ-315 / ADR-048). A bulge-polyline path — several segments chained — is a later
+/// increment; this one takes one segment.
+struct SweepPath {
+  bool arc = false;      ///< false — the straight segment \ref start → \ref end. true — a circular arc.
+  Vec3 start;            ///< The path start; the profile is placed here.
+  Vec3 end;              ///< The path end.
+  Vec3 centre;           ///< Arc only: the arc centre. \ref start and \ref end are equidistant from it.
+  Vec3 normal;           ///< Arc only: unit axis the arc turns about; `+sweep` is CCW around it.
+  double sweep = 0.0;    ///< Arc only: signed sweep, `0 < |sweep| <= 2*pi`.
+};
+
+/// How \ref Sweep carries the profile's orientation along the path.
+struct SweepOptions {
+  /// A constant twist, applied linearly from 0 at the path start to \ref twistRad at the end, about
+  /// the (moving) path tangent. Only on a straight path in this increment.
+  double twistRad = 0.0;
+  /// true — the profile's plane normal follows the path tangent (a rotation-minimizing frame; on a
+  /// planar arc this is the frame that does not spin about the tangent). false — the profile keeps
+  /// its original world orientation and is only translated along the path (straight path only here).
+  bool alignToPath = true;
+};
+
+/// Sweep one closed planar \p profile along \p path and return the solid in \p out (REQ-315 /
+/// ADR-048, GitHub issue #241).
+///
+/// Each profile edge sweeps one \ref SurfaceKind::Nurbs face — ruled along a straight path, an exact
+/// rational revolution along an arc path — and the profile caps the two ends as planar faces. A
+/// **straight path reproduces \ref Extrude**; a **circular-arc path (twist 0, aligned) reproduces
+/// \ref Revolve** — asserted in tests. This increment builds a **single-segment** path; a
+/// bulge-polyline path, a twist on a curved path, and a fixed-orientation curved path are each
+/// refused by name (\ref Problem::SweepUnsupportedOption) pending the next increment.
+///
+/// Nothing is stored unless the result passes \ref Validate and \ref SelfIntersects (REQ-201);
+/// \p out is left untouched on failure. Refuses — by name — a degenerate path
+/// (\ref Problem::SweepPathDegenerate), a profile that reaches an arc path's axis
+/// (\ref Problem::SweepProfileTouchesAxis), and the same malformed / non-planar / self-crossing /
+/// reflex-arc profiles \ref Loft refuses. The result carries no recipe.
+[[nodiscard]] bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& options,
+                         Solid* out, Problem* outWhy);
 
 /// Which side (or sides) of the cut \ref Slice keeps. "Above" is the `+planeNormal` side.
 enum class SliceKeep : std::uint8_t { Above, Below, Both };

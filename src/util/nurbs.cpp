@@ -385,4 +385,115 @@ Patch ArcRibbon(const Vec3& centre0, const Vec3& start0, const Vec3& centre1, co
   return patch;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Sweep builders.
+// ---------------------------------------------------------------------------------------------
+
+Curve LineCurve(const Vec3& p0, const Vec3& p1) {
+  Curve c;
+  c.deg = 1;
+  c.knots = {0.0, 0.0, 1.0, 1.0};
+  c.pts = {p0, p1};
+  c.wts = {1.0, 1.0};
+  return c;
+}
+
+Curve ArcCurve(const Vec3& centre, const Vec3& start, const Vec3& axis, double sweepRad) {
+  Curve c;
+  c.deg = 2;
+  RationalArc(centre, start, axis, sweepRad, &c.pts, &c.wts);
+  const int segments = (static_cast<int>(c.pts.size()) - 1) / 2;
+  c.knots.reserve(static_cast<std::size_t>(c.pts.size() + 3));
+  c.knots.insert(c.knots.end(), {0.0, 0.0, 0.0});
+  for (int s = 1; s < segments; ++s) {
+    c.knots.push_back(static_cast<double>(s));
+    c.knots.push_back(static_cast<double>(s));
+  }
+  c.knots.insert(c.knots.end(), {static_cast<double>(segments), static_cast<double>(segments),
+                                 static_cast<double>(segments)});
+  return c;
+}
+
+Patch RuledCurveToCurve(const Curve& a, const Curve& b) {
+  Patch patch;
+  const int n = static_cast<int>(a.pts.size());
+  if (a.deg != b.deg || n < 2 || static_cast<int>(b.pts.size()) != n)
+    return patch;  // invalid; ValidatePatch will name it
+
+  patch.degU = a.deg;
+  patch.degV = 1;
+  patch.nu = n;
+  patch.nv = 2;
+  patch.knotsU = a.knots;
+  patch.knotsV = {0.0, 0.0, 1.0, 1.0};
+  patch.ctrl.resize(static_cast<std::size_t>(n) * 2);
+  patch.wts.resize(static_cast<std::size_t>(n) * 2);
+  for (int i = 0; i < n; ++i) {
+    patch.ctrl[i] = a.pts[i];
+    patch.wts[i] = a.wts[i];
+    patch.ctrl[n + i] = b.pts[i];
+    patch.wts[n + i] = b.wts[i];
+  }
+  return patch;
+}
+
+Patch RevolveCurve(const Curve& c, const Vec3& axisPoint, const Vec3& axisDir, double sweepRad) {
+  Patch patch;
+  const int nu = static_cast<int>(c.pts.size());
+  if (nu < 2 || !(std::fabs(sweepRad) > 1e-12))
+    return patch;
+  const Vec3 ax = Normalize(axisDir);
+  const int segments =
+      std::max(1, static_cast<int>(std::ceil(std::fabs(sweepRad) / (kPi / 2.0) - 1e-9)));
+  const int nv = 2 * segments + 1;
+
+  // Each U control point traces its own circular arc of the same sweep; RationalArc gives that V
+  // control column. A point ON the axis has no arc — its column collapses to the point (a pole),
+  // exactly the sphere-pole case the rest of the kernel already handles.
+  std::vector<std::vector<Vec3>> cols(static_cast<std::size_t>(nu));
+  std::vector<std::vector<double>> colw(static_cast<std::size_t>(nu));
+  bool anyOffAxis = false;
+  for (int i = 0; i < nu; ++i) {
+    const Vec3& p = c.pts[static_cast<std::size_t>(i)];
+    const Vec3 centre = Add(axisPoint, Scale(ax, Dot(Sub(p, axisPoint), ax)));
+    if (Length(Sub(p, centre)) > 1e-9 * (1.0 + Length(p))) {
+      RationalArc(centre, p, ax, sweepRad, &cols[static_cast<std::size_t>(i)],
+                  &colw[static_cast<std::size_t>(i)]);
+      anyOffAxis = true;
+      if (static_cast<int>(cols[static_cast<std::size_t>(i)].size()) != nv)
+        return Patch{};
+    } else {
+      cols[static_cast<std::size_t>(i)].assign(static_cast<std::size_t>(nv), p);
+      colw[static_cast<std::size_t>(i)].assign(static_cast<std::size_t>(nv), 1.0);
+    }
+  }
+  if (!anyOffAxis)
+    return patch;  // the whole curve is on the axis — nothing is swept
+
+  patch.degU = c.deg;
+  patch.degV = 2;
+  patch.nu = nu;
+  patch.nv = nv;
+  patch.knotsU = c.knots;
+  patch.knotsV.reserve(static_cast<std::size_t>(nv + 3));
+  patch.knotsV.insert(patch.knotsV.end(), {0.0, 0.0, 0.0});
+  for (int s = 1; s < segments; ++s) {
+    patch.knotsV.push_back(static_cast<double>(s));
+    patch.knotsV.push_back(static_cast<double>(s));
+  }
+  patch.knotsV.insert(patch.knotsV.end(), {static_cast<double>(segments), static_cast<double>(segments),
+                                           static_cast<double>(segments)});
+
+  patch.ctrl.resize(static_cast<std::size_t>(nu) * static_cast<std::size_t>(nv));
+  patch.wts.resize(static_cast<std::size_t>(nu) * static_cast<std::size_t>(nv));
+  for (int j = 0; j < nv; ++j)
+    for (int i = 0; i < nu; ++i) {
+      const std::size_t idx = static_cast<std::size_t>(j) * static_cast<std::size_t>(nu) +
+                              static_cast<std::size_t>(i);
+      patch.ctrl[idx] = cols[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)];
+      patch.wts[idx] = c.wts[static_cast<std::size_t>(i)] * colw[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)];
+    }
+  return patch;
+}
+
 }  // namespace nurbs

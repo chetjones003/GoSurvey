@@ -127,4 +127,41 @@ void RationalArc(const Vec3& centre, const Vec3& start, const Vec3& axis, double
 [[nodiscard]] Patch ArcRibbon(const Vec3& centre0, const Vec3& start0, const Vec3& centre1,
                               const Vec3& start1, const Vec3& axis, double sweepRad);
 
+// ---------------------------------------------------------------------------------------------
+// Sweep builders (REQ-315 increment 2 / ADR-048). A sweep places one profile-edge curve at each
+// end of a path segment and skins the surface between them: ruled where the segment is straight,
+// rational-revolved where the segment is a circular arc. `Curve` is that profile-edge curve — a
+// rational B-spline curve, the U cross-section every sweep patch shares.
+// ---------------------------------------------------------------------------------------------
+
+/// A rational B-spline curve: `pts.size()` control points of degree \ref deg, a clamped
+/// \ref knots vector of length `pts.size() + deg + 1`, and a positive weight per point.
+struct Curve {
+  int deg = 1;
+  std::vector<double> knots;
+  std::vector<Vec3> pts;
+  std::vector<double> wts;
+};
+
+/// The straight segment from \p p0 to \p p1 as a degree-1 \ref Curve (two control points, weight 1).
+[[nodiscard]] Curve LineCurve(const Vec3& p0, const Vec3& p1);
+
+/// A circular arc of \p sweepRad radians about \p axis (unit) through \p centre, starting at
+/// \p start, as a degree-2 rational \ref Curve — the same control points \ref RationalArc produces.
+[[nodiscard]] Curve ArcCurve(const Vec3& centre, const Vec3& start, const Vec3& axis, double sweepRad);
+
+/// A **ruled** patch spanning straight (degree 1) in V from \p a to \p b — two curves that must
+/// share a degree, a knot vector and a control-point count. `a` is the `vMin` edge, `b` the `vMax`
+/// edge; U carries `a`'s (and `b`'s) rational shape. This is the patch a sweep raises over one
+/// profile edge along a **straight** path segment.
+[[nodiscard]] Patch RuledCurveToCurve(const Curve& a, const Curve& b);
+
+/// The patch swept when curve \p c is **revolved** \p sweepRad radians about the axis through
+/// \p axisPoint in unit direction \p axisDir — U carries `c`'s shape, V is the exact degree-2
+/// rational arc of the revolution. This is the patch a sweep raises over one profile edge along a
+/// circular-**arc** path segment; with a straight profile edge it reproduces \ref ArcRibbon, and the
+/// solid it helps build reproduces a revolve. Every control point of \p c must lie off the axis.
+[[nodiscard]] Patch RevolveCurve(const Curve& c, const Vec3& axisPoint, const Vec3& axisDir,
+                                 double sweepRad);
+
 }  // namespace nurbs
