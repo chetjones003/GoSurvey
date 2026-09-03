@@ -67,24 +67,58 @@ EXPECT SOLIDKIND 1 Solid
 EXPECT SOLIDPROPS 1 296.0881320326807 321.220873261399 4 6 4
 EXPECT LOG "Solid created"
 
-# --- A profile with no path is reported, not silently swallowed ----------------------------
+# --- A circle swept along a bulge polyline: line -> tangent 90-deg arc -> line --------------
+# Segment 1: straight (0,200)->(10,200), length 10.
+# Segment 2: a tangent quarter arc, radius 10 about (10,210), to (20,210).
+# Segment 3: straight (20,210)->(20,220), length 10.
+# V = 20*pi (the two straight tube pieces) + (pi/2)*10*pi (the elbow, Pappus) = 20*pi + 5*pi^2
+#   = 112.17987473733407.
+# Area = 42*pi (2 caps + 2 straight tube walls) + 10*pi^2 (the elbow wall) = 230.64293761703865.
+# Three bands: 8 v, 14 e, 8 f.
+CMD POLYLINE
+CMD 0,200
+CMD 10,200
+CMD ARC
+CMD 20,210
+CMD LINE
+CMD 20,220
+CMD END
 CMD CIRCLE
-CMD 300,0
-CMD 3
+CMD 0,200
+CMD 1
 ESC
-BOX 295 -5 305 5
-EXPECT SELECTED 1
+
+BOX -5 195 25 225
+EXPECT SELECTED 2
 CMD SWEEP
-EXPECT LOG "select a closed profile and a line/arc path"
-CMD
-EXPECT LOG "select one closed polyline or circle"
-EXPECT SOLIDS 2
+EXPECT SOLIDS 3
+EXPECT SOLIDKIND 2 Solid
+EXPECT SOLIDPROPS 2 112.17987473733407 230.64293761703865 8 14 8
+EXPECT LOG "Solid created"
+
+# --- A polyline path with a sharp corner is refused by name --------------------------------
+# (Selection is cleared by the successful sweep above, so the box holds exactly these two.)
+CMD POLYLINE
+CMD 0,300
+CMD 10,300
+CMD 10,310
+CMD END
+CMD CIRCLE
+CMD 0,300
+CMD 1
+ESC
+BOX -5 295 15 315
+EXPECT SELECTED 2
+CMD SWEEP
+EXPECT LOG "sharp corner"
+EXPECT SOLIDS 3
 ESC
 
 # --- Solids survive a .gs save and reopen with topology intact -----------------------------
 SAVEAS %OUT%/req315-sweep.gs
 OPEN %OUT%/req315-sweep.gs
-EXPECT SOLIDS 2
+EXPECT SOLIDS 3
 EXPECT SOLIDPROPS 0 240 248 8 12 6
+EXPECT SOLIDPROPS 2 112.17987473733407 230.64293761703865 8 14 8
 
 CHECK ALL

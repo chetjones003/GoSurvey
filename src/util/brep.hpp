@@ -300,8 +300,11 @@ enum class Problem {
   // --- Sweep (REQ-315 / ADR-048, GitHub issue #241). ---
   SweepPathDegenerate,        ///< A zero-length line path, or an arc path with no radius / no sweep.
   SweepProfileTouchesAxis,    ///< An arc-path sweep whose profile reaches the path's axis of curvature.
-  /// An option combination this increment does not build: a twist on a curved path, or a curved path
-  /// with the profile held at a fixed world orientation. A straight path takes any option.
+  /// The path has a **sharp corner** — a tangent discontinuity where two segments meet. Only smooth
+  /// (tangent-continuous) bends are built in this increment.
+  SweepPathCorner,
+  /// An option combination this increment does not build: a twist or a fixed world orientation on
+  /// anything but a single straight segment. A single straight segment takes any option.
   SweepUnsupportedOption,
 };
 

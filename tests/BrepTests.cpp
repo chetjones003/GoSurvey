@@ -3123,7 +3123,7 @@ TEST_CASE("Sweep refuses a mitred corner in the path by name", "[brep][req315]")
   path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
   Solid s;
   REQUIRE_FALSE(brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why));
-  REQUIRE(why == Problem::SweepUnsupportedOption);
+  REQUIRE(why == Problem::SweepPathCorner);
   REQUIRE(s.faces.empty());
 }
 

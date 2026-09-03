@@ -138,9 +138,20 @@ Tests: 3 new in `BrepTests` (a circle along line→tangent-arc→line is a bent 
 `18π + 2.5π²`; a 90° corner is refused; two collinear segments == the one-segment sweep) + the
 `ArcPath` / `LinePath` / `BrepJsonTests` helpers updated to the new struct. ctest **1062/1062**.
 
+## Sweep — the SWEEP command reads a polyline path *(branch `feat/req315-sweep-polyline-cmd`)*
+
+`SweepPathFromSelection` gained a **`Polyline`** branch: an **open** polyline's per-vertex bulges
+(REQ-316, `userPolylineVertsBulge`) become the path's arc segments (`BulgeArc` → centre / sweep,
+normal +Z), straight where the bulge is zero. A closed polyline is left for
+`ExtrudeProfileFromSelection` (it is a profile, not a path). A bulge across a change in elevation is
+refused (not a planar arc). Kernel: a new `Problem::SweepPathCorner` (split out of
+`SweepUnsupportedOption`) so a sharp corner in a polyline path reports *"the sweep path has a sharp
+corner; only smooth bends are supported"* rather than a twist-option message. `req315-sweep.txt`
+gains a bulge-polyline case (line → tangent 90° arc → line, a circle → a bent pipe, `20π + 5π²`
+volume and `42π + 10π²` area, exact) and a corner-refusal case. ctest **1062/1062**.
+
 **Deferred**: a mitred corner (needs a miter cross-section); twist / fixed orientation on a curved
-or multi-segment path; a full-turn arc segment; the `SWEEP` command reading a **polyline** entity as
-the path (bulge extraction + corner-refusal UX); the `SWEEP` twist / alignment keyword options.
+or multi-segment path; a full-turn arc segment; the `SWEEP` twist / alignment keyword options.
 
 ### Slice B (original plan) — the command and the viewport
 

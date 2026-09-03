@@ -4255,11 +4255,13 @@ void CancelLoftCommand(AppCommandState& st);
 
 // --- SWEEP (REQ-315 / ADR-048, GitHub issue #241) -------------------------------------------
 
-/// Begin the SWEEP command: select **one** closed polyline / circle (the profile) and **one** line
-/// or arc (the path), then Enter to sweep the profile along the path (`brep::Sweep`). The closed
-/// loop is taken as the profile and the open curve as the path, so the selection order does not
-/// matter. If both are already selected, a bare `SWEEP` builds immediately. One undo step; the
-/// source entities are left in place; every failure is reported by name (REQ-201).
+/// Begin the SWEEP command: select **one** closed polyline / circle (the profile) and **one** line,
+/// arc or open polyline (the path), then Enter to sweep the profile along the path (`brep::Sweep`).
+/// The closed loop is taken as the profile and the open curve as the path, so the selection order
+/// does not matter. A polyline path's per-vertex bulges become its arc segments (REQ-316); a sharp
+/// corner in the path is refused by name (`brep::Problem::SweepPathCorner`). If both operands are
+/// already selected, a bare `SWEEP` builds immediately. One undo step; the source entities are left
+/// in place; every failure is reported by name (REQ-201).
 void StartSweepCommand(AppCommandState& st, std::vector<std::string>& log);
 void CancelSweepCommand(AppCommandState& st);
 
