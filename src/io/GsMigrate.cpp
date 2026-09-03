@@ -9,8 +9,16 @@ namespace {
 // downgrade branch above) rather than silently mis-reading the edge.
 bool MigrateV1ToV2(nlohmann::json& /*doc*/, std::string& /*err*/) { return true; }
 
+// v2 -> v3 (REQ-314 B2b-2, D-2026-09-03-a): a `brep` solid edge may now be `CurveKind::Intersection`
+// (kind 3), the procedural quartic where two surfaces cross — it carries its two surfaces and an
+// on-curve witness point instead of a radius/sweep. A v2 document has no such edge, so carrying it
+// forward is a pure relabel and the resave is byte-identical. The bump exists so an older GoSurvey
+// refuses a drawing with one by name rather than mis-reading the edge as an arc.
+bool MigrateV2ToV3(nlohmann::json& /*doc*/, std::string& /*err*/) { return true; }
+
 const GsMigrationStep kSteps[] = {
     {1, "solids may carry elliptical intersection edges (B2b-1)", &MigrateV1ToV2},
+    {2, "solids may carry procedural intersection-curve edges (B2b-2)", &MigrateV2ToV3},
 };
 
 }  // namespace

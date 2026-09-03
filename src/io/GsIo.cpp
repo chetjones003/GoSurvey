@@ -671,6 +671,34 @@ SurveyLabelStyleTemplates SurveyLabelTemplatesFromJson(const json& o) {
 // hand-edited file cannot present a skewed surface frame that would silently shear a solid.
 // ---------------------------------------------------------------------------------------------
 
+json BrepSurfaceToJson(const brep::Surface& sf) {
+  json j;
+  j["kind"] = static_cast<int>(sf.kind);
+  j["frame"] = UcsFrameToJson(sf.frame);
+  j["r"] = sf.radius;
+  j["r2"] = sf.radius2;
+  j["h"] = sf.height;
+  if (sf.inward)
+    j["inward"] = true;
+  return j;
+}
+
+bool BrepSurfaceFromJson(const json& j, brep::Surface* out) {
+  if (!j.is_object() || !j.contains("kind") || !j.contains("frame"))
+    return false;
+  const int k = j["kind"].get<int>();
+  if (k < static_cast<int>(brep::SurfaceKind::Plane) || k > static_cast<int>(brep::SurfaceKind::Torus))
+    return false;
+  out->kind = static_cast<brep::SurfaceKind>(k);
+  if (!UcsFrameFromJson(j["frame"], &out->frame))
+    return false;
+  out->radius = j.value("r", 0.0);
+  out->radius2 = j.value("r2", 0.0);
+  out->height = j.value("h", 0.0);
+  out->inward = j.value("inward", false);
+  return std::isfinite(out->radius) && std::isfinite(out->radius2) && std::isfinite(out->height);
+}
+
 bool ReadVec3(const json& j, ray3d::Vec3* out) {
   if (!j.is_array() || j.size() != 3)
     return false;
@@ -704,6 +732,13 @@ json SolidToJson(const brep::Solid& s) {
       je["sweep"] = e.sweep;
       if (e.kind == brep::CurveKind::Ellipse)
         je["r2"] = e.radius2;  // REQ-314 B2b-1 — bumps kGsFormatVersion
+    } else if (e.kind == brep::CurveKind::Intersection) {
+      // REQ-314 B2b-2 — bumps kGsFormatVersion 2 -> 3 (a v2 reader would mis-read this edge).
+      je["witness"] = json::array({e.frame.origin.x, e.frame.origin.y, e.frame.origin.z});
+      json surfs = json::array();
+      for (const brep::Surface& sf : e.isectSurfaces)
+        surfs.push_back(BrepSurfaceToJson(sf));
+      je["surfaces"] = std::move(surfs);
     }
     edges.push_back(std::move(je));
   }
@@ -779,7 +814,8 @@ bool SolidFromJson(const json& o, brep::Solid* out) {
       brep::Edge e;
       const int k = je["kind"].get<int>();
       if (k != static_cast<int>(brep::CurveKind::Line) && k != static_cast<int>(brep::CurveKind::Arc) &&
-          k != static_cast<int>(brep::CurveKind::Ellipse))
+          k != static_cast<int>(brep::CurveKind::Ellipse) &&
+          k != static_cast<int>(brep::CurveKind::Intersection))
         return false;
       e.kind = static_cast<brep::CurveKind>(k);
       e.v0 = je["v0"].get<int>();
@@ -795,6 +831,17 @@ bool SolidFromJson(const json& o, brep::Solid* out) {
           if (!je.contains("r2"))
             return false;
           e.radius2 = je["r2"].get<double>();
+        }
+      } else if (e.kind == brep::CurveKind::Intersection) {
+        if (!je.contains("witness") || !ReadVec3(je["witness"], &e.frame.origin))
+          return false;
+        if (!je.contains("surfaces") || !je["surfaces"].is_array() || je["surfaces"].size() != 2)
+          return false;
+        for (const auto& js : je["surfaces"]) {
+          brep::Surface sf;
+          if (!BrepSurfaceFromJson(js, &sf))
+            return false;
+          e.isectSurfaces.push_back(sf);
         }
       }
       out->edges.push_back(e);

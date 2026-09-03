@@ -2147,7 +2147,7 @@ TEST_CASE("Curved B2b-1: the Steinmetz bicylinder - INTERSECT of two equal perpe
     REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(want).epsilon(1e-9));
   }
 
-  SECTION("unequal radii are not this recogniser - still refused, operands untouched") {
+  SECTION("unequal radii are the branch-pipe recogniser (B2b-2), not the Steinmetz one") {
     Solid cylZ;
     Solid cylX;
     REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));
@@ -2155,8 +2155,10 @@ TEST_CASE("Curved B2b-1: the Steinmetz bicylinder - INTERSECT of two equal perpe
     REQUIRE(ucs::FromNormal(Vec3{-6, 0, 0}, Vec3{1, 0, 0}, &alongX));
     REQUIRE(brep::MakeCylinder(alongX, r * 0.5, 12, &cylX, &why));
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanIntersect(cylZ, cylX, &out, &why));
-    REQUIRE(why == Problem::BooleanCurvedFace);
+    REQUIRE(brep::BooleanIntersect(cylZ, cylX, &out, &why));  // a pipe-tee lens now
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(CountOf(out[0]).f == 4);
   }
 }
 
@@ -2237,6 +2239,95 @@ TEST_CASE("Curved B2b-2: a procedural Intersection edge marches along both cylin
       REQUIRE(p.y >= bnd.mn.y - 1e-6);
       REQUIRE(p.z <= bnd.mx.z + 1e-6);
     }
+  }
+}
+
+TEST_CASE("Curved B2b-2: INTERSECT of a thin pipe crossing a thick one is the lens", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 2.0;
+  const double R = 5.0;
+
+  // lens volume = 4 * integral_{-r}^{r} sqrt(R^2 - y^2) sqrt(r^2 - y^2) dy  (a fine reference)
+  auto lensVolume = [&](double rr, double RR) {
+    const int N = 400000;
+    double v = 0.0;
+    for (int i = 0; i < N; ++i) {
+      const double y = -rr + 2.0 * rr * (i + 0.5) / N;
+      v += (2.0 * rr / N) * 4.0 * std::sqrt(RR * RR - y * y) * std::sqrt(rr * rr - y * y);
+    }
+    return v;
+  };
+  const double vref = lensVolume(r, R);
+
+  SECTION("axes crossing at the origin — volume matches the numerical reference") {
+    Solid thin;
+    Solid thick;
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(Vec3{-12, 0, 0}, Vec3{1, 0, 0}, &ax));
+    REQUIRE(brep::MakeCylinder(ax, r, 24, &thin, &why));  // axis +x, x in [-12, 12]
+    REQUIRE(brep::MakeCylinder(At(0, 0, -12), R, 24, &thick, &why));  // axis +z
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thin, thick, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 10);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 8);
+
+    const brep::MassProperties mp = brep::ComputeMassProperties(out[0]);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(vref).epsilon(2e-4));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(5e-3));
+  }
+
+  SECTION("order does not matter; SUBTRACT and UNION of this pair are still refused") {
+    Solid thin;
+    Solid thick;
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(Vec3{-12, 0, 0}, Vec3{1, 0, 0}, &ax));
+    REQUIRE(brep::MakeCylinder(ax, r, 24, &thin, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -12), R, 24, &thick, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thick, thin, &out, &why));  // reversed
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(2e-4));
+    REQUIRE_FALSE(brep::BooleanSubtract(thick, thin, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+    REQUIRE_FALSE(brep::BooleanUnion(thick, thin, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+
+  SECTION("stable on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-12, 0, 0}), frame.xAxis, &ax));
+    ucs::Ucs bx = frame;
+    bx.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -12});
+    Solid thin;
+    Solid thick;
+    REQUIRE(brep::MakeCylinder(ax, r, 24, &thin, &why));
+    REQUIRE(brep::MakeCylinder(bx, R, 24, &thick, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thin, thick, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-4));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vref).epsilon(5e-4));
   }
 }
 
