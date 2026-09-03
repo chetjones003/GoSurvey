@@ -19,7 +19,7 @@
 /// layer. The updater needs it: the release manifest carries the format version of the build
 /// being offered, and comparing that against this one is what lets the update dialog tell a user
 /// whether drawings saved by the new version will still open in the one they have (REQ-078).
-constexpr int kGsFormatVersion = 3;
+constexpr int kGsFormatVersion = 4;
 
 /// One single-version step. `fromVersion` is the version it upgrades FROM; it always produces
 /// `fromVersion + 1` (ADR-030 (c)) — a step that jumps two versions is two steps.

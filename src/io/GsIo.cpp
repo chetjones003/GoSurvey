@@ -8,6 +8,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 #include "util/meshgeom.hpp"
+#include "BrepJson.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -671,256 +672,8 @@ SurveyLabelStyleTemplates SurveyLabelTemplatesFromJson(const json& o) {
 // hand-edited file cannot present a skewed surface frame that would silently shear a solid.
 // ---------------------------------------------------------------------------------------------
 
-json BrepSurfaceToJson(const brep::Surface& sf) {
-  json j;
-  j["kind"] = static_cast<int>(sf.kind);
-  j["frame"] = UcsFrameToJson(sf.frame);
-  j["r"] = sf.radius;
-  j["r2"] = sf.radius2;
-  j["h"] = sf.height;
-  if (sf.inward)
-    j["inward"] = true;
-  return j;
-}
-
-bool BrepSurfaceFromJson(const json& j, brep::Surface* out) {
-  if (!j.is_object() || !j.contains("kind") || !j.contains("frame"))
-    return false;
-  const int k = j["kind"].get<int>();
-  if (k < static_cast<int>(brep::SurfaceKind::Plane) || k > static_cast<int>(brep::SurfaceKind::Torus))
-    return false;
-  out->kind = static_cast<brep::SurfaceKind>(k);
-  if (!UcsFrameFromJson(j["frame"], &out->frame))
-    return false;
-  out->radius = j.value("r", 0.0);
-  out->radius2 = j.value("r2", 0.0);
-  out->height = j.value("h", 0.0);
-  out->inward = j.value("inward", false);
-  return std::isfinite(out->radius) && std::isfinite(out->radius2) && std::isfinite(out->height);
-}
-
-bool ReadVec3(const json& j, ray3d::Vec3* out) {
-  if (!j.is_array() || j.size() != 3)
-    return false;
-  for (const auto& c : j)
-    if (!c.is_number())
-      return false;
-  out->x = j[0].get<double>();
-  out->y = j[1].get<double>();
-  out->z = j[2].get<double>();
-  return std::isfinite(out->x) && std::isfinite(out->y) && std::isfinite(out->z);
-}
-
-
-json SolidToJson(const brep::Solid& s) {
-  json o;
-
-  json verts = json::array();
-  for (const brep::Vertex& v : s.vertices)
-    verts.push_back(json::array({v.p.x, v.p.y, v.p.z}));
-  o["vertices"] = std::move(verts);
-
-  json edges = json::array();
-  for (const brep::Edge& e : s.edges) {
-    json je;
-    je["kind"] = static_cast<int>(e.kind);
-    je["v0"] = e.v0;
-    je["v1"] = e.v1;
-    if (e.kind == brep::CurveKind::Arc || e.kind == brep::CurveKind::Ellipse) {
-      je["frame"] = UcsFrameToJson(e.frame);
-      je["r"] = e.radius;
-      je["sweep"] = e.sweep;
-      if (e.kind == brep::CurveKind::Ellipse)
-        je["r2"] = e.radius2;  // REQ-314 B2b-1 — bumps kGsFormatVersion
-    } else if (e.kind == brep::CurveKind::Intersection) {
-      // REQ-314 B2b-2 — bumps kGsFormatVersion 2 -> 3 (a v2 reader would mis-read this edge).
-      je["witness"] = json::array({e.frame.origin.x, e.frame.origin.y, e.frame.origin.z});
-      json surfs = json::array();
-      for (const brep::Surface& sf : e.isectSurfaces)
-        surfs.push_back(BrepSurfaceToJson(sf));
-      je["surfaces"] = std::move(surfs);
-    }
-    edges.push_back(std::move(je));
-  }
-  o["edges"] = std::move(edges);
-
-  json faces = json::array();
-  for (const brep::Face& f : s.faces) {
-    json jf;
-    json sf;
-    sf["kind"] = static_cast<int>(f.surface.kind);
-    sf["frame"] = UcsFrameToJson(f.surface.frame);
-    sf["r"] = f.surface.radius;
-    sf["r2"] = f.surface.radius2;
-    sf["h"] = f.surface.height;
-    if (f.surface.inward)  // REQ-314 B2a — additive, tolerant key, no kGsFormatVersion bump
-      sf["inward"] = true;
-    jf["surface"] = std::move(sf);
-    jf["u"] = json::array({f.uStart, f.uEnd});
-    jf["v"] = json::array({f.vStart, f.vEnd});
-    json loops = json::array();
-    for (const brep::Loop& lp : f.loops) {
-      json jl = json::array();
-      for (const brep::EdgeUse& u : lp.uses)
-        jl.push_back(json::array({u.edge, u.reversed ? 1 : 0}));
-      loops.push_back(std::move(jl));
-    }
-    jf["loops"] = std::move(loops);
-    faces.push_back(std::move(jf));
-  }
-  o["faces"] = std::move(faces);
-
-  json shells = json::array();
-  for (const brep::Shell& sh : s.shells)
-    shells.push_back(sh.faces);
-  o["shells"] = std::move(shells);
-
-  // The recipe rides along for the Properties panel and for future parametric regeneration. It is
-  // NEVER consulted to rebuild the geometry on load — see the section note above.
-  json rc;
-  rc["kind"] = static_cast<int>(s.recipe.kind);
-  rc["frame"] = UcsFrameToJson(s.recipe.frame);
-  rc["length"] = s.recipe.length;
-  rc["width"] = s.recipe.width;
-  rc["height"] = s.recipe.height;
-  rc["radius"] = s.recipe.radius;
-  rc["radius2"] = s.recipe.radius2;
-  rc["sides"] = s.recipe.sides;
-  o["recipe"] = std::move(rc);
-
-  return o;
-}
-
-/// Rebuild one solid. Returns false — writing nothing — on any structural problem, so a hand-edited
-/// or truncated file is refused with a reason rather than partly loaded (REQ-201). The caller
-/// validates the result afterwards; this only has to produce something well-formed enough to check.
-bool SolidFromJson(const json& o, brep::Solid* out) {
-  if (!o.is_object())
-    return false;
-
-  if (o.contains("vertices") && o["vertices"].is_array()) {
-    for (const auto& jv : o["vertices"]) {
-      brep::Vertex v;
-      if (!ReadVec3(jv, &v.p))
-        return false;
-      out->vertices.push_back(v);
-    }
-  }
-
-  if (o.contains("edges") && o["edges"].is_array()) {
-    for (const auto& je : o["edges"]) {
-      if (!je.is_object() || !je.contains("kind") || !je.contains("v0") || !je.contains("v1"))
-        return false;
-      brep::Edge e;
-      const int k = je["kind"].get<int>();
-      if (k != static_cast<int>(brep::CurveKind::Line) && k != static_cast<int>(brep::CurveKind::Arc) &&
-          k != static_cast<int>(brep::CurveKind::Ellipse) &&
-          k != static_cast<int>(brep::CurveKind::Intersection))
-        return false;
-      e.kind = static_cast<brep::CurveKind>(k);
-      e.v0 = je["v0"].get<int>();
-      e.v1 = je["v1"].get<int>();
-      if (e.kind == brep::CurveKind::Arc || e.kind == brep::CurveKind::Ellipse) {
-        if (!je.contains("frame") || !UcsFrameFromJson(je["frame"], &e.frame))
-          return false;
-        if (!je.contains("r") || !je.contains("sweep"))
-          return false;
-        e.radius = je["r"].get<double>();
-        e.sweep = je["sweep"].get<double>();
-        if (e.kind == brep::CurveKind::Ellipse) {
-          if (!je.contains("r2"))
-            return false;
-          e.radius2 = je["r2"].get<double>();
-        }
-      } else if (e.kind == brep::CurveKind::Intersection) {
-        if (!je.contains("witness") || !ReadVec3(je["witness"], &e.frame.origin))
-          return false;
-        if (!je.contains("surfaces") || !je["surfaces"].is_array() || je["surfaces"].size() != 2)
-          return false;
-        for (const auto& js : je["surfaces"]) {
-          brep::Surface sf;
-          if (!BrepSurfaceFromJson(js, &sf))
-            return false;
-          e.isectSurfaces.push_back(sf);
-        }
-      }
-      out->edges.push_back(e);
-    }
-  }
-
-  if (o.contains("faces") && o["faces"].is_array()) {
-    for (const auto& jf : o["faces"]) {
-      if (!jf.is_object() || !jf.contains("surface"))
-        return false;
-      brep::Face f;
-      const json& sf = jf["surface"];
-      if (!sf.is_object() || !sf.contains("kind") || !sf.contains("frame"))
-        return false;
-      const int sk = sf["kind"].get<int>();
-      if (sk < static_cast<int>(brep::SurfaceKind::Plane) || sk > static_cast<int>(brep::SurfaceKind::Torus))
-        return false;
-      f.surface.kind = static_cast<brep::SurfaceKind>(sk);
-      if (!UcsFrameFromJson(sf["frame"], &f.surface.frame))
-        return false;
-      f.surface.radius = sf.value("r", 0.0);
-      f.surface.radius2 = sf.value("r2", 0.0);
-      f.surface.inward = sf.value("inward", false);
-      f.surface.height = sf.value("h", 0.0);
-      if (jf.contains("u") && jf["u"].is_array() && jf["u"].size() == 2) {
-        f.uStart = jf["u"][0].get<double>();
-        f.uEnd = jf["u"][1].get<double>();
-      }
-      if (jf.contains("v") && jf["v"].is_array() && jf["v"].size() == 2) {
-        f.vStart = jf["v"][0].get<double>();
-        f.vEnd = jf["v"][1].get<double>();
-      }
-      if (jf.contains("loops") && jf["loops"].is_array()) {
-        for (const auto& jl : jf["loops"]) {
-          if (!jl.is_array())
-            return false;
-          brep::Loop lp;
-          for (const auto& ju : jl) {
-            if (!ju.is_array() || ju.size() != 2)
-              return false;
-            brep::EdgeUse u;
-            u.edge = ju[0].get<int>();
-            u.reversed = ju[1].get<int>() != 0;
-            lp.uses.push_back(u);
-          }
-          f.loops.push_back(std::move(lp));
-        }
-      }
-      out->faces.push_back(std::move(f));
-    }
-  }
-
-  if (o.contains("shells") && o["shells"].is_array()) {
-    for (const auto& js : o["shells"]) {
-      if (!js.is_array())
-        return false;
-      brep::Shell sh;
-      for (const auto& fi : js)
-        sh.faces.push_back(fi.get<int>());
-      out->shells.push_back(std::move(sh));
-    }
-  }
-
-  if (o.contains("recipe") && o["recipe"].is_object()) {
-    const json& rc = o["recipe"];
-    const int rk = rc.value("kind", 0);
-    if (rk >= static_cast<int>(brep::PrimitiveKind::None) && rk <= static_cast<int>(brep::PrimitiveKind::Torus))
-      out->recipe.kind = static_cast<brep::PrimitiveKind>(rk);
-    if (rc.contains("frame"))
-      (void)UcsFrameFromJson(rc["frame"], &out->recipe.frame);  // cosmetic; never rebuilds geometry
-    out->recipe.length = rc.value("length", 0.0);
-    out->recipe.width = rc.value("width", 0.0);
-    out->recipe.height = rc.value("height", 0.0);
-    out->recipe.radius = rc.value("radius", 0.0);
-    out->recipe.radius2 = rc.value("radius2", 0.0);
-    out->recipe.sides = rc.value("sides", 0);
-  }
-  return true;
-}
+// The solid `.gs` encoding lives in BrepJson.hpp (namespace `gsio`) so it is linkable without the
+// command layer this file drags in. `gsio::SolidToJson` / `gsio::SolidFromJson` are used below.
 
 json BuildRoot(const AppCommandState& st) {
   json root;
@@ -1494,7 +1247,7 @@ json BuildRoot(const AppCommandState& st) {
     for (const CadSolidPtr& sp : st.cadSolids) {
       if (!sp)
         continue;
-      solids.push_back(SolidToJson(*sp));
+      solids.push_back(gsio::SolidToJson(*sp));
     }
     doc["solids"] = std::move(solids);
     json solidAttrs = json::array();
@@ -2666,7 +2419,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& el : doc["solids"]) {
       ++solidIdx;
       brep::Solid s;
-      if (!SolidFromJson(el, &s)) {
+      if (!gsio::SolidFromJson(el, &s)) {
         log.push_back("Solid " + std::to_string(solidIdx) + " skipped — the stored topology is malformed.");
         continue;
       }

@@ -16,9 +16,17 @@ bool MigrateV1ToV2(nlohmann::json& /*doc*/, std::string& /*err*/) { return true;
 // refuses a drawing with one by name rather than mis-reading the edge as an arc.
 bool MigrateV2ToV3(nlohmann::json& /*doc*/, std::string& /*err*/) { return true; }
 
+// v3 -> v4 (REQ-315 / ADR-048, D-2026-09-03-b): a `brep` solid face may now carry a
+// `SurfaceKind::Nurbs` freeform surface — the patch a loft (and later a sweep) raises over its
+// profiles. A v3 document has no such face (loft did not exist), so carrying it forward is a pure
+// relabel and the resave is byte-identical. The bump exists so an older GoSurvey refuses a drawing
+// with a NURBS face by name rather than mis-reading the surface as a plane.
+bool MigrateV3ToV4(nlohmann::json& /*doc*/, std::string& /*err*/) { return true; }
+
 const GsMigrationStep kSteps[] = {
     {1, "solids may carry elliptical intersection edges (B2b-1)", &MigrateV1ToV2},
     {2, "solids may carry procedural intersection-curve edges (B2b-2)", &MigrateV2ToV3},
+    {3, "solids may carry freeform NURBS surface faces (REQ-315 loft)", &MigrateV3ToV4},
 };
 
 }  // namespace

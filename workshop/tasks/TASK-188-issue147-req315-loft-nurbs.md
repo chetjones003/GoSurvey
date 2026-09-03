@@ -61,8 +61,20 @@ Boolean used it.
 
 ## Status
 
-**Slice A1 implemented.** Build green, `ctest` 1037/1037. Slices A2 and B to follow as their own
-PRs.
+**Slice A1 implemented** (PR #244). **Slice A2 implemented** (branch
+`feat/req315-loft-nurbs-kernel`): `SurfaceKind::Nurbs` + the `Patch` payload on `Surface`;
+`brep::Loft(std::vector<Profile>, ...)` — Extrude's topology generalised to N profiles, one NURBS
+side patch per corresponding edge pair (`RuledLinear` / `ArcRibbon`) plus two planar caps;
+`IntegrateFace` routes a `Nurbs` face through nested `GradedGaussIntegrate` (area = ∫∫|Su×Sv|,
+vol term = ∫∫(S−q)·(Su×Sv)); `Validate` (patch validity + closure residual relaxed to `1e-5·scale³`
+like the procedural-edge case), `Tessellate` (uniform param grid, analytic normals),
+`TessellateIsolines` (interior param lines), `ClosestPointOnSurface` (grid + Gauss–Newton),
+`Translate` (moves the control net), `ComputeBounds` (control-net hull). `.gs`: the encoding moved to
+a new pure header `src/io/BrepJson.hpp` (`namespace gsio`, linkable without the command layer); a
+`Nurbs` face writes a `patch` key; `kGsFormatVersion` **3 → 4** with a no-op v3→v4 migration step and
+the CI check unchanged (it reads the constant). Build green, `ctest` **1049/1049** (+12: 8 loft cases
+in `BrepTests`, 4 in the new `BrepJsonTests`, plus a migration-chain test). Slice B (the `LOFT`
+command + viewport) to follow as its own PR.
 
 ## Verification
 
