@@ -24901,7 +24901,9 @@ bool HandleSweepTextInput(const std::string& lineIn, AppCommandState& st,
     rest = StringUtil::trimCopy(line.substr(sp + 1));
   }
   std::string low = StringUtil::toLowerAsciiCopy(tok);
-  if (rest.empty() && low.size() > 1 && low[0] == 't') {  // "T45" — letter then number, no space
+  if (rest.empty() && low.size() > 1 && low[0] == 't' &&
+      (std::isdigit(static_cast<unsigned char>(low[1])) || low[1] == '-' || low[1] == '+' ||
+       low[1] == '.')) {  // "T45" — the letter then the number, no space
     rest = tok.substr(1);
     low = "t";
   }
