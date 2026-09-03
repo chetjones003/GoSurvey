@@ -22,17 +22,22 @@
 # matching AutoCAD's own circle-stretch rule exactly.
 #
 # T3 (Ellipse, center captured): E1 center (700,0), major axis vector (20,0) [endpoint pick
-# (720,0)], ratio 0.5. Ellipse candidacy is a plain bounding-box overlap test (looser than Circle's
-# curve test), so a box entirely inside its rough bounds still selects it. Box (695,-5)-(705,5)
-# contains the center. Displacement (0,0)->(10,-10), dx=10 dy=-10. Expected: E1 center ->
-# (710,-10); major axis vector and ratio unchanged (ellipses have no partial-stretch concept, same
-# as Circle).
+# (720,0)], ratio 0.5 -> semi-major 20, semi-minor 10. Ellipse candidacy is curve-precise, exactly
+# like Circle's above: the box must actually touch the ellipse, not merely overlap its bounding
+# box. (It was a plain bounding-box overlap until 2026-09-03 — see the pickbox-curve-fence-is-the-
+# curve transcript for the user report that ended that, and for why this box grew.) Box
+# (695,-15)-(705,15) contains the center (0 from it) and reaches y=+/-15, past the curve's +/-9.92
+# over that x range -- a genuine curve-straddling box. Displacement (0,0)->(10,-10), dx=10 dy=-10.
+# Expected: E1 center -> (710,-10); major axis vector and ratio unchanged (ellipses have no
+# partial-stretch concept, same as Circle).
 #
 # T4 (Arc, TRUE partial stretch — one endpoint in-box): A1 is a quarter-circle arc, center (900,0)
 # r=10, start angle 0 (point (910,0)), sweep +90deg (point (900,10)), built via 3-point entry
-# (910,0) -> (907.0710678,7.0710678) [45deg, on the arc] -> (900,10). Arc candidacy (like Ellipse's)
-# is a bounding-box overlap test, not curve-precise. Box (905,-5)-(915,5) contains ONLY the start
-# point (910,0); the end point (900,10) is outside (y=10 > 5). Displacement (0,0)->(5,0), dx=5 dy=0
+# (910,0) -> (907.0710678,7.0710678) [45deg, on the arc] -> (900,10). Arc candidacy (like Circle's
+# and Ellipse's) is curve-precise. Box (905,-5)-(915,5) contains the arc's start point (910,0), so
+# the box touches the curve AND captures exactly one definition point; the end point (900,10) is
+# outside it (y=10 > 5), which is what makes this a PARTIAL stretch rather than a translation.
+# Displacement (0,0)->(5,0), dx=5 dy=0
 # -- the SAME numbers as tests/StretchGeomTests.cpp's own "quarter circle, one endpoint moved" case,
 # just offset by this arc's (900,0) center (the closed form is translation-invariant, so the
 # expected new center/radius here is that unit test's own (2.5,-2.5)/sqrt(162.5), offset by
@@ -100,7 +105,7 @@ ESC
 
 # --- T3: ellipse, center captured ---
 CMD STRETCH
-BOX 695 -5 705 5
+BOX 695 -15 705 15
 CLICK 0 0
 CLICK 10 -10
 ESC

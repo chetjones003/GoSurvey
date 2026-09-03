@@ -7260,64 +7260,33 @@ bool SelectedEntityEqual(const SelectedEntity& a, const SelectedEntity& b) {
   return a.type == b.type && a.index == b.index;
 }
 
-void ArcRoughBounds(const CadArc& a, float* outMnX, float* outMxX, float* outMnY, float* outMxY, bool* any) {
-  const int n = std::max(8, static_cast<int>(std::fabs(static_cast<double>(a.sweepRad)) / (3.14159265 / 16.0)) + 1);
-  // A tilted arc (REQ-312) does not pass through the points its XY parametrisation names, so bounds
-  // taken from those are not bounds at all -- they can be SMALLER than the arc, which crops it out
-  // of a window selection and out of ZOOM EXTENTS.
-  const bool flat = IsFlatNormal(a.nx, a.ny, a.nz);
-  const ucs::Ucs plane = flat ? ucs::Ucs{} : CurvePlane(a);
-  for (int i = 0; i <= n; ++i) {
-    const float u = static_cast<float>(i) / static_cast<float>(n);
-    const float t = a.startRad + a.sweepRad * u;
-    float x = a.cx + a.r * std::cos(t);
-    float y = a.cy + a.r * std::sin(t);
-    if (!flat) {
-      const ray3d::Vec3 p = CurvePointAt(plane, static_cast<double>(a.r), static_cast<double>(t));
-      x = static_cast<float>(p.x);
-      y = static_cast<float>(p.y);
-    }
-    if (!*any) {
-      *outMnX = *outMxX = x;
-      *outMnY = *outMxY = y;
-      *any = true;
-    } else {
-      *outMnX = std::min(*outMnX, x);
-      *outMxX = std::max(*outMxX, x);
-      *outMnY = std::min(*outMnY, y);
-      *outMxY = std::max(*outMxY, y);
-    }
-  }
-}
-
-void EllipseRoughBounds(const CadEllipse& e, float* outMnX, float* outMxX, float* outMnY, float* outMxY,
-                        bool* any) {
-  const float ma = std::hypot(e.majVx, e.majVy);
-  if (ma < 1e-8f)
+/// \p segments + 1 world points around an ellipse, the first point repeated last (a closed chain).
+///
+/// The counterpart of \ref SampleCurveWorld for the one authored curve that is not circular. An
+/// ellipse is always parallel to XY (\ref CadEllipse::z), so there is no plane frame to build — the
+/// major-axis vector supplies the frame directly.
+///
+/// Replaced `ArcRoughBounds` / `EllipseRoughBounds`, which existed only to give the selection fence
+/// a box to test a curve against. Both are gone: a fence tests the CURVE now, and the extents walk
+/// (`ComputeWorldExtents`) always had its own sampling.
+void SampleEllipseWorld(std::vector<ray3d::Vec3>& out, const CadEllipse& e, int segments) {
+  out.clear();
+  const double ma = std::hypot(static_cast<double>(e.majVx), static_cast<double>(e.majVy));
+  if (ma < 1e-8 || segments < 1)
     return;
-  const float ux = e.majVx / ma;
-  const float uy = e.majVy / ma;
-  const float px = -uy;
-  const float py = ux;
-  const float mb = ma * e.ratio;
-  constexpr int n = 48;
-  constexpr float twopi = 6.28318530718f;
-  for (int i = 0; i <= n; ++i) {
-    const float ang = twopi * static_cast<float>(i) / static_cast<float>(n);
-    const float c = std::cos(ang);
-    const float s = std::sin(ang);
-    const float x = e.cx + ux * (ma * c) + px * (mb * s);
-    const float y = e.cy + uy * (ma * c) + py * (mb * s);
-    if (!*any) {
-      *outMnX = *outMxX = x;
-      *outMnY = *outMxY = y;
-      *any = true;
-    } else {
-      *outMnX = std::min(*outMnX, x);
-      *outMxX = std::max(*outMxX, x);
-      *outMnY = std::min(*outMnY, y);
-      *outMxY = std::max(*outMxY, y);
-    }
+  const double ux = static_cast<double>(e.majVx) / ma;
+  const double uy = static_cast<double>(e.majVy) / ma;
+  const double mb = ma * static_cast<double>(e.ratio);
+  constexpr double kTwoPi = 6.28318530717958647692;
+  out.reserve(static_cast<size_t>(segments) + 1u);
+  for (int i = 0; i <= segments; ++i) {
+    const double ang = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
+    const double c = std::cos(ang);
+    const double s = std::sin(ang);
+    // The perpendicular is (-uy, ux) — the minor axis, in the ellipse's own plane.
+    out.push_back(ray3d::Vec3{static_cast<double>(e.cx) + ux * (ma * c) - uy * (mb * s),
+                              static_cast<double>(e.cy) + uy * (ma * c) + ux * (mb * s),
+                              static_cast<double>(e.z)});
   }
 }
 
@@ -7405,8 +7374,12 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   //
   // Projecting an entity's world bounding box gives a conservative screen box (the bound of the
   // projection, not the projection of the bound), so crossing mode can occasionally include an
-  // object whose box grazes the rect. Lines — by far the most-selected entity — are projected
-  // endpoint-wise and stay exact. Recorded as a limitation rather than hidden.
+  // object whose box grazes the rect. Recorded as a limitation rather than hidden — but it is now
+  // a limitation of the BOX-SHAPED entities only (annotations, tables, block references, PDF
+  // underlays), whose footprint really is a rectangle. Everything the user draws as an outline is
+  // tested against its own geometry: lines endpoint-wise, polylines per vertex and per bulge arc,
+  // and circles / arcs / ellipses along the curve itself (2026-09-03 — a curve inside a box is a
+  // bad approximation in both directions, and it was selecting circles a fence never touched).
   const bool proj = cam != nullptr && vpW > 0.f && vpH > 0.f;
   auto SP = [&](float wx, float wy, float wz, float* sx, float* sy) {
     if (!proj) {
@@ -7459,8 +7432,52 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
     mxY += expand;
   }
 
+  // A CURVE is tested against the curve it draws, tessellated and projected per vertex — never
+  // against a box drawn round it (user report with screenshots, 2026-09-03). A box is wrong in two
+  // directions at once: a circle's enclosing world square reaches sqrt(2)*r at its corners, ~41%
+  // past the rim, AND the box is solid where the curve is hollow, so a fence in the empty middle
+  // hit as well. Polylines with arc segments already test the arc they draw (REQ-316 / ADR-047,
+  // ChainHitsRect) — this is the same rule for the entity types that draw a curve on their own.
+  //
+  // \p pts are world points along the curve in order; a closed curve repeats its first point last,
+  // which is what SampleCurveWorld over a full sweep produces. Window mode wants every vertex
+  // inside the rect, crossing mode any SEGMENT touching it — the same two questions the line loop
+  // below asks, so the rule cannot drift between an entity that curves and one that does not.
+  auto CurveHitsRect = [&](const std::vector<ray3d::Vec3>& pts) -> bool {
+    if (pts.size() < 2)
+      return false;
+    float px = 0.f;
+    float py = 0.f;
+    SP(static_cast<float>(pts[0].x), static_cast<float>(pts[0].y), static_cast<float>(pts[0].z), &px, &py);
+    if (windowMode && !PointInsideClosedRect(px, py, mnX, mxX, mnY, mxY))
+      return false;
+    for (size_t i = 1; i < pts.size(); ++i) {
+      float qx = 0.f;
+      float qy = 0.f;
+      SP(static_cast<float>(pts[i].x), static_cast<float>(pts[i].y), static_cast<float>(pts[i].z), &qx, &qy);
+      if (windowMode) {
+        if (!PointInsideClosedRect(qx, qy, mnX, mxX, mnY, mxY))
+          return false;
+      } else if (SegIntersectsAABB(px, py, qx, qy, mnX, mxX, mnY, mxY)) {
+        return true;
+      }
+      px = qx;
+      py = qy;
+    }
+    return windowMode;
+  };
+  // Segments across a sweep, matching ChainHitsRect's choice for a polyline bulge (pi/24 steps, so
+  // a full circle is 48). The chord then departs the true curve by r*(1-cos(3.75 deg)) = 0.0021*r,
+  // under a pixel for any circle that fits on screen — small beside the pick aperture, and small in
+  // the direction that matters: it is the tessellation the renderer draws that the user aims at.
+  auto CurveSegmentCount = [](double sweepRad) {
+    constexpr double kPi = 3.14159265358979323846;
+    return std::clamp(static_cast<int>(std::ceil(std::fabs(sweepRad) / (kPi / 24.0))), 8, 96);
+  };
+
   std::vector<SelectedEntity> hits;
   std::vector<int> surveyHits;
+  std::vector<ray3d::Vec3> curvePts;  // reused by the circle / arc / ellipse walks below
   const auto& L = st.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
@@ -7491,12 +7508,24 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       const float r = C[ci + 3];
       bool hit = false;
       if (proj) {
-        // A circle projects to an ellipse; test its bounding box (conservative, see the note above).
-        float b0x, b0y, b1x, b1y;
-        SPBox(cx - r, cy - r, cx + r, cy + r, &b0x, &b0y, &b1x, &b1y);
-        hit = windowMode ? (b0x >= mnX && b1x <= mxX && b0y >= mnY && b1y <= mxY)
-                         : !(b1x < mnX || b0x > mxX || b1y < mnY || b0y > mxY);
+        // Orbited: a circle projects to an ELLIPSE, so there is no analytic rim test to reach for —
+        // walk the rim in the circle's own plane (REQ-312) and project each vertex. This replaced
+        // the bounding box of the enclosing world square, which is what selected a circle from a
+        // fence that never touched it.
+        float cnx = 0.f;
+        float cny = 0.f;
+        float cnz = 1.f;
+        CircleNormalAt(st.userCircleNormals, ci / 4, &cnx, &cny, &cnz);
+        constexpr double kTwoPi = 6.28318530717958647692;
+        SampleCurveWorld(curvePts,
+                         CurvePlane(static_cast<double>(cx), static_cast<double>(cy),
+                                    static_cast<double>(C[ci + 2]), static_cast<double>(cnx),
+                                    static_cast<double>(cny), static_cast<double>(cnz)),
+                         static_cast<double>(r), 0.0, kTwoPi, CurveSegmentCount(kTwoPi));
+        hit = CurveHitsRect(curvePts);
       } else if (windowMode)
+        // Plan view keeps its EXACT analytic tests. A tessellation would be a step backwards where
+        // a closed form is available, and REQ-058 holds the plan path unchanged on purpose.
         hit = CircleFullyInsideRect(cx, cy, r, mnX, mxX, mnY, mxY);
       else
         hit = CircleIntersectsAABB(cx, cy, r, mnX, mxX, mnY, mxY);
@@ -7561,21 +7590,15 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
     }
   }
   for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
-    float amnX = 0.f;
-    float amxX = 0.f;
-    float amnY = 0.f;
-    float amxY = 0.f;
-    bool any = false;
-    ArcRoughBounds(st.userArcs[ai], &amnX, &amxX, &amnY, &amxY, &any);
-    if (!any)
+    // The arc it draws, in its own plane (REQ-312), in every view. An arc had no analytic fence
+    // test to lose: it was tested against its bounding box in PLAN view as well, and a box round
+    // a semicircle is mostly the empty space under it.
+    const CadArc& a = st.userArcs[ai];
+    if (!(a.r > 1e-12f))
       continue;
-    SPBox(amnX, amnY, amxX, amxY, &amnX, &amnY, &amxX, &amxY);  // screen space when orbited
-    bool hit = false;
-    if (windowMode)
-      hit = amnX >= mnX && amxX <= mxX && amnY >= mnY && amxY <= mxY;
-    else
-      hit = !(amxX < mnX || amnX > mxX || amxY < mnY || amnY > mxY);
-    if (hit) {
+    SampleCurveWorld(curvePts, CurvePlane(a), static_cast<double>(a.r), static_cast<double>(a.startRad),
+                     static_cast<double>(a.sweepRad), CurveSegmentCount(static_cast<double>(a.sweepRad)));
+    if (CurveHitsRect(curvePts)) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Arc;
       e.index = static_cast<int>(ai);
@@ -7583,21 +7606,11 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
     }
   }
   for (size_t ei = 0; ei < st.userEllipses.size(); ++ei) {
-    float emnX = 0.f;
-    float emxX = 0.f;
-    float emnY = 0.f;
-    float emxY = 0.f;
-    bool any = false;
-    EllipseRoughBounds(st.userEllipses[ei], &emnX, &emxX, &emnY, &emxY, &any);
-    if (!any)
-      continue;
-    SPBox(emnX, emnY, emxX, emxY, &emnX, &emnY, &emxX, &emxY);  // screen space when orbited
-    bool hit = false;
-    if (windowMode)
-      hit = emnX >= mnX && emxX <= mxX && emnY >= mnY && emxY <= mxY;
-    else
-      hit = !(emxX < mnX || emnX > mxX || emxY < mnY || emnY > mxY);
-    if (hit) {
+    // The ellipse it draws, in every view — same story as the arc above. Its bounding box was the
+    // worst offender of the three: an ellipse fills pi/4 of its box and nothing of its middle.
+    constexpr double kTwoPi = 6.28318530717958647692;
+    SampleEllipseWorld(curvePts, st.userEllipses[ei], CurveSegmentCount(kTwoPi));
+    if (CurveHitsRect(curvePts)) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Ellipse;
       e.index = static_cast<int>(ei);
@@ -17451,8 +17464,9 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     if (dr <= 1e-12)
       continue;
     const int n = std::max(8, static_cast<int>(std::fabs(static_cast<double>(a.sweepRad)) / (3.14159265 / 16.0)) + 1);
-    // Sampled in the arc's own plane (REQ-312); see ArcRoughBounds for why the XY walk understates
-    // a tilted arc rather than merely approximating it.
+    // Sampled in the arc's own plane (REQ-312). A tilted arc does not pass through the points its
+    // XY parametrisation names, so bounds taken from those are not bounds at all — they can come
+    // out SMALLER than the arc, cropping it out of ZOOM EXTENTS rather than merely approximating it.
     const bool arcFlat = IsFlatNormal(a.nx, a.ny, a.nz);
     const ucs::Ucs arcPlane = arcFlat ? ucs::Ucs{} : CurvePlane(a);
     for (int i = 0; i <= n; ++i) {
