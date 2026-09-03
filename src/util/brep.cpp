@@ -1113,7 +1113,7 @@ const char* ProblemText(Problem p) {
     return "A profile arc's endpoints are not the same distance from its centre.";
   case Problem::ProfileSelfIntersects: return "The profile crosses itself.";
   case Problem::ProfileArcReflex:
-    return "A profile arc curves inward; this release can extrude outward-curving arcs only.";
+    return "A profile arc curves inward; LOFT and SWEEP build outward-curving arcs only.";
   case Problem::NonPositiveAngle: return "The revolve angle must be non-zero and no more than a full turn.";
   case Problem::RevolveAxisDegenerate: return "The revolve axis direction is zero or not a finite number.";
   case Problem::RevolveAxisNotInPlane: return "The revolve axis must lie in the profile's plane.";
@@ -2064,10 +2064,13 @@ bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWh
       E[static_cast<std::size_t>(k)].sweep = -src.sweep * sgn;
     }
   }
-  for (const ProfileEdge& pe : E) {
-    if (pe.arc && !(pe.sweep > 1e-12))
-      return Fail(Problem::ProfileArcReflex, outWhy);
-  }
+  // A REFLEX arc — one curving into the loop rather than out of it — used to be refused here, by a
+  // `Problem::ProfileArcReflex` that no longer exists. It is built now: after the walk above, the
+  // loop runs CCW about `up`, so an arc whose sweep is still positive has its centre on the INTERIOR
+  // side and sweeps an ordinary outward-facing cylinder, while a negative one has its centre outside
+  // the loop and sweeps a face whose material is on the far side from its own axis. That is what
+  // `Surface::inward` was added for in B2a, and this is ADR-046 (d)'s own "separate feature, now
+  // unblocked" being taken up. See the side-face loop below, which is the only place that changes.
 
   Solid s;
   std::vector<int> baseV(static_cast<std::size_t>(n));
@@ -2137,8 +2140,13 @@ bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWh
       f.surface.height = dist;
       const Vec3 toStart = ray3d::Sub(W[static_cast<std::size_t>(k)], pe.centre);
       const double u0 = std::atan2(ray3d::Dot(toStart, cyl.yAxis), ray3d::Dot(toStart, cyl.xAxis));
-      f.uStart = u0;
-      f.uEnd = u0 + pe.sweep;
+      // The span is stored increasing and the ORIENTATION is carried by `inward`, which is the
+      // convention the Boolean bore walls already use — a negative `uEnd - uStart` would make the
+      // face's own area come out negative instead, and the area is a magnitude.
+      const double u1 = u0 + pe.sweep;
+      f.surface.inward = pe.sweep < 0.0;
+      f.uStart = std::min(u0, u1);
+      f.uEnd = std::max(u0, u1);
       Loop lp;
       lp.uses = std::move(uses);
       f.loops.push_back(std::move(lp));

@@ -2043,6 +2043,17 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   correctly *subtracts* the void it bounds; `ClosestPointOnSurface`, `Validate` and `.gs` are
   unaffected (`.gs` gains an additive tolerant key — no `kGsFormatVersion` bump). `ProfileArcReflex`
   stays for now; a reflex profile arc in an extrude is a separate feature, now unblocked.
+  **Taken up 2026-09-03 (D-2026-09-03-e): `Extrude` no longer raises `Problem::ProfileArcReflex` and builds
+  a reflex arc.** It needed nothing but the flag above. After the builder's walk the loop runs CCW
+  about the extrusion direction, so an arc whose sweep is still positive has its centre on the
+  interior side and sweeps an ordinary outward cylinder, while a negative one has its centre outside
+  and sweeps precisely the inward face B2a already defined. The span is stored increasing and the
+  orientation carried by `inward`, which is the convention the bore walls set — a negative
+  `uEnd - uStart` would make the face's own AREA come out negative, and an area is a magnitude. Both
+  halves are load-bearing and measured: with the flag left false, or the span left decreasing,
+  `Validate`'s geometric closure probe rejects the solid outright and `Extrude` returns false. The
+  reason no other code changed is that (d) above had already done the work — this is the caller that
+  collects it.
   (e) **`Validate` proves manifoldness, orientability and closure — including GEOMETRIC closure.**
   Beyond the index/ring/tally checks, the volume integral is taken about two different reference
   points and required to agree. On a closed surface it must (the closed integral of `n dA` vanishes);

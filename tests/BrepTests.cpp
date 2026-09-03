@@ -1332,19 +1332,6 @@ TEST_CASE("Extrude refuses bad input by name and stores nothing", "[brep][req314
     REQUIRE_FALSE(brep::Extrude(PolyProfile(World(), {{0, 0}, {4, 0}, {0, 3}, {4, 3}}), 2.0, &s, &why));
     REQUIRE(why == Problem::ProfileSelfIntersects);
   }
-  SECTION("an inward-curving (reflex) arc") {
-    // A rectangle whose top edge is an arc bulging DOWN into the rectangle. The face it would sweep
-    // has its outward normal pointing toward the cylinder axis, which Surface cannot express.
-    brep::Profile pr;
-    pr.plane = World();
-    pr.vertices = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 6, 0}, Vec3{0, 6, 0}};
-    pr.edges.assign(4, brep::ProfileEdge{});
-    pr.edges[2].arc = true;                 // the top edge, (10,6) -> (0,6)
-    pr.edges[2].centre = Vec3{5, 6, 0};
-    pr.edges[2].sweep = -kPi;               // bulges down through (5,1), into the rectangle
-    REQUIRE_FALSE(brep::Extrude(pr, 3.0, &s, &why));
-    REQUIRE(why == Problem::ProfileArcReflex);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3144,4 +3131,157 @@ TEST_CASE("Sweep along collinear polyline segments equals the single-segment swe
   REQUIRE(brep::ComputeMassProperties(two).volume ==
           Approx(brep::ComputeMassProperties(one).volume).epsilon(1e-9));
   REQUIRE(brep::ComputeMassProperties(two).volume == Approx(4.0 * 4.0 * 12.0).epsilon(1e-7));
+}
+
+// ---------------------------------------------------------------------------------------------
+// REQ-314 increment 1, amended: a profile arc may curve INTO its loop.
+//
+// ADR-046 (d) recorded this as "a separate feature, now unblocked" the moment B2a gave `Surface`
+// an `inward` flag for the wall of a Boolean bore. A reflex profile arc needs exactly that face and
+// nothing else: after the builder's walk the loop runs CCW about the extrusion direction, so an arc
+// with a positive sweep has its centre on the INTERIOR side and sweeps an ordinary outward cylinder,
+// while a negative one has its centre outside and sweeps a face whose material is on the far side
+// from its own axis.
+//
+// The figures are what make this a test rather than a demonstration: an annular sector has a volume
+// and a surface area that can be written down, and both are wrong in a different way if the inner
+// face's orientation is mishandled — the volume by twice the void, the area not at all.
+// ---------------------------------------------------------------------------------------------
+namespace {
+
+/// A quarter annulus between \p rIn and \p rOut, in the first quadrant of \p plane.
+brep::Profile QuarterAnnulus(const ucs::Ucs& plane, double rOut, double rIn) {
+  brep::Profile pr;
+  pr.plane = plane;
+  pr.vertices = {ucs::UcsToWorld(plane, Vec3{rOut, 0.0, 0.0}),
+                 ucs::UcsToWorld(plane, Vec3{0.0, rOut, 0.0}),
+                 ucs::UcsToWorld(plane, Vec3{0.0, rIn, 0.0}),
+                 ucs::UcsToWorld(plane, Vec3{rIn, 0.0, 0.0})};
+  pr.edges.resize(4);
+  pr.edges[0] = {true, plane.origin, kPi * 0.5};   // outer rim, curving away from the material
+  pr.edges[1] = {false, Vec3{}, 0.0};              // the far end
+  pr.edges[2] = {true, plane.origin, -kPi * 0.5};  // inner rim, curving INTO the material
+  pr.edges[3] = {false, Vec3{}, 0.0};              // the near end
+  return pr;
+}
+
+} // namespace
+
+TEST_CASE("Extrude builds a profile arc that curves inward", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double rOut = 11.0;
+  const double rIn = 9.0;
+  const double h = 5.0;
+  // A quarter of an annulus: (pi/4)(11^2 - 9^2) = 10pi of plan, 5 tall.
+  const double wantVolume = 0.25 * kPi * (rOut * rOut - rIn * rIn) * h;
+  // Outer and inner walls, two flat ends, and the two caps.
+  const double wantArea = kPi * 0.5 * rOut * h + kPi * 0.5 * rIn * h +
+                          2.0 * (rOut - rIn) * h + 2.0 * 0.25 * kPi * (rOut * rOut - rIn * rIn);
+
+  Solid s;
+  REQUIRE(brep::Extrude(QuarterAnnulus(World(), rOut, rIn), h, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(wantVolume).margin(1e-9));
+  REQUIRE(mp.surfaceArea == Approx(wantArea).margin(1e-9));
+
+  // Exactly one face looks inward: the concave wall. If the flag were set on both curved faces the
+  // volume would come out as the DIFFERENCE of the two sectors' negatives and still be positive, so
+  // this is asserted directly rather than inferred from the figures.
+  std::size_t inward = 0;
+  std::size_t cylinders = 0;
+  for (const brep::Face& f : s.faces) {
+    cylinders += f.surface.kind == brep::SurfaceKind::Cylinder ? 1u : 0u;
+    inward += f.surface.inward ? 1u : 0u;
+  }
+  REQUIRE(cylinders == 2);
+  REQUIRE(inward == 1);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.0005, &t, &why));
+  RequireWindingMatchesNormals(t);
+  RequireBoundsContain(brep::ComputeBounds(s), t);
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(0.005));
+  REQUIRE(TessellatedArea(t) == Approx(mp.surfaceArea).epsilon(0.005));
+}
+
+TEST_CASE("A reflex extrude is the same solid whichever way it is described", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double wantVolume = 0.25 * kPi * (11.0 * 11.0 - 9.0 * 9.0) * 5.0;
+
+  // The builder normalises the walk, so a profile given the other way round, or extruded downward,
+  // has to land on the same solid. That normalisation is where a reflex arc's sign could quietly be
+  // read against the wrong direction, which is why it is asserted rather than assumed.
+  brep::Profile fwd = QuarterAnnulus(World(), 11.0, 9.0);
+  brep::Profile rev;
+  rev.plane = fwd.plane;
+  const std::size_t n = fwd.vertices.size();
+  for (std::size_t i = 0; i < n; ++i) {
+    rev.vertices.push_back(fwd.vertices[n - 1 - i]);
+    brep::ProfileEdge e = fwd.edges[(2 * n - i - 2) % n];
+    e.sweep = -e.sweep;
+    rev.edges.push_back(e);
+  }
+
+  Solid a;
+  Solid b;
+  Solid down;
+  REQUIRE(brep::Extrude(fwd, 5.0, &a, &why));
+  REQUIRE(brep::Extrude(rev, 5.0, &b, &why));
+  REQUIRE(brep::Extrude(fwd, -5.0, &down, &why));
+  REQUIRE(brep::ComputeMassProperties(a).volume == Approx(wantVolume).margin(1e-9));
+  REQUIRE(brep::ComputeMassProperties(b).volume == Approx(wantVolume).margin(1e-9));
+  REQUIRE(brep::ComputeMassProperties(down).volume == Approx(wantVolume).margin(1e-9));
+  REQUIRE(brep::ComputeMassProperties(b).surfaceArea ==
+          Approx(brep::ComputeMassProperties(a).surfaceArea).margin(1e-9));
+
+  // Downward puts the same shape on the other side of the plane, and nowhere else.
+  const brep::Bounds bd = brep::ComputeBounds(down);
+  REQUIRE(bd.mn.z == Approx(-5.0).margin(1e-9));
+  REQUIRE(bd.mx.z == Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("A reflex extrude keeps its figures on a tilted frame at survey scale", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  REQUIRE(ucs::FromNormal(Vec3{3500000.0, 850000.0, 420.0},
+                          ray3d::Normalize(Vec3{0.3, -0.4, 0.866}), &plane));
+  Solid s;
+  REQUIRE(brep::Extrude(QuarterAnnulus(plane, 11.0, 9.0), 5.0, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(s).volume ==
+          Approx(0.25 * kPi * (11.0 * 11.0 - 9.0 * 9.0) * 5.0).epsilon(1e-9));
+}
+
+TEST_CASE("A reflex arc can bite a bay out of a rectangle", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  // The shape REQ-314 increment 1 used to name as the thing it could not build: a 10 x 6 rectangle
+  // whose top edge is a half-circle bulging DOWN into it. Kept as the case rather than replaced,
+  // because it is a deeper reflex than an annulus wall — the arc reaches most of the way across the
+  // shape, so a mishandled orientation cannot hide in a thin sliver.
+  brep::Profile pr;
+  pr.plane = World();
+  pr.vertices = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 6, 0}, Vec3{0, 6, 0}};
+  pr.edges.assign(4, brep::ProfileEdge{});
+  pr.edges[2].arc = true;                  // the top edge, (10,6) -> (0,6)
+  pr.edges[2].centre = Vec3{5, 6, 0};
+  pr.edges[2].sweep = -kPi;                // bulges down through (5,1), into the rectangle
+
+  Solid s;
+  REQUIRE(brep::Extrude(pr, 3.0, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  // 60 square feet of rectangle less a half-disc of radius 5, three feet tall.
+  const double plan = 60.0 - 0.5 * kPi * 25.0;
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.volume == Approx(plan * 3.0).margin(1e-9));
+  // Two caps, three straight walls totalling 22 feet of run, and a half-circle wall of 5pi.
+  REQUIRE(mp.surfaceArea == Approx(2.0 * plan + 22.0 * 3.0 + kPi * 5.0 * 3.0).margin(1e-9));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.0005, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(0.005));
 }

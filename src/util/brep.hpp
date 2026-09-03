@@ -255,9 +255,14 @@ enum class Problem {
   ProfilePointOffPlane,      ///< A profile vertex or arc centre that is not on the profile plane.
   ProfileArcRadiusMismatch,  ///< A profile arc whose two endpoints are not equidistant from its centre.
   ProfileSelfIntersects,     ///< A profile loop that crosses itself.
-  /// A profile arc that curves inward (a reflex bulge). The face it would sweep has its outward
-  /// normal pointing toward the cylinder axis, which \ref Surface has no way to express — there is
-  /// no "reversed" flag. Supported once the booleans force a general answer to inward-curving faces.
+
+  /// A profile arc that curves inward (a reflex bulge). The face it sweeps has its outward normal
+  /// pointing toward the cylinder axis, which needs `Surface::inward`.
+  ///
+  /// **Extrude no longer raises this** - REQ-314 as amended builds that face. LOFT and SWEEP still
+  /// do: neither has been taught to carry an inward wall through its own surface construction, so
+  /// they refuse by name rather than build a solid whose material is on the wrong side of a face
+  /// (REQ-201).
   ProfileArcReflex,
 
   // --- Revolve (REQ-314 increment 2). ---
