@@ -593,4 +593,26 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       seg(cmd.sliceP3, cmd.sliceP1);
     }
   }
+  // REQ-317 POLYSOLID. The wall the cursor is currently proposing, drawn from the SAME
+  // `CadBuildPolysolidFromCommand` the next click commits and Enter finishes — so what is on screen
+  // is the wall that will be created, not a separately-drawn approximation of it.
+  //
+  // Nothing is drawn while a corner is impossible: a bend too sharp for the width, or a curve too
+  // tight, makes the builder refuse, and an empty preview is the honest picture of "there is no wall
+  // there" — the message on the command line says which.
+  if (cmd.active == AppCommandState::Kind::Polysolid &&
+      cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitNextPoint) {
+    const ucs::Point2D cursor = ucs::WorldToPlane(
+        CadPolysolidFrameFor(cmd), ray3d::Vec3{curX, curY, CadCommitElevation(cmd)});
+    brep::Solid ghost;
+    brep::Problem why = brep::Problem::Ok;
+    if (CadBuildPolysolidFromCommand(cmd, &cursor, &ghost, &why)) {
+      std::vector<double> segs;
+      if (brep::TessellateEdges(ghost, kSolidChordToleranceFt, &segs, &why)) {
+        for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+          PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                               static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+      }
+    }
+  }
 }

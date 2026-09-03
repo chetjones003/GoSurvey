@@ -1435,6 +1435,11 @@ struct AppCommandState {
     /// UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046, GitHub #147): SUBTRACT prompts twice —
     /// solids to subtract from, then solids to subtract; UNION and INTERSECT prompt once.
     Boolean,
+    /// REQ-317 POLYSOLID: a wall swept along a picked path. Its OWN Kind, unlike the seven
+    /// primitives that share one - a polysolid is built from a PATH rather than from a fixed set of
+    /// named dimensions, so it has different state and a different state machine, and folding it
+    /// into `Solid` would mean a table with a variable-length entry no other row uses.
+    Polysolid,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1500,6 +1505,7 @@ struct AppCommandState {
     case Kind::Slice:            return "SLICE";
     case Kind::Loft:             return "LOFT";
     case Kind::Boolean:          return "BOOLEAN";
+    case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
     default:                  return "";
     }
   }
@@ -2184,6 +2190,31 @@ struct AppCommandState {
   /// the .cpp).
   int booleanOp = 0;
   std::vector<int> booleanMinuend;  ///< SUBTRACT: cadSolids indices gathered by step 1.
+  // --- REQ-317 POLYSOLID: a wall swept along a picked path ---------------------------------------
+
+  enum class PolysolidPhase {
+    WaitFirstPoint,  ///< the start of the run, or `O` to convert something already drawn
+    WaitObject,      ///< `O` was given: the next click names the entity to sweep along
+    WaitNextPoint    ///< a run is under way; each further point commits a segment
+  } polysolidPhase = PolysolidPhase::WaitFirstPoint;
+
+  /// The path being drawn, in \ref polysolidBase's work-plane coordinates — the same form
+  /// `brep::MakePolysolid` takes, so the command never holds a second representation of it.
+  brep::Path polysolidPath;
+  /// The first point, in storage coordinates: the origin of the placement frame.
+  ray3d::Vec3 polysolidBase{};
+  /// `A` draws arc segments and `L` straight ones, exactly as PLINE's own option does.
+  bool polysolidArcMode = false;
+  /// A letter typed on its own, waiting for its value on the next line (`H` then `4`, as well as
+  /// `H 4`). 0 = nothing armed; otherwise the uppercase letter.
+  char polysolidPending = 0;
+
+  /// Remembered between invocations, the way AutoCAD remembers PSOLWIDTH and PSOLHEIGHT: a wall is
+  /// almost always drawn at the same size as the last one, and re-typing it every time is the
+  /// friction that makes a command feel wrong. Saved with the drawing.
+  double polysolidWidth = 0.25;
+  double polysolidHeight = 4.0;
+  brep::Justify polysolidJustify = brep::Justify::Center;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -4176,6 +4207,32 @@ void SubmitSolidViewportPick(AppCommandState& st, float wx, float wy, std::vecto
 /// Clear the prompted solid command's state. Called by Esc and by every other command start, so a
 /// half-built solid cannot leak into the next command.
 void CancelSolidCommand(AppCommandState& st);
+
+// --- REQ-317 POLYSOLID ---------------------------------------------------------------------------
+/// Open the command: pick a start point, or `O` to sweep along something already drawn.
+void StartPolysolidCommand(AppCommandState& st, std::vector<std::string>& log);
+/// The prompt line, computed rather than literal: it echoes the height, width and justification in
+/// force, which is what makes them discoverable without a separate report command (REQ-304).
+[[nodiscard]] std::string CadPolysolidPromptText(const AppCommandState& st);
+/// Handle one typed line: a coordinate, or one of `A L C U H W J O`. \return false if not consumed.
+bool HandlePolysolidTextInput(const std::string& line, AppCommandState& st,
+                              std::vector<std::string>& log);
+/// Handle a viewport click: a path point, or — at the `O`bject prompt — the entity to sweep along.
+void SubmitPolysolidViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Convert the Line / Arc / Circle / Polyline under (\p wx, \p wy) into a wall, or say why not.
+void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Reset the path, keeping the remembered height, width and justification.
+void CancelPolysolidCommand(AppCommandState& st);
+/// The frame a polysolid is built in: the active UCS anchored at the first picked point. Exposed so
+/// the viewport can put the cursor into the same plane the builder reads it from - one frame, not two.
+[[nodiscard]] ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st);
+/// The candidate wall, optionally including the segment \p cursor is currently proposing.
+///
+/// ONE builder for the preview, the click that commits a point and the Enter that finishes — a
+/// preview computed separately from the commit is a preview that eventually shows a wall the click
+/// does not build (ADR-046 (a)).
+[[nodiscard]] bool CadBuildPolysolidFromCommand(const AppCommandState& st, const ucs::Point2D* cursor,
+                                                brep::Solid* out, brep::Problem* outWhy);
 
 /// Report a solid's properties into \p log — kind, dimensions, volume, surface area, and its
 /// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.

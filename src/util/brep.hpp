@@ -226,7 +226,7 @@ struct Recipe {
   /// Polysolid only: the path it was swept along, in \ref frame's plane, plus how it was justified.
   /// The one recipe field whose length is not fixed. Like every other recipe field it is
   /// description and never truth — nothing in validity, mass properties or tessellation reads it
-  /// (ADR-048 (f)).
+  /// (ADR-050 (f)).
   Path path;
   Justify justify = Justify::Center;
 };
@@ -269,7 +269,7 @@ enum class Problem {
   DegenerateFrame,           ///< The placement frame is not right-handed orthonormal.
 
   // --- REQ-317 POLYSOLID: a path that does not describe a wall. Each is refused, never repaired;
-  //     see ADR-048 (c) for why approximating them would be worse than declining. ---
+  //     see ADR-050 (c) for why approximating them would be worse than declining. ---
   PathTooShort,              ///< Fewer than two points, or a closed path with fewer than two segments.
   PathSegmentDegenerate,     ///< A repeated point, or an arc with no sweep or no radius.
   PolysolidCornerCollapsed,  ///< A bend so sharp, or a segment so short, that the inner offset runs
@@ -277,7 +277,7 @@ enum class Problem {
   PolysolidCurveTooTight,    ///< An arc whose inner offset radius reaches zero: the wall would turn
                              ///< inside out around the curve.
   /// A path crossing its own run, so the wall would enclose part of the ground twice and its volume
-  /// would count that part twice. Detected exactly for straight-segment paths; see ADR-048 (c).
+  /// would count that part twice. Detected exactly for straight-segment paths; see ADR-050 (c).
   PolysolidPathSelfIntersects,
 
   // --- Validation: the topology itself is wrong. ---
@@ -413,7 +413,7 @@ inline constexpr int kMaxPyramidSides = 64;
 /// and adjacent offsets are intersected, so a corner is mitred and counted once. Straight runs give
 /// planar side faces and curved runs cylindrical ones. A corner that cannot be mitred — too sharp,
 /// too short, or an arc whose inner offset would reach zero radius — is refused by name rather than
-/// approximated (ADR-048 (b), (c)).
+/// approximated (ADR-050 (b), (c)).
 [[nodiscard]] bool MakePolysolid(const ucs::Ucs& frame, const Path& path, double width, double height,
                                  Justify justify, Solid* out, Problem* outWhy);
 

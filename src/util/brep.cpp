@@ -5770,13 +5770,13 @@ bool BooleanIntersect(const Solid& a, const Solid& b, std::vector<Solid>* out, P
   return BooleanPlanar(a, b, BoolOp::Intersect, out, outWhy);
 }
 // ---------------------------------------------------------------------------------------------
-// REQ-317 POLYSOLID: a wall swept along a path (ADR-048).
+// REQ-317 POLYSOLID: a wall swept along a path (ADR-050).
 //
 // The whole of the difficulty is the corners. Offsetting each segment to each side is easy and
 // gives a run of disconnected pieces; making one wall out of them means INTERSECTING adjacent
 // offsets so the corner is mitred and counted once. A box per straight run would be far easier and
 // is wrong three ways at once — the runs overlap, the drawing holds N objects where the user drew
-// one, and the volume double-counts every bend (ADR-048 (b)).
+// one, and the volume double-counts every bend (ADR-050 (b)).
 // ---------------------------------------------------------------------------------------------
 namespace {
 

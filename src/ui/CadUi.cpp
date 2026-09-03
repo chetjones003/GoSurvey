@@ -8866,6 +8866,13 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     boolHint = CadBooleanPromptText(cmd);
     return boolHint.c_str();
   }
+  // REQ-317 POLYSOLID, computed for the same reason: the hint echoes the height, width and
+  // justification in force, so a literal would go stale the moment one of them changed.
+  if (cmd.active == AppCommandState::Kind::Polysolid) {
+    static std::string polysolidHint;
+    polysolidHint = CadPolysolidPromptText(cmd);
+    return polysolidHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Circle) {
     using CP = AppCommandState::CirclePhase;
     switch (cmd.circlePhase) {

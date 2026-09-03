@@ -6411,6 +6411,7 @@ const CmdEntry kRegistry[] = {
     {"sphere", "sph", "Create a sphere solid: SPHERE <X,Y[,Z]> <radius>"},
     {"torus", "tor", "Create a torus solid: TORUS <X,Y[,Z]> <radius> <tube radius>"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
+    {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
@@ -11854,6 +11855,11 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   if (st.active == K::Boolean) {
     if (st.selBoxWaitingSecond)
       finishBox();  // every phase is a selection step; Enter advances it
+    return;
+  }
+
+  if (st.active == K::Polysolid) {
+    SubmitPolysolidViewportPick(st, wx, wy, log);
     return;
   }
 
@@ -25882,6 +25888,568 @@ void SubmitSolidViewportPick(AppCommandState& st, float wx, float wy, std::vecto
     CommitPromptedSolid(st, log);
 }
 
+// ---------------------------------------------------------------------------------------------
+// REQ-317 POLYSOLID — a wall swept along a picked path.
+//
+// Its own command Kind rather than an eighth row in `CadSolidParamSpecs`: a polysolid is built from
+// a PATH, so its state is a growing list rather than a fixed set of named dimensions, and folding it
+// into `Kind::Solid` would put a variable-length entry in a table no other row uses.
+//
+// What it shares with the seven primitives is everything after the geometry: one builder feeding the
+// preview, the click and Enter alike; the kernel's own refusals; and the same store, undo step and
+// created-message.
+// ---------------------------------------------------------------------------------------------
+namespace {
+
+/// The placement frame: the active UCS anchored at the first picked point.
+[[nodiscard]] ucs::Ucs PolysolidFrame(const AppCommandState& st) {
+  return SolidPlacementFrame(st, st.polysolidBase);
+}
+
+[[nodiscard]] const char* JustifyName(brep::Justify j) {
+  switch (j) {
+  case brep::Justify::Left: return "Left";
+  case brep::Justify::Center: return "Center";
+  case brep::Justify::Right: return "Right";
+  }
+  return "Center";
+}
+
+/// The path's end point, in the frame's plane.
+[[nodiscard]] ucs::Point2D PolysolidEndPoint(const brep::Path& p) {
+  return p.segs.empty() ? p.start : p.segs.back().end;
+}
+
+/// The unit tangent at the end of \p p, pointing along travel. `{0,0}` when there is no segment yet
+/// — the case an arc cannot be drawn from, and the caller refuses it by name rather than guessing.
+[[nodiscard]] ucs::Point2D PolysolidEndTangent(const brep::Path& p) {
+  if (p.segs.empty())
+    return ucs::Point2D{0.0, 0.0};
+  const ucs::Point2D a = p.segs.size() == 1 ? p.start : p.segs[p.segs.size() - 2].end;
+  const ucs::Point2D b = p.segs.back().end;
+  const double dx = b.x - a.x;
+  const double dy = b.y - a.y;
+  const double len = std::sqrt(dx * dx + dy * dy);
+  if (!(len > 1e-12))
+    return ucs::Point2D{0.0, 0.0};
+  const ucs::Point2D chord{dx / len, dy / len};
+  const double sweep = p.segs.back().sweep;
+  if (std::fabs(sweep) <= 1e-12)
+    return chord;
+  // The end tangent of an arc is its chord turned by half the included angle: the chord is the
+  // average of the two end tangents, so each is half a sweep either side of it.
+  const double c = std::cos(sweep * 0.5);
+  const double s = std::sin(sweep * 0.5);
+  return ucs::Point2D{chord.x * c - chord.y * s, chord.x * s + chord.y * c};
+}
+
+/// The sweep of an arc that leaves \p from along \p tangent and arrives at \p to.
+///
+/// One pick determines it, which is what makes an arc segment a gesture rather than a form: the
+/// start point and the direction out of the previous segment are already known, and a circle through
+/// a point with a given tangent at another is unique. PLINE's own rule, and AutoCAD's.
+[[nodiscard]] double TangentArcSweep(const ucs::Point2D& from, const ucs::Point2D& tangent,
+                                     const ucs::Point2D& to) {
+  const double dx = from.x - to.x;
+  const double dy = from.y - to.y;
+  const ucs::Point2D n{-tangent.y, tangent.x};  // the left normal: the centre lies along it
+  const double dn = dx * n.x + dy * n.y;
+  const double d2 = dx * dx + dy * dy;
+  if (!(std::fabs(dn) > 1e-12 * std::max(1.0, d2)))
+    return 0.0;  // the far point is straight ahead: the "arc" is a straight run, and is one
+  const double r = -d2 / (2.0 * dn);
+  const ucs::Point2D centre{from.x + r * n.x, from.y + r * n.y};
+  const double a0 = std::atan2(from.y - centre.y, from.x - centre.x);
+  const double a1 = std::atan2(to.y - centre.y, to.x - centre.x);
+  double d = a1 - a0;
+  const double sign = r > 0.0 ? 1.0 : -1.0;  // r > 0 puts the centre on the left, which sweeps CCW
+  while (d <= 0.0)
+    d += 2.0 * 3.14159265358979323846;
+  while (d > 2.0 * 3.14159265358979323846)
+    d -= 2.0 * 3.14159265358979323846;
+  return sign >= 0.0 ? d : d - 2.0 * 3.14159265358979323846;
+}
+
+} // namespace
+
+ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st) { return PolysolidFrame(st); }
+
+void CancelPolysolidCommand(AppCommandState& st) {
+  st.polysolidPhase = AppCommandState::PolysolidPhase::WaitFirstPoint;
+  st.polysolidPath = brep::Path{};
+  st.polysolidBase = ray3d::Vec3{};
+  st.polysolidArcMode = false;
+  st.polysolidPending = 0;
+  // Width, height and justification deliberately SURVIVE the cancel: they are the settings the next
+  // wall will want, which is what AutoCAD's PSOLWIDTH and PSOLHEIGHT are for.
+}
+
+bool CadBuildPolysolidFromCommand(const AppCommandState& st, const ucs::Point2D* cursor,
+                                  brep::Solid* out, brep::Problem* outWhy) {
+  brep::Path p = st.polysolidPath;
+  if (cursor) {
+    // The segment the cursor is currently proposing, so the preview and the click that commits it
+    // are built from ONE function — a preview computed separately eventually shows a wall the click
+    // does not build (ADR-046 (a), the argument REQ-313 already made for its own preview).
+    const double sweep =
+        st.polysolidArcMode ? TangentArcSweep(PolysolidEndPoint(p), PolysolidEndTangent(p), *cursor)
+                            : 0.0;
+    p.segs.push_back(brep::PathSeg{*cursor, sweep});
+  }
+  if (p.segs.empty())
+    return false;
+  return brep::MakePolysolid(PolysolidFrame(st), p, st.polysolidWidth, st.polysolidHeight,
+                             st.polysolidJustify, out, outWhy);
+}
+
+std::string CadPolysolidPromptText(const AppCommandState& st) {
+  char buf[320];
+  const std::string dims = "[H=" + TrimNumber(st.polysolidHeight) + " W=" +
+                           TrimNumber(st.polysolidWidth) + " J=" + JustifyName(st.polysolidJustify) +
+                           "]";
+  switch (st.polysolidPhase) {
+  case AppCommandState::PolysolidPhase::WaitObject:
+    std::snprintf(buf, sizeof(buf),
+                  "POLYSOLID - select a line, arc, circle or polyline to sweep along %s",
+                  dims.c_str());
+    return buf;
+  case AppCommandState::PolysolidPhase::WaitFirstPoint:
+    std::snprintf(buf, sizeof(buf),
+                  "POLYSOLID - start point, or Object / Height / Width / Justify %s", dims.c_str());
+    return buf;
+  case AppCommandState::PolysolidPhase::WaitNextPoint:
+    break;
+  }
+  std::snprintf(buf, sizeof(buf),
+                "POLYSOLID - next point%s, or %s / Close / Undo / Height / Width / Justify, Enter to "
+                "finish %s",
+                st.polysolidPath.segs.empty() ? "" : " (Enter finishes)",
+                st.polysolidArcMode ? "Line" : "Arc", dims.c_str());
+  return buf;
+}
+
+namespace {
+
+/// Store the wall built from the path so far and end the command.
+void CommitPolysolid(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.polysolidPath.segs.empty()) {
+    log.push_back("POLYSOLID - a wall needs at least two points; Esc cancels.");
+    return;
+  }
+  brep::Solid solid;
+  brep::Problem why = brep::Problem::Ok;
+  if (!CadBuildPolysolidFromCommand(st, nullptr, &solid, &why)) {
+    // The kernel's own reason, and the command STAYS OPEN — the points already picked are worth
+    // more than the message, and `U` can take back the one that caused it.
+    log.push_back(std::string("POLYSOLID - ") + brep::ProblemText(why));
+    log.push_back(CadPolysolidPromptText(st));
+    return;
+  }
+  const brep::MassProperties mp = brep::ComputeMassProperties(solid);
+  PushUndoSnapshot(st, "Create Polysolid");
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  log.push_back(SolidCreatedMessage(brep::PrimitiveKind::Polysolid, mp));
+  CancelPolysolidCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+/// Add the segment ending at \p pt, in the frame's plane.
+void AddPolysolidPoint(AppCommandState& st, const ucs::Point2D& pt, std::vector<std::string>& log) {
+  const ucs::Point2D from = PolysolidEndPoint(st.polysolidPath);
+  if (std::fabs(pt.x - from.x) < 1e-9 && std::fabs(pt.y - from.y) < 1e-9) {
+    log.push_back("POLYSOLID - that is the same point as the last one.");
+    return;
+  }
+  double sweep = 0.0;
+  if (st.polysolidArcMode) {
+    if (st.polysolidPath.segs.empty()) {
+      // An arc has to be tangent to SOMETHING. There is no incoming direction at the very first
+      // segment, so this is refused rather than given a direction the user did not choose.
+      log.push_back("POLYSOLID - an arc needs a straight run before it to be tangent to; draw one "
+                    "first, or press L for a straight segment.");
+      return;
+    }
+    sweep = TangentArcSweep(from, PolysolidEndTangent(st.polysolidPath), pt);
+  }
+  st.polysolidPath.segs.push_back(brep::PathSeg{pt, sweep});
+  st.polysolidPhase = AppCommandState::PolysolidPhase::WaitNextPoint;
+  log.push_back(CadPolysolidPromptText(st));
+}
+
+/// Set one of the three remembered settings from \p value.
+bool SetPolysolidSetting(AppCommandState& st, char letter, const std::string& value,
+                         std::vector<std::string>& log) {
+  const std::string v = StringUtil::trimCopy(value);
+  if (letter == 'J') {
+    const char c = v.empty() ? '\0' : static_cast<char>(std::toupper(static_cast<unsigned char>(v[0])));
+    if (c == 'L')
+      st.polysolidJustify = brep::Justify::Left;
+    else if (c == 'C')
+      st.polysolidJustify = brep::Justify::Center;
+    else if (c == 'R')
+      st.polysolidJustify = brep::Justify::Right;
+    else {
+      log.push_back("POLYSOLID - justification must be Left, Center or Right.");
+      return false;
+    }
+    log.push_back(std::string("POLYSOLID - justification = ") + JustifyName(st.polysolidJustify) + ".");
+    return true;
+  }
+  double d = 0.0;
+  {
+    char* end = nullptr;
+    d = std::strtod(v.c_str(), &end);
+    if (v.empty() || !end || *end != 0 || !std::isfinite(d) || !(d > 0.0)) {
+      log.push_back(std::string("POLYSOLID - ") + (letter == 'H' ? "height" : "width") +
+                    " must be a positive number.");
+      return false;
+    }
+  }
+  if (letter == 'H') {
+    st.polysolidHeight = d;
+    log.push_back("POLYSOLID - height = " + TrimNumber(d) + ".");
+  } else {
+    st.polysolidWidth = d;
+    log.push_back("POLYSOLID - width = " + TrimNumber(d) + ".");
+  }
+  return true;
+}
+
+} // namespace
+
+void StartPolysolidCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelPolysolidCommand(st);
+  st.active = AppCommandState::Kind::Polysolid;
+  log.push_back(CadPolysolidPromptText(st));
+}
+
+bool HandlePolysolidTextInput(const std::string& lineIn, AppCommandState& st,
+                              std::vector<std::string>& log) {
+  const std::string line = StringUtil::trimCopy(lineIn);
+
+  // A letter armed on its own line takes the next line as its value, which is what makes `H` then
+  // `4` work as well as `H 4` — the shape the prompted primitives already established.
+  if (st.polysolidPending != 0) {
+    const char letter = st.polysolidPending;
+    st.polysolidPending = 0;
+    if (line.empty()) {
+      log.push_back(CadPolysolidPromptText(st));
+      return true;
+    }
+    (void)SetPolysolidSetting(st, letter, line, log);
+    log.push_back(CadPolysolidPromptText(st));
+    return true;
+  }
+
+  if (line.empty()) {
+    // Enter FINISHES an open wall. At the very first prompt there is nothing to finish, so it ends
+    // the command rather than reporting a refusal for something the user never started.
+    if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitFirstPoint) {
+      log.push_back("POLYSOLID canceled.");
+      CancelPolysolidCommand(st);
+      st.active = AppCommandState::Kind::None;
+      return true;
+    }
+    CommitPolysolid(st, log);
+    return true;
+  }
+
+  const char head = static_cast<char>(std::toupper(static_cast<unsigned char>(line[0])));
+  const std::string rest = StringUtil::trimCopy(line.substr(1));
+  const bool bareLetter = rest.empty();
+
+  // No coordinate begins with one of these letters, so there is nothing to disambiguate against.
+  if (head == 'H' || head == 'W' || head == 'J') {
+    if (bareLetter) {
+      st.polysolidPending = head;
+      log.push_back(head == 'J' ? "POLYSOLID - justification (Left / Center / Right)?"
+                                : (head == 'H' ? "POLYSOLID - height?" : "POLYSOLID - width?"));
+      return true;
+    }
+    (void)SetPolysolidSetting(st, head, rest, log);
+    log.push_back(CadPolysolidPromptText(st));
+    return true;
+  }
+
+  if (head == 'O' && bareLetter) {
+    if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitNextPoint) {
+      log.push_back("POLYSOLID - Object converts something already drawn; it cannot join a run "
+                    "already under way.");
+      return true;
+    }
+    st.polysolidPhase = AppCommandState::PolysolidPhase::WaitObject;
+    log.push_back(CadPolysolidPromptText(st));
+    return true;
+  }
+
+  if ((head == 'A' || head == 'L') && bareLetter) {
+    st.polysolidArcMode = head == 'A';
+    log.push_back(st.polysolidArcMode ? "POLYSOLID - arc segments." : "POLYSOLID - straight segments.");
+    log.push_back(CadPolysolidPromptText(st));
+    return true;
+  }
+
+  if (head == 'C' && bareLetter) {
+    if (st.polysolidPath.segs.size() < 2) {
+      log.push_back("POLYSOLID - a closed wall needs at least three points.");
+      return true;
+    }
+    // Close by returning to the start: a straight run, or an arc tangent to the last one, exactly as
+    // a further picked point would be.
+    const ucs::Point2D from = PolysolidEndPoint(st.polysolidPath);
+    const double sweep =
+        st.polysolidArcMode
+            ? TangentArcSweep(from, PolysolidEndTangent(st.polysolidPath), st.polysolidPath.start)
+            : 0.0;
+    st.polysolidPath.segs.push_back(brep::PathSeg{st.polysolidPath.start, sweep});
+    st.polysolidPath.closed = true;
+    CommitPolysolid(st, log);
+    if (st.active == AppCommandState::Kind::Polysolid) {
+      // Refused: take the closing segment back off so the run is exactly where it was.
+      st.polysolidPath.segs.pop_back();
+      st.polysolidPath.closed = false;
+    }
+    return true;
+  }
+
+  if (head == 'U' && bareLetter) {
+    if (st.polysolidPath.segs.empty()) {
+      log.push_back("POLYSOLID - nothing to undo yet.");
+      return true;
+    }
+    st.polysolidPath.segs.pop_back();
+    if (st.polysolidPath.segs.empty())
+      log.push_back("POLYSOLID - back to the start point.");
+    log.push_back(CadPolysolidPromptText(st));
+    return true;
+  }
+
+  // Anything else is a coordinate — except at the Object prompt, which wants something already
+  // drawn. Typing a point there would silently start an ordinary run instead, which is not what was
+  // asked for.
+  if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject) {
+    log.push_back("POLYSOLID - click the line, arc, circle or polyline to sweep along (Esc cancels).");
+    return true;
+  }
+  ray3d::Vec3 pt{};
+  if (!ParseSolidBasePoint(st, line, &pt, log, "POLYSOLID"))
+    return true;  // the reason has been reported; the prompt stands
+  if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitFirstPoint) {
+    st.polysolidBase = pt;
+    st.polysolidPath = brep::Path{};
+    st.polysolidPhase = AppCommandState::PolysolidPhase::WaitNextPoint;
+    log.push_back(CadPolysolidPromptText(st));
+    return true;
+  }
+  const ucs::Point2D local = ucs::WorldToPlane(PolysolidFrame(st), pt);
+  AddPolysolidPoint(st, local, log);
+  return true;
+}
+
+void SubmitPolysolidViewportPick(AppCommandState& st, float wx, float wy,
+                                 std::vector<std::string>& log) {
+  if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject) {
+    CadPolysolidConvertObjectAt(st, wx, wy, log);
+    return;
+  }
+  const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
+  if (st.polysolidPhase == AppCommandState::PolysolidPhase::WaitFirstPoint) {
+    st.polysolidBase = pt;
+    st.polysolidPath = brep::Path{};
+    st.polysolidPhase = AppCommandState::PolysolidPhase::WaitNextPoint;
+    log.push_back(CadPolysolidPromptText(st));
+    return;
+  }
+  AddPolysolidPoint(st, ucs::WorldToPlane(PolysolidFrame(st), pt), log);
+}
+
+namespace {
+
+/// Append the straight run \p from -> \p to, in \p frame's plane, refusing a point off that plane.
+[[nodiscard]] bool AppendFlatPoint(const ucs::Ucs& frame, const ray3d::Vec3& p, double tol,
+                                   brep::Path* path, bool first) {
+  double off = 0.0;
+  const ucs::Point2D q = ucs::WorldToPlane(frame, p, &off);
+  if (std::fabs(off) > tol)
+    return false;
+  if (first)
+    path->start = q;
+  else
+    path->segs.push_back(brep::PathSeg{q, 0.0});
+  return true;
+}
+
+} // namespace
+
+void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
+                                 std::vector<std::string>& log) {
+  SelectedEntity hit;
+  const float tol = CadOffsetEntityPickTolWorld(st);
+  if (!PickClosestCadEntity(st, wx, wy, tol, &hit, nullptr)) {
+    log.push_back("POLYSOLID - nothing there. Pick a line, arc, circle or polyline (Esc cancels).");
+    return;
+  }
+
+  using T = SelectedEntity::Type;
+  if (hit.type != T::LineSeg && hit.type != T::Arc && hit.type != T::Circle &&
+      hit.type != T::Polyline) {
+    log.push_back("POLYSOLID - a wall can follow a line, an arc, a circle or a polyline. Nothing "
+                  "else has a path to sweep along.");
+    return;
+  }
+
+  // The path has to lie in the plane the wall rises from, so the source is measured against the
+  // active work plane and refused by name if it does not lie in it. Anchoring the frame at the
+  // source's own start point is what makes that test meaningful rather than circular.
+  ray3d::Vec3 anchor{};
+  const std::size_t i = static_cast<std::size_t>(hit.index);
+  switch (hit.type) {
+  case T::LineSeg:
+    anchor = ray3d::Vec3{st.userLinesFlat[i * 6 + 0], st.userLinesFlat[i * 6 + 1],
+                         st.userLinesFlat[i * 6 + 2]};
+    break;
+  case T::Arc: {
+    const CadArc& a = st.userArcs[i];
+    anchor = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
+    break;
+  }
+  case T::Circle:
+    anchor = ray3d::Vec3{st.userCirclesCxCyZR[i * 4 + 0] + st.userCirclesCxCyZR[i * 4 + 3],
+                         st.userCirclesCxCyZR[i * 4 + 1], st.userCirclesCxCyZR[i * 4 + 2]};
+    break;
+  default: {
+    const std::size_t base = static_cast<std::size_t>(st.userPolylineOffsets[i]) * 3u;
+    anchor = ray3d::Vec3{st.userPolylineVerts[base + 0], st.userPolylineVerts[base + 1],
+                         st.userPolylineVerts[base + 2]};
+    break;
+  }
+  }
+
+  const AppCommandState::PolysolidPhase savedPhase = st.polysolidPhase;
+  st.polysolidBase = anchor;
+  const ucs::Ucs frame = PolysolidFrame(st);
+  const double planeTol = 1e-6 * std::max(1.0, std::fabs(anchor.x) + std::fabs(anchor.y));
+
+  brep::Path path;
+  bool flat = true;
+  switch (hit.type) {
+  case T::LineSeg: {
+    flat = AppendFlatPoint(frame, anchor, planeTol, &path, true) &&
+           AppendFlatPoint(frame,
+                           ray3d::Vec3{st.userLinesFlat[i * 6 + 3], st.userLinesFlat[i * 6 + 4],
+                                       st.userLinesFlat[i * 6 + 5]},
+                           planeTol, &path, false);
+    break;
+  }
+  case T::Arc: {
+    const CadArc& a = st.userArcs[i];
+    const ray3d::Vec3 n = ray3d::Normalize(ray3d::Vec3{a.nx, a.ny, a.nz});
+    if (std::fabs(std::fabs(ray3d::Dot(n, frame.zAxis)) - 1.0) > 1e-6) {
+      flat = false;
+      break;
+    }
+    // The arc's own sweep sign is measured about ITS normal; the path's is about the frame's, and
+    // an arc lying in the plane the other way up runs the opposite way round.
+    const double dir = ray3d::Dot(n, frame.zAxis) > 0.0 ? 1.0 : -1.0;
+    double sweep = static_cast<double>(a.sweepRad) * dir;
+    path.start = ucs::WorldToPlane(frame, CurveWorldPointOnArc(a, static_cast<double>(a.startRad)));
+    // A rim that goes all the way round has no chord, so it is seamed into halves — the same split
+    // every closed curve in the kernel already gets (ADR-045 (d)).
+    if (std::fabs(sweep) >= 2.0 * 3.14159265358979323846 - 1e-9) {
+      path.segs.push_back(brep::PathSeg{ucs::WorldToPlane(frame, CurveWorldPointOnArc(a, static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * 0.5)), sweep * 0.5});
+      path.segs.push_back(brep::PathSeg{path.start, sweep * 0.5});
+      path.closed = true;
+    } else {
+      path.segs.push_back(brep::PathSeg{ucs::WorldToPlane(frame, CurveWorldPointOnArc(a, static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad))), sweep});
+    }
+    break;
+  }
+  case T::Circle: {
+    float cnx = 0.f, cny = 0.f, cnz = 1.f;
+    CircleNormalAt(st.userCircleNormals, i, &cnx, &cny, &cnz);
+    const ray3d::Vec3 n = ray3d::Normalize(ray3d::Vec3{cnx, cny, cnz});
+    if (std::fabs(std::fabs(ray3d::Dot(n, frame.zAxis)) - 1.0) > 1e-6) {
+      flat = false;
+      break;
+    }
+    const double r = st.userCirclesCxCyZR[i * 4 + 3];
+    const ucs::Point2D c = ucs::WorldToPlane(
+        frame, ray3d::Vec3{st.userCirclesCxCyZR[i * 4 + 0], st.userCirclesCxCyZR[i * 4 + 1],
+                           st.userCirclesCxCyZR[i * 4 + 2]});
+    const double kPiLocal = 3.14159265358979323846;
+    path.start = ucs::Point2D{c.x + r, c.y};
+    path.segs.push_back(brep::PathSeg{ucs::Point2D{c.x - r, c.y}, kPiLocal});
+    path.segs.push_back(brep::PathSeg{path.start, kPiLocal});
+    path.closed = true;
+    break;
+  }
+  default: {
+    const std::size_t b = static_cast<std::size_t>(st.userPolylineOffsets[i]);
+    const std::size_t e = static_cast<std::size_t>(st.userPolylineOffsets[i + 1]);
+    // A polyline's ARC segments come across too (REQ-316 / ADR-047 gave the store per-vertex
+    // bulges). The bulge on vertex `v` describes the segment LEAVING it, and `tan(theta/4)` is the
+    // DXF convention both stores share — so the included angle is `4*atan(bulge)`, which is exactly
+    // what `PathSeg::sweep` wants, sign and all. Converted here rather than in the kernel, because
+    // `brep` does not know what a `CadPolyline` is (ADR-050 (a)).
+    auto bulgeAt = [&](std::size_t v) {
+      return v < st.userPolylineVertsBulge.size()
+                 ? static_cast<double>(st.userPolylineVertsBulge[v])
+                 : 0.0;
+    };
+    for (std::size_t v = b; v < e && flat; ++v) {
+      double off = 0.0;
+      const ucs::Point2D q = ucs::WorldToPlane(
+          frame,
+          ray3d::Vec3{st.userPolylineVerts[v * 3 + 0], st.userPolylineVerts[v * 3 + 1],
+                      st.userPolylineVerts[v * 3 + 2]},
+          &off);
+      if (std::fabs(off) > planeTol) {
+        flat = false;
+        break;
+      }
+      if (v == b)
+        path.start = q;
+      else
+        path.segs.push_back(brep::PathSeg{q, 4.0 * std::atan(bulgeAt(v - 1))});
+    }
+    if (flat && i < st.userPolylineClosed.size() && st.userPolylineClosed[i] != 0 &&
+        path.segs.size() >= 2) {
+      path.segs.push_back(brep::PathSeg{path.start, 4.0 * std::atan(bulgeAt(e - 1))});
+      path.closed = true;
+    }
+    break;
+  }
+  }
+
+  if (!flat) {
+    st.polysolidPhase = savedPhase;
+    log.push_back("POLYSOLID - that object does not lie in the current work plane, so there is no "
+                  "flat path to sweep. Set the UCS to its plane first.");
+    return;
+  }
+
+  st.polysolidPath = std::move(path);
+  brep::Solid solid;
+  brep::Problem why = brep::Problem::Ok;
+  if (!CadBuildPolysolidFromCommand(st, nullptr, &solid, &why)) {
+    st.polysolidPath = brep::Path{};
+    st.polysolidPhase = savedPhase;
+    log.push_back(std::string("POLYSOLID - ") + brep::ProblemText(why));
+    log.push_back(CadPolysolidPromptText(st));
+    return;
+  }
+  const brep::MassProperties mp = brep::ComputeMassProperties(solid);
+  PushUndoSnapshot(st, "Create Polysolid");
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  log.push_back(SolidCreatedMessage(brep::PrimitiveKind::Polysolid, mp));
+  CancelPolysolidCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
 /// Shared by the prompt and the inline `VS SHADED` form, so neither can set a value the other would
 /// reject (REQ-201). Accepts the AutoCAD-ish spellings a user is likely to try.
 bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
@@ -26621,6 +27189,12 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("Command canceled.");
     CancelBooleanCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Polysolid) {
+    // REQ-317. Named like every other cancel here: a command abandoned in silence looks exactly
+    // like one that quietly created something.
+    log.push_back("POLYSOLID canceled.");
+    CancelPolysolidCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
   else if (st.active == AppCommandState::Kind::FeatureLine)
@@ -27284,6 +27858,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandleSolidTextInput(line, st, log);
       return;
     }
+    // REQ-317 POLYSOLID: Enter FINISHES the wall, so it is handled here for the same reason - this
+    // block consumes a blank line and the Kind-keyed branch further down never sees one.
+    if (st.active == K::Polysolid) {
+      (void)HandlePolysolidTextInput(line, st, log);
+      return;
+    }
     if (st.active == K::Pan) {
       // Enter (or right-click in Enter mode) exits PAN; Esc exits via CancelActiveCommand.
       st.active = K::None;
@@ -27652,6 +28232,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // `ISOLINES 8` sets how many curves are drawn around a curved solid face; a bare `ISOLINES`
     // reports it. The report-or-set shape `VS` and `PERSPECTIVE` use, and AutoCAD's own name for the
     // setting, so someone who knows the variable finds it where they expect.
+    // REQ-317 POLYSOLID: a wall swept along a picked path. Prompted only - a path has no fixed
+    // argument count, so there is no one-line form to offer.
+    if (plotTok == "polysolid" || plotTok == "psolid") {
+      StartPolysolidCommand(st, log);
+      return;
+    }
     if (plotTok == "isolines") {
       std::string isoArg;
       if (issIdle >> isoArg) {
@@ -29230,6 +29816,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleBooleanTextInput(line, st, log))
       return;
     log.push_back(CadBooleanPromptText(st));
+    return;
+  }
+
+  // REQ-317 POLYSOLID, beside it for the same reason: a point, then letters that set the wall.
+  if (st.active == AppCommandState::Kind::Polysolid) {
+    if (HandlePolysolidTextInput(line, st, log))
+      return;
+    log.push_back(CadPolysolidPromptText(st));
     return;
   }
 

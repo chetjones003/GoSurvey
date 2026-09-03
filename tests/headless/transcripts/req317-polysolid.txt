@@ -1,0 +1,218 @@
+# REQ-317 POLYSOLID — a wall swept along a path (GitHub issue #146, ADR-048, TASK-187).
+#
+# The kernel's own arithmetic is asserted in BrepTests, where it can be checked in closed form.
+# What only this file can reach is the half between the command line and the store: that a path
+# picked point by point reaches the builder unchanged, that the options set what they say, that the
+# preview is the wall the next click commits, that a refusal leaves the run standing, and that the
+# result saves and reopens like any other solid.
+#
+# The figure every volume below rests on: for CENTRE justification a mitred wall's plan area is
+# exactly `width * centreline length`, whatever angles it turns through — a mitre gives back on the
+# outside of a bend precisely what it takes on the inside. The SURFACE areas are what prove the
+# corners are actually mitred: a run of overlapping boxes would report the same volumes and carry
+# two extra end caps at every joint.
+
+NEW
+
+# --- A typed L-shaped wall --------------------------------------------------------------------------
+CMD POLYSOLID
+EXPECT LOG "start point"
+CMD W 2
+EXPECT LOG "width = 2"
+CMD H 3
+EXPECT LOG "height = 3"
+CMD 0,0
+CMD 10,0
+CMD 10,10
+# Blank Enter FINISHES the wall. It reaches the command through the blank-line block, which consumes
+# Enter before any Kind-keyed branch sees it — the trap FEATURELINE, UCS and the prompted primitives
+# each fell into first.
+CMD
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Polysolid
+# 2 wide, 3 high, two 10 ft legs: 120 cubic feet with the corner counted ONCE.
+# 212 square feet = 2*40 flat + 3*(18+22) sides + 2*(2*3) end caps. Two boxes would say 224.
+EXPECT SOLIDPROPS 0 120 212 12 18 8
+# The outer rail runs past the centreline's corner at x=10, which is what a mitre does.
+EXPECT SOLIDBOUNDS 0 0 -1 0 11 10 3
+
+# --- A closed rectangular wall ------------------------------------------------------------------------
+CMD POLYSOLID
+CMD H 4
+CMD 0,0
+CMD 20,0
+CMD 20,10
+CMD 0,10
+CMD C
+EXPECT SOLIDS 2
+# Outer 22 x 12 less inner 18 x 8 = 120 sq ft of plan, 4 ft high. No end caps: it closes on itself.
+EXPECT SOLIDPROPS 1 480 720 16 24 10
+
+# --- Undo takes back one segment, not the whole run ---------------------------------------------------
+CMD POLYSOLID
+# The height is still 4 from the wall above — the settings are REMEMBERED between invocations, the way
+# AutoCAD remembers PSOLWIDTH and PSOLHEIGHT — so it is set back to 3 here rather than assumed.
+CMD H 3
+CMD 0,0
+CMD 10,0
+CMD 10,50
+CMD U
+EXPECT LOG "next point"
+CMD 10,10
+CMD
+# The same wall as the first one: the 10,50 leg was taken back and 10,10 put in its place.
+EXPECT SOLIDPROPS 2 120 212 12 18 8
+
+# --- The preview is the wall the click commits --------------------------------------------------------
+CMD POLYSOLID
+CLICK 0 0
+HOVER 10 0
+# 2 wide about the centreline, 3 high, running out to the cursor.
+EXPECT PREVIEWBOUNDS 0 -1 0 10 1 3
+CLICK 10 0
+CMD
+# The committed solid occupies the space the rubber did. One builder, so it cannot be otherwise —
+# and if it ever is, this is the pair of lines that says so.
+EXPECT SOLIDBOUNDS 3 0 -1 0 10 1 3
+EXPECT SOLIDPROPS 3 60 112 8 12 6
+
+# --- An arc segment, tangent to the run before it -----------------------------------------------------
+CMD POLYSOLID
+CMD 0,0
+CMD 10,0
+CMD A
+EXPECT LOG "arc segments"
+CMD 20,10
+CMD
+# A 10 ft straight then a quarter turn of 10 ft radius: 2 * 3 * (10 + 5pi).
+EXPECT SOLIDPROPS 4 154.2477796 269.0796327 12 18 8
+
+# --- An arc cannot be the FIRST segment: there is nothing for it to be tangent to ----------------------
+CMD POLYSOLID
+CMD 100,100
+CMD A
+CMD 110,110
+EXPECT LOG "needs a straight run before it"
+ESC
+EXPECT SOLIDS 5
+
+# --- Justification puts the wall on one side of the line it was drawn along ----------------------------
+CMD POLYSOLID
+CMD J L
+EXPECT LOG "justification = Left"
+CMD W 4
+CMD H 3
+CMD 0,0
+CMD 10,0
+CMD
+# Travel is +x, so Left justification leaves the whole wall to the right of the picked line: the same
+# 120 cubic feet as the centred one, in a different place.
+EXPECT SOLIDPROPS 5 120 164 8 12 6
+EXPECT SOLIDBOUNDS 5 0 -4 0 10 0 3
+
+# --- Object: sweep along something already drawn ------------------------------------------------------
+CMD LINE
+CMD 0,50
+CMD 30,50
+# Esc rather than Enter: a blank Enter after a LINE chain re-arms LINE, so the next verb would be
+# swallowed as a point. Pre-existing behaviour, and not what this file is testing.
+ESC
+CMD POLYSOLID
+# Justification is remembered too, so it is set back to Center here - it was Left for the wall above.
+# Setting it needs a POLYSOLID to be RUNNING: these letters are the command's options, not verbs.
+CMD J C
+CMD W 2
+CMD H 5
+CMD O
+EXPECT LOG "select a line, arc, circle or polyline"
+PICK 15 50
+EXPECT SOLIDS 7
+EXPECT SOLIDKIND 6 Polysolid
+EXPECT SOLIDPROPS 6 300 440 8 12 6
+
+# A CIRCLE gives a closed ring wall, which is the case with a HOLE in each flat face — the shape the
+# old centroid-fan triangulator could not draw at all.
+CMD CIRCLE
+CMD 0,-100
+CMD 10
+ESC
+CMD POLYSOLID
+CMD W 2
+CMD H 1
+CMD O
+PICK 10 -100
+EXPECT SOLIDS 8
+# pi*(11^2 - 9^2) high by one foot, and 2*pi*(11+9) of wall plus two 40*pi annular faces.
+EXPECT SOLIDPROPS 7 125.6637061 376.9911184 8 12 6
+
+# A POLYLINE brings its ARC segments across too (REQ-316 gave the store per-vertex bulges). This is
+# the same shape as the picked-arc wall above - a 10 ft straight then a tangent quarter turn of 10 ft
+# radius - so it must report the same figures, which is what pins the bulge conversion.
+CMD POLYLINE
+CMD 0,-300
+CMD 10,-300
+CMD ARC
+CMD 20,-290
+CMD END
+CMD POLYSOLID
+CMD W 2
+CMD H 3
+CMD O
+PICK 5 -300
+EXPECT SOLIDS 9
+EXPECT SOLIDPROPS 8 154.2477796 269.0796327 12 18 8
+
+# --- Refusals leave the run standing and create nothing (REQ-201) -------------------------------------
+CMD POLYSOLID
+CMD W 0
+EXPECT LOG "width must be a positive number"
+CMD W 2
+# Doubling straight back on itself: the two offsets are anti-parallel, so the corner has no point.
+CMD 0,200
+CMD 10,200
+CMD 0,200
+CMD
+EXPECT LOG "too sharp"
+EXPECT SOLIDS 9
+# The run is still open, and U takes back the segment that caused it.
+CMD U
+CMD 10,210
+CMD
+EXPECT SOLIDS 10
+
+# A path that crosses its own run would enclose the same ground twice.
+CMD POLYSOLID
+CMD W 1
+CMD H 3
+CMD 0,300
+CMD 10,300
+CMD 10,305
+CMD 5,305
+CMD 5,295
+CMD
+EXPECT LOG "crosses itself"
+ESC
+EXPECT SOLIDS 10
+
+# --- Esc leaves nothing behind, and the next command starts clean --------------------------------------
+CMD POLYSOLID
+CMD 0,400
+CMD 10,400
+ESC
+EXPECT LOG "POLYSOLID canceled"
+EXPECT SOLIDS 10
+
+# --- Save and reopen ----------------------------------------------------------------------------------
+SAVEAS %OUT%/polysolid-roundtrip.gs
+NEW
+EXPECT SOLIDS 0
+OPEN %OUT%/polysolid-roundtrip.gs
+EXPECT SOLIDS 10
+# The topology is what was written, so every figure comes back from it rather than from a recipe
+# rebuilt on load (ADR-045 (f)) — including the ring wall's holes and its inward-facing inner wall.
+EXPECT SOLIDPROPS 0 120 212 12 18 8
+EXPECT SOLIDPROPS 1 480 720 16 24 10
+EXPECT SOLIDPROPS 7 125.6637061 376.9911184 8 12 6
+EXPECT SOLIDKIND 7 Polysolid
+
+CHECK ALL
