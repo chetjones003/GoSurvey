@@ -65,9 +65,11 @@ struct Surface {
 };
 
 /// The analytic curve an edge lies on. `Ellipse` was added in REQ-314 B2b-1 (D-2026-09-02-h) — an
-/// oblique plane cutting a cylinder meets it along one. The general procedural intersection curve
-/// (a cylinder∩cylinder quartic) is B2b-2 and not yet a member.
-enum class CurveKind : std::uint8_t { Line, Arc, Ellipse };
+/// oblique plane cutting a cylinder meets it along one. `Intersection` (REQ-314 B2b-2,
+/// D-2026-09-03-a) is the general procedural curve where two surfaces cross — a quartic that has no
+/// closed form: it carries the two surfaces (see \ref Edge::isectSurfaces) and is evaluated by
+/// marching along it.
+enum class CurveKind : std::uint8_t { Line, Arc, Ellipse, Intersection };
 
 /// An edge of the solid, referenced by index from the loops that use it.
 ///
@@ -86,10 +88,17 @@ struct Edge {
   /// Arc: origin is the centre, Z is the arc's normal, X points from the centre toward `v0`.
   /// Ellipse: origin is the centre, X is the **semi-major** direction, Y the **semi-minor**, Z the
   /// ellipse-plane normal. The edge starts at the ellipse parameter of `v0` and runs \ref sweep.
+  /// Intersection: `frame.origin` is an **on-curve witness point** near the parametric middle — it
+  /// fixes which of the two ways round the marching evaluator runs from `v0` to `v1`, and seeds the
+  /// Newton correction. The axes are unused. `Translate` / `PlaceInFrame` move it like any frame.
   ucs::Ucs frame;
   double radius = 0.0;   ///< Arc: radius. Ellipse: semi-major axis `a`.
   double radius2 = 0.0;  ///< Ellipse: semi-minor axis `b`. Unused for Line / Arc.
   double sweep = 0.0;    ///< Arc / Ellipse: signed parameter sweep about `frame.zAxis`, CCW positive.
+
+  /// Intersection only: **exactly two** surfaces whose crossing this edge lies on (copies, so the
+  /// edge survives `Translate` and `.gs` on its own). Empty for every other `CurveKind`.
+  std::vector<Surface> isectSurfaces;
 };
 
 /// One directed use of an \ref Edge by a \ref Loop.

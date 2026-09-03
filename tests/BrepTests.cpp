@@ -2160,6 +2160,86 @@ TEST_CASE("Curved B2b-1: the Steinmetz bicylinder - INTERSECT of two equal perpe
   }
 }
 
+TEST_CASE("Curved B2b-2: a procedural Intersection edge marches along both cylinders",
+          "[brep][req314]") {
+  // The pipe-tee intersection curve: small cyl A (axis +x, radius r) meets big cyl B (axis +z,
+  // radius R) along x = sqrt(R^2 - r^2 cos^2 theta), y = r cos theta, z = r sin theta.
+  const double r = 2.0;
+  const double R = 5.0;
+  auto curve = [&](double th) {
+    return Vec3{std::sqrt(R * R - r * r * std::cos(th) * std::cos(th)), r * std::cos(th),
+                r * std::sin(th)};
+  };
+
+  brep::Surface a;
+  a.kind = brep::SurfaceKind::Cylinder;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{1, 0, 0}, &a.frame));
+  a.radius = r;
+  a.height = 40.0;
+  brep::Surface b;
+  b.kind = brep::SurfaceKind::Cylinder;
+  b.frame = ucs::Ucs{};
+  b.radius = R;
+  b.height = 40.0;
+
+  Solid s;
+  s.vertices.push_back(brep::Vertex{curve(0.0)});
+  s.vertices.push_back(brep::Vertex{curve(kPi * 0.5)});
+  brep::Edge e;
+  e.kind = brep::CurveKind::Intersection;
+  e.v0 = 0;
+  e.v1 = 1;
+  e.frame.origin = curve(kPi * 0.25);  // the witness
+  e.isectSurfaces = {a, b};
+  s.edges.push_back(e);
+
+  auto onBoth = [](const Solid& sol, const brep::Edge& ed, double t) {
+    const Vec3 p = brep::EdgePointAt(sol, ed, t);
+    const Vec3 qa = brep::ClosestPointOnSurface(ed.isectSurfaces[0], p);
+    const Vec3 qb = brep::ClosestPointOnSurface(ed.isectSurfaces[1], p);
+    REQUIRE(ray3d::Length(ray3d::Sub(p, qa)) < 1e-6);
+    REQUIRE(ray3d::Length(ray3d::Sub(p, qb)) < 1e-6);
+    return p;
+  };
+
+  SECTION("every sampled point lies on both surfaces; the ends are the two vertices") {
+    for (int i = 0; i <= 20; ++i)
+      onBoth(s, s.edges[0], i / 20.0);
+    REQUIRE(ray3d::Length(ray3d::Sub(brep::EdgePointAt(s, s.edges[0], 0.0), curve(0.0))) < 1e-6);
+    REQUIRE(ray3d::Length(ray3d::Sub(brep::EdgePointAt(s, s.edges[0], 1.0), curve(kPi * 0.5))) < 1e-6);
+    // the walk follows the curvature: its midpoint is well off the straight chord between the ends
+    const Vec3 v0p = curve(0.0);
+    const Vec3 v1p = curve(kPi * 0.5);
+    const Vec3 mid = brep::EdgePointAt(s, s.edges[0], 0.5);
+    const Vec3 chordMid = ray3d::Scale(ray3d::Add(v0p, v1p), 0.5);
+    REQUIRE(ray3d::Length(ray3d::Sub(mid, chordMid)) > 0.1);
+    // and the marched point matches the closed-form curve at its own angle (theta from y,z)
+    for (int k = 1; k < 20; ++k) {
+      const Vec3 p = brep::EdgePointAt(s, s.edges[0], k / 20.0);
+      const double th = std::atan2(p.z / r, p.y / r);
+      REQUIRE(ray3d::Length(ray3d::Sub(p, curve(th))) < 1e-6);
+    }
+  }
+
+  SECTION("Translate carries the stored surfaces, so the curve still lands on them") {
+    const brep::Solid moved = brep::Translate(s, Vec3{3.5e6, -1.24e7, 250.0});
+    for (int i = 0; i <= 20; ++i)
+      onBoth(moved, moved.edges[0], i / 20.0);
+  }
+
+  SECTION("bounds contain the marched curve; the edge asks for several segments") {
+    const brep::Bounds bnd = brep::ComputeBounds(s);
+    REQUIRE(bnd.valid);
+    for (int i = 0; i <= 20; ++i) {
+      const Vec3 p = brep::EdgePointAt(s, s.edges[0], i / 20.0);
+      REQUIRE(p.x >= bnd.mn.x - 1e-6);
+      REQUIRE(p.x <= bnd.mx.x + 1e-6);
+      REQUIRE(p.y >= bnd.mn.y - 1e-6);
+      REQUIRE(p.z <= bnd.mx.z + 1e-6);
+    }
+  }
+}
+
 TEST_CASE("Curved B1: two coaxial cylinders - union and intersect", "[brep][req314]") {
   Problem why = Problem::Ok;
   std::vector<Solid> r;

@@ -137,6 +137,8 @@ void PlaceInFrame(Solid* s, const ucs::Ucs& frame) {
   for (Edge& e : s->edges) {
     if (e.kind != CurveKind::Line)
       mapFrame(&e.frame);
+    for (Surface& sf : e.isectSurfaces)  // Intersection: carry the stored surfaces into the frame too
+      mapFrame(&sf.frame);
   }
   for (Face& f : s->faces)
     mapFrame(&f.surface.frame);
@@ -547,10 +549,19 @@ struct CylinderCut {
   return std::clamp(n, kMinArcSegments, kMaxArcSegments);
 }
 
-/// Segment count to walk a curved edge (Arc or Ellipse) within \p tol; 1 for a straight edge.
+/// Segment count to walk a curved edge (Arc / Ellipse / Intersection) within \p tol; 1 for a line.
 [[nodiscard]] int SegmentsForEdge(const Edge& e, double tol) {
   if (e.kind == CurveKind::Line)
     return 1;
+  if (e.kind == CurveKind::Intersection) {
+    // A quartic has no closed segment count. Use the tighter of the two surfaces' curvatures as a
+    // proxy radius over a quarter turn — generous, and the marched walk itself is what stays on it.
+    double rr = 1.0;
+    for (const Surface& sf : e.isectSurfaces)
+      if (sf.radius > 1e-9)
+        rr = std::min(rr == 1.0 ? sf.radius : rr, sf.radius);
+    return SegmentsForArc(rr, kHalfPi, tol);
+  }
   const double r = e.kind == CurveKind::Ellipse ? std::max(e.radius, e.radius2) : e.radius;
   return SegmentsForArc(r, e.sweep, tol);
 }
@@ -723,7 +734,153 @@ const char* ProblemText(Problem p) {
   return std::atan2(y, x);
 }
 
+// ---------------------------------------------------------------------------------------------
+// The procedural intersection curve (REQ-314 B2b-2, D-2026-09-03-a). An `Intersection` edge stores
+// the two surfaces it lies on and an on-curve witness (`frame.origin`); the curve itself is walked
+// by marching — step along the tangent (the cross product of the two surface normals), then correct
+// straight back onto both surfaces. Everything downstream (tessellation, bounds, the nearest-point
+// query) samples this walk, exactly as it samples the closed-form curves.
+// ---------------------------------------------------------------------------------------------
+
+/// The geometric outward unit normal of \p sf at a point \p p that lies on it, in world. Ignores
+/// `Surface::inward` — the marching tangent only needs the plane the surface bends in.
+[[nodiscard]] Vec3 SurfaceNormalGeom(const Surface& sf, const Vec3& p) {
+  const Vec3 loc = ucs::WorldToUcs(sf.frame, p);
+  Vec3 n{0.0, 0.0, 1.0};
+  const double rho = std::sqrt(loc.x * loc.x + loc.y * loc.y);
+  switch (sf.kind) {
+  case SurfaceKind::Plane:
+    n = Vec3{0.0, 0.0, 1.0};
+    break;
+  case SurfaceKind::Cylinder:
+    n = rho > 1e-12 ? Vec3{loc.x / rho, loc.y / rho, 0.0} : Vec3{1.0, 0.0, 0.0};
+    break;
+  case SurfaceKind::Sphere: {
+    const double len = ray3d::Length(loc);
+    n = len > 1e-12 ? ray3d::Scale(loc, 1.0 / len) : Vec3{1.0, 0.0, 0.0};
+    break;
+  }
+  case SurfaceKind::Cone: {
+    const double k = (sf.radius - sf.radius2) / sf.height;
+    const Vec3 rad = rho > 1e-12 ? Vec3{loc.x / rho, loc.y / rho, 0.0} : Vec3{1.0, 0.0, 0.0};
+    n = ray3d::Normalize(Vec3{rad.x, rad.y, k});
+    break;
+  }
+  case SurfaceKind::Torus: {
+    const Vec3 ring = rho > 1e-12 ? Vec3{loc.x * sf.radius / rho, loc.y * sf.radius / rho, 0.0}
+                                  : Vec3{sf.radius, 0.0, 0.0};
+    n = ray3d::Normalize(ray3d::Sub(loc, ring));
+    break;
+  }
+  }
+  return ucs::UcsVectorToWorld(sf.frame, n);
+}
+
+/// Pull \p p onto the curve where \p a and \p b cross: alternately project onto each surface, which
+/// converges to a point on both when the surfaces are not near-tangent (the case B2b-2 handles).
+[[nodiscard]] Vec3 SettleOntoIntersection(const Surface& a, const Surface& b, Vec3 p) {
+  for (int i = 0; i < 24; ++i) {
+    const Vec3 pa = ClosestPointOnSurface(a, p);
+    const Vec3 q = ClosestPointOnSurface(b, pa);
+    if (ray3d::Length(ray3d::Sub(q, p)) <= 1e-13 * (1.0 + ray3d::Length(q)))
+      return q;
+    p = q;
+  }
+  return p;
+}
+
+/// March the intersection curve of edge \p e from `v0` to `v1` into a dense world polyline (the way
+/// the witness in `e.frame.origin` says to go round). \p n is the number of chords.
+[[nodiscard]] std::vector<Vec3> MarchIntersectionCurve(const Solid& s, const Edge& e, int n) {
+  std::vector<Vec3> pts;
+  if (e.isectSurfaces.size() != 2)
+    return pts;
+  const Surface& sa = e.isectSurfaces[0];
+  const Surface& sb = e.isectSurfaces[1];
+  const Vec3 start = s.vertices[static_cast<std::size_t>(e.v0)].p;
+  const Vec3 end = s.vertices[static_cast<std::size_t>(e.v1)].p;
+  const Vec3 witness = e.frame.origin;
+  n = std::clamp(n, 4, 4096);
+  pts.reserve(static_cast<std::size_t>(n) + 1);
+  pts.push_back(start);
+
+  // A rough length: start -> witness -> end. The marching step is a fraction of it.
+  const double rough = ray3d::Length(ray3d::Sub(witness, start)) + ray3d::Length(ray3d::Sub(end, witness));
+  const double step = std::max(rough / static_cast<double>(n), 1e-12);
+  Vec3 p = start;
+  // Head toward the witness on the first step, then keep the same travel sense.
+  Vec3 prevDir = ray3d::Normalize(ray3d::Sub(witness, start));
+  const int guard = 8 * n + 64;
+  bool nearEndArmed = false;
+  for (int it = 0; it < guard; ++it) {
+    Vec3 tangent = ray3d::Cross(SurfaceNormalGeom(sa, p), SurfaceNormalGeom(sb, p));
+    const double tl = ray3d::Length(tangent);
+    if (!(tl > 1e-14))
+      break;  // surfaces tangent here — outside B2b-2's remit
+    tangent = ray3d::Scale(tangent, 1.0 / tl);
+    if (ray3d::Dot(tangent, prevDir) < 0.0)
+      tangent = ray3d::Scale(tangent, -1.0);
+    Vec3 next = SettleOntoIntersection(sa, sb, ray3d::Add(p, ray3d::Scale(tangent, step)));
+    const Vec3 realDir = ray3d::Sub(next, p);
+    const double moved = ray3d::Length(realDir);
+    if (!(moved > 1e-15))
+      break;
+    prevDir = ray3d::Scale(realDir, 1.0 / moved);
+    const double distToEnd = ray3d::Length(ray3d::Sub(next, end));
+    if (nearEndArmed && distToEnd >= ray3d::Length(ray3d::Sub(p, end))) {
+      break;  // walked past the closest approach to v1 — stop and close on it
+    }
+    if (distToEnd <= step)
+      nearEndArmed = true;
+    pts.push_back(next);
+    p = next;
+    if (nearEndArmed && distToEnd <= 1e-9 * (1.0 + ray3d::Length(end)))
+      break;
+    if (static_cast<int>(pts.size()) > 6 * n)
+      break;
+  }
+  pts.push_back(end);
+  return pts;
+}
+
+/// Resample a marched polyline to the point at fractional arc length \p t in [0, 1].
+[[nodiscard]] Vec3 PointAtArcFraction(const std::vector<Vec3>& poly, double t) {
+  if (poly.empty())
+    return Vec3{};
+  if (poly.size() == 1 || t <= 0.0)
+    return poly.front();
+  if (t >= 1.0)
+    return poly.back();
+  double total = 0.0;
+  for (std::size_t i = 1; i < poly.size(); ++i)
+    total += ray3d::Length(ray3d::Sub(poly[i], poly[i - 1]));
+  if (!(total > 0.0))
+    return poly.front();
+  double target = t * total;
+  for (std::size_t i = 1; i < poly.size(); ++i) {
+    const double seg = ray3d::Length(ray3d::Sub(poly[i], poly[i - 1]));
+    if (target <= seg || i + 1 == poly.size()) {
+      const double f = seg > 1e-15 ? target / seg : 0.0;
+      return ray3d::Add(poly[i - 1], ray3d::Scale(ray3d::Sub(poly[i], poly[i - 1]), f));
+    }
+    target -= seg;
+  }
+  return poly.back();
+}
+
 Vec3 EdgePointAt(const Solid& s, const Edge& e, double t) {
+  if (e.kind == CurveKind::Intersection) {
+    if (e.isectSurfaces.size() != 2)
+      return s.vertices[static_cast<std::size_t>(e.v0)].p;
+    if (t <= 0.0)
+      return s.vertices[static_cast<std::size_t>(e.v0)].p;
+    if (t >= 1.0)
+      return s.vertices[static_cast<std::size_t>(e.v1)].p;
+    // The marched polyline places the point; a final settle removes the chord-interpolation error so
+    // the result is exactly on both surfaces.
+    const Vec3 p = PointAtArcFraction(MarchIntersectionCurve(s, e, 256), t);
+    return SettleOntoIntersection(e.isectSurfaces[0], e.isectSurfaces[1], p);
+  }
   if (e.kind == CurveKind::Line) {
     const Vec3& a = s.vertices[static_cast<std::size_t>(e.v0)].p;
     const Vec3& b = s.vertices[static_cast<std::size_t>(e.v1)].p;
@@ -745,6 +902,8 @@ Solid Translate(const Solid& s, const Vec3& delta) {
   for (Edge& e : out.edges) {
     if (e.kind != CurveKind::Line)
       e.frame.origin = ray3d::Add(e.frame.origin, delta);
+    for (Surface& sf : e.isectSurfaces)  // Intersection: the stored surfaces travel with the edge
+      sf.frame.origin = ray3d::Add(sf.frame.origin, delta);
   }
   for (Face& f : out.faces)
     f.surface.frame.origin = ray3d::Add(f.surface.frame.origin, delta);
@@ -809,6 +968,23 @@ Vec3 ClosestPointOnSurface(const Surface& sf, const Vec3& p) {
 }
 
 Vec3 ClosestPointOnEdge(const Solid& s, const Edge& e, const Vec3& p) {
+  if (e.kind == CurveKind::Intersection) {
+    const std::vector<Vec3> poly = MarchIntersectionCurve(s, e, 256);
+    Vec3 best = poly.empty() ? Vec3{} : poly.front();
+    double bestD = std::numeric_limits<double>::max();
+    for (std::size_t i = 0; i + 1 < poly.size(); ++i) {
+      const Vec3 ab = ray3d::Sub(poly[i + 1], poly[i]);
+      const double denom = ray3d::Dot(ab, ab);
+      const double u = denom > 1e-24 ? std::clamp(ray3d::Dot(ray3d::Sub(p, poly[i]), ab) / denom, 0.0, 1.0) : 0.0;
+      const Vec3 c = ray3d::Add(poly[i], ray3d::Scale(ab, u));
+      const double d = ray3d::Length(ray3d::Sub(c, p));
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    return best;
+  }
   if (e.kind == CurveKind::Line) {
     const Vec3& a = s.vertices[static_cast<std::size_t>(e.v0)].p;
     const Vec3& b = s.vertices[static_cast<std::size_t>(e.v1)].p;
@@ -4427,6 +4603,26 @@ Problem Validate(const Solid& s) {
       if (ray3d::Length(ray3d::Sub(s.vertices[static_cast<std::size_t>(e.v1)].p,
                                    s.vertices[static_cast<std::size_t>(e.v0)].p)) <= lenEps)
         return Problem::DegenerateEdge;
+    } else if (e.kind == CurveKind::Intersection) {
+      // The curve is defined entirely by its two surfaces and its endpoints — check them here, not a
+      // radius or sweep (an Intersection edge carries neither).
+      if (e.isectSurfaces.size() != 2)
+        return Problem::DegenerateEdge;
+      const double onEps = 1e-7 * scale;
+      for (const Surface& sf : e.isectSurfaces) {
+        if (!AllFinite({sf.radius, sf.radius2, sf.height}) || !FinitePoint(sf.frame.origin))
+          return Problem::NonFiniteCoordinate;
+        for (const Vec3& p : {s.vertices[static_cast<std::size_t>(e.v0)].p,
+                              s.vertices[static_cast<std::size_t>(e.v1)].p, e.frame.origin}) {
+          if (!FinitePoint(p))
+            return Problem::NonFiniteCoordinate;
+          if (ray3d::Length(ray3d::Sub(p, ClosestPointOnSurface(sf, p))) > onEps)
+            return Problem::DegenerateEdge;
+        }
+      }
+      if (ray3d::Length(ray3d::Sub(s.vertices[static_cast<std::size_t>(e.v1)].p,
+                                   s.vertices[static_cast<std::size_t>(e.v0)].p)) <= lenEps)
+        return Problem::DegenerateEdge;
     } else {
       if (!AllFinite({e.radius, e.radius2, e.sweep}) || !FinitePoint(e.frame.origin))
         return Problem::NonFiniteCoordinate;
@@ -4617,6 +4813,9 @@ Bounds ComputeBounds(const Solid& s) {
       ExpandCircle(&b, e.frame.origin, e.frame.zAxis, e.radius);
     else if (e.kind == CurveKind::Ellipse)  // conservative: the semi-major circle bounds the ellipse
       ExpandCircle(&b, e.frame.origin, e.frame.zAxis, e.radius);
+    else if (e.kind == CurveKind::Intersection)
+      for (const Vec3& p : MarchIntersectionCurve(s, e, 64))
+        Expand(&b, p);
   }
   for (const Face& f : s.faces) {
     const Surface& sf = f.surface;
