@@ -3757,11 +3757,117 @@ struct SphereShape {
   return Succeed(outWhy);
 }
 
+/// `A ∪ B` of the Steinmetz pair — a T-pipe (or cross-pipe): both cylinders' walls outside the other,
+/// plus all four flat caps (REQ-314 B2b-1 coda, D-2026-09-02-i). \p fr: origin at the crossing,
+/// `zAxis` along `A`, `xAxis` along `B`. \p zA0 / \p zA1 and \p xB0 / \p xB1 are the two cylinders'
+/// cap positions from the crossing (`… < -r < 0 < r < …`). The two intersection ellipses (planes
+/// `z = ±x`) are the internal seam; each cylinder's wall becomes two bands (a top/bottom for `A`, a
+/// `±x` pair for `B`), every band split into two half-faces through the crossing points. 10 vertices,
+/// 20 edges, 12 faces. Volume `vol(A) + vol(B) − 16 r³ / 3`.
+[[nodiscard]] bool BuildSteinmetzUnion(const ucs::Ucs& fr, double r, double zA0, double zA1,
+                                       double xB0, double xB1, Solid* out, Problem* outWhy) {
+  Solid s;
+  const Vec3 X = fr.xAxis;
+  const Vec3 Y = fr.yAxis;
+  const Vec3 Z = fr.zAxis;
+  const Vec3 c = fr.origin;
+  auto Wc = [&](double sx, double sz) {
+    return ray3d::Add(c, ray3d::Add(ray3d::Scale(X, sx), ray3d::Scale(Z, sz)));
+  };
+  const int v0 = AddVertex(&s, ray3d::Add(c, ray3d::Scale(Y, r)));   // crossing, +Y
+  const int v1 = AddVertex(&s, ray3d::Add(c, ray3d::Scale(Y, -r)));  // crossing, -Y
+  const int rTa = AddVertex(&s, ray3d::Add(Wc(0.0, zA1), ray3d::Scale(Y, r)));
+  const int rTb = AddVertex(&s, ray3d::Add(Wc(0.0, zA1), ray3d::Scale(Y, -r)));
+  const int rBa = AddVertex(&s, ray3d::Add(Wc(0.0, zA0), ray3d::Scale(Y, r)));
+  const int rBb = AddVertex(&s, ray3d::Add(Wc(0.0, zA0), ray3d::Scale(Y, -r)));
+  const int qPa = AddVertex(&s, ray3d::Add(Wc(xB1, 0.0), ray3d::Scale(Y, r)));
+  const int qPb = AddVertex(&s, ray3d::Add(Wc(xB1, 0.0), ray3d::Scale(Y, -r)));
+  const int qNa = AddVertex(&s, ray3d::Add(Wc(xB0, 0.0), ray3d::Scale(Y, r)));
+  const int qNb = AddVertex(&s, ray3d::Add(Wc(xB0, 0.0), ray3d::Scale(Y, -r)));
+
+  const double a = r * std::sqrt(2.0);
+  const double b = r;
+  const Vec3 nP = ray3d::Normalize(ray3d::Sub(Z, X));  // plane z = x
+  const Vec3 nM = ray3d::Normalize(ray3d::Add(Z, X));  // plane z = -x
+  const Vec3 mP = ray3d::Normalize(ray3d::Add(Z, X));
+  const Vec3 mM = ray3d::Normalize(ray3d::Sub(X, Z));
+  const int ePp = AddEllipse(&s, v1, v0, c, nP, mP, a, b, kPi);  // z = x,  x > 0
+  const int ePn = AddEllipse(&s, v0, v1, c, nP, mP, a, b, kPi);  // z = x,  x < 0
+  const int eMp = AddEllipse(&s, v1, v0, c, nM, mM, a, b, kPi);  // z = -x, x > 0
+  const int eMn = AddEllipse(&s, v0, v1, c, nM, mM, a, b, kPi);  // z = -x, x < 0
+
+  const Vec3 topC = Wc(0.0, zA1);
+  const Vec3 botC = Wc(0.0, zA0);
+  const Vec3 pxC = Wc(xB1, 0.0);
+  const Vec3 nxC = Wc(xB0, 0.0);
+  const int rtP = AddArc(&s, rTb, rTa, topC, Z, kPi);   // A top rim, x > 0
+  const int rtN = AddArc(&s, rTa, rTb, topC, Z, kPi);   // A top rim, x < 0
+  const int rbP = AddArc(&s, rBb, rBa, botC, Z, kPi);   // A bottom rim, x > 0
+  const int rbN = AddArc(&s, rBa, rBb, botC, Z, kPi);   // A bottom rim, x < 0
+  const int rpA = AddArc(&s, qPb, qPa, pxC, X, kPi);    // B +x rim, z < 0
+  const int rpB = AddArc(&s, qPa, qPb, pxC, X, kPi);    // B +x rim, z > 0
+  const int rnA = AddArc(&s, qNb, qNa, nxC, X, kPi);    // B -x rim, z < 0
+  const int rnB = AddArc(&s, qNa, qNb, nxC, X, kPi);    // B -x rim, z > 0
+  const int sTa = AddLine(&s, v0, rTa);
+  const int sTb = AddLine(&s, v1, rTb);
+  const int sBa = AddLine(&s, v0, rBa);
+  const int sBb = AddLine(&s, v1, rBb);
+  const int sPa = AddLine(&s, v0, qPa);
+  const int sPb = AddLine(&s, v1, qPb);
+  const int sNa = AddLine(&s, v0, qNa);
+  const int sNb = AddLine(&s, v1, qNb);
+
+  auto band = [&](const ucs::Ucs& sf, double h, double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame = sf;
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = h;
+    f.uStart = u0;
+    f.uEnd = u1;
+    Loop lp;
+    lp.uses = std::move(uses);
+    f.loops.push_back(std::move(lp));
+    s.faces.push_back(std::move(f));
+  };
+  ucs::Ucs frTop = fr;
+  ucs::Ucs frBot = fr;
+  frBot.origin = botC;
+  ucs::Ucs frPx;
+  frPx.origin = c;
+  frPx.zAxis = X;
+  frPx.xAxis = Z;
+  frPx.yAxis = ray3d::Normalize(ray3d::Cross(X, Z));
+  ucs::Ucs frNx = frPx;
+  frNx.origin = nxC;
+
+  // A's wall outside B: a top band (z >= |x|) and a bottom band, each two half-faces.
+  band(frTop, zA1, -kHalfPi, kHalfPi, {{ePp, false}, {sTa, false}, {rtP, true}, {sTb, true}});
+  band(frTop, zA1, kHalfPi, kHalfPi + kPi, {{eMn, false}, {sTb, false}, {rtN, true}, {sTa, true}});
+  band(frBot, -zA0, -kHalfPi, kHalfPi, {{eMp, true}, {sBb, false}, {rbP, false}, {sBa, true}});
+  band(frBot, -zA0, kHalfPi, kHalfPi + kPi, {{ePn, true}, {sBa, false}, {rbN, false}, {sBb, true}});
+  s.faces.push_back(MakePlaneFace(topC, Z, {{rtP, false}, {rtN, false}}));
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{rbP, true}, {rbN, true}}));
+  // B's wall outside A: a +x band and a -x band, each two half-faces (split at world z = 0).
+  band(frPx, xB1, -kHalfPi, kHalfPi, {{ePp, true}, {sPb, false}, {rpB, true}, {sPa, true}});
+  band(frPx, xB1, kHalfPi, kHalfPi + kPi, {{eMp, false}, {sPa, false}, {rpA, true}, {sPb, true}});
+  band(frNx, -xB0, -kHalfPi, kHalfPi, {{eMn, true}, {sNa, false}, {rnB, false}, {sNb, true}});
+  band(frNx, -xB0, kHalfPi, kHalfPi + kPi, {{ePn, false}, {sNb, false}, {rnA, false}, {sNa, true}});
+  s.faces.push_back(MakePlaneFace(pxC, X, {{rpA, false}, {rpB, false}}));
+  s.faces.push_back(MakePlaneFace(nxC, ray3d::Scale(X, -1.0), {{rnA, true}, {rnB, true}}));
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// Recognise two equal-radius cylinders whose axes cross at right angles, both piercing clear of the
-/// other's caps. INTERSECT is a Steinmetz bicylinder and `A − B` is `A` with a clean perpendicular
-/// channel (both closed form); UNION of this pair (a T-pipe) is a later B2b-1 sub-slice and is
-/// refused by name here. `*handled` stays false when the pair is not this configuration, so the
-/// caller falls through to the coaxial recogniser.
+/// other's caps. INTERSECT is a Steinmetz bicylinder, `A − B` is `A` with a clean perpendicular
+/// channel, and `A ∪ B` is a T-pipe — all closed form. `*handled` stays false when the pair is not
+/// this configuration, so the caller falls through to the coaxial recogniser.
 [[nodiscard]] bool TryBooleanSteinmetz(const CylinderShape& A, const CylinderShape& B, BoolOp op,
                                        std::vector<Solid>* out, bool* handled, Problem* outWhy) {
   const double sc = A.radius + A.length + B.length;
@@ -3786,8 +3892,6 @@ struct SphereShape {
     return false;  // an intersection ellipse would run off a cap — not the clean bicylinder
 
   *handled = true;
-  if (op == BoolOp::Union)
-    return Fail(Problem::BooleanCurvedFace, outWhy);  // T-pipe UNION — a later sub-slice
 
   ucs::Ucs fr;
   if (!ucs::FromNormal(meet, az, &fr))
@@ -3797,14 +3901,20 @@ struct SphereShape {
     return Fail(Problem::BooleanResultInvalid, outWhy);
   fr.xAxis = ray3d::Normalize(xa);
   fr.yAxis = ray3d::Normalize(ray3d::Cross(fr.zAxis, fr.xAxis));
+  const double zA0 = -sa;
+  const double zA1 = A.length - sa;
+  const double xB0 = -sb;
+  const double xB1 = B.length - sb;
   Solid r2;
-  if (op == BoolOp::Intersect) {
-    if (!BuildSteinmetzIntersection(fr, r, &r2, outWhy))
-      return false;
-  } else {
-    if (!BuildSteinmetzSubtract(fr, r, -sa, A.length - sa, &r2, outWhy))
-      return false;
-  }
+  bool ok = false;
+  if (op == BoolOp::Intersect)
+    ok = BuildSteinmetzIntersection(fr, r, &r2, outWhy);
+  else if (op == BoolOp::Subtract)
+    ok = BuildSteinmetzSubtract(fr, r, zA0, zA1, &r2, outWhy);
+  else
+    ok = BuildSteinmetzUnion(fr, r, zA0, zA1, xB0, xB1, &r2, outWhy);
+  if (!ok)
+    return false;
   out->push_back(std::move(r2));
   return Succeed(outWhy);
 }

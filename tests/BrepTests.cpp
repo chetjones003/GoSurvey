@@ -2100,16 +2100,51 @@ TEST_CASE("Curved B2b-1: the Steinmetz bicylinder - INTERSECT of two equal perpe
     REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(want).epsilon(1e-9));
   }
 
-  SECTION("UNION of the same pair (a T-pipe) is refused by name - a later sub-slice") {
+  SECTION("UNION is a T-pipe - volume vol(A) + vol(B) - 16 r^3 / 3") {
     Solid cylZ;
     Solid cylX;
-    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));  // vol pi r^2 * 12
     ucs::Ucs alongX;
-    REQUIRE(ucs::FromNormal(Vec3{-6, 0, 0}, Vec3{1, 0, 0}, &alongX));
+    REQUIRE(ucs::FromNormal(Vec3{-9, 0, 0}, Vec3{1, 0, 0}, &alongX));
+    REQUIRE(brep::MakeCylinder(alongX, r, 18, &cylX, &why));  // vol pi r^2 * 18, x in [-9, 9]
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    const double vA = kPi * r * r * 12.0;
+    const double vB = kPi * r * r * 18.0;
+    const double want = vA + vB - 16.0 * r * r * r / 3.0;
+    RequireSolid(out[0], Counts{10, 20, 12}, 2, want,
+                 // each cylinder's wall (2 pi r * len) loses its 8 r^2 elliptical bite; four caps.
+                 (2.0 * kPi * r * 12.0 - 8.0 * r * r) + (2.0 * kPi * r * 18.0 - 8.0 * r * r) +
+                     4.0 * kPi * r * r);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.003, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(3e-3));
+  }
+
+  SECTION("UNION stays exact on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs alongZ = frame;
+    alongZ.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -6});
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-6, 0, 0}), frame.xAxis, &alongX));
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(alongZ, r, 12, &cylZ, &why));
     REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanUnion(cylZ, cylX, &out, &why));
-    REQUIRE(why == Problem::BooleanCurvedFace);
+    REQUIRE(brep::BooleanUnion(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    const double want = 2.0 * kPi * r * r * 12.0 - 16.0 * r * r * r / 3.0;
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(1e-9));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(want).epsilon(1e-9));
   }
 
   SECTION("unequal radii are not this recogniser - still refused, operands untouched") {
