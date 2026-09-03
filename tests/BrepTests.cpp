@@ -2201,14 +2201,77 @@ TEST_CASE("Curved B2b-2 first pair: sphere INTERSECT cylinder, axis through the 
     REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vol).epsilon(1e-9));
   }
 
-  SECTION("SUBTRACT and UNION of the centred pair are not built yet - refused, not corrupt") {
+  SECTION("sphere - cylinder is a clean drilled ball, genus one") {
+    const double vol = 4.0 / 3.0 * kPi * Rs * Rs * Rs -
+                       (2.0 * kPi * r * r * h + 2.0 * (kPi * (Rs - h) * (Rs - h) * (2.0 * Rs + h) / 3.0));
+    const double area = 4.0 * kPi * h * (Rs + r);
     Solid sph;
     Solid cyl;
     REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
     REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cyl, &why));
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanSubtract(sph, cyl, &out, &why));
-    REQUIRE_FALSE(brep::BooleanUnion(sph, cyl, &out, &why));
+    REQUIRE(brep::BooleanSubtract(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    RequireSolid(out[0], Counts{4, 8, 4}, 0, vol, area);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.002, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vol).epsilon(3e-3));
+
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{0, 0, -6}), frame.zAxis, &axis));
+    Solid sph2;
+    Solid cyl2;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph2, &why));
+    REQUIRE(brep::MakeCylinder(axis, r, 12, &cyl2, &why));
+    std::vector<Solid> far;
+    REQUIRE(brep::BooleanSubtract(sph2, cyl2, &far, &why));
+    REQUIRE(brep::Validate(far[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(far[0]).volume == Approx(vol).epsilon(1e-9));
+    const brep::Solid moved = brep::Translate(far[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vol).epsilon(1e-9));
+  }
+
+  SECTION("cylinder - sphere leaves two stubs, each with a spherical dimple") {
+    const double stubVol = kPi * r * r * (6.0 - h) - kPi * (Rs - h) * (Rs - h) * (2.0 * Rs + h) / 3.0;
+    const double stubArea = kPi * r * r + 2.0 * kPi * r * (6.0 - h) + 2.0 * kPi * Rs * (Rs - h);
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, sph, &out, &why));
+    REQUIRE(out.size() == 2);
+    for (const Solid& stub : out) {
+      RequireSolid(stub, Counts{5, 8, 5}, 2, stubVol, stubArea);
+      REQUIRE_FALSE(brep::SelfIntersects(stub));
+    }
+  }
+
+  SECTION("sphere union cylinder is a ball with a boss out each side") {
+    const double vol = 4.0 / 3.0 * kPi * Rs * Rs * Rs + kPi * r * r * 12.0 -
+                       (2.0 * kPi * r * r * h + 2.0 * (kPi * (Rs - h) * (Rs - h) * (2.0 * Rs + h) / 3.0));
+    const double area = 4.0 * kPi * Rs * h + 2.0 * (2.0 * kPi * r * (6.0 - h)) + 2.0 * kPi * r * r;
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    RequireSolid(out[0], Counts{8, 14, 8}, 2, vol, area);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.002, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vol).epsilon(3e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanUnion(cyl, sph, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vol).epsilon(1e-12));
   }
 
   SECTION("an offset axis (a quartic) is still refused - a later slice") {

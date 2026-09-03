@@ -4762,6 +4762,255 @@ struct SphereShape {
   return Succeed(outWhy);
 }
 
+/// `sphere − cylinder` with the cylinder axis **through the sphere centre** (REQ-314 B2b-2, GitHub
+/// issue #242). A ball with a clean cylindrical hole drilled straight through it — a genus-1 solid.
+/// The kept spherical surface is the equatorial zone `|z| <= h` (`h = √(Rs²−r²)`); the bore is an
+/// **inward** cylinder wall of radius \p r spanning `z ∈ [−h, h]`. The zone's two seams are sphere
+/// meridians (they bulge to `±Rs`), the bore's two seams the straight segments at `±x`. 4 vertices,
+/// 8 edges, 4 faces. Built canonically about `+z` and placed into \p fr (origin = sphere centre,
+/// `zAxis` = cylinder axis).
+///
+/// Volume `(4/3) π Rs³ − (2 π r² h + 2 · π (Rs−h)² (2Rs+h) / 3)`; area `4 π h (Rs + r)`.
+[[nodiscard]] bool BuildSphereCylinderSubtractSphere(const ucs::Ucs& fr, double r, double Rs,
+                                                     Solid* out, Problem* outWhy) {
+  if (!(Rs > r) || !(r > 0.0))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double h = std::sqrt(std::max(0.0, Rs * Rs - r * r));
+  const double vc = std::asin(std::clamp(h / Rs, -1.0, 1.0));  // latitude of each cut circle
+  Solid s;
+  const int t0 = AddVertex(&s, Vec3{r, 0.0, h});
+  const int t1 = AddVertex(&s, Vec3{-r, 0.0, h});
+  const int b0 = AddVertex(&s, Vec3{r, 0.0, -h});
+  const int b1 = AddVertex(&s, Vec3{-r, 0.0, -h});
+  const int tc0 = AddArc(&s, t0, t1, Vec3{0.0, 0.0, h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int tc1 = AddArc(&s, t1, t0, Vec3{0.0, 0.0, h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int bc0 = AddArc(&s, b0, b1, Vec3{0.0, 0.0, -h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int bc1 = AddArc(&s, b1, b0, Vec3{0.0, 0.0, -h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int mzP = AddArc(&s, b0, t0, Vec3{0.0, 0.0, 0.0}, Vec3{0.0, -1.0, 0.0}, 2.0 * vc);  // +x meridian
+  const int mzN = AddArc(&s, b1, t1, Vec3{0.0, 0.0, 0.0}, Vec3{0.0, 1.0, 0.0}, 2.0 * vc);   // -x meridian
+  const int szP = AddLine(&s, b0, t0);  // +x bore seam
+  const int szN = AddLine(&s, b1, t1);  // -x bore seam
+
+  auto zone = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Sphere;
+    f.surface.radius = Rs;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.vStart = -vc;
+    f.vEnd = vc;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame.origin = Vec3{0.0, 0.0, -h};
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = 2.0 * h;
+    f.surface.inward = true;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  zone(0.0, kPi, {{bc0, false}, {mzN, false}, {tc0, true}, {mzP, true}});
+  zone(kPi, kTwoPi, {{bc1, false}, {mzP, false}, {tc1, true}, {mzN, true}});
+  wall(0.0, kPi, {{szP, false}, {tc0, false}, {szN, true}, {bc0, true}});
+  wall(kPi, kTwoPi, {{szN, false}, {tc1, false}, {szP, true}, {bc1, true}});
+
+  AddSingleShell(&s);
+  PlaceInFrame(&s, fr);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+/// One stub of `cylinder − sphere` (centred axis): a short cylinder of radius \p r, one flat cap at
+/// `z = zFlat`, the other end an **inward** spherical dimple (the sphere's polar cap, `pole = ±Rs`).
+/// \p poleSign is `+1` for the stub above the sphere, `−1` for the one below. `|zFlat| > h`. 5
+/// vertices, 8 edges, 5 faces. Built canonically about `+z`, placed into \p fr.
+[[nodiscard]] bool BuildCylinderSphereStub(const ucs::Ucs& fr, double r, double Rs, double zFlat,
+                                           int poleSign, Solid* out, Problem* outWhy) {
+  if (!(Rs > r) || !(r > 0.0))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double h = std::sqrt(std::max(0.0, Rs * Rs - r * r));
+  const double vc = std::asin(std::clamp(h / Rs, -1.0, 1.0));
+  const double zCut = poleSign > 0 ? h : -h;
+  const double pole = poleSign > 0 ? Rs : -Rs;
+  if (!(std::fabs(zFlat) > h))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  Solid s;
+  const int d0 = AddVertex(&s, Vec3{r, 0.0, zFlat});
+  const int d1 = AddVertex(&s, Vec3{-r, 0.0, zFlat});
+  const int c0 = AddVertex(&s, Vec3{r, 0.0, zCut});
+  const int c1 = AddVertex(&s, Vec3{-r, 0.0, zCut});
+  const int pl = AddVertex(&s, Vec3{0.0, 0.0, pole});
+  const int dc0 = AddArc(&s, d0, d1, Vec3{0.0, 0.0, zFlat}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int dc1 = AddArc(&s, d1, d0, Vec3{0.0, 0.0, zFlat}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int cc0 = AddArc(&s, c0, c1, Vec3{0.0, 0.0, zCut}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int cc1 = AddArc(&s, c1, c0, Vec3{0.0, 0.0, zCut}, Vec3{0.0, 0.0, 1.0}, kPi);
+  // Wall seams run cut -> flat; meridians run cut -> pole. The +x meridian turns about -y when the
+  // pole is +z and about +y when it is -z (so the sweep stays positive either way).
+  const int w0 = AddLine(&s, c0, d0);
+  const int w1 = AddLine(&s, c1, d1);
+  const Vec3 myAxis = poleSign > 0 ? Vec3{0.0, -1.0, 0.0} : Vec3{0.0, 1.0, 0.0};
+  const int m0 = AddArc(&s, c0, pl, Vec3{0.0, 0.0, 0.0}, myAxis, kHalfPi - vc);
+  const int m1 = AddArc(&s, c1, pl, Vec3{0.0, 0.0, 0.0}, ray3d::Scale(myAxis, -1.0), kHalfPi - vc);
+
+  const double zLo = std::min(zFlat, zCut);
+  const double zHi = std::max(zFlat, zCut);
+  auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame.origin = Vec3{0.0, 0.0, zLo};
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = zHi - zLo;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  auto dimple = [&](double u0, double u1, double v0, double v1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Sphere;
+    f.surface.radius = Rs;
+    f.surface.inward = true;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.vStart = v0;
+    f.vEnd = v1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+
+  if (poleSign > 0) {
+    s.faces.push_back(MakePlaneFace(Vec3{0.0, 0.0, zFlat}, Vec3{0.0, 0.0, 1.0},
+                                    {{dc0, false}, {dc1, false}}));
+    wall(0.0, kPi, {{cc0, false}, {w1, false}, {dc0, true}, {w0, true}});
+    wall(kPi, kTwoPi, {{cc1, false}, {w0, false}, {dc1, true}, {w1, true}});
+    dimple(0.0, kPi, vc, kHalfPi, {{m0, false}, {m1, true}, {cc0, true}});
+    dimple(kPi, kTwoPi, vc, kHalfPi, {{m1, false}, {m0, true}, {cc1, true}});
+  } else {
+    s.faces.push_back(MakePlaneFace(Vec3{0.0, 0.0, zFlat}, Vec3{0.0, 0.0, -1.0},
+                                    {{dc1, true}, {dc0, true}}));
+    wall(0.0, kPi, {{dc0, false}, {w1, true}, {cc0, true}, {w0, false}});
+    wall(kPi, kTwoPi, {{dc1, false}, {w0, true}, {cc1, true}, {w1, false}});
+    dimple(0.0, kPi, -kHalfPi, -vc, {{m0, true}, {cc0, false}, {m1, false}});
+    dimple(kPi, kTwoPi, -kHalfPi, -vc, {{m1, true}, {cc1, false}, {m0, false}});
+  }
+
+  AddSingleShell(&s);
+  PlaceInFrame(&s, fr);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+/// `cylinder − sphere` with the cylinder axis **through the sphere centre** and both cylinder caps
+/// clear of the sphere: the sphere bites the cylinder clean in two, leaving two disjoint stubs, each
+/// with a concave spherical dimple on its inner end (REQ-314 B2b-2, GitHub issue #242). \p zBot /
+/// \p zTop are the cylinder cap heights measured from the sphere centre along \p fr's `zAxis`
+/// (`zBot < −h < h < zTop`). Pushes **two** solids.
+[[nodiscard]] bool BuildCylinderSphereSubtract(const ucs::Ucs& fr, double r, double Rs, double zBot,
+                                               double zTop, std::vector<Solid>* out, Problem* outWhy) {
+  Solid top;
+  if (!BuildCylinderSphereStub(fr, r, Rs, zTop, 1, &top, outWhy))
+    return false;
+  Solid bot;
+  if (!BuildCylinderSphereStub(fr, r, Rs, zBot, -1, &bot, outWhy))
+    return false;
+  out->push_back(std::move(top));
+  out->push_back(std::move(bot));
+  return Succeed(outWhy);
+}
+
+/// `sphere ∪ cylinder` with the cylinder axis **through the sphere centre**, both caps clear of the
+/// sphere (REQ-314 B2b-2, GitHub issue #242): the ball with a solid cylindrical boss out each side.
+/// The kept spherical surface is the equatorial zone `|z| <= h`; each boss is the cylinder wall from
+/// the cut circle out to its flat cap. 8 vertices, 14 edges, 8 faces. Built canonically about `+z`,
+/// placed into \p fr. \p zBot / \p zTop are the cap heights from the sphere centre
+/// (`zBot < −h < h < zTop`).
+///
+/// Volume `(4/3) π Rs³ + π r² (zTop − zBot) − (2 π r² h + 2 · π (Rs−h)² (2Rs+h) / 3)`.
+[[nodiscard]] bool BuildSphereCylinderUnion(const ucs::Ucs& fr, double r, double Rs, double zBot,
+                                            double zTop, Solid* out, Problem* outWhy) {
+  if (!(Rs > r) || !(r > 0.0))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double h = std::sqrt(std::max(0.0, Rs * Rs - r * r));
+  if (!(zBot < -h) || !(zTop > h))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double vc = std::asin(std::clamp(h / Rs, -1.0, 1.0));
+  Solid s;
+  const int t0 = AddVertex(&s, Vec3{r, 0.0, h});
+  const int t1 = AddVertex(&s, Vec3{-r, 0.0, h});
+  const int b0 = AddVertex(&s, Vec3{r, 0.0, -h});
+  const int b1 = AddVertex(&s, Vec3{-r, 0.0, -h});
+  const int rt0 = AddVertex(&s, Vec3{r, 0.0, zTop});
+  const int rt1 = AddVertex(&s, Vec3{-r, 0.0, zTop});
+  const int rb0 = AddVertex(&s, Vec3{r, 0.0, zBot});
+  const int rb1 = AddVertex(&s, Vec3{-r, 0.0, zBot});
+  const int tc0 = AddArc(&s, t0, t1, Vec3{0.0, 0.0, h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int tc1 = AddArc(&s, t1, t0, Vec3{0.0, 0.0, h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int bc0 = AddArc(&s, b0, b1, Vec3{0.0, 0.0, -h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int bc1 = AddArc(&s, b1, b0, Vec3{0.0, 0.0, -h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int mzP = AddArc(&s, b0, t0, Vec3{0.0, 0.0, 0.0}, Vec3{0.0, -1.0, 0.0}, 2.0 * vc);
+  const int mzN = AddArc(&s, b1, t1, Vec3{0.0, 0.0, 0.0}, Vec3{0.0, 1.0, 0.0}, 2.0 * vc);
+  const int rtc0 = AddArc(&s, rt0, rt1, Vec3{0.0, 0.0, zTop}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int rtc1 = AddArc(&s, rt1, rt0, Vec3{0.0, 0.0, zTop}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int rbc0 = AddArc(&s, rb0, rb1, Vec3{0.0, 0.0, zBot}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int rbc1 = AddArc(&s, rb1, rb0, Vec3{0.0, 0.0, zBot}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int su0 = AddLine(&s, t0, rt0);
+  const int su1 = AddLine(&s, t1, rt1);
+  const int sl0 = AddLine(&s, rb0, b0);
+  const int sl1 = AddLine(&s, rb1, b1);
+
+  auto zone = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Sphere;
+    f.surface.radius = Rs;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.vStart = -vc;
+    f.vEnd = vc;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  auto wall = [&](double zLo, double zHi, double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame.origin = Vec3{0.0, 0.0, zLo};
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = zHi - zLo;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  zone(0.0, kPi, {{bc0, false}, {mzN, false}, {tc0, true}, {mzP, true}});
+  zone(kPi, kTwoPi, {{bc1, false}, {mzP, false}, {tc1, true}, {mzN, true}});
+  wall(h, zTop, 0.0, kPi, {{tc0, false}, {su1, false}, {rtc0, true}, {su0, true}});
+  wall(h, zTop, kPi, kTwoPi, {{tc1, false}, {su0, false}, {rtc1, true}, {su1, true}});
+  s.faces.push_back(MakePlaneFace(Vec3{0.0, 0.0, zTop}, Vec3{0.0, 0.0, 1.0},
+                                  {{rtc0, false}, {rtc1, false}}));
+  wall(zBot, -h, 0.0, kPi, {{rbc0, false}, {sl1, false}, {bc0, true}, {sl0, true}});
+  wall(zBot, -h, kPi, kTwoPi, {{rbc1, false}, {sl0, false}, {bc1, true}, {sl1, true}});
+  s.faces.push_back(MakePlaneFace(Vec3{0.0, 0.0, zBot}, Vec3{0.0, 0.0, -1.0},
+                                  {{rbc0, true}, {rbc1, true}}));
+
+  AddSingleShell(&s);
+  PlaceInFrame(&s, fr);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// The Steinmetz bicylinder: the INTERSECT of two right circular cylinders of **equal radius** whose
 /// axes **cross at right angles** (REQ-314 B2b-1 coda, D-2026-09-02-i). Their surfaces meet along two
 /// full ellipses (the quartic intersection `x⁴ = …` factors into the planes `z = ±x`), so the result
@@ -5813,9 +6062,13 @@ struct SphereShape {
 /// the whole result is closed-form. Any other configuration (an offset or skew axis → a quartic
 /// curve) is left for a later slice and falls through unhandled to the caller's refusal.
 ///
-/// Only `INTERSECT` is built here; `SUBTRACT` / `UNION` of the centred pair are the next slices.
+/// All three operations are built: INTERSECT (a spherical-ended barrel), UNION (the ball with a
+/// cylindrical boss each side), and SUBTRACT — `sphere − cylinder` is the drilled ball (genus 1),
+/// `cylinder − sphere` two stubs each with a spherical dimple. \p sphereIsMinuend picks the
+/// SUBTRACT direction and is ignored for the other two.
 [[nodiscard]] bool TryBooleanSphereCylinder(const SphereShape& S, const CylinderShape& C, BoolOp op,
-                                            std::vector<Solid>* out, bool* handled, Problem* outWhy) {
+                                            bool sphereIsMinuend, std::vector<Solid>* out,
+                                            bool* handled, Problem* outWhy) {
   const double sc = S.radius + C.radius + C.length;
   const double eps = 1e-7 * sc;
   // The sphere centre must lie on the cylinder axis line.
@@ -5830,18 +6083,36 @@ struct SphereShape {
     return false;  // a cylinder cap reaches into the sphere — not the clean spherical-ended barrel
                    // (the cap must clear the sphere entirely, else the result keeps a flat disk piece)
 
-  if (op != BoolOp::Intersect)
-    return false;  // centred sphere ∩ cylinder SUBTRACT / UNION — the next slices
-
   *handled = true;
   ucs::Ucs fr;
   if (!ucs::FromNormal(S.centre, C.axis.zAxis, &fr))
     return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double zBot = -along;
+  const double zTop = C.length - along;
   Solid r;
-  if (!BuildSphereCylinderIntersection(fr, C.radius, S.radius, &r, outWhy))
-    return false;
-  out->push_back(std::move(r));
-  return Succeed(outWhy);
+  switch (op) {
+  case BoolOp::Intersect:
+    if (!BuildSphereCylinderIntersection(fr, C.radius, S.radius, &r, outWhy))
+      return false;
+    out->push_back(std::move(r));
+    return Succeed(outWhy);
+  case BoolOp::Union:
+    if (!BuildSphereCylinderUnion(fr, C.radius, S.radius, zBot, zTop, &r, outWhy))
+      return false;
+    out->push_back(std::move(r));
+    return Succeed(outWhy);
+  case BoolOp::Subtract:
+    if (sphereIsMinuend) {
+      if (!BuildSphereCylinderSubtractSphere(fr, C.radius, S.radius, &r, outWhy))
+        return false;
+      out->push_back(std::move(r));
+      return Succeed(outWhy);
+    }
+    if (!BuildCylinderSphereSubtract(fr, C.radius, S.radius, zBot, zTop, out, outWhy))
+      return false;
+    return Succeed(outWhy);
+  }
+  return false;
 }
 
 /// Try the curved recognisers. `*handled` true means the result (success or a named refusal) is
@@ -5872,12 +6143,13 @@ struct SphereShape {
   const bool aSph = ClassifySphere(a, &sa);
   const bool bSph = ClassifySphere(b, &sb);
   if (aSph && bCyl) {
-    const bool ok = TryBooleanSphereCylinder(sa, cb, op, out, handled, outWhy);
+    const bool ok = TryBooleanSphereCylinder(sa, cb, op, /*sphereIsMinuend=*/true, out, handled, outWhy);
     if (*handled)
       return ok;
   }
   if (bSph && aCyl) {
-    const bool ok = TryBooleanSphereCylinder(sb, ca, op, out, handled, outWhy);
+    const bool ok =
+        TryBooleanSphereCylinder(sb, ca, op, /*sphereIsMinuend=*/false, out, handled, outWhy);
     if (*handled)
       return ok;
   }
