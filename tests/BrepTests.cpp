@@ -2150,6 +2150,88 @@ TEST_CASE("Curved B2b-1: the Steinmetz bicylinder - INTERSECT of two equal perpe
   }
 }
 
+TEST_CASE("Curved B2b-2 first pair: sphere INTERSECT cylinder, axis through the centre",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double Rs = 5.0;
+  const double r = 3.0;
+  const double h = 4.0;  // sqrt(Rs^2 - r^2)
+  // Centred: the intersection is two plane circles, so the result is closed-form — a cylindrical
+  // band (z in [-h, h]) capped by the two spherical zones the cylinder encloses.
+  const double vol = 2.0 * kPi * r * r * h + 2.0 * (kPi * (Rs - h) * (Rs - h) * (2.0 * Rs + h) / 3.0);
+  const double area = 4.0 * kPi * r * h + 4.0 * kPi * Rs * (Rs - h);
+
+  SECTION("axis at the origin - closed-form volume and area, 6 v / 10 e / 6 f") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cyl, &why));  // axis +z, clears the sphere both ends
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    RequireSolid(out[0], Counts{6, 10, 6}, 2, vol, area);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.002, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vol).epsilon(3e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(cyl, sph, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vol).epsilon(1e-12));
+  }
+
+  SECTION("the same figure on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{0, 0, -6}), frame.zAxis, &axis));
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(axis, r, 12, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vol).epsilon(1e-9));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vol).epsilon(1e-9));
+  }
+
+  SECTION("SUBTRACT and UNION of the centred pair are not built yet - refused, not corrupt") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(sph, cyl, &out, &why));
+    REQUIRE_FALSE(brep::BooleanUnion(sph, cyl, &out, &why));
+  }
+
+  SECTION("an offset axis (a quartic) is still refused - a later slice") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(1.5, 0, -6), r * 0.5, 12, &cyl, &why));  // axis offset from centre
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanIntersect(sph, cyl, &out, &why));
+  }
+
+  SECTION("a cylinder cap that reaches into the sphere is refused, not mis-built") {
+    // The cap at z = -2 sits h(=4) past the centre but still inside the sphere (Rs = 5), so the
+    // clean spherical-ended barrel is not the answer here.
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -2), r, 12, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanIntersect(sph, cyl, &out, &why));
+  }
+}
+
 TEST_CASE("Curved B2b-2: a procedural Intersection edge marches along both cylinders",
           "[brep][req314]") {
   // The pipe-tee intersection curve: small cyl A (axis +x, radius r) meets big cyl B (axis +z,

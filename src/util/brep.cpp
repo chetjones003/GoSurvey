@@ -4685,6 +4685,83 @@ struct SphereShape {
   return Succeed(outWhy);
 }
 
+/// `sphere ∩ cylinder` with the cylinder axis **through the sphere centre** (REQ-314 B2b-2 first
+/// pair, GitHub issue #242). With the axis centred the two surfaces meet along **two plane circles**
+/// at `z = ±h`, `h = √(Rs² − r²)` — not a quartic — so every edge is a `CurveKind::Arc` and every
+/// face closed-form. The result is a cylindrical mid-band (radius \p r, `z ∈ [−h, h]`) capped by the
+/// two spherical zones the cylinder encloses. 6 vertices, 10 edges, 6 faces. Built canonically about
+/// `+z` and placed into \p fr (origin = sphere centre, `zAxis` = cylinder axis).
+///
+/// Volume `2 π r² h + 2 · π (Rs−h)² (2Rs+h) / 3`; area `4 π r h + 4 π Rs (Rs−h)`.
+[[nodiscard]] bool BuildSphereCylinderIntersection(const ucs::Ucs& fr, double r, double Rs, Solid* out,
+                                                   Problem* outWhy) {
+  if (!(Rs > r) || !(r > 0.0))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double h = std::sqrt(std::max(0.0, Rs * Rs - r * r));
+  const double vc = std::asin(std::clamp(h / Rs, -1.0, 1.0));  // latitude of the cut circle
+  const Vec3 zc{0.0, 0.0, 0.0};
+  Solid s;
+  const int t0 = AddVertex(&s, Vec3{r, 0.0, h});
+  const int t1 = AddVertex(&s, Vec3{-r, 0.0, h});
+  const int b0 = AddVertex(&s, Vec3{r, 0.0, -h});
+  const int b1 = AddVertex(&s, Vec3{-r, 0.0, -h});
+  const int np = AddVertex(&s, Vec3{0.0, 0.0, Rs});
+  const int sp = AddVertex(&s, Vec3{0.0, 0.0, -Rs});
+  // The two cut circles, each split into a +y and a −y half-arc at the x-seam (+x → −x is the +y half).
+  const int tc0 = AddArc(&s, t0, t1, Vec3{0.0, 0.0, h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int tc1 = AddArc(&s, t1, t0, Vec3{0.0, 0.0, h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int bc0 = AddArc(&s, b0, b1, Vec3{0.0, 0.0, -h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  const int bc1 = AddArc(&s, b1, b0, Vec3{0.0, 0.0, -h}, Vec3{0.0, 0.0, 1.0}, kPi);
+  // Band seams: +x at longitude 0, −x at longitude π.
+  const int sxP = AddLine(&s, b0, t0);
+  const int sxN = AddLine(&s, b1, t1);
+  // Cap meridians to each pole (the BuildSphericalCap idiom).
+  const int tm0 = AddArc(&s, t0, np, zc, Vec3{0.0, -1.0, 0.0}, kHalfPi - vc);
+  const int tm1 = AddArc(&s, t1, np, zc, Vec3{0.0, 1.0, 0.0}, kHalfPi - vc);
+  const int bm0 = AddArc(&s, b0, sp, zc, Vec3{0.0, 1.0, 0.0}, kHalfPi - vc);
+  const int bm1 = AddArc(&s, b1, sp, zc, Vec3{0.0, -1.0, 0.0}, kHalfPi - vc);
+
+  auto cylBand = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame.origin = Vec3{0.0, 0.0, -h};
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = 2.0 * h;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  auto sphereCap = [&](double u0, double u1, double v0, double v1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Sphere;
+    f.surface.radius = Rs;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.vStart = v0;
+    f.vEnd = v1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  // Band (coaxial-stack outward-wall winding).
+  cylBand(0.0, kPi, {{bc0, false}, {sxN, false}, {tc0, true}, {sxP, true}});
+  cylBand(kPi, kTwoPi, {{bc1, false}, {sxP, false}, {tc1, true}, {sxN, true}});
+  // Top cap (BuildSphericalCap winding).
+  sphereCap(0.0, kPi, vc, kHalfPi, {{tm1, false}, {tm0, true}, {tc0, false}});
+  sphereCap(kPi, kTwoPi, vc, kHalfPi, {{tm0, false}, {tm1, true}, {tc1, false}});
+  // Bottom cap (the top-cap loop reflected through z = 0 — order and every direction reversed).
+  sphereCap(0.0, kPi, -kHalfPi, -vc, {{bc0, true}, {bm0, false}, {bm1, true}});
+  sphereCap(kPi, kTwoPi, -kHalfPi, -vc, {{bc1, true}, {bm1, false}, {bm0, true}});
+
+  AddSingleShell(&s);
+  PlaceInFrame(&s, fr);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// The Steinmetz bicylinder: the INTERSECT of two right circular cylinders of **equal radius** whose
 /// axes **cross at right angles** (REQ-314 B2b-1 coda, D-2026-09-02-i). Their surfaces meet along two
 /// full ellipses (the quartic intersection `x⁴ = …` factors into the planes `z = ±x`), so the result
@@ -5730,6 +5807,43 @@ struct SphereShape {
   return Fail(Problem::BooleanCurvedFace, outWhy);  // partial penetration / a footprint over an edge
 }
 
+/// `sphere` × `cylinder` (GitHub issue #242, REQ-314 B2b-2 first pair). This slice handles the
+/// **centred** case only — the cylinder axis passing through the sphere centre, radius `r < Rs`,
+/// the cylinder clear of the sphere on both sides — where the intersection is two plane circles and
+/// the whole result is closed-form. Any other configuration (an offset or skew axis → a quartic
+/// curve) is left for a later slice and falls through unhandled to the caller's refusal.
+///
+/// Only `INTERSECT` is built here; `SUBTRACT` / `UNION` of the centred pair are the next slices.
+[[nodiscard]] bool TryBooleanSphereCylinder(const SphereShape& S, const CylinderShape& C, BoolOp op,
+                                            std::vector<Solid>* out, bool* handled, Problem* outWhy) {
+  const double sc = S.radius + C.radius + C.length;
+  const double eps = 1e-7 * sc;
+  // The sphere centre must lie on the cylinder axis line.
+  const Vec3 w = ray3d::Sub(S.centre, C.axis.origin);
+  const double along = ray3d::Dot(w, C.axis.zAxis);
+  const Vec3 foot = ray3d::Add(C.axis.origin, ray3d::Scale(C.axis.zAxis, along));
+  if (ray3d::Length(ray3d::Sub(S.centre, foot)) > eps)
+    return false;  // offset / skew axis — a quartic, a later slice
+  if (S.radius <= C.radius + eps)
+    return false;  // the cylinder does not fit inside the sphere — not this shape
+  if (along < S.radius - eps || along > C.length - S.radius + eps)
+    return false;  // a cylinder cap reaches into the sphere — not the clean spherical-ended barrel
+                   // (the cap must clear the sphere entirely, else the result keeps a flat disk piece)
+
+  if (op != BoolOp::Intersect)
+    return false;  // centred sphere ∩ cylinder SUBTRACT / UNION — the next slices
+
+  *handled = true;
+  ucs::Ucs fr;
+  if (!ucs::FromNormal(S.centre, C.axis.zAxis, &fr))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  Solid r;
+  if (!BuildSphereCylinderIntersection(fr, C.radius, S.radius, &r, outWhy))
+    return false;
+  out->push_back(std::move(r));
+  return Succeed(outWhy);
+}
+
 /// Try the curved recognisers. `*handled` true means the result (success or a named refusal) is
 /// final; false means no curved recogniser applied and the caller refuses the pair itself.
 [[nodiscard]] bool TryBooleanCurved(const Solid& a, const Solid& b, BoolOp op, std::vector<Solid>* out,
@@ -5757,6 +5871,16 @@ struct SphereShape {
   SphereShape sb;
   const bool aSph = ClassifySphere(a, &sa);
   const bool bSph = ClassifySphere(b, &sb);
+  if (aSph && bCyl) {
+    const bool ok = TryBooleanSphereCylinder(sa, cb, op, out, handled, outWhy);
+    if (*handled)
+      return ok;
+  }
+  if (bSph && aCyl) {
+    const bool ok = TryBooleanSphereCylinder(sb, ca, op, out, handled, outWhy);
+    if (*handled)
+      return ok;
+  }
   if (aSph && AllFacesPlanar(b))
     return TryBooleanSpherePlanar(b, a, sa, op, /*sphIsMinuend=*/true, out, handled, outWhy);
   if (bSph && AllFacesPlanar(a))

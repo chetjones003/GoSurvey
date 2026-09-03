@@ -176,6 +176,15 @@ far side (a stub band) integrates from the curve to `rimZ`. The `-X` branch cap'
 all three operations.** Remaining B2b-2 sub-slices: sphere∩cylinder, skew / non-perpendicular
 cylinder axes, non-elliptical cone sections.
 
+**PROGRESS 2026-09-03 — issue #242 opened to track the remaining sub-slices; sphere∩cylinder started
+(TASK-195).** Finding: sphere∩cylinder splits — the **centred** case (cylinder axis through the
+sphere centre) meets along **two plane circles**, not a quartic, so it is closed-form and needs no
+procedural curve; only the **offset / skew** axis is the genuine quartic. User chose the centred
+case first (matches the closed-form-then-procedural phasing). **Slice A / INTERSECT done**:
+`BuildSphereCylinderIntersection` + `TryBooleanSphereCylinder` in `brep.cpp` — a spherical-ended
+barrel, 6v/10e/6f, closed-form volume/area, no `.gs` bump. SUBTRACT/UNION of the centred pair and
+the offset quartic are the next slices.
+
 ### Deferred within B2b-2 (later sub-slices)
 
 - sphere ∩ cylinder, torus ∩ anything, cone parabola / hyperbola sections.
