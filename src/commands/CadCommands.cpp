@@ -6417,7 +6417,8 @@ const CmdEntry kRegistry[] = {
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
     {"slice", "sl", "Cut selected solids with a plane (three points), keeping one side or both"},
     {"loft", "lft", "Loft a solid through two or more selected closed polylines or circles, in pick order"},
-    {"sweep", "swp", "Sweep a selected closed profile along a selected line, arc or open polyline path"},
+    {"sweep", "swp",
+     "Sweep a closed profile along a line, arc or open polyline path (T twist, A path-alignment)"},
     {"union", "uni", "Combine two selected solids into one"},
     {"subtract", "su", "Subtract the second selected solid from the first"},
     {"intersect", "in", "Keep only the volume two selected solids share"},
@@ -24781,10 +24782,22 @@ bool GatherSweepInputs(const AppCommandState& st, brep::Profile* profOut, brep::
   return *haveProf && *havePath;
 }
 
+/// The twist / alignment options the SWEEP command has collected (REQ-315 keywords). The kernel
+/// already carries both; this only plumbs the two `AppCommandState` fields into a `SweepOptions`.
+brep::SweepOptions SweepOptionsFrom(const AppCommandState& st) {
+  constexpr double kSweepDegToRad = 3.14159265358979323846 / 180.0;
+  brep::SweepOptions o;
+  o.twistRad = st.sweepTwistDeg * kSweepDegToRad;
+  o.alignToPath = st.sweepAlignToPath;
+  return o;
+}
+
 } // namespace
 
 void CancelSweepCommand(AppCommandState& st) {
   st.sweepPhase = AppCommandState::SweepPhase::SelectInputs;
+  st.sweepTwistDeg = 0.0;
+  st.sweepAlignToPath = true;
 }
 
 std::string CadSweepPromptText(const AppCommandState& st) {
@@ -24800,7 +24813,13 @@ std::string CadSweepPromptText(const AppCommandState& st) {
     s += ha ? ", path ok" : ", no path yet";
     s += ")";
   }
-  s += ", Enter when done. ESC cancels.";
+  s += ". Enter builds; T <deg> twist, A toggles path-alignment. ESC cancels.";
+  if (st.sweepTwistDeg != 0.0 || !st.sweepAlignToPath) {
+    char b[80];
+    std::snprintf(b, sizeof(b), " [twist %g°, align %s]", st.sweepTwistDeg,
+                  st.sweepAlignToPath ? "on" : "off");
+    s += b;
+  }
   return s;
 }
 
@@ -24812,7 +24831,7 @@ bool CadBuildSweepSolid(const AppCommandState& st, brep::Solid* out) {
   if (!GatherSweepInputs(st, &prof, &path, &hp, &ha))
     return false;
   brep::Problem why = brep::Problem::Ok;
-  return brep::Sweep(prof, path, brep::SweepOptions{}, out, &why);
+  return brep::Sweep(prof, path, SweepOptionsFrom(st), out, &why);
 }
 
 static void CommitSweep(AppCommandState& st, std::vector<std::string>& log) {
@@ -24828,7 +24847,7 @@ static void CommitSweep(AppCommandState& st, std::vector<std::string>& log) {
   }
   brep::Solid solid;
   brep::Problem why = brep::Problem::Ok;
-  if (!brep::Sweep(prof, path, brep::SweepOptions{}, &solid, &why)) {
+  if (!brep::Sweep(prof, path, SweepOptionsFrom(st), &solid, &why)) {
     log.push_back(std::string("SWEEP — ") + brep::ProblemText(why));
     return;
   }
@@ -24868,10 +24887,60 @@ bool HandleSweepTextInput(const std::string& lineIn, AppCommandState& st,
   if (st.active != AppCommandState::Kind::Sweep)
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
-  if (!line.empty())
-    return false;
-  CommitSweep(st, log);
-  return true;
+  if (line.empty()) {
+    CommitSweep(st, log);
+    return true;
+  }
+
+  // A keyword token and an optional value: "T 45", "TWIST 45", "T45", "A", "A N".
+  std::string tok = line;
+  std::string rest;
+  const std::size_t sp = line.find_first_of(" \t");
+  if (sp != std::string::npos) {
+    tok = line.substr(0, sp);
+    rest = StringUtil::trimCopy(line.substr(sp + 1));
+  }
+  std::string low = StringUtil::toLowerAsciiCopy(tok);
+  if (rest.empty() && low.size() > 1 && low[0] == 't') {  // "T45" — letter then number, no space
+    rest = tok.substr(1);
+    low = "t";
+  }
+
+  if (low == "t" || low == "twist") {
+    if (rest.empty()) {
+      log.push_back("SWEEP — twist needs an angle, e.g. \"T 45\" (degrees over the whole path).");
+      return true;
+    }
+    char* end = nullptr;
+    const double deg = std::strtod(rest.c_str(), &end);
+    if (!end || *end != '\0' || !std::isfinite(deg)) {
+      log.push_back("SWEEP — \"" + rest + "\" is not an angle. Type degrees, e.g. \"T 45\".");
+      return true;
+    }
+    st.sweepTwistDeg = deg;
+    log.push_back(CadSweepPromptText(st));
+    return true;
+  }
+
+  if (low == "a" || low == "align" || low == "alignment") {
+    if (rest.empty()) {
+      st.sweepAlignToPath = !st.sweepAlignToPath;
+    } else {
+      const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(rest[0])));
+      if (c == 'y')
+        st.sweepAlignToPath = true;
+      else if (c == 'n')
+        st.sweepAlignToPath = false;
+      else {
+        log.push_back("SWEEP — alignment is \"A Y\" or \"A N\" (bare \"A\" toggles).");
+        return true;
+      }
+    }
+    log.push_back(CadSweepPromptText(st));
+    return true;
+  }
+
+  return false;  // not a SWEEP keyword — let the generic path (and issue #233) have it
 }
 
 // -------------------------------------------------------------------------------------------------

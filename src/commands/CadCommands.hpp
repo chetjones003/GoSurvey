@@ -2184,6 +2184,9 @@ struct AppCommandState {
     SelectInputs,  ///< Accumulate a closed profile and a line/arc path; Enter builds.
   } sweepPhase = SweepPhase::SelectInputs;
 
+  double sweepTwistDeg = 0.0;      ///< SWEEP `T` keyword: constant twist over the path, degrees.
+  bool sweepAlignToPath = true;    ///< SWEEP `A` keyword: stand the profile normal to the path.
+
   std::vector<int> sliceSolidIndices;  ///< indices into cadSolids, gathered when SelectSolids ends
   ray3d::Vec3 sliceP1;
   ray3d::Vec3 sliceP2;

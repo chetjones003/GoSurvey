@@ -121,4 +121,79 @@ EXPECT SOLIDS 3
 EXPECT SOLIDPROPS 0 240 248 8 12 6
 EXPECT SOLIDPROPS 2 112.17987473733407 230.64293761703865 8 14 8
 
+# --- SWEEP keyword options: T (twist) and A (path-alignment), REQ-315 -------------------------
+# The kernel has carried brep::SweepOptions{twistRad, alignToPath} since the first sweep slice;
+# these keywords are the command's way to set them. Both need the *prompted* flow — select the
+# profile and path with SWEEP already running, THEN the keyword, THEN Enter — because a bare SWEEP
+# on a ready selection is the build-now shortcut and uses defaults.
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD 4,0
+CMD 4,6
+CMD 0,6
+CMD CLOSE
+ESC
+# A 3D path with a rise: (0,0,0) -> (6,0,8), length 10, NOT perpendicular to the XY-plane profile.
+CMD 3DPOLY
+CMD 0,0,0
+CMD 6,0,8
+CMD END
+ESC
+
+# alignToPath ON (default): the rectangle stands perpendicular to the path, V = 24 * 10 = 240.
+CMD SWEEP
+BOX -20 -20 30 30
+CMD
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 240 248 8 12 6
+CMD UNDO
+EXPECT SOLIDS 0
+
+# "A N" — fixed orientation: the rectangle is only translated along the path, giving an oblique
+# prism. V = base area * perpendicular rise = 24 * 8 = 192, exactly, and different from 240 — so
+# the keyword provably reached the kernel. Area 232 (48 caps + 32*2 + 60*2 slanted walls).
+CMD SWEEP
+BOX -20 -20 30 30
+CMD A N
+EXPECT LOG "align off"
+CMD
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 192 232 8 12 6
+CMD UNDO
+EXPECT SOLIDS 0
+
+# "T 90" — a constant twist over the path. The prompt echoes the setting (proves the parse and the
+# state write); the solid builds; BrepTests owns the twisted volume's exact value.
+CMD SWEEP
+BOX -20 -20 30 30
+CMD T 90
+EXPECT LOG "twist 90"
+# A non-keyword typed at the prompt is not swallowed as an option — the twist setting stands.
+CMD ZZ
+CMD FOOBAR
+EXPECT LOG "twist 90"
+CMD
+EXPECT SOLIDS 1
+EXPECT LOG "Solid created"
+
+# A twist on a curved (arc) path is refused by name — the kernel supports twist on a single
+# straight segment only in this version.
+CMD CIRCLE
+CMD 0,100
+CMD 2
+ESC
+CMD ARC
+PICK 115 100
+PICK 110.6066017 110.6066017
+PICK 100 115
+ESC
+CMD SWEEP
+BOX -5 95 120 120
+CMD T 45
+CMD
+EXPECT LOG "single straight path"
+EXPECT SOLIDS 1
+ESC
+
 CHECK ALL
