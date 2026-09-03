@@ -13,9 +13,14 @@ cylinders whose axes cross at right angles now builds the bicylinder in closed f
 (`BuildSteinmetzIntersection` / `TryBooleanSteinmetz` in `src/util/brep.cpp`) — volume `16 r³/3`,
 area `16 r²`, four `CurveKind::Ellipse` edges, no procedural machinery, no `.gs` version bump.
 `CylinderCutZExtent` gained a mid-`u` tiebreak so its two-ellipse branch can order two cut planes
-that share an axis-intercept. **UNION / SUBTRACT of this pair (the T-pipe)** are still refused
-`BooleanCurvedFace` — the next sub-slice. B2b-2 proper (the procedural curve) is unchanged and not
-started.
+that share an axis-intercept. **B2b-2 proper (the procedural curve) is unchanged and not started.**
+
+**PROGRESS 2026-09-02 (2)** — Steinmetz coda increment 2 shipped: **SUBTRACT** `A − B` of the same
+pair (`BuildSteinmetzSubtract`) — cylinder `A` with a clean perpendicular cylinder-`B` channel bored
+through it. Result is 6 vertices / 12 edges / 8 faces: `A`'s wall split into a top and a bottom band
+by the two intersection ellipses, two flat caps, and two inward channel patches. Volume
+`vol(A) − 16 r³/3`, exact. **UNION of this pair (the T-pipe)** is still refused `BooleanCurvedFace` —
+the next sub-slice.
 
 ## What is left
 

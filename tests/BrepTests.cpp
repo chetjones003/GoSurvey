@@ -2055,7 +2055,52 @@ TEST_CASE("Curved B2b-1: the Steinmetz bicylinder - INTERSECT of two equal perpe
             Approx(16.0 * r * r * r / 3.0).epsilon(1e-9));
   }
 
-  SECTION("UNION and SUBTRACT of the same pair (a T-pipe) are refused by name - a later sub-slice") {
+  SECTION("SUBTRACT bores a clean perpendicular channel - volume vol(A) - 16 r^3 / 3") {
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));  // vol pi r^2 * 12
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(Vec3{-6, 0, 0}, Vec3{1, 0, 0}, &alongX));
+    REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    const double vA = kPi * r * r * 12.0;
+    RequireSolid(out[0], Counts{6, 12, 8}, 2, vA - 16.0 * r * r * r / 3.0,
+                 // area: A's wall (2 pi r * 12 minus the bicylinder's A-share 8 r^2) + two caps
+                 //       + the channel wall (the bicylinder's B-share 8 r^2)
+                 2.0 * kPi * r * 12.0 - 8.0 * r * r + 2.0 * kPi * r * r + 8.0 * r * r);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vA - 16.0 * r * r * r / 3.0).epsilon(3e-3));
+  }
+
+  SECTION("SUBTRACT stays exact on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs alongZ = frame;
+    alongZ.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -6});
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-6, 0, 0}), frame.xAxis, &alongX));
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(alongZ, r, 12, &cylZ, &why));
+    REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    const double want = kPi * r * r * 12.0 - 16.0 * r * r * r / 3.0;
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(1e-9));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(want).epsilon(1e-9));
+  }
+
+  SECTION("UNION of the same pair (a T-pipe) is refused by name - a later sub-slice") {
     Solid cylZ;
     Solid cylX;
     REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));
@@ -2064,8 +2109,6 @@ TEST_CASE("Curved B2b-1: the Steinmetz bicylinder - INTERSECT of two equal perpe
     REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));
     std::vector<Solid> out;
     REQUIRE_FALSE(brep::BooleanUnion(cylZ, cylX, &out, &why));
-    REQUIRE(why == Problem::BooleanCurvedFace);
-    REQUIRE_FALSE(brep::BooleanSubtract(cylZ, cylX, &out, &why));
     REQUIRE(why == Problem::BooleanCurvedFace);
   }
 
