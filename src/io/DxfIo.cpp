@@ -2462,11 +2462,12 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   dxfDimParams.arrowSizeInches = st.activeDimensionStyle.arrowSizeInches;
   dxfDimParams.arrowScale = 1.f;
   dxfDimParams.arrowType = st.activeDimensionStyle.arrowType;
-  // An exploded dimension costs one LINE per stroke, THREE per arrowhead (its outline: this writer
-  // has no filled-triangle entity), and one TEXT for the label. The count pre-pass and the emit
-  // below MUST agree - a mismatch shifts every later entity handle - so both ask this one function.
+  // An exploded dimension costs one LINE per stroke (strokes.segs already includes the arrowhead
+  // outline as Arrow-kind segments - this writer has no filled-triangle entity, and strokes.arrows
+  // only repeats those same three edges) plus one TEXT for the label. The count pre-pass and the
+  // emit below MUST agree - a mismatch shifts every later entity handle - so both ask this function.
   const auto dxfDimEntityCount = [](const CadDimWorldStrokes& s) {
-    return static_cast<uint64_t>(s.segs.size() + s.arrows.size() * 3u + 1u);
+    return static_cast<uint64_t>(s.segs.size() + 1u);
   };
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
     const CadAnnotation& an = st.cadAnnotations[ai];
@@ -3826,18 +3827,14 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
         emitPair(230, "1.0");
         ++nDimExplodedLines;
       };
+      // Every stroke, including the arrowhead outlines. The stroke module emits each arrowhead as
+      // three Arrow-kind segments in strokes.segs (and insets the dimension line by the arrow length
+      // at each end, so dropping them would leave a visible gap where the head belongs). strokes.arrows
+      // carries the same three edges as a triangle for a filled renderer; emitting it here too would
+      // just double every arrowhead line. A filled head would want a DXF SOLID, which this writer has
+      // no other use for - the outline reads correctly at every scale and stays within LINE + TEXT.
       for (const CadDimWorldSeg& sg : strokes.segs)
         emitLine(sg.x0, sg.y0, sg.x1, sg.y1);
-      // Arrowheads as outlines, three lines apiece. The stroke module insets the dimension line by
-      // the arrow length at each end, so omitting them would leave a visible gap where the head
-      // belongs rather than the full-length line this used to emit. A filled head would want a DXF
-      // SOLID, which this writer has no other use for - the outline reads correctly at every scale
-      // and keeps the export to the two entity kinds it already emits.
-      for (const CadDimWorldTri& tri : strokes.arrows) {
-        emitLine(tri.x0, tri.y0, tri.x1, tri.y1);
-        emitLine(tri.x1, tri.y1, tri.x2, tri.y2);
-        emitLine(tri.x2, tri.y2, tri.x0, tri.y0);
-      }
       char hb[24];
       std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
       const std::string txt = sanitizeDxfText(an.text);
