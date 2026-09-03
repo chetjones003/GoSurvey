@@ -2043,6 +2043,17 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   correctly *subtracts* the void it bounds; `ClosestPointOnSurface`, `Validate` and `.gs` are
   unaffected (`.gs` gains an additive tolerant key — no `kGsFormatVersion` bump). `ProfileArcReflex`
   stays for now; a reflex profile arc in an extrude is a separate feature, now unblocked.
+  **Taken up 2026-09-03 (D-2026-09-03-e): `Extrude` no longer raises `Problem::ProfileArcReflex` and builds
+  a reflex arc.** It needed nothing but the flag above. After the builder's walk the loop runs CCW
+  about the extrusion direction, so an arc whose sweep is still positive has its centre on the
+  interior side and sweeps an ordinary outward cylinder, while a negative one has its centre outside
+  and sweeps precisely the inward face B2a already defined. The span is stored increasing and the
+  orientation carried by `inward`, which is the convention the bore walls set — a negative
+  `uEnd - uStart` would make the face's own AREA come out negative, and an area is a magnitude. Both
+  halves are load-bearing and measured: with the flag left false, or the span left decreasing,
+  `Validate`'s geometric closure probe rejects the solid outright and `Extrude` returns false. The
+  reason no other code changed is that (d) above had already done the work — this is the caller that
+  collects it.
   (e) **`Validate` proves manifoldness, orientability and closure — including GEOMETRIC closure.**
   Beyond the index/ring/tally checks, the volume integral is taken about two different reference
   points and required to agree. On a closed surface it must (the closed integral of `n dA` vanishes);
@@ -2705,24 +2716,119 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   any solid at all.
   Note that this project's `CadPolyline` store is **straight-only** — it carries no bulges — so the
   `O`bject option's curved paths come from `Arc` and `Circle` entities, not from polylines.
-  (h) **`Surface` gains a `sense` of `+1` or `-1`, and ADR-045's "no reversed flag" is amended here.**
-  That rule held for the seven primitives — a cylinder's material is always outside it, a sphere's
-  always inside — and stops holding at the first curved wall: its inner face's material is on the far
-  side from its own axis, and flipping the frame's Z does not flip which way is radially outward.
-  Applied in exactly three places (the divergence integrand, the mesh normals, the mesh winding) and
-  **refused by `Validate` for a plane**, whose outward direction already lives in `frame.zAxis` —
-  encoding the same fact twice is precisely the disagreement the original rule was written to
-  prevent. Written to `.gs` only when it is `-1`, so every pre-REQ-314 solid still serializes byte
-  for byte. Worth knowing: the geometric closure probe ADR-045 added is what catches a wrong sense,
-  and no topological check could — a shell with one face facing the wrong way is manifold,
-  orientable and ring-closed.
-- Consequences: `brep` gains one builder, one `PrimitiveKind`, one recipe field, a face sense and a
-  real triangulator, and `Problem` gains the named refusals of (c). `.gs` gains an optional recipe
-  key, an optional face `sense`, and three settings keys (`polysolidWidth`, `polysolidHeight`,
-  `polysolidJustify` — remembered between invocations the way AutoCAD's PSOLWIDTH and PSOLHEIGHT
-  are); no `kGsFormatVersion` bump. The triangulator is a **shared** change — every existing solid's mesh
-  goes through it — which is why its equivalence to the fan on convex faces is asserted rather than
-  assumed. **Still not addressed:** sweeping an arbitrary profile along an arbitrary 3D path,
-  booleans between polysolids, and editing a placed polysolid's path — all #120 Phase 4 and 5, and
-  all of which this deliberately does not pretend to be.
 
+### ADR-049 — Sub-object picking: one shared pick, an expiring reference, and the projection as part of the answer   (2026-09-03, accepted)
+
+- **Context.** REQ-318 needs the system to name the face, edge or vertex under the cursor.
+
+  **The starting point was not what issue #148 said it was, and the correction is the reason this
+  ADR has the shape it does.** The issue's "existing foundation" section, and the first draft of this
+  decision, both rested on PR #180's finding that `src/util/ray3d.hpp` had ray/plane and ray/segment
+  but no ray/triangle — concluding that solid faces were unpickable. PR #180 was written
+  2026-08-31, *before* REQ-313 landed on 2026-09-01, and it was quoted without being re-checked
+  against `beta`. In fact object snapping has picked solid faces, edges and vertices since REQ-313:
+  `CadSnap.cpp` already had a Möller–Trumbore test over the display cache's triangle buffer
+  (`RayHitSolidFace`), the `triFace` lookup, the `ClosestPointOnSurface` projection, a ray/edge
+  approach (`ClosestRayPointToEdge`) and a padded bounds reject (`RayNearBounds`).
+
+  So the real problem was never "can we hit a triangle". It was that all of that was file-private,
+  and a second caller could only re-implement it. Three things then had to be decided.
+
+  **(a) One pick, shared — the snap path is refactored onto it rather than left alongside.** A
+  second implementation is a second set of numerics, and the two drafted here already disagreed: the
+  snap copy used an absolute determinant epsilon (`1e-12`) and exact barycentric bounds, while the
+  shared test is scale-relative with a small outward barycentric slack. On the hairline crack
+  between two faces of the tessellation — which is deliberately *unwelded*, because "a solid's edges
+  are creases" — the snap copy falls through and reports nothing where the shared one reports a hit.
+  A user would have seen the snap marker and the sub-object highlight name different things under
+  one cursor, and #156's "UCS from the picked face" would have aligned to a face object snap said
+  was not there. The scale-relative epsilon is also the one that survives survey coordinates: an
+  absolute threshold rejects a legitimate 0.25 ft triangle at easting 2e6.
+
+  `ray3d::RayTriangleIntersect` is therefore the only ray/triangle test, `solidpick::RayNearBounds`
+  the only broad phase, and `CadSnap` calls both. The alternative — leave both and document the
+  split — was rejected: CLAUDE.md §7 names duplicate architecture directly, and the divergence above
+  is what it looks like in practice.
+
+  **(b) A sub-object reference is an index PLUS the identity of the solid it came from, and it
+  EXPIRES rather than re-binding.** This is the part that is genuinely new, since snapping returns a
+  *point* and never has to remember what it hit. The only names the kernel offers are indices into
+  `Solid::faces` / `::edges` / `::vertices`. Measured: two identical `Make*` calls produce
+  byte-identical topology, and an index keeps its meaning across an edit that *preserves* the
+  topology — a box's face indices survive a height change, a length change and a frame translation,
+  compared face-by-face on surface kind, outward normal and the `inward` flag. It loses its meaning
+  across anything that changes the counts: a cone frustum collapsing to an apex goes 4 faces → 3, and
+  every boolean rebuilds wholesale.
+
+  The reference therefore pairs the index with a `weak_ptr<const brep::Solid>`, following the
+  precedent `CadSolidTessellation` already sets for its cache key — "a raw key could be matched by a
+  NEW solid allocated at the freed address", and the cache would then draw the wrong shape while
+  looking plausible. A topology-changing edit lets the reference expire. A persistent per-sub-object
+  id minted at construction was considered and **deferred, not dismissed**: it is what a mature
+  kernel does and the only thing that survives a boolean, but it changes every builder and every
+  operation in `brep.cpp` for a benefit Phase 5 does not need. If a later phase needs a selection to
+  survive a boolean, that is the decision to revisit; this one does not preclude it.
+
+  **(c) The projection is part of the answer — and it fixes one error, not both.** The triangle
+  locates the sub-object; `ClosestPointOnSurface` (faces) and `ClosestPointOnEdge` (edges, clamped to
+  the edge's own extent, so an arc answer is on the circle) place the point. At the shipping chord
+  tolerance a raw triangle hit sits **0.00986 ft** off a cylinder's true surface — *inside* REQ-101's
+  ±0.01 ft, which is exactly the trap, while spending 98.6% of the budget before any other error
+  joins in.
+
+  The sharper half of this decision, and the one an earlier draft got wrong: **the projection
+  removes distance-from-surface error and does nothing whatever for position-along-surface error.**
+  A test that asserts only the picked radius on a cylinder therefore cannot fail — the projection
+  rescales *any* nearby point to exactly `r` — so the acceptance asserts the picked **azimuth** as
+  well. The same distinction sets the module's precondition: the display buffers are `float`, which
+  is adequate only because storage coordinates are document-local and so stay at model magnitude
+  (REQ-101's whole reason for being local). Fed triangles at absolute state-plane magnitude they
+  quantize to 0.125 ft, and at oblique incidence that displaces the answer *along* the surface by
+  `d·tan(angle from normal)` where the projection cannot see it. Both cases are pinned in the tests
+  with identical ray geometry, one passing and one failing.
+
+  **(d) Precedence is vertex → edge → face, bounded by occlusion measured against the nearest
+  TRIANGLE.** Every vertex lies on an edge and every edge on a face, so a pure nearest-hit rule makes
+  a vertex unpickable — the same argument object snapping already makes for preferring an endpoint
+  to a nearest-point. Each kind has its own screen-derived tolerance; zero means "do not offer this
+  kind". A candidate more than its own tolerance behind the front surface is refused, or a click on a
+  near face selects the back silhouette. The baseline is the nearest *triangle* and not the nearest
+  usable *face*: a triangle whose face id is out of range still proves a front surface is there, and
+  using the next valid face's depth would put the baseline on the far side of the solid.
+
+  **(e) The pick normalizes the ray it is given.** `RayTriangleIntersect`'s parameter scales as
+  `1/|dir|` while `ray3d::RayPointDistance`'s scales as `|dir|`, so on a non-unit ray a face depth
+  and a vertex depth are a factor of `|dir|²` apart and the occlusion test in (d) is meaningless
+  rather than merely imprecise. A caller that builds its ray by unprojecting a near and a far point —
+  `dir = far - near`, the natural construction — would get no vertex or edge pick at all. Normalizing
+  on entry was chosen over documenting a precondition because the failure is silent.
+
+  **(f) The pick is a pure module in the Domain layer, in the solid's own coordinates.**
+  `src/util/solidpick.{hpp,cpp}` depends on `brep` and `ray3d` and nothing else — no GL, no ImGui, no
+  `AppCommandState` — so precedence, occlusion and every refusal are decided in the test target
+  without a window (the ADR-002 pressure that already governs `brep`, `meshgeom`, `traverse` and
+  `hatch`). Note this moves the shared pick *out* of `src/viewport`: snapping is one consumer of the
+  query, not its owner. Coordinates are the solid's own storage coordinates and the caller converts
+  the ray; taking a world ray plus an origin offset would put the local/world seam inside a geometry
+  module, the class of error REQ-101's document-origin rebase exists to prevent.
+
+- **Consequences.**
+  - `CadSnap`'s solid pick changes behaviour slightly and deliberately: it now reports a hit on a
+    face/face boundary where it previously fell through, and it accepts small triangles at survey
+    magnitude that its absolute epsilon rejected. Both are fixes, and both are why the change is
+    recorded rather than done quietly.
+  - Issue **#156** becomes a thin consumer of the face answer, which is what PR #180 chose when it
+    deferred #156 onto #148.
+  - The pick sees one solid at a time, so occlusion between *different* solids is the caller's to
+    resolve by depth-ordering the per-solid answers; `Pick::rayT` is a distance for that purpose.
+  - A selection that must survive a boolean is not expressible. That is decision (b)'s accepted cost.
+  - **A process consequence worth recording.** This decision was first drafted on a stale premise
+    taken from a PR older than the code it described, and the error survived until review. The
+    cheap defence is the one that was skipped: a claim about what the codebase does not have is a
+    `grep` against `beta`, not a quotation.
+
+- **Out of scope and not designed for:** the selection *mode* and its store, the highlight treatment
+  (including whether a sub-object highlight may be occluded — the selection overlay is deliberately
+  never depth-tested, which is right for 2D linework and wrong for a solid's far-side face, and that
+  wants a screenshot rather than an argument); grips; gizmos; fillet and chamfer; picking a
+  sub-object of a mesh or a TIN surface, neither of which has face identity (ADR-026 (g), REQ-070).

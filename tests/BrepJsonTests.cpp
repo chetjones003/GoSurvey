@@ -90,13 +90,14 @@ TEST_CASE("A solid with no NURBS face serializes without the patch key", "[brepj
 TEST_CASE("A swept solid round-trips through .gs with topology and volume intact", "[brepjson][req315]") {
   brep::Solid swept;
   brep::Problem why = brep::Problem::Ok;
+  brep::SweepSegment seg;
+  seg.arc = true;
+  seg.centre = ray3d::Vec3{0, 0, 0};
+  seg.normal = ray3d::Vec3{0, 0, 1};
+  seg.sweep = kPi;  // a half-turn elbow
   brep::SweepPath arcPath;
-  arcPath.arc = true;
-  arcPath.start = ray3d::Vec3{10, 0, 0};
-  arcPath.centre = ray3d::Vec3{0, 0, 0};
-  arcPath.normal = ray3d::Vec3{0, 0, 1};
-  arcPath.sweep = kPi;  // a half-turn elbow
-  arcPath.end = arcPath.start;
+  arcPath.points = {ray3d::Vec3{10, 0, 0}, ray3d::Vec3{-10, 0, 0}};  // +X rotated pi about +Z
+  arcPath.segments = {seg};
 
   ucs::Ucs prof;
   REQUIRE(ucs::FromNormal(ray3d::Vec3{10, 0, 0}, ray3d::Vec3{0, 1, 0}, &prof));

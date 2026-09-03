@@ -1432,6 +1432,10 @@ struct AppCommandState {
     /// lofting order, Enter to skin a solid through them (SurfaceKind::Nurbs side faces). One
     /// select-objects phase and nothing else — no height, no axis.
     Loft,
+    /// SWEEP (REQ-315 / ADR-048, GitHub #241): select one closed profile and one line-or-arc path,
+    /// Enter to sweep the profile along the path. One select-objects phase; the closed loop is the
+    /// profile and the open curve is the path.
+    Sweep,
     /// UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046, GitHub #147): SUBTRACT prompts twice —
     /// solids to subtract from, then solids to subtract; UNION and INTERSECT prompt once.
     Boolean,
@@ -1504,6 +1508,7 @@ struct AppCommandState {
     case Kind::Revolve:          return "REVOLVE";
     case Kind::Slice:            return "SLICE";
     case Kind::Loft:             return "LOFT";
+    case Kind::Sweep:            return "SWEEP";
     case Kind::Boolean:          return "BOOLEAN";
     case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
     default:                  return "";
@@ -2172,6 +2177,12 @@ struct AppCommandState {
   enum class LoftPhase {
     SelectProfiles,  ///< Accumulate an ORDERED selection of closed polylines / circles; Enter builds.
   } loftPhase = LoftPhase::SelectProfiles;
+
+  // --- The SWEEP command (REQ-315 / ADR-048, GitHub #241) --------------------------------------
+
+  enum class SweepPhase {
+    SelectInputs,  ///< Accumulate a closed profile and a line/arc path; Enter builds.
+  } sweepPhase = SweepPhase::SelectInputs;
 
   std::vector<int> sliceSolidIndices;  ///< indices into cadSolids, gathered when SelectSolids ends
   ray3d::Vec3 sliceP1;
@@ -4298,6 +4309,31 @@ void CancelLoftCommand(AppCommandState& st);
 /// ghost and for the commit — one function, so the ghost cannot show a shape the Enter would not
 /// build. Returns false when the selection does not yet hold two loftable profiles.
 [[nodiscard]] bool CadBuildLoftSolid(const AppCommandState& st, brep::Solid* out);
+
+// --- SWEEP (REQ-315 / ADR-048, GitHub issue #241) -------------------------------------------
+
+/// Begin the SWEEP command: select **one** closed polyline / circle (the profile) and **one** line,
+/// arc or open polyline (the path), then Enter to sweep the profile along the path (`brep::Sweep`).
+/// The closed loop is taken as the profile and the open curve as the path, so the selection order
+/// does not matter. A polyline path's per-vertex bulges become its arc segments (REQ-316); a sharp
+/// corner in the path is refused by name (`brep::Problem::SweepPathCorner`). If both operands are
+/// already selected, a bare `SWEEP` builds immediately. One undo step; the source entities are left
+/// in place; every failure is reported by name (REQ-201).
+void StartSweepCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelSweepCommand(AppCommandState& st);
+
+/// The prompt for the running SWEEP command. Shared by the command line and the at-cursor dynamic
+/// input (REQ-304).
+[[nodiscard]] std::string CadSweepPromptText(const AppCommandState& st);
+
+/// Feed one typed line to a running SWEEP command. An empty line (Enter) builds; anything else is
+/// not understood. Returns false when the command is not SWEEP.
+[[nodiscard]] bool HandleSweepTextInput(const std::string& line, AppCommandState& st,
+                                        std::vector<std::string>& log);
+
+/// The candidate solid the running SWEEP command describes from the current selection, for the live
+/// ghost and the commit. Returns false when the selection does not yet hold a profile and a path.
+[[nodiscard]] bool CadBuildSweepSolid(const AppCommandState& st, brep::Solid* out);
 
 // --- REVOLVE (REQ-314 / ADR-046 increment 2b) -------------------------------------------------
 

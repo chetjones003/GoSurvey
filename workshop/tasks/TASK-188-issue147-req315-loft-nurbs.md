@@ -102,10 +102,56 @@ angles, tilted survey-magnitude arc path, twisted straight sweep with a tessella
 `Translate` at state-plane magnitude, every refusal by name) + a swept-solid `.gs` round-trip in
 `BrepJsonTests`. Build green, ctest **1057/1057**.
 
-**Deferred to the next sweep slice**: a bulge-polyline path (multi-segment, needs a
-rotation-minimizing frame carried across joints — the double-reflection method); twist on a curved
-path; a fixed-orientation curved sweep; a full-turn arc path (seams like a revolve); the `SWEEP`
-command + viewport.
+## Sweep — command slice *(branch `feat/req315-sweep-command`)*
+
+`AppCommandState::Kind::Sweep` + a one-value `SweepPhase::SelectInputs`. `SWEEP` (alias `SWP`) opens
+the prompted form — select **one** closed polyline / circle (the profile) and **one** line or arc
+(the path), Enter to build; a bare `SWEEP` on a ready selection of both builds immediately. Selection
+order does not matter: `GatherSweepInputs` takes the closed loop as the profile
+(`ExtrudeProfileFromSelection`) and the open curve as the path (`SweepPathFromSelection` — a LINE
+gives a straight `brep::SweepPath`, a `CadArc` gives an arc one via `ucs::FromNormal` +
+`PointOnPlaneCircle`). `CadBuildSweepSolid` is the one source of truth for the ghost and the commit
+(`brep::Sweep`, default options). Wired through the six places
+([[project_3d_entity_checklist]]) exactly like LOFT + the `kRegistry` entry. Twist / alignment
+keyword options are a follow-up (kernel already takes them). Headless transcript
+`tests/headless/transcripts/req315-sweep.txt`: a rectangle swept along a line == a 240-volume prism
+(topology + area exact); a circle swept along a 90° arc == a quarter torus (`30·π²` volume and
+`π²·30 + 8π` area exact); undo/redo; a profile with no path refused; `.gs` save/reopen. ctest
+**1059/1059**.
+
+## Sweep — bulge-polyline path *(branch `feat/req315-sweep-polyline`)*
+
+`SweepPath` generalised from a single `{arc,start,end,centre,normal,sweep}` to `{points, segments}`
+— an open chain of `SweepSegment{arc,centre,normal,sweep}`. `brep::Sweep` now builds **one band per
+segment**, Loft-style, with the rings **shared at the joints**. A rotation-minimizing frame is
+carried along the path: unchanged across a straight segment (constant tangent), rotated by the arc
+about its plane normal across an arc segment (parallel transport — no torsion on a circular arc). A
+**tangent discontinuity at a joint (a mitred corner) is refused by name**
+(`SweepUnsupportedOption`) — the common bulge-polyline / filleted-path case is tangent-continuous and
+is supported. Twist / fixed-orientation still require a single straight segment (guarded). A
+single-segment path reduces exactly to the previous code path (all prior sweep tests pass unchanged).
+
+`IntegrateNurbsFaceNumeric`'s knot-cell change (from the previous slice) is what lets a multi-span
+patch anywhere in a multi-band sweep integrate accurately.
+
+Tests: 3 new in `BrepTests` (a circle along line→tangent-arc→line is a bent pipe with volume
+`18π + 2.5π²`; a 90° corner is refused; two collinear segments == the one-segment sweep) + the
+`ArcPath` / `LinePath` / `BrepJsonTests` helpers updated to the new struct. ctest **1062/1062**.
+
+## Sweep — the SWEEP command reads a polyline path *(branch `feat/req315-sweep-polyline-cmd`)*
+
+`SweepPathFromSelection` gained a **`Polyline`** branch: an **open** polyline's per-vertex bulges
+(REQ-316, `userPolylineVertsBulge`) become the path's arc segments (`BulgeArc` → centre / sweep,
+normal +Z), straight where the bulge is zero. A closed polyline is left for
+`ExtrudeProfileFromSelection` (it is a profile, not a path). A bulge across a change in elevation is
+refused (not a planar arc). Kernel: a new `Problem::SweepPathCorner` (split out of
+`SweepUnsupportedOption`) so a sharp corner in a polyline path reports *"the sweep path has a sharp
+corner; only smooth bends are supported"* rather than a twist-option message. `req315-sweep.txt`
+gains a bulge-polyline case (line → tangent 90° arc → line, a circle → a bent pipe, `20π + 5π²`
+volume and `42π + 10π²` area, exact) and a corner-refusal case. ctest **1062/1062**.
+
+**Deferred**: a mitred corner (needs a miter cross-section); twist / fixed orientation on a curved
+or multi-segment path; a full-turn arc segment; the `SWEEP` twist / alignment keyword options.
 
 ### Slice B (original plan) — the command and the viewport
 

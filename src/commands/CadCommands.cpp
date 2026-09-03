@@ -6417,6 +6417,7 @@ const CmdEntry kRegistry[] = {
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
     {"slice", "sl", "Cut selected solids with a plane (three points), keeping one side or both"},
     {"loft", "lft", "Loft a solid through two or more selected closed polylines or circles, in pick order"},
+    {"sweep", "swp", "Sweep a selected closed profile along a selected line, arc or open polyline path"},
     {"union", "uni", "Combine two selected solids into one"},
     {"subtract", "su", "Subtract the second selected solid from the first"},
     {"intersect", "in", "Keep only the volume two selected solids share"},
@@ -6550,6 +6551,62 @@ const CmdEntry kRegistry[] = {
     {"blockmodel", "", "Switch to model space"},
     {"blockpaper", "", "Switch to the first paper layout"},
 };
+
+/// The registry entry whose primary name or alias is exactly \p low (already lowercased), or null.
+///
+/// One matcher, used by the dispatch loop that STARTS a command and by the failure path that has to
+/// recognise a command name it cannot start (GitHub issue #233). Two copies of this would be free to
+/// disagree about which words are command names, and the whole point of the failure message is that
+/// it agrees with the dispatcher.
+[[nodiscard]] const CmdEntry* FindRegistryEntry(const std::string& low) {
+  for (const CmdEntry& e : kRegistry) {
+    if (low == StringUtil::toLowerAsciiCopy(e.primary))
+      return &e;
+    if (e.aliases[0] == '\0')
+      continue;
+    std::istringstream als(std::string(e.aliases));
+    std::string a;
+    while (std::getline(als, a, ',')) {
+      a = StringUtil::trimCopy(a);
+      if (!a.empty() && low == StringUtil::toLowerAsciiCopy(a))
+        return &e;
+    }
+  }
+  return nullptr;
+}
+
+/// Report a line the active command could not use (GitHub issue #233).
+///
+/// When the line is the NAME of another command, say that — because the honest reason it did nothing
+/// is "a command is still running", not "that is not a valid point". A registry lookup here cannot
+/// swallow a command's own keywords: this is the failure path, reached only after the active command
+/// has already declined the line, so `ARC` inside POLYLINE and `L` inside a solid prompt are consumed
+/// long before they reach it.
+///
+/// Why it matters more than the wording suggests: the two commands people use most are still running
+/// at exactly the moment the next command name gets typed. LINE's blank Enter deliberately ends the
+/// chain and RESTARTS the command (D-2026-08-25-j), and CIRCLE loops back for the next circle — both
+/// chosen, neither wrong — so a user who believes they have finished types the next verb into a live
+/// point prompt and is told their coordinate syntax is bad. That reads as a freeze.
+void ReportUnparsedCommandInput(const AppCommandState& st, const std::string& line,
+                                const std::string& fallback, std::vector<std::string>& log) {
+  const std::string trimmed = StringUtil::trimCopy(line);
+  const CmdEntry* entry =
+      trimmed.empty() ? nullptr : FindRegistryEntry(StringUtil::toLowerAsciiCopy(trimmed));
+  const char* running = AppCommandState::KindName(st.active);
+  if (!entry || !running || running[0] == '\0') {
+    log.push_back(fallback);
+    return;
+  }
+  // Name the CANONICAL command rather than echoing the alias back: a user who typed `c` is better
+  // served by "then type CIRCLE" than by being shown their own single letter.
+  std::string wanted = entry->primary;
+  for (char& c : wanted)
+    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  log.push_back(std::string(running) + " is still running, so \"" + trimmed +
+                "\" was read as input to it rather than as a command. Press Esc to end " + running +
+                ", then type " + wanted + ".");
+}
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
 
@@ -11837,6 +11894,12 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   if (st.active == K::Loft) {
     // One phase, and it is the accumulate-and-Enter shape: a finished fence merges into the
     // selection, the command advances only on Enter (HandleLoftTextInput).
+    if (st.selBoxWaitingSecond)
+      finishBox();
+    return;
+  }
+
+  if (st.active == K::Sweep) {
     if (st.selBoxWaitingSecond)
       finishBox();
     return;
@@ -24609,6 +24672,209 @@ bool HandleLoftTextInput(const std::string& lineIn, AppCommandState& st, std::ve
 }
 
 // -------------------------------------------------------------------------------------------------
+// The SWEEP command (REQ-315 / ADR-048, GitHub issue #241). Select one closed profile and one line
+// or arc path; Enter sweeps the profile along the path (brep::Sweep). The closed loop is the
+// profile and the open curve is the path — selection order does not matter. The ghost and the
+// commit both go through CadBuildSweepSolid.
+// -------------------------------------------------------------------------------------------------
+
+namespace {
+
+/// A brep::SweepPath from a selected LINE, ARC or **open POLYLINE** entity (a polyline's per-vertex
+/// bulges become the arc segments — REQ-316). Returns false for anything else; a closed polyline is
+/// a profile, not a path, so it is left for `ExtrudeProfileFromSelection`.
+[[nodiscard]] bool SweepPathFromSelection(const AppCommandState& st, const SelectedEntity& sel,
+                                          brep::SweepPath* out) {
+  if (sel.type == SelectedEntity::Type::Polyline) {
+    const std::size_t pi = static_cast<std::size_t>(sel.index);
+    if (sel.index < 0 || pi + 1 >= st.userPolylineOffsets.size())
+      return false;
+    if (pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0)
+      return false;  // closed → a profile, not a path
+    const int vB = st.userPolylineOffsets[pi];
+    const int vE = st.userPolylineOffsets[pi + 1];
+    if (vE - vB < 2)
+      return false;
+    std::vector<ray3d::Vec3> pts;
+    for (int v = vB; v < vE; ++v) {
+      const std::size_t f = static_cast<std::size_t>(v) * 3;
+      if (f + 2 >= st.userPolylineVerts.size())
+        return false;
+      pts.push_back({static_cast<double>(st.userPolylineVerts[f + 0]),
+                     static_cast<double>(st.userPolylineVerts[f + 1]),
+                     static_cast<double>(st.userPolylineVerts[f + 2])});
+    }
+    std::vector<brep::SweepSegment> segs;
+    for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
+      const std::size_t vi = static_cast<std::size_t>(vB) + k;
+      const float bulge =
+          vi < st.userPolylineVertsBulge.size() ? st.userPolylineVertsBulge[vi] : 0.f;
+      brep::SweepSegment seg;
+      if (std::fabs(bulge) > 1e-6f) {
+        if (std::fabs(pts[k].z - pts[k + 1].z) > 1e-6)
+          return false;  // a bulge across a change in elevation is not a planar arc
+        const BulgeArcSpan span =
+            BulgeArc(pts[k].x, pts[k].y, pts[k + 1].x, pts[k + 1].y, static_cast<double>(bulge));
+        if (!span.valid)
+          return false;
+        seg.arc = true;
+        seg.centre = {span.cx, span.cy, pts[k].z};
+        seg.normal = {0.0, 0.0, 1.0};
+        seg.sweep = span.sweep;
+      }
+      segs.push_back(seg);
+    }
+    out->points = std::move(pts);
+    out->segments = std::move(segs);
+    return true;
+  }
+  if (sel.type == SelectedEntity::Type::LineSeg) {
+    const std::size_t b = static_cast<std::size_t>(sel.index) * 6;
+    if (sel.index < 0 || b + 5 >= st.userLinesFlat.size())
+      return false;
+    const ray3d::Vec3 p0{static_cast<double>(st.userLinesFlat[b + 0]),
+                         static_cast<double>(st.userLinesFlat[b + 1]),
+                         static_cast<double>(st.userLinesFlat[b + 2])};
+    const ray3d::Vec3 p1{static_cast<double>(st.userLinesFlat[b + 3]),
+                         static_cast<double>(st.userLinesFlat[b + 4]),
+                         static_cast<double>(st.userLinesFlat[b + 5])};
+    out->points = {p0, p1};
+    out->segments = {brep::SweepSegment{}};  // one straight segment
+    return true;
+  }
+  if (sel.type == SelectedEntity::Type::Arc) {
+    if (sel.index < 0 || static_cast<std::size_t>(sel.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<std::size_t>(sel.index)];
+    if (!(a.r > 0.0f) || !(std::fabs(a.sweepRad) > 1e-6f))
+      return false;
+    ucs::Ucs frame;
+    if (!ucs::FromNormal(ray3d::Vec3{a.cx, a.cy, a.z}, ray3d::Vec3{a.nx, a.ny, a.nz}, &frame))
+      return false;
+    const ray3d::Vec3 start = ucs::PointOnPlaneCircle(frame, a.r, a.startRad);
+    const ray3d::Vec3 end = ucs::PointOnPlaneCircle(frame, a.r, a.startRad + a.sweepRad);
+    brep::SweepSegment seg;
+    seg.arc = true;
+    seg.centre = frame.origin;
+    seg.normal = frame.zAxis;
+    seg.sweep = a.sweepRad;
+    out->points = {start, end};
+    out->segments = {seg};
+    return true;
+  }
+  return false;
+}
+
+/// Scan the selection for the profile (a closed polyline / circle) and the path (a line / arc).
+bool GatherSweepInputs(const AppCommandState& st, brep::Profile* profOut, brep::SweepPath* pathOut,
+                       bool* haveProf, bool* havePath) {
+  *haveProf = false;
+  *havePath = false;
+  for (const SelectedEntity& sel : st.selection) {
+    if (!*haveProf && ExtrudeProfileFromSelection(st, sel, profOut)) {
+      *haveProf = true;
+      continue;
+    }
+    if (!*havePath && SweepPathFromSelection(st, sel, pathOut))
+      *havePath = true;
+  }
+  return *haveProf && *havePath;
+}
+
+} // namespace
+
+void CancelSweepCommand(AppCommandState& st) {
+  st.sweepPhase = AppCommandState::SweepPhase::SelectInputs;
+}
+
+std::string CadSweepPromptText(const AppCommandState& st) {
+  brep::Profile prof;
+  brep::SweepPath path;
+  bool hp = false;
+  bool ha = false;
+  (void)GatherSweepInputs(st, &prof, &path, &hp, &ha);
+  std::string s = "SWEEP — select a closed profile and a line, arc or open polyline path";
+  if (hp || ha) {
+    s += " (";
+    s += hp ? "profile ok" : "no profile yet";
+    s += ha ? ", path ok" : ", no path yet";
+    s += ")";
+  }
+  s += ", Enter when done. ESC cancels.";
+  return s;
+}
+
+bool CadBuildSweepSolid(const AppCommandState& st, brep::Solid* out) {
+  brep::Profile prof;
+  brep::SweepPath path;
+  bool hp = false;
+  bool ha = false;
+  if (!GatherSweepInputs(st, &prof, &path, &hp, &ha))
+    return false;
+  brep::Problem why = brep::Problem::Ok;
+  return brep::Sweep(prof, path, brep::SweepOptions{}, out, &why);
+}
+
+static void CommitSweep(AppCommandState& st, std::vector<std::string>& log) {
+  brep::Profile prof;
+  brep::SweepPath path;
+  bool hp = false;
+  bool ha = false;
+  GatherSweepInputs(st, &prof, &path, &hp, &ha);
+  if (!hp || !ha) {
+    log.push_back("SWEEP — select one closed polyline or circle (the profile) and one line, arc or open polyline "
+                  "(the path).");
+    return;
+  }
+  brep::Solid solid;
+  brep::Problem why = brep::Problem::Ok;
+  if (!brep::Sweep(prof, path, brep::SweepOptions{}, &solid, &why)) {
+    log.push_back(std::string("SWEEP — ") + brep::ProblemText(why));
+    return;
+  }
+  PushUndoSnapshot(st, "Sweep");
+  const brep::MassProperties mp = brep::ComputeMassProperties(solid);
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+  BumpCadGpuCache(st);
+  st.selection.clear();
+  CancelSweepCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+void StartSweepCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelSweepCommand(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Sweep;
+  st.lastCommand = AppCommandState::Kind::Sweep;
+  st.selBoxWaitingSecond = false;
+  st.sweepPhase = AppCommandState::SweepPhase::SelectInputs;
+
+  brep::Profile prof;
+  brep::SweepPath path;
+  bool hp = false;
+  bool ha = false;
+  if (GatherSweepInputs(st, &prof, &path, &hp, &ha)) {
+    CommitSweep(st, log);
+    if (st.active != AppCommandState::Kind::Sweep)
+      return;
+  }
+  log.push_back(CadSweepPromptText(st));
+}
+
+bool HandleSweepTextInput(const std::string& lineIn, AppCommandState& st,
+                          std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Sweep)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  if (!line.empty())
+    return false;
+  CommitSweep(st, log);
+  return true;
+}
+
+// -------------------------------------------------------------------------------------------------
 // The prompted REVOLVE command (REQ-314 / ADR-046 increment 2b). Select a closed polyline or circle,
 // then the two ends of the revolve axis, then an angle in degrees (default a full turn). The ghost
 // and the commit both go through CadBuildRevolveSolids.
@@ -27185,6 +27451,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("LOFT canceled.");
     CancelLoftCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Sweep) {
+    log.push_back("SWEEP canceled.");
+    CancelSweepCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Boolean) {
     log.push_back("Command canceled.");
     CancelBooleanCommand(st);
@@ -27951,6 +28221,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     } else if (st.active == K::Loft) {
       // Enter skins the solid through the selected profiles (in selection order).
       (void)HandleLoftTextInput("", st, log);
+    } else if (st.active == K::Sweep) {
+      // Enter sweeps the selected profile along the selected path.
+      (void)HandleSweepTextInput("", st, log);
     } else if (st.active == K::Slice) {
       (void)HandleSliceTextInput("", st, log);
     } else if (st.active == K::Boolean) {
@@ -28285,6 +28558,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // A bare verb opens the prompted form (select profiles, Enter to build); with two or more
       // profiles already selected, StartLoftCommand builds straight away.
       StartLoftCommand(st, log);
+      return;
+    }
+    if (plotTok == "sweep" || plotTok == "swp") {
+      StartSweepCommand(st, log);
       return;
     }
     if (plotTok == "slice" || plotTok == "sl") {
@@ -29240,7 +29517,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleModifyText(st, st.active == AppCommandState::Kind::Copy, line, log)) {
       return;
     }
-    log.push_back("Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.");
+    ReportUnparsedCommandInput(st, line, "Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.", log);
     return;
   }
 
@@ -29248,7 +29525,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleStretchText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse STRETCH input — use X,Y or @dx,dy from base.");
+    ReportUnparsedCommandInput(st, line, "Could not parse STRETCH input — use X,Y or @dx,dy from base.", log);
     return;
   }
 
@@ -29256,7 +29533,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleScaleText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse SCALE input — see command hints (base X,Y; factor; R + reference/new length).");
+    ReportUnparsedCommandInput(st, line, "Could not parse SCALE input — see command hints (base X,Y; factor; R + reference/new length).", log);
     return;
   }
 
@@ -29264,7 +29541,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleRotateText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse ROTATE input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse ROTATE input — see command hints.", log);
     return;
   }
 
@@ -29272,7 +29549,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleMirrorText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse MIRROR input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse MIRROR input — see command hints.", log);
     return;
   }
 
@@ -29280,7 +29557,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleArrayText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse ARRAY input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse ARRAY input — see command hints.", log);
     return;
   }
 
@@ -29288,7 +29565,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleLengthenText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse LENGTHEN input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse LENGTHEN input — see command hints.", log);
     return;
   }
 
@@ -29296,7 +29573,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleFilletText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse FILLET input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse FILLET input — see command hints.", log);
     return;
   }
 
@@ -29304,7 +29581,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleChamferText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse CHAMFER input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse CHAMFER input — see command hints.", log);
     return;
   }
 
@@ -29738,9 +30015,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
     }
 
-    log.push_back(
+    ReportUnparsedCommandInput(
+        st, line,
         std::string("Could not parse point. Use X,Y or X Y") +
-        (allowRel ? "; @dx,dy; A / 2P (two picks); A 45 +90; ortho distance toward cursor." : "."));
+            (allowRel ? "; @dx,dy; A / 2P (two picks); A 45 +90; ortho distance toward cursor."
+                      : "."),
+        log);
     return;
   }
 
@@ -29771,7 +30051,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleCircleTextInput(line, st, log)) {
       return;
     }
-    log.push_back("Could not parse input for current CIRCLE step — see hint below.");
+    ReportUnparsedCommandInput(st, line, "Could not parse input for current CIRCLE step — see hint below.", log);
     return;
   }
 
@@ -29795,6 +30075,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleLoftTextInput(line, st, log))
       return;
     log.push_back(CadLoftPromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Sweep) {
+    if (HandleSweepTextInput(line, st, log))
+      return;
+    log.push_back(CadSweepPromptText(st));
     return;
   }
 
@@ -29881,24 +30168,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   std::string low = StringUtil::toLowerAsciiCopy(line);
-  for (const CmdEntry& e : kRegistry) {
-    if (low == StringUtil::toLowerAsciiCopy(e.primary)) {
-      DispatchByPrimary(StringUtil::toLowerAsciiCopy(e.primary), st, log);
-      return;
-    }
-    if (e.aliases[0] == '\0')
-      continue;
-    std::istringstream als(std::string(e.aliases));
-    std::string a;
-    while (std::getline(als, a, ',')) {
-      a = StringUtil::trimCopy(a);
-      if (a.empty())
-        continue;
-      if (low == StringUtil::toLowerAsciiCopy(a)) {
-        DispatchByPrimary(StringUtil::toLowerAsciiCopy(e.primary), st, log);
-        return;
-      }
-    }
+  // Through the same matcher the failure path uses (issue #233), so the two cannot disagree about
+  // which words are command names — which is the whole basis of that message.
+  if (const CmdEntry* e = FindRegistryEntry(low)) {
+    DispatchByPrimary(StringUtil::toLowerAsciiCopy(e->primary), st, log);
+    return;
   }
 
   if (TryStrongFuzzyDispatch(line, st, log)) {

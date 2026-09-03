@@ -1125,7 +1125,7 @@ const char* ProblemText(Problem p) {
     return "A profile arc's endpoints are not the same distance from its centre.";
   case Problem::ProfileSelfIntersects: return "The profile crosses itself.";
   case Problem::ProfileArcReflex:
-    return "A profile arc curves inward; this release can extrude outward-curving arcs only.";
+    return "A profile arc curves inward; LOFT and SWEEP build outward-curving arcs only.";
   case Problem::NonPositiveAngle: return "The revolve angle must be non-zero and no more than a full turn.";
   case Problem::RevolveAxisDegenerate: return "The revolve axis direction is zero or not a finite number.";
   case Problem::RevolveAxisNotInPlane: return "The revolve axis must lie in the profile's plane.";
@@ -1158,9 +1158,11 @@ const char* ProblemText(Problem p) {
   case Problem::SweepPathDegenerate: return "The sweep path has no length.";
   case Problem::SweepProfileTouchesAxis:
     return "The profile reaches the arc path's axis of curvature; move it clear of the axis.";
+  case Problem::SweepPathCorner:
+    return "The sweep path has a sharp corner; only smooth (tangent-continuous) bends are supported.";
   case Problem::SweepUnsupportedOption:
-    return "This sweep option is not supported yet: a twist or a fixed orientation needs a straight "
-           "path in this version.";
+    return "This sweep option is not supported yet: a twist or a fixed orientation needs a single "
+           "straight path segment in this version.";
   }
   return "The solid is not valid.";
 }
@@ -2074,10 +2076,13 @@ bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWh
       E[static_cast<std::size_t>(k)].sweep = -src.sweep * sgn;
     }
   }
-  for (const ProfileEdge& pe : E) {
-    if (pe.arc && !(pe.sweep > 1e-12))
-      return Fail(Problem::ProfileArcReflex, outWhy);
-  }
+  // A REFLEX arc — one curving into the loop rather than out of it — used to be refused here, by a
+  // `Problem::ProfileArcReflex` that no longer exists. It is built now: after the walk above, the
+  // loop runs CCW about `up`, so an arc whose sweep is still positive has its centre on the INTERIOR
+  // side and sweeps an ordinary outward-facing cylinder, while a negative one has its centre outside
+  // the loop and sweeps a face whose material is on the far side from its own axis. That is what
+  // `Surface::inward` was added for in B2a, and this is ADR-046 (d)'s own "separate feature, now
+  // unblocked" being taken up. See the side-face loop below, which is the only place that changes.
 
   Solid s;
   std::vector<int> baseV(static_cast<std::size_t>(n));
@@ -2147,8 +2152,13 @@ bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWh
       f.surface.height = dist;
       const Vec3 toStart = ray3d::Sub(W[static_cast<std::size_t>(k)], pe.centre);
       const double u0 = std::atan2(ray3d::Dot(toStart, cyl.yAxis), ray3d::Dot(toStart, cyl.xAxis));
-      f.uStart = u0;
-      f.uEnd = u0 + pe.sweep;
+      // The span is stored increasing and the ORIENTATION is carried by `inward`, which is the
+      // convention the Boolean bore walls already use — a negative `uEnd - uStart` would make the
+      // face's own area come out negative instead, and the area is a magnitude.
+      const double u1 = u0 + pe.sweep;
+      f.surface.inward = pe.sweep < 0.0;
+      f.uStart = std::min(u0, u1);
+      f.uEnd = std::max(u0, u1);
       Loop lp;
       lp.uses = std::move(uses);
       f.loops.push_back(std::move(lp));
@@ -2441,6 +2451,69 @@ namespace {
   return true;
 }
 
+/// A path segment's start / end unit tangents, its axis data, and its derived end point. Returns
+/// false for a degenerate segment.
+struct SweepSegGeom {
+  Vec3 startTan;
+  Vec3 endTan;
+  Vec3 axis;      ///< arc only: the unit turn axis
+  Vec3 centre;    ///< arc only
+  double sweep = 0.0;
+  Vec3 endPoint;  ///< the segment's geometric end (derived for an arc)
+  bool arc = false;
+};
+
+[[nodiscard]] bool SegGeom(const Vec3& a, const Vec3& b, const SweepSegment& seg, double scale,
+                           SweepSegGeom* out) {
+  out->arc = seg.arc;
+  if (!seg.arc) {
+    const Vec3 d = ray3d::Sub(b, a);
+    if (!(ray3d::Length(d) > 1e-9 * (1.0 + scale)))
+      return false;
+    out->startTan = out->endTan = ray3d::Normalize(d);
+    out->endPoint = b;
+    return true;
+  }
+  if (!FinitePoint(seg.centre) || !FinitePoint(seg.normal) || !(ray3d::Length(seg.normal) > 1e-9))
+    return false;
+  if (!std::isfinite(seg.sweep) || !(std::fabs(seg.sweep) > 1e-9) ||
+      std::fabs(seg.sweep) >= kTwoPi - 1e-6)
+    return false;
+  out->axis = ray3d::Normalize(seg.normal);
+  out->centre = seg.centre;
+  out->sweep = seg.sweep;
+  const Vec3 r0 = ray3d::Sub(a, seg.centre);
+  if (!(ray3d::Length(r0) > 1e-9 * (1.0 + scale)))
+    return false;
+  out->startTan = ray3d::Normalize(ray3d::Cross(out->axis, r0));
+  const Vec3 r1 = RotateAbout(r0, out->axis, seg.sweep);
+  out->endTan = ray3d::Normalize(ray3d::Cross(out->axis, r1));
+  if (seg.sweep < 0.0) {
+    out->startTan = ray3d::Scale(out->startTan, -1.0);
+    out->endTan = ray3d::Scale(out->endTan, -1.0);
+  }
+  out->endPoint = ray3d::Add(seg.centre, r1);
+  // The nominal next point must be the arc image of this one (a caller consistency check).
+  if (ray3d::Length(ray3d::Sub(out->endPoint, b)) > 1e-5 * (1.0 + scale) + 1e-6)
+    return false;
+  return true;
+}
+
+/// The profile mapped rigidly from its own plane into frame \p F.
+[[nodiscard]] Profile PlaceProfileInFrame(const Profile& profile, const ucs::Ucs& F) {
+  Profile p;
+  p.plane = F;
+  p.vertices.reserve(profile.vertices.size());
+  for (const Vec3& v : profile.vertices)
+    p.vertices.push_back(ucs::UcsToWorld(F, ucs::WorldToUcs(profile.plane, v)));
+  p.edges = profile.edges;
+  for (std::size_t i = 0; i < p.edges.size(); ++i)
+    if (p.edges[i].arc)
+      p.edges[i].centre =
+          ucs::UcsToWorld(F, ucs::WorldToUcs(profile.plane, profile.edges[i].centre));
+  return p;
+}
+
 } // namespace
 
 bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& options, Solid* out,
@@ -2454,169 +2527,176 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
     return Fail(Problem::ProfileTooFewEdges, outWhy);
   if (!FrameOk(profile.plane))
     return Fail(Problem::DegenerateFrame, outWhy);
-  if (!FinitePoint(path.start) || !FinitePoint(path.end))
+
+  const int np = static_cast<int>(path.points.size());
+  if (np < 2 || static_cast<int>(path.segments.size()) != np - 1)
     return Fail(Problem::SweepPathDegenerate, outWhy);
+  for (const Vec3& p : path.points)
+    if (!FinitePoint(p))
+      return Fail(Problem::SweepPathDegenerate, outWhy);
 
-  // --- Path → the two end frames --------------------------------------------------------------
-  Vec3 tangent0{0, 0, 1};
-  Vec3 arcAxis{0, 0, 1};
-  Vec3 arcCentre{};
-  Vec3 pathEnd = path.end;
-  double arcSweep = 0.0;
-  if (!path.arc) {
-    const Vec3 d = ray3d::Sub(path.end, path.start);
-    if (!(ray3d::Length(d) > 1e-9))
+  const bool singleStraight = np == 2 && !path.segments[0].arc;
+  if ((options.twistRad != 0.0 || !options.alignToPath) && !singleStraight)
+    return Fail(Problem::SweepUnsupportedOption, outWhy);
+
+  // Path scale, for the relative tolerances below.
+  double scale = 1e-9;
+  for (int k = 0; k + 1 < np; ++k)
+    scale = std::max(scale, ray3d::Length(ray3d::Sub(path.points[static_cast<std::size_t>(k + 1)],
+                                                     path.points[static_cast<std::size_t>(k)])));
+
+  // --- Per-segment geometry, and the tangent-continuity check at every joint -------------------
+  std::vector<SweepSegGeom> seg(static_cast<std::size_t>(np - 1));
+  for (int k = 0; k + 1 < np; ++k) {
+    if (!SegGeom(path.points[static_cast<std::size_t>(k)], path.points[static_cast<std::size_t>(k + 1)],
+                 path.segments[static_cast<std::size_t>(k)], scale, &seg[static_cast<std::size_t>(k)]))
       return Fail(Problem::SweepPathDegenerate, outWhy);
-    tangent0 = ray3d::Normalize(d);
-  } else {
-    // A curved path with a twist, or with the profile held at a fixed orientation, is the next
-    // increment — refused by name here rather than half-built.
-    if (options.twistRad != 0.0 || !options.alignToPath)
-      return Fail(Problem::SweepUnsupportedOption, outWhy);
-    if (!FinitePoint(path.centre) || !FinitePoint(path.normal) ||
-        !(ray3d::Length(path.normal) > 1e-9))
-      return Fail(Problem::SweepPathDegenerate, outWhy);
-    arcSweep = path.sweep;
-    if (!std::isfinite(arcSweep) || !(std::fabs(arcSweep) > 1e-9) ||
-        std::fabs(arcSweep) >= kTwoPi - 1e-6)
-      return Fail(Problem::SweepPathDegenerate, outWhy);  // a full turn seams like a revolve — later
-    arcAxis = ray3d::Normalize(path.normal);
-    arcCentre = path.centre;
-    const Vec3 r0 = ray3d::Sub(path.start, arcCentre);
-    if (!(ray3d::Length(r0) > 1e-9))
-      return Fail(Problem::SweepPathDegenerate, outWhy);
-    tangent0 = ray3d::Normalize(ray3d::Cross(arcAxis, r0));
-    if (arcSweep < 0.0)
-      tangent0 = ray3d::Scale(tangent0, -1.0);
-    // The path end is derived, not trusted — it must be exactly the arc image of the start.
-    pathEnd = ray3d::Add(arcCentre, RotateAbout(r0, arcAxis, arcSweep));
+    if (k > 0 &&
+        ray3d::Dot(seg[static_cast<std::size_t>(k - 1)].endTan, seg[static_cast<std::size_t>(k)].startTan) <
+            1.0 - 1e-6)
+      return Fail(Problem::SweepPathCorner, outWhy);  // a mitred corner — a later increment
   }
 
-  ucs::Ucs F0;
-  if (!SweepFrameAt(profile.plane, path.start, tangent0, options.alignToPath, 0.0, &F0))
+  // --- Carry a rotation-minimizing frame along the path ---------------------------------------
+  std::vector<ucs::Ucs> frame(static_cast<std::size_t>(np));
+  if (!SweepFrameAt(profile.plane, path.points[0], seg[0].startTan, options.alignToPath, 0.0,
+                    &frame[0]))
     return Fail(Problem::DegenerateFrame, outWhy);
-  ucs::Ucs F1;
-  if (!path.arc) {
-    if (!SweepFrameAt(profile.plane, pathEnd, tangent0, options.alignToPath, options.twistRad, &F1))
-      return Fail(Problem::DegenerateFrame, outWhy);
-  } else {
-    // F1 is F0 revolved by the sweep, so RevolveCurve of an F0 edge lands exactly on the F1 edge.
-    F1.origin = pathEnd;
-    F1.xAxis = RotateAbout(F0.xAxis, arcAxis, arcSweep);
-    F1.yAxis = RotateAbout(F0.yAxis, arcAxis, arcSweep);
-    F1.zAxis = RotateAbout(F0.zAxis, arcAxis, arcSweep);
-    if (!ucs::IsRightHandedOrthonormal(F1, 1e-6))
-      return Fail(Problem::DegenerateFrame, outWhy);
-  }
-
-  // --- Place the profile in each end frame --------------------------------------------------
-  auto placeProfile = [&](const ucs::Ucs& F) {
-    Profile p;
-    p.plane = F;
-    p.vertices.reserve(profile.vertices.size());
-    for (const Vec3& v : profile.vertices)
-      p.vertices.push_back(ucs::UcsToWorld(F, ucs::WorldToUcs(profile.plane, v)));
-    p.edges = profile.edges;
-    for (std::size_t i = 0; i < p.edges.size(); ++i)
-      if (p.edges[i].arc)
-        p.edges[i].centre =
-            ucs::UcsToWorld(F, ucs::WorldToUcs(profile.plane, profile.edges[i].centre));
-    return p;
-  };
-  const Profile p0 = placeProfile(F0);
-  const Profile p1 = placeProfile(F1);
-
-  LoftProfilePrep prep0;
-  LoftProfilePrep prep1;
-  if (!PrepLoftProfile(p0, F0.zAxis, &prep0, outWhy))
-    return false;
-  if (!PrepLoftProfile(p1, F1.zAxis, &prep1, outWhy))
-    return false;
-
-  if (path.arc) {
-    for (const Vec3& w : prep0.walk) {
-      const Vec3 rel = ray3d::Sub(w, arcCentre);
-      const Vec3 perp = ray3d::Sub(rel, ray3d::Scale(arcAxis, ray3d::Dot(rel, arcAxis)));
-      if (!(ray3d::Length(perp) > 1e-7 * (1.0 + ray3d::Length(rel))))
-        return Fail(Problem::SweepProfileTouchesAxis, outWhy);
+  for (int k = 1; k < np; ++k) {
+    const SweepSegGeom& g = seg[static_cast<std::size_t>(k - 1)];
+    ucs::Ucs f = frame[static_cast<std::size_t>(k - 1)];
+    f.origin = path.points[static_cast<std::size_t>(k)];
+    if (g.arc) {
+      f.xAxis = RotateAbout(f.xAxis, g.axis, g.sweep);
+      f.yAxis = RotateAbout(f.yAxis, g.axis, g.sweep);
+      f.zAxis = RotateAbout(f.zAxis, g.axis, g.sweep);
     }
+    if (!ucs::IsRightHandedOrthonormal(f, 1e-6))
+      return Fail(Problem::DegenerateFrame, outWhy);
+    frame[static_cast<std::size_t>(k)] = f;
+  }
+  // The whole-path twist (a single straight segment only, guarded above): rotate the end frame.
+  if (options.twistRad != 0.0) {
+    ucs::Ucs& f = frame[static_cast<std::size_t>(np - 1)];
+    f.xAxis = RotateAbout(f.xAxis, ray3d::Normalize(f.zAxis), options.twistRad);
+    f.yAxis = RotateAbout(f.yAxis, ray3d::Normalize(f.zAxis), options.twistRad);
+    if (!ucs::IsRightHandedOrthonormal(f, 1e-6))
+      return Fail(Problem::DegenerateFrame, outWhy);
   }
 
-  // --- Topology: Loft's single band, rails following the path -------------------------------
+  // --- Place the profile in every frame, and prep each ring -----------------------------------
+  std::vector<LoftProfilePrep> prep(static_cast<std::size_t>(np));
+  for (int k = 0; k < np; ++k) {
+    const Profile pk = PlaceProfileInFrame(profile, frame[static_cast<std::size_t>(k)]);
+    if (!PrepLoftProfile(pk, frame[static_cast<std::size_t>(k)].zAxis, &prep[static_cast<std::size_t>(k)],
+                         outWhy))
+      return false;
+  }
+  // Every arc segment: both of its rings must be clear of that segment's axis.
+  for (int k = 0; k + 1 < np; ++k) {
+    if (!seg[static_cast<std::size_t>(k)].arc)
+      continue;
+    const SweepSegGeom& g = seg[static_cast<std::size_t>(k)];
+    for (int side = 0; side < 2; ++side)
+      for (const Vec3& w : prep[static_cast<std::size_t>(k + side)].walk) {
+        const Vec3 rel = ray3d::Sub(w, g.centre);
+        const Vec3 perp = ray3d::Sub(rel, ray3d::Scale(g.axis, ray3d::Dot(rel, g.axis)));
+        if (!(ray3d::Length(perp) > 1e-7 * (1.0 + ray3d::Length(rel))))
+          return Fail(Problem::SweepProfileTouchesAxis, outWhy);
+      }
+  }
+
+  // --- Topology: one band per segment, rings shared at the joints (Loft-style) ----------------
   Solid s;
-  std::vector<int> v0(static_cast<std::size_t>(n));
-  std::vector<int> v1(static_cast<std::size_t>(n));
-  for (int j = 0; j < n; ++j) {
-    v0[static_cast<std::size_t>(j)] = AddVertex(&s, prep0.walk[static_cast<std::size_t>(j)]);
-    v1[static_cast<std::size_t>(j)] = AddVertex(&s, prep1.walk[static_cast<std::size_t>(j)]);
-  }
-  std::vector<int> e0(static_cast<std::size_t>(n));
-  std::vector<int> e1(static_cast<std::size_t>(n));
-  std::vector<int> rail(static_cast<std::size_t>(n));
-  for (int j = 0; j < n; ++j) {
-    const std::size_t jj = static_cast<std::size_t>(j);
-    const int j1 = (j + 1) % n;
-    if (prep0.arc[jj]) {
-      e0[jj] = AddArc(&s, v0[jj], v0[static_cast<std::size_t>(j1)], prep0.centre[jj], prep0.up,
-                      prep0.sweep[jj]);
-      e1[jj] = AddArc(&s, v1[jj], v1[static_cast<std::size_t>(j1)], prep1.centre[jj], prep1.up,
-                      prep1.sweep[jj]);
-    } else {
-      e0[jj] = AddLine(&s, v0[jj], v0[static_cast<std::size_t>(j1)]);
-      e1[jj] = AddLine(&s, v1[jj], v1[static_cast<std::size_t>(j1)]);
+  std::vector<std::vector<int>> ringV(static_cast<std::size_t>(np),
+                                      std::vector<int>(static_cast<std::size_t>(n)));
+  for (int k = 0; k < np; ++k)
+    for (int j = 0; j < n; ++j)
+      ringV[static_cast<std::size_t>(k)][static_cast<std::size_t>(j)] =
+          AddVertex(&s, prep[static_cast<std::size_t>(k)].walk[static_cast<std::size_t>(j)]);
+
+  std::vector<std::vector<int>> ringE(static_cast<std::size_t>(np),
+                                      std::vector<int>(static_cast<std::size_t>(n)));
+  for (int k = 0; k < np; ++k)
+    for (int j = 0; j < n; ++j) {
+      const std::size_t kk = static_cast<std::size_t>(k);
+      const std::size_t jj = static_cast<std::size_t>(j);
+      const int a = ringV[kk][jj];
+      const int b = ringV[kk][static_cast<std::size_t>((j + 1) % n)];
+      ringE[kk][jj] = prep[kk].arc[jj]
+                          ? AddArc(&s, a, b, prep[kk].centre[jj], prep[kk].up, prep[kk].sweep[jj])
+                          : AddLine(&s, a, b);
     }
-    if (!path.arc) {
-      rail[jj] = AddLine(&s, v0[jj], v1[jj]);
-    } else {
-      const Vec3 w = prep0.walk[jj];
-      const Vec3 c =
-          ray3d::Add(arcCentre, ray3d::Scale(arcAxis, ray3d::Dot(ray3d::Sub(w, arcCentre), arcAxis)));
-      rail[jj] = AddArc(&s, v0[jj], v1[jj], c, arcAxis, arcSweep);
+
+  std::vector<std::vector<int>> railE(static_cast<std::size_t>(np - 1),
+                                      std::vector<int>(static_cast<std::size_t>(n)));
+  for (int k = 0; k + 1 < np; ++k) {
+    const SweepSegGeom& g = seg[static_cast<std::size_t>(k)];
+    for (int j = 0; j < n; ++j) {
+      const int a = ringV[static_cast<std::size_t>(k)][static_cast<std::size_t>(j)];
+      const int b = ringV[static_cast<std::size_t>(k + 1)][static_cast<std::size_t>(j)];
+      if (!g.arc) {
+        railE[static_cast<std::size_t>(k)][static_cast<std::size_t>(j)] = AddLine(&s, a, b);
+      } else {
+        const Vec3 w = prep[static_cast<std::size_t>(k)].walk[static_cast<std::size_t>(j)];
+        const Vec3 c = ray3d::Add(
+            g.centre, ray3d::Scale(g.axis, ray3d::Dot(ray3d::Sub(w, g.centre), g.axis)));
+        railE[static_cast<std::size_t>(k)][static_cast<std::size_t>(j)] =
+            AddArc(&s, a, b, c, g.axis, g.sweep);
+      }
     }
   }
 
+  // Bottom cap (ring 0, outward −frame0.z), top cap (last ring, outward +frameEnd.z).
   {
     std::vector<EdgeUse> uses;
-    for (int k = n - 1; k >= 0; --k)
-      uses.push_back(EdgeUse{e0[static_cast<std::size_t>(k)], true});
-    s.faces.push_back(MakePlaneFace(prep0.walk[0], ray3d::Scale(F0.zAxis, -1.0), std::move(uses)));
+    for (int j = n - 1; j >= 0; --j)
+      uses.push_back(EdgeUse{ringE.front()[static_cast<std::size_t>(j)], true});
+    s.faces.push_back(
+        MakePlaneFace(prep.front().walk[0], ray3d::Scale(frame.front().zAxis, -1.0), std::move(uses)));
   }
   {
     std::vector<EdgeUse> uses;
-    for (int k = 0; k < n; ++k)
-      uses.push_back(EdgeUse{e1[static_cast<std::size_t>(k)], false});
-    s.faces.push_back(MakePlaneFace(prep1.walk[0], F1.zAxis, std::move(uses)));
+    for (int j = 0; j < n; ++j)
+      uses.push_back(EdgeUse{ringE.back()[static_cast<std::size_t>(j)], false});
+    s.faces.push_back(MakePlaneFace(prep.back().walk[0], frame.back().zAxis, std::move(uses)));
   }
 
-  for (int j = 0; j < n; ++j) {
-    const std::size_t jj = static_cast<std::size_t>(j);
-    const std::size_t j1 = static_cast<std::size_t>((j + 1) % n);
-    const nurbs::Curve c0 =
-        prep0.arc[jj]
-            ? nurbs::ArcCurve(prep0.centre[jj], prep0.walk[jj], prep0.up, prep0.sweep[jj])
-            : nurbs::LineCurve(prep0.walk[jj], prep0.walk[j1]);
-    Face f;
-    f.surface.kind = SurfaceKind::Nurbs;
-    if (!path.arc) {
-      const nurbs::Curve c1 =
-          prep1.arc[jj]
-              ? nurbs::ArcCurve(prep1.centre[jj], prep1.walk[jj], prep1.up, prep1.sweep[jj])
-              : nurbs::LineCurve(prep1.walk[jj], prep1.walk[j1]);
-      f.surface.patch = nurbs::RuledCurveToCurve(c0, c1);
-    } else {
-      f.surface.patch = nurbs::RevolveCurve(c0, arcCentre, arcAxis, arcSweep);
+  // Side faces: one NURBS patch per (band, profile edge).
+  for (int k = 0; k + 1 < np; ++k) {
+    const SweepSegGeom& g = seg[static_cast<std::size_t>(k)];
+    const LoftProfilePrep& p0 = prep[static_cast<std::size_t>(k)];
+    const LoftProfilePrep& p1 = prep[static_cast<std::size_t>(k + 1)];
+    for (int j = 0; j < n; ++j) {
+      const std::size_t jj = static_cast<std::size_t>(j);
+      const std::size_t j1 = static_cast<std::size_t>((j + 1) % n);
+      const nurbs::Curve c0 =
+          p0.arc[jj] ? nurbs::ArcCurve(p0.centre[jj], p0.walk[jj], p0.up, p0.sweep[jj])
+                     : nurbs::LineCurve(p0.walk[jj], p0.walk[j1]);
+      Face f;
+      f.surface.kind = SurfaceKind::Nurbs;
+      if (!g.arc) {
+        const nurbs::Curve c1 =
+            p1.arc[jj] ? nurbs::ArcCurve(p1.centre[jj], p1.walk[jj], p1.up, p1.sweep[jj])
+                       : nurbs::LineCurve(p1.walk[jj], p1.walk[j1]);
+        f.surface.patch = nurbs::RuledCurveToCurve(c0, c1);
+      } else {
+        f.surface.patch = nurbs::RevolveCurve(c0, g.centre, g.axis, g.sweep);
+      }
+      if (nurbs::ValidatePatch(f.surface.patch) != nurbs::PatchProblem::Ok)
+        return Fail(Problem::SweepUnsupportedOption, outWhy);
+      f.uStart = nurbs::UMin(f.surface.patch);
+      f.uEnd = nurbs::UMax(f.surface.patch);
+      f.vStart = nurbs::VMin(f.surface.patch);
+      f.vEnd = nurbs::VMax(f.surface.patch);
+      Loop lp;
+      lp.uses = {EdgeUse{ringE[static_cast<std::size_t>(k)][jj], false},
+                 EdgeUse{railE[static_cast<std::size_t>(k)][j1], false},
+                 EdgeUse{ringE[static_cast<std::size_t>(k + 1)][jj], true},
+                 EdgeUse{railE[static_cast<std::size_t>(k)][jj], true}};
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
     }
-    if (nurbs::ValidatePatch(f.surface.patch) != nurbs::PatchProblem::Ok)
-      return Fail(Problem::SweepUnsupportedOption, outWhy);
-    f.uStart = nurbs::UMin(f.surface.patch);
-    f.uEnd = nurbs::UMax(f.surface.patch);
-    f.vStart = nurbs::VMin(f.surface.patch);
-    f.vEnd = nurbs::VMax(f.surface.patch);
-    Loop lp;
-    lp.uses = {EdgeUse{e0[jj], false}, EdgeUse{rail[j1], false}, EdgeUse{e1[jj], true},
-               EdgeUse{rail[jj], true}};
-    f.loops.push_back(std::move(lp));
-    s.faces.push_back(std::move(f));
   }
 
   AddSingleShell(&s);

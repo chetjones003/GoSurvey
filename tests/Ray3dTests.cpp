@@ -99,6 +99,131 @@ TEST_CASE("Degenerate ray and degenerate plane are rejected, not NaN", "[ray3d]"
 }
 
 // ---------------------------------------------------------------------------
+// RayTriangleIntersect - how a solid's FACES are picked (REQ-318 / GitHub #148).
+//
+// A face is analytic, but a cursor can only be tested against the tessellation, so every face pick
+// runs through here and then projects onto the surface. These tests pin the arithmetic and, just as
+// importantly, the refusals: a click that hits no triangle must yield NO coordinate rather than a
+// plausible one (REQ-201).
+// ---------------------------------------------------------------------------
+
+namespace {
+// A unit triangle in the world XY plane: (0,0) (1,0) (0,1), wound CCW seen from +Z.
+const Vec3 kTa{0.0, 0.0, 0.0};
+const Vec3 kTb{1.0, 0.0, 0.0};
+const Vec3 kTc{0.0, 1.0, 0.0};
+}  // namespace
+
+TEST_CASE("A ray through a triangle's interior reports the hit point and its depth", "[ray3d]") {
+  Vec3 hit;
+  double t = 0.0, u = 0.0, v = 0.0;
+  REQUIRE(RayTriangleIntersect(DownAt(0.25, 0.25), kTa, kTb, kTc, &hit, &t, &u, &v));
+  REQUIRE(hit.x == Approx(0.25));
+  REQUIRE(hit.y == Approx(0.25));
+  REQUIRE(hit.z == Approx(0.0));
+  REQUIRE(t == Approx(100.0));  // DownAt starts at z = 100 and travels -Z
+  REQUIRE(u == Approx(0.25));   // barycentric along a->b
+  REQUIRE(v == Approx(0.25));   // barycentric along a->c
+}
+
+TEST_CASE("A ray outside the triangle but inside its plane reports no hit", "[ray3d]") {
+  // (0.8, 0.8) is beyond the hypotenuse: u + v > 1. The plane is hit, the TRIANGLE is not, and the
+  // difference is the whole point - a pick must not select a face the cursor is not over.
+  Vec3 hit{-1.0, -1.0, -1.0};
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(0.8, 0.8), kTa, kTb, kTc, &hit));
+  REQUIRE(hit.x == -1.0);  // untouched
+  REQUIRE(hit.y == -1.0);
+  REQUIRE(hit.z == -1.0);
+
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(-0.1, 0.5), kTa, kTb, kTc, &hit));  // u < 0
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(0.5, -0.1), kTa, kTb, kTc, &hit));  // v < 0
+}
+
+TEST_CASE("A triangle behind the ray origin is not hit", "[ray3d]") {
+  // Cursor below the triangle looking further down: the face is behind, so there is no pick.
+  Vec3 hit;
+  const Ray up{{0.25, 0.25, -5.0}, {0.0, 0.0, -1.0}};
+  REQUIRE_FALSE(RayTriangleIntersect(up, kTa, kTb, kTc, &hit));
+}
+
+TEST_CASE("A ray parallel to the triangle's plane reports no hit", "[ray3d]") {
+  Vec3 hit;
+  const Ray along{{-5.0, 0.25, 0.0}, {1.0, 0.0, 0.0}};
+  REQUIRE_FALSE(RayTriangleIntersect(along, kTa, kTb, kTc, &hit));
+}
+
+TEST_CASE("A degenerate triangle is rejected, not divided by", "[ray3d]") {
+  Vec3 hit;
+  // Collinear "triangle": all three points on the X axis. It bounds no area and cannot be hit.
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(0.5, 0.0), Vec3{0, 0, 0}, Vec3{1, 0, 0}, Vec3{2, 0, 0}, &hit));
+  // All three points coincident.
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(0.0, 0.0), kTa, kTa, kTa, &hit));
+}
+
+TEST_CASE("A degenerate ray and a null out-param are rejected", "[ray3d]") {
+  Vec3 hit;
+  const Ray zero{{0.25, 0.25, 100.0}, {0.0, 0.0, 0.0}};
+  REQUIRE_FALSE(RayTriangleIntersect(zero, kTa, kTb, kTc, &hit));
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(0.25, 0.25), kTa, kTb, kTc, nullptr));
+}
+
+TEST_CASE("Winding does not decide whether a triangle is hit", "[ray3d]") {
+  // A solid's tessellation winds every triangle outward, so a face seen from inside the solid -
+  // which is what a section view or a pick through a bore shows - presents its back. Refusing a
+  // back-facing hit here would make those faces unpickable, so the test pins that it is hit.
+  Vec3 hit;
+  REQUIRE(RayTriangleIntersect(DownAt(0.25, 0.25), kTa, kTc, kTb, &hit));  // reversed winding
+  REQUIRE(hit.z == Approx(0.0));
+}
+
+TEST_CASE("A hit exactly on a shared edge is reported by both triangles", "[ray3d]") {
+  // Two triangles meeting along the line x + y = 1, forming the unit square. A ray down the shared
+  // edge must hit at least one - and here both - rather than falling through the crack between
+  // them. Across FACES the solid tessellation is deliberately unwelded, so this is the case that
+  // decides whether a click on a solid's silhouette selects anything at all.
+  const Vec3 d{1.0, 1.0, 0.0};
+  Vec3 h1, h2;
+  const bool first = RayTriangleIntersect(DownAt(0.5, 0.5), kTa, kTb, kTc, &h1);
+  const bool second = RayTriangleIntersect(DownAt(0.5, 0.5), kTb, d, kTc, &h2);
+  REQUIRE(first);
+  REQUIRE(second);
+  REQUIRE(h1.z == Approx(0.0));
+  REQUIRE(h2.z == Approx(0.0));
+}
+
+TEST_CASE("A small triangle at state-plane coordinates is hit accurately", "[ray3d]") {
+  // The REQ-101 stress case: an absolute epsilon on the determinant would reject this outright,
+  // which is why the degeneracy test is scale-relative. A 0.25 ft feature at easting 2e6 is an
+  // ordinary thing in a survey drawing.
+  const double ex = 2000000.0, ny = 500000.0;
+  const Vec3 a{ex, ny, 12.0};
+  const Vec3 b{ex + 0.25, ny, 12.0};
+  const Vec3 c{ex, ny + 0.25, 12.0};
+  Vec3 hit;
+  double t = 0.0;
+  REQUIRE(RayTriangleIntersect(Ray{{ex + 0.05, ny + 0.05, 112.0}, {0.0, 0.0, -1.0}}, a, b, c, &hit, &t));
+  REQUIRE(hit.x == Approx(ex + 0.05));
+  REQUIRE(hit.y == Approx(ny + 0.05));
+  REQUIRE(hit.z == Approx(12.0).margin(1e-9));
+  REQUIRE(t == Approx(100.0));
+}
+
+TEST_CASE("An oblique ray hits a tilted triangle where the geometry says", "[ray3d]") {
+  // A 45-degree triangle in the XZ-ish plane, hit by a horizontal ray: confirms the routine is not
+  // quietly assuming a horizontal face.
+  const Vec3 a{0.0, -1.0, 0.0};
+  const Vec3 b{0.0, 1.0, 0.0};
+  const Vec3 c{0.0, 0.0, 2.0};
+  Vec3 hit;
+  double t = 0.0;
+  REQUIRE(RayTriangleIntersect(Ray{{-4.0, 0.0, 0.5}, {1.0, 0.0, 0.0}}, a, b, c, &hit, &t));
+  REQUIRE(hit.x == Approx(0.0));
+  REQUIRE(hit.y == Approx(0.0));
+  REQUIRE(hit.z == Approx(0.5));
+  REQUIRE(t == Approx(4.0));
+}
+
+// ---------------------------------------------------------------------------
 // RaySegmentDistance — how picking works once the camera tilts.
 // ---------------------------------------------------------------------------
 
