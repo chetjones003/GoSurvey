@@ -3397,3 +3397,155 @@ TEST_CASE("A wall that bends meets the tessellator with a NON-CONVEX cap", "[bre
   REQUIRE(t.triangleCount() == 32);
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// REQ-317 x REQ-314: a polysolid is an ordinary operand for the feature operations.
+//
+// Worth asserting rather than assuming. A polysolid is the first solid in the project that is
+// neither a primitive nor the output of a feature operation, and the whole value of putting it in
+// the same `brep::Solid` is that everything already built for solids accepts it — a wall you can cut
+// a doorway out of is a far more useful thing than a wall.
+//
+// The figures below are the ones that would catch a wrong answer, not just a returned `true`: a
+// boolean that silently kept the wrong side, or a slice that lost the mitred corner, still succeeds.
+// ---------------------------------------------------------------------------------------------
+TEST_CASE("A polysolid is an ordinary operand for extrude-era operations", "[brep][req317][req314]") {
+  Problem why = Problem::Ok;
+  auto volumeOf = [](const Solid& s) { return brep::ComputeMassProperties(s).volume; };
+
+  // A straight wall: 20 long, 2 wide, 8 high = 320 cubic feet.
+  Solid wall;
+  brep::Path p;
+  p.start = ucs::Point2D{0.0, 0.0};
+  p.segs.push_back(brep::PathSeg{ucs::Point2D{20.0, 0.0}, 0.0});
+  REQUIRE(brep::MakePolysolid(World(), p, 2.0, 8.0, brep::Justify::Center, &wall, &why));
+  REQUIRE(volumeOf(wall) == Approx(320.0).margin(1e-9));
+
+  // A doorway: x[6.5, 9.5], y[-2, 2], z[0, 7]. It overhangs the wall in Y and stops short in Z, so
+  // the overlap is 3 x 2 x 7 = 42 — chosen that way so the answer is not simply the box's volume.
+  Solid door;
+  ucs::Ucs at = World();
+  at.origin = Vec3{8.0, 0.0, 0.0};
+  REQUIRE(brep::MakeBox(at, 3.0, 4.0, 7.0, &door, &why));
+
+  SECTION("a doorway subtracts out of a wall, and takes exactly its overlap") {
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(wall, door, &out, &why));
+    double v = 0.0;
+    for (const Solid& s : out)
+      v += volumeOf(s);
+    REQUIRE(v == Approx(320.0 - 42.0).margin(1e-9));
+  }
+
+  SECTION("a union adds only the part that was not already wall") {
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(wall, door, &out, &why));
+    double v = 0.0;
+    for (const Solid& s : out)
+      v += volumeOf(s);
+    REQUIRE(v == Approx(320.0 + 84.0 - 42.0).margin(1e-9));
+  }
+
+  SECTION("a wall slices in two, and the two halves still add up") {
+    Solid above;
+    Solid below;
+    REQUIRE(brep::Slice(wall, Vec3{10.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0}, brep::SliceKeep::Both,
+                        &above, &below, &why));
+    REQUIRE(volumeOf(above) == Approx(160.0).margin(1e-9));
+    REQUIRE(volumeOf(below) == Approx(160.0).margin(1e-9));
+  }
+
+  SECTION("a wall that BENDS slices too, and the mitred corner survives the cut") {
+    // The case that could quietly go wrong: an L wall is non-convex, and the cut is on the leg away
+    // from the corner, so the corner has to come through untouched in the larger piece.
+    Solid lwall;
+    brep::Path lp;
+    lp.start = ucs::Point2D{0.0, 0.0};
+    lp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, 0.0});
+    lp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 10.0}, 0.0});
+    REQUIRE(brep::MakePolysolid(World(), lp, 2.0, 3.0, brep::Justify::Center, &lwall, &why));
+    REQUIRE(volumeOf(lwall) == Approx(120.0).margin(1e-9));
+
+    Solid above;
+    Solid below;
+    REQUIRE(brep::Slice(lwall, Vec3{5.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0}, brep::SliceKeep::Both,
+                        &above, &below, &why));
+    // Below the cut is a plain 5 x 2 x 3 block; everything else, corner included, is above it.
+    REQUIRE(volumeOf(below) == Approx(30.0).margin(1e-9));
+    REQUIRE(volumeOf(above) == Approx(90.0).margin(1e-9));
+  }
+
+  SECTION("a bent wall is a legal boolean operand") {
+    Solid lwall;
+    brep::Path lp;
+    lp.start = ucs::Point2D{0.0, 0.0};
+    lp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, 0.0});
+    lp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 10.0}, 0.0});
+    REQUIRE(brep::MakePolysolid(World(), lp, 2.0, 3.0, brep::Justify::Center, &lwall, &why));
+    ucs::Ucs g = World();
+    g.origin = Vec3{5.0, 0.0, 0.0};
+    Solid notch;
+    REQUIRE(brep::MakeBox(g, 2.0, 4.0, 2.0, &notch, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(lwall, notch, &out, &why));
+    double v = 0.0;
+    for (const Solid& s : out)
+      v += volumeOf(s);
+    REQUIRE(v == Approx(120.0 - 2.0 * 2.0 * 2.0).margin(1e-9));
+  }
+
+  SECTION("a CURVED wall is refused, by the boundary REQ-314 states for itself") {
+    // Not a polysolid defect and not a gap in this requirement: SLICE handles flat faces only
+    // (increment 3a) and B1 combines uncurved operands only. This asserts WHICH refusal comes back,
+    // so that when those increments land, this test fails and says so rather than a curved wall
+    // quietly staying unusable.
+    Solid curved;
+    brep::Path cp;
+    cp.start = ucs::Point2D{0.0, 0.0};
+    cp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, 0.0});
+    cp.segs.push_back(brep::PathSeg{ucs::Point2D{20.0, 10.0}, kPi * 0.5});
+    REQUIRE(brep::MakePolysolid(World(), cp, 2.0, 5.0, brep::Justify::Center, &curved, &why));
+
+    Solid above;
+    Solid below;
+    REQUIRE_FALSE(brep::Slice(curved, Vec3{5.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0},
+                              brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SliceCurvedFace);
+
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(curved, door, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Why `MakePolysolid` is its own builder rather than a call to `Extrude`.
+//
+// A wall's plan outline IS a closed planar loop of lines and arcs, which is exactly what `Extrude`
+// takes, so the refactor is the obvious one to reach for. It does not work, and this records the
+// measurement rather than the opinion: `Extrude` refuses an arc that curves INTO its loop, and the
+// inner rail of every bend is one. Building polysolids on `Extrude` would therefore mean a second
+// code path for curved walls — and a third for closed ones, whose plan has two loops where `Extrude`
+// takes one — which is more machinery than the builder it would replace, not less.
+//
+// If REQ-314 later lifts that restriction (it has `Surface::inward` to express the face now, which
+// it did not when `Extrude` was written), this test fails, and that is the signal to revisit.
+// ---------------------------------------------------------------------------------------------
+TEST_CASE("Extrude cannot yet build a curved wall's outline", "[brep][req317][req314]") {
+  Problem why = Problem::Ok;
+  brep::Profile pr;
+  pr.plane = World();
+  const double R = 10.0;
+  const double half = 1.0;
+  pr.vertices = {Vec3{R + half, 0.0, 0.0}, Vec3{0.0, R + half, 0.0}, Vec3{0.0, R - half, 0.0},
+                 Vec3{R - half, 0.0, 0.0}};
+  pr.edges.resize(4);
+  pr.edges[0] = {true, Vec3{0.0, 0.0, 0.0}, kPi * 0.5};   // outer rail, curving outward
+  pr.edges[1] = {false, Vec3{}, 0.0};                      // the far end cap
+  pr.edges[2] = {true, Vec3{0.0, 0.0, 0.0}, -kPi * 0.5};  // inner rail, curving INTO the region
+  pr.edges[3] = {false, Vec3{}, 0.0};                      // the near end cap
+
+  Solid s;
+  REQUIRE_FALSE(brep::Extrude(pr, 5.0, &s, &why));
+  REQUIRE(why == Problem::ProfileArcReflex);
+}

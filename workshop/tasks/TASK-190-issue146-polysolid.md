@@ -116,6 +116,42 @@ the run left standing, Esc, and a `.gs` round trip.
   with the drawing. Taken from AutoCAD's `PSOLWIDTH` / `PSOLHEIGHT`; a wall is almost always drawn at
   the same size as the last one.
 
+## Composing with REQ-314, measured rather than assumed
+
+The point of putting a polysolid in the same `brep::Solid` as everything else is that the feature
+operations accept it. That is now asserted, with the figures that would catch a wrong answer rather
+than a returned `true` — a boolean that kept the wrong side still succeeds:
+
+| Operation | Result |
+|---|---|
+| a doorway box SUBTRACTed from a straight wall | 320 − 42 = **278** (its overlap, not its volume) |
+| UNION of the two | 320 + 84 − 42 = **362** |
+| SLICE a straight wall in half | **160 / 160** |
+| SLICE a BENT wall off-corner | **90 / 30**, the mitred corner intact in the larger piece |
+| SUBTRACT a notch from a bent wall | 120 − 8 = **112** |
+
+The wall's own volume is asserted first, so a regression in `MakePolysolid` trips before any of these
+and a regression in the operation trips after — the two cannot be confused for each other.
+
+Refused, and asserted **by name** so the boundary is visible when it moves: a **curved** wall gives
+`SliceCurvedFace` and `BooleanCurvedFace`. Neither is a polysolid defect nor a gap in this
+requirement — they are the limits REQ-314 states for its own increments (SLICE 3a is flat-faced, B1
+takes uncurved operands). When those increments land, these assertions fail and say so, rather than a
+curved wall quietly staying unusable.
+
+## Why this is NOT built on `Extrude`, measured rather than argued
+
+A wall's plan outline is a closed planar loop of lines and arcs, which is exactly what `Extrude`
+takes, so folding `MakePolysolid` into it is the obvious refactor to reach for. **It does not work,
+and a test records why rather than a commit message**: `Extrude` refuses an arc curving INTO its loop
+(`ProfileArcReflex`), and the inner rail of every bend is one. Building on it would leave a second
+code path for curved walls and a third for closed ones — whose plan has two loops where `Extrude`
+takes one — which is more machinery than the builder it would replace, not less.
+
+If REQ-314 lifts that restriction (it has `Surface::inward` to express the face now, which it did not
+when `Extrude` was written), the pinned test fails, and that is the signal to revisit.
+
+
 ## Technical debt / stated boundaries
 
 - **DEBT-1 — no self-intersection check on a path containing a curve.** Exact for straight-segment
