@@ -52,7 +52,26 @@ Boolean used it.
   `Tessellate` + `TessellateIsolines` + `ClosestPointOnSurface` (Newton) for a `Nurbs` face.
 - `.gs` gains the `Nurbs` surface encoding; `kGsFormatVersion` **3 → 4**; `io/GsMigrate` + CI check.
 
-### Slice B — the command and the viewport *(next PR)*
+### Slice B — the command and the viewport *(implemented, branch `feat/req315-loft-command`)*
+
+`AppCommandState::Kind::Loft` + a one-value `LoftPhase::SelectProfiles`. `LOFT` (typed alias `LFT`)
+opens the prompted form — select two or more closed polylines / circles **in pick order**, Enter to
+build; a bare `LOFT` on a ready selection of ≥2 profiles builds immediately (the EXTRUDE-on-selection
+shortcut). `CadBuildLoftSolid` is the single source of truth for the live wireframe ghost and the
+commit (reuses `GatherExtrudeProfiles` + `brep::Loft`). Wired through the six places
+([[project_3d_entity_checklist]]): `ViewportClickRouteFor` (`R::SelectionAccumulate`), the viewport
+submit dispatch (fence-merge only), the command-line Enter branch (`HandleLoftTextInput`), the
+`CommandInputHint` / prompt (`CadLoftPromptText`), the `CadRubberPreview` ghost, and
+`CancelActiveCommand`; plus the `kRegistry` entry. Rendering / selection / erase / one-undo-step and
+the DXF/DWG skip message are the generic `cadSolids` paths, unchanged. Headless transcript
+`tests/headless/transcripts/req315-loft.txt` (cylinder loft == the cylinder primitive's props;
+square→square == the pyramid frustum; prompted CLICK-select flow; undo/redo; single-profile refusal;
+`.gs` save/reopen). ctest 1050/1050. **Known limitation**: the ghost rebuilds `brep::Loft` (with its
+numerical `Validate`) each frame while ≥2 profiles are selected — same shape as the EXTRUDE/REVOLVE
+ghosts but heavier per rebuild; fine for the 2–3 simple profiles a loft normally has, revisit if a
+many-edge loft preview ever stutters.
+
+### Slice B (original plan) — the command and the viewport
 
 - `LOFT` (typed + prompted), wired through the six places
   ([[project_3d_entity_checklist]]): route, submit-pick, command-line Enter, input hint / resolve,

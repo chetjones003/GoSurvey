@@ -562,6 +562,23 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     }
   }
 
+  // --- LOFT: a wireframe ghost of the skinned solid, rebuilt from the current selection every frame
+  //     (REQ-315 / ADR-048). Same builder the Enter commits through, so the ghost cannot show a
+  //     shape the commit would not build.
+  if (cmd.active == AppCommandState::Kind::Loft &&
+      cmd.loftPhase == AppCommandState::LoftPhase::SelectProfiles) {
+    brep::Solid g;
+    if (CadBuildLoftSolid(cmd, &g)) {
+      std::vector<double> segs;
+      brep::Problem why = brep::Problem::Ok;
+      if (brep::TessellateEdges(g, kSolidChordToleranceFt, &segs, &why)) {
+        for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+          PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                               static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+      }
+    }
+  }
+
   // --- SLICE: the triangle the three picked points span, as a hint of the cutting plane.
   if (cmd.active == AppCommandState::Kind::Slice) {
     using SP = AppCommandState::SlicePhase;

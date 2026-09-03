@@ -1,0 +1,125 @@
+# REQ-315 / ADR-048 (GitHub #241, Phase 4 of #120) — LOFT, end to end.
+#
+# BrepTests / BrepJsonTests prove the kernel (brep::Loft, the SurfaceKind::Nurbs faces, the .gs
+# round-trip). This transcript tests the half the kernel cannot: that selecting two or more closed
+# profiles at different elevations and running LOFT puts the skinned solid in the document, that its
+# volume and topology are what the kernel computed, that it survives a .gs save/reopen, that one
+# undo step removes it, and that a bad selection is reported rather than silently swallowed.
+
+NEW
+EXPECT SOLIDS 0
+
+# --- Two equal circles, 8 ft apart in Z -> a cylinder, lofted -----------------------------------
+# r = 5 at z = 0, r = 5 at z = 8. Volume pi*25*8 = 628.3185307179587.
+# Area 2*pi*25 + 2*pi*5*8 = 157.07963267948966 + 251.32741228718345 = 408.4070449666731.
+# Same topology the cylinder primitive has: 4 vertices, 6 edges, 4 faces.
+CMD CIRCLE
+CMD 0,0
+CMD 5
+ESC
+CMD ELEV
+CMD 8
+ESC
+CMD CIRCLE
+CMD 0,0
+CMD 5
+ESC
+CMD ELEV
+CMD 0
+ESC
+EXPECT CIRCLES 2
+
+BOX -8 -8 8 8
+EXPECT SELECTED 2
+CMD LOFT
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Solid
+EXPECT SOLIDPROPS 0 628.3185307179587 408.4070449666731 4 6 4
+EXPECT LOG "Solid created"
+# the source circles are left in place
+EXPECT CIRCLES 2
+
+# --- One undo step removes it; redo brings it back --------------------------------------------
+CMD UNDO
+EXPECT SOLIDS 0
+EXPECT CIRCLES 2
+CMD REDO
+EXPECT SOLIDS 1
+
+# --- A square shrinking to a smaller square -> the pyramid frustum ----------------------------
+# side 8 at z = 0, side 4 at z = 6. Volume 6/3 * (64 + 16 + sqrt(64*16)) = 2 * 112 = 224.
+# Area 80 + 4 * 6 * sqrt(40) = 231.78932768808222. A box's topology: 8 v, 12 e, 6 f.
+CMD POLYLINE
+CMD 96,-4
+CMD 104,-4
+CMD 104,4
+CMD 96,4
+CMD CLOSE
+ESC
+CMD ELEV
+CMD 6
+ESC
+CMD POLYLINE
+CMD 98,-2
+CMD 102,-2
+CMD 102,2
+CMD 98,2
+CMD CLOSE
+ESC
+CMD ELEV
+CMD 0
+ESC
+EXPECT POLYLINES 2
+
+BOX 94 -6 106 6
+EXPECT SELECTED 2
+CMD LOFT
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 1 224 231.78932768808222 8 12 6
+
+# --- The prompted form: bare LOFT, click two circles in order, Enter -------------------------
+CMD CIRCLE
+CMD 300,0
+CMD 3
+ESC
+CMD ELEV
+CMD 10
+ESC
+CMD CIRCLE
+CMD 300,0
+CMD 7
+ESC
+CMD ELEV
+CMD 0
+ESC
+CMD LOFT
+EXPECT LOG "select closed polylines or circles in lofting order"
+CLICK 303 0
+CLICK 307 0
+CMD
+EXPECT SOLIDS 3
+EXPECT SOLIDKIND 2 Solid
+EXPECT LOG "Solid created"
+
+# --- A single profile is refused, not silently swallowed -------------------------------------
+CMD CIRCLE
+CMD 500,0
+CMD 4
+ESC
+BOX 495 -5 505 5
+EXPECT SELECTED 1
+CMD LOFT
+EXPECT LOG "select closed polylines or circles in lofting order"
+CMD
+EXPECT LOG "select at least two"
+EXPECT SOLIDS 3
+ESC
+
+# --- Solids survive a .gs save and reopen with topology intact ------------------------------
+SAVEAS %OUT%/req315-loft.gs
+OPEN %OUT%/req315-loft.gs
+EXPECT SOLIDS 3
+EXPECT SOLIDPROPS 0 628.3185307179587 408.4070449666731 4 6 4
+EXPECT SOLIDPROPS 1 224 231.78932768808222 8 12 6
+
+CHECK ALL

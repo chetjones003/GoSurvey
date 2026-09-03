@@ -34,6 +34,8 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
           cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) ||
          (cmd.active == K::Revolve &&
           cmd.revolvePhase == AppCommandState::RevolvePhase::SelectProfiles) ||
+         (cmd.active == K::Loft &&
+          cmd.loftPhase == AppCommandState::LoftPhase::SelectProfiles) ||
          (cmd.active == K::Slice &&
           cmd.slicePhase == AppCommandState::SlicePhase::SelectSolids) ||
          cmd.active == K::Boolean;
@@ -158,6 +160,10 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Extrude:
     return cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles ? R::SelectionAccumulate
                                                                             : R::SnappedPointPick;
+  // LOFT (REQ-315): one phase, and it is the accumulate-and-Enter "select profiles" step — nothing
+  // is picked by point, so this is its only route.
+  case K::Loft:
+    return R::SelectionAccumulate;
   // REVOLVE (REQ-314): select profiles, then two snapped points for the axis; the angle is typed.
   case K::Revolve: {
     using RP = AppCommandState::RevolvePhase;
