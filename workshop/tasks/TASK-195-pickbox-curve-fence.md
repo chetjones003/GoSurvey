@@ -170,9 +170,42 @@ verification only, same standing as TASK-193's viewport/plot paths.
 
 ## Technical debt / follow-ups (not fixed here)
 
-- **Paper-space box selection** (`ComputeSelectionFromRect`'s paper counterpart) was not examined for
-  the same box-vs-curve defect. REQ-039 gives it the same rule and it deserves its own look.
-- **Block references, tables, annotations and PDF underlays** are still tested by their bounding box.
-  For those the box IS the footprint, so this is correct today — but a block whose content is a small
-  circle in a large empty extent has the same shape of problem, and no requirement currently says
-  which answer is wanted.
+### Paper space has the same defect, in every type — audited, confirmed, deferred
+
+Asked for and carried out after this fix was pushed. `SelectPaperEntitiesInBox`
+(`src/commands/PaperSpace.hpp:373`) tests **every** paper type by bounding box. Seven probes run
+against it, all seven failed:
+
+| type | what it tests | probe (crossing box) | got |
+|---|---|---|---|
+| Line | bbox of the endpoints | box `[8,1]-[9,2]`, ~5 in clear of the line `(0,0)-(10,10)` | selects |
+| Circle | enclosing square `cx ± r` | box `[7.5,7.5]-[8.5,8.5]`, 10.6 from an r=10 circle | selects |
+| Circle | same, and solid | box `[-1,-1]-[1,1]` in the hollow middle | selects |
+| Arc | square of the **whole circle**, sweep ignored | 90° arc in the upper-right quadrant, box in the lower-**left** | selects |
+| Ellipse | square of side 2·major, **`ratio` ignored** | semi-minor 1, box at `y ∈ [5,6]` | selects |
+| Polyline | bbox of all vertices | L-shape `(0,0)→(10,0)→(10,10)`, box in the empty upper-left | selects |
+| Block | the insertion **point** only | box over the block's geometry, not its insertion point | **misses** |
+
+Worse than what this task fixed, in two ways. **Lines and polylines are affected**, which they never
+were in model space (`SegIntersectsAABB` and `ChainHitsRect` were always exact there). And **arc and
+ellipse ignore their own shape outright** — the arc uses the full circle's square whatever its sweep,
+the ellipse ignores `ratio` entirely. The block is the mirror-image defect: too small, not too big.
+
+The click path (`PickPaperEntityAt`) is already curve-correct for circles, and viewports are already
+handled correctly inside `closePaperSelBox` (the hollow-rectangle rule, issue #4). The box path is
+the outlier.
+
+**Deferred to its own PR after this one merges**, on the user's call (2026-09-03): different file,
+different requirement path (REQ-039 acceptance (1)), and it changes an existing unit test —
+`tests/PaperSpaceTests.cpp:315` asserts the hollow-circle behaviour as correct (box `[9,9]-[11,11]`
+lies entirely inside a circle at `(10,10)` r=2 and is required to select it), the same
+defect-written-down-as-intent as this task's STRETCH transcript. Blocks are to be fixed too, against
+their real geometry via the world AABB model space already uses (`CadBlockWorldAabb`) — confirmed
+with the user rather than assumed, since it changes selection in the opposite direction.
+
+### Model-space box-shaped entities
+
+**Tables, annotations, block references and PDF underlays** are still tested by their bounding box.
+For those the box IS the footprint, so this is correct today — but a block whose content is a small
+circle in a large empty extent has the same shape of problem, and no accepted requirement currently
+says which answer is wanted.
