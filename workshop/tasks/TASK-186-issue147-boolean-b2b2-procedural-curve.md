@@ -151,7 +151,19 @@ after `Translate`; the reversed operand order; `SUBTRACT` / `UNION` still refuse
 headless-transcript `.gs` round-trip is deferred — building a perpendicular cylinder pair from
 commands needs a `CYLINDER` axis option (the base point stays in world coords under a `UCS`).
 
-`SUBTRACT` / `UNION` of the branch pipe are PR B / PR C.
+**PROGRESS 2026-09-03 — PR B done.** `SUBTRACT` (`main − branch`): `BuildBranchPipeSubtract` — a
+**genus-1** solid, 8 vertices / 12 edges / 6 faces. The two intersection loops become the **inner
+loop** of `B`'s two wall half-faces (split at the `ψ = ±π/2` seams); `B`'s two flat caps; `A`'s wall
+inside `B`, inward, in two halves. `IntegrateFace` gained a branch: a cylinder face whose
+`Intersection` edge is only in an *inner* loop is the full band **minus** the bite
+(`IntegrateCylinderFaceNumeric` on the inner-loop strip). `SameSurfaceApprox` now ignores an
+along-axis frame-origin offset (so a stored surface at the crossing matches the face's surface at a
+cap). The tessellator draws a holed band as a lower + upper sub-strip. `TryBooleanBranchPipe` routes
+`SUBTRACT` when the minuend is the thick cylinder; `thin − thick` (two stubs) and `UNION` fall
+through. Volume `vol(main) − lens`, to 5e-4 against a fine numerical reference; genus-1 topology,
+tilted survey frame, `Translate` all covered.
+
+`UNION` of the branch pipe is PR C.
 
 ### Deferred within B2b-2 (later sub-slices)
 
