@@ -1,0 +1,87 @@
+# GitHub issue #233 — typing a command name at a point prompt is swallowed as a bad coordinate.
+#
+# The failure was never that the input was refused; it was WHAT the refusal said. A user who believes
+# they have finished a command types the next verb, gets told their coordinate syntax is wrong, and
+# concludes the application has stopped responding. Nothing named the command that was still running,
+# and nothing mentioned Esc.
+#
+# This is a message fix, not a behaviour change: the verb is still not dispatched, and every command
+# still ends exactly where it did. Two behaviours that PUT the user in this position are deliberate
+# and are not touched — LINE's blank Enter ends the chain and restarts LINE (D-2026-08-25-j), and
+# CIRCLE loops back for the next circle.
+#
+# The load-bearing case in this file is the LAST one: a command's own keyword that happens to also be
+# a command name must still reach the command. `ARC` inside POLYLINE is the example, and it is what
+# would break if the registry lookup were moved earlier, to before the active command sees the line.
+
+NEW
+
+# --- LINE: the case from the issue ---------------------------------------------------------------
+CMD LINE
+CMD 0,0
+CMD 10,0
+# The user believes this ended LINE. It ended the CHAIN and restarted the command, which is the
+# documented behaviour and is not what this fixes.
+CMD
+CMD SPHERE
+EXPECT LOG "LINE is still running"
+EXPECT LOG "Press Esc to end LINE, then type SPHERE."
+# Nothing was created either way - the refusal is unchanged, only its wording.
+EXPECT SOLIDS 0
+EXPECT LINES 1
+
+# Esc gets out, and the command the user wanted then starts normally. Without this the fix would be
+# a nicer message on a dead end.
+ESC
+CMD SPHERE
+EXPECT LOG "SPHERE — centre point"
+ESC
+
+# --- An ALIAS is recognised, and the message names the canonical command --------------------------
+CMD LINE
+CMD 0,0
+CMD 10,0
+CMD
+CMD C
+EXPECT LOG "then type CIRCLE."
+ESC
+
+# --- CIRCLE loops after creating one, so it is still running too ----------------------------------
+CMD CIRCLE
+CMD 0,0
+CMD 10
+EXPECT CIRCLES 1
+CMD BOX
+EXPECT LOG "CIRCLE is still running"
+EXPECT LOG "then type BOX."
+ESC
+
+# --- A real typo still gets the coordinate help, not the command message --------------------------
+#
+# The lookup is exact: only a word the DISPATCHER would accept as a command gets the new message.
+# Anything else is what it always was - a coordinate the command could not read.
+CMD LINE
+CMD 0,0
+CMD zzzz
+EXPECT LOG "Could not parse point. Use X,Y or X Y"
+ESC
+
+# --- A command's own keyword still reaches the command --------------------------------------------
+#
+# `ARC` is a command name AND POLYLINE's arc-mode keyword. It must draw an arc segment, not report
+# that POLYLINE is still running. It works because the registry lookup lives in the FAILURE path,
+# reached only after the active command has already declined the line - so POLYLINE consumes `ARC`
+# long before it gets there. Moving the lookup earlier would break this, and this is the assertion
+# that would say so.
+CMD POLYLINE
+CMD 0,-50
+CMD 10,-50
+CMD ARC
+CMD 20,-40
+CMD END
+EXPECT POLYLINES 1
+EXPECT LOG "POLYLINE — arc mode."
+# The arc really is an arc: a quarter turn tangent to the +X run before it, bulge tan(22.5 deg).
+EXPECT POLYBULGE 0 1 0.414214
+
+CHECK ALL
