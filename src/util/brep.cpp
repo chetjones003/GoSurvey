@@ -3665,10 +3665,103 @@ struct SphereShape {
   return Succeed(outWhy);
 }
 
+/// `A − B` where `A` and `B` are the Steinmetz pair: cylinder `A` (kept) with a full perpendicular
+/// channel of cylinder `B` bored clean through it (REQ-314 B2b-1 coda, D-2026-09-02-i). \p fr: origin
+/// at the axis crossing, `zAxis` along `A`, `xAxis` along `B`. \p zA0 / \p zA1 are `A`'s cap heights
+/// along its axis, measured from the crossing (`zA0 < -r < 0 < r < zA1`). The two intersection
+/// ellipses (planes `z = ±x`) split `A`'s wall into a top band and a bottom band; the channel wall is
+/// two inward cylinder patches. Volume is `vol(A) − 16 r³ / 3`.
+[[nodiscard]] bool BuildSteinmetzSubtract(const ucs::Ucs& fr, double r, double zA0, double zA1,
+                                          Solid* out, Problem* outWhy) {
+  Solid s;
+  const Vec3 X = fr.xAxis;
+  const Vec3 Y = fr.yAxis;
+  const Vec3 Z = fr.zAxis;
+  const Vec3 c = fr.origin;
+  auto P = [&](const Vec3& base, double z) { return ray3d::Add(base, ray3d::Scale(Z, z)); };
+  const int v0 = AddVertex(&s, ray3d::Add(c, ray3d::Scale(Y, r)));   // ellipse crossing, +Y
+  const int v1 = AddVertex(&s, ray3d::Add(c, ray3d::Scale(Y, -r)));  // ellipse crossing, -Y
+  const int rTa = AddVertex(&s, P(ray3d::Add(c, ray3d::Scale(Y, r)), zA1));
+  const int rTb = AddVertex(&s, P(ray3d::Add(c, ray3d::Scale(Y, -r)), zA1));
+  const int rBa = AddVertex(&s, P(ray3d::Add(c, ray3d::Scale(Y, r)), zA0));
+  const int rBb = AddVertex(&s, P(ray3d::Add(c, ray3d::Scale(Y, -r)), zA0));
+
+  const double a = r * std::sqrt(2.0);
+  const double b = r;
+  const Vec3 nP = ray3d::Normalize(ray3d::Sub(Z, X));  // plane z = x
+  const Vec3 nM = ray3d::Normalize(ray3d::Add(Z, X));  // plane z = -x
+  const Vec3 mP = ray3d::Normalize(ray3d::Add(Z, X));
+  const Vec3 mM = ray3d::Normalize(ray3d::Sub(X, Z));
+  // The four half-ellipses. aP+/aM+ run v1 -> v0 (through the x>0 side); aP-/aM- run v0 -> v1 (x<0).
+  const int aPp = AddEllipse(&s, v1, v0, c, nP, mP, a, b, kPi);
+  const int aPn = AddEllipse(&s, v0, v1, c, nP, mP, a, b, kPi);
+  const int aMp = AddEllipse(&s, v1, v0, c, nM, mM, a, b, kPi);
+  const int aMn = AddEllipse(&s, v0, v1, c, nM, mM, a, b, kPi);
+
+  const Vec3 topC = P(c, zA1);
+  const Vec3 botC = P(c, zA0);
+  const int rtP = AddArc(&s, rTb, rTa, topC, Z, kPi);   // top rim, x>0
+  const int rtN = AddArc(&s, rTa, rTb, topC, Z, kPi);   // top rim, x<0
+  const int rbP = AddArc(&s, rBb, rBa, botC, Z, kPi);   // bottom rim, x>0
+  const int rbN = AddArc(&s, rBa, rBb, botC, Z, kPi);   // bottom rim, x<0
+  const int sTa = AddLine(&s, v0, rTa);
+  const int sTb = AddLine(&s, v1, rTb);
+  const int sBa = AddLine(&s, v0, rBa);
+  const int sBb = AddLine(&s, v1, rBb);
+
+  auto cylBand = [&](const ucs::Ucs& sf, double h, double u0, double u1, bool inward,
+                     std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame = sf;
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = h;
+    f.surface.inward = inward;
+    f.uStart = u0;
+    f.uEnd = u1;
+    Loop lp;
+    lp.uses = std::move(uses);
+    f.loops.push_back(std::move(lp));
+    s.faces.push_back(std::move(f));
+  };
+  ucs::Ucs frTop = fr;  // A's wall, crossing at z = 0, cap at z = zA1
+  ucs::Ucs frBot = fr;
+  frBot.origin = botC;
+  ucs::Ucs frCh;  // cylinder B's channel wall
+  frCh.origin = c;
+  frCh.zAxis = X;
+  frCh.xAxis = Z;
+  frCh.yAxis = ray3d::Normalize(ray3d::Cross(X, Z));
+
+  // A's top band (z >= |x|): two half-faces split through the crossing points.
+  cylBand(frTop, zA1, -kHalfPi, kHalfPi, false, {{aPp, false}, {sTa, false}, {rtP, true}, {sTb, true}});
+  cylBand(frTop, zA1, kHalfPi, kHalfPi + kPi, false,
+          {{aMn, false}, {sTb, false}, {rtN, true}, {sTa, true}});
+  // A's bottom band (z <= -|x|).
+  cylBand(frBot, -zA0, -kHalfPi, kHalfPi, false,
+          {{aMp, true}, {sBb, false}, {rbP, false}, {sBa, true}});
+  cylBand(frBot, -zA0, kHalfPi, kHalfPi + kPi, false,
+          {{aPn, true}, {sBa, false}, {rbN, false}, {sBb, true}});
+  // A's two flat caps.
+  s.faces.push_back(MakePlaneFace(topC, Z, {{rtP, false}, {rtN, false}}));
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{rbP, true}, {rbN, true}}));
+  // B's channel wall, inward: two patches bounded only by ellipse arcs.
+  cylBand(frCh, 2.0 * r, -kHalfPi, kHalfPi, true, {{aPp, true}, {aMn, true}});
+  cylBand(frCh, 2.0 * r, kHalfPi, kHalfPi + kPi, true, {{aPn, false}, {aMp, false}});
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// Recognise two equal-radius cylinders whose axes cross at right angles, both piercing clear of the
-/// other's caps. INTERSECT is a Steinmetz bicylinder (closed form); UNION / SUBTRACT of this pair (a
-/// T-pipe) are a later B2b-1 sub-slice and are refused by name here. `*handled` stays false when the
-/// pair is not this configuration, so the caller falls through to the coaxial recogniser.
+/// other's caps. INTERSECT is a Steinmetz bicylinder and `A − B` is `A` with a clean perpendicular
+/// channel (both closed form); UNION of this pair (a T-pipe) is a later B2b-1 sub-slice and is
+/// refused by name here. `*handled` stays false when the pair is not this configuration, so the
+/// caller falls through to the coaxial recogniser.
 [[nodiscard]] bool TryBooleanSteinmetz(const CylinderShape& A, const CylinderShape& B, BoolOp op,
                                        std::vector<Solid>* out, bool* handled, Problem* outWhy) {
   const double sc = A.radius + A.length + B.length;
@@ -3693,8 +3786,8 @@ struct SphereShape {
     return false;  // an intersection ellipse would run off a cap — not the clean bicylinder
 
   *handled = true;
-  if (op != BoolOp::Intersect)
-    return Fail(Problem::BooleanCurvedFace, outWhy);  // T-pipe UNION / SUBTRACT — a later sub-slice
+  if (op == BoolOp::Union)
+    return Fail(Problem::BooleanCurvedFace, outWhy);  // T-pipe UNION — a later sub-slice
 
   ucs::Ucs fr;
   if (!ucs::FromNormal(meet, az, &fr))
@@ -3705,8 +3798,13 @@ struct SphereShape {
   fr.xAxis = ray3d::Normalize(xa);
   fr.yAxis = ray3d::Normalize(ray3d::Cross(fr.zAxis, fr.xAxis));
   Solid r2;
-  if (!BuildSteinmetzIntersection(fr, r, &r2, outWhy))
-    return false;
+  if (op == BoolOp::Intersect) {
+    if (!BuildSteinmetzIntersection(fr, r, &r2, outWhy))
+      return false;
+  } else {
+    if (!BuildSteinmetzSubtract(fr, r, -sa, A.length - sa, &r2, outWhy))
+      return false;
+  }
   out->push_back(std::move(r2));
   return Succeed(outWhy);
 }
