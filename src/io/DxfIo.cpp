@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "CadDimStroke.hpp"  // one source for dimension geometry, shared with the viewport and the plot
 #include "CadLinetype.hpp"
 #include "DxfColors.hpp"
 #include "DxfEntityEmit.hpp"
@@ -2451,15 +2452,32 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
                                static_cast<uint64_t>(st.cadFilledRegions.size()) +
                                static_cast<uint64_t>(st.userArcs.size()) +
                                static_cast<uint64_t>(st.userEllipses.size());
+  // Dimension geometry comes from CadDimStroke.hpp - the same module the viewport (CadUi) and the
+  // plot (PdfPlot) already use - rather than being rebuilt here. The block this replaces handled
+  // DimAligned and DimLinear only, so an angular dimension exported as a bare label with no arc, no
+  // extension rays and no vertex (issue #252). Sharing the module fixes that kind, fixes every kind
+  // added later for free, and stops the three output paths disagreeing about what a dimension is.
+  CadDimStrokeParams dxfDimParams;
+  dxfDimParams.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
+  dxfDimParams.arrowSizeInches = st.activeDimensionStyle.arrowSizeInches;
+  dxfDimParams.arrowScale = 1.f;
+  dxfDimParams.arrowType = st.activeDimensionStyle.arrowType;
+  // An exploded dimension costs one LINE per stroke (strokes.segs already includes the arrowhead
+  // outline as Arrow-kind segments - this writer has no filled-triangle entity, and strokes.arrows
+  // only repeats those same three edges) plus one TEXT for the label. The count pre-pass and the
+  // emit below MUST agree - a mismatch shifts every later entity handle - so both ask this function.
+  const auto dxfDimEntityCount = [](const CadDimWorldStrokes& s) {
+    return static_cast<uint64_t>(s.segs.size() + 1u);
+  };
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
     const CadAnnotation& an = st.cadAnnotations[ai];
     if (an.kind == CadAnnotation::Kind::Text)
       ++entityHandleCount;
-    else if (an.kind == CadAnnotation::Kind::DimAligned || an.kind == CadAnnotation::Kind::DimLinear) {
-      float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
-      if (!CadDimAnyGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+    else if (CadAnnotationIsDimension(an)) {
+      CadDimWorldStrokes strokes;
+      if (!CadDimBuildWorldStrokes(an, dxfDimParams, &strokes))
         continue;
-      entityHandleCount += 4; // three LINE + one TEXT
+      entityHandleCount += dxfDimEntityCount(strokes);
     } else
       ++entityHandleCount;
   }
@@ -3786,27 +3804,17 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
         emitTextRecord(rec);
         ++nTextOut;
       }
-    } else if (an.kind == CadAnnotation::Kind::DimAligned || an.kind == CadAnnotation::Kind::DimLinear) {
-      float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
-      if (!CadDimAnyGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+    } else if (CadAnnotationIsDimension(an)) {
+      CadDimWorldStrokes strokes;
+      if (!CadDimBuildWorldStrokes(an, dxfDimParams, &strokes))
         continue;
-      const float gap = std::clamp(0.012f * meas, 1.e-5f * meas, 0.12f * meas);
-      const float over = std::clamp(0.02f * meas, 1.e-5f * meas, 0.1f * meas);
-      const float leg1 = std::hypot(sx1 - an.dimExt1X, sy1 - an.dimExt1Y);
-      const float u1 = leg1 > 1.e-8f ? gap / leg1 : 0.f;
-      const float ex1 = an.dimExt1X + (sx1 - an.dimExt1X) * u1;
-      const float ey1 = an.dimExt1Y + (sy1 - an.dimExt1Y) * u1;
-      const float leg2 = std::hypot(sx2 - an.dimExt2X, sy2 - an.dimExt2Y);
-      const float u2 = leg2 > 1.e-8f ? gap / leg2 : 0.f;
-      const float ex2 = an.dimExt2X + (sx2 - an.dimExt2X) * u2;
-      const float ey2 = an.dimExt2Y + (sy2 - an.dimExt2Y) * u2;
       auto emitLine = [&](float x0, float y0, float x1, float y1) {
         char hb[24];
         std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
         emitPair(0, "LINE");
         emitEntityHeader(hb, layer, at, entAci, annLyr);
         emitPair(100, "AcDbLine");
-        // A dimension's leader/extension lines sit on the dimension's own plane (REQ-057).
+        // A dimension's strokes sit on the dimension's own plane (REQ-057).
         const std::string dimZ = std::to_string(static_cast<double>(an.insZ));
         emitPair(10, std::to_string(static_cast<double>(x0)));
         emitPair(20, std::to_string(static_cast<double>(y0)));
@@ -3819,13 +3827,17 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
         emitPair(230, "1.0");
         ++nDimExplodedLines;
       };
-      emitLine(ex1, ey1, sx1 + nx * over, sy1 + ny * over);
-      emitLine(ex2, ey2, sx2 + nx * over, sy2 + ny * over);
-      emitLine(sx1, sy1, sx2, sy2);
+      // Every stroke, including the arrowhead outlines. The stroke module emits each arrowhead as
+      // three Arrow-kind segments in strokes.segs (and insets the dimension line by the arrow length
+      // at each end, so dropping them would leave a visible gap where the head belongs). strokes.arrows
+      // carries the same three edges as a triangle for a filled renderer; emitting it here too would
+      // just double every arrowhead line. A filled head would want a DXF SOLID, which this writer has
+      // no other use for - the outline reads correctly at every scale and stays within LINE + TEXT.
+      for (const CadDimWorldSeg& sg : strokes.segs)
+        emitLine(sg.x0, sg.y0, sg.x1, sg.y1);
       char hb[24];
       std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
       const std::string txt = sanitizeDxfText(an.text);
-      const double rotRad = static_cast<double>(an.rotationRad);
       DxfTextRecord rec;
       rec.handleHex = hb;
       rec.ownerHandleHex = hBrModel;
@@ -3835,13 +3847,16 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       rec.lineweight370 = dxfEntityLineweight370Str(at);
       rec.hasTransparency = dxfTransparency440Str(EffectiveEntityTransparency01(at, annLyr),
                                                   &rec.transparency440);
-      rec.x = std::to_string(static_cast<double>(an.insX));
-      rec.y = std::to_string(static_cast<double>(an.insY));
+      // The label goes where the stroke module puts it, not at the raw insertion point: for an
+      // angular dimension those differ, the label riding the arc rather than sitting at insX/insY.
+      rec.x = std::to_string(static_cast<double>(strokes.labelX));
+      rec.y = std::to_string(static_cast<double>(strokes.labelY));
       rec.z = std::to_string(static_cast<double>(an.insZ));  // elevation (REQ-057)
       rec.height =
           std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch)));
       rec.text = txt;
-      rec.rotationDeg = std::to_string(rotRad * (180.0 / kPi)); // DXF group 50 is DEGREES
+      rec.rotationDeg =
+          std::to_string(static_cast<double>(strokes.labelRotRad) * (180.0 / kPi)); // group 50 is DEGREES
       emitTextRecord(rec);
       ++nTextOut;
     } else {
