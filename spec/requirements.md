@@ -3973,14 +3973,14 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
 
 ### REQ-111 — Associative DIMENSION entity
-- Purpose: GoSurvey has no dimension object; an "aligned dimension" exports as exploded lines plus text, which is not associative and doesn't round-trip as a dimension
+- Purpose: GoSurvey has no dimension object; EVERY dimension kind exports as exploded lines plus text, which is not associative and doesn't round-trip as a dimension. (Corrected 2026-09-03, issue #252: this line said "an aligned dimension", and an angular one exported as the text ALONE - no arc, no rays, no vertex - because the DXF writer rebuilt dimension geometry by hand and its branch covered the aligned and linear kinds only. That is fixed; the inaccuracy is recorded because it is what let the gap sit unnoticed.)
 - Priority: could
 - Type: functional
 - Statement: Add a DIMENSION entity (at minimum linear/aligned) that stores its definition points, updates its displayed measurement when the dimensioned geometry moves, and round-trips as a real DXF `DIMENSION`.
 - Acceptance (sketch): dragging dimensioned geometry updates the displayed value and leader within REQ-101; DXF round-trip preserves it as a `DIMENSION`, not exploded geometry; erasing the dimensioned geometry is handled per REQ-201, not silently.
 - Owner-layer: Domain/Commands/IO/Renderer
 - Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i) 2026-09-03 — Purpose corrected (issue #252, TASK-193); the requirement itself is unchanged and stays proposed.
 
 ### REQ-112 — Binary DXF import
 - Purpose: only ASCII DXF is read; a binary DXF must be round-tripped through AutoCAD's Save As first
