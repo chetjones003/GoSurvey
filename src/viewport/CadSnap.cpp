@@ -4,6 +4,7 @@
 #include "geom2d.hpp"
 #include "util/cadblock.hpp"
 #include "util/curveintersect.hpp"
+#include "util/solidpick.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -699,37 +700,24 @@ ray3d::Vec3 ClosestRayPointToEdge(const ray3d::Ray& ray, const brep::Solid& s, c
 /// The box is padded by \p pad so a ray passing just outside a solid still reaches the triangles: a
 /// snap that silently misses is worse than a slow one, which is the same call the surface pick makes
 /// about its own plan-AABB reject.
+/// Delegates to \ref solidpick::RayNearBounds, which is the same slab test lifted into the shared
+/// pick module (REQ-318). Kept as a local name so the call sites below read unchanged; the point of
+/// the move is that the snap and the sub-object pick cannot drift apart in what they reject.
 [[nodiscard]] bool RayNearBounds(const ray3d::Ray& ray, const brep::Bounds& b, double pad) {
-  if (!b.valid)
-    return false;
-  const double mn[3] = {b.mn.x - pad, b.mn.y - pad, b.mn.z - pad};
-  const double mx[3] = {b.mx.x + pad, b.mx.y + pad, b.mx.z + pad};
-  const double o[3] = {ray.origin.x, ray.origin.y, ray.origin.z};
-  const double d[3] = {ray.dir.x, ray.dir.y, ray.dir.z};
-  double tNear = -std::numeric_limits<double>::max();
-  double tFar = std::numeric_limits<double>::max();
-  for (int i = 0; i < 3; ++i) {
-    if (std::fabs(d[i]) < 1e-12) {
-      if (o[i] < mn[i] || o[i] > mx[i])
-        return false;  // parallel to this slab and outside it
-      continue;
-    }
-    double t0 = (mn[i] - o[i]) / d[i];
-    double t1 = (mx[i] - o[i]) / d[i];
-    if (t0 > t1)
-      std::swap(t0, t1);
-    tNear = std::max(tNear, t0);
-    tFar = std::min(tFar, t1);
-    if (tNear > tFar)
-      return false;
-  }
-  return tFar >= 0.0;
+  return solidpick::RayNearBounds(ray, b, pad);
 }
 
 /// Nearest front-facing triangle hit along \p ray, over the flat 9-floats-per-triangle buffer the
 /// solid display cache holds. Writes the hit point and the FACE the triangle belongs to.
 ///
-/// Möller–Trumbore, two-sided: a solid can be viewed from inside (an orbit that puts the camera in
+/// The ray/triangle test itself is \ref ray3d::RayTriangleIntersect, shared with the sub-object
+/// pick (REQ-318). It was open-coded here before that existed; two copies of a pick are two sets of
+/// numerics that can disagree under one cursor, which is what the move prevents — the local copy
+/// used an absolute determinant epsilon and exact barycentric bounds, so it fell through the
+/// hairline crack between two faces of the deliberately unwelded tessellation where the shared one
+/// reports a hit.
+///
+/// Two-sided, unchanged: a solid can be viewed from inside (an orbit that puts the camera in
 /// the middle of a box is ordinary), and a one-sided test would report nothing there rather than the
 /// far wall. Nearest hit wins, which is what makes the snap land on the surface facing the user.
 bool RayHitSolidFace(const ray3d::Ray& ray, const std::vector<float>& triVerts,
@@ -742,28 +730,16 @@ bool RayHitSolidFace(const ray3d::Ray& ray, const std::vector<float>& triVerts,
     const ray3d::Vec3 v0{triVerts[b], triVerts[b + 1], triVerts[b + 2]};
     const ray3d::Vec3 v1{triVerts[b + 3], triVerts[b + 4], triVerts[b + 5]};
     const ray3d::Vec3 v2{triVerts[b + 6], triVerts[b + 7], triVerts[b + 8]};
-    const ray3d::Vec3 e1 = ray3d::Sub(v1, v0);
-    const ray3d::Vec3 e2 = ray3d::Sub(v2, v0);
-    const ray3d::Vec3 pv = ray3d::Cross(ray.dir, e2);
-    const double det = ray3d::Dot(e1, pv);
-    if (std::fabs(det) < 1e-12)
-      continue;  // ray parallel to the triangle's plane
-    const double invDet = 1.0 / det;
-    const ray3d::Vec3 tv = ray3d::Sub(ray.origin, v0);
-    const double u = ray3d::Dot(tv, pv) * invDet;
-    if (u < 0.0 || u > 1.0)
+    ray3d::Vec3 hit;
+    double hitT = 0.0;
+    if (!ray3d::RayTriangleIntersect(ray, v0, v1, v2, &hit, &hitT))
       continue;
-    const ray3d::Vec3 qv = ray3d::Cross(tv, e1);
-    const double v = ray3d::Dot(ray.dir, qv) * invDet;
-    if (v < 0.0 || u + v > 1.0)
-      continue;
-    const double hitT = ray3d::Dot(e2, qv) * invDet;
-    if (hitT <= 0.0 || hitT >= bestT)
+    if (hitT >= bestT)
       continue;
     bestT = hitT;
     found = true;
     if (outHit)
-      *outHit = ray.at(hitT);
+      *outHit = hit;
     if (outFace)
       *outFace = t < triFaceIds.size() ? triFaceIds[t] : -1;
   }

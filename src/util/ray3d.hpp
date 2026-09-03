@@ -76,6 +76,79 @@ inline bool RayPlaneIntersect(const Ray& ray, const Plane& plane, Vec3* outHit, 
   return true;
 }
 
+/// Intersect \p ray with the triangle \p a → \p b → \p c. Writes the hit point to \p outHit and
+/// returns true only for a real intersection **in front of** the ray origin.
+///
+/// Möller–Trumbore, in `double`. This is the test a solid's FACES are picked with, and it is the
+/// piece REQ-313 deliberately left for its first consumer: a face carries an analytic surface, but
+/// what a cursor can actually be tested against is the tessellation, so the pick finds the triangle
+/// and `brep::Tessellation::triFace` names the face that triangle belongs to.
+///
+/// **The hit must then be projected onto that face's analytic surface**
+/// (`brep::ClosestPointOnSurface`); that step is part of the pick, not a refinement of it. Measured
+/// on a cylinder tessellated at the shipping chord tolerance, the raw triangle hit sits 0.00986 ft
+/// off the true surface — inside REQ-101's ±0.01 ft, but spending 98.6% of the budget before any
+/// other error joins in. The projection takes it to 1e-15 ft at the origin and 1e-10 ft at
+/// state-plane magnitude (the double floor there), which is the difference between a face pick that
+/// merely passes a tolerance test and one that is actually exact.
+///
+/// Returns false — leaving \p outHit untouched — for a degenerate ray, a degenerate triangle, a ray
+/// parallel to the triangle's plane, a miss, and a hit behind the origin. Callers MUST honour the
+/// return value, for the reason \ref RayPlaneIntersect gives: a click that hits nothing has no world
+/// coordinate, and inventing one puts geometry where the user never pointed (REQ-201).
+///
+/// \p outT receives the ray parameter of the hit, which is what depth-orders one candidate triangle
+/// against another; \p outU and \p outV the barycentric coordinates of the hit, free here and needed
+/// by a caller that interpolates a per-vertex normal across the triangle.
+inline bool RayTriangleIntersect(const Ray& ray, const Vec3& a, const Vec3& b, const Vec3& c,
+                                 Vec3* outHit, double* outT = nullptr, double* outU = nullptr,
+                                 double* outV = nullptr) {
+  if (!outHit || !ray.valid())
+    return false;
+  const Vec3 e1 = Sub(b, a);
+  const Vec3 e2 = Sub(c, a);
+  const Vec3 pv = Cross(ray.dir, e2);
+  const double det = Dot(e1, pv);
+  // A near-zero determinant means the ray lies in (or runs parallel to) the triangle's plane, and
+  // the same test catches a degenerate triangle whose two edges are collinear. The threshold is
+  // **scale-relative**: an absolute epsilon would reject a legitimate small triangle at survey
+  // coordinates, which is precisely where a 0.25 ft feature at easting 2e6 lives.
+  const double scale = Length(e1) * Length(e2);
+  if (!(std::fabs(det) > 1e-12 * (scale > 0.0 ? scale : 1.0)))
+    return false;
+  const double inv = 1.0 / det;
+  const Vec3 tv = Sub(ray.origin, a);
+  // The barycentric tests are given a hair of slack rather than being exact. Within one face the
+  // tessellation is indexed, so adjacent triangles share vertices exactly and no slack is needed;
+  // ACROSS faces it is deliberately unwelded ("a solid's edges are creases" — brep.hpp), so a ray
+  // through a shared boundary is decided by two independent evaluations. Erring outward makes such a
+  // ray hit BOTH triangles and lets the nearest win, instead of falling through a hairline crack and
+  // reporting a miss on a solid the user clicked squarely. Any point this admits is off the triangle
+  // by less than the slack and is projected onto the analytic surface afterwards regardless.
+  constexpr double kBaryEps = 1e-9;
+  const double u = Dot(tv, pv) * inv;
+  if (u < -kBaryEps || u > 1.0 + kBaryEps)
+    return false;
+  const Vec3 qv = Cross(tv, e1);
+  const double v = Dot(ray.dir, qv) * inv;
+  if (v < -kBaryEps || u + v > 1.0 + kBaryEps)
+    return false;
+  const double t = Dot(e2, qv) * inv;
+  if (!(t > 0.0) || !std::isfinite(t))
+    return false;  // behind the origin, or non-finite from an extreme input
+  const Vec3 hit = ray.at(t);
+  if (!std::isfinite(hit.x) || !std::isfinite(hit.y) || !std::isfinite(hit.z))
+    return false;
+  *outHit = hit;
+  if (outT)
+    *outT = t;
+  if (outU)
+    *outU = u;
+  if (outV)
+    *outV = v;
+  return true;
+}
+
 /// Shortest distance from \p ray to the finite segment \p a → \p b.
 ///
 /// This is the orbited-camera analogue of "how far is the cursor from this line?": under a plan
@@ -95,7 +168,13 @@ inline double RaySegmentDistance(const Ray& ray, const Vec3& a, const Vec3& b, d
   const double segLen2 = Dot(seg, seg);
   if (segLen2 < 1e-24) {  // the "segment" is a point
     const Vec3 ap = Sub(a, ray.origin);
-    const double t = Dot(ap, ray.dir);
+    double t = Dot(ap, ray.dir);
+    // Clamped for the same reason the non-degenerate path below clamps, and RayPointDistance
+    // with it: a point behind the ray origin must be measured FROM the origin. Left unclamped,
+    // this returned a negative outT, which — per this function's own "useful for
+    // depth-ordering picks" — sorts as nearer than everything actually in front of the camera.
+    if (t < 0.0)
+      t = 0.0;
     const Vec3 closest = ray.at(t);
     if (outT)
       *outT = t;
