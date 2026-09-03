@@ -624,6 +624,8 @@ struct IsectStrip {
   const Surface* other = nullptr;
   double zSearchLo = 0.0;
   double zSearchHi = 0.0;
+  bool oneSided = false;  ///< the loop has ONE Intersection edge: the strip runs curve <-> `rimZ`.
+  double rimZ = 0.0;      ///< the constant axial bound (a flat rim) opposite the curve, if `oneSided`.
   [[nodiscard]] bool valid() const { return sf && other && zSearchHi > zSearchLo; }
 };
 
@@ -632,23 +634,44 @@ struct IsectStrip {
   st.sf = &f.surface;
   double zMin = 1e300;
   double zMax = -1e300;
+  int nIsect = 0;
+  double curveZLo = 1e300;
+  double curveZHi = -1e300;   // z of vertices that ARE on an Intersection edge
+  double plainZLo = 1e300;
+  double plainZHi = -1e300;   // z of vertices on Line / Arc edges only
   for (const Loop& lp : f.loops)
     for (const EdgeUse& u : lp.uses) {
       const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+      const bool isI = e.kind == CurveKind::Intersection;
       for (const int vi : {e.v0, e.v1}) {
         const double z = ucs::WorldToUcs(f.surface.frame, s.vertices[static_cast<std::size_t>(vi)].p).z;
         zMin = std::min(zMin, z);
         zMax = std::max(zMax, z);
+        if (isI) {
+          curveZLo = std::min(curveZLo, z);
+          curveZHi = std::max(curveZHi, z);
+        } else {
+          plainZLo = std::min(plainZLo, z);
+          plainZHi = std::max(plainZHi, z);
+        }
       }
-      if (e.kind == CurveKind::Intersection && e.isectSurfaces.size() == 2)
+      if (isI && e.isectSurfaces.size() == 2) {
+        ++nIsect;
         for (std::size_t k = 0; k < 2; ++k)
           if (!SameSurfaceApprox(e.isectSurfaces[k], f.surface))
             st.other = &e.isectSurfaces[k];
+      }
     }
   if (zMax > zMin) {
     const double margin = 0.3 * (zMax - zMin) + 1e-6 * (1.0 + std::fabs(zMax));
     st.zSearchLo = zMin - margin;
     st.zSearchHi = zMax + margin;
+  }
+  if (nIsect == 1 && plainZHi >= plainZLo) {
+    // A stub band: one quartic edge, and a flat rim on the far side. The rim is whichever plain
+    // bound is not shared with the curve's own end.
+    st.oneSided = true;
+    st.rimZ = std::fabs(plainZLo - curveZLo) > std::fabs(plainZHi - curveZHi) ? plainZLo : plainZHi;
   }
   return st;
 }
@@ -692,6 +715,15 @@ struct IsectStrip {
     }
     zp = zc;
     gp = gc;
+  }
+  if (st.oneSided) {
+    // one quartic edge and a flat rim: the strip runs from the rim to the crossing nearest it.
+    if (roots == 0)
+      return false;
+    const double cross = std::fabs(first - st.rimZ) <= std::fabs(last - st.rimZ) ? first : last;
+    *zLo = std::min(cross, st.rimZ);
+    *zHi = std::max(cross, st.rimZ);
+    return *zHi > *zLo;
   }
   if (roots < 2)
     return false;
@@ -4427,10 +4459,128 @@ struct SphereShape {
   return Succeed(outWhy);
 }
 
+/// `A ∪ B`: the solid pipe-tee — the thick main `B` (radius \p R, axis `fr.zAxis`, caps \p zB0 /
+/// \p zB1) fused with the thin branch `A` (radius \p r, axis `fr.xAxis`, caps \p xA0 / \p xA1)
+/// (REQ-314 B2b-2). 12 vertices, 18 edges, 10 faces: `B`'s wall outside `A` (two halves, each with
+/// the branch mouth as an inner loop) + `B`'s two caps + `A`'s wall outside `B` (four stub halves)
+/// + `A`'s two caps. Volume `vol(A) + vol(B) − lens`.
+[[nodiscard]] bool BuildBranchPipeUnion(const ucs::Ucs& fr, double r, double R, double zB0, double zB1,
+                                        double xA0, double xA1, Solid* out, Problem* outWhy) {
+  if (!(R > r) || !(r > 0.0) || !(zB1 - zB0 > 2.0 * r) || !(xA0 < -R) || !(xA1 > R))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 X = fr.xAxis;
+  const Vec3 Y = fr.yAxis;
+  const Vec3 Z = fr.zAxis;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = fr.origin;
+  aSurf.frame.zAxis = X;
+  aSurf.frame.xAxis = Z;
+  aSurf.frame.yAxis = ray3d::Scale(Y, -1.0);
+  aSurf.radius = r;
+  aSurf.height = xA1 - xA0;
+  Surface bSurf;
+  bSurf.kind = SurfaceKind::Cylinder;
+  bSurf.frame.origin = fr.origin;
+  bSurf.frame.zAxis = Z;
+  bSurf.frame.xAxis = X;
+  bSurf.frame.yAxis = Y;
+  bSurf.radius = R;
+  bSurf.height = zB1 - zB0;
+
+  Solid s;
+  auto cpt = [&](double phi, int sign) {
+    const double x = std::sqrt(std::max(0.0, R * R - r * r * std::sin(phi) * std::sin(phi))) * sign;
+    return W(Vec3{x, -r * std::sin(phi), r * std::cos(phi)});
+  };
+  const int p0 = AddVertex(&s, cpt(0.0, 1));
+  const int p1 = AddVertex(&s, cpt(kPi, 1));
+  const int n0 = AddVertex(&s, cpt(0.0, -1));
+  const int n1 = AddVertex(&s, cpt(kPi, -1));
+  const int bp = AddVertex(&s, W(Vec3{0.0, R, zB0}));
+  const int bm = AddVertex(&s, W(Vec3{0.0, -R, zB0}));
+  const int tp = AddVertex(&s, W(Vec3{0.0, R, zB1}));
+  const int tm = AddVertex(&s, W(Vec3{0.0, -R, zB1}));
+  const int k0 = AddVertex(&s, W(Vec3{xA1, 0.0, r}));
+  const int k1 = AddVertex(&s, W(Vec3{xA1, 0.0, -r}));
+  const int m0 = AddVertex(&s, W(Vec3{xA0, 0.0, r}));
+  const int m1 = AddVertex(&s, W(Vec3{xA0, 0.0, -r}));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = cpt(witnessPhi, sign);
+    e.isectSurfaces = {aSurf, bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int cpU = isect(p0, p1, 1.75 * kPi, 1);
+  const int cpL = isect(p0, p1, 0.25 * kPi, 1);
+  const int cnU = isect(n0, n1, 1.75 * kPi, -1);
+  const int cnL = isect(n0, n1, 0.25 * kPi, -1);
+  const int seamP = AddLine(&s, bp, tp);
+  const int seamM = AddLine(&s, bm, tm);
+  const Vec3 botC = W(Vec3{0.0, 0.0, zB0});
+  const Vec3 topC = W(Vec3{0.0, 0.0, zB1});
+  const int brF = AddArc(&s, bm, bp, botC, Z, kPi);
+  const int brB = AddArc(&s, bp, bm, botC, Z, kPi);
+  const int trF = AddArc(&s, tm, tp, topC, Z, kPi);
+  const int trB = AddArc(&s, tp, tm, topC, Z, kPi);
+  const int ks0 = AddLine(&s, p0, k0);  // +X stub, A seam phi = 0
+  const int ksP = AddLine(&s, p1, k1);  // +X stub, A seam phi = pi
+  const int ms0 = AddLine(&s, n0, m0);  // -X stub, A seam phi = 0
+  const int msP = AddLine(&s, n1, m1);
+  const Vec3 kC = W(Vec3{xA1, 0.0, 0.0});
+  const Vec3 mC = W(Vec3{xA0, 0.0, 0.0});
+  const Vec3 negX = ray3d::Scale(X, -1.0);
+  const int krF = AddArc(&s, k0, k1, kC, X, kPi);
+  const int krB = AddArc(&s, k1, k0, kC, X, kPi);
+  // The -X cap's rim arcs run about −X, so with the same loop pattern its face still winds outward.
+  const int mrF = AddArc(&s, m0, m1, mC, negX, kPi);
+  const int mrB = AddArc(&s, m1, m0, mC, negX, kPi);
+
+  auto face = [&](const Surface& surf, double u0, double u1, std::vector<Loop> loops) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops = std::move(loops);
+    s.faces.push_back(std::move(f));
+  };
+  face(bSurf, -kHalfPi, kHalfPi,
+       {Loop{{{brF, false}, {seamP, false}, {trF, true}, {seamM, true}}},
+        Loop{{{cpU, false}, {cpL, true}}}});
+  face(bSurf, kHalfPi, kHalfPi + kPi,
+       {Loop{{{brB, false}, {seamM, false}, {trB, true}, {seamP, true}}},
+        Loop{{{cnU, false}, {cnL, true}}}});
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{brF, true}, {brB, true}}));
+  s.faces.push_back(MakePlaneFace(topC, Z, {{trF, false}, {trB, false}}));
+  face(aSurf, 0.0, kPi,
+       {Loop{{{cpL, false}, {ksP, false}, {krF, true}, {ks0, true}}}});
+  face(aSurf, kPi, kTwoPi,
+       {Loop{{{cpU, true}, {ks0, false}, {krB, true}, {ksP, true}}}});
+  face(aSurf, 0.0, kPi,
+       {Loop{{{cnL, false}, {msP, false}, {mrF, true}, {ms0, true}}}});
+  face(aSurf, kPi, kTwoPi,
+       {Loop{{{cnU, true}, {ms0, false}, {mrB, true}, {msP, true}}}});
+  s.faces.push_back(MakePlaneFace(kC, X, {{krF, false}, {krB, false}}));
+  s.faces.push_back(MakePlaneFace(mC, negX, {{mrF, false}, {mrB, false}}));
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// Recognise a thin cylinder crossing a thicker one at right angles through an interior point (the
-/// axes intersect, radii differ) — the pipe-tee. INTERSECT builds the lens, SUBTRACT bores the branch
-/// clean through the main (B2b-2); UNION is a later sub-slice. `*handled` stays false when the pair
-/// is not this configuration.
+/// axes intersect, radii differ) — the pipe-tee. INTERSECT the lens, SUBTRACT bores the branch clean
+/// through the main, UNION fuses them (B2b-2). `*handled` stays false when the pair is not this
+/// configuration.
 [[nodiscard]] bool TryBooleanBranchPipe(const CylinderShape& A, const CylinderShape& B, BoolOp op,
                                         std::vector<Solid>* out, bool* handled, Problem* outWhy) {
   const double sc = A.radius + B.radius + A.length + B.length;
@@ -4461,8 +4611,6 @@ struct SphereShape {
     return false;
 
   const bool minuendIsThick = A.radius > B.radius;
-  if (op == BoolOp::Union)
-    return false;  // UNION of a branch pipe — a later B2b-2 sub-slice
   if (op == BoolOp::Subtract && !minuendIsThick)
     return false;  // thin − thick leaves two stubs — a later sub-slice
   *handled = true;
@@ -4475,14 +4623,20 @@ struct SphereShape {
     return Fail(Problem::BooleanResultInvalid, outWhy);
   fr.xAxis = ray3d::Normalize(xa);
   fr.yAxis = ray3d::Normalize(ray3d::Cross(fr.zAxis, fr.xAxis));
+  const double zB0 = -sThick;
+  const double zB1 = thick.length - sThick;
+  const double sThinFr = ray3d::Dot(ray3d::Sub(meet, thin.axis.origin), fr.xAxis);
+  const double xA0 = -sThinFr;
+  const double xA1 = thin.length - sThinFr;
   Solid result;
   if (op == BoolOp::Intersect) {
     if (!BuildBranchPipeIntersection(fr, r, R, &result, outWhy))
       return false;
-  } else {
-    const double zB0 = -sThick;
-    const double zB1 = thick.length - sThick;
+  } else if (op == BoolOp::Subtract) {
     if (!BuildBranchPipeSubtract(fr, r, R, zB0, zB1, &result, outWhy))
+      return false;
+  } else {
+    if (!BuildBranchPipeUnion(fr, r, R, zB0, zB1, xA0, xA1, &result, outWhy))
       return false;
   }
   out->push_back(std::move(result));
