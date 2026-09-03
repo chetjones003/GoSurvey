@@ -769,24 +769,47 @@ struct IsectStrip {
 /// cross product `Su x Sv` is exactly the oriented vector area element `n dA`, so the area integrand
 /// is its length and the volume integrand is `(S - q) . (Su x Sv)`. Builders orient the patch so
 /// `Su x Sv` points outward; \ref Surface::inward is applied by the shared flip in \ref IntegrateFace.
+/// The distinct interior knot values of \p knots strictly inside `[lo, hi]`, plus the two ends — the
+/// panel boundaries the quadrature must respect, since a (rational) B-spline is only C^(p-1) at a
+/// knot and Gauss–Legendre is accurate only on a smooth integrand.
+[[nodiscard]] std::vector<double> KnotPanels(const std::vector<double>& knots, double lo, double hi) {
+  std::vector<double> b{lo};
+  for (double k : knots)
+    if (k > lo + 1e-12 && k < hi - 1e-12 && k > b.back() + 1e-12)
+      b.push_back(k);
+  b.push_back(hi);
+  return b;
+}
+
 [[nodiscard]] FaceIntegrals IntegrateNurbsFaceNumeric(const Face& f, const Vec3& q) {
   const nurbs::Patch& patch = f.surface.patch;
   const double uLo = std::min(f.uStart, f.uEnd);
   const double uHi = std::max(f.uStart, f.uEnd);
   const double vLo = std::min(f.vStart, f.vEnd);
   const double vHi = std::max(f.vStart, f.vEnd);
+  const std::vector<double> uB = KnotPanels(patch.knotsU, uLo, uHi);
+  const std::vector<double> vB = KnotPanels(patch.knotsV, vLo, vHi);
+
+  // Integrate each knot cell on its own with a graded Gauss rule, so no panel straddles a knot.
+  auto over = [&](auto&& integrand) {
+    double acc = 0.0;
+    for (std::size_t iu = 0; iu + 1 < uB.size(); ++iu)
+      for (std::size_t iv = 0; iv + 1 < vB.size(); ++iv)
+        acc += GradedGaussIntegrate(uB[iu], uB[iu + 1], 4, [&](double u) {
+          return GradedGaussIntegrate(vB[iv], vB[iv + 1], 4,
+                                      [&](double v) { return integrand(u, v); });
+        });
+    return acc;
+  };
+
   FaceIntegrals out;
-  out.area = GradedGaussIntegrate(uLo, uHi, 8, [&](double u) {
-    return GradedGaussIntegrate(vLo, vHi, 8, [&](double v) {
-      const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
-      return ray3d::Length(ray3d::Cross(sp.du, sp.dv));
-    });
+  out.area = over([&](double u, double v) {
+    const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
+    return ray3d::Length(ray3d::Cross(sp.du, sp.dv));
   });
-  out.volTerm = GradedGaussIntegrate(uLo, uHi, 8, [&](double u) {
-    return GradedGaussIntegrate(vLo, vHi, 8, [&](double v) {
-      const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
-      return ray3d::Dot(ray3d::Sub(sp.p, q), ray3d::Cross(sp.du, sp.dv));
-    });
+  out.volTerm = over([&](double u, double v) {
+    const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
+    return ray3d::Dot(ray3d::Sub(sp.p, q), ray3d::Cross(sp.du, sp.dv));
   });
   return out;
 }
@@ -1120,6 +1143,12 @@ const char* ProblemText(Problem p) {
   case Problem::LoftProfileMismatch:
     return "The loft profiles do not match edge-for-edge (different edge counts, or a straight edge "
            "paired with an arc).";
+  case Problem::SweepPathDegenerate: return "The sweep path has no length.";
+  case Problem::SweepProfileTouchesAxis:
+    return "The profile reaches the arc path's axis of curvature; move it clear of the axis.";
+  case Problem::SweepUnsupportedOption:
+    return "This sweep option is not supported yet: a twist or a fixed orientation needs a straight "
+           "path in this version.";
   }
   return "The solid is not valid.";
 }
@@ -2339,6 +2368,246 @@ bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy) {
 
   AddSingleShell(&s);  // one shell, no recipe — the topology is the stored truth (ADR-046 (e))
 
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return Fail(why, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Feature operations — Sweep (REQ-315 / ADR-048, GitHub issue #241). One profile along one path
+// segment (a line or a circular arc). A straight segment builds ruled NURBS side faces and
+// reproduces Extrude; an arc segment revolves the profile about the arc's axis and reproduces
+// Revolve. The topology is Loft's single band; the difference is the V direction of each side patch
+// (a straight span vs an exact rational revolution) and that the rails follow the path.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// Rodrigues' rotation of \p v about unit axis \p k by angle \p a.
+[[nodiscard]] Vec3 RotateAbout(const Vec3& v, const Vec3& k, double a) {
+  const double c = std::cos(a);
+  const double sn = std::sin(a);
+  return ray3d::Add(ray3d::Add(ray3d::Scale(v, c), ray3d::Scale(ray3d::Cross(k, v), sn)),
+                    ray3d::Scale(k, ray3d::Dot(k, v) * (1.0 - c)));
+}
+
+/// The frame that places the profile at a path point: origin \p o, and — when \p align — the profile
+/// axes carried by the minimal rotation that takes the profile normal onto \p tangent, then twisted
+/// \p twist about that tangent. When \p align is false the profile keeps its own axes (translate
+/// only). Returns false if the result is not right-handed orthonormal.
+[[nodiscard]] bool SweepFrameAt(const ucs::Ucs& profilePlane, const Vec3& o, const Vec3& tangent,
+                                bool align, double twist, ucs::Ucs* out) {
+  ucs::Ucs f = profilePlane;
+  f.origin = o;
+  if (align) {
+    const Vec3 t = ray3d::Normalize(tangent);
+    const Vec3 nrm = profilePlane.zAxis;
+    const double d = std::clamp(ray3d::Dot(nrm, t), -1.0, 1.0);
+    Vec3 axis = ray3d::Cross(nrm, t);
+    const double al = ray3d::Length(axis);
+    if (al > 1e-12) {
+      axis = ray3d::Scale(axis, 1.0 / al);
+      const double ang = std::acos(d);
+      f.xAxis = RotateAbout(profilePlane.xAxis, axis, ang);
+      f.yAxis = RotateAbout(profilePlane.yAxis, axis, ang);
+      f.zAxis = RotateAbout(profilePlane.zAxis, axis, ang);
+    } else if (d < 0.0) {
+      // normal antiparallel to the tangent: a half turn about the profile's own X.
+      f.yAxis = ray3d::Scale(profilePlane.yAxis, -1.0);
+      f.zAxis = ray3d::Scale(profilePlane.zAxis, -1.0);
+    }
+  }
+  if (twist != 0.0) {
+    f.xAxis = RotateAbout(f.xAxis, ray3d::Normalize(f.zAxis), twist);
+    f.yAxis = RotateAbout(f.yAxis, ray3d::Normalize(f.zAxis), twist);
+  }
+  if (!ucs::IsRightHandedOrthonormal(f, 1e-6))
+    return false;
+  *out = f;
+  return true;
+}
+
+} // namespace
+
+bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& options, Solid* out,
+           Problem* outWhy) {
+  if (!out)
+    return false;
+  const int n = static_cast<int>(profile.vertices.size());
+  if (n != static_cast<int>(profile.edges.size()))
+    return Fail(Problem::ProfileMalformed, outWhy);
+  if (n < 2)
+    return Fail(Problem::ProfileTooFewEdges, outWhy);
+  if (!FrameOk(profile.plane))
+    return Fail(Problem::DegenerateFrame, outWhy);
+  if (!FinitePoint(path.start) || !FinitePoint(path.end))
+    return Fail(Problem::SweepPathDegenerate, outWhy);
+
+  // --- Path → the two end frames --------------------------------------------------------------
+  Vec3 tangent0{0, 0, 1};
+  Vec3 arcAxis{0, 0, 1};
+  Vec3 arcCentre{};
+  Vec3 pathEnd = path.end;
+  double arcSweep = 0.0;
+  if (!path.arc) {
+    const Vec3 d = ray3d::Sub(path.end, path.start);
+    if (!(ray3d::Length(d) > 1e-9))
+      return Fail(Problem::SweepPathDegenerate, outWhy);
+    tangent0 = ray3d::Normalize(d);
+  } else {
+    // A curved path with a twist, or with the profile held at a fixed orientation, is the next
+    // increment — refused by name here rather than half-built.
+    if (options.twistRad != 0.0 || !options.alignToPath)
+      return Fail(Problem::SweepUnsupportedOption, outWhy);
+    if (!FinitePoint(path.centre) || !FinitePoint(path.normal) ||
+        !(ray3d::Length(path.normal) > 1e-9))
+      return Fail(Problem::SweepPathDegenerate, outWhy);
+    arcSweep = path.sweep;
+    if (!std::isfinite(arcSweep) || !(std::fabs(arcSweep) > 1e-9) ||
+        std::fabs(arcSweep) >= kTwoPi - 1e-6)
+      return Fail(Problem::SweepPathDegenerate, outWhy);  // a full turn seams like a revolve — later
+    arcAxis = ray3d::Normalize(path.normal);
+    arcCentre = path.centre;
+    const Vec3 r0 = ray3d::Sub(path.start, arcCentre);
+    if (!(ray3d::Length(r0) > 1e-9))
+      return Fail(Problem::SweepPathDegenerate, outWhy);
+    tangent0 = ray3d::Normalize(ray3d::Cross(arcAxis, r0));
+    if (arcSweep < 0.0)
+      tangent0 = ray3d::Scale(tangent0, -1.0);
+    // The path end is derived, not trusted — it must be exactly the arc image of the start.
+    pathEnd = ray3d::Add(arcCentre, RotateAbout(r0, arcAxis, arcSweep));
+  }
+
+  ucs::Ucs F0;
+  if (!SweepFrameAt(profile.plane, path.start, tangent0, options.alignToPath, 0.0, &F0))
+    return Fail(Problem::DegenerateFrame, outWhy);
+  ucs::Ucs F1;
+  if (!path.arc) {
+    if (!SweepFrameAt(profile.plane, pathEnd, tangent0, options.alignToPath, options.twistRad, &F1))
+      return Fail(Problem::DegenerateFrame, outWhy);
+  } else {
+    // F1 is F0 revolved by the sweep, so RevolveCurve of an F0 edge lands exactly on the F1 edge.
+    F1.origin = pathEnd;
+    F1.xAxis = RotateAbout(F0.xAxis, arcAxis, arcSweep);
+    F1.yAxis = RotateAbout(F0.yAxis, arcAxis, arcSweep);
+    F1.zAxis = RotateAbout(F0.zAxis, arcAxis, arcSweep);
+    if (!ucs::IsRightHandedOrthonormal(F1, 1e-6))
+      return Fail(Problem::DegenerateFrame, outWhy);
+  }
+
+  // --- Place the profile in each end frame --------------------------------------------------
+  auto placeProfile = [&](const ucs::Ucs& F) {
+    Profile p;
+    p.plane = F;
+    p.vertices.reserve(profile.vertices.size());
+    for (const Vec3& v : profile.vertices)
+      p.vertices.push_back(ucs::UcsToWorld(F, ucs::WorldToUcs(profile.plane, v)));
+    p.edges = profile.edges;
+    for (std::size_t i = 0; i < p.edges.size(); ++i)
+      if (p.edges[i].arc)
+        p.edges[i].centre =
+            ucs::UcsToWorld(F, ucs::WorldToUcs(profile.plane, profile.edges[i].centre));
+    return p;
+  };
+  const Profile p0 = placeProfile(F0);
+  const Profile p1 = placeProfile(F1);
+
+  LoftProfilePrep prep0;
+  LoftProfilePrep prep1;
+  if (!PrepLoftProfile(p0, F0.zAxis, &prep0, outWhy))
+    return false;
+  if (!PrepLoftProfile(p1, F1.zAxis, &prep1, outWhy))
+    return false;
+
+  if (path.arc) {
+    for (const Vec3& w : prep0.walk) {
+      const Vec3 rel = ray3d::Sub(w, arcCentre);
+      const Vec3 perp = ray3d::Sub(rel, ray3d::Scale(arcAxis, ray3d::Dot(rel, arcAxis)));
+      if (!(ray3d::Length(perp) > 1e-7 * (1.0 + ray3d::Length(rel))))
+        return Fail(Problem::SweepProfileTouchesAxis, outWhy);
+    }
+  }
+
+  // --- Topology: Loft's single band, rails following the path -------------------------------
+  Solid s;
+  std::vector<int> v0(static_cast<std::size_t>(n));
+  std::vector<int> v1(static_cast<std::size_t>(n));
+  for (int j = 0; j < n; ++j) {
+    v0[static_cast<std::size_t>(j)] = AddVertex(&s, prep0.walk[static_cast<std::size_t>(j)]);
+    v1[static_cast<std::size_t>(j)] = AddVertex(&s, prep1.walk[static_cast<std::size_t>(j)]);
+  }
+  std::vector<int> e0(static_cast<std::size_t>(n));
+  std::vector<int> e1(static_cast<std::size_t>(n));
+  std::vector<int> rail(static_cast<std::size_t>(n));
+  for (int j = 0; j < n; ++j) {
+    const std::size_t jj = static_cast<std::size_t>(j);
+    const int j1 = (j + 1) % n;
+    if (prep0.arc[jj]) {
+      e0[jj] = AddArc(&s, v0[jj], v0[static_cast<std::size_t>(j1)], prep0.centre[jj], prep0.up,
+                      prep0.sweep[jj]);
+      e1[jj] = AddArc(&s, v1[jj], v1[static_cast<std::size_t>(j1)], prep1.centre[jj], prep1.up,
+                      prep1.sweep[jj]);
+    } else {
+      e0[jj] = AddLine(&s, v0[jj], v0[static_cast<std::size_t>(j1)]);
+      e1[jj] = AddLine(&s, v1[jj], v1[static_cast<std::size_t>(j1)]);
+    }
+    if (!path.arc) {
+      rail[jj] = AddLine(&s, v0[jj], v1[jj]);
+    } else {
+      const Vec3 w = prep0.walk[jj];
+      const Vec3 c =
+          ray3d::Add(arcCentre, ray3d::Scale(arcAxis, ray3d::Dot(ray3d::Sub(w, arcCentre), arcAxis)));
+      rail[jj] = AddArc(&s, v0[jj], v1[jj], c, arcAxis, arcSweep);
+    }
+  }
+
+  {
+    std::vector<EdgeUse> uses;
+    for (int k = n - 1; k >= 0; --k)
+      uses.push_back(EdgeUse{e0[static_cast<std::size_t>(k)], true});
+    s.faces.push_back(MakePlaneFace(prep0.walk[0], ray3d::Scale(F0.zAxis, -1.0), std::move(uses)));
+  }
+  {
+    std::vector<EdgeUse> uses;
+    for (int k = 0; k < n; ++k)
+      uses.push_back(EdgeUse{e1[static_cast<std::size_t>(k)], false});
+    s.faces.push_back(MakePlaneFace(prep1.walk[0], F1.zAxis, std::move(uses)));
+  }
+
+  for (int j = 0; j < n; ++j) {
+    const std::size_t jj = static_cast<std::size_t>(j);
+    const std::size_t j1 = static_cast<std::size_t>((j + 1) % n);
+    const nurbs::Curve c0 =
+        prep0.arc[jj]
+            ? nurbs::ArcCurve(prep0.centre[jj], prep0.walk[jj], prep0.up, prep0.sweep[jj])
+            : nurbs::LineCurve(prep0.walk[jj], prep0.walk[j1]);
+    Face f;
+    f.surface.kind = SurfaceKind::Nurbs;
+    if (!path.arc) {
+      const nurbs::Curve c1 =
+          prep1.arc[jj]
+              ? nurbs::ArcCurve(prep1.centre[jj], prep1.walk[jj], prep1.up, prep1.sweep[jj])
+              : nurbs::LineCurve(prep1.walk[jj], prep1.walk[j1]);
+      f.surface.patch = nurbs::RuledCurveToCurve(c0, c1);
+    } else {
+      f.surface.patch = nurbs::RevolveCurve(c0, arcCentre, arcAxis, arcSweep);
+    }
+    if (nurbs::ValidatePatch(f.surface.patch) != nurbs::PatchProblem::Ok)
+      return Fail(Problem::SweepUnsupportedOption, outWhy);
+    f.uStart = nurbs::UMin(f.surface.patch);
+    f.uEnd = nurbs::UMax(f.surface.patch);
+    f.vStart = nurbs::VMin(f.surface.patch);
+    f.vEnd = nurbs::VMax(f.surface.patch);
+    Loop lp;
+    lp.uses = {EdgeUse{e0[jj], false}, EdgeUse{rail[j1], false}, EdgeUse{e1[jj], true},
+               EdgeUse{rail[jj], true}};
+    f.loops.push_back(std::move(lp));
+    s.faces.push_back(std::move(f));
+  }
+
+  AddSingleShell(&s);
   const Problem why = Validate(s);
   if (why != Problem::Ok)
     return Fail(why, outWhy);
@@ -6184,7 +6453,24 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       double netStep = 0.0;
       for (std::size_t k = 0; k + 1 < patch.ctrl.size(); ++k)
         netStep = std::max(netStep, ray3d::Length(ray3d::Sub(patch.ctrl[k + 1], patch.ctrl[k])));
-      const bool curved = patch.degU > 1 || patch.degV > 1;
+      // A patch is flat enough for one quad only when it is bilinear AND its control net is planar —
+      // a *twisted* ruled patch (a swept-with-twist side face) is degree 1 in both directions but
+      // genuinely curved.
+      bool curved = patch.degU > 1 || patch.degV > 1;
+      if (!curved && patch.ctrl.size() >= 4) {
+        const Vec3 e1 = ray3d::Sub(patch.ctrl[1], patch.ctrl[0]);
+        const Vec3 e2 = ray3d::Sub(patch.ctrl[static_cast<std::size_t>(patch.nu)], patch.ctrl[0]);
+        Vec3 nrm = ray3d::Cross(e1, e2);
+        const double nl = ray3d::Length(nrm);
+        if (nl > 1e-12) {
+          nrm = ray3d::Scale(nrm, 1.0 / nl);
+          for (const Vec3& c : patch.ctrl)
+            if (std::fabs(ray3d::Dot(ray3d::Sub(c, patch.ctrl[0]), nrm)) > chordTolerance) {
+              curved = true;
+              break;
+            }
+        }
+      }
       const int n = curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance),
                                         8, 128)
                            : 1;
@@ -6320,8 +6606,24 @@ bool TessellateIsolines(const Solid& s, int isolineCount, double chordTolerance,
 
     if (sf.kind == SurfaceKind::Nurbs) {
       const nurbs::Patch& patch = sf.patch;
-      if (patch.degU == 1 && patch.degV == 1)
-        continue;  // a straight ruled span is flat — its boundary already says everything
+      if (patch.degU == 1 && patch.degV == 1 && patch.ctrl.size() >= 4) {
+        // A planar bilinear span is flat — its boundary already says everything. A twisted one is not.
+        const Vec3 e1 = ray3d::Sub(patch.ctrl[1], patch.ctrl[0]);
+        const Vec3 e2 = ray3d::Sub(patch.ctrl[static_cast<std::size_t>(patch.nu)], patch.ctrl[0]);
+        Vec3 nrm = ray3d::Cross(e1, e2);
+        const double nl = ray3d::Length(nrm);
+        bool planar = true;
+        if (nl > 1e-12) {
+          nrm = ray3d::Scale(nrm, 1.0 / nl);
+          for (const Vec3& c : patch.ctrl)
+            if (std::fabs(ray3d::Dot(ray3d::Sub(c, patch.ctrl[0]), nrm)) > chordTolerance) {
+              planar = false;
+              break;
+            }
+        }
+        if (planar)
+          continue;
+      }
       // Evenly spaced interior parameter lines both ways — the patch domain is not a full turn, so
       // the global-angle grid the analytic kinds use does not apply. Same evaluator as the shaded
       // triangles (SurfacePointAt), so the wireframe cannot float off the shading.

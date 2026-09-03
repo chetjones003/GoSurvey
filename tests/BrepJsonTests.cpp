@@ -87,6 +87,35 @@ TEST_CASE("A solid with no NURBS face serializes without the patch key", "[brepj
   REQUIRE(dumped.find("Nurbs") == std::string::npos);
 }
 
+TEST_CASE("A swept solid round-trips through .gs with topology and volume intact", "[brepjson][req315]") {
+  brep::Solid swept;
+  brep::Problem why = brep::Problem::Ok;
+  brep::SweepPath arcPath;
+  arcPath.arc = true;
+  arcPath.start = ray3d::Vec3{10, 0, 0};
+  arcPath.centre = ray3d::Vec3{0, 0, 0};
+  arcPath.normal = ray3d::Vec3{0, 0, 1};
+  arcPath.sweep = kPi;  // a half-turn elbow
+  arcPath.end = arcPath.start;
+
+  ucs::Ucs prof;
+  REQUIRE(ucs::FromNormal(ray3d::Vec3{10, 0, 0}, ray3d::Vec3{0, 1, 0}, &prof));
+  brep::Profile pr;
+  pr.plane = prof;
+  for (const ray3d::Vec3& lp : {ray3d::Vec3{-1.5, -1.5, 0}, ray3d::Vec3{1.5, -1.5, 0},
+                                ray3d::Vec3{1.5, 1.5, 0}, ray3d::Vec3{-1.5, 1.5, 0}})
+    pr.vertices.push_back(ucs::UcsToWorld(prof, lp));
+  pr.edges.assign(4, brep::ProfileEdge{});
+
+  REQUIRE(brep::Sweep(pr, arcPath, brep::SweepOptions{}, &swept, &why));
+  bool sawNurbs = false;
+  for (const brep::Face& f : swept.faces)
+    if (f.surface.kind == brep::SurfaceKind::Nurbs)
+      sawNurbs = true;
+  REQUIRE(sawNurbs);
+  RequireRoundTrips(swept);
+}
+
 TEST_CASE("A lofted solid with NURBS faces round-trips with topology and volume intact",
           "[brepjson][req315]") {
   brep::Solid loft;
