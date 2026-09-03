@@ -6416,6 +6416,7 @@ const CmdEntry kRegistry[] = {
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
     {"slice", "sl", "Cut selected solids with a plane (three points), keeping one side or both"},
     {"loft", "lft", "Loft a solid through two or more selected closed polylines or circles, in pick order"},
+    {"sweep", "swp", "Sweep a selected closed profile along a selected line or arc path into a solid"},
     {"union", "uni", "Combine two selected solids into one"},
     {"subtract", "su", "Subtract the second selected solid from the first"},
     {"intersect", "in", "Keep only the volume two selected solids share"},
@@ -11836,6 +11837,12 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   if (st.active == K::Loft) {
     // One phase, and it is the accumulate-and-Enter shape: a finished fence merges into the
     // selection, the command advances only on Enter (HandleLoftTextInput).
+    if (st.selBoxWaitingSecond)
+      finishBox();
+    return;
+  }
+
+  if (st.active == K::Sweep) {
     if (st.selBoxWaitingSecond)
       finishBox();
     return;
@@ -24603,6 +24610,161 @@ bool HandleLoftTextInput(const std::string& lineIn, AppCommandState& st, std::ve
 }
 
 // -------------------------------------------------------------------------------------------------
+// The SWEEP command (REQ-315 / ADR-048, GitHub issue #241). Select one closed profile and one line
+// or arc path; Enter sweeps the profile along the path (brep::Sweep). The closed loop is the
+// profile and the open curve is the path — selection order does not matter. The ghost and the
+// commit both go through CadBuildSweepSolid.
+// -------------------------------------------------------------------------------------------------
+
+namespace {
+
+/// A brep::SweepPath from a selected LINE or ARC entity. Returns false for anything else.
+[[nodiscard]] bool SweepPathFromSelection(const AppCommandState& st, const SelectedEntity& sel,
+                                          brep::SweepPath* out) {
+  if (sel.type == SelectedEntity::Type::LineSeg) {
+    const std::size_t b = static_cast<std::size_t>(sel.index) * 6;
+    if (sel.index < 0 || b + 5 >= st.userLinesFlat.size())
+      return false;
+    out->arc = false;
+    out->start = {static_cast<double>(st.userLinesFlat[b + 0]),
+                  static_cast<double>(st.userLinesFlat[b + 1]),
+                  static_cast<double>(st.userLinesFlat[b + 2])};
+    out->end = {static_cast<double>(st.userLinesFlat[b + 3]),
+                static_cast<double>(st.userLinesFlat[b + 4]),
+                static_cast<double>(st.userLinesFlat[b + 5])};
+    return true;
+  }
+  if (sel.type == SelectedEntity::Type::Arc) {
+    if (sel.index < 0 || static_cast<std::size_t>(sel.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<std::size_t>(sel.index)];
+    if (!(a.r > 0.0f) || !(std::fabs(a.sweepRad) > 1e-6f))
+      return false;
+    ucs::Ucs frame;
+    if (!ucs::FromNormal(ray3d::Vec3{a.cx, a.cy, a.z},
+                         ray3d::Vec3{a.nx, a.ny, a.nz}, &frame))
+      return false;
+    out->arc = true;
+    out->start = ucs::PointOnPlaneCircle(frame, a.r, a.startRad);
+    out->centre = frame.origin;
+    out->normal = frame.zAxis;
+    out->sweep = a.sweepRad;
+    out->end = out->start;  // brep::Sweep derives the true end from centre / normal / sweep
+    return true;
+  }
+  return false;
+}
+
+/// Scan the selection for the profile (a closed polyline / circle) and the path (a line / arc).
+bool GatherSweepInputs(const AppCommandState& st, brep::Profile* profOut, brep::SweepPath* pathOut,
+                       bool* haveProf, bool* havePath) {
+  *haveProf = false;
+  *havePath = false;
+  for (const SelectedEntity& sel : st.selection) {
+    if (!*haveProf && ExtrudeProfileFromSelection(st, sel, profOut)) {
+      *haveProf = true;
+      continue;
+    }
+    if (!*havePath && SweepPathFromSelection(st, sel, pathOut))
+      *havePath = true;
+  }
+  return *haveProf && *havePath;
+}
+
+} // namespace
+
+void CancelSweepCommand(AppCommandState& st) {
+  st.sweepPhase = AppCommandState::SweepPhase::SelectInputs;
+}
+
+std::string CadSweepPromptText(const AppCommandState& st) {
+  brep::Profile prof;
+  brep::SweepPath path;
+  bool hp = false;
+  bool ha = false;
+  (void)GatherSweepInputs(st, &prof, &path, &hp, &ha);
+  std::string s = "SWEEP — select a closed profile and a line/arc path";
+  if (hp || ha) {
+    s += " (";
+    s += hp ? "profile ok" : "no profile yet";
+    s += ha ? ", path ok" : ", no path yet";
+    s += ")";
+  }
+  s += ", Enter when done. ESC cancels.";
+  return s;
+}
+
+bool CadBuildSweepSolid(const AppCommandState& st, brep::Solid* out) {
+  brep::Profile prof;
+  brep::SweepPath path;
+  bool hp = false;
+  bool ha = false;
+  if (!GatherSweepInputs(st, &prof, &path, &hp, &ha))
+    return false;
+  brep::Problem why = brep::Problem::Ok;
+  return brep::Sweep(prof, path, brep::SweepOptions{}, out, &why);
+}
+
+static void CommitSweep(AppCommandState& st, std::vector<std::string>& log) {
+  brep::Profile prof;
+  brep::SweepPath path;
+  bool hp = false;
+  bool ha = false;
+  GatherSweepInputs(st, &prof, &path, &hp, &ha);
+  if (!hp || !ha) {
+    log.push_back("SWEEP — select one closed polyline or circle (the profile) and one line or arc "
+                  "(the path).");
+    return;
+  }
+  brep::Solid solid;
+  brep::Problem why = brep::Problem::Ok;
+  if (!brep::Sweep(prof, path, brep::SweepOptions{}, &solid, &why)) {
+    log.push_back(std::string("SWEEP — ") + brep::ProblemText(why));
+    return;
+  }
+  PushUndoSnapshot(st, "Sweep");
+  const brep::MassProperties mp = brep::ComputeMassProperties(solid);
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+  BumpCadGpuCache(st);
+  st.selection.clear();
+  CancelSweepCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+void StartSweepCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelSweepCommand(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Sweep;
+  st.lastCommand = AppCommandState::Kind::Sweep;
+  st.selBoxWaitingSecond = false;
+  st.sweepPhase = AppCommandState::SweepPhase::SelectInputs;
+
+  brep::Profile prof;
+  brep::SweepPath path;
+  bool hp = false;
+  bool ha = false;
+  if (GatherSweepInputs(st, &prof, &path, &hp, &ha)) {
+    CommitSweep(st, log);
+    if (st.active != AppCommandState::Kind::Sweep)
+      return;
+  }
+  log.push_back(CadSweepPromptText(st));
+}
+
+bool HandleSweepTextInput(const std::string& lineIn, AppCommandState& st,
+                          std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Sweep)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  if (!line.empty())
+    return false;
+  CommitSweep(st, log);
+  return true;
+}
+
+// -------------------------------------------------------------------------------------------------
 // The prompted REVOLVE command (REQ-314 / ADR-046 increment 2b). Select a closed polyline or circle,
 // then the two ends of the revolve axis, then an angle in degrees (default a full turn). The ghost
 // and the commit both go through CadBuildRevolveSolids.
@@ -26617,6 +26779,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("LOFT canceled.");
     CancelLoftCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Sweep) {
+    log.push_back("SWEEP canceled.");
+    CancelSweepCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Boolean) {
     log.push_back("Command canceled.");
     CancelBooleanCommand(st);
@@ -27371,6 +27537,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     } else if (st.active == K::Loft) {
       // Enter skins the solid through the selected profiles (in selection order).
       (void)HandleLoftTextInput("", st, log);
+    } else if (st.active == K::Sweep) {
+      // Enter sweeps the selected profile along the selected path.
+      (void)HandleSweepTextInput("", st, log);
     } else if (st.active == K::Slice) {
       (void)HandleSliceTextInput("", st, log);
     } else if (st.active == K::Boolean) {
@@ -27699,6 +27868,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // A bare verb opens the prompted form (select profiles, Enter to build); with two or more
       // profiles already selected, StartLoftCommand builds straight away.
       StartLoftCommand(st, log);
+      return;
+    }
+    if (plotTok == "sweep" || plotTok == "swp") {
+      StartSweepCommand(st, log);
       return;
     }
     if (plotTok == "slice" || plotTok == "sl") {
@@ -29209,6 +29382,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleLoftTextInput(line, st, log))
       return;
     log.push_back(CadLoftPromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Sweep) {
+    if (HandleSweepTextInput(line, st, log))
+      return;
+    log.push_back(CadSweepPromptText(st));
     return;
   }
 

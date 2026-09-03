@@ -1,0 +1,90 @@
+# REQ-315 / ADR-048 (GitHub #241, Phase 4 of #120) — SWEEP, end to end.
+#
+# BrepTests / BrepJsonTests prove the kernel (brep::Sweep, the SurfaceKind::Nurbs faces, the .gs
+# round-trip). This transcript tests the half the kernel cannot: that selecting a closed profile and
+# a line-or-arc path and running SWEEP puts the swept solid in the document, that its volume and
+# topology are what the kernel computed, that it survives a .gs save/reopen, that one undo step
+# removes it, and that a bad selection is reported rather than silently swallowed.
+
+NEW
+EXPECT SOLIDS 0
+
+# --- A 4 x 6 closed rectangle swept along a 10-unit line -> a prism -----------------------------
+# alignToPath stands the rectangle up perpendicular to the path, so V = 24 * 10 = 240.
+# Area = 2*24 + perimeter(20) * 10 = 48 + 200 = 248. A box's topology: 8 v, 12 e, 6 f.
+CMD POLYLINE
+CMD 0,0
+CMD 4,0
+CMD 4,6
+CMD 0,6
+CMD CLOSE
+ESC
+CMD LINE
+CMD 20,0
+CMD 20,10
+ESC
+EXPECT POLYLINES 1
+EXPECT LINES 1
+
+BOX -2 -2 22 12
+EXPECT SELECTED 2
+CMD SWEEP
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Solid
+EXPECT SOLIDPROPS 0 240 248 8 12 6
+EXPECT LOG "Solid created"
+# the source entities are left in place
+EXPECT POLYLINES 1
+EXPECT LINES 1
+
+# --- One undo step removes it; redo brings it back -------------------------------------------
+CMD UNDO
+EXPECT SOLIDS 0
+CMD REDO
+EXPECT SOLIDS 1
+
+# --- A circle swept along a 90-degree arc -> a quarter torus --------------------------------
+# tube r = 2, ring R = 15, quarter turn about (100,100). V = 30 * pi^2 = 296.0881320326807.
+# Area = pi^2 * 30 (tube) + 8 * pi (two caps) = 321.220873261399.
+# A circle profile is 4 v, 6 e, 4 f (the cylinder-style seam).
+CMD CIRCLE
+CMD 0,100
+CMD 2
+ESC
+CMD ARC
+PICK 115 100
+PICK 110.6066017 110.6066017
+PICK 100 115
+ESC
+EXPECT CIRCLES 1
+EXPECT ARCS 1
+
+BOX -5 95 120 120
+EXPECT SELECTED 2
+CMD SWEEP
+EXPECT SOLIDS 2
+EXPECT SOLIDKIND 1 Solid
+EXPECT SOLIDPROPS 1 296.0881320326807 321.220873261399 4 6 4
+EXPECT LOG "Solid created"
+
+# --- A profile with no path is reported, not silently swallowed ----------------------------
+CMD CIRCLE
+CMD 300,0
+CMD 3
+ESC
+BOX 295 -5 305 5
+EXPECT SELECTED 1
+CMD SWEEP
+EXPECT LOG "select a closed profile and a line/arc path"
+CMD
+EXPECT LOG "select one closed polyline or circle"
+EXPECT SOLIDS 2
+ESC
+
+# --- Solids survive a .gs save and reopen with topology intact -----------------------------
+SAVEAS %OUT%/req315-sweep.gs
+OPEN %OUT%/req315-sweep.gs
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 0 240 248 8 12 6
+
+CHECK ALL
