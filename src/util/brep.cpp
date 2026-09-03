@@ -469,14 +469,19 @@ struct CylinderCut {
   return ray3d::Dot(ray3d::Sub(p, q), SurfaceNormalGeom(sf, q)) >= 0.0 ? d : -d;
 }
 
-/// The two surfaces are the same analytic surface (up to rounding).
+/// The two surfaces are the same analytic surface (up to rounding). For a cylinder / cone the frame
+/// origin may sit anywhere along the axis — only the perpendicular offset has to vanish.
 [[nodiscard]] bool SameSurfaceApprox(const Surface& a, const Surface& b) {
   if (a.kind != b.kind)
     return false;
   const double sc = 1.0 + std::fabs(a.radius) + std::fabs(b.radius);
-  return std::fabs(a.radius - b.radius) < 1e-6 * sc &&
-         ray3d::Length(ray3d::Sub(a.frame.origin, b.frame.origin)) < 1e-6 * sc &&
-         std::fabs(std::fabs(ray3d::Dot(a.frame.zAxis, b.frame.zAxis)) - 1.0) < 1e-9;
+  if (std::fabs(a.radius - b.radius) > 1e-6 * sc ||
+      std::fabs(std::fabs(ray3d::Dot(a.frame.zAxis, b.frame.zAxis)) - 1.0) > 1e-9)
+    return false;
+  Vec3 d = ray3d::Sub(a.frame.origin, b.frame.origin);
+  if (a.kind == SurfaceKind::Cylinder || a.kind == SurfaceKind::Cone)
+    d = ray3d::Sub(d, ray3d::Scale(a.frame.zAxis, ray3d::Dot(d, a.frame.zAxis)));
+  return ray3d::Length(d) < 1e-6 * sc;
 }
 
 /// Pull \p p onto the curve where \p a and \p b cross: alternately project onto each surface, which
@@ -571,11 +576,17 @@ struct CylinderCut {
   return poly.back();
 }
 
+[[nodiscard]] bool LoopHasIntersectionEdge(const Solid& s, const Loop& lp) {
+  for (const EdgeUse& u : lp.uses)
+    if (s.edges[static_cast<std::size_t>(u.edge)].kind == CurveKind::Intersection)
+      return true;
+  return false;
+}
+
 [[nodiscard]] bool FaceLoopHasIntersectionEdge(const Solid& s, const Face& f) {
   for (const Loop& lp : f.loops)
-    for (const EdgeUse& u : lp.uses)
-      if (s.edges[static_cast<std::size_t>(u.edge)].kind == CurveKind::Intersection)
-        return true;
+    if (LoopHasIntersectionEdge(s, lp))
+      return true;
   return false;
 }
 
@@ -730,7 +741,28 @@ struct IsectStrip {
   }
   case SurfaceKind::Cylinder: {
     if (FaceLoopHasIntersectionEdge(s, f)) {
-      out = IntegrateCylinderFaceNumeric(s, f, q);  // ADR-045 (b) numerical carve-out (D-2026-09-02-i)
+      // ADR-045 (b) numerical carve-out (D-2026-09-02-i). A procedural edge in the OUTER loop bounds
+      // the face's material directly; one that appears only in an INNER loop is a bite out of an
+      // otherwise-full band (a bored branch mouth), so the term is the full band minus that bite.
+      const bool inOuter = LoopHasIntersectionEdge(s, f.loops.front());
+      if (inOuter) {
+        out = IntegrateCylinderFaceNumeric(s, f, q);
+      } else {
+        double zLo = 1e300;
+        double zHi = -1e300;
+        for (const EdgeUse& u : f.loops.front().uses)
+          for (const int vi : {s.edges[static_cast<std::size_t>(u.edge)].v0,
+                               s.edges[static_cast<std::size_t>(u.edge)].v1}) {
+            const double z = ucs::WorldToUcs(sf.frame, s.vertices[static_cast<std::size_t>(vi)].p).z;
+            zLo = std::min(zLo, z);
+            zHi = std::max(zHi, z);
+          }
+        const ConeIntegrals full = CylinderPlaneCutIntegrals(sf.radius, f.uStart, f.uEnd, zHi - zLo,
+                                                             0.0, 0.0, qLocal);
+        const FaceIntegrals bite = IntegrateCylinderFaceNumeric(s, f, q);
+        out.area = full.area - bite.area;
+        out.volTerm = full.volTerm - bite.volTerm;
+      }
       break;
     }
     CylinderCut cc;
@@ -4297,9 +4329,107 @@ struct SphereShape {
   return Succeed(outWhy);
 }
 
+/// `B − A`: the thick cylinder `B` (radius \p R, axis `fr.zAxis`, caps at \p zB0 / \p zB1) with the
+/// thin branch cylinder `A` (radius \p r, axis `fr.xAxis`) bored clean through it — a genus-1 solid
+/// (REQ-314 B2b-2). 8 vertices, 12 edges, 6 faces: `B`'s wall split in two by the `ψ = ±π/2` seams,
+/// each half carrying the branch mouth as an inner loop; `B`'s two flat caps; and `A`'s wall inside
+/// `B`, inward, in two halves. Volume `vol(B) − 16 r³/3`-analogue (the lens).
+[[nodiscard]] bool BuildBranchPipeSubtract(const ucs::Ucs& fr, double r, double R, double zB0,
+                                           double zB1, Solid* out, Problem* outWhy) {
+  if (!(R > r) || !(r > 0.0) || !(zB1 - zB0 > 2.0 * r))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 X = fr.xAxis;
+  const Vec3 Y = fr.yAxis;
+  const Vec3 Z = fr.zAxis;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = fr.origin;
+  aSurf.frame.zAxis = X;
+  aSurf.frame.xAxis = Z;
+  aSurf.frame.yAxis = ray3d::Scale(Y, -1.0);
+  aSurf.radius = r;
+  aSurf.height = 4.0 * R;
+  Surface bSurf;
+  bSurf.kind = SurfaceKind::Cylinder;
+  bSurf.frame.origin = fr.origin;
+  bSurf.frame.zAxis = Z;
+  bSurf.frame.xAxis = X;
+  bSurf.frame.yAxis = Y;
+  bSurf.radius = R;
+  bSurf.height = zB1 - zB0;
+
+  Solid s;
+  auto cpt = [&](double phi, int sign) {
+    const double x = std::sqrt(std::max(0.0, R * R - r * r * std::sin(phi) * std::sin(phi))) * sign;
+    return W(Vec3{x, -r * std::sin(phi), r * std::cos(phi)});
+  };
+  const int p0 = AddVertex(&s, cpt(0.0, 1));
+  const int p1 = AddVertex(&s, cpt(kPi, 1));
+  const int n0 = AddVertex(&s, cpt(0.0, -1));
+  const int n1 = AddVertex(&s, cpt(kPi, -1));
+  const int bp = AddVertex(&s, W(Vec3{0.0, R, zB0}));
+  const int bm = AddVertex(&s, W(Vec3{0.0, -R, zB0}));
+  const int tp = AddVertex(&s, W(Vec3{0.0, R, zB1}));
+  const int tm = AddVertex(&s, W(Vec3{0.0, -R, zB1}));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = cpt(witnessPhi, sign);
+    e.isectSurfaces = {aSurf, bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int cpU = isect(p0, p1, 1.75 * kPi, 1);   // C+ through Qa (psi > 0)
+  const int cpL = isect(p0, p1, 0.25 * kPi, 1);   // C+ through Qb (psi < 0)
+  const int cnU = isect(n0, n1, 1.75 * kPi, -1);  // C- through Na (psi < pi)
+  const int cnL = isect(n0, n1, 0.25 * kPi, -1);  // C- through Nb (psi > pi)
+  const int sA0 = AddLine(&s, n0, p0);            // A seam z = r
+  const int sAp = AddLine(&s, n1, p1);            // A seam z = -r
+  const int seamP = AddLine(&s, bp, tp);          // B seam psi = +pi/2
+  const int seamM = AddLine(&s, bm, tm);          // B seam psi = -pi/2
+  const Vec3 botC = W(Vec3{0.0, 0.0, zB0});
+  const Vec3 topC = W(Vec3{0.0, 0.0, zB1});
+  const int brF = AddArc(&s, bm, bp, botC, Z, kPi);  // bottom rim, front (psi -pi/2 -> pi/2)
+  const int brB = AddArc(&s, bp, bm, botC, Z, kPi);  // bottom rim, back
+  const int trF = AddArc(&s, tm, tp, topC, Z, kPi);  // top rim, front
+  const int trB = AddArc(&s, tp, tm, topC, Z, kPi);  // top rim, back
+
+  auto face = [&](const Surface& surf, double u0, double u1, std::vector<Loop> loops) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops = std::move(loops);
+    s.faces.push_back(std::move(f));
+  };
+  face(bSurf, -kHalfPi, kHalfPi,
+       {Loop{{{brF, false}, {seamP, false}, {trF, true}, {seamM, true}}},
+        Loop{{{cpU, false}, {cpL, true}}}});
+  face(bSurf, kHalfPi, kHalfPi + kPi,
+       {Loop{{{brB, false}, {seamM, false}, {trB, true}, {seamP, true}}},
+        Loop{{{cnU, true}, {cnL, false}}}});
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{brF, true}, {brB, true}}));
+  s.faces.push_back(MakePlaneFace(topC, Z, {{trF, false}, {trB, false}}));
+  Surface aIn = aSurf;
+  aIn.inward = true;
+  face(aIn, 0.0, kPi, {Loop{{{cpL, false}, {sAp, true}, {cnL, true}, {sA0, false}}}});
+  face(aIn, kPi, kTwoPi, {Loop{{{cpU, true}, {sA0, true}, {cnU, false}, {sAp, false}}}});
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// Recognise a thin cylinder crossing a thicker one at right angles through an interior point (the
-/// axes intersect, radii differ) — the pipe-tee. INTERSECT builds the lens (B2b-2); SUBTRACT / UNION
-/// are later sub-slices and are left for the caller to refuse. `*handled` stays false when the pair
+/// axes intersect, radii differ) — the pipe-tee. INTERSECT builds the lens, SUBTRACT bores the branch
+/// clean through the main (B2b-2); UNION is a later sub-slice. `*handled` stays false when the pair
 /// is not this configuration.
 [[nodiscard]] bool TryBooleanBranchPipe(const CylinderShape& A, const CylinderShape& B, BoolOp op,
                                         std::vector<Solid>* out, bool* handled, Problem* outWhy) {
@@ -4330,8 +4460,11 @@ struct SphereShape {
       sThick > thick.length - r + eps)
     return false;
 
-  if (op != BoolOp::Intersect)
-    return false;  // SUBTRACT / UNION of a branch pipe — a later B2b-2 sub-slice
+  const bool minuendIsThick = A.radius > B.radius;
+  if (op == BoolOp::Union)
+    return false;  // UNION of a branch pipe — a later B2b-2 sub-slice
+  if (op == BoolOp::Subtract && !minuendIsThick)
+    return false;  // thin − thick leaves two stubs — a later sub-slice
   *handled = true;
 
   ucs::Ucs fr;
@@ -4342,10 +4475,17 @@ struct SphereShape {
     return Fail(Problem::BooleanResultInvalid, outWhy);
   fr.xAxis = ray3d::Normalize(xa);
   fr.yAxis = ray3d::Normalize(ray3d::Cross(fr.zAxis, fr.xAxis));
-  Solid lens;
-  if (!BuildBranchPipeIntersection(fr, r, R, &lens, outWhy))
-    return false;
-  out->push_back(std::move(lens));
+  Solid result;
+  if (op == BoolOp::Intersect) {
+    if (!BuildBranchPipeIntersection(fr, r, R, &result, outWhy))
+      return false;
+  } else {
+    const double zB0 = -sThick;
+    const double zB1 = thick.length - sThick;
+    if (!BuildBranchPipeSubtract(fr, r, R, zB0, zB1, &result, outWhy))
+      return false;
+  }
+  out->push_back(std::move(result));
   return Succeed(outWhy);
 }
 
@@ -5429,6 +5569,52 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     case SurfaceKind::Cone: {
       const double r0 = sf.radius;
       const double r1 = sf.kind == SurfaceKind::Cylinder ? sf.radius : sf.radius2;
+      // A holed band (a branch mouth bored out of an otherwise-full cylinder wall — REQ-314 B2b-2):
+      // the Intersection edge is in an INNER loop, so the face is `[zFull0, zFull1]` minus a bite
+      // `[bz0(u), bz1(u)]`. Drawn as a lower and an upper sub-strip (both collapse where there is no
+      // bite).
+      if (sf.kind == SurfaceKind::Cylinder && f.loops.size() > 1 &&
+          !LoopHasIntersectionEdge(s, f.loops.front()) && FaceLoopHasIntersectionEdge(s, f)) {
+        const IsectStrip hStrip = MakeIsectStrip(s, f);
+        double zF0 = 1e300;
+        double zF1 = -1e300;
+        for (const EdgeUse& u : f.loops.front().uses)
+          for (const int vi : {s.edges[static_cast<std::size_t>(u.edge)].v0,
+                               s.edges[static_cast<std::size_t>(u.edge)].v1}) {
+            const double z = ucs::WorldToUcs(sf.frame, s.vertices[static_cast<std::size_t>(vi)].p).z;
+            zF0 = std::min(zF0, z);
+            zF1 = std::max(zF1, z);
+          }
+        const int hnu = std::clamp(
+            SegmentsForArc(r0, f.uEnd - f.uStart, 0.25 * chordTolerance), 32, 320);
+        std::vector<std::uint32_t> rA(static_cast<std::size_t>(hnu) + 1);
+        std::vector<std::uint32_t> rB(static_cast<std::size_t>(hnu) + 1);
+        std::vector<std::uint32_t> rC(static_cast<std::size_t>(hnu) + 1);
+        std::vector<std::uint32_t> rD(static_cast<std::size_t>(hnu) + 1);
+        for (int i = 0; i <= hnu; ++i) {
+          const double t = f.uStart + (f.uEnd - f.uStart) * i / static_cast<double>(hnu);
+          const Vec3 nn = ConicalNormal(sf, r0, r0, t);
+          double b0 = zF1;
+          double b1 = zF1;
+          if (hStrip.valid())
+            (void)IsectStripAt(hStrip, t, &b0, &b1);
+          b0 = std::clamp(b0, zF0, zF1);
+          b1 = std::clamp(b1, zF0, zF1);
+          rA[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r0, t, zF0), nn);
+          rB[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r0, t, b0), nn);
+          rC[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r0, t, b1), nn);
+          rD[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r0, t, zF1), nn);
+        }
+        for (int i = 0; i < hnu; ++i) {
+          const auto a = static_cast<std::size_t>(i);
+          const auto b = static_cast<std::size_t>(i + 1);
+          mb.Tri(rA[a], rA[b], rB[b]);
+          mb.Tri(rA[a], rB[b], rB[a]);
+          mb.Tri(rC[a], rC[b], rD[b]);
+          mb.Tri(rC[a], rD[b], rD[a]);
+        }
+        break;
+      }
       const bool isect = sf.kind == SurfaceKind::Cylinder && FaceLoopHasIntersectionEdge(s, f);
       const int nu = isect ? std::clamp(SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart,
                                                        0.25 * chordTolerance),
