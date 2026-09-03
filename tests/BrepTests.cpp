@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 using Catch::Approx;
@@ -3087,3 +3088,312 @@ TEST_CASE("Sweep refuses bad input by name and stores nothing", "[brep][req315]"
   }
   REQUIRE(s.faces.empty());
 }
+// ---------------------------------------------------------------------------------------------
+// REQ-317 POLYSOLID.
+//
+// The figure worth understanding before reading these: for CENTRE justification, a mitred wall's
+// plan area is exactly `width * centreline length`, whatever mix of straight runs and curves the
+// path is and whatever angles it turns through — the triangle a mitre adds on the outside of a bend
+// is congruent to the one it removes on the inside. So the volume is `width * height * length` and
+// can be written down for every case below.
+//
+// That figure does NOT distinguish a mitred wall from a run of overlapping boxes, which sum to the
+// same number, so it is never asserted alone. The SURFACE AREA is what separates them: a mitred wall
+// has two end caps and no internal ones, where a run of boxes has two per joint.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+brep::Path StraightPath(std::vector<std::pair<double, double>> pts, bool closed = false) {
+  brep::Path p;
+  p.start = ucs::Point2D{pts.front().first, pts.front().second};
+  for (std::size_t i = 1; i < pts.size(); ++i)
+    p.segs.push_back(brep::PathSeg{ucs::Point2D{pts[i].first, pts[i].second}, 0.0});
+  p.closed = closed;
+  return p;
+}
+
+/// Every face that looks INWARD — a curved wall's inner face, the same situation as a bore wall
+/// express, and what REQ-314 B2a's `Surface::inward` records for the wall of a bore.
+std::size_t InwardFaceCount(const Solid& s) {
+  std::size_t n = 0;
+  for (const brep::Face& f : s.faces)
+    n += f.surface.inward ? 1u : 0u;
+  return n;
+}
+
+} // namespace
+
+TEST_CASE("A one-segment polysolid is exactly a box", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakePolysolid(World(), StraightPath({{0.0, 0.0}, {10.0, 0.0}}), 2.0, 3.0,
+                              brep::Justify::Center, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(60.0).margin(1e-9));       // 10 long, 2 wide, 3 high
+  REQUIRE(mp.surfaceArea == Approx(112.0).margin(1e-9)); // 2*20 + 2*30 + 2*6
+
+  REQUIRE(s.vertices.size() == 8);
+  REQUIRE(s.edges.size() == 12);
+  REQUIRE(s.faces.size() == 6);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE(s.recipe.kind == brep::PrimitiveKind::Polysolid);
+  REQUIRE(InwardFaceCount(s) == 0);
+}
+
+TEST_CASE("A corner is mitred, so it belongs to the wall exactly once", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  // Two 10 ft legs meeting at a right angle, 2 wide and 3 high.
+  REQUIRE(brep::MakePolysolid(World(), StraightPath({{0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}}), 2.0,
+                              3.0, brep::Justify::Center, &s, &why));
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  // Plan area = width * centreline length = 2 * 20. The mitre gives back on the outside of the bend
+  // exactly what it takes on the inside, which is why this is the length and not something less.
+  REQUIRE(mp.volume == Approx(120.0).margin(1e-9));
+  // THE assertion of this test. The outer rail runs 11 + 11 and the inner 9 + 9, so the sides are
+  // 3 * 40; the two flat faces are 2 * 40; and there are exactly TWO end caps at 2 * 3.
+  //
+  // A wall built as one box per leg would report the same 120 cubic feet — the volumes coincide —
+  // but 224 square feet, because it would carry four end caps instead of two. That is the difference
+  // between one wall and two boxes that happen to touch, and it is only visible here.
+  REQUIRE(mp.surfaceArea == Approx(212.0).margin(1e-9));
+
+  REQUIRE(s.vertices.size() == 12);
+  REQUIRE(s.edges.size() == 18);
+  REQUIRE(s.faces.size() == 8);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+
+  const brep::Bounds bb = brep::ComputeBounds(s);
+  REQUIRE(bb.mn.x == Approx(0.0).margin(1e-9));
+  REQUIRE(bb.mx.x == Approx(11.0).margin(1e-9));  // the outer rail, past the centreline's 10
+  REQUIRE(bb.mn.y == Approx(-1.0).margin(1e-9));
+  REQUIRE(bb.mx.y == Approx(10.0).margin(1e-9));
+}
+
+TEST_CASE("A closed rectangular wall is the difference of two prisms", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakePolysolid(
+      World(), StraightPath({{0.0, 0.0}, {20.0, 0.0}, {20.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}}, true),
+      2.0, 4.0, brep::Justify::Center, &s, &why));
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  // Outer 22 x 12 less inner 18 x 8 = 120 sq ft of plan, 4 ft high. Also 2 * 60, the width times the
+  // centreline's own perimeter — the two derivations agree, which is the point of writing both.
+  REQUIRE(mp.volume == Approx(480.0).margin(1e-9));
+  REQUIRE(mp.surfaceArea == Approx(720.0).margin(1e-9));  // 4*(68+52) sides + 2*120 flat, no caps
+
+  REQUIRE(s.vertices.size() == 16);
+  REQUIRE(s.edges.size() == 24);
+  REQUIRE(s.faces.size() == 10);
+
+  // The two flat faces each have a HOLE — an outer loop and an inner one. This is the shape the
+  // centroid fan could not draw and the reason it was replaced (ADR-046 (d)).
+  std::size_t withHoles = 0;
+  for (const brep::Face& f : s.faces)
+    withHoles += f.loops.size() == 2 ? 1u : 0u;
+  REQUIRE(withHoles == 2);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.001, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(1e-9));
+  REQUIRE(TessellatedArea(t) == Approx(mp.surfaceArea).epsilon(1e-9));
+}
+
+TEST_CASE("A curved wall sweeps cylinders, and its inner face looks inward", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  // A full ring of radius 10, as the two half turns every closed curve here is seamed into.
+  brep::Path p;
+  p.start = ucs::Point2D{10.0, 0.0};
+  p.segs.push_back(brep::PathSeg{ucs::Point2D{-10.0, 0.0}, kPi});
+  p.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, kPi});
+  p.closed = true;
+
+  Solid s;
+  REQUIRE(brep::MakePolysolid(World(), p, 2.0, 1.0, brep::Justify::Center, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(kPi * (11.0 * 11.0 - 9.0 * 9.0)).margin(1e-9));
+  // Outer 2*pi*11 and inner 2*pi*9 walls, one foot high, plus two annular faces of 40*pi.
+  REQUIRE(mp.surfaceArea == Approx(120.0 * kPi).margin(1e-9));
+
+  // A polysolid extrudes a flat profile straight up, so a curved run is a CYLINDER patch and not a
+  // torus — the point ADR-046 (e) records because the opposite was assumed out loud while scoping.
+  std::size_t cylinders = 0;
+  for (const brep::Face& f : s.faces)
+    cylinders += f.surface.kind == brep::SurfaceKind::Cylinder ? 1u : 0u;
+  REQUIRE(cylinders == 4);
+  REQUIRE(InwardFaceCount(s) == 2);  // the two halves of the inner wall
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.0005, &t, &why));
+  RequireWindingMatchesNormals(t);
+  RequireBoundsContain(brep::ComputeBounds(s), t);
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(0.005));
+  REQUIRE(TessellatedArea(t) == Approx(mp.surfaceArea).epsilon(0.005));
+}
+
+TEST_CASE("An arc tangent to the run before it needs no mitre", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  // Straight along +x to (10,0), then a quarter turn to the LEFT ending at (20,10): the arc's centre
+  // is at (10,10) and its start tangent is +x, so the join is smooth. This is what the command draws
+  // every time, and a smooth join must be taken directly rather than solved for — the two offsets
+  // are tangent there, so an intersection would be a double root.
+  brep::Path p;
+  p.start = ucs::Point2D{0.0, 0.0};
+  p.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, 0.0});
+  p.segs.push_back(brep::PathSeg{ucs::Point2D{20.0, 10.0}, kPi * 0.5});
+
+  Solid s;
+  REQUIRE(brep::MakePolysolid(World(), p, 2.0, 5.0, brep::Justify::Center, &s, &why));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  // width * height * centreline length, the straight 10 plus a quarter of a 10 ft radius turn.
+  REQUIRE(mp.volume == Approx(2.0 * 5.0 * (10.0 + 10.0 * kPi * 0.5)).margin(1e-9));
+
+  // The join is smooth, so both rails pass through the offset of the shared point exactly: the left
+  // rail at (10, 1) and the right at (10, -1). A mitre computed there instead would move them.
+  bool leftJoin = false;
+  bool rightJoin = false;
+  for (const brep::Vertex& v : s.vertices) {
+    if (std::fabs(v.p.z) > 1e-12)
+      continue;
+    leftJoin = leftJoin || (std::fabs(v.p.x - 10.0) < 1e-12 && std::fabs(v.p.y - 1.0) < 1e-12);
+    rightJoin = rightJoin || (std::fabs(v.p.x - 10.0) < 1e-12 && std::fabs(v.p.y + 1.0) < 1e-12);
+  }
+  REQUIRE(leftJoin);
+  REQUIRE(rightJoin);
+}
+
+TEST_CASE("Justification moves the wall without changing its size", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  const brep::Path p = StraightPath({{0.0, 0.0}, {10.0, 0.0}});
+  struct Case {
+    brep::Justify j;
+    double minY;
+    double maxY;
+  };
+  // Travel is +x, so "left" is +y. Left justification puts the PATH on the wall's left edge, which
+  // leaves the wall entirely to the right of it.
+  const Case cases[] = {{brep::Justify::Left, -4.0, 0.0},
+                        {brep::Justify::Center, -2.0, 2.0},
+                        {brep::Justify::Right, 0.0, 4.0}};
+  for (const Case& c : cases) {
+    Solid s;
+    REQUIRE(brep::MakePolysolid(World(), p, 4.0, 3.0, c.j, &s, &why));
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(120.0).margin(1e-9));
+    const brep::Bounds bb = brep::ComputeBounds(s);
+    REQUIRE(bb.mn.y == Approx(c.minY).margin(1e-9));
+    REQUIRE(bb.mx.y == Approx(c.maxY).margin(1e-9));
+  }
+}
+
+TEST_CASE("A polysolid keeps its figures at survey coordinate magnitudes", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs far = World();
+  far.origin = Vec3{3500000.0, 850000.0, 420.0};
+  Solid s;
+  REQUIRE(brep::MakePolysolid(far, StraightPath({{0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}}), 2.0, 3.0,
+                              brep::Justify::Center, &s, &why));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(120.0).epsilon(1e-9));
+  REQUIRE(mp.surfaceArea == Approx(212.0).epsilon(1e-9));
+}
+
+TEST_CASE("A path that does not describe a wall is refused by name", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  const brep::Path ok = StraightPath({{0.0, 0.0}, {10.0, 0.0}});
+
+  REQUIRE_FALSE(brep::MakePolysolid(World(), ok, 0.0, 3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::NonPositiveWidth);
+  REQUIRE_FALSE(brep::MakePolysolid(World(), ok, 2.0, 0.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::NonPositiveHeight);
+
+  brep::Path empty;
+  empty.start = ucs::Point2D{0.0, 0.0};
+  REQUIRE_FALSE(brep::MakePolysolid(World(), empty, 2.0, 3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PathTooShort);
+
+  brep::Path oneClosed = StraightPath({{0.0, 0.0}, {10.0, 0.0}}, true);
+  REQUIRE_FALSE(brep::MakePolysolid(World(), oneClosed, 2.0, 3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PathTooShort);
+
+  REQUIRE_FALSE(brep::MakePolysolid(World(), StraightPath({{0.0, 0.0}, {0.0, 0.0}, {5.0, 0.0}}), 2.0,
+                                    3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PathSegmentDegenerate);
+
+  // Closed, but the last segment does not come back to the start.
+  REQUIRE_FALSE(brep::MakePolysolid(World(),
+                                    StraightPath({{0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}}, true), 2.0,
+                                    3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PathSegmentDegenerate);
+
+  // Doubling straight back on itself: the two offsets are anti-parallel, so there is no corner point
+  // at all, not merely an awkward one.
+  REQUIRE_FALSE(brep::MakePolysolid(World(), StraightPath({{0.0, 0.0}, {10.0, 0.0}, {0.0, 0.0}}), 2.0,
+                                    3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PolysolidCornerCollapsed);
+
+  // A 4 ft wall cannot follow a 1 ft radius turn: the inner rail would have a negative radius.
+  brep::Path tight;
+  tight.start = ucs::Point2D{1.0, 0.0};
+  tight.segs.push_back(brep::PathSeg{ucs::Point2D{-1.0, 0.0}, kPi});
+  REQUIRE_FALSE(brep::MakePolysolid(World(), tight, 4.0, 3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PolysolidCurveTooTight);
+  // The same turn is fine for a wall narrow enough to take it.
+  REQUIRE(brep::MakePolysolid(World(), tight, 1.0, 3.0, brep::Justify::Center, &s, &why));
+
+  // A path crossing its own run would enclose the same ground twice, so its volume would count that
+  // ground twice. Refused outright — unlike a self-intersecting torus, which is a shape people draw
+  // deliberately and where only the mass properties are withheld (ADR-045 (f)).
+  REQUIRE_FALSE(brep::MakePolysolid(
+      World(), StraightPath({{0.0, 0.0}, {10.0, 0.0}, {10.0, 5.0}, {5.0, 5.0}, {5.0, -5.0}}), 1.0,
+      3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PolysolidPathSelfIntersects);
+
+  ucs::Ucs skewed = World();
+  skewed.yAxis = Vec3{1.0, 1.0, 0.0};
+  REQUIRE_FALSE(brep::MakePolysolid(skewed, ok, 2.0, 3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::DegenerateFrame);
+}
+
+TEST_CASE("A wall that bends meets the tessellator with a NON-CONVEX cap", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  // An L on plan. Its top and bottom faces are six-sided and non-convex, which is the case the
+  // centroid fan cannot draw - fanning one emits triangles that fall outside the face and overlap
+  // each other, and the mesh stops agreeing with the analytic area. REQ-314 added the ear clipper
+  // for exactly that; this is the first caller that reaches it from a SWEPT solid rather than a
+  // sliced or booleaned one, so the two are pinned together here.
+  Solid s;
+  REQUIRE(brep::MakePolysolid(World(), StraightPath({{0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}}), 2.0,
+                              3.0, brep::Justify::Center, &s, &why));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.001, &t, &why));
+  RequireWindingMatchesNormals(t);
+  RequireBoundsContain(brep::ComputeBounds(s), t);
+  // Flat faces and straight rails throughout, so the mesh is not an approximation of anything: it
+  // must reproduce the analytic figures exactly, not merely closely.
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(1e-9));
+  REQUIRE(TessellatedArea(t) == Approx(mp.surfaceArea).epsilon(1e-9));
+
+  // The two routes are visible in the count: the six convex quad faces are FANNED (four triangles
+  // apiece, 24) and the two non-convex six-sided caps are EAR-CLIPPED (m-2, so four apiece, 8).
+  REQUIRE(t.triangleCount() == 32);
+}
+
