@@ -78,13 +78,49 @@ quadrature** over its parametric domain, to a tolerance well inside REQ-101 (±0
 form stays the path for every face that has one — only the genuinely non-analytic face falls back.
 This is a **SPEC change to ADR-045** and the pivotal decision below.
 
-### Scope of the first B2b-2 slice (proposed)
+### First slice — confirmed scope (D-2026-09-03-a)
 
-- `CurveKind::Intersection` + marching evaluator + tessellator + numerical face integration.
-- **One operand pair**: two **non-coaxial cylinders**, axes coplanar, `INTERSECT` first (the
-  bicylinder lens — hand-checkable against a fine numerical reference), then `UNION` / `SUBTRACT`.
-- `.gs`: the new edge kind serialises its two surfaces + interval; **`kGsFormatVersion` 2 → 3**
-  (a v2 reader cannot evaluate it), with a no-op v2→v3 migration.
+**Operand pair:** a thinner cylinder crossing a thicker one, **axes perpendicular and intersecting**,
+**unequal radius** `r < R` — the pipe-tee / branch pipe. (Equal-radius intersecting axes always meet
+along two plane ellipses — the Steinmetz coda already covers the perpendicular case, and the same
+factoring `z² = (x sinθ + z cosθ)²` handles every other angle — so the genuine quartic needs `r ≠ R`.)
+`INTERSECT` first.
+
+**The intersection curve.** Big cyl `B` axis `= Z`, radius `R`; small cyl `A` axis `= X`, radius `r`.
+`A`: `y² + z² = r²`. `B`: `x² + y² = R²`. On both: parametrise by `A`'s angle `u` — `y = r cos u`,
+`z = r sin u`, and `x = ±√(R² − r² cos² u)` (always real since `r < R`). One closed quartic loop per
+sign of `x`: the branch pipe's entry curve and its exit curve.
+
+**Delivery — PR A (this task's next PR):**
+
+1. **`CurveKind::Intersection`** enum member. `Edge` gains `std::vector<Surface> isectSurfaces`
+   (exactly two entries for an Intersection edge; empty otherwise — no size cost on Line/Arc/Ellipse
+   edges) and reuses `frame.origin` as an on-curve **witness point** near the parametric middle (it
+   disambiguates the marching direction and seeds the Newton step; `Translate` / `PlaceInFrame`
+   already move `frame.origin`).
+2. **Marching evaluator** (`EdgePointAt`): from `v0`, tangent `= normalize(n₀ × n₁)` (surface
+   normals), sign picked toward the witness; step, then a 2-D Newton correction back onto both
+   surfaces (`ClosestPointOnSurface` twice, alternating, is enough); accumulate chord length; report
+   the point at fractional arc-length `t`. `ClosestPointOnEdge` reuses the same march + a nearest-
+   sample polish. `SegmentsForEdge` counts marched chords to the tolerance.
+3. **Plumbing:** `Translate` and `PlaceInFrame` map `frame.origin` **and both `isectSurfaces[i].frame`**;
+   `ComputeBounds` samples the marched curve; `Validate` gains an Intersection branch (two finite
+   surfaces; `v0`, `v1`, witness each on both surfaces within `1e-7·scale`).
+4. **Numerical face integration.** `IntegrateFace`: when a face's boundary loop contains an
+   Intersection edge, integrate over the surface's own `u` with **Gauss–Legendre (32-node)**, the
+   `z`/`v` limits at each node found by bisecting the boundary curve in `u`. Reduces to the existing
+   `CylinderPlaneCutIntegrals` shape but with numerically-evaluated limits. `Validate`'s
+   closed-surface point-invariance check keeps its `1e-8·scale³` bound for all-analytic solids and
+   relaxes to `1e-6·scale³` when the solid contains an Intersection edge (follows from D-2026-09-02-i;
+   still far inside REQ-101's `±0.01 ft`).
+5. **`BuildBranchPipeIntersection`** + recogniser: two cylinders, perpendicular intersecting axes,
+   `r ≠ R`, the thin one fully crossing the thick one clear of its caps → the lens (small-cyl wall
+   segment + two big-cyl cap patches, bounded by the four quartic half-curves).
+6. **`.gs`**: an Intersection edge writes its two surfaces + witness; **`kGsFormatVersion` 2 → 3**
+   with a no-op v2→v3 migration (a v2 drawing has no Intersection edge, so its resave is
+   byte-identical).
+
+**PR B:** `SUBTRACT` (the branch bored out of the main). **PR C:** `UNION` (the pipe tee).
 
 ### Deferred within B2b-2 (later sub-slices)
 
