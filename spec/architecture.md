@@ -2642,6 +2642,81 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
      two-or-more equal-edge-count planar profiles.
   2. **Sweep** — a profile along a line / arc / bulge-polyline path with a rotation-minimizing frame
      and optional twist; agreement asserted against extrude and revolve where the path is analytic.
+### ADR-050 — POLYSOLID: offset-and-mitre in the kernel   (2026-09-03, accepted)
+- Context: REQ-317 asks for a wall swept along a picked path. ADR-045 settled how a *primitive* is
+  built — a formula, a frame, a closed shell — and ADR-046 settled the feature operations that cut
+  and combine finished solids. A polysolid is neither: it is the first builder whose output topology
+  depends on the length and shape of its **input path** rather than on a fixed template or on two
+  operands. What has to be decided before any of it is written is where the corner geometry lives.
+- Decision:
+  (a) **The sweep lives in the kernel as `brep::MakePolysolid`, alongside the seven `MakeX`
+  builders, and takes a path rather than an entity.** Its input is a frame, a list of straight and
+  arc segments in that frame's plane, a closed flag, a width, a height and a justification — plain
+  geometry, no document, no `CadPolyline`, no entity index. The `O`bject option is therefore a
+  **command-layer conversion** that reads an entity and produces that path, which is what lets a
+  clicked path and a converted Line reach exactly one builder. It is the same argument ADR-045 (b)
+  made for the UCS supplying orientation: the kernel gets geometry, and the command layer translates.
+  (b) **Corners are MITRED, by offsetting the path to each side and intersecting adjacent offsets.**
+  The tempting alternative — one box per straight run, one cylinder patch per arc — is far easier
+  and is wrong three ways at once: the runs **overlap** at every bend, so the volume double-counts
+  every corner; the drawing holds N objects where the user drew one, so a single MOVE or ERASE
+  cannot address the wall; and the overlap is invisible in the shaded view, which makes it exactly
+  the silent wrong answer REQ-201 exists to prevent. Line/line intersects two offset lines, line/arc
+  a line and a circle, arc/arc two circles — three cases, all closed-form, none iterative. A
+  **smooth** join is taken directly rather than solved for, because its two offsets are tangent there
+  and the intersection is a double root; every arc the command draws is tangent to the run before it,
+  so that is the common path and not the exception.
+  (c) **A corner that cannot be mitred is REFUSED by name, never approximated.** Three shapes have
+  no wall: a bend so sharp that the inner offset runs back past its own segment, a segment shorter
+  than the mitre its neighbours demand, and an arc whose inner offset radius reaches zero — the wall
+  turning inside out around the curve. Each gets its own `Problem` and creates nothing. A **path that
+  crosses its own run** is refused too, and the asymmetry with ADR-045 (f)'s self-intersecting torus
+  is deliberate: a torus that passes through itself is a shape people draw on purpose, so it is built
+  and only its mass properties are withheld, where a wall crossing its own run is an authoring
+  mistake. That check is exact for straight-segment paths, where a rail is a polygon, and is
+  deliberately **not applied** when the path contains an arc: testing a curve by its chords would
+  refuse walls that are perfectly fine, and a false refusal is strictly worse than no check. The
+  general case is the same Phase 4 self-intersection test ADR-045 already defers.
+  (d) **A curved run produces a CYLINDER patch, not a torus, and no new surface kind is added.**
+  Extruding a planar arc perpendicular to its own plane sweeps a cylinder; a torus would arise only
+  if a round *profile* were swept along a curve, which is not what a polysolid does. Recorded because
+  the opposite was assumed out loud while scoping this, and it is the difference between reusing a
+  surface the kernel already integrates in closed form and deriving a new one. It is also why
+  REQ-317 is not blocked behind REQ-315's freeform-surface question.
+  (e) **`Surface::inward` is REUSED, not reinvented.** A curved wall's inner face has its material on
+  the far side from its own axis — the same situation as the wall of a bore, which REQ-314 B2a
+  already added that flag for (D-2026-09-02-c). This work was first written with a `sense` field of
+  its own and that duplicate was removed on discovering the existing one: two flags meaning the same
+  thing is the disagreement ADR-045's original "no reversed flag" rule was trying to prevent, and it
+  would have been that rule's failure mode rather than its absence.
+  (f) **The tessellator is NOT touched.** A wall's cap is non-convex the moment its path bends, and
+  annular when the path closes on a circle — and REQ-314 had already taught the plane branch both:
+  a convex ring is fanned from its centroid, a non-convex one is ear-clipped, and a two-loop face is
+  stripped by angle about the hole. This is the first caller to reach those from a **swept** solid
+  rather than a sliced or booleaned one, so the pairing is pinned by a test instead of by new code.
+  (g) **The recipe carries the PATH — the first recipe whose length is not fixed.** ADR-045 (f) keeps
+  the topology as the stored truth and the recipe as description, and that split is what makes this
+  safe: a variable-length recipe field cannot change any answer, because validity, mass properties
+  and tessellation read the topology and never the recipe. Written additively to `.gs`, so a file
+  with no polysolids is byte-identical.
+  (h) **`PLINE`'s arc rule is reused: an arc segment is TANGENT to the segment before it and ends at
+  the picked point.** That determines the arc uniquely from one pick, which is what makes it a
+  gesture rather than a form to fill in. An arc asked for as the **first** segment has no incoming
+  direction and is refused by name rather than defaulting to some direction the user did not choose.
+  A converted POLYLINE brings its arc segments with it: REQ-316 gave the polyline store per-vertex
+  bulges, and `tan(theta/4)` converts to `PathSeg::sweep` as `4*atan(bulge)` — sign and all — so the
+  two stores share the DXF convention rather than each having its own.
+- Consequences: `brep` gains one builder, one `PrimitiveKind`, two recipe fields and the named
+  refusals of (c); no new surface kind, no new curve kind, and no change to the tessellator, the
+  integrals or the validity checks. `.gs` gains an optional recipe key and three settings keys
+  (`polysolidWidth`, `polysolidHeight`, `polysolidJustify`, remembered between invocations the way
+  AutoCAD's PSOLWIDTH and PSOLHEIGHT are); no `kGsFormatVersion` bump. **Still not addressed:**
+  sweeping an arbitrary profile along an arbitrary 3D path (REQ-315, blocked on the freeform-surface
+  question in ADR-046), and editing a placed polysolid's path — #120 Phase 5, alongside transforming
+  any solid at all.
+  Note that this project's `CadPolyline` store is **straight-only** — it carries no bulges — so the
+  `O`bject option's curved paths come from `Arc` and `Circle` entities, not from polylines.
+
 ### ADR-049 — Sub-object picking: one shared pick, an expiring reference, and the projection as part of the answer   (2026-09-03, accepted)
 
 - **Context.** REQ-318 needs the system to name the face, edge or vertex under the cursor.

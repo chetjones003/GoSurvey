@@ -165,10 +165,42 @@ struct Vertex {
 // The recipe: what a primitive was built from.
 // ---------------------------------------------------------------------------------------------
 
-enum class PrimitiveKind : std::uint8_t { None, Box, Wedge, Pyramid, Cylinder, Cone, Sphere, Torus };
+enum class PrimitiveKind : std::uint8_t {
+  None, Box, Wedge, Pyramid, Cylinder, Cone, Sphere, Torus,
+  /// REQ-317. Appended, never inserted: the value is written into `.gs`.
+  Polysolid
+};
 
 /// Canonical name, for the Properties panel, the command line and the log. Never returns null.
 [[nodiscard]] const char* PrimitiveKindName(PrimitiveKind k);
+
+// ---------------------------------------------------------------------------------------------
+// REQ-317: the path a polysolid is swept along.
+// ---------------------------------------------------------------------------------------------
+
+/// One segment of a \ref Path, running from the previous point to \ref end.
+///
+/// A straight segment has `sweep == 0`. A curved one carries the **signed included angle** of a
+/// circular arc, CCW positive about the path frame's +Z — so the centre and radius are derived from
+/// the chord and the sweep rather than stored, and a segment cannot hold a centre that disagrees
+/// with its own endpoints.
+struct PathSeg {
+  ucs::Point2D end{};
+  double sweep = 0.0;
+};
+
+/// A chain of straight and circular segments in the XY plane of a frame. The profile GoSurvey
+/// sweeps; not a document entity, so the kernel never learns what a `CadPolyline` is (ADR-048 (a)).
+struct Path {
+  ucs::Point2D start{};
+  std::vector<PathSeg> segs;
+  /// A closed path's last segment ends at \ref start, and the wall has no end caps.
+  bool closed = false;
+};
+
+/// Which side of the picked line the wall sits on (REQ-317). "Left" is the left of the direction of
+/// travel, so it depends on the order the points were picked — which is what AutoCAD does too.
+enum class Justify : std::uint8_t { Left, Center, Right };
 
 /// The parameters a primitive was created from, kept alongside the topology it produced.
 ///
@@ -190,6 +222,13 @@ struct Recipe {
   double radius = 0.0;   ///< Pyramid base circumradius; Cylinder r; Cone base r; Sphere R; Torus major R.
   double radius2 = 0.0;  ///< Pyramid top circumradius; Cone top r; Torus minor r.
   int sides = 0;         ///< Pyramid only: number of base sides.
+
+  /// Polysolid only: the path it was swept along, in \ref frame's plane, plus how it was justified.
+  /// The one recipe field whose length is not fixed. Like every other recipe field it is
+  /// description and never truth — nothing in validity, mass properties or tessellation reads it
+  /// (ADR-050 (f)).
+  Path path;
+  Justify justify = Justify::Center;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -229,6 +268,18 @@ enum class Problem {
   SideCountOutOfRange,       ///< A pyramid with fewer than 3 or more than kMaxPyramidSides sides.
   DegenerateFrame,           ///< The placement frame is not right-handed orthonormal.
 
+  // --- REQ-317 POLYSOLID: a path that does not describe a wall. Each is refused, never repaired;
+  //     see ADR-050 (c) for why approximating them would be worse than declining. ---
+  PathTooShort,              ///< Fewer than two points, or a closed path with fewer than two segments.
+  PathSegmentDegenerate,     ///< A repeated point, or an arc with no sweep or no radius.
+  PolysolidCornerCollapsed,  ///< A bend so sharp, or a segment so short, that the inner offset runs
+                             ///< back past itself — there is no wall there to build.
+  PolysolidCurveTooTight,    ///< An arc whose inner offset radius reaches zero: the wall would turn
+                             ///< inside out around the curve.
+  /// A path crossing its own run, so the wall would enclose part of the ground twice and its volume
+  /// would count that part twice. Detected exactly for straight-segment paths; see ADR-050 (c).
+  PolysolidPathSelfIntersects,
+
   // --- Validation: the topology itself is wrong. ---
   NoShell,
   EmptyShell,
@@ -243,6 +294,7 @@ enum class Problem {
   NonFiniteCoordinate,
   NotClosed,                    ///< The shell encloses no positive volume, so it is not a solid.
   UnusedVertex,
+
 
   // --- Tessellation. ---
   PlaneFaceNotSimple,  ///< A flat face with holes, which the fan triangulation below cannot handle.
@@ -359,6 +411,20 @@ inline constexpr int kMaxPyramidSides = 64;
 
 /// A torus of \p majorRadius (centre to tube centre) and \p minorRadius (the tube), centred on the
 /// frame origin with the frame Z as its axis of revolution.
+/// REQ-317: a wall of \p width and \p height swept along \p path, mitred at every corner.
+///
+/// \p path lies in \p frame's XY plane and the wall rises along +Z. \p justify says which side of
+/// the path the wall sits on: `Center` splits the width evenly, `Left` puts the path on the wall's
+/// left edge, `Right` on its right — left and right of the direction of travel.
+///
+/// The result is ONE solid, not a run of boxes: the path is offset to each side by the half-width
+/// and adjacent offsets are intersected, so a corner is mitred and counted once. Straight runs give
+/// planar side faces and curved runs cylindrical ones. A corner that cannot be mitred — too sharp,
+/// too short, or an arc whose inner offset would reach zero radius — is refused by name rather than
+/// approximated (ADR-050 (b), (c)).
+[[nodiscard]] bool MakePolysolid(const ucs::Ucs& frame, const Path& path, double width, double height,
+                                 Justify justify, Solid* out, Problem* outWhy);
+
 [[nodiscard]] bool MakeTorus(const ucs::Ucs& frame, double majorRadius, double minorRadius, Solid* out,
                              Problem* outWhy);
 

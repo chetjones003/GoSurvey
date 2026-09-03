@@ -228,6 +228,19 @@ using nlohmann::json;
   rc["radius"] = s.recipe.radius;
   rc["radius2"] = s.recipe.radius2;
   rc["sides"] = s.recipe.sides;
+  // REQ-317. Written only when there is one, so every pre-REQ-317 solid still serializes exactly as
+  // it did - the same additive rule ADR-045 (f) already set for the section as a whole.
+  if (!s.recipe.path.segs.empty()) {
+    json jp;
+    jp["start"] = json::array({s.recipe.path.start.x, s.recipe.path.start.y});
+    json segs = json::array();
+    for (const brep::PathSeg& ps : s.recipe.path.segs)
+      segs.push_back(json::array({ps.end.x, ps.end.y, ps.sweep}));
+    jp["segs"] = std::move(segs);
+    jp["closed"] = s.recipe.path.closed;
+    rc["path"] = std::move(jp);
+    rc["justify"] = static_cast<int>(s.recipe.justify);
+  }
   o["recipe"] = std::move(rc);
 
   return o;
@@ -340,7 +353,7 @@ using nlohmann::json;
     const json& rc = o["recipe"];
     const int rk = rc.value("kind", 0);
     if (rk >= static_cast<int>(brep::PrimitiveKind::None) &&
-        rk <= static_cast<int>(brep::PrimitiveKind::Torus))
+        rk <= static_cast<int>(brep::PrimitiveKind::Polysolid))
       out->recipe.kind = static_cast<brep::PrimitiveKind>(rk);
     if (rc.contains("frame"))
       (void)BrepFrameFromJson(rc["frame"], &out->recipe.frame);  // cosmetic; never rebuilds geometry
@@ -350,6 +363,31 @@ using nlohmann::json;
     out->recipe.radius = rc.value("radius", 0.0);
     out->recipe.radius2 = rc.value("radius2", 0.0);
     out->recipe.sides = rc.value("sides", 0);
+    out->recipe.justify = static_cast<brep::Justify>(rc.value("justify", 0));
+    // REQ-317: the one recipe field whose length is not fixed. Read defensively and DISCARDED on a
+    // problem rather than refusing the solid - the topology is the stored truth (ADR-045 (c)), so a
+    // damaged recipe costs a Properties readout and nothing else.
+    if (rc.contains("path") && rc["path"].is_object()) {
+      const json& jp = rc["path"];
+      brep::Path p;
+      bool ok = jp.contains("start") && jp["start"].is_array() && jp["start"].size() == 2;
+      if (ok) {
+        p.start = ucs::Point2D{jp["start"][0].get<double>(), jp["start"][1].get<double>()};
+        p.closed = jp.value("closed", false);
+        if (jp.contains("segs") && jp["segs"].is_array()) {
+          for (const auto& js : jp["segs"]) {
+            if (!js.is_array() || js.size() != 3) {
+              ok = false;
+              break;
+            }
+            p.segs.push_back(brep::PathSeg{
+                ucs::Point2D{js[0].get<double>(), js[1].get<double>()}, js[2].get<double>()});
+          }
+        }
+      }
+      if (ok)
+        out->recipe.path = std::move(p);
+    }
   }
   return true;
 }

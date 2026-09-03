@@ -143,6 +143,12 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::DesignateBoundary:
     return R::RawEntityPick;
 
+  // REQ-317 POLYSOLID: points, except at the `O`bject prompt, where the click names an existing
+  // Line, Arc, Circle or Polyline to sweep along instead of a coordinate.
+  case K::Polysolid:
+    return cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject ? R::RawEntityPick
+                                                                             : R::SnappedPointPick;
+
   // --- Select-then-point modify commands: window-select first, then coordinates. ---
   case K::Move:
   case K::Copy:

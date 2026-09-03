@@ -66,6 +66,20 @@ TEST_CASE("Every pick-driven command is routed by the model-space viewport", "[v
   }
 }
 
+TEST_CASE("POLYSOLID routes points and objects differently", "[viewport][pick][req317]") {
+  // The two prompts want different things from the same click: a coordinate for a path point, and
+  // the RAW cursor for `O`bject, because an entity is hit-tested against where the mouse actually is
+  // rather than against an OSNAP-adjusted commit point.
+  AppCommandState st;
+  st.active = K::Polysolid;
+  st.polysolidPhase = AppCommandState::PolysolidPhase::WaitFirstPoint;
+  REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SnappedPointPick);
+  st.polysolidPhase = AppCommandState::PolysolidPhase::WaitNextPoint;
+  REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SnappedPointPick);
+  st.polysolidPhase = AppCommandState::PolysolidPhase::WaitObject;
+  REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::RawEntityPick);
+}
+
 TEST_CASE("REQ-103's modify commands route the way their picks need", "[viewport][pick][req103][task099]") {
   SECTION("MIRROR window-selects first, then takes mirror-line points") {
     AppCommandState st = AtFirstPrompt(K::Mirror);
