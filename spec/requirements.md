@@ -5980,9 +5980,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
     `CurveKind::Ellipse`, added in increment B2b-1 — so SLICE and the Booleans handle it from B2b-1
     on; two non-coaxial cylinders (a quartic curve) keep the refusal until B2b-2. Steinmetz coda,
     D-2026-09-02-i: two **equal-radius** cylinders whose axes cross at right angles meet along two
-    ellipses, not a quartic — **INTERSECT** of that pair builds the bicylinder and **SUBTRACT**
-    (`A − B`) bores a clean perpendicular channel through `A`, both in closed form from B2b-1 on;
-    UNION of it (a T-pipe) keeps the refusal for a later B2b-1 sub-slice.)*
+    ellipses, not a quartic — INTERSECT (the bicylinder), SUBTRACT (`A − B`, a clean perpendicular
+    channel) and UNION (a T-pipe) of that pair all build in closed form from B2b-1 on. Every other
+    non-coaxial cylinder pair keeps the refusal until B2b-2.)*
   - **Slice** of a box and of a cylinder by a plane, keeping one side and keeping both, produces
     valid closed solids whose volumes sum to the original within REQ-101. A slice that misses the
     solid reports it and changes nothing. *(An **oblique** cut through a cylinder produces an

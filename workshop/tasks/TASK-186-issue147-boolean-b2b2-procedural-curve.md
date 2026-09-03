@@ -17,10 +17,14 @@ that share an axis-intercept. **B2b-2 proper (the procedural curve) is unchanged
 
 **PROGRESS 2026-09-02 (2)** — Steinmetz coda increment 2 shipped: **SUBTRACT** `A − B` of the same
 pair (`BuildSteinmetzSubtract`) — cylinder `A` with a clean perpendicular cylinder-`B` channel bored
-through it. Result is 6 vertices / 12 edges / 8 faces: `A`'s wall split into a top and a bottom band
-by the two intersection ellipses, two flat caps, and two inward channel patches. Volume
-`vol(A) − 16 r³/3`, exact. **UNION of this pair (the T-pipe)** is still refused `BooleanCurvedFace` —
-the next sub-slice.
+through it. 6 vertices / 12 edges / 8 faces; volume `vol(A) − 16 r³/3`, exact.
+
+**PROGRESS 2026-09-02 (3)** — Steinmetz coda **complete**: **UNION** `A ∪ B` of the same pair
+(`BuildSteinmetzUnion`) — a T-pipe / cross-pipe. 10 vertices / 20 edges / 12 faces: each cylinder's
+wall becomes two bands (top/bottom for `A`, `±x` for `B`) split into half-faces through the crossing
+points, plus all four flat caps; the two intersection ellipses are the internal seam. Volume
+`vol(A) + vol(B) − 16 r³/3`, exact. **The whole Steinmetz coda (INTERSECT / SUBTRACT / UNION) is now
+closed-form; B2b-2 proper (the procedural curve) is unchanged and not started.**
 
 ## What is left
 
@@ -31,12 +35,14 @@ After B1, B2a and B2b-1, the curved-Boolean coverage is:
 | axis-aligned cylinder × box | ✅ | ✅ | ✅ |
 | tilted cylinder × box | ✅ | ✅ | ✅ |
 | coaxial cylinder × cylinder | ✅ | ✅ | ✅ |
+| **equal-radius cylinders, perpendicular crossing axes** | ✅ | ✅ | ✅ |
 | sphere × box | ✅ | ✅ | ✅ |
 
 Still refused **by name**: `cylinder − box` (a notch), and every pair whose intersection curve is
 neither a line, an arc, nor an ellipse:
 
-- **two non-coaxial cylinders** — a **quartic** space curve (a `T`-junction pipe, a lug boss);
+- **two non-coaxial cylinders that are not the equal-radius perpendicular case** — a **quartic**
+  space curve (an oblique branch pipe, a lug boss);
 - **sphere ∩ cylinder** — a quartic;
 - a **cone** section that is a parabola or hyperbola (an open curve).
 
