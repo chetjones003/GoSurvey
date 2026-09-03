@@ -120,7 +120,22 @@ sign of `x`: the branch pipe's entry curve and its exit curve.
    with a no-op v2→v3 migration (a v2 drawing has no Intersection edge, so its resave is
    byte-identical).
 
+PR A is delivered in two: **A1** — steps 1–3 (representation + marching evaluator + `Translate` /
+`PlaceInFrame` / `ComputeBounds` / `SegmentsForEdge` / `ClosestPointOnEdge` / `Validate` edge
+branch), tested at the brep level with a hand-built Intersection edge; **A2** — steps 4–6 (numerical
+face integration + `Validate` tolerance relaxation + `BuildBranchPipeIntersection` + recogniser +
+`.gs` `kGsFormatVersion` 2→3).
+
 **PR B:** `SUBTRACT` (the branch bored out of the main). **PR C:** `UNION` (the pipe tee).
+
+**PROGRESS 2026-09-03 — PR A1 done.** `CurveKind::Intersection` + `Edge::isectSurfaces` +
+`frame.origin` witness; `SurfaceNormalGeom` / `SettleOntoIntersection` / `MarchIntersectionCurve` /
+`PointAtArcFraction`; `EdgePointAt` marches then settles onto both surfaces; `ClosestPointOnEdge`,
+`SegmentsForEdge`, `Translate`, `PlaceInFrame`, `ComputeBounds`, `Validate` all gained an
+Intersection branch. Tested: a pipe-tee intersection curve marched to <1e-6 on both cylinders,
+endpoints exact, follows curvature not the chord, survives `Translate` at survey magnitude, bounds
+contain it. No Boolean and no numerical integration yet — a solid with an Intersection edge still
+fails `Validate`'s volume check (A2).
 
 ### Deferred within B2b-2 (later sub-slices)
 
