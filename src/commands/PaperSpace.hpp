@@ -2,8 +2,10 @@
 
 #include "CadEntities.hpp"
 #include "util/cadblock.hpp"
+#include "util/geom2d.hpp"  // the shared segment/circle-vs-box tests the model-space fence uses
 #include "util/ucs.hpp"  // REQ-155: per-viewport active UCS frame (pure value type, ray3d only)
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -365,24 +367,114 @@ inline void PaperTextBoundsIn(const CadAnnotation& a, float* x0, float* y0, floa
   *y1 = a.insY;
 }
 
+// Window/crossing test for a chain of paper-inch points (x,y pairs, in order): window wants EVERY
+// point inside the box, crossing wants any SEGMENT to touch it. \p closed adds the closing segment.
+//
+// The crossing half is the whole point. Testing a chain by its bounding box answers a different
+// question — "is the box anywhere near this object" — and for anything that is not itself a filled
+// rectangle the two answers differ over most of the box: an L-shaped polyline occupies two edges of
+// its bounding square and none of the middle.
+inline bool PaperChainHitsBox(const std::vector<float>& xy, bool closed, float bx0, float by0, float bx1,
+                              float by1, bool windowMode) {
+  const size_t n = xy.size() / 2;
+  if (n == 0)
+    return false;
+  if (windowMode) {
+    for (size_t i = 0; i < n; ++i)
+      if (!PointInsideClosedRect(xy[i * 2], xy[i * 2 + 1], bx0, bx1, by0, by1))
+        return false;
+    return true;
+  }
+  if (n == 1)
+    return PointInsideClosedRect(xy[0], xy[1], bx0, bx1, by0, by1);
+  for (size_t i = 0; i + 1 < n; ++i)
+    if (SegIntersectsAABB(xy[i * 2], xy[i * 2 + 1], xy[i * 2 + 2], xy[i * 2 + 3], bx0, bx1, by0, by1))
+      return true;
+  if (closed &&
+      SegIntersectsAABB(xy[(n - 1) * 2], xy[(n - 1) * 2 + 1], xy[0], xy[1], bx0, bx1, by0, by1))
+    return true;
+  return false;
+}
+
+// Segments to walk a curve of \p sweepRad with. pi/24 per step (48 for a full turn), the same choice
+// ChainHitsRect makes for a model-space polyline bulge, so the two fences cannot disagree about
+// where a curve goes.
+inline int PaperCurveSegments(float sweepRad) {
+  constexpr double kPi = 3.14159265358979323846;
+  const double steps = std::ceil(std::fabs(static_cast<double>(sweepRad)) / (kPi / 24.0));
+  return std::clamp(static_cast<int>(steps), 8, 96);
+}
+
+// A paper arc / ellipse as an (x,y) chain, for PaperChainHitsBox. A sheet is 2D (ADR-025 (g)), so
+// these need none of the plane-frame handling REQ-312 gives their model-space counterparts.
+inline void SamplePaperArc(std::vector<float>& xy, const CadArc& a, int segments) {
+  xy.clear();
+  if (!(a.r > 1.e-9f) || segments < 1)
+    return;
+  xy.reserve(static_cast<size_t>(segments + 1) * 2u);
+  for (int i = 0; i <= segments; ++i) {
+    const float t = a.startRad + a.sweepRad * (static_cast<float>(i) / static_cast<float>(segments));
+    xy.push_back(a.cx + a.r * std::cos(t));
+    xy.push_back(a.cy + a.r * std::sin(t));
+  }
+}
+
+/// The chain closes on itself (last point == first), so callers pass \c closed=false.
+inline void SamplePaperEllipse(std::vector<float>& xy, const CadEllipse& e, int segments) {
+  xy.clear();
+  const float ma = std::sqrt(e.majVx * e.majVx + e.majVy * e.majVy);
+  if (!(ma > 1.e-9f) || segments < 1)
+    return;
+  const float ux = e.majVx / ma;
+  const float uy = e.majVy / ma;
+  const float mb = ma * e.ratio;  // the minor axis — the value the old bounding box ignored
+  constexpr float kTwoPi = 6.28318530718f;
+  xy.reserve(static_cast<size_t>(segments + 1) * 2u);
+  for (int i = 0; i <= segments; ++i) {
+    const float ang = kTwoPi * static_cast<float>(i) / static_cast<float>(segments);
+    const float c = std::cos(ang);
+    const float s = std::sin(ang);
+    xy.push_back(e.cx + ux * (ma * c) - uy * (mb * s));
+    xy.push_back(e.cy + uy * (ma * c) + ux * (mb * s));
+  }
+}
+
 // Box-select native paper-space geometry (REQ-039). Selects entities of every paper type inside the box
 // [bx0,by0]-[bx1,by1] (paper inches, already normalized so bx0<=bx1, by0<=by1). windowMode=true (L→R drag):
-// an entity is selected only when its bounding extent is fully inside the box; windowMode=false (R→L drag,
-// crossing): selected when its extent overlaps the box. Text selects by its top-left bounds (matching the
-// renderer + PickPaperEntityAt). Appends matches to \p out (does not clear). Pure + header-only.
+// an entity is selected only when it lies entirely inside the box; windowMode=false (R→L drag, crossing):
+// selected when the box actually TOUCHES it. Text selects by its top-left bounds (matching the renderer +
+// PickPaperEntityAt). Appends matches to \p out (does not clear). Header-only.
+//
+// Every type used to be tested by its bounding box, which is REQ-039's rule only for an object that is
+// itself a filled rectangle — text. For the rest it was wrong in both directions and by a lot: a diagonal
+// line was selected from anywhere in its bounding square; a circle from its corners (sqrt(2)*r out) and from
+// its hollow middle; an ARC from the square of the whole circle whatever its sweep, so a 90 degree arc
+// answered a box three quadrants away; an ELLIPSE from a square of side 2*major with `ratio` ignored
+// entirely, so a nearly flat ellipse answered a box far above it; and a polyline from the empty inside of
+// its bounding box. Blocks had the opposite defect — tested as their insertion POINT, so a box over the
+// geometry the block draws missed it. Each type is now tested against what it actually draws.
+//
+// \p blockDefs resolves a block's real extent; null keeps the historical insertion-point test, matching
+// PickPaperEntityAt's own optional-defs shape.
 inline void SelectPaperEntitiesInBox(const PaperLayout& L, float bx0, float by0, float bx1, float by1,
-                                     bool windowMode, std::vector<PaperEntityRef>& out) {
+                                     bool windowMode, std::vector<PaperEntityRef>& out,
+                                     const std::vector<CadBlockDefinition>* blockDefs = nullptr) {
+  // Kept for the two types whose footprint really IS a rectangle: text, and a block's extent.
   auto boxSel = [&](float ex0, float ey0, float ex1, float ey1) {
     return windowMode ? (ex0 >= bx0 && ex1 <= bx1 && ey0 >= by0 && ey1 <= by1)
                       : (ex0 <= bx1 && ex1 >= bx0 && ey0 <= by1 && ey1 >= by0);
   };
+  std::vector<float> xy;  // reused by the arc / ellipse / polyline walks
   for (int si = 0; si < static_cast<int>(L.paperLines.size() / 6); ++si) {
     const size_t i = static_cast<size_t>(si) * 6;
-    const float lx0 = std::min(L.paperLines[i], L.paperLines[i + 3]);
-    const float lx1 = std::max(L.paperLines[i], L.paperLines[i + 3]);
-    const float ly0 = std::min(L.paperLines[i + 1], L.paperLines[i + 4]);
-    const float ly1 = std::max(L.paperLines[i + 1], L.paperLines[i + 4]);
-    if (boxSel(lx0, ly0, lx1, ly1))
+    const float lx0 = L.paperLines[i], ly0 = L.paperLines[i + 1];
+    const float lx1 = L.paperLines[i + 3], ly1 = L.paperLines[i + 4];
+    // Window is unchanged in effect: for an axis-aligned rect, "the endpoints' bbox is inside" and
+    // "both endpoints are inside" are the same statement. Only crossing was wrong.
+    const bool hit = windowMode ? (PointInsideClosedRect(lx0, ly0, bx0, bx1, by0, by1) &&
+                                   PointInsideClosedRect(lx1, ly1, bx0, bx1, by0, by1))
+                                : SegIntersectsAABB(lx0, ly0, lx1, ly1, bx0, bx1, by0, by1);
+    if (hit)
       out.push_back({PaperEntityRef::Type::Line, si});
   }
   for (int ti = 0; ti < static_cast<int>(L.paperTexts.size()); ++ti) {
@@ -394,37 +486,49 @@ inline void SelectPaperEntitiesInBox(const PaperLayout& L, float bx0, float by0,
   for (int ci = 0; ci < static_cast<int>(L.paperCircles.size() / 3); ++ci) {
     const size_t i = static_cast<size_t>(ci) * 3;
     const float cx = L.paperCircles[i], cy = L.paperCircles[i + 1], r = L.paperCircles[i + 2];
-    if (boxSel(cx - r, cy - r, cx + r, cy + r))
+    // The exact analytic tests, the same two model space uses in plan view — a circle on a sheet is
+    // always flat, so there is nothing here that would force a tessellation.
+    const bool hit = windowMode ? CircleFullyInsideRect(cx, cy, r, bx0, bx1, by0, by1)
+                                : CircleIntersectsAABB(cx, cy, r, bx0, bx1, by0, by1);
+    if (hit)
       out.push_back({PaperEntityRef::Type::Circle, ci});
   }
   for (int ai = 0; ai < static_cast<int>(L.paperArcs.size()); ++ai) {
     const CadArc& a = L.paperArcs[static_cast<size_t>(ai)];
-    if (boxSel(a.cx - a.r, a.cy - a.r, a.cx + a.r, a.cy + a.r))
+    SamplePaperArc(xy, a, PaperCurveSegments(a.sweepRad));
+    if (PaperChainHitsBox(xy, /*closed=*/false, bx0, by0, bx1, by1, windowMode))
       out.push_back({PaperEntityRef::Type::Arc, ai});
   }
   for (int ei = 0; ei < static_cast<int>(L.paperEllipses.size()); ++ei) {
-    const CadEllipse& e = L.paperEllipses[static_cast<size_t>(ei)];
-    const float rad = std::sqrt(e.majVx * e.majVx + e.majVy * e.majVy);
-    if (boxSel(e.cx - rad, e.cy - rad, e.cx + rad, e.cy + rad))
+    SamplePaperEllipse(xy, L.paperEllipses[static_cast<size_t>(ei)], PaperCurveSegments(6.2831853f));
+    if (PaperChainHitsBox(xy, /*closed=*/false, bx0, by0, bx1, by1, windowMode))
       out.push_back({PaperEntityRef::Type::Ellipse, ei});
   }
   const int nPoly = static_cast<int>(L.paperPolyOffsets.size()) - 1;
   for (int pi = 0; pi < nPoly; ++pi) {
     const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
     const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
-    float ex0 = 1e30f, ey0 = 1e30f, ex1 = -1e30f, ey1 = -1e30f;
+    if (v1 <= v0)
+      continue;
+    xy.clear();
+    xy.reserve(static_cast<size_t>(v1 - v0) * 2u);
     for (int vi = v0; vi < v1; ++vi) {
-      const float vx = L.paperPolyVerts[static_cast<size_t>(vi * 3)];
-      const float vy = L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)];
-      ex0 = std::min(ex0, vx); ey0 = std::min(ey0, vy);
-      ex1 = std::max(ex1, vx); ey1 = std::max(ey1, vy);
+      xy.push_back(L.paperPolyVerts[static_cast<size_t>(vi * 3)]);
+      xy.push_back(L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)]);
     }
-    if (v1 > v0 && boxSel(ex0, ey0, ex1, ey1))
+    const bool closed = static_cast<size_t>(pi) < L.paperPolyClosed.size() &&
+                        L.paperPolyClosed[static_cast<size_t>(pi)] != 0;
+    if (PaperChainHitsBox(xy, closed, bx0, by0, bx1, by1, windowMode))
       out.push_back({PaperEntityRef::Type::Polyline, pi});
   }
   for (int bi = 0; bi < static_cast<int>(L.paperBlockRefs.size()); ++bi) {
     const CadBlockRef& br = L.paperBlockRefs[static_cast<size_t>(bi)];
-    if (boxSel(br.xf.x, br.xf.y, br.xf.x, br.xf.y))
+    // The block's real extent, the same `CadBlockWorldAabb` model-space box-select already uses.
+    // Without the definitions there is nothing to measure, so fall back to the insertion point.
+    float mnX = br.xf.x, mnY = br.xf.y, mxX = br.xf.x, mxY = br.xf.y;
+    if (blockDefs)
+      CadBlockWorldAabb(*blockDefs, br, &mnX, &mnY, &mxX, &mxY);
+    if (boxSel(mnX, mnY, mxX, mxY))
       out.push_back({PaperEntityRef::Type::Block, bi});
   }
 }
