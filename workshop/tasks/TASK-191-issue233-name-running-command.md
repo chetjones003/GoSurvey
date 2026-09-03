@@ -93,10 +93,13 @@ better served by "then type CIRCLE" than by being shown their own single letter 
   re-print their prompt instead of a parse error, so a command name typed there is still swallowed —
   but the prompt at least names the command, which is the outcome this task is after. Left alone
   rather than given a twelfth call site whose fallback is a prompt.
-- **DEBT-2 — a typed verb still cannot interrupt a running command.** Part (1) of issue #233, left
-  open there: it changes what Enter and Esc mean across every point-taking command and needs a
-  recorded decision first.
+- **DEBT-2 — RESOLVED, not debt.** Part (1) of issue #233 (should a typed verb interrupt a running
+  command) was put to the user in plain English on 2026-09-03. The user chose **keep-as-is**: no verb
+  is dispatched from a point prompt, the running command ends only on Esc or its own completion.
+  Recorded as **D-2026-09-03-f**. If auto-interrupt is wanted later it is a fresh feature request with
+  its own REQ, not a continuation of this issue.
 
 ## Status
 
-Complete and verified. Goes to review, not done; the issue is not closed here.
+Complete and verified. **Issue #233 closed 2026-09-03** — part (2) shipped in PR #234, part (1)
+decided (D-2026-09-03-f, keep-as-is). Decision recorded in `spec/project.md` §9.
