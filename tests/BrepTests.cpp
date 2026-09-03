@@ -2898,20 +2898,26 @@ namespace {
 
 brep::SweepPath LinePath(const Vec3& a, const Vec3& b) {
   brep::SweepPath p;
-  p.arc = false;
-  p.start = a;
-  p.end = b;
+  p.points = {a, b};
+  p.segments = {brep::SweepSegment{}};
   return p;
 }
 
 brep::SweepPath ArcPath(const Vec3& start, const Vec3& centre, const Vec3& axis, double sweep) {
+  brep::SweepSegment seg;
+  seg.arc = true;
+  seg.centre = centre;
+  seg.normal = axis;
+  seg.sweep = sweep;
+  const Vec3 r0 = ray3d::Sub(start, centre);
+  const double c = std::cos(sweep), s = std::sin(sweep);
+  const Vec3 k = ray3d::Normalize(axis);
+  const Vec3 end = ray3d::Add(
+      centre, ray3d::Add(ray3d::Add(ray3d::Scale(r0, c), ray3d::Scale(ray3d::Cross(k, r0), s)),
+                         ray3d::Scale(k, ray3d::Dot(k, r0) * (1.0 - c))));
   brep::SweepPath p;
-  p.arc = true;
-  p.start = start;
-  p.centre = centre;
-  p.normal = axis;
-  p.sweep = sweep;
-  p.end = start;  // Sweep derives the real end from centre/axis/sweep
+  p.points = {start, end};
+  p.segments = {seg};
   return p;
 }
 
@@ -2996,13 +3002,7 @@ TEST_CASE("Sweep stays accurate on a tilted arc path at survey magnitude", "[bre
          {ucs::Point2D{-1, -1}, ucs::Point2D{1, -1}, ucs::Point2D{1, 1}, ucs::Point2D{-1, 1}})
       pr.vertices.push_back(ucs::PlaneToWorld(prof, q));
     pr.edges.assign(4, brep::ProfileEdge{});
-    brep::SweepPath path;
-    path.arc = true;
-    path.start = o;
-    path.centre = base.origin;
-    path.normal = base.zAxis;
-    path.sweep = 2.0 * kPi / 3.0;
-    path.end = o;
+    const brep::SweepPath path = ArcPath(o, base.origin, base.zAxis, 2.0 * kPi / 3.0);
     Solid s;
     REQUIRE(brep::Sweep(pr, path, brep::SweepOptions{}, &s, &why));
     return s;
@@ -3086,4 +3086,62 @@ TEST_CASE("Sweep refuses bad input by name and stores nothing", "[brep][req315]"
     REQUIRE(why == Problem::SweepUnsupportedOption);
   }
   REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep along a bulge polyline path is a bent pipe with the summed volume", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // A circle (r 1, area pi) along: line +X of length 10, a tangent quarter arc (radius 5) turning to
+  // +Y, then line +Y of length 8. Volume = 18*pi (straight) + (pi/2)*5*pi (Pappus, the elbow).
+  const brep::Profile circ = CircleProfile(World(), 1.0);
+
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{15, 5, 0}, Vec3{15, 13, 0}};
+  brep::SweepSegment arcSeg;
+  arcSeg.arc = true;
+  arcSeg.centre = Vec3{10, 5, 0};
+  arcSeg.normal = Vec3{0, 0, 1};
+  arcSeg.sweep = kPi / 2.0;
+  path.segments = {brep::SweepSegment{}, arcSeg, brep::SweepSegment{}};
+
+  Solid s;
+  const bool ok = brep::Sweep(circ, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+
+  const double expected = 18.0 * kPi + (kPi / 2.0) * 5.0 * kPi;
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-4));
+}
+
+TEST_CASE("Sweep refuses a mitred corner in the path by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}};  // a 90-degree corner at the joint
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why));
+  REQUIRE(why == Problem::SweepUnsupportedOption);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep along collinear polyline segments equals the single-segment sweep", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-2, -2}, {2, -2}, {2, 2}, {-2, 2}});
+
+  Solid one;
+  REQUIRE(brep::Sweep(sq, LinePath(Vec3{0, 0, 0}, Vec3{0, 0, 12}), brep::SweepOptions{}, &one, &why));
+
+  brep::SweepPath split;
+  split.points = {Vec3{0, 0, 0}, Vec3{0, 0, 5}, Vec3{0, 0, 12}};
+  split.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid two;
+  REQUIRE(brep::Sweep(sq, split, brep::SweepOptions{}, &two, &why));
+  REQUIRE(brep::Validate(two) == Problem::Ok);
+
+  REQUIRE(brep::ComputeMassProperties(two).volume ==
+          Approx(brep::ComputeMassProperties(one).volume).epsilon(1e-9));
+  REQUIRE(brep::ComputeMassProperties(two).volume == Approx(4.0 * 4.0 * 12.0).epsilon(1e-7));
 }

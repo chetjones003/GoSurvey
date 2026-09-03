@@ -24625,13 +24625,14 @@ namespace {
     const std::size_t b = static_cast<std::size_t>(sel.index) * 6;
     if (sel.index < 0 || b + 5 >= st.userLinesFlat.size())
       return false;
-    out->arc = false;
-    out->start = {static_cast<double>(st.userLinesFlat[b + 0]),
-                  static_cast<double>(st.userLinesFlat[b + 1]),
-                  static_cast<double>(st.userLinesFlat[b + 2])};
-    out->end = {static_cast<double>(st.userLinesFlat[b + 3]),
-                static_cast<double>(st.userLinesFlat[b + 4]),
-                static_cast<double>(st.userLinesFlat[b + 5])};
+    const ray3d::Vec3 p0{static_cast<double>(st.userLinesFlat[b + 0]),
+                         static_cast<double>(st.userLinesFlat[b + 1]),
+                         static_cast<double>(st.userLinesFlat[b + 2])};
+    const ray3d::Vec3 p1{static_cast<double>(st.userLinesFlat[b + 3]),
+                         static_cast<double>(st.userLinesFlat[b + 4]),
+                         static_cast<double>(st.userLinesFlat[b + 5])};
+    out->points = {p0, p1};
+    out->segments = {brep::SweepSegment{}};  // one straight segment
     return true;
   }
   if (sel.type == SelectedEntity::Type::Arc) {
@@ -24641,15 +24642,17 @@ namespace {
     if (!(a.r > 0.0f) || !(std::fabs(a.sweepRad) > 1e-6f))
       return false;
     ucs::Ucs frame;
-    if (!ucs::FromNormal(ray3d::Vec3{a.cx, a.cy, a.z},
-                         ray3d::Vec3{a.nx, a.ny, a.nz}, &frame))
+    if (!ucs::FromNormal(ray3d::Vec3{a.cx, a.cy, a.z}, ray3d::Vec3{a.nx, a.ny, a.nz}, &frame))
       return false;
-    out->arc = true;
-    out->start = ucs::PointOnPlaneCircle(frame, a.r, a.startRad);
-    out->centre = frame.origin;
-    out->normal = frame.zAxis;
-    out->sweep = a.sweepRad;
-    out->end = out->start;  // brep::Sweep derives the true end from centre / normal / sweep
+    const ray3d::Vec3 start = ucs::PointOnPlaneCircle(frame, a.r, a.startRad);
+    const ray3d::Vec3 end = ucs::PointOnPlaneCircle(frame, a.r, a.startRad + a.sweepRad);
+    brep::SweepSegment seg;
+    seg.arc = true;
+    seg.centre = frame.origin;
+    seg.normal = frame.zAxis;
+    seg.sweep = a.sweepRad;
+    out->points = {start, end};
+    out->segments = {seg};
     return true;
   }
   return false;
