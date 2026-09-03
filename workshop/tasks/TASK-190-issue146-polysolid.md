@@ -142,14 +142,17 @@ curved wall quietly staying unusable.
 ## Why this is NOT built on `Extrude`, measured rather than argued
 
 A wall's plan outline is a closed planar loop of lines and arcs, which is exactly what `Extrude`
-takes, so folding `MakePolysolid` into it is the obvious refactor to reach for. **It does not work,
-and a test records why rather than a commit message**: `Extrude` refuses an arc curving INTO its loop
-(`ProfileArcReflex`), and the inner rail of every bend is one. Building on it would leave a second
-code path for curved walls and a third for closed ones — whose plan has two loops where `Extrude`
-takes one — which is more machinery than the builder it would replace, not less.
+takes, so folding `MakePolysolid` into it is the obvious refactor to reach for. It was **two**
+reasons, and the investigation removed one of them from the codebase rather than from the argument:
 
-If REQ-314 lifts that restriction (it has `Surface::inward` to express the face now, which it did not
-when `Extrude` was written), the pinned test fails, and that is the signal to revisit.
+1. `Extrude` refused an arc curving **into** its loop, which the inner rail of every bend is. That
+   restriction was ADR-046 (d)'s own "separate feature, now unblocked", and this requirement's test
+   is what pointed at it — so it was **lifted** (D-2026-09-03-b), and the test that pinned it is
+   gone because the thing it pinned is gone.
+2. `Profile` is a **single loop**, and a closed wall's plan is an annulus with two. That one is not
+   going away by itself, and it is what the test pins now: extruding a ring wall's outer rail alone
+   does not approximate the wall, it fills the courtyard in — a solid cylinder more than three times
+   the wall's volume. The gap between those two figures is the whole of the argument.
 
 
 ## Technical debt / stated boundaries

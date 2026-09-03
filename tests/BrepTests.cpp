@@ -3522,30 +3522,46 @@ TEST_CASE("A polysolid is an ordinary operand for extrude-era operations", "[bre
 // Why `MakePolysolid` is its own builder rather than a call to `Extrude`.
 //
 // A wall's plan outline IS a closed planar loop of lines and arcs, which is exactly what `Extrude`
-// takes, so the refactor is the obvious one to reach for. It does not work, and this records the
-// measurement rather than the opinion: `Extrude` refuses an arc that curves INTO its loop, and the
-// inner rail of every bend is one. Building polysolids on `Extrude` would therefore mean a second
-// code path for curved walls — and a third for closed ones, whose plan has two loops where `Extrude`
-// takes one — which is more machinery than the builder it would replace, not less.
+// takes, so the refactor is the obvious one to reach for. This records the measurement rather than
+// the opinion.
 //
-// If REQ-314 later lifts that restriction (it has `Surface::inward` to express the face now, which
-// it did not when `Extrude` was written), this test fails, and that is the signal to revisit.
+// It was TWO reasons, and one of them has since gone: `Extrude` used to refuse an arc curving into
+// its loop, which the inner rail of every bend is — lifted separately (D-2026-09-03-b), after this
+// requirement's own test pointed at it. What remains is the one below, and it is not going away by
+// itself: `Profile` is a SINGLE loop, and a closed wall's plan is an annulus with two.
+//
+// Extruding the outer rail alone does not approximate the wall — it fills the courtyard in. The gap
+// between the two numbers is the whole of the argument.
 // ---------------------------------------------------------------------------------------------
-TEST_CASE("Extrude cannot yet build a curved wall's outline", "[brep][req317][req314]") {
+TEST_CASE("A closed wall's plan needs two loops, where Extrude takes one", "[brep][req317][req314]") {
   Problem why = Problem::Ok;
-  brep::Profile pr;
-  pr.plane = World();
-  const double R = 10.0;
-  const double half = 1.0;
-  pr.vertices = {Vec3{R + half, 0.0, 0.0}, Vec3{0.0, R + half, 0.0}, Vec3{0.0, R - half, 0.0},
-                 Vec3{R - half, 0.0, 0.0}};
-  pr.edges.resize(4);
-  pr.edges[0] = {true, Vec3{0.0, 0.0, 0.0}, kPi * 0.5};   // outer rail, curving outward
-  pr.edges[1] = {false, Vec3{}, 0.0};                      // the far end cap
-  pr.edges[2] = {true, Vec3{0.0, 0.0, 0.0}, -kPi * 0.5};  // inner rail, curving INTO the region
-  pr.edges[3] = {false, Vec3{}, 0.0};                      // the near end cap
+  const double rOut = 11.0;
+  const double rIn = 9.0;
+  const double h = 4.0;
 
-  Solid s;
-  REQUIRE_FALSE(brep::Extrude(pr, 5.0, &s, &why));
-  REQUIRE(why == Problem::ProfileArcReflex);
+  // The ring wall itself: a closed circular path, 2 wide and 4 high.
+  brep::Path rp;
+  rp.start = ucs::Point2D{10.0, 0.0};
+  rp.segs.push_back(brep::PathSeg{ucs::Point2D{-10.0, 0.0}, kPi});
+  rp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, kPi});
+  rp.closed = true;
+  Solid ring;
+  REQUIRE(brep::MakePolysolid(World(), rp, 2.0, h, brep::Justify::Center, &ring, &why));
+  const double wallVolume = kPi * (rOut * rOut - rIn * rIn) * h;
+  REQUIRE(brep::ComputeMassProperties(ring).volume == Approx(wallVolume).margin(1e-9));
+
+  // Its OUTER rail, as the single loop `Extrude` accepts — two half turns, the way every closed
+  // curve in this kernel is seamed.
+  brep::Profile outer;
+  outer.plane = World();
+  outer.vertices = {Vec3{rOut, 0.0, 0.0}, Vec3{-rOut, 0.0, 0.0}};
+  outer.edges.resize(2);
+  outer.edges[0] = {true, Vec3{0.0, 0.0, 0.0}, kPi};
+  outer.edges[1] = {true, Vec3{0.0, 0.0, 0.0}, kPi};
+
+  Solid disc;
+  REQUIRE(brep::Extrude(outer, h, &disc, &why));
+  // A solid cylinder, not a wall: the courtyard is filled in, and by more than the wall itself is.
+  REQUIRE(brep::ComputeMassProperties(disc).volume == Approx(kPi * rOut * rOut * h).margin(1e-9));
+  REQUIRE(brep::ComputeMassProperties(disc).volume > 3.0 * wallVolume);
 }
