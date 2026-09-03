@@ -6131,6 +6131,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   freeform-surface question (D-2026-09-02-a, TASK-173). 2026-09-03 — unblocked; Statement and
   Acceptance written and accepted; freeform surface decided as a minimal in-tree NURBS patch
   (D-2026-09-03-b, ADR-048, TASK-187). Loft-before-sweep order confirmed with the user.
+  2026-09-03 — LOFT (PRs #244/#246/#247) and SWEEP (PRs #248–#251) delivered; SWEEP's `T` (twist)
+  and `A` (path-alignment) keyword options wired to the kernel's existing `brep::SweepOptions`
+  (TASK-194). Deferred, each its own later increment: a twist or fixed orientation on a curved or
+  multi-segment path, a mitred path corner, a full-turn arc segment.
 
 ### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
 
