@@ -6208,6 +6208,88 @@ capability that does not exist. They are recorded here rather than quietly dropp
 > *measurement method*. A performance requirement with no defined benchmark is
 > not verifiable.
 
+### REQ-318 — Sub-object picking: which face, edge or vertex is the cursor over?
+
+- Purpose: a solid can be selected today, but only whole. Editing a solid directly — pushing a face,
+  dragging an edge, rounding a corner — first requires naming the *part* of it under the cursor, and
+  naming it precisely enough that the edit lands where the user pointed.
+- Priority: must
+- Type: functional
+- Depends on: ADR-049 (the sub-object reference, and the single home for the pick), REQ-313 / ADR-045
+  (the analytic faces that make an exact answer possible), REQ-314 / ADR-046 (the solids worth
+  editing).
+- **Starting state — stated plainly, because the issue and an earlier draft of this requirement both
+  got it wrong.** The ray/triangle → `triFace` → `ClosestPointOnSurface` pipeline is **not new**.
+  Object snapping has picked solid faces, edges and vertices since REQ-313 landed, in
+  `src/viewport/CadSnap.cpp` (`RayHitSolidFace`, `ClosestRayPointToEdge`, `RayNearBounds`). What did
+  not exist was any way for a *second* caller to use it: those helpers were file-private, so a
+  selection subsystem would have had to re-implement them. This requirement is therefore about
+  making one pick serve both, and about the selection concepts on top of it — not about teaching the
+  program to hit a triangle, which it already could.
+- Statement: given a cursor ray and a solid, the system reports the nearest **face**, **edge** or
+  **vertex** of that solid, together with the point **on** that geometry, from one shared
+  implementation used by every caller. The behaviour this requires:
+  1. **One implementation, not one per caller.** The ray/triangle test and the broad-phase bounds
+     reject live in one place and every pick routes through them. Two copies of a pick are two sets
+     of numerics that can disagree under a single cursor — which is not hypothetical: the snap copy
+     used an absolute determinant epsilon and exact barycentric bounds, so it fell through the
+     hairline crack between two faces of the deliberately unwelded tessellation exactly where a
+     scale-relative test with a barycentric slack reports a hit. A user would have seen the snap
+     marker and the sub-object highlight name different things.
+  2. **The reported point lies on the analytic geometry, never on a tessellation chord.** A face
+     answer comes from the face's analytic surface, an edge answer from the edge's true curve —
+     including an arc — and a vertex answer is the vertex itself. The tessellation is used only to
+     find *which* sub-object; it never places the point.
+  3. **Precedence is vertex, then edge, then face**, each within its own tolerance. Every vertex lies
+     on an edge and every edge on a face, so a nearest-wins rule alone would make a vertex
+     unpickable.
+  4. **An occluded sub-object is not reported.** A vertex or edge more than its own tolerance behind
+     the nearest *triangle* hit is on the far side of the solid. The baseline is the nearest
+     triangle rather than the nearest usable face: a triangle whose face id is unusable still proves
+     a front surface is there. Where the ray misses the solid's triangles entirely there is no front
+     surface, so a near-miss just outside the silhouette may still take an edge or a vertex.
+  5. **The tolerances are screen-derived and may be zero.** A vertex subtends a few pixels however
+     far away it is, so the caller converts a pixel budget into world units at the pick depth, as the
+     existing entity pick does. Zero disables that kind of pick rather than offering it at an
+     arbitrary distance.
+  6. **A pick that cannot be justified reports nothing** — a miss, a solid behind the cursor, a
+     degenerate ray, or inconsistent inputs. No coordinate is returned rather than a plausible wrong
+     one (REQ-201).
+  7. **A pick costs no tessellation, and rejects cheaply.** The already-built display triangles are
+     what is tested, behind a padded bounds test, so a pick stays inside REQ-100's frame budget on
+     hover and the user picks the geometry they can actually see.
+- Acceptance:
+  - a face pick on a cylinder reports a point on the cylinder of radius `r` **and at the azimuth the
+    ray was aimed along** — both, because the projection makes the radius exact for any nearby input,
+    so a radius assertion alone cannot distinguish a good pick from a bad one;
+  - a face pick reports the nearest face, not the far side of the solid, from either direction;
+  - a click near a corner reports the vertex; near a mid-edge, the edge; away from both, the face;
+  - a click near a cylinder's rim reports a point on the rim's arc at radius `r`, not on a chord;
+  - a curved edge that carries no sweep parameter is still walked as a curve;
+  - a vertex or edge hidden behind a nearer face of the same solid is not reported, and remains
+    unreported when the occluding triangle's face id is unusable;
+  - a zero tolerance for a kind means that kind is never reported;
+  - a ray whose direction is not unit length gives the same answer as one that is, and the reported
+    depth does not scale with the direction's length;
+  - a ray passing just outside the silhouette still reaches the solid's edges;
+  - a ray that misses, a solid behind the cursor, a degenerate ray, a null result and inconsistent
+    triangle buffers each report no pick and leave the caller's result untouched;
+  - the snap path and the sub-object path give the same answer for the same ray, because they are
+    the same code;
+  - the pick's geometry and its refusals are all decided without a window or a document.
+- Owner-layer: Domain (the pick query), UI/Commands (casting the ray, converting the tolerances, and
+  what is done with the answer)
+- Status: accepted — **increment 1 of 2 delivered** (GitHub issue #148, D-2026-09-03-c, ADR-049,
+  TASK-189). Increment 1 is the shared pick *query*: `ray3d::RayTriangleIntersect` and the new pure
+  `src/util/solidpick.{hpp,cpp}`, with `CadSnap.cpp`'s two file-private copies refactored onto them
+  so the divergence in item 1 cannot recur. Increment 2 is the *selection*: a sub-object selection
+  mode with its own store, the highlight treatment, and coexistence with whole-entity selection —
+  which is where #148's acceptance criteria 1 and 2 are actually met.
+- Revisions: 2026-09-03 — initial; increment 1 delivered. Same day, before merge: the "Starting
+  state" note above added and the statement recast after review found the requirement had been
+  drafted on the premise that solid faces were unpickable. They were not; the premise came from
+  PR #180, which predates REQ-313 landing and was quoted without being re-checked against `beta`.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -6800,6 +6882,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
 | REQ-305 | Commands/Viewport | done (GitHub issue #87, D-2026-08-25-m, TASK-111 — relabeled from REQ-304/TASK-109 while merging `master` into `beta`, see the requirement's own header note). ARRAY (rectangular + polar) follows the MOVE/COPY/ROTATE/SCALE/MIRROR transform-command shape end to end; survey points excluded from the array selection, confirmed with the user (D-2026-08-25-m addendum). Amended once (D-2026-08-25-n, TASK-112): the shared "select objects" step was click-or-box-and-accumulate-until-Enter for MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY (STRETCH excluded — its crossing box is load-bearing geometry, REQ-103 step 5), replacing the box-only shape all seven originally shared. `GoSurveyTests.exe` 542/542, headless transcript corpus green (1 pre-existing disabled, unrelated) | accepted |
+| REQ-318 | Domain/UI | accepted, increment 1 of 2 delivered — the SHARED pick query (GitHub issue #148, D-2026-09-03-c, ADR-049, TASK-189). **What was new is not what the issue claimed.** The ray/triangle → `triFace` → `ClosestPointOnSurface` pipeline already shipped with REQ-313, inside `src/viewport/CadSnap.cpp`; what it could not do was serve a second caller, because `RayHitSolidFace`, `ClosestRayPointToEdge` and `RayNearBounds` were file-private. So increment 1 is a *consolidation*: `ray3d::RayTriangleIntersect` and the new pure `src/util/solidpick.{hpp,cpp}` are the one home, and `CadSnap` now routes through both instead of keeping its own copies. That mattered concretely — the snap copy used an absolute determinant epsilon and exact barycentric bounds while the shared one is scale-relative with a barycentric slack, so on the hairline crack between two faces of the deliberately unwelded tessellation the two disagreed: snap reported nothing where a selection would report a hit, and a user would have seen the snap marker and the sub-object highlight name different things under one cursor. Above the geometry, what is genuinely new is the **expiring sub-object reference** (an index is durable across a topology-preserving edit and meaningless across one that changes the counts, so it is paired with a `weak_ptr` to the solid and expires rather than re-binding), and precedence and occlusion as stated rules. The projection remains the sharpest point and is measured: a raw triangle hit sits 0.00986 ft off a cylinder's true surface at the shipping chord tolerance — inside REQ-101's ±0.01 ft but 98.6% of the whole budget — and projected the residual is at the arithmetic floor. **The tests assert the picked AZIMUTH as well as the radius**, because `ClosestPointOnSurface` rescales any nearby point to exactly `r`: a radius assertion alone cannot fail for the reason it appears to test, and an earlier draft of this row cited one that could not. Occlusion is measured against the nearest *triangle* rather than the nearest usable face, so a corrupt face id cannot move the baseline to the far side of the solid; the ray is normalized on entry, because `RayTriangleIntersect`'s parameter scales as `1/\|dir\|` and `RayPointDistance`'s as `\|dir\|`, which on a non-unit ray makes the occlusion comparison meaningless rather than merely imprecise; and the curved-edge chord budget keys on the curve KIND, not on `sweep`, which a `CurveKind::Intersection` edge leaves zero. Increment 2 is the selection mode, its store, the highlight treatment and coexistence with the entity pick — where #148 acceptance criteria 1 and 2 are actually met. | `SolidPickTests` (21 cases: cylinder radius AND azimuth from 24 azimuths; the same oblique geometry passing at storage magnitude and failing at absolute state-plane magnitude, which pins the local-coordinates precondition with evidence rather than prose; near-face-wins from both directions; vertex/edge/face precedence; zero tolerance disables a kind; occluded far-side vertex refused, and still refused when the occluding triangle's id is corrupt; a non-unit ray giving an identical answer and an unchanged depth; a ray just outside the silhouette still reaching the edges; the rim picked on the true arc; and refusals for a miss, a solid behind the cursor, a degenerate ray, a null result, mismatched buffers and an empty solid) + `Ray3dTests` (10 new cases for the primitive, including a hit on a shared edge reported by both triangles and a 0.25 ft triangle at easting 2e6 — the case an absolute degeneracy epsilon would reject). The refactored snap path is covered by the existing `GoSurveySnapTests` and the `req313-solid-picked` headless transcript, both unchanged and green. Full suite 1062/1062. | accepted |
 
 ---
 

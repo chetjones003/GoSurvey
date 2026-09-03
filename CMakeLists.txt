@@ -345,6 +345,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   # validation, the loft builders), no GL and no brep coupling, so its correctness is pinned against
   # closed-form circle / plane expectations rather than a viewport.
   src/util/nurbs.cpp
+  # REQ-318 sub-object picking (ADR-049, GitHub issue #148). Pure for the same reason the kernel
+  # above it is: the precedence between a face, an edge and a vertex, and the refusal to report a
+  # pick it cannot justify, are decided without a window.
+  src/util/solidpick.cpp
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
   src/util/docinvariants.cpp
@@ -737,6 +741,8 @@ if(GOSURVEY_BUILD_TESTS)
     # volume/area stable. BrepJson.hpp is header-only and pulls in only nlohmann/json + brep.hpp, so
     # the serializer the saver actually runs is exercised directly here (GsIo.cpp is not linkable).
     tests/BrepJsonTests.cpp
+    tests/SolidPickTests.cpp
+    src/util/solidpick.cpp
     tests/MeshGsRoundTripTests.cpp
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
