@@ -6416,7 +6416,7 @@ const CmdEntry kRegistry[] = {
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
     {"slice", "sl", "Cut selected solids with a plane (three points), keeping one side or both"},
     {"loft", "lft", "Loft a solid through two or more selected closed polylines or circles, in pick order"},
-    {"sweep", "swp", "Sweep a selected closed profile along a selected line or arc path into a solid"},
+    {"sweep", "swp", "Sweep a selected closed profile along a selected line, arc or open polyline path"},
     {"union", "uni", "Combine two selected solids into one"},
     {"subtract", "su", "Subtract the second selected solid from the first"},
     {"intersect", "in", "Keep only the volume two selected solids share"},
@@ -24618,9 +24618,54 @@ bool HandleLoftTextInput(const std::string& lineIn, AppCommandState& st, std::ve
 
 namespace {
 
-/// A brep::SweepPath from a selected LINE or ARC entity. Returns false for anything else.
+/// A brep::SweepPath from a selected LINE, ARC or **open POLYLINE** entity (a polyline's per-vertex
+/// bulges become the arc segments — REQ-316). Returns false for anything else; a closed polyline is
+/// a profile, not a path, so it is left for `ExtrudeProfileFromSelection`.
 [[nodiscard]] bool SweepPathFromSelection(const AppCommandState& st, const SelectedEntity& sel,
                                           brep::SweepPath* out) {
+  if (sel.type == SelectedEntity::Type::Polyline) {
+    const std::size_t pi = static_cast<std::size_t>(sel.index);
+    if (sel.index < 0 || pi + 1 >= st.userPolylineOffsets.size())
+      return false;
+    if (pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0)
+      return false;  // closed → a profile, not a path
+    const int vB = st.userPolylineOffsets[pi];
+    const int vE = st.userPolylineOffsets[pi + 1];
+    if (vE - vB < 2)
+      return false;
+    std::vector<ray3d::Vec3> pts;
+    for (int v = vB; v < vE; ++v) {
+      const std::size_t f = static_cast<std::size_t>(v) * 3;
+      if (f + 2 >= st.userPolylineVerts.size())
+        return false;
+      pts.push_back({static_cast<double>(st.userPolylineVerts[f + 0]),
+                     static_cast<double>(st.userPolylineVerts[f + 1]),
+                     static_cast<double>(st.userPolylineVerts[f + 2])});
+    }
+    std::vector<brep::SweepSegment> segs;
+    for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
+      const std::size_t vi = static_cast<std::size_t>(vB) + k;
+      const float bulge =
+          vi < st.userPolylineVertsBulge.size() ? st.userPolylineVertsBulge[vi] : 0.f;
+      brep::SweepSegment seg;
+      if (std::fabs(bulge) > 1e-6f) {
+        if (std::fabs(pts[k].z - pts[k + 1].z) > 1e-6)
+          return false;  // a bulge across a change in elevation is not a planar arc
+        const BulgeArcSpan span =
+            BulgeArc(pts[k].x, pts[k].y, pts[k + 1].x, pts[k + 1].y, static_cast<double>(bulge));
+        if (!span.valid)
+          return false;
+        seg.arc = true;
+        seg.centre = {span.cx, span.cy, pts[k].z};
+        seg.normal = {0.0, 0.0, 1.0};
+        seg.sweep = span.sweep;
+      }
+      segs.push_back(seg);
+    }
+    out->points = std::move(pts);
+    out->segments = std::move(segs);
+    return true;
+  }
   if (sel.type == SelectedEntity::Type::LineSeg) {
     const std::size_t b = static_cast<std::size_t>(sel.index) * 6;
     if (sel.index < 0 || b + 5 >= st.userLinesFlat.size())
@@ -24686,7 +24731,7 @@ std::string CadSweepPromptText(const AppCommandState& st) {
   bool hp = false;
   bool ha = false;
   (void)GatherSweepInputs(st, &prof, &path, &hp, &ha);
-  std::string s = "SWEEP — select a closed profile and a line/arc path";
+  std::string s = "SWEEP — select a closed profile and a line, arc or open polyline path";
   if (hp || ha) {
     s += " (";
     s += hp ? "profile ok" : "no profile yet";
@@ -24715,7 +24760,7 @@ static void CommitSweep(AppCommandState& st, std::vector<std::string>& log) {
   bool ha = false;
   GatherSweepInputs(st, &prof, &path, &hp, &ha);
   if (!hp || !ha) {
-    log.push_back("SWEEP — select one closed polyline or circle (the profile) and one line or arc "
+    log.push_back("SWEEP — select one closed polyline or circle (the profile) and one line, arc or open polyline "
                   "(the path).");
     return;
   }

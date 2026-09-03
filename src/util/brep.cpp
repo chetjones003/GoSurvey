@@ -1146,9 +1146,11 @@ const char* ProblemText(Problem p) {
   case Problem::SweepPathDegenerate: return "The sweep path has no length.";
   case Problem::SweepProfileTouchesAxis:
     return "The profile reaches the arc path's axis of curvature; move it clear of the axis.";
+  case Problem::SweepPathCorner:
+    return "The sweep path has a sharp corner; only smooth (tangent-continuous) bends are supported.";
   case Problem::SweepUnsupportedOption:
-    return "This sweep option is not supported yet: a twist or a fixed orientation needs a straight "
-           "path in this version.";
+    return "This sweep option is not supported yet: a twist or a fixed orientation needs a single "
+           "straight path segment in this version.";
   }
   return "The solid is not valid.";
 }
@@ -2532,7 +2534,7 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
     if (k > 0 &&
         ray3d::Dot(seg[static_cast<std::size_t>(k - 1)].endTan, seg[static_cast<std::size_t>(k)].startTan) <
             1.0 - 1e-6)
-      return Fail(Problem::SweepUnsupportedOption, outWhy);  // a mitred corner — a later increment
+      return Fail(Problem::SweepPathCorner, outWhy);  // a mitred corner — a later increment
   }
 
   // --- Carry a rotation-minimizing frame along the path ---------------------------------------
