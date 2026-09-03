@@ -134,8 +134,24 @@ face integration + `Validate` tolerance relaxation + `BuildBranchPipeIntersectio
 `SegmentsForEdge`, `Translate`, `PlaceInFrame`, `ComputeBounds`, `Validate` all gained an
 Intersection branch. Tested: a pipe-tee intersection curve marched to <1e-6 on both cylinders,
 endpoints exact, follows curvature not the chord, survives `Translate` at survey magnitude, bounds
-contain it. No Boolean and no numerical integration yet — a solid with an Intersection edge still
-fails `Validate`'s volume check (A2).
+contain it.
+
+**PROGRESS 2026-09-03 — PR A2 done.** Numerical face integration: `IsectStrip` / `MakeIsectStrip` /
+`IsectStripAt` scan+bisect the axial extent of an Intersection-bounded cylinder face at a longitude;
+`IntegrateCylinderFaceNumeric` integrates it with a graded 8-node Gauss rule (`GradedGaussIntegrate`
+— cosine-clustered panels so a lens end that pinches to zero width still integrates). `IntegrateFace`
+routes Intersection-bounded cylinder faces there; the tessellator uses the same strip. `Validate`'s
+closed-surface residual relaxes to `1e-5·scale³` for solids with an Intersection edge.
+`BuildBranchPipeIntersection` (8 vertices / 10 edges / 4 faces) + `TryBooleanBranchPipe` (perpendicular
+intersecting axes, `r ≠ R`, the thin cylinder clear of the thick one's caps) → `INTERSECT` builds the
+lens. `.gs`: an Intersection edge writes its two surfaces + witness (`BrepSurfaceToJson` /
+`BrepSurfaceFromJson`); `kGsFormatVersion` 2 → 3 with a no-op `MigrateV2ToV3`. Tested: the lens
+volume matches a fine numerical reference to 2e-4, on-axis and on a tilted survey-magnitude frame and
+after `Translate`; the reversed operand order; `SUBTRACT` / `UNION` still refused. **Follow-up:** a
+headless-transcript `.gs` round-trip is deferred — building a perpendicular cylinder pair from
+commands needs a `CYLINDER` axis option (the base point stays in world coords under a `UCS`).
+
+`SUBTRACT` / `UNION` of the branch pipe are PR B / PR C.
 
 ### Deferred within B2b-2 (later sub-slices)
 
