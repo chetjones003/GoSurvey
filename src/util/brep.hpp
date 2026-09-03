@@ -445,16 +445,22 @@ struct Profile {
 /// a degenerate profile frame (\ref Problem::DegenerateFrame). The result carries no recipe.
 [[nodiscard]] bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy);
 
-/// A **sweep path**: a straight segment, or a single circular arc, that \ref Sweep runs a profile
-/// along (REQ-315 / ADR-048). A bulge-polyline path — several segments chained — is a later
-/// increment; this one takes one segment.
+/// One segment of a \ref SweepPath: the span from `points[k]` to `points[k+1]`.
+struct SweepSegment {
+  bool arc = false;    ///< false — a straight span. true — a circular arc.
+  Vec3 centre;         ///< Arc only: the arc centre; both segment endpoints are equidistant from it.
+  Vec3 normal;         ///< Arc only: unit axis the arc turns about; `+sweep` is CCW around it.
+  double sweep = 0.0;  ///< Arc only: signed sweep about \ref normal, `0 < |sweep| < 2*pi`.
+};
+
+/// A **sweep path** for \ref Sweep (REQ-315 / ADR-048): an open chain of straight and circular-arc
+/// segments. `points[0]` is where the profile starts; segment `k` runs `points[k] → points[k+1]`,
+/// so `segments.size()` is `points.size() - 1`. A single segment is the common case (a line or an
+/// arc); several **tangent-continuous** segments form a bulge polyline. A tangent discontinuity at a
+/// joint (a mitred corner) is a later increment and is refused by name.
 struct SweepPath {
-  bool arc = false;      ///< false — the straight segment \ref start → \ref end. true — a circular arc.
-  Vec3 start;            ///< The path start; the profile is placed here.
-  Vec3 end;              ///< The path end.
-  Vec3 centre;           ///< Arc only: the arc centre. \ref start and \ref end are equidistant from it.
-  Vec3 normal;           ///< Arc only: unit axis the arc turns about; `+sweep` is CCW around it.
-  double sweep = 0.0;    ///< Arc only: signed sweep, `0 < |sweep| <= 2*pi`.
+  std::vector<Vec3> points;
+  std::vector<SweepSegment> segments;
 };
 
 /// How \ref Sweep carries the profile's orientation along the path.
@@ -471,18 +477,22 @@ struct SweepOptions {
 /// Sweep one closed planar \p profile along \p path and return the solid in \p out (REQ-315 /
 /// ADR-048, GitHub issue #241).
 ///
-/// Each profile edge sweeps one \ref SurfaceKind::Nurbs face — ruled along a straight path, an exact
-/// rational revolution along an arc path — and the profile caps the two ends as planar faces. A
-/// **straight path reproduces \ref Extrude**; a **circular-arc path (twist 0, aligned) reproduces
-/// \ref Revolve** — asserted in tests. This increment builds a **single-segment** path; a
-/// bulge-polyline path, a twist on a curved path, and a fixed-orientation curved path are each
-/// refused by name (\ref Problem::SweepUnsupportedOption) pending the next increment.
+/// One band per path segment (\ref Loft's topology, chained): each profile edge sweeps one
+/// \ref SurfaceKind::Nurbs face per segment — ruled along a straight segment, an exact rational
+/// revolution along an arc segment — and the profile caps the two path ends as planar faces. The
+/// profile's orientation is carried along the path by a rotation-minimizing frame (parallel
+/// transport; on a circular arc the frame simply turns with the arc plane). A **single straight
+/// segment reproduces \ref Extrude**; a **single arc segment (twist 0, aligned) reproduces
+/// \ref Revolve** — asserted in tests.
 ///
-/// Nothing is stored unless the result passes \ref Validate and \ref SelfIntersects (REQ-201);
-/// \p out is left untouched on failure. Refuses — by name — a degenerate path
-/// (\ref Problem::SweepPathDegenerate), a profile that reaches an arc path's axis
-/// (\ref Problem::SweepProfileTouchesAxis), and the same malformed / non-planar / self-crossing /
-/// reflex-arc profiles \ref Loft refuses. The result carries no recipe.
+/// Still refused by name (\ref Problem::SweepUnsupportedOption), pending later increments: a tangent
+/// discontinuity at a joint (a mitred corner); a twist or a fixed orientation on anything but a
+/// single straight segment; a full-turn arc segment.
+///
+/// Nothing is stored unless the result passes \ref Validate (REQ-201); \p out is left untouched on
+/// failure. Refuses — by name — a malformed or degenerate path (\ref Problem::SweepPathDegenerate),
+/// a profile that reaches an arc segment's axis (\ref Problem::SweepProfileTouchesAxis), and the same
+/// malformed / non-planar / self-crossing / reflex-arc profiles \ref Loft refuses. No recipe.
 [[nodiscard]] bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& options,
                          Solid* out, Problem* outWhy);
 
