@@ -3287,7 +3287,6 @@ TEST_CASE("A reflex arc can bite a bay out of a rectangle", "[brep][req314]") {
   REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(0.005));
 }
 
-}
 // ---------------------------------------------------------------------------------------------
 // REQ-317 POLYSOLID.
 //
