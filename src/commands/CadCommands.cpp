@@ -6551,6 +6551,62 @@ const CmdEntry kRegistry[] = {
     {"blockpaper", "", "Switch to the first paper layout"},
 };
 
+/// The registry entry whose primary name or alias is exactly \p low (already lowercased), or null.
+///
+/// One matcher, used by the dispatch loop that STARTS a command and by the failure path that has to
+/// recognise a command name it cannot start (GitHub issue #233). Two copies of this would be free to
+/// disagree about which words are command names, and the whole point of the failure message is that
+/// it agrees with the dispatcher.
+[[nodiscard]] const CmdEntry* FindRegistryEntry(const std::string& low) {
+  for (const CmdEntry& e : kRegistry) {
+    if (low == StringUtil::toLowerAsciiCopy(e.primary))
+      return &e;
+    if (e.aliases[0] == '\0')
+      continue;
+    std::istringstream als(std::string(e.aliases));
+    std::string a;
+    while (std::getline(als, a, ',')) {
+      a = StringUtil::trimCopy(a);
+      if (!a.empty() && low == StringUtil::toLowerAsciiCopy(a))
+        return &e;
+    }
+  }
+  return nullptr;
+}
+
+/// Report a line the active command could not use (GitHub issue #233).
+///
+/// When the line is the NAME of another command, say that — because the honest reason it did nothing
+/// is "a command is still running", not "that is not a valid point". A registry lookup here cannot
+/// swallow a command's own keywords: this is the failure path, reached only after the active command
+/// has already declined the line, so `ARC` inside POLYLINE and `L` inside a solid prompt are consumed
+/// long before they reach it.
+///
+/// Why it matters more than the wording suggests: the two commands people use most are still running
+/// at exactly the moment the next command name gets typed. LINE's blank Enter deliberately ends the
+/// chain and RESTARTS the command (D-2026-08-25-j), and CIRCLE loops back for the next circle — both
+/// chosen, neither wrong — so a user who believes they have finished types the next verb into a live
+/// point prompt and is told their coordinate syntax is bad. That reads as a freeze.
+void ReportUnparsedCommandInput(const AppCommandState& st, const std::string& line,
+                                const std::string& fallback, std::vector<std::string>& log) {
+  const std::string trimmed = StringUtil::trimCopy(line);
+  const CmdEntry* entry =
+      trimmed.empty() ? nullptr : FindRegistryEntry(StringUtil::toLowerAsciiCopy(trimmed));
+  const char* running = AppCommandState::KindName(st.active);
+  if (!entry || !running || running[0] == '\0') {
+    log.push_back(fallback);
+    return;
+  }
+  // Name the CANONICAL command rather than echoing the alias back: a user who typed `c` is better
+  // served by "then type CIRCLE" than by being shown their own single letter.
+  std::string wanted = entry->primary;
+  for (char& c : wanted)
+    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  log.push_back(std::string(running) + " is still running, so \"" + trimmed +
+                "\" was read as input to it rather than as a command. Press Esc to end " + running +
+                ", then type " + wanted + ".");
+}
+
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
 
 int FuzzySubsequenceScore(std::string_view query, std::string_view cand) {
@@ -28875,7 +28931,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleModifyText(st, st.active == AppCommandState::Kind::Copy, line, log)) {
       return;
     }
-    log.push_back("Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.");
+    ReportUnparsedCommandInput(st, line, "Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.", log);
     return;
   }
 
@@ -28883,7 +28939,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleStretchText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse STRETCH input — use X,Y or @dx,dy from base.");
+    ReportUnparsedCommandInput(st, line, "Could not parse STRETCH input — use X,Y or @dx,dy from base.", log);
     return;
   }
 
@@ -28891,7 +28947,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleScaleText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse SCALE input — see command hints (base X,Y; factor; R + reference/new length).");
+    ReportUnparsedCommandInput(st, line, "Could not parse SCALE input — see command hints (base X,Y; factor; R + reference/new length).", log);
     return;
   }
 
@@ -28899,7 +28955,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleRotateText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse ROTATE input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse ROTATE input — see command hints.", log);
     return;
   }
 
@@ -28907,7 +28963,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleMirrorText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse MIRROR input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse MIRROR input — see command hints.", log);
     return;
   }
 
@@ -28915,7 +28971,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleArrayText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse ARRAY input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse ARRAY input — see command hints.", log);
     return;
   }
 
@@ -28923,7 +28979,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleLengthenText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse LENGTHEN input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse LENGTHEN input — see command hints.", log);
     return;
   }
 
@@ -28931,7 +28987,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleFilletText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse FILLET input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse FILLET input — see command hints.", log);
     return;
   }
 
@@ -28939,7 +28995,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleChamferText(st, line, log)) {
       return;
     }
-    log.push_back("Could not parse CHAMFER input — see command hints.");
+    ReportUnparsedCommandInput(st, line, "Could not parse CHAMFER input — see command hints.", log);
     return;
   }
 
@@ -29373,9 +29429,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
     }
 
-    log.push_back(
+    ReportUnparsedCommandInput(
+        st, line,
         std::string("Could not parse point. Use X,Y or X Y") +
-        (allowRel ? "; @dx,dy; A / 2P (two picks); A 45 +90; ortho distance toward cursor." : "."));
+            (allowRel ? "; @dx,dy; A / 2P (two picks); A 45 +90; ortho distance toward cursor."
+                      : "."),
+        log);
     return;
   }
 
@@ -29406,7 +29465,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleCircleTextInput(line, st, log)) {
       return;
     }
-    log.push_back("Could not parse input for current CIRCLE step — see hint below.");
+    ReportUnparsedCommandInput(st, line, "Could not parse input for current CIRCLE step — see hint below.", log);
     return;
   }
 
@@ -29515,24 +29574,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   std::string low = StringUtil::toLowerAsciiCopy(line);
-  for (const CmdEntry& e : kRegistry) {
-    if (low == StringUtil::toLowerAsciiCopy(e.primary)) {
-      DispatchByPrimary(StringUtil::toLowerAsciiCopy(e.primary), st, log);
-      return;
-    }
-    if (e.aliases[0] == '\0')
-      continue;
-    std::istringstream als(std::string(e.aliases));
-    std::string a;
-    while (std::getline(als, a, ',')) {
-      a = StringUtil::trimCopy(a);
-      if (a.empty())
-        continue;
-      if (low == StringUtil::toLowerAsciiCopy(a)) {
-        DispatchByPrimary(StringUtil::toLowerAsciiCopy(e.primary), st, log);
-        return;
-      }
-    }
+  // Through the same matcher the failure path uses (issue #233), so the two cannot disagree about
+  // which words are command names — which is the whole basis of that message.
+  if (const CmdEntry* e = FindRegistryEntry(low)) {
+    DispatchByPrimary(StringUtil::toLowerAsciiCopy(e->primary), st, log);
+    return;
   }
 
   if (TryStrongFuzzyDispatch(line, st, log)) {
