@@ -102,10 +102,27 @@ angles, tilted survey-magnitude arc path, twisted straight sweep with a tessella
 `Translate` at state-plane magnitude, every refusal by name) + a swept-solid `.gs` round-trip in
 `BrepJsonTests`. Build green, ctest **1057/1057**.
 
+## Sweep — command slice *(branch `feat/req315-sweep-command`)*
+
+`AppCommandState::Kind::Sweep` + a one-value `SweepPhase::SelectInputs`. `SWEEP` (alias `SWP`) opens
+the prompted form — select **one** closed polyline / circle (the profile) and **one** line or arc
+(the path), Enter to build; a bare `SWEEP` on a ready selection of both builds immediately. Selection
+order does not matter: `GatherSweepInputs` takes the closed loop as the profile
+(`ExtrudeProfileFromSelection`) and the open curve as the path (`SweepPathFromSelection` — a LINE
+gives a straight `brep::SweepPath`, a `CadArc` gives an arc one via `ucs::FromNormal` +
+`PointOnPlaneCircle`). `CadBuildSweepSolid` is the one source of truth for the ghost and the commit
+(`brep::Sweep`, default options). Wired through the six places
+([[project_3d_entity_checklist]]) exactly like LOFT + the `kRegistry` entry. Twist / alignment
+keyword options are a follow-up (kernel already takes them). Headless transcript
+`tests/headless/transcripts/req315-sweep.txt`: a rectangle swept along a line == a 240-volume prism
+(topology + area exact); a circle swept along a 90° arc == a quarter torus (`30·π²` volume and
+`π²·30 + 8π` area exact); undo/redo; a profile with no path refused; `.gs` save/reopen. ctest
+**1059/1059**.
+
 **Deferred to the next sweep slice**: a bulge-polyline path (multi-segment, needs a
 rotation-minimizing frame carried across joints — the double-reflection method); twist on a curved
-path; a fixed-orientation curved sweep; a full-turn arc path (seams like a revolve); the `SWEEP`
-command + viewport.
+path; a fixed-orientation curved sweep; a full-turn arc path (seams like a revolve); the SWEEP
+twist / alignment keyword options.
 
 ### Slice B (original plan) — the command and the viewport
 

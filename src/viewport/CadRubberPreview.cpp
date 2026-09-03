@@ -579,6 +579,21 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     }
   }
 
+  // --- SWEEP: the same live wireframe ghost, from the selected profile + path (REQ-315).
+  if (cmd.active == AppCommandState::Kind::Sweep &&
+      cmd.sweepPhase == AppCommandState::SweepPhase::SelectInputs) {
+    brep::Solid g;
+    if (CadBuildSweepSolid(cmd, &g)) {
+      std::vector<double> segs;
+      brep::Problem why = brep::Problem::Ok;
+      if (brep::TessellateEdges(g, kSolidChordToleranceFt, &segs, &why)) {
+        for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+          PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                               static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+      }
+    }
+  }
+
   // --- SLICE: the triangle the three picked points span, as a hint of the cutting plane.
   if (cmd.active == AppCommandState::Kind::Slice) {
     using SP = AppCommandState::SlicePhase;

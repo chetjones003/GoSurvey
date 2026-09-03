@@ -8856,6 +8856,11 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     loftHint = CadLoftPromptText(cmd);
     return loftHint.c_str();
   }
+  if (cmd.active == AppCommandState::Kind::Sweep) {
+    static std::string sweepHint;
+    sweepHint = CadSweepPromptText(cmd);
+    return sweepHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Slice) {
     static std::string sliceHint;
     sliceHint = CadSlicePromptText(cmd);
