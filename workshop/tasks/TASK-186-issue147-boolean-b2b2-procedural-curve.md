@@ -188,7 +188,27 @@ the offset quartic are the next slices.
 ### Deferred within B2b-2 (later sub-slices)
 
 - torus ∩ anything, cone parabola / hyperbola sections.
-- The fully-general tilted-AND-skew cylinder-cylinder pair.
+- The fully-general tilted-AND-skew pair, SUBTRACT/UNION/thin−thick (INTERSECT done, see below).
+
+**PROGRESS 2026-09-04 — fully-general (tilted AND skew) branch pipe INTERSECT done
+(feat/issue242-general-branch-pipe-intersect, issue #242).** Key finding: the thin-cylinder-on-thick
+crossing quadratic is closed-form for ANY relative axis position — `(Px)²+(Py)²=R²` is quadratic in
+the thin-axis parameter `s` for *any* fixed `φ` regardless of tilt/offset, since `Px,Py` are affine
+in `s`. All three prior special cases (perpendicular-coplanar, tilted-coplanar `α≠0,g=0`,
+perpendicular-skew `α=0,g≠0`) were solving degenerate versions of ONE quadratic; the general solve
+is `s(φ) = (r sinα cosφ ± √(R² − (g − r sinφ)²)) / cosα`, `g` the true common-perpendicular gap
+(signed, builder doesn't care), reducing to both prior formulas at α=0 or g=0.
+`BuildGeneralBranchPipeIntersection`: same 8v/10e/4f χ=2 lens topology; thick-wall mouth patches
+have no closed-form angular extent once both α,g≠0, so `uStart/uEnd` come from a one-time 360-sample
+scan with margin (the numeric strip search at integration time finds the exact band regardless — it
+never needed the closed form, only the WIDTH of the loop it was told to trust it in).
+`TryBooleanBranchPipe`: `cThin`/`cThick` (closest points of the two skew lines) hoisted above the
+`perp` split since both branches need them; general branch builds `gfr` via `thin's own in-plane
+direction` (not the gap direction — that only works when `perp`), conservative (not tight) bounds
+`sBound=(r|sinα|+R)/cosα`, `zBound=sBound|sinα|+r cosα` gate "fully crosses"/"caps clear". INTERSECT
+only; SUBTRACT/UNION/thin−thick still refused. Volume vs a 1400×1400 section integral (8e-3), tilted
+survey frame. Full suite green (1119). **All test assertions passed on the first build** — the
+closed-form derivation + numeric u-scan removed the risk that broke the cyl-box pocket slice.
 
 **PROGRESS 2026-09-04 — `cylinder − box` slot done (feat/issue242-cylinder-box-slot, issue #242).**
 A slot (two parallel full-length cutting faces) leaves two disjoint "wing" pieces — each is exactly
