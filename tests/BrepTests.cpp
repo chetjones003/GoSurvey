@@ -3021,9 +3021,25 @@ TEST_CASE("Curved B2b-2: INTERSECT of a NON-perpendicular branch pipe is the til
     REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(5e-3));
   }
 
-  SECTION("thin - thick (two stubs) is still refused - a later sub-slice") {
+  SECTION("thin - thick bites the tilted branch in two - a stub each side, each with a dimple") {
+    const double total = kPi * r * r * 30.0 - vref;  // both stubs
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(out.size() == 2);
+    double sum = 0.0;
+    for (const Solid& stub : out) {
+      REQUIRE(brep::Validate(stub) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(stub));
+      REQUIRE(CountOf(stub).v == 4);
+      REQUIRE(CountOf(stub).e == 6);
+      REQUIRE(CountOf(stub).f == 4);
+      REQUIRE(brep::EulerCharacteristic(stub) == 2);
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(stub, 0.01, &t, &why));
+      RequireWindingMatchesNormals(t);
+      sum += brep::ComputeMassProperties(stub).volume;
+    }
+    REQUIRE(sum == Approx(total).epsilon(5e-3));
   }
 
   SECTION("skew (non-coplanar) axes are refused") {
@@ -3079,7 +3095,7 @@ TEST_CASE("Curved B2b-2: SUBTRACT bores a branch clean through the main pipe", "
     REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(6e-3));
   }
 
-  SECTION("thin − thick (two stubs) is still refused") {
+  SECTION("thin − thick bites the branch in two — a stub each side, each with a dimple") {
     Solid thin;
     Solid thick;
     ucs::Ucs ax;
@@ -3087,8 +3103,23 @@ TEST_CASE("Curved B2b-2: SUBTRACT bores a branch clean through the main pipe", "
     REQUIRE(brep::MakeCylinder(ax, r, 24, &thin, &why));
     REQUIRE(brep::MakeCylinder(At(0, 0, -12), R, L, &thick, &why));
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanSubtract(thin, thick, &out, &why));
-    REQUIRE(why == Problem::BooleanCurvedFace);
+    REQUIRE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(out.size() == 2);
+    const double total = kPi * r * r * 24.0 - lensVolume(r, R);
+    double sum = 0.0;
+    for (const Solid& stub : out) {
+      REQUIRE(brep::Validate(stub) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(stub));
+      REQUIRE(CountOf(stub).v == 4);
+      REQUIRE(CountOf(stub).e == 6);
+      REQUIRE(CountOf(stub).f == 4);
+      REQUIRE(brep::EulerCharacteristic(stub) == 2);
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(stub, 0.01, &t, &why));
+      RequireWindingMatchesNormals(t);
+      sum += brep::ComputeMassProperties(stub).volume;
+    }
+    REQUIRE(sum == Approx(total).epsilon(5e-3));
   }
 
   SECTION("stable on a tilted survey-magnitude frame and after Translate") {

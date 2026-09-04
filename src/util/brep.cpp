@@ -6481,6 +6481,113 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
   return Succeed(outWhy);
 }
 
+/// One stub of `A − B` (thin − thick) for a branch pipe (REQ-314 B2b-2, GitHub issue #242): the
+/// thick main `B` (radius \p R, axis `fr.zAxis`) bites the thin branch `A` (radius \p r, tilted by
+/// \p alpha, `fr.xAxis` = its in-plane component) clean in two. This is the \p sideSign stub — the
+/// piece of `A` from its flat cap at axis-parameter \p zetaFlat to the quartic mouth `B` cut: `A`'s
+/// wall in two u halves, the flat cap, and an **inward** patch of `B`'s wall as the concave end.
+/// 4 vertices, 6 edges (2 procedural), 4 faces, χ = 2. Built in \p fr and left there. `alpha = 0` is
+/// the perpendicular tee. Every curved face integrates numerically.
+[[nodiscard]] bool BuildBranchPipeThinStub(const ucs::Ucs& fr, double r, double R, double alpha,
+                                           double zetaFlat, int sideSign, Solid* out,
+                                           Problem* outWhy) {
+  const double ca = std::cos(alpha);
+  const double sa = std::sin(alpha);
+  const double zetaMax = (R + r * std::fabs(sa)) / ca;
+  if (!(R > r) || !(r > 0.0) || !(std::fabs(alpha) < kHalfPi - 1e-6) ||
+      !(std::fabs(zetaFlat) > zetaMax + 1e-9 * (R + r)))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const int msign = sideSign > 0 ? 1 : -1;
+  const Vec3 Y = fr.yAxis;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+  const Vec3 tHat = ray3d::Add(ray3d::Scale(fr.xAxis, ca), ray3d::Scale(fr.zAxis, sa));
+  const Vec3 xaHat = ray3d::Add(ray3d::Scale(fr.xAxis, -sa), ray3d::Scale(fr.zAxis, ca));
+  auto thinPt = [&](double phi, double zeta) {
+    return W(Vec3{zeta * ca - r * std::cos(phi) * sa, -r * std::sin(phi),
+                  zeta * sa + r * std::cos(phi) * ca});
+  };
+  auto cpt = [&](double phi) {
+    const double root = std::sqrt(std::max(0.0, R * R - r * r * std::sin(phi) * std::sin(phi)));
+    return thinPt(phi, (r * sa * std::cos(phi) + msign * root) / ca);
+  };
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = fr.origin;
+  aSurf.frame.zAxis = tHat;
+  aSurf.frame.xAxis = xaHat;
+  aSurf.frame.yAxis = ray3d::Scale(Y, -1.0);
+  aSurf.radius = r;
+  aSurf.height = 4.0 * (std::fabs(zetaFlat) + R);
+  Surface bSurf;
+  bSurf.kind = SurfaceKind::Cylinder;
+  bSurf.frame = fr;
+  bSurf.radius = R;
+  bSurf.height = 8.0 * R;
+
+  Solid s;
+  const int p0 = AddVertex(&s, cpt(0.0));               // mouth φ = 0
+  const int pP = AddVertex(&s, cpt(kPi));               // mouth φ = π
+  const int q0 = AddVertex(&s, thinPt(0.0, zetaFlat));  // rim φ = 0
+  const int qP = AddVertex(&s, thinPt(kPi, zetaFlat));  // rim φ = π
+
+  auto isect = [&](int a, int b, double witnessPhi) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = a;
+    e.v1 = b;
+    e.frame.origin = cpt(witnessPhi);
+    e.isectSurfaces = {aSurf, bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int eP = isect(p0, pP, 0.5 * kPi);  // mouth, y > 0
+  const int eN = isect(pP, p0, 1.5 * kPi);  // mouth, y < 0
+  const int sp0 = AddLine(&s, p0, q0);      // wall seam φ = 0
+  const int spP = AddLine(&s, pP, qP);      // wall seam φ = π
+  const Vec3 fc = W(Vec3{zetaFlat * ca, 0.0, zetaFlat * sa});
+  const int rc0 = AddArc(&s, q0, qP, fc, tHat, kPi);  // rim, y > 0
+  const int rcP = AddArc(&s, qP, q0, fc, tHat, kPi);  // rim, y < 0
+
+  auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = aSurf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  const double psi0 = std::asin(std::clamp(r / R, -1.0, 1.0));
+  auto dimple = [&](std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = bSurf;
+    f.surface.inward = true;
+    f.uStart = msign > 0 ? -psi0 : kPi - psi0;
+    f.uEnd = msign > 0 ? psi0 : kPi + psi0;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+
+  if (msign > 0) {
+    // Loop below the rim: mouth is the bottom edge of each wall half, rim the top.
+    wall(0.0, kPi, {{eP, false}, {spP, false}, {rc0, true}, {sp0, true}});
+    wall(kPi, kTwoPi, {{eN, false}, {sp0, false}, {rcP, true}, {spP, true}});
+    s.faces.push_back(MakePlaneFace(fc, tHat, {{rc0, false}, {rcP, false}}));
+    dimple({{eN, true}, {eP, true}});
+  } else {
+    wall(0.0, kPi, {{rc0, false}, {spP, true}, {eP, true}, {sp0, false}});
+    wall(kPi, kTwoPi, {{rcP, false}, {sp0, true}, {eN, true}, {spP, false}});
+    s.faces.push_back(MakePlaneFace(fc, ray3d::Scale(tHat, -1.0), {{rc0, true}, {rcP, true}}));
+    dimple({{eP, false}, {eN, false}});
+  }
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// `A ∪ B`: the solid pipe-tee — the thick main `B` (radius \p R, axis `fr.zAxis`, caps \p zB0 /
 /// \p zB1) fused with the thin branch `A` (radius \p r, axis `fr.xAxis`, caps \p xA0 / \p xA1)
 /// (REQ-314 B2b-2). 12 vertices, 18 edges, 10 faces: `B`'s wall outside `A` (two halves, each with
@@ -6661,8 +6768,19 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
 
   const bool minuendIsThick = A.radius > B.radius;
 
-  if (op == BoolOp::Subtract && !minuendIsThick)
-    return false;  // thin − thick leaves two stubs — a later sub-slice
+  if (op == BoolOp::Subtract && !minuendIsThick) {
+    // thin − thick: the thick bites the thin in two — a pair of stubs, each a short branch with an
+    // inward dimple where the main cut it (issue #242). Handles perpendicular and tilted alike.
+    *handled = true;
+    Solid up;
+    Solid down;
+    if (!BuildBranchPipeThinStub(fr, r, R, alpha, thin.length - sThin, 1, &up, outWhy) ||
+        !BuildBranchPipeThinStub(fr, r, R, alpha, -sThin, -1, &down, outWhy))
+      return false;
+    out->push_back(std::move(up));
+    out->push_back(std::move(down));
+    return Succeed(outWhy);
+  }
 
   if (!perp) {
     *handled = true;
