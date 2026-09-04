@@ -103,6 +103,18 @@ on the tessellation; a tilted survey-magnitude frame + `Translate` to 1e-9; reve
 `SUBTRACT`/`UNION` refused; an offset axis refused; a cap-inside-sphere config refused. Full suite
 green.
 
+**Slice B / `d < r` pole-covered INTERSECT — implemented (issue #242, feat/issue242-sphere-cyl-polecovered-intersect).**
+`MakeOffsetScaffold` relaxed to `d > 0`, `d + r < Rs`, `|d − r| > tiny` — the same four-edge quartic
+scaffold serves `d > r` and `d < r` (the loop is closed at every longitude in both). For `d < r` the
+cylinder swallows each sphere pole, so `BuildSphereCylinderOffsetIntersection`'s two cap faces become
+full **polar caps** (`u` 0→2π, `v` loop→±π/2) instead of longitude-limited lens patches.
+`MakeSphereIsectStrip` forces the latitude scan to the pole when a face's own `v` span reaches it;
+`SphereStripAt` returns a one-root strip that runs off the pole end. `BuildSphereCylinderOffsetSubtractSphere`
+/ `...Union` gained explicit `d > r` guards (their kept sphere still assumes a pole). `TryBooleanSphereCylinder`
+routes `d < r` to INTERSECT only; `d ≈ r` tangency and `d < r` SUBTRACT/UNION refused. 4v/6e/4f χ=2,
+volume vs a 1400×1400 plug integral (3e-3), tilted frame. Full suite green (1116 ctest). No `.gs` bump.
+Still open: `d < r` SUBTRACT/UNION, skew axis.
+
 **Slice A / SUBTRACT + UNION — implemented (issue #242, feat/issue242-sphere-cylinder-subtract-union).**
 `src/util/brep.cpp`:
 

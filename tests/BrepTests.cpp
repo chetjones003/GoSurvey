@@ -2375,14 +2375,88 @@ TEST_CASE("Curved B2b-2 first pair: sphere INTERSECT cylinder, axis through the 
     REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vol).epsilon(1e-12));
   }
 
-  SECTION("an offset axis with d <= r (the pole-covered sub-case) is still refused") {
+  SECTION("an offset axis with d ~= r (axis tangent to the pole) is refused as degenerate") {
     Solid sph;
     Solid cyl;
     REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
-    REQUIRE(brep::MakeCylinder(At(1.5, 0, -6), r * 0.5, 12, &cyl, &why));  // d = 1.5 = cyl radius
+    REQUIRE(brep::MakeCylinder(At(1.5, 0, -6), 1.5, 12, &cyl, &why));  // d = 1.5 = cyl radius
     std::vector<Solid> out;
     REQUIRE_FALSE(brep::BooleanIntersect(sph, cyl, &out, &why));
-    REQUIRE_FALSE(brep::BooleanSubtract(sph, cyl, &out, &why));  // offset SUBTRACT: a later slice
+    REQUIRE_FALSE(brep::BooleanSubtract(sph, cyl, &out, &why));
+  }
+
+  SECTION("an offset axis with d < r (the pole-covered sub-case) - INTERSECT is a polar-capped plug") {
+    const double dp = 1.0;
+    const double rp = 2.0;  // dp < rp: the cylinder swallows each pole; dp + rp = 3 < Rs = 5
+    // Reference: integrate 2*sqrt(Rs^2 - x^2 - y^2) over the disk (x-dp)^2 + y^2 <= rp^2.
+    double vref = 0.0;
+    const int nr = 1400;
+    const int nt = 1400;
+    for (int i = 0; i < nr; ++i) {
+      const double rho = rp * (i + 0.5) / nr;
+      for (int j = 0; j < nt; ++j) {
+        const double th = kTwoPiTest * (j + 0.5) / nt;
+        const double x = dp + rho * std::cos(th);
+        const double y = rho * std::sin(th);
+        vref += 2.0 * std::sqrt(std::max(0.0, Rs * Rs - x * x - y * y)) * rho * (rp / nr) *
+                (kTwoPiTest / nt);
+      }
+    }
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(dp, 0, -12), rp, 24, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 4);
+    REQUIRE(CountOf(out[0]).e == 6);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 4);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(3e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(8e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(cyl, sph, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vref).epsilon(3e-3));
+
+    std::vector<Solid> sub;
+    REQUIRE_FALSE(brep::BooleanSubtract(sph, cyl, &sub, &why));  // d < r SUBTRACT / UNION: a later slice
+    REQUIRE_FALSE(brep::BooleanUnion(sph, cyl, &sub, &why));
+  }
+
+  SECTION("a d < r plug on a tilted survey-magnitude frame") {
+    const double dp = 1.0;
+    const double rp = 2.0;
+    const ucs::Ucs frame = TiltedAt(2.7e6, 9.1e6, 180.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{dp, 0, -12}), frame.zAxis, &axis));
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(axis, rp, 24, &cyl, &why));
+    std::vector<Solid> flat;
+    Solid sphF;
+    Solid cylF;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sphF, &why));
+    REQUIRE(brep::MakeCylinder(At(dp, 0, -12), rp, 24, &cylF, &why));
+    REQUIRE(brep::BooleanIntersect(sphF, cylF, &flat, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume ==
+            Approx(brep::ComputeMassProperties(flat[0]).volume).epsilon(1e-6));
   }
 
   SECTION("a cylinder cap that reaches into the sphere is refused, not mis-built") {
