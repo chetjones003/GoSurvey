@@ -7630,8 +7630,7 @@ struct SkewBranch {
       out->push_back(cyl);  // disjoint — the minuend is unchanged
       return Succeed(outWhy);
     }
-    int cutFace = -1;
-    int cutCount = 0;
+    std::vector<int> cutFaces;
     bool boxSquareToAxis = true;
     for (int fi = 0; fi < static_cast<int>(planar.faces.size()); ++fi) {
       const Face& f = planar.faces[static_cast<std::size_t>(fi)];
@@ -7647,13 +7646,12 @@ struct SkewBranch {
       if (dn > 1e-6)
         continue;  // not parallel to the axis — cannot be the lengthwise flat
       const double px = ray3d::Dot(ray3d::Sub(C.axis.origin, ring[0]), n);  // axis offset, +n out of box
-      if (px > -(C.radius - e2) && px < C.radius - e2) {
-        ++cutCount;
-        cutFace = fi;
-      }
+      if (px > -(C.radius - e2) && px < C.radius - e2)
+        cutFaces.push_back(fi);
     }
+    const int cutCount = static_cast<int>(cutFaces.size());
     if (boxSquareToAxis && cutCount == 1) {
-      const Face& f = planar.faces[static_cast<std::size_t>(cutFace)];
+      const Face& f = planar.faces[static_cast<std::size_t>(cutFaces[0])];
       const std::vector<Vec3> ring = FaceRing(planar, f);
       const Vec3 n = f.surface.frame.zAxis;
       const double px = ray3d::Dot(ray3d::Sub(C.axis.origin, ring[0]), n);
@@ -7722,6 +7720,67 @@ struct SkewBranch {
           if (!BuildCylinderPocket(lf, C.radius, C.length, px, za, zb, &r, outWhy))
             return false;
           out->push_back(std::move(r));
+          return Succeed(outWhy);
+        }
+      }
+    }
+    if (boxSquareToAxis && cutCount == 2) {
+      // A slot: two parallel cutting faces bound a full-length slab between them, leaving two
+      // disjoint "wing" pieces (GitHub issue #242). Each wing has exactly the single-flat notch's
+      // shape, so it reuses BuildCylinderLongitudinalFlat; the second wing is built in a frame with
+      // its +x mirrored (still right-handed) so "kept x ≤ px" reads as the far side of the slot.
+      const Face& f0 = planar.faces[static_cast<std::size_t>(cutFaces[0])];
+      const std::vector<Vec3> ring0 = FaceRing(planar, f0);
+      const Vec3 n0 = f0.surface.frame.zAxis;
+      const double px0 = ray3d::Dot(ray3d::Sub(C.axis.origin, ring0[0]), n0);
+      ucs::Ucs lf0 = C.axis;
+      const Vec3 wx00 = ray3d::Scale(n0, -1.0);
+      lf0.xAxis =
+          ray3d::Normalize(ray3d::Sub(wx00, ray3d::Scale(lf0.zAxis, ray3d::Dot(wx00, lf0.zAxis))));
+      lf0.yAxis = ray3d::Normalize(ray3d::Cross(lf0.zAxis, lf0.xAxis));
+      // The other face's threshold, expressed in lf0's coordinates. Its own local frame has
+      // xAxis' = -n1 = n0 = -lf0.xAxis (n1 is antiparallel to n0 for a box's two opposing faces), so
+      // its "kept x' <= px1" becomes "lf0-x >= -px1" — the far wing is kept where lf0-x >= qx1Signed.
+      const Face& f1 = planar.faces[static_cast<std::size_t>(cutFaces[1])];
+      const std::vector<Vec3> ring1 = FaceRing(planar, f1);
+      const Vec3 n1 = f1.surface.frame.zAxis;
+      if (ray3d::Dot(n0, n1) > -1.0 + 1e-6)
+        return Fail(Problem::BooleanCurvedFace, outWhy);  // not a simple opposing-face slot
+      const double px1 = ray3d::Dot(ray3d::Sub(C.axis.origin, ring1[0]), n1);
+      const double qx1Signed = -px1;
+      if (px0 < qx1Signed - e2) {
+        auto WL0 = [&](double x, double y, double z) { return ucs::UcsToWorld(lf0, Vec3{x, y, z}); };
+        const double q0 = std::sqrt(std::max(0.0, C.radius * C.radius - px0 * px0));
+        const double q1 = std::sqrt(std::max(0.0, C.radius * C.radius - qx1Signed * qx1Signed));
+        auto insideEveryBoxFace = [&](const std::vector<Vec3>& probe) {
+          for (const Face& bf : planar.faces) {
+            if (bf.surface.kind != SurfaceKind::Plane)
+              continue;
+            const std::vector<Vec3> br = FaceRing(planar, bf);
+            if (br.size() < 3)
+              continue;
+            const Vec3 bn = bf.surface.frame.zAxis;
+            for (const Vec3& p : probe)
+              if (ray3d::Dot(ray3d::Sub(p, br[0]), bn) > e2)
+                return false;
+          }
+          return true;
+        };
+        const std::vector<Vec3> slotProbe = {
+            WL0(px0, -q0, 0.0),       WL0(px0, q0, 0.0),       WL0(px0, -q0, C.length),
+            WL0(px0, q0, C.length),   WL0(qx1Signed, -q1, 0.0), WL0(qx1Signed, q1, 0.0),
+            WL0(qx1Signed, -q1, C.length), WL0(qx1Signed, q1, C.length)};
+        if (insideEveryBoxFace(slotProbe)) {
+          ucs::Ucs mf = lf0;
+          mf.xAxis = ray3d::Scale(lf0.xAxis, -1.0);
+          mf.yAxis = ray3d::Scale(lf0.yAxis, -1.0);
+          Solid wingLo;
+          Solid wingHi;
+          if (!BuildCylinderLongitudinalFlat(lf0, C.radius, C.length, px0, &wingLo, outWhy) ||
+              !BuildCylinderLongitudinalFlat(mf, C.radius, C.length, -qx1Signed, &wingHi, outWhy))
+            return false;
+          out->push_back(std::move(wingLo));
+          out->push_back(std::move(wingHi));
           return Succeed(outWhy);
         }
       }
