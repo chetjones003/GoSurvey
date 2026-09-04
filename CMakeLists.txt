@@ -985,6 +985,10 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GsIoViewportCameraTests.cpp
     tests/GsMigrateLegacyBreaklineTests.cpp
     tests/ViewportUcsTests.cpp
+    # REQ-318 increment 2 (issue #148) — the sub-object SELECTION: its store, the expiring
+    # reference, mutual exclusion and cross-solid depth order. Needs gosurvey_domain for
+    # SubmitSubObjectPick / ExpireSubObjectSelection, like ViewportUcsTests above.
+    tests/SubObjectSelectionTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into

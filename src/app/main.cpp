@@ -852,6 +852,12 @@ int main()
     // refresh above: keyed on its own staleness key, so an unrelated edit does not retessellate a
     // solid, and #120's "do not regenerate a solid's render mesh every frame" holds by construction.
     RefreshSolidDisplayGeometry(cmd);
+    // A sub-object reference is an index PLUS the solid it came from, and it EXPIRES rather than
+    // re-binding when that solid is replaced (REQ-318 item 10 / ADR-049). Swept here, once a frame,
+    // rather than at each of the many places a solid can be erased, undone or replaced — one sweep
+    // that cannot be forgotten beats a dozen call sites that can. Costs nothing when the selection
+    // is empty, which is the overwhelming case.
+    ExpireSubObjectSelection(cmd);
 
     const ImGuiViewport *mainVp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainVp->WorkPos);
@@ -1149,10 +1155,31 @@ int main()
     std::vector<float> highlightCircles;
     BuildSelectionHighlight(cmd, &highlightLines, &highlightCircles);
 
+    // The sub-object selection (REQ-318 item 11) and the pre-highlight of what a Ctrl click would
+    // take (item 14). Their edge and vertex linework is APPENDED to the ordinary highlight and hover
+    // channels — which is what gives each the never-occluded treatment and the colour it should
+    // have, without a new channel for either. Only the face tints need a channel of their own,
+    // because only they are depth-tested.
+    CadSubObjectOverlay subObjectOverlay;
+    {
+      std::vector<float> subObjectLines;
+      BuildSubObjectHighlight(cmd, &subObjectOverlay.selectedFaceTris, &subObjectOverlay.selectedFaceEdges,
+                              &subObjectLines);
+      highlightLines.insert(highlightLines.end(), subObjectLines.begin(), subObjectLines.end());
+    }
+
     std::vector<float> hoverLines;
     std::vector<float> hoverCircles;
-    if (cmd.activeSpaceIndex == kModelSpaceIndex) // no model-entity hover in paper space (incl. floating)
+    if (cmd.activeSpaceIndex == kModelSpaceIndex) { // no model-entity hover in paper space (incl. floating)
       BuildHoverHighlight(cmd, &hoverLines, &hoverCircles);
+      // The sub-object pre-highlight rides the same channel, so a hovered edge or vertex gets the
+      // hover blue rather than the selection yellow with no second colour to define. `CadUi` has
+      // already suppressed the entity hover while Ctrl is held, so the two cannot both be here.
+      std::vector<float> subHoverLines;
+      BuildSubObjectHoverHighlight(cmd, &subObjectOverlay.hoverFaceTris, &subObjectOverlay.hoverFaceEdges,
+                                   &subHoverLines);
+      hoverLines.insert(hoverLines.end(), subHoverLines.begin(), subHoverLines.end());
+    }
 
     std::vector<float> surveyMarkers;
     if (!cmd.surveyPoints.empty())
@@ -1362,7 +1389,13 @@ int main()
                                // The grid follows the UCS (REQ-154). Storage space, like the camera
                                // and every vertex the renderer receives. Paper space keeps its own
                                // 2D sheet grid and is deliberately excluded.
-                               paperSpace ? nullptr : &ucsGridFrame);
+                               paperSpace ? nullptr : &ucsGridFrame,
+                               // The selected and hovered solid FACE tints (REQ-318 items 11 and
+                               // 14). Model space only, like every other GL overlay here; the edges
+                               // and vertices of both went into the highlight and hover line
+                               // channels above and are drawn never-occluded, while these two are
+                               // depth-tested — see the renderer's own note at the draw.
+                               (paperSpace || subObjectOverlay.empty()) ? nullptr : &subObjectOverlay);
     cmd.perfRenderMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfRenderT0).count();
 

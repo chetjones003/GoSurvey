@@ -1336,6 +1336,28 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // per-frame path this function is called from.
     if (const std::vector<float>* border = SurfaceBorderEdges(cmd, static_cast<size_t>(e.index)))
       hlLines->insert(hlLines->end(), border->begin(), border->end());
+  } else if (e.type == SelectedEntity::Type::Solid) {
+    // REQ-318 item 12. Before this, a selected solid drew NO highlight at all — it picked, box-
+    // selected and erased correctly while giving the user nothing on screen to confirm what was
+    // selected. Exactly the omission REQ-087's feature line had, three branches up.
+    //
+    // The solid's own EDGES, which is what the entity pick tests against (`PickClosestCadEntity`
+    // picks solid edges and deliberately not triangles, because in 2D Wireframe the edges are the
+    // only thing on screen). So the highlight traces the thing that selects, in every visual style.
+    //
+    // Read from the tessellation cache rather than rebuilt from the topology: an arc edge is walked
+    // into chords there already, and this function is on the per-frame path (the Surface branch
+    // above records the same reasoning for the same reason).
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= cmd.cadSolids.size() || !cmd.cadSolids[k])
+      return;
+    const CadSolidPtr& sp = cmd.cadSolids[k];
+    for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
+      if (t.key.lock() != sp)
+        continue;
+      hlLines->insert(hlLines->end(), t.edgeVerts.begin(), t.edgeVerts.end());
+      break;
+    }
   } else if (e.type == SelectedEntity::Type::FilledRegion) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.cadFilledRegions.size())
@@ -1407,6 +1429,159 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlL
   if (cmd.active == AppCommandState::Kind::Chamfer &&
       cmd.chamferPhase == AppCommandState::ChamferPhase::WaitSecondEntity)
     AppendEntityHighlight(cmd, cmd.chamferFirstEntity, hlLines, hlCircles);
+}
+
+namespace {
+
+/// Chords to draw one solid edge with.
+///
+/// A DISPLAY budget, deliberately not `solidpick.cpp`'s `EdgeSearchChords`, which is a SEARCH
+/// budget: that one only has to be fine enough that the right edge wins a nearest-approach contest
+/// (the winner is then placed exactly by `ClosestPointOnEdge`), while this one is the line the user
+/// looks at. pi/24 per chord is the step `ChainHitsRect` and the curve fences already use, so a
+/// highlighted arc bends the same way everywhere in the program.
+int SubObjectEdgeChords(const brep::Edge& e) {
+  if (e.kind == brep::CurveKind::Line)
+    return 1;
+  constexpr double kPi = 3.14159265358979323846;
+  const double sweep = std::fabs(e.sweep);
+  // `sweep` is documented as meaningful for Arc and Ellipse only — an Intersection edge (the
+  // procedural surface-crossing curve REQ-314's booleans produce) leaves it zero, and keying on it
+  // would draw that edge as a single straight chord across a curve. Key on the KIND, as the pick
+  // does and for the same reason.
+  if (e.kind == brep::CurveKind::Intersection || !(sweep > 0.0) || !std::isfinite(sweep))
+    return 64;
+  return std::clamp(static_cast<int>(std::ceil(sweep / (kPi / 24.0))), 8, 96);
+}
+
+void AppendSeg(std::vector<float>* out, const ray3d::Vec3& a, const ray3d::Vec3& b) {
+  out->push_back(static_cast<float>(a.x));
+  out->push_back(static_cast<float>(a.y));
+  out->push_back(static_cast<float>(a.z));
+  out->push_back(static_cast<float>(b.x));
+  out->push_back(static_cast<float>(b.y));
+  out->push_back(static_cast<float>(b.z));
+}
+
+}  // namespace
+
+namespace {
+
+/// One sub-object's drawable geometry, appended. Shared by the selection highlight and the hover
+/// pre-highlight so the two cannot draw a picked face differently from a hovered one.
+/// Walk one solid edge into \p out as `GL_LINES`. Shared by the edge highlight and the face
+/// boundary, so a face's outline bends exactly as that same edge does when picked on its own.
+void AppendSolidEdge(const brep::Solid& sp, const brep::Edge& e, std::vector<float>* out) {
+  const int n = SubObjectEdgeChords(e);
+  ray3d::Vec3 prev = brep::EdgePointAt(sp, e, 0.0);
+  for (int i = 1; i <= n; ++i) {
+    const ray3d::Vec3 cur = brep::EdgePointAt(sp, e, static_cast<double>(i) / n);
+    AppendSeg(out, prev, cur);
+    prev = cur;
+  }
+}
+
+void AppendSubObjectGeometry(const AppCommandState& cmd, const SelectedSubObject& s, double armWorld,
+                             std::vector<float>* faceTris, std::vector<float>* faceEdges,
+                             std::vector<float>* lines) {
+  {
+    if (s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= cmd.cadSolids.size())
+      return;
+    const CadSolidPtr& sp = cmd.cadSolids[static_cast<size_t>(s.solidIndex)];
+    // The reference expires rather than re-binds (ADR-049): if the solid it names is not the solid
+    // it came from, an edit has replaced it and this index no longer means what it meant. Draw
+    // nothing rather than highlight a face the user never picked. `ExpireSubObjectSelection` sweeps
+    // these once a frame; this guard is what makes the order of the two not matter.
+    if (!sp || s.owner.lock() != sp)
+      return;
+    if (s.kind == solidpick::Kind::Face) {
+      if (s.index < 0 || static_cast<size_t>(s.index) >= sp->faces.size())
+        return;
+      // The face's BOUNDARY first, because it is what the user actually sees. Every loop — the
+      // outer one and any holes — walked as its own edges, so a curved face outlines as a curve
+      // and a face with a hole shows the hole.
+      if (faceEdges) {
+        for (const brep::Loop& loop : sp->faces[static_cast<size_t>(s.index)].loops) {
+          for (const brep::EdgeUse& use : loop.uses) {
+            if (use.edge < 0 || static_cast<size_t>(use.edge) >= sp->edges.size())
+              continue;
+            AppendSolidEdge(*sp, sp->edges[static_cast<size_t>(use.edge)], faceEdges);
+          }
+        }
+      }
+      if (!faceTris)
+        return;
+      // The face's OWN triangles, from the per-solid cache. Not from `solidDisplayGeometry`, which
+      // merges solids into shared buffers and keeps no face channel (REQ-318 item 13).
+      for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
+        if (t.key.lock() != sp)
+          continue;
+        if (t.triVerts.size() != t.triFaceIds.size() * 9)
+          break;  // inconsistent buffers: draw nothing rather than read past the end (REQ-201)
+        for (size_t tri = 0; tri < t.triFaceIds.size(); ++tri) {
+          if (t.triFaceIds[tri] != s.index)
+            continue;
+          faceTris->insert(faceTris->end(), t.triVerts.begin() + static_cast<std::ptrdiff_t>(tri * 9),
+                           t.triVerts.begin() + static_cast<std::ptrdiff_t>(tri * 9 + 9));
+        }
+        break;
+      }
+    } else if (s.kind == solidpick::Kind::Edge) {
+      if (!lines || s.index < 0 || static_cast<size_t>(s.index) >= sp->edges.size())
+        return;
+      AppendSolidEdge(*sp, sp->edges[static_cast<size_t>(s.index)], lines);
+    } else if (s.kind == solidpick::Kind::Vertex) {
+      if (!lines || s.index < 0 || static_cast<size_t>(s.index) >= sp->vertices.size())
+        return;
+      const ray3d::Vec3 v = sp->vertices[static_cast<size_t>(s.index)].p;
+      // A three-axis cross, not a dot: a dot is one pixel of a colour the drawing may already use,
+      // while a cross reads as a marker at any zoom and from any camera angle.
+      AppendSeg(lines, ray3d::Vec3{v.x - armWorld, v.y, v.z}, ray3d::Vec3{v.x + armWorld, v.y, v.z});
+      AppendSeg(lines, ray3d::Vec3{v.x, v.y - armWorld, v.z}, ray3d::Vec3{v.x, v.y + armWorld, v.z});
+      AppendSeg(lines, ray3d::Vec3{v.x, v.y, v.z - armWorld}, ray3d::Vec3{v.x, v.y, v.z + armWorld});
+    }
+  }
+}
+
+/// A vertex marker's arm, as a fixed fraction of the VIEW rather than of the model: a marker sized
+/// in world units is a speck when zoomed out and fills the screen when zoomed in, which is the same
+/// reason the snap glyphs are screen-sized (REQ-058).
+double SubObjectMarkerArm(const AppCommandState& cmd) {
+  return std::max(1.e-9, static_cast<double>(cmd.viewportLastSurveyLayoutOrthoHalfH) * 0.012);
+}
+
+}  // namespace
+
+void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* faceTris,
+                             std::vector<float>* faceEdges, std::vector<float>* lines) {
+  if (faceTris)
+    faceTris->clear();
+  if (faceEdges)
+    faceEdges->clear();
+  if (lines)
+    lines->clear();
+  const double arm = SubObjectMarkerArm(cmd);
+  for (const SelectedSubObject& s : cmd.subObjectSelection)
+    AppendSubObjectGeometry(cmd, s, arm, faceTris, faceEdges, lines);
+}
+
+void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>* faceTris,
+                                  std::vector<float>* faceEdges, std::vector<float>* lines) {
+  if (faceTris)
+    faceTris->clear();
+  if (faceEdges)
+    faceEdges->clear();
+  if (lines)
+    lines->clear();
+  if (!cmd.subObjectHoverValid)
+    return;
+  // Already selected? Say nothing. The selection highlight is the stronger statement, and drawing a
+  // quieter one over it only muddies the colour — the rule BuildHoverHighlight already applies to
+  // entities ("skip if already selected — selection highlight takes visual precedence").
+  for (const SelectedSubObject& s : cmd.subObjectSelection)
+    if (s.sameTarget(cmd.subObjectHover))
+      return;
+  AppendSubObjectGeometry(cmd, cmd.subObjectHover, SubObjectMarkerArm(cmd), faceTris, faceEdges, lines);
 }
 
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,

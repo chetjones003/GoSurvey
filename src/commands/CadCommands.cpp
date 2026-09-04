@@ -11481,6 +11481,11 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       st.stretchRectMxY = std::max(st.selBoxAnchorY, wy);
     }
     st.selBoxWaitingSecond = false;
+    // A completed fence IS an entity selection, so it takes the other side of REQ-318 item 9's
+    // mutual exclusion: sub-objects go. Here rather than only in the viewport's click handler
+    // because this is the shared path a transcript can drive — the clear that lives in `CadUi.cpp`
+    // covers the plain CLICK, which has no headless equivalent at all.
+    st.subObjectSelection.clear();
     log.push_back("Fence — CAD " + std::to_string(st.selection.size()) + ", survey " +
                   std::to_string(st.selectedSurveyPointIndices.size()) +
                   (fenceLeftToRightWindowMode ? " (window)." : " (crossing)."));
@@ -19570,6 +19575,10 @@ void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& lo
 
 void ClearCadSelection(AppCommandState& st) {
   st.selection.clear();
+  // The sub-object selection goes with it. Every caller of this function means "nothing is selected
+  // now" — ESC, a new drawing, a command that consumes the selection — and leaving sub-objects
+  // behind would be a selection the user cannot see a reason for (REQ-318 item 9).
+  st.subObjectSelection.clear();
   st.selBoxWaitingSecond = false;
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
@@ -23760,6 +23769,163 @@ bool ImportGltfModel(AppCommandState& st, const std::string& path, double unitSc
 // B-rep solids (REQ-313 / ADR-045, GitHub issue #146 — Phase 3 of #120)
 // =================================================================================================
 
+// =================================================================================================
+// B-rep solids (REQ-313 / ADR-045, GitHub issue #146 — Phase 3 of #120)
+// =================================================================================================
+
+// --- Sub-object selection (REQ-318 increment 2 / D-2026-09-04-a, issue #148) ---------------------
+
+int ExpireSubObjectSelection(AppCommandState& st) {
+  if (st.subObjectSelection.empty())
+    return 0;
+  const size_t before = st.subObjectSelection.size();
+  auto dead = [&](SelectedSubObject& s) {
+    // IDENTITY decides, the index is only a lookup (ADR-049). A solid is immutable and REPLACED
+    // rather than edited, so an edit that changed the topology has put a *different* object in the
+    // store and this `weak_ptr` no longer locks — that is the expiry the ADR is about, and it fires
+    // however the replacement happened (a boolean, an undo, a direct edit) with no call site having
+    // to remember anything.
+    const CadSolidPtr sp = s.owner.lock();
+    if (!sp)
+      return true;
+    // Erasing an UNRELATED solid shifts every index after it. The selection must survive that: the
+    // solid the user picked is still there, still the same object, and losing the selection because
+    // something else was deleted would be a defect rather than an expiry. So the cached index is
+    // REPAIRED from the identity rather than trusted.
+    if (s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= st.cadSolids.size() ||
+        st.cadSolids[static_cast<size_t>(s.solidIndex)] != sp) {
+      const auto at = std::find(st.cadSolids.begin(), st.cadSolids.end(), sp);
+      if (at == st.cadSolids.end())
+        return true;  // still alive somewhere, but no longer in this drawing
+      s.solidIndex = static_cast<int>(at - st.cadSolids.begin());
+    }
+    if (s.index < 0)
+      return true;
+    switch (s.kind) {
+    case solidpick::Kind::Face:   return static_cast<size_t>(s.index) >= sp->faces.size();
+    case solidpick::Kind::Edge:   return static_cast<size_t>(s.index) >= sp->edges.size();
+    case solidpick::Kind::Vertex: return static_cast<size_t>(s.index) >= sp->vertices.size();
+    case solidpick::Kind::None:   return true;
+    }
+    return true;
+  };
+  st.subObjectSelection.erase(
+      std::remove_if(st.subObjectSelection.begin(), st.subObjectSelection.end(), dead),
+      st.subObjectSelection.end());
+  return static_cast<int>(before - st.subObjectSelection.size());
+}
+
+void ToggleSubObjectSelection(AppCommandState& st, const SelectedSubObject& pick, bool toggle) {
+  if (pick.kind == solidpick::Kind::None || pick.index < 0 || pick.solidIndex < 0)
+    return;
+  auto it = std::find_if(st.subObjectSelection.begin(), st.subObjectSelection.end(),
+                         [&](const SelectedSubObject& s) { return s.sameTarget(pick); });
+  if (it != st.subObjectSelection.end()) {
+    if (toggle)
+      st.subObjectSelection.erase(it);
+    return;  // a plain click on something already selected is a no-op, not a duplicate
+  }
+  st.subObjectSelection.push_back(pick);
+}
+
+bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
+                              const solidpick::Tolerance& tol, SelectedSubObject* out,
+                              solidpick::Pick* outPick) {
+  if (!out)
+    return false;
+  bool any = false;
+  double bestT = 0.0;
+  SelectedSubObject best{};
+  solidpick::Pick bestPick{};
+  for (size_t i = 0; i < st.cadSolids.size(); ++i) {
+    if (!SolidVisible(st, i))
+      continue;
+    const CadSolidPtr& sp = st.cadSolids[i];
+    // The solid's OWN cached triangles, not the coalesced display batch: the batch merges solids
+    // that draw identically into shared buffers (#194) and carries no per-face channel, so neither
+    // the pick nor the highlight can be resolved from it (REQ-318 item 13).
+    const auto ce = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
+                                 [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+    if (ce == st.solidDisplayCache.end() || ce->empty())
+      continue;  // never tessellate here — a pick must not cost a tessellation (REQ-318 item 7)
+    solidpick::Pick p;
+    if (!solidpick::PickSubObject(*sp, ce->triVerts, ce->triFaceIds, ray, tol, &p))
+      continue;
+    // DEBT-1 from TASK-189, closed here. PickSubObject's occlusion rule is per-solid — it cannot
+    // know that a nearer solid stands in front of this one — so the cross-solid order is the
+    // caller's, on the distance the query returns for exactly this purpose.
+    if (any && !(p.rayT < bestT))
+      continue;
+    any = true;
+    bestT = p.rayT;
+    bestPick = p;
+    best.solidIndex = static_cast<int>(i);
+    best.kind = p.kind;
+    best.index = p.index;
+    best.owner = sp;
+  }
+  if (!any)
+    return false;
+  *out = best;
+  if (outPick)
+    *outPick = bestPick;
+  return true;
+}
+
+bool BuildSubObjectHoverRow(const AppCommandState& st, const SelectedSubObject& s,
+                            SubObjectHoverRow* out) {
+  if (!out || s.kind == solidpick::Kind::None || s.index < 0)
+    return false;
+  const CadSolidPtr sp = s.owner.lock();
+  if (!sp || s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= st.cadSolids.size() ||
+      st.cadSolids[static_cast<size_t>(s.solidIndex)] != sp)
+    return false;  // expired, or the index has not been repaired yet — say nothing rather than guess
+  out->title = std::string("Solid ") + solidpick::KindName(s.kind) + " " + std::to_string(s.index);
+  // 1-based, matching how the command line numbers solids everywhere else. A readout that counts
+  // from zero while the log counts from one is two names for one object.
+  out->solid = std::to_string(s.solidIndex + 1);
+  static const EntityAttributes kDefaults{};
+  const EntityAttributes& a = static_cast<size_t>(s.solidIndex) < st.cadSolidAttrs.size()
+                                  ? st.cadSolidAttrs[static_cast<size_t>(s.solidIndex)]
+                                  : kDefaults;
+  // The STORED values, not the resolved ones. "ByLayer" is the answer the user needs — it is what
+  // the Properties panel shows and what they would change — where a resolved "#FFFFFF" would hide
+  // the fact that the object is following its layer at all. Same choice AutoCAD's rollover makes.
+  out->color = a.color.empty() ? std::string("ByLayer") : a.color;
+  out->layer = a.layer.empty() ? std::string("0") : a.layer;
+  out->linetype = a.linetype.empty() ? std::string("ByLayer") : a.linetype;
+  return true;
+}
+
+bool SubmitSubObjectPick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
+                         bool toggle, std::vector<std::string>& log) {
+  // Mutual exclusion, and the reason it is done HERE rather than by each caller: #148's criterion 2
+  // ("sub-object selection does not interfere with whole-entity selection") is only structural if
+  // there is one place that enforces it. Two callers each clearing the other selection is two
+  // places to forget.
+  st.selection.clear();
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;  // Ctrl is unambiguous: it never drags a fence
+
+  SelectedSubObject sub;
+  if (!PickSubObjectAcrossSolids(st, ray, tol, &sub)) {
+    // A miss CLEARS. It does not arm a box and it does not silently do nothing — REQ-201: the user
+    // gets told which of the two just happened.
+    const bool had = !st.subObjectSelection.empty();
+    st.subObjectSelection.clear();
+    log.push_back(had ? "Sub-object selection cleared - nothing under the cursor."
+                      : "No solid face, edge or vertex under the cursor.");
+    return false;
+  }
+  const bool wasSelected = std::any_of(st.subObjectSelection.begin(), st.subObjectSelection.end(),
+                                       [&](const SelectedSubObject& s) { return s.sameTarget(sub); });
+  ToggleSubObjectSelection(st, sub, toggle);
+  log.push_back(std::string(toggle && wasSelected ? "Deselected " : "Selected ") +
+                solidpick::KindName(sub.kind) + " " + std::to_string(sub.index) + " of solid " +
+                std::to_string(sub.solidIndex + 1) + " (" + std::to_string(st.subObjectSelection.size()) +
+                " sub-object(s) selected).");
+  return true;
+}
 bool SolidVisible(const AppCommandState& st, size_t solidIndex) {
   if (solidIndex >= st.cadSolids.size())
     return false;

@@ -941,7 +941,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const CadSurfaceDisplayGeometry* surfaceGeometry,
                                    const VolumeMapDisplayGeometry* volumeMap,
                                    const std::vector<float>* removalLines,
-                                   const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame) {
+                                   const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame,
+                                   const CadSubObjectOverlay* subObjectOverlay) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -1064,6 +1065,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   constexpr GLfloat kLwSurvey = 1.65f;
   constexpr GLfloat kLwSnap = 1.35f;
   constexpr GLfloat kLwGizmo = 1.1f;
+  // REQ-318 item 14: a hovered FACE reads purple, where a hovered edge or vertex reads the ordinary
+  // hover blue. Three sub-object kinds share one cursor and precedence decides between them within
+  // a few pixels, so telling them apart has to be possible at a glance rather than by reading the
+  // command line (user request, 2026-09-04). Named once here because the fill and the outline must
+  // be the same colour or they read as two different things.
+  constexpr GLfloat kSubFaceHoverR = 0.72f;
+  constexpr GLfloat kSubFaceHoverG = 0.45f;
+  constexpr GLfloat kSubFaceHoverB = 1.f;
 
   GLint locMvp = glGetUniformLocation(lineProgram_, "uMVP");
   GLint locCol = glGetUniformLocation(lineProgram_, "uColor");
@@ -2031,6 +2040,80 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hvCircGeom.size() / 3));
       glLineWidth(kLwMain);
     }
+  }
+
+  // --- Sub-object face tint (REQ-318 item 11) — THE ONE DEPTH-TESTED OVERLAY -------------------
+  //
+  // The block comment above states the rule this deliberately breaks, so the exception is written
+  // where someone changing the rule will read it. A selected FACE of a solid is a patch of a closed
+  // volume, not a stroke of 2D linework: drawn never-occluded, a face on the far side glows through
+  // the body and reads as being on the near side. The sub-object selection's edges and vertices are
+  // NOT here — they arrive through `highlightLines` below and keep the never-occluded treatment,
+  // because a line one pixel wide sunk into the surface it lies on is simply gone (D-2026-09-04-a).
+  //
+  // In 2D Wireframe no solid faces are drawn and nothing has written depth, so every fragment
+  // passes GL_LEQUAL against the cleared buffer and the tint draws. That is the intent, not an
+  // accident of the state: in the default style the tint is the only way a face selection is
+  // visible at all.
+  if (subObjectOverlay && !subObjectOverlay->empty()) {
+    std::vector<float> subTriRel;
+    const auto drawTint = [&](const std::vector<float>& tris, float r, float g, float b, float a) {
+      if (tris.empty() || tris.size() % 9 != 0)
+        return;
+      ConvertLineVertsWorldToView(tris, viewAnchorX, viewAnchorY, &subTriRel);
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+      glUniform4f(locCol, r, g, b, a);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(subTriRel.size() * sizeof(float)),
+                   subTriRel.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(subTriRel.size() / 3));
+    };
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_FALSE);  // tint the face; do not become the surface for anything drawn after it
+    // Pulled toward the viewer, or the tint and the face it covers are the same depth and the
+    // result is z-fighting speckle rather than a highlight.
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.f, -1.f);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Hover FIRST, so a selected face drawn over a hovered one wins — the same "selection always
+    // wins" ordering the hover and highlight line channels use a few lines above. In practice the
+    // two never overlap (BuildSubObjectHoverHighlight emits nothing for an already-selected
+    // sub-object); the order is what makes that a belt rather than the only brace.
+    //
+    // PURPLE for a face, against the blue an edge or a vertex gets, so the three kinds are told
+    // apart at a glance rather than by reading the command line (user request, 2026-09-04).
+    drawTint(subObjectOverlay->hoverFaceTris, kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB, 0.30f);
+    // The selection accent, translucent: opaque would hide the shading that says which way the face
+    // turns, and on a curved face that shading is how the user reads the shape they just picked.
+    drawTint(subObjectOverlay->selectedFaceTris, 1.f, 0.92f, 0.15f, 0.42f);
+    glDisable(GL_BLEND);
+    glPolygonOffset(0.f, 0.f);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    depthForOverlay();  // back to the rule for everything below
+
+    // The face BOUNDARY, and this is the half that actually reads. A translucent fill tints
+    // whatever is behind it, and in 2D Wireframe — the default — there is nothing behind it: solids
+    // draw no faces there, so the wash lands on the empty viewport and comes out near black. The
+    // outline is what makes a face selection visible at all in the style users spend most of their
+    // time in, and it is how every CAD package shows this.
+    //
+    // NOT depth-tested, unlike the fill: it is linework, one pixel wide, and the rule the fill has
+    // to break is the rule this obeys — sunk into the surface it traces, it would disappear.
+    const auto drawFaceEdges = [&](const std::vector<float>& segs, float r, float g, float b) {
+      if (segs.empty() || segs.size() % 6 != 0)
+        return;
+      ConvertLineVertsWorldToView(segs, viewAnchorX, viewAnchorY, &subTriRel);
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+      glUniform4f(locCol, r, g, b, 1.f);
+      glLineWidth(kLwHiLine);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(subTriRel.size() * sizeof(float)),
+                   subTriRel.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(subTriRel.size() / 3));
+      glLineWidth(kLwMain);
+    };
+    drawFaceEdges(subObjectOverlay->hoverFaceEdges, kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB);
+    drawFaceEdges(subObjectOverlay->selectedFaceEdges, 1.f, 0.92f, 0.15f);
   }
 
   // --- Selection highlight (accent stroke on top of committed geometry) ---

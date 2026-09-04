@@ -115,7 +115,24 @@ public:
                    //
                    // Null means the WCS and takes the original world-XY code path unchanged, which
                    // is what every drawing that never touches UCS continues to get.
-                   const ucs::Ucs* gridFrame = nullptr);
+                   const ucs::Ucs* gridFrame = nullptr,
+                   // REQ-318 items 11 and 14 — the tinted fills over a selected solid FACE and over
+                   // the one a `Ctrl` click WOULD take. Storage coordinates, already filtered and
+                   // resolved by the caller like every other overlay here.
+                   //
+                   // Its own channel, and the only overlays in this signature that are DEPTH-TESTED.
+                   // The blanket rule a few hundred lines down — "overlays are UI, never occluded:
+                   // a selection highlight that hides behind the object it is highlighting is a
+                   // bug" — was written for 2D linework and gives the wrong answer for one face of
+                   // a closed volume: never-occluded, a selected back face glows through the body.
+                   // The sub-object selection's EDGE and VERTEX linework keeps the ordinary
+                   // never-occluded treatment and arrives through \p highlightLines, because a line
+                   // one pixel wide sunk into the surface it lies on is invisible (D-2026-09-04-a).
+                   //
+                   // In 2D Wireframe there is no depth buffer content to be occluded by — solids
+                   // draw no faces there — so the tint simply draws, which is the only way a face
+                   // selection can be shown in the default style.
+                   const CadSubObjectOverlay* subObjectOverlay = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
