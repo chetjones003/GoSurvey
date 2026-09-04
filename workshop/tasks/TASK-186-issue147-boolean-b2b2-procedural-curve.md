@@ -190,6 +190,16 @@ the offset quartic are the next slices.
 - torus ∩ anything, cone parabola / hyperbola sections.
 - The fully-general tilted-AND-skew cylinder-cylinder pair.
 
+**PROGRESS 2026-09-04 — `cylinder − box` slot done (feat/issue242-cylinder-box-slot, issue #242).**
+A slot (two parallel full-length cutting faces) leaves two disjoint "wing" pieces — each is exactly
+the single-flat notch shape, so **no new builder**: both wings call `BuildCylinderLongitudinalFlat`
+directly, the second in a frame with `xAxis`/`yAxis` both negated (mirrored, still right-handed) so
+"kept x ≤ px" reads as the slot's far side. Recogniser: `cutFaces` now a vector (was a single
+`cutFace`); `cutCount==2` with antiparallel normals → express face1's threshold in face0's frame
+(`qx1Signed = -px1`, since face1's own local xAxis = -n1 = n0 = -lf0.xAxis) → probe the slot's 8
+extreme points against every other box face → two `BuildCylinderLongitudinalFlat` calls. A
+part-length slot still refused. 4v/6e/4f χ=2 each wing, closed-form. Full suite green (1118).
+
 **PROGRESS 2026-09-04 — `cylinder − box` partial-length pocket done (feat/issue242-cylinder-box-pocket,
 issue #242).** `BuildCylinderPocket`: a rectangular bite that reaches neither cap — floor + ceiling
 (circular-segment planar faces) + 5 cylinder-wall sub-bands (lower/upper split minor/major at u=±φ to

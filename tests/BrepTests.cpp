@@ -2083,11 +2083,40 @@ TEST_CASE("Curved B2b-2: cylinder - box mills a single lengthwise flat (a notch)
     REQUIRE(why == Problem::BooleanCurvedFace);
   }
 
-  SECTION("a slot bounded by two parallel faces is refused by name") {
+  SECTION("a slot bounded by two parallel faces leaves two wings") {
+    const double pxw = -2.0;  // each wing's own kept-side threshold (symmetric slot: +/-2)
+    const double qw = std::sqrt(r * r - pxw * pxw);
+    const double wingSeg = r * r * std::acos(pxw / r) - pxw * qw;  // area of x > pxw
+    const double wingVol = L * (kPi * r * r - wingSeg);  // kept x <= pxw (or the mirror x >= -pxw)
     Solid cyl;
     Solid box;
     REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
     REQUIRE(brep::MakeBox(At(0, 0, -15), 4, 40, 40, &box, &why));  // x[-2,2] - cuts two flats
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(out.size() == 2);
+    double total = 0.0;
+    for (const Solid& wing : out) {
+      REQUIRE(brep::Validate(wing) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(wing));
+      REQUIRE(CountOf(wing).v == 4);
+      REQUIRE(CountOf(wing).e == 6);
+      REQUIRE(CountOf(wing).f == 4);
+      const double v = brep::ComputeMassProperties(wing).volume;
+      REQUIRE(v == Approx(wingVol).epsilon(1e-9));
+      total += v;
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(wing, 0.006, &t, &why));
+      RequireWindingMatchesNormals(t);
+    }
+    REQUIRE(total < kPi * r * r * L);  // strictly less than the full cylinder - the slot is real
+  }
+
+  SECTION("a slot that reaches only part of the length is still refused by name") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(0, 0, 3), 4, 40, 4, &box, &why));  // x[-2,2], z[3,7] only
     std::vector<Solid> out;
     REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &out, &why));
     REQUIRE(why == Problem::BooleanCurvedFace);
