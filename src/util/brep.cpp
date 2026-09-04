@@ -6544,6 +6544,85 @@ struct SkewBranch {
   return Succeed(outWhy);
 }
 
+/// One stub of `A − B` (thin − thick) for a **skew** (offset) perpendicular branch pipe (REQ-314
+/// B2b-2, GitHub issue #242): the thick `B` bites the offset thin `A` in two. The \p sideSign stub —
+/// `A`'s wall in two u halves from the flat cap at `fr.yAxis`-parameter \p yFlat to the quartic mouth,
+/// plus an **inward** off-centre patch of `B`'s wall as the concave end. 4v / 6e / 4f, χ = 2.
+[[nodiscard]] bool BuildSkewBranchPipeThinStub(const ucs::Ucs& fr, double r, double R, double g,
+                                               double yFlat, int sideSign, Solid* out,
+                                               Problem* outWhy) {
+  SkewBranch sb;
+  const double sMax = std::sqrt(std::max(0.0, R * R - (g - r) * (g - r)));
+  if (!MakeSkewBranch(fr, r, R, g, &sb) || !(std::fabs(yFlat) > sMax + 1e-9 * (R + r)))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const int msign = sideSign > 0 ? 1 : -1;
+  const Vec3 Y = fr.yAxis;
+  auto W = [&](const Vec3& l) { return sb.W(l); };
+  auto cpt = [&](double phi) { return sb.cpt(phi, msign); };
+
+  Solid s;
+  const int p0 = AddVertex(&s, cpt(0.0));                 // mouth φ = 0
+  const int pP = AddVertex(&s, cpt(kPi));                 // mouth φ = π
+  const int q0 = AddVertex(&s, sb.thinPt(0.0, yFlat));    // rim φ = 0
+  const int qP = AddVertex(&s, sb.thinPt(kPi, yFlat));    // rim φ = π
+
+  auto isect = [&](int a, int b, double witnessPhi) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = a;
+    e.v1 = b;
+    e.frame.origin = cpt(witnessPhi);
+    e.isectSurfaces = {sb.aSurf, sb.bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int eP = isect(p0, pP, 0.5 * kPi);
+  const int eN = isect(pP, p0, 1.5 * kPi);
+  const int sp0 = AddLine(&s, p0, q0);
+  const int spP = AddLine(&s, pP, qP);
+  const Vec3 fc = W(Vec3{g, yFlat, 0.0});
+  const int rc0 = AddArc(&s, q0, qP, fc, Y, kPi);
+  const int rcP = AddArc(&s, qP, q0, fc, Y, kPi);
+
+  auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = sb.aSurf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  const double uLo = std::atan2(std::sqrt(std::max(0.0, R * R - (g + r) * (g + r))), g + r);
+  const double uHi = std::atan2(std::sqrt(std::max(0.0, R * R - (g - r) * (g - r))), g - r);
+  auto dimple = [&](std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = sb.bSurf;
+    f.surface.inward = true;
+    f.uStart = msign > 0 ? uLo : -uHi;
+    f.uEnd = msign > 0 ? uHi : -uLo;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+
+  if (msign > 0) {
+    wall(0.0, kPi, {{eP, false}, {spP, false}, {rc0, true}, {sp0, true}});
+    wall(kPi, kTwoPi, {{eN, false}, {sp0, false}, {rcP, true}, {spP, true}});
+    s.faces.push_back(MakePlaneFace(fc, Y, {{rc0, false}, {rcP, false}}));
+    dimple({{eN, true}, {eP, true}});
+  } else {
+    wall(0.0, kPi, {{rc0, false}, {spP, true}, {eP, true}, {sp0, false}});
+    wall(kPi, kTwoPi, {{rcP, false}, {sp0, true}, {eN, true}, {spP, false}});
+    s.faces.push_back(MakePlaneFace(fc, ray3d::Scale(Y, -1.0), {{rc0, true}, {rcP, true}}));
+    dimple({{eP, false}, {eN, false}});
+  }
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// `B − A` for a **non-perpendicular** branch pipe (REQ-314 B2b-2, GitHub issue #242): the thin
 /// branch `A` (radius \p r, tilted by \p alpha) bored clean through the thick main `B` (radius \p R,
 /// axis `fr.zAxis`, caps \p zB0 / \p zB1). `BuildBranchPipeSubtract` generalised the same way
@@ -7064,14 +7143,22 @@ struct SkewBranch {
     if (kAlong - r < eps || thick.length - kAlong - r < eps)
       return false;  // a thick cap sits inside the lens
     const bool minuendThick = A.radius > B.radius;
-    if (op == BoolOp::Subtract && !minuendThick)
-      return false;  // thin − thick (two stubs) — a later skew slice
     *handled = true;
     const double zB0 = -kAlong;
     const double zB1 = thick.length - kAlong;
     // thin cap parameters along fr.yAxis, measured from cThick (= sfr.origin).
     const double yLo = std::min(t0, t1);
     const double yHi = std::max(t0, t1);
+    if (op == BoolOp::Subtract && !minuendThick) {
+      Solid up;
+      Solid down;
+      if (!BuildSkewBranchPipeThinStub(sfr, r, R, gap, yHi, 1, &up, outWhy) ||
+          !BuildSkewBranchPipeThinStub(sfr, r, R, gap, yLo, -1, &down, outWhy))
+        return false;
+      out->push_back(std::move(up));
+      out->push_back(std::move(down));
+      return Succeed(outWhy);
+    }
     Solid result;
     bool ok = false;
     if (op == BoolOp::Intersect)
