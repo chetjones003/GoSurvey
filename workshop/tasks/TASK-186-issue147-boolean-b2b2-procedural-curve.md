@@ -190,6 +190,15 @@ the offset quartic are the next slices.
 - sphere ∩ cylinder, torus ∩ anything, cone parabola / hyperbola sections.
 - Skew (non-coplanar) cylinder axes.
 
+**PROGRESS 2026-09-04 — non-perpendicular branch pipe SUBTRACT + UNION done (feat/issue242-branch-pipe-angled-sub-union, issue #242).**
+`BuildAngledBranchPipeSubtract` / `BuildAngledBranchPipeUnion` = the perpendicular builders verbatim
+except `aSurf.frame` (tilted) + the closed-form `cpt`; UNION additionally re-aims the two thin stub
+caps ⊥ the tilted axis (`thinPt(φ,ζ)`, rim arcs about `±t̂`, centres `ζ·t̂`) and takes `zetaA0/zetaA1`
+(thin-axis params) instead of `xA0/xA1`. `TryBooleanBranchPipe` non-perp branch now dispatches all
+three ops; `thin − thick` (two stubs) still refused. SUBTRACT 8v/12e/6f genus 1, UNION 12v/18e/10f;
+volumes `πR²L − lens` and `πR²L + πr²L − lens` vs a 1200×1200 section integral (5e-3). Full suite
+green (1117 ctest). No `.gs` bump.
+
 **PROGRESS 2026-09-04 — non-perpendicular branch pipe INTERSECT done (feat/issue242-branch-pipe-angled, issue #242).**
 `BuildAngledBranchPipeIntersection` = `BuildBranchPipeIntersection` verbatim except `aSurf.frame`
 (thin axis = `cos α·x̂ + sin α·ẑ`) and the witness `cpt(φ,sign)` — the closed-form curve
