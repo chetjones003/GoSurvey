@@ -3018,9 +3018,25 @@ TEST_CASE("Curved B2b-2: INTERSECT of a SKEW (offset) perpendicular branch pipe 
     REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(5e-3));
   }
 
-  SECTION("thin - thick of a skew pair is still refused - a later slice") {
+  SECTION("thin - thick of a skew pair bites the branch in two - a stub each side") {
+    const double total = kPi * r * r * 30.0 - vref;
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(out.size() == 2);
+    double sum = 0.0;
+    for (const Solid& stub : out) {
+      REQUIRE(brep::Validate(stub) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(stub));
+      REQUIRE(CountOf(stub).v == 4);
+      REQUIRE(CountOf(stub).e == 6);
+      REQUIRE(CountOf(stub).f == 4);
+      REQUIRE(brep::EulerCharacteristic(stub) == 2);
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(stub, 0.008, &t, &why));
+      RequireWindingMatchesNormals(t);
+      sum += brep::ComputeMassProperties(stub).volume;
+    }
+    REQUIRE(sum == Approx(total).epsilon(5e-3));
   }
 }
 

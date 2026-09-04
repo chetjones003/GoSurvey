@@ -190,6 +190,12 @@ the offset quartic are the next slices.
 - sphere ∩ cylinder, torus ∩ anything, cone parabola / hyperbola sections.
 - Skew (non-coplanar) cylinder axes.
 
+**PROGRESS 2026-09-04 — skew branch pipe `thin − thick` done (feat/issue242-skew-branch-pipe-thin-minus-thick, issue #242).**
+`BuildSkewBranchPipeThinStub` = `BuildBranchPipeThinStub` via the `SkewBranch` helper, off-centre
+inward dimple u ∈ [uLo,uHi] / [−uHi,−uLo]. Two stubs 4v/6e/4f χ=2, total volume `πr²L − lens` (5e-3).
+**Perpendicular branch-pipe family now COMPLETE** — coplanar + skew × INTERSECT/SUBTRACT/UNION/thin−thick.
+Only the fully-general **tilted-AND-skew** cyl-cyl case is left. Full suite green (1118).
+
 **PROGRESS 2026-09-04 — skew (offset) perpendicular branch pipe SUBTRACT + UNION done (feat/issue242-skew-branch-pipe-sub-union, issue #242).**
 Because the offset thin (axis ‖ fr.yAxis, x = g > r) pierces the thick entirely on its +x half,
 **both mouths land in u ∈ (−π/2, π/2)** — so the thick wall splits at **ψ = 0 / ψ = π** (not ±π/2),
