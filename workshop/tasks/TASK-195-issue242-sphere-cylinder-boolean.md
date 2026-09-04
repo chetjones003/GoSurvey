@@ -178,4 +178,21 @@ Tests — `BrepTests` "sphere INTERSECT cylinder with an offset axis (the quarti
 repeated call); `sphere ∪ cylinder` (10/16/8, χ = 2, volume `(4/3)πRs³ + πr²·L − vref`, reversed
 operand order); `cylinder − sphere` offset still refused. Full suite green (1115 ctest cases).
 
-**Next:** the `d ≤ r` pole-covered sub-case; `cylinder − sphere` offset; then Slice C (skew axis).
+**Slice B / `cylinder − sphere` (cylinder minuend) — implemented
+(feat/issue242-cylinder-sphere-offset-subtract).** Same sub-case guard. `src/util/brep.cpp`:
+
+- `BuildCylinderSphereOffsetStub(fr, r, Rs, d, zFlat, sideSign, ...)` — one disjoint stub: a short
+  cylinder with a flat plane cap and, on its inner end, an **inward** lens-shaped sphere dimple (the
+  patch the cylinder encloses that side) bounded by one quartic loop. 4v / 6e (2 procedural) / 4f,
+  χ = 2. Outer winding mirrors the offset UNION boss; the dimple is the offset INTERSECT cap
+  reversed + `inward`. Reuses `IntegrateSphereFaceNumeric` and the tessellator's lens path unchanged.
+- `BuildCylinderSphereOffsetSubtract(...)` — calls the stub builder twice, pushes two solids.
+- `TryBooleanSphereCylinder`'s offset branch now also `*handled`s `op == Subtract && !sphereIsMinuend`;
+  doc-comment + block comment refreshed. `.gs` unchanged (retired anyway — D-2026-09-03-h).
+
+Tests — the former "cylinder − sphere offset still refused" section replaced with the real case: two
+stubs, per-stub 4/6/4, χ = 2, 2 Intersection edges; total volume `πr²·L − vref` vs the 1400×1400
+plug reference (3e-3); summed tessellated volume; tilted survey frame + `Translate`; a
+cap-inside-sphere config still refused. Full suite green (1115 ctest cases).
+
+**Next:** the `d ≤ r` pole-covered sub-case; then Slice C (skew axis).
