@@ -797,8 +797,10 @@ struct SphereIsectStrip {
     }
   if (vMax > vMin) {
     const double margin = 0.35 * (vMax - vMin) + 1e-6;
-    st.vSearchLo = std::max(-kHalfPi, vMin - margin);
-    st.vSearchHi = std::min(kHalfPi, vMax + margin);
+    // A face whose own latitude span reaches a pole is a polar cap (issue #242, the d < r sub-case):
+    // the bite runs right off that end, so the scan has to include the pole itself.
+    st.vSearchLo = f.vStart <= -kHalfPi + 1e-9 ? -kHalfPi : std::max(-kHalfPi, vMin - margin);
+    st.vSearchHi = f.vEnd >= kHalfPi - 1e-9 ? kHalfPi : std::min(kHalfPi, vMax + margin);
   }
   return st;
 }
@@ -843,6 +845,20 @@ struct SphereIsectStrip {
     }
     vp = vc;
     gp = gc;
+  }
+  if (roots == 1) {
+    // The bite runs off one end of the search range — a polar cap (issue #242, the d < r sub-case).
+    // `inside` above the lone root ⟹ the cap reaches the top of the range (a pole), and vice versa.
+    if (g(st.vSearchHi) <= 0.0) {
+      *vLo = first;
+      *vHi = st.vSearchHi;
+      return true;
+    }
+    if (g(st.vSearchLo) <= 0.0) {
+      *vLo = st.vSearchLo;
+      *vHi = first;
+      return true;
+    }
   }
   if (roots < 2)
     return false;
@@ -4976,9 +4992,13 @@ struct OffsetScaffold {
   [[nodiscard]] Vec3 W(const Vec3& l) const { return ucs::UcsToWorld(fr, l); }
 };
 
+/// \p d is the axis-to-centre offset. `d > r` (the axis misses the sphere pole) and `d < r` (the
+/// pole-covered sub-case, issue #242) both produce the same four-edge scaffold — a closed quartic
+/// loop at every longitude — and differ only in which sphere patches the callers keep. `d ≈ r`
+/// (axis tangent to the pole) is degenerate and refused.
 [[nodiscard]] bool MakeOffsetScaffold(const ucs::Ucs& fr, double r, double Rs, double d,
                                       OffsetScaffold* sc) {
-  if (!(r > 0.0) || !(d > r) || !(d + r < Rs))
+  if (!(r > 0.0) || !(d > 0.0) || !(d + r < Rs) || std::fabs(d - r) <= 1e-9 * (Rs + r + d))
     return false;
   sc->fr = fr;
   sc->r = r;
@@ -5061,13 +5081,14 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
 }
 
 /// `sphere ∩ cylinder` with the cylinder axis **parallel to a sphere diameter but offset** by \p d
-/// (REQ-314 B2b-2, GitHub issue #242 — the genuine quartic). `r < d` (the axis misses the pole) and
-/// `d + r < Rs` (the cylinder clears the equator) and both caps clear the sphere: the cylinder then
-/// pierces the sphere in two closed quartic loops, and the INTERSECT is a plug — the cylinder wall
-/// band between the loops, capped by the two lens-shaped sphere patches the cylinder encloses.
-/// Local frame: sphere centre at the origin, `+z` the cylinder axis direction, the cylinder axis
-/// through `(d, 0, 0)`. 4 vertices, 6 edges (4 procedural), 4 faces. Every face integrates
-/// numerically. Placed into \p fr.
+/// (REQ-314 B2b-2, GitHub issue #242 — the genuine quartic). `d + r < Rs` (the cylinder clears the
+/// equator) and both caps clear the sphere: the cylinder pierces the sphere in two closed quartic
+/// loops, and the INTERSECT is a plug — the cylinder wall band between the loops, capped by the two
+/// sphere patches the cylinder encloses. When `d > r` those caps are lens patches between the poles;
+/// when `d < r` (the pole-covered sub-case) the cylinder swallows each pole and the caps are full
+/// polar caps. Local frame: sphere centre at the origin, `+z` the cylinder axis direction, the
+/// cylinder axis through `(d, 0, 0)`. 4 vertices, 6 edges (4 procedural), 4 faces. Every face
+/// integrates numerically. Placed into \p fr.
 ///
 /// The curve: at cylinder longitude `φ`, `z² = Rs² − d² − r² − 2 d r cos φ` (always positive here),
 /// one loop per sign of `z`.
@@ -5115,13 +5136,22 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
   cylFace(0.0, kPi, {{eLp, false}, {sP, false}, {eUp, true}, {s0, true}});
   cylFace(kPi, kTwoPi, {{eLn, false}, {s0, false}, {eUn, true}, {sP, true}});
 
-  // The two sphere caps. Longitude spans ±asin(r/d) about fr.xAxis (longitude 0); latitude spans the
-  // z-extremes of the loop. The numeric integrator/tessellator find the exact band per longitude.
-  const double uHalf = std::asin(std::clamp(r / d, -1.0, 1.0));
+  // The two sphere caps the cylinder encloses. Latitude runs between the loop's z-extremes; the
+  // numeric integrator / tessellator find the exact band per longitude.
+  //   d > r  — the axis misses the pole: each cap is a lens spanning longitude ±asin(r/d) about
+  //            fr.xAxis, latitude strictly between the poles.
+  //   d < r  — the pole-covered sub-case (issue #242): the cylinder swallows the pole, so each cap
+  //            is a full polar cap — every longitude, latitude from the loop up to ±π/2.
   const double vLoU = std::asin(std::clamp(z0 / Rs, -1.0, 1.0));
   const double vHiU = std::asin(std::clamp(zP / Rs, -1.0, 1.0));
-  capFace(-uHalf, uHalf, vLoU, vHiU, {{eUp, false}, {eUn, false}});
-  capFace(-uHalf, uHalf, -vHiU, -vLoU, {{eLp, true}, {eLn, true}});
+  if (d < r) {
+    capFace(0.0, kTwoPi, vLoU, kHalfPi, {{eUp, false}, {eUn, false}});
+    capFace(0.0, kTwoPi, -kHalfPi, -vLoU, {{eLp, true}, {eLn, true}});
+  } else {
+    const double uHalf = std::asin(std::clamp(r / d, -1.0, 1.0));
+    capFace(-uHalf, uHalf, vLoU, vHiU, {{eUp, false}, {eUn, false}});
+    capFace(-uHalf, uHalf, -vHiU, -vLoU, {{eLp, true}, {eLn, true}});
+  }
 
   AddSingleShell(&s);
   if (Validate(s) != Problem::Ok || SelfIntersects(s))
@@ -5140,8 +5170,8 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
 [[nodiscard]] bool BuildSphereCylinderOffsetSubtractSphere(const ucs::Ucs& fr, double r, double Rs,
                                                            double d, Solid* out, Problem* outWhy) {
   OffsetScaffold sc;
-  if (!MakeOffsetScaffold(fr, r, Rs, d, &sc))
-    return Fail(Problem::BooleanResultInvalid, outWhy);
+  if (!(d > r) || !MakeOffsetScaffold(fr, r, Rs, d, &sc))
+    return Fail(Problem::BooleanResultInvalid, outWhy);  // d ≤ r kept sphere has no pole — a later slice
   Solid& s = sc.s;
   const int u0 = 0;
   const int uP = 1;
@@ -5185,8 +5215,8 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
                                                   double zBot, double zTop, Solid* out,
                                                   Problem* outWhy) {
   OffsetScaffold sc;
-  if (!MakeOffsetScaffold(fr, r, Rs, d, &sc))
-    return Fail(Problem::BooleanResultInvalid, outWhy);
+  if (!(d > r) || !MakeOffsetScaffold(fr, r, Rs, d, &sc))
+    return Fail(Problem::BooleanResultInvalid, outWhy);  // d ≤ r kept sphere has no pole — a later slice
   Solid& s = sc.s;
   if (!(zBot < -sc.zP) || !(zTop > sc.zP))
     return Fail(Problem::BooleanResultInvalid, outWhy);
@@ -6799,11 +6829,11 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
 /// both with the cylinder caps clear of the sphere on each side and `r < Rs`:
 ///   - **centred** — the cylinder axis through the sphere centre; the intersection is two plane
 ///     circles and every result is closed-form.
-///   - **offset** — the axis parallel to a sphere diameter, displaced by `d` with `r < d` and
-///     `d + r < Rs` (a clean through-hole); the intersection is a quartic loop each side and the
-///     curved faces integrate numerically.
-/// The `d ≤ r` pole-covered sub-case and skew / non-parallel axes fall through unhandled to the
-/// caller's refusal.
+///   - **offset** — the axis parallel to a sphere diameter, displaced by `d` with `d + r < Rs`; the
+///     intersection is a quartic loop each side and the curved faces integrate numerically. `d > r`
+///     (axis misses the pole) does all three operations; `d < r` (pole-covered, issue #242) does
+///     INTERSECT — a polar-capped plug.
+/// `d ≈ r` tangency, `d < r` SUBTRACT / UNION, and skew / non-parallel axes fall through unhandled.
 ///
 /// All three operations are built: INTERSECT (a spherical-ended barrel / plug), UNION (the ball with
 /// a cylindrical boss each side), and SUBTRACT — `sphere − cylinder` is the drilled ball (genus 1),
@@ -6821,13 +6851,17 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
   const double offset = ray3d::Length(ray3d::Sub(S.centre, foot));  // axis-to-centre distance
 
   if (offset > eps) {
-    // The offset quartic (issue #242, slice B). All three operations, in the sub-case where the
-    // cylinder misses the pole (`r < d`) and clears the equator (`d + r < Rs`) and both caps clear
-    // the sphere — a clean through-plug / hole / boss / pair of stubs. The `d ≤ r` pole-covered
-    // case and skew axes fall through unhandled.
+    // The offset quartic (issue #242, slice B). The cylinder must clear the equator (`d + r < Rs`)
+    // and both caps must clear the sphere. Two sub-cases:
+    //   d > r — the axis misses the sphere pole: all three operations (plug / hole / boss / stubs).
+    //   d < r — the pole-covered sub-case: only INTERSECT so far (a polar-capped plug); SUBTRACT /
+    //           UNION, `d ≈ r` tangency, and skew axes fall through unhandled.
     const double d = offset;
-    if (!(d > C.radius + eps) || !(d + C.radius < S.radius - eps))
-      return false;  // the `d ≤ r` pole-covered case: a later slice
+    if (!(d + C.radius < S.radius - eps) || std::fabs(d - C.radius) <= eps)
+      return false;
+    const bool poleCovered = d < C.radius;
+    if (poleCovered && op != BoolOp::Intersect)
+      return false;  // d ≤ r SUBTRACT / UNION: a later slice
     // The loop reaches |z| = zP at φ = π; both caps must clear that for a clean plug / boss / hole.
     const double zP = std::sqrt(std::max(0.0, S.radius * S.radius - (d - C.radius) * (d - C.radius)));
     if (along - zP < eps || C.length - (along + zP) < eps)
