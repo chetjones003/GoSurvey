@@ -187,8 +187,24 @@ the offset quartic are the next slices.
 
 ### Deferred within B2b-2 (later sub-slices)
 
-- sphere ∩ cylinder, torus ∩ anything, cone parabola / hyperbola sections.
-- Skew (non-coplanar) cylinder axes.
+- torus ∩ anything, cone parabola / hyperbola sections.
+- The fully-general tilted-AND-skew cylinder-cylinder pair.
+
+**PROGRESS 2026-09-04 — `cylinder − box` partial-length pocket done (feat/issue242-cylinder-box-pocket,
+issue #242).** `BuildCylinderPocket`: a rectangular bite that reaches neither cap — floor + ceiling
+(circular-segment planar faces) + 5 cylinder-wall sub-bands (lower/upper split minor/major at u=±φ to
+match the pocket's chord, plus the middle major band) + 2 full-circle caps. 8v/16e/10f, χ=2, all
+arcs+lines (closed form, no marching). **Bug found and fixed during this slice**: `CylinderCutZExtent`
+only recognises a plane cut via an `Ellipse` edge; a face bounded by plain rim `Arc`s (no ellipse)
+always falls through to `ConicalFaceIntegrals(sf.radius,...,sf.height,...)`, which trusts
+`sf.frame`/`sf.height` as the face's OWN span — every sub-band needs its OWN frame origin (shifted to
+its local z=0) and its own height, not the full-cylinder ones, or every partial band silently
+integrates as if it ran the whole cylinder length (→ `Problem::NotClosed`, closed topology but wrong
+volume). Worth remembering for any future partial-height cylinder sub-face. Full suite green (1118).
+Also fixed a stale doc comment: sphere∩cylinder has **no separate skew-axis case** — a sphere is
+rotationally symmetric, so the perpendicular offset `d` is the only invariant of a cylinder's
+placement relative to it; the existing `d>r`/`d<r` builders already cover every axis direction
+(docs/issue242-sphere-cylinder-skew-not-distinct, PR #276).
 
 **PROGRESS 2026-09-04 — skew branch pipe `thin − thick` done (feat/issue242-skew-branch-pipe-thin-minus-thick, issue #242).**
 `BuildSkewBranchPipeThinStub` = `BuildBranchPipeThinStub` via the `SkewBranch` helper, off-centre

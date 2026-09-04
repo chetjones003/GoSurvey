@@ -2048,11 +2048,36 @@ TEST_CASE("Curved B2b-2: cylinder - box mills a single lengthwise flat (a notch)
             Approx(1000.0 - kPi * 1.5 * 1.5 * 10.0).epsilon(1e-9));
   }
 
-  SECTION("a partial-length box (a pocket) is refused by name") {
+  SECTION("a partial-length box mills a pocket that reaches neither end") {
+    const double za = 3.0;
+    const double zb = 7.0;
+    const double wantPocket = kPi * r * r * L - (zb - za) * seg;
     Solid cyl;
     Solid box;
     REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
-    REQUIRE(brep::MakeBox(At(12, 0, 3), 20, 40, 4, &box, &why));  // z[3,7] only - inside the length
+    REQUIRE(brep::MakeBox(At(12, 0, za), 20, 40, zb - za, &box, &why));  // z[3,7] only - inside the length
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    const Counts pc = CountOf(out[0]);
+    REQUIRE(pc.v == 8);
+    REQUIRE(pc.e == 16);
+    REQUIRE(pc.f == 10);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(wantPocket).epsilon(1e-9));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.006, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(wantPocket).epsilon(3e-3));
+  }
+
+  SECTION("a pocket that touches a cap is refused by name (not the interior shape)") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(12, 0, 6), 20, 40, 8, &box, &why));  // z[6,14] - runs past the top cap
     std::vector<Solid> out;
     REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &out, &why));
     REQUIRE(why == Problem::BooleanCurvedFace);

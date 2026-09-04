@@ -7521,6 +7521,98 @@ struct SkewBranch {
   return Succeed(outWhy);
 }
 
+/// A right circular cylinder (base at \p axisFrame.origin, height \p h, radius \p r) with a
+/// rectangular **pocket** milled into one side that does not reach either end: the flat at local
+/// x = \p px (`-r < px < r`) removes material x > px only for z ∈ [\p za, \p zb]
+/// (`0 < za < zb < h`). The pocket floor and ceiling are the circular segment `x > px` at each
+/// level; the caps and the wall above/below the pocket are untouched. 8 vertices, 16 edges,
+/// 10 faces, χ = 2. Arcs and lines only — closed form, no numeric integration (GitHub issue #242).
+[[nodiscard]] bool BuildCylinderPocket(const ucs::Ucs& axisFrame, double r, double h, double px,
+                                       double za, double zb, Solid* out, Problem* outWhy) {
+  const double q = std::sqrt(std::max(0.0, r * r - px * px));
+  const double phi = std::acos(std::clamp(px / r, -1.0, 1.0));
+  const double minorSweep = 2.0 * phi;
+  const double majorSweep = kTwoPi - 2.0 * phi;
+  const double eps = 1e-9 * std::max(h, r);
+  if (q <= 1e-12 || minorSweep <= 1e-9 || majorSweep <= 1e-9 || !(za > eps) || !(zb > za + eps) ||
+      !(h - zb > eps))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(axisFrame, Vec3{x, y, z}); };
+  const Vec3 Z = axisFrame.zAxis;
+
+  Solid s;
+  const int v0Lo = AddVertex(&s, W(px, -q, 0.0));
+  const int v0Hi = AddVertex(&s, W(px, q, 0.0));
+  const int vALo = AddVertex(&s, W(px, -q, za));
+  const int vAHi = AddVertex(&s, W(px, q, za));
+  const int vBLo = AddVertex(&s, W(px, -q, zb));
+  const int vBHi = AddVertex(&s, W(px, q, zb));
+  const int vLLo = AddVertex(&s, W(px, -q, h));
+  const int vLHi = AddVertex(&s, W(px, q, h));
+
+  // At each level, the "minor" arc runs the short way through u = 0 (the +x point, r,0,z) and the
+  // "major" arc the long way through u = π (the −x point) — the same pair used everywhere the
+  // kernel needs a full circle split to match a chord elsewhere (issue #242).
+  auto level = [&](double z, int lo, int hi, int* mn, int* mj) {
+    const Vec3 c = W(0.0, 0.0, z);
+    *mn = AddArc(&s, lo, hi, c, Z, minorSweep);
+    *mj = AddArc(&s, hi, lo, c, Z, majorSweep);
+  };
+  int mn0 = -1, mj0 = -1, mnA = -1, mjA = -1, mnB = -1, mjB = -1, mnL = -1, mjL = -1;
+  level(0.0, v0Lo, v0Hi, &mn0, &mj0);
+  level(za, vALo, vAHi, &mnA, &mjA);
+  level(zb, vBLo, vBHi, &mnB, &mjB);
+  level(h, vLLo, vLHi, &mnL, &mjL);
+
+  const int sHi0A = AddLine(&s, v0Hi, vAHi);
+  const int sLo0A = AddLine(&s, v0Lo, vALo);
+  const int sHiAB = AddLine(&s, vAHi, vBHi);
+  const int sLoAB = AddLine(&s, vALo, vBLo);
+  const int sHiBL = AddLine(&s, vBHi, vLHi);
+  const int sLoBL = AddLine(&s, vBLo, vLLo);
+  const int chordA = AddLine(&s, vALo, vAHi);
+  const int chordB = AddLine(&s, vBLo, vBHi);
+
+  // Each partial band gets its OWN frame origin (shifted to its own local z = 0) and its own
+  // `height` — `CylinderCutZExtent` only recognises a cut against an `Ellipse` edge, so a face
+  // bounded by plain rim arcs falls back to `ConicalFaceIntegrals`, which trusts `sf.height` as
+  // the face's actual span. Sharing the full-cylinder frame/height across every sub-band here
+  // would integrate each one as if it ran the whole way from the base to the top.
+  auto cyl = [&](double zBase, double zSpan, double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame = axisFrame;
+    f.surface.frame.origin = W(0.0, 0.0, zBase);
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = zSpan;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+
+  s.faces.push_back(MakePlaneFace(W(0.0, 0.0, 0.0), ray3d::Scale(Z, -1.0), {{mn0, true}, {mj0, true}}));
+  s.faces.push_back(MakePlaneFace(W(0.0, 0.0, h), Z, {{mnL, false}, {mjL, false}}));
+  cyl(0.0, za, -phi, phi, {{mn0, false}, {sHi0A, false}, {mnA, true}, {sLo0A, true}});
+  cyl(0.0, za, phi, kTwoPi - phi, {{mj0, false}, {sLo0A, false}, {mjA, true}, {sHi0A, true}});
+  cyl(zb, h - zb, -phi, phi, {{mnB, false}, {sHiBL, false}, {mnL, true}, {sLoBL, true}});
+  cyl(zb, h - zb, phi, kTwoPi - phi, {{mjB, false}, {sLoBL, false}, {mjL, true}, {sHiBL, true}});
+  cyl(za, zb - za, phi, kTwoPi - phi, {{mjA, false}, {sLoAB, false}, {mjB, true}, {sHiAB, true}});
+  s.faces.push_back(MakePlaneFace(W(px, 0.0, za), Z, {{mnA, false}, {chordA, true}}));
+  s.faces.push_back(
+      MakePlaneFace(W(px, 0.0, zb), ray3d::Scale(Z, -1.0), {{mnB, true}, {chordB, false}}));
+  s.faces.push_back(MakePlaneFace(
+      W(px, 0.0, 0.5 * (za + zb)), axisFrame.xAxis,
+      {{chordA, false}, {sHiAB, false}, {chordB, true}, {sLoAB, true}}));
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 [[nodiscard]] bool TryBooleanCylinderThroughPlanar(const Solid& planar, const Solid& cyl,
                                                    const CylinderShape& C, BoolOp op, bool cylIsMinuend,
                                                    std::vector<Solid>* out, bool* handled,
@@ -7572,12 +7664,37 @@ struct SkewBranch {
       lf.xAxis = ray3d::Normalize(ray3d::Sub(wx0, ray3d::Scale(lf.zAxis, ray3d::Dot(wx0, lf.zAxis))));
       lf.yAxis = ray3d::Normalize(ray3d::Cross(lf.zAxis, lf.xAxis));
       auto WL = [&](double x, double y, double z) { return ucs::UcsToWorld(lf, Vec3{x, y, z}); };
+      auto insideEveryBoxFace = [&](const std::vector<Vec3>& probe) {
+        for (const Face& bf : planar.faces) {
+          if (bf.surface.kind != SurfaceKind::Plane)
+            continue;
+          const std::vector<Vec3> br = FaceRing(planar, bf);
+          if (br.size() < 3)
+            continue;
+          const Vec3 bn = bf.surface.frame.zAxis;
+          for (const Vec3& p : probe)
+            if (ray3d::Dot(ray3d::Sub(p, br[0]), bn) > e2)
+              return false;
+        }
+        return true;
+      };
       // Every extreme point of the removed segment must lie inside the box, so that
       // cylinder − box == cylinder − (this one half-space).
-      const Vec3 probe[6] = {WL(px, -q, 0.0),       WL(px, q, 0.0),
-                             WL(px, q, C.length),   WL(px, -q, C.length),
-                             WL(C.radius, 0.0, 0.0), WL(C.radius, 0.0, C.length)};
-      bool removedInsideBox = true;
+      const std::vector<Vec3> fullProbe = {WL(px, -q, 0.0),       WL(px, q, 0.0),
+                                           WL(px, q, C.length),   WL(px, -q, C.length),
+                                           WL(C.radius, 0.0, 0.0), WL(C.radius, 0.0, C.length)};
+      if (insideEveryBoxFace(fullProbe)) {
+        Solid r;
+        if (!BuildCylinderLongitudinalFlat(lf, C.radius, C.length, px, &r, outWhy))
+          return false;
+        out->push_back(std::move(r));
+        return Succeed(outWhy);
+      }
+      // Not a full-span flat — try a partial-length pocket: the box's two axis-perpendicular faces,
+      // both strictly inside the cylinder's length, bound a rectangular bite in the middle
+      // (GitHub issue #242).
+      std::vector<double> perpHeights;
+      bool perpOk = true;
       for (const Face& bf : planar.faces) {
         if (bf.surface.kind != SurfaceKind::Plane)
           continue;
@@ -7585,16 +7702,28 @@ struct SkewBranch {
         if (br.size() < 3)
           continue;
         const Vec3 bn = bf.surface.frame.zAxis;
-        for (const Vec3& p : probe)
-          if (ray3d::Dot(ray3d::Sub(p, br[0]), bn) > e2)
-            removedInsideBox = false;
+        if (std::fabs(std::fabs(ray3d::Dot(bn, az2)) - 1.0) > 1e-6)
+          continue;
+        const double t = ray3d::Dot(ray3d::Sub(br[0], C.axis.origin), az2);
+        if (t <= e2 || t >= C.length - e2) {
+          perpOk = false;  // a perpendicular face at or beyond a cap — not this shape
+          continue;
+        }
+        perpHeights.push_back(t);
       }
-      if (removedInsideBox) {
-        Solid r;
-        if (!BuildCylinderLongitudinalFlat(lf, C.radius, C.length, px, &r, outWhy))
-          return false;
-        out->push_back(std::move(r));
-        return Succeed(outWhy);
+      if (perpOk && perpHeights.size() == 2) {
+        const double za = std::min(perpHeights[0], perpHeights[1]);
+        const double zb = std::max(perpHeights[0], perpHeights[1]);
+        const std::vector<Vec3> pocketProbe = {WL(px, -q, za),          WL(px, q, za),
+                                               WL(px, -q, zb),          WL(px, q, zb),
+                                               WL(C.radius, 0.0, za),   WL(C.radius, 0.0, zb)};
+        if (insideEveryBoxFace(pocketProbe)) {
+          Solid r;
+          if (!BuildCylinderPocket(lf, C.radius, C.length, px, za, zb, &r, outWhy))
+            return false;
+          out->push_back(std::move(r));
+          return Succeed(outWhy);
+        }
       }
     }
     if (boxSquareToAxis && cutCount == 0 && PointInPlanarSolid(C.axis.origin, planar, sc2) &&
