@@ -103,6 +103,18 @@ on the tessellation; a tilted survey-magnitude frame + `Translate` to 1e-9; reve
 `SUBTRACT`/`UNION` refused; an offset axis refused; a cap-inside-sphere config refused. Full suite
 green.
 
+**Slice B / `d < r` pole-covered SUBTRACT + UNION — implemented (issue #242, feat/issue242-sphere-cyl-polecovered-sub-union).**
+New `AddOffsetKeptZone` (the `d < r` counterpart of `AddOffsetKeptHemispheres`): no pole vertices,
+one kept sub-arc of each of the `u = 0` / `u = π` meridians, two zone faces with full pole-to-pole
+`v` metadata so `IntegrateFace` / the tessellator take the "hemisphere minus every lens bite" path
+(here two bites = a polar cap at each pole → the equatorial zone). `BuildSphereCylinderOffsetSubtractSphere`
+/ `...Union` branch `d < r → AddOffsetKeptZone` (bore / boss code unchanged — the loop half-edge
+windings match); `BuildCylinderSphereOffsetStub`'s dimple becomes a full inward polar cap
+(`u` 0→2π, `v` loop→±π/2) when `d < r`. `d > r` guards dropped from all three. `TryBooleanSphereCylinder`
+now routes every offset op regardless of `d ≷ r`. Counts: `sphere−cyl` 4v/8e/4f χ=0 (genus 1),
+stub 4v/6e/4f χ=2, `sphere∪cyl` 8v/14e/8f. Volumes vs the 1400×1400 plug integral (3e-3), winding,
+full suite green (1116). Only skew axis left on the sphere∩cylinder item.
+
 **Slice B / `d < r` pole-covered INTERSECT — implemented (issue #242, feat/issue242-sphere-cyl-polecovered-intersect).**
 `MakeOffsetScaffold` relaxed to `d > 0`, `d + r < Rs`, `|d − r| > tiny` — the same four-edge quartic
 scaffold serves `d > r` and `d < r` (the loop is closed at every longitude in both). For `d < r` the
