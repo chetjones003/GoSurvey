@@ -3344,10 +3344,13 @@ requirements is a planning failure, not a sign of rigor.
   JSON document (the same tree `.gs` writes) so survey points, traverse, layouts, text/surface
   styles, `worldDocumentOrigin`, and the rest of that tree survive Open → Save → Open.
   A DWG without that payload is a **foreign** drawing and imports through REQ-170 CAD mapping.
-  `.gs` read/write remains in the tree (workspace template, explicit `.gs` paths, future
-  project file) and is not the File drawing chooser. Existing `.gs` files still open when a
-  path ending in `.gs` is given (command line, template, transcript `OPEN samples/…`).
   This does **not** claim unknown-object preservation (DM-08).
+  **Amended 2026-09-03 (D-2026-09-03-h): `.gs` is retired.** The standalone `.gs` file, `GsIo`,
+  workspace-template `.gs` and migration code are removed from source. The embedded GoSurvey JSON
+  document (this requirement's payload) stays until a native DWG representation replaces it, then
+  is removed with it. The "`.gs` read/write remains in the tree" sentence and the "existing `.gs`
+  files still open" acceptance bullet are withdrawn; `SaveGoSurveyFile` / `LoadGoSurveyFile` are
+  removed with the standalone path.
 - Acceptance:
   - a new drawing, File → Save, writes a `.dwg` (not `.gs`);
   - File → Open’s default filter is DWG; `.gs` is not listed as a drawing type;
@@ -3362,6 +3365,8 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-08-29 — D-2026-08-29-j, ADR-044 (renumbered from D-2026-08-29-h / ADR-043 on the
   beta merge; those identifiers were taken by the REQ-107 block-editor decision).
+  2026-09-03 — D-2026-09-03-h: `.gs` retired; standalone `.gs`/`GsIo`/migration removed from
+  source; embedded JSON document removed once a native DWG representation replaces it.
 
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,

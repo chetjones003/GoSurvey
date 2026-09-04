@@ -278,6 +278,12 @@ A lightweight board that complements the milestones. Keep each column honest.
   map into CAD stores / retire converter from File open-save → point cloud + PTS → PTX/LAS/LAZ/E57
   → IMAGE → IFC view. **No code until a Workshop task cites these REQs.** ODA and native scan
   project formats stay out.
+- **Retire `.gs` (D-2026-09-03-h, GitHub issue #264).** Two stages: (1) delete the
+  standalone `.gs` file / `GsIo` / workspace-template `.gs` / migration / `kGsFormatVersion` —
+  can start now; (2) delete the GoSurvey JSON document serializer only once a native
+  DWG-embedded representation (EED / GOSURVEY dictionary XRECORDs, dwg-plan P-01..P-05, DM-08)
+  replaces the ADR-044 trailer — a real epic, not a cleanup. Stage 2 blocks on that
+  representation; shipping it earlier is silent per-save data loss.
 - **M-Surfaces-119 — Issue #119 remainder** (D-2026-08-27-a, ADR-039, D-2026-08-27-b). Phases 1–3
   (REQ-124…135) implemented on the 119 branch. REQ-136 TIN volume surface in progress. Grid /
   corridor / contour smoothing and labels / TIN swap remain out of scope.

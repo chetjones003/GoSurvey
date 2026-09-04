@@ -1895,6 +1895,17 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   `.gs` version without amending REQ-079.
 
 ### ADR-044 — DWG drawing document with a GoSurvey JSON trailer   (2026-08-29, accepted)
+
+  **Direction changed 2026-09-03 (D-2026-09-03-h): `.gs` is retired and the JSON trailer is
+  interim.** Clause (d) is withdrawn — the standalone `.gs` file, `GsIo`, workspace-template `.gs`,
+  the migration code and `kGsFormatVersion` are removed from source. Clause (b)'s JSON trailer
+  stays **only until** a native DWG-embedded representation (per-field EED / GOSURVEY dictionary
+  XRECORDs — dwg-plan P-01..P-05, DM-08) replaces it; the trailer and the
+  `BuildRoot` / `LoadGoSurveyFromJsonUtf8` serializer are removed in the same increment that lands
+  that representation, never before (removing them earlier drops survey points, styles, point
+  groups, paper layouts and 3D solids on every save — REQ-001 / REQ-201). Clause (e) SAMEFILE
+  moves to the native representation when it lands. GitHub issue #264 tracks the order.
+
 - Context:    dwg-plan PART 11 listed per-field EED + GOSURVEY dictionary XRECORDs + native LAYOUT
   objects as the native-format design, blocked on DM-08 and layout/block mapping. The user asked
   to make File Open/Save DWG **now**, keep `.gs` code, and preserve survey-specific data. LibreDWG

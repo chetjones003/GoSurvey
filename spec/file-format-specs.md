@@ -20,8 +20,17 @@ Autodesk ODA membership and **without** Leica/Autodesk native scan-project SDKs.
 | Rasters | JPEG, PNG, BMP | drawing **IMAGE** underlays; file read/write |
 | BIM | IFC | **view only** (tessellate to REQ-063 meshes) |
 
-`.dwg` is the drawing document (REQ-175 / ADR-044). `.gs` remains for workspace templates and a
-future project file; its JSON document is also the GoSurvey payload inside a saved DWG.
+`.dwg` is the drawing document (REQ-175 / ADR-044).
+
+**`.gs` is retired (2026-09-03, D-2026-09-03-h).** The standalone GoSurvey JSON file, its `GsIo`
+read/write path, workspace-template `.gs`, the version-migration code and the `kGsFormatVersion`
+discipline are all to be removed from source. No feature spends effort on `.gs` from this date; a
+requirement that reads "a `.gs` save/load round-trips X" is read as "the drawing file round-trips
+X". The GoSurvey JSON document serializer (`BuildRoot` / `LoadGoSurveyFromJsonUtf8`) is **also**
+slated for removal, but only after a native DWG-embedded representation of every survey-specific
+domain field replaces the ADR-044 JSON trailer — until that ships, removing the serializer would
+silently drop survey points, styles, point groups, paper layouts and 3D solids on every save,
+which REQ-001 / REQ-201 forbid. See GitHub issue #264 for the removal order.
 
 ---
 
@@ -58,7 +67,7 @@ Legend: **R** = read into GoSurvey, **W** = write from GoSurvey, **—** = out o
 |-----|---|---|--------|--------|
 | `.dwg` | yes | R2000 / R2004 | LibreDWG | Open does not require ODA File Converter or AutoCAD. Save default AC1018. Written file must open in AutoCAD **without Recover** for the entity set we emit. |
 | `.dxf` | yes | yes | LibreDWG | ASCII and binary DXF as LibreDWG supports them. Replaces `DxfIo` as the **interchange** path once REQ-170 is verified; Phase 1 converter may remain a **test oracle**. |
-| `.gs` | yes | yes | existing `GsIo` | Unchanged native. |
+| `.gs` | — | — | (removed) | Retired 2026-09-03, D-2026-09-03-h. Standalone `.gs` file, `GsIo`, workspace-template `.gs` and `kGsFormatVersion` all leave source. The GoSurvey JSON *document* survives only as the ADR-044 in-`.dwg` trailer, itself pending replacement by a native representation. |
 
 **Mapped into the GoSurvey domain** (lossy where the domain has no type): LINE, CIRCLE, ARC,
 ELLIPSE, POINT, LWPOLYLINE / POLYLINE, TEXT, MTEXT, HATCH, DIMENSION (kinds we already
