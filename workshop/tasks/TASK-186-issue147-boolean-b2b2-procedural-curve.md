@@ -188,7 +188,22 @@ the offset quartic are the next slices.
 ### Deferred within B2b-2 (later sub-slices)
 
 - torus ∩ anything, cone parabola / hyperbola sections.
-- The fully-general tilted-AND-skew pair, SUBTRACT/UNION/thin−thick (INTERSECT done, see below).
+- The fully-general tilted-AND-skew pair's `thin − thick` (INTERSECT/SUBTRACT/UNION done, see below).
+
+**PROGRESS 2026-09-04 — fully-general branch pipe SUBTRACT + UNION done
+(feat/issue242-general-branch-pipe-sub-union, issue #242; user chose this over cone sections when
+asked, D-2026-09-04 informal).** The two mouths' longitudes on the thick wall have no closed form
+once both α,g≠0 (unlike every narrower case), so the wall's 2 seams are placed **dynamically**:
+`FindGeneralBranchSeams` scans both mouths' `u`-extent (reusing the INTERSECT builder's scan),
+orders them by centre, and sets `seamA/seamB` at the midpoints of the two gaps between them. Key
+correctness point: each mouth's inner-loop winding (`{cpU,false},{cpL,true}` etc.) is fixed **per
+edge**, independent of which dynamically-placed face slot ends up hosting it — verified against the
+`aIn`/bore faces' fixed usage before coding, not just by testing. `BuildGeneralBranchPipeSubtract`
+(8v/12e/6f genus1) and `...Union` (12v/18e/10f, thin stub caps ⊥ tHat at zetaA0/zetaA1) otherwise
+mirror the coplanar/skew builders exactly. `thin−thick` still refused (needs its own general stub
+builder). Full suite green (1119) — dynamic-seam SUBTRACT+UNION passed on the same build as written,
+no repeat of the pocket-slice bug (topology reasoning done on paper before coding, same discipline
+as the closed-form INTERSECT derivation).
 
 **PROGRESS 2026-09-04 — fully-general (tilted AND skew) branch pipe INTERSECT done
 (feat/issue242-general-branch-pipe-intersect, issue #242).** Key finding: the thin-cylinder-on-thick
