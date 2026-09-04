@@ -2430,9 +2430,52 @@ TEST_CASE("Curved B2b-2 first pair: sphere INTERSECT cylinder, axis through the 
     REQUIRE(brep::BooleanIntersect(cyl, sph, &rev, &why));  // operand order does not matter
     REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vref).epsilon(3e-3));
 
+    const double sphereVol = 4.0 / 3.0 * kPi * Rs * Rs * Rs;
+    const double cylVol = kPi * rp * rp * 24.0;
+
     std::vector<Solid> sub;
-    REQUIRE_FALSE(brep::BooleanSubtract(sph, cyl, &sub, &why));  // d < r SUBTRACT / UNION: a later slice
-    REQUIRE_FALSE(brep::BooleanUnion(sph, cyl, &sub, &why));
+    REQUIRE(brep::BooleanSubtract(sph, cyl, &sub, &why));  // sphere - cylinder: the drilled ball
+    REQUIRE(sub.size() == 1);
+    REQUIRE(brep::Validate(sub[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(sub[0]));
+    REQUIRE(CountOf(sub[0]).v == 4);
+    REQUIRE(CountOf(sub[0]).e == 8);
+    REQUIRE(CountOf(sub[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(sub[0]) == 0);  // genus 1
+    REQUIRE(brep::ComputeMassProperties(sub[0]).volume == Approx(sphereVol - vref).epsilon(3e-3));
+    brep::Tessellation ts;
+    REQUIRE(brep::Tessellate(sub[0], 0.01, &ts, &why));
+    RequireWindingMatchesNormals(ts);
+    REQUIRE(TessellatedVolume(ts) == Approx(sphereVol - vref).epsilon(6e-3));
+
+    std::vector<Solid> stubs;
+    REQUIRE(brep::BooleanSubtract(cyl, sph, &stubs, &why));  // cylinder - sphere: two stubs
+    REQUIRE(stubs.size() == 2);
+    double stubTotal = 0.0;
+    for (const Solid& st : stubs) {
+      REQUIRE(brep::Validate(st) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(st));
+      REQUIRE(CountOf(st).v == 4);
+      REQUIRE(CountOf(st).f == 4);
+      REQUIRE(brep::EulerCharacteristic(st) == 2);
+      stubTotal += brep::ComputeMassProperties(st).volume;
+    }
+    REQUIRE(stubTotal == Approx(cylVol - vref).epsilon(3e-3));
+
+    std::vector<Solid> uni;
+    REQUIRE(brep::BooleanUnion(sph, cyl, &uni, &why));  // sphere u cylinder: ball with a boss each side
+    REQUIRE(uni.size() == 1);
+    REQUIRE(brep::Validate(uni[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(uni[0]));
+    REQUIRE(CountOf(uni[0]).v == 8);
+    REQUIRE(CountOf(uni[0]).e == 14);
+    REQUIRE(CountOf(uni[0]).f == 8);
+    REQUIRE(brep::ComputeMassProperties(uni[0]).volume ==
+            Approx(sphereVol + cylVol - vref).epsilon(3e-3));
+    brep::Tessellation tu;
+    REQUIRE(brep::Tessellate(uni[0], 0.01, &tu, &why));
+    RequireWindingMatchesNormals(tu);
+    REQUIRE(TessellatedVolume(tu) == Approx(sphereVol + cylVol - vref).epsilon(6e-3));
   }
 
   SECTION("a d < r plug on a tilted survey-magnitude frame") {
