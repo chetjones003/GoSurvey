@@ -361,7 +361,7 @@ inline bool SnapPaperInchPoint(const PaperLayout& L, float px, float py, float t
 //
 // The rule itself is \ref CadTextAnnotationBounds — ONE definition shared with model space, which is what
 // REQ-039's "the exact UX they use in model space" asks for. This function had its own copy, and it differed
-// in three ways that all reached the user (TASK-197):
+// in three ways that all reached the user (TASK-198):
 //
 //   * it ignored the BOX an MTEXT or a Table actually occupies — the rectangle the user dragged, and the one
 //     the renderer wraps, anchors and clips to — and substituted a one-line guess sitting at the insertion

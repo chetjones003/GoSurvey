@@ -5939,7 +5939,7 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
       expandSeg(xs[i], ys[i], xs[i], ys[i]);
     return;
   }
-  // Plain TEXT: the shared rule, one definition with paper space (TASK-197).
+  // Plain TEXT: the shared rule, one definition with paper space (TASK-198).
   CadTextAnnotationBounds(a, h, outMnX, outMnY, outMxX, outMxY);
 }
 

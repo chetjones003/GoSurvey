@@ -1,9 +1,9 @@
-# TASK-197 — paper text is bounded by the box it occupies
+# TASK-198 — paper text is bounded by the box it occupies
 
 ## Origin
 
-Raised as a follow-up by TASK-196 and asked for by the user (2026-09-04): *"now fix the paper text
-glyph box."* TASK-196 left text as the one paper type still selected by an approximate rectangle,
+Raised as a follow-up by TASK-197 and asked for by the user (2026-09-04): *"now fix the paper text
+glyph box."* TASK-197 left text as the one paper type still selected by an approximate rectangle,
 noting the estimate `0.6 · height · length` was a guess shared with the click pick.
 
 ## Requirement authority
@@ -50,7 +50,7 @@ it, so the two cannot drift again. Alongside it:
   APERTURE, and both pick sites already apply one: `PickPaperEntityAt` expands by `tolIn` and
   `PickCadAnnotationAt` by `tol`. Kept in the bounds it was applied a second time, and applied to the
   box FENCE as well — where an overstated extent selects a label the box never touched, which is the
-  defect TASK-196 spent its whole length removing from every other type.
+  defect TASK-197 spent its whole length removing from every other type.
 
 The dimension branch of `CadAnnotationRoughBounds` routes its label quad through the same estimate,
 so the label of a dimension is measured like any other string.
@@ -107,7 +107,7 @@ insertion point is the TOP-left, so the glyphs descend below it) is unchanged an
 ## Verification
 
 - **build-project** — PASS. Release MSVC/Ninja, clean.
-- **testing** — PASS. `ctest`: **1117/1117** on `beta` @ `d158da7` with TASK-196.
+- **testing** — PASS. `ctest`: **1117/1117** on `beta` @ `d158da7` with TASK-197.
 - **architecture-review** — PASS. The rule moves DOWN, into the dependency-free entity header both
   spaces already include — no new dependency, no layer crossed, and the deliberate refusal to reach
   UP into the UI for font metrics is recorded above and as debt below.

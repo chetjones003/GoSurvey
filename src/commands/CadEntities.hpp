@@ -387,7 +387,7 @@ inline constexpr float kCadTextAdvanceFactor = 0.55f;
 ///
 /// There is deliberately **no minimum width**. This used to floor at `2 * h`, which made a one- or
 /// two-character label report an extent up to three times the glyphs it draws — and a bounds function
-/// that overstates is a fence that selects a label the box never touched, the defect TASK-196 spent
+/// that overstates is a fence that selects a label the box never touched, the defect TASK-197 spent
 /// its whole length removing from every other type. The floor was there so a short label would still
 /// be clickable; that is an APERTURE, and both pick sites already apply one — `PickPaperEntityAt`
 /// expands by `tolIn` and `PickCadAnnotationAt` by `tol`. Keeping it here applied it a second time,

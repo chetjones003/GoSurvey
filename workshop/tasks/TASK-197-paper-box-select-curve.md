@@ -1,8 +1,8 @@
-# TASK-196 — paper-space box selection tests the object, not a box drawn round it
+# TASK-197 — paper-space box selection tests the object, not a box drawn round it
 
 ## Origin
 
-Follow-up audit asked for by the user against TASK-195 (model-space fence, PR #257): *"check the
+Follow-up audit asked for by the user against TASK-196 (model-space fence, PR #257): *"check the
 paper space box selection for the same bug."* It has it — in **every** type, and worse. Then:
 *"go ahead and fix paper space now."*
 
@@ -20,7 +20,7 @@ their segment and polylines per-segment since before REQ-039 existed — so this
 against an accepted requirement, not a new one. Not a SPEC GAP.
 
 Related: **REQ-316 / ADR-047** established "test the curve it draws" for polyline bulges, and
-**TASK-195** applied it to model-space circles, arcs and ellipses. This is the paper-space half.
+**TASK-196** applied it to model-space circles, arcs and ellipses. This is the paper-space half.
 
 ## What was wrong
 
@@ -38,7 +38,7 @@ i.e. text alone. Seven probes, all seven wrong:
 | Polyline | bbox of all vertices | L-shape `(0,0)→(10,0)→(10,10)`, box in the empty upper-left | selects |
 | Block | the insertion **point** only | box over the block's geometry, not its insertion point | **misses** |
 
-Two things made it worse than TASK-195's model-space case:
+Two things made it worse than TASK-196's model-space case:
 
 - **Lines and polylines were affected.** Model space never had this — `SegIntersectsAABB` and
   `ChainHitsRect` were always exact there. On a sheet, a diagonal line was selected from anywhere in
@@ -98,7 +98,7 @@ is the defect class this whole task is about.
 ## Test approach
 
 `tests/PaperSpaceTests.cpp` — "Paper box-select tests the object, not a box round it (REQ-039,
-TASK-196)". Seven sections, one per defect, and **every MISS is paired with a HIT on the same
+TASK-197)". Seven sections, one per defect, and **every MISS is paired with a HIT on the same
 entity** so a box test that selected nothing could not pass. The closed-polyline section pairs the
 other way round: the hypotenuse hit is paired with the same chain marked OPEN, which must NOT be
 selected there — that pairing is what proves the closing leg is what hit, since the bounding box
@@ -119,7 +119,7 @@ the fix returns them all to green. Lines: 320, 359, 379, 397, 420, 442, 464, 485
 The circle is at `(10,10)` with `r = 2`; the box's farthest corner is `sqrt(2) = 1.41` from the
 centre, so the box lies **entirely inside** the circle and touches no drawn geometry. It selected
 only because the test was the circle's solid bounding square — the defect, written down as the
-expected behaviour, exactly like TASK-195's STRETCH transcript. It now requires `out.empty()`, and a
+expected behaviour, exactly like TASK-196's STRETCH transcript. It now requires `out.empty()`, and a
 new box at `[11,11]-[13,13]` — genuinely straddling the rim — carries the original intent. No
 assertion was weakened and nothing was skipped.
 
@@ -149,4 +149,4 @@ selection logic they call is fully covered above. GUI verification only.
   guess, and it is shared with the click pick, so both are off by the same amount.
 - **Blocks in both spaces** are tested by their world AABB. For a block whose content is a small
   circle in a large empty extent this is the same shape of problem the rest of this task fixed; no
-  accepted requirement currently says which answer is wanted. Same note as TASK-195's.
+  accepted requirement currently says which answer is wanted. Same note as TASK-196's.

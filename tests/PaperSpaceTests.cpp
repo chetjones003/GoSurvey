@@ -250,7 +250,7 @@ TEST_CASE("Paper text bounds anchor at the top-left insertion (REQ-039)", "[pape
   t.insY = 4.f;
   t.plottedHeightInches = 0.5f;
   // Two glyphs → width = kCadTextAdvanceFactor * h * 2 = 0.55 * 0.5 * 2 = 0.55. Paper used its own
-  // 0.6 until TASK-197; model and paper now share one factor, so a string of a given height reports
+  // 0.6 until TASK-198; model and paper now share one factor, so a string of a given height reports
   // the same width on a sheet as it does in the model — REQ-039's parity, in the one place it was
   // measurably absent.
   t.text = "AB";
@@ -317,7 +317,7 @@ TEST_CASE("Paper box-select selects each type by window/crossing rules (REQ-039)
   // r=2, and the box's farthest corner is sqrt(2) = 1.41 away — so it touches no drawn geometry and
   // selects nothing. Until 2026-09-03 this required the circle instead: the box test was the circle's
   // bounding SQUARE, which is solid, so a fence in the hollow middle hit. See the "against actual
-  // geometry" case below, and TASK-196.
+  // geometry" case below, and TASK-197.
   {
     std::vector<PaperEntityRef> out;
     SelectPaperEntitiesInBox(L, 9.f, 9.f, 11.f, 11.f, /*windowMode=*/false, out);
@@ -344,13 +344,13 @@ TEST_CASE("Paper box-select selects each type by window/crossing rules (REQ-039)
   }
 }
 
-// TASK-196 — REQ-039 acceptance (1): a crossing box selects a paper object it TOUCHES, and a window
+// TASK-197 — REQ-039 acceptance (1): a crossing box selects a paper object it TOUCHES, and a window
 // box one it ENCLOSES. Every type used to be tested by its bounding box, which answers a different
 // question for anything that is not a filled rectangle. Each miss below failed before the fix.
 //
 // Every MISS is paired with a HIT on the same entity, because a box test that selected nothing would
 // pass every miss on its own.
-TEST_CASE("Paper box-select tests the object, not a box round it (REQ-039, TASK-196)", "[paperspace]") {
+TEST_CASE("Paper box-select tests the object, not a box round it (REQ-039, TASK-197)", "[paperspace]") {
   auto n = [](const std::vector<PaperEntityRef>& v) { return static_cast<int>(v.size()); };
 
   SECTION("line: a diagonal is not selected from the corner of its bounding square") {
@@ -506,10 +506,10 @@ TEST_CASE("Paper box-select tests the object, not a box round it (REQ-039, TASK-
   }
 }
 
-// TASK-197 — paper text is bounded by the rectangle it OCCUPIES. Paper space carried its own copy of
+// TASK-198 — paper text is bounded by the rectangle it OCCUPIES. Paper space carried its own copy of
 // the text-bounds rule and it differed from model space's in three ways, each of which put the pick
 // and the fence somewhere the glyphs are not. Every case below failed before the fix.
-TEST_CASE("Paper text bounds: the box it occupies, not a guess at the insertion point (TASK-197)",
+TEST_CASE("Paper text bounds: the box it occupies, not a guess at the insertion point (TASK-198)",
           "[paperspace]") {
   SECTION("MTEXT is bounded by the box the user dragged, not by a one-line estimate") {
     CadAnnotation a;
@@ -604,13 +604,13 @@ TEST_CASE("Paper text bounds: the box it occupies, not a guess at the insertion 
     PaperTextBoundsIn(a, &x0, &y0, &x1, &y1);
     // Was floored at 2*h in model space, which reported an extent three times the glyph. A pick
     // aperture belongs to the pick (PickPaperEntityAt already expands by tolIn), not to the extent —
-    // applied here it also inflated the box FENCE, which is what TASK-196 spent its length removing.
+    // applied here it also inflated the box FENCE, which is what TASK-197 spent its length removing.
     REQUIRE(x1 - x0 == Catch::Approx(0.55f));
   }
 }
 
 // The bounds above are what the box fence consumes, so the fix has to be visible through it too.
-TEST_CASE("Paper box-select follows an MTEXT's real box (TASK-197)", "[paperspace]") {
+TEST_CASE("Paper box-select follows an MTEXT's real box (TASK-198)", "[paperspace]") {
   PaperLayout L;
   CadAnnotation a;
   a.kind = CadAnnotation::Kind::Mtext;
