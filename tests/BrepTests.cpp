@@ -2456,13 +2456,72 @@ TEST_CASE("Curved B2b-2: sphere INTERSECT cylinder with an offset axis (the quar
     REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(2e-3));
   }
 
-  SECTION("cylinder - sphere with an offset axis is still refused, not corrupt") {
+  SECTION("cylinder - sphere with an offset axis leaves two stubs, each with a lens dimple") {
     Solid sph;
     Solid cyl;
     REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
-    REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));  // caps at z = +/-12 clear the sphere
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanSubtract(cyl, sph, &out, &why));  // cylinder minuend: a later slice
+    REQUIRE(brep::BooleanSubtract(cyl, sph, &out, &why));
+    REQUIRE(out.size() == 2);
+    for (const auto& stub : out) {
+      REQUIRE(brep::Validate(stub) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(stub));
+      REQUIRE(CountOf(stub).v == 4);
+      REQUIRE(CountOf(stub).e == 6);
+      REQUIRE(CountOf(stub).f == 4);
+      REQUIRE(brep::EulerCharacteristic(stub) == 2);
+      int isect = 0;
+      for (const auto& e : stub.edges)
+        if (e.kind == brep::CurveKind::Intersection)
+          ++isect;
+      REQUIRE(isect == 2);
+    }
+
+    // Total kept volume = the whole cylinder minus the sphere-cylinder intersection plug.
+    const double want = kPi * r * r * 24.0 - vref;
+    double vol = 0.0;
+    for (const auto& stub : out)
+      vol += brep::ComputeMassProperties(stub).volume;
+    REQUIRE(vol == Approx(want).epsilon(3e-3));
+
+    double tvol = 0.0;
+    for (const auto& stub : out) {
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(stub, 0.01, &t, &why));
+      RequireWindingMatchesNormals(t);
+      tvol += TessellatedVolume(t);
+    }
+    REQUIRE(tvol == Approx(want).epsilon(1e-2));
+
+    // A tilted survey-magnitude frame, then Translate back to the origin.
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{d, 0, -12}), frame.zAxis, &axis));
+    Solid sph2;
+    Solid cyl2;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph2, &why));
+    REQUIRE(brep::MakeCylinder(axis, r, 24, &cyl2, &why));
+    std::vector<Solid> far;
+    REQUIRE(brep::BooleanSubtract(cyl2, sph2, &far, &why));
+    REQUIRE(far.size() == 2);
+    double fvol = 0.0;
+    for (const auto& stub : far) {
+      REQUIRE(brep::Validate(stub) == Problem::Ok);
+      const brep::Solid moved = brep::Translate(stub, Vec3{-3.5e6, -1.24e7, -250.0});
+      REQUIRE(brep::Validate(moved) == Problem::Ok);
+      fvol += brep::ComputeMassProperties(moved).volume;
+    }
+    REQUIRE(fvol == Approx(want).epsilon(3e-3));
+  }
+
+  SECTION("an offset cylinder - sphere with a cap inside the sphere is still refused") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -4), r, 8, &cyl, &why));  // caps at z = +/-4 sit inside
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, sph, &out, &why));
   }
 }
 

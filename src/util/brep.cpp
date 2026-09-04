@@ -5247,6 +5247,132 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
   return Succeed(outWhy);
 }
 
+/// One stub of `cylinder − sphere` with the cylinder axis **parallel to a sphere diameter, offset by**
+/// \p d (REQ-314 B2b-2, GitHub issue #242 — the quartic). Sub-case `r < d` (axis misses the pole),
+/// `d + r < Rs` (clears the equator), both caps clear the sphere: the sphere bites the cylinder clean
+/// in two, leaving two disjoint stubs. This builds the stub on the \p sideSign side (`+1` above the
+/// sphere, `−1` below): a short cylinder with a flat cap at `z = zFlat` and, on its inner end, an
+/// **inward** spherical dimple — the lens-shaped sphere patch the cylinder encloses on that side —
+/// bounded by one quartic loop. 4 vertices, 6 edges (2 procedural), 4 faces, χ = 2. Built in \p fr
+/// (origin = sphere centre, `+z` = cylinder axis, `+x` toward the cylinder axis) and left there.
+/// Every sphere and cylinder face integrates numerically. `.gs` stays v3.
+[[nodiscard]] bool BuildCylinderSphereOffsetStub(const ucs::Ucs& fr, double r, double Rs, double d,
+                                                 double zFlat, int sideSign, Solid* out,
+                                                 Problem* outWhy) {
+  if (!(r > 0.0) || !(d > r) || !(d + r < Rs))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double sgn = sideSign > 0 ? 1.0 : -1.0;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+  auto gg = [&](double phi) { return Rs * Rs - d * d - r * r - 2.0 * d * r * std::cos(phi); };
+  auto cyl = [&](double phi, double z) {
+    return W(Vec3{d + r * std::cos(phi), r * std::sin(phi), z});
+  };
+  const double z0 = std::sqrt(std::max(0.0, gg(0.0)));  // loop half-height at φ = 0 (near side)
+  const double zP = std::sqrt(std::max(0.0, gg(kPi)));  // loop half-height at φ = π (far side)
+  if (!(sgn * zFlat > zP))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+
+  Surface cSurf;
+  cSurf.kind = SurfaceKind::Cylinder;
+  cSurf.frame.origin = W(Vec3{d, 0.0, 0.0});
+  cSurf.frame.zAxis = fr.zAxis;
+  cSurf.frame.xAxis = fr.xAxis;
+  cSurf.frame.yAxis = fr.yAxis;
+  cSurf.radius = r;
+  cSurf.height = 4.0 * Rs;
+  Surface sSurf;
+  sSurf.kind = SurfaceKind::Sphere;
+  sSurf.frame = fr;
+  sSurf.radius = Rs;
+
+  Solid s;
+  const int p0 = AddVertex(&s, cyl(0.0, sgn * z0));  // 0: loop vertex at φ = 0
+  const int pP = AddVertex(&s, cyl(kPi, sgn * zP));  // 1: loop vertex at φ = π
+  const int q0 = AddVertex(&s, cyl(0.0, zFlat));     // 2: rim vertex at φ = 0
+  const int qP = AddVertex(&s, cyl(kPi, zFlat));     // 3: rim vertex at φ = π
+
+  auto isect = [&](int a, int b, double witnessPhi) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = a;
+    e.v1 = b;
+    e.frame.origin = cyl(witnessPhi, sgn * std::sqrt(std::max(0.0, gg(witnessPhi))));
+    e.isectSurfaces = {cSurf, sSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int eP = isect(p0, pP, 0.5 * kPi);  // 4: quartic loop, y > 0 (p0 → pP)
+  const int eN = isect(pP, p0, 1.5 * kPi);  // 5: quartic loop, y < 0 (pP → p0)
+  const int sp0 = AddLine(&s, p0, q0);      // 6: wall seam at φ = 0 (loop → rim)
+  const int spP = AddLine(&s, pP, qP);      // 7: wall seam at φ = π
+  const Vec3 fc = W(Vec3{d, 0.0, zFlat});
+  const Vec3 caxis = fr.zAxis;
+  const int rc0 = AddArc(&s, q0, qP, fc, caxis, kPi);  // 8: rim, y > 0 (q0 → qP)
+  const int rcP = AddArc(&s, qP, q0, fc, caxis, kPi);  // 9: rim, y < 0
+
+  auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = cSurf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  auto dimple = [&](double vLo, double vHi, std::vector<EdgeUse> uses) {
+    const double uHalf = std::asin(std::clamp(r / d, -1.0, 1.0));
+    Face f;
+    f.surface = sSurf;
+    f.surface.inward = true;
+    f.uStart = -uHalf;
+    f.uEnd = uHalf;
+    f.vStart = vLo;
+    f.vEnd = vHi;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  const double vLoU = std::asin(std::clamp(z0 / Rs, -1.0, 1.0));
+  const double vHiU = std::asin(std::clamp(zP / Rs, -1.0, 1.0));
+
+  if (sideSign > 0) {
+    // Loop sits below the rim: bottom edge is the quartic loop, top edge the rim.
+    wall(0.0, kPi, {{eP, false}, {spP, false}, {rc0, true}, {sp0, true}});
+    wall(kPi, kTwoPi, {{eN, false}, {sp0, false}, {rcP, true}, {spP, true}});
+    s.faces.push_back(MakePlaneFace(fc, caxis, {{rc0, false}, {rcP, false}}));
+    dimple(vLoU, vHiU, {{eN, true}, {eP, true}});
+  } else {
+    // Rim sits below the loop: bottom edge is the rim, top edge the quartic loop.
+    wall(0.0, kPi, {{rc0, false}, {spP, true}, {eP, true}, {sp0, false}});
+    wall(kPi, kTwoPi, {{rcP, false}, {sp0, true}, {eN, true}, {spP, false}});
+    s.faces.push_back(MakePlaneFace(fc, ray3d::Scale(caxis, -1.0), {{rc0, true}, {rcP, true}}));
+    dimple(-vHiU, -vLoU, {{eP, false}, {eN, false}});
+  }
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+/// `cylinder − sphere` with the cylinder axis **parallel to a sphere diameter, offset by** \p d and
+/// both cylinder caps clear of the sphere (REQ-314 B2b-2, GitHub issue #242 — the quartic): the
+/// sphere bites the cylinder clean in two, leaving two disjoint stubs, each with a concave lens-shaped
+/// spherical dimple on its inner end. \p zBot / \p zTop are the cylinder cap heights measured from the
+/// sphere centre along \p fr's `zAxis` (`zBot < −zP`, `zTop > zP`). Pushes **two** solids.
+[[nodiscard]] bool BuildCylinderSphereOffsetSubtract(const ucs::Ucs& fr, double r, double Rs,
+                                                     double d, double zBot, double zTop,
+                                                     std::vector<Solid>* out, Problem* outWhy) {
+  Solid top;
+  if (!BuildCylinderSphereOffsetStub(fr, r, Rs, d, zTop, 1, &top, outWhy))
+    return false;
+  Solid bot;
+  if (!BuildCylinderSphereOffsetStub(fr, r, Rs, d, zBot, -1, &bot, outWhy))
+    return false;
+  out->push_back(std::move(top));
+  out->push_back(std::move(bot));
+  return Succeed(outWhy);
+}
+
 /// `sphere − cylinder` with the cylinder axis **through the sphere centre** (REQ-314 B2b-2, GitHub
 /// issue #242). A ball with a clean cylindrical hole drilled straight through it — a genus-1 solid.
 /// The kept spherical surface is the equatorial zone `|z| <= h` (`h = √(Rs²−r²)`); the bore is an
@@ -6541,14 +6667,18 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
   return Fail(Problem::BooleanCurvedFace, outWhy);  // partial penetration / a footprint over an edge
 }
 
-/// `sphere` × `cylinder` (GitHub issue #242, REQ-314 B2b-2 first pair). This slice handles the
-/// **centred** case only — the cylinder axis passing through the sphere centre, radius `r < Rs`,
-/// the cylinder clear of the sphere on both sides — where the intersection is two plane circles and
-/// the whole result is closed-form. Any other configuration (an offset or skew axis → a quartic
-/// curve) is left for a later slice and falls through unhandled to the caller's refusal.
+/// `sphere` × `cylinder` (GitHub issue #242, REQ-314 B2b-2 first pair). Handles two axis positions,
+/// both with the cylinder caps clear of the sphere on each side and `r < Rs`:
+///   - **centred** — the cylinder axis through the sphere centre; the intersection is two plane
+///     circles and every result is closed-form.
+///   - **offset** — the axis parallel to a sphere diameter, displaced by `d` with `r < d` and
+///     `d + r < Rs` (a clean through-hole); the intersection is a quartic loop each side and the
+///     curved faces integrate numerically.
+/// The `d ≤ r` pole-covered sub-case and skew / non-parallel axes fall through unhandled to the
+/// caller's refusal.
 ///
-/// All three operations are built: INTERSECT (a spherical-ended barrel), UNION (the ball with a
-/// cylindrical boss each side), and SUBTRACT — `sphere − cylinder` is the drilled ball (genus 1),
+/// All three operations are built: INTERSECT (a spherical-ended barrel / plug), UNION (the ball with
+/// a cylindrical boss each side), and SUBTRACT — `sphere − cylinder` is the drilled ball (genus 1),
 /// `cylinder − sphere` two stubs each with a spherical dimple. \p sphereIsMinuend picks the
 /// SUBTRACT direction and is ignored for the other two.
 [[nodiscard]] bool TryBooleanSphereCylinder(const SphereShape& S, const CylinderShape& C, BoolOp op,
@@ -6563,14 +6693,13 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
   const double offset = ray3d::Length(ray3d::Sub(S.centre, foot));  // axis-to-centre distance
 
   if (offset > eps) {
-    // The offset quartic (issue #242, slice B). INTERSECT only, and only the sub-case where the
+    // The offset quartic (issue #242, slice B). All three operations, in the sub-case where the
     // cylinder misses the pole (`r < d`) and clears the equator (`d + r < Rs`) and both caps clear
-    // the sphere — a clean through-plug. Everything else falls through unhandled.
+    // the sphere — a clean through-plug / hole / boss / pair of stubs. The `d ≤ r` pole-covered
+    // case and skew axes fall through unhandled.
     const double d = offset;
-    const bool wantOffset = op == BoolOp::Intersect || op == BoolOp::Union ||
-                            (op == BoolOp::Subtract && sphereIsMinuend);
-    if (!wantOffset || !(d > C.radius + eps) || !(d + C.radius < S.radius - eps))
-      return false;  // `cylinder − sphere` offset and the `d ≤ r` pole-covered case: later slices
+    if (!(d > C.radius + eps) || !(d + C.radius < S.radius - eps))
+      return false;  // the `d ≤ r` pole-covered case: a later slice
     // The loop reaches |z| = zP at φ = π; both caps must clear that for a clean plug / boss / hole.
     const double zP = std::sqrt(std::max(0.0, S.radius * S.radius - (d - C.radius) * (d - C.radius)));
     if (along - zP < eps || C.length - (along + zP) < eps)
@@ -6585,6 +6714,9 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
       return Fail(Problem::BooleanResultInvalid, outWhy);
     fq.xAxis = ray3d::Normalize(x);
     fq.yAxis = ray3d::Normalize(ray3d::Cross(fq.zAxis, fq.xAxis));
+    if (op == BoolOp::Subtract && !sphereIsMinuend)
+      return BuildCylinderSphereOffsetSubtract(fq, C.radius, S.radius, d, -along, C.length - along,
+                                               out, outWhy);
     Solid rq;
     if (op == BoolOp::Intersect) {
       if (!BuildSphereCylinderOffsetIntersection(fq, C.radius, S.radius, d, &rq, outWhy))
