@@ -4262,6 +4262,11 @@ TEST_CASE("Sweep along a multi-segment path that closes into a loop builds with 
   REQUIRE(brep::Validate(s) == Problem::Ok);
   REQUIRE_FALSE(brep::SelfIntersects(s));
   REQUIRE(brep::EulerCharacteristic(s) == 0);  // no caps — genus 1, same as the full-circle case
+  // Euler characteristic alone can't tell a correctly-closed 3-ring loop from some other
+  // topologically-valid-but-wrong wiring that happens to integrate to the same volume — so check
+  // the counts directly: 3 rings of the circle profile's 2 vertices/edges each, none duplicated.
+  REQUIRE(CountOf(s).v == 6);
+  REQUIRE(CountOf(s).f == 6);
 
   const double expected = 2.0 * kPi * r * (kPi * 0.5 * 0.5);  // Pappus: circle profile, area pi*r^2
   REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-4));

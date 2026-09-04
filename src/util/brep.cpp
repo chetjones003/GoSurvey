@@ -2914,24 +2914,19 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
   // A closed path: the last point coincides with the first (a full-circle single arc, now split
   // above, or a multi-segment path that returns to its own start). Built with no end caps and the
   // last ring aliased onto the first (REQ-315 2026-09-04) instead of Loft's two planar caps.
-  double closeScaleProbe = 1e-9;
-  for (int k = 0; k + 1 < np; ++k)
-    closeScaleProbe = std::max(
-        closeScaleProbe, ray3d::Length(ray3d::Sub(work.points[static_cast<std::size_t>(k + 1)],
-                                                   work.points[static_cast<std::size_t>(k)])));
-  const bool closed =
-      np >= 3 && ray3d::Length(ray3d::Sub(work.points[0], work.points[static_cast<std::size_t>(np - 1)])) <
-                     1e-7 * (1.0 + closeScaleProbe);
-
-  const bool singleStraight = np == 2 && !work.segments[0].arc;
-  if ((options.twistRad != 0.0 || !options.alignToPath) && !singleStraight)
-    return Fail(Problem::SweepUnsupportedOption, outWhy);
-
-  // Path scale, for the relative tolerances below.
+  // Path scale, for the relative tolerances below (including the closed-path check next).
   double scale = 1e-9;
   for (int k = 0; k + 1 < np; ++k)
     scale = std::max(scale, ray3d::Length(ray3d::Sub(work.points[static_cast<std::size_t>(k + 1)],
                                                      work.points[static_cast<std::size_t>(k)])));
+
+  const bool closed =
+      np >= 3 && ray3d::Length(ray3d::Sub(work.points[0], work.points[static_cast<std::size_t>(np - 1)])) <
+                     1e-7 * (1.0 + scale);
+
+  const bool singleStraight = np == 2 && !work.segments[0].arc;
+  if ((options.twistRad != 0.0 || !options.alignToPath) && !singleStraight)
+    return Fail(Problem::SweepUnsupportedOption, outWhy);
 
   // --- Per-segment geometry, and the tangent-continuity check at every joint -------------------
   std::vector<SweepSegGeom> seg(static_cast<std::size_t>(np - 1));

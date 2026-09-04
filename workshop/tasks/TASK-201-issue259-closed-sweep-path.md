@@ -124,6 +124,17 @@ multi-segment closed loops:
   where the rotation-minimizing frame closes by construction and the check never fires. Revisit if a
   future increment allows a non-planar closed path.
 
+## Final independent review (second pass, a fresh reviewer)
+
+Verified the ring/edge/rail indexing by hand (no double-add at the aliased seam, `railE`'s last
+iteration correctly bridges to the aliased ring, cap-skipping correctly gated) and the closed-polyline
+bulge indexing against the pre-existing convention. One real gap found and fixed: the multi-segment
+closed-loop test asserted only Euler characteristic and volume, which cannot distinguish a correctly
+built 3-ring loop from a topologically-different-but-same-volume wiring — added direct vertex/face
+count assertions (`V == 6`, `F == 6` for the 2-vertex circle profile × 3 rings). One nitpick fixed:
+`scale` was computed twice over the same loop; the closed-path check now reuses the single
+computation. Re-verified: `ctest` **1140/1140** after the fix.
+
 ## Technical debt
 
 - **DEBT-1 — no command-layer / transcript test for the new Circle-as-path and closed-Polyline-as-path
