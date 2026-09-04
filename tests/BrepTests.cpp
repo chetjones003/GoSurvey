@@ -2908,6 +2908,97 @@ TEST_CASE("Curved B2b-2: INTERSECT of a thin pipe crossing a thick one is the le
   }
 }
 
+TEST_CASE("Curved B2b-2: INTERSECT of a NON-perpendicular branch pipe is the tilted lens",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 2.0;
+  const double R = 5.0;
+  const double alpha = kPi / 6.0;  // 30 deg off perpendicular, axes coplanar and crossing
+  const double ca = std::cos(alpha);
+  const double sa = std::sin(alpha);
+
+  // lens volume = integral over the thin cross-section (rho,phi) of the thick-cylinder chord length
+  //   2 sqrt(R^2 - rho^2 sin^2 phi) / cos(alpha)   times   rho drho dphi
+  double vref = 0.0;
+  const int nRho = 1200;
+  const int nPhi = 1200;
+  for (int i = 0; i < nRho; ++i) {
+    const double rho = r * (i + 0.5) / nRho;
+    for (int j = 0; j < nPhi; ++j) {
+      const double phi = kTwoPiTest * (j + 0.5) / nPhi;
+      vref += 2.0 * std::sqrt(std::max(0.0, R * R - rho * rho * std::sin(phi) * std::sin(phi))) / ca *
+              rho * (r / nRho) * (kTwoPiTest / nPhi);
+    }
+  }
+
+  const Vec3 thinDir{ca, 0.0, sa};
+  Solid thin;
+  Solid thick;
+  ucs::Ucs ax;
+  REQUIRE(ucs::FromNormal(Vec3{-15.0 * ca, 0.0, -15.0 * sa}, thinDir, &ax));  // meet at param 15
+  REQUIRE(brep::MakeCylinder(ax, r, 30, &thin, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -15), R, 30, &thick, &why));
+
+  SECTION("axes crossing at the origin - volume matches the numerical reference") {
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 10);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 8);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(1e-2));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(thin, thick, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vref).epsilon(5e-3));
+  }
+
+  SECTION("the tilted lens on a survey-magnitude frame") {
+    const ucs::Ucs frame = TiltedAt(4.1e6, 2.2e6, 130.0);
+    ucs::Ucs axF;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-15.0 * ca, 0.0, -15.0 * sa}),
+                            ucs::UcsVectorToWorld(frame, thinDir), &axF));
+    ucs::Ucs bxF = frame;
+    bxF.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -15});
+    Solid thinF;
+    Solid thickF;
+    REQUIRE(brep::MakeCylinder(axF, r, 30, &thinF, &why));
+    REQUIRE(brep::MakeCylinder(bxF, R, 30, &thickF, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thickF, thinF, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-3));
+  }
+
+  SECTION("non-perpendicular SUBTRACT and UNION are refused - later slices") {
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(thick, thin, &out, &why));
+    REQUIRE_FALSE(brep::BooleanUnion(thick, thin, &out, &why));
+  }
+
+  SECTION("skew (non-coplanar) axes are refused") {
+    Solid skew;
+    ucs::Ucs sx;
+    REQUIRE(ucs::FromNormal(Vec3{-15.0 * ca, 4.0, -15.0 * sa}, thinDir, &sx));  // offset in y
+    REQUIRE(brep::MakeCylinder(sx, r, 30, &skew, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanIntersect(thick, skew, &out, &why));
+  }
+}
+
 TEST_CASE("Curved B2b-2: SUBTRACT bores a branch clean through the main pipe", "[brep][req314]") {
   Problem why = Problem::Ok;
   const double r = 2.0;

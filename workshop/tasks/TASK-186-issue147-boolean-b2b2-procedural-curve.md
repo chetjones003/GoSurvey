@@ -190,6 +190,17 @@ the offset quartic are the next slices.
 - sphere ∩ cylinder, torus ∩ anything, cone parabola / hyperbola sections.
 - Skew (non-coplanar) cylinder axes.
 
+**PROGRESS 2026-09-04 — non-perpendicular branch pipe INTERSECT done (feat/issue242-branch-pipe-angled, issue #242).**
+`BuildAngledBranchPipeIntersection` = `BuildBranchPipeIntersection` verbatim except `aSurf.frame`
+(thin axis = `cos α·x̂ + sin α·ẑ`) and the witness `cpt(φ,sign)` — the closed-form curve
+`ζ(φ) = (r sinα cosφ ± √(R²−r²sin²φ)) / cosα` along the thin axis (derives to `cos²α`·quadratic →
+disc factors as `cos²α(R²−r²sin²φ)`). `psi0 = asin(r/R)` unchanged (thin's y-extent is ±r regardless
+of α). `TryBooleanBranchPipe` reworked: proper 2-line intersection for `meet` (was a perpendicular-only
+projection), coplanar-gap test, `alpha` from the thin axis vs `fr.xAxis` (= thin's own in-plane
+component), α-aware fully-crosses / clears-caps margins (reduce to the old `≥R` / `≥r` at α=0).
+Non-perp SUBTRACT/UNION and skew axes still refused. 8v/10e/4f χ=2, volume vs a 1200×1200 thin-section
+integral (5e-3), tilted frame. Full suite green (1117 ctest). No `.gs` bump.
+
 **PROGRESS 2026-09-03 — `cylinder − box` notch done (feat/issue242-cylinder-box-notch, issue #242).**
 `BuildCylinderLongitudinalFlat` + a recogniser in `TryBooleanCylinderThroughPlanar`: when the box
 presents exactly one face parallel to the cylinder axis that cuts within the radius, the box is
