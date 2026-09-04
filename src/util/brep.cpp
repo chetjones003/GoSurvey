@@ -3123,8 +3123,14 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
   // only slides each vertex along its own already-valid rail; it does not change which straight line
   // it lies on, only where the (shared) ring cuts it — which is what keeps both adjoining bands'
   // rails meeting this ring exactly, without a gap or an overlap.
+  // Fixed orientation (REQ-315 2026-09-04) needs no shear at all: the frame never rotates, so every
+  // ring — mitred joint or not — already IS the profile translated to that path point, exactly the
+  // invariant `alignToPath = false` promises. Shearing it anyway would displace it off the path
+  // vertex for no reason, breaking that exact invariant precisely where it is easiest to check (a
+  // sharp corner) — caught by an independent review's test on a non-planar closed, fixed-orientation
+  // path before this task was called done.
   for (int k = 0; k < np; ++k) {
-    if (!mitreAt[static_cast<std::size_t>(k)])
+    if (!mitreAt[static_cast<std::size_t>(k)] || !options.alignToPath)
       continue;
     const Vec3& N = mitreN[static_cast<std::size_t>(k)];
     const Vec3& T = mitreTangent[static_cast<std::size_t>(k)];

@@ -145,6 +145,25 @@ changes.
   verifying claims with direct construction before writing them into the spec or a test, the same
   discipline TASK-201 and TASK-202 used and documented.
 
+## Final independent review (second pass, a fresh reviewer)
+
+Found and confirmed one real, previously-unnoticed defect: the mitre shear loop
+(`brep.cpp`, after the profile-prep loop) was gated on `mitreAt[k]` but **not** on
+`options.alignToPath` — so a fixed-orientation ring at a sharp corner was sheared off its true path
+point, even though fixed orientation needs no shear at all (every ring already sits exactly on its
+path point without one, unlike the aligned case, which genuinely needs the shear to reconcile two
+different cross-section planes at the corner). Fixed by adding `|| !options.alignToPath` to the same
+skip condition. The reviewer's own test (a non-planar closed triangular path) additionally surfaced
+that fixed orientation on **any closed path** always encloses zero volume — a rigid, non-rotating
+cross-section translated around a closed loop returns to its exact start, confirmed against two
+independent non-planar examples rather than assumed — which the kernel's existing generic closure
+check already refuses correctly (`Problem::NotClosed`) with no special-casing needed. Replaced the
+reviewer's (well-intentioned but geometrically-impossible) "closed path succeeds" test with two
+correct ones: an **open** path with two non-coplanar sharp corners (proves the actual bug fix) and a
+**closed** path asserting the `NotClosed` refusal by name (documents the zero-volume fact rather than
+treating it as a surprise). Spec's Statement/Acceptance/Revisions updated to match. Re-verified:
+`ctest` **1152/1152** after both fixes.
+
 ## Acceptance criteria status
 
 Against issue #259's "twist / fixed orientation on a curved or multi-segment path" item:

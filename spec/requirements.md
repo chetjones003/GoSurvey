@@ -6087,10 +6087,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
     ellipse-like or multi-arc loop) is built by the same rule. A closed path builds **no end caps** — the first and last cross-section
     rings are the same ring, wrapped together (mirroring `brep::Revolve`'s existing full-turn
     treatment: no literal 2π edge, no duplicate vertices at the seam) — rather than two coincident or
-    degenerate planar faces. **Fixed orientation** on a closed path is built (below); a **nonzero
-    twist** on a closed path stays refused (`Problem::SweepUnsupportedOption`) — not as an increment
-    boundary but because it is geometrically inconsistent: the seam ring is one ring, and a linear
-    twist from 0 at the start to a nonzero angle at the end would need it to carry two different
+    degenerate planar faces. **Fixed orientation on a closed path is attempted, not specially
+    refused, but never succeeds**: a rigid, non-rotating cross-section translated all the way around
+    any closed loop back to itself encloses no net volume (confirmed against independent non-planar
+    examples, not assumed), so it is refused by the kernel's existing generic closure check
+    (`Problem::NotClosed`, REQ-201) — the same check any degenerate closed surface fails, not a
+    sweep-specific rule. A **nonzero twist** on a closed path stays refused
+    (`Problem::SweepUnsupportedOption`) — not as an increment boundary but because it is geometrically
+    inconsistent: the seam ring is one ring, and a linear twist from 0 at the start to a nonzero angle
+    at the end would need it to carry two different
     orientations at once. A rotation-minimizing frame with zero twist closes consistently around a
     planar closed path by construction.
   - **A sharp (tangent-discontinuous) corner where BOTH adjoining path segments are straight, and the
@@ -6126,8 +6131,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
     vector regardless of the path's own shape, so the arc band's construction becomes the same ruled
     (straight-rail) surface the straight-segment case already uses. Twist and fixed orientation compose
     on a straight path: a fixed-orientation profile can still be given a twist, spinning about its own
-    unchanging normal as it travels. A mitred corner still mitres under either option — the shear
-    construction does not depend on how the frame is carried, only on the two tangents meeting there.
+    unchanging normal as it travels. A sharp corner is still classified and, where eligible, still
+    named a mitred joint under fixed orientation — but the mitre **shear itself does not run** there:
+    fixed orientation already places every ring exactly on its path point (never rotated, so no
+    reconciling cut is needed the way the aligned case needs one), and shearing it anyway would move
+    it off that point for no reason. A real defect of exactly this shape — the shear gated on "is this
+    corner mitred" but not on `alignToPath` — was found and fixed during this task's own final review.
   - **Fixed orientation on a curved path is not checked for the swept envelope folding over itself.**
     There is no rotation-minimizing frame to prevent it, unlike the aligned case, but `brep::
     SelfIntersects` is a narrow, torus-specific check (ADR-045 (f)'s tube-larger-than-ring case), not a
@@ -6186,10 +6195,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
     implementing, and the false assumption corrected before this bullet was written. **Fixed
     orientation works on any path including a curved one**, checked against a hand-derived reference
     (each ring is the first ring translated by the same vector the path's own two endpoints differ
-    by — provable from "fixed orientation never rotates," not merely plausible). A nonzero twist on a
+    by — provable from "fixed orientation never rotates," not merely plausible) — including through a
+    sharp (mitre-classified) corner, where a real defect (the mitre shear running regardless of
+    `alignToPath`, moving a fixed-orientation ring off its true path point) was found and fixed by
+    exactly this check, on an open path with two non-coplanar sharp corners. A nonzero twist on a
     closed path, or combined with an arc segment, is refused by name, not silently built wrong. A
-    fixed-orientation sweep that folds over itself is **not** refused — see the Statement note above —
-    and this is asserted by its absence: no test claims that refusal exists.
+    fixed-orientation sweep on a **closed** path is refused too, always, as having no enclosed volume
+    (`Problem::NotClosed`, the kernel's own generic closure check — see the Statement note above), and
+    a fixed-orientation sweep that folds over itself on an **open** curved path is **not** refused —
+    no real detector exists to build that check on — asserted by its absence: no test claims that
+    refusal exists.
   - **Results survive `.gs` save and reopen** with vertex / edge / face counts identical and volume
     and area within a relative 1e-6. A drawing with no NURBS face serializes byte-identically to a
     version-3 build. A version-4 file with a malformed patch is refused with the kernel's reason and
@@ -6250,8 +6265,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
   folds-over-itself risk as a known limitation rather than build a real detector (a separate
   undertaking) or refuse curved fixed-orientation sweeps outright. A nonzero twist on a closed path is
   refused as geometrically inconsistent (one seam ring cannot carry two different end-of-path
-  orientations), not as a further increment boundary. Issue #259 is now fully addressed, the third
-  item narrower than the other two but for stated, verified reasons rather than left unstated.
+  orientations), not as a further increment boundary. An independent final review found one more real
+  defect before this task was called done: the mitre shear ran for a fixed-orientation ring at a sharp
+  corner even though fixed orientation needs no shear there at all (every ring already sits exactly on
+  its path point without one) — fixed by gating the shear on `alignToPath` the same way the mitre
+  frame-turn already was. That review also surfaced that fixed orientation on a **closed** path always
+  encloses zero volume (a non-rotating cross-section translated around any closed loop returns to its
+  exact start), refused by the kernel's ordinary closure check rather than needing a sweep-specific
+  rule — confirmed against independent examples rather than assumed, and recorded above rather than
+  left as a surprise. Issue #259 is now fully addressed, the third item narrower than the other two
+  but for stated, verified reasons rather than left unstated.
 
 ### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
 

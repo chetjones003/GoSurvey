@@ -4534,6 +4534,66 @@ TEST_CASE("Sweep with fixed orientation translates the profile without rotating 
 // limitation (REQ-315 2026-09-04), not a checked-and-refused case. Building a real detector (checking
 // every face against every other) is a separate undertaking, decided against for this task.
 
+// GAP CHECK (independent review): the mitre shear (applied at a sharp corner) was gated on the
+// corner being mitre-classified, but NOT on `alignToPath` — a fixed-orientation ring at a sharp
+// corner was sheared off the true path point even though fixed orientation needs no shear at all
+// (every ring already IS the profile translated there, corner or not, since the frame never
+// rotates). Fixed, and this is the open-path case that exercises it: three straight segments with
+// two sharp, non-coplanar corners.
+TEST_CASE("Sweep with fixed orientation keeps every ring a plain translation through sharp corners",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // flat in XY
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{9, 1, 4}, Vec3{3, 11, -6}, Vec3{-2, 4, 8}};  // open, non-planar
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  brep::SweepOptions opt;
+  opt.alignToPath = false;
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, opt, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);  // open, capped
+  REQUIRE(CountOf(s).v == 16);                 // 4 rings x 4 vertices
+
+  // Fixed orientation never rotates, corner or not: every ring must be ring 0 translated by
+  // (points[k] - points[0]), pointwise — including the two sharp corners in between.
+  for (int k = 0; k < 4; ++k) {
+    const Vec3 translate = ray3d::Sub(path.points[static_cast<std::size_t>(k)], path.points[0]);
+    for (int j = 0; j < 4; ++j) {
+      const Vec3 expected = ray3d::Add(s.vertices[static_cast<std::size_t>(j)].p, translate);
+      const Vec3& actual = s.vertices[static_cast<std::size_t>(4 * k + j)].p;
+      REQUIRE(actual.x == Approx(expected.x).epsilon(1e-9));
+      REQUIRE(actual.y == Approx(expected.y).epsilon(1e-9));
+      REQUIRE(actual.z == Approx(expected.z).epsilon(1e-9));
+    }
+  }
+}
+
+// A fixed-orientation sweep along a CLOSED path is a special case worth stating plainly: since the
+// frame never rotates, the profile returns to its exact starting position AND orientation, and the
+// "tube" this sweeps is provably zero-volume (a rigid, non-rotating cross-section translated around
+// any closed loop back to itself encloses no net interior — confirmed empirically here against two
+// independent non-planar triangular paths before writing this down, not assumed). The kernel's
+// existing generic closure check catches this on its own (no special-casing needed): a solid with no
+// enclosed volume is refused as `Problem::NotClosed`, the same as any other degenerate closed
+// surface, REQ-201.
+TEST_CASE("Sweep refuses a fixed-orientation closed path as having no enclosed volume",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{9, 1, 4}, Vec3{3, 11, -6}, Vec3{0, 0, 0}};  // closed, non-planar
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  brep::SweepOptions opt;
+  opt.alignToPath = false;
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(sq, path, opt, &s, &why));
+  REQUIRE(why == Problem::NotClosed);
+  REQUIRE(s.faces.empty());
+}
+
 // ---------------------------------------------------------------------------------------------
 // REQ-314 increment 1, amended: a profile arc may curve INTO its loop.
 //
