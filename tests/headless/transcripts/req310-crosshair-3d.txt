@@ -47,17 +47,17 @@ CMD CROSSHAIR3D ON
 EXPECT LINEXYZ 0 0 0 30 10 20 30
 
 # --- Survives a .gs round trip ----------------------------------------------------------------------
-SAVEAS %OUT%/xhair.gs
-OPEN %OUT%/xhair.gs
+SAVEAS %OUT%/xhair.dwg
+OPEN %OUT%/xhair.dwg
 EXPECT CROSSHAIR3D ON
 
 # ...and so does OFF, which is the additive-key case: the key is written only when ON, so this
 # proves the absent key reads as OFF rather than carrying the previous session's value.
 CMD CROSSHAIR3D OFF
-SAVEAS %OUT%/xhair-off.gs
+SAVEAS %OUT%/xhair-off.dwg
 CMD CROSSHAIR3D ON
 EXPECT CROSSHAIR3D ON
-OPEN %OUT%/xhair-off.gs
+OPEN %OUT%/xhair-off.dwg
 EXPECT CROSSHAIR3D OFF
 
 CHECK ALL

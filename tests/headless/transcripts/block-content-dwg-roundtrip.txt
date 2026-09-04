@@ -1,4 +1,4 @@
-# A block definition's non-line geometry must survive a `.gs` save/reopen.
+# A block definition's non-line geometry must survive a `.dwg` save/reopen.
 #
 # CadBlockContentToJson / ...FromJson once serialized only lines, circles(+attrs),
 # nested and texts — arcs, ellipses, polylines, meshes, per-text attrs and the
@@ -34,9 +34,9 @@ CMD BCLOSE SAVE
 EXPECT LOG "BCLOSE — closed"
 
 # save, drop the document, reload
-SAVEAS %OUT%/blk-content-1.gs
+SAVEAS %OUT%/blk-content-1.dwg
 NEW
-OPEN %OUT%/blk-content-1.gs
+OPEN %OUT%/blk-content-1.dwg
 
 # the reloaded definition still carries all three entities
 CMD BEDIT SHAPE
@@ -47,5 +47,5 @@ EXPECT CIRCLES 1
 CMD BCLOSE
 
 # and an idempotent re-save reproduces the file byte-for-byte
-SAVEAS %OUT%/blk-content-2.gs
-EXPECT SAMEFILE %OUT%/blk-content-1.gs %OUT%/blk-content-2.gs
+SAVEAS %OUT%/blk-content-2.dwg
+EXPECT SAMEFILE %OUT%/blk-content-1.dwg %OUT%/blk-content-2.dwg

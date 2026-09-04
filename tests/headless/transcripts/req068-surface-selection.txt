@@ -19,7 +19,7 @@
 # moved and could not find out why. So each refusal is asserted twice: the log line exists
 # (REQ-201), and the operation still did its job on everything else.
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 
 CMD SURFACECREATE Test EG, Existing Ground
 EXPECT SURFACES 1

@@ -154,8 +154,8 @@ EXPECT SOLIDS 7
 # Phase 4 boolean) will save the same way (ADR-045 (a)). If the reload rebuilt from the recipe
 # instead, every count below would still pass and the claim would be untested - which is why the
 # volumes are asserted to a relative 1e-6 rather than to REQ-101's 0.01.
-SAVEAS %OUT%/solids.gs
-OPEN %OUT%/solids.gs
+SAVEAS %OUT%/solids.dwg
+OPEN %OUT%/solids.dwg
 
 EXPECT SOLIDS 7
 EXPECT SOLIDKIND 0 Box
@@ -191,9 +191,9 @@ CMD LINE
 CMD 0,0
 CMD 10,10
 ESC
-SAVEAS %OUT%/nosolids.gs
-EXPECT FILELACKS %OUT%/nosolids.gs "solids"
-OPEN %OUT%/nosolids.gs
+SAVEAS %OUT%/nosolids.dwg
+EXPECT FILELACKS %OUT%/nosolids.dwg "solids"
+OPEN %OUT%/nosolids.dwg
 EXPECT SOLIDS 0
 EXPECT LINES 1
 
@@ -282,8 +282,8 @@ EXPECT SOLIDBOUNDS 0 -5 -5 0 5 5 10
 EXPECT SOLIDPROPS 0 1000 600 8 12 6
 
 # And it survives the round trip in the rebased frame.
-SAVEAS %OUT%/rebased.gs
-OPEN %OUT%/rebased.gs
+SAVEAS %OUT%/rebased.dwg
+OPEN %OUT%/rebased.dwg
 EXPECT SOLIDBOUNDS 0 -5 -5 0 5 5 10
 EXPECT SOLIDPROPS 0 1000 600 8 12 6
 
@@ -302,8 +302,8 @@ EXPECT SOLIDS 1
 EXPECT SOLIDPROPS 0 1005.3096491487338 603.1857894892403 4 6 4
 # 40 deep in Y and 8 across in X and Z - a cylinder lying down, not standing up.
 EXPECT SOLIDBOUNDS 0 -4 -20 -4 4 0 4
-SAVEAS %OUT%/ucssolid.gs
-OPEN %OUT%/ucssolid.gs
+SAVEAS %OUT%/ucssolid.dwg
+OPEN %OUT%/ucssolid.dwg
 EXPECT SOLIDPROPS 0 1005.3096491487338 603.1857894892403 4 6 4
 EXPECT SOLIDBOUNDS 0 -4 -20 -4 4 0 4
 

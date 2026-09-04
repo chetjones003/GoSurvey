@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds samples/font-demo.gs — the visual fixture for issue #115's font/text audit.
+  Builds samples/font-demo.dwg — the visual fixture for issue #115's font/text audit.
 
 .DESCRIPTION
   Issue #115's Testing section asks for a drawing carrying as many text types as possible, so the same
@@ -16,10 +16,13 @@
   Fonts are assigned round-robin across Arial / Times New Roman / romans.shx so one drawing shows a
   TrueType family, a second TrueType family, and an SHX stroke font side by side.
 
-  Output is UTF-8 without a BOM: LoadGoSurveyFile feeds the bytes to nlohmann JSON, which rejects a BOM.
+  The transcript SAVEAS's a .dwg; this script extracts its embedded GoSurvey JSON trailer
+  (GsJsonDwgFixture from-dwg — the JSON schema, REQ-175, lives on only inside a .dwg trailer since
+  issue #264 retired standalone .gs), edits it, and wraps the result back into a .dwg
+  (GsJsonDwgFixture to-dwg). Output JSON is UTF-8 without a BOM: the JSON parser rejects a BOM.
 
 .EXAMPLE
-  pwsh tools/Make-FontDemoGs.ps1
+  pwsh tools/Make-FontDemoDwg.ps1
 #>
 [CmdletBinding()]
 param(
@@ -37,10 +40,13 @@ if (-not $RepoRoot) {
 $headless = Join-Path $RepoRoot 'build/gosurvey_headless.exe'
 if (-not (Test-Path $headless)) { throw "headless driver not built: $headless" }
 
+$converter = Join-Path $RepoRoot 'build/GsJsonDwgFixture.exe'
+if (-not (Test-Path $converter)) { throw "GsJsonDwgFixture not built: $converter (build target GsJsonDwgFixture first)" }
+
 $transcript = Join-Path $RepoRoot 'tests/headless/transcripts/issue115-font-matrix.txt'
 if (-not (Test-Path $transcript)) { throw "transcript missing: $transcript" }
 
-if (-not $OutFile) { $OutFile = Join-Path $RepoRoot 'samples/font-demo.gs' }
+if (-not $OutFile) { $OutFile = Join-Path $RepoRoot 'samples/font-demo.dwg' }
 
 function Write-Utf8NoBom([string]$Path, [string]$Content) {
   $enc = New-Object System.Text.UTF8Encoding $false
@@ -53,10 +59,14 @@ try {
   & $headless run $transcript --out $work | Write-Verbose
   if ($LASTEXITCODE -ne 0) { throw "transcript failed (exit $LASTEXITCODE)" }
 
-  $built = Join-Path $work 'font-matrix-full.gs'
-  if (-not (Test-Path $built)) { throw "transcript produced no font-matrix-full.gs" }
+  $built = Join-Path $work 'font-matrix-full.dwg'
+  if (-not (Test-Path $built)) { throw "transcript produced no font-matrix-full.dwg" }
 
-  $root = Get-Content -LiteralPath $built -Raw -Encoding UTF8 | ConvertFrom-Json
+  $extracted = Join-Path $work 'font-matrix-full.json'
+  & $converter from-dwg $built $extracted
+  if ($LASTEXITCODE -ne 0) { throw "GsJsonDwgFixture from-dwg failed (exit $LASTEXITCODE)" }
+
+  $root = Get-Content -LiteralPath $extracted -Raw -Encoding UTF8 | ConvertFrom-Json
 
   # MTEXT content comes from the on-screen editor, so the transcript cannot place one. Inject a model
   # MTEXT inside the extents so both viewports show it — this is the entity REQ-050 sizes.
@@ -111,7 +121,10 @@ try {
   }
 
   $json = $root | ConvertTo-Json -Depth 100
-  Write-Utf8NoBom $OutFile $json
+  $editedJson = Join-Path $work 'font-matrix-edited.json'
+  Write-Utf8NoBom $editedJson $json
+  & $converter to-dwg $editedJson $OutFile
+  if ($LASTEXITCODE -ne 0) { throw "GsJsonDwgFixture to-dwg failed (exit $LASTEXITCODE)" }
   Write-Host ("wrote {0} ({1} annotations stamped)" -f $OutFile, $i)
 }
 finally {

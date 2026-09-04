@@ -7,7 +7,7 @@
 #
 # Fixtures are PNEZD (P,N,E,Z,D): pad-points.csv has 7 points, pad-points-more.csv the same 7 plus 3.
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE Pad, Existing Ground
 CMD SURFACELIST
 EXPECT LOG "Surface "Pad": 500 points, 982 triangles"
@@ -70,7 +70,7 @@ CHECK ALL
 # It cannot be produced by SURFACEADDFILE, which refuses an unreadable path up front — the file has
 # to go missing AFTER the link was made, which is exactly the case this covers.
 
-OPEN samples/missing-point-file.gs
+OPEN samples/missing-point-file.dwg
 CMD SURFACELIST
 EXPECT LOG "Surface "Pad": 507 points, 1000 triangles"
 

@@ -19,7 +19,7 @@ EXPECT LOG "Unknown"
 CMD TOOLSPACE LIST
 EXPECT LOG "tab: Settings"
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD TOOLSPACE PROSPECTOR
 CMD TOOLSPACE LIST
 EXPECT LOG "Existing Ground"

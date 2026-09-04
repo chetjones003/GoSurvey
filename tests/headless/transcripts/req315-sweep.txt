@@ -115,8 +115,8 @@ EXPECT SOLIDS 3
 ESC
 
 # --- Solids survive a .gs save and reopen with topology intact -----------------------------
-SAVEAS %OUT%/req315-sweep.gs
-OPEN %OUT%/req315-sweep.gs
+SAVEAS %OUT%/req315-sweep.dwg
+OPEN %OUT%/req315-sweep.dwg
 EXPECT SOLIDS 3
 EXPECT SOLIDPROPS 0 240 248 8 12 6
 EXPECT SOLIDPROPS 2 112.17987473733407 230.64293761703865 8 14 8

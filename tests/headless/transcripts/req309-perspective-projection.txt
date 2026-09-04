@@ -73,8 +73,8 @@ EXPECT PROJECTION ORTHOGRAPHIC
 EXPECT FOV 32
 
 # --- Both survive a .gs round trip ------------------------------------------------------------------
-SAVEAS %OUT%/proj.gs
-OPEN %OUT%/proj.gs
+SAVEAS %OUT%/proj.dwg
+OPEN %OUT%/proj.dwg
 
 # The active view was orthographic at FOV 32 when saved.
 EXPECT PROJECTION ORTHOGRAPHIC

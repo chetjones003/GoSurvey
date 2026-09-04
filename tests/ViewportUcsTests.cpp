@@ -135,10 +135,10 @@ TEST_CASE("Per-viewport UCS round-trips .gs; a legacy file loads every viewport 
 
   const std::filesystem::path path = UniqueGsPath("vpucs");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
   REQUIRE(loaded.paperLayouts.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports.size() == 2);
 
@@ -172,7 +172,7 @@ TEST_CASE("Per-viewport UCS round-trips .gs; a legacy file loads every viewport 
     out << raw;
   }
   AppCommandState legacy;
-  REQUIRE(LoadGoSurveyFile(legacy, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyTemplateFile(legacy, path.string().c_str(), log));
   for (const Viewport& v : legacy.paperLayouts[0].viewports)
     REQUIRE(ucs::IsWorld(v.activeUcs));
 }
@@ -204,10 +204,10 @@ TEST_CASE("Saving .gs while floating records the drawing's UCS, not the viewport
   REQUIRE_FALSE(CadUcsIsWorld(st));  // st.activeUcs is the viewport frame right now
 
   const std::filesystem::path path = UniqueGsPath("floatsave");
-  REQUIRE(SaveGoSurveyFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
   REQUIRE(ucs::IsWorld(loaded.activeUcs));  // the DRAWING frame was saved, not the viewport's
   const ucs::Ucs& r0 = loaded.paperLayouts[0].viewports[0].activeUcs;
   REQUIRE(r0.origin.x == Approx(10.0));     // the viewport frame survived on the viewport

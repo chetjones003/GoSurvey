@@ -68,8 +68,8 @@ EXPECT LOG "must touch the revolve axis"
 EXPECT SOLIDS 2
 
 # --- Solids survive a .gs save and reopen with topology intact -------------------------------
-SAVEAS %OUT%/req314-revolve.gs
-OPEN %OUT%/req314-revolve.gs
+SAVEAS %OUT%/req314-revolve.dwg
+OPEN %OUT%/req314-revolve.dwg
 EXPECT SOLIDS 2
 
 CHECK ALL

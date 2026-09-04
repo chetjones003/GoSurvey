@@ -329,14 +329,14 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   const std::string ext = LowerExt(pathUtf8);
   AppCommandState scratch;
   bool ok = false;
-  if (ext == ".gs")
-    ok = LoadGoSurveyFile(scratch, pathUtf8, log);
-  else if (ext == ".dxf")
+  if (ext == ".dxf")
     ok = ImportDxfFile(scratch, pathUtf8, log);
   else if (ext == ".dwg")
     ok = ImportDwgFile(scratch, pathUtf8, log);
   else {
-    log.push_back("BLOCKIMPORT — expected a .gs, .dxf, or .dwg file.");
+    // .gs block-library import was removed by issue #264 (D-2026-09-03-h); re-adding a
+    // block-library container is tracked as issue #284, not part of this one.
+    log.push_back("BLOCKIMPORT — expected a .dxf or .dwg file.");
     return -1;
   }
   if (!ok)
@@ -377,7 +377,7 @@ void LoadBundledBlockLibraryImpl(AppCommandState& dest, std::vector<std::string>
     if (!e.is_regular_file(ec))
       continue;
     const std::string ext = LowerExt(e.path().u8string().c_str());
-    if (ext == ".gs" || ext == ".dxf")
+    if (ext == ".dxf")
       files.push_back(e.path());
   }
   std::sort(files.begin(), files.end());
@@ -963,7 +963,7 @@ void CadBlocksCollectEditPickerNames(const AppCommandState& st, std::vector<std:
         if (!e.is_regular_file(ec))
           continue;
         const std::string extLo = StringUtil::toLowerAsciiCopy(e.path().extension().u8string());
-        if (extLo != ".gs" && extLo != ".dxf")
+        if (extLo != ".dxf")
           continue;
         const std::string stem = e.path().stem().u8string();
         if (stem.empty() || CadBlockFindDef(st.blockDefs, stem) >= 0)
@@ -1032,7 +1032,7 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
             continue;
           const std::string ext = e.path().extension().u8string();
           const std::string extLo = StringUtil::toLowerAsciiCopy(ext);
-          if (extLo != ".gs" && extLo != ".dxf")
+          if (extLo != ".dxf")
             continue;
           if (!CadBlockEqCi(e.path().stem().u8string(), name))
             continue;
@@ -1804,23 +1804,9 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
   }
 
   if (tok == "wblock") {
-    const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.size() < 2) {
-      log.push_back("WBLOCK — usage: WBLOCK <name>, <path>.");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
-    if (di < 0) {
-      log.push_back("WBLOCK — no block named \"" + f[0] + "\".");
-      return true;
-    }
-    AppCommandState tmp;
-    tmp.blockDefs.push_back(st.blockDefs[static_cast<size_t>(di)]);
-    if (!SaveGoSurveyFile(tmp, f[1].c_str(), log)) {
-      log.push_back("WBLOCK — could not write " + f[1] + ".");
-      return true;
-    }
-    log.push_back("WBLOCK — wrote \"" + f[0] + "\" to " + f[1] + ".");
+    // .gs block-library export was removed by issue #264 (D-2026-09-03-h); WBLOCK had no other
+    // target format, so it is disabled pending issue #284 (a .dwg-based container).
+    log.push_back("WBLOCK — unavailable: .gs block-library export was retired; see issue #284 for .dwg-based block export.");
     return true;
   }
 

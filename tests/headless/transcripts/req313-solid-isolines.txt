@@ -46,8 +46,8 @@ CMD ISOLINES
 EXPECT LOG "ISOLINES = 16"
 
 # --- It survives a .gs round trip -----------------------------------------------------------------------
-SAVEAS %OUT%/iso.gs
-OPEN %OUT%/iso.gs
+SAVEAS %OUT%/iso.dwg
+OPEN %OUT%/iso.dwg
 CMD ISOLINES
 EXPECT LOG "ISOLINES = 16"
 EXPECT SOLIDEDGESEGS 116

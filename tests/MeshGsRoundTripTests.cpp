@@ -38,7 +38,7 @@ std::vector<float> AwkwardFloats() {
 TEST_CASE("Mesh vertex positions survive .gs serialization bit-identically", "[mesh][gs]") {
   const std::vector<float> verts = AwkwardFloats();
   json m;
-  m["verts"] = verts;  // exactly what SaveGoSurveyFile writes
+  m["verts"] = verts;  // exactly what SerializeGoSurveyJson writes
 
   const std::string text = m.dump();
   const json back = json::parse(text);

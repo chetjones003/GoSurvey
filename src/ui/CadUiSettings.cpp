@@ -4,6 +4,7 @@
 #include "CadUi.hpp"
 #include "CadUiHelpers.hpp"
 #include "AppIcon.hpp"
+#include "AppPaths.hpp"
 #include "GpuPreference.hpp"
 #include "MtextRichFormat.hpp"
 #include "NumFormat.hpp"
@@ -223,27 +224,27 @@ static void DrawSettingsDisplayTab(AppCommandState& cmd) {
 
 static void DrawSettingsFilesTab(AppCommandState& cmd, std::vector<std::string>* log) {
   DrawSettingsNote(
-      "Search paths, file locations, and startup template. GoSurvey loads a workspace .gs at startup; an empty "
-      "Custom path uses the bundled resources/default-template.gs next to the executable. Preferences are saved "
+      "Search paths, file locations, and startup template. GoSurvey loads a workspace template .gst at startup; an empty "
+      "Custom path uses the bundled resources/default-template.gst next to the executable. Preferences are saved "
       "in gosurvey-user.json beside the executable.");
-  BoxBegin("Startup template (.gs)", 140.f);
-  ImGui::InputText("Custom .gs path (UTF-8)##startup_gs", cmd.defaultWorkspaceTemplatePathUtf8,
+  BoxBegin("Startup template (.gst)", 140.f);
+  ImGui::InputText("Custom .gst path (UTF-8)##startup_gst", cmd.defaultWorkspaceTemplatePathUtf8,
                    IM_ARRAYSIZE(cmd.defaultWorkspaceTemplatePathUtf8));
   ImGui::SameLine();
 #if defined(_WIN32)
-  if (ImGui::Button("Browse##startup_gs")) {
-    if (BrowseOpenFileGsUtf8(cmd.defaultWorkspaceTemplatePathUtf8, sizeof(cmd.defaultWorkspaceTemplatePathUtf8)) && log)
+  if (ImGui::Button("Browse##startup_gst")) {
+    if (BrowseOpenFileGstUtf8(cmd.defaultWorkspaceTemplatePathUtf8, sizeof(cmd.defaultWorkspaceTemplatePathUtf8)) && log)
       log->push_back("Startup template path set from file dialog.");
   }
 #else
-  ImGui::BeginDisabled(); ImGui::Button("Browse##startup_gs"); ImGui::EndDisabled();
+  ImGui::BeginDisabled(); ImGui::Button("Browse##startup_gst"); ImGui::EndDisabled();
   ItemHelpTooltip("File browse for startup template is only implemented on Windows in this build.");
 #endif
-  const std::filesystem::path bundled = ResolveDefaultWorkspaceTemplateGsPath();
+  const std::filesystem::path bundled = ResolveDefaultWorkspaceTemplateGstPath();
   if (!bundled.empty())
     ImGui::TextDisabled("Bundled template resolved to: %s", bundled.u8string().c_str());
   else
-    ImGui::TextDisabled("Bundled template not found (expected resources/default-template.gs beside exe or cwd).");
+    ImGui::TextDisabled("Bundled template not found (expected resources/default-template.gst beside exe or cwd).");
   if (ImGui::Button("Save startup preferences##startup_save")) {
     if (SaveUserStartupPrefs(cmd)) {
       if (log) log->push_back("Saved startup preferences (gosurvey-user.json).");
@@ -1161,7 +1162,7 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
     }
     ItemHelpTooltip("AutoCAD INSUNITS. A relabel only: it tells the drawing (and the DXF $INSUNITS header) what unit it is in. It never rescales or converts geometry.");
   }
-  ImGui::TextDisabled("Relabel only — saved to the drawing (.gs) and DXF $INSUNITS; geometry unchanged.");
+  ImGui::TextDisabled("Relabel only — saved to the drawing and DXF $INSUNITS; geometry unchanged.");
   BoxEnd();
 
   // ---- Sample Output (live) ----

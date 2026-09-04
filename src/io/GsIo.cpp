@@ -2928,9 +2928,9 @@ std::string SerializeGoSurveyJson(const AppCommandState& st) {
   return BuildRoot(st).dump(2);
 }
 
-bool SaveGoSurveyFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || !pathUtf8[0]) {
-    log.push_back("Save .gs: empty path.");
+    log.push_back("Save .gst: empty path.");
     return false;
   }
   try {
@@ -2940,10 +2940,10 @@ bool SaveGoSurveyFile(const AppCommandState& st, const char* pathUtf8, std::vect
       return false;
     }
     f << SerializeGoSurveyJson(st);
-    log.push_back(std::string("Saved GoSurvey workspace (.gs): ") + pathUtf8);
+    log.push_back(std::string("Saved GoSurvey template (.gst): ") + pathUtf8);
     return true;
   } catch (const std::exception& e) {
-    log.push_back(std::string("Save .gs failed: ") + e.what());
+    log.push_back(std::string("Save .gst failed: ") + e.what());
     return false;
   }
 }
@@ -3029,9 +3029,9 @@ bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, st
   }
 }
 
-bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+bool LoadGoSurveyTemplateFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || !pathUtf8[0]) {
-    log.push_back("Open .gs: empty path.");
+    log.push_back("Open .gst: empty path.");
     return false;
   }
   std::ifstream f(std::filesystem::path(pathUtf8), std::ios::binary);
@@ -3042,6 +3042,6 @@ bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std
   const std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
   if (!LoadGoSurveyFromJsonUtf8(st, bytes, log))
     return false;
-  log.push_back(std::string("Opened GoSurvey workspace (.gs): ") + pathUtf8);
+  log.push_back(std::string("Opened GoSurvey template (.gst): ") + pathUtf8);
   return true;
 }

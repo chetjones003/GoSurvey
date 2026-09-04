@@ -24,6 +24,7 @@
 #include "PdfAttach.hpp"
 #include "SurveyPoints.hpp"
 #include "AppIcon.hpp"
+#include "AppPaths.hpp"
 #include "GsIo.hpp"
 #include "DwgIo.hpp"
 #include "SplashScreen.hpp"
@@ -67,9 +68,11 @@ namespace
 
   /// Returns the first command-line argument naming an existing file, as UTF-8, or empty.
   ///
-  /// BUG-012: the installer registers `.gs` with `shell\open\command = "...GoSurvey.exe" "%1"`,
-  /// so Explorer has always passed the path — and `main()` took no arguments, so it was silently
-  /// dropped and double-clicking a drawing opened an empty session.
+  /// BUG-012: the installer used to register `.gs` with `shell\open\command = "...GoSurvey.exe"
+  /// "%1"` (removed by issue #264 — `.gs` is no longer an openable document), so Explorer passed
+  /// the path — and `main()` took no arguments, so it was silently dropped and double-clicking a
+  /// drawing opened an empty session. Still handling this so a path passed on the command line
+  /// any other way (a shortcut, a shell verb someone adds later) keeps working.
   ///
   /// Reads the WIDE command line rather than adding `argc`/`argv` to `main`. `argv` is encoded in
   /// the process ANSI codepage, so a drawing under a path containing characters outside it would
@@ -117,7 +120,7 @@ namespace
         return false;
       std::vector<std::string> boot;
       const std::string u8 = p.u8string();
-      if (!LoadGoSurveyFile(cmd, u8.c_str(), boot))
+      if (!LoadGoSurveyTemplateFile(cmd, u8.c_str(), boot))
         return false;
       appendLines(boot);
       return true;
@@ -130,26 +133,26 @@ namespace
       {
         std::vector<std::string> boot;
         const std::string u8 = custom.u8string();
-        if (LoadGoSurveyFile(cmd, u8.c_str(), boot))
+        if (LoadGoSurveyTemplateFile(cmd, u8.c_str(), boot))
         {
           appendLines(boot);
           LoadBundledBlockLibrary(cmd, cmdLog);
           return;
         }
         appendLines(boot);
-        cmdLog.push_back("Startup: custom template failed to load; trying bundled default-template.gs.");
+        cmdLog.push_back("Startup: custom template failed to load; trying bundled default-template.gst.");
       }
       else
       {
-        cmdLog.push_back("Startup: custom template path not found; trying bundled default-template.gs.");
+        cmdLog.push_back("Startup: custom template path not found; trying bundled default-template.gst.");
       }
     }
 
-    if (tryLoadPath(ResolveDefaultWorkspaceTemplateGsPath())) {
+    if (tryLoadPath(ResolveDefaultWorkspaceTemplateGstPath())) {
       LoadBundledBlockLibrary(cmd, cmdLog);
       return;
     }
-    cmdLog.push_back("Startup: bundled default-template.gs not found; starting with an empty drawing.");
+    cmdLog.push_back("Startup: bundled default-template.gst not found; starting with an empty drawing.");
     LoadBundledBlockLibrary(cmd, cmdLog);
   }
 
@@ -423,7 +426,7 @@ int main()
   cmdLog.push_back("Drawing Created.");
   cmdLog.push_back("JSON database - ready...");
   // BUG-012: a drawing passed on the command line wins over the startup template. Someone who
-  // double-clicked a .gs wants that drawing, not a blank sheet built from their template.
+  // opened a drawing this way wants that drawing, not a blank sheet built from their template.
   bool openedFromCommandLine = false;
   {
     const std::string startupFile = FirstExistingFileArgumentUtf8();
@@ -440,16 +443,16 @@ int main()
         cmdLog.push_back("Could not open " + startupFile + "; starting from the usual template.");
       else
       {
-        // BUG-027: loading a drawing is not the same as OWNING it. Until this ran, a .gs opened by
-        // double-click was loaded but anonymous - the tab still read "Drawing 1", and the first
-        // Save (menu or Ctrl+S) opened Save As and then asked permission to overwrite the user's
-        // own drawing. File > Open adopts its path for exactly this reason; the startup argument
-        // never did.
+        // BUG-027: loading a drawing is not the same as OWNING it. Until this ran, a drawing opened
+        // this way was loaded but anonymous - the tab still read "Drawing 1", and the first Save
+        // (menu or Ctrl+S) opened Save As and then asked permission to overwrite the user's own
+        // drawing. File > Open adopts its path for exactly this reason; the startup argument never
+        // did.
         //
-        // Adopted HERE and not inside LoadGoSurveyFile: the startup TEMPLATE loads through that
-        // same function, and a blank drawing that adopted default-template.gs as its save target
-        // would overwrite the template on the next Ctrl+S. Only the caller knows whether the file
-        // it just read is the document or the mould for one.
+        // Adopted HERE and not inside LoadGoSurveyTemplateFile: the startup TEMPLATE loads through
+        // that same function, and a blank drawing that adopted default-template.gst as its save
+        // target would overwrite the template on the next Ctrl+S. Only the caller knows whether the
+        // file it just read is the document or the mould for one.
         std::error_code             absEc;
         const std::filesystem::path argPath(startupFile);
         // Absolute, because a relative argument would otherwise be re-resolved later against

@@ -305,15 +305,14 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(!s_cmd->paperLayouts[0].paperBlockRefs.empty());
     SubmitCad(ctx, "BLOCKMODEL");
 
-    SubmitCad(ctx, "WBLOCK HYDRANT, issue124-wblock.gs");
-    IM_CHECK(CadLogHas("WBLOCK"));
-    SubmitCad(ctx, "BLOCKIMPORT issue124-wblock.gs");
+    // WBLOCK/BLOCKIMPORT .gs round-trip removed by issue #264 (D-2026-09-03-h); WBLOCK is
+    // disabled pending a .dwg-based block-library replacement (issue #284).
 
     std::vector<std::string> ioLog;
-    IM_CHECK(SaveGoSurveyFile(*s_cmd, "issue124-roundtrip.gs", ioLog));
+    IM_CHECK(SaveGoSurveyTemplateFile(*s_cmd, "issue124-roundtrip.json", ioLog));
     {
       AppCommandState loaded;
-      IM_CHECK(LoadGoSurveyFile(loaded, "issue124-roundtrip.gs", ioLog));
+      IM_CHECK(LoadGoSurveyTemplateFile(loaded, "issue124-roundtrip.json", ioLog));
       IM_CHECK(!loaded.blockDefs.empty());
       IM_CHECK(!loaded.cadBlockRefs.empty());
     }

@@ -1,6 +1,6 @@
 // Issue #125 — DIMANGULAR must round-trip through .gs (kind + angle vertex).
 //
-// GsIo.cpp is not linked here. These tests exercise the same JSON helpers Save/LoadGoSurveyFile
+// GsIo.cpp is not linked here. These tests exercise the same JSON helpers SerializeGoSurveyJson/LoadGoSurveyFromJsonUtf8
 // call (`GsAnnotationJson.hpp`), which is where the defect lived: Kind::DimAngular fell through
 // to "text" and dimAngVertexX/Y were never written.
 

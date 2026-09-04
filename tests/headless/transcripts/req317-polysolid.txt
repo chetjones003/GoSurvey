@@ -203,10 +203,10 @@ EXPECT LOG "POLYSOLID canceled"
 EXPECT SOLIDS 10
 
 # --- Save and reopen ----------------------------------------------------------------------------------
-SAVEAS %OUT%/polysolid-roundtrip.gs
+SAVEAS %OUT%/polysolid-roundtrip.dwg
 NEW
 EXPECT SOLIDS 0
-OPEN %OUT%/polysolid-roundtrip.gs
+OPEN %OUT%/polysolid-roundtrip.dwg
 EXPECT SOLIDS 10
 # The topology is what was written, so every figure comes back from it rather than from a recipe
 # rebuilt on load (ADR-045 (f)) — including the ring wall's holes and its inward-facing inner wall.
