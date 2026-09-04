@@ -4211,6 +4211,29 @@ TEST_CASE("Sweep mitres both corners of a Z-shaped 3-segment path", "[brep][req3
           Approx(4.0 * 8.0 + 4.0 * 6.0 + 4.0 * 5.0).epsilon(1e-9));
 }
 
+TEST_CASE("Sweep mitres three consecutive corners of a helix-like 4-segment path", "[brep][req315]") {
+  // Three mitred corners in a row, none coplanar with the others (each turn is about a different
+  // axis) — a stress test for whether TurnFrameToTangent's running frame stays correct after TWO
+  // turns in a row, not just one.
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{5, 0, 0}, Vec3{5, 4, 0}, Vec3{5, 4, 3}, Vec3{9, 4, 3}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{},
+                   brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE(CountOf(s).v == 20);  // 5 rings x 4 vertices
+  REQUIRE(CountOf(s).f == 18);  // 4 bands x 4 side faces + 2 caps
+  REQUIRE(brep::ComputeMassProperties(s).volume ==
+          Approx(4.0 * 5.0 + 4.0 * 4.0 + 4.0 * 3.0 + 4.0 * 4.0).epsilon(1e-9));
+}
+
 TEST_CASE("Sweep mitres every corner of a closed rectangular path", "[brep][req315]") {
   Problem why = Problem::Ok;
   const brep::Profile sq = PolyProfile(World(), {{-0.5, -0.5}, {0.5, -0.5}, {0.5, 0.5}, {-0.5, 0.5}});

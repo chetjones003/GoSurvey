@@ -115,6 +115,17 @@ new (correct) build-and-measure behavior.
   pass (numeric verification of the geometry before writing the "expected volume" in a test, the same
   discipline TASK-201 used and documented).
 
+## Final independent review (second pass, a fresh reviewer)
+
+Verified the bisector-plane guard math algebraically (the `SweepMitreCollapsed` threshold is exactly
+the shear denominator's own near-zero condition, so nothing slips past it), traced `TurnFrameToTangent`
+and the `prep[np-1]` aliasing against every downstream consumer, and — since the existing tests only
+cover a *two*-corner path — wrote and ran an additional 3-consecutive-corner test (4 segments, each
+turn about a different, non-coplanar axis) to specifically stress whether the running frame stays
+correct after two turns in a row rather than just one. It passed, volume exact to 1e-9. Folded into
+this PR as `[req315]` case "Sweep mitres three consecutive corners of a helix-like 4-segment path".
+No bugs found; `ctest` **1146/1146** after adding it.
+
 ## Acceptance criteria status
 
 Against issue #259's "mitred (tangent-discontinuous) path corner" item, scoped by user decision to
