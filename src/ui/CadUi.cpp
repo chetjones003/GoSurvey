@@ -13393,7 +13393,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           SelectedEntity hoverHit{};
           float hoverD2 = 0.f;
           const float hoverTol = CadHoverEntityPickTolWorld(cmd);
-          if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2)) {
+          // The SAME ray the click below uses (REQ-058) — what highlights has to be what selects.
+          // Without it the hover measured a plan-view XY distance from the work-plane cursor point
+          // while the click measured the true distance from the ray, and off plan view those two
+          // disagree: the XY distance over-measures along the foreshortened screen direction, so
+          // geometry the click would take highlighted on one side of the cursor and not the other.
+          if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2, cursorRayPtr)) {
             cmd.viewportHoverEntityValid = true;
             cmd.viewportHoverEntity = hoverHit;
           } else {
