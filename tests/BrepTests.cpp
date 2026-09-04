@@ -4118,20 +4118,6 @@ TEST_CASE("Sweep refuses bad input by name and stores nothing", "[brep][req315]"
                               brep::SweepOptions{}, &s, &why));
     REQUIRE(why == Problem::SweepProfileTouchesAxis);
   }
-  SECTION("a twist on a curved path") {
-    ucs::Ucs xz;
-    REQUIRE(ucs::FromNormal(Vec3{5, 0, 0}, Vec3{0, 1, 0}, &xz));
-    brep::Profile pr;
-    pr.plane = xz;
-    for (const ucs::Point2D& q :
-         {ucs::Point2D{-1, -1}, ucs::Point2D{1, -1}, ucs::Point2D{1, 1}, ucs::Point2D{-1, 1}})
-      pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
-    pr.edges.assign(4, brep::ProfileEdge{});
-    brep::SweepOptions opt;
-    opt.twistRad = 0.3;
-    REQUIRE_FALSE(brep::Sweep(pr, ArcPath(xz.origin, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kPi / 2.0), opt, &s, &why));
-    REQUIRE(why == Problem::SweepUnsupportedOption);
-  }
   REQUIRE(s.faces.empty());
 }
 
@@ -4162,15 +4148,141 @@ TEST_CASE("Sweep along a bulge polyline path is a bent pipe with the summed volu
   REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-4));
 }
 
-TEST_CASE("Sweep refuses a mitred corner in the path by name", "[brep][req315]") {
+// ---------------------------------------------------------------------------------------------
+// A mitred sweep-path corner (REQ-315, 2026-09-04, GitHub issue #259): a sharp corner where both
+// adjoining path segments are straight and the profile is polygonal mitres — cut on the plane that
+// bisects the two tangents — rather than being refused. Its own volume identity (area x leg length,
+// summed) is what makes it testable without a numerical reference: the bisector plane passes through
+// the path's own vertex, so each leg keeps its full nominal length regardless of the plane's tilt.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("Sweep mitres a 90-degree corner between two straight segments", "[brep][req315]") {
   Problem why = Problem::Ok;
-  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
   brep::SweepPath path;
   path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}};  // a 90-degree corner at the joint
   path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
   Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  // One shared ring at the corner (mitred, not duplicated): 3 rings x 4 vertices, 2 bands x 4 side
+  // faces + 2 caps.
+  REQUIRE(CountOf(s).v == 12);
+  REQUIRE(CountOf(s).f == 10);
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(4.0 * 10.0 + 4.0 * 10.0).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep mitres both corners of a Z-shaped 3-segment path", "[brep][req315]") {
+  // Two corners in a row (not coplanar with each other) — the case that would catch a frame that
+  // does not correctly re-derive each leg's own orientation after the first mitre.
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{8, 0, 0}, Vec3{8, 0, 6}, Vec3{8, 5, 6}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE(CountOf(s).v == 16);  // 4 rings x 4 vertices
+  REQUIRE(CountOf(s).f == 14);  // 3 bands x 4 side faces + 2 caps
+  REQUIRE(brep::ComputeMassProperties(s).volume ==
+          Approx(4.0 * 8.0 + 4.0 * 6.0 + 4.0 * 5.0).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep mitres three consecutive corners of a helix-like 4-segment path", "[brep][req315]") {
+  // Three mitred corners in a row, none coplanar with the others (each turn is about a different
+  // axis) — a stress test for whether TurnFrameToTangent's running frame stays correct after TWO
+  // turns in a row, not just one.
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{5, 0, 0}, Vec3{5, 4, 0}, Vec3{5, 4, 3}, Vec3{9, 4, 3}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{},
+                   brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE(CountOf(s).v == 20);  // 5 rings x 4 vertices
+  REQUIRE(CountOf(s).f == 18);  // 4 bands x 4 side faces + 2 caps
+  REQUIRE(brep::ComputeMassProperties(s).volume ==
+          Approx(4.0 * 5.0 + 4.0 * 4.0 + 4.0 * 3.0 + 4.0 * 4.0).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep mitres every corner of a closed rectangular path", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-0.5, -0.5}, {0.5, -0.5}, {0.5, 0.5}, {-0.5, 0.5}});
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{6, 0, 0}, Vec3{6, 4, 0}, Vec3{0, 4, 0}, Vec3{0, 0, 0}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{},
+                   brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 0);  // no caps, closed — same as any closed sweep path
+  REQUIRE(CountOf(s).v == 16);                 // 4 rings (ring 4 aliased onto ring 0) x 4 vertices
+  REQUIRE(CountOf(s).f == 16);                 // 4 bands x 4 side faces, no caps
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(1.0 * (6.0 + 4.0 + 6.0 + 4.0)).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep still refuses a sharp corner touching an arc segment, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  brep::SweepPath path;
+  // A quarter-circle arc from (0,0,0) to (5,5,0), centre (0,5,0), ending heading +Y — then a
+  // straight leg heading +X instead of continuing +Y: a sharp joint that touches an arc segment.
+  path.points = {Vec3{0, 0, 0}, Vec3{5, 5, 0}, Vec3{15, 5, 0}};
+  brep::SweepSegment arcSeg;
+  arcSeg.arc = true;
+  arcSeg.centre = Vec3{0, 5, 0};
+  arcSeg.normal = Vec3{0, 0, 1};
+  arcSeg.sweep = kPi / 2.0;
+  path.segments = {arcSeg, brep::SweepSegment{}};
+  Solid s;
   REQUIRE_FALSE(brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why));
   REQUIRE(why == Problem::SweepPathCorner);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep refuses a mitred corner whose profile has an arc edge, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile circ = CircleProfile(World(), 1.0);
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}};  // the same 90-degree corner
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(circ, path, brep::SweepOptions{}, &s, &why));
+  REQUIRE(why == Problem::SweepMitreProfileArc);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep refuses a corner too sharp to mitre, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  brep::SweepPath path;
+  // A near-total reversal: out along +X, back almost exactly along -X — the bisector plane is
+  // degenerate (the tangents' sum is within the kernel's own collapse tolerance of zero).
+  const double delta = 1e-8;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0},
+                 Vec3{10 - 10.0 * std::cos(delta), 10.0 * std::sin(delta), 0}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why));
+  REQUIRE(why == Problem::SweepMitreCollapsed);
   REQUIRE(s.faces.empty());
 }
 
@@ -4191,6 +4303,295 @@ TEST_CASE("Sweep along collinear polyline segments equals the single-segment swe
   REQUIRE(brep::ComputeMassProperties(two).volume ==
           Approx(brep::ComputeMassProperties(one).volume).epsilon(1e-9));
   REQUIRE(brep::ComputeMassProperties(two).volume == Approx(4.0 * 4.0 * 12.0).epsilon(1e-7));
+}
+
+// ---------------------------------------------------------------------------------------------
+// A closed sweep path (REQ-315, 2026-09-04, GitHub issue #259): a single full-circle arc segment,
+// or a multi-segment path that returns to its own start. No end caps, the first and last rings
+// shared, and a full-circle single-arc path equals a full-turn Revolve — the same reasoning REQ-315
+// already applies to a partial arc path and REQ-314 extrude.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("Sweep along a full-circle arc path builds a capless ring at the Pappus volume",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // Same rectangle profile as the partial-arc-path test: radius 2..5, height 3, clear of the Z axis.
+  // brep::Revolve cannot build this shape for comparison — it requires the profile to TOUCH its
+  // axis, the opposite of what Sweep already requires of an arc segment's axis
+  // (Problem::SweepProfileTouchesAxis) — so this is checked against Pappus directly, the same way
+  // the existing partial-arc-path case already is.
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{3.5, 0.0, 1.5}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{-1.5, -1.5}, ucs::Point2D{1.5, -1.5},
+                                ucs::Point2D{1.5, 1.5}, ucs::Point2D{-1.5, 1.5}})
+    pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  pr.edges.assign(4, brep::ProfileEdge{});
+
+  Solid swept;
+  const bool ok = brep::Sweep(pr, ArcPath(xz.origin, Vec3{0, 0, 1.5}, Vec3{0, 0, 1}, 2.0 * kPi),
+                              brep::SweepOptions{}, &swept, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(swept) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(swept));
+  REQUIRE(brep::EulerCharacteristic(swept) == 0);  // no caps — a torus-like ring, genus 1
+  REQUIRE(CountOf(swept).v == 8);  // two split half-turn rings of 4 vertices each, shared at the seam
+  REQUIRE(CountOf(swept).f == 8);  // two bands x 4 profile edges, no caps
+
+  const brep::MassProperties ms = brep::ComputeMassProperties(swept);
+  REQUIRE(ms.valid);
+  REQUIRE(ms.volume == Approx(2.0 * kPi * 3.5 * 9.0).epsilon(1e-5));  // Pappus
+}
+
+TEST_CASE("Sweep along a multi-segment path that closes into a loop builds with no end caps",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile circ = CircleProfile(World(), 0.5);
+
+  // Three 120-degree arcs about the same centre/axis, forming a closed circular path of radius 4.
+  const Vec3 centre{0, 0, 0};
+  const Vec3 axis{0, 0, 1};
+  const double r = 4.0;
+  brep::SweepPath path;
+  for (int k = 0; k < 3; ++k) {
+    const double a = (2.0 * kPi / 3.0) * static_cast<double>(k);
+    path.points.push_back(Vec3{r * std::cos(a), r * std::sin(a), 0});
+  }
+  path.points.push_back(path.points.front());  // closes the loop
+  brep::SweepSegment seg;
+  seg.arc = true;
+  seg.centre = centre;
+  seg.normal = axis;
+  seg.sweep = 2.0 * kPi / 3.0;
+  path.segments = {seg, seg, seg};
+
+  Solid s;
+  const bool ok = brep::Sweep(circ, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 0);  // no caps — genus 1, same as the full-circle case
+  // Euler characteristic alone can't tell a correctly-closed 3-ring loop from some other
+  // topologically-valid-but-wrong wiring that happens to integrate to the same volume — so check
+  // the counts directly: 3 rings of the circle profile's 2 vertices/edges each, none duplicated.
+  REQUIRE(CountOf(s).v == 6);
+  REQUIRE(CountOf(s).f == 6);
+
+  const double expected = 2.0 * kPi * r * (kPi * 0.5 * 0.5);  // Pappus: circle profile, area pi*r^2
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-4));
+}
+
+TEST_CASE("Sweep mitres a closed triangular path, including the closing seam", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  // Three straight segments returning to the start, mitred at every one of the three corners —
+  // including the closing seam back to the start, not tangent-continuous anywhere.
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}, Vec3{0, 0, 0}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 0);  // closed, no caps
+  REQUIRE(CountOf(s).v == 12);                 // 3 rings (closing seam aliased) x 4 vertices
+  REQUIRE(CountOf(s).f == 12);                 // 3 bands x 4 side faces, no caps
+  const double perimeter = 10.0 + 10.0 + std::sqrt(200.0);
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(4.0 * perimeter).epsilon(1e-9));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Twist and fixed orientation on a curved or multi-segment path (REQ-315, 2026-09-04, GitHub issue
+// #259 — the last of its three items). Twist accumulates proportionally to distance travelled;
+// fixed orientation carries the profile's original axes unrotated through every segment, straight
+// or arc. Both were previously refused on anything but a single straight segment.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("Sweep twist accumulates proportionally to distance travelled", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // A 1x3 rectangle — deliberately asymmetric, so a wrong twist angle is not masked by symmetry.
+  const brep::Profile rect =
+      PolyProfile(World(), {{-0.5, -1.5}, {0.5, -1.5}, {0.5, 1.5}, {-0.5, 1.5}});
+  brep::SweepOptions opt;
+  opt.twistRad = kPi / 2.0;
+
+  // Two COLLINEAR straight segments (lengths 4 and 6, both +X) — tangent-continuous, not a corner —
+  // so ring 1 (the joint) sits at length fraction 4/10 of the total twist.
+  brep::SweepPath path2;
+  path2.points = {Vec3{0, 0, 0}, Vec3{4, 0, 0}, Vec3{10, 0, 0}};
+  path2.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s2;
+  const bool ok2 = brep::Sweep(rect, path2, opt, &s2, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok2);
+  REQUIRE(brep::Validate(s2) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s2));
+
+  // Reference: an independent single-segment sweep of the FIRST leg alone, with its twist scaled to
+  // its own share (4/10) of the total — the already-verified "rotate only the end frame" rule for a
+  // single straight segment. Ring 1 of the two-segment sweep must match this reference's end ring
+  // exactly: both are the profile placed in the same frame, twisted by the same accumulated angle.
+  brep::SweepOptions optRef;
+  optRef.twistRad = opt.twistRad * (4.0 / 10.0);
+  Solid sRef;
+  REQUIRE(brep::Sweep(rect, LinePath(Vec3{0, 0, 0}, Vec3{4, 0, 0}), optRef, &sRef, &why));
+
+  REQUIRE(CountOf(s2).v == 12);   // 3 rings x 4 vertices
+  REQUIRE(CountOf(sRef).v == 8);  // 2 rings x 4 vertices
+  for (int j = 0; j < 4; ++j) {
+    const Vec3& a = s2.vertices[static_cast<std::size_t>(4 + j)].p;    // s2's ring 1
+    const Vec3& b = sRef.vertices[static_cast<std::size_t>(4 + j)].p;  // sRef's end ring
+    REQUIRE(a.x == Approx(b.x).epsilon(1e-9));
+    REQUIRE(a.y == Approx(b.y).epsilon(1e-9));
+    REQUIRE(a.z == Approx(b.z).epsilon(1e-9));
+  }
+
+  // Not asserted: an exact total volume. Each band's surface is a RULED (straight-line) interpolation
+  // between its two — differently twisted — end rings, not a true continuous rotation, so it does
+  // not preserve `area x length` the way an untwisted or uniformly-translated band does; the ring
+  // positions above are the correctness signal for this construction, not a volume identity.
+}
+
+TEST_CASE("Sweep refuses a twist combined with an arc path segment, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{3.5, 0.0, 1.5}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{-1.5, -1.5}, ucs::Point2D{1.5, -1.5},
+                                ucs::Point2D{1.5, 1.5}, ucs::Point2D{-1.5, 1.5}})
+    pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  pr.edges.assign(4, brep::ProfileEdge{});
+  const brep::SweepPath path = ArcPath(xz.origin, Vec3{0, 0, 1.5}, Vec3{0, 0, 1}, kPi);
+
+  brep::SweepOptions twisted;
+  twisted.twistRad = 1.1;
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(pr, path, twisted, &s, &why));
+  REQUIRE(why == Problem::SweepTwistNeedsStraightPath);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep refuses a nonzero twist on a closed path, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile circ = CircleProfile(World(), 0.5);
+  const brep::SweepPath path = ArcPath(Vec3{4, 0, 0}, Vec3{0, 0, 0}, Vec3{0, 0, 1}, 2.0 * kPi);
+  brep::SweepOptions opt;
+  opt.twistRad = 0.1;
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(circ, path, opt, &s, &why));
+  REQUIRE(why == Problem::SweepUnsupportedOption);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep with fixed orientation translates the profile without rotating it along an arc",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // Profile normal (0,1,0) is perpendicular to the arc's axis (0,0,1) — an ordinary "duct" placement,
+  // like every other arc-path test in this file (a normal PARALLEL to the axis would lay the profile
+  // flat in the arc's own plane, a degenerate setup for a sweep).
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{5, 0, 0}, Vec3{0, 1, 0}, &xz));
+  brep::Profile rect;
+  rect.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{-0.5, -1.5}, ucs::Point2D{0.5, -1.5},
+                                ucs::Point2D{0.5, 1.5}, ucs::Point2D{-0.5, 1.5}})
+    rect.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  rect.edges.assign(4, brep::ProfileEdge{});
+
+  brep::SweepOptions opt;
+  opt.alignToPath = false;
+  const brep::SweepPath path = ArcPath(xz.origin, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kPi / 2.0);
+  Solid s;
+  const bool ok = brep::Sweep(rect, path, opt, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(CountOf(s).v == 8);  // 2 rings x 4 vertices
+
+  // Fixed orientation never rotates: ring 1 must be ring 0 translated by (points[1] - points[0]),
+  // pointwise — no other relationship between the two rings is possible without a rotation.
+  const Vec3 translate = ray3d::Sub(path.points[1], path.points[0]);
+  for (int j = 0; j < 4; ++j) {
+    const Vec3 expected = ray3d::Add(s.vertices[static_cast<std::size_t>(j)].p, translate);
+    const Vec3& actual = s.vertices[static_cast<std::size_t>(4 + j)].p;
+    REQUIRE(actual.x == Approx(expected.x).epsilon(1e-9));
+    REQUIRE(actual.y == Approx(expected.y).epsilon(1e-9));
+    REQUIRE(actual.z == Approx(expected.z).epsilon(1e-9));
+  }
+}
+
+// Deliberately no test for "fixed orientation folds over itself, refused by name": there is no such
+// refusal. `brep::SelfIntersects` is a narrow, torus-specific check (ADR-045 (f)), not a general
+// overlap detector, so Sweep cannot and does not catch a fixed-orientation sweep that occupies the
+// same space twice on a sufficiently tight curve or oversized profile — a known, documented
+// limitation (REQ-315 2026-09-04), not a checked-and-refused case. Building a real detector (checking
+// every face against every other) is a separate undertaking, decided against for this task.
+
+// GAP CHECK (independent review): the mitre shear (applied at a sharp corner) was gated on the
+// corner being mitre-classified, but NOT on `alignToPath` — a fixed-orientation ring at a sharp
+// corner was sheared off the true path point even though fixed orientation needs no shear at all
+// (every ring already IS the profile translated there, corner or not, since the frame never
+// rotates). Fixed, and this is the open-path case that exercises it: three straight segments with
+// two sharp, non-coplanar corners.
+TEST_CASE("Sweep with fixed orientation keeps every ring a plain translation through sharp corners",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // flat in XY
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{9, 1, 4}, Vec3{3, 11, -6}, Vec3{-2, 4, 8}};  // open, non-planar
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  brep::SweepOptions opt;
+  opt.alignToPath = false;
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, opt, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);  // open, capped
+  REQUIRE(CountOf(s).v == 16);                 // 4 rings x 4 vertices
+
+  // Fixed orientation never rotates, corner or not: every ring must be ring 0 translated by
+  // (points[k] - points[0]), pointwise — including the two sharp corners in between.
+  for (int k = 0; k < 4; ++k) {
+    const Vec3 translate = ray3d::Sub(path.points[static_cast<std::size_t>(k)], path.points[0]);
+    for (int j = 0; j < 4; ++j) {
+      const Vec3 expected = ray3d::Add(s.vertices[static_cast<std::size_t>(j)].p, translate);
+      const Vec3& actual = s.vertices[static_cast<std::size_t>(4 * k + j)].p;
+      REQUIRE(actual.x == Approx(expected.x).epsilon(1e-9));
+      REQUIRE(actual.y == Approx(expected.y).epsilon(1e-9));
+      REQUIRE(actual.z == Approx(expected.z).epsilon(1e-9));
+    }
+  }
+}
+
+// A fixed-orientation sweep along a CLOSED path is a special case worth stating plainly: since the
+// frame never rotates, the profile returns to its exact starting position AND orientation, and the
+// "tube" this sweeps is provably zero-volume (a rigid, non-rotating cross-section translated around
+// any closed loop back to itself encloses no net interior — confirmed empirically here against two
+// independent non-planar triangular paths before writing this down, not assumed). The kernel's
+// existing generic closure check catches this on its own (no special-casing needed): a solid with no
+// enclosed volume is refused as `Problem::NotClosed`, the same as any other degenerate closed
+// surface, REQ-201.
+TEST_CASE("Sweep refuses a fixed-orientation closed path as having no enclosed volume",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{9, 1, 4}, Vec3{3, 11, -6}, Vec3{0, 0, 0}};  // closed, non-planar
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  brep::SweepOptions opt;
+  opt.alignToPath = false;
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(sq, path, opt, &s, &why));
+  REQUIRE(why == Problem::NotClosed);
+  REQUIRE(s.faces.empty());
 }
 
 // ---------------------------------------------------------------------------------------------

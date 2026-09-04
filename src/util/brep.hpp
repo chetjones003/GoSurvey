@@ -357,12 +357,28 @@ enum class Problem {
   // --- Sweep (REQ-315 / ADR-048, GitHub issue #241). ---
   SweepPathDegenerate,        ///< A zero-length line path, or an arc path with no radius / no sweep.
   SweepProfileTouchesAxis,    ///< An arc-path sweep whose profile reaches the path's axis of curvature.
-  /// The path has a **sharp corner** — a tangent discontinuity where two segments meet. Only smooth
-  /// (tangent-continuous) bends are built in this increment.
+  /// The path has a **sharp corner** touching an arc segment. A straight-to-straight corner is
+  /// mitred instead (REQ-315 2026-09-04); a corner touching an arc segment would need a trimmed
+  /// NURBS patch — out of scope (REQ-315) — so it is still refused here, this increment.
   SweepPathCorner,
-  /// An option combination this increment does not build: a twist or a fixed world orientation on
-  /// anything but a single straight segment. A single straight segment takes any option.
+  /// A straight-to-straight sharp corner, but the profile has an arc edge — mitring would shear it
+  /// into a non-circular curve, which this increment does not build (REQ-315 2026-09-04). A
+  /// polygonal (all-straight-edge) profile mitres; a profile with any arc edge does not, yet.
+  SweepMitreProfileArc,
+  /// A straight-to-straight corner too sharp to mitre — the two segments fold back on themselves
+  /// closely enough that the bisector (mitre) plane is degenerate (REQ-315 2026-09-04).
+  SweepMitreCollapsed,
+  /// A nonzero twist on a **closed** path (REQ-315 2026-09-04): geometrically inconsistent rather
+  /// than an increment boundary — the seam ring is one ring, and a linear twist from 0 at the start
+  /// to a nonzero angle at the end would need it to carry two different orientations at once.
   SweepUnsupportedOption,
+  /// A nonzero twist combined with an **arc** path segment (REQ-315 2026-09-04): within an arc band,
+  /// a profile vertex's true trajectory under a continuously varying twist compounds the path's own
+  /// rotation with the twist's, which the arc band's rail/patch construction (a plain circular arc, or
+  /// an exact rational revolve) cannot represent — the same category of gap as a mitred corner
+  /// touching an arc segment, deferred for the same reason rather than built silently wrong. Twist on
+  /// an all-straight (possibly multi-segment) path is unaffected.
+  SweepTwistNeedsStraightPath,
 
   // --- Push/pull (REQ-319 / ADR-046 amendment (i), GitHub issue #148 Phase 5). ---
   PushPullFaceNotPlanar,    ///< The face to move is a cylinder, cone, sphere, torus or NURBS wall.
@@ -539,11 +555,16 @@ struct SweepSegment {
   double sweep = 0.0;  ///< Arc only: signed sweep about \ref normal, `0 < |sweep| < 2*pi`.
 };
 
-/// A **sweep path** for \ref Sweep (REQ-315 / ADR-048): an open chain of straight and circular-arc
+/// A **sweep path** for \ref Sweep (REQ-315 / ADR-048): a chain of straight and circular-arc
 /// segments. `points[0]` is where the profile starts; segment `k` runs `points[k] → points[k+1]`,
 /// so `segments.size()` is `points.size() - 1`. A single segment is the common case (a line or an
-/// arc); several **tangent-continuous** segments form a bulge polyline. A tangent discontinuity at a
-/// joint (a mitred corner) is a later increment and is refused by name.
+/// arc); several segments form a bulge polyline, most often **tangent-continuous**. A tangent
+/// discontinuity at a joint where both adjoining segments are straight is a **mitred corner**
+/// (REQ-315 2026-09-04) rather than a refusal; touching an arc segment it is still refused by name
+/// (a trimmed NURBS patch, out of scope). The path is usually **open**
+/// (`points[0] != points.back()`); it may also be **closed** — `points[0] == points.back()`, a full
+/// circle when there is one arc segment — which \ref Sweep treats specially (no end caps, REQ-315
+/// 2026-09-04).
 struct SweepPath {
   std::vector<Vec3> points;
   std::vector<SweepSegment> segments;
@@ -551,12 +572,20 @@ struct SweepPath {
 
 /// How \ref Sweep carries the profile's orientation along the path.
 struct SweepOptions {
-  /// A constant twist, applied linearly from 0 at the path start to \ref twistRad at the end, about
-  /// the (moving) path tangent. Only on a straight path in this increment.
+  /// A constant twist, applied about the (moving, if \ref alignToPath) path tangent, accumulating
+  /// **proportionally to distance travelled** — 0 at the path start, \ref twistRad at the end, with
+  /// each segment's share of that being its own length (a straight segment's chord, an arc segment's
+  /// `radius * |sweep|`) divided by the path's total length (REQ-315 2026-09-04). Refused on a closed
+  /// path (\ref Problem::SweepUnsupportedOption): the seam ring cannot carry two different end-of-
+  /// path orientations at once.
   double twistRad = 0.0;
   /// true — the profile's plane normal follows the path tangent (a rotation-minimizing frame; on a
   /// planar arc this is the frame that does not spin about the tangent). false — the profile keeps
-  /// its original world orientation and is only translated along the path (straight path only here).
+  /// its original world orientation and is only translated along the path, straight or curved
+  /// (REQ-315 2026-09-04). **Not checked**: on a curved path this carries no rotation-minimizing
+  /// guarantee against the swept envelope folding over itself, and \ref Sweep does not detect it — a
+  /// profile too large, or a path too tightly curved, for this option can build a solid that occupies
+  /// the same space twice. A known, documented limitation, not a checked-and-refused case.
   bool alignToPath = true;
 };
 
@@ -571,9 +600,33 @@ struct SweepOptions {
 /// segment reproduces \ref Extrude**; a **single arc segment (twist 0, aligned) reproduces
 /// \ref Revolve** — asserted in tests.
 ///
-/// Still refused by name (\ref Problem::SweepUnsupportedOption), pending later increments: a tangent
-/// discontinuity at a joint (a mitred corner); a twist or a fixed orientation on anything but a
-/// single straight segment; a full-turn arc segment.
+/// A **closed path** — a single full-circle arc segment, or a multi-segment path whose last point
+/// coincides with its first — builds with no end caps; the first and last cross-section rings are
+/// the same ring (REQ-315 2026-09-04), mirroring \ref Revolve's own full-turn treatment. Its closing
+/// seam is checked for tangent continuity the same way an interior joint is — unless it mitres
+/// (below), in which case the continuity check does not apply.
+///
+/// A **mitred corner** (REQ-315 2026-09-04, GitHub issue #259): where two adjoining **straight**
+/// segments meet at a tangent discontinuity, and the profile is **polygonal** (no arc edge), the
+/// shared ring at the joint is built on the plane bisecting the two tangents — one straight cut
+/// through both legs, matching a mitred pipe or duct joint (no gap, no overlap). This also applies at
+/// a closed path's own closing seam. Refused — by name, not silently built as an unmitred or
+/// collapsed joint — when: the corner touches an **arc** segment (\ref Problem::SweepPathCorner) —
+/// mitring that would need a trimmed NURBS patch, out of scope (REQ-315); the profile has an arc edge
+/// (\ref Problem::SweepMitreProfileArc) — shearing a circular edge onto an oblique plane makes an
+/// ellipse, not built this increment; or the corner is too sharp to mitre, near a full reversal
+/// (\ref Problem::SweepMitreCollapsed).
+///
+/// \ref SweepOptions::twistRad and \ref SweepOptions::alignToPath both work on **any** path — curved,
+/// multi-segment, mitred — not only a single straight segment (REQ-315 2026-09-04). Twist
+/// accumulates proportionally to distance travelled; a nonzero twist is refused on a **closed** path
+/// (\ref Problem::SweepUnsupportedOption) as geometrically inconsistent, not an increment boundary.
+/// Fixed orientation (`alignToPath = false`) carries the profile's original axes unrotated through
+/// every segment; on a curved path this has no rotation-minimizing guarantee against the swept
+/// envelope folding over itself, and it is **not checked** — `SelfIntersects` is a narrow,
+/// torus-specific check (ADR-045 (f)), not a general overlap detector, and a real one is a separate
+/// undertaking. A profile too large, or a path too tightly curved, for this option can build a solid
+/// that occupies the same space twice; a known, documented limitation (REQ-315 2026-09-04).
 ///
 /// Nothing is stored unless the result passes \ref Validate (REQ-201); \p out is left untouched on
 /// failure. Refuses — by name — a malformed or degenerate path (\ref Problem::SweepPathDegenerate),

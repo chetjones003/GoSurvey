@@ -24837,17 +24837,19 @@ bool HandleLoftTextInput(const std::string& lineIn, AppCommandState& st, std::ve
 
 namespace {
 
-/// A brep::SweepPath from a selected LINE, ARC or **open POLYLINE** entity (a polyline's per-vertex
-/// bulges become the arc segments — REQ-316). Returns false for anything else; a closed polyline is
-/// a profile, not a path, so it is left for `ExtrudeProfileFromSelection`.
+/// A brep::SweepPath from a selected LINE, ARC, CIRCLE or POLYLINE entity (a polyline's per-vertex
+/// bulges become the arc segments — REQ-316). Returns false for anything else. An open polyline is
+/// the common path case; a **closed** polyline, or a full-sweep Arc, or a Circle, builds a **closed**
+/// path (REQ-315 2026-09-04, issue #259) — reachable for a closed shape only when it is not the
+/// first closed shape in the selection, since `GatherSweepInputs` tries the profile role first for
+/// every selected entity in order.
 [[nodiscard]] bool SweepPathFromSelection(const AppCommandState& st, const SelectedEntity& sel,
                                           brep::SweepPath* out) {
   if (sel.type == SelectedEntity::Type::Polyline) {
     const std::size_t pi = static_cast<std::size_t>(sel.index);
     if (sel.index < 0 || pi + 1 >= st.userPolylineOffsets.size())
       return false;
-    if (pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0)
-      return false;  // closed → a profile, not a path
+    const bool closed = pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0;
     const int vB = st.userPolylineOffsets[pi];
     const int vE = st.userPolylineOffsets[pi + 1];
     if (vE - vB < 2)
@@ -24861,17 +24863,27 @@ namespace {
                      static_cast<double>(st.userPolylineVerts[f + 1]),
                      static_cast<double>(st.userPolylineVerts[f + 2])});
     }
+    if (closed) {
+      // A closed polyline may or may not repeat its first vertex at the end
+      // (ExtrudeProfileFromSelection makes the same check for the same reason).
+      if (pts.size() >= 2 && ray3d::Length(ray3d::Sub(pts.front(), pts.back())) < 1e-7)
+        pts.pop_back();
+      if (pts.size() < 3)
+        return false;
+    }
+    const std::size_t segCount = closed ? pts.size() : pts.size() - 1;
     std::vector<brep::SweepSegment> segs;
-    for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
+    for (std::size_t k = 0; k < segCount; ++k) {
+      const std::size_t k1 = (k + 1) % pts.size();
       const std::size_t vi = static_cast<std::size_t>(vB) + k;
       const float bulge =
           vi < st.userPolylineVertsBulge.size() ? st.userPolylineVertsBulge[vi] : 0.f;
       brep::SweepSegment seg;
       if (std::fabs(bulge) > 1e-6f) {
-        if (std::fabs(pts[k].z - pts[k + 1].z) > 1e-6)
+        if (std::fabs(pts[k].z - pts[k1].z) > 1e-6)
           return false;  // a bulge across a change in elevation is not a planar arc
         const BulgeArcSpan span =
-            BulgeArc(pts[k].x, pts[k].y, pts[k + 1].x, pts[k + 1].y, static_cast<double>(bulge));
+            BulgeArc(pts[k].x, pts[k].y, pts[k1].x, pts[k1].y, static_cast<double>(bulge));
         if (!span.valid)
           return false;
         seg.arc = true;
@@ -24881,6 +24893,8 @@ namespace {
       }
       segs.push_back(seg);
     }
+    if (closed)
+      pts.push_back(pts.front());  // close the path: points[0] == points.back()
     out->points = std::move(pts);
     out->segments = std::move(segs);
     return true;
@@ -24916,6 +24930,41 @@ namespace {
     seg.normal = frame.zAxis;
     seg.sweep = a.sweepRad;
     out->points = {start, end};
+    out->segments = {seg};
+    return true;
+  }
+  if (sel.type == SelectedEntity::Type::Circle) {
+    // A full-circle path (REQ-315 2026-09-04, issue #259): the same closed-path shape as a
+    // full-sweep Arc above, one segment with a full 2*pi turn. `GatherSweepInputs` tries the
+    // profile role first for every selected entity in order, so a Circle only reaches here when it
+    // is not the first closed shape selected.
+    const std::size_t ci = static_cast<std::size_t>(sel.index);
+    if (sel.index < 0 || ci * 4 + 3 >= st.userCirclesCxCyZR.size())
+      return false;
+    const double cx = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 0]);
+    const double cy = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 1]);
+    const double cz = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 2]);
+    const double r = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 3]);
+    if (!(r > 0.0))
+      return false;
+    ray3d::Vec3 nrm{0, 0, 1};
+    if (ci * 3 + 2 < st.userCircleNormals.size()) {
+      const ray3d::Vec3 cand{static_cast<double>(st.userCircleNormals[ci * 3 + 0]),
+                             static_cast<double>(st.userCircleNormals[ci * 3 + 1]),
+                             static_cast<double>(st.userCircleNormals[ci * 3 + 2])};
+      if (ray3d::Length(cand) > 1e-9)
+        nrm = ray3d::Normalize(cand);
+    }
+    ucs::Ucs frame;
+    if (!ucs::FromNormal(ray3d::Vec3{cx, cy, cz}, nrm, &frame))
+      return false;
+    const ray3d::Vec3 start = ucs::PointOnPlaneCircle(frame, r, 0.0);
+    brep::SweepSegment seg;
+    seg.arc = true;
+    seg.centre = frame.origin;
+    seg.normal = frame.zAxis;
+    seg.sweep = 2.0 * 3.14159265358979323846;
+    out->points = {start, start};
     out->segments = {seg};
     return true;
   }
