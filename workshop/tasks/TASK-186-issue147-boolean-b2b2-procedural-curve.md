@@ -190,6 +190,15 @@ the offset quartic are the next slices.
 - sphere ∩ cylinder, torus ∩ anything, cone parabola / hyperbola sections.
 - Skew (non-coplanar) cylinder axes.
 
+**PROGRESS 2026-09-04 — branch pipe `thin − thick` done (feat/issue242-branch-pipe-thin-minus-thick, issue #242).**
+`BuildBranchPipeThinStub(fr, r, R, alpha, zetaFlat, sideSign)` = `BuildCylinderSphereOffsetStub`'s
+topology (4v/6e/4f χ=2: thin wall 2 halves + flat cap + inward dimple) with the dimple surface
+swapped sphere→thick-cylinder (`bSurf`, `inward`, u ∈ ±psi0 / π±psi0). Handles perpendicular
+(`alpha=0`) and tilted alike — one builder, `cpt(φ)` the same closed form. `TryBooleanBranchPipe`'s
+`thin − thick` guard now pushes two stubs (`zetaFlat = thin.length − sThin` / `−sThin`). Total
+volume `πr²·L − lens` vs the section integral (5e-3). Full suite green (1117). No `.gs` bump.
+**Coplanar branch-pipe family now COMPLETE** (perp + tilted × INTERSECT/SUBTRACT/UNION/thin−thick).
+
 **PROGRESS 2026-09-04 — non-perpendicular branch pipe SUBTRACT + UNION done (feat/issue242-branch-pipe-angled-sub-union, issue #242).**
 `BuildAngledBranchPipeSubtract` / `BuildAngledBranchPipeUnion` = the perpendicular builders verbatim
 except `aSurf.frame` (tilted) + the closed-form `cpt`; UNION additionally re-aims the two thin stub
