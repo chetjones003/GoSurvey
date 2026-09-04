@@ -7803,11 +7803,14 @@ struct SkewBranch {
 /// both with the cylinder caps clear of the sphere on each side and `r < Rs`:
 ///   - **centred** — the cylinder axis through the sphere centre; the intersection is two plane
 ///     circles and every result is closed-form.
-///   - **offset** — the axis parallel to a sphere diameter, displaced by `d` with `d + r < Rs`; the
-///     intersection is a quartic loop each side and the curved faces integrate numerically. Both
-///     `d > r` (axis misses the pole) and `d < r` (pole-covered, issue #242) do all three
+///   - **offset** — the axis at perpendicular distance `d` from the sphere centre, `d + r < Rs`; the
+///     intersection is a quartic loop each side and the curved faces integrate numerically. Because
+///     a sphere is rotationally symmetric, `d` (plus the axial position and length) is the *only*
+///     invariant of the cylinder's placement — this covers every axis direction and position, not
+///     just some "coplanar" special case; there is no separate skew-axis configuration to handle.
+///     Both `d > r` (axis misses the pole) and `d < r` (pole-covered, issue #242) do all three
 ///     operations; the `d < r` results keep the sphere's equatorial zone in place of two hemispheres.
-/// `d ≈ r` tangency and skew / non-parallel axes fall through unhandled.
+/// `d ≈ r` tangency (axis grazing the pole) falls through unhandled, refused as degenerate.
 ///
 /// All three operations are built: INTERSECT (a spherical-ended barrel / plug), UNION (the ball with
 /// a cylindrical boss each side), and SUBTRACT — `sphere − cylinder` is the drilled ball (genus 1),
@@ -7828,7 +7831,8 @@ struct SkewBranch {
     // The offset quartic (issue #242, slice B). The cylinder must clear the equator (`d + r < Rs`)
     // and both caps must clear the sphere. `d > r` (axis misses the pole) and `d < r` (pole-covered)
     // both do all three operations — the quartic scaffold is the same, only which sphere patches are
-    // kept differs. `d ≈ r` tangency and skew axes fall through unhandled.
+    // kept differs. `d` alone (a sphere has no other invariant of the axis's position — every axis
+    // direction and placement is covered here). `d ≈ r` tangency falls through unhandled.
     const double d = offset;
     if (!(d + C.radius < S.radius - eps) || std::fabs(d - C.radius) <= eps)
       return false;
