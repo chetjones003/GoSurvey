@@ -147,5 +147,35 @@ Intersection-edge count; volume vs a 1400×1400 numerical plug reference (2e-3);
 + tessellated volume; tilted survey frame + `Translate`; reversed operand order; SUBTRACT / UNION of
 the offset pair refused; the `d ≤ r` sub-case still refused. Full suite green (1115 ctest cases).
 
-**Next:** Slice B / SUBTRACT then UNION (offset pair); the `d ≤ r` pole-covered sub-case; then
-Slice C (skew axis).
+**Slice B / SUBTRACT + UNION — implemented (issue #242, feat/issue242-sphere-cylinder-offset-subtract-union).**
+Same sub-case as the offset INTERSECT (`r < d`, `d + r < Rs`, both caps clear the sphere past the
+`φ = π` loop height `zP`). `src/util/brep.cpp`:
+
+- `MakeOffsetScaffold` factored out of `BuildSphereCylinderOffsetIntersection` — the shared cSurf /
+  sSurf frames, the four loop vertices `u0/uP/l0/lP` and the four `CurveKind::Intersection` half-
+  edges. The INTERSECT builder now consumes it too (no behaviour change).
+- `BuildSphereCylinderOffsetSubtractSphere(fr, r, Rs, d, ...)` — `sphere − cylinder`, an off-centre
+  hole drilled clean through: the kept sphere is **two lens-bitten hemispheres** (u 0→π and π→2π in
+  a frame whose xAxis points at the cylinder axis, full pole-to-pole v span), the bore an **inward**
+  cylinder wall between the two quartic loops. 6v / 10e (4 procedural) / 4f, χ = 0.
+- `BuildSphereCylinderOffsetUnion(fr, r, Rs, d, zBot, zTop, ...)` — `sphere ∪ cylinder`, the ball
+  with an off-centre boss out each side: the same two hemispheres + two **outward** cylinder bosses
+  (loop → flat cap) + two planar end caps. 10v / 16e (4 procedural) / 8f, χ = 2.
+- **Sphere numeric integration — "hemisphere minus lens bite".** `SphereStripsAt` returns *every*
+  latitude interval inside the cylinder at a longitude (a hemisphere face has two lens bites, one
+  near each pole). `IntegrateSphereFaceNumeric` sums them. `IntegrateFace`'s `Sphere` branch: a
+  full-v-span face = analytic hemisphere − numeric bite (mirrors the cylinder `!inOuter` branch); a
+  narrow-v-span face (the INTERSECT plug's lens) = the bite directly.
+- Tessellator `Sphere` branch: a full-v-span isect face draws the full hemisphere grid and drops
+  any quad whose centre lands in a bite (ragged at grid resolution, well inside REQ-101).
+- `TryBooleanSphereCylinder`'s offset branch now `*handled`s INTERSECT, UNION and
+  `sphere − cylinder`; `cylinder − sphere` offset and the `d ≤ r` case still fall through unhandled.
+  `.gs` stays at `kGsFormatVersion` 3 (Intersection edges already serialise).
+
+Tests — `BrepTests` "sphere INTERSECT cylinder with an offset axis (the quartic)", new sections:
+`sphere − cylinder` (6/10/4, χ = 0, 4 Intersection edges, volume `(4/3)πRs³ − vref` vs the
+1400×1400 plug reference to 2e-3, tessellated volume + winding, tilted survey frame + `Translate`,
+repeated call); `sphere ∪ cylinder` (10/16/8, χ = 2, volume `(4/3)πRs³ + πr²·L − vref`, reversed
+operand order); `cylinder − sphere` offset still refused. Full suite green (1115 ctest cases).
+
+**Next:** the `d ≤ r` pole-covered sub-case; `cylinder − sphere` offset; then Slice C (skew axis).

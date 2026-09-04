@@ -2375,14 +2375,94 @@ TEST_CASE("Curved B2b-2: sphere INTERSECT cylinder with an offset axis (the quar
     REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vref).epsilon(2e-3));
   }
 
-  SECTION("SUBTRACT and UNION of the offset pair are not built yet - refused, not corrupt") {
+  SECTION("sphere - cylinder is an off-centre hole drilled clean through, genus one") {
     Solid sph;
     Solid cyl;
     REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
     REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanSubtract(sph, cyl, &out, &why));
-    REQUIRE_FALSE(brep::BooleanUnion(sph, cyl, &out, &why));
+    REQUIRE(brep::BooleanSubtract(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 6);
+    REQUIRE(CountOf(out[0]).e == 10);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 0);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 4);
+
+    const double want = 4.0 / 3.0 * kPi * Rs * Rs * Rs - vref;
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(2e-3));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(8e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanSubtract(sph, cyl, &rev, &why));
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(2e-3));
+
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{d, 0, -12}), frame.zAxis, &axis));
+    Solid sph2;
+    Solid cyl2;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph2, &why));
+    REQUIRE(brep::MakeCylinder(axis, r, 24, &cyl2, &why));
+    std::vector<Solid> far;
+    REQUIRE(brep::BooleanSubtract(sph2, cyl2, &far, &why));
+    REQUIRE(brep::Validate(far[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(far[0]).volume == Approx(want).epsilon(2e-3));
+    const brep::Solid moved = brep::Translate(far[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(want).epsilon(2e-3));
+  }
+
+  SECTION("sphere union cylinder is a ball with an off-centre boss out each side") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 10);
+    REQUIRE(CountOf(out[0]).e == 16);
+    REQUIRE(CountOf(out[0]).f == 8);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 4);
+
+    const double want = 4.0 / 3.0 * kPi * Rs * Rs * Rs + kPi * r * r * 24.0 - vref;
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(2e-3));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(8e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanUnion(cyl, sph, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(2e-3));
+  }
+
+  SECTION("cylinder - sphere with an offset axis is still refused, not corrupt") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, sph, &out, &why));  // cylinder minuend: a later slice
   }
 }
 
