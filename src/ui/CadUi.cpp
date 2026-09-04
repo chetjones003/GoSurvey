@@ -12592,7 +12592,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
       // Native paper geometry in the same box (REQ-039): one shared, unit-tested helper for every type.
       cmd.selectedPaperEntities.clear();
-      SelectPaperEntitiesInBox(L, bx0, by0, bx1, by1, windowMode, cmd.selectedPaperEntities);
+      SelectPaperEntitiesInBox(L, bx0, by0, bx1, by1, windowMode, cmd.selectedPaperEntities, &cmd.blockDefs);
       // REQ-103 STRETCH: remember this box regardless of which command (if any) is active — paper
       // box-select is ambient (this whole lambda runs on any plain click-drag, not gated by
       // cmd.active), and STRETCH is invoked AFTER a selection already exists, the same "pre-select,
@@ -12629,7 +12629,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
       cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
       std::vector<PaperEntityRef> boxEntities;
-      SelectPaperEntitiesInBox(L, bx0, by0, bx1, by1, windowMode, boxEntities);
+      SelectPaperEntitiesInBox(L, bx0, by0, bx1, by1, windowMode, boxEntities, &cmd.blockDefs);
       for (const auto& e : boxEntities) {
         bool present = false;
         for (const auto& s : cmd.selectedPaperEntities)
