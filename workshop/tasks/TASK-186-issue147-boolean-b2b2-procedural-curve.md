@@ -188,8 +188,18 @@ the offset quartic are the next slices.
 ### Deferred within B2b-2 (later sub-slices)
 
 - sphere ∩ cylinder, torus ∩ anything, cone parabola / hyperbola sections.
-- `cylinder − box` (a notch) — planar cuts of a cylinder; arguably a B2b-1 leftover, small.
 - Skew (non-coplanar) cylinder axes.
+
+**PROGRESS 2026-09-03 — `cylinder − box` notch done (feat/issue242-cylinder-box-notch, issue #242).**
+`BuildCylinderLongitudinalFlat` + a recogniser in `TryBooleanCylinderThroughPlanar`: when the box
+presents exactly one face parallel to the cylinder axis that cuts within the radius, the box is
+otherwise square to the axis, and every extreme point of the removed segment lies inside the box,
+`cylinder − box` reduces to `cylinder − (that one half-space)` — a full-length planar flat. Result
+4v/6e/4f, χ = 2 (two D caps, one rectangular flat, one partial cylinder wall). Closed-form volume
+`L·(πr² − (r²·acos(px/r) − px·√(r²−px²)))`. No new curve types (lines + arcs), no `.gs` bump.
+Partial-length pocket, two-face slot, and tilted box still refused by name; a full-swallow box
+reports `BooleanEmptyResult`; a disjoint box returns the cylinder unchanged. Full suite green (1116).
+Still deferred: partial-length pockets, slots, corner clips, tilted `cylinder − box`.
 
 ## Verification
 

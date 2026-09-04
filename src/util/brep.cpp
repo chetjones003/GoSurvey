@@ -6463,13 +6463,141 @@ void AddOffsetKeptHemispheres(OffsetScaffold* sc) {
   return Succeed(outWhy);
 }
 
+/// A right circular cylinder (base at \p axisFrame.origin, height \p h, radius \p r) with one planar
+/// flat milled the full length parallel to the axis: the cut plane sits at local x = \p px
+/// (`-r < px < r`), the material with x > px removed, the flat's outward normal along local +x. The
+/// result is 4v / 6e / 4f, χ = 2 — two D-shaped end caps, one rectangular flat, one partial
+/// cylindrical wall (u ∈ [φ, 2π−φ], φ = acos(px/r)). Used by `cylinder − box` (GitHub issue #242).
+[[nodiscard]] bool BuildCylinderLongitudinalFlat(const ucs::Ucs& axisFrame, double r, double h,
+                                                 double px, Solid* out, Problem* outWhy) {
+  const double q = std::sqrt(std::max(0.0, r * r - px * px));
+  const double phi = std::acos(std::clamp(px / r, -1.0, 1.0));
+  const double sweep = kTwoPi - 2.0 * phi;
+  if (q <= 1e-12 || sweep <= 1e-9 || sweep >= kTwoPi - 1e-9)
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(axisFrame, Vec3{x, y, z}); };
+  Solid s;
+  const int v0 = AddVertex(&s, W(px, -q, 0.0));
+  const int v1 = AddVertex(&s, W(px, q, 0.0));
+  const int v2 = AddVertex(&s, W(px, q, h));
+  const int v3 = AddVertex(&s, W(px, -q, h));
+  const Vec3 Z = axisFrame.zAxis;
+  const Vec3 botC = W(0.0, 0.0, 0.0);
+  const Vec3 topC = W(0.0, 0.0, h);
+  const int eb = AddArc(&s, v1, v0, botC, Z, sweep);  // bottom major arc, u: φ → 2π−φ
+  const int et = AddArc(&s, v2, v3, topC, Z, sweep);  // top major arc, same sense
+  const int chordBot = AddLine(&s, v0, v1);
+  const int chordTop = AddLine(&s, v2, v3);
+  const int seamPos = AddLine(&s, v1, v2);  // u = φ seam, base → top
+  const int seamNeg = AddLine(&s, v0, v3);  // u = 2π−φ seam, base → top
+
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{chordBot, true}, {eb, true}}));
+  s.faces.push_back(MakePlaneFace(topC, Z, {{chordTop, true}, {et, false}}));
+  s.faces.push_back(MakePlaneFace(
+      W(px, 0.0, 0.5 * h), axisFrame.xAxis,
+      {{chordBot, false}, {seamPos, false}, {chordTop, false}, {seamNeg, true}}));
+  {
+    Face f;
+    f.surface.kind = SurfaceKind::Cylinder;
+    f.surface.frame = axisFrame;
+    f.surface.radius = r;
+    f.surface.radius2 = r;
+    f.surface.height = h;
+    f.uStart = phi;
+    f.uEnd = kTwoPi - phi;
+    Loop lp;
+    lp.uses = {{seamNeg, false}, {et, true}, {seamPos, true}, {eb, false}};
+    f.loops.push_back(std::move(lp));
+    s.faces.push_back(std::move(f));
+  }
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 [[nodiscard]] bool TryBooleanCylinderThroughPlanar(const Solid& planar, const Solid& cyl,
                                                    const CylinderShape& C, BoolOp op, bool cylIsMinuend,
                                                    std::vector<Solid>* out, bool* handled,
                                                    Problem* outWhy) {
   *handled = true;
-  if (op == BoolOp::Subtract && cylIsMinuend)
-    return Fail(Problem::BooleanCurvedFace, outWhy);  // cylinder − box: a notch, its own B2 slice
+  if (op == BoolOp::Subtract && cylIsMinuend) {
+    // cylinder − box: the single-flat notch. Recognise exactly one box face parallel to the axis
+    // that cuts within the radius, the box otherwise square to the axis and engulfing the removed
+    // slab; then the subtraction is the cylinder minus that one half-space. A partial-length pocket,
+    // a slot bounded by two faces, or a tilted box falls through to the refusal (GitHub issue #242).
+    const Vec3 az2 = C.axis.zAxis;
+    const double sc2 = std::max(ModelScale(planar), C.radius + C.length);
+    const double e2 = 1e-7 * sc2;
+    if (!AabbsOverlap(planar, cyl, e2)) {
+      out->push_back(cyl);  // disjoint — the minuend is unchanged
+      return Succeed(outWhy);
+    }
+    int cutFace = -1;
+    int cutCount = 0;
+    bool boxSquareToAxis = true;
+    for (int fi = 0; fi < static_cast<int>(planar.faces.size()); ++fi) {
+      const Face& f = planar.faces[static_cast<std::size_t>(fi)];
+      if (f.surface.kind != SurfaceKind::Plane)
+        continue;
+      const std::vector<Vec3> ring = FaceRing(planar, f);
+      if (ring.size() < 3)
+        continue;
+      const Vec3 n = f.surface.frame.zAxis;
+      const double dn = std::fabs(ray3d::Dot(n, az2));
+      if (dn > 1e-6 && dn < 1.0 - 1e-6)
+        boxSquareToAxis = false;  // a face neither parallel nor perpendicular to the axis
+      if (dn > 1e-6)
+        continue;  // not parallel to the axis — cannot be the lengthwise flat
+      const double px = ray3d::Dot(ray3d::Sub(C.axis.origin, ring[0]), n);  // axis offset, +n out of box
+      if (px > -(C.radius - e2) && px < C.radius - e2) {
+        ++cutCount;
+        cutFace = fi;
+      }
+    }
+    if (boxSquareToAxis && cutCount == 1) {
+      const Face& f = planar.faces[static_cast<std::size_t>(cutFace)];
+      const std::vector<Vec3> ring = FaceRing(planar, f);
+      const Vec3 n = f.surface.frame.zAxis;
+      const double px = ray3d::Dot(ray3d::Sub(C.axis.origin, ring[0]), n);
+      const double q = std::sqrt(std::max(0.0, C.radius * C.radius - px * px));
+      // Local frame: base at the cylinder base, +x into the removed slab (−n), +z the axis.
+      ucs::Ucs lf = C.axis;
+      const Vec3 wx0 = ray3d::Scale(n, -1.0);
+      lf.xAxis = ray3d::Normalize(ray3d::Sub(wx0, ray3d::Scale(lf.zAxis, ray3d::Dot(wx0, lf.zAxis))));
+      lf.yAxis = ray3d::Normalize(ray3d::Cross(lf.zAxis, lf.xAxis));
+      auto WL = [&](double x, double y, double z) { return ucs::UcsToWorld(lf, Vec3{x, y, z}); };
+      // Every extreme point of the removed segment must lie inside the box, so that
+      // cylinder − box == cylinder − (this one half-space).
+      const Vec3 probe[6] = {WL(px, -q, 0.0),       WL(px, q, 0.0),
+                             WL(px, q, C.length),   WL(px, -q, C.length),
+                             WL(C.radius, 0.0, 0.0), WL(C.radius, 0.0, C.length)};
+      bool removedInsideBox = true;
+      for (const Face& bf : planar.faces) {
+        if (bf.surface.kind != SurfaceKind::Plane)
+          continue;
+        const std::vector<Vec3> br = FaceRing(planar, bf);
+        if (br.size() < 3)
+          continue;
+        const Vec3 bn = bf.surface.frame.zAxis;
+        for (const Vec3& p : probe)
+          if (ray3d::Dot(ray3d::Sub(p, br[0]), bn) > e2)
+            removedInsideBox = false;
+      }
+      if (removedInsideBox) {
+        Solid r;
+        if (!BuildCylinderLongitudinalFlat(lf, C.radius, C.length, px, &r, outWhy))
+          return false;
+        out->push_back(std::move(r));
+        return Succeed(outWhy);
+      }
+    }
+    if (boxSquareToAxis && cutCount == 0 && PointInPlanarSolid(C.axis.origin, planar, sc2) &&
+        PointInPlanarSolid(ray3d::Add(C.axis.origin, ray3d::Scale(az2, C.length)), planar, sc2))
+      return Fail(Problem::BooleanEmptyResult, outWhy);  // box swallows the whole cylinder
+    return Fail(Problem::BooleanCurvedFace, outWhy);  // cylinder − box: other cases, their own slice
+  }
   const bool bore = op == BoolOp::Subtract;  // box − cylinder: drill a hole (B2a)
   const Vec3 az = C.axis.zAxis;
   const double scale = std::max(ModelScale(planar), C.radius + C.length);
