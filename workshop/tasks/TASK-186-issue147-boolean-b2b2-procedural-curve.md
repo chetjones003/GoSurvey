@@ -190,6 +190,16 @@ the offset quartic are the next slices.
 - sphere ∩ cylinder, torus ∩ anything, cone parabola / hyperbola sections.
 - Skew (non-coplanar) cylinder axes.
 
+**PROGRESS 2026-09-04 — skew (offset) perpendicular branch pipe INTERSECT done (feat/issue242-skew-branch-pipe-intersect, issue #242).**
+`BuildSkewBranchPipeIntersection(fr, r, R, g)` = `BuildBranchPipeIntersection` verbatim except
+`aSurf.frame` (thin axis = `fr.yAxis`, through `(g,0,0)`), the curve `s(φ) = ±√(R²−(g+r sinφ)²)`,
+and the two thick-wall patches now OFF-CENTRE — `u ∈ [uLo, uHi]` and its mirror, with
+`uLo = atan2(√(R²−(g+r)²), g+r)`, `uHi = atan2(√(R²−(g−r)²), g−r)` (symmetric `±psi0` only when g=0).
+`TryBooleanBranchPipe` gained a `gap > eps` skew branch: proper skew-line closest points →
+`sfr` (zAxis = thick, xAxis = gap dir); requires perpendicular + INTERSECT + `g+r<R` + thin fully
+crosses + thin axis ‖ `±sfr.yAxis` (tilted+skew still refused). 8v/10e/4f χ=2, volume vs a 1400×1400
+section integral (5e-3), tilted frame. SUBTRACT/UNION skew refused. Full suite green (1118). No `.gs` bump.
+
 **PROGRESS 2026-09-04 — branch pipe `thin − thick` done (feat/issue242-branch-pipe-thin-minus-thick, issue #242).**
 `BuildBranchPipeThinStub(fr, r, R, alpha, zetaFlat, sideSign)` = `BuildCylinderSphereOffsetStub`'s
 topology (4v/6e/4f χ=2: thin wall 2 halves + flat cap + inward dimple) with the dimple surface
