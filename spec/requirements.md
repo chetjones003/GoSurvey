@@ -6091,6 +6091,22 @@ capability that does not exist. They are recorded here rather than quietly dropp
     the same rule that already refuses them on any curved or multi-segment path (unchanged); a
     rotation-minimizing frame with zero twist closes consistently around a planar closed path by
     construction.
+  - **A sharp (tangent-discontinuous) corner where BOTH adjoining path segments are straight, and the
+    profile is polygonal (no arc edge), is mitred** rather than refused (REQ-315 2026-09-04, issue
+    #259): the shared ring at the corner lies on the plane that bisects the incoming and outgoing
+    tangent directions, one straight cut through both legs' cross-sections, matching what a real
+    mitred pipe or duct joint does — no gap, no overlap, and each leg's own swept volume is
+    unaffected (`area × leg length`, exactly as an unmitred straight run, because the bisector plane
+    passes through the path's own corner point). A sharp corner touching an **arc** path segment
+    stays refused (`Problem::SweepPathCorner`): mitring it would need a trimmed NURBS patch (the
+    cross-section reaches the cut plane at a different point per profile vertex around the curve),
+    which REQ-315 already marks out of scope as its own future decision — this is not a smaller
+    version of that decision, it is the same one, deferred for the same reason. A sharp corner with a
+    profile that has an arc edge stays refused too (`Problem::SweepMitreProfileArc`): shearing a
+    circular profile edge onto an oblique plane makes an ellipse, a curve this increment does not
+    build. A corner too sharp to mitre — the two directions fold back near a full reversal, so the
+    bisector plane is degenerate — is refused by name (`Problem::SweepMitreCollapsed`), the same
+    "refuse rather than build a collapsed shape" rule REQ-317's polysolid mitre already applies.
   - Both commands exist in the **typed** and the **prompted** shape the REQ-313 / REQ-314 commands
     use, pick their operands in the viewport or by entity id, preview the result, and commit as
     **one undoable step**. The source profiles and path are consumed only after the result passes
@@ -6122,6 +6138,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
     axis — a closed-path sweep therefore builds a shape, a hollow ring, that Revolve alone cannot). A
     degenerate closed path (zero enclosed length, a path that only touches its start without properly
     closing) is refused by name, not silently accepted as closed.
+  - **A mitred straight-to-straight corner's total volume equals the sum of each leg's
+    `area × length`**, to REQ-101, asserted in tests — the closed-form identity that makes a mitred
+    corner testable without a separate numerical reference: a plane through the path's own vertex
+    truncates a constant-cross-section prism at exactly its nominal length on each side, regardless
+    of the plane's tilt. A corner touching an arc path segment, or a corner whose profile has an arc
+    edge, is refused by name, not silently built as an unmitred (gapped or overlapping) joint. A
+    corner too sharp to mitre (near a full reversal) is refused by name, not built as a
+    self-intersecting or inverted band.
   - **Results survive `.gs` save and reopen** with vertex / edge / face counts identical and volume
     and area within a relative 1e-6. A drawing with no NURBS face serializes byte-identically to a
     version-3 build. A version-4 file with a malformed patch is refused with the kernel's reason and
@@ -6159,6 +6183,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   their start) accepted as a Statement/Acceptance addition (issue #259 follow-up to #241; scoped by
   user decision to include multi-segment closed loops, not just the single-arc case). Twist / fixed
   orientation and mitred corners remain deferred, unchanged.
+  2026-09-04 — a straight-to-straight mitred corner accepted as a Statement/Acceptance addition
+  (issue #259 follow-up to #241). Scoped by user decision, after a mid-investigation finding: a
+  corner touching an arc path segment needs a trimmed NURBS patch to mitre correctly, and REQ-315
+  already marks trimmed NURBS out of scope as its own future decision, so a full-generality mitre
+  would have reopened that decision rather than merely extended this one. The user chose to ship the
+  straight-to-straight case now and leave the arc-adjacent case deferred alongside it, rather than
+  open the trimmed-NURBS question here. Twist / fixed orientation remains deferred, unchanged.
 
 ### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
 

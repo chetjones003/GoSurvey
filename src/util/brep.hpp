@@ -357,9 +357,17 @@ enum class Problem {
   // --- Sweep (REQ-315 / ADR-048, GitHub issue #241). ---
   SweepPathDegenerate,        ///< A zero-length line path, or an arc path with no radius / no sweep.
   SweepProfileTouchesAxis,    ///< An arc-path sweep whose profile reaches the path's axis of curvature.
-  /// The path has a **sharp corner** — a tangent discontinuity where two segments meet. Only smooth
-  /// (tangent-continuous) bends are built in this increment.
+  /// The path has a **sharp corner** touching an arc segment. A straight-to-straight corner is
+  /// mitred instead (REQ-315 2026-09-04); a corner touching an arc segment would need a trimmed
+  /// NURBS patch — out of scope (REQ-315) — so it is still refused here, this increment.
   SweepPathCorner,
+  /// A straight-to-straight sharp corner, but the profile has an arc edge — mitring would shear it
+  /// into a non-circular curve, which this increment does not build (REQ-315 2026-09-04). A
+  /// polygonal (all-straight-edge) profile mitres; a profile with any arc edge does not, yet.
+  SweepMitreProfileArc,
+  /// A straight-to-straight corner too sharp to mitre — the two segments fold back on themselves
+  /// closely enough that the bisector (mitre) plane is degenerate (REQ-315 2026-09-04).
+  SweepMitreCollapsed,
   /// An option combination this increment does not build: a twist or a fixed world orientation on
   /// anything but a single straight segment. A single straight segment takes any option.
   SweepUnsupportedOption,
@@ -542,8 +550,10 @@ struct SweepSegment {
 /// A **sweep path** for \ref Sweep (REQ-315 / ADR-048): a chain of straight and circular-arc
 /// segments. `points[0]` is where the profile starts; segment `k` runs `points[k] → points[k+1]`,
 /// so `segments.size()` is `points.size() - 1`. A single segment is the common case (a line or an
-/// arc); several **tangent-continuous** segments form a bulge polyline. A tangent discontinuity at a
-/// joint (a mitred corner) is a later increment and is refused by name. The path is usually **open**
+/// arc); several segments form a bulge polyline, most often **tangent-continuous**. A tangent
+/// discontinuity at a joint where both adjoining segments are straight is a **mitred corner**
+/// (REQ-315 2026-09-04) rather than a refusal; touching an arc segment it is still refused by name
+/// (a trimmed NURBS patch, out of scope). The path is usually **open**
 /// (`points[0] != points.back()`); it may also be **closed** — `points[0] == points.back()`, a full
 /// circle when there is one arc segment — which \ref Sweep treats specially (no end caps, REQ-315
 /// 2026-09-04).
@@ -577,11 +587,23 @@ struct SweepOptions {
 /// A **closed path** — a single full-circle arc segment, or a multi-segment path whose last point
 /// coincides with its first — builds with no end caps; the first and last cross-section rings are
 /// the same ring (REQ-315 2026-09-04), mirroring \ref Revolve's own full-turn treatment. Its closing
-/// seam is checked for tangent continuity the same way an interior joint is.
+/// seam is checked for tangent continuity the same way an interior joint is — unless it mitres
+/// (below), in which case the continuity check does not apply.
 ///
-/// Still refused by name (\ref Problem::SweepUnsupportedOption), pending later increments: a tangent
-/// discontinuity at a joint (a mitred corner), including at a closed path's seam; a twist or a fixed
-/// orientation on anything but a single straight segment (so never on a closed path).
+/// A **mitred corner** (REQ-315 2026-09-04, GitHub issue #259): where two adjoining **straight**
+/// segments meet at a tangent discontinuity, and the profile is **polygonal** (no arc edge), the
+/// shared ring at the joint is built on the plane bisecting the two tangents — one straight cut
+/// through both legs, matching a mitred pipe or duct joint (no gap, no overlap). This also applies at
+/// a closed path's own closing seam. Refused — by name, not silently built as an unmitred or
+/// collapsed joint — when: the corner touches an **arc** segment (\ref Problem::SweepPathCorner) —
+/// mitring that would need a trimmed NURBS patch, out of scope (REQ-315); the profile has an arc edge
+/// (\ref Problem::SweepMitreProfileArc) — shearing a circular edge onto an oblique plane makes an
+/// ellipse, not built this increment; or the corner is too sharp to mitre, near a full reversal
+/// (\ref Problem::SweepMitreCollapsed).
+///
+/// Still refused by name (\ref Problem::SweepUnsupportedOption), pending later increments: a twist or
+/// a fixed orientation on anything but a single straight segment (so never on a closed or mitred
+/// path).
 ///
 /// Nothing is stored unless the result passes \ref Validate (REQ-201); \p out is left untouched on
 /// failure. Refuses — by name — a malformed or degenerate path (\ref Problem::SweepPathDegenerate),
