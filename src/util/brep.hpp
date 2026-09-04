@@ -363,6 +363,18 @@ enum class Problem {
   /// An option combination this increment does not build: a twist or a fixed world orientation on
   /// anything but a single straight segment. A single straight segment takes any option.
   SweepUnsupportedOption,
+
+  // --- Push/pull (REQ-319 / ADR-046 amendment (i), GitHub issue #148 Phase 5). ---
+  PushPullFaceNotPlanar,    ///< The face to move is a cylinder, cone, sphere, torus or NURBS wall.
+  PushPullDistanceZero,     ///< A zero (or non-finite) distance: nothing to do, and saying otherwise lies.
+  /// A face adjacent to the one being moved is not a plane parallel to the push direction, so it
+  /// would have to be RE-SOLVED rather than translated — its own vertices would leave its own
+  /// surface. Checked before anything is built, because \ref Validate cannot catch it afterwards:
+  /// Validate tests topology and degeneracy and has no check that a face's vertices lie on that
+  /// face's surface, so the bad result would pass, tessellate from one geometry and integrate its
+  /// volume from another (ADR-046 amendment (i)).
+  PushPullNeighbourNotParallel,
+  PushPullResultInvalid,    ///< The moved solid did not validate — collapsed, inverted or degenerate.
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -788,5 +800,46 @@ struct Tessellation {
 /// document-origin rebase (REQ-101), where a store that does not follow the origin is a solid that
 /// silently jumps by the origin's whole magnitude.
 [[nodiscard]] Solid Translate(const Solid& s, const Vec3& delta);
+
+/// Move face \p faceIndex of \p s along its own outward normal by \p distance (REQ-319).
+///
+/// **The first operation in this kernel that EDITS a solid.** Everything before it builds: from a
+/// profile (extrude, revolve, loft, sweep), from two solids (the Booleans), or by cutting one
+/// (slice). This takes a solid and returns a changed one — and, like all of them, it computes into
+/// a fresh `Solid` and validates before returning, never mutating its input (ADR-046 (d)). That is
+/// not merely tidiness: `CadSolidPtr` is `shared_ptr<const Solid>` so undo snapshots are a refcount
+/// bump, which makes immutability the precondition for undo working at all.
+///
+/// **What moves.** The face's surface origin, every vertex its loops use, and the frame of any arc
+/// edge whose two endpoints are both on the face. A neighbouring face keeps its surface untouched
+/// and simply becomes taller or shorter — which is exactly why a box's side stays a plane while its
+/// top rises, and exactly why the precondition below exists.
+///
+/// **Refuses, by name and before building anything:**
+/// - \ref Problem::PushPullFaceNotPlanar — a curved wall. Moving a cylinder's wall is a radius
+///   change and a different geometry problem: the caps' boundary arcs must be re-solved, not
+///   translated. Its own increment.
+/// - \ref Problem::PushPullDistanceZero — zero or non-finite. Reporting success for a move that did
+///   not happen is worse than declining.
+/// - \ref Problem::PushPullNeighbourNotParallel — a neighbour that is not a plane whose normal is
+///   perpendicular to the push. **This is the load-bearing one**, and it was measured rather than
+///   argued. Translating the moved face's vertices leaves such a neighbour's surface where it was
+///   while its vertices walk off it, and \ref Validate cannot be relied on to notice: it checks
+///   topology and degeneracy and has no test that a face's vertices lie on their own surface.
+///   With this check removed, pushing a **cylinder's cap** by 3 builds a solid that Validate passes
+///   as Ok and whose analytic volume comes out 863.938 against a true 1021.02 — 15% wrong, because
+///   the wall still reports `height = 10` while its boundary sits at 13. (A slanted PLANE neighbour
+///   — a wedge — Validate does catch, at every distance tried; there the check buys an accurate
+///   refusal rather than safety, which matters under REQ-201 but is a smaller claim.) See ADR-046
+///   amendment (i).
+/// - \ref Problem::PushPullResultInvalid — the moved solid failed validation: pushed so far it
+///   collapsed, inverted, or degenerated a face. A real gesture, not a hypothetical.
+///
+/// **The result carries no recipe.** A pushed box is not the box its recipe describes, and a recipe
+/// that no longer describes its solid reads as authoritative while being false (REQ-319 item 6).
+/// **The topology is unchanged** — same vertex, edge and face counts, same indices — which is what
+/// lets a REQ-318 sub-object reference survive the edit rather than expire (ADR-049).
+[[nodiscard]] bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out,
+                                Problem* outWhy);
 
 } // namespace brep
