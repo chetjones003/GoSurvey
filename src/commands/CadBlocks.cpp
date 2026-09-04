@@ -335,7 +335,7 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
     ok = ImportDwgFile(scratch, pathUtf8, log);
   else {
     // .gs block-library import was removed by issue #264 (D-2026-09-03-h); re-adding a
-    // block-library container is tracked as its own follow-up issue, not part of this one.
+    // block-library container is tracked as issue #284, not part of this one.
     log.push_back("BLOCKIMPORT — expected a .dxf or .dwg file.");
     return -1;
   }
@@ -1805,8 +1805,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
   if (tok == "wblock") {
     // .gs block-library export was removed by issue #264 (D-2026-09-03-h); WBLOCK had no other
-    // target format, so it is disabled pending the follow-up issue for a .dwg-based container.
-    log.push_back("WBLOCK — unavailable: .gs block-library export was retired; see the follow-up issue for .dwg-based block export.");
+    // target format, so it is disabled pending issue #284 (a .dwg-based container).
+    log.push_back("WBLOCK — unavailable: .gs block-library export was retired; see issue #284 for .dwg-based block export.");
     return true;
   }
 

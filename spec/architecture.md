@@ -1910,7 +1910,7 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (d) **`.gs` APIs stay.** Workspace template and an explicit `.gs` path still use `GsIo`.
       **Amended D-2026-09-03-h / issue #264 (2026-09-04):** standalone `.gs` as an openable
       document is retired outright — no explicit `.gs` path anywhere, including WBLOCK/BLOCKIMPORT
-      (block-library replacement spun to its own follow-up issue). The workspace template moved to
+      (block-library replacement spun to issue #284). The workspace template moved to
       its own narrower format, `.gst`, with a dedicated reader/writer
       (`SaveGoSurveyTemplateFile`/`LoadGoSurveyTemplateFile`) — same JSON shape, no file
       association. `BuildRoot`/`LoadGoSurveyFromJsonUtf8` (clause (b)) are unaffected.

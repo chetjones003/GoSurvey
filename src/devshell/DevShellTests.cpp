@@ -306,7 +306,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     SubmitCad(ctx, "BLOCKMODEL");
 
     // WBLOCK/BLOCKIMPORT .gs round-trip removed by issue #264 (D-2026-09-03-h); WBLOCK is
-    // disabled pending a .dwg-based block-library replacement (tracked in a follow-up issue).
+    // disabled pending a .dwg-based block-library replacement (issue #284).
 
     std::vector<std::string> ioLog;
     IM_CHECK(SaveGoSurveyTemplateFile(*s_cmd, "issue124-roundtrip.json", ioLog));
