@@ -1947,7 +1947,8 @@ TEST_CASE("Curved B1: a cylinder axis-aligned through a box - plug, boss, and th
     RequireWindingMatchesNormals(t);
   }
 
-  SECTION("SUBTRACT the other way (cylinder - box) is still refused - its own slice") {
+  SECTION("SUBTRACT the other way (cylinder - box), box shorter than the cylinder, is refused") {
+    // The box spans z[0,10] but the cylinder runs z[-5,15]; a partial-length pocket is a later slice.
     REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &r, &why));
     REQUIRE(why == Problem::BooleanCurvedFace);
   }
@@ -1987,6 +1988,106 @@ TEST_CASE("Curved B1: a failed curved Boolean leaves the operands untouched", "[
   REQUIRE(brep::ComputeMassProperties(cone).volume ==
           Approx(brep::ComputeMassProperties(coneBefore).volume).epsilon(1e-12));
   (void)cyl;
+}
+
+TEST_CASE("Curved B2b-2: cylinder - box mills a single lengthwise flat (a notch)", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 4.0;
+  const double L = 10.0;
+  const double px = 2.0;  // cut plane at local x = 2, material x > 2 removed
+  const double q = std::sqrt(r * r - px * px);
+  const double seg = r * r * std::acos(px / r) - px * q;  // removed circular-segment area
+  const double wantVol = L * (kPi * r * r - seg);
+
+  SECTION("axis-aligned - closed form, 4v/6e/4f, winding, tessellated volume") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(12, 0, -15), 20, 40, 40, &box, &why));  // -x face at x=2, engulfs the rest
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    const Counts c = CountOf(out[0]);
+    REQUIRE(c.v == 4);
+    REQUIRE(c.e == 6);
+    REQUIRE(c.f == 4);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(wantVol).epsilon(1e-9));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.004, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(wantVol).epsilon(3e-3));
+  }
+
+  SECTION("tilted survey-magnitude frame - same volume") {
+    const ucs::Ucs fr = TiltedAt(2100000.0, 5900000.0, 300.0);
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(fr, r, L, &cyl, &why));
+    // A box whose -x face (local) sits at x = px and which runs well past the cylinder every other way.
+    ucs::Ucs bf = fr;
+    bf.origin = ucs::UcsToWorld(fr, Vec3{px + 10.0, 0.0, -15.0});
+    Solid box;
+    REQUIRE(brep::MakeBox(bf, 20, 40, 40, &box, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(wantVol).epsilon(1e-6));
+  }
+
+  SECTION("reversed roles are unaffected - box - cylinder still drills a hole") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, -5), 1.5, 20, &cyl, &why));
+    REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(box, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume ==
+            Approx(1000.0 - kPi * 1.5 * 1.5 * 10.0).epsilon(1e-9));
+  }
+
+  SECTION("a partial-length box (a pocket) is refused by name") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(12, 0, 3), 20, 40, 4, &box, &why));  // z[3,7] only - inside the length
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+
+  SECTION("a slot bounded by two parallel faces is refused by name") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(0, 0, -15), 4, 40, 40, &box, &why));  // x[-2,2] - cuts two flats
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+
+  SECTION("a box that swallows the whole cylinder reports an empty result") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(0, 0, -15), 40, 40, 40, &box, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(why == Problem::BooleanEmptyResult);
+  }
+
+  SECTION("a disjoint box leaves the cylinder unchanged") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(100, 0, 0), 10, 10, 10, &box, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(kPi * r * r * L).epsilon(1e-9));
+  }
 }
 
 TEST_CASE("Curved B2b-1: the Steinmetz bicylinder - INTERSECT of two equal perpendicular cylinders",
