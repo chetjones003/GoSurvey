@@ -6080,6 +6080,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
     the path or hold it at a fixed world orientation. A straight path reproduces REQ-314 extrude and
     a planar circular-arc path reproduces revolve — asserted to agree where the analytic result
     exists; every other path produces NURBS side faces.
+  - **A path that closes back on its own start point — a single full-circle arc segment, or a
+    multi-segment bulge-polyline path whose last point coincides with its first** — is a **closed
+    sweep path**, not a refusal. Its volume matches the Pappus value for a full turn about the path's
+    axis, the same relationship a partial arc-path sweep already has; a non-circular closed path (an
+    ellipse-like or multi-arc loop) is built by the same rule. A closed path builds **no end caps** — the first and last cross-section
+    rings are the same ring, wrapped together (mirroring `brep::Revolve`'s existing full-turn
+    treatment: no literal 2π edge, no duplicate vertices at the seam) — rather than two coincident or
+    degenerate planar faces. Twist and fixed-orientation options remain refused on a closed path by
+    the same rule that already refuses them on any curved or multi-segment path (unchanged); a
+    rotation-minimizing frame with zero twist closes consistently around a planar closed path by
+    construction.
   - Both commands exist in the **typed** and the **prompted** shape the REQ-313 / REQ-314 commands
     use, pick their operands in the viewport or by entity id, preview the result, and commit as
     **one undoable step**. The source profiles and path are consumed only after the result passes
@@ -6102,6 +6113,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
     display tessellation quality changes.
   - **A straight-path sweep equals REQ-314 extrude** and a **planar arc-path sweep of an in-plane
     profile equals revolve**, to REQ-101, asserted in tests.
+  - **A closed sweep path (a full-circle arc segment, or a multi-segment path returning to its start)
+    builds a valid closed solid with no end-cap faces** — `brep::Validate` passes and the ring at the
+    path's start is shared with the ring at its end rather than duplicated. Its volume matches the
+    Pappus value for a full turn, to REQ-101, the same check the existing partial-arc-path case
+    already uses (`brep::Revolve` itself cannot be cross-checked here: it requires the profile to
+    *touch* its axis, the opposite of what a curved-path sweep already requires of an arc segment's
+    axis — a closed-path sweep therefore builds a shape, a hollow ring, that Revolve alone cannot). A
+    degenerate closed path (zero enclosed length, a path that only touches its start without properly
+    closing) is refused by name, not silently accepted as closed.
   - **Results survive `.gs` save and reopen** with vertex / edge / face counts identical and volume
     and area within a relative 1e-6. A drawing with no NURBS face serializes byte-identically to a
     version-3 build. A version-4 file with a malformed patch is refused with the kernel's reason and
@@ -6135,6 +6155,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   and `A` (path-alignment) keyword options wired to the kernel's existing `brep::SweepOptions`
   (TASK-194). Deferred, each its own later increment: a twist or fixed orientation on a curved or
   multi-segment path, a mitred path corner, a full-turn arc segment.
+  2026-09-04 — closed sweep paths (a full-circle arc segment, and multi-segment paths that return to
+  their start) accepted as a Statement/Acceptance addition (issue #259 follow-up to #241; scoped by
+  user decision to include multi-segment closed loops, not just the single-arc case). Twist / fixed
+  orientation and mitred corners remain deferred, unchanged.
 
 ### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
 

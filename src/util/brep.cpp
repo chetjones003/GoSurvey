@@ -2879,44 +2879,86 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
   if (!FrameOk(profile.plane))
     return Fail(Problem::DegenerateFrame, outWhy);
 
-  const int np = static_cast<int>(path.points.size());
-  if (np < 2 || static_cast<int>(path.segments.size()) != np - 1)
+  // A single full-circle arc segment (points[0] == points[1], sweep a full turn) splits here into
+  // two half-turn segments around a synthetic midpoint, so no analytic edge downstream ever carries
+  // a literal 2*pi sweep — the same reason Revolve splits its own full turn in two (brep.hpp: "every
+  // primitive below splits its rims at a seam instead, so full-circle edges do not occur"). A
+  // multi-segment path that closes on itself (points[0] == points[np-1], REQ-315 2026-09-04) needs
+  // no such split: every one of its segments is already < 2*pi.
+  SweepPath work = path;
+  if (work.points.size() == 2 && work.segments.size() == 1 && work.segments[0].arc) {
+    const SweepSegment& seg0 = work.segments[0];
+    const double r0len = ray3d::Length(ray3d::Sub(work.points[0], seg0.centre));
+    if (r0len > 1e-9 && FinitePoint(seg0.centre) && FinitePoint(seg0.normal) &&
+        ray3d::Length(seg0.normal) > 1e-9 && std::isfinite(seg0.sweep) &&
+        std::fabs(std::fabs(seg0.sweep) - kTwoPi) < 1e-6 &&
+        ray3d::Length(ray3d::Sub(work.points[0], work.points[1])) < 1e-7 * (1.0 + r0len)) {
+      const Vec3 axis = ray3d::Normalize(seg0.normal);
+      const Vec3 r0 = ray3d::Sub(work.points[0], seg0.centre);
+      const double halfSweep = seg0.sweep * 0.5;
+      const Vec3 mid = ray3d::Add(seg0.centre, RotateAbout(r0, axis, halfSweep));
+      SweepSegment half = seg0;
+      half.sweep = halfSweep;
+      work.points = {work.points[0], mid, work.points[1]};
+      work.segments = {half, half};
+    }
+  }
+
+  const int np = static_cast<int>(work.points.size());
+  if (np < 2 || static_cast<int>(work.segments.size()) != np - 1)
     return Fail(Problem::SweepPathDegenerate, outWhy);
-  for (const Vec3& p : path.points)
+  for (const Vec3& p : work.points)
     if (!FinitePoint(p))
       return Fail(Problem::SweepPathDegenerate, outWhy);
 
-  const bool singleStraight = np == 2 && !path.segments[0].arc;
+  // A closed path: the last point coincides with the first (a full-circle single arc, now split
+  // above, or a multi-segment path that returns to its own start). Built with no end caps and the
+  // last ring aliased onto the first (REQ-315 2026-09-04) instead of Loft's two planar caps.
+  double closeScaleProbe = 1e-9;
+  for (int k = 0; k + 1 < np; ++k)
+    closeScaleProbe = std::max(
+        closeScaleProbe, ray3d::Length(ray3d::Sub(work.points[static_cast<std::size_t>(k + 1)],
+                                                   work.points[static_cast<std::size_t>(k)])));
+  const bool closed =
+      np >= 3 && ray3d::Length(ray3d::Sub(work.points[0], work.points[static_cast<std::size_t>(np - 1)])) <
+                     1e-7 * (1.0 + closeScaleProbe);
+
+  const bool singleStraight = np == 2 && !work.segments[0].arc;
   if ((options.twistRad != 0.0 || !options.alignToPath) && !singleStraight)
     return Fail(Problem::SweepUnsupportedOption, outWhy);
 
   // Path scale, for the relative tolerances below.
   double scale = 1e-9;
   for (int k = 0; k + 1 < np; ++k)
-    scale = std::max(scale, ray3d::Length(ray3d::Sub(path.points[static_cast<std::size_t>(k + 1)],
-                                                     path.points[static_cast<std::size_t>(k)])));
+    scale = std::max(scale, ray3d::Length(ray3d::Sub(work.points[static_cast<std::size_t>(k + 1)],
+                                                     work.points[static_cast<std::size_t>(k)])));
 
   // --- Per-segment geometry, and the tangent-continuity check at every joint -------------------
   std::vector<SweepSegGeom> seg(static_cast<std::size_t>(np - 1));
   for (int k = 0; k + 1 < np; ++k) {
-    if (!SegGeom(path.points[static_cast<std::size_t>(k)], path.points[static_cast<std::size_t>(k + 1)],
-                 path.segments[static_cast<std::size_t>(k)], scale, &seg[static_cast<std::size_t>(k)]))
+    if (!SegGeom(work.points[static_cast<std::size_t>(k)], work.points[static_cast<std::size_t>(k + 1)],
+                 work.segments[static_cast<std::size_t>(k)], scale, &seg[static_cast<std::size_t>(k)]))
       return Fail(Problem::SweepPathDegenerate, outWhy);
     if (k > 0 &&
         ray3d::Dot(seg[static_cast<std::size_t>(k - 1)].endTan, seg[static_cast<std::size_t>(k)].startTan) <
             1.0 - 1e-6)
       return Fail(Problem::SweepPathCorner, outWhy);  // a mitred corner — a later increment
   }
+  // The closing seam of a closed path is a joint like any other: the last segment's end tangent
+  // must meet the first segment's start tangent smoothly, or it is a mitred corner too.
+  if (closed &&
+      ray3d::Dot(seg[static_cast<std::size_t>(np - 2)].endTan, seg[0].startTan) < 1.0 - 1e-6)
+    return Fail(Problem::SweepPathCorner, outWhy);
 
   // --- Carry a rotation-minimizing frame along the path ---------------------------------------
   std::vector<ucs::Ucs> frame(static_cast<std::size_t>(np));
-  if (!SweepFrameAt(profile.plane, path.points[0], seg[0].startTan, options.alignToPath, 0.0,
+  if (!SweepFrameAt(profile.plane, work.points[0], seg[0].startTan, options.alignToPath, 0.0,
                     &frame[0]))
     return Fail(Problem::DegenerateFrame, outWhy);
   for (int k = 1; k < np; ++k) {
     const SweepSegGeom& g = seg[static_cast<std::size_t>(k - 1)];
     ucs::Ucs f = frame[static_cast<std::size_t>(k - 1)];
-    f.origin = path.points[static_cast<std::size_t>(k)];
+    f.origin = work.points[static_cast<std::size_t>(k)];
     if (g.arc) {
       f.xAxis = RotateAbout(f.xAxis, g.axis, g.sweep);
       f.yAxis = RotateAbout(f.yAxis, g.axis, g.sweep);
@@ -2925,6 +2967,16 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
     if (!ucs::IsRightHandedOrthonormal(f, 1e-6))
       return Fail(Problem::DegenerateFrame, outWhy);
     frame[static_cast<std::size_t>(k)] = f;
+  }
+  // A closed path must close its frame too: the profile orientation carried all the way around must
+  // match the orientation it started with, or the seam ring would be built twice, inconsistently.
+  // A rotation-minimizing frame around a planar closed path closes by construction; this is a
+  // safety net for the general (non-planar) case, refused the same way a sharp corner is.
+  if (closed) {
+    const ucs::Ucs& f0 = frame[0];
+    const ucs::Ucs& fN = frame[static_cast<std::size_t>(np - 1)];
+    if (ray3d::Dot(f0.xAxis, fN.xAxis) < 1.0 - 1e-6 || ray3d::Dot(f0.zAxis, fN.zAxis) < 1.0 - 1e-6)
+      return Fail(Problem::SweepPathCorner, outWhy);
   }
   // The whole-path twist (a single straight segment only, guarded above): rotate the end frame.
   if (options.twistRad != 0.0) {
@@ -2958,17 +3010,23 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
   }
 
   // --- Topology: one band per segment, rings shared at the joints (Loft-style) ----------------
+  // A closed path shares its LAST ring with its FIRST — the same vertex/edge ids, not a duplicate
+  // coincident ring — mirroring Revolve's own full-turn wraparound (brep.cpp, Revolve's `full`
+  // branch: `idx = V[k][0]`).
   Solid s;
+  const int ringCount = closed ? np - 1 : np;
   std::vector<std::vector<int>> ringV(static_cast<std::size_t>(np),
                                       std::vector<int>(static_cast<std::size_t>(n)));
-  for (int k = 0; k < np; ++k)
+  for (int k = 0; k < ringCount; ++k)
     for (int j = 0; j < n; ++j)
       ringV[static_cast<std::size_t>(k)][static_cast<std::size_t>(j)] =
           AddVertex(&s, prep[static_cast<std::size_t>(k)].walk[static_cast<std::size_t>(j)]);
+  if (closed)
+    ringV[static_cast<std::size_t>(np - 1)] = ringV[0];
 
   std::vector<std::vector<int>> ringE(static_cast<std::size_t>(np),
                                       std::vector<int>(static_cast<std::size_t>(n)));
-  for (int k = 0; k < np; ++k)
+  for (int k = 0; k < ringCount; ++k)
     for (int j = 0; j < n; ++j) {
       const std::size_t kk = static_cast<std::size_t>(k);
       const std::size_t jj = static_cast<std::size_t>(j);
@@ -2978,6 +3036,8 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
                           ? AddArc(&s, a, b, prep[kk].centre[jj], prep[kk].up, prep[kk].sweep[jj])
                           : AddLine(&s, a, b);
     }
+  if (closed)
+    ringE[static_cast<std::size_t>(np - 1)] = ringE[0];
 
   std::vector<std::vector<int>> railE(static_cast<std::size_t>(np - 1),
                                       std::vector<int>(static_cast<std::size_t>(n)));
@@ -2998,19 +3058,22 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
     }
   }
 
-  // Bottom cap (ring 0, outward −frame0.z), top cap (last ring, outward +frameEnd.z).
-  {
-    std::vector<EdgeUse> uses;
-    for (int j = n - 1; j >= 0; --j)
-      uses.push_back(EdgeUse{ringE.front()[static_cast<std::size_t>(j)], true});
-    s.faces.push_back(
-        MakePlaneFace(prep.front().walk[0], ray3d::Scale(frame.front().zAxis, -1.0), std::move(uses)));
-  }
-  {
-    std::vector<EdgeUse> uses;
-    for (int j = 0; j < n; ++j)
-      uses.push_back(EdgeUse{ringE.back()[static_cast<std::size_t>(j)], false});
-    s.faces.push_back(MakePlaneFace(prep.back().walk[0], frame.back().zAxis, std::move(uses)));
+  // Bottom cap (ring 0, outward −frame0.z), top cap (last ring, outward +frameEnd.z). A closed path
+  // has no ends — the "last" ring IS the first — so neither cap is built.
+  if (!closed) {
+    {
+      std::vector<EdgeUse> uses;
+      for (int j = n - 1; j >= 0; --j)
+        uses.push_back(EdgeUse{ringE.front()[static_cast<std::size_t>(j)], true});
+      s.faces.push_back(
+          MakePlaneFace(prep.front().walk[0], ray3d::Scale(frame.front().zAxis, -1.0), std::move(uses)));
+    }
+    {
+      std::vector<EdgeUse> uses;
+      for (int j = 0; j < n; ++j)
+        uses.push_back(EdgeUse{ringE.back()[static_cast<std::size_t>(j)], false});
+      s.faces.push_back(MakePlaneFace(prep.back().walk[0], frame.back().zAxis, std::move(uses)));
+    }
   }
 
   // Side faces: one NURBS patch per (band, profile edge).

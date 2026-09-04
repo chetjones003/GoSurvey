@@ -539,11 +539,14 @@ struct SweepSegment {
   double sweep = 0.0;  ///< Arc only: signed sweep about \ref normal, `0 < |sweep| < 2*pi`.
 };
 
-/// A **sweep path** for \ref Sweep (REQ-315 / ADR-048): an open chain of straight and circular-arc
+/// A **sweep path** for \ref Sweep (REQ-315 / ADR-048): a chain of straight and circular-arc
 /// segments. `points[0]` is where the profile starts; segment `k` runs `points[k] → points[k+1]`,
 /// so `segments.size()` is `points.size() - 1`. A single segment is the common case (a line or an
 /// arc); several **tangent-continuous** segments form a bulge polyline. A tangent discontinuity at a
-/// joint (a mitred corner) is a later increment and is refused by name.
+/// joint (a mitred corner) is a later increment and is refused by name. The path is usually **open**
+/// (`points[0] != points.back()`); it may also be **closed** — `points[0] == points.back()`, a full
+/// circle when there is one arc segment — which \ref Sweep treats specially (no end caps, REQ-315
+/// 2026-09-04).
 struct SweepPath {
   std::vector<Vec3> points;
   std::vector<SweepSegment> segments;
@@ -571,9 +574,14 @@ struct SweepOptions {
 /// segment reproduces \ref Extrude**; a **single arc segment (twist 0, aligned) reproduces
 /// \ref Revolve** — asserted in tests.
 ///
+/// A **closed path** — a single full-circle arc segment, or a multi-segment path whose last point
+/// coincides with its first — builds with no end caps; the first and last cross-section rings are
+/// the same ring (REQ-315 2026-09-04), mirroring \ref Revolve's own full-turn treatment. Its closing
+/// seam is checked for tangent continuity the same way an interior joint is.
+///
 /// Still refused by name (\ref Problem::SweepUnsupportedOption), pending later increments: a tangent
-/// discontinuity at a joint (a mitred corner); a twist or a fixed orientation on anything but a
-/// single straight segment; a full-turn arc segment.
+/// discontinuity at a joint (a mitred corner), including at a closed path's seam; a twist or a fixed
+/// orientation on anything but a single straight segment (so never on a closed path).
 ///
 /// Nothing is stored unless the result passes \ref Validate (REQ-201); \p out is left untouched on
 /// failure. Refuses — by name — a malformed or degenerate path (\ref Problem::SweepPathDegenerate),

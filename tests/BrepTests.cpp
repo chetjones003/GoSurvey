@@ -4194,6 +4194,94 @@ TEST_CASE("Sweep along collinear polyline segments equals the single-segment swe
 }
 
 // ---------------------------------------------------------------------------------------------
+// A closed sweep path (REQ-315, 2026-09-04, GitHub issue #259): a single full-circle arc segment,
+// or a multi-segment path that returns to its own start. No end caps, the first and last rings
+// shared, and a full-circle single-arc path equals a full-turn Revolve — the same reasoning REQ-315
+// already applies to a partial arc path and REQ-314 extrude.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("Sweep along a full-circle arc path builds a capless ring at the Pappus volume",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // Same rectangle profile as the partial-arc-path test: radius 2..5, height 3, clear of the Z axis.
+  // brep::Revolve cannot build this shape for comparison — it requires the profile to TOUCH its
+  // axis, the opposite of what Sweep already requires of an arc segment's axis
+  // (Problem::SweepProfileTouchesAxis) — so this is checked against Pappus directly, the same way
+  // the existing partial-arc-path case already is.
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{3.5, 0.0, 1.5}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{-1.5, -1.5}, ucs::Point2D{1.5, -1.5},
+                                ucs::Point2D{1.5, 1.5}, ucs::Point2D{-1.5, 1.5}})
+    pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  pr.edges.assign(4, brep::ProfileEdge{});
+
+  Solid swept;
+  const bool ok = brep::Sweep(pr, ArcPath(xz.origin, Vec3{0, 0, 1.5}, Vec3{0, 0, 1}, 2.0 * kPi),
+                              brep::SweepOptions{}, &swept, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(swept) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(swept));
+  REQUIRE(brep::EulerCharacteristic(swept) == 0);  // no caps — a torus-like ring, genus 1
+  REQUIRE(CountOf(swept).v == 8);  // two split half-turn rings of 4 vertices each, shared at the seam
+  REQUIRE(CountOf(swept).f == 8);  // two bands x 4 profile edges, no caps
+
+  const brep::MassProperties ms = brep::ComputeMassProperties(swept);
+  REQUIRE(ms.valid);
+  REQUIRE(ms.volume == Approx(2.0 * kPi * 3.5 * 9.0).epsilon(1e-5));  // Pappus
+}
+
+TEST_CASE("Sweep along a multi-segment path that closes into a loop builds with no end caps",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile circ = CircleProfile(World(), 0.5);
+
+  // Three 120-degree arcs about the same centre/axis, forming a closed circular path of radius 4.
+  const Vec3 centre{0, 0, 0};
+  const Vec3 axis{0, 0, 1};
+  const double r = 4.0;
+  brep::SweepPath path;
+  for (int k = 0; k < 3; ++k) {
+    const double a = (2.0 * kPi / 3.0) * static_cast<double>(k);
+    path.points.push_back(Vec3{r * std::cos(a), r * std::sin(a), 0});
+  }
+  path.points.push_back(path.points.front());  // closes the loop
+  brep::SweepSegment seg;
+  seg.arc = true;
+  seg.centre = centre;
+  seg.normal = axis;
+  seg.sweep = 2.0 * kPi / 3.0;
+  path.segments = {seg, seg, seg};
+
+  Solid s;
+  const bool ok = brep::Sweep(circ, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 0);  // no caps — genus 1, same as the full-circle case
+
+  const double expected = 2.0 * kPi * r * (kPi * 0.5 * 0.5);  // Pappus: circle profile, area pi*r^2
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-4));
+}
+
+TEST_CASE("Sweep refuses a closed path whose seam is a mitred corner, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  // Two straight segments returning to the start but meeting the closing seam at a sharp angle —
+  // a triangle-shaped path, not tangent-continuous anywhere.
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}, Vec3{0, 0, 0}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why));
+  REQUIRE(why == Problem::SweepPathCorner);
+  REQUIRE(s.faces.empty());
+}
+
+// ---------------------------------------------------------------------------------------------
 // REQ-314 increment 1, amended: a profile arc may curve INTO its loop.
 //
 // ADR-046 (d) recorded this as "a separate feature, now unblocked" the moment B2a gave `Surface`
