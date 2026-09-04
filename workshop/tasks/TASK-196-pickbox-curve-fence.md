@@ -1,4 +1,4 @@
-# TASK-195 — a selection fence tests the CURVE, not a box drawn round it
+# TASK-196 — a selection fence tests the CURVE, not a box drawn round it
 
 ## Bug report
 
