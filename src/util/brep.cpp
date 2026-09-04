@@ -6338,6 +6338,212 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
   return Succeed(outWhy);
 }
 
+/// Shared frame + curve helpers for the skew (offset) perpendicular branch pipe. `A`'s axis is
+/// `fr.yAxis` through `(g, 0, 0)`; `B`'s is `fr.zAxis`. Both mouths sit on `B`'s `+x` half, so the
+/// thick wall is split at `ψ = 0` and `ψ = π` (not `±π/2`) — one mouth per half.
+struct SkewBranch {
+  ucs::Ucs fr;
+  double r = 0.0;
+  double R = 0.0;
+  double g = 0.0;
+  Surface aSurf;
+  Surface bSurf;
+  [[nodiscard]] Vec3 W(const Vec3& l) const { return ucs::UcsToWorld(fr, l); }
+  [[nodiscard]] Vec3 cpt(double phi, int sign) const {
+    const double px = g + r * std::sin(phi);
+    return W(Vec3{px, std::sqrt(std::max(0.0, R * R - px * px)) * sign, r * std::cos(phi)});
+  }
+  [[nodiscard]] Vec3 thinPt(double phi, double y) const {
+    return W(Vec3{g + r * std::sin(phi), y, r * std::cos(phi)});
+  }
+};
+
+[[nodiscard]] bool MakeSkewBranch(const ucs::Ucs& fr, double r, double R, double g, SkewBranch* sb) {
+  if (!(R > r) || !(r > 0.0) || !(g >= 0.0) || !(g + r < R))
+    return false;
+  sb->fr = fr;
+  sb->r = r;
+  sb->R = R;
+  sb->g = g;
+  sb->aSurf.kind = SurfaceKind::Cylinder;
+  sb->aSurf.frame.origin = sb->W(Vec3{g, 0.0, 0.0});
+  sb->aSurf.frame.zAxis = fr.yAxis;
+  sb->aSurf.frame.xAxis = fr.zAxis;
+  sb->aSurf.frame.yAxis = fr.xAxis;
+  sb->aSurf.radius = r;
+  sb->aSurf.height = 8.0 * R;
+  sb->bSurf.kind = SurfaceKind::Cylinder;
+  sb->bSurf.frame = fr;
+  sb->bSurf.radius = R;
+  sb->bSurf.height = 8.0 * R;
+  return true;
+}
+
+/// `B − A` for a **skew** (offset) perpendicular branch pipe (REQ-314 B2b-2, GitHub issue #242): the
+/// thin `A` (axis `fr.yAxis`, through `(g, 0, 0)`) bored clean through the thick `B` (axis
+/// `fr.zAxis`, caps \p zB0 / \p zB1). Both mouths lie on `B`'s `+x` half, so the thick wall splits at
+/// `ψ = 0` / `ψ = π` — each half carries one mouth as an inner loop. 8v / 12e / 6f, genus 1.
+[[nodiscard]] bool BuildSkewBranchPipeSubtract(const ucs::Ucs& fr, double r, double R, double g,
+                                               double zB0, double zB1, Solid* out, Problem* outWhy) {
+  SkewBranch sb;
+  if (!MakeSkewBranch(fr, r, R, g, &sb) || !(zB1 - zB0 > 2.0 * r))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 Z = fr.zAxis;
+  auto W = [&](const Vec3& l) { return sb.W(l); };
+  Solid s;
+  const int p0 = AddVertex(&s, sb.cpt(0.0, 1));
+  const int p1 = AddVertex(&s, sb.cpt(kPi, 1));
+  const int n0 = AddVertex(&s, sb.cpt(0.0, -1));
+  const int n1 = AddVertex(&s, sb.cpt(kPi, -1));
+  const int bp = AddVertex(&s, W(Vec3{R, 0.0, zB0}));    // ψ = 0
+  const int bm = AddVertex(&s, W(Vec3{-R, 0.0, zB0}));   // ψ = π
+  const int tp = AddVertex(&s, W(Vec3{R, 0.0, zB1}));
+  const int tm = AddVertex(&s, W(Vec3{-R, 0.0, zB1}));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = sb.cpt(witnessPhi, sign);
+    e.isectSurfaces = {sb.aSurf, sb.bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int cpU = isect(p0, p1, 1.75 * kPi, 1);
+  const int cpL = isect(p0, p1, 0.25 * kPi, 1);
+  const int cnU = isect(n0, n1, 1.75 * kPi, -1);
+  const int cnL = isect(n0, n1, 0.25 * kPi, -1);
+  const int sA0 = AddLine(&s, n0, p0);
+  const int sAp = AddLine(&s, n1, p1);
+  const int seam0 = AddLine(&s, bp, tp);   // B seam ψ = 0
+  const int seamPi = AddLine(&s, bm, tm);  // B seam ψ = π
+  const Vec3 botC = W(Vec3{0.0, 0.0, zB0});
+  const Vec3 topC = W(Vec3{0.0, 0.0, zB1});
+  const int brU = AddArc(&s, bp, bm, botC, Z, kPi);  // bottom rim ψ 0 -> π (through +y)
+  const int brD = AddArc(&s, bm, bp, botC, Z, kPi);  // bottom rim ψ π -> 2π (through -y)
+  const int trU = AddArc(&s, tp, tm, topC, Z, kPi);
+  const int trD = AddArc(&s, tm, tp, topC, Z, kPi);
+
+  auto face = [&](const Surface& surf, double u0, double u1, std::vector<Loop> loops) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops = std::move(loops);
+    s.faces.push_back(std::move(f));
+  };
+  face(sb.bSurf, 0.0, kPi,
+       {Loop{{{brU, false}, {seamPi, false}, {trU, true}, {seam0, true}}},
+        Loop{{{cpU, false}, {cpL, true}}}});
+  face(sb.bSurf, kPi, kTwoPi,
+       {Loop{{{brD, false}, {seam0, false}, {trD, true}, {seamPi, true}}},
+        Loop{{{cnU, true}, {cnL, false}}}});
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{brU, true}, {brD, true}}));
+  s.faces.push_back(MakePlaneFace(topC, Z, {{trU, false}, {trD, false}}));
+  Surface aIn = sb.aSurf;
+  aIn.inward = true;
+  face(aIn, 0.0, kPi, {Loop{{{cpL, false}, {sAp, true}, {cnL, true}, {sA0, false}}}});
+  face(aIn, kPi, kTwoPi, {Loop{{{cpU, true}, {sA0, true}, {cnU, false}, {sAp, false}}}});
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+/// `A ∪ B` for a **skew** (offset) perpendicular branch pipe (REQ-314 B2b-2, GitHub issue #242). Same
+/// thick-wall split as \ref BuildSkewBranchPipeSubtract; the two thin stubs run out along `±fr.yAxis`
+/// to flat caps at \p yA0 / \p yA1 (measured from `fr.origin`). 12v / 18e / 10f.
+[[nodiscard]] bool BuildSkewBranchPipeUnion(const ucs::Ucs& fr, double r, double R, double g,
+                                            double zB0, double zB1, double yA0, double yA1, Solid* out,
+                                            Problem* outWhy) {
+  SkewBranch sb;
+  const double sMax = std::sqrt(std::max(0.0, R * R - (g - r) * (g - r)));
+  if (!MakeSkewBranch(fr, r, R, g, &sb) || !(zB1 - zB0 > 2.0 * r) || !(yA0 < -sMax) || !(yA1 > sMax))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 Y = fr.yAxis;
+  const Vec3 Z = fr.zAxis;
+  auto W = [&](const Vec3& l) { return sb.W(l); };
+  Solid s;
+  const int p0 = AddVertex(&s, sb.cpt(0.0, 1));
+  const int p1 = AddVertex(&s, sb.cpt(kPi, 1));
+  const int n0 = AddVertex(&s, sb.cpt(0.0, -1));
+  const int n1 = AddVertex(&s, sb.cpt(kPi, -1));
+  const int bp = AddVertex(&s, W(Vec3{R, 0.0, zB0}));
+  const int bm = AddVertex(&s, W(Vec3{-R, 0.0, zB0}));
+  const int tp = AddVertex(&s, W(Vec3{R, 0.0, zB1}));
+  const int tm = AddVertex(&s, W(Vec3{-R, 0.0, zB1}));
+  const int k0 = AddVertex(&s, sb.thinPt(0.0, yA1));  // +y stub rim
+  const int k1 = AddVertex(&s, sb.thinPt(kPi, yA1));
+  const int m0 = AddVertex(&s, sb.thinPt(0.0, yA0));  // -y stub rim
+  const int m1 = AddVertex(&s, sb.thinPt(kPi, yA0));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = sb.cpt(witnessPhi, sign);
+    e.isectSurfaces = {sb.aSurf, sb.bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int cpU = isect(p0, p1, 1.75 * kPi, 1);
+  const int cpL = isect(p0, p1, 0.25 * kPi, 1);
+  const int cnU = isect(n0, n1, 1.75 * kPi, -1);
+  const int cnL = isect(n0, n1, 0.25 * kPi, -1);
+  const int seam0 = AddLine(&s, bp, tp);
+  const int seamPi = AddLine(&s, bm, tm);
+  const Vec3 botC = W(Vec3{0.0, 0.0, zB0});
+  const Vec3 topC = W(Vec3{0.0, 0.0, zB1});
+  const int brU = AddArc(&s, bp, bm, botC, Z, kPi);
+  const int brD = AddArc(&s, bm, bp, botC, Z, kPi);
+  const int trU = AddArc(&s, tp, tm, topC, Z, kPi);
+  const int trD = AddArc(&s, tm, tp, topC, Z, kPi);
+  const int ks0 = AddLine(&s, p0, k0);
+  const int ksP = AddLine(&s, p1, k1);
+  const int ms0 = AddLine(&s, n0, m0);
+  const int msP = AddLine(&s, n1, m1);
+  const Vec3 kC = W(Vec3{g, yA1, 0.0});
+  const Vec3 mC = W(Vec3{g, yA0, 0.0});
+  const Vec3 negY = ray3d::Scale(Y, -1.0);
+  const int krF = AddArc(&s, k0, k1, kC, Y, kPi);
+  const int krB = AddArc(&s, k1, k0, kC, Y, kPi);
+  const int mrF = AddArc(&s, m0, m1, mC, negY, kPi);
+  const int mrB = AddArc(&s, m1, m0, mC, negY, kPi);
+
+  auto face = [&](const Surface& surf, double u0, double u1, std::vector<Loop> loops) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops = std::move(loops);
+    s.faces.push_back(std::move(f));
+  };
+  face(sb.bSurf, 0.0, kPi,
+       {Loop{{{brU, false}, {seamPi, false}, {trU, true}, {seam0, true}}},
+        Loop{{{cpU, false}, {cpL, true}}}});
+  face(sb.bSurf, kPi, kTwoPi,
+       {Loop{{{brD, false}, {seam0, false}, {trD, true}, {seamPi, true}}},
+        Loop{{{cnU, false}, {cnL, true}}}});
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{brU, true}, {brD, true}}));
+  s.faces.push_back(MakePlaneFace(topC, Z, {{trU, false}, {trD, false}}));
+  face(sb.aSurf, 0.0, kPi, {Loop{{{cpL, false}, {ksP, false}, {krF, true}, {ks0, true}}}});
+  face(sb.aSurf, kPi, kTwoPi, {Loop{{{cpU, true}, {ks0, false}, {krB, true}, {ksP, true}}}});
+  face(sb.aSurf, 0.0, kPi, {Loop{{{cnL, false}, {msP, false}, {mrF, true}, {ms0, true}}}});
+  face(sb.aSurf, kPi, kTwoPi, {Loop{{{cnU, true}, {ms0, false}, {mrB, true}, {msP, true}}}});
+  s.faces.push_back(MakePlaneFace(kC, Y, {{krF, false}, {krB, false}}));
+  s.faces.push_back(MakePlaneFace(mC, negY, {{mrF, false}, {mrB, false}}));
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// `B − A` for a **non-perpendicular** branch pipe (REQ-314 B2b-2, GitHub issue #242): the thin
 /// branch `A` (radius \p r, tilted by \p alpha) bored clean through the thick main `B` (radius \p R,
 /// axis `fr.zAxis`, caps \p zB0 / \p zB1). `BuildBranchPipeSubtract` generalised the same way
@@ -6826,9 +7032,10 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
   const bool perp = std::fabs(axDot) <= 1e-7;
 
   if (gap > eps) {
-    // Skew axes — the offset branch pipe (issue #242). So far only the perpendicular-offset
-    // INTERSECT: axes at right angles, missing by `gap`, the thin fully crossing, caps clear.
-    if (!perp || op != BoolOp::Intersect || !(gap + r < R - eps))
+    // Skew axes — the offset branch pipe (issue #242). The perpendicular-offset case: axes at right
+    // angles, missing by `gap`, the thin fully crossing, caps clear. All three ops for a `thick`
+    // minuend; `thin − thick` and a tilted thin axis still fall through.
+    if (!perp || !(gap + r < R - eps))
       return false;
     const Vec3 td = thin.axis.zAxis;
     const Vec3 kd = thick.axis.zAxis;
@@ -6856,9 +7063,24 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
     const double kAlong = ray3d::Dot(ray3d::Sub(cThick, thick.axis.origin), kd);
     if (kAlong - r < eps || thick.length - kAlong - r < eps)
       return false;  // a thick cap sits inside the lens
+    const bool minuendThick = A.radius > B.radius;
+    if (op == BoolOp::Subtract && !minuendThick)
+      return false;  // thin − thick (two stubs) — a later skew slice
     *handled = true;
+    const double zB0 = -kAlong;
+    const double zB1 = thick.length - kAlong;
+    // thin cap parameters along fr.yAxis, measured from cThick (= sfr.origin).
+    const double yLo = std::min(t0, t1);
+    const double yHi = std::max(t0, t1);
     Solid result;
-    if (!BuildSkewBranchPipeIntersection(sfr, r, R, gap, &result, outWhy))
+    bool ok = false;
+    if (op == BoolOp::Intersect)
+      ok = BuildSkewBranchPipeIntersection(sfr, r, R, gap, &result, outWhy);
+    else if (op == BoolOp::Subtract)
+      ok = BuildSkewBranchPipeSubtract(sfr, r, R, gap, zB0, zB1, &result, outWhy);
+    else
+      ok = BuildSkewBranchPipeUnion(sfr, r, R, gap, zB0, zB1, yLo, yHi, &result, outWhy);
+    if (!ok)
       return false;
     out->push_back(std::move(result));
     return Succeed(outWhy);

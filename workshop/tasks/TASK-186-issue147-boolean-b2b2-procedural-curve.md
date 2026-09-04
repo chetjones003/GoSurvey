@@ -190,6 +190,15 @@ the offset quartic are the next slices.
 - sphere ∩ cylinder, torus ∩ anything, cone parabola / hyperbola sections.
 - Skew (non-coplanar) cylinder axes.
 
+**PROGRESS 2026-09-04 — skew (offset) perpendicular branch pipe SUBTRACT + UNION done (feat/issue242-skew-branch-pipe-sub-union, issue #242).**
+Because the offset thin (axis ‖ fr.yAxis, x = g > r) pierces the thick entirely on its +x half,
+**both mouths land in u ∈ (−π/2, π/2)** — so the thick wall splits at **ψ = 0 / ψ = π** (not ±π/2),
+each half carrying one mouth. `SkewBranch` helper struct (shared frame + `cpt`/`thinPt`);
+`BuildSkewBranchPipe{Subtract,Union}` are the coplanar builders with that seam relocation + skew
+`aSurf`/curve; UNION stub caps ⊥ fr.yAxis at `yLo/yHi`. `TryBooleanBranchPipe` skew branch dispatches
+all three thick-minuend ops; `thin−thick` skew + tilted-skew still refused. SUBTRACT 8v/12e/6f genus1,
+UNION 12v/18e/10f; volumes vs a 1400×1400 section integral (5e-3). Full suite green (1118). No `.gs` bump.
+
 **PROGRESS 2026-09-04 — skew (offset) perpendicular branch pipe INTERSECT done (feat/issue242-skew-branch-pipe-intersect, issue #242).**
 `BuildSkewBranchPipeIntersection(fr, r, R, g)` = `BuildBranchPipeIntersection` verbatim except
 `aSurf.frame` (thin axis = `fr.yAxis`, through `(g,0,0)`), the curve `s(φ) = ±√(R²−(g+r sinφ)²)`,
