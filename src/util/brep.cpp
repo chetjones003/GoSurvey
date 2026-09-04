@@ -6152,6 +6152,103 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
   return Succeed(outWhy);
 }
 
+/// `A ∩ B` for a **non-perpendicular** branch pipe (REQ-314 B2b-2, GitHub issue #242): the thin
+/// cylinder `A` (radius \p r) crosses the thick `B` (radius \p R) with their axes coplanar and
+/// crossing at `fr.origin`, but tilted by \p alpha off perpendicular (`|alpha| < π/2`; `alpha = 0`
+/// is \ref BuildBranchPipeIntersection). `fr.zAxis` is `B`'s axis and `fr.xAxis` the in-plane
+/// component of `A`'s axis, so `A`'s axis is `cos α·x̂ + sin α·ẑ`. Same lens topology as the
+/// perpendicular case — 8 vertices, 10 edges (8 procedural `CurveKind::Intersection` quarter-arcs),
+/// 4 faces — with the curve `ζ(φ) = (r sinα cosφ ± √(R² − r² sin²φ)) / cosα` along `A`'s axis. Every
+/// face integrates numerically.
+[[nodiscard]] bool BuildAngledBranchPipeIntersection(const ucs::Ucs& fr, double r, double R,
+                                                     double alpha, Solid* out, Problem* outWhy) {
+  if (!(R > r) || !(r > 0.0) || !(std::fabs(alpha) < kHalfPi - 1e-6))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double ca = std::cos(alpha);
+  const double sa = std::sin(alpha);
+  const Vec3 Y = fr.yAxis;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+  // A's axis (tHat) and the seam direction the wall's u = 0 follows (xaHat), in fr coords.
+  const Vec3 tHat = ray3d::Add(ray3d::Scale(fr.xAxis, ca), ray3d::Scale(fr.zAxis, sa));
+  const Vec3 xaHat = ray3d::Add(ray3d::Scale(fr.xAxis, -sa), ray3d::Scale(fr.zAxis, ca));
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = fr.origin;
+  aSurf.frame.zAxis = tHat;
+  aSurf.frame.xAxis = xaHat;
+  aSurf.frame.yAxis = ray3d::Scale(Y, -1.0);
+  aSurf.radius = r;
+  aSurf.height = 8.0 * R;
+  Surface bSurf;
+  bSurf.kind = SurfaceKind::Cylinder;
+  bSurf.frame.origin = fr.origin;
+  bSurf.frame.zAxis = fr.zAxis;
+  bSurf.frame.xAxis = fr.xAxis;
+  bSurf.frame.yAxis = Y;
+  bSurf.radius = R;
+  bSurf.height = 8.0 * R;
+
+  Solid s;
+  auto cpt = [&](double phi, int sign) {
+    const double root = std::sqrt(std::max(0.0, R * R - r * r * std::sin(phi) * std::sin(phi)));
+    const double zeta = (r * sa * std::cos(phi) + sign * root) / ca;
+    return W(Vec3{zeta * ca - r * std::cos(phi) * sa, -r * std::sin(phi),
+                  zeta * sa + r * std::cos(phi) * ca});
+  };
+  const int p0 = AddVertex(&s, cpt(0.0, 1));
+  const int qb = AddVertex(&s, cpt(kHalfPi, 1));
+  const int p1 = AddVertex(&s, cpt(kPi, 1));
+  const int qa = AddVertex(&s, cpt(1.5 * kPi, 1));
+  const int n0 = AddVertex(&s, cpt(0.0, -1));
+  const int nb = AddVertex(&s, cpt(kHalfPi, -1));
+  const int n1 = AddVertex(&s, cpt(kPi, -1));
+  const int na = AddVertex(&s, cpt(1.5 * kPi, -1));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = cpt(witnessPhi, sign);
+    e.isectSurfaces = {aSurf, bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int e1 = isect(p0, qb, 0.25 * kPi, 1);
+  const int e2 = isect(qb, p1, 0.75 * kPi, 1);
+  const int e3 = isect(p1, qa, 1.25 * kPi, 1);
+  const int e4 = isect(qa, p0, 1.75 * kPi, 1);
+  const int e5 = isect(n0, nb, 0.25 * kPi, -1);
+  const int e6 = isect(nb, n1, 0.75 * kPi, -1);
+  const int e7 = isect(n1, na, 1.25 * kPi, -1);
+  const int e8 = isect(na, n0, 1.75 * kPi, -1);
+  const int sTop = AddLine(&s, n0, p0);  // φ = 0 seam of A
+  const int sBot = AddLine(&s, n1, p1);  // φ = π seam of A
+
+  auto cylFace = [&](const Surface& surf, double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  const double psi0 = std::asin(std::clamp(r / R, -1.0, 1.0));
+  cylFace(aSurf, 0.0, kPi,
+          {{e1, false}, {e2, false}, {sBot, true}, {e6, true}, {e5, true}, {sTop, false}});
+  cylFace(aSurf, kPi, kTwoPi,
+          {{e3, false}, {e4, false}, {sTop, true}, {e8, true}, {e7, true}, {sBot, false}});
+  cylFace(bSurf, -psi0, psi0, {{e4, true}, {e3, true}, {e2, true}, {e1, true}});
+  cylFace(bSurf, kPi - psi0, kPi + psi0, {{e5, false}, {e6, false}, {e7, false}, {e8, false}});
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// `A ∪ B`: the solid pipe-tee — the thick main `B` (radius \p R, axis `fr.zAxis`, caps \p zB0 /
 /// \p zB1) fused with the thin branch `A` (radius \p r, axis `fr.xAxis`, caps \p xA0 / \p xA1)
 /// (REQ-314 B2b-2). 12 vertices, 18 edges, 10 faces: `B`'s wall outside `A` (two halves, each with
@@ -6270,9 +6367,11 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
   return Succeed(outWhy);
 }
 
-/// Recognise a thin cylinder crossing a thicker one at right angles through an interior point (the
-/// axes intersect, radii differ) — the pipe-tee. INTERSECT the lens, SUBTRACT bores the branch clean
-/// through the main, UNION fuses them (B2b-2). `*handled` stays false when the pair is not this
+/// Recognise a thin cylinder crossing a thicker one through an interior point, axes coplanar and
+/// crossing, radii differ — the pipe-tee (B2b-2). At **right angles**: INTERSECT the lens, SUBTRACT
+/// bores the branch clean through the main, UNION fuses them. **Non-perpendicular** (issue #242):
+/// INTERSECT only for now — the tilted lens; SUBTRACT / UNION fall through unhandled. Skew
+/// (non-coplanar) axes fall through too. `*handled` stays false when the pair is not this
 /// configuration.
 [[nodiscard]] bool TryBooleanBranchPipe(const CylinderShape& A, const CylinderShape& B, BoolOp op,
                                         std::vector<Solid>* out, bool* handled, Problem* outWhy) {
@@ -6282,40 +6381,70 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
     return false;  // equal radius — plane ellipses, not this recogniser
   const Vec3 az = A.axis.zAxis;
   const Vec3 bz = B.axis.zAxis;
-  if (std::fabs(ray3d::Dot(az, bz)) > 1e-7)
-    return false;  // not perpendicular
-  const Vec3 w0 = ray3d::Sub(A.axis.origin, B.axis.origin);
-  const Vec3 pA = ray3d::Add(A.axis.origin, ray3d::Scale(az, -ray3d::Dot(w0, az)));
-  const Vec3 pB = ray3d::Add(B.axis.origin, ray3d::Scale(bz, ray3d::Dot(w0, bz)));
-  if (ray3d::Length(ray3d::Sub(pA, pB)) > eps)
-    return false;  // skew axes
-  const Vec3 meet = ray3d::Scale(ray3d::Add(pA, pB), 0.5);
+  const double axDot = ray3d::Dot(az, bz);
+  if (std::fabs(std::fabs(axDot) - 1.0) < 1e-7)
+    return false;  // parallel / coaxial — a different recogniser
+  // The axis lines must be coplanar and cross: the gap along their common perpendicular ~ 0.
+  const Vec3 wBA = ray3d::Sub(B.axis.origin, A.axis.origin);
+  const Vec3 axCross = ray3d::Cross(az, bz);
+  const double axCross2 = ray3d::Dot(axCross, axCross);
+  if (axCross2 < 1e-18 ||
+      std::fabs(ray3d::Dot(wBA, axCross)) / std::sqrt(axCross2) > eps)
+    return false;  // skew axes — a later slice
+  const double pAlong = ray3d::Dot(wBA, az);
+  const double qAlong = ray3d::Dot(wBA, bz);
+  const Vec3 meet =
+      ray3d::Add(A.axis.origin, ray3d::Scale(az, (pAlong - axDot * qAlong) / (1.0 - axDot * axDot)));
 
   // thin / thick roles
   const CylinderShape& thin = A.radius < B.radius ? A : B;
   const CylinderShape& thick = A.radius < B.radius ? B : A;
   const double r = thin.radius;
   const double R = thick.radius;
-  const double sThin = ray3d::Dot(ray3d::Sub(meet, thin.axis.origin), thin.axis.zAxis);
-  const double sThick = ray3d::Dot(ray3d::Sub(meet, thick.axis.origin), thick.axis.zAxis);
-  // the thin cylinder must fully cross the thick one; the lens must clear the thick one's caps
-  if (sThin < R - eps || sThin > thin.length - R + eps || sThick < r - eps ||
-      sThick > thick.length - r + eps)
-    return false;
-
-  const bool minuendIsThick = A.radius > B.radius;
-  if (op == BoolOp::Subtract && !minuendIsThick)
-    return false;  // thin − thick leaves two stubs — a later sub-slice
-  *handled = true;
+  const bool perp = std::fabs(axDot) <= 1e-7;
 
   ucs::Ucs fr;
   if (!ucs::FromNormal(meet, thick.axis.zAxis, &fr))
     return Fail(Problem::BooleanResultInvalid, outWhy);
-  Vec3 xa = ray3d::Sub(thin.axis.zAxis, ray3d::Scale(fr.zAxis, ray3d::Dot(thin.axis.zAxis, fr.zAxis)));
-  if (!(ray3d::Length(xa) > 1e-9))
+  const Vec3 xperp = ray3d::Sub(
+      thin.axis.zAxis, ray3d::Scale(fr.zAxis, ray3d::Dot(thin.axis.zAxis, fr.zAxis)));
+  if (!(ray3d::Length(xperp) > 1e-9 * sc))
     return Fail(Problem::BooleanResultInvalid, outWhy);
-  fr.xAxis = ray3d::Normalize(xa);
+  fr.xAxis = ray3d::Normalize(xperp);
   fr.yAxis = ray3d::Normalize(ray3d::Cross(fr.zAxis, fr.xAxis));
+  // `fr.xAxis` is `thin`'s own in-plane component, so `thin`'s axis is cos α·x̂ + sin α·ẑ with
+  // α ∈ (−π/2, π/2); α ≈ 0 is the perpendicular tee.
+  const double alpha =
+      std::atan2(ray3d::Dot(thin.axis.zAxis, fr.zAxis), ray3d::Dot(thin.axis.zAxis, fr.xAxis));
+  const double ca = std::cos(alpha);
+
+  const double sThin = ray3d::Dot(ray3d::Sub(meet, thin.axis.origin), thin.axis.zAxis);
+  const double sThick = ray3d::Dot(ray3d::Sub(meet, thick.axis.origin), thick.axis.zAxis);
+  // The thin cylinder must fully cross the thick one and the lens must clear the thick one's caps —
+  // widened for the tilt (at α = 0 these reduce to `sThin ≥ R`, `sThick ≥ r`).
+  const double zetaMax = (R + r * std::fabs(std::sin(alpha))) / ca;
+  const double zThickMax = zetaMax * std::fabs(std::sin(alpha)) + r;
+  if (sThin - zetaMax < eps || thin.length - sThin - zetaMax < eps || sThick - zThickMax < eps ||
+      thick.length - sThick - zThickMax < eps)
+    return false;
+
+  const bool minuendIsThick = A.radius > B.radius;
+
+  if (!perp) {
+    if (op != BoolOp::Intersect)
+      return false;  // non-perpendicular SUBTRACT / UNION — later slices
+    *handled = true;
+    Solid tilted;
+    if (!BuildAngledBranchPipeIntersection(fr, r, R, alpha, &tilted, outWhy))
+      return false;
+    out->push_back(std::move(tilted));
+    return Succeed(outWhy);
+  }
+
+  if (op == BoolOp::Subtract && !minuendIsThick)
+    return false;  // thin − thick leaves two stubs — a later sub-slice
+  *handled = true;
+
   const double zB0 = -sThick;
   const double zB1 = thick.length - sThick;
   const double sThinFr = ray3d::Dot(ray3d::Sub(meet, thin.axis.origin), fr.xAxis);
