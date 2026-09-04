@@ -1381,8 +1381,11 @@ const char* ProblemText(Problem p) {
   case Problem::SweepMitreCollapsed:
     return "This corner is too sharp to mitre; the two segments fold back on themselves.";
   case Problem::SweepUnsupportedOption:
-    return "This sweep option is not supported yet: a twist or a fixed orientation needs a single "
-           "straight path segment in this version.";
+    return "A twist cannot be applied to a closed sweep path; the seam ring cannot carry two "
+           "different orientations at once.";
+  case Problem::SweepTwistNeedsStraightPath:
+    return "A twist cannot be combined with an arc path segment in this version; twist works on a "
+           "straight (or multi-segment straight) path.";
   case Problem::PushPullFaceNotPlanar:
     return "Only a flat face can be pushed or pulled in this version - a curved wall moves by "
            "changing its radius, which is a different edit.";
@@ -2845,6 +2848,8 @@ struct SweepSegGeom {
   double sweep = 0.0;
   Vec3 endPoint;  ///< the segment's geometric end (derived for an arc)
   bool arc = false;
+  double length = 0.0;  ///< chord length (straight) or `radius * |sweep|` (arc) — REQ-315 2026-09-04,
+                        ///< a segment's own share of a path-length-proportional twist.
 };
 
 [[nodiscard]] bool SegGeom(const Vec3& a, const Vec3& b, const SweepSegment& seg, double scale,
@@ -2856,6 +2861,7 @@ struct SweepSegGeom {
       return false;
     out->startTan = out->endTan = ray3d::Normalize(d);
     out->endPoint = b;
+    out->length = ray3d::Length(d);
     return true;
   }
   if (!FinitePoint(seg.centre) || !FinitePoint(seg.normal) || !(ray3d::Length(seg.normal) > 1e-9))
@@ -2880,6 +2886,7 @@ struct SweepSegGeom {
   // The nominal next point must be the arc image of this one (a caller consistency check).
   if (ray3d::Length(ray3d::Sub(out->endPoint, b)) > 1e-5 * (1.0 + scale) + 1e-6)
     return false;
+  out->length = ray3d::Length(r0) * std::fabs(seg.sweep);
   return true;
 }
 
@@ -2957,9 +2964,22 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
       np >= 3 && ray3d::Length(ray3d::Sub(work.points[0], work.points[static_cast<std::size_t>(np - 1)])) <
                      1e-7 * (1.0 + scale);
 
-  const bool singleStraight = np == 2 && !work.segments[0].arc;
-  if ((options.twistRad != 0.0 || !options.alignToPath) && !singleStraight)
+  // A nonzero twist on a closed path is geometrically inconsistent, not an increment boundary: the
+  // seam ring is one ring, and "0 at the start, twistRad at the end" would need it to carry two
+  // different orientations at once (REQ-315 2026-09-04). Fixed orientation has no such conflict — a
+  // constant (never-rotated) frame trivially closes, so it is not gated here.
+  if (options.twistRad != 0.0 && closed)
     return Fail(Problem::SweepUnsupportedOption, outWhy);
+  // A nonzero twist combined with an arc segment is refused, this increment (REQ-315 2026-09-04):
+  // within an arc band, a profile vertex's true trajectory under a continuously varying twist is not
+  // a plain circular arc (it compounds the path's own rotation with the twist's), which the arc
+  // band's rail/patch construction (a single circular arc, or an exact rational revolve) cannot
+  // represent — the same category of gap as a mitred corner touching an arc segment: fixing it needs
+  // a genuinely different surface, not a smaller version of the straight-segment case.
+  if (options.twistRad != 0.0)
+    for (const SweepSegment& seg2 : work.segments)
+      if (seg2.arc)
+        return Fail(Problem::SweepTwistNeedsStraightPath, outWhy);
 
   // --- Per-segment geometry, and the sharp-corner classification at every joint -----------------
   // A sharp (tangent-discontinuous) joint where BOTH adjoining segments are straight, and the
@@ -3028,7 +3048,9 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
     const SweepSegGeom& g = seg[static_cast<std::size_t>(k - 1)];
     ucs::Ucs f = running;
     f.origin = work.points[static_cast<std::size_t>(k)];
-    if (g.arc) {
+    // Fixed orientation (REQ-315 2026-09-04): the frame's axes never rotate, through an arc or a
+    // corner — only the origin moves. `alignToPath` gates every rotation in this loop.
+    if (g.arc && options.alignToPath) {
       f.xAxis = RotateAbout(f.xAxis, g.axis, g.sweep);
       f.yAxis = RotateAbout(f.yAxis, g.axis, g.sweep);
       f.zAxis = RotateAbout(f.zAxis, g.axis, g.sweep);
@@ -3044,7 +3066,7 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
     // incoming frame is itself already rotated away from the profile's own plane (which it is, past
     // the very first leg) — turning the current frame is what keeps this consistent with the shear,
     // the same way arc propagation already turns the frame incrementally instead of re-deriving it.
-    if (mitreAt[static_cast<std::size_t>(k)]) {
+    if (mitreAt[static_cast<std::size_t>(k)] && options.alignToPath) {
       if (!TurnFrameToTangent(&running, seg[static_cast<std::size_t>(k)].startTan))
         return Fail(Problem::DegenerateFrame, outWhy);
     }
@@ -3060,13 +3082,30 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
     if (ray3d::Dot(f0.xAxis, fN.xAxis) < 1.0 - 1e-6 || ray3d::Dot(f0.zAxis, fN.zAxis) < 1.0 - 1e-6)
       return Fail(Problem::SweepPathCorner, outWhy);
   }
-  // The whole-path twist (a single straight segment only, guarded above): rotate the end frame.
+  // Twist accumulates proportionally to distance travelled (REQ-315 2026-09-04): each ring's own
+  // share is its cumulative path length so far, divided by the total — 0 at the start, `twistRad` at
+  // the end, and (for the single-straight-segment case) exactly the old "rotate only the end frame"
+  // rule, since there the only two rings are the start (fraction 0, a no-op) and the end (fraction
+  // 1). Applied to each ring's OWN xAxis/yAxis about its OWN zAxis, after alignment/mitre are already
+  // resolved — twist spins the cross-section in place, it does not change what the path itself does.
   if (options.twistRad != 0.0) {
-    ucs::Ucs& f = frame[static_cast<std::size_t>(np - 1)];
-    f.xAxis = RotateAbout(f.xAxis, ray3d::Normalize(f.zAxis), options.twistRad);
-    f.yAxis = RotateAbout(f.yAxis, ray3d::Normalize(f.zAxis), options.twistRad);
-    if (!ucs::IsRightHandedOrthonormal(f, 1e-6))
-      return Fail(Problem::DegenerateFrame, outWhy);
+    std::vector<double> cumLen(static_cast<std::size_t>(np), 0.0);
+    for (int k = 1; k < np; ++k)
+      cumLen[static_cast<std::size_t>(k)] =
+          cumLen[static_cast<std::size_t>(k - 1)] + seg[static_cast<std::size_t>(k - 1)].length;
+    const double totalLen = cumLen[static_cast<std::size_t>(np - 1)];
+    for (int k = 0; k < np; ++k) {
+      const double frac =
+          totalLen > 1e-12 ? std::clamp(cumLen[static_cast<std::size_t>(k)] / totalLen, 0.0, 1.0) : 0.0;
+      if (frac == 0.0)
+        continue;
+      ucs::Ucs& f = frame[static_cast<std::size_t>(k)];
+      const double ang = options.twistRad * frac;
+      f.xAxis = RotateAbout(f.xAxis, ray3d::Normalize(f.zAxis), ang);
+      f.yAxis = RotateAbout(f.yAxis, ray3d::Normalize(f.zAxis), ang);
+      if (!ucs::IsRightHandedOrthonormal(f, 1e-6))
+        return Fail(Problem::DegenerateFrame, outWhy);
+    }
   }
 
   // --- Place the profile in every frame, and prep each ring -----------------------------------
@@ -3084,8 +3123,14 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
   // only slides each vertex along its own already-valid rail; it does not change which straight line
   // it lies on, only where the (shared) ring cuts it — which is what keeps both adjoining bands'
   // rails meeting this ring exactly, without a gap or an overlap.
+  // Fixed orientation (REQ-315 2026-09-04) needs no shear at all: the frame never rotates, so every
+  // ring — mitred joint or not — already IS the profile translated to that path point, exactly the
+  // invariant `alignToPath = false` promises. Shearing it anyway would displace it off the path
+  // vertex for no reason, breaking that exact invariant precisely where it is easiest to check (a
+  // sharp corner) — caught by an independent review's test on a non-planar closed, fixed-orientation
+  // path before this task was called done.
   for (int k = 0; k < np; ++k) {
-    if (!mitreAt[static_cast<std::size_t>(k)])
+    if (!mitreAt[static_cast<std::size_t>(k)] || !options.alignToPath)
       continue;
     const Vec3& N = mitreN[static_cast<std::size_t>(k)];
     const Vec3& T = mitreTangent[static_cast<std::size_t>(k)];
@@ -3155,7 +3200,11 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
     for (int j = 0; j < n; ++j) {
       const int a = ringV[static_cast<std::size_t>(k)][static_cast<std::size_t>(j)];
       const int b = ringV[static_cast<std::size_t>(k + 1)][static_cast<std::size_t>(j)];
-      if (!g.arc) {
+      // Fixed orientation (REQ-315 2026-09-04) never rotates, so every vertex's rail is a straight
+      // translation — even through an arc segment: a rigid body under pure translation moves every
+      // point by the identical vector, regardless of the path's own shape. Only the ALIGNED case's
+      // rail through an arc segment is itself an arc (the profile orbiting the path's own axis).
+      if (!g.arc || !options.alignToPath) {
         railE[static_cast<std::size_t>(k)][static_cast<std::size_t>(j)] = AddLine(&s, a, b);
       } else {
         const Vec3 w = prep[static_cast<std::size_t>(k)].walk[static_cast<std::size_t>(j)];
@@ -3198,7 +3247,10 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
                      : nurbs::LineCurve(p0.walk[jj], p0.walk[j1]);
       Face f;
       f.surface.kind = SurfaceKind::Nurbs;
-      if (!g.arc) {
+      // Fixed orientation (REQ-315 2026-09-04): the patch is a ruled surface between c0 and its
+      // rigid translate by the segment's own displacement, even through an arc — the same reason
+      // the rail above is a straight line, not an arc, in this case.
+      if (!g.arc || !options.alignToPath) {
         const nurbs::Curve c1 =
             p1.arc[jj] ? nurbs::ArcCurve(p1.centre[jj], p1.walk[jj], p1.up, p1.sweep[jj])
                        : nurbs::LineCurve(p1.walk[jj], p1.walk[j1]);
@@ -3226,6 +3278,13 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
   const Problem why = Validate(s);
   if (why != Problem::Ok)
     return Fail(why, outWhy);
+  // Fixed orientation on a curved path (REQ-315 2026-09-04) carries no rotation-minimizing guarantee
+  // against the swept envelope folding over itself — unlike every aligned case, where the frame
+  // always turns with the path. Not checked: `SelfIntersects` is a narrow, torus-specific check
+  // (ADR-045 (f)'s tube-larger-than-ring case), not a general overlap detector, and a real one is a
+  // separate undertaking (checking every face against every other). A profile too large, or a path
+  // too tightly curved, for this option can build a solid that occupies the same space twice — a
+  // known, documented limitation (REQ-315 2026-09-04), not a checked-and-refused case.
   *out = std::move(s);
   return Succeed(outWhy);
 }
