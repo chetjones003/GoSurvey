@@ -1162,7 +1162,7 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
     }
     ItemHelpTooltip("AutoCAD INSUNITS. A relabel only: it tells the drawing (and the DXF $INSUNITS header) what unit it is in. It never rescales or converts geometry.");
   }
-  ImGui::TextDisabled("Relabel only — saved to the drawing (.gs) and DXF $INSUNITS; geometry unchanged.");
+  ImGui::TextDisabled("Relabel only — saved to the drawing and DXF $INSUNITS; geometry unchanged.");
   BoxEnd();
 
   // ---- Sample Output (live) ----
