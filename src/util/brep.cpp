@@ -1377,6 +1377,16 @@ const char* ProblemText(Problem p) {
   case Problem::SweepUnsupportedOption:
     return "This sweep option is not supported yet: a twist or a fixed orientation needs a single "
            "straight path segment in this version.";
+  case Problem::PushPullFaceNotPlanar:
+    return "Only a flat face can be pushed or pulled in this version - a curved wall moves by "
+           "changing its radius, which is a different edit.";
+  case Problem::PushPullDistanceZero:
+    return "Push/pull needs a distance that is not zero.";
+  case Problem::PushPullNeighbourNotParallel:
+    return "This face cannot be pushed: a face beside it is not flat and parallel to the push, so "
+           "it would have to be rebuilt rather than stretched.";
+  case Problem::PushPullResultInvalid:
+    return "That push would turn the solid inside out or flatten it, so it was not applied.";
   }
   return "The solid is not valid.";
 }
@@ -1440,6 +1450,133 @@ Solid Translate(const Solid& s, const Vec3& delta) {
   return out;
 }
 
+
+// -------------------------------------------------------------------------------------------
+// Push/pull a planar face (REQ-319 / ADR-046 amendment (i), GitHub issue #148 Phase 5).
+// -------------------------------------------------------------------------------------------
+
+namespace {
+
+/// Every vertex index the loops of \p f use, once each.
+void CollectFaceVertices(const Solid& s, const Face& f, std::vector<int>* out) {
+  for (const Loop& loop : f.loops) {
+    for (const EdgeUse& use : loop.uses) {
+      if (use.edge < 0 || static_cast<size_t>(use.edge) >= s.edges.size())
+        continue;
+      const Edge& e = s.edges[static_cast<size_t>(use.edge)];
+      for (int v : {e.v0, e.v1})
+        if (std::find(out->begin(), out->end(), v) == out->end())
+          out->push_back(v);
+    }
+  }
+}
+
+}  // namespace
+
+bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out, Problem* outWhy) {
+  const auto fail = [&](Problem p) {
+    if (outWhy)
+      *outWhy = p;
+    return false;
+  };
+  if (!out)
+    return fail(Problem::IndexOutOfRange);
+  if (faceIndex < 0 || static_cast<size_t>(faceIndex) >= s.faces.size())
+    return fail(Problem::IndexOutOfRange);
+  // Zero is refused rather than treated as a successful no-op: a command that reports it moved
+  // something it did not is worse than one that declines (REQ-319 item 3).
+  if (!std::isfinite(distance) || std::fabs(distance) <= 1e-12)
+    return fail(Problem::PushPullDistanceZero);
+
+  const Face& face = s.faces[static_cast<size_t>(faceIndex)];
+  if (face.surface.kind != SurfaceKind::Plane)
+    return fail(Problem::PushPullFaceNotPlanar);
+
+  // The push direction is the face's own outward normal. `Surface::inward` flips which side the
+  // material is on (REQ-314 B2a), and it has to be honoured here or a positive distance would grow
+  // an inward-facing face the wrong way — the one place a sign error would look like a working
+  // feature that pushes backwards.
+  Vec3 dir = face.surface.frame.zAxis;
+  if (face.surface.inward)
+    dir = ray3d::Scale(dir, -1.0);
+  const double dirLen = ray3d::Length(dir);
+  if (!(dirLen > 1e-12))
+    return fail(Problem::DegenerateFrame);
+  dir = ray3d::Scale(dir, 1.0 / dirLen);
+
+  std::vector<int> moved;
+  CollectFaceVertices(s, face, &moved);
+  if (moved.empty())
+    return fail(Problem::FaceHasNoLoop);
+  const auto isMoved = [&](int v) { return std::find(moved.begin(), moved.end(), v) != moved.end(); };
+
+  // THE PRECONDITION (ADR-046 amendment (i)). Every face that shares a moving vertex keeps its own
+  // surface while its boundary moves, so its surface must be one the move leaves correct: a PLANE
+  // whose normal is perpendicular to the push. A slanted plane, or any curved wall, would have to
+  // be re-solved instead — and if it is not, its vertices simply leave its surface and `Validate`
+  // says nothing, because `Validate` tests topology and degeneracy and never asks whether a face's
+  // vertices lie on that face. Checked here, before anything is built, so a refusal costs nothing
+  // and leaves the input untouched.
+  for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+    if (static_cast<int>(fi) == faceIndex)
+      continue;
+    const Face& nb = s.faces[fi];
+    std::vector<int> nbVerts;
+    CollectFaceVertices(s, nb, &nbVerts);
+    const bool touches = std::any_of(nbVerts.begin(), nbVerts.end(), isMoved);
+    if (!touches)
+      continue;  // not adjacent to the move: nothing about it changes
+    if (nb.surface.kind != SurfaceKind::Plane)
+      return fail(Problem::PushPullNeighbourNotParallel);
+    // Perpendicular normals mean the neighbour's plane CONTAINS the push direction, so sliding its
+    // boundary along that direction keeps every vertex on it exactly.
+    if (std::fabs(ray3d::Dot(ray3d::Normalize(nb.surface.frame.zAxis), dir)) > 1.e-9)
+      return fail(Problem::PushPullNeighbourNotParallel);
+    // A neighbour ALL of whose vertices move is not a wall being stretched — it is a second face
+    // travelling with the first, which means the solid has no thickness in this direction and the
+    // push would fold it. Validate would catch the collapse, but by name this says why.
+    if (std::all_of(nbVerts.begin(), nbVerts.end(), isMoved))
+      return fail(Problem::PushPullNeighbourNotParallel);
+  }
+
+  const Vec3 delta = ray3d::Scale(dir, distance);
+  Solid r = s;
+  for (int v : moved)
+    r.vertices[static_cast<size_t>(v)].p = ray3d::Add(r.vertices[static_cast<size_t>(v)].p, delta);
+  // The face's own plane travels with its boundary. Without this the vertices would move and the
+  // surface would stay, which is the very inconsistency the precondition above exists to prevent —
+  // on the moved face itself rather than on a neighbour.
+  r.faces[static_cast<size_t>(faceIndex)].surface.frame.origin =
+      ray3d::Add(r.faces[static_cast<size_t>(faceIndex)].surface.frame.origin, delta);
+  // An ARC edge carries a centre. One lying wholly on the moved face travels whole; one with a
+  // single endpoint on it is a side edge, and a side edge of a push/pull is straight by the
+  // precondition above (a curved one would need a curved neighbour, already refused).
+  for (Edge& e : r.edges) {
+    if (e.kind == CurveKind::Line)
+      continue;
+    if (isMoved(e.v0) && isMoved(e.v1)) {
+      e.frame.origin = ray3d::Add(e.frame.origin, delta);
+      for (Surface& sf : e.isectSurfaces)
+        sf.frame.origin = ray3d::Add(sf.frame.origin, delta);
+    }
+  }
+
+  // The recipe is DROPPED, not updated (REQ-319 item 6). A pushed box is not the box its recipe
+  // describes, and a recipe that no longer describes its solid reads as authoritative while being
+  // false. ADR-045 already made it optional and never consulted by validity, mass properties or
+  // tessellation, so nothing downstream misses it.
+  r.recipe = Recipe{};
+
+  // ADR-046 (d): validate before returning, never mutate the input. A push far enough to collapse
+  // or invert the solid is an ordinary user gesture, and this is what turns it into a refusal.
+  const Problem why = Validate(r);
+  if (why != Problem::Ok)
+    return fail(Problem::PushPullResultInvalid);
+  *out = std::move(r);
+  if (outWhy)
+    *outWhy = Problem::Ok;
+  return true;
+}
 namespace {
 
 /// The patch parameter `(u, v)` whose surface point is nearest \p p: a coarse grid search to pick a

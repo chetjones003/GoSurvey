@@ -754,6 +754,9 @@ if(GOSURVEY_BUILD_TESTS)
     # and surface area, its refusals, and its behaviour at state-plane coordinate magnitudes are all
     # decided here, with no window and no document.
     tests/BrepTests.cpp
+    # REQ-319 / ADR-046 amendment (i) — push/pull, the first kernel op that EDITS a solid. Its own
+    # file because its subject is the PRECONDITION Validate cannot enforce, not another builder.
+    tests/PushPullTests.cpp
     src/util/brep.cpp
     # REQ-315 / ADR-048: the NURBS patch math. Partition-of-unity, a bilinear patch reproducing a
     # plane, a rational arc row that is exactly on its circle, and derivative agreement with finite

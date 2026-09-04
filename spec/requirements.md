@@ -6490,6 +6490,87 @@ capability that does not exist. They are recorded here rather than quietly dropp
   behavioural choices it turned on — `Ctrl`+click for entry, and a depth-tested face fill against
   never-occluded edge and vertex linework — were put to the user and are recorded as D-2026-09-04-a.
 
+### REQ-319 — Push/pull a solid's face: the first operation that EDITS a solid
+
+- Purpose: Phase 5 is direct modelling — changing a solid by moving part of it rather than by
+  re-entering the parameters it was built from. REQ-318 made a face nameable; this makes it movable.
+  It is also the first operation in the kernel that takes an existing solid and returns a *changed*
+  one: every operation before it built from a profile, combined two solids, or cut one.
+- Priority: must
+- Type: functional
+- Depends on: REQ-318 / ADR-049 (naming the face), REQ-313 / ADR-045 (the analytic faces that make
+  an exact answer possible), ADR-046 (d) (compute, validate, then replace).
+- Statement: a **planar** face of a solid can be moved along its own normal by a signed distance,
+  producing a new solid, when the geometry permits it. The behaviour this requires:
+  1. **The face's own plane and its boundary move together.** The face's surface origin and every
+     vertex its loops use translate by `distance × outward normal`. A neighbouring face keeps its
+     surface and simply becomes taller or shorter, which is what makes a box's side stay a plane
+     while its top rises.
+  2. **It is refused unless every neighbour is a plane parallel to the push.** A neighbouring face
+     whose surface is not a plane, or is a plane whose normal is not perpendicular to the push
+     direction, would have to be **re-solved** rather than translated: its own vertices would leave
+     its own surface. The operation refuses by name instead of producing that.
+
+     **This precondition cannot be delegated to `brep::Validate`, and the case that proves it was
+     measured.** Validate checks topology and degeneracy — closed shells, edges used twice with
+     consistent orientation, no degenerate face or edge, finite coordinates, positive volume. **It
+     has no check that a face's vertices lie on that face's surface**, and cannot cheaply: for a
+     Boolean result that is a tolerance question, not a boolean one.
+
+     With the precondition removed, pushing a **cylinder's flat cap** by 3 ft builds a solid that
+     **Validate passes as Ok** and whose analytic volume is **863.938 against a true 1021.02** —
+     15% wrong — because the wall's surface still reports `height = 10` while its top boundary sits
+     at 13. A closed, manifold, positive-volume solid whose volume is a lie.
+
+     A **slanted plane** neighbour — a wedge — Validate *does* reject, at every distance from
+     0.001 ft up. There the pre-check buys not safety but an accurate sentence: without it the user
+     is told "that push would turn the solid inside out or flatten it", which is false for a
+     0.001 ft push on a wedge, and REQ-201 asks for a reason the user can *read*. Both halves are
+     stated because the difference between them is exactly the kind of thing a later reader would
+     otherwise have to re-derive.
+  3. **A zero or non-finite distance is refused**, not treated as a no-op that reports success: a
+     command that says it moved something it did not is worse than one that declines.
+  4. **The result is validated before anything is stored** (ADR-046 (d)). A push that collapses the
+     solid, inverts it, or degenerates a face is refused by name and the document is untouched. A
+     push far enough to turn a solid inside out is a real user gesture, not a hypothetical.
+  5. **The topology is preserved, so a sub-object reference survives the edit.** The operation moves
+     geometry and changes no counts, which is exactly the case ADR-049 measured when it chose an
+     index paired with the solid's identity. A push therefore leaves the pushed face still selected,
+     and a second push continues from the first.
+  6. **The recipe is dropped, never quietly updated.** A pushed box is no longer the box its recipe
+     describes. ADR-045 already made the recipe optional and never consulted by validity, mass
+     properties or tessellation; a recipe that no longer describes its solid is worse than none,
+     because it reads as authoritative. `.gs` already stores topology rather than the recipe, so a
+     pushed solid round-trips with no format change.
+  7. **One undoable step.** The whole edit — including dropping the recipe and re-tessellating — is
+     a single undo, and Ctrl+Z restores the prior solid exactly.
+- Acceptance:
+  - pushing a box's top face by `+d` gives a solid whose volume is the original plus `base area × d`,
+    exactly, and whose face, edge and vertex counts are unchanged;
+  - pulling the same face by `−d` returns the original volume within REQ-101, and pushing then
+    pulling by the same distance restores the original geometry;
+  - pushing a side face changes the volume by the *other* two dimensions' product times the distance
+    — so the operation is not silently assuming a particular axis;
+  - the pushed face's own plane moves with it: a point on the new face satisfies the new plane
+    equation, not the old one;
+  - a push that would collapse the solid to zero height or through itself is refused by name, and
+    the input solid is returned untouched;
+  - a zero distance, a non-finite distance, and an out-of-range face index are each refused by name;
+  - a non-planar face — a cylinder's wall — is refused by name rather than approximated;
+  - a face with a non-parallel planar neighbour is refused by name. A wedge's slanted face is the
+    hand-checkable case: pushing the wedge's top would slide the slope's vertices off the slope;
+  - a solid that has been pushed reports no recipe, and reloads from `.gs` with the pushed geometry;
+  - the sub-object selection still names the pushed face after the edit, and a second push moves it
+    again from its new position;
+  - one Ctrl+Z restores the pre-push solid, geometry and recipe alike.
+- Owner-layer: Domain (`brep` — the operation and its refusals), Commands (the command, the undo
+  step, dropping the recipe), UI (the grip drag, a later increment)
+- Status: accepted — **increment 1 of 2**: the kernel operation and a typed command that drives it
+  from a sub-object selection. Increment 2 is the **grip drag** — a handle on the selected face that
+  moves it with the mouse and previews the result live — which is #148's criterion 3 in the form its
+  wording implies.
+- Revisions: 2026-09-04 — initial (D-2026-09-04-c, GitHub issue #148 criteria 3, 7 and 8).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

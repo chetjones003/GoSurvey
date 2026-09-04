@@ -2368,6 +2368,56 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
      numerically (ADR-045 (b) amendment, D-2026-09-02-i). Refusals lifted pair by pair.
   8. *(separate REQ-315, ADR-048 — accepted 2026-09-03)* — `SurfaceKind::Nurbs` freeform surface,
      then **loft**, then **sweep**.
+  9. *(REQ-319, amendment (i) below — accepted 2026-09-04)* — **push/pull a planar face**, the first
+     operation that edits an existing solid rather than building one.
+
+- **Amendment (i) — a MODIFYING operation, and a precondition `Validate` cannot enforce**
+  (2026-09-04, D-2026-09-04-c, REQ-319, GitHub issue #148 Phase 5).
+
+  Every operation this ADR planned *builds*: from a profile (extrude, revolve, loft, sweep), from two
+  solids (the Booleans), or by cutting one (slice). Phase 5's direct modelling needs the other kind —
+  take a solid, change part of it, return a solid. `brep::PushPullFace` is the first, and the shape
+  it establishes is:
+
+  **A modifying operation copies, edits the copy, and validates before returning.** Not an in-place
+  mutation. `CadSolidPtr` is `shared_ptr<const brep::Solid>` precisely so that undo snapshots are a
+  refcount bump (architecture §11.5), and a solid is *replaced*, never edited. Decision (d)'s
+  compute-validate-replace therefore applies unchanged; only the input differs.
+
+  **The new part is a geometric precondition that `Validate` does not cover, and the case proving
+  it was measured rather than argued.** Moving a face's vertices along its normal leaves each
+  neighbouring face's *surface* untouched — correct when the neighbour is a plane parallel to the
+  push, wrong for anything else, because that neighbour's own vertices then leave its own surface.
+  `Validate` checks topology and degeneracy: closed shells, edges used twice with consistent
+  orientation, no degenerate face or edge, finite coordinates, positive volume. **It has no check
+  that a face's vertices lie on that face's surface.**
+
+  Removing the precondition and measuring:
+
+  - a **cylinder's flat cap** pushed by 3 ft **builds**, `Validate` returns **Ok**, and the analytic
+    volume comes out **863.938 against a true 1021.02** — 15% wrong — because the wall surface still
+    reports `height = 10` while its top boundary sits at 13. A closed, manifold, positive-volume
+    solid whose volume is a lie, and the case this decision rests on;
+  - a **wedge's slanted plane** neighbour, by contrast, `Validate` *does* reject, at every distance
+    from 0.001 ft to 2 ft. There the pre-check buys an accurate refusal rather than safety — without
+    it the user is told "that push would turn the solid inside out", which is false — which matters
+    under REQ-201 but is the smaller claim.
+
+  **The first draft of this amendment asserted the wedge as the proof and was wrong.** It is
+  recorded that way because the distinction is the whole content of the decision: some geometric
+  breakage happens to trip a topological check, and some does not, and only measurement tells them
+  apart.
+
+  Adding such a check to `Validate` was considered and rejected: for a Boolean result it is a
+  tolerance question rather than a boolean one, and making every existing operation pay for it —
+  and possibly newly fail on it — to guard one new operation is the wrong place to put the cost.
+
+  So **a modifying operation owns its own preconditions**, checked before it builds anything, and
+  refuses by name. This is the same conclusion #148's fillet planning reached independently about
+  the over-radius case: `SelfIntersects` is documented as not general, and the refusal has to be a
+  pre-check against adjacent face extents rather than an after-the-fact test. Two operations, one
+  lesson: **the kernel's safety nets catch the topology, not the geometry, and a new operation that
+  can break the geometry must bring its own net.**
 
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
