@@ -6249,6 +6249,238 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
   return Succeed(outWhy);
 }
 
+/// `B − A` for a **non-perpendicular** branch pipe (REQ-314 B2b-2, GitHub issue #242): the thin
+/// branch `A` (radius \p r, tilted by \p alpha) bored clean through the thick main `B` (radius \p R,
+/// axis `fr.zAxis`, caps \p zB0 / \p zB1). `BuildBranchPipeSubtract` generalised the same way
+/// \ref BuildAngledBranchPipeIntersection generalises the perpendicular lens — only `A`'s surface
+/// frame and the procedural curve `ζ(φ)` change; `B`'s wall halves, caps and the two inward bore
+/// halves keep their topology. 8 vertices, 12 edges, 6 faces; genus 1.
+[[nodiscard]] bool BuildAngledBranchPipeSubtract(const ucs::Ucs& fr, double r, double R, double alpha,
+                                                 double zB0, double zB1, Solid* out, Problem* outWhy) {
+  const double ca = std::cos(alpha);
+  const double sa = std::sin(alpha);
+  const double zSpan = (R + r * std::fabs(sa)) / ca * std::fabs(sa) + r;  // mouth half-height on B's axis
+  if (!(R > r) || !(r > 0.0) || !(std::fabs(alpha) < kHalfPi - 1e-6) || !(zB1 - zB0 > 2.0 * zSpan))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 Y = fr.yAxis;
+  const Vec3 Z = fr.zAxis;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+  const Vec3 tHat = ray3d::Add(ray3d::Scale(fr.xAxis, ca), ray3d::Scale(fr.zAxis, sa));
+  const Vec3 xaHat = ray3d::Add(ray3d::Scale(fr.xAxis, -sa), ray3d::Scale(fr.zAxis, ca));
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = fr.origin;
+  aSurf.frame.zAxis = tHat;
+  aSurf.frame.xAxis = xaHat;
+  aSurf.frame.yAxis = ray3d::Scale(Y, -1.0);
+  aSurf.radius = r;
+  aSurf.height = 8.0 * R;
+  Surface bSurf;
+  bSurf.kind = SurfaceKind::Cylinder;
+  bSurf.frame.origin = fr.origin;
+  bSurf.frame.zAxis = Z;
+  bSurf.frame.xAxis = fr.xAxis;
+  bSurf.frame.yAxis = Y;
+  bSurf.radius = R;
+  bSurf.height = zB1 - zB0;
+
+  Solid s;
+  auto cpt = [&](double phi, int sign) {
+    const double root = std::sqrt(std::max(0.0, R * R - r * r * std::sin(phi) * std::sin(phi)));
+    const double zeta = (r * sa * std::cos(phi) + sign * root) / ca;
+    return W(Vec3{zeta * ca - r * std::cos(phi) * sa, -r * std::sin(phi),
+                  zeta * sa + r * std::cos(phi) * ca});
+  };
+  const int p0 = AddVertex(&s, cpt(0.0, 1));
+  const int p1 = AddVertex(&s, cpt(kPi, 1));
+  const int n0 = AddVertex(&s, cpt(0.0, -1));
+  const int n1 = AddVertex(&s, cpt(kPi, -1));
+  const int bp = AddVertex(&s, W(Vec3{0.0, R, zB0}));
+  const int bm = AddVertex(&s, W(Vec3{0.0, -R, zB0}));
+  const int tp = AddVertex(&s, W(Vec3{0.0, R, zB1}));
+  const int tm = AddVertex(&s, W(Vec3{0.0, -R, zB1}));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = cpt(witnessPhi, sign);
+    e.isectSurfaces = {aSurf, bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int cpU = isect(p0, p1, 1.75 * kPi, 1);
+  const int cpL = isect(p0, p1, 0.25 * kPi, 1);
+  const int cnU = isect(n0, n1, 1.75 * kPi, -1);
+  const int cnL = isect(n0, n1, 0.25 * kPi, -1);
+  const int sA0 = AddLine(&s, n0, p0);
+  const int sAp = AddLine(&s, n1, p1);
+  const int seamP = AddLine(&s, bp, tp);
+  const int seamM = AddLine(&s, bm, tm);
+  const Vec3 botC = W(Vec3{0.0, 0.0, zB0});
+  const Vec3 topC = W(Vec3{0.0, 0.0, zB1});
+  const int brF = AddArc(&s, bm, bp, botC, Z, kPi);
+  const int brB = AddArc(&s, bp, bm, botC, Z, kPi);
+  const int trF = AddArc(&s, tm, tp, topC, Z, kPi);
+  const int trB = AddArc(&s, tp, tm, topC, Z, kPi);
+
+  auto face = [&](const Surface& surf, double u0, double u1, std::vector<Loop> loops) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops = std::move(loops);
+    s.faces.push_back(std::move(f));
+  };
+  face(bSurf, -kHalfPi, kHalfPi,
+       {Loop{{{brF, false}, {seamP, false}, {trF, true}, {seamM, true}}},
+        Loop{{{cpU, false}, {cpL, true}}}});
+  face(bSurf, kHalfPi, kHalfPi + kPi,
+       {Loop{{{brB, false}, {seamM, false}, {trB, true}, {seamP, true}}},
+        Loop{{{cnU, true}, {cnL, false}}}});
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{brF, true}, {brB, true}}));
+  s.faces.push_back(MakePlaneFace(topC, Z, {{trF, false}, {trB, false}}));
+  Surface aIn = aSurf;
+  aIn.inward = true;
+  face(aIn, 0.0, kPi, {Loop{{{cpL, false}, {sAp, true}, {cnL, true}, {sA0, false}}}});
+  face(aIn, kPi, kTwoPi, {Loop{{{cpU, true}, {sA0, true}, {cnU, false}, {sAp, false}}}});
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+/// `A ∪ B` for a **non-perpendicular** branch pipe (REQ-314 B2b-2, GitHub issue #242): the thin
+/// branch `A` (radius \p r, tilted by \p alpha, axis-parameter caps \p zetaA0 / \p zetaA1 measured
+/// from `fr.origin` along `A`'s axis) fused onto the thick main `B`. Generalised from
+/// \ref BuildBranchPipeUnion exactly as the other two — only `A`'s frame, the curve `ζ(φ)`, and the
+/// stub caps (now perpendicular to `A`'s tilted axis) change. 12 vertices, 18 edges, 10 faces.
+[[nodiscard]] bool BuildAngledBranchPipeUnion(const ucs::Ucs& fr, double r, double R, double alpha,
+                                              double zB0, double zB1, double zetaA0, double zetaA1,
+                                              Solid* out, Problem* outWhy) {
+  const double ca = std::cos(alpha);
+  const double sa = std::sin(alpha);
+  const double zetaMax = (R + r * std::fabs(sa)) / ca;
+  const double zSpan = zetaMax * std::fabs(sa) + r;
+  if (!(R > r) || !(r > 0.0) || !(std::fabs(alpha) < kHalfPi - 1e-6) || !(zB1 - zB0 > 2.0 * zSpan) ||
+      !(zetaA0 < -zetaMax) || !(zetaA1 > zetaMax))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 Y = fr.yAxis;
+  const Vec3 Z = fr.zAxis;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+  const Vec3 tHat = ray3d::Add(ray3d::Scale(fr.xAxis, ca), ray3d::Scale(fr.zAxis, sa));
+  const Vec3 xaHat = ray3d::Add(ray3d::Scale(fr.xAxis, -sa), ray3d::Scale(fr.zAxis, ca));
+  const Vec3 tHatW = tHat;  // fr axes are already world vectors
+  // A point on A's wall at angle phi, axis-parameter zeta.
+  auto thinPt = [&](double phi, double zeta) {
+    return W(Vec3{zeta * ca - r * std::cos(phi) * sa, -r * std::sin(phi),
+                  zeta * sa + r * std::cos(phi) * ca});
+  };
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = fr.origin;
+  aSurf.frame.zAxis = tHat;
+  aSurf.frame.xAxis = xaHat;
+  aSurf.frame.yAxis = ray3d::Scale(Y, -1.0);
+  aSurf.radius = r;
+  aSurf.height = zetaA1 - zetaA0;
+  Surface bSurf;
+  bSurf.kind = SurfaceKind::Cylinder;
+  bSurf.frame.origin = fr.origin;
+  bSurf.frame.zAxis = Z;
+  bSurf.frame.xAxis = fr.xAxis;
+  bSurf.frame.yAxis = Y;
+  bSurf.radius = R;
+  bSurf.height = zB1 - zB0;
+
+  Solid s;
+  auto cpt = [&](double phi, int sign) {
+    const double root = std::sqrt(std::max(0.0, R * R - r * r * std::sin(phi) * std::sin(phi)));
+    const double zeta = (r * sa * std::cos(phi) + sign * root) / ca;
+    return thinPt(phi, zeta);
+  };
+  const int p0 = AddVertex(&s, cpt(0.0, 1));
+  const int p1 = AddVertex(&s, cpt(kPi, 1));
+  const int n0 = AddVertex(&s, cpt(0.0, -1));
+  const int n1 = AddVertex(&s, cpt(kPi, -1));
+  const int bp = AddVertex(&s, W(Vec3{0.0, R, zB0}));
+  const int bm = AddVertex(&s, W(Vec3{0.0, -R, zB0}));
+  const int tp = AddVertex(&s, W(Vec3{0.0, R, zB1}));
+  const int tm = AddVertex(&s, W(Vec3{0.0, -R, zB1}));
+  const int k0 = AddVertex(&s, thinPt(0.0, zetaA1));
+  const int k1 = AddVertex(&s, thinPt(kPi, zetaA1));
+  const int m0 = AddVertex(&s, thinPt(0.0, zetaA0));
+  const int m1 = AddVertex(&s, thinPt(kPi, zetaA0));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = cpt(witnessPhi, sign);
+    e.isectSurfaces = {aSurf, bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int cpU = isect(p0, p1, 1.75 * kPi, 1);
+  const int cpL = isect(p0, p1, 0.25 * kPi, 1);
+  const int cnU = isect(n0, n1, 1.75 * kPi, -1);
+  const int cnL = isect(n0, n1, 0.25 * kPi, -1);
+  const int seamP = AddLine(&s, bp, tp);
+  const int seamM = AddLine(&s, bm, tm);
+  const Vec3 botC = W(Vec3{0.0, 0.0, zB0});
+  const Vec3 topC = W(Vec3{0.0, 0.0, zB1});
+  const int brF = AddArc(&s, bm, bp, botC, Z, kPi);
+  const int brB = AddArc(&s, bp, bm, botC, Z, kPi);
+  const int trF = AddArc(&s, tm, tp, topC, Z, kPi);
+  const int trB = AddArc(&s, tp, tm, topC, Z, kPi);
+  const int ks0 = AddLine(&s, p0, k0);
+  const int ksP = AddLine(&s, p1, k1);
+  const int ms0 = AddLine(&s, n0, m0);
+  const int msP = AddLine(&s, n1, m1);
+  const Vec3 kCc = W(Vec3{zetaA1 * ca, 0.0, zetaA1 * sa});  // stub cap centres, on A's axis
+  const Vec3 mCc = W(Vec3{zetaA0 * ca, 0.0, zetaA0 * sa});
+  const Vec3 negT = ray3d::Scale(tHatW, -1.0);
+  const int krF = AddArc(&s, k0, k1, kCc, tHatW, kPi);
+  const int krB = AddArc(&s, k1, k0, kCc, tHatW, kPi);
+  const int mrF = AddArc(&s, m0, m1, mCc, negT, kPi);
+  const int mrB = AddArc(&s, m1, m0, mCc, negT, kPi);
+
+  auto face = [&](const Surface& surf, double u0, double u1, std::vector<Loop> loops) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops = std::move(loops);
+    s.faces.push_back(std::move(f));
+  };
+  face(bSurf, -kHalfPi, kHalfPi,
+       {Loop{{{brF, false}, {seamP, false}, {trF, true}, {seamM, true}}},
+        Loop{{{cpU, false}, {cpL, true}}}});
+  face(bSurf, kHalfPi, kHalfPi + kPi,
+       {Loop{{{brB, false}, {seamM, false}, {trB, true}, {seamP, true}}},
+        Loop{{{cnU, false}, {cnL, true}}}});
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{brF, true}, {brB, true}}));
+  s.faces.push_back(MakePlaneFace(topC, Z, {{trF, false}, {trB, false}}));
+  face(aSurf, 0.0, kPi, {Loop{{{cpL, false}, {ksP, false}, {krF, true}, {ks0, true}}}});
+  face(aSurf, kPi, kTwoPi, {Loop{{{cpU, true}, {ks0, false}, {krB, true}, {ksP, true}}}});
+  face(aSurf, 0.0, kPi, {Loop{{{cnL, false}, {msP, false}, {mrF, true}, {ms0, true}}}});
+  face(aSurf, kPi, kTwoPi, {Loop{{{cnU, true}, {ms0, false}, {mrB, true}, {msP, true}}}});
+  s.faces.push_back(MakePlaneFace(kCc, tHatW, {{krF, false}, {krB, false}}));
+  s.faces.push_back(MakePlaneFace(mCc, negT, {{mrF, false}, {mrB, false}}));
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// `A ∪ B`: the solid pipe-tee — the thick main `B` (radius \p R, axis `fr.zAxis`, caps \p zB0 /
 /// \p zB1) fused with the thin branch `A` (radius \p r, axis `fr.xAxis`, caps \p xA0 / \p xA1)
 /// (REQ-314 B2b-2). 12 vertices, 18 edges, 10 faces: `B`'s wall outside `A` (two halves, each with
@@ -6368,11 +6600,10 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
 }
 
 /// Recognise a thin cylinder crossing a thicker one through an interior point, axes coplanar and
-/// crossing, radii differ — the pipe-tee (B2b-2). At **right angles**: INTERSECT the lens, SUBTRACT
-/// bores the branch clean through the main, UNION fuses them. **Non-perpendicular** (issue #242):
-/// INTERSECT only for now — the tilted lens; SUBTRACT / UNION fall through unhandled. Skew
-/// (non-coplanar) axes fall through too. `*handled` stays false when the pair is not this
-/// configuration.
+/// crossing, radii differ — the pipe-tee (B2b-2). INTERSECT the lens, SUBTRACT bores the branch
+/// clean through the main, UNION fuses them — at **right angles** and, since issue #242, at any
+/// **non-perpendicular** coplanar angle too (`thin − thick` SUBTRACT still falls through). Skew
+/// (non-coplanar) axes fall through. `*handled` stays false when the pair is not this configuration.
 [[nodiscard]] bool TryBooleanBranchPipe(const CylinderShape& A, const CylinderShape& B, BoolOp op,
                                         std::vector<Solid>* out, bool* handled, Problem* outWhy) {
   const double sc = A.radius + B.radius + A.length + B.length;
@@ -6430,19 +6661,28 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
 
   const bool minuendIsThick = A.radius > B.radius;
 
+  if (op == BoolOp::Subtract && !minuendIsThick)
+    return false;  // thin − thick leaves two stubs — a later sub-slice
+
   if (!perp) {
-    if (op != BoolOp::Intersect)
-      return false;  // non-perpendicular SUBTRACT / UNION — later slices
     *handled = true;
+    const double zB0n = -sThick;
+    const double zB1n = thick.length - sThick;
     Solid tilted;
-    if (!BuildAngledBranchPipeIntersection(fr, r, R, alpha, &tilted, outWhy))
+    bool ok = false;
+    if (op == BoolOp::Intersect)
+      ok = BuildAngledBranchPipeIntersection(fr, r, R, alpha, &tilted, outWhy);
+    else if (op == BoolOp::Subtract)
+      ok = BuildAngledBranchPipeSubtract(fr, r, R, alpha, zB0n, zB1n, &tilted, outWhy);
+    else
+      ok = BuildAngledBranchPipeUnion(fr, r, R, alpha, zB0n, zB1n, -sThin, thin.length - sThin,
+                                      &tilted, outWhy);
+    if (!ok)
       return false;
     out->push_back(std::move(tilted));
     return Succeed(outWhy);
   }
 
-  if (op == BoolOp::Subtract && !minuendIsThick)
-    return false;  // thin − thick leaves two stubs — a later sub-slice
   *handled = true;
 
   const double zB0 = -sThick;

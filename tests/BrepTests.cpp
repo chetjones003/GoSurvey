@@ -2983,10 +2983,47 @@ TEST_CASE("Curved B2b-2: INTERSECT of a NON-perpendicular branch pipe is the til
     REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-3));
   }
 
-  SECTION("non-perpendicular SUBTRACT and UNION are refused - later slices") {
+  SECTION("SUBTRACT bores the tilted branch clean through the main - genus 1") {
+    const double thickVol = kPi * R * R * 30.0;
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanSubtract(thick, thin, &out, &why));
-    REQUIRE_FALSE(brep::BooleanUnion(thick, thin, &out, &why));
+    REQUIRE(brep::BooleanSubtract(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 12);
+    REQUIRE(CountOf(out[0]).f == 6);  // two B-wall faces carry the mouth as an inner loop (genus 1)
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(thickVol - vref).epsilon(5e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(thickVol - vref).epsilon(1e-2));
+  }
+
+  SECTION("UNION fuses the tilted branch and the main into one solid pipe-tee") {
+    const double want = kPi * R * R * 30.0 + kPi * r * r * 30.0 - vref;
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 12);
+    REQUIRE(CountOf(out[0]).e == 18);
+    REQUIRE(CountOf(out[0]).f == 10);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(5e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(1e-2));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanUnion(thin, thick, &rev, &why));  // order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(5e-3));
+  }
+
+  SECTION("thin - thick (two stubs) is still refused - a later sub-slice") {
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(thin, thick, &out, &why));
   }
 
   SECTION("skew (non-coplanar) axes are refused") {
