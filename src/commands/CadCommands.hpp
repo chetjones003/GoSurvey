@@ -37,6 +37,7 @@
 #include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
 #include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
 #include "util/cadsolid.hpp"   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
+#include "util/solidpick.hpp"  // solidpick::Kind, for SelectedSubObject (REQ-318 / ADR-049)
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.
@@ -91,6 +92,40 @@ struct SelectedEntity {
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
+};
+
+/// One selected FACE, EDGE or VERTEX of one solid (REQ-318 increment 2 / ADR-049, issue #148).
+///
+/// **Why this is not a `SelectedEntity::Type`.** A sub-object is not an entity: it has no
+/// attributes, no layer, no id, and nothing that consumes `AppCommandState::selection` — MOVE,
+/// DELETE, the Properties panel, DXF export, the highlight walk — can act on one until #148's
+/// criteria 3-6 land. Folding it in would put a branch for it in every one of those consumers, and
+/// the first one that forgot would be a sub-object silently deleted or exported. Its own store makes
+/// REQ-318 item 9's "does not interfere" a structural property rather than a promise
+/// (D-2026-09-04-a).
+///
+/// **Why the index alone is not the reference.** ADR-049 measured this: a face index keeps its
+/// meaning across an edit that preserves the topology — a box's face indices survive a height
+/// change, a length change, a frame translation — and loses it across one that changes the counts,
+/// such as a cone frustum collapsing to an apex (4 faces to 3) or any boolean. So the index is
+/// paired with the identity of the solid it came from and the reference **expires** rather than
+/// re-binding to whatever now occupies that slot. A `weak_ptr` and not a raw pointer for the reason
+/// `CadSolidTessellation::key` gives: a raw address can be matched by a new allocation.
+struct SelectedSubObject {
+  /// Index into \ref AppCommandState::cadSolids. Kept alongside \ref owner because the store is
+  /// addressed by index everywhere else in this file; \ref owner is what decides validity.
+  int solidIndex = -1;
+  solidpick::Kind kind = solidpick::Kind::None;
+  /// Index into the owning solid's `faces`, `edges` or `vertices`, per \ref kind.
+  int index = -1;
+  /// The solid this reference was taken from. Empty (expired) means the solid is gone; pointing at
+  /// a *different* solid than `cadSolids[solidIndex]` means it was replaced by an edit, and either
+  /// way the reference is dropped rather than followed.
+  std::weak_ptr<const brep::Solid> owner;
+
+  [[nodiscard]] bool sameTarget(const SelectedSubObject& o) const {
+    return solidIndex == o.solidIndex && kind == o.kind && index == o.index;
+  }
 };
 
 /// REQ-103 BREAK (step 4): a break point resolved onto a specific entity — the exact coordinate
@@ -2786,6 +2821,18 @@ struct AppCommandState {
   // --- Selection (idle box pick + move/copy/rotate) ---
   std::vector<SelectedEntity> selection;
 
+  /// Selected faces / edges / vertices of solids (REQ-318 increment 2, issue #148).
+  ///
+  /// **Mutually exclusive with \ref selection**, by decision D-2026-09-04-a: a plain click clears
+  /// this, a `Ctrl` click clears that. Never both at once, which is what makes #148's "sub-object
+  /// selection does not interfere with whole-entity selection" hold without every consumer of
+  /// \ref selection having to know this exists.
+  ///
+  /// **Session state, like \ref hiddenEntityIds** — not written to `.gs` and not carried in an undo
+  /// snapshot. A selection is not part of the drawing, and a reference that expires on a topology
+  /// change (\ref SelectedSubObject) would be meaningless after a reload anyway.
+  std::vector<SelectedSubObject> subObjectSelection;
+
   /// Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS, as **stable entity ids** (REQ-084 (d),
   /// ADR-034). Kept SORTED so the per-entity test is a `binary_search`; empty is the overwhelming
   /// case and every gate early-outs on it, so nothing is paid for a drawing with no isolation.
@@ -5113,6 +5160,58 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
 
 /// Clears window-selection draft state and CAD entity selection only (not survey point pick).
 void ClearCadSelection(AppCommandState& st);
+
+// --- Sub-object selection (REQ-318 increment 2 / D-2026-09-04-a, issue #148) ------------------
+//
+// Free functions rather than members for the reason every other selection operation in this header
+// is: `AppCommandState` is plain data (architecture §11), and these are testable against a
+// hand-built state with no window and no document.
+
+/// Drop every sub-object reference whose solid is gone or has been REPLACED (REQ-318 item 10).
+///
+/// A solid is immutable and replaced rather than edited (`CadSolidPtr` is `shared_ptr<const>`), so
+/// "replaced" is exactly "the `weak_ptr` no longer locks to `cadSolids[solidIndex]`" — which covers
+/// an erase, an undo, a boolean, and any direct edit, without any of them having to remember to call
+/// something. Also drops references whose index no longer addresses anything on the solid it names.
+///
+/// Returns the number dropped, so a caller can report an expiry rather than have a selection quietly
+/// shrink (REQ-201).
+int ExpireSubObjectSelection(AppCommandState& st);
+
+/// Add \p pick to the sub-object selection, or remove it when \p toggle and it is already there.
+///
+/// \p toggle is Shift's meaning, kept identical to Shift's meaning for entities. A plain add of a
+/// sub-object already selected is a no-op rather than a duplicate.
+void ToggleSubObjectSelection(AppCommandState& st, const SelectedSubObject& pick, bool toggle);
+
+/// The nearest sub-object under \p ray across EVERY visible solid, or false for a miss.
+///
+/// This is where TASK-189's DEBT-1 is closed. `solidpick::PickSubObject` sees one solid at a time,
+/// so its occlusion rule cannot reach across solids: a vertex hidden behind a *different* solid is
+/// still a hit as far as that function knows. Ordering the per-solid answers on `Pick::rayT` — the
+/// distance the query returns for exactly this purpose — is the caller's job, and this is the
+/// caller.
+///
+/// Honours layer visibility and isolation through `SolidVisible`, so a pick cannot name geometry the
+/// renderer is not drawing (the rule REQ-084 (d) already applies to the entity pick). Solids with no
+/// cached tessellation are skipped rather than tessellated: a pick must not cost a tessellation
+/// (REQ-318 item 7).
+[[nodiscard]] bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
+                                             const solidpick::Tolerance& tol, SelectedSubObject* out,
+                                             solidpick::Pick* outPick = nullptr);
+
+/// ONE sub-object click, whole: pick along \p ray, apply the mutual-exclusion rule, update the
+/// store, and say what happened. Returns true when something was picked.
+///
+/// The *rule* lives here rather than in the viewport's mouse handler on purpose. What the click
+/// does — the entity selection is cleared because the two are mutually exclusive (REQ-318 item 9),
+/// `toggle` (Shift) removes an already-selected sub-object, and a miss CLEARS rather than arming a
+/// selection fence — is behaviour a transcript has to be able to drive and assert. Left inline in
+/// `CadUi.cpp` it would have been reachable only by hand, which is the shape of defect TASK-099
+/// found five times over. The UI keeps exactly one decision of its own: that `Ctrl` is what asks
+/// for this.
+bool SubmitSubObjectPick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
+                         bool toggle, std::vector<std::string>& log);
 /// Replace selection with all entities of the same kind as the first selected item (or all survey points).
 /// Move the armed grip to (x, y) in local storage coordinates — the one place grip geometry is written, so
 /// the mouse drag and command-line distance entry cannot drift apart. No-op when no grip is armed.

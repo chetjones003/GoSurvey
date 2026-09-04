@@ -852,6 +852,12 @@ int main()
     // refresh above: keyed on its own staleness key, so an unrelated edit does not retessellate a
     // solid, and #120's "do not regenerate a solid's render mesh every frame" holds by construction.
     RefreshSolidDisplayGeometry(cmd);
+    // A sub-object reference is an index PLUS the solid it came from, and it EXPIRES rather than
+    // re-binding when that solid is replaced (REQ-318 item 10 / ADR-049). Swept here, once a frame,
+    // rather than at each of the many places a solid can be erased, undone or replaced — one sweep
+    // that cannot be forgotten beats a dozen call sites that can. Costs nothing when the selection
+    // is empty, which is the overwhelming case.
+    ExpireSubObjectSelection(cmd);
 
     const ImGuiViewport *mainVp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainVp->WorkPos);
@@ -1149,6 +1155,16 @@ int main()
     std::vector<float> highlightCircles;
     BuildSelectionHighlight(cmd, &highlightLines, &highlightCircles);
 
+    // The sub-object selection (REQ-318 item 11). Its edge and vertex linework is APPENDED to the
+    // ordinary highlight channel, which is what gives it the never-occluded treatment the decision
+    // asks for; only the face tint needs a channel of its own, because only it is depth-tested.
+    std::vector<float> subObjectFaceTris;
+    {
+      std::vector<float> subObjectLines;
+      BuildSubObjectHighlight(cmd, &subObjectFaceTris, &subObjectLines);
+      highlightLines.insert(highlightLines.end(), subObjectLines.begin(), subObjectLines.end());
+    }
+
     std::vector<float> hoverLines;
     std::vector<float> hoverCircles;
     if (cmd.activeSpaceIndex == kModelSpaceIndex) // no model-entity hover in paper space (incl. floating)
@@ -1362,7 +1378,12 @@ int main()
                                // The grid follows the UCS (REQ-154). Storage space, like the camera
                                // and every vertex the renderer receives. Paper space keeps its own
                                // 2D sheet grid and is deliberately excluded.
-                               paperSpace ? nullptr : &ucsGridFrame);
+                               paperSpace ? nullptr : &ucsGridFrame,
+                               // The selected solid FACE's tint (REQ-318 item 11). Model space only,
+                               // like every other GL overlay here; its edges and vertices went into
+                               // `highlightLines` above and are drawn never-occluded, while this one
+                               // is depth-tested — see the renderer's own note at the draw.
+                               (paperSpace || subObjectFaceTris.empty()) ? nullptr : &subObjectFaceTris);
     cmd.perfRenderMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfRenderT0).count();
 

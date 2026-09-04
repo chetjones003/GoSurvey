@@ -941,7 +941,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const CadSurfaceDisplayGeometry* surfaceGeometry,
                                    const VolumeMapDisplayGeometry* volumeMap,
                                    const std::vector<float>* removalLines,
-                                   const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame) {
+                                   const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame,
+                                   const std::vector<float>* subObjectFaceTris) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -2031,6 +2032,44 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hvCircGeom.size() / 3));
       glLineWidth(kLwMain);
     }
+  }
+
+  // --- Sub-object face tint (REQ-318 item 11) — THE ONE DEPTH-TESTED OVERLAY -------------------
+  //
+  // The block comment above states the rule this deliberately breaks, so the exception is written
+  // where someone changing the rule will read it. A selected FACE of a solid is a patch of a closed
+  // volume, not a stroke of 2D linework: drawn never-occluded, a face on the far side glows through
+  // the body and reads as being on the near side. The sub-object selection's edges and vertices are
+  // NOT here — they arrive through `highlightLines` below and keep the never-occluded treatment,
+  // because a line one pixel wide sunk into the surface it lies on is simply gone (D-2026-09-04-a).
+  //
+  // In 2D Wireframe no solid faces are drawn and nothing has written depth, so every fragment
+  // passes GL_LEQUAL against the cleared buffer and the tint draws. That is the intent, not an
+  // accident of the state: in the default style the tint is the only way a face selection is
+  // visible at all.
+  if (subObjectFaceTris && !subObjectFaceTris->empty() && subObjectFaceTris->size() % 9 == 0) {
+    std::vector<float> subTriRel;
+    ConvertLineVertsWorldToView(*subObjectFaceTris, viewAnchorX, viewAnchorY, &subTriRel);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_FALSE);  // tint the face; do not become the surface for anything drawn after it
+    // Pulled toward the viewer, or the tint and the face it covers are the same depth and the
+    // result is z-fighting speckle rather than a highlight.
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.f, -1.f);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+    // The selection accent, translucent: opaque would hide the shading that says which way the face
+    // turns, and on a curved face that shading is how the user reads the shape they just picked.
+    glUniform4f(locCol, 1.f, 0.92f, 0.15f, 0.38f);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(subTriRel.size() * sizeof(float)), subTriRel.data(),
+                 GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(subTriRel.size() / 3));
+    glDisable(GL_BLEND);
+    glPolygonOffset(0.f, 0.f);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    depthForOverlay();  // back to the rule for everything below
   }
 
   // --- Selection highlight (accent stroke on top of committed geometry) ---

@@ -671,6 +671,82 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
            sourceLine);
       return false;
     }
+  } else if (verb == "SUBOBJECT") {
+    // SUBOBJECT <x> <y> <z> [SHIFT] — one Ctrl+click on a solid's face, edge or vertex (REQ-318
+    // increment 2, issue #148).
+    //
+    // Its own verb rather than a modifier on CLICK, because the two ask different questions. CLICK
+    // routes through `ViewportClickRouteFor` to prove a command receives clicks at all; this drives
+    // a SELECTION, which that router deliberately has nothing to say about — and idle click-select
+    // has no headless equivalent at all (see CLICK's own note), which is exactly why the sub-object
+    // click's meaning was moved OUT of `CadUi.cpp` into `SubmitSubObjectPick` before this verb was
+    // written. The verb calls that shared function; it does not re-implement the rule.
+    //
+    // A full XYZ, not a plan XY: the target is a point on a solid's surface in three dimensions, and
+    // naming it in plan alone cannot distinguish the top face of a box from the bottom one directly
+    // beneath it. The ray is then the one the CAMERA would cast at that point — built exactly as
+    // CLICK builds one for a prompted solid — so what is tested is the pick the user gets, not a
+    // synthetic axis-aligned ray no viewport would ever produce.
+    std::istringstream is(rest);
+    float sx = 0.f, sy = 0.f, sz = 0.f;
+    if (!(is >> sx >> sy >> sz)) {
+      Fail(run, "parse",
+           "SUBOBJECT expects <x> <y> <z> [<vertexTol> <edgeTol>] [SHIFT], got: " + rest, sourceLine);
+      return false;
+    }
+    // Optional explicit tolerances, and the reason they are worth a verb argument: in the GUI these
+    // are screen-derived (REQ-318 item 5) from the cursor aperture and the viewport's height in
+    // pixels — neither of which a transcript has. Left to the default they come out around 3 units
+    // on a 20 x 10 x 8 box, which swallows the whole precedence rule: a click in the MIDDLE of a
+    // face lands within 3 units of that face's edge and the edge wins, so every assertion would be
+    // about the default's size rather than about the pick. Stating them makes each case say what
+    // geometry it is actually distinguishing, and makes REQ-318's "a zero tolerance means that kind
+    // is never reported" expressible here as well as in the unit tests.
+    bool haveTol = false;
+    float tolV = 0.f, tolE = 0.f;
+    {
+      const std::streampos save = is.tellg();
+      if (is >> tolV >> tolE) {
+        haveTol = true;
+      } else {
+        is.clear();
+        if (save != std::streampos(-1))
+          is.seekg(save);
+      }
+    }
+    bool toggle = false;
+    std::string mod;
+    while (is >> mod) {
+      if (UpperAscii(mod) == "SHIFT") {
+        toggle = true;
+      } else {
+        Fail(run, "parse", "SUBOBJECT: unknown modifier " + mod + " (expected SHIFT)", sourceLine);
+        return false;
+      }
+    }
+    // A projection needs a viewport size; a transcript has no window, so give it the same definite
+    // one VIEWANGLES does.
+    if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+      run.st.uiViewportWidthPx = 1200.f;
+      run.st.uiViewportHeightPx = 700.f;
+    }
+    const Camera subCam = CadViewCamera(run.st);
+    float ssx = 0.f, ssy = 0.f;
+    subCam.WorldToScreen(static_cast<double>(sx), static_cast<double>(sy), static_cast<double>(sz),
+                         run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &ssx, &ssy);
+    const ray3d::Ray subRay =
+        subCam.ScreenRay(ssx, ssy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+    solidpick::Tolerance subTol;
+    if (haveTol) {
+      subTol.vertex = static_cast<double>(tolV);
+      subTol.edge = static_cast<double>(tolE);
+    } else {
+      // No explicit budget: the same function the GUI calls, so an unstated transcript still gets
+      // the product's own answer rather than a number invented here.
+      subTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(run.st));
+      subTol.edge = subTol.vertex;
+    }
+    SubmitSubObjectPick(run.st, subRay, subTol, toggle, run.log);
   } else if (verb == "BOX") {
     // BOX <x0> <y0> <x1> <y1> [WINDOW] [SUBTRACT] — a box selection from two world corners.
     //
@@ -2088,6 +2164,25 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // still in the drawing and must simply refuse to be picked.
       else if (what == "SELECTED")
         got = static_cast<long>(run.st.selection.size());
+      // How many FACES / EDGES / VERTICES of solids are selected (REQ-318 increment 2). A separate
+      // count from SELECTED and not a subset of it: the two stores are mutually exclusive by
+      // decision (D-2026-09-04-a), so "SELECTED 0 / SUBOBJECTS 1" is the assertion that says the
+      // sub-object selection did not leak into the entity one — which is #148's criterion 2 stated
+      // as a number rather than as a promise.
+      else if (what == "SUBOBJECTS")
+        got = static_cast<long>(run.st.subObjectSelection.size());
+      else if (what == "SUBOBJECTFACES" || what == "SUBOBJECTEDGES" || what == "SUBOBJECTVERTICES") {
+        const solidpick::Kind want = what == "SUBOBJECTFACES"   ? solidpick::Kind::Face
+                                     : what == "SUBOBJECTEDGES" ? solidpick::Kind::Edge
+                                                                : solidpick::Kind::Vertex;
+        // By KIND, because "one sub-object is selected" and "the selected sub-object is the face
+        // you aimed at" are different claims — the same distinction SELECTEDSURFACES draws below,
+        // and here it is load-bearing: precedence is vertex, then edge, then face, so a pick that
+        // silently returned the wrong KIND is precisely the failure this increment can have.
+        got = static_cast<long>(std::count_if(
+            run.st.subObjectSelection.begin(), run.st.subObjectSelection.end(),
+            [&](const SelectedSubObject& s) { return s.kind == want; }));
+      }
       else if (what == "SURFACES")
         got = static_cast<long>(run.st.cadSurfaces.size());
       // How many of the CURRENT selection are TIN surfaces (REQ-068 / ADR-036 (b)). Distinct from

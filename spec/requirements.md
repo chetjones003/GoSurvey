@@ -6366,6 +6366,45 @@ capability that does not exist. They are recorded here rather than quietly dropp
   7. **A pick costs no tessellation, and rejects cheaply.** The already-built display triangles are
      what is tested, behind a padded bounds test, so a pick stays inside REQ-100's frame budget on
      hover and the user picks the geometry they can actually see.
+
+  **Increment 2 — the selection.** Items 1-7 answer *what is under the cursor*. What follows is what
+  the program does with that answer: a selection the user makes, sees, and can act on later
+  (D-2026-09-04-a).
+
+  8. **Entry is `Ctrl` + click, and nothing else changes.** A plain click selects the whole solid
+     exactly as it did before. Holding `Ctrl` selects the face, edge or vertex under the cursor
+     instead. There is no mode to enter or leave, deliberately: a persistent sub-object mode is one
+     a user can be left in without noticing, after which every ordinary click means something they
+     did not intend.
+  9. **The sub-object selection is its own store, and the two selections are mutually exclusive.** A
+     plain click clears the sub-object selection; a `Ctrl` click clears the entity selection. Shift
+     toggles within whichever selection the click addresses, keeping the meaning Shift already has.
+     Nothing that consumes the entity selection — a transform, DELETE, the Properties panel, export
+     — ever sees a sub-object, which is what makes "does not interfere" a structural property rather
+     than a promise.
+  10. **A sub-object reference expires; it does not re-bind.** It is an index *plus* the identity of
+      the solid it came from (ADR-049). An index keeps its meaning across an edit that preserves the
+      topology and loses it across one that changes the counts, so a reference whose solid has been
+      replaced by a topology-changing edit is dropped rather than silently pointing at whatever now
+      occupies that index.
+  11. **What is selected is visible, and a face reads as a face.** A selected face is drawn as a
+      tinted fill over its own triangles, an edge and a vertex as accent linework. **The face fill
+      is depth-tested and the linework is not.** A never-occluded face tint would show a back face
+      glowing through the body; an occluded edge or vertex would vanish into the surface it lies on,
+      being one line or one dot thick. This is a deliberate exception to the blanket overlay rule
+      ("a selection highlight that hides behind the object it is highlighting is a bug"), which was
+      written for 2D linework and does not survive contact with a closed volume.
+
+      In **2D Wireframe** — the default style, which draws no solid faces and runs with the depth
+      test off — there is nothing for the tint to be occluded by and it simply draws. That is the
+      intended behaviour, not a fallback: in wireframe the tint is the only way a face selection can
+      be shown at all, and no nearer surface exists on screen to contradict it.
+  12. **A whole selected solid is visible too.** It is drawn by its own edges, which is what the
+      entity pick already tests against, so the highlight traces the thing that selects. Stated
+      because it did not exist: before this increment a selected solid showed nothing whatever.
+  13. **The highlight is built from the per-solid tessellation**, not from the coalesced display
+      batches. Those merge solids that draw identically into shared buffers for REQ-100's draw-call
+      budget and carry no per-face channel, so a face's triangles cannot be recovered from them.
 - Acceptance:
   - a face pick on a cylinder reports a point on the cylinder of radius `r` **and at the azimuth the
     ray was aimed along** — both, because the projection makes the radius exact for any nearby input,
@@ -6384,19 +6423,43 @@ capability that does not exist. They are recorded here rather than quietly dropp
     triangle buffers each report no pick and leave the caller's result untouched;
   - the snap path and the sub-object path give the same answer for the same ray, because they are
     the same code;
+
+  Increment 2:
+  - a `Ctrl` click on a face, on an edge and on a vertex each leave exactly that sub-object
+    selected, and each is visible on screen;
+  - a plain click on the same solid selects the whole solid and leaves the sub-object selection
+    empty; a `Ctrl` click then leaves the entity selection empty — neither is ever populated at the
+    same time as the other;
+  - a plain click in the middle of a face selects nothing while a `Ctrl` click there selects the
+    face — the entity pick tests edges only, and this states the difference rather than hiding it;
+  - `Shift`+`Ctrl` click on an already-selected sub-object removes it and leaves the rest;
+  - a `Ctrl` click that hits no solid clears the sub-object selection and starts no selection box;
+  - with two solids one behind the other, a `Ctrl` click takes the nearer one's sub-object — the
+    per-solid occlusion rule of increment 1 cannot see across solids, so the caller orders them;
+  - a sub-object reference survives an edit that preserves the solid's topology and is dropped by
+    one that changes it, rather than pointing at a different sub-object;
+  - erasing the solid a sub-object belongs to leaves no dangling selection;
+  - a selected whole solid draws a highlight — the case that did not exist before this increment;
+  - the face fill is depth-tested and the edge and vertex linework is not, in the styles that have a
+    depth buffer at all;
   - the pick's geometry and its refusals are all decided without a window or a document.
 - Owner-layer: Domain (the pick query), UI/Commands (casting the ray, converting the tolerances, and
   what is done with the answer)
 - Status: accepted — **increment 1 of 2 delivered** (GitHub issue #148, D-2026-09-03-c, ADR-049,
-  TASK-189). Increment 1 is the shared pick *query*: `ray3d::RayTriangleIntersect` and the new pure
+  TASK-189); **increment 2 specified and in progress** (D-2026-09-04-a, TASK-199). Increment 1 is
+  the shared pick *query*: `ray3d::RayTriangleIntersect` and the new pure
   `src/util/solidpick.{hpp,cpp}`, with `CadSnap.cpp`'s two file-private copies refactored onto them
-  so the divergence in item 1 cannot recur. Increment 2 is the *selection*: a sub-object selection
-  mode with its own store, the highlight treatment, and coexistence with whole-entity selection —
-  which is where #148's acceptance criteria 1 and 2 are actually met.
+  so the divergence in item 1 cannot recur. Increment 2 is the *selection* — statement items 8-13
+  above — which is where #148's acceptance criteria 1 and 2 are actually met.
 - Revisions: 2026-09-03 — initial; increment 1 delivered. Same day, before merge: the "Starting
   state" note above added and the statement recast after review found the requirement had been
   drafted on the premise that solid faces were unpickable. They were not; the premise came from
   PR #180, which predates REQ-313 landing and was quoted without being re-checked against `beta`.
+  2026-09-04 — increment 2 given a statement and acceptance of its own (items 8-13). It had a named
+  scope and no criteria, which is a requirement that cannot be verified: the status line said what
+  increment 2 *was about* while every one of the eleven acceptance bullets tested the query. The two
+  behavioural choices it turned on — `Ctrl`+click for entry, and a depth-tested face fill against
+  never-occluded edge and vertex linework — were put to the user and are recorded as D-2026-09-04-a.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

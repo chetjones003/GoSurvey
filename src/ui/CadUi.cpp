@@ -14023,7 +14023,42 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       break;
     case ViewportClickRoute::IdleSelection: {
       bool handled = false;
-      if (cmd.selBoxWaitingSecond) {
+      // Sub-object selection (REQ-318 increment 2, D-2026-09-04-a). Ctrl+click names the FACE, EDGE
+      // or VERTEX of a solid under the cursor instead of the whole object; a plain click keeps every
+      // behaviour it had. No mode is entered, deliberately — a persistent sub-object mode is one a
+      // user can be left in without noticing, after which every ordinary click means something they
+      // did not intend.
+      //
+      // The two selections are mutually exclusive (REQ-318 item 9), which is what makes #148's
+      // "does not interfere with whole-entity selection" structural: nothing that consumes
+      // `cmd.selection` ever sees a sub-object, so no consumer needs to know this exists.
+      const bool subObjectClick = modelSpace && ImGui::GetIO().KeyCtrl;
+      if (!subObjectClick && !cmd.subObjectSelection.empty()) {
+        cmd.subObjectSelection.clear();
+        BumpCadGpuCache(cmd);
+      }
+      if (subObjectClick) {
+        AbortMtextGripInteraction(cmd);
+        ClearDimGripInteraction(cmd);
+        // Everything the click MEANS is in SubmitSubObjectPick, in the command layer, where a
+        // transcript can drive it. What is decided here — and only here — is that Ctrl is what asks
+        // for a sub-object, plus the two things the command layer has no access to: the cursor RAY
+        // and the pixel-derived tolerance.
+        //
+        // The ray is built here rather than reusing `pickRayPtr`, which is null in plan view: a
+        // solid has faces to pick looking straight down just as much as from an orbit, and 2D
+        // Wireframe plan IS the default view.
+        const ray3d::Ray subRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        solidpick::Tolerance subTol;
+        // The same screen-derived aperture the entity pick uses (REQ-318 item 5), so a vertex and a
+        // line subtend the same target however far away they are.
+        subTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
+        subTol.edge = subTol.vertex;
+        SubmitSubObjectPick(cmd, subRay, subTol, keyShift, log);
+        BumpCadGpuCache(cmd);
+        handled = true;
+      }
+      if (!handled && cmd.selBoxWaitingSecond) {
         UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         for (int svi : cmd.selectedSurveyPointIndices) {
           if (svi >= 0 && static_cast<size_t>(svi) < cmd.surveyPoints.size())
