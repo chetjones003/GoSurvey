@@ -1373,7 +1373,13 @@ const char* ProblemText(Problem p) {
   case Problem::SweepProfileTouchesAxis:
     return "The profile reaches the arc path's axis of curvature; move it clear of the axis.";
   case Problem::SweepPathCorner:
-    return "The sweep path has a sharp corner; only smooth (tangent-continuous) bends are supported.";
+    return "The sweep path has a sharp corner touching an arc segment; only a straight-to-straight "
+           "corner can be mitred in this version.";
+  case Problem::SweepMitreProfileArc:
+    return "This corner would mitre, but the profile has an arc edge; a polygonal profile is needed "
+           "to mitre a sharp corner in this version.";
+  case Problem::SweepMitreCollapsed:
+    return "This corner is too sharp to mitre; the two segments fold back on themselves.";
   case Problem::SweepUnsupportedOption:
     return "This sweep option is not supported yet: a twist or a fixed orientation needs a single "
            "straight path segment in this version.";
@@ -2802,6 +2808,33 @@ namespace {
   return true;
 }
 
+/// Rotate \p f's own axes by the minimal rotation that takes its CURRENT `zAxis` onto \p newTangent
+/// (unit), about `cross(f.zAxis, newTangent)` — i.e., continue the SAME frame through a turn, rather
+/// than re-deriving one fresh from some other reference. This is the discrete (single-turn) analogue
+/// of the incremental `RotateAbout` propagation already used through an arc segment, and is what a
+/// mitred corner needs (REQ-315 2026-09-04): re-deriving a leg's frame fresh from `profile.plane`
+/// instead gives a DIFFERENT (generally inconsistent) basis whenever the incoming frame was itself
+/// already rotated away from the profile's own plane — verified to disagree by direct construction
+/// during this feature's implementation. Leaves \p f unchanged (returns true, a no-op) if `zAxis`
+/// already matches; returns false only if the result fails to stay right-handed orthonormal.
+[[nodiscard]] bool TurnFrameToTangent(ucs::Ucs* f, const Vec3& newTangent) {
+  const Vec3 t = ray3d::Normalize(newTangent);
+  const double d = std::clamp(ray3d::Dot(f->zAxis, t), -1.0, 1.0);
+  Vec3 axis = ray3d::Cross(f->zAxis, t);
+  const double al = ray3d::Length(axis);
+  if (al > 1e-12) {
+    axis = ray3d::Scale(axis, 1.0 / al);
+    const double ang = std::acos(d);
+    f->xAxis = RotateAbout(f->xAxis, axis, ang);
+    f->yAxis = RotateAbout(f->yAxis, axis, ang);
+    f->zAxis = RotateAbout(f->zAxis, axis, ang);
+  } else if (d < 0.0) {
+    f->yAxis = ray3d::Scale(f->yAxis, -1.0);
+    f->zAxis = ray3d::Scale(f->zAxis, -1.0);
+  }
+  return ucs::IsRightHandedOrthonormal(*f, 1e-6);
+}
+
 /// A path segment's start / end unit tangents, its axis data, and its derived end point. Returns
 /// false for a degenerate segment.
 struct SweepSegGeom {
@@ -2928,7 +2961,36 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
   if ((options.twistRad != 0.0 || !options.alignToPath) && !singleStraight)
     return Fail(Problem::SweepUnsupportedOption, outWhy);
 
-  // --- Per-segment geometry, and the tangent-continuity check at every joint -------------------
+  // --- Per-segment geometry, and the sharp-corner classification at every joint -----------------
+  // A sharp (tangent-discontinuous) joint where BOTH adjoining segments are straight, and the
+  // profile is polygonal (no arc edge), MITRES (REQ-315 2026-09-04) rather than refusing:
+  // `mitreAt[k]` records that ring k is cut on the bisector plane of the two tangents meeting there
+  // (sheared in once the perpendicular ring is built, below) instead of being refused outright.
+  // `mitreTangent[k]` is the tangent to shear ALONG — the incoming segment's, matching whichever
+  // perpendicular reference that ring's frame actually is (the outgoing segment's, for a closed
+  // path's ring 0, whose frame is built ⊥ to what leaves it, not what arrives).
+  const bool profileIsPolygon = std::all_of(profile.edges.begin(), profile.edges.end(),
+                                            [](const ProfileEdge& pe) { return !pe.arc; });
+  std::vector<bool> mitreAt(static_cast<std::size_t>(np), false);
+  std::vector<Vec3> mitreN(static_cast<std::size_t>(np));
+  std::vector<Vec3> mitreTangent(static_cast<std::size_t>(np));
+
+  auto classifyCorner = [&](int ring, const SweepSegGeom& gi, const SweepSegGeom& go,
+                            const Vec3& shearTangent) -> bool {
+    if (gi.arc || go.arc)
+      return Fail(Problem::SweepPathCorner, outWhy);
+    if (!profileIsPolygon)
+      return Fail(Problem::SweepMitreProfileArc, outWhy);
+    const Vec3 n = ray3d::Add(gi.endTan, go.startTan);
+    const double nl = ray3d::Length(n);
+    if (!(nl > 1e-6))
+      return Fail(Problem::SweepMitreCollapsed, outWhy);
+    mitreAt[static_cast<std::size_t>(ring)] = true;
+    mitreN[static_cast<std::size_t>(ring)] = ray3d::Scale(n, 1.0 / nl);
+    mitreTangent[static_cast<std::size_t>(ring)] = shearTangent;
+    return true;
+  };
+
   std::vector<SweepSegGeom> seg(static_cast<std::size_t>(np - 1));
   for (int k = 0; k + 1 < np; ++k) {
     if (!SegGeom(work.points[static_cast<std::size_t>(k)], work.points[static_cast<std::size_t>(k + 1)],
@@ -2936,23 +2998,35 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
       return Fail(Problem::SweepPathDegenerate, outWhy);
     if (k > 0 &&
         ray3d::Dot(seg[static_cast<std::size_t>(k - 1)].endTan, seg[static_cast<std::size_t>(k)].startTan) <
-            1.0 - 1e-6)
-      return Fail(Problem::SweepPathCorner, outWhy);  // a mitred corner — a later increment
+            1.0 - 1e-6) {
+      const SweepSegGeom& gi = seg[static_cast<std::size_t>(k - 1)];
+      const SweepSegGeom& go = seg[static_cast<std::size_t>(k)];
+      if (!classifyCorner(k, gi, go, gi.endTan))
+        return false;
+    }
   }
-  // The closing seam of a closed path is a joint like any other: the last segment's end tangent
-  // must meet the first segment's start tangent smoothly, or it is a mitred corner too.
-  if (closed &&
-      ray3d::Dot(seg[static_cast<std::size_t>(np - 2)].endTan, seg[0].startTan) < 1.0 - 1e-6)
-    return Fail(Problem::SweepPathCorner, outWhy);
+  // The closing seam of a closed path is a joint like any other: smooth, mitred, or refused. It
+  // shears ring 0 (aliased onto ring np-1 later) — there is no separate ring np-1 to shear.
+  bool closingMitred = false;
+  if (closed) {
+    const SweepSegGeom& gi = seg[static_cast<std::size_t>(np - 2)];
+    const SweepSegGeom& go = seg[0];
+    if (ray3d::Dot(gi.endTan, go.startTan) < 1.0 - 1e-6) {
+      if (!classifyCorner(0, gi, go, go.startTan))
+        return false;
+      closingMitred = true;
+    }
+  }
 
   // --- Carry a rotation-minimizing frame along the path ---------------------------------------
   std::vector<ucs::Ucs> frame(static_cast<std::size_t>(np));
   if (!SweepFrameAt(profile.plane, work.points[0], seg[0].startTan, options.alignToPath, 0.0,
                     &frame[0]))
     return Fail(Problem::DegenerateFrame, outWhy);
+  ucs::Ucs running = frame[0];
   for (int k = 1; k < np; ++k) {
     const SweepSegGeom& g = seg[static_cast<std::size_t>(k - 1)];
-    ucs::Ucs f = frame[static_cast<std::size_t>(k - 1)];
+    ucs::Ucs f = running;
     f.origin = work.points[static_cast<std::size_t>(k)];
     if (g.arc) {
       f.xAxis = RotateAbout(f.xAxis, g.axis, g.sweep);
@@ -2962,12 +3036,25 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
     if (!ucs::IsRightHandedOrthonormal(f, 1e-6))
       return Fail(Problem::DegenerateFrame, outWhy);
     frame[static_cast<std::size_t>(k)] = f;
+    running = f;
+    // A mitred joint's ring (just captured above, ⊥ the INCOMING tangent) is not what the next leg
+    // continues from: the next leg needs its own perpendicular reference, but TURNED to the new
+    // tangent from the CURRENT frame — not re-derived fresh from `profile.plane` (REQ-315
+    // 2026-09-04). Re-deriving fresh gives a different, generally inconsistent basis whenever the
+    // incoming frame is itself already rotated away from the profile's own plane (which it is, past
+    // the very first leg) — turning the current frame is what keeps this consistent with the shear,
+    // the same way arc propagation already turns the frame incrementally instead of re-deriving it.
+    if (mitreAt[static_cast<std::size_t>(k)]) {
+      if (!TurnFrameToTangent(&running, seg[static_cast<std::size_t>(k)].startTan))
+        return Fail(Problem::DegenerateFrame, outWhy);
+    }
   }
   // A closed path must close its frame too: the profile orientation carried all the way around must
   // match the orientation it started with, or the seam ring would be built twice, inconsistently.
   // A rotation-minimizing frame around a planar closed path closes by construction; this is a
-  // safety net for the general (non-planar) case, refused the same way a sharp corner is.
-  if (closed) {
+  // safety net for the general (non-planar) case, refused the same way a sharp corner is — but not
+  // when the seam is deliberately mitred, where a tangent (and so frame) discontinuity is expected.
+  if (closed && !closingMitred) {
     const ucs::Ucs& f0 = frame[0];
     const ucs::Ucs& fN = frame[static_cast<std::size_t>(np - 1)];
     if (ray3d::Dot(f0.xAxis, fN.xAxis) < 1.0 - 1e-6 || ray3d::Dot(f0.zAxis, fN.zAxis) < 1.0 - 1e-6)
@@ -2990,6 +3077,33 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
                          outWhy))
       return false;
   }
+  // --- Mitre shear: slide each mitred ring's vertices, individually, along the recorded tangent
+  // until they land on that joint's bisector plane (REQ-315 2026-09-04). Every vertex's
+  // straight-segment trajectory through the adjoining band is a line parallel to that same tangent
+  // (both segments at a mitred joint are straight, by construction — classifyCorner above), so this
+  // only slides each vertex along its own already-valid rail; it does not change which straight line
+  // it lies on, only where the (shared) ring cuts it — which is what keeps both adjoining bands'
+  // rails meeting this ring exactly, without a gap or an overlap.
+  for (int k = 0; k < np; ++k) {
+    if (!mitreAt[static_cast<std::size_t>(k)])
+      continue;
+    const Vec3& N = mitreN[static_cast<std::size_t>(k)];
+    const Vec3& T = mitreTangent[static_cast<std::size_t>(k)];
+    const Vec3& planePoint = work.points[static_cast<std::size_t>(k)];
+    const double denom = ray3d::Dot(T, N);  // cos(half the corner angle); > 0, SweepMitreCollapsed guards 0
+    for (Vec3& w : prep[static_cast<std::size_t>(k)].walk) {
+      const double t = ray3d::Dot(ray3d::Sub(planePoint, w), N) / denom;
+      w = ray3d::Add(w, ray3d::Scale(T, t));
+    }
+  }
+  // A closed path's last ring is the same ring as its first — `prep[np-1]` must be an ALIAS of
+  // `prep[0]` (whether or not the closing seam mitres), the same way `ringV`/`ringE` already are.
+  // Left un-aliased, the last band's own surface patches would be built from the STALE, unsheared
+  // `prep[np-1]` while their boundary EDGES point at the (correctly sheared) `ringV[0]` vertices —
+  // a patch that does not match its own boundary, which is exactly the defect a closed-surface
+  // volume check exists to catch.
+  if (closed)
+    prep[static_cast<std::size_t>(np - 1)] = prep[0];
   // Every arc segment: both of its rings must be clear of that segment's axis.
   for (int k = 0; k + 1 < np; ++k) {
     if (!seg[static_cast<std::size_t>(k)].arc)

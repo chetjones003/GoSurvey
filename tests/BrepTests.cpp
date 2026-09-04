@@ -4162,15 +4162,141 @@ TEST_CASE("Sweep along a bulge polyline path is a bent pipe with the summed volu
   REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-4));
 }
 
-TEST_CASE("Sweep refuses a mitred corner in the path by name", "[brep][req315]") {
+// ---------------------------------------------------------------------------------------------
+// A mitred sweep-path corner (REQ-315, 2026-09-04, GitHub issue #259): a sharp corner where both
+// adjoining path segments are straight and the profile is polygonal mitres — cut on the plane that
+// bisects the two tangents — rather than being refused. Its own volume identity (area x leg length,
+// summed) is what makes it testable without a numerical reference: the bisector plane passes through
+// the path's own vertex, so each leg keeps its full nominal length regardless of the plane's tilt.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("Sweep mitres a 90-degree corner between two straight segments", "[brep][req315]") {
   Problem why = Problem::Ok;
-  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
   brep::SweepPath path;
   path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}};  // a 90-degree corner at the joint
   path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
   Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  // One shared ring at the corner (mitred, not duplicated): 3 rings x 4 vertices, 2 bands x 4 side
+  // faces + 2 caps.
+  REQUIRE(CountOf(s).v == 12);
+  REQUIRE(CountOf(s).f == 10);
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(4.0 * 10.0 + 4.0 * 10.0).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep mitres both corners of a Z-shaped 3-segment path", "[brep][req315]") {
+  // Two corners in a row (not coplanar with each other) — the case that would catch a frame that
+  // does not correctly re-derive each leg's own orientation after the first mitre.
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{8, 0, 0}, Vec3{8, 0, 6}, Vec3{8, 5, 6}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE(CountOf(s).v == 16);  // 4 rings x 4 vertices
+  REQUIRE(CountOf(s).f == 14);  // 3 bands x 4 side faces + 2 caps
+  REQUIRE(brep::ComputeMassProperties(s).volume ==
+          Approx(4.0 * 8.0 + 4.0 * 6.0 + 4.0 * 5.0).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep mitres three consecutive corners of a helix-like 4-segment path", "[brep][req315]") {
+  // Three mitred corners in a row, none coplanar with the others (each turn is about a different
+  // axis) — a stress test for whether TurnFrameToTangent's running frame stays correct after TWO
+  // turns in a row, not just one.
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{5, 0, 0}, Vec3{5, 4, 0}, Vec3{5, 4, 3}, Vec3{9, 4, 3}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{},
+                   brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE(CountOf(s).v == 20);  // 5 rings x 4 vertices
+  REQUIRE(CountOf(s).f == 18);  // 4 bands x 4 side faces + 2 caps
+  REQUIRE(brep::ComputeMassProperties(s).volume ==
+          Approx(4.0 * 5.0 + 4.0 * 4.0 + 4.0 * 3.0 + 4.0 * 4.0).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep mitres every corner of a closed rectangular path", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-0.5, -0.5}, {0.5, -0.5}, {0.5, 0.5}, {-0.5, 0.5}});
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{6, 0, 0}, Vec3{6, 4, 0}, Vec3{0, 4, 0}, Vec3{0, 0, 0}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{},
+                   brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 0);  // no caps, closed — same as any closed sweep path
+  REQUIRE(CountOf(s).v == 16);                 // 4 rings (ring 4 aliased onto ring 0) x 4 vertices
+  REQUIRE(CountOf(s).f == 16);                 // 4 bands x 4 side faces, no caps
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(1.0 * (6.0 + 4.0 + 6.0 + 4.0)).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep still refuses a sharp corner touching an arc segment, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  brep::SweepPath path;
+  // A quarter-circle arc from (0,0,0) to (5,5,0), centre (0,5,0), ending heading +Y — then a
+  // straight leg heading +X instead of continuing +Y: a sharp joint that touches an arc segment.
+  path.points = {Vec3{0, 0, 0}, Vec3{5, 5, 0}, Vec3{15, 5, 0}};
+  brep::SweepSegment arcSeg;
+  arcSeg.arc = true;
+  arcSeg.centre = Vec3{0, 5, 0};
+  arcSeg.normal = Vec3{0, 0, 1};
+  arcSeg.sweep = kPi / 2.0;
+  path.segments = {arcSeg, brep::SweepSegment{}};
+  Solid s;
   REQUIRE_FALSE(brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why));
   REQUIRE(why == Problem::SweepPathCorner);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep refuses a mitred corner whose profile has an arc edge, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile circ = CircleProfile(World(), 1.0);
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}};  // the same 90-degree corner
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(circ, path, brep::SweepOptions{}, &s, &why));
+  REQUIRE(why == Problem::SweepMitreProfileArc);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep refuses a corner too sharp to mitre, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  brep::SweepPath path;
+  // A near-total reversal: out along +X, back almost exactly along -X — the bisector plane is
+  // degenerate (the tangents' sum is within the kernel's own collapse tolerance of zero).
+  const double delta = 1e-8;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0},
+                 Vec3{10 - 10.0 * std::cos(delta), 10.0 * std::sin(delta), 0}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why));
+  REQUIRE(why == Problem::SweepMitreCollapsed);
   REQUIRE(s.faces.empty());
 }
 
@@ -4272,18 +4398,25 @@ TEST_CASE("Sweep along a multi-segment path that closes into a loop builds with 
   REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-4));
 }
 
-TEST_CASE("Sweep refuses a closed path whose seam is a mitred corner, by name", "[brep][req315]") {
+TEST_CASE("Sweep mitres a closed triangular path, including the closing seam", "[brep][req315]") {
   Problem why = Problem::Ok;
-  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
-  // Two straight segments returning to the start but meeting the closing seam at a sharp angle —
-  // a triangle-shaped path, not tangent-continuous anywhere.
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  // Three straight segments returning to the start, mitred at every one of the three corners —
+  // including the closing seam back to the start, not tangent-continuous anywhere.
   brep::SweepPath path;
   path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}, Vec3{0, 0, 0}};
   path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
   Solid s;
-  REQUIRE_FALSE(brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why));
-  REQUIRE(why == Problem::SweepPathCorner);
-  REQUIRE(s.faces.empty());
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 0);  // closed, no caps
+  REQUIRE(CountOf(s).v == 12);                 // 3 rings (closing seam aliased) x 4 vertices
+  REQUIRE(CountOf(s).f == 12);                 // 3 bands x 4 side faces, no caps
+  const double perimeter = 10.0 + 10.0 + std::sqrt(200.0);
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(4.0 * perimeter).epsilon(1e-9));
 }
 
 // ---------------------------------------------------------------------------------------------
