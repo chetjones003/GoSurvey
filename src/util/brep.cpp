@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <limits>
 #include <map>
@@ -6745,6 +6746,291 @@ struct SkewBranch {
   return Succeed(outWhy);
 }
 
+/// The two mouths a general (tilted-and-skew) branch pipe cuts into `B`'s wall do not sit at fixed,
+/// predictable longitudes the way every narrower special case's do, so the wall's two seams have to
+/// be placed dynamically: at the midpoints of the two angular gaps between the mouths. Scans both
+/// mouths' `u`-extent the same way \ref BuildGeneralBranchPipeIntersection bounds them, orders the
+/// two by longitude, and returns the two seam angles (`seamA < seamB < seamA + 2π`) plus which
+/// mouth (`pFirst`) falls in `[seamA, seamB]`.
+struct GeneralBranchSeams {
+  double seamA = 0.0;
+  double seamB = 0.0;
+  bool pFirst = true;  ///< true: the `+` mouth (sign 1) is the one spanning [seamA, seamB].
+};
+
+[[nodiscard]] GeneralBranchSeams FindGeneralBranchSeams(const ucs::Ucs& fr,
+                                                        const std::function<Vec3(double, int)>& cpt) {
+  auto thickU = [&](const Vec3& p) {
+    const Vec3 d = ray3d::Sub(p, fr.origin);
+    return std::atan2(ray3d::Dot(d, fr.yAxis), ray3d::Dot(d, fr.xAxis));
+  };
+  auto scan = [&](int sign, double refPhi, double* lo, double* hi) {
+    const double uRef = thickU(cpt(refPhi, sign));
+    *lo = uRef;
+    *hi = uRef;
+    constexpr int kSamples = 360;
+    for (int i = 0; i <= kSamples; ++i) {
+      const double phi = kTwoPi * static_cast<double>(i) / kSamples;
+      double u = thickU(cpt(phi, sign));
+      u -= kTwoPi * std::round((u - uRef) / kTwoPi);
+      *lo = std::min(*lo, u);
+      *hi = std::max(*hi, u);
+    }
+  };
+  double pLo = 0.0, pHi = 0.0, nLo = 0.0, nHi = 0.0;
+  scan(1, kHalfPi, &pLo, &pHi);
+  scan(-1, -kHalfPi, &nLo, &nHi);
+  const double pC = 0.5 * (pLo + pHi);
+  double nC = 0.5 * (nLo + nHi);
+  const double shift = -kTwoPi * std::round((nC - pC) / kTwoPi);
+  nLo += shift;
+  nHi += shift;
+  nC += shift;
+  GeneralBranchSeams gs;
+  gs.pFirst = pC < nC;
+  const double lo1 = gs.pFirst ? pLo : nLo;
+  const double hi1 = gs.pFirst ? pHi : nHi;
+  const double lo2 = gs.pFirst ? nLo : pLo;
+  const double hi2 = gs.pFirst ? nHi : pHi;
+  gs.seamA = 0.5 * (hi1 + lo2);          // the gap between mouth 1 and mouth 2
+  gs.seamB = 0.5 * (hi2 + lo1 + kTwoPi);  // the gap between mouth 2 and mouth 1, wrapped
+  return gs;
+}
+
+/// `B − A` for the **fully general** branch pipe (REQ-314 B2b-2, GitHub issue #242): the thin `A`
+/// (tilted by \p alpha, offset by \p g — see \ref BuildGeneralBranchPipeIntersection) bored clean
+/// through the thick `B` (axis `fr.zAxis`, caps \p zB0 / \p zB1). `B`'s wall splits at the two
+/// dynamic seams \ref FindGeneralBranchSeams finds; everything else — the bore, the caps, the mouth
+/// loops' windings (fixed per edge, independent of which seam-bounded face ends up hosting them) —
+/// mirrors \ref BuildBranchPipeSubtract. 8 vertices, 12 edges, 6 faces; genus 1.
+[[nodiscard]] bool BuildGeneralBranchPipeSubtract(const ucs::Ucs& fr, double r, double R, double alpha,
+                                                  double g, double zB0, double zB1, Solid* out,
+                                                  Problem* outWhy) {
+  const double ca = std::cos(alpha);
+  const double sa = std::sin(alpha);
+  if (!(R > r) || !(r > 0.0) || !(ca > 1e-6) || !(zB1 - zB0 > 2.0 * r))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 Y = fr.yAxis;
+  const Vec3 Z = fr.zAxis;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+  const Vec3 tHat = ray3d::Add(ray3d::Scale(fr.xAxis, ca), ray3d::Scale(fr.zAxis, sa));
+  const Vec3 xaHat = ray3d::Add(ray3d::Scale(fr.xAxis, -sa), ray3d::Scale(fr.zAxis, ca));
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = W(Vec3{0.0, g, 0.0});
+  aSurf.frame.zAxis = tHat;
+  aSurf.frame.xAxis = xaHat;
+  aSurf.frame.yAxis = ray3d::Scale(Y, -1.0);
+  aSurf.radius = r;
+  aSurf.height = 8.0 * (R + std::fabs(g));
+  Surface bSurf;
+  bSurf.kind = SurfaceKind::Cylinder;
+  bSurf.frame = fr;
+  bSurf.radius = R;
+  bSurf.height = zB1 - zB0;
+
+  Solid s;
+  auto cpt = [&](double phi, int sign) {
+    const double K = r * std::cos(phi);
+    const double py = g - r * std::sin(phi);
+    const double root = std::sqrt(std::max(0.0, R * R - py * py));
+    const double zeta = (r * sa * std::cos(phi) + sign * root) / ca;
+    return W(Vec3{zeta * ca - K * sa, py, zeta * sa + K * ca});
+  };
+  const int p0 = AddVertex(&s, cpt(0.0, 1));
+  const int p1 = AddVertex(&s, cpt(kPi, 1));
+  const int n0 = AddVertex(&s, cpt(0.0, -1));
+  const int n1 = AddVertex(&s, cpt(kPi, -1));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = cpt(witnessPhi, sign);
+    e.isectSurfaces = {aSurf, bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int cpU = isect(p0, p1, 1.75 * kPi, 1);
+  const int cpL = isect(p0, p1, 0.25 * kPi, 1);
+  const int cnU = isect(n0, n1, 1.75 * kPi, -1);
+  const int cnL = isect(n0, n1, 0.25 * kPi, -1);
+  const int sA0 = AddLine(&s, n0, p0);
+  const int sAp = AddLine(&s, n1, p1);
+
+  const GeneralBranchSeams gs = FindGeneralBranchSeams(fr, cpt);
+  auto rimPt = [&](double th, double z) { return W(Vec3{R * std::cos(th), R * std::sin(th), z}); };
+  const Vec3 botC = W(Vec3{0.0, 0.0, zB0});
+  const Vec3 topC = W(Vec3{0.0, 0.0, zB1});
+  const int bA = AddVertex(&s, rimPt(gs.seamA, zB0));
+  const int bB = AddVertex(&s, rimPt(gs.seamB, zB0));
+  const int tA = AddVertex(&s, rimPt(gs.seamA, zB1));
+  const int tB = AddVertex(&s, rimPt(gs.seamB, zB1));
+  const int seamLineA = AddLine(&s, bA, tA);
+  const int seamLineB = AddLine(&s, bB, tB);
+  const int brAB = AddArc(&s, bA, bB, botC, Z, gs.seamB - gs.seamA);
+  const int brBA = AddArc(&s, bB, bA, botC, Z, kTwoPi - (gs.seamB - gs.seamA));
+  const int trAB = AddArc(&s, tA, tB, topC, Z, gs.seamB - gs.seamA);
+  const int trBA = AddArc(&s, tB, tA, topC, Z, kTwoPi - (gs.seamB - gs.seamA));
+
+  auto face = [&](const Surface& surf, double u0, double u1, std::vector<Loop> loops) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops = std::move(loops);
+    s.faces.push_back(std::move(f));
+  };
+  // [seamA, seamB] hosts mouth 2 (whichever sign comes second in the unwrapped order); the other
+  // face hosts mouth 1. Each mouth loop's own winding is fixed by the edge (see FindGeneralBranchSeams
+  // doc) — independent of which face slot it lands in.
+  const Loop pMouth{{{cpU, false}, {cpL, true}}};
+  const Loop nMouth{{{cnU, true}, {cnL, false}}};
+  const Loop& mouth2 = gs.pFirst ? nMouth : pMouth;
+  const Loop& mouth1 = gs.pFirst ? pMouth : nMouth;
+  face(bSurf, gs.seamA, gs.seamB,
+       {Loop{{{brAB, false}, {seamLineB, false}, {trAB, true}, {seamLineA, true}}}, mouth2});
+  face(bSurf, gs.seamB, gs.seamA + kTwoPi,
+       {Loop{{{brBA, false}, {seamLineA, false}, {trBA, true}, {seamLineB, true}}}, mouth1});
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{brAB, true}, {brBA, true}}));
+  s.faces.push_back(MakePlaneFace(topC, Z, {{trAB, false}, {trBA, false}}));
+  Surface aIn = aSurf;
+  aIn.inward = true;
+  face(aIn, 0.0, kPi, {Loop{{{cpL, false}, {sAp, true}, {cnL, true}, {sA0, false}}}});
+  face(aIn, kPi, kTwoPi, {Loop{{{cpU, true}, {sA0, true}, {cnU, false}, {sAp, false}}}});
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+/// `A ∪ B` for the **fully general** branch pipe (REQ-314 B2b-2, GitHub issue #242): same dynamic
+/// seam placement as \ref BuildGeneralBranchPipeSubtract; the two thin stubs run out along `±tHat`
+/// (`A`'s tilted axis) to flat caps at the axis parameters \p zetaA0 / \p zetaA1, exactly as
+/// \ref BuildAngledBranchPipeUnion's stubs do. 12 vertices, 18 edges, 10 faces.
+[[nodiscard]] bool BuildGeneralBranchPipeUnion(const ucs::Ucs& fr, double r, double R, double alpha,
+                                               double g, double zB0, double zB1, double zetaA0,
+                                               double zetaA1, Solid* out, Problem* outWhy) {
+  const double ca = std::cos(alpha);
+  const double sa = std::sin(alpha);
+  if (!(R > r) || !(r > 0.0) || !(ca > 1e-6) || !(zB1 - zB0 > 2.0 * r) || !(zetaA1 > zetaA0))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 Y = fr.yAxis;
+  const Vec3 Z = fr.zAxis;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+  const Vec3 tHat = ray3d::Add(ray3d::Scale(fr.xAxis, ca), ray3d::Scale(fr.zAxis, sa));
+  const Vec3 xaHat = ray3d::Add(ray3d::Scale(fr.xAxis, -sa), ray3d::Scale(fr.zAxis, ca));
+  auto thinPt = [&](double phi, double zeta) {
+    return W(Vec3{zeta * ca - r * std::cos(phi) * sa, g - r * std::sin(phi),
+                  zeta * sa + r * std::cos(phi) * ca});
+  };
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = W(Vec3{0.0, g, 0.0});
+  aSurf.frame.zAxis = tHat;
+  aSurf.frame.xAxis = xaHat;
+  aSurf.frame.yAxis = ray3d::Scale(Y, -1.0);
+  aSurf.radius = r;
+  aSurf.height = zetaA1 - zetaA0;
+  Surface bSurf;
+  bSurf.kind = SurfaceKind::Cylinder;
+  bSurf.frame = fr;
+  bSurf.radius = R;
+  bSurf.height = zB1 - zB0;
+
+  Solid s;
+  auto cpt = [&](double phi, int sign) {
+    const double root = std::sqrt(std::max(0.0, R * R - (g - r * std::sin(phi)) * (g - r * std::sin(phi))));
+    const double zeta = (r * sa * std::cos(phi) + sign * root) / ca;
+    return thinPt(phi, zeta);
+  };
+  const int p0 = AddVertex(&s, cpt(0.0, 1));
+  const int p1 = AddVertex(&s, cpt(kPi, 1));
+  const int n0 = AddVertex(&s, cpt(0.0, -1));
+  const int n1 = AddVertex(&s, cpt(kPi, -1));
+  const int k0 = AddVertex(&s, thinPt(0.0, zetaA1));
+  const int k1 = AddVertex(&s, thinPt(kPi, zetaA1));
+  const int m0 = AddVertex(&s, thinPt(0.0, zetaA0));
+  const int m1 = AddVertex(&s, thinPt(kPi, zetaA0));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = cpt(witnessPhi, sign);
+    e.isectSurfaces = {aSurf, bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int cpU = isect(p0, p1, 1.75 * kPi, 1);
+  const int cpL = isect(p0, p1, 0.25 * kPi, 1);
+  const int cnU = isect(n0, n1, 1.75 * kPi, -1);
+  const int cnL = isect(n0, n1, 0.25 * kPi, -1);
+  const int ks0 = AddLine(&s, p0, k0);
+  const int ksP = AddLine(&s, p1, k1);
+  const int ms0 = AddLine(&s, n0, m0);
+  const int msP = AddLine(&s, n1, m1);
+  const Vec3 kC = W(Vec3{zetaA1 * ca, g, zetaA1 * sa});
+  const Vec3 mC = W(Vec3{zetaA0 * ca, g, zetaA0 * sa});
+  const Vec3 negT = ray3d::Scale(tHat, -1.0);
+  const int krF = AddArc(&s, k0, k1, kC, tHat, kPi);
+  const int krB = AddArc(&s, k1, k0, kC, tHat, kPi);
+  const int mrF = AddArc(&s, m0, m1, mC, negT, kPi);
+  const int mrB = AddArc(&s, m1, m0, mC, negT, kPi);
+
+  const GeneralBranchSeams gs = FindGeneralBranchSeams(fr, cpt);
+  auto rimPt = [&](double th, double z) { return W(Vec3{R * std::cos(th), R * std::sin(th), z}); };
+  const Vec3 botC = W(Vec3{0.0, 0.0, zB0});
+  const Vec3 topC = W(Vec3{0.0, 0.0, zB1});
+  const int bA = AddVertex(&s, rimPt(gs.seamA, zB0));
+  const int bB = AddVertex(&s, rimPt(gs.seamB, zB0));
+  const int tA = AddVertex(&s, rimPt(gs.seamA, zB1));
+  const int tB = AddVertex(&s, rimPt(gs.seamB, zB1));
+  const int seamLineA = AddLine(&s, bA, tA);
+  const int seamLineB = AddLine(&s, bB, tB);
+  const int brAB = AddArc(&s, bA, bB, botC, Z, gs.seamB - gs.seamA);
+  const int brBA = AddArc(&s, bB, bA, botC, Z, kTwoPi - (gs.seamB - gs.seamA));
+  const int trAB = AddArc(&s, tA, tB, topC, Z, gs.seamB - gs.seamA);
+  const int trBA = AddArc(&s, tB, tA, topC, Z, kTwoPi - (gs.seamB - gs.seamA));
+
+  auto face = [&](const Surface& surf, double u0, double u1, std::vector<Loop> loops) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops = std::move(loops);
+    s.faces.push_back(std::move(f));
+  };
+  const Loop pMouth{{{cpU, false}, {cpL, true}}};
+  const Loop nMouth{{{cnU, false}, {cnL, true}}};
+  const Loop& mouth2 = gs.pFirst ? nMouth : pMouth;
+  const Loop& mouth1 = gs.pFirst ? pMouth : nMouth;
+  face(bSurf, gs.seamA, gs.seamB,
+       {Loop{{{brAB, false}, {seamLineB, false}, {trAB, true}, {seamLineA, true}}}, mouth2});
+  face(bSurf, gs.seamB, gs.seamA + kTwoPi,
+       {Loop{{{brBA, false}, {seamLineA, false}, {trBA, true}, {seamLineB, true}}}, mouth1});
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Z, -1.0), {{brAB, true}, {brBA, true}}));
+  s.faces.push_back(MakePlaneFace(topC, Z, {{trAB, false}, {trBA, false}}));
+  face(aSurf, 0.0, kPi, {Loop{{{cpL, false}, {ksP, false}, {krF, true}, {ks0, true}}}});
+  face(aSurf, kPi, kTwoPi, {Loop{{{cpU, true}, {ks0, false}, {krB, true}, {ksP, true}}}});
+  face(aSurf, 0.0, kPi, {Loop{{{cnL, false}, {msP, false}, {mrF, true}, {ms0, true}}}});
+  face(aSurf, kPi, kTwoPi, {Loop{{{cnU, true}, {ms0, false}, {mrB, true}, {msP, true}}}});
+  s.faces.push_back(MakePlaneFace(kC, tHat, {{krF, false}, {krB, false}}));
+  s.faces.push_back(MakePlaneFace(mC, negT, {{mrF, false}, {mrB, false}}));
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// `B − A` for a **non-perpendicular** branch pipe (REQ-314 B2b-2, GitHub issue #242): the thin
 /// branch `A` (radius \p r, tilted by \p alpha) bored clean through the thick main `B` (radius \p R,
 /// axis `fr.zAxis`, caps \p zB0 / \p zB1). `BuildBranchPipeSubtract` generalised the same way
@@ -7243,6 +7529,7 @@ struct SkewBranch {
     const double kPar = (ray3d::Dot(kd, rv) - axDot * ray3d::Dot(td, rv)) / den;
     const Vec3 cThin = ray3d::Add(thin.axis.origin, ray3d::Scale(td, tPar));
     const Vec3 cThick = ray3d::Add(thick.axis.origin, ray3d::Scale(kd, kPar));
+    const bool minuendThick = A.radius > B.radius;
 
     if (perp) {
       // Right angles, missing by `gap`, the thin fully crossing, caps clear. All three ops for a
@@ -7267,7 +7554,6 @@ struct SkewBranch {
       const double kAlong = ray3d::Dot(ray3d::Sub(cThick, thick.axis.origin), kd);
       if (kAlong - r < eps || thick.length - kAlong - r < eps)
         return false;  // a thick cap sits inside the lens
-      const bool minuendThick = A.radius > B.radius;
       *handled = true;
       const double zB0 = -kAlong;
       const double zB1 = thick.length - kAlong;
@@ -7298,11 +7584,12 @@ struct SkewBranch {
       return Succeed(outWhy);
     }
 
-    // Fully general: tilted AND skew (issue #242) — INTERSECT only so far. `gfr.xAxis` is the thin
-    // axis's own in-plane component (as in the coplanar-tilted case), `gfr.origin` sits on the thick
-    // axis at the closest approach, and the offset `g` — the thin axis's constant coordinate along
-    // `gfr.yAxis` — is the true common-perpendicular gap (may be negative; the builder doesn't care).
-    if (op != BoolOp::Intersect)
+    // Fully general: tilted AND skew (issue #242). `gfr.xAxis` is the thin axis's own in-plane
+    // component (as in the coplanar-tilted case), `gfr.origin` sits on the thick axis at the closest
+    // approach, and the offset `g` — the thin axis's constant coordinate along `gfr.yAxis` — is the
+    // true common-perpendicular gap (may be negative; the builders don't care). `thin − thick` still
+    // falls through — it would need its own stub builder, a later slice.
+    if (op == BoolOp::Subtract && !minuendThick)
       return false;
     ucs::Ucs gfr;
     if (!ucs::FromNormal(cThick, kd, &gfr))
@@ -7332,8 +7619,20 @@ struct SkewBranch {
         sThickAt - zBound < eps || thick.length - sThickAt - zBound < eps)
       return false;
     *handled = true;
+    const double zB0 = -sThickAt;
+    const double zB1 = thick.length - sThickAt;
+    const double zetaA0 = -sThinAt;
+    const double zetaA1 = thin.length - sThinAt;
     Solid result;
-    if (!BuildGeneralBranchPipeIntersection(gfr, r, R, galpha, gOff, &result, outWhy))
+    bool gok = false;
+    if (op == BoolOp::Intersect)
+      gok = BuildGeneralBranchPipeIntersection(gfr, r, R, galpha, gOff, &result, outWhy);
+    else if (op == BoolOp::Subtract)
+      gok = BuildGeneralBranchPipeSubtract(gfr, r, R, galpha, gOff, zB0, zB1, &result, outWhy);
+    else
+      gok = BuildGeneralBranchPipeUnion(gfr, r, R, galpha, gOff, zB0, zB1, zetaA0, zetaA1, &result,
+                                        outWhy);
+    if (!gok)
       return false;
     out->push_back(std::move(result));
     return Succeed(outWhy);
