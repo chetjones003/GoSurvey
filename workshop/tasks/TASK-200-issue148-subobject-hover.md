@@ -133,3 +133,64 @@ cases above. `EXPECT SUBOBJECTS`-style coverage of a hover would be asserting th
   it is a gate change, not new machinery.
 - **TASK-199's DEBT-2 and DEBT-3 stand** — the sub-object selection is still invisible to the
   Properties panel and the status bar, and TASK-189's face-interior containment gap is untouched.
+
+---
+
+## Follow-up, same day — the face preview was invisible, not absent
+
+Reported by the user with a reference image: *"the selection preview for the faces does not work …
+the line and point preview worked, it's just the faces that isn't working"*, plus *"make the face
+preview purple to tell apart from lines and points that are blue"*.
+
+### Diagnosis — it was drawing the whole time
+
+Not a missing draw, and worth stating because "does not work" and "cannot be seen" want opposite
+fixes. Three checks, none of them a guess:
+
+- the geometry was produced — the existing test asserted `hoverFaceTris` non-empty and passed;
+- the shader honours alpha (`FragColor = uColor;`), so the fill was not being forced opaque;
+- nothing enables `GL_CULL_FACE` anywhere in the renderer, so it was not being culled.
+
+What was left is arithmetic. The tint blends `SRC_ALPHA, ONE_MINUS_SRC_ALPHA` over whatever is
+behind it, and in **2D Wireframe — the default style — solids draw no faces at all**, so what is
+behind it is the empty viewport. `0.20 × (0.45, 0.72, 1.0)` over black is **RGB(23, 37, 51)**: black,
+to any eye, beside the white wireframe two pixels away. The line and vertex previews were opaque, so
+they were fine — exactly matching the report.
+
+**A translucent fill is the wrong primary treatment for this.** It only reads where there is
+something to tint, which in the default style there is not. The user's reference image shows the
+answer every CAD package uses: **outline the face**.
+
+### Changes
+
+- **A highlighted face now draws its BOUNDARY**, walked from the face's own loops — every loop, so a
+  face with a hole shows the hole, and each edge through `AppendSolidEdge`, shared with the edge
+  highlight, so a curved face outlines as a curve rather than a chord. The fill stays as the
+  supporting act and its alpha is raised (0.20 → 0.30 hover, 0.38 → 0.42 selected) for the shaded
+  styles where it does have something behind it.
+- **The face preview is PURPLE** (`0.72, 0.45, 1.0`), against the blue an edge or a vertex gets.
+  Three kinds share one cursor and precedence decides between them within a few pixels, so telling
+  them apart has to be possible at a glance rather than by reading the command line. The fill and
+  the outline take the constant from one place, or they read as two different things.
+- **The outline is NOT depth-tested**, unlike the fill. It is linework one pixel wide, and the rule
+  the fill has to break is the rule this one obeys: sunk into the surface it traces, it vanishes.
+
+### Test
+
+`A highlighted face draws its boundary, not only a fill` — the boundary is non-empty, is **exactly
+four segments** for a box's quadrilateral top face (a mere non-empty check would pass if the whole
+solid's wireframe were emitted, which would look almost right on screen), every vertex of it lies on
+that face's own plane at `z = 8` (what fails if the loop walk strays onto an adjacent face), the
+hover path outlines too, and an edge or vertex selection contributes no face boundary.
+
+This is the half that cannot be verified from a screenshot after the fact: a fill with no outline
+looks exactly like a bug report.
+
+`ctest` **1124/1124**.
+
+### Debt
+
+- **DEBT-4 — the tint's visibility is not asserted anywhere, and cannot be.** The failure was a
+  colour arithmetic result on a particular background, which no unit test sees. What is now pinned
+  is that a face emits linework at all — the property whose absence caused this. A genuine guard
+  would need a rendered-pixel comparison, which this project has no harness for.

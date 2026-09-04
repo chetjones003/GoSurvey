@@ -1469,8 +1469,21 @@ namespace {
 
 /// One sub-object's drawable geometry, appended. Shared by the selection highlight and the hover
 /// pre-highlight so the two cannot draw a picked face differently from a hovered one.
+/// Walk one solid edge into \p out as `GL_LINES`. Shared by the edge highlight and the face
+/// boundary, so a face's outline bends exactly as that same edge does when picked on its own.
+void AppendSolidEdge(const brep::Solid& sp, const brep::Edge& e, std::vector<float>* out) {
+  const int n = SubObjectEdgeChords(e);
+  ray3d::Vec3 prev = brep::EdgePointAt(sp, e, 0.0);
+  for (int i = 1; i <= n; ++i) {
+    const ray3d::Vec3 cur = brep::EdgePointAt(sp, e, static_cast<double>(i) / n);
+    AppendSeg(out, prev, cur);
+    prev = cur;
+  }
+}
+
 void AppendSubObjectGeometry(const AppCommandState& cmd, const SelectedSubObject& s, double armWorld,
-                             std::vector<float>* faceTris, std::vector<float>* lines) {
+                             std::vector<float>* faceTris, std::vector<float>* faceEdges,
+                             std::vector<float>* lines) {
   {
     if (s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= cmd.cadSolids.size())
       return;
@@ -1482,7 +1495,21 @@ void AppendSubObjectGeometry(const AppCommandState& cmd, const SelectedSubObject
     if (!sp || s.owner.lock() != sp)
       return;
     if (s.kind == solidpick::Kind::Face) {
-      if (!faceTris || s.index < 0 || static_cast<size_t>(s.index) >= sp->faces.size())
+      if (s.index < 0 || static_cast<size_t>(s.index) >= sp->faces.size())
+        return;
+      // The face's BOUNDARY first, because it is what the user actually sees. Every loop — the
+      // outer one and any holes — walked as its own edges, so a curved face outlines as a curve
+      // and a face with a hole shows the hole.
+      if (faceEdges) {
+        for (const brep::Loop& loop : sp->faces[static_cast<size_t>(s.index)].loops) {
+          for (const brep::EdgeUse& use : loop.uses) {
+            if (use.edge < 0 || static_cast<size_t>(use.edge) >= sp->edges.size())
+              continue;
+            AppendSolidEdge(*sp, sp->edges[static_cast<size_t>(use.edge)], faceEdges);
+          }
+        }
+      }
+      if (!faceTris)
         return;
       // The face's OWN triangles, from the per-solid cache. Not from `solidDisplayGeometry`, which
       // merges solids into shared buffers and keeps no face channel (REQ-318 item 13).
@@ -1502,14 +1529,7 @@ void AppendSubObjectGeometry(const AppCommandState& cmd, const SelectedSubObject
     } else if (s.kind == solidpick::Kind::Edge) {
       if (!lines || s.index < 0 || static_cast<size_t>(s.index) >= sp->edges.size())
         return;
-      const brep::Edge& e = sp->edges[static_cast<size_t>(s.index)];
-      const int n = SubObjectEdgeChords(e);
-      ray3d::Vec3 prev = brep::EdgePointAt(*sp, e, 0.0);
-      for (int i = 1; i <= n; ++i) {
-        const ray3d::Vec3 cur = brep::EdgePointAt(*sp, e, static_cast<double>(i) / n);
-        AppendSeg(lines, prev, cur);
-        prev = cur;
-      }
+      AppendSolidEdge(*sp, sp->edges[static_cast<size_t>(s.index)], lines);
     } else if (s.kind == solidpick::Kind::Vertex) {
       if (!lines || s.index < 0 || static_cast<size_t>(s.index) >= sp->vertices.size())
         return;
@@ -1533,20 +1553,24 @@ double SubObjectMarkerArm(const AppCommandState& cmd) {
 }  // namespace
 
 void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* faceTris,
-                             std::vector<float>* lines) {
+                             std::vector<float>* faceEdges, std::vector<float>* lines) {
   if (faceTris)
     faceTris->clear();
+  if (faceEdges)
+    faceEdges->clear();
   if (lines)
     lines->clear();
   const double arm = SubObjectMarkerArm(cmd);
   for (const SelectedSubObject& s : cmd.subObjectSelection)
-    AppendSubObjectGeometry(cmd, s, arm, faceTris, lines);
+    AppendSubObjectGeometry(cmd, s, arm, faceTris, faceEdges, lines);
 }
 
 void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>* faceTris,
-                                  std::vector<float>* lines) {
+                                  std::vector<float>* faceEdges, std::vector<float>* lines) {
   if (faceTris)
     faceTris->clear();
+  if (faceEdges)
+    faceEdges->clear();
   if (lines)
     lines->clear();
   if (!cmd.subObjectHoverValid)
@@ -1557,7 +1581,7 @@ void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>
   for (const SelectedSubObject& s : cmd.subObjectSelection)
     if (s.sameTarget(cmd.subObjectHover))
       return;
-  AppendSubObjectGeometry(cmd, cmd.subObjectHover, SubObjectMarkerArm(cmd), faceTris, lines);
+  AppendSubObjectGeometry(cmd, cmd.subObjectHover, SubObjectMarkerArm(cmd), faceTris, faceEdges, lines);
 }
 
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,

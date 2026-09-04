@@ -244,11 +244,12 @@ TEST_CASE("The sub-object highlight draws the geometry that was picked (REQ-318 
   AddBox(st, World(), 20.0, 10.0, 8.0);
   std::vector<std::string> log;
   std::vector<float> tris;
+  std::vector<float> faceEdges;
   std::vector<float> lines;
 
   SECTION("a face fills triangles and draws no linework") {
     REQUIRE(SubmitSubObjectPick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), false, log));
-    BuildSubObjectHighlight(st, &tris, &lines);
+    BuildSubObjectHighlight(st, &tris, &faceEdges, &lines);
     REQUIRE_FALSE(tris.empty());
     REQUIRE(tris.size() % 9 == 0);
     REQUIRE(lines.empty());
@@ -258,14 +259,14 @@ TEST_CASE("The sub-object highlight draws the geometry that was picked (REQ-318 
   }
   SECTION("an edge draws linework and fills nothing") {
     REQUIRE(SubmitSubObjectPick(st, RayAt({0, 40, 48}, {0, 5, 8}), Tol(0.5, 0.5), false, log));
-    BuildSubObjectHighlight(st, &tris, &lines);
+    BuildSubObjectHighlight(st, &tris, &faceEdges, &lines);
     REQUIRE(tris.empty());
     REQUIRE_FALSE(lines.empty());
     REQUIRE(lines.size() % 6 == 0);
   }
   SECTION("a vertex draws a three-axis cross centred on it") {
     REQUIRE(SubmitSubObjectPick(st, RayAt({60, 55, 58}, {10, 5, 8}), Tol(0.5, 0.5), false, log));
-    BuildSubObjectHighlight(st, &tris, &lines);
+    BuildSubObjectHighlight(st, &tris, &faceEdges, &lines);
     REQUIRE(tris.empty());
     REQUIRE(lines.size() == 3 * 6);  // three segments, six floats each
     // Each arm's midpoint is the vertex itself.
@@ -284,7 +285,7 @@ TEST_CASE("The sub-object highlight draws the geometry that was picked (REQ-318 
     st.cadSolids[0] = std::make_shared<const brep::Solid>(std::move(other));
     // Deliberately WITHOUT calling ExpireSubObjectSelection first: the highlight must be safe on
     // its own, so the order of the two in the frame cannot matter.
-    BuildSubObjectHighlight(st, &tris, &lines);
+    BuildSubObjectHighlight(st, &tris, &faceEdges, &lines);
     REQUIRE(tris.empty());
     REQUIRE(lines.empty());
   }
@@ -310,8 +311,9 @@ TEST_CASE("The hover pre-highlight names what a Ctrl click would take (REQ-318 i
   st.subObjectHover = hovered;
 
   std::vector<float> tris;
+  std::vector<float> faceEdges;
   std::vector<float> lines;
-  BuildSubObjectHoverHighlight(st, &tris, &lines);
+  BuildSubObjectHoverHighlight(st, &tris, &faceEdges, &lines);
   REQUIRE_FALSE(tris.empty());  // a face hover fills triangles
   REQUIRE(lines.empty());
 
@@ -322,16 +324,16 @@ TEST_CASE("The hover pre-highlight names what a Ctrl click would take (REQ-318 i
   SECTION("once selected, the pre-highlight steps aside") {
     // The selection highlight is the stronger statement; drawing a quieter one over it only muddies
     // the colour. Same rule BuildHoverHighlight already applies to entities.
-    BuildSubObjectHoverHighlight(st, &tris, &lines);
+    BuildSubObjectHoverHighlight(st, &tris, &faceEdges, &lines);
     REQUIRE(tris.empty());
     REQUIRE(lines.empty());
     // ...while the SELECTION highlight is of course still drawn.
-    BuildSubObjectHighlight(st, &tris, &lines);
+    BuildSubObjectHighlight(st, &tris, &faceEdges, &lines);
     REQUIRE_FALSE(tris.empty());
   }
   SECTION("no hover means no pre-highlight") {
     st.subObjectHoverValid = false;
-    BuildSubObjectHoverHighlight(st, &tris, &lines);
+    BuildSubObjectHoverHighlight(st, &tris, &faceEdges, &lines);
     REQUIRE(tris.empty());
     REQUIRE(lines.empty());
   }
@@ -341,7 +343,7 @@ TEST_CASE("The hover pre-highlight names what a Ctrl click would take (REQ-318 i
     brep::Problem why{};
     REQUIRE(brep::MakeBox(World(), 4.0, 4.0, 4.0, &other, &why));
     st.cadSolids[0] = std::make_shared<const brep::Solid>(std::move(other));
-    BuildSubObjectHoverHighlight(st, &tris, &lines);
+    BuildSubObjectHoverHighlight(st, &tris, &faceEdges, &lines);
     REQUIRE(tris.empty());
     REQUIRE(lines.empty());
   }
@@ -381,5 +383,60 @@ TEST_CASE("The sub-object rollover names the kind and the owning solid (REQ-318 
     SubObjectHoverRow out;
     REQUIRE_FALSE(BuildSubObjectHoverRow(st, none, &out));
     REQUIRE_FALSE(BuildSubObjectHoverRow(st, s, nullptr));
+  }
+}
+
+// The defect the user reported on 2026-09-04: "the face preview does not work — lines and points
+// work". It WAS drawing. A translucent fill tints what is behind it, and in 2D Wireframe — the
+// default style — solids draw no faces, so the wash landed on the empty viewport: 20% alpha of
+// (0.45,0.72,1.0) over black is RGB(23,37,51), which is black to any eye beside white wireframe.
+//
+// So a face has to draw its BOUNDARY, not only a fill. These cases pin that, because it is the half
+// that cannot be verified from a screenshot after the fact — a fill and no outline looks exactly
+// like a bug report.
+TEST_CASE("A highlighted face draws its boundary, not only a fill (REQ-318 item 11/14)", "[subobject]") {
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  AddBox(st, World(), 20.0, 10.0, 8.0);
+  std::vector<std::string> log;
+  std::vector<float> tris;
+  std::vector<float> faceEdges;
+  std::vector<float> lines;
+
+  REQUIRE(SubmitSubObjectPick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), false, log));
+  REQUIRE(st.subObjectSelection[0].kind == solidpick::Kind::Face);
+  BuildSubObjectHighlight(st, &tris, &faceEdges, &lines);
+
+  REQUIRE_FALSE(tris.empty());
+  REQUIRE_FALSE(faceEdges.empty());   // the half that was missing
+  REQUIRE(faceEdges.size() % 6 == 0);
+  REQUIRE(lines.empty());             // a face is not edge/vertex linework
+
+  // The top face of a box is a quadrilateral, so its boundary is four straight edges — four
+  // segments, no more. A count rather than a mere non-empty check: emitting the whole solid's
+  // wireframe would also be "not empty" and would look almost right on screen.
+  REQUIRE(faceEdges.size() == 4 * 6);
+  // Every vertex of it lies on the face's own plane, z = 8. This is what would fail if the loop
+  // walk picked up an adjacent face's edges.
+  for (size_t i = 2; i < faceEdges.size(); i += 3)
+    REQUIRE(faceEdges[i] == Catch::Approx(8.f));
+
+  SECTION("the hover pre-highlight outlines too") {
+    st.subObjectSelection.clear();
+    SelectedSubObject hovered;
+    REQUIRE(PickSubObjectAcrossSolids(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), &hovered));
+    st.subObjectHoverValid = true;
+    st.subObjectHover = hovered;
+    BuildSubObjectHoverHighlight(st, &tris, &faceEdges, &lines);
+    REQUIRE_FALSE(tris.empty());
+    REQUIRE(faceEdges.size() == 4 * 6);
+  }
+  SECTION("an edge or vertex contributes no face boundary") {
+    st.subObjectSelection.clear();
+    REQUIRE(SubmitSubObjectPick(st, RayAt({0, 40, 48}, {0, 5, 8}), Tol(0.5, 0.5), false, log));
+    REQUIRE(st.subObjectSelection[0].kind == solidpick::Kind::Edge);
+    BuildSubObjectHighlight(st, &tris, &faceEdges, &lines);
+    REQUIRE(faceEdges.empty());
+    REQUIRE_FALSE(lines.empty());
   }
 }

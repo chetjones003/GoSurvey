@@ -127,7 +127,24 @@ struct CadSolidDisplayGeometry {
 struct CadSubObjectOverlay {
   std::vector<float> selectedFaceTris;  ///< `GL_TRIANGLES`, nine floats per triangle, storage coords.
   std::vector<float> hoverFaceTris;     ///< the same, for what a `Ctrl` click would take.
-  [[nodiscard]] bool empty() const { return selectedFaceTris.empty() && hoverFaceTris.empty(); }
+  /// The same faces' BOUNDARY loops: `GL_LINES`, six floats per segment.
+  ///
+  /// **This is what actually makes a face selection visible, and the fill is the supporting act.**
+  /// A translucent tint reads only where there is something behind it to tint. In 2D Wireframe —
+  /// the default style, where solids draw no faces at all — the background is the empty viewport,
+  /// and a 20%-alpha wash over black comes out around RGB(23,37,51): black, to any eye, beside the
+  /// bright wireframe next to it. Outlining the face is how every CAD package shows this, for
+  /// exactly that reason.
+  ///
+  /// Their own channels rather than the shared highlight/hover line buffers because they carry
+  /// their own colour: a face reads PURPLE so it cannot be mistaken for the blue an edge or a
+  /// vertex uses (user request, 2026-09-04).
+  std::vector<float> selectedFaceEdges;
+  std::vector<float> hoverFaceEdges;
+  [[nodiscard]] bool empty() const {
+    return selectedFaceTris.empty() && hoverFaceTris.empty() && selectedFaceEdges.empty() &&
+           hoverFaceEdges.empty();
+  }
 };
 
 /// The chord tolerance solids are tessellated at, in drawing units.

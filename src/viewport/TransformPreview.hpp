@@ -60,7 +60,7 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* out
 /// draw-call budget (#194) and carry no per-face channel, so a face's own triangles cannot be
 /// recovered from them (REQ-318 item 13).
 void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* outFaceTris,
-                             std::vector<float>* outLines);
+                             std::vector<float>* outFaceEdges, std::vector<float>* outLines);
 
 /// The same, for the sub-object under the cursor that a `Ctrl` click WOULD take (REQ-318 item 14).
 ///
@@ -70,7 +70,7 @@ void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* out
 /// already selected: the selection highlight is the stronger statement and drawing both over one
 /// another only muddies it, which is the rule `BuildHoverHighlight` already applies to entities.
 void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>* outFaceTris,
-                                  std::vector<float>* outLines);
+                                  std::vector<float>* outFaceEdges, std::vector<float>* outLines);
 
 /// Hover highlight geometry for the viewport (entity under idle cursor, distinct from selection).
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* outHoverLines,

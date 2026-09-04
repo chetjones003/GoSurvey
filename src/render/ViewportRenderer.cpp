@@ -1065,6 +1065,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   constexpr GLfloat kLwSurvey = 1.65f;
   constexpr GLfloat kLwSnap = 1.35f;
   constexpr GLfloat kLwGizmo = 1.1f;
+  // REQ-318 item 14: a hovered FACE reads purple, where a hovered edge or vertex reads the ordinary
+  // hover blue. Three sub-object kinds share one cursor and precedence decides between them within
+  // a few pixels, so telling them apart has to be possible at a glance rather than by reading the
+  // command line (user request, 2026-09-04). Named once here because the fill and the outline must
+  // be the same colour or they read as two different things.
+  constexpr GLfloat kSubFaceHoverR = 0.72f;
+  constexpr GLfloat kSubFaceHoverG = 0.45f;
+  constexpr GLfloat kSubFaceHoverB = 1.f;
 
   GLint locMvp = glGetUniformLocation(lineProgram_, "uMVP");
   GLint locCol = glGetUniformLocation(lineProgram_, "uColor");
@@ -2073,16 +2081,39 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     // two never overlap (BuildSubObjectHoverHighlight emits nothing for an already-selected
     // sub-object); the order is what makes that a belt rather than the only brace.
     //
-    // The hover blue is the same hue as the entity hover stroke and half the selection's opacity:
-    // it has to read as "this is what you would get", not as "this is what you have".
-    drawTint(subObjectOverlay->hoverFaceTris, 0.45f, 0.72f, 1.f, 0.20f);
+    // PURPLE for a face, against the blue an edge or a vertex gets, so the three kinds are told
+    // apart at a glance rather than by reading the command line (user request, 2026-09-04).
+    drawTint(subObjectOverlay->hoverFaceTris, kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB, 0.30f);
     // The selection accent, translucent: opaque would hide the shading that says which way the face
     // turns, and on a curved face that shading is how the user reads the shape they just picked.
-    drawTint(subObjectOverlay->selectedFaceTris, 1.f, 0.92f, 0.15f, 0.38f);
+    drawTint(subObjectOverlay->selectedFaceTris, 1.f, 0.92f, 0.15f, 0.42f);
     glDisable(GL_BLEND);
     glPolygonOffset(0.f, 0.f);
     glDisable(GL_POLYGON_OFFSET_FILL);
     depthForOverlay();  // back to the rule for everything below
+
+    // The face BOUNDARY, and this is the half that actually reads. A translucent fill tints
+    // whatever is behind it, and in 2D Wireframe — the default — there is nothing behind it: solids
+    // draw no faces there, so the wash lands on the empty viewport and comes out near black. The
+    // outline is what makes a face selection visible at all in the style users spend most of their
+    // time in, and it is how every CAD package shows this.
+    //
+    // NOT depth-tested, unlike the fill: it is linework, one pixel wide, and the rule the fill has
+    // to break is the rule this obeys — sunk into the surface it traces, it would disappear.
+    const auto drawFaceEdges = [&](const std::vector<float>& segs, float r, float g, float b) {
+      if (segs.empty() || segs.size() % 6 != 0)
+        return;
+      ConvertLineVertsWorldToView(segs, viewAnchorX, viewAnchorY, &subTriRel);
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+      glUniform4f(locCol, r, g, b, 1.f);
+      glLineWidth(kLwHiLine);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(subTriRel.size() * sizeof(float)),
+                   subTriRel.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(subTriRel.size() / 3));
+      glLineWidth(kLwMain);
+    };
+    drawFaceEdges(subObjectOverlay->hoverFaceEdges, kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB);
+    drawFaceEdges(subObjectOverlay->selectedFaceEdges, 1.f, 0.92f, 0.15f);
   }
 
   // --- Selection highlight (accent stroke on top of committed geometry) ---

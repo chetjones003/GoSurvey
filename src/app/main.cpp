@@ -1163,7 +1163,8 @@ int main()
     CadSubObjectOverlay subObjectOverlay;
     {
       std::vector<float> subObjectLines;
-      BuildSubObjectHighlight(cmd, &subObjectOverlay.selectedFaceTris, &subObjectLines);
+      BuildSubObjectHighlight(cmd, &subObjectOverlay.selectedFaceTris, &subObjectOverlay.selectedFaceEdges,
+                              &subObjectLines);
       highlightLines.insert(highlightLines.end(), subObjectLines.begin(), subObjectLines.end());
     }
 
@@ -1175,7 +1176,8 @@ int main()
       // hover blue rather than the selection yellow with no second colour to define. `CadUi` has
       // already suppressed the entity hover while Ctrl is held, so the two cannot both be here.
       std::vector<float> subHoverLines;
-      BuildSubObjectHoverHighlight(cmd, &subObjectOverlay.hoverFaceTris, &subHoverLines);
+      BuildSubObjectHoverHighlight(cmd, &subObjectOverlay.hoverFaceTris, &subObjectOverlay.hoverFaceEdges,
+                                   &subHoverLines);
       hoverLines.insert(hoverLines.end(), subHoverLines.begin(), subHoverLines.end());
     }
 
