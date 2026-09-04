@@ -23872,6 +23872,31 @@ bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
   return true;
 }
 
+bool BuildSubObjectHoverRow(const AppCommandState& st, const SelectedSubObject& s,
+                            SubObjectHoverRow* out) {
+  if (!out || s.kind == solidpick::Kind::None || s.index < 0)
+    return false;
+  const CadSolidPtr sp = s.owner.lock();
+  if (!sp || s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= st.cadSolids.size() ||
+      st.cadSolids[static_cast<size_t>(s.solidIndex)] != sp)
+    return false;  // expired, or the index has not been repaired yet — say nothing rather than guess
+  out->title = std::string("Solid ") + solidpick::KindName(s.kind) + " " + std::to_string(s.index);
+  // 1-based, matching how the command line numbers solids everywhere else. A readout that counts
+  // from zero while the log counts from one is two names for one object.
+  out->solid = std::to_string(s.solidIndex + 1);
+  static const EntityAttributes kDefaults{};
+  const EntityAttributes& a = static_cast<size_t>(s.solidIndex) < st.cadSolidAttrs.size()
+                                  ? st.cadSolidAttrs[static_cast<size_t>(s.solidIndex)]
+                                  : kDefaults;
+  // The STORED values, not the resolved ones. "ByLayer" is the answer the user needs — it is what
+  // the Properties panel shows and what they would change — where a resolved "#FFFFFF" would hide
+  // the fact that the object is following its layer at all. Same choice AutoCAD's rollover makes.
+  out->color = a.color.empty() ? std::string("ByLayer") : a.color;
+  out->layer = a.layer.empty() ? std::string("0") : a.layer;
+  out->linetype = a.linetype.empty() ? std::string("ByLayer") : a.linetype;
+  return true;
+}
+
 bool SubmitSubObjectPick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                          bool toggle, std::vector<std::string>& log) {
   // Mutual exclusion, and the reason it is done HERE rather than by each caller: #148's criterion 2

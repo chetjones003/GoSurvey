@@ -1465,31 +1465,25 @@ void AppendSeg(std::vector<float>* out, const ray3d::Vec3& a, const ray3d::Vec3&
 
 }  // namespace
 
-void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* faceTris,
-                             std::vector<float>* lines) {
-  if (faceTris)
-    faceTris->clear();
-  if (lines)
-    lines->clear();
-  if (cmd.subObjectSelection.empty())
-    return;
-  // A vertex marker is a cross, and its arm is a fixed fraction of the VIEW rather than of the
-  // model: a marker sized in world units is a speck when zoomed out and fills the screen when
-  // zoomed in, which is the same reason the snap glyphs are screen-sized (REQ-058).
-  const double armWorld = std::max(1.e-9, static_cast<double>(cmd.viewportLastSurveyLayoutOrthoHalfH) * 0.012);
-  for (const SelectedSubObject& s : cmd.subObjectSelection) {
+namespace {
+
+/// One sub-object's drawable geometry, appended. Shared by the selection highlight and the hover
+/// pre-highlight so the two cannot draw a picked face differently from a hovered one.
+void AppendSubObjectGeometry(const AppCommandState& cmd, const SelectedSubObject& s, double armWorld,
+                             std::vector<float>* faceTris, std::vector<float>* lines) {
+  {
     if (s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= cmd.cadSolids.size())
-      continue;
+      return;
     const CadSolidPtr& sp = cmd.cadSolids[static_cast<size_t>(s.solidIndex)];
     // The reference expires rather than re-binds (ADR-049): if the solid it names is not the solid
     // it came from, an edit has replaced it and this index no longer means what it meant. Draw
     // nothing rather than highlight a face the user never picked. `ExpireSubObjectSelection` sweeps
     // these once a frame; this guard is what makes the order of the two not matter.
     if (!sp || s.owner.lock() != sp)
-      continue;
+      return;
     if (s.kind == solidpick::Kind::Face) {
       if (!faceTris || s.index < 0 || static_cast<size_t>(s.index) >= sp->faces.size())
-        continue;
+        return;
       // The face's OWN triangles, from the per-solid cache. Not from `solidDisplayGeometry`, which
       // merges solids into shared buffers and keeps no face channel (REQ-318 item 13).
       for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
@@ -1507,7 +1501,7 @@ void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* fac
       }
     } else if (s.kind == solidpick::Kind::Edge) {
       if (!lines || s.index < 0 || static_cast<size_t>(s.index) >= sp->edges.size())
-        continue;
+        return;
       const brep::Edge& e = sp->edges[static_cast<size_t>(s.index)];
       const int n = SubObjectEdgeChords(e);
       ray3d::Vec3 prev = brep::EdgePointAt(*sp, e, 0.0);
@@ -1518,7 +1512,7 @@ void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* fac
       }
     } else if (s.kind == solidpick::Kind::Vertex) {
       if (!lines || s.index < 0 || static_cast<size_t>(s.index) >= sp->vertices.size())
-        continue;
+        return;
       const ray3d::Vec3 v = sp->vertices[static_cast<size_t>(s.index)].p;
       // A three-axis cross, not a dot: a dot is one pixel of a colour the drawing may already use,
       // while a cross reads as a marker at any zoom and from any camera angle.
@@ -1529,6 +1523,42 @@ void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* fac
   }
 }
 
+/// A vertex marker's arm, as a fixed fraction of the VIEW rather than of the model: a marker sized
+/// in world units is a speck when zoomed out and fills the screen when zoomed in, which is the same
+/// reason the snap glyphs are screen-sized (REQ-058).
+double SubObjectMarkerArm(const AppCommandState& cmd) {
+  return std::max(1.e-9, static_cast<double>(cmd.viewportLastSurveyLayoutOrthoHalfH) * 0.012);
+}
+
+}  // namespace
+
+void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* faceTris,
+                             std::vector<float>* lines) {
+  if (faceTris)
+    faceTris->clear();
+  if (lines)
+    lines->clear();
+  const double arm = SubObjectMarkerArm(cmd);
+  for (const SelectedSubObject& s : cmd.subObjectSelection)
+    AppendSubObjectGeometry(cmd, s, arm, faceTris, lines);
+}
+
+void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>* faceTris,
+                                  std::vector<float>* lines) {
+  if (faceTris)
+    faceTris->clear();
+  if (lines)
+    lines->clear();
+  if (!cmd.subObjectHoverValid)
+    return;
+  // Already selected? Say nothing. The selection highlight is the stronger statement, and drawing a
+  // quieter one over it only muddies the colour — the rule BuildHoverHighlight already applies to
+  // entities ("skip if already selected — selection highlight takes visual precedence").
+  for (const SelectedSubObject& s : cmd.subObjectSelection)
+    if (s.sameTarget(cmd.subObjectHover))
+      return;
+  AppendSubObjectGeometry(cmd, cmd.subObjectHover, SubObjectMarkerArm(cmd), faceTris, lines);
+}
 
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,
                          std::vector<float>* hoverCircles) {

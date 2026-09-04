@@ -1155,20 +1155,29 @@ int main()
     std::vector<float> highlightCircles;
     BuildSelectionHighlight(cmd, &highlightLines, &highlightCircles);
 
-    // The sub-object selection (REQ-318 item 11). Its edge and vertex linework is APPENDED to the
-    // ordinary highlight channel, which is what gives it the never-occluded treatment the decision
-    // asks for; only the face tint needs a channel of its own, because only it is depth-tested.
-    std::vector<float> subObjectFaceTris;
+    // The sub-object selection (REQ-318 item 11) and the pre-highlight of what a Ctrl click would
+    // take (item 14). Their edge and vertex linework is APPENDED to the ordinary highlight and hover
+    // channels — which is what gives each the never-occluded treatment and the colour it should
+    // have, without a new channel for either. Only the face tints need a channel of their own,
+    // because only they are depth-tested.
+    CadSubObjectOverlay subObjectOverlay;
     {
       std::vector<float> subObjectLines;
-      BuildSubObjectHighlight(cmd, &subObjectFaceTris, &subObjectLines);
+      BuildSubObjectHighlight(cmd, &subObjectOverlay.selectedFaceTris, &subObjectLines);
       highlightLines.insert(highlightLines.end(), subObjectLines.begin(), subObjectLines.end());
     }
 
     std::vector<float> hoverLines;
     std::vector<float> hoverCircles;
-    if (cmd.activeSpaceIndex == kModelSpaceIndex) // no model-entity hover in paper space (incl. floating)
+    if (cmd.activeSpaceIndex == kModelSpaceIndex) { // no model-entity hover in paper space (incl. floating)
       BuildHoverHighlight(cmd, &hoverLines, &hoverCircles);
+      // The sub-object pre-highlight rides the same channel, so a hovered edge or vertex gets the
+      // hover blue rather than the selection yellow with no second colour to define. `CadUi` has
+      // already suppressed the entity hover while Ctrl is held, so the two cannot both be here.
+      std::vector<float> subHoverLines;
+      BuildSubObjectHoverHighlight(cmd, &subObjectOverlay.hoverFaceTris, &subHoverLines);
+      hoverLines.insert(hoverLines.end(), subHoverLines.begin(), subHoverLines.end());
+    }
 
     std::vector<float> surveyMarkers;
     if (!cmd.surveyPoints.empty())
@@ -1379,11 +1388,12 @@ int main()
                                // and every vertex the renderer receives. Paper space keeps its own
                                // 2D sheet grid and is deliberately excluded.
                                paperSpace ? nullptr : &ucsGridFrame,
-                               // The selected solid FACE's tint (REQ-318 item 11). Model space only,
-                               // like every other GL overlay here; its edges and vertices went into
-                               // `highlightLines` above and are drawn never-occluded, while this one
-                               // is depth-tested — see the renderer's own note at the draw.
-                               (paperSpace || subObjectFaceTris.empty()) ? nullptr : &subObjectFaceTris);
+                               // The selected and hovered solid FACE tints (REQ-318 items 11 and
+                               // 14). Model space only, like every other GL overlay here; the edges
+                               // and vertices of both went into the highlight and hover line
+                               // channels above and are drawn never-occluded, while these two are
+                               // depth-tested — see the renderer's own note at the draw.
+                               (paperSpace || subObjectOverlay.empty()) ? nullptr : &subObjectOverlay);
     cmd.perfRenderMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfRenderT0).count();
 

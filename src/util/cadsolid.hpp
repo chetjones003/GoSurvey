@@ -112,6 +112,24 @@ struct CadSolidDisplayGeometry {
   [[nodiscard]] bool empty() const { return solids.empty(); }
 };
 
+/// The sub-object overlay's FACE fills — the one selected, and the one the cursor is over
+/// (REQ-318 items 11 and 14).
+///
+/// One struct rather than two parameters on a `RenderScene` signature that is already 30 long, the
+/// same argument \ref CadSolidDisplayGeometry records for itself: these two are always built
+/// together and always consumed together, one frame apart at most.
+///
+/// **Faces only.** The sub-object selection's edge and vertex linework goes through the renderer's
+/// ordinary highlight and hover line channels, because there it gets exactly the treatment it
+/// wants — never occluded, since a line one pixel wide sunk into the surface it lies on is
+/// invisible. A face fill is the one part that must be depth-tested (D-2026-09-04-a), and that is
+/// why it needs a channel of its own at all.
+struct CadSubObjectOverlay {
+  std::vector<float> selectedFaceTris;  ///< `GL_TRIANGLES`, nine floats per triangle, storage coords.
+  std::vector<float> hoverFaceTris;     ///< the same, for what a `Ctrl` click would take.
+  [[nodiscard]] bool empty() const { return selectedFaceTris.empty() && hoverFaceTris.empty(); }
+};
+
 /// The chord tolerance solids are tessellated at, in drawing units.
 ///
 /// One value, not a per-solid setting: #120 asks that quality be configurable, and a single knob is

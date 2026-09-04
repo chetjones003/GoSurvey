@@ -2833,6 +2833,16 @@ struct AppCommandState {
   /// change (\ref SelectedSubObject) would be meaningless after a reload anyway.
   std::vector<SelectedSubObject> subObjectSelection;
 
+  /// What a `Ctrl` click WOULD take, under the cursor right now (REQ-318 item 14). Refreshed behind
+  /// the same gate as the entity hover pick, and by the same query the click uses — so what lights
+  /// up is what selects, by construction rather than by two code paths agreeing.
+  bool subObjectHoverValid = false;
+  SelectedSubObject subObjectHover;
+  /// Rest timer for the rollover readout, exactly as REQ-089's surface readout uses one: the
+  /// pre-highlight is immediate, the panel waits for the cursor to settle. A readout that tracks the
+  /// cursor continuously covers the geometry being picked.
+  HoverDwell subObjectHoverDwell{};
+
   /// Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS, as **stable entity ids** (REQ-084 (d),
   /// ADR-034). Kept SORTED so the per-entity test is a `binary_search`; empty is the overwhelming
   /// case and every gate early-outs on it, so nothing is paid for a drawing with no isolation.
@@ -5212,6 +5222,25 @@ void ToggleSubObjectSelection(AppCommandState& st, const SelectedSubObject& pick
 /// for this.
 bool SubmitSubObjectPick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                          bool toggle, std::vector<std::string>& log);
+
+/// What the sub-object rollover says (REQ-318 item 14) — the same four fields AutoCAD's rollover
+/// shows for an object, with the sub-object's KIND as the title.
+///
+/// Strings, resolved here rather than at draw time, for the reason \ref SurfaceHoverRow is: the
+/// readout is then purely presentational and the resolution — which is where "ByLayer" and a missing
+/// attribute row have to be handled — is testable without a window.
+struct SubObjectHoverRow {
+  std::string title;     ///< "Solid face" / "Solid edge" / "Solid vertex", plus the index.
+  std::string solid;     ///< which solid, 1-based, as the command line numbers them.
+  std::string color;
+  std::string layer;
+  std::string linetype;
+};
+
+/// Describe \p s for the rollover. False (and \p out untouched) when the reference no longer
+/// resolves — an expired reference has nothing truthful to say about a solid that is gone.
+[[nodiscard]] bool BuildSubObjectHoverRow(const AppCommandState& st, const SelectedSubObject& s,
+                                          SubObjectHoverRow* out);
 /// Replace selection with all entities of the same kind as the first selected item (or all survey points).
 /// Move the armed grip to (x, y) in local storage coordinates — the one place grip geometry is written, so
 /// the mouse drag and command-line distance entry cannot drift apart. No-op when no grip is armed.

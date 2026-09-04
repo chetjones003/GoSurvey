@@ -942,7 +942,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const VolumeMapDisplayGeometry* volumeMap,
                                    const std::vector<float>* removalLines,
                                    const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame,
-                                   const std::vector<float>* subObjectFaceTris) {
+                                   const CadSubObjectOverlay* subObjectOverlay) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -2047,9 +2047,18 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // passes GL_LEQUAL against the cleared buffer and the tint draws. That is the intent, not an
   // accident of the state: in the default style the tint is the only way a face selection is
   // visible at all.
-  if (subObjectFaceTris && !subObjectFaceTris->empty() && subObjectFaceTris->size() % 9 == 0) {
+  if (subObjectOverlay && !subObjectOverlay->empty()) {
     std::vector<float> subTriRel;
-    ConvertLineVertsWorldToView(*subObjectFaceTris, viewAnchorX, viewAnchorY, &subTriRel);
+    const auto drawTint = [&](const std::vector<float>& tris, float r, float g, float b, float a) {
+      if (tris.empty() || tris.size() % 9 != 0)
+        return;
+      ConvertLineVertsWorldToView(tris, viewAnchorX, viewAnchorY, &subTriRel);
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+      glUniform4f(locCol, r, g, b, a);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(subTriRel.size() * sizeof(float)),
+                   subTriRel.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(subTriRel.size() / 3));
+    };
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDepthMask(GL_FALSE);  // tint the face; do not become the surface for anything drawn after it
@@ -2059,13 +2068,17 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glPolygonOffset(-1.f, -1.f);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+    // Hover FIRST, so a selected face drawn over a hovered one wins — the same "selection always
+    // wins" ordering the hover and highlight line channels use a few lines above. In practice the
+    // two never overlap (BuildSubObjectHoverHighlight emits nothing for an already-selected
+    // sub-object); the order is what makes that a belt rather than the only brace.
+    //
+    // The hover blue is the same hue as the entity hover stroke and half the selection's opacity:
+    // it has to read as "this is what you would get", not as "this is what you have".
+    drawTint(subObjectOverlay->hoverFaceTris, 0.45f, 0.72f, 1.f, 0.20f);
     // The selection accent, translucent: opaque would hide the shading that says which way the face
     // turns, and on a curved face that shading is how the user reads the shape they just picked.
-    glUniform4f(locCol, 1.f, 0.92f, 0.15f, 0.38f);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(subTriRel.size() * sizeof(float)), subTriRel.data(),
-                 GL_STREAM_DRAW);
-    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(subTriRel.size() / 3));
+    drawTint(subObjectOverlay->selectedFaceTris, 1.f, 0.92f, 0.15f, 0.38f);
     glDisable(GL_BLEND);
     glPolygonOffset(0.f, 0.f);
     glDisable(GL_POLYGON_OFFSET_FILL);

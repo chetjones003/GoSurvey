@@ -289,3 +289,97 @@ TEST_CASE("The sub-object highlight draws the geometry that was picked (REQ-318 
     REQUIRE(lines.empty());
   }
 }
+
+// REQ-318 item 14 (D-2026-09-04-b) — the pre-highlight and the rollover.
+//
+// The GUI decides ONE thing about this feature: that Ctrl is the key that arms it. Everything
+// below — that the pre-highlight names what a click would take, that it steps aside for the
+// selection, and what the readout says — is command-layer behaviour, and is asserted here.
+TEST_CASE("The hover pre-highlight names what a Ctrl click would take (REQ-318 item 14)", "[subobject]") {
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  AddBox(st, World(), 20.0, 10.0, 8.0);
+  std::vector<std::string> log;
+  const auto atFace = RayAt({0, 0, 100}, {0, 0, 8});
+
+  // The pre-highlight and the click are the SAME query, so what lights up cannot disagree with what
+  // selects. Asserted by running the hover pick and the click pick on one ray and comparing.
+  SelectedSubObject hovered;
+  REQUIRE(PickSubObjectAcrossSolids(st, atFace, Tol(0.5, 0.5), &hovered));
+  st.subObjectHoverValid = true;
+  st.subObjectHover = hovered;
+
+  std::vector<float> tris;
+  std::vector<float> lines;
+  BuildSubObjectHoverHighlight(st, &tris, &lines);
+  REQUIRE_FALSE(tris.empty());  // a face hover fills triangles
+  REQUIRE(lines.empty());
+
+  REQUIRE(SubmitSubObjectPick(st, atFace, Tol(0.5, 0.5), false, log));
+  REQUIRE(st.subObjectSelection.size() == 1);
+  REQUIRE(st.subObjectSelection[0].sameTarget(hovered));
+
+  SECTION("once selected, the pre-highlight steps aside") {
+    // The selection highlight is the stronger statement; drawing a quieter one over it only muddies
+    // the colour. Same rule BuildHoverHighlight already applies to entities.
+    BuildSubObjectHoverHighlight(st, &tris, &lines);
+    REQUIRE(tris.empty());
+    REQUIRE(lines.empty());
+    // ...while the SELECTION highlight is of course still drawn.
+    BuildSubObjectHighlight(st, &tris, &lines);
+    REQUIRE_FALSE(tris.empty());
+  }
+  SECTION("no hover means no pre-highlight") {
+    st.subObjectHoverValid = false;
+    BuildSubObjectHoverHighlight(st, &tris, &lines);
+    REQUIRE(tris.empty());
+    REQUIRE(lines.empty());
+  }
+  SECTION("an expired hover reference draws nothing") {
+    st.subObjectSelection.clear();
+    brep::Solid other;
+    brep::Problem why{};
+    REQUIRE(brep::MakeBox(World(), 4.0, 4.0, 4.0, &other, &why));
+    st.cadSolids[0] = std::make_shared<const brep::Solid>(std::move(other));
+    BuildSubObjectHoverHighlight(st, &tris, &lines);
+    REQUIRE(tris.empty());
+    REQUIRE(lines.empty());
+  }
+}
+
+TEST_CASE("The sub-object rollover names the kind and the owning solid (REQ-318 item 14)", "[subobject]") {
+  AppCommandState st;
+  AddBox(st, World(), 20.0, 10.0, 8.0);
+  st.cadSolidAttrs[0].layer = "Structures";
+  std::vector<std::string> log;
+
+  SelectedSubObject s;
+  REQUIRE(PickSubObjectAcrossSolids(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), &s));
+
+  SubObjectHoverRow row;
+  REQUIRE(BuildSubObjectHoverRow(st, s, &row));
+  REQUIRE(row.title.rfind("Solid face", 0) == 0);
+  // 1-based, matching how the command line numbers solids. A readout counting from zero while the
+  // log counts from one is two names for one object.
+  REQUIRE(row.solid == "1");
+  REQUIRE(row.layer == "Structures");
+  // The STORED value, not the resolved one: "ByLayer" is what the Properties panel shows and what
+  // the user would change, where a resolved "#FFFFFF" would hide that the solid follows its layer.
+  REQUIRE(row.color == "ByLayer");
+  REQUIRE(row.linetype == "ByLayer");
+
+  SECTION("an expired reference says nothing rather than describing a stale solid") {
+    brep::Solid other;
+    brep::Problem why{};
+    REQUIRE(brep::MakeBox(World(), 4.0, 4.0, 4.0, &other, &why));
+    st.cadSolids[0] = std::make_shared<const brep::Solid>(std::move(other));
+    SubObjectHoverRow stale;
+    REQUIRE_FALSE(BuildSubObjectHoverRow(st, s, &stale));
+  }
+  SECTION("a kindless reference is refused") {
+    SelectedSubObject none;
+    SubObjectHoverRow out;
+    REQUIRE_FALSE(BuildSubObjectHoverRow(st, none, &out));
+    REQUIRE_FALSE(BuildSubObjectHoverRow(st, s, nullptr));
+  }
+}

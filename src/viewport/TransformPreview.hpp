@@ -62,6 +62,16 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* out
 void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* outFaceTris,
                              std::vector<float>* outLines);
 
+/// The same, for the sub-object under the cursor that a `Ctrl` click WOULD take (REQ-318 item 14).
+///
+/// A separate call rather than a flag on the one above, because the two are drawn in different
+/// colours through different channels — the hover's linework joins the ordinary blue hover channel
+/// and its face tint is quieter than the selection's. Emits nothing when the hovered sub-object is
+/// already selected: the selection highlight is the stronger statement and drawing both over one
+/// another only muddies it, which is the rule `BuildHoverHighlight` already applies to entities.
+void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>* outFaceTris,
+                                  std::vector<float>* outLines);
+
 /// Hover highlight geometry for the viewport (entity under idle cursor, distinct from selection).
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* outHoverLines,
                          std::vector<float>* outHoverCircles);

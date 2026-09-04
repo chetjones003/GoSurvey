@@ -884,6 +884,45 @@ static void DrawSurfaceAnalysisLegend(const AppCommandState& cmd, ImVec2 imgPos,
   }
 }
 
+/// Draw the sub-object rollover beside the cursor (REQ-318 item 14) — what a `Ctrl` click would
+/// take, and the properties of the solid it belongs to.
+///
+/// **Nothing is latched, unlike \ref DrawSurfaceRolloverReadout**, and for the same reason
+/// \ref DrawSurveyPointRolloverReadout is not: the pick that supplies the answer has already run
+/// this frame for the pre-highlight, so there is no expensive query to defer and nothing to hold
+/// across frames. Only the DWELL is borrowed from REQ-089 — a panel that tracks the cursor
+/// continuously covers the very geometry being picked, which is exactly the complaint that put a
+/// rest timer on the surface readout.
+///
+/// Purely presentational: `BuildSubObjectHoverRow` resolved every string, so this reads and formats.
+static void DrawSubObjectRolloverReadout(const AppCommandState& cmd) {
+  if (!cmd.subObjectHoverValid)
+    return;
+  SubObjectHoverRow row;
+  if (!BuildSubObjectHoverRow(cmd, cmd.subObjectHover, &row))
+    return;  // the reference no longer resolves — say nothing rather than describe a stale solid
+
+  // Guarded, as the surface readout's own note explains: BeginTooltip returns false when ImGui
+  // declines to open the window, and EndTooltip must not be called then.
+  if (!ImGui::BeginTooltip())
+    return;
+
+  // Same measured-offset alignment the surface readout uses, against this panel's widest label.
+  const float valueX = ImGui::CalcTextSize("Linetype").x + ImGui::GetStyle().ItemSpacing.x * 2.f;
+  ImGui::TextUnformatted(row.title.c_str());
+  ImGui::Spacing();
+  const auto field = [valueX](const char* label, const std::string& value) {
+    ImGui::TextDisabled("%s", label);
+    ImGui::SameLine(valueX);
+    ImGui::TextUnformatted(value.c_str());
+  };
+  field("Solid", row.solid);
+  field("Color", row.color);
+  field("Layer", row.layer);
+  field("Linetype", row.linetype);
+  ImGui::EndTooltip();
+}
+
 /// Draw the survey-point rollover readout beside the cursor (REQ-090), for the point at
 /// `cmd.surveyPoints[ix]`.
 ///
@@ -13361,9 +13400,39 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                  /*maxIdleSec=*/0.25);
       cmd.perfHoverPickRan = runHoverPick;
       const auto perfHoverT0 = std::chrono::steady_clock::now();
+      // Sub-object pre-highlight (REQ-318 item 14, D-2026-09-04-b): while Ctrl is held, show what a
+      // click WOULD take before it is taken. Precedence is vertex-then-edge-then-face within
+      // screen-derived tolerances, so on a corner a few pixels decide between three different
+      // answers — without this the only way to find out is to click and read the log.
+      //
+      // Behind `runHoverPick`, the same gate the entity pick uses, which is the whole reason
+      // TASK-199's DEBT-1 could be reversed: this is not a second per-frame walk beside the existing
+      // hover, it is the same budget. It also SUPPRESSES the entity hover rather than drawing beside
+      // it — two highlights answering one cursor is the defect, not the feature.
+      const bool subObjectHovering = modelSpace && !blockEntityHover && ImGui::GetIO().KeyCtrl;
+      if (subObjectHovering) {
+        cmd.viewportHoverEntityValid = false;
+        if (runHoverPick) {
+          const ray3d::Ray hoverRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+          solidpick::Tolerance hoverTol;
+          // The same budget the click uses — literally the same call — so the pre-highlight cannot
+          // name one sub-object while the click takes another.
+          hoverTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
+          hoverTol.edge = hoverTol.vertex;
+          SelectedSubObject hovered;
+          cmd.subObjectHoverValid =
+              PickSubObjectAcrossSolids(cmd, hoverRay, hoverTol, &hovered);
+          if (cmd.subObjectHoverValid)
+            cmd.subObjectHover = hovered;
+        }
+      } else {
+        cmd.subObjectHoverValid = false;
+      }
       if (blockEntityHover) {
         cmd.viewportHoverEntityValid = false;
         cmd.viewportHoverPickGate.primed = false;
+      } else if (subObjectHovering) {
+        // Handled above; the entity hover stays off while Ctrl is held.
       } else if (runHoverPick) {
         // Text annotations are picked by bounding box and take priority over geometry, mirroring
         // click-to-select (the annotation pick runs before the entity pick on a click). Hovering text
@@ -13541,7 +13610,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // fall back to for the remainder of the rest — `elapsed` cannot come again without a real move. So
     // the query always runs on `elapsed`, unconditionally; only which readout is drawn reads `onPoint`,
     // decided fresh every single frame from the current pick.
-    if (surfaceReadoutAllowed) {
+    // REQ-318 item 14 takes precedence over both of the readouts below while Ctrl is held: Ctrl is
+    // the user saying they are asking about solids, and three panels competing for one cursor is
+    // worse than any of them. Its own dwell, so releasing Ctrl and resting on a surface still costs
+    // a fresh rest rather than firing off a timer that ran while this panel was showing.
+    if (cmd.subObjectHoverValid) {
+      const HoverDwellTick subTick = UpdateHoverDwell(&cmd.subObjectHoverDwell, mx, my, nowSec,
+                                                      kSurfaceRolloverMoveTolPx, kSurfaceRolloverDwellSec);
+      if (subTick.settled)
+        DrawSubObjectRolloverReadout(cmd);
+      // The surface timer is re-based rather than left running, for the reason the else-branch
+      // below gives: coming back to it should cost a dwell, not fire instantly.
+      cmd.surfaceHoverRows.clear();
+      ResetHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec);
+    } else if (surfaceReadoutAllowed) {
+      ResetHoverDwell(&cmd.subObjectHoverDwell, mx, my, nowSec);
       const HoverDwellTick tick = UpdateHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec,
                                                    kSurfaceRolloverMoveTolPx, kSurfaceRolloverDwellSec);
       if (tick.moved)
@@ -13559,6 +13642,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // firing instantly on a timer that kept running while the readout was hidden.
       cmd.surfaceHoverRows.clear();
       ResetHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec);
+      ResetHoverDwell(&cmd.subObjectHoverDwell, mx, my, nowSec);
     }
   }
 

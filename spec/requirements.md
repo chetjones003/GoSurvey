@@ -6405,6 +6405,27 @@ capability that does not exist. They are recorded here rather than quietly dropp
   13. **The highlight is built from the per-solid tessellation**, not from the coalesced display
       batches. Those merge solids that draw identically into shared buffers for REQ-100's draw-call
       budget and carry no per-face channel, so a face's triangles cannot be recovered from them.
+  14. **While `Ctrl` is held, the sub-object under the cursor is shown BEFORE it is clicked** — a
+      pre-highlight in a quieter treatment than the selection's, plus a rollover readout naming what
+      would be selected and the properties of the solid it belongs to (D-2026-09-04-b).
+
+      Not decoration. Precedence is vertex-then-edge-then-face within screen-derived tolerances
+      (item 3), so which of the three a click will take is a function of the cursor's distance from
+      geometry the user cannot measure by eye — on a box corner, a few pixels decide between a
+      vertex, an edge and a face. Without the pre-highlight the only way to find out is to click and
+      read the log, which makes every pick a guess and a correction. The whole-entity hover
+      pre-highlight REQ-036 and REQ-039 already require exists for the weaker version of this
+      problem.
+
+      The readout follows the surface rollover REQ-089 established, including its **dwell**: it
+      appears once the cursor comes to rest and goes when it moves, because a panel that tracks the
+      cursor continuously obscures the geometry being picked. While `Ctrl` is held it takes
+      precedence over the surface and survey-point readouts — `Ctrl` says the user is asking about
+      solids.
+
+      **The pre-highlight pick must not cost the frame budget.** It runs behind the same gate the
+      entity hover pick already uses (a movement tolerance, a minimum interval, an idle cut-off), and
+      the broad-phase bounds reject of item 7 applies to it unchanged.
 - Acceptance:
   - a face pick on a cylinder reports a point on the cylinder of radius `r` **and at the azimuth the
     ray was aimed along** — both, because the projection makes the radius exact for any nearby input,
@@ -6442,6 +6463,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a selected whole solid draws a highlight — the case that did not exist before this increment;
   - the face fill is depth-tested and the edge and vertex linework is not, in the styles that have a
     depth buffer at all;
+  - holding `Ctrl` over a face, an edge and a vertex pre-highlights each of them, in a treatment
+    distinct from the selection's, and the pre-highlight names the same sub-object a click would
+    take — it is the same query, so it cannot disagree;
+  - releasing `Ctrl`, or moving off every solid, leaves no pre-highlight behind;
+  - the rollover names the sub-object's KIND and the owning solid's colour, layer and linetype, and
+    appears only once the cursor has come to rest;
+  - a sub-object pre-highlight suppresses the whole-entity hover highlight rather than drawing both;
+  - the pre-highlight pick runs behind the existing hover gate, not once per frame.
   - the pick's geometry and its refusals are all decided without a window or a document.
 - Owner-layer: Domain (the pick query), UI/Commands (casting the ray, converting the tolerances, and
   what is done with the answer)
