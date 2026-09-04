@@ -127,7 +127,7 @@ bool BrowseSaveFileDwgUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNam
   return WideToUtf8(path, utf8Out, utf8Cap);
 }
 
-bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap) {
+bool BrowseOpenFileGstUtf8(char* utf8Out, size_t utf8Cap) {
   if (!utf8Out || utf8Cap < 4)
     return false;
   wchar_t wfile[MAX_PATH]{};
@@ -135,7 +135,7 @@ bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lStructSize = sizeof(ofn);
   ofn.lpstrFile = wfile;
   ofn.nMaxFile = MAX_PATH;
-  ofn.lpstrFilter = L"GoSurvey (*.gs)\0*.gs\0All (*.*)\0*.*\0\0";
+  ofn.lpstrFilter = L"GoSurvey Template (*.gst)\0*.gst\0All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
   if (!GetOpenFileNameW(&ofn))
@@ -206,8 +206,7 @@ bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lpstrFile = wfile;
   ofn.nMaxFile = MAX_PATH;
   ofn.lpstrTitle = L"Import Block";
-  ofn.lpstrFilter = L"Blocks (*.gs;*.dxf;*.dwg)\0*.gs;*.dxf;*.dwg\0"
-                    L"GoSurvey (*.gs)\0*.gs\0"
+  ofn.lpstrFilter = L"Blocks (*.dxf;*.dwg)\0*.dxf;*.dwg\0"
                     L"Drawing Exchange (*.dxf)\0*.dxf\0"
                     L"AutoCAD Drawing (*.dwg)\0*.dwg\0"
                     L"All (*.*)\0*.*\0\0";
@@ -217,34 +216,6 @@ bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap) {
   if (!GetOpenFileNameW(&ofn))
     return false;
   return WideToUtf8(wfile, utf8Out, utf8Cap);
-}
-
-bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8) {
-  if (!utf8Out || utf8Cap < 4)
-    return false;
-  wchar_t wfile[MAX_PATH]{};
-  if (defaultNameUtf8 && defaultNameUtf8[0] != '\0')
-    Utf8ToWide(defaultNameUtf8, wfile, MAX_PATH);
-  else
-    wcscpy_s(wfile, L"drawing.gs");
-
-  OPENFILENAMEW ofn{};
-  ofn.lStructSize = sizeof(ofn);
-  ofn.lpstrFile = wfile;
-  ofn.nMaxFile = MAX_PATH;
-  ofn.lpstrFilter = L"GoSurvey (*.gs)\0*.gs\0All (*.*)\0*.*\0\0";
-  ofn.nFilterIndex = 1;
-  ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
-  if (!GetSaveFileNameW(&ofn))
-    return false;
-
-  wchar_t path[MAX_PATH]{};
-  wcscpy_s(path, wfile);
-  const size_t L = wcslen(path);
-  const bool hasExt = L >= 3 && (_wcsicmp(path + L - 3, L".gs") == 0);
-  if (!hasExt && L + 3 < MAX_PATH)
-    wcscat_s(path, MAX_PATH, L".gs");
-  return WideToUtf8(path, utf8Out, utf8Cap);
 }
 
 bool BrowseSaveFileDxfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8) {
@@ -385,14 +356,7 @@ bool BrowseSaveFileDwgUtf8(char* utf8Out, size_t utf8Cap, const char*) {
   return false;
 }
 
-bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap) {
-  if (utf8Out && utf8Cap > 0)
-    utf8Out[0] = '\0';
-  (void)utf8Cap;
-  return false;
-}
-
-bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+bool BrowseOpenFileGstUtf8(char* utf8Out, size_t utf8Cap) {
   if (utf8Out && utf8Cap > 0)
     utf8Out[0] = '\0';
   (void)utf8Cap;

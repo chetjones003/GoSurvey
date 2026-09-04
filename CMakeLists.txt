@@ -556,8 +556,8 @@ target_compile_definitions(GoSurvey PRIVATE GLEW_STATIC)
 
 if(WIN32)
   # Stable, version-free filename (ADR-029 (b)). A version-stamped name changes the path
-  # of the installed program on every release, which breaks shortcuts, the .gs association's
-  # shell\open\command, and any form of self-replacement — all three of which REQ-078 needs.
+  # of the installed program on every release, which breaks shortcuts and any form of
+  # self-replacement — both of which REQ-078 needs.
   # Existing GoSurvey-<version>.exe files are swept by [InstallDelete] in installer/GoSurvey.iss.
   set_target_properties(GoSurvey PROPERTIES OUTPUT_NAME "GoSurvey" WIN32_EXECUTABLE TRUE)
   if(MSVC)
@@ -573,7 +573,7 @@ gosurvey_enable_pch(GoSurvey)
 # project default (C++17), so it cannot consume it (D-2026-08-31-a).
 set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
-set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gs")
+set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gst")
 add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
@@ -586,7 +586,7 @@ add_custom_command(TARGET GoSurvey POST_BUILD
           "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gs"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gst"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
@@ -658,6 +658,29 @@ if(GOSURVEY_BUILD_HEADLESS)
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
 
   gosurvey_target_warnings(gosurvey_headless)
+
+  # GsJsonDwgFixture (issue #264): converts between raw GoSurvey JSON (the .gst template shape,
+  # REQ-175) and a .dwg carrying it as the ADR-044 trailer. Used by tools/Make-*.ps1 to author
+  # samples/*.dwg test fixtures from readable JSON — not shipped, like gosurvey_headless.
+  add_executable(GsJsonDwgFixture
+    tools/GsJsonDwgFixture.cpp
+    src/platform/HeadlessFileDialogs.cpp
+    src/platform/HeadlessPdfAttach.cpp
+  )
+  target_include_directories(GsJsonDwgFixture PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/font
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${NLOHMANN_JSON_INCLUDE}
+    ${CMAKE_BINARY_DIR}/generated
+  )
+  target_link_libraries(GsJsonDwgFixture PRIVATE gosurvey_domain LibreDWG::libredwg)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -960,6 +983,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CadSnapTests.cpp
     tests/GsIoDimAngularTests.cpp
     tests/GsIoViewportCameraTests.cpp
+    tests/GsMigrateLegacyBreaklineTests.cpp
     tests/ViewportUcsTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp

@@ -185,7 +185,7 @@ CHECK ALL
 # is local (36.39257518, 39.69194649). The full precision matters: a pick a thousandth off the
 # constraint line interpolates into the neighbouring triangle and reads 499.9 instead of 500.000,
 # which would make this test look flaky rather than exact.
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE EG, Ground + Curb
 CMD FEATURELINE Ridge
 CMD 30,40,500

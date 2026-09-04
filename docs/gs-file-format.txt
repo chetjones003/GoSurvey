@@ -2,6 +2,14 @@
   GoSurvey workspace file (.gs) — format specification and load behavior
 ================================================================================
 
+NOTE (2026-09-04, D-2026-09-03-h / issue #264): standalone .gs as an openable document
+format is RETIRED — there is no File > Open/Save, no OPEN/SAVEAS verb, and no Windows
+file association for .gs any more. The JSON schema this document describes lives on in
+two places only: (1) embedded as a trailer inside every .dwg (ADR-044; the drawing
+document is .dwg), and (2) as the .gst workspace-template format (same shape, its own
+narrow reader/writer, no file association). Everything below still describes that JSON
+schema accurately — only the file extension and the ability to open it standalone changed.
+
 This document describes the native GoSurvey workspace file format (extension
 .gs), how it is structured on disk, and exactly how the application reads it.
 It is derived from the implementation in:

@@ -12,11 +12,11 @@
 # ANALYSIS/BAND/ARROWS/CLEARBANDS/ARROWBAND/CLEARARROWBANDS call the exact fields the tab edits.
 #
 # **The numbers are properties of the FIXTURE**, read out of the running program with
-# `DUMP SURFACES --print-log` the same way req070's are: `samples/surface-demo.gs` triangulates to
+# `DUMP SURFACES --print-log` the same way req070's are: `samples/surface-demo.dwg` triangulates to
 # 982 triangles spanning 103.52 to 136.70 ft of elevation (req071-contour-extract.txt). If the
 # sample's points ever change, these change with it.
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE Test EG, Existing Ground
 EXPECT SURFACES 1
 

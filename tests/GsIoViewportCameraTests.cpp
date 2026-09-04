@@ -1,4 +1,4 @@
-// REQ-061 — the per-viewport camera must survive SaveGoSurveyFile / LoadGoSurveyFile, and a
+// REQ-061 — the per-viewport camera must survive SaveGoSurveyTemplateFile / LoadGoSurveyTemplateFile, and a
 // legacy .gs (no camera keys) must load with every viewport in plan view. Linked here
 // (GoSurveySnapTests) because GoSurveyTests cannot link GsIo.cpp.
 
@@ -42,10 +42,10 @@ TEST_CASE("Per-viewport camera round-trips through .gs (REQ-061)", "[gs][req061]
 
   const std::filesystem::path path = UniqueGsPath("vpcam");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
   REQUIRE(loaded.paperLayouts.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports.size() == 2);
 
@@ -70,7 +70,7 @@ TEST_CASE("A legacy .gs with no camera keys loads every viewport in plan view (R
 
   const std::filesystem::path path = UniqueGsPath("legacy");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
 
   // Strip the camera keys from the saved JSON to simulate a file written before REQ-061.
   std::string raw;
@@ -106,7 +106,7 @@ TEST_CASE("A legacy .gs with no camera keys loads every viewport in plan view (R
   }
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
   REQUIRE(loaded.paperLayouts.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports[0].cameraIsPlan());

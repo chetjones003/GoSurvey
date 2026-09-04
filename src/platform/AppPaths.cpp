@@ -83,6 +83,6 @@ std::filesystem::path ResolveAppLogoPngPath() {
   return {};
 }
 
-std::filesystem::path ResolveDefaultWorkspaceTemplateGsPath() {
-  return ResolveBundledAssetPath(std::filesystem::path("resources") / "default-template.gs");
+std::filesystem::path ResolveDefaultWorkspaceTemplateGstPath() {
+  return ResolveBundledAssetPath(std::filesystem::path("resources") / "default-template.gst");
 }

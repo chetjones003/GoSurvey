@@ -2,7 +2,7 @@
 
 NEW
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATECORR EmptyCorr
 EXPECT LOG "no feature lines"
 CMD SURFSWAPEDGE EmptyCorr

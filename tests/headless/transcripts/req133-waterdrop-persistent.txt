@@ -5,7 +5,7 @@
 
 NEW
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE EG, Existing Ground
 EXPECT POLYLINES 0
 CMD WATERDROP EG, 150, 300

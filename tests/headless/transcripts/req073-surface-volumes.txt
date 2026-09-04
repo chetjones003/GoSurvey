@@ -14,14 +14,14 @@
 # algorithm the way the Catch2 suite's hand-built rectangles are).
 #
 # **The numbers are properties of the FIXTURE**, read out of the running program with `--print-log`,
-# the same convention `req070`/`req072` use: `samples/surface-demo.gs` triangulates to 982 triangles
+# the same convention `req070`/`req072` use: `samples/surface-demo.dwg` triangulates to 982 triangles
 # over 229,208.2107 ft^2. Two surfaces built from the SAME point group ("Existing Ground") are
 # independently-triangulated but topologically IDENTICAL (Delaunay is deterministic for the same
 # point set), so comparing them nets exactly zero — a stronger end-to-end version of "compare a
 # surface with itself" than passing one `CadTin` to itself, since these are two distinct `CadSurface`
 # objects reached by two distinct names.
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE Base, Existing Ground
 CMD SURFACECREATE Twin, Existing Ground
 EXPECT SURFACES 2

@@ -20,8 +20,10 @@ Autodesk ODA membership and **without** Leica/Autodesk native scan-project SDKs.
 | Rasters | JPEG, PNG, BMP | drawing **IMAGE** underlays; file read/write |
 | BIM | IFC | **view only** (tessellate to REQ-063 meshes) |
 
-`.dwg` is the drawing document (REQ-175 / ADR-044). `.gs` remains for workspace templates and a
-future project file; its JSON document is also the GoSurvey payload inside a saved DWG.
+`.dwg` is the drawing document (REQ-175 / ADR-044). `.gs` is retired as a standalone, openable
+document format (D-2026-09-03-h, issue #264) — its JSON schema lives on only as the GoSurvey
+payload embedded inside a saved DWG. The startup workspace template now uses its own narrower
+format, `.gst` (same JSON shape, no file association, not opened as a drawing).
 
 ---
 
@@ -58,7 +60,7 @@ Legend: **R** = read into GoSurvey, **W** = write from GoSurvey, **—** = out o
 |-----|---|---|--------|--------|
 | `.dwg` | yes | R2000 / R2004 | LibreDWG | Open does not require ODA File Converter or AutoCAD. Save default AC1018. Written file must open in AutoCAD **without Recover** for the entity set we emit. |
 | `.dxf` | yes | yes | LibreDWG | ASCII and binary DXF as LibreDWG supports them. Replaces `DxfIo` as the **interchange** path once REQ-170 is verified; Phase 1 converter may remain a **test oracle**. |
-| `.gs` | yes | yes | existing `GsIo` | Unchanged native. |
+| `.gs` | — | — | — | Retired as a document format (D-2026-09-03-h). Its JSON schema survives only as the DWG trailer and as `.gst` (workspace template). |
 
 **Mapped into the GoSurvey domain** (lossy where the domain has no type): LINE, CIRCLE, ARC,
 ELLIPSE, POINT, LWPOLYLINE / POLYLINE, TEXT, MTEXT, HATCH, DIMENSION (kinds we already

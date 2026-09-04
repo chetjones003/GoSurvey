@@ -60,7 +60,7 @@ CHECK ALL
 # The per-vertex elevations reaching the triangulation is covered by TinConstraintTests ("a breakline
 # vertex not among the surface points is folded in with its own elevation"); what this adds is that
 # the ENTITY a 3DPOLY produces is an ordinary polyline as far as REQ-069 is concerned.
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE P3D, Existing Ground
 CMD 3DPOLY
 CMD 20,20,500

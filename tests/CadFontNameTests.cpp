@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -178,11 +180,27 @@ TEST_CASE("Viewport overlay plan skips isolated annotations (REQ-084 (d))", "[ca
   REQUIRE_FALSE(CadEntityIdHidden(&hidden, 0));
 }
 
-TEST_CASE("font-demo.gs opens without a BOM and uses explicit 1:25 / 1:100 viewports", "[cadfont]") {
-  const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/font-demo.gs";
+TEST_CASE("font-demo.dwg's embedded GoSurvey document has no BOM and uses explicit 1:25 / 1:100 viewports", "[cadfont]") {
+  const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/font-demo.dwg";
   std::ifstream in(path, std::ios::binary);
   REQUIRE(in.good());
-  const std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const std::string fileBytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  REQUIRE_FALSE(fileBytes.empty());
+
+  // Trailer layout (REQ-175 / ADR-044, DwgIo.cpp): JSON, then a little-endian uint64 length, then a
+  // 16-byte magic. Reimplemented rather than linking DwgIo.cpp/GsIo.cpp: this target deliberately
+  // stays free of the command layer they pull in.
+  constexpr char kMagic[16] = {'G', 'O', 'S', 'U', 'R', 'V', 'E', 'Y', '_', 'D', 'O', 'C', 'v', '1', '\n', '\0'};
+  constexpr size_t kFooter = sizeof(kMagic) + 8;
+  REQUIRE(fileBytes.size() >= kFooter);
+  REQUIRE(std::memcmp(fileBytes.data() + fileBytes.size() - sizeof(kMagic), kMagic, sizeof(kMagic)) == 0);
+  std::uint64_t jsonLen = 0;
+  const unsigned char* lenBytes =
+      reinterpret_cast<const unsigned char*>(fileBytes.data() + fileBytes.size() - kFooter);
+  for (int i = 0; i < 8; ++i)
+    jsonLen |= static_cast<std::uint64_t>(lenBytes[i]) << (8 * i);
+  REQUIRE(jsonLen <= fileBytes.size() - kFooter);
+  const std::string raw = fileBytes.substr(fileBytes.size() - kFooter - jsonLen, jsonLen);
   REQUIRE_FALSE(raw.empty());
   REQUIRE(static_cast<unsigned char>(raw[0]) != 0xEFu);
 

@@ -98,8 +98,8 @@ CMD SUBTRACT
 BOX 12 -8 28 8
 CMD
 EXPECT SOLIDS 1
-SAVEAS %OUT%/req314-boolean.gs
-OPEN %OUT%/req314-boolean.gs
+SAVEAS %OUT%/req314-boolean.dwg
+OPEN %OUT%/req314-boolean.dwg
 EXPECT SOLIDS 1
 CMD SOLIDLIST
 EXPECT LOG "volume 1700"

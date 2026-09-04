@@ -43,22 +43,22 @@ ESC
 
 EXPECT CIRCLES 1
 EXPECT ARCS 1
-SAVEAS %OUT%/req312-flat-a.gs
+SAVEAS %OUT%/req312-flat-a.dwg
 
 # The circles are there, and their plane is not - because it is the plane every circle has always
 # had, and saying so would rewrite every file in existence on its next save.
-EXPECT FILECONTAINS %OUT%/req312-flat-a.gs "circles"
-EXPECT FILELACKS %OUT%/req312-flat-a.gs "circlesN"
-EXPECT FILELACKS %OUT%/req312-flat-a.gs "nx"
+EXPECT FILECONTAINS %OUT%/req312-flat-a.dwg "circles"
+EXPECT FILELACKS %OUT%/req312-flat-a.dwg "circlesN"
+EXPECT FILELACKS %OUT%/req312-flat-a.dwg "nx"
 
 # Reopen and re-save: byte for byte the same file. This is the stability half; the absence checks
 # above are the half it cannot see.
-OPEN %OUT%/req312-flat-a.gs
+OPEN %OUT%/req312-flat-a.dwg
 EXPECT CIRCLES 1
 EXPECT ARCS 1
 EXPECT CIRCLEXYZ 0 50 50 0 10 0 0 1
-SAVEAS %OUT%/req312-flat-b.gs
-EXPECT SAMEFILE %OUT%/req312-flat-a.gs %OUT%/req312-flat-b.gs
+SAVEAS %OUT%/req312-flat-b.dwg
+EXPECT SAMEFILE %OUT%/req312-flat-a.dwg %OUT%/req312-flat-b.dwg
 
 # --- A tilted drawing writes its planes, and gets them back --------------------------------------
 # UCS X 90 makes the work plane the world plane y = 0 - a wall - with normal (0, -1, 0). A UCS pick
@@ -93,11 +93,11 @@ EXPECT CIRCLEXYZ 0 100 0 0 20 0 -1 0
 EXPECT CIRCLEXYZ 1 500 500 0 30 0 0 1
 EXPECT ARCPOINTS 0 210 0 0 190 0 0
 
-SAVEAS %OUT%/req312-tilted-a.gs
-EXPECT FILECONTAINS %OUT%/req312-tilted-a.gs "circlesN"
-EXPECT FILECONTAINS %OUT%/req312-tilted-a.gs "nx"
+SAVEAS %OUT%/req312-tilted-a.dwg
+EXPECT FILECONTAINS %OUT%/req312-tilted-a.dwg "circlesN"
+EXPECT FILECONTAINS %OUT%/req312-tilted-a.dwg "nx"
 
-OPEN %OUT%/req312-tilted-a.gs
+OPEN %OUT%/req312-tilted-a.dwg
 EXPECT CIRCLES 2
 EXPECT ARCS 1
 EXPECT CIRCLEXYZ 0 100 0 0 20 0 -1 0
@@ -107,7 +107,7 @@ EXPECT ARCPOINTS 0 210 0 0 190 0 0
 # Bit-identical, not merely within tolerance. `EXPECT CIRCLEXYZ` holds coordinates to REQ-101's
 # 0.01 ft, which a serializer that dropped the last bits of every float would still satisfy; a
 # byte-identical re-save is what says nothing was lost at all.
-SAVEAS %OUT%/req312-tilted-b.gs
-EXPECT SAMEFILE %OUT%/req312-tilted-a.gs %OUT%/req312-tilted-b.gs
+SAVEAS %OUT%/req312-tilted-b.dwg
+EXPECT SAMEFILE %OUT%/req312-tilted-a.dwg %OUT%/req312-tilted-b.dwg
 
 CHECK ALL

@@ -68,9 +68,9 @@ EXPORT DXF %OUT%/arc-b.dxf
 EXPECT SAMEFILE %OUT%/arc-a.dxf %OUT%/arc-b.dxf
 
 # ── 3. .gs round trip ─────────────────────────────────────────────────────────────────────────
-SAVEAS %OUT%/arc.gs
+SAVEAS %OUT%/arc.dwg
 NEW
-OPEN %OUT%/arc.gs
+OPEN %OUT%/arc.dwg
 CHECK ALL
 EXPECT POLYLINES 1
 EXPECT POLYBULGE 0 0 0.414214
@@ -89,8 +89,8 @@ EXPORT DXF %OUT%/rect-a.dxf
 EXPORT DXF %OUT%/rect-b.dxf
 EXPECT SAMEFILE %OUT%/rect-a.dxf %OUT%/rect-b.dxf
 
-SAVEAS %OUT%/rect.gs
-EXPECT FILELACKS %OUT%/rect.gs "polylineVertsBulge"
+SAVEAS %OUT%/rect.dwg
+EXPECT FILELACKS %OUT%/rect.dwg "polylineVertsBulge"
 
 # ── 5. box-selection follows the arc, not its chord ───────────────────────────────────────────
 NEW

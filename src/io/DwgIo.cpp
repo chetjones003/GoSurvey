@@ -2,7 +2,6 @@
 
 #include "GsIo.hpp"
 #include "LibreDwgCad.hpp"
-#include "PointFileExt.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -146,8 +145,6 @@ bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<
     log.push_back("Open drawing — no path.");
     return false;
   }
-  if (pointfile::EndsWithIgnoreCaseAscii(pathUtf8, ".gs"))
-    return LoadGoSurveyFile(st, pathUtf8, log);
   return ImportDwgFile(st, pathUtf8, log);
 }
 
@@ -156,7 +153,5 @@ bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::v
     log.push_back("Save drawing — no path.");
     return false;
   }
-  if (pointfile::EndsWithIgnoreCaseAscii(pathUtf8, ".gs"))
-    return SaveGoSurveyFile(st, pathUtf8, log);
   return ExportDwgFile(st, pathUtf8, log);
 }

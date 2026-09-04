@@ -80,8 +80,8 @@ EXPECT SOLIDS 3
 EXPECT SOLIDPROPS 2 4200 1900 8 12 6
 
 # --- Solids survive a .gs save and reopen with topology intact --------------------------------
-SAVEAS %OUT%/req314-extrude.gs
-OPEN %OUT%/req314-extrude.gs
+SAVEAS %OUT%/req314-extrude.dwg
+OPEN %OUT%/req314-extrude.dwg
 EXPECT SOLIDS 3
 EXPECT SOLIDPROPS 0 1200 800 8 12 6
 EXPECT SOLIDPROPS 1 452.3893421169302 326.7256359733385 4 6 4

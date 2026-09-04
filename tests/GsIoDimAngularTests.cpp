@@ -1,4 +1,4 @@
-// Issue #125 — DIMANGULAR must survive SaveGoSurveyFile / LoadGoSurveyFile (the SAVEAS/OPEN path).
+// Issue #125 — DIMANGULAR must survive SaveGoSurveyTemplateFile / LoadGoSurveyTemplateFile (the SAVEAS/OPEN path).
 // Linked here (GoSurveySnapTests) because GoSurveyTests cannot link GsIo.cpp.
 
 #include <catch2/catch_approx.hpp>
@@ -27,7 +27,7 @@ std::filesystem::path UniqueGsPath(const char* stem) {
 
 }  // namespace
 
-TEST_CASE("DIMANGULAR survives SaveGoSurveyFile then LoadGoSurveyFile (issue #125)", "[gs][dimangular]") {
+TEST_CASE("DIMANGULAR survives SaveGoSurveyTemplateFile then LoadGoSurveyTemplateFile (issue #125)", "[gs][dimangular]") {
   AppCommandState st;
   CadAnnotation a;
   a.kind = CadAnnotation::Kind::DimAngular;
@@ -51,7 +51,7 @@ TEST_CASE("DIMANGULAR survives SaveGoSurveyFile then LoadGoSurveyFile (issue #12
 
   const std::filesystem::path path = UniqueGsPath("dimangular");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
 
   {
     std::ifstream in(path, std::ios::binary);
@@ -62,7 +62,7 @@ TEST_CASE("DIMANGULAR survives SaveGoSurveyFile then LoadGoSurveyFile (issue #12
   }
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
   REQUIRE(loaded.cadAnnotations.size() == 1);
   const CadAnnotation& b = loaded.cadAnnotations[0];
   REQUIRE(b.kind == CadAnnotation::Kind::DimAngular);
@@ -96,10 +96,10 @@ TEST_CASE("kind text in a saved .gs reloads as TEXT, not DIMANGULAR (issue #125)
 
   const std::filesystem::path path = UniqueGsPath("text-not-angular");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
   REQUIRE(loaded.cadAnnotations.size() == 1);
   REQUIRE(loaded.cadAnnotations[0].kind == CadAnnotation::Kind::Text);
   REQUIRE(loaded.cadAnnotations[0].text == "just a label");

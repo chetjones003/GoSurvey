@@ -1,14 +1,18 @@
 <#
 .SYNOPSIS
-  Regenerates samples/surface-demo.gs — the TIN surface test fixture (REQ-066/067/068).
+  Regenerates samples/surface-demo.dwg — the TIN surface test fixture (REQ-066/067/068).
 
 .DESCRIPTION
-  The fixture is committed, but it is GENERATED, and this script is why. A committed .gs is an
+  The fixture is committed, but it is GENERATED, and this script is why. A committed .dwg is an
   opaque blob: nobody can tell from a diff whether a point moved, a group rule changed, or the
   terrain was reshaped. A deterministic generator beside it makes the fixture reviewable — the
   terrain is six lines of arithmetic you can read, and re-running always produces the same file.
   Same reasoning as util/benchscene.cpp, which generates the REQ-100 scene rather than committing
   a 100 MB artifact.
+
+  The document is authored as JSON (the same shape a .gst template holds, REQ-175), then wrapped
+  into a .dwg via GsJsonDwgFixture (issue #264 — .gs is no longer an openable document format;
+  its JSON schema lives on only inside the .dwg trailer).
 
   Determinism matters and is deliberate: the jitter uses a fixed-seed integer LCG, never
   Get-Random and never the clock, so two runs of the same commit produce byte-identical output.
@@ -26,7 +30,7 @@
   (model space, no layouts, no crash).
 
 .EXAMPLE
-  pwsh -File tools/Make-SurfaceDemoGs.ps1
+  pwsh -File tools/Make-SurfaceDemoDwg.ps1
 #>
 [CmdletBinding()]
 param(
@@ -35,9 +39,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $OutFile) { $OutFile = Join-Path $RepoRoot 'samples\surface-demo.gs' }
+if (-not $OutFile) { $OutFile = Join-Path $RepoRoot 'samples\surface-demo.dwg' }
 
-$template = Join-Path $RepoRoot 'resources\default-template.gs'
+$converter = Join-Path $RepoRoot 'build\GsJsonDwgFixture.exe'
+if (-not (Test-Path $converter)) { throw "GsJsonDwgFixture not built: $converter (build target GsJsonDwgFixture first)" }
+
+$template = Join-Path $RepoRoot 'resources\default-template.gst'
 if (-not (Test-Path $template)) { throw "Template not found: $template" }
 
 $d = Get-Content $template -Raw | ConvertFrom-Json
@@ -129,7 +136,14 @@ $doc | Add-Member -NotePropertyName pointGroups -NotePropertyValue @(
 ) -Force
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutFile) | Out-Null
-$d | ConvertTo-Json -Depth 40 | Set-Content $OutFile -Encoding UTF8
+$work = Join-Path ([System.IO.Path]::GetTempPath()) ("surfacedemo-" + [guid]::NewGuid().ToString('N') + '.json')
+try {
+  $d | ConvertTo-Json -Depth 40 | Set-Content $work -Encoding UTF8
+  & $converter to-dwg $work $OutFile
+  if ($LASTEXITCODE -ne 0) { throw "GsJsonDwgFixture to-dwg failed (exit $LASTEXITCODE)" }
+} finally {
+  Remove-Item -Force $work -ErrorAction SilentlyContinue
+}
 
 $zs = $pts | ForEach-Object { $_.elevation }
 Write-Host ("Wrote {0} ({1:N0} bytes)" -f $OutFile, (Get-Item $OutFile).Length)

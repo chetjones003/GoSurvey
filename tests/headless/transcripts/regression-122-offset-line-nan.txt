@@ -35,7 +35,7 @@ CHECK ALL
 
 # The document is still storable after the refused command — nothing was half-committed
 # on the way out, and a save/open round trip stays clean.
-SAVEAS %OUT%/rt-122.gs
-OPEN %OUT%/rt-122.gs
+SAVEAS %OUT%/rt-122.dwg
+OPEN %OUT%/rt-122.dwg
 EXPECT LINES 0
 CHECK ALL

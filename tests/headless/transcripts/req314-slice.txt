@@ -75,8 +75,8 @@ EXPECT LOG "disjoint pieces"
 EXPECT SOLIDS 7
 
 # --- Solids survive a .gs save and reopen ------------------------------------------------
-SAVEAS %OUT%/req314-slice.gs
-OPEN %OUT%/req314-slice.gs
+SAVEAS %OUT%/req314-slice.dwg
+OPEN %OUT%/req314-slice.dwg
 EXPECT SOLIDS 7
 
 CHECK ALL
