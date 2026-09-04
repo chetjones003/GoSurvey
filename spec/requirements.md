@@ -6087,10 +6087,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
     ellipse-like or multi-arc loop) is built by the same rule. A closed path builds **no end caps** — the first and last cross-section
     rings are the same ring, wrapped together (mirroring `brep::Revolve`'s existing full-turn
     treatment: no literal 2π edge, no duplicate vertices at the seam) — rather than two coincident or
-    degenerate planar faces. Twist and fixed-orientation options remain refused on a closed path by
-    the same rule that already refuses them on any curved or multi-segment path (unchanged); a
-    rotation-minimizing frame with zero twist closes consistently around a planar closed path by
-    construction.
+    degenerate planar faces. **Fixed orientation** on a closed path is built (below); a **nonzero
+    twist** on a closed path stays refused (`Problem::SweepUnsupportedOption`) — not as an increment
+    boundary but because it is geometrically inconsistent: the seam ring is one ring, and a linear
+    twist from 0 at the start to a nonzero angle at the end would need it to carry two different
+    orientations at once. A rotation-minimizing frame with zero twist closes consistently around a
+    planar closed path by construction.
   - **A sharp (tangent-discontinuous) corner where BOTH adjoining path segments are straight, and the
     profile is polygonal (no arc edge), is mitred** rather than refused (REQ-315 2026-09-04, issue
     #259): the shared ring at the corner lies on the plane that bisects the incoming and outgoing
@@ -6107,11 +6109,39 @@ capability that does not exist. They are recorded here rather than quietly dropp
     build. A corner too sharp to mitre — the two directions fold back near a full reversal, so the
     bisector plane is degenerate — is refused by name (`Problem::SweepMitreCollapsed`), the same
     "refuse rather than build a collapsed shape" rule REQ-317's polysolid mitre already applies.
+  - **Twist works on a straight (or multi-segment all-straight) path**, not only a single segment
+    (REQ-315 2026-09-04, issue #259), and **fixed orientation works on any path, including a curved
+    one**. **Twist accumulates proportionally to distance travelled** — a straight segment's share is
+    its chord length — so a short segment turns the profile less than a long one, matching the
+    standard convention (and unchanged for the single-segment case, where this reduces to the existing
+    "0 at the start, the full angle at the end" rule exactly). Twist is refused, by name, combined with
+    an **arc** path segment (`Problem::SweepTwistNeedsStraightPath`): within an arc band a profile
+    vertex's true trajectory under a continuously varying twist compounds the path's own rotation with
+    the twist's, which the arc band's construction (a plain circular arc, or an exact rational revolve)
+    cannot represent — the same category of gap as a mitred corner touching an arc segment, and
+    deferred for the same reason rather than built silently wrong. **Fixed orientation** carries the
+    profile's original world axes unrotated through every segment, straight or arc — mechanically the
+    same "translate only" placement already used for a single straight segment; through an arc segment
+    this is still exact, because a rigid body under pure translation moves every point by the identical
+    vector regardless of the path's own shape, so the arc band's construction becomes the same ruled
+    (straight-rail) surface the straight-segment case already uses. Twist and fixed orientation compose
+    on a straight path: a fixed-orientation profile can still be given a twist, spinning about its own
+    unchanging normal as it travels. A mitred corner still mitres under either option — the shear
+    construction does not depend on how the frame is carried, only on the two tangents meeting there.
+  - **Fixed orientation on a curved path is not checked for the swept envelope folding over itself.**
+    There is no rotation-minimizing frame to prevent it, unlike the aligned case, but `brep::
+    SelfIntersects` is a narrow, torus-specific check (ADR-045 (f)'s tube-larger-than-ring case), not a
+    general overlap detector, and building a real one (checking every face against every other) is a
+    separate undertaking, decided against for this task. A profile too large, or a path too tightly
+    curved, for this option can therefore build a solid that occupies the same space twice — a known,
+    documented limitation rather than a checked-and-refused case.
   - Both commands exist in the **typed** and the **prompted** shape the REQ-313 / REQ-314 commands
     use, pick their operands in the viewport or by entity id, preview the result, and commit as
     **one undoable step**. The source profiles and path are consumed only after the result passes
-    `brep::Validate` (and `brep::SelfIntersects`); a failure is refused by name and the document is
-    untouched (REQ-314 / ADR-046 (d), unchanged).
+    `brep::Validate`; a failure is refused by name and the document is untouched (REQ-314 / ADR-046
+    (d), unchanged). `brep::SelfIntersects` is checked by other REQ-313/314 kernel builders where it
+    is meaningful (ADR-045 (f)'s torus case); sweep's own fixed-orientation gap, above, is the one
+    place in this requirement that is not covered by it.
   - The result stores **topology only** by default; it may optionally record a recipe (profile / path
     entity ids and parameters) that is never consulted by validity, mass properties or tessellation
     (ADR-045 (c), ADR-046 (e)).
@@ -6146,6 +6176,20 @@ capability that does not exist. They are recorded here rather than quietly dropp
     edge, is refused by name, not silently built as an unmitred (gapped or overlapping) joint. A
     corner too sharp to mitre (near a full reversal) is refused by name, not built as a
     self-intersecting or inverted band.
+  - **Twist works on a straight (or multi-segment all-straight) path and composes with fixed
+    orientation there**; twist accumulates proportionally to distance travelled, checked against a
+    path whose segments have different lengths and cross-checked ring-for-ring against an independent
+    single-segment reference sweep, asserted in tests. Twist is **not** asserted to preserve volume:
+    each band's surface is a ruled (straight-line) interpolation between its two differently-twisted
+    end rings, not a true continuous rotation, so it does not generally preserve `area × length` the
+    way an untwisted or uniformly-translated band does — this was checked directly (not assumed) while
+    implementing, and the false assumption corrected before this bullet was written. **Fixed
+    orientation works on any path including a curved one**, checked against a hand-derived reference
+    (each ring is the first ring translated by the same vector the path's own two endpoints differ
+    by — provable from "fixed orientation never rotates," not merely plausible). A nonzero twist on a
+    closed path, or combined with an arc segment, is refused by name, not silently built wrong. A
+    fixed-orientation sweep that folds over itself is **not** refused — see the Statement note above —
+    and this is asserted by its absence: no test claims that refusal exists.
   - **Results survive `.gs` save and reopen** with vertex / edge / face counts identical and volume
     and area within a relative 1e-6. A drawing with no NURBS face serializes byte-identically to a
     version-3 build. A version-4 file with a malformed patch is refused with the kernel's reason and
@@ -6190,6 +6234,24 @@ capability that does not exist. They are recorded here rather than quietly dropp
   would have reopened that decision rather than merely extended this one. The user chose to ship the
   straight-to-straight case now and leave the arc-adjacent case deferred alongside it, rather than
   open the trimmed-NURBS question here. Twist / fixed orientation remains deferred, unchanged.
+  2026-09-04 — twist (straight paths) and fixed orientation (any path) accepted as a
+  Statement/Acceptance addition (issue #259 follow-up to #241, the last of its three items), narrower
+  than first scoped after two mid-investigation findings put back to the user. First: twist combined
+  with an arc segment produced a silently wrong volume — the arc band's construction (a plain circular
+  arc, or an exact rational revolve) cannot represent a vertex's true trajectory under a continuously
+  varying twist, the same category of gap as a mitred corner touching an arc segment — so the user
+  chose to refuse twist+arc by name (`Problem::SweepTwistNeedsStraightPath`) rather than build it
+  wrong; twist on a straight or multi-segment-straight path, and fixed orientation on any path
+  including a curved one, ship as designed (twist distribution: proportional to distance travelled,
+  the standard convention, over an alternative of an equal share per segment). Second: a planned
+  internal `brep::SelfIntersects` check for fixed-orientation-on-a-curve turned out not to work —
+  `SelfIntersects` is a narrow, torus-specific check (ADR-045 (f)), not a general overlap detector —
+  so the user chose to build fixed orientation on a curve as designed and document the
+  folds-over-itself risk as a known limitation rather than build a real detector (a separate
+  undertaking) or refuse curved fixed-orientation sweeps outright. A nonzero twist on a closed path is
+  refused as geometrically inconsistent (one seam ring cannot carry two different end-of-path
+  orientations), not as a further increment boundary. Issue #259 is now fully addressed, the third
+  item narrower than the other two but for stated, verified reasons rather than left unstated.
 
 ### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
 

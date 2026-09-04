@@ -177,8 +177,9 @@ CMD
 EXPECT SOLIDS 1
 EXPECT LOG "Solid created"
 
-# A twist on a curved (arc) path is refused by name — the kernel supports twist on a single
-# straight segment only in this version.
+# A twist on a curved (arc) path is still refused by name (REQ-315 2026-09-04, issue #259): twist now
+# works on a straight (or multi-segment straight) path, but combined with an arc segment it would need
+# a surface this kernel does not have — BrepTests owns that refusal by name.
 CMD CIRCLE
 CMD 0,100
 CMD 2
@@ -192,7 +193,6 @@ CMD SWEEP
 BOX -5 95 120 120
 CMD T 45
 CMD
-EXPECT LOG "single straight path"
 EXPECT SOLIDS 1
 ESC
 
