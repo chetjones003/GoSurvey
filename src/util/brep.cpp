@@ -6249,6 +6249,95 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
   return Succeed(outWhy);
 }
 
+/// `A ∩ B` for a **skew** (offset, non-coplanar) perpendicular branch pipe (REQ-314 B2b-2, GitHub
+/// issue #242): the thin cylinder `A` (radius \p r, axis `fr.yAxis`, through `(g, 0, 0)`) crosses the
+/// thick `B` (radius \p R, axis `fr.zAxis`) at right angles but with their axes missing each other by
+/// \p g (`0 ≤ g`, `g + r < R`). Same lens topology as the coplanar cases — 8 vertices, 10 edges
+/// (8 procedural), 4 faces — with the curve `s(φ) = ±√(R² − (g + r sinφ)²)` along `A`'s axis and the
+/// two thick-wall patches now off-centre (u ∈ [uLo, uHi] and its mirror). Every face integrates
+/// numerically.
+[[nodiscard]] bool BuildSkewBranchPipeIntersection(const ucs::Ucs& fr, double r, double R, double g,
+                                                   Solid* out, Problem* outWhy) {
+  if (!(R > r) || !(r > 0.0) || !(g >= 0.0) || !(g + r < R))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Vec3 Y = fr.yAxis;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = W(Vec3{g, 0.0, 0.0});
+  aSurf.frame.zAxis = Y;             // A's axis
+  aSurf.frame.xAxis = fr.zAxis;      // φ = 0 points toward +z
+  aSurf.frame.yAxis = fr.xAxis;
+  aSurf.radius = r;
+  aSurf.height = 8.0 * R;
+  Surface bSurf;
+  bSurf.kind = SurfaceKind::Cylinder;
+  bSurf.frame = fr;
+  bSurf.radius = R;
+  bSurf.height = 8.0 * R;
+
+  Solid s;
+  auto cpt = [&](double phi, int sign) {
+    const double px = g + r * std::sin(phi);
+    const double sc = std::sqrt(std::max(0.0, R * R - px * px)) * sign;
+    return W(Vec3{px, sc, r * std::cos(phi)});
+  };
+  const int p0 = AddVertex(&s, cpt(0.0, 1));
+  const int qb = AddVertex(&s, cpt(kHalfPi, 1));
+  const int p1 = AddVertex(&s, cpt(kPi, 1));
+  const int qa = AddVertex(&s, cpt(1.5 * kPi, 1));
+  const int n0 = AddVertex(&s, cpt(0.0, -1));
+  const int nb = AddVertex(&s, cpt(kHalfPi, -1));
+  const int n1 = AddVertex(&s, cpt(kPi, -1));
+  const int na = AddVertex(&s, cpt(1.5 * kPi, -1));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = cpt(witnessPhi, sign);
+    e.isectSurfaces = {aSurf, bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int e1 = isect(p0, qb, 0.25 * kPi, 1);
+  const int e2 = isect(qb, p1, 0.75 * kPi, 1);
+  const int e3 = isect(p1, qa, 1.25 * kPi, 1);
+  const int e4 = isect(qa, p0, 1.75 * kPi, 1);
+  const int e5 = isect(n0, nb, 0.25 * kPi, -1);
+  const int e6 = isect(nb, n1, 0.75 * kPi, -1);
+  const int e7 = isect(n1, na, 1.25 * kPi, -1);
+  const int e8 = isect(na, n0, 1.75 * kPi, -1);
+  const int sTop = AddLine(&s, n0, p0);  // φ = 0 seam of A
+  const int sBot = AddLine(&s, n1, p1);  // φ = π seam of A
+
+  auto cylFace = [&](const Surface& surf, double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  // The +s mouth on B runs from φ = π/2 (px = g + r, nearest B's axis) to φ = 3π/2 (px = g − r).
+  const double uLo = std::atan2(std::sqrt(std::max(0.0, R * R - (g + r) * (g + r))), g + r);
+  const double uHi = std::atan2(std::sqrt(std::max(0.0, R * R - (g - r) * (g - r))), g - r);
+  cylFace(aSurf, 0.0, kPi,
+          {{e1, false}, {e2, false}, {sBot, true}, {e6, true}, {e5, true}, {sTop, false}});
+  cylFace(aSurf, kPi, kTwoPi,
+          {{e3, false}, {e4, false}, {sTop, true}, {e8, true}, {e7, true}, {sBot, false}});
+  cylFace(bSurf, uLo, uHi, {{e4, true}, {e3, true}, {e2, true}, {e1, true}});
+  cylFace(bSurf, -uHi, -uLo, {{e5, false}, {e6, false}, {e7, false}, {e8, false}});
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// `B − A` for a **non-perpendicular** branch pipe (REQ-314 B2b-2, GitHub issue #242): the thin
 /// branch `A` (radius \p r, tilted by \p alpha) bored clean through the thick main `B` (radius \p R,
 /// axis `fr.zAxis`, caps \p zB0 / \p zB1). `BuildBranchPipeSubtract` generalised the same way
@@ -6722,17 +6811,12 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
   const double axDot = ray3d::Dot(az, bz);
   if (std::fabs(std::fabs(axDot) - 1.0) < 1e-7)
     return false;  // parallel / coaxial — a different recogniser
-  // The axis lines must be coplanar and cross: the gap along their common perpendicular ~ 0.
   const Vec3 wBA = ray3d::Sub(B.axis.origin, A.axis.origin);
   const Vec3 axCross = ray3d::Cross(az, bz);
   const double axCross2 = ray3d::Dot(axCross, axCross);
-  if (axCross2 < 1e-18 ||
-      std::fabs(ray3d::Dot(wBA, axCross)) / std::sqrt(axCross2) > eps)
-    return false;  // skew axes — a later slice
-  const double pAlong = ray3d::Dot(wBA, az);
-  const double qAlong = ray3d::Dot(wBA, bz);
-  const Vec3 meet =
-      ray3d::Add(A.axis.origin, ray3d::Scale(az, (pAlong - axDot * qAlong) / (1.0 - axDot * axDot)));
+  if (axCross2 < 1e-18)
+    return false;
+  const double gap = std::fabs(ray3d::Dot(wBA, axCross)) / std::sqrt(axCross2);
 
   // thin / thick roles
   const CylinderShape& thin = A.radius < B.radius ? A : B;
@@ -6740,6 +6824,50 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
   const double r = thin.radius;
   const double R = thick.radius;
   const bool perp = std::fabs(axDot) <= 1e-7;
+
+  if (gap > eps) {
+    // Skew axes — the offset branch pipe (issue #242). So far only the perpendicular-offset
+    // INTERSECT: axes at right angles, missing by `gap`, the thin fully crossing, caps clear.
+    if (!perp || op != BoolOp::Intersect || !(gap + r < R - eps))
+      return false;
+    const Vec3 td = thin.axis.zAxis;
+    const Vec3 kd = thick.axis.zAxis;
+    const Vec3 rv = ray3d::Sub(thin.axis.origin, thick.axis.origin);
+    const double den = 1.0 - axDot * axDot;
+    const double tPar = (axDot * ray3d::Dot(kd, rv) - ray3d::Dot(td, rv)) / den;
+    const double kPar = (ray3d::Dot(kd, rv) - axDot * ray3d::Dot(td, rv)) / den;
+    const Vec3 cThin = ray3d::Add(thin.axis.origin, ray3d::Scale(td, tPar));
+    const Vec3 cThick = ray3d::Add(thick.axis.origin, ray3d::Scale(kd, kPar));
+    ucs::Ucs sfr;
+    if (!ucs::FromNormal(cThick, kd, &sfr))
+      return Fail(Problem::BooleanResultInvalid, outWhy);
+    const Vec3 gx = ray3d::Sub(cThin, cThick);  // thick axis -> thin axis
+    if (!(ray3d::Length(gx) > 1e-9 * sc))
+      return false;
+    sfr.xAxis = ray3d::Normalize(gx);
+    sfr.yAxis = ray3d::Normalize(ray3d::Cross(sfr.zAxis, sfr.xAxis));
+    if (std::fabs(ray3d::Dot(td, sfr.yAxis)) < 1.0 - 1e-6)
+      return false;  // the thin axis is also tilted — a later slice
+    const double sMax = std::sqrt(std::max(0.0, R * R - (gap - r) * (gap - r)));
+    const double t0 = ray3d::Dot(ray3d::Sub(thin.axis.origin, cThick), sfr.yAxis);
+    const double t1 = t0 + thin.length * ray3d::Dot(td, sfr.yAxis);
+    if (std::min(t0, t1) > -sMax - eps || std::max(t0, t1) < sMax + eps)
+      return false;  // the thin does not fully cross
+    const double kAlong = ray3d::Dot(ray3d::Sub(cThick, thick.axis.origin), kd);
+    if (kAlong - r < eps || thick.length - kAlong - r < eps)
+      return false;  // a thick cap sits inside the lens
+    *handled = true;
+    Solid result;
+    if (!BuildSkewBranchPipeIntersection(sfr, r, R, gap, &result, outWhy))
+      return false;
+    out->push_back(std::move(result));
+    return Succeed(outWhy);
+  }
+
+  const double pAlong = ray3d::Dot(wBA, az);
+  const double qAlong = ray3d::Dot(wBA, bz);
+  const Vec3 meet =
+      ray3d::Add(A.axis.origin, ray3d::Scale(az, (pAlong - axDot * qAlong) / (1.0 - axDot * axDot)));
 
   ucs::Ucs fr;
   if (!ucs::FromNormal(meet, thick.axis.zAxis, &fr))

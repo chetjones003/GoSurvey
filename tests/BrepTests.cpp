@@ -2908,6 +2908,85 @@ TEST_CASE("Curved B2b-2: INTERSECT of a thin pipe crossing a thick one is the le
   }
 }
 
+TEST_CASE("Curved B2b-2: INTERSECT of a SKEW (offset) perpendicular branch pipe is the lens",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 1.5;
+  const double R = 5.0;
+  const double g = 2.0;  // the two axes miss each other by g; g + r < R
+
+  // lens volume = integral over the thin cross-section (rho,phi) of the thick chord length
+  //   2 sqrt(R^2 - (g + rho sin phi)^2)   times   rho drho dphi
+  double vref = 0.0;
+  const int nRho = 1400;
+  const int nPhi = 1400;
+  for (int i = 0; i < nRho; ++i) {
+    const double rho = r * (i + 0.5) / nRho;
+    for (int j = 0; j < nPhi; ++j) {
+      const double phi = kTwoPiTest * (j + 0.5) / nPhi;
+      const double px = g + rho * std::sin(phi);
+      vref += 2.0 * std::sqrt(std::max(0.0, R * R - px * px)) * rho * (r / nRho) * (kTwoPiTest / nPhi);
+    }
+  }
+
+  Solid thin;
+  Solid thick;
+  ucs::Ucs ax;
+  REQUIRE(ucs::FromNormal(Vec3{g, -15, 0}, Vec3{0, 1, 0}, &ax));  // axis +y, offset g in x
+  REQUIRE(brep::MakeCylinder(ax, r, 30, &thin, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -15), R, 30, &thick, &why));  // axis +z
+
+  SECTION("offset axes, right angles - volume matches the numerical reference") {
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 10);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 8);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.008, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(1e-2));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(thin, thick, &rev, &why));  // order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vref).epsilon(5e-3));
+  }
+
+  SECTION("the skew lens on a survey-magnitude frame") {
+    const ucs::Ucs frame = TiltedAt(3.9e6, 1.7e6, 90.0);
+    ucs::Ucs axF;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{g, -15, 0}),
+                            ucs::UcsVectorToWorld(frame, Vec3{0, 1, 0}), &axF));
+    ucs::Ucs bxF = frame;
+    bxF.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -15});
+    Solid thinF;
+    Solid thickF;
+    REQUIRE(brep::MakeCylinder(axF, r, 30, &thinF, &why));
+    REQUIRE(brep::MakeCylinder(bxF, R, 30, &thickF, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thickF, thinF, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-3));
+  }
+
+  SECTION("SUBTRACT and UNION of a skew branch pipe are refused - later slices") {
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(thick, thin, &out, &why));
+    REQUIRE_FALSE(brep::BooleanUnion(thick, thin, &out, &why));
+  }
+}
+
 TEST_CASE("Curved B2b-2: INTERSECT of a NON-perpendicular branch pipe is the tilted lens",
           "[brep][req314]") {
   Problem why = Problem::Ok;
