@@ -4185,6 +4185,14 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
 /// the help registry, so the two cannot disagree about which commands exist.
 [[nodiscard]] bool CadIsSolidPrimitiveVerb(const std::string& verb);
 
+/// PRESSPULL (REQ-319) — move the one selected solid FACE along its own normal by p args feet.
+///
+/// Acts on the REQ-318 sub-object selection, which is what pairs the two: Ctrl+click names the face,
+/// this moves it. Refuses — by name, with the document untouched — an empty or face-less selection,
+/// more than one face, a distance that is not a number, and every geometric refusal `brep::PushPullFace`
+/// raises. One undo step for the whole edit.
+void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+
 /// One named dimension of a primitive: the letter that sets it, and what to call it in a prompt.
 ///
 /// `optional` marks a parameter the primitive can be built without — only a cone's and a pyramid's

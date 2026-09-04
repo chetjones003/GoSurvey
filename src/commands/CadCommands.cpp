@@ -25732,6 +25732,98 @@ static void CommitSlice(AppCommandState& st, brep::SliceKeep keep, std::vector<s
   st.active = AppCommandState::Kind::None;
 }
 
+// -------------------------------------------------------------------------------------------
+// PRESSPULL (REQ-319 / D-2026-09-04-c) — move the selected FACE along its own normal.
+// -------------------------------------------------------------------------------------------
+
+void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  // Acts on the REQ-318 sub-object selection, which is the whole point of the pairing: Ctrl+click
+  // names the face, this moves it. Nothing else in the program can name a face, so there is no
+  // second way in and no ambiguity about which face is meant.
+  //
+  // Expiry is swept once a frame in the main loop, but this runs from the command line and must not
+  // assume that has happened since the last edit — a PRESSPULL immediately after an undo would
+  // otherwise read a reference to a solid that is gone.
+  ExpireSubObjectSelection(st);
+
+  std::vector<const SelectedSubObject*> faces;
+  for (const SelectedSubObject& s : st.subObjectSelection)
+    if (s.kind == solidpick::Kind::Face)
+      faces.push_back(&s);
+
+  if (faces.empty()) {
+    log.push_back(st.subObjectSelection.empty()
+                      ? "PRESSPULL - select a solid FACE first: hold Ctrl and click one."
+                      : "PRESSPULL - the selection has no face in it. Ctrl+click a face, not an "
+                        "edge or a vertex.");
+    return;
+  }
+  if (faces.size() > 1) {
+    // Refused rather than applied to all of them. Two faces of one solid move its geometry twice
+    // over, and the second push would be computed against the first's result while the user was
+    // picturing the original - a compound edit nobody asked for. One face, one move (REQ-201).
+    log.push_back("PRESSPULL - " + std::to_string(faces.size()) +
+                  " faces are selected; this moves one at a time.");
+    return;
+  }
+
+  const std::string text = StringUtil::trimCopy(args);
+  if (text.empty()) {
+    log.push_back("Usage: PRESSPULL <distance> - positive moves the face outward, negative inward.");
+    return;
+  }
+  char* end = nullptr;
+  const double distance = std::strtod(text.c_str(), &end);
+  if (!end || *end != '\0' || !std::isfinite(distance)) {
+    log.push_back("PRESSPULL - \"" + text + "\" is not a number.");
+    return;
+  }
+
+  const SelectedSubObject ref = *faces.front();
+  const CadSolidPtr sp = ref.owner.lock();
+  if (!sp || ref.solidIndex < 0 || static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size()) {
+    log.push_back("PRESSPULL - that face is no longer there.");
+    return;
+  }
+
+  brep::Solid moved;
+  brep::Problem why = brep::Problem::Ok;
+  if (!brep::PushPullFace(*sp, ref.index, distance, &moved, &why)) {
+    // ADR-046 (d) and REQ-201: the kernel's own sentence, and the document is untouched. Nothing
+    // above this line has modified anything, which is what makes that true rather than restored.
+    log.push_back(std::string("PRESSPULL - ") + brep::ProblemText(why));
+    return;
+  }
+
+  // One undo step for the whole edit (REQ-319 item 7) - the geometry, the dropped recipe and the
+  // re-tessellation that follows from BumpCadGpuCache.
+  PushUndoSnapshot(st, "PressPull");
+  const auto replaced = std::make_shared<const brep::Solid>(std::move(moved));
+  st.cadSolids[static_cast<size_t>(ref.solidIndex)] = replaced;
+
+  // The selection FOLLOWS the edit. Push/pull preserves topology, so the face index still names the
+  // same face - but the reference is keyed on the solid's IDENTITY (ADR-049), and the solid has
+  // just been replaced by a different object. Left alone it would expire on the next sweep and the
+  // user would lose the selection after every push, making a second push impossible without
+  // re-picking. Re-pointing it at the new solid is the whole reason REQ-319 item 5 states that the
+  // topology is preserved.
+  for (SelectedSubObject& s : st.subObjectSelection)
+    if (s.solidIndex == ref.solidIndex)
+      s.owner = replaced;
+
+  BumpCadGpuCache(st);
+  const brep::MassProperties mp = brep::ComputeMassProperties(*replaced);
+  char msg[240];
+  if (mp.valid)
+    std::snprintf(msg, sizeof(msg), "PRESSPULL - face %d of solid %d moved %.4f; volume now %.4f.",
+                  ref.index, ref.solidIndex + 1, distance, mp.volume);
+  else
+    std::snprintf(msg, sizeof(msg), "PRESSPULL - face %d of solid %d moved %.4f.", ref.index,
+                  ref.solidIndex + 1, distance);
+  log.push_back(msg);
+}
+
+
 bool HandleSliceTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::Slice)
     return false;
@@ -28764,6 +28856,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // UCS, then exact dimensions — which is what REQ-313's acceptance asks for and no more. The
     // active UCS supplies the orientation, so a cylinder gets an arbitrary 3D axis without a new
     // command or an axis argument (#120), the same rule REQ-312 settled for tilted arcs.
+    // PRESSPULL (REQ-319) — the first command that EDITS a solid rather than creating one. It takes
+    // its target from the REQ-318 sub-object selection, so there is no "select objects" step: the
+    // face was named by a Ctrl+click before the command was typed, which is the pairing the two
+    // requirements were designed around.
+    if (plotTok == "presspull" || plotTok == "pp") {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      CadPressPull(st, restOfLine, log);
+      return;
+    }
     if (CadIsSolidPrimitiveVerb(plotTok)) {
       std::string restOfLine;
       std::getline(issIdle, restOfLine);

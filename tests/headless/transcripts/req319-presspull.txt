@@ -1,0 +1,148 @@
+# REQ-319 (D-2026-09-04-c, GitHub issue #148 Phase 5 slice 3) — PRESSPULL: moving a solid's face.
+#
+# The first command in the program that EDITS a solid rather than creating one. It takes its target
+# from the REQ-318 sub-object selection, which is the pairing the two requirements were designed
+# around: Ctrl+click names the face, PRESSPULL moves it. There is no "select objects" step, and no
+# other way to name a face, so there is nothing to disambiguate.
+#
+# THE BOX. `CMD BOX 0,0 20 10 8` is centred on (0,0) with its base at z = 0: x in [-10,10],
+# y in [-5,5], z in [0,8], volume 1600. Every coordinate below was probed against the shipped kernel
+# before it was asserted (see the req318 transcript for the same note and the same reason).
+#
+# The kernel operation's own arithmetic — volumes, the moved plane, every refusal — is PushPullTests'
+# subject and is not repeated here. What this file owns is what a transcript can see and a unit test
+# cannot: that the COMMAND finds its face, refuses without one, leaves the document untouched when
+# the kernel declines, undoes in one step, and survives a .gs round-trip.
+
+# --- Criterion 3: the selected face moves -----------------------------------------------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+VIEWANGLES -45 35
+
+# Ctrl+click the top face, then push it 3 ft: 20 x 10 of new material.
+SUBOBJECT 0 0 8 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 3
+EXPECT LOG "volume now 2200"
+# The topology is untouched, which is REQ-319 item 5 and what lets the selection survive below.
+EXPECT SOLIDPROPS 0 2200 1060 8 12 6
+
+# --- The selection follows the edit, so a second push continues from the first -----------------------
+# The solid is REPLACED by the edit (it is immutable), and the sub-object reference is keyed on the
+# solid's IDENTITY (ADR-049). Without re-pointing it the reference would expire on the next sweep and
+# the user would have to re-pick the face after every single push.
+
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 3
+EXPECT LOG "volume now 2800"
+EXPECT SUBOBJECTFACES 1
+
+# --- Pulling inward removes material, and the same face keeps being the target -----------------------
+
+CMD PRESSPULL -6
+EXPECT LOG "volume now 1600"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- Criterion 7: one Ctrl+Z per push ---------------------------------------------------------------
+# Three pushes above, so three undos walk back through them one at a time. A push that took two undo
+# steps — or none — would show here and nowhere else.
+
+UNDO
+EXPECT SOLIDPROPS 0 2800 1240 8 12 6
+UNDO
+EXPECT SOLIDPROPS 0 2200 1060 8 12 6
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+REDO
+EXPECT SOLIDPROPS 0 2200 1060 8 12 6
+
+# --- A SIDE face, so the command is not quietly assuming an axis -------------------------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+# The +X face: pushing it 2 ft adds width x height = 10 x 8 x 2 = 160, not 20 x 10 x 2.
+SUBOBJECT 10 0 4 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 2
+EXPECT LOG "volume now 1760"
+
+# --- Refusals: each one leaves the drawing exactly as it was -----------------------------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+
+# No selection at all.
+CMD PRESSPULL 3
+EXPECT LOG "select a solid FACE first"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# A selection that is an EDGE, not a face.
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+CMD PRESSPULL 3
+EXPECT LOG "no face in it"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# Two faces: refused rather than applied twice over. The second push would be computed against the
+# first's result while the user was picturing the original.
+SUBOBJECT 0 0 8 0.5 0.5
+SUBOBJECT 0 0 0 0.5 0.5
+EXPECT SUBOBJECTFACES 2
+CMD PRESSPULL 3
+EXPECT LOG "moves one at a time"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# No distance, and a distance that is not a number.
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 0 0 8 0.5 0.5
+CMD PRESSPULL
+EXPECT LOG "Usage: PRESSPULL"
+CMD PRESSPULL banana
+EXPECT LOG "is not a number"
+CMD PRESSPULL 0
+EXPECT LOG "distance that is not zero"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# A push that would flatten the solid: the kernel's own sentence, and the box is untouched.
+CMD PRESSPULL -8
+EXPECT LOG "turn the solid inside out"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# A CURVED neighbour — the case brep::Validate does not catch, measured at 15% volume error with the
+# precondition removed (see PushPullTests). Here it is simply refused, by name.
+NEW
+CMD CYLINDER 0,0 5 10
+EXPECT SOLIDS 1
+VIEWANGLES -45 35
+SUBOBJECT 0 0 10 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 3
+EXPECT LOG "not flat and parallel to the push"
+
+# --- Criterion 8: a pushed solid survives a .gs round-trip ------------------------------------------
+# Nearly free by construction — GsIo stores TOPOLOGY, not the recipe, precisely so a recipe-less
+# result can be saved (the Booleans and SLICE already rely on it). Asserted anyway, because "it
+# should follow" is how a format gap goes unnoticed until a user's drawing will not reopen.
+
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 0 0 8 0.5 0.5
+CMD PRESSPULL 3
+EXPECT SOLIDPROPS 0 2200 1060 8 12 6
+SAVEAS %OUT%/presspull.gs
+NEW
+EXPECT SOLIDS 0
+OPEN %OUT%/presspull.gs
+EXPECT SOLIDS 1
+# The pushed geometry, not the box it was built as.
+EXPECT SOLIDPROPS 0 2200 1060 8 12 6
+
+CHECK ALL
