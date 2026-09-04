@@ -440,3 +440,137 @@ TEST_CASE("A highlighted face draws its boundary, not only a fill (REQ-318 item 
     REQUIRE_FALSE(lines.empty());
   }
 }
+
+// REQ-319 increment 2 — the face grip's geometry. The DRAG is a mouse gesture and stays GUI-only,
+// but everything it computes is here: where the handle sits, which way the face slides, and how far
+// a cursor ray is asking for. Those are the parts that can be silently wrong and look plausible.
+TEST_CASE("The face grip sits on the face and slides along its normal (REQ-319)", "[subobject]") {
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  AddBox(st, World(), 20.0, 10.0, 8.0);  // x [-10,10], y [-5,5], z [0,8]
+  std::vector<std::string> log;
+
+  SECTION("the top face: handle at the centroid, axis +Z") {
+    REQUIRE(SubmitSubObjectPick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), false, log));
+    ray3d::Vec3 anchor;
+    ray3d::Vec3 axis;
+    REQUIRE(CadSubObjectFaceGrip(st, st.subObjectSelection[0], &anchor, &axis));
+    REQUIRE(anchor.x == Catch::Approx(0.0).margin(1e-9));
+    REQUIRE(anchor.y == Catch::Approx(0.0).margin(1e-9));
+    REQUIRE(anchor.z == Catch::Approx(8.0));   // ON the face, not floating above it
+    REQUIRE(axis.z == Catch::Approx(1.0));     // outward, so a positive drag grows the box
+    REQUIRE(std::fabs(axis.x) + std::fabs(axis.y) == Catch::Approx(0.0).margin(1e-9));
+  }
+  SECTION("a side face: the axis follows the face, not the world") {
+    // A grip that always slid along Z would pass the case above and fail this one.
+    REQUIRE(SubmitSubObjectPick(st, RayAt({100, 0, 4}, {10, 0, 4}), Tol(0.5, 0.5), false, log));
+    ray3d::Vec3 anchor;
+    ray3d::Vec3 axis;
+    REQUIRE(CadSubObjectFaceGrip(st, st.subObjectSelection[0], &anchor, &axis));
+    REQUIRE(anchor.x == Catch::Approx(10.0));
+    REQUIRE(axis.x == Catch::Approx(1.0));
+  }
+  SECTION("an edge or vertex has no face grip") {
+    st.subObjectSelection.clear();
+    REQUIRE(SubmitSubObjectPick(st, RayAt({0, 40, 48}, {0, 5, 8}), Tol(0.5, 0.5), false, log));
+    ray3d::Vec3 a;
+    ray3d::Vec3 x;
+    REQUIRE_FALSE(CadSubObjectFaceGrip(st, st.subObjectSelection[0], &a, &x));
+  }
+  SECTION("an expired reference has no grip either") {
+    REQUIRE(SubmitSubObjectPick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), false, log));
+    const SelectedSubObject ref = st.subObjectSelection[0];
+    brep::Solid other;
+    brep::Problem why{};
+    REQUIRE(brep::MakeBox(World(), 4.0, 4.0, 4.0, &other, &why));
+    st.cadSolids[0] = std::make_shared<const brep::Solid>(std::move(other));
+    ray3d::Vec3 a;
+    ray3d::Vec3 x;
+    REQUIRE_FALSE(CadSubObjectFaceGrip(st, ref, &a, &x));
+  }
+}
+
+TEST_CASE("The grip distance is the closest approach of the cursor ray to the axis (REQ-319)",
+          "[subobject]") {
+  const ray3d::Vec3 anchor{0, 0, 8};
+  const ray3d::Vec3 axis{0, 0, 1};
+  double d = 0.0;
+
+  SECTION("a ray aimed straight at a point on the axis reports that point's offset") {
+    // Sighting horizontally at z = 11, three above the anchor.
+    ray3d::Ray r;
+    r.origin = {100, 0, 11};
+    r.dir = {-1, 0, 0};
+    REQUIRE(CadSubObjectGripAxisDistance(r, anchor, axis, &d));
+    REQUIRE(d == Catch::Approx(3.0));
+  }
+  SECTION("below the anchor is negative — pulling in is the same gesture with the other sign") {
+    ray3d::Ray r;
+    r.origin = {100, 0, 5};
+    r.dir = {-1, 0, 0};
+    REQUIRE(CadSubObjectGripAxisDistance(r, anchor, axis, &d));
+    REQUIRE(d == Catch::Approx(-3.0));
+  }
+  SECTION("it is UNCLAMPED, because the axis is a direction and not a segment") {
+    ray3d::Ray r;
+    r.origin = {100, 0, 908};
+    r.dir = {-1, 0, 0};
+    REQUIRE(CadSubObjectGripAxisDistance(r, anchor, axis, &d));
+    REQUIRE(d == Catch::Approx(900.0));
+  }
+  SECTION("an oblique ray still resolves, and off-axis sideways offset does not change the answer") {
+    // Skew, not intersecting: 5 ft off to the side. The closest approach along the AXIS is still
+    // z = 11, which is what makes a drag work from any camera angle rather than only face-on.
+    ray3d::Ray r;
+    r.origin = {100, 5, 11};
+    r.dir = {-1, 0, 0};
+    REQUIRE(CadSubObjectGripAxisDistance(r, anchor, axis, &d));
+    REQUIRE(d == Catch::Approx(3.0));
+  }
+  SECTION("a ray sighting straight down the axis is refused rather than answered") {
+    // There is no closest point: every point of the axis is equally near. The caller holds its last
+    // value on false, so a drag does not snap to zero as the camera swings through the axis.
+    ray3d::Ray r;
+    r.origin = {0, 0, 100};
+    r.dir = {0, 0, -1};
+    REQUIRE_FALSE(CadSubObjectGripAxisDistance(r, anchor, axis, &d));
+  }
+  SECTION("a degenerate ray or axis is refused") {
+    ray3d::Ray bad;
+    bad.origin = {0, 0, 0};
+    bad.dir = {0, 0, 0};
+    REQUIRE_FALSE(CadSubObjectGripAxisDistance(bad, anchor, axis, &d));
+    ray3d::Ray r;
+    r.origin = {100, 0, 11};
+    r.dir = {-1, 0, 0};
+    REQUIRE_FALSE(CadSubObjectGripAxisDistance(r, anchor, {0, 0, 0}, &d));
+    REQUIRE_FALSE(CadSubObjectGripAxisDistance(r, anchor, axis, nullptr));
+  }
+}
+
+TEST_CASE("The grip drag and the typed command commit through one path (REQ-319)", "[subobject]") {
+  // Both go through CadApplyPushPull, so a drag and a PRESSPULL of the same distance cannot produce
+  // different solids — the single-implementation rule REQ-318 item 1 states for the pick, applied to
+  // the edit. Asserted by driving the shared function directly, which is what the grip's commit does.
+  AppCommandState st;
+  AddBox(st, World(), 20.0, 10.0, 8.0);
+  std::vector<std::string> log;
+  REQUIRE(SubmitSubObjectPick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), false, log));
+
+  const CadSolidPtr before = st.cadSolids[0];
+  REQUIRE(CadApplyPushPull(st, st.subObjectSelection[0], 3.0, log));
+  REQUIRE(st.cadSolids[0] != before);  // replaced, never mutated
+  REQUIRE(brep::ComputeMassProperties(*st.cadSolids[0]).volume == Catch::Approx(2200.0));
+  // The selection followed the edit, so a second push works without re-picking.
+  REQUIRE(st.subObjectSelection.size() == 1);
+  REQUIRE(st.subObjectSelection[0].owner.lock() == st.cadSolids[0]);
+  REQUIRE(CadApplyPushPull(st, st.subObjectSelection[0], 3.0, log));
+  REQUIRE(brep::ComputeMassProperties(*st.cadSolids[0]).volume == Catch::Approx(2800.0));
+
+  SECTION("a refusal leaves the document untouched") {
+    const CadSolidPtr held = st.cadSolids[0];
+    REQUIRE_FALSE(CadApplyPushPull(st, st.subObjectSelection[0], -14.0, log));
+    REQUIRE(st.cadSolids[0] == held);
+    REQUIRE(brep::ComputeMassProperties(*st.cadSolids[0]).volume == Catch::Approx(2800.0));
+  }
+}

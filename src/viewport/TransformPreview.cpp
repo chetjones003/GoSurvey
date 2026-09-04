@@ -1584,6 +1584,81 @@ void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>
   AppendSubObjectGeometry(cmd, cmd.subObjectHover, SubObjectMarkerArm(cmd), faceTris, faceEdges, lines);
 }
 
+void BuildSubObjectGripGeometry(const AppCommandState& cmd, std::vector<float>* handle,
+                                std::vector<float>* preview) {
+  if (handle)
+    handle->clear();
+  if (preview)
+    preview->clear();
+
+  // Exactly one selected face gets a handle. Two would need two handles and a rule for which one a
+  // drag grabs, and PRESSPULL already refuses to move two faces at once — offering a gesture the
+  // commit would decline is worse than offering none.
+  const SelectedSubObject* ref = nullptr;
+  if (cmd.subObjectGripActive) {
+    ref = &cmd.subObjectGripRef;  // mid-drag the handle belongs to the face being dragged
+  } else {
+    int faces = 0;
+    for (const SelectedSubObject& s : cmd.subObjectSelection)
+      if (s.kind == solidpick::Kind::Face) {
+        ++faces;
+        ref = &s;
+      }
+    if (faces != 1)
+      return;
+  }
+
+  ray3d::Vec3 anchor;
+  ray3d::Vec3 axis;
+  if (!CadSubObjectFaceGrip(cmd, *ref, &anchor, &axis))
+    return;
+
+  const double arm = SubObjectMarkerArm(cmd);
+  // Two directions IN the face's plane, so the handle lies flat on the face rather than floating in
+  // front of it — a square that cuts through the surface reads as a bug at a glancing camera angle.
+  ray3d::Vec3 u = std::fabs(axis.z) < 0.9 ? ray3d::Vec3{0, 0, 1} : ray3d::Vec3{1, 0, 0};
+  u = ray3d::Normalize(ray3d::Cross(axis, u));
+  const ray3d::Vec3 v = ray3d::Normalize(ray3d::Cross(axis, u));
+
+  if (handle) {
+    const ray3d::Vec3 c[4] = {
+        ray3d::Add(anchor, ray3d::Add(ray3d::Scale(u, arm), ray3d::Scale(v, arm))),
+        ray3d::Add(anchor, ray3d::Add(ray3d::Scale(u, -arm), ray3d::Scale(v, arm))),
+        ray3d::Add(anchor, ray3d::Add(ray3d::Scale(u, -arm), ray3d::Scale(v, -arm))),
+        ray3d::Add(anchor, ray3d::Add(ray3d::Scale(u, arm), ray3d::Scale(v, -arm))),
+    };
+    for (int i = 0; i < 4; ++i)
+      AppendSeg(handle, c[i], c[(i + 1) % 4]);
+  }
+
+  if (!preview || !cmd.subObjectGripActive)
+    return;
+  const ray3d::Vec3 delta = ray3d::Scale(axis, cmd.subObjectGripDistance);
+  const CadSolidPtr sp = ref->owner.lock();
+  if (!sp || ref->index < 0 || static_cast<size_t>(ref->index) >= sp->faces.size())
+    return;
+  // The face's boundary where it would land. Translated, not rebuilt: `brep::PushPullFace` copies
+  // the whole solid and validates it, which is the right cost once on commit and the wrong cost
+  // every frame of a drag.
+  for (const brep::Loop& loop : sp->faces[static_cast<size_t>(ref->index)].loops) {
+    for (const brep::EdgeUse& use : loop.uses) {
+      if (use.edge < 0 || static_cast<size_t>(use.edge) >= sp->edges.size())
+        continue;
+      std::vector<float> seg;
+      AppendSolidEdge(*sp, sp->edges[static_cast<size_t>(use.edge)], &seg);
+      for (size_t i = 0; i + 2 < seg.size(); i += 3) {
+        preview->push_back(seg[i] + static_cast<float>(delta.x));
+        preview->push_back(seg[i + 1] + static_cast<float>(delta.y));
+        preview->push_back(seg[i + 2] + static_cast<float>(delta.z));
+      }
+    }
+  }
+  // A leader from the handle to where it is going, so the drag distance is readable even when the
+  // moved boundary happens to sit behind other geometry.
+  AppendSeg(preview, anchor, ray3d::Add(anchor, delta));
+}
+
+
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,
                          std::vector<float>* hoverCircles) {
   hoverLines->clear();

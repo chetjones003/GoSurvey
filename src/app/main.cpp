@@ -758,6 +758,18 @@ int main()
         CancelTableCellEditor(cmd);
         cmdBuf[0] = '\0';
       }
+      else if (cmd.subObjectGripActive)
+      {
+        // A TRUE cancel, not an undo: a live face drag changes nothing in the store until it is
+        // committed (REQ-319 increment 2), so abandoning one costs an undo step nobody spent.
+        // Ahead of the other grips for the same reason it is ahead of them on click — it is the
+        // gesture in progress.
+        cmd.subObjectGripActive = false;
+        cmd.subObjectGripDistance = 0.0;
+        BumpCadGpuCache(cmd);
+        cmdLog.push_back("Face drag cancelled.");
+        cmdBuf[0] = '\0';
+      }
       else if (cmd.mtextGripMoveActive)
       {
         AbortMtextGripInteraction(cmd);
@@ -1150,6 +1162,14 @@ int main()
       const float midy = (cmd.trimCutInfP1y + ly) * 0.5f;
       CadTrimAppendCutLineRemovedPreview(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, midx, midy, &previewLines);
     }
+    {
+      // Where a live face drag would put the face (REQ-319 increment 2). The ghost channel, with
+      // every other "this is what you would get" preview — the same reasoning that put the
+      // transform ghost there rather than in the highlight.
+      std::vector<float> gripPreview;
+      BuildSubObjectGripGeometry(cmd, nullptr, &gripPreview);
+      previewLines.insert(previewLines.end(), gripPreview.begin(), gripPreview.end());
+    }
 
     std::vector<float> highlightLines;
     std::vector<float> highlightCircles;
@@ -1166,6 +1186,13 @@ int main()
       BuildSubObjectHighlight(cmd, &subObjectOverlay.selectedFaceTris, &subObjectOverlay.selectedFaceEdges,
                               &subObjectLines);
       highlightLines.insert(highlightLines.end(), subObjectLines.begin(), subObjectLines.end());
+      // The face grip's handle rides the selection channel (REQ-319 increment 2): a grip IS part of
+      // what is selected, and giving it the selection accent is what every other grip in the
+      // program already does. Its drag preview goes to the ghost channel below, with the other
+      // "where this would land" geometry.
+      std::vector<float> gripHandle;
+      BuildSubObjectGripGeometry(cmd, &gripHandle, nullptr);
+      highlightLines.insert(highlightLines.end(), gripHandle.begin(), gripHandle.end());
     }
 
     std::vector<float> hoverLines;

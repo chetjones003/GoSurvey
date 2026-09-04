@@ -137,3 +137,62 @@ built as.
   direction is accepted; everything else is refused, including cases a cleverer implementation could
   handle by re-solving one neighbour. Refusing is the right default while the alternative is silent
   geometric corruption.
+
+---
+
+## Increment 2 — the grip drag
+
+Criterion 3's wording ("3D grips move faces") in the form it implies: a handle on the selected face,
+dragged along its normal, committed with a click.
+
+### Interaction
+
+Click-arm, move, click-commit — **the idiom `entityGripMoveActive` already uses**, so a solid's grip
+behaves like every other grip in the program rather than being the one that wants a held button.
+`Esc` cancels, and it is a *true* cancel: nothing in the store moves until the commit, so abandoning
+a drag costs no undo step. The grip check runs **before** everything else on a click, in both
+directions — a live drag consumes the click as its commit, and an idle click on the handle arms one
+— because the handle sits ON the face it belongs to, and checked later the plain-click branch would
+clear the very selection the handle belongs to.
+
+A click without having moved is treated as a cancel rather than a zero-distance push. The kernel
+would refuse that by name, and "I changed my mind" should not produce an error message.
+
+### Three things worth recording
+
+1. **The drag reads the cursor every frame, ungated.** The hover pick is behind
+   `HoverPickGateShouldRun`; this deliberately is not, because a handle that lags the pointer reads
+   as a stuck drag. It is affordable for the reason the gate exists to protect against does not
+   apply: a skew-line solve searches no geometry.
+2. **The preview translates the face's boundary; it does not rebuild the solid.** `PushPullFace`
+   copies the whole solid and validates it — the right cost once on commit, the wrong cost on every
+   frame of a drag. Translating the boundary shows exactly where the face will land at a cost that
+   does not grow with the solid, and the real geometry is still computed once where a refusal can
+   be reported (ADR-046 (d)).
+3. **The drag and `PRESSPULL` commit through one function.** `CadApplyPushPull` was extracted from
+   the command for this, so the two cannot diverge about what a push does — REQ-318 item 1's
+   single-implementation rule applied to the edit rather than to the pick.
+
+Also: a handle appears only when **exactly one** face is selected. `PRESSPULL` refuses to move two
+faces at once, and offering a gesture the commit would decline is worse than offering none.
+
+### Test
+
+`SubObjectSelectionTests` gains three cases (12 total, 241 assertions). The drag itself is a mouse
+gesture and stays GUI-only, but everything it computes is asserted: the handle sits **on** the face
+at its centroid with the axis pointing outward; a side face's axis follows the face rather than the
+world (a grip that always slid along Z would pass the top-face case and fail this one); the distance
+is the unclamped, signed closest approach of the cursor ray to the axis, unchanged by sideways offset
+so a drag works from any camera angle; a ray sighting straight down the axis is **refused** rather
+than answered, because there is no closest point and the caller holds its last value instead of
+snapping to zero as the camera swings through; and the shared commit replaces rather than mutates,
+carries the selection forward, and leaves the document untouched on a refusal.
+
+`ctest` **1136/1136**.
+
+### Debt
+
+- **DEBT-4 — no numeric entry during a drag.** AutoCAD lets you type a distance mid-gesture. Here the
+  drag is mouse-only and `PRESSPULL` is keyboard-only; they meet at the same commit but not in the
+  same gesture.
+- **DEBT-5 — no ORTHO or snap interaction.** The distance is whatever the cursor ray resolves to.

@@ -25779,11 +25779,17 @@ void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std:
     return;
   }
 
-  const SelectedSubObject ref = *faces.front();
+  CadApplyPushPull(st, *faces.front(), distance, log);
+}
+
+bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double distance,
+                      std::vector<std::string>& log) {
   const CadSolidPtr sp = ref.owner.lock();
-  if (!sp || ref.solidIndex < 0 || static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size()) {
+  if (ref.kind != solidpick::Kind::Face || !sp || ref.solidIndex < 0 ||
+      static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size() ||
+      st.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp) {
     log.push_back("PRESSPULL - that face is no longer there.");
-    return;
+    return false;
   }
 
   brep::Solid moved;
@@ -25792,7 +25798,7 @@ void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std:
     // ADR-046 (d) and REQ-201: the kernel's own sentence, and the document is untouched. Nothing
     // above this line has modified anything, which is what makes that true rather than restored.
     log.push_back(std::string("PRESSPULL - ") + brep::ProblemText(why));
-    return;
+    return false;
   }
 
   // One undo step for the whole edit (REQ-319 item 7) - the geometry, the dropped recipe and the
@@ -25821,6 +25827,80 @@ void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std:
     std::snprintf(msg, sizeof(msg), "PRESSPULL - face %d of solid %d moved %.4f.", ref.index,
                   ref.solidIndex + 1, distance);
   log.push_back(msg);
+  return true;
+}
+
+bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                          ray3d::Vec3* outAnchor, ray3d::Vec3* outAxis) {
+  if (!outAnchor || !outAxis || ref.kind != solidpick::Kind::Face || ref.index < 0)
+    return false;
+  const CadSolidPtr sp = ref.owner.lock();
+  if (!sp || ref.solidIndex < 0 || static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size() ||
+      st.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp)
+    return false;
+  if (static_cast<size_t>(ref.index) >= sp->faces.size())
+    return false;
+  const brep::Face& f = sp->faces[static_cast<size_t>(ref.index)];
+  if (f.surface.kind != brep::SurfaceKind::Plane)
+    return false;  // only a flat face can be pushed (REQ-319), so only a flat face gets a handle
+
+  // The centroid of the face's boundary vertices. Averaged over DISTINCT vertices, not over edge
+  // uses: a loop uses each vertex twice, so summing uses would weight a shared corner double and
+  // pull the handle off centre on any face whose loop is not uniform.
+  ray3d::Vec3 sum{0.0, 0.0, 0.0};
+  int n = 0;
+  std::vector<int> seen;
+  for (const brep::Loop& loop : f.loops) {
+    for (const brep::EdgeUse& use : loop.uses) {
+      if (use.edge < 0 || static_cast<size_t>(use.edge) >= sp->edges.size())
+        continue;
+      const brep::Edge& e = sp->edges[static_cast<size_t>(use.edge)];
+      for (int v : {e.v0, e.v1}) {
+        if (v < 0 || static_cast<size_t>(v) >= sp->vertices.size())
+          continue;
+        if (std::find(seen.begin(), seen.end(), v) != seen.end())
+          continue;
+        seen.push_back(v);
+        sum = ray3d::Add(sum, sp->vertices[static_cast<size_t>(v)].p);
+        ++n;
+      }
+    }
+  }
+  if (n == 0)
+    return false;
+  *outAnchor = ray3d::Scale(sum, 1.0 / static_cast<double>(n));
+
+  // The same direction `brep::PushPullFace` will move it, `Surface::inward` included — or a positive
+  // drag would push the face one way and the commit would move it the other.
+  ray3d::Vec3 dir = f.surface.frame.zAxis;
+  if (f.surface.inward)
+    dir = ray3d::Scale(dir, -1.0);
+  const double len = ray3d::Length(dir);
+  if (!(len > 1e-12))
+    return false;
+  *outAxis = ray3d::Scale(dir, 1.0 / len);
+  return true;
+}
+
+bool CadSubObjectGripAxisDistance(const ray3d::Ray& ray, const ray3d::Vec3& anchor,
+                                  const ray3d::Vec3& axis, double* outDistance) {
+  if (!outDistance || !ray.valid())
+    return false;
+  const double axisLen = ray3d::Length(axis);
+  if (!(axisLen > 1e-12))
+    return false;
+  const ray3d::Vec3 u = ray3d::Scale(axis, 1.0 / axisLen);
+  const ray3d::Vec3 d = ray3d::Normalize(ray.dir);
+  // Closest approach of two skew lines. `s` is the parameter along the AXIS, which is the distance
+  // we want because `u` is a unit vector. Unclamped: the axis is a direction the face slides along,
+  // not a segment, and clamping would stop the drag at an arbitrary end.
+  const double dDotU = ray3d::Dot(d, u);
+  const double denom = 1.0 - dDotU * dDotU;  // = sin^2 of the angle between them
+  if (!(std::fabs(denom) > 1e-12))
+    return false;  // the cursor is sighting straight down the axis: no closest point to speak of
+  const ray3d::Vec3 w0 = ray3d::Sub(anchor, ray.origin);
+  *outDistance = (ray3d::Dot(w0, d) * dDotU - ray3d::Dot(w0, u)) / denom;
+  return true;
 }
 
 
