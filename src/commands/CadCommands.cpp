@@ -5887,10 +5887,9 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
                               float* outMxX, float* outMxY) {
   const float h = CadAnnotationHeightWorld(a, modelUnitsPerPlottedInch);
   if (CadAnnotationHasTextBox(a.kind)) {
-    *outMnX = std::min(a.boxMinX, a.boxMaxX);
-    *outMxX = std::max(a.boxMinX, a.boxMaxX);
-    *outMnY = std::min(a.boxMinY, a.boxMaxY);
-    *outMxY = std::max(a.boxMinY, a.boxMaxY);
+    // Delegated, not duplicated — CadTextAnnotationBounds returns the same stored box. Kept as an
+    // explicit early-out only because the dimension branch below must not fall through to it.
+    CadTextAnnotationBounds(a, h, outMnX, outMnY, outMxX, outMxY);
     return;
   }
   if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
@@ -5921,8 +5920,7 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
     const float ey2 = a.dimExt2Y + (sy2 - a.dimExt2Y) * u2;
     expandSeg(ex1, ey1, sx1 + nx * over, sy1 + ny * over);
     expandSeg(ex2, ey2, sx2 + nx * over, sy2 + ny * over);
-    const float charFactor = 0.55f;
-    const float tw = std::max(h * charFactor * std::max(1.f, static_cast<float>(a.text.size())), h * 2.f);
+    const float tw = CadTextEstimatedWidth(a.text, h);  // the dimension LABEL's own quad
     const float c = std::cos(a.rotationRad);
     const float s = std::sin(a.rotationRad);
     auto corner = [&](float lx, float ly, float* ox, float* oy) {
@@ -5941,30 +5939,8 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
       expandSeg(xs[i], ys[i], xs[i], ys[i]);
     return;
   }
-  const float charFactor = 0.55f;
-  const float w = std::max(h * charFactor * std::max(1.f, static_cast<float>(a.text.size())), h * 2.f);
-  const float c = std::cos(a.rotationRad);
-  const float s = std::sin(a.rotationRad);
-  auto corner = [&](float lx, float ly, float* ox, float* oy) {
-    const float rx = lx * c - ly * s;
-    const float ry = lx * s + ly * c;
-    *ox = a.insX + rx;
-    *oy = a.insY + ry;
-  };
-  float xs[4]{};
-  float ys[4]{};
-  corner(0.f, 0.f, &xs[0], &ys[0]);
-  corner(w, 0.f, &xs[1], &ys[1]);
-  corner(w, -h, &xs[2], &ys[2]);
-  corner(0.f, -h, &xs[3], &ys[3]);
-  *outMnX = *outMxX = xs[0];
-  *outMnY = *outMxY = ys[0];
-  for (int i = 1; i < 4; ++i) {
-    *outMnX = std::min(*outMnX, xs[i]);
-    *outMxX = std::max(*outMxX, xs[i]);
-    *outMnY = std::min(*outMnY, ys[i]);
-    *outMxY = std::max(*outMxY, ys[i]);
-  }
+  // Plain TEXT: the shared rule, one definition with paper space (TASK-197).
+  CadTextAnnotationBounds(a, h, outMnX, outMnY, outMxX, outMxY);
 }
 
 int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,

@@ -249,13 +249,17 @@ TEST_CASE("Paper text bounds anchor at the top-left insertion (REQ-039)", "[pape
   t.insX = 3.f;
   t.insY = 4.f;
   t.plottedHeightInches = 0.5f;
-  t.text = "AB";  // two glyphs → width = 0.6*h*2 = 0.6
+  // Two glyphs → width = kCadTextAdvanceFactor * h * 2 = 0.55 * 0.5 * 2 = 0.55. Paper used its own
+  // 0.6 until TASK-197; model and paper now share one factor, so a string of a given height reports
+  // the same width on a sheet as it does in the model — REQ-039's parity, in the one place it was
+  // measurably absent.
+  t.text = "AB";
   float x0, y0, x1, y1;
   PaperTextBoundsIn(t, &x0, &y0, &x1, &y1);
   REQUIRE(x0 == Catch::Approx(3.f));
   REQUIRE(y1 == Catch::Approx(4.f));        // top edge at the insertion Y
   REQUIRE(y0 == Catch::Approx(4.f - 0.5f)); // descends one line height below it
-  REQUIRE(x1 == Catch::Approx(3.f + 0.6f));
+  REQUIRE(x1 == Catch::Approx(3.f + 0.55f));
   REQUIRE(y0 < y1);
 }
 
@@ -500,4 +504,139 @@ TEST_CASE("Paper box-select tests the object, not a box round it (REQ-039, TASK-
     SelectPaperEntitiesInBox(L, -1.f, -1.f, 1.f, 1.f, /*windowMode=*/false, out);
     REQUIRE(n(out) == 1);
   }
+}
+
+// TASK-197 — paper text is bounded by the rectangle it OCCUPIES. Paper space carried its own copy of
+// the text-bounds rule and it differed from model space's in three ways, each of which put the pick
+// and the fence somewhere the glyphs are not. Every case below failed before the fix.
+TEST_CASE("Paper text bounds: the box it occupies, not a guess at the insertion point (TASK-197)",
+          "[paperspace]") {
+  SECTION("MTEXT is bounded by the box the user dragged, not by a one-line estimate") {
+    CadAnnotation a;
+    a.kind = CadAnnotation::Kind::Mtext;
+    a.insX = 0.f;
+    a.insY = 0.f;
+    a.plottedHeightInches = 0.25f;
+    a.text = "a paragraph of wrapped text";
+    a.boxMinX = 10.f; a.boxMaxX = 14.f;   // the rectangle the renderer wraps, anchors and clips to
+    a.boxMinY = 20.f; a.boxMaxY = 23.f;
+    float x0, y0, x1, y1;
+    PaperTextBoundsIn(a, &x0, &y0, &x1, &y1);
+    REQUIRE(x0 == Catch::Approx(10.f));
+    REQUIRE(y0 == Catch::Approx(20.f));
+    REQUIRE(x1 == Catch::Approx(14.f));
+    REQUIRE(y1 == Catch::Approx(23.f));
+  }
+
+  SECTION("a Table is bounded by its box too") {
+    CadAnnotation a;
+    a.kind = CadAnnotation::Kind::Table;
+    a.plottedHeightInches = 0.25f;
+    a.text = "cells";
+    a.boxMinX = 1.f; a.boxMaxX = 6.f;
+    a.boxMinY = 2.f; a.boxMaxY = 5.f;
+    float x0, y0, x1, y1;
+    PaperTextBoundsIn(a, &x0, &y0, &x1, &y1);
+    REQUIRE(x0 == Catch::Approx(1.f));
+    REQUIRE(y0 == Catch::Approx(2.f));
+    REQUIRE(x1 == Catch::Approx(6.f));
+    REQUIRE(y1 == Catch::Approx(5.f));
+  }
+
+  SECTION("a stored box is normalized, so a box dragged right-to-left is still a box") {
+    CadAnnotation a;
+    a.kind = CadAnnotation::Kind::Mtext;
+    a.text = "x";
+    a.boxMinX = 14.f; a.boxMaxX = 10.f;   // reversed corners
+    a.boxMinY = 23.f; a.boxMaxY = 20.f;
+    float x0, y0, x1, y1;
+    PaperTextBoundsIn(a, &x0, &y0, &x1, &y1);
+    REQUIRE(x0 == Catch::Approx(10.f));
+    REQUIRE(y0 == Catch::Approx(20.f));
+    REQUIRE(x1 == Catch::Approx(14.f));
+    REQUIRE(y1 == Catch::Approx(23.f));
+  }
+
+  SECTION("rotation turns the box with the glyphs") {
+    CadAnnotation a;
+    a.kind = CadAnnotation::Kind::Text;
+    a.insX = 0.f;
+    a.insY = 0.f;
+    a.plottedHeightInches = 1.f;
+    a.text = "ABCD";                       // 4 glyphs -> w = 0.55 * 1 * 4 = 2.2
+    a.rotationRad = 1.5707963267948966f;   // 90 deg CCW
+    float x0, y0, x1, y1;
+    PaperTextBoundsIn(a, &x0, &y0, &x1, &y1);
+    // Unrotated the box is [0,2.2] x [-1,0]. Turned a quarter turn about the insertion point it
+    // becomes [0,1] x [0,2.2] — the string now runs UP the sheet, and the box has to run up with it.
+    REQUIRE(x0 == Catch::Approx(0.f).margin(1.e-6));  // margin: Approx(0) rejects a signed zero
+    REQUIRE(x1 == Catch::Approx(1.f));
+    REQUIRE(y0 == Catch::Approx(0.f).margin(1.e-6));
+    REQUIRE(y1 == Catch::Approx(2.2f));
+  }
+
+  SECTION("width counts characters, not bytes") {
+    CadAnnotation a;
+    a.kind = CadAnnotation::Kind::Text;
+    a.insX = 0.f;
+    a.insY = 0.f;
+    a.plottedHeightInches = 1.f;
+    a.text = "\xC3\xA9\xC3\xA9\xC3\xA9";   // "eee" with acute accents: 3 characters, 6 BYTES
+    float x0, y0, x1, y1;
+    PaperTextBoundsIn(a, &x0, &y0, &x1, &y1);
+    REQUIRE(x1 - x0 == Catch::Approx(0.55f * 3.f));   // not 6 characters' worth
+    // The same three characters written in ASCII must measure the same.
+    CadAnnotation b = a;
+    b.text = "eee";
+    float bx0, by0, bx1, by1;
+    PaperTextBoundsIn(b, &bx0, &by0, &bx1, &by1);
+    REQUIRE(x1 - x0 == Catch::Approx(bx1 - bx0));
+  }
+
+  SECTION("a short label reports the width it draws, with no minimum padding") {
+    CadAnnotation a;
+    a.kind = CadAnnotation::Kind::Text;
+    a.insX = 0.f;
+    a.insY = 0.f;
+    a.plottedHeightInches = 1.f;
+    a.text = "A";
+    float x0, y0, x1, y1;
+    PaperTextBoundsIn(a, &x0, &y0, &x1, &y1);
+    // Was floored at 2*h in model space, which reported an extent three times the glyph. A pick
+    // aperture belongs to the pick (PickPaperEntityAt already expands by tolIn), not to the extent —
+    // applied here it also inflated the box FENCE, which is what TASK-196 spent its length removing.
+    REQUIRE(x1 - x0 == Catch::Approx(0.55f));
+  }
+}
+
+// The bounds above are what the box fence consumes, so the fix has to be visible through it too.
+TEST_CASE("Paper box-select follows an MTEXT's real box (TASK-197)", "[paperspace]") {
+  PaperLayout L;
+  CadAnnotation a;
+  a.kind = CadAnnotation::Kind::Mtext;
+  a.insX = 0.f;                       // insertion point at the origin ...
+  a.insY = 0.f;
+  a.plottedHeightInches = 0.25f;
+  a.text = "wrapped paragraph text";
+  a.boxMinX = 10.f; a.boxMaxX = 14.f;  // ... the box it occupies is ten inches away
+  a.boxMinY = 20.f; a.boxMaxY = 23.f;
+  L.paperTexts.push_back(a);
+
+  std::vector<PaperEntityRef> out;
+  // A crossing box over the text as drawn selects it.
+  SelectPaperEntitiesInBox(L, 11.f, 21.f, 13.f, 22.f, /*windowMode=*/false, out);
+  REQUIRE(out.size() == 1);
+  REQUIRE(out.front().type == PaperEntityRef::Type::Text);
+
+  // A crossing box over the INSERTION POINT, where the old estimate put the rectangle, selects
+  // nothing — there is no text drawn there.
+  out.clear();
+  SelectPaperEntitiesInBox(L, -1.f, -1.f, 1.f, 1.f, /*windowMode=*/false, out);
+  REQUIRE(out.empty());
+
+  // Window mode needs the real box inside, and is not satisfied by enclosing the insertion point.
+  SelectPaperEntitiesInBox(L, -1.f, -1.f, 5.f, 5.f, /*windowMode=*/true, out);
+  REQUIRE(out.empty());
+  SelectPaperEntitiesInBox(L, 9.f, 19.f, 15.f, 24.f, /*windowMode=*/true, out);
+  REQUIRE(out.size() == 1);
 }

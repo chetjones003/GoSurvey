@@ -354,17 +354,27 @@ inline bool SnapPaperInchPoint(const PaperLayout& L, float px, float py, float t
   return found;
 }
 
-// Approximate paper-text bounds in paper inches (REQ-039). The renderer treats the insertion point as the
-// TOP-LEFT (matching model AddText): the glyphs occupy [insY - h, insY] in paper Y and [insX, insX + w] in X.
+// Paper-text bounds in paper inches (REQ-039). The renderer treats the insertion point as the TOP-LEFT
+// (matching model AddText): the glyphs occupy [insY - h, insY] in paper Y and [insX, insX + w] in X.
 // Earlier code anchored the bounds above the text (insertion-as-bottom-left), so click-picking text was off by
-// ~one line height (TASK-012 debt); anchor downward to match the glyphs. Pure + header-only so it is testable.
+// ~one line height (TASK-012 debt); anchor downward to match the glyphs.
+//
+// The rule itself is \ref CadTextAnnotationBounds — ONE definition shared with model space, which is what
+// REQ-039's "the exact UX they use in model space" asks for. This function had its own copy, and it differed
+// in three ways that all reached the user (TASK-197):
+//
+//   * it ignored the BOX an MTEXT or a Table actually occupies — the rectangle the user dragged, and the one
+//     the renderer wraps, anchors and clips to — and substituted a one-line guess sitting at the insertion
+//     point, so a sheet MTEXT was picked nowhere near where it is drawn;
+//   * it ignored `rotationRad`, so a rotated string's box stayed axis-aligned around where the string would
+//     have been unrotated;
+//   * it measured width by `text.size()`, a BYTE count, so any accented or CJK string got a box two to four
+//     times too wide.
+//
+// Height only ever comes from `plottedHeightInches` here: paper inches ARE plotted inches (ADR-025 (g)), so
+// unlike model space there is no drawing scale to divide by.
 inline void PaperTextBoundsIn(const CadAnnotation& a, float* x0, float* y0, float* x1, float* y1) {
-  const float h = std::max(0.01f, a.plottedHeightInches);
-  const float w = std::max(h * 0.6f, h * 0.6f * static_cast<float>(a.text.size()));
-  *x0 = a.insX;
-  *y0 = a.insY - h;
-  *x1 = a.insX + w;
-  *y1 = a.insY;
+  CadTextAnnotationBounds(a, std::max(0.01f, a.plottedHeightInches), x0, y0, x1, y1);
 }
 
 // Window/crossing test for a chain of paper-inch points (x,y pairs, in order): window wants EVERY

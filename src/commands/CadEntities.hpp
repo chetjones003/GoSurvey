@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -357,6 +358,85 @@ struct CadAnnotation {
 
 [[nodiscard]] inline bool CadAnnotationHasTextBox(CadAnnotation::Kind k) {
   return k == CadAnnotation::Kind::Mtext || k == CadAnnotation::Kind::Table;
+}
+
+/// Estimated advance width of one character as a fraction of the text height.
+///
+/// An ESTIMATE, and deliberately one value: the true width comes from the resolved font's advances
+/// (`Shx::MeasureWidthPx` for a stroke font, `ImFont::CalcTextSizeA` for a TrueType one), and neither
+/// is reachable from here — the SHX path reads font files off disk and the TTF path lives above this
+/// layer in the UI. A hit test that answered differently depending on which Autodesk fonts happen to
+/// be installed would be worse than one that is consistently approximate. Named and shared so model
+/// space and paper space cannot drift apart about how wide a string is, which is what they had done.
+inline constexpr float kCadTextAdvanceFactor = 0.55f;
+
+/// UTF-8 code points in \p s — the count that decides how wide a string DRAWS.
+///
+/// `std::string::size()` counts BYTES. Every non-ASCII character is 2-4 of them, so a string of
+/// accented or CJK text measured by `size()` produces a box two to four times too wide, and the
+/// selection box round it reaches that much past the glyphs.
+[[nodiscard]] inline std::size_t CadTextGlyphCount(const std::string& s) {
+  std::size_t n = 0;
+  for (unsigned char c : s)
+    if ((c & 0xC0) != 0x80)  // continuation bytes are 10xxxxxx; count lead bytes only
+      ++n;
+  return n;
+}
+
+/// The estimated drawn width of \p text at height \p h. See \ref kCadTextAdvanceFactor.
+///
+/// There is deliberately **no minimum width**. This used to floor at `2 * h`, which made a one- or
+/// two-character label report an extent up to three times the glyphs it draws — and a bounds function
+/// that overstates is a fence that selects a label the box never touched, the defect TASK-196 spent
+/// its whole length removing from every other type. The floor was there so a short label would still
+/// be clickable; that is an APERTURE, and both pick sites already apply one — `PickPaperEntityAt`
+/// expands by `tolIn` and `PickCadAnnotationAt` by `tol`. Keeping it here applied it a second time,
+/// to the box fence as well, where it has no business.
+[[nodiscard]] inline float CadTextEstimatedWidth(const std::string& text, float h) {
+  return kCadTextAdvanceFactor * h * std::max(1.f, static_cast<float>(CadTextGlyphCount(text)));
+}
+
+/// The rectangle a TEXT-like annotation occupies, in whatever units \p heightUnits is expressed in —
+/// world units in model space, paper inches on a sheet. Outputs are a normalized AABB.
+///
+/// The insertion point is the TOP-LEFT: glyphs occupy `[insX, insX + w]` and `[insY - h, insY]`,
+/// matching what the renderer draws (and `AddText`, which draws from a top-left origin).
+///
+/// One definition for both spaces (REQ-039: a sheet object gets "the exact UX they use in model
+/// space"). Paper space had its own copy, and it differed in three ways that all reached the user:
+/// it ignored the stored box an MTEXT actually occupies, it ignored `rotationRad` so a rotated
+/// string's box stayed axis-aligned at the wrong place, and it used a different advance factor.
+inline void CadTextAnnotationBounds(const CadAnnotation& a, float heightUnits, float* mnX, float* mnY,
+                                    float* mxX, float* mxY) {
+  if (CadAnnotationHasTextBox(a.kind)) {
+    // MTEXT and Table carry the box the user actually dragged, and the renderer wraps, anchors and
+    // clips to it. Nothing estimated can beat the real thing.
+    *mnX = std::min(a.boxMinX, a.boxMaxX);
+    *mxX = std::max(a.boxMinX, a.boxMaxX);
+    *mnY = std::min(a.boxMinY, a.boxMaxY);
+    *mxY = std::max(a.boxMinY, a.boxMaxY);
+    return;
+  }
+  const float h = heightUnits;
+  const float w = CadTextEstimatedWidth(a.text, h);
+  const float c = std::cos(a.rotationRad);
+  const float s = std::sin(a.rotationRad);
+  float xs[4];
+  float ys[4];
+  const float lx[4] = {0.f, w, w, 0.f};
+  const float ly[4] = {0.f, 0.f, -h, -h};
+  for (int i = 0; i < 4; ++i) {
+    xs[i] = a.insX + lx[i] * c - ly[i] * s;
+    ys[i] = a.insY + lx[i] * s + ly[i] * c;
+  }
+  *mnX = *mxX = xs[0];
+  *mnY = *mxY = ys[0];
+  for (int i = 1; i < 4; ++i) {
+    *mnX = std::min(*mnX, xs[i]);
+    *mxX = std::max(*mxX, xs[i]);
+    *mnY = std::min(*mnY, ys[i]);
+    *mxY = std::max(*mxY, ys[i]);
+  }
 }
 
 /// Committed 3-point arc (circumcircle + start/sweep in radians from +X).
