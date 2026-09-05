@@ -1899,7 +1899,17 @@ requirements is a planning failure, not a sign of rigor.
   - no gizmo is drawn when the selection is empty.
 - Owner-layer: UI (widget), Commands (apply + undo)
 - Status: accepted
-- Revisions: 2026-08-11 — initial.
+- **Starting state — measured 2026-09-04, when this was first picked up.** Neither half of the
+  acceptance above was reachable. `ApplyTranslationToSelection` takes `(dx, dy)` and never touches
+  Z; `ApplyRotationToSelection` turns about a vertical axis only; `ApplyScaleToSelection` scales
+  about a flat point. And all six transform commands drop solids by name. So a gizmo's up-down
+  handle would have had no typed command to agree with, and the objects Phase 5 exists to edit could
+  not be moved at all. **REQ-320 lifts translation to 3D and makes a solid movable**; the gizmo
+  follows it rather than preceding it, because "agrees with the equivalent typed command" requires
+  the typed command to be able to say it first.
+- Revisions: 2026-08-11 — initial. 2026-09-04 — the starting-state note added and the delivery
+  sequenced behind REQ-320 (D-2026-09-04-f). No change to what is required, only to what has to
+  exist underneath it.
 
 ### REQ-061 — Per-viewport camera in paper space
 - Purpose: put a plan view and an isometric on the same sheet
@@ -6710,6 +6720,66 @@ capability that does not exist. They are recorded here rather than quietly dropp
   moves it with the mouse and previews the result live — which is #148's criterion 3 in the form its
   wording implies.
 - Revisions: 2026-09-04 — initial (D-2026-09-04-c, GitHub issue #148 criteria 3, 7 and 8).
+
+### REQ-320 — MOVE works in three dimensions, and a solid can be moved
+
+- Purpose: REQ-060 asks for a gizmo that manipulates the selection **in 3D** and whose drag must
+  "produce coordinates agreeing with the equivalent typed command". Neither half is possible today:
+  the transform the typed command uses is flat, and it throws solids out. This is the layer that has
+  to exist before a gizmo can sit on it.
+- Priority: must
+- Type: functional
+- Depends on: REQ-057 (Z in the data), REQ-058 (a camera that can show it), REQ-313 / ADR-045
+  (`brep::Translate`, which already moves a solid completely).
+- **Starting state — measured, because the gap is the reason this requirement exists.**
+  `ApplyTranslationToSelection` takes `(dx, dy)` and never touches Z: not once in its hundred-odd
+  lines, for any of the ten entity types it walks. `ApplyRotationToSelection` turns about a vertical
+  axis only and `ApplyScaleToSelection` scales about a flat point. And **all six** transform
+  commands — MOVE, ROTATE, SCALE, MIRROR, ARRAY, STRETCH — call
+  `DropSolidsFromSelectionForTransform`, which removes every solid from the selection and reports
+  *"transforming a solid is not supported yet"*. So the objects Phase 5 exists to edit cannot be
+  moved at all, by any means, and the `SelectedEntity::Type::Solid` comment says so and names Phase 5
+  as where that is to be fixed.
+- Statement: **MOVE translates the selection in three dimensions, and a solid moves with it.**
+  1. **The translation carries a Z component**, applied to every entity type that has an elevation:
+     a line's two endpoints, a circle's, arc's and ellipse's plane, a polyline's and feature line's
+     vertices, an annotation's insertion, a filled region's vertices, a block reference's insertion,
+     and a solid.
+  2. **A solid moves through `brep::Translate`**, not through a per-field sweep. That function
+     already moves every vertex, every arc edge's centre, every face's surface origin, a NURBS
+     patch's control points and the recipe's placement frame — and its own documentation says why
+     that must stay in one place: *"open-coded at a call site, adding a field to `Surface` later
+     would silently miss it, and a solid that half-moved is not a shape at all."*
+  3. **A solid is REPLACED, not edited.** `CadSolidPtr` is `shared_ptr<const brep::Solid>` so an undo
+     snapshot is a refcount bump; the translated solid is a new object taking the old one's place.
+  4. **Typed MOVE accepts an elevation.** A base point or destination may be `X,Y,Z`, and a relative
+     destination may be `@dx,dy,dz`. An omitted Z is zero, so every existing drawing, transcript and
+     habit behaves exactly as before.
+  5. **One undoable step**, as MOVE already is — the Z part is not a second operation.
+  6. **Nothing else changes.** ROTATE, SCALE, MIRROR, ARRAY and STRETCH keep refusing solids and keep
+     working in plan, and say so by name. Widening them means rotating every entity's stored frame
+     about an arbitrary axis, which is the work REQ-312 needed for a single tilted arc; it is a
+     separate requirement, not a footnote to this one.
+- Acceptance:
+  - a typed MOVE with a Z component moves a line, a circle, an arc, an ellipse, a polyline, a
+    feature line, an annotation and a block reference by that Z, and their reported elevations change
+    by exactly it;
+  - a MOVE with no Z component leaves every elevation untouched, byte for byte — the existing
+    behaviour is the default, not a special case;
+  - a **solid** moves, and its volume and surface area are unchanged by the move to the last digit
+    the closed forms give: a translation is an isometry, so any drift is a defect rather than a
+    tolerance;
+  - a moved solid's faces, edges and vertices are all displaced by the same vector — a solid that
+    half-moved would still validate, so this is asserted against the geometry rather than against
+    `Validate`;
+  - a moved solid saves and reloads from `.gs` at its new position;
+  - one Ctrl+Z restores the pre-move position, solids included, in a single step;
+  - ROTATE, SCALE, MIRROR, ARRAY and STRETCH still refuse a solid by name, unchanged.
+- Owner-layer: Commands (the transform and the typed parse), Domain (`brep::Translate`, already there)
+- Status: accepted — increment 1 of REQ-060's prerequisites (D-2026-09-04-f, GitHub issue #148
+  Phase 5 slice 4a).
+- Revisions: 2026-09-04 — initial. Written when REQ-060's gizmo work found that the transforms it
+  must agree with are two-dimensional and exclude solids, which no requirement had recorded.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

@@ -2952,6 +2952,9 @@ struct AppCommandState {
 
   float modifyBaseX = 0.f;
   float modifyBaseY = 0.f;
+  /// REQ-320: the base point's elevation, so a typed MOVE can carry a Z. Zero when the base was
+  /// typed without one, which is every drawing that predates 3D MOVE.
+  float modifyBaseZ = 0.f;
   /// \c Kind::Scale — after base pick: reference length (world) so scale = new length / this value (or distance /
   /// base-to-cursor over this value in \c ScalePhase::FactorPick).
   float scaleRefDist = 1.f;

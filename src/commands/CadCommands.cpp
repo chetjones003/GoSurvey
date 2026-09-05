@@ -9299,9 +9299,44 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
   BumpCadGpuCache(st);
 }
 
-void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
+/// Move every selected solid by (dx, dy, dz), replacing each rather than editing it (REQ-320).
+///
+/// `brep::Translate` and not a per-field sweep here, and its own header says why: it moves every
+/// vertex, every arc edge's centre, every face's surface origin, a NURBS patch's control points and
+/// the recipe's placement frame, and *"open-coded at a call site, adding a field to `Surface` later
+/// would silently miss it, and a solid that half-moved is not a shape at all."*
+///
+/// Replaced, never edited: `CadSolidPtr` is `shared_ptr<const brep::Solid>` precisely so an undo
+/// snapshot is a refcount bump, which makes immutability the precondition for undo working at all.
+static void TranslateSelectedSolids(AppCommandState& st, float dx, float dy, float dz) {
+  if (dx == 0.f && dy == 0.f && dz == 0.f)
+    return;
+  // De-duplicated: a selection should not hold the same solid twice, and translating one twice
+  // would move it twice as far — a defect that only shows up on a drawing where it happened.
+  std::set<int> seen;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.cadSolids.size())
+      continue;
+    if (!seen.insert(e.index).second)
+      continue;
+    const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
+    if (!sp)
+      continue;
+    st.cadSolids[static_cast<size_t>(e.index)] = std::make_shared<const brep::Solid>(
+        brep::Translate(*sp, ray3d::Vec3{static_cast<double>(dx), static_cast<double>(dy),
+                                         static_cast<double>(dz)}));
+  }
+}
+
+void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float dz,
+                                std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MOVE", log);
-  DropSolidsFromSelectionForTransform(st, "MOVE", log);
+  // Solids are NOT dropped any more (REQ-320): `brep::Translate` moves one completely, and doing so
+  // is the whole reason this function gained a Z. Every OTHER transform still drops them by name -
+  // rotating a solid means turning every surface frame and every arc-edge frame in its topology,
+  // which is a separate requirement rather than a footnote to this one.
+  TranslateSelectedSolids(st, dx, dy, dz);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 &&
@@ -9315,8 +9350,10 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::v
     if (k + 5 < st.userLinesFlat.size()) {
       st.userLinesFlat[k] += dx;
       st.userLinesFlat[k + 1] += dy;
+      st.userLinesFlat[k + 2] += dz;
       st.userLinesFlat[k + 3] += dx;
       st.userLinesFlat[k + 4] += dy;
+      st.userLinesFlat[k + 5] += dz;
     }
   }
   for (const auto& e : st.selection) {
@@ -9326,6 +9363,7 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::v
     if (k + 3 < st.userCirclesCxCyZR.size()) {
       st.userCirclesCxCyZR[k] += dx;
       st.userCirclesCxCyZR[k + 1] += dy;
+      st.userCirclesCxCyZR[k + 2] += dz;  // cx, cy, Z, r - the plane the circle sits in
     }
   }
   for (const auto& e : st.selection) {
@@ -9336,6 +9374,7 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::v
       continue;
     st.userArcs[k].cx += dx;
     st.userArcs[k].cy += dy;
+    st.userArcs[k].z += dz;
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Ellipse)
@@ -9345,6 +9384,7 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::v
       continue;
     st.userEllipses[k].cx += dx;
     st.userEllipses[k].cy += dy;
+    st.userEllipses[k].z += dz;
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Polyline)
@@ -9357,6 +9397,7 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::v
     for (int vi = v0; vi < v1; ++vi) {
       st.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)] += dx;
       st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] += dy;
+      st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)] += dz;
     }
   }
   for (const auto& e : st.selection) {
@@ -9368,6 +9409,7 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::v
     CadAnnotation& a = st.cadAnnotations[k];
     a.insX += dx;
     a.insY += dy;
+    a.insZ += dz;  // REQ-320: text and dimensions carry an elevation like everything else
     if (a.kind == CadAnnotation::Kind::Mtext) {
       a.boxMinX += dx;
       a.boxMinY += dy;
@@ -9416,6 +9458,16 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::v
     *x += dx;
     *y += dy;
   });
+  // A feature line is 3D design linework (REQ-087), so its elevations move too. Its own pass rather
+  // than a wider lambda: `TransformSelectedFeatureLinesInPlace` is shared with ROTATE, SCALE and
+  // MIRROR, which are deliberately plan-only, and widening the shared helper would hand them a Z
+  // they have no business with.
+  if (dz != 0.f) {
+    ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
+      for (int vi = v0; vi < v1; ++vi)
+        st.featureLineVerts[static_cast<size_t>(vi) * 3 + 2] += dz;
+    });
+  }
   ApplyTranslationToSelectedSurveyPoints(st, dx, dy);
   BumpCadGpuCache(st);
 }
@@ -9899,32 +9951,85 @@ bool ParseAngleDegreesInternal(const std::string& raw, float* degreesOut) {
   return true;
 }
 
+/// Peel an optional third component off a typed point, returning the `X,Y` part and the elevation.
+///
+/// The same shape `ParseSolidBasePoint` uses, and for the same reason: the shared 2D parser reads
+/// two numbers and ignores the rest, so `1,2,3` would otherwise land silently at (1,2) with the
+/// elevation dropped on the floor. Strict about the field count for the same reason.
+///
+/// An omitted Z is zero and `*outHasZ` is false, so every existing drawing, transcript and habit
+/// behaves exactly as it did (REQ-320 item 4).
+static bool PeelTypedElevation(const std::string& raw, std::string* outXy, float* outZ, bool* outHasZ,
+                               const char* verbUpper, std::vector<std::string>& log) {
+  const std::string trimmed = StringUtil::trimCopy(raw);
+  *outXy = trimmed;
+  *outZ = 0.f;
+  *outHasZ = false;
+  const size_t c1 = trimmed.find(',');
+  const size_t c2 = (c1 == std::string::npos) ? std::string::npos : trimmed.find(',', c1 + 1);
+  if (c2 == std::string::npos)
+    return true;
+  if (trimmed.find(',', c2 + 1) != std::string::npos) {
+    log.push_back(std::string(verbUpper) + " - too many coordinates: X,Y or X,Y,Z.");
+    return false;
+  }
+  const std::string zText = StringUtil::trimCopy(trimmed.substr(c2 + 1));
+  char* zEnd = nullptr;
+  const double zv = std::strtod(zText.c_str(), &zEnd);
+  if (zText.empty() || !zEnd || *zEnd != '\0' || !std::isfinite(zv)) {
+    log.push_back(std::string(verbUpper) + " - elevation must be a number: X,Y,Z.");
+    return false;
+  }
+  *outZ = static_cast<float>(zv);
+  *outHasZ = true;
+  *outXy = trimmed.substr(0, c2);
+  return true;
+}
+
 bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineIn, std::vector<std::string>& log) {
   std::string line = StringUtil::trimCopy(lineIn);
   using MP = AppCommandState::ModifyPhase;
   if (st.modifyPhase == MP::NeedBase) {
+    // REQ-320 item 4: a base point may carry an elevation. Peeled before the shared 2D parser sees
+    // it, because that parser reads two numbers and ignores the rest.
+    std::string baseXy;
+    float baseZ = 0.f;
+    bool baseHasZ = false;
+    if (!PeelTypedElevation(line, &baseXy, &baseZ, &baseHasZ, isCopy ? "COPY" : "MOVE", log))
+      return true;  // reported by name; stay in the phase rather than fall through as unparsed
     float px = 0.f;
     float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, baseXy, &px, &py, false, 0.f, 0.f))
       return false;
     st.modifyBaseX = px;
     st.modifyBaseY = py;
+    st.modifyBaseZ = baseZ;
     st.modifyPhase = MP::NeedDestination;
     log.push_back(isCopy ? "COPY — specify second point (destination)." : "MOVE — specify second point (destination).");
     return true;
   }
   if (st.modifyPhase == MP::NeedDestination) {
+    std::string destXy;
+    float destZ = 0.f;
+    bool destHasZ = false;
+    if (!PeelTypedElevation(line, &destXy, &destZ, &destHasZ, isCopy ? "COPY" : "MOVE", log))
+      return true;
     float px = 0.f;
     float py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
+    if (!ParseStoragePoint(st, destXy, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
       return false;
     float dx = px - st.modifyBaseX;
     float dy = py - st.modifyBaseY;
+    // A RELATIVE destination (@dx,dy,dz) states the offset directly; an absolute one states a
+    // position, so the offset is the difference. An omitted Z is zero on either side, which is what
+    // keeps a plain `MOVE 0,0 / 10,0` moving nothing in Z (REQ-320 item 4).
+    const bool relative = !destXy.empty() && destXy[0] == '@';
+    const float dz = relative ? destZ : (destZ - st.modifyBaseZ);
     PushUndoSnapshot(st, isCopy ? "Copy" : "Move");
     if (isCopy)
       FinalizeCopyTranslation(st, dx, dy, log);
     else {
-      ApplyTranslationToSelection(st, dx, dy, log);
+      ApplyTranslationToSelection(st, dx, dy, dz, log);
       // Stay in MOVE — same selection at new position, ready for another base+destination.
       st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
       log.push_back("MOVE complete — base point (ESC to exit):");
@@ -12012,7 +12117,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       if (wasCopy)
         FinalizeCopyTranslation(st, dx, dy, log);
       else {
-        ApplyTranslationToSelection(st, dx, dy, log);
+        ApplyTranslationToSelection(st, dx, dy, 0.f, log);
+        // The PICKED path stays plan-only for now (REQ-320 item 4 covers typed entry). A picked
+        // MOVE has always ignored the elevations of its two points, and quietly making it 3D would
+        // change what every existing drag does rather than adding something new.
         // Stay in MOVE — same selection at new position, ready for another base+destination.
         st.modifyPhase = MP::NeedBase;
         log.push_back("MOVE complete — base point (ESC to exit):");
