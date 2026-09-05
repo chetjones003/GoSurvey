@@ -1673,6 +1673,93 @@ TEST_CASE("Curved B2b-1: an oblique plane slices a cylinder into two elliptical-
   REQUIRE(sawEllipse);
 }
 
+TEST_CASE("Curved B2b-2 tail: an oblique plane slices a cone into two elliptical-ended pieces",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid cone;
+  REQUIRE(brep::MakeCone(World(), 6, 2, 8, &cone, &why));  // base r6 at z0, top r2 at z8
+
+  const Vec3 planePoint{0, 0, 4};
+  const Vec3 pn = ray3d::Normalize(Vec3{0.3, 0.0, 1.0});
+  const double nx = pn.x, ny = pn.y, nz = pn.z;
+  const double C = ray3d::Dot(pn, planePoint);
+  const double k = (2.0 - 6.0) / 8.0;
+
+  // Independent reference (no reuse of the ellipse-derivation code under test): at each height z the
+  // cone's cross-section is a disk of radius rho(z), cut by the line nx*x+ny*y = C - nz*z, a standard
+  // circular-segment area in closed form. Integrate that over z numerically (fine but 1-D, cheap).
+  auto segmentAreaBelow = [&](double rho, double dist) {
+    // Area of {x^2+y^2<=rho^2, x<=dist} in a frame where the cut line is x = dist.
+    if (dist >= rho) return kPi * rho * rho;
+    if (dist <= -rho) return 0.0;
+    return dist * std::sqrt(rho * rho - dist * dist) + rho * rho * std::asin(dist / rho) +
+           rho * rho * kPi * 0.5;
+  };
+  double vBelowRef = 0.0;
+  const int nZ = 200000;
+  for (int i = 0; i < nZ; ++i) {
+    const double z = 8.0 * (i + 0.5) / nZ;
+    const double rho = 6.0 + k * z;
+    const double amp = std::sqrt(nx * nx + ny * ny);
+    const double dist = (C - nz * z) / amp;  // signed distance (in the rotated frame) of the cut line
+    vBelowRef += segmentAreaBelow(rho, dist) * (8.0 / nZ);
+  }
+  const double coneVol = kPi * 8.0 / 3.0 * (36.0 + 12.0 + 4.0);  // r0=6,r1=2,h=8
+  const double vAboveRef = coneVol - vBelowRef;
+
+  Solid up;
+  Solid dn;
+  REQUIRE(brep::Slice(cone, planePoint, pn, brep::SliceKeep::Both, &up, &dn, &why));
+  REQUIRE(brep::Validate(up) == Problem::Ok);
+  REQUIRE(brep::Validate(dn) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(up));
+  REQUIRE_FALSE(brep::SelfIntersects(dn));
+  REQUIRE(up.recipe.kind == brep::PrimitiveKind::None);  // no longer a plain cone recipe
+
+  const auto mUp = brep::ComputeMassProperties(up);
+  const auto mDn = brep::ComputeMassProperties(dn);
+  REQUIRE(mUp.valid);
+  REQUIRE(mDn.valid);
+  REQUIRE(mDn.volume == Approx(vBelowRef).epsilon(1e-4));
+  REQUIRE(mUp.volume == Approx(vAboveRef).epsilon(1e-4));
+  REQUIRE(mUp.volume + mDn.volume == Approx(coneVol).epsilon(1e-9));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(dn, 0.02, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(vBelowRef).epsilon(0.01));
+
+  // .gs round trip preserves the ellipse edge (Translate is the cheap in-kernel proxy).
+  Solid reopened = brep::Translate(dn, Vec3{0, 0, 0});
+  bool sawEllipse = false;
+  for (const auto& e : reopened.edges)
+    if (e.kind == brep::CurveKind::Ellipse)
+      sawEllipse = true;
+  REQUIRE(sawEllipse);
+  REQUIRE(brep::Validate(reopened) == Problem::Ok);
+
+  SECTION("surviving Translate at a survey-magnitude offset") {
+    const Solid moved = brep::Translate(dn, Vec3{1.9e6, 6.4e6, 1200.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vBelowRef).epsilon(1e-4));
+  }
+
+  SECTION("a cut that would clip a cap is refused by name") {
+    Solid up2, dn2;
+    REQUIRE_FALSE(brep::Slice(cone, Vec3{0, 0, 0.5}, pn, brep::SliceKeep::Both, &up2, &dn2, &why));
+    REQUIRE(why == Problem::SliceResultComplex);
+  }
+
+  SECTION("a steeper cut past the half-angle (parabola/hyperbola regime) is refused by name") {
+    // Cone half-angle here is atan(|k|) = atan(0.5); a plane tilted past that off the axis leaves the
+    // ellipse regime. Still refused (this task's part (b), not yet built).
+    Solid up2, dn2;
+    const Vec3 steep = ray3d::Normalize(Vec3{2.0, 0.0, 1.0});  // well past atan(0.5) from the axis
+    REQUIRE_FALSE(brep::Slice(cone, planePoint, steep, brep::SliceKeep::Both, &up2, &dn2, &why));
+    REQUIRE(why == Problem::SliceCurvedFace);
+  }
+}
+
 TEST_CASE("Curved B2b-1: a tilted cylinder INTERSECT a box is an oblique elliptical-ended plug",
           "[brep][req314]") {
   Problem why = Problem::Ok;

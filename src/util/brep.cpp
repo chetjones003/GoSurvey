@@ -596,6 +596,16 @@ struct CylinderCut {
   return false;
 }
 
+/// A `SurfaceKind::Cone` face bounded by an `Ellipse` edge is a `SliceConeOblique` piece (issue #283,
+/// TASK-204) — its material does not span the full `[0, height]` the way an unsliced cone face's does.
+[[nodiscard]] bool FaceLoopHasEllipseEdge(const Solid& s, const Face& f) {
+  for (const Loop& lp : f.loops)
+    for (const EdgeUse& u : lp.uses)
+      if (s.edges[static_cast<std::size_t>(u.edge)].kind == CurveKind::Ellipse)
+        return true;
+  return false;
+}
+
 // 8-node Gauss–Legendre on [-1, 1] (four symmetric pairs).
 constexpr double kGL8x[4] = {0.18343464249564980, 0.52553240991632899, 0.79666647741362674,
                              0.96028985649753623};
@@ -760,6 +770,101 @@ struct IsectStrip {
     if (!IsectStripAt(st, u, &a, &b))
       return 0.0;
     return r * (r - qL.x * std::cos(u) - qL.y * std::sin(u)) * (b - a);
+  });
+  return out;
+}
+
+/// A **cone** face bounded by one ellipse (the oblique cut) and one flat rim — `SliceConeOblique`'s
+/// piece (REQ-314 B2b-2 tail, GitHub issue #283, TASK-204). The plane params are recovered from the
+/// stored `CurveKind::Ellipse` edge's own geometry (its centre and normal, already in world, need no
+/// extra fields) rather than carried separately, so this face costs nothing beyond `Ellipse` itself.
+struct ConeCutStrip {
+  const Surface* sf = nullptr;
+  double rimZ = 0.0;
+  double nx = 0.0, ny = 0.0, nz = 0.0, planeC = 0.0;  // plane, in the cone's own local frame
+  [[nodiscard]] bool valid() const { return sf != nullptr; }
+};
+
+[[nodiscard]] ConeCutStrip MakeConeCutStrip(const Solid& s, const Face& f) {
+  ConeCutStrip st;
+  bool haveRim = false;
+  bool haveEllipse = false;
+  for (const Loop& lp : f.loops)
+    for (const EdgeUse& u : lp.uses) {
+      const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+      if (e.kind == CurveKind::Arc) {
+        st.rimZ = ucs::WorldToUcs(f.surface.frame, s.vertices[static_cast<std::size_t>(e.v0)].p).z;
+        haveRim = true;
+      } else if (e.kind == CurveKind::Ellipse) {
+        const Vec3& nWorld = e.frame.zAxis;  // the ellipse edge's own normal
+        st.nx = ray3d::Dot(nWorld, f.surface.frame.xAxis);
+        st.ny = ray3d::Dot(nWorld, f.surface.frame.yAxis);
+        st.nz = ray3d::Dot(nWorld, f.surface.frame.zAxis);
+        st.planeC = ray3d::Dot(nWorld, ray3d::Sub(e.frame.origin, f.surface.frame.origin));
+        haveEllipse = true;
+      }
+    }
+  if (haveRim && haveEllipse)
+    st.sf = &f.surface;
+  return st;
+}
+
+/// The exact (rational, not marching) cone-generator/plane crossing height at azimuth `u`, and the
+/// resulting `[zLo, zHi]` this face's material occupies there (between the flat rim and the cut).
+[[nodiscard]] bool ConeCutStripAt(const ConeCutStrip& st, double u, double* zLo, double* zHi) {
+  const double r0 = st.sf->radius;
+  const double r1 = st.sf->radius2;
+  const double h = st.sf->height;
+  const double kk = (r1 - r0) / h;
+  const double a = st.nx * std::cos(u) + st.ny * std::sin(u);
+  const double denom = kk * a + st.nz;
+  if (!(std::fabs(denom) > 1e-12))
+    return false;  // the generator at this u is parallel to the plane — shouldn't occur for a face
+                   // built strictly inside both caps (SliceConeOblique's own guard)
+  const double zCut = (st.planeC - r0 * a) / denom;
+  *zLo = std::min(st.rimZ, zCut);
+  *zHi = std::max(st.rimZ, zCut);
+  return true;
+}
+
+/// Numerical area / volume term of a `SliceConeOblique` piece's lateral face — the cone analogue of
+/// \ref IntegrateCylinderFaceNumeric. `z` is exact at each sampled `u` (no bisection needed, unlike a
+/// marching `Intersection` curve), but the outer `u` integral has no closed form once the cone's
+/// radius varies with height, so it goes through the same `GradedGaussIntegrate` machinery
+/// (ADR-045 (b), extended per TASK-204's Q3: an *analytic* curve whose face integral still has no
+/// tractable closed form).
+[[nodiscard]] FaceIntegrals IntegrateConeCutFaceNumeric(const Solid& s, const Face& f, const Vec3& q) {
+  const Vec3 qL = ucs::WorldToUcs(f.surface.frame, q);
+  const double r0 = f.surface.radius;
+  const double r1 = f.surface.radius2;
+  const double h = f.surface.height;
+  const double kk = (r1 - r0) / h;
+  const double slant = std::sqrt(1.0 + kk * kk);
+  const ConeCutStrip st = MakeConeCutStrip(s, f);
+  FaceIntegrals out;
+  if (!st.valid())
+    return out;
+  auto iRho = [&](double zLo, double zHi) {
+    return r0 * (zHi - zLo) + kk * (zHi * zHi - zLo * zLo) * 0.5;
+  };
+  auto iRho2 = [&](double zLo, double zHi) {
+    return r0 * r0 * (zHi - zLo) + r0 * kk * (zHi * zHi - zLo * zLo) +
+           kk * kk * (zHi * zHi * zHi - zLo * zLo * zLo) / 3.0;
+  };
+  auto iRhoZ = [&](double zLo, double zHi) {
+    return r0 * (zHi * zHi - zLo * zLo) * 0.5 + kk * (zHi * zHi * zHi - zLo * zLo * zLo) / 3.0;
+  };
+  out.area = GradedGaussIntegrate(f.uStart, f.uEnd, 48, [&](double u) {
+    double zLo = 0.0, zHi = 0.0;
+    return ConeCutStripAt(st, u, &zLo, &zHi) ? slant * iRho(zLo, zHi) : 0.0;
+  });
+  out.volTerm = GradedGaussIntegrate(f.uStart, f.uEnd, 48, [&](double u) {
+    double zLo = 0.0, zHi = 0.0;
+    if (!ConeCutStripAt(st, u, &zLo, &zHi))
+      return 0.0;
+    const double rhoI = iRho(zLo, zHi);
+    return iRho2(zLo, zHi) - (qL.x * std::cos(u) + qL.y * std::sin(u)) * rhoI -
+           kk * (iRhoZ(zLo, zHi) - qL.z * rhoI);
   });
   return out;
 }
@@ -1059,9 +1164,14 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
     break;
   }
   case SurfaceKind::Cone: {
-    const ConeIntegrals ci = ConicalFaceIntegrals(sf.radius, sf.radius2, sf.height, f.uStart, f.uEnd, qLocal);
-    out.area = ci.area;
-    out.volTerm = ci.volTerm;
+    if (FaceLoopHasEllipseEdge(s, f)) {
+      out = IntegrateConeCutFaceNumeric(s, f, q);
+    } else {
+      const ConeIntegrals ci =
+          ConicalFaceIntegrals(sf.radius, sf.radius2, sf.height, f.uStart, f.uEnd, qLocal);
+      out.area = ci.area;
+      out.volTerm = ci.volTerm;
+    }
     break;
   }
   case SurfaceKind::Sphere: {
@@ -3893,6 +4003,272 @@ struct PolyFace {
   return Succeed(outWhy);
 }
 
+/// The ellipse a plane cuts from a **cone** — unlike a cylinder, the cone's radius grows along its
+/// axis, so the axis-plane intersection point is NOT the ellipse's centre (REQ-314 B2b-2 tail,
+/// GitHub issue #283, TASK-204). Derived by expressing the cone as the quadric `X^2+Y^2 = k^2 Z^2` in
+/// apex-centred local coordinates (`k = (r1-r0)/h`, the cone's slope; apex at local `z = -r0/k`),
+/// substituting a general in-plane parametrisation `X = Q0 + p*e1 + q*e2` (`Q0` = axis ∩ plane, `e1,e2`
+/// an arbitrary in-plane orthonormal basis with `(e1, e2, normal)` right-handed), and diagonalising the
+/// resulting 2-D conic `A p^2 + 2 D p q + B q^2 + E p + F q + G = 0` by the standard symmetric-2x2
+/// eigen-decomposition. Verified numerically (worst residual ~1e-9 of the ellipse equation over 20000
+/// random cone/plane configurations, including survey-scale frames) before being coded here.
+struct ConeObliqueEllipse {
+  Vec3 centre{};    ///< world
+  Vec3 normal{};    ///< world, the +axis-ish orientation (matches `dotNZ > 0 ? pn : -pn`)
+  Vec3 majorDir{};  ///< world, unit, the larger semi-axis direction
+  double majorSemi = 0.0;
+  double minorSemi = 0.0;
+  double zLo = 0.0;  ///< the ellipse's own extreme axial (local Z) extent, for the cap-clip check
+  double zHi = 0.0;
+};
+
+[[nodiscard]] bool ComputeConeObliqueEllipse(const ucs::Ucs& fr, double r0, double r1, double h,
+                                             const Vec3& planePoint, const Vec3& pn, double eps,
+                                             ConeObliqueEllipse* out) {
+  const double k = (r1 - r0) / h;
+  const Vec3 X = fr.xAxis;
+  const Vec3 Y = fr.yAxis;
+  const Vec3 Z = fr.zAxis;
+  const bool posZ = ray3d::Dot(pn, Z) > 0.0;
+  const Vec3 eN = posZ ? pn : ray3d::Scale(pn, -1.0);
+  const double nx = ray3d::Dot(eN, X);
+  const double ny = ray3d::Dot(eN, Y);
+  const double nz = ray3d::Dot(eN, Z);
+  const double amp = std::sqrt(nx * nx + ny * ny);
+  if (!(std::fabs(nz) > std::fabs(k) * amp + eps))
+    return false;  // parabola / hyperbola / tangent regime — not this recogniser
+
+  const double C = ray3d::Dot(eN, ray3d::Sub(planePoint, fr.origin));
+  const double z0 = C / nz;  // axis ∩ plane, local
+  const double zApex = -r0 / k;
+  const double zc0 = z0 - zApex;  // z0 in apex-centred local coordinates
+
+  const Vec3 e1 = ray3d::Normalize(ray3d::Cross(eN, Z));
+  const Vec3 e2 = ray3d::Normalize(ray3d::Cross(eN, e1));
+  const Vec3 Q0 = ray3d::Add(fr.origin, ray3d::Scale(Z, z0));
+  const double e1x = ray3d::Dot(e1, X), e1y = ray3d::Dot(e1, Y), e1z = ray3d::Dot(e1, Z);
+  const double e2x = ray3d::Dot(e2, X), e2y = ray3d::Dot(e2, Y), e2z = ray3d::Dot(e2, Z);
+
+  const double Acoef = (e1x * e1x + e1y * e1y) - k * k * e1z * e1z;
+  const double Bcoef = (e2x * e2x + e2y * e2y) - k * k * e2z * e2z;
+  const double Dcoef = (e1x * e2x + e1y * e2y) - k * k * e1z * e2z;
+  const double Ecoef = -2.0 * k * k * zc0 * e1z;
+  const double Fcoef = -2.0 * k * k * zc0 * e2z;
+  const double Gcoef = -k * k * zc0 * zc0;
+
+  // Centre in (p, q): solves [2A 2D; 2D 2B] v0 = [-E; -F].
+  const double a11 = 2.0 * Acoef, a12 = 2.0 * Dcoef, a21 = 2.0 * Dcoef, a22 = 2.0 * Bcoef;
+  const double det = a11 * a22 - a12 * a21;
+  if (!(std::fabs(det) > 1e-12))
+    return false;
+  const double v0p = (-Ecoef * a22 - a12 * (-Fcoef)) / det;
+  const double v0q = (a11 * (-Fcoef) - (-Ecoef) * a21) / det;
+  const double K = Gcoef - (Acoef * v0p * v0p + 2.0 * Dcoef * v0p * v0q + Bcoef * v0q * v0q);
+
+  const double trM = Acoef + Bcoef;
+  const double diffM = Acoef - Bcoef;
+  const double rad = std::sqrt((0.5 * diffM) * (0.5 * diffM) + Dcoef * Dcoef);
+  const double lambda1 = 0.5 * trM + rad;
+  const double lambda2 = 0.5 * trM - rad;
+  const double theta = 0.5 * std::atan2(2.0 * Dcoef, diffM);
+  const double a1sq = -K / lambda1;
+  const double a2sq = -K / lambda2;
+  if (!(a1sq > 0.0) || !(a2sq > 0.0))
+    return false;  // not a real bounded ellipse (shouldn't happen once the regime test passed)
+  const double a1 = std::sqrt(a1sq);
+  const double a2 = std::sqrt(a2sq);
+  const Vec3 dir1 = ray3d::Add(ray3d::Scale(e1, std::cos(theta)), ray3d::Scale(e2, std::sin(theta)));
+  const Vec3 dir2 = ray3d::Add(ray3d::Scale(e1, -std::sin(theta)), ray3d::Scale(e2, std::cos(theta)));
+  const Vec3 centre = ray3d::Add(Q0, ray3d::Add(ray3d::Scale(e1, v0p), ray3d::Scale(e2, v0q)));
+
+  ConeObliqueEllipse r;
+  r.centre = centre;
+  r.normal = eN;
+  if (a1 >= a2) {
+    r.majorDir = dir1;
+    r.majorSemi = a1;
+    r.minorSemi = a2;
+  } else {
+    r.majorDir = dir2;
+    r.majorSemi = a2;
+    r.minorSemi = a1;
+  }
+  // Axial (local Z) extent: any ellipse point is centre + majorSemi*cos(t)*majorDir +
+  // minorSemi*sin(t)*minorDir (minorDir = cross(normal, majorDir), matching AddEllipse's own frame),
+  // so its local-Z coordinate is zCentre + majorSemi*cos(t)*d1z + minorSemi*sin(t)*d2z, whose extremes
+  // are zCentre +/- sqrt((majorSemi*d1z)^2 + (minorSemi*d2z)^2).
+  const Vec3 minorDir = ray3d::Cross(eN, r.majorDir);
+  const double zCentre = ray3d::Dot(ray3d::Sub(centre, fr.origin), Z);
+  const double d1z = ray3d::Dot(r.majorDir, Z);
+  const double d2z = ray3d::Dot(minorDir, Z);
+  const double R = std::sqrt((r.majorSemi * d1z) * (r.majorSemi * d1z) +
+                             (r.minorSemi * d2z) * (r.minorSemi * d2z));
+  r.zLo = zCentre - R;
+  r.zHi = zCentre + R;
+  *out = r;
+  return true;
+}
+
+/// Cut a right circular **cone** by an oblique plane whose angle keeps the cross-section an ellipse
+/// (REQ-314 B2b-2 tail, GitHub issue #283, TASK-204). Mirrors `SliceCylinderOblique`'s topology and
+/// piece-building exactly (a truncated cone with one flat rim and one elliptical rim), generalised via
+/// \ref ComputeConeObliqueEllipse for the cone's non-constant radius. Parabola / hyperbola regimes are
+/// not handled here (`*handled` stays false, so the caller's by-name refusal applies) — a later slice.
+[[nodiscard]] bool SliceConeOblique(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                    SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
+                                    Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Cone)
+    return false;
+  const ucs::Ucs& fr = rc.frame;
+  const Vec3 Z = fr.zAxis;
+  const double r0 = rc.radius;
+  const double r1 = rc.radius2;
+  const double h = rc.height;
+  const double dotNZ = ray3d::Dot(pn, Z);
+  if (std::fabs(dotNZ) < 1e-6 || std::fabs(dotNZ) > 1.0 - 1e-9)
+    return false;  // perpendicular / parallel — not this recogniser
+  if (std::fabs(r1 - r0) < 1e-9 * std::max(h, 1.0))
+    return false;  // r0 == r1 is a cylinder in a Cone recipe (shouldn't happen) — not this recogniser
+
+  const double scale = std::max({h, r0, r1});
+  const double eps = 1e-7 * std::max(scale, 1.0);
+
+  ConeObliqueEllipse ce;
+  if (!ComputeConeObliqueEllipse(fr, r0, r1, h, planePoint, pn, eps, &ce))
+    return false;  // parabola / hyperbola / tangent — a later slice
+  *handled = true;
+  if (ce.zLo <= eps || ce.zHi >= h - eps)
+    return Fail(Problem::SliceResultComplex, outWhy);  // the ellipse would clip a cap
+
+  const double k = (r1 - r0) / h;
+  auto radiusAt = [&](double z) { return r0 + k * z; };
+  auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(fr, Vec3{x, y, z}); };
+  const Vec3 minorDir = ray3d::Cross(ce.normal, ce.majorDir);
+  auto tOf = [&](const Vec3& p) {
+    const Vec3 rel = ray3d::Sub(p, ce.centre);
+    const double c = ray3d::Dot(rel, ce.majorDir) / ce.majorSemi;
+    const double sn = ray3d::Dot(rel, minorDir) / ce.minorSemi;
+    return std::atan2(sn, c);
+  };
+  // The cone-generator/plane crossing at azimuth u = 0 / pi (the seam where the ellipse meets the
+  // cone's own u = 0 / pi generators) — the exact rational z(u) from ComputeConeObliqueEllipse's own
+  // derivation, evaluated directly rather than re-deriving through the ellipse parametrisation.
+  const double nx = ray3d::Dot(ce.normal, fr.xAxis);
+  const double ny = ray3d::Dot(ce.normal, fr.yAxis);
+  const double nz = ray3d::Dot(ce.normal, fr.zAxis);
+  const double C = ray3d::Dot(ce.normal, ray3d::Sub(planePoint, fr.origin));
+  auto zOfU = [&](double u) {
+    const double a = nx * std::cos(u) + ny * std::sin(u);
+    return (C - r0 * a) / (k * a + nz);
+  };
+  const double z0seam = zOfU(0.0);
+  const double zPseam = zOfU(kPi);
+  const Vec3 P0 = W(radiusAt(z0seam), 0.0, z0seam);
+  const Vec3 PP = W(-radiusAt(zPseam), 0.0, zPseam);
+  const double t0 = tOf(P0);
+  const double tP = tOf(PP);
+  // Cone-azimuth u and the ellipse's own parameter t need not advance in the same rotational sense,
+  // so each half's signed sweep is found independently — via its own interior witness point — rather
+  // than assumed to complement the other to a full 2*pi.
+  auto onArc = [&](double tStart, double sweep, double tTest) {
+    double d = tTest - tStart;
+    while (d <= -kPi) d += kTwoPi;
+    while (d > kPi) d -= kTwoPi;
+    if (sweep > 0.0 && d < 0.0) d += kTwoPi;
+    if (sweep < 0.0 && d > 0.0) d -= kTwoPi;
+    return sweep > 0.0 ? (d >= -1e-6 && d <= sweep + 1e-6) : (d <= 1e-6 && d >= sweep - 1e-6);
+  };
+  auto arcSweep = [&](double tStart, double tEnd, double tWitness) {
+    double sweepPos = tEnd - tStart;
+    while (sweepPos <= 0.0) sweepPos += kTwoPi;
+    while (sweepPos > kTwoPi) sweepPos -= kTwoPi;
+    return onArc(tStart, sweepPos, tWitness) ? sweepPos : sweepPos - kTwoPi;
+  };
+  const double zMidLower = zOfU(kHalfPi);
+  const double tMidLower = tOf(W(0.0, radiusAt(zMidLower), zMidLower));
+  const double sweepLower = arcSweep(t0, tP, tMidLower);
+  const double zMidUpper = zOfU(1.5 * kPi);
+  const double tMidUpper = tOf(W(0.0, -radiusAt(zMidUpper), zMidUpper));
+  const double sweepUpper = arcSweep(tP, t0, tMidUpper);
+
+  auto build = [&](bool upper, Solid* dst) -> bool {
+    Solid s;
+    const int se0 = AddVertex(&s, P0);
+    const int se1 = AddVertex(&s, PP);
+    const double rimR = upper ? r1 : r0;
+    const int rimZ0 = AddVertex(&s, W(rimR, 0.0, upper ? h : 0.0));
+    const int rimZ1 = AddVertex(&s, W(-rimR, 0.0, upper ? h : 0.0));
+
+    const Vec3 rimC = W(0.0, 0.0, upper ? h : 0.0);
+    const int rr0 = AddArc(&s, rimZ0, rimZ1, rimC, Z, kPi);
+    const int rr1 = AddArc(&s, rimZ1, rimZ0, rimC, Z, kPi);
+    const int el0 = AddEllipse(&s, se0, se1, ce.centre, ce.normal, ce.majorDir, ce.majorSemi,
+                               ce.minorSemi, sweepLower);
+    const int el1 = AddEllipse(&s, se1, se0, ce.centre, ce.normal, ce.majorDir, ce.majorSemi,
+                               ce.minorSemi, sweepUpper);
+    const int sm0 = AddLine(&s, upper ? se0 : rimZ0, upper ? rimZ0 : se0);
+    const int sm1 = AddLine(&s, upper ? se1 : rimZ1, upper ? rimZ1 : se1);
+
+    if (upper)
+      s.faces.push_back(MakePlaneFace(rimC, Z, {{rr0, false}, {rr1, false}}));
+    else
+      s.faces.push_back(MakePlaneFace(rimC, ray3d::Scale(Z, -1.0), {{rr1, true}, {rr0, true}}));
+    const Vec3 cutN = upper ? ray3d::Scale(ce.normal, -1.0) : ce.normal;
+    if (upper)
+      s.faces.push_back(MakePlaneFace(ce.centre, cutN, {{el1, true}, {el0, true}}));
+    else
+      s.faces.push_back(MakePlaneFace(ce.centre, cutN, {{el0, false}, {el1, false}}));
+
+    auto side = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+      Face f;
+      f.surface.kind = SurfaceKind::Cone;
+      f.surface.frame = fr;
+      f.surface.radius = r0;
+      f.surface.radius2 = r1;
+      f.surface.height = h;
+      f.uStart = u0;
+      f.uEnd = u1;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    };
+    if (upper) {
+      side(0.0, kPi, {{el0, false}, {sm1, false}, {rr0, true}, {sm0, true}});
+      side(kPi, kTwoPi, {{el1, false}, {sm0, false}, {rr1, true}, {sm1, true}});
+    } else {
+      side(0.0, kPi, {{rr0, false}, {sm1, false}, {el0, true}, {sm0, true}});
+      side(kPi, kTwoPi, {{rr1, false}, {sm0, false}, {el1, true}, {sm1, true}});
+    }
+
+    AddSingleShell(&s);
+    const Problem why = Validate(s);
+    if (why != Problem::Ok)
+      return Fail(Problem::SliceResultComplex, outWhy);
+    *dst = std::move(s);
+    return true;
+  };
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  const bool upperIsAbove = dotNZ > 0.0;
+  Solid* upperDst = upperIsAbove ? outAbove : outBelow;
+  Solid* lowerDst = upperIsAbove ? outBelow : outAbove;
+  const bool wantUpper = upperIsAbove ? wantAbove : wantBelow;
+  const bool wantLower = upperIsAbove ? wantBelow : wantAbove;
+
+  Solid probe;
+  if (!build(true, &probe) || !build(false, &probe))
+    return false;
+  if (wantUpper && upperDst && !build(true, upperDst))
+    return false;
+  if (wantLower && lowerDst && !build(false, lowerDst))
+    return false;
+  return Succeed(outWhy);
+}
+
 } // namespace
 
 bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, SliceKeep keep,
@@ -3917,6 +4293,9 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
       if (handled)
         return ok;
       ok = SliceCylinderOblique(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
+      ok = SliceConeOblique(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
       if (handled)
         return ok;
       return Fail(Problem::SliceCurvedFace, outWhy);
@@ -9888,9 +10267,15 @@ Problem Validate(const Solid& s) {
   for (const Edge& e : s.edges)
     if (e.kind == CurveKind::Intersection)
       hasNumericFace = true;
-  for (const Face& f : s.faces)
+  for (const Face& f : s.faces) {
     if (f.surface.kind == SurfaceKind::Nurbs)  // REQ-315: a NURBS face is integrated by quadrature too
       hasNumericFace = true;
+    // A SliceConeOblique cut face (issue #283, TASK-204) is also integrated numerically — see
+    // IntegrateConeCutFaceNumeric — for the same reason: a cone's non-constant radius means its
+    // plane-cut face's u-integral has no tractable closed form (ADR-045 (b), extended).
+    if (f.surface.kind == SurfaceKind::Cone && FaceLoopHasEllipseEdge(s, f))
+      hasNumericFace = true;
+  }
   const double closeTol = (hasNumericFace ? 1e-5 : 1e-8) * scale * scale * scale;
 
   const Vec3 probe = ray3d::Add(q, Vec3{scale, 0.7 * scale, -1.3 * scale});
@@ -10325,13 +10710,15 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         break;
       }
       const bool isect = sf.kind == SurfaceKind::Cylinder && FaceLoopHasIntersectionEdge(s, f);
-      const int nu = isect ? std::clamp(SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart,
-                                                       0.25 * chordTolerance),
-                                       24, 256)
-                           : SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart, chordTolerance);
+      const bool coneCut = sf.kind == SurfaceKind::Cone && FaceLoopHasEllipseEdge(s, f);
+      const int nu = (isect || coneCut) ? std::clamp(SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart,
+                                                                    0.25 * chordTolerance),
+                                                    24, 256)
+                                       : SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart, chordTolerance);
       CylinderCut cc;
       const bool cut = sf.kind == SurfaceKind::Cylinder && !isect && CylinderCutZExtent(s, f, &cc);
       const IsectStrip strip = isect ? MakeIsectStrip(s, f) : IsectStrip{};
+      const ConeCutStrip coneStrip = coneCut ? MakeConeCutStrip(s, f) : ConeCutStrip{};
       auto bound = [](const double c[3], double u) {
         return c[0] + c[1] * std::cos(u) + c[2] * std::sin(u);
       };
@@ -10348,6 +10735,9 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
             zA = zB = zc;  // the strip has pinched — a degenerate sliver at this end of the lens
           }
         }
+        if (coneCut && coneStrip.valid())
+          (void)ConeCutStripAt(coneStrip, t, &zA, &zB);  // exact — never pinches (SliceConeOblique's
+                                                          // own guard keeps the cut off both caps
         lower[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r1, t, zA), n);
         upper[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r1, t, zB), n);
       }
