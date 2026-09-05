@@ -1386,9 +1386,9 @@ const char* ProblemText(Problem p) {
   case Problem::SweepTwistNeedsStraightPath:
     return "A twist cannot be combined with an arc path segment in this version; twist works on a "
            "straight (or multi-segment straight) path.";
-  case Problem::PushPullFaceNotPlanar:
-    return "Only a flat face can be pushed or pulled in this version - a curved wall moves by "
-           "changing its radius, which is a different edit.";
+  case Problem::PushPullFaceKindUnsupported:
+    return "This kind of face cannot be pushed: a flat face moves, and a cylinder wall changes "
+           "radius, but a cone, sphere or torus wall has no single radius to change.";
   case Problem::PushPullDistanceZero:
     return "Push/pull needs a distance that is not zero.";
   case Problem::PushPullNeighbourCurved:
@@ -1583,8 +1583,117 @@ bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out, Pr
     return fail(Problem::PushPullDistanceZero);
 
   const Face& face = s.faces[static_cast<size_t>(faceIndex)];
+
+  // --- A CYLINDER WALL: the one curved face that CAN be pushed, because it has exactly one
+  // --- parameter a push corresponds to (REQ-319 increment 4 / D-2026-09-04-e).
+  //
+  // A wall push is not a translation, and that is the whole reason it needs its own path rather
+  // than a wider tolerance somewhere: the outward normal points a different way at every point of
+  // the surface, so there is no single direction to move along. What the gesture means is a RADIUS
+  // change — every point moves along its own normal by the same amount, which is exactly what
+  // adding to the radius does.
+  //
+  // A cone is deliberately NOT here. Offsetting a cone along its own normal moves both radii by
+  // `d / cos(half-angle)` and leaves the apex where it was: an offset surface, not a radius change,
+  // and a second decision about what the gesture should mean. Its own increment if it is ever
+  // wanted.
+  if (face.surface.kind == SurfaceKind::Cylinder) {
+    const Surface& w0 = face.surface;
+    const Vec3 axis = ray3d::Normalize(w0.frame.zAxis);
+    // `inward` flips which side the material is on (REQ-314 B2a): for a hole, the outward normal
+    // points AT the axis, so pushing outward makes the hole smaller. Honoured here or a positive
+    // push would widen a hole while widening a boss — a sign error that reads as a working feature
+    // half the time.
+    const double newRadius = w0.radius + (w0.inward ? -distance : distance);
+    if (!(newRadius > 1e-9))
+      return fail(Problem::PushPullCurvedDegenerate);
+
+    // Every face sharing this surface is part of the same wall — a full cylinder is stored as two
+    // half-faces, and pushing one without the other would leave the solid with two different radii
+    // meeting along a seam.
+    std::vector<int> wallFaces;
+    for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+      const Surface& sf = s.faces[fi].surface;
+      if (sf.kind != SurfaceKind::Cylinder || sf.inward != w0.inward)
+        continue;
+      if (std::fabs(sf.radius - w0.radius) > 1e-9 || std::fabs(sf.height - w0.height) > 1e-9)
+        continue;
+      if (ray3d::Length(ray3d::Sub(sf.frame.origin, w0.frame.origin)) > 1e-9)
+        continue;
+      if (std::fabs(std::fabs(ray3d::Dot(ray3d::Normalize(sf.frame.zAxis), axis)) - 1.0) > 1e-9)
+        continue;
+      wallFaces.push_back(static_cast<int>(fi));
+    }
+    std::vector<int> wallVerts;
+    for (int fi : wallFaces)
+      CollectFaceVertices(s, s.faces[static_cast<size_t>(fi)], &wallVerts);
+    if (wallVerts.empty())
+      return fail(Problem::FaceHasNoLoop);
+    const auto onWall = [&](int v) {
+      return std::find(wallVerts.begin(), wallVerts.end(), v) != wallVerts.end();
+    };
+
+    // Every other face at those corners must be a CAP — a plane square to the axis. Such a plane is
+    // unchanged by the move: its boundary slides around inside it, which is exactly what growing a
+    // circle within its own plane does. A slanted plane would have to be re-solved, and a second
+    // curved surface would have its own parameter to argue about.
+    for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+      if (std::find(wallFaces.begin(), wallFaces.end(), static_cast<int>(fi)) != wallFaces.end())
+        continue;
+      std::vector<int> fv;
+      CollectFaceVertices(s, s.faces[fi], &fv);
+      if (!std::any_of(fv.begin(), fv.end(), onWall))
+        continue;
+      if (s.faces[fi].surface.kind != SurfaceKind::Plane)
+        return fail(Problem::PushPullNeighbourCurved);
+      if (std::fabs(std::fabs(ray3d::Dot(ray3d::Normalize(s.faces[fi].surface.frame.zAxis), axis)) - 1.0) >
+          1e-9)
+        return fail(Problem::PushPullVertexUnsolvable);  // a cut face, not a cap
+    }
+
+    Solid rw = s;
+    // Each corner keeps its height along the axis and its angle around it, and takes the new
+    // radius. Nothing translates: the whole point is that every point of the wall moves a different
+    // way and the same amount.
+    for (int v : wallVerts) {
+      const Vec3 rel = ray3d::Sub(s.vertices[static_cast<size_t>(v)].p, w0.frame.origin);
+      const double axial = ray3d::Dot(rel, axis);
+      Vec3 radial = ray3d::Sub(rel, ray3d::Scale(axis, axial));
+      const double rl = ray3d::Length(radial);
+      if (!(rl > 1e-12))
+        return fail(Problem::PushPullVertexUnsolvable);  // a corner on the axis has no direction
+      radial = ray3d::Scale(radial, newRadius / rl);
+      rw.vertices[static_cast<size_t>(v)].p =
+          ray3d::Add(ray3d::Add(w0.frame.origin, ray3d::Scale(axis, axial)), radial);
+    }
+    // The cap boundary arcs grow with it. Their centres stay on the axis where they were — a cap's
+    // PLANE does not move when the wall's radius changes, which is the difference between this and
+    // the cap push, where the plane moves and the radius does not.
+    for (Edge& e : rw.edges) {
+      if (e.kind == CurveKind::Line || !onWall(e.v0) || !onWall(e.v1))
+        continue;
+      if (e.kind != CurveKind::Arc)
+        return fail(Problem::PushPullNeighbourCurved);
+      e.radius = newRadius;
+    }
+    for (int fi : wallFaces) {
+      Surface& sf = rw.faces[static_cast<size_t>(fi)].surface;
+      sf.radius = newRadius;
+      sf.radius2 = newRadius;
+    }
+
+    rw.recipe = Recipe{};
+    const Problem whyW = Validate(rw);
+    if (whyW != Problem::Ok)
+      return fail(Problem::PushPullResultInvalid);
+    *out = std::move(rw);
+    if (outWhy)
+      *outWhy = Problem::Ok;
+    return true;
+  }
+
   if (face.surface.kind != SurfaceKind::Plane)
-    return fail(Problem::PushPullFaceNotPlanar);
+    return fail(Problem::PushPullFaceKindUnsupported);
 
   // The push direction is the face's own outward normal. `Surface::inward` flips which side the
   // material is on (REQ-314 B2a), and it has to be honoured here or a positive distance would grow
