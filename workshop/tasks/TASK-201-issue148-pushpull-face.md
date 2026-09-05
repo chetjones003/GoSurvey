@@ -196,3 +196,82 @@ carries the selection forward, and leaves the document untouched on a refusal.
   drag is mouse-only and `PRESSPULL` is keyboard-only; they meet at the same commit but not in the
   same gesture.
 - **DEBT-5 — no ORTHO or snap interaction.** The distance is whatever the cursor ray resolves to.
+
+---
+
+## Increment 3 — a cap beside a curved wall (D-2026-09-04-d)
+
+Reported by the user: push/pull not working on cylinders or cones. A cap is a plane, so it always
+passed the face test; what refused it was the wall beside it.
+
+### A third kind of move
+
+A curved surface cannot be **intersected** the way a plane can — but it can be
+**re-parameterised**, and that turned out to be a move this operation did not have:
+
+| move | what it applies to |
+|---|---|
+| translate | the plane being pushed |
+| re-solve | a corner, as the meeting point of the planes around it (increment 2) |
+| **re-parameterise** | a curved wall: a cylinder's stored height, a cone's end radius |
+
+A cylinder's `height` grows or shrinks, and its frame **origin travels too** when the moving cap is
+the base — that origin *is* the base centre, and moving only one of the two leaves the wall spanning
+the wrong interval. The volume is what distinguishes those two mistakes from each other, which is why
+the bottom-cap case asserts it.
+
+### The taper, put to the user
+
+Pushing a cone's cap could keep the **slope** (so the radius changes) or keep the **radius** (so the
+slope changes). **The user chose keep the slope**, so a push extends the same cone rather than
+bending its wall. Not a rounding preference: on the worked example — base 5, top 2, height 10 pushed
+to 12 — the two answers are **426.75 against 490.09**, 13% apart. The test asserts the first and
+names the second, so the assertion distinguishes the decision that was made from the one that was not.
+
+### The number that measures the whole thing
+
+Leave the wall's height alone while its boundary moves and the push **still builds and still passes
+`Validate`**, reporting **863.938 against a true 1021.02**. That figure now appears in the tests as
+the value the result must *not* be, so a regression that reintroduces it is recognisable on sight
+rather than merely failing.
+
+The guarantee is also now **positive rather than defensive**: the wall is made to match its boundary,
+instead of the move being declined because it might not.
+
+### Still refused, each by name
+
+A curved **wall** pushed along its own normal (a radius change, not a translation of anything); a
+**sphere or torus** (no height or taper to follow); an axis **oblique** to the push; and a cap whose
+corners also touch an unrelated **plane** — that carries a plane constraint and a surface one at
+once, which is a different solve.
+
+### Coverage now
+
+| solid | increment 1 | increment 2 | increment 3 |
+|---|---|---|---|
+| Box | 6/6 | 6/6 | 6/6 |
+| Wedge | 2/5 | 5/5 | 5/5 |
+| Pyramid | 0/6 | 6/6 | 6/6 |
+| Cylinder | 0/4 | 0/4 | **2/4** (both caps) |
+| Cone | 0/4 | 0/4 | **2/4** (both caps) |
+
+### Verification
+
+`ctest` **1157/1157**. Volumes asserted as closed forms — `pi r^2 h`, `pi h/3 (R^2 + Rr + r^2)` —
+not figures recorded from the output, which matters more than usual because the wrong answer this
+replaces was plausible to four significant figures.
+
+**Two transcript details recorded rather than worked around:** the wedge case needs
+`VIEWANGLES 135 20` and the cylinder-wall case needs the point at `(0,-5,5)`, because at the default
+camera those faces are on the far side and a ray aimed at them picks the near face instead — exactly
+what happens to a user who has not orbited. And the `PYRAMID` **command's** radius argument is the
+inradius where `brep::MakePyramid`'s is the circumradius, so the same numbers build a frustum of
+twice the volume; neither is wrong, and the discrepancy looks like an error until you know which each
+takes.
+
+### Debt
+
+- **DEBT-6 — a curved wall still cannot be pushed.** It is a radius change: the wall's radius and
+  both caps' boundary arcs move together, and the caps' planes stay. Well-defined, and its own slice.
+- **DEBT-7 — a sliced cylinder's cap is refused.** Its corners touch both a plane and a curved
+  surface, and satisfying both at once is a solve neither existing path performs.

@@ -115,9 +115,10 @@ CMD PRESSPULL -8
 EXPECT LOG "turn the solid inside out"
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
-# A CURVED neighbour - the case brep::Validate does not catch, measured at 15% volume error with the
-# precondition removed (see PushPullTests). A corner is re-solved by intersecting the surfaces that
-# meet there, and a cylinder wall is not a plane to intersect. Refused by name.
+# A CYLINDER's cap - the case brep::Validate does not catch, and the one the user reported. Leaving
+# the wall's stored height alone while its boundary moves still builds and still validates, at a
+# volume 15% wrong (863.938 against a true 1021.02). The wall is re-parameterised instead, so this
+# reports the exact closed form: pi x 25 x 13.
 NEW
 CMD CYLINDER 0,0 5 10
 EXPECT SOLIDS 1
@@ -125,7 +126,32 @@ VIEWANGLES -45 35
 SUBOBJECT 0 0 10 0.5 0.5
 EXPECT SUBOBJECTFACES 1
 CMD PRESSPULL 3
-EXPECT LOG "a curved face meets it"
+EXPECT LOG "volume now 1021.0176"
+
+# A CONE's cap KEEPS THE SLOPE (D-2026-09-04-d): base 5, top 2 over height 10 is -0.3 per foot, so
+# at height 12 the top radius is 1.4 and the volume is pi x 12/3 x (25 + 7 + 1.96) = 426.7539.
+# Keeping the RADIUS instead - the other taper choice - would have given 490.0885, so this figure
+# is what tells the decision that was made from the one that was not.
+NEW
+CMD CONE 0,0 5 2 10
+EXPECT SOLIDS 1
+VIEWANGLES -45 35
+SUBOBJECT 0 0 10 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 2
+EXPECT LOG "volume now 426.7539"
+
+# The curved WALL itself is still refused: pushing it is a radius change, not a translation.
+# Aimed at (0,-5,5) rather than (5,0,5): at this camera that is the side of the wall actually facing
+# the viewer, and a ray at the far side picks the near one instead - the same thing that happens to
+# a user who has not orbited.
+NEW
+CMD CYLINDER 0,0 5 10
+VIEWANGLES -45 35
+SUBOBJECT 0 -5 5 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 1
+EXPECT LOG "Only a flat face can be pushed"
 
 # --- The shapes that used to be refused (user report, 2026-09-04) --------------------------------
 # The first algorithm translated corners along the push, which only works where every neighbour
