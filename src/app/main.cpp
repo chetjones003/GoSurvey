@@ -15,6 +15,7 @@
 #include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadRubberPreview.hpp"
+#include "util/gizmooverlay.hpp"  // CadGizmoOverlay, constructed here (REQ-060)
 #include "TransformPreview.hpp"
 #include "CadUi.hpp"
 #include "util/framewatch.hpp"
