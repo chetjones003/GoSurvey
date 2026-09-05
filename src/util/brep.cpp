@@ -1397,6 +1397,8 @@ const char* ProblemText(Problem p) {
   case Problem::PushPullVertexUnsolvable:
     return "This face cannot be pushed: one of its corners would have to split, because more than "
            "three faces meet there.";
+  case Problem::PushPullCurvedDegenerate:
+    return "That would flatten the curved wall beside this face, or push it through its own apex.";
   case Problem::PushPullResultInvalid:
     return "That push would turn the solid inside out or flatten it, so it was not applied.";
   }
@@ -1507,6 +1509,62 @@ bool ThreePlanePoint(const PushFacePlane& a, const PushFacePlane& b, const PushF
   return true;
 }
 
+
+/// A cylinder or cone wall beside the cap being moved, and what the move does to it.
+///
+/// A cap is a plane and moves by translation; the WALL beside it is not a plane and cannot be
+/// intersected, so it is re-parameterised instead: a cylinder's stored height grows or shrinks, and
+/// a cone's end radius follows its own slope (D-2026-09-04-c, the taper choice put to the user —
+/// **keep the slope, let the radius change**, so pushing a cone's cap extends the same cone rather
+/// than bending its wall).
+struct CurvedWallMove {
+  Vec3 axis;         ///< Unit, the wall's own +Z.
+  Vec3 origin;       ///< The wall's frame origin (base centre) BEFORE the move.
+  double height = 0.0;
+  double radius = 0.0;   ///< At the wall's z = 0.
+  double radius2 = 0.0;  ///< At z = height. Equal to \ref radius for a cylinder.
+  bool movingTopEnd = true;  ///< Whether the cap being moved is the wall's +Z end.
+  // Filled by Solve():
+  Vec3 newOrigin;
+  double newHeight = 0.0;
+  double newRadius = 0.0;
+  double newRadius2 = 0.0;
+  double movedEndRadius = 0.0;  ///< The radius at the END THAT MOVED, after the move.
+  double movedEndAxial = 0.0;   ///< Its axial coordinate measured from \ref newOrigin.
+};
+
+/// Work out the wall's new parameters for a cap moved by \p t along the wall's axis.
+///
+/// The wall spans `origin` to `origin + height*axis`. Whichever end the cap is, the other stays put
+/// and the moving one travels by `t` — so a cylinder simply gets taller or shorter, and a cone's
+/// moving end takes the radius its own slope puts there. False when that leaves no wall: zero or
+/// negative height, or a radius at or through zero, which is a shape change rather than a size one.
+bool SolveCurvedWall(CurvedWallMove* w, double t) {
+  const double slope = (w->height > 1e-12) ? (w->radius2 - w->radius) / w->height : 0.0;
+  if (w->movingTopEnd) {
+    w->newOrigin = w->origin;
+    w->newHeight = w->height + t;
+    w->newRadius = w->radius;
+    w->newRadius2 = w->radius + slope * w->newHeight;
+    w->movedEndRadius = w->newRadius2;
+    w->movedEndAxial = w->newHeight;
+  } else {
+    // The base end moves: the frame origin travels with it, and the radius there is what the same
+    // slope gives at the new position. The top end and its radius are untouched, which is what
+    // "keep the slope" means from the other side.
+    w->newOrigin = ray3d::Add(w->origin, ray3d::Scale(w->axis, t));
+    w->newHeight = w->height - t;
+    w->newRadius = w->radius + slope * t;
+    w->newRadius2 = w->radius2;
+    w->movedEndRadius = w->newRadius;
+    w->movedEndAxial = 0.0;
+  }
+  if (!(w->newHeight > 1e-9))
+    return false;  // pushed flat or through itself
+  if (!(w->newRadius > 1e-9) || !(w->newRadius2 > 1e-9))
+    return false;  // a cone driven to or past its own apex: the cap would become a point
+  return true;
+}
 }  // namespace
 
 bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out, Problem* outWhy) {
@@ -1556,14 +1614,122 @@ bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out, Pr
   // neighbour contains that direction — true of a box, false of a pyramid, whose faces are all
   // planes and none of which could be pushed at all. Re-solving lifted that restriction.
   std::vector<PushFacePlane> planesAt;  // reused per vertex
+  // A CURVED neighbour is not automatically a refusal any more. A cylinder or cone wall whose axis
+  // runs along the push is re-parameterised instead of intersected — its stored height grows, and a
+  // cone's moving end takes the radius its own slope puts there. That is the "make this cylinder
+  // taller" gesture, and it is the shape of every other curved case that is NOT supported: a wall
+  // pushed sideways is a radius change, a sphere or a torus has no such parameter at all, and an
+  // oblique axis is not a translation of anything.
+  std::vector<int> curvedWallFaces;
   for (size_t fi = 0; fi < s.faces.size(); ++fi) {
     const Face& nb = s.faces[fi];
     if (nb.surface.kind == SurfaceKind::Plane)
       continue;
     std::vector<int> nbVerts;
     CollectFaceVertices(s, nb, &nbVerts);
-    if (std::any_of(nbVerts.begin(), nbVerts.end(), isMoved))
+    if (!std::any_of(nbVerts.begin(), nbVerts.end(), isMoved))
+      continue;
+    if (nb.surface.kind != SurfaceKind::Cylinder && nb.surface.kind != SurfaceKind::Cone)
       return fail(Problem::PushPullNeighbourCurved);
+    const double axDot = ray3d::Dot(ray3d::Normalize(nb.surface.frame.zAxis), dir);
+    if (std::fabs(std::fabs(axDot) - 1.0) > 1e-9)
+      return fail(Problem::PushPullNeighbourCurved);  // pushing across the axis, not along it
+    curvedWallFaces.push_back(static_cast<int>(fi));
+  }
+
+  if (!curvedWallFaces.empty()) {
+    // Every wall touching the move must be the SAME wall — the halves a full cylinder is stored as
+    // share one surface, differing only in their angular span. Two genuinely different walls at one
+    // cap would each want their own re-parameterisation and could disagree about where the boundary
+    // lands, so that is refused rather than resolved arbitrarily.
+    const Surface& w0 = s.faces[static_cast<size_t>(curvedWallFaces.front())].surface;
+    for (int fi : curvedWallFaces) {
+      const Surface& sf = s.faces[static_cast<size_t>(fi)].surface;
+      if (sf.kind != w0.kind || sf.inward != w0.inward ||
+          std::fabs(sf.radius - w0.radius) > 1e-9 || std::fabs(sf.radius2 - w0.radius2) > 1e-9 ||
+          std::fabs(sf.height - w0.height) > 1e-9 ||
+          ray3d::Length(ray3d::Sub(sf.frame.origin, w0.frame.origin)) > 1e-9)
+        return fail(Problem::PushPullNeighbourCurved);
+    }
+    // Every face at a moving corner must be the cap itself or one of those walls. A corner that also
+    // touches an unrelated PLANE — a sliced cylinder — has both a plane constraint and a surface
+    // one, and satisfying both is a different solve. Refused rather than silently ignoring one.
+    for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+      if (static_cast<int>(fi) == faceIndex ||
+          std::find(curvedWallFaces.begin(), curvedWallFaces.end(), static_cast<int>(fi)) !=
+              curvedWallFaces.end())
+        continue;
+      std::vector<int> fv;
+      CollectFaceVertices(s, s.faces[fi], &fv);
+      if (std::any_of(fv.begin(), fv.end(), isMoved))
+        return fail(Problem::PushPullVertexUnsolvable);
+    }
+
+    CurvedWallMove wall;
+    wall.axis = ray3d::Normalize(w0.frame.zAxis);
+    wall.origin = w0.frame.origin;
+    wall.height = w0.height;
+    wall.radius = w0.radius;
+    wall.radius2 = w0.radius2;
+    // Which end is moving: the cap's outward normal points along the wall's axis at the top end and
+    // against it at the base. `t` is the signed travel measured in the wall's own axis direction, so
+    // both ends are one piece of arithmetic rather than two.
+    wall.movingTopEnd = ray3d::Dot(dir, wall.axis) > 0.0;
+    const double t = distance * ray3d::Dot(dir, wall.axis);
+    if (!SolveCurvedWall(&wall, t))
+      return fail(Problem::PushPullCurvedDegenerate);
+
+    Solid rc = s;
+    const Vec3 deltaC = ray3d::Scale(dir, distance);
+    // The corners: each keeps its angular position, takes the axial coordinate of the end it is on,
+    // and takes that end's NEW radius. On a cylinder the radius is unchanged and this is a pure
+    // translation; on a cone the corner also moves radially, which is the taper following its slope.
+    for (int v : moved) {
+      const Vec3 p = s.vertices[static_cast<size_t>(v)].p;
+      const Vec3 rel = ray3d::Sub(p, wall.origin);
+      Vec3 radial = ray3d::Sub(rel, ray3d::Scale(wall.axis, ray3d::Dot(rel, wall.axis)));
+      const double rl = ray3d::Length(radial);
+      if (!(rl > 1e-12))
+        return fail(Problem::PushPullVertexUnsolvable);  // a corner ON the axis has no direction
+      radial = ray3d::Scale(radial, wall.movedEndRadius / rl);
+      rc.vertices[static_cast<size_t>(v)].p =
+          ray3d::Add(ray3d::Add(wall.newOrigin, ray3d::Scale(wall.axis, wall.movedEndAxial)), radial);
+    }
+    // The cap's own plane, and its boundary arcs: an arc's centre sits on the axis at the moved
+    // end, and its radius is that end's radius. Both have to move or the cap's boundary stops
+    // matching its own plane — the same inconsistency the plane path guards against, in the one
+    // place a curve can express it.
+    rc.faces[static_cast<size_t>(faceIndex)].surface.frame.origin =
+        ray3d::Add(face.surface.frame.origin, deltaC);
+    const Vec3 movedEndCentre =
+        ray3d::Add(wall.newOrigin, ray3d::Scale(wall.axis, wall.movedEndAxial));
+    for (Edge& e : rc.edges) {
+      if (!isMoved(e.v0) || !isMoved(e.v1))
+        continue;
+      if (e.kind == CurveKind::Line)
+        continue;  // a seam chord across the cap: its endpoints already moved
+      if (e.kind != CurveKind::Arc)
+        return fail(Problem::PushPullNeighbourCurved);
+      e.frame.origin = movedEndCentre;
+      e.radius = wall.movedEndRadius;
+    }
+    // The wall itself.
+    for (int fi : curvedWallFaces) {
+      Surface& sf = rc.faces[static_cast<size_t>(fi)].surface;
+      sf.frame.origin = wall.newOrigin;
+      sf.height = wall.newHeight;
+      sf.radius = wall.newRadius;
+      sf.radius2 = wall.newRadius2;
+    }
+
+    rc.recipe = Recipe{};
+    const Problem whyC = Validate(rc);
+    if (whyC != Problem::Ok)
+      return fail(Problem::PushPullResultInvalid);
+    *out = std::move(rc);
+    if (outWhy)
+      *outWhy = Problem::Ok;
+    return true;
   }
 
   // The moved face's plane, translated. Every corner is then solved against THIS rather than the
