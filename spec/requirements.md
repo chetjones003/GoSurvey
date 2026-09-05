@@ -1898,8 +1898,34 @@ requirements is a planning failure, not a sign of rigor.
   - a gizmo drag and the equivalent typed command produce coordinates agreeing within REQ-101;
   - no gizmo is drawn when the selection is empty.
 - Owner-layer: UI (widget), Commands (apply + undo)
-- Status: accepted
-- Revisions: 2026-08-11 — initial.
+- Status: accepted — **TRANSLATE implemented 2026-09-04** (D-2026-09-04-g, GitHub issue #148 Phase 5
+  slice 4b). Three axis handles on the selection's bounding-box centre, aligned with the **active
+  UCS** (REQ-154, like the grid, ORTHO and coordinate entry — identical to world axes in the default
+  World UCS). Click-arm, click-commit, as every other grip in this viewport works; a right-click or
+  a cleared selection abandons the drag. The commit goes through `ApplyTranslationToSelection` — the
+  same function typed MOVE calls — so the second acceptance bullet holds **by construction rather
+  than by two implementations agreeing**. A handle sighted end-on (the Z handle in plan view) is
+  refused rather than answered from a near-singular divide. Command layer:
+  `CadGizmoAnchorWorld` / `CadGizmoAxisWorld` / `CadAxisDragParam` / `PickGizmoAxis` /
+  `SubmitGizmoClick` / `UpdateGizmoDrag` / `CommitGizmoDrag`; overlay `CadGizmoOverlay` +
+  `BuildGizmoOverlay`; headless `GIZMO GRAB|DROP|CANCEL` and `EXPECT GIZMO` / `EXPECT GIZMOAXIS`.
+  **Rotate and scale are NOT implemented and are blocked, not deferred by preference:** ROTATE and
+  SCALE are still plan-only and still refuse solids (REQ-320 item 6), so a rotate handle would again
+  have no typed command to agree with. Lifting them means turning every entity's stored frame about
+  an arbitrary axis — the work REQ-312 needed for one tilted arc, multiplied across every type — and
+  is its own requirement.
+- **Starting state — measured 2026-09-04, when this was first picked up.** Neither half of the
+  acceptance above was reachable. `ApplyTranslationToSelection` takes `(dx, dy)` and never touches
+  Z; `ApplyRotationToSelection` turns about a vertical axis only; `ApplyScaleToSelection` scales
+  about a flat point. And all six transform commands drop solids by name. So a gizmo's up-down
+  handle would have had no typed command to agree with, and the objects Phase 5 exists to edit could
+  not be moved at all. **REQ-320 lifts translation to 3D and makes a solid movable**; the gizmo
+  follows it rather than preceding it, because "agrees with the equivalent typed command" requires
+  the typed command to be able to say it first.
+- Revisions: 2026-08-11 — initial. 2026-09-04 — the starting-state note added and the delivery
+  sequenced behind REQ-320 (D-2026-09-04-f). No change to what is required, only to what has to
+  exist underneath it. 2026-09-04 — the TRANSLATE gizmo implemented (D-2026-09-04-g); rotate and
+  scale recorded as blocked on plan-only ROTATE/SCALE rather than left silent.
 
 ### REQ-061 — Per-viewport camera in paper space
 - Purpose: put a plan view and an isometric on the same sheet
@@ -6711,6 +6737,66 @@ capability that does not exist. They are recorded here rather than quietly dropp
   wording implies.
 - Revisions: 2026-09-04 — initial (D-2026-09-04-c, GitHub issue #148 criteria 3, 7 and 8).
 
+### REQ-320 — MOVE works in three dimensions, and a solid can be moved
+
+- Purpose: REQ-060 asks for a gizmo that manipulates the selection **in 3D** and whose drag must
+  "produce coordinates agreeing with the equivalent typed command". Neither half is possible today:
+  the transform the typed command uses is flat, and it throws solids out. This is the layer that has
+  to exist before a gizmo can sit on it.
+- Priority: must
+- Type: functional
+- Depends on: REQ-057 (Z in the data), REQ-058 (a camera that can show it), REQ-313 / ADR-045
+  (`brep::Translate`, which already moves a solid completely).
+- **Starting state — measured, because the gap is the reason this requirement exists.**
+  `ApplyTranslationToSelection` takes `(dx, dy)` and never touches Z: not once in its hundred-odd
+  lines, for any of the ten entity types it walks. `ApplyRotationToSelection` turns about a vertical
+  axis only and `ApplyScaleToSelection` scales about a flat point. And **all six** transform
+  commands — MOVE, ROTATE, SCALE, MIRROR, ARRAY, STRETCH — call
+  `DropSolidsFromSelectionForTransform`, which removes every solid from the selection and reports
+  *"transforming a solid is not supported yet"*. So the objects Phase 5 exists to edit cannot be
+  moved at all, by any means, and the `SelectedEntity::Type::Solid` comment says so and names Phase 5
+  as where that is to be fixed.
+- Statement: **MOVE translates the selection in three dimensions, and a solid moves with it.**
+  1. **The translation carries a Z component**, applied to every entity type that has an elevation:
+     a line's two endpoints, a circle's, arc's and ellipse's plane, a polyline's and feature line's
+     vertices, an annotation's insertion, a filled region's vertices, a block reference's insertion,
+     and a solid.
+  2. **A solid moves through `brep::Translate`**, not through a per-field sweep. That function
+     already moves every vertex, every arc edge's centre, every face's surface origin, a NURBS
+     patch's control points and the recipe's placement frame — and its own documentation says why
+     that must stay in one place: *"open-coded at a call site, adding a field to `Surface` later
+     would silently miss it, and a solid that half-moved is not a shape at all."*
+  3. **A solid is REPLACED, not edited.** `CadSolidPtr` is `shared_ptr<const brep::Solid>` so an undo
+     snapshot is a refcount bump; the translated solid is a new object taking the old one's place.
+  4. **Typed MOVE accepts an elevation.** A base point or destination may be `X,Y,Z`, and a relative
+     destination may be `@dx,dy,dz`. An omitted Z is zero, so every existing drawing, transcript and
+     habit behaves exactly as before.
+  5. **One undoable step**, as MOVE already is — the Z part is not a second operation.
+  6. **Nothing else changes.** ROTATE, SCALE, MIRROR, ARRAY and STRETCH keep refusing solids and keep
+     working in plan, and say so by name. Widening them means rotating every entity's stored frame
+     about an arbitrary axis, which is the work REQ-312 needed for a single tilted arc; it is a
+     separate requirement, not a footnote to this one.
+- Acceptance:
+  - a typed MOVE with a Z component moves a line, a circle, an arc, an ellipse, a polyline, a
+    feature line, an annotation and a block reference by that Z, and their reported elevations change
+    by exactly it;
+  - a MOVE with no Z component leaves every elevation untouched, byte for byte — the existing
+    behaviour is the default, not a special case;
+  - a **solid** moves, and its volume and surface area are unchanged by the move to the last digit
+    the closed forms give: a translation is an isometry, so any drift is a defect rather than a
+    tolerance;
+  - a moved solid's faces, edges and vertices are all displaced by the same vector — a solid that
+    half-moved would still validate, so this is asserted against the geometry rather than against
+    `Validate`;
+  - a moved solid saves and reloads from `.gs` at its new position;
+  - one Ctrl+Z restores the pre-move position, solids included, in a single step;
+  - ROTATE, SCALE, MIRROR, ARRAY and STRETCH still refuse a solid by name, unchanged.
+- Owner-layer: Commands (the transform and the typed parse), Domain (`brep::Translate`, already there)
+- Status: accepted — increment 1 of REQ-060's prerequisites (D-2026-09-04-f, GitHub issue #148
+  Phase 5 slice 4a).
+- Revisions: 2026-09-04 — initial. Written when REQ-060's gizmo work found that the transforms it
+  must agree with are two-dimensional and exclude solids, which no requirement had recorded.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -7193,7 +7279,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-057 | Domain/IO/UI | planned — DXF group-30 round-trip within REQ-101; `.gs` Z bit-identical on reload; legacy `.gs` loads all-zero Z; Properties Z edit undoable; survey elevation reads back as Z; parallel Z arrays stay length-locked across insert/erase/undo | accepted |
 | REQ-058 | Renderer/UI/Commands | `CameraTests` (plan-view parity, anchor-before-rotation composition, billboard basis) + `Ray3dTests` + `LinetypeTessellationTests` (per-vertex Z) + `CurveIntersectTests` + `BenchSceneTests`; manual/scripted in-app before/after for the render, overlay and glyph stages that no test target can link (TASK-036/037/039) | accepted — signed off 2026-08-12 | **Fixed 2026-09-01 (TASK-170):** box selection off plan view projected its two drag corners at Z = 0 while lines project at their true Z, so on a work plane raised by `ELEV` or tilted by a UCS the fence both drew and selected at pixels the cursor was never over. Each corner now carries its own work-plane elevation (`selBoxAnchorZ`, published through `uiCursorWorldZ` rather than threaded through five call sites). Invisible until now because Z does not move a PLAN projection and is genuinely 0 on the world XY plane at elevation zero — and because `headless.req058-orbited-fence-elevation` is the FIRST transcript to orbit the view at all, via a new `VIEWANGLES` driver verb. That is the wider finding: every REQ-058 behaviour that only exists off plan view had no failing test available to it. Negative-tested — restoring the Z = 0 projection reports `SELECTED: expected 1, got 0`
 | REQ-059 | UI | planned — manual (+Z / −Y / an off-axis handle animate correctly and settle < 0.5 s; gizmo tracks the camera after orbit; clicks outside the gizmo still pick geometry). Appearance is ImOGuizmo stock — the mockup is not the target (amended 2026-08-11) | accepted |
-| REQ-060 | UI/Commands | planned — manual (translate/rotate/scale each apply and undo in one step; gizmo result matches the typed command within REQ-101; no gizmo with an empty selection) | accepted |
+| REQ-060 | UI/Commands | translate: `headless.req060-gizmo-translate` (a drag along X and along Z, the same offset typed as MOVE landing on the same coordinates, one UNDO, a cancel, and a solid moved and reloaded) + `GizmoTranslateTests` (the skew-line solve, the anchor, an empty selection, a click that misses every handle, the UCS-aligned axes). rotate/scale: not implemented — blocked on plan-only ROTATE/SCALE (REQ-320 item 6) | accepted |
 | REQ-061 | Domain/Renderer/IO | `ViewportCameraTests` (plan-view projection == `ModelToPaperIn` bit-for-bit over a grid; SW-iso hand-computed sheet point; rect-centre invariant; sibling independence) + `GsIoViewportCameraTests` (camera round-trips `.gs`; legacy file with the keys stripped loads all-plan) + manual (two viewports one plan one isometric, on screen and in the PDF plot) | accepted — implemented 2026-08-31 (issue #175) |
 | REQ-063 | Domain/IO/Renderer | planned — `.gs` round-trip bit-identical; legacy `.gs` loads; extents include meshes; erase undoable in one step; layer freeze/off/non-plottable honoured; 2M-triangle model loads without index overflow | accepted |
 | REQ-064 | Renderer/UI/IO | planned — 2D Wireframe **pixel-identical** to pre-change (the parity gate, as REQ-058 had); occlusion correct in Hidden/Shaded; lighting follows the camera; style change does not alter geometry/selection/snap/plot; REQ-100 met in Shaded | accepted |

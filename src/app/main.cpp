@@ -15,6 +15,7 @@
 #include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadRubberPreview.hpp"
+#include "util/gizmooverlay.hpp"  // CadGizmoOverlay, constructed here (REQ-060)
 #include "TransformPreview.hpp"
 #include "CadUi.hpp"
 #include "util/framewatch.hpp"
@@ -1181,6 +1182,20 @@ int main()
       hoverLines.insert(hoverLines.end(), subHoverLines.begin(), subHoverLines.end());
     }
 
+    // The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b), and the ghost of what an
+    // armed drag is about to do. The ghost rides the ordinary PREVIEW channel — that channel already
+    // means "what is about to happen" for MOVE, ROTATE and OFFSET, and a gizmo drag is the same
+    // statement made with a handle instead of two typed points.
+    CadGizmoOverlay gizmoOverlay;
+    BuildGizmoOverlay(cmd, &gizmoOverlay);
+    if (cmd.gizmoDragActive) {
+      std::vector<float> ghostLines;
+      std::vector<float> ghostCircles;
+      BuildGizmoDragGhost(cmd, &ghostLines, &ghostCircles);
+      previewLines.insert(previewLines.end(), ghostLines.begin(), ghostLines.end());
+      previewCircles.insert(previewCircles.end(), ghostCircles.begin(), ghostCircles.end());
+    }
+
     std::vector<float> surveyMarkers;
     if (!cmd.surveyPoints.empty())
     {
@@ -1395,7 +1410,10 @@ int main()
                                // and vertices of both went into the highlight and hover line
                                // channels above and are drawn never-occluded, while these two are
                                // depth-tested — see the renderer's own note at the draw.
-                               (paperSpace || subObjectOverlay.empty()) ? nullptr : &subObjectOverlay);
+                               (paperSpace || subObjectOverlay.empty()) ? nullptr : &subObjectOverlay,
+                               // The gizmo handles. Model space only for the same reason — a paper
+                               // sheet is 2D (ADR-025 (g)) and has no third axis to offer.
+                               (paperSpace || gizmoOverlay.empty()) ? nullptr : &gizmoOverlay);
     cmd.perfRenderMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfRenderT0).count();
 

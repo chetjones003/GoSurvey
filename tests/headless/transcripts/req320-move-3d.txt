@@ -1,0 +1,146 @@
+# REQ-320 (D-2026-09-04-f, GitHub issue #148 Phase 5 slice 4a) — MOVE in three dimensions, and a
+# solid that can finally be moved.
+#
+# Written because REQ-060's gizmo could not be built on what was there. `ApplyTranslationToSelection`
+# took (dx, dy) and never touched Z, and all six transform commands dropped solids by name — so a
+# gizmo's up-down handle would have had no typed command to agree with, which REQ-060's own
+# acceptance requires, and the objects Phase 5 exists to edit could not be moved at all.
+#
+# The two halves this file asserts are therefore: elevations change by exactly the Z asked for, and
+# a solid moves as a rigid body. The second is checked by MASS PROPERTIES rather than by coordinates:
+# a translation is an isometry, so a solid whose volume or area moved is one that did not translate.
+
+# --- A MOVE with no Z is unchanged, which is the important half ---------------------------------
+# Every existing drawing and habit has to behave exactly as before. Asserted FIRST, because a
+# regression here is worse than the feature is worth.
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+CMD MOVE
+CMD 0,0
+CMD 5,0
+ESC
+EXPECT LINEXYZ 0 5 0 0 15 0 0
+
+# --- A typed Z moves the elevation, and only the elevation ---------------------------------------
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+CMD MOVE
+CMD 0,0
+CMD 0,0,25
+ESC
+# The plan position is untouched and both endpoints rose by 25.
+EXPECT LINEXYZ 0 0 0 25 10 0 25
+
+# --- A RELATIVE destination carries its own Z ----------------------------------------------------
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+CMD MOVE
+CMD 0,0
+CMD @3,4,5
+ESC
+EXPECT LINEXYZ 0 3 4 5 13 4 5
+
+# --- An absolute pair: the offset is the DIFFERENCE of the two elevations ------------------------
+# Base at Z = 10, destination at Z = 4, so the line drops 6 rather than rising to 4.
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+CMD MOVE
+CMD 0,0,10
+CMD 0,0,4
+ESC
+EXPECT LINEXYZ 0 0 0 -6 10 0 -6
+
+# --- A SOLID moves, which nothing could do before -------------------------------------------------
+# Volume and surface area are unchanged to the last digit the closed forms give: a translation is an
+# isometry, so any drift at all is a defect rather than a tolerance. That is a stronger check than
+# comparing coordinates, and it is the one that catches a solid that moved only some of its parts —
+# which would still pass brep::Validate, since Validate never compares a face's surface against its
+# own boundary.
+
+NEW
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+CMD MOVE
+CMD 0,0
+CMD @100,50,25
+ESC
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# It really moved: a fence where the box now is finds it. Note a fence ACCUMULATES into the current
+# selection, and the box is still selected from before the MOVE - so the negative half of this
+# ("nothing where it used to be") is asserted in the reload block below, which starts from an empty
+# selection and can therefore say it. Mass properties alone would pass on a solid that never moved.
+BOX 80 30 120 70
+EXPECT SELECTED 1
+
+# --- One Ctrl+Z, solids included ------------------------------------------------------------------
+
+UNDO
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- A moved solid survives a .gs round-trip at its new position ----------------------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+BOX -20 -20 20 20
+CMD MOVE
+CMD 0,0
+CMD @100,50,25
+ESC
+SAVEAS %OUT%/move3d.gs
+NEW
+EXPECT SOLIDS 0
+OPEN %OUT%/move3d.gs
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# A freshly opened drawing has nothing selected, so this is where the pair can be stated: nothing
+# remains where the box was drawn, and it is where the move put it.
+BOX -20 -20 20 20
+EXPECT SELECTED 0
+BOX 80 30 120 70
+EXPECT SELECTED 1
+
+# --- Every OTHER transform still refuses a solid, by name -----------------------------------------
+# REQ-320 item 6. Rotating a solid means turning every surface frame and every arc-edge frame in its
+# topology — the work REQ-312 needed for one tilted arc — and is a separate requirement. Asserted so
+# that "MOVE works now" cannot be read as "transforms work now".
+
+NEW
+CMD BOX 0,0 20 10 8
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+CMD ROTATE
+CMD 0,0
+CMD 90
+ESC
+EXPECT LOG "transforming a solid is not supported yet"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+CHECK ALL

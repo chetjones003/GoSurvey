@@ -3,6 +3,7 @@
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
 #include "PdfAttach.hpp"
+#include "gizmooverlay.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -132,7 +133,13 @@ public:
                    // In 2D Wireframe there is no depth buffer content to be occluded by — solids
                    // draw no faces there — so the tint simply draws, which is the only way a face
                    // selection can be shown in the default style.
-                   const CadSubObjectOverlay* subObjectOverlay = nullptr);
+                   const CadSubObjectOverlay* subObjectOverlay = nullptr,
+                   // The translate gizmo's handles (REQ-060, GitHub issue #148 Phase 5 slice 4b).
+                   //
+                   // Its own channel because it is the only overlay here that is not one colour:
+                   // X red, Y green, Z blue is what every 3D application already draws, and a widget
+                   // whose three handles shared a colour would have to be read rather than seen.
+                   const CadGizmoOverlay* gizmoOverlay = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
