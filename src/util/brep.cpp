@@ -749,12 +749,12 @@ struct IsectStrip {
   FaceIntegrals out;
   if (!st.valid())
     return out;
-  out.area = GradedGaussIntegrate(f.uStart, f.uEnd, 22, [&](double u) {
+  out.area = GradedGaussIntegrate(f.uStart, f.uEnd, 48, [&](double u) {
     double a = 0.0;
     double b = 0.0;
     return IsectStripAt(st, u, &a, &b) ? r * (b - a) : 0.0;
   });
-  out.volTerm = GradedGaussIntegrate(f.uStart, f.uEnd, 22, [&](double u) {
+  out.volTerm = GradedGaussIntegrate(f.uStart, f.uEnd, 48, [&](double u) {
     double a = 0.0;
     double b = 0.0;
     if (!IsectStripAt(st, u, &a, &b))
@@ -7399,6 +7399,134 @@ struct GeneralBranchSeams {
   return Succeed(outWhy);
 }
 
+/// One stub of `A − B` (thin − thick) for the **fully general** (tilted-and-skew) branch pipe
+/// (REQ-314 B2b-2, GitHub issue #283): the thick `B` bites the offset-and-tilted thin `A` in two.
+/// Generalises \ref BuildBranchPipeThinStub (tilt only) and \ref BuildSkewBranchPipeThinStub (offset
+/// only) exactly the way \ref BuildGeneralBranchPipeIntersection generalises their non-stub
+/// siblings: identical 4v / 6e (2 procedural) / 4f, χ = 2 topology, the mouth curve is the general
+/// `ζ(φ)`, and the thick-wall dimple's angular extent has no closed form once both `alpha` and `g`
+/// are nonzero, so it is found the same sample-scan way \ref BuildGeneralBranchPipeIntersection
+/// bounds its mouth patches.
+[[nodiscard]] bool BuildGeneralBranchPipeThinStub(const ucs::Ucs& fr, double r, double R, double alpha,
+                                                  double g, double zetaFlat, int sideSign, Solid* out,
+                                                  Problem* outWhy) {
+  const double ca = std::cos(alpha);
+  const double sa = std::sin(alpha);
+  const double zetaMax = (r * std::fabs(sa) + R) / ca;
+  if (!(R > r) || !(r > 0.0) || !(ca > 1e-6) || !(std::fabs(g) + r < R) ||
+      !(std::fabs(zetaFlat) > zetaMax + 1e-9 * (R + r)))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const int msign = sideSign > 0 ? 1 : -1;
+  const Vec3 Y = fr.yAxis;
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+  const Vec3 tHat = ray3d::Add(ray3d::Scale(fr.xAxis, ca), ray3d::Scale(fr.zAxis, sa));
+  const Vec3 xaHat = ray3d::Add(ray3d::Scale(fr.xAxis, -sa), ray3d::Scale(fr.zAxis, ca));
+  auto thinPt = [&](double phi, double zeta) {
+    return W(Vec3{zeta * ca - r * std::cos(phi) * sa, g - r * std::sin(phi),
+                  zeta * sa + r * std::cos(phi) * ca});
+  };
+  auto cpt = [&](double phi) {
+    const double py = g - r * std::sin(phi);
+    const double root = std::sqrt(std::max(0.0, R * R - py * py));
+    return thinPt(phi, (r * sa * std::cos(phi) + msign * root) / ca);
+  };
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = W(Vec3{0.0, g, 0.0});
+  aSurf.frame.zAxis = tHat;
+  aSurf.frame.xAxis = xaHat;
+  aSurf.frame.yAxis = ray3d::Scale(Y, -1.0);
+  aSurf.radius = r;
+  aSurf.height = 4.0 * (std::fabs(zetaFlat) + R);
+  Surface bSurf;
+  bSurf.kind = SurfaceKind::Cylinder;
+  bSurf.frame = fr;
+  bSurf.radius = R;
+  bSurf.height = 8.0 * (R + std::fabs(g));
+
+  Solid s;
+  const int p0 = AddVertex(&s, cpt(0.0));               // mouth phi = 0
+  const int pP = AddVertex(&s, cpt(kPi));               // mouth phi = pi
+  const int q0 = AddVertex(&s, thinPt(0.0, zetaFlat));  // rim phi = 0
+  const int qP = AddVertex(&s, thinPt(kPi, zetaFlat));  // rim phi = pi
+
+  auto isect = [&](int a, int b, double witnessPhi) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = a;
+    e.v1 = b;
+    e.frame.origin = cpt(witnessPhi);
+    e.isectSurfaces = {aSurf, bSurf};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int eP = isect(p0, pP, 0.5 * kPi);  // mouth, y > 0 side
+  const int eN = isect(pP, p0, 1.5 * kPi);  // mouth, y < 0 side
+  const int sp0 = AddLine(&s, p0, q0);      // wall seam phi = 0
+  const int spP = AddLine(&s, pP, qP);      // wall seam phi = pi
+  const Vec3 fc = W(Vec3{zetaFlat * ca, g, zetaFlat * sa});
+  const int rc0 = AddArc(&s, q0, qP, fc, tHat, kPi);  // rim, y > 0
+  const int rcP = AddArc(&s, qP, q0, fc, tHat, kPi);  // rim, y < 0
+
+  auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = aSurf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  // The mouth's u-extent on B's wall has no closed form once both alpha and g are nonzero (see
+  // BuildGeneralBranchPipeIntersection::scanRange); sample it the same way, about this one mouth.
+  auto thickU = [&](const Vec3& p) {
+    const Vec3 d = ray3d::Sub(p, fr.origin);
+    return std::atan2(ray3d::Dot(d, fr.yAxis), ray3d::Dot(d, fr.xAxis));
+  };
+  const double refPhi = msign > 0 ? kHalfPi : -kHalfPi;
+  const double uRef = thickU(cpt(refPhi));
+  double uLo = uRef;
+  double uHi = uRef;
+  constexpr int kSamples = 360;
+  for (int i = 0; i <= kSamples; ++i) {
+    const double phi = kTwoPi * static_cast<double>(i) / kSamples;
+    double u = thickU(cpt(phi));
+    u -= kTwoPi * std::round((u - uRef) / kTwoPi);
+    uLo = std::min(uLo, u);
+    uHi = std::max(uHi, u);
+  }
+  const double margin = 0.15 * (uHi - uLo) + 1e-6;
+  uLo -= margin;
+  uHi += margin;
+  auto dimple = [&](std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = bSurf;
+    f.surface.inward = true;
+    f.uStart = uLo;
+    f.uEnd = uHi;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+
+  if (msign > 0) {
+    wall(0.0, kPi, {{eP, false}, {spP, false}, {rc0, true}, {sp0, true}});
+    wall(kPi, kTwoPi, {{eN, false}, {sp0, false}, {rcP, true}, {spP, true}});
+    s.faces.push_back(MakePlaneFace(fc, tHat, {{rc0, false}, {rcP, false}}));
+    dimple({{eN, true}, {eP, true}});
+  } else {
+    wall(0.0, kPi, {{rc0, false}, {spP, true}, {eP, true}, {sp0, false}});
+    wall(kPi, kTwoPi, {{rcP, false}, {sp0, true}, {eN, true}, {spP, false}});
+    s.faces.push_back(MakePlaneFace(fc, ray3d::Scale(tHat, -1.0), {{rc0, true}, {rcP, true}}));
+    dimple({{eP, false}, {eN, false}});
+  }
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// `B − A` for a **non-perpendicular** branch pipe (REQ-314 B2b-2, GitHub issue #242): the thin
 /// branch `A` (radius \p r, tilted by \p alpha) bored clean through the thick main `B` (radius \p R,
 /// axis `fr.zAxis`, caps \p zB0 / \p zB1). `BuildBranchPipeSubtract` generalised the same way
@@ -7856,11 +7984,11 @@ struct GeneralBranchSeams {
   return Succeed(outWhy);
 }
 
-/// Recognise a thin cylinder crossing a thicker one through an interior point, axes coplanar and
-/// crossing, radii differ — the pipe-tee (B2b-2). INTERSECT the lens, SUBTRACT bores the branch
-/// clean through the main, UNION fuses them — at **right angles** and, since issue #242, at any
-/// **non-perpendicular** coplanar angle too (`thin − thick` SUBTRACT still falls through). Skew
-/// (non-coplanar) axes fall through. `*handled` stays false when the pair is not this configuration.
+/// Recognise a thin cylinder crossing a thicker one through an interior point, radii differ — the
+/// pipe-tee (B2b-2). INTERSECT the lens, SUBTRACT bores the branch clean through the main (or, for a
+/// thin minuend, splits the branch into two stubs), UNION fuses them — at **right angles**, at any
+/// **non-perpendicular** coplanar angle (issue #242), and, offset **and** tilted at once, fully
+/// general (issue #242 / #283). `*handled` stays false when the pair is not this configuration.
 [[nodiscard]] bool TryBooleanBranchPipe(const CylinderShape& A, const CylinderShape& B, BoolOp op,
                                         std::vector<Solid>* out, bool* handled, Problem* outWhy) {
   const double sc = A.radius + B.radius + A.length + B.length;
@@ -7900,8 +8028,7 @@ struct GeneralBranchSeams {
     const bool minuendThick = A.radius > B.radius;
 
     if (perp) {
-      // Right angles, missing by `gap`, the thin fully crossing, caps clear. All three ops for a
-      // `thick` minuend; `thin − thick` still falls through.
+      // Right angles, missing by `gap`, the thin fully crossing, caps clear.
       if (!(gap + r < R - eps))
         return false;
       ucs::Ucs sfr;
@@ -7952,13 +8079,11 @@ struct GeneralBranchSeams {
       return Succeed(outWhy);
     }
 
-    // Fully general: tilted AND skew (issue #242). `gfr.xAxis` is the thin axis's own in-plane
-    // component (as in the coplanar-tilted case), `gfr.origin` sits on the thick axis at the closest
-    // approach, and the offset `g` — the thin axis's constant coordinate along `gfr.yAxis` — is the
-    // true common-perpendicular gap (may be negative; the builders don't care). `thin − thick` still
-    // falls through — it would need its own stub builder, a later slice.
-    if (op == BoolOp::Subtract && !minuendThick)
-      return false;
+    // Fully general: tilted AND skew (issue #242, thin-thick stub added for #283). `gfr.xAxis` is
+    // the thin axis's own in-plane component (as in the coplanar-tilted case), `gfr.origin` sits on
+    // the thick axis at the closest approach, and the offset `g` — the thin axis's constant
+    // coordinate along `gfr.yAxis` — is the true common-perpendicular gap (may be negative; the
+    // builders don't care).
     ucs::Ucs gfr;
     if (!ucs::FromNormal(cThick, kd, &gfr))
       return Fail(Problem::BooleanResultInvalid, outWhy);
@@ -7991,6 +8116,16 @@ struct GeneralBranchSeams {
     const double zB1 = thick.length - sThickAt;
     const double zetaA0 = -sThinAt;
     const double zetaA1 = thin.length - sThinAt;
+    if (op == BoolOp::Subtract && !minuendThick) {
+      Solid up;
+      Solid down;
+      if (!BuildGeneralBranchPipeThinStub(gfr, r, R, galpha, gOff, zetaA1, 1, &up, outWhy) ||
+          !BuildGeneralBranchPipeThinStub(gfr, r, R, galpha, gOff, zetaA0, -1, &down, outWhy))
+        return false;
+      out->push_back(std::move(up));
+      out->push_back(std::move(down));
+      return Succeed(outWhy);
+    }
     Solid result;
     bool gok = false;
     if (op == BoolOp::Intersect)
