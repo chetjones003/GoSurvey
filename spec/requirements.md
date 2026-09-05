@@ -6669,12 +6669,25 @@ capability that does not exist. They are recorded here rather than quietly dropp
      height alone while its boundary moves still BUILDS and still passes `Validate`: a cylinder
      pushed from h = 10 to h = 13 reports **863.938 against a true 1021.02**, 15% out, because the
      wall says 10 while its cap sits at 13.
-  3. **Everything else curved is still refused by name.** A curved wall pushed along its own normal
-     is a radius change and not a translation at all; a sphere or torus has no height or taper to
-     follow; and a cylinder axis oblique to the push is not a translation of anything. A cap whose
-     corners also touch an unrelated plane - a sliced cylinder - carries both a plane constraint
-     and a surface one, and satisfying both at once is a different solve.
-  4. **It is refused when a corner cannot be re-solved** - the planes there do not cross in a single
+  3. **A CYLINDER WALL pushes by changing its radius.** This is the one curved face that can be
+     moved, and it is not a translation: the outward normal points a different way at every point of
+     the surface, so there is no single direction to move along. What the gesture means is that
+     every point moves along its OWN normal by the same amount, which is exactly what adding to the
+     radius does. Both half-faces a full cylinder is stored as follow together, the cap boundary
+     arcs grow with it, and the cap PLANES do not move - the mirror image of the cap push, where
+     the plane moves and the radius does not.
+
+     `Surface::inward` decides the sign. A hole's wall has its outward normal pointing AT the axis,
+     so pushing it outward makes the hole SMALLER and the solid heavier. Got wrong, the feature
+     still appears to work - on a boss.
+  4. **Everything else curved is refused by name.** A CONE wall: offsetting it along its own normal
+     moves both radii by `d / cos(half-angle)` and leaves the apex where it was, which is an offset
+     surface rather than a radius change, and which of the two a drag should mean is a second
+     decision. A sphere or torus has no single parameter a push corresponds to. An axis oblique to
+     the push is not a translation of anything. And a cap whose corners also touch an unrelated
+     plane - a sliced cylinder - carries both a plane constraint and a surface one, which is a
+     different solve.
+  5. **It is refused when a corner cannot be re-solved** - the planes there do not cross in a single
      point, or more than three faces meet and moving one leaves no point satisfying all of them. A
      true pyramid's apex is the honest example: four planes meet there, and pushing one of its side
      faces would split that apex into several points. A topology change, and a different operation.
@@ -6697,21 +6710,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
      0.001 ft push on a wedge, and REQ-201 asks for a reason the user can *read*. Both halves are
      stated because the difference between them is exactly the kind of thing a later reader would
      otherwise have to re-derive.
-  5. **A zero or non-finite distance is refused**, not treated as a no-op that reports success: a
+  6. **A zero or non-finite distance is refused**, not treated as a no-op that reports success: a
      command that says it moved something it did not is worse than one that declines.
-  6. **The result is validated before anything is stored** (ADR-046 (d)). A push that collapses the
+  7. **The result is validated before anything is stored** (ADR-046 (d)). A push that collapses the
      solid, inverts it, or degenerates a face is refused by name and the document is untouched. A
      push far enough to turn a solid inside out is a real user gesture, not a hypothetical.
-  7. **The topology is preserved, so a sub-object reference survives the edit.** The operation moves
+  8. **The topology is preserved, so a sub-object reference survives the edit.** The operation moves
      geometry and changes no counts, which is exactly the case ADR-049 measured when it chose an
      index paired with the solid's identity. A push therefore leaves the pushed face still selected,
      and a second push continues from the first.
-  8. **The recipe is dropped, never quietly updated.** A pushed box is no longer the box its recipe
+  9. **The recipe is dropped, never quietly updated.** A pushed box is no longer the box its recipe
      describes. ADR-045 already made the recipe optional and never consulted by validity, mass
      properties or tessellation; a recipe that no longer describes its solid is worse than none,
      because it reads as authoritative. `.gs` already stores topology rather than the recipe, so a
      pushed solid round-trips with no format change.
-  9. **One undoable step.** The whole edit — including dropping the recipe and re-tessellating — is
+  10. **One undoable step.** The whole edit — including dropping the recipe and re-tessellating — is
      a single undo, and Ctrl+Z restores the prior solid exactly.
 - Acceptance:
   - pushing a box's top face by `+d` gives a solid whose volume is the original plus `base area × d`,
@@ -6735,8 +6748,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
     instead would have produced;
   - a cone pushed through its own apex, and a cylinder flattened to nothing, are each refused by
     name rather than inverted;
-  - a curved WALL, a sphere, a torus, and a cap whose corners also touch an unrelated plane are
-    each still refused by name;
+  - a CYLINDER's wall pushes by radius: r = 5 h = 10 pushed 2 gives pi x 49 x 10 exactly, both
+    half-faces carry the new radius, the cap arcs grow with it, and the cap planes do not move;
+  - a HOLE's wall pushes the other way - a boolean-produced inward wall pushed outward SHRINKS the
+    hole and the solid gains material, which is the one place a sign error would still look like a
+    working feature;
+  - a cylinder wall pushed to or through zero radius is refused by name;
+  - a CONE wall, a sphere, a torus, and a cap whose corners also touch an unrelated plane are each
+    still refused by name;
   - a WEDGE's end face pushes, and the wedge gets TALLER as it extends, because the ramp keeps its
     slope - the case an algorithm that translated corners could only refuse;
   - a pyramid FRUSTUM pushes on every one of its six faces, and raising its top makes that top

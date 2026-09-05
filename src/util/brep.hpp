@@ -381,7 +381,11 @@ enum class Problem {
   SweepTwistNeedsStraightPath,
 
   // --- Push/pull (REQ-319 / ADR-046 amendment (i), GitHub issue #148 Phase 5). ---
-  PushPullFaceNotPlanar,    ///< The face to move is a cylinder, cone, sphere, torus or NURBS wall.
+  /// This kind of face cannot be moved. A PLANE translates and a CYLINDER wall changes radius; a
+  /// cone, sphere, torus or NURBS wall has no single parameter a push corresponds to - offsetting a
+  /// cone along its own normal moves both radii by `d / cos(half-angle)`, which is an offset rather
+  /// than the radius change the gesture reads as.
+  PushPullFaceKindUnsupported,
   PushPullDistanceZero,     ///< A zero (or non-finite) distance: nothing to do, and saying otherwise lies.
   /// A face meeting the one being moved is CURVED. A corner of the moved face is re-solved as the
   /// meeting point of the planes around it, and a curved surface is not a plane to intersect: the
@@ -891,7 +895,7 @@ struct Tessellation {
 /// check and this operation therefore guarantees itself.
 ///
 /// **Refuses, by name and before building anything:**
-/// - \ref Problem::PushPullFaceNotPlanar — a curved wall. Moving a cylinder's wall is a radius
+/// - \ref Problem::PushPullFaceKindUnsupported — a curved wall. Moving a cylinder's wall is a radius
 ///   change and a different geometry problem: the caps' boundary arcs must be re-solved, not
 ///   translated. Its own increment.
 /// - \ref Problem::PushPullDistanceZero — zero or non-finite. Reporting success for a move that did

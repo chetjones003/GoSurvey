@@ -183,16 +183,14 @@ TEST_CASE("Push/pull refuses what it cannot do, by name (REQ-319 / REQ-201)", "[
     REQUIRE(why == brep::Problem::IndexOutOfRange);
     REQUIRE_FALSE(brep::PushPullFace(box, top, 3.0, nullptr, &why));
   }
-  SECTION("a CURVED face is refused rather than approximated") {
-    brep::Solid cyl;
-    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &cyl, &why));
-    int wall = -1;
-    for (size_t i = 0; i < cyl.faces.size(); ++i)
-      if (cyl.faces[i].surface.kind == brep::SurfaceKind::Cylinder)
-        wall = static_cast<int>(i);
-    REQUIRE(wall >= 0);
-    REQUIRE_FALSE(brep::PushPullFace(cyl, wall, 1.0, &out, &why));
-    REQUIRE(why == brep::Problem::PushPullFaceNotPlanar);
+  SECTION("a SPHERE face is refused - no single parameter a push corresponds to") {
+    // A cylinder WALL is no longer refused: it changes radius (see the wall case below). A sphere
+    // has no such parameter - offsetting it moves its whole surface and is a different edit - so
+    // this is what the refusal is about now.
+    brep::Solid sph;
+    REQUIRE(brep::MakeSphere(World(), 5.0, &sph, &why));
+    REQUIRE_FALSE(brep::PushPullFace(sph, 0, 1.0, &out, &why));
+    REQUIRE(why == brep::Problem::PushPullFaceKindUnsupported);
   }
   SECTION("a cylinder's cap produces the TRUE volume, not the plausible wrong one") {
     // **This is the case the wall re-parameterisation exists for**, and the only one measured to
@@ -250,7 +248,7 @@ TEST_CASE("Push/pull refuses what it cannot do, by name (REQ-319 / REQ-201)", "[
   }
   SECTION("every refusal has a sentence of its own") {
     // ProblemText never returns null, and a refusal the user cannot read is REQ-201 unmet.
-    for (brep::Problem p : {brep::Problem::PushPullFaceNotPlanar, brep::Problem::PushPullDistanceZero,
+    for (brep::Problem p : {brep::Problem::PushPullFaceKindUnsupported, brep::Problem::PushPullDistanceZero,
                             brep::Problem::PushPullNeighbourCurved,
                             brep::Problem::PushPullVertexUnsolvable,
                             brep::Problem::PushPullResultInvalid}) {
@@ -451,7 +449,12 @@ TEST_CASE("A cap whose neighbour is a curved wall pushes, and the wall follows (
     REQUIRE_FALSE(brep::PushPullFace(cyl, FaceFacing(cyl, {0, 0, 1}), -10.0, &out, &why));
     REQUIRE(why == brep::Problem::PushPullCurvedDegenerate);
   }
-  SECTION("the curved WALL itself is still refused — it is a radius change, not a translation") {
+  SECTION("the curved WALL is a radius change, and now does it") {
+    // This SECTION asserted a refusal until increment 4. Kept, inverted, rather than deleted: the
+    // cap and the wall are the two halves of "push a cylinder", and having them side by side is
+    // what shows they are different operations - the cap moves a plane and leaves the radius, the
+    // wall changes the radius and leaves the planes.
+    constexpr double kPiW = 3.14159265358979323846;
     brep::Solid cyl;
     REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &cyl, &why));
     int wall = -1;
@@ -459,16 +462,17 @@ TEST_CASE("A cap whose neighbour is a curved wall pushes, and the wall follows (
       if (cyl.faces[i].surface.kind == brep::SurfaceKind::Cylinder)
         wall = static_cast<int>(i);
     REQUIRE(wall >= 0);
-    REQUIRE_FALSE(brep::PushPullFace(cyl, wall, 1.0, &out, &why));
-    REQUIRE(why == brep::Problem::PushPullFaceNotPlanar);
+    REQUIRE(brep::PushPullFace(cyl, wall, 2.0, &out, &why));
+    REQUIRE(Volume(out) == Approx(kPiW * 49.0 * 10.0));
   }
   SECTION("a SPHERE is still refused: there is no height or taper to follow") {
     brep::Solid sph;
     REQUIRE(brep::MakeSphere(World(), 5.0, &sph, &why));
     for (size_t i = 0; i < sph.faces.size(); ++i) {
       REQUIRE_FALSE(brep::PushPullFace(sph, static_cast<int>(i), 1.0, &out, &why));
-      REQUIRE((why == brep::Problem::PushPullFaceNotPlanar ||
+      REQUIRE((why == brep::Problem::PushPullFaceKindUnsupported ||
                why == brep::Problem::PushPullNeighbourCurved));
     }
   }
 }
+
