@@ -1,4 +1,4 @@
-# TASK-204 — MOVE in three dimensions, and a solid that can be moved (REQ-320, issue #148 slice 4a)
+# TASK-205 — MOVE in three dimensions, and a solid that can be moved (REQ-320, issue #148 slice 4a)
 
 ## Origin: a SPEC GAP found while starting the gizmo
 

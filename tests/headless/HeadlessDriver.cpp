@@ -27,6 +27,7 @@
 #include "SurveyCsv.hpp"
 #include "SurveyPoints.hpp"
 #include "TransformPreview.hpp"
+#include "viewport/CadSnap.hpp"  // WorldToleranceFromPixels, for the GIZMO verb's screen-derived aperture
 #include "ViewportPickPolicy.hpp"
 #include "docinvariants.hpp"
 
@@ -747,6 +748,74 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       subTol.edge = subTol.vertex;
     }
     SubmitSubObjectPick(run.st, subRay, subTol, toggle, run.log);
+  } else if (verb == "GIZMO") {
+    // GIZMO GRAB <x> <y> <z>  |  GIZMO DROP <x> <y> <z>  |  GIZMO CANCEL
+    //
+    // The translate gizmo (REQ-060, issue #148 slice 4b), driven the way a mouse drives it: each
+    // form casts the ray the CAMERA would cast at the named world point and hands it to
+    // `SubmitGizmoClick`, exactly as SUBOBJECT does a few verbs up.
+    //
+    // **A ray, not a distance, and that is the whole point of the verb.** REQ-060's second
+    // acceptance bullet is that "a gizmo drag and the equivalent typed command produce coordinates
+    // agreeing within REQ-101". A verb that handed the command layer a ready-made offset would
+    // assert that two ways of calling one function agree, which is not a fact about the product. By
+    // aiming at a point and letting the skew-line solve decide the distance, what is asserted is the
+    // pick, the projection and the transform together — the same three the user's drag goes through.
+    //
+    // GRAB fails loudly when no handle is under the ray: a transcript whose grab silently missed
+    // would then assert that a move did not happen, which is exactly what a broken gizmo does.
+    std::istringstream is(rest);
+    std::string what;
+    if (!(is >> what)) {
+      Fail(run, "parse", "GIZMO expects GRAB <x> <y> <z>, DROP <x> <y> <z> or CANCEL", sourceLine);
+      return false;
+    }
+    what = UpperAscii(what);
+    if (what == "CANCEL") {
+      CancelGizmoDrag(run.st);
+      return true;
+    }
+    if (what != "GRAB" && what != "DROP") {
+      Fail(run, "parse", "GIZMO: unknown form " + what + " (expected GRAB, DROP or CANCEL)", sourceLine);
+      return false;
+    }
+    float gx = 0.f, gy = 0.f, gz = 0.f;
+    if (!(is >> gx >> gy >> gz)) {
+      Fail(run, "parse", "GIZMO " + what + " expects <x> <y> <z>, got: " + rest, sourceLine);
+      return false;
+    }
+    // A projection needs a viewport size; a transcript has no window, so give it the same definite
+    // one VIEWANGLES and SUBOBJECT do. It also fixes the handle length and the grab aperture, both
+    // of which are screen-derived — so a transcript's gizmo is the same size as the user's.
+    if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+      run.st.uiViewportWidthPx = 1200.f;
+      run.st.uiViewportHeightPx = 700.f;
+    }
+    const Camera gizCam = CadViewCamera(run.st);
+    float gsx = 0.f, gsy = 0.f;
+    gizCam.WorldToScreen(static_cast<double>(gx), static_cast<double>(gy), static_cast<double>(gz),
+                         run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &gsx, &gsy);
+    const ray3d::Ray gizRay =
+        gizCam.ScreenRay(gsx, gsy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+    const double gizTol = static_cast<double>(CadSnap::WorldToleranceFromPixels(
+        run.st.uiViewportHeightPx,
+        (1.f / std::max(run.st.viewportZoom, 1.e-9f)) * 50.f, kGizmoHandleGrabPx));
+    if (what == "GRAB" && run.st.gizmoDragActive) {
+      Fail(run, "state", "GIZMO GRAB while a drag is already armed - DROP or CANCEL it first",
+           sourceLine);
+      return false;
+    }
+    if (what == "DROP" && !run.st.gizmoDragActive) {
+      Fail(run, "state", "GIZMO DROP with no armed drag - GRAB a handle first", sourceLine);
+      return false;
+    }
+    if (!SubmitGizmoClick(run.st, gizRay, gizTol, run.log)) {
+      Fail(run, "pick",
+           "GIZMO GRAB found no handle under (" + std::to_string(gx) + ", " + std::to_string(gy) +
+               ", " + std::to_string(gz) + ") - is anything selected, and is the point on a handle?",
+           sourceLine);
+      return false;
+    }
   } else if (verb == "BOX") {
     // BOX <x0> <y0> <x1> <y1> [WINDOW] [SUBTRACT] — a box selection from two world corners.
     //
@@ -2171,6 +2240,17 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // as a number rather than as a promise.
       else if (what == "SUBOBJECTS")
         got = static_cast<long>(run.st.subObjectSelection.size());
+      // Whether a translate gizmo is drawn at all (REQ-060 acceptance 3: "no gizmo is drawn when
+      // the selection is empty"). Asserted through `CadGizmoVisible`, which is the same predicate
+      // `BuildGizmoOverlay` early-outs on — so this is the drawing decision itself, not a
+      // restatement of it that could drift.
+      else if (what == "GIZMO")
+        got = CadGizmoVisible(run.st) ? 1L : 0L;
+      // Which handle is armed: -1 none, 0 X, 1 Y, 2 Z. "A drag is armed" and "the drag is along the
+      // axis you aimed at" are different claims, and the second is the one a mis-projected pick
+      // breaks silently.
+      else if (what == "GIZMOAXIS")
+        got = static_cast<long>(run.st.gizmoDragActive ? run.st.gizmoDragAxis : -1);
       else if (what == "SUBOBJECTFACES" || what == "SUBOBJECTEDGES" || what == "SUBOBJECTVERTICES") {
         const solidpick::Kind want = what == "SUBOBJECTFACES"   ? solidpick::Kind::Face
                                      : what == "SUBOBJECTEDGES" ? solidpick::Kind::Edge

@@ -992,6 +992,10 @@ if(GOSURVEY_BUILD_TESTS)
     # reference, mutual exclusion and cross-solid depth order. Needs gosurvey_domain for
     # SubmitSubObjectPick / ExpireSubObjectSelection, like ViewportUcsTests above.
     tests/SubObjectSelectionTests.cpp
+    # REQ-060 (issue #148 Phase 5 slice 4b) — the TRANSLATE gizmo: the skew-line solve, the anchor,
+    # and the two negatives (a click that misses every handle, an empty selection). Needs
+    # gosurvey_domain for SubmitGizmoClick / ApplyTranslationToSelection.
+    tests/GizmoTranslateTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into

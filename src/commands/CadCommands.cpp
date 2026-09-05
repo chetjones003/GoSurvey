@@ -9329,6 +9329,15 @@ static void TranslateSelectedSolids(AppCommandState& st, float dx, float dy, flo
   }
 }
 
+// The surrounding anonymous namespace is closed for this ONE function and reopened after it.
+//
+// It is public API now (declared in `CadCommands.hpp`): REQ-060 requires that a gizmo drag and the
+// equivalent typed command produce the same coordinates, and the only way to make that a property
+// rather than a hope is for both to call this — which means the gizmo's own translation unit, and
+// the test that asserts the agreement, both have to be able to name it. Internal linkage said the
+// opposite: "nothing outside this file may depend on this".
+}  // namespace
+
 void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float dz,
                                 std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MOVE", log);
@@ -9471,6 +9480,9 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
   ApplyTranslationToSelectedSurveyPoints(st, dx, dy);
   BumpCadGpuCache(st);
 }
+
+namespace {  // reopened; see the note above ApplyTranslationToSelection
+
 
 static void ScalePtAroundBase(float bx, float by, float sc, float* x, float* y) {
   *x = bx + sc * (*x - bx);
@@ -12400,6 +12412,332 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 }
 
 } // namespace
+
+
+// --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) --------------------------
+//
+// Everything the gizmo MEANS lives here, in the command layer, and not in `CadUi.cpp`. Two things
+// stay in the UI because the command layer has no access to them: the cursor RAY, and the pixel
+// aperture it is tested against. That split is the same one REQ-318's sub-object pick uses, and it
+// is what lets a headless transcript drive the gizmo at all — which REQ-060's "agrees with the
+// equivalent typed command" has to be asserted by, since asserting it by inspection is exactly the
+// kind of claim that stops being true.
+
+namespace {
+
+/// Accumulate one WCS point into a running box.
+void GizmoGrowBounds(double x, double y, double z, ray3d::Vec3* mn, ray3d::Vec3* mx, bool* any) {
+  if (!*any) {
+    *mn = ray3d::Vec3{x, y, z};
+    *mx = *mn;
+    *any = true;
+    return;
+  }
+  mn->x = std::min(mn->x, x);
+  mn->y = std::min(mn->y, y);
+  mn->z = std::min(mn->z, z);
+  mx->x = std::max(mx->x, x);
+  mx->y = std::max(mx->y, y);
+  mx->z = std::max(mx->z, z);
+}
+
+}  // namespace
+
+bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
+  if (!out || st.selection.empty())
+    return false;
+  ray3d::Vec3 mn{};
+  ray3d::Vec3 mx{};
+  bool any = false;
+  const auto grow = [&](double x, double y, double z) { GizmoGrowBounds(x, y, z, &mn, &mx, &any); };
+  using T = SelectedEntity::Type;
+  for (const auto& e : st.selection) {
+    const size_t k = static_cast<size_t>(std::max(e.index, 0));
+    switch (e.type) {
+    case T::LineSeg: {
+      const size_t b = k * 6;
+      if (b + 5 < st.userLinesFlat.size()) {
+        grow(st.userLinesFlat[b], st.userLinesFlat[b + 1], st.userLinesFlat[b + 2]);
+        grow(st.userLinesFlat[b + 3], st.userLinesFlat[b + 4], st.userLinesFlat[b + 5]);
+      }
+      break;
+    }
+    case T::Circle: {
+      const size_t b = k * 4;  // cx, cy, z, r
+      if (b + 3 < st.userCirclesCxCyZR.size()) {
+        const double cx = st.userCirclesCxCyZR[b];
+        const double cy = st.userCirclesCxCyZR[b + 1];
+        const double cz = st.userCirclesCxCyZR[b + 2];
+        const double r = st.userCirclesCxCyZR[b + 3];
+        grow(cx - r, cy - r, cz);
+        grow(cx + r, cy + r, cz);
+      }
+      break;
+    }
+    case T::Arc:
+      // The full circle the arc lies on, not the arc's own extent. Conservative by up to a radius,
+      // and the anchor is a handle position rather than an input to any move — see the header note.
+      if (k < st.userArcs.size()) {
+        const auto& a = st.userArcs[k];
+        grow(a.cx - a.r, a.cy - a.r, a.z);
+        grow(a.cx + a.r, a.cy + a.r, a.z);
+      }
+      break;
+    case T::Ellipse:
+      if (k < st.userEllipses.size()) {
+        const auto& el = st.userEllipses[k];
+        // The major-axis vector bounds it either way round; the minor is `ratio` times it and smaller.
+        const double rr = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+        grow(el.cx - rr, el.cy - rr, el.z);
+        grow(el.cx + rr, el.cy + rr, el.z);
+      }
+      break;
+    case T::Polyline: {
+      if (k + 1 < st.userPolylineOffsets.size()) {
+        const int v0 = st.userPolylineOffsets[k];
+        const int v1 = st.userPolylineOffsets[k + 1];
+        for (int vi = v0; vi < v1; ++vi) {
+          const size_t b = static_cast<size_t>(vi) * 3;
+          if (b + 2 < st.userPolylineVerts.size())
+            grow(st.userPolylineVerts[b], st.userPolylineVerts[b + 1], st.userPolylineVerts[b + 2]);
+        }
+      }
+      break;
+    }
+    case T::FeatureLine: {
+      if (k + 1 < st.featureLineOffsets.size()) {
+        const int v0 = st.featureLineOffsets[k];
+        const int v1 = st.featureLineOffsets[k + 1];
+        for (int vi = v0; vi < v1; ++vi) {
+          const size_t b = static_cast<size_t>(vi) * 3;
+          if (b + 2 < st.featureLineVerts.size())
+            grow(st.featureLineVerts[b], st.featureLineVerts[b + 1], st.featureLineVerts[b + 2]);
+        }
+      }
+      break;
+    }
+    case T::Annotation:
+      if (k < st.cadAnnotations.size()) {
+        const CadAnnotation& a = st.cadAnnotations[k];
+        float mnx = 0.f, mny = 0.f, mxx = 0.f, mxy = 0.f;
+        CadAnnotationRoughBounds(a, st.modelUnitsPerPlottedInch, &mnx, &mny, &mxx, &mxy);
+        grow(mnx, mny, a.insZ);
+        grow(mxx, mxy, a.insZ);
+      }
+      break;
+    case T::Table:
+      if (k < st.cadTables.size())
+        grow(st.cadTables[k].insX, st.cadTables[k].insY, st.cadTables[k].insZ);
+      break;
+    case T::PdfUnderlay:
+      if (k < st.pdfAttachments.size())
+        grow(st.pdfAttachments[k].insertX, st.pdfAttachments[k].insertY, 0.0);
+      break;
+    case T::FilledRegion:
+      if (k < st.cadFilledRegions.size()) {
+        const CadFilledRegion& fr = st.cadFilledRegions[k];
+        for (size_t vi = 0; vi + 2 < fr.vertsXyz.size(); vi += 3)
+          grow(fr.vertsXyz[vi], fr.vertsXyz[vi + 1], fr.vertsXyz[vi + 2]);
+      }
+      break;
+    case T::BlockRef:
+      if (k < st.cadBlockRefs.size()) {
+        const CadBlockRef& br = st.cadBlockRefs[k];
+        float mnx = 0.f, mny = 0.f, mxx = 0.f, mxy = 0.f;
+        CadBlockWorldAabb(st.blockDefs, br, &mnx, &mny, &mxx, &mxy);
+        grow(mnx, mny, br.xf.z);
+        grow(mxx, mxy, br.xf.z);
+      }
+      break;
+    case T::Solid:
+      // The one type Phase 5 exists for, and the only one whose bounds are exact here: the kernel
+      // already owns the walk (`brep::ComputeBounds`), so there is nothing to re-derive.
+      if (k < st.cadSolids.size() && st.cadSolids[k]) {
+        const brep::Bounds b = brep::ComputeBounds(*st.cadSolids[k]);
+        if (b.valid) {
+          grow(b.mn.x, b.mn.y, b.mn.z);
+          grow(b.mx.x, b.mx.y, b.mx.z);
+        }
+      }
+      break;
+    case T::Mesh:
+    case T::Surface:
+      // Display-only (REQ-063, REQ-068 / ADR-036 (b)): every transform refuses them by name, so a
+      // gizmo anchored partly on one would advertise a move that will not happen to it.
+      break;
+    }
+  }
+  if (!any)
+    return false;
+  *out = ray3d::Vec3{0.5 * (mn.x + mx.x), 0.5 * (mn.y + mx.y), 0.5 * (mn.z + mx.z)};
+  return true;
+}
+
+ray3d::Vec3 CadGizmoAxisWorld(const AppCommandState& st, int axis) {
+  // The ACTIVE UCS, not the world frame. The grid, ORTHO and coordinate entry all take their
+  // directions from it (REQ-154), and a gizmo that disagreed with the grid it is drawn over would
+  // be the only thing in the viewport pointing somewhere else. In the World UCS — the default, and
+  // what every existing drawing has — the two are identical.
+  const ucs::Ucs& u = st.activeUcs;
+  const ray3d::Vec3 v = axis == 0 ? u.xAxis : axis == 1 ? u.yAxis : u.zAxis;
+  const double len = ray3d::Length(v);
+  if (len > 1.e-12)
+    return ray3d::Scale(v, 1.0 / len);
+  return ray3d::Vec3{axis == 0 ? 1.0 : 0.0, axis == 1 ? 1.0 : 0.0, axis == 2 ? 1.0 : 0.0};
+}
+
+/// The ortho half-height \ref CadViewCamera builds its projection from, repeated rather than
+/// reached for: this function has no viewport size to construct a Camera with, and the expression
+/// is the camera's own definition of the view's world scale.
+static float CadGizmoOrthoHalfHeightWorld(const AppCommandState& st) {
+  return (1.f / std::max(st.viewportZoom, 1.e-9f)) * 50.f;
+}
+
+float CadGizmoHandleLenWorld(const AppCommandState& st) {
+  // A definite viewport height even with no window: a transcript has no framebuffer, and a handle
+  // length of zero would make every hit test fail silently rather than fail loudly.
+  const float vph = st.uiViewportHeightPx > 1.f ? st.uiViewportHeightPx : 700.f;
+  return std::max(1.e-6f, CadSnap::WorldToleranceFromPixels(vph, CadGizmoOrthoHalfHeightWorld(st),
+                                                            kGizmoHandleLenPx));
+}
+
+bool CadGizmoVisible(const AppCommandState& st) {
+  if (st.activeSpaceIndex != kModelSpaceIndex)
+    return false;  // a paper sheet is 2D (ADR-025 (g)); there is no third handle to draw
+  ray3d::Vec3 a{};
+  return CadGizmoAnchorWorld(st, &a);
+}
+
+bool CadAxisDragParam(const ray3d::Vec3& anchor, const ray3d::Vec3& axisDir, const ray3d::Ray& ray,
+                      double* outParam, double parallelTol) {
+  if (!outParam)
+    return false;
+  const double axisLen = ray3d::Length(axisDir);
+  const double dirLen = ray3d::Length(ray.dir);
+  if (axisLen < 1.e-12 || dirLen < 1.e-12)
+    return false;
+  const ray3d::Vec3 u = ray3d::Scale(axisDir, 1.0 / axisLen);
+  const ray3d::Vec3 d = ray3d::Scale(ray.dir, 1.0 / dirLen);
+  // Closest points of two skew lines: P = anchor + s*u, Q = ray.origin + t*d, with (P - Q)
+  // perpendicular to both. With u and d unit that is  s - t(u.d) = -(w.u)  and  s(u.d) - t = -(w.d),
+  // where w = anchor - ray.origin.
+  const ray3d::Vec3 w = ray3d::Sub(anchor, ray.origin);
+  const double b = ray3d::Dot(u, d);
+  const double denom = b * b - 1.0;
+  // |b| -> 1 is the ray looking straight down the handle: every point of it projects to the same
+  // pixel, so no distance is being expressed. Refusing is the honest answer — a near-singular
+  // divide returns an enormous number, which reads on screen as the selection flying away.
+  if (std::fabs(denom) < parallelTol)
+    return false;
+  const double t = (b * ray3d::Dot(w, u) - ray3d::Dot(w, d)) / denom;
+  *outParam = t * b - ray3d::Dot(w, u);
+  return true;
+}
+
+int PickGizmoAxis(const AppCommandState& st, const ray3d::Ray& ray, double tolWorld) {
+  ray3d::Vec3 anchor{};
+  if (!CadGizmoVisible(st) || !CadGizmoAnchorWorld(st, &anchor))
+    return -1;
+  const double len = static_cast<double>(CadGizmoHandleLenWorld(st));
+  const double dirLen = ray3d::Length(ray.dir);
+  if (dirLen < 1.e-12)
+    return -1;
+  const ray3d::Vec3 d = ray3d::Scale(ray.dir, 1.0 / dirLen);
+  int best = -1;
+  double bestDist = tolWorld;
+  for (int axis = 0; axis < kGizmoAxisCount; ++axis) {
+    const ray3d::Vec3 u = CadGizmoAxisWorld(st, axis);
+    double s = 0.0;
+    if (!CadAxisDragParam(anchor, u, ray, &s))
+      continue;  // sighting down this handle: not grabbable, and not a near miss either
+    // The handle is a SEGMENT from the anchor to its tip, so a point past either end is measured
+    // from that end. Without the clamp the whole infinite axis line grabs, and a click anywhere
+    // along a world axis — far outside the widget — would start a drag.
+    s = std::clamp(s, 0.0, len);
+    const ray3d::Vec3 onAxis = ray3d::Add(anchor, ray3d::Scale(u, s));
+    const ray3d::Vec3 rel = ray3d::Sub(onAxis, ray.origin);
+    const double along = ray3d::Dot(rel, d);
+    const double dist = ray3d::Length(ray3d::Sub(rel, ray3d::Scale(d, along)));
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = axis;
+    }
+  }
+  return best;
+}
+
+void UpdateGizmoHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorld) {
+  if (st.gizmoDragActive)
+    return;  // the grabbed handle stays lit; pre-highlighting one the click cannot reach is a lie
+  st.gizmoHoverAxis = PickGizmoAxis(st, ray, tolWorld);
+}
+
+void UpdateGizmoDrag(AppCommandState& st, const ray3d::Ray& ray) {
+  if (!st.gizmoDragActive)
+    return;
+  double s = 0.0;
+  if (!CadAxisDragParam(st.gizmoAnchor, st.gizmoAxisDir, ray, &s))
+    return;  // sighting down the axis: hold the last distance rather than jump
+  st.gizmoDragDistance = s - st.gizmoGrabParam;
+}
+
+void CancelGizmoDrag(AppCommandState& st) {
+  st.gizmoDragActive = false;
+  st.gizmoDragAxis = -1;
+  st.gizmoDragDistance = 0.0;
+}
+
+bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.gizmoDragActive)
+    return false;
+  const double dist = st.gizmoDragDistance;
+  const int axis = st.gizmoDragAxis;
+  const ray3d::Vec3 u = st.gizmoAxisDir;
+  CancelGizmoDrag(st);
+  if (std::fabs(dist) < 1.e-12)
+    return false;  // a click that moved nothing is a cancel, not an empty undo step
+  // ONE undo snapshot for the whole drag (REQ-060 acceptance 1: "one Ctrl+Z restores the prior
+  // state in a single step"), and then the SAME function typed MOVE calls. That is the whole design
+  // of this feature: "a gizmo drag and the equivalent typed command produce coordinates agreeing
+  // within REQ-101" holds because there is one implementation, not because two agree today.
+  PushUndoSnapshot(st, "Move");
+  ApplyTranslationToSelection(st, static_cast<float>(dist * u.x), static_cast<float>(dist * u.y),
+                              static_cast<float>(dist * u.z), log);
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "Gizmo move: %.4f along %s.", dist,
+                axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
+  log.push_back(buf);
+  return true;
+}
+
+bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorld,
+                      std::vector<std::string>& log) {
+  if (st.gizmoDragActive) {
+    UpdateGizmoDrag(st, ray);
+    CommitGizmoDrag(st, log);
+    return true;  // the click was the gizmo's whether or not the distance came out zero
+  }
+  const int axis = PickGizmoAxis(st, ray, tolWorld);
+  if (axis < 0)
+    return false;
+  ray3d::Vec3 anchor{};
+  if (!CadGizmoAnchorWorld(st, &anchor))
+    return false;
+  const ray3d::Vec3 u = CadGizmoAxisWorld(st, axis);
+  double s = 0.0;
+  if (!CadAxisDragParam(anchor, u, ray, &s))
+    return false;  // grabbed while sighting down the handle: nothing to measure from
+  st.gizmoDragActive = true;
+  st.gizmoDragAxis = axis;
+  st.gizmoAnchor = anchor;
+  st.gizmoAxisDir = u;
+  st.gizmoGrabParam = s;
+  st.gizmoDragDistance = 0.0;
+  st.gizmoHoverAxis = axis;
+  log.push_back(std::string("Gizmo: dragging along ") + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") +
+                " — click to place, ESC to cancel.");
+  return true;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Curve solvers (REQ-312).
@@ -19663,6 +20001,10 @@ void ClearCadSelection(AppCommandState& st) {
   // now" — ESC, a new drawing, a command that consumes the selection — and leaving sub-objects
   // behind would be a selection the user cannot see a reason for (REQ-318 item 9).
   st.subObjectSelection.clear();
+  // And any armed gizmo drag (REQ-060): the gizmo hangs off the selection, so a selection that is
+  // gone leaves a drag with nothing to move and an anchor pointing at where something used to be.
+  CancelGizmoDrag(st);
+  st.gizmoHoverAxis = -1;
   st.selBoxWaitingSecond = false;
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);

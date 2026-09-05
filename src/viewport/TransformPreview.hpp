@@ -3,6 +3,7 @@
 #include <vector>
 
 struct AppCommandState;
+struct CadGizmoOverlay;
 
 /// Translucent preview for MOVE/COPY/SCALE/ROTATE and OFFSET live preview (viewport line/circle batches).
 ///
@@ -75,3 +76,16 @@ void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>
 /// Hover highlight geometry for the viewport (entity under idle cursor, distinct from selection).
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* outHoverLines,
                          std::vector<float>* outHoverCircles);
+
+/// The translate gizmo's handles (REQ-060, GitHub issue #148 Phase 5 slice 4b).
+///
+/// Emits nothing when the selection is empty, which IS REQ-060's third acceptance bullet: there is
+/// no separate "should the gizmo be drawn" flag for a caller to get wrong.
+void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out);
+
+/// The selection, drawn where an armed gizmo drag is about to put it. Empty when nothing is armed.
+///
+/// Rides the ordinary PREVIEW channel at the call site rather than owning one: a ghost of what is
+/// about to happen is exactly what that channel already carries for MOVE, ROTATE and OFFSET.
+void BuildGizmoDragGhost(const AppCommandState& cmd, std::vector<float>* outLines,
+                         std::vector<float>* outCircles);

@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "geom2d.hpp"
+#include "gizmooverlay.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1626,4 +1627,106 @@ void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLi
       cmd.chamferFirstEntity.type == e.type && cmd.chamferFirstEntity.index == e.index)
     return;
   AppendEntityHighlight(cmd, e, hoverLines, hoverCircles);
+}
+
+// --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) --------------------------
+
+namespace {
+
+void GizmoSeg(std::vector<float>* out, const ray3d::Vec3& a, const ray3d::Vec3& b) {
+  out->push_back(static_cast<float>(a.x));
+  out->push_back(static_cast<float>(a.y));
+  out->push_back(static_cast<float>(a.z));
+  out->push_back(static_cast<float>(b.x));
+  out->push_back(static_cast<float>(b.y));
+  out->push_back(static_cast<float>(b.z));
+}
+
+}  // namespace
+
+void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out) {
+  if (!out)
+    return;
+  for (int i = 0; i < 3; ++i) {
+    out->axis[i].clear();
+    out->hot[i] = false;
+  }
+  out->guide.clear();
+  // REQ-060 acceptance 3, and the whole of it: an empty selection has no anchor, so nothing is
+  // emitted and nothing is drawn. Stated by the anchor's own return rather than by a separate
+  // "is the selection empty" test, which is a second thing that could disagree with the first.
+  ray3d::Vec3 anchor{};
+  if (!CadGizmoVisible(cmd) || !CadGizmoAnchorWorld(cmd, &anchor))
+    return;
+  // The gizmo does NOT follow the ghost during a drag: the handles stay where they were grabbed,
+  // which is what the drag distance is measured from. A widget that slid along with the preview
+  // would be measuring from a moving origin, and the number under the cursor would be nonsense.
+  if (cmd.gizmoDragActive)
+    anchor = cmd.gizmoAnchor;
+  const double len = static_cast<double>(CadGizmoHandleLenWorld(cmd));
+  const int lit = cmd.gizmoDragActive ? cmd.gizmoDragAxis : cmd.gizmoHoverAxis;
+  for (int a = 0; a < kGizmoAxisCount; ++a) {
+    const ray3d::Vec3 u = CadGizmoAxisWorld(cmd, a);
+    const ray3d::Vec3 tip = ray3d::Add(anchor, ray3d::Scale(u, len));
+    out->hot[a] = (a == lit);
+    GizmoSeg(&out->axis[a], anchor, tip);
+    // Four barbs back from the tip, on a small ring around the axis. Built in the AXIS's own frame
+    // rather than the camera's, so the arrowhead is part of the widget's geometry and does not swim
+    // when the view orbits — the opposite choice from a survey point's marker cross, which is a
+    // screen-space annotation and should billboard.
+    ray3d::Vec3 seed{0.0, 0.0, 1.0};
+    if (std::fabs(ray3d::Dot(u, seed)) > 0.9)
+      seed = ray3d::Vec3{1.0, 0.0, 0.0};
+    const ray3d::Vec3 p = ray3d::Normalize(ray3d::Cross(u, seed));
+    const ray3d::Vec3 q = ray3d::Cross(u, p);
+    const double back = len * 0.82;
+    const double flare = len * 0.07;
+    const ray3d::Vec3 base = ray3d::Add(anchor, ray3d::Scale(u, back));
+    for (int i = 0; i < 4; ++i) {
+      const ray3d::Vec3 side = i == 0   ? ray3d::Scale(p, flare)
+                               : i == 1 ? ray3d::Scale(p, -flare)
+                               : i == 2 ? ray3d::Scale(q, flare)
+                                        : ray3d::Scale(q, -flare);
+      GizmoSeg(&out->axis[a], tip, ray3d::Add(base, side));
+    }
+  }
+  if (cmd.gizmoDragActive) {
+    // The track, extended well past the handle in both directions: the drag is not limited to the
+    // handle's length, and a guide that stopped at the tip would say it was.
+    const ray3d::Vec3 u = cmd.gizmoAxisDir;
+    const double reach = len * 12.0;
+    GizmoSeg(&out->guide, ray3d::Sub(anchor, ray3d::Scale(u, reach)),
+             ray3d::Add(anchor, ray3d::Scale(u, reach)));
+  }
+}
+
+void BuildGizmoDragGhost(const AppCommandState& cmd, std::vector<float>* outLines,
+                         std::vector<float>* outCircles) {
+  if (!outLines || !outCircles)
+    return;
+  outLines->clear();
+  outCircles->clear();
+  if (!cmd.gizmoDragActive || std::fabs(cmd.gizmoDragDistance) < 1.e-12)
+    return;
+  // The selection's own highlight linework, translated. Built from `AppendEntityHighlight` rather
+  // than from a second per-type walk: the ghost is then, by construction, a picture of exactly what
+  // the drag is about to move — every type it covers and no type it does not.
+  for (const auto& e : cmd.selection)
+    AppendEntityHighlight(cmd, e, outLines, outCircles);
+  const double d = cmd.gizmoDragDistance;
+  const ray3d::Vec3 u = cmd.gizmoAxisDir;
+  const float dx = static_cast<float>(d * u.x);
+  const float dy = static_cast<float>(d * u.y);
+  const float dz = static_cast<float>(d * u.z);
+  for (size_t i = 0; i + 2 < outLines->size(); i += 3) {
+    (*outLines)[i] += dx;
+    (*outLines)[i + 1] += dy;
+    (*outLines)[i + 2] += dz;
+  }
+  // Circles are carried as (cx, cy, z, r) rather than as chords, so only the centre moves.
+  for (size_t i = 0; i + 3 < outCircles->size(); i += 4) {
+    (*outCircles)[i] += dx;
+    (*outCircles)[i + 1] += dy;
+    (*outCircles)[i + 2] += dz;
+  }
 }

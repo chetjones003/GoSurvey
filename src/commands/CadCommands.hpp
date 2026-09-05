@@ -2843,6 +2843,39 @@ struct AppCommandState {
   /// cursor continuously covers the geometry being picked.
   HoverDwell subObjectHoverDwell{};
 
+  // --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) -------------------------
+  /// Which axis handle the cursor is over right now, or -1: 0 = the active UCS X, 1 = Y, 2 = Z.
+  ///
+  /// Pre-highlight only. It is refreshed by the same hit test the click uses, so the handle that
+  /// lights up is the handle that grabs - the rule REQ-318's sub-object hover already follows, and
+  /// for the same reason: two code paths that agree by inspection stop agreeing.
+  int gizmoHoverAxis = -1;
+
+  /// True between the click that grabs an axis handle and the click that commits or cancels it.
+  ///
+  /// Click-arm / click-commit rather than press-drag-release, because that is what every other grip
+  /// in this viewport already does (\ref mtextGripMoveActive, \ref dimGripMoveActive) - and it is
+  /// the only shape a transcript can drive, a headless run having no mouse to hold down.
+  bool gizmoDragActive = false;
+  int gizmoDragAxis = -1;
+
+  /// Where the gizmo sat when the handle was grabbed, in WCS.
+  ///
+  /// Captured rather than recomputed per frame: nothing moves until the drag commits, but the
+  /// captured pair is what makes the drag a rigid one-axis slide even if the selection changes
+  /// underneath it.
+  ray3d::Vec3 gizmoAnchor{0.0, 0.0, 0.0};
+  /// The axis direction grabbed, in WCS - captured with the anchor, and for the same reason.
+  ray3d::Vec3 gizmoAxisDir{1.0, 0.0, 0.0};
+  /// Signed position along that axis, measured at the moment of the grab.
+  ///
+  /// The drag distance is the CHANGE in this, never its absolute value, so the handle does not jump
+  /// to the cursor on the first mouse move - and so the anchor's own precision cannot affect the
+  /// result: it appears in both terms and cancels.
+  double gizmoGrabParam = 0.0;
+  /// The live drag distance along \ref gizmoAxisDir, in drawing units. Zero when nothing is dragged.
+  double gizmoDragDistance = 0.0;
+
   /// Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS, as **stable entity ids** (REQ-084 (d),
   /// ADR-034). Kept SORTED so the per-entity test is a `binary_search`; empty is the overwhelming
   /// case and every gate early-outs on it, so nothing is paid for a drawing with no isolation.
@@ -5251,6 +5284,97 @@ struct SubObjectHoverRow {
 void ApplyEntityGripPoint(AppCommandState& st, float x, float y);
 
 void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::string>* log);
+
+// --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) --------------------------
+//
+// One rule decides the shape of everything below: **the gizmo commits through
+// `ApplyTranslationToSelection`, the same function typed MOVE calls.** REQ-060 requires that "a
+// gizmo drag and the equivalent typed command produce coordinates agreeing within REQ-101"; going
+// through the one function makes that hold by construction rather than by two implementations
+// happening to match, which is the failure mode a tolerance-based acceptance invites.
+//
+// The gizmo aligns with the ACTIVE UCS, not with world axes. Everything else in this program that
+// takes a direction from the user - the grid, ORTHO, coordinate entry - follows the UCS (REQ-154),
+// and in the World UCS the two are identical, so the default view is unchanged.
+
+/// Translate the whole selection by (\p dx, \p dy, \p dz) in WCS (REQ-320). Surfaces are dropped by
+/// name (REQ-201); solids move through `brep::Translate`. The caller owns the undo snapshot.
+///
+/// Declared here — it had been a definition private to `CadCommands.cpp` — because REQ-060's
+/// acceptance is that a gizmo drag and the typed command agree, and the only way to make that a
+/// property rather than a hope is for both to call this. A test that asserts the agreement has to be
+/// able to name it too.
+void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float dz,
+                                 std::vector<std::string>& log);
+
+/// Number of gizmo axes. Three: the UCS X, Y and Z. Named so the loops below say why they are 3.
+inline constexpr int kGizmoAxisCount = 3;
+/// Handle length, in screen pixels, held constant at every zoom (REQ-060's "as displayed").
+inline constexpr float kGizmoHandleLenPx = 70.f;
+/// Grab aperture around a handle, in screen pixels.
+inline constexpr float kGizmoHandleGrabPx = 7.f;
+
+/// Where the gizmo hangs: the centre of the selection's bounding box, in WCS. False when nothing in
+/// the selection has a position (an empty selection, or one holding only display-only types).
+///
+/// **The precision of this point does not affect any move.** A drag distance is the change in the
+/// axis parameter between the grab and the drop, so the anchor appears in both terms and cancels;
+/// it decides only where the handles are DRAWN. That is why conservative per-type bounds are good
+/// enough here, and why this is deliberately not \ref ComputeSelectionCentroidWorld - that answers
+/// ROTATE's different question (a pivot, in plan, over ROTATE's own type set) and changing it to
+/// serve this one would change where ROTATE and ARRAY turn things about.
+[[nodiscard]] bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out);
+
+/// Unit direction of gizmo axis \p axis (0 = X, 1 = Y, 2 = Z) in WCS, from the active UCS.
+[[nodiscard]] ray3d::Vec3 CadGizmoAxisWorld(const AppCommandState& st, int axis);
+
+/// Handle length in drawing units for the current view - \ref kGizmoHandleLenPx converted through
+/// the same ortho half-height \ref CadViewCamera builds its projection from, so the handle is the
+/// stated pixel length on screen and a transcript with no window still gets a definite answer.
+[[nodiscard]] float CadGizmoHandleLenWorld(const AppCommandState& st);
+
+/// True when a gizmo should be drawn at all: a non-empty model-space selection with an anchor.
+/// REQ-060's third acceptance bullet ("no gizmo is drawn when the selection is empty") is this.
+[[nodiscard]] bool CadGizmoVisible(const AppCommandState& st);
+
+/// Signed position along the line (\p anchor, \p axisDir) of the point on it nearest \p ray.
+///
+/// The standard skew-line solve. False when the ray is within \p parallelTol of parallel to the
+/// axis - looking straight down a handle, every point of it projects to the same pixel and there is
+/// no distance the gesture could mean. Refusing is the honest answer; the alternative is a huge
+/// number from a near-singular divide, which reads as the selection flying off the screen.
+[[nodiscard]] bool CadAxisDragParam(const ray3d::Vec3& anchor, const ray3d::Vec3& axisDir,
+                                    const ray3d::Ray& ray, double* outParam,
+                                    double parallelTol = 1.e-6);
+
+/// Which axis handle \p ray hits, or -1. \p tolWorld is the grab aperture in drawing units.
+///
+/// Nearest handle wins, measured as the true 3D distance between the ray and the handle SEGMENT -
+/// so a handle pointing away from the camera, which projects to almost nothing, is hard to grab by
+/// accident and the one pointing across the view is easy.
+[[nodiscard]] int PickGizmoAxis(const AppCommandState& st, const ray3d::Ray& ray, double tolWorld);
+
+/// One click on the gizmo, in the command layer where a transcript can drive it.
+///
+/// Grabs the handle under \p ray if one is there and nothing is armed yet; otherwise commits the
+/// armed drag at the ray's position. Returns true when the click was the gizmo's - the caller must
+/// then NOT treat it as an ordinary selection click.
+bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorld,
+                      std::vector<std::string>& log);
+
+/// Refresh \ref AppCommandState::gizmoDragDistance from the cursor. No-op when nothing is armed.
+void UpdateGizmoDrag(AppCommandState& st, const ray3d::Ray& ray);
+
+/// Refresh \ref AppCommandState::gizmoHoverAxis from the cursor. No-op while a drag is armed - the
+/// grabbed handle stays lit, and a pre-highlight of a handle the click cannot reach is a lie.
+void UpdateGizmoHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorld);
+
+/// Apply the armed drag: one undo snapshot, one \ref ApplyTranslationToSelection, and disarm.
+/// False (and nothing changed) when no drag is armed or the distance is zero.
+bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log);
+
+/// Disarm without moving anything. Safe to call at any time; ESC and a right-click both do.
+void CancelGizmoDrag(AppCommandState& st);
 /// Removes all committed CAD lines/circles and clears CAD selection (survey points unchanged).
 void ClearCadGeometry(AppCommandState& st);
 /// Ends active LINE/CIRCLE/MOVE/etc. draft without logging — used after DXF import.

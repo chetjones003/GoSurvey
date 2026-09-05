@@ -13428,6 +13428,34 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else {
         cmd.subObjectHoverValid = false;
       }
+      // The translate gizmo's handle pre-highlight and its live drag (REQ-060, issue #148 slice 4b).
+      //
+      // Outside `runHoverPick`, unlike every pick above it, and for a reason: this is three
+      // ray-to-segment tests against a widget whose position is already known, not a walk of the
+      // drawing — and while a drag is armed the ghost has to follow the cursor every frame or the
+      // gesture is not direct manipulation at all.
+      //
+      // Suppressed while Ctrl is held so it cannot compete with the sub-object pick, which is the
+      // same "two highlights answering one cursor is the defect" rule the block above states.
+      if (modelSpace && !ImGui::GetIO().KeyCtrl) {
+        const ray3d::Ray gizRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+        if (cmd.gizmoDragActive) {
+          UpdateGizmoDrag(cmd, gizRay);
+          BumpCadGpuCache(cmd);
+        } else {
+          const int wasHot = cmd.gizmoHoverAxis;
+          // The grab aperture in world units, from the same pixel-to-world conversion the handle
+          // length uses, so the target is the stated number of pixels at every zoom.
+          UpdateGizmoHover(cmd, gizRay,
+                           static_cast<double>(CadSnap::WorldToleranceFromPixels(
+                               avail.y, halfH, kGizmoHandleGrabPx)));
+          if (cmd.gizmoHoverAxis != wasHot)
+            BumpCadGpuCache(cmd);
+        }
+      } else if (cmd.gizmoHoverAxis >= 0 && !cmd.gizmoDragActive) {
+        cmd.gizmoHoverAxis = -1;
+        BumpCadGpuCache(cmd);
+      }
       if (blockEntityHover) {
         cmd.viewportHoverEntityValid = false;
         cmd.viewportHoverPickGate.primed = false;
@@ -13820,6 +13848,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     BumpCadGpuCache(cmd);
   }
 
+  // A right-click abandons an armed gizmo drag, exactly as it abandons the two grip drags on either
+  // side of this (REQ-060, issue #148 slice 4b). Nothing has moved yet, so there is nothing to undo.
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
+      my < avail.y && cmd.gizmoDragActive) {
+    CancelGizmoDrag(cmd);
+    BumpCadGpuCache(cmd);
+  }
+
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
       my < avail.y && cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0) {
     const size_t gi = static_cast<size_t>(cmd.dimGripAnnotationIndex);
@@ -14116,6 +14152,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // The two selections are mutually exclusive (REQ-318 item 9), which is what makes #148's
       // "does not interfere with whole-entity selection" structural: nothing that consumes
       // `cmd.selection` ever sees a sub-object, so no consumer needs to know this exists.
+      // The translate gizmo gets first refusal on the click (REQ-060, issue #148 slice 4b).
+      //
+      // BEFORE the ordinary selection pick, because a handle sits over the objects it moves and a
+      // click that selected through it would make the widget undraggable. It only ever consumes a
+      // click that actually lands on a handle — `SubmitGizmoClick` returns false otherwise — so a
+      // click anywhere else in the viewport means exactly what it always meant.
+      //
+      // Not while Ctrl is held: that is the sub-object pick's gesture (D-2026-09-04-a), and the two
+      // must not race for the same click.
+      if (modelSpace && !ImGui::GetIO().KeyCtrl) {
+        const ray3d::Ray gizClickRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        if (SubmitGizmoClick(cmd, gizClickRay,
+                             static_cast<double>(CadSnap::WorldToleranceFromPixels(
+                                 avail.y, halfH, kGizmoHandleGrabPx)),
+                             log)) {
+          BumpCadGpuCache(cmd);
+          break;  // the click was the gizmo's; nothing below may also act on it
+        }
+      }
       const bool subObjectClick = modelSpace && ImGui::GetIO().KeyCtrl;
       if (!subObjectClick && !cmd.subObjectSelection.empty()) {
         cmd.subObjectSelection.clear();
