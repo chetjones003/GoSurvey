@@ -25841,8 +25841,36 @@ bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& re
   if (static_cast<size_t>(ref.index) >= sp->faces.size())
     return false;
   const brep::Face& f = sp->faces[static_cast<size_t>(ref.index)];
+
+  // A CYLINDER WALL gets a handle too, and it slides RADIALLY (REQ-319 increment 4). The handle sits
+  // on the surface at the middle of the face's own angular span and half way up, and its axis is the
+  // outward normal AT THAT POINT — which is what the drag distance means, since the push moves every
+  // point of the wall along its own normal by the same amount.
+  //
+  // Mid-span rather than anywhere on the face because a wall is curved: a handle at the edge of the
+  // span sits on the seam, where it reads as belonging to the neighbouring half.
+  if (f.surface.kind == brep::SurfaceKind::Cylinder) {
+    const ray3d::Vec3 axis = ray3d::Normalize(f.surface.frame.zAxis);
+    const double u = 0.5 * (f.uStart + f.uEnd);
+    const ray3d::Vec3 x = ray3d::Normalize(f.surface.frame.xAxis);
+    const ray3d::Vec3 y = ray3d::Cross(axis, x);
+    ray3d::Vec3 radial =
+        ray3d::Add(ray3d::Scale(x, std::cos(u)), ray3d::Scale(y, std::sin(u)));
+    const double rl = ray3d::Length(radial);
+    if (!(rl > 1e-12))
+      return false;
+    radial = ray3d::Scale(radial, 1.0 / rl);
+    *outAnchor = ray3d::Add(ray3d::Add(f.surface.frame.origin,
+                                       ray3d::Scale(axis, f.surface.height * 0.5)),
+                            ray3d::Scale(radial, f.surface.radius));
+    // `inward` flips which way is out of the material, exactly as the kernel's own sign does — the
+    // handle has to drag the way the commit will move, or the preview and the result disagree.
+    *outAxis = f.surface.inward ? ray3d::Scale(radial, -1.0) : radial;
+    return true;
+  }
+
   if (f.surface.kind != brep::SurfaceKind::Plane)
-    return false;  // only a flat face can be pushed (REQ-319), so only a flat face gets a handle
+    return false;  // a cone, sphere or torus wall cannot be pushed, so it gets no handle
 
   // The centroid of the face's boundary vertices. Averaged over DISTINCT vertices, not over edge
   // uses: a loop uses each vertex twice, so summing uses would weight a shared corner double and

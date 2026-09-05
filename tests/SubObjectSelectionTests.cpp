@@ -574,3 +574,65 @@ TEST_CASE("The grip drag and the typed command commit through one path (REQ-319)
     REQUIRE(brep::ComputeMassProperties(*st.cadSolids[0]).volume == Catch::Approx(2800.0));
   }
 }
+
+// REQ-319 increment 4 — a cylinder WALL gets a handle too, and it slides radially.
+TEST_CASE("A cylinder wall's grip slides along its own radius (REQ-319)", "[subobject]") {
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  {
+    brep::Solid cyl;
+    brep::Problem why{};
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &cyl, &why));
+    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(cyl)));
+    st.cadSolidAttrs.push_back(EntityAttributes{});
+    RefreshSolidDisplayGeometry(st);
+  }
+  const CadSolidPtr sp = st.cadSolids[0];
+
+  int wall = -1;
+  for (size_t i = 0; i < sp->faces.size(); ++i)
+    if (sp->faces[i].surface.kind == brep::SurfaceKind::Cylinder)
+      wall = static_cast<int>(i);
+  REQUIRE(wall >= 0);
+
+  SelectedSubObject ref;
+  ref.solidIndex = 0;
+  ref.kind = solidpick::Kind::Face;
+  ref.index = wall;
+  ref.owner = sp;
+
+  ray3d::Vec3 anchor;
+  ray3d::Vec3 axis;
+  REQUIRE(CadSubObjectFaceGrip(st, ref, &anchor, &axis));
+
+  // ON the wall: 5 from the axis, half way up. A handle floating off the surface reads as belonging
+  // to nothing, and one at the end of the angular span sits on the seam between the two halves.
+  REQUIRE(std::hypot(anchor.x, anchor.y) == Catch::Approx(5.0));
+  REQUIRE(anchor.z == Catch::Approx(5.0));
+  // The axis is RADIAL — outward at the handle — not the solid's Z. A grip that reused the surface
+  // frame's zAxis would point up the cylinder and drag the wall along its own length, which changes
+  // nothing at all.
+  REQUIRE(std::fabs(axis.z) == Catch::Approx(0.0).margin(1e-9));
+  REQUIRE(ray3d::Length(axis) == Catch::Approx(1.0));
+  // It points away from the axis of the cylinder, i.e. out of the material.
+  REQUIRE(ray3d::Dot(axis, ray3d::Vec3{anchor.x, anchor.y, 0.0}) > 0.0);
+
+  SECTION("a cone wall gets no handle, because it cannot be pushed") {
+    brep::Solid cone;
+    brep::Problem why{};
+    REQUIRE(brep::MakeCone(World(), 5.0, 2.0, 10.0, &cone, &why));
+    st.cadSolids[0] = std::make_shared<const brep::Solid>(std::move(cone));
+    RefreshSolidDisplayGeometry(st);
+    SelectedSubObject cref;
+    cref.solidIndex = 0;
+    cref.kind = solidpick::Kind::Face;
+    cref.owner = st.cadSolids[0];
+    for (size_t i = 0; i < st.cadSolids[0]->faces.size(); ++i)
+      if (st.cadSolids[0]->faces[i].surface.kind == brep::SurfaceKind::Cone) {
+        cref.index = static_cast<int>(i);
+        ray3d::Vec3 a;
+        ray3d::Vec3 x;
+        REQUIRE_FALSE(CadSubObjectFaceGrip(st, cref, &a, &x));
+      }
+  }
+}

@@ -275,3 +275,90 @@ takes.
   both caps' boundary arcs move together, and the caps' planes stay. Well-defined, and its own slice.
 - **DEBT-7 — a sliced cylinder's cap is refused.** Its corners touch both a plane and a curved
   surface, and satisfying both at once is a solve neither existing path performs.
+
+---
+
+## Increment 4 — a cylinder wall pushes by changing its radius (D-2026-09-04-e)
+
+The fourth kind of move, and the one least like a push.
+
+### A wall push is not a translation
+
+The outward normal points a different way at every point of the surface, so there is no single
+direction to move along. What the gesture means is that **every point moves along its own normal by
+the same amount** — which is exactly what adding to the radius does. That is why it needs its own
+path rather than a wider tolerance somewhere.
+
+The operation's four moves are now:
+
+| move | applies to |
+|---|---|
+| translate | a plane |
+| re-solve | a corner, as the meeting point of the planes around it |
+| re-parameterise | a wall's height or taper, when a cap moves |
+| **re-radius** | a cylinder wall |
+
+### The sign, which would have shipped wrong quietly
+
+`Surface::inward` (REQ-314 B2a) says the material is on the −radial side. **A hole's wall has its
+outward normal pointing at the axis**, so pushing it outward makes the hole *smaller* and the solid
+*heavier*. Taken from the stored axis without honouring the flag, a boss would still grow correctly
+and every hole would grow backwards — a feature that works on the half of the cases anyone demos.
+
+Measured on a real `BooleanSubtract` result rather than a hand-set flag, because the flag alone is
+not the case: what has to hold is that this reads the same geometry the Booleans produce. A
+20×20×10 box with an r=3 hole is 3717.26; pushing the hole's wall +1 gives **3874.34** (r=2), where
+the wrong sign gives **2977.4** (r=4). Both plausible, one right.
+
+### Both halves follow together
+
+A full cylinder is stored as two half-faces sharing one surface. Updating one would leave two
+different radii meeting along a seam — and `Validate` would not object, because it never compares a
+face's surface against its neighbour's. The same blind spot this whole amendment is built around,
+surfacing a third time.
+
+### The cone stays refused, and that is a decision
+
+Offsetting a cone along its own normal moves **both** radii by `d / cos(half-angle)` and leaves the
+apex where it was. That is an offset surface, not a radius change, and which of the two a drag should
+mean is exactly the fork D-2026-09-04-d had to put to the user for the cap taper. Not settled, so not
+guessed.
+
+### Renamed
+
+`PushPullFaceNotPlanar` → `PushPullFaceKindUnsupported`. It no longer means "not a plane" now that
+one curved kind is supported, and a refusal whose *name* is wrong is worse than one whose message is
+vague.
+
+### The grip
+
+A wall gets a handle too, sitting **on** the surface at the middle of the face's own angular span and
+half way up, with a **radial** axis. Mid-span rather than anywhere, because a handle at the edge of
+the span sits on the seam and reads as belonging to the neighbouring half. A grip that reused the
+surface frame's `zAxis` would point up the cylinder and drag the wall along its own length, which
+changes nothing at all — so the test asserts the axis is perpendicular to Z rather than merely
+non-zero.
+
+### Coverage
+
+| solid | inc 1 | inc 2 | inc 3 | inc 4 |
+|---|---|---|---|---|
+| Box | 6/6 | 6/6 | 6/6 | 6/6 |
+| Wedge | 2/5 | 5/5 | 5/5 | 5/5 |
+| Pyramid | 0/6 | 6/6 | 6/6 | 6/6 |
+| Cylinder | 0/4 | 0/4 | 2/4 | **4/4** |
+| Cone | 0/4 | 0/4 | 2/4 | 2/4 |
+
+`ctest` **1158/1158**.
+
+### Two older test sections inverted rather than deleted
+
+Both asserted the wall was refused. Kept and turned around, because the cap and the wall side by side
+are what show they are **different operations**: a cap push moves a plane and leaves the radius; a
+wall push changes the radius and leaves the planes. Same gesture, same command, mirror geometry.
+
+### Debt
+
+- **DEBT-8 — a cone wall.** Needs the offset-vs-radius fork decided first.
+- **DEBT-7 still stands** — a sliced cylinder's cap, whose corners carry a plane constraint and a
+  surface one at once.

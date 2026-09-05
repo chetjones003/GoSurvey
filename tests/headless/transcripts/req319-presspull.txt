@@ -141,17 +141,29 @@ EXPECT SUBOBJECTFACES 1
 CMD PRESSPULL 2
 EXPECT LOG "volume now 426.7539"
 
-# The curved WALL itself is still refused: pushing it is a radius change, not a translation.
+# The curved WALL pushes too, by changing its RADIUS - r = 5 to r = 7, so pi x 49 x 10 = 1539.3804.
 # Aimed at (0,-5,5) rather than (5,0,5): at this camera that is the side of the wall actually facing
 # the viewer, and a ray at the far side picks the near one instead - the same thing that happens to
 # a user who has not orbited.
+#
+# Note this is the MIRROR of the cap case above: a cap push moves a plane and leaves the radius; a
+# wall push changes the radius and leaves the planes. Same gesture, same command, different geometry.
 NEW
 CMD CYLINDER 0,0 5 10
 VIEWANGLES -45 35
 SUBOBJECT 0 -5 5 0.5 0.5
 EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 2
+EXPECT LOG "volume now 1539.3804"
+
+# A CONE's wall is still refused: offsetting it moves both radii and leaves the apex, which is an
+# offset surface rather than a radius change - a second decision, not a missing case.
+NEW
+CMD CONE 0,0 5 2 10
+VIEWANGLES -45 35
+SUBOBJECT 0 -4 2 0.5 0.5
 CMD PRESSPULL 1
-EXPECT LOG "Only a flat face can be pushed"
+EXPECT LOG "no single radius to change"
 
 # --- The shapes that used to be refused (user report, 2026-09-04) --------------------------------
 # The first algorithm translated corners along the push, which only works where every neighbour
