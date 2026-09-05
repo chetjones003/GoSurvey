@@ -3077,9 +3077,25 @@ TEST_CASE("Curved B2b-2: INTERSECT of a fully general (tilted AND skew) branch p
     REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(8e-3));
   }
 
-  SECTION("thin - thick of the general case is still refused - a later slice") {
+  SECTION("thin - thick of the general case splits the branch into two stubs") {
+    const double thinVol = kPi * r * r * 30.0;
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(out.size() == 2);
+    double total = 0.0;
+    for (const auto& sol : out) {
+      REQUIRE(brep::Validate(sol) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(sol));
+      REQUIRE(CountOf(sol).v == 4);
+      REQUIRE(CountOf(sol).e == 6);
+      REQUIRE(CountOf(sol).f == 4);
+      REQUIRE(brep::EulerCharacteristic(sol) == 2);
+      total += brep::ComputeMassProperties(sol).volume;
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(sol, 0.01, &t, &why));
+      RequireWindingMatchesNormals(t);
+    }
+    REQUIRE(total == Approx(thinVol - vref).epsilon(8e-3));
   }
 }
 
