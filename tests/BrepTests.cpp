@@ -1750,13 +1750,81 @@ TEST_CASE("Curved B2b-2 tail: an oblique plane slices a cone into two elliptical
     REQUIRE(why == Problem::SliceResultComplex);
   }
 
-  SECTION("a steeper cut past the half-angle (parabola/hyperbola regime) is refused by name") {
+  SECTION("a steeper cut past the half-angle, tangent to the top cap, is still refused (two merged notches)") {
     // Cone half-angle here is atan(|k|) = atan(0.5); a plane tilted past that off the axis leaves the
-    // ellipse regime. Still refused (this task's part (b), not yet built).
+    // ellipse regime. This particular plane's hump peaks exactly at the top rim, giving 4 level
+    // crossings (not the 2 a single same-rim notch needs) - still refused, not the case TASK-204
+    // slice (b) built.
     Solid up2, dn2;
     const Vec3 steep = ray3d::Normalize(Vec3{2.0, 0.0, 1.0});  // well past atan(0.5) from the axis
     REQUIRE_FALSE(brep::Slice(cone, planePoint, steep, brep::SliceKeep::Both, &up2, &dn2, &why));
     REQUIRE(why == Problem::SliceCurvedFace);
+  }
+}
+
+TEST_CASE("Curved B2b-2 tail: a steep cone slice with a single same-rim notch (parabola regime)",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid cone;
+  REQUIRE(brep::MakeCone(World(), 6, 2, 8, &cone, &why));  // base r6 at z0, top r2 at z8, k=-0.5
+
+  const Vec3 planePoint{0, 0, 2.5};
+  const Vec3 pn = ray3d::Normalize(Vec3{0.8, 0.0, 0.4});  // parabola-tangent direction (nz=|k|*amp)
+  const double nx = pn.x, ny = pn.y, nz = pn.z;
+  const double C = ray3d::Dot(pn, planePoint);
+  const double k = (2.0 - 6.0) / 8.0;
+
+  // Independent reference (no reuse of any code under test): at each height z the cone's
+  // cross-section is a disk of radius rho(z), cut by the line nx*x+ny*y = C - nz*z - a standard
+  // circular-segment area in closed form, same method as the ellipse-regime test above (this
+  // reasoning holds regardless of regime: at any FIXED height, a plane always cuts a circle in one
+  // simple chord). Integrate over z numerically.
+  auto segmentAreaBelow = [&](double rho, double dist) {
+    if (dist >= rho) return kPi * rho * rho;
+    if (dist <= -rho) return 0.0;
+    return dist * std::sqrt(rho * rho - dist * dist) + rho * rho * std::asin(dist / rho) +
+           rho * rho * kPi * 0.5;
+  };
+  const double amp = std::sqrt(nx * nx + ny * ny);
+  double vBelowRef = 0.0;
+  const int nZ = 400000;
+  for (int i = 0; i < nZ; ++i) {
+    const double z = 8.0 * (i + 0.5) / nZ;
+    const double rho = 6.0 + k * z;
+    const double dist = (C - nz * z) / amp;
+    vBelowRef += segmentAreaBelow(rho, dist) * (8.0 / nZ);
+  }
+  const double coneVol = kPi * 8.0 / 3.0 * (36.0 + 12.0 + 4.0);
+  const double vAboveRef = coneVol - vBelowRef;
+
+  Solid up;
+  Solid dn;
+  REQUIRE(brep::Slice(cone, planePoint, pn, brep::SliceKeep::Both, &up, &dn, &why));
+  REQUIRE(brep::Validate(up) == Problem::Ok);
+  REQUIRE(brep::Validate(dn) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(up));
+  REQUIRE_FALSE(brep::SelfIntersects(dn));
+
+  const auto mUp = brep::ComputeMassProperties(up);
+  const auto mDn = brep::ComputeMassProperties(dn);
+  REQUIRE(mUp.valid);
+  REQUIRE(mDn.valid);
+  // Unlike the closed-form ellipse regime, this cut is a marched Intersection curve (ADR-045 (b)),
+  // so exact equality isn't achievable - same 1e-4 tolerance as the reference-volume checks below.
+  REQUIRE(mUp.volume + mDn.volume == Approx(coneVol).epsilon(1e-4));
+  // "above" is the +pn side, matching every other Slice recogniser's convention.
+  REQUIRE(mDn.volume == Approx(vBelowRef).epsilon(1e-4));
+  REQUIRE(mUp.volume == Approx(vAboveRef).epsilon(1e-4));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(dn, 0.02, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(vBelowRef).epsilon(0.01));
+
+  SECTION("surviving Translate at a survey-magnitude offset") {
+    const Solid moved = brep::Translate(dn, Vec3{1.9e6, 6.4e6, 1200.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vBelowRef).epsilon(1e-4));
   }
 }
 

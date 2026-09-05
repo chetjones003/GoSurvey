@@ -311,3 +311,105 @@ reference within REQ-101, and the by-name refusals for clipped-cap / tangent / m
 
 `build-project`, `testing` (full `BrepTests` + `.gs` migration), `code-review`, `architecture-review`
 (the two ADR-045(b) questions above are the load-bearing architectural decisions this task makes).
+
+## PROGRESS 2026-09-05 (2) — curve representation resolved; first narrow slice scoped
+
+Two findings that change the plan for the better, before any topology code was written:
+
+1. **`CurveKind::Intersection` already covers this curve with zero new work.** `ClosestPointOnSurface`
+   and `SurfaceNormalGeom` (the two primitives `MarchIntersectionCurve`'s marching, `Validate`, and
+   every other `Intersection`-edge consumer are built on) already have branches for **both**
+   `SurfaceKind::Plane` and `SurfaceKind::Cone` — neither was written for this task; they were already
+   there for other B2b-2 work. So a cone-cut-by-a-plane curve is just an ordinary `Intersection` edge
+   with `isectSurfaces = {coneSurface, planeSurface}` (`PlaneSurface(planePoint, normal)` already
+   exists as a helper). **No new `CurveKind`, no `.gs` bump, no new marching/Validate/Translate/
+   tessellation-walk code** — all of that is reused verbatim. Only two things are still new: (a) a
+   face-integration path for a `Cone` face bounded by this curve (generalising slice (a)'s
+   `IntegrateConeCutFaceNumeric` / `ConeCutStrip` to also recognise an `Intersection` edge with a
+   `Plane` co-surface, reusing the exact rational `z(u)` rather than falling back to generic
+   bisection, since the other surface is known to be a plane), and (b) the actual solid-builder
+   topology below.
+
+2. **The notch-counting derivation above is confirmed correct by direct sampling** (not re-derived —
+   the scan-and-bisect approach from the earlier finding was turned into a working interval finder and
+   run against three concrete cases): a "coincidentally tangent to the top rim" parabola case, a clean
+   single-hump parabola whose peak stays strictly below the top rim (exactly **one** cut interval,
+   both ends landing on the **same** rim — the simple case), and the earlier hyperbola two-notch
+   example (confirmed **two** disjoint cut intervals, each landing on **different** rims at its two
+   ends — the harder case). This is exactly the fork the topology section above predicted.
+
+### The scoped first slice: exactly one notch, both ends on the same rim
+
+Worked out fully (Euler-characteristic-checked, not yet coded):
+
+- **The small "shaved-off" piece** (the tiny wedge on the far side of the cut, only existing near the
+  notch's own azimuth span): 2 vertices (the two rim points where the cut meets the rim), 3 edges
+  (the short rim arc between them, the straight chord between them — which is exactly the
+  plane-vs-rim-plane intersection line, since both rim points lie on the cutting plane by construction
+  — and the cut curve itself), 3 faces (the rim-disk segment, the cutting-plane cap, and one cone wall
+  band). `V-E+F = 2-3+3 = 2`.
+- **The big "notched" piece** (everywhere else, still one connected solid — confirmed physically: away
+  from the notch's azimuth span, the *entire* generator from base to top sits on one consistent side,
+  so the other side has *no* material there at all, meaning the non-notch side is a single small
+  wedge, not two separate pieces the way the ellipse-regime split the frustum into two comparable
+  halves): 4 vertices (rim points at both the cut rim and the *opposite*, untouched rim), 7 edges (the
+  major rim arc + chord closing its own cap on the cut side, same as the wedge's minor arc/chord but
+  the long way around; the untouched rim split into major/minor arcs purely so the two wall bands can
+  meet cleanly; two vertical seams), 5 faces (both rim caps, the cutting-plane cap — the same one the
+  wedge has, opposite winding — and two cone wall bands, one for the untouched majority arc, one for
+  the notch itself, bounded below by the cut curve instead of the rim). `V-E+F = 4-7+5 = 2`. Directly
+  comparable in shape to `BuildCylinderLongitudinalFlat` (4v/6e/4f) — one extra edge and face because
+  the untouched rim needs its own major/minor split here, where a flat (non-curved) cut's rim needed
+  none.
+
+**Scope of this first slice**: only the case above (exactly one cut interval, both ends on the same
+rim). A single notch whose two ends land on *different* rims, or a configuration producing two
+disjoint notches (confirmed possible, per the hyperbola example above), fall through to the existing
+`Problem::SliceCurvedFace` refusal — named, not guessed at, same precedent as every other partial B2b-2
+increment in this file (e.g. `cylinder - box`'s partial-length pocket/slot staging).
+
+## PROGRESS 2026-09-05 (3) — slice (b)'s single-notch case shipped
+
+`SliceConeObliqueOpenNotch` (`FindConeCutTransitions` + `buildWedge` / `buildNotched`) builds exactly
+the topology above. Three real bugs were found — all via the same discipline as slice (a): build,
+check `Validate` against an independent numerical reference, fix, repeat — not by re-deriving windings
+on paper a second time.
+
+1. **`PlaneLoopSignedArea` never handled `CurveKind::Intersection`.** Every prior use of an
+   Intersection edge bounded a *curved* wall (integrated separately); this is the first time one
+   bounds a flat `Plane` cap. The area routine silently fell back to a straight chord for it, which
+   exactly cancelled against the wedge's real chord edge — the cutting-plane cap's area (and hence
+   its volume contribution) came out as an exact **zero**, not a rounding error, which is what made it
+   obvious this was a missing code path rather than a numeric one. Fixed by walking the marched
+   polyline (`MarchIntersectionCurve`) and shoelacing over its consecutive points instead of just the
+   two endpoints — reduces to the ordinary chord term when the curve happens to be straight. This is a
+   general fix (any future planar face bounded by an Intersection edge benefits), not narrow to this
+   builder.
+2. **Both solids' cap and wall windings were wrong in several places**, caught by `Validate`'s
+   point-invariance closure check and, for one face, by a literal negative signed area. Root cause:
+   the winding a cap needs flips depending on which rim (base or top) the notch actually lands on, the
+   same way `SliceCylinderOblique`'s own upper/lower caps already flip — but the wedge's and notched
+   piece's shared edges (the chord between the two caps, the seams between the two wall bands) each
+   have their *own* closure constraint (whether the two uses of an edge must match or must oppose,
+   determined by which vertex each edge's own `v0`/`v1` field actually points at), so flipping one
+   face's loop wholesale silently broke an edge shared with a neighbour. Resolved by tracing each
+   shared edge's vertex chain explicitly for both `onTop` cases rather than assuming a single flip
+   formula applies uniformly — the `wallMajor`/`wallNotch` loops are spelled out as two explicit
+   `if (onTop) {...} else {...}` blocks rather than one parametrised expression, specifically because
+   an earlier single-formula attempt was wrong.
+3. **Above/below was swapped.** The wedge was assumed to sit on the `+pn` side; the independent
+   reference volume showed it is actually on the `-pn` side. Fixed by swapping the default
+   `outAbove`/`outBelow` assignment (kept the existing `dotNZ < 0` mirroring logic unchanged, since
+   that part was already correct).
+
+New test: "Curved B2b-2 tail: a steep cone slice with a single same-rim notch (parabola regime)"
+(`BrepTests.cpp`, `[req314]`) — same independent circular-segment-per-height reference method as
+slice (a)'s test, survey-magnitude `Translate` stability, tessellated-volume cross-check. The existing
+"still refused" test for the tangent-to-cap configuration (four level crossings, not the two this slice
+handles) continues to pass unchanged and was re-commented to explain why it's still refused now that
+*some* parabola/hyperbola configurations are handled. Full suite green: 954→955 Catch2 cases, 1154
+ctest (one pre-existing unrelated failure, `RecentDrawingsTests`, confirmed present on unmodified
+`beta`).
+
+Two-disjoint-notch (general hyperbola) and cross-rim single-notch configurations are still refused by
+name — a later slice, if ever needed.

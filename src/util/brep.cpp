@@ -183,6 +183,9 @@ void AddSingleShell(Solid* s) {
 // (p - q) never is.
 // ---------------------------------------------------------------------------------------------
 
+/// Forward declaration: defined below alongside the rest of the Intersection-curve marching machinery.
+[[nodiscard]] std::vector<Vec3> MarchIntersectionCurve(const Solid& s, const Edge& e, int n);
+
 /// Signed area of one loop, measured in the face's plane and about the face's outward normal.
 [[nodiscard]] double PlaneLoopSignedArea(const Solid& s, const Face& f, const Loop& lp) {
   const ucs::Ucs& fr = f.surface.frame;
@@ -191,6 +194,22 @@ void AddSingleShell(Solid* s) {
     const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
     const int startV = u.reversed ? e.v1 : e.v0;
     const int endV = u.reversed ? e.v0 : e.v1;
+    if (e.kind == CurveKind::Intersection) {
+      // No closed-form bulge term exists for a marching curve (TASK-204 slice (b), GitHub issue
+      // #283 — the first time an Intersection edge has bounded a PLANAR face rather than a curved
+      // wall). Walk the marched polyline and shoelace over its consecutive points instead of just
+      // the endpoints — reduces to the ordinary straight-chord term when the curve happens to be
+      // straight, and picks up the real bulge otherwise.
+      std::vector<Vec3> poly = MarchIntersectionCurve(s, e, 128);
+      if (u.reversed)
+        std::reverse(poly.begin(), poly.end());
+      for (std::size_t i = 0; i + 1 < poly.size(); ++i) {
+        const ucs::Point2D pa = ucs::WorldToPlane(fr, poly[i]);
+        const ucs::Point2D pb = ucs::WorldToPlane(fr, poly[i + 1]);
+        acc += 0.5 * (pa.x * pb.y - pb.x * pa.y);
+      }
+      continue;
+    }
     const ucs::Point2D a = ucs::WorldToPlane(fr, s.vertices[static_cast<std::size_t>(startV)].p);
     const ucs::Point2D b = ucs::WorldToPlane(fr, s.vertices[static_cast<std::size_t>(endV)].p);
     acc += 0.5 * (a.x * b.y - b.x * a.y);
@@ -774,10 +793,12 @@ struct IsectStrip {
   return out;
 }
 
-/// A **cone** face bounded by one ellipse (the oblique cut) and one flat rim — `SliceConeOblique`'s
-/// piece (REQ-314 B2b-2 tail, GitHub issue #283, TASK-204). The plane params are recovered from the
-/// stored `CurveKind::Ellipse` edge's own geometry (its centre and normal, already in world, need no
-/// extra fields) rather than carried separately, so this face costs nothing beyond `Ellipse` itself.
+/// A **cone** face bounded by one oblique-plane cut and one flat rim — a `SliceConeOblique` piece
+/// (REQ-314 B2b-2 tail, GitHub issue #283, TASK-204). The cut is either a `CurveKind::Ellipse` (the
+/// ellipse regime, slice (a)) or a `CurveKind::Intersection` against a `SurfaceKind::Plane`
+/// co-surface (the parabola/hyperbola single-notch regime, slice (b)) — either way the plane's
+/// params are recovered from the edge's own stored geometry, so this face costs nothing beyond
+/// whichever edge kind is already there.
 struct ConeCutStrip {
   const Surface* sf = nullptr;
   double rimZ = 0.0;
@@ -788,7 +809,14 @@ struct ConeCutStrip {
 [[nodiscard]] ConeCutStrip MakeConeCutStrip(const Solid& s, const Face& f) {
   ConeCutStrip st;
   bool haveRim = false;
-  bool haveEllipse = false;
+  bool haveCut = false;
+  auto takePlane = [&](const Vec3& nWorld, const Vec3& originWorld) {
+    st.nx = ray3d::Dot(nWorld, f.surface.frame.xAxis);
+    st.ny = ray3d::Dot(nWorld, f.surface.frame.yAxis);
+    st.nz = ray3d::Dot(nWorld, f.surface.frame.zAxis);
+    st.planeC = ray3d::Dot(nWorld, ray3d::Sub(originWorld, f.surface.frame.origin));
+    haveCut = true;
+  };
   for (const Loop& lp : f.loops)
     for (const EdgeUse& u : lp.uses) {
       const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
@@ -796,15 +824,14 @@ struct ConeCutStrip {
         st.rimZ = ucs::WorldToUcs(f.surface.frame, s.vertices[static_cast<std::size_t>(e.v0)].p).z;
         haveRim = true;
       } else if (e.kind == CurveKind::Ellipse) {
-        const Vec3& nWorld = e.frame.zAxis;  // the ellipse edge's own normal
-        st.nx = ray3d::Dot(nWorld, f.surface.frame.xAxis);
-        st.ny = ray3d::Dot(nWorld, f.surface.frame.yAxis);
-        st.nz = ray3d::Dot(nWorld, f.surface.frame.zAxis);
-        st.planeC = ray3d::Dot(nWorld, ray3d::Sub(e.frame.origin, f.surface.frame.origin));
-        haveEllipse = true;
+        takePlane(e.frame.zAxis, e.frame.origin);  // the ellipse edge's own normal is the plane's
+      } else if (e.kind == CurveKind::Intersection) {
+        for (const Surface& sf : e.isectSurfaces)
+          if (sf.kind == SurfaceKind::Plane)
+            takePlane(sf.frame.zAxis, sf.frame.origin);
       }
     }
-  if (haveRim && haveEllipse)
+  if (haveRim && haveCut)
     st.sf = &f.surface;
   return st;
 }
@@ -1164,7 +1191,7 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
     break;
   }
   case SurfaceKind::Cone: {
-    if (FaceLoopHasEllipseEdge(s, f)) {
+    if (FaceLoopHasEllipseEdge(s, f) || FaceLoopHasIntersectionEdge(s, f)) {
       out = IntegrateConeCutFaceNumeric(s, f, q);
     } else {
       const ConeIntegrals ci =
@@ -4269,6 +4296,291 @@ struct ConeObliqueEllipse {
   return Succeed(outWhy);
 }
 
+/// One place the cone-generator/plane crossing `z(u)` enters or leaves `(0, h)` (TASK-204 slice (b)):
+/// `rim` says which rim it touches there (`false` = base, `true` = top).
+struct ConeCutTransition {
+  double u = 0.0;
+  bool rim = false;
+};
+
+/// Every point around the full circle where the exact rational `z(u) = (C - r0*A(u)) / (k*A(u) + nz)`
+/// enters or leaves `(0, h)` — the parabola/hyperbola regime's cut can, in general, touch this band
+/// along zero, one or two disjoint stretches of `u` (TASK-204's "PROGRESS 2026-09-05 (2)" finding,
+/// checked by direct sampling before this was coded). A dense scan-and-bisect, mirroring the witness
+/// scans used elsewhere in this file (e.g. `FindGeneralBranchSeams`) — `z(u)` is cheap and exact, so
+/// there is no marching error to worry about, only where the level crossings land. Samples that jump
+/// straight past the whole `(0, h)` band between two adjacent grid points (only possible immediately
+/// next to a pole, where `z(u)` runs to `+-infinity`) are dropped rather than guessed at: they never
+/// bound a real cut interval (the frustum's own rim is what actually stops the material there).
+[[nodiscard]] std::vector<ConeCutTransition> FindConeCutTransitions(double r0, double h, double k,
+                                                                    double nx, double ny, double nz,
+                                                                    double C) {
+  auto A = [&](double u) { return nx * std::cos(u) + ny * std::sin(u); };
+  auto zOfU = [&](double u) { return (C - r0 * A(u)) / (k * A(u) + nz); };
+  constexpr int kSamples = 2000;
+  auto state = [&](double z) {
+    if (!std::isfinite(z))
+      return z > 0.0 ? 1 : -1;
+    if (z <= 0.0)
+      return -1;
+    if (z >= h)
+      return 1;
+    return 0;
+  };
+  auto bisect = [&](double u0, double u1, double level) {
+    double lo = u0, hi = u1;
+    double glo = zOfU(lo) - level;
+    for (int k2 = 0; k2 < 60; ++k2) {
+      const double mid = 0.5 * (lo + hi);
+      const double gm = zOfU(mid) - level;
+      if ((glo <= 0.0) != (gm <= 0.0))
+        hi = mid;
+      else {
+        lo = mid;
+        glo = gm;
+      }
+    }
+    return 0.5 * (lo + hi);
+  };
+  std::vector<double> us(kSamples);
+  std::vector<double> zs(kSamples);
+  for (int i = 0; i < kSamples; ++i) {
+    us[static_cast<std::size_t>(i)] = kTwoPi * static_cast<double>(i) / kSamples;
+    zs[static_cast<std::size_t>(i)] = zOfU(us[static_cast<std::size_t>(i)]);
+  }
+  std::vector<ConeCutTransition> out;
+  for (int i = 0; i < kSamples; ++i) {
+    const int j = (i + 1) % kSamples;
+    const double ua = us[static_cast<std::size_t>(i)];
+    const double ub = j == 0 ? ua + kTwoPi : us[static_cast<std::size_t>(j)];
+    const int sa = state(zs[static_cast<std::size_t>(i)]);
+    const int sb = state(zs[static_cast<std::size_t>(j)]);
+    if (sa == sb)
+      continue;
+    if ((sa == -1 && sb == 0) || (sa == 0 && sb == -1))
+      out.push_back({bisect(ua, ub, 0.0), false});
+    else if ((sa == 0 && sb == 1) || (sa == 1 && sb == 0))
+      out.push_back({bisect(ua, ub, h), true});
+    // sa/sb == {-1,1} (skipped straight past the band, only next to a pole): no real crossing here.
+  }
+  for (ConeCutTransition& t : out) t.u = std::fmod(std::fmod(t.u, kTwoPi) + kTwoPi, kTwoPi);
+  std::sort(out.begin(), out.end(), [](const ConeCutTransition& a, const ConeCutTransition& b) {
+    return a.u < b.u;
+  });
+  return out;
+}
+
+/// Cut a right circular **cone** by an oblique plane whose angle puts the cross-section in the
+/// parabola/hyperbola regime (TASK-204 slice (b), GitHub issue #283) — narrowly, for now: only when
+/// the cut touches the frustum's lateral surface along exactly **one** stretch of azimuth, with both
+/// ends landing on the **same** rim (both base, or both top). This is a single wedge-shaped bite out
+/// of one side of the frustum. Every other configuration (two disjoint stretches, confirmed possible
+/// in this regime, or one stretch spanning both rims) falls through to `Problem::SliceCurvedFace` —
+/// see TASK-204's progress notes for the full topology and why it is scoped narrower here.
+[[nodiscard]] bool SliceConeObliqueOpenNotch(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                             SliceKeep keep, Solid* outAbove, Solid* outBelow,
+                                             bool* handled, Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Cone)
+    return false;
+  const ucs::Ucs& fr = rc.frame;
+  const Vec3 Z = fr.zAxis;
+  const double r0 = rc.radius;
+  const double r1 = rc.radius2;
+  const double h = rc.height;
+  const double dotNZ = ray3d::Dot(pn, Z);
+  if (std::fabs(dotNZ) < 1e-6 || std::fabs(dotNZ) > 1.0 - 1e-9)
+    return false;  // perpendicular / parallel — not this recogniser
+  if (std::fabs(r1 - r0) < 1e-9 * std::max(h, 1.0))
+    return false;  // r0 == r1 is a cylinder in a Cone recipe (shouldn't happen) — not this recogniser
+
+  const double k = (r1 - r0) / h;
+  const double nx = ray3d::Dot(pn, fr.xAxis);
+  const double ny = ray3d::Dot(pn, fr.yAxis);
+  const double nz = ray3d::Dot(pn, fr.zAxis);
+  const double amp = std::sqrt(nx * nx + ny * ny);
+  const double scale = std::max({h, r0, r1});
+  const double eps = 1e-7 * std::max(scale, 1.0);
+  if (std::fabs(nz) > std::fabs(k) * amp + eps)
+    return false;  // the ellipse regime — SliceConeOblique's own remit
+
+  const double C = ray3d::Dot(pn, ray3d::Sub(planePoint, fr.origin));
+  const std::vector<ConeCutTransition> trans = FindConeCutTransitions(r0, h, k, nx, ny, nz, C);
+  if (trans.size() != 2 || trans[0].rim != trans[1].rim)
+    return false;  // 0 or 2+ disjoint notches, or a notch spanning both rims — a later slice
+
+  *handled = true;
+  const bool onTop = trans[0].rim;
+  const double uA = trans[0].u;
+  const double uB = trans[1].u;
+  const double notchSweep = uB - uA;
+  if (!(notchSweep > eps) || !(notchSweep < kTwoPi - eps))
+    return Fail(Problem::SliceResultComplex, outWhy);
+
+  auto radiusAt = [&](double z) { return r0 + k * z; };
+  auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(fr, Vec3{x, y, z}); };
+  auto A = [&](double u) { return nx * std::cos(u) + ny * std::sin(u); };
+  auto zOfU = [&](double u) { return (C - r0 * A(u)) / (k * A(u) + nz); };
+  const double cutRimZ = onTop ? h : 0.0;
+  const double cutRimR = onTop ? r1 : r0;
+  const double otherRimZ = onTop ? 0.0 : h;
+  const double otherRimR = onTop ? r0 : r1;
+  const Vec3 pA = W(cutRimR * std::cos(uA), cutRimR * std::sin(uA), cutRimZ);
+  const Vec3 pB = W(cutRimR * std::cos(uB), cutRimR * std::sin(uB), cutRimZ);
+
+  Surface coneSurf;
+  coneSurf.kind = SurfaceKind::Cone;
+  coneSurf.frame = fr;
+  coneSurf.radius = r0;
+  coneSurf.radius2 = r1;
+  coneSurf.height = h;
+  Surface planeSurf = PlaneSurface(planePoint, pn);
+
+  auto addCutEdge = [&](Solid* s, int v0, int v1, double witnessU) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    const double zw = zOfU(witnessU);
+    e.frame.origin = W(radiusAt(zw) * std::cos(witnessU), radiusAt(zw) * std::sin(witnessU), zw);
+    e.isectSurfaces = {coneSurf, planeSurf};
+    s->edges.push_back(e);
+    return static_cast<int>(s->edges.size()) - 1;
+  };
+  const double uMid = 0.5 * (uA + uB);
+
+  // The small wedge sliced off: 2v / 3e / 3f, chi = 2 (the rim-disk segment, the cutting-plane cap,
+  // one cone wall band). Built with the CUT rim's own material kept — the "other" side of the plane
+  // from the big notched piece below.
+  auto buildWedge = [&](Solid* dst) -> bool {
+    Solid s;
+    const int v0 = AddVertex(&s, pA);
+    const int v1 = AddVertex(&s, pB);
+    const Vec3 rimC = W(0.0, 0.0, cutRimZ);
+    const int rimMinor = AddArc(&s, v0, v1, rimC, Z, notchSweep);
+    const int chord = AddLine(&s, v1, v0);
+    const int cut = addCutEdge(&s, v0, v1, uMid);
+    const Vec3 rimN = onTop ? Z : ray3d::Scale(Z, -1.0);
+    // rimMinor is CCW about +Z by construction (AddArc's own convention); the base rim's outward
+    // normal is -Z, so its loop must run the OPPOSITE sense from the top rim's — same flip
+    // SliceConeOblique's own build() lambda applies between its "upper" and "lower" caps.
+    s.faces.push_back(
+        MakePlaneFace(rimC, rimN, {{rimMinor, !onTop}, {chord, !onTop}}));
+    // chord is shared with the rim cap above, which now uses it as `!onTop` — the two faces sharing
+    // an edge must use it once each way, so this one uses `onTop` (cut must match, by the same
+    // same-two-vertices closure constraint as chord+rimMinor above). That forces this loop's own
+    // winding, so the normal that makes its area positive is found empirically, not guessed:
+    // opposite of the naive onTop-follows-pn guess.
+    const Vec3 cutN = onTop ? ray3d::Scale(pn, -1.0) : pn;
+    s.faces.push_back(MakePlaneFace(planePoint, cutN, {{chord, onTop}, {cut, onTop}}));
+    Face wall;
+    wall.surface = coneSurf;
+    wall.uStart = uA;
+    wall.uEnd = uB;
+    // rimMinor and cut are each shared with one of the two caps above (`!onTop` and `onTop`
+    // respectively) — the wall's own uses must be the opposite of those, once each way.
+    wall.loops.push_back(Loop{{{rimMinor, onTop}, {cut, !onTop}}});
+    s.faces.push_back(std::move(wall));
+    AddSingleShell(&s);
+    if (Validate(s) != Problem::Ok || SelfIntersects(s))
+      return Fail(Problem::SliceResultComplex, outWhy);
+    *dst = std::move(s);
+    return true;
+  };
+
+  // The big notched piece: 4v / 7e / 5f, chi = 2. Same wedge cap reused with opposite winding, plus
+  // the untouched rim (both caps at the FAR end) and the majority wall band spanning the rest of the
+  // circle at full height.
+  auto buildNotched = [&](Solid* dst) -> bool {
+    Solid s;
+    const int v0 = AddVertex(&s, pA);
+    const int v1 = AddVertex(&s, pB);
+    const Vec3 cutRimC = W(0.0, 0.0, cutRimZ);
+    const int rimMajor = AddArc(&s, v1, v0, cutRimC, Z, kTwoPi - notchSweep);
+    const int chord = AddLine(&s, v0, v1);
+    const int cut = addCutEdge(&s, v0, v1, uMid);
+    const Vec3 rimN = onTop ? Z : ray3d::Scale(Z, -1.0);
+    s.faces.push_back(MakePlaneFace(cutRimC, rimN, {{rimMajor, !onTop}, {chord, !onTop}}));
+    const Vec3 cutN = onTop ? ray3d::Scale(pn, -1.0) : pn;
+    // chord must be used oppositely from the rim cap's `!onTop` (shared edge, once each way) — here
+    // `chord`'s own vertex order (built the other way round from the wedge's) needs `cut` opposite
+    // to `chord` in turn for this loop's own closure, unlike the wedge's matching pair above.
+    s.faces.push_back(MakePlaneFace(planePoint, cutN, {{chord, onTop}, {cut, !onTop}}));
+
+    const Vec3 qA = W(otherRimR * std::cos(uA), otherRimR * std::sin(uA), otherRimZ);
+    const Vec3 qB = W(otherRimR * std::cos(uB), otherRimR * std::sin(uB), otherRimZ);
+    const int q0 = AddVertex(&s, qA);
+    const int q1 = AddVertex(&s, qB);
+    const Vec3 otherRimC = W(0.0, 0.0, otherRimZ);
+    const int otherMajor = AddArc(&s, q1, q0, otherRimC, Z, kTwoPi - notchSweep);
+    const int otherMinor = AddArc(&s, q0, q1, otherRimC, Z, notchSweep);
+    const Vec3 otherN = onTop ? ray3d::Scale(Z, -1.0) : Z;
+    s.faces.push_back(MakePlaneFace(otherRimC, otherN, {{otherMajor, onTop}, {otherMinor, onTop}}));
+
+    const int seamA = AddLine(&s, v0, q0);
+    const int seamB = AddLine(&s, v1, q1);
+
+    Face wallMajor;
+    wallMajor.surface = coneSurf;
+    wallMajor.uStart = uB;
+    wallMajor.uEnd = uA + kTwoPi;
+    // The base/top rim major arcs and the two seams, chased vertex-by-vertex (independently for
+    // each case — cone-azimuth "which is bottom" swaps with onTop, and the two cases are not a
+    // single ternary-per-slot away from each other, so each is spelled out explicitly).
+    if (onTop) {
+      wallMajor.loops.push_back(
+          Loop{{{otherMajor, false}, {seamA, true}, {rimMajor, true}, {seamB, false}}});
+    } else {
+      wallMajor.loops.push_back(
+          Loop{{{rimMajor, false}, {seamA, false}, {otherMajor, true}, {seamB, true}}});
+    }
+    s.faces.push_back(std::move(wallMajor));
+
+    Face wallNotch;
+    wallNotch.surface = coneSurf;
+    wallNotch.uStart = uA;
+    wallNotch.uEnd = uB;
+    if (onTop) {
+      wallNotch.loops.push_back(
+          Loop{{{otherMinor, false}, {seamB, true}, {cut, true}, {seamA, false}}});
+    } else {
+      wallNotch.loops.push_back(
+          Loop{{{cut, false}, {seamB, false}, {otherMinor, true}, {seamA, true}}});
+    }
+    s.faces.push_back(std::move(wallNotch));
+
+    AddSingleShell(&s);
+    if (Validate(s) != Problem::Ok || SelfIntersects(s))
+      return Fail(Problem::SliceResultComplex, outWhy);
+    *dst = std::move(s);
+    return true;
+  };
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  // The wedge keeps the material on the -pn side (confirmed empirically against an independent
+  // reference — see TASK-204); "above" is the +pn side.
+  Solid* wedgeDst = outBelow;
+  Solid* notchedDst = outAbove;
+  bool wantWedge = wantBelow;
+  bool wantNotched = wantAbove;
+  if (dotNZ < 0.0) {
+    // pn points toward -Z-ish: swap so "above" still means the +pn side.
+    std::swap(wedgeDst, notchedDst);
+    std::swap(wantWedge, wantNotched);
+  }
+
+  Solid probe;
+  if (!buildWedge(&probe) || !buildNotched(&probe))
+    return false;
+  if (wantWedge && wedgeDst && !buildWedge(wedgeDst))
+    return false;
+  if (wantNotched && notchedDst && !buildNotched(notchedDst))
+    return false;
+  return Succeed(outWhy);
+}
+
 } // namespace
 
 bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, SliceKeep keep,
@@ -4296,6 +4608,9 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
       if (handled)
         return ok;
       ok = SliceConeOblique(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
+      ok = SliceConeObliqueOpenNotch(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
       if (handled)
         return ok;
       return Fail(Problem::SliceCurvedFace, outWhy);
@@ -10710,7 +11025,8 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         break;
       }
       const bool isect = sf.kind == SurfaceKind::Cylinder && FaceLoopHasIntersectionEdge(s, f);
-      const bool coneCut = sf.kind == SurfaceKind::Cone && FaceLoopHasEllipseEdge(s, f);
+      const bool coneCut = sf.kind == SurfaceKind::Cone &&
+                          (FaceLoopHasEllipseEdge(s, f) || FaceLoopHasIntersectionEdge(s, f));
       const int nu = (isect || coneCut) ? std::clamp(SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart,
                                                                     0.25 * chordTolerance),
                                                     24, 256)
