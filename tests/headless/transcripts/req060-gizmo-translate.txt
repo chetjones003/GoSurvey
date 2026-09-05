@@ -1,0 +1,162 @@
+# REQ-060 (GitHub issue #148 Phase 5 slice 4b) — the TRANSLATE gizmo.
+#
+# The requirement's three acceptance bullets are what this file is organised around:
+#
+#   1. a drag moves the selection, and one Ctrl+Z restores the prior state in a single step;
+#   2. a gizmo drag and the equivalent typed command produce coordinates agreeing within REQ-101;
+#   3. no gizmo is drawn when the selection is empty.
+#
+# The GIZMO verb aims the CAMERA's own ray at a world point, exactly as SUBOBJECT does — it never
+# hands the command layer a ready-made distance. That matters for bullet 2: a verb that passed an
+# offset straight through would assert that two ways of calling one function agree, which is not a
+# fact about the product. What is asserted here is the handle pick, the skew-line projection and the
+# transform together, which is the same chain the user's mouse goes through.
+#
+# The numbers below are exact, not approximate, and they are exact by construction: every GRAB and
+# DROP point lies ON the axis it names, so the nearest point of the axis to the ray IS that point
+# whatever the camera is doing. The drag distance is then the difference of two axis positions.
+#
+# Handle geometry, for the reader checking the arithmetic: the default view has zoom 1, so the
+# camera's ortho half-height is 50 world units, and the verb gives a windowless run a 1200 x 700
+# viewport. That is 100 / 700 world units per pixel, so the 70-pixel handle is 10 units long and the
+# 7-pixel grab aperture is 1 unit.
+
+# --- Bullet 3: nothing selected, no gizmo --------------------------------------------------------
+# Asserted through `CadGizmoVisible`, which is the predicate `BuildGizmoOverlay` itself early-outs
+# on — so this is the drawing decision, not a restatement of it.
+
+NEW
+EXPECT SELECTED 0
+EXPECT GIZMO 0
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+# Drawn but not selected: still no gizmo. The gizmo hangs off the SELECTION, not off the drawing.
+EXPECT GIZMO 0
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+EXPECT GIZMO 1
+
+# --- A drag along X ------------------------------------------------------------------------------
+# The line spans (0,0,0)-(10,0,0), so the gizmo's anchor — the centre of the selection's bounding
+# box — is (5,0,0) and the X handle runs from there to (15,0,0).
+#
+# GRAB at (10,0,0) is the handle's midpoint: 5 units along the axis. DROP at (25,0,0) is 20 units
+# along it. The drag is the DIFFERENCE, 15 — which is why the handle does not jump to the cursor on
+# the first mouse move, and why the anchor's own precision cannot affect the answer: it appears in
+# both terms and cancels.
+
+EXPECT GIZMOAXIS -1
+GIZMO GRAB 10 0 0
+# The handle it found is the one aimed at. "A drag is armed" and "the drag is along X" are different
+# claims, and a mis-projected pick breaks the second silently.
+EXPECT GIZMOAXIS 0
+# Nothing has moved yet: arming is not acting.
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+GIZMO DROP 25 0 0
+EXPECT GIZMOAXIS -1
+EXPECT LINEXYZ 0 15 0 0 25 0 0
+
+# --- Bullet 1: ONE Ctrl+Z puts it back -----------------------------------------------------------
+# One step, not two: the drag pushes a single undo snapshot however far the cursor travelled.
+
+UNDO
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+
+# --- Bullet 2: the equivalent typed MOVE gives the same coordinates -------------------------------
+# Same drawing, same offset, stated the other way. They agree because there is ONE implementation —
+# the gizmo commits through `ApplyTranslationToSelection`, which is the function MOVE calls — so
+# this asserts that the gizmo's own arithmetic (pick, project, difference) lands on the offset the
+# typed form states outright.
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+CMD MOVE
+CMD 0,0
+CMD @15,0,0
+ESC
+EXPECT LINEXYZ 0 15 0 0 25 0 0
+
+# --- A drag along Z, which is the half nothing could do before slice 4a ---------------------------
+# In PLAN view the Z handle points straight at the camera: every point of it projects to the same
+# pixel, so there is no distance the gesture could express and the pick refuses it. That is not a
+# limitation to work around — it is the honest answer, and the alternative is a near-singular divide
+# that reads on screen as the selection flying away. So the view is orbited first.
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+VIEWANGLES 135 20
+
+# Cancelling an armed drag first, because it moves nothing and so leaves the drawing ready for the
+# drag proper. A right-click abandons the drag in the viewport, as it abandons every other grip
+# drag; nothing has moved yet, so there is nothing to undo — which is the claim being made here.
+GIZMO GRAB 5 0 5
+EXPECT GIZMOAXIS 2
+GIZMO CANCEL
+EXPECT GIZMOAXIS -1
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+
+# Anchor (5,0,0); the Z handle runs from there to (5,0,10). GRAB 5 up, DROP 25 up, so +20.
+GIZMO GRAB 5 0 5
+EXPECT GIZMOAXIS 2
+GIZMO DROP 5 0 25
+EXPECT LINEXYZ 0 0 0 20 10 0 20
+# UNDO restores the geometry AND drops the selection, so this is the last thing the block can say —
+# the gizmo hangs off the selection, and after an undo there is nothing for it to hang off.
+UNDO
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+EXPECT SELECTED 0
+EXPECT GIZMO 0
+
+# --- A SOLID moves under the gizmo, which is what Phase 5 is for ----------------------------------
+# A primitive's frame origin is the centre of its BASE (brep.hpp), so `BOX 0,0 20 10 8` spans
+# x -10..10, y -5..5, z 0..8. The gizmo's anchor is that box's centre, (0,0,4), and the X handle
+# runs from there to (10,0,4). GRAB 5 along, DROP 105 along, so the drag is +100 in X.
+#
+# Back to PLAN first, so the fences below are the plain plan-view fences req320 uses. The view being
+# orbited is the previous block's subject, not this one's.
+#
+# Mass properties are asserted unchanged to the last digit the closed forms give: a translation is
+# an isometry, so any drift at all is a defect rather than a tolerance. That is the check that
+# catches a solid which moved only SOME of its parts — such a solid still passes `brep::Validate`,
+# which never compares a face's surface against its own boundary.
+
+NEW
+VIEWANGLES 0 90
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+BOX -15 -10 15 10
+EXPECT SELECTED 1
+EXPECT GIZMO 1
+GIZMO GRAB 5 0 4
+EXPECT GIZMOAXIS 0
+GIZMO DROP 105 0 4
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# It really moved, and the pair of fences that says so needs an EMPTY selection to start from — a
+# fence ACCUMULATES into the current selection, and the box is still selected from the drag. A save
+# and reload gives that empty start, and proves the moved solid survives the round trip at its new
+# position at the same time.
+SAVEAS %OUT%/gizmo-solid.gs
+NEW
+EXPECT SOLIDS 0
+OPEN %OUT%/gizmo-solid.gs
+EXPECT SOLIDS 1
+BOX -15 -10 15 10
+EXPECT SELECTED 0
+BOX 85 -10 115 10
+EXPECT SELECTED 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+CHECK ALL

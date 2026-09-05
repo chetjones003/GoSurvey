@@ -942,7 +942,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const VolumeMapDisplayGeometry* volumeMap,
                                    const std::vector<float>* removalLines,
                                    const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame,
-                                   const CadSubObjectOverlay* subObjectOverlay) {
+                                   const CadSubObjectOverlay* subObjectOverlay,
+                                   const CadGizmoOverlay* gizmoOverlay) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -2350,6 +2351,46 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   glUniform4f(locCol, 0.25f, 0.55f, 1.f, 1.f);
   glDrawArrays(GL_LINES, 4, 2);
   glLineWidth(kLwMain);
+
+  // --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) --------------------------
+  //
+  // LAST, so it sits on top of everything including the corner axis triad above: it is the one
+  // overlay the user is about to click, and a handle hidden behind the geometry it manipulates is
+  // not a handle. Never depth-tested, for the same reason.
+  //
+  // The three colours are the triad's OWN colours, taken literally from the block above rather than
+  // chosen again here: the corner icon has been telling this user which way X, Y and Z point since
+  // long before there was a gizmo, and two widgets disagreeing about that would be worse than
+  // either being wrong.
+  if (gizmoOverlay && !gizmoOverlay->empty()) {
+    depthForOverlay();
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);  // back to WORLD space, off the triad's screen matrix
+    std::vector<float> gizRel;
+    const auto drawGizmo = [&](const std::vector<float>& segs, float r, float g, float b, float w) {
+      if (segs.empty() || segs.size() % 6 != 0)
+        return;
+      ConvertLineVertsWorldToView(segs, viewAnchorX, viewAnchorY, &gizRel);
+      glUniform4f(locCol, r, g, b, 1.f);
+      glLineWidth(w);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(gizRel.size() * sizeof(float)),
+                   gizRel.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(gizRel.size() / 3));
+    };
+    // The drag track first, thin, so the handles draw over it.
+    drawGizmo(gizmoOverlay->guide, 0.55f, 0.55f, 0.6f, kLwMain);
+    static const float kAxisRgb[3][3] = {
+        {0.9f, 0.2f, 0.2f}, {0.2f, 0.85f, 0.35f}, {0.25f, 0.55f, 1.f}};
+    for (int a = 0; a < 3; ++a) {
+      // A hot handle takes the selection accent rather than a brighter version of its own colour:
+      // "this is what the click will take" is the same statement a highlight makes everywhere else
+      // in this viewport, and it should look the same wherever it is made.
+      if (gizmoOverlay->hot[a])
+        drawGizmo(gizmoOverlay->axis[a], 1.f, 0.92f, 0.15f, kLwGizmo + 1.f);
+      else
+        drawGizmo(gizmoOverlay->axis[a], kAxisRgb[a][0], kAxisRgb[a][1], kAxisRgb[a][2], kLwGizmo);
+    }
+    glLineWidth(kLwMain);
+  }
   }  // end model-space geometry scope (see the note at its opening brace)
 
 finish_render:

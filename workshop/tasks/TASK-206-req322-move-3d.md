@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:workshop/tasks/TASK-206-req322-move-3d.md
 # TASK-206 — MOVE in three dimensions, and a solid that can be moved (REQ-322, issue #148 slice 4a)
+========
+# TASK-205 — MOVE in three dimensions, and a solid that can be moved (REQ-320, issue #148 slice 4a)
+>>>>>>>> 0e08b27 (feat(gizmo): the translate gizmo, committing through typed MOVE's own transform (REQ-060, #148 slice 4b)):workshop/tasks/TASK-205-req320-move-3d.md
 
 ## Origin: a SPEC GAP found while starting the gizmo
 
