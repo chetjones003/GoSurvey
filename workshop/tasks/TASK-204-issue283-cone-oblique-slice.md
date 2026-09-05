@@ -46,7 +46,83 @@ trip, survey-magnitude stability, cap-clip refusal, and confirms the parabola/hy
 refuses by name. Full suite green: 953→954 Catch2 cases, 1153 ctest (one pre-existing unrelated
 failure, `RecentDrawingsTests`, confirmed present on unmodified `beta` too).
 
-Parabola/hyperbola (slice b) not yet started.
+Parabola/hyperbola (slice b): **scoped, not yet implemented** — see below.
+
+## Slice (b) scope, worked out 2026-09-05
+
+Before writing any code, the actual topology was worked out and checked numerically (`node`
+scratch scripts sampling `z(u)` directly, not reused from any derivation under test). It is bigger
+than slice (a), and bigger than a first read of issue #283 suggests. Recorded here so the next
+session does not have to re-derive it.
+
+**The curve.** Same exact rational `z(u) = (C - r0*A(u)) / (k*A(u) + nz)` as slice (a)
+(`A(u) = nx cos u + ny sin u`), but now the denominator `k*A(u) + nz` has one (parabola, tangent) or
+two (hyperbola) real zeros over `u in [0, 2*pi)` — the azimuths where the generator is exactly
+parallel to the cutting plane, so `z(u)` runs to `+-infinity` there. A finite frustum only cares
+where `z(u)` actually lands inside `(0, h)`.
+
+**The topology is not "one notch."** Between two consecutive zeros of the denominator, `A(u)` (a
+plain sinusoid) is not monotonic — it has exactly one interior extremum — so `z(u)`, though a
+monotonic (Möbius) function *of* `A(u)`, is **not monotonic in `u`** on that arc: it can cross a
+fixed level (like `z=0` or `z=h`) twice, not once. Checked directly: a concrete hyperbola example
+(`r0=6, r1=2, h=8`, plane normal `nx=0.8, ny=0, nz=0.3*|k|*amp`) has its two denominator zeros at
+`u ~ 1.27` and `u ~ 5.02`, and the two arcs between them **each independently** either produce one
+bounded cut sub-interval (where `z(u)` dips through the full `(0,h)` range and back out) or none —
+in that example, one arc produced a cut (two disjoint sub-arcs: `u ~ [1.48, 1.88]` and
+`u ~ [4.41, 4.81]`) while the other arc's hump never reached down into `(0,h)` at all. **So the
+plane can cut the lateral surface along zero, one, or two disjoint arcs** (up to one per arc between
+consecutive denominator zeros), each becoming its own separate "notch" in the resulting solid,
+closed by whichever rim (base or top) the arc's two ends land on. A parabola (only one denominator
+zero, so only one arc — the whole circle minus a point) was checked too and found only one cut arc
+in the example tried, but the same non-monotonicity argument means **a parabola cut is not
+guaranteed to produce exactly one notch either** — it needs the same general handling, not a special
+case assumed simpler.
+
+**What a full implementation needs** (none of this exists yet):
+1. Find every denominator zero over one period (0, 1, or 2 — closed form, since `k*A(u)+nz = 0` is
+   a single-harmonic equation in `u`).
+2. Within each arc between consecutive zeros (or the single "whole circle minus a point" arc for a
+   parabola), find zero, one, or (if the argument above is right) possibly more bounded sub-intervals
+   where `z(u) in (0, h)` — this needs a root search (the level-crossing structure isn't necessarily
+   a simple closed form once the whole-circle wraparound and multiple humps are considered), most
+   likely reusing the existing scan-and-bisect pattern (`IsectStrip`-style) rather than a fully
+   closed-form interval list.
+3. For each such interval (a "notch"): the two cut endpoints land on EITHER the base rim, the top
+   rim, or (in principle) each other's arc — build a face whose loop mixes a piece of the affected
+   rim with the cut curve, closed by seam lines — structurally similar to `BuildBranchPipeThinStub`'s
+   rim-vs-curve pattern, but the rim piece is now only a PORTION of a circle (bounded by wherever
+   the adjacent no-cut regions start), not the earlier full semicircle halves slice (a) used.
+4. Whichever piece (the base-side or top-side solid) is being built needs its own rim traced INTO
+   and OUT OF each notch in turn — a rim edge with an unknown, run-time-determined number of
+   "bites" taken out of it, ordered by azimuth. This is the genuinely new kernel topology the
+   original issue text was pointing at — nothing existing in the kernel builds a face whose
+   boundary alternates between a rim arc and a cut curve a variable number of times.
+5. A new curve kind (or a generalisation of the `ConeObliqueEllipse`-style approach) for the cut
+   curve itself; face integration follows the same numeric approach as slice (a)
+   (`IntegrateConeCutFaceNumeric`'s pattern generalises directly — the closed-form inner-`z`
+   integral doesn't care how many notches there are, only the per-notch `u`-bounds change) — this
+   part is the least risky, since it is a direct extension of already-working, already-verified code.
+6. `.gs` bump, `Validate`, `Tessellate`, and a full test matrix: 0/1/2-notch configurations, a
+   notch that touches the base rim vs. the top rim vs. (if possible) both ends on the same rim, a
+   parabola's exact tangent case, and every refusal (a cut that misses the solid, one that touches a
+   corner exactly, degenerate configurations).
+
+**Assessment:** item (5) is a straightforward extension of slice (a)'s already-verified machinery.
+Items (1)-(4) are the hard, genuinely novel part — a variable-count-of-notches rim/wall topology
+the kernel has never needed before, and getting the notch-counting and rim-bridging logic right
+(items 1-2 especially) needs the same "derive then verify numerically against an independent
+reference before writing kernel code" discipline slice (a) used twice to catch real bugs. This is
+realistically multi-session work on its own, not a same-session follow-on to slice (a). **Not
+started**; the two ellipse-regime bugs already fixed in slice (a) are a concrete demonstration of why
+rushing the harder topology here without the same verification discipline would be a mistake.
+
+## Decision needed before resuming
+
+Whoever picks this back up should re-confirm scope against the above (rather than issue #283's
+original "parabola/hyperbola, two simple regimes" framing, which undersells the actual topology) —
+in particular whether the full variable-notch-count generality is worth building, or whether a
+narrower first slice (e.g. exactly one notch, refusing configurations that would need two) is an
+acceptable interim step.
 
 ## Requirement authority
 
