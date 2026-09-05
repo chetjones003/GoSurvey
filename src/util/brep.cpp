@@ -1141,11 +1141,30 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
   return out;
 }
 
+/// General-loop numeric mass-property integrator (ADR-052, issue #307) — forward-declared here,
+/// defined below \ref ToroidalPoint since it needs those surface-point/derivative formulas.
+[[nodiscard]] FaceIntegrals IntegrateGeneralLoopFace(const Face& f, const Vec3& qLocal);
+
 /// \p q is the world-frame reference point; each branch transforms it into the surface's own frame.
-[[nodiscard]] FaceIntegrals IntegrateFace(const Solid& s, const Face& f, const Vec3& q) {
+///
+/// \p honorGeneralLoops gates the `Face::paramLoops` branch (issue #307). `Validate`'s own internal
+/// closure check (two `VolumeAbout` calls compared for point-invariance) passes false: that check
+/// exists to catch a shell that does not actually seal, and `paramLoops` is documented (ADR-052 (c),
+/// issue #306) as a classification aid that need not trace the face's real 3D boundary — so trusting
+/// it there would make the closure probe fail on a face whose loop is simply a placeholder, not a
+/// real leak. `ComputeMassProperties`, the user-facing report, passes true so the general-loop
+/// numeric integral this file adds actually gets used once a real trim shape exists (issue #310).
+[[nodiscard]] FaceIntegrals IntegrateFace(const Solid& s, const Face& f, const Vec3& q,
+                                          bool honorGeneralLoops = true) {
   const Surface& sf = f.surface;
   const Vec3 qLocal = ucs::WorldToUcs(sf.frame, q);
   FaceIntegrals out;
+  if (honorGeneralLoops && !f.paramLoops.empty()) {
+    out = IntegrateGeneralLoopFace(f, qLocal);
+    if (sf.inward)
+      out.volTerm = -out.volTerm;
+    return out;
+  }
   switch (sf.kind) {
   case SurfaceKind::Plane: {
     out.area = PlaneFaceArea(s, f);
@@ -1271,11 +1290,12 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
 /// correct for a `q` near the solid rather than at the world origin, which is the whole numerical
 /// stability argument at state-plane magnitudes; and they are what make the closure probe below
 /// non-vacuous, since without them this function would be trivially independent of `q`.
-[[nodiscard]] double VolumeAbout(const Solid& s, const Vec3& q, bool* outFinite) {
+[[nodiscard]] double VolumeAbout(const Solid& s, const Vec3& q, bool* outFinite,
+                                 bool honorGeneralLoops = true) {
   double volTerm = 0.0;
   bool finite = true;
   for (const Face& f : s.faces) {
-    const FaceIntegrals fi = IntegrateFace(s, f, q);
+    const FaceIntegrals fi = IntegrateFace(s, f, q, honorGeneralLoops);
     if (!std::isfinite(fi.area) || !std::isfinite(fi.volTerm))
       finite = false;
     volTerm += fi.volTerm;
@@ -1402,6 +1422,147 @@ struct MeshBuilder {
   const double cv = std::cos(v);
   const double s = sf.inward ? -1.0 : 1.0;
   return ucs::UcsVectorToWorld(sf.frame, Vec3{s * cv * std::cos(t), s * cv * std::sin(t), s * std::sin(v)});
+}
+
+/// Point and parametric partial derivatives of \p sf at `(u, v)`, all in the SURFACE'S OWN local
+/// frame — the frame-relative analogue of `SurfacePointAt`/`EvaluateWithDerivs`, needed only by
+/// \ref IntegrateGeneralLoopFace below so a general trim loop can be integrated identically for
+/// every `SurfaceKind` via `Su x Sv` (issue #307). Verified by hand to reduce to the exact outward
+/// normal each closed-form `*FaceIntegrals` function above was derived against, for every curved
+/// kind (Cylinder/Cone/Sphere/Torus) — matching signs and magnitudes to those functions is what lets
+/// a general loop that happens to trace a rectangle reproduce the closed-form answer exactly.
+void LocalSurfaceDerivs(const Surface& sf, double u, double v, Vec3* p, Vec3* su, Vec3* sv) {
+  switch (sf.kind) {
+  case SurfaceKind::Plane:
+    *p = Vec3{u, v, 0.0};
+    *su = Vec3{1.0, 0.0, 0.0};
+    *sv = Vec3{0.0, 1.0, 0.0};
+    return;
+  case SurfaceKind::Cylinder: {
+    const double r = sf.radius;
+    *p = Vec3{r * std::cos(u), r * std::sin(u), v};
+    *su = Vec3{-r * std::sin(u), r * std::cos(u), 0.0};
+    *sv = Vec3{0.0, 0.0, 1.0};
+    return;
+  }
+  case SurfaceKind::Cone: {
+    const double r0 = sf.radius;
+    const double r1 = sf.radius2;
+    const double drho = (r1 - r0) / sf.height;
+    const double rho = r0 + drho * v;
+    *p = Vec3{rho * std::cos(u), rho * std::sin(u), v};
+    *su = Vec3{-rho * std::sin(u), rho * std::cos(u), 0.0};
+    *sv = Vec3{drho * std::cos(u), drho * std::sin(u), 1.0};
+    return;
+  }
+  case SurfaceKind::Sphere: {
+    const double r = sf.radius;
+    const double cv = std::cos(v);
+    const double sv2 = std::sin(v);
+    *p = Vec3{r * cv * std::cos(u), r * cv * std::sin(u), r * sv2};
+    *su = Vec3{-r * cv * std::sin(u), r * cv * std::cos(u), 0.0};
+    *sv = Vec3{-r * sv2 * std::cos(u), -r * sv2 * std::sin(u), r * cv};
+    return;
+  }
+  case SurfaceKind::Torus: {
+    const double major = sf.radius;
+    const double minor = sf.radius2;
+    const double cv = std::cos(v);
+    const double sv2 = std::sin(v);
+    const double rho = major + minor * cv;
+    *p = Vec3{rho * std::cos(u), rho * std::sin(u), minor * sv2};
+    *su = Vec3{-rho * std::sin(u), rho * std::cos(u), 0.0};
+    *sv = Vec3{-minor * sv2 * std::cos(u), -minor * sv2 * std::sin(u), minor * cv};
+    return;
+  }
+  case SurfaceKind::Nurbs: {
+    const nurbs::SurfacePoint spt = nurbs::EvaluateWithDerivs(sf.patch, u, v);
+    *p = ucs::WorldToUcs(sf.frame, spt.p);
+    *su = ucs::WorldVectorToUcs(sf.frame, spt.du);
+    *sv = ucs::WorldVectorToUcs(sf.frame, spt.dv);
+    return;
+  }
+  }
+}
+
+/// The `(u, v)` crossings of a horizontal line at parameter `v` against every edge of every loop in
+/// \p paramLoops, sorted ascending. Consecutive pairs `[xs[2k], xs[2k+1]]` are the inside intervals
+/// at that `v` under the even-odd rule — correct for one outer loop plus disjoint, properly nested
+/// holes, exactly the shape `Validate` (issue #306) already requires of `paramLoops`.
+[[nodiscard]] std::vector<double> GeneralLoopScanline(
+    const std::vector<std::vector<curveisect::Vec2>>& paramLoops, double v) {
+  std::vector<double> xs;
+  for (const std::vector<curveisect::Vec2>& poly : paramLoops) {
+    const std::size_t n = poly.size();
+    for (std::size_t i = 0; i < n; ++i) {
+      const curveisect::Vec2& a = poly[i];
+      const curveisect::Vec2& b = poly[(i + 1) % n];
+      if ((a.y <= v) != (b.y <= v)) {
+        const double t = (v - a.y) / (b.y - a.y);
+        xs.push_back(a.x + t * (b.x - a.x));
+      }
+    }
+  }
+  std::sort(xs.begin(), xs.end());
+  return xs;
+}
+
+/// Numeric area/volume term of a face carrying a general trim loop (`Face::paramLoops`, ADR-052,
+/// issue #306), for any `SurfaceKind` — the additive branch issue #307 asks for. Integrates
+/// `|Su x Sv|` (area) and `(P - q) . (Su x Sv)` (the divergence-theorem volume term, shared with
+/// every closed-form `*FaceIntegrals` function above) over the loop's actual parameter-space
+/// interior, found per `v`-scanline via \ref GeneralLoopScanline rather than assumed to be the
+/// `uStart/uEnd/vStart/vEnd` rectangle. `inward` is left for the shared flip in \ref IntegrateFace.
+[[nodiscard]] FaceIntegrals IntegrateGeneralLoopFace(const Face& f, const Vec3& qLocal) {
+  const Surface& sf = f.surface;
+  FaceIntegrals out;
+  // Break the v-range at every vertex's own v, not just at its overall min/max: the u-interval
+  // returned by `GeneralLoopScanline` only varies smoothly BETWEEN vertices — at each vertex an edge
+  // can enter or leave the scan, changing which interval a sample falls in by a jump. A polygon whose
+  // straight edges are not all v-monotonic (e.g. a rectangular hole) is otherwise a step function of
+  // v, which a fixed Gauss panel grid does not integrate exactly unless a panel boundary happens to
+  // land exactly on the step — this way one always does.
+  std::vector<double> vBreaks;
+  for (const std::vector<curveisect::Vec2>& poly : f.paramLoops)
+    for (const curveisect::Vec2& p : poly)
+      vBreaks.push_back(p.y);
+  if (vBreaks.size() < 2)
+    return out;
+  std::sort(vBreaks.begin(), vBreaks.end());
+  vBreaks.erase(std::unique(vBreaks.begin(), vBreaks.end(),
+                            [](double a, double b) { return std::fabs(a - b) < 1e-12 * (1.0 + std::fabs(a)); }),
+                vBreaks.end());
+  if (vBreaks.size() < 2)
+    return out;
+  constexpr int kVPanels = 8;
+  constexpr int kUPanels = 12;
+  auto integrand = [&](double u, double v, bool wantVol) {
+    Vec3 p;
+    Vec3 su;
+    Vec3 sv;
+    LocalSurfaceDerivs(sf, u, v, &p, &su, &sv);
+    const Vec3 n = ray3d::Cross(su, sv);
+    return wantVol ? ray3d::Dot(ray3d::Sub(p, qLocal), n) : ray3d::Length(n);
+  };
+  auto stripIntegral = [&](double v, bool wantVol) {
+    const std::vector<double> xs = GeneralLoopScanline(f.paramLoops, v);
+    double acc = 0.0;
+    for (std::size_t i = 0; i + 1 < xs.size(); i += 2) {
+      const double u0 = xs[i];
+      const double u1 = xs[i + 1];
+      if (u1 > u0)
+        acc += GradedGaussIntegrate(u0, u1, kUPanels,
+                                    [&](double u) { return integrand(u, v, wantVol); });
+    }
+    return acc;
+  };
+  for (std::size_t i = 0; i + 1 < vBreaks.size(); ++i) {
+    const double v0 = vBreaks[i];
+    const double v1 = vBreaks[i + 1];
+    out.area += GradedGaussIntegrate(v0, v1, kVPanels, [&](double v) { return stripIntegral(v, false); });
+    out.volTerm += GradedGaussIntegrate(v0, v1, kVPanels, [&](double v) { return stripIntegral(v, true); });
+  }
+  return out;
 }
 
 } // namespace
@@ -10667,9 +10828,12 @@ Problem Validate(const Solid& s) {
   //     deliberately generic — nonzero along all three axes, and irrational relative to the model —
   //     so no face's own frame can happen to cancel it.
   // (2) Does it enclose a positive volume, i.e. do the faces point outward rather than inward?
+  // `honorGeneralLoops=false`: a `Face::paramLoops` (ADR-052, issue #306) is a classification aid
+  // that need not trace the face's real 3D boundary, so this closure probe must judge the shell by
+  // its actual edges, not by a general trim shape that could be a placeholder (issue #307).
   const Vec3 q = ReferencePoint(s);
   bool finite = true;
-  const double volume = VolumeAbout(s, q, &finite);
+  const double volume = VolumeAbout(s, q, &finite, /*honorGeneralLoops=*/false);
   if (!finite)
     return Problem::NonFiniteCoordinate;
 
@@ -10693,7 +10857,7 @@ Problem Validate(const Solid& s) {
   const double closeTol = (hasNumericFace ? 1e-5 : 1e-8) * scale * scale * scale;
 
   const Vec3 probe = ray3d::Add(q, Vec3{scale, 0.7 * scale, -1.3 * scale});
-  const double probeVolume = VolumeAbout(s, probe, nullptr);
+  const double probeVolume = VolumeAbout(s, probe, nullptr, /*honorGeneralLoops=*/false);
   if (!std::isfinite(probeVolume) || std::fabs(volume - probeVolume) > closeTol)
     return Problem::NotClosed;
 
