@@ -115,8 +115,9 @@ CMD PRESSPULL -8
 EXPECT LOG "turn the solid inside out"
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
-# A CURVED neighbour — the case brep::Validate does not catch, measured at 15% volume error with the
-# precondition removed (see PushPullTests). Here it is simply refused, by name.
+# A CURVED neighbour - the case brep::Validate does not catch, measured at 15% volume error with the
+# precondition removed (see PushPullTests). A corner is re-solved by intersecting the surfaces that
+# meet there, and a cylinder wall is not a plane to intersect. Refused by name.
 NEW
 CMD CYLINDER 0,0 5 10
 EXPECT SOLIDS 1
@@ -124,7 +125,50 @@ VIEWANGLES -45 35
 SUBOBJECT 0 0 10 0.5 0.5
 EXPECT SUBOBJECTFACES 1
 CMD PRESSPULL 3
-EXPECT LOG "not flat and parallel to the push"
+EXPECT LOG "a curved face meets it"
+
+# --- The shapes that used to be refused (user report, 2026-09-04) --------------------------------
+# The first algorithm translated corners along the push, which only works where every neighbour
+# contains that direction: box 6/6, wedge 2/5, pyramid 0/6. Re-solving each corner as the meeting
+# point of the planes around it gives box 6/6, wedge 5/5, pyramid 6/6. These are the cases that
+# changed, driven through the COMMAND so the fix is asserted where the user met it.
+
+NEW
+CMD WEDGE 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 800 655.407 6 9 5
+VIEWANGLES 135 20
+# The full-height end face at x = -10. The camera matters: at azimuth -45 that face is on the FAR
+# side, so a ray aimed at it meets the near face first and picks that instead. 135 puts the eye
+# where the end face is what the cursor is actually over - the same thing a user does by orbiting. Extending it 5 ft makes the wedge TALLER as well as longer,
+# because the ramp keeps its slope: at x = -15 the slope has risen to z = 10, so the new material is
+# a trapezoid 10 high at the far end and 8 at the near one - mean 9 x 10 wide x 5 long = 450.
+SUBOBJECT -10 0 4 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 5
+EXPECT LOG "volume now 1250"
+
+# A pyramid FRUSTUM: every one of its six faces moves, walls included.
+NEW
+CMD PYRAMID 0,0 4 5 2 10
+EXPECT SOLIDS 1
+VIEWANGLES -45 35
+SUBOBJECT 0 0 10 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+# Note the command's radius is the INRADIUS (the apothem), where brep::MakePyramid's is the
+# circumradius - so this frustum is twice the volume of PushPullTests' one built from the same
+# numbers. Both are hand-computable and neither is wrong; stated because the discrepancy looks like
+# an error until you know which radius each takes.
+#
+# Base inradius 5 -> square of side 10, area 100. Top inradius 2 -> area 16. Frustum volume is
+# h/3 x (A1 + A2 + sqrt(A1 A2)) = 10/3 x (100 + 16 + 40) = 520.
+EXPECT SOLIDPROPS 0 520 408.3286 8 12 6
+# Raising the top 1 ft adds only 13.72, not the 16 a prism of the old top would: the walls keep
+# their slope, so the top gets NARROWER as it rises - inradius 5 + (2-5) x 11/10 = 1.7, area 11.56,
+# volume 11/3 x (100 + 11.56 + 34) = 533.72. That shortfall is the evidence the corners were
+# re-solved rather than translated straight up, which would have kept the top its old size.
+CMD PRESSPULL 1
+EXPECT LOG "volume now 533.72"
 
 # --- Criterion 8: a pushed solid survives a .gs round-trip ------------------------------------------
 # Nearly free by construction — GsIo stores TOPOLOGY, not the recipe, precisely so a recipe-less
