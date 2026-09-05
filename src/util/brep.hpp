@@ -398,6 +398,10 @@ enum class Problem {
   /// of them leaves no point satisfying all of them — the corner would have to split into several,
   /// which changes the topology and is a different operation.
   PushPullVertexUnsolvable,
+  /// Moving this cap would collapse or invert the wall beside it: a cylinder pushed to zero height,
+  /// or a cone whose moving end passes through its own apex. Refused before building rather than
+  /// left to \ref Validate, so the reason names the wall rather than the whole solid.
+  PushPullCurvedDegenerate,
   PushPullResultInvalid,    ///< The moved solid did not validate — collapsed, inverted or degenerate.
 };
 

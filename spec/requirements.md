@@ -6657,10 +6657,24 @@ capability that does not exist. They are recorded here rather than quietly dropp
      they are what a user sees: extending a wedge's end face makes the wedge **taller**, because the
      ramp keeps its slope; and raising a pyramid frustum's top makes that top **narrower**, because
      the walls keep theirs.
-  2. **It is refused when a CURVED face meets the moved one.** A corner is re-solved by intersecting
-     the surfaces around it, and a curved surface is not a plane to intersect: a cylinder wall beside
-     a cap would have to change its stored radius or height, which is a different edit.
-  3. **It is refused when a corner cannot be re-solved** - the planes there do not cross in a single
+  2. **A flat CAP whose neighbour is a cylinder or cone wall pushes too, and the wall follows.** A
+     corner is normally re-solved by intersecting the surfaces around it, and a curved surface is
+     not a plane to intersect - so the wall is RE-PARAMETERISED instead. A cylinder's stored height
+     grows or shrinks (and its frame origin travels too when the moving cap is the base, since that
+     origin IS the base centre). A cone's moving end takes the radius its own slope puts there:
+     **the slope is kept and the radius changes**, so pushing a cone's cap extends the same cone
+     rather than bending its wall (D-2026-09-04-d, put to the user).
+
+     This is the case that measures worst if it is got wrong rather than refused. Leaving the wall's
+     height alone while its boundary moves still BUILDS and still passes `Validate`: a cylinder
+     pushed from h = 10 to h = 13 reports **863.938 against a true 1021.02**, 15% out, because the
+     wall says 10 while its cap sits at 13.
+  3. **Everything else curved is still refused by name.** A curved wall pushed along its own normal
+     is a radius change and not a translation at all; a sphere or torus has no height or taper to
+     follow; and a cylinder axis oblique to the push is not a translation of anything. A cap whose
+     corners also touch an unrelated plane - a sliced cylinder - carries both a plane constraint
+     and a surface one, and satisfying both at once is a different solve.
+  4. **It is refused when a corner cannot be re-solved** - the planes there do not cross in a single
      point, or more than three faces meet and moving one leaves no point satisfying all of them. A
      true pyramid's apex is the honest example: four planes meet there, and pushing one of its side
      faces would split that apex into several points. A topology change, and a different operation.
@@ -6683,21 +6697,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
      0.001 ft push on a wedge, and REQ-201 asks for a reason the user can *read*. Both halves are
      stated because the difference between them is exactly the kind of thing a later reader would
      otherwise have to re-derive.
-  4. **A zero or non-finite distance is refused**, not treated as a no-op that reports success: a
+  5. **A zero or non-finite distance is refused**, not treated as a no-op that reports success: a
      command that says it moved something it did not is worse than one that declines.
-  5. **The result is validated before anything is stored** (ADR-046 (d)). A push that collapses the
+  6. **The result is validated before anything is stored** (ADR-046 (d)). A push that collapses the
      solid, inverts it, or degenerates a face is refused by name and the document is untouched. A
      push far enough to turn a solid inside out is a real user gesture, not a hypothetical.
-  6. **The topology is preserved, so a sub-object reference survives the edit.** The operation moves
+  7. **The topology is preserved, so a sub-object reference survives the edit.** The operation moves
      geometry and changes no counts, which is exactly the case ADR-049 measured when it chose an
      index paired with the solid's identity. A push therefore leaves the pushed face still selected,
      and a second push continues from the first.
-  7. **The recipe is dropped, never quietly updated.** A pushed box is no longer the box its recipe
+  8. **The recipe is dropped, never quietly updated.** A pushed box is no longer the box its recipe
      describes. ADR-045 already made the recipe optional and never consulted by validity, mass
      properties or tessellation; a recipe that no longer describes its solid is worse than none,
      because it reads as authoritative. `.gs` already stores topology rather than the recipe, so a
      pushed solid round-trips with no format change.
-  8. **One undoable step.** The whole edit — including dropping the recipe and re-tessellating — is
+  9. **One undoable step.** The whole edit — including dropping the recipe and re-tessellating — is
      a single undo, and Ctrl+Z restores the prior solid exactly.
 - Acceptance:
   - pushing a box's top face by `+d` gives a solid whose volume is the original plus `base area × d`,
@@ -6712,7 +6726,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
     the input solid is returned untouched;
   - a zero distance, a non-finite distance, and an out-of-range face index are each refused by name;
   - a non-planar face - a cylinder's wall - is refused by name rather than approximated;
-  - a face beside a CURVED one is refused by name; a cylinder's flat cap is the hand-checkable case;
+  - a CYLINDER's top cap pushes, and the volume is pi r^2 h for the NEW height exactly - the case
+    that reported 863.938 against a true 1021.02 before the wall's stored height followed it;
+  - its BOTTOM cap grows the cylinder downward, moving the wall's frame origin as well as its
+    height - the volume is what distinguishes doing one from doing both;
+  - a CONE's top cap keeps the wall's slope, so the opening narrows: base 5, top 2, height 10
+    pushed to 12 gives a top radius of 1.4, and a volume 13% away from what keeping the radius
+    instead would have produced;
+  - a cone pushed through its own apex, and a cylinder flattened to nothing, are each refused by
+    name rather than inverted;
+  - a curved WALL, a sphere, a torus, and a cap whose corners also touch an unrelated plane are
+    each still refused by name;
   - a WEDGE's end face pushes, and the wedge gets TALLER as it extends, because the ramp keeps its
     slope - the case an algorithm that translated corners could only refuse;
   - a pyramid FRUSTUM pushes on every one of its six faces, and raising its top makes that top

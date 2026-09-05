@@ -194,22 +194,28 @@ TEST_CASE("Push/pull refuses what it cannot do, by name (REQ-319 / REQ-201)", "[
     REQUIRE_FALSE(brep::PushPullFace(cyl, wall, 1.0, &out, &why));
     REQUIRE(why == brep::Problem::PushPullFaceNotPlanar);
   }
-  SECTION("a cylinder's flat CAP is refused for its NEIGHBOUR — the case Validate misses") {
-    // **This is the case the whole precondition exists for**, and the only one measured to slip
-    // past `Validate`. The cap is planar, so it passes the face test; it is refused because the
-    // wall beside it is a cylinder, whose stored `height` would have to be re-solved rather than
-    // translated.
+  SECTION("a cylinder's cap produces the TRUE volume, not the plausible wrong one") {
+    // **This is the case the wall re-parameterisation exists for**, and the only one measured to
+    // slip past `Validate`. The cap is planar, so it always passed the face test; what used to
+    // refuse it was the cylinder wall beside it, whose stored `height` cannot be intersected the
+    // way a plane can.
     //
-    // With the neighbour checks removed, this push BUILDS: `Validate` returns Ok, and the analytic
-    // volume comes out 863.938 against a true 1021.02 for r=5 h=13 — 15% wrong — because the wall
-    // surface still reports `height = 10` while its top boundary sits at 13. A closed, manifold,
-    // positive-volume solid whose volume is a lie. That is what "Validate checks topology, not
-    // geometry" costs when nothing else is standing there.
+    // Leave that height alone and the push still BUILDS: `Validate` returns Ok, and the analytic
+    // volume comes out **863.938 against a true 1021.02** for r=5 h=13 — 15% wrong — because the
+    // wall reports `height = 10` while its boundary sits at 13. A closed, manifold, positive-volume
+    // solid whose volume is a lie. That is what "Validate checks topology, not geometry" costs when
+    // nothing else is standing there.
+    //
+    // Asserted as the exact right answer rather than as a refusal, and the wrong number is named
+    // below so a regression that reintroduces it is recognisable on sight rather than merely
+    // failing.
+    constexpr double kPi = 3.14159265358979323846;
     brep::Solid cyl;
     REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &cyl, &why));
     const int cap = FaceFacing(cyl, {0, 0, 1});
-    REQUIRE_FALSE(brep::PushPullFace(cyl, cap, 1.0, &out, &why));
-    REQUIRE(why == brep::Problem::PushPullNeighbourCurved);
+    REQUIRE(brep::PushPullFace(cyl, cap, 3.0, &out, &why));
+    REQUIRE(Volume(out) == Approx(kPi * 25.0 * 13.0));  // 1021.0176
+    REQUIRE(Volume(out) != Approx(863.938).margin(0.01));
   }
   SECTION("a TRUE pyramid's side face is refused because its apex would have to split") {
     // Top radius ZERO, so there is a real apex — four planes meeting at one point. Move one of them
@@ -351,5 +357,118 @@ TEST_CASE("Slanted neighbours push correctly, by re-solving corners (REQ-319)", 
     REQUIRE(Volume(out) == Approx(266.86).margin(0.01));
     REQUIRE(Volume(out) < v0 + topArea * 1.0);
     REQUIRE(Volume(out) > v0);  // it did grow — the sign is right
+  }
+}
+
+
+
+// REQ-319 increment 3 — a flat CAP whose neighbour is a curved wall (D-2026-09-04-d).
+//
+// The user reported push/pull not working on cylinders or cones. A cap is a plane, so it always
+// passed the face test; what refused it was the wall beside it, which cannot be intersected the way
+// a plane can. It is now RE-PARAMETERISED instead: a cylinder's stored height grows or shrinks, and
+// a cone's moving end takes the radius its own slope puts there.
+//
+// Volumes here are the closed forms, not figures recorded from the output: a cylinder is `pi r^2 h`
+// and a cone frustum `pi h / 3 * (R^2 + Rr + r^2)`. That matters more than usual, because the exact
+// number this used to produce — 863.938 for a cylinder pushed to h = 13 — was wrong by 15% and
+// perfectly plausible.
+TEST_CASE("A cap whose neighbour is a curved wall pushes, and the wall follows (REQ-319)", "[pushpull]") {
+  constexpr double kPi = 3.14159265358979323846;
+  brep::Problem why{};
+  brep::Solid out;
+
+  SECTION("a cylinder's top cap: the wall's stored height follows") {
+    brep::Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &cyl, &why));
+    REQUIRE(Volume(cyl) == Approx(kPi * 25.0 * 10.0));
+
+    REQUIRE(brep::PushPullFace(cyl, FaceFacing(cyl, {0, 0, 1}), 3.0, &out, &why));
+    // The number this is really about: 1021.0176, not the 863.938 the old code produced by leaving
+    // the wall reporting height = 10 while its boundary sat at 13.
+    REQUIRE(Volume(out) == Approx(kPi * 25.0 * 13.0));
+    for (const brep::Face& f : out.faces)
+      if (f.surface.kind == brep::SurfaceKind::Cylinder) {
+        REQUIRE(f.surface.height == Approx(13.0));
+        REQUIRE(f.surface.radius == Approx(5.0));  // a cylinder cap push is not a radius change
+      }
+    // Topology untouched, so a sub-object reference survives (ADR-049) and a second push works.
+    REQUIRE(out.faces.size() == cyl.faces.size());
+    REQUIRE(out.edges.size() == cyl.edges.size());
+  }
+  SECTION("pulling the cap inward shortens it") {
+    brep::Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &cyl, &why));
+    REQUIRE(brep::PushPullFace(cyl, FaceFacing(cyl, {0, 0, 1}), -3.0, &out, &why));
+    REQUIRE(Volume(out) == Approx(kPi * 25.0 * 7.0));
+  }
+  SECTION("the BOTTOM cap grows it downward, moving the wall's own origin") {
+    // The wall's frame origin IS its base centre, so pushing the base has to move that as well as
+    // change the height. Getting only one of the two would leave the wall spanning the wrong
+    // interval — and the volume is what tells the two apart.
+    brep::Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &cyl, &why));
+    REQUIRE(brep::PushPullFace(cyl, FaceFacing(cyl, {0, 0, -1}), 3.0, &out, &why));
+    REQUIRE(Volume(out) == Approx(kPi * 25.0 * 13.0));
+    for (const brep::Face& f : out.faces)
+      if (f.surface.kind == brep::SurfaceKind::Cylinder) {
+        REQUIRE(f.surface.height == Approx(13.0));
+        REQUIRE(f.surface.frame.origin.z == Approx(-3.0));  // the base moved down with the cap
+      }
+  }
+  SECTION("a cone's top cap KEEPS THE SLOPE, so the opening narrows") {
+    // The taper choice put to the user (D-2026-09-04-d): pushing a cone's cap extends the SAME
+    // cone rather than bending its wall. Base 5, top 2 over height 10, so the slope is -0.3 per
+    // foot; at height 12 the top radius is 5 - 0.3*12 = 1.4.
+    brep::Solid cone;
+    REQUIRE(brep::MakeCone(World(), 5.0, 2.0, 10.0, &cone, &why));
+    REQUIRE(Volume(cone) == Approx(kPi * 10.0 / 3.0 * (25.0 + 10.0 + 4.0)));
+
+    REQUIRE(brep::PushPullFace(cone, FaceFacing(cone, {0, 0, 1}), 2.0, &out, &why));
+    for (const brep::Face& f : out.faces)
+      if (f.surface.kind == brep::SurfaceKind::Cone) {
+        REQUIRE(f.surface.height == Approx(12.0));
+        REQUIRE(f.surface.radius == Approx(5.0));    // the base is untouched
+        REQUIRE(f.surface.radius2 == Approx(1.4));   // the top followed the slope
+      }
+    // Frustum volume with the NEW top radius: pi*12/3 * (25 + 7 + 1.96) = 426.754. Had the top kept
+    // its old radius of 2 — the other taper choice — it would have been pi*4*(25+10+4) = 490.09.
+    // The two differ by 13%, so this assertion distinguishes the decision that was actually made.
+    REQUIRE(Volume(out) == Approx(kPi * 12.0 / 3.0 * (25.0 + 5.0 * 1.4 + 1.4 * 1.4)));
+  }
+  SECTION("a cone pushed through its own apex is refused, not inverted") {
+    // Slope -0.3 per foot from a base of 5, so the apex is at height 16.67. Pushing the top cap
+    // past that would give a negative radius — a wall turned inside out, which validates as
+    // cheerfully as anything else because Validate does not look at surface parameters.
+    brep::Solid cone;
+    REQUIRE(brep::MakeCone(World(), 5.0, 2.0, 10.0, &cone, &why));
+    REQUIRE_FALSE(brep::PushPullFace(cone, FaceFacing(cone, {0, 0, 1}), 10.0, &out, &why));
+    REQUIRE(why == brep::Problem::PushPullCurvedDegenerate);
+  }
+  SECTION("a cylinder flattened to nothing is refused") {
+    brep::Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &cyl, &why));
+    REQUIRE_FALSE(brep::PushPullFace(cyl, FaceFacing(cyl, {0, 0, 1}), -10.0, &out, &why));
+    REQUIRE(why == brep::Problem::PushPullCurvedDegenerate);
+  }
+  SECTION("the curved WALL itself is still refused — it is a radius change, not a translation") {
+    brep::Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &cyl, &why));
+    int wall = -1;
+    for (size_t i = 0; i < cyl.faces.size(); ++i)
+      if (cyl.faces[i].surface.kind == brep::SurfaceKind::Cylinder)
+        wall = static_cast<int>(i);
+    REQUIRE(wall >= 0);
+    REQUIRE_FALSE(brep::PushPullFace(cyl, wall, 1.0, &out, &why));
+    REQUIRE(why == brep::Problem::PushPullFaceNotPlanar);
+  }
+  SECTION("a SPHERE is still refused: there is no height or taper to follow") {
+    brep::Solid sph;
+    REQUIRE(brep::MakeSphere(World(), 5.0, &sph, &why));
+    for (size_t i = 0; i < sph.faces.size(); ++i) {
+      REQUIRE_FALSE(brep::PushPullFace(sph, static_cast<int>(i), 1.0, &out, &why));
+      REQUIRE((why == brep::Problem::PushPullFaceNotPlanar ||
+               why == brep::Problem::PushPullNeighbourCurved));
+    }
   }
 }
