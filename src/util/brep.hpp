@@ -381,15 +381,31 @@ enum class Problem {
   SweepTwistNeedsStraightPath,
 
   // --- Push/pull (REQ-319 / ADR-046 amendment (i), GitHub issue #148 Phase 5). ---
-  PushPullFaceNotPlanar,    ///< The face to move is a cylinder, cone, sphere, torus or NURBS wall.
+  /// This kind of face cannot be moved. A PLANE translates and a CYLINDER wall changes radius; a
+  /// cone, sphere, torus or NURBS wall has no single parameter a push corresponds to - offsetting a
+  /// cone along its own normal moves both radii by `d / cos(half-angle)`, which is an offset rather
+  /// than the radius change the gesture reads as.
+  PushPullFaceKindUnsupported,
   PushPullDistanceZero,     ///< A zero (or non-finite) distance: nothing to do, and saying otherwise lies.
-  /// A face adjacent to the one being moved is not a plane parallel to the push direction, so it
-  /// would have to be RE-SOLVED rather than translated — its own vertices would leave its own
-  /// surface. Checked before anything is built, because \ref Validate cannot catch it afterwards:
+  /// A face meeting the one being moved is CURVED. A corner of the moved face is re-solved as the
+  /// meeting point of the planes around it, and a curved surface is not a plane to intersect: the
+  /// cylinder wall beside a cap would have to change its stored radius or height, which is a
+  /// different edit (its own increment).
+  ///
+  /// Checked before anything is built, because \ref Validate cannot catch the result afterwards:
   /// Validate tests topology and degeneracy and has no check that a face's vertices lie on that
-  /// face's surface, so the bad result would pass, tessellate from one geometry and integrate its
-  /// volume from another (ADR-046 amendment (i)).
-  PushPullNeighbourNotParallel,
+  /// face's surface, so a solid whose wall no longer matches its boundary would pass, tessellate
+  /// from one geometry and integrate its volume from another (ADR-046 amendment (i)).
+  PushPullNeighbourCurved,
+  /// A corner of the moved face cannot be re-solved: the planes meeting there are parallel or
+  /// otherwise do not cross in a single point, or MORE than three faces meet there and moving one
+  /// of them leaves no point satisfying all of them — the corner would have to split into several,
+  /// which changes the topology and is a different operation.
+  PushPullVertexUnsolvable,
+  /// Moving this cap would collapse or invert the wall beside it: a cylinder pushed to zero height,
+  /// or a cone whose moving end passes through its own apex. Refused before building rather than
+  /// left to \ref Validate, so the reason names the wall rather than the whole solid.
+  PushPullCurvedDegenerate,
   PushPullResultInvalid,    ///< The moved solid did not validate — collapsed, inverted or degenerate.
 };
 
@@ -863,28 +879,39 @@ struct Tessellation {
 /// not merely tidiness: `CadSolidPtr` is `shared_ptr<const Solid>` so undo snapshots are a refcount
 /// bump, which makes immutability the precondition for undo working at all.
 ///
-/// **What moves.** The face's surface origin, every vertex its loops use, and the frame of any arc
-/// edge whose two endpoints are both on the face. A neighbouring face keeps its surface untouched
-/// and simply becomes taller or shorter — which is exactly why a box's side stays a plane while its
-/// top rises, and exactly why the precondition below exists.
+/// **What moves, and how.** The face's own plane translates. Every corner of it is then **re-solved
+/// as the point where the planes of the faces meeting there now cross** — not translated along the
+/// push. That distinction is the whole generality of the operation:
+///
+/// - on a **box**, sliding a corner straight up a vertical wall and intersecting three planes give
+///   the same point, so the two agree;
+/// - on a **pyramid or a wedge**, they do not. Every neighbour is slanted, so a corner slid straight
+///   up leaves the sloping face it is supposed to sit on. Re-solving puts it exactly where the
+///   slope, its other neighbour and the moved face now meet — which is what "push the base of a
+///   pyramid" means, and what translation could only refuse.
+///
+/// A neighbouring face keeps its surface untouched throughout: its own vertices are re-solved *onto*
+/// it, so it stays a plane its boundary actually lies on. That is the property `Validate` does not
+/// check and this operation therefore guarantees itself.
 ///
 /// **Refuses, by name and before building anything:**
-/// - \ref Problem::PushPullFaceNotPlanar — a curved wall. Moving a cylinder's wall is a radius
+/// - \ref Problem::PushPullFaceKindUnsupported — a curved wall. Moving a cylinder's wall is a radius
 ///   change and a different geometry problem: the caps' boundary arcs must be re-solved, not
 ///   translated. Its own increment.
 /// - \ref Problem::PushPullDistanceZero — zero or non-finite. Reporting success for a move that did
 ///   not happen is worse than declining.
-/// - \ref Problem::PushPullNeighbourNotParallel — a neighbour that is not a plane whose normal is
-///   perpendicular to the push. **This is the load-bearing one**, and it was measured rather than
-///   argued. Translating the moved face's vertices leaves such a neighbour's surface where it was
-///   while its vertices walk off it, and \ref Validate cannot be relied on to notice: it checks
-///   topology and degeneracy and has no test that a face's vertices lie on their own surface.
-///   With this check removed, pushing a **cylinder's cap** by 3 builds a solid that Validate passes
-///   as Ok and whose analytic volume comes out 863.938 against a true 1021.02 — 15% wrong, because
-///   the wall still reports `height = 10` while its boundary sits at 13. (A slanted PLANE neighbour
-///   — a wedge — Validate does catch, at every distance tried; there the check buys an accurate
-///   refusal rather than safety, which matters under REQ-201 but is a smaller claim.) See ADR-046
-///   amendment (i).
+/// - \ref Problem::PushPullNeighbourCurved — a curved face meets the moved one. **This is the
+///   load-bearing refusal**, and it was measured rather than argued. A curved surface is not a plane
+///   to intersect, and \ref Validate cannot be relied on to notice the result: it checks topology
+///   and degeneracy and has no test that a face's vertices lie on their own surface. With this check
+///   removed, pushing a **cylinder's cap** by 3 builds a solid that Validate passes as **Ok** and
+///   whose analytic volume comes out **863.938 against a true 1021.02** — 15% wrong, because the
+///   wall still reports `height = 10` while its boundary sits at 13. See ADR-046 amendment (i).
+/// - \ref Problem::PushPullVertexUnsolvable — a corner whose planes do not cross in one point, or
+///   one where more than three faces meet and moving one leaves no point satisfying all of them.
+///   Pushing a **pyramid's side face** is the honest example: its corners include the apex, where
+///   four planes meet, and moving one of them would split that apex into several points. A topology
+///   change, and a different operation.
 /// - \ref Problem::PushPullResultInvalid — the moved solid failed validation: pushed so far it
 ///   collapsed, inverted, or degenerated a face. A real gesture, not a hypothetical.
 ///

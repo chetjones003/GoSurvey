@@ -25732,6 +25732,206 @@ static void CommitSlice(AppCommandState& st, brep::SliceKeep keep, std::vector<s
   st.active = AppCommandState::Kind::None;
 }
 
+// -------------------------------------------------------------------------------------------
+// PRESSPULL (REQ-319 / D-2026-09-04-c) — move the selected FACE along its own normal.
+// -------------------------------------------------------------------------------------------
+
+void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  // Acts on the REQ-318 sub-object selection, which is the whole point of the pairing: Ctrl+click
+  // names the face, this moves it. Nothing else in the program can name a face, so there is no
+  // second way in and no ambiguity about which face is meant.
+  //
+  // Expiry is swept once a frame in the main loop, but this runs from the command line and must not
+  // assume that has happened since the last edit — a PRESSPULL immediately after an undo would
+  // otherwise read a reference to a solid that is gone.
+  ExpireSubObjectSelection(st);
+
+  std::vector<const SelectedSubObject*> faces;
+  for (const SelectedSubObject& s : st.subObjectSelection)
+    if (s.kind == solidpick::Kind::Face)
+      faces.push_back(&s);
+
+  if (faces.empty()) {
+    log.push_back(st.subObjectSelection.empty()
+                      ? "PRESSPULL - select a solid FACE first: hold Ctrl and click one."
+                      : "PRESSPULL - the selection has no face in it. Ctrl+click a face, not an "
+                        "edge or a vertex.");
+    return;
+  }
+  if (faces.size() > 1) {
+    // Refused rather than applied to all of them. Two faces of one solid move its geometry twice
+    // over, and the second push would be computed against the first's result while the user was
+    // picturing the original - a compound edit nobody asked for. One face, one move (REQ-201).
+    log.push_back("PRESSPULL - " + std::to_string(faces.size()) +
+                  " faces are selected; this moves one at a time.");
+    return;
+  }
+
+  const std::string text = StringUtil::trimCopy(args);
+  if (text.empty()) {
+    log.push_back("Usage: PRESSPULL <distance> - positive moves the face outward, negative inward.");
+    return;
+  }
+  char* end = nullptr;
+  const double distance = std::strtod(text.c_str(), &end);
+  if (!end || *end != '\0' || !std::isfinite(distance)) {
+    log.push_back("PRESSPULL - \"" + text + "\" is not a number.");
+    return;
+  }
+
+  CadApplyPushPull(st, *faces.front(), distance, log);
+}
+
+bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double distance,
+                      std::vector<std::string>& log) {
+  const CadSolidPtr sp = ref.owner.lock();
+  if (ref.kind != solidpick::Kind::Face || !sp || ref.solidIndex < 0 ||
+      static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size() ||
+      st.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp) {
+    log.push_back("PRESSPULL - that face is no longer there.");
+    return false;
+  }
+
+  brep::Solid moved;
+  brep::Problem why = brep::Problem::Ok;
+  if (!brep::PushPullFace(*sp, ref.index, distance, &moved, &why)) {
+    // ADR-046 (d) and REQ-201: the kernel's own sentence, and the document is untouched. Nothing
+    // above this line has modified anything, which is what makes that true rather than restored.
+    log.push_back(std::string("PRESSPULL - ") + brep::ProblemText(why));
+    return false;
+  }
+
+  // One undo step for the whole edit (REQ-319 item 7) - the geometry, the dropped recipe and the
+  // re-tessellation that follows from BumpCadGpuCache.
+  PushUndoSnapshot(st, "PressPull");
+  const auto replaced = std::make_shared<const brep::Solid>(std::move(moved));
+  st.cadSolids[static_cast<size_t>(ref.solidIndex)] = replaced;
+
+  // The selection FOLLOWS the edit. Push/pull preserves topology, so the face index still names the
+  // same face - but the reference is keyed on the solid's IDENTITY (ADR-049), and the solid has
+  // just been replaced by a different object. Left alone it would expire on the next sweep and the
+  // user would lose the selection after every push, making a second push impossible without
+  // re-picking. Re-pointing it at the new solid is the whole reason REQ-319 item 5 states that the
+  // topology is preserved.
+  for (SelectedSubObject& s : st.subObjectSelection)
+    if (s.solidIndex == ref.solidIndex)
+      s.owner = replaced;
+
+  BumpCadGpuCache(st);
+  const brep::MassProperties mp = brep::ComputeMassProperties(*replaced);
+  char msg[240];
+  if (mp.valid)
+    std::snprintf(msg, sizeof(msg), "PRESSPULL - face %d of solid %d moved %.4f; volume now %.4f.",
+                  ref.index, ref.solidIndex + 1, distance, mp.volume);
+  else
+    std::snprintf(msg, sizeof(msg), "PRESSPULL - face %d of solid %d moved %.4f.", ref.index,
+                  ref.solidIndex + 1, distance);
+  log.push_back(msg);
+  return true;
+}
+
+bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                          ray3d::Vec3* outAnchor, ray3d::Vec3* outAxis) {
+  if (!outAnchor || !outAxis || ref.kind != solidpick::Kind::Face || ref.index < 0)
+    return false;
+  const CadSolidPtr sp = ref.owner.lock();
+  if (!sp || ref.solidIndex < 0 || static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size() ||
+      st.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp)
+    return false;
+  if (static_cast<size_t>(ref.index) >= sp->faces.size())
+    return false;
+  const brep::Face& f = sp->faces[static_cast<size_t>(ref.index)];
+
+  // A CYLINDER WALL gets a handle too, and it slides RADIALLY (REQ-319 increment 4). The handle sits
+  // on the surface at the middle of the face's own angular span and half way up, and its axis is the
+  // outward normal AT THAT POINT — which is what the drag distance means, since the push moves every
+  // point of the wall along its own normal by the same amount.
+  //
+  // Mid-span rather than anywhere on the face because a wall is curved: a handle at the edge of the
+  // span sits on the seam, where it reads as belonging to the neighbouring half.
+  if (f.surface.kind == brep::SurfaceKind::Cylinder) {
+    const ray3d::Vec3 axis = ray3d::Normalize(f.surface.frame.zAxis);
+    const double u = 0.5 * (f.uStart + f.uEnd);
+    const ray3d::Vec3 x = ray3d::Normalize(f.surface.frame.xAxis);
+    const ray3d::Vec3 y = ray3d::Cross(axis, x);
+    ray3d::Vec3 radial =
+        ray3d::Add(ray3d::Scale(x, std::cos(u)), ray3d::Scale(y, std::sin(u)));
+    const double rl = ray3d::Length(radial);
+    if (!(rl > 1e-12))
+      return false;
+    radial = ray3d::Scale(radial, 1.0 / rl);
+    *outAnchor = ray3d::Add(ray3d::Add(f.surface.frame.origin,
+                                       ray3d::Scale(axis, f.surface.height * 0.5)),
+                            ray3d::Scale(radial, f.surface.radius));
+    // `inward` flips which way is out of the material, exactly as the kernel's own sign does — the
+    // handle has to drag the way the commit will move, or the preview and the result disagree.
+    *outAxis = f.surface.inward ? ray3d::Scale(radial, -1.0) : radial;
+    return true;
+  }
+
+  if (f.surface.kind != brep::SurfaceKind::Plane)
+    return false;  // a cone, sphere or torus wall cannot be pushed, so it gets no handle
+
+  // The centroid of the face's boundary vertices. Averaged over DISTINCT vertices, not over edge
+  // uses: a loop uses each vertex twice, so summing uses would weight a shared corner double and
+  // pull the handle off centre on any face whose loop is not uniform.
+  ray3d::Vec3 sum{0.0, 0.0, 0.0};
+  int n = 0;
+  std::vector<int> seen;
+  for (const brep::Loop& loop : f.loops) {
+    for (const brep::EdgeUse& use : loop.uses) {
+      if (use.edge < 0 || static_cast<size_t>(use.edge) >= sp->edges.size())
+        continue;
+      const brep::Edge& e = sp->edges[static_cast<size_t>(use.edge)];
+      for (int v : {e.v0, e.v1}) {
+        if (v < 0 || static_cast<size_t>(v) >= sp->vertices.size())
+          continue;
+        if (std::find(seen.begin(), seen.end(), v) != seen.end())
+          continue;
+        seen.push_back(v);
+        sum = ray3d::Add(sum, sp->vertices[static_cast<size_t>(v)].p);
+        ++n;
+      }
+    }
+  }
+  if (n == 0)
+    return false;
+  *outAnchor = ray3d::Scale(sum, 1.0 / static_cast<double>(n));
+
+  // The same direction `brep::PushPullFace` will move it, `Surface::inward` included — or a positive
+  // drag would push the face one way and the commit would move it the other.
+  ray3d::Vec3 dir = f.surface.frame.zAxis;
+  if (f.surface.inward)
+    dir = ray3d::Scale(dir, -1.0);
+  const double len = ray3d::Length(dir);
+  if (!(len > 1e-12))
+    return false;
+  *outAxis = ray3d::Scale(dir, 1.0 / len);
+  return true;
+}
+
+bool CadSubObjectGripAxisDistance(const ray3d::Ray& ray, const ray3d::Vec3& anchor,
+                                  const ray3d::Vec3& axis, double* outDistance) {
+  if (!outDistance || !ray.valid())
+    return false;
+  const double axisLen = ray3d::Length(axis);
+  if (!(axisLen > 1e-12))
+    return false;
+  const ray3d::Vec3 u = ray3d::Scale(axis, 1.0 / axisLen);
+  const ray3d::Vec3 d = ray3d::Normalize(ray.dir);
+  // Closest approach of two skew lines. `s` is the parameter along the AXIS, which is the distance
+  // we want because `u` is a unit vector. Unclamped: the axis is a direction the face slides along,
+  // not a segment, and clamping would stop the drag at an arbitrary end.
+  const double dDotU = ray3d::Dot(d, u);
+  const double denom = 1.0 - dDotU * dDotU;  // = sin^2 of the angle between them
+  if (!(std::fabs(denom) > 1e-12))
+    return false;  // the cursor is sighting straight down the axis: no closest point to speak of
+  const ray3d::Vec3 w0 = ray3d::Sub(anchor, ray.origin);
+  *outDistance = (ray3d::Dot(w0, d) * dDotU - ray3d::Dot(w0, u)) / denom;
+  return true;
+}
+
+
 bool HandleSliceTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::Slice)
     return false;
@@ -28764,6 +28964,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // UCS, then exact dimensions — which is what REQ-313's acceptance asks for and no more. The
     // active UCS supplies the orientation, so a cylinder gets an arbitrary 3D axis without a new
     // command or an axis argument (#120), the same rule REQ-312 settled for tilted arcs.
+    // PRESSPULL (REQ-319) — the first command that EDITS a solid rather than creating one. It takes
+    // its target from the REQ-318 sub-object selection, so there is no "select objects" step: the
+    // face was named by a Ctrl+click before the command was typed, which is the pairing the two
+    // requirements were designed around.
+    if (plotTok == "presspull" || plotTok == "pp") {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      CadPressPull(st, restOfLine, log);
+      return;
+    }
     if (CadIsSolidPrimitiveVerb(plotTok)) {
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
