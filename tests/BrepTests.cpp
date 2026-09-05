@@ -5627,3 +5627,107 @@ TEST_CASE("A general trim loop's hole is subtracted from a planar face's area",
   const double expectedDelta = (100.0 - 4.0) - (100.0 - kPi);  // new face area minus the true one
   REQUIRE(mp.surfaceArea - baseline.surfaceArea == Approx(expectedDelta).margin(1e-4));
 }
+
+// ---------------------------------------------------------------------------------------------
+// General trim loop tessellation (GitHub issue #308): the ear-clip-and-map path over
+// `Face::paramLoops`, whose triangulated area must agree with #307's numeric integral for the
+// same face.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("A general trim loop tracing the full u/v rectangle tessellates to the same area as the "
+          "closed-form cylinder",
+          "[brep][req308][adr052]") {
+  Problem why = Problem::Ok;
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), 3.0, 5.0, &cyl, &why));
+  brep::Tessellation before;
+  REQUIRE(brep::Tessellate(cyl, 0.05, &before, &why));
+
+  int fi = -1;
+  for (std::size_t i = 0; i < cyl.faces.size(); ++i)
+    if (cyl.faces[i].surface.kind == brep::SurfaceKind::Cylinder) {
+      fi = static_cast<int>(i);
+      break;
+    }
+  REQUIRE(fi >= 0);
+  brep::Face& f = cyl.faces[static_cast<std::size_t>(fi)];
+  const double u0 = f.uStart;
+  const double u1 = f.uEnd;
+  const double h = f.surface.height;
+  f.paramLoops = {{{u0, 0.0}, {u1, 0.0}, {u1, h}, {u0, h}}};
+  REQUIRE(brep::Validate(cyl) == Problem::Ok);
+
+  brep::Tessellation after;
+  REQUIRE(brep::Tessellate(cyl, 0.05, &after, &why));
+  REQUIRE(TessellatedArea(after) == Approx(TessellatedArea(before)).epsilon(0.01));
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(cyl);
+  REQUIRE(mp.valid);
+  REQUIRE(TessellatedArea(after) == Approx(mp.surfaceArea).epsilon(0.02));
+}
+
+TEST_CASE("A non-rectangular general trim loop on a planar face tessellates to the correct "
+          "triangle area with no gaps",
+          "[brep][req308][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10.0, 6.0, 4.0, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  brep::Face& f = box.faces[static_cast<std::size_t>(fi)];
+  f.paramLoops = {{{0.0, 0.0}, {3.0, 0.0}, {0.0, 4.0}}};
+  REQUIRE(brep::Validate(box) == Problem::Ok);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(box, 0.05, &t, &why));
+
+  // Only the modified face's tessellation should reflect the triangle; find its triangles by face
+  // index and sum their area directly.
+  double faceArea = 0.0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    if (t.triFace[i / 3] != fi)
+      continue;
+    const Vec3 a{t.vertsXyz[3 * t.indices[i]], t.vertsXyz[3 * t.indices[i] + 1], t.vertsXyz[3 * t.indices[i] + 2]};
+    const Vec3 b{t.vertsXyz[3 * t.indices[i + 1]], t.vertsXyz[3 * t.indices[i + 1] + 1],
+                 t.vertsXyz[3 * t.indices[i + 1] + 2]};
+    const Vec3 c{t.vertsXyz[3 * t.indices[i + 2]], t.vertsXyz[3 * t.indices[i + 2] + 1],
+                 t.vertsXyz[3 * t.indices[i + 2] + 2]};
+    faceArea += 0.5 * ray3d::Length(ray3d::Cross(ray3d::Sub(b, a), ray3d::Sub(c, a)));
+  }
+  REQUIRE(faceArea == Approx(0.5 * 3.0 * 4.0).margin(1e-9));
+}
+
+TEST_CASE("A general trim loop's hole is excluded from a planar face's tessellation", "[brep][req308][adr052]") {
+  Problem why = Problem::Ok;
+  Solid block;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -1), 1.0, 12.0, &cyl, &why));
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  const int fi = FindTwoLoopPlaneFace(r[0]);
+  REQUIRE(fi >= 0);
+
+  brep::Face& f = r[0].faces[static_cast<std::size_t>(fi)];
+  REQUIRE(f.loops.size() == 2);
+  f.paramLoops = {{{-5.0, -5.0}, {5.0, -5.0}, {5.0, 5.0}, {-5.0, 5.0}},
+                  {{-1.0, -1.0}, {-1.0, 1.0}, {1.0, 1.0}, {1.0, -1.0}}};
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+
+  double faceArea = 0.0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    if (t.triFace[i / 3] != fi)
+      continue;
+    const Vec3 a{t.vertsXyz[3 * t.indices[i]], t.vertsXyz[3 * t.indices[i] + 1], t.vertsXyz[3 * t.indices[i] + 2]};
+    const Vec3 b{t.vertsXyz[3 * t.indices[i + 1]], t.vertsXyz[3 * t.indices[i + 1] + 1],
+                 t.vertsXyz[3 * t.indices[i + 1] + 2]};
+    const Vec3 c{t.vertsXyz[3 * t.indices[i + 2]], t.vertsXyz[3 * t.indices[i + 2] + 1],
+                 t.vertsXyz[3 * t.indices[i + 2] + 2]};
+    faceArea += 0.5 * ray3d::Length(ray3d::Cross(ray3d::Sub(b, a), ray3d::Sub(c, a)));
+  }
+  REQUIRE(faceArea == Approx(100.0 - 4.0).margin(1e-6));
+}
