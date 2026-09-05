@@ -2408,6 +2408,52 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   breakage happens to trip a topological check, and some does not, and only measurement tells them
   apart.
 
+  **Amendment (i), revised the same day — corners are RE-SOLVED, not translated.** The first
+  implementation moved each corner of the pushed face ALONG the push. That is correct only where
+  every neighbouring face contains the push direction, and measured against the shipped primitives
+  it managed **box 6/6, wedge 2/5, pyramid 0/6** — a pyramid is entirely flat-faced and could not be
+  pushed at all, which is what showed the algorithm was a special case wearing the name of a general
+  one. Each corner is now recomputed as the point where the planes of the faces meeting there cross,
+  which gives **box 6/6, wedge 5/5, pyramid 6/6** and identical answers on the box.
+
+  Two user-visible consequences follow from the neighbours keeping their planes, and both are the
+  correct behaviour rather than side effects: extending a wedge's end face makes the wedge TALLER
+  (the ramp keeps its slope), and raising a pyramid frustum's top makes that top NARROWER (the walls
+  keep theirs). A translation would have produced a wedge whose corners no longer touch its own
+  slope, and a frustum whose walls bend.
+
+  The refusal set changed with it. `PushPullNeighbourNotParallel` is gone — parallelism is no longer
+  required — replaced by `PushPullNeighbourCurved` (a curved surface is not a plane to intersect)
+  and `PushPullVertexUnsolvable` (the planes at a corner do not meet in one point, or more than
+  three faces meet there and moving one would split it). A true pyramid's apex is the second case:
+  four planes, and pushing a side face would break it into several points — a topology change, and a
+  different operation. Its base still pushes.
+
+  **Amendment (i), extended — a curved neighbour is RE-PARAMETERISED, not refused** (2026-09-04,
+  D-2026-09-04-d). The user reported push/pull not working on cylinders or cones. A cap is a plane,
+  so it always passed the face test; what refused it was the wall beside it. A curved surface cannot
+  be intersected the way a plane can, but it CAN be re-parameterised, and that is a third kind of
+  move this ADR did not have:
+
+  - **translate** a plane (the face being pushed);
+  - **re-solve** a corner as the meeting point of the planes around it (amendment (i) proper);
+  - **re-parameterise** a curved wall: a cylinder's stored height, a cone's end radius.
+
+  The taper choice was put to the user and is the substance of the decision: **a cone keeps its
+  slope and lets the radius change**, so pushing its cap extends the same cone rather than bending
+  its wall. The alternative - keep the radius, change the slope - produces a volume 13% different on
+  the worked example, so it is a real fork rather than a rounding preference.
+
+  This is also the case that measures worst when got wrong rather than refused, and it is the one
+  the earlier amendment cited: leave the wall's height alone while its boundary moves and the push
+  still builds and still passes `Validate`, reporting **863.938 against a true 1021.02**. The
+  guarantee is now positive rather than defensive - the wall is made to match its boundary instead
+  of the move being declined because it might not.
+
+  Still refused, each by name: a curved wall pushed along its own normal (a radius change, not a
+  translation), a sphere or torus (no height or taper to follow), an axis oblique to the push, and a
+  cap whose corners also touch an unrelated plane (two constraints, a different solve).
+
   Adding such a check to `Validate` was considered and rejected: for a Boolean result it is a
   tolerance question rather than a boolean one, and making every existing operation pay for it —
   and possibly newly fail on it — to guard one new operation is the wrong place to put the cost.
