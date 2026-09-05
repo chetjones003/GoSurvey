@@ -39,6 +39,57 @@ TEST_CASE("DXF model-space drawing imports as a named block definition", "[issue
   CHECK(st.cadBlockRefs.empty());
 }
 
+TEST_CASE("WBLOCK writes a definition to .dwg and BLOCKIMPORT reads it back", "[issue284][wblock][blockimport]") {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "gosurvey-wblock";
+  fs::create_directories(dir);
+  const fs::path dwg = dir / "HYDRANT.dwg";
+  std::error_code rmEc;
+  fs::remove(dwg, rmEc);
+
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "HYDRANT";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.resize(1);
+  def.content.lineVis.resize(1);
+  CadBlockAttrDef ad;
+  ad.tag = "ID";
+  ad.prompt = "Point ID";
+  ad.defaultValue = "A";
+  def.attrDefs.push_back(ad);
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream wblockArgs(std::string("HYDRANT, ") + dwg.u8string());
+  REQUIRE(CadBlocksTryIdleCommand(st, "wblock", wblockArgs, log));
+  REQUIRE(fs::exists(dwg));
+
+  AppCommandState dest;
+  std::vector<std::string> importLog;
+  REQUIRE(ImportCadBlocksFromPath(dest, dwg.u8string().c_str(), importLog));
+  const int di = CadBlockFindDef(dest.blockDefs, "HYDRANT");
+  REQUIRE(di >= 0);
+  const CadBlockDefinition& d = dest.blockDefs[static_cast<size_t>(di)];
+  CHECK(d.content.lines.size() == 6);
+  REQUIRE(d.attrDefs.size() == 1);
+  CHECK(d.attrDefs[0].tag == "ID");
+}
+
+TEST_CASE("WBLOCK refuses a missing block name", "[issue284][wblock]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  std::istringstream args("MISSING, C:/does/not/matter.dwg");
+  REQUIRE(CadBlocksTryIdleCommand(st, "wblock", args, log));
+  bool refused = false;
+  for (const std::string& line : log) {
+    if (line.find("no block named") != std::string::npos)
+      refused = true;
+  }
+  CHECK(refused);
+}
+
 TEST_CASE("bare BLOCKIMPORT opens the file picker", "[issue124][blockimport]") {
   namespace fs = std::filesystem;
   const fs::path dir = fs::temp_directory_path() / "gosurvey-blockimport";

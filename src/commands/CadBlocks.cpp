@@ -377,7 +377,7 @@ void LoadBundledBlockLibraryImpl(AppCommandState& dest, std::vector<std::string>
     if (!e.is_regular_file(ec))
       continue;
     const std::string ext = LowerExt(e.path().u8string().c_str());
-    if (ext == ".dxf")
+    if (ext == ".dxf" || ext == ".dwg")
       files.push_back(e.path());
   }
   std::sort(files.begin(), files.end());
@@ -1032,7 +1032,7 @@ void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view nameRaw, st
             continue;
           const std::string ext = e.path().extension().u8string();
           const std::string extLo = StringUtil::toLowerAsciiCopy(ext);
-          if (extLo != ".dxf")
+          if (extLo != ".dxf" && extLo != ".dwg")
             continue;
           if (!CadBlockEqCi(e.path().stem().u8string(), name))
             continue;
@@ -1804,9 +1804,27 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
   }
 
   if (tok == "wblock") {
-    // .gs block-library export was removed by issue #264 (D-2026-09-03-h); WBLOCK had no other
-    // target format, so it is disabled pending issue #284 (a .dwg-based container).
-    log.push_back("WBLOCK — unavailable: .gs block-library export was retired; see issue #284 for .dwg-based block export.");
+    // issue #284: WBLOCK writes a single block definition out to its own .dwg, using the same
+    // ADR-044 JSON trailer mechanism as whole-drawing save. The trailer's blockDefs array holds
+    // just this one definition; BLOCKIMPORT reading it back finds scratch.blockDefs already
+    // populated (see ImportCadBlocksFromPathImpl) and merges it directly — no drawing-capture needed.
+    const std::vector<std::string> f = SplitCommaRest(args);
+    if (f.size() < 2) {
+      log.push_back("WBLOCK — usage: WBLOCK <name>, <path.dwg>.");
+      return true;
+    }
+    const int di = CadBlockFindDef(st.blockDefs, f[0]);
+    if (di < 0) {
+      log.push_back("WBLOCK — no block named \"" + f[0] + "\".");
+      return true;
+    }
+    AppCommandState tmp;
+    tmp.blockDefs.push_back(st.blockDefs[static_cast<size_t>(di)]);
+    if (!ExportDwgFile(tmp, f[1].c_str(), log)) {
+      log.push_back("WBLOCK — could not write " + f[1] + ".");
+      return true;
+    }
+    log.push_back("WBLOCK — wrote \"" + f[0] + "\" to " + f[1] + ".");
     return true;
   }
 

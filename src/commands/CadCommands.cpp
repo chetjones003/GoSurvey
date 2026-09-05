@@ -6508,7 +6508,7 @@ const CmdEntry kRegistry[] = {
     {"blocklist", "", "List block definitions"},
     {"blockstats", "", "Definition statistics"},
     {"purge", "-purge", "Purge unused block definitions"},
-    {"wblock", "", "Write a block definition to a file (unavailable — see issue #264 follow-up)"},
+    {"wblock", "", "Write a block definition to its own .dwg file"},
     {"blockimport", "", "Import block definitions (.dxf/.dwg); omit the path to browse"},
     {"blocklib", "blockbrowser", "List the drawing block library with previews"},
     {"blocksearch", "", "Search block names"},
