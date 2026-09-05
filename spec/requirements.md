@@ -6642,14 +6642,29 @@ capability that does not exist. They are recorded here rather than quietly dropp
   an exact answer possible), ADR-046 (d) (compute, validate, then replace).
 - Statement: a **planar** face of a solid can be moved along its own normal by a signed distance,
   producing a new solid, when the geometry permits it. The behaviour this requires:
-  1. **The face's own plane and its boundary move together.** The face's surface origin and every
-     vertex its loops use translate by `distance × outward normal`. A neighbouring face keeps its
-     surface and simply becomes taller or shorter, which is what makes a box's side stay a plane
-     while its top rises.
-  2. **It is refused unless every neighbour is a plane parallel to the push.** A neighbouring face
-     whose surface is not a plane, or is a plane whose normal is not perpendicular to the push
-     direction, would have to be **re-solved** rather than translated: its own vertices would leave
-     its own surface. The operation refuses by name instead of producing that.
+  1. **The face's plane moves, and every corner of it is RE-SOLVED.** The face's surface origin
+     translates by `distance x outward normal`. Each vertex its loops use is then recomputed as the
+     point where the planes of the faces meeting there now cross - **not** translated along the push.
+
+     That distinction is the whole generality of the operation, and it was learned by measurement.
+     Translating corners is correct only where every neighbour contains the push direction: true of
+     a box, false of everything else. Measured against the shipped primitives, translation managed
+     **box 6/6, wedge 2/5, pyramid 0/6** - a pyramid is entirely flat-faced and could not be pushed
+     at all. Re-solving gives **box 6/6, wedge 5/5, pyramid 6/6**, with identical answers on the box.
+
+     A neighbour keeps its surface untouched throughout, and its own vertices are re-solved *onto*
+     it, so it stays a plane its boundary actually lies on. Two consequences worth stating because
+     they are what a user sees: extending a wedge's end face makes the wedge **taller**, because the
+     ramp keeps its slope; and raising a pyramid frustum's top makes that top **narrower**, because
+     the walls keep theirs.
+  2. **It is refused when a CURVED face meets the moved one.** A corner is re-solved by intersecting
+     the surfaces around it, and a curved surface is not a plane to intersect: a cylinder wall beside
+     a cap would have to change its stored radius or height, which is a different edit.
+  3. **It is refused when a corner cannot be re-solved** - the planes there do not cross in a single
+     point, or more than three faces meet and moving one leaves no point satisfying all of them. A
+     true pyramid's apex is the honest example: four planes meet there, and pushing one of its side
+     faces would split that apex into several points. A topology change, and a different operation.
+     Its BASE still pushes, because those corners are three planes each.
 
      **This precondition cannot be delegated to `brep::Validate`, and the case that proves it was
      measured.** Validate checks topology and degeneracy — closed shells, edges used twice with
@@ -6668,21 +6683,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
      0.001 ft push on a wedge, and REQ-201 asks for a reason the user can *read*. Both halves are
      stated because the difference between them is exactly the kind of thing a later reader would
      otherwise have to re-derive.
-  3. **A zero or non-finite distance is refused**, not treated as a no-op that reports success: a
+  4. **A zero or non-finite distance is refused**, not treated as a no-op that reports success: a
      command that says it moved something it did not is worse than one that declines.
-  4. **The result is validated before anything is stored** (ADR-046 (d)). A push that collapses the
+  5. **The result is validated before anything is stored** (ADR-046 (d)). A push that collapses the
      solid, inverts it, or degenerates a face is refused by name and the document is untouched. A
      push far enough to turn a solid inside out is a real user gesture, not a hypothetical.
-  5. **The topology is preserved, so a sub-object reference survives the edit.** The operation moves
+  6. **The topology is preserved, so a sub-object reference survives the edit.** The operation moves
      geometry and changes no counts, which is exactly the case ADR-049 measured when it chose an
      index paired with the solid's identity. A push therefore leaves the pushed face still selected,
      and a second push continues from the first.
-  6. **The recipe is dropped, never quietly updated.** A pushed box is no longer the box its recipe
+  7. **The recipe is dropped, never quietly updated.** A pushed box is no longer the box its recipe
      describes. ADR-045 already made the recipe optional and never consulted by validity, mass
      properties or tessellation; a recipe that no longer describes its solid is worse than none,
      because it reads as authoritative. `.gs` already stores topology rather than the recipe, so a
      pushed solid round-trips with no format change.
-  7. **One undoable step.** The whole edit — including dropping the recipe and re-tessellating — is
+  8. **One undoable step.** The whole edit — including dropping the recipe and re-tessellating — is
      a single undo, and Ctrl+Z restores the prior solid exactly.
 - Acceptance:
   - pushing a box's top face by `+d` gives a solid whose volume is the original plus `base area × d`,
@@ -6696,9 +6711,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a push that would collapse the solid to zero height or through itself is refused by name, and
     the input solid is returned untouched;
   - a zero distance, a non-finite distance, and an out-of-range face index are each refused by name;
-  - a non-planar face — a cylinder's wall — is refused by name rather than approximated;
-  - a face with a non-parallel planar neighbour is refused by name. A wedge's slanted face is the
-    hand-checkable case: pushing the wedge's top would slide the slope's vertices off the slope;
+  - a non-planar face - a cylinder's wall - is refused by name rather than approximated;
+  - a face beside a CURVED one is refused by name; a cylinder's flat cap is the hand-checkable case;
+  - a WEDGE's end face pushes, and the wedge gets TALLER as it extends, because the ramp keeps its
+    slope - the case an algorithm that translated corners could only refuse;
+  - a pyramid FRUSTUM pushes on every one of its six faces, and raising its top makes that top
+    narrower rather than keeping its size;
+  - a TRUE pyramid's side face is refused by name, because its apex would have to split into
+    several points - while its base still pushes;
   - a solid that has been pushed reports no recipe, and reloads from `.gs` with the pushed geometry;
   - the sub-object selection still names the pushed face after the edit, and a second push moves it
     again from its new position;

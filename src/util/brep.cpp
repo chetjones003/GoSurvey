@@ -1391,9 +1391,12 @@ const char* ProblemText(Problem p) {
            "changing its radius, which is a different edit.";
   case Problem::PushPullDistanceZero:
     return "Push/pull needs a distance that is not zero.";
-  case Problem::PushPullNeighbourNotParallel:
-    return "This face cannot be pushed: a face beside it is not flat and parallel to the push, so "
-           "it would have to be rebuilt rather than stretched.";
+  case Problem::PushPullNeighbourCurved:
+    return "This face cannot be pushed: a curved face meets it, and a curved wall has to be rebuilt "
+           "rather than stretched.";
+  case Problem::PushPullVertexUnsolvable:
+    return "This face cannot be pushed: one of its corners would have to split, because more than "
+           "three faces meet there.";
   case Problem::PushPullResultInvalid:
     return "That push would turn the solid inside out or flatten it, so it was not applied.";
   }
@@ -1480,6 +1483,30 @@ void CollectFaceVertices(const Solid& s, const Face& f, std::vector<int>* out) {
   }
 }
 
+/// One plane as `n · p = d`, with `n` unit length.
+struct PushFacePlane {
+  Vec3 n;
+  double d = 0.0;
+};
+
+/// Where three planes cross, or false when they do not cross in a single point (two parallel, or
+/// all three sharing a line). `det` is the scalar triple product of the normals; it vanishes in
+/// exactly those cases, which is why the test is on it rather than on the angles between them.
+bool ThreePlanePoint(const PushFacePlane& a, const PushFacePlane& b, const PushFacePlane& c, Vec3* out) {
+  const Vec3 bc = ray3d::Cross(b.n, c.n);
+  const double det = ray3d::Dot(a.n, bc);
+  // Scale-relative: the normals are unit, so `det` is already dimensionless and a fixed floor is
+  // meaningful here in a way it would not be for a length.
+  if (!(std::fabs(det) > 1e-9))
+    return false;
+  const Vec3 ca = ray3d::Cross(c.n, a.n);
+  const Vec3 ab = ray3d::Cross(a.n, b.n);
+  *out = ray3d::Scale(ray3d::Add(ray3d::Add(ray3d::Scale(bc, a.d), ray3d::Scale(ca, b.d)),
+                                 ray3d::Scale(ab, c.d)),
+                      1.0 / det);
+  return true;
+}
+
 }  // namespace
 
 bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out, Problem* outWhy) {
@@ -1519,56 +1546,106 @@ bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out, Pr
     return fail(Problem::FaceHasNoLoop);
   const auto isMoved = [&](int v) { return std::find(moved.begin(), moved.end(), v) != moved.end(); };
 
-  // THE PRECONDITION (ADR-046 amendment (i)). Every face that shares a moving vertex keeps its own
-  // surface while its boundary moves, so its surface must be one the move leaves correct: a PLANE
-  // whose normal is perpendicular to the push. A slanted plane, or any curved wall, would have to
-  // be re-solved instead — and if it is not, its vertices simply leave its surface and `Validate`
-  // says nothing, because `Validate` tests topology and degeneracy and never asks whether a face's
-  // vertices lie on that face. Checked here, before anything is built, so a refusal costs nothing
-  // and leaves the input untouched.
+  // Every face that touches a moving corner must be a PLANE, because re-solving that corner means
+  // intersecting the surfaces meeting there and a curved surface is not a plane to intersect. This
+  // is the check ADR-046 amendment (i) is about — see the header for the measured cost of removing
+  // it (a cylinder cap pushed 3 ft validates cleanly and reports a volume 15% wrong).
+  //
+  // Note what is NOT required any more: the neighbour does not have to be PARALLEL to the push. The
+  // first version of this operation translated corners along the push, which only works when every
+  // neighbour contains that direction — true of a box, false of a pyramid, whose faces are all
+  // planes and none of which could be pushed at all. Re-solving lifted that restriction.
+  std::vector<PushFacePlane> planesAt;  // reused per vertex
   for (size_t fi = 0; fi < s.faces.size(); ++fi) {
-    if (static_cast<int>(fi) == faceIndex)
-      continue;
     const Face& nb = s.faces[fi];
+    if (nb.surface.kind == SurfaceKind::Plane)
+      continue;
     std::vector<int> nbVerts;
     CollectFaceVertices(s, nb, &nbVerts);
-    const bool touches = std::any_of(nbVerts.begin(), nbVerts.end(), isMoved);
-    if (!touches)
-      continue;  // not adjacent to the move: nothing about it changes
-    if (nb.surface.kind != SurfaceKind::Plane)
-      return fail(Problem::PushPullNeighbourNotParallel);
-    // Perpendicular normals mean the neighbour's plane CONTAINS the push direction, so sliding its
-    // boundary along that direction keeps every vertex on it exactly.
-    if (std::fabs(ray3d::Dot(ray3d::Normalize(nb.surface.frame.zAxis), dir)) > 1.e-9)
-      return fail(Problem::PushPullNeighbourNotParallel);
-    // A neighbour ALL of whose vertices move is not a wall being stretched — it is a second face
-    // travelling with the first, which means the solid has no thickness in this direction and the
-    // push would fold it. Validate would catch the collapse, but by name this says why.
-    if (std::all_of(nbVerts.begin(), nbVerts.end(), isMoved))
-      return fail(Problem::PushPullNeighbourNotParallel);
+    if (std::any_of(nbVerts.begin(), nbVerts.end(), isMoved))
+      return fail(Problem::PushPullNeighbourCurved);
   }
 
-  const Vec3 delta = ray3d::Scale(dir, distance);
+  // The moved face's plane, translated. Every corner is then solved against THIS rather than the
+  // original, which is what actually moves the face.
+  const Vec3 movedOrigin = ray3d::Add(face.surface.frame.origin, ray3d::Scale(dir, distance));
+  const PushFacePlane movedPlane{dir, ray3d::Dot(dir, movedOrigin)};
+
   Solid r = s;
-  for (int v : moved)
-    r.vertices[static_cast<size_t>(v)].p = ray3d::Add(r.vertices[static_cast<size_t>(v)].p, delta);
-  // The face's own plane travels with its boundary. Without this the vertices would move and the
-  // surface would stay, which is the very inconsistency the precondition above exists to prevent —
-  // on the moved face itself rather than on a neighbour.
-  r.faces[static_cast<size_t>(faceIndex)].surface.frame.origin =
-      ray3d::Add(r.faces[static_cast<size_t>(faceIndex)].surface.frame.origin, delta);
-  // An ARC edge carries a centre. One lying wholly on the moved face travels whole; one with a
-  // single endpoint on it is a side edge, and a side edge of a push/pull is straight by the
-  // precondition above (a curved one would need a curved neighbour, already refused).
-  for (Edge& e : r.edges) {
-    if (e.kind == CurveKind::Line)
-      continue;
-    if (isMoved(e.v0) && isMoved(e.v1)) {
-      e.frame.origin = ray3d::Add(e.frame.origin, delta);
-      for (Surface& sf : e.isectSurfaces)
-        sf.frame.origin = ray3d::Add(sf.frame.origin, delta);
+  for (int v : moved) {
+    // Collect the plane of every face using this vertex. The moved face contributes its NEW plane;
+    // the others contribute the planes they already have, which is what keeps their own boundaries
+    // on their own surfaces.
+    planesAt.clear();
+    planesAt.push_back(movedPlane);
+    for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+      if (static_cast<int>(fi) == faceIndex)
+        continue;
+      std::vector<int> fv;
+      CollectFaceVertices(s, s.faces[fi], &fv);
+      if (std::find(fv.begin(), fv.end(), v) == fv.end())
+        continue;
+      const Surface& sf = s.faces[fi].surface;
+      Vec3 n = sf.frame.zAxis;
+      const double nl = ray3d::Length(n);
+      if (!(nl > 1e-12))
+        return fail(Problem::DegenerateFrame);
+      n = ray3d::Scale(n, 1.0 / nl);
+      planesAt.push_back(PushFacePlane{n, ray3d::Dot(n, sf.frame.origin)});
     }
+    if (planesAt.size() < 3)
+      return fail(Problem::PushPullVertexUnsolvable);  // a corner needs three planes to be a point
+
+    // Solve with the best-conditioned triple: the three whose normals span space most squarely.
+    // Taking simply the first three would pick a near-degenerate triple on any vertex where two
+    // faces happen to be nearly coplanar, and produce a corner far from where it belongs.
+    Vec3 solved{};
+    double bestDet = 0.0;
+    bool found = false;
+    for (size_t a = 0; a < planesAt.size(); ++a)
+      for (size_t b = a + 1; b < planesAt.size(); ++b)
+        for (size_t c = b + 1; c < planesAt.size(); ++c) {
+          const double det = std::fabs(
+              ray3d::Dot(planesAt[a].n, ray3d::Cross(planesAt[b].n, planesAt[c].n)));
+          if (det <= bestDet)
+            continue;
+          Vec3 p;
+          if (!ThreePlanePoint(planesAt[a], planesAt[b], planesAt[c], &p))
+            continue;
+          bestDet = det;
+          solved = p;
+          found = true;
+        }
+    if (!found)
+      return fail(Problem::PushPullVertexUnsolvable);
+
+    // Every OTHER plane at this corner must also pass through the answer. When more than three
+    // faces meet — a pyramid's apex, four planes — moving one of them generally leaves no single
+    // point satisfying all of them, and the corner would have to split into several. That is a
+    // topology change and a different operation, so it is refused rather than approximated.
+    //
+    // Scale-relative, because a residual of a millimetre means something different on a 1 ft solid
+    // than on one at state-plane magnitude.
+    const double tol = 1e-9 * (1.0 + ray3d::Length(solved));
+    for (const PushFacePlane& pe : planesAt)
+      if (std::fabs(ray3d::Dot(pe.n, solved) - pe.d) > tol)
+        return fail(Problem::PushPullVertexUnsolvable);
+
+    r.vertices[static_cast<size_t>(v)].p = solved;
   }
+
+  // The face's own plane travels with its boundary. Without this the corners would move and the
+  // surface would stay — the very inconsistency the precondition above prevents on a neighbour,
+  // committed on the moved face itself.
+  r.faces[static_cast<size_t>(faceIndex)].surface.frame.origin = movedOrigin;
+
+  // An ARC edge carries a centre of its own. One can only exist where a curved face does, and a
+  // curved face touching the move was refused above — so an arc edge with both ends on the moved
+  // face cannot occur here. Refused rather than assumed: an edge that curves and is silently left
+  // behind is exactly the class of error this operation exists to avoid.
+  for (const Edge& e : r.edges)
+    if (e.kind != CurveKind::Line && isMoved(e.v0) && isMoved(e.v1))
+      return fail(Problem::PushPullNeighbourCurved);
 
   // The recipe is DROPPED, not updated (REQ-319 item 6). A pushed box is not the box its recipe
   // describes, and a recipe that no longer describes its solid reads as authoritative while being
