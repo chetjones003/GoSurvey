@@ -11074,6 +11074,129 @@ void EarClip(const std::vector<ucs::Point2D>& ring, std::vector<std::array<int, 
     tris->push_back({idx[0], idx[i], idx[i + 1]});
 }
 
+/// World-space position of \p sf at parameter `(u, v)`, via the same `LocalSurfaceDerivs` the
+/// general-loop mass-property integral (issue #307) uses — so the tessellator's notion of the
+/// surface matches the numeric integral's exactly, which is what lets #308's area test compare
+/// the two.
+[[nodiscard]] Vec3 GeneralLoopWorldPoint(const Surface& sf, double u, double v) {
+  Vec3 p, su, sv;
+  LocalSurfaceDerivs(sf, u, v, &p, &su, &sv);
+  return ucs::UcsToWorld(sf.frame, p);
+}
+
+/// Recursive chord-deviation half of \ref GeneralLoopChordSegments: `depth` bounds it to `2^10`
+/// segments per call even on a pathological span (e.g. a paramLoop edge that runs a full 2*pi).
+int GeneralLoopChordDepth(const Surface& sf, curveisect::Vec2 pa, curveisect::Vec2 pb, double tol,
+                          int depth) {
+  if (depth >= 10)
+    return 1;
+  const curveisect::Vec2 pm{0.5 * (pa.x + pb.x), 0.5 * (pa.y + pb.y)};
+  const Vec3 a = GeneralLoopWorldPoint(sf, pa.x, pa.y);
+  const Vec3 b = GeneralLoopWorldPoint(sf, pb.x, pb.y);
+  const Vec3 m = GeneralLoopWorldPoint(sf, pm.x, pm.y);
+  const Vec3 mid = ray3d::Scale(ray3d::Add(a, b), 0.5);
+  if (ray3d::Length(ray3d::Sub(m, mid)) <= tol)
+    return 1;
+  return GeneralLoopChordDepth(sf, pa, pm, tol, depth + 1) + GeneralLoopChordDepth(sf, pm, pb, tol, depth + 1);
+}
+
+/// How many straight segments the parameter-space chord `pa`-`pb`, evaluated through \p sf, needs
+/// so no sub-chord deviates from the true surface by more than \p tol — the general-loop analogue
+/// of `SegmentsForArc`'s role in the rectangle grid path, but adaptive rather than closed-form so
+/// it works for every `SurfaceKind` including `Nurbs`.
+[[nodiscard]] int GeneralLoopChordSegments(const Surface& sf, curveisect::Vec2 pa, curveisect::Vec2 pb,
+                                           double tol) {
+  return GeneralLoopChordDepth(sf, pa, pb, tol, 0);
+}
+
+/// Tessellates a face carrying a general trim loop (`Face::paramLoops`, ADR-052, issue #306), for
+/// any `SurfaceKind` — the triangulation counterpart to issue #307's numeric integral. It reuses
+/// that integral's exact decomposition: break `v` at every loop vertex (so the number of
+/// even-odd "inside" intervals from \ref GeneralLoopScanline is constant within a band), which
+/// turns each interval, per band, into a trapezoid whose four corners are real loop points and
+/// whose sides are the loop's own straight edges — an exact fit to the trim boundary, holes
+/// excluded automatically by the even-odd rule. Each trapezoid is then filled with a
+/// chord-tolerance grid exactly like the rectangle path's, so a curved surface still tessellates
+/// finely inside the loop, not just accurately along its edge.
+void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder* mb) {
+  const Surface& sf = f.surface;
+  if (f.paramLoops.empty())
+    return;
+
+  std::vector<double> vBreaks;
+  for (const std::vector<curveisect::Vec2>& poly : f.paramLoops)
+    for (const curveisect::Vec2& p : poly)
+      vBreaks.push_back(p.y);
+  if (vBreaks.size() < 2)
+    return;
+  std::sort(vBreaks.begin(), vBreaks.end());
+  vBreaks.erase(std::unique(vBreaks.begin(), vBreaks.end(),
+                            [](double a, double b) { return std::fabs(a - b) < 1e-12 * (1.0 + std::fabs(a)); }),
+                vBreaks.end());
+  if (vBreaks.size() < 2)
+    return;
+
+  const double normalSign = sf.inward ? -1.0 : 1.0;
+  auto pushVertex = [&](double u, double v) {
+    Vec3 p, su, sv;
+    LocalSurfaceDerivs(sf, u, v, &p, &su, &sv);
+    const Vec3 n = ray3d::Scale(ray3d::Normalize(ray3d::Cross(su, sv)), normalSign);
+    return mb->Push(ucs::UcsToWorld(sf.frame, p), ucs::UcsVectorToWorld(sf.frame, n));
+  };
+
+  for (std::size_t bi = 0; bi + 1 < vBreaks.size(); ++bi) {
+    const double v0 = vBreaks[bi];
+    const double v1 = vBreaks[bi + 1];
+    // `GeneralLoopScanline`'s half-open `a.y <= v` convention correctly avoids double-counting an
+    // edge shared by two bands, but it means a scan taken exactly AT a band's own v0/v1 (rather
+    // than strictly between them) can miss a crossing that lies exactly on the scanline — most
+    // visibly the outermost band's own outer edge. Sampling a hair inside the band sidesteps that
+    // without changing which edges bound this band (guaranteed constant within it by `vBreaks`).
+    const double eps = 1e-9 * std::max(1.0, v1 - v0);
+    const std::vector<double> xs0 = GeneralLoopScanline(f.paramLoops, v0 + eps);
+    const std::vector<double> xs1 = GeneralLoopScanline(f.paramLoops, v1 - eps);
+    if (xs0.size() != xs1.size() || xs0.size() < 2)
+      continue;  // a numerically-degenerate band (a break landing exactly on a vertex pair) — skip
+    for (std::size_t k = 0; k + 1 < xs0.size(); k += 2) {
+      const double u0L = xs0[k];
+      const double u0R = xs0[k + 1];
+      const double u1L = xs1[k];
+      const double u1R = xs1[k + 1];
+      if (u0R <= u0L && u1R <= u1L)
+        continue;
+
+      const int nRows = std::max(1, std::max(GeneralLoopChordSegments(sf, {u0L, v0}, {u1L, v1}, chordTolerance),
+                                             GeneralLoopChordSegments(sf, {u0R, v0}, {u1R, v1}, chordTolerance)));
+      const int nCols = std::max(1, std::max(GeneralLoopChordSegments(sf, {u0L, v0}, {u0R, v0}, chordTolerance),
+                                             GeneralLoopChordSegments(sf, {u1L, v1}, {u1R, v1}, chordTolerance)));
+
+      std::vector<std::vector<std::uint32_t>> grid(
+          static_cast<std::size_t>(nRows) + 1,
+          std::vector<std::uint32_t>(static_cast<std::size_t>(nCols) + 1));
+      for (int r = 0; r <= nRows; ++r) {
+        const double t = static_cast<double>(r) / nRows;
+        const double v = v0 + t * (v1 - v0);
+        const double uL = u0L + t * (u1L - u0L);
+        const double uR = u0R + t * (u1R - u0R);
+        for (int c = 0; c <= nCols; ++c) {
+          const double s = static_cast<double>(c) / nCols;
+          grid[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)] =
+              pushVertex(uL + s * (uR - uL), v);
+        }
+      }
+      for (int r = 0; r < nRows; ++r)
+        for (int c = 0; c < nCols; ++c) {
+          const std::uint32_t a = grid[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)];
+          const std::uint32_t b = grid[static_cast<std::size_t>(r)][static_cast<std::size_t>(c) + 1];
+          const std::uint32_t cc = grid[static_cast<std::size_t>(r) + 1][static_cast<std::size_t>(c)];
+          const std::uint32_t d = grid[static_cast<std::size_t>(r) + 1][static_cast<std::size_t>(c) + 1];
+          mb->Tri(a, b, d);
+          mb->Tri(a, d, cc);
+        }
+    }
+  }
+}
+
 } // namespace
 
 bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy) {
@@ -11092,6 +11215,12 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     const Face& f = s.faces[fi];
     mb.face = static_cast<int>(fi);
     const Surface& sf = f.surface;
+    if (!f.paramLoops.empty()) {
+      // A general trim loop (ADR-052, issue #306) overrides the rectangle-span grid below for
+      // every `SurfaceKind` — issue #308's counterpart to issue #307's numeric-integral branch.
+      TessellateGeneralLoopFace(f, chordTolerance, &mb);
+      continue;
+    }
     switch (sf.kind) {
     case SurfaceKind::Plane: {
       if (f.loops.size() > 2)
