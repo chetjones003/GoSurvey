@@ -166,12 +166,24 @@ jobs:
         # instead would recreate exactly the split that broke the first CI run: ninja-release
         # pinned nothing, CMake took whatever was first on PATH, and local (clang) silently
         # diverged from CI (cl) until the build failed on a construct only one of them rejects.
+        #
+        # /analyze (REQ-324) is a compiler flag, not something build.exe recognizes: MSVC /analyze
+        # warnings do not fail the build unless paired with /WX, which is deliberately NOT set here
+        # — the existing codebase has never been triaged against it, so this starts report-only.
         run: >
           cmake --preset ninja-release
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DCMAKE_C_FLAGS="/analyze"
+          -DCMAKE_CXX_FLAGS="/analyze"
           -DGOSURVEY_VERSION_SUFFIX="${{ steps.ver.outputs.suffix }}"
           -DGOSURVEY_VERSION_BUILD=${{ github.run_number }}
+
+      - name: Register MSVC /analyze problem matcher
+        # Turns `/analyze` warnings in the Build step's log into GitHub Actions annotations
+        # (REQ-324). Registered as its own step so it is easy to find/remove independently of the
+        # Configure and Build steps it affects.
+        run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
 
       - name: Build
         run: cmake --build build
