@@ -4525,141 +4525,183 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   if (cmd.activeRibbonTab == kRibbonTabManage) {
     // ---- Data Shortcuts -------------------------------------------------
     {
-      const float cw = colW({"Synchronize References", "Validate Data Shortcuts"});
-      const float w = 8.f + belowW("Create Data\nShortcuts") + 4.f + cw + 4.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecMgManageDS", "Data Shortcuts", w, panelH);
-        nyiLarge("##MgCreateDS", "c3d_datashortcut", "Create Data\nShortcuts");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##MgNewDSFolder", "c3d_newfolder", "New Shortcuts Folder", cw);
-        insNyi("##MgSetDSFolder", "c3d_setfolder", "Set Shortcuts Folder", cw);
-        insNyi("##MgSetWorkFolder", "c3d_workfolder", "Set Working Folder", cw);
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##MgManageDS", "c3d_managedata", "Manage Data Shortcuts", cw);
-        insNyi("##MgValidateDS", "c3d_validatedata", "Validate Data Shortcuts", cw);
-        insNyi("##MgSyncRefs", "c3d_syncref", "Synchronize References", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonGroupSpec createDsGroup;
+      createDsGroup.buttons = {largeBtnSpecEx("##MgCreateDS", -1, "c3d_datashortcut", "Create Data\nShortcuts", true,
+                                               "Create Data Shortcuts — not implemented yet.",
+                                               belowW("Create Data\nShortcuts"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          createDsGroup,
+          columnOfButtons({
+              rowBtn("##MgNewDSFolder", -1, "c3d_newfolder", "New Shortcuts Folder", true,
+                     "New Shortcuts Folder — not implemented yet.", false),
+              rowBtn("##MgSetDSFolder", -1, "c3d_setfolder", "Set Shortcuts Folder", true,
+                     "Set Shortcuts Folder — not implemented yet.", false),
+              rowBtn("##MgSetWorkFolder", -1, "c3d_workfolder", "Set Working Folder", true,
+                     "Set Working Folder — not implemented yet.", false),
+          }),
+          columnOfButtons({
+              rowBtn("##MgManageDS", -1, "c3d_managedata", "Manage Data Shortcuts", true,
+                     "Manage Data Shortcuts — not implemented yet.", false),
+              rowBtn("##MgValidateDS", -1, "c3d_validatedata", "Validate Data Shortcuts", true,
+                     "Validate Data Shortcuts — not implemented yet.", false),
+              rowBtn("##MgSyncRefs", -1, "c3d_syncref", "Synchronize References", true,
+                     "Synchronize References — not implemented yet.", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecMgManageDS", "Data Shortcuts", spec, nullptr);
       }, "Data Shortcuts", RibbonIconKind::Nyi, "c3d_datashortcut"});
     }
 
     // ---- Action Recorder ----------------------------------------------
     {
-      const float cw = colW({"Insert Message", "Preferences"});
-      const float w = 8.f + belowW("Record") + 4.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecMgActionRec", "Action Recorder", w, panelH);
-        nyiLarge("##MgRecord", "c3d_record", "Record");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##MgPlay", "c3d_play", "Play", cw);
-        insNyi("##MgInsertMsg", "Annotation", "Insert Message", cw);
-        insNyi("##MgInsertVal", "Field", "Insert Value", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonGroupSpec recordGroup;
+      recordGroup.buttons = {
+          largeBtnSpecEx("##MgRecord", -1, "c3d_record", "Record", true, "Record — not implemented yet.", belowW("Record"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          recordGroup,
+          columnOfButtons({
+              rowBtn("##MgPlay", -1, "c3d_play", "Play", true, "Play — not implemented yet.", false),
+              rowBtn("##MgInsertMsg", -1, "Annotation", "Insert Message", true, "Insert Message — not implemented yet.",
+                     false),
+              rowBtn("##MgInsertVal", -1, "Field", "Insert Value", true, "Insert Value — not implemented yet.", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecMgActionRec", "Action Recorder", spec, nullptr);
       }, "Action Recorder", RibbonIconKind::Nyi, "c3d_record"});
     }
 
     // ---- Customization ----------------------------------------------
     {
-      const float cw = colW({"Edit Aliases"});
-      const float w = 8.f + belowW("User\nInterface") + 4.f + belowW("Tool\nPalettes") + 4.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecMgCustomize", "Customization", w, panelH);
-        nyiLarge("##MgCui", "c3d_cui", "User\nInterface");
-        ImGui::SameLine(0, 4);
-        nyiLarge("##MgToolPalettes", "c3d_toolpalette", "Tool\nPalettes");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##MgCuiImport", "Import", "Import", cw);
-        insNyi("##MgCuiExport", "Export", "Export", cw);
-        insNyi("##MgEditAliases", "c3d_editalias", "Edit Aliases", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      ribbonlayout::RibbonGroupSpec cuiGroup;
+      cuiGroup.buttons = {largeBtnSpecEx("##MgCui", -1, "c3d_cui", "User\nInterface", true,
+                                         "User Interface — not implemented yet.", belowW("User\nInterface"))};
+      ribbonlayout::RibbonGroupSpec toolPalettesGroup;
+      toolPalettesGroup.buttons = {largeBtnSpecEx("##MgToolPalettes", -1, "c3d_toolpalette", "Tool\nPalettes", true,
+                                                   "Tool Palettes — not implemented yet.", belowW("Tool\nPalettes"))};
+      spec.groups = {
+          cuiGroup,
+          toolPalettesGroup,
+          columnOfButtons({
+              rowBtn("##MgCuiImport", -1, "Import", "Import", true, "Import — not implemented yet.", false),
+              rowBtn("##MgCuiExport", -1, "Export", "Export", true, "Export — not implemented yet.", false),
+              rowBtn("##MgEditAliases", -1, "c3d_editalias", "Edit Aliases", true, "Edit Aliases — not implemented yet.",
+                     false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecMgCustomize", "Customization", spec, nullptr);
       }, "Customization", RibbonIconKind::Nyi, "c3d_cui"});
     }
 
     // ---- Applications ----------------------------------------------
     {
-      const float cw = colW({"Visual Basic Editor", "Visual LISP Editor"});
-      const float w = 8.f + belowW("Load\nApplication") + 4.f + belowW("Run\nScript") + 4.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecMgApps", "Applications", w, panelH);
-        nyiLarge("##MgLoadApp", "c3d_loadapp", "Load\nApplication");
-        ImGui::SameLine(0, 4);
-        nyiLarge("##MgRunScript", "c3d_runscript", "Run\nScript");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##MgVbEditor", "c3d_vbeditor", "Visual Basic Editor", cw);
-        insNyi("##MgLispEditor", "c3d_lispeditor", "Visual LISP Editor", cw);
-        insNyi("##MgVbaMacro", "c3d_vbamacro", "Run VBA Macro", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      ribbonlayout::RibbonGroupSpec loadAppGroup;
+      loadAppGroup.buttons = {largeBtnSpecEx("##MgLoadApp", -1, "c3d_loadapp", "Load\nApplication", true,
+                                             "Load Application — not implemented yet.", belowW("Load\nApplication"))};
+      ribbonlayout::RibbonGroupSpec runScriptGroup;
+      runScriptGroup.buttons = {largeBtnSpecEx("##MgRunScript", -1, "c3d_runscript", "Run\nScript", true,
+                                               "Run Script — not implemented yet.", belowW("Run\nScript"))};
+      spec.groups = {
+          loadAppGroup,
+          runScriptGroup,
+          columnOfButtons({
+              rowBtn("##MgVbEditor", -1, "c3d_vbeditor", "Visual Basic Editor", true,
+                     "Visual Basic Editor — not implemented yet.", false),
+              rowBtn("##MgLispEditor", -1, "c3d_lispeditor", "Visual LISP Editor", true,
+                     "Visual LISP Editor — not implemented yet.", false),
+              rowBtn("##MgVbaMacro", -1, "c3d_vbamacro", "Run VBA Macro", true, "Run VBA Macro — not implemented yet.",
+                     false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecMgApps", "Applications", spec, nullptr);
       }, "Applications", RibbonIconKind::Nyi, "c3d_runscript"});
     }
 
     // ---- CAD Standards ----------------------------------------------
     {
-      const float cw = colW({"Layer Translator", "Configure"});
-      const float w = 8.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecMgStandards", "CAD Standards", w, panelH);
-        ImGui::BeginGroup();
-        insNyi("##MgLayerTrans", "c3d_layertranslator", "Layer Translator", cw);
-        insNyi("##MgStdCheck", "Check", "Check", cw);
-        insNyi("##MgStdConfigure", "c3d_cadstd_config", "Configure", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##MgLayerTrans", -1, "c3d_layertranslator", "Layer Translator", true,
+                 "Layer Translator — not implemented yet.", false),
+          rowBtn("##MgStdCheck", -1, "Check", "Check", true, "Check — not implemented yet.", false),
+          rowBtn("##MgStdConfigure", -1, "c3d_cadstd_config", "Configure", true, "Configure — not implemented yet.",
+                 false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecMgStandards", "CAD Standards", spec, nullptr);
       }, "CAD Standards", RibbonIconKind::Nyi, "Check"});
     }
 
     // ---- Styles ----------------------------------------------
     {
-      const float cw = colW({"Reference", "Purge"});
-      const float w = 8.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecMgStyles", "Styles", w, panelH);
-        ImGui::BeginGroup();
-        insNyi("##MgStylesImport", "Import", "Import", cw);
-        insNyi("##MgStylesPurge", "Purge", "Purge", cw);
-        insNyi("##MgStylesReference", "Attach", "Reference", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##MgStylesImport", -1, "Import", "Import", true, "Import — not implemented yet.", false),
+          rowBtn("##MgStylesPurge", -1, "Purge", "Purge", true, "Purge — not implemented yet.", false),
+          rowBtn("##MgStylesReference", -1, "Attach", "Reference", true, "Reference — not implemented yet.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecMgStyles", "Styles", spec, nullptr);
       }, "Styles", RibbonIconKind::Nyi, "Purge"});
     }
 
     // ---- Property Set Data ----------------------------------------------
     {
-      const float w = 8.f + belowW("Define\nProperty Sets");
-      ribbonSpecs.push_back({w, w, [&, w]() {
-        RibbonSectionBegin("RibbonSecMgPropSets", "Property Set Data", w, panelH);
-        nyiLarge("##MgDefinePropSets", "c3d_propsets", "Define\nProperty Sets");
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      ribbonlayout::RibbonGroupSpec g;
+      g.buttons = {largeBtnSpecEx("##MgDefinePropSets", -1, "c3d_propsets", "Define\nProperty Sets", true,
+                                  "Define Property Sets — not implemented yet.", belowW("Define\nProperty Sets"))};
+      spec.groups = {g};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecMgPropSets", "Property Set Data", spec, nullptr);
       }, "Property Set Data", RibbonIconKind::Nyi, "c3d_propsets"});
     }
 
     // ---- Performance ----------------------------------------------
     {
-      const float w = 8.f + belowW("Performance\nAnalyzer");
-      ribbonSpecs.push_back({w, w, [&, w]() {
-        RibbonSectionBegin("RibbonSecMgPerf", "Performance", w, panelH);
-        nyiLarge("##MgPerfAnalyzer", "c3d_perfanalyzer", "Performance\nAnalyzer");
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      ribbonlayout::RibbonGroupSpec g;
+      g.buttons = {largeBtnSpecEx("##MgPerfAnalyzer", -1, "c3d_perfanalyzer", "Performance\nAnalyzer", true,
+                                  "Performance Analyzer — not implemented yet.", belowW("Performance\nAnalyzer"))};
+      spec.groups = {g};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecMgPerf", "Performance", spec, nullptr);
       }, "Performance", RibbonIconKind::Nyi, "c3d_perfanalyzer"});
     }
 
     // ---- Visual Programming ----------------------------------------------
     {
-      const float w = 8.f + belowW("Dynamo") + 4.f + belowW("Dynamo\nPlayer");
-      ribbonSpecs.push_back({w, w, [&, w]() {
-        RibbonSectionBegin("RibbonSecMgVisProg", "Visual Programming", w, panelH);
-        nyiLarge("##MgDynamo", "c3d_dynamo", "Dynamo");
-        ImGui::SameLine(0, 4);
-        nyiLarge("##MgDynamoPlayer", "c3d_dynamoplayer", "Dynamo\nPlayer");
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      ribbonlayout::RibbonGroupSpec dynamoGroup;
+      dynamoGroup.buttons = {
+          largeBtnSpecEx("##MgDynamo", -1, "c3d_dynamo", "Dynamo", true, "Dynamo — not implemented yet.", belowW("Dynamo"))};
+      ribbonlayout::RibbonGroupSpec dynamoPlayerGroup;
+      dynamoPlayerGroup.buttons = {largeBtnSpecEx("##MgDynamoPlayer", -1, "c3d_dynamoplayer", "Dynamo\nPlayer", true,
+                                                   "Dynamo Player — not implemented yet.", belowW("Dynamo\nPlayer"))};
+      spec.groups = {dynamoGroup, dynamoPlayerGroup};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecMgVisProg", "Visual Programming", spec, nullptr);
       }, "Visual Programming", RibbonIconKind::Nyi, "c3d_dynamo"});
     }
   } // if (activeRibbonTab == kRibbonTabManage)
