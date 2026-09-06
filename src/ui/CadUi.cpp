@@ -3786,45 +3786,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // REQ-302 increment 2 (ADR-038 (a)): each tab's own section widths, computed once at Wide
   // metrics (`W`) and once at Medium (`M`) — same formulas as increment 1 shipped, since colW()
   // above already resolves compact vs. not; nothing here duplicates a button-sizing decision.
-  struct RibbonTabWidths {
-    float wEdit, wDraw, wMod, wInq, wSrv, wAnalyze, wLayout;
-  };
-  auto computeTabWidths = [&](bool compact) {
-    curCompact = compact;
-    RibbonTabWidths w{};
-    w.wEdit = 8.f + largeW + 4.f + colW({"Copy", "Undo", "Redo"});
-    w.wDraw = 8.f + gridCell * 4.f + 4.f * 3.f;  // grid buttons are already icon-only — no Medium delta
-    // Four columns: a small-button column is 3 tall (colH), so a 4th item in one BeginGroup is
-    // clipped by the child window's own bounds — the same "fourth needs its own column" rule
-    // Inquiry/Survey below already follow. Join/Mirror/Lengthen exactly fills one column;
-    // Extend/Break/Stretch exactly fills a second.
-    w.wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
-              colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"}) + 4.f +
-              colW({"Extend", "Break", "Stretch"}) + 4.f + colW({"Fillet", "Chamfer"});
-    // Annotate tab sections compute their own widths inline (GUI-pass 2026-08-30, C3D 8-panel
-    // rebuild) — no wAnnText/wAnnDim entries here.
-    // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
-    // Aligned/Linear moved to Annotate's new Dimensions section above (2026-08-25 follow-up) — ID
-    // Point/Elev-Grade are the two that remain genuinely survey-scoped inquiry tools.
-    w.wInq  = 8.f + colW({"ID Point"}) + 4.f + colW({"Elev/Grade"});
-    // Three columns after Points: the panel is three small buttons tall, so Surfaces/Volumes/
-    // Grades/Groups (four items) needs its own two-column split, same as Modify's Extend/Break/
-    // Stretch + Fillet/Chamfer split above (fixed 2026-08-25 — see the Survey section body).
-    w.wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"}) + 4.f +
-              colW({"Surfaces", "Volumes"}) + 4.f + colW({"Elev", "Drop"}) + 4.f +
-              colW({"Shed", "Report"}) + 4.f + colW({"Grades", "Groups"});
-    w.wAnalyze = 8.f + colW({"Slope", "Dir", "Arrows"}) + 4.f + colW({"Catch", "Stats", "Rebuild"}) + 4.f +
-                 colW({"Breakln", "Contour", "Boundry"}) + 4.f + colW({"Vol Surf", "Props"});
-    // REQ-302 increment 3: Plot/Batch Plot moved out to Output's "Plot" section — Layout keeps
-    // only the viewport-authoring tools (Rect VP is a largeBtn placed outside colW; Poly VP is
-    // the one column here).
-    w.wLayout = 8.f + largeW + 4.f + colW({"Poly VP"});
-    // View/Named Views/Coordinates/Settings (issue #329) size themselves inline via
-    // ribbonlayout::MeasureRibbonSection — no wView/wNamedViews/wCoords/wViewSettings here.
-    return w;
-  };
-  const RibbonTabWidths W = computeTabWidths(false);
-  const RibbonTabWidths M = computeTabWidths(true);
+  // REQ-302/ADR-053: every tab now sizes its own sections inline via
+  // ribbonlayout::MeasureRibbonSection (issue #326 Home, #327 Insert, #328 Annotate, #329 View,
+  // #330 Manage, #331 Output, #332 Survey, #333 Layout) — the RibbonTabWidths struct and
+  // computeTabWidths(...)/W/M this used to hold (wEdit/wDraw/wMod/wInq/wSrv/wAnalyze/wLayout) are
+  // gone; nothing computes a whole-tab width formula up front any more.
   curCompact = false;  // reset — RenderRibbonFit sets this per-section at actual render time
 
   // REQ-302 increment 2 (ADR-038): build the active tab's sections as deferred render closures,
@@ -4172,26 +4138,26 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
       }
     } else {
-      // Layout contextual ribbon (REQ-032): paper-space viewport-authoring tools. Plot/Batch Plot
-      // moved to the Output tab's "Plot" section (REQ-302 increment 3, D-2026-08-25-h) — this
-      // section no longer duplicates them.
-      ribbonSpecs.push_back({W.wLayout, M.wLayout, [&]() {
-        RibbonSectionBegin("RibbonSecLayout", "Layout", curCompact ? M.wLayout : W.wLayout, panelH);
-        {
-          if (largeBtn("##RibbonRectVp", RibbonIconKind::ViewportRect, "Rect VP"))
-            StartPaperRectViewportCommand(cmd, log);
-          RibbonItemHelp("Rectangular viewport — two clicks define a viewport on the sheet.\nCommand bar: MVIEW / RECTVP");
-          ImGui::SameLine(0, 4);
-          ImGui::BeginGroup();
-          const float cwL = colW({"Poly VP"});
-          ImGui::BeginDisabled();
-          smallBtn("##RibbonPolyVp", RibbonIconKind::ViewportPoly, "Poly VP", cwL);
-          ImGui::EndDisabled();
-          RibbonItemHelp("Polygonal viewport — coming in a later increment (REQ-034).",
-                         ImGuiHoveredFlags_AllowWhenDisabled);
-          ImGui::EndGroup();
-        }
-        RibbonSectionEnd();
+      // Layout contextual ribbon (REQ-032/REQ-033): paper-space viewport-authoring tools. Plot/
+      // Batch Plot moved to the Output tab's "Plot" section (REQ-302 increment 3, D-2026-08-25-h)
+      // — this section no longer duplicates them.
+      ribbonlayout::RibbonGroupSpec rectVpGroup;
+      rectVpGroup.buttons = {largeBtnSpec("##RibbonRectVp", (int)RibbonIconKind::ViewportRect, "Rect VP", false,
+                                          "Rectangular viewport — two clicks define a viewport on the sheet.\nCommand bar: MVIEW / RECTVP")};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          rectVpGroup,
+          columnOfButtons({
+              rowBtn("##RibbonPolyVp", (int)RibbonIconKind::ViewportPoly, nullptr, "Poly VP", true,
+                     "Polygonal viewport — coming in a later increment (REQ-034).", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecLayout", "Layout", spec, [&](const std::string& id) {
+          if (id == "##RibbonRectVp") StartPaperRectViewportCommand(cmd, log);
+        });
       }});
     } // if (!ribbonPaperSpace) — Draw/Modify vs Layout
 
