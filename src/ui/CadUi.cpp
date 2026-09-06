@@ -3277,6 +3277,19 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
   return pressed;
 }
 
+// REQ-302/ADR-053 (issue #325) — thin, externally-linkable wrapper around RibbonButtonEx so the
+// data-driven RibbonLayout API (ui/RibbonLayoutDraw.hpp) can draw the exact same button chrome
+// every hand-built ribbon section uses, without RibbonIconKind/RibbonLabel (private to this file)
+// leaking into that header. `iconName` always takes the RibbonButtonEx iconNameOverride path
+// (RibbonIconKind::Nyi is just the placeholder enum value RibbonButtonEx needs when the override
+// is used); an empty iconName falls back to RibbonIconKind::Nyi's own procedural glyph.
+bool RibbonDrawButtonForLayout(const char* str_id, const char* label, const char* iconName, const ImVec2& size,
+                               bool labelBelow) {
+  const char* iconOverride = (iconName && iconName[0]) ? iconName : nullptr;
+  const RibbonLabel mode = (label && label[0]) ? (labelBelow ? RibbonLabel::Below : RibbonLabel::Right)
+                                                : RibbonLabel::None;
+  return RibbonButtonEx(str_id, RibbonIconKind::Nyi, label, size, mode, iconOverride);
+}
 
 static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | extraFlags) && ImGui::BeginTooltip()) {

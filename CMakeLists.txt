@@ -414,6 +414,10 @@ add_executable(GoSurvey
 
   # UI panels
   src/ui/CadUi.cpp
+  # REQ-302/ADR-053 (issue #325) — RibbonLayout::DrawSection. Calls RibbonDrawButtonForLayout
+  # (CadUi.cpp), so it needs a live ImGui window like the rest of this list; no test target links
+  # CadUi.cpp (it pulls GLFW/OpenGL through the windowed app), so this is exercised manually.
+  src/ui/RibbonLayoutDraw.cpp
   # Cohesive panels split out of the CadUi.cpp mega-TU (TASK-150 Phase 2, issue
   # #142). Shared helpers go through src/ui/CadUiInternal.hpp.
   src/ui/CadUi_Modals.cpp

@@ -40,6 +40,14 @@ void ClearRecentDrawings();
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
 /// Ribbon under the menu bar: sectioned icon toolbars (Draw, Modify, View, …) plus a fixed-width layer strip; hover for tooltips.
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log);
+/// REQ-302/ADR-053 (issue #325) — draws one ribbon button with the exact chrome every hand-built
+/// ribbon section already uses (3D bevel, icon art, label), for the data-driven RibbonLayout API
+/// (ui/RibbonLayoutDraw.hpp) to call per placed item without duplicating that chrome. `iconName`
+/// is a c3d_* icon id or empty (falls back to the generic "not yet implemented" glyph — real
+/// icon-kind mapping is a later sub-issue). Must be called inside an ImGui window. Returns true
+/// on the frame the button is clicked.
+bool RibbonDrawButtonForLayout(const char* str_id, const char* label, const char* iconName, const ImVec2& size,
+                               bool labelBelow = false);
 /// Drop shadow + lit top edge on every floating window and popup, so dialogs lift
 /// off the shell (REQ-081). Call once per frame AFTER all windows are submitted
 /// and BEFORE ImGui::Render(); it appends to each window's own draw list, which
