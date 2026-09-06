@@ -1014,6 +1014,11 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GsIoDimAngularTests.cpp
     tests/GsIoViewportCameraTests.cpp
     tests/GsMigrateLegacyBreaklineTests.cpp
+    # REQ-302/ADR-053 (issue #323) — ribbon layout measure pass. Header-only, but needs a live
+    # ImGui frame for CalcTextSize (font metrics), same headless-font-atlas pattern
+    # GsMigrateLegacyBreaklineTests.cpp uses above — that's why it rides with GoSurveySnapTests
+    # (links imgui_core) rather than the imgui-free GoSurveyTests.
+    tests/RibbonLayoutMeasureTests.cpp
     tests/ViewportUcsTests.cpp
     # REQ-318 increment 2 (issue #148) — the sub-object SELECTION: its store, the expiring
     # reference, mutual exclusion and cross-solid depth order. Needs gosurvey_domain for
