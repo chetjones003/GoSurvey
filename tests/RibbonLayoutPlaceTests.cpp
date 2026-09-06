@@ -141,3 +141,106 @@ TEST_CASE("PlaceRibbonSection with no Fill items and no overflow places everythi
   REQUIRE_FALSE(placed.items[0].overflow);
   REQUIRE_FALSE(placed.items[1].overflow);
 }
+
+TEST_CASE("PlaceRibbonSection stacks a Column-layout group's buttons vertically", "[ribbonlayout][place]") {
+  RibbonButtonSpec a; a.id = "a";
+  RibbonButtonSpec b; b.id = "b";
+
+  RibbonGroupSpec col;
+  col.layout = RibbonGroupLayout::Column;
+  col.gapY = 2.f;
+  col.buttons = {a, b};
+
+  RibbonSectionSpec section;
+  section.groups = {col};
+
+  RibbonMeasuredSection measured;
+  measured.spec = &section;
+  RibbonMeasuredGroup mg;
+  mg.spec = &section.groups[0];
+  RibbonMeasuredButton mbA; mbA.spec = &section.groups[0].buttons[0]; mbA.size = ImVec2(20.f, 10.f);
+  RibbonMeasuredButton mbB; mbB.spec = &section.groups[0].buttons[1]; mbB.size = ImVec2(20.f, 10.f);
+  mg.buttons = {mbA, mbB};
+  mg.size = ImVec2(20.f, 22.f);
+  measured.groups.push_back(mg);
+  measured.size = mg.size;
+
+  const RibbonPlacedSection placed = PlaceRibbonSection(measured, 100.f);
+
+  REQUIRE(placed.items.size() == 2);
+  REQUIRE(placed.items[0].pos == ImVec2(0.f, 0.f));
+  REQUIRE(placed.items[1].pos == ImVec2(0.f, 12.f)); // 10 (height) + 2 (gapY)
+  REQUIRE_FALSE(placed.items[0].overflow);
+  REQUIRE_FALSE(placed.items[1].overflow);
+}
+
+TEST_CASE("PlaceRibbonSection wraps a Grid-layout group's buttons into rows", "[ribbonlayout][place]") {
+  RibbonButtonSpec btns[5];
+  for (int i = 0; i < 5; ++i) btns[i].id = "b" + std::to_string(i);
+
+  RibbonGroupSpec grid;
+  grid.layout = RibbonGroupLayout::Grid;
+  grid.gridColumns = 2;
+  grid.gapX = 1.f;
+  grid.gapY = 3.f;
+  grid.buttons.assign(btns, btns + 5);
+
+  RibbonSectionSpec section;
+  section.groups = {grid};
+
+  RibbonMeasuredSection measured;
+  measured.spec = &section;
+  RibbonMeasuredGroup mg;
+  mg.spec = &section.groups[0];
+  for (int i = 0; i < 5; ++i) {
+    RibbonMeasuredButton mb;
+    mb.spec = &section.groups[0].buttons[i];
+    mb.size = ImVec2(10.f, 10.f);
+    mg.buttons.push_back(mb);
+  }
+  mg.size = ImVec2(21.f, 33.f); // 2*10+1 wide, 3*10+2*3 tall (3 rows)
+  measured.groups.push_back(mg);
+  measured.size = mg.size;
+
+  const RibbonPlacedSection placed = PlaceRibbonSection(measured, 100.f);
+
+  REQUIRE(placed.items.size() == 5);
+  REQUIRE(placed.items[0].pos == ImVec2(0.f, 0.f));
+  REQUIRE(placed.items[1].pos == ImVec2(11.f, 0.f));   // col 1: 10 + gapX(1)
+  REQUIRE(placed.items[2].pos == ImVec2(0.f, 13.f));   // row 1: 10 + gapY(3)
+  REQUIRE(placed.items[3].pos == ImVec2(11.f, 13.f));
+  REQUIRE(placed.items[4].pos == ImVec2(0.f, 26.f));   // row 2
+  for (const RibbonPlacedItem& item : placed.items)
+    REQUIRE_FALSE(item.overflow);
+}
+
+TEST_CASE("PlaceRibbonSection places multiple top-level groups side by side with groupGapX", "[ribbonlayout][place]") {
+  RibbonButtonSpec a; a.id = "a";
+  RibbonButtonSpec b; b.id = "b";
+
+  RibbonGroupSpec g0; g0.buttons = {a};
+  RibbonGroupSpec g1; g1.buttons = {b};
+
+  RibbonSectionSpec section;
+  section.groups = {g0, g1};
+  section.groupGapX = 6.f;
+
+  RibbonMeasuredSection measured;
+  measured.spec = &section;
+
+  RibbonMeasuredGroup mg0; mg0.spec = &section.groups[0];
+  RibbonMeasuredButton mbA; mbA.spec = &section.groups[0].buttons[0]; mbA.size = ImVec2(30.f, 20.f);
+  mg0.buttons = {mbA}; mg0.size = ImVec2(30.f, 20.f);
+
+  RibbonMeasuredGroup mg1; mg1.spec = &section.groups[1];
+  RibbonMeasuredButton mbB; mbB.spec = &section.groups[1].buttons[0]; mbB.size = ImVec2(25.f, 20.f);
+  mg1.buttons = {mbB}; mg1.size = ImVec2(25.f, 20.f);
+
+  measured.groups = {mg0, mg1};
+
+  const RibbonPlacedSection placed = PlaceRibbonSection(measured, 100.f);
+
+  REQUIRE(placed.items.size() == 2);
+  REQUIRE(placed.items[0].pos.x == 0.f);
+  REQUIRE(placed.items[1].pos.x == 36.f); // 30 (group0 width) + groupGapX(6)
+}

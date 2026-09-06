@@ -23,8 +23,10 @@ int DrawSection(const ribbonlayout::RibbonSectionSpec& section, float availableW
 
     ImGui::SetCursorScreenPos(ImVec2(origin.x + item.pos.x, origin.y + item.pos.y));
     const std::string strId = "##RibbonLayout_" + item.spec->id;
-    const bool pressed = RibbonDrawButtonForLayout(strId.c_str(), item.spec->label.c_str(),
-                                                    item.spec->iconName.c_str(), item.size);
+    const bool pressed = RibbonDrawButtonForLayout(
+        strId.c_str(), item.spec->label.c_str(), item.spec->iconName.c_str(), item.size,
+        item.spec->labelBelow, item.spec->disabled,
+        item.spec->tooltip.empty() ? nullptr : item.spec->tooltip.c_str(), item.spec->iconKind);
     if (pressed && onClick)
       onClick(item.spec->id);
     ++drawnCount;
