@@ -90,7 +90,11 @@ ASSUMPTION-1: "Top" and "WCS" are the same menu outcome (identical frame); "Top"
   `UcsTests` + `req154-ucs-plan` transcript, which this task does not modify.
 
 ## 8. Implementation log
-- 2026-09-06 open → plan (Authority + Q1/Q2 answered) → implement.
+- 2026-09-06 open → plan (Authority + Q1/Q2 answered) → implement → build+854/854 → submitted.
+- 2026-09-06 PR #370 (feat/view-tab-coordinate-systems → beta). Hands-on testing confirmed the
+  feature; surfaced three PRE-EXISTING 3D bugs unrelated to this change, filed as #371 (ORTHO not
+  following a rotated UCS — may need a spec decision), #372 (object snaps in orbited views),
+  #373 (JOIN drops non-coplanar 3D polyline segments).
 
 ## 9. Self-verification
 - [x] build-project        — PASS (`build.bat` ninja-release, 253/253, GoSurvey.exe linked)
