@@ -2486,6 +2486,70 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   lesson: **the kernel's safety nets catch the topology, not the geometry, and a new operation that
   can break the geometry must bring its own net.**
 
+- **Amendment (j) — a modifying operation that ADDS topology, and the rolling-ball model**
+  (2026-09-05, D-2026-09-05-c, REQ-323, GitHub issue #148 Phase 5).
+
+  Amendment (i) established the modifying operation: copy, edit the copy, validate before returning,
+  and bring your own precondition because `Validate` checks topology rather than geometry.
+  `PushPullFace` moves what is already there — the same faces, edges and vertices come out as went
+  in. FILLET is the first operation that **changes the topology itself**: it deletes an edge and
+  creates a face, two edges and two vertices in its place.
+
+  **(1) The model is a rolling ball, and it is worth naming because it decides every number.** A
+  fillet of radius `r` on an edge is the surface traced by a ball of radius `r` rolling along the
+  edge while touching both adjacent faces. For a straight edge between two planes that ball's centre
+  travels along a straight line — the intersection of the two planes each offset by `r` toward the
+  material — so the swept surface is a **cylinder** of radius `r` about that line, and every
+  boundary is closed-form. Nothing is sampled or marched.
+
+  The setback follows from the same picture: where the fillet meets each face, it does so at
+  distance
+
+      d = r / tan(theta / 2)
+
+  from the original edge, measured in that face, where `theta` is the interior dihedral angle. At a
+  box's 90-degree edge that is exactly `r`; at a shallow joint it tends to zero, and at a sharp one
+  it grows without bound — which is *why* a large radius on a sharp edge has to be refused rather
+  than clamped.
+
+  **(2) The topology delta is exact and worth stating, because it is what a test can assert.** One
+  filleted edge, both endpoints landing on planar faces:
+
+  | | before | after |
+  |---|---|---|
+  | vertices | `v0`, `v1` | four: the ends of the two tangent lines |
+  | edges | the edge itself | two tangent lines + one arc at each end |
+  | faces | — | one cylindrical fillet face |
+
+  Net: `V + 2`, `E + 3`, `F + 1`, so `V - E + F` is unchanged and the shell stays Euler-consistent.
+  A box filleted on one edge goes from `8/12/6` to `10/15/7`.
+
+  **(3) The precondition, per amendment (i), and what it is measured against.** `SelfIntersects` is
+  documented as not general, so the refusal is a **pre-check** and not an after-the-fact test. The
+  radius must be strictly less than the distance from the edge to the far boundary of *each*
+  adjacent face, measured perpendicular to the edge within that face. At the limit the face does not
+  merely become thin — it vanishes, leaving a zero-area face that `DegenerateFace` would catch only
+  after the solid was built, and only sometimes. The check is cheap and exact for a planar face:
+  it is the extent of the face's own loop.
+
+  **(4) A shared vertex is refused, and that is a deliberate boundary rather than an omission.**
+  Where two filleted edges meet at a vertex, their two cylinders arrive at the corner and leave a
+  curved triangular gap. Closing it needs a **spherical** patch trimmed against both — the classic
+  rolling-ball corner — and a rule for corners where more than three edges meet or where the arriving
+  fillets have different radii. That is a second geometry problem, not a loop over the first, and it
+  is the whole distance between "round one edge" and issue #148's "chains of edges". So increment 1
+  refuses a vertex shared by two edges of the same request, by name, and issue #148's acceptance 5
+  stays open until the corner patch exists.
+
+  **(5) What this does NOT need, corrected from a first reading.** REQ-321 / ADR-052's general trim
+  loops are **not** a prerequisite here. A plane face's area has always been integrated over its
+  own boundary loops rather than its parameter rectangle (`PlaneFaceArea`), which is why a Boolean
+  can already leave a plane with a circular hole in it — so the quarter-circle bite a fillet takes
+  out of the faces at each end of the edge is representable with the machinery REQ-313 shipped. The
+  fillet's own cylindrical face is bounded by an iso-rectangle: one angular span, one length.
+  `paramLoops` becomes necessary at the *next* increment, where rounding a cylinder's rim leaves the
+  cylinder wall irregularly trimmed.
+
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
 - **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —
