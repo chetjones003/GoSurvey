@@ -2386,6 +2386,11 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       // in this viewport, and it should look the same wherever it is made.
       if (gizmoOverlay->hot[a])
         drawGizmo(gizmoOverlay->axis[a], 1.f, 0.92f, 0.15f, kLwGizmo + 1.f);
+      else if (gizmoOverlay->faceMode)
+        // The single face-normal handle takes the PURPLE a selected face already wears, not the X
+        // handle's red: it is not X, and a widget that said it was would be lying about the one
+        // thing it exists to communicate (issue #148 acceptance 4).
+        drawGizmo(gizmoOverlay->axis[a], kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB, kLwGizmo);
       else
         drawGizmo(gizmoOverlay->axis[a], kAxisRgb[a][0], kAxisRgb[a][1], kAxisRgb[a][2], kLwGizmo);
     }

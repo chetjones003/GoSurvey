@@ -122,7 +122,7 @@ EXPECT GIZMO 0
 # x -10..10, y -5..5, z 0..8. The gizmo's anchor is that box's centre, (0,0,4), and the X handle
 # runs from there to (10,0,4). GRAB 5 along, DROP 105 along, so the drag is +100 in X.
 #
-# Back to PLAN first, so the fences below are the plain plan-view fences req320 uses. The view being
+# Back to PLAN first, so the fences below are the plain plan-view fences req322 uses. The view being
 # orbited is the previous block's subject, not this one's.
 #
 # Mass properties are asserted unchanged to the last digit the closed forms give: a translation is

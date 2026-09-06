@@ -23,6 +23,11 @@ struct CadGizmoOverlay {
   /// see the track the selection is sliding along rather than only the short handle.
   std::vector<float> guide;
 
+  /// True when the single handle in `axis[0]` is a solid FACE's own normal rather than a UCS axis
+  /// (issue #148 acceptance 4). It then draws PURPLE — the colour a selected face already uses —
+  /// instead of the X handle's red, because it is not X and should not claim to be.
+  bool faceMode = false;
+
   [[nodiscard]] bool empty() const {
     return axis[0].empty() && axis[1].empty() && axis[2].empty() && guide.empty();
   }

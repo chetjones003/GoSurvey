@@ -1910,22 +1910,32 @@ requirements is a planning failure, not a sign of rigor.
   `SubmitGizmoClick` / `UpdateGizmoDrag` / `CommitGizmoDrag`; overlay `CadGizmoOverlay` +
   `BuildGizmoOverlay`; headless `GIZMO GRAB|DROP|CANCEL` and `EXPECT GIZMO` / `EXPECT GIZMOAXIS`.
   **Rotate and scale are NOT implemented and are blocked, not deferred by preference:** ROTATE and
-  SCALE are still plan-only and still refuse solids (REQ-320 item 6), so a rotate handle would again
+  SCALE are still plan-only and still refuse solids (REQ-322 item 6), so a rotate handle would again
   have no typed command to agree with. Lifting them means turning every entity's stored frame about
   an arbitrary axis — the work REQ-312 needed for one tilted arc, multiplied across every type — and
   is its own requirement.
+  **The gizmo also takes a SUB-OBJECT selection** (2026-09-05, D-2026-09-05-b, issue #148 acceptance
+  4): with exactly one solid FACE selected it shows ONE handle along that face's own normal — purple,
+  not the X handle's red, because it is not X — and commits through `CadApplyPushPull`, the function
+  typed `PRESSPULL` calls. One handle and not three because `brep::PushPullFace` takes a distance
+  along the normal and nothing else; a second would name a direction the kernel cannot move the face
+  in. An EDGE or a VERTEX selection gets no gizmo at all: no kernel operation moves either, so a
+  handle would advertise an edit that cannot happen. The mode is derived from the selection
+  (`CadGizmoModeFor`), never stored, because the two selections are already mutually exclusive
+  (D-2026-09-04-a).
 - **Starting state — measured 2026-09-04, when this was first picked up.** Neither half of the
   acceptance above was reachable. `ApplyTranslationToSelection` takes `(dx, dy)` and never touches
   Z; `ApplyRotationToSelection` turns about a vertical axis only; `ApplyScaleToSelection` scales
   about a flat point. And all six transform commands drop solids by name. So a gizmo's up-down
   handle would have had no typed command to agree with, and the objects Phase 5 exists to edit could
-  not be moved at all. **REQ-320 lifts translation to 3D and makes a solid movable**; the gizmo
+  not be moved at all. **REQ-322 lifts translation to 3D and makes a solid movable**; the gizmo
   follows it rather than preceding it, because "agrees with the equivalent typed command" requires
   the typed command to be able to say it first.
 - Revisions: 2026-08-11 — initial. 2026-09-04 — the starting-state note added and the delivery
-  sequenced behind REQ-320 (D-2026-09-04-f). No change to what is required, only to what has to
+  sequenced behind REQ-322 (D-2026-09-04-f). No change to what is required, only to what has to
   exist underneath it. 2026-09-04 — the TRANSLATE gizmo implemented (D-2026-09-04-g); rotate and
-  scale recorded as blocked on plan-only ROTATE/SCALE rather than left silent.
+  scale recorded as blocked on plan-only ROTATE/SCALE rather than left silent. 2026-09-05 — the
+  gizmo extended to a sub-object FACE selection (D-2026-09-05-b, issue #148 acceptance 4).
 
 ### REQ-061 — Per-viewport camera in paper space
 - Purpose: put a plan view and an isometric on the same sheet
@@ -6877,7 +6887,6 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain (`brep` — decision only; the follow-up issues are the actual owners of the code)
 - Status: accepted — design decision recorded; #306–#310 implement it.
 - Revisions: 2026-09-05 — initial (ADR-052, GitHub issue #305, split from #302, split from #299).
-
 ### REQ-322 — MOVE works in three dimensions, and a solid can be moved
 
 - Purpose: REQ-060 asks for a gizmo that manipulates the selection **in 3D** and whose drag must
@@ -7423,7 +7432,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-057 | Domain/IO/UI | planned — DXF group-30 round-trip within REQ-101; `.gs` Z bit-identical on reload; legacy `.gs` loads all-zero Z; Properties Z edit undoable; survey elevation reads back as Z; parallel Z arrays stay length-locked across insert/erase/undo | accepted |
 | REQ-058 | Renderer/UI/Commands | `CameraTests` (plan-view parity, anchor-before-rotation composition, billboard basis) + `Ray3dTests` + `LinetypeTessellationTests` (per-vertex Z) + `CurveIntersectTests` + `BenchSceneTests`; manual/scripted in-app before/after for the render, overlay and glyph stages that no test target can link (TASK-036/037/039) | accepted — signed off 2026-08-12 | **Fixed 2026-09-01 (TASK-170):** box selection off plan view projected its two drag corners at Z = 0 while lines project at their true Z, so on a work plane raised by `ELEV` or tilted by a UCS the fence both drew and selected at pixels the cursor was never over. Each corner now carries its own work-plane elevation (`selBoxAnchorZ`, published through `uiCursorWorldZ` rather than threaded through five call sites). Invisible until now because Z does not move a PLAN projection and is genuinely 0 on the world XY plane at elevation zero — and because `headless.req058-orbited-fence-elevation` is the FIRST transcript to orbit the view at all, via a new `VIEWANGLES` driver verb. That is the wider finding: every REQ-058 behaviour that only exists off plan view had no failing test available to it. Negative-tested — restoring the Z = 0 projection reports `SELECTED: expected 1, got 0`
 | REQ-059 | UI | planned — manual (+Z / −Y / an off-axis handle animate correctly and settle < 0.5 s; gizmo tracks the camera after orbit; clicks outside the gizmo still pick geometry). Appearance is ImOGuizmo stock — the mockup is not the target (amended 2026-08-11) | accepted |
-| REQ-060 | UI/Commands | translate: `headless.req060-gizmo-translate` (a drag along X and along Z, the same offset typed as MOVE landing on the same coordinates, one UNDO, a cancel, and a solid moved and reloaded) + `GizmoTranslateTests` (the skew-line solve, the anchor, an empty selection, a click that misses every handle, the UCS-aligned axes). rotate/scale: not implemented — blocked on plan-only ROTATE/SCALE (REQ-320 item 6) | accepted |
+| REQ-060 | UI/Commands | translate (entities): `headless.req060-gizmo-translate` (a drag along X and along Z, the same offset typed as MOVE landing on the same coordinates, one UNDO, a cancel, and a solid moved and reloaded) + `GizmoTranslateTests` (the skew-line solve, the anchor, an empty selection, a click that misses every handle, the UCS-aligned axes). translate (a solid FACE): `headless.req148-gizmo-subobject` (the drag and `PRESSPULL 12` leaving identical mass properties; one handle not three; no gizmo on an edge or a vertex) + `SubObjectSelectionTests` (the mode derivation, vertex-for-vertex equality with PRESSPULL, the captured face reference). rotate/scale: not implemented — blocked on plan-only ROTATE/SCALE (REQ-322 item 6) | accepted |
 | REQ-061 | Domain/Renderer/IO | `ViewportCameraTests` (plan-view projection == `ModelToPaperIn` bit-for-bit over a grid; SW-iso hand-computed sheet point; rect-centre invariant; sibling independence) + `GsIoViewportCameraTests` (camera round-trips `.gs`; legacy file with the keys stripped loads all-plan) + manual (two viewports one plan one isometric, on screen and in the PDF plot) | accepted — implemented 2026-08-31 (issue #175) |
 | REQ-063 | Domain/IO/Renderer | planned — `.gs` round-trip bit-identical; legacy `.gs` loads; extents include meshes; erase undoable in one step; layer freeze/off/non-plottable honoured; 2M-triangle model loads without index overflow | accepted |
 | REQ-064 | Renderer/UI/IO | planned — 2D Wireframe **pixel-identical** to pre-change (the parity gate, as REQ-058 had); occlusion correct in Hidden/Shaded; lighting follows the camera; style change does not alter geometry/selection/snap/plot; REQ-100 met in Shaded | accepted |

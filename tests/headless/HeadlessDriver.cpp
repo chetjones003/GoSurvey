@@ -2251,6 +2251,11 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // breaks silently.
       else if (what == "GIZMOAXIS")
         got = static_cast<long>(run.st.gizmoDragActive ? run.st.gizmoDragAxis : -1);
+      // How many handles the gizmo has: 3 on an entity selection, 1 on a solid FACE, 0 for none.
+      // The count is the difference between the two modes made assertable — a face gizmo that grew
+      // a second handle would be offering a direction `brep::PushPullFace` cannot move a face in.
+      else if (what == "GIZMOAXES")
+        got = static_cast<long>(CadGizmoAxisCountFor(run.st));
       else if (what == "SUBOBJECTFACES" || what == "SUBOBJECTEDGES" || what == "SUBOBJECTVERTICES") {
         const solidpick::Kind want = what == "SUBOBJECTFACES"   ? solidpick::Kind::Face
                                      : what == "SUBOBJECTEDGES" ? solidpick::Kind::Edge

@@ -2843,25 +2843,21 @@ struct AppCommandState {
   /// cursor continuously covers the geometry being picked.
   HoverDwell subObjectHoverDwell{};
 
-  // --- The face grip (REQ-319 increment 2): drag the selected face along its own normal. ---
+  // --- The translate gizmo (REQ-060 + GitHub issue #148 acceptance 4, Phase 5 slices 4b and 4c) ---
   //
-  // Armed by a click on the grip, updated as the cursor moves, committed by a second click — the
-  // same click-arm / click-commit idiom `entityGripMoveActive` already uses, so a solid's grip
-  // behaves like every other grip in the program rather than being the one that wants a held button.
-  bool subObjectGripActive = false;
-  SelectedSubObject subObjectGripRef;
-  /// The grip's anchor (the face centroid) and the axis it slides along (the face's outward normal),
-  /// both resolved ONCE when the drag arms. Re-deriving them per frame from the live solid would be
-  /// re-deriving them from geometry the drag is in the middle of changing.
-  ray3d::Vec3 subObjectGripAnchor;
-  ray3d::Vec3 subObjectGripAxis;
-  /// Signed distance along \ref subObjectGripAxis the cursor currently asks for. Applied only on
-  /// commit — nothing in the store moves while the drag is live, which is what makes Esc a true
-  /// cancel rather than an undo.
-  double subObjectGripDistance = 0.0;
+  // ONE widget, two subjects. With entities selected it shows three handles along the active UCS
+  // and commits through `ApplyTranslationToSelection`; with exactly one solid FACE selected it
+  // shows one handle along that face's own normal and commits through `CadApplyPushPull`. Which of
+  // the two is derived from the selection (\ref CadGizmoModeFor), never stored, because the two
+  // selections are already mutually exclusive (D-2026-09-04-a) — a stored mode would be a third
+  // thing that can disagree with them.
+  //
+  // The face mode REPLACED the separate face grip REQ-319 increment 2 first shipped: two handles
+  // for one operation is worse than either, and the gizmo brings the arrow, the pre-highlight, the
+  // live ghost and the shared skew-line solve the grip's screen-space dot did not have.
 
-  // --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) -------------------------
-  /// Which axis handle the cursor is over right now, or -1: 0 = the active UCS X, 1 = Y, 2 = Z.
+  /// Which axis handle the cursor is over right now, or -1. In entity mode 0/1/2 are the active
+  /// UCS X, Y and Z; in face mode 0 is the face normal and there is no other.
   ///
   /// Pre-highlight only. It is refreshed by the same hit test the click uses, so the handle that
   /// lights up is the handle that grabs - the rule REQ-318's sub-object hover already follows, and
@@ -2878,9 +2874,9 @@ struct AppCommandState {
 
   /// Where the gizmo sat when the handle was grabbed, in WCS.
   ///
-  /// Captured rather than recomputed per frame: nothing moves until the drag commits, but the
-  /// captured pair is what makes the drag a rigid one-axis slide even if the selection changes
-  /// underneath it.
+  /// Captured rather than recomputed per frame, and in face mode that is load-bearing: the anchor
+  /// is the face's centroid, and re-deriving it mid-drag would derive it from geometry the drag is
+  /// about to change.
   ray3d::Vec3 gizmoAnchor{0.0, 0.0, 0.0};
   /// The axis direction grabbed, in WCS - captured with the anchor, and for the same reason.
   ray3d::Vec3 gizmoAxisDir{1.0, 0.0, 0.0};
@@ -2892,6 +2888,13 @@ struct AppCommandState {
   double gizmoGrabParam = 0.0;
   /// The live drag distance along \ref gizmoAxisDir, in drawing units. Zero when nothing is dragged.
   double gizmoDragDistance = 0.0;
+
+  /// In face mode, WHICH face the armed drag is moving — captured at the grab like the anchor.
+  ///
+  /// The selection could be cleared or re-picked between arming and committing; the drag applies to
+  /// the face the user actually grabbed, not to whatever is selected when they let go.
+  bool gizmoDragIsSubObject = false;
+  SelectedSubObject gizmoDragSubObject;
 
   /// Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS, as **stable entity ids** (REQ-084 (d),
   /// ADR-034). Kept SORTED so the per-entity test is a `binary_search`; empty is the overwhelming
@@ -4264,16 +4267,6 @@ bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double 
 [[nodiscard]] bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& ref,
                                         ray3d::Vec3* outAnchor, ray3d::Vec3* outAxis);
 
-/// How far along \p axis from \p anchor the cursor \p ray is asking for — the closest approach of
-/// two skew lines, unclamped and signed.
-///
-/// Unclamped on purpose: the axis is a direction the face slides along, not a segment, and clamping
-/// would silently stop the drag at an arbitrary end. Signed, because pulling inward is the same
-/// gesture as pushing outward with the other sign. False when the ray is parallel to the axis, where
-/// there is no closest point to speak of — the drag then holds its last value rather than jumping.
-[[nodiscard]] bool CadSubObjectGripAxisDistance(const ray3d::Ray& ray, const ray3d::Vec3& anchor,
-                                                const ray3d::Vec3& axis, double* outDistance);
-
 /// One named dimension of a primitive: the letter that sets it, and what to call it in a prompt.
 ///
 /// `optional` marks a parameter the primitive can be built without — only a cone's and a pyramid's
@@ -5350,7 +5343,7 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
 // takes a direction from the user - the grid, ORTHO, coordinate entry - follows the UCS (REQ-154),
 // and in the World UCS the two are identical, so the default view is unchanged.
 
-/// Translate the whole selection by (\p dx, \p dy, \p dz) in WCS (REQ-320). Surfaces are dropped by
+/// Translate the whole selection by (\p dx, \p dy, \p dz) in WCS (REQ-322). Surfaces are dropped by
 /// name (REQ-201); solids move through `brep::Translate`. The caller owns the undo snapshot.
 ///
 /// Declared here — it had been a definition private to `CadCommands.cpp` — because REQ-060's
@@ -5360,25 +5353,59 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
 void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float dz,
                                  std::vector<std::string>& log);
 
-/// Number of gizmo axes. Three: the UCS X, Y and Z. Named so the loops below say why they are 3.
+/// What the gizmo is currently acting on, derived from the selection and never stored.
+///
+/// The two selections are mutually exclusive already (D-2026-09-04-a), so a stored mode would be a
+/// third thing that can disagree with them. `None` is the answer whenever no gizmo may be drawn —
+/// which is REQ-060's third acceptance bullet and, for a face, the honest answer for a selection the
+/// kernel has no operation for.
+enum class CadGizmoMode {
+  None,
+  /// The entity selection: three handles along the active UCS, committing through
+  /// `ApplyTranslationToSelection`.
+  Entity,
+  /// Exactly one solid FACE: ONE handle along that face's own normal, committing through
+  /// `CadApplyPushPull` — so a drag and the typed `PRESSPULL` agree by construction (issue #148
+  /// acceptance 4).
+  ///
+  /// One handle and not three, because `brep::PushPullFace` takes a distance along the face normal
+  /// and nothing else. A handle along UCS X on a face whose normal is Z would advertise a move the
+  /// kernel cannot make; drawing it and then refusing the drag is worse than not drawing it.
+  SubObjectFace,
+};
+
+/// Which subject the gizmo has right now. \c None when no gizmo may be drawn.
+[[nodiscard]] CadGizmoMode CadGizmoModeFor(const AppCommandState& st);
+
+/// The one selected face, when \ref CadGizmoModeFor is \c SubObjectFace. False otherwise.
+[[nodiscard]] bool CadGizmoSubObjectFace(const AppCommandState& st, SelectedSubObject* out);
+
+/// Maximum gizmo axes. Three: the UCS X, Y and Z. Named so the loops below say why they are 3.
 inline constexpr int kGizmoAxisCount = 3;
+
+/// How many handles the gizmo actually has right now: 3 in entity mode, 1 in face mode, 0 for none.
+[[nodiscard]] int CadGizmoAxisCountFor(const AppCommandState& st);
 /// Handle length, in screen pixels, held constant at every zoom (REQ-060's "as displayed").
 inline constexpr float kGizmoHandleLenPx = 70.f;
 /// Grab aperture around a handle, in screen pixels.
 inline constexpr float kGizmoHandleGrabPx = 7.f;
 
-/// Where the gizmo hangs: the centre of the selection's bounding box, in WCS. False when nothing in
-/// the selection has a position (an empty selection, or one holding only display-only types).
+/// Where the gizmo hangs, in WCS. False when there is nothing for it to hang off.
 ///
-/// **The precision of this point does not affect any move.** A drag distance is the change in the
-/// axis parameter between the grab and the drop, so the anchor appears in both terms and cancels;
-/// it decides only where the handles are DRAWN. That is why conservative per-type bounds are good
-/// enough here, and why this is deliberately not \ref ComputeSelectionCentroidWorld - that answers
-/// ROTATE's different question (a pivot, in plan, over ROTATE's own type set) and changing it to
-/// serve this one would change where ROTATE and ARRAY turn things about.
+/// **Entity mode:** the centre of the selection's bounding box. Its precision does not affect any
+/// move — a drag distance is the change in the axis parameter between the grab and the drop, so the
+/// anchor appears in both terms and cancels, and it decides only where the handles are DRAWN. That
+/// is why conservative per-type bounds are good enough, and why this is deliberately not
+/// \ref ComputeSelectionCentroidWorld: that answers ROTATE's different question (a pivot, in plan,
+/// over ROTATE's own type set), and changing it to serve this one would change where ROTATE and
+/// ARRAY turn things about.
+///
+/// **Face mode:** the face's centroid (\ref CadSubObjectFaceGrip), where the grip this replaced
+/// already put its handle. A corner would read as a vertex grip, which is a different edit.
 [[nodiscard]] bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out);
 
-/// Unit direction of gizmo axis \p axis (0 = X, 1 = Y, 2 = Z) in WCS, from the active UCS.
+/// Unit direction of gizmo axis \p axis in WCS: the active UCS's X / Y / Z in entity mode, and the
+/// selected face's outward normal (axis 0, the only one) in face mode.
 [[nodiscard]] ray3d::Vec3 CadGizmoAxisWorld(const AppCommandState& st, int axis);
 
 /// Handle length in drawing units for the current view - \ref kGizmoHandleLenPx converted through
@@ -5386,8 +5413,8 @@ inline constexpr float kGizmoHandleGrabPx = 7.f;
 /// stated pixel length on screen and a transcript with no window still gets a definite answer.
 [[nodiscard]] float CadGizmoHandleLenWorld(const AppCommandState& st);
 
-/// True when a gizmo should be drawn at all: a non-empty model-space selection with an anchor.
-/// REQ-060's third acceptance bullet ("no gizmo is drawn when the selection is empty") is this.
+/// True when a gizmo should be drawn at all: \ref CadGizmoModeFor is not \c None and an anchor
+/// resolves. REQ-060's third acceptance bullet ("no gizmo when the selection is empty") is this.
 [[nodiscard]] bool CadGizmoVisible(const AppCommandState& st);
 
 /// Signed position along the line (\p anchor, \p axisDir) of the point on it nearest \p ray.
@@ -5422,8 +5449,16 @@ void UpdateGizmoDrag(AppCommandState& st, const ray3d::Ray& ray);
 /// grabbed handle stays lit, and a pre-highlight of a handle the click cannot reach is a lie.
 void UpdateGizmoHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorld);
 
-/// Apply the armed drag: one undo snapshot, one \ref ApplyTranslationToSelection, and disarm.
-/// False (and nothing changed) when no drag is armed or the distance is zero.
+/// Apply the armed drag as ONE undoable step, and disarm.
+///
+/// Entity mode goes through `ApplyTranslationToSelection`, the function typed MOVE calls; face mode
+/// goes through `CadApplyPushPull`, the function typed `PRESSPULL` calls. Both agreements are then
+/// structural rather than two implementations that happen to match today — REQ-060's second
+/// acceptance bullet and issue #148's fourth, stated the same way.
+///
+/// False (and nothing changed) when no drag is armed, when the distance is zero, or when the kernel
+/// refuses the push - in which case `CadApplyPushPull` has already logged its own sentence and the
+/// document is untouched.
 bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log);
 
 /// Disarm without moving anything. Safe to call at any time; ESC and a right-click both do.

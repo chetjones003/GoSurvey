@@ -13409,21 +13409,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // TASK-199's DEBT-1 could be reversed: this is not a second per-frame walk beside the existing
       // hover, it is the same budget. It also SUPPRESSES the entity hover rather than drawing beside
       // it — two highlights answering one cursor is the defect, not the feature.
-      // A live face drag reads the cursor every frame — this is the one thing in the feature that
-      // must not be gated, because a handle that lags the pointer reads as a stuck drag. It costs a
-      // skew-line solve, not a pick: no geometry is searched (REQ-319 increment 2).
-      if (cmd.subObjectGripActive && modelSpace) {
-        const ray3d::Ray dragRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
-        double dragDist = 0.0;
-        if (CadSubObjectGripAxisDistance(dragRay, cmd.subObjectGripAnchor, cmd.subObjectGripAxis,
-                                         &dragDist))
-          cmd.subObjectGripDistance = dragDist;
-        // else: the cursor is sighting straight down the axis, where there is no closest point.
-        // Hold the last value rather than jumping — a drag that snaps to zero as the camera passes
-        // through the axis would throw away the distance the user had already dialled in.
-      }
+      // (The live gizmo drag, which covers a face drag too since slice 4c, is a few lines below.)
       const bool subObjectHovering = modelSpace && !blockEntityHover && ImGui::GetIO().KeyCtrl &&
-                                     !cmd.subObjectGripActive;
+                                     !cmd.gizmoDragActive;
       if (subObjectHovering) {
         cmd.viewportHoverEntityValid = false;
         if (runHoverPick) {
@@ -13442,16 +13430,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else {
         cmd.subObjectHoverValid = false;
       }
-      // The translate gizmo's handle pre-highlight and its live drag (REQ-060, issue #148 slice 4b).
+      // The translate gizmo's handle pre-highlight and its live drag (REQ-060 slice 4b; the FACE
+      // handle and its ghost since slice 4c, issue #148 acceptance 4).
       //
-      // Outside `runHoverPick`, unlike every pick above it, and for a reason: this is three
+      // Outside `runHoverPick`, unlike every pick above it, and for a reason: this is at most three
       // ray-to-segment tests against a widget whose position is already known, not a walk of the
       // drawing — and while a drag is armed the ghost has to follow the cursor every frame or the
       // gesture is not direct manipulation at all.
       //
-      // Suppressed while Ctrl is held so it cannot compete with the sub-object pick, which is the
-      // same "two highlights answering one cursor is the defect" rule the block above states.
-      if (modelSpace && !ImGui::GetIO().KeyCtrl) {
+      // The HOVER is suppressed while Ctrl is held so it cannot compete with the sub-object pick,
+      // which is the same "two highlights answering one cursor is the defect" rule the block above
+      // states. A live DRAG is not: pressing Ctrl mid-drag should not freeze the gesture.
+      if (modelSpace && (cmd.gizmoDragActive || !ImGui::GetIO().KeyCtrl)) {
         const ray3d::Ray gizRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
         if (cmd.gizmoDragActive) {
           UpdateGizmoDrag(cmd, gizRay);
@@ -14166,75 +14156,28 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // The two selections are mutually exclusive (REQ-318 item 9), which is what makes #148's
       // "does not interfere with whole-entity selection" structural: nothing that consumes
       // `cmd.selection` ever sees a sub-object, so no consumer needs to know this exists.
-      // The translate gizmo gets first refusal on the click (REQ-060, issue #148 slice 4b).
+
+      // The translate gizmo gets first refusal on the click (REQ-060 slice 4b; a solid FACE too
+      // since slice 4c, issue #148 acceptance 4).
       //
-      // BEFORE the ordinary selection pick AND before the face grip below, because a handle sits
-      // over the objects it moves and a click that selected through it would make the widget
-      // undraggable. It only ever consumes a click that actually lands on a handle —
+      // BEFORE the ordinary selection pick, and before the plain-click clear below, because a
+      // handle sits over the thing it moves: a click that selected through it would make the widget
+      // undraggable, and a click that cleared the sub-object selection would take away the very
+      // face the handle belongs to. It only ever consumes a click that actually lands on a handle —
       // `SubmitGizmoClick` returns false otherwise — so a click anywhere else in the viewport means
-      // exactly what it always meant. In practice the two never contend for the same click: the
-      // gizmo only shows on a non-empty WHOLE-ENTITY selection and the face grip only on a
-      // sub-object one, and those two selections are mutually exclusive stores (D-2026-09-04-a).
+      // exactly what it always meant.
       //
       // Not while Ctrl is held: that is the sub-object pick's gesture (D-2026-09-04-a), and the two
-      // must not race for the same click.
-      if (modelSpace && !ImGui::GetIO().KeyCtrl) {
+      // must not race for the same click. A live drag is exempt, so a drag begun before Ctrl went
+      // down can still be committed.
+      if (modelSpace && (cmd.gizmoDragActive || !ImGui::GetIO().KeyCtrl)) {
         const ray3d::Ray gizClickRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
         if (SubmitGizmoClick(cmd, gizClickRay,
                              static_cast<double>(CadSnap::WorldToleranceFromPixels(
                                  avail.y, halfH, kGizmoHandleGrabPx)),
                              log)) {
           BumpCadGpuCache(cmd);
-          handled = true;
-        }
-      }
-      // The face GRIP (REQ-319 increment 2) is checked before anything else, in both directions: a
-      // live drag consumes this click as its commit, and an idle click on the handle arms one. It
-      // comes first because the handle sits ON the face it belongs to — checked later, the plain
-      // click below would clear the very selection the handle belongs to.
-      if (!handled && modelSpace && cmd.subObjectGripActive) {
-        const SelectedSubObject dragged = cmd.subObjectGripRef;
-        const double dist = cmd.subObjectGripDistance;
-        cmd.subObjectGripActive = false;
-        if (std::fabs(dist) <= 1.e-9) {
-          // A click without having moved is a cancel, not a zero-distance push the kernel would
-          // refuse by name — the user gets silence, which is what "I changed my mind" should cost.
-          log.push_back("Face drag cancelled.");
-        } else {
-          CadApplyPushPull(cmd, dragged, dist, log);
-        }
-        cmd.subObjectGripDistance = 0.0;
-        BumpCadGpuCache(cmd);
-        handled = true;
-      }
-      if (!handled && modelSpace && !cmd.subObjectSelection.empty()) {
-        ray3d::Vec3 gripAnchor;
-        ray3d::Vec3 gripAxis;
-        int faceCount = 0;
-        const SelectedSubObject* faceRef = nullptr;
-        for (const SelectedSubObject& s : cmd.subObjectSelection)
-          if (s.kind == solidpick::Kind::Face) {
-            ++faceCount;
-            faceRef = &s;
-          }
-        if (faceCount == 1 && CadSubObjectFaceGrip(cmd, *faceRef, &gripAnchor, &gripAxis)) {
-          // Hit-tested in SCREEN space against a pixel budget, like every other grip: a handle is a
-          // few pixels wide however far away the solid is.
-          float gx = 0.f;
-          float gy = 0.f;
-          CadViewCamera(cmd).WorldToScreen(gripAnchor.x, gripAnchor.y, gripAnchor.z, avail.x, avail.y,
-                                           &gx, &gy);
-          const float gdx = gx - mx;
-          const float gdy = gy - my;
-          if (gdx * gdx + gdy * gdy <= 12.f * 12.f) {
-            cmd.subObjectGripActive = true;
-            cmd.subObjectGripRef = *faceRef;
-            cmd.subObjectGripAnchor = gripAnchor;
-            cmd.subObjectGripAxis = gripAxis;
-            cmd.subObjectGripDistance = 0.0;
-            log.push_back("Face drag - move the cursor to set the distance, click to apply, Esc to cancel.");
-            handled = true;
-          }
+          handled = true;  // the click was the gizmo's; nothing below may also act on it
         }
       }
       const bool subObjectClick = !handled && modelSpace && ImGui::GetIO().KeyCtrl;

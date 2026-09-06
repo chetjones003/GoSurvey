@@ -73,20 +73,18 @@ void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* out
 void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>* outFaceTris,
                                   std::vector<float>* outFaceEdges, std::vector<float>* outLines);
 
-/// The face GRIP: its handle, and — while a drag is live — where the face would land (REQ-319
-/// increment 2).
+/// Where a face would land under an armed gizmo drag (REQ-319 increment 2, re-driven by issue #148
+/// acceptance 4). Empty unless a gizmo drag is armed on a face.
 ///
-/// \p outHandle is a small square in the face's own plane at its centroid, as `GL_LINES`. Drawn
-/// whenever exactly one face is selected, so the handle is what tells the user the face is
-/// draggable at all.
+/// The face's boundary translated by the live drag distance, plus a leader from the centroid to it.
+/// **The solid is not rebuilt per frame to draw this** — a push is a whole-solid copy and a
+/// validation, and the drag runs on the frame path. Translating the boundary shows where the face
+/// is heading at a cost that does not grow with the solid, and the real geometry is computed once,
+/// on commit, where a refusal can still be reported (ADR-046 (d)).
 ///
-/// \p outPreview is the face's boundary translated by the live drag distance, plus a line from the
-/// handle to it. **The solid is not rebuilt per frame to draw this** — a push is a whole-solid copy
-/// and a validation, and the drag runs on the frame path. Translating the boundary shows exactly
-/// where the face will land at a cost that does not grow with the solid, and the real geometry is
-/// computed once, on commit, where a refusal can still be reported (ADR-046 (d)).
-void BuildSubObjectGripGeometry(const AppCommandState& cmd, std::vector<float>* outHandle,
-                                std::vector<float>* outPreview);
+/// The square HANDLE this used to draw beside the preview is gone: slice 4c made the gizmo's arrow
+/// the handle, and two handles for one operation is worse than either.
+void BuildSubObjectFaceGhost(const AppCommandState& cmd, std::vector<float>* outPreview);
 
 /// Hover highlight geometry for the viewport (entity under idle cursor, distinct from selection).
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* outHoverLines,

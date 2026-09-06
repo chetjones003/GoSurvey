@@ -490,6 +490,9 @@ TEST_CASE("The face grip sits on the face and slides along its normal (REQ-319)"
   }
 }
 
+// Renamed subject: this WAS `CadSubObjectGripAxisDistance`, the face grip's own skew-line solve.
+// Slice 4c collapsed it into `CadAxisDragParam`, the gizmo's - they were the same arithmetic under
+// two names, written on branches that could not see each other. The cases are unchanged.
 TEST_CASE("The grip distance is the closest approach of the cursor ray to the axis (REQ-319)",
           "[subobject]") {
   const ray3d::Vec3 anchor{0, 0, 8};
@@ -501,21 +504,21 @@ TEST_CASE("The grip distance is the closest approach of the cursor ray to the ax
     ray3d::Ray r;
     r.origin = {100, 0, 11};
     r.dir = {-1, 0, 0};
-    REQUIRE(CadSubObjectGripAxisDistance(r, anchor, axis, &d));
+    REQUIRE(CadAxisDragParam(anchor, axis, r, &d));
     REQUIRE(d == Catch::Approx(3.0));
   }
   SECTION("below the anchor is negative — pulling in is the same gesture with the other sign") {
     ray3d::Ray r;
     r.origin = {100, 0, 5};
     r.dir = {-1, 0, 0};
-    REQUIRE(CadSubObjectGripAxisDistance(r, anchor, axis, &d));
+    REQUIRE(CadAxisDragParam(anchor, axis, r, &d));
     REQUIRE(d == Catch::Approx(-3.0));
   }
   SECTION("it is UNCLAMPED, because the axis is a direction and not a segment") {
     ray3d::Ray r;
     r.origin = {100, 0, 908};
     r.dir = {-1, 0, 0};
-    REQUIRE(CadSubObjectGripAxisDistance(r, anchor, axis, &d));
+    REQUIRE(CadAxisDragParam(anchor, axis, r, &d));
     REQUIRE(d == Catch::Approx(900.0));
   }
   SECTION("an oblique ray still resolves, and off-axis sideways offset does not change the answer") {
@@ -524,7 +527,7 @@ TEST_CASE("The grip distance is the closest approach of the cursor ray to the ax
     ray3d::Ray r;
     r.origin = {100, 5, 11};
     r.dir = {-1, 0, 0};
-    REQUIRE(CadSubObjectGripAxisDistance(r, anchor, axis, &d));
+    REQUIRE(CadAxisDragParam(anchor, axis, r, &d));
     REQUIRE(d == Catch::Approx(3.0));
   }
   SECTION("a ray sighting straight down the axis is refused rather than answered") {
@@ -533,18 +536,18 @@ TEST_CASE("The grip distance is the closest approach of the cursor ray to the ax
     ray3d::Ray r;
     r.origin = {0, 0, 100};
     r.dir = {0, 0, -1};
-    REQUIRE_FALSE(CadSubObjectGripAxisDistance(r, anchor, axis, &d));
+    REQUIRE_FALSE(CadAxisDragParam(anchor, axis, r, &d));
   }
   SECTION("a degenerate ray or axis is refused") {
     ray3d::Ray bad;
     bad.origin = {0, 0, 0};
     bad.dir = {0, 0, 0};
-    REQUIRE_FALSE(CadSubObjectGripAxisDistance(bad, anchor, axis, &d));
+    REQUIRE_FALSE(CadAxisDragParam(anchor, axis, bad, &d));
     ray3d::Ray r;
     r.origin = {100, 0, 11};
     r.dir = {-1, 0, 0};
-    REQUIRE_FALSE(CadSubObjectGripAxisDistance(r, anchor, {0, 0, 0}, &d));
-    REQUIRE_FALSE(CadSubObjectGripAxisDistance(r, anchor, axis, nullptr));
+    REQUIRE_FALSE(CadAxisDragParam(anchor, {0, 0, 0}, r, &d));
+    REQUIRE_FALSE(CadAxisDragParam(anchor, axis, r, nullptr));
   }
 }
 
@@ -635,4 +638,149 @@ TEST_CASE("A cylinder wall's grip slides along its own radius (REQ-319)", "[subo
         REQUIRE_FALSE(CadSubObjectFaceGrip(st, cref, &a, &x));
       }
   }
+}
+
+// --- The gizmo on a sub-object selection (issue #148 acceptance 4, Phase 5 slice 4c) -------------
+//
+// The transcript `req148-gizmo-subobject` drives this through the camera and asserts the thing that
+// matters — a drag and `PRESSPULL <the same distance>` leaving identical mass properties. These
+// cases own the mode DERIVATION, which a transcript can only observe two numbers of.
+
+TEST_CASE("The gizmo mode is derived from the selection, never stored", "[subobject][gizmo]") {
+  AppCommandState st;
+  st.uiViewportWidthPx = 1200.f;
+  st.uiViewportHeightPx = 700.f;
+  AddBox(st, World(), 20.0, 10.0, 8.0);  // x [-10,10], y [-5,5], z [0,8]
+  std::vector<std::string> log;
+
+  SECTION("nothing selected: no gizmo") {
+    REQUIRE(CadGizmoModeFor(st) == CadGizmoMode::None);
+    REQUIRE(CadGizmoAxisCountFor(st) == 0);
+    REQUIRE_FALSE(CadGizmoVisible(st));
+  }
+
+  SECTION("one FACE: one handle, on the face's centroid, along its own normal") {
+    REQUIRE(SubmitSubObjectPick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), false, log));
+    REQUIRE(CadGizmoModeFor(st) == CadGizmoMode::SubObjectFace);
+    // ONE, because `brep::PushPullFace` takes a distance along the normal and nothing else. A
+    // second handle would name a direction the kernel cannot move the face in.
+    REQUIRE(CadGizmoAxisCountFor(st) == 1);
+    ray3d::Vec3 anchor{};
+    REQUIRE(CadGizmoAnchorWorld(st, &anchor));
+    REQUIRE(anchor.z == Catch::Approx(8.0));
+    const ray3d::Vec3 axis = CadGizmoAxisWorld(st, 0);
+    REQUIRE(axis.z == Catch::Approx(1.0));
+    // Not the UCS X it would be in entity mode - the case that fails if the face branch is missed.
+    REQUIRE(std::fabs(axis.x) == Catch::Approx(0.0).margin(1e-9));
+  }
+
+  SECTION("an EDGE or a VERTEX: no gizmo, and that is the honest answer") {
+    // The kernel has no operation that moves either, so a handle would advertise a move that cannot
+    // happen. Refusing after the drag would be worse than not offering it (D-2026-09-05-b).
+    REQUIRE(SubmitSubObjectPick(st, RayAt({0, 100, 100}, {0, 5, 8}), Tol(0.5, 0.5), false, log));
+    REQUIRE(st.subObjectSelection.size() == 1);
+    REQUIRE(st.subObjectSelection[0].kind != solidpick::Kind::Face);
+    REQUIRE(CadGizmoModeFor(st) == CadGizmoMode::None);
+    REQUIRE(CadGizmoAxisCountFor(st) == 0);
+    REQUIRE_FALSE(CadGizmoVisible(st));
+  }
+
+  SECTION("TWO faces: no gizmo, because there is no single normal to slide along") {
+    REQUIRE(SubmitSubObjectPick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.0, 0.0), false, log));
+    REQUIRE(SubmitSubObjectPick(st, RayAt({100, 0, 4}, {10, 0, 4}), Tol(0.0, 0.0), true, log));
+    REQUIRE(st.subObjectSelection.size() == 2);
+    REQUIRE(CadGizmoModeFor(st) == CadGizmoMode::None);
+    // PRESSPULL already refuses to move two faces at once; offering a gesture the commit would
+    // decline is worse than offering none.
+    REQUIRE(CadGizmoAxisCountFor(st) == 0);
+  }
+
+  SECTION("an ENTITY selection keeps the three-handle gizmo it had") {
+    st.userLinesFlat = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+    st.userLineAttrs.push_back(EntityAttributes{});
+    SelectedEntity e;
+    e.type = SelectedEntity::Type::LineSeg;
+    e.index = 0;
+    st.selection.push_back(e);
+    REQUIRE(CadGizmoModeFor(st) == CadGizmoMode::Entity);
+    REQUIRE(CadGizmoAxisCountFor(st) == 3);
+  }
+}
+
+TEST_CASE("A face gizmo drag commits what PRESSPULL would", "[subobject][gizmo]") {
+  // Issue #148 acceptance 4 at the level a unit test can hold it. It is true by construction —
+  // `CommitGizmoDrag` calls `CadApplyPushPull`, which is what `CadPressPull` calls — and this is
+  // the case that would fail if someone gave the face gizmo an edit of its own.
+  std::vector<std::string> log;
+
+  AppCommandState viaGizmo;
+  viaGizmo.uiViewportWidthPx = 1200.f;
+  viaGizmo.uiViewportHeightPx = 700.f;
+  AddBox(viaGizmo, World(), 20.0, 10.0, 8.0);
+  REQUIRE(SubmitSubObjectPick(viaGizmo, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), false, log));
+  // Anchor (0,0,8), axis +Z. Grab 5 up, drop 17 up: the drag is 12.
+  {
+    ray3d::Ray grab;
+    grab.origin = {100, 0, 13};
+    grab.dir = {-1, 0, 0};
+    REQUIRE(SubmitGizmoClick(viaGizmo, grab, 1.0, log));
+    REQUIRE(viaGizmo.gizmoDragActive);
+    REQUIRE(viaGizmo.gizmoDragIsSubObject);
+    ray3d::Ray drop;
+    drop.origin = {100, 0, 25};
+    drop.dir = {-1, 0, 0};
+    UpdateGizmoDrag(viaGizmo, drop);
+    REQUIRE(viaGizmo.gizmoDragDistance == Catch::Approx(12.0));
+    REQUIRE(CommitGizmoDrag(viaGizmo, log));
+  }
+
+  AppCommandState viaTyped;
+  viaTyped.uiViewportWidthPx = 1200.f;
+  viaTyped.uiViewportHeightPx = 700.f;
+  AddBox(viaTyped, World(), 20.0, 10.0, 8.0);
+  REQUIRE(SubmitSubObjectPick(viaTyped, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), false, log));
+  CadPressPull(viaTyped, "12", log);
+
+  REQUIRE(viaGizmo.cadSolids.size() == 1);
+  REQUIRE(viaTyped.cadSolids.size() == 1);
+  REQUIRE(viaGizmo.cadSolids[0]);
+  REQUIRE(viaTyped.cadSolids[0]);
+  // Vertex for vertex, not merely "the same volume": a solid that moved the right amount the wrong
+  // way can share a volume with one that did not.
+  const brep::Solid& a = *viaGizmo.cadSolids[0];
+  const brep::Solid& b = *viaTyped.cadSolids[0];
+  REQUIRE(a.vertices.size() == b.vertices.size());
+  for (size_t i = 0; i < a.vertices.size(); ++i) {
+    CHECK(a.vertices[i].p.x == Catch::Approx(b.vertices[i].p.x).margin(1e-9));
+    CHECK(a.vertices[i].p.y == Catch::Approx(b.vertices[i].p.y).margin(1e-9));
+    CHECK(a.vertices[i].p.z == Catch::Approx(b.vertices[i].p.z).margin(1e-9));
+  }
+}
+
+TEST_CASE("A face drag applies to the face GRABBED, not to whatever is selected later",
+          "[subobject][gizmo]") {
+  // The selection can be cleared or re-picked between the two clicks of a click-arm / click-commit
+  // drag. The reference is captured at the grab for that reason.
+  AppCommandState st;
+  st.uiViewportWidthPx = 1200.f;
+  st.uiViewportHeightPx = 700.f;
+  AddBox(st, World(), 20.0, 10.0, 8.0);
+  std::vector<std::string> log;
+  REQUIRE(SubmitSubObjectPick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), false, log));
+  ray3d::Ray grab;
+  grab.origin = {100, 0, 13};
+  grab.dir = {-1, 0, 0};
+  REQUIRE(SubmitGizmoClick(st, grab, 1.0, log));
+  const SelectedSubObject grabbed = st.gizmoDragSubObject;
+
+  st.subObjectSelection.clear();  // the user clears it mid-drag
+  ray3d::Ray drop;
+  drop.origin = {100, 0, 25};
+  drop.dir = {-1, 0, 0};
+  UpdateGizmoDrag(st, drop);
+  REQUIRE(st.gizmoDragDistance == Catch::Approx(12.0));
+  REQUIRE(CommitGizmoDrag(st, log));
+  REQUIRE(grabbed.index == 0 + grabbed.index);  // (the reference itself is what was applied)
+  // 20 x 10, pushed from 8 to 20 tall.
+  REQUIRE(brep::ComputeMassProperties(*st.cadSolids[0]).volume == Catch::Approx(4000.0));
 }

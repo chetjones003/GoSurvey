@@ -1585,63 +1585,31 @@ void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>
   AppendSubObjectGeometry(cmd, cmd.subObjectHover, SubObjectMarkerArm(cmd), faceTris, faceEdges, lines);
 }
 
-void BuildSubObjectGripGeometry(const AppCommandState& cmd, std::vector<float>* handle,
-                                std::vector<float>* preview) {
-  if (handle)
-    handle->clear();
-  if (preview)
-    preview->clear();
-
-  // Exactly one selected face gets a handle. Two would need two handles and a rule for which one a
-  // drag grabs, and PRESSPULL already refuses to move two faces at once — offering a gesture the
-  // commit would decline is worse than offering none.
-  const SelectedSubObject* ref = nullptr;
-  if (cmd.subObjectGripActive) {
-    ref = &cmd.subObjectGripRef;  // mid-drag the handle belongs to the face being dragged
-  } else {
-    int faces = 0;
-    for (const SelectedSubObject& s : cmd.subObjectSelection)
-      if (s.kind == solidpick::Kind::Face) {
-        ++faces;
-        ref = &s;
-      }
-    if (faces != 1)
-      return;
-  }
-
-  ray3d::Vec3 anchor;
-  ray3d::Vec3 axis;
-  if (!CadSubObjectFaceGrip(cmd, *ref, &anchor, &axis))
+void BuildSubObjectFaceGhost(const AppCommandState& cmd, std::vector<float>* preview) {
+  if (!preview)
     return;
-
-  const double arm = SubObjectMarkerArm(cmd);
-  // Two directions IN the face's plane, so the handle lies flat on the face rather than floating in
-  // front of it — a square that cuts through the surface reads as a bug at a glancing camera angle.
-  ray3d::Vec3 u = std::fabs(axis.z) < 0.9 ? ray3d::Vec3{0, 0, 1} : ray3d::Vec3{1, 0, 0};
-  u = ray3d::Normalize(ray3d::Cross(axis, u));
-  const ray3d::Vec3 v = ray3d::Normalize(ray3d::Cross(axis, u));
-
-  if (handle) {
-    const ray3d::Vec3 c[4] = {
-        ray3d::Add(anchor, ray3d::Add(ray3d::Scale(u, arm), ray3d::Scale(v, arm))),
-        ray3d::Add(anchor, ray3d::Add(ray3d::Scale(u, -arm), ray3d::Scale(v, arm))),
-        ray3d::Add(anchor, ray3d::Add(ray3d::Scale(u, -arm), ray3d::Scale(v, -arm))),
-        ray3d::Add(anchor, ray3d::Add(ray3d::Scale(u, arm), ray3d::Scale(v, -arm))),
-    };
-    for (int i = 0; i < 4; ++i)
-      AppendSeg(handle, c[i], c[(i + 1) % 4]);
-  }
-
-  if (!preview || !cmd.subObjectGripActive)
+  preview->clear();
+  // Only while a gizmo drag is armed ON A FACE. The square handle this function used to draw is
+  // gone: the gizmo's arrow is the handle now (issue #148 acceptance 4), and two handles for one
+  // operation is worse than either.
+  if (!cmd.gizmoDragActive || !cmd.gizmoDragIsSubObject)
     return;
-  const ray3d::Vec3 delta = ray3d::Scale(axis, cmd.subObjectGripDistance);
-  const CadSolidPtr sp = ref->owner.lock();
-  if (!sp || ref->index < 0 || static_cast<size_t>(ref->index) >= sp->faces.size())
+  const SelectedSubObject& ref = cmd.gizmoDragSubObject;
+  const ray3d::Vec3 anchor = cmd.gizmoAnchor;
+  const ray3d::Vec3 delta = ray3d::Scale(cmd.gizmoAxisDir, cmd.gizmoDragDistance);
+  const CadSolidPtr sp = ref.owner.lock();
+  if (!sp || ref.index < 0 || static_cast<size_t>(ref.index) >= sp->faces.size())
     return;
   // The face's boundary where it would land. Translated, not rebuilt: `brep::PushPullFace` copies
   // the whole solid and validates it, which is the right cost once on commit and the wrong cost
   // every frame of a drag.
-  for (const brep::Loop& loop : sp->faces[static_cast<size_t>(ref->index)].loops) {
+  //
+  // It is a PICTURE of the distance, not a promise about the result: a real push also re-solves
+  // every neighbouring face, and the corners of this outline are where the face's own vertices
+  // would go if nothing else moved. That is the honest thing to show for the same reason the ghost
+  // is not the rebuilt solid — the rebuild can still be refused, and it happens on commit where a
+  // refusal can be reported (ADR-046 (d)).
+  for (const brep::Loop& loop : sp->faces[static_cast<size_t>(ref.index)].loops) {
     for (const brep::EdgeUse& use : loop.uses) {
       if (use.edge < 0 || static_cast<size_t>(use.edge) >= sp->edges.size())
         continue;
@@ -1654,8 +1622,8 @@ void BuildSubObjectGripGeometry(const AppCommandState& cmd, std::vector<float>* 
       }
     }
   }
-  // A leader from the handle to where it is going, so the drag distance is readable even when the
-  // moved boundary happens to sit behind other geometry.
+  // A leader from the face's centroid to where it is going, so the drag distance is readable even
+  // when the moved boundary happens to sit behind other geometry.
   AppendSeg(preview, anchor, ray3d::Add(anchor, delta));
 }
 
@@ -1727,6 +1695,7 @@ void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out) {
     out->hot[i] = false;
   }
   out->guide.clear();
+  out->faceMode = false;
   // REQ-060 acceptance 3, and the whole of it: an empty selection has no anchor, so nothing is
   // emitted and nothing is drawn. Stated by the anchor's own return rather than by a separate
   // "is the selection empty" test, which is a second thing that could disagree with the first.
@@ -1740,8 +1709,14 @@ void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out) {
     anchor = cmd.gizmoAnchor;
   const double len = static_cast<double>(CadGizmoHandleLenWorld(cmd));
   const int lit = cmd.gizmoDragActive ? cmd.gizmoDragAxis : cmd.gizmoHoverAxis;
-  for (int a = 0; a < kGizmoAxisCount; ++a) {
-    const ray3d::Vec3 u = CadGizmoAxisWorld(cmd, a);
+  const int axisCount = CadGizmoAxisCountFor(cmd);
+  out->faceMode = CadGizmoModeFor(cmd) == CadGizmoMode::SubObjectFace;
+  for (int a = 0; a < axisCount; ++a) {
+    // Mid-drag the direction is the one CAPTURED at the grab, not one re-derived from the live
+    // selection: in face mode that direction comes from the face's own normal, and re-deriving it
+    // would read it off geometry the drag is about to change.
+    const ray3d::Vec3 u = (cmd.gizmoDragActive && a == cmd.gizmoDragAxis) ? cmd.gizmoAxisDir
+                                                                         : CadGizmoAxisWorld(cmd, a);
     const ray3d::Vec3 tip = ray3d::Add(anchor, ray3d::Scale(u, len));
     out->hot[a] = (a == lit);
     GizmoSeg(&out->axis[a], anchor, tip);

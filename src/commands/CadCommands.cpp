@@ -12445,8 +12445,75 @@ void GizmoGrowBounds(double x, double y, double z, ray3d::Vec3* mn, ray3d::Vec3*
 
 }  // namespace
 
+bool CadGizmoSubObjectFace(const AppCommandState& st, SelectedSubObject* out) {
+  // Exactly one face, and nothing else. More than one face has no single normal to slide along, and
+  // a face selected alongside an edge or a vertex is a selection whose meaning is not settled — both
+  // are refused rather than guessed at, which is what `CadPressPull` already does with its own
+  // selection (REQ-319).
+  const SelectedSubObject* found = nullptr;
+  for (const SelectedSubObject& s : st.subObjectSelection) {
+    if (s.kind != solidpick::Kind::Face)
+      return false;
+    if (found)
+      return false;
+    found = &s;
+  }
+  if (!found)
+    return false;
+  if (out)
+    *out = *found;
+  return true;
+}
+
+CadGizmoMode CadGizmoModeFor(const AppCommandState& st) {
+  if (st.activeSpaceIndex != kModelSpaceIndex)
+    return CadGizmoMode::None;  // a paper sheet is 2D (ADR-025 (g)); there is no third handle to draw
+  // The sub-object selection is tested FIRST, but the order is a belt rather than the only brace:
+  // the two stores are mutually exclusive by decision (D-2026-09-04-a), so they are never both
+  // non-empty. Testing this one first means that if that invariant ever breaks, the gizmo shows the
+  // narrower, more specific edit rather than silently translating a solid whose face was picked.
+  SelectedSubObject face;
+  if (CadGizmoSubObjectFace(st, &face)) {
+    // Only a PLANAR face has a normal to slide along; `CadSubObjectFaceGrip` is the one place that
+    // decides that, so asking it here means the gizmo appears exactly where a push can be applied.
+    ray3d::Vec3 a{};
+    ray3d::Vec3 n{};
+    return CadSubObjectFaceGrip(st, face, &a, &n) ? CadGizmoMode::SubObjectFace : CadGizmoMode::None;
+  }
+  // An EDGE or a VERTEX selection deliberately gets no gizmo. The kernel has no operation that moves
+  // one - `brep::PushPullFace` is the only solid edit there is - so a handle would advertise a move
+  // that cannot happen. Issue #148 criterion 3's other two thirds are unbuilt, and the gizmo says so
+  // by not appearing rather than by refusing after the drag (D-2026-09-05-b).
+  if (!st.subObjectSelection.empty())
+    return CadGizmoMode::None;
+  return st.selection.empty() ? CadGizmoMode::None : CadGizmoMode::Entity;
+}
+
+int CadGizmoAxisCountFor(const AppCommandState& st) {
+  switch (CadGizmoModeFor(st)) {
+  case CadGizmoMode::Entity:
+    return kGizmoAxisCount;
+  case CadGizmoMode::SubObjectFace:
+    // ONE, because `brep::PushPullFace` takes a distance along the face normal and nothing else. A
+    // second handle would name a direction the kernel cannot move the face in.
+    return 1;
+  case CadGizmoMode::None:
+    break;
+  }
+  return 0;
+}
+
 bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
-  if (!out || st.selection.empty())
+  if (!out)
+    return false;
+  {
+    SelectedSubObject face;
+    if (CadGizmoModeFor(st) == CadGizmoMode::SubObjectFace && CadGizmoSubObjectFace(st, &face)) {
+      ray3d::Vec3 axis{};
+      return CadSubObjectFaceGrip(st, face, out, &axis);
+    }
+  }
+  if (st.selection.empty())
     return false;
   ray3d::Vec3 mn{};
   ray3d::Vec3 mx{};
@@ -12576,10 +12643,22 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
 }
 
 ray3d::Vec3 CadGizmoAxisWorld(const AppCommandState& st, int axis) {
-  // The ACTIVE UCS, not the world frame. The grid, ORTHO and coordinate entry all take their
-  // directions from it (REQ-154), and a gizmo that disagreed with the grid it is drawn over would
-  // be the only thing in the viewport pointing somewhere else. In the World UCS — the default, and
-  // what every existing drawing has — the two are identical.
+  // FACE MODE: the face's own outward normal, which is the only direction `brep::PushPullFace` can
+  // move it in. There is one handle, so `axis` is ignored - the caller's loop is bounded by
+  // `CadGizmoAxisCountFor`, which returns 1 here.
+  {
+    SelectedSubObject face;
+    if (CadGizmoModeFor(st) == CadGizmoMode::SubObjectFace && CadGizmoSubObjectFace(st, &face)) {
+      ray3d::Vec3 anchor{};
+      ray3d::Vec3 normal{};
+      if (CadSubObjectFaceGrip(st, face, &anchor, &normal))
+        return normal;
+    }
+  }
+  // ENTITY MODE: the ACTIVE UCS, not the world frame. The grid, ORTHO and coordinate entry all take
+  // their directions from it (REQ-154), and a gizmo that disagreed with the grid it is drawn over
+  // would be the only thing in the viewport pointing somewhere else. In the World UCS — the default,
+  // and what every existing drawing has — the two are identical.
   const ucs::Ucs& u = st.activeUcs;
   const ray3d::Vec3 v = axis == 0 ? u.xAxis : axis == 1 ? u.yAxis : u.zAxis;
   const double len = ray3d::Length(v);
@@ -12604,8 +12683,8 @@ float CadGizmoHandleLenWorld(const AppCommandState& st) {
 }
 
 bool CadGizmoVisible(const AppCommandState& st) {
-  if (st.activeSpaceIndex != kModelSpaceIndex)
-    return false;  // a paper sheet is 2D (ADR-025 (g)); there is no third handle to draw
+  if (CadGizmoModeFor(st) == CadGizmoMode::None)
+    return false;
   ray3d::Vec3 a{};
   return CadGizmoAnchorWorld(st, &a);
 }
@@ -12647,7 +12726,8 @@ int PickGizmoAxis(const AppCommandState& st, const ray3d::Ray& ray, double tolWo
   const ray3d::Vec3 d = ray3d::Scale(ray.dir, 1.0 / dirLen);
   int best = -1;
   double bestDist = tolWorld;
-  for (int axis = 0; axis < kGizmoAxisCount; ++axis) {
+  const int axisCount = CadGizmoAxisCountFor(st);
+  for (int axis = 0; axis < axisCount; ++axis) {
     const ray3d::Vec3 u = CadGizmoAxisWorld(st, axis);
     double s = 0.0;
     if (!CadAxisDragParam(anchor, u, ray, &s))
@@ -12687,6 +12767,7 @@ void CancelGizmoDrag(AppCommandState& st) {
   st.gizmoDragActive = false;
   st.gizmoDragAxis = -1;
   st.gizmoDragDistance = 0.0;
+  st.gizmoDragIsSubObject = false;
 }
 
 bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
@@ -12695,13 +12776,34 @@ bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
   const double dist = st.gizmoDragDistance;
   const int axis = st.gizmoDragAxis;
   const ray3d::Vec3 u = st.gizmoAxisDir;
+  const bool onFace = st.gizmoDragIsSubObject;
+  const SelectedSubObject face = st.gizmoDragSubObject;
   CancelGizmoDrag(st);
   if (std::fabs(dist) < 1.e-12)
     return false;  // a click that moved nothing is a cancel, not an empty undo step
-  // ONE undo snapshot for the whole drag (REQ-060 acceptance 1: "one Ctrl+Z restores the prior
-  // state in a single step"), and then the SAME function typed MOVE calls. That is the whole design
-  // of this feature: "a gizmo drag and the equivalent typed command produce coordinates agreeing
-  // within REQ-101" holds because there is one implementation, not because two agree today.
+
+  // FACE MODE: the SAME function typed `PRESSPULL` calls, which is what makes issue #148's fourth
+  // criterion ("the gizmo ... matches the equivalent typed command within REQ-101") true by
+  // construction. `CadApplyPushPull` owns the undo snapshot, the re-pointing of every sub-object
+  // reference that named the replaced solid, and the kernel's own sentence on a refusal — none of
+  // which should be said twice.
+  //
+  // The distance passes through unchanged because the gizmo's axis IS the face normal
+  // (`CadSubObjectFaceGrip` supplies both), so positive is outward in both.
+  if (onFace) {
+    if (!CadApplyPushPull(st, face, dist, log))
+      return false;  // refused by the kernel and already reported; the document is untouched
+    char faceBuf[128];
+    std::snprintf(faceBuf, sizeof(faceBuf), "Gizmo push/pull: %.4f along the face normal.", dist);
+    log.push_back(faceBuf);
+    return true;
+  }
+
+  // ENTITY MODE: ONE undo snapshot for the whole drag (REQ-060 acceptance 1: "one Ctrl+Z restores
+  // the prior state in a single step"), and then the SAME function typed MOVE calls. That is the
+  // whole design of this feature: "a gizmo drag and the equivalent typed command produce
+  // coordinates agreeing within REQ-101" holds because there is one implementation, not because two
+  // agree today.
   PushUndoSnapshot(st, "Move");
   ApplyTranslationToSelection(st, static_cast<float>(dist * u.x), static_cast<float>(dist * u.y),
                               static_cast<float>(dist * u.z), log);
@@ -12729,6 +12831,12 @@ bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorl
   double s = 0.0;
   if (!CadAxisDragParam(anchor, u, ray, &s))
     return false;  // grabbed while sighting down the handle: nothing to measure from
+  // WHICH face, captured now rather than read at the commit: the selection can be cleared or
+  // re-picked between the two clicks, and the drag belongs to the face the user actually grabbed.
+  const bool onFace = CadGizmoModeFor(st) == CadGizmoMode::SubObjectFace;
+  SelectedSubObject face;
+  if (onFace && !CadGizmoSubObjectFace(st, &face))
+    return false;
   st.gizmoDragActive = true;
   st.gizmoDragAxis = axis;
   st.gizmoAnchor = anchor;
@@ -12736,8 +12844,14 @@ bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorl
   st.gizmoGrabParam = s;
   st.gizmoDragDistance = 0.0;
   st.gizmoHoverAxis = axis;
-  log.push_back(std::string("Gizmo: dragging along ") + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") +
-                " — click to place, ESC to cancel.");
+  st.gizmoDragIsSubObject = onFace;
+  st.gizmoDragSubObject = face;
+  if (onFace) {
+    log.push_back("Gizmo: pushing the face along its normal — click to place, ESC to cancel.");
+  } else {
+    log.push_back(std::string("Gizmo: dragging along ") + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") +
+                  " — click to place, ESC to cancel.");
+  }
   return true;
 }
 
@@ -26362,26 +26476,6 @@ bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& re
   return true;
 }
 
-bool CadSubObjectGripAxisDistance(const ray3d::Ray& ray, const ray3d::Vec3& anchor,
-                                  const ray3d::Vec3& axis, double* outDistance) {
-  if (!outDistance || !ray.valid())
-    return false;
-  const double axisLen = ray3d::Length(axis);
-  if (!(axisLen > 1e-12))
-    return false;
-  const ray3d::Vec3 u = ray3d::Scale(axis, 1.0 / axisLen);
-  const ray3d::Vec3 d = ray3d::Normalize(ray.dir);
-  // Closest approach of two skew lines. `s` is the parameter along the AXIS, which is the distance
-  // we want because `u` is a unit vector. Unclamped: the axis is a direction the face slides along,
-  // not a segment, and clamping would stop the drag at an arbitrary end.
-  const double dDotU = ray3d::Dot(d, u);
-  const double denom = 1.0 - dDotU * dDotU;  // = sin^2 of the angle between them
-  if (!(std::fabs(denom) > 1e-12))
-    return false;  // the cursor is sighting straight down the axis: no closest point to speak of
-  const ray3d::Vec3 w0 = ray3d::Sub(anchor, ray.origin);
-  *outDistance = (ray3d::Dot(w0, d) * dDotU - ray3d::Dot(w0, u)) / denom;
-  return true;
-}
 
 
 bool HandleSliceTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {

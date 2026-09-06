@@ -207,8 +207,8 @@ TEST_CASE("Gizmo: the handles follow the active UCS", "[gizmo][req060]") {
   CHECK(st.userLinesFlat[1] == Approx(7.0));
 }
 
-TEST_CASE("Gizmo/MOVE: a block reference's insertion carries its elevation", "[gizmo][req320]") {
-  // REQ-320 item 1 names "a block reference's insertion" explicitly among the entity kinds a 3D
+TEST_CASE("Gizmo/MOVE: a block reference's insertion carries its elevation", "[gizmo][req322]") {
+  // REQ-322 item 1 names "a block reference's insertion" explicitly among the entity kinds a 3D
   // translate must carry — this is the acceptance bullet the block-ref call site once missed by
   // hardcoding dz to 0.
   AppCommandState st;
@@ -230,8 +230,8 @@ TEST_CASE("Gizmo/MOVE: a block reference's insertion carries its elevation", "[g
   CHECK(st.cadBlockRefs[0].xf.z == Approx(33.0));
 }
 
-TEST_CASE("Gizmo/MOVE: a filled region's vertices carry their elevation", "[gizmo][req320]") {
-  // REQ-320 item 1 names "a filled region's vertices" explicitly — `hatchgeom::Translate` used to
+TEST_CASE("Gizmo/MOVE: a filled region's vertices carry their elevation", "[gizmo][req322]") {
+  // REQ-322 item 1 names "a filled region's vertices" explicitly — `hatchgeom::Translate` used to
   // take no dz at all, so a filled region moved with the rest of a selection stayed at its old Z.
   AppCommandState st;
   CadFilledRegion fr;
