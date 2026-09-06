@@ -2429,6 +2429,52 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   four planes, and pushing a side face would break it into several points — a topology change, and a
   different operation. Its base still pushes.
 
+  **Amendment (i), extended — a curved neighbour is RE-PARAMETERISED, not refused** (2026-09-04,
+  D-2026-09-04-d). The user reported push/pull not working on cylinders or cones. A cap is a plane,
+  so it always passed the face test; what refused it was the wall beside it. A curved surface cannot
+  be intersected the way a plane can, but it CAN be re-parameterised, and that is a third kind of
+  move this ADR did not have:
+
+  - **translate** a plane (the face being pushed);
+  - **re-solve** a corner as the meeting point of the planes around it (amendment (i) proper);
+  - **re-parameterise** a curved wall: a cylinder's stored height, a cone's end radius.
+
+  The taper choice was put to the user and is the substance of the decision: **a cone keeps its
+  slope and lets the radius change**, so pushing its cap extends the same cone rather than bending
+  its wall. The alternative - keep the radius, change the slope - produces a volume 13% different on
+  the worked example, so it is a real fork rather than a rounding preference.
+
+  This is also the case that measures worst when got wrong rather than refused, and it is the one
+  the earlier amendment cited: leave the wall's height alone while its boundary moves and the push
+  still builds and still passes `Validate`, reporting **863.938 against a true 1021.02**. The
+  guarantee is now positive rather than defensive - the wall is made to match its boundary instead
+  of the move being declined because it might not.
+
+  Still refused, each by name: a curved wall pushed along its own normal (a radius change, not a
+  translation), a sphere or torus (no height or taper to follow), an axis oblique to the push, and a
+  cap whose corners also touch an unrelated plane (two constraints, a different solve).
+
+  **Amendment (i), extended again — a cylinder WALL is a radius change** (2026-09-04,
+  D-2026-09-04-e). The fourth kind of move, and the one that is least like a push: a wall's outward
+  normal points a different way at every point of the surface, so there is no single direction to
+  translate along. The gesture means every point moves along its OWN normal by the same amount,
+  which is what adding to the radius does. So the operation's four moves are now:
+
+  - **translate** a plane; **re-solve** a corner; **re-parameterise** a wall's height or taper;
+    and **re-radius** a cylinder wall.
+
+  `Surface::inward` decides the sign, and it is the detail worth writing down: a hole's wall has
+  its outward normal pointing AT the axis, so pushing it outward makes the hole SMALLER and the
+  solid heavier. Got wrong, the feature still appears to work — on a boss. The test builds its hole
+  with a real `BooleanSubtract` rather than by setting the flag on a hand-made solid, because the
+  flag alone is not the case: what has to hold is that this operation reads the same geometry the
+  Booleans produce.
+
+  A CONE wall stays refused, and the reason is a genuine second decision rather than effort:
+  offsetting a cone along its own normal moves both radii by `d / cos(half-angle)` and leaves the
+  apex where it was. That is an offset surface, not a radius change, and which of the two a drag
+  should mean is exactly the kind of fork D-2026-09-04-d had to put to the user for the cap.
+
   Adding such a check to `Validate` was considered and rejected: for a Boolean result it is a
   tolerance question rather than a boolean one, and making every existing operation pay for it —
   and possibly newly fail on it — to guard one new operation is the wrong place to put the cost.

@@ -2843,6 +2843,23 @@ struct AppCommandState {
   /// cursor continuously covers the geometry being picked.
   HoverDwell subObjectHoverDwell{};
 
+  // --- The face grip (REQ-319 increment 2): drag the selected face along its own normal. ---
+  //
+  // Armed by a click on the grip, updated as the cursor moves, committed by a second click — the
+  // same click-arm / click-commit idiom `entityGripMoveActive` already uses, so a solid's grip
+  // behaves like every other grip in the program rather than being the one that wants a held button.
+  bool subObjectGripActive = false;
+  SelectedSubObject subObjectGripRef;
+  /// The grip's anchor (the face centroid) and the axis it slides along (the face's outward normal),
+  /// both resolved ONCE when the drag arms. Re-deriving them per frame from the live solid would be
+  /// re-deriving them from geometry the drag is in the middle of changing.
+  ray3d::Vec3 subObjectGripAnchor;
+  ray3d::Vec3 subObjectGripAxis;
+  /// Signed distance along \ref subObjectGripAxis the cursor currently asks for. Applied only on
+  /// commit — nothing in the store moves while the drag is live, which is what makes Esc a true
+  /// cancel rather than an undo.
+  double subObjectGripDistance = 0.0;
+
   /// Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS, as **stable entity ids** (REQ-084 (d),
   /// ADR-034). Kept SORTED so the per-entity test is a `binary_search`; empty is the overwhelming
   /// case and every gate early-outs on it, so nothing is paid for a drawing with no isolation.
@@ -4184,6 +4201,42 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
 /// True when \p verb names one of the seven primitive commands. Used by the command dispatch and by
 /// the help registry, so the two cannot disagree about which commands exist.
 [[nodiscard]] bool CadIsSolidPrimitiveVerb(const std::string& verb);
+
+/// PRESSPULL (REQ-319) — move the one selected solid FACE along its own normal by p args feet.
+///
+/// Acts on the REQ-318 sub-object selection, which is what pairs the two: Ctrl+click names the face,
+/// this moves it. Refuses — by name, with the document untouched — an empty or face-less selection,
+/// more than one face, a distance that is not a number, and every geometric refusal `brep::PushPullFace`
+/// raises. One undo step for the whole edit.
+void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+
+/// Apply one push/pull and record it as a single undo step. The shared commit behind both the typed
+/// `PRESSPULL` and the grip drag, so the two cannot diverge about what a push does — the same
+/// single-implementation rule REQ-318 item 1 states for the pick.
+///
+/// Replaces the solid, re-points every sub-object reference that named it (the reference is keyed on
+/// identity, and the solid has just been replaced), and logs the kernel's own sentence on a refusal
+/// with the document untouched.
+bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double distance,
+                      std::vector<std::string>& log);
+
+/// The face grip's anchor and slide axis: the face's centroid, and its outward normal (REQ-319
+/// increment 2). False when \p ref does not resolve to a planar face of a live solid.
+///
+/// The centroid rather than a corner, because a grip is a handle on the *face* — a corner handle
+/// would read as a vertex grip, which is a different edit (#148 criterion 3's other half, not built).
+[[nodiscard]] bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                                        ray3d::Vec3* outAnchor, ray3d::Vec3* outAxis);
+
+/// How far along \p axis from \p anchor the cursor \p ray is asking for — the closest approach of
+/// two skew lines, unclamped and signed.
+///
+/// Unclamped on purpose: the axis is a direction the face slides along, not a segment, and clamping
+/// would silently stop the drag at an arbitrary end. Signed, because pulling inward is the same
+/// gesture as pushing outward with the other sign. False when the ray is parallel to the axis, where
+/// there is no closest point to speak of — the drag then holds its last value rather than jumping.
+[[nodiscard]] bool CadSubObjectGripAxisDistance(const ray3d::Ray& ray, const ray3d::Vec3& anchor,
+                                                const ray3d::Vec3& axis, double* outDistance);
 
 /// One named dimension of a primitive: the letter that sets it, and what to call it in a prompt.
 ///

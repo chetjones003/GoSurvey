@@ -407,7 +407,11 @@ enum class Problem {
   SweepTwistNeedsStraightPath,
 
   // --- Push/pull (REQ-319 / ADR-046 amendment (i), GitHub issue #148 Phase 5). ---
-  PushPullFaceNotPlanar,    ///< The face to move is a cylinder, cone, sphere, torus or NURBS wall.
+  /// This kind of face cannot be moved. A PLANE translates and a CYLINDER wall changes radius; a
+  /// cone, sphere, torus or NURBS wall has no single parameter a push corresponds to - offsetting a
+  /// cone along its own normal moves both radii by `d / cos(half-angle)`, which is an offset rather
+  /// than the radius change the gesture reads as.
+  PushPullFaceKindUnsupported,
   PushPullDistanceZero,     ///< A zero (or non-finite) distance: nothing to do, and saying otherwise lies.
   /// A face meeting the one being moved is CURVED. A corner of the moved face is re-solved as the
   /// meeting point of the planes around it, and a curved surface is not a plane to intersect: the
@@ -424,6 +428,10 @@ enum class Problem {
   /// of them leaves no point satisfying all of them — the corner would have to split into several,
   /// which changes the topology and is a different operation.
   PushPullVertexUnsolvable,
+  /// Moving this cap would collapse or invert the wall beside it: a cylinder pushed to zero height,
+  /// or a cone whose moving end passes through its own apex. Refused before building rather than
+  /// left to \ref Validate, so the reason names the wall rather than the whole solid.
+  PushPullCurvedDegenerate,
   PushPullResultInvalid,    ///< The moved solid did not validate — collapsed, inverted or degenerate.
 };
 
@@ -913,7 +921,7 @@ struct Tessellation {
 /// check and this operation therefore guarantees itself.
 ///
 /// **Refuses, by name and before building anything:**
-/// - \ref Problem::PushPullFaceNotPlanar — a curved wall. Moving a cylinder's wall is a radius
+/// - \ref Problem::PushPullFaceKindUnsupported — a curved wall. Moving a cylinder's wall is a radius
 ///   change and a different geometry problem: the caps' boundary arcs must be re-solved, not
 ///   translated. Its own increment.
 /// - \ref Problem::PushPullDistanceZero — zero or non-finite. Reporting success for a move that did
@@ -934,7 +942,7 @@ struct Tessellation {
 ///   collapsed, inverted, or degenerated a face. A real gesture, not a hypothetical.
 ///
 /// **The result carries no recipe.** A pushed box is not the box its recipe describes, and a recipe
-/// that no longer describes its solid reads as authoritative while being false (REQ-319 item 6).
+/// that no longer describes its solid reads as authoritative while being false (REQ-319 item 9).
 /// **The topology is unchanged** — same vertex, edge and face counts, same indices — which is what
 /// lets a REQ-318 sub-object reference survive the edit rather than expire (ADR-049).
 [[nodiscard]] bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out,

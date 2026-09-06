@@ -13409,7 +13409,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // TASK-199's DEBT-1 could be reversed: this is not a second per-frame walk beside the existing
       // hover, it is the same budget. It also SUPPRESSES the entity hover rather than drawing beside
       // it — two highlights answering one cursor is the defect, not the feature.
-      const bool subObjectHovering = modelSpace && !blockEntityHover && ImGui::GetIO().KeyCtrl;
+      // A live face drag reads the cursor every frame — this is the one thing in the feature that
+      // must not be gated, because a handle that lags the pointer reads as a stuck drag. It costs a
+      // skew-line solve, not a pick: no geometry is searched (REQ-319 increment 2).
+      if (cmd.subObjectGripActive && modelSpace) {
+        const ray3d::Ray dragRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+        double dragDist = 0.0;
+        if (CadSubObjectGripAxisDistance(dragRay, cmd.subObjectGripAnchor, cmd.subObjectGripAxis,
+                                         &dragDist))
+          cmd.subObjectGripDistance = dragDist;
+        // else: the cursor is sighting straight down the axis, where there is no closest point.
+        // Hold the last value rather than jumping — a drag that snaps to zero as the camera passes
+        // through the axis would throw away the distance the user had already dialled in.
+      }
+      const bool subObjectHovering = modelSpace && !blockEntityHover && ImGui::GetIO().KeyCtrl &&
+                                     !cmd.subObjectGripActive;
       if (subObjectHovering) {
         cmd.viewportHoverEntityValid = false;
         if (runHoverPick) {
@@ -14116,8 +14130,57 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // The two selections are mutually exclusive (REQ-318 item 9), which is what makes #148's
       // "does not interfere with whole-entity selection" structural: nothing that consumes
       // `cmd.selection` ever sees a sub-object, so no consumer needs to know this exists.
-      const bool subObjectClick = modelSpace && ImGui::GetIO().KeyCtrl;
-      if (!subObjectClick && !cmd.subObjectSelection.empty()) {
+      // The face GRIP (REQ-319 increment 2) is checked before anything else, in both directions: a
+      // live drag consumes this click as its commit, and an idle click on the handle arms one. It
+      // comes first because the handle sits ON the face it belongs to — checked later, the plain
+      // click below would clear the very selection the handle belongs to.
+      if (modelSpace && cmd.subObjectGripActive) {
+        const SelectedSubObject dragged = cmd.subObjectGripRef;
+        const double dist = cmd.subObjectGripDistance;
+        cmd.subObjectGripActive = false;
+        if (std::fabs(dist) <= 1.e-9) {
+          // A click without having moved is a cancel, not a zero-distance push the kernel would
+          // refuse by name — the user gets silence, which is what "I changed my mind" should cost.
+          log.push_back("Face drag cancelled.");
+        } else {
+          CadApplyPushPull(cmd, dragged, dist, log);
+        }
+        cmd.subObjectGripDistance = 0.0;
+        BumpCadGpuCache(cmd);
+        handled = true;
+      }
+      if (!handled && modelSpace && !cmd.subObjectSelection.empty()) {
+        ray3d::Vec3 gripAnchor;
+        ray3d::Vec3 gripAxis;
+        int faceCount = 0;
+        const SelectedSubObject* faceRef = nullptr;
+        for (const SelectedSubObject& s : cmd.subObjectSelection)
+          if (s.kind == solidpick::Kind::Face) {
+            ++faceCount;
+            faceRef = &s;
+          }
+        if (faceCount == 1 && CadSubObjectFaceGrip(cmd, *faceRef, &gripAnchor, &gripAxis)) {
+          // Hit-tested in SCREEN space against a pixel budget, like every other grip: a handle is a
+          // few pixels wide however far away the solid is.
+          float gx = 0.f;
+          float gy = 0.f;
+          CadViewCamera(cmd).WorldToScreen(gripAnchor.x, gripAnchor.y, gripAnchor.z, avail.x, avail.y,
+                                           &gx, &gy);
+          const float gdx = gx - mx;
+          const float gdy = gy - my;
+          if (gdx * gdx + gdy * gdy <= 12.f * 12.f) {
+            cmd.subObjectGripActive = true;
+            cmd.subObjectGripRef = *faceRef;
+            cmd.subObjectGripAnchor = gripAnchor;
+            cmd.subObjectGripAxis = gripAxis;
+            cmd.subObjectGripDistance = 0.0;
+            log.push_back("Face drag - move the cursor to set the distance, click to apply, Esc to cancel.");
+            handled = true;
+          }
+        }
+      }
+      const bool subObjectClick = !handled && modelSpace && ImGui::GetIO().KeyCtrl;
+      if (!handled && !subObjectClick && !cmd.subObjectSelection.empty()) {
         cmd.subObjectSelection.clear();
         BumpCadGpuCache(cmd);
       }

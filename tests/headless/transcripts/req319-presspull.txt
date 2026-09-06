@@ -1,0 +1,230 @@
+# REQ-319 (D-2026-09-04-c, GitHub issue #148 Phase 5 slice 3) — PRESSPULL: moving a solid's face.
+#
+# The first command in the program that EDITS a solid rather than creating one. It takes its target
+# from the REQ-318 sub-object selection, which is the pairing the two requirements were designed
+# around: Ctrl+click names the face, PRESSPULL moves it. There is no "select objects" step, and no
+# other way to name a face, so there is nothing to disambiguate.
+#
+# THE BOX. `CMD BOX 0,0 20 10 8` is centred on (0,0) with its base at z = 0: x in [-10,10],
+# y in [-5,5], z in [0,8], volume 1600. Every coordinate below was probed against the shipped kernel
+# before it was asserted (see the req318 transcript for the same note and the same reason).
+#
+# The kernel operation's own arithmetic — volumes, the moved plane, every refusal — is PushPullTests'
+# subject and is not repeated here. What this file owns is what a transcript can see and a unit test
+# cannot: that the COMMAND finds its face, refuses without one, leaves the document untouched when
+# the kernel declines, undoes in one step, and survives a .gs round-trip.
+
+# --- Criterion 3: the selected face moves -----------------------------------------------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+VIEWANGLES -45 35
+
+# Ctrl+click the top face, then push it 3 ft: 20 x 10 of new material.
+SUBOBJECT 0 0 8 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 3
+EXPECT LOG "volume now 2200"
+# The topology is untouched, which is REQ-319 item 5 and what lets the selection survive below.
+EXPECT SOLIDPROPS 0 2200 1060 8 12 6
+
+# --- The selection follows the edit, so a second push continues from the first -----------------------
+# The solid is REPLACED by the edit (it is immutable), and the sub-object reference is keyed on the
+# solid's IDENTITY (ADR-049). Without re-pointing it the reference would expire on the next sweep and
+# the user would have to re-pick the face after every single push.
+
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 3
+EXPECT LOG "volume now 2800"
+EXPECT SUBOBJECTFACES 1
+
+# --- Pulling inward removes material, and the same face keeps being the target -----------------------
+
+CMD PRESSPULL -6
+EXPECT LOG "volume now 1600"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- Criterion 7: one Ctrl+Z per push ---------------------------------------------------------------
+# Three pushes above, so three undos walk back through them one at a time. A push that took two undo
+# steps — or none — would show here and nowhere else.
+
+UNDO
+EXPECT SOLIDPROPS 0 2800 1240 8 12 6
+UNDO
+EXPECT SOLIDPROPS 0 2200 1060 8 12 6
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+REDO
+EXPECT SOLIDPROPS 0 2200 1060 8 12 6
+
+# --- A SIDE face, so the command is not quietly assuming an axis -------------------------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+# The +X face: pushing it 2 ft adds width x height = 10 x 8 x 2 = 160, not 20 x 10 x 2.
+SUBOBJECT 10 0 4 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 2
+EXPECT LOG "volume now 1760"
+
+# --- Refusals: each one leaves the drawing exactly as it was -----------------------------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+
+# No selection at all.
+CMD PRESSPULL 3
+EXPECT LOG "select a solid FACE first"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# A selection that is an EDGE, not a face.
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+CMD PRESSPULL 3
+EXPECT LOG "no face in it"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# Two faces: refused rather than applied twice over. The second push would be computed against the
+# first's result while the user was picturing the original.
+SUBOBJECT 0 0 8 0.5 0.5
+SUBOBJECT 0 0 0 0.5 0.5
+EXPECT SUBOBJECTFACES 2
+CMD PRESSPULL 3
+EXPECT LOG "moves one at a time"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# No distance, and a distance that is not a number.
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 0 0 8 0.5 0.5
+CMD PRESSPULL
+EXPECT LOG "Usage: PRESSPULL"
+CMD PRESSPULL banana
+EXPECT LOG "is not a number"
+CMD PRESSPULL 0
+EXPECT LOG "distance that is not zero"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# A push that would flatten the solid: the kernel's own sentence, and the box is untouched.
+CMD PRESSPULL -8
+EXPECT LOG "turn the solid inside out"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# A CYLINDER's cap - the case brep::Validate does not catch, and the one the user reported. Leaving
+# the wall's stored height alone while its boundary moves still builds and still validates, at a
+# volume 15% wrong (863.938 against a true 1021.02). The wall is re-parameterised instead, so this
+# reports the exact closed form: pi x 25 x 13.
+NEW
+CMD CYLINDER 0,0 5 10
+EXPECT SOLIDS 1
+VIEWANGLES -45 35
+SUBOBJECT 0 0 10 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 3
+EXPECT LOG "volume now 1021.0176"
+
+# A CONE's cap KEEPS THE SLOPE (D-2026-09-04-d): base 5, top 2 over height 10 is -0.3 per foot, so
+# at height 12 the top radius is 1.4 and the volume is pi x 12/3 x (25 + 7 + 1.96) = 426.7539.
+# Keeping the RADIUS instead - the other taper choice - would have given 490.0885, so this figure
+# is what tells the decision that was made from the one that was not.
+NEW
+CMD CONE 0,0 5 2 10
+EXPECT SOLIDS 1
+VIEWANGLES -45 35
+SUBOBJECT 0 0 10 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 2
+EXPECT LOG "volume now 426.7539"
+
+# The curved WALL pushes too, by changing its RADIUS - r = 5 to r = 7, so pi x 49 x 10 = 1539.3804.
+# Aimed at (0,-5,5) rather than (5,0,5): at this camera that is the side of the wall actually facing
+# the viewer, and a ray at the far side picks the near one instead - the same thing that happens to
+# a user who has not orbited.
+#
+# Note this is the MIRROR of the cap case above: a cap push moves a plane and leaves the radius; a
+# wall push changes the radius and leaves the planes. Same gesture, same command, different geometry.
+NEW
+CMD CYLINDER 0,0 5 10
+VIEWANGLES -45 35
+SUBOBJECT 0 -5 5 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 2
+EXPECT LOG "volume now 1539.3804"
+
+# A CONE's wall is still refused: offsetting it moves both radii and leaves the apex, which is an
+# offset surface rather than a radius change - a second decision, not a missing case.
+NEW
+CMD CONE 0,0 5 2 10
+VIEWANGLES -45 35
+SUBOBJECT 0 -4 2 0.5 0.5
+CMD PRESSPULL 1
+EXPECT LOG "no single radius to change"
+
+# --- The shapes that used to be refused (user report, 2026-09-04) --------------------------------
+# The first algorithm translated corners along the push, which only works where every neighbour
+# contains that direction: box 6/6, wedge 2/5, pyramid 0/6. Re-solving each corner as the meeting
+# point of the planes around it gives box 6/6, wedge 5/5, pyramid 6/6. These are the cases that
+# changed, driven through the COMMAND so the fix is asserted where the user met it.
+
+NEW
+CMD WEDGE 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 800 655.407 6 9 5
+VIEWANGLES 135 20
+# The full-height end face at x = -10. The camera matters: at azimuth -45 that face is on the FAR
+# side, so a ray aimed at it meets the near face first and picks that instead. 135 puts the eye
+# where the end face is what the cursor is actually over - the same thing a user does by orbiting. Extending it 5 ft makes the wedge TALLER as well as longer,
+# because the ramp keeps its slope: at x = -15 the slope has risen to z = 10, so the new material is
+# a trapezoid 10 high at the far end and 8 at the near one - mean 9 x 10 wide x 5 long = 450.
+SUBOBJECT -10 0 4 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 5
+EXPECT LOG "volume now 1250"
+
+# A pyramid FRUSTUM: every one of its six faces moves, walls included.
+NEW
+CMD PYRAMID 0,0 4 5 2 10
+EXPECT SOLIDS 1
+VIEWANGLES -45 35
+SUBOBJECT 0 0 10 0.5 0.5
+EXPECT SUBOBJECTFACES 1
+# Note the command's radius is the INRADIUS (the apothem), where brep::MakePyramid's is the
+# circumradius - so this frustum is twice the volume of PushPullTests' one built from the same
+# numbers. Both are hand-computable and neither is wrong; stated because the discrepancy looks like
+# an error until you know which radius each takes.
+#
+# Base inradius 5 -> square of side 10, area 100. Top inradius 2 -> area 16. Frustum volume is
+# h/3 x (A1 + A2 + sqrt(A1 A2)) = 10/3 x (100 + 16 + 40) = 520.
+EXPECT SOLIDPROPS 0 520 408.3286 8 12 6
+# Raising the top 1 ft adds only 13.72, not the 16 a prism of the old top would: the walls keep
+# their slope, so the top gets NARROWER as it rises - inradius 5 + (2-5) x 11/10 = 1.7, area 11.56,
+# volume 11/3 x (100 + 11.56 + 34) = 533.72. That shortfall is the evidence the corners were
+# re-solved rather than translated straight up, which would have kept the top its old size.
+CMD PRESSPULL 1
+EXPECT LOG "volume now 533.72"
+
+# --- Criterion 8: a pushed solid survives a .gs round-trip ------------------------------------------
+# Nearly free by construction — GsIo stores TOPOLOGY, not the recipe, precisely so a recipe-less
+# result can be saved (the Booleans and SLICE already rely on it). Asserted anyway, because "it
+# should follow" is how a format gap goes unnoticed until a user's drawing will not reopen.
+
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 0 0 8 0.5 0.5
+CMD PRESSPULL 3
+EXPECT SOLIDPROPS 0 2200 1060 8 12 6
+SAVEAS %OUT%/presspull.gs
+NEW
+EXPECT SOLIDS 0
+OPEN %OUT%/presspull.gs
+EXPECT SOLIDS 1
+# The pushed geometry, not the box it was built as.
+EXPECT SOLIDPROPS 0 2200 1060 8 12 6
+
+CHECK ALL
