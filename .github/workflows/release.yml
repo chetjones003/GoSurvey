@@ -1,16 +1,17 @@
 # GoSurvey build / package / release pipeline — REQ-202, ADR-029.
 #
-# Two jobs, three publish outcomes, decided by where the push landed:
+# Two jobs, three publish outcomes, decided by which branch the run targets:
 #
-#   build             compile + ctest on every push (REQ-202 gate)
+#   build             compile + ctest, run only on manual dispatch (REQ-202 (d))
 #   package           Inno installer from the build artifacts; then:
 #     any other branch  installer kept as a workflow artifact; nothing published
 #     beta              installer published to the ROLLING `channel-beta` prerelease (assets replaced)
 #     master            stable release, VERSION-GATED: tagged v<version> only if that tag is new
 #
-# The version gate is what makes "push to master" safe to repeat. The release step is a no-op
-# while project(VERSION) still matches the newest tag, so a docs push to master does not
-# republish, retag, or notify users. Bumping the version in CMakeLists.txt IS the release.
+# The version gate is what makes a re-run against master safe to repeat. The release step is a
+# no-op while project(VERSION) still matches the newest tag, so re-running the pipeline against
+# master does not republish, retag, or notify users. Bumping the version in CMakeLists.txt IS the
+# release.
 #
 # The version has exactly one source (ADR-029 (a)): project(VERSION) in CMakeLists.txt. It is
 # read here and passed onward; nothing in this file hard-codes a version number.
@@ -18,17 +19,11 @@
 name: release
 
 on:
-  push:
-    branches: ['**']
-    # REQ-202 / D-2026-08-31-a (issue #142): a push that touches only docs or
-    # governance runs no pipeline. Anything under src/, cmake/, tests/, the
-    # CMake files, or the workflow itself still runs the full build+test gate.
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'spec/**'
-      - 'workshop/**'
-      - 'verification/**'
+  # REQ-202 (d): manual dispatch only. The pipeline used to run on every push; that automatic
+  # trigger is gone by deliberate choice (2026-09-06) — CI minutes and rolling-beta churn were
+  # spent on commits that did not need a build, and a stable release must never be one push away
+  # from firing on its own. Choose the target branch in the "Run workflow" ref dropdown; that
+  # selection drives the same beta/master routing this file always had.
   workflow_dispatch:
 
 concurrency:
