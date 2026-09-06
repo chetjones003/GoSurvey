@@ -7326,6 +7326,38 @@ capability that does not exist. They are recorded here rather than quietly dropp
                workflow_dispatch; docs/spec-only pushes skip the pipeline. The build+test gate is
                unchanged.
 
+### REQ-324 — Static analysis runs automatically and non-blocking findings are surfaced, not silenced
+- Purpose: catch a class of bug (uninitialized memory, buffer overrun, null deref) and a class of
+  security issue automatically, before either reaches a reviewer or a release, without adding a new
+  gate contributors must satisfy on day one
+- Priority: should
+- Type: quality
+- Statement: Two static-analysis checks run in CI, additively — neither replaces nor gates REQ-202's
+  existing build/test/package/publish pipeline:
+
+  | Check | Where | Trigger | Blocking? |
+  |---|---|---|---|
+  | MSVC `/analyze` | extends the existing `build` job's Configure/Build steps in `release.yml` | every push that already runs the build+test gate (REQ-202) | no — findings are surfaced as build annotations; the job does not fail on them |
+  | CodeQL (`cpp` query suite) | new workflow, its own build of the CMake/Ninja/MSVC project | pull requests + a weekly schedule | governed by CodeQL's own default (Security tab alerts; does not fail the PR check by default) |
+
+  Both are additive: `/analyze` is a flag added to compiler invocations already running in
+  `release.yml`'s `build` job, and CodeQL runs in a separate workflow so a slow or flaky analysis run
+  can never block or delay REQ-202's release gate. Non-blocking here is a deliberate starting state,
+  not a permanent one — the existing findings on the current codebase have not been triaged, and
+  failing the build on all of them immediately would block unrelated work. Tightening either check to
+  blocking is a future decision, not part of this requirement.
+- Acceptance:
+  - `release.yml`'s Configure step passes MSVC `/analyze`-family flags; a build containing an
+    `/analyze` finding still completes the `build` job successfully;
+  - a new CodeQL workflow builds the project via the existing CMake/Ninja/MSVC toolchain and runs
+    the `cpp` query suite;
+  - the CodeQL workflow triggers on `pull_request` and a weekly `schedule`, not on every branch push;
+  - REQ-202's existing build/test/package/publish behavior (push-target routing, version gate,
+    manifest, publish steps) is unchanged.
+- Owner-layer: Build/Platform
+- Status: accepted (2026-09-06)
+- Revisions: 2026-09-06 — initial.
+
 ### REQ-203 — The command layer is drivable without a window
 - Purpose: debuggability, maintainability — the interactive surface is the largest part of the
   system with no automated coverage, and it is where users actually meet the bugs
@@ -7564,6 +7596,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-077 | util/Platform/UI/IO | `UpdateCheckTests` (17 cases / 101 assertions, green 2026-08-15: ordering incl. `0.5.0-beta.2` < `0.5.0-beta.10` < `0.5.0`; release outranks its own prereleases but not the next version's; malformed versions refused not coerced; manifest parse of good/malformed/missing-field documents; channel → URL) — remaining conditions (no delay offline, 24 h throttle, disabled = no request) written but **not yet exercised**; needs a published manifest. Was: planned — `UpdateCheckTests` (version ordering across the prerelease boundary incl. `0.5.0-beta.2` < `0.5.0-beta.10` < `0.5.0`; equal/older yields no update; manifest parse of a good document, a malformed one, and one missing required fields; channel → URL selection; stable never selects a prerelease) + manual (network unplugged = no dialog, no delay, no error; second launch inside 24 h issues no request; setting off issues no request) | accepted |
 | REQ-078 | UI/Platform/IO | `UpdateCheckTests` (skip suppresses that version but not a later one — green 2026-08-15); the download / hash / unsaved-guard / install paths are implemented but **unexercised — no manifest has been published yet**, and no real upgrade has been performed (TASK-050 ASSUMPTION-1). Was: planned — `UpdateCheckTests` (skip-state suppresses that version but not a later one) + manual (nothing downloads without a click; corrupted download fails the hash, is deleted, and is reported; dirty drawing hits the unsaved-changes modal and cancel aborts the update; after install one `GoSurvey.exe` remains, old `GoSurvey-0.*.exe` gone, shortcuts + `.gs` association still resolve; killed mid-download then retried succeeds) | accepted |
 | REQ-202 | Build/Platform | **six of seven conditions observed against the live pipeline, 2026-08-20** — evidence per condition in TASK-049 §9, which cites the run ids: feature branch → artifact only, no release, no tag (run `31912058476`); repeated `beta` pushes → exactly one `channel-beta` prerelease across ~20 pushes; unchanged version on master → publishes nothing, fails nothing (run `32049139096`); bumped version → `v<version>` tag + release (`v0.5.0`, `v0.5.1`, `v0.5.2`); tag == AppVersion == manifest version (v0.5.2 checked three ways); manifest SHA-256 matches the asset (re-derived from the downloaded installer, byte-identical, `size` too). **Outstanding: failing ctest → no release has never been observed** — no run has failed at Test; the nearest evidence is run `31910767883`, which failed at Build and published nothing, so the gate is confirmed only in the negative (TASK-049 debt (5)). Status stays `accepted` rather than MET for that reason. Was: planned — observed pipeline behaviour (feature branch → artifact only, no tag; repeated `beta` pushes → exactly one `channel-beta` prerelease; unchanged version on master → no publish, no failure; bumped version → `v<version>` tag + release; failing ctest → no release; tag == AppVersion == manifest version; manifest SHA-256 matches the asset) | accepted |
+| REQ-324 | Build/Platform | planned — verify `/analyze` flags present in Configure step and `build` job succeeds with a build containing an `/analyze` finding; `codeql.yml` builds via CMake/Ninja/MSVC and runs on `pull_request`+`schedule` only, not on push; REQ-202's push-target routing/version-gate/publish steps re-verified unchanged | accepted |
 | REQ-051 | UI/IO | `MtextToolbarTests` (panel-anchor clamp in-bounds/off-screen/oversized; font+colour run-tag composition incl. empty family = no tag; ruler tick spacing + zero-width = no ticks; attach label 1–9 + out-of-range fallback) + manual (panel titled "Text Formatting" with two rows + ruler; drag persists across edits and restart; font/colour apply to the selection only; height/oblique/entity colour whole-object; style dropdown re-bakes per REQ-044; B/I/U/caps/symbol unchanged; justification re-lays out; disabled controls inert with naming tooltips; ruler + expand toggles; paper MTEXT same panel; single-line TEXT still bare box; OK/Esc + `.gs`/DXF round-trip unchanged) | accepted |
 | REQ-203 | Build/Platform/Commands | planned — the `gosurvey_headless` link line carries no imgui/glfw/GLEW/`gl*` symbol; a hand-written transcript (line + circle + polyline) saves a `.gs` identical to the same steps performed in the GUI; a queued `DIALOG` answer satisfies a file-dialog call with no block; a deliberately-broken transcript exits non-zero naming invariant + step + line; the same transcript twice is byte-identical; CI runs the corpus per push | accepted |
 | REQ-082 | UI | planned — manual (header click sorts + marks the column, second click reverses; equal keys stable; after sorting, edit/delete act on the record shown; header frozen while scrolling; unchecked checkbox visible; saved file order unaffected by display sort) | accepted |

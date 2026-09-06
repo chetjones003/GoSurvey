@@ -1,0 +1,71 @@
+# CodeQL static analysis (REQ-324) — additive, security/quality-focused C++ scan.
+#
+# Deliberately separate from release.yml: this must never be able to slow down or block REQ-202's
+# build/test/package/publish gate, so it has its own trigger (pull_request + a weekly schedule, not
+# every push) and its own job. It shares release.yml's MSVC/Ninja setup because CodeQL's C++ analysis
+# needs the project actually built with tracing, not merely configured.
+#
+# Findings land on the repository's Security tab (code scanning alerts), not as a failing check —
+# tightening that is a future decision, not part of this requirement.
+
+name: codeql
+
+on:
+  pull_request:
+    branches: ['**']
+  schedule:
+    # Mondays, 06:00 UTC.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Ensure Ninja
+        shell: pwsh
+        run: |
+          if (Get-Command ninja -ErrorAction SilentlyContinue) {
+            Write-Host "Using $((Get-Command ninja).Source) ($(ninja --version))"
+            exit 0
+          }
+          $ver = '1.12.1'
+          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: cpp
+          queries: security-and-quality
+
+      - name: Configure
+        run: cmake --preset ninja-release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:cpp'

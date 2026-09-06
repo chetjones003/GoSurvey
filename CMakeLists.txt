@@ -64,6 +64,17 @@ endfunction()
 #   4245       signed/unsigned mismatch on Win32 API constants.
 #   4456/4457/4458/4459  local/param/member/global shadowing — style, not a bug.
 # _CRT_SECURE_NO_WARNINGS silences C4996 for standard C functions (getenv, strncpy).
+#
+# GOSURVEY_ENABLE_ANALYZE (REQ-324, off by default) adds MSVC's /analyze as a per-target
+# compile option, not a CMAKE_CXX_FLAGS override: CMake's MSVC platform module supplies
+# CMAKE_CXX_FLAGS' default content (/EHsc /GR among it), and a command-line
+# -DCMAKE_CXX_FLAGS=... on first configure REPLACES that default rather than adding to it
+# — losing /EHsc silently. That broke exception-using tests with a stack-buffer-overrun
+# crash the first time this was tried (CI run for REQ-324's own PR). Routing it through
+# this function keeps it scoped to our own targets (third_party/ vendored code is never
+# passed through gosurvey_target_warnings) and additive to whatever flags CMake already set.
+option(GOSURVEY_ENABLE_ANALYZE
+  "Add MSVC /analyze to our own targets (REQ-324). Report-only: not paired with /WX." OFF)
 function(gosurvey_target_warnings tgt)
   if(MSVC)
     target_compile_options(${tgt} PRIVATE
@@ -71,6 +82,9 @@ function(gosurvey_target_warnings tgt)
       /wd4244 /wd4305 /wd4267 /wd4245
       /wd4456 /wd4457 /wd4458 /wd4459)
     target_compile_definitions(${tgt} PRIVATE _CRT_SECURE_NO_WARNINGS)
+    if(GOSURVEY_ENABLE_ANALYZE)
+      target_compile_options(${tgt} PRIVATE /analyze)
+    endif()
   else()
     target_compile_options(${tgt} PRIVATE
       -Wall -Wextra
