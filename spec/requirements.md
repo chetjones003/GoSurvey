@@ -7012,16 +7012,26 @@ capability that does not exist. They are recorded here rather than quietly dropp
      false.
 - Acceptance:
   - a 20 x 10 x 8 box filleted with `r = 2` along one 20-long top edge reports volume
-    **1520 + 20*pi = 1582.8318530718** and surface area **800 + 18*pi = 856.5486677646**, against
+    **1520 + 20*pi = 1582.8318530718** and surface area **792 + 22*pi = 861.1150383794**, against
     the closed forms and not a tolerance: the removed prism is `L * r^2 * (1 - pi/4)`, the fillet
-    adds a quarter-cylinder `(pi*r/2) * L`, each adjacent face loses a strip `r * L`, and each end
-    face loses a quarter-disc `pi*r^2/4`;
+    adds a quarter-cylinder `(pi*r/2) * L`, each adjacent face loses a strip `r * L`, and **each end
+    face loses `r^2 * (1 - pi/4)`** — the same cross-section the prism has, because the end face IS
+    the cross-section plane. **The area was corrected on 2026-09-05, from `800 + 18*pi`.** The first
+    draft said each end face loses a quarter-disc `pi*r^2/4`, which is the region INSIDE the arc; the
+    face keeps that and loses the sliver between the arc and the old square corner. Caught by the
+    implementation's own test, because the acceptance was written as arithmetic before the code, and
+    re-derived face by face (160 + 120 + 160 + 200 + 2*79.141593 + 20*pi) before this line changed;
   - that solid reports **7 faces, 15 edges, 10 vertices**, and `brep::Validate` returns `Ok`;
   - the same box filleted at `r = 8` — the exact height of the shorter adjacent face — is
     **refused by name and left unchanged**, as is any larger radius, and `r = 0` and a negative `r`;
-  - a fillet on a **wedge's** slanted edge sets back by `r / tan(theta/2)` rather than by `r`, and
-    its end faces meet the fillet along an **ellipse** rather than a circle — the case that
-    distinguishes the rolling-ball model from "cut `r` off each face";
+  - a fillet on a **wedge's** ridge sets back by `r / tan(theta/2)` and **not** by `r` — for a
+    20 x 10 x 8 wedge the dihedral is `acos(h / sqrt(L^2 + h^2))` = 68.199 degrees and the setback is
+    `2*L*r / (sqrt(L^2+h^2) - h)` = `40 / (sqrt(464) - 8)` = 2.9540659229. **This is the case that
+    distinguishes the rolling-ball model from "cut `r` off each face"**, which would pass the box
+    above and fail here. **Corrected 2026-09-05:** the first draft also claimed a wedge's end faces
+    meet the fillet along an *ellipse*. They do not — `MakeWedge` is a right prism, so its ends are
+    square to the ridge and the boundary is a circle. An ellipse needs an end face OBLIQUE to the
+    edge (a pyramid's base edge), which increment 1 refuses by name as `FilletEndFaceUnsupported`;
   - two edges that share a vertex are refused **by name**, the solid unchanged, and the message says
     that a shared corner is what is unsupported rather than reporting a geometric failure;
   - a concave edge is refused by name;
@@ -7038,7 +7048,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   REQ-321's general trim loops first become necessary. CHAMFER is a separate requirement — it shares
   the edge selection and the refusal shape but none of the surface geometry.
 - Revisions: 2026-09-05 — initial. Scope (straight convex edges between planar faces; a shared
-  corner refused) chosen by the user, 2026-09-05.
+  corner refused) chosen by the user, 2026-09-05. 2026-09-05 — two acceptance numbers corrected by
+  the implementation: the filleted box's AREA (`792 + 22*pi`, not `800 + 18*pi`) and the claim that a
+  wedge gives an elliptical end curve (it does not; that needs an oblique end face). See the two
+  bullets above, and D-2026-09-05-c.
 
 
 ### REQ-100 — Frame budget
@@ -7635,7 +7648,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
 | REQ-305 | Commands/Viewport | done (GitHub issue #87, D-2026-08-25-m, TASK-111 — relabeled from REQ-304/TASK-109 while merging `master` into `beta`, see the requirement's own header note). ARRAY (rectangular + polar) follows the MOVE/COPY/ROTATE/SCALE/MIRROR transform-command shape end to end; survey points excluded from the array selection, confirmed with the user (D-2026-08-25-m addendum). Amended once (D-2026-08-25-n, TASK-112): the shared "select objects" step was click-or-box-and-accumulate-until-Enter for MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY (STRETCH excluded — its crossing box is load-bearing geometry, REQ-103 step 5), replacing the box-only shape all seven originally shared. `GoSurveyTests.exe` 542/542, headless transcript corpus green (1 pre-existing disabled, unrelated) | accepted |
 | REQ-318 | Domain/UI | accepted, increment 1 of 2 delivered — the SHARED pick query (GitHub issue #148, D-2026-09-03-c, ADR-049, TASK-189). **What was new is not what the issue claimed.** The ray/triangle → `triFace` → `ClosestPointOnSurface` pipeline already shipped with REQ-313, inside `src/viewport/CadSnap.cpp`; what it could not do was serve a second caller, because `RayHitSolidFace`, `ClosestRayPointToEdge` and `RayNearBounds` were file-private. So increment 1 is a *consolidation*: `ray3d::RayTriangleIntersect` and the new pure `src/util/solidpick.{hpp,cpp}` are the one home, and `CadSnap` now routes through both instead of keeping its own copies. That mattered concretely — the snap copy used an absolute determinant epsilon and exact barycentric bounds while the shared one is scale-relative with a barycentric slack, so on the hairline crack between two faces of the deliberately unwelded tessellation the two disagreed: snap reported nothing where a selection would report a hit, and a user would have seen the snap marker and the sub-object highlight name different things under one cursor. Above the geometry, what is genuinely new is the **expiring sub-object reference** (an index is durable across a topology-preserving edit and meaningless across one that changes the counts, so it is paired with a `weak_ptr` to the solid and expires rather than re-binding), and precedence and occlusion as stated rules. The projection remains the sharpest point and is measured: a raw triangle hit sits 0.00986 ft off a cylinder's true surface at the shipping chord tolerance — inside REQ-101's ±0.01 ft but 98.6% of the whole budget — and projected the residual is at the arithmetic floor. **The tests assert the picked AZIMUTH as well as the radius**, because `ClosestPointOnSurface` rescales any nearby point to exactly `r`: a radius assertion alone cannot fail for the reason it appears to test, and an earlier draft of this row cited one that could not. Occlusion is measured against the nearest *triangle* rather than the nearest usable face, so a corrupt face id cannot move the baseline to the far side of the solid; the ray is normalized on entry, because `RayTriangleIntersect`'s parameter scales as `1/\|dir\|` and `RayPointDistance`'s as `\|dir\|`, which on a non-unit ray makes the occlusion comparison meaningless rather than merely imprecise; and the curved-edge chord budget keys on the curve KIND, not on `sweep`, which a `CurveKind::Intersection` edge leaves zero. Increment 2 is the selection mode, its store, the highlight treatment and coexistence with the entity pick — where #148 acceptance criteria 1 and 2 are actually met. | `SolidPickTests` (21 cases: cylinder radius AND azimuth from 24 azimuths; the same oblique geometry passing at storage magnitude and failing at absolute state-plane magnitude, which pins the local-coordinates precondition with evidence rather than prose; near-face-wins from both directions; vertex/edge/face precedence; zero tolerance disables a kind; occluded far-side vertex refused, and still refused when the occluding triangle's id is corrupt; a non-unit ray giving an identical answer and an unchanged depth; a ray just outside the silhouette still reaching the edges; the rim picked on the true arc; and refusals for a miss, a solid behind the cursor, a degenerate ray, a null result, mismatched buffers and an empty solid) + `Ray3dTests` (10 new cases for the primitive, including a hit on a shared edge reported by both triangles and a 0.25 ft triangle at easting 2e6 — the case an absolute degeneracy epsilon would reject). The refactored snap path is covered by the existing `GoSurveySnapTests` and the `req313-solid-picked` headless transcript, both unchanged and green. Full suite 1062/1062. | accepted |
-| REQ-323 | Domain/Commands | accepted, NOT implemented — requirement only (GitHub issue #148 acceptance 5, D-2026-09-05-c, ADR-046 amendment (j)). Increment 1 is one straight convex edge between two planar faces, refusing a shared corner by name; the spherical corner patch that closes #148 acceptance 5, the concave edge, and the torus fillet on a circular rim are each their own increment. Acceptance carries closed-form numbers (a 20x10x8 box at r=2 -> volume 1520+20pi, area 800+18pi, 7/15/10) so the first test can be written against arithmetic rather than against the implementation. |
+| REQ-323 | Domain/Commands | accepted, NOT implemented — requirement only (GitHub issue #148 acceptance 5, D-2026-09-05-c, ADR-046 amendment (j)). Increment 1 is one straight convex edge between two planar faces, refusing a shared corner by name; the spherical corner patch that closes #148 acceptance 5, the concave edge, and the torus fillet on a circular rim are each their own increment. Acceptance carries closed-form numbers (a 20x10x8 box at r=2 -> volume 1520+20pi, area 792+22pi, 7/15/10 - the area corrected from 800+18pi by the implementation's own test) so the first test can be written against arithmetic rather than against the implementation. |
 
 ---
 
