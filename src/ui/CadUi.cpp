@@ -5966,6 +5966,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const bool hatchEditing = !hatchSel.empty();
   if (cmd.active == AppCommandState::Kind::Hatch || hatchEditing) {
     ImGui::SameLine(0, 8);
+    // REQ-302/ADR-053 (issue #335): this section is intentionally NOT wired onto
+    // ribbonlayout::RibbonSectionSpec/RibbonLayout::DrawSection. Every control here — the pattern
+    // swatch + its popup palette, ColorEdit3, the transparency slider, the layer combo, and the
+    // angle/scale InputFloats — is a live interactive widget, not a plain button; the engine's
+    // data model (RibbonButtonSpec/RibbonGroupSpec) has no representation for any of them. There
+    // is nothing button-shaped in this section to migrate, so wHatchCtx stays a fixed constant
+    // rather than a MeasureRibbonSection result.
     const float wHatchCtx = 360.f;
     RibbonSectionBegin("RibbonSecHatchCtx", hatchEditing ? "Hatch (selected)" : "Hatch", wHatchCtx, panelH);
     {
