@@ -3758,22 +3758,6 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   (void)gridCell3;
 
-  // Insert-tab helpers — MUST be at function scope for the same reason the Home ones are (captured
-  // by reference, invoked later by RenderRibbonFit). `iconName` is a resources/icons/<name>.png that
-  // is not in the RibbonIconKind enum (library art reused for a not-yet-enumerated command).
-  auto insRow = [&](const char* id, const char* iconName, const char* label, float w) {
-    return RibbonButtonEx(id, RibbonIconKind::Nyi, curCompact ? nullptr : label,
-                          ImVec2(curCompact ? rowH : w, rowH),
-                          curCompact ? RibbonLabel::None : RibbonLabel::Right, iconName);
-  };
-  auto insNyi = [&](const char* id, const char* iconName, const char* label, float w) {
-    // label stays non-null even when compact (RibbonNyiButton asserts on it and still needs it for
-    // the auto NYI tooltip); RibbonLabel::None is what hides the text. Matches the Home `nyiRow`.
-    RibbonNyiButton(id, RibbonIconKind::Nyi, label,
-                    ImVec2(curCompact ? rowH : w, rowH),
-                    curCompact ? RibbonLabel::None : RibbonLabel::Right, iconName);
-  };
-
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
   // Civil 3D Annotate tab shows a style/scale combo in most panels. Where GoSurvey has no picker
   // yet, render a disabled combo-shaped placeholder with the automatic NYI tooltip. MUST be at
@@ -3786,12 +3770,6 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     char tip[96];
     std::snprintf(tip, sizeof(tip), "%s \xE2\x80\x94 not implemented yet.", text);
     RibbonItemHelp(tip, ImGuiHoveredFlags_AllowWhenDisabled);
-  };
-  // Large (icon-above-label) NYI button using a resources/icons/<name>.png. Function scope for the
-  // same reason as insRow/insNyi — captured by the deferred ribbonSpecs closures. Used by the
-  // Annotate and Manage tab rebuilds.
-  auto nyiLarge = [&](const char* id, const char* iconName, const char* label) {
-    RibbonNyiButton(id, RibbonIconKind::Nyi, label, ImVec2(belowW(label), colH), RibbonLabel::Below, iconName);
   };
   // Visual-style combo width measured from its longest option text, not a guessed constant — a
   // hardcoded 132px clipped "2D Wireframe" (user GUI-pass feedback, 2026-08-25).
@@ -5761,53 +5739,63 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   if (cmd.activeRibbonTab == kRibbonTabOutput) {
     // ---- Plan Production ---------------------------------------------------
     {
-      const float w = 8.f + belowW("Create View\nFrames") + 4.f + belowW("Create\nSheets") + 4.f +
-                      belowW("Create Section\nSheets");
-      ribbonSpecs.push_back({w, w, [&, w]() {
-        RibbonSectionBegin("RibbonSecOutPlanProd", "Plan Production", w, panelH);
-        nyiLarge("##OutViewFrames", "c3d_viewframes", "Create View\nFrames");
-        ImGui::SameLine(0, 4);
-        nyiLarge("##OutCreateSheets", "c3d_createsheets", "Create\nSheets");
-        ImGui::SameLine(0, 4);
-        nyiLarge("##OutSectionSheets", "c3d_sectionsheets", "Create Section\nSheets");
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      ribbonlayout::RibbonGroupSpec g1, g2, g3;
+      g1.buttons = {largeBtnSpecEx("##OutViewFrames", -1, "c3d_viewframes", "Create View\nFrames", true,
+                                   "Create View Frames — not implemented yet.", belowW("Create View\nFrames"))};
+      g2.buttons = {largeBtnSpecEx("##OutCreateSheets", -1, "c3d_createsheets", "Create\nSheets", true,
+                                   "Create Sheets — not implemented yet.", belowW("Create\nSheets"))};
+      g3.buttons = {largeBtnSpecEx("##OutSectionSheets", -1, "c3d_sectionsheets", "Create Section\nSheets", true,
+                                   "Create Section Sheets — not implemented yet.", belowW("Create Section\nSheets"))};
+      spec.groups = {g1, g2, g3};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecOutPlanProd", "Plan Production", spec, nullptr);
       }, "Plan Production", RibbonIconKind::Nyi, "c3d_createsheets"});
     }
 
     // ---- Plot -----------------------------------------------------------
     {
-      const float cw = colW({"Page Setup Manager", "Plotter Manager"});
-      const float w = 8.f + belowW("Plot") + 4.f + cw + 4.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecOutPlot", "Plot", w, panelH);
-        if (RibbonButtonEx("##RibbonPlot", RibbonIconKind::Plot, "Plot",
-                           ImVec2(belowW("Plot"), colH), RibbonLabel::Below))
-          PlotActiveLayout(cmd, log);
-        RibbonItemHelp("Plot the current layout to a vector PDF.\nCommand bar: PLOT");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (insRow("##RibbonBatchPlot", "Plot", "Batch Plot", cw)) {
-          cmd.batchPlotSelected.clear();
-          if (cmd.activeSpaceIndex >= 0)
-            cmd.batchPlotSelected.push_back(cmd.activeSpaceIndex);
-          cmd.showBatchPlotDialog = true;
-        }
-        RibbonItemHelp("Batch plot — pick layouts to plot into one multi-page PDF.");
-        insNyi("##RibbonPlotPreview", "c3d_plotpreview", "Preview", cw);
-        if (insRow("##RibbonPageSetupMgr", "Page_Setup", "Page Setup Manager", cw)) {
-          EnsureStandardPageSetup(cmd);
-          cmd.pageSetupLayoutIdx  = cmd.activeSpaceIndex >= 0 ? cmd.activeSpaceIndex : 0;
-          cmd.pageSetupManagerSel = -1;
-          cmd.showPageSetupManager = true;
-        }
-        RibbonItemHelp("Page Setup Manager — named paper size / plot settings for the active layout.");
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##RibbonViewDetails", "Display_and_Plot_Frames", "View Details", cw);
-        insNyi("##RibbonPlotterMgr", "c3d_plottermgr", "Plotter Manager", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonGroupSpec plotGroup;
+      plotGroup.buttons = {largeBtnSpecEx("##RibbonPlot", (int)RibbonIconKind::Plot, nullptr, "Plot", false,
+                                          "Plot the current layout to a vector PDF.\nCommand bar: PLOT", belowW("Plot"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          plotGroup,
+          columnOfButtons({
+              rowBtn("##RibbonBatchPlot", -1, "Plot", "Batch Plot", false,
+                     "Batch plot — pick layouts to plot into one multi-page PDF.", false),
+              rowBtn("##RibbonPlotPreview", -1, "c3d_plotpreview", "Preview", true, "Preview — not implemented yet.",
+                     false),
+              rowBtn("##RibbonPageSetupMgr", -1, "Page_Setup", "Page Setup Manager", false,
+                     "Page Setup Manager — named paper size / plot settings for the active layout.", false),
+          }),
+          columnOfButtons({
+              rowBtn("##RibbonViewDetails", -1, "Display_and_Plot_Frames", "View Details", true,
+                     "View Details — not implemented yet.", false),
+              rowBtn("##RibbonPlotterMgr", -1, "c3d_plottermgr", "Plotter Manager", true,
+                     "Plotter Manager — not implemented yet.", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecOutPlot", "Plot", spec, [&](const std::string& id) {
+          if (id == "##RibbonPlot") {
+            PlotActiveLayout(cmd, log);
+          } else if (id == "##RibbonBatchPlot") {
+            cmd.batchPlotSelected.clear();
+            if (cmd.activeSpaceIndex >= 0)
+              cmd.batchPlotSelected.push_back(cmd.activeSpaceIndex);
+            cmd.showBatchPlotDialog = true;
+          } else if (id == "##RibbonPageSetupMgr") {
+            EnsureStandardPageSetup(cmd);
+            cmd.pageSetupLayoutIdx  = cmd.activeSpaceIndex >= 0 ? cmd.activeSpaceIndex : 0;
+            cmd.pageSetupManagerSel = -1;
+            cmd.showPageSetupManager = true;
+          }
+        });
       }, "Plot", RibbonIconKind::Plot});
     }
 
@@ -5815,71 +5803,91 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     {
       static char ribbonExpDxfPath[4096]{};
       static char ribbonExpDwgPath[4096]{};
-      const float cw = colW({"Export Civil 3D Drawing", "Export Civil Objects to SDF"});
-      const float w = 8.f + colW({"Export DXF"}) + 4.f + cw * 4.f + 4.f * 3.f;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecOutExport", "Export", w, panelH);
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonExportDxf", RibbonIconKind::Export, "Export DXF", colW({"Export DXF"}))) {
-          if (BrowseSaveFileDxfUtf8(ribbonExpDxfPath, sizeof(ribbonExpDxfPath), "drawing.dxf"))
-            ExportDxfFile(cmd, ribbonExpDxfPath, log);
-        }
-        RibbonItemHelp("Export the current drawing to DXF.\nSame as File menu → Export DXF...");
-        if (smallBtn("##RibbonExportDwg", RibbonIconKind::Export, "Export DWG", colW({"Export DXF"}))) {
-          if (BrowseSaveFileDwgUtf8(ribbonExpDwgPath, sizeof(ribbonExpDwgPath), "drawing.dwg")) {
-            cmd.dwgPendingExportPath = ribbonExpDwgPath;
-            cmd.dwgLossyExportModal  = true;
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          columnOfButtons({
+              rowBtn("##RibbonExportDxf", (int)RibbonIconKind::Export, nullptr, "Export DXF", false,
+                     "Export the current drawing to DXF.\nSame as File menu → Export DXF...", false),
+              rowBtn("##RibbonExportDwg", (int)RibbonIconKind::Export, nullptr, "Export DWG", false,
+                     "Save DWG as R2000 via LibreDWG.\nSame as File menu → Export DWG...", false),
+              rowBtn("##RibbonExportPoints", -1, "c3d_exportpoints", "Export Points", false,
+                     "Export survey points to a point file (PNEZD / user format).", false),
+          }),
+          columnOfButtons({
+              rowBtn("##RibbonExpImx", -1, "c3d_exportto", "Export IMX", true, "Export IMX — not implemented yet.", false),
+              rowBtn("##RibbonExpLandXml", -1, "c3d_landxml", "Export to LandXML", true,
+                     "Export to LandXML — not implemented yet.", false),
+              rowBtn("##RibbonExpC3dDwg", -1, "c3d_exportto", "Export Civil 3D Drawing", true,
+                     "Export Civil 3D Drawing — not implemented yet.", false),
+          }),
+          columnOfButtons({
+              rowBtn("##RibbonExpFgdb", -1, "c3d_exportto", "Export to FGDB", true,
+                     "Export to FGDB — not implemented yet.", false),
+              rowBtn("##RibbonRehabMgr", -1, "c3d_exportto", "Rehab Manager", true, "Rehab Manager — not implemented yet.",
+                     false),
+              rowBtn("##RibbonTransferPoints", -1, "c3d_transferpoints", "Transfer Points", true,
+                     "Transfer Points — not implemented yet.", false),
+          }),
+          columnOfButtons({
+              rowBtn("##RibbonExpHecRas", -1, "c3d_exportto", "Export to HEC RAS", true,
+                     "Export to HEC RAS — not implemented yet.", false),
+              rowBtn("##RibbonExpSdf", -1, "c3d_exportto", "Export Civil Objects to SDF", true,
+                     "Export Civil Objects to SDF — not implemented yet.", false),
+              rowBtn("##RibbonExpStorm", -1, "c3d_exportto", "Export to Storm Sewers", true,
+                     "Export to Storm Sewers — not implemented yet.", false),
+          }),
+          columnOfButtons({
+              rowBtn("##RibbonExp3dsMax", -1, "c3d_exportto", "Export to 3ds Max", true,
+                     "Export to 3ds Max — not implemented yet.", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecOutExport", "Export", spec, [&](const std::string& id) {
+          if (id == "##RibbonExportDxf") {
+            if (BrowseSaveFileDxfUtf8(ribbonExpDxfPath, sizeof(ribbonExpDxfPath), "drawing.dxf"))
+              ExportDxfFile(cmd, ribbonExpDxfPath, log);
+          } else if (id == "##RibbonExportDwg") {
+            if (BrowseSaveFileDwgUtf8(ribbonExpDwgPath, sizeof(ribbonExpDwgPath), "drawing.dwg")) {
+              cmd.dwgPendingExportPath = ribbonExpDwgPath;
+              cmd.dwgLossyExportModal  = true;
+            }
+          } else if (id == "##RibbonExportPoints") {
+            cmd.showExportPointsWindow = true;
           }
-        }
-        RibbonItemHelp("Save DWG as R2000 via LibreDWG.\nSame as File menu → Export DWG...");
-        if (insRow("##RibbonExportPoints", "c3d_exportpoints", "Export Points", colW({"Export DXF"})))
-          cmd.showExportPointsWindow = true;
-        RibbonItemHelp("Export survey points to a point file (PNEZD / user format).");
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##RibbonExpImx", "c3d_exportto", "Export IMX", cw);
-        insNyi("##RibbonExpLandXml", "c3d_landxml", "Export to LandXML", cw);
-        insNyi("##RibbonExpC3dDwg", "c3d_exportto", "Export Civil 3D Drawing", cw);
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##RibbonExpFgdb", "c3d_exportto", "Export to FGDB", cw);
-        insNyi("##RibbonRehabMgr", "c3d_exportto", "Rehab Manager", cw);
-        insNyi("##RibbonTransferPoints", "c3d_transferpoints", "Transfer Points", cw);
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##RibbonExpHecRas", "c3d_exportto", "Export to HEC RAS", cw);
-        insNyi("##RibbonExpSdf", "c3d_exportto", "Export Civil Objects to SDF", cw);
-        insNyi("##RibbonExpStorm", "c3d_exportto", "Export to Storm Sewers", cw);
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##RibbonExp3dsMax", "c3d_exportto", "Export to 3ds Max", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+        });
       }, "Export", RibbonIconKind::Export});
     }
 
     // ---- Publish -----------------------------------------------------
     {
-      const float w = 8.f + belowW("Publish\nSurfaces") + 4.f + belowW("Publish to\nArcGIS");
-      ribbonSpecs.push_back({w, w, [&, w]() {
-        RibbonSectionBegin("RibbonSecOutPublish", "Publish", w, panelH);
-        nyiLarge("##OutPublishSurf", "c3d_publishsurf", "Publish\nSurfaces");
-        ImGui::SameLine(0, 4);
-        nyiLarge("##OutPublishGis", "c3d_publishgis", "Publish to\nArcGIS");
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      ribbonlayout::RibbonGroupSpec g1, g2;
+      g1.buttons = {largeBtnSpecEx("##OutPublishSurf", -1, "c3d_publishsurf", "Publish\nSurfaces", true,
+                                   "Publish Surfaces — not implemented yet.", belowW("Publish\nSurfaces"))};
+      g2.buttons = {largeBtnSpecEx("##OutPublishGis", -1, "c3d_publishgis", "Publish to\nArcGIS", true,
+                                   "Publish to ArcGIS — not implemented yet.", belowW("Publish to\nArcGIS"))};
+      spec.groups = {g1, g2};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecOutPublish", "Publish", spec, nullptr);
       }, "Publish", RibbonIconKind::Nyi, "c3d_publishgis"});
     }
 
     // ---- Export to DWF/PDF -----------------------------------------
     {
-      const float w = 8.f + belowW("Export") + 4.f + annStyleW;
-      ribbonSpecs.push_back({w, w, [&, w]() {
-        RibbonSectionBegin("RibbonSecOutDwfPdf", "Export to DWF/PDF", w, panelH);
-        nyiLarge("##OutDwfxExport", "c3d_dwfx", "Export");
+      ribbonlayout::RibbonGroupSpec dwfxGroup;
+      dwfxGroup.buttons = {
+          largeBtnSpecEx("##OutDwfxExport", -1, "c3d_dwfx", "Export", true, "Export — not implemented yet.", belowW("Export"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {dwfxGroup};
+      const float buttonsW = ribbonlayout::MeasureRibbonSection(spec).size.x;
+      const float w = buttonsW + 4.f + annStyleW + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, buttonsW]() {
+        RibbonSectionBegin("RibbonSecOutDwfPdf", "Export to DWF/PDF", buttonsW + 4.f + annStyleW + 8.f, panelH);
+        RibbonLayout::DrawSection(spec, buttonsW, nullptr);
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Export");
