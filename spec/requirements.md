@@ -7283,22 +7283,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: should
 - Type: quality
 - Statement: Building the installer is done by CI from a clean checkout, never from a developer
-  workstation. Pushing to the repository builds, runs the test suite, and — depending on where it
-  was pushed — packages and publishes:
+  workstation. The pipeline runs only on manual dispatch (REQ-202 (d)) — choosing a target branch
+  in the "Run workflow" ref dropdown builds, runs the test suite, and — depending on which branch
+  was targeted — packages and publishes:
 
-  | Push target | Result |
+  | Dispatch target | Result |
   |---|---|
-  | any other branch | build + test only; the installer job is skipped (run it on demand via `workflow_dispatch`) |
+  | any other branch | build + test only; the installer job is skipped (run it explicitly if an installer artifact is wanted) |
   | `beta` | build + test, then installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
   | `master` | build + test, then version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
 
-  A push touching only documentation or governance (`**/*.md`, `docs/**`, `spec/**`, `workshop/**`,
-  `verification/**`) does not run the pipeline. The `build`/`test` gate still runs on every push
-  that touches code, on every branch (D-2026-08-31-a).
-
-  The version gate is what makes "push to master" safe to do repeatedly: the release step is a no-op
-  when `project(VERSION)` still matches the newest release, so a documentation push to master does
-  not republish, retag, or re-notify users. Bumping the version *is* the act of releasing.
+  The version gate is what makes a re-dispatch against master safe to repeat: the release step is a
+  no-op when `project(VERSION)` still matches the newest release, so re-running the pipeline against
+  master does not republish, retag, or re-notify users. Bumping the version *is* the act of releasing.
 
   Every published release carries the installer, a `latest.json` manifest (version, download URL,
   SHA-256, size, release notes), and nothing that the machine could not regenerate from the tagged
@@ -7307,14 +7304,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
   This is REQ-200 extended one step: REQ-200 says a clean build of a fixed commit is reproducible;
   this says the artifact users actually receive **is** that build, rather than whatever happened to
   be in a developer's `build/` directory.
+
+  **(d) Manual dispatch only (2026-09-06).** The pipeline previously ran on every push to every
+  branch; that automatic trigger has been removed. A push, including one to `beta` or `master`, now
+  runs no CI job at all until someone explicitly runs the workflow. This trades away the
+  build+test-on-every-push safety net REQ-201/REQ-200 relied on for CI minutes and rolling-beta
+  churn that were being spent on commits nobody needed built yet; the tradeoff is deliberate and the
+  user directs each dispatch by hand, so this is not a SPEC GAP the pipeline itself needs to cover.
 - Acceptance:
-  - a push to a feature branch runs build + test, creates no release and no tag, and does not run
-    the installer job; `workflow_dispatch` on that branch still produces a downloadable installer;
-  - a docs/spec/workshop/verification-only push runs no pipeline job;
-  - a push to `beta` leaves exactly one `channel-beta` prerelease in the releases list regardless of
-    how many times it is pushed, carrying the newest installer;
-  - a push to `master` with an unchanged version publishes nothing and fails nothing;
-  - a push to `master` with a bumped version creates tag `v<version>` and a stable release;
+  - no CI job runs on a plain `git push` to any branch;
+  - dispatching against a feature branch runs build + test, creates no release and no tag, and does
+    not run the installer job;
+  - dispatching against `beta` leaves exactly one `channel-beta` prerelease in the releases list
+    regardless of how many times it is dispatched, carrying the newest installer;
+  - dispatching against `master` with an unchanged version publishes nothing and fails nothing;
+  - dispatching against `master` with a bumped version creates tag `v<version>` and a stable release;
   - a failing `ctest` run publishes no release;
   - the installer's `AppVersion`, the release tag, and the manifest's `version` field are equal on
     every published release;
@@ -7325,6 +7329,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
                2026-08-31 — D-2026-08-31-a (issue #142): installer job gated to beta/master/
                workflow_dispatch; docs/spec-only pushes skip the pipeline. The build+test gate is
                unchanged.
+               2026-09-06 — (d): automatic push trigger removed; the pipeline now runs only on
+               manual `workflow_dispatch`, targeting whichever branch is chosen in the ref dropdown.
 
 ### REQ-324 — Static analysis runs automatically and non-blocking findings are surfaced, not silenced
 - Purpose: catch a class of bug (uninitialized memory, buffer overrun, null deref) and a class of
@@ -7337,7 +7343,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
   | Check | Where | Trigger | Blocking? |
   |---|---|---|---|
-  | MSVC `/analyze` | extends the existing `build` job's Configure/Build steps in `release.yml` | every push that already runs the build+test gate (REQ-202) | no — findings are surfaced as build annotations; the job does not fail on them |
+  | MSVC `/analyze` | extends the existing `build` job's Configure/Build steps in `release.yml` | every manual dispatch of `release.yml` (REQ-202 (d) — no longer on every push) | no — findings are surfaced as build annotations; the job does not fail on them |
   | CodeQL (`cpp` query suite) | new workflow, its own build of the CMake/Ninja/MSVC project | pull requests + a weekly schedule | governed by CodeQL's own default (Security tab alerts; does not fail the PR check by default) |
 
   Both are additive: `/analyze` is a flag added to compiler invocations already running in
@@ -7352,7 +7358,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a new CodeQL workflow builds the project via the existing CMake/Ninja/MSVC toolchain and runs
     the `cpp` query suite;
   - the CodeQL workflow triggers on `pull_request` and a weekly `schedule`, not on every branch push;
-  - REQ-202's existing build/test/package/publish behavior (push-target routing, version gate,
+  - REQ-202's existing build/test/package/publish behavior (dispatch-target routing, version gate,
     manifest, publish steps) is unchanged.
 - Owner-layer: Build/Platform
 - Status: accepted (2026-09-06)
@@ -7595,7 +7601,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-076 | Domain/IO | planned — `EntityIdTests` (id survives erase of another entity, undo/redo, copy/paste, `.gs` round-trip; reference to an erased entity resolves to nothing, not to its index successor; paste yields a new id; legacy load is deterministic across two loads; no reuse within a session or across save/load) + the `EraseCadAnnotationAtIndex` fixup loop deleted, not duplicated | accepted |
 | REQ-077 | util/Platform/UI/IO | `UpdateCheckTests` (17 cases / 101 assertions, green 2026-08-15: ordering incl. `0.5.0-beta.2` < `0.5.0-beta.10` < `0.5.0`; release outranks its own prereleases but not the next version's; malformed versions refused not coerced; manifest parse of good/malformed/missing-field documents; channel → URL) — remaining conditions (no delay offline, 24 h throttle, disabled = no request) written but **not yet exercised**; needs a published manifest. Was: planned — `UpdateCheckTests` (version ordering across the prerelease boundary incl. `0.5.0-beta.2` < `0.5.0-beta.10` < `0.5.0`; equal/older yields no update; manifest parse of a good document, a malformed one, and one missing required fields; channel → URL selection; stable never selects a prerelease) + manual (network unplugged = no dialog, no delay, no error; second launch inside 24 h issues no request; setting off issues no request) | accepted |
 | REQ-078 | UI/Platform/IO | `UpdateCheckTests` (skip suppresses that version but not a later one — green 2026-08-15); the download / hash / unsaved-guard / install paths are implemented but **unexercised — no manifest has been published yet**, and no real upgrade has been performed (TASK-050 ASSUMPTION-1). Was: planned — `UpdateCheckTests` (skip-state suppresses that version but not a later one) + manual (nothing downloads without a click; corrupted download fails the hash, is deleted, and is reported; dirty drawing hits the unsaved-changes modal and cancel aborts the update; after install one `GoSurvey.exe` remains, old `GoSurvey-0.*.exe` gone, shortcuts + `.gs` association still resolve; killed mid-download then retried succeeds) | accepted |
-| REQ-202 | Build/Platform | **six of seven conditions observed against the live pipeline, 2026-08-20** — evidence per condition in TASK-049 §9, which cites the run ids: feature branch → artifact only, no release, no tag (run `31912058476`); repeated `beta` pushes → exactly one `channel-beta` prerelease across ~20 pushes; unchanged version on master → publishes nothing, fails nothing (run `32049139096`); bumped version → `v<version>` tag + release (`v0.5.0`, `v0.5.1`, `v0.5.2`); tag == AppVersion == manifest version (v0.5.2 checked three ways); manifest SHA-256 matches the asset (re-derived from the downloaded installer, byte-identical, `size` too). **Outstanding: failing ctest → no release has never been observed** — no run has failed at Test; the nearest evidence is run `31910767883`, which failed at Build and published nothing, so the gate is confirmed only in the negative (TASK-049 debt (5)). Status stays `accepted` rather than MET for that reason. Was: planned — observed pipeline behaviour (feature branch → artifact only, no tag; repeated `beta` pushes → exactly one `channel-beta` prerelease; unchanged version on master → no publish, no failure; bumped version → `v<version>` tag + release; failing ctest → no release; tag == AppVersion == manifest version; manifest SHA-256 matches the asset) | accepted |
+| REQ-202 | Build/Platform | **six of seven conditions observed against the live pipeline, 2026-08-20** — evidence per condition in TASK-049 §9, which cites the run ids: feature branch → artifact only, no release, no tag (run `31912058476`); repeated `beta` pushes → exactly one `channel-beta` prerelease across ~20 pushes; unchanged version on master → publishes nothing, fails nothing (run `32049139096`); bumped version → `v<version>` tag + release (`v0.5.0`, `v0.5.1`, `v0.5.2`); tag == AppVersion == manifest version (v0.5.2 checked three ways); manifest SHA-256 matches the asset (re-derived from the downloaded installer, byte-identical, `size` too). **Outstanding: failing ctest → no release has never been observed** — no run has failed at Test; the nearest evidence is run `31910767883`, which failed at Build and published nothing, so the gate is confirmed only in the negative (TASK-049 debt (5)). Status stays `accepted` rather than MET for that reason. Was: planned — observed pipeline behaviour (feature branch → artifact only, no tag; repeated `beta` pushes → exactly one `channel-beta` prerelease; unchanged version on master → no publish, no failure; bumped version → `v<version>` tag + release; failing ctest → no release; tag == AppVersion == manifest version; manifest SHA-256 matches the asset). **2026-09-06 (d): trigger changed to manual `workflow_dispatch` only** — the push-driven evidence above predates this change and remains valid for what each dispatch target does; "no CI job runs on a plain push" not yet separately observed against a live push. | accepted |
 | REQ-324 | Build/Platform | planned — verify `/analyze` flags present in Configure step and `build` job succeeds with a build containing an `/analyze` finding; `codeql.yml` builds via CMake/Ninja/MSVC and runs on `pull_request`+`schedule` only, not on push; REQ-202's push-target routing/version-gate/publish steps re-verified unchanged | accepted |
 | REQ-051 | UI/IO | `MtextToolbarTests` (panel-anchor clamp in-bounds/off-screen/oversized; font+colour run-tag composition incl. empty family = no tag; ruler tick spacing + zero-width = no ticks; attach label 1–9 + out-of-range fallback) + manual (panel titled "Text Formatting" with two rows + ruler; drag persists across edits and restart; font/colour apply to the selection only; height/oblique/entity colour whole-object; style dropdown re-bakes per REQ-044; B/I/U/caps/symbol unchanged; justification re-lays out; disabled controls inert with naming tooltips; ruler + expand toggles; paper MTEXT same panel; single-line TEXT still bare box; OK/Esc + `.gs`/DXF round-trip unchanged) | accepted |
 | REQ-203 | Build/Platform/Commands | planned — the `gosurvey_headless` link line carries no imgui/glfw/GLEW/`gl*` symbol; a hand-written transcript (line + circle + polyline) saves a `.gs` identical to the same steps performed in the GUI; a queued `DIALOG` answer satisfies a file-dialog call with no block; a deliberately-broken transcript exits non-zero naming invariant + step + line; the same transcript twice is byte-identical; CI runs the corpus per push | accepted |
