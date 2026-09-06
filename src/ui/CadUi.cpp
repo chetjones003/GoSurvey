@@ -5912,43 +5912,45 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         selPdfCtxIdx < static_cast<int>(cmd.pdfAttachments.size())) {
     ImGui::SameLine(0, 8);
     PdfAttachment& pdfSel = cmd.pdfAttachments[static_cast<size_t>(selPdfCtxIdx)];
-    const float ctrlW     = 185.f;
-    const float pdfCw     = colW({"Background", "Vectorize"});
-    const float wPdfCtx   = 8.f + pdfCw + 6.f + ctrlW;
-    RibbonSectionBegin("RibbonSecPdfCtx", "PDF Underlay", wPdfCtx, panelH);
+    const float ctrlW = 185.f;
+    ribbonlayout::RibbonSectionSpec spec;
+    spec.groups = {columnOfButtons({
+        rowBtn("##PdfBgBtn", pdfSel.showBackground ? (int)RibbonIconKind::PdfShowBg : (int)RibbonIconKind::PdfHideBg,
+               nullptr, "Background", false,
+               pdfSel.showBackground
+                   ? "Background ON — lines visible, paper transparent.  Click to show paper."
+                   : "Background OFF — full raster image visible.  Click to hide paper.",
+               false),
+        rowBtn("##PdfVecBtn", (int)RibbonIconKind::PdfVectorize, nullptr, "Vectorize", false,
+               "Vectorize Lines — add PDF snap-line geometry as drawing entities on the current layer.", false),
+    })};
+    const float buttonsW = ribbonlayout::MeasureRibbonSection(spec).size.x;
+    RibbonSectionBegin("RibbonSecPdfCtx", "PDF Underlay", buttonsW + 6.f + ctrlW + 8.f, panelH);
+    RibbonLayout::DrawSection(spec, buttonsW, [&](const std::string& id) {
+      DevShell_OnUi(id.c_str());
+      if (id == "##PdfBgBtn") pdfSel.showBackground = !pdfSel.showBackground;
+      else if (id == "##PdfVecBtn") VectorizePdfAttachmentLines(cmd, selPdfCtxIdx, log);
+    });
+    ImGui::SameLine(0, 6);
+    ImGui::BeginGroup();
     {
-      ImGui::BeginGroup();
-      if (smallBtn("##PdfBgBtn", pdfSel.showBackground ? RibbonIconKind::PdfShowBg : RibbonIconKind::PdfHideBg,
-                   "Background", pdfCw))
-        pdfSel.showBackground = !pdfSel.showBackground;
-      RibbonItemHelp(pdfSel.showBackground
-                     ? "Background ON — lines visible, paper transparent.  Click to show paper."
-                     : "Background OFF — full raster image visible.  Click to hide paper.");
-      if (smallBtn("##PdfVecBtn", RibbonIconKind::PdfVectorize, "Vectorize", pdfCw))
-        VectorizePdfAttachmentLines(cmd, selPdfCtxIdx, log);
-      RibbonItemHelp("Vectorize Lines — add PDF snap-line geometry as drawing entities on the current layer.");
-      ImGui::EndGroup();
-      ImGui::SameLine(0, 6);
-      ImGui::BeginGroup();
-      {
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("Fade");
-        ImGui::SameLine(0, 4.f);
-        float fadePct = pdfSel.fade * 100.f;
-        ImGui::SetNextItemWidth(ctrlW - 38.f);
-        if (ImGui::SliderFloat("##PdfCtxFade", &fadePct, 0.f, 100.f, "%.0f%%"))
-          pdfSel.fade = fadePct / 100.f;
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("Snap:");
-        ImGui::SameLine(0, 3.f);
-        ImGui::Checkbox("L##pcs", &pdfSel.snapLines);
-        ImGui::SameLine(0, 3.f);
-        ImGui::Checkbox("C##pcs", &pdfSel.snapCircles);
-        ImGui::SameLine(0, 3.f);
-        ImGui::Checkbox("T##pcs", &pdfSel.snapText);
-      }
-      ImGui::EndGroup();
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextDisabled("Fade");
+      ImGui::SameLine(0, 4.f);
+      float fadePct = pdfSel.fade * 100.f;
+      ImGui::SetNextItemWidth(ctrlW - 38.f);
+      if (ImGui::SliderFloat("##PdfCtxFade", &fadePct, 0.f, 100.f, "%.0f%%"))
+        pdfSel.fade = fadePct / 100.f;
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextDisabled("Snap:");
+      ImGui::SameLine(0, 3.f);
+      ImGui::Checkbox("L##pcs", &pdfSel.snapLines);
+      ImGui::SameLine(0, 3.f);
+      ImGui::Checkbox("C##pcs", &pdfSel.snapCircles);
+      ImGui::SameLine(0, 3.f);
+      ImGui::Checkbox("T##pcs", &pdfSel.snapText);
     }
+    ImGui::EndGroup();
     RibbonSectionEnd();
     } // selPdfCtxIdx >= 0
   } // contextual PDF block
