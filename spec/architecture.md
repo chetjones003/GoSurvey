@@ -2408,6 +2408,27 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   breakage happens to trip a topological check, and some does not, and only measurement tells them
   apart.
 
+  **Amendment (i), revised the same day — corners are RE-SOLVED, not translated.** The first
+  implementation moved each corner of the pushed face ALONG the push. That is correct only where
+  every neighbouring face contains the push direction, and measured against the shipped primitives
+  it managed **box 6/6, wedge 2/5, pyramid 0/6** — a pyramid is entirely flat-faced and could not be
+  pushed at all, which is what showed the algorithm was a special case wearing the name of a general
+  one. Each corner is now recomputed as the point where the planes of the faces meeting there cross,
+  which gives **box 6/6, wedge 5/5, pyramid 6/6** and identical answers on the box.
+
+  Two user-visible consequences follow from the neighbours keeping their planes, and both are the
+  correct behaviour rather than side effects: extending a wedge's end face makes the wedge TALLER
+  (the ramp keeps its slope), and raising a pyramid frustum's top makes that top NARROWER (the walls
+  keep theirs). A translation would have produced a wedge whose corners no longer touch its own
+  slope, and a frustum whose walls bend.
+
+  The refusal set changed with it. `PushPullNeighbourNotParallel` is gone — parallelism is no longer
+  required — replaced by `PushPullNeighbourCurved` (a curved surface is not a plane to intersect)
+  and `PushPullVertexUnsolvable` (the planes at a corner do not meet in one point, or more than
+  three faces meet there and moving one would split it). A true pyramid's apex is the second case:
+  four planes, and pushing a side face would break it into several points — a topology change, and a
+  different operation. Its base still pushes.
+
   Adding such a check to `Validate` was considered and rejected: for a Boolean result it is a
   tolerance question rather than a boolean one, and making every existing operation pay for it —
   and possibly newly fail on it — to guard one new operation is the wrong place to put the cost.
