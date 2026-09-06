@@ -397,9 +397,18 @@ TEST_CASE("ACIS SAT import: a non-rectangular trimmed cylindrical face imports v
   REQUIRE(wall != nullptr);
   CHECK_FALSE(wall->paramLoops.empty());
 
+  const double kPi = 3.14159265358979323846;
   const auto mp = brep::ComputeMassProperties(r.solid);
-  const double expectedVolume = 5.0 * 3.14159265358979323846;
-  CHECK(mp.volume == Catch::Approx(expectedVolume).epsilon(1e-6));
+  CHECK(mp.volume == Catch::Approx(5.0 * kPi).epsilon(1e-6));
+  // Total surface area: two quarter-disk caps (pi*r^2/4 each) + two flat radial sides (r*h each) +
+  // the curved wall (r*(pi/2)*h) = 2*pi + 20 + 5*pi = 7*pi + 20.
+  CHECK(mp.surfaceArea == Catch::Approx(7.0 * kPi + 20.0).epsilon(1e-6));
+
+  brep::Tessellation tess;
+  brep::Problem tessWhy = brep::Problem::Ok;
+  REQUIRE(brep::Tessellate(r.solid, 0.01, &tess, &tessWhy));
+  CHECK(tess.indices.size() % 3 == 0);
+  CHECK_FALSE(tess.indices.empty());
 }
 
 TEST_CASE("ACIS SAT import: a cylindrical face with a hole loop is still refused by name even "
