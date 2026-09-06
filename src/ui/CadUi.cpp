@@ -3692,23 +3692,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                         g_chrome.ribbonBottomGutter;
   constexpr float kLayerPanelW = 288.f;
 
-  // Civil 3D-style panel metrics: a button column fills the height above the
-  // bottom title; small labeled buttons stack 3 to a column; the icon grid
-  // uses 2 rows of square cells.
-  const float colH      = std::max(48.f, RibbonPanelContentH(panelH) - 8.f);
-  const float rowH      = std::floor((colH - 4.f) / 3.f);
-  const float gridCell  = std::floor((colH - 2.f) / 2.f);
-  // Civil 3D's Home-tab icon grids (Draw, Palettes, layer state, Clipboard) are 3 rows of small
-  // cells, not 2 — a 2-row cell clipped the bottom row.
-  const float gridCell3 = std::floor((colH - 6.f) / 3.f);
+  // Civil 3D-style panel metrics: a button column fills the height above the bottom title.
+  const float colH = std::max(48.f, RibbonPanelContentH(panelH) - 8.f);
   constexpr float largeW = 60.f;
   constexpr float kTsLargeW = 76.f;
   auto belowW = [&](const char* label) { return RibbonBelowButtonWidth(label, kTsLargeW); };
   auto capW = [&](const char* caption) { return std::max(kTsLargeW, RibbonMaxLineWidth(caption) + 16.f); };
 
-  // REQ-302 increment 2 (ADR-038 (a)): `curCompact` is read by colW()/smallBtn() below — Medium
-  // metrics are simply "the same button code, with this flag true." largeBtn/gridBtn are unaffected
-  // (grid cells are already icon-only; a large button's label-below layout doesn't shrink further).
+  // REQ-302/ADR-053 (issue #339): every tab now measures its own content via
+  // ribbonlayout::MeasureRibbonSection — curCompact only gates label-vs-icon-only rendering
+  // (rowBtn's `compact` param) at the Medium breakpoint; it is no longer read by any hardcoded
+  // width formula (colW/smallBtn, retired in #338, were the last such readers).
   bool curCompact = false;
   auto largeBtn = [&](const char* id, RibbonIconKind ic, const char* label) {
     const bool hit = RibbonButtonEx(id, ic, label, ImVec2(largeW, colH), RibbonLabel::Below);
@@ -3716,9 +3710,6 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       DevShell_OnUi(id);
     return hit;
   };
-  (void)rowH;
-  (void)gridCell;
-  (void)gridCell3;
 
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
   // Civil 3D Annotate tab shows a style/scale combo in most panels. Where GoSurvey has no picker
@@ -6136,6 +6127,16 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   ImGui::EndChild();
 
+  // REQ-302/ADR-053 (issue #339): the persistent Layers strip is intentionally NOT wired onto
+  // RibbonLayout/kept as a fixed width. Unlike every per-tab section, kLayerPanelW is also read
+  // at `availForTools` above (BEFORE any tab-specific code runs) to reserve this strip's space in
+  // the Wide/Medium/Narrow fit decision for whichever tab is active; making this section's own
+  // width dynamic would require restructuring that reservation to build (and measure) this spec
+  // before the tab-fit calculation instead of after it — out of scope for the per-tab conversions
+  // in #326-#338, none of which named this strip, and riskier than the value it would add (its
+  // one real button, "Layers", is a minor part of a section whose other control, the current-layer
+  // combo, is a live widget the engine can't represent anyway — the same "nothing/little to gain"
+  // calculus as the Hatch contextual tab, issue #335).
   ImGui::SameLine(0, st.ItemSpacing.x);
   RibbonSectionBegin("RibbonLayerStrip", "Layers", kLayerPanelW, panelH);
   {
