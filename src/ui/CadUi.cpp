@@ -4812,215 +4812,215 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   if (cmd.activeRibbonTab == kRibbonTabSurfaceCtx && !ribbonPaperSpace && selSurfIdx >= 0) {
     const std::string& surfName = cmd.cadSurfaces[static_cast<size_t>(selSurfIdx)].name;
 
-    const float tsLabelsSec = 8.f + belowW("Add Labels") + 4.f + belowW("Add Legend") + 8.f;
-    ribbonSpecs.push_back({tsLabelsSec, tsLabelsSec, [&]() {
-      const float tsAddLabels = belowW("Add Labels");
-      const float tsAddLegend = belowW("Add Legend");
-      RibbonSectionBegin("RibbonSecTsLabels", "Labels & Tables", 8.f + tsAddLabels + 4.f + tsAddLegend + 8.f, panelH);
-      RibbonNyiButton("##TsAddLabels", RibbonIconKind::SurfLabel, "Add Labels", ImVec2(tsAddLabels, colH),
-                      RibbonLabel::Below);
-      ImGui::SameLine(0, 4);
-      RibbonNyiButton("##TsAddLegend", RibbonIconKind::SurfLegend, "Add Legend", ImVec2(tsAddLegend, colH),
-                      RibbonLabel::Below);
-      RibbonSectionEnd();
-    }});
-
     {
-      const float genCell = colW({"Properties", "Inquiry", "Isolate Objects"});
-      const float wGen = 8.f + genCell + 4.f + genCell;
-      ribbonSpecs.push_back({wGen, wGen, [&]() {
-      const float cell = colW({"Properties", "Inquiry", "Isolate Objects"});
-      RibbonSectionBegin("RibbonSecTsGen", "General Tools", 8.f + cell + 4.f + cell, panelH);
-      ImGui::BeginGroup();
-      if (smallBtn("##TsProps", RibbonIconKind::SurfPropsHand, "Properties", cell))
-        cmd.pendingPropertiesFocus = true;
-      RibbonItemHelp("Properties — the side Properties panel for the selected surface.");
-      if (smallBtn("##TsInquiry", RibbonIconKind::SurfInquiry, "Inquiry", cell))
-        StartSurfaceElevGradeCommand(cmd, log);
-      RibbonItemHelp("Inquiry — elevation and grade on this surface.\nCommand bar: SURFELEV");
-      ImGui::EndGroup();
-      ImGui::SameLine(0, 4);
-      ImGui::BeginGroup();
-      if (smallBtn("##TsIsolate", RibbonIconKind::SurfIsolate, "Isolate Objects", cell))
-        ImGui::OpenPopup("##TsIsolateMenu");
-      RibbonItemHelp("Isolate Objects — isolate, hide, or end isolation (REQ-084).");
-      if (ImGui::BeginPopup("##TsIsolateMenu")) {
-        if (ImGui::MenuItem("Isolate Objects"))
-          IsolateSelectedObjects(cmd, log);
-        if (ImGui::MenuItem("Hide Objects"))
-          HideSelectedObjects(cmd, log);
-        if (ImGui::MenuItem("End Object Isolation", nullptr, false, !cmd.hiddenEntityIds.empty()))
-          EndObjectIsolation(cmd, log);
-        ImGui::EndPopup();
-      }
-      ImGui::EndGroup();
-      RibbonSectionEnd();
-    }});
+      ribbonlayout::RibbonGroupSpec g1, g2;
+      g1.buttons = {largeBtnSpecEx("##TsAddLabels", (int)RibbonIconKind::SurfLabel, nullptr, "Add Labels", true,
+                                   "Add Labels — not implemented yet.", belowW("Add Labels"))};
+      g2.buttons = {largeBtnSpecEx("##TsAddLegend", (int)RibbonIconKind::SurfLegend, nullptr, "Add Legend", true,
+                                   "Add Legend — not implemented yet.", belowW("Add Legend"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {g1, g2};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecTsLabels", "Labels & Tables", spec, nullptr);
+      }});
     }
 
     {
-      const float wMod = 8.f + belowW("Surface Properties") + 4.f + belowW("Add Data") + 4.f + belowW("Edit Surface") + 8.f;
-      ribbonSpecs.push_back({wMod, wMod, [&]() {
-      const float tsSurfProps = belowW("Surface Properties");
-      const float tsAddData = belowW("Add Data");
-      const float tsEditSurf = belowW("Edit Surface");
-      RibbonSectionBegin("RibbonSecTsMod", "Modify", 8.f + tsSurfProps + 4.f + tsAddData + 4.f + tsEditSurf + 8.f, panelH);
-      if (RibbonButtonEx("##TsSurfProps", RibbonIconKind::SurfDoc, "Surface Properties", ImVec2(tsSurfProps, colH),
-                         RibbonLabel::Below)) {
-        cmd.surfacePropertiesIndex = selSurfIdx;
-        cmd.showSurfacePropertiesWindow = true;
-      }
-      RibbonItemHelp("Surface Properties — Information, Definition, Analysis, Statistics.");
-      ImGui::SameLine(0, 4);
-      if (RibbonButtonEx("##TsAddData", RibbonIconKind::SurfAddData, "Add Data", ImVec2(tsAddData, colH),
-                         RibbonLabel::Below))
-        ImGui::OpenPopup("##TsAddDataMenu");
-      RibbonItemHelp("Add Data — breaklines, contours, and boundaries on this surface.");
-      if (ImGui::BeginPopup("##TsAddDataMenu")) {
-        if (ImGui::MenuItem("Breaklines"))
-          StartDesignateBreaklineCommand(cmd, surfName, log);
-        if (ImGui::MenuItem("Contours"))
-          StartDesignateContourCommand(cmd, surfName, log);
-        if (ImGui::MenuItem("Boundary"))
-          StartDesignateBoundaryCommand(cmd, surfName, CadBoundaryKind::Outer, log);
-        if (ImGui::MenuItem("Point Groups"))
-          cmd.showSurfaceManagerWindow = true;
-        ImGui::BeginDisabled();
-        ImGui::MenuItem("Point Files");
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-          ImGui::SetTooltip("Point Files — not implemented yet.");
-        ImGui::EndDisabled();
-        ImGui::EndPopup();
-      }
-      ImGui::SameLine(0, 4);
-      if (RibbonButtonEx("##TsEditSurf", RibbonIconKind::SurfEdit, "Edit Surface", ImVec2(tsEditSurf, colH),
-                         RibbonLabel::Below))
-        ImGui::OpenPopup("##TsEditSurfMenu");
-      RibbonItemHelp("Edit Surface — add/delete/move points, delete TIN lines, swap edges, or rebuild.");
-      if (ImGui::BeginPopup("##TsEditSurfMenu")) {
-        if (ImGui::MenuItem("Add Point"))
-          StartSurfAddPointCommand(cmd, surfName, log);
-        if (ImGui::MenuItem("Delete Point"))
-          StartSurfDelPointCommand(cmd, surfName, log);
-        if (ImGui::MenuItem("Move Point"))
-          StartSurfMovePointCommand(cmd, surfName, log);
-        if (ImGui::MenuItem("Delete TIN Line"))
-          StartSurfDelLineCommand(cmd, surfName, log);
-        if (ImGui::MenuItem("Swap Edge"))
-          StartSurfSwapEdgeCommand(cmd, surfName, log);
-        if (ImGui::MenuItem("Rebuild"))
-          SubmitRibbonCommand(cmd, log, "SURFACEREBUILD " + surfName);
-        ImGui::EndPopup();
-      }
-      RibbonSectionEnd();
-    }});
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          columnOfButtons({
+              rowBtn("##TsProps", (int)RibbonIconKind::SurfPropsHand, nullptr, "Properties", false,
+                     "Properties — the side Properties panel for the selected surface.", false),
+              rowBtn("##TsInquiry", (int)RibbonIconKind::SurfInquiry, nullptr, "Inquiry", false,
+                     "Inquiry — elevation and grade on this surface.\nCommand bar: SURFELEV", false),
+          }),
+          columnOfButtons({
+              rowBtn("##TsIsolate", (int)RibbonIconKind::SurfIsolate, nullptr, "Isolate Objects", false,
+                     "Isolate Objects — isolate, hide, or end isolation (REQ-084).", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecTsGen", "General Tools", spec, [&](const std::string& id) {
+          if (id == "##TsProps") cmd.pendingPropertiesFocus = true;
+          else if (id == "##TsInquiry") StartSurfaceElevGradeCommand(cmd, log);
+          else if (id == "##TsIsolate") ImGui::OpenPopup("##TsIsolateMenu");
+        });
+        if (ImGui::BeginPopup("##TsIsolateMenu")) {
+          if (ImGui::MenuItem("Isolate Objects"))
+            IsolateSelectedObjects(cmd, log);
+          if (ImGui::MenuItem("Hide Objects"))
+            HideSelectedObjects(cmd, log);
+          if (ImGui::MenuItem("End Object Isolation", nullptr, false, !cmd.hiddenEntityIds.empty()))
+            EndObjectIsolation(cmd, log);
+          ImGui::EndPopup();
+        }
+      }});
     }
 
     {
-      const float lodW = colW({"Reduced LOD", "High LOD"});
-      ribbonSpecs.push_back({8.f + lodW, 8.f + lodW, [&]() {
-      const float cw = colW({"Reduced LOD", "High LOD"});
-      RibbonSectionBegin("RibbonSecTsLod", "Level of Detail", 8.f + cw, panelH);
-      ImGui::BeginGroup();
-      RibbonNyiButton("##TsLodLow", RibbonIconKind::SurfLodLow, "Reduced LOD",
-                      ImVec2(curCompact ? rowH : cw, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
-      RibbonNyiButton("##TsLodHigh", RibbonIconKind::SurfLodHigh, "High LOD",
-                      ImVec2(curCompact ? rowH : cw, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
-      ImGui::EndGroup();
-      RibbonSectionEnd();
-    }});
+      ribbonlayout::RibbonGroupSpec g1, g2, g3;
+      g1.buttons = {largeBtnSpecEx("##TsSurfProps", (int)RibbonIconKind::SurfDoc, nullptr, "Surface Properties", false,
+                                   "Surface Properties — Information, Definition, Analysis, Statistics.",
+                                   belowW("Surface Properties"))};
+      g2.buttons = {largeBtnSpecEx("##TsAddData", (int)RibbonIconKind::SurfAddData, nullptr, "Add Data", false,
+                                   "Add Data — breaklines, contours, and boundaries on this surface.",
+                                   belowW("Add Data"))};
+      g3.buttons = {largeBtnSpecEx("##TsEditSurf", (int)RibbonIconKind::SurfEdit, nullptr, "Edit Surface", false,
+                                   "Edit Surface — add/delete/move points, delete TIN lines, swap edges, or rebuild.",
+                                   belowW("Edit Surface"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {g1, g2, g3};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {
+        drawRibbonSectionSpec("RibbonSecTsMod", "Modify", spec, [&](const std::string& id) {
+          if (id == "##TsSurfProps") {
+            cmd.surfacePropertiesIndex = selSurfIdx;
+            cmd.showSurfacePropertiesWindow = true;
+          } else if (id == "##TsAddData") {
+            ImGui::OpenPopup("##TsAddDataMenu");
+          } else if (id == "##TsEditSurf") {
+            ImGui::OpenPopup("##TsEditSurfMenu");
+          }
+        });
+        if (ImGui::BeginPopup("##TsAddDataMenu")) {
+          if (ImGui::MenuItem("Breaklines"))
+            StartDesignateBreaklineCommand(cmd, surfName, log);
+          if (ImGui::MenuItem("Contours"))
+            StartDesignateContourCommand(cmd, surfName, log);
+          if (ImGui::MenuItem("Boundary"))
+            StartDesignateBoundaryCommand(cmd, surfName, CadBoundaryKind::Outer, log);
+          if (ImGui::MenuItem("Point Groups"))
+            cmd.showSurfaceManagerWindow = true;
+          ImGui::BeginDisabled();
+          ImGui::MenuItem("Point Files");
+          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Point Files — not implemented yet.");
+          ImGui::EndDisabled();
+          ImGui::EndPopup();
+        }
+        if (ImGui::BeginPopup("##TsEditSurfMenu")) {
+          if (ImGui::MenuItem("Add Point"))
+            StartSurfAddPointCommand(cmd, surfName, log);
+          if (ImGui::MenuItem("Delete Point"))
+            StartSurfDelPointCommand(cmd, surfName, log);
+          if (ImGui::MenuItem("Move Point"))
+            StartSurfMovePointCommand(cmd, surfName, log);
+          if (ImGui::MenuItem("Delete TIN Line"))
+            StartSurfDelLineCommand(cmd, surfName, log);
+          if (ImGui::MenuItem("Swap Edge"))
+            StartSurfSwapEdgeCommand(cmd, surfName, log);
+          if (ImGui::MenuItem("Rebuild"))
+            SubmitRibbonCommand(cmd, log, "SURFACEREBUILD " + surfName);
+          ImGui::EndPopup();
+        }
+      }});
     }
 
     {
-      const float wAn = 8.f + belowW("Water Drop") + 4.f + colW({"Crossing BL", "Visibility", "Catchment", "Volumes"}) +
-                        4.f + colW({"Crossing BL", "Visibility", "Catchment", "Volumes"}) + 8.f;
-      ribbonSpecs.push_back({wAn, wAn, [&]() {
-      const float tsWater = belowW("Water Drop");
-      const float cell = colW({"Crossing BL", "Visibility", "Catchment", "Volumes"});
-      RibbonSectionBegin("RibbonSecTsAnalyze", "Analyze", 8.f + tsWater + 4.f + cell + 4.f + cell + 8.f, panelH);
-      if (RibbonButtonEx("##TsWaterDrop", RibbonIconKind::SurfWaterDrop, "Water Drop", ImVec2(tsWater, colH),
-                         RibbonLabel::Below))
-        StartWaterDropCommand(cmd, surfName, log);
-      RibbonItemHelp("Water Drop — pick a point on this surface.\nCommand bar: WATERDROP");
-      ImGui::SameLine(0, 4);
-      ImGui::BeginGroup();
-      RibbonNyiButton("##TsXBreak", RibbonIconKind::SurfBandage, "Crossing BL",
-                      ImVec2(curCompact ? rowH : cell, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
-      RibbonNyiButton("##TsVisCheck", RibbonIconKind::SurfEye, "Visibility",
-                      ImVec2(curCompact ? rowH : cell, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
-      ImGui::EndGroup();
-      ImGui::SameLine(0, 4);
-      ImGui::BeginGroup();
-      if (smallBtn("##TsCatchment", RibbonIconKind::SurfCatchment, "Catchment", cell))
-        StartCatchmentCommand(cmd, surfName, log);
-      RibbonItemHelp("Catchment Area — pick an outlet on this surface.\nCommand bar: CATCHMENT");
-      if (smallBtn("##TsVolDash", RibbonIconKind::SurfVolumes, "Volumes", cell))
-        cmd.volumeDashboard.open = true;
-      RibbonItemHelp("Volumes Dashboard — base vs comparison cut/fill.");
-      ImGui::EndGroup();
-      RibbonSectionEnd();
-    }});
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##TsLodLow", (int)RibbonIconKind::SurfLodLow, nullptr, "Reduced LOD", true,
+                 "Reduced LOD — not implemented yet.", false),
+          rowBtn("##TsLodHigh", (int)RibbonIconKind::SurfLodHigh, nullptr, "High LOD", true,
+                 "High LOD — not implemented yet.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecTsLod", "Level of Detail", spec, nullptr);
+      }});
     }
 
     {
-      const float toolW = colW({"Drape Image", "Extract", "Move to Surface"});
-      ribbonSpecs.push_back({8.f + toolW, 8.f + toolW, [&]() {
-      const float cw = colW({"Drape Image", "Extract", "Move to Surface"});
-      RibbonSectionBegin("RibbonSecTsTools", "Surface Tools", 8.f + cw, panelH);
-      ImGui::BeginGroup();
-      RibbonNyiButton("##TsDrape", RibbonIconKind::SurfDrape, "Drape Image",
-                      ImVec2(curCompact ? rowH : cw, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
-      if (smallBtn("##TsExtract", RibbonIconKind::SurfExtract, "Extract", cw))
-        ImGui::OpenPopup("##TsExtractMenu");
-      RibbonItemHelp("Extract from Surface — contours, water-drop, or catchment.");
-      if (ImGui::BeginPopup("##TsExtractMenu")) {
-        if (ImGui::MenuItem("Contours"))
-          SubmitRibbonCommand(cmd, log, "EXTRACT " + surfName);
-        if (ImGui::MenuItem("Water Drop Path"))
-          SubmitRibbonCommand(cmd, log, "WATERDROP EXTRACT");
-        if (ImGui::MenuItem("Water Drop Feature Line"))
-          SubmitRibbonCommand(cmd, log, "WATERDROP EXTRACT FL");
-        if (ImGui::MenuItem("Catchment"))
-          SubmitRibbonCommand(cmd, log, "CATCHMENT EXTRACT");
-        ImGui::EndPopup();
-      }
-      RibbonNyiButton("##TsMoveTo", RibbonIconKind::SurfMoveTo, "Move to Surface",
-                      ImVec2(curCompact ? rowH : cw, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
-      ImGui::EndGroup();
-      RibbonSectionEnd();
-    }});
+      ribbonlayout::RibbonGroupSpec waterGroup;
+      waterGroup.buttons = {largeBtnSpecEx("##TsWaterDrop", (int)RibbonIconKind::SurfWaterDrop, nullptr, "Water Drop",
+                                           false, "Water Drop — pick a point on this surface.\nCommand bar: WATERDROP",
+                                           belowW("Water Drop"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          waterGroup,
+          columnOfButtons({
+              rowBtn("##TsXBreak", (int)RibbonIconKind::SurfBandage, nullptr, "Crossing BL", true,
+                     "Crossing BL — not implemented yet.", false),
+              rowBtn("##TsVisCheck", (int)RibbonIconKind::SurfEye, nullptr, "Visibility", true,
+                     "Visibility — not implemented yet.", false),
+          }),
+          columnOfButtons({
+              rowBtn("##TsCatchment", (int)RibbonIconKind::SurfCatchment, nullptr, "Catchment", false,
+                     "Catchment Area — pick an outlet on this surface.\nCommand bar: CATCHMENT", false),
+              rowBtn("##TsVolDash", (int)RibbonIconKind::SurfVolumes, nullptr, "Volumes", false,
+                     "Volumes Dashboard — base vs comparison cut/fill.", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {
+        drawRibbonSectionSpec("RibbonSecTsAnalyze", "Analyze", spec, [&](const std::string& id) {
+          if (id == "##TsWaterDrop") StartWaterDropCommand(cmd, surfName, log);
+          else if (id == "##TsCatchment") StartCatchmentCommand(cmd, surfName, log);
+          else if (id == "##TsVolDash") cmd.volumeDashboard.open = true;
+        });
+      }});
     }
 
     {
-      const float wLaunch = 8.f + belowW("Quick Profile") + 4.f + colW({"Create Profile", "Data Shortcut", "Grading Tools"}) + 8.f;
-      ribbonSpecs.push_back({wLaunch, wLaunch, [&]() {
-      const float tsQP = belowW("Quick Profile");
-      const float cell = colW({"Create Profile", "Data Shortcut", "Grading Tools"});
-      RibbonSectionBegin("RibbonSecTsLaunch", "Launch Pad", 8.f + tsQP + 4.f + cell + 8.f, panelH);
-      if (RibbonButtonEx("##TsQProfile", RibbonIconKind::SurfQuickProfile, "Quick Profile", ImVec2(tsQP, colH),
-                         RibbonLabel::Below))
-        StartQuickProfileCommand(cmd, surfName, log);
-      RibbonItemHelp("Quick Profile — sample this surface along two plan points.\nCommand bar: QUICKPROFILE");
-      ImGui::SameLine(0, 4);
-      ImGui::BeginGroup();
-      RibbonNyiButton("##TsCProfile", RibbonIconKind::SurfProfile, "Create Profile",
-                      ImVec2(curCompact ? rowH : cell, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
-      RibbonNyiButton("##TsDShort", RibbonIconKind::SurfDataShortcut, "Data Shortcut",
-                      ImVec2(curCompact ? rowH : cell, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
-      RibbonNyiButton("##TsGrade", RibbonIconKind::SurfGrading, "Grading Tools",
-                      ImVec2(curCompact ? rowH : cell, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
-      ImGui::EndGroup();
-      RibbonSectionEnd();
-    }});
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##TsDrape", (int)RibbonIconKind::SurfDrape, nullptr, "Drape Image", true,
+                 "Drape Image — not implemented yet.", false),
+          rowBtn("##TsExtract", (int)RibbonIconKind::SurfExtract, nullptr, "Extract", false,
+                 "Extract from Surface — contours, water-drop, or catchment.", false),
+          rowBtn("##TsMoveTo", (int)RibbonIconKind::SurfMoveTo, nullptr, "Move to Surface", true,
+                 "Move to Surface — not implemented yet.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {
+        drawRibbonSectionSpec("RibbonSecTsTools", "Surface Tools", spec, [&](const std::string& id) {
+          if (id == "##TsExtract") ImGui::OpenPopup("##TsExtractMenu");
+        });
+        if (ImGui::BeginPopup("##TsExtractMenu")) {
+          if (ImGui::MenuItem("Contours"))
+            SubmitRibbonCommand(cmd, log, "EXTRACT " + surfName);
+          if (ImGui::MenuItem("Water Drop Path"))
+            SubmitRibbonCommand(cmd, log, "WATERDROP EXTRACT");
+          if (ImGui::MenuItem("Water Drop Feature Line"))
+            SubmitRibbonCommand(cmd, log, "WATERDROP EXTRACT FL");
+          if (ImGui::MenuItem("Catchment"))
+            SubmitRibbonCommand(cmd, log, "CATCHMENT EXTRACT");
+          ImGui::EndPopup();
+        }
+      }});
+    }
+
+    {
+      ribbonlayout::RibbonGroupSpec qpGroup;
+      qpGroup.buttons = {largeBtnSpecEx("##TsQProfile", (int)RibbonIconKind::SurfQuickProfile, nullptr, "Quick Profile",
+                                        false,
+                                        "Quick Profile — sample this surface along two plan points.\nCommand bar: QUICKPROFILE",
+                                        belowW("Quick Profile"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          qpGroup,
+          columnOfButtons({
+              rowBtn("##TsCProfile", (int)RibbonIconKind::SurfProfile, nullptr, "Create Profile", true,
+                     "Create Profile — not implemented yet.", false),
+              rowBtn("##TsDShort", (int)RibbonIconKind::SurfDataShortcut, nullptr, "Data Shortcut", true,
+                     "Data Shortcut — not implemented yet.", false),
+              rowBtn("##TsGrade", (int)RibbonIconKind::SurfGrading, nullptr, "Grading Tools", true,
+                     "Grading Tools — not implemented yet.", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {
+        drawRibbonSectionSpec("RibbonSecTsLaunch", "Launch Pad", spec, [&](const std::string& id) {
+          if (id == "##TsQProfile") StartQuickProfileCommand(cmd, surfName, log);
+        });
+      }});
     }
   } // kRibbonTabSurfaceCtx
 
