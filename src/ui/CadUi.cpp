@@ -3310,24 +3310,6 @@ bool RibbonDrawButtonForLayout(const char* str_id, const char* label, const char
   return pressed && !disabled;
 }
 
-static void RibbonNyiButton(const char* id, RibbonIconKind ic, const char* label, const ImVec2& size,
-                            RibbonLabel mode, const char* iconNameOverride = nullptr) {
-  assert(id != nullptr);
-  assert(label != nullptr);
-  ImGui::BeginDisabled();
-  (void)RibbonButtonEx(id, ic, label, size, mode, iconNameOverride);
-  char flat[160];
-  size_t o = 0;
-  for (const char* p = label; *p != '\0' && o + 1 < sizeof(flat); ++p) {
-    flat[o++] = (*p == '\n') ? ' ' : *p;
-  }
-  flat[o] = '\0';
-  char tip[192];
-  std::snprintf(tip, sizeof(tip), "%s — not implemented yet.", flat);
-  RibbonItemHelp(tip, ImGuiHoveredFlags_AllowWhenDisabled);
-  ImGui::EndDisabled();
-}
-
 static int FirstSelectedSurfaceIndex(const AppCommandState& cmd) {
   const size_t n = cmd.cadSurfaces.size();
   assert(n < 10000000u);
@@ -3734,28 +3716,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       DevShell_OnUi(id);
     return hit;
   };
-  auto smallBtn = [&](const char* id, RibbonIconKind ic, const char* label, float w) {
-    const RibbonLabel mode = curCompact ? RibbonLabel::None : RibbonLabel::Right;
-    const bool hit = RibbonButtonEx(id, ic, curCompact ? nullptr : label, ImVec2(curCompact ? rowH : w, rowH), mode);
-    if (hit)
-      DevShell_OnUi(id);
-    return hit;
-  };
+  (void)rowH;
   (void)gridCell;
-  // Column width = small icon + gap + the widest label in the column — or, compact, just the icon
-  // (REQ-302 increment 2 Medium/Narrow: "switch button labels to icons," issue #83 strategy 3).
-  auto colW = [&](std::initializer_list<const char*> labels) {
-    if (curCompact)
-      return rowH;
-    float m = 0.f;
-    for (const char* l : labels)
-      m = std::max(m, ImGui::CalcTextSize(l).x);
-    // icon (rowH-6) + 3px gaps each side + label; matches RibbonButtonEx Right-mode layout with
-    // a small margin. (Was +8 — trimmed once the child-font-scale bug was fixed so the extra
-    // slack is no longer needed, which is what lets the wide Home tab fit its full labels.)
-    return rowH + 6.f + m;
-  };
-
   (void)gridCell3;
 
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
@@ -5029,46 +4991,46 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     const bool singlePt = (nSvyPts == 1);
 
     {
-      const float wAddTables = capW("Add\nTables");
-      const float wEditLbl = capW("Edit Label\nText");
-      const float wLabels = singlePt ? (8.f + wAddTables + 4.f + wEditLbl + 8.f) : (8.f + wAddTables + 8.f);
-      ribbonSpecs.push_back({wLabels, wLabels, [&]() {
-        const float wTbl = capW("Add\nTables");
-        const float wEdit = capW("Edit Label\nText");
-        const bool one = (nSvyPts == 1);
-        RibbonSectionBegin("RibbonSecSpLabels", one ? "Labels & Tables" : "Tables",
-                           one ? (8.f + wTbl + 4.f + wEdit + 8.f) : (8.f + wTbl + 8.f), panelH);
-        RibbonNyiButton("##SpAddTables", RibbonIconKind::SurfLegend, "Add\nTables", ImVec2(wTbl, colH),
-                        RibbonLabel::Below);
-        if (one) {
-          ImGui::SameLine(0, 4);
-          RibbonNyiButton("##SpEditLbl", RibbonIconKind::Text, "Edit Label\nText", ImVec2(wEdit, colH),
-                          RibbonLabel::Below);
-        }
-        RibbonSectionEnd();
+      ribbonlayout::RibbonGroupSpec g1;
+      g1.buttons = {largeBtnSpecEx("##SpAddTables", (int)RibbonIconKind::SurfLegend, nullptr, "Add\nTables", true,
+                                   "Add Tables — not implemented yet.", capW("Add\nTables"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {g1};
+      if (singlePt) {
+        ribbonlayout::RibbonGroupSpec g2;
+        g2.buttons = {largeBtnSpecEx("##SpEditLbl", (int)RibbonIconKind::Text, nullptr, "Edit Label\nText", true,
+                                     "Edit Label Text — not implemented yet.", capW("Edit Label\nText"))};
+        spec.groups.push_back(g2);
+      }
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, singlePt]() {
+        drawRibbonSectionSpec("RibbonSecSpLabels", singlePt ? "Labels & Tables" : "Tables", spec, nullptr);
       }});
     }
 
     {
-      const float wInq = capW("Inquiry");
-      const float genCell = colW({"Properties", "Isolate Objects"});
-      const float wGen = 8.f + wInq + 4.f + genCell + 8.f;
-      ribbonSpecs.push_back({wGen, wGen, [&]() {
-        const float wInquiry = capW("Inquiry");
-        const float cell = colW({"Properties", "Isolate Objects"});
-        RibbonSectionBegin("RibbonSecSpGen", "General Tools", 8.f + wInquiry + 4.f + cell + 8.f, panelH);
-        if (RibbonButtonEx("##SpInquiry", RibbonIconKind::SurfInquiry, "Inquiry", ImVec2(wInquiry, colH),
-                           RibbonLabel::Below))
-          StartIdPointCommand(cmd, log);
-        RibbonItemHelp("Inquiry — identify a point.\nCommand bar: ID");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (smallBtn("##SpProps", RibbonIconKind::SurfPropsHand, "Properties", cell))
-          cmd.pendingPropertiesFocus = true;
-        RibbonItemHelp("Properties — the side Properties panel for the current selection.");
-        if (smallBtn("##SpIsolate", RibbonIconKind::SurfIsolate, "Isolate Objects", cell))
-          ImGui::OpenPopup("##SpIsolateMenu");
-        RibbonItemHelp("Isolate Objects — isolate, hide, or end isolation (REQ-084).");
+      ribbonlayout::RibbonGroupSpec inqGroup;
+      inqGroup.buttons = {largeBtnSpecEx("##SpInquiry", (int)RibbonIconKind::SurfInquiry, nullptr, "Inquiry", false,
+                                         "Inquiry — identify a point.\nCommand bar: ID", capW("Inquiry"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          inqGroup,
+          columnOfButtons({
+              rowBtn("##SpProps", (int)RibbonIconKind::SurfPropsHand, nullptr, "Properties", false,
+                     "Properties — the side Properties panel for the current selection.", false),
+              rowBtn("##SpIsolate", (int)RibbonIconKind::SurfIsolate, nullptr, "Isolate Objects", false,
+                     "Isolate Objects — isolate, hide, or end isolation (REQ-084).", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSpGen", "General Tools", spec, [&](const std::string& id) {
+          if (id == "##SpInquiry") StartIdPointCommand(cmd, log);
+          else if (id == "##SpProps") cmd.pendingPropertiesFocus = true;
+          else if (id == "##SpIsolate") ImGui::OpenPopup("##SpIsolateMenu");
+        });
         if (ImGui::BeginPopup("##SpIsolateMenu")) {
           if (ImGui::MenuItem("Isolate Objects"))
             IsolateSelectedObjects(cmd, log);
@@ -5078,106 +5040,102 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             EndObjectIsolation(cmd, log);
           ImGui::EndPopup();
         }
-        ImGui::EndGroup();
-        RibbonSectionEnd();
       }});
     }
 
     {
-      const float wEditList = capW("Edit/List\nPoints");
-      const float wPgProps = capW("Point Group\nProperties");
-      const float cRen = colW({"Renumber", "Datum", "Elevations from Surface"});
-      const float cLock = colW({"Lock Points", "Unlock Points"});
-      const float wMod = 8.f + wEditList + 4.f + wPgProps + 4.f + cRen + 4.f + cLock + 8.f;
-      ribbonSpecs.push_back({wMod, wMod, [&]() {
-        const float wList = capW("Edit/List\nPoints");
-        const float wGrp = capW("Point Group\nProperties");
-        const float cA = colW({"Renumber", "Datum", "Elevations from Surface"});
-        const float cB = colW({"Lock Points", "Unlock Points"});
-        RibbonSectionBegin("RibbonSecSpMod", "Modify", 8.f + wList + 4.f + wGrp + 4.f + cA + 4.f + cB + 8.f, panelH);
-        if (RibbonButtonEx("##SpEditList", RibbonIconKind::SurveyPoint, "Edit/List\nPoints", ImVec2(wList, colH),
-                           RibbonLabel::Below))
-          StartViewPointsCommand(cmd, log);
-        RibbonItemHelp("Edit/List Points — the survey point list.\nCommand bar: VIEWPOINTS");
-        ImGui::SameLine(0, 4);
-        if (RibbonButtonEx("##SpPgProps", RibbonIconKind::SurfPropsHand, "Point Group\nProperties", ImVec2(wGrp, colH),
-                           RibbonLabel::Below))
-          cmd.showPointGroupManagerWindow = true;
-        RibbonItemHelp("Point Group Properties — create and edit point groups.");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        RibbonNyiButton("##SpRenumber", RibbonIconKind::SvyRenumber, "Renumber", ImVec2(cA, rowH),
-                        RibbonLabel::Right);
-        RibbonNyiButton("##SpDatum", RibbonIconKind::Id, "Datum", ImVec2(cA, rowH), RibbonLabel::Right);
-        RibbonNyiButton("##SpElevSurf", RibbonIconKind::SurfAddData, "Elevations from Surface", ImVec2(cA, rowH),
-                        RibbonLabel::Right);
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        RibbonNyiButton("##SpLock", RibbonIconKind::SvyLock, "Lock Points", ImVec2(cB, rowH), RibbonLabel::Right);
-        RibbonNyiButton("##SpUnlock", RibbonIconKind::SvyUnlock, "Unlock Points", ImVec2(cB, rowH),
-                        RibbonLabel::Right);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonGroupSpec g1, g2;
+      g1.buttons = {largeBtnSpecEx("##SpEditList", (int)RibbonIconKind::SurveyPoint, nullptr, "Edit/List\nPoints", false,
+                                   "Edit/List Points — the survey point list.\nCommand bar: VIEWPOINTS",
+                                   capW("Edit/List\nPoints"))};
+      g2.buttons = {largeBtnSpecEx("##SpPgProps", (int)RibbonIconKind::SurfPropsHand, nullptr, "Point Group\nProperties",
+                                   false, "Point Group Properties — create and edit point groups.",
+                                   capW("Point Group\nProperties"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          g1,
+          g2,
+          columnOfButtons({
+              rowBtn("##SpRenumber", (int)RibbonIconKind::SvyRenumber, nullptr, "Renumber", true,
+                     "Renumber — not implemented yet.", false),
+              rowBtn("##SpDatum", (int)RibbonIconKind::Id, nullptr, "Datum", true, "Datum — not implemented yet.", false),
+              rowBtn("##SpElevSurf", (int)RibbonIconKind::SurfAddData, nullptr, "Elevations from Surface", true,
+                     "Elevations from Surface — not implemented yet.", false),
+          }),
+          columnOfButtons({
+              rowBtn("##SpLock", (int)RibbonIconKind::SvyLock, nullptr, "Lock Points", true,
+                     "Lock Points — not implemented yet.", false),
+              rowBtn("##SpUnlock", (int)RibbonIconKind::SvyUnlock, nullptr, "Unlock Points", true,
+                     "Unlock Points — not implemented yet.", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSpMod", "Modify", spec, [&](const std::string& id) {
+          if (id == "##SpEditList") StartViewPointsCommand(cmd, log);
+          else if (id == "##SpPgProps") cmd.showPointGroupManagerWindow = true;
+        });
       }});
     }
 
     {
-      const float wGeo = capW("Geodetic\nCalculator");
-      ribbonSpecs.push_back({8.f + wGeo + 8.f, 8.f + wGeo + 8.f, [&]() {
-        const float w = capW("Geodetic\nCalculator");
-        RibbonSectionBegin("RibbonSecSpAnalyze", "Analyze", 8.f + w + 8.f, panelH);
-        RibbonNyiButton("##SpGeodetic", RibbonIconKind::SvyGeodetic, "Geodetic\nCalculator", ImVec2(w, colH),
-                        RibbonLabel::Below);
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      ribbonlayout::RibbonGroupSpec g;
+      g.buttons = {largeBtnSpecEx("##SpGeodetic", (int)RibbonIconKind::SvyGeodetic, nullptr, "Geodetic\nCalculator", true,
+                                  "Geodetic Calculator — not implemented yet.", capW("Geodetic\nCalculator"))};
+      spec.groups = {g};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSpAnalyze", "Analyze", spec, nullptr);
       }});
     }
 
     {
-      const float toolsCol = colW({"Import Points", "Export Points", "Transfer Points"});
-      const float wTools = 8.f + toolsCol + 8.f;
-      ribbonSpecs.push_back({wTools, wTools, [&]() {
-        const float cell = colW({"Import Points", "Export Points", "Transfer Points"});
-        RibbonSectionBegin("RibbonSecSpTools", "SURVEY Point Tools", 8.f + cell + 8.f, panelH);
-        ImGui::BeginGroup();
-        if (smallBtn("##SpImport", RibbonIconKind::Import, "Import Points", cell))
-          StartImportPointsCommand(cmd, log);
-        RibbonItemHelp("Import Points — load a point file.\nCommand bar: IMPORTPOINTS");
-        if (smallBtn("##SpExport", RibbonIconKind::ClipboardCopy, "Export Points", cell))
-          StartExportPointsCommand(cmd, log);
-        RibbonItemHelp("Export Points — write selected or all points.\nCommand bar: EXPORTPOINTS");
-        RibbonNyiButton("##SpTransfer", RibbonIconKind::SurfMoveTo, "Transfer Points", ImVec2(cell, rowH),
-                        RibbonLabel::Right);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##SpImport", (int)RibbonIconKind::Import, nullptr, "Import Points", false,
+                 "Import Points — load a point file.\nCommand bar: IMPORTPOINTS", false),
+          rowBtn("##SpExport", (int)RibbonIconKind::ClipboardCopy, nullptr, "Export Points", false,
+                 "Export Points — write selected or all points.\nCommand bar: EXPORTPOINTS", false),
+          rowBtn("##SpTransfer", (int)RibbonIconKind::SurfMoveTo, nullptr, "Transfer Points", true,
+                 "Transfer Points — not implemented yet.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSpTools", "SURVEY Point Tools", spec, [&](const std::string& id) {
+          if (id == "##SpImport") StartImportPointsCommand(cmd, log);
+          else if (id == "##SpExport") StartExportPointsCommand(cmd, log);
+        });
       }});
     }
 
     {
-      const float wCreate = capW("Create\nPoints");
-      const float launchCol = colW({"Create Point Group", "Import Points", "Create Surface"});
-      const float wLaunch = 8.f + wCreate + 4.f + launchCol + 8.f;
-      ribbonSpecs.push_back({wLaunch, wLaunch, [&]() {
-        const float wPts = capW("Create\nPoints");
-        const float cell = colW({"Create Point Group", "Import Points", "Create Surface"});
-        RibbonSectionBegin("RibbonSecSpLaunch", "Launch Pad", 8.f + wPts + 4.f + cell + 8.f, panelH);
-        if (RibbonButtonEx("##SpCreatePts", RibbonIconKind::SurveyPoint, "Create\nPoints", ImVec2(wPts, colH),
-                           RibbonLabel::Below))
-          StartCreatePointsCommand(cmd, log);
-        RibbonItemHelp("Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (smallBtn("##SpCreateGrp", RibbonIconKind::Layers, "Create Point Group", cell))
-          cmd.showPointGroupManagerWindow = true;
-        RibbonItemHelp("Create Point Group — the Point Groups window.");
-        if (smallBtn("##SpImport2", RibbonIconKind::Import, "Import Points", cell))
-          StartImportPointsCommand(cmd, log);
-        RibbonItemHelp("Import Points — load a point file.\nCommand bar: IMPORTPOINTS");
-        if (smallBtn("##SpCreateSurf", RibbonIconKind::SurfAddData, "Create Surface", cell))
-          cmd.showCreateSurfaceWindow = true;
-        RibbonItemHelp("Create Surface — TIN, grid, corridor, or volume type.");
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonGroupSpec createGroup;
+      createGroup.buttons = {largeBtnSpecEx("##SpCreatePts", (int)RibbonIconKind::SurveyPoint, nullptr, "Create\nPoints",
+                                            false, "Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS",
+                                            capW("Create\nPoints"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          createGroup,
+          columnOfButtons({
+              rowBtn("##SpCreateGrp", (int)RibbonIconKind::Layers, nullptr, "Create Point Group", false,
+                     "Create Point Group — the Point Groups window.", false),
+              rowBtn("##SpImport2", (int)RibbonIconKind::Import, nullptr, "Import Points", false,
+                     "Import Points — load a point file.\nCommand bar: IMPORTPOINTS", false),
+              rowBtn("##SpCreateSurf", (int)RibbonIconKind::SurfAddData, nullptr, "Create Surface", false,
+                     "Create Surface — TIN, grid, corridor, or volume type.", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSpLaunch", "Launch Pad", spec, [&](const std::string& id) {
+          if (id == "##SpCreatePts") StartCreatePointsCommand(cmd, log);
+          else if (id == "##SpCreateGrp") cmd.showPointGroupManagerWindow = true;
+          else if (id == "##SpImport2") StartImportPointsCommand(cmd, log);
+          else if (id == "##SpCreateSurf") cmd.showCreateSurfaceWindow = true;
+        });
       }});
     }
   } // kRibbonTabSurveyPointCtx
