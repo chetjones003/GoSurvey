@@ -433,6 +433,30 @@ enum class Problem {
   /// left to \ref Validate, so the reason names the wall rather than the whole solid.
   PushPullCurvedDegenerate,
   PushPullResultInvalid,    ///< The moved solid did not validate — collapsed, inverted or degenerate.
+
+  // --- REQ-323 FILLET: rounding an edge with a rolling ball (ADR-046 amendment (j)). Every one of
+  //     these is a PRE-check, refused before anything is built, because `Validate` sees topology
+  //     and not geometry — the lesson amendment (i) already recorded for push/pull. ---
+  FilletRadiusNotPositive,   ///< A radius of zero or less: there is no ball to roll.
+  FilletEdgeNotLine,         ///< Increment 1 rounds a straight edge; an arc or ellipse is its own case.
+  FilletFaceNotPlanar,       ///< One of the two faces meeting the edge is curved.
+  FilletFacesParallel,       ///< The two faces are coplanar or facing each other: no edge to round.
+  FilletEdgeConcave,         ///< A crease rather than a corner. Adds material; its own increment.
+  /// The radius does not fit: the setback `r / tan(theta/2)` reaches the far side of one of the two
+  /// adjacent faces. Refused at equality too — at the limit the face does not thin, it vanishes.
+  FilletRadiusTooLarge,
+  /// A face at one end of the edge is not planar, or is not square to the edge. A planar end face
+  /// square to the edge meets the fillet along a circle; an oblique one meets it along an ellipse,
+  /// which is a second construction and its own increment.
+  FilletEndFaceUnsupported,
+  /// More than three edges meet at one end of the edge, so removing this one does not leave a single
+  /// gap to close with one arc.
+  FilletVertexNotSimple,
+  /// Two edges of the same request share a vertex. Their fillets leave a curved triangular gap that
+  /// needs a spherical corner patch — the whole distance between "round an edge" and "round a
+  /// chain" (issue #148 acceptance 5, still open).
+  FilletEdgesShareVertex,
+  FilletResultInvalid,       ///< The rounded solid did not validate. Should not happen; refused if it does.
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -947,5 +971,56 @@ struct Tessellation {
 /// lets a REQ-318 sub-object reference survive the edit rather than expire (ADR-049).
 [[nodiscard]] bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out,
                                 Problem* outWhy);
+
+/// Round the edge \p edgeIndex of \p s with a fillet of radius \p radius (REQ-323, ADR-046
+/// amendment (j)). Writes the rounded solid to \p out and returns true, or leaves \p out alone and
+/// writes the reason to \p outWhy.
+///
+/// **The model is a rolling ball.** The fillet is the surface a ball of radius \p radius traces
+/// while rolling along the edge in contact with both adjacent faces. For a straight edge between two
+/// planes that centre travels a straight line — the meet of the two planes each offset by the radius
+/// toward the material — so the surface is a **cylinder**, and every boundary it creates has a
+/// closed form. Nothing is sampled and nothing is marched.
+///
+/// Where the fillet lands on each face follows from the same picture: the tangent line sits
+///
+///     d = radius / tan(theta / 2)
+///
+/// from the original edge, measured in that face, where `theta` is the interior dihedral angle.
+/// That is exactly the radius at a 90-degree edge, tends to zero as the joint flattens, and grows
+/// without bound as it sharpens — which is why a large radius on a sharp edge has to be REFUSED
+/// rather than clamped, and why the check below is on `d` and not on the radius.
+///
+/// **The topology changes**, which no operation before this one did (amendment (j)): the edge is
+/// deleted, and two tangent lines, one arc at each end, one cylindrical face and two vertices per
+/// endpoint take its place. `V + 2`, `E + 3`, `F + 1`, leaving `V - E + F` unchanged. A box filleted
+/// on one edge goes from 8/12/6 to 10/15/7.
+///
+/// Refused, each by name and with \p out untouched:
+/// - \ref Problem::FilletRadiusNotPositive, \ref Problem::NonFiniteParameter — no ball to roll;
+/// - \ref Problem::FilletEdgeNotLine — increment 1 rounds straight edges;
+/// - \ref Problem::FilletFaceNotPlanar, \ref Problem::FilletFacesParallel;
+/// - \ref Problem::FilletEdgeConcave — a crease ADDS material: the cylinder is `inward`, the
+///   adjacent faces grow rather than shrink, and the radius limit comes from the far side of the
+///   crease rather than from the faces' extents. Opposite bookkeeping; its own increment;
+/// - \ref Problem::FilletRadiusTooLarge — the pre-check, per amendment (i). `SelfIntersects` is
+///   documented as not general, so this cannot be an after-the-fact test;
+/// - \ref Problem::FilletEndFaceUnsupported — a face at one end that is curved, or oblique to the
+///   edge. A square end face meets the fillet along a CIRCLE; an oblique one along an ELLIPSE,
+///   which is a second construction and its own increment;
+/// - \ref Problem::FilletVertexNotSimple — more than three edges at an end, so removing this one
+///   leaves more than one gap and no single arc closes it.
+[[nodiscard]] bool FilletEdge(const Solid& s, int edgeIndex, double radius, Solid* out,
+                              Problem* outWhy);
+
+/// Round several edges at once, as one operation (REQ-323 item 7).
+///
+/// Refuses \ref Problem::FilletEdgesShareVertex when any two of \p edgeIndices meet at a vertex:
+/// their cylinders would arrive at that corner and leave a curved triangular gap needing a
+/// **spherical** patch trimmed against both — the whole distance between "round an edge" and issue
+/// #148's "round a chain", and the reason that acceptance line is still open. Edges that pairwise
+/// share no vertex are independent, so they are applied in turn and the result is one solid.
+[[nodiscard]] bool FilletEdges(const Solid& s, const std::vector<int>& edgeIndices, double radius,
+                               Solid* out, Problem* outWhy);
 
 } // namespace brep
