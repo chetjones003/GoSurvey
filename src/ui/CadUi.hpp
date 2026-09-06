@@ -47,7 +47,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 /// icon-kind mapping is a later sub-issue). Must be called inside an ImGui window. Returns true
 /// on the frame the button is clicked.
 bool RibbonDrawButtonForLayout(const char* str_id, const char* label, const char* iconName, const ImVec2& size,
-                               bool labelBelow = false);
+                               bool labelBelow = false, bool disabled = false, const char* tooltip = nullptr,
+                               int iconKind = -1);
 /// Drop shadow + lit top edge on every floating window and popup, so dialogs lift
 /// off the shell (REQ-081). Call once per frame AFTER all windows are submitted
 /// and BEFORE ImGui::Render(); it appends to each window's own draw list, which

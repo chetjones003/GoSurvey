@@ -145,3 +145,43 @@ TEST_CASE("MeasureRibbonGroup rolls up nested sub-groups", "[ribbonlayout][measu
   const float sumSubGroups = measured.groups[0].size.x + measured.groups[1].size.x;
   REQUIRE(measured.size.x == sumSubGroups);
 }
+
+TEST_CASE("MeasureRibbonGroup with Column layout stacks height and takes the max width", "[ribbonlayout][measure]") {
+  const HeadlessImGuiScope imguiScope;
+
+  RibbonButtonSpec a; a.id = "a"; a.sizePolicy = RibbonSizePolicy::Fixed; a.fixedSize = 15.f;
+  RibbonButtonSpec b; b.id = "b"; b.sizePolicy = RibbonSizePolicy::Fixed; b.fixedSize = 20.f;
+
+  RibbonGroupSpec col;
+  col.layout = RibbonGroupLayout::Column;
+  col.gapY = 2.f;
+  col.buttons = {a, b};
+
+  const RibbonMeasuredGroup measured = MeasureRibbonGroup(col);
+
+  REQUIRE(measured.size.x == 20.f);       // widest button
+  REQUIRE(measured.size.y == 15.f + 20.f + 2.f); // stacked heights + gap
+}
+
+TEST_CASE("MeasureRibbonGroup with Grid layout wraps into rows of gridColumns", "[ribbonlayout][measure]") {
+  const HeadlessImGuiScope imguiScope;
+
+  RibbonGroupSpec grid;
+  grid.layout = RibbonGroupLayout::Grid;
+  grid.gridColumns = 2;
+  grid.gapX = 1.f;
+  grid.gapY = 3.f;
+  for (int i = 0; i < 5; ++i) {
+    RibbonButtonSpec btn;
+    btn.id = "b" + std::to_string(i);
+    btn.sizePolicy = RibbonSizePolicy::Fixed;
+    btn.fixedSize = 10.f;
+    grid.buttons.push_back(btn);
+  }
+
+  const RibbonMeasuredGroup measured = MeasureRibbonGroup(grid);
+
+  // 5 buttons in 2 columns -> 3 rows.
+  REQUIRE(measured.size.x == 10.f * 2.f + 1.f);
+  REQUIRE(measured.size.y == 10.f * 3.f + 3.f * 2.f);
+}

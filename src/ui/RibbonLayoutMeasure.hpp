@@ -53,7 +53,7 @@ struct RibbonMeasuredSection {
 inline ImVec2 MeasureRibbonButton(const RibbonButtonSpec& btn) {
   switch (btn.sizePolicy) {
     case RibbonSizePolicy::Fixed:
-      return ImVec2(btn.fixedSize, btn.fixedSize);
+      return ImVec2(btn.fixedSize, btn.fixedHeight > 0.f ? btn.fixedHeight : btn.fixedSize);
     case RibbonSizePolicy::Fill:
       return ImVec2(0.f, 0.f);
     case RibbonSizePolicy::AutoFit:
@@ -69,26 +69,66 @@ inline ImVec2 MeasureRibbonButton(const RibbonButtonSpec& btn) {
   }
 }
 
+// REQ-302/ADR-053 (issue #326): layout-aware group sizing. Row keeps the original sum/max
+// behavior (gapX/gapY default to 0, so pre-existing Row-only specs measure identically to before);
+// Column stacks buttons/sub-groups vertically; Grid wraps buttons into rows of `gridColumns`.
 inline RibbonMeasuredGroup MeasureRibbonGroup(const RibbonGroupSpec& group) {
   RibbonMeasuredGroup out;
   out.spec = &group;
   out.buttons.reserve(group.buttons.size());
   out.groups.reserve(group.groups.size());
 
-  ImVec2 size(0.f, 0.f);
   for (const RibbonButtonSpec& btn : group.buttons) {
     RibbonMeasuredButton mb;
     mb.spec = &btn;
     mb.size = MeasureRibbonButton(btn);
-    size.x += mb.size.x;
-    size.y = std::max(size.y, mb.size.y);
     out.buttons.push_back(mb);
   }
-  for (const RibbonGroupSpec& sub : group.groups) {
-    RibbonMeasuredGroup mg = MeasureRibbonGroup(sub);
-    size.x += mg.size.x;
-    size.y = std::max(size.y, mg.size.y);
-    out.groups.push_back(std::move(mg));
+  for (const RibbonGroupSpec& sub : group.groups)
+    out.groups.push_back(MeasureRibbonGroup(sub));
+
+  ImVec2 size(0.f, 0.f);
+  switch (group.layout) {
+    case RibbonGroupLayout::Column: {
+      for (const RibbonMeasuredButton& mb : out.buttons) {
+        size.x = std::max(size.x, mb.size.x);
+        size.y += mb.size.y;
+      }
+      if (!out.buttons.empty())
+        size.y += group.gapY * static_cast<float>(out.buttons.size() - 1);
+      for (const RibbonMeasuredGroup& mg : out.groups) {
+        size.x = std::max(size.x, mg.size.x);
+        size.y += mg.size.y + group.gapY;
+      }
+      break;
+    }
+    case RibbonGroupLayout::Grid: {
+      const int cols = group.gridColumns > 0 ? group.gridColumns : static_cast<int>(out.buttons.size());
+      float cellW = 0.f, cellH = 0.f;
+      for (const RibbonMeasuredButton& mb : out.buttons) {
+        cellW = std::max(cellW, mb.size.x);
+        cellH = std::max(cellH, mb.size.y);
+      }
+      const int n = static_cast<int>(out.buttons.size());
+      const int rows = cols > 0 ? (n + cols - 1) / cols : 0;
+      size.x = cols > 0 ? cols * cellW + std::max(0, cols - 1) * group.gapX : 0.f;
+      size.y = rows > 0 ? rows * cellH + std::max(0, rows - 1) * group.gapY : 0.f;
+      break;
+    }
+    case RibbonGroupLayout::Row:
+    default: {
+      for (const RibbonMeasuredButton& mb : out.buttons) {
+        size.x += mb.size.x;
+        size.y = std::max(size.y, mb.size.y);
+      }
+      if (!out.buttons.empty())
+        size.x += group.gapX * static_cast<float>(out.buttons.size() - 1);
+      for (const RibbonMeasuredGroup& mg : out.groups) {
+        size.x += mg.size.x + group.gapX;
+        size.y = std::max(size.y, mg.size.y);
+      }
+      break;
+    }
   }
   out.size = size;
   return out;
