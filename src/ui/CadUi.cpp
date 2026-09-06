@@ -3954,7 +3954,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                               const std::function<void(const std::string&)>& onClick) {
     const float contentW = ribbonlayout::MeasureRibbonSection(spec).size.x;
     RibbonSectionBegin(childId, title, contentW + 8.f, panelH);
-    RibbonLayout::DrawSection(spec, contentW, onClick);
+    RibbonLayout::DrawSection(spec, contentW, [&](const std::string& id) {
+      DevShell_OnUi(id.c_str());
+      if (onClick) onClick(id);
+    });
     RibbonSectionEnd();
     return contentW + 8.f;
   };
