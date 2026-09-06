@@ -1019,6 +1019,10 @@ if(GOSURVEY_BUILD_TESTS)
     # GsMigrateLegacyBreaklineTests.cpp uses above — that's why it rides with GoSurveySnapTests
     # (links imgui_core) rather than the imgui-free GoSurveyTests.
     tests/RibbonLayoutMeasureTests.cpp
+    # REQ-302/ADR-053 (issue #324) — ribbon layout place pass. Pure layout math (no live ImGui
+    # frame needed), but includes RibbonLayoutMeasure.hpp for ImVec2/RibbonMeasuredButton, so it
+    # rides with GoSurveySnapTests (has the imgui include path) rather than GoSurveyTests.
+    tests/RibbonLayoutPlaceTests.cpp
     tests/ViewportUcsTests.cpp
     # REQ-318 increment 2 (issue #148) — the sub-object SELECTION: its store, the expiring
     # reference, mutual exclusion and cross-solid depth order. Needs gosurvey_domain for
