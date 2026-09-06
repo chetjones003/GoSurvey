@@ -510,7 +510,7 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
     }
     CadLayerRow row{};
     row.name = name;
-    row.on = ly->on != 0;
+    row.on = ly->off == 0;
     row.frozen = ly->frozen != 0;
     row.locked = ly->locked != 0;
     row.color = ColorStorage(ly->color);
@@ -606,9 +606,9 @@ struct TableWriter {
       uint32_t rgb = 0;
       const int aci = DxfColorStringToRgbPacked(row.color, &rgb) ? DxfNearestAciFromRgbPacked(rgb) : 7;
       ly->color.index = static_cast<BITCODE_BSd>(row.on ? aci : -aci);
-      ly->color.method = 0xc2;
+      ly->color.method = DWG_COLOR_METHOD_ACI;
       ly->color.rgb = 0;
-      ly->on = row.on ? 1 : 0;
+      ly->off = row.on ? 0 : 1;
       ly->frozen = row.frozen ? 1 : 0;
       ly->locked = row.locked ? 1 : 0;
       ly->flag0 = static_cast<BITCODE_BS>((row.frozen ? 1 : 0) | (row.on ? 2 : 0) |
@@ -629,15 +629,15 @@ struct TableWriter {
     }
     if (a.color == "ByBlock") {
       ent->color.index = 0;
-      ent->color.method = 0xc1;
+      ent->color.method = DWG_COLOR_METHOD_BYBLOCK;
     } else if (a.color.empty() || a.color == "ByLayer") {
       ent->color.index = 256;
-      ent->color.method = 0xc0;
+      ent->color.method = DWG_COLOR_METHOD_BYLAYER;
     } else {
       uint32_t rgb = 0;
       if (DxfColorStringToRgbPacked(a.color, &rgb)) {
         ent->color.index = static_cast<BITCODE_BSd>(DxfNearestAciFromRgbPacked(rgb));
-        ent->color.method = 0xc2;
+        ent->color.method = DWG_COLOR_METHOD_ACI;
       }
     }
     if (Dwg_Object* lt = EnsureLtype(a.linetype)) {

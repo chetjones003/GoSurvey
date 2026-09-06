@@ -196,8 +196,8 @@ TEST_CASE("LibreDWG imports a multi-layer table end to end", "[dwg][libredwg][is
       Dwg_Object_LAYER* ly = dwg_add_LAYER(dwg, s.name);
       REQUIRE(ly != nullptr);
       ly->color.index = s.aci;
-      ly->color.method = 0xc2;
-      ly->on = s.on ? 1 : 0;
+      ly->color.method = DWG_COLOR_METHOD_ACI;
+      ly->off = s.on ? 0 : 1;
       ly->frozen = s.frozen ? 1 : 0;
       ly->locked = s.locked ? 1 : 0;
       // R2000 encode serialises the packed flag0 bits, not the decoded booleans.
