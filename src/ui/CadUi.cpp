@@ -3912,21 +3912,27 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if (!compact) b.label = label;
     return b;
   };
-  // Icon-above-label large button (Toolspace/Paste). Fixed to the existing largeW x colH
-  // footprint — AutoFit's measure pass only models a side-by-side icon+label, not a stacked one.
-  auto largeBtnSpec = [&](const char* id, int iconKind, const char* label, bool disabled,
-                           const char* tooltip) {
+  // Icon-above-label large button (Toolspace/Paste/Annotate's "nyiLarge" buttons). Fixed size —
+  // AutoFit's measure pass only models a side-by-side icon+label, not a stacked one. `width`
+  // matches the old belowW(label)-measured footprint for labels wider than the largeW default.
+  auto largeBtnSpecEx = [&](const char* id, int iconKind, const char* iconName, const char* label,
+                             bool disabled, const char* tooltip, float width) {
     ribbonlayout::RibbonButtonSpec b;
     b.id = id;
     b.iconKind = iconKind;
+    if (iconName) b.iconName = iconName;
     b.label = label;
     b.labelBelow = true;
     b.disabled = disabled;
     if (tooltip) b.tooltip = tooltip;
     b.sizePolicy = ribbonlayout::RibbonSizePolicy::Fixed;
-    b.fixedSize = largeW;
+    b.fixedSize = width;
     b.fixedHeight = colH;
     return b;
+  };
+  auto largeBtnSpec = [&](const char* id, int iconKind, const char* label, bool disabled,
+                           const char* tooltip) {
+    return largeBtnSpecEx(id, iconKind, nullptr, label, disabled, tooltip, largeW);
   };
   // REQ-302/ADR-053 (issue #326): every Home multi-button group is built as a single flat Grid
   // with buttons placed DIRECTLY (never nested via RibbonGroupSpec::groups) — a Column-of-Row
@@ -4263,33 +4269,48 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
     // ---- Labels & Tables --------------------------------------------------
     {
-      const float w = 8.f + belowW("Add\nLabels") + 4.f + belowW("Add\nTables");
-      ribbonSpecs.push_back({w, w, [&, w]() {
-        RibbonSectionBegin("RibbonSecAnnLabels", "Labels & Tables", w, panelH);
-        nyiLarge("##AnnAddLabels", "Annotation_Add", "Add\nLabels");
-        ImGui::SameLine(0, 4);
-        nyiLarge("##AnnAddTables", "Table", "Add\nTables");
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {ribbonlayout::RibbonGroupSpec{}};
+      spec.groups[0].layout = ribbonlayout::RibbonGroupLayout::Row;
+      spec.groups[0].gapX = 4.f;
+      spec.groups[0].buttons = {
+          largeBtnSpecEx("##AnnAddLabels", -1, "Annotation_Add", "Add\nLabels", true, "Add Labels — not implemented yet.",
+                         belowW("Add\nLabels")),
+          largeBtnSpecEx("##AnnAddTables", -1, "Table", "Add\nTables", true, "Add Tables — not implemented yet.",
+                         belowW("Add\nTables")),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecAnnLabels", "Labels & Tables", spec, nullptr);
       }, "Labels & Tables", RibbonIconKind::Nyi, "Annotation_Add"});
     }
 
     // ---- Text -----------------------------------------------------------
     {
-      const float cw = colW({"Text", "Find text"});
-      const float w = 8.f + belowW("Multiline\nText") + 4.f + cw + 4.f + annStyleW;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecAnnotate", "Text", w, panelH);
-        if (RibbonButtonEx("##RibbonMtextLarge", RibbonIconKind::Mtext, "Multiline\nText",
-                           ImVec2(belowW("Multiline\nText"), colH), RibbonLabel::Below))
-          StartMtextCommand(cmd, log);
-        RibbonItemHelp("Multiline Text — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonText", RibbonIconKind::Text, "Text", cw))
-          StartTextCommand(cmd, log);
-        RibbonItemHelp("Text — single-line annotation at insertion.\nCommand bar: TEXT");
-        insNyi("##RibbonFindText", "Find", "Find text", cw);
-        ImGui::EndGroup();
+      ribbonlayout::RibbonGroupSpec mtextGroup;
+      mtextGroup.buttons = {largeBtnSpecEx(
+          "##RibbonMtextLarge", (int)RibbonIconKind::Mtext, nullptr, "Multiline\nText", false,
+          "Multiline Text — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT",
+          belowW("Multiline\nText"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          mtextGroup,
+          columnOfButtons({
+              rowBtn("##RibbonText", (int)RibbonIconKind::Text, nullptr, "Text", false,
+                     "Text — single-line annotation at insertion.\nCommand bar: TEXT", false),
+              rowBtn("##RibbonFindText", -1, "Find", "Find text", true, "Find text — not implemented yet.", false),
+          }),
+      };
+      const float buttonsW = ribbonlayout::MeasureRibbonSection(spec).size.x;
+      const float w = buttonsW + 4.f + annStyleW + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, buttonsW]() {
+        RibbonSectionBegin("RibbonSecAnnotate", "Text", buttonsW + 4.f + annStyleW + 8.f, panelH);
+        RibbonLayout::DrawSection(spec, buttonsW, [&](const std::string& id) {
+          DevShell_OnUi(id.c_str());
+          if (id == "##RibbonMtextLarge") StartMtextCommand(cmd, log);
+          else if (id == "##RibbonText") StartTextCommand(cmd, log);
+        });
         // Active text style for new TEXT/MTEXT (REQ-044): an AutoCAD-style flyout of thumbnail previews.
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
@@ -4349,33 +4370,40 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // 2026-08-30: expanded to the C3D shape — a large Dimension button plus Linear/Aligned/
     // Angular and greyed Quick/Continue, with a style combo.
     {
-      const float cA = colW({"Aligned", "Angular"});
-      const float cB = colW({"Continue"});
-      const float w = 8.f + belowW("Dimension") + 4.f + cA + 4.f + cB + 4.f + annStyleW;
-      ribbonSpecs.push_back({w, w, [&, cA, cB, w]() {
-        RibbonSectionBegin("RibbonSecAnnDim", "Dimensions", w, panelH);
-        if (RibbonButtonEx("##RibbonDimLarge", RibbonIconKind::DimLinear, "Dimension",
-                           ImVec2(belowW("Dimension"), colH), RibbonLabel::Below))
-          StartDimLinearCommand(cmd, log);
-        RibbonItemHelp(
-            "Dimension — horizontal or vertical distance in X or Y; third pick sets line position.\nCommand bar: DIMLINEAR or DLI");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", cA))
-          StartDimLinearCommand(cmd, log);
-        RibbonItemHelp("Linear dimension — horizontal or vertical distance in X or Y.\nCommand bar: DIMLINEAR or DLI");
-        if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", cA))
-          StartDimAlignedCommand(cmd, log);
-        RibbonItemHelp("Aligned dimension — extension lines parallel to the picked points.\nCommand bar: DIMALIGNED or DAL");
-        if (smallBtn("##RibbonDimAng", RibbonIconKind::DimAngular, "Angular", cA))
-          StartDimAngularCommand(cmd, log);
-        RibbonItemHelp("Angular dimension — vertex, two ray points, then arc position.\nCommand bar: DIMANGULAR or DAN");
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##RibbonDimQuick", "Quick_Dimension", "Quick", cB);
-        insNyi("##RibbonDimCont", "Dim_Continue", "Continue", cB);
-        ImGui::EndGroup();
+      ribbonlayout::RibbonGroupSpec dimLargeGroup;
+      dimLargeGroup.buttons = {largeBtnSpecEx(
+          "##RibbonDimLarge", (int)RibbonIconKind::DimLinear, nullptr, "Dimension", false,
+          "Dimension — horizontal or vertical distance in X or Y; third pick sets line position.\nCommand bar: DIMLINEAR or DLI",
+          belowW("Dimension"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          dimLargeGroup,
+          columnOfButtons({
+              rowBtn("##RibbonDimLin", (int)RibbonIconKind::DimLinear, nullptr, "Linear", false,
+                     "Linear dimension — horizontal or vertical distance in X or Y.\nCommand bar: DIMLINEAR or DLI", false),
+              rowBtn("##RibbonDim", (int)RibbonIconKind::Dim, nullptr, "Aligned", false,
+                     "Aligned dimension — extension lines parallel to the picked points.\nCommand bar: DIMALIGNED or DAL",
+                     false),
+              rowBtn("##RibbonDimAng", (int)RibbonIconKind::DimAngular, nullptr, "Angular", false,
+                     "Angular dimension — vertex, two ray points, then arc position.\nCommand bar: DIMANGULAR or DAN",
+                     false),
+          }),
+          columnOfButtons({
+              rowBtn("##RibbonDimQuick", -1, "Quick_Dimension", "Quick", true, "Quick — not implemented yet.", false),
+              rowBtn("##RibbonDimCont", -1, "Dim_Continue", "Continue", true, "Continue — not implemented yet.", false),
+          }),
+      };
+      const float buttonsW = ribbonlayout::MeasureRibbonSection(spec).size.x;
+      const float w = buttonsW + 4.f + annStyleW + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, buttonsW]() {
+        RibbonSectionBegin("RibbonSecAnnDim", "Dimensions", buttonsW + 4.f + annStyleW + 8.f, panelH);
+        RibbonLayout::DrawSection(spec, buttonsW, [&](const std::string& id) {
+          DevShell_OnUi(id.c_str());
+          if (id == "##RibbonDimLarge" || id == "##RibbonDimLin") StartDimLinearCommand(cmd, log);
+          else if (id == "##RibbonDim") StartDimAlignedCommand(cmd, log);
+          else if (id == "##RibbonDimAng") StartDimAngularCommand(cmd, log);
+        });
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Dimension style");
@@ -4390,30 +4418,37 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
     // ---- Centerlines ------------------------------------------------------
     {
-      const float cw = colW({"Center Mark", "Centerline"});
-      const float w = 8.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecAnnCenterlines", "Centerlines", w, panelH);
-        ImGui::BeginGroup();
-        insNyi("##AnnCenterMark", "Center_Mark", "Center Mark", cw);
-        insNyi("##AnnCenterline", "Centerline", "Centerline", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##AnnCenterMark", -1, "Center_Mark", "Center Mark", true, "Center Mark — not implemented yet.", false),
+          rowBtn("##AnnCenterline", -1, "Centerline", "Centerline", true, "Centerline — not implemented yet.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecAnnCenterlines", "Centerlines", spec, nullptr);
       }, "Centerlines", RibbonIconKind::Nyi, "Center_Mark"});
     }
 
     // ---- Leaders --------------------------------------------------------
     {
-      const float cw = colW({"Remove Leader"});
-      const float w = 8.f + belowW("Multi\nleader") + 4.f + cw + 4.f + annStyleW;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecAnnLeaders", "Leaders", w, panelH);
-        nyiLarge("##AnnMultileader", "Multileader", "Multi\nleader");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##AnnAddLeader", "Add_Leader", "Add Leader", cw);
-        insNyi("##AnnRemoveLeader", "Remove_Leader", "Remove Leader", cw);
-        ImGui::EndGroup();
+      ribbonlayout::RibbonGroupSpec multileaderGroup;
+      multileaderGroup.buttons = {largeBtnSpecEx("##AnnMultileader", -1, "Multileader", "Multi\nleader", true,
+                                                  "Multi leader — not implemented yet.", belowW("Multi\nleader"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          multileaderGroup,
+          columnOfButtons({
+              rowBtn("##AnnAddLeader", -1, "Add_Leader", "Add Leader", true, "Add Leader — not implemented yet.", false),
+              rowBtn("##AnnRemoveLeader", -1, "Remove_Leader", "Remove Leader", true,
+                     "Remove Leader — not implemented yet.", false),
+          }),
+      };
+      const float buttonsW = ribbonlayout::MeasureRibbonSection(spec).size.x;
+      const float w = buttonsW + 4.f + annStyleW + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, buttonsW]() {
+        RibbonSectionBegin("RibbonSecAnnLeaders", "Leaders", buttonsW + 4.f + annStyleW + 8.f, panelH);
+        RibbonLayout::DrawSection(spec, buttonsW, nullptr);
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Multileader style");
@@ -4425,16 +4460,24 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
     // ---- Tables --------------------------------------------------------
     {
-      const float cw = colW({"Extract Data", "Link Data"});
-      const float w = 8.f + belowW("Table") + 4.f + cw + 4.f + annStyleW;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecAnnTables", "Tables", w, panelH);
-        nyiLarge("##AnnTable", "Table", "Table");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##AnnExtractData", "Extract_Data", "Extract Data", cw);
-        insNyi("##AnnLinkData", "Data_Link", "Link Data", cw);
-        ImGui::EndGroup();
+      ribbonlayout::RibbonGroupSpec tableGroup;
+      tableGroup.buttons = {
+          largeBtnSpecEx("##AnnTable", -1, "Table", "Table", true, "Table — not implemented yet.", belowW("Table"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          tableGroup,
+          columnOfButtons({
+              rowBtn("##AnnExtractData", -1, "Extract_Data", "Extract Data", true, "Extract Data — not implemented yet.",
+                     false),
+              rowBtn("##AnnLinkData", -1, "Data_Link", "Link Data", true, "Link Data — not implemented yet.", false),
+          }),
+      };
+      const float buttonsW = ribbonlayout::MeasureRibbonSection(spec).size.x;
+      const float w = buttonsW + 4.f + annStyleW + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, buttonsW]() {
+        RibbonSectionBegin("RibbonSecAnnTables", "Tables", buttonsW + 4.f + annStyleW + 8.f, panelH);
+        RibbonLayout::DrawSection(spec, buttonsW, nullptr);
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Table style");
@@ -4446,32 +4489,39 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
     // ---- Markup --------------------------------------------------------
     {
-      const float cw = colW({"Revision Cloud"});
-      const float w = 8.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecAnnMarkup", "Markup", w, panelH);
-        ImGui::BeginGroup();
-        insNyi("##AnnWipeout", "Wipeout", "Wipeout", cw);
-        insNyi("##AnnRevcloud", "c3d_revcloud", "Revision Cloud", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##AnnWipeout", -1, "Wipeout", "Wipeout", true, "Wipeout — not implemented yet.", false),
+          rowBtn("##AnnRevcloud", -1, "c3d_revcloud", "Revision Cloud", true, "Revision Cloud — not implemented yet.",
+                 false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecAnnMarkup", "Markup", spec, nullptr);
       }, "Markup", RibbonIconKind::Nyi, "Wipeout"});
     }
 
     // ---- Annotation Scaling --------------------------------------------
     {
-      const float cw = colW({"Add/Delete Scales", "Sync Positions"});
-      const float w = 8.f + belowW("Add Current\nScale") + 4.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw, w]() {
-        RibbonSectionBegin("RibbonSecAnnScaling", "Annotation Scaling", w, panelH);
-        nyiLarge("##AnnAddScale", "Add_Current_Scale", "Add Current\nScale");
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##AnnAddDeleteScales", "Add_Delete_Scales", "Add/Delete Scales", cw);
-        insNyi("##AnnScaleList", "Scale_List", "Scale List", cw);
-        insNyi("##AnnSyncScale", "Sync_Scale_Positions", "Sync Positions", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonGroupSpec addScaleGroup;
+      addScaleGroup.buttons = {largeBtnSpecEx("##AnnAddScale", -1, "Add_Current_Scale", "Add Current\nScale", true,
+                                               "Add Current Scale — not implemented yet.",
+                                               belowW("Add Current\nScale"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          addScaleGroup,
+          columnOfButtons({
+              rowBtn("##AnnAddDeleteScales", -1, "Add_Delete_Scales", "Add/Delete Scales", true,
+                     "Add/Delete Scales — not implemented yet.", false),
+              rowBtn("##AnnScaleList", -1, "Scale_List", "Scale List", true, "Scale List — not implemented yet.", false),
+              rowBtn("##AnnSyncScale", -1, "Sync_Scale_Positions", "Sync Positions", true,
+                     "Sync Positions — not implemented yet.", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecAnnScaling", "Annotation Scaling", spec, nullptr);
       }, "Annotation Scaling", RibbonIconKind::Nyi, "Add_Current_Scale"});
     }
   } // if (activeRibbonTab == kRibbonTabAnnotate)
