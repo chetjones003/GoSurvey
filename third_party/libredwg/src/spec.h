@@ -1,7 +1,7 @@
 /*****************************************************************************/
 /*  LibreDWG - free implementation of the DWG file format                    */
 /*                                                                           */
-/*  Copyright (C) 2018-2024 Free Software Foundation, Inc.                   */
+/*  Copyright (C) 2018-2025 Free Software Foundation, Inc.                   */
 /*                                                                           */
 /*  This library is free software, licensed under the terms of the GNU       */
 /*  General Public License as published by the Free Software Foundation,     */
@@ -104,6 +104,12 @@
 
 #endif /* SPEC_H */
 
+#define FIELD_VALUE(nam) _obj->nam
+#define SUB_FIELD_VALUE(o, nam) _obj->o.nam
+
+#ifndef AVAIL_BITS
+#  define AVAIL_BITS(dat) (int64_t)((dat->size * 8) - bit_position (dat))
+#endif
 #ifndef VALUE_HANDLE
 #  define VALUE_HANDLE(value, nam, handle_code, dxf)
 #endif
@@ -112,6 +118,9 @@
 #endif
 #ifndef VALUE_TV
 #  define VALUE_TV(value, dxf)
+#endif
+#ifndef VALUE_TVc
+#  define VALUE_TVc(value, dxf) VALUE_TV (""value, dxf)
 #endif
 #ifndef VALUE_TF
 #  define VALUE_TF(value, dxf)
@@ -411,6 +420,7 @@
 #  define FIELD_BL0(name, dxf) FIELD_BL (name, dxf)
 #  define SUB_FIELD_BL0(o, name, dxf) SUB_FIELD_BL (o, name, dxf)
 #  define FIELD_B0(name, dxf) FIELD_B (name, dxf)
+#  define FIELD_B1(name, dxf) FIELD_B (name, dxf)
 #  define FIELD_BS0(name, dxf) FIELD_BS (name, dxf)
 #  define FIELD_BS1(name, dxf) FIELD_BS (name, dxf)
 #  define FIELD_RC0(name, dxf) FIELD_RC (name, dxf)
@@ -610,7 +620,7 @@
 #ifndef CONTROL_HANDLE_STREAM
 #  define CONTROL_HANDLE_STREAM                                               \
     assert (obj->supertype == DWG_SUPERTYPE_OBJECT);                          \
-    PRE (R_2007a)                                                              \
+    PRE (R_2007a)                                                             \
     {                                                                         \
       hdl_dat->byte = dat->byte;                                              \
       hdl_dat->bit = dat->bit;                                                \
@@ -722,43 +732,50 @@
 #endif
 
 #ifndef COMMON_TABLE_FLAGS
-#  define COMMON_TABLE_FLAGS(acdbname)                                        \
-    assert (obj->supertype == DWG_SUPERTYPE_OBJECT);                          \
-    PRE (R_13b1)                                                              \
-    {                                                                         \
-      if (strcmp (#acdbname, "Layer") == 0)                                   \
-        {                                                                     \
-          FIELD_CAST (flag, RC, RS, 70);                                      \
-        }                                                                     \
-      else                                                                    \
-        {                                                                     \
-          FIELD_CAST (flag, RC, RC, 70);                                      \
-        }                                                                     \
-      DECODER_OR_ENCODER { LOG_FLAG_##acdbname }                              \
-      FIELD_TFv (name, 32, 2);                                                \
-      VERSION (R_11)                                                          \
-        FIELD_RSd (used, 0);                                                  \
-    }                                                                         \
-    LATER_VERSIONS                                                            \
-    {                                                                         \
-      FIELD_T (name, 2);                                                      \
-      UNTIL (R_2004)                                                          \
-      {                                                                       \
-        FIELD_B (is_xref_ref, 0);       /* always 1, 70 bit 6 */              \
-        FIELD_BS (is_xref_resolved, 0); /* 0 or 256 */                        \
-        FIELD_B (is_xref_dep, 0);       /* 70 bit 4 */                        \
-      }                                                                       \
-      LATER_VERSIONS                                                          \
-      {                                                                       \
-        FIELD_VALUE (is_xref_ref) = 1;                                        \
-        FIELD_BS (is_xref_resolved, 0); /* 0 or 256 */                        \
-        if (FIELD_VALUE (is_xref_resolved) == 256)                            \
-          FIELD_VALUE (is_xref_dep) = 1;                                      \
-      }                                                                       \
-      FIELD_HANDLE (xref, 5, 0); /* NULLHDL without is_xref_dep */            \
-      FIELD_VALUE (flag)                                                      \
-          |= FIELD_VALUE (is_xref_dep) << 4 | FIELD_VALUE (is_xref_ref) << 6; \
-    }                                                                         \
+#  define COMMON_TABLE_FLAGS(acdbname)                                              \
+    assert (obj->supertype == DWG_SUPERTYPE_OBJECT);                                \
+    PRE (R_13b1)                                                                    \
+    {                                                                               \
+      if (strcmp (#acdbname, "Layer") == 0)                                         \
+        {                                                                           \
+          FIELD_CAST (flag, RC, RS, 70);                                            \
+        }                                                                           \
+      else                                                                          \
+        {                                                                           \
+          FIELD_CAST (flag, RC, RC, 70);                                            \
+        } /* clang-format off */                                                      \
+      DECODER_OR_ENCODER                                                          \
+        {                                                                         \
+          LOG_FLAG_##acdbname                                                     \
+        }                                                                         \
+      FIELD_TFv (name, 32, 2);                                                    \
+      VERSION (R_11)                                                              \
+        FIELD_RSd (used, 0); /* clang-format on */                                                         \
+    }                                                                               \
+    LATER_VERSIONS                                                                  \
+    {                                                                               \
+      FIELD_T (name, 2);                                                            \
+      UNTIL (R_2004)                                                                \
+      {                                                                             \
+        FIELD_B (is_xref_ref, 0); /* always 1, 70 bit 6 */                    \
+        FIELD_BS (is_xref_resolved, 0); /* 0 or 256 */                              \
+        FIELD_B (is_xref_dep, 0); /* 70 bit 4 */                              \
+      }                                                                             \
+      LATER_VERSIONS                                                                \
+      {                                                                             \
+        FIELD_VALUE (is_xref_ref) = 1;                                              \
+        FIELD_BS (is_xref_resolved, 0); /* 0 or 256 */                              \
+        if (FIELD_VALUE (is_xref_resolved) == 256)                                  \
+          FIELD_VALUE (is_xref_dep) = 1;                                            \
+      }                                                                             \
+      FIELD_HANDLE (xref, 5, 0); /* NULLHDL without is_xref_dep */                  \
+      FIELD_VALUE (flag)                                                            \
+          |= FIELD_VALUE (is_xref_dep) << 4 | FIELD_VALUE (is_xref_ref) << 6;       \
+      DECODER_OR_ENCODER                                                            \
+      {                                                                             \
+        LOG_TRACE ("=> flag %u [BL 70]\n", FIELD_VALUE (flag));                     \
+      }                                                                             \
+    }                                                                               \
     RESET_VER
 #endif
 
@@ -853,6 +870,11 @@
       Dwg_Object_##parenttype *restrict _obj, Bit_Chain * dat,                \
       Bit_Chain * hdl_dat, Bit_Chain * str_dat, Dwg_Object *restrict obj)
 
+#define DWG_ENT_SUBCLASS_DECL(parenttype, subtype)                            \
+  static int DWG_PRIVATE_N (ACTION, parenttype##_##subtype) (                 \
+      Dwg_Entity_##parenttype *restrict _obj, Bit_Chain * dat,                \
+      Bit_Chain * hdl_dat, Bit_Chain * str_dat, Dwg_Object *restrict obj)
+
 #define DWG_SUBCLASS(parenttype, subtype)                                     \
   static int DWG_PRIVATE_N (ACTION, parenttype##_##subtype) (                 \
       Dwg_Object_##parenttype *restrict _obj, Bit_Chain * dat,                \
@@ -865,13 +887,21 @@
     return error;                                                             \
   }
 
+#define DWG_ENT_SUBCLASS(parenttype, subtype)                                 \
+  static int DWG_PRIVATE_N (ACTION, parenttype##_##subtype) (                 \
+      Dwg_Entity_##parenttype *restrict _obj, Bit_Chain * dat,                \
+      Bit_Chain * hdl_dat, Bit_Chain * str_dat, Dwg_Object *restrict obj)     \
+  {                                                                           \
+    BITCODE_BL vcount, rcount3, rcount4;                                      \
+    Dwg_Data *dwg = obj->parent;                                              \
+    int error = 0;                                                            \
+    subtype##_fields;                                                         \
+    return error;                                                             \
+  }
+
 #define CALL_SUBCLASS(_xobj, parenttype, subtype)                             \
   error |= DWG_PRIVATE_N (ACTION, parenttype##_##subtype) (                   \
       _xobj, dat, hdl_dat, str_dat, (Dwg_Object *)obj)
-// if the name is compile-time known
-#define CALL_ENTITY(name, xobj)                                               \
-  error |= DWG_PRIVATE_N (ACTION, name) (dat, hdl_dat, str_dat,               \
-                                         (Dwg_Object *)xobj)
 // TODO: dispatch on the type
 #define CALL_SUBENT(hdl, dxf)
 // error |= DWG_PRIVATE_N (ACTION, xobj->fixedtype) (dat, hdl_dat, str_dat,
@@ -888,6 +918,20 @@
   if (value > w)                                                              \
   LOG_WARN ("Unknown flag (0x%x)", value & ~(w))
 
+#ifndef LOG_LAYER_FLAG
+#  define LOG_LAYER_FLAG(w)                                                   \
+    DECODER_OR_ENCODER                                                        \
+    {                                                                         \
+      if (_obj->w)                                                            \
+        LOG_TRACE ("       %s: 0x%x\n", #w, _obj->w);                         \
+    }
+#  define LOG_LAYER_FLAG_REV(w)                                               \
+    DECODER_OR_ENCODER                                                        \
+    {                                                                         \
+      if (!_obj->w)                                                           \
+        LOG_TRACE ("       %s: 0x%x\n", #w, _obj->w);                         \
+    }
+#endif
 #ifndef LOG_TEXT_GENERATION
 #  define LOG_TEXT_GENERATION_W(w)                                            \
     if (_obj->generation & TEXT_GENERATION_##w)                               \
@@ -901,6 +945,25 @@
           LOG_TEXT_GENERATION_W (BACKWARDS);                                  \
           LOG_TEXT_GENERATION_W (UPSIDE_DOWN);                                \
           LOG_FLAG_MAX (_obj->generation, 7);                                 \
+          LOG_TRACE ("\n");                                                   \
+        }                                                                     \
+    }
+#endif
+
+#ifndef LOG_LTYPE_SHAPE_FLAG
+#  define LOG_LTYPE_SHAPE_FLAG_W(w)                                           \
+    if (_obj->dashes[rcount1].shape_flag & LTYPE_SHAPE_FLAG_##w)              \
+    LOG_TRACE (#w "(0x%x) ", LTYPE_SHAPE_FLAG_##w)
+#  define LOG_LTYPE_SHAPE_FLAG                                                \
+    DECODER_OR_ENCODER                                                        \
+    {                                                                         \
+      if (_obj->dashes[rcount1].shape_flag)                                   \
+        {                                                                     \
+          LOG_TRACE ("                      ");                               \
+          LOG_LTYPE_SHAPE_FLAG_W (ABS_ROTATION);                              \
+          LOG_LTYPE_SHAPE_FLAG_W (IS_TEXT);                                   \
+          LOG_LTYPE_SHAPE_FLAG_W (IS_SHAPE);                                  \
+          LOG_FLAG_MAX (_obj->dashes[rcount1].shape_flag, 5);                 \
           LOG_TRACE ("\n");                                                   \
         }                                                                     \
     }
@@ -1141,6 +1204,33 @@
     }
 #endif
 
+#ifndef LOG_MLINESTYLE_FLAG
+#  define LOG_MLINESTYLE_FLAG_W(w)                                            \
+    if (_obj->flag & MLINESTYLE_FLAG_##w)                                     \
+    LOG_TRACE (#w "(0x%x) ", MLINESTYLE_FLAG_##w)
+#  define LOG_MLINESTYLE_FLAG                                                 \
+    DECODER_OR_ENCODER                                                        \
+    {                                                                         \
+      if (_obj->flag)                                                         \
+        {                                                                     \
+          LOG_TRACE ("      ");                                               \
+          LOG_MLINESTYLE_FLAG_W (FILL);                                       \
+          LOG_MLINESTYLE_FLAG_W (MITERS);                                     \
+          LOG_MLINESTYLE_FLAG_W (UNKNOWN_4);                                  \
+          LOG_MLINESTYLE_FLAG_W (UNKNOWN_8);                                  \
+          LOG_MLINESTYLE_FLAG_W (START_SQUARE_END);                           \
+          LOG_MLINESTYLE_FLAG_W (START_INNER_ARC);                            \
+          LOG_MLINESTYLE_FLAG_W (START_ROUND);                                \
+          LOG_MLINESTYLE_FLAG_W (UNKNOWN_128);                                \
+          LOG_MLINESTYLE_FLAG_W (END_SQUARE);                                 \
+          LOG_MLINESTYLE_FLAG_W (END_INNER_ARC);                              \
+          LOG_MLINESTYLE_FLAG_W (END_ROUND);                                  \
+          LOG_FLAG_MAX (_obj->flag, 2047);                                    \
+          LOG_TRACE ("\n");                                                   \
+        }                                                                     \
+    }
+#endif
+
 #ifndef LOG_MLINE_JUSTIFICATION
 #  define LOG_MLINE_JUSTIFICATION_W(w)                                        \
     if (_obj->justification == MLINE_JUSTIFICATION_##w)                       \
@@ -1169,7 +1259,7 @@
     {                                                                         \
       if (_obj->scenario)                                                     \
         {                                                                     \
-          LOG_TRACE ("         ");                                            \
+          LOG_TRACE ("          ");                                           \
           LOG_SPLINE_SCENARIO_W (SPLINE);                                     \
           LOG_SPLINE_SCENARIO_W (BEZIER);                                     \
           LOG_FLAG_MAX (_obj->scenario, 2);                                   \
@@ -1299,4 +1389,8 @@
 #else
 #  define PRER13_SECTION_HDR(name)
 #  define DWG_TABLE(token) DWG_OBJECT (token)
+#endif
+
+#ifndef _DEBUG_HERE
+#  define _DEBUG_HERE(x)
 #endif

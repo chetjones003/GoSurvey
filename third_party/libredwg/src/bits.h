@@ -1,7 +1,7 @@
 /*****************************************************************************/
 /*  LibreDWG - free implementation of the DWG file format                    */
 /*                                                                           */
-/*  Copyright (C) 2009-2023 Free Software Foundation, Inc.                   */
+/*  Copyright (C) 2009-2025 Free Software Foundation, Inc.                   */
 /*                                                                           */
 /*  This library is free software, licensed under the terms of the GNU       */
 /*  General Public License as published by the Free Software Foundation,     */
@@ -84,12 +84,13 @@ typedef struct _bit_chain
     NULL, size, 0UL, 0, 0, R_INVALID, R_INVALID, NULL, 0                      \
   }
 
-// only if from r2007+ DWG, not JSON, DXF, add API
+// only if from r2007+ DWG. not JSON, DXF (FIXME TABLE.name). add API converts
+// to TU
 #define IS_FROM_TU(dat)                                                       \
   (dat->from_version >= R_2007) && !(dat->opts & DWG_OPTS_IN)
 #define IS_FROM_TU_DWG(dwg)                                                   \
   (dwg->header.from_version >= R_2007) && !(dwg->opts & DWG_OPTS_IN)
-#define TU_to_int(b) le16toh ((b[1] << 8) + b[0])
+#define TU_to_int(b) le16toh (((uint16_t)b[1] << 8) + b[0])
 
 /* Functions for raw data manipulations.
  */
@@ -103,9 +104,6 @@ void bit_write_B (Bit_Chain *dat, unsigned char value);
 
 BITCODE_BB bit_read_BB (Bit_Chain *dat);
 void bit_write_BB (Bit_Chain *dat, unsigned char value);
-
-BITCODE_3B bit_read_3B (Bit_Chain *dat);
-void bit_write_3B (Bit_Chain *dat, unsigned char value);
 
 BITCODE_4BITS bit_read_4BITS (Bit_Chain *dat);
 void bit_write_4BITS (Bit_Chain *dat, unsigned char value);
@@ -147,9 +145,14 @@ BITCODE_BS bit_read_BOT (Bit_Chain *dat);
 void bit_write_BOT (Bit_Chain *dat, BITCODE_BS value);
 
 BITCODE_BLL bit_read_BLL (Bit_Chain *dat);
-BITCODE_BLL bit_read_3BLL (Bit_Chain *dat); /*unused but as documented*/
 void bit_write_BLL (Bit_Chain *dat, BITCODE_BLL value);
+
+#if 0
+BITCODE_3B bit_read_3B (Bit_Chain *dat);
+void bit_write_3B (Bit_Chain *dat, unsigned char value);
+BITCODE_BLL bit_read_3BLL (Bit_Chain *dat); /*unused but as documented*/
 void bit_write_3BLL (Bit_Chain *dat, BITCODE_BLL value);
+#endif
 
 BITCODE_BD bit_read_BD (Bit_Chain *dat);
 void bit_write_BD (Bit_Chain *dat, BITCODE_BD value);
@@ -197,6 +200,8 @@ int bit_read_fixed (Bit_Chain *restrict dat, BITCODE_RC *restrict dest,
 /* read fixed-length ASCII string */
 BITCODE_TF bit_read_TF (Bit_Chain *dat, size_t length) ATTRIBUTE_MALLOC;
 BITCODE_TF bit_read_bits (Bit_Chain *dat, size_t bits) ATTRIBUTE_MALLOC;
+void bit_write_bits (Bit_Chain *restrict dat, BITCODE_TF restrict bits,
+                     size_t numbits);
 
 void bit_write_TF (Bit_Chain *restrict dat, BITCODE_TF restrict chain,
                    size_t length);
@@ -301,7 +306,7 @@ char *bit_TV_to_utf8 (const char *restrict src,
 EXPORT BITCODE_TU bit_utf8_to_TU (char *restrict str,
                                   const unsigned cquoted) ATTRIBUTE_MALLOC;
 // convert all \\U+XXXX and \\M+nXXXX sequences to UTF-8
-char *bit_u_expand (char *src);
+const char *bit_u_expand (const char *src);
 
 /* compare an ASCII/TU string to ASCII name */
 int bit_eq_T (Bit_Chain *restrict dat, const BITCODE_T restrict str1,
@@ -349,11 +354,11 @@ void bit_chain_free (Bit_Chain *dat);
 
 void bit_print (Bit_Chain *dat, size_t size);
 
-void bit_write_bits (Bit_Chain *restrict dat, const char *restrict bits);
+void bit_write_bits1 (Bit_Chain *restrict dat, const char *restrict bits);
 long bit_write_hexbits (Bit_Chain *restrict dat, const char *restrict bytes);
 void bit_print_bits (unsigned char *bits, size_t bitsize);
 void bit_fprint_bits (FILE *fp, unsigned char *bits, size_t bitsize);
-void bit_explore_chain (Bit_Chain *dat, size_t datsize);
+void bit_explore_chain (Bit_Chain *dat, size_t from, size_t size);
 
 BITCODE_BD bit_nan (void);
 int bit_isnan (BITCODE_BD number);
