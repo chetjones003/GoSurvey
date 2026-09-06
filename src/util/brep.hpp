@@ -916,7 +916,7 @@ struct Tessellation {
 ///   collapsed, inverted, or degenerated a face. A real gesture, not a hypothetical.
 ///
 /// **The result carries no recipe.** A pushed box is not the box its recipe describes, and a recipe
-/// that no longer describes its solid reads as authoritative while being false (REQ-319 item 6).
+/// that no longer describes its solid reads as authoritative while being false (REQ-319 item 9).
 /// **The topology is unchanged** — same vertex, edge and face counts, same indices — which is what
 /// lets a REQ-318 sub-object reference survive the edit rather than expire (ADR-049).
 [[nodiscard]] bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out,

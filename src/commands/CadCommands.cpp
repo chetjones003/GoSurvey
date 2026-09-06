@@ -25801,7 +25801,7 @@ bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double 
     return false;
   }
 
-  // One undo step for the whole edit (REQ-319 item 7) - the geometry, the dropped recipe and the
+  // One undo step for the whole edit (REQ-319 item 10) - the geometry, the dropped recipe and the
   // re-tessellation that follows from BumpCadGpuCache.
   PushUndoSnapshot(st, "PressPull");
   const auto replaced = std::make_shared<const brep::Solid>(std::move(moved));
@@ -25811,7 +25811,7 @@ bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double 
   // same face - but the reference is keyed on the solid's IDENTITY (ADR-049), and the solid has
   // just been replaced by a different object. Left alone it would expire on the next sweep and the
   // user would lose the selection after every push, making a second push impossible without
-  // re-picking. Re-pointing it at the new solid is the whole reason REQ-319 item 5 states that the
+  // re-picking. Re-pointing it at the new solid is the whole reason REQ-319 item 8 states that the
   // topology is preserved.
   for (SelectedSubObject& s : st.subObjectSelection)
     if (s.solidIndex == ref.solidIndex)

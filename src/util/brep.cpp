@@ -1578,7 +1578,7 @@ bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out, Pr
   if (faceIndex < 0 || static_cast<size_t>(faceIndex) >= s.faces.size())
     return fail(Problem::IndexOutOfRange);
   // Zero is refused rather than treated as a successful no-op: a command that reports it moved
-  // something it did not is worse than one that declines (REQ-319 item 3).
+  // something it did not is worse than one that declines (REQ-319 item 6).
   if (!std::isfinite(distance) || std::fabs(distance) <= 1e-12)
     return fail(Problem::PushPullDistanceZero);
 
@@ -1922,7 +1922,7 @@ bool PushPullFace(const Solid& s, int faceIndex, double distance, Solid* out, Pr
     if (e.kind != CurveKind::Line && isMoved(e.v0) && isMoved(e.v1))
       return fail(Problem::PushPullNeighbourCurved);
 
-  // The recipe is DROPPED, not updated (REQ-319 item 6). A pushed box is not the box its recipe
+  // The recipe is DROPPED, not updated (REQ-319 item 9). A pushed box is not the box its recipe
   // describes, and a recipe that no longer describes its solid reads as authoritative while being
   // false. ADR-045 already made it optional and never consulted by validity, mass properties or
   // tessellation, so nothing downstream misses it.
