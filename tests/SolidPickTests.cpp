@@ -81,6 +81,28 @@ Ray Down(double x, double y, double z = 500.0) { return Ray{{x, y, z}, {0.0, 0.0
 
 solidpick::Tolerance NoSnap() { return solidpick::Tolerance{0.0, 0.0}; }
 
+/// The world point at parameter `(u, v)` of a planar face's own frame — independent of which way
+/// `ucs::FromNormal` happened to point that frame's x/y axes.
+Vec3 AtParam(const brep::Face& f, double u, double v) {
+  return ucs::UcsToWorld(f.surface.frame, Vec3{u, v, 0.0});
+}
+
+/// A ray approaching `(u, v)` on \p f from outside the solid, along the face's own outward normal —
+/// works for any planar face regardless of which way it happens to point.
+Ray RayAtParam(const brep::Face& f, double u, double v) {
+  const Vec3 p = AtParam(f, u, v);
+  const Vec3 n = f.surface.frame.zAxis;
+  return Ray{ray3d::Add(p, ray3d::Scale(n, 500.0)), ray3d::Scale(n, -1.0)};
+}
+
+/// The first face whose surface is a plane and whose loop count is \p loopCount.
+int FindPlaneFace(const brep::Solid& s, std::size_t loopCount) {
+  for (std::size_t i = 0; i < s.faces.size(); ++i)
+    if (s.faces[i].surface.kind == brep::SurfaceKind::Plane && s.faces[i].loops.size() == loopCount)
+      return static_cast<int>(i);
+  return -1;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -499,4 +521,88 @@ TEST_CASE("KindName is defined for every kind", "[solidpick]") {
   REQUIRE(std::string(solidpick::KindName(solidpick::Kind::Face)) == "face");
   REQUIRE(std::string(solidpick::KindName(solidpick::Kind::Edge)) == "edge");
   REQUIRE(std::string(solidpick::KindName(solidpick::Kind::Vertex)) == "vertex");
+}
+
+// ---------------------------------------------------------------------------
+// General trim loops (REQ-321/ADR-052, GitHub issue #309): a face carrying `Face::paramLoops`
+// (issue #306) is tessellated clipped to that loop (issue #308), and the pick pipeline above never
+// tests a face's `uStart/uEnd/vStart/vEnd` rectangle directly — it walks the DISPLAY TRIANGLES a
+// tessellation produced. So a general-loop face's non-rectangular boundary (and any hole) is
+// already a point-in-polygon test by construction: there simply are no triangles outside the loop
+// or inside a hole for a ray to hit. These tests pin that this holds all the way through picking,
+// not just through tessellation and mass properties (#307/#308's own tests).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A point inside a triangular general trim loop is picked as that face", "[solidpick][req321][adr052]") {
+  brep::Solid box = Box(10, 6, 4);  // hx = 5, hy = 3
+  const int fi = FindPlaneFace(box, 1);
+  REQUIRE(fi >= 0);
+  brep::Face& f = box.faces[static_cast<std::size_t>(fi)];
+  // A right triangle covering roughly the lower-left half of the face's real rectangle, CCW.
+  f.paramLoops = {{{-5.0, -3.0}, {5.0, -3.0}, {-5.0, 3.0}}};
+  REQUIRE(brep::Validate(box) == brep::Problem::Ok);
+  const Displayed d = Display(box);
+
+  // (-3, -2) satisfies v < -0.6u (the hypotenuse from (5,-3) to (-5,3)) and is inside the triangle.
+  solidpick::Pick p;
+  REQUIRE(solidpick::PickSubObject(d.solid, d.triVerts, d.triFaceIds, RayAtParam(f, -3.0, -2.0),
+                                   NoSnap(), &p));
+  REQUIRE(p.kind == solidpick::Kind::Face);
+  REQUIRE(p.index == fi);
+}
+
+TEST_CASE("A point outside a triangular general trim loop, but still on the underlying surface, is "
+          "not picked as that face",
+          "[solidpick][req321][adr052]") {
+  brep::Solid box = Box(10, 6, 4);
+  const int fi = FindPlaneFace(box, 1);
+  REQUIRE(fi >= 0);
+  brep::Face& f = box.faces[static_cast<std::size_t>(fi)];
+  f.paramLoops = {{{-5.0, -3.0}, {5.0, -3.0}, {-5.0, 3.0}}};
+  REQUIRE(brep::Validate(box) == brep::Problem::Ok);
+  const Displayed d = Display(box);
+
+  // (3, 2) is inside the face's real rectangle (u in [-5,5], v in [-3,3]) but on the far side of the
+  // hypotenuse from the triangle, so it is not part of the trimmed face at all. The ray passes
+  // straight through with no triangle to hit there, so the pick must not report this face.
+  solidpick::Pick p;
+  const bool hit =
+      solidpick::PickSubObject(d.solid, d.triVerts, d.triFaceIds, RayAtParam(f, 3.0, 2.0), NoSnap(), &p);
+  if (hit)
+    REQUIRE((p.kind != solidpick::Kind::Face || p.index != fi));
+}
+
+TEST_CASE("A point inside a general trim loop's hole is not picked as that face", "[solidpick][req321][adr052]") {
+  brep::Solid block = Box(10, 10, 10);
+  brep::Solid cyl = Cylinder(1.0, 12.0, Vec3{0, 0, -1});  // through-hole, radius 1
+  std::vector<brep::Solid> r;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::BooleanSubtract(block, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  const int fi = FindPlaneFace(r[0], 2);
+  REQUIRE(fi >= 0);
+
+  brep::Face& f = r[0].faces[static_cast<std::size_t>(fi)];
+  REQUIRE(f.loops.size() == 2);
+  // Outer CCW square matching the block's real 10x10 rectangle, plus a CW square hole (side 2)
+  // centred on the origin - well inside the true (radius-1, circular) drilled hole, so a point
+  // inside this square hole is also inside the real hole and there is genuinely no surface there.
+  f.paramLoops = {{{-5.0, -5.0}, {5.0, -5.0}, {5.0, 5.0}, {-5.0, 5.0}},
+                  {{-1.0, -1.0}, {-1.0, 1.0}, {1.0, 1.0}, {1.0, -1.0}}};
+  REQUIRE(brep::Validate(r[0]) == brep::Problem::Ok);
+  const Displayed d = Display(r[0]);
+
+  // Inside the hole: no triangle of this face covers the origin, so it must not be picked as `fi`.
+  solidpick::Pick miss;
+  const bool hitHole =
+      solidpick::PickSubObject(d.solid, d.triVerts, d.triFaceIds, RayAtParam(f, 0.0, 0.0), NoSnap(), &miss);
+  if (hitHole)
+    REQUIRE((miss.kind != solidpick::Kind::Face || miss.index != fi));
+
+  // Just outside the hole, still inside the outer square: picked as `fi`, on the real surface.
+  solidpick::Pick hit;
+  REQUIRE(solidpick::PickSubObject(d.solid, d.triVerts, d.triFaceIds, RayAtParam(f, 3.0, 0.0), NoSnap(),
+                                   &hit));
+  REQUIRE(hit.kind == solidpick::Kind::Face);
+  REQUIRE(hit.index == fi);
 }

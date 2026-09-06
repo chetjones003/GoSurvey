@@ -153,6 +153,47 @@ TEST_CASE("A lofted solid with NURBS faces round-trips with topology and volume 
   }
 }
 
+TEST_CASE("A hand-built general trim loop round-trips through .gs (ADR-052, issue #306)",
+          "[brepjson][req306][adr052]") {
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(World(), 10.0, 10.0, 10.0, &box, &why));
+
+  int fi = -1;
+  for (std::size_t i = 0; i < box.faces.size(); ++i) {
+    if (box.faces[i].surface.kind == brep::SurfaceKind::Plane && box.faces[i].loops.size() == 1) {
+      fi = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(fi >= 0);
+  box.faces[static_cast<std::size_t>(fi)].paramLoops = {
+      {{0.0, 0.0}, {4.0, 0.0}, {4.0, 2.0}, {2.0, 4.0}, {0.0, 2.0}}};
+  REQUIRE(brep::Validate(box) == brep::Problem::Ok);
+
+  const nlohmann::json j = gsio::SolidToJson(box);
+  brep::Solid back;
+  REQUIRE(gsio::SolidFromJson(j, &back));
+  REQUIRE(brep::Validate(back) == brep::Problem::Ok);
+  REQUIRE(back.faces[static_cast<std::size_t>(fi)].paramLoops.size() == 1);
+  const std::vector<curveisect::Vec2>& poly = back.faces[static_cast<std::size_t>(fi)].paramLoops[0];
+  REQUIRE(poly.size() == 5);
+  REQUIRE(poly[2].x == Approx(4.0));
+  REQUIRE(poly[2].y == Approx(2.0));
+
+  // Written twice, the JSON is identical.
+  REQUIRE(gsio::SolidToJson(back).dump() == j.dump());
+}
+
+TEST_CASE("A face with an empty general trim loop serializes without the paramLoops key",
+          "[brepjson][req306][adr052]") {
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(World(), 3.0, 3.0, 3.0, &box, &why));
+  const std::string dumped = gsio::SolidToJson(box).dump();
+  REQUIRE(dumped.find("paramLoops") == std::string::npos);
+}
+
 TEST_CASE("A version-4 file with a malformed NURBS patch is refused, not loaded", "[brepjson][req315]") {
   brep::Solid loft;
   brep::Problem why = brep::Problem::Ok;

@@ -305,8 +305,8 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(!s_cmd->paperLayouts[0].paperBlockRefs.empty());
     SubmitCad(ctx, "BLOCKMODEL");
 
-    // WBLOCK/BLOCKIMPORT .gs round-trip removed by issue #264 (D-2026-09-03-h); WBLOCK is
-    // disabled pending a .dwg-based block-library replacement (issue #284).
+    // WBLOCK/BLOCKIMPORT's .gs round-trip was removed by issue #264 (D-2026-09-03-h) and
+    // replaced with a .dwg-based one by issue #284 (CadBlockImportTests.cpp covers it).
 
     std::vector<std::string> ioLog;
     IM_CHECK(SaveGoSurveyTemplateFile(*s_cmd, "issue124-roundtrip.json", ioLog));

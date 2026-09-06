@@ -210,6 +210,18 @@ using nlohmann::json;
       loops.push_back(std::move(jl));
     }
     jf["loops"] = std::move(loops);
+    // ADR-052 / issue #306: additive, no kGsFormatVersion bump — empty `paramLoops` (the rectangle
+    // form, every current builder) writes nothing, so a pre-ADR-052 file round-trips byte-for-byte.
+    if (!f.paramLoops.empty()) {
+      json paramLoops = json::array();
+      for (const auto& poly : f.paramLoops) {
+        json jpoly = json::array();
+        for (const curveisect::Vec2& pt : poly)
+          jpoly.push_back(json::array({pt.x, pt.y}));
+        paramLoops.push_back(std::move(jpoly));
+      }
+      jf["paramLoops"] = std::move(paramLoops);
+    }
     faces.push_back(std::move(jf));
   }
   o["faces"] = std::move(faces);
@@ -332,6 +344,19 @@ using nlohmann::json;
             lp.uses.push_back(u);
           }
           f.loops.push_back(std::move(lp));
+        }
+      }
+      if (jf.contains("paramLoops") && jf["paramLoops"].is_array()) {
+        for (const auto& jpoly : jf["paramLoops"]) {
+          if (!jpoly.is_array())
+            return false;
+          std::vector<curveisect::Vec2> poly;
+          for (const auto& jpt : jpoly) {
+            if (!jpt.is_array() || jpt.size() != 2)
+              return false;
+            poly.push_back(curveisect::Vec2{jpt[0].get<double>(), jpt[1].get<double>()});
+          }
+          f.paramLoops.push_back(std::move(poly));
         }
       }
       out->faces.push_back(std::move(f));

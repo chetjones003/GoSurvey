@@ -341,6 +341,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
   # expectation rather than by looking at a shaded viewport.
   src/util/brep.cpp
+  # REQ-320 / ADR-051: the ACIS SAT record parser feeding 3DSOLID import (GitHub issue #299). Pure
+  # and dependency-free like brep.cpp itself — no LibreDWG, no GL — so a malformed or unsupported
+  # record is caught against a hand-authored SAT fixture rather than a real vendor block library.
+  src/util/AcisSatParser.cpp
   # REQ-315 / ADR-048: the freeform (NURBS) surface patch — pure math (evaluation, derivatives,
   # validation, the loft builders), no GL and no brep coupling, so its correctness is pinned against
   # closed-form circle / plane expectations rather than a viewport.
@@ -757,6 +761,10 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-319 / ADR-046 amendment (i) — push/pull, the first kernel op that EDITS a solid. Its own
     # file because its subject is the PRECONDITION Validate cannot enforce, not another builder.
     tests/PushPullTests.cpp
+    # REQ-320 / ADR-051 — the ACIS SAT parser (GitHub issue #299). Pure, so a hand-authored SAT
+    # fixture pins the supported plane/cylinder/cone shapes and every refusal without a DWG file.
+    tests/AcisSatParserTests.cpp
+    src/util/AcisSatParser.cpp
     src/util/brep.cpp
     # REQ-315 / ADR-048: the NURBS patch math. Partition-of-unity, a bilinear patch reproducing a
     # plane, a rational arc row that is exactly on its circle, and derivative agreement with finite

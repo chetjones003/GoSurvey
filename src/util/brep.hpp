@@ -1,5 +1,6 @@
 #pragma once
 
+#include "curveintersect.hpp"
 #include "nurbs.hpp"
 #include "ucs.hpp"
 
@@ -148,6 +149,17 @@ struct Face {
   double vEnd = 0.0;
 
   std::vector<Loop> loops;
+
+  /// **General trim loop** (ADR-052, issue #306) — a straight-line (u,v) polygon per entry in
+  /// \ref loops (index-aligned: `paramLoops[0]` is the outer boundary, further entries are holes),
+  /// used exclusively as a fast inside/outside classification aid for a boundary that does not
+  /// reduce to the `uStart/uEnd/vStart/vEnd` rectangle. **Empty (the default) means the face is in
+  /// rectangle form** — byte-identical to pre-ADR-052 behavior in every consumer. `loops`' `Edge`
+  /// records remain the sole authoritative record of the 3D boundary curve; a curved edge
+  /// contributes several polyline vertices here rather than one. No current primitive or Boolean
+  /// builder populates this — it exists for a future importer (issue #310) and is only exercised by
+  /// hand-built test fixtures until then.
+  std::vector<std::vector<curveisect::Vec2>> paramLoops;
 };
 
 /// A closed, oriented set of faces. Every primitive below has exactly one; a Phase 4 subtraction
@@ -294,6 +306,20 @@ enum class Problem {
   NonFiniteCoordinate,
   NotClosed,                    ///< The shell encloses no positive volume, so it is not a solid.
   UnusedVertex,
+
+  // --- General trim loops (ADR-052, issue #306): a non-empty `Face::paramLoops`. ---
+  /// `paramLoops.size()` does not match `loops.size()` — the two are meant to be index-aligned.
+  GeneralLoopCountMismatch,
+  /// A `paramLoops` entry with fewer than 3 points: it cannot enclose an area, so it is not a
+  /// closed boundary at all.
+  GeneralLoopOpen,
+  /// A `paramLoops` polygon whose edges cross themselves.
+  GeneralLoopSelfIntersects,
+  /// The outer loop does not wind CCW, or a hole does not wind CW, in (u,v) — the same convention
+  /// \ref Loop already uses in 3D (outer positive signed area, holes negative).
+  GeneralLoopWrongWinding,
+  /// A hole loop (`paramLoops[1..]`) is not entirely inside the outer loop (`paramLoops[0]`).
+  GeneralLoopHoleNotNested,
 
 
   // --- Tessellation. ---

@@ -4,6 +4,7 @@
 /// Header-only so Catch2 can cover transforms, nesting, and cycle detection without GL.
 
 #include "CadEntities.hpp"
+#include "cadsolid.hpp"
 
 #include <algorithm>
 #include <array>
@@ -132,6 +133,10 @@ struct CadBlockContent {
   std::vector<CadBlockNested> nested;
   std::vector<std::shared_ptr<const CadMesh>> meshes;
   std::vector<EntityAttributes> meshAttrs;
+  /// REQ-320 / ADR-051: B-rep solids (native or ACIS-imported), so INSERT/WBLOCK/BLOCKIMPORT round-
+  /// trip a 3D-solid block the same way \ref meshes already round-trips a mesh block.
+  std::vector<CadSolidPtr> solids;
+  std::vector<EntityAttributes> solidAttrs;
 };
 
 struct CadBlockDefinition {

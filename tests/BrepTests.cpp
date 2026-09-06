@@ -1673,6 +1673,161 @@ TEST_CASE("Curved B2b-1: an oblique plane slices a cylinder into two elliptical-
   REQUIRE(sawEllipse);
 }
 
+TEST_CASE("Curved B2b-2 tail: an oblique plane slices a cone into two elliptical-ended pieces",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid cone;
+  REQUIRE(brep::MakeCone(World(), 6, 2, 8, &cone, &why));  // base r6 at z0, top r2 at z8
+
+  const Vec3 planePoint{0, 0, 4};
+  const Vec3 pn = ray3d::Normalize(Vec3{0.3, 0.0, 1.0});
+  const double nx = pn.x, ny = pn.y, nz = pn.z;
+  const double C = ray3d::Dot(pn, planePoint);
+  const double k = (2.0 - 6.0) / 8.0;
+
+  // Independent reference (no reuse of the ellipse-derivation code under test): at each height z the
+  // cone's cross-section is a disk of radius rho(z), cut by the line nx*x+ny*y = C - nz*z, a standard
+  // circular-segment area in closed form. Integrate that over z numerically (fine but 1-D, cheap).
+  auto segmentAreaBelow = [&](double rho, double dist) {
+    // Area of {x^2+y^2<=rho^2, x<=dist} in a frame where the cut line is x = dist.
+    if (dist >= rho) return kPi * rho * rho;
+    if (dist <= -rho) return 0.0;
+    return dist * std::sqrt(rho * rho - dist * dist) + rho * rho * std::asin(dist / rho) +
+           rho * rho * kPi * 0.5;
+  };
+  double vBelowRef = 0.0;
+  const int nZ = 200000;
+  for (int i = 0; i < nZ; ++i) {
+    const double z = 8.0 * (i + 0.5) / nZ;
+    const double rho = 6.0 + k * z;
+    const double amp = std::sqrt(nx * nx + ny * ny);
+    const double dist = (C - nz * z) / amp;  // signed distance (in the rotated frame) of the cut line
+    vBelowRef += segmentAreaBelow(rho, dist) * (8.0 / nZ);
+  }
+  const double coneVol = kPi * 8.0 / 3.0 * (36.0 + 12.0 + 4.0);  // r0=6,r1=2,h=8
+  const double vAboveRef = coneVol - vBelowRef;
+
+  Solid up;
+  Solid dn;
+  REQUIRE(brep::Slice(cone, planePoint, pn, brep::SliceKeep::Both, &up, &dn, &why));
+  REQUIRE(brep::Validate(up) == Problem::Ok);
+  REQUIRE(brep::Validate(dn) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(up));
+  REQUIRE_FALSE(brep::SelfIntersects(dn));
+  REQUIRE(up.recipe.kind == brep::PrimitiveKind::None);  // no longer a plain cone recipe
+
+  const auto mUp = brep::ComputeMassProperties(up);
+  const auto mDn = brep::ComputeMassProperties(dn);
+  REQUIRE(mUp.valid);
+  REQUIRE(mDn.valid);
+  REQUIRE(mDn.volume == Approx(vBelowRef).epsilon(1e-4));
+  REQUIRE(mUp.volume == Approx(vAboveRef).epsilon(1e-4));
+  REQUIRE(mUp.volume + mDn.volume == Approx(coneVol).epsilon(1e-9));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(dn, 0.02, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(vBelowRef).epsilon(0.01));
+
+  // .gs round trip preserves the ellipse edge (Translate is the cheap in-kernel proxy).
+  Solid reopened = brep::Translate(dn, Vec3{0, 0, 0});
+  bool sawEllipse = false;
+  for (const auto& e : reopened.edges)
+    if (e.kind == brep::CurveKind::Ellipse)
+      sawEllipse = true;
+  REQUIRE(sawEllipse);
+  REQUIRE(brep::Validate(reopened) == Problem::Ok);
+
+  SECTION("surviving Translate at a survey-magnitude offset") {
+    const Solid moved = brep::Translate(dn, Vec3{1.9e6, 6.4e6, 1200.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vBelowRef).epsilon(1e-4));
+  }
+
+  SECTION("a cut that would clip a cap is refused by name") {
+    Solid up2, dn2;
+    REQUIRE_FALSE(brep::Slice(cone, Vec3{0, 0, 0.5}, pn, brep::SliceKeep::Both, &up2, &dn2, &why));
+    REQUIRE(why == Problem::SliceResultComplex);
+  }
+
+  SECTION("a steeper cut past the half-angle, tangent to the top cap, is still refused (two merged notches)") {
+    // Cone half-angle here is atan(|k|) = atan(0.5); a plane tilted past that off the axis leaves the
+    // ellipse regime. This particular plane's hump peaks exactly at the top rim, giving 4 level
+    // crossings (not the 2 a single same-rim notch needs) - still refused, not the case TASK-204
+    // slice (b) built.
+    Solid up2, dn2;
+    const Vec3 steep = ray3d::Normalize(Vec3{2.0, 0.0, 1.0});  // well past atan(0.5) from the axis
+    REQUIRE_FALSE(brep::Slice(cone, planePoint, steep, brep::SliceKeep::Both, &up2, &dn2, &why));
+    REQUIRE(why == Problem::SliceCurvedFace);
+  }
+}
+
+TEST_CASE("Curved B2b-2 tail: a steep cone slice with a single same-rim notch (parabola regime)",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid cone;
+  REQUIRE(brep::MakeCone(World(), 6, 2, 8, &cone, &why));  // base r6 at z0, top r2 at z8, k=-0.5
+
+  const Vec3 planePoint{0, 0, 2.5};
+  const Vec3 pn = ray3d::Normalize(Vec3{0.8, 0.0, 0.4});  // parabola-tangent direction (nz=|k|*amp)
+  const double nx = pn.x, ny = pn.y, nz = pn.z;
+  const double C = ray3d::Dot(pn, planePoint);
+  const double k = (2.0 - 6.0) / 8.0;
+
+  // Independent reference (no reuse of any code under test): at each height z the cone's
+  // cross-section is a disk of radius rho(z), cut by the line nx*x+ny*y = C - nz*z - a standard
+  // circular-segment area in closed form, same method as the ellipse-regime test above (this
+  // reasoning holds regardless of regime: at any FIXED height, a plane always cuts a circle in one
+  // simple chord). Integrate over z numerically.
+  auto segmentAreaBelow = [&](double rho, double dist) {
+    if (dist >= rho) return kPi * rho * rho;
+    if (dist <= -rho) return 0.0;
+    return dist * std::sqrt(rho * rho - dist * dist) + rho * rho * std::asin(dist / rho) +
+           rho * rho * kPi * 0.5;
+  };
+  const double amp = std::sqrt(nx * nx + ny * ny);
+  double vBelowRef = 0.0;
+  const int nZ = 400000;
+  for (int i = 0; i < nZ; ++i) {
+    const double z = 8.0 * (i + 0.5) / nZ;
+    const double rho = 6.0 + k * z;
+    const double dist = (C - nz * z) / amp;
+    vBelowRef += segmentAreaBelow(rho, dist) * (8.0 / nZ);
+  }
+  const double coneVol = kPi * 8.0 / 3.0 * (36.0 + 12.0 + 4.0);
+  const double vAboveRef = coneVol - vBelowRef;
+
+  Solid up;
+  Solid dn;
+  REQUIRE(brep::Slice(cone, planePoint, pn, brep::SliceKeep::Both, &up, &dn, &why));
+  REQUIRE(brep::Validate(up) == Problem::Ok);
+  REQUIRE(brep::Validate(dn) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(up));
+  REQUIRE_FALSE(brep::SelfIntersects(dn));
+
+  const auto mUp = brep::ComputeMassProperties(up);
+  const auto mDn = brep::ComputeMassProperties(dn);
+  REQUIRE(mUp.valid);
+  REQUIRE(mDn.valid);
+  // Unlike the closed-form ellipse regime, this cut is a marched Intersection curve (ADR-045 (b)),
+  // so exact equality isn't achievable - same 1e-4 tolerance as the reference-volume checks below.
+  REQUIRE(mUp.volume + mDn.volume == Approx(coneVol).epsilon(1e-4));
+  // "above" is the +pn side, matching every other Slice recogniser's convention.
+  REQUIRE(mDn.volume == Approx(vBelowRef).epsilon(1e-4));
+  REQUIRE(mUp.volume == Approx(vAboveRef).epsilon(1e-4));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(dn, 0.02, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(vBelowRef).epsilon(0.01));
+
+  SECTION("surviving Translate at a survey-magnitude offset") {
+    const Solid moved = brep::Translate(dn, Vec3{1.9e6, 6.4e6, 1200.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vBelowRef).epsilon(1e-4));
+  }
+}
+
 TEST_CASE("Curved B2b-1: a tilted cylinder INTERSECT a box is an oblique elliptical-ended plug",
           "[brep][req314]") {
   Problem why = Problem::Ok;
@@ -3077,9 +3232,25 @@ TEST_CASE("Curved B2b-2: INTERSECT of a fully general (tilted AND skew) branch p
     REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(8e-3));
   }
 
-  SECTION("thin - thick of the general case is still refused - a later slice") {
+  SECTION("thin - thick of the general case splits the branch into two stubs") {
+    const double thinVol = kPi * r * r * 30.0;
     std::vector<Solid> out;
-    REQUIRE_FALSE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(out.size() == 2);
+    double total = 0.0;
+    for (const auto& sol : out) {
+      REQUIRE(brep::Validate(sol) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(sol));
+      REQUIRE(CountOf(sol).v == 4);
+      REQUIRE(CountOf(sol).e == 6);
+      REQUIRE(CountOf(sol).f == 4);
+      REQUIRE(brep::EulerCharacteristic(sol) == 2);
+      total += brep::ComputeMassProperties(sol).volume;
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(sol, 0.01, &t, &why));
+      RequireWindingMatchesNormals(t);
+    }
+    REQUIRE(total == Approx(thinVol - vref).epsilon(8e-3));
   }
 }
 
@@ -5223,4 +5394,340 @@ TEST_CASE("A closed wall's plan needs two loops, where Extrude takes one", "[bre
   // A solid cylinder, not a wall: the courtyard is filled in, and by more than the wall itself is.
   REQUIRE(brep::ComputeMassProperties(disc).volume == Approx(kPi * rOut * rOut * h).margin(1e-9));
   REQUIRE(brep::ComputeMassProperties(disc).volume > 3.0 * wallVolume);
+}
+
+// ---------------------------------------------------------------------------------------------
+// General trim loops (ADR-052, GitHub issue #306): `Face::paramLoops` is an additive field that
+// nothing yet renders, measures or picks. These tests exercise only what #306 itself owns — that
+// `Validate` accepts a well-formed general loop and refuses a malformed one by name — on hand-built
+// fixtures, since no primitive or Boolean builder populates the field yet (that stays true through
+// #307-#310).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// A face whose `loops` describes a single square ring (any planar box face will do — the general
+/// loop checks in `Validate` do not require `paramLoops` to geometrically match the 3D boundary,
+/// only to be internally well-formed, per ADR-052 (c): the polygon is a classification aid, not the
+/// authoritative curve).
+int FindSingleLoopPlaneFace(const Solid& s) {
+  for (std::size_t i = 0; i < s.faces.size(); ++i) {
+    if (s.faces[i].surface.kind == brep::SurfaceKind::Plane && s.faces[i].loops.size() == 1)
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+int FindTwoLoopPlaneFace(const Solid& s) {
+  for (std::size_t i = 0; i < s.faces.size(); ++i) {
+    if (s.faces[i].surface.kind == brep::SurfaceKind::Plane && s.faces[i].loops.size() == 2)
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+}  // namespace
+
+TEST_CASE("Validate accepts a face with a well-formed general trim loop", "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  brep::Face& f = box.faces[static_cast<std::size_t>(fi)];
+  // A simple CCW pentagon in (u,v).
+  f.paramLoops = {{{0.0, 0.0}, {4.0, 0.0}, {4.0, 2.0}, {2.0, 4.0}, {0.0, 2.0}}};
+  REQUIRE(brep::Validate(box) == Problem::Ok);
+}
+
+TEST_CASE("Validate refuses a general trim loop with too few points, by name", "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  box.faces[static_cast<std::size_t>(fi)].paramLoops = {{{0.0, 0.0}, {1.0, 1.0}}};
+  REQUIRE(brep::Validate(box) == Problem::GeneralLoopOpen);
+}
+
+TEST_CASE("Validate refuses a self-intersecting general trim loop, by name", "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  // A bow-tie: edges (0,0)-(4,4) and (4,0)-(0,4) cross in the middle.
+  box.faces[static_cast<std::size_t>(fi)].paramLoops = {{{0.0, 0.0}, {4.0, 4.0}, {4.0, 0.0}, {0.0, 4.0}}};
+  REQUIRE(brep::Validate(box) == Problem::GeneralLoopSelfIntersects);
+}
+
+TEST_CASE("Validate refuses a general trim loop wound the wrong way, by name", "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  // Same square as the accepted case, wound CW instead of CCW.
+  box.faces[static_cast<std::size_t>(fi)].paramLoops = {{{0.0, 0.0}, {0.0, 4.0}, {4.0, 4.0}, {4.0, 0.0}}};
+  REQUIRE(brep::Validate(box) == Problem::GeneralLoopWrongWinding);
+}
+
+TEST_CASE("Validate refuses a general trim loop whose paramLoops count disagrees with loops, by name",
+          "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  // The face has one 3D loop; give it two param loops.
+  box.faces[static_cast<std::size_t>(fi)].paramLoops = {{{0.0, 0.0}, {4.0, 0.0}, {4.0, 4.0}, {0.0, 4.0}},
+                                                         {{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}, {1.0, 2.0}}};
+  REQUIRE(brep::Validate(box) == Problem::GeneralLoopCountMismatch);
+}
+
+TEST_CASE("Validate accepts a general trim loop's hole nested inside its outer boundary",
+          "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid block;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -1), 1.0, 12.0, &cyl, &why));  // through-hole, z -1..11
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  const int fi = FindTwoLoopPlaneFace(r[0]);
+  REQUIRE(fi >= 0);
+  brep::Face& f = r[0].faces[static_cast<std::size_t>(fi)];
+  REQUIRE(f.loops.size() == 2);
+  // Outer CCW square, hole (a smaller square) CW, fully inside.
+  f.paramLoops = {{{-5.0, -5.0}, {5.0, -5.0}, {5.0, 5.0}, {-5.0, 5.0}},
+                  {{-1.0, -1.0}, {-1.0, 1.0}, {1.0, 1.0}, {1.0, -1.0}}};
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+}
+
+TEST_CASE("Validate refuses a general trim loop hole that lies outside its outer boundary, by name",
+          "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid block;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -1), 1.0, 12.0, &cyl, &why));
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  const int fi = FindTwoLoopPlaneFace(r[0]);
+  REQUIRE(fi >= 0);
+  brep::Face& f = r[0].faces[static_cast<std::size_t>(fi)];
+  // Hole entirely outside the outer square.
+  f.paramLoops = {{{-5.0, -5.0}, {5.0, -5.0}, {5.0, 5.0}, {-5.0, 5.0}},
+                  {{20.0, 20.0}, {20.0, 22.0}, {22.0, 22.0}, {22.0, 20.0}}};
+  REQUIRE(brep::Validate(r[0]) == Problem::GeneralLoopHoleNotNested);
+}
+
+TEST_CASE("A rectangle-form face validates byte-identically with an empty general trim loop",
+          "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 20, 10, 8, &box, &why));
+  for (const brep::Face& f : box.faces)
+    REQUIRE(f.paramLoops.empty());
+  REQUIRE(brep::Validate(box) == Problem::Ok);
+}
+
+// ---------------------------------------------------------------------------------------------
+// General trim loop mass properties (GitHub issue #307): the numeric integration path over
+// `Face::paramLoops`, additive alongside the closed-form rectangle path exercised everywhere else
+// in this file.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("A general trim loop tracing the full u/v rectangle matches the closed-form cylinder "
+          "integral",
+          "[brep][req307][adr052]") {
+  Problem why = Problem::Ok;
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), 3.0, 5.0, &cyl, &why));
+  const brep::MassProperties before = brep::ComputeMassProperties(cyl);
+  REQUIRE(before.valid);
+
+  int fi = -1;
+  for (std::size_t i = 0; i < cyl.faces.size(); ++i)
+    if (cyl.faces[i].surface.kind == brep::SurfaceKind::Cylinder) {
+      fi = static_cast<int>(i);
+      break;
+    }
+  REQUIRE(fi >= 0);
+  brep::Face& f = cyl.faces[static_cast<std::size_t>(fi)];
+  const double u0 = f.uStart;
+  const double u1 = f.uEnd;
+  const double h = f.surface.height;
+  // The exact same rectangle the closed-form path already integrates over, just handed to the
+  // general-loop path instead — CCW per Validate's winding rule.
+  f.paramLoops = {{{u0, 0.0}, {u1, 0.0}, {u1, h}, {u0, h}}};
+  REQUIRE(brep::Validate(cyl) == Problem::Ok);
+
+  const brep::MassProperties after = brep::ComputeMassProperties(cyl);
+  REQUIRE(after.valid);
+  REQUIRE(after.volume == Approx(before.volume).epsilon(1e-6));
+  REQUIRE(after.surfaceArea == Approx(before.surfaceArea).epsilon(1e-6));
+}
+
+TEST_CASE("A non-rectangular general trim loop integrates to the correct triangle area",
+          "[brep][req307][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  const double L = 10.0;
+  const double W = 6.0;
+  const double H = 4.0;
+  REQUIRE(brep::MakeBox(World(), L, W, H, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  brep::Face& f = box.faces[static_cast<std::size_t>(fi)];
+  // A right triangle with legs 3 and 4 (area 6) in the face's own (u,v) plane. It need not match the
+  // face's real rectangular 3D boundary — ADR-052 (c) treats `paramLoops` purely as a classification
+  // aid, so `Validate` does not require geometric agreement (see the pentagon test above).
+  f.paramLoops = {{{0.0, 0.0}, {3.0, 0.0}, {0.0, 4.0}}};
+  REQUIRE(brep::Validate(box) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(box);
+  REQUIRE(mp.valid);
+  const double triangleArea = 0.5 * 3.0 * 4.0;
+  const double expectedTotal = 2.0 * (L * W + L * H + W * H) - (L * W) + triangleArea;
+  REQUIRE(mp.surfaceArea == Approx(expectedTotal).margin(1e-6));
+}
+
+TEST_CASE("A general trim loop's hole is subtracted from a planar face's area",
+          "[brep][req307][adr052]") {
+  Problem why = Problem::Ok;
+  Solid block;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -1), 1.0, 12.0, &cyl, &why));  // through-hole, radius 1, z -1..11
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  const int fi = FindTwoLoopPlaneFace(r[0]);
+  REQUIRE(fi >= 0);
+
+  // Baseline: this face's real area is a 10x10 square minus the drilled circle (area 100 - pi).
+  const brep::MassProperties baseline = brep::ComputeMassProperties(r[0]);
+  REQUIRE(baseline.valid);
+
+  brep::Face& f = r[0].faces[static_cast<std::size_t>(fi)];
+  REQUIRE(f.loops.size() == 2);
+  // Replace the classification-aid polygon with an outer CCW square and a CW square hole (area 4)
+  // fully nested inside it — ADR-052 (c) does not require `paramLoops` to match the real 3D boundary
+  // (here a circle), only to be well-formed, so this exercises hole subtraction with simple
+  // arithmetic: the face's area should become exactly 100 - 4, replacing the true 100 - pi.
+  f.paramLoops = {{{-5.0, -5.0}, {5.0, -5.0}, {5.0, 5.0}, {-5.0, 5.0}},
+                  {{-1.0, -1.0}, {-1.0, 1.0}, {1.0, 1.0}, {1.0, -1.0}}};
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(r[0]);
+  REQUIRE(mp.valid);
+  const double expectedDelta = (100.0 - 4.0) - (100.0 - kPi);  // new face area minus the true one
+  REQUIRE(mp.surfaceArea - baseline.surfaceArea == Approx(expectedDelta).margin(1e-4));
+}
+
+// ---------------------------------------------------------------------------------------------
+// General trim loop tessellation (GitHub issue #308): the ear-clip-and-map path over
+// `Face::paramLoops`, whose triangulated area must agree with #307's numeric integral for the
+// same face.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("A general trim loop tracing the full u/v rectangle tessellates to the same area as the "
+          "closed-form cylinder",
+          "[brep][req308][adr052]") {
+  Problem why = Problem::Ok;
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), 3.0, 5.0, &cyl, &why));
+  brep::Tessellation before;
+  REQUIRE(brep::Tessellate(cyl, 0.05, &before, &why));
+
+  int fi = -1;
+  for (std::size_t i = 0; i < cyl.faces.size(); ++i)
+    if (cyl.faces[i].surface.kind == brep::SurfaceKind::Cylinder) {
+      fi = static_cast<int>(i);
+      break;
+    }
+  REQUIRE(fi >= 0);
+  brep::Face& f = cyl.faces[static_cast<std::size_t>(fi)];
+  const double u0 = f.uStart;
+  const double u1 = f.uEnd;
+  const double h = f.surface.height;
+  f.paramLoops = {{{u0, 0.0}, {u1, 0.0}, {u1, h}, {u0, h}}};
+  REQUIRE(brep::Validate(cyl) == Problem::Ok);
+
+  brep::Tessellation after;
+  REQUIRE(brep::Tessellate(cyl, 0.05, &after, &why));
+  REQUIRE(TessellatedArea(after) == Approx(TessellatedArea(before)).epsilon(0.01));
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(cyl);
+  REQUIRE(mp.valid);
+  REQUIRE(TessellatedArea(after) == Approx(mp.surfaceArea).epsilon(0.02));
+}
+
+TEST_CASE("A non-rectangular general trim loop on a planar face tessellates to the correct "
+          "triangle area with no gaps",
+          "[brep][req308][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10.0, 6.0, 4.0, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  brep::Face& f = box.faces[static_cast<std::size_t>(fi)];
+  f.paramLoops = {{{0.0, 0.0}, {3.0, 0.0}, {0.0, 4.0}}};
+  REQUIRE(brep::Validate(box) == Problem::Ok);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(box, 0.05, &t, &why));
+
+  // Only the modified face's tessellation should reflect the triangle; find its triangles by face
+  // index and sum their area directly.
+  double faceArea = 0.0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    if (t.triFace[i / 3] != fi)
+      continue;
+    const Vec3 a{t.vertsXyz[3 * t.indices[i]], t.vertsXyz[3 * t.indices[i] + 1], t.vertsXyz[3 * t.indices[i] + 2]};
+    const Vec3 b{t.vertsXyz[3 * t.indices[i + 1]], t.vertsXyz[3 * t.indices[i + 1] + 1],
+                 t.vertsXyz[3 * t.indices[i + 1] + 2]};
+    const Vec3 c{t.vertsXyz[3 * t.indices[i + 2]], t.vertsXyz[3 * t.indices[i + 2] + 1],
+                 t.vertsXyz[3 * t.indices[i + 2] + 2]};
+    faceArea += 0.5 * ray3d::Length(ray3d::Cross(ray3d::Sub(b, a), ray3d::Sub(c, a)));
+  }
+  REQUIRE(faceArea == Approx(0.5 * 3.0 * 4.0).margin(1e-9));
+}
+
+TEST_CASE("A general trim loop's hole is excluded from a planar face's tessellation", "[brep][req308][adr052]") {
+  Problem why = Problem::Ok;
+  Solid block;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -1), 1.0, 12.0, &cyl, &why));
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  const int fi = FindTwoLoopPlaneFace(r[0]);
+  REQUIRE(fi >= 0);
+
+  brep::Face& f = r[0].faces[static_cast<std::size_t>(fi)];
+  REQUIRE(f.loops.size() == 2);
+  f.paramLoops = {{{-5.0, -5.0}, {5.0, -5.0}, {5.0, 5.0}, {-5.0, 5.0}},
+                  {{-1.0, -1.0}, {-1.0, 1.0}, {1.0, 1.0}, {1.0, -1.0}}};
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+
+  double faceArea = 0.0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    if (t.triFace[i / 3] != fi)
+      continue;
+    const Vec3 a{t.vertsXyz[3 * t.indices[i]], t.vertsXyz[3 * t.indices[i] + 1], t.vertsXyz[3 * t.indices[i] + 2]};
+    const Vec3 b{t.vertsXyz[3 * t.indices[i + 1]], t.vertsXyz[3 * t.indices[i + 1] + 1],
+                 t.vertsXyz[3 * t.indices[i + 1] + 2]};
+    const Vec3 c{t.vertsXyz[3 * t.indices[i + 2]], t.vertsXyz[3 * t.indices[i + 2] + 1],
+                 t.vertsXyz[3 * t.indices[i + 2] + 2]};
+    faceArea += 0.5 * ray3d::Length(ray3d::Cross(ray3d::Sub(b, a), ray3d::Sub(c, a)));
+  }
+  REQUIRE(faceArea == Approx(100.0 - 4.0).margin(1e-6));
 }

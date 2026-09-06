@@ -1,5 +1,6 @@
 #include "LibreDwgCad.hpp"
 
+#include "AcisSatParser.hpp"
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "DxfColors.hpp"
@@ -259,6 +260,59 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
                   std::unordered_map<std::string, int>* skipHist);
 
+/// REQ-320 / ADR-051 (GitHub issue #299): a `3DSOLID` entity's geometry is an ACIS record stream,
+/// not lines/circles LibreDWG can hand back directly. `acis_data` is LibreDWG's already-decrypted
+/// payload — SAT (v1, text) or SAB (v2+, binary), per `version` (DXF 70). This importer supports SAT
+/// only (issue #301 tracks SAB); a SAB stream, or anything AcisSatParser refuses, is reported through
+/// the same `NoteSkip` mechanism an unrecognized entity type already uses (REQ-201: never silent).
+void ImportAcisSolid(AppCommandState& st, const Dwg_Entity__3DSOLID* sol, const Xf2& xf,
+                     const EntityAttributes& at, std::unordered_map<std::string, int>* skipHist) {
+  if (sol->acis_empty || sol->acis_data == nullptr) {
+    NoteSkip(skipHist, "3DSOLID(empty)");
+    return;
+  }
+  // A rotated or non-uniformly-scaled placement (a 3DSOLID reached through a rotated/scaled nested
+  // INSERT) would need every surface/edge frame in the imported solid transformed consistently, not
+  // just its vertices — out of scope this increment. The primary case (a block DEFINITION's own
+  // 3DSOLID, imported directly by BLOCKIMPORT) always reaches here with an identity transform.
+  const bool identityXf = std::fabs(xf.ox) < 1e-9 && std::fabs(xf.oy) < 1e-9 &&
+                           std::fabs(xf.ang) < 1e-9 && std::fabs(xf.sx - 1.0) < 1e-9 &&
+                           std::fabs(xf.sy - 1.0) < 1e-9;
+  if (!identityXf) {
+    NoteSkip(skipHist, "3DSOLID(rotated/scaled placement not supported)");
+    return;
+  }
+  if (sol->version >= 2) {
+    NoteSkip(skipHist, "3DSOLID(SAB binary ACIS not supported, issue #301)");
+    return;
+  }
+  // `acis_data` is LibreDWG's decrypted buffer; the SAT-decryption cipher preserves length, so the
+  // encrypted blocks' summed size is the decrypted length — read exactly that many bytes rather than
+  // trusting a NUL terminator, which a corrupted or unusually-encoded file need not have.
+  std::string sat;
+  if (sol->num_blocks > 0 && sol->block_size != nullptr) {
+    std::size_t total = 0;
+    for (BITCODE_BL i = 0; i < sol->num_blocks; ++i)
+      total += sol->block_size[i];
+    sat.assign(reinterpret_cast<const char*>(sol->acis_data), total);
+  } else {
+    sat.assign(reinterpret_cast<const char*>(sol->acis_data));
+  }
+  const acissat::ImportResult r = acissat::ImportSatSolid(sat, "3DSOLID");
+  if (!r.ok) {
+    NoteSkip(skipHist, ("3DSOLID(" + r.error + ")").c_str());
+    return;
+  }
+  // Every other imported entity localizes against the document origin (LocalLine/LocalCircle/etc.,
+  // above) — a solid's vertices and surface/edge frames need the identical shift, or it renders and
+  // exports offset from every other entity in a state-plane drawing (REQ-101's Local storage
+  // invariant).
+  const brep::Solid localized =
+      brep::Translate(r.solid, ray3d::Vec3{-st.worldDocumentOriginX, -st.worldDocumentOriginY, 0.0});
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(localized));
+  st.cadSolidAttrs.push_back(at);
+}
+
 void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
                    std::unordered_map<std::string, int>* skipHist) {
   if (depth > 8 || ent == nullptr || ent->tio.INSERT == nullptr)
@@ -409,6 +463,10 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
   }
   if (ty == DWG_TYPE_INSERT) {
     ExplodeInsert(st, dwg, ent, depth, skipHist);
+    return;
+  }
+  if (ty == DWG_TYPE__3DSOLID && ent->tio._3DSOLID != nullptr) {
+    ImportAcisSolid(st, ent->tio._3DSOLID, xf, at, skipHist);
     return;
   }
   if (ty == DWG_TYPE_SEQEND || ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_ENDBLK)

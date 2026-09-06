@@ -2955,3 +2955,203 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   never depth-tested, which is right for 2D linework and wrong for a solid's far-side face, and that
   wants a screenshot rather than an argument); grips; gizmos; fillet and chamfer; picking a
   sub-object of a mesh or a TIN surface, neither of which has face identity (ADR-026 (g), REQ-070).
+
+### ADR-051 — ACIS 3D-solid import: SAT-only, analytic primitives that fit the existing rectangular face model, refuse otherwise   (2026-09-05, accepted)
+
+- **Context.** Issue #299: vendor block-library `.dwg`/`.dxf` files (e.g. Plant 3D piping symbols) commonly
+  hold their only geometry as an ACIS `3DSOLID` entity — LibreDWG decrypts the container but exposes only
+  the raw ACIS record stream (`Dwg_Entity__3DSOLID::acis_data`), never tessellating it. Three questions
+  needed a recorded answer before any code, per CLAUDE.md's SPEC GAP process:
+
+  **(a) SAT vs. SAB.** `_3DSOLID_FIELDS::version` (DXF 70) distinguishes ACIS v1 text (SAT) from v2+
+  binary (SAB) framing of the same record model. **Decision: SAT only for the first increment.** SAT's
+  tokens are whitespace-delimited text, trivial to hand-parse; SAB uses typed binary tokens and would
+  double the parser surface for the same topology-interpretation logic. Deferred to **#301**, which reuses
+  whatever record-interpretation code this ADR's implementation produces.
+
+  **(b) Surface/curve scope.** ACIS analytic surfaces (`plane-surface`, `cone-surface` — which also
+  encodes a cylinder as the zero-half-angle case, `sphere-surface`, `torus-surface`) map directly onto
+  GoSurvey's existing `brep::SurfaceKind` (`Plane`/`Cylinder`/`Cone`/`Sphere`/`Torus`, ADR-045). ACIS
+  free-form surfaces (`spline-surface`) and derived surfaces (blends, sweeps, lofts not already reduced to
+  an analytic type by the file writer) have no such direct mapping and would route through
+  `SurfaceKind::Nurbs` (ADR-048), which needs its own knot/control-point/trim design. **Decision: analytic
+  primitive surfaces only for the first increment.** Deferred to **#300**.
+
+  **(b-1) Within "analytic primitives", plane/cylinder/cone ship first, and only their FULL-revolve
+  form; sphere/torus, and a PARTIAL cylinder/cone revolve, are each a fast-follow of this same
+  feature.** A full revolve (two full-circle rim edges, no seam) has a fixed `u` span — `[0, 2*pi)` —
+  independent of the loop's actual geometry, so it needs no derivation beyond recognizing the shape.
+  A partial revolve (a seam line, an arc, a seam line, an arc) is an equally recognizable loop shape,
+  but its `u` span is NOT fixed — it has to come from the seam edges' actual angular position in the
+  face's own frame, a materially different derivation this increment does not implement. **Review of
+  this very change caught a first draft that recognized the partial shape but then defaulted its span
+  to the full revolve's `[0, 2*pi)` regardless — a real defect (silently over-reporting area/volume on
+  a partial cylindrical wall) that would have shipped invisibly, since `Validate` checks topology, not
+  a face's span against its loop's actual geometric extent.** Landing the correct derivation needs its
+  own fixture that actually exercises a non-full span, which this ADR's revision does not yet have;
+  the honest fix is to ship only the shape this increment can prove correct (a hand-authored full
+  cylinder fixture, ADR-051's own sanctioned approach) and refuse the partial shape by name, rather
+  than land an unverified formula. A sphere's loop can pinch to a point at a pole (a degenerate
+  "vertex" the loop's edges meet at rather than a fourth corner) and a torus has its own seam/pole
+  combinations; both need a genuinely different loop-shape recognizer than the cylinder/cone one, not
+  a parameter change to it. Rather than risk a hastily-generalized recognizer being subtly wrong in
+  exactly the cases that are hardest to unit test by hand, **this increment ships plane and the
+  full-revolve form of cylinder/cone only**; sphere, torus, and the partial-revolve span derivation are
+  each refused by
+  name ("recognized but not yet mapped") and tracked as the next increment of #299 itself, not a new
+  issue — the parser, topology walk and refusal plumbing this ADR builds are unchanged by adding them.
+
+  **(c) The face-boundary mismatch, and why it forced a second decision (issue #302).** A general ACIS
+  face's boundary is an arbitrary closed loop of edges in parameter space. `brep::Face` (ADR-045) instead
+  carries a **rectangular** parametric span (`uStart/uEnd/vStart/vEnd`) — every existing primitive and
+  Boolean-result builder produces faces whose boundary is exactly one such rectangle, and `Validate`, mass
+  properties and tessellation all assume it. Making the kernel accept a general trimmed loop is a real
+  architectural extension (it touches every one of those consumers, for every face kind, not just the ones
+  ACIS exercises) — far beyond an importer's scope, and requiring a REQ/ADR of its own. **Decision:
+  #299 accepts only ACIS solids whose every face's boundary reduces to that rectangle** (checked by
+  walking each face's loop, converting vertices to the surface's own parameters, and confirming the loop
+  is exactly the surface's iso-parameter rectangle at those bounds, with at most a hole loop the kernel's
+  existing "extra loop" convention already supports). Anything else — an irregularly trimmed face, a loop
+  that doesn't close onto an axis-aligned parameter rectangle — is refused by name. General trimmed-face
+  support is tracked separately as **#302** and is not a prerequisite for #299.
+
+  **(d) Unsupported content: refuse, never approximate.** Matches the export precedent already recorded
+  (D-2026-09-01-b, which refuses to tessellate a GoSurvey solid into DWG rather than write a lossy
+  `3DSOLID`) and REQ-201 (no silent data loss). Every refusal names the entity handle and the specific
+  record/face that could not be represented — an empty block definition with no message is exactly the
+  failure issue #299 was filed to fix, and a silently-approximated one would be worse: a shape that reads
+  as authoritative but disagrees with the source file.
+
+- **Decision.**
+  1. A new pure, dependency-free module, `src/util/AcisSatParser.{hpp,cpp}` (Domain layer, no LibreDWG/GL/
+     ImGui dependency — same ADR-002 pressure as `brep` itself), tokenizes a SAT text stream into records
+     keyed by their `$n` position, and resolves the body → lump → shell → face → loop → coedge → edge →
+     vertex → point graph into a `brep::Solid` by direct translation (ACIS already gives explicit topology,
+     so this is a graph translation, not a primitive-recognition problem) — checking (c)'s rectangle
+     constraint per face and returning a per-face/per-entity `Problem`-style reason on the first mismatch.
+  2. `src/io/LibreDwgCad.cpp`'s `ImportObject` gains a `DWG_TYPE__3DSOLID` case (alongside the existing
+     flat dispatch chain) that refuses immediately on `version` indicating SAB, then hands `acis_data` to
+     the new parser; a refusal reaches the same `NoteSkip` mechanism the dispatch's fallthrough already
+     uses, so the entity is reported, not silently dropped.
+  3. `CadBlockContent` (`src/util/cadblock.hpp`) gains a `solids` member alongside its existing `meshes`,
+     and `CadBlocks.cpp`'s capture/load-back/`DrawingHasCaptureableGeometry` functions treat it the same
+     way they already treat meshes — closing the round-trip gap issue #299 named for *any* solid-bearing
+     block (including a native GoSurvey solid WBLOCK'd), not only an ACIS-derived one.
+
+- **Consequences.**
+  - A real-world file using free-form/blend surfaces, SAB encoding, or a non-rectangular trim (e.g. a
+    filleted edge written back as an analytic-looking but irregularly-bounded face) imports nothing from
+    that `3DSOLID` and reports why, rather than the silent empty result issue #299 was filed against.
+  - #300, #301 and #302 each build on this ADR's module/plumbing rather than duplicating it.
+  - `kGsFormatVersion` is unaffected: an imported solid becomes an ordinary `brep::Solid` with
+    `PrimitiveKind::None` (ADR-045's "no recipe" case, already handled — a Boolean result has the same
+    shape), so nothing about `.gs` serialization changes.
+
+- **Out of scope and not designed for:** SAB (#301); spline/blend/swept surfaces (#300); general trimmed
+  face boundaries (#302); DWG *export* of solids (unchanged, D-2026-09-01-b); ACIS `wire` bodies (curves
+  with no faces) and `sheet` bodies (open shells) — this ADR covers solid (`is_solid` lump) bodies only,
+  matching REQ-313's "the solid kernel" framing; a future issue would need to name wire/sheet import if
+  wanted.
+
+### ADR-052 — General trimmed-boundary faces: an additive parameter-space loop, not a rectangle replacement   (2026-09-05, accepted)
+
+- **Context.** Issue #302 (split from #299/ADR-051 (c)): `brep::Face`'s boundary is today always the
+  surface's own iso-parameter **rectangle** — `uStart/uEnd/vStart/vEnd` — and every consumer (`Validate`,
+  mass-property quadrature, tessellation, sub-object picking) assumes it. ADR-051 (c) refused any ACIS
+  face whose loop is not that rectangle rather than guess at a general representation under an
+  importer's time pressure. Issue #305 asks for that representation decision on its own, design only, no
+  kernel code. `brep::Face` already carries `loops` — an ordered ring of 3D `Edge`/`EdgeUse` records
+  (`Line`/`Arc`/`Ellipse`/`Intersection`, ADR-045) — but today those edges are always constrained to trace
+  exactly the iso-parameter rectangle; `uStart/uEnd/vStart/vEnd` is carried explicitly alongside them
+  rather than derived from the loop, because for a rectangle the two must always agree and re-deriving
+  the span from the loop every time it's needed would be strictly more work for the same answer. The open
+  question is how to represent a loop that does **not** reduce to that rectangle.
+
+  Three sub-decisions, matching the issue's checklist:
+
+  **(a) Representation: additive field, not a replacement.** `Face` gains a new field —
+  `std::vector<std::vector<curveintersect::Vec2>> paramLoops` — index-aligned with `loops` (one 2D
+  polygon per 3D loop: `paramLoops[0]` for the outer boundary, further entries for holes, matching the
+  existing "extra loop is a hole" convention). **Empty `paramLoops` (the default) means the face is
+  unchanged: rectangle form, `uStart/uEnd/vStart/vEnd` is the authoritative boundary, exactly today's
+  behavior, byte-identical validation.** A non-empty `paramLoops` marks the face as **general form**;
+  `uStart/uEnd/vStart/vEnd` on a general-form face is retained anyway, but repurposed as a cheap
+  axis-aligned bounding box of `paramLoops[0]` — an optional fast-reject before the real point-in-loop
+  test in #307/#308/#309's implementations, not a second source of truth (a general-form face's bbox is
+  computed from its polygon, never authored independently, so the two can't disagree). This was chosen
+  over replacing the rectangle fields outright because every existing primitive and Boolean-result
+  builder (REQ-313/314/315) already emits valid rectangle-form faces; forcing all of them to also
+  populate a parameter polygon for a rectangle they already describe exactly would be churn with no
+  behavioral change, for dozens of call sites, to satisfy a consumer (ACIS import) that doesn't need it.
+
+  **(b) Rectangle stays the fast path.** No existing primitive or Boolean builder changes as part of this
+  ADR or its own implementation issue (#306): they keep emitting rectangle-form faces, and `Validate`,
+  mass properties, tessellation and picking keep using today's closed-form/rectangle-quadrature paths for
+  them unchanged. General-form handling in #307–#309 is an **additive branch** keyed on `paramLoops`
+  being non-empty, not a replacement of the existing code paths.
+
+  **(c) What bounds a general loop, and why not reuse `Edge` curve kinds directly.** `paramLoops`'
+  polygon is a **straight-line polyline in (u,v) space** — literally a sequence of `Vec2` points, closed
+  by wrapping back to the first. This is deliberately the narrowest option the issue offers ("an
+  arbitrary polyline of param-space points"), sized to what #310 (the first real consumer, ACIS import)
+  actually needs: ACIS coedges resolve to line, circle/arc, or ellipse curves (never the procedural
+  `Intersection` kind, which has no closed-form parameter-space projection and is not something an
+  imported file can produce), and REQ-314's precedent for those already gives a way to sample a curved
+  edge finely into (u,v) points at import time — the polyline is a **classification aid**, not the
+  boundary's geometric record. **The true 3D boundary curve stays the existing `loops`/`Edge` data**
+  (used for the shell's manifold "every edge twice" check, for rendering the actual edge, and as the
+  parameterization the surface evaluator maps through) — `paramLoops` exists only so #307's quadrature,
+  #308's tessellation clipping and #309's picking each have a fast, uniform "is this (u,v) inside the
+  face" test without every one of them re-deriving a point-in-loop test from `Edge` curve kinds
+  individually. A curved (`Arc`/`Ellipse`) boundary edge therefore contributes several polyline vertices
+  to `paramLoops` rather than one; the sampling density needed to keep classification error under
+  REQ-314's existing relative-1e-6 tolerance is an implementation detail for #306 (which builds the first
+  populated `paramLoops`) to pick and test against a known shape, not fixed by this ADR. Because
+  `paramLoops` never carries the authoritative geometry, an under-sampled polyline is a latent bug in a
+  later increment's numbers, never a silent loss of the imported shape itself — the exact curve is still
+  in `loops`.
+
+  **(d) Scope handed to follow-ups, in order.** This ADR decides representation only; no kernel code
+  changes here (issue #305's own "not in scope"). The accepted follow-up order is **#306** (add
+  `paramLoops` to `Face`, extend `Validate` for closed/simple/correctly-wound/nested-holes general loops,
+  decide `.gs` round-trip for a hand-built fixture) → **#307** (mass-property quadrature restricted to a
+  general loop's interior) → **#308** (tessellation clipped to a general loop) → **#309** (point-in-loop
+  sub-object picking) → **#310** (ACIS import stops refusing non-rectangular faces, wiring its coedge
+  data into `paramLoops`/`loops` per (c)). Each is independently reviewable and each can ship without the
+  ones after it still working (a `paramLoops`-bearing `Face` that #307 doesn't yet integrate over
+  correctly is a bug in #307, not a reason to hold back #306).
+
+  **(e) Interaction with `SurfaceKind::Nurbs` (ADR-048).** No special case needed. A `Nurbs` face already
+  repurposes `uStart/uEnd/vStart/vEnd` as the patch's parameter rectangle rather than an angular span
+  (ADR-048); `paramLoops` sits at the same level — a boundary within that surface's own (u,v) domain,
+  analytic or freeform alike. A trimmed freeform patch (the fully-general case a real kernel supports,
+  named in #302's own checklist) is therefore already representable as a `Nurbs` surface with a
+  non-empty `paramLoops`, with no further design decision required here; whether any near-term issue
+  actually builds one is separate from whether the representation supports it.
+
+- **Decision.**
+  1. `brep::Face` gains `std::vector<std::vector<curveintersect::Vec2>> paramLoops;` (default empty),
+     index-aligned with `loops`, per (a).
+  2. Empty `paramLoops` is the rectangle form and is byte-identical to today's behavior in every consumer;
+     non-empty is the general form and is handled by an additive branch in each consumer, never a
+     replacement of the rectangle-form path.
+  3. `paramLoops` holds only straight-line (u,v) polygons (outer + hole), used exclusively for
+     inside/outside classification; `loops`' existing `Edge` records remain the sole authoritative record
+     of the 3D boundary curve.
+  4. Implementation is sequenced #306 → #307 → #308 → #309 → #310, each its own issue/PR.
+
+- **Consequences.**
+  - No behavior change for any existing solid: every current primitive/Boolean builder leaves
+    `paramLoops` empty, so `Validate`/mass-properties/tessellation/picking see only the rectangle form
+    they already handle.
+  - #306–#310 each have an unambiguous, narrow scope with a clear "done" test, per (d).
+  - A face kind or trim shape ACIS (or any future importer) produces that cannot be reduced to a closed
+    polyline in (u,v) — e.g. a loop that is not a simple polygon once sampled — is still refused by name
+    at import time (REQ-201); `paramLoops` gives the importer a target to hit, not a guarantee every ACIS
+    face can hit it.
+
+- **Out of scope and not designed for:** any kernel code (issue #305 is design-only; #306 makes the first
+  code change); a general (u,v) *curve* record for `paramLoops` beyond straight polylines (deferred
+  indefinitely — no consumer needs it, per (c)); `Intersection`-kind boundary edges in a general loop
+  (no imported or generated content produces one yet); serialization details for a general-form face
+  (`.gs` field layout, version bump if any) — left to #306 to decide and record.

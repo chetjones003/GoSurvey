@@ -316,6 +316,37 @@ Partial-length pocket, two-face slot, and tilted box still refused by name; a fu
 reports `BooleanEmptyResult`; a disjoint box returns the cylinder unchanged. Full suite green (1116).
 Still deferred: partial-length pockets, slots, corner clips, tilted `cylinder − box`.
 
+**PROGRESS 2026-09-04 — fully general branch-pipe `thin − thick` done (issue #283, split from #242).**
+`BuildGeneralBranchPipeThinStub` generalises `BuildBranchPipeThinStub` (tilt only) and
+`BuildSkewBranchPipeThinStub` (offset only) exactly the way `BuildGeneralBranchPipeIntersection`
+generalises their non-stub siblings: same 4v/6e (2 procedural)/4f χ=2 topology, `cpt(φ)` the general
+quadratic, and the thick-wall dimple's angular extent found by the same 360-sample scan-with-margin
+`BuildGeneralBranchPipeIntersection` uses for its mouth patches (no closed form once both `alpha` and
+`g` are nonzero). `TryBooleanBranchPipe`'s general-case `thin − thick` guard now dispatches two stubs.
+
+This is the item the 2026-09-04 session earlier in the day **abandoned** (see the prior entry below) —
+this attempt used the identical topology/formulas and it built and validated correctly. Root cause of
+the earlier failure: not a topology or winding bug at all. `Validate`'s point-invariance closure check
+(`VolumeAbout` from two reference points) was failing by a small margin — diff ≈0.009 against a
+`closeTol` ≈0.0088 for this specific config — purely a **quadrature accuracy** shortfall in
+`IntegrateCylinderFaceNumeric`'s `GradedGaussIntegrate(f.uStart, f.uEnd, 22, ...)`: the dimple face's
+scanned `[uLo, uHi]` band pads a margin around the true mouth extent, and the *cosine-graded* panel
+placement (clustering toward the domain's own ends) doesn't concentrate resolution at the interior
+support/no-support edge that padding creates. Confirmed by convergence, not guesswork: bumping the
+panel count alone (22→200, `scan` left at 96) collapsed the residual by ~50×; a small sweep found 40
+panels was the last one to fail (diff 0.0071) and 48 the value shipped, with real margin above every
+sampled config. This raises the panel count for *every* numeric cylinder face (all of B2b-2's
+procedural-curve solids), not just this one — full suite re-run green at 48 (953 Catch2 cases /
+8,158,654 assertions, 1152 ctest), runtime unchanged. New test:
+"thin - thick of the general case splits the branch into two stubs" (`BrepTests.cpp`), replacing the
+old "is still refused" placeholder, using the same `r=1.8, R=5.0, alpha=25°, g=1.5` fixture as the
+section's other three ops. **The lesson for next time a `NotClosed` shows up on a numerically
+integrated solid: check quadrature convergence (bump panels/scan and see if the residual shrinks)
+*before* re-deriving windings by hand** — this is exactly the "VolumeAbout per-face" instrumentation
+the abandoned entry recommended, just applied to the integrator's resolution rather than the topology.
+
+Only the cone parabola/hyperbola open-curve item remains on issue #283.
+
 ## Verification
 
 `build-project`, `testing` (full `BrepTests` + `.gs` migration + wider suite), `code-review`,
