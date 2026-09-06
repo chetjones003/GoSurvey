@@ -5188,85 +5188,119 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       std::snprintf(buf, sizeof(buf), "%s", line);
       ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
     };
-    const float wOpen = 8.f + colW({"Edit Block", "Save Block", "Test Block"});
-    ribbonSpecs.push_back({wOpen, wOpen, [&]() {
-      const float cw = colW({"Edit Block", "Save Block", "Test Block"});
-      RibbonSectionBegin("RibbonSecBeOpen", "Open/Save", wOpen, panelH);
-      if (smallBtn("##BeEdit", RibbonIconKind::BlockEditor, "Edit Block", cw))
-        CadBlocksOpenEditPicker(cmd, log);
-      RibbonItemHelp("Edit Block — BEDIT the selected INSERT, or the definition already open.");
-      if (smallBtn("##BeSave", RibbonIconKind::BeSaveBlock, "Save Block", cw))
-        beditSubmit("BSAVE");
-      RibbonItemHelp("Save Block — BSAVE. References update immediately.");
-      RibbonNyiButton("##BeTest", RibbonIconKind::BlockEditor, "Test Block", ImVec2(cw, rowH), RibbonLabel::Right);
-      RibbonSectionEnd();
-    }});
-    const float wGeom = 8.f + colW({"Auto Constrain", "Show/Hide", "Show All"});
-    ribbonSpecs.push_back({wGeom, wGeom, [&]() {
-      const float cw = colW({"Auto Constrain", "Show/Hide", "Show All"});
-      RibbonSectionBegin("RibbonSecBeGeom", "Geometric", wGeom, panelH);
-      RibbonNyiButton("##BeAutoC", RibbonIconKind::BeAutoConstrain, "Auto Constrain", ImVec2(cw, rowH), RibbonLabel::Right);
-      RibbonNyiButton("##BeShHide", RibbonIconKind::BeConstraintShow, "Show/Hide", ImVec2(cw, rowH), RibbonLabel::Right);
-      RibbonNyiButton("##BeShAll", RibbonIconKind::BeConstraintShow, "Show All", ImVec2(cw, rowH), RibbonLabel::Right);
-      RibbonSectionEnd();
-    }});
-    const float wDim = 8.f + colW({"Linear", "Aligned"});
-    ribbonSpecs.push_back({wDim, wDim, [&]() {
-      const float cw = colW({"Linear", "Aligned"});
-      RibbonSectionBegin("RibbonSecBeDim", "Dimensional", wDim, panelH);
-      RibbonNyiButton("##BeDimL", RibbonIconKind::DimLinear, "Linear", ImVec2(cw, rowH), RibbonLabel::Right);
-      RibbonNyiButton("##BeDimA", RibbonIconKind::Dim, "Aligned", ImVec2(cw, rowH), RibbonLabel::Right);
-      RibbonSectionEnd();
-    }});
-    const float wMan = 8.f + colW({"Block Table", "Parameters", "Palettes"});
-    ribbonSpecs.push_back({wMan, wMan, [&]() {
-      const float cw = colW({"Block Table", "Parameters", "Palettes"});
-      RibbonSectionBegin("RibbonSecBeMan", "Manage", wMan, panelH);
-      RibbonNyiButton("##BeBTable", RibbonIconKind::BeBlockTable, "Block Table", ImVec2(cw, rowH), RibbonLabel::Right);
-      RibbonNyiButton("##BePMan", RibbonIconKind::BeParameters, "Parameters", ImVec2(cw, rowH), RibbonLabel::Right);
-      if (smallBtn("##BePalettes", RibbonIconKind::BePalettes, "Palettes", cw))
-        cmd.blockAuthoringPaletteOpen = !cmd.blockAuthoringPaletteOpen;
-      RibbonItemHelp("Authoring Palettes — Parameters, Actions, Parameter Sets, Constraints.");
-      RibbonSectionEnd();
-    }});
-    const float wAct = 8.f + colW({"Point", "Linear", "Polar"}) + 4.f + colW({"XY", "Rotation", "Align"}) + 4.f +
-                       colW({"Flip", "Visibility", "Lookup"}) + 4.f + colW({"Basepoint"});
-    ribbonSpecs.push_back({wAct, wAct, [&]() {
-      const float c0 = colW({"Point", "Linear", "Polar"});
-      const float c1 = colW({"XY", "Rotation", "Align"});
-      const float c2 = colW({"Flip", "Visibility", "Lookup"});
-      const float c3 = colW({"Basepoint"});
-      RibbonSectionBegin("RibbonSecBeAct", "Action Parameters", wAct, panelH);
-      auto addP = [&](const char* kind, RibbonIconKind icon, const char* id, const char* label, float cw) {
-        if (smallBtn(id, icon, label, cw)) {
-          char line[96];
-          std::snprintf(line, sizeof(line), "BPARAM %s1, %s", label, kind);
-          ProcessCommandLineSubmit(line, static_cast<int>(sizeof(line)), cmd, log);
-        }
+    {
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##BeEdit", (int)RibbonIconKind::BlockEditor, nullptr, "Edit Block", false,
+                 "Edit Block — BEDIT the selected INSERT, or the definition already open.", false),
+          rowBtn("##BeSave", (int)RibbonIconKind::BeSaveBlock, nullptr, "Save Block", false,
+                 "Save Block — BSAVE. References update immediately.", false),
+          rowBtn("##BeTest", (int)RibbonIconKind::BlockEditor, nullptr, "Test Block", true,
+                 "Test Block — not implemented yet.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecBeOpen", "Open/Save", spec, [&](const std::string& id) {
+          if (id == "##BeEdit") CadBlocksOpenEditPicker(cmd, log);
+          else if (id == "##BeSave") beditSubmit("BSAVE");
+        });
+      }});
+    }
+    {
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##BeAutoC", (int)RibbonIconKind::BeAutoConstrain, nullptr, "Auto Constrain", true,
+                 "Auto Constrain — not implemented yet.", false),
+          rowBtn("##BeShHide", (int)RibbonIconKind::BeConstraintShow, nullptr, "Show/Hide", true,
+                 "Show/Hide — not implemented yet.", false),
+          rowBtn("##BeShAll", (int)RibbonIconKind::BeConstraintShow, nullptr, "Show All", true,
+                 "Show All — not implemented yet.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecBeGeom", "Geometric", spec, nullptr);
+      }});
+    }
+    {
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##BeDimL", (int)RibbonIconKind::DimLinear, nullptr, "Linear", true, "Linear — not implemented yet.",
+                 false),
+          rowBtn("##BeDimA", (int)RibbonIconKind::Dim, nullptr, "Aligned", true, "Aligned — not implemented yet.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecBeDim", "Dimensional", spec, nullptr);
+      }});
+    }
+    {
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##BeBTable", (int)RibbonIconKind::BeBlockTable, nullptr, "Block Table", true,
+                 "Block Table — not implemented yet.", false),
+          rowBtn("##BePMan", (int)RibbonIconKind::BeParameters, nullptr, "Parameters", true,
+                 "Parameters — not implemented yet.", false),
+          rowBtn("##BePalettes", (int)RibbonIconKind::BePalettes, nullptr, "Palettes", false,
+                 "Authoring Palettes — Parameters, Actions, Parameter Sets, Constraints.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecBeMan", "Manage", spec, [&](const std::string& id) {
+          if (id == "##BePalettes") cmd.blockAuthoringPaletteOpen = !cmd.blockAuthoringPaletteOpen;
+        });
+      }});
+    }
+    {
+      // Every button here dispatches the same BPARAM command shape, differing only in the parameter
+      // kind keyword and the on-screen label used as BPARAM's name argument.
+      auto beParam = [](const char* id, int iconKind, const char* label, const char* kind) {
+        ribbonlayout::RibbonButtonSpec b;
+        b.id = id;
+        b.iconKind = iconKind;
+        b.label = label;
+        b.tooltip = kind;  // carries the BPARAM kind keyword through to onClick below
+        return b;
       };
-      ImGui::BeginGroup();
-      addP("point", RibbonIconKind::BeParamPoint, "##BePPoint", "Point", c0);
-      addP("linear", RibbonIconKind::BeParamLinear, "##BePLin", "Linear", c0);
-      addP("polar", RibbonIconKind::BeParamPolar, "##BePPol", "Polar", c0);
-      ImGui::EndGroup();
-      ImGui::SameLine(0, 4);
-      ImGui::BeginGroup();
-      addP("move", RibbonIconKind::BeParamXY, "##BePXY", "XY", c1);
-      addP("rotation", RibbonIconKind::BeParamRotation, "##BePRot", "Rotation", c1);
-      addP("linear", RibbonIconKind::BeParamAlignment, "##BePAln", "Align", c1);
-      ImGui::EndGroup();
-      ImGui::SameLine(0, 4);
-      ImGui::BeginGroup();
-      addP("flip", RibbonIconKind::BeParamFlip, "##BePFlip", "Flip", c2);
-      addP("visibility", RibbonIconKind::BeParamVisibility, "##BePVis", "Visibility", c2);
-      addP("lookup", RibbonIconKind::BeParamLookup, "##BePLook", "Lookup", c2);
-      ImGui::EndGroup();
-      ImGui::SameLine(0, 4);
-      ImGui::BeginGroup();
-      addP("point", RibbonIconKind::BeParamBasepoint, "##BePBase", "Basepoint", c3);
-      ImGui::EndGroup();
-      RibbonSectionEnd();
-    }});
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          columnOfButtons({
+              beParam("##BePPoint", (int)RibbonIconKind::BeParamPoint, "Point", "point"),
+              beParam("##BePLin", (int)RibbonIconKind::BeParamLinear, "Linear", "linear"),
+              beParam("##BePPol", (int)RibbonIconKind::BeParamPolar, "Polar", "polar"),
+          }),
+          columnOfButtons({
+              beParam("##BePXY", (int)RibbonIconKind::BeParamXY, "XY", "move"),
+              beParam("##BePRot", (int)RibbonIconKind::BeParamRotation, "Rotation", "rotation"),
+              beParam("##BePAln", (int)RibbonIconKind::BeParamAlignment, "Align", "linear"),
+          }),
+          columnOfButtons({
+              beParam("##BePFlip", (int)RibbonIconKind::BeParamFlip, "Flip", "flip"),
+              beParam("##BePVis", (int)RibbonIconKind::BeParamVisibility, "Visibility", "visibility"),
+              beParam("##BePLook", (int)RibbonIconKind::BeParamLookup, "Lookup", "lookup"),
+          }),
+          columnOfButtons({
+              beParam("##BePBase", (int)RibbonIconKind::BeParamBasepoint, "Basepoint", "point"),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecBeAct", "Action Parameters", spec, [&](const std::string& id) {
+          // Find the clicked button's spec to recover its label + BPARAM kind (stashed in tooltip).
+          for (const ribbonlayout::RibbonGroupSpec& g : spec.groups)
+            for (const ribbonlayout::RibbonButtonSpec& b : g.buttons)
+              if (b.id == id) {
+                char line[96];
+                std::snprintf(line, sizeof(line), "BPARAM %s1, %s", b.label.c_str(), b.tooltip.c_str());
+                ProcessCommandLineSubmit(line, static_cast<int>(sizeof(line)), cmd, log);
+                return;
+              }
+        });
+      }});
+    }
+    // Visibility (issue #336): a single live combobox, not a button — nothing for
+    // RibbonButtonSpec/RibbonLayout to represent here, so this stays hand-drawn (same reasoning as
+    // the Hatch contextual tab, issue #335).
     ribbonSpecs.push_back({160.f, 160.f, [&]() {
       RibbonSectionBegin("RibbonSecBeVis", "Visibility", 160.f, panelH);
       const int di = CadBlockFindDef(cmd.blockDefs, cmd.blockEditorName);
@@ -5288,6 +5322,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }
       RibbonSectionEnd();
     }});
+    // Close (issue #336): a deliberately red-styled warning button (PushStyleColor) — the engine's
+    // RibbonButtonEx chrome has no per-button color override, so this one stays hand-drawn rather
+    // than lose its "this ends the edit session" visual distinctness.
     ribbonSpecs.push_back({136.f, 136.f, [&]() {
       RibbonSectionBegin("RibbonSecBeClose", "Close", 136.f, panelH);
       ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(180, 40, 40, 255));
