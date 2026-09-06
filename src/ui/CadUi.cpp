@@ -4686,46 +4686,49 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   // D-2026-08-28-k / REQ-141: Civil 3D Survey tab (screenshot 2). No Object Viewer.
   if (cmd.activeRibbonTab == kRibbonTabSurvey && !ribbonPaperSpace) {
-    const float wLabelsSec =
-        8.f + capW("Add\nLabels") + 4.f + capW("Add\nTables") + 4.f + capW("Renumber\nTags") + 8.f;
-    ribbonSpecs.push_back({wLabelsSec, wLabelsSec, [&]() {
-      const float wAddLabels = capW("Add\nLabels");
-      const float wAddTables = capW("Add\nTables");
-      const float wRenumber = capW("Renumber\nTags");
-      const float wSec = 8.f + wAddLabels + 4.f + wAddTables + 4.f + wRenumber + 8.f;
-      RibbonSectionBegin("RibbonSecSvyLabels", "Labels & Tables", wSec, panelH);
-      RibbonNyiButton("##SvyAddLabels", RibbonIconKind::SurfLabel, "Add\nLabels", ImVec2(wAddLabels, colH),
-                      RibbonLabel::Below);
-      ImGui::SameLine(0, 4);
-      if (RibbonButtonEx("##SvyAddTables", RibbonIconKind::SurfLegend, "Add\nTables", ImVec2(wAddTables, colH),
-                         RibbonLabel::Below))
-        ImGui::OpenPopup("##SvyAddTablesMenu");
-      RibbonItemHelp("Add Tables — insert a volume TABLE or MTEXT report.\nCommand bar: VOLREPORT TABLE / VOLREPORT");
-      if (ImGui::BeginPopup("##SvyAddTablesMenu")) {
-        if (ImGui::MenuItem("Volume Table"))
-          SubmitRibbonCommand(cmd, log, "VOLREPORT TABLE");
-        if (ImGui::MenuItem("Volume Report (MTEXT)"))
-          SubmitRibbonCommand(cmd, log, "VOLREPORT");
-        ImGui::EndPopup();
-      }
-      ImGui::SameLine(0, 4);
-      RibbonNyiButton("##SvyRenumber", RibbonIconKind::SvyRenumber, "Renumber\nTags", ImVec2(wRenumber, colH),
-                      RibbonLabel::Below);
-      RibbonSectionEnd();
-    }});
-
+    // ---- Labels & Tables --------------------------------------------------
     {
-      const float wGen = 8.f + colW({"Properties", "Isolate Objects"}) + 8.f;
-      ribbonSpecs.push_back({wGen, wGen, [&]() {
-        const float cell = colW({"Properties", "Isolate Objects"});
-        RibbonSectionBegin("RibbonSecSvyGen", "General Tools", 8.f + cell + 8.f, panelH);
-        ImGui::BeginGroup();
-        if (smallBtn("##SvyProps", RibbonIconKind::SurfPropsHand, "Properties", cell))
-          cmd.pendingPropertiesFocus = true;
-        RibbonItemHelp("Properties — the side Properties panel for the current selection.");
-        if (smallBtn("##SvyIsolate", RibbonIconKind::SurfIsolate, "Isolate Objects", cell))
-          ImGui::OpenPopup("##SvyIsolateMenu");
-        RibbonItemHelp("Isolate Objects — isolate, hide, or end isolation (REQ-084).");
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      ribbonlayout::RibbonGroupSpec g1, g2, g3;
+      g1.buttons = {largeBtnSpecEx("##SvyAddLabels", (int)RibbonIconKind::SurfLabel, nullptr, "Add\nLabels", true,
+                                   "Add Labels — not implemented yet.", capW("Add\nLabels"))};
+      g2.buttons = {largeBtnSpecEx("##SvyAddTables", (int)RibbonIconKind::SurfLegend, nullptr, "Add\nTables", false,
+                                   "Add Tables — insert a volume TABLE or MTEXT report.\nCommand bar: VOLREPORT TABLE / VOLREPORT",
+                                   capW("Add\nTables"))};
+      g3.buttons = {largeBtnSpecEx("##SvyRenumber", (int)RibbonIconKind::SvyRenumber, nullptr, "Renumber\nTags", true,
+                                   "Renumber Tags — not implemented yet.", capW("Renumber\nTags"))};
+      spec.groups = {g1, g2, g3};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSvyLabels", "Labels & Tables", spec, [&](const std::string& id) {
+          if (id == "##SvyAddTables") ImGui::OpenPopup("##SvyAddTablesMenu");
+        });
+        if (ImGui::BeginPopup("##SvyAddTablesMenu")) {
+          if (ImGui::MenuItem("Volume Table"))
+            SubmitRibbonCommand(cmd, log, "VOLREPORT TABLE");
+          if (ImGui::MenuItem("Volume Report (MTEXT)"))
+            SubmitRibbonCommand(cmd, log, "VOLREPORT");
+          ImGui::EndPopup();
+        }
+      }});
+    }
+
+    // ---- General Tools ------------------------------------------------
+    {
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##SvyProps", (int)RibbonIconKind::SurfPropsHand, nullptr, "Properties", false,
+                 "Properties — the side Properties panel for the current selection.", false),
+          rowBtn("##SvyIsolate", (int)RibbonIconKind::SurfIsolate, nullptr, "Isolate Objects", false,
+                 "Isolate Objects — isolate, hide, or end isolation (REQ-084).", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSvyGen", "General Tools", spec, [&](const std::string& id) {
+          if (id == "##SvyProps") cmd.pendingPropertiesFocus = true;
+          else if (id == "##SvyIsolate") ImGui::OpenPopup("##SvyIsolateMenu");
+        });
         if (ImGui::BeginPopup("##SvyIsolateMenu")) {
           if (ImGui::MenuItem("Isolate Objects"))
             IsolateSelectedObjects(cmd, log);
@@ -4735,108 +4738,106 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             EndObjectIsolation(cmd, log);
           ImGui::EndPopup();
         }
-        ImGui::EndGroup();
-        RibbonSectionEnd();
       }});
     }
 
+    // ---- Survey (toolspace) --------------------------------------------
     {
-      const float wSurvey = 8.f + capW("Survey\nToolspace") + 4.f + capW("Network\nProperties") + 4.f +
-                            capW("Figure\nProperties") + 8.f;
-      ribbonSpecs.push_back({wSurvey, wSurvey, [&]() {
-        const float wTs = capW("Survey\nToolspace");
-        const float wNet = capW("Network\nProperties");
-        const float wFig = capW("Figure\nProperties");
-        RibbonSectionBegin("RibbonSecSvyTs", "Survey", 8.f + wTs + 4.f + wNet + 4.f + wFig + 8.f, panelH);
-        if (RibbonButtonEx("##SvyToolspace", RibbonIconKind::SvyTripod, "Survey\nToolspace", ImVec2(wTs, colH),
-                           RibbonLabel::Below))
-          cmd.showToolspaceWindow = true;
-        RibbonItemHelp("Survey Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE");
-        ImGui::SameLine(0, 4);
-        RibbonNyiButton("##SvyNetProps", RibbonIconKind::SvyPda, "Network\nProperties", ImVec2(wNet, colH),
-                        RibbonLabel::Below);
-        ImGui::SameLine(0, 4);
-        RibbonNyiButton("##SvyFigProps", RibbonIconKind::SvyFigure, "Figure\nProperties", ImVec2(wFig, colH),
-                        RibbonLabel::Below);
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      ribbonlayout::RibbonGroupSpec g1, g2, g3;
+      g1.buttons = {largeBtnSpecEx("##SvyToolspace", (int)RibbonIconKind::SvyTripod, nullptr, "Survey\nToolspace", false,
+                                   "Survey Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE",
+                                   capW("Survey\nToolspace"))};
+      g2.buttons = {largeBtnSpecEx("##SvyNetProps", (int)RibbonIconKind::SvyPda, nullptr, "Network\nProperties", true,
+                                   "Network Properties — not implemented yet.", capW("Network\nProperties"))};
+      g3.buttons = {largeBtnSpecEx("##SvyFigProps", (int)RibbonIconKind::SvyFigure, nullptr, "Figure\nProperties", true,
+                                   "Figure Properties — not implemented yet.", capW("Figure\nProperties"))};
+      spec.groups = {g1, g2, g3};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSvyTs", "Survey", spec, [&](const std::string& id) {
+          if (id == "##SvyToolspace") cmd.showToolspaceWindow = true;
+        });
       }});
     }
 
+    // ---- Modify ---------------------------------------------------------
     {
-      const float wMod = 8.f + capW("Survey\nQuery") + 4.f +
-                         colW({"Survey Figure Properties", "Survey Point Properties", "Browse to Survey Data"}) + 4.f +
-                         colW({"Edit Geometry", "Edit Elevations", "Update Figure"}) + 8.f;
-      ribbonSpecs.push_back({wMod, wMod, [&]() {
-        const float wQuery = capW("Survey\nQuery");
-        const float cFig = colW({"Survey Figure Properties", "Survey Point Properties", "Browse to Survey Data"});
-        const float cEdit = colW({"Edit Geometry", "Edit Elevations", "Update Figure"});
-        RibbonSectionBegin("RibbonSecSvyMod", "Modify", 8.f + wQuery + 4.f + cFig + 4.f + cEdit + 8.f, panelH);
-        RibbonNyiButton("##SvyQuery", RibbonIconKind::SvyQuery, "Survey\nQuery", ImVec2(wQuery, colH),
-                        RibbonLabel::Below);
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        RibbonNyiButton("##SvyFigProp2", RibbonIconKind::SvyFigure, "Survey Figure Properties", ImVec2(cFig, rowH),
-                        RibbonLabel::Right);
-        if (smallBtn("##SvyPtProps", RibbonIconKind::SurveyPoint, "Survey Point Properties", cFig))
-          cmd.pendingPropertiesFocus = true;
-        RibbonItemHelp("Survey Point Properties — the Properties panel for selected survey points.");
-        RibbonNyiButton("##SvyBrowse", RibbonIconKind::SvyPin, "Browse to Survey Data", ImVec2(cFig, rowH),
-                        RibbonLabel::Right);
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        RibbonNyiButton("##SvyEditGeom", RibbonIconKind::Rect, "Edit Geometry", ImVec2(cEdit, rowH),
-                        RibbonLabel::Right);
-        if (smallBtn("##SvyEditElev", RibbonIconKind::SurfEdit, "Edit Elevations", cEdit))
-          cmd.showFeatureLineElevWindow = true;
-        RibbonItemHelp(
-            "Edit Elevations — station, elevation, and grade for feature-line points.\n"
-            "Feature Line Elevations window.");
-        RibbonNyiButton("##SvyUpdateFig", RibbonIconKind::SvyRefresh, "Update Figure", ImVec2(cEdit, rowH),
-                        RibbonLabel::Right);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonGroupSpec queryGroup;
+      queryGroup.buttons = {largeBtnSpecEx("##SvyQuery", (int)RibbonIconKind::SvyQuery, nullptr, "Survey\nQuery", true,
+                                           "Survey Query — not implemented yet.", capW("Survey\nQuery"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          queryGroup,
+          columnOfButtons({
+              rowBtn("##SvyFigProp2", (int)RibbonIconKind::SvyFigure, nullptr, "Survey Figure Properties", true,
+                     "Survey Figure Properties — not implemented yet.", false),
+              rowBtn("##SvyPtProps", (int)RibbonIconKind::SurveyPoint, nullptr, "Survey Point Properties", false,
+                     "Survey Point Properties — the Properties panel for selected survey points.", false),
+              rowBtn("##SvyBrowse", (int)RibbonIconKind::SvyPin, nullptr, "Browse to Survey Data", true,
+                     "Browse to Survey Data — not implemented yet.", false),
+          }),
+          columnOfButtons({
+              rowBtn("##SvyEditGeom", (int)RibbonIconKind::Rect, nullptr, "Edit Geometry", true,
+                     "Edit Geometry — not implemented yet.", false),
+              rowBtn("##SvyEditElev", (int)RibbonIconKind::SurfEdit, nullptr, "Edit Elevations", false,
+                     "Edit Elevations — station, elevation, and grade for feature-line points.\nFeature Line Elevations window.",
+                     false),
+              rowBtn("##SvyUpdateFig", (int)RibbonIconKind::SvyRefresh, nullptr, "Update Figure", true,
+                     "Update Figure — not implemented yet.", false),
+          }),
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSvyMod", "Modify", spec, [&](const std::string& id) {
+          if (id == "##SvyPtProps") cmd.pendingPropertiesFocus = true;
+          else if (id == "##SvyEditElev") cmd.showFeatureLineElevWindow = true;
+        });
       }});
     }
 
+    // ---- Analyze ----------------------------------------------------------
     {
-      const float anCol = colW({"Mapcheck", "Geodetic Calculator", "Astronomic Direction"});
-      const float wAn = 8.f + anCol + 8.f;
-      ribbonSpecs.push_back({wAn, wAn, [&]() {
-        const float cell = colW({"Mapcheck", "Geodetic Calculator", "Astronomic Direction"});
-        RibbonSectionBegin("RibbonSecSvyAnalyze", "Analyze", 8.f + cell + 8.f, panelH);
-        ImGui::BeginGroup();
-        RibbonNyiButton("##SvyMapcheck", RibbonIconKind::SvyGlobe, "Mapcheck", ImVec2(cell, rowH), RibbonLabel::Right);
-        RibbonNyiButton("##SvyGeodetic", RibbonIconKind::SvyGeodetic, "Geodetic Calculator", ImVec2(cell, rowH),
-                        RibbonLabel::Right);
-        RibbonNyiButton("##SvyAstro", RibbonIconKind::SvySun, "Astronomic Direction", ImVec2(cell, rowH),
-                        RibbonLabel::Right);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##SvyMapcheck", (int)RibbonIconKind::SvyGlobe, nullptr, "Mapcheck", true,
+                 "Mapcheck — not implemented yet.", false),
+          rowBtn("##SvyGeodetic", (int)RibbonIconKind::SvyGeodetic, nullptr, "Geodetic Calculator", true,
+                 "Geodetic Calculator — not implemented yet.", false),
+          rowBtn("##SvyAstro", (int)RibbonIconKind::SvySun, nullptr, "Astronomic Direction", true,
+                 "Astronomic Direction — not implemented yet.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSvyAnalyze", "Analyze", spec, nullptr);
       }});
     }
 
+    // ---- Launch Pad ---------------------------------------------------
     {
-      const float launchCol = colW({"Quick Profile", "Create Surface", "Grading Creation Tools"});
-      const float wLaunch = 8.f + launchCol + 8.f;
-      ribbonSpecs.push_back({wLaunch, wLaunch, [&]() {
-        const float cell = colW({"Quick Profile", "Create Surface", "Grading Creation Tools"});
-        RibbonSectionBegin("RibbonSecSvyLaunch", "Launch Pad", 8.f + cell + 8.f, panelH);
-        ImGui::BeginGroup();
-        if (smallBtn("##SvyQProfile", RibbonIconKind::SurfQuickProfile, "Quick Profile", cell)) {
-          if (!cmd.cadSurfaces.empty())
-            StartQuickProfileCommand(cmd, cmd.cadSurfaces[0].name, log);
-          else
-            SubmitRibbonCommand(cmd, log, "QUICKPROFILE");
-        }
-        RibbonItemHelp("Quick Profile — sample a surface along two plan points.\nCommand bar: QUICKPROFILE");
-        if (smallBtn("##SvyCreateSurf", RibbonIconKind::SurfAddData, "Create Surface", cell))
-          cmd.showCreateSurfaceWindow = true;
-        RibbonItemHelp("Create Surface — TIN, grid, corridor, or volume type.\nToolspace: Create Surface...");
-        RibbonNyiButton("##SvyGrading", RibbonIconKind::SurfGrading, "Grading Creation Tools", ImVec2(cell, rowH),
-                        RibbonLabel::Right);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##SvyQProfile", (int)RibbonIconKind::SurfQuickProfile, nullptr, "Quick Profile", false,
+                 "Quick Profile — sample a surface along two plan points.\nCommand bar: QUICKPROFILE", false),
+          rowBtn("##SvyCreateSurf", (int)RibbonIconKind::SurfAddData, nullptr, "Create Surface", false,
+                 "Create Surface — TIN, grid, corridor, or volume type.\nToolspace: Create Surface...", false),
+          rowBtn("##SvyGrading", (int)RibbonIconKind::SurfGrading, nullptr, "Grading Creation Tools", true,
+                 "Grading Creation Tools — not implemented yet.", false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecSvyLaunch", "Launch Pad", spec, [&](const std::string& id) {
+          if (id == "##SvyQProfile") {
+            if (!cmd.cadSurfaces.empty())
+              StartQuickProfileCommand(cmd, cmd.cadSurfaces[0].name, log);
+            else
+              SubmitRibbonCommand(cmd, log, "QUICKPROFILE");
+          } else if (id == "##SvyCreateSurf") {
+            cmd.showCreateSurfaceWindow = true;
+          }
+        });
       }});
     }
   } // if (activeRibbonTab == kRibbonTabSurvey)
