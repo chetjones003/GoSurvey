@@ -206,3 +206,45 @@ TEST_CASE("Gizmo: the handles follow the active UCS", "[gizmo][req060]") {
   CHECK(st.userLinesFlat[0] == Approx(0.0).margin(1e-6));
   CHECK(st.userLinesFlat[1] == Approx(7.0));
 }
+
+TEST_CASE("Gizmo/MOVE: a block reference's insertion carries its elevation", "[gizmo][req320]") {
+  // REQ-320 item 1 names "a block reference's insertion" explicitly among the entity kinds a 3D
+  // translate must carry — this is the acceptance bullet the block-ref call site once missed by
+  // hardcoding dz to 0.
+  AppCommandState st;
+  CadBlockRef br;
+  br.defName = "TESTBLOCK";
+  br.xf.x = 1.f;
+  br.xf.y = 2.f;
+  br.xf.z = 3.f;
+  st.cadBlockRefs.push_back(br);
+  SelectedEntity e;
+  e.type = SelectedEntity::Type::BlockRef;
+  e.index = 0;
+  st.selection.push_back(e);
+
+  std::vector<std::string> log;
+  ApplyTranslationToSelection(st, 10.f, 20.f, 30.f, log);
+  CHECK(st.cadBlockRefs[0].xf.x == Approx(11.0));
+  CHECK(st.cadBlockRefs[0].xf.y == Approx(22.0));
+  CHECK(st.cadBlockRefs[0].xf.z == Approx(33.0));
+}
+
+TEST_CASE("Gizmo/MOVE: a filled region's vertices carry their elevation", "[gizmo][req320]") {
+  // REQ-320 item 1 names "a filled region's vertices" explicitly — `hatchgeom::Translate` used to
+  // take no dz at all, so a filled region moved with the rest of a selection stayed at its old Z.
+  AppCommandState st;
+  CadFilledRegion fr;
+  fr.vertsXyz = {0.f, 0.f, 5.f, 10.f, 0.f, 5.f, 10.f, 10.f, 5.f, 0.f, 10.f, 5.f};
+  fr.loopStart = {0};
+  st.cadFilledRegions.push_back(fr);
+  SelectedEntity e;
+  e.type = SelectedEntity::Type::FilledRegion;
+  e.index = 0;
+  st.selection.push_back(e);
+
+  std::vector<std::string> log;
+  ApplyTranslationToSelection(st, 100.f, -50.f, 25.f, log);
+  CHECK(st.cadFilledRegions[0].vertsXyz[2] == Approx(30.0));
+  CHECK(st.cadFilledRegions[0].vertsXyz[5] == Approx(30.0));
+}

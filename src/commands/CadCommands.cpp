@@ -9446,7 +9446,7 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
       continue;
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadFilledRegions.size())
       continue;
-    hatchgeom::Translate(st.cadFilledRegions[static_cast<size_t>(e.index)], dx, dy);
+    hatchgeom::Translate(st.cadFilledRegions[static_cast<size_t>(e.index)], dx, dy, dz);
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Table)
@@ -9460,7 +9460,9 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
       continue;
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
       continue;
-    CadBlockTranslate(&st.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, 0.f);
+    // REQ-320 item 1 names "a block reference's insertion" explicitly; dz must ride along with
+    // dx/dy exactly as it does for every other entity type in this function.
+    CadBlockTranslate(&st.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, dz);
   }
   // Feature lines (REQ-087) — see ApplyRotationToSelection.
   TransformSelectedFeatureLinesInPlace(st, [&](float* x, float* y) {
