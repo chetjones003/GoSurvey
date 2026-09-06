@@ -4,6 +4,7 @@
 #include "ray3d.hpp"
 #include "ucs.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
@@ -431,9 +432,82 @@ class Importer {
     return true;
   }
 
-  /// Recognizes exactly the two cylinder/cone loop shapes this increment supports (see
-  /// AcisSatParser.hpp) and derives the face's rectangular parametric span from them directly, rather
-  /// than from a generic vertex scan — see ADR-051 (b-1) for why.
+  /// Maps a cone/cylinder face's loop into a general parametric trim loop (`Face::paramLoops`,
+  /// ADR-052, issue #306) for the non-full-revolve case `BuildConeFace` cannot reduce to its
+  /// rectangular `uStart..uEnd` span — issue #310's concrete case for stopping the outright refusal.
+  /// \p frame is the face's own base/axis frame, already computed by the caller from the same axial
+  /// extent as the rectangle path. `u` is `atan2(y, x)` in that frame, continuously unwrapped as the
+  /// loop is walked (so a loop that happens to cross the frame's own angular seam does not read as a
+  /// spurious ~2*pi jump); `v` is the frame-local Z, already zero-based at the face's own axial start
+  /// — exactly `LocalSurfaceDerivs`' `SurfaceKind::Cylinder`/`Cone` convention (brep.cpp), so no
+  /// rescaling is needed for area/volume/tessellation to agree with it. A curved edge is sampled at
+  /// `kArcSamples` points along its own span, per \ref brep::Face::paramLoops' "a curved edge
+  /// contributes several polyline vertices" contract; a straight edge contributes just its start
+  /// point (its end point is the next edge's start).
+  ///
+  /// This is exact, and the resulting solid passes `Validate`, only when the loop's real 3D shape
+  /// reduces to the `uStart..uEnd x [0, height]` rectangle this function's own bounding box reports
+  /// (a partial revolve: two constant-`v` rim edges — arcs or straight generatrix chords whose
+  /// endpoints share a height — joined by two constant-`u` generatrix edges). `Validate`'s own
+  /// closure probe integrates the face by that reported rectangle, not by `paramLoops` (ADR-052 (c):
+  /// the closure probe distrusts `paramLoops` as a possible placeholder), so a loop that is
+  /// genuinely non-rectangular in (u, v) — e.g. an oblique planar cut through only part of a
+  /// revolve, without an `Ellipse` edge `CylinderCutZExtent` (brep.cpp) can recognize — will build
+  /// here but then fail `Validate` with `NotClosed`, refused rather than silently misimported.
+  bool BuildConeGeneralTrim(const brep::Solid& out, const LoopWalk& loop, const ucs::Ucs& frame,
+                             brep::Face* outFace) {
+    constexpr int kArcSamples = 8;
+    std::vector<curveisect::Vec2> poly;
+    bool haveRaw = false;
+    double prevRaw = 0.0;
+    double contU = 0.0;
+    auto addPoint = [&](const Vec3& p3) {
+      const Vec3 local = ucs::WorldToUcs(frame, p3);
+      const double rawU = std::atan2(local.y, local.x);
+      if (!haveRaw) {
+        contU = rawU;
+        haveRaw = true;
+      } else {
+        double delta = rawU - prevRaw;
+        while (delta > kPi)
+          delta -= 2.0 * kPi;
+        while (delta <= -kPi)
+          delta += 2.0 * kPi;
+        contU += delta;
+      }
+      prevRaw = rawU;
+      poly.push_back(curveisect::Vec2{contU, local.z});
+    };
+    for (const brep::EdgeUse& u : loop.uses) {
+      const brep::Edge& e = out.edges[static_cast<size_t>(u.edge)];
+      const int samples = (e.kind == brep::CurveKind::Line) ? 1 : kArcSamples;
+      for (int k = 0; k < samples; ++k) {
+        const double tTraverse = static_cast<double>(k) / samples;
+        const double s = u.reversed ? (1.0 - tTraverse) : tTraverse;
+        addPoint(brep::EdgePointAt(out, e, s));
+      }
+    }
+    if (poly.size() < 3)
+      return Fail("cylindrical/conical face's general trim loop has too few points to enclose an area");
+    double uLo = poly[0].x, uHi = poly[0].x, vLo = poly[0].y, vHi = poly[0].y;
+    for (const curveisect::Vec2& p : poly) {
+      uLo = std::min(uLo, p.x);
+      uHi = std::max(uHi, p.x);
+      vLo = std::min(vLo, p.y);
+      vHi = std::max(vHi, p.y);
+    }
+    outFace->uStart = uLo;
+    outFace->uEnd = uHi;
+    outFace->vStart = vLo;
+    outFace->vEnd = vHi;
+    outFace->paramLoops.assign(1, std::move(poly));
+    return true;
+  }
+
+  /// Recognizes the two cylinder/cone loop shapes this importer maps straight to `Face`'s
+  /// rectangular `uStart..uEnd` span (see AcisSatParser.hpp) — any other single-loop shape falls
+  /// through to \ref BuildConeGeneralTrim instead. Derives the rectangular span directly from the
+  /// recognized shape rather than from a generic vertex scan — see ADR-051 (b-1) for why.
   bool BuildConeFace(const SatRecord& surface, const std::string& faceSense, LoopWalk* loop,
                       brep::Solid* out, brep::Face* outFace) {
     Vec3 axisOrigin{}, axisRaw{};
@@ -457,21 +531,15 @@ class Importer {
       if (e0.v0 == e0.v1 && e1.v0 == e1.v1)
         full = true;
     }
-    // A partial revolve (a seam/arc/seam/arc quadrilateral) is deliberately NOT accepted this
-    // increment: its u-span has to come from the seam edges' actual angular position in the face's
-    // own frame, not simply set to [0, 2*pi) the way a full revolve's is — a materially different,
-    // untested derivation, and code-review on this very change is what caught the difference (a
-    // first draft here defaulted every cone-surface face's span to a full 2*pi regardless of loop
-    // shape, which would have silently over-reported area/volume on a partial cylindrical wall).
-    // Rather than land that derivation unverified, this importer accepts the full-revolve shape only
-    // and refuses a partial one by name; a fast-follow of this same feature can add it once it has a
-    // fixture that actually exercises a non-full angular span.
-    if (!full)
-      return Fail(
-          "cylindrical/conical face's loop is not the one shape this importer recognizes (a full "
-          "revolve, i.e. two full-circle rim edges) — a partial revolve and general trimmed faces "
-          "are both tracked separately (issue #302; a partial revolve's u-span derivation is its own "
-          "fast-follow of this feature)");
+    // A loop that is not the two-full-circle-rim shape above (most commonly a partial revolve — a
+    // seam/arc/seam/arc quadrilateral) used to be refused outright (issue #302's original ADR-051
+    // (c) narrowing) because deriving its u-span from the seam edges' angular position, while still
+    // reporting the rectangle form, was a materially different and untested derivation. Issue #306's
+    // `Face::paramLoops` general trim loop removes the need for that derivation entirely: the loop's
+    // own edges are sampled directly into a (u,v) polygon (`BuildConeGeneralTrim` below), so the
+    // face's true boundary is what area/volume/tessellation/picking (#307-#309) actually see — this
+    // is issue #310's concrete case for this surface kind. See `BuildConeGeneralTrim`'s own comment
+    // for why a loop that is genuinely non-rectangular in (u, v) still gets refused, via `Validate`.
 
     // A full revolve's two rim edges (each a full circle, v0 == v1) share no vertex with each other,
     // so brep::Validate's "consecutive edge uses share a vertex" ring-closure check cannot see them as
@@ -540,9 +608,12 @@ class Importer {
       outFace->surface.radius2 = rTop;
     }
     outFace->surface.inward = (faceSense == "reversed");
-    outFace->uStart = 0.0;
-    outFace->uEnd = 2.0 * kPi;
-    return true;
+    if (full) {
+      outFace->uStart = 0.0;
+      outFace->uEnd = 2.0 * kPi;
+      return true;
+    }
+    return BuildConeGeneralTrim(*out, *loop, frame, outFace);
   }
 
   /// Reverses a patch's U parametrisation in place (reflects `knotsU`, reverses each row of `ctrl` /
