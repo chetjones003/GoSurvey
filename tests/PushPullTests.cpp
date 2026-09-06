@@ -475,4 +475,3 @@ TEST_CASE("A cap whose neighbour is a curved wall pushes, and the wall follows (
     }
   }
 }
-

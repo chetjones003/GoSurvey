@@ -135,6 +135,78 @@ body $-1 $72 $-1 $-1 #
 End-of-ACIS-data
 )";
 
+/// A quarter-cylinder wedge (issue #310): radius 2, height 5, standing on the origin over the
+/// quadrant `0<=x, 0<=y` — a straight extrusion (flat bottom and top quarter-disk caps, two flat
+/// radial side faces, one curved wall) whose wall face's loop is an arc/line/arc/line quadrilateral
+/// spanning less than the full revolve (`u: 0..pi/2`, not `0..2*pi`). `BuildConeFace`'s old
+/// two-full-circle-rim recognizer refused this loop shape outright (see the ADR-051 (b-1) comment on
+/// `BuildConeFace` in AcisSatParser.cpp: "a partial revolve...is deliberately NOT accepted"). Issue
+/// #306's `Face::paramLoops` general trim loop is what lets this loop shape in now, via
+/// `BuildConeGeneralTrim`. Volume = quarter-disk area * height = `(pi*2*2/4) * 5 = 5*pi`.
+const std::string kQuarterCylinderSat = kHeader + R"(
+point $-1 0 0 0 #
+point $-1 2 0 0 #
+point $-1 0 2 0 #
+point $-1 0 0 5 #
+point $-1 2 0 5 #
+point $-1 0 2 5 #
+vertex $-1 $-1 $0 #
+vertex $-1 $-1 $1 #
+vertex $-1 $-1 $2 #
+vertex $-1 $-1 $3 #
+vertex $-1 $-1 $4 #
+vertex $-1 $-1 $5 #
+straight-curve $-1 0 0 0 1 0 0 #
+ellipse-curve $-1 0 0 0 0 0 1 2 0 0 1 #
+ellipse-curve $-1 0 0 5 0 0 1 2 0 0 1 #
+edge $-1 $6 $7 $12 forward #
+edge $-1 $6 $8 $12 forward #
+edge $-1 $9 $10 $12 forward #
+edge $-1 $9 $11 $12 forward #
+edge $-1 $6 $9 $12 forward #
+edge $-1 $7 $10 $12 forward #
+edge $-1 $8 $11 $12 forward #
+edge $-1 $7 $8 $13 forward #
+edge $-1 $10 $11 $14 forward #
+plane-surface $-1 0 0 0 0 0 -1 1 0 0 #
+plane-surface $-1 0 0 5 0 0 1 1 0 0 #
+plane-surface $-1 0 0 0 0 -1 0 1 0 0 #
+plane-surface $-1 0 0 0 -1 0 0 0 1 0 #
+cone-surface $-1 0 0 0 0 0 1 1 0 0 0 1 2 1 #
+loop $-1 $-1 $30 $-1 #
+coedge $-1 $31 $-1 $-1 $16 forward $-1 #
+coedge $-1 $32 $-1 $-1 $22 reversed $-1 #
+coedge $-1 $30 $-1 $-1 $15 reversed $-1 #
+loop $-1 $-1 $34 $-1 #
+coedge $-1 $35 $-1 $-1 $17 forward $-1 #
+coedge $-1 $36 $-1 $-1 $23 forward $-1 #
+coedge $-1 $34 $-1 $-1 $18 reversed $-1 #
+loop $-1 $-1 $38 $-1 #
+coedge $-1 $39 $-1 $-1 $15 forward $-1 #
+coedge $-1 $40 $-1 $-1 $20 forward $-1 #
+coedge $-1 $41 $-1 $-1 $17 reversed $-1 #
+coedge $-1 $38 $-1 $-1 $19 reversed $-1 #
+loop $-1 $-1 $43 $-1 #
+coedge $-1 $44 $-1 $-1 $19 forward $-1 #
+coedge $-1 $45 $-1 $-1 $18 forward $-1 #
+coedge $-1 $46 $-1 $-1 $21 reversed $-1 #
+coedge $-1 $43 $-1 $-1 $16 reversed $-1 #
+loop $-1 $-1 $48 $-1 #
+coedge $-1 $49 $-1 $-1 $22 forward $-1 #
+coedge $-1 $50 $-1 $-1 $21 forward $-1 #
+coedge $-1 $51 $-1 $-1 $23 reversed $-1 #
+coedge $-1 $48 $-1 $-1 $20 reversed $-1 #
+face $-1 $53 $29 $-1 $24 forward single #
+face $-1 $54 $33 $-1 $25 forward single #
+face $-1 $55 $37 $-1 $26 forward single #
+face $-1 $56 $42 $-1 $27 forward single #
+face $-1 $-1 $47 $-1 $28 forward single #
+shell $-1 $-1 $-1 $52 $-1 $58 #
+lump $-1 $-1 $57 $59 #
+body $-1 $58 $-1 $-1 #
+End-of-ACIS-data
+)";
+
 }  // namespace
 
 TEST_CASE("ACIS SAT import: plain cylinder builds a valid solid", "[acissat]") {
@@ -306,4 +378,59 @@ TEST_CASE("ACIS SAT import: a malformed record is refused, never crashes", "[aci
   const acissat::ImportResult r = acissat::ImportSatSolid(sat, "");
   CHECK_FALSE(r.ok);
   CHECK_FALSE(r.error.empty());
+}
+
+TEST_CASE("ACIS SAT import: a non-rectangular trimmed cylindrical face imports via the general trim "
+          "loop instead of being refused (issue #310)",
+          "[acissat]") {
+  const acissat::ImportResult r = acissat::ImportSatSolid(kQuarterCylinderSat, "QuarterCylinder");
+  INFO(r.error);
+  REQUIRE(r.ok);
+  CHECK(r.solid.faces.size() == 5);
+  CHECK(r.solid.shells.size() == 1);
+  CHECK(brep::Validate(r.solid) == brep::Problem::Ok);
+
+  const brep::Face* wall = nullptr;
+  for (const brep::Face& f : r.solid.faces)
+    if (f.surface.kind == brep::SurfaceKind::Cylinder)
+      wall = &f;
+  REQUIRE(wall != nullptr);
+  CHECK_FALSE(wall->paramLoops.empty());
+
+  const double kPi = 3.14159265358979323846;
+  const auto mp = brep::ComputeMassProperties(r.solid);
+  CHECK(mp.volume == Catch::Approx(5.0 * kPi).epsilon(1e-6));
+  // Total surface area: two quarter-disk caps (pi*r^2/4 each) + two flat radial sides (r*h each) +
+  // the curved wall (r*(pi/2)*h) = 2*pi + 20 + 5*pi = 7*pi + 20.
+  CHECK(mp.surfaceArea == Catch::Approx(7.0 * kPi + 20.0).epsilon(1e-6));
+
+  brep::Tessellation tess;
+  brep::Problem tessWhy = brep::Problem::Ok;
+  REQUIRE(brep::Tessellate(r.solid, 0.01, &tess, &tessWhy));
+  CHECK(tess.indices.size() % 3 == 0);
+  CHECK_FALSE(tess.indices.empty());
+}
+
+TEST_CASE("ACIS SAT import: a cylindrical face with a hole loop is still refused by name even "
+          "though general trim loops are now accepted (issue #310)",
+          "[acissat]") {
+  // Gives the wall face a second loop (record index 60, appended below, reusing the same coedge
+  // chain — its content doesn't matter, only that `loops.size()` becomes 2) by pointing the wall's
+  // own loop (index 47) at it via `loop.next`. `BuildFaceForSurface`'s cone-surface branch refuses
+  // any loop count other than exactly 1 before general-trim building ever runs, so this must still
+  // be refused by name rather than silently misimported as, say, an annular general trim.
+  std::string sat = kQuarterCylinderSat;
+  const std::string from = "loop $-1 $-1 $48 $-1 #\ncoedge $-1 $49";
+  const std::string to = "loop $-1 $60 $48 $-1 #\ncoedge $-1 $49";
+  const size_t pos = sat.find(from);
+  REQUIRE(pos != std::string::npos);
+  sat.replace(pos, from.size(), to);
+  const std::string endMarker = "End-of-ACIS-data";
+  const size_t endPos = sat.find(endMarker);
+  REQUIRE(endPos != std::string::npos);
+  sat.insert(endPos, "loop $-1 $-1 $48 $-1 #\n");
+
+  const acissat::ImportResult r = acissat::ImportSatSolid(sat, "");
+  CHECK_FALSE(r.ok);
+  CHECK(Contains(r.error, "hole loop"));
 }

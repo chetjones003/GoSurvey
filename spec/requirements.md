@@ -6810,7 +6810,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   wording implies.
 - Revisions: 2026-09-04 — initial (D-2026-09-04-c, GitHub issue #148 criteria 3, 7 and 8).
 
-### REQ-322 — Import an ACIS 3D-solid block (analytic primitives, SAT only)
+### REQ-320 — Import an ACIS 3D-solid block (analytic primitives, SAT only)
 
 - Purpose: real-world vendor block libraries (Plant 3D piping/mechanical symbols) commonly store their
   only geometry as an ACIS `3DSOLID` entity; GoSurvey's DWG/DXF importer silently skips it today,
@@ -6946,10 +6946,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   Phase 5 slice 4a).
 - Revisions: 2026-09-04 — initial. Written when REQ-060's gizmo work found that the transforms it
   must agree with are two-dimensional and exclude solids, which no requirement had recorded.
-  2026-09-05 — renumbered from REQ-320 to REQ-322. `beta` accepted its own REQ-320 (the ACIS
-  3D-solid import, issue #299) while this branch was in flight; the merged branch is where the two
-  meet, and the one already on `beta` keeps the number.
-
+  2026-09-06 — renumbered from REQ-320 to REQ-322 on rebase: `beta` had independently assigned
+  REQ-320 to ACIS 3D-solid import (#299) and REQ-321 to general trimmed-boundary faces (#305) while
+  this branch was in flight. No content change.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -7433,7 +7432,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-057 | Domain/IO/UI | planned — DXF group-30 round-trip within REQ-101; `.gs` Z bit-identical on reload; legacy `.gs` loads all-zero Z; Properties Z edit undoable; survey elevation reads back as Z; parallel Z arrays stay length-locked across insert/erase/undo | accepted |
 | REQ-058 | Renderer/UI/Commands | `CameraTests` (plan-view parity, anchor-before-rotation composition, billboard basis) + `Ray3dTests` + `LinetypeTessellationTests` (per-vertex Z) + `CurveIntersectTests` + `BenchSceneTests`; manual/scripted in-app before/after for the render, overlay and glyph stages that no test target can link (TASK-036/037/039) | accepted — signed off 2026-08-12 | **Fixed 2026-09-01 (TASK-170):** box selection off plan view projected its two drag corners at Z = 0 while lines project at their true Z, so on a work plane raised by `ELEV` or tilted by a UCS the fence both drew and selected at pixels the cursor was never over. Each corner now carries its own work-plane elevation (`selBoxAnchorZ`, published through `uiCursorWorldZ` rather than threaded through five call sites). Invisible until now because Z does not move a PLAN projection and is genuinely 0 on the world XY plane at elevation zero — and because `headless.req058-orbited-fence-elevation` is the FIRST transcript to orbit the view at all, via a new `VIEWANGLES` driver verb. That is the wider finding: every REQ-058 behaviour that only exists off plan view had no failing test available to it. Negative-tested — restoring the Z = 0 projection reports `SELECTED: expected 1, got 0`
 | REQ-059 | UI | planned — manual (+Z / −Y / an off-axis handle animate correctly and settle < 0.5 s; gizmo tracks the camera after orbit; clicks outside the gizmo still pick geometry). Appearance is ImOGuizmo stock — the mockup is not the target (amended 2026-08-11) | accepted |
-| REQ-060 | UI/Commands | translate (entities): `headless.req060-gizmo-translate` + `GizmoTranslateTests`. translate (a solid FACE): `headless.req148-gizmo-subobject` (the drag and `PRESSPULL 12` leaving identical mass properties; one handle not three; no gizmo on an edge or a vertex) + `SubObjectSelectionTests` (the mode derivation, vertex-for-vertex equality with PRESSPULL, the captured face reference). rotate/scale: not implemented — blocked on plan-only ROTATE/SCALE (REQ-322 item 6) | accepted |
+| REQ-060 | UI/Commands | translate (entities): `headless.req060-gizmo-translate` (a drag along X and along Z, the same offset typed as MOVE landing on the same coordinates, one UNDO, a cancel, and a solid moved and reloaded) + `GizmoTranslateTests` (the skew-line solve, the anchor, an empty selection, a click that misses every handle, the UCS-aligned axes). translate (a solid FACE): `headless.req148-gizmo-subobject` (the drag and `PRESSPULL 12` leaving identical mass properties; one handle not three; no gizmo on an edge or a vertex) + `SubObjectSelectionTests` (the mode derivation, vertex-for-vertex equality with PRESSPULL, the captured face reference). rotate/scale: not implemented — blocked on plan-only ROTATE/SCALE (REQ-322 item 6) | accepted |
 | REQ-061 | Domain/Renderer/IO | `ViewportCameraTests` (plan-view projection == `ModelToPaperIn` bit-for-bit over a grid; SW-iso hand-computed sheet point; rect-centre invariant; sibling independence) + `GsIoViewportCameraTests` (camera round-trips `.gs`; legacy file with the keys stripped loads all-plan) + manual (two viewports one plan one isometric, on screen and in the PDF plot) | accepted — implemented 2026-08-31 (issue #175) |
 | REQ-063 | Domain/IO/Renderer | planned — `.gs` round-trip bit-identical; legacy `.gs` loads; extents include meshes; erase undoable in one step; layer freeze/off/non-plottable honoured; 2M-triangle model loads without index overflow | accepted |
 | REQ-064 | Renderer/UI/IO | planned — 2D Wireframe **pixel-identical** to pre-change (the parity gate, as REQ-058 had); occlusion correct in Hidden/Shaded; lighting follows the camera; style change does not alter geometry/selection/snap/plot; REQ-100 met in Shaded | accepted |
