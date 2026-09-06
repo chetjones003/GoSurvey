@@ -167,15 +167,19 @@ jobs:
         # pinned nothing, CMake took whatever was first on PATH, and local (clang) silently
         # diverged from CI (cl) until the build failed on a construct only one of them rejects.
         #
-        # /analyze (REQ-324) is a compiler flag, not something build.exe recognizes: MSVC /analyze
-        # warnings do not fail the build unless paired with /WX, which is deliberately NOT set here
-        # — the existing codebase has never been triaged against it, so this starts report-only.
+        # /analyze (REQ-324) is added via GOSURVEY_ENABLE_ANALYZE, NOT -DCMAKE_CXX_FLAGS: a
+        # command-line CMAKE_CXX_FLAGS on first configure REPLACES CMake's MSVC-default flags
+        # (which include /EHsc /GR) instead of adding to them, silently dropping /EHsc and
+        # crashing exception-using tests with a stack-buffer-overrun (0xc0000409) — caught by
+        # this PR's own first CI run. GOSURVEY_ENABLE_ANALYZE instead adds /analyze as a
+        # per-target compile option (CMakeLists.txt's gosurvey_target_warnings), additive and
+        # scoped to our own targets only. It does not fail the build unless paired with /WX,
+        # which is deliberately NOT set — the existing codebase has never been triaged against it.
         run: >
           cmake --preset ninja-release
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-          -DCMAKE_C_FLAGS="/analyze"
-          -DCMAKE_CXX_FLAGS="/analyze"
+          -DGOSURVEY_ENABLE_ANALYZE=ON
           -DGOSURVEY_VERSION_SUFFIX="${{ steps.ver.outputs.suffix }}"
           -DGOSURVEY_VERSION_BUILD=${{ github.run_number }}
 
