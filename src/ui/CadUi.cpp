@@ -3809,10 +3809,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // metrics (`W`) and once at Medium (`M`) — same formulas as increment 1 shipped, since colW()
   // above already resolves compact vs. not; nothing here duplicates a button-sizing decision.
   struct RibbonTabWidths {
-    float wEdit, wDraw, wMod, wInq, wSrv, wAnalyze, wView, wLayout;
-    float wViewSettings;  // REQ-302 increment 3 (Insert/Output tabs now size their sections inline)
-    float wNamedViews = 0.f;  // REQ-106
-    float wCoords = 0.f;      // REQ-154
+    float wEdit, wDraw, wMod, wInq, wSrv, wAnalyze, wLayout;
   };
   auto computeTabWidths = [&](bool compact) {
     curCompact = compact;
@@ -3840,19 +3837,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
               colW({"Shed", "Report"}) + 4.f + colW({"Grades", "Groups"});
     w.wAnalyze = 8.f + colW({"Slope", "Dir", "Arrows"}) + 4.f + colW({"Catch", "Stats", "Rebuild"}) + 4.f +
                  colW({"Breakln", "Contour", "Boundry"}) + 4.f + colW({"Vol Surf", "Props"});
-    w.wView = 8.f + colW({"Extents", "Window"}) + 8.f + visualStyleComboW;  // REQ-064
-    // REQ-106 Named Views: the combo carries the longest preset name, and two stacked buttons sit
-    // beside it — the same shape AutoCAD's own Named Views panel uses.
-    w.wNamedViews = 8.f + namedViewComboW + 4.f + colW({"New View", "Manager"});
-    // REQ-154 Coordinates: three two-button columns and the frame combo, AutoCAD's own grouping.
-    w.wCoords = 8.f + 3.f * (colW({"3-Point", "Object"}) + 4.f) + 8.f + ucsComboW;
     // REQ-302 increment 3: Plot/Batch Plot moved out to Output's "Plot" section — Layout keeps
     // only the viewport-authoring tools (Rect VP is a largeBtn placed outside colW; Poly VP is
     // the one column here).
     w.wLayout = 8.f + largeW + 4.f + colW({"Poly VP"});
-    // REQ-302 increment 3 (content audit): View tab Settings section. Insert/Output/Annotate/Manage
-    // tabs size their sections inline (GUI-pass 2026-08-30 C3D rebuilds).
-    w.wViewSettings = 8.f + colW({"Settings"}) + 4.f + colW({"Toolspace"});
+    // View/Named Views/Coordinates/Settings (issue #329) size themselves inline via
+    // ribbonlayout::MeasureRibbonSection — no wView/wNamedViews/wCoords/wViewSettings here.
     return w;
   };
   const RibbonTabWidths W = computeTabWidths(false);
@@ -5326,18 +5316,28 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   // REQ-302: View tab.
   if (cmd.activeRibbonTab == kRibbonTabView) {
-    ribbonSpecs.push_back({W.wView, M.wView, [&]() {
-      RibbonSectionBegin("RibbonSecView", "View", curCompact ? M.wView : W.wView, panelH);
-      {
-        const float cw = colW({"Extents", "Window"});
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonZExtents", RibbonIconKind::ZoomExtents, "Extents", cw))
-          StartZoomExtentsCommand(cmd, log);
-        RibbonItemHelp("Zoom extents — fit all drawing content in the view.\nCommand bar: ZOOMEXTENTS or ZE");
-        if (smallBtn("##RibbonZWindow", RibbonIconKind::ZoomWindow, "Window", cw))
-          StartZoomWindowCommand(cmd, log);
-        RibbonItemHelp("Zoom window — zoom to a rectangle you pick with two clicks.\nCommand bar: ZOOMWINDOW or ZW");
-        ImGui::EndGroup();
+    // ---- View (zoom buttons + visual style/projection widgets) ----------
+    {
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##RibbonZExtents", (int)RibbonIconKind::ZoomExtents, nullptr, "Extents", false,
+                 "Zoom extents — fit all drawing content in the view.\nCommand bar: ZOOMEXTENTS or ZE", false),
+          rowBtn("##RibbonZWindow", (int)RibbonIconKind::ZoomWindow, nullptr, "Window", false,
+                 "Zoom window — zoom to a rectangle you pick with two clicks.\nCommand bar: ZOOMWINDOW or ZW", false),
+      })};
+      const float buttonsW = ribbonlayout::MeasureRibbonSection(spec).size.x;
+      // Visual style + Projection are live comboboxes/sliders, not buttons — the engine has no
+      // widget type for those, so they stay hand-drawn; their own footprint (already a measured
+      // constant, visualStyleComboW) is simply added alongside the engine-measured button width.
+      const float w = buttonsW + 8.f + visualStyleComboW + 8.f + visualStyleComboW + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, buttonsW]() {
+        RibbonSectionBegin("RibbonSecView", "View", buttonsW + 8.f + visualStyleComboW + 8.f + visualStyleComboW + 8.f,
+                           panelH);
+        RibbonLayout::DrawSection(spec, buttonsW, [&](const std::string& id) {
+          DevShell_OnUi(id.c_str());
+          if (id == "##RibbonZExtents") StartZoomExtentsCommand(cmd, log);
+          else if (id == "##RibbonZWindow") StartZoomWindowCommand(cmd, log);
+        });
         // Visual style (REQ-064). Sits in View because it is a property of how this viewport draws,
         // not of the drawing — the same reasoning that put it on RenderTuning rather than on an entity.
         ImGui::SameLine(0, 8);
@@ -5380,18 +5380,28 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           RibbonItemHelp("Perspective field of view, in degrees.\nCommand bar: FOV <1-179>");
         }
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        RibbonSectionEnd();
+      }});
+    }
 
+    // ---- Named Views (orientation/named-view combo + New View/Manager buttons) -----------------
     // REQ-302 increment 3 (content audit, D-2026-08-25-h): Settings placed on View per the user's
     // explicit decision — same window the View menu's "Settings..." item already opens.
     // REQ-106 Named Views. AutoCAD puts this on the View tab beside the viewport tools, and the
     // combo does double duty there: it NAMES the current view and it is how you change it.
-    ribbonSpecs.push_back({W.wNamedViews, M.wNamedViews, [&]() {
-      RibbonSectionBegin("RibbonSecNamedViews", "Named Views",
-                         curCompact ? M.wNamedViews : W.wNamedViews, panelH);
-      {
+    {
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##RibbonNewView", (int)RibbonIconKind::ZoomWindow, nullptr, "New View", false,
+                 "Save the current camera and coordinate frame under a name.\nCommand bar: VIEW S <name>", false),
+          rowBtn("##RibbonViewMgr", (int)RibbonIconKind::Layers, nullptr, "Manager", false,
+                 "View Manager — restore and delete saved views, and the drawing's saved\ncoordinate systems.\nCommand bar: VIEW",
+                 false),
+      })};
+      const float buttonsW = ribbonlayout::MeasureRibbonSection(spec).size.x;
+      const float w = namedViewComboW + 4.f + buttonsW + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, buttonsW]() {
+        RibbonSectionBegin("RibbonSecNamedViews", "Named Views", namedViewComboW + 4.f + buttonsW + 8.f, panelH);
         ImGui::BeginGroup();
         // "Unsaved View" whenever the camera does not correspond to a saved one — AutoCAD's own
         // wording, and a statement about the CAMERA rather than about unsaved drawing edits.
@@ -5440,64 +5450,60 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                        "this drawing. A saved view restores the camera AND the coordinate frame.\n"
                        "Command bar: VIEW [Save/Restore/Delete/?] <name>");
         ImGui::EndGroup();
-
         ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        const float cwv = colW({"New View", "Manager"});
-        if (smallBtn("##RibbonNewView", RibbonIconKind::ZoomWindow, "New View", cwv))
-          cmd.showViewManagerNewPrompt = true;
-        RibbonItemHelp("Save the current camera and coordinate frame under a name.\nCommand bar: VIEW S <name>");
-        if (smallBtn("##RibbonViewMgr", RibbonIconKind::Layers, "Manager", cwv))
-          cmd.showViewManagerWindow = true;
-        RibbonItemHelp("View Manager — restore and delete saved views, and the drawing's saved\n"
-                       "coordinate systems.\nCommand bar: VIEW");
-        ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        RibbonLayout::DrawSection(spec, buttonsW, [&](const std::string& id) {
+          DevShell_OnUi(id.c_str());
+          if (id == "##RibbonNewView") cmd.showViewManagerNewPrompt = true;
+          else if (id == "##RibbonViewMgr") cmd.showViewManagerWindow = true;
+        });
+        RibbonSectionEnd();
+      }});
+    }
 
+    // ---- Coordinates (UCS buttons + frame-selector combo) ----------------
     // REQ-154 Coordinates. AutoCAD's own panel name and position — View tab, beside Named Views.
     // The frame selector is duplicated from the one under the ViewCube on purpose: that one is where
     // your eye already is while drawing, this one is where you go looking when you want to CHANGE
     // frames. Both read their label from CadUcsFrameLabel so they cannot disagree.
-    ribbonSpecs.push_back({W.wCoords, M.wCoords, [&]() {
-      RibbonSectionBegin("RibbonSecCoords", "Coordinates", curCompact ? M.wCoords : W.wCoords, panelH);
-      {
-        const float cwc = colW({"3-Point", "Object"});
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonUcsCmd", RibbonIconKind::ZoomWindow, "UCS", cwc))
-          StartUcsCommand(cmd, log);
-        RibbonItemHelp("UCS — manages user coordinate systems.\n"
-                       "Pick an origin, then an X-axis point, then a point on the XY plane.\n"
-                       "Command bar: UCS");
-        if (smallBtn("##RibbonUcs3P", RibbonIconKind::ZoomWindow, "3-Point", cwc)) {
-          StartUcsCommand(cmd, log);  // the three-point form IS the bare command's default path
-        }
-        RibbonItemHelp("Define a frame from three picks: origin, +X direction, and a point on the\n"
-                       "+Y half of the plane.\nCommand bar: UCS then three points");
-        ImGui::EndGroup();
-
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonUcsWorld", RibbonIconKind::ZoomExtents, "World", cwc))
-          ProcessCommandLineSubmitStr(cmd, "UCS W", log);
-        RibbonItemHelp("Back to the World Coordinate System.\nCommand bar: UCS W");
-        if (smallBtn("##RibbonUcsPrev", RibbonIconKind::ZoomExtents, "Previous", cwc))
-          ProcessCommandLineSubmitStr(cmd, "UCS P", log);
-        RibbonItemHelp("Step back to the previous frame.\nCommand bar: UCS P");
-        ImGui::EndGroup();
-
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonUcsObj", RibbonIconKind::Layers, "Object", cwc))
-          ProcessCommandLineSubmitStr(cmd, "UCS OB", log);
-        RibbonItemHelp("Align the frame to a picked line, arc, circle, ellipse or text.\nCommand bar: UCS OB");
-        if (smallBtn("##RibbonUcsZ", RibbonIconKind::Layers, "Rotate Z", cwc))
-          ProcessCommandLineSubmitStr(cmd, "UCS Z", log);
-        RibbonItemHelp("Spin the frame about its own Z axis. Type an angle, or 2P to take it from\n"
-                       "two picked points.\nCommand bar: UCS Z");
-        ImGui::EndGroup();
-
+    {
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groupGapX = 4.f;
+      spec.groups = {
+          columnOfButtons({
+              rowBtn("##RibbonUcsCmd", (int)RibbonIconKind::ZoomWindow, nullptr, "UCS", false,
+                     "UCS — manages user coordinate systems.\nPick an origin, then an X-axis point, then a point on the XY plane.\nCommand bar: UCS",
+                     false),
+              rowBtn("##RibbonUcs3P", (int)RibbonIconKind::ZoomWindow, nullptr, "3-Point", false,
+                     "Define a frame from three picks: origin, +X direction, and a point on the\n+Y half of the plane.\nCommand bar: UCS then three points",
+                     false),
+          }),
+          columnOfButtons({
+              rowBtn("##RibbonUcsWorld", (int)RibbonIconKind::ZoomExtents, nullptr, "World", false,
+                     "Back to the World Coordinate System.\nCommand bar: UCS W", false),
+              rowBtn("##RibbonUcsPrev", (int)RibbonIconKind::ZoomExtents, nullptr, "Previous", false,
+                     "Step back to the previous frame.\nCommand bar: UCS P", false),
+          }),
+          columnOfButtons({
+              rowBtn("##RibbonUcsObj", (int)RibbonIconKind::Layers, nullptr, "Object", false,
+                     "Align the frame to a picked line, arc, circle, ellipse or text.\nCommand bar: UCS OB", false),
+              rowBtn("##RibbonUcsZ", (int)RibbonIconKind::Layers, nullptr, "Rotate Z", false,
+                     "Spin the frame about its own Z axis. Type an angle, or 2P to take it from\ntwo picked points.\nCommand bar: UCS Z",
+                     false),
+          }),
+      };
+      const float buttonsW = ribbonlayout::MeasureRibbonSection(spec).size.x;
+      const float w = buttonsW + 8.f + ucsComboW + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec, buttonsW]() {
+        RibbonSectionBegin("RibbonSecCoords", "Coordinates", buttonsW + 8.f + ucsComboW + 8.f, panelH);
+        RibbonLayout::DrawSection(spec, buttonsW, [&](const std::string& id) {
+          DevShell_OnUi(id.c_str());
+          if (id == "##RibbonUcsCmd" || id == "##RibbonUcs3P")
+            StartUcsCommand(cmd, log);  // the three-point form IS the bare command's default path
+          else if (id == "##RibbonUcsWorld") ProcessCommandLineSubmitStr(cmd, "UCS W", log);
+          else if (id == "##RibbonUcsPrev") ProcessCommandLineSubmitStr(cmd, "UCS P", log);
+          else if (id == "##RibbonUcsObj") ProcessCommandLineSubmitStr(cmd, "UCS OB", log);
+          else if (id == "##RibbonUcsZ") ProcessCommandLineSubmitStr(cmd, "UCS Z", log);
+        });
         // The frame selector, same content as the ViewCube's.
         ImGui::SameLine(0, 8);
         ImGui::BeginGroup();
@@ -5525,23 +5531,27 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                        "built but not saved. Save one with UCS N <name>; rename, restore and\n"
                        "delete saved frames in the View Manager.");
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        RibbonSectionEnd();
+      }});
+    }
 
-    ribbonSpecs.push_back({W.wViewSettings, M.wViewSettings, [&]() {
-      RibbonSectionBegin("RibbonSecViewSettings", "Settings", curCompact ? M.wViewSettings : W.wViewSettings, panelH);
-      {
-        if (smallBtn("##RibbonSettings", RibbonIconKind::Settings, "Settings", colW({"Settings"})))
-          cmd.showSettingsWindow = true;
-        RibbonItemHelp("Open application settings (same as View menu → Settings...).");
-        ImGui::SameLine(0, 4);
-        if (smallBtn("##RibbonToolspace", RibbonIconKind::Toolspace, "Toolspace", colW({"Toolspace"})))
-          cmd.showToolspaceWindow = true;
-        RibbonItemHelp("Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE");
-      }
-      RibbonSectionEnd();
-    }});
+    // ---- Settings ---------------------------------------------------------
+    {
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {gridOfButtons({
+          rowBtn("##RibbonSettings", (int)RibbonIconKind::Settings, nullptr, "Settings", false,
+                 "Open application settings (same as View menu → Settings...).", false),
+          rowBtn("##RibbonToolspace", (int)RibbonIconKind::Toolspace, nullptr, "Toolspace", false,
+                 "Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE", false),
+      }, 2, 4.f)};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecViewSettings", "Settings", spec, [&](const std::string& id) {
+          if (id == "##RibbonSettings") cmd.showSettingsWindow = true;
+          else if (id == "##RibbonToolspace") cmd.showToolspaceWindow = true;
+        });
+      }, "Settings", RibbonIconKind::Settings});
+    }
   } // if (activeRibbonTab == kRibbonTabView)
 
   // REQ-302 / GUI-pass 2026-08-30: Insert tab laid out like the Home tab — sections Import, Block,
