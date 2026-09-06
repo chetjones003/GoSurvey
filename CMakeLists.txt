@@ -756,6 +756,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ColorContrastTests.cpp
     tests/PlotFontTests.cpp
     tests/CadFontNameTests.cpp
+    # REQ-302/ADR-053 (issue #322) — ribbon layout data model. Header-only and pure: plain
+    # structs with no ImGui calls, so it belongs with the other header-only pure tests above.
+    tests/RibbonLayoutTypesTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
     tests/MtextTextOpsTests.cpp
