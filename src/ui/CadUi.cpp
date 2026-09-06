@@ -3949,7 +3949,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   };
   // Measures `spec`, opens the section's child panel at exactly the content width it measured
   // (+ the panel's own 8px horizontal padding), draws it, and dispatches clicks by button id.
-  auto drawHomeSection = [&](const char* childId, const char* title,
+  auto drawRibbonSectionSpec = [&](const char* childId, const char* title,
                               const ribbonlayout::RibbonSectionSpec& spec,
                               const std::function<void(const std::string&)>& onClick) {
     const float contentW = ribbonlayout::MeasureRibbonSection(spec).size.x;
@@ -3982,7 +3982,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       spec.groups = {toolspace, grid};
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
       ribbonSpecs.push_back({w, w, [&, spec]() {
-        drawHomeSection("RibbonSecPalettes", "Palettes", spec, [&](const std::string& id) {
+        drawRibbonSectionSpec("RibbonSecPalettes", "Palettes", spec, [&](const std::string& id) {
           if (id == "##RibbonToolspaceHome") cmd.showToolspaceWindow = true;
         });
       }, "Palettes", RibbonIconKind::Toolspace});
@@ -3999,7 +3999,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       spec.groups = {g};
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
       ribbonSpecs.push_back({w, w, [&, spec]() {
-        drawHomeSection("RibbonSecExplore", "Explore", spec, nullptr);
+        drawRibbonSectionSpec("RibbonSecExplore", "Explore", spec, nullptr);
       }, "Explore", RibbonIconKind::Nyi, "c3d_projexplorer"});
     }
 
@@ -4014,7 +4014,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       spec.groups = {g};
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
       ribbonSpecs.push_back({w, w, [&, spec]() {
-        drawHomeSection("RibbonSecOptimize", "Optimize", spec, nullptr);
+        drawRibbonSectionSpec("RibbonSecOptimize", "Optimize", spec, nullptr);
       }, "Optimize", RibbonIconKind::Nyi, "c3d_gradingopt"});
     }
 
@@ -4045,7 +4045,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const ribbonlayout::RibbonSectionSpec spec = buildSpec(false);
         const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
         ribbonSpecs.push_back({w, w, [&, spec]() {
-          drawHomeSection("RibbonSecGroundData", "Create Ground Data", spec, [&](const std::string& id) {
+          drawRibbonSectionSpec("RibbonSecGroundData", "Create Ground Data", spec, [&](const std::string& id) {
             if (id == "##CgdPoints") StartCreatePointsCommand(cmd, log);
           });
         }, "Create Ground Data", RibbonIconKind::SurveyPoint});
@@ -4082,7 +4082,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float mw = ribbonlayout::MeasureRibbonSection(medSpec).size.x + 8.f;
         ribbonSpecs.push_back({w, mw, [&, buildSpec]() {
           const ribbonlayout::RibbonSectionSpec spec = buildSpec(curCompact);
-          drawHomeSection("RibbonSecCreateDesign", "Create Design", spec, nullptr);
+          drawRibbonSectionSpec("RibbonSecCreateDesign", "Create Design", spec, nullptr);
         }, "Create Design", RibbonIconKind::Nyi, "c3d_alignment"});
       }
 
@@ -4106,7 +4106,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float mw = ribbonlayout::MeasureRibbonSection(medSpec).size.x + 8.f;
         ribbonSpecs.push_back({w, mw, [&, buildSpec]() {
           const ribbonlayout::RibbonSectionSpec spec = buildSpec(curCompact);
-          drawHomeSection("RibbonSecProfSect", "Profile & Section Views", spec, nullptr);
+          drawRibbonSectionSpec("RibbonSecProfSect", "Profile & Section Views", spec, nullptr);
         }, "Profile & Section Views", RibbonIconKind::Nyi, "c3d_profileview"});
       }
 
@@ -4136,7 +4136,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             iconBtn("##RibbonWipeout", -1, "c3d_wipeout", true, "Wipeout — not implemented yet."),
         }, 4, 4.f)};
         ribbonSpecs.push_back({0.f, 0.f, [&, spec]() {
-          drawHomeSection("RibbonSecDraw", "Draw", spec, [&](const std::string& id) {
+          drawRibbonSectionSpec("RibbonSecDraw", "Draw", spec, [&](const std::string& id) {
             if (id == "##RibbonLine") StartLineCommand(cmd, log);
             else if (id == "##RibbonArc") StartArcCommand(cmd, log);
             else if (id == "##RibbonPLine") StartPolylineCommand(cmd, log);
@@ -4180,7 +4180,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                     "Extend — lengthen to a boundary edge.\nCommand bar: EXTEND or EX"),
         }, 4, 4.f)};
         ribbonSpecs.push_back({0.f, 0.f, [&, spec]() {
-          drawHomeSection("RibbonSecModify", "Modify", spec, [&](const std::string& id) {
+          drawRibbonSectionSpec("RibbonSecModify", "Modify", spec, [&](const std::string& id) {
             if (id == "##RibbonMove") StartMoveCommand(cmd, log);
             else if (id == "##RibbonRotate") StartRotateCommand(cmd, log);
             else if (id == "##RibbonTrim") StartTrimCommand(cmd, log);
@@ -4244,7 +4244,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       spec.groups = {pasteGroup, grid};
 
       ribbonSpecs.push_back({0.f, 0.f, [&, spec, hasClip, hasSel]() {
-        drawHomeSection("RibbonSecClipboard", "Clipboard", spec, [&](const std::string& id) {
+        drawRibbonSectionSpec("RibbonSecClipboard", "Clipboard", spec, [&](const std::string& id) {
           if (id == "##RibbonPasteHome" && hasClip) StartPasteCommand(cmd, log);
           else if (id == "##RibbonCopyClipHome" && hasSel) CopySelectionToClipboard(cmd, log);
         });
@@ -5502,109 +5502,152 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   if (cmd.activeRibbonTab == kRibbonTabInsert) {
     // ---- Import ---------------------------------------------------------
     {
-      const float cA = colW({"Import DXF", "Import DWG", "Import PDF"});
-      const float cB = colW({"LandXML", "Points From File", "Import Survey Data"});
-      const float w = 8.f + (curCompact ? rowH * 2.f + 4.f : cA + 4.f + cB);
-      const float mw = 8.f + rowH * 2.f + 4.f;
-      ribbonSpecs.push_back({8.f + cA + 4.f + cB, mw, [&, cA, cB]() {
-        static char ribbonDxfPath[4096]{};
-        static char ribbonDwgPath[4096]{};
-        const float wSec = curCompact ? mw : 8.f + cA + 4.f + cB;
-        RibbonSectionBegin("RibbonSecInsImport", "Import", wSec, panelH);
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonImportDxf", RibbonIconKind::Import, "Import DXF", cA)) {
-          if (BrowseOpenFileDxfUtf8(ribbonDxfPath, sizeof(ribbonDxfPath)))
-            ImportDxfFile(cmd, ribbonDxfPath, log);
-        }
-        RibbonItemHelp("Import a DXF drawing into the current session.\nSame as File menu → Import DXF...");
-        if (smallBtn("##RibbonImportDwg", RibbonIconKind::Import, "Import DWG", cA)) {
-          if (BrowseOpenFileDwgUtf8(ribbonDwgPath, sizeof(ribbonDwgPath)))
-            ImportDwgFile(cmd, ribbonDwgPath, log);
-        }
-        RibbonItemHelp("Import a DWG drawing (LibreDWG, no converter).\nSame as File menu → Import DWG...");
-        if (insRow("##RibbonImportPdf", "PDF_Import", "Import PDF", cA))
-          StartPdfAttachCommand(cmd, log);
-        RibbonItemHelp("Attach a PDF page as a raster underlay.\nCommand bar: PDFATTACH");
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        insNyi("##RibbonInsLandXml", "DGN_Import", "LandXML", cB);
-        insNyi("##RibbonInsPointsFile", "Import", "Points From File", cB);
-        insNyi("##RibbonInsSurveyData", "svytripod", "Import Survey Data", cB);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
-      }});
-      (void)w;
+      // Must persist across frames — BrowseOpenFile*Utf8 write into these on the click frame,
+      // then the path is consumed by Import*File on that same frame.
+      static char ribbonDxfPath[4096]{};
+      static char ribbonDwgPath[4096]{};
+      auto buildSpec = [&](bool compact) {
+        ribbonlayout::RibbonSectionSpec spec;
+        spec.groupGapX = 4.f;
+        spec.groups = {
+            columnOfButtons({
+                rowBtn("##RibbonImportDxf", (int)RibbonIconKind::Import, nullptr, "Import DXF", false,
+                       "Import a DXF drawing into the current session.\nSame as File menu → Import DXF...", compact),
+                rowBtn("##RibbonImportDwg", (int)RibbonIconKind::Import, nullptr, "Import DWG", false,
+                       "Import a DWG drawing (LibreDWG, no converter).\nSame as File menu → Import DWG...", compact),
+                rowBtn("##RibbonImportPdf", -1, "PDF_Import", "Import PDF", false,
+                       "Attach a PDF page as a raster underlay.\nCommand bar: PDFATTACH", compact),
+            }),
+            columnOfButtons({
+                rowBtn("##RibbonInsLandXml", -1, "DGN_Import", "LandXML", true, "LandXML — not implemented yet.", compact),
+                rowBtn("##RibbonInsPointsFile", -1, "Import", "Points From File", true,
+                       "Points From File — not implemented yet.", compact),
+                rowBtn("##RibbonInsSurveyData", -1, "svytripod", "Import Survey Data", true,
+                       "Import Survey Data — not implemented yet.", compact),
+            }),
+        };
+        return spec;
+      };
+      const ribbonlayout::RibbonSectionSpec wideSpec = buildSpec(false);
+      const ribbonlayout::RibbonSectionSpec medSpec = buildSpec(true);
+      const float w = ribbonlayout::MeasureRibbonSection(wideSpec).size.x + 8.f;
+      const float mw = ribbonlayout::MeasureRibbonSection(medSpec).size.x + 8.f;
+      ribbonSpecs.push_back({w, mw, [&, buildSpec]() {
+        const ribbonlayout::RibbonSectionSpec spec = buildSpec(curCompact);
+        drawRibbonSectionSpec("RibbonSecInsImport", "Import", spec, [&](const std::string& id) {
+          if (id == "##RibbonImportDxf") {
+            if (BrowseOpenFileDxfUtf8(ribbonDxfPath, sizeof(ribbonDxfPath)))
+              ImportDxfFile(cmd, ribbonDxfPath, log);
+          } else if (id == "##RibbonImportDwg") {
+            if (BrowseOpenFileDwgUtf8(ribbonDwgPath, sizeof(ribbonDwgPath)))
+              ImportDwgFile(cmd, ribbonDwgPath, log);
+          } else if (id == "##RibbonImportPdf") {
+            StartPdfAttachCommand(cmd, log);
+          }
+        });
+      }, "Import", RibbonIconKind::Import});
     }
 
     // ---- Block ---------------------------------------------------------
     {
-      const float cA = colW({"Insert", "Create"});
-      const float cB = colW({"Edit", "Edit Attributes"});
-      const float w = 8.f + cA + 4.f + cB;
-      ribbonSpecs.push_back({w, w, [&, cA, cB]() {
-        RibbonSectionBegin("RibbonSecInsBlock", "Block", w, panelH);
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonInsInsert", RibbonIconKind::BlockInsert, "Insert", cA))
-          StartInsertBlockCommand(cmd, log);
-        RibbonItemHelp("Insert a block. Opens the Insert dialog (same as INSERT).");
-        if (insRow("##RibbonInsCreate", "Make_Block", "Create", cA)) {
-          char buf[8] = "BLOCK";
-          ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
-        }
-        RibbonItemHelp("Create a block definition from the selection.\nCommand bar: BLOCK <name>, <x>, <y>");
-        ImGui::EndGroup();
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (insRow("##RibbonInsEdit", "Block_Editor", "Edit", cB))
-          CadBlocksOpenEditPicker(cmd, log);
-        RibbonItemHelp("Block Editor — choose a definition from the drawing or block library.\nCommand bar: BEDIT");
-        insNyi("##RibbonInsEditAttr", "Multiple_Attributes", "Edit Attributes", cB);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
-      }});
+      auto buildSpec = [&](bool compact) {
+        ribbonlayout::RibbonSectionSpec spec;
+        spec.groupGapX = 4.f;
+        spec.groups = {
+            columnOfButtons({
+                rowBtn("##RibbonInsInsert", (int)RibbonIconKind::BlockInsert, nullptr, "Insert", false,
+                       "Insert a block. Opens the Insert dialog (same as INSERT).", compact),
+                rowBtn("##RibbonInsCreate", -1, "Make_Block", "Create", false,
+                       "Create a block definition from the selection.\nCommand bar: BLOCK <name>, <x>, <y>", compact),
+            }),
+            columnOfButtons({
+                rowBtn("##RibbonInsEdit", -1, "Block_Editor", "Edit", false,
+                       "Block Editor — choose a definition from the drawing or block library.\nCommand bar: BEDIT",
+                       compact),
+                rowBtn("##RibbonInsEditAttr", -1, "Multiple_Attributes", "Edit Attributes", true,
+                       "Edit Attributes — not implemented yet.", compact),
+            }),
+        };
+        return spec;
+      };
+      const ribbonlayout::RibbonSectionSpec wideSpec = buildSpec(false);
+      const ribbonlayout::RibbonSectionSpec medSpec = buildSpec(true);
+      const float w = ribbonlayout::MeasureRibbonSection(wideSpec).size.x + 8.f;
+      const float mw = ribbonlayout::MeasureRibbonSection(medSpec).size.x + 8.f;
+      ribbonSpecs.push_back({w, mw, [&, buildSpec]() {
+        const ribbonlayout::RibbonSectionSpec spec = buildSpec(curCompact);
+        drawRibbonSectionSpec("RibbonSecInsBlock", "Block", spec, [&](const std::string& id) {
+          if (id == "##RibbonInsInsert") {
+            StartInsertBlockCommand(cmd, log);
+          } else if (id == "##RibbonInsCreate") {
+            char buf[8] = "BLOCK";
+            ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+          } else if (id == "##RibbonInsEdit") {
+            CadBlocksOpenEditPicker(cmd, log);
+          }
+        });
+      }, "Block", RibbonIconKind::BlockInsert});
     }
 
     // ---- Reference ---------------------------------------------------------
     {
-      const float cw = colW({"Attach", "Clip", "Adjust"});
-      const float w = 8.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw]() {
-        RibbonSectionBegin("RibbonSecInsReference", "Reference", w, panelH);
-        ImGui::BeginGroup();
-        insNyi("##RibbonRefAttach", "Attach", "Attach", cw);
-        insNyi("##RibbonRefClip", "Clip", "Clip", cw);
-        insNyi("##RibbonRefAdjust", "Adjust", "Adjust", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
-      }});
+      auto buildSpec = [&](bool compact) {
+        ribbonlayout::RibbonSectionSpec spec;
+        spec.groups = {columnOfButtons({
+            rowBtn("##RibbonRefAttach", -1, "Attach", "Attach", true, "Attach — not implemented yet.", compact),
+            rowBtn("##RibbonRefClip", -1, "Clip", "Clip", true, "Clip — not implemented yet.", compact),
+            rowBtn("##RibbonRefAdjust", -1, "Adjust", "Adjust", true, "Adjust — not implemented yet.", compact),
+        })};
+        return spec;
+      };
+      const ribbonlayout::RibbonSectionSpec wideSpec = buildSpec(false);
+      const ribbonlayout::RibbonSectionSpec medSpec = buildSpec(true);
+      const float w = ribbonlayout::MeasureRibbonSection(wideSpec).size.x + 8.f;
+      const float mw = ribbonlayout::MeasureRibbonSection(medSpec).size.x + 8.f;
+      ribbonSpecs.push_back({w, mw, [&, buildSpec]() {
+        const ribbonlayout::RibbonSectionSpec spec = buildSpec(curCompact);
+        drawRibbonSectionSpec("RibbonSecInsReference", "Reference", spec, nullptr);
+      }, "Reference", RibbonIconKind::Nyi, "Attach"});
     }
 
     // ---- Point Cloud ---------------------------------------------------------
     {
-      const float cw = colW({"Attach"});
-      const float w = 8.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw]() {
-        RibbonSectionBegin("RibbonSecInsPointCloud", "Point Cloud", w, panelH);
-        ImGui::BeginGroup();
-        insNyi("##RibbonPcAttach", "Attach", "Attach", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
-      }});
+      auto buildSpec = [&](bool compact) {
+        ribbonlayout::RibbonSectionSpec spec;
+        spec.groups = {columnOfButtons({
+            rowBtn("##RibbonPcAttach", -1, "Attach", "Attach", true, "Attach — not implemented yet.", compact),
+        })};
+        return spec;
+      };
+      const ribbonlayout::RibbonSectionSpec wideSpec = buildSpec(false);
+      const ribbonlayout::RibbonSectionSpec medSpec = buildSpec(true);
+      const float w = ribbonlayout::MeasureRibbonSection(wideSpec).size.x + 8.f;
+      const float mw = ribbonlayout::MeasureRibbonSection(medSpec).size.x + 8.f;
+      ribbonSpecs.push_back({w, mw, [&, buildSpec]() {
+        const ribbonlayout::RibbonSectionSpec spec = buildSpec(curCompact);
+        drawRibbonSectionSpec("RibbonSecInsPointCloud", "Point Cloud", spec, nullptr);
+      }, "Point Cloud", RibbonIconKind::Nyi, "Attach"});
     }
 
     // ---- Data ---------------------------------------------------------
     {
-      const float cw = colW({"Field", "Hyperlink"});
-      const float w = 8.f + cw;
-      ribbonSpecs.push_back({w, w, [&, cw]() {
-        RibbonSectionBegin("RibbonSecInsData", "Data", w, panelH);
-        ImGui::BeginGroup();
-        insNyi("##RibbonDataField", "Field", "Field", cw);
-        insNyi("##RibbonDataHyperlink", "Hyperlink", "Hyperlink", cw);
-        ImGui::EndGroup();
-        RibbonSectionEnd();
-      }});
+      auto buildSpec = [&](bool compact) {
+        ribbonlayout::RibbonSectionSpec spec;
+        spec.groups = {columnOfButtons({
+            rowBtn("##RibbonDataField", -1, "Field", "Field", true, "Field — not implemented yet.", compact),
+            rowBtn("##RibbonDataHyperlink", -1, "Hyperlink", "Hyperlink", true, "Hyperlink — not implemented yet.",
+                   compact),
+        })};
+        return spec;
+      };
+      const ribbonlayout::RibbonSectionSpec wideSpec = buildSpec(false);
+      const ribbonlayout::RibbonSectionSpec medSpec = buildSpec(true);
+      const float w = ribbonlayout::MeasureRibbonSection(wideSpec).size.x + 8.f;
+      const float mw = ribbonlayout::MeasureRibbonSection(medSpec).size.x + 8.f;
+      ribbonSpecs.push_back({w, mw, [&, buildSpec]() {
+        const ribbonlayout::RibbonSectionSpec spec = buildSpec(curCompact);
+        drawRibbonSectionSpec("RibbonSecInsData", "Data", spec, nullptr);
+      }, "Data", RibbonIconKind::Nyi, "Field"});
     }
   } // if (activeRibbonTab == kRibbonTabInsert)
 
