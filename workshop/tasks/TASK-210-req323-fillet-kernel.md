@@ -14,7 +14,7 @@ Kernel first, command second — the shape REQ-319 and every Phase 4 slice used.
 |---|---|
 | `src/util/brep.hpp` | ten `Problem` values; `FilletEdge`, `FilletEdges` |
 | `src/util/brep.cpp` | the rolling-ball construction, the pre-check, and the compaction pass |
-| `tests/FilletEdgeTests.cpp` | new — 16 cases |
+| `tests/FilletEdgeTests.cpp` | new — 11 cases |
 | `spec/requirements.md`, `spec/project.md` | two acceptance numbers corrected (below) |
 
 ## The construction, in one paragraph
@@ -62,7 +62,7 @@ recorded in D-2026-09-05-c rather than rediscovered a fourth time.
 
 ## Test approach
 
-`FilletEdgeTests`, 16 cases. The box is checked against both closed forms *and* against the topology
+`FilletEdgeTests`, 11 cases. The box is checked against both closed forms *and* against the topology
 delta amendment (j) states, plus the surface **kind** — a fillet that produced the right volume out
 of the wrong surface would pass the numbers and be wrong for everything downstream.
 
@@ -71,8 +71,23 @@ simply cut `r` off each face would pass the box and fail here. Its setback is as
 closed form `2*L*r / (sqrt(L^2+h^2) - h)` rather than a decimal, because the first draft's hand-typed
 `2.9516` was itself wrong by 0.0025 and this case caught that too.
 
-Every refusal is asserted **by name** with the output solid untouched, including at the exact limit
-`r = 8` — at the limit the face does not thin, it vanishes.
+Every refusal `FilletEdge` can produce is now asserted **by name** with the output solid untouched,
+including at the exact limit `r = 8` (the face does not thin, it vanishes) — an external
+pre-merge review (D-2026-09-06) found that four of the ten `Problem::Fillet*` values (concave edge,
+parallel faces, an oblique end face, a >3-edge vertex) had code but no test, so a sign error in any
+of them could have shipped silent. Three are hand-built fixtures rather than real primitives: no
+`Make*` shape produces two literally parallel faces meeting an edge, or a vertex of degree 4, so
+those two are constructed directly against the `Solid` struct; the concave case is the mirror image
+of the same hand-built fixture (flip which way face A's loop traverses the edge and the sign the
+convexity check reads flips with it). The fourth (an oblique pyramid-rim end face) uses the real
+`MakePyramid` primitive.
+
+That same review caught a second, separate bug: `ProblemText` — the one function that turns a
+`Problem` into what the user actually reads — had **no case for any of the ten new `Fillet*`
+values**, so every fillet refusal fell through to the generic "The solid is not valid.", which is
+actively wrong for e.g. a concave edge or an oversized radius (neither touches the solid at all).
+Fixed with one message per value, and a test (`ProblemText` case above) that pins each one apart
+from the generic fallback so this cannot regress silently again.
 
 The last case is REQ-323's own final bullet: `PushPullFace` still works on the filleted solid. A
 fillet that left a shape later operations refused would be worse than one that refused up front.
@@ -80,20 +95,21 @@ fillet that left a shape later operations refused would be worse than one that r
 ## Verification
 
 - **build-project** — PASS. Release MSVC/Ninja, clean tree.
-- **testing** — PASS. `ctest` **1218/1218**.
+- **testing** — PASS. `ctest` **1222/1222** (post-review; was 1218/1218 before the added cases).
 - **architecture-review** — PASS. Kernel-only; the operation follows amendment (i)'s copy-edit-
   validate shape and brings its own pre-check, and adds amendment (j)'s topology change.
-- **code-review** — self-run. It found the inverted traversal flag above, and one thing worth
-  keeping: `CompactUnused` is a separate pass rather than bookkeeping woven through the edit,
-  because `UnusedVertex` is a `Validate` failure — forgetting the sweep fails loudly.
+- **code-review** — self-run, plus an external pre-merge review (D-2026-09-06) that found the two
+  gaps described above (both fixed) and one inflated claim: this file originally said "16 cases" —
+  it has always had far fewer `TEST_CASE`s than that; corrected here to the actual count.
 - **performance-review** — PASS. One whole-solid copy per filleted edge, as every modifying
   operation makes (ADR-046 (d)), plus a linear sweep per edge.
 
 ## Not covered by test, stated plainly
 
 - **The `FILLET` command.** Next slice — there is no way to reach this from the UI or a transcript
-  yet, so REQ-323's undo, `.gs` round-trip and refusal-message bullets are not yet asserted.
-- **An oblique end face.** Refused by name; the ellipse construction is increment 4.
+  yet, so REQ-323's undo, `.gs` round-trip bullets are not yet asserted.
+- **An oblique end face's construction.** Refused by name (and now tested that it IS refused); the
+  ellipse construction itself is increment 4.
 
 ## Technical debt
 

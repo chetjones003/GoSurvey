@@ -1706,6 +1706,29 @@ const char* ProblemText(Problem p) {
     return "That would flatten the curved wall beside this face, or push it through its own apex.";
   case Problem::PushPullResultInvalid:
     return "That push would turn the solid inside out or flatten it, so it was not applied.";
+  case Problem::FilletRadiusNotPositive:
+    return "Fillet radius must be greater than zero.";
+  case Problem::FilletEdgeNotLine:
+    return "Only a straight edge can be filleted; this one is curved.";
+  case Problem::FilletFaceNotPlanar:
+    return "One of the faces beside this edge is curved, not flat.";
+  case Problem::FilletFacesParallel:
+    return "The two faces beside this edge are parallel, so there is no corner to round.";
+  case Problem::FilletEdgeConcave:
+    return "This edge is concave, not convex — rounding it would add material, which this fillet "
+           "does not yet do.";
+  case Problem::FilletRadiusTooLarge:
+    return "That radius is too large for this edge: it would reach past the far side of an "
+           "adjacent face.";
+  case Problem::FilletEndFaceUnsupported:
+    return "A face at one end of this edge is curved or not square to it, so the fillet cannot "
+           "close there.";
+  case Problem::FilletVertexNotSimple:
+    return "More than three edges meet at one end of this edge, so it cannot be filleted alone.";
+  case Problem::FilletEdgesShareVertex:
+    return "Two of the selected edges share a corner, which this fillet does not yet support.";
+  case Problem::FilletResultInvalid:
+    return "That fillet would leave the solid invalid, so it was not applied.";
   }
   return "The solid is not valid.";
 }
@@ -2359,8 +2382,7 @@ void CompactUnused(Solid* s) {
     for (Loop& lp : f.loops)
       for (EdgeUse& u : lp.uses)
         u.edge = edgeMap[static_cast<std::size_t>(u.edge)];
-  for (Shell& sh : s->shells)
-    (void)sh;  // shells index faces, and no face is removed
+  // Shells index faces, and no face is removed here, so they need no remapping pass.
   s->vertices = std::move(verts);
   s->edges = std::move(edges);
 }

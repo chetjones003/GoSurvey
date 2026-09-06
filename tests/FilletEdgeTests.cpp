@@ -16,6 +16,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <string>
 #include <vector>
 
 #include "brep.hpp"
@@ -244,6 +245,132 @@ TEST_CASE("Fillet: two edges sharing a vertex are refused, and nothing is built"
   CHECK(mp.volume == Approx(1600.0 - 2.0 * 20.0 * (4.0 - kPi)).epsilon(1e-12));
 }
 
+TEST_CASE("Fillet: a concave edge is refused, not silently built", "[fillet][req323]") {
+  // REQ-323 item 6. A hand-built fixture, same style as the parallel-faces case above: convex vs.
+  // concave is decided entirely by `dot(uA, nB)`, where `uA` is `cross(nA, dirA)` and `dirA` follows
+  // the edge's traversal direction in face A's own loop. Face A here traverses the edge FORWARD
+  // (`reversed = false`), which is the mirror image of a real convex corner's winding for this same
+  // pair of face normals -- material occupies more than a quarter-turn, the opposite of a box corner.
+  brep::Solid s;
+  s.vertices.push_back(brep::Vertex{{0.0, 0.0, 0.0}});
+  s.vertices.push_back(brep::Vertex{{10.0, 0.0, 0.0}});
+  brep::Edge edge0;
+  edge0.kind = brep::CurveKind::Line;
+  edge0.v0 = 0;
+  edge0.v1 = 1;
+  s.edges.push_back(edge0);
+  const int e0 = 0;
+
+  brep::Face a;
+  a.surface.kind = brep::SurfaceKind::Plane;
+  a.surface.frame.zAxis = {0.0, 0.0, 1.0};
+  a.loops.push_back(brep::Loop{{brep::EdgeUse{e0, false}}});
+  s.faces.push_back(a);
+
+  brep::Face b;
+  b.surface.kind = brep::SurfaceKind::Plane;
+  b.surface.frame.zAxis = {0.0, 1.0, 0.0};  // perpendicular to a, not parallel
+  b.loops.push_back(brep::Loop{{brep::EdgeUse{e0, true}}});
+  s.faces.push_back(b);
+
+  brep::Solid out;
+  Problem w{};
+  CHECK_FALSE(brep::FilletEdge(s, e0, 1.0, &out, &w));
+  CHECK(w == Problem::FilletEdgeConcave);
+}
+
+TEST_CASE("Fillet: two coplanar faces meeting an edge are refused, not divided by zero",
+          "[fillet][req323]") {
+  // A hand-built fixture rather than a primitive: no `Make*` shape in the kernel produces two
+  // PARALLEL planar faces meeting a straight edge (that is a degenerate fold, not a solid corner),
+  // so this pathological case is only reachable by constructing it directly — the way REQ-313's
+  // `paramLoops` documents itself as "exercised only by hand-built test fixtures until" its consumer
+  // exists. `tan(theta/2)` is undefined at theta = 0, which is exactly why this must be a pre-check.
+  brep::Solid s;
+  s.vertices.push_back(brep::Vertex{{0.0, 0.0, 0.0}});
+  s.vertices.push_back(brep::Vertex{{10.0, 0.0, 0.0}});
+  const int v0 = 0;
+  const int v1 = 1;
+  brep::Edge edge0;
+  edge0.kind = brep::CurveKind::Line;
+  edge0.v0 = v0;
+  edge0.v1 = v1;
+  s.edges.push_back(edge0);
+  const int e0 = 0;
+
+  brep::Face a;
+  a.surface.kind = brep::SurfaceKind::Plane;
+  a.surface.frame.zAxis = {0.0, 0.0, 1.0};
+  a.loops.push_back(brep::Loop{{brep::EdgeUse{e0, false}}});
+  s.faces.push_back(a);
+
+  brep::Face b;
+  b.surface.kind = brep::SurfaceKind::Plane;
+  b.surface.frame.zAxis = {0.0, 0.0, 1.0};  // same normal as `a` -- coplanar/parallel, not a corner
+  b.loops.push_back(brep::Loop{{brep::EdgeUse{e0, true}}});
+  s.faces.push_back(b);
+
+  brep::Solid out;
+  Problem w{};
+  CHECK_FALSE(brep::FilletEdge(s, e0, 1.0, &out, &w));
+  CHECK(w == Problem::FilletFacesParallel);
+}
+
+TEST_CASE("Fillet: a vertex with more than three edges is refused, not guessed at",
+          "[fillet][req323]") {
+  // REQ-323's precondition assumes exactly one gap opens at each end when the edge is removed -- true
+  // at an ordinary 3-edge solid vertex, but not at a higher-valence one. A hand-built fourth face
+  // touching the box's own top-back-left vertex (reusing a real edge already there) manufactures that
+  // vertex without needing a primitive that produces one.
+  const brep::Solid box = Box(20.0, 10.0, 8.0);
+  const int ei = EdgeAt(box, {0.0, 5.0, 8.0});
+  REQUIRE(ei >= 0);
+  const int v0 = box.edges[static_cast<std::size_t>(ei)].v0;
+
+  int otherEdge = -1;
+  for (std::size_t i = 0; i < box.edges.size(); ++i) {
+    if (static_cast<int>(i) == ei)
+      continue;
+    if (box.edges[i].v0 == v0 || box.edges[i].v1 == v0) {
+      otherEdge = static_cast<int>(i);
+      break;
+    }
+  }
+  REQUIRE(otherEdge >= 0);
+
+  brep::Solid corrupt = box;
+  brep::Face phantom;
+  phantom.surface.kind = brep::SurfaceKind::Plane;
+  phantom.surface.frame.zAxis = {0.0, 0.0, 1.0};
+  phantom.loops.push_back(brep::Loop{{brep::EdgeUse{otherEdge, false}}});
+  corrupt.faces.push_back(phantom);
+
+  brep::Solid out;
+  Problem w{};
+  CHECK_FALSE(brep::FilletEdge(corrupt, ei, 2.0, &out, &w));
+  CHECK(w == Problem::FilletVertexNotSimple);
+}
+
+TEST_CASE("Fillet: an oblique end face is refused, not fudged into a circle",
+          "[fillet][req323]") {
+  // REQ-323 item 5 / increment 4's boundary: a square PYRAMID's base rim sits between the (planar)
+  // base and one (planar) slanted side face -- both meeting FilletEdge's own preconditions -- but at
+  // each end of that rim, the ADJACENT side face is oblique to the rim rather than square to it, so
+  // the fillet-to-face boundary there would be an ellipse, not the circle increment 1 builds.
+  brep::Solid pyramid;
+  Problem why{};
+  REQUIRE(brep::MakePyramid(World(), 4, 5.0, 0.0, 6.0, &pyramid, &why));
+
+  const ray3d::Vec3 mid{2.5, 2.5, 0.0};  // base rim from (5,0,0) to (0,5,0)
+  const int ei = EdgeAt(pyramid, mid);
+  REQUIRE(ei >= 0);
+
+  brep::Solid out;
+  Problem w{};
+  CHECK_FALSE(brep::FilletEdge(pyramid, ei, 0.3, &out, &w));
+  CHECK(w == Problem::FilletEndFaceUnsupported);
+}
+
 TEST_CASE("Fillet: a filleted solid is still a solid the next operation accepts",
           "[fillet][req323]") {
   // REQ-323's last acceptance bullet. A fillet that left a shape later operations refused would be
@@ -266,4 +393,24 @@ TEST_CASE("Fillet: a filleted solid is still a solid the next operation accepts"
   Problem w{};
   REQUIRE(brep::PushPullFace(filleted, bottom, 1.0, &pushed, &w));
   CHECK(brep::Validate(pushed) == Problem::Ok);
+}
+
+TEST_CASE("Fillet: every refusal has its own message, not the generic solid-invalid one",
+          "[fillet][req323]") {
+  // REQ-323 item 5: "refused by name". `ProblemText` is the one place that name reaches a user, so a
+  // `Fillet*` value with no case in that switch would fall through to "The solid is not valid." --
+  // true of nothing this function refuses, and actively misleading for e.g. a concave edge or an
+  // oversized radius, neither of which touches the solid at all.
+  const std::vector<Problem> filletProblems = {
+      Problem::FilletRadiusNotPositive,  Problem::FilletEdgeNotLine,
+      Problem::FilletFaceNotPlanar,      Problem::FilletFacesParallel,
+      Problem::FilletEdgeConcave,        Problem::FilletRadiusTooLarge,
+      Problem::FilletEndFaceUnsupported, Problem::FilletVertexNotSimple,
+      Problem::FilletEdgesShareVertex,   Problem::FilletResultInvalid,
+  };
+  for (const Problem p : filletProblems) {
+    const std::string text = brep::ProblemText(p);
+    CHECK(text != "The solid is not valid.");
+    CHECK_FALSE(text.empty());
+  }
 }
