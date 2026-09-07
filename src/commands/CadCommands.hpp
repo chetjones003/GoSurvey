@@ -4910,9 +4910,18 @@ bool ParseWorldPointD(const std::string& raw, double* ox, double* oy, bool allow
 /// is only valid while the plane is close enough to horizontal that Z is a function of (x,y) — it
 /// degenerates for a plane that stands on edge to world Z (a Front/Left/Right-style UCS), which is
 /// exactly issue #371's repro. New call sites should always pass the real Z when they have it.
+///
+/// \p wz (optional, issue #371 follow-up) receives the ortho-adjusted world Z when the locked UCS
+/// axis maps onto world Z, e.g. squaring to a Front/Left/Right-style UCS's vertical axis. Left
+/// untouched when \p wz is null, when ORTHO/POLAR did not fire, or under the World UCS (ORTHO never
+/// touches Z there). A caller that commits or previews a point's elevation independently (via
+/// \c CadCommitElevation / \c uiCursorWorldZ) MUST pass \p wz and use the value it comes back with
+/// instead of re-deriving Z from the raw cursor, or the lock silently fails to reach the render or
+/// the committed geometry even though \p wx / \p wy report a locked point.
 void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
                                    bool ortho, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
-                                   float targetZ = std::numeric_limits<float>::quiet_NaN());
+                                   float targetZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float* wz = nullptr);
 
 /// POLAR tracking (issue #154, REQ-154): snap the world pick onto the nearest polar ray around the
 /// anchor, measured in the active UCS's XY plane from +X. No-op unless \p polar and
@@ -4923,7 +4932,8 @@ void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
 /// applies here.
 void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
                                    bool polar, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
-                                   float targetZ = std::numeric_limits<float>::quiet_NaN());
+                                   float targetZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float* wz = nullptr);
 
 /// Snap pick onto anchor + t*(ux,uy). Negative \p t allowed unless \p forwardOnly.
 void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx, float lockUy, float* wx, float* wy,
