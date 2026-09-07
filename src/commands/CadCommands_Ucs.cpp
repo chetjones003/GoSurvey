@@ -254,11 +254,26 @@ ray3d::Vec3 ConstrainToUcsOrthoOnScreen(const ucs::Ucs& frame, const ray3d::Vec3
   // candidate the cursor is actually closer to on screen. This subsumes the plan-view case exactly —
   // in plan view the two decisions always agree, since UCS deltas and screen deltas are the same
   // thing up to a uniform scale.
-  // The out-of-plane component locks to the ANCHOR's, not the raw target's — see ConstrainToUcsOrtho's
-  // comment (issue #371 third follow-up) for why.
-  const ray3d::Vec3 d = ucs::WorldVectorToUcs(frame, ray3d::Sub(target, anchor));
-  const ray3d::Vec3 freeAlongY = ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, ray3d::Vec3{0.0, d.y, 0.0}));
-  const ray3d::Vec3 freeAlongX = ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, ray3d::Vec3{d.x, 0.0, 0.0}));
+  //
+  // issue #386: each candidate is the point on its LOCKED AXIS LINE (through the anchor) closest to
+  // the cursor's own camera RAY — not "take target's dominant UCS component," which intersects the
+  // cursor ray with the whole UCS PLANE first and only then discards the other axis. That plane
+  // intersection is fine near-on but goes numerically unstable the moment the plane grazes the
+  // camera ray (an easy thing under an orbited view even when the LOCKED LINE itself is nowhere near
+  // parallel to it) — a tiny mouse move then blows up into an enormous, erratic in-plane swing, which
+  // is exactly the "preview length doesn't track the cursor" defect. Measuring against each candidate
+  // LINE directly sidesteps the plane's conditioning entirely. `target` is already a real point on
+  // the cursor's ray (the caller built it by intersecting that ray with the work plane), so the ray
+  // itself is recovered with no pixel coordinates needed (`Camera::RayThroughWorldPoint`).
+  //
+  // The out-of-plane component locks to the ANCHOR's, not the raw target's, automatically here: both
+  // candidate lines run along in-plane UCS axes, so neither can carry the point off the plane through
+  // the anchor — see ConstrainToUcsOrtho's comment (issue #371 third follow-up) for why that matters.
+  const ray3d::Ray cursorRay = cam.RayThroughWorldPoint(target);
+  const ray3d::Vec3 yDirWorld = ucs::UcsVectorToWorld(frame, ray3d::Vec3{0.0, 1.0, 0.0});
+  const ray3d::Vec3 xDirWorld = ucs::UcsVectorToWorld(frame, ray3d::Vec3{1.0, 0.0, 0.0});
+  const ray3d::Vec3 freeAlongY = ray3d::ClosestPointOnLineToRay(cursorRay, anchor, yDirWorld);
+  const ray3d::Vec3 freeAlongX = ray3d::ClosestPointOnLineToRay(cursorRay, anchor, xDirWorld);
   float cx = 0.f, cy = 0.f, ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
   cam.WorldToScreen(target.x, target.y, target.z, viewportWidthPx, viewportHeightPx, &cx, &cy);
   cam.WorldToScreen(freeAlongY.x, freeAlongY.y, freeAlongY.z, viewportWidthPx, viewportHeightPx, &ax, &ay);
