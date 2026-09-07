@@ -1825,12 +1825,22 @@ struct AppCommandState {
   /// as in AutoCAD: it fires on objects that do not touch, which is surprising unless asked for.
   bool objectSnapApparentIntersection = false;
   bool objectSnapSurface = true;
-  /// Snap to a B-rep solid's faces and edges (REQ-313). ONE toggle for both kinds, not two: they
-  /// are the two halves of "snap to a solid", and no requirement asks to enable one without the
-  /// other, so a second preference would be an unearned option (REQ-301). A solid's VERTICES and its
-  /// edge MIDPOINTS answer to the ordinary Endpoint and Midpoint toggles instead — they are exactly
-  /// what those snaps already mean, and a user who has Endpoint on expects a corner to snap.
-  bool objectSnapSolid = true;
+  /// --- 3D Object Snap (REQ-325/#395, supersedes REQ-301) ---------------------------------------
+  /// AutoCAD's "3D Object Snap" tab is a SEPARATE system from the 2D Object Snap above: its own
+  /// master toggle (F4, independent of F3's `objectSnapEnabled`) and its own six per-mode toggles.
+  /// REQ-301 previously argued a single `objectSnapSolid` toggle was correct because "no requirement
+  /// asks to enable one [face/edge] without the other" — #395 is exactly that requirement, adding
+  /// four more AutoCAD-parity modes besides, so the single toggle is retired (D-2026-09-07-a) in
+  /// favor of one flag per mode. Solid Vertex/Midpoint-on-edge snapping used to ride on the 2D
+  /// Endpoint/Midpoint toggles; they now live here exclusively, so 3D Object Snap really is
+  /// independent of 2D Object Snap.
+  bool objectSnap3dEnabled = true;        ///< Master toggle, F4.
+  bool objectSnap3dVertex = true;         ///< A solid's topology vertices (was objectSnapEndpoint).
+  bool objectSnap3dMidpointEdge = true;   ///< An edge's midpoint (was objectSnapMidpoint).
+  bool objectSnap3dNearestFace = true;    ///< Nearest point on a face under the cursor (was objectSnapSolid/Face).
+  bool objectSnap3dCenterFace = false;    ///< Centroid of a face — every SurfaceKind, including Nurbs.
+  bool objectSnap3dKnot = false;          ///< A NURBS (freeform) face's knot points.
+  bool objectSnap3dPerpendicular = false; ///< Foot of the perpendicular from a command reference onto a planar face.
   /// Isolines drawn around a curved solid face, per full turn (AutoCAD calls this ISOLINES).
   /// Per drawing, persisted in `.gs` and in user preferences like every other display setting.
   int viewportSolidIsolines = kSolidDefaultIsolines;

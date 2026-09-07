@@ -645,6 +645,17 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     AppendSnapDiamondOutline(out, f, mh * 0.62f);
     AppendSnapSquareOutline(out, f, mh);
     break;
+  case CadSnap::Kind::CenterOfFace:
+    // A triangle with an inscribed circle — deliberately distinct from Face's diamond+square and
+    // from Midpoint's plain triangle (REQ-325/#395).
+    AppendSnapTriangleOutline(out, f, mh);
+    AppendSnapCircle(out, f, mh * 0.4f, snapCircSegs);
+    break;
+  case CadSnap::Kind::Knot:
+    // A diamond inside a square — not used by any other kind (REQ-325/#395).
+    AppendSnapSquareOutline(out, f, mh);
+    AppendSnapDiamondOutline(out, f, mh * 0.55f);
+    break;
   case CadSnap::Kind::Grip:
     break; // grip snap is silent — no glyph drawn
   }
@@ -2438,13 +2449,19 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glLineWidth(kLwMain);
   }
 
-  // --- Object snap glyph (green, screen-stable size) ---
+  // --- Object snap glyph (screen-stable size) ---
+  // 2D Object Snap (F3) glyphs stay green; 3D Object Snap (F4, REQ-325/#395) glyphs are purple
+  // (#8803fc) so a user can tell at a glance which system answered, even for a kind (Endpoint,
+  // Midpoint, Perpendicular) shared between both.
   if (snapOverlay && snapOverlay->valid) {
     std::vector<float> snapGeom;
     BuildSnapOverlayLines(*snapOverlay, cam, halfH, fbH_, snapGlyphHalfPx, viewAnchorX, viewAnchorY, snapGeom);
     if (!snapGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-      glUniform4f(locCol, 0.15f, 0.92f, 0.38f, 1.f);
+      if (snapOverlay->solid)
+        glUniform4f(locCol, 0x88 / 255.f, 0x03 / 255.f, 0xfc / 255.f, 1.f);
+      else
+        glUniform4f(locCol, 0.15f, 0.92f, 0.38f, 1.f);
       glLineWidth(kLwSnap);
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(snapGeom.size() * sizeof(float)), snapGeom.data(),
                    GL_STREAM_DRAW);

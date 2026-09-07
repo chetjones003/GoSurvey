@@ -654,7 +654,10 @@ TEST_CASE("A solid's corner answers Endpoint and its edge answers Edge", "[CadSn
   AppCommandState st;
   st.objectSnapEndpoint = true;
   st.objectSnapMidpoint = false;
-  st.objectSnapSolid = true;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dVertex = true;
+  st.objectSnap3dMidpointEdge = false;
+  st.objectSnap3dNearestFace = true;
 
   // A 20 x 20 x 20 box on the origin: x and y span +/-10, z runs 0 to 20.
   brep::Solid box;
@@ -695,7 +698,10 @@ TEST_CASE("A face snap lands on the surface, not on the tessellator's chord", "[
   AppCommandState st;
   st.objectSnapEndpoint = false;
   st.objectSnapMidpoint = false;
-  st.objectSnapSolid = true;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dVertex = false;
+  st.objectSnap3dMidpointEdge = false;
+  st.objectSnap3dNearestFace = true;
 
   // A cylinder of radius 10 rising 20 from the origin.
   brep::Solid cyl;
@@ -728,7 +734,8 @@ TEST_CASE("A solid on an off layer offers no snap at all", "[CadSnap][req313]") 
   // picking, and it is the easiest one to forget.
   AppCommandState st;
   st.objectSnapEndpoint = true;
-  st.objectSnapSolid = true;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dVertex = true;
 
   brep::Solid box;
   brep::Problem why = brep::Problem::Ok;
@@ -746,6 +753,211 @@ TEST_CASE("A solid on an off layer offers no snap at all", "[CadSnap][req313]") 
   const ray3d::Ray ray = RayAt(-10.0, -10.0, 20.0);
   const CadSnap::Hit hit = CadSnap::FindBest(-10.0, -10.0, st, false, kTol, {}, &ray);
   CHECK_FALSE(hit.valid);
+}
+
+// ---------------------------------------------------------------------------------------------
+// GitHub issue #395 / REQ-325 — the 3D Object Snap tab: Vertex, Midpoint on edge, Center of face
+// (every face type including NURBS), Nearest to face, Perpendicular, Knot, and the F4 master gate
+// being independent of 2D Object Snap (F3).
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("3D Object Snap Vertex fires under its own flag and is gated by the F4 master", "[CadSnap][issue395]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;  // 2D Endpoint OFF — proves solid Vertex no longer rides on it.
+  st.objectSnap3dVertex = true;
+
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 20.0, 20.0, &box, &why));
+  InstallSolid(st, std::move(box));
+
+  const ray3d::Ray ray = RayAt(-10.0, -10.0, 20.0);
+
+  SECTION("F4 on: vertex snaps") {
+    st.objectSnap3dEnabled = true;
+    const CadSnap::Hit hit = CadSnap::FindBest(-10.0, -10.0, st, false, kTol, {}, &ray);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Endpoint);
+    CHECK(hit.x == Approx(-10.f).margin(1e-4));
+    CHECK(hit.y == Approx(-10.f).margin(1e-4));
+    CHECK(hit.z == Approx(20.f).margin(1e-4));
+  }
+
+  SECTION("F4 off: no solid-derived kind fires even though every per-mode flag is true") {
+    st.objectSnap3dEnabled = false;
+    st.objectSnap3dVertex = true;
+    st.objectSnap3dMidpointEdge = true;
+    st.objectSnap3dNearestFace = true;
+    st.objectSnap3dCenterFace = true;
+    const CadSnap::Hit hit = CadSnap::FindBest(-10.0, -10.0, st, false, kTol, {}, &ray);
+    CHECK_FALSE(hit.valid);
+  }
+}
+
+TEST_CASE("3D Object Snap Midpoint-on-edge", "[CadSnap][issue395]") {
+  AppCommandState st;
+  st.objectSnapMidpoint = false;  // 2D Midpoint OFF — proves independence from F3.
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dMidpointEdge = true;
+
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 20.0, 20.0, &box, &why));
+  InstallSolid(st, std::move(box));
+
+  const ray3d::Ray ray = RayAt(-10.0, -10.0, 10.0);
+  const CadSnap::Hit hit = CadSnap::FindBest(-10.0, -10.0, st, false, /*tolWorld=*/2.f, {}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Midpoint);
+  CHECK(hit.x == Approx(-10.f).margin(1e-6));
+  CHECK(hit.y == Approx(-10.f).margin(1e-6));
+  CHECK(hit.z == Approx(10.f).margin(1e-6));
+}
+
+TEST_CASE("3D Object Snap Nearest-to-face still works under the renamed flag", "[CadSnap][issue395]") {
+  AppCommandState st;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dNearestFace = true;
+
+  brep::Solid cyl;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeCylinder(ucs::Ucs{}, 10.0, 20.0, &cyl, &why));
+  InstallSolid(st, std::move(cyl));
+
+  ray3d::Ray ray;
+  ray.origin = {-70.0, -103.0, 10.0};
+  ray.dir = ray3d::Normalize(ray3d::Vec3{0.55, 0.835, 0.0});
+
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, false, /*tolWorld=*/60.f, {}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Face);
+  const double r = std::sqrt(static_cast<double>(hit.x) * hit.x + static_cast<double>(hit.y) * hit.y);
+  CHECK(r == Approx(10.0).margin(1e-6));
+}
+
+TEST_CASE("3D Object Snap Center-of-face on a box's planar face is the geometric center", "[CadSnap][issue395]") {
+  AppCommandState st;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dCenterFace = true;
+  st.objectSnap3dNearestFace = false;  // isolate Center-of-face: on this ray they'd tie on distance.
+
+  // 20 x 20 x 20 box: the top face (z = 20) spans x,y in [-10, 10], so its center is (0, 0, 20).
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 20.0, 20.0, &box, &why));
+  InstallSolid(st, std::move(box));
+
+  ray3d::Ray ray;
+  ray.origin = {0.0, 0.0, 100.0};
+  ray.dir = ray3d::Normalize(ray3d::Vec3{0.0, 0.0, -1.0});
+
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, false, /*tolWorld=*/1.f, {}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::CenterOfFace);
+  CHECK(hit.x == Approx(0.f).margin(1e-4));
+  CHECK(hit.y == Approx(0.f).margin(1e-4));
+  CHECK(hit.z == Approx(20.f).margin(1e-4));
+}
+
+TEST_CASE("3D Object Snap Center-of-face on a cylinder end-cap lands on the axis, not a vertex average",
+         "[CadSnap][issue395]") {
+  // The end-cap's rim is ONE circular edge with two coincident-parameter topology vertices — if
+  // Center-of-face naively averaged those two vertices instead of sampling the circle, it would land
+  // on the rim rather than at the true centroid (the axis). This is exactly the case the issue's
+  // acceptance criteria calls out.
+  AppCommandState st;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dCenterFace = true;
+  st.objectSnap3dNearestFace = false;  // isolate Center-of-face: on this ray they'd tie on distance.
+
+  brep::Solid cyl;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeCylinder(ucs::Ucs{}, 10.0, 20.0, &cyl, &why));
+  InstallSolid(st, std::move(cyl));
+
+  // Aim straight down at the top cap (z = 20), centered on the axis.
+  ray3d::Ray ray;
+  ray.origin = {0.0, 0.0, 100.0};
+  ray.dir = ray3d::Normalize(ray3d::Vec3{0.0, 0.0, -1.0});
+
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, false, /*tolWorld=*/1.f, {}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::CenterOfFace);
+  CHECK(hit.x == Approx(0.f).margin(1e-3));
+  CHECK(hit.y == Approx(0.f).margin(1e-3));
+  CHECK(hit.z == Approx(20.f).margin(1e-3));
+}
+
+TEST_CASE("3D Object Snap Perpendicular lands at the foot on a planar face", "[CadSnap][issue395]") {
+  AppCommandState st;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dPerpendicular = true;
+  st.objectSnap3dNearestFace = false;  // isolate Perpendicular: on this ray they'd tie on distance.
+  // A LINE in progress, previous point at (2, 2) — the perpendicular reference (REQ-325/#395 reuses
+  // the same command-reference machinery the 2D Perpendicular toggle already has). On a horizontal
+  // face the foot of the perpendicular from any (x,y,*) keeps that same X/Y and only moves in Z, so
+  // the reference is placed directly under the ray for the foot to land where the cursor is aiming.
+  st.active = AppCommandState::Kind::Line;
+  st.linePhase = AppCommandState::LinePhase::NeedNextPoint;
+  st.anchorX = 2.0;
+  st.anchorY = 2.0;
+
+  // 20 x 20 x 20 box: the top face (z = 20) is the plane z = 20 for any x,y in range.
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 20.0, 20.0, &box, &why));
+  InstallSolid(st, std::move(box));
+
+  ray3d::Ray ray;
+  ray.origin = {2.0, 2.0, 100.0};
+  ray.dir = ray3d::Normalize(ray3d::Vec3{0.0, 0.0, -1.0});
+
+  const CadSnap::Hit hit = CadSnap::FindBest(2.0, 2.0, st, /*commandActive=*/true, /*tolWorld=*/1.f, {}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Perpendicular);
+  // The foot of the perpendicular from (2,2,*) onto the plane z=20 is (2, 2, 20) — a plane's foot
+  // from any point off it does not move in X/Y, only in Z.
+  CHECK(hit.x == Approx(2.f).margin(1e-3));
+  CHECK(hit.y == Approx(2.f).margin(1e-3));
+  CHECK(hit.z == Approx(20.f).margin(1e-3));
+}
+
+TEST_CASE("3D Object Snap Knot enumerates a NURBS patch's distinct knot values", "[CadSnap][issue395]") {
+  // Constructing a full LOFT/SWEEP NURBS solid fixture is disproportionate for this unit test, so —
+  // per the issue's own guidance — the knot-enumeration/evaluation logic is verified directly against
+  // a hand-built `nurbs::Patch` with a known clamped knot vector, independent of the full solid pipeline.
+  // Degree 2, 4 control points per direction: clamped knot vector [0,0,0,0.5,1,1,1] has ONE interior
+  // distinct knot, 0.5, beyond the clamped ends.
+  nurbs::Patch patch;
+  patch.degU = 2;
+  patch.degV = 2;
+  patch.nu = 4;
+  patch.nv = 4;
+  patch.knotsU = {0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0};
+  patch.knotsV = {0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0};
+  patch.ctrl.assign(static_cast<size_t>(patch.nu * patch.nv), ray3d::Vec3{});
+  patch.wts.assign(static_cast<size_t>(patch.nu * patch.nv), 1.0);
+  for (int j = 0; j < patch.nv; ++j) {
+    for (int i = 0; i < patch.nu; ++i) {
+      patch.ctrl[static_cast<size_t>(j * patch.nu + i)] =
+          ray3d::Vec3{static_cast<double>(i), static_cast<double>(j), 0.0};
+    }
+  }
+
+  // Distinct in-range knot values (matching CadSnap.cpp's own dedup rule): 0.0, 0.5, 1.0 -> 3 values,
+  // so the 2D grid is 3x3 = 9 points, and every one should lie exactly on the flat z=0 patch.
+  std::vector<double> distinct;
+  for (double k : patch.knotsU) {
+    if (distinct.empty() || std::fabs(distinct.back() - k) > 1e-9)
+      distinct.push_back(k);
+  }
+  REQUIRE(distinct.size() == 3);
+  for (double u : distinct) {
+    for (double v : distinct) {
+      const ray3d::Vec3 p = nurbs::Evaluate(patch, u, v);
+      CHECK(p.z == Approx(0.0).margin(1e-9));
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

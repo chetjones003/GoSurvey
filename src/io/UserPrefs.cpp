@@ -242,7 +242,14 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   b  ("objectSnapIntersection", &st.objectSnapIntersection);
   b  ("objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   b  ("objectSnapSurface",             &st.objectSnapSurface);
-  b  ("objectSnapSolid",               &st.objectSnapSolid);
+  // --- 3D Object Snap (REQ-325/#395, supersedes REQ-301's objectSnapSolid) ---
+  b  ("objectSnap3dEnabled",           &st.objectSnap3dEnabled);
+  b  ("objectSnap3dVertex",            &st.objectSnap3dVertex);
+  b  ("objectSnap3dMidpointEdge",      &st.objectSnap3dMidpointEdge);
+  b  ("objectSnap3dNearestFace",       &st.objectSnap3dNearestFace);
+  b  ("objectSnap3dCenterFace",        &st.objectSnap3dCenterFace);
+  b  ("objectSnap3dKnot",              &st.objectSnap3dKnot);
+  b  ("objectSnap3dPerpendicular",     &st.objectSnap3dPerpendicular);
   // ISOLINES (REQ-313 as amended). Range-checked on read for the same reason the visual style below
   // is: a bad value should fall back to the default, not strip every curved solid to its edges.
   if (s.contains("viewportSolidIsolines") && s["viewportSolidIsolines"].is_number_integer())
@@ -459,7 +466,13 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["objectSnapIntersection"]     = st.objectSnapIntersection;
   s["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   s["objectSnapSurface"]              = st.objectSnapSurface;
-  s["objectSnapSolid"]                = st.objectSnapSolid;
+  s["objectSnap3dEnabled"]            = st.objectSnap3dEnabled;
+  s["objectSnap3dVertex"]             = st.objectSnap3dVertex;
+  s["objectSnap3dMidpointEdge"]       = st.objectSnap3dMidpointEdge;
+  s["objectSnap3dNearestFace"]        = st.objectSnap3dNearestFace;
+  s["objectSnap3dCenterFace"]         = st.objectSnap3dCenterFace;
+  s["objectSnap3dKnot"]               = st.objectSnap3dKnot;
+  s["objectSnap3dPerpendicular"]      = st.objectSnap3dPerpendicular;
   s["viewportSolidIsolines"]          = st.viewportSolidIsolines;
   s["objectSnapAperturePx"]       = st.objectSnapAperturePx;
   s["objectSnapGlyphHalfPx"]      = st.objectSnapGlyphHalfPx;

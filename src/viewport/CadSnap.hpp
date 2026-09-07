@@ -28,7 +28,17 @@ enum class Kind {
   /// triangles to decide WHICH face is under it, and the hit is then projected onto that face's
   /// analytic surface — so the returned point lies exactly on the cylinder, not on a chord that is
   /// a sagitta short of it (#120: "the resulting point should lie exactly on the selected face").
-  Face
+  Face,
+  /// The centroid of a B-rep solid FACE (REQ-325/#395, "3D Object Snap" -> "Center of face"),
+  /// AutoCAD-parity mode independent of `Face`'s "nearest point under the cursor". Supported for
+  /// every face type including NURBS (freeform LOFT/SWEEP): planar faces get an exact area-weighted
+  /// polygon centroid (`brep::PlanarFaceCentroid`), curved faces (including Nurbs) get a
+  /// triangulation-based area-weighted centroid projected back onto the analytic surface.
+  CenterOfFace,
+  /// A knot point of a NURBS (freeform) face's parametrization (REQ-325/#395, AutoCAD "Knot"). Only
+  /// meaningful for `brep::SurfaceKind::Nurbs` faces — the distinct knot values of the patch's U and
+  /// V knot vectors, evaluated on the surface.
+  Knot
 };
 
 struct Hit {
@@ -40,6 +50,11 @@ struct Hit {
   /// datum while the point it marks sits at its own elevation, so the marker floats away from the
   /// geometry as soon as the view is orbited. Zero for flat drawings, which is every pre-3D one.
   float z = 0.f;
+  /// True when this candidate came from the 3D Object Snap system (REQ-325/#395) rather than the 2D
+  /// one — used only to color the glyph (3D Object Snap purple #8803fc vs 2D Object Snap green), so
+  /// a user can tell at a glance which snap system answered, even for a kind (Endpoint, Midpoint,
+  /// Perpendicular) shared between both.
+  bool solid = false;
 };
 
 struct SnapCandidateEntry {
@@ -110,6 +125,10 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 1;  ///< As strong a claim as a midpoint: a real curve, but any point along it (REQ-313).
   case Kind::Face:
     return 0;  ///< The weakest solid claim — a vertex or an edge under the same cursor must win.
+  case Kind::CenterOfFace:
+    return 0;  ///< Same tier as Face: a computed point on the same face, not a stronger claim.
+  case Kind::Knot:
+    return 1;  ///< A named parametric feature of the surface — as strong a claim as an edge midpoint.
   case Kind::Grip:
     return 4; ///< Beats all geometry snaps; no glyph is drawn for this kind.
   }

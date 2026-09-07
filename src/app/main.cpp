@@ -712,6 +712,10 @@ int main()
     // WantTextInput never interferes with typing a command.
     if (ImGui::IsKeyPressed(ImGuiKey_F3, false))
       cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
+    // REQ-325/#395: F4 is 3D Object Snap's OWN master toggle — independent of F3 above, matching
+    // AutoCAD's separate 2D/3D Object Snap systems.
+    if (ImGui::IsKeyPressed(ImGuiKey_F4, false))
+      cmd.objectSnap3dEnabled = !cmd.objectSnap3dEnabled;
     if (ImGui::IsKeyPressed(ImGuiKey_F8, false)) {
       orthoEnabled = !orthoEnabled;
       if (orthoEnabled)

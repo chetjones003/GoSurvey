@@ -908,6 +908,26 @@ struct Tessellation {
 /// itself, never on the infinite line or full circle it lies along.
 [[nodiscard]] Vec3 ClosestPointOnEdge(const Solid& s, const Edge& e, const Vec3& p);
 
+/// The exact area-weighted centroid of a **planar** face's outer loop (REQ-325/#395 "Center of
+/// face"). Curved edges (Arc/Ellipse) are subdivided via \ref EdgePointAt before the shoelace-style
+/// weighting is applied, so a cylinder end-cap's circular rim centroids to the circle's own centre
+/// rather than to the average of its two topology vertices. Only valid for
+/// `f.surface.kind == SurfaceKind::Plane`; the caller is responsible for that check. Falls back to
+/// the plain vertex average if the loop is degenerate (zero projected area).
+[[nodiscard]] Vec3 PlanarFaceCentroid(const Solid& s, const Face& f);
+
+/// The point at the midpoint of a **curved** face's own (u, v) parameter domain (REQ-325/#395
+/// "Center of face"), evaluated with the same analytic surface evaluator the tessellator uses — so
+/// the answer lies exactly on the surface. This is the well-defined stand-in for a true area
+/// centroid on a curved face: a full-revolution face (e.g. a cylinder's whole lateral surface) is
+/// rotationally symmetric about its axis, so an area-weighted centroid of its triangles averages to
+/// a point ON THE AXIS — a degenerate input to \ref ClosestPointOnSurface, which for a Cylinder/Cone
+/// returns that axis point UNPROJECTED (there is no single nearest point on the surface from the
+/// axis). The parameter midpoint has no such degeneracy and matches how AutoCAD resolves "Center of
+/// face" for a revolved surface: mid-height/mid-taper at a fixed, reproducible longitude. Only valid
+/// for a non-`Plane` `f.surface.kind`; the caller is responsible for that check.
+[[nodiscard]] Vec3 CurvedFaceMidpoint(const Face& f);
+
 /// \p s moved by \p delta, leaving its shape and orientation alone.
 ///
 /// **Lives here because only this header knows every place a coordinate hides in a `Solid`** — the

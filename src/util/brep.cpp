@@ -2923,6 +2923,80 @@ Vec3 ClosestPointOnEdge(const Solid& s, const Edge& e, const Vec3& p) {
   return ucs::PointOnPlaneCircle(e.frame, e.radius, forward ? param : -param);
 }
 
+namespace {
+[[nodiscard]] Vec3 AverageOfRing(const std::vector<Vec3>& r) {
+  Vec3 c{};
+  for (const Vec3& p : r)
+    c = ray3d::Add(c, p);
+  return r.empty() ? c : ray3d::Scale(c, 1.0 / static_cast<double>(r.size()));
+}
+} // namespace
+
+Vec3 PlanarFaceCentroid(const Solid& s, const Face& f) {
+  if (f.loops.empty())
+    return Vec3{};
+  // Subdivide curved edges so a circular rim contributes many points, not just its two topology
+  // vertices — averaging just the vertices of a full circle's rim is nowhere near its centre.
+  std::vector<Vec3> ring;
+  for (const EdgeUse& u : f.loops[0].uses) {
+    const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+    const int steps = (e.kind == CurveKind::Line) ? 1 : 24;
+    for (int i = 0; i < steps; ++i) {
+      const double t = static_cast<double>(i) / static_cast<double>(steps);
+      const double tt = u.reversed ? (1.0 - t) : t;
+      ring.push_back(EdgePointAt(s, e, tt));
+    }
+  }
+  if (ring.size() < 3)
+    return AverageOfRing(ring);
+
+  // Project onto the face's own plane basis and take the exact area-weighted (shoelace) centroid of
+  // the resulting 2D polygon, then map back to 3D.
+  const ucs::Ucs& fr = f.surface.frame;
+  std::vector<double> u2(ring.size());
+  std::vector<double> v2(ring.size());
+  for (std::size_t i = 0; i < ring.size(); ++i) {
+    const Vec3 d = ray3d::Sub(ring[i], fr.origin);
+    u2[i] = ray3d::Dot(d, fr.xAxis);
+    v2[i] = ray3d::Dot(d, fr.yAxis);
+  }
+  double area = 0.0, cu = 0.0, cv = 0.0;
+  for (std::size_t i = 0; i < ring.size(); ++i) {
+    const std::size_t j = (i + 1) % ring.size();
+    const double cross = u2[i] * v2[j] - u2[j] * v2[i];
+    area += cross;
+    cu += (u2[i] + u2[j]) * cross;
+    cv += (v2[i] + v2[j]) * cross;
+  }
+  area *= 0.5;
+  if (!(std::fabs(area) > 1e-12))
+    return AverageOfRing(ring);  // degenerate (zero-area) loop
+  cu /= (6.0 * area);
+  cv /= (6.0 * area);
+  return ray3d::Add(fr.origin, ray3d::Add(ray3d::Scale(fr.xAxis, cu), ray3d::Scale(fr.yAxis, cv)));
+}
+
+Vec3 CurvedFaceMidpoint(const Face& f) {
+  const double u = 0.5 * (f.uStart + f.uEnd);
+  const double v = 0.5 * (f.vStart + f.vEnd);
+  const Surface& sf = f.surface;
+  switch (sf.kind) {
+  case SurfaceKind::Plane:
+    return sf.frame.origin;  // caller error (only meant for curved faces) — a harmless fallback
+  case SurfaceKind::Cylinder:
+    return ConicalPoint(sf, sf.radius, sf.radius, u, v);
+  case SurfaceKind::Cone:
+    return ConicalPoint(sf, sf.radius, sf.radius2, u, v);
+  case SurfaceKind::Sphere:
+    return SphericalPoint(sf, u, v);
+  case SurfaceKind::Torus:
+    return ToroidalPoint(sf, u, v);
+  case SurfaceKind::Nurbs:
+    return nurbs::Evaluate(sf.patch, u, v);
+  }
+  return sf.frame.origin;
+}
+
 // ---------------------------------------------------------------------------------------------
 // The seven primitives.
 // ---------------------------------------------------------------------------------------------

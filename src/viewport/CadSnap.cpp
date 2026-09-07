@@ -280,7 +280,7 @@ struct SnapPickAccum {
 ///        EITHER that recomputed heuristic OR the plain ray distance, whichever is smaller (issue
 ///        #372). Ranking is always the true ray distance, as issue #103 requires.
 void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float snapY, Kind kind, float pickDistSq,
-                  float tolWorld, float snapZ = 0.f, bool heuristicAccept = false) {
+                  float tolWorld, float snapZ = 0.f, bool heuristicAccept = false, bool solid = false) {
   const float tol2 = tolWorld * tolWorld;
   float rankDistSq = (snapX - wx) * (snapX - wx) + (snapY - wy) * (snapY - wy);
   // Orbited: re-measure the candidate against the cursor ray in 3D. Doing it here — at the one
@@ -310,6 +310,7 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
+    acc->best.solid = solid;
     acc->bestRankDistSq = rankDistSq;
     acc->bestPri = pri;
     return;
@@ -319,6 +320,7 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
+    acc->best.solid = solid;
     acc->bestRankDistSq = rankDistSq;
     acc->bestPri = pri;
     return;
@@ -331,15 +333,16 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
+    acc->best.solid = solid;
     acc->bestPri = pri;
   }
 }
 
 void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind kind, float tolWorld,
-              float pz = 0.f) {
+              float pz = 0.f, bool solid = false) {
   const float dx = px - wx;
   const float dy = py - wy;
-  ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz);
+  ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz, /*heuristicAccept=*/false, solid);
 }
 
 /// Mean vertex elevation of polyline loop [\p v0,\p v1) — the elevation of its geometric centre.
@@ -825,10 +828,17 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   const bool wantSurveyPoint = want(Kind::SurveyCenter, cmd.objectSnapSurveyPoint);
   const bool wantPerpendicular = want(Kind::Perpendicular, cmd.objectSnapPerpendicular);
   const bool wantSurface = want(Kind::Surface, cmd.objectSnapSurface);
+  const bool wantCenterOfFace = want(Kind::CenterOfFace, cmd.objectSnap3dEnabled && cmd.objectSnap3dCenterFace);
+  const bool wantKnot = want(Kind::Knot, cmd.objectSnap3dEnabled && cmd.objectSnap3dKnot);
 
   float refPx = 0.f;
   float refPy = 0.f;
   const bool havePerpRef = commandActive && wantPerpendicular && PerpendicularReference(cmd, &refPx, &refPy);
+  // 3D Object Snap's own Perpendicular mode (REQ-325/#395) uses the SAME reference-point machinery
+  // as the 2D Perpendicular toggle above, but is gated independently by the F4 master + its own
+  // per-mode flag — it must fire even when the 2D `objectSnapPerpendicular` toggle is off.
+  const bool have3dPerpRef = commandActive && cmd.objectSnap3dEnabled && cmd.objectSnap3dPerpendicular &&
+                             PerpendicularReference(cmd, &refPx, &refPy);
 
   // REQ-118: while a POLYLINE/3DPOLY draft is open, its STARTING vertex is an Endpoint candidate,
   // so the cursor can land on it exactly and the ordinary snap marker shows it. This is the only
@@ -1162,28 +1172,39 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     }
   }
 
-  // --- B-rep solid snaps (REQ-313 / ADR-045) ------------------------------------------------------
+  // --- 3D Object Snap: B-rep solid snaps (REQ-325/#395, supersedes REQ-313/REQ-301/ADR-045) --------
   //
-  // Four kinds come off a solid, and which toggle governs which is a deliberate split:
+  // Every kind below is gated by the F4 master (`cmd.objectSnap3dEnabled`) AND its own per-mode
+  // flag — the 3D Object Snap tab is deliberately independent of the 2D Object Snap toggles (F3),
+  // matching AutoCAD. Six AutoCAD-parity modes:
   //
-  //   Endpoint  its VERTICES     — the ordinary Endpoint toggle. A box corner IS an endpoint, and a
-  //                                user with Endpoint on expects a corner to snap.
-  //   Midpoint  its EDGE MIDDLES — the ordinary Midpoint toggle, same argument.
-  //   Edge      any point ALONG an edge  ) both behind `objectSnapSolid`, the one preference that
-  //   Face      any point ON a face      ) means "snap to solids" (REQ-301: not two options).
+  //   Vertex            its VERTICES               -> Kind::Endpoint, objectSnap3dVertex
+  //   Midpoint on edge  its EDGE MIDDLES            -> Kind::Midpoint, objectSnap3dMidpointEdge
+  //   Nearest to face   nearest point ON a face,    -> Kind::Face,     objectSnap3dNearestFace
+  //                     or along an edge (kept as
+  //                     one flag: same "nearest to
+  //                     the solid under the cursor"
+  //                     claim REQ-301 already made)   Kind::Edge,     objectSnap3dNearestFace
+  //   Center of face    a face's centroid           -> Kind::CenterOfFace, objectSnap3dCenterFace
+  //   Knot              a NURBS face's knot points  -> Kind::Knot,     objectSnap3dKnot
+  //   Perpendicular     foot of the perpendicular   -> Kind::Perpendicular, objectSnap3dPerpendicular
+  //                     from a command reference
+  //                     onto a PLANAR face
   //
-  // The FACE answer is what needs care. The ray is tested against the cached triangles to decide
-  // which face is under the cursor, and the hit is then projected onto that face's ANALYTIC surface
-  // — so on a cylinder the point comes back on the cylinder rather than a sagitta short of it, on
-  // the chord the tessellator happened to draw (#120: "the resulting point should lie exactly on the
-  // selected face"). Without that projection a face snap would be quietly wrong by an amount that
-  // shrinks as you zoom in, which is the least reportable kind of wrong there is.
-  //
-  // Face snapping needs a pick ray and is skipped without one: in a plan view with no ray there is
-  // no "under the cursor" to resolve, and answering with the work-plane point would be an invention.
-  if (!cmd.cadSolids.empty()) {
-    const bool wantSolidEdge = want(Kind::Edge, cmd.objectSnapSolid);
-    const bool wantSolidFace = want(Kind::Face, cmd.objectSnapSolid);
+  // The FACE answer needs care. The ray is tested against the cached triangles to decide which face
+  // is under the cursor, and the hit is then projected onto that face's ANALYTIC surface — so on a
+  // cylinder the point comes back on the cylinder rather than a sagitta short of it, on the chord
+  // the tessellator happened to draw (#120: "the resulting point should lie exactly on the selected
+  // face"). Face/CenterOfFace/Knot all need a pick ray and are skipped without one: in a plan view
+  // with no ray there is no "under the cursor" to resolve, and answering with the work-plane point
+  // would be an invention.
+  if (!cmd.cadSolids.empty() && cmd.objectSnap3dEnabled) {
+    const bool wantSolidVertex = want(Kind::Endpoint, cmd.objectSnap3dVertex);
+    const bool wantSolidMidpoint = want(Kind::Midpoint, cmd.objectSnap3dMidpointEdge);
+    const bool wantSolidNearest = want(Kind::Face, cmd.objectSnap3dNearestFace) ||
+                                  want(Kind::Edge, cmd.objectSnap3dNearestFace);
+    const bool wantSolidCenterFace = wantCenterOfFace;
+    const bool wantSolidKnot = wantKnot;
     const ray3d::Vec3 cursor{wx, wy, acc.ray ? acc.ray->origin.z : 0.0};
 
     for (size_t si = 0; si < cmd.cadSolids.size(); ++si) {
@@ -1196,19 +1217,19 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       if (!sp)
         continue;
 
-      if (wantEndpoint || wantMidpoint || wantSolidEdge) {
-        if (wantEndpoint) {
+      if (wantSolidVertex || wantSolidMidpoint || wantSolidNearest) {
+        if (wantSolidVertex) {
           for (const brep::Vertex& v : sp->vertices)
             Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(v.p.x),
-                     static_cast<float>(v.p.y), Kind::Endpoint, tolWorld, static_cast<float>(v.p.z));
+                     static_cast<float>(v.p.y), Kind::Endpoint, tolWorld, static_cast<float>(v.p.z), true);
         }
         for (const brep::Edge& e : sp->edges) {
-          if (wantMidpoint) {
+          if (wantSolidMidpoint) {
             const ray3d::Vec3 mid = brep::EdgePointAt(*sp, e, 0.5);
             Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(mid.x),
-                     static_cast<float>(mid.y), Kind::Midpoint, tolWorld, static_cast<float>(mid.z));
+                     static_cast<float>(mid.y), Kind::Midpoint, tolWorld, static_cast<float>(mid.z), true);
           }
-          if (wantSolidEdge) {
+          if (wantSolidNearest) {
             // Measured from the cursor RAY where there is one, so an orbited view snaps to the edge
             // the user is pointing at rather than to whatever passes under the same plan XY.
             //
@@ -1221,28 +1242,105 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
             const ray3d::Vec3 probe = acc.ray ? ClosestRayPointToEdge(*acc.ray, *sp, e) : cursor;
             const ray3d::Vec3 on = brep::ClosestPointOnEdge(*sp, e, probe);
             Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(on.x),
-                     static_cast<float>(on.y), Kind::Edge, tolWorld, static_cast<float>(on.z));
+                     static_cast<float>(on.y), Kind::Edge, tolWorld, static_cast<float>(on.z), true);
           }
         }
       }
 
-      if (wantSolidFace && acc.ray) {
+      if ((wantSolidNearest || wantSolidCenterFace || wantSolidKnot || have3dPerpRef) && acc.ray) {
         // Reject the whole solid before touching its triangles — see RayNearBounds. Hover runs this
         // every frame, and the walk below is O(triangles).
         if (!RayNearBounds(*acc.ray, brep::ComputeBounds(*sp), static_cast<double>(tolWorld)))
           continue;
         const auto it = std::find_if(cmd.solidDisplayCache.begin(), cmd.solidDisplayCache.end(),
                                      [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
-        if (it == cmd.solidDisplayCache.end() || it->triVerts.empty())
-          continue;  // not tessellated yet; it becomes snappable on the frame after it is drawn
-        ray3d::Vec3 hit{};
-        int faceIndex = -1;
-        if (RayHitSolidFace(*acc.ray, it->triVerts, it->triFaceIds, &hit, &faceIndex) && faceIndex >= 0 &&
-            static_cast<size_t>(faceIndex) < sp->faces.size()) {
-          // The triangle told us WHICH face; the surface tells us WHERE on it.
-          const ray3d::Vec3 exact = brep::ClosestPointOnSurface(sp->faces[static_cast<size_t>(faceIndex)].surface, hit);
-          Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(exact.x),
-                   static_cast<float>(exact.y), Kind::Face, tolWorld, static_cast<float>(exact.z));
+        const bool tessellated = it != cmd.solidDisplayCache.end() && !it->triVerts.empty();
+
+        if (wantSolidNearest && tessellated) {
+          ray3d::Vec3 hit{};
+          int faceIndex = -1;
+          if (RayHitSolidFace(*acc.ray, it->triVerts, it->triFaceIds, &hit, &faceIndex) && faceIndex >= 0 &&
+              static_cast<size_t>(faceIndex) < sp->faces.size()) {
+            // The triangle told us WHICH face; the surface tells us WHERE on it.
+            const ray3d::Vec3 exact = brep::ClosestPointOnSurface(sp->faces[static_cast<size_t>(faceIndex)].surface, hit);
+            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(exact.x),
+                     static_cast<float>(exact.y), Kind::Face, tolWorld, static_cast<float>(exact.z), true);
+          }
+        }
+
+        // Center of face and Perpendicular both need to know WHICH face is under the cursor, the
+        // same ray/triangle test Nearest-to-face uses above — resolved independently here so either
+        // mode works even when Nearest-to-face itself is toggled off.
+        if ((wantSolidCenterFace || have3dPerpRef) && tessellated) {
+          ray3d::Vec3 hit{};
+          int faceIndex = -1;
+          if (RayHitSolidFace(*acc.ray, it->triVerts, it->triFaceIds, &hit, &faceIndex) && faceIndex >= 0 &&
+              static_cast<size_t>(faceIndex) < sp->faces.size()) {
+            const brep::Face& face = sp->faces[static_cast<size_t>(faceIndex)];
+
+            if (wantSolidCenterFace) {
+              ray3d::Vec3 c{};
+              if (face.surface.kind == brep::SurfaceKind::Plane) {
+                c = brep::PlanarFaceCentroid(*sp, face);
+              } else {
+                // Curved (and Nurbs) faces: the parameter-domain midpoint, NOT an area-weighted
+                // triangle centroid. A full-revolution face (e.g. a cylinder's whole lateral
+                // surface) is rotationally symmetric about its axis, so a triangle-area centroid
+                // averages to a point ON THE AXIS — a degenerate input to `ClosestPointOnSurface`,
+                // which for a Cylinder/Cone returns that axis point UNPROJECTED (there is no single
+                // nearest point on the surface from the axis itself), landing the glyph nowhere
+                // near the visible face. `CurvedFaceMidpoint` evaluates the surface directly at its
+                // own (u, v) midpoint instead, which has no such degeneracy.
+                c = brep::CurvedFaceMidpoint(face);
+              }
+              // heuristicAccept: the cursor ray already hit THIS face (that is what put us inside
+              // this block), so — matching AutoCAD, and the same "cursor anywhere over the shape"
+              // treatment CENTER already gets on a circle (issue #372) — Center of face is offered
+              // no matter where on the face the cursor sits, not only when it happens to land within
+              // the ordinary aperture of the centroid itself. pickDistSq=0 always clears the
+              // tolerance test; ranking against other candidates still uses the true ray distance to
+              // the centroid, so a genuinely closer Endpoint/Edge on the same face still wins.
+              ConsiderSnap(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(c.x),
+                           static_cast<float>(c.y), Kind::CenterOfFace, 0.f, tolWorld, static_cast<float>(c.z),
+                           /*heuristicAccept=*/true, /*solid=*/true);
+            }
+
+            if (have3dPerpRef && face.surface.kind == brep::SurfaceKind::Plane) {
+              // A true 90-degree foot only exists for a planar feature; curved faces have no single
+              // well-defined "perpendicular" point in general, matching AutoCAD's own 3D Perpendicular.
+              const ray3d::Vec3 refW{static_cast<double>(refPx), static_cast<double>(refPy), 0.0};
+              const ray3d::Vec3 foot = brep::ClosestPointOnSurface(face.surface, refW);
+              Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(foot.x),
+                       static_cast<float>(foot.y), Kind::Perpendicular, tolWorld, static_cast<float>(foot.z), true);
+            }
+          }
+        }
+
+        if (wantSolidKnot) {
+          for (const brep::Face& face : sp->faces) {
+            if (face.surface.kind != brep::SurfaceKind::Nurbs)
+              continue;
+            const nurbs::Patch& patch = face.surface.patch;
+            auto distinctKnots = [](const std::vector<double>& knots, double lo, double hi) {
+              std::vector<double> out;
+              for (double k : knots) {
+                if (k < lo - 1e-9 || k > hi + 1e-9)
+                  continue;
+                if (out.empty() || std::fabs(out.back() - k) > 1e-9)
+                  out.push_back(k);
+              }
+              return out;
+            };
+            const std::vector<double> us = distinctKnots(patch.knotsU, face.uStart, face.uEnd);
+            const std::vector<double> vs = distinctKnots(patch.knotsV, face.vStart, face.vEnd);
+            for (double u : us) {
+              for (double v : vs) {
+                const ray3d::Vec3 p = nurbs::Evaluate(patch, u, v);
+                Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(p.x),
+                         static_cast<float>(p.y), Kind::Knot, tolWorld, static_cast<float>(p.z), true);
+              }
+            }
+          }
         }
       }
     }

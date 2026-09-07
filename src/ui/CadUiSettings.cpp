@@ -501,14 +501,62 @@ static void DrawSettingsDraftingTab(AppCommandState& cmd) {
                   "whichever object is nearer the camera. Off by default: it fires on objects that do "
                   "not meet.");
   ImGui::Checkbox("Surface elevation (interpolated TIN at the cursor)", &cmd.objectSnapSurface);
-  ImGui::Checkbox("Solid face and edge (REQ-313)", &cmd.objectSnapSolid);
   ItemHelpTooltip("Snaps to the covering visible surface's triangle plane at the cursor (REQ-127). "
                   "Weaker than endpoints so vertices still win. Off: no surface snap.");
+  ImGui::Separator();
+  ImGui::TextDisabled("Snapping to B-rep SOLIDS is configured separately, in the \"3D Object Snap\" tab (F4).");
   ImGui::Separator();
   ImGui::TextWrapped(
       "With a command active (LINE, CIRCLE, …), Shift+right-click anywhere on the drawing: choose a snap type, "
       "then pick one from every matching snap in the model (list is sorted by distance from that click). "
       "That choice applies to the next left-click only.");
+  BoxEnd();
+}
+
+/// REQ-325/#395: AutoCAD-style "3D Object Snap" tab. A separate system from 2D Object Snap
+/// (Drafting tab above): its own master toggle (F4) and six per-mode toggles, two-column layout
+/// with Select All / Clear All, matching AutoCAD's own 3D Object Snap dialog.
+static void DrawSettings3dObjectSnapTab(AppCommandState& cmd) {
+  BoxBegin("3D Object Snap", 0.f);
+  ImGui::TextUnformatted("Cursor snaps to B-rep solid geometry when 3D Object Snap is on (status bar or F4).");
+  ImGui::TextWrapped("Independent of the 2D Object snap above (F3) — the two systems can be on, off, or "
+                      "configured differently at the same time, matching AutoCAD.");
+  ImGui::Separator();
+  ImGui::Checkbox("Enable 3D Object Snap", &cmd.objectSnap3dEnabled);
+  ImGui::Separator();
+
+  bool* const flags[] = {
+      &cmd.objectSnap3dVertex,        &cmd.objectSnap3dMidpointEdge, &cmd.objectSnap3dCenterFace,
+      &cmd.objectSnap3dKnot,          &cmd.objectSnap3dPerpendicular, &cmd.objectSnap3dNearestFace,
+  };
+  if (ImGui::Button("Select All")) {
+    for (bool* f : flags) *f = true;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Clear All")) {
+    for (bool* f : flags) *f = false;
+  }
+  ImGui::Separator();
+
+  if (ImGui::BeginTable("##osnap3d_layout", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::Checkbox("Vertex", &cmd.objectSnap3dVertex);
+    ItemHelpTooltip("A solid's topology corners.");
+    ImGui::Checkbox("Midpoint on edge", &cmd.objectSnap3dMidpointEdge);
+    ItemHelpTooltip("The midpoint of a solid edge.");
+    ImGui::Checkbox("Center of face", &cmd.objectSnap3dCenterFace);
+    ItemHelpTooltip("A face's centroid — supported for every face type, including curved and NURBS "
+                    "(freeform LOFT/SWEEP) faces.");
+    ImGui::TableSetColumnIndex(1);
+    ImGui::Checkbox("Knot", &cmd.objectSnap3dKnot);
+    ItemHelpTooltip("A NURBS (freeform) face's knot points.");
+    ImGui::Checkbox("Perpendicular", &cmd.objectSnap3dPerpendicular);
+    ItemHelpTooltip("Foot of the perpendicular from a command reference point onto a planar face.");
+    ImGui::Checkbox("Nearest to face", &cmd.objectSnap3dNearestFace);
+    ItemHelpTooltip("Nearest point on a face (and, as one preference, along an edge) under the cursor.");
+    ImGui::EndTable();
+  }
   BoxEnd();
 }
 
@@ -833,7 +881,7 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       if (ImGui::BeginTabItem("System"))         { cmd.settingsActiveTabIdx = 4; DrawSettingsSystemTab(cmd);                                                           ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("User Preferences")){ cmd.settingsActiveTabIdx = 5; DrawSettingsUserPrefsTab(cmd);                                                        ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("Drafting"))       { cmd.settingsActiveTabIdx = 6; DrawSettingsDraftingTab(cmd);                                                         ImGui::EndTabItem(); }
-      if (ImGui::BeginTabItem("3D Modeling"))    { cmd.settingsActiveTabIdx = 7; DrawSettingsPlaceholderTab("3D Modeling", "GoSurvey is 2D; 3D options are reserved."); ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("3D Object Snap")) { cmd.settingsActiveTabIdx = 7; DrawSettings3dObjectSnapTab(cmd);                                                     ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("Selection"))      { cmd.settingsActiveTabIdx = 8; DrawSettingsSelectionTab(cmd);                                                       ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("Profiles"))       { cmd.settingsActiveTabIdx = 9; DrawSettingsPlaceholderTab("Profiles", "Saved option profiles. Current: <<GoSurvey>>.");ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("AEC Editor"))     { cmd.settingsActiveTabIdx = 10; DrawSettingsPlaceholderTab("AEC Editor", "Civil/AEC-specific editor preferences.");   ImGui::EndTabItem(); }
