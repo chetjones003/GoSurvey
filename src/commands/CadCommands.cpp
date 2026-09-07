@@ -18730,7 +18730,15 @@ void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
                                          : ApproximateOnWorkPlaneFromXy(frame, anchorX, anchorY);
   const ray3d::Vec3 targetPt =
       haveRealZ ? ray3d::Vec3{*wx, *wy, targetZ} : ApproximateOnWorkPlaneFromXy(frame, *wx, *wy);
-  const ray3d::Vec3 constrained = ConstrainToUcsOrtho(frame, anchorPt, targetPt);
+  // issue #371 second follow-up: under an orbited camera, comparing raw UCS-delta magnitude picks
+  // the wrong axis, because an oblique view mixes both in-plane axes into any one screen direction
+  // (confirmed against AutoCAD: its ORTHO decision is a screen one, not a world one). Decide on
+  // screen whenever a live viewport size is published; fall back to the world-space decision
+  // otherwise (headless/tests with no viewport, or before the first frame publishes a size).
+  const ray3d::Vec3 constrained = (st.uiViewportWidthPx > 0.f && st.uiViewportHeightPx > 0.f)
+      ? ConstrainToUcsOrthoOnScreen(frame, anchorPt, targetPt, CadViewCamera(st), st.uiViewportWidthPx,
+                                    st.uiViewportHeightPx)
+      : ConstrainToUcsOrtho(frame, anchorPt, targetPt);
   if (!std::isfinite(constrained.x) || !std::isfinite(constrained.y) || !std::isfinite(constrained.z))
     return;  // leave the point alone rather than move it somewhere undefined (REQ-201)
   *wx = static_cast<float>(constrained.x);

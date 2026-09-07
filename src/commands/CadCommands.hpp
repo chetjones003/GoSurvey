@@ -5103,6 +5103,16 @@ bool ProcessViewCommandLine(AppCommandState& st, const std::string& rest, std::v
 /// WCS this reduces exactly to the world-axis constraint the 2D path always applied.
 ray3d::Vec3 ConstrainToUcsOrtho(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target);
 
+/// \ref ConstrainToUcsOrtho's screen-aware counterpart (issue #371 second follow-up). Under an
+/// orbited (non-plan) camera, comparing raw UCS-delta magnitude no longer reliably says which axis
+/// the cursor is "farther along" — an oblique view mixes both in-plane axes into any one screen
+/// direction. This instead projects both candidate locked points and the raw cursor hit through
+/// \p cam and keeps whichever candidate is actually closer to the cursor on screen, matching
+/// AutoCAD's observed behavior (a Front-UCS ORTHO drag stays screen-vertical from any orbit).
+/// Reduces to \ref ConstrainToUcsOrtho's decision in plan view, where the two always agree.
+ray3d::Vec3 ConstrainToUcsOrthoOnScreen(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target,
+                                        const Camera& cam, float viewportWidthPx, float viewportHeightPx);
+
 /// RECT (REQ-053): two opposite corners create an axis-aligned rectangle.
 void StartRectCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Store the rectangle spanned by the two corners as a 4-vertex closed polyline, ending the command.
