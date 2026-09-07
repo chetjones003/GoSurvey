@@ -265,3 +265,45 @@ TEST_CASE("ApplyOrthoConstrainFromAnchor takes the screen-aware path once a live
   const bool matchesWorldFallback = (std::fabs(wx - 6.f) < 1e-4f) && (std::fabs(wz - 0.f) < 1e-4f);
   REQUIRE_FALSE(matchesWorldFallback);
 }
+
+// Issue #371 FIFTH follow-up: typing a bare distance under ORTHO (REQ-047's direct-distance entry)
+// used a flat X/Y-only helper (OrthoUnitTowardUiCursorFromAnchor) that never looked at the active
+// UCS's frame or at Z at all — under a Front/Left/Right-style UCS the typed distance travelled in a
+// direction unrelated to the UCS's axes, landing at whatever elevation the mouse happened to be
+// hovering over. OrthoUcsDirectDistancePoint fixes this by routing through the SAME UCS-ortho
+// decision (and anchor-plane lock) the mouse-drag path uses.
+TEST_CASE("OrthoUcsDirectDistancePoint places the typed distance along the UCS-locked axis, in the "
+         "anchor's plane",
+         "[ucs][ortho][req154]") {
+  AppCommandState st;
+  st.activeUcs = ucs::RotatedAboutX(ucs::Ucs{}, 90.0);  // Front: world Y is out-of-plane
+
+  // Anchor off the Front UCS's own plane (world Y = 45), matching a real OSNAP CENTRE hit on
+  // geometry from a different coordinate system — the exact repro this whole thread started from.
+  st.anchorX = 10.f;
+  st.anchorY = 45.f;
+  st.anchorZ = 0.f;
+  // Raw (unsnapped) cursor hit: farther along world Z (10) than world X (2) from the anchor, near
+  // the Front plane's own depth (world Y ~ 0) — dominant axis should lock world X.
+  st.uiCursorWorldX = 12.f;
+  st.uiCursorWorldY = 0.f;
+  st.uiCursorWorldZ = 10.f;
+  // No live viewport published -> world-space fallback decision (deterministic for the test; the
+  // screen-aware path is exercised directly by the ConstrainToUcsOrthoOnScreen tests above).
+  st.uiViewportWidthPx = 0.f;
+  st.uiViewportHeightPx = 0.f;
+
+  float px = 0.f, py = 0.f;
+  const bool ok = OrthoUcsDirectDistancePoint(st, /*dist=*/5.f, &px, &py);
+  REQUIRE(ok);
+
+  // World X locks to the anchor's (10); world Z (published through resolvedPointZ, the channel
+  // CadCommitElevation reads) moves 5 units along the locked direction.
+  REQUIRE(px == Approx(10.f).margin(1e-4));
+  REQUIRE(st.resolvedPointZValid);
+  REQUIRE(st.resolvedPointZ == Approx(5.f).margin(1e-4));
+  // World Y (depth) stays at the ANCHOR's (45) — not the raw cursor hit's (0). Before this fix the
+  // direction ignored the UCS entirely and the elevation came from an unrelated, stale mouse Z.
+  REQUIRE(py == Approx(45.f).margin(1e-4));
+  REQUIRE_FALSE(st.viewportSnapPickValid);
+}
