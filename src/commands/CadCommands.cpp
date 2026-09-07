@@ -18735,7 +18735,8 @@ void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
   // (confirmed against AutoCAD: its ORTHO decision is a screen one, not a world one). Decide on
   // screen whenever a live viewport size is published; fall back to the world-space decision
   // otherwise (headless/tests with no viewport, or before the first frame publishes a size).
-  const ray3d::Vec3 constrained = (st.uiViewportWidthPx > 0.f && st.uiViewportHeightPx > 0.f)
+  const bool screenAware = st.uiViewportWidthPx > 0.f && st.uiViewportHeightPx > 0.f;
+  const ray3d::Vec3 constrained = screenAware
       ? ConstrainToUcsOrthoOnScreen(frame, anchorPt, targetPt, CadViewCamera(st), st.uiViewportWidthPx,
                                     st.uiViewportHeightPx)
       : ConstrainToUcsOrtho(frame, anchorPt, targetPt);
