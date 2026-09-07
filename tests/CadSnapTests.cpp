@@ -802,6 +802,27 @@ TEST_CASE("Orbited edge-on: circle CENTRE falls back to ray-proximity when the s
   CHECK_FALSE(CadSnap::FindBest(7.0, 0.0, st, /*commandActive=*/true, kTol, {}, &offRim).valid);
 }
 
+TEST_CASE("Orbited grazing: a small circle CENTRE still resolves when the ray points nearly at it",
+          "[CadSnap][issue372]") {
+  // A shape smaller than the aperture, seen at a shallow (but not edge-on) angle. The pick ray
+  // passes ~3 ft from the centre in space — inside kTol (5) — but its crossing of z = 0 is 75 ft
+  // away, far outside the 1-ft disc. "Over the shape" alone would reject; accepting on the smaller
+  // of the shape heuristic and the true ray distance keeps the pre-#372 envelope.
+  AppCommandState st;
+  st.objectSnapCenter = true;
+  st.userCirclesCxCyZR = {0.f, 0.f, 0.f, 1.f};
+
+  ray3d::Ray ray;
+  ray.origin = {0.0, -50.0, 5.0};
+  ray.dir = ray3d::Normalize(ray3d::Vec3{0.0, 50.0, -2.0});
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, /*commandActive=*/true, kTol, {}, &ray);
+
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Center);
+  CHECK(hit.x == Approx(0.f).margin(1e-4));
+  CHECK(hit.y == Approx(0.f).margin(1e-4));
+}
+
 TEST_CASE("Orbited: an ellipse CENTRE is acquired with the cursor over the body", "[CadSnap][issue372]") {
   AppCommandState st;
   st.objectSnapCenter = true;

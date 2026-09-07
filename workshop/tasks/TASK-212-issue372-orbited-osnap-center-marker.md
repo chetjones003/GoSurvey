@@ -42,7 +42,10 @@ In any orbited model view (camera not looking straight down world Z):
 - `CadSnap::ConsiderSnap` — new `bool heuristicAccept = false`. When a pick ray is present it still
   **ranks** by the true ray distance (issue #103's rule, unchanged). For an ordinary kind the ray
   distance is the acceptance test too (the caller's plan-XY `pickDistSq` is meaningless once the
-  view tilts). A `heuristicAccept` kind keeps the caller's `pickDistSq` as the acceptance test.
+  view tilts). A `heuristicAccept` kind accepts on the **smaller of** the caller's (plane-recomputed)
+  heuristic and the true ray distance — the shape heuristic covers "cursor anywhere over the shape",
+  the ray distance keeps the pre-#372 envelope for a shape smaller than the aperture. A phantom
+  needs both to be large, so the `min` never revives one.
 - `RayXyAtPlaneZ` / `CenterHeuristicPoint` (new file-local helpers) — the CENTRE call sites now
   evaluate their plan-XY heuristic (`CircleCenterPickDistSq` etc.) **at the cursor ray's crossing
   of the shape's own plane** (`z = the shape's elevation`) rather than at `wx,wy`, which is the
@@ -73,7 +76,7 @@ native CIRCLE), now called out in a code comment.
 
 ## 4. Tests
 
-`tests/CadSnapTests.cpp`, tag `[issue372]` (6 cases):
+`tests/CadSnapTests.cpp`, tag `[issue372]` (7 cases):
 
 - orbited circle CENTRE acquired with the cursor over the rim (was: no snap);
 - orbited: a genuinely closer line endpoint still out-ranks the CENTRE heuristic (ranking rule
@@ -82,6 +85,8 @@ native CIRCLE), now called out in a code comment.
   without pointing at the disc (review regression 1);
 - orbited **edge-on**: CENTRE falls back to ray-proximity — resolves on-axis, not from over the rim
   (review regression 2);
+- orbited **grazing**: a small (sub-aperture) circle's CENTRE still resolves when the ray points
+  nearly at it though its plane-crossing is far off the disc (review regression 3);
 - orbited ellipse CENTRE acquired with the cursor over the body;
 - orbited survey-point CENTRE acquired from over its X marker at a zoomed-out scale.
 

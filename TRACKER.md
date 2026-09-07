@@ -20,18 +20,22 @@
       snap is offered whenever the cursor is anywhere over the disc (`CircleCenterPickDistSq`
       returns 0 for `d ≤ r`); that whole affordance — for circles, ellipses, closed polylines and
       survey-point X markers alike — was silently lost under orbit.
-    - **Two wrong drafts before the right one, both caught in review.** (1) "Keep the plan-XY
+    - **Three wrong drafts before the right one, all caught in review.** (1) "Keep the plan-XY
       heuristic as-is when a ray is present" fired a *phantom* CENTRE: `wx/wy` is the ray's
       crossing of the WORK plane, not the shape's plane, so a ray passing over an elevated shape's
-      XY footprint read "inside" and snapped to a centre the cursor was nowhere near — and
-      `rankDistSq` is never tolerance-gated, so it committed. (2) "Accept when the ray passes within
-      `radius + aperture` of the centre *point*" still fired a phantom when a shallow orbit put the
-      ray above a large disc without pointing at it, and needed a per-shape extent.
+      XY footprint read "inside" and snapped to a centre the cursor was nowhere near. (2) "Accept
+      when the ray passes within `radius + aperture` of the centre *point*" still fired a phantom
+      when a shallow orbit put the ray above a large disc without pointing at it, and needed a
+      per-shape extent. (3) "Accept only on the plane-recomputed heuristic" shrank the snap below
+      the pre-#372 envelope for a shape smaller than the aperture — fixed by accepting on the
+      MIN of that heuristic and the plain ray distance.
     - **What shipped:** the CENTRE heuristics are now evaluated at the cursor ray's crossing of the
       **shape's own plane** (`RayXyAtPlaneZ` / `CenterHeuristicPoint`), which is the correct
       generalisation — every plan heuristic already treats a curve as living in the plane of its
-      own elevation. `ConsiderSnap` gains a `heuristicAccept` flag that just says "don't overwrite
-      the caller's pickDistSq with the ray distance" (ranking still uses the ray distance, issue
+      own elevation. `ConsiderSnap` gains a `heuristicAccept` flag: such a candidate is accepted on
+      the SMALLER of the plane-recomputed heuristic and the true ray distance — the first covers
+      "cursor anywhere over the shape", the second keeps the pre-#372 envelope for a shape smaller
+      than the aperture; a phantom needs both large. Ranking still uses the ray distance (issue
       #103 unchanged). A ray parallel to that plane — an edge-on FRONT/LEFT/RIGHT/BACK view of a
       plan drawing — has no crossing, so CENTRE falls back to the pre-#372 rule (accept when the
       ray points almost exactly at the point). Plan view is byte-for-byte untouched (`acc->ray` is

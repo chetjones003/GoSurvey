@@ -275,11 +275,10 @@ struct SnapPickAccum {
 ///        is anywhere over the shape, not only near the centroid). The plan-XY heuristic is
 ///        meaningless once the view tilts, so an ORBITED caller passes true only after recomputing
 ///        \p pickDistSq at the cursor ray's crossing of the shape's own plane (see
-///        \ref CenterHeuristicPoint); it passes false — falling back to plain ray-distance
-///        acceptance — when that crossing does not exist (an edge-on view). With it set, the ray
-///        path keeps the recomputed heuristic as the acceptance test; without it, the ray distance
-///        to the exact point is the acceptance test (issue #372). Ranking is always the true ray
-///        distance, as issue #103 requires.
+///        \ref CenterHeuristicPoint); it passes false — plain ray-distance acceptance only — when
+///        that crossing does not exist (an edge-on view). With it set, the ray path accepts on
+///        EITHER that recomputed heuristic OR the plain ray distance, whichever is smaller (issue
+///        #372). Ranking is always the true ray distance, as issue #103 requires.
 void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float snapY, Kind kind, float pickDistSq,
                   float tolWorld, float snapZ = 0.f, bool heuristicAccept = false) {
   const float tol2 = tolWorld * tolWorld;
@@ -294,8 +293,12 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     const double d = ray3d::RayPointDistance(
         *acc->ray, ray3d::Vec3{static_cast<double>(snapX), static_cast<double>(snapY), static_cast<double>(snapZ)});
     rankDistSq = static_cast<float>(d * d);
-    if (!heuristicAccept)
-      pickDistSq = rankDistSq;
+    // Ordinary kind: the ray distance IS the acceptance test. Heuristic kind: accept on EITHER the
+    // shape heuristic (cursor is over the shape) OR the plain ray distance (cursor points almost
+    // straight at the point) — the latter keeps the pre-#372 envelope for a shape smaller than the
+    // aperture, which "over the shape" alone would shrink. A phantom needs BOTH to be large, so
+    // taking the min never revives one.
+    pickDistSq = heuristicAccept ? std::min(pickDistSq, rankDistSq) : rankDistSq;
   }
   if (!(pickDistSq <= tol2) || pickDistSq > 1.e28f)
     return;
@@ -1322,6 +1325,8 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
           const float lr = SC[i + 2] * sc;
           float hx = 0.f;
           float hy = 0.f;
+          // planeZ 0: a PDF underlay's snap geometry sits on the drawing datum, the same assumption
+          // the committed snapZ (0, below) already makes. If underlays gain an elevation both move.
           const bool heur = CenterHeuristicPoint(acc, wx, wy, 0.f, &hx, &hy);
           const float p2 = CircleCenterPickDistSq(hx, hy, lcx, lcy, lr, tolWorld);
           ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld, 0.f, /*heuristicAccept=*/heur);
