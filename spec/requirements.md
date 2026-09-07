@@ -3886,10 +3886,10 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: should
 - Type: functional
 - Statement: Add the commands above, reusing existing geometry/snap infrastructure; read-only, no undo entry.
-- Acceptance (sketch): AREA reports area/perimeter for polylines, rectangles and circles within REQ-101; DIST reports distance and delta X/Y/(Z) between two snapped points; LIST prints an entity's stored properties; MASSPROP reports at least area/perimeter/centroid for a closed region.
+- Acceptance (sketch): AREA reports area/perimeter for polylines, rectangles and circles within REQ-101; DIST reports distance and delta X/Y/Z between two snapped/typed points, using current unit/precision settings (NumFormat.hpp); LIST prints an entity's stored properties; MASSPROP reports at least area/perimeter/centroid for a closed region.
 - Owner-layer: Commands/UI
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Status: accepted (DIST only — issue #382); AREA/LIST/MASSPROP remain proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i); 2026-09-07 — accepted scoped to DIST (issue #382)
 
 ### REQ-106 — View-management commands
 - Purpose: no view-stack undo, no named views, no isometric presets beyond the ViewCube's standard faces

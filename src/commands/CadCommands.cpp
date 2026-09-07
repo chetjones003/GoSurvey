@@ -6272,6 +6272,11 @@ void ResetSurveyInverseDraft(AppCommandState& st) {
   st.surveyInverseFromX = st.surveyInverseFromY = 0.f;
 }
 
+void ResetDistDraft(AppCommandState& st) {
+  st.distPhase = AppCommandState::DistPhase::WaitFrom;
+  st.distFromX = st.distFromY = st.distFromZ = 0.f;
+}
+
 void ResetAllCadDraftTools(AppCommandState& st) {
   // UCS / PLAN prompt state (REQ-154). Reset here with every other draft so a cancelled UCS cannot
   // leave a half-collected origin behind for the next command to pick up.
@@ -6293,6 +6298,7 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   ResetDimDraft(st);
   ResetDimAngularDraft(st);
   ResetSurveyInverseDraft(st);
+  ResetDistDraft(st);
   ClearDimGripInteraction(st);
   AbortMtextGripInteraction(st);
   // Release PDF draft resources if any command was running
@@ -6414,6 +6420,7 @@ const CmdEntry kRegistry[] = {
     {"dimsty", "dimstyle, dsty", "Dimension style editor"},
     {"id", "", "Identify point coordinates"},
     {"inverse", "inv", "Inverse between two points"},
+    {"dist", "di", "3D distance between two points: dX, dY, dZ, slope distance"},
     {"surfelev", "se", "Surface elevation at a point; grade between two"},
     {"designatebreakline", "dbl", "Add a picked line/polyline as a surface breakline"},
     {"designatecontour", "dcon", "Add a picked line/polyline as a surface contour source"},
@@ -6897,6 +6904,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "inverse") {
     StartSurveyInverseCommand(st, log);
+    return true;
+  }
+  if (primary == "dist") {
+    StartDistCommand(st, log);
     return true;
   }
   if (primary == "extract") {
@@ -10769,6 +10780,37 @@ static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float 
   st.surveyInversePhase = SIP::WaitFrom;
 }
 
+/// REQ-105: DIST — reports delta X/Y/Z and slope (true 3D) distance in the active UCS, the same
+/// frame ID reports in (CommitIdPointAt) so the numbers match what the user would type back in.
+/// \p lx1,ly1 and \p lx2,ly2 are LOCAL X/Y (the same frame CommitIdPointAt's lx/ly parameters are
+/// in), converted to world here; \p wz1,wz2 are already WORLD Z (as returned by
+/// CadCommitElevation), matching CommitIdPointAt's convention.
+static void CommitDistSecondPoint(AppCommandState& st, float lx1, float ly1, float wz1, float lx2, float ly2, float wz2,
+                                   std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using DP = AppCommandState::DistPhase;
+  double wx1 = 0., wy1 = 0., wx2 = 0., wy2 = 0.;
+  CadCoord::WorldFromLocal(st, lx1, ly1, &wx1, &wy1);
+  CadCoord::WorldFromLocal(st, lx2, ly2, &wx2, &wy2);
+  const ray3d::Vec3 p1 = ucs::WorldToUcs(st.activeUcs, {wx1, wy1, static_cast<double>(wz1)});
+  const ray3d::Vec3 p2 = ucs::WorldToUcs(st.activeUcs, {wx2, wy2, static_cast<double>(wz2)});
+  const double dx = p2.x - p1.x;
+  const double dy = p2.y - p1.y;
+  const double dz = p2.z - p1.z;
+  const double slope = std::sqrt(dx * dx + dy * dy + dz * dz);
+  if (slope < 1e-10) {
+    log.push_back("DIST — distance is zero; pick a different second point.");
+    return;
+  }
+  const int p = st.displayLinearPrecision;
+  char buf[512];
+  std::snprintf(buf, sizeof(buf), "DIST — dX = %s  dY = %s  dZ = %s  slope dist = %s", FormatLinear(dx, p).c_str(),
+                FormatLinear(dy, p).c_str(), FormatLinear(dz, p).c_str(), FormatLinear(slope, p).c_str());
+  log.push_back(buf);
+  st.active = K::None;
+  st.distPhase = DP::WaitFrom;
+}
+
 // --- REQ-074 spot elevation and grade, REQ-089 rollover readout ---------------------------------
 
 /// One visible surface covering a plan position, and its interpolated elevation there.
@@ -11831,6 +11873,20 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       return;
     }
     CommitSurveyInverseSecondPoint(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Dist) {
+    using DP = AppCommandState::DistPhase;
+    if (st.distPhase == DP::WaitFrom) {
+      st.distFromX = wx;
+      st.distFromY = wy;
+      st.distFromZ = CadCommitElevation(st);
+      st.distPhase = DP::WaitTo;
+      log.push_back("DIST — second point (pick or type X,Y; @dx,dy from first):");
+      return;
+    }
+    CommitDistSecondPoint(st, st.distFromX, st.distFromY, st.distFromZ, wx, wy, CadCommitElevation(st), log);
     return;
   }
 
@@ -20562,6 +20618,24 @@ void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& lo
       "Result: ΔE, ΔN, horizontal distance, bearing D°M'S\" and decimal ° clockwise from north. ESC cancels.");
 }
 
+void StartDistCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using DP = AppCommandState::DistPhase;
+  if (st.active != K::None) {
+    log.push_back("DIST — finish or cancel the active command first.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active = K::Dist;
+  st.distPhase = DP::WaitFrom;
+  log.push_back(
+      "DIST — first point (pick, snap, or type X,Y); then second (pick, snap, type X,Y, or "
+      "@dx,dy for direct-distance entry). Result: dX, dY, dZ, and slope (3D) distance. ESC cancels.");
+}
+
 void ClearCadSelection(AppCommandState& st) {
   st.selection.clear();
   // The sub-object selection goes with it. Every caller of this function means "nothing is selected
@@ -29199,6 +29273,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ID canceled.");
   else if (st.active == AppCommandState::Kind::SurveyInverse)
     log.push_back("INVERSE canceled.");
+  else if (st.active == AppCommandState::Kind::Dist)
+    log.push_back("DIST canceled.");
   else if (st.active == AppCommandState::Kind::Zoom)
     log.push_back("ZOOM WINDOW canceled.");
   else if (st.active == AppCommandState::Kind::Pan)
@@ -30952,6 +31028,30 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (st.active == K::Dist) {
+    using DP = AppCommandState::DistPhase;
+    float px = 0.f;
+    float py = 0.f;
+    if (st.distPhase == DP::WaitFrom) {
+      if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+        log.push_back("DIST — type X,Y (World) or pick first point in Drawing1.");
+        return;
+      }
+      st.distFromX = px;
+      st.distFromY = py;
+      st.distFromZ = CadCommitElevation(st);
+      st.distPhase = DP::WaitTo;
+      log.push_back("DIST — second point (X,Y or @dx,dy from first).");
+      return;
+    }
+    if (!ParseStoragePoint(st, line, &px, &py, true, st.distFromX, st.distFromY)) {
+      log.push_back("DIST — type X,Y or @dx,dy from first point.");
+      return;
+    }
+    CommitDistSecondPoint(st, st.distFromX, st.distFromY, st.distFromZ, px, py, CadCommitElevation(st), log);
+    return;
+  }
+
   if (st.active == K::InsertBlock) {
     using IPh = AppCommandState::InsertBlockPhase;
     if (st.insertBlockPhase == IPh::WaitDialog) {
@@ -32187,6 +32287,13 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     if (st.surveyInversePhase == SIP::WaitFrom)
       return "INVERSE: First point — pick or X,Y (Easting, Northing) | ESC cancel";
     return "INVERSE: Second point — pick or X,Y / @ from first | ESC cancel";
+  }
+
+  if (st.active == K::Dist) {
+    using DP = AppCommandState::DistPhase;
+    if (st.distPhase == DP::WaitFrom)
+      return "DIST: First point — pick or X,Y | ESC cancel";
+    return "DIST: Second point — pick or X,Y / @ from first | ESC cancel";
   }
 
   if (st.active == K::SurfaceElevGrade) {

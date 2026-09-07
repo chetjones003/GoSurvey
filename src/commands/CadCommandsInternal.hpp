@@ -33,6 +33,7 @@ void ResetMtextDraft(AppCommandState& st);
 void ResetDimDraft(AppCommandState& st);
 void ResetDimAngularDraft(AppCommandState& st);
 void ResetSurveyInverseDraft(AppCommandState& st);
+void ResetDistDraft(AppCommandState& st);
 /// Resets every in-progress draft/prompt tool. Call on command start, cancel, or
 /// clear-geometry so no half-collected state leaks into the next command.
 void ResetAllCadDraftTools(AppCommandState& st);

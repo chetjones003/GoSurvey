@@ -325,6 +325,9 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitTo)
     PushRubberSegViewRel(rubberLines, cmd.surveyInverseFromX, cmd.surveyInverseFromY, curXf, curYf, 0., 0., zc, zc);
 
+  if (cmd.active == AppCommandState::Kind::Dist && cmd.distPhase == AppCommandState::DistPhase::WaitTo)
+    PushRubberSegViewRel(rubberLines, cmd.distFromX, cmd.distFromY, curXf, curYf, 0., 0., cmd.distFromZ, zc);
+
   if (cmd.active == AppCommandState::Kind::DimAngular) {
     using DAP = AppCommandState::DimAngularPhase;
     if (cmd.dimAngularPhase == DAP::WaitRay1)

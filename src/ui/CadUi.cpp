@@ -9114,6 +9114,12 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
       return "INVERSE — first point X,Y (Easting, Northing):";
     return "INVERSE — second point X,Y or @ from first:";
   }
+  if (cmd.active == AppCommandState::Kind::Dist) {
+    using DP = AppCommandState::DistPhase;
+    if (cmd.distPhase == DP::WaitFrom)
+      return "DIST — first point X,Y:";
+    return "DIST — second point X,Y or @ from first:";
+  }
   // The prompted solid primitives (REQ-313 as amended). REQ-304 requires every Kind to carry a live
   // prompt; this one is COMPUTED rather than a literal, because it echoes the dimensions already set
   // back to the user, and there are seven primitives with four different parameter sets between them.
@@ -9412,6 +9418,7 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   }
   case K::IdPoint: return true;
   case K::SurveyInverse: return true;
+  case K::Dist: return true;
   // REQ-074. Missing here as well as from the viewport click dispatch, so SURFELEV got neither
   // typed-point entry nor a usable pick — the same pre-existing TASK-055 gap, in the second of the
   // two lists a point-picking command has to appear in.
@@ -9610,6 +9617,8 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   case K::SurveyInverse:
     return cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitFrom ? "Specify first point:"
                                                                                   : "Specify second point:";
+  case K::Dist:
+    return cmd.distPhase == AppCommandState::DistPhase::WaitFrom ? "Specify first point:" : "Specify second point:";
   case K::Move:
   case K::Copy:
     return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:"
