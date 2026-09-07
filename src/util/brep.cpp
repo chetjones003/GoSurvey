@@ -2976,6 +2976,27 @@ Vec3 PlanarFaceCentroid(const Solid& s, const Face& f) {
   return ray3d::Add(fr.origin, ray3d::Add(ray3d::Scale(fr.xAxis, cu), ray3d::Scale(fr.yAxis, cv)));
 }
 
+Vec3 CurvedFaceMidpoint(const Face& f) {
+  const double u = 0.5 * (f.uStart + f.uEnd);
+  const double v = 0.5 * (f.vStart + f.vEnd);
+  const Surface& sf = f.surface;
+  switch (sf.kind) {
+  case SurfaceKind::Plane:
+    return sf.frame.origin;  // caller error (only meant for curved faces) — a harmless fallback
+  case SurfaceKind::Cylinder:
+    return ConicalPoint(sf, sf.radius, sf.radius, u, v);
+  case SurfaceKind::Cone:
+    return ConicalPoint(sf, sf.radius, sf.radius2, u, v);
+  case SurfaceKind::Sphere:
+    return SphericalPoint(sf, u, v);
+  case SurfaceKind::Torus:
+    return ToroidalPoint(sf, u, v);
+  case SurfaceKind::Nurbs:
+    return nurbs::Evaluate(sf.patch, u, v);
+  }
+  return sf.frame.origin;
+}
+
 // ---------------------------------------------------------------------------------------------
 // The seven primitives.
 // ---------------------------------------------------------------------------------------------

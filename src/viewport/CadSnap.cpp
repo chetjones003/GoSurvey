@@ -280,7 +280,7 @@ struct SnapPickAccum {
 ///        EITHER that recomputed heuristic OR the plain ray distance, whichever is smaller (issue
 ///        #372). Ranking is always the true ray distance, as issue #103 requires.
 void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float snapY, Kind kind, float pickDistSq,
-                  float tolWorld, float snapZ = 0.f, bool heuristicAccept = false) {
+                  float tolWorld, float snapZ = 0.f, bool heuristicAccept = false, bool solid = false) {
   const float tol2 = tolWorld * tolWorld;
   float rankDistSq = (snapX - wx) * (snapX - wx) + (snapY - wy) * (snapY - wy);
   // Orbited: re-measure the candidate against the cursor ray in 3D. Doing it here — at the one
@@ -310,6 +310,7 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
+    acc->best.solid = solid;
     acc->bestRankDistSq = rankDistSq;
     acc->bestPri = pri;
     return;
@@ -319,6 +320,7 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
+    acc->best.solid = solid;
     acc->bestRankDistSq = rankDistSq;
     acc->bestPri = pri;
     return;
@@ -331,15 +333,16 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
+    acc->best.solid = solid;
     acc->bestPri = pri;
   }
 }
 
 void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind kind, float tolWorld,
-              float pz = 0.f) {
+              float pz = 0.f, bool solid = false) {
   const float dx = px - wx;
   const float dy = py - wy;
-  ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz);
+  ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz, /*heuristicAccept=*/false, solid);
 }
 
 /// Mean vertex elevation of polyline loop [\p v0,\p v1) — the elevation of its geometric centre.
@@ -1218,13 +1221,13 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
         if (wantSolidVertex) {
           for (const brep::Vertex& v : sp->vertices)
             Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(v.p.x),
-                     static_cast<float>(v.p.y), Kind::Endpoint, tolWorld, static_cast<float>(v.p.z));
+                     static_cast<float>(v.p.y), Kind::Endpoint, tolWorld, static_cast<float>(v.p.z), true);
         }
         for (const brep::Edge& e : sp->edges) {
           if (wantSolidMidpoint) {
             const ray3d::Vec3 mid = brep::EdgePointAt(*sp, e, 0.5);
             Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(mid.x),
-                     static_cast<float>(mid.y), Kind::Midpoint, tolWorld, static_cast<float>(mid.z));
+                     static_cast<float>(mid.y), Kind::Midpoint, tolWorld, static_cast<float>(mid.z), true);
           }
           if (wantSolidNearest) {
             // Measured from the cursor RAY where there is one, so an orbited view snaps to the edge
@@ -1239,7 +1242,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
             const ray3d::Vec3 probe = acc.ray ? ClosestRayPointToEdge(*acc.ray, *sp, e) : cursor;
             const ray3d::Vec3 on = brep::ClosestPointOnEdge(*sp, e, probe);
             Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(on.x),
-                     static_cast<float>(on.y), Kind::Edge, tolWorld, static_cast<float>(on.z));
+                     static_cast<float>(on.y), Kind::Edge, tolWorld, static_cast<float>(on.z), true);
           }
         }
       }
@@ -1261,7 +1264,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
             // The triangle told us WHICH face; the surface tells us WHERE on it.
             const ray3d::Vec3 exact = brep::ClosestPointOnSurface(sp->faces[static_cast<size_t>(faceIndex)].surface, hit);
             Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(exact.x),
-                     static_cast<float>(exact.y), Kind::Face, tolWorld, static_cast<float>(exact.z));
+                     static_cast<float>(exact.y), Kind::Face, tolWorld, static_cast<float>(exact.z), true);
           }
         }
 
@@ -1280,36 +1283,26 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
               if (face.surface.kind == brep::SurfaceKind::Plane) {
                 c = brep::PlanarFaceCentroid(*sp, face);
               } else {
-                // Curved (and Nurbs) faces: area-weighted centroid of this face's own cached
-                // triangles, then projected back onto the exact analytic surface so the answer
-                // lies on it rather than a chord's worth short — the same guarantee Nearest-to-face
-                // gives, just at the centroid instead of the ray hit. Reuses the same tessellation
-                // already relied on for rendering/picking; an exact analytic-integral centroid is a
-                // possible future refinement if `ComputeMassProperties`'s internal integrals turn
-                // out reusable, but is out of scope here.
-                ray3d::Vec3 sum{};
-                double areaSum = 0.0;
-                const auto& tv = it->triVerts;
-                const auto& tf = it->triFaceIds;
-                const size_t triCount = tv.size() / 9;
-                for (size_t t = 0; t < triCount; ++t) {
-                  if (t >= tf.size() || tf[t] != faceIndex)
-                    continue;
-                  const size_t b = t * 9;
-                  const ray3d::Vec3 a{tv[b + 0], tv[b + 1], tv[b + 2]};
-                  const ray3d::Vec3 bb{tv[b + 3], tv[b + 4], tv[b + 5]};
-                  const ray3d::Vec3 c3{tv[b + 6], tv[b + 7], tv[b + 8]};
-                  const ray3d::Vec3 cross = ray3d::Cross(ray3d::Sub(bb, a), ray3d::Sub(c3, a));
-                  const double triArea = 0.5 * ray3d::Length(cross);
-                  const ray3d::Vec3 triC = ray3d::Scale(ray3d::Add(ray3d::Add(a, bb), c3), 1.0 / 3.0);
-                  sum = ray3d::Add(sum, ray3d::Scale(triC, triArea));
-                  areaSum += triArea;
-                }
-                const ray3d::Vec3 approx = areaSum > 1e-12 ? ray3d::Scale(sum, 1.0 / areaSum) : hit;
-                c = brep::ClosestPointOnSurface(face.surface, approx);
+                // Curved (and Nurbs) faces: the parameter-domain midpoint, NOT an area-weighted
+                // triangle centroid. A full-revolution face (e.g. a cylinder's whole lateral
+                // surface) is rotationally symmetric about its axis, so a triangle-area centroid
+                // averages to a point ON THE AXIS — a degenerate input to `ClosestPointOnSurface`,
+                // which for a Cylinder/Cone returns that axis point UNPROJECTED (there is no single
+                // nearest point on the surface from the axis itself), landing the glyph nowhere
+                // near the visible face. `CurvedFaceMidpoint` evaluates the surface directly at its
+                // own (u, v) midpoint instead, which has no such degeneracy.
+                c = brep::CurvedFaceMidpoint(face);
               }
-              Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(c.x),
-                       static_cast<float>(c.y), Kind::CenterOfFace, tolWorld, static_cast<float>(c.z));
+              // heuristicAccept: the cursor ray already hit THIS face (that is what put us inside
+              // this block), so — matching AutoCAD, and the same "cursor anywhere over the shape"
+              // treatment CENTER already gets on a circle (issue #372) — Center of face is offered
+              // no matter where on the face the cursor sits, not only when it happens to land within
+              // the ordinary aperture of the centroid itself. pickDistSq=0 always clears the
+              // tolerance test; ranking against other candidates still uses the true ray distance to
+              // the centroid, so a genuinely closer Endpoint/Edge on the same face still wins.
+              ConsiderSnap(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(c.x),
+                           static_cast<float>(c.y), Kind::CenterOfFace, 0.f, tolWorld, static_cast<float>(c.z),
+                           /*heuristicAccept=*/true, /*solid=*/true);
             }
 
             if (have3dPerpRef && face.surface.kind == brep::SurfaceKind::Plane) {
@@ -1318,7 +1311,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
               const ray3d::Vec3 refW{static_cast<double>(refPx), static_cast<double>(refPy), 0.0};
               const ray3d::Vec3 foot = brep::ClosestPointOnSurface(face.surface, refW);
               Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(foot.x),
-                       static_cast<float>(foot.y), Kind::Perpendicular, tolWorld, static_cast<float>(foot.z));
+                       static_cast<float>(foot.y), Kind::Perpendicular, tolWorld, static_cast<float>(foot.z), true);
             }
           }
         }
@@ -1344,7 +1337,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
               for (double v : vs) {
                 const ray3d::Vec3 p = nurbs::Evaluate(patch, u, v);
                 Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(p.x),
-                         static_cast<float>(p.y), Kind::Knot, tolWorld, static_cast<float>(p.z));
+                         static_cast<float>(p.y), Kind::Knot, tolWorld, static_cast<float>(p.z), true);
               }
             }
           }

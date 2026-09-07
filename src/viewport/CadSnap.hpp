@@ -50,6 +50,11 @@ struct Hit {
   /// datum while the point it marks sits at its own elevation, so the marker floats away from the
   /// geometry as soon as the view is orbited. Zero for flat drawings, which is every pre-3D one.
   float z = 0.f;
+  /// True when this candidate came from the 3D Object Snap system (REQ-325/#395) rather than the 2D
+  /// one — used only to color the glyph (3D Object Snap purple #8803fc vs 2D Object Snap green), so
+  /// a user can tell at a glance which snap system answered, even for a kind (Endpoint, Midpoint,
+  /// Perpendicular) shared between both.
+  bool solid = false;
 };
 
 struct SnapCandidateEntry {
