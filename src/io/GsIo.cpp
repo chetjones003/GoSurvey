@@ -1594,7 +1594,9 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapIntersection"] = st.objectSnapIntersection;
   settings["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   settings["objectSnapSurface"] = st.objectSnapSurface;
-  settings["objectSnapSolid"] = st.objectSnapSolid;  // REQ-313
+  settings["objectSnapSolid"] = st.objectSnap3dEnabled;  // REQ-325/#395: .gs is deprecated (retired
+                                                          // format); minimal one-field carry-forward
+                                                          // of the master toggle, not a full migration.
   settings["viewportSolidIsolines"] = st.viewportSolidIsolines;
   settings["objectSnapAperturePx"] = st.objectSnapAperturePx;
   settings["objectSnapGlyphHalfPx"] = st.objectSnapGlyphHalfPx;
@@ -1784,7 +1786,7 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   b(s, "objectSnapIntersection", &st.objectSnapIntersection);
   b(s, "objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   b(s, "objectSnapSurface", &st.objectSnapSurface);
-  b(s, "objectSnapSolid", &st.objectSnapSolid);
+  b(s, "objectSnapSolid", &st.objectSnap3dEnabled);  // REQ-325/#395: see save-side comment above.
   // ISOLINES (REQ-313 as amended). Clamped on read, so a hand-edited file cannot ask for a wireframe
   // dense enough to cost the frame budget, and an absent key keeps the default rather than zero -
   // which would silently strip every curved solid back to its edges.

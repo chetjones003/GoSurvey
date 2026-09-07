@@ -7454,6 +7454,61 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-06)
 - Revisions: 2026-09-06 — initial.
 
+### REQ-326 — 3D Object Snap: AutoCAD-parity solid-geometry snapping, independent of 2D Object Snap (issue #395)
+- Purpose: let a user snap the cursor to B-rep solid geometry (vertices, edges, faces, and — for
+  freeform NURBS surfaces from LOFT/SWEEP — knot points) the same way AutoCAD's "3D Object Snap" tab
+  works, as its own system separate from ordinary 2D Object Snap
+- Priority: should
+- Type: functional
+- Statement: A second, independent object-snap system exists for B-rep solids, mirroring AutoCAD's
+  3D Object Snap tab:
+  - a master toggle (**F4**, `AppCommandState::objectSnap3dEnabled`) independent of 2D Object Snap's
+    F3 toggle — either can be on, off, or configured differently at the same time;
+  - six per-mode toggles, each gated by the master AND its own flag: **Vertex**, **Midpoint on
+    edge**, **Center of face**, **Knot**, **Perpendicular**, **Nearest to face**;
+  - **Center of face** is supported for every face type, including curved and NURBS (freeform
+    LOFT/SWEEP) surfaces — not planar/cylindrical only;
+  - a Settings dialog tab ("3D Object Snap") with a two-column checkbox layout plus Select All /
+    Clear All buttons, and persistence identical in kind to the existing 2D Object Snap settings
+    (`UserPrefs.cpp`/`gosurvey-user.json`).
+
+  **Supersedes REQ-301.** REQ-301 argued a single `objectSnapSolid` toggle governing both "solid
+  face" and "solid edge" snapping was correct because "no requirement asks to enable one without the
+  other." This requirement is exactly that case, and adds four more AutoCAD-parity modes besides, so
+  the single toggle is retired in favor of one flag per mode (D-2026-09-07-a). A solid's Vertex and
+  Midpoint-on-edge snaps, which previously rode on the 2D `objectSnapEndpoint`/`objectSnapMidpoint`
+  toggles, now answer exclusively to the new 3D per-mode flags and the F4 master — so 3D Object Snap
+  really is independent of 2D Object Snap, per this issue's explicit requirement.
+- Acceptance:
+  - F4 toggles `objectSnap3dEnabled` and works even with command-bar focus, independent of F3;
+  - with the master off, no solid-derived snap kind (`Endpoint`/`Midpoint`/`Face`/`Edge`/
+    `CenterOfFace`/`Knot`/`Perpendicular` sourced from a `brep::Solid`) is ever returned, even when
+    every individual per-mode flag is true;
+  - Vertex, Midpoint-on-edge, and Nearest-to-face reproduce REQ-313's prior solid-snap behavior under
+    their renamed/split flags (no regression);
+  - Center-of-face returns the exact area-weighted centroid for a planar face
+    (`brep::PlanarFaceCentroid`) and a triangulation-based area-weighted centroid projected onto the
+    analytic surface for every curved/NURBS face — verified on a box's planar face AND a cylinder's
+    circular end-cap (where naively averaging the two topology vertices of the rim would be wrong);
+  - Perpendicular returns the foot of the perpendicular from the active command's reference point
+    onto a **planar** face only (no single well-defined foot exists on a curved face in general);
+  - Knot enumerates the distinct parameter values of a NURBS face's U/V knot vectors (deduplicating
+    the clamped repeated end knots) and evaluates the surface there;
+  - the Settings dialog's "3D Object Snap" tab shows a two-column checkbox layout with Select All /
+    Clear All, and every flag round-trips through `UserPrefs.cpp` save/load;
+  - `CadSnapTests.cpp` `[issue395]`-tagged tests cover all of the above; the pre-existing `[req313]`
+    solid-snap tests pass unmodified in intent (updated only to the new flag names).
+- Owner-layer: Domain/Commands, UI
+- Status: done — `CadSnap.hpp`/`.cpp` (`Kind::CenterOfFace`, `Kind::Knot`, the F4-gated solid-snap
+  block), `brep::PlanarFaceCentroid` (`brep.hpp`/`.cpp`), `CadCommands.hpp` (`objectSnap3dEnabled` +
+  six per-mode flags, replacing `objectSnapSolid`), `CadUiSettings.cpp`
+  (`DrawSettings3dObjectSnapTab`, repurposing the "3D Modeling" placeholder tab), `CadUi.cpp` (status
+  bar "3D OSNAP" button + right-click popup, status-text switch), `ViewportRenderer.cpp` (CenterOfFace
+  / Knot glyphs), `UserPrefs.cpp`/`GsIo.cpp` persistence, `main.cpp` (F4 key handler). Tests:
+  `CadSnapTests.cpp` `[CadSnap][issue395]` (7 new test cases) plus the 3 updated `[req313]` cases.
+  GitHub issue #395, PR (this branch).
+- Revisions: 2026-09-07 — initial, supersedes REQ-301's single solid-snap toggle.
+
 ### REQ-203 — The command layer is drivable without a window
 - Purpose: debuggability, maintainability — the interactive surface is the largest part of the
   system with no automated coverage, and it is where users actually meet the bugs
@@ -7782,6 +7837,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-305 | Commands/Viewport | done (GitHub issue #87, D-2026-08-25-m, TASK-111 — relabeled from REQ-304/TASK-109 while merging `master` into `beta`, see the requirement's own header note). ARRAY (rectangular + polar) follows the MOVE/COPY/ROTATE/SCALE/MIRROR transform-command shape end to end; survey points excluded from the array selection, confirmed with the user (D-2026-08-25-m addendum). Amended once (D-2026-08-25-n, TASK-112): the shared "select objects" step was click-or-box-and-accumulate-until-Enter for MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY (STRETCH excluded — its crossing box is load-bearing geometry, REQ-103 step 5), replacing the box-only shape all seven originally shared. `GoSurveyTests.exe` 542/542, headless transcript corpus green (1 pre-existing disabled, unrelated) | accepted |
 | REQ-318 | Domain/UI | accepted, increment 1 of 2 delivered — the SHARED pick query (GitHub issue #148, D-2026-09-03-c, ADR-049, TASK-189). **What was new is not what the issue claimed.** The ray/triangle → `triFace` → `ClosestPointOnSurface` pipeline already shipped with REQ-313, inside `src/viewport/CadSnap.cpp`; what it could not do was serve a second caller, because `RayHitSolidFace`, `ClosestRayPointToEdge` and `RayNearBounds` were file-private. So increment 1 is a *consolidation*: `ray3d::RayTriangleIntersect` and the new pure `src/util/solidpick.{hpp,cpp}` are the one home, and `CadSnap` now routes through both instead of keeping its own copies. That mattered concretely — the snap copy used an absolute determinant epsilon and exact barycentric bounds while the shared one is scale-relative with a barycentric slack, so on the hairline crack between two faces of the deliberately unwelded tessellation the two disagreed: snap reported nothing where a selection would report a hit, and a user would have seen the snap marker and the sub-object highlight name different things under one cursor. Above the geometry, what is genuinely new is the **expiring sub-object reference** (an index is durable across a topology-preserving edit and meaningless across one that changes the counts, so it is paired with a `weak_ptr` to the solid and expires rather than re-binding), and precedence and occlusion as stated rules. The projection remains the sharpest point and is measured: a raw triangle hit sits 0.00986 ft off a cylinder's true surface at the shipping chord tolerance — inside REQ-101's ±0.01 ft but 98.6% of the whole budget — and projected the residual is at the arithmetic floor. **The tests assert the picked AZIMUTH as well as the radius**, because `ClosestPointOnSurface` rescales any nearby point to exactly `r`: a radius assertion alone cannot fail for the reason it appears to test, and an earlier draft of this row cited one that could not. Occlusion is measured against the nearest *triangle* rather than the nearest usable face, so a corrupt face id cannot move the baseline to the far side of the solid; the ray is normalized on entry, because `RayTriangleIntersect`'s parameter scales as `1/\|dir\|` and `RayPointDistance`'s as `\|dir\|`, which on a non-unit ray makes the occlusion comparison meaningless rather than merely imprecise; and the curved-edge chord budget keys on the curve KIND, not on `sweep`, which a `CurveKind::Intersection` edge leaves zero. Increment 2 is the selection mode, its store, the highlight treatment and coexistence with the entity pick — where #148 acceptance criteria 1 and 2 are actually met. | `SolidPickTests` (21 cases: cylinder radius AND azimuth from 24 azimuths; the same oblique geometry passing at storage magnitude and failing at absolute state-plane magnitude, which pins the local-coordinates precondition with evidence rather than prose; near-face-wins from both directions; vertex/edge/face precedence; zero tolerance disables a kind; occluded far-side vertex refused, and still refused when the occluding triangle's id is corrupt; a non-unit ray giving an identical answer and an unchanged depth; a ray just outside the silhouette still reaching the edges; the rim picked on the true arc; and refusals for a miss, a solid behind the cursor, a degenerate ray, a null result, mismatched buffers and an empty solid) + `Ray3dTests` (10 new cases for the primitive, including a hit on a shared edge reported by both triangles and a 0.25 ft triangle at easting 2e6 — the case an absolute degeneracy epsilon would reject). The refactored snap path is covered by the existing `GoSurveySnapTests` and the `req313-solid-picked` headless transcript, both unchanged and green. Full suite 1062/1062. | accepted |
 | REQ-323 | Domain/Commands | increment 1 KERNEL delivered (GitHub issue #148 acceptance 5, D-2026-09-05-c, ADR-046 amendment (j), TASK-210). `FilletEdgeTests` — a box against both closed forms (volume 1520+20pi, area 792+22pi, topology 7/15/10), a WEDGE whose 68.199-degree dihedral gives setback 40/(sqrt(464)-8) and not r, every refusal by name, two opposite edges as one operation, and PRESSPULL still working on the result. The FILLET command is the next slice; the spherical corner patch that closes #148 acceptance 5, the concave edge, the oblique end face and the torus fillet are each their own increment. |
+| REQ-326 | Domain/Commands, UI | done (GitHub issue #395, D-2026-09-07-a). `CadSnapTests.cpp` `[CadSnap][issue395]` (7 cases: Vertex + F4 master gate, Midpoint-on-edge, Nearest-to-face regression, Center-of-face on a planar box face, Center-of-face on a cylinder end-cap landing on the axis rather than a vertex average, Perpendicular's foot on a planar face, Knot enumeration against a hand-built `nurbs::Patch`) plus the 3 pre-existing `[req313]` solid-snap cases updated to the new per-mode flags. Full suite 1277/1278 (the one failure, `a missing or corrupt store loads as an empty list`, is pre-existing on `beta` and unrelated — reproduced against `beta` directly). |
 
 ---
 

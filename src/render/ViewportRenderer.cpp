@@ -645,6 +645,17 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     AppendSnapDiamondOutline(out, f, mh * 0.62f);
     AppendSnapSquareOutline(out, f, mh);
     break;
+  case CadSnap::Kind::CenterOfFace:
+    // A triangle with an inscribed circle — deliberately distinct from Face's diamond+square and
+    // from Midpoint's plain triangle (REQ-325/#395).
+    AppendSnapTriangleOutline(out, f, mh);
+    AppendSnapCircle(out, f, mh * 0.4f, snapCircSegs);
+    break;
+  case CadSnap::Kind::Knot:
+    // A diamond inside a square — not used by any other kind (REQ-325/#395).
+    AppendSnapSquareOutline(out, f, mh);
+    AppendSnapDiamondOutline(out, f, mh * 0.55f);
+    break;
   case CadSnap::Kind::Grip:
     break; // grip snap is silent — no glyph drawn
   }

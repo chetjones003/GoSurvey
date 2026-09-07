@@ -9870,7 +9870,28 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
         ImGui::Checkbox("Intersection", &cmd.objectSnapIntersection);
         ImGui::Checkbox("Apparent intersection", &cmd.objectSnapApparentIntersection);
         ImGui::Checkbox("Surface elevation", &cmd.objectSnapSurface);
-        ImGui::Checkbox("Solid face / edge", &cmd.objectSnapSolid);
+        ImGui::EndPopup();
+      }
+      ImGui::SameLine(0, sp);
+    }
+
+    // 3D OSNAP (+ its own snap-type popup) — REQ-325/#395, independent of 2D OSNAP above (F4).
+    {
+      const bool on = cmd.objectSnap3dEnabled;
+      PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
+      if (ImGui::Button("3D OSNAP", ImVec2(0.f, statusBtnH)))
+        cmd.objectSnap3dEnabled = !cmd.objectSnap3dEnabled;
+      PopModeToggleButtonColors(on);
+      ItemHelpTooltip("3D Object snap — F4 toggles; right-click for snap types. Independent of 2D Object snap (F3).");
+      if (ImGui::BeginPopupContextItem("osnap3d_modes", ImGuiPopupFlags_MouseButtonRight)) {
+        ImGui::TextDisabled("3D Object Snap to");
+        ImGui::Separator();
+        ImGui::Checkbox("Vertex", &cmd.objectSnap3dVertex);
+        ImGui::Checkbox("Midpoint on edge", &cmd.objectSnap3dMidpointEdge);
+        ImGui::Checkbox("Center of face", &cmd.objectSnap3dCenterFace);
+        ImGui::Checkbox("Knot", &cmd.objectSnap3dKnot);
+        ImGui::Checkbox("Perpendicular", &cmd.objectSnap3dPerpendicular);
+        ImGui::Checkbox("Nearest to face", &cmd.objectSnap3dNearestFace);
         ImGui::EndPopup();
       }
       ImGui::SameLine(0, sp);
@@ -11987,6 +12008,10 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Solid edge";
   case CadSnap::Kind::Face:
     return "Solid face";
+  case CadSnap::Kind::CenterOfFace:
+    return "Center of face";
+  case CadSnap::Kind::Knot:
+    return "Knot";
   case CadSnap::Kind::Grip:
     return "Grip";
   }
