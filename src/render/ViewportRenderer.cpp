@@ -240,8 +240,12 @@ const CadLayerRow* LookupLayerRowCi(const std::vector<CadLayerRow>* layers, cons
   return nullptr;
 }
 
+// issue #383: AutoCAD's default (0.18mm/ByLayer) linework reads as a near-hairline in the
+// viewport, not the noticeably-bold stroke the old 0.65+mm*5.25 mapping produced (1.6px at
+// 0.18mm). Rescaled so the common 0.18mm case lands just above the 1px floor while heavier
+// explicit lineweights still scale up visibly.
 float LineweightMmToDevicePx(float mm) {
-  return std::clamp(0.65f + mm * 5.25f, 1.f, 16.f);
+  return std::clamp(0.5f + mm * 4.f, 1.f, 16.f);
 }
 
 /// A polyline is the one committed type whose vertices each carry their own elevation (REQ-057), so
@@ -1062,7 +1066,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   float mvp[16];
   MulMat4(projRot, model, mvp);
 
-  constexpr GLfloat kLwMain = 1.35f;
+  // issue #383: this is the fallback stroke for entities with no resolvable lineweight AND the
+  // width rubber-band previews inherit (they draw right after the highlight passes below, which
+  // restore glLineWidth(kLwMain)). Thinned to match AutoCAD's default look.
+  constexpr GLfloat kLwMain = 1.f;
   constexpr GLfloat kLwHiLine = 2.65f;
   constexpr GLfloat kLwHiCirc = 2.45f;
   constexpr GLfloat kLwSurvey = 1.65f;
