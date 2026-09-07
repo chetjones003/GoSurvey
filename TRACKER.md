@@ -7,6 +7,45 @@
 
 ## CHANGES
 
+### CENTRE object snaps came back under an orbited camera, and the snap marker stopped drifting — 2026-09-06
+
+    - GitHub issue #372, found while testing REQ-154. TASK-212. Two defects against REQ-058's
+      already-signed-off acceptance ("center snaps resolve correctly from an orbited camera";
+      "snap glyphs … are UI markers, not geometry").
+    - **CENTRE never acquired over a circle once the view was orbited.** The orbited snap path
+      (`CadSnap::ConsiderSnap`, the `acc->ray` branch — issue #103) re-measures every candidate as
+      the distance from the cursor ray to the *exact* snap point and uses that as both the ranking
+      AND the acceptance metric. For a circle's CENTRE the exact point is a full radius from where
+      the cursor sits on the rim, so it was always outside the aperture. In plan view the same
+      snap is offered whenever the cursor is anywhere over the disc (`CircleCenterPickDistSq`
+      returns 0 for `d ≤ r`); that whole affordance — for circles, ellipses, closed polylines and
+      survey-point X markers alike — was silently lost under orbit.
+    - **Two wrong drafts before the right one, both caught in review.** (1) "Keep the plan-XY
+      heuristic as-is when a ray is present" fired a *phantom* CENTRE: `wx/wy` is the ray's
+      crossing of the WORK plane, not the shape's plane, so a ray passing over an elevated shape's
+      XY footprint read "inside" and snapped to a centre the cursor was nowhere near — and
+      `rankDistSq` is never tolerance-gated, so it committed. (2) "Accept when the ray passes within
+      `radius + aperture` of the centre *point*" still fired a phantom when a shallow orbit put the
+      ray above a large disc without pointing at it, and needed a per-shape extent.
+    - **What shipped:** the CENTRE heuristics are now evaluated at the cursor ray's crossing of the
+      **shape's own plane** (`RayXyAtPlaneZ` / `CenterHeuristicPoint`), which is the correct
+      generalisation — every plan heuristic already treats a curve as living in the plane of its
+      own elevation. `ConsiderSnap` gains a `heuristicAccept` flag that just says "don't overwrite
+      the caller's pickDistSq with the ray distance" (ranking still uses the ray distance, issue
+      #103 unchanged). A ray parallel to that plane — an edge-on FRONT/LEFT/RIGHT/BACK view of a
+      plan drawing — has no crossing, so CENTRE falls back to the pre-#372 rule (accept when the
+      ray points almost exactly at the point). Plan view is byte-for-byte untouched (`acc->ray` is
+      null). Survey-point CENTRE is included: the X marker is a fixed *plotted* size, many
+      apertures wide when zoomed out.
+    - **The marker drifted because it was drawn lifted.** `BuildSnapOverlayLines` placed the glyph
+      at `snap.z + 0.045`. The snap overlay is drawn depth-test-off and after the geometry passes,
+      so the lift bought nothing — but a world-Z offset projects to a visible on-screen gap between
+      the marker and the point a click commits as soon as the camera tilts. Same lesson, and same
+      fix, as the hover-circle overlay's own dropped Z bias.
+    - **Left for later:** a *placed block instance's* circle CENTRE still resolves only near the
+      true centre under orbit — `CadBlockCollectWorldCenters` carries no radius/extent. Called out
+      in a code comment; #372's repro is a native CIRCLE.
+
 ### A DXF file states the arc its own reader can hold — and it was 74% of arcs, not a corner case — 2026-08-26
 
     - GitHub issue #111, filed by TASK-121 out of its DEBT-1 while fixing #98. REQ-204 + TASK-122.

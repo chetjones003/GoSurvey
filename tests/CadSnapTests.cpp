@@ -691,3 +691,161 @@ TEST_CASE("A solid on an off layer offers no snap at all", "[CadSnap][req313]") 
   const CadSnap::Hit hit = CadSnap::FindBest(-10.0, -10.0, st, false, kTol, {}, &ray);
   CHECK_FALSE(hit.valid);
 }
+
+// ---------------------------------------------------------------------------------------------
+// GitHub issue #372 — CENTRE-family object snaps from an orbited (non-plan) 3D view.
+//
+// In plan view a circle / ellipse / closed-polyline / survey-point CENTRE is offered whenever the
+// cursor is over the SHAPE, not only near the centroid: `CircleCenterPickDistSq` and friends return
+// 0 for a cursor inside the footprint. The orbited path (issue #103 / REQ-058) re-measured every
+// candidate as the distance from the cursor ray to the exact snap point, so that heuristic — where
+// the point is a whole radius from the rim under the cursor — was lost and CENTRE could never be
+// acquired under orbit. The fix evaluates the heuristic at the cursor ray's crossing of the shape's
+// OWN plane (`RayXyAtPlaneZ`) and keeps it as the acceptance test, while ranking stays the true ray
+// distance. Testing at the shape plane (not the work plane, which `wx/wy` already is) is what stops
+// a ray that merely passes over the footprint from firing a phantom snap.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// A pick ray from an orbited eye (above and to the side) aimed through world point \p p — the
+/// shape an isometric-ish camera gives. Not edge-on to the world-XY plane, so shapes drawn in plan
+/// still have a well-defined "the cursor is pointing here" crossing.
+ray3d::Ray OrbitRayThrough(double px, double py, double pz) {
+  ray3d::Ray r;
+  r.origin = {px - 18.0, py - 26.0, pz + 30.0};
+  r.dir = ray3d::Normalize(ray3d::Vec3{px - r.origin.x, py - r.origin.y, pz - r.origin.z});
+  return r;
+}
+
+} // namespace
+
+TEST_CASE("Orbited: a circle CENTRE is acquired with the cursor over the rim, not the centroid",
+          "[CadSnap][issue372]") {
+  AppCommandState st;
+  st.objectSnapCenter = true;
+  st.objectSnapEndpoint = true;
+
+  // Circle radius 10 in the world-XY plane, centred at the origin.
+  st.userCirclesCxCyZR = {0.f, 0.f, 0.f, 10.f};
+
+  // Cursor pointing at the rim at (7, 0, 0) — 7 ft from the true centre, outside kTol (5). Before
+  // the fix the ray-to-centre distance failed the tolerance test and nothing was returned.
+  const ray3d::Ray ray = OrbitRayThrough(7.0, 0.0, 0.0);
+  const CadSnap::Hit hit = CadSnap::FindBest(7.0, 0.0, st, /*commandActive=*/true, kTol, {}, &ray);
+
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Center);
+  CHECK(hit.x == Approx(0.f).margin(1e-4));
+  CHECK(hit.y == Approx(0.f).margin(1e-4));
+  CHECK(hit.z == Approx(0.f).margin(1e-4));
+}
+
+TEST_CASE("Orbited: a genuinely closer endpoint still out-ranks the circle CENTRE heuristic",
+          "[CadSnap][issue372]") {
+  AppCommandState st;
+  st.objectSnapCenter = true;
+  st.objectSnapEndpoint = true;
+
+  st.userCirclesCxCyZR = {0.f, 0.f, 0.f, 10.f};
+  // A line whose endpoint sits exactly where the cursor points, on the circle's rim. The CENTRE
+  // heuristic accepts here too, but ranking is the true ray distance, so the endpoint wins.
+  st.userLinesFlat = {7.f, 0.f, 0.f, 40.f, 25.f, 0.f};
+
+  const ray3d::Ray ray = OrbitRayThrough(7.0, 0.0, 0.0);
+  const CadSnap::Hit hit = CadSnap::FindBest(7.0, 0.0, st, /*commandActive=*/true, kTol, {}, &ray);
+
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Endpoint);
+  CHECK(hit.x == Approx(7.f).margin(1e-4));
+}
+
+TEST_CASE("Orbited: no phantom CENTRE when the ray passes over the footprint but not the shape",
+          "[CadSnap][issue372]") {
+  // A shallow orbit over a large circle (radius 100) in the world-XY plane. The cursor ray passes
+  // ABOVE the disc and crosses z = 0 at (0, 145) — 45 ft outside the rim — yet its closest approach
+  // to the centre POINT is only ~29 ft. A reach test around the centre point would accept; testing
+  // at the ray's crossing of the circle's own plane correctly rejects.
+  AppCommandState st;
+  st.objectSnapCenter = true;
+  st.userCirclesCxCyZR = {0.f, 0.f, 0.f, 100.f};
+
+  ray3d::Ray ray;
+  ray.origin = {0.0, -100.0, 50.0};
+  ray.dir = ray3d::Normalize(ray3d::Vec3{0.0, 0.98, -0.2});
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, /*commandActive=*/true, kTol, {}, &ray);
+
+  CHECK_FALSE(hit.valid);
+}
+
+TEST_CASE("Orbited edge-on: circle CENTRE falls back to ray-proximity when the shape plane has no crossing",
+          "[CadSnap][issue372]") {
+  AppCommandState st;
+  st.objectSnapCenter = true;
+  st.userCirclesCxCyZR = {0.f, 0.f, 0.f, 10.f};
+
+  // FRONT view: a horizontal ray lying in the circle's own plane. There is no ray/plane crossing,
+  // so the "cursor is over the shape" heuristic cannot apply — but a ray aimed straight through the
+  // centre still resolves CENTRE, exactly as it did before issue #372.
+  ray3d::Ray onAxis;
+  onAxis.origin = {0.0, -100.0, 0.0};
+  onAxis.dir = {0.0, 1.0, 0.0};
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, /*commandActive=*/true, kTol, {}, &onAxis);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Center);
+
+  // ...but NOT from over the rim in that same edge-on view — the heuristic that would allow it is
+  // unavailable, and the exact centre is a full radius from the ray.
+  ray3d::Ray offRim;
+  offRim.origin = {7.0, -100.0, 0.0};
+  offRim.dir = {0.0, 1.0, 0.0};
+  CHECK_FALSE(CadSnap::FindBest(7.0, 0.0, st, /*commandActive=*/true, kTol, {}, &offRim).valid);
+}
+
+TEST_CASE("Orbited: an ellipse CENTRE is acquired with the cursor over the body", "[CadSnap][issue372]") {
+  AppCommandState st;
+  st.objectSnapCenter = true;
+  st.objectSnapMidpoint = false;  // isolate the CENTRE candidate — perimeter midpoints are their own path
+
+  CadEllipse el;
+  el.cx = 0.f;
+  el.cy = 0.f;
+  el.z = 0.f;
+  el.majVx = 12.f;  // major axis along world +X, half-length 12
+  el.majVy = 0.f;
+  el.ratio = 0.5f;  // minor half-length 6
+  st.userEllipses.push_back(el);
+
+  // Pointing at the body at (8, 0, 0) — inside the ellipse, 8 ft from the centre, outside kTol.
+  const ray3d::Ray ray = OrbitRayThrough(8.0, 0.0, 0.0);
+  const CadSnap::Hit hit = CadSnap::FindBest(8.0, 0.0, st, /*commandActive=*/true, kTol, {}, &ray);
+
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Center);
+  CHECK(hit.x == Approx(0.f).margin(1e-4));
+  CHECK(hit.y == Approx(0.f).margin(1e-4));
+}
+
+TEST_CASE("Orbited: a survey point CENTRE is acquired from over its marker at a zoomed-out scale",
+          "[CadSnap][issue372]") {
+  AppCommandState st;
+  st.objectSnapSurveyPoint = true;
+
+  SurveyPoint sp;
+  sp.easting = 0.f;
+  sp.northing = 0.f;
+  sp.elevation = 0.f;
+  st.surveyPoints.push_back(sp);
+  // Zoomed out: the X marker's half-span is many apertures wide in world units.
+  st.surveyPointCrossSpanPlottedInches = 0.2f;
+  st.modelUnitsPerPlottedInch = 60.f;  // -> marker half-span ~6 ft, well over kTol
+
+  // Pointing at the marker arm ~4 ft off the point — inside the drawn X, outside kTol.
+  const ray3d::Ray ray = OrbitRayThrough(4.0, 0.0, 0.0);
+  const CadSnap::Hit hit = CadSnap::FindBest(4.0, 0.0, st, /*commandActive=*/true, kTol, {}, &ray);
+
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::SurveyCenter);
+  CHECK(hit.x == Approx(0.f).margin(1e-4));
+  CHECK(hit.y == Approx(0.f).margin(1e-4));
+}

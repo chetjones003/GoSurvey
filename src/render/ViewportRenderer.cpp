@@ -541,10 +541,12 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
   SnapGlyphFrame f;
   WorldToViewRelativeFloat(static_cast<double>(snap.x), static_cast<double>(snap.y), viewAnchorX, viewAnchorY, &f.cx,
                            &f.cy);
-  // The glyph sits at the snapped point's own elevation, with a hair of lift so it still draws
-  // over coincident geometry (REQ-057/058). Pinning it to a constant put the marker on the datum
-  // while the point it marks was elevated, so it drifted away from the geometry under orbit.
-  f.cz = snap.z + 0.045f;
+  // The glyph sits EXACTLY at the snapped point's own elevation (REQ-057/058). No lift: the snap
+  // overlay is drawn with the depth test off (`depthForOverlay` is in effect here), and after the
+  // geometry passes, so draw order already puts it over coincident lines and circles. A world-Z
+  // nudge bought nothing there — and under an orbited camera it projected to a visible on-screen
+  // gap between the marker and both the geometry and the point a click commits (#372).
+  f.cz = snap.z;
   // Screen-facing, not work-plane-aligned (REQ-058 / GAP-2). In plan view right/up are world +X/+Y,
   // so every glyph below is built from exactly the offsets it used before.
   f.right = cam.RightWorld();
