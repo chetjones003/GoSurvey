@@ -3626,6 +3626,149 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // the exporter had no LWPOLYLINE branch at all, so polylines were dropped from the DXF without a word.
   size_t nPolyOut = 0;
   {
+    // Writes vertices [vStart, vEndIncl] of a polyline as one LWPOLYLINE, `closed` decided by the
+    // caller (the whole-polyline path passes the real flag; a split-off run is never closed — REQ-325
+    // / ADR-053 increment 4 does not attempt to preserve closure through a tilted-segment split).
+    // Bulge is carried for whichever straight/flat-curved vertices fall in this range; a tilted one
+    // never does, by construction of the caller that decides the range.
+    auto emitPolylineRun = [&](int vStart, int vEndIncl, bool closed, const EntityAttributes& at) {
+      if (vEndIncl - vStart < 1)
+        return;
+      const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+      const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+      const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+      char hb[24];
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+      DxfLwPolylineRecord rec;
+      rec.handleHex = hb;
+      rec.ownerHandleHex = hBrModel;
+      rec.layer = layer8;
+      rec.linetype = DxfExportEntityLtype6(at);
+      rec.colorAci = std::to_string(DxfNearestAciFromRgbPacked(rgb));
+      rec.lineweight370 = dxfEntityLineweight370Str(at);
+      rec.hasTransparency =
+          dxfTransparency440Str(EffectiveEntityTransparency01(at, lyr), &rec.transparency440);
+      rec.closed = closed;
+      // LWPOLYLINE carries ONE elevation (group 38) for the whole polyline, so a genuinely 3D
+      // polyline cannot round-trip through it — the first vertex's Z is written and the rest are
+      // dropped. Recorded as technical debt in the TASK-034 log: carrying per-vertex Z needs the
+      // 3D POLYLINE/VERTEX entity pair, which is its own change.
+      rec.elevation38 = std::to_string(static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vStart * 3 + 2)]));
+      rec.vertices.reserve(static_cast<size_t>(vEndIncl - vStart + 1));
+      for (int vi = vStart; vi <= vEndIncl; ++vi)
+        rec.vertices.emplace_back(std::to_string(worldX(st.userPolylineVerts[static_cast<size_t>(vi * 3)])),
+                                  std::to_string(worldY(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)])));
+      // REQ-316 / ADR-047: per-vertex bulge (group 42). Only emitted when this run has any curved
+      // segment; a straight run writes no group 42 and round-trips exactly as before.
+      {
+        bool anyBulge = false;
+        for (int vi = vStart; vi <= vEndIncl && vi < static_cast<int>(st.userPolylineVertsBulge.size()); ++vi)
+          if (st.userPolylineVertsBulge[static_cast<size_t>(vi)] != 0.0f) { anyBulge = true; break; }
+        if (anyBulge) {
+          rec.bulges.reserve(static_cast<size_t>(vEndIncl - vStart + 1));
+          for (int vi = vStart; vi <= vEndIncl; ++vi) {
+            const float b = vi < static_cast<int>(st.userPolylineVertsBulge.size())
+                                ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.0f;
+            rec.bulges.push_back(b == 0.0f ? std::string("0") : std::to_string(static_cast<double>(b)));
+          }
+        }
+      }
+      emitLwPolylineRecord(rec);
+      ++nPolyOut;
+    };
+
+    // REQ-325 / ADR-053 increment 4: writes one tilted curved segment (a `CadArc` derived from its
+    // two polyline vertices, not a stored entity) as its own ARC, reusing the exact tilted-ARC
+    // groups the real userArcs loop above writes — so a re-imported file, re-`JOIN`ed, produces the
+    // identical plane REQ-312's own math already trusts.
+    auto emitSyntheticArc = [&](const CadArc& arc, const EntityAttributes& at) {
+      char hb[24];
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+      const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+      const int entAci = DxfNearestAciFromRgbPacked(rgb);
+      const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+      const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+      const DxfArcAsWritten aw = DxfArcToWrite(arc);
+      const bool arcFlat = IsFlatNormal(arc.nx, arc.ny, arc.nz);
+      const ray3d::Vec3 a10 =
+          arcFlat ? ray3d::Vec3{worldX(arc.cx), worldY(arc.cy), static_cast<double>(arc.z)}
+                  : ocsPointOf(worldX(arc.cx), worldY(arc.cy), static_cast<double>(arc.z),
+                               static_cast<double>(arc.nx), static_cast<double>(arc.ny),
+                               static_cast<double>(arc.nz));
+      emitPair(0, "ARC");
+      emitEntityHeader(hb, layer8, at, entAci, lyr);
+      emitPair(100, "AcDbCircle");
+      emitPair(10, std::to_string(a10.x));
+      emitPair(20, std::to_string(a10.y));
+      emitPair(30, std::to_string(a10.z));
+      emitPair(40, std::to_string(static_cast<double>(arc.r)));
+      if (arcFlat) {
+        emitPair(210, "0.0");
+        emitPair(220, "0.0");
+        emitPair(230, "1.0");
+      } else {
+        emitPair(210, extrusionText(static_cast<double>(arc.nx)));
+        emitPair(220, extrusionText(static_cast<double>(arc.ny)));
+        emitPair(230, extrusionText(static_cast<double>(arc.nz)));
+      }
+      emitPair(100, "AcDbArc");
+      emitPair(50, aw.startDeg);
+      emitPair(51, aw.endDeg);
+    };
+
+    // Builds the `CadArc` a tilted polyline segment (vertex `ia`'s own leaving bulge/normal) draws —
+    // same construction issue #373's 3D FILLET solve and the render/pick/snap increments (1-3) all
+    // already use: an ad-hoc frame from the leaving vertex gives the true world centre, then the
+    // ARC's own CANONICAL frame (`ucs::FromNormal(centre, normal)`) re-derives the angles, because
+    // that is the frame every consumer of `CadArc::startRad/sweepRad` (including `DxfArcToWrite`
+    // just above) actually reads them in — the exact bug FILLET's own `addArc3D` fix (issue #373)
+    // found and fixed once already.
+    auto buildTiltedSegmentArc = [&](int ia, int ib, float bulge, float nx, float ny, float nz,
+                                     CadArc* out) -> bool {
+      const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>(ia) * 3],
+                           st.userPolylineVerts[static_cast<size_t>(ia) * 3 + 1],
+                           st.userPolylineVerts[static_cast<size_t>(ia) * 3 + 2]};
+      const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>(ib) * 3],
+                           st.userPolylineVerts[static_cast<size_t>(ib) * 3 + 1],
+                           st.userPolylineVerts[static_cast<size_t>(ib) * 3 + 2]};
+      ucs::Ucs plane{};
+      if (!ucs::FromNormal(pA, ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                           static_cast<double>(nz)},
+                           &plane))
+        return false;
+      const ucs::Point2D p1Local = ucs::WorldToPlane(plane, pB);
+      const BulgeArcSpan arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
+      if (!arc.valid)
+        return false;
+      const ray3d::Vec3 centerWorld = ucs::PlaneToWorld(plane, ucs::Point2D{arc.cx, arc.cy});
+      ucs::Ucs canon{};
+      if (!ucs::FromNormal(centerWorld, ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                                     static_cast<double>(nz)},
+                           &canon))
+        return false;
+      const ucs::Point2D sLocal = ucs::WorldToPlane(canon, pA);
+      const ucs::Point2D eLocal = ucs::WorldToPlane(canon, pB);
+      const float thetaA = static_cast<float>(std::atan2(sLocal.y, sLocal.x));
+      const float thetaB = static_cast<float>(std::atan2(eLocal.y, eLocal.x));
+      constexpr float kTwoPi = 6.28318530717958647692f;
+      float sweep = thetaB - thetaA;
+      if (bulge >= 0.f) {
+        while (sweep < 0.f) sweep += kTwoPi;
+      } else {
+        while (sweep > 0.f) sweep -= kTwoPi;
+      }
+      out->cx = static_cast<float>(centerWorld.x);
+      out->cy = static_cast<float>(centerWorld.y);
+      out->z = static_cast<float>(centerWorld.z);
+      out->r = static_cast<float>(arc.radius);
+      out->startRad = thetaA;
+      out->sweepRad = sweep;
+      out->nx = nx;
+      out->ny = ny;
+      out->nz = nz;
+      return true;
+    };
+
     const int polyCount =
         static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
     for (int pi = 0; pi < polyCount; ++pi) {
@@ -3636,51 +3779,67 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       EntityAttributes at{};
       if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
         at = st.userPolylineAttrs[static_cast<size_t>(pi)];
-      const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
-      const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
-      const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+      const bool closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
+                          st.userPolylineClosed[static_cast<size_t>(pi)] != 0;
 
-      char hb[24];
-      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
-
-      DxfLwPolylineRecord rec;
-      rec.handleHex = hb;
-      rec.ownerHandleHex = hBrModel;
-      rec.layer = layer8;
-      rec.linetype = DxfExportEntityLtype6(at);
-      rec.colorAci = std::to_string(DxfNearestAciFromRgbPacked(rgb));
-      rec.lineweight370 = dxfEntityLineweight370Str(at);
-      rec.hasTransparency =
-          dxfTransparency440Str(EffectiveEntityTransparency01(at, lyr), &rec.transparency440);
-      rec.closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
-                   st.userPolylineClosed[static_cast<size_t>(pi)] != 0;
-      // LWPOLYLINE carries ONE elevation (group 38) for the whole polyline, so a genuinely 3D
-      // polyline cannot round-trip through it — the first vertex's Z is written and the rest are
-      // dropped. Recorded as technical debt in the TASK-034 log: carrying per-vertex Z needs the
-      // 3D POLYLINE/VERTEX entity pair, which is its own change.
-      if (v1 > v0)
-        rec.elevation38 = std::to_string(static_cast<double>(st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]));
-      rec.vertices.reserve(static_cast<size_t>(v1 - v0));
-      for (int vi = v0; vi < v1; ++vi)
-        rec.vertices.emplace_back(std::to_string(worldX(st.userPolylineVerts[static_cast<size_t>(vi * 3)])),
-                                  std::to_string(worldY(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)])));
-      // REQ-316 / ADR-047: per-vertex bulge (group 42). Only emitted when this polyline has any
-      // curved segment; a straight polyline writes no group 42 and round-trips exactly as before.
-      {
-        bool anyBulge = false;
-        for (int vi = v0; vi < v1 && vi < static_cast<int>(st.userPolylineVertsBulge.size()); ++vi)
-          if (st.userPolylineVertsBulge[static_cast<size_t>(vi)] != 0.0f) { anyBulge = true; break; }
-        if (anyBulge) {
-          rec.bulges.reserve(static_cast<size_t>(v1 - v0));
-          for (int vi = v0; vi < v1; ++vi) {
-            const float b = vi < static_cast<int>(st.userPolylineVertsBulge.size())
-                                ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.0f;
-            rec.bulges.push_back(b == 0.0f ? std::string("0") : std::to_string(static_cast<double>(b)));
-          }
+      auto normalAt = [&](int vi, float* nx, float* ny, float* nz) {
+        const size_t k = static_cast<size_t>(vi) * 3;
+        if (k + 2 < st.userPolylineVertsNormal.size()) {
+          *nx = st.userPolylineVertsNormal[k];
+          *ny = st.userPolylineVertsNormal[k + 1];
+          *nz = st.userPolylineVertsNormal[k + 2];
+        } else {
+          *nx = 0.f; *ny = 0.f; *nz = 1.f;
         }
+      };
+      auto bulgeAt = [&](int vi) -> float {
+        return static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
+                   ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.f;
+      };
+      auto isTiltedEdge = [&](int vi) {
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        normalAt(vi, &nx, &ny, &nz);
+        return bulgeAt(vi) != 0.f && !IsFlatNormal(nx, ny, nz);
+      };
+
+      bool hasTilted = false;
+      for (int vi = v0; vi + 1 < v1; ++vi)
+        if (isTiltedEdge(vi)) { hasTilted = true; break; }
+      if (closed && v1 - v0 >= 2 && isTiltedEdge(v1 - 1))
+        hasTilted = true;
+
+      if (!hasTilted) {
+        // Unchanged path — byte-identical to before REQ-325.
+        emitPolylineRun(v0, v1 - 1, closed, at);
+        continue;
       }
-      emitLwPolylineRecord(rec);
-      ++nPolyOut;
+
+      // REQ-325 / ADR-053 increment 4: split at each tilted edge into flat runs (their own
+      // LWPOLYLINE) plus one ARC per tilted segment. The closing wrap edge, if tilted, is handled
+      // the same way as any other edge — closure itself is not preserved through a split (documented
+      // in ADR-053 (e)).
+      int runStart = v0;
+      for (int vi = v0; vi + 1 < v1; ++vi) {
+        if (!isTiltedEdge(vi))
+          continue;
+        emitPolylineRun(runStart, vi, false, at);
+        CadArc arc{};
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        normalAt(vi, &nx, &ny, &nz);
+        if (buildTiltedSegmentArc(vi, vi + 1, bulgeAt(vi), nx, ny, nz, &arc))
+          emitSyntheticArc(arc, at);
+        runStart = vi + 1;
+      }
+      if (closed && v1 - v0 >= 2 && isTiltedEdge(v1 - 1)) {
+        emitPolylineRun(runStart, v1 - 1, false, at);
+        CadArc arc{};
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        normalAt(v1 - 1, &nx, &ny, &nz);
+        if (buildTiltedSegmentArc(v1 - 1, v0, bulgeAt(v1 - 1), nx, ny, nz, &arc))
+          emitSyntheticArc(arc, at);
+      } else {
+        emitPolylineRun(runStart, v1 - 1, false, at);
+      }
     }
   }
 

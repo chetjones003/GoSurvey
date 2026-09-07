@@ -364,3 +364,115 @@ EXPECT ARCS 0
 # picks the polyline; a point far from all of it picks nothing.
 EXPECT PICKAT 5.1 0 1.0 POLYLINE
 EXPECT PICKAT 100 100 0.5 NONE
+
+# ── 12. REQ-325 / ADR-053 increment 4 — DXF export splits a tilted segment into a real ARC ───────
+# Same joined tilted-arc polyline as scenario 9. DXF's LWPOLYLINE has one shared elevation/normal
+# for the WHOLE entity — no per-segment plane slot — so the tilted segment is written as a separate
+# ARC entity instead of a flattened-wrong bulge, and re-importing reproduces the exact geometry
+# (now two objects again, re-JOINable, not the original one polyline).
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+CMD
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+
+EXPORT DXF %OUT%/req325-split.dxf
+NEW
+IMPORT DXF %OUT%/req325-split.dxf
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+EXPECT LINES 0
+EXPECT ARCPOINTS 0 4.4142 0 4.4142 5.8284 0 5.0000
+
+# ── 13. A flat-only polyline (no tilt anywhere) exports as ONE LWPOLYLINE, unchanged ─────────────
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD ARC
+CMD CANGLE 90
+CMD 10,0
+CMD LINE
+CMD 20,0
+CMD END
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 1
+
+EXPORT DXF %OUT%/req325-flat.dxf
+NEW
+IMPORT DXF %OUT%/req325-flat.dxf
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+EXPECT POLYARCS 0 1
+
+# ── 14. DWG round trip: flat bulge survives; a tilted segment degrades to straight, not corrupt ──
+# DWG's own LWPOLYLINE writer has no tilted-ARC export path to split a tilted segment onto (unlike
+# DXF), so — a real, separate, named gap, not silently produced — a tilted segment is written
+# straight (bulge 0) rather than flattened wrong. A flat curved segment round-trips exactly.
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD ARC
+CMD CANGLE 90
+CMD 10,0
+CMD LINE
+CMD 20,0
+CMD END
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 1
+
+SAVEAS %OUT%/req325-flat.dwg
+NEW
+OPEN %OUT%/req325-flat.dwg
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 1
+
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+CMD
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+
+SAVEAS %OUT%/req325-tilted.dwg
+NEW
+OPEN %OUT%/req325-tilted.dwg
+CHECK ALL
+EXPECT POLYLINES 1
