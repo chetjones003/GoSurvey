@@ -6456,9 +6456,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
     (REQ-201), across the SAME tolerance the 3D FILLET solve uses.
 - Owner-layer: Domain (`userPolylineVertsNormal`, `docinvariants`) / Commands (`ExecuteJoinSelection`)
   / Renderer (tessellation) / Viewport (snap, pick) / IO (`DxfIo`, `LibreDwgCad` split-on-export).
-- Status: **proposed** — increment 1 (storage + JOIN) in progress.
-- Revisions: 2026-09-07 — proposed (feature request via `/add-feature`, this session); DXF/DWG
-  split-on-export decided with the user rather than flattening or refusing.
+- Status: **accepted (2026-09-07)** — all four increments delivered (storage + JOIN; render + pick;
+  object snap; DXF split-on-export + DWG bulge), each its own PR/commit against issue #373 / PR #389.
+  Two gaps found and deliberately scoped out rather than silently left, each its own filed issue:
+  DWG's ARC writer carries no normal/extrusion at all, so a tilted polyline segment degrades to
+  straight on DWG export rather than splitting onto a tilted ARC the way DXF now does (issue #391);
+  EXPLODE never handled a Polyline at all, block-ref selections only (issue #390, found investigating
+  the same thread, unrelated to REQ-325 itself).
+- Revisions: 2026-09-07 — proposed (feature request via `/add-feature`, this session) and delivered
+  same day; DXF/DWG split-on-export decided with the user rather than flattening or refusing; the
+  object-snap increment's scope grew once in progress (2026-09-07, user-confirmed) after finding
+  curved-polyline Midpoint had never been curve-aware even in the flat case — built for both flat and
+  tilted together rather than shipping a plane-aware extension of code that did not actually exist.
 
 ### REQ-317 — POLYSOLID: a wall swept along a path (GitHub issue #146)
 - Purpose: REQ-313 gives GoSurvey seven solids, and every one of them is a shape from a formula

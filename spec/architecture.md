@@ -3222,9 +3222,11 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
 
 ### ADR-053 — Tilted polyline curve segments: a per-vertex normal side-car, split-on-export to DXF/DWG   (2026-09-07, accepted)
 
-- **Status:** accepted (2026-09-07). Backs REQ-325. Phased delivery (storage+JOIN, render+pick, snap,
-  DXF/DWG split) chosen by the user, mirroring ADR-047's own four-increment delivery of the flat
-  version of this same feature.
+- **Status:** accepted (2026-09-07), **all four increments delivered same day** (storage+JOIN,
+  render+pick, snap, DXF split-on-export + DWG bulge). Backs REQ-325. Phased delivery chosen by the
+  user, mirroring ADR-047's own four-increment delivery of the flat version of this same feature.
+  DWG's own tilted-ARC write path does not exist (issue #391, filed rather than built silently or
+  left unnoted) — DWG export of a tilted polyline segment degrades to straight instead.
 
 - **Context.** REQ-312 gave a single ARC or CIRCLE an arbitrary plane. REQ-316/ADR-047 then gave
   polylines curved (bulge) segments — but `BulgeArc(x0, y0, x1, y1, bulge)` is a pure 2D function; a
