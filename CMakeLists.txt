@@ -1048,6 +1048,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
     # StartDistCommand, like TrimLinePreviewTests above.
     tests/DistCommandTests.cpp
+    # GitHub issue #396 — EXTRUDE's typed height must take its sign from the live preview
+    # direction. Needs gosurvey_domain for HandleExtrudeTextInput, like DistCommandTests above.
+    tests/ExtrudeTypedHeightDirectionTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
