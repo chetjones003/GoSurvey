@@ -156,12 +156,12 @@ struct CadSubObjectOverlay {
 inline constexpr double kSolidChordToleranceFt = 0.01;
 
 /// Default number of isolines drawn around a curved face, per full turn (AutoCAD names this setting
-/// ISOLINES and defaults it to 4). Issue #384: 4 reads as round on a cylinder but leaves a sphere or
-/// torus looking sparse and faceted next to AutoCAD's own wireframe, which relies on a denser cage of
-/// meridian/latitude lines for that reading, not finer segmentation of any one of them. 8 doubles the
-/// cage density (comparable to what users commonly run AutoCAD's ISOLINES at) while staying far under
-/// the REQ-100 frame-budget ceiling below.
-inline constexpr int kSolidDefaultIsolines = 8;
+/// ISOLINES and defaults it to 4). Issue #384: 4, and even 8, still read as sparse next to the dense
+/// meridian/latitude cage a user showed from their own AutoCAD session — that reading comes from
+/// having many crossing circles, not from any one circle being smoother. 16 quadruples the original
+/// default and visually matches that reference screenshot, while staying far under the REQ-100
+/// frame-budget ceiling below.
+inline constexpr int kSolidDefaultIsolines = 16;
 /// Ceiling, so a hand-edited file or a mistyped command cannot ask for a wireframe dense enough to
 /// cost the frame budget (REQ-100). AutoCAD caps ISOLINES at 2047; this is well past useful.
 inline constexpr int kSolidMaxIsolines = 256;
