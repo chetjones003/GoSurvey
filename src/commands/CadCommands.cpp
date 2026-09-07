@@ -6396,6 +6396,8 @@ const CmdEntry kRegistry[] = {
     {"cone", "", "Create a cone solid: CONE <X,Y[,Z]> <base radius> <top radius> <height>"},
     {"sphere", "sph", "Create a sphere solid: SPHERE <X,Y[,Z]> <radius>"},
     {"torus", "tor", "Create a torus solid: TORUS <X,Y[,Z]> <radius> <tube radius>"},
+    {"presspull", "pp",
+     "Move a selected solid FACE along its own normal: Ctrl+click a face, then PRESSPULL <distance>"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
