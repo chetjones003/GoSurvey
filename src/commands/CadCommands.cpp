@@ -16113,24 +16113,65 @@ static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, in
   return true;
 }
 
-/// issue #373: FILLET between two 3D line segments whose four endpoints are not all flat at world
-/// Z=0. Two lines that share SOME plane (even a tilted/vertical one) get a real tangent arc, solved
-/// by reusing the exact same 2D machinery (\ref SolveFilletCenter, \ref FilletTangentPointOnLine,
-/// \ref FilletParallelSemicircle) every OTHER fillet already goes through — just fed that plane's
-/// own projected 2D coordinates instead of world XY — then mapped back to world XYZ. Two lines with
-/// no common plane at all (true skew lines) are refused by name (REQ-201): there is no single
-/// correct arc for them, and guessing one silently would be worse than refusing.
-static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1, const SelectedEntity& e2,
-                                   float pick1X, float pick1Y, float pick2X, float pick2Y,
-                                   std::vector<std::string>& log) {
-  const size_t k1 = static_cast<size_t>(e1.index) * 6;
-  const size_t k2 = static_cast<size_t>(e2.index) * 6;
-  if (k1 + 5 >= st.userLinesFlat.size() || k2 + 5 >= st.userLinesFlat.size())
+/// issue #373: the 3D fillet solve's own "straight curve" — a plain Line, or a Polyline's own free
+/// end segment (Case B already restricts a Polyline to that, same as the 2D path) — reduced to its
+/// two WORLD-space 3D endpoints, plus enough to trim it back afterward. Kept separate from
+/// \ref FilletCurve, which stays the plane-local 2D shape both this and the legacy 2D solve share.
+struct Fillet3DCurve {
+  ray3d::Vec3 p0, p1;
+  bool isPolyline = false;
+  int viA = -1, viB = -1;  // Polyline only: p0's and p1's own vertex index (LOCAL store, not *3)
+};
+
+/// Reads a Line or Polyline-end-segment's own two endpoints in world XYZ. False on a bad index or an
+/// entity type the 3D solve does not handle (Arc/Circle — unchanged, still 2D-only via the legacy
+/// path, matching REQ-201's "refuse rather than guess" for what is not explicitly supported).
+static bool ReadFillet3DCurve(const AppCommandState& st, const SelectedEntity& e, int polySeg, Fillet3DCurve* out) {
+  using T = SelectedEntity::Type;
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    out->p0 = {st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 2]};
+    out->p1 = {st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5]};
+    out->isPolyline = false;
+    return true;
+  }
+  if (e.type == T::Polyline) {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size() || polySeg < 0)
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    const int viA = v0 + polySeg, viB = v0 + ((polySeg + 1) % numVerts);
+    const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+    if (b3 + 2 >= st.userPolylineVerts.size())
+      return false;
+    out->p0 = {st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[a3 + 2]};
+    out->p1 = {st.userPolylineVerts[b3], st.userPolylineVerts[b3 + 1], st.userPolylineVerts[b3 + 2]};
+    out->isPolyline = true;
+    out->viA = viA;
+    out->viB = viB;
+    return true;
+  }
+  return false;
+}
+
+/// issue #373: FILLET between two Line/Polyline-end-segment curves whose four endpoints are not all
+/// flat at world Z=0. Two curves that share SOME plane (even a tilted/vertical one) get a real
+/// tangent arc, solved by reusing the exact same 2D machinery (\ref SolveFilletCenter, \ref
+/// FilletTangentPointOnLine, \ref FilletParallelSemicircle) every OTHER fillet already goes through
+/// — just fed that plane's own projected 2D coordinates instead of world XY — then mapped back to
+/// world XYZ. Two curves with no common plane at all (true skew lines) are refused by name (REQ-201):
+/// there is no single correct arc for them, and guessing one silently would be worse than refusing.
+static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1, int polySeg1,
+                                   const SelectedEntity& e2, int polySeg2, float pick1X, float pick1Y,
+                                   float pick2X, float pick2Y, std::vector<std::string>& log) {
+  Fillet3DCurve curve1, curve2;
+  if (!ReadFillet3DCurve(st, e1, polySeg1, &curve1) || !ReadFillet3DCurve(st, e2, polySeg2, &curve2))
     return false;
-  const ray3d::Vec3 a0{st.userLinesFlat[k1], st.userLinesFlat[k1 + 1], st.userLinesFlat[k1 + 2]};
-  const ray3d::Vec3 a1{st.userLinesFlat[k1 + 3], st.userLinesFlat[k1 + 4], st.userLinesFlat[k1 + 5]};
-  const ray3d::Vec3 b0{st.userLinesFlat[k2], st.userLinesFlat[k2 + 1], st.userLinesFlat[k2 + 2]};
-  const ray3d::Vec3 b1{st.userLinesFlat[k2 + 3], st.userLinesFlat[k2 + 4], st.userLinesFlat[k2 + 5]};
+  const ray3d::Vec3 a0 = curve1.p0, a1 = curve1.p1, b0 = curve2.p0, b1 = curve2.p1;
 
   ucs::Ucs frame{};
   ray3d::Vec3 offPlanePt = b1;
@@ -16186,21 +16227,54 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
   const ucs::Point2D pp1 = ucs::WorldToPlane(frame, nearestOnLine(a0, a1, pick1X, pick1Y));
   const ucs::Point2D pp2 = ucs::WorldToPlane(frame, nearestOnLine(b0, b1, pick2X, pick2Y));
 
-  auto trimLineTo3D = [&](int idx, float tx2d, float ty2d) -> bool {
-    const size_t k = static_cast<size_t>(idx) * 6;
+  // issue #373: trims either curve kind back to a plane-local 2D tangent point. A Line moves
+  // whichever of its OWN two endpoints sits nearer the tangent point (same rule the 2D path uses);
+  // a Polyline moves its already-known free-end vertex (\ref ReadFillet3DCurve) — there is no
+  // "nearer of two ends" choice there, since the other end is a shared interior vertex Case B never
+  // lets this touch.
+  auto trimCurveTo3D = [&](const SelectedEntity& e, const Fillet3DCurve& curve, float tx2d, float ty2d) -> bool {
+    const ray3d::Vec3 t3d = ucs::PlaneToWorld(frame, ucs::Point2D{tx2d, ty2d});
+    if (curve.isPolyline) {
+      if (curve.viA < 0 || curve.viB < 0)
+        return false;
+      // Which vertex moves is decided by nearness to the TANGENT POINT, the same rule the Line
+      // branch below uses (and for the same reason: a single-segment open polyline's one edge is
+      // simultaneously its own "first" and "last", so polySeg alone cannot say which end is free —
+      // only the corner this fillet is actually rounding can).
+      const ucs::Point2D pp0 = ucs::WorldToPlane(frame, curve.p0);
+      const ucs::Point2D pp1b = ucs::WorldToPlane(frame, curve.p1);
+      const float d0 = (tx2d - static_cast<float>(pp0.x)) * (tx2d - static_cast<float>(pp0.x)) +
+                       (ty2d - static_cast<float>(pp0.y)) * (ty2d - static_cast<float>(pp0.y));
+      const float d1 = (tx2d - static_cast<float>(pp1b.x)) * (tx2d - static_cast<float>(pp1b.x)) +
+                       (ty2d - static_cast<float>(pp1b.y)) * (ty2d - static_cast<float>(pp1b.y));
+      const bool nearFirst = d0 <= d1;
+      const int movingVi = nearFirst ? curve.viA : curve.viB;
+      const size_t k = static_cast<size_t>(movingVi) * 3;
+      if (k + 2 >= st.userPolylineVerts.size())
+        return false;
+      const ray3d::Vec3 fixed = nearFirst ? curve.p1 : curve.p0;
+      const float newLen = static_cast<float>(ray3d::Length(ray3d::Sub(t3d, fixed)));
+      if (!(newLen > 1e-6f)) {
+        log.push_back("FILLET — that would collapse a polyline segment to zero length; refused.");
+        return false;
+      }
+      st.userPolylineVerts[k] = static_cast<float>(t3d.x);
+      st.userPolylineVerts[k + 1] = static_cast<float>(t3d.y);
+      st.userPolylineVerts[k + 2] = static_cast<float>(t3d.z);
+      return true;
+    }
+    const size_t k = static_cast<size_t>(e.index) * 6;
     if (k + 5 >= st.userLinesFlat.size())
       return false;
-    const ray3d::Vec3 p0{st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 2]};
-    const ray3d::Vec3 p1{st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5]};
-    const ucs::Point2D pp0 = ucs::WorldToPlane(frame, p0);
-    const ucs::Point2D pp1b = ucs::WorldToPlane(frame, p1);
+    const ucs::Point2D pp0 = ucs::WorldToPlane(frame, curve.p0);
+    const ucs::Point2D pp1b = ucs::WorldToPlane(frame, curve.p1);
     const float d0 = (tx2d - static_cast<float>(pp0.x)) * (tx2d - static_cast<float>(pp0.x)) +
                      (ty2d - static_cast<float>(pp0.y)) * (ty2d - static_cast<float>(pp0.y));
     const float d1 = (tx2d - static_cast<float>(pp1b.x)) * (tx2d - static_cast<float>(pp1b.x)) +
                      (ty2d - static_cast<float>(pp1b.y)) * (ty2d - static_cast<float>(pp1b.y));
     const bool nearFirst = d0 <= d1;
-    const ray3d::Vec3 t3d = ucs::PlaneToWorld(frame, ucs::Point2D{tx2d, ty2d});
-    const float newLen = static_cast<float>(ray3d::Length(ray3d::Sub(t3d, nearFirst ? p1 : p0)));
+    const float newLen =
+        static_cast<float>(ray3d::Length(ray3d::Sub(t3d, nearFirst ? curve.p1 : curve.p0)));
     if (!(newLen > 1e-6f)) {
       log.push_back("FILLET — that would collapse a line to zero length; refused.");
       return false;
@@ -16217,20 +16291,43 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
     return true;
   };
 
-  auto addArc3D = [&](float cx2d, float cy2d, float startRad, float sweepRad, float r) {
-    const ray3d::Vec3 c3d = ucs::PlaneToWorld(frame, ucs::Point2D{cx2d, cy2d});
+  // Builds the ARC — but its startRad/sweepRad must be measured in the arc's own CANONICAL frame,
+  // `ucs::FromNormal(centre, normal)` (REQ-312, CadEntities.hpp's own CurvePlane), not in whatever
+  // ad-hoc frame this function's own 2D solve happened to use. FromThreePoints' X axis runs along
+  // curve1's own direction — a choice made for the solve's convenience — while FromNormal's X axis
+  // is the deterministic Arbitrary Axis Algorithm from the normal alone; the two agree only by
+  // accident (a real bug this fixed, caught by a non-90-degree corner: the semicircle special case's
+  // exact 180-degree sweep hid it, since a reflection through the centre lands on the same point in
+  // ANY consistently-handed frame sharing that centre and normal, but a partial sweep does not).
+  auto addArc3D = [&](const ray3d::Vec3& c3d, const ray3d::Vec3& startWorld, const ray3d::Vec3& endWorld,
+                      float r) -> bool {
+    ucs::Ucs canon{};
+    if (!ucs::FromNormal(c3d, frame.zAxis, &canon)) {
+      log.push_back("FILLET — could not orient the fillet arc's plane; refused.");
+      return false;
+    }
+    const ucs::Point2D sLocal = ucs::WorldToPlane(canon, startWorld);
+    const ucs::Point2D eLocal = ucs::WorldToPlane(canon, endWorld);
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    const float thetaA = std::atan2(static_cast<float>(sLocal.y), static_cast<float>(sLocal.x));
+    const float thetaB = std::atan2(static_cast<float>(eLocal.y), static_cast<float>(eLocal.x));
+    float sweep = FilletCcwAngleDelta(thetaA, thetaB);
+    if (sweep > kPi)
+      sweep -= kTwoPi;
     CadArc arc{};
     arc.cx = static_cast<float>(c3d.x);
     arc.cy = static_cast<float>(c3d.y);
     arc.z = static_cast<float>(c3d.z);
     arc.r = r;
-    arc.startRad = startRad;
-    arc.sweepRad = sweepRad;
+    arc.startRad = thetaA;
+    arc.sweepRad = sweep;
     arc.nx = static_cast<float>(frame.zAxis.x);
     arc.ny = static_cast<float>(frame.zAxis.y);
     arc.nz = static_cast<float>(frame.zAxis.z);
     st.userArcs.push_back(arc);
     st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+    return true;
   };
 
   if (FilletLinesAreParallel(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by)) {
@@ -16243,13 +16340,17 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
       return true;
     }
     PushUndoSnapshot(st, "Fillet");
-    const bool ok = !st.cornerTrimMode || trimLineTo3D(e2.index, projX, projY);
+    const bool ok = !st.cornerTrimMode || trimCurveTo3D(e2, curve2, projX, projY);
     if (ok) {
       const float cx = 0.5f * (anchorX + projX), cy = 0.5f * (anchorY + projY);
-      addArc3D(cx, cy, std::atan2(anchorY - cy, anchorX - cx), 3.14159265358979323846f, semiR);
-      BumpCadGpuCache(st);
-      log.push_back("FILLET — parallel 3D lines connected by a semicircle (radius set by the gap "
-                    "between them, not the current FILLET radius).");
+      const ray3d::Vec3 c3d = ucs::PlaneToWorld(frame, ucs::Point2D{cx, cy});
+      const ray3d::Vec3 startWorld = ucs::PlaneToWorld(frame, ucs::Point2D{anchorX, anchorY});
+      const ray3d::Vec3 endWorld = ucs::PlaneToWorld(frame, ucs::Point2D{projX, projY});
+      if (addArc3D(c3d, startWorld, endWorld, semiR)) {
+        BumpCadGpuCache(st);
+        log.push_back("FILLET — parallel 3D lines connected by a semicircle (radius set by the gap "
+                      "between them, not the current FILLET radius).");
+      }
     }
     return true;
   }
@@ -16289,24 +16390,23 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
   PushUndoSnapshot(st, "Fillet");
   bool ok1 = true, ok2 = true;
   if (st.cornerTrimMode) {
-    ok1 = trimLineTo3D(e1.index, t1x, t1y);
-    ok2 = trimLineTo3D(e2.index, t2x, t2y);
+    ok1 = trimCurveTo3D(e1, curve1, t1x, t1y);
+    ok2 = trimCurveTo3D(e2, curve2, t2x, t2y);
   }
   if (ok1 && ok2) {
     const bool radiusIsZero = st.filletRadius < 1e-4f;
+    bool arcOk = true;
     if (!radiusIsZero) {
-      constexpr float kPi = 3.14159265358979323846f;
-      constexpr float kTwoPi = 6.28318530717958647692f;
-      const float thetaA = std::atan2(t1y - cy, t1x - cx);
-      const float thetaB = std::atan2(t2y - cy, t2x - cx);
-      float sweep = FilletCcwAngleDelta(thetaA, thetaB);
-      if (sweep > kPi)
-        sweep -= kTwoPi;
-      addArc3D(cx, cy, thetaA, sweep, st.filletRadius);
+      const ray3d::Vec3 c3d = ucs::PlaneToWorld(frame, ucs::Point2D{cx, cy});
+      const ray3d::Vec3 startWorld = ucs::PlaneToWorld(frame, ucs::Point2D{t1x, t1y});
+      const ray3d::Vec3 endWorld = ucs::PlaneToWorld(frame, ucs::Point2D{t2x, t2y});
+      arcOk = addArc3D(c3d, startWorld, endWorld, st.filletRadius);
     }
-    BumpCadGpuCache(st);
-    log.push_back(radiusIsZero ? "FILLET — corner trimmed to a point (radius 0)."
-                               : "FILLET — 3D corner filleted.");
+    if (arcOk) {
+      BumpCadGpuCache(st);
+      log.push_back(radiusIsZero ? "FILLET — corner trimmed to a point (radius 0)."
+                                 : "FILLET — 3D corner filleted.");
+    }
   }
   return true;
 }
@@ -16421,15 +16521,24 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
       return;
     }
 
-    // issue #373: two plain Line entities whose endpoints are not all flat at world Z=0 go through
-    // the dedicated 3D solve above instead of the legacy 2D-only path below, which silently drops Z.
-    if (st.filletFirstEntity.type == SelectedEntity::Type::LineSeg && hit.type == SelectedEntity::Type::LineSeg) {
-      auto lineIsFlatZero = [&](int idx) -> bool {
-        const size_t k = static_cast<size_t>(idx) * 6;
-        return k + 5 < st.userLinesFlat.size() && st.userLinesFlat[k + 2] == 0.f && st.userLinesFlat[k + 5] == 0.f;
+    // issue #373: two straight curves (Line, or a Polyline's own free-end segment) whose endpoints
+    // are not all flat at world Z=0 go through the dedicated 3D solve above instead of the legacy
+    // 2D-only path below, which silently drops Z. Arc/Circle stay on the legacy path unconditionally
+    // — REQ-201's "refuse rather than guess" for what the 3D solve does not explicitly cover.
+    auto isFilletStraightType = [](SelectedEntity::Type t) {
+      return t == SelectedEntity::Type::LineSeg || t == SelectedEntity::Type::Polyline;
+    };
+    if (isFilletStraightType(st.filletFirstEntity.type) && isFilletStraightType(hit.type)) {
+      Fillet3DCurve probe1, probe2;
+      const bool haveCurves = ReadFillet3DCurve(st, st.filletFirstEntity, st.filletFirstPolySeg, &probe1) &&
+                              ReadFillet3DCurve(st, hit, polySeg, &probe2);
+      auto flatZero = [](const ray3d::Vec3& p0, const ray3d::Vec3& p1) {
+        return p0.z == 0.0 && p1.z == 0.0;
       };
-      if (!lineIsFlatZero(st.filletFirstEntity.index) || !lineIsFlatZero(hit.index)) {
-        HandleFillet3DLineLine(st, st.filletFirstEntity, hit, st.filletFirstPickX, st.filletFirstPickY, wx, wy, log);
+      if (haveCurves &&
+          (!flatZero(probe1.p0, probe1.p1) || !flatZero(probe2.p0, probe2.p1))) {
+        HandleFillet3DLineLine(st, st.filletFirstEntity, st.filletFirstPolySeg, hit, polySeg,
+                               st.filletFirstPickX, st.filletFirstPickY, wx, wy, log);
         st.filletPhase = FP::WaitFirstEntity;
         st.filletFirstEntity = SelectedEntity{};
         st.filletFirstPolySeg = -1;

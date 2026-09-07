@@ -161,3 +161,57 @@ EXPECT LOG FILLET — corner filleted.
 CHECK ALL
 EXPECT LINES 2
 EXPECT ARCS 1
+
+# ── 6. FILLET on two separate 3D POLYLINES (3DPOLY), not just plain Lines ───────────────────────
+# Real report: two 3DPOLY entities meeting at a tilted corner still said "no valid tangent arc
+# exists for that radius" after the Line/Line fix above — because the 3D solve only recognised
+# LineSeg entities, so a Polyline's end segment still fell through to the legacy 2D-only path and
+# had its own Z silently dropped, same as the original JOIN bug. A tilted-plane 45-degree corner,
+# drawn as two separate open 3DPOLY entities.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CHECK ALL
+EXPECT POLYLINES 2
+
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+EXPECT LOG FILLET — 3D corner filleted.
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+# Both polylines were trimmed back off the corner by the fillet radius, in 3D. The two lines meet
+# at 45 degrees, not 90, so the tangent length is r/tan(22.5 deg) from the corner, not simply r —
+# hand-verified via the offset-line-intersection construction FilletCandidateCenters itself uses.
+EXPECT POLYVERT 0 1 4.4142 0 4.4142
+EXPECT POLYVERT 1 0 5.8284 0 5.0000
+EXPECT ARCPOINTS 0 4.4142 0 4.4142 5.8284 0 5.0000
+
+# ── 7. Radius too large is refused for a 3D polyline pair too ──────────────────────────────────
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 20
+CLICK 2 0
+CLICK 10 0
+EXPECT LOG FILLET — radius 20.000000 is too large for the selected objects; refused.
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 0
