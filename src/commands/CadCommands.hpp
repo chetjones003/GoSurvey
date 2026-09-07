@@ -3175,6 +3175,14 @@ struct AppCommandState {
   SelectedEntity filletFirstEntity{};
   int filletFirstPolySeg = -1;
   float filletFirstPickX = 0.f, filletFirstPickY = 0.f;
+  /// issue #373 follow-up: the first pick's own camera ray (default-constructed/invalid in plan
+  /// view or paper space, matching `ray3d::Ray::valid()`). The 3D fillet solve's candidate-side
+  /// disambiguation needs the click's TRUE off-line position — projecting a pick exactly onto the
+  /// curve it is nearest to (the only option without a ray) throws away the one signal that tells
+  /// two mathematically valid tangent arcs apart, tying the choice to iteration order instead of
+  /// where the user actually clicked (a real report: a small-radius fillet rounding the OUTSIDE of
+  /// a corner instead of the inside).
+  ray3d::Ray filletFirstPickRay{};
   /// Persisted app-level (gosurvey-user.json), like `trimState` — NOT per-drawing (D-2026-08-24-g:
   /// a generalized "system variable registry" was considered and explicitly declined here; see that
   /// decision's rationale for why). Default 0.5, matching AutoCAD's own FILLETRAD default.

@@ -16167,7 +16167,8 @@ static bool ReadFillet3DCurve(const AppCommandState& st, const SelectedEntity& e
 /// there is no single correct arc for them, and guessing one silently would be worse than refusing.
 static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1, int polySeg1,
                                    const SelectedEntity& e2, int polySeg2, float pick1X, float pick1Y,
-                                   float pick2X, float pick2Y, std::vector<std::string>& log) {
+                                   const ray3d::Ray& pick1Ray, float pick2X, float pick2Y,
+                                   const ray3d::Ray* pick2Ray, std::vector<std::string>& log) {
   Fillet3DCurve curve1, curve2;
   if (!ReadFillet3DCurve(st, e1, polySeg1, &curve1) || !ReadFillet3DCurve(st, e2, polySeg2, &curve2))
     return false;
@@ -16224,8 +16225,25 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
     const double t = ((px - p0.x) * vx + (py - p0.y) * vy) / len2;
     return {p0.x + t * vx, p0.y + t * vy, p0.z + t * (p1.z - p0.z)};
   };
-  const ucs::Point2D pp1 = ucs::WorldToPlane(frame, nearestOnLine(a0, a1, pick1X, pick1Y));
-  const ucs::Point2D pp2 = ucs::WorldToPlane(frame, nearestOnLine(b0, b1, pick2X, pick2Y));
+  // issue #373: a pick projected exactly ONTO its own line (nearestOnLine) throws away the one
+  // thing that tells two mathematically valid tangent arcs apart — which side of the line the user
+  // actually clicked on. A point exactly on the line is equidistant from both perpendicular offset
+  // candidates, so SolveFilletCenter's nearest-to-pick tie-break degenerates to iteration order (a
+  // real report: a small-radius fillet rounding the OUTSIDE of a corner instead of the inside).
+  // Whenever the click's own camera ray is available (any orbited/non-plan view), intersecting it
+  // with THIS fillet's own plane gives the exact point the user pointed at, off-line component
+  // included — nearestOnLine stays the fallback for a flat plan-view pick (where wx,wy already IS
+  // the true in-plane point) or the rare case a ray misses the plane edge-on.
+  const ray3d::Plane solvePlane{frame.origin, frame.zAxis};
+  ray3d::Vec3 pickPt1{};
+  const bool haveRayPick1 = pick1Ray.valid() && ray3d::RayPlaneIntersect(pick1Ray, solvePlane, &pickPt1);
+  ray3d::Vec3 pickPt2{};
+  const bool haveRayPick2 =
+      pick2Ray && pick2Ray->valid() && ray3d::RayPlaneIntersect(*pick2Ray, solvePlane, &pickPt2);
+  const ucs::Point2D pp1 =
+      ucs::WorldToPlane(frame, haveRayPick1 ? pickPt1 : nearestOnLine(a0, a1, pick1X, pick1Y));
+  const ucs::Point2D pp2 =
+      ucs::WorldToPlane(frame, haveRayPick2 ? pickPt2 : nearestOnLine(b0, b1, pick2X, pick2Y));
 
   // issue #373: trims either curve kind back to a plane-local 2D tangent point. A Line moves
   // whichever of its OWN two endpoints sits nearer the tangent point (same rule the 2D path uses);
@@ -16468,6 +16486,7 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
     st.filletFirstPolySeg = polySeg;
     st.filletFirstPickX = wx;
     st.filletFirstPickY = wy;
+    st.filletFirstPickRay = pickRay ? *pickRay : ray3d::Ray{};
     st.filletPhase = FP::WaitSecondEntity;
     log.push_back("FILLET — select second object:");
     return;
@@ -16538,7 +16557,8 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
       if (haveCurves &&
           (!flatZero(probe1.p0, probe1.p1) || !flatZero(probe2.p0, probe2.p1))) {
         HandleFillet3DLineLine(st, st.filletFirstEntity, st.filletFirstPolySeg, hit, polySeg,
-                               st.filletFirstPickX, st.filletFirstPickY, wx, wy, log);
+                               st.filletFirstPickX, st.filletFirstPickY, st.filletFirstPickRay, wx, wy,
+                               pickRay, log);
         st.filletPhase = FP::WaitFirstEntity;
         st.filletFirstEntity = SelectedEntity{};
         st.filletFirstPolySeg = -1;

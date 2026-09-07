@@ -215,3 +215,38 @@ EXPECT LOG FILLET — radius 20.000000 is too large for the selected objects; re
 CHECK ALL
 EXPECT POLYLINES 2
 EXPECT ARCS 0
+
+# ── 8. The camera-ray pick fixes a real report: small-radius fillet rounding the WRONG side ─────
+# A pick projected exactly onto its own line cannot tell two valid tangent arcs apart — it is
+# equidistant from both candidates, so the "nearest to pick" tie-break falls back to iteration
+# order, and could round the OUTSIDE of the corner instead of the inside. A right-angle corner
+# (vertical then horizontal, same shape as the report's screenshot) with an orbited view and a CLICK
+# Z that lands slightly OFF each line, toward the interior of the corner, is what a real screen
+# click naturally provides — this is what the ray-plane intersection now recovers.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 0,0,10
+CMD END
+CMD 3DPOLY
+CMD 0,0,10
+CMD 10,0,10
+CMD END
+VIEWANGLES -45 35
+CHECK ALL
+EXPECT POLYLINES 2
+
+CMD FILLET
+CMD R
+CMD 0.25
+CLICK 0.1 0 5
+EXPECT LOG FILLET — select second object:
+CLICK 5 0 9.9
+EXPECT LOG FILLET — 3D corner filleted.
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+# The INSIDE tangent arc — both trims land toward the corner's interior, not the outside.
+EXPECT POLYVERT 0 1 0 0 9.75
+EXPECT POLYVERT 1 0 0.25 0 10
+EXPECT ARCPOINTS 0 0 0 9.75 0.25 0 10
