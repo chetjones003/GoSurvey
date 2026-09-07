@@ -49,7 +49,7 @@ TEST_CASE("Every pick-driven command is routed by the model-space viewport", "[v
       K::Solid,
       K::Text, K::Mtext, K::DimAligned, K::DimLinear, K::DimAngular,
       // Inquiry / placement.
-      K::IdPoint, K::SurveyInverse, K::SurfaceElevGrade, K::WaterDrop, K::Catchment, K::SwapTinEdge,
+      K::IdPoint, K::SurveyInverse, K::Dist, K::SurfaceElevGrade, K::WaterDrop, K::Catchment, K::SwapTinEdge,
       K::AddTinPoint, K::DelTinPoint, K::MoveTinPoint, K::DelTinLine, K::QuickProfile, K::Paste,
       // Modify commands.
       K::Move, K::Copy, K::Rotate, K::Scale, K::Array, K::Delete, K::Join, K::Trim, K::Offset, K::Align,

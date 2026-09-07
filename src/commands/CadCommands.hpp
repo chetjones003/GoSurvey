@@ -1423,6 +1423,8 @@ struct AppCommandState {
     IdPoint,
     /// Two-point inverse: horizontal distance and bearing (clockwise from north) between picks (World X=E, Y=N).
     SurveyInverse,
+    /// REQ-105: two-point 3D distance — delta X/Y/Z and slope (true 3D) distance between picks.
+    Dist,
     /// REQ-074: one pick reports interpolated surface elevation, a second reports grade between them.
     SurfaceElevGrade,
     /// REQ-133: one pick traces a water-drop path on a named surface.
@@ -1549,6 +1551,7 @@ struct AppCommandState {
     case Kind::Offset:        return "OFFSET";
     case Kind::IdPoint:       return "ID";
     case Kind::SurveyInverse: return "INVERSE";
+    case Kind::Dist:          return "DIST";
     case Kind::PdfAttach:     return "PDFATTACH";
     case Kind::Align:         return "ALIGN";
     case Kind::Paste:         return "PASTE";
@@ -3267,6 +3270,12 @@ struct AppCommandState {
   enum class SurveyInversePhase { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
   float surveyInverseFromX = 0.f;
   float surveyInverseFromY = 0.f;
+
+  /// REQ-105: DIST — two-point 3D distance (delta X/Y/Z + slope distance).
+  enum class DistPhase { WaitFrom, WaitTo } distPhase = DistPhase::WaitFrom;
+  float distFromX = 0.f;
+  float distFromY = 0.f;
+  float distFromZ = 0.f;
 
   /// REQ-074 spot elevation / grade. The first pick is kept so the second can report grade against
   /// it; the elevations are kept per surface, by name, because a point can be covered by more than
@@ -5213,6 +5222,7 @@ void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfa
                                    std::vector<std::string>& log);
 
 void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartDistCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log);

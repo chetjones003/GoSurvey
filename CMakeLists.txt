@@ -1045,6 +1045,9 @@ if(GOSURVEY_BUILD_TESTS)
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp
+    # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
+    # StartDistCommand, like TrimLinePreviewTests above.
+    tests/DistCommandTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
