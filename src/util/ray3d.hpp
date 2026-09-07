@@ -215,6 +215,42 @@ inline double RaySegmentDistance(const Ray& ray, const Vec3& a, const Vec3& b, d
   return Length(Sub(onSeg, onRay));
 }
 
+/// The point on the INFINITE line through \p linePoint along \p lineDir closest to \p ray (skew-line
+/// closest approach, unclamped — unlike \ref RaySegmentDistance's segment). \p outDegenerate, if
+/// given, is set true when the line runs parallel to the ray (no well-conditioned closest point
+/// exists), in which case \p linePoint itself is returned unchanged.
+///
+/// This is the ray/PLANE-intersection alternative for a 1-D constraint (e.g. an ORTHO-locked axis):
+/// intersecting the ray with the full plane the line lies in and then projecting onto the line is
+/// numerically unstable whenever the plane grazes the ray, even though the LINE itself is nowhere
+/// near parallel to it — a tiny screen-pixel move blows up into an enormous, erratic in-plane swing
+/// (issue #386). Measuring against the line directly sidesteps that: it degenerates only when the
+/// LINE itself is (nearly) parallel to the ray, an unavoidable case no formulation escapes (looking
+/// straight down the locked axis has no length to show, in this app or in AutoCAD).
+inline Vec3 ClosestPointOnLineToRay(const Ray& ray, const Vec3& linePoint, const Vec3& lineDir,
+                                    bool* outDegenerate = nullptr) {
+  if (outDegenerate)
+    *outDegenerate = false;
+  const Vec3 d = Normalize(lineDir);
+  if (!ray.valid() || Dot(d, d) < 0.5) {
+    if (outDegenerate)
+      *outDegenerate = true;
+    return linePoint;
+  }
+  const Vec3 w0 = Sub(linePoint, ray.origin);
+  const double b = Dot(d, ray.dir);     // ray.dir is unit per the Ray contract
+  const double dDot = Dot(d, w0);
+  const double eDot = Dot(ray.dir, w0);
+  const double denom = 1.0 - b * b;     // == a*c - b*b with a = d.d = 1, c = ray.dir.ray.dir = 1
+  if (!(std::fabs(denom) > 1e-9)) {
+    if (outDegenerate)
+      *outDegenerate = true;
+    return linePoint;
+  }
+  const double t = (b * eDot - dDot) / denom;
+  return Add(linePoint, Scale(d, t));
+}
+
 /// Shortest distance from \p ray to \p p. \p outT receives the ray parameter of closest approach.
 inline double RayPointDistance(const Ray& ray, const Vec3& p, double* outT = nullptr) {
   if (!ray.valid())

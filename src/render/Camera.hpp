@@ -309,6 +309,27 @@ struct Camera {
       *outDepth = -czr;  // camera looks down -Z, so farther points have more negative czr
   }
 
+  /// Reconstructs the camera ray that produced world point \p p, given only \p p — no pixel needed.
+  ///
+  /// Used where a caller already has a ray/plane hit (e.g. the cursor's raw work-plane intersection)
+  /// and needs the RAY it came from, not just that one point on it — e.g. to find the closest point
+  /// on some other line to the same cursor ray (issue #386). Under Orthographic every ray shares one
+  /// direction (\ref ForwardWorld) and \p p already lies on it, so it can serve as the ray's origin
+  /// directly. Under Perspective the rays fan out from a single eye, so direction is recovered as
+  /// `normalize(p - eye)` — exact, since \p p being a real hit on the original ray means it is
+  /// collinear with that eye by construction.
+  [[nodiscard]] ray3d::Ray RayThroughWorldPoint(const ray3d::Vec3& p) const {
+    const ray3d::Vec3 fwd = ForwardWorld();
+    if (projection == Projection::Perspective) {
+      const double kDeg = 3.14159265358979323846 / 180.0;
+      const double dist = static_cast<double>(orthoHalfH) / std::tan(0.5 * static_cast<double>(fovDeg) * kDeg);
+      const ray3d::Vec3 target{targetX, targetY, targetZ};
+      const ray3d::Vec3 eye = ray3d::Sub(target, ray3d::Scale(fwd, dist));
+      return ray3d::Ray{eye, ray3d::Normalize(ray3d::Sub(p, eye))};
+    }
+    return ray3d::Ray{p, fwd};
+  }
+
   /// The ray a screen pixel casts into the world (REQ-058 picking and drawing).
   ///
   /// \param px,py      pixel position inside the viewport, origin at its TOP-LEFT (ImGui convention).
