@@ -130,6 +130,56 @@ TEST_CASE("ORTHO leaves wz untouched under the World UCS", "[ucs][ortho][req154]
   REQUIRE(wz == Approx(42.f));
 }
 
+// Issue #371 THIRD follow-up (real repro): an anchor placed by OSNAP CENTRE onto a circle drawn
+// under a DIFFERENT coordinate system sits nowhere near the active UCS's own plane — completely
+// ordinary, and REQ-154 explicitly allows a snapped point to carry its own off-plane elevation.
+// Before this fix, ConstrainToUcsOrtho preserved the out-of-plane offset measured between anchor and
+// the raw (unsnapped) cursor hit, which — since the cursor's raw hit carries no deliberate 3D intent
+// of its own, it is simply wherever the fixed work plane happens to sit — dragged the WHOLE segment
+// through however many units of depth separated the anchor from that plane, on top of whichever
+// axis ORTHO locked. The result still looked diagonal on screen even after the screen-aware axis
+// fix, because "square to one axis" doesn't help when the segment is also drifting through a third.
+TEST_CASE("ORTHO keeps the segment in the plane through the ANCHOR when the anchor is off the "
+         "UCS's own plane",
+         "[ucs][ortho][req154]") {
+  const ucs::Ucs frame = ucs::RotatedAboutX(ucs::Ucs{}, 90.0);  // Front: world Y is out-of-plane
+
+  // Anchor 45 units off the Front UCS's plane (world Y = 45) — e.g. OSNAP CENTRE onto a circle
+  // drawn under a different coordinate system, exactly like the reported repro.
+  const ray3d::Vec3 anchor{10.0, 45.0, 0.0};
+  // The raw, UNSNAPPED cursor hit: near the Front plane's own depth (world Y ~ 0), farther along
+  // world Z (10) than world X (2) — dominant axis should lock world X.
+  const ray3d::Vec3 target{12.0, 0.0, 10.0};
+
+  const ray3d::Vec3 constrained = ConstrainToUcsOrtho(frame, anchor, target);
+
+  // World X locks back to the anchor's (10); world Z is free, following the cursor (10).
+  REQUIRE(constrained.x == Approx(10.0).margin(1e-6));
+  REQUIRE(constrained.z == Approx(10.0).margin(1e-6));
+  // World Y (out-of-plane / depth) stays at the ANCHOR's (45) — NOT the raw cursor hit's (0). This
+  // is the exact defect: before the fix this asserted Approx(0.0), and the segment silently spanned
+  // 45 units of unrequested depth on top of the X/Z lock.
+  REQUIRE(constrained.y == Approx(45.0).margin(1e-6));
+}
+
+TEST_CASE("ConstrainToUcsOrthoOnScreen also keeps the segment in the plane through the ANCHOR",
+         "[ucs][ortho][req154]") {
+  const ucs::Ucs frame = ucs::RotatedAboutX(ucs::Ucs{}, 90.0);
+  const Camera cam = [] {
+    Camera c = Camera::Plan(0.0, 0.0, 50.f);
+    c.azimuthDeg = 60.f;
+    c.elevationDeg = 20.f;
+    return c;
+  }();
+
+  const ray3d::Vec3 anchor{10.0, 45.0, 0.0};
+  const ray3d::Vec3 target{12.0, 0.0, 10.0};
+
+  const ray3d::Vec3 constrained = ConstrainToUcsOrthoOnScreen(frame, anchor, target, cam, 1200.f, 700.f);
+
+  REQUIRE(constrained.y == Approx(45.0).margin(1e-6));
+}
+
 // Issue #371 THIRD follow-up: comparing raw UCS-delta magnitude (ConstrainToUcsOrtho's decision)
 // only tells you which axis the cursor is "farther along" while the camera is a plan view of the
 // UCS. Once the camera is orbited (any UCSFOLLOW=0 drag with a Front/Left/Right-style UCS is

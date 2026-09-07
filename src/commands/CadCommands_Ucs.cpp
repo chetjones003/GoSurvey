@@ -221,12 +221,21 @@ bool ProcessViewCommandLine(AppCommandState& st, const std::string& rest, std::v
 ray3d::Vec3 ConstrainToUcsOrtho(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target) {
   // ORTHO means "square with the axes" - and once a UCS exists, that means the UCS's axes, not the
   // world's (REQ-047 under REQ-154). Measure the offset in the frame, keep the dominant in-plane
-  // component, drop the other. The out-of-plane component is preserved rather than zeroed: the
-  // caller may be constraining a point an object snap legitimately lifted off the plane, and
-  // flattening it here would move geometry the user had already placed.
+  // component, drop the other.
+  //
+  // issue #371 third follow-up: the out-of-plane component is locked to the ANCHOR's (zero offset),
+  // not preserved from the raw target. An anchor placed by an object snap onto geometry from a
+  // DIFFERENT plane (a very ordinary thing to do — see the real repro this fixes: OSNAP CENTRE onto
+  // a circle drawn under a different coordinate system, then POLYLINE under a Front UCS) commonly
+  // sits nowhere near the active UCS's own plane. The un-snapped cursor's raw ray-plane hit, by
+  // contrast, carries no deliberate 3D intent at all — it is wherever the FIXED work plane happens
+  // to sit, an artifact of geometry, not something the user chose. Preserving that raw offset instead
+  // of the anchor's dragged the whole segment through however many units of unrequested depth
+  // separated the two, which is exactly the "still looks diagonal" defect: REQ-154 states ORTHO
+  // "stays in the UCS plane," and a plane through the anchor (parallel to the UCS) is the only
+  // reading of that which does not also require silently relocating the anchor itself.
   const ray3d::Vec3 d = ucs::WorldVectorToUcs(frame, ray3d::Sub(target, anchor));
-  const ray3d::Vec3 keep =
-      (std::fabs(d.y) > std::fabs(d.x)) ? ray3d::Vec3{0.0, d.y, d.z} : ray3d::Vec3{d.x, 0.0, d.z};
+  const ray3d::Vec3 keep = (std::fabs(d.y) > std::fabs(d.x)) ? ray3d::Vec3{0.0, d.y, 0.0} : ray3d::Vec3{d.x, 0.0, 0.0};
   return ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, keep));
 }
 
@@ -245,9 +254,11 @@ ray3d::Vec3 ConstrainToUcsOrthoOnScreen(const ucs::Ucs& frame, const ray3d::Vec3
   // candidate the cursor is actually closer to on screen. This subsumes the plan-view case exactly —
   // in plan view the two decisions always agree, since UCS deltas and screen deltas are the same
   // thing up to a uniform scale.
+  // The out-of-plane component locks to the ANCHOR's, not the raw target's — see ConstrainToUcsOrtho's
+  // comment (issue #371 third follow-up) for why.
   const ray3d::Vec3 d = ucs::WorldVectorToUcs(frame, ray3d::Sub(target, anchor));
-  const ray3d::Vec3 freeAlongY = ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, ray3d::Vec3{0.0, d.y, d.z}));
-  const ray3d::Vec3 freeAlongX = ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, ray3d::Vec3{d.x, 0.0, d.z}));
+  const ray3d::Vec3 freeAlongY = ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, ray3d::Vec3{0.0, d.y, 0.0}));
+  const ray3d::Vec3 freeAlongX = ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, ray3d::Vec3{d.x, 0.0, 0.0}));
   float cx = 0.f, cy = 0.f, ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
   cam.WorldToScreen(target.x, target.y, target.z, viewportWidthPx, viewportHeightPx, &cx, &cy);
   cam.WorldToScreen(freeAlongY.x, freeAlongY.y, freeAlongY.z, viewportWidthPx, viewportHeightPx, &ax, &ay);
