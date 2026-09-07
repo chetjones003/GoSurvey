@@ -131,11 +131,40 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
     // hover highlight follows the shape the renderer drew.
     const float bulge =
         static_cast<size_t>(a) < cmd.userPolylineVertsBulge.size() ? cmd.userPolylineVertsBulge[static_cast<size_t>(a)] : 0.f;
-    const BulgeArcSpan arc = (bulge != 0.f)
-                                 ? BulgeArc(cmd.userPolylineVerts[A], cmd.userPolylineVerts[A + 1],
-                                            cmd.userPolylineVerts[B], cmd.userPolylineVerts[B + 1],
-                                            static_cast<double>(bulge))
-                                 : BulgeArcSpan{};
+    if (bulge == 0.f) {
+      out->push_back(cmd.userPolylineVerts[A]);
+      out->push_back(cmd.userPolylineVerts[A + 1]);
+      out->push_back(za);
+      out->push_back(cmd.userPolylineVerts[B]);
+      out->push_back(cmd.userPolylineVerts[B + 1]);
+      out->push_back(cmd.userPolylineVerts[B + 2]);
+      return;
+    }
+    // REQ-325 / ADR-053: this segment's own plane, when it is not flat +Z — the same construction
+    // the renderer's own AppendChainEdgesVc (ViewportRenderer.cpp) and PickClosestCadEntity's
+    // polySegD2 already use, so a tilted curve's highlight traces the curve actually drawn instead
+    // of a flat approximation sitting somewhere else entirely (a real report: a joined polyline's
+    // tilted arc segment never lit up yellow when the polyline was selected).
+    float nx = 0.f, ny = 0.f, nz = 1.f;
+    if (A + 2 < cmd.userPolylineVertsNormal.size()) {
+      nx = cmd.userPolylineVertsNormal[A];
+      ny = cmd.userPolylineVertsNormal[A + 1];
+      nz = cmd.userPolylineVertsNormal[A + 2];
+    }
+    const bool flat = IsFlatNormal(nx, ny, nz);
+    ucs::Ucs plane{};
+    BulgeArcSpan arc{};
+    if (flat) {
+      arc = BulgeArc(cmd.userPolylineVerts[A], cmd.userPolylineVerts[A + 1], cmd.userPolylineVerts[B],
+                     cmd.userPolylineVerts[B + 1], static_cast<double>(bulge));
+    } else if (ucs::FromNormal(ray3d::Vec3{cmd.userPolylineVerts[A], cmd.userPolylineVerts[A + 1], za},
+                               ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                           static_cast<double>(nz)},
+                               &plane)) {
+      const ucs::Point2D p1Local = ucs::WorldToPlane(
+          plane, ray3d::Vec3{cmd.userPolylineVerts[B], cmd.userPolylineVerts[B + 1], cmd.userPolylineVerts[B + 2]});
+      arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
+    }
     if (!arc.valid) {
       out->push_back(cmd.userPolylineVerts[A]);
       out->push_back(cmd.userPolylineVerts[A + 1]);
@@ -147,19 +176,35 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
     }
     constexpr double kPi = 3.14159265358979323846;
     const int n = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 24.0))), 2, 96);
-    double px = cmd.userPolylineVerts[A], py = cmd.userPolylineVerts[A + 1];
+    auto sampleWorld = [&](double u, float* ox, float* oy, float* oz) {
+      const double lx = arc.cx + arc.radius * std::cos(u);
+      const double ly = arc.cy + arc.radius * std::sin(u);
+      if (flat) {
+        *ox = static_cast<float>(lx);
+        *oy = static_cast<float>(ly);
+        *oz = za;
+        return;
+      }
+      const ray3d::Vec3 wp = ucs::PlaneToWorld(plane, ucs::Point2D{lx, ly});
+      *ox = static_cast<float>(wp.x);
+      *oy = static_cast<float>(wp.y);
+      *oz = static_cast<float>(wp.z);
+    };
+    float px = 0.f, py = 0.f, pz = 0.f;
+    sampleWorld(arc.startAngle, &px, &py, &pz);
     for (int s = 1; s <= n; ++s) {
       const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / n);
-      const double qx = arc.cx + arc.radius * std::cos(u);
-      const double qy = arc.cy + arc.radius * std::sin(u);
-      out->push_back(static_cast<float>(px));
-      out->push_back(static_cast<float>(py));
-      out->push_back(za);
-      out->push_back(static_cast<float>(qx));
-      out->push_back(static_cast<float>(qy));
-      out->push_back(za);
+      float qx = 0.f, qy = 0.f, qz = 0.f;
+      sampleWorld(u, &qx, &qy, &qz);
+      out->push_back(px);
+      out->push_back(py);
+      out->push_back(pz);
+      out->push_back(qx);
+      out->push_back(qy);
+      out->push_back(qz);
       px = qx;
       py = qy;
+      pz = qz;
     }
   };
   for (int vi = v0; vi + 1 < v1; ++vi)

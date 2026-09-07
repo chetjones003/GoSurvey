@@ -13,6 +13,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "CadCommands.hpp"
+#include "viewport/TransformPreview.hpp"
+
+#include <cmath>
+#include <vector>
 
 using Catch::Approx;
 
@@ -93,4 +97,51 @@ TEST_CASE("Cut-line preview never previews more than the single nearest edge", "
 TEST_CASE("Cut-line preview tolerates a null output pointer", "[trim][issue166]") {
   const AppCommandState st = TwoCrossingLines();
   CadTrimAppendCutLineRemovedPreview(st, 20.f, -5.f, 20.f, 5.f, 20.f, 0.f, nullptr);  // must not crash
+}
+
+// REQ-325 / ADR-053 follow-up (real report): a polyline JOIN gave a tilted curved segment (issue
+// #373's 3D FILLET), and the selected polyline's YELLOW highlight never lit up over that segment —
+// it stayed the entity's own base colour, because BuildSelectionHighlight's own arc tracer
+// (TransformPreview.cpp's appendCommittedPolylineStrip) was still flat-only, missed by increment 2
+// (which only fixed the RENDERER's own tessellation and PickClosestCadEntity, a separate function).
+TEST_CASE("A selected polyline's tilted curved segment highlights on the true arc, not flat",
+         "[TransformPreview][req325]") {
+  AppCommandState st;
+  // Same wall-standing half circle as the CadSnapTests req325 cases: vertex A=(0,0,0), B=(20,0,0),
+  // bulge=1, normal (0,-1,0) -- the true apex sits at world (10, 0, -10), not the chord's (10,0,0).
+  st.userPolylineVerts = {0.f, 0.f, 0.f, 20.f, 0.f, 0.f};
+  st.userPolylineOffsets = {0, 2};
+  st.userPolylineClosed = {0};
+  st.userPolylineAttrs.emplace_back();
+  st.userPolylineVertsBulge = {1.f, 0.f};
+  st.userPolylineVertsNormal = {0.f, -1.f, 0.f, 0.f, 0.f, 1.f};
+  SelectedEntity se{};
+  se.type = SelectedEntity::Type::Polyline;
+  se.index = 0;
+  st.selection.push_back(se);
+
+  std::vector<float> hlLines;
+  std::vector<float> hlCircles;
+  BuildSelectionHighlight(st, &hlLines, &hlCircles);
+  REQUIRE(hlLines.size() % 6 == 0);
+  REQUIRE(hlLines.size() >= 6);
+
+  // Every highlighted point must lie on the true circle (radius 10 about world (10,0,0)) and in the
+  // wall's own plane (y = 0) -- the old flat-chord code instead drew a single straight segment
+  // sitting at z = 0 the whole way, which both checks below would catch (a chord point off the
+  // circle, or every z pinned to 0 instead of dipping to -10 at the apex).
+  bool sawTrueDepth = false;
+  for (size_t i = 0; i + 5 < hlLines.size(); i += 6) {
+    for (int p = 0; p < 2; ++p) {
+      const float x = hlLines[i + static_cast<size_t>(p) * 3 + 0];
+      const float y = hlLines[i + static_cast<size_t>(p) * 3 + 1];
+      const float z = hlLines[i + static_cast<size_t>(p) * 3 + 2];
+      CHECK(y == Approx(0.f).margin(1e-3));
+      const float d = std::sqrt((x - 10.f) * (x - 10.f) + z * z);
+      CHECK(d == Approx(10.f).margin(0.05f));
+      if (z < -5.f)
+        sawTrueDepth = true;
+    }
+  }
+  CHECK(sawTrueDepth);  // at least one sampled point is genuinely near the apex, not chord-flat
 }
