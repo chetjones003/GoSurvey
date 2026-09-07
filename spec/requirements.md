@@ -5457,11 +5457,16 @@ requirements is a planning failure, not a sign of rigor.
   accepted as typed input at those prompts, so what the mouse produces is exactly what could have
   been typed.
 
-  **A frame selector sits under the ViewCube**, in model space only. It names the active frame —
-  `WCS`, the saved name when the frame is one of them, or `Unnamed` for a frame built but not saved —
-  and opens a menu of `WCS`, every named UCS in the drawing, and `New UCS`. Selecting a name restores
-  that frame; `New UCS` opens the ordinary command, so the menu and the command line cannot drift
-  about what any of it means.
+  **A frame selector sits under the ViewCube**, in model space only, and a second copy of it is the
+  **View-tab "Coordinate system" combo**. Each names the active frame — `WCS`, the saved name when
+  the frame is one of them, or `Unnamed` for a frame built but not saved — and opens a menu of
+  `WCS`, the **six orthographic UCS presets** (`Top` / `Bottom` / `Left` / `Right` / `Front` /
+  `Back`), every named UCS in the drawing, and `New UCS`. Selecting a name or a preset restores that
+  frame; `New UCS` opens the ordinary command, so the menu and the command line cannot drift about
+  what any of it means. The two selectors offer an identical list — the preset frames are one shared
+  constant table in the `ucs` module (AutoCAD's standard orthographic-UCS axis mapping, origin at
+  the world origin; `Top` is the WCS itself), computed and never persisted. A preset is an ordinary
+  UCS change: ORTHO, the grid and `UCSFOLLOW` treat it exactly as any other frame.
 
   **Coordinate entry is in the UCS.** Under a UCS rotated 45° about Z, `10,0` is ten units along the
   UCS X axis; `@dx,dy` is a delta along the UCS axes. Typed points accept `X,Y,Z` as well as `X,Y`,
@@ -5524,7 +5529,10 @@ requirements is a planning failure, not a sign of rigor.
   to the rotation-angle prompt (take the angle from two picked points), at the user's request during
   hands-on testing of this branch. Same day — live axis preview, the polar
   distance/angle cursor pair (REQ-024's stated exception) with `@distance<angle` as typed input, and
-  the frame selector under the ViewCube; all three requested from hands-on testing.
+  the frame selector under the ViewCube; all three requested from hands-on testing. 2026-09-06 —
+  both frame selectors gained the six orthographic UCS presets (Top/Bottom/Left/Right/Front/Back),
+  a shared computed constant table, at the user's request for one-click plane switching in 3D
+  solid-modelling work (D-2026-09-06-a, TASK-153).
 
 #### Not in this requirement — and why
 

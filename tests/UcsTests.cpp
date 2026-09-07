@@ -14,6 +14,7 @@
 #include "util/ucs.hpp"
 
 #include <cmath>
+#include <string>
 
 using Catch::Approx;
 using ucs::Ucs;
@@ -644,4 +645,73 @@ TEST_CASE("A vertical plane keeps a stable frame either side of the pole", "[ucs
   RequireVec(ucs::PointOnPlaneCircle(f, 10.0, 3.14159265358979323846), 90.0, 0.0, 0.0);
   // A quarter turn goes UP, which is the whole point: no XY-plane store can put a curve there.
   RequireVec(ucs::PointOnPlaneCircle(f, 10.0, 3.14159265358979323846 / 2.0), 100.0, 0.0, 10.0);
+}
+
+// --- Orthographic presets (REQ-154, D-2026-09-06-a) -------------------------------------------
+
+TEST_CASE("The orthographic UCS presets are the six standard views, named in order", "[ucs]") {
+  const auto& p = ucs::OrthographicPresets();
+  REQUIRE(p.size() == 6);
+  REQUIRE(std::string(p[0].name) == "Top");
+  REQUIRE(std::string(p[1].name) == "Bottom");
+  REQUIRE(std::string(p[2].name) == "Front");
+  REQUIRE(std::string(p[3].name) == "Back");
+  REQUIRE(std::string(p[4].name) == "Left");
+  REQUIRE(std::string(p[5].name) == "Right");
+}
+
+TEST_CASE("Every orthographic preset is a right-handed orthonormal frame at the world origin", "[ucs]") {
+  for (const ucs::OrthoPreset& preset : ucs::OrthographicPresets()) {
+    INFO("preset " << preset.name);
+    REQUIRE(ucs::IsRightHandedOrthonormal(preset.frame));
+    RequireVec(preset.frame.origin, 0.0, 0.0, 0.0);
+  }
+}
+
+TEST_CASE("The Top preset is exactly the World Coordinate System", "[ucs]") {
+  const ucs::OrthoPreset& top = ucs::OrthographicPresets()[0];
+  REQUIRE(ucs::IsWorld(top.frame));
+}
+
+TEST_CASE("Each orthographic preset makes the named world face the XY work plane", "[ucs]") {
+  // The work plane's outward normal is the preset's Z axis; it must be the world direction you
+  // would be looking ALONG to see that face. This is the AutoCAD orthographic-UCS table.
+  auto planeNormal = [](const char* name) {
+    for (const ucs::OrthoPreset& p : ucs::OrthographicPresets())
+      if (std::string(p.name) == name)
+        return ucs::WorkPlane(p.frame).normal;
+    return Vec3{0.0, 0.0, 0.0};
+  };
+  RequireVec(planeNormal("Top"), 0.0, 0.0, 1.0);
+  RequireVec(planeNormal("Bottom"), 0.0, 0.0, -1.0);
+  RequireVec(planeNormal("Front"), 0.0, -1.0, 0.0);
+  RequireVec(planeNormal("Back"), 0.0, 1.0, 0.0);
+  RequireVec(planeNormal("Left"), -1.0, 0.0, 0.0);
+  RequireVec(planeNormal("Right"), 1.0, 0.0, 0.0);
+
+  // Front: screen-right is world +X, screen-up is world +Z - a coordinate typed as 1,0 lands one
+  // unit east and 0,1 lands one unit up, which is what "draw on the front" has to mean.
+  auto frame = [](const char* name) {
+    for (const ucs::OrthoPreset& p : ucs::OrthographicPresets())
+      if (std::string(p.name) == name)
+        return p.frame;
+    return Ucs{};
+  };
+  RequireVec(ucs::UcsToWorld(frame("Front"), Vec3{1.0, 0.0, 0.0}), 1.0, 0.0, 0.0);
+  RequireVec(ucs::UcsToWorld(frame("Front"), Vec3{0.0, 1.0, 0.0}), 0.0, 0.0, 1.0);
+  RequireVec(ucs::UcsToWorld(frame("Right"), Vec3{1.0, 0.0, 0.0}), 0.0, 1.0, 0.0);
+}
+
+TEST_CASE("The orthographic presets are all distinct, and a survey UCS matches none of them", "[ucs]") {
+  const auto& presets = ucs::OrthographicPresets();
+  for (size_t i = 0; i < presets.size(); ++i)
+    for (size_t j = i + 1; j < presets.size(); ++j) {
+      INFO(presets[i].name << " vs " << presets[j].name);
+      REQUIRE_FALSE(ucs::FramesMatch(presets[i].frame, presets[j].frame));
+    }
+  // A frame squared to a lot line (rotated 30 deg about Z, origin moved) is a user frame, not a
+  // preset - the label lookup must not call it "Front".
+  const Ucs survey = ucs::WithOrigin(ucs::RotatedAboutZ(Ucs{}, 30.0), Vec3{1000.0, 2000.0, 0.0});
+  for (const ucs::OrthoPreset& p : ucs::OrthographicPresets())
+    REQUIRE_FALSE(ucs::FramesMatch(p.frame, survey));
 }

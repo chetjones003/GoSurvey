@@ -3525,6 +3525,12 @@ static std::string CadUcsFrameLabel(const AppCommandState& cmd) {
     if (ucs::FramesMatch(n.frame, cmd.activeUcs))
       return n.name;
   }
+  // An orthographic preset (REQ-154, D-2026-09-06-a): a saved name wins over the preset label, so
+  // this comes after the ucsNamed loop. "Top" is the WCS and is already handled above.
+  for (const ucs::OrthoPreset& p : ucs::OrthographicPresets()) {
+    if (ucs::FramesMatch(p.frame, cmd.activeUcs))
+      return p.name;
+  }
   return "Unnamed";
 }
 
@@ -5487,6 +5493,15 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           const bool isW = CadUcsIsWorld(cmd);
           if (ImGui::Selectable("WCS", isW) && !isW)
             SetActiveUcs(cmd, ucs::Ucs{}, log);
+          // The six orthographic UCS presets (REQ-154, D-2026-09-06-a). Same shared table the
+          // ViewCube selector uses, so the two lists cannot drift. "Top" IS the WCS, so it ticks
+          // with the WCS row above.
+          ImGui::Separator();
+          for (const ucs::OrthoPreset& p : ucs::OrthographicPresets()) {
+            const bool sel = ucs::FramesMatch(p.frame, cmd.activeUcs);
+            if (ImGui::Selectable(p.name, sel) && !sel)
+              SetActiveUcs(cmd, p.frame, log);
+          }
           if (!cmd.ucsNamed.empty()) {
             ImGui::Separator();
             for (const NamedUcs& n : cmd.ucsNamed) {
@@ -18100,6 +18115,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (ImGui::BeginPopup("##ucsdropmenu")) {
         if (ImGui::MenuItem("WCS", nullptr, isWorld) && !isWorld)
           SetActiveUcs(cmd, ucs::Ucs{}, log);
+        // The six orthographic UCS presets (REQ-154, D-2026-09-06-a) - the same shared table the
+        // View-tab "Coordinate system" combo lists, so the two selectors offer an identical menu.
+        // "Top" is the WCS and ticks with the row above it.
+        ImGui::Separator();
+        for (const ucs::OrthoPreset& p : ucs::OrthographicPresets()) {
+          const bool isActive = ucs::FramesMatch(p.frame, cmd.activeUcs);
+          if (ImGui::MenuItem(p.name, nullptr, isActive) && !isActive)
+            SetActiveUcs(cmd, p.frame, log);
+        }
         // Every frame saved in this drawing, so restoring one is a click. It is the only way to
         // restore by name besides the View Manager - the UCS command's Named option only saves.
         if (!cmd.ucsNamed.empty()) {

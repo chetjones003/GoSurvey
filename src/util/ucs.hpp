@@ -2,6 +2,7 @@
 
 #include "ray3d.hpp"
 
+#include <array>
 #include <cmath>
 
 /// The User Coordinate System: one authoritative WCS <-> UCS implementation (REQ-154, GitHub #126).
@@ -437,6 +438,36 @@ inline void SpinPair(Vec3* a, Vec3* b, double deg) {
   const double r = best * kRad;
   const Vec3 snapped{planar * std::cos(r), planar * std::sin(r), d.z};
   return ray3d::Add(anchor, UcsVectorToWorld(u, snapped));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Orthographic presets (REQ-154, D-2026-09-06-a).
+//
+// The six standard views as WORK FRAMES: each makes one world face the XY work plane, with the
+// origin at the world origin. `Top` is the WCS itself. This is AutoCAD's standard orthographic-UCS
+// axis mapping. Kept as one shared table so the View-tab "Coordinate system" combo and the
+// ViewCube frame selector cannot offer different lists (REQ-154: the two must not disagree).
+//
+// The frames are computed constants — nothing here is persisted; a preset selected in the UI is
+// fed straight to the ordinary `SetActiveUcs` path, so ORTHO, the grid and UCSFOLLOW treat it as
+// any other frame.
+// ---------------------------------------------------------------------------------------------
+
+struct OrthoPreset {
+  const char* name;
+  Ucs frame;
+};
+
+[[nodiscard]] inline const std::array<OrthoPreset, 6>& OrthographicPresets() {
+  static const std::array<OrthoPreset, 6> kPresets = {{
+      {"Top", Ucs{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}}},
+      {"Bottom", Ucs{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, {0.0, 0.0, -1.0}}},
+      {"Front", Ucs{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, -1.0, 0.0}}},
+      {"Back", Ucs{{0.0, 0.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 1.0, 0.0}}},
+      {"Left", Ucs{{0.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0}}},
+      {"Right", Ucs{{0.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0}}},
+  }};
+  return kPresets;
 }
 
 // ---------------------------------------------------------------------------------------------
