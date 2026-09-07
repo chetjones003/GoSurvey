@@ -270,19 +270,35 @@ struct SnapPickAccum {
 ///        Ranking against other candidates always uses the true point distance, never this value,
 ///        so a kind with a generous heuristic acceptance radius cannot out-rank a kind that is
 ///        genuinely closer to the cursor (issue #103).
+/// \param heuristicAccept true when \p pickDistSq is a "cursor is over the SHAPE" heuristic (a
+///        circle / ellipse / closed-polyline / survey-point CENTRE is offered whenever the cursor
+///        is anywhere over the shape, not only near the centroid). The plan-XY heuristic is
+///        meaningless once the view tilts, so an ORBITED caller passes true only after recomputing
+///        \p pickDistSq at the cursor ray's crossing of the shape's own plane (see
+///        \ref CenterHeuristicPoint); it passes false — plain ray-distance acceptance only — when
+///        that crossing does not exist (an edge-on view). With it set, the ray path accepts on
+///        EITHER that recomputed heuristic OR the plain ray distance, whichever is smaller (issue
+///        #372). Ranking is always the true ray distance, as issue #103 requires.
 void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float snapY, Kind kind, float pickDistSq,
-                  float tolWorld, float snapZ = 0.f) {
+                  float tolWorld, float snapZ = 0.f, bool heuristicAccept = false) {
   const float tol2 = tolWorld * tolWorld;
   float rankDistSq = (snapX - wx) * (snapX - wx) + (snapY - wy) * (snapY - wy);
   // Orbited: re-measure the candidate against the cursor ray in 3D. Doing it here — at the one
   // place every candidate funnels through — means each generator keeps its own 2D construction
-  // logic and only the comparison changes. The ray distance to the actual point serves as both the
-  // acceptance and ranking metric here — there is no separate heuristic once measured against the ray.
+  // logic and only the comparison changes. The ray distance to the actual point is always the
+  // ranking metric; for an ordinary kind it is the acceptance metric too (the caller's plan-XY
+  // pickDistSq means nothing once the view tilts). A \p heuristicAccept kind keeps the caller's
+  // pickDistSq — which for the orbited path the caller has already recomputed in the shape's plane.
   if (acc->ray) {
     const double d = ray3d::RayPointDistance(
         *acc->ray, ray3d::Vec3{static_cast<double>(snapX), static_cast<double>(snapY), static_cast<double>(snapZ)});
-    pickDistSq = static_cast<float>(d * d);
-    rankDistSq = pickDistSq;
+    rankDistSq = static_cast<float>(d * d);
+    // Ordinary kind: the ray distance IS the acceptance test. Heuristic kind: accept on EITHER the
+    // shape heuristic (cursor is over the shape) OR the plain ray distance (cursor points almost
+    // straight at the point) — the latter keeps the pre-#372 envelope for a shape smaller than the
+    // aperture, which "over the shape" alone would shrink. A phantom needs BOTH to be large, so
+    // taking the min never revives one.
+    pickDistSq = heuristicAccept ? std::min(pickDistSq, rankDistSq) : rankDistSq;
   }
   if (!(pickDistSq <= tol2) || pickDistSq > 1.e28f)
     return;
@@ -338,6 +354,49 @@ void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind k
   for (int vi = v0; vi < v1; ++vi)
     zSum += static_cast<double>(verts[static_cast<size_t>(vi * 3 + 2)]);
   return static_cast<float>(zSum / static_cast<double>(v1 - v0));
+}
+
+/// Where the cursor ray crosses the horizontal plane z = \p planeZ, as XY. Returns false when the
+/// ray is (near-)parallel to that plane or the crossing is behind the camera.
+///
+/// This is the point at which a "cursor is over the SHAPE" CENTRE heuristic must be evaluated once
+/// the view is orbited (issue #372). `wx,wy` handed to \ref FindBest is the ray's crossing of the
+/// WORK plane, a different plane — testing containment there let a ray passing over an elevated
+/// shape's footprint, or above a large one in a shallow orbit, read "inside" and fire a phantom
+/// CENTRE. Every plan-view CENTRE heuristic (`CircleCenterPickDistSq` and friends) is a pure-XY
+/// test, i.e. it already treats a curve as living in the plane z = its own elevation; this feeds it
+/// the cursor position in that same plane. A ray parallel to the plane (an edge-on FRONT / LEFT /
+/// RIGHT / BACK view of a plan drawing) has no crossing; the caller then falls back to accepting
+/// CENTRE only when the ray points almost exactly at the point (see \ref CenterHeuristicPoint).
+[[nodiscard]] bool RayXyAtPlaneZ(const ray3d::Ray& ray, double planeZ, float* hx, float* hy) {
+  const double dz = ray.dir.z;
+  if (dz > -1.e-6 && dz < 1.e-6)
+    return false;
+  const double t = (planeZ - ray.origin.z) / dz;
+  if (t < 0.0)
+    return false;
+  *hx = static_cast<float>(ray.origin.x + t * ray.dir.x);
+  *hy = static_cast<float>(ray.origin.y + t * ray.dir.y);
+  return true;
+}
+
+/// Resolves where a plan-view CENTRE-family heuristic (`CircleCenterPickDistSq` and friends) should
+/// be evaluated for a candidate whose plane is z = \p planeZ, and whether that point can be trusted.
+///
+/// \p px,\p py always come back usable: the plain cursor (\p wx,\p wy) in plan / paper space, or —
+/// orbited — the cursor ray's crossing of the shape's plane. The return value is whether the
+/// heuristic applies: false when an orbited ray is (near-)parallel to the plane (an edge-on
+/// FRONT / LEFT / RIGHT / BACK view), in which case \p px,\p py stay at the raw cursor and the
+/// caller should fall back to the plain ray-distance acceptance (\c heuristicAccept = false) —
+/// i.e. the CENTRE still resolves when the ray points almost exactly at it, as it did before
+/// issue #372, just not from "anywhere over the shape".
+[[nodiscard]] bool CenterHeuristicPoint(const SnapPickAccum& acc, double wx, double wy, float planeZ, float* px,
+                                        float* py) {
+  *px = static_cast<float>(wx);
+  *py = static_cast<float>(wy);
+  if (!acc.ray)
+    return true;
+  return RayXyAtPlaneZ(*acc.ray, static_cast<double>(planeZ), px, py);
 }
 
 /// Foot of perpendicular from \p ref onto segment AB (clamped). Cursor \p wx,\p wy only gates distance.
@@ -818,8 +877,11 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float cx = C[i];
       const float cy = C[i + 1];
       const float r = C[i + 3];
-      const float p2 = CircleCenterPickDistSq(wx, wy, cx, cy, r, tolWorld);
-      ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld, C[i + 2]);
+      float hx = 0.f;
+      float hy = 0.f;
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, C[i + 2], &hx, &hy);
+      const float p2 = CircleCenterPickDistSq(hx, hy, cx, cy, r, tolWorld);
+      ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld, C[i + 2], /*heuristicAccept=*/heur);
     }
   }
 
@@ -856,9 +918,12 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       float gcx = 0.f;
       float gcy = 0.f;
       if (ClosedPolylineCentroid(cmd.userPolylineVerts, v0, v1, &gcx, &gcy)) {
-        const float p2 = ClosedPolyGeometricPickDistSq(wx, wy, cmd.userPolylineVerts, v0, v1);
-        ConsiderSnap(&acc, wx, wy, gcx, gcy, Kind::GeometricCenter, p2, tolWorld,
-                     PolylineLoopMeanZ(cmd.userPolylineVerts, v0, v1));
+        const float meanZ = PolylineLoopMeanZ(cmd.userPolylineVerts, v0, v1);
+        float hx = 0.f;
+        float hy = 0.f;
+        const bool heur = CenterHeuristicPoint(acc, wx, wy, meanZ, &hx, &hy);
+        const float p2 = ClosedPolyGeometricPickDistSq(hx, hy, cmd.userPolylineVerts, v0, v1);
+        ConsiderSnap(&acc, wx, wy, gcx, gcy, Kind::GeometricCenter, p2, tolWorld, meanZ, /*heuristicAccept=*/heur);
       }
     }
   }
@@ -928,8 +993,11 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     if (ma < 1e-8f || kEllSnapSeg < 3)
       continue;
     if (wantCenter) {
-      const float p2 = EllipseCenterPickDistSq(wx, wy, el, tolWorld);
-      ConsiderSnap(&acc, wx, wy, el.cx, el.cy, Kind::Center, p2, tolWorld, el.z);
+      float hx = 0.f;
+      float hy = 0.f;
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, el.z, &hx, &hy);
+      const float p2 = EllipseCenterPickDistSq(hx, hy, el, tolWorld);
+      ConsiderSnap(&acc, wx, wy, el.cx, el.cy, Kind::Center, p2, tolWorld, el.z, /*heuristicAccept=*/heur);
     }
     const float ux = el.majVx / ma;
     const float uy = el.majVy / ma;
@@ -983,8 +1051,15 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     const float arm =
         SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
     for (const SurveyPoint& sp : cmd.surveyPoints) {
-      const float p2 = MinDistSqToSurveyMarker(wx, wy, sp.easting, sp.northing, arm);
-      ConsiderSnap(&acc, wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, p2, tolWorld, sp.elevation);  // elevation IS the point's Z (REQ-057)
+      // The X marker's half-span is a fixed plotted size, so at a zoomed-out view it is many
+      // apertures wide — the same "cursor is over the SHAPE" heuristic circles get, and the same
+      // orbited-view breakage (issue #372): evaluate it where the ray meets the point's own plane.
+      float hx = 0.f;
+      float hy = 0.f;
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, sp.elevation, &hx, &hy);
+      const float p2 = MinDistSqToSurveyMarker(hx, hy, sp.easting, sp.northing, arm);
+      ConsiderSnap(&acc, wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, p2, tolWorld, sp.elevation,
+                   /*heuristicAccept=*/heur);  // elevation IS the point's Z (REQ-057)
     }
   }
 
@@ -1015,6 +1090,11 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       if (wantCenter) {
         bctr.clear();
         CadBlockCollectWorldCenters(cmd.blockDefs, br, &bctr);
+        // Only the centre POINTS are collected, not each shape's radius/extent, so a block circle's
+        // CENTRE cannot get the "cursor is over the shape" acceptance native circles get under an
+        // orbited camera (issue #372) — it resolves only when the ray passes near the centre point
+        // itself. Widening CadBlockCollectWorldCenters is a separate change; #372's repro is a
+        // native CIRCLE.
         for (const CadBlockWorldPoint& p : bctr)
           Consider(&acc, wx, wy, p.x, p.y, Kind::Center, tolWorld, p.z);
       }
@@ -1243,8 +1323,13 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
           float lcx = 0.f, lcy = 0.f;
           pdfToLocal(SC[i], SC[i + 1], &lcx, &lcy);
           const float lr = SC[i + 2] * sc;
-          const float p2 = CircleCenterPickDistSq(wx, wy, lcx, lcy, lr, tolWorld);
-          ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld);
+          float hx = 0.f;
+          float hy = 0.f;
+          // planeZ 0: a PDF underlay's snap geometry sits on the drawing datum, the same assumption
+          // the committed snapZ (0, below) already makes. If underlays gain an elevation both move.
+          const bool heur = CenterHeuristicPoint(acc, wx, wy, 0.f, &hx, &hy);
+          const float p2 = CircleCenterPickDistSq(hx, hy, lcx, lcy, lr, tolWorld);
+          ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld, 0.f, /*heuristicAccept=*/heur);
         }
       }
 
