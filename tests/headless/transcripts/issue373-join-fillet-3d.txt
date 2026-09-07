@@ -1,0 +1,131 @@
+# issue #373 — JOIN of two non-coplanar-looking 3D polylines dropped a vertical/near-vertical run,
+# and FILLET could not touch two lines whose endpoints are not both at world Z=0.
+#
+# JOIN's edge walk only ever compared X/Y at each endpoint and always wrote 0 for the joined
+# polyline's own Z, so two 3D polylines sharing a plan location at different elevations fused onto
+# the wrong endpoint and every vertex landed on Z=0. FILLET's two-line solve was pure 2D throughout
+# (FilletCurve, SolveFilletCenter, the arc it built) so a picked line's own Z was silently ignored.
+#
+# LINE's own typed input has no X,Y,Z form (3DPOLY does; a plain LINE silently drops a third field —
+# a separate, pre-existing, documented limitation, not part of this fix). ELEV changed BETWEEN two
+# picks of the same LINE is what builds a true 3D line segment here instead.
+
+# ── 1. JOIN of two 3D polylines preserves every vertex's Z ─────────────────────────────────────
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 0,0,10
+CMD END
+CMD 3DPOLY
+CMD 0,0,10
+CMD 10,0,10
+CMD END
+
+CHECK ALL
+EXPECT POLYLINES 2
+
+CMD JOIN
+CLICK -5 -5
+CLICK 15 5
+EXPECT SELECTED 2
+CMD
+EXPECT LOG JOIN — created 1 polyline(s).
+CHECK ALL
+EXPECT POLYLINES 1
+# All three vertices survive with their own Z — nothing collapses to 0.
+EXPECT POLYVERT 0 0 0 0 0
+EXPECT POLYVERT 0 1 0 0 10
+EXPECT POLYVERT 0 2 10 0 10
+
+# ── 2. A vertical run sharing a plan position at a DIFFERENT elevation is NOT fused to it ────────
+NEW
+CMD ELEV 0
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD ELEV 5
+CMD LINE
+CMD 0,0
+CMD 0,-10
+ESC
+CMD ELEV 0
+
+CMD JOIN
+CLICK -5 -12
+CLICK 12 5
+EXPECT SELECTED 2
+CMD
+# The two lines never actually touch (Z 0 vs Z 5 at the shared plan XY) — nothing merges.
+EXPECT LOG JOIN — nothing merged: the selected objects' endpoints do not connect.
+EXPECT LINES 2
+EXPECT POLYLINES 0
+
+# ── 3. FILLET of two parallel 3D lines connects them with a semicircle, in 3D ───────────────────
+# Line 2 is drawn flat, then MOVEd up by Z=5 as a rigid whole (a plain LINE's own typed input has no
+# X,Y,Z form — only 3DPOLY does) — two lines this way are still exactly coplanar (any two parallel
+# lines are), so this exercises the plane build, the projected 2D solve and the 3D semicircle special
+# case end to end, with hand-computable expected numbers.
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 0,3
+CMD 10,3
+ESC
+CHECK ALL
+EXPECT LINES 2
+
+BOX -1 2 11 4
+CMD MOVE
+CMD 0,0
+CMD @0,0,5
+ESC
+CHECK ALL
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+EXPECT LINEXYZ 1 0 3 5 10 3 5
+
+CMD FILLET
+CLICK 1 0
+CLICK 9 3
+EXPECT LOG FILLET — parallel 3D lines connected by a semicircle (radius set by the gap between them, not the current FILLET radius).
+CHECK ALL
+EXPECT LINES 2
+EXPECT ARCS 1
+# Line 1 anchors the semicircle at its own (unmoved) start; line 2's near end already sits exactly at
+# the tangent point, so neither line's stored endpoints change.
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+EXPECT LINEXYZ 1 0 3 5 10 3 5
+EXPECT ARCPOINTS 0 0 0 0 0 3 5
+
+# ── 4. Two genuinely skew (non-coplanar) 3D lines are refused, not guessed at ───────────────────
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 0,5
+CMD 0,15
+ESC
+CHECK ALL
+EXPECT LINES 2
+
+BOX -1 4 1 16
+CMD MOVE
+CMD 0,0
+CMD @0,0,5
+ESC
+CHECK ALL
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+EXPECT LINEXYZ 1 0 5 5 0 15 5
+
+CMD FILLET
+CLICK 5 0
+CLICK 0 10
+EXPECT LOG FILLET — the two lines do not share a plane (non-coplanar 3D lines are not supported); refused.
+CHECK ALL
+EXPECT LINES 2
+EXPECT ARCS 0

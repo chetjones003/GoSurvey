@@ -351,6 +351,10 @@ struct FilletCurve {
   bool isLine = true;
   float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
   float cx = 0.f, cy = 0.f, r = 0.f;
+  // issue #373: a Line's own Z at each endpoint, in WORLD space (unused for Arc/Circle). Only
+  // consulted by the two-line 3D fillet path — every other consumer keeps working entirely in
+  // whatever 2D frame it was already given (world XY, or a projected plane's own 2D coordinates).
+  float az0 = 0.f, az1 = 0.f;
 };
 
 /// A curveisect::Seg standing in for curve `(ax,ay)-(bx,by)`'s INFINITE extension. curveisect has no
