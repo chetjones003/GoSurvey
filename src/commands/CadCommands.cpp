@@ -103,6 +103,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.userPolylineOffsets    = cmd.userPolylineOffsets;
   doc.userPolylineVerts      = cmd.userPolylineVerts;
   doc.userPolylineVertsBulge = cmd.userPolylineVertsBulge;  // REQ-316 / ADR-047
+  doc.userPolylineVertsNormal = cmd.userPolylineVertsNormal;  // REQ-325 / ADR-053
   doc.userPolylineClosed     = cmd.userPolylineClosed;
   doc.userPolylineAttrs      = cmd.userPolylineAttrs;
   doc.featureLineOffsets     = cmd.featureLineOffsets;   // REQ-087
@@ -192,6 +193,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.userPolylineOffsets        = doc.userPolylineOffsets;
   cmd.userPolylineVerts          = doc.userPolylineVerts;
   cmd.userPolylineVertsBulge     = doc.userPolylineVertsBulge;  // REQ-316 / ADR-047
+  cmd.userPolylineVertsNormal    = doc.userPolylineVertsNormal;  // REQ-325 / ADR-053
   cmd.userPolylineClosed         = doc.userPolylineClosed;
   cmd.userPolylineAttrs          = doc.userPolylineAttrs;
   cmd.featureLineOffsets         = doc.featureLineOffsets;   // REQ-087
@@ -1512,6 +1514,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.userPolylineOffsets  = st.userPolylineOffsets;
   snap.userPolylineVerts    = st.userPolylineVerts;
   snap.userPolylineVertsBulge = st.userPolylineVertsBulge;  // REQ-316 / ADR-047
+  snap.userPolylineVertsNormal = st.userPolylineVertsNormal;  // REQ-325 / ADR-053
   snap.userPolylineClosed   = st.userPolylineClosed;
   snap.userPolylineAttrs    = st.userPolylineAttrs;
   snap.featureLineOffsets   = st.featureLineOffsets;   // REQ-087
@@ -1554,6 +1557,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.userPolylineOffsets  = snap.userPolylineOffsets;
   st.userPolylineVerts    = snap.userPolylineVerts;
   st.userPolylineVertsBulge = snap.userPolylineVertsBulge;  // REQ-316 / ADR-047
+  st.userPolylineVertsNormal = snap.userPolylineVertsNormal;  // REQ-325 / ADR-053
   st.userPolylineClosed   = snap.userPolylineClosed;
   st.userPolylineAttrs    = snap.userPolylineAttrs;
   st.featureLineOffsets   = snap.featureLineOffsets;   // REQ-087
@@ -8205,6 +8209,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
       // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
       uint8_t cl = 0;
       if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
         cl = st.userPolylineClosed[static_cast<size_t>(pi)];
@@ -8702,6 +8707,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
       // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
       uint8_t cl = 0;
       if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
         cl = st.userPolylineClosed[static_cast<size_t>(pi)];
@@ -9104,6 +9110,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
       // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
       uint8_t cl = 0;
       if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
         cl = st.userPolylineClosed[static_cast<size_t>(pi)];
@@ -11543,7 +11550,8 @@ static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, float& wx, 
 }
 
 void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
-                             bool windowSelectionSubtract, bool fenceLeftToRightWindowMode) {
+                             bool windowSelectionSubtract, bool fenceLeftToRightWindowMode,
+                             const ray3d::Ray* pickRay) {
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
   using RP = AppCommandState::RotatePhase;
@@ -12411,7 +12419,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   }
 
   if (st.active == K::Fillet) {
-    HandleFilletViewportPick(st, wx, wy, log);
+    HandleFilletViewportPick(st, wx, wy, log, pickRay);
     return;
   }
 
@@ -14836,6 +14844,7 @@ static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<
   for (size_t oi = static_cast<size_t>(pi + 1); oi < st.userPolylineOffsets.size(); ++oi)
     st.userPolylineOffsets[oi] += delta;
   SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
+  SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
 }
 
 /// Appends a brand-new polyline to the end of the CSR arrays. Precondition: at least one polyline
@@ -14853,6 +14862,7 @@ static void AppendNewPolyline(AppCommandState& st, const std::vector<std::pair<f
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
   st.userPolylineAttrs.push_back(std::move(attrs));
   SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
+  SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
 }
 
 static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
@@ -15848,8 +15858,10 @@ static bool BuildFilletCurveFromEntity(const AppCommandState& st, const Selected
     out->isLine = true;
     out->ax = st.userLinesFlat[k];
     out->ay = st.userLinesFlat[k + 1];
+    out->az0 = st.userLinesFlat[k + 2];
     out->bx = st.userLinesFlat[k + 3];
     out->by = st.userLinesFlat[k + 4];
+    out->az1 = st.userLinesFlat[k + 5];
     return true;
   }
   if (e.type == T::Arc) {
@@ -16110,6 +16122,322 @@ static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, in
   return true;
 }
 
+/// issue #373: the 3D fillet solve's own "straight curve" — a plain Line, or a Polyline's own free
+/// end segment (Case B already restricts a Polyline to that, same as the 2D path) — reduced to its
+/// two WORLD-space 3D endpoints, plus enough to trim it back afterward. Kept separate from
+/// \ref FilletCurve, which stays the plane-local 2D shape both this and the legacy 2D solve share.
+struct Fillet3DCurve {
+  ray3d::Vec3 p0, p1;
+  bool isPolyline = false;
+  int viA = -1, viB = -1;  // Polyline only: p0's and p1's own vertex index (LOCAL store, not *3)
+};
+
+/// Reads a Line or Polyline-end-segment's own two endpoints in world XYZ. False on a bad index or an
+/// entity type the 3D solve does not handle (Arc/Circle — unchanged, still 2D-only via the legacy
+/// path, matching REQ-201's "refuse rather than guess" for what is not explicitly supported).
+static bool ReadFillet3DCurve(const AppCommandState& st, const SelectedEntity& e, int polySeg, Fillet3DCurve* out) {
+  using T = SelectedEntity::Type;
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    out->p0 = {st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 2]};
+    out->p1 = {st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5]};
+    out->isPolyline = false;
+    return true;
+  }
+  if (e.type == T::Polyline) {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size() || polySeg < 0)
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    const int viA = v0 + polySeg, viB = v0 + ((polySeg + 1) % numVerts);
+    const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+    if (b3 + 2 >= st.userPolylineVerts.size())
+      return false;
+    out->p0 = {st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[a3 + 2]};
+    out->p1 = {st.userPolylineVerts[b3], st.userPolylineVerts[b3 + 1], st.userPolylineVerts[b3 + 2]};
+    out->isPolyline = true;
+    out->viA = viA;
+    out->viB = viB;
+    return true;
+  }
+  return false;
+}
+
+/// issue #373: FILLET between two Line/Polyline-end-segment curves whose four endpoints are not all
+/// flat at world Z=0. Two curves that share SOME plane (even a tilted/vertical one) get a real
+/// tangent arc, solved by reusing the exact same 2D machinery (\ref SolveFilletCenter, \ref
+/// FilletTangentPointOnLine, \ref FilletParallelSemicircle) every OTHER fillet already goes through
+/// — just fed that plane's own projected 2D coordinates instead of world XY — then mapped back to
+/// world XYZ. Two curves with no common plane at all (true skew lines) are refused by name (REQ-201):
+/// there is no single correct arc for them, and guessing one silently would be worse than refusing.
+static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1, int polySeg1,
+                                   const SelectedEntity& e2, int polySeg2, float pick1X, float pick1Y,
+                                   const ray3d::Ray& pick1Ray, float pick2X, float pick2Y,
+                                   const ray3d::Ray* pick2Ray, std::vector<std::string>& log) {
+  Fillet3DCurve curve1, curve2;
+  if (!ReadFillet3DCurve(st, e1, polySeg1, &curve1) || !ReadFillet3DCurve(st, e2, polySeg2, &curve2))
+    return false;
+  const ray3d::Vec3 a0 = curve1.p0, a1 = curve1.p1, b0 = curve2.p0, b1 = curve2.p1;
+
+  ucs::Ucs frame{};
+  ray3d::Vec3 offPlanePt = b1;
+  bool haveFrame = ucs::FromThreePoints(a0, a1, b0, &frame);
+  if (!haveFrame) {
+    haveFrame = ucs::FromThreePoints(a0, a1, b1, &frame);
+    offPlanePt = b0;
+  }
+  if (!haveFrame) {
+    log.push_back("FILLET — the two lines are degenerate; refused.");
+    return true;
+  }
+
+  double tol = 1e-3;
+  {
+    double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
+    if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
+      tol = std::max(1e-5, 1e-4 * std::max(mxX - mnX, mxY - mnY));
+  }
+  if (std::fabs(ucs::SignedDistanceToPlane(frame, offPlanePt)) > tol) {
+    log.push_back("FILLET — the two lines do not share a plane (non-coplanar 3D lines are not "
+                  "supported); refused.");
+    return true;
+  }
+
+  const ucs::Point2D pa0 = ucs::WorldToPlane(frame, a0);
+  const ucs::Point2D pa1 = ucs::WorldToPlane(frame, a1);
+  const ucs::Point2D pb0 = ucs::WorldToPlane(frame, b0);
+  const ucs::Point2D pb1 = ucs::WorldToPlane(frame, b1);
+  FilletCurve c1{}, c2{};
+  c1.isLine = true;
+  c1.ax = static_cast<float>(pa0.x);
+  c1.ay = static_cast<float>(pa0.y);
+  c1.bx = static_cast<float>(pa1.x);
+  c1.by = static_cast<float>(pa1.y);
+  c2.isLine = true;
+  c2.ax = static_cast<float>(pb0.x);
+  c2.ay = static_cast<float>(pb0.y);
+  c2.bx = static_cast<float>(pb1.x);
+  c2.by = static_cast<float>(pb1.y);
+
+  // The 2D pick points only disambiguate which candidate solution to use; the nearest point on
+  // each line (in its own WORLD XY projection) is guaranteed to lie on that line, hence exactly on
+  // the shared plane — project that instead of the raw 2D pick.
+  auto nearestOnLine = [](const ray3d::Vec3& p0, const ray3d::Vec3& p1, float px, float py) -> ray3d::Vec3 {
+    const double vx = p1.x - p0.x, vy = p1.y - p0.y;
+    const double len2 = vx * vx + vy * vy;
+    if (len2 < 1e-18)
+      return p0;
+    const double t = ((px - p0.x) * vx + (py - p0.y) * vy) / len2;
+    return {p0.x + t * vx, p0.y + t * vy, p0.z + t * (p1.z - p0.z)};
+  };
+  // issue #373: a pick projected exactly ONTO its own line (nearestOnLine) throws away the one
+  // thing that tells two mathematically valid tangent arcs apart — which side of the line the user
+  // actually clicked on. A point exactly on the line is equidistant from both perpendicular offset
+  // candidates, so SolveFilletCenter's nearest-to-pick tie-break degenerates to iteration order (a
+  // real report: a small-radius fillet rounding the OUTSIDE of a corner instead of the inside).
+  // Whenever the click's own camera ray is available (any orbited/non-plan view), intersecting it
+  // with THIS fillet's own plane gives the exact point the user pointed at, off-line component
+  // included — nearestOnLine stays the fallback for a flat plan-view pick (where wx,wy already IS
+  // the true in-plane point) or the rare case a ray misses the plane edge-on.
+  const ray3d::Plane solvePlane{frame.origin, frame.zAxis};
+  ray3d::Vec3 pickPt1{};
+  const bool haveRayPick1 = pick1Ray.valid() && ray3d::RayPlaneIntersect(pick1Ray, solvePlane, &pickPt1);
+  ray3d::Vec3 pickPt2{};
+  const bool haveRayPick2 =
+      pick2Ray && pick2Ray->valid() && ray3d::RayPlaneIntersect(*pick2Ray, solvePlane, &pickPt2);
+  const ucs::Point2D pp1 =
+      ucs::WorldToPlane(frame, haveRayPick1 ? pickPt1 : nearestOnLine(a0, a1, pick1X, pick1Y));
+  const ucs::Point2D pp2 =
+      ucs::WorldToPlane(frame, haveRayPick2 ? pickPt2 : nearestOnLine(b0, b1, pick2X, pick2Y));
+
+  // issue #373: trims either curve kind back to a plane-local 2D tangent point. A Line moves
+  // whichever of its OWN two endpoints sits nearer the tangent point (same rule the 2D path uses);
+  // a Polyline moves its already-known free-end vertex (\ref ReadFillet3DCurve) — there is no
+  // "nearer of two ends" choice there, since the other end is a shared interior vertex Case B never
+  // lets this touch.
+  auto trimCurveTo3D = [&](const SelectedEntity& e, const Fillet3DCurve& curve, float tx2d, float ty2d) -> bool {
+    const ray3d::Vec3 t3d = ucs::PlaneToWorld(frame, ucs::Point2D{tx2d, ty2d});
+    if (curve.isPolyline) {
+      if (curve.viA < 0 || curve.viB < 0)
+        return false;
+      // Which vertex moves is decided by nearness to the TANGENT POINT, the same rule the Line
+      // branch below uses (and for the same reason: a single-segment open polyline's one edge is
+      // simultaneously its own "first" and "last", so polySeg alone cannot say which end is free —
+      // only the corner this fillet is actually rounding can).
+      const ucs::Point2D pp0 = ucs::WorldToPlane(frame, curve.p0);
+      const ucs::Point2D pp1b = ucs::WorldToPlane(frame, curve.p1);
+      const float d0 = (tx2d - static_cast<float>(pp0.x)) * (tx2d - static_cast<float>(pp0.x)) +
+                       (ty2d - static_cast<float>(pp0.y)) * (ty2d - static_cast<float>(pp0.y));
+      const float d1 = (tx2d - static_cast<float>(pp1b.x)) * (tx2d - static_cast<float>(pp1b.x)) +
+                       (ty2d - static_cast<float>(pp1b.y)) * (ty2d - static_cast<float>(pp1b.y));
+      const bool nearFirst = d0 <= d1;
+      const int movingVi = nearFirst ? curve.viA : curve.viB;
+      const size_t k = static_cast<size_t>(movingVi) * 3;
+      if (k + 2 >= st.userPolylineVerts.size())
+        return false;
+      const ray3d::Vec3 fixed = nearFirst ? curve.p1 : curve.p0;
+      const float newLen = static_cast<float>(ray3d::Length(ray3d::Sub(t3d, fixed)));
+      if (!(newLen > 1e-6f)) {
+        log.push_back("FILLET — that would collapse a polyline segment to zero length; refused.");
+        return false;
+      }
+      st.userPolylineVerts[k] = static_cast<float>(t3d.x);
+      st.userPolylineVerts[k + 1] = static_cast<float>(t3d.y);
+      st.userPolylineVerts[k + 2] = static_cast<float>(t3d.z);
+      return true;
+    }
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    const ucs::Point2D pp0 = ucs::WorldToPlane(frame, curve.p0);
+    const ucs::Point2D pp1b = ucs::WorldToPlane(frame, curve.p1);
+    const float d0 = (tx2d - static_cast<float>(pp0.x)) * (tx2d - static_cast<float>(pp0.x)) +
+                     (ty2d - static_cast<float>(pp0.y)) * (ty2d - static_cast<float>(pp0.y));
+    const float d1 = (tx2d - static_cast<float>(pp1b.x)) * (tx2d - static_cast<float>(pp1b.x)) +
+                     (ty2d - static_cast<float>(pp1b.y)) * (ty2d - static_cast<float>(pp1b.y));
+    const bool nearFirst = d0 <= d1;
+    const float newLen =
+        static_cast<float>(ray3d::Length(ray3d::Sub(t3d, nearFirst ? curve.p1 : curve.p0)));
+    if (!(newLen > 1e-6f)) {
+      log.push_back("FILLET — that would collapse a line to zero length; refused.");
+      return false;
+    }
+    if (nearFirst) {
+      st.userLinesFlat[k] = static_cast<float>(t3d.x);
+      st.userLinesFlat[k + 1] = static_cast<float>(t3d.y);
+      st.userLinesFlat[k + 2] = static_cast<float>(t3d.z);
+    } else {
+      st.userLinesFlat[k + 3] = static_cast<float>(t3d.x);
+      st.userLinesFlat[k + 4] = static_cast<float>(t3d.y);
+      st.userLinesFlat[k + 5] = static_cast<float>(t3d.z);
+    }
+    return true;
+  };
+
+  // Builds the ARC — but its startRad/sweepRad must be measured in the arc's own CANONICAL frame,
+  // `ucs::FromNormal(centre, normal)` (REQ-312, CadEntities.hpp's own CurvePlane), not in whatever
+  // ad-hoc frame this function's own 2D solve happened to use. FromThreePoints' X axis runs along
+  // curve1's own direction — a choice made for the solve's convenience — while FromNormal's X axis
+  // is the deterministic Arbitrary Axis Algorithm from the normal alone; the two agree only by
+  // accident (a real bug this fixed, caught by a non-90-degree corner: the semicircle special case's
+  // exact 180-degree sweep hid it, since a reflection through the centre lands on the same point in
+  // ANY consistently-handed frame sharing that centre and normal, but a partial sweep does not).
+  auto addArc3D = [&](const ray3d::Vec3& c3d, const ray3d::Vec3& startWorld, const ray3d::Vec3& endWorld,
+                      float r) -> bool {
+    ucs::Ucs canon{};
+    if (!ucs::FromNormal(c3d, frame.zAxis, &canon)) {
+      log.push_back("FILLET — could not orient the fillet arc's plane; refused.");
+      return false;
+    }
+    const ucs::Point2D sLocal = ucs::WorldToPlane(canon, startWorld);
+    const ucs::Point2D eLocal = ucs::WorldToPlane(canon, endWorld);
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    const float thetaA = std::atan2(static_cast<float>(sLocal.y), static_cast<float>(sLocal.x));
+    const float thetaB = std::atan2(static_cast<float>(eLocal.y), static_cast<float>(eLocal.x));
+    float sweep = FilletCcwAngleDelta(thetaA, thetaB);
+    if (sweep > kPi)
+      sweep -= kTwoPi;
+    CadArc arc{};
+    arc.cx = static_cast<float>(c3d.x);
+    arc.cy = static_cast<float>(c3d.y);
+    arc.z = static_cast<float>(c3d.z);
+    arc.r = r;
+    arc.startRad = thetaA;
+    arc.sweepRad = sweep;
+    arc.nx = static_cast<float>(frame.zAxis.x);
+    arc.ny = static_cast<float>(frame.zAxis.y);
+    arc.nz = static_cast<float>(frame.zAxis.z);
+    st.userArcs.push_back(arc);
+    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+    return true;
+  };
+
+  if (FilletLinesAreParallel(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by)) {
+    float anchorX = 0.f, anchorY = 0.f, projX = 0.f, projY = 0.f;
+    FilletParallelSemicircle(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by, pp1.x, pp1.y, &anchorX,
+                             &anchorY, &projX, &projY);
+    const float semiR = 0.5f * std::hypot(projX - anchorX, projY - anchorY);
+    if (semiR < 1e-4f) {
+      log.push_back("FILLET — the two lines coincide; refused.");
+      return true;
+    }
+    PushUndoSnapshot(st, "Fillet");
+    const bool ok = !st.cornerTrimMode || trimCurveTo3D(e2, curve2, projX, projY);
+    if (ok) {
+      const float cx = 0.5f * (anchorX + projX), cy = 0.5f * (anchorY + projY);
+      const ray3d::Vec3 c3d = ucs::PlaneToWorld(frame, ucs::Point2D{cx, cy});
+      const ray3d::Vec3 startWorld = ucs::PlaneToWorld(frame, ucs::Point2D{anchorX, anchorY});
+      const ray3d::Vec3 endWorld = ucs::PlaneToWorld(frame, ucs::Point2D{projX, projY});
+      if (addArc3D(c3d, startWorld, endWorld, semiR)) {
+        BumpCadGpuCache(st);
+        log.push_back("FILLET — parallel 3D lines connected by a semicircle (radius set by the gap "
+                      "between them, not the current FILLET radius).");
+      }
+    }
+    return true;
+  }
+
+  float cx = 0.f, cy = 0.f;
+  if (!SolveFilletCenter(c1, c2, st.filletRadius, pp1.x, pp1.y, pp2.x, pp2.y, &cx, &cy)) {
+    log.push_back("FILLET — no valid tangent arc exists for that radius; refused.");
+    return true;
+  }
+  float t1x = 0.f, t1y = 0.f, t2x = 0.f, t2y = 0.f;
+  FilletTangentPointOnLine(c1, cx, cy, &t1x, &t1y);
+  FilletTangentPointOnLine(c2, cx, cy, &t2x, &t2y);
+
+  // "Radius too large" check (D-2026-08-25-b), the 3D counterpart of the 2D path's own
+  // FilletRadiusFitsCurve: the plain radius-0 intersection (p0) is the TRUE corner, and a valid
+  // tangent point must stay within each line's own span measured from whichever original endpoint
+  // sits nearer p0 out to the far one — going past the far endpoint means the requested radius needs
+  // more line than either curve actually has. Checked in the same plane-local 2D coordinates
+  // everything else in this function already uses, so the existing (curve-agnostic) helpers apply
+  // unchanged.
+  float p0x = 0.f, p0y = 0.f;
+  const bool haveP0 = SolveFilletCenter(c1, c2, 0.f, pp1.x, pp1.y, pp2.x, pp2.y, &p0x, &p0y);
+  if (haveP0) {
+    const bool near1First = NearerToFirstPoint(p0x, p0y, c1.ax, c1.ay, c1.bx, c1.by);
+    const bool near2First = NearerToFirstPoint(p0x, p0y, c2.ax, c2.ay, c2.bx, c2.by);
+    const bool fits1 = FilletPointWithinSpan(near1First ? c1.ax : c1.bx, near1First ? c1.ay : c1.by,
+                                             near1First ? c1.bx : c1.ax, near1First ? c1.by : c1.ay, t1x, t1y);
+    const bool fits2 = FilletPointWithinSpan(near2First ? c2.ax : c2.bx, near2First ? c2.ay : c2.by,
+                                             near2First ? c2.bx : c2.ax, near2First ? c2.by : c2.ay, t2x, t2y);
+    if (!fits1 || !fits2) {
+      log.push_back("FILLET — radius " + std::to_string(st.filletRadius) +
+                    " is too large for the selected objects; refused.");
+      return true;
+    }
+  }
+
+  PushUndoSnapshot(st, "Fillet");
+  bool ok1 = true, ok2 = true;
+  if (st.cornerTrimMode) {
+    ok1 = trimCurveTo3D(e1, curve1, t1x, t1y);
+    ok2 = trimCurveTo3D(e2, curve2, t2x, t2y);
+  }
+  if (ok1 && ok2) {
+    const bool radiusIsZero = st.filletRadius < 1e-4f;
+    bool arcOk = true;
+    if (!radiusIsZero) {
+      const ray3d::Vec3 c3d = ucs::PlaneToWorld(frame, ucs::Point2D{cx, cy});
+      const ray3d::Vec3 startWorld = ucs::PlaneToWorld(frame, ucs::Point2D{t1x, t1y});
+      const ray3d::Vec3 endWorld = ucs::PlaneToWorld(frame, ucs::Point2D{t2x, t2y});
+      arcOk = addArc3D(c3d, startWorld, endWorld, st.filletRadius);
+    }
+    if (arcOk) {
+      BumpCadGpuCache(st);
+      log.push_back(radiusIsZero ? "FILLET — corner trimmed to a point (radius 0)."
+                                 : "FILLET — 3D corner filleted.");
+    }
+  }
+  return true;
+}
+
 static std::string FilletPromptSuffix(const AppCommandState& st) {
   char buf[96];
   std::snprintf(buf, sizeof(buf), "<R=%.3f, %s>", static_cast<double>(st.filletRadius),
@@ -16145,11 +16473,16 @@ void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log) {
 /// are the SAME polyline's adjacent segments (Case A, \ref ApplyFilletPolylineCorner) or two
 /// different curves (Case B), computes the tangent arc (or the parallel-lines semicircle special
 /// case), applies the trim/extend (Trim mode only), and loops back to "select first object".
-void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
+                              const ray3d::Ray* pickRay) {
   using FP = AppCommandState::FilletPhase;
   SelectedEntity hit{};
   float d2 = 0.f;
-  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+  // issue #373 follow-up: `wx,wy` alone is the click's flattened work-plane intersection, which is
+  // nowhere near a line that does not lie on the current work plane (e.g. a vertical run seen from
+  // an orbited camera or an ortho Front/Left view) — the TRUE 3D ray-to-segment distance is what has
+  // to decide the hit whenever the camera provides one.
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2, pickRay)) {
     log.push_back("FILLET — no object at pick.");
     return;
   }
@@ -16162,6 +16495,7 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
     st.filletFirstPolySeg = polySeg;
     st.filletFirstPickX = wx;
     st.filletFirstPickY = wy;
+    st.filletFirstPickRay = pickRay ? *pickRay : ray3d::Ray{};
     st.filletPhase = FP::WaitSecondEntity;
     log.push_back("FILLET — select second object:");
     return;
@@ -16213,6 +16547,33 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
     if (!polylineIsEndSegmentOnly(st.filletFirstEntity, st.filletFirstPolySeg) ||
         !polylineIsEndSegmentOnly(hit, polySeg)) {
       return;
+    }
+
+    // issue #373: two straight curves (Line, or a Polyline's own free-end segment) whose endpoints
+    // are not all flat at world Z=0 go through the dedicated 3D solve above instead of the legacy
+    // 2D-only path below, which silently drops Z. Arc/Circle stay on the legacy path unconditionally
+    // — REQ-201's "refuse rather than guess" for what the 3D solve does not explicitly cover.
+    auto isFilletStraightType = [](SelectedEntity::Type t) {
+      return t == SelectedEntity::Type::LineSeg || t == SelectedEntity::Type::Polyline;
+    };
+    if (isFilletStraightType(st.filletFirstEntity.type) && isFilletStraightType(hit.type)) {
+      Fillet3DCurve probe1, probe2;
+      const bool haveCurves = ReadFillet3DCurve(st, st.filletFirstEntity, st.filletFirstPolySeg, &probe1) &&
+                              ReadFillet3DCurve(st, hit, polySeg, &probe2);
+      auto flatZero = [](const ray3d::Vec3& p0, const ray3d::Vec3& p1) {
+        return p0.z == 0.0 && p1.z == 0.0;
+      };
+      if (haveCurves &&
+          (!flatZero(probe1.p0, probe1.p1) || !flatZero(probe2.p0, probe2.p1))) {
+        HandleFillet3DLineLine(st, st.filletFirstEntity, st.filletFirstPolySeg, hit, polySeg,
+                               st.filletFirstPickX, st.filletFirstPickY, st.filletFirstPickRay, wx, wy,
+                               pickRay, log);
+        st.filletPhase = FP::WaitFirstEntity;
+        st.filletFirstEntity = SelectedEntity{};
+        st.filletFirstPolySeg = -1;
+        log.push_back("FILLET — select first object or [Radius/Trim] " + FilletPromptSuffix(st) + ". ESC cancels.");
+        return;
+      }
     }
 
     FilletCurve c1{}, c2{};
@@ -19570,6 +19931,7 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
     }
     st.userPolylineOffsets.push_back(baseVert + 4);
     SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316: RECT is straight
+    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
     st.userPolylineClosed.push_back(1u);
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
   }
@@ -20751,6 +21113,7 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
       if (static_cast<size_t>(vb) * 3 + 1 >= st.userPolylineVerts.size())
         return;
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
       const double b = ArcBulgeThrough(st.userPolylineVerts[static_cast<size_t>(va) * 3],
                                        st.userPolylineVerts[static_cast<size_t>(va) * 3 + 1],
                                        static_cast<double>(x), static_cast<double>(y),
@@ -20997,6 +21360,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.userEllAttrs.clear();
   st.userPolylineVerts.clear();
   st.userPolylineVertsBulge.clear();  // REQ-316 / ADR-047
+  st.userPolylineVertsNormal.clear();  // REQ-325 / ADR-053
   st.userPolylineOffsets.clear();
   st.userPolylineClosed.clear();
   st.userPolylineAttrs.clear();
@@ -21094,6 +21458,10 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
   if (!st.userPolylineVertsBulge.empty() && static_cast<size_t>(b) <= st.userPolylineVertsBulge.size())
     st.userPolylineVertsBulge.erase(st.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(a),
                                     st.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(b));
+  // REQ-325 / ADR-053: same per-vertex cut span, 3 floats wide instead of 1.
+  if (!st.userPolylineVertsNormal.empty() && static_cast<size_t>(b) * 3 <= st.userPolylineVertsNormal.size())
+    st.userPolylineVertsNormal.erase(st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(a) * 3,
+                                     st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(b) * 3);
   std::vector<int> newOff;
   newOff.reserve(static_cast<size_t>(std::max(0, np - 1) + 1));
   newOff.push_back(0);
@@ -22430,22 +22798,57 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       const size_t A = static_cast<size_t>(va) * 3, B = static_cast<size_t>(vb) * 3;
       const float bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
                               ? st.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.f;
-      const BulgeArcSpan arc = (bulge != 0.f)
-                                   ? BulgeArc(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
-                                              st.userPolylineVerts[B], st.userPolylineVerts[B + 1],
-                                              static_cast<double>(bulge))
-                                   : BulgeArcSpan{};
-      if (!arc.valid)
+      auto chordD2 = [&]() {
         return d2Segment(st.userPolylineVerts[A], st.userPolylineVerts[A + 1], st.userPolylineVerts[A + 2],
                          st.userPolylineVerts[B], st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]);
-      if (!useRay)
-        return PointArcDistanceSq(wx, wy, arc);  // exact — the aperture means the same on a curve as a line
+      };
+      if (bulge == 0.f)
+        return chordD2();
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      if (static_cast<size_t>(va) * 3 + 2 < st.userPolylineVertsNormal.size()) {
+        nx = st.userPolylineVertsNormal[static_cast<size_t>(va) * 3];
+        ny = st.userPolylineVertsNormal[static_cast<size_t>(va) * 3 + 1];
+        nz = st.userPolylineVertsNormal[static_cast<size_t>(va) * 3 + 2];
+      }
+      if (IsFlatNormal(nx, ny, nz)) {
+        const BulgeArcSpan arc = BulgeArc(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
+                                          st.userPolylineVerts[B], st.userPolylineVerts[B + 1],
+                                          static_cast<double>(bulge));
+        if (!arc.valid)
+          return chordD2();
+        if (!useRay)
+          return PointArcDistanceSq(wx, wy, arc);  // exact — the aperture means the same on a curve as a line
+        double d2 = 1e300;
+        constexpr int ns = 24;
+        const double za = static_cast<double>(st.userPolylineVerts[A + 2]);
+        for (int s = 0; s <= ns; ++s) {
+          const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / ns);
+          d2 = std::min(d2, d2Point(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), za));
+        }
+        return d2;
+      }
+      // REQ-325 / ADR-053: a tilted segment's bulge is solved in ITS OWN plane's 2D coordinates —
+      // same technique as the tilted render branch above — then sampled back to world 3D, so both
+      // the plan-view flattened metric (d2Point with no ray) and the true ray-to-curve metric (with
+      // one) see the real tilted shape rather than a flat approximation.
+      const ray3d::Vec3 p0{st.userPolylineVerts[A], st.userPolylineVerts[A + 1], st.userPolylineVerts[A + 2]};
+      const ray3d::Vec3 p1{st.userPolylineVerts[B], st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]};
+      ucs::Ucs plane{};
+      if (!ucs::FromNormal(p0, ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                           static_cast<double>(nz)},
+                           &plane))
+        return chordD2();
+      const ucs::Point2D p1Local = ucs::WorldToPlane(plane, p1);
+      const BulgeArcSpan arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
+      if (!arc.valid)
+        return chordD2();
       double d2 = 1e300;
       constexpr int ns = 24;
-      const double za = static_cast<double>(st.userPolylineVerts[A + 2]);
       for (int s = 0; s <= ns; ++s) {
         const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / ns);
-        d2 = std::min(d2, d2Point(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), za));
+        const ray3d::Vec3 wp = ucs::PlaneToWorld(
+            plane, ucs::Point2D{arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u)});
+        d2 = std::min(d2, d2Point(wp.x, wp.y, wp.z));
       }
       return d2;
     };
@@ -23401,13 +23804,16 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 
   struct Edge {
     float x0, y0, x1, y1;
+    float z0 = 0.f, z1 = 0.f;  // issue #373: JOIN must respect Z, not just plan position
     int lineIx;
     int polyIx;
     float bulge = 0.f;  // REQ-316 / ADR-047: bulge traversing x0,y0 -> x1,y1 (0 = straight)
+    // REQ-325 / ADR-053: the plane the bulge is measured in — world +Z for every straight edge and
+    // every flat arc, an arc's own nx,ny,nz when it is tilted. Meaningless when bulge == 0.
+    float nx = 0.f, ny = 0.f, nz = 1.f;
     int arcIx = -1;
   };
   std::vector<Edge> edges;
-  int tiltedArcsSkipped = 0;
   float tol = 1e-3f;
   double mnX = 0.;
   double mxX = 0.;
@@ -23416,14 +23822,16 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
   if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
     tol = std::max(1e-5f, static_cast<float>(1e-4 * std::max(mxX - mnX, mxY - mnY)));
 
-  auto readLine = [&](int idx, float* x0, float* y0, float* x1, float* y1) -> bool {
+  auto readLine = [&](int idx, float* x0, float* y0, float* z0, float* x1, float* y1, float* z1) -> bool {
     const size_t k = static_cast<size_t>(idx) * 6;
     if (k + 5 >= st.userLinesFlat.size())
       return false;
     *x0 = st.userLinesFlat[k];
     *y0 = st.userLinesFlat[k + 1];
+    *z0 = st.userLinesFlat[k + 2];
     *x1 = st.userLinesFlat[k + 3];
     *y1 = st.userLinesFlat[k + 4];
+    *z1 = st.userLinesFlat[k + 5];
     return true;
   };
 
@@ -23432,31 +23840,52 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
                ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
                : 0.f;
   };
+  // REQ-325 / ADR-053: a Polyline's own curved segment already carries a plane (e.g. re-joining a
+  // polyline a previous JOIN gave a tilted arc) — read it instead of assuming world +Z.
+  auto polyNormalAt = [&](int vi, float* nx, float* ny, float* nz) {
+    const size_t k = static_cast<size_t>(vi) * 3;
+    if (k + 2 < st.userPolylineVertsNormal.size()) {
+      *nx = st.userPolylineVertsNormal[k];
+      *ny = st.userPolylineVertsNormal[k + 1];
+      *nz = st.userPolylineVertsNormal[k + 2];
+    } else {
+      *nx = 0.f; *ny = 0.f; *nz = 1.f;
+    }
+  };
 
   for (const auto& se : st.selection) {
     if (se.type == ST::LineSeg && se.index >= 0) {
-      float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
-      if (!readLine(se.index, &x0, &y0, &x1, &y1))
+      float x0 = 0.f, y0 = 0.f, z0 = 0.f, x1 = 0.f, y1 = 0.f, z1 = 0.f;
+      if (!readLine(se.index, &x0, &y0, &z0, &x1, &y1, &z1))
         continue;
-      edges.push_back({x0, y0, x1, y1, se.index, -1, 0.f, -1});
+      Edge e{};
+      e.x0 = x0; e.y0 = y0; e.x1 = x1; e.y1 = y1; e.z0 = z0; e.z1 = z1;
+      e.lineIx = se.index; e.polyIx = -1;
+      edges.push_back(e);
     } else if (se.type == ST::Arc && se.index >= 0) {
-      // REQ-316 / ADR-047: an ARC contributes one bulge edge. A tilted arc (REQ-312) cannot go
-      // into a 2D polyline without losing its plane, so it is refused by name (REQ-201) — the same
-      // treatment feature lines get above.
+      // REQ-316 / ADR-047 + REQ-325 / ADR-053: an ARC contributes one bulge edge, flat or tilted —
+      // its own plane rides along as this edge's normal (\ref Edge::nx). A tilted arc is only
+      // refused later, per-component, when it turns out NOT coplanar with what it would join to.
       const size_t k = static_cast<size_t>(se.index);
       if (k >= st.userArcs.size())
         continue;
       const CadArc& a = st.userArcs[k];
-      if (!IsFlatNormal(a.nx, a.ny, a.nz)) {
-        ++tiltedArcsSkipped;
-        continue;
-      }
-      const float x0 = a.cx + a.r * std::cos(a.startRad);
-      const float y0 = a.cy + a.r * std::sin(a.startRad);
-      const float x1 = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
-      const float y1 = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+      // REQ-325 / ADR-053: an arc's true 3D endpoints are only ever `a.cx + r*cos/sin(angle)` when
+      // it is flat — that formula assumes world X/Y are the arc's own in-plane axes, which is exactly
+      // what a tilted arc's Arbitrary-Axis-Algorithm frame (`CurvePlane`) does NOT agree with. Using
+      // it for a tilted arc silently computed a point nowhere near the real geometry (the bug this
+      // fixed: JOIN's endpoint-coincidence test then finds nothing to connect at all).
+      const ucs::Ucs plane = CurvePlane(a);
+      const ray3d::Vec3 p0 = CurvePointAt(plane, a.r, a.startRad);
+      const ray3d::Vec3 p1 = CurvePointAt(plane, a.r, a.startRad + a.sweepRad);
       const float bulge = std::tan(a.sweepRad * 0.25f);
-      edges.push_back({x0, y0, x1, y1, -1, -1, bulge, static_cast<int>(k)});
+      Edge e{};
+      e.x0 = static_cast<float>(p0.x); e.y0 = static_cast<float>(p0.y); e.z0 = static_cast<float>(p0.z);
+      e.x1 = static_cast<float>(p1.x); e.y1 = static_cast<float>(p1.y); e.z1 = static_cast<float>(p1.z);
+      e.lineIx = -1; e.polyIx = -1; e.bulge = bulge;
+      e.nx = a.nx; e.ny = a.ny; e.nz = a.nz;
+      e.arcIx = static_cast<int>(k);
+      edges.push_back(e);
     } else if (se.type == ST::Polyline && se.index >= 0) {
       const int pi = se.index;
       if (static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
@@ -23468,23 +23897,31 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       for (int vi = v0; vi + 1 < v1; ++vi) {
         const float ax = st.userPolylineVerts[static_cast<size_t>(vi * 3)];
         const float ay = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+        const float az = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)];
         const float bx = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
         const float by = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
-        edges.push_back({ax, ay, bx, by, -1, pi, polyBulgeAt(vi), -1});
+        const float bz = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)];
+        Edge e{};
+        e.x0 = ax; e.y0 = ay; e.x1 = bx; e.y1 = by; e.z0 = az; e.z1 = bz;
+        e.lineIx = -1; e.polyIx = pi; e.bulge = polyBulgeAt(vi);
+        polyNormalAt(vi, &e.nx, &e.ny, &e.nz);
+        edges.push_back(e);
       }
       if (closed && v1 - v0 >= 2) {
         const float ax = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
         const float ay = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
+        const float az = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)];
         const float bx = st.userPolylineVerts[static_cast<size_t>(v0 * 3)];
         const float by = st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
-        edges.push_back({ax, ay, bx, by, -1, pi, polyBulgeAt(v1 - 1), -1});
+        const float bz = st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)];
+        Edge e{};
+        e.x0 = ax; e.y0 = ay; e.x1 = bx; e.y1 = by; e.z0 = az; e.z1 = bz;
+        e.lineIx = -1; e.polyIx = pi; e.bulge = polyBulgeAt(v1 - 1);
+        polyNormalAt(v1 - 1, &e.nx, &e.ny, &e.nz);
+        edges.push_back(e);
       }
     }
   }
-  if (tiltedArcsSkipped > 0)
-    log.push_back("JOIN — " + std::to_string(tiltedArcsSkipped) + " tilted arc" +
-                  (tiltedArcsSkipped == 1 ? "" : "s") + " ignored: cannot fold a non-planar arc into a polyline.");
-
   if (edges.size() < 2) {
     log.push_back("JOIN — select at least two connected lines, arcs, or polylines.");
     st.selection.clear();
@@ -23506,22 +23943,26 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     }
   };
   UF uf(2 * n);
-  auto nearPt = [&](float ax, float ay, float bx, float by) {
+  // issue #373: two endpoints only coincide when they share the same 3D position, not just the
+  // same plan (X/Y) position — otherwise a vertical run sharing a plan location at a different
+  // elevation gets fused with the wrong endpoint and its vertices are discarded.
+  auto nearPt = [&](float ax, float ay, float az, float bx, float by, float bz) {
     const float dx = ax - bx;
     const float dy = ay - by;
-    return dx * dx + dy * dy <= tol * tol;
+    const float dz = az - bz;
+    return dx * dx + dy * dy + dz * dz <= tol * tol;
   };
   for (int i = 0; i < n; ++i) {
     for (int j = i + 1; j < n; ++j) {
       const Edge& A = edges[static_cast<size_t>(i)];
       const Edge& B = edges[static_cast<size_t>(j)];
-      if (nearPt(A.x0, A.y0, B.x0, B.y0))
+      if (nearPt(A.x0, A.y0, A.z0, B.x0, B.y0, B.z0))
         uf.unite(2 * i, 2 * j);
-      if (nearPt(A.x0, A.y0, B.x1, B.y1))
+      if (nearPt(A.x0, A.y0, A.z0, B.x1, B.y1, B.z1))
         uf.unite(2 * i, 2 * j + 1);
-      if (nearPt(A.x1, A.y1, B.x0, B.y0))
+      if (nearPt(A.x1, A.y1, A.z1, B.x0, B.y0, B.z0))
         uf.unite(2 * i + 1, 2 * j);
-      if (nearPt(A.x1, A.y1, B.x1, B.y1))
+      if (nearPt(A.x1, A.y1, A.z1, B.x1, B.y1, B.z1))
         uf.unite(2 * i + 1, 2 * j + 1);
     }
   }
@@ -23566,15 +24007,66 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       continue;
     }
 
-    std::unordered_map<int, std::pair<float, float>> rep;
+    // REQ-325 / ADR-053: a tilted-arc edge is only accepted into this component when its own plane
+    // (already known — REQ-312 gives every ARC its own centre+normal, nothing to derive) agrees, to
+    // JOIN's own tolerance, with the FAR endpoint of every edge directly touching it. The far
+    // endpoint of a straight neighbor is enough to prove the whole neighbor lies in that plane (it
+    // is a straight line, and its near end already sits on the plane by construction); a curved
+    // neighbor is checked at its own endpoint only, an increment-1 approximation (full-curve
+    // coplanarity is increment 2's rendering work, not JOIN's).
+    {
+      bool badTiltedArc = false;
+      for (int ej : comp) {
+        const Edge& E = edges[static_cast<size_t>(ej)];
+        if (E.bulge == 0.f || IsFlatNormal(E.nx, E.ny, E.nz) || E.arcIx < 0)
+          continue;
+        if (static_cast<size_t>(E.arcIx) >= st.userArcs.size()) {
+          badTiltedArc = true;
+          break;
+        }
+        const CadArc& a = st.userArcs[static_cast<size_t>(E.arcIx)];
+        ucs::Ucs arcPlane{};
+        if (!ucs::FromNormal(ray3d::Vec3{a.cx, a.cy, a.z}, ray3d::Vec3{a.nx, a.ny, a.nz}, &arcPlane)) {
+          badTiltedArc = true;
+          break;
+        }
+        const int k0 = clusterOf(2 * ej), k1 = clusterOf(2 * ej + 1);
+        for (int oj : comp) {
+          if (oj == ej)
+            continue;
+          const Edge& N = edges[static_cast<size_t>(oj)];
+          const int u = clusterOf(2 * oj), v = clusterOf(2 * oj + 1);
+          const bool uTouches = (u == k0 || u == k1), vTouches = (v == k0 || v == k1);
+          if (!uTouches && !vTouches)
+            continue;
+          if (uTouches && vTouches)
+            continue;  // both ends of a tiny loop touch the arc — nothing "far" to check
+          const ray3d::Vec3 farPt = uTouches ? ray3d::Vec3{N.x1, N.y1, N.z1} : ray3d::Vec3{N.x0, N.y0, N.z0};
+          if (std::fabs(ucs::SignedDistanceToPlane(arcPlane, farPt)) > static_cast<double>(tol)) {
+            badTiltedArc = true;
+            break;
+          }
+        }
+        if (badTiltedArc)
+          break;
+      }
+      if (badTiltedArc) {
+        log.push_back("JOIN — skipped a group: a tilted arc does not share a plane with the edges it "
+                      "would be joined to.");
+        continue;
+      }
+    }
+
+    struct Pt3 { float x, y, z; };
+    std::unordered_map<int, Pt3> rep;
     for (int ej : comp) {
       const Edge& E = edges[static_cast<size_t>(ej)];
       const int k0 = clusterOf(2 * ej);
       const int k1 = clusterOf(2 * ej + 1);
       if (!rep.count(k0))
-        rep[k0] = {E.x0, E.y0};
+        rep[k0] = {E.x0, E.y0, E.z0};
       if (!rep.count(k1))
-        rep[k1] = {E.x1, E.y1};
+        rep[k1] = {E.x1, E.y1, E.z1};
     }
 
     std::unordered_map<int, int> deg;
@@ -23659,24 +24151,32 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 
     std::vector<float> pv;
     std::vector<float> pvBulge;  // REQ-316 / ADR-047: bulge of the segment leaving each vertex
+    std::vector<float> pvNormal;  // REQ-325 / ADR-053: plane of that same leaving segment, 3 per vertex
     for (size_t i = 0; i < pathVerts.size(); ++i) {
       const int cid = clusters[static_cast<size_t>(pathVerts[i])];
       const auto& pt = rep[cid];
-      pv.push_back(pt.first);
-      pv.push_back(pt.second);
-      pv.push_back(0.f);
+      pv.push_back(pt.x);
+      pv.push_back(pt.y);
+      pv.push_back(pt.z);
       // The bulge for the segment LEAVING vertex i is the edge that joins i to i+1 (pathEdges[i+1]),
-      // negated when that edge is traversed against its stored x0->x1 direction.
+      // negated when that edge is traversed against its stored x0->x1 direction. A curve's PLANE is
+      // not sign-sensitive the way its bulge is — traversing an arc backwards reverses which way it
+      // bows (the bulge sign) but not which plane it lies in — so the normal carries straight across.
       float leave = 0.f;
+      float leaveNx = 0.f, leaveNy = 0.f, leaveNz = 1.f;
       if (i + 1 < pathVerts.size()) {
         const int e = pathEdges[i + 1];
         if (e >= 0) {
           const Edge& E = edges[static_cast<size_t>(e)];
           const bool forward = clusterOf(2 * e) == cid;  // stored x0 sits at this vertex
           leave = forward ? E.bulge : -E.bulge;
+          leaveNx = E.nx; leaveNy = E.ny; leaveNz = E.nz;
         }
       }
       pvBulge.push_back(leave);
+      pvNormal.push_back(leaveNx);
+      pvNormal.push_back(leaveNy);
+      pvNormal.push_back(leaveNz);
     }
 
     bool closed = pathVerts.front() == pathVerts.back();
@@ -23684,10 +24184,18 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       // Drop the repeated closing vertex; its leaving-bulge (the closing segment) moves onto the
       // last kept vertex, which is where userPolylineClosed expects the closing arc.
       const float closeBulge = pvBulge[pvBulge.size() - 2];  // edge from vert n-2 -> repeated last
+      const size_t closeN = pvNormal.size() - 6;  // the same edge's normal, 3 floats back from last
+      const float closeNx = pvNormal[closeN], closeNy = pvNormal[closeN + 1], closeNz = pvNormal[closeN + 2];
       pv.resize(pv.size() - 3);
       pvBulge.resize(pvBulge.size() - 1);
+      pvNormal.resize(pvNormal.size() - 3);
       if (!pvBulge.empty())
         pvBulge.back() = closeBulge;
+      if (pvNormal.size() >= 3) {
+        pvNormal[pvNormal.size() - 3] = closeNx;
+        pvNormal[pvNormal.size() - 2] = closeNy;
+        pvNormal[pvNormal.size() - 1] = closeNz;
+      }
     }
 
     if (pv.size() < 6)
@@ -23702,7 +24210,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
     // REQ-316 / ADR-047: carry the joined bulges through. Only materialise the array when a
-    // segment is actually curved, so a straight-only JOIN keeps .gs byte-stable.
+    // segment is actually curved, so a straight-only JOIN keeps its export byte-stable.
     {
       bool anyArc = false;
       for (float b : pvBulge)
@@ -23714,6 +24222,20 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
                                 : 0;
         for (size_t k = 0; k < static_cast<size_t>(nv) && k < pvBulge.size(); ++k)
           st.userPolylineVertsBulge[tail + k] = pvBulge[k];
+      }
+      // REQ-325 / ADR-053: same rule, one level up — materialise the normal array only when a
+      // joined segment is actually TILTED, so a flat-only JOIN (the overwhelming common case)
+      // leaves it untouched.
+      bool anyTilted = false;
+      for (size_t k = 0; k + 2 < pvNormal.size(); k += 3)
+        if (!IsFlatNormal(pvNormal[k], pvNormal[k + 1], pvNormal[k + 2])) { anyTilted = true; break; }
+      if (anyTilted || !st.userPolylineVertsNormal.empty()) {
+        SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+        const size_t tail3 = st.userPolylineVertsNormal.size() >= static_cast<size_t>(nv) * 3
+                                 ? st.userPolylineVertsNormal.size() - static_cast<size_t>(nv) * 3
+                                 : 0;
+        for (size_t k = 0; k < static_cast<size_t>(nv) * 3 && k < pvNormal.size(); ++k)
+          st.userPolylineVertsNormal[tail3 + k] = pvNormal[k];
       }
     }
     polysOut++;
@@ -24189,6 +24711,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     for (int pi : polyToErase)
       ErasePolylineByIndex(st, pi);
     SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
+    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
   }
 
   // ── report ────────────────────────────────────────────────────────────────
@@ -25535,16 +26058,56 @@ namespace {
           vi < st.userPolylineVertsBulge.size() ? st.userPolylineVertsBulge[vi] : 0.f;
       brep::SweepSegment seg;
       if (std::fabs(bulge) > 1e-6f) {
-        if (std::fabs(pts[k].z - pts[k1].z) > 1e-6)
-          return false;  // a bulge across a change in elevation is not a planar arc
-        const BulgeArcSpan span =
-            BulgeArc(pts[k].x, pts[k].y, pts[k1].x, pts[k1].y, static_cast<double>(bulge));
-        if (!span.valid)
-          return false;
-        seg.arc = true;
-        seg.centre = {span.cx, span.cy, pts[k].z};
-        seg.normal = {0.0, 0.0, 1.0};
-        seg.sweep = span.sweep;
+        // REQ-325 / ADR-053: this segment's own plane, when it is not flat +Z — same construction
+        // issue #373's 3D FILLET solve and REQ-325 increments 1-3 already use. Before this, ANY
+        // bulge segment spanning a change in elevation was refused outright ("not a planar arc"),
+        // even a genuinely tilted-but-planar one from JOIN.
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        if (vi * 3 + 2 < st.userPolylineVertsNormal.size()) {
+          nx = st.userPolylineVertsNormal[vi * 3];
+          ny = st.userPolylineVertsNormal[vi * 3 + 1];
+          nz = st.userPolylineVertsNormal[vi * 3 + 2];
+        }
+        if (IsFlatNormal(nx, ny, nz)) {
+          if (std::fabs(pts[k].z - pts[k1].z) > 1e-6)
+            return false;  // a flat-normal bulge spanning different Z is inconsistent data
+          const BulgeArcSpan span =
+              BulgeArc(pts[k].x, pts[k].y, pts[k1].x, pts[k1].y, static_cast<double>(bulge));
+          if (!span.valid)
+            return false;
+          seg.arc = true;
+          seg.centre = {span.cx, span.cy, pts[k].z};
+          seg.normal = {0.0, 0.0, 1.0};
+          seg.sweep = span.sweep;
+        } else {
+          const ray3d::Vec3 nrm{static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)};
+          ucs::Ucs plane{};
+          if (!ucs::FromNormal(pts[k], nrm, &plane))
+            return false;
+          const ucs::Point2D p1Local = ucs::WorldToPlane(plane, pts[k1]);
+          const BulgeArcSpan span = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
+          if (!span.valid)
+            return false;
+          const ray3d::Vec3 centreWorld = ucs::PlaneToWorld(plane, ucs::Point2D{span.cx, span.cy});
+          ucs::Ucs canon{};
+          if (!ucs::FromNormal(centreWorld, nrm, &canon))
+            return false;
+          const ucs::Point2D sLocal = ucs::WorldToPlane(canon, pts[k]);
+          const ucs::Point2D eLocal = ucs::WorldToPlane(canon, pts[k1]);
+          const double thetaA = std::atan2(sLocal.y, sLocal.x);
+          const double thetaB = std::atan2(eLocal.y, eLocal.x);
+          constexpr double kTwoPi = 6.28318530717958647692;
+          double sweep = thetaB - thetaA;
+          if (bulge >= 0.f) {
+            while (sweep < 0.0) sweep += kTwoPi;
+          } else {
+            while (sweep > 0.0) sweep -= kTwoPi;
+          }
+          seg.arc = true;
+          seg.centre = centreWorld;
+          seg.normal = nrm;
+          seg.sweep = sweep;
+        }
       }
       segs.push_back(seg);
     }
@@ -28805,6 +29368,7 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
       if (b != 0.f) { draftHasArc = true; break; }
     if (draftHasArc || !st.userPolylineVertsBulge.empty()) {
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
       const size_t tail = st.userPolylineVertsBulge.size() >= nvert ? st.userPolylineVertsBulge.size() - nvert : 0;
       for (size_t k = 0; k < nvert && k < st.polylineDraftBulge.size(); ++k)
         st.userPolylineVertsBulge[tail + k] = st.polylineDraftBulge[k];
@@ -29038,9 +29602,10 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
 // two-line clarification in an unreviewable diff. The space is stated here, at the entry point, which
 // is where a caller looks.
 void SubmitViewportPick(AppCommandState& st, float localX, float localY, std::vector<std::string>& log,
-                         bool windowSelectionSubtract, bool fenceLeftToRightWindowMode) {
+                         bool windowSelectionSubtract, bool fenceLeftToRightWindowMode,
+                         const ray3d::Ray* pickRay) {
   ClearPendingOneShotObjectSnap(st);
-  SubmitViewportPickImpl(st, localX, localY, log, windowSelectionSubtract, fenceLeftToRightWindowMode);
+  SubmitViewportPickImpl(st, localX, localY, log, windowSelectionSubtract, fenceLeftToRightWindowMode, pickRay);
 }
 
 // REQ-101 / decision D-2026-08-17-b: establish the document origin BEFORE a typed coordinate of

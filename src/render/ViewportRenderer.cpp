@@ -290,6 +290,10 @@ void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput&
     // curve. Only applies to the polyline store (feature lines pass a different V and no bulges).
     const std::vector<float>* B =
         (V == eg.polylineVerts && eg.polylineBulge && !eg.polylineBulge->empty()) ? eg.polylineBulge : nullptr;
+    // REQ-325 / ADR-053: the plane a curved segment lies in, when it is not flat +Z. Same
+    // restriction as B above — only the polyline store carries this, feature lines have no curves.
+    const std::vector<float>* N =
+        (V == eg.polylineVerts && eg.polylineNormal && !eg.polylineNormal->empty()) ? eg.polylineNormal : nullptr;
     std::vector<float> xy;
     std::vector<float> zs;
     xy.reserve(static_cast<size_t>(nv * 2));
@@ -316,14 +320,45 @@ void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput&
       const int nk = (k + 1) % nv;
       const double wx1 = static_cast<double>((*V)[static_cast<size_t>((v0 + nk) * 3 + 0)]);
       const double wy1 = static_cast<double>((*V)[static_cast<size_t>((v0 + nk) * 3 + 1)]);
-      const BulgeArcSpan arc = BulgeArc(wx0, wy0, wx1, wy1, static_cast<double>(bulge));
+      const float z1 = (*V)[static_cast<size_t>((v0 + nk) * 3 + 2)];
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      if (N && static_cast<size_t>(vi) * 3 + 2 < N->size()) {
+        nx = (*N)[static_cast<size_t>(vi) * 3];
+        ny = (*N)[static_cast<size_t>(vi) * 3 + 1];
+        nz = (*N)[static_cast<size_t>(vi) * 3 + 2];
+      }
+      constexpr double kPi = 3.14159265358979323846;
+      if (IsFlatNormal(nx, ny, nz)) {
+        const BulgeArcSpan arc = BulgeArc(wx0, wy0, wx1, wy1, static_cast<double>(bulge));
+        if (!arc.valid)
+          continue;
+        const int nseg = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 24.0))), 2, 96);
+        for (int s = 1; s < nseg; ++s) {  // interior points only; endpoints are the polyline vertices
+          const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / nseg);
+          pushViewRel(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), z0);
+        }
+        continue;
+      }
+      // REQ-325 / ADR-053: a tilted segment leaves the XY plane, so its own bulge (a purely
+      // geometric, frame-agnostic quantity) is solved in ITS OWN plane's 2D coordinates — built
+      // from the leaving vertex as origin — the same technique the 3D FILLET solve (issue #373)
+      // and AppendArcVcDashed's own tilted-ARC branch below both use, not a fourth invention.
+      ucs::Ucs plane{};
+      if (!ucs::FromNormal(ray3d::Vec3{wx0, wy0, z0}, ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                                                  static_cast<double>(nz)},
+                           &plane))
+        continue;
+      const ucs::Point2D p1Local =
+          ucs::WorldToPlane(plane, ray3d::Vec3{wx1, wy1, static_cast<double>(z1)});
+      const BulgeArcSpan arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
       if (!arc.valid)
         continue;
-      constexpr double kPi = 3.14159265358979323846;
       const int nseg = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 24.0))), 2, 96);
-      for (int s = 1; s < nseg; ++s) {  // interior points only; endpoints are the polyline vertices
+      for (int s = 1; s < nseg; ++s) {
         const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / nseg);
-        pushViewRel(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), z0);
+        const ray3d::Vec3 wp = ucs::PlaneToWorld(
+            plane, ucs::Point2D{arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u)});
+        pushViewRel(wp.x, wp.y, static_cast<float>(wp.z));
       }
     }
     const int chainN = static_cast<int>(zs.size());

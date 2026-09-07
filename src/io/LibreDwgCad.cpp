@@ -224,8 +224,11 @@ void LocalArc(AppCommandState& st, double cx, double cy, double r, double a0, do
   st.userArcAttrs.push_back(at);
 }
 
+// REQ-316 / ADR-047: `bulge`, when given, is one entry per vertex (DXF group 42's own convention) —
+// null or shorter than `xyz`'s vertex count means every segment stays straight, matching every
+// caller that predates bulge support (POLYLINE_2D/POLYLINE_3D below have no bulge concept at all).
 void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool closed,
-                   const EntityAttributes& at) {
+                   const EntityAttributes& at, const std::vector<double>* bulge = nullptr) {
   const size_t nv = xyz.size() / 3;
   if (nv < 2)
     return;
@@ -240,6 +243,19 @@ void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool clo
   st.userPolylineOffsets.push_back(base + static_cast<int>(nv));
   st.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
   st.userPolylineAttrs.push_back(at);
+  bool anyBulge = bulge != nullptr;
+  if (anyBulge) {
+    anyBulge = false;
+    for (size_t i = 0; i < nv && i < bulge->size(); ++i)
+      if ((*bulge)[i] != 0.0) { anyBulge = true; break; }
+  }
+  if (anyBulge || !st.userPolylineVertsBulge.empty()) {
+    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+    const size_t tail = st.userPolylineVertsBulge.size() >= nv ? st.userPolylineVertsBulge.size() - nv : 0;
+    if (bulge)
+      for (size_t i = 0; i < nv && i < bulge->size(); ++i)
+        st.userPolylineVertsBulge[tail + i] = static_cast<float>((*bulge)[i]);
+  }
 }
 
 void LocalText(AppCommandState& st, double x, double y, double z, double height, double rotRad,
@@ -402,7 +418,15 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       xyz.push_back(e->elevation);
     }
     const bool closed = (e->flag & 512) != 0 || (e->flag & 1) != 0;
-    LocalPolyline(st, xyz, closed, at);
+    // REQ-316 / ADR-047 (DWG side, REQ-325 / ADR-053 increment 4): group-42-equivalent bulges, one
+    // per vertex, present whenever `bulges` is non-null — LibreDWG's own `num_bulges` flag bit (16).
+    std::vector<double> bulge;
+    if (e->bulges != nullptr && e->num_bulges > 0) {
+      bulge.reserve(e->num_bulges);
+      for (BITCODE_BL i = 0; i < e->num_bulges; ++i)
+        bulge.push_back(e->bulges[i]);
+    }
+    LocalPolyline(st, xyz, closed, at, bulge.empty() ? nullptr : &bulge);
     return;
   }
   if ((ty == DWG_TYPE_POLYLINE_2D || ty == DWG_TYPE_POLYLINE_3D)) {
@@ -719,6 +743,45 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, nv, pts.data());
     if (lw != nullptr && i < st.userPolylineClosed.size() && st.userPolylineClosed[i])
       lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
+    // REQ-316 / ADR-047 (DWG side, REQ-325 / ADR-053 increment 4): per-vertex bulge (group-42
+    // equivalent). A TILTED segment is written straight (bulge 0) here rather than flattened wrong
+    // — DWG's LWPOLYLINE has the same one-elevation/one-extrusion ceiling DXF's does, and unlike DXF
+    // this exporter has no existing tilted-ARC write path to split it out onto (a real, separate
+    // gap: `dwg_add_ARC` above takes no normal/extrusion at all), so refusing the curve rather than
+    // silently drawing it flat is the REQ-201 choice until that support exists.
+    if (lw != nullptr) {
+      bool anyBulge = false;
+      std::vector<double> bulges(static_cast<size_t>(nv), 0.0);
+      for (int v = 0; v < nv; ++v) {
+        const int vi = a + v;
+        const float b2 = static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
+                             ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.f;
+        if (b2 == 0.f)
+          continue;
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        const size_t nk = static_cast<size_t>(vi) * 3;
+        if (nk + 2 < st.userPolylineVertsNormal.size()) {
+          nx = st.userPolylineVertsNormal[nk];
+          ny = st.userPolylineVertsNormal[nk + 1];
+          nz = st.userPolylineVertsNormal[nk + 2];
+        }
+        if (!IsFlatNormal(nx, ny, nz))
+          continue;  // left straight — see the comment above
+        bulges[static_cast<size_t>(v)] = static_cast<double>(b2);
+        anyBulge = true;
+      }
+      if (anyBulge) {
+        lw->num_bulges = static_cast<BITCODE_BL>(nv);
+        lw->bulges = static_cast<BITCODE_BD*>(calloc(static_cast<size_t>(nv), sizeof(BITCODE_BD)));
+        if (lw->bulges != nullptr) {
+          for (int v = 0; v < nv; ++v)
+            lw->bulges[v] = bulges[static_cast<size_t>(v)];
+          lw->flag = static_cast<BITCODE_BS>(lw->flag | 16);
+        } else {
+          lw->num_bulges = 0;
+        }
+      }
+    }
     if (lw != nullptr)
       apply(lw->parent, AttrAt(st.userPolylineAttrs, i));
   }

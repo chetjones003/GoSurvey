@@ -76,10 +76,11 @@ static void SubmitRibbonCommand(AppCommandState& cmd, std::vector<std::string>& 
 }
 
 static void UiSubmitViewportPick(AppCommandState& cmd, float x, float y, std::vector<std::string>& log,
-                                 bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false)
+                                 bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
+                                 const ray3d::Ray* pickRay = nullptr)
 {
   DevShell_OnPick(x, y);
-  SubmitViewportPick(cmd, x, y, log, windowSelectionSubtract, fenceLeftToRightWindowMode);
+  SubmitViewportPick(cmd, x, y, log, windowSelectionSubtract, fenceLeftToRightWindowMode, pickRay);
 }
 
 // Render a sample string in a text style's font/bold/italic, fit into box [tl, tl+sz] (REQ-044). Shared by
@@ -14247,10 +14248,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // it — neither of which was possible while the decision lived inline here.
     switch (ViewportClickRouteFor(cmd)) {
     case ViewportClickRoute::RawEntityPick:
-      // Entity-pick commands (OFFSET, REQ-069's designators, REQ-103's LENGTHEN/EXTEND/BREAK):
-      // the raw, unsnapped cursor position is what PickClosestCadEntity hit-tests against, not an
-      // OSNAP-adjusted commit point.
-      UiSubmitViewportPick(cmd, rawPickX, rawPickY, log);
+      // Entity-pick commands (OFFSET, REQ-069's designators, REQ-103's LENGTHEN/EXTEND/BREAK,
+      // FILLET/CHAMFER): the raw, unsnapped cursor position is what PickClosestCadEntity hit-tests
+      // against, not an OSNAP-adjusted commit point. `pickRayPtr` (issue #373 follow-up) rides along
+      // so FILLET can hit-test the TRUE 3D ray-to-segment distance instead of `rawPickX,rawPickY`
+      // alone, which in an orbited/ortho non-plan view is only the click's flattened work-plane
+      // intersection — nowhere near a line that does not lie on that plane. The other RawEntityPick
+      // handlers still ignore the extra argument, unchanged.
+      UiSubmitViewportPick(cmd, rawPickX, rawPickY, log, false, false, pickRayPtr);
       break;
     case ViewportClickRoute::PdfAttachInsertPoint:
       SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);

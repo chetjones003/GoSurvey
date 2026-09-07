@@ -618,8 +618,23 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
           rayPtr = &camRay;
         }
         CadResolveSolidPick(run.st, ray3d::Vec3{static_cast<double>(x), static_cast<double>(y), z}, rayPtr);
+        SubmitViewportPick(run.st, x, y, run.log);
+      } else if (ViewportClickRouteFor(run.st) == ViewportClickRoute::RawEntityPick && clickHasZ &&
+                !CadViewIsPlan(run.st) && run.st.uiViewportWidthPx > 0.f) {
+        // issue #373 follow-up: an explicit third coordinate on a RawEntityPick CLICK (FILLET,
+        // OFFSET, LENGTHEN, EXTEND, BREAK, ...) is the one way a transcript can name a point OFF
+        // the current work plane and still exercise the same camera-ray hit-test the real viewport
+        // performs for an orbited/ortho non-plan view — mirrors the CadResolveSolidPick ray build
+        // just above, aimed at (x, y, clickZ) instead of the work plane's own Z.
+        const Camera cam = CadViewCamera(run.st);
+        float sx = 0.f, sy = 0.f;
+        cam.WorldToScreen(static_cast<double>(x), static_cast<double>(y), static_cast<double>(clickZ),
+                          run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &sx, &sy);
+        const ray3d::Ray camRay = cam.ScreenRay(sx, sy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+        SubmitViewportPick(run.st, x, y, run.log, false, false, &camRay);
+      } else {
+        SubmitViewportPick(run.st, x, y, run.log);
       }
-      SubmitViewportPick(run.st, x, y, run.log);
       break;
     case ViewportClickRoute::SelectionBox:
     case ViewportClickRoute::IdleSelection:
@@ -1938,6 +1953,48 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         std::snprintf(msg, sizeof(msg), "EXPECT POLYBULGE %ld %ld: is %.6f, expected %.6f", pi, vi, got, want);
         Fail(run, "expect", msg, sourceLine);
         return false;
+      }
+      return true;
+    } else if (what == "POLYVERT") {
+      // EXPECT POLYVERT <polylineIndex> <vertexIndexWithinPolyline> <x> <y> <z> — one polyline
+      // vertex's WORLD coordinates (REQ-057, issue #373). Added because JOIN's own polyline output
+      // had no test able to see Z at all: EXPECT POLYLINES only counts, and EXPECT POLYBULGE checks
+      // curvature, not position — a real bug (JOIN silently writing 0 for every vertex's Z) passed
+      // every existing JOIN transcript.
+      std::istringstream is(arg);
+      long pi = -1, vi = -1;
+      double want[3] = {0, 0, 0};
+      if (!(is >> pi) || !(is >> vi) || !(is >> want[0] >> want[1] >> want[2])) {
+        Fail(run, "parse", "EXPECT POLYVERT needs <polylineIndex> <vertexIndex> <x> <y> <z>", sourceLine);
+        return false;
+      }
+      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.userPolylineOffsets.size()) {
+        Fail(run, "expect", "EXPECT POLYVERT: no polyline at index " + std::to_string(pi), sourceLine);
+        return false;
+      }
+      const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      if (vi < 0 || vi >= (v1 - v0)) {
+        Fail(run, "expect", "EXPECT POLYVERT: vertex index out of range for that polyline", sourceLine);
+        return false;
+      }
+      const size_t gv = static_cast<size_t>(v0 + vi) * 3;
+      if (gv + 2 >= run.st.userPolylineVerts.size()) {
+        Fail(run, "expect", "EXPECT POLYVERT: vertex storage out of range", sourceLine);
+        return false;
+      }
+      double gx = 0., gy = 0.;
+      CadCoord::WorldFromLocal(run.st, run.st.userPolylineVerts[gv], run.st.userPolylineVerts[gv + 1], &gx, &gy);
+      const double got[3] = {gx, gy, static_cast<double>(run.st.userPolylineVerts[gv + 2])};
+      const char* names[3] = {"x", "y", "z"};
+      for (int k = 0; k < 3; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[192];
+          std::snprintf(msg, sizeof(msg), "EXPECT POLYVERT %ld %ld: %s is %.6f, expected %.6f", pi, vi, names[k],
+                        got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
       }
       return true;
     } else if (what == "PICKAT") {

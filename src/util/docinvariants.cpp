@@ -126,6 +126,28 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     if (!std::isfinite(st.userPolylineVertsBulge[i]))
       Add(out, docinv::kPolylineBulge,
           "userPolylineVertsBulge[" + std::to_string(i) + "] is not finite");
+  // REQ-325 / ADR-053: per-vertex curve-plane normal — empty, or exactly one (stride-3) entry per
+  // vertex, same additive/omit-when-default rule bulge itself follows one line up.
+  CheckStride(out, "userPolylineVertsNormal", st.userPolylineVertsNormal.size(), 3);
+  if (!st.userPolylineVertsNormal.empty() &&
+      st.userPolylineVertsNormal.size() / 3 != st.userPolylineVerts.size() / 3) {
+    Add(out, docinv::kPolylineBulge,
+        "userPolylineVertsNormal holds " + std::to_string(st.userPolylineVertsNormal.size() / 3) +
+            " entries but userPolylineVerts holds " + std::to_string(st.userPolylineVerts.size() / 3) +
+            " vertices; the normal array is per vertex");
+  }
+  for (size_t i = 0; i + 2 < st.userPolylineVertsNormal.size(); i += 3) {
+    const float nx = st.userPolylineVertsNormal[i], ny = st.userPolylineVertsNormal[i + 1],
+               nz = st.userPolylineVertsNormal[i + 2];
+    if (!std::isfinite(nx) || !std::isfinite(ny) || !std::isfinite(nz)) {
+      Add(out, docinv::kPolylineBulge, "userPolylineVertsNormal[" + std::to_string(i / 3) + "] is not finite");
+      continue;
+    }
+    const float len2 = nx * nx + ny * ny + nz * nz;
+    if (std::fabs(len2 - 1.0f) > 1e-3f)
+      Add(out, docinv::kPolylineBulge,
+          "userPolylineVertsNormal[" + std::to_string(i / 3) + "] is not a unit vector");
+  }
   for (size_t i = 0; i < st.userArcs.size(); ++i) {
     const CadArc& a = st.userArcs[i];
     const std::string p = "userArcs[" + std::to_string(i) + "].";

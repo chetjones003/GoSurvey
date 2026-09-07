@@ -351,6 +351,10 @@ struct FilletCurve {
   bool isLine = true;
   float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
   float cx = 0.f, cy = 0.f, r = 0.f;
+  // issue #373: a Line's own Z at each endpoint, in WORLD space (unused for Arc/Circle). Only
+  // consulted by the two-line 3D fillet path — every other consumer keeps working entirely in
+  // whatever 2D frame it was already given (world XY, or a projected plane's own 2D coordinates).
+  float az0 = 0.f, az1 = 0.f;
 };
 
 /// A curveisect::Seg standing in for curve `(ax,ay)-(bx,by)`'s INFINITE extension. curveisect has no
@@ -770,6 +774,10 @@ struct CadExtendedGeometryInput {
   /// REQ-316 / ADR-047: per-vertex bulge (parallel to polylineVerts, one per vertex). Null or
   /// empty means every polyline segment is straight — the pre-ADR-047 behaviour.
   const std::vector<float>* polylineBulge = nullptr;
+  /// REQ-325 / ADR-053: per-vertex curve-plane normal (stride 3, parallel to polylineVerts). Null
+  /// or empty means every curved segment is flat (world +Z) — the pre-ADR-053 behaviour, and what
+  /// every polyline that predates it still is.
+  const std::vector<float>* polylineNormal = nullptr;
   // Feature lines (REQ-087). Same four arrays, same shape — the renderer draws both through one
   // function, so a feature line cannot render differently from a polyline by accident.
   const std::vector<float>* featureLineVerts = nullptr;
@@ -937,6 +945,22 @@ inline void SyncPolylineBulge(std::vector<float>& bulge, std::size_t vertsFloatC
   bulge.resize(vertsFloatCount / 3, 0.0f);
 }
 
+/// REQ-325 / ADR-053: keep the parallel per-vertex polyline curve-plane-normal array the right
+/// length for the vertex list (stride 3, one normal per vertex). New entries default to world +Z
+/// (a flat/straight segment's normal is never consulted, but a uniform default keeps every entry
+/// a valid unit vector for docinvariants). Called at every site \ref SyncPolylineBulge already is —
+/// the two arrays' lengths must never drift apart, the same reason bulge itself is synced there.
+inline void SyncPolylineNormal(std::vector<float>& normal, std::size_t vertsFloatCount) {
+  const std::size_t n = vertsFloatCount / 3;
+  const std::size_t oldN = normal.size() / 3;
+  normal.resize(n * 3);
+  for (std::size_t i = oldN; i < n; ++i) {
+    normal[i * 3] = 0.f;
+    normal[i * 3 + 1] = 0.f;
+    normal[i * 3 + 2] = 1.f;
+  }
+}
+
 /// REQ-316 / ADR-047: grip index base for a polyline ARC segment's midpoint (bulge) grip. Vertex
 /// grips are `0..vertexCount-1`; a bulge grip for segment `s` is `kPolyBulgeGripBase + s`. The base
 /// is far above any realistic vertex count so the two grip families never collide.
@@ -960,6 +984,11 @@ struct DrawingGeometrySnapshot {
   /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
   /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
   std::vector<float>            userPolylineVertsBulge;
+  /// REQ-325 / ADR-053: the plane of the (bulge-curved) segment leaving this vertex, 3 floats each
+  /// (stride 3, parallel to userPolylineVerts — see AppCommandState::userPolylineVertsNormal).
+  /// Consulted only when the paired bulge is non-zero; omitted from persistence when every entry is
+  /// world +Z, the same additive/byte-identical-legacy rule REQ-312 used for userCircleNormals.
+  std::vector<float>            userPolylineVertsNormal;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
@@ -1098,6 +1127,11 @@ struct DrawingDocument {
   /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
   /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
   std::vector<float>            userPolylineVertsBulge;
+  /// REQ-325 / ADR-053: the plane of the (bulge-curved) segment leaving this vertex, 3 floats each
+  /// (stride 3, parallel to userPolylineVerts — see AppCommandState::userPolylineVertsNormal).
+  /// Consulted only when the paired bulge is non-zero; omitted from persistence when every entry is
+  /// world +Z, the same additive/byte-identical-legacy rule REQ-312 used for userCircleNormals.
+  std::vector<float>            userPolylineVertsNormal;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
@@ -2313,6 +2347,9 @@ struct AppCommandState {
   std::vector<float> userPolylineVerts;
   /// REQ-316 / ADR-047: per-vertex DXF bulge, parallel to userPolylineVerts (size()/3 entries).
   std::vector<float> userPolylineVertsBulge;
+  /// REQ-325 / ADR-053: per-vertex curve plane normal, parallel to userPolylineVerts (see the
+  /// AppCommandState field of the same name for the full contract).
+  std::vector<float> userPolylineVertsNormal;
   std::vector<uint8_t> userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
 
@@ -3171,6 +3208,14 @@ struct AppCommandState {
   SelectedEntity filletFirstEntity{};
   int filletFirstPolySeg = -1;
   float filletFirstPickX = 0.f, filletFirstPickY = 0.f;
+  /// issue #373 follow-up: the first pick's own camera ray (default-constructed/invalid in plan
+  /// view or paper space, matching `ray3d::Ray::valid()`). The 3D fillet solve's candidate-side
+  /// disambiguation needs the click's TRUE off-line position — projecting a pick exactly onto the
+  /// curve it is nearest to (the only option without a ray) throws away the one signal that tells
+  /// two mathematically valid tangent arcs apart, tying the choice to iteration order instead of
+  /// where the user actually clicked (a real report: a small-radius fillet rounding the OUTSIDE of
+  /// a corner instead of the inside).
+  ray3d::Ray filletFirstPickRay{};
   /// Persisted app-level (gosurvey-user.json), like `trimState` — NOT per-drawing (D-2026-08-24-g:
   /// a generalized "system variable registry" was considered and explicitly declined here; see that
   /// decision's rationale for why). Default 0.5, matching AutoCAD's own FILLETRAD default.
@@ -5199,7 +5244,8 @@ void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Model-space + floating-model-space viewport-pick handler for FILLET. Non-static for the same
 /// anonymous-namespace/global-scope reason `HandleLengthenViewportPick`/`HandleExtendViewportPick`/
 /// `HandleBreakViewportPick` are — `SubmitViewportPickImpl` needs to see it via this header.
-void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
+                              const ray3d::Ray* pickRay = nullptr);
 /// Typed command-line handling for FILLET's R(adius)/T(rim) sub-commands (REQ-103 step 6a) — the
 /// mode-letter shape LENGTHEN's own `HandleLengthenText` established, simplified: FILLET has no
 /// pending-pick-awaiting-a-value latch, since R/T only ever change a persisted setting, never
@@ -5549,8 +5595,14 @@ float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, floa
 ///   (`ApplyDocumentOriginRebase` shifts `viewportPanX/Y`), and an OSNAP overrides them with a value
 ///   read directly out of the geometry stores — so a snapped pick is exact and an unsnapped one is
 ///   bounded by the pixel it came from (REQ-101).
+// `pickRay` (issue #373 follow-up): the camera ray behind this click, in an orbited/non-plan model
+// view — nullptr in plan view and paper space, matching PickClosestCadEntity's own convention.
+// Threaded through so a RawEntityPick command (FILLET today) can hit-test the TRUE 3D distance from
+// the ray to elevated geometry instead of the click's flattened work-plane intersection, which is
+// nowhere near a line that does not lie on the current work plane.
 void SubmitViewportPick(AppCommandState& st, float localX, float localY, std::vector<std::string>& log,
-                        bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false);
+                        bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
+                        const ray3d::Ray* pickRay = nullptr);
 
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log);
 void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log);
