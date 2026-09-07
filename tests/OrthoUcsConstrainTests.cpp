@@ -73,3 +73,57 @@ TEST_CASE("ORTHO off is still a no-op under a vertical UCS (REQ-047 under REQ-15
   REQUIRE(wx == Approx(2.f));
   REQUIRE(wy == Approx(0.f));
 }
+
+// Issue #371 follow-up: ApplyOrthoConstrainFromAnchor's UCS branch correctly computed the locked
+// world Z internally (ConstrainToUcsOrtho's z component) but had no channel to report it — only wx/wy
+// went back to the caller. Every caller that commits or previews Z independently (CadCommitElevation /
+// uiCursorWorldZ) kept using the cursor's raw, un-locked elevation, so a Front/Left/Right-UCS ORTHO
+// line rendered/committed diagonally even though wx/wy alone looked correct. Fixed by adding an
+// optional wz out-param that the caller must thread back into its own Z source.
+TEST_CASE("ORTHO reports the locked world Z through wz when squaring to the UCS's vertical axis",
+         "[ucs][ortho][req154]") {
+  AppCommandState st = MakeFrontViewUcsDrawing();
+
+  // Same repro as the first UCS test above: anchor at the UCS origin, cursor mostly along UCS +Y
+  // (world +Z). This time the anchor is NOT at world Z=0, matching the real bug report where the
+  // anchor is an OSNAP CENTRE on geometry off the current work plane (e.g. a circle drawn under a
+  // different coordinate system) — world (10, 10, 0) mapped into this UCS's origin-relative test.
+  const float anchorX = 0.f, anchorY = 0.f, anchorZ = 3.f;
+  float wx = 2.f, wy = 0.f;
+  const float targetZ = 10.f;
+  float wz = -999.f;  // sentinel: must be overwritten when the axis locks onto world Z
+
+  ApplyOrthoConstrainFromAnchor(st, anchorX, anchorY, &wx, &wy, /*ortho=*/true, anchorZ, targetZ, &wz);
+
+  // Dominant axis is UCS Y (world Z): wx locks back to the anchor's world X, and the caller's Z
+  // source must be told to render/commit at the CURSOR's world Z (10), not the anchor's (3) — ORTHO
+  // constrains the in-plane offset, it does not flatten the segment onto one elevation.
+  REQUIRE(wx == Approx(0.f).margin(1e-4));
+  REQUIRE(wz == Approx(10.f).margin(1e-4));
+}
+
+TEST_CASE("ORTHO reports the anchor's world Z through wz when the horizontal axis is dominant",
+         "[ucs][ortho][req154]") {
+  AppCommandState st = MakeFrontViewUcsDrawing();
+
+  const float anchorX = 0.f, anchorY = 0.f, anchorZ = 3.f;
+  float wx = 10.f, wy = 0.f;
+  const float targetZ = 2.f;
+  float wz = -999.f;
+
+  ApplyOrthoConstrainFromAnchor(st, anchorX, anchorY, &wx, &wy, /*ortho=*/true, anchorZ, targetZ, &wz);
+
+  // Dominant axis is UCS X (world X): world Z locks back to the ANCHOR's (3), not the cursor's raw
+  // targetZ (2) — this is the exact lock that was previously computed and then discarded, letting a
+  // caller's independently-derived elevation (CadCommitElevation / uiCursorWorldZ) draw diagonally.
+  REQUIRE(wx == Approx(10.f).margin(1e-4));
+  REQUIRE(wz == Approx(3.f).margin(1e-4));
+}
+
+TEST_CASE("ORTHO leaves wz untouched under the World UCS", "[ucs][ortho][req154]") {
+  AppCommandState st;  // World UCS by default
+  float wx = 5.f, wy = 0.f;
+  float wz = 42.f;  // sentinel: World-UCS ORTHO never adjusts Z, so this must survive unchanged
+  ApplyOrthoConstrainFromAnchor(st, 0.f, 0.f, &wx, &wy, /*ortho=*/true, 0.f, 0.f, &wz);
+  REQUIRE(wz == Approx(42.f));
+}

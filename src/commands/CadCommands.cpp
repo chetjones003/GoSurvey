@@ -11526,10 +11526,19 @@ static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, float& wx, 
   }
   if (st.segmentAngleLockActive)
     ApplySegmentAngleLockToWorldPick(st.anchorX, st.anchorY, st.segmentLockUx, st.segmentLockUy, &wx, &wy, false);
-  else
+  else {
     // no-op when ORTHO off (REQ-047); anchorZ/the cursor's resolved Z are passed so a tilted or
     // edge-on UCS plane constrains correctly (issue #371) instead of guessing Z from x,y.
-    ApplyOrthoConstrainFromAnchor(st, st.anchorX, st.anchorY, &wx, &wy, st.orthoMode, st.anchorZ, st.resolvedPointZ);
+    //
+    // The Z lock comes back through st.resolvedPointZ (issue #371 follow-up): squaring to a
+    // Front/Left/Right-style UCS's vertical axis locks world Z to the anchor's, and
+    // CadCommitElevation() reads resolvedPointZ for the vertex this pick is about to commit. Without
+    // updating it here, the commit would read the cursor's raw (unlocked) elevation and the geometry
+    // would land off the ORTHO line wx/wy just reported.
+    ApplyOrthoConstrainFromAnchor(st, st.anchorX, st.anchorY, &wx, &wy, st.orthoMode, st.anchorZ, st.resolvedPointZ,
+                                  &st.resolvedPointZ);
+    st.resolvedPointZValid = true;
+  }
   return false;
 }
 
@@ -18673,7 +18682,7 @@ static ray3d::Vec3 ApproximateOnWorkPlaneFromXy(const ucs::Ucs& frame, double x,
 }
 
 void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
-                                   bool polar, float anchorZ, float targetZ) {
+                                   bool polar, float anchorZ, float targetZ, float* wz) {
   if (!polar || !st.polarMode || !wx || !wy)
     return;
   const ucs::Ucs frame = CadActiveUcsStorage(st);
@@ -18692,13 +18701,15 @@ void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
     return;  // leave the point alone rather than move it somewhere undefined (REQ-201)
   *wx = static_cast<float>(snapped.x);
   *wy = static_cast<float>(snapped.y);
+  if (wz && std::isfinite(snapped.z))
+    *wz = static_cast<float>(snapped.z);
 }
 
 void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
-                                   bool ortho, float anchorZ, float targetZ) {
+                                   bool ortho, float anchorZ, float targetZ, float* wz) {
   if (!ortho || !wx || !wy) {
     // ORTHO and POLAR are mutually exclusive; when ORTHO is off, POLAR (if on) constrains instead.
-    ApplyPolarConstrainFromAnchor(st, anchorX, anchorY, wx, wy, !ortho, anchorZ, targetZ);
+    ApplyPolarConstrainFromAnchor(st, anchorX, anchorY, wx, wy, !ortho, anchorZ, targetZ, wz);
     return;
   }
   // Under the WCS this is the original world-axis constraint, byte for byte — REQ-047's one tested
@@ -18724,12 +18735,12 @@ void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
     return;  // leave the point alone rather than move it somewhere undefined (REQ-201)
   *wx = static_cast<float>(constrained.x);
   *wy = static_cast<float>(constrained.y);
-  // NOTE (issue #371 follow-up): the locked axis is not necessarily world X or Y — squaring to a
+  // issue #371 follow-up: the locked axis is not necessarily world X or Y — squaring to a
   // Front/Left/Right-style UCS's vertical axis locks world Z to the ANCHOR's, not the cursor's raw
-  // elevation, and this function has no channel back to the ~29 geometry-creation sites that read
-  // CadCommitElevation() for Z independently of this call (AppCommandState::resolvedPointZ, doc
-  // comment there). That commit-elevation channel would need to accept an ortho-adjusted Z to close
-  // this the rest of the way; out of scope for the X/Y-squaring defect issue #371 reports and fixes.
+  // elevation. Report it through wz so a caller that commits or previews Z independently (via
+  // CadCommitElevation / uiCursorWorldZ) can pick up the lock instead of silently overwriting it.
+  if (wz)
+    *wz = static_cast<float>(constrained.z);
 }
 
 void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx, float lockUy, float* wx, float* wy,

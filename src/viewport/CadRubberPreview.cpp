@@ -181,14 +181,18 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     } else {
       float lx = curXf;
       float ly = curYf;
+      float lz = zc;
       if (cmd.segmentAngleLockActive)
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
                                          false);
       else
+        // lz picks up the ortho-locked Z (issue #371 follow-up) when squaring to a Front/Left/Right-
+        // style UCS's vertical axis — without it the preview kept rendering at the cursor's raw
+        // (unlocked) elevation even though lx/ly reported a squared point.
         ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled, cmd.anchorZ,
-                                      cmd.uiCursorWorldZ);
+                                      cmd.uiCursorWorldZ, &lz);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
-                           zc);  // preview at the elevation it will commit to
+                           lz);  // preview at the elevation it will commit to
     }
   }
 
@@ -236,17 +240,19 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
                            zc);
     } else {
+      float lz = zc;
       if (cmd.segmentAngleLockActive)
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
                                          false);
       else
+        // lz picks up the ortho-locked Z (issue #371 follow-up) — see the LINE branch above.
         ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled, cmd.anchorZ,
-                                      cmd.uiCursorWorldZ);
+                                      cmd.uiCursorWorldZ, &lz);
       // REQ-316 / ADR-047: in ARC mode the rubber-band to the cursor previews the pending arc,
       // computed by the SAME function the commit uses so what is drawn is what will be committed.
       const float pendBulge =
           cmd.polylineArcMode ? CadPolylineDraftBulgeForNextPoint(cmd, lx, ly) : 0.f;
-      pushMaybeArc(cmd.anchorX, cmd.anchorY, lx, ly, cmd.anchorZ, zc, pendBulge);
+      pushMaybeArc(cmd.anchorX, cmd.anchorY, lx, ly, cmd.anchorZ, lz, pendBulge);
     }
   }
 
@@ -275,8 +281,10 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       } else {
         float lx = curXf;
         float ly = curYf;
-        ApplyOrthoConstrainFromAnchor(cmd, ax, ay, &lx, &ly, orthoEnabled, az, cmd.uiCursorWorldZ);
-        PushRubberSegViewRel(rubberLines, ax, ay, lx, ly, 0., 0., az, zc);
+        float lz = zc;
+        // lz picks up the ortho-locked Z (issue #371 follow-up) — see the LINE branch above.
+        ApplyOrthoConstrainFromAnchor(cmd, ax, ay, &lx, &ly, orthoEnabled, az, cmd.uiCursorWorldZ, &lz);
+        PushRubberSegViewRel(rubberLines, ax, ay, lx, ly, 0., 0., az, lz);
       }
     }
   }
@@ -363,7 +371,13 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     if (cmd.mtextPhase == MPtxt::WaitCorner2) {
       float lx = curXf;
       float ly = curYf;
-      ApplyOrthoConstrainFromAnchor(cmd, cmd.mtxtX1, cmd.mtxtY1, &lx, &ly, orthoEnabled);
+      // MTEXT is a single-elevation planar entity — both corners land at zc (REQ-058), so that is the
+      // real Z for BOTH ends, not the "no Z available" NaN default. Passing NaN here (as before) sent
+      // ApplyOrthoConstrainFromAnchor's UCS branch into the broken plane-equation fallback under a
+      // Front/Left/Right-style UCS (issue #371's edge-on-plane defect), which can derive the WRONG
+      // world Z for each end and therefore pick the WRONG axis to lock — not just render wrong, the
+      // rectangle itself could come out square to the wrong side.
+      ApplyOrthoConstrainFromAnchor(cmd, cmd.mtxtX1, cmd.mtxtY1, &lx, &ly, orthoEnabled, zc, zc);
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, lx, ly, 0., 0., zc);
     } else if (cmd.mtextPhase == MPtxt::WaitString)
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, cmd.mtxtX2, cmd.mtxtY2, 0., 0.,
@@ -443,9 +457,13 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       if (cmd.insertBlockPhase != IPh::WaitInsertPoint) {
         float lx = curXf;
         float ly = curYf;
+        float lz = zc;
+        // lz picks up the ortho-locked Z (issue #371 follow-up) — see the LINE branch above. The
+        // scale/rotation VALUES (InsertLiveScaleDist/InsertLiveRotDeg) are X/Y-only and unaffected,
+        // but the drag-indicator segment itself should render where ORTHO actually locked it.
         ApplyOrthoConstrainFromAnchor(cmd, cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled,
-                                      cmd.insertBlockZ, cmd.uiCursorWorldZ);
-        PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0., zc, zc);
+                                      cmd.insertBlockZ, cmd.uiCursorWorldZ, &lz);
+        PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0., zc, lz);
       }
       // Live ghost of the block at the transform this pick would commit (REQ-107, D-2026-08-29-i).
       CadBlockXform gxf;
