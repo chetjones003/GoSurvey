@@ -556,7 +556,14 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
   f.right = cam.RightWorld();
   f.up = cam.UpWorld();
   const float mh = std::clamp(glyphHalfPx, 3.f, 48.f) * (2.f * halfWorld) / static_cast<float>(std::max(fbHeight, 1));
-  const int snapCircSegs = std::max(16, static_cast<int>(mh * 40.f));
+  // Segment count for the CENTER/SurveyCenter glyph's circle: this has to come from the glyph's
+  // fixed ON-SCREEN pixel size, not from `mh` above. `mh` is that same size converted into WORLD
+  // units so the glyph itself stays screen-stable — at extreme zoom-out `halfWorld` (and so `mh`)
+  // can run into the billions, and using it directly here turned into an uncapped, effectively
+  // unbounded segment count (even int-overflowing) that froze the app building one circle (issue
+  // #381). The glyph never draws larger than `glyphHalfPx` screen pixels, so a small constant range
+  // driven by THAT is all the smoothness a few dozen screen pixels can ever show.
+  const int snapCircSegs = std::clamp(static_cast<int>(std::clamp(glyphHalfPx, 3.f, 48.f) * 1.5f), 16, 96);
   switch (snap.kind) {
   case CadSnap::Kind::Endpoint:
     AppendSnapSquareOutline(out, f, mh);
@@ -1041,7 +1048,18 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // plan view where Z cannot affect what is on screen — and a surveyed site sits a few thousand feet
   // up, so that is the entire drawing. Depth testing is off (draw order decides), so a wide range
   // costs nothing.
-  Ortho(-halfW, halfW, -halfH, halfH, cam.nearZ, cam.farZ, proj);
+  //
+  // cam.nearZ/farZ's fixed +/-100000 stops being "a wide range" once the view is orbited/tilted and
+  // zoomed far out: an oblique plane's camera-space DEPTH grows with how far its points sit from the
+  // view centre in world space, same as its on-screen extent does. At extreme zoom-out the tilted
+  // grid (and any real geometry) can need a depth range of MILLIONS of units even though every point
+  // is legitimately on screen — measured directly at halfH ~600k, worst-case grid depth ran to +/-4.3M
+  // against a fixed +/-100000 clip, so all but a thin sliver near zero depth was silently clipped
+  // (issue #381: "grid messes up" after zooming out far under an orbited/tilted UCS). Scaling the pad
+  // with halfH keeps it generous at every zoom level instead of only the levels the fixed constant
+  // happened to cover; depth testing being off means the wider range still costs nothing.
+  const float depthPad = std::max({cam.farZ, -cam.nearZ, halfH * 20.f});
+  Ortho(-halfW, halfW, -halfH, halfH, -depthPad, depthPad, proj);
 
   // The camera rotation (REQ-058). Identity in plan view, so the composed matrices below are
   // bit-identical to the pre-3D pipeline until the user actually orbits.
@@ -1168,10 +1186,66 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       return 10.f * p;
     };
     const float step = niceStep(std::max(halfW, halfH) * 2.f);
-    const float spanW = halfW * 2.15f + step * 2.f;
-    const float spanH = halfH * 2.15f + step * 2.f;
-    const int rawNi = static_cast<int>(std::ceil(spanW / std::max(step, 1e-12f))) + 2;
-    const int ni = std::min(512, std::max(4, rawNi));
+
+    // How far the grid has to extend along the PLANE's own two axes to cover the visible screen
+    // rectangle, given how that plane sits relative to the camera. Screen halfW/halfH alone are only
+    // the right extent when the plane's axes line up with the camera's right/up (plan view on the
+    // World UCS) — once the view is orbited, or the plane is a tilted/vertical UCS (e.g. "Front"),
+    // one plane axis can project onto the screen far more compressed than the other. Using a single
+    // shared span for both directions under-covers whichever axis foreshortens harder, which is what
+    // made the grid look sparse or one-axis-only after repeated orbit/zoom (issue #381). This inverts
+    // the exact (for an orthographic camera) linear map from plane (u,v) to screen (right,up) offsets,
+    // so each axis gets the span it actually needs.
+    auto planeSpanForScreen = [&](const ray3d::Vec3& uAxis, const ray3d::Vec3& vAxis, float* outSpanU,
+                                  float* outSpanV) {
+      const ray3d::Vec3 rightW = cam.RightWorld();
+      const ray3d::Vec3 upW = cam.UpWorld();
+      const double m00 = ray3d::Dot(uAxis, rightW);
+      const double m01 = ray3d::Dot(vAxis, rightW);
+      const double m10 = ray3d::Dot(uAxis, upW);
+      const double m11 = ray3d::Dot(vAxis, upW);
+      const double det = m00 * m11 - m01 * m10;
+      const double halfWd = static_cast<double>(halfW) * 2.15;
+      const double halfHd = static_cast<double>(halfH) * 2.15;
+      // Near-zero determinant means the plane is (close to) edge-on to the screen: a screen pixel
+      // maps to an unbounded distance in-plane, so no finite span can fully cover it. Fall back to
+      // the flat estimate — the existing ni cap below still bounds the vertex count.
+      if (std::fabs(det) < 1e-6) {
+        *outSpanU = static_cast<float>(halfWd);
+        *outSpanV = static_cast<float>(halfHd);
+        return;
+      }
+      const double inv00 = m11 / det, inv01 = -m01 / det;
+      const double inv10 = -m10 / det, inv11 = m00 / det;
+      *outSpanU = static_cast<float>(std::fabs(inv00) * halfWd + std::fabs(inv01) * halfHd);
+      *outSpanV = static_cast<float>(std::fabs(inv10) * halfWd + std::fabs(inv11) * halfHd);
+    };
+    const bool useUcsFrame = gridFrame && !ucs::IsWorld(*gridFrame);
+    float spanU = 0.f;
+    float spanV = 0.f;
+    if (useUcsFrame)
+      planeSpanForScreen(gridFrame->xAxis, gridFrame->yAxis, &spanU, &spanV);
+    else
+      planeSpanForScreen(ray3d::Vec3{1.0, 0.0, 0.0}, ray3d::Vec3{0.0, 1.0, 0.0}, &spanU, &spanV);
+    // A near-edge-on plane (tiny determinant in planeSpanForScreen) can still slip a huge-but-finite
+    // span past that function's own guard. The line-count cap below bounds the vertex COUNT, but the
+    // span is also used directly as a segment ENDPOINT coordinate (ov ± spanV / ou ± spanW), so an
+    // uncapped span sends near-infinite world coordinates to the GPU — which is what hung the app
+    // rather than just drawing a sparse grid. Cap both to what the eventual 512-line limit can
+    // actually reach, and fall back to the flat estimate if the math produced something non-finite.
+    const float maxReach = step * 600.f;
+    if (!std::isfinite(spanU) || spanU < 0.f)
+      spanU = halfW * 2.15f;
+    if (!std::isfinite(spanV) || spanV < 0.f)
+      spanV = halfH * 2.15f;
+    spanU = std::min(spanU, maxReach);
+    spanV = std::min(spanV, maxReach);
+    const float spanW = spanU + step * 2.f;
+    const float spanH = spanV + step * 2.f;
+    const int rawNiU = static_cast<int>(std::ceil(spanW / std::max(step, 1e-12f))) + 2;
+    const int rawNiV = static_cast<int>(std::ceil(spanH / std::max(step, 1e-12f))) + 2;
+    const int niU = std::min(512, std::max(4, rawNiU));
+    const int niV = std::min(512, std::max(4, rawNiV));
     const double stepD = static_cast<double>(step);
     const double originX = std::floor(viewAnchorX / stepD) * stepD;
     const double originY = std::floor(viewAnchorY / stepD) * stepD;
@@ -1212,26 +1286,35 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       gridVerts.push_back(static_cast<float>(b.z) + gz);
     };
 
-    if (gridFrame && !ucs::IsWorld(*gridFrame)) {
+    if (useUcsFrame) {
       // Anchor the grid to the view centre projected INTO the frame, so panning still slides the
       // grid with the drawing instead of leaving it stranded around the UCS origin.
-      const ray3d::Vec3 anchorUcs = ucs::WorldToUcs(*gridFrame, {viewAnchorX, viewAnchorY, gridFrame->origin.z});
+      // The anchor has to be the camera's REAL 3D target (targetX, targetY, targetZ), not the UCS
+      // plane's own origin Z substituted in for the unknown Z. WorldToUcs projects the offset onto
+      // each axis independently (u = dot(offset, xAxis), v = dot(offset, yAxis)); for a plane whose
+      // xAxis or yAxis has a Z component — e.g. the vertical "Front" UCS, where yAxis IS world Z —
+      // that axis's anchor coordinate comes ENTIRELY from the offset's Z. Substituting the plane's
+      // own origin Z there zeroes that offset outright, so the anchor stops following the camera the
+      // moment the user pans/orbits vertically: it stays pinned near the UCS origin no matter how far
+      // targetZ has moved, and the grid ends up generated around a point nowhere near what is on
+      // screen (issue #381).
+      const ray3d::Vec3 anchorUcs = ucs::WorldToUcs(*gridFrame, {viewAnchorX, viewAnchorY, cam.targetZ});
       const double ou = std::floor(anchorUcs.x / stepD) * stepD;
       const double ov = std::floor(anchorUcs.y / stepD) * stepD;
-      for (int i = -ni; i <= ni; ++i) {
+      for (int i = -niU; i <= niU; ++i) {
         const double u = ou + static_cast<double>(i) * stepD;
         pushUcsGridSeg(*gridFrame, u, ov - static_cast<double>(spanH), u, ov + static_cast<double>(spanH));
       }
-      for (int i = -ni; i <= ni; ++i) {
+      for (int i = -niV; i <= niV; ++i) {
         const double v = ov + static_cast<double>(i) * stepD;
         pushUcsGridSeg(*gridFrame, ou - static_cast<double>(spanW), v, ou + static_cast<double>(spanW), v);
       }
     } else {
-      for (int i = -ni; i <= ni; ++i) {
+      for (int i = -niU; i <= niU; ++i) {
         const double x = originX + static_cast<double>(i) * stepD;
         pushGridSeg(x, viewAnchorY - static_cast<double>(spanH), x, viewAnchorY + static_cast<double>(spanH));
       }
-      for (int i = -ni; i <= ni; ++i) {
+      for (int i = -niV; i <= niV; ++i) {
         const double y = originY + static_cast<double>(i) * stepD;
         pushGridSeg(viewAnchorX - static_cast<double>(spanW), y, viewAnchorX + static_cast<double>(spanW), y);
       }

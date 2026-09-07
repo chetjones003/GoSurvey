@@ -12410,8 +12410,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const double halfH1 = (1.0 / std::max(z1, 1.e-9)) * 50.0;
       const double dh = halfH0 - halfH1;
       const double aspectD = static_cast<double>(aspect);
-      *panX += (u - 0.5) * 2.0 * aspectD * dh;
-      *panY += dh * (1.0 - 2.0 * v);
+      const double wx = (u - 0.5) * 2.0 * aspectD * dh;
+      const double wy = dh * (1.0 - 2.0 * v);
+      if (modelSpace && !CadViewIsPlan(cmd)) {
+        // Keep the point under the cursor under the cursor (REQ-058), same as the orbited pan
+        // fix above: once the view tilts, world X/Y no longer line up with screen right/up, so
+        // applying wx/wy directly to panX/panY zooms about the wrong point (issue #381). wx/wy
+        // are still the right MAGNITUDE (derived the same way the pan drag's are) — they just have
+        // to move along the camera's own right/up axes, with the up axis's Z component going to
+        // the pan Z the way orbited panning already does.
+        float R[16];
+        CadViewCamera(cmd).ViewRotation(R);
+        const double rx = R[0], ry = R[4], rz = R[8];  // camera right, in world axes
+        const double ux = R[1], uy = R[5], uz = R[9];  // camera up, in world axes
+        *panX += rx * wx + ux * wy;
+        *panY += ry * wx + uy * wy;
+        cmd.viewportPanZ += rz * wx + uz * wy;
+      } else {
+        *panX += wx;
+        *panY += wy;
+      }
       *zoom = static_cast<float>(z1);
     }
 
