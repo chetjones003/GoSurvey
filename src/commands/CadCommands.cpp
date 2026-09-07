@@ -32021,7 +32021,7 @@ float EffectiveEntityLineweightMm(const EntityAttributes& e, const CadLayerRow* 
     return e.lineweightMm;
   if (layer && layer->lineweightMm >= 0.f)
     return layer->lineweightMm;
-  return 0.18f;
+  return 0.09f;
 }
 
 std::string EffectiveEntityLinetypeNameForViewport(const EntityAttributes& e, const CadLayerRow* layer) {
