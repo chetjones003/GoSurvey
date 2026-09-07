@@ -4943,6 +4943,17 @@ void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx
 /// into local storage first (REQ-047). False if the crosshair coincides with the anchor.
 /// The pure form lives in `OrthoConstrain.hpp` as \c OrthoUnitTowardPoint (both points in one frame).
 bool OrthoUnitTowardUiCursorFromAnchor(const AppCommandState& st, float* ux, float* uy);
+
+/// Direct-distance entry under a UCS (issue #371 5th follow-up): the UCS/screen-aware counterpart of
+/// \ref OrthoUnitTowardUiCursorFromAnchor, for every UCS other than World. Runs the anchor and the
+/// raw cursor hit through the same UCS-ortho decision \ref ApplyOrthoConstrainFromAnchor uses and
+/// returns the point \p dist units from the anchor along whichever axis it locked onto, landing in
+/// the plane through the anchor. Publishes the resulting elevation through
+/// \c AppCommandState::resolvedPointZ (which \c CadCommitElevation reads), so the caller's ordinary
+/// commit path picks it up unchanged. False when the cursor coincides with the anchor's locked
+/// direction.
+bool OrthoUcsDirectDistancePoint(AppCommandState& st, float dist, float* outX, float* outY);
+
 /// Trimmed input parses as exactly one float (allows negative).
 bool ParseSingleFloatToken(const std::string& raw, float* out);
 

@@ -18918,6 +18918,55 @@ bool OrthoUnitTowardUiCursorFromAnchor(const AppCommandState& st, float* ux, flo
   return OrthoUnitTowardPoint(st.anchorX, st.anchorY, cursorLocalX, cursorLocalY, ux, uy);
 }
 
+// Direct-distance entry under a UCS (issue #371 5th follow-up). OrthoUnitTowardUiCursorFromAnchor
+// above is a flat X/Y computation — it never looks at the active UCS's frame or at Z at all, which is
+// exactly right under the World UCS (REQ-047's original, still-tested behavior) and exactly wrong
+// otherwise: under a Front/Left/Right-style UCS the typed distance travelled in a direction with no
+// relation to the UCS's own axes, landing at whatever elevation the mouse happened to be hovering
+// over at the time — independent of the direction AND of the distance just typed.
+//
+// This instead builds the anchor and the raw cursor hit as real 3D points in the SAME storage frame
+// CadActiveUcsStorage returns (uiCursorWorldX/Y need CadCoord::LocalFromWorld first, same as above;
+// Z is frame-invariant), runs them through the identical UCS-ortho decision the mouse-drag path uses
+// (screen-aware when a live viewport is published, landing in the plane through the anchor — issue
+// #371's 3rd and 4th follow-ups), and returns the point \p dist units from the anchor along
+// whichever axis that decision locked onto. The resulting elevation is published through
+// AppCommandState::resolvedPointZ / resolvedPointZValid, the same channel CadCommitElevation reads,
+// so the caller's ordinary SubmitLineVertex/SubmitPolylineVertex commit picks it up with no other
+// change. Returns false when the cursor coincides with the anchor's locked direction — nothing to
+// take a distance along.
+bool OrthoUcsDirectDistancePoint(AppCommandState& st, float dist, float* outX, float* outY) {
+  if (!outX || !outY)
+    return false;
+  const ucs::Ucs frame = CadActiveUcsStorage(st);
+  float cursorLocalX = 0.f;
+  float cursorLocalY = 0.f;
+  CadCoord::LocalFromWorld(st, static_cast<double>(st.uiCursorWorldX), static_cast<double>(st.uiCursorWorldY),
+                           &cursorLocalX, &cursorLocalY);
+  const ray3d::Vec3 anchorPt{st.anchorX, st.anchorY, st.anchorZ};
+  const ray3d::Vec3 targetPt{cursorLocalX, cursorLocalY, st.uiCursorWorldZ};
+  const bool screenAware = st.uiViewportWidthPx > 0.f && st.uiViewportHeightPx > 0.f;
+  const ray3d::Vec3 constrained = screenAware
+      ? ConstrainToUcsOrthoOnScreen(frame, anchorPt, targetPt, CadViewCamera(st), st.uiViewportWidthPx,
+                                    st.uiViewportHeightPx)
+      : ConstrainToUcsOrtho(frame, anchorPt, targetPt);
+  const ray3d::Vec3 dir = ray3d::Sub(constrained, anchorPt);
+  const double len = ray3d::Length(dir);
+  if (!(len > 1e-9))
+    return false;
+  const ray3d::Vec3 unit = ray3d::Scale(dir, 1.0 / len);
+  const ray3d::Vec3 result = ray3d::Add(anchorPt, ray3d::Scale(unit, static_cast<double>(dist)));
+  *outX = static_cast<float>(result.x);
+  *outY = static_cast<float>(result.y);
+  st.resolvedPointZ = static_cast<float>(result.z);
+  st.resolvedPointZValid = true;
+  // This Z is authoritative for the point about to commit — a stale mouse snap from before the
+  // distance was typed must not override it (REQ-047's "object snap overrides ORTHO" is about a
+  // LIVE snap under the cursor, not a leftover flag from an earlier hover).
+  st.viewportSnapPickValid = false;
+  return true;
+}
+
 bool ParseSingleFloatToken(const std::string& raw, float* out) {
   std::istringstream iss(raw);
   iss >> std::ws;
@@ -30908,13 +30957,25 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (allowRel && st.orthoMode) {
       float dist = 0.f;
       if (ParseSingleFloatToken(line, &dist)) {
-        float ux = 0.f;
-        float uy = 0.f;
-        if (!OrthoUnitTowardUiCursorFromAnchor(st, &ux, &uy))
-          log.push_back(
-              "Ortho distance needs cursor direction — move crosshair away from anchor, then enter distance.");
-        else
-          SubmitPolylineVertex(st, st.anchorX + ux * dist, st.anchorY + uy * dist, log);
+        // Under a UCS, the direction AND the elevation both come from the same UCS-ortho decision
+        // the mouse-drag path uses (issue #371 5th follow-up) — OrthoUnitTowardUiCursorFromAnchor is
+        // a flat X/Y computation that has no notion of the UCS's own axes or of Z.
+        if (CadUcsIsWorld(st)) {
+          float ux = 0.f;
+          float uy = 0.f;
+          if (!OrthoUnitTowardUiCursorFromAnchor(st, &ux, &uy))
+            log.push_back(
+                "Ortho distance needs cursor direction — move crosshair away from anchor, then enter distance.");
+          else
+            SubmitPolylineVertex(st, st.anchorX + ux * dist, st.anchorY + uy * dist, log);
+        } else {
+          float px = 0.f, py = 0.f;
+          if (!OrthoUcsDirectDistancePoint(st, dist, &px, &py))
+            log.push_back(
+                "Ortho distance needs cursor direction — move crosshair away from anchor, then enter distance.");
+          else
+            SubmitPolylineVertex(st, px, py, log);
+        }
         return;
       }
     }
@@ -31073,15 +31134,26 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (allowRel && st.orthoMode) {
       float dist = 0.f;
       if (ParseSingleFloatToken(line, &dist)) {
-        float ux = 0.f;
-        float uy = 0.f;
-        if (!OrthoUnitTowardUiCursorFromAnchor(st, &ux, &uy))
-          log.push_back(
-              "Ortho distance needs cursor direction — move crosshair away from anchor, then enter distance.");
-        else {
-          px = st.anchorX + ux * dist;
-          py = st.anchorY + uy * dist;
-          SubmitLineVertex(st, px, py, log);
+        // Under a UCS, the direction AND the elevation both come from the same UCS-ortho decision
+        // the mouse-drag path uses (issue #371 5th follow-up) — OrthoUnitTowardUiCursorFromAnchor is
+        // a flat X/Y computation that has no notion of the UCS's own axes or of Z.
+        if (CadUcsIsWorld(st)) {
+          float ux = 0.f;
+          float uy = 0.f;
+          if (!OrthoUnitTowardUiCursorFromAnchor(st, &ux, &uy))
+            log.push_back(
+                "Ortho distance needs cursor direction — move crosshair away from anchor, then enter distance.");
+          else {
+            px = st.anchorX + ux * dist;
+            py = st.anchorY + uy * dist;
+            SubmitLineVertex(st, px, py, log);
+          }
+        } else {
+          if (!OrthoUcsDirectDistancePoint(st, dist, &px, &py))
+            log.push_back(
+                "Ortho distance needs cursor direction — move crosshair away from anchor, then enter distance.");
+          else
+            SubmitLineVertex(st, px, py, log);
         }
         return;
       }
