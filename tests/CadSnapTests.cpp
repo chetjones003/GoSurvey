@@ -375,6 +375,62 @@ TEST_CASE("A tilted arc's midpoint candidates rise with the arc", "[CadSnap][req
   CHECK(d == Approx(10.f).margin(0.05f));  // 0.05 covers the chord's own sagitta, nothing more
 }
 
+TEST_CASE("A tilted polyline curve segment's midpoint follows the true arc, not its chord",
+         "[CadSnap][req325]") {
+  // REQ-325 / ADR-053 increment 3. A single-segment open polyline standing on the wall y = 0, same
+  // shape family as WallArc: vertex A = (0,0,0), vertex B = (20,0,0), bulge = 1 (a half circle),
+  // normal (0,-1,0). The plane FromNormal builds from A as origin gives xAxis=(1,0,0),
+  // yAxis=(0,0,1), so local (10,0) is the arc's centre, world (10,0,0); the half circle's apex at
+  // local (10,-10) is world (10,0,-10) -- NOT the chord midpoint (10,0,0) the pre-fix code always
+  // returned regardless of bulge (a real gap: even a FLAT bulge segment's Midpoint was chord-only).
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapMidpoint = true;
+  st.objectSnapCenter = false;
+  st.userPolylineVerts = {0.f, 0.f, 0.f, 20.f, 0.f, 0.f};
+  st.userPolylineOffsets = {0, 2};
+  st.userPolylineClosed = {0};
+  st.userPolylineAttrs.emplace_back();
+  st.userPolylineVertsBulge = {1.f, 0.f};
+  st.userPolylineVertsNormal = {0.f, -1.f, 0.f, 0.f, 0.f, 1.f};
+
+  const ray3d::Ray ray = RayAt(10.0, 0.0, -10.0);
+  const CadSnap::Hit hit = CadSnap::FindBest(10.0, 0.0, st, /*commandActive=*/false, kTol,
+                                             /*exclude=*/{}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Midpoint);
+  CHECK(hit.y == Approx(0.f).margin(1e-4));  // on the wall — the old chord path never left y = 0 either
+  CHECK(hit.z < -9.f);                       // near the true apex (-10), nowhere near the chord's 0
+  // Genuinely on the circle: distance 10 from (10, 0, 0), the world centre this plane implies.
+  const float d = std::hypot(hit.x - 10.f, hit.z);
+  CHECK(d == Approx(10.f).margin(0.1f));  // 0.1 covers the 24-chord sagitta at this radius
+}
+
+TEST_CASE("A flat polyline curve segment's midpoint follows the true arc too", "[CadSnap][req325]") {
+  // Same fix, the FLAT case: bulge already existed (REQ-316), but Midpoint on it was still the
+  // straight chord — never actually curve-aware even for the simple case.
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapMidpoint = true;
+  st.objectSnapCenter = false;
+  st.userPolylineVerts = {0.f, 0.f, 0.f, 20.f, 0.f, 0.f};
+  st.userPolylineOffsets = {0, 2};
+  st.userPolylineClosed = {0};
+  st.userPolylineAttrs.emplace_back();
+  st.userPolylineVertsBulge = {1.f, 0.f};
+  // No normal array at all — the pre-existing default, world +Z, flat.
+
+  const CadSnap::Hit hit =
+      CadSnap::FindBest(10.0, -10.0, st, /*commandActive=*/false, kTol, /*exclude=*/{}, nullptr);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Midpoint);
+  // The flat apex is (10, -10, 0) — a half circle of radius 10 centred at (10, 0, 0) in the XY
+  // plane (BulgeArc's own sign convention) — genuinely different from the chord midpoint
+  // (10, 0, 0) the old code always returned.
+  CHECK(hit.y < -9.f);
+  CHECK(hit.z == Approx(0.f).margin(1e-4));
+}
+
 TEST_CASE("A tilted arc offers nothing where only its XY shadow would be", "[CadSnap][req312]") {
   AppCommandState st;
   st.objectSnapEndpoint = true;

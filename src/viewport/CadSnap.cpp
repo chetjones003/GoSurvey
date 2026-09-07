@@ -904,10 +904,71 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
         Consider(&acc, wx, wy, ax, ay, Kind::Endpoint, tolWorld, az);
         Consider(&acc, wx, wy, bx, by, Kind::Endpoint, tolWorld, bz);
       }
-      if (wantMidpoint)
-        Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
-      if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
+      const float bulge = static_cast<size_t>(ia) < cmd.userPolylineVertsBulge.size()
+                              ? cmd.userPolylineVertsBulge[static_cast<size_t>(ia)] : 0.f;
+      if (bulge == 0.f) {
+        if (wantMidpoint)
+          Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
+        if (havePerpRef)
+          AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
+        return;
+      }
+      // REQ-325 / ADR-053 increment 3: a curved segment's own Midpoint candidates follow the TRUE
+      // curve (flat or tilted), the same dense chord-sampling the standalone ARC entity already
+      // offers below (kArcSnapSeg) — not the single straight-chord point every polyline bulge
+      // segment silently fell back to before, which was wrong even for a flat arc.
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      if (static_cast<size_t>(ia) * 3 + 2 < cmd.userPolylineVertsNormal.size()) {
+        nx = cmd.userPolylineVertsNormal[static_cast<size_t>(ia) * 3];
+        ny = cmd.userPolylineVertsNormal[static_cast<size_t>(ia) * 3 + 1];
+        nz = cmd.userPolylineVertsNormal[static_cast<size_t>(ia) * 3 + 2];
+      }
+      const bool flat = IsFlatNormal(nx, ny, nz);
+      ucs::Ucs plane{};
+      BulgeArcSpan arc{};
+      if (flat) {
+        arc = BulgeArc(ax, ay, bx, by, static_cast<double>(bulge));
+      } else if (ucs::FromNormal(ray3d::Vec3{ax, ay, az},
+                                 ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                             static_cast<double>(nz)},
+                                 &plane)) {
+        const ucs::Point2D p1Local = ucs::WorldToPlane(plane, ray3d::Vec3{bx, by, bz});
+        arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
+      }
+      if (!arc.valid) {
+        // Degenerate bulge or plane — same fallback the chord path above already uses.
+        if (wantMidpoint)
+          Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
+        if (havePerpRef)
+          AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
+        return;
+      }
+      auto sampleWorld = [&](double u, float* ox, float* oy, float* oz) {
+        const double lx = arc.cx + arc.radius * std::cos(u);
+        const double ly = arc.cy + arc.radius * std::sin(u);
+        if (flat) {
+          *ox = static_cast<float>(lx);
+          *oy = static_cast<float>(ly);
+          *oz = az;  // both ends share Z on a flat (world +Z) segment
+          return;
+        }
+        const ray3d::Vec3 wp = ucs::PlaneToWorld(plane, ucs::Point2D{lx, ly});
+        *ox = static_cast<float>(wp.x);
+        *oy = static_cast<float>(wp.y);
+        *oz = static_cast<float>(wp.z);
+      };
+      constexpr int kPolyArcSnapSeg = 24;  // matches the standalone ARC entity's own kArcSnapSeg
+      for (int i = 0; i < kPolyArcSnapSeg; ++i) {
+        const double t0 = arc.startAngle + arc.sweep * (static_cast<double>(i) / kPolyArcSnapSeg);
+        const double t1 = arc.startAngle + arc.sweep * (static_cast<double>(i + 1) / kPolyArcSnapSeg);
+        float x0 = 0.f, y0 = 0.f, z0 = 0.f, x1 = 0.f, y1 = 0.f, z1 = 0.f;
+        sampleWorld(t0, &x0, &y0, &z0);
+        sampleWorld(t1, &x1, &y1, &z1);
+        if (wantMidpoint)
+          Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, 0.5f * (z0 + z1));
+        if (havePerpRef)
+          AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
+      }
     };
     for (int vi = v0; vi + 1 < v1; ++vi)
       considerEdge(vi, vi + 1);
