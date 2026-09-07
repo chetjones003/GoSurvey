@@ -5862,7 +5862,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
     topological edges alone are a poor picture of a curved solid — a sphere's are two meridians, which
     draw as a lens rather than a ball — so curves are drawn *across* each curved face, from the same
     analytic surface evaluator the shaded triangles use. The count is per **full turn**, as AutoCAD's
-    `ISOLINES` is; it is set by an `ISOLINES` command in the report-or-set shape, defaults to **4**,
+    `ISOLINES` is; it is set by an `ISOLINES` command in the report-or-set shape, defaults to **16**
+    (amended 2026-09-07, D-2026-09-07-a, GitHub issue #384 — 4 read as round on a cylinder's single
+    ruling direction but left a sphere or torus looking sparse next to AutoCAD's own denser wireframe
+    cage; a user-supplied reference screenshot of AutoCAD's default sphere wireframe showed a dense
+    crossing-circle cage that 16 matches, while staying far under the REQ-100 frame-budget ceiling),
     accepts **0** (meaning edges only), refuses a value outside 0..256 by name while leaving the
     setting standing, and is saved in `.gs` and in the user preferences, clamped on read. The
     directions are per surface kind: a cylinder and a cone get rulings along the axis only, a sphere

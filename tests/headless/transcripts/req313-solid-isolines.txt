@@ -15,7 +15,7 @@ EXPECT SOLIDS 1
 # --- The default draws more than the bare edges -----------------------------------------------------
 EXPECT LOG "Cylinder created"
 CMD ISOLINES
-EXPECT LOG "ISOLINES = 4"
+EXPECT LOG "ISOLINES = 16"
 
 # --- Turning them off leaves the edges alone ---------------------------------------------------------
 CMD ISOLINES 0
