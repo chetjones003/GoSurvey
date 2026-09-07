@@ -331,3 +331,36 @@ EXPECT LOG JOIN — skipped a group: a tilted arc does not share a plane with th
 CHECK ALL
 EXPECT POLYLINES 2
 EXPECT ARCS 1
+
+# ── 11. REQ-325 / ADR-053 increment 2 — pick and render see the TRUE tilted curve ────────────────
+# Real report follow-on: a curved segment's own bulge is a flat-2D-only construction, so a picked
+# polyline containing a tilted arc (from JOIN, scenario 9) either could not be hit at all or was
+# tested against the wrong (flattened) points. PICKAT drives PickClosestCadEntity directly — no
+# screen/ray plumbing in the headless driver, so this is the plan-view (no-ray) flattened-metric
+# path, but that path now samples the tilted arc's TRUE 3D shape rather than a flat approximation.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+CMD
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+# A point roughly on the curved segment's own XY footprint (between the two known tangent points)
+# picks the polyline; a point far from all of it picks nothing.
+EXPECT PICKAT 5.1 0 1.0 POLYLINE
+EXPECT PICKAT 100 100 0.5 NONE

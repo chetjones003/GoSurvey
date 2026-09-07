@@ -22798,22 +22798,57 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       const size_t A = static_cast<size_t>(va) * 3, B = static_cast<size_t>(vb) * 3;
       const float bulge = static_cast<size_t>(va) < st.userPolylineVertsBulge.size()
                               ? st.userPolylineVertsBulge[static_cast<size_t>(va)] : 0.f;
-      const BulgeArcSpan arc = (bulge != 0.f)
-                                   ? BulgeArc(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
-                                              st.userPolylineVerts[B], st.userPolylineVerts[B + 1],
-                                              static_cast<double>(bulge))
-                                   : BulgeArcSpan{};
-      if (!arc.valid)
+      auto chordD2 = [&]() {
         return d2Segment(st.userPolylineVerts[A], st.userPolylineVerts[A + 1], st.userPolylineVerts[A + 2],
                          st.userPolylineVerts[B], st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]);
-      if (!useRay)
-        return PointArcDistanceSq(wx, wy, arc);  // exact — the aperture means the same on a curve as a line
+      };
+      if (bulge == 0.f)
+        return chordD2();
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      if (static_cast<size_t>(va) * 3 + 2 < st.userPolylineVertsNormal.size()) {
+        nx = st.userPolylineVertsNormal[static_cast<size_t>(va) * 3];
+        ny = st.userPolylineVertsNormal[static_cast<size_t>(va) * 3 + 1];
+        nz = st.userPolylineVertsNormal[static_cast<size_t>(va) * 3 + 2];
+      }
+      if (IsFlatNormal(nx, ny, nz)) {
+        const BulgeArcSpan arc = BulgeArc(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
+                                          st.userPolylineVerts[B], st.userPolylineVerts[B + 1],
+                                          static_cast<double>(bulge));
+        if (!arc.valid)
+          return chordD2();
+        if (!useRay)
+          return PointArcDistanceSq(wx, wy, arc);  // exact — the aperture means the same on a curve as a line
+        double d2 = 1e300;
+        constexpr int ns = 24;
+        const double za = static_cast<double>(st.userPolylineVerts[A + 2]);
+        for (int s = 0; s <= ns; ++s) {
+          const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / ns);
+          d2 = std::min(d2, d2Point(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), za));
+        }
+        return d2;
+      }
+      // REQ-325 / ADR-053: a tilted segment's bulge is solved in ITS OWN plane's 2D coordinates —
+      // same technique as the tilted render branch above — then sampled back to world 3D, so both
+      // the plan-view flattened metric (d2Point with no ray) and the true ray-to-curve metric (with
+      // one) see the real tilted shape rather than a flat approximation.
+      const ray3d::Vec3 p0{st.userPolylineVerts[A], st.userPolylineVerts[A + 1], st.userPolylineVerts[A + 2]};
+      const ray3d::Vec3 p1{st.userPolylineVerts[B], st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]};
+      ucs::Ucs plane{};
+      if (!ucs::FromNormal(p0, ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                           static_cast<double>(nz)},
+                           &plane))
+        return chordD2();
+      const ucs::Point2D p1Local = ucs::WorldToPlane(plane, p1);
+      const BulgeArcSpan arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
+      if (!arc.valid)
+        return chordD2();
       double d2 = 1e300;
       constexpr int ns = 24;
-      const double za = static_cast<double>(st.userPolylineVerts[A + 2]);
       for (int s = 0; s <= ns; ++s) {
         const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / ns);
-        d2 = std::min(d2, d2Point(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), za));
+        const ray3d::Vec3 wp = ucs::PlaneToWorld(
+            plane, ucs::Point2D{arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u)});
+        d2 = std::min(d2, d2Point(wp.x, wp.y, wp.z));
       }
       return d2;
     };

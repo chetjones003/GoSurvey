@@ -1245,6 +1245,7 @@ int main()
     ext.polylineClosed = &cmd.userPolylineClosed;
     ext.polylineAttrs = &cmd.userPolylineAttrs;
     ext.polylineBulge = &cmd.userPolylineVertsBulge;  // REQ-316 / ADR-047
+    ext.polylineNormal = &cmd.userPolylineVertsNormal;  // REQ-325 / ADR-053
     ext.featureLineVerts = &cmd.featureLineVerts;      // REQ-087
     ext.featureLineOffsets = &cmd.featureLineOffsets;
     ext.featureLineClosed = &cmd.featureLineClosed;

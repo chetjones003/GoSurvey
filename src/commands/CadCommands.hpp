@@ -774,6 +774,10 @@ struct CadExtendedGeometryInput {
   /// REQ-316 / ADR-047: per-vertex bulge (parallel to polylineVerts, one per vertex). Null or
   /// empty means every polyline segment is straight — the pre-ADR-047 behaviour.
   const std::vector<float>* polylineBulge = nullptr;
+  /// REQ-325 / ADR-053: per-vertex curve-plane normal (stride 3, parallel to polylineVerts). Null
+  /// or empty means every curved segment is flat (world +Z) — the pre-ADR-053 behaviour, and what
+  /// every polyline that predates it still is.
+  const std::vector<float>* polylineNormal = nullptr;
   // Feature lines (REQ-087). Same four arrays, same shape — the renderer draws both through one
   // function, so a feature line cannot render differently from a polyline by accident.
   const std::vector<float>* featureLineVerts = nullptr;
