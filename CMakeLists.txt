@@ -1028,6 +1028,10 @@ if(GOSURVEY_BUILD_TESTS)
     # rides with GoSurveySnapTests (has the imgui include path) rather than GoSurveyTests.
     tests/RibbonLayoutPlaceTests.cpp
     tests/ViewportUcsTests.cpp
+    # REQ-154 / issue #371 — ORTHO squaring to a vertical (Front/Left/Right-style) UCS. Needs
+    # gosurvey_domain for ApplyOrthoConstrainFromAnchor, so it rides with GoSurveySnapTests like
+    # ViewportUcsTests.cpp above.
+    tests/OrthoUcsConstrainTests.cpp
     # REQ-318 increment 2 (issue #148) — the sub-object SELECTION: its store, the expiring
     # reference, mutual exclusion and cross-solid depth order. Needs gosurvey_domain for
     # SubmitSubObjectPick / ExpireSubObjectSelection, like ViewportUcsTests above.

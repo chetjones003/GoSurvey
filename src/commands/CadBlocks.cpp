@@ -30,7 +30,8 @@ float InsertRotZFromCwNorthDeg(float deg) { return -deg * 0.01745329252f; }
 float InsertLiveScaleDist(const AppCommandState& st, float wx, float wy) {
   float lx = wx;
   float ly = wy;
-  ApplyOrthoConstrainFromAnchor(st, st.insertBlockX, st.insertBlockY, &lx, &ly, st.orthoMode);
+  ApplyOrthoConstrainFromAnchor(st, st.insertBlockX, st.insertBlockY, &lx, &ly, st.orthoMode, st.insertBlockZ,
+                                st.uiCursorWorldZ);
   const float dx = lx - st.insertBlockX;
   const float dy = ly - st.insertBlockY;
   return std::sqrt(dx * dx + dy * dy);
@@ -42,7 +43,8 @@ float InsertLiveScaleDist(const AppCommandState& st, float wx, float wy) {
 float InsertLiveRotDeg(const AppCommandState& st, float wx, float wy) {
   float lx = wx;
   float ly = wy;
-  ApplyOrthoConstrainFromAnchor(st, st.insertBlockX, st.insertBlockY, &lx, &ly, st.orthoMode);
+  ApplyOrthoConstrainFromAnchor(st, st.insertBlockX, st.insertBlockY, &lx, &ly, st.orthoMode, st.insertBlockZ,
+                                st.uiCursorWorldZ);
   const float dx = lx - st.insertBlockX;
   const float dy = ly - st.insertBlockY;
   if (dx * dx + dy * dy <= 1.e-10f)

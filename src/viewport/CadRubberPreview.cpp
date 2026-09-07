@@ -185,7 +185,8 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
                                          false);
       else
-        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled, cmd.anchorZ,
+                                      cmd.uiCursorWorldZ);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
                            zc);  // preview at the elevation it will commit to
     }
@@ -239,7 +240,8 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
                                          false);
       else
-        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled, cmd.anchorZ,
+                                      cmd.uiCursorWorldZ);
       // REQ-316 / ADR-047: in ARC mode the rubber-band to the cursor previews the pending arc,
       // computed by the SAME function the commit uses so what is drawn is what will be committed.
       const float pendBulge =
@@ -273,7 +275,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       } else {
         float lx = curXf;
         float ly = curYf;
-        ApplyOrthoConstrainFromAnchor(cmd, ax, ay, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, ax, ay, &lx, &ly, orthoEnabled, az, cmd.uiCursorWorldZ);
         PushRubberSegViewRel(rubberLines, ax, ay, lx, ly, 0., 0., az, zc);
       }
     }
@@ -441,7 +443,8 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       if (cmd.insertBlockPhase != IPh::WaitInsertPoint) {
         float lx = curXf;
         float ly = curYf;
-        ApplyOrthoConstrainFromAnchor(cmd, cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled);
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled,
+                                      cmd.insertBlockZ, cmd.uiCursorWorldZ);
         PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0., zc, zc);
       }
       // Live ghost of the block at the transform this pick would commit (REQ-107, D-2026-08-29-i).

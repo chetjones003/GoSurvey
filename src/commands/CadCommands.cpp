@@ -11527,7 +11527,9 @@ static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, float& wx, 
   if (st.segmentAngleLockActive)
     ApplySegmentAngleLockToWorldPick(st.anchorX, st.anchorY, st.segmentLockUx, st.segmentLockUy, &wx, &wy, false);
   else
-    ApplyOrthoConstrainFromAnchor(st, st.anchorX, st.anchorY, &wx, &wy, st.orthoMode);  // no-op when ORTHO off (REQ-047)
+    // no-op when ORTHO off (REQ-047); anchorZ/the cursor's resolved Z are passed so a tilted or
+    // edge-on UCS plane constrains correctly (issue #371) instead of guessing Z from x,y.
+    ApplyOrthoConstrainFromAnchor(st, st.anchorX, st.anchorY, &wx, &wy, st.orthoMode, st.anchorZ, st.resolvedPointZ);
   return false;
 }
 
@@ -18657,23 +18659,34 @@ bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, f
   return ParseStoragePointZ(st, raw, lx, ly, nullptr, allowRelative, baseLocalX, baseLocalY);
 }
 
+// Lift a storage (x,y) onto the active work plane by SOLVING the plane equation for Z. Only valid
+// while the plane is close enough to horizontal that Z is a genuine function of (x,y) — it has no
+// solution (and falls back to the plane's own origin Z, which is simply wrong) once the plane
+// stands on edge to world Z, e.g. a Front/Left/Right-style UCS (issue #371). Kept only as the
+// fallback for callers that cannot supply the point's real, already-resolved Z.
+static ray3d::Vec3 ApproximateOnWorkPlaneFromXy(const ucs::Ucs& frame, double x, double y) {
+  const ray3d::Vec3 n = frame.zAxis;
+  const double z = (std::fabs(n.z) > 1e-9)
+                       ? frame.origin.z - (n.x * (x - frame.origin.x) + n.y * (y - frame.origin.y)) / n.z
+                       : frame.origin.z;
+  return ray3d::Vec3{x, y, z};
+}
+
 void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
-                                   bool polar) {
+                                   bool polar, float anchorZ, float targetZ) {
   if (!polar || !st.polarMode || !wx || !wy)
     return;
   const ucs::Ucs frame = CadActiveUcsStorage(st);
-  // Lift both points onto the UCS work plane first, the same reason ConstrainToUcsOrtho does: polar
-  // is a constraint within that plane and a tilted plane's Z varies across it.
-  auto onWorkPlane = [&](double x, double y) {
-    const ray3d::Vec3 n = frame.zAxis;
-    const double z = (std::fabs(n.z) > 1e-9)
-                         ? frame.origin.z - (n.x * (x - frame.origin.x) + n.y * (y - frame.origin.y)) / n.z
-                         : frame.origin.z;
-    return ray3d::Vec3{x, y, z};
-  };
+  // Prefer the REAL, already-resolved elevation of each point (issue #371) over solving the plane
+  // equation for Z, which only has a real answer while the plane is close to horizontal.
+  const bool haveRealZ = std::isfinite(anchorZ) && std::isfinite(targetZ);
+  const ray3d::Vec3 anchorPt = haveRealZ ? ray3d::Vec3{anchorX, anchorY, anchorZ}
+                                         : ApproximateOnWorkPlaneFromXy(frame, anchorX, anchorY);
+  const ray3d::Vec3 targetPt =
+      haveRealZ ? ray3d::Vec3{*wx, *wy, targetZ} : ApproximateOnWorkPlaneFromXy(frame, *wx, *wy);
   const std::vector<double>& extra = st.polarExtraAnglesDeg;
-  const ray3d::Vec3 snapped = ucs::SnapToPolarRay(frame, onWorkPlane(anchorX, anchorY), onWorkPlane(*wx, *wy),
-                                                  st.polarIncrementDeg, extra.empty() ? nullptr : extra.data(),
+  const ray3d::Vec3 snapped = ucs::SnapToPolarRay(frame, anchorPt, targetPt, st.polarIncrementDeg,
+                                                  extra.empty() ? nullptr : extra.data(),
                                                   static_cast<int>(extra.size()));
   if (!std::isfinite(snapped.x) || !std::isfinite(snapped.y))
     return;  // leave the point alone rather than move it somewhere undefined (REQ-201)
@@ -18682,10 +18695,10 @@ void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
 }
 
 void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
-                                   bool ortho) {
+                                   bool ortho, float anchorZ, float targetZ) {
   if (!ortho || !wx || !wy) {
     // ORTHO and POLAR are mutually exclusive; when ORTHO is off, POLAR (if on) constrains instead.
-    ApplyPolarConstrainFromAnchor(st, anchorX, anchorY, wx, wy, !ortho);
+    ApplyPolarConstrainFromAnchor(st, anchorX, anchorY, wx, wy, !ortho, anchorZ, targetZ);
     return;
   }
   // Under the WCS this is the original world-axis constraint, byte for byte — REQ-047's one tested
@@ -18694,22 +18707,29 @@ void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
     OrthoConstrainPoint(anchorX, anchorY, wx, wy, ortho);
     return;
   }
-  // Under a UCS, "square" means square with the UCS axes (REQ-154). Both points are lifted onto the
-  // work plane first, because ORTHO is a constraint within that plane and a tilted plane's Z varies
-  // across it — constraining the flat XY projection instead would slide the point off the plane.
+  // Under a UCS, "square" means square with the UCS axes (REQ-154). Both points need their real 3D
+  // position on (or off) the work plane; ORTHO is a constraint within that plane and a tilted
+  // plane's Z varies across it — constraining the flat XY projection instead would slide the point
+  // off the plane. Prefer the caller's already-resolved Z (issue #371); solving the plane equation
+  // for Z from (x,y) alone breaks down once the plane stands on edge to world Z, which is exactly
+  // the Front/Left/Right-UCS case the issue reports.
   const ucs::Ucs frame = CadActiveUcsStorage(st);
-  auto onWorkPlane = [&](double x, double y) {
-    const ray3d::Vec3 n = frame.zAxis;
-    const double z = (std::fabs(n.z) > 1e-9)
-                         ? frame.origin.z - (n.x * (x - frame.origin.x) + n.y * (y - frame.origin.y)) / n.z
-                         : frame.origin.z;
-    return ray3d::Vec3{x, y, z};
-  };
-  const ray3d::Vec3 constrained = ConstrainToUcsOrtho(frame, onWorkPlane(anchorX, anchorY), onWorkPlane(*wx, *wy));
-  if (!std::isfinite(constrained.x) || !std::isfinite(constrained.y))
+  const bool haveRealZ = std::isfinite(anchorZ) && std::isfinite(targetZ);
+  const ray3d::Vec3 anchorPt = haveRealZ ? ray3d::Vec3{anchorX, anchorY, anchorZ}
+                                         : ApproximateOnWorkPlaneFromXy(frame, anchorX, anchorY);
+  const ray3d::Vec3 targetPt =
+      haveRealZ ? ray3d::Vec3{*wx, *wy, targetZ} : ApproximateOnWorkPlaneFromXy(frame, *wx, *wy);
+  const ray3d::Vec3 constrained = ConstrainToUcsOrtho(frame, anchorPt, targetPt);
+  if (!std::isfinite(constrained.x) || !std::isfinite(constrained.y) || !std::isfinite(constrained.z))
     return;  // leave the point alone rather than move it somewhere undefined (REQ-201)
   *wx = static_cast<float>(constrained.x);
   *wy = static_cast<float>(constrained.y);
+  // NOTE (issue #371 follow-up): the locked axis is not necessarily world X or Y — squaring to a
+  // Front/Left/Right-style UCS's vertical axis locks world Z to the ANCHOR's, not the cursor's raw
+  // elevation, and this function has no channel back to the ~29 geometry-creation sites that read
+  // CadCommitElevation() for Z independently of this call (AppCommandState::resolvedPointZ, doc
+  // comment there). That commit-elevation channel would need to accept an ortho-adjusted Z to close
+  // this the rest of the way; out of scope for the X/Y-squaring defect issue #371 reports and fixes.
 }
 
 void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx, float lockUy, float* wx, float* wy,
