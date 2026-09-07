@@ -230,6 +230,33 @@ ray3d::Vec3 ConstrainToUcsOrtho(const ucs::Ucs& frame, const ray3d::Vec3& anchor
   return ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, keep));
 }
 
+ray3d::Vec3 ConstrainToUcsOrthoOnScreen(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target,
+                                        const Camera& cam, float viewportWidthPx, float viewportHeightPx) {
+  // issue #371 second follow-up: under an ORBITED (non-plan) camera, moving the mouse along ONE
+  // screen direction generally changes BOTH of the UCS's in-plane axes' world coordinates at once —
+  // an oblique view mixes them. ConstrainToUcsOrtho's "whichever raw UCS delta is bigger" test reads
+  // that mixture back as "the user meant to move along whichever axis happens to have the bigger
+  // world delta," which is frequently the WRONG axis relative to what the cursor is actually doing
+  // on screen (confirmed against AutoCAD: a Front-UCS ORTHO drag renders perfectly vertical on
+  // screen from any orbit, because ORTHO's choice there is a SCREEN decision, not a world one).
+  //
+  // So decide on screen instead: build both candidate locked points (free along UCS X, free along
+  // UCS Y), project each and the raw cursor hit to pixels with the SAME camera, and keep whichever
+  // candidate the cursor is actually closer to on screen. This subsumes the plan-view case exactly —
+  // in plan view the two decisions always agree, since UCS deltas and screen deltas are the same
+  // thing up to a uniform scale.
+  const ray3d::Vec3 d = ucs::WorldVectorToUcs(frame, ray3d::Sub(target, anchor));
+  const ray3d::Vec3 freeAlongY = ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, ray3d::Vec3{0.0, d.y, d.z}));
+  const ray3d::Vec3 freeAlongX = ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, ray3d::Vec3{d.x, 0.0, d.z}));
+  float cx = 0.f, cy = 0.f, ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+  cam.WorldToScreen(target.x, target.y, target.z, viewportWidthPx, viewportHeightPx, &cx, &cy);
+  cam.WorldToScreen(freeAlongY.x, freeAlongY.y, freeAlongY.z, viewportWidthPx, viewportHeightPx, &ax, &ay);
+  cam.WorldToScreen(freeAlongX.x, freeAlongX.y, freeAlongX.z, viewportWidthPx, viewportHeightPx, &bx, &by);
+  const double distFreeY = std::hypot(cx - ax, cy - ay);
+  const double distFreeX = std::hypot(cx - bx, cy - by);
+  return (distFreeY <= distFreeX) ? freeAlongY : freeAlongX;
+}
+
 // A one-line description of a frame, for the command log. Coordinates are reported in WORLD, the
 // only frame a UCS description can sensibly be stated in - describing a UCS in its own coordinates
 // would report every UCS alike as "origin 0,0,0".

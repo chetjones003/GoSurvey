@@ -16,6 +16,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
+
 #include "CadCommands.hpp"
 
 using Catch::Approx;
@@ -126,4 +128,90 @@ TEST_CASE("ORTHO leaves wz untouched under the World UCS", "[ucs][ortho][req154]
   float wz = 42.f;  // sentinel: World-UCS ORTHO never adjusts Z, so this must survive unchanged
   ApplyOrthoConstrainFromAnchor(st, 0.f, 0.f, &wx, &wy, /*ortho=*/true, 0.f, 0.f, &wz);
   REQUIRE(wz == Approx(42.f));
+}
+
+// Issue #371 THIRD follow-up: comparing raw UCS-delta magnitude (ConstrainToUcsOrtho's decision)
+// only tells you which axis the cursor is "farther along" while the camera is a plan view of the
+// UCS. Once the camera is orbited (any UCSFOLLOW=0 drag with a Front/Left/Right-style UCS is
+// exactly this — the camera never had to move for the coordinate system to change), one screen
+// direction generically maps onto a MIX of both in-plane UCS axes, so the raw-delta comparison can
+// lock the wrong one even though the user is visibly dragging along a single screen direction.
+// Confirmed against AutoCAD/Civil3D: an ORTHO drag under a Front UCS renders perfectly
+// screen-vertical from any orbit angle, because AutoCAD's decision is a SCREEN one.
+namespace {
+// The same Front UCS as above, plus a live, ORBITED (non-plan) camera and a published viewport
+// size — the two things ApplyOrthoConstrainFromAnchor needs to take the screen-aware path instead
+// of the world-space fallback.
+AppCommandState MakeOrbitedFrontViewUcsDrawing() {
+  AppCommandState st = [] {
+    AppCommandState s;
+    s.activeUcs = ucs::RotatedAboutX(ucs::Ucs{}, 90.0);
+    return s;
+  }();
+  st.viewportAzimuthDeg = 60.f;
+  st.viewportElevationDeg = 20.f;  // not 90 -> orbited, not a plan view (CadViewIsPlan is false)
+  st.viewportZoom = 1.f;
+  st.uiViewportWidthPx = 1200.f;
+  st.uiViewportHeightPx = 700.f;
+  return st;
+}
+}  // namespace
+
+TEST_CASE("ConstrainToUcsOrthoOnScreen can pick the OPPOSITE axis from the world-space decision "
+         "under an orbited camera",
+         "[ucs][ortho][req154]") {
+  const ucs::Ucs frame = ucs::RotatedAboutX(ucs::Ucs{}, 90.0);
+  const Camera cam = [] {
+    Camera c = Camera::Plan(0.0, 0.0, 50.f);
+    c.azimuthDeg = 60.f;
+    c.elevationDeg = 20.f;
+    return c;
+  }();
+
+  const ray3d::Vec3 anchor{0.0, 0.0, 0.0};
+  // A cursor hit whose raw UCS X offset (6) is bigger than its raw UCS Y / world-Z offset (4): the
+  // world-space decision (ConstrainToUcsOrtho) locks Z and leaves world X free — (6, 0, 0).
+  const ray3d::Vec3 target{6.0, 0.0, 4.0};
+
+  const ray3d::Vec3 worldDecision = ConstrainToUcsOrtho(frame, anchor, target);
+  const ray3d::Vec3 screenDecision =
+      ConstrainToUcsOrthoOnScreen(frame, anchor, target, cam, 1200.f, 700.f);
+
+  // The world-space decision locks Z (world X free): (6, 0, 0).
+  REQUIRE(worldDecision.x == Approx(6.0).margin(1e-6));
+  REQUIRE(worldDecision.z == Approx(0.0).margin(1e-6));
+
+  // Whichever candidate the screen decision picks, it must be the one whose SCREEN projection is
+  // actually closer to the raw cursor hit's own screen projection — not whatever the world-space
+  // magnitude comparison says. Verify that invariant directly, camera-orientation-agnostic.
+  float tx = 0.f, ty = 0.f, sx = 0.f, sy = 0.f, wxs = 0.f, wys = 0.f;
+  cam.WorldToScreen(target.x, target.y, target.z, 1200.f, 700.f, &tx, &ty);
+  cam.WorldToScreen(screenDecision.x, screenDecision.y, screenDecision.z, 1200.f, 700.f, &sx, &sy);
+  cam.WorldToScreen(worldDecision.x, worldDecision.y, worldDecision.z, 1200.f, 700.f, &wxs, &wys);
+  const double distScreenDecision = std::hypot(tx - sx, ty - sy);
+  const double distWorldDecision = std::hypot(tx - wxs, ty - wys);
+  REQUIRE(distScreenDecision <= distWorldDecision + 1e-6);
+
+  // For this specific camera (az=60, el=20 — an asymmetric oblique orbit), the two decisions
+  // actually diverge: the screen-nearer candidate is NOT the world-space decision's answer.
+  REQUIRE(distScreenDecision < distWorldDecision - 1e-6);
+}
+
+TEST_CASE("ApplyOrthoConstrainFromAnchor takes the screen-aware path once a live viewport is "
+         "published",
+         "[ucs][ortho][req154]") {
+  AppCommandState st = MakeOrbitedFrontViewUcsDrawing();
+
+  const float anchorX = 0.f, anchorY = 0.f, anchorZ = 0.f;
+  float wx = 6.f, wy = 0.f;
+  const float targetZ = 4.f;  // matches the divergent case above: world (6, 0, 4)
+  float wz = -999.f;
+
+  ApplyOrthoConstrainFromAnchor(st, anchorX, anchorY, &wx, &wy, /*ortho=*/true, anchorZ, targetZ, &wz);
+
+  // The world-space fallback (used when no viewport is published) would answer (6, 0) with wz=0.
+  // With the viewport published, this must NOT be that answer: the screen-aware path picked the
+  // other candidate, confirmed against ConstrainToUcsOrthoOnScreen directly in the test above.
+  const bool matchesWorldFallback = (std::fabs(wx - 6.f) < 1e-4f) && (std::fabs(wz - 0.f) < 1e-4f);
+  REQUIRE_FALSE(matchesWorldFallback);
 }
