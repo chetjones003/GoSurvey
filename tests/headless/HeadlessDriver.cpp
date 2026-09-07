@@ -618,8 +618,23 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
           rayPtr = &camRay;
         }
         CadResolveSolidPick(run.st, ray3d::Vec3{static_cast<double>(x), static_cast<double>(y), z}, rayPtr);
+        SubmitViewportPick(run.st, x, y, run.log);
+      } else if (ViewportClickRouteFor(run.st) == ViewportClickRoute::RawEntityPick && clickHasZ &&
+                !CadViewIsPlan(run.st) && run.st.uiViewportWidthPx > 0.f) {
+        // issue #373 follow-up: an explicit third coordinate on a RawEntityPick CLICK (FILLET,
+        // OFFSET, LENGTHEN, EXTEND, BREAK, ...) is the one way a transcript can name a point OFF
+        // the current work plane and still exercise the same camera-ray hit-test the real viewport
+        // performs for an orbited/ortho non-plan view — mirrors the CadResolveSolidPick ray build
+        // just above, aimed at (x, y, clickZ) instead of the work plane's own Z.
+        const Camera cam = CadViewCamera(run.st);
+        float sx = 0.f, sy = 0.f;
+        cam.WorldToScreen(static_cast<double>(x), static_cast<double>(y), static_cast<double>(clickZ),
+                          run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &sx, &sy);
+        const ray3d::Ray camRay = cam.ScreenRay(sx, sy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+        SubmitViewportPick(run.st, x, y, run.log, false, false, &camRay);
+      } else {
+        SubmitViewportPick(run.st, x, y, run.log);
       }
-      SubmitViewportPick(run.st, x, y, run.log);
       break;
     case ViewportClickRoute::SelectionBox:
     case ViewportClickRoute::IdleSelection:

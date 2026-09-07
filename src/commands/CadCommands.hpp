@@ -5203,7 +5203,8 @@ void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Model-space + floating-model-space viewport-pick handler for FILLET. Non-static for the same
 /// anonymous-namespace/global-scope reason `HandleLengthenViewportPick`/`HandleExtendViewportPick`/
 /// `HandleBreakViewportPick` are — `SubmitViewportPickImpl` needs to see it via this header.
-void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
+                              const ray3d::Ray* pickRay = nullptr);
 /// Typed command-line handling for FILLET's R(adius)/T(rim) sub-commands (REQ-103 step 6a) — the
 /// mode-letter shape LENGTHEN's own `HandleLengthenText` established, simplified: FILLET has no
 /// pending-pick-awaiting-a-value latch, since R/T only ever change a persisted setting, never
@@ -5553,8 +5554,14 @@ float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, floa
 ///   (`ApplyDocumentOriginRebase` shifts `viewportPanX/Y`), and an OSNAP overrides them with a value
 ///   read directly out of the geometry stores — so a snapped pick is exact and an unsnapped one is
 ///   bounded by the pixel it came from (REQ-101).
+// `pickRay` (issue #373 follow-up): the camera ray behind this click, in an orbited/non-plan model
+// view — nullptr in plan view and paper space, matching PickClosestCadEntity's own convention.
+// Threaded through so a RawEntityPick command (FILLET today) can hit-test the TRUE 3D distance from
+// the ray to elevated geometry instead of the click's flattened work-plane intersection, which is
+// nowhere near a line that does not lie on the current work plane.
 void SubmitViewportPick(AppCommandState& st, float localX, float localY, std::vector<std::string>& log,
-                        bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false);
+                        bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
+                        const ray3d::Ray* pickRay = nullptr);
 
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log);
 void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log);

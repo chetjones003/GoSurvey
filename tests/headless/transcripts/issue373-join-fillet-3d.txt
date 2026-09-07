@@ -129,3 +129,35 @@ EXPECT LOG FILLET — the two lines do not share a plane (non-coplanar 3D lines 
 CHECK ALL
 EXPECT LINES 2
 EXPECT ARCS 0
+
+# ── 5. FILLET's own pick now accepts the camera ray (plumbing smoke test) ───────────────────────
+# Real report: in an orbited/ortho view, hovering visibly over a vertical line and getting "no
+# object at pick", because FILLET's click handler never received the camera ray PickClosestCadEntity
+# already knows how to use — it only ever got the click's flattened work-plane X/Y. FILLET now takes
+# an optional ray and CLICK's own Z form aims one, the same way CadResolveSolidPick's ray already
+# does. This checks the new parameter is actually wired end to end (CadUi.cpp -> SubmitViewportPick
+# -> SubmitViewportPickImpl -> HandleFilletViewportPick -> PickClosestCadEntity) and does not
+# regress an ordinary flat pick once the view is orbited. It cannot reproduce the exact screen-ray
+# mismatch itself — that needs a live GUI pass (a scripted CLICK aims its ray at the exact 3D point
+# named, sidestepping the screen-to-workplane projection the real bug is in).
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 10,0
+CMD 10,10
+ESC
+VIEWANGLES -45 35
+CHECK ALL
+EXPECT LINES 2
+
+CMD FILLET
+CLICK 5 0 0
+EXPECT LOG FILLET — select second object:
+CLICK 10 5 0
+EXPECT LOG FILLET — corner filleted.
+CHECK ALL
+EXPECT LINES 2
+EXPECT ARCS 1

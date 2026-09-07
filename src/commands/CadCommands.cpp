@@ -11543,7 +11543,8 @@ static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, float& wx, 
 }
 
 void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
-                             bool windowSelectionSubtract, bool fenceLeftToRightWindowMode) {
+                             bool windowSelectionSubtract, bool fenceLeftToRightWindowMode,
+                             const ray3d::Ray* pickRay) {
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
   using RP = AppCommandState::RotatePhase;
@@ -12411,7 +12412,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   }
 
   if (st.active == K::Fillet) {
-    HandleFilletViewportPick(st, wx, wy, log);
+    HandleFilletViewportPick(st, wx, wy, log, pickRay);
     return;
   }
 
@@ -16262,6 +16263,29 @@ static bool HandleFillet3DLineLine(AppCommandState& st, const SelectedEntity& e1
   FilletTangentPointOnLine(c1, cx, cy, &t1x, &t1y);
   FilletTangentPointOnLine(c2, cx, cy, &t2x, &t2y);
 
+  // "Radius too large" check (D-2026-08-25-b), the 3D counterpart of the 2D path's own
+  // FilletRadiusFitsCurve: the plain radius-0 intersection (p0) is the TRUE corner, and a valid
+  // tangent point must stay within each line's own span measured from whichever original endpoint
+  // sits nearer p0 out to the far one — going past the far endpoint means the requested radius needs
+  // more line than either curve actually has. Checked in the same plane-local 2D coordinates
+  // everything else in this function already uses, so the existing (curve-agnostic) helpers apply
+  // unchanged.
+  float p0x = 0.f, p0y = 0.f;
+  const bool haveP0 = SolveFilletCenter(c1, c2, 0.f, pp1.x, pp1.y, pp2.x, pp2.y, &p0x, &p0y);
+  if (haveP0) {
+    const bool near1First = NearerToFirstPoint(p0x, p0y, c1.ax, c1.ay, c1.bx, c1.by);
+    const bool near2First = NearerToFirstPoint(p0x, p0y, c2.ax, c2.ay, c2.bx, c2.by);
+    const bool fits1 = FilletPointWithinSpan(near1First ? c1.ax : c1.bx, near1First ? c1.ay : c1.by,
+                                             near1First ? c1.bx : c1.ax, near1First ? c1.by : c1.ay, t1x, t1y);
+    const bool fits2 = FilletPointWithinSpan(near2First ? c2.ax : c2.bx, near2First ? c2.ay : c2.by,
+                                             near2First ? c2.bx : c2.ax, near2First ? c2.by : c2.ay, t2x, t2y);
+    if (!fits1 || !fits2) {
+      log.push_back("FILLET — radius " + std::to_string(st.filletRadius) +
+                    " is too large for the selected objects; refused.");
+      return true;
+    }
+  }
+
   PushUndoSnapshot(st, "Fillet");
   bool ok1 = true, ok2 = true;
   if (st.cornerTrimMode) {
@@ -16322,11 +16346,16 @@ void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log) {
 /// are the SAME polyline's adjacent segments (Case A, \ref ApplyFilletPolylineCorner) or two
 /// different curves (Case B), computes the tangent arc (or the parallel-lines semicircle special
 /// case), applies the trim/extend (Trim mode only), and loops back to "select first object".
-void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
+                              const ray3d::Ray* pickRay) {
   using FP = AppCommandState::FilletPhase;
   SelectedEntity hit{};
   float d2 = 0.f;
-  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+  // issue #373 follow-up: `wx,wy` alone is the click's flattened work-plane intersection, which is
+  // nowhere near a line that does not lie on the current work plane (e.g. a vertical run seen from
+  // an orbited camera or an ortho Front/Left view) — the TRUE 3D ray-to-segment distance is what has
+  // to decide the hit whenever the camera provides one.
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2, pickRay)) {
     log.push_back("FILLET — no object at pick.");
     return;
   }
@@ -29245,9 +29274,10 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
 // two-line clarification in an unreviewable diff. The space is stated here, at the entry point, which
 // is where a caller looks.
 void SubmitViewportPick(AppCommandState& st, float localX, float localY, std::vector<std::string>& log,
-                         bool windowSelectionSubtract, bool fenceLeftToRightWindowMode) {
+                         bool windowSelectionSubtract, bool fenceLeftToRightWindowMode,
+                         const ray3d::Ray* pickRay) {
   ClearPendingOneShotObjectSnap(st);
-  SubmitViewportPickImpl(st, localX, localY, log, windowSelectionSubtract, fenceLeftToRightWindowMode);
+  SubmitViewportPickImpl(st, localX, localY, log, windowSelectionSubtract, fenceLeftToRightWindowMode, pickRay);
 }
 
 // REQ-101 / decision D-2026-08-17-b: establish the document origin BEFORE a typed coordinate of
