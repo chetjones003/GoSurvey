@@ -6391,6 +6391,75 @@ capability that does not exist. They are recorded here rather than quietly dropp
   its own PR and Verification pass.
 - Revisions: 2026-09-02 — proposed and accepted (D-2026-09-02-e, ADR-047, TASK-180).
 
+### REQ-325 — Polyline arc segments carry their own plane (tilted curves), and JOIN accepts a coplanar tilted arc
+
+- Purpose: REQ-312 let a single ARC or CIRCLE lie in any plane, not just world XY. REQ-316 then gave
+  polylines curved segments — but only flat ones (the per-vertex bulge assumes every arc lies in
+  world XY, same as the pre-REQ-312 ARC did). The 3D FILLET fix (issue #373) now produces a genuinely
+  tilted ARC when it rounds a corner between two non-coplanar-with-world-XY lines — and JOIN refuses
+  to fold that arc into the polyline it geometrically completes, reporting "tilted arc ignored:
+  cannot fold a non-planar arc into a polyline". That refusal was correct when written (REQ-316 had
+  no tilted-plane storage to put it in) but is now the gap between two features that should compose.
+- Priority: should
+- Type: functional
+- Depends on: REQ-312 (`ucs::FromNormal`/`CurvePlane`/`CurvePointAt`, the tilted-curve machinery this
+  reuses), REQ-316/ADR-047 (the per-vertex bulge store this extends), REQ-057 (Z preservation).
+- Statement: a polyline segment's bulge may describe an arc in ANY plane, not just world XY, recorded
+  as a per-vertex normal in a parallel `userPolylineVertsNormal` array beside `userPolylineVerts` and
+  `userPolylineVertsBulge` — the same side-car shape ADR-047 chose for bulge itself, and the same
+  shape REQ-312 already used for `userCircleNormals` (a circle's stride cannot carry a normal without
+  widening ~300 call sites; a polyline vertex's stride is the same argument). Default world +Z,
+  additive, OMITTED from every persisted format when every segment is flat (REQ-312's own
+  byte-identical-legacy-round-trip rule, extended one layer up). The normal at vertex *i* describes
+  the plane of the segment LEAVING vertex *i* (paired with that vertex's own bulge), consulted only
+  when the paired bulge is non-zero.
+
+  Delivered in increments, mirroring ADR-047's own four-PR delivery of the flat version:
+  1. **Storage + JOIN.** The side-car array; `ExecuteJoinSelection` builds a normal per edge (flat
+     `+Z` for a Line/Polyline edge or a flat Arc, the arc's own `nx/ny/nz` for a tilted Arc) and
+     accepts a tilted Arc into the merge when it is coplanar with, and connects to, the adjacent
+     edges being joined — the SAME coplanarity test (`ucs::FromThreePoints` + a signed-distance
+     tolerance check) the 3D FILLET solve (issue #373) already uses, not a new one. A tilted arc that
+     is NOT coplanar with its neighbors is still refused by name (REQ-201) — there is no single
+     correct plane to guess for it.
+  2. **Render + pick.** A tilted curved segment tessellates in its OWN plane (`CurvePlane`/
+     `CurvePointAt`, REQ-312's shared parametrisation — not a new one) and is selected by a pick on
+     the true 3D curve, not its flattened projection.
+  3. **Object snap.** Endpoint/midpoint/centre/quadrant on a tilted curved polyline segment, plane-
+     aware and covered from an orbited pick ray — REQ-312's own acceptance bullet, extended to a
+     polyline's curved segments.
+  4. **DXF/DWG export/import.** DXF's `LWPOLYLINE` (and DWG's own polyline entities) carry ONE
+     elevation and ONE extrusion direction for the WHOLE entity — there is no per-segment plane slot,
+     a hard format constraint, not an implementation gap. A polyline containing a tilted curved
+     segment is therefore SPLIT on export: its flat run(s) stay one `LWPOLYLINE`/`POLYLINE` each, and
+     each tilted curved segment is written as its own separate ARC entity (REQ-312's own tilted-ARC
+     DXF/DWG support, unchanged) — geometrically exact, re-`JOIN`-able after re-import, but no longer
+     literally one object once it leaves GoSurvey. A polyline with every segment flat keeps exporting
+     as one `LWPOLYLINE`, unchanged (this is the byte-identical-legacy case). Decided with the user
+     2026-09-07 rather than silently flattening the tilted segment or refusing the whole export.
+- Acceptance:
+  - Two Line entities (or Polyline end segments) meeting at an angle, FILLETed (issue #373's 3D solve
+    produces a tilted arc), JOIN into one polyline: `JOIN — created 1 polyline(s)`, not the tilted-arc
+    refusal.
+  - That polyline's curved segment renders as the TRUE tilted arc (same plane, same start/sweep as
+    the original ARC entity it was built from) — not flattened onto world XY or onto either
+    connecting edge's own plane.
+  - A CENTER/MID/endpoint/quadrant osnap on that curved segment lands on the correct 3D point, to
+    REQ-101 tolerance, from an orbited pick ray.
+  - DXF and DWG export of that polyline produces a flat `LWPOLYLINE`/`POLYLINE` for the straight
+    run(s) plus a separate ARC entity carrying the tilted segment's own plane; reimporting reproduces
+    the same geometry (now as separate objects, re-`JOIN`-able).
+  - Every existing flat-bulge polyline transcript and test (REQ-316's own acceptance suite) keeps
+    passing unchanged — an all-flat polyline's `.gs`-era and DXF/DWG behavior is bit-for-bit
+    unaffected, and the new normal array is omitted from export when every segment is flat.
+  - JOIN still refuses a tilted Arc that is not coplanar with the edges it would be joined to, by name
+    (REQ-201), across the SAME tolerance the 3D FILLET solve uses.
+- Owner-layer: Domain (`userPolylineVertsNormal`, `docinvariants`) / Commands (`ExecuteJoinSelection`)
+  / Renderer (tessellation) / Viewport (snap, pick) / IO (`DxfIo`, `LibreDwgCad` split-on-export).
+- Status: **proposed** — increment 1 (storage + JOIN) in progress.
+- Revisions: 2026-09-07 — proposed (feature request via `/add-feature`, this session); DXF/DWG
+  split-on-export decided with the user rather than flattening or refusing.
+
 ### REQ-317 — POLYSOLID: a wall swept along a path (GitHub issue #146)
 - Purpose: REQ-313 gives GoSurvey seven solids, and every one of them is a shape from a formula
   placed at a point. None of them is the shape a surveyor draws most: a **wall** — a run of picked

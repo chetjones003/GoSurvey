@@ -941,6 +941,22 @@ inline void SyncPolylineBulge(std::vector<float>& bulge, std::size_t vertsFloatC
   bulge.resize(vertsFloatCount / 3, 0.0f);
 }
 
+/// REQ-325 / ADR-053: keep the parallel per-vertex polyline curve-plane-normal array the right
+/// length for the vertex list (stride 3, one normal per vertex). New entries default to world +Z
+/// (a flat/straight segment's normal is never consulted, but a uniform default keeps every entry
+/// a valid unit vector for docinvariants). Called at every site \ref SyncPolylineBulge already is —
+/// the two arrays' lengths must never drift apart, the same reason bulge itself is synced there.
+inline void SyncPolylineNormal(std::vector<float>& normal, std::size_t vertsFloatCount) {
+  const std::size_t n = vertsFloatCount / 3;
+  const std::size_t oldN = normal.size() / 3;
+  normal.resize(n * 3);
+  for (std::size_t i = oldN; i < n; ++i) {
+    normal[i * 3] = 0.f;
+    normal[i * 3 + 1] = 0.f;
+    normal[i * 3 + 2] = 1.f;
+  }
+}
+
 /// REQ-316 / ADR-047: grip index base for a polyline ARC segment's midpoint (bulge) grip. Vertex
 /// grips are `0..vertexCount-1`; a bulge grip for segment `s` is `kPolyBulgeGripBase + s`. The base
 /// is far above any realistic vertex count so the two grip families never collide.
@@ -964,6 +980,11 @@ struct DrawingGeometrySnapshot {
   /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
   /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
   std::vector<float>            userPolylineVertsBulge;
+  /// REQ-325 / ADR-053: the plane of the (bulge-curved) segment leaving this vertex, 3 floats each
+  /// (stride 3, parallel to userPolylineVerts — see AppCommandState::userPolylineVertsNormal).
+  /// Consulted only when the paired bulge is non-zero; omitted from persistence when every entry is
+  /// world +Z, the same additive/byte-identical-legacy rule REQ-312 used for userCircleNormals.
+  std::vector<float>            userPolylineVertsNormal;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
@@ -1102,6 +1123,11 @@ struct DrawingDocument {
   /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
   /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
   std::vector<float>            userPolylineVertsBulge;
+  /// REQ-325 / ADR-053: the plane of the (bulge-curved) segment leaving this vertex, 3 floats each
+  /// (stride 3, parallel to userPolylineVerts — see AppCommandState::userPolylineVertsNormal).
+  /// Consulted only when the paired bulge is non-zero; omitted from persistence when every entry is
+  /// world +Z, the same additive/byte-identical-legacy rule REQ-312 used for userCircleNormals.
+  std::vector<float>            userPolylineVertsNormal;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
@@ -2317,6 +2343,9 @@ struct AppCommandState {
   std::vector<float> userPolylineVerts;
   /// REQ-316 / ADR-047: per-vertex DXF bulge, parallel to userPolylineVerts (size()/3 entries).
   std::vector<float> userPolylineVertsBulge;
+  /// REQ-325 / ADR-053: per-vertex curve plane normal, parallel to userPolylineVerts (see the
+  /// AppCommandState field of the same name for the full contract).
+  std::vector<float> userPolylineVertsNormal;
   std::vector<uint8_t> userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
 

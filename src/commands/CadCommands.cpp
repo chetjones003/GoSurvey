@@ -103,6 +103,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.userPolylineOffsets    = cmd.userPolylineOffsets;
   doc.userPolylineVerts      = cmd.userPolylineVerts;
   doc.userPolylineVertsBulge = cmd.userPolylineVertsBulge;  // REQ-316 / ADR-047
+  doc.userPolylineVertsNormal = cmd.userPolylineVertsNormal;  // REQ-325 / ADR-053
   doc.userPolylineClosed     = cmd.userPolylineClosed;
   doc.userPolylineAttrs      = cmd.userPolylineAttrs;
   doc.featureLineOffsets     = cmd.featureLineOffsets;   // REQ-087
@@ -192,6 +193,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.userPolylineOffsets        = doc.userPolylineOffsets;
   cmd.userPolylineVerts          = doc.userPolylineVerts;
   cmd.userPolylineVertsBulge     = doc.userPolylineVertsBulge;  // REQ-316 / ADR-047
+  cmd.userPolylineVertsNormal    = doc.userPolylineVertsNormal;  // REQ-325 / ADR-053
   cmd.userPolylineClosed         = doc.userPolylineClosed;
   cmd.userPolylineAttrs          = doc.userPolylineAttrs;
   cmd.featureLineOffsets         = doc.featureLineOffsets;   // REQ-087
@@ -1512,6 +1514,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.userPolylineOffsets  = st.userPolylineOffsets;
   snap.userPolylineVerts    = st.userPolylineVerts;
   snap.userPolylineVertsBulge = st.userPolylineVertsBulge;  // REQ-316 / ADR-047
+  snap.userPolylineVertsNormal = st.userPolylineVertsNormal;  // REQ-325 / ADR-053
   snap.userPolylineClosed   = st.userPolylineClosed;
   snap.userPolylineAttrs    = st.userPolylineAttrs;
   snap.featureLineOffsets   = st.featureLineOffsets;   // REQ-087
@@ -1554,6 +1557,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.userPolylineOffsets  = snap.userPolylineOffsets;
   st.userPolylineVerts    = snap.userPolylineVerts;
   st.userPolylineVertsBulge = snap.userPolylineVertsBulge;  // REQ-316 / ADR-047
+  st.userPolylineVertsNormal = snap.userPolylineVertsNormal;  // REQ-325 / ADR-053
   st.userPolylineClosed   = snap.userPolylineClosed;
   st.userPolylineAttrs    = snap.userPolylineAttrs;
   st.featureLineOffsets   = snap.featureLineOffsets;   // REQ-087
@@ -8205,6 +8209,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
       // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
       uint8_t cl = 0;
       if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
         cl = st.userPolylineClosed[static_cast<size_t>(pi)];
@@ -8702,6 +8707,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
       // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
       uint8_t cl = 0;
       if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
         cl = st.userPolylineClosed[static_cast<size_t>(pi)];
@@ -9104,6 +9110,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
       // arc-aware MOVE/COPY/ROTATE/MIRROR is Inc 3.
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
       uint8_t cl = 0;
       if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
         cl = st.userPolylineClosed[static_cast<size_t>(pi)];
@@ -14837,6 +14844,7 @@ static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<
   for (size_t oi = static_cast<size_t>(pi + 1); oi < st.userPolylineOffsets.size(); ++oi)
     st.userPolylineOffsets[oi] += delta;
   SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
+  SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
 }
 
 /// Appends a brand-new polyline to the end of the CSR arrays. Precondition: at least one polyline
@@ -14854,6 +14862,7 @@ static void AppendNewPolyline(AppCommandState& st, const std::vector<std::pair<f
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
   st.userPolylineAttrs.push_back(std::move(attrs));
   SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
+  SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
 }
 
 static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
@@ -19922,6 +19931,7 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
     }
     st.userPolylineOffsets.push_back(baseVert + 4);
     SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316: RECT is straight
+    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
     st.userPolylineClosed.push_back(1u);
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
   }
@@ -21103,6 +21113,7 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
       if (static_cast<size_t>(vb) * 3 + 1 >= st.userPolylineVerts.size())
         return;
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
       const double b = ArcBulgeThrough(st.userPolylineVerts[static_cast<size_t>(va) * 3],
                                        st.userPolylineVerts[static_cast<size_t>(va) * 3 + 1],
                                        static_cast<double>(x), static_cast<double>(y),
@@ -21349,6 +21360,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.userEllAttrs.clear();
   st.userPolylineVerts.clear();
   st.userPolylineVertsBulge.clear();  // REQ-316 / ADR-047
+  st.userPolylineVertsNormal.clear();  // REQ-325 / ADR-053
   st.userPolylineOffsets.clear();
   st.userPolylineClosed.clear();
   st.userPolylineAttrs.clear();
@@ -21446,6 +21458,10 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
   if (!st.userPolylineVertsBulge.empty() && static_cast<size_t>(b) <= st.userPolylineVertsBulge.size())
     st.userPolylineVertsBulge.erase(st.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(a),
                                     st.userPolylineVertsBulge.begin() + static_cast<std::ptrdiff_t>(b));
+  // REQ-325 / ADR-053: same per-vertex cut span, 3 floats wide instead of 1.
+  if (!st.userPolylineVertsNormal.empty() && static_cast<size_t>(b) * 3 <= st.userPolylineVertsNormal.size())
+    st.userPolylineVertsNormal.erase(st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(a) * 3,
+                                     st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(b) * 3);
   std::vector<int> newOff;
   newOff.reserve(static_cast<size_t>(std::max(0, np - 1) + 1));
   newOff.push_back(0);
@@ -23757,10 +23773,12 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     int lineIx;
     int polyIx;
     float bulge = 0.f;  // REQ-316 / ADR-047: bulge traversing x0,y0 -> x1,y1 (0 = straight)
+    // REQ-325 / ADR-053: the plane the bulge is measured in — world +Z for every straight edge and
+    // every flat arc, an arc's own nx,ny,nz when it is tilted. Meaningless when bulge == 0.
+    float nx = 0.f, ny = 0.f, nz = 1.f;
     int arcIx = -1;
   };
   std::vector<Edge> edges;
-  int tiltedArcsSkipped = 0;
   float tol = 1e-3f;
   double mnX = 0.;
   double mxX = 0.;
@@ -23787,32 +23805,52 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
                ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
                : 0.f;
   };
+  // REQ-325 / ADR-053: a Polyline's own curved segment already carries a plane (e.g. re-joining a
+  // polyline a previous JOIN gave a tilted arc) — read it instead of assuming world +Z.
+  auto polyNormalAt = [&](int vi, float* nx, float* ny, float* nz) {
+    const size_t k = static_cast<size_t>(vi) * 3;
+    if (k + 2 < st.userPolylineVertsNormal.size()) {
+      *nx = st.userPolylineVertsNormal[k];
+      *ny = st.userPolylineVertsNormal[k + 1];
+      *nz = st.userPolylineVertsNormal[k + 2];
+    } else {
+      *nx = 0.f; *ny = 0.f; *nz = 1.f;
+    }
+  };
 
   for (const auto& se : st.selection) {
     if (se.type == ST::LineSeg && se.index >= 0) {
       float x0 = 0.f, y0 = 0.f, z0 = 0.f, x1 = 0.f, y1 = 0.f, z1 = 0.f;
       if (!readLine(se.index, &x0, &y0, &z0, &x1, &y1, &z1))
         continue;
-      edges.push_back({x0, y0, x1, y1, z0, z1, se.index, -1, 0.f, -1});
-      // NOTE: Edge{x0,y0,x1,y1, z0,z1, lineIx,polyIx, bulge,arcIx}
+      Edge e{};
+      e.x0 = x0; e.y0 = y0; e.x1 = x1; e.y1 = y1; e.z0 = z0; e.z1 = z1;
+      e.lineIx = se.index; e.polyIx = -1;
+      edges.push_back(e);
     } else if (se.type == ST::Arc && se.index >= 0) {
-      // REQ-316 / ADR-047: an ARC contributes one bulge edge. A tilted arc (REQ-312) cannot go
-      // into a 2D polyline without losing its plane, so it is refused by name (REQ-201) — the same
-      // treatment feature lines get above.
+      // REQ-316 / ADR-047 + REQ-325 / ADR-053: an ARC contributes one bulge edge, flat or tilted —
+      // its own plane rides along as this edge's normal (\ref Edge::nx). A tilted arc is only
+      // refused later, per-component, when it turns out NOT coplanar with what it would join to.
       const size_t k = static_cast<size_t>(se.index);
       if (k >= st.userArcs.size())
         continue;
       const CadArc& a = st.userArcs[k];
-      if (!IsFlatNormal(a.nx, a.ny, a.nz)) {
-        ++tiltedArcsSkipped;
-        continue;
-      }
-      const float x0 = a.cx + a.r * std::cos(a.startRad);
-      const float y0 = a.cy + a.r * std::sin(a.startRad);
-      const float x1 = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
-      const float y1 = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+      // REQ-325 / ADR-053: an arc's true 3D endpoints are only ever `a.cx + r*cos/sin(angle)` when
+      // it is flat — that formula assumes world X/Y are the arc's own in-plane axes, which is exactly
+      // what a tilted arc's Arbitrary-Axis-Algorithm frame (`CurvePlane`) does NOT agree with. Using
+      // it for a tilted arc silently computed a point nowhere near the real geometry (the bug this
+      // fixed: JOIN's endpoint-coincidence test then finds nothing to connect at all).
+      const ucs::Ucs plane = CurvePlane(a);
+      const ray3d::Vec3 p0 = CurvePointAt(plane, a.r, a.startRad);
+      const ray3d::Vec3 p1 = CurvePointAt(plane, a.r, a.startRad + a.sweepRad);
       const float bulge = std::tan(a.sweepRad * 0.25f);
-      edges.push_back({x0, y0, x1, y1, a.z, a.z, -1, -1, bulge, static_cast<int>(k)});
+      Edge e{};
+      e.x0 = static_cast<float>(p0.x); e.y0 = static_cast<float>(p0.y); e.z0 = static_cast<float>(p0.z);
+      e.x1 = static_cast<float>(p1.x); e.y1 = static_cast<float>(p1.y); e.z1 = static_cast<float>(p1.z);
+      e.lineIx = -1; e.polyIx = -1; e.bulge = bulge;
+      e.nx = a.nx; e.ny = a.ny; e.nz = a.nz;
+      e.arcIx = static_cast<int>(k);
+      edges.push_back(e);
     } else if (se.type == ST::Polyline && se.index >= 0) {
       const int pi = se.index;
       if (static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
@@ -23828,7 +23866,11 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
         const float bx = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
         const float by = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
         const float bz = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)];
-        edges.push_back({ax, ay, bx, by, az, bz, -1, pi, polyBulgeAt(vi), -1});
+        Edge e{};
+        e.x0 = ax; e.y0 = ay; e.x1 = bx; e.y1 = by; e.z0 = az; e.z1 = bz;
+        e.lineIx = -1; e.polyIx = pi; e.bulge = polyBulgeAt(vi);
+        polyNormalAt(vi, &e.nx, &e.ny, &e.nz);
+        edges.push_back(e);
       }
       if (closed && v1 - v0 >= 2) {
         const float ax = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
@@ -23837,14 +23879,14 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
         const float bx = st.userPolylineVerts[static_cast<size_t>(v0 * 3)];
         const float by = st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
         const float bz = st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)];
-        edges.push_back({ax, ay, bx, by, az, bz, -1, pi, polyBulgeAt(v1 - 1), -1});
+        Edge e{};
+        e.x0 = ax; e.y0 = ay; e.x1 = bx; e.y1 = by; e.z0 = az; e.z1 = bz;
+        e.lineIx = -1; e.polyIx = pi; e.bulge = polyBulgeAt(v1 - 1);
+        polyNormalAt(v1 - 1, &e.nx, &e.ny, &e.nz);
+        edges.push_back(e);
       }
     }
   }
-  if (tiltedArcsSkipped > 0)
-    log.push_back("JOIN — " + std::to_string(tiltedArcsSkipped) + " tilted arc" +
-                  (tiltedArcsSkipped == 1 ? "" : "s") + " ignored: cannot fold a non-planar arc into a polyline.");
-
   if (edges.size() < 2) {
     log.push_back("JOIN — select at least two connected lines, arcs, or polylines.");
     st.selection.clear();
@@ -23928,6 +23970,56 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     if (comp.size() < 2) {
       ++lonelyEdges;
       continue;
+    }
+
+    // REQ-325 / ADR-053: a tilted-arc edge is only accepted into this component when its own plane
+    // (already known — REQ-312 gives every ARC its own centre+normal, nothing to derive) agrees, to
+    // JOIN's own tolerance, with the FAR endpoint of every edge directly touching it. The far
+    // endpoint of a straight neighbor is enough to prove the whole neighbor lies in that plane (it
+    // is a straight line, and its near end already sits on the plane by construction); a curved
+    // neighbor is checked at its own endpoint only, an increment-1 approximation (full-curve
+    // coplanarity is increment 2's rendering work, not JOIN's).
+    {
+      bool badTiltedArc = false;
+      for (int ej : comp) {
+        const Edge& E = edges[static_cast<size_t>(ej)];
+        if (E.bulge == 0.f || IsFlatNormal(E.nx, E.ny, E.nz) || E.arcIx < 0)
+          continue;
+        if (static_cast<size_t>(E.arcIx) >= st.userArcs.size()) {
+          badTiltedArc = true;
+          break;
+        }
+        const CadArc& a = st.userArcs[static_cast<size_t>(E.arcIx)];
+        ucs::Ucs arcPlane{};
+        if (!ucs::FromNormal(ray3d::Vec3{a.cx, a.cy, a.z}, ray3d::Vec3{a.nx, a.ny, a.nz}, &arcPlane)) {
+          badTiltedArc = true;
+          break;
+        }
+        const int k0 = clusterOf(2 * ej), k1 = clusterOf(2 * ej + 1);
+        for (int oj : comp) {
+          if (oj == ej)
+            continue;
+          const Edge& N = edges[static_cast<size_t>(oj)];
+          const int u = clusterOf(2 * oj), v = clusterOf(2 * oj + 1);
+          const bool uTouches = (u == k0 || u == k1), vTouches = (v == k0 || v == k1);
+          if (!uTouches && !vTouches)
+            continue;
+          if (uTouches && vTouches)
+            continue;  // both ends of a tiny loop touch the arc — nothing "far" to check
+          const ray3d::Vec3 farPt = uTouches ? ray3d::Vec3{N.x1, N.y1, N.z1} : ray3d::Vec3{N.x0, N.y0, N.z0};
+          if (std::fabs(ucs::SignedDistanceToPlane(arcPlane, farPt)) > static_cast<double>(tol)) {
+            badTiltedArc = true;
+            break;
+          }
+        }
+        if (badTiltedArc)
+          break;
+      }
+      if (badTiltedArc) {
+        log.push_back("JOIN — skipped a group: a tilted arc does not share a plane with the edges it "
+                      "would be joined to.");
+        continue;
+      }
     }
 
     struct Pt3 { float x, y, z; };
@@ -24024,6 +24116,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 
     std::vector<float> pv;
     std::vector<float> pvBulge;  // REQ-316 / ADR-047: bulge of the segment leaving each vertex
+    std::vector<float> pvNormal;  // REQ-325 / ADR-053: plane of that same leaving segment, 3 per vertex
     for (size_t i = 0; i < pathVerts.size(); ++i) {
       const int cid = clusters[static_cast<size_t>(pathVerts[i])];
       const auto& pt = rep[cid];
@@ -24031,17 +24124,24 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       pv.push_back(pt.y);
       pv.push_back(pt.z);
       // The bulge for the segment LEAVING vertex i is the edge that joins i to i+1 (pathEdges[i+1]),
-      // negated when that edge is traversed against its stored x0->x1 direction.
+      // negated when that edge is traversed against its stored x0->x1 direction. A curve's PLANE is
+      // not sign-sensitive the way its bulge is — traversing an arc backwards reverses which way it
+      // bows (the bulge sign) but not which plane it lies in — so the normal carries straight across.
       float leave = 0.f;
+      float leaveNx = 0.f, leaveNy = 0.f, leaveNz = 1.f;
       if (i + 1 < pathVerts.size()) {
         const int e = pathEdges[i + 1];
         if (e >= 0) {
           const Edge& E = edges[static_cast<size_t>(e)];
           const bool forward = clusterOf(2 * e) == cid;  // stored x0 sits at this vertex
           leave = forward ? E.bulge : -E.bulge;
+          leaveNx = E.nx; leaveNy = E.ny; leaveNz = E.nz;
         }
       }
       pvBulge.push_back(leave);
+      pvNormal.push_back(leaveNx);
+      pvNormal.push_back(leaveNy);
+      pvNormal.push_back(leaveNz);
     }
 
     bool closed = pathVerts.front() == pathVerts.back();
@@ -24049,10 +24149,18 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       // Drop the repeated closing vertex; its leaving-bulge (the closing segment) moves onto the
       // last kept vertex, which is where userPolylineClosed expects the closing arc.
       const float closeBulge = pvBulge[pvBulge.size() - 2];  // edge from vert n-2 -> repeated last
+      const size_t closeN = pvNormal.size() - 6;  // the same edge's normal, 3 floats back from last
+      const float closeNx = pvNormal[closeN], closeNy = pvNormal[closeN + 1], closeNz = pvNormal[closeN + 2];
       pv.resize(pv.size() - 3);
       pvBulge.resize(pvBulge.size() - 1);
+      pvNormal.resize(pvNormal.size() - 3);
       if (!pvBulge.empty())
         pvBulge.back() = closeBulge;
+      if (pvNormal.size() >= 3) {
+        pvNormal[pvNormal.size() - 3] = closeNx;
+        pvNormal[pvNormal.size() - 2] = closeNy;
+        pvNormal[pvNormal.size() - 1] = closeNz;
+      }
     }
 
     if (pv.size() < 6)
@@ -24067,7 +24175,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
     // REQ-316 / ADR-047: carry the joined bulges through. Only materialise the array when a
-    // segment is actually curved, so a straight-only JOIN keeps .gs byte-stable.
+    // segment is actually curved, so a straight-only JOIN keeps its export byte-stable.
     {
       bool anyArc = false;
       for (float b : pvBulge)
@@ -24079,6 +24187,20 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
                                 : 0;
         for (size_t k = 0; k < static_cast<size_t>(nv) && k < pvBulge.size(); ++k)
           st.userPolylineVertsBulge[tail + k] = pvBulge[k];
+      }
+      // REQ-325 / ADR-053: same rule, one level up — materialise the normal array only when a
+      // joined segment is actually TILTED, so a flat-only JOIN (the overwhelming common case)
+      // leaves it untouched.
+      bool anyTilted = false;
+      for (size_t k = 0; k + 2 < pvNormal.size(); k += 3)
+        if (!IsFlatNormal(pvNormal[k], pvNormal[k + 1], pvNormal[k + 2])) { anyTilted = true; break; }
+      if (anyTilted || !st.userPolylineVertsNormal.empty()) {
+        SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+        const size_t tail3 = st.userPolylineVertsNormal.size() >= static_cast<size_t>(nv) * 3
+                                 ? st.userPolylineVertsNormal.size() - static_cast<size_t>(nv) * 3
+                                 : 0;
+        for (size_t k = 0; k < static_cast<size_t>(nv) * 3 && k < pvNormal.size(); ++k)
+          st.userPolylineVertsNormal[tail3 + k] = pvNormal[k];
       }
     }
     polysOut++;
@@ -24554,6 +24676,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     for (int pi : polyToErase)
       ErasePolylineByIndex(st, pi);
     SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());  // REQ-316 / ADR-047
+    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
   }
 
   // ── report ────────────────────────────────────────────────────────────────
@@ -29170,6 +29293,7 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
       if (b != 0.f) { draftHasArc = true; break; }
     if (draftHasArc || !st.userPolylineVertsBulge.empty()) {
       SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());  // REQ-325 / ADR-053
       const size_t tail = st.userPolylineVertsBulge.size() >= nvert ? st.userPolylineVertsBulge.size() - nvert : 0;
       for (size_t k = 0; k < nvert && k < st.polylineDraftBulge.size(); ++k)
         st.userPolylineVertsBulge[tail + k] = st.polylineDraftBulge[k];

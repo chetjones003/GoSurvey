@@ -3219,3 +3219,91 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   indefinitely — no consumer needs it, per (c)); `Intersection`-kind boundary edges in a general loop
   (no imported or generated content produces one yet); serialization details for a general-form face
   (`.gs` field layout, version bump if any) — left to #306 to decide and record.
+
+### ADR-053 — Tilted polyline curve segments: a per-vertex normal side-car, split-on-export to DXF/DWG   (2026-09-07, accepted)
+
+- **Status:** accepted (2026-09-07). Backs REQ-325. Phased delivery (storage+JOIN, render+pick, snap,
+  DXF/DWG split) chosen by the user, mirroring ADR-047's own four-increment delivery of the flat
+  version of this same feature.
+
+- **Context.** REQ-312 gave a single ARC or CIRCLE an arbitrary plane. REQ-316/ADR-047 then gave
+  polylines curved (bulge) segments — but `BulgeArc(x0, y0, x1, y1, bulge)` is a pure 2D function; a
+  polyline's curved segment is implicitly assumed to lie flat in world XY, the same assumption the
+  pre-REQ-312 ARC made. The 3D FILLET fix (issue #373) now produces a genuinely tilted ARC when
+  rounding a corner between two lines that do not share the world XY plane, and JOIN refuses to fold
+  that arc into the polyline it completes ("tilted arc ignored: cannot fold a non-planar arc into a
+  polyline") — a real, working refusal (REQ-316 had nowhere to put the plane), now the gap between
+  two accepted features.
+
+- **Decision.**
+
+  **(a) A per-vertex normal is a second parallel array**, `std::vector<float> userPolylineVertsNormal`
+  (stride 3, one normal per vertex, `size() == userPolylineVerts.size()`), beside the existing vertex
+  store and ADR-047's own bulge array — not a widened stride (ADR-047's own correction already ruled
+  that out for the identical reason: a `std::vector<float>` widened in place leaves stride-arithmetic
+  bugs the compiler cannot catch), and not folded into the bulge array (a normal is three numbers, a
+  bulge is one, and REQ-312 already established the precedent of a SEPARATE side-car for a normal
+  next to a store that cannot carry one — `userCircleNormals` beside the 4-float circle quads). The
+  normal at vertex *i* is the plane of the segment LEAVING vertex *i*, consulted only when that
+  vertex's own bulge (ADR-047 (a)) is non-zero AND the normal is not world +Z (`IsFlatNormal`,
+  REQ-312's own exact-comparison guard) — an all-flat polyline never allocates or reads this array,
+  matching ADR-047 (b)'s "today's behaviour is the zero case" rule one layer up.
+
+  **(b) JOIN's coplanarity test is the 3D FILLET solve's own test, not a new one.** `ExecuteJoinSelection`
+  already builds one bulge-carrying edge per selected Line/Polyline/Arc (ADR-047 (e)); it now also
+  builds a normal per edge — world +Z for a flat Line/Polyline edge or a flat Arc, the ARC's own
+  `nx/ny/nz` for a tilted one. Before folding a TILTED arc's edge into a walked component, JOIN checks
+  it is coplanar with the edges it connects to using the identical construction issue #373's
+  `HandleFillet3DLineLine` already added (`ucs::FromThreePoints` from three of the touching points,
+  then a signed-distance tolerance check against the fourth) — the same tolerance, not a
+  independently-tuned one, so JOIN and FILLET cannot disagree about what counts as "the same plane."
+  A tilted arc that fails this check is refused by name (REQ-201), same wording pattern as today's
+  blanket refusal, now conditioned on actual non-coplanarity rather than "any tilt at all."
+
+  **(c) Increment 1 (this ADR's immediate scope) is storage + JOIN + docinvariants only.** Render,
+  pick, and object snap on a tilted curved polyline segment fall back to being wrong (rendered/picked
+  as if flat) until increment 2 lands — an explicitly accepted, temporary gap (not silently discovered
+  later), because a polyline JOIN produces is otherwise correct data the moment increment 2 ships, and
+  gating increment 1 on having all four ready at once is exactly the single-PR risk ADR-047 already
+  rejected for the flat version. `docinvariants` gains
+  `userPolylineVertsNormal.size() == userPolylineVerts.size()` and "every normal is either exactly
+  world +Z or a finite unit-length-within-tolerance vector," mirroring REQ-312's own circle-normal
+  invariant.
+
+  **(d) Render/pick (increment 2) reuse `CurvePlane`/`CurvePointAt` unchanged** — REQ-312's one shared
+  parametrisation, already plane-aware; a tilted polyline segment becomes a THIRD caller alongside the
+  ARC entity and the DXF importer, not a new tessellation path. Object snap (increment 3) is the same
+  shape: REQ-312's existing plane-aware Endpoint/Midpoint/Center/Quadrant snap logic, extended to walk
+  a polyline's per-segment normal instead of assuming the polyline's own flat +Z.
+
+  **(e) DXF/DWG (increment 4): split on export, not flatten, not refuse.** `LWPOLYLINE` (DXF) and
+  DWG's own polyline entities carry exactly ONE elevation and ONE extrusion direction (group
+  38/210-220-230) for the WHOLE entity — a hard format ceiling REQ-312 already documented when it
+  scoped tilted-circle DXF bounds, not something increment 4 can negotiate around. A polyline
+  containing a tilted curved segment is written as its flat run(s), each its own `LWPOLYLINE`, PLUS
+  one separate ARC entity per tilted segment carrying that segment's own plane (REQ-312's existing
+  tilted-ARC DXF/DWG support, unchanged) — geometrically exact and re-`JOIN`-able after reimport, at
+  the cost of no longer being literally one object once it leaves GoSurvey. Considered and rejected:
+  flattening the tilted segment (REQ-201 — a flattened curve lies on neither the original arc nor
+  anywhere the user drew) and refusing the whole export (unnecessarily destructive when a correct,
+  if split, representation exists). Decided with the user 2026-09-07. An all-flat polyline keeps
+  exporting as one `LWPOLYLINE`/`POLYLINE`, byte-identical to today.
+
+- **Consequences.**
+  - No behavior change for any existing polyline: `userPolylineVertsNormal` is empty (or all-+Z) for
+    every polyline that exists today, and every consumer that does not yet know about it (increments
+    2-4, until each lands) keeps reading the vertex/bulge stores exactly as before.
+  - JOIN gains ONE new accept path (a coplanar tilted arc) and keeps its existing refusal for every
+    other tilted-arc case, worded to say WHY (not coplanar) rather than blanket-refusing by kind.
+  - A polyline saved to DXF/DWG before increment 4 ships still flattens or drops a tilted segment
+    exactly as today (increment 4 is what changes export behavior) — recorded as a known gap between
+    increments 1 and 4, not a silent one.
+  - Increments 2-4 are each their own PR and Verification pass, per REQ-325's own phasing.
+
+- **Out of scope and not designed for:** a general per-segment plane for anything other than a
+  circular-arc bulge segment (polylines have no other curved segment kind); OFFSET, TRIM, FILLET or
+  CHAMFER operating ON a tilted polyline segment (REQ-312's own arc-entity scope note already excludes
+  TRIM/BREAK and OFFSET against a tilted curve for the identical reason — planar-XY geometry — and
+  this ADR does not lift that for the polyline case either); `.gs` (retired, no code path); extents/
+  length/area on a tilted polyline segment (folded into increment 2's render work, not called out
+  separately since `CurvePointAt` sampling already answers both).

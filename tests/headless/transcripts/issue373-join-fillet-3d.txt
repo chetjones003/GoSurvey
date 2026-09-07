@@ -250,3 +250,84 @@ EXPECT ARCS 1
 EXPECT POLYVERT 0 1 0 0 9.75
 EXPECT POLYVERT 1 0 0.25 0 10
 EXPECT ARCPOINTS 0 0 0 9.75 0.25 0 10
+
+# ── 9. REQ-325 / ADR-053 increment 1 — JOIN accepts a coplanar TILTED arc ────────────────────────
+# Real report: FILLET (issue #373's 3D fix) built a genuinely tilted arc between two 3D polylines,
+# and JOIN refused it outright ("tilted arc ignored: cannot fold a non-planar arc into a polyline").
+# Same 45-degree corner as scenario 6 — Line/Polyline, arc, Line/Polyline all lie in the Y=0 plane —
+# now folded into ONE polyline instead of being left as three separate objects.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+EXPECT SELECTED 3
+CMD
+EXPECT LOG JOIN — created 1 polyline(s).
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+EXPECT LINES 0
+# The tilted arc's own two tangent-point ends survive as ordinary polyline vertices, in 3D, exactly
+# where the fillet put them — the walk direction is whichever way the Eulerian path happened to run.
+EXPECT POLYVERT 0 0 15 0 5
+EXPECT POLYVERT 0 1 5.8284 0 5.0000
+EXPECT POLYVERT 0 2 4.4142 0 4.4142
+EXPECT POLYVERT 0 3 0 0 0
+
+# ── 10. JOIN still refuses a tilted arc that is NOT coplanar with what it would join to ──────────
+# Same tilted arc as scenario 9, but its second neighbor is swapped for a 3D polyline that shares the
+# arc's own endpoint yet heads off in Y (out of the arc's Y=0 plane) instead of staying in it — JOIN
+# must refuse by name, not silently guess a plane or drop the arc.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CMD DELETE
+BOX 11 -1 13 1
+CMD
+CMD 3DPOLY
+CMD 4.414214,0,4.414214
+CMD 4.414214,5,4.414214
+CMD END
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+EXPECT SELECTED 3
+CMD
+EXPECT LOG JOIN — skipped a group: a tilted arc does not share a plane with the edges it would be joined to.
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
