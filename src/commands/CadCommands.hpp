@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits>
+
 #include "CadEntities.hpp"
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
@@ -4900,15 +4902,28 @@ bool ParseWorldPointD(const std::string& raw, double* ox, double* oy, bool allow
 /// When \p ortho is false but \p st has POLAR tracking on, applies the polar snap instead — the two
 /// share this one entry point so every existing ortho call site picks up polar with no change
 /// (\ref AppCommandState::polarMode is mutually exclusive with ortho).
+///
+/// \p anchorZ / \p targetZ are the REAL, already-resolved elevations of the anchor and the cursor
+/// pick (issue #371) — e.g. \c AppCommandState::anchorZ and \c AppCommandState::resolvedPointZ /
+/// \c uiCursorWorldZ. When both are finite they are used as-is. When either is left at its default
+/// NaN, the UCS branch falls back to solving the work-plane equation for Z from (x,y) alone, which
+/// is only valid while the plane is close enough to horizontal that Z is a function of (x,y) — it
+/// degenerates for a plane that stands on edge to world Z (a Front/Left/Right-style UCS), which is
+/// exactly issue #371's repro. New call sites should always pass the real Z when they have it.
 void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
-                                   bool ortho);
+                                   bool ortho, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float targetZ = std::numeric_limits<float>::quiet_NaN());
 
 /// POLAR tracking (issue #154, REQ-154): snap the world pick onto the nearest polar ray around the
 /// anchor, measured in the active UCS's XY plane from +X. No-op unless \p polar and
 /// \ref AppCommandState::polarMode. Called from \ref ApplyOrthoConstrainFromAnchor; exposed for the
 /// preview paths that want it explicitly.
+///
+/// \p anchorZ / \p targetZ — see \ref ApplyOrthoConstrainFromAnchor; the same edge-on-plane caveat
+/// applies here.
 void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
-                                   bool polar);
+                                   bool polar, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float targetZ = std::numeric_limits<float>::quiet_NaN());
 
 /// Snap pick onto anchor + t*(ux,uy). Negative \p t allowed unless \p forwardOnly.
 void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx, float lockUy, float* wx, float* wy,
