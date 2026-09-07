@@ -26058,16 +26058,56 @@ namespace {
           vi < st.userPolylineVertsBulge.size() ? st.userPolylineVertsBulge[vi] : 0.f;
       brep::SweepSegment seg;
       if (std::fabs(bulge) > 1e-6f) {
-        if (std::fabs(pts[k].z - pts[k1].z) > 1e-6)
-          return false;  // a bulge across a change in elevation is not a planar arc
-        const BulgeArcSpan span =
-            BulgeArc(pts[k].x, pts[k].y, pts[k1].x, pts[k1].y, static_cast<double>(bulge));
-        if (!span.valid)
-          return false;
-        seg.arc = true;
-        seg.centre = {span.cx, span.cy, pts[k].z};
-        seg.normal = {0.0, 0.0, 1.0};
-        seg.sweep = span.sweep;
+        // REQ-325 / ADR-053: this segment's own plane, when it is not flat +Z — same construction
+        // issue #373's 3D FILLET solve and REQ-325 increments 1-3 already use. Before this, ANY
+        // bulge segment spanning a change in elevation was refused outright ("not a planar arc"),
+        // even a genuinely tilted-but-planar one from JOIN.
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        if (vi * 3 + 2 < st.userPolylineVertsNormal.size()) {
+          nx = st.userPolylineVertsNormal[vi * 3];
+          ny = st.userPolylineVertsNormal[vi * 3 + 1];
+          nz = st.userPolylineVertsNormal[vi * 3 + 2];
+        }
+        if (IsFlatNormal(nx, ny, nz)) {
+          if (std::fabs(pts[k].z - pts[k1].z) > 1e-6)
+            return false;  // a flat-normal bulge spanning different Z is inconsistent data
+          const BulgeArcSpan span =
+              BulgeArc(pts[k].x, pts[k].y, pts[k1].x, pts[k1].y, static_cast<double>(bulge));
+          if (!span.valid)
+            return false;
+          seg.arc = true;
+          seg.centre = {span.cx, span.cy, pts[k].z};
+          seg.normal = {0.0, 0.0, 1.0};
+          seg.sweep = span.sweep;
+        } else {
+          const ray3d::Vec3 nrm{static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)};
+          ucs::Ucs plane{};
+          if (!ucs::FromNormal(pts[k], nrm, &plane))
+            return false;
+          const ucs::Point2D p1Local = ucs::WorldToPlane(plane, pts[k1]);
+          const BulgeArcSpan span = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
+          if (!span.valid)
+            return false;
+          const ray3d::Vec3 centreWorld = ucs::PlaneToWorld(plane, ucs::Point2D{span.cx, span.cy});
+          ucs::Ucs canon{};
+          if (!ucs::FromNormal(centreWorld, nrm, &canon))
+            return false;
+          const ucs::Point2D sLocal = ucs::WorldToPlane(canon, pts[k]);
+          const ucs::Point2D eLocal = ucs::WorldToPlane(canon, pts[k1]);
+          const double thetaA = std::atan2(sLocal.y, sLocal.x);
+          const double thetaB = std::atan2(eLocal.y, eLocal.x);
+          constexpr double kTwoPi = 6.28318530717958647692;
+          double sweep = thetaB - thetaA;
+          if (bulge >= 0.f) {
+            while (sweep < 0.0) sweep += kTwoPi;
+          } else {
+            while (sweep > 0.0) sweep -= kTwoPi;
+          }
+          seg.arc = true;
+          seg.centre = centreWorld;
+          seg.normal = nrm;
+          seg.sweep = sweep;
+        }
       }
       segs.push_back(seg);
     }

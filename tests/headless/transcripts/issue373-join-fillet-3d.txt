@@ -476,3 +476,44 @@ NEW
 OPEN %OUT%/req325-tilted.dwg
 CHECK ALL
 EXPECT POLYLINES 1
+
+# ── 15. SWEEP accepts a joined polyline path containing a tilted curved segment ──────────────────
+# Real report: SWEEP silently refused (never reached the solid-build step) with a joined tilted-arc
+# polyline as the path. SweepPathFromSelection (REQ-315) predates REQ-325 and, for ANY bulge segment
+# spanning different Z, always refused outright ("not a planar arc") and otherwise hardcoded a flat
+# +Z normal — never consulting the per-vertex normal REQ-325 added. Same joined-corner geometry as
+# scenario 9, swept with a small circular profile.
+NEW
+CMD CIRCLE
+CLICK 0 0
+CLICK 0.17 0
+ESC
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+CMD
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+EXPECT CIRCLES 1
+
+CMD SWEEP
+CLICK 0 0
+CLICK 8 3
+CMD
+CHECK ALL
+EXPECT SOLIDS 1
