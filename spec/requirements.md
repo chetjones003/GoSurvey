@@ -7509,6 +7509,72 @@ capability that does not exist. They are recorded here rather than quietly dropp
   GitHub issue #395, PR (this branch).
 - Revisions: 2026-09-07 — initial, supersedes REQ-301's single solid-snap toggle.
 
+### REQ-327 — TRIM resolves through the pick ray and finds true 3D crossings, increment 1: Line-vs-Line (issue #399)
+
+- Purpose: TRIM's target pick, cutting-edge selection, and pick-side math (`CollectCutSegments`,
+  `PickClosestTrimTarget`, `TrimSegmentIntersectPickSide`, `SubmitTrimViewportPick`,
+  `CadCommands.cpp:22174-24829`) are flat world-XY throughout — correct only in plan view under the
+  world UCS. An orbited camera or a rotated UCS needs the pick resolved through the camera ray, the
+  same seam 3D Object Snap (REQ-326/issue #395) and the 3D FILLET solve (issue #373,
+  `HandleFillet3DLineLine`) already use, and the crossing found in true 3D rather than the flattened
+  screen-space projection.
+- Priority: should
+- Type: functional
+- Depends on: REQ-058 (camera + ray picking + UCS work plane), REQ-326/issue #395 (the pick-ray
+  seam this reuses via `PickClosestCadEntity`'s existing `pickRay` parameter), issue #373 (the
+  coplanarity-tolerance precedent this extends to a skew-tolerance rule).
+- Statement: this increment covers **Line-vs-Line TRIM only** — both the target being shortened and
+  every cutting edge are plain `Line` entities. When the viewport click carries a valid pick ray (an
+  orbited camera; `SubmitTrimViewportPick`'s new optional `const ray3d::Ray* pickRay` parameter),
+  TRIM's final "click the piece to remove" step:
+  - selects the target Line via the pick ray's true 3D distance to candidate geometry
+    (`PickClosestCadEntity`'s existing ray-aware metric), not a flattened XY distance;
+  - finds where the target crosses each Line cutting edge in true 3D: the exact crossing point when
+    the two lines are coplanar (zero gap at closest approach), or the closest-approach point when
+    they are skew but the 3D gap is within tolerance;
+  - decides which side of the crossing to remove using the point on the target line's own infinite
+    extension closest to the pick RAY (issue #386's ray-line closest-approach technique), not the
+    flattened cursor position.
+
+  **SPEC GAP resolution (D-2026-09-07-b, user-approved):** "skew edges count as intersecting within
+  tolerance" reuses the tolerance FORMULA the 3D FILLET solve (issue #373) already established for
+  its own coplanarity check — `tol = max(1e-5, 1e-4 * max(worldExtentX, worldExtentY))` — applied to
+  the 3D gap distance between the two lines at closest approach (via a standard clamped
+  segment-segment closest-approach solve, `SegSegClosest3D`), not to FILLET's signed-distance-to-a-
+  shared-plane test. A pair farther apart than `tol` is not an intersection; TRIM reports "segment
+  does not cross a cutting edge" rather than fabricate one. This differs from FILLET, which refuses
+  any non-coplanar pair outright — TRIM's issue explicitly asked for a within-tolerance
+  closest-approach acceptance that FILLET does not attempt.
+
+  **Deferred to later increments, refused by name rather than silently run through the old flat
+  math:** any target or cutting edge that is a Circle, Arc, Ellipse, or Polyline, whenever the pick
+  carries a valid ray. Increment 2 will extend 3D crossing-finding to arcs/circles; increment 3 to
+  polylines. Plan view (world UCS, no orbit — pick ray is null) is completely unaffected for every
+  entity type: `SubmitTrimViewportPick` falls through to the original, byte-identical 2D code path
+  whenever no pick ray is supplied.
+- Acceptance:
+  - in an orbited view, clicking the segment of a Line between two crossing coplanar 3D Line edges
+    trims exactly that segment, at the true 3D crossing point;
+  - two Line edges that are skew but pass within `tol` of each other at closest approach are trimmed
+    at the closest-approach point on the target; two Line edges farther apart than `tol` are refused
+    ("does not cross a cutting edge"), not fabricated;
+  - a crossing that only exists in world-XY projection but not in true 3D (the two lines pass each
+    other in Z, beyond `tol`) is NOT treated as an intersection; a crossing that exists in true 3D but
+    not in the flattened XY projection (e.g. two lines coplanar in the world X-Z plane) IS found;
+  - a Circle, Arc, Ellipse, or Polyline reached as a TRIM target or cutting edge while a pick ray is
+    active is refused by name ("3D `<kind>` targets/cutting edges not yet supported...") — never
+    silently trimmed with the old flat math;
+  - plan view / world UCS TRIM (no pick ray) is bit-for-bit unchanged for every entity type, including
+    Circle/Arc/Ellipse/Polyline cutting edges and targets (regression guard).
+- Owner-layer: Commands (`CadCommands.cpp`: `SegSegClosest3D`, `Try3DLineLineTrim`,
+  `SubmitTrimViewportPick`'s new `pickRay` parameter) / UI (`CadUi.cpp`'s `TrimPick` route, passing
+  the click's already-computed `pickRayPtr`).
+- Status: **accepted (2026-09-07)** — increment 1 of 3 delivered (Line-vs-Line). Increment 2
+  (Circle/Arc) and increment 3 (Polyline) are separate, not-yet-scheduled follow-on work under the
+  same issue #399.
+- Revisions: 2026-09-07 — proposed and accepted same day (`/implement-issue 399`); SPEC GAP on the
+  skew-tolerance rule resolved with the user before implementation (D-2026-09-07-b).
+
 ### REQ-203 — The command layer is drivable without a window
 - Purpose: debuggability, maintainability — the interactive surface is the largest part of the
   system with no automated coverage, and it is where users actually meet the bugs
