@@ -2640,6 +2640,75 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   `D1 != D2` the corner remains a single point, but (3)'s tangent-vertex solve changes and REQ-329's
   increment-2 closed forms are replaced by a second set.
 
+
+- **Amendment (l) — a precondition has to see the whole REQUEST, not one edge of it at a time**
+  (2026-09-08, D-2026-09-08-c, REQ-323 and REQ-329 item 4 amended, TASK-223).
+
+  Amendment (i) established the rule: a modifying operation owns its own precondition, because
+  `Validate` checks topology and not geometry. Amendment (j) applied it to the fillet and stated the
+  check — *"the radius must be strictly less than the distance from the edge to the far boundary of
+  each adjacent face"* — and amendment (k) carried the same sentence to the chamfer. **That sentence
+  is per-edge, and it is measured against the ORIGINAL solid.** It was correct for the operation
+  amendment (j) first described, which rounded one edge, and it stopped being sufficient the moment
+  increment 2 made the request a SET of edges. Nobody noticed, because the check kept passing.
+
+  **What it cannot see.** Two things, and they are separate statements rather than one:
+
+  1. **What another requested edge takes out of the same face.** Two edges bounding one face each cut
+     a strip into it. Asked one at a time, each strip fits. Asked together, they can overlap.
+  2. **One edge's two ends eating each other.** At a corner the blend runs some distance ALONG the
+     edge before it begins. With a corner at both ends, the two can want more than the edge has.
+
+  **What that produced.** Not a refusal and not a crash — a solid. `Validate` is topological, so a
+  face whose boundary has crossed over and inverted passes it, and `ComputeMassProperties` returns a
+  number for it. On a 20 x 10 x 8 box, the two 20-long top edges are 10 apart across a 10-wide face,
+  so any setback above 5 crosses:
+
+  | | before amendment (l) |
+  |---|---|
+  | `FILLET 6` | **accepted**, volume 1290.97336, self-intersecting |
+  | `CHAMFER 6` | **accepted**, volume 880, self-intersecting |
+  | either at exactly 5 | refused — but only because the face reaches ZERO area and `DegenerateFace` happens to catch it |
+
+  So the failure window was "the strips overlap", and the single case that was caught was caught by
+  accident. This is a defect against **issue #148 acceptance 6** — *"a fillet or chamfer that cannot
+  be built is refused with a clear message and leaves the solid unchanged"* — for both operations.
+
+  **Decision. The precondition is a property of the REQUEST**, and both operations answer it through
+  one shared implementation (`BlendSpan` / `BlendsFit` in `brep.cpp`) rather than two that could
+  drift. Two conditions are added to the per-edge one, which stays:
+
+  1. `length > consumed[0] + consumed[1]` per edge, where `consumed` is what a corner at that end
+     runs along the edge — zero at an open end, so an unchained request is unaffected;
+  2. for two requested edges bounding one face, the room between them must exceed the sum of their
+     setbacks. **Adjacent edges are exempt**, and that exemption is load-bearing rather than an
+     optimisation: their cuts are *meant* to meet, at the corner vertex, and it is condition (1) that
+     covers their interaction. Without the exemption every corner in increment 2 would refuse.
+
+  Equality is refused in both, for the reason the original check already gave: at the limit the face
+  does not become thin, it vanishes.
+
+  **Four refusals, not two, and not folded into the existing one.**
+  `FilletRadiusOverlapsAnother` / `ChamferDistanceOverlapsAnother` and
+  `FilletEdgeTooShortForItsCorners` / `ChamferEdgeTooShortForItsCorners`. Reusing
+  `FilletRadiusTooLarge` was considered and rejected: its sentence says the setback *"would reach
+  past the far side of an adjacent face"*, which is true of the per-edge case and false of both new
+  ones — a user whose real obstacle is a second edge they selected would go looking for the wrong
+  thing. REQ-323 and REQ-329 both say "refused by name"; a name that describes a different failure
+  is not one.
+
+  **The pairwise test is exact where it matters and conservative elsewhere.** It measures from the
+  nearer of the other edge's two endpoints, which is exact for the parallel case a box, wedge or
+  prism actually produces. For two edges of one face that are neither parallel nor adjacent —
+  reachable only on a face with more than four sides — it errs toward refusing something buildable.
+  That direction is deliberate: the failure this amendment exists to fix is the other one.
+
+  **This is also a note about how the defect was found.** Not by a test — every existing test passed
+  before and after, because none of them asked for two blends that collide. It came out of a
+  `/code-review high` pass on the chamfer, which noticed the check was reading the original solid,
+  and it was then reproduced with numbers on the *fillet*, which had shipped with it. A precondition
+  that is only ever exercised on requests it accepts is not evidence that it refuses the right things.
+
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
 - **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —

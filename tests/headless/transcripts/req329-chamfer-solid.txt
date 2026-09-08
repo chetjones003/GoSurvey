@@ -257,4 +257,53 @@ EXPECT SUBOBJECTS 0
 UNDO
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
+
+# --- The request has to fit ITSELF, not just each edge of it (REQ-329 item 4 as amended) --------------
+# D-2026-09-08-c, ADR-046 amendment (l). The precondition used to be measured one edge at a time
+# against the ORIGINAL solid, so two requested chamfers running into each other went straight through and
+# produced a self-intersecting solid that Validate — which is topological — happily accepted. Found
+# by /code-review high on TASK-222.
+#
+# The top face is 10 wide and each blend sets back into it, so two opposite 20-long top edges collide
+# for any value above 5 and touch at exactly 5.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.1 0.1
+SUBOBJECT 0 -5 8 0.1 0.1
+EXPECT SUBOBJECTEDGES 2
+CMD CHAMFER 6
+EXPECT LOG "would run into each other"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# Equality is refused too, for the reason the original per-face check already gave: at the limit the
+# face does not thin, it vanishes.
+CMD CHAMFER 5
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# The selection survives, and the largest value that DOES fit is still accepted — the new check must
+# not have quietly shrunk the envelope.
+EXPECT SUBOBJECTEDGES 2
+CMD CHAMFER 4.9
+EXPECT SUBOBJECTS 0
+
+# An edge too short for the corners at BOTH its ends. The vertical is 8 long and each corner runs the
+# blend along it before the blend begins, so at 5 the two corners want 10 of the 8 available. This is
+# a different statement from the one above, and it gets its own sentence.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT -10 5 4 0.1 0.1
+SUBOBJECT 0 5 8 0.1 0.1
+SUBOBJECT -10 0 8 0.1 0.1
+SUBOBJECT 0 5 0 0.1 0.1
+SUBOBJECT -10 0 0 0.1 0.1
+EXPECT SUBOBJECTEDGES 5
+CMD CHAMFER 5
+EXPECT LOG "too short to bevel at both of its corners"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# 3 fits: the two corners want 6 of the 8.
+CMD CHAMFER 3
+EXPECT SUBOBJECTS 0
+
 CHECK ALL

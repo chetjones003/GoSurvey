@@ -592,3 +592,98 @@ TEST_CASE("Chamfer: a corner whose faces are not square to each other is refused
   CHECK(w == Problem::ChamferCornerNotOrthogonal);
   CHECK(out.faces.empty());
 }
+
+// --- REQ-329 item 4 as amended (D-2026-09-08-c, ADR-046 amendment (l)) ----------------------------
+//
+// The precondition was measured ONE EDGE AT A TIME against the ORIGINAL solid, so it could not see
+// two requested bevels running into each other. `CHAMFER 6` on the two 20-long top edges of a
+// 20 x 10 x 8 box — 10 apart across a 10-wide face, so the two setbacks total 12 — was ACCEPTED and
+// returned a self-intersecting solid reporting volume 880. Found by `/code-review high` on this
+// task; the same defect was in REQ-323's fillet, which this precondition was inherited from.
+
+TEST_CASE("Chamfer: two bevels that would run into each other are refused", "[chamfer][req329]") {
+  const brep::Solid box = Box(20.0, 10.0, 8.0);
+  const int back = EdgeAt(box, {0.0, 5.0, 8.0});
+  const int front = EdgeAt(box, {0.0, -5.0, 8.0});
+  REQUIRE(back >= 0);
+  REQUIRE(front >= 0);
+
+  for (const double d : {5.0, 6.0, 7.5}) {
+    brep::Solid out;
+    Problem why{};
+    CHECK_FALSE(brep::ChamferEdges(box, {back, front}, d, &out, &why));
+    // Its OWN name, not `ChamferDistanceTooLarge`: nothing is wrong with either edge on its own.
+    CHECK(why == Problem::ChamferDistanceOverlapsAnother);
+    CHECK(out.faces.empty());
+    brep::Solid alone;
+    Problem w{};
+    CHECK(brep::ChamferEdge(box, back, d, &alone, &w));
+  }
+
+  // The largest distance that DOES fit still lands on the closed form — two prisms of `L d^2 / 2`.
+  brep::Solid ok;
+  Problem why{};
+  REQUIRE(brep::ChamferEdges(box, {back, front}, 4.9, &ok, &why));
+  CHECK(brep::Validate(ok) == Problem::Ok);
+  const brep::MassProperties mp = brep::ComputeMassProperties(ok);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Approx(1600.0 - 20.0 * 4.9 * 4.9).epsilon(1e-12));
+  CHECK(mp.volume == Approx(1119.8).margin(1e-9));
+}
+
+TEST_CASE("Chamfer: an edge too short for the corners at both its ends is refused",
+          "[chamfer][req329]") {
+  // A vertical edge is 8 long, and a corner takes `d` off its length at each end. At d = 5 the two
+  // corners want 10 of the 8 available.
+  const brep::Solid box = Box(20.0, 10.0, 8.0);
+  const std::vector<int> five = {
+      EdgeAt(box, {-10.0, 5.0, 4.0}),
+      EdgeAt(box, {0.0, 5.0, 8.0}),   EdgeAt(box, {-10.0, 0.0, 8.0}),
+      EdgeAt(box, {0.0, 5.0, 0.0}),   EdgeAt(box, {-10.0, 0.0, 0.0}),
+  };
+  for (const int e : five)
+    REQUIRE(e >= 0);
+
+  brep::Solid out;
+  Problem why{};
+  CHECK_FALSE(brep::ChamferEdges(box, five, 5.0, &out, &why));
+  CHECK(why == Problem::ChamferEdgeTooShortForItsCorners);
+  CHECK(out.faces.empty());
+
+  brep::Solid ok;
+  Problem w{};
+  REQUIRE(brep::ChamferEdges(box, five, 3.0, &ok, &w));
+  CHECK(brep::Validate(ok) == Problem::Ok);
+}
+
+TEST_CASE("Chamfer: all twelve edges have a real upper bound now", "[chamfer][req329]") {
+  // `d = 4` is the exact limit for a box 8 in its shortest dimension, and `d = 2` — the case the
+  // bevelled-box acceptance uses — is unaffected, which is why this runs beside it.
+  const brep::Solid box = Box(20.0, 10.0, 8.0);
+  std::vector<int> all;
+  for (std::size_t i = 0; i < box.edges.size(); ++i)
+    all.push_back(static_cast<int>(i));
+
+  for (const double d : {4.0, 5.0}) {
+    brep::Solid out;
+    Problem why{};
+    CHECK_FALSE(brep::ChamferEdges(box, all, d, &out, &why));
+    CHECK(why == Problem::ChamferEdgeTooShortForItsCorners);
+    CHECK(out.faces.empty());
+  }
+
+  brep::Solid ok;
+  Problem w{};
+  REQUIRE(brep::ChamferEdges(box, all, 3.9, &ok, &w));
+  CHECK(brep::Validate(ok) == Problem::Ok);
+}
+
+TEST_CASE("Chamfer: the two new refusals have their own messages", "[chamfer][req329]") {
+  for (const Problem p :
+       {Problem::ChamferDistanceOverlapsAnother, Problem::ChamferEdgeTooShortForItsCorners}) {
+    const std::string text = brep::ProblemText(p);
+    CHECK(text != "The solid is not valid.");
+    CHECK(text != std::string(brep::ProblemText(Problem::ChamferDistanceTooLarge)));
+    CHECK(text != std::string(brep::ProblemText(Problem::FilletRadiusOverlapsAnother)));
+  }
+}

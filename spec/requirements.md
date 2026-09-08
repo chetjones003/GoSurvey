@@ -7148,6 +7148,25 @@ capability that does not exist. They are recorded here rather than quietly dropp
      less than the distance from the edge to the far boundary of *each* adjacent face, measured
      perpendicular to the edge within that face. Equality is refused too: at the limit the face does
      not become thin, it vanishes.
+  4b. **AMENDED 2026-09-08 (D-2026-09-08-c, ADR-046 amendment (l)): the check above is per-EDGE, and
+     the request also has to fit ITSELF.** As first written, item 4 was measured one edge at a time
+     against the ORIGINAL solid, which was sufficient while the operation took a single edge and
+     stopped being so the moment edge CHAINS made the request a set. It could see neither what
+     another requested edge takes out of the same face, nor one edge's two ends eating each other at
+     their corners — so a request whose blends overlap was ACCEPTED, and returned a self-intersecting
+     solid that `Validate` (which is topological) passes and `ComputeMassProperties` reports a number
+     for. Two further conditions now hold, checked before anything is built and refused by their own
+     names:
+     - **an edge must survive its own two ends**: `length > consumed[0] + consumed[1]`, where
+       `consumed` is what a corner at that end runs along the edge before the blend begins, and is
+       zero at an open end — so a request with no chained corners is unaffected;
+     - **two requested edges bounding one face must not cut into each other**: the room between them
+       must exceed the sum of their setbacks. **Edges ADJACENT to each other are exempt**, and that
+       exemption is load-bearing: their cuts are *meant* to meet at the shared corner vertex, and the
+       first condition is what covers their interaction instead.
+     Equality is refused in both, for the same reason item 4 already gave. Both operations answer
+     this through ONE shared implementation, because two copies of a precondition are two things that
+     can drift apart and this defect is what that drift looked like.
   5. **Refused by name, each for its own reason, with the solid untouched:** an edge that is not a
      straight line; either adjacent face not planar; any face at either endpoint not planar (its
      boundary would be a procedural intersection curve); the two adjacent faces parallel (there is
@@ -7206,6 +7225,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a corner whose three faces are not mutually perpendicular is refused by name: its patch is a
     general spherical triangle rather than an octant, so not an iso-rectangle and not closed-form;
   - a concave edge is refused by name;
+  - **(item 4b)** on that box, the two 20-long TOP edges — 10 apart across a 10-wide face — are
+    refused **by their own name** for any value of 5 or more, with the solid unchanged, while each of
+    those edges ALONE at the same value is still accepted; and the largest value that does fit, 4.9,
+    still lands on the closed form. Before 2026-09-08 both were accepted and returned a
+    self-intersecting solid;
+  - **(item 4b)** a vertical edge with a complete corner at BOTH ends is refused by its own,
+    DIFFERENT name once the two corners want more of the edge than it has — 5 + 5 against a length of
+    8 — and 3 + 3 against the same 8 is accepted;
+  - **(item 4b)** all twelve edges of that box have a real upper bound: 4 is refused (the box is 8 in
+    its shortest dimension) and 3.9 is accepted, with the 2 the closed-form acceptance above uses
+    unaffected;
   - one Ctrl+Z restores the pre-fillet solid in a single step;
   - a filleted solid saves and reloads from `.gs` with the same mass properties and topology;
   - `PRESSPULL` still works on the filleted solid's remaining planar faces — a fillet must not leave
@@ -7237,7 +7267,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
   wedge gives an elliptical end curve (it does not; that needs an oblique end face). See the two
   bullets above, and D-2026-09-05-c. 2026-09-08 — increment 2 (D-2026-09-08-a): edge chains and the
   spherical corner patch, with acceptance extended to the rounded-box closed forms `1120 + 344*pi/3`
-  and `368 + 120*pi` for a 20 x 10 x 8 box at r = 2, topology 24/48/26.
+  and `368 + 120*pi` for a 20 x 10 x 8 box at r = 2, topology 24/48/26. 2026-09-08 — item 4
+  AMENDED as item 4b (D-2026-09-08-c, ADR-046 amendment (l), TASK-223): the precondition was
+  per-EDGE and could not see two requested fillets colliding, so `FILLET 6` on two opposite top edges
+  of a 20 x 10 x 8 box was ACCEPTED and returned a self-intersecting solid reporting volume
+  1290.97336. Found by a code-review pass on REQ-329, which had inherited the same check.
 
 
 
@@ -7277,6 +7311,25 @@ capability that does not exist. They are recorded here rather than quietly dropp
      from the edge to the far boundary of *each* adjacent face, measured perpendicular to the edge
      within that face. Equality is refused too: at the limit the face does not become thin, it
      vanishes. This is REQ-323 item 4 with `d` read directly instead of derived.
+  4b. **AMENDED 2026-09-08 (D-2026-09-08-c, ADR-046 amendment (l)): the check above is per-EDGE, and
+     the request also has to fit ITSELF.** As first written, item 4 was measured one edge at a time
+     against the ORIGINAL solid, which was sufficient while the operation took a single edge and
+     stopped being so the moment edge CHAINS made the request a set. It could see neither what
+     another requested edge takes out of the same face, nor one edge's two ends eating each other at
+     their corners — so a request whose blends overlap was ACCEPTED, and returned a self-intersecting
+     solid that `Validate` (which is topological) passes and `ComputeMassProperties` reports a number
+     for. Two further conditions now hold, checked before anything is built and refused by their own
+     names:
+     - **an edge must survive its own two ends**: `length > consumed[0] + consumed[1]`, where
+       `consumed` is what a corner at that end runs along the edge before the blend begins, and is
+       zero at an open end — so a request with no chained corners is unaffected;
+     - **two requested edges bounding one face must not cut into each other**: the room between them
+       must exceed the sum of their setbacks. **Edges ADJACENT to each other are exempt**, and that
+       exemption is load-bearing: their cuts are *meant* to meet at the shared corner vertex, and the
+       first condition is what covers their interaction instead.
+     Equality is refused in both, for the same reason item 4 already gave. Both operations answer
+     this through ONE shared implementation, because two copies of a precondition are two things that
+     can drift apart and this defect is what that drift looked like.
   5. **Refused by name, each for its own reason, with the solid untouched:** an edge that is not a
      straight line; either adjacent face not planar; any face at either endpoint not planar or not
      square to the edge (item 10); the two adjacent faces parallel (there is no edge to bevel); a
@@ -7352,6 +7405,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a corner with only SOME of its edges selected is refused **by name**, the solid unchanged;
   - a non-orthogonal corner, a concave edge, an oblique end face and a curved end face are each
     refused by name;
+  - **(item 4b)** on that box, the two 20-long TOP edges — 10 apart across a 10-wide face — are
+    refused **by their own name** for any value of 5 or more, with the solid unchanged, while each of
+    those edges ALONE at the same value is still accepted; and the largest value that does fit, 4.9,
+    still lands on the closed form. Before 2026-09-08 both were accepted and returned a
+    self-intersecting solid;
+  - **(item 4b)** a vertical edge with a complete corner at BOTH ends is refused by its own,
+    DIFFERENT name once the two corners want more of the edge than it has — 5 + 5 against a length of
+    8 — and 3 + 3 against the same 8 is accepted;
+  - **(item 4b)** all twelve edges of that box have a real upper bound: 4 is refused (the box is 8 in
+    its shortest dimension) and 3.9 is accepted, with the 2 the closed-form acceptance above uses
+    unaffected;
   - one Ctrl+Z restores the pre-chamfer solid in a single step;
   - a chamfered solid saves and reloads from `.gs` with the same mass properties and topology;
   - `PRESSPULL` still works on the chamfered solid's remaining planar faces — a chamfer must not
@@ -7364,19 +7428,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-08, D-2026-09-08-b). Scope — a single symmetric distance now, the
   AutoCAD two-distance form and its base-face toggle as a later increment — chosen by the user on
   2026-09-08 after the AutoCAD behaviour was surveyed and the corner-coupling cost was stated.
-- **KNOWN GAP, recorded 2026-09-08 and not yet decided (TASK-222 DEBT-4, `/code-review high`).** Item
-  4's pre-check is **per-edge and per-face**: it measures how far each adjacent face reaches from
-  *that* edge, and sees nothing of what another requested edge takes out of the same face, nor of the
-  two ends of one edge eating each other at their corners. Overlapping cuts are therefore ACCEPTED
-  and produce a self-intersecting solid with meaningless mass properties — on a 20 x 10 x 8 box,
-  `CHAMFER 6` on both 20-long top edges (10 apart in a 10-wide face) is accepted and reports volume
-  880. `Validate` is topological, so `ChamferResultInvalid` does not fire; the only case it happens
-  to catch is exact equality, where the face reaches zero area. **REQ-323's fillet has the identical
-  defect** — `FILLET 6` on the same two edges reports 1290.97336 — because this precondition was
-  inherited from it verbatim. So the gap is against **both requirements and against issue #148
-  acceptance 6**, and how far the precondition should reach is a decision for the user rather than
-  something the Workshop layer may choose (CLAUDE.md §5).
-- Revisions: 2026-09-08 — initial.
+- **The gap recorded here on 2026-09-08 is CLOSED** by D-2026-09-08-c / ADR-046 amendment (l): item
+  4's per-edge check could not see two requested blends colliding, and item 4b is the fix. It was
+  never chamfer-specific — REQ-323's fillet shipped with the same defect and was corrected in the
+  same change.
+- Revisions: 2026-09-08 — initial. 2026-09-08 — item 4 AMENDED as item 4b (D-2026-09-08-c,
+  ADR-046 amendment (l), TASK-223): the precondition was per-EDGE and could not see two requested
+  bevels colliding, so `CHAMFER 6` on two opposite top edges of a 20 x 10 x 8 box was ACCEPTED and
+  returned a self-intersecting solid reporting volume 880. Found by `/code-review high` on TASK-222;
+  REQ-323 had the same defect and was corrected in the same change.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -8276,8 +8336,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
 | REQ-305 | Commands/Viewport | done (GitHub issue #87, D-2026-08-25-m, TASK-111 — relabeled from REQ-304/TASK-109 while merging `master` into `beta`, see the requirement's own header note). ARRAY (rectangular + polar) follows the MOVE/COPY/ROTATE/SCALE/MIRROR transform-command shape end to end; survey points excluded from the array selection, confirmed with the user (D-2026-08-25-m addendum). Amended once (D-2026-08-25-n, TASK-112): the shared "select objects" step was click-or-box-and-accumulate-until-Enter for MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY (STRETCH excluded — its crossing box is load-bearing geometry, REQ-103 step 5), replacing the box-only shape all seven originally shared. `GoSurveyTests.exe` 542/542, headless transcript corpus green (1 pre-existing disabled, unrelated) | accepted |
 | REQ-318 | Domain/UI | accepted, increment 1 of 2 delivered — the SHARED pick query (GitHub issue #148, D-2026-09-03-c, ADR-049, TASK-189). **What was new is not what the issue claimed.** The ray/triangle → `triFace` → `ClosestPointOnSurface` pipeline already shipped with REQ-313, inside `src/viewport/CadSnap.cpp`; what it could not do was serve a second caller, because `RayHitSolidFace`, `ClosestRayPointToEdge` and `RayNearBounds` were file-private. So increment 1 is a *consolidation*: `ray3d::RayTriangleIntersect` and the new pure `src/util/solidpick.{hpp,cpp}` are the one home, and `CadSnap` now routes through both instead of keeping its own copies. That mattered concretely — the snap copy used an absolute determinant epsilon and exact barycentric bounds while the shared one is scale-relative with a barycentric slack, so on the hairline crack between two faces of the deliberately unwelded tessellation the two disagreed: snap reported nothing where a selection would report a hit, and a user would have seen the snap marker and the sub-object highlight name different things under one cursor. Above the geometry, what is genuinely new is the **expiring sub-object reference** (an index is durable across a topology-preserving edit and meaningless across one that changes the counts, so it is paired with a `weak_ptr` to the solid and expires rather than re-binding), and precedence and occlusion as stated rules. The projection remains the sharpest point and is measured: a raw triangle hit sits 0.00986 ft off a cylinder's true surface at the shipping chord tolerance — inside REQ-101's ±0.01 ft but 98.6% of the whole budget — and projected the residual is at the arithmetic floor. **The tests assert the picked AZIMUTH as well as the radius**, because `ClosestPointOnSurface` rescales any nearby point to exactly `r`: a radius assertion alone cannot fail for the reason it appears to test, and an earlier draft of this row cited one that could not. Occlusion is measured against the nearest *triangle* rather than the nearest usable face, so a corrupt face id cannot move the baseline to the far side of the solid; the ray is normalized on entry, because `RayTriangleIntersect`'s parameter scales as `1/\|dir\|` and `RayPointDistance`'s as `\|dir\|`, which on a non-unit ray makes the occlusion comparison meaningless rather than merely imprecise; and the curved-edge chord budget keys on the curve KIND, not on `sweep`, which a `CurveKind::Intersection` edge leaves zero. Increment 2 is the selection mode, its store, the highlight treatment and coexistence with the entity pick — where #148 acceptance criteria 1 and 2 are actually met. | `SolidPickTests` (21 cases: cylinder radius AND azimuth from 24 azimuths; the same oblique geometry passing at storage magnitude and failing at absolute state-plane magnitude, which pins the local-coordinates precondition with evidence rather than prose; near-face-wins from both directions; vertex/edge/face precedence; zero tolerance disables a kind; occluded far-side vertex refused, and still refused when the occluding triangle's id is corrupt; a non-unit ray giving an identical answer and an unchanged depth; a ray just outside the silhouette still reaching the edges; the rim picked on the true arc; and refusals for a miss, a solid behind the cursor, a degenerate ray, a null result, mismatched buffers and an empty solid) + `Ray3dTests` (10 new cases for the primitive, including a hit on a shared edge reported by both triangles and a 0.25 ft triangle at easting 2e6 — the case an absolute degeneracy epsilon would reject). The refactored snap path is covered by the existing `GoSurveySnapTests` and the `req313-solid-picked` headless transcript, both unchanged and green. Full suite 1062/1062. | accepted |
-| REQ-323 | Domain/Commands | increments 1 and 2 delivered — kernel (TASK-210), the FILLET command (TASK-217), edge chains + the spherical corner patch (TASK-218). `FilletEdgeTests` (a box against the single-edge closed forms volume 1520+20pi / area 792+22pi; ALL TWELVE edges against the rounded-box forms 1120+344pi/3 and 368+120pi with topology 24/48/26 and 6 planes + 12 cylinders + 8 octants; a WEDGE whose 68.199-degree dihedral gives setback 40/(sqrt(464)-8); every refusal by name including a partial and an oblique corner) + `headless.req323-fillet-solid` (Ctrl+click edges then `FILLET 2`, a three-edge corner, the selection cleared, UNDO, four refusals leaving the solid untouched, a .gs round-trip, and a bare FILLET still being the 2D command). **#148 acceptance 5 closed for the fillet**; the chamfer half is REQ-329 (delivered 2026-09-08), which closes it for both |
-| REQ-329 | Domain/Commands | increments 1 and 2 delivered 2026-09-08 (D-2026-09-08-b, ADR-046 amendment (k), TASK-222) — kernel + the `CHAMFER` verb on a sub-object edge selection, in one task because the delta over REQ-323 is small and entirely mechanical. `ChamferEdgeTests` (15 cases: a box against the single-edge closed forms volume **1560** / area **796+40*sqrt(2)**, topology 10/15/7, and every face planar and every edge straight; ALL TWELVE edges against the bevelled-box forms **1344** and **368+232*sqrt(2)** with topology **32/48/18** — 6 quads + 12 HEXAGONS, no corner face, and every vertex of degree 3; a WEDGE proving the setback does NOT move with the dihedral where REQ-323's proves that it does; the three-edge corner landing one vertex at the meet of the three bevel planes; every refusal by name including the partial and non-orthogonal corners, the oblique end face, NaN, and the same edge twice) + `headless.req329-chamfer-solid` (Ctrl+click edges then `CHAMFER 2`, a three-edge corner at **1530** / **734+67*sqrt(2)**, all twelve edges end-to-end through the pick, the selection cleared, UNDO, four refusals leaving the solid untouched, a .gs round-trip, the prompted form with ESC and with a bad then a refused answer, edges gathered from INSIDE the running command, and a bare CHAMFER with nothing selected still being the 2D command). **#148 acceptance 5 now closed for BOTH halves**, which closes the last of the seven slices #148's own pre-implementation survey listed. **The cross-check is the finding worth keeping:** the bevelled box's inner-box-plus-slabs term is **1120** and its planar-face total is **368** — the identical constants in REQ-323's rounded box `1120 + 344*pi/3` and `368 + 120*pi`, because a fillet and a chamfer share their inner box and slabs exactly and differ only in what fills the twelve edge channels and the eight corners. Two independently derived acceptances confirming each other; neither could do that alone. Also discharges **TASK-221 DEBT-1** — the sub-object pre-highlight now reaches CHAMFER, which that task deferred in as many words until a solid chamfer existed. **Deferred by decision, each by name:** the AutoCAD two-distance / base-face form (D-2026-09-08-b item 13 — and the coupling is stated: with `D1 != D2` the corner stays a point but the cut-vertex solve changes and the increment-2 closed forms are replaced), a concave edge, an oblique or curved end face, a curved edge, a partial corner and a non-orthogonal corner. Full suite 1325/1325 | accepted |
+| REQ-323 | Domain/Commands | increments 1 and 2 delivered — kernel (TASK-210), the FILLET command (TASK-217), edge chains + the spherical corner patch (TASK-218). `FilletEdgeTests` (a box against the single-edge closed forms volume 1520+20pi / area 792+22pi; ALL TWELVE edges against the rounded-box forms 1120+344pi/3 and 368+120pi with topology 24/48/26 and 6 planes + 12 cylinders + 8 octants; a WEDGE whose 68.199-degree dihedral gives setback 40/(sqrt(464)-8); every refusal by name including a partial and an oblique corner) + `headless.req323-fillet-solid` (Ctrl+click edges then `FILLET 2`, a three-edge corner, the selection cleared, UNDO, four refusals leaving the solid untouched, a .gs round-trip, and a bare FILLET still being the 2D command). **#148 acceptance 5 closed for the fillet**; the chamfer half is REQ-329 (delivered 2026-09-08), which closes it for both. **Item 4 AMENDED 2026-09-08 as item 4b** (D-2026-09-08-c, ADR-046 amendment (l), TASK-223): the precondition was per-EDGE and measured against the ORIGINAL solid, so it could not see two requested fillets colliding — `FILLET 6` on two opposite top edges of a 20 x 10 x 8 box was ACCEPTED and returned a self-intersecting solid reporting volume 1290.97336, which `Validate` passes because it is topological. Now refused by name (`FilletRadiusOverlapsAnother`, `FilletEdgeTooShortForItsCorners`) through a precondition shared with REQ-329, with 4 new `FilletEdgeTests` cases asserting both the refusals AND the largest value that still fits (4.9 on two opposite edges, 3.9 on all twelve) so the envelope is provably unchanged. Found by a code-review pass on REQ-329, not by any test |
+| REQ-329 | Domain/Commands | increments 1 and 2 delivered 2026-09-08 (D-2026-09-08-b, ADR-046 amendment (k), TASK-222) — kernel + the `CHAMFER` verb on a sub-object edge selection, in one task because the delta over REQ-323 is small and entirely mechanical. `ChamferEdgeTests` (15 cases: a box against the single-edge closed forms volume **1560** / area **796+40*sqrt(2)**, topology 10/15/7, and every face planar and every edge straight; ALL TWELVE edges against the bevelled-box forms **1344** and **368+232*sqrt(2)** with topology **32/48/18** — 6 quads + 12 HEXAGONS, no corner face, and every vertex of degree 3; a WEDGE proving the setback does NOT move with the dihedral where REQ-323's proves that it does; the three-edge corner landing one vertex at the meet of the three bevel planes; every refusal by name including the partial and non-orthogonal corners, the oblique end face, NaN, and the same edge twice) + `headless.req329-chamfer-solid` (Ctrl+click edges then `CHAMFER 2`, a three-edge corner at **1530** / **734+67*sqrt(2)**, all twelve edges end-to-end through the pick, the selection cleared, UNDO, four refusals leaving the solid untouched, a .gs round-trip, the prompted form with ESC and with a bad then a refused answer, edges gathered from INSIDE the running command, and a bare CHAMFER with nothing selected still being the 2D command). **#148 acceptance 5 now closed for BOTH halves**, which closes the last of the seven slices #148's own pre-implementation survey listed. **The cross-check is the finding worth keeping:** the bevelled box's inner-box-plus-slabs term is **1120** and its planar-face total is **368** — the identical constants in REQ-323's rounded box `1120 + 344*pi/3` and `368 + 120*pi`, because a fillet and a chamfer share their inner box and slabs exactly and differ only in what fills the twelve edge channels and the eight corners. Two independently derived acceptances confirming each other; neither could do that alone. Also discharges **TASK-221 DEBT-1** — the sub-object pre-highlight now reaches CHAMFER, which that task deferred in as many words until a solid chamfer existed. **Deferred by decision, each by name:** the AutoCAD two-distance / base-face form (D-2026-09-08-b item 13 — and the coupling is stated: with `D1 != D2` the corner stays a point but the cut-vertex solve changes and the increment-2 closed forms are replaced), a concave edge, an oblique or curved end face, a curved edge, a partial corner and a non-orthogonal corner. **Item 4 AMENDED 2026-09-08 as item 4b** (D-2026-09-08-c, ADR-046 amendment (l), TASK-223) after `/code-review high` found the precondition was per-EDGE and read the ORIGINAL solid: `CHAMFER 6` on two opposite top edges was ACCEPTED and returned a self-intersecting solid reporting volume 880. REQ-323 had the same defect and both were fixed together through ONE shared implementation, on the user's instruction. 4 new `ChamferEdgeTests` cases assert the refusals and the largest value that still fits. Full suite 1333/1333 | accepted |
 | REQ-326 | Domain/Commands, UI | done (GitHub issue #395, D-2026-09-07-a). `CadSnapTests.cpp` `[CadSnap][issue395]` (7 cases: Vertex + F4 master gate, Midpoint-on-edge, Nearest-to-face regression, Center-of-face on a planar box face, Center-of-face on a cylinder end-cap landing on the axis rather than a vertex average, Perpendicular's foot on a planar face, Knot enumeration against a hand-built `nurbs::Patch`) plus the 3 pre-existing `[req313]` solid-snap cases updated to the new per-mode flags. Full suite 1277/1278 (the one failure, `a missing or corrupt store loads as an empty list`, is pre-existing on `beta` and unrelated — reproduced against `beta` directly). |
 
 ---

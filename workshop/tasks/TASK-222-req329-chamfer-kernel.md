@@ -223,3 +223,13 @@ bevel planes, so the hexagon is planar; the gap-closing insertion handling the l
 running before the bevel faces are appended; and the arc re-anchor block being unreachable here (the
 end-face check forces a planar end face, so every unrequested edge at an open end is a straight
 plane-meets-plane line).
+
+---
+
+**DEBT-4 CLOSED 2026-09-08** by TASK-223 (D-2026-09-08-c, ADR-046 amendment (l)), on the user's
+instruction to fix it for the fillet as well as the chamfer rather than only where it was found.
+REQ-323 and REQ-329 item 4 are both amended as item 4b, the two operations now share one
+precondition implementation, and four new refusals name the two new failures. Suite 1333/1333.
+
+**DEBT-5 stands** — the contradictory "could not parse" trailer after a refused value, shared with
+FILLET.

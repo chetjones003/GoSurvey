@@ -445,6 +445,15 @@ enum class Problem {
   /// The radius does not fit: the setback `r / tan(theta/2)` reaches the far side of one of the two
   /// adjacent faces. Refused at equality too — at the limit the face does not thin, it vanishes.
   FilletRadiusTooLarge,
+  /// The request does not fit ITSELF: two requested edges bounding one face would have their
+  /// fillets cut into each other. Separate from \ref Problem::FilletRadiusTooLarge, which is about
+  /// one edge against the face's own extent — a user told "the far side of an adjacent face" when
+  /// the obstacle is another edge they selected would look for the wrong thing. ADR-046 amendment
+  /// (l).
+  FilletRadiusOverlapsAnother,
+  /// An edge is too short for the corners at BOTH of its ends: each fillet runs some distance along
+  /// the edge before it begins, and together they use the edge up. Amendment (l).
+  FilletEdgeTooShortForItsCorners,
   /// A face at one end of the edge is not planar, or is not square to the edge. A planar end face
   /// square to the edge meets the fillet along a circle; an oblique one meets it along an ellipse,
   /// which is a second construction and its own increment.
@@ -476,6 +485,12 @@ enum class Problem {
   /// The distance does not fit: the cut reaches the far side of one of the two adjacent faces.
   /// Refused at equality too. No trig here, unlike the fillet - the distance IS the setback.
   ChamferDistanceTooLarge,
+  /// The request does not fit ITSELF: two requested edges bounding one face would have their bevels
+  /// cut into each other. Separate from \ref Problem::ChamferDistanceTooLarge for the reason its
+  /// fillet twin is. ADR-046 amendment (l).
+  ChamferDistanceOverlapsAnother,
+  /// An edge is too short for the corners at BOTH of its ends. Amendment (l).
+  ChamferEdgeTooShortForItsCorners,
   /// A face at one end of the edge is not planar, or is not square to the edge. **Not the fillet's
   /// reason.** A plane cuts a plane in a straight line at any angle, so obliquity was expected to be
   /// free here; it is not. The cut point `p + d*u` lies ON the end face only while that face is

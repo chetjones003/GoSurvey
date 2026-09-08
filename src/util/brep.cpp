@@ -1720,6 +1720,12 @@ const char* ProblemText(Problem p) {
   case Problem::FilletRadiusTooLarge:
     return "That radius is too large for this edge: it would reach past the far side of an "
            "adjacent face.";
+  case Problem::FilletRadiusOverlapsAnother:
+    return "That radius is too large for this selection: this fillet and the one on another "
+           "selected edge would run into each other.";
+  case Problem::FilletEdgeTooShortForItsCorners:
+    return "This edge is too short to round at both of its corners — the two fillets would meet "
+           "before either finished.";
   case Problem::FilletEndFaceUnsupported:
     return "A face at one end of this edge is curved or not square to it, so the fillet cannot "
            "close there.";
@@ -1747,6 +1753,12 @@ const char* ProblemText(Problem p) {
   case Problem::ChamferDistanceTooLarge:
     return "That distance is too large for this edge: the bevel would reach past the far side of "
            "an adjacent face.";
+  case Problem::ChamferDistanceOverlapsAnother:
+    return "That distance is too large for this selection: this chamfer and the one on another "
+           "selected edge would run into each other.";
+  case Problem::ChamferEdgeTooShortForItsCorners:
+    return "This edge is too short to bevel at both of its corners — the two chamfers would meet "
+           "before either finished.";
   case Problem::ChamferEndFaceUnsupported:
     return "A face at one end of this edge is curved or not square to it, so the bevel cannot close "
            "there.";
@@ -2477,6 +2489,9 @@ struct FilletEdgePlan {
   int slot[2] = {-1, -1};
   Vec3 t{};                    ///< unit, from `v[0]` toward `v[1]`
   Vec3 n[2]{};                 ///< the two faces' outward normals
+  Vec3 u[2]{};                 ///< in-face unit perpendicular to the edge, INTO the material
+  double setback = 0.0;        ///< r / tan(theta/2): how far the fillet cuts into each face
+  double length = 0.0;
   int v[2] = {-1, -1};         ///< the original endpoints
   Vec3 axisPt[2]{};            ///< where the fillet's axis sits at each end
   int tan[2] = {-1, -1};       ///< the two tangent-line edges, stored end0 -> end1
@@ -2528,6 +2543,84 @@ struct EdgeUseTable {
     }
   return t;
 }
+
+/// One requested edge of a blend — a fillet or a chamfer — reduced to what the crowding pre-check
+/// below needs. Both operations fill this identically; only the SETBACK is derived differently (the
+/// fillet converts a radius through `r / tan(theta/2)`, the chamfer is handed it).
+struct BlendSpan {
+  Vec3 p[2]{};                       ///< the edge's two endpoint positions
+  Vec3 t{};                          ///< unit, `p[0]` -> `p[1]`
+  double length = 0.0;
+  int v[2] = {-1, -1};               ///< the original endpoint indices
+  int face[2] = {-1, -1};
+  Vec3 u[2]{};                       ///< in-face unit perpendicular to the edge, INTO the material
+  double setback = 0.0;              ///< how far the blend cuts into each adjacent face
+  double consumed[2] = {0.0, 0.0};   ///< taken off this edge's own LENGTH at each end, by a corner
+};
+
+enum class BlendFit { Ok, EdgeTooShort, Overlaps };
+
+/// Does the whole REQUEST fit — not merely each edge of it one at a time?
+///
+/// **ADR-046 amendment (l), and this exists because the original precondition was measured one edge
+/// at a time.** Amendment (i)'s rule — a modifying operation owns its own precondition, because
+/// `Validate` checks topology and not geometry — was implemented as "for this edge, does the setback
+/// reach the far boundary of each adjacent face?". That question is answered against the ORIGINAL
+/// face, so it sees nothing of what the other requested edges take out of the same face, and nothing
+/// of one edge's two ends eating each other at their corners. Both let a request through whose
+/// blends overlap, and the result is a self-intersecting solid that `Validate` accepts and whose
+/// mass properties are meaningless. On a 20 x 10 x 8 box, `FILLET 6` and `CHAMFER 6` on the two
+/// 20-long top edges — 10 apart across a 10-wide face — were both accepted.
+///
+/// Two things have to hold, and they are separate statements rather than one:
+///
+///  1. **An edge must survive its own two ends.** At a corner the blend runs `consumed` along the
+///     edge before it begins, so the blend face is `length - consumed[0] - consumed[1]` long and
+///     that has to be positive.
+///  2. **Two requested edges bounding one face must not cut into each other.** Their strips are
+///     `setback` and `setback'` wide, so the room between them has to exceed the sum. **ADJACENT
+///     edges are exempt**: their cuts are *meant* to meet, at the shared corner vertex, and (1) is
+///     what covers their interaction instead.
+///
+/// Equality is refused in both, for the reason the original check already gave: at the limit the
+/// face does not become thin, it vanishes.
+///
+/// (2) is measured from the nearer of the other edge's two endpoints, which is exact for the
+/// parallel case that a box, wedge or prism actually produces. For two edges of a face that are
+/// neither parallel nor adjacent — reachable only on a face with more than four sides — it is
+/// conservative rather than exact, and errs toward refusing something buildable. That direction is
+/// deliberate: the failure being fixed here is the other one.
+[[nodiscard]] BlendFit BlendsFit(const std::vector<BlendSpan>& spans) {
+  constexpr double kEps = 1e-9;
+
+  for (const BlendSpan& a : spans)
+    if (!(a.consumed[0] + a.consumed[1] < a.length - kEps))
+      return BlendFit::EdgeTooShort;
+
+  for (std::size_t ia = 0; ia < spans.size(); ++ia)
+    for (std::size_t ib = 0; ib < spans.size(); ++ib) {
+      if (ia == ib)
+        continue;
+      const BlendSpan& a = spans[ia];
+      const BlendSpan& b = spans[ib];
+      if (a.v[0] == b.v[0] || a.v[0] == b.v[1] || a.v[1] == b.v[0] || a.v[1] == b.v[1])
+        continue;  // adjacent: their cuts meet at the shared corner by construction
+      for (int ka = 0; ka < 2; ++ka)
+        for (int kb = 0; kb < 2; ++kb) {
+          if (b.face[kb] != a.face[ka])
+            continue;
+          // How far the shared face still reaches from `a`, once `b` has taken its own strip.
+          const double reach =
+              std::min(ray3d::Dot(ray3d::Sub(b.p[0], a.p[0]), a.u[ka]),
+                       ray3d::Dot(ray3d::Sub(b.p[1], a.p[0]), a.u[ka])) +
+              b.setback * ray3d::Dot(b.u[kb], a.u[ka]);
+          if (!(a.setback < reach - kEps))
+            return BlendFit::Overlaps;
+        }
+    }
+  return BlendFit::Ok;
+}
+
 
 }  // namespace
 
@@ -2598,12 +2691,16 @@ bool FilletEdgesGeneral(const Solid& s, const std::vector<int>& edgeIndices, dou
     const Vec3 uB = ray3d::Normalize(ray3d::Cross(p.n[1], dirB));
     if (!(ray3d::Dot(uA, p.n[1]) < -1e-9))
       return fail(Problem::FilletEdgeConcave);
+    p.u[0] = uA;
+    p.u[1] = uB;
+    p.length = len;
 
     const double cosTheta = std::clamp(ray3d::Dot(uA, uB), -1.0, 1.0);
     const double halfT = 0.5 * std::acos(cosTheta);
     if (!(std::tan(halfT) > 1e-12))
       return fail(Problem::FilletFacesParallel);
     const double setback = radius / std::tan(halfT);
+    p.setback = setback;
     const auto reach = [&](const Face& f, const Vec3& dir) {
       double m = 0.0;
       for (const int vi : FaceVertexSet(s, f))
@@ -2688,6 +2785,45 @@ bool FilletEdgesGeneral(const Solid& s, const std::vector<int>& edgeIndices, dou
         p.axisPt[k] = corners[static_cast<std::size_t>(it->second)].centre;
     }
 
+
+  // Does the whole REQUEST fit? The per-edge check above asks only whether THIS radius reaches the
+  // far side of THIS edge's own faces, measured against the ORIGINAL solid - so it sees nothing of
+  // what the other requested edges take out of the same face, and nothing of one edge's two ends
+  // eating each other. ADR-046 amendment (l), and the case that forced it: `FILLET 6` on the two
+  // 20-long top edges of a 20 x 10 x 8 box (10 apart across a 10-wide face) was ACCEPTED and
+  // returned a self-intersecting solid reporting volume 1290.97336.
+  //
+  // Here rather than in the per-edge loop because it needs every edge's setback at once, and after
+  // the axis points have been moved onto the corner centres because that is what makes `consumed`
+  // fall out: `dot(axisPt[k] - p[k], t)` is zero at an open end and the corner's own bite at a
+  // corner, with no second rule.
+  {
+    std::vector<BlendSpan> spans;
+    spans.reserve(plans.size());
+    for (const FilletEdgePlan& p : plans) {
+      BlendSpan b;
+      for (int k = 0; k < 2; ++k) {
+        b.v[k] = p.v[k];
+        b.p[k] = s.vertices[static_cast<std::size_t>(p.v[k])].p;
+        b.face[k] = p.face[k];
+        b.u[k] = p.u[k];
+      }
+      b.t = p.t;
+      b.length = p.length;
+      b.setback = p.setback;
+      for (int k = 0; k < 2; ++k)
+        b.consumed[k] = std::fabs(ray3d::Dot(ray3d::Sub(p.axisPt[k], b.p[k]), p.t));
+      spans.push_back(b);
+    }
+    switch (BlendsFit(spans)) {
+    case BlendFit::EdgeTooShort:
+      return fail(Problem::FilletEdgeTooShortForItsCorners);
+    case BlendFit::Overlaps:
+      return fail(Problem::FilletRadiusOverlapsAnother);
+    case BlendFit::Ok:
+      break;
+    }
+  }
   // Open ends keep increment 1's rule: the one other face there must be planar and square to the
   // edge, so the arc closing the fillet is a circle rather than an ellipse.
   for (const auto& [vk, slots] : atVertex) {
@@ -3154,6 +3290,48 @@ bool ChamferEdgesGeneral(const Solid& s, const std::vector<int>& edgeIndices, do
     if (!SolveThreePlanes(q0.planeN, q0.planeD, q1.planeN, q1.planeD, q2.planeN, q2.planeD, &c.point))
       return fail(Problem::ChamferCornerNotOrthogonal);
     corners.push_back(c);
+  }
+
+  // Does the whole REQUEST fit? Same question, same answer and the same helper as the fillet's —
+  // ADR-046 amendment (l). The per-edge check above measures this distance against the ORIGINAL
+  // face, so it sees neither what another requested edge takes out of that face nor one edge's two
+  // ends eating each other. `CHAMFER 6` on the two 20-long top edges of a 20 x 10 x 8 box was
+  // ACCEPTED and returned a self-intersecting solid reporting volume 880.
+  //
+  // What a corner takes off an edge's own LENGTH is exactly `distance`: the cut vertex there is
+  // `p + distance * (u_this + u_other)`, and `u_other` runs along this edge, which is what the
+  // orthogonality check a few lines above guarantees.
+  {
+    std::vector<int> cornerAt;
+    for (const ChamferCornerPlan& c : corners)
+      cornerAt.push_back(c.vertex);
+    std::sort(cornerAt.begin(), cornerAt.end());
+
+    std::vector<BlendSpan> spans;
+    spans.reserve(plans.size());
+    for (const ChamferEdgePlan& p : plans) {
+      BlendSpan b;
+      for (int k = 0; k < 2; ++k) {
+        b.v[k] = p.v[k];
+        b.p[k] = s.vertices[static_cast<std::size_t>(p.v[k])].p;
+        b.face[k] = p.face[k];
+        b.u[k] = p.u[k];
+        b.consumed[k] =
+            std::binary_search(cornerAt.begin(), cornerAt.end(), p.v[k]) ? distance : 0.0;
+      }
+      b.t = p.t;
+      b.length = ray3d::Length(ray3d::Sub(b.p[1], b.p[0]));
+      b.setback = distance;
+      spans.push_back(b);
+    }
+    switch (BlendsFit(spans)) {
+    case BlendFit::EdgeTooShort:
+      return fail(Problem::ChamferEdgeTooShortForItsCorners);
+    case BlendFit::Overlaps:
+      return fail(Problem::ChamferDistanceOverlapsAnother);
+    case BlendFit::Ok:
+      break;
+    }
   }
 
   // Open ends keep the fillet's rule, and for a reason that had to be worked rather than assumed
