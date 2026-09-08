@@ -1048,6 +1048,10 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
     # StartDistCommand, like TrimLinePreviewTests above.
     tests/DistCommandTests.cpp
+    # GitHub issue #396 (PRESSPULL addendum) — PRESSPULL was brought in line with EXTRUDE's own
+    # select-target / wait-distance flow and widened to closed 2D shapes. Needs gosurvey_domain
+    # for HandlePressPullTextInput / StartPressPullCommand, like DistCommandTests above.
+    tests/PressPullTypedDistanceDirectionTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

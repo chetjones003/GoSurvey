@@ -1,0 +1,88 @@
+# GitHub issue #396 (PRESSPULL addendum) — PRESSPULL was brought in line with EXTRUDE's own
+# select-target / wait-distance flow, and widened to accept a closed 2D shape (a closed polyline or
+# a circle) as a target, not just an existing solid FACE. Pressing/pulling a closed shape builds a
+# new solid the same way EXTRUDE would, through the same kernel path.
+#
+# Sub-object face targets are req319-presspull.txt's subject and are not repeated here. What this
+# file owns is the closed-shape target: the one-line shortcut, the prompted select-then-distance
+# form, and that the source shape is left in place exactly like EXTRUDE leaves its source.
+
+NEW
+EXPECT SOLIDS 0
+
+# --- A closed rectangular polyline, 20 x 12, PRESSPULL 5 -> the same solid EXTRUDE 5 would build ---
+# Volume 20*12*5 = 1200. Area 2*240 + perimeter 64 * 5 = 480 + 320 = 800. A box: 8 v, 12 e, 6 f.
+CMD POLYLINE
+CMD 0,0
+CMD 20,0
+CMD 20,12
+CMD 0,12
+CMD CLOSE
+ESC
+EXPECT POLYLINES 1
+
+BOX -2 -2 22 14
+EXPECT SELECTED 1
+CMD PRESSPULL 5
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Solid
+EXPECT SOLIDPROPS 0 1200 800 8 12 6
+EXPECT LOG "Solid created"
+# the source polyline is left in place, exactly like EXTRUDE leaves its source.
+EXPECT POLYLINES 1
+
+# --- One undo step removes it; redo brings it back --------------------------------------------
+CMD UNDO
+EXPECT SOLIDS 0
+EXPECT POLYLINES 1
+CMD REDO
+EXPECT SOLIDS 1
+
+# --- A circle, r = 4, PRESSPULL 9 -> the same solid EXTRUDE 9 would build -----------------------
+# Volume pi*16*9 = 452.3893421169302. Area 2*pi*16 + 2*pi*4*9 = 326.7256359733385. 4 v, 6 e, 4 f.
+CMD CIRCLE
+CMD 200,0
+CMD 4
+ESC
+EXPECT CIRCLES 1
+BOX 194 -6 206 6
+EXPECT SELECTED 1
+CMD PRESSPULL 9
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 1 452.3893421169302 326.7256359733385 4 6 4
+
+# --- The prompted form: select a closed shape, bare PRESSPULL, Enter, then a typed distance ------
+# 30 x 20, pulled -7: a solid the OTHER side of the shape's plane from a positive PRESSPULL.
+# Volume 30*20*7 = 4200. Area 2*600 + perimeter 100 * 7 = 1200 + 700 = 1900.
+CMD POLYLINE
+CMD 0,100
+CMD 30,100
+CMD 30,120
+CMD 0,120
+CMD CLOSE
+ESC
+BOX -2 98 32 122
+EXPECT SELECTED 1
+CMD PRESSPULL
+EXPECT LOG "specify distance"
+CMD -7
+EXPECT SOLIDS 3
+EXPECT SOLIDPROPS 2 4200 1900 8 12 6
+
+# --- A line in the selection is reported, not silently swallowed -------------------------------
+CMD LINE
+CMD 300,0
+CMD 320,0
+ESC
+BOX 299 -2 321 2
+EXPECT SELECTED 1
+CMD PRESSPULL 3
+EXPECT LOG "no face in it"
+EXPECT SOLIDS 3
+
+# --- A bare PRESSPULL with NOTHING selected asks for a target rather than refusing outright ------
+CMD PRESSPULL
+EXPECT LOG "closed polyline or circle"
+ESC
+
+CHECK ALL

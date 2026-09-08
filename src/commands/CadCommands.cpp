@@ -6397,7 +6397,7 @@ const CmdEntry kRegistry[] = {
     {"sphere", "sph", "Create a sphere solid: SPHERE <X,Y[,Z]> <radius>"},
     {"torus", "tor", "Create a torus solid: TORUS <X,Y[,Z]> <radius> <tube radius>"},
     {"presspull", "pp",
-     "Move a selected solid FACE along its own normal: Ctrl+click a face, then PRESSPULL <distance>"},
+     "Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, select a target, then a distance"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
@@ -12069,6 +12069,16 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       return;
     }
     SubmitExtrudeViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::PressPull) {
+    if (st.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) {
+      if (st.selBoxWaitingSecond)
+        finishBox();
+      return;
+    }
+    SubmitPressPullViewportPick(st, wx, wy, log);
     return;
   }
 
@@ -27027,43 +27037,107 @@ static void CommitSlice(AppCommandState& st, brep::SliceKeep keep, std::vector<s
 }
 
 // -------------------------------------------------------------------------------------------
-// PRESSPULL (REQ-319 / D-2026-09-04-c) — move the selected FACE along its own normal.
+// PRESSPULL (REQ-319 / D-2026-09-04-c, widened by GitHub issue #396) — move the selected FACE
+// along its own normal, or turn a selected closed polyline/circle into (or out of) a solid the
+// same way EXTRUDE does. Brought in line with EXTRUDE's own select-target / wait-distance shape:
+// a bare PRESSPULL asks for a target (unless one is already named), then a distance — typed, or
+// dragged from the cursor with a live ghost.
 // -------------------------------------------------------------------------------------------
 
-void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  // Acts on the REQ-318 sub-object selection, which is the whole point of the pairing: Ctrl+click
-  // names the face, this moves it. Nothing else in the program can name a face, so there is no
-  // second way in and no ambiguity about which face is meant.
-  //
-  // Expiry is swept once a frame in the main loop, but this runs from the command line and must not
-  // assume that has happened since the last edit — a PRESSPULL immediately after an undo would
-  // otherwise read a reference to a solid that is gone.
+namespace {
+
+enum class PressPullTargetKind {
+  None,     ///< Nothing eligible is selected.
+  TooMany,  ///< More than one eligible face or shape is selected.
+  Face,     ///< Exactly one solid FACE, from the REQ-318 sub-object selection.
+  Profile,  ///< Exactly one closed polyline/circle, from the ordinary entity selection.
+};
+
+struct PressPullTarget {
+  PressPullTargetKind kind = PressPullTargetKind::None;
+  SelectedSubObject face;
+  brep::Profile profile;
+};
+
+/// What PRESSPULL would act on right now. The two selections are mutually exclusive
+/// (D-2026-09-04-a), so a face selection is checked first and, when it names anything at all
+/// (even an ineligible edge/vertex), the entity selection is not consulted — the same priority
+/// the original face-only command gave its two refusal messages.
+PressPullTarget GatherPressPullTarget(AppCommandState& st) {
+  // Expiry is swept once a frame in the main loop, but this can run from the command line and
+  // must not assume that has happened since the last edit — a PRESSPULL immediately after an
+  // undo would otherwise read a reference to a solid that is gone.
   ExpireSubObjectSelection(st);
 
-  std::vector<const SelectedSubObject*> faces;
-  for (const SelectedSubObject& s : st.subObjectSelection)
-    if (s.kind == solidpick::Kind::Face)
-      faces.push_back(&s);
+  if (!st.subObjectSelection.empty()) {
+    std::vector<const SelectedSubObject*> faces;
+    for (const SelectedSubObject& s : st.subObjectSelection)
+      if (s.kind == solidpick::Kind::Face)
+        faces.push_back(&s);
+    if (faces.size() > 1)
+      return {PressPullTargetKind::TooMany, {}, {}};
+    if (faces.size() == 1)
+      return {PressPullTargetKind::Face, *faces.front(), {}};
+    return {PressPullTargetKind::None, {}, {}};  // an edge/vertex selection: no face in it
+  }
 
-  if (faces.empty()) {
-    log.push_back(st.subObjectSelection.empty()
-                      ? "PRESSPULL - select a solid FACE first: hold Ctrl and click one."
-                      : "PRESSPULL - the selection has no face in it. Ctrl+click a face, not an "
-                        "edge or a vertex.");
+  std::vector<brep::Profile> profiles;
+  int skipped = 0;
+  GatherExtrudeProfiles(st, &profiles, &skipped);
+  if (profiles.size() > 1)
+    return {PressPullTargetKind::TooMany, {}, {}};
+  if (profiles.size() == 1)
+    return {PressPullTargetKind::Profile, {}, profiles.front()};
+  return {PressPullTargetKind::None, {}, {}};
+}
+
+/// Build (face mode) or create (profile mode) the solid PRESSPULL describes at \p distance, and
+/// apply it: one undo step, GPU cache bump, and the kernel's own sentence on a refusal with the
+/// document left untouched. Shared by the one-line shortcut and the prompted command's commit, so
+/// the two cannot diverge (the same rule \ref CadApplyPushPull states for the grip drag).
+bool CadCommitPressPullTarget(AppCommandState& st, const PressPullTarget& t, double distance,
+                              std::vector<std::string>& log) {
+  if (t.kind == PressPullTargetKind::Face)
+    return CadApplyPushPull(st, t.face, distance, log);
+
+  brep::Solid built;
+  brep::Problem why = brep::Problem::Ok;
+  if (!brep::Extrude(t.profile, distance, &built, &why)) {
+    log.push_back(std::string("PRESSPULL - ") + brep::ProblemText(why));
+    return false;
+  }
+  PushUndoSnapshot(st, "PressPull");
+  const brep::MassProperties mp = brep::ComputeMassProperties(built);
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(built)));
+  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+  BumpCadGpuCache(st);
+  return true;
+}
+
+}  // namespace
+
+void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const PressPullTarget t = GatherPressPullTarget(st);
+  if (t.kind == PressPullTargetKind::TooMany) {
+    // Refused rather than applied to all of them. Two candidates moved at once means the second
+    // is computed against the first's result while the user was picturing the original - a
+    // compound edit nobody asked for. One target, one move (REQ-201).
+    log.push_back("PRESSPULL - more than one candidate is selected; this moves one at a time.");
     return;
   }
-  if (faces.size() > 1) {
-    // Refused rather than applied to all of them. Two faces of one solid move its geometry twice
-    // over, and the second push would be computed against the first's result while the user was
-    // picturing the original - a compound edit nobody asked for. One face, one move (REQ-201).
-    log.push_back("PRESSPULL - " + std::to_string(faces.size()) +
-                  " faces are selected; this moves one at a time.");
+  if (t.kind == PressPullTargetKind::None) {
+    log.push_back(st.subObjectSelection.empty() && st.selection.empty()
+                      ? "PRESSPULL - select a solid FACE first: hold Ctrl and click one, or "
+                        "select a closed polyline or circle."
+                      : "PRESSPULL - the selection has no face in it. Ctrl+click a face, not an "
+                        "edge or a vertex, or select a closed polyline/circle instead.");
     return;
   }
 
   const std::string text = StringUtil::trimCopy(args);
   if (text.empty()) {
-    log.push_back("Usage: PRESSPULL <distance> - positive moves the face outward, negative inward.");
+    log.push_back("Usage: PRESSPULL <distance> - positive moves outward, negative inward.");
     return;
   }
   char* end = nullptr;
@@ -27073,7 +27147,202 @@ void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std:
     return;
   }
 
-  CadApplyPushPull(st, *faces.front(), distance, log);
+  if (CadCommitPressPullTarget(st, t, distance, log) && t.kind == PressPullTargetKind::Profile)
+    st.selection.clear();
+}
+
+// -------------------------------------------------------------------------------------------------
+// The prompted PRESSPULL command (GitHub issue #396). A bare PRESSPULL asks for a target (unless one
+// is already named by a Ctrl+clicked face or a selected closed shape), then a distance — typed, or
+// dragged from the cursor with a live ghost. The ghost and the commit both go through
+// CadBuildPressPullSolid, so the ghost cannot show a shape the click would not build — the same
+// one-source-of-truth rule EXTRUDE follows.
+// -------------------------------------------------------------------------------------------------
+
+void CancelPressPullCommand(AppCommandState& st) {
+  st.pressPullPhase = AppCommandState::PressPullPhase::SelectTarget;
+  st.pressPullOnFace = false;
+  st.pressPullFace = SelectedSubObject{};
+  st.pressPullProfile = brep::Profile{};
+  st.pressPullDistPickValid = false;
+  st.pressPullDistPick = 0.0;
+}
+
+std::string CadPressPullPromptText(const AppCommandState& st) {
+  if (st.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) {
+    return "PRESSPULL — Ctrl+click a solid face, or select a closed polyline or circle, Enter when "
+           "done. ESC cancels.";
+  }
+  std::string s = "PRESSPULL — specify distance";
+  if (st.pressPullDistPickValid) {
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), " <%.4g>", st.pressPullDistPick);
+    s += buf;
+  }
+  s += ": type a value or click. ESC cancels.";
+  return s;
+}
+
+/// Move to the distance phase if the current target resolves; otherwise report and stay.
+static void PressPullEnterDistancePhase(AppCommandState& st, std::vector<std::string>& log) {
+  const PressPullTarget t = GatherPressPullTarget(st);
+  if (t.kind == PressPullTargetKind::TooMany) {
+    log.push_back("PRESSPULL - more than one candidate is selected; this moves one at a time.");
+    st.pressPullPhase = AppCommandState::PressPullPhase::SelectTarget;
+    return;
+  }
+  if (t.kind == PressPullTargetKind::None) {
+    log.push_back("PRESSPULL - nothing selected can be pushed or pulled (need a solid face, a "
+                  "closed polyline, or a circle).");
+    st.pressPullPhase = AppCommandState::PressPullPhase::SelectTarget;
+    return;
+  }
+  st.pressPullOnFace = (t.kind == PressPullTargetKind::Face);
+  if (st.pressPullOnFace)
+    st.pressPullFace = t.face;
+  else
+    st.pressPullProfile = t.profile;
+  st.pressPullPhase = AppCommandState::PressPullPhase::WaitDistance;
+  st.pressPullDistPickValid = false;
+  log.push_back(CadPressPullPromptText(st));
+}
+
+void StartPressPullCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelPressPullCommand(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::PressPull;
+  st.lastCommand = AppCommandState::Kind::PressPull;
+  st.selBoxWaitingSecond = false;
+
+  if (!st.subObjectSelection.empty() || !st.selection.empty()) {
+    PressPullEnterDistancePhase(st, log);
+    if (st.pressPullPhase == AppCommandState::PressPullPhase::WaitDistance)
+      return;
+    // fell back to SelectTarget — nothing usable was selected; drop it and ask.
+    st.selection.clear();
+  }
+  st.pressPullPhase = AppCommandState::PressPullPhase::SelectTarget;
+  log.push_back(CadPressPullPromptText(st));
+}
+
+bool CadBuildPressPullSolid(const AppCommandState& st, double distance, brep::Solid* out) {
+  if (!out || !std::isfinite(distance) || distance == 0.0)
+    return false;
+  if (st.pressPullOnFace) {
+    const CadSolidPtr sp = st.pressPullFace.owner.lock();
+    if (!sp || st.pressPullFace.solidIndex < 0 ||
+        static_cast<size_t>(st.pressPullFace.solidIndex) >= st.cadSolids.size() ||
+        st.cadSolids[static_cast<size_t>(st.pressPullFace.solidIndex)] != sp)
+      return false;
+    brep::Problem why = brep::Problem::Ok;
+    return brep::PushPullFace(*sp, st.pressPullFace.index, distance, out, &why);
+  }
+  brep::Problem why = brep::Problem::Ok;
+  return brep::Extrude(st.pressPullProfile, distance, out, &why);
+}
+
+static void CommitPressPull(AppCommandState& st, double distance, std::vector<std::string>& log) {
+  PressPullTarget t;
+  t.kind = st.pressPullOnFace ? PressPullTargetKind::Face : PressPullTargetKind::Profile;
+  t.face = st.pressPullFace;
+  t.profile = st.pressPullProfile;
+  if (!CadCommitPressPullTarget(st, t, distance, log))
+    return;  // refused; stays in WaitDistance so the user can try another value
+  if (!st.pressPullOnFace)
+    st.selection.clear();
+  CancelPressPullCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+bool HandlePressPullTextInput(const std::string& lineIn, AppCommandState& st,
+                              std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::PressPull)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+
+  if (st.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) {
+    if (!line.empty())
+      return false;  // a name / coordinate here means nothing; leave the command running
+    if (st.subObjectSelection.empty() && st.selection.empty()) {
+      log.push_back("PRESSPULL — nothing selected. Ctrl+click a face, or select a closed "
+                    "polyline/circle, or ESC.");
+      return true;
+    }
+    PressPullEnterDistancePhase(st, log);
+    return true;
+  }
+
+  // WaitDistance.
+  if (line.empty()) {
+    if (st.pressPullDistPickValid) {
+      CommitPressPull(st, st.pressPullDistPick, log);
+    } else {
+      log.push_back("PRESSPULL — type a distance, or move the cursor to a view where one can be read.");
+    }
+    return true;
+  }
+  char* end = nullptr;
+  const double d = std::strtod(line.c_str(), &end);
+  if (!end || *end != '\0' || !std::isfinite(d) || d == 0.0) {
+    log.push_back("PRESSPULL — \"" + line + "\" is not a distance. Type a non-zero number, or ESC.");
+    return true;
+  }
+  // The typed number is a magnitude; the sign comes from wherever the live preview is currently
+  // pointing (issue #396's rule for EXTRUDE, applied here too), falling back to the typed sign
+  // as-is when no valid preview direction is available.
+  const double signedD = st.pressPullDistPickValid ? std::copysign(d, st.pressPullDistPick) : d;
+  CommitPressPull(st, signedD, log);
+  return true;
+}
+
+void SubmitPressPullViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  (void)wx;
+  (void)wy;
+  if (st.active != AppCommandState::Kind::PressPull)
+    return;
+  if (st.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) {
+    // Selection accumulation itself is handled by the shared click path; a click here only advances
+    // once the user presses Enter. Nothing to do.
+    return;
+  }
+  if (!st.pressPullDistPickValid) {
+    log.push_back("PRESSPULL — no distance under the cursor here; type a value, or orbit the view.");
+    return;
+  }
+  CommitPressPull(st, st.pressPullDistPick, log);
+}
+
+void CadResolvePressPullPick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray) {
+  st.pressPullDistPickValid = false;
+  if (st.active != AppCommandState::Kind::PressPull ||
+      st.pressPullPhase != AppCommandState::PressPullPhase::WaitDistance)
+    return;
+
+  // The push/pull axis: the target's own outward normal (face mode) or plane normal (profile
+  // mode), through an anchor on it. Distance is the closest approach between that axis and the
+  // cursor ray — exactly the maths CadResolveExtrudePick and the gizmo drag both use, and for the
+  // same reason: the cursor sits ON the work plane, so its offset along the axis is only readable
+  // from the ray. Plan view has no ray, so it has no answer; the prompt says so.
+  (void)cursorOnPlane;
+  if (!ray || !ray->valid())
+    return;
+
+  ray3d::Vec3 anchor{};
+  ray3d::Vec3 axis{};
+  if (st.pressPullOnFace) {
+    if (!CadSubObjectFaceGrip(st, st.pressPullFace, &anchor, &axis))
+      return;
+  } else {
+    anchor = st.pressPullProfile.plane.origin;
+    axis = st.pressPullProfile.plane.zAxis;
+  }
+  double d = 0.0;
+  if (!CadAxisDragParam(anchor, axis, *ray, &d))
+    return;
+  if (!std::isfinite(d) || std::fabs(d) <= 1e-9)
+    return;
+  st.pressPullDistPick = d;
+  st.pressPullDistPickValid = true;
 }
 
 bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double distance,
@@ -29189,6 +29458,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("EXTRUDE canceled.");
     CancelExtrudeCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::PressPull) {
+    log.push_back("PRESSPULL canceled.");
+    CancelPressPullCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Revolve) {
     log.push_back("REVOLVE canceled.");
     CancelRevolveCommand(st);
@@ -30242,14 +30515,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // UCS, then exact dimensions — which is what REQ-313's acceptance asks for and no more. The
     // active UCS supplies the orientation, so a cylinder gets an arbitrary 3D axis without a new
     // command or an axis argument (#120), the same rule REQ-312 settled for tilted arcs.
-    // PRESSPULL (REQ-319) — the first command that EDITS a solid rather than creating one. It takes
-    // its target from the REQ-318 sub-object selection, so there is no "select objects" step: the
-    // face was named by a Ctrl+click before the command was typed, which is the pairing the two
-    // requirements were designed around.
+    // PRESSPULL (REQ-319, widened by GitHub issue #396) — the first command that EDITS a solid
+    // rather than creating one, and (since #396) one that can also build a new one from a closed
+    // 2D shape. A bare verb opens the prompted form (select a target, then a typed or dragged
+    // distance — EXTRUDE's own shape); a distance argument is the one-line shortcut, same as
+    // EXTRUDE's report-or-set split.
     if (plotTok == "presspull" || plotTok == "pp") {
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
-      CadPressPull(st, restOfLine, log);
+      if (StringUtil::trimCopy(restOfLine).empty())
+        StartPressPullCommand(st, log);
+      else
+        CadPressPull(st, restOfLine, log);
       return;
     }
     if (CadIsSolidPrimitiveVerb(plotTok)) {
@@ -31879,6 +32156,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleExtrudeTextInput(line, st, log))
       return;
     log.push_back(CadExtrudePromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::PressPull) {
+    if (HandlePressPullTextInput(line, st, log))
+      return;
+    log.push_back(CadPressPullPromptText(st));
     return;
   }
 
