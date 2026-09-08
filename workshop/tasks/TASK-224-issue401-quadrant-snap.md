@@ -1,7 +1,7 @@
 # TASK-224 — REQ-330: Quadrant object snap for circles and arcs
 
 - Type:    feature (new accepted requirement, single task)
-- Status:  in progress
+- Status:  done — PR #428
 - Opened:  2026-09-08
 - Owner:   Workshop
 - GitHub:  #401
@@ -76,6 +76,14 @@ REQ-062 pattern for adding a snap kind.
 ## 7. Verification
 
 - `dev/build` clean.
-- `dev/test` — new `[issue401]` cases green; pre-existing `beta` failure
-  (`a missing or corrupt store loads as an empty list`) unrelated.
+- `dev/test` — 1326/1327 green. The one failure, `a missing or corrupt store loads as an empty
+  list` (test #887, crash exit `0xc0000409`), is pre-existing on `beta` and unrelated to snapping
+  (a store-corruption serialization test). All six new `[CadSnap][issue401]` cases green; the six
+  circle-rim CENTRE/Midpoint/Endpoint ranking tests that briefly failed while Quadrant defaulted
+  ON pass again with the default OFF.
 - Manual GUI pass handed to the user (glyph colour/shape, menu entry, checkbox).
+
+## 8. Result
+
+**PASS.** REQ-330 delivered. Quadrant defaults OFF (AutoCAD OSMODE parity); no existing snap
+behaviour changes unless the toggle is enabled.
