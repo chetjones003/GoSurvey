@@ -5422,13 +5422,23 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
 /// mode-letter shape LENGTHEN's own `HandleLengthenText` established, simplified: FILLET has no
 /// pending-pick-awaiting-a-value latch, since R/T only ever change a persisted setting, never
 /// apply to an already-picked object.
+/// **The return value means "was this input UNDERSTOOD", not "did the command advance"**, and the
+/// distinction is load-bearing: the one and only thing the caller does with it is decide whether to
+/// append `ReportUnparsedCommandInput`'s trailer. So a value the kernel REFUSED returns **true** —
+/// it was understood, it was declined by name, and the prompt is still up — while a stray token
+/// returns **false**, which is what earns the genuinely useful "FILLET is still running, so
+/// \"circle\" was read as input to it; press Esc" hint.
+///
+/// Conflating the two is what TASK-224 fixed: a refused radius used to be followed by "Could not
+/// parse FILLET input", which contradicted the refusal printed one line above it.
 bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 void StartChamferCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Model-space + floating-model-space viewport-pick handler for CHAMFER. Non-static for the same
 /// anonymous-namespace/global-scope reason `HandleFilletViewportPick` is.
 void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 /// Typed command-line handling for CHAMFER's D(istance)/A(ngle)/T(rim) sub-commands (REQ-103 step
-/// 6b) — same shape as `HandleFilletText`.
+/// 6b) — same shape as `HandleFilletText`, **including what its return value means**: true when the
+/// input was understood (a refused distance included), false only when it was not.
 bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);

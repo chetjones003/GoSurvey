@@ -288,4 +288,41 @@ EXPECT SOLIDPROPS 0 1600 880 8 12 6
 CMD FILLET 3
 EXPECT SUBOBJECTS 0
 
+
+# --- A REFUSED value is not an UNPARSED one (TASK-224) -----------------------------------------------
+# The kernel declining a radius used to be followed by "Could not parse FILLET input — see command
+# hints.", which contradicted the sentence printed one line above it: the input parsed perfectly well,
+# and the kernel refused it by name. `HandleFILLETText`'s return value was being read as "did the
+# command advance" when the only thing the caller does with it is decide whether to add that trailer,
+# so it now means "was this input UNDERSTOOD" instead.
+#
+# NOLOG rather than LOG, because the defect is a line that should NOT be there and no positive
+# assertion can catch a message being wrongly present.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.1 0.1
+CMD FILLET
+CMD 8
+EXPECT LOG "too large"
+EXPECT LOG "different radius"
+EXPECT NOLOG "Could not parse"
+# Still asking, still holding the edge, and the value that fits still applies.
+EXPECT SUBOBJECTEDGES 1
+CMD 2
+EXPECT SUBOBJECTS 0
+
+# A genuinely unparsed token still gets the trailer, because that is the case it is FOR: it names the
+# running command and tells the user how to leave it. Only the false half was removed.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.1 0.1
+CMD FILLET
+CMD CIRCLE
+EXPECT LOG "FILLET is still running"
+EXPECT LOG "Press Esc"
+
 CHECK ALL

@@ -17247,7 +17247,10 @@ bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vecto
     if (!CadApplyFilletToSelectedEdges(st, want, log)) {
       // Already reported by name, and the solid is untouched. Ask again rather than giving up.
       log.push_back("FILLET - specify a different radius, or ESC to cancel:");
-      return false;
+      // TRUE, and the value is the point: this input was UNDERSTOOD - the kernel refused it by
+      // name. Returning false would earn the caller's "Could not parse" trailer, which would be
+      // simply untrue and would contradict the sentence just logged (TASK-224).
+      return true;
     }
     st.filletRadius = static_cast<float>(want);
     st.filletSolidAwaitingRadius = false;
@@ -17296,7 +17299,9 @@ bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vecto
     if (answered) {
       if (!CadApplyFilletToSelectedEdges(st, want, log)) {
         log.push_back("FILLET - specify a different radius, or ESC to cancel:");
-        return false;  // the prompt stays up; nothing was built, so the edges are still selected
+        // Understood and refused, not unparsed - see the note in the prompt branch above. The
+        // prompt stays up either way; nothing was built, so the edges are still selected.
+        return true;
       }
       st.filletRadius = static_cast<float>(want);
       st.active = AppCommandState::Kind::None;
@@ -18157,7 +18162,10 @@ bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vect
     if (!CadApplyChamferToSelectedEdges(st, want, log)) {
       // Already reported by name, and the solid is untouched. Ask again rather than giving up.
       log.push_back("CHAMFER - specify a different distance, or ESC to cancel:");
-      return false;
+      // TRUE, and the value is the point: this input was UNDERSTOOD - the kernel refused it by
+      // name. Returning false would earn the caller's "Could not parse" trailer, which would be
+      // simply untrue and would contradict the sentence just logged (TASK-224).
+      return true;
     }
     st.chamferDist1 = static_cast<float>(want);
     st.chamferSolidAwaitingDistance = false;
@@ -18235,7 +18243,9 @@ bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vect
     if (answered) {
       if (!CadApplyChamferToSelectedEdges(st, want, log)) {
         log.push_back("CHAMFER - specify a different distance, or ESC to cancel:");
-        return false;  // the prompt stays up; nothing was built, so the edges are still selected
+        // Understood and refused, not unparsed - see the note in the prompt branch above. The
+        // prompt stays up either way; nothing was built, so the edges are still selected.
+        return true;
       }
       st.chamferDist1 = static_cast<float>(want);
       st.active = AppCommandState::Kind::None;

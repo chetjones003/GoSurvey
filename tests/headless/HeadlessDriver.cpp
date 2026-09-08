@@ -132,6 +132,12 @@ struct Run {
   bool checkEveryStep = true;
   std::vector<Failure> failures;
 
+  /// Log length before the most recent CMD, so `EXPECT NOLOG` can ask what THAT command did and
+  /// did not say. A whole-log search would be useless for it: a transcript that legitimately
+  /// provokes a message once could never then assert its absence anywhere later, and NEW does not
+  /// reset the log (nothing does).
+  size_t logMarkBeforeLastCmd = 0;
+
   /// Log length before the current step, so a step's own output can be isolated (REQ-201 checks).
   size_t logMarkBeforeStep = 0;
 
@@ -475,6 +481,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       return false;
     }
   } else if (verb == "CMD") {
+    run.logMarkBeforeLastCmd = run.log.size();
     // `CMD` with no argument is a bare Enter, which is how half the commands terminate — an empty
     // argument is meaningful here, never a no-op.
     char buf[1024];
@@ -1631,6 +1638,26 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       if (!found) {
         Fail(run, "expect", "no log line contains: " + needle, sourceLine);
         return false;
+      }
+    } else if (what == "NOLOG") {
+      // EXPECT NOLOG "text" — the mirror of LOG, and it exists because some defects are a line that
+      // should NOT be there. TASK-224: a FILLET/CHAMFER value the kernel refused was followed by
+      // "Could not parse ... input", which is false — the input parsed, the kernel declined it — and
+      // no positive assertion can catch a message being wrongly PRESENT.
+      //
+      // Scoped to the MOST RECENT CMD, unlike LOG, which searches the whole accumulated log. A
+      // whole-log search would be near-useless here: nothing resets the log (NEW included), so a
+      // transcript that legitimately provokes a message once could never assert its absence again.
+      // "That command did not say this" is both the stronger claim and the one worth making.
+      std::string needle = Trim(arg);
+      if (needle.size() >= 2 && needle.front() == '"' && needle.back() == '"')
+        needle = needle.substr(1, needle.size() - 2);
+      for (std::size_t i = run.logMarkBeforeLastCmd; i < run.log.size(); ++i) {
+        if (run.log[i].find(needle) != std::string::npos) {
+          Fail(run, "expect", "the last command logged what must not be said: " + needle,
+               sourceLine);
+          return false;
+        }
       }
     } else if (what == "PROJECTION") {
       // EXPECT PROJECTION <ORTHOGRAPHIC|PERSPECTIVE> — the LIVE projection (REQ-309).

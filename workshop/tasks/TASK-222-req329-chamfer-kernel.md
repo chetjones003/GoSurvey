@@ -233,3 +233,9 @@ precondition implementation, and four new refusals name the two new failures. Su
 
 **DEBT-5 stands** — the contradictory "could not parse" trailer after a refused value, shared with
 FILLET.
+
+**DEBT-5 CLOSED 2026-09-08** by TASK-224, on the user's instruction. `Handle*Text`'s return value now
+means "was this input understood" rather than "did the command advance" — the contract that was never
+written down, which is how the two readings coexisted — so a refused value no longer earns a "Could
+not parse" trailer. FILLET and CHAMFER fixed together. The headless driver gains `EXPECT NOLOG`,
+scoped to the most recent command, and the assertion was proven to fail when the defect is put back.
