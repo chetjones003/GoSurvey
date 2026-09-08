@@ -452,10 +452,15 @@ enum class Problem {
   /// More than three edges meet at one end of the edge, so removing this one does not leave a single
   /// gap to close with one arc.
   FilletVertexNotSimple,
-  /// Two edges of the same request share a vertex. Their fillets leave a curved triangular gap that
-  /// needs a spherical corner patch — the whole distance between "round an edge" and "round a
-  /// chain" (issue #148 acceptance 5, still open).
-  FilletEdgesShareVertex,
+  /// Only SOME of the edges meeting at a corner are in the request. The ball rolling along a
+  /// filleted edge has to run off onto an edge that is staying sharp, which is a setback blend and
+  /// a different construction from the corner patch. Its own increment.
+  FilletCornerPartial,
+  /// The three faces at a corner are not mutually perpendicular. Their patch is then a general
+  /// spherical triangle rather than an octant, which is not an iso-rectangle in (u,v) and needs
+  /// REQ-321's general trim loops - and with them a numerically integrated area instead of the
+  /// closed form. Increment 2 covers the orthogonal corner; the oblique one is its own.
+  FilletCornerNotOrthogonal,
   FilletResultInvalid,       ///< The rounded solid did not validate. Should not happen; refused if it does.
 };
 
@@ -1033,13 +1038,25 @@ struct Tessellation {
 [[nodiscard]] bool FilletEdge(const Solid& s, int edgeIndex, double radius, Solid* out,
                               Problem* outWhy);
 
-/// Round several edges at once, as one operation (REQ-323 item 7).
+/// Round several edges at once, as one operation, **including where their fillets meet at a corner**
+/// (REQ-323 increments 1 and 2).
 ///
-/// Refuses \ref Problem::FilletEdgesShareVertex when any two of \p edgeIndices meet at a vertex:
-/// their cylinders would arrive at that corner and leave a curved triangular gap needing a
-/// **spherical** patch trimmed against both — the whole distance between "round an edge" and issue
-/// #148's "round a chain", and the reason that acceptance line is still open. Edges that pairwise
-/// share no vertex are independent, so they are applied in turn and the result is one solid.
+/// Every requested edge is built in ONE pass, not one after another: after the first fillet the
+/// shared vertex is gone, so a second arriving there would find a cylinder where it needs a plane.
+///
+/// At a vertex whose three edges are all requested, the three fillets meet on a **spherical** patch
+/// of the same radius — the ball that touches all three faces. Each cylinder axis passes through
+/// that ball's centre, so the boundary between each fillet and the patch is a great-circle arc, and
+/// with three mutually perpendicular faces the patch is an octant: the parameter rectangle
+/// `u, v in [0, pi/2]`, whose area and volume stay closed-form.
+///
+/// Refused, in addition to everything \ref FilletEdge refuses:
+/// - \ref Problem::FilletCornerPartial — some but not all of the edges at a corner are in the
+///   request, so the ball would have to run off a rounded edge onto one staying sharp. That is a
+///   setback blend and a different construction;
+/// - \ref Problem::FilletCornerNotOrthogonal — the three faces at a corner are not square to each
+///   other. Their patch is then a general spherical triangle, which is not an iso-rectangle and
+///   needs REQ-321's general trim loops (and with them a numeric area rather than the closed form).
 [[nodiscard]] bool FilletEdges(const Solid& s, const std::vector<int>& edgeIndices, double radius,
                                Solid* out, Problem* outWhy);
 

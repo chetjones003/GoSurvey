@@ -230,7 +230,9 @@ TEST_CASE("Fillet: two edges sharing a vertex are refused, and nothing is built"
   brep::Solid out;
   Problem why{};
   CHECK_FALSE(brep::FilletEdges(box, {topBack, topLeft}, 2.0, &out, &why));
-  CHECK(why == Problem::FilletEdgesShareVertex);
+  // Increment 2 narrowed this: it is not "they share a vertex" but "only SOME of the edges at that
+  // corner are selected", which is the case the corner patch genuinely cannot build.
+  CHECK(why == Problem::FilletCornerPartial);
   CHECK(out.faces.empty());
 
   // Two OPPOSITE top edges share no vertex, so they are independent and both are rounded in one
@@ -406,11 +408,151 @@ TEST_CASE("Fillet: every refusal has its own message, not the generic solid-inva
       Problem::FilletFaceNotPlanar,      Problem::FilletFacesParallel,
       Problem::FilletEdgeConcave,        Problem::FilletRadiusTooLarge,
       Problem::FilletEndFaceUnsupported, Problem::FilletVertexNotSimple,
-      Problem::FilletEdgesShareVertex,   Problem::FilletResultInvalid,
+      Problem::FilletCornerPartial,      Problem::FilletCornerNotOrthogonal,
+      Problem::FilletResultInvalid,
   };
   for (const Problem p : filletProblems) {
     const std::string text = brep::ProblemText(p);
     CHECK(text != "The solid is not valid.");
     CHECK_FALSE(text.empty());
   }
+}
+
+// --- REQ-323 increment 2: edge chains, and the spherical corner patch -----------------------------
+//
+// The closed forms for a fully rounded box are the acceptance here, and they are worth writing out
+// because each term is separately checkable. With `a = L-2r`, `b = W-2r`, `c = H-2r`:
+//
+//   V = a*b*c                              the inner box
+//     + 2r(ab + ac + bc)                   six slabs
+//     + pi*r^2 (a + b + c)                 twelve quarter-cylinders
+//     + (4/3) pi r^3                       eight octants, which together are one sphere
+//
+//   A = 2(ab + ac + bc) + 2 pi r (a+b+c) + 4 pi r^2
+//
+// For 20 x 10 x 8 at r = 2 that is 1120 + 344pi/3 and 368 + 120pi. Derived before the code, as
+// increment 1's were - and increment 1 is exactly why: two of ITS acceptance numbers were wrong, and
+// only writing them down first made that visible.
+
+TEST_CASE("Fillet: all twelve edges of a box, against the rounded-box closed forms",
+          "[fillet][req323]") {
+  const brep::Solid box = Box(20.0, 10.0, 8.0);
+  std::vector<int> all;
+  for (std::size_t i = 0; i < box.edges.size(); ++i)
+    all.push_back(static_cast<int>(i));
+  REQUIRE(all.size() == 12);
+
+  brep::Solid out;
+  Problem why{};
+  REQUIRE(brep::FilletEdges(box, all, 2.0, &out, &why));
+  REQUIRE(brep::Validate(out) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(out);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Approx(1120.0 + 344.0 * kPi / 3.0).epsilon(1e-12));
+  CHECK(mp.surfaceArea == Approx(368.0 + 120.0 * kPi).epsilon(1e-12));
+
+  // 6 planes + 12 cylinders + 8 octants; 8 corners x 3 tangent points; 12 x 2 tangent lines plus
+  // 8 x 3 corner arcs. Euler holds: 24 - 48 + 26 = 2.
+  CHECK(out.faces.size() == 26);
+  CHECK(out.vertices.size() == 24);
+  CHECK(out.edges.size() == 48);
+  CHECK(brep::EulerCharacteristic(out) == brep::EulerCharacteristic(box));
+
+  int planes = 0;
+  int cylinders = 0;
+  int spheres = 0;
+  for (const brep::Face& f : out.faces) {
+    if (f.surface.kind == brep::SurfaceKind::Plane)
+      ++planes;
+    else if (f.surface.kind == brep::SurfaceKind::Cylinder)
+      ++cylinders;
+    else if (f.surface.kind == brep::SurfaceKind::Sphere) {
+      ++spheres;
+      CHECK(f.surface.radius == Approx(2.0));
+      // The octant, and this is the reason increment 2 asks for orthogonal corners: it keeps the
+      // patch an ISO-RECTANGLE, so its area is the closed form rather than a numeric integral.
+      CHECK(f.uEnd - f.uStart == Approx(kPi * 0.5));
+      CHECK(f.vEnd - f.vStart == Approx(kPi * 0.5));
+    }
+  }
+  CHECK(planes == 6);
+  CHECK(cylinders == 12);
+  CHECK(spheres == 8);
+}
+
+TEST_CASE("Fillet: three edges at one corner give one patch and three open ends",
+          "[fillet][req323]") {
+  // The smallest chain that works. Two edges sharing a corner do NOT: that leaves the third edge at
+  // the corner sharp, which is a partial corner and refused below.
+  const brep::Solid box = Box(20.0, 10.0, 8.0);
+  const int e1 = EdgeAt(box, {0.0, 5.0, 8.0});     // along X at y=5, z=8
+  const int e2 = EdgeAt(box, {-10.0, 0.0, 8.0});   // along Y at x=-10, z=8
+  const int e3 = EdgeAt(box, {-10.0, 5.0, 4.0});   // along Z at x=-10, y=5
+  REQUIRE(e1 >= 0);
+  REQUIRE(e2 >= 0);
+  REQUIRE(e3 >= 0);
+  // They all meet at (-10, 5, 8).
+  brep::Solid out;
+  Problem why{};
+  REQUIRE(brep::FilletEdges(box, {e1, e2, e3}, 2.0, &out, &why));
+  REQUIRE(brep::Validate(out) == Problem::Ok);
+
+  int spheres = 0;
+  for (const brep::Face& f : out.faces)
+    if (f.surface.kind == brep::SurfaceKind::Sphere)
+      ++spheres;
+  CHECK(spheres == 1);
+  CHECK(out.faces.size() == 6 + 3 + 1);
+
+  // The corner ball sits at distance r from all three planes, so its centre is (-8, 3, 6) and the
+  // patch's three corners are that plus 2 along each outward normal.
+  const auto hasVertex = [&](double x, double y, double z) {
+    for (const brep::Vertex& v : out.vertices)
+      if (std::fabs(v.p.x - x) < 1e-9 && std::fabs(v.p.y - y) < 1e-9 && std::fabs(v.p.z - z) < 1e-9)
+        return true;
+    return false;
+  };
+  CHECK(hasVertex(-8.0, 3.0, 8.0));   // on the top face
+  CHECK(hasVertex(-8.0, 5.0, 6.0));   // on the y = 5 face
+  CHECK(hasVertex(-10.0, 3.0, 6.0));  // on the x = -10 face
+}
+
+TEST_CASE("Fillet: a corner with only some of its edges selected is refused", "[fillet][req323]") {
+  // The ball would have to roll off a rounded edge onto one staying sharp — a setback blend, and a
+  // different construction from the corner patch. Increment 1 refused ANY shared vertex; increment 2
+  // narrows that to the case it genuinely cannot build, and says which case it is.
+  const brep::Solid box = Box(20.0, 10.0, 8.0);
+  const int e1 = EdgeAt(box, {0.0, 5.0, 8.0});
+  const int e2 = EdgeAt(box, {-10.0, 0.0, 8.0});
+  brep::Solid out;
+  Problem why{};
+  CHECK_FALSE(brep::FilletEdges(box, {e1, e2}, 2.0, &out, &why));
+  CHECK(why == Problem::FilletCornerPartial);
+  CHECK(out.faces.empty());
+}
+
+TEST_CASE("Fillet: a corner whose faces are not square to each other is refused",
+          "[fillet][req323]") {
+  // A WEDGE's ridge corner: the slanted face is 68.199 degrees from the back face, so the three
+  // normals there are not mutually perpendicular and the patch would be a general spherical
+  // triangle rather than an octant — not an iso-rectangle, so not closed-form. Increment 2's own
+  // boundary, refused by name rather than approximated.
+  brep::Solid wedge;
+  Problem why{};
+  REQUIRE(brep::MakeWedge(World(), 20.0, 10.0, 8.0, &wedge, &why));
+  const int ridge = EdgeAt(wedge, {-10.0, 0.0, 8.0});
+  REQUIRE(ridge >= 0);
+  // Every edge at one end of the ridge, so the corner is complete but oblique.
+  const int rv = wedge.edges[static_cast<std::size_t>(ridge)].v0;
+  std::vector<int> atCorner;
+  for (std::size_t i = 0; i < wedge.edges.size(); ++i)
+    if (wedge.edges[i].v0 == rv || wedge.edges[i].v1 == rv)
+      atCorner.push_back(static_cast<int>(i));
+  REQUIRE(atCorner.size() == 3);
+  brep::Solid out;
+  Problem w{};
+  CHECK_FALSE(brep::FilletEdges(wedge, atCorner, 1.0, &out, &w));
+  CHECK(w == Problem::FilletCornerNotOrthogonal);
+  CHECK(out.faces.empty());
 }

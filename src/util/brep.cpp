@@ -1725,8 +1725,12 @@ const char* ProblemText(Problem p) {
            "close there.";
   case Problem::FilletVertexNotSimple:
     return "More than three edges meet at one end of this edge, so it cannot be filleted alone.";
-  case Problem::FilletEdgesShareVertex:
-    return "Two of the selected edges share a corner, which this fillet does not yet support.";
+  case Problem::FilletCornerPartial:
+    return "Some of the edges that share a corner are selected and some are not; select all three, "
+           "or none of them.";
+  case Problem::FilletCornerNotOrthogonal:
+    return "The three faces at that corner are not square to each other, which this fillet does not "
+           "yet round.";
   case Problem::FilletResultInvalid:
     return "That fillet would leave the solid invalid, so it was not applied.";
   }
@@ -2389,194 +2393,387 @@ void CompactUnused(Solid* s) {
 
 }  // namespace
 
-bool FilletEdge(const Solid& s, int edgeIndex, double radius, Solid* out, Problem* outWhy) {
-  if (!out)
-    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
-  const auto fail = [&](Problem why) { return Fail(why, outWhy); };
+// Both public entry points are one call into the general builder below. They were two separate
+// implementations while increment 1 could only round one edge at a time; increment 2's corner patch
+// made the sequential form impossible - after the first fillet the shared vertex is gone, so the
+// second arrives at a CYLINDER rather than a plane - so the builder does every requested edge in one
+// pass and a single edge is simply the case with no corners. That also retired increment 1's
+// position-based re-lookup (TASK-210 DEBT-1), which existed only to survive the compaction between
+bool FilletEdgesGeneral(const Solid& s, const std::vector<int>& edgeIndices, double radius,
+                        Solid* out, Problem* outWhy);
 
+// sequential passes.
+bool FilletEdge(const Solid& s, int edgeIndex, double radius, Solid* out, Problem* outWhy) {
+  return FilletEdgesGeneral(s, std::vector<int>{edgeIndex}, radius, out, outWhy);
+}
+
+bool FilletEdges(const Solid& s, const std::vector<int>& edgeIndices, double radius, Solid* out,
+                 Problem* outWhy) {
+  return FilletEdgesGeneral(s, edgeIndices, radius, out, outWhy);
+}
+
+// --- REQ-323 increment 2: edge CHAINS, and the spherical patch where their fillets meet ----------
+//
+// Increment 1 rounded one edge at a time and refused any two that shared a corner. This is the
+// construction that lifts that, and it replaces the sequential one rather than looping it: after the
+// first fillet the corner vertex is gone, so a second fillet arriving at it has a CYLINDER for a
+// neighbour rather than a plane, and no amount of iterating gets past that. Everything below is
+// built in one pass from the original solid.
+//
+// The geometry that makes it work, and it is worth stating because it is what keeps every number
+// closed-form:
+//
+//   * The corner ball touches all three faces, so its centre `c` is at distance `r` from all three
+//     planes — one 3x3 solve, the same one a single edge uses with two planes and the edge direction.
+//   * **Each of the three cylinder axes passes through `c`.** An axis is the locus of points at
+//     distance `r` from its own two planes, and `c` is at distance `r` from all three. So the
+//     cylinders do not merely approach the corner, they terminate exactly at it.
+//   * A cylinder of radius `r` whose axis passes through `c`, and a sphere of radius `r` centred on
+//     `c`, meet exactly on the GREAT circle in the plane through `c` perpendicular to that axis.
+//     So each boundary between a fillet and the corner patch is a great-circle arc, and the patch is
+//     a spherical triangle whose corners are `c + r*n_i` — the same tangent points the three fillets
+//     already land on.
+//   * When the three normals are mutually perpendicular that triangle is an OCTANT, which in the
+//     frame `(x, y, z) = (n1, n2, n3)` is exactly the parameter rectangle `u, v in [0, pi/2]`.
+//     That is why increment 2 asks for orthogonality: a general spherical triangle is bounded by
+//     three great circles that are not iso-parameter lines, so it would need REQ-321's `paramLoops`
+//     and with them a numerically integrated area in place of the closed form.
+
+namespace {
+
+/// One requested edge, and everything derived from it.
+struct FilletEdgePlan {
+  int edge = -1;
+  int face[2] = {-1, -1};      ///< [0] = A, [1] = B, in `FindEdgeUsers` order.
+  bool rev[2] = {false, false};
+  int loop[2] = {-1, -1};
+  int slot[2] = {-1, -1};
+  Vec3 t{};                    ///< unit, from `v[0]` toward `v[1]`
+  Vec3 n[2]{};                 ///< the two faces' outward normals
+  int v[2] = {-1, -1};         ///< the original endpoints
+  Vec3 axisPt[2]{};            ///< where the fillet's axis sits at each end
+  int tan[2] = {-1, -1};       ///< the two tangent-line edges, stored end0 -> end1
+  int endArc[2] = {-1, -1};    ///< the arc closing each end, stored A-side -> B-side
+  bool cylArcRev[2] = {false, false};  ///< how the CYLINDER used each of those arcs
+};
+
+/// A vertex where all three edges are being filleted.
+struct FilletCornerPlan {
+  int vertex = -1;
+  Vec3 centre{};
+  int face[3] = {-1, -1, -1};
+  int arc[3] = {-1, -1, -1};
+  bool arcRevForSphere[3] = {false, false, false};
+};
+
+/// Which two faces use each edge, in one sweep.
+struct EdgeUseTable {
+  std::vector<std::array<int, 2>> face;
+  std::vector<std::array<int, 2>> loop;
+  std::vector<std::array<int, 2>> slot;
+  std::vector<std::array<bool, 2>> rev;
+  std::vector<int> count;
+};
+
+[[nodiscard]] EdgeUseTable BuildEdgeUseTable(const Solid& s) {
+  EdgeUseTable t;
+  t.face.assign(s.edges.size(), {-1, -1});
+  t.loop.assign(s.edges.size(), {-1, -1});
+  t.slot.assign(s.edges.size(), {-1, -1});
+  t.rev.assign(s.edges.size(), {false, false});
+  t.count.assign(s.edges.size(), 0);
+  for (std::size_t fi = 0; fi < s.faces.size(); ++fi)
+    for (std::size_t li = 0; li < s.faces[fi].loops.size(); ++li) {
+      const Loop& lp = s.faces[fi].loops[li];
+      for (std::size_t si = 0; si < lp.uses.size(); ++si) {
+        const int ei = lp.uses[si].edge;
+        if (ei < 0 || static_cast<std::size_t>(ei) >= s.edges.size())
+          continue;
+        const std::size_t e = static_cast<std::size_t>(ei);
+        if (t.count[e] < 2) {
+          t.face[e][t.count[e]] = static_cast<int>(fi);
+          t.loop[e][t.count[e]] = static_cast<int>(li);
+          t.slot[e][t.count[e]] = static_cast<int>(si);
+          t.rev[e][t.count[e]] = lp.uses[si].reversed;
+        }
+        ++t.count[e];
+      }
+    }
+  return t;
+}
+
+}  // namespace
+
+bool FilletEdgesGeneral(const Solid& s, const std::vector<int>& edgeIndices, double radius,
+                        Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;
+  const auto fail = [&](Problem why) { return Fail(why, outWhy); };
   if (!AllFinite({radius}))
     return fail(Problem::NonFiniteParameter);
   if (!(radius > 0.0))
     return fail(Problem::FilletRadiusNotPositive);
-  if (edgeIndex < 0 || static_cast<std::size_t>(edgeIndex) >= s.edges.size())
+  if (edgeIndices.empty())
     return fail(Problem::IndexOutOfRange);
 
-  const Edge& e = s.edges[static_cast<std::size_t>(edgeIndex)];
-  if (e.kind != CurveKind::Line)
-    return fail(Problem::FilletEdgeNotLine);
+  const EdgeUseTable uses = BuildEdgeUseTable(s);
+  std::vector<int> req = edgeIndices;
+  std::sort(req.begin(), req.end());
+  if (std::adjacent_find(req.begin(), req.end()) != req.end())
+    return fail(Problem::IndexOutOfRange);  // the same edge twice is a caller mistake, not a shape
+  for (const int ei : req)
+    if (ei < 0 || static_cast<std::size_t>(ei) >= s.edges.size())
+      return fail(Problem::IndexOutOfRange);
 
-  const EdgeUsers users = FindEdgeUsers(s, edgeIndex);
-  if (users.count != 2)
-    return fail(Problem::EdgeNotUsedTwice);
-  const Face& fA = s.faces[static_cast<std::size_t>(users.face[0])];
-  const Face& fB = s.faces[static_cast<std::size_t>(users.face[1])];
-  if (fA.surface.kind != SurfaceKind::Plane || fB.surface.kind != SurfaceKind::Plane)
-    return fail(Problem::FilletFaceNotPlanar);
-
-  const Vec3 p0 = s.vertices[static_cast<std::size_t>(e.v0)].p;
-  const Vec3 p1 = s.vertices[static_cast<std::size_t>(e.v1)].p;
-  const double edgeLen = ray3d::Length(ray3d::Sub(p1, p0));
-  if (!(edgeLen > 1e-12))
-    return fail(Problem::DegenerateEdge);
-  const Vec3 t = ray3d::Scale(ray3d::Sub(p1, p0), 1.0 / edgeLen);
-
-  // A plane's frame Z is its OUTWARD normal, by ADR-045's convention — there is no separate
-  // reversed flag to reconcile.
-  const Vec3 nA = ray3d::Normalize(fA.surface.frame.zAxis);
-  const Vec3 nB = ray3d::Normalize(fB.surface.frame.zAxis);
-  if (std::fabs(ray3d::Dot(nA, nB)) > 1.0 - 1e-9)
-    return fail(Problem::FilletFacesParallel);
-
-  // The direction from the edge INTO each face's interior. A face's loop runs counter-clockwise seen
-  // from outside, so the interior lies to the LEFT of the traversal direction — which is
-  // `cross(outward normal, traversal)`. Taken from the topology rather than guessed from a sample
-  // point, so it is right for a face of any shape.
-  const Vec3 dirA = users.reversed[0] ? ray3d::Scale(t, -1.0) : t;
-  const Vec3 dirB = users.reversed[1] ? ray3d::Scale(t, -1.0) : t;
-  const Vec3 uA = ray3d::Normalize(ray3d::Cross(nA, dirA));
-  const Vec3 uB = ray3d::Normalize(ray3d::Cross(nB, dirB));
-
-  // Convex means stepping into face A's interior also steps INSIDE face B's half-space. A concave
-  // edge is the other sign, and is a different operation rather than the same one mirrored: it adds
-  // material, so the fillet cylinder faces inward, the adjacent faces grow instead of shrinking, and
-  // the radius is limited by the far side of the crease rather than by the faces' own extents.
-  if (!(ray3d::Dot(uA, nB) < -1e-9))
-    return fail(Problem::FilletEdgeConcave);
-
-  // theta is the interior dihedral angle; the setback is r / tan(theta/2), which is exactly r at 90
-  // degrees. The check below is on the SETBACK and not on the radius, because on a sharp edge a
-  // modest radius still reaches a long way across both faces.
-  const double cosTheta = std::clamp(ray3d::Dot(uA, uB), -1.0, 1.0);
-  const double theta = std::acos(cosTheta);
-  const double halfT = 0.5 * theta;
-  if (!(std::tan(halfT) > 1e-12))
-    return fail(Problem::FilletFacesParallel);
-  const double setback = radius / std::tan(halfT);
-
-  // The pre-check (amendment (i)). The setback must be strictly less than how far the face reaches
-  // from this edge; at equality the face does not merely become thin, it vanishes, and a zero-area
-  // face is something `Validate` catches only sometimes and only after the solid is built.
-  const auto reach = [&](const Face& f, const Vec3& dir) {
-    double m = 0.0;
-    for (const int vi : FaceVertexSet(s, f))
-      m = std::max(m, ray3d::Dot(ray3d::Sub(s.vertices[static_cast<std::size_t>(vi)].p, p0), dir));
-    return m;
+  const auto isRequested = [&](int ei) {
+    return std::binary_search(req.begin(), req.end(), ei);
   };
-  if (!(setback < reach(fA, uA) - 1e-9) || !(setback < reach(fB, uB) - 1e-9))
-    return fail(Problem::FilletRadiusTooLarge);
 
-  // The rolling ball's centre line: distance `radius` from each plane, on the material side, in the
-  // cross-section through p0. `-radius` because the material is on the -normal side of each face.
-  Vec3 w{};
-  if (!SolveThreePlanes(nA, -radius, nB, -radius, t, 0.0, &w))
-    return fail(Problem::FilletFacesParallel);
-  const Vec3 c0 = ray3d::Add(p0, w);
-  const Vec3 c1 = ray3d::Add(p1, w);
-  // Where the ball touches each face: straight back out along that face's own normal.
-  const Vec3 a0 = ray3d::Add(c0, ray3d::Scale(nA, radius));
-  const Vec3 a1 = ray3d::Add(c1, ray3d::Scale(nA, radius));
-  const Vec3 b0 = ray3d::Add(c0, ray3d::Scale(nB, radius));
-  const Vec3 b1 = ray3d::Add(c1, ray3d::Scale(nB, radius));
+  // --- Per-edge validation and geometry, exactly increment 1's ------------------------------------
+  std::vector<FilletEdgePlan> plans;
+  plans.reserve(req.size());
+  for (const int ei : req) {
+    const std::size_t e = static_cast<std::size_t>(ei);
+    if (uses.count[e] != 2)
+      return fail(Problem::EdgeNotUsedTwice);
+    const Edge& ed = s.edges[e];
+    if (ed.kind != CurveKind::Line)
+      return fail(Problem::FilletEdgeNotLine);
 
-  // The face at each end of the edge: the one other face meeting that vertex. Three edges at a
-  // vertex means three faces, two of which are A and B.
-  int endFace[2] = {-1, -1};
-  const int endVert[2] = {e.v0, e.v1};
-  for (int k = 0; k < 2; ++k) {
-    int found = -1;
-    int others = 0;
-    for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
-      if (static_cast<int>(fi) == users.face[0] || static_cast<int>(fi) == users.face[1])
-        continue;
-      const std::vector<int> vs = FaceVertexSet(s, s.faces[fi]);
-      if (!std::binary_search(vs.begin(), vs.end(), endVert[k]))
-        continue;
-      ++others;
-      found = static_cast<int>(fi);
+    FilletEdgePlan p;
+    p.edge = ei;
+    for (int k = 0; k < 2; ++k) {
+      p.face[k] = uses.face[e][static_cast<std::size_t>(k)];
+      p.loop[k] = uses.loop[e][static_cast<std::size_t>(k)];
+      p.slot[k] = uses.slot[e][static_cast<std::size_t>(k)];
+      p.rev[k] = uses.rev[e][static_cast<std::size_t>(k)];
     }
-    if (others != 1)
-      return fail(Problem::FilletVertexNotSimple);
-    const Face& ef = s.faces[static_cast<std::size_t>(found)];
-    if (ef.surface.kind != SurfaceKind::Plane)
-      return fail(Problem::FilletEndFaceUnsupported);
-    // Square to the edge, so the cylinder is cut by a plane perpendicular to its axis and the new
-    // boundary is a CIRCLE. An oblique end face gives an ellipse, which is a second construction.
-    if (std::fabs(std::fabs(ray3d::Dot(ray3d::Normalize(ef.surface.frame.zAxis), t)) - 1.0) > 1e-9)
-      return fail(Problem::FilletEndFaceUnsupported);
-    endFace[k] = found;
+    const Face& fA = s.faces[static_cast<std::size_t>(p.face[0])];
+    const Face& fB = s.faces[static_cast<std::size_t>(p.face[1])];
+    if (fA.surface.kind != SurfaceKind::Plane || fB.surface.kind != SurfaceKind::Plane)
+      return fail(Problem::FilletFaceNotPlanar);
+    p.v[0] = ed.v0;
+    p.v[1] = ed.v1;
+    const Vec3 p0 = s.vertices[static_cast<std::size_t>(ed.v0)].p;
+    const Vec3 p1 = s.vertices[static_cast<std::size_t>(ed.v1)].p;
+    const double len = ray3d::Length(ray3d::Sub(p1, p0));
+    if (!(len > 1e-12))
+      return fail(Problem::DegenerateEdge);
+    p.t = ray3d::Scale(ray3d::Sub(p1, p0), 1.0 / len);
+    p.n[0] = ray3d::Normalize(fA.surface.frame.zAxis);
+    p.n[1] = ray3d::Normalize(fB.surface.frame.zAxis);
+    if (std::fabs(ray3d::Dot(p.n[0], p.n[1])) > 1.0 - 1e-9)
+      return fail(Problem::FilletFacesParallel);
+
+    const Vec3 dirA = p.rev[0] ? ray3d::Scale(p.t, -1.0) : p.t;
+    const Vec3 dirB = p.rev[1] ? ray3d::Scale(p.t, -1.0) : p.t;
+    const Vec3 uA = ray3d::Normalize(ray3d::Cross(p.n[0], dirA));
+    const Vec3 uB = ray3d::Normalize(ray3d::Cross(p.n[1], dirB));
+    if (!(ray3d::Dot(uA, p.n[1]) < -1e-9))
+      return fail(Problem::FilletEdgeConcave);
+
+    const double cosTheta = std::clamp(ray3d::Dot(uA, uB), -1.0, 1.0);
+    const double halfT = 0.5 * std::acos(cosTheta);
+    if (!(std::tan(halfT) > 1e-12))
+      return fail(Problem::FilletFacesParallel);
+    const double setback = radius / std::tan(halfT);
+    const auto reach = [&](const Face& f, const Vec3& dir) {
+      double m = 0.0;
+      for (const int vi : FaceVertexSet(s, f))
+        m = std::max(m, ray3d::Dot(ray3d::Sub(s.vertices[static_cast<std::size_t>(vi)].p, p0), dir));
+      return m;
+    };
+    if (!(setback < reach(fA, uA) - 1e-9) || !(setback < reach(fB, uB) - 1e-9))
+      return fail(Problem::FilletRadiusTooLarge);
+
+    // The axis offset from the edge line: distance `radius` from each plane, on the material side.
+    Vec3 w{};
+    if (!SolveThreePlanes(p.n[0], -radius, p.n[1], -radius, p.t, 0.0, &w))
+      return fail(Problem::FilletFacesParallel);
+    p.axisPt[0] = ray3d::Add(p0, w);
+    p.axisPt[1] = ray3d::Add(p1, w);
+    plans.push_back(p);
   }
 
-  // --- Build ------------------------------------------------------------------------------------
-  Solid r = s;
-  const int ia[2] = {AddVertex(&r, a0), AddVertex(&r, a1)};
-  const int ib[2] = {AddVertex(&r, b0), AddVertex(&r, b1)};
+  // --- Classify every vertex a requested edge touches ---------------------------------------------
+  std::map<int, std::vector<int>> atVertex;  // original vertex -> requested plan slots
+  for (std::size_t i = 0; i < plans.size(); ++i)
+    for (const int vk : plans[i].v)
+      atVertex[vk].push_back(static_cast<int>(i));
 
-  // Every other edge that ended on the old vertex now ends on the tangent point of whichever of the
-  // two faces it shares. At a three-edge vertex there is exactly one such edge per face.
-  const auto faceUsesEdge = [&](int fi, int ei) {
-    for (const Loop& lp : r.faces[static_cast<std::size_t>(fi)].loops)
-      for (const EdgeUse& u : lp.uses)
-        if (u.edge == ei)
-          return true;
-    return false;
+  std::vector<int> degree(s.vertices.size(), 0);
+  for (const Edge& ed : s.edges) {
+    ++degree[static_cast<std::size_t>(ed.v0)];
+    ++degree[static_cast<std::size_t>(ed.v1)];
+  }
+
+  std::vector<FilletCornerPlan> corners;
+  std::map<int, int> cornerOfVertex;  // original vertex -> index into `corners`
+  for (const auto& [vk, slots] : atVertex) {
+    if (degree[static_cast<std::size_t>(vk)] != 3)
+      return fail(Problem::FilletVertexNotSimple);
+    if (slots.size() == 2) {
+      // The ball would have to run off a rounded edge onto one staying sharp - a setback blend, and
+      // a different construction from the corner patch (REQ-323 increment 2's own boundary).
+      return fail(Problem::FilletCornerPartial);
+    }
+    if (slots.size() != 3)
+      continue;  // an open end; handled with the planar end face, exactly as increment 1 does
+
+    FilletCornerPlan c;
+    c.vertex = vk;
+    // The three faces at the corner are the three faces of the three edges, each appearing twice.
+    std::vector<int> fs;
+    for (const int si : slots)
+      for (const int f : plans[static_cast<std::size_t>(si)].face)
+        fs.push_back(f);
+    std::sort(fs.begin(), fs.end());
+    fs.erase(std::unique(fs.begin(), fs.end()), fs.end());
+    if (fs.size() != 3)
+      return fail(Problem::FilletVertexNotSimple);
+    Vec3 nrm[3];
+    for (int i = 0; i < 3; ++i) {
+      c.face[i] = fs[static_cast<std::size_t>(i)];
+      const Face& f = s.faces[static_cast<std::size_t>(c.face[i])];
+      if (f.surface.kind != SurfaceKind::Plane)
+        return fail(Problem::FilletFaceNotPlanar);
+      nrm[i] = ray3d::Normalize(f.surface.frame.zAxis);
+    }
+    // Orthogonal, so the patch is an octant and stays an iso-rectangle - see the note above.
+    for (int i = 0; i < 3; ++i)
+      if (std::fabs(ray3d::Dot(nrm[i], nrm[(i + 1) % 3])) > 1e-9)
+        return fail(Problem::FilletCornerNotOrthogonal);
+
+    Vec3 w{};
+    if (!SolveThreePlanes(nrm[0], -radius, nrm[1], -radius, nrm[2], -radius, &w))
+      return fail(Problem::FilletCornerNotOrthogonal);
+    c.centre = ray3d::Add(s.vertices[static_cast<std::size_t>(vk)].p, w);
+    cornerOfVertex[vk] = static_cast<int>(corners.size());
+    corners.push_back(c);
+  }
+
+  // At a corner the fillet axis passes through the ball's centre, so every edge meeting there ends
+  // exactly on it. This is the one place the corner changes an edge's own geometry.
+  for (FilletEdgePlan& p : plans)
+    for (int k = 0; k < 2; ++k) {
+      const auto it = cornerOfVertex.find(p.v[k]);
+      if (it != cornerOfVertex.end())
+        p.axisPt[k] = corners[static_cast<std::size_t>(it->second)].centre;
+    }
+
+  // Open ends keep increment 1's rule: the one other face there must be planar and square to the
+  // edge, so the arc closing the fillet is a circle rather than an ellipse.
+  for (const auto& [vk, slots] : atVertex) {
+    if (slots.size() != 1)
+      continue;
+    const FilletEdgePlan& p = plans[static_cast<std::size_t>(slots.front())];
+    int endFace = -1;
+    for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
+      if (static_cast<int>(fi) == p.face[0] || static_cast<int>(fi) == p.face[1])
+        continue;
+      const std::vector<int> vs = FaceVertexSet(s, s.faces[fi]);
+      if (!std::binary_search(vs.begin(), vs.end(), vk))
+        continue;
+      if (endFace >= 0)
+        return fail(Problem::FilletVertexNotSimple);
+      endFace = static_cast<int>(fi);
+    }
+    if (endFace < 0)
+      return fail(Problem::FilletVertexNotSimple);
+    const Face& ef = s.faces[static_cast<std::size_t>(endFace)];
+    if (ef.surface.kind != SurfaceKind::Plane)
+      return fail(Problem::FilletEndFaceUnsupported);
+    if (std::fabs(std::fabs(ray3d::Dot(ray3d::Normalize(ef.surface.frame.zAxis), p.t)) - 1.0) > 1e-9)
+      return fail(Problem::FilletEndFaceUnsupported);
+  }
+
+  // --- Build ---------------------------------------------------------------------------------------
+  Solid r = s;
+  // Every new vertex is named by (original vertex, original face): the point where the fillet lands
+  // on that face. At a corner three faces give three points; at an open end only the edge's own two
+  // faces do, and the third face's corner is closed by the arc instead.
+  std::map<std::pair<int, int>, int> tangentVert;
+  const auto tangentPoint = [&](const FilletEdgePlan& p, int k, int which) {
+    const std::pair<int, int> key{p.v[k], p.face[which]};
+    const auto it = tangentVert.find(key);
+    if (it != tangentVert.end())
+      return it->second;
+    const int id = AddVertex(&r, ray3d::Add(p.axisPt[k], ray3d::Scale(p.n[which], radius)));
+    tangentVert.emplace(key, id);
+    return id;
   };
-  for (int k = 0; k < 2; ++k) {
-    for (std::size_t ei = 0; ei < r.edges.size(); ++ei) {
-      if (static_cast<int>(ei) == edgeIndex)
+
+  for (FilletEdgePlan& p : plans) {
+    const int a0 = tangentPoint(p, 0, 0);
+    const int a1 = tangentPoint(p, 1, 0);
+    const int b0 = tangentPoint(p, 0, 1);
+    const int b1 = tangentPoint(p, 1, 1);
+    p.tan[0] = AddLine(&r, a0, a1);
+    p.tan[1] = AddLine(&r, b0, b1);
+    // Which way round the cylinder the fillet runs, in the frame whose X points at the face-A
+    // tangent line: face A sits at 0 and face B at `phi`, which is +-(pi - theta).
+    const Vec3 frameX = p.n[0];
+    const Vec3 frameY = ray3d::Normalize(ray3d::Cross(p.t, p.n[0]));
+    const double phi = std::atan2(ray3d::Dot(p.n[1], frameY), ray3d::Dot(p.n[1], frameX));
+    const Vec3 arcNormal = phi > 0.0 ? p.t : ray3d::Scale(p.t, -1.0);
+    const double arcSweep = std::fabs(phi);
+    // ONE rule for both kinds of end: an arc of radius `radius` about the axis point, from the
+    // face-A tangent point to the face-B one. At an open end that axis point is the edge's own
+    // offset; at a corner it is the ball's centre. Nothing else differs.
+    p.endArc[0] = AddArc(&r, a0, b0, p.axisPt[0], arcNormal, arcSweep);
+    p.endArc[1] = AddArc(&r, a1, b1, p.axisPt[1], arcNormal, arcSweep);
+  }
+
+  // Unrequested edges ending on a touched vertex follow the face they share with the fillet. A
+  // corner has no such edges - all three of its edges are requested - so this only ever fires at an
+  // open end, where exactly one of the edge's two faces is the fillet's.
+  for (std::size_t ei = 0; ei < r.edges.size(); ++ei) {
+    if (isRequested(static_cast<int>(ei)) || ei >= uses.count.size())
+      continue;
+    Edge& x = r.edges[ei];
+    for (int endSel = 0; endSel < 2; ++endSel) {
+      const int vk = endSel == 0 ? x.v0 : x.v1;
+      const auto it = atVertex.find(vk);
+      if (it == atVertex.end() || it->second.size() != 1)
         continue;
-      Edge& x = r.edges[ei];
-      if (x.v0 != endVert[k] && x.v1 != endVert[k])
-        continue;
+      const FilletEdgePlan& p = plans[static_cast<std::size_t>(it->second.front())];
       int repl = -1;
-      if (faceUsesEdge(users.face[0], static_cast<int>(ei)))
-        repl = ia[k];
-      else if (faceUsesEdge(users.face[1], static_cast<int>(ei)))
-        repl = ib[k];
+      for (int which = 0; which < 2 && repl < 0; ++which)
+        for (const int xf : uses.face[ei])
+          if (xf == p.face[which]) {
+            const auto vt = tangentVert.find({vk, p.face[which]});
+            if (vt != tangentVert.end())
+              repl = vt->second;
+            break;
+          }
       if (repl < 0)
-        continue;  // an edge of the end face only; it keeps its own endpoints
-      if (x.v0 == endVert[k])
+        continue;
+      if (endSel == 0)
         x.v0 = repl;
-      if (x.v1 == endVert[k])
+      else
         x.v1 = repl;
-      // An arc's frame is anchored on its centre, which has not moved; only the endpoint changed,
-      // and a shortened arc keeps its centre and radius. A line carries no frame at all.
-      if (x.kind == CurveKind::Arc || x.kind == CurveKind::Ellipse) {
-        const Vec3 toStart = ray3d::Sub(r.vertices[static_cast<std::size_t>(x.v0)].p, x.frame.origin);
-        const Vec3 z = ray3d::Normalize(x.frame.zAxis);
-        const Vec3 nx = ray3d::Sub(toStart, ray3d::Scale(z, ray3d::Dot(toStart, z)));
-        if (ray3d::Length(nx) > 1e-12) {
-          x.frame.xAxis = ray3d::Normalize(nx);
-          x.frame.yAxis = ray3d::Normalize(ray3d::Cross(z, x.frame.xAxis));
-        }
+    }
+    // A shortened arc keeps its centre and radius; only its start direction is re-anchored.
+    if (x.kind == CurveKind::Arc || x.kind == CurveKind::Ellipse) {
+      const Vec3 toStart = ray3d::Sub(r.vertices[static_cast<std::size_t>(x.v0)].p, x.frame.origin);
+      const Vec3 z = ray3d::Normalize(x.frame.zAxis);
+      const Vec3 nx = ray3d::Sub(toStart, ray3d::Scale(z, ray3d::Dot(toStart, z)));
+      if (ray3d::Length(nx) > 1e-12) {
+        x.frame.xAxis = ray3d::Normalize(nx);
+        x.frame.yAxis = ray3d::Normalize(ray3d::Cross(z, x.frame.xAxis));
       }
     }
   }
 
-  // The two tangent lines, and the arc closing each end.
-  const int tanA = AddLine(&r, ia[0], ia[1]);
-  const int tanB = AddLine(&r, ib[0], ib[1]);
-  // Which way round the cylinder the fillet runs. Measured in the frame whose X points at the face-A
-  // tangent line, so face A sits at angle 0 and face B at `phi`; `phi` is +-(pi - theta).
-  const Vec3 frameX = nA;
-  const Vec3 frameY = ray3d::Normalize(ray3d::Cross(t, nA));
-  const double phi = std::atan2(ray3d::Dot(nB, frameY), ray3d::Dot(nB, frameX));
-  const Vec3 arcNormal = phi > 0.0 ? t : ray3d::Scale(t, -1.0);
-  const double arcSweep = std::fabs(phi);
-  const int arc[2] = {AddArc(&r, ia[0], ib[0], c0, arcNormal, arcSweep),
-                      AddArc(&r, ia[1], ib[1], c1, arcNormal, arcSweep)};
+  // Each requested edge becomes its face's tangent line, keeping the sense the loop already had.
+  for (const FilletEdgePlan& p : plans)
+    for (int which = 0; which < 2; ++which)
+      r.faces[static_cast<std::size_t>(p.face[which])]
+          .loops[static_cast<std::size_t>(p.loop[which])]
+          .uses[static_cast<std::size_t>(p.slot[which])] = EdgeUse{p.tan[which], p.rev[which]};
 
-  // Face A and face B each swap the old edge for their tangent line, keeping the sense they had:
-  // the loop still runs the same way round, it just runs a little further in.
-  r.faces[static_cast<std::size_t>(users.face[0])]
-      .loops[static_cast<std::size_t>(users.loop[0])]
-      .uses[static_cast<std::size_t>(users.slot[0])] = EdgeUse{tanA, users.reversed[0]};
-  r.faces[static_cast<std::size_t>(users.face[1])]
-      .loops[static_cast<std::size_t>(users.loop[1])]
-      .uses[static_cast<std::size_t>(users.slot[1])] = EdgeUse{tanB, users.reversed[1]};
-
-  // Each end face has a one-vertex gap where the corner used to be. Found by walking the loop for
-  // the place where consecutive uses no longer meet, rather than by assuming an order — the loop's
-  // starting point is arbitrary and its winding depends on which side of the solid the face is on.
+  // Close whatever gaps that left. At a corner both edges of a face are requested and their tangent
+  // lines already meet, so nothing is inserted; at an open end the third face gets the arc.
   const auto useFrom = [&](const EdgeUse& u) {
     const Edge& x = r.edges[static_cast<std::size_t>(u.edge)];
     return u.reversed ? x.v1 : x.v0;
@@ -2585,132 +2782,135 @@ bool FilletEdge(const Solid& s, int edgeIndex, double radius, Solid* out, Proble
     const Edge& x = r.edges[static_cast<std::size_t>(u.edge)];
     return u.reversed ? x.v0 : x.v1;
   };
-  for (int k = 0; k < 2; ++k) {
-    Face& ef = r.faces[static_cast<std::size_t>(endFace[k])];
-    bool closed = false;
-    for (Loop& lp : ef.loops) {
-      const std::size_t n = lp.uses.size();
-      for (std::size_t i = 0; i < n && !closed; ++i) {
+  std::map<std::pair<int, int>, int> arcByEnds;
+  for (const FilletEdgePlan& p : plans)
+    for (int k = 0; k < 2; ++k) {
+      const Edge& a = r.edges[static_cast<std::size_t>(p.endArc[k])];
+      arcByEnds[{std::min(a.v0, a.v1), std::max(a.v0, a.v1)}] = p.endArc[k];
+    }
+  for (Face& f : r.faces)
+    for (Loop& lp : f.loops) {
+      for (std::size_t i = 0; i < lp.uses.size(); ++i) {
+        const std::size_t j = (i + 1) % lp.uses.size();
         const int to = useTo(lp.uses[i]);
-        const int from = useFrom(lp.uses[(i + 1) % n]);
+        const int from = useFrom(lp.uses[j]);
         if (to == from)
           continue;
-        if (!((to == ia[k] && from == ib[k]) || (to == ib[k] && from == ia[k])))
-          continue;  // a gap this fillet did not open; leave it for Validate to report
+        const auto it = arcByEnds.find({std::min(to, from), std::max(to, from)});
+        if (it == arcByEnds.end())
+          continue;  // not a gap this fillet opened; Validate will report it
+        const Edge& a = r.edges[static_cast<std::size_t>(it->second)];
         lp.uses.insert(lp.uses.begin() + static_cast<std::ptrdiff_t>(i) + 1,
-                       EdgeUse{arc[k], to == ib[k]});
-        closed = true;
+                       EdgeUse{it->second, to == a.v1});
+        ++i;  // step over what was just inserted
       }
-      if (closed)
-        break;
     }
-    if (!closed)
-      return fail(Problem::FilletResultInvalid);
-  }
 
-  // The fillet face itself. Its loop takes the OPPOSITE sense to face A's use of the tangent line —
-  // which is what makes every edge used once each way, and so what makes the shell orientable —
-  // and the rest of the ring follows from where that leaves it.
-  {
-    const int startA = users.reversed[0] ? ia[0] : ia[1];
-    const int kEnd = (startA == ia[0]) ? 1 : 0;  // the end the tangent line runs TOWARD
+  // The cylinders. The ring takes the OPPOSITE sense to face A's use of the tangent line, which is
+  // what makes every edge used once each way; the rest of it follows from where that leaves off.
+  for (FilletEdgePlan& p : plans) {
+    const int kEnd = p.rev[0] ? 1 : 0;
     const int kFar = 1 - kEnd;
     Loop lp;
-    lp.uses.push_back(EdgeUse{tanA, !users.reversed[0]});          // a[kFar] -> a[kEnd]
-    lp.uses.push_back(EdgeUse{arc[kEnd], false});                  // a[kEnd] -> b[kEnd]
-    lp.uses.push_back(EdgeUse{tanB, kEnd == 1});                   // b[kEnd] -> b[kFar]
-    lp.uses.push_back(EdgeUse{arc[kFar], true});                   // b[kFar] -> a[kFar]
+    lp.uses.push_back(EdgeUse{p.tan[0], !p.rev[0]});
+    lp.uses.push_back(EdgeUse{p.endArc[kEnd], false});
+    lp.uses.push_back(EdgeUse{p.tan[1], kEnd == 1});
+    lp.uses.push_back(EdgeUse{p.endArc[kFar], true});
+    p.cylArcRev[kEnd] = false;
+    p.cylArcRev[kFar] = true;
+
+    const Vec3 frameX = p.n[0];
+    const double phi = std::atan2(ray3d::Dot(p.n[1], ray3d::Normalize(ray3d::Cross(p.t, p.n[0]))),
+                                  ray3d::Dot(p.n[1], frameX));
+    const Vec3 axisZ = phi > 0.0 ? p.t : ray3d::Scale(p.t, -1.0);
     Face f;
     f.surface.kind = SurfaceKind::Cylinder;
     f.surface.radius = radius;
-    f.surface.height = edgeLen;
-    // Z along the sweep direction so the angular span reads 0 -> |phi| rather than backwards, and
-    // the origin at whichever end that Z starts from.
-    f.surface.frame.zAxis = arcNormal;
+    f.surface.height =
+        ray3d::Length(ray3d::Sub(p.axisPt[1], p.axisPt[0]));  // shorter than the edge at a corner
+    f.surface.frame.zAxis = axisZ;
     f.surface.frame.xAxis = frameX;
-    f.surface.frame.yAxis = ray3d::Normalize(ray3d::Cross(arcNormal, frameX));
-    f.surface.frame.origin = phi > 0.0 ? c0 : c1;
+    f.surface.frame.yAxis = ray3d::Normalize(ray3d::Cross(axisZ, frameX));
+    f.surface.frame.origin = phi > 0.0 ? p.axisPt[0] : p.axisPt[1];
     f.uStart = 0.0;
-    f.uEnd = arcSweep;
+    f.uEnd = std::fabs(phi);
     f.loops.push_back(std::move(lp));
     r.faces.push_back(std::move(f));
+    if (!r.shells.empty())
+      r.shells.front().faces.push_back(static_cast<int>(r.faces.size()) - 1);
   }
-  if (!r.shells.empty())
-    r.shells.front().faces.push_back(static_cast<int>(r.faces.size()) - 1);
+
+  // The corner patches. Three great-circle arcs, each shared with one cylinder and used the other
+  // way round here — which is what keeps the shell orientable without a second rule.
+  for (FilletCornerPlan& c : corners) {
+    int found = 0;
+    for (const FilletEdgePlan& p : plans)
+      for (int k = 0; k < 2; ++k) {
+        if (p.v[k] != c.vertex)
+          continue;
+        if (found >= 3)
+          return fail(Problem::FilletVertexNotSimple);
+        c.arc[found] = p.endArc[k];
+        c.arcRevForSphere[found] = !p.cylArcRev[k];
+        ++found;
+      }
+    if (found != 3)
+      return fail(Problem::FilletVertexNotSimple);
+
+    // Chain the three into a ring head-to-tail rather than assuming the order they were collected.
+    Loop lp;
+    std::array<bool, 3> used{false, false, false};
+    int at = -1;
+    for (int step = 0; step < 3; ++step) {
+      int pick = -1;
+      for (int i = 0; i < 3 && pick < 0; ++i) {
+        if (used[static_cast<std::size_t>(i)])
+          continue;
+        const Edge& a = r.edges[static_cast<std::size_t>(c.arc[i])];
+        const int from = c.arcRevForSphere[i] ? a.v1 : a.v0;
+        if (at < 0 || from == at)
+          pick = i;
+      }
+      if (pick < 0)
+        return fail(Problem::FilletResultInvalid);
+      used[static_cast<std::size_t>(pick)] = true;
+      const Edge& a = r.edges[static_cast<std::size_t>(c.arc[pick])];
+      at = c.arcRevForSphere[pick] ? a.v0 : a.v1;
+      lp.uses.push_back(EdgeUse{c.arc[pick], c.arcRevForSphere[pick]});
+    }
+
+    // The octant, in the frame its own three normals define. `n0 x n1 = n2` makes it right-handed;
+    // if the three came out the other way round, swapping two of them fixes it without moving the
+    // patch. In that frame the three tangent points sit at (u,v) = (0,0), (pi/2,0) and the pole, so
+    // the patch IS the rectangle [0, pi/2] x [0, pi/2] and its area stays closed-form.
+    Vec3 nx = ray3d::Normalize(s.faces[static_cast<std::size_t>(c.face[0])].surface.frame.zAxis);
+    Vec3 ny = ray3d::Normalize(s.faces[static_cast<std::size_t>(c.face[1])].surface.frame.zAxis);
+    const Vec3 nz = ray3d::Normalize(s.faces[static_cast<std::size_t>(c.face[2])].surface.frame.zAxis);
+    if (ray3d::Dot(ray3d::Cross(nx, ny), nz) < 0.0)
+      std::swap(nx, ny);
+    Face f;
+    f.surface.kind = SurfaceKind::Sphere;
+    f.surface.radius = radius;
+    f.surface.frame.origin = c.centre;
+    f.surface.frame.xAxis = nx;
+    f.surface.frame.yAxis = ny;
+    f.surface.frame.zAxis = nz;
+    f.uStart = 0.0;
+    f.uEnd = kHalfPi;
+    f.vStart = 0.0;
+    f.vEnd = kHalfPi;
+    f.loops.push_back(std::move(lp));
+    r.faces.push_back(std::move(f));
+    if (!r.shells.empty())
+      r.shells.front().faces.push_back(static_cast<int>(r.faces.size()) - 1);
+  }
 
   CompactUnused(&r);
-  // A filleted box is not the box its recipe describes, and a recipe that no longer describes its
-  // solid reads as authoritative while being false (REQ-323 item 9, as push/pull already does).
   r.recipe = Recipe{};
   const Problem why = Validate(r);
   if (why != Problem::Ok)
     return fail(Problem::FilletResultInvalid);
   *out = std::move(r);
-  if (outWhy)
-    *outWhy = Problem::Ok;
-  return true;
-}
-
-bool FilletEdges(const Solid& s, const std::vector<int>& edgeIndices, double radius, Solid* out,
-                 Problem* outWhy) {
-  if (!out)
-    return false;
-  const auto fail = [&](Problem why) { return Fail(why, outWhy); };
-  if (edgeIndices.empty())
-    return fail(Problem::IndexOutOfRange);
-
-  // A shared vertex is refused BEFORE anything is built, so a request that cannot be honoured in
-  // full changes nothing at all. Two fillets meeting at a corner leave a curved triangular gap that
-  // needs a spherical patch trimmed against both — issue #148 acceptance 5, still open.
-  for (std::size_t i = 0; i < edgeIndices.size(); ++i) {
-    const int ei = edgeIndices[i];
-    if (ei < 0 || static_cast<std::size_t>(ei) >= s.edges.size())
-      return fail(Problem::IndexOutOfRange);
-    for (std::size_t j = i + 1; j < edgeIndices.size(); ++j) {
-      const int ej = edgeIndices[j];
-      if (ej < 0 || static_cast<std::size_t>(ej) >= s.edges.size())
-        return fail(Problem::IndexOutOfRange);
-      if (ei == ej)
-        return fail(Problem::FilletEdgesShareVertex);
-      const Edge& a = s.edges[static_cast<std::size_t>(ei)];
-      const Edge& b = s.edges[static_cast<std::size_t>(ej)];
-      if (a.v0 == b.v0 || a.v0 == b.v1 || a.v1 == b.v0 || a.v1 == b.v1)
-        return fail(Problem::FilletEdgesShareVertex);
-    }
-  }
-
-  // Applied in turn, and the identity of each edge is carried across by its endpoint POSITIONS
-  // rather than by its index: the previous fillet compacted the arrays, so index `ei` no longer
-  // means what it meant. Positions are stable because edges that share no vertex do not move each
-  // other's endpoints.
-  Solid acc = s;
-  for (const int ei : edgeIndices) {
-    const Vec3 q0 = s.vertices[static_cast<std::size_t>(s.edges[static_cast<std::size_t>(ei)].v0)].p;
-    const Vec3 q1 = s.vertices[static_cast<std::size_t>(s.edges[static_cast<std::size_t>(ei)].v1)].p;
-    int here = -1;
-    for (std::size_t k = 0; k < acc.edges.size(); ++k) {
-      const Edge& x = acc.edges[k];
-      if (x.kind != CurveKind::Line)
-        continue;
-      const Vec3& x0 = acc.vertices[static_cast<std::size_t>(x.v0)].p;
-      const Vec3& x1 = acc.vertices[static_cast<std::size_t>(x.v1)].p;
-      const bool same = (ray3d::Length(ray3d::Sub(x0, q0)) < 1e-9 &&
-                         ray3d::Length(ray3d::Sub(x1, q1)) < 1e-9) ||
-                        (ray3d::Length(ray3d::Sub(x0, q1)) < 1e-9 &&
-                         ray3d::Length(ray3d::Sub(x1, q0)) < 1e-9);
-      if (same) {
-        here = static_cast<int>(k);
-        break;
-      }
-    }
-    if (here < 0)
-      return fail(Problem::FilletResultInvalid);
-    Solid next;
-    if (!FilletEdge(acc, here, radius, &next, outWhy))
-      return false;  // already reported by name, and `out` is untouched
-    acc = std::move(next);
-  }
-  *out = std::move(acc);
   if (outWhy)
     *outWhy = Problem::Ok;
   return true;
