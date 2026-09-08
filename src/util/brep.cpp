@@ -3111,7 +3111,6 @@ bool ChamferEdgesGeneral(const Solid& s, const std::vector<int>& edgeIndices, do
   }
 
   std::vector<ChamferCornerPlan> corners;
-  std::map<int, int> cornerOfVertex;  // original vertex -> index into `corners`
   for (const auto& [vk, slots] : atVertex) {
     if (degree[static_cast<std::size_t>(vk)] != 3)
       return fail(Problem::ChamferVertexNotSimple);
@@ -3154,7 +3153,6 @@ bool ChamferEdgesGeneral(const Solid& s, const std::vector<int>& edgeIndices, do
     c.vertex = vk;
     if (!SolveThreePlanes(q0.planeN, q0.planeD, q1.planeN, q1.planeD, q2.planeN, q2.planeD, &c.point))
       return fail(Problem::ChamferCornerNotOrthogonal);
-    cornerOfVertex[vk] = static_cast<int>(corners.size());
     corners.push_back(c);
   }
 

@@ -7364,6 +7364,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-08, D-2026-09-08-b). Scope — a single symmetric distance now, the
   AutoCAD two-distance form and its base-face toggle as a later increment — chosen by the user on
   2026-09-08 after the AutoCAD behaviour was surveyed and the corner-coupling cost was stated.
+- **KNOWN GAP, recorded 2026-09-08 and not yet decided (TASK-222 DEBT-4, `/code-review high`).** Item
+  4's pre-check is **per-edge and per-face**: it measures how far each adjacent face reaches from
+  *that* edge, and sees nothing of what another requested edge takes out of the same face, nor of the
+  two ends of one edge eating each other at their corners. Overlapping cuts are therefore ACCEPTED
+  and produce a self-intersecting solid with meaningless mass properties — on a 20 x 10 x 8 box,
+  `CHAMFER 6` on both 20-long top edges (10 apart in a 10-wide face) is accepted and reports volume
+  880. `Validate` is topological, so `ChamferResultInvalid` does not fire; the only case it happens
+  to catch is exact equality, where the face reaches zero area. **REQ-323's fillet has the identical
+  defect** — `FILLET 6` on the same two edges reports 1290.97336 — because this precondition was
+  inherited from it verbatim. So the gap is against **both requirements and against issue #148
+  acceptance 6**, and how far the precondition should reach is a decision for the user rather than
+  something the Workshop layer may choose (CLAUDE.md §5).
 - Revisions: 2026-09-08 — initial.
 
 ### REQ-100 — Frame budget

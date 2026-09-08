@@ -13,7 +13,7 @@
 
 ## Files affected
 
-- `src/util/brep.hpp` — five new `Problem` values, `ChamferEdge` / `ChamferEdges` declarations.
+- `src/util/brep.hpp` — eleven new `Problem` values, `ChamferEdge` / `ChamferEdges` declarations.
 - `src/util/brep.cpp` — `ProblemMessage` cases; the `ChamferEdgesGeneral` builder.
 - `tests/ChamferEdgeTests.cpp` (new) — the closed-form and refusal cases.
 - `CMakeLists.txt` — register it.
@@ -55,9 +55,9 @@ Arithmetic written before the code, per REQ-329's acceptance, which is the disci
 two wrong numbers in REQ-323 increment 1:
 
 - 20 x 10 x 8 box, one 20-long edge, `d = 2` → volume **1560**, area **796 + 40*sqrt(2)**,
-  topology 7/15/10, `Validate` = `Ok`;
+  topology 10/15/7, `Validate` = `Ok`;
 - all twelve edges, `d = 2` → volume **1344**, area **368 + 232*sqrt(2)**, topology 32/48/18,
-  6 planes + 12 planes and no other surface kind, `V - E + F = 2`;
+  6 + 12 planar faces and no other surface kind, `V - E + F = 2`;
 - a wedge ridge → setback exactly `d` at a 68.199-degree dihedral (item 2's proof case);
 - every refusal by name: `d <= 0`, non-finite, too large (including exact equality at `d = 8`),
   concave, curved edge, curved adjacent face, parallel faces, partial corner, non-orthogonal
@@ -167,3 +167,59 @@ confirming each other.
   but it is a trap the next transcript will hit too.
 - **DEBT-3 — concave edges, curved edges, oblique and curved end faces, partial and non-orthogonal
   corners.** Each refused by name, each its own increment, each with its reason recorded.
+
+---
+
+## Code-review findings (`/code-review high`, 2026-09-08) and what was done with each
+
+**Finding 3 — dead state. FIXED in this task.** `cornerOfVertex` was written and never read: the
+fillet reads its copy back to move each plan's axis point onto the ball centre, and the chamfer has
+no such step because its corner does not move the bevel planes. Carried over from the template.
+Removed; suite still 1325/1325.
+
+**Finding 1 — the distance pre-check is per-edge and per-face, so overlapping cuts are accepted.
+NOT fixed here; raised to the user, because it is a SPEC question and it is not this task's bug.**
+
+`reach()` measures how far each adjacent face extends from *this* edge along `u`. Nothing accounts
+for material another requested edge takes out of the same face, or for the two ends of one edge
+eating each other. `Validate` is topological, so `ChamferResultInvalid` never fires. Reproduced on a
+20 x 10 x 8 box, both top edges along X (10 apart in a 10-wide top face):
+
+| | result |
+|---|---|
+| `CHAMFER 6` | **accepted**, volume 880 — the two cut lines land at y = -1 and y = +1, crossed |
+| `FILLET 6` | **accepted**, volume 1290.97336 — same crossing |
+| `CHAMFER 5` / `FILLET 5` | refused, but only because at exactly `d = W/2` the top face becomes
+  ZERO-area and `DegenerateFace` catches it. One unit either side and it is accepted. |
+
+**The shipped FILLET has the identical defect**, because the chamfer inherited `reach` from it
+verbatim. So this is a defect against **REQ-323 as well as REQ-329**, and against **#148 acceptance
+6** ("a fillet or chamfer that cannot be built is refused with a clear message and leaves the solid
+unchanged") for both. It was not introduced here and it is not fixable here without deciding how far
+the precondition should reach — which changes two accepted requirements and touches five PRs already
+open for review. Recorded, reproduced, and put to the user rather than guessed at (CLAUDE.md §5).
+
+**Finding 2 — a refused distance is followed by a contradictory "could not parse" line. NOT fixed
+here; same reason, smaller stakes.** `HandleChamferText` returns false after the kernel refuses, and
+the caller appends `"Could not parse CHAMFER input — see command hints."` So a user typing `8` at
+the prompt sees the refusal by name, then "specify a different distance", then a third line saying
+the input did not parse — which is false, it parsed fine and the kernel refused it. **FILLET does
+exactly the same thing today**, so fixing it for CHAMFER alone would make the two diverge on a
+shipped message. One line each; bundled with Finding 1 for the user's call.
+
+## Technical debt (continued)
+
+- **DEBT-4 — the precondition does not see other requested edges (Finding 1).** HIGH. Shared with
+  the shipped fillet.
+- **DEBT-5 — the contradictory "could not parse" trailer (Finding 2).** LOW. Shared with FILLET.
+
+## What the review checked and found correct
+
+Worth recording, because these are the parts that would have been expensive to get wrong: the bevel
+faces' loop orientation (including the corner spokes coming out opposite between the two bevels that
+share them, verified analytically in both `face[0]`/`face[1]` orderings); the bevel plane being
+exactly equidistant from both cut lines; the three-plane corner point genuinely lying on all three
+bevel planes, so the hexagon is planar; the gap-closing insertion handling the last-to-first wrap and
+running before the bevel faces are appended; and the arc re-anchor block being unreachable here (the
+end-face check forces a planar end face, so every unrequested edge at an open end is a straight
+plane-meets-plane line).
