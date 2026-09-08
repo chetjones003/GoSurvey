@@ -90,7 +90,9 @@ driver where the log never resets. `LOG` keeps its whole-log semantics.
 ## Technical debt
 
 - **TASK-222 DEBT-5 is CLOSED** by this task.
-- **DEBT-1 — the same `bool` shape exists on other `Handle*Text` handlers** (LENGTHEN, MOVE, SCALE,
+**DEBT-1 CLOSED 2026-09-08** by TASK-225, on the user's instruction to go through the other commands. The audit found SCALE (4 paths), ARRAY (7) and MIRROR (1) with the same defect; MOVE/COPY, STRETCH, ROTATE, LENGTHEN, CIRCLE and the inline point parser were clean. The fix is ONE rule at the caller rather than twelve patches, because most of those handlers cover "did not parse" and "parsed and out of range" with a single `return false` that no return value can separate: **the generic fallback is suppressed when the handler already spoke.**
+
+~~- **DEBT-1 — the same `bool` shape exists on other `Handle*Text` handlers**~~ (LENGTHEN, MOVE, SCALE,
   ROTATE, MIRROR, ARRAY, and CIRCLE's step handler all sit behind the same
   `ReportUnparsedCommandInput` pattern). None was inspected here. Whether any of them can also refuse
   a *understood* value is unknown, and this task deliberately did not go looking — but the contract

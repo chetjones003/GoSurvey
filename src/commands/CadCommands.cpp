@@ -6584,23 +6584,41 @@ const CmdEntry kRegistry[] = {
 /// chosen, neither wrong — so a user who believes they have finished types the next verb into a live
 /// point prompt and is told their coordinate syntax is bad. That reads as a freeze.
 void ReportUnparsedCommandInput(const AppCommandState& st, const std::string& line,
-                                const std::string& fallback, std::vector<std::string>& log) {
+                                const std::string& fallback, std::vector<std::string>& log,
+                                std::size_t markBeforeHandler) {
   const std::string trimmed = StringUtil::trimCopy(line);
   const CmdEntry* entry =
       trimmed.empty() ? nullptr : FindRegistryEntry(StringUtil::toLowerAsciiCopy(trimmed));
   const char* running = AppCommandState::KindName(st.active);
-  if (!entry || !running || running[0] == '\0') {
-    log.push_back(fallback);
+  if (entry && running && running[0] != '\0') {
+    // Name the CANONICAL command rather than echoing the alias back: a user who typed `c` is better
+    // served by "then type CIRCLE" than by being shown their own single letter.
+    //
+    // This half fires whether or not the handler already spoke, and deliberately: it answers a
+    // DIFFERENT confusion - "I thought this command had finished" - which the handler's own message
+    // about columns or radii does not address.
+    std::string wanted = entry->primary;
+    for (char& c : wanted)
+      c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    log.push_back(std::string(running) + " is still running, so \"" + trimmed +
+                  "\" was read as input to it rather than as a command. Press Esc to end " + running +
+                  ", then type " + wanted + ".");
     return;
   }
-  // Name the CANONICAL command rather than echoing the alias back: a user who typed `c` is better
-  // served by "then type CIRCLE" than by being shown their own single letter.
-  std::string wanted = entry->primary;
-  for (char& c : wanted)
-    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-  log.push_back(std::string(running) + " is still running, so \"" + trimmed +
-                "\" was read as input to it rather than as a command. Press Esc to end " + running +
-                ", then type " + wanted + ".");
+  // The generic fallback is a LAST resort. It is better than silence and worse than anything the
+  // handler said in the command's own words (REQ-201), so it is suppressed when the handler already
+  // spoke -- which \p markBeforeHandler is how the caller reports.
+  //
+  // **TASK-225, and the reason this is a rule rather than a per-command patch.** Under a message
+  // like "ARRAY Rectangular - number of columns must be a positive whole number", a following
+  // "Could not parse ARRAY input - see command hints." adds nothing when the input really was
+  // unparseable, and is flatly FALSE when it parsed and was declined on a rule -- `0` columns,
+  // a scale factor of `-2`, a mirror line whose two points coincide. Those two cases share one
+  // `return false` inside most handlers, so no return value can separate them; what CAN be observed,
+  // at the caller and uniformly, is whether the handler already explained itself.
+  if (log.size() > markBeforeHandler)
+    return;
+  log.push_back(fallback);
 }
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -32865,74 +32883,83 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (st.active == AppCommandState::Kind::Move || st.active == AppCommandState::Kind::Copy) {
+    const std::size_t mark = log.size();
     if (HandleModifyText(st, st.active == AppCommandState::Kind::Copy, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Stretch) {
+    const std::size_t mark = log.size();
     if (HandleStretchText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse STRETCH input — use X,Y or @dx,dy from base.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse STRETCH input — use X,Y or @dx,dy from base.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Scale) {
+    const std::size_t mark = log.size();
     if (HandleScaleText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse SCALE input — see command hints (base X,Y; factor; R + reference/new length).", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse SCALE input — see command hints (base X,Y; factor; R + reference/new length).", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Rotate) {
+    const std::size_t mark = log.size();
     if (HandleRotateText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse ROTATE input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse ROTATE input — see command hints.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Mirror) {
+    const std::size_t mark = log.size();
     if (HandleMirrorText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse MIRROR input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse MIRROR input — see command hints.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Array) {
+    const std::size_t mark = log.size();
     if (HandleArrayText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse ARRAY input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse ARRAY input — see command hints.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Lengthen) {
+    const std::size_t mark = log.size();
     if (HandleLengthenText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse LENGTHEN input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse LENGTHEN input — see command hints.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Fillet) {
+    const std::size_t mark = log.size();
     if (HandleFilletText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse FILLET input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse FILLET input — see command hints.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Chamfer) {
+    const std::size_t mark = log.size();
     if (HandleChamferText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse CHAMFER input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse CHAMFER input — see command hints.", log, mark);
     return;
   }
 
@@ -33389,12 +33416,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
     }
 
+    // No handler ran for this one - the parsing above is inline - so nothing can have spoken for
+    // this input, and `log.size()` is the honest mark. The fallback below is the only message.
     ReportUnparsedCommandInput(
         st, line,
         std::string("Could not parse point. Use X,Y or X Y") +
             (allowRel ? "; @dx,dy; A / 2P (two picks); A 45 +90; ortho distance toward cursor."
                       : "."),
-        log);
+        log, log.size());
     return;
   }
 
@@ -33422,10 +33451,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (st.active == AppCommandState::Kind::Circle) {
+    const std::size_t mark = log.size();
     if (HandleCircleTextInput(line, st, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse input for current CIRCLE step — see hint below.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse input for current CIRCLE step — see hint below.", log, mark);
     return;
   }
 
