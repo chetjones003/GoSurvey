@@ -1,7 +1,7 @@
 # TASK-216 — REQ-328: general arbitrary-axis rotation primitive + Polar ARRAY consumer
 
 - Type:    feature
-- Status:  done — PR pending
+- Status:  done — PR #413
 - Opened:  2026-09-07
 - Owner:   Workshop
 - GitHub:  #400 (scope addition)
