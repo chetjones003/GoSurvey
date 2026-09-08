@@ -97,19 +97,26 @@ CMD PRESSPULL 3
 EXPECT LOG "moves one at a time"
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
-# No distance, and a distance that is not a number.
+# --- A bare PRESSPULL with a target already selected opens the prompted form (GitHub issue #396,
+# EXTRUDE's own select-target / wait-distance shape): it no longer just prints a usage line. A
+# typed distance there is validated the same way EXTRUDE's typed height is, and ESC cancels it
+# cleanly with the document untouched. -----------------------------------------------------------
 NEW
 CMD BOX 0,0 20 10 8
 VIEWANGLES -45 35
 SUBOBJECT 0 0 8 0.5 0.5
 CMD PRESSPULL
-EXPECT LOG "Usage: PRESSPULL"
-CMD PRESSPULL banana
-EXPECT LOG "is not a number"
-CMD PRESSPULL 0
-EXPECT LOG "distance that is not zero"
+EXPECT LOG "specify distance"
+CMD banana
+EXPECT LOG "is not a distance"
+CMD 0
+EXPECT LOG "is not a distance"
+ESC
+EXPECT LOG "PRESSPULL canceled"
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
+# The one-line shortcut `PRESSPULL <distance>` still works exactly as before, with no selection
+# prompt in between — a distance argument is a report-or-set style shortcut, same as EXTRUDE's.
 # A push that would flatten the solid: the kernel's own sentence, and the box is untouched.
 CMD PRESSPULL -8
 EXPECT LOG "turn the solid inside out"

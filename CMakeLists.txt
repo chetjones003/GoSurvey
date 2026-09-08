@@ -1051,6 +1051,10 @@ if(GOSURVEY_BUILD_TESTS)
     # GitHub issue #396 — EXTRUDE's typed height must take its sign from the live preview
     # direction. Needs gosurvey_domain for HandleExtrudeTextInput, like DistCommandTests above.
     tests/ExtrudeTypedHeightDirectionTests.cpp
+    # GitHub issue #396 (PRESSPULL addendum) — PRESSPULL was brought in line with EXTRUDE's own
+    # select-target / wait-distance flow and widened to closed 2D shapes. Needs gosurvey_domain
+    # for HandlePressPullTextInput / StartPressPullCommand, like DistCommandTests above.
+    tests/PressPullTypedDistanceDirectionTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

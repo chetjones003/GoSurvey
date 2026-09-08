@@ -1517,6 +1517,12 @@ struct AppCommandState {
     /// named dimensions, so it has different state and a different state machine, and folding it
     /// into `Solid` would mean a table with a variable-length entry no other row uses.
     Polysolid,
+    /// PRESSPULL (REQ-319 / D-2026-09-04-c, widened by GitHub issue #396): move a solid FACE along
+    /// its own normal, or turn a closed polyline/circle into (or out of) a solid along its plane
+    /// normal. Its own Kind because — like EXTRUDE — it has a select-target phase and then a
+    /// distance phase with a live cursor-driven pick, neither of which the old one-shot
+    /// `CadPressPull(st, args, log)` free function had.
+    PressPull,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1585,6 +1591,7 @@ struct AppCommandState {
     case Kind::Sweep:            return "SWEEP";
     case Kind::Boolean:          return "BOOLEAN";
     case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
+    case Kind::PressPull:          return "PRESSPULL";
     default:                  return "";
     }
   }
@@ -2230,6 +2237,34 @@ struct AppCommandState {
   /// along the first profile's plane normal; positive is the +normal side.
   bool extrudeHeightPickValid = false;
   double extrudeHeightPick = 0.0;
+
+  // --- The PRESSPULL command (REQ-319 / D-2026-09-04-c, widened by GitHub issue #396) ------------
+  // Brought in line with EXTRUDE's flow: a select-target phase (a Ctrl+clicked solid FACE, or a
+  // selected closed polyline/circle — mutually exclusive per D-2026-09-04-a), then a distance phase
+  // with the same typed-or-dragged-with-a-live-ghost shape.
+
+  enum class PressPullPhase {
+    SelectTarget,  ///< A face named by Ctrl+click, or a closed-shape entity selection; Enter confirms.
+    WaitDistance,  ///< Target gathered: type a distance, or move the cursor and click.
+  } pressPullPhase = PressPullPhase::SelectTarget;
+
+  /// True when the gathered target is an existing solid FACE (\ref pressPullFace); false when it is
+  /// a closed 2D shape (\ref pressPullProfile) that PRESSPULL will extrude into — or out of — a new
+  /// solid. Exactly one of the two is meaningful at a time, decided when \ref PressPullPhase leaves
+  /// \c SelectTarget.
+  bool pressPullOnFace = false;
+  /// The face reference, valid when \ref pressPullOnFace is true. Keyed on the solid's identity
+  /// (ADR-049), the same reference \ref subObjectSelection uses.
+  SelectedSubObject pressPullFace;
+  /// The closed profile, in STORAGE coordinates, valid when \ref pressPullOnFace is false. Kept so
+  /// the live ghost and the commit build from exactly the same input, the same one-source-of-truth
+  /// rule EXTRUDE's \ref extrudeProfiles follows.
+  brep::Profile pressPullProfile;
+  /// What the cursor is currently worth as a push/pull distance, republished every frame from the
+  /// viewport. Read by the ghost and by the click that commits it. Signed along the target's own
+  /// outward normal (face mode) or plane normal (profile mode); positive is outward / +normal.
+  bool pressPullDistPickValid = false;
+  double pressPullDistPick = 0.0;
 
   // --- The REVOLVE command (REQ-314 / ADR-046 increment 2, GitHub #147) --------------------------
 
@@ -4307,13 +4342,45 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
 /// the help registry, so the two cannot disagree about which commands exist.
 [[nodiscard]] bool CadIsSolidPrimitiveVerb(const std::string& verb);
 
-/// PRESSPULL (REQ-319) — move the one selected solid FACE along its own normal by p args feet.
+/// PRESSPULL (REQ-319, widened by GitHub issue #396) — the one-line shortcut `PRESSPULL <distance>`.
+/// Its target is either the one Ctrl+clicked solid FACE (the REQ-318 sub-object selection) or a
+/// selected closed polyline/circle, which PRESSPULL extrudes into (or out of) a new solid the same
+/// way EXTRUDE does. Refuses — by name, with the document untouched — an empty or ineligible
+/// selection, more than one candidate, a distance that is not a number, and every geometric refusal
+/// `brep::PushPullFace` / `brep::Extrude` raises. One undo step for the whole edit.
 ///
-/// Acts on the REQ-318 sub-object selection, which is what pairs the two: Ctrl+click names the face,
-/// this moves it. Refuses — by name, with the document untouched — an empty or face-less selection,
-/// more than one face, a distance that is not a number, and every geometric refusal `brep::PushPullFace`
-/// raises. One undo step for the whole edit.
+/// `StartPressPullCommand` is the prompted form a bare `PRESSPULL` opens: select a target (if none is
+/// yet), then a distance that can be typed or dragged from the cursor with a live ghost — EXTRUDE's
+/// own shape.
 void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void StartPressPullCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelPressPullCommand(AppCommandState& st);
+
+/// The prompt for whatever the PRESSPULL command is waiting for — the target, or the distance with
+/// the live cursor value shown. Shared by the command line and the at-cursor dynamic input (REQ-304).
+[[nodiscard]] std::string CadPressPullPromptText(const AppCommandState& st);
+
+/// Feed one typed line to a running PRESSPULL command. Returns false when the text was not
+/// understood, which leaves the command where it was rather than cancelling it.
+[[nodiscard]] bool HandlePressPullTextInput(const std::string& line, AppCommandState& st,
+                                            std::vector<std::string>& log);
+
+/// A viewport click during PRESSPULL: confirms the target (SelectTarget) or commits at the
+/// cursor-resolved distance (WaitDistance).
+void SubmitPressPullViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Resolve what the cursor is currently worth as a push/pull distance and publish it on \p st as
+/// `pressPullDistPickValid` / `pressPullDistPick`. The same closest-approach-between-cursor-ray-and-
+/// axis geometry \ref CadResolveExtrudePick uses, along the gathered target's own normal (face mode,
+/// via \ref CadSubObjectFaceGrip) or plane normal (profile mode). \p cursorOnPlane is storage
+/// coordinates; \p ray is the pick ray, or null in plan view (where a distance cannot be read off the
+/// screen).
+void CadResolvePressPullPick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray);
+
+/// The candidate solid the running PRESSPULL command describes at \p distance, for the live ghost and
+/// for the commit — one function, so the ghost cannot show a shape the click would not build. Returns
+/// false (and leaves \p out untouched) when the number does not yet describe a solid.
+[[nodiscard]] bool CadBuildPressPullSolid(const AppCommandState& st, double distance, brep::Solid* out);
 
 /// Apply one push/pull and record it as a single undo step. The shared commit behind both the typed
 /// `PRESSPULL` and the grip drag, so the two cannot diverge about what a push does — the same

@@ -9138,6 +9138,11 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     extrudeHint = CadExtrudePromptText(cmd);
     return extrudeHint.c_str();
   }
+  if (cmd.active == AppCommandState::Kind::PressPull) {
+    static std::string pressPullHint;
+    pressPullHint = CadPressPullPromptText(cmd);
+    return pressPullHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Revolve) {
     static std::string revolveHint;
     revolveHint = CadRevolvePromptText(cmd);
@@ -13613,6 +13618,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     CadResolveSolidPick(cmd, ray3d::Vec3{rawX, rawY, rawZ}, cursorRayPtr);
     // EXTRUDE's height, resolved the same way and for the same reason (REQ-314).
     CadResolveExtrudePick(cmd, ray3d::Vec3{rawX, rawY, rawZ}, cursorRayPtr);
+    // PRESSPULL's distance (GitHub issue #396): the same closest-approach reading, along the
+    // target's own normal instead of a profile's plane.
+    CadResolvePressPullPick(cmd, ray3d::Vec3{rawX, rawY, rawZ}, cursorRayPtr);
 
     if (outCursorRawX)
       *outCursorRawX = rawX;
@@ -14341,6 +14349,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         break;
       }
       bool handled = false;
+
+      // PRESSPULL's SelectTarget phase (GitHub issue #396) is the one SelectionAccumulate user
+      // whose prompt asks for a Ctrl+click — its OTHER target, a solid FACE, is named the same way
+      // IdleSelection's sub-object pick names one. Without this, PRESSPULL's own on-screen prompt
+      // ("Ctrl+click a solid face... Enter when done") describes a gesture this route swallows as
+      // an ordinary whole-entity click, and a face can never be named once the command has started.
+      if (cmd.active == K::PressPull &&
+          cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget && modelSpace &&
+          ImGui::GetIO().KeyCtrl) {
+        AbortMtextGripInteraction(cmd);
+        ClearDimGripInteraction(cmd);
+        const ray3d::Ray subRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        solidpick::Tolerance subTol;
+        subTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
+        subTol.edge = subTol.vertex;
+        SubmitSubObjectPick(cmd, subRay, subTol, keyShift, log);
+        BumpCadGpuCache(cmd);
+        break;
+      }
 
       const int tblIx = PickCadTableAt(rawPickX, rawPickY, cmd, halfH, avail.y);
       if (tblIx >= 0) {

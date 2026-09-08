@@ -32,6 +32,8 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
          // REQ-314: EXTRUDE's / REVOLVE's SelectProfiles step is the same accumulate-and-Enter shape.
          (cmd.active == K::Extrude &&
           cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) ||
+         (cmd.active == K::PressPull &&
+          cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) ||
          (cmd.active == K::Revolve &&
           cmd.revolvePhase == AppCommandState::RevolvePhase::SelectProfiles) ||
          (cmd.active == K::Loft &&
@@ -169,6 +171,15 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Extrude:
     return cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles ? R::SelectionAccumulate
                                                                             : R::SnappedPointPick;
+  // PRESSPULL (REQ-319, widened by GitHub issue #396): the same select-then-distance shape as
+  // EXTRUDE. SelectTarget accumulates entities the same way (a Ctrl+click sub-object face is a
+  // separate selection this route never sees — ViewportClickRouteFor only decides ordinary
+  // model-space clicks); WaitDistance is a snapped point resolved to a distance by
+  // SubmitPressPullViewportPick.
+  case K::PressPull:
+    return cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget
+               ? R::SelectionAccumulate
+               : R::SnappedPointPick;
   // LOFT / SWEEP (REQ-315): one phase, the accumulate-and-Enter "select objects" step — nothing is
   // picked by point, so this is their only route.
   case K::Loft:

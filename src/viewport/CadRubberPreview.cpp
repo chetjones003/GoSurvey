@@ -560,6 +560,39 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     }
   }
 
+  // --- PRESSPULL: the candidate solid as a wireframe ghost, rebuilt from the cursor distance every
+  //     frame (GitHub issue #396). Same builder the click commits through, so the ghost cannot show
+  //     a shape the commit would not build — EXTRUDE's own rule, applied here too.
+  if (cmd.active == AppCommandState::Kind::PressPull &&
+      cmd.pressPullPhase == AppCommandState::PressPullPhase::WaitDistance && cmd.pressPullDistPickValid) {
+    brep::Solid ghost;
+    if (CadBuildPressPullSolid(cmd, cmd.pressPullDistPick, &ghost)) {
+      std::vector<double> segs;
+      brep::Problem why = brep::Problem::Ok;
+      if (brep::TessellateEdges(ghost, kSolidChordToleranceFt, &segs, &why)) {
+        for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+          PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                               static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+      }
+    }
+    // The measuring line along the push/pull axis, so the distance reads as a distance.
+    ray3d::Vec3 anchor{};
+    ray3d::Vec3 axis{};
+    bool haveAxis = false;
+    if (cmd.pressPullOnFace) {
+      haveAxis = CadSubObjectFaceGrip(cmd, cmd.pressPullFace, &anchor, &axis);
+    } else {
+      anchor = cmd.pressPullProfile.plane.origin;
+      axis = cmd.pressPullProfile.plane.zAxis;
+      haveAxis = true;
+    }
+    if (haveAxis) {
+      const ray3d::Vec3 tip = ray3d::Add(anchor, ray3d::Scale(axis, cmd.pressPullDistPick));
+      PushRubberSegViewRel(rubberLines, anchor.x, anchor.y, tip.x, tip.y, 0., 0.,
+                           static_cast<float>(anchor.z), static_cast<float>(tip.z));
+    }
+  }
+
   // --- REVOLVE: the axis line, and once both ends and a profile are set, a ghost of the solid at
   //     the current angle (REQ-314 / ADR-046).
   if (cmd.active == AppCommandState::Kind::Revolve) {
