@@ -4371,6 +4371,23 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
 /// own shape.
 void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void StartPressPullCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// True when the REQ-318 sub-object selection holds solid EDGES and nothing else — the one state in
+/// which a typed `FILLET` means the solid fillet rather than the 2D one (REQ-323).
+[[nodiscard]] bool CadSubObjectSelectionIsAllEdges(const AppCommandState& st);
+
+/// FILLET on the selected solid edge(s) (REQ-323 increment 1, GitHub issue #148 acceptance 5).
+///
+/// Paired with the sub-object selection exactly as `CadPressPull` is: Ctrl+click names the edge,
+/// this rounds it. One solid at a time, one undo step however many edges are named, and every
+/// refusal is the kernel's own sentence with the document untouched — `brep::FilletEdges` pre-checks
+/// everything, so nothing was built rather than something rolled back.
+///
+/// **Clears the sub-object selection on success**, unlike push/pull, which re-points it. A fillet
+/// changes the TOPOLOGY: the selected edge is gone and every index after it has shifted, so a kept
+/// reference would name whatever edge inherited the number.
+void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
+                         std::vector<std::string>& log);
 void CancelPressPullCommand(AppCommandState& st);
 
 /// The prompt for whatever the PRESSPULL command is waiting for — the target, or the distance with

@@ -28246,6 +28246,98 @@ bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double 
   return true;
 }
 
+// --- FILLET on a solid EDGE (REQ-323 increment 1, command half; issue #148 acceptance 5) ---------
+//
+// Paired with the REQ-318 sub-object selection exactly as PRESSPULL is: Ctrl+click names the edge,
+// FILLET rounds it. There is no "select edges" step of its own, for the reason D-2026-09-04-a gave
+// for the pick — a persistent mode is one a user can be left in without noticing.
+
+bool CadSubObjectSelectionIsAllEdges(const AppCommandState& st) {
+  if (st.subObjectSelection.empty())
+    return false;
+  for (const SelectedSubObject& s : st.subObjectSelection)
+    if (s.kind != solidpick::Kind::Edge)
+      return false;
+  return true;
+}
+
+void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
+                         std::vector<std::string>& log) {
+  if (!CadSubObjectSelectionIsAllEdges(st)) {
+    log.push_back("FILLET - select solid EDGES first: hold Ctrl and click one.");
+    return;
+  }
+  // One solid at a time. Two solids filleted from one line would be two edits under one undo step,
+  // and the second's radius would be checked against the first's result - a compound edit nobody
+  // asked for, which is the same reason PRESSPULL refuses more than one target (REQ-201).
+  const int solidIndex = st.subObjectSelection.front().solidIndex;
+  for (const SelectedSubObject& s : st.subObjectSelection)
+    if (s.solidIndex != solidIndex) {
+      log.push_back("FILLET - the selected edges are on different solids; this rounds one solid at "
+                    "a time.");
+      return;
+    }
+  const CadSolidPtr sp = st.subObjectSelection.front().owner.lock();
+  if (!sp || solidIndex < 0 || static_cast<size_t>(solidIndex) >= st.cadSolids.size() ||
+      st.cadSolids[static_cast<size_t>(solidIndex)] != sp) {
+    log.push_back("FILLET - that edge is no longer there.");
+    return;
+  }
+
+  const std::string text = StringUtil::trimCopy(args);
+  if (text.empty()) {
+    log.push_back("Usage: FILLET <radius> - rounds the selected solid edge(s).");
+    return;
+  }
+  char* end = nullptr;
+  const double radius = std::strtod(text.c_str(), &end);
+  if (!end || *end != '\0' || !std::isfinite(radius)) {
+    log.push_back("FILLET - \"" + text + "\" is not a number.");
+    return;
+  }
+
+  std::vector<int> edges;
+  edges.reserve(st.subObjectSelection.size());
+  for (const SelectedSubObject& s : st.subObjectSelection)
+    edges.push_back(s.index);
+
+  brep::Solid rounded;
+  brep::Problem why = brep::Problem::Ok;
+  if (!brep::FilletEdges(*sp, edges, radius, &rounded, &why)) {
+    // The kernel's own sentence, and the document untouched - ADR-046 (d) and REQ-201. Every fillet
+    // refusal is a PRE-check, so "untouched" is true because nothing was built, not because
+    // something was rolled back.
+    log.push_back(std::string("FILLET - ") + brep::ProblemText(why));
+    return;
+  }
+
+  // One undo step for the whole edit, however many edges were named (REQ-323 item 8).
+  PushUndoSnapshot(st, "Fillet");
+  const auto replaced = std::make_shared<const brep::Solid>(std::move(rounded));
+  st.cadSolids[static_cast<size_t>(solidIndex)] = replaced;
+
+  // **The sub-object selection is CLEARED, and this is where fillet differs from push/pull.**
+  // `CadApplyPushPull` re-points its references at the replaced solid because a push preserves the
+  // topology, so the face index still names the same face. A fillet does not: the edge that was
+  // selected no longer exists, and every index after it has shifted (the kernel compacts). Keeping
+  // the reference would leave it pointing at whatever edge inherited the number - a selection that
+  // looks live and names something the user never picked. Dropping it is the honest answer, and
+  // ADR-049's expiring reference is the precedent.
+  st.subObjectSelection.clear();
+
+  BumpCadGpuCache(st);
+  const brep::MassProperties mp = brep::ComputeMassProperties(*replaced);
+  char msg[256];
+  if (mp.valid)
+    std::snprintf(msg, sizeof(msg),
+                  "FILLET - %d edge(s) of solid %d rounded at radius %.4f; volume now %.4f.",
+                  static_cast<int>(edges.size()), solidIndex + 1, radius, mp.volume);
+  else
+    std::snprintf(msg, sizeof(msg), "FILLET - %d edge(s) of solid %d rounded at radius %.4f.",
+                  static_cast<int>(edges.size()), solidIndex + 1, radius);
+  log.push_back(msg);
+}
+
 bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& ref,
                           ray3d::Vec3* outAnchor, ray3d::Vec3* outAxis) {
   if (!outAnchor || !outAxis || ref.kind != solidpick::Kind::Face || ref.index < 0)
@@ -31389,6 +31481,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // 2D shape. A bare verb opens the prompted form (select a target, then a typed or dragged
     // distance — EXTRUDE's own shape); a distance argument is the one-line shortcut, same as
     // EXTRUDE's report-or-set split.
+    // FILLET on a solid EDGE (REQ-323, GitHub issue #148 acceptance 5). The same verb the 2D fillet
+    // uses, because it is the same idea and every CAD package spells it the same way — and the two
+    // cannot be confused, because this path is taken ONLY when the sub-object selection holds solid
+    // edges and nothing else, a state the 2D flow has never been able to reach. With no such
+    // selection the line falls through untouched, so every existing FILLET habit and transcript
+    // behaves exactly as before.
+    if (plotTok == "fillet" && CadSubObjectSelectionIsAllEdges(st)) {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      CadFilletSolidEdges(st, restOfLine, log);
+      return;
+    }
     if (plotTok == "presspull" || plotTok == "pp") {
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
