@@ -132,14 +132,16 @@ TEST_CASE("3D TRIM finds a rotated-UCS crossing via the pick ray, independent of
   CHECK(st.userLinesFlat[2] == Approx(0.f));
 }
 
-TEST_CASE("3D TRIM refuses a non-line cutting edge by name instead of guessing", "[trim][issue399]") {
+TEST_CASE("3D TRIM refuses a polyline cutting edge by name instead of guessing", "[trim][issue399]") {
   AppCommandState st;
   st.userLinesFlat = {0.f, 0.f, 0.f, 100.f, 0.f, 0.f};
-  st.userCirclesCxCyZR = {50.f, 0.f, 0.f, 10.f};
-  SelectedEntity circleCutter{};
-  circleCutter.type = SelectedEntity::Type::Circle;
-  circleCutter.index = 0;
-  ArmTrimWithCutters(st, {circleCutter});
+  st.userPolylineOffsets = {0, 2};
+  st.userPolylineVerts = {50.f, -10.f, 0.f, 50.f, 10.f, 0.f};
+  st.userPolylineClosed = {false};
+  SelectedEntity polyCutter{};
+  polyCutter.type = SelectedEntity::Type::Polyline;
+  polyCutter.index = 0;
+  ArmTrimWithCutters(st, {polyCutter});
 
   const ray3d::Ray pickRay{ray3d::Vec3{20.0, 0.0, 100.0}, ray3d::Vec3{0.0, 0.0, -1.0}};
   std::vector<std::string> log;
@@ -150,6 +152,87 @@ TEST_CASE("3D TRIM refuses a non-line cutting edge by name instead of guessing",
   bool sawRefusal = false;
   for (const std::string& line : log)
     if (line.find("not yet supported") != std::string::npos)
+      sawRefusal = true;
+  CHECK(sawRefusal);
+}
+
+TEST_CASE("3D TRIM cuts a line against a coplanar circle cutting edge from an orbited view",
+         "[trim][issue399]") {
+  AppCommandState st;
+  // Target crosses a circle of radius 10 centred at (50,0,0); both lie in world XY (z=0), so the
+  // crossings are at x = 40 and x = 60.
+  st.userLinesFlat = {0.f, 0.f, 0.f, 100.f, 0.f, 0.f};
+  st.userCirclesCxCyZR = {50.f, 0.f, 0.f, 10.f};
+  SelectedEntity circleCutter{};
+  circleCutter.type = SelectedEntity::Type::Circle;
+  circleCutter.index = 0;
+  ArmTrimWithCutters(st, {circleCutter});
+
+  // Orbited pick ray looking straight down, aimed at the left half of the target (x=20).
+  const ray3d::Ray pickRay{ray3d::Vec3{20.0, 0.0, 100.0}, ray3d::Vec3{0.0, 0.0, -1.0}};
+  std::vector<std::string> log;
+  REQUIRE(SubmitTrimViewportPick(st, 20.f, 0.f, 1.f, log, &pickRay));
+
+  // The pick at x=20 lands on the removed side [0,40]; the surviving segment is [40,100].
+  REQUIRE(st.userLinesFlat.size() == 6);
+  CHECK(st.userLinesFlat[0] == Approx(40.f));
+  CHECK(st.userLinesFlat[3] == Approx(100.f));
+}
+
+TEST_CASE("3D TRIM cuts a line against a coplanar arc cutting edge in a tilted (X-Z) plane",
+         "[trim][issue399]") {
+  AppCommandState st;
+  // Target and a tilted arc both live in the world X-Z plane (y=0). Arc: centre (50,0,0), radius
+  // 10, normal +Y (its own plane is X-Z), half turn so it spans both crossings at x=40 and x=60.
+  st.userLinesFlat = {0.f, 0.f, 0.f, 100.f, 0.f, 0.f};
+  CadArc arc{};
+  arc.cx = 50.f;
+  arc.cy = 0.f;
+  arc.z = 0.f;
+  arc.r = 10.f;
+  arc.nx = 0.f;
+  arc.ny = 1.f;
+  arc.nz = 0.f;
+  arc.startRad = 0.f;
+  arc.sweepRad = 6.28318530717958647692f;
+  st.userArcs.push_back(arc);
+  SelectedEntity arcCutter{};
+  arcCutter.type = SelectedEntity::Type::Arc;
+  arcCutter.index = 0;
+  ArmTrimWithCutters(st, {arcCutter});
+
+  const ray3d::Ray pickRay{ray3d::Vec3{20.0, 100.0, 0.0}, ray3d::Vec3{0.0, -1.0, 0.0}};
+  std::vector<std::string> log;
+  REQUIRE(SubmitTrimViewportPick(st, 20.f, 0.f, 1.f, log, &pickRay));
+
+  // The pick at x=20 lands on the removed side [0,40]; the surviving segment is [40,100].
+  REQUIRE(st.userLinesFlat.size() == 6);
+  CHECK(st.userLinesFlat[0] == Approx(40.f).margin(0.05));
+  CHECK(st.userLinesFlat[3] == Approx(100.f));
+}
+
+TEST_CASE("3D TRIM skips a skew circle cutting edge rather than guessing a crossing",
+         "[trim][issue399]") {
+  AppCommandState st;
+  // Target line is on world Z=0; the circle is centred on the target's line but tilted (normal +X,
+  // its own plane is Y-Z) and offset in Z so it does not actually touch the target.
+  st.userLinesFlat = {0.f, 0.f, 0.f, 100.f, 0.f, 0.f};
+  st.userCirclesCxCyZR = {50.f, 0.f, 5.f, 10.f};
+  st.userCircleNormals = {1.f, 0.f, 0.f};
+  SelectedEntity circleCutter{};
+  circleCutter.type = SelectedEntity::Type::Circle;
+  circleCutter.index = 0;
+  ArmTrimWithCutters(st, {circleCutter});
+
+  const ray3d::Ray pickRay{ray3d::Vec3{20.0, 0.0, 100.0}, ray3d::Vec3{0.0, 0.0, -1.0}};
+  std::vector<std::string> log;
+  CHECK_FALSE(SubmitTrimViewportPick(st, 20.f, 0.f, 1.f, log, &pickRay));
+
+  REQUIRE(st.userLinesFlat.size() == 6);
+  CHECK(st.userLinesFlat[0] == Approx(0.f));  // untouched: skew cutter contributed no crossing
+  bool sawRefusal = false;
+  for (const std::string& line : log)
+    if (line.find("does not cross") != std::string::npos)
       sawRefusal = true;
   CHECK(sawRefusal);
 }

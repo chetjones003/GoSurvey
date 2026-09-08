@@ -23810,17 +23810,67 @@ static double SegSegClosest3D(const ray3d::Vec3& p0, const ray3d::Vec3& p1, cons
   return Dot(gap, gap);
 }
 
-/// issue #399 increment 1: TRIM's target-pick, cutting-edge collection and pick-side math are all
+/// issue #399 increment 2: builds the local-2D `curveisect::Conic` for a Circle/Arc/Ellipse cutting
+/// edge, expressed in ITS OWN plane (\ref CadEntities.hpp's `CurvePlane`) — centred at that plane's
+/// origin, so `WorldToPlane(plane, worldPoint)` of any point on the curve lands exactly on the
+/// returned conic's own parametrisation (REQ-312's own convention; the flat +Z case reproduces the
+/// existing world-XY numbers exactly, byte for bit). Returns false for a degenerate curve.
+static bool CutterCurvePlaneAndConic(const AppCommandState& st, const SelectedEntity& c, ucs::Ucs* outPlane,
+                                     curveisect::Conic* outConic) {
+  using ST = SelectedEntity::Type;
+  if (c.type == ST::Circle) {
+    const size_t k = static_cast<size_t>(c.index) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
+      return false;
+    const float r = st.userCirclesCxCyZR[k + 3];
+    if (!(r > 1e-9f))
+      return false;
+    float nx = 0.f, ny = 0.f, nz = 1.f;
+    CircleNormalAt(st.userCircleNormals, static_cast<size_t>(c.index), &nx, &ny, &nz);
+    *outPlane = CurvePlane(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 2], nx, ny, nz);
+    *outConic = curveisect::MakeCircle(0.0, 0.0, r);
+    return true;
+  }
+  if (c.type == ST::Arc) {
+    if (c.index < 0 || static_cast<size_t>(c.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(c.index)];
+    if (!(a.r > 1e-9f))
+      return false;
+    *outPlane = CurvePlane(a);
+    *outConic = curveisect::MakeArc(0.0, 0.0, a.r, a.startRad, a.sweepRad);
+    return true;
+  }
+  if (c.type == ST::Ellipse) {
+    if (c.index < 0 || static_cast<size_t>(c.index) >= st.userEllipses.size())
+      return false;
+    const CadEllipse& el = st.userEllipses[static_cast<size_t>(c.index)];
+    if (std::hypot(el.majVx, el.majVy) < 1e-9)
+      return false;
+    *outPlane = CurvePlane(el.cx, el.cy, el.z, 0.0, 0.0, 1.0);
+    *outConic = curveisect::MakeEllipse(0.0, 0.0, el.majVx, el.majVy, el.ratio);
+    return true;
+  }
+  return false;
+}
+
+/// issue #399 increments 1-2: TRIM's target-pick, cutting-edge collection and pick-side math are all
 /// flat world-XY (\ref TrimSegmentIntersectPickSide, \ref PickClosestTrimTarget) — correct only in
 /// plan view under the world UCS. An orbited camera or a non-world UCS needs the pick resolved
 /// through the camera ray (same seam 3D Object Snap / issue #395 and FILLET / issue #373 use) and
-/// the crossing found in true 3D, not the screen-space projection. Scope is deliberately narrow
-/// (Line target, Line cutting edges only — REQ-399 increment 1); every other combination is refused
-/// by name rather than silently falling through to the wrong flat math. Returns true once the pick
-/// has been fully handled (trimmed or refused with a log message) so the caller must not also run
-/// the 2D path.
-static bool Try3DLineLineTrim(AppCommandState& st, double wx, double wy, float tolWorld,
-                              const ray3d::Ray& pickRay, std::vector<std::string>& log) {
+/// the crossing found in true 3D, not the screen-space projection.
+///
+/// Scope: the TARGET being shortened must be a Line (matching the existing 2D TRIM, which likewise
+/// never supports Circle/Arc/Ellipse — only Line/Polyline — as a trim TARGET; Polyline targets are
+/// a later increment, not a regression here). The CUTTING edges may be Line (increment 1) or
+/// Circle/Arc/Ellipse (increment 2): a coplanar cutter intersects the target exactly; a skew one
+/// (no shared plane) is silently skipped rather than guessed at — REQ-399's "otherwise report no
+/// intersection" rule — since a closest-approach solve for a line against a curved cutting edge has
+/// no closed form and is deferred to a later increment. Any other cutting-edge type (Polyline) is
+/// refused by name. Returns true once the pick has been fully handled (trimmed or refused with a
+/// log message) so the caller must not also run the 2D path.
+static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWorld,
+                          const ray3d::Ray& pickRay, std::vector<std::string>& log) {
   auto typeName = [](SelectedEntity::Type t) -> const char* {
     switch (t) {
       case SelectedEntity::Type::Circle: return "circle";
@@ -23829,6 +23879,10 @@ static bool Try3DLineLineTrim(AppCommandState& st, double wx, double wy, float t
       case SelectedEntity::Type::Polyline: return "polyline";
       default: return "object";
     }
+  };
+  auto isSupportedCutter = [](SelectedEntity::Type t) {
+    return t == SelectedEntity::Type::LineSeg || t == SelectedEntity::Type::Circle ||
+           t == SelectedEntity::Type::Arc || t == SelectedEntity::Type::Ellipse;
   };
 
   SelectedEntity hit{};
@@ -23850,7 +23904,7 @@ static bool Try3DLineLineTrim(AppCommandState& st, double wx, double wy, float t
     return false;
   }
   for (const SelectedEntity& c : st.trimCutters) {
-    if (c.type != SelectedEntity::Type::LineSeg) {
+    if (!isSupportedCutter(c.type)) {
       log.push_back(std::string("TRIM — 3D ") + typeName(c.type) +
                     " cutting edges not yet supported in an orbited view or non-world UCS; refused.");
       return false;
@@ -23880,23 +23934,53 @@ static bool Try3DLineLineTrim(AppCommandState& st, double wx, double wy, float t
   ray3d::Vec3 bestPoint{};
   bool haveBestPoint = false;
   for (const SelectedEntity& c : st.trimCutters) {
-    if (c.type != SelectedEntity::Type::LineSeg || c.index == hit.index)
+    if (c.type == SelectedEntity::Type::LineSeg) {
+      if (c.index == hit.index)
+        continue;
+      const size_t ck = static_cast<size_t>(c.index) * 6;
+      if (ck + 5 >= st.userLinesFlat.size())
+        continue;
+      const ray3d::Vec3 qa{st.userLinesFlat[ck], st.userLinesFlat[ck + 1], st.userLinesFlat[ck + 2]};
+      const ray3d::Vec3 qb{st.userLinesFlat[ck + 3], st.userLinesFlat[ck + 4], st.userLinesFlat[ck + 5]};
+      double s = 0., t = 0.;
+      const double gap2 = SegSegClosest3D(ta, tb, qa, qb, &s, &t);
+      if (gap2 > epsGeom * epsGeom)
+        continue;  // farther apart than tolerance at closest approach: not an intersection
+      if (s <= epsT || s >= 1.0 - epsT)
+        continue;  // touches only at (or past) an existing endpoint of the target
+      ts.push_back(s);
+      if (!haveBestPoint) {
+        haveBestPoint = true;
+        bestPoint = ray3d::Add(ta, ray3d::Scale(ray3d::Sub(tb, ta), s));
+      }
       continue;
-    const size_t ck = static_cast<size_t>(c.index) * 6;
-    if (ck + 5 >= st.userLinesFlat.size())
+    }
+    // issue #399 increment 2: Circle/Arc/Ellipse cutting edge. Coplanarity is judged against the
+    // TARGET line's two endpoints — the same signed-distance-to-plane test FILLET (issue #373) uses
+    // — projected into the cutter's own plane and solved exactly via `curveisect::IntersectSegConic`
+    // (REQ-062), never by tessellating the curve the way the 2D path still does.
+    ucs::Ucs plane{};
+    curveisect::Conic conic{};
+    if (!CutterCurvePlaneAndConic(st, c, &plane, &conic))
       continue;
-    const ray3d::Vec3 qa{st.userLinesFlat[ck], st.userLinesFlat[ck + 1], st.userLinesFlat[ck + 2]};
-    const ray3d::Vec3 qb{st.userLinesFlat[ck + 3], st.userLinesFlat[ck + 4], st.userLinesFlat[ck + 5]};
-    double s = 0., t = 0.;
-    const double gap2 = SegSegClosest3D(ta, tb, qa, qb, &s, &t);
-    if (gap2 > epsGeom * epsGeom)
-      continue;  // farther apart than tolerance at closest approach: not an intersection
-    if (s <= epsT || s >= 1.0 - epsT)
-      continue;  // touches only at (or past) an existing endpoint of the target
-    ts.push_back(s);
-    if (!haveBestPoint) {
-      haveBestPoint = true;
-      bestPoint = ray3d::Add(ta, ray3d::Scale(ray3d::Sub(tb, ta), s));
+    const double da = ucs::SignedDistanceToPlane(plane, ta);
+    const double db = ucs::SignedDistanceToPlane(plane, tb);
+    if (std::fabs(da) > epsGeom || std::fabs(db) > epsGeom)
+      continue;  // skew: no closed-form line-vs-curve closest approach yet (deferred); skip, don't guess
+    const ucs::Point2D pa = ucs::WorldToPlane(plane, ta);
+    const ucs::Point2D pb = ucs::WorldToPlane(plane, tb);
+    const curveisect::Seg seg{{pa.x, pa.y}, {pb.x, pb.y}};
+    std::vector<curveisect::Hit2> hits;
+    curveisect::IntersectSegConic(seg, conic, &hits);
+    for (const curveisect::Hit2& h : hits) {
+      const double s = h.tA;  // WorldToPlane is affine: the projected segment's t IS the 3D line's t
+      if (s <= epsT || s >= 1.0 - epsT)
+        continue;
+      ts.push_back(s);
+      if (!haveBestPoint) {
+        haveBestPoint = true;
+        bestPoint = ray3d::Add(ta, ray3d::Scale(ray3d::Sub(tb, ta), s));
+      }
     }
   }
   if (ts.empty()) {
@@ -24033,11 +24117,11 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
     return true;
   }
 
-  // issue #399 increment 1: an orbited camera resolves through a real pick ray (\ref
-  // Try3DLineLineTrim); plan view / world UCS (pickRay null) falls through to the original,
+  // issue #399 increments 1-2: an orbited camera resolves through a real pick ray (\ref
+  // Try3DLineTrim); plan view / world UCS (pickRay null) falls through to the original,
   // byte-identical flat-XY path below.
   if (pickRay && pickRay->valid())
-    return Try3DLineLineTrim(st, wx, wy, tolWorld, *pickRay, log);
+    return Try3DLineTrim(st, wx, wy, tolWorld, *pickRay, log);
 
   TrimTargetEdge tgt{};
   float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, d2 = 0.f;
