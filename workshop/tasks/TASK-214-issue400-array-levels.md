@@ -1,7 +1,7 @@
 # TASK-214 — Issue #400 (increment 2 of 3): ARRAY Rectangular "levels" (3D grid)
 
 - Type:    feature
-- Status:  in progress
+- Status:  done — PR #410 (stacked on #409)
 - Opened:  2026-09-07
 - Owner:   Workshop
 - GitHub:  #400
