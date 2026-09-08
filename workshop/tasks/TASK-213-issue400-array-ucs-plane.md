@@ -1,7 +1,7 @@
 # TASK-213 — Issue #400 (increment 1 of 3): ARRAY resolves picks through the active UCS plane
 
 - Type:    feature (3D integration of an existing 2D command)
-- Status:  in progress
+- Status:  done — PR #409
 - Opened:  2026-09-07
 - Owner:   Workshop
 - GitHub:  #400
