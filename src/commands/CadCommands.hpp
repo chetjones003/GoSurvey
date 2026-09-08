@@ -3329,6 +3329,16 @@ struct AppCommandState {
   bool chamferTextAwaitingSecondDist = false;
   bool chamferTextAwaitingAngle = false;
   bool chamferTextAwaitingTrim = false;
+  /// Transient: true while a bare `CHAMFER` with solid edges selected is waiting for the distance
+  /// that applies the bevel (REQ-329). The exact twin of `filletSolidAwaitingRadius`, and it exists
+  /// for the reason that field records: an argument-only form is a dead end, because the command
+  /// enters no state and the next keystroke reaches the IDLE command line.
+  ///
+  /// The remembered value is `chamferDist1`, reused rather than duplicated — the way `filletRadius`
+  /// serves both the 2D and the solid fillet. REQ-329's increment 1 is a single SYMMETRIC distance,
+  /// so `chamferDist2` and `chamferMode` have no meaning here; the two-distance form is deferred
+  /// (D-2026-09-08-b item 13), and when it arrives this is where it picks them up.
+  bool chamferSolidAwaitingDistance = false;
 
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
@@ -4410,6 +4420,25 @@ bool CadApplyFilletToSelectedEdges(AppCommandState& st, double radius,
 /// Re-prompt after a `Ctrl`+click gathered (or failed to gather) a solid edge while FILLET is
 /// running. Says how many edges are held and that a radius is what finishes the command.
 void CadFilletReportEdgeSelection(AppCommandState& st, std::vector<std::string>& log);
+
+/// CHAMFER on a solid EDGE (REQ-329, GitHub issue #148 acceptance 5). The same verb the 2D chamfer
+/// uses and the same split `CadFilletSolidEdges` has: a bare `CHAMFER` with solid edges selected
+/// prompts for the distance, `CHAMFER <d>` applies it in one line. The 2D flow is untouched — this
+/// path is taken only when the sub-object selection holds solid edges and nothing else, a state the
+/// 2D flow has never been able to reach.
+void CadChamferSolidEdges(AppCommandState& st, const std::string& args,
+                          std::vector<std::string>& log);
+
+/// Bevel the selected solid edge(s) by \p distance, as one undoable step. The shared commit behind
+/// both the one-line and the prompted form. False (and nothing changed) on any refusal, which is
+/// already logged by name — every `brep::ChamferEdges` refusal is a pre-check, so "unchanged" is
+/// true because nothing was built rather than because something was rolled back.
+bool CadApplyChamferToSelectedEdges(AppCommandState& st, double distance,
+                                    std::vector<std::string>& log);
+
+/// Re-prompt after a `Ctrl`+click gathered (or failed to gather) a solid edge while CHAMFER is
+/// running. The twin of `CadFilletReportEdgeSelection`.
+void CadChamferReportEdgeSelection(AppCommandState& st, std::vector<std::string>& log);
 void CancelPressPullCommand(AppCommandState& st);
 
 /// The prompt for whatever the PRESSPULL command is waiting for — the target, or the distance with

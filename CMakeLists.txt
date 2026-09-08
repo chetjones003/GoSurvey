@@ -780,6 +780,7 @@ if(GOSURVEY_BUILD_TESTS)
     # decided here, with no window and no document.
     tests/BrepTests.cpp
     # REQ-323 / ADR-046 (j) — FILLET. Closed-form acceptance numbers, written before the code.
+    tests/ChamferEdgeTests.cpp
     tests/FilletEdgeTests.cpp
     # REQ-319 / ADR-046 amendment (i) — push/pull, the first kernel op that EDITS a solid. Its own
     # file because its subject is the PRECONDITION Validate cannot enforce, not another builder.

@@ -88,3 +88,15 @@ what selects**, which is the rule the pre-highlight exists to make true.
   TASK-220, TASK-221) have now leaned on manual verification for hover behaviour. A verb that sets a
   cursor position and modifier state, then asserts `subObjectHoverValid` and the hovered kind, would
   cover all of them.
+
+---
+
+**DEBT-1 discharged 2026-09-08** by TASK-222 (REQ-329). A solid chamfer now exists, so `CHAMFER`
+joined the hover exception list — the one line this task predicted. The predicate's variable was
+renamed `filletEntityPick` -> `cornerEntityPick` at the same time, since it now names both.
+
+**Not re-verified by hand, and stated plainly.** The three GUI cases above were checked for FILLET;
+the CHAMFER term reaches byte-for-byte the same code with the same command shape, so TASK-222 did not
+repeat them. **DEBT-2 therefore stands and is now the gap it was always going to be** — a verb that
+sets a cursor position and modifier state, then asserts `subObjectHoverValid` and the hovered kind,
+would have made this a one-line test instead of an argument from similarity.
