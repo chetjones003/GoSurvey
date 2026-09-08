@@ -1731,9 +1731,25 @@ requirements is a planning failure, not a sign of rigor.
       and 2D-entity rotation about an arbitrary 3D axis is not yet built anywhere in this codebase
       (D-2026-09-04-g), and polar ARRAY reuses that same primitive rather than inventing a second one.
       Lifting this refusal is tracked as future scope alongside 3D ROTATE, not part of this increment.
+  12. (GitHub issue #400, D-2026-09-07-b, increment 2 of 3) Rectangular ARRAY gains an optional third
+      "levels" count + spacing, measured along the active UCS Z axis, stacking the whole 2D grid at
+      `levelSpacing` intervals for `levels` layers. **0 or 1 level is the default (Enter at the
+      prompt) and reproduces exactly today's 2D grid** — no level-spacing prompt is shown at all in
+      that case, so an ordinary 2D rectangular array types no more than it does today. Level spacing
+      is TYPED-NUMBER ENTRY ONLY, not click-driven like column/row spacing: an ordinary viewport click
+      resolves against the active work plane itself (REQ-312), which by construction has no Z extent
+      of its own to click a distance along — there is no on-screen gesture that reads as "this far
+      along the plane's own normal" the way a click reads as "this far along the plane." `levels` and
+      `levelSpacing` are otherwise plain fields on the SAME `ArrayType::Rectangular`, not a new array
+      type (the parameter-vs-new-type choice was put to the user and decided in D-2026-09-07-b);
+      `shapeDesc` reports `cols x rows x levels` only when levels > 1, matching the existing
+      `cols x rows` wording when it is 1.
 - Owner-layer: Commands (`CadCommands.cpp`/`.hpp`), Viewport (`TransformPreview.cpp`, cursor hint)
 - Status: accepted
-- Revisions: 2026-09-07 — Acceptance 10-11 added (GitHub issue #400, D-2026-09-07-b): ARRAY is
+- Revisions: 2026-09-07 — Acceptance 12 added (GitHub issue #400, increment 2 of 3): the "levels"
+  parameter on Rectangular. Typed-only level spacing (no click) was a scope line drawn while
+  implementing, not decided ahead of time — see Acceptance 12 for why a click cannot express it.
+  2026-09-07 — Acceptance 10-11 added (GitHub issue #400, D-2026-09-07-b): ARRAY is
   purely world-XY today (rectangular offsets by world dx/dy, polar rotates about world Z), matching
   #399/TRIM and #395/3D Object Snap before their own 3D work. Sequenced into 3 increments: (1) this
   one — UCS-plane picks for the existing 2D entity set; (2) a third "levels" count+spacing on

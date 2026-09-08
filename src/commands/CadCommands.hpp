@@ -3161,7 +3161,9 @@ struct AppCommandState {
     Rect_WaitColumns,       ///< typed integer only — not spatial
     Rect_WaitColumnSpacing, ///< typed number, or click (horizontal distance from the anchor)
     Rect_WaitRows,          ///< typed integer only
-    Rect_WaitRowSpacing,    ///< typed number, or click (vertical distance from the anchor); commits on completion
+    Rect_WaitRowSpacing,    ///< typed number, or click (vertical distance from the anchor)
+    Rect_WaitLevels,        ///< typed integer only (GitHub issue #400 inc 2); Enter/0/1 = 2D, commits immediately
+    Rect_WaitLevelSpacing,  ///< typed number ONLY — no click (REQ-305 acceptance 12); commits on completion
     Polar_WaitCenter,       ///< click / typed X,Y / object snap — the normal point-input path
     Polar_WaitItemCount,    ///< typed integer only — TOTAL instances including the original
     Polar_WaitAngle,        ///< typed degrees, or click (angle from center to cursor)
@@ -3172,6 +3174,14 @@ struct AppCommandState {
   int arrayRows = 0;
   float arrayColSpacing = 0.f;
   float arrayRowSpacing = 0.f;
+  /// GitHub issue #400 increment 2 / REQ-305 acceptance 12. 1 level (the default) is the pre-#400
+  /// 2D grid; the level-spacing prompt is skipped entirely at 0 or 1, so an ordinary 2D rectangular
+  /// array types no more than it always has.
+  int arrayLevels = 1;
+  /// Distance between levels along the active UCS Z axis. Typed-number entry only (no interactive
+  /// click) — see REQ-305 acceptance 12 for why a viewport click cannot express a distance along the
+  /// work plane's own normal.
+  float arrayLevelSpacing = 0.f;
   /// Anchor for interactive column/row-spacing entry (Rect_WaitColumnSpacing/RowSpacing read the
   /// cursor's distance from this point) — the same point \ref FirstSelectionAnchorPoint computes,
   /// cached once at WaitType so it does not shift while spacing is being dragged.

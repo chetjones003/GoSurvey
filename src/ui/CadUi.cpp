@@ -9213,6 +9213,10 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
       return "ARRAY Rectangular — number of rows:";
     case AP::Rect_WaitRowSpacing:
       return "ARRAY Rectangular — row spacing (type a distance, or click):";
+    case AP::Rect_WaitLevels:
+      return "ARRAY Rectangular — number of levels <1 = 2D>:";
+    case AP::Rect_WaitLevelSpacing:
+      return "ARRAY Rectangular — level spacing (type a distance):";
     case AP::Polar_WaitCenter:
       return "ARRAY Polar — specify center point:";
     case AP::Polar_WaitItemCount:
