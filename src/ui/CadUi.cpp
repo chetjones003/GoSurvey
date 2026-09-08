@@ -326,7 +326,7 @@ void ApplyCadDarkTheme() {
   // -------------------------------------------------------------------------
   // Palette (REQ-081 revision 3, TASK-129: ladder lifted so chrome reads lighter).
   // Derived, not picked — the rules are:
-  //
+      //
   //  1. Every neutral is ACHROMATIC (R = G = B). No surface carries a colour
   //     cast, so all chroma in the UI belongs to the accent and to the semantic
   //     triad, and anything coloured is therefore meaningful by construction.
@@ -347,7 +347,7 @@ void ApplyCadDarkTheme() {
   //     on screen apart from the danger swatch.
   //  4. Text is held to measured contrast on the panel surface, not to taste.
   //  5. The semantic triad is equiluminant, so no member outranks the others.
-  //
+      //
   // Every number below was validated before it was written; the ratios in the
   // comments are computed, not estimated.
   // -------------------------------------------------------------------------
@@ -1171,7 +1171,7 @@ void DrawFloatingWindowChrome() {
   // points, the traverse editor, the save-before-close modal and every menu or
   // combo popup get the same treatment from one place, and a dialog added later
   // is covered the day it is written.
-  //
+      //
   // Appending to a window's OWN draw list is what makes the layering right: draw
   // lists are emitted in window order, so the halo lands over whatever is behind
   // that window and under any window above it. A shared background or foreground
@@ -3774,7 +3774,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // dynamic layout (buttons size to their own icon/label content via AutoFit and wrap into
   // rows/columns/grids the engine itself lays out), not a pixel-for-pixel port of the old
   // hand-tuned metrics.
-  //
+      //
   // MUST be at DrawRibbonBar function scope (not inside the `if (Home)` block below): the
   // ribbonSpecs render closures capture these by reference and are invoked LATER by
   // RenderRibbonFit, after the Home block has exited. Declaring them in the block left dangling
@@ -9123,7 +9123,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   // The prompted solid primitives (REQ-313 as amended). REQ-304 requires every Kind to carry a live
   // prompt; this one is COMPUTED rather than a literal, because it echoes the dimensions already set
   // back to the user, and there are seven primitives with four different parameter sets between them.
-  //
+      //
   // The buffer is static because this function returns `const char*` and every other branch returns
   // a string literal. Safe here and only here: the hint is built and consumed on the UI thread
   // within one frame, by this call and the cursor-text call that shares it — the same string, which
@@ -10596,7 +10596,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   // Floating bar: the prompt lives in the input field's placeholder (CommandInputHint),
   // so the separate footer-hint lines are suppressed — the bar stays a clean single line.
   // Classic dock keeps the wrapped hint lines below the input.
-  //
+      //
   // REQ-119: a hint carrying variant markup goes through the SHARED renderer — the same one
   // the floating bar uses — so no command needs click handling of its own. LINE used to have
   // a hand-rolled copy of this here, with [A]/[2P] and their tokens spelled out literally;
@@ -12418,21 +12418,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const bool routeZoomToViewport = InFloatingModelSpace(cmd) && !cmd.viewportZoomLocked;
 
   // ZOOM EXTENTS by middle double-click (REQ-120) — AutoCAD's binding for the same gesture.
-  //
+      //
   // Raised HERE rather than inside the wheel/pan block below, because that block is guarded by
   // `!routeZoomToViewport`: with a floating viewport owning pan/zoom (the default, lock OFF) it is
   // skipped entirely, so the gesture silently did nothing in exactly the place issue #100 is about.
   // REQ-120 claimed floating model space frames the model; it never even fired there. Corrected as
   // part of REQ-123 — the flag is raised in every space and `ProcessPendingViewportZoom` decides
   // what "extents" means for each.
-  //
+      //
   // Deliberately NOT routed through StartZoomExtentsCommand: that refuses while a command is
   // running, and this gesture is TRANSPARENT, because wanting to reframe mid-command is exactly
   // when a user reaches for it. Setting the flag directly is the same thing DXF import already does
   // to frame a freshly-imported drawing, and it is safe mid-command because the deferred consumer
   // writes only a camera — the active command's phase, picked points and draft geometry are
   // untouched. The typed ZOOMEXTENTS keeps its guard and its refusal message.
-  //
+      //
   // A double-click is not a drag, so middle-drag pan is unaffected (REQ-045 requires it).
   if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle)) {
     cmd.pendingZoomWindow = false;  // a pending ZOOM WINDOW would otherwise win the same frame
@@ -13543,11 +13543,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // THE model-space input seam (REQ-058). Everything downstream — snap, hover, entity picking,
   // hatch tracing, command submission — consumes rawX/rawY, so orbit-awareness is this one
   // substitution rather than a sweep of every consumer.
-  //
+      //
   // Plan view and paper space keep the original linear arithmetic **bit-identical** (paper is 2D
   // by definition — ADR-025 (g) — and plan view is REQ-058's parity guarantee). Only an orbited
   // model view takes the ray path.
-  //
+      //
   // `cursorValid` is false when an orbited ray misses the work plane (an edge-on UCS). That is a
   // real state, not an error to paper over: there is no world point under the cursor, so the block
   // is skipped exactly as if the cursor were outside the viewport. Inventing a coordinate here
@@ -13685,8 +13685,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // hover feedback (REQ-056). WaitDynamicTarget is a coordinate pick on an object already
       // chosen, so hover stays suppressed there — the same split BREAK's two phases make.
       const bool lengthenEntityPick = cmd.active == AK::Lengthen && cmd.lengthenPhase == LPh::WaitSelectOrMode;
+      // FILLET: both phases are entity SEARCHES - `ViewportPickPolicy` routes the command to
+      // `RawEntityPick`, and since REQ-323 a `Ctrl`+click there names a solid EDGE. So by this block's
+      // own rule ("their clicks mean coordinates rather than objects" is what earns suppression) it
+      // belongs with TRIM/EXTEND/BREAK/LENGTHEN rather than with the coordinate-entry commands. Without
+      // it nothing lit up under the cursor while FILLET ran, so the only way to find out what a click
+      // would take was to take it (user request, 2026-09-08).
+      //
+      // CHAMFER is the identical shape and is deliberately NOT included: no solid chamfer exists yet,
+      // so there is nothing for a sub-object pre-highlight to offer there. One line when it does.
+      const bool filletEntityPick = cmd.active == AK::Fillet;
       const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick &&
-                                     !breakEntityPick && !lengthenEntityPick) ||
+                                     !breakEntityPick && !lengthenEntityPick && !filletEntityPick) ||
                                     cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
       // REQ-089: the rollover readout rides on this exact condition. Model space only — a sheet has
@@ -13929,7 +13939,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   // Surface rollover readout (REQ-089): advance the dwell, and on the one frame it elapses, ask what
   // is under the cursor — once.
-  //
+      //
   // **The query is deliberately NOT run per frame.** `BuildSurfaceHoverRows` walks every triangle of
   // every visible surface (`TinElevationAt` is a linear scan), and REQ-100's surface profile is the
   // one profile near the frame budget and is CPU-bound — `PickClosestCadEntity` above already walks
@@ -17317,12 +17327,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // --- Survey point marker highlights: hover and selection (REQ-058) -----------------------------
   // Both highlight the point's OWN X rather than ringing it: a ring says "something is here" where a
   // coloured X says "this one".
-  //
+      //
   // A selected survey point previously showed nothing at all. Its linked label DID highlight — the
   // label is a CadAnnotation and so lives in `cmd.selection`, which `BuildSelectionHighlight` walks
   // — but survey points live in `selectedSurveyPointIndices`, which that function never sees. So the
   // label lit up and the point it belongs to did not.
-  //
+      //
   // Drawn here rather than added to BuildSelectionHighlight because the X is **billboarded**: its
   // shape depends on the camera, and that function takes only the command state. This is the same
   // reason the markers themselves are built with a basis in main.cpp.
@@ -17392,10 +17402,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // axis-aligned SCREEN rectangle from them, so the drawn box and the region that actually selects
   // were different shapes. Building it from the same two projected corners the hit test uses makes
   // the box show exactly what it will select, in every orientation.
-  //
+      //
   // Z = 0 for both corners, matching the hit test's own `SP(xa, ya, 0.f, ...)`: the drag happens on
   // the work plane, and using anything else here would re-introduce the same disagreement.
-  //
+      //
   // Colours are carried over from the removed GL stage unchanged, so a plan-view drag — the default
   // view and the common case — looks exactly as it did before.
   if (modelSpace && cmd.selBoxWaitingSecond) {
@@ -17933,7 +17943,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   // CAD-style crosshair (viewport only): OS cursor hidden; position follows world cursor (sticky OSNAP blend in
   // command). Pick box matches object snap aperture; arms from Settings.
-  //
+      //
   // While the user is typing a command NAME (no active command yet, command buffer
   // non-empty), the crosshair freezes at its last position so the autocomplete popup
   // anchored to it stays put. The OS mouse stays free — the user can move/click the
@@ -18182,13 +18192,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // AutoCAD's little frame selector under the ViewCube. It answers "which frame am I in?" without
   // reading the status bar, and switching back to World — the thing you do most — becomes one click
   // instead of `UCS` then `W`.
-  //
+      //
   // Drawn as its OWN overlay window rather than by moving this one's cursor. Reaching outside the
   // viewport window's content region with SetCursorScreenPos trips ImGui's "code uses
   // SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries" assertion, which paints
   // a red banner across the drawing — the same overlay-window shape the cursor's dynamic input above
   // already uses, and for the same reason.
-  //
+      //
   // Model space only, like the ViewCube and the UCS icon: a paper sheet has no frame.
   if (modelSpace && avail.x > 200.f && avail.y > 200.f) {
     // The label names the frame: WCS, the saved name when the active frame IS one of them, and
@@ -18257,12 +18267,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // Drawn AT THE UCS ORIGIN, which is AutoCAD's UCSICON Origin behaviour and what a user reading a
   // rotated frame actually wants: the icon then says where the frame IS, not merely which way it
   // points. Model space only, like the ViewCube: a paper sheet has no coordinate frame.
-  //
+      //
   // It falls back to the bottom-left corner whenever the origin is off-screen or too near an edge
   // to draw the whole triad. That fallback is not a nicety — an icon pinned to an origin you have
   // panned away from is an icon you cannot see, and the frame matters most exactly then. AutoCAD
   // does the same.
-  //
+      //
   // Purely an indicator either way: no hit region, swallows no clicks.
   if (modelSpace && avail.x > 80.f && avail.y > 80.f) {
     constexpr float kUcsIconArm = 26.f;
@@ -18574,7 +18584,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // sit in the shipped layout (SetupMainDockLayout), and they match the
   // light-from-top-left convention the classic theme's bevels already use, so
   // the two themes never disagree about where the light is.
-  //
+      //
   // Cast onto the IMAGE rect, not the window rect. The window rect starts above
   // the dock tab bar and its content is inset by WindowPadding, so a shadow
   // aimed at it lands entirely on the tab strip and the padding band — drawn,
