@@ -25980,7 +25980,8 @@ bool HandleExtrudeTextInput(const std::string& lineIn, AppCommandState& st, std:
     log.push_back("EXTRUDE — \"" + line + "\" is not a height. Type a non-zero number, or ESC.");
     return true;
   }
-  CommitExtrude(st, h, log);
+  const double signedH = st.extrudeHeightPickValid ? std::copysign(h, st.extrudeHeightPick) : h;
+  CommitExtrude(st, signedH, log);
   return true;
 }
 
