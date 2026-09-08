@@ -4406,6 +4406,10 @@ void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
 /// fillet does. False (and nothing changed) on any refusal, which is already logged by name.
 bool CadApplyFilletToSelectedEdges(AppCommandState& st, double radius,
                                    std::vector<std::string>& log);
+
+/// Re-prompt after a `Ctrl`+click gathered (or failed to gather) a solid edge while FILLET is
+/// running. Says how many edges are held and that a radius is what finishes the command.
+void CadFilletReportEdgeSelection(AppCommandState& st, std::vector<std::string>& log);
 void CancelPressPullCommand(AppCommandState& st);
 
 /// The prompt for whatever the PRESSPULL command is waiting for — the target, or the distance with
