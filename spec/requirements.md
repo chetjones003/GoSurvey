@@ -7675,14 +7675,20 @@ capability that does not exist. They are recorded here rather than quietly dropp
   gap, not specific to 3D — Circle/Arc/Ellipse has never been a valid TRIM target even in the
   pre-existing 2D implementation), remain open follow-on scope beyond issue #399's stated
   increments. A true curved (tilted-arc) polyline segment intersection is likewise open follow-on
-  scope. The **drawn trim-line preview** (the rubber band from the first point to the cursor and the
-  dashed removal hint, `CadTrimAppendCutLineRemovedPreview` / `main.cpp`'s `PushRubberSegViewRel`
-  block) is still drawn with the plan-view-only pan/zoom transform, so under an orbited camera the
-  preview line renders in the wrong place even though the committed trim (increment 4) is correct —
-  hooking the preview into the orbited rubber-band renderer is tracked as immediate follow-on, not
-  part of this increment. Plan view (world UCS, no orbit — pick ray is null) is completely
-  unaffected for every entity type and both triggers: `SubmitTrimViewportPick` falls through to the
-  original, byte-identical 2D code path whenever no pick ray is supplied.
+  scope. Plan view (world UCS, no orbit — pick ray is null) is completely unaffected for every
+  entity type and both triggers: `SubmitTrimViewportPick` falls through to the original,
+  byte-identical 2D code path whenever no pick ray is supplied.
+
+  **Increment 4 preview:** the drawn trim-line preview also follows the camera in an orbited model
+  view. The rubber band from the first drawn point to the cursor (`main.cpp`'s
+  `PushRubberSegViewRel` block) carries both ends' real elevation — the first point keeps the Z it
+  was clicked at (`AppCommandState::trimCutInfP1z`), the far end takes the committed cursor/snap
+  elevation, and the ORTHO lock runs through the UCS-aware `ApplyOrthoConstrainFromAnchor`. The
+  dashed removal hint uses `CadTrimAppendCutLineRemovedPreview3D`, which resolves the same 3D solve
+  the commit does (`Solve3DDrawnLineTrim`, shared by `Try3DDrawnLineTrim` and the preview) and emits
+  the removed portion as a true 3D segment. Plan view / paper space keep the byte-identical 2D
+  `CadTrimAppendCutLineRemovedPreview` — issue #166's per-frame perf tuning lives there and is
+  untouched.
 - Acceptance:
   - in an orbited view, clicking the segment of a Line between two crossing coplanar 3D Line edges
     trims exactly that segment, at the true 3D crossing point;
@@ -7707,27 +7713,34 @@ capability that does not exist. They are recorded here rather than quietly dropp
     drawn points keep the committed cursor/snap elevation, the target and crossing are found in true
     3D, and the correct portion is removed — geometry stays on its original plane; the same drawn
     trim in plan view / world UCS is bit-for-bit unchanged (regression guard);
+  - (increment 4) the drawn trim-line preview in an orbited view — both the rubber band and the
+    dashed removal hint — is drawn at the geometry's real elevation, not the world datum, and the
+    hint marks the same portion the commit will remove; plan view / paper space keep the 2D preview
+    unchanged;
   - plan view / world UCS TRIM (no pick ray) is bit-for-bit unchanged for every entity type and both
     triggers (classic pick and drawn line), including Polyline cutting edges and targets (regression
     guard).
 - Owner-layer: Commands (`CadCommands.cpp`: `SegSegClosest3D`, `CutterCurvePlaneAndConic`,
   `FindNearestPolylineSegment3D`, `Collect3DTrimCrossings`, `Apply3DTrimCut`, `Try3DLineTrim`,
-  `Try3DDrawnLineTrim`, `SubmitTrimViewportPick`'s `pickRay` parameter) / UI (`CadUi.cpp`'s
-  `TrimPick` route, passing the click's already-computed `pickRayPtr`).
+  `Solve3DDrawnLineTrim`, `Try3DDrawnLineTrim`, `CadTrimAppendCutLineRemovedPreview3D`,
+  `SubmitTrimViewportPick`'s `pickRay` parameter) / UI (`CadUi.cpp`'s `TrimPick` route passing
+  `pickRayPtr`; `main.cpp`'s trim cutting-line preview block).
 - Status: **accepted (2026-09-07; increment 4 added 2026-09-08)** — four increments delivered:
   increment 1 (Line-vs-Line), 2 (Circle/Arc/Ellipse cutting edges), 3 (Polyline as both target and
   cutting edge), 4 (the default TRIMSTATE 0 drawn-line trim, not just the classic pick). Issue
-  #399's own four draft acceptance criteria are now met for both TRIM triggers, with the 2D-parity
-  gaps above (Circle/Arc/Ellipse as a TRIM target; true curved-polyline-segment intersection) and
-  the orbited drawn-trim-line PREVIEW named as explicit follow-on scope rather than silently left
-  unstated.
+  #399's own four draft acceptance criteria are now met for both TRIM triggers (commit AND preview),
+  with the 2D-parity gaps above (Circle/Arc/Ellipse as a TRIM target; true curved-polyline-segment
+  intersection) named as explicit follow-on scope rather than silently left unstated.
 - Revisions: 2026-09-08 — increment 4 added (D-2026-09-08-a): increments 1-3 covered only the
   classic "click the piece to remove" flow (TRIMSTATE 1); the default TRIMSTATE 0 drawn-line trim
   was still flat world-XY and committed the drawn line onto the ground plane under an orbited camera
   / Front-style UCS (user-reported against issue #399's own screenshot). Same 3D rules and entity
   matrix as increments 1-3, moved onto the drawn-line trigger; the increment-1-3 crossing loop was
   extracted into the shared `Collect3DTrimCrossings` / `Apply3DTrimCut` so there is one copy, not
-  two. The orbited drawn-trim-line preview stays flat and is tracked as immediate follow-on.
+  two. 2026-09-08 (same day, follow-on commit) — the increment-4 drawn-trim-line PREVIEW made
+  camera-aware too (user asked for it directly rather than leaving it as tracked follow-on): rubber
+  band carries both ends' real Z, dashed hint via `CadTrimAppendCutLineRemovedPreview3D` on the
+  shared `Solve3DDrawnLineTrim`; plan view / paper keep the 2D preview and issue #166's perf tuning.
   2026-09-07 — proposed and accepted same day (`/implement-issue 399`); SPEC GAP on the
   skew-tolerance rule resolved with the user before implementation (D-2026-09-07-b). Same day,
   increment 2 delivered: extended cutting edges to Circle/Arc/Ellipse via the existing `curveisect`

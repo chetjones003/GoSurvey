@@ -24607,27 +24607,45 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
   return true;
 }
 
-/// issue #399 increment 4: smart TRIM (TRIMSTATE 0 — two clicks draw a line across the drawing) in
-/// true 3D. The pre-existing path (\ref ExecuteDrawnSegmentTrimOnce) is flat world-XY throughout: it
-/// drops the Z of both drawn points and of every candidate edge, so under an orbited camera or a
-/// non-world UCS it picks the wrong target and trims to a bogus XY-projected crossing (issue #399's
-/// screenshot — the drawn stroke lands on the ground plane, far from where the cursor and geometry
-/// sit). When the drawn points carry a real elevation (a valid pick ray), this resolves the whole
-/// operation the same way the classic "click the piece to remove" path's \ref Try3DLineTrim does:
-/// the target is the Line or straight polyline chord whose true 3D closest approach to the drawn
-/// segment \p f0 -> \p f1 is smallest (and within the same match tolerance the 2D path uses),
-/// crossings are found in 3D (\ref Collect3DTrimCrossings against the whole drawing), and the
-/// removed portion is the one containing the drawn line's midpoint — the 3D form of the 2D fence
-/// rule. Entity coverage matches increments 1-3 exactly: Line / straight-polyline-chord target;
-/// Line, coplanar Circle/Arc/Ellipse, or polyline-chord cutters. Plan view keeps the byte-identical
-/// 2D path — \ref SubmitTrimViewportPick only routes here when a valid pick ray is supplied.
-static void Try3DDrawnLineTrim(AppCommandState& st, const ray3d::Vec3& f0, const ray3d::Vec3& f1,
-                               float tolWorld, std::vector<std::string>& log) {
+/// issue #399 increment 4: the resolved outcome of a smart (drawn-line) TRIM in true 3D — shared by
+/// the commit (\ref Try3DDrawnLineTrim) and the orbited-view preview
+/// (\ref CadTrimAppendCutLineRemovedPreview3D) so both read the same target and cut point.
+struct DrawnLineTrimSolution {
+  SelectedEntity hit{};
+  bool targetIsPoly = false;
+  size_t tk = 0;          ///< userLinesFlat offset (Line target); unused for a polyline target
+  int targetVi = -1;      ///< picked chord's near vertex (polyline target)
+  ray3d::Vec3 ta{}, tb{}; ///< the target segment
+  ray3d::Vec3 cut{};      ///< the 3D crossing the trim shortens to
+  bool trimA = false;     ///< true = move the ta end, false = move the tb end
+};
+
+/// issue #399 increment 4: solve a smart TRIM (TRIMSTATE 0 — two clicks draw a line across the
+/// drawing) in true 3D. The pre-existing path (\ref ExecuteDrawnSegmentTrimOnce) is flat world-XY
+/// throughout: it drops the Z of both drawn points and of every candidate edge, so under an orbited
+/// camera or a non-world UCS it picks the wrong target and trims to a bogus XY-projected crossing
+/// (issue #399's screenshot — the drawn stroke lands on the ground plane, far from the cursor and
+/// geometry). Given the drawn segment \p f0 -> \p f1 with real elevation, this resolves the operation
+/// the same way the classic "click the piece to remove" path's \ref Try3DLineTrim does: the target
+/// is the Line or straight polyline chord whose true 3D closest approach to the drawn segment is
+/// smallest (within the same match tolerance the 2D path uses), crossings are found in 3D
+/// (\ref Collect3DTrimCrossings against the whole drawing), and the removed portion is the one
+/// containing the drawn line's midpoint — the 3D form of the 2D fence rule. Entity coverage matches
+/// increments 1-3 exactly: Line / straight-polyline-chord target; Line, coplanar Circle/Arc/Ellipse,
+/// or polyline-chord cutters. \p log (optional — null for the preview, which must not push chat
+/// lines) receives the same refusal messages the 2D path emits. Returns false with nothing written
+/// to \p out when there is no trim to make.
+static bool Solve3DDrawnLineTrim(const AppCommandState& st, const ray3d::Vec3& f0, const ray3d::Vec3& f1,
+                                 float tolWorld, DrawnLineTrimSolution* out, std::vector<std::string>* log) {
+  auto note = [&](const char* m) {
+    if (log)
+      log->push_back(m);
+  };
   const ray3d::Vec3 fdir = ray3d::Sub(f1, f0);
   const double fLen2 = ray3d::Dot(fdir, fdir);
   if (fLen2 < 1e-18) {
-    log.push_back("TRIM — line too short.");
-    return;
+    note("TRIM — line too short.");
+    return false;
   }
 
   double epsGeom = 1e-5;
@@ -24689,14 +24707,14 @@ static void Try3DDrawnLineTrim(AppCommandState& st, const ray3d::Vec3& f0, const
       tryEdge(v1 - 1);
   }
   if (!haveTarget) {
-    log.push_back("TRIM — no segment close enough to your line (draw along the edge to shorten).");
-    return;
+    note("TRIM — no segment close enough to your line (draw along the edge to shorten).");
+    return false;
   }
 
   const double targetLen = ray3d::Length(ray3d::Sub(tb, ta));
   if (targetLen < 1e-9) {
-    log.push_back("TRIM — degenerate segment.");
-    return;
+    note("TRIM — degenerate segment.");
+    return false;
   }
   const double epsT = std::clamp(epsGeom / targetLen, 1e-9, 0.05);
 
@@ -24720,8 +24738,8 @@ static void Try3DDrawnLineTrim(AppCommandState& st, const ray3d::Vec3& f0, const
   std::vector<double> ts;
   Collect3DTrimCrossings(st, cutters, ta, tb, targetIsPoly, targetIndex, targetVi, epsGeom, epsT, &ts);
   if (ts.empty()) {
-    log.push_back("TRIM — nothing crosses that segment.");
-    return;
+    note("TRIM — nothing crosses that segment.");
+    return false;
   }
 
   // Which crossing, and which side: the drawn line picks the crossing nearest to it (3D
@@ -24751,12 +24769,49 @@ static void Try3DDrawnLineTrim(AppCommandState& st, const ray3d::Vec3& f0, const
     }
   }
 
-  const ray3d::Vec3 cut = ray3d::Add(ta, ray3d::Scale(tdir, tNear));
-  SelectedEntity hit{};
-  hit.type = targetIsPoly ? SelectedEntity::Type::Polyline : SelectedEntity::Type::LineSeg;
-  hit.index = targetIndex;
-  const size_t tk = targetIsPoly ? 0 : static_cast<size_t>(targetIndex) * 6;
-  Apply3DTrimCut(st, hit, targetIsPoly, tk, targetVi, cut, /*trimA=*/u < tNear, log);
+  out->hit.type = targetIsPoly ? SelectedEntity::Type::Polyline : SelectedEntity::Type::LineSeg;
+  out->hit.index = targetIndex;
+  out->targetIsPoly = targetIsPoly;
+  out->tk = targetIsPoly ? 0 : static_cast<size_t>(targetIndex) * 6;
+  out->targetVi = targetVi;
+  out->ta = ta;
+  out->tb = tb;
+  out->cut = ray3d::Add(ta, ray3d::Scale(tdir, tNear));
+  out->trimA = u < tNear;
+  return true;
+}
+
+/// issue #399 increment 4: commit a smart (drawn-line) TRIM resolved in true 3D. Plan view keeps the
+/// byte-identical 2D path — \ref SubmitTrimViewportPick only routes here when a valid pick ray is
+/// supplied.
+static void Try3DDrawnLineTrim(AppCommandState& st, const ray3d::Vec3& f0, const ray3d::Vec3& f1,
+                               float tolWorld, std::vector<std::string>& log) {
+  DrawnLineTrimSolution s;
+  if (!Solve3DDrawnLineTrim(st, f0, f1, tolWorld, &s, &log))
+    return;
+  Apply3DTrimCut(st, s.hit, s.targetIsPoly, s.tk, s.targetVi, s.cut, s.trimA, log);
+}
+
+void CadTrimAppendCutLineRemovedPreview3D(const AppCommandState& st, const ray3d::Vec3& f0, const ray3d::Vec3& f1,
+                                          std::vector<float>* previewLinesOut) {
+  if (!previewLinesOut)
+    return;
+  // Same pixel-aperture tolerance the 2D sibling derives internally (Solve3DDrawnLineTrim scales it
+  // by 4 and floors it against the drawing extent, matching ExecuteDrawnSegmentTrimOnce).
+  const float tolWorld = CadSnap::WorldToleranceFromPixels(
+      st.viewportLastSurveyLayoutHeightPx, st.viewportLastSurveyLayoutOrthoHalfH, st.objectSnapAperturePx);
+  DrawnLineTrimSolution s;
+  if (!Solve3DDrawnLineTrim(st, f0, f1, tolWorld, &s, nullptr))
+    return;
+  // The portion the commit would remove: from the moving end to the cut point.
+  const ray3d::Vec3 a = s.trimA ? s.ta : s.cut;
+  const ray3d::Vec3 b = s.trimA ? s.cut : s.tb;
+  previewLinesOut->push_back(static_cast<float>(a.x));
+  previewLinesOut->push_back(static_cast<float>(a.y));
+  previewLinesOut->push_back(static_cast<float>(a.z));
+  previewLinesOut->push_back(static_cast<float>(b.x));
+  previewLinesOut->push_back(static_cast<float>(b.y));
+  previewLinesOut->push_back(static_cast<float>(b.z));
 }
 
 bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld,

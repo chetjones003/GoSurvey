@@ -151,6 +151,45 @@ TEST_CASE("3D drawn-line TRIM cuts a polyline target segment, other vertices unt
   CHECK(st.userPolylineVerts[8] == Approx(100.f));  // untouched
 }
 
+TEST_CASE("3D drawn-line TRIM preview emits the removed portion in true 3D", "[trim][issue399]") {
+  AppCommandState st;
+  // Same X-Z-plane layout as the first case; target (0,0,0)-(100,0,0), cutter crossing at x=50.
+  st.userLinesFlat = {
+      0.f,  0.f, 0.f,   100.f, 0.f, 0.f,
+      50.f, 0.f, -20.f, 50.f,  0.f, 20.f,
+  };
+
+  std::vector<float> preview;
+  CadTrimAppendCutLineRemovedPreview3D(st, ray3d::Vec3{30.0, 0.0, -5.0}, ray3d::Vec3{30.0, 0.0, 5.0}, &preview);
+
+  // One XYZ segment: from the moving end (0,0,0) to the cut point (50,0,0) — on the plane, not the
+  // datum (z stays 0 here, but every coordinate is a real 3D world point, not an XY projection).
+  REQUIRE(preview.size() == 6);
+  CHECK(preview[0] == Approx(0.f));
+  CHECK(preview[1] == Approx(0.f));
+  CHECK(preview[2] == Approx(0.f));
+  CHECK(preview[3] == Approx(50.f));
+  CHECK(preview[4] == Approx(0.f));
+  CHECK(preview[5] == Approx(0.f));
+}
+
+TEST_CASE("3D drawn-line TRIM preview follows an elevated target's Z", "[trim][issue399]") {
+  AppCommandState st;
+  // Target sits at z=40 (drawn in a Front UCS, well off the datum); cutter crosses it at x=50.
+  st.userLinesFlat = {
+      0.f,  0.f, 40.f,  100.f, 0.f, 40.f,
+      50.f, 0.f, 20.f,  50.f,  0.f, 60.f,
+  };
+
+  std::vector<float> preview;
+  CadTrimAppendCutLineRemovedPreview3D(st, ray3d::Vec3{30.0, 0.0, 35.0}, ray3d::Vec3{30.0, 0.0, 45.0}, &preview);
+
+  REQUIRE(preview.size() == 6);
+  CHECK(preview[2] == Approx(40.f));  // the hint rides the target's elevation, not z=0
+  CHECK(preview[5] == Approx(40.f));
+  CHECK(preview[3] == Approx(50.f));
+}
+
 TEST_CASE("Plan-view drawn-line TRIM is unchanged when no pick ray is supplied (regression guard)",
           "[trim][issue399]") {
   AppCommandState st;

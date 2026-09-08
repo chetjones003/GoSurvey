@@ -28,28 +28,32 @@ IN:
   pick-ray path.
 - `Collect3DTrimCrossings` / `Apply3DTrimCut` (new static helpers) — the increment-1-3 crossing loop
   and apply step, extracted from `Try3DLineTrim` so both TRIM paths share one copy.
-- `Try3DDrawnLineTrim` (new) — target chosen by true 3D closest approach to the drawn segment
-  (`SegSegClosest3D`, same match tolerance `ExecuteDrawnSegmentTrimOnce` uses); crossings via
+- `Solve3DDrawnLineTrim` (new static) — target chosen by true 3D closest approach to the drawn
+  segment (`SegSegClosest3D`, same match tolerance `ExecuteDrawnSegmentTrimOnce` uses); crossings via
   `Collect3DTrimCrossings` against the whole drawing; removed side = the one containing the drawn
-  line's midpoint.
+  line's midpoint. Shared by the commit and the preview.
+- `Try3DDrawnLineTrim` (new) — `Solve3DDrawnLineTrim` + `Apply3DTrimCut`.
 - `SubmitTrimViewportPick` `CuttingLine_WaitP1` / `WaitP2`: capture Z, route to `Try3DDrawnLineTrim`
   when a valid pick ray is supplied; ORTHO/POLAR on point 2 via `ApplyOrthoConstrainFromAnchor`
   (UCS-aware) on that path. Flat path byte-for-byte unchanged.
+- PREVIEW (camera-aware, follow-on commit same day): `main.cpp`'s trim cutting-line block passes both
+  rubber-band ends' real Z (`PushRubberSegViewRel` z args) with UCS-aware ORTHO; the dashed removal
+  hint routes to `CadTrimAppendCutLineRemovedPreview3D` (new, on `Solve3DDrawnLineTrim`) in an
+  orbited model view. Plan view / paper keep `CadTrimAppendCutLineRemovedPreview` (issue #166 perf).
 
 OUT (explicit follow-on, not this task):
-- The drawn-trim-line PREVIEW (rubber band + dashed hint, `CadTrimAppendCutLineRemovedPreview` /
-  `main.cpp` `PushRubberSegViewRel` block) under an orbited camera — still plan-view-only transform;
-  needs the orbited rubber-band renderer.
 - Circle/Arc/Ellipse as a trim TARGET (pre-existing 2D-parity gap).
 - True curved (tilted-arc) polyline-segment intersection (REQ-325 territory).
 - Skew line/polyline-vs-curve closest-approach solve.
 
 ## 4. Files
 
-- `src/commands/CadCommands.hpp`: two float fields.
+- `src/commands/CadCommands.hpp`: two float fields; `CadTrimAppendCutLineRemovedPreview3D` decl.
 - `src/commands/CadCommands.cpp`: `Collect3DTrimCrossings`, `Apply3DTrimCut` (extracted),
-  `Try3DLineTrim` (rewired to the helpers — behaviour identical), `Try3DDrawnLineTrim` (new),
+  `Try3DLineTrim` (rewired to the helpers — behaviour identical), `DrawnLineTrimSolution` +
+  `Solve3DDrawnLineTrim` + `Try3DDrawnLineTrim` + `CadTrimAppendCutLineRemovedPreview3D` (new),
   `SubmitTrimViewportPick` cutting-line phases.
+- `src/app/main.cpp`: trim cutting-line preview block — real-Z rubber band, 3D dashed hint in orbit.
 - `tests/Trim3DDrawnLineTests.cpp` (new), `CMakeLists.txt` registration.
 
 ## 5. Regression guard
@@ -63,11 +67,12 @@ OUT (explicit follow-on, not this task):
 
 `tests/Trim3DDrawnLineTests.cpp`: coplanar X-Z-plane crossing; XY-projection-only crossing refused;
 midpoint picks the removed side; coplanar circle cutter; polyline target segment (siblings
-untouched); plan-view regression (no pick ray).
+untouched); preview emits the removed portion in 3D; preview rides an elevated target's Z;
+plan-view regression (no pick ray).
 
 ## 7. Verification
 
 - `build-project`: PASS (release).
-- `testing`: PASS — `GoSurveySnapTests` 1716 assertions / 168 cases; full `dev/test` ctest 0.
+- `testing`: PASS — `GoSurveySnapTests` 1727 assertions / 170 cases; full `dev/test` ctest 0.
 - `architecture-review`: no layer change — Commands-layer helpers + one new `AppCommandState` field,
   same shape as increments 1-3.

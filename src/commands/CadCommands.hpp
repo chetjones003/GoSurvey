@@ -5395,6 +5395,12 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
 void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1x, float fenceP1y, float fenceP2x,
                                         float fenceP2y, float pickPreviewX, float pickPreviewY,
                                         std::vector<float>* previewLinesOut);
+/// issue #399 increment 4: the orbited-view / non-world-UCS counterpart. Given the drawn trim
+/// segment in true 3D (\p f0 -> \p f1, real elevations), appends the portion the commit would remove
+/// as one XYZ line segment — resolved by the same 3D solve the commit uses (\ref Try3DDrawnLineTrim),
+/// so the dashed hint lands on the geometry, not the datum. No-op when there is no trim to make.
+void CadTrimAppendCutLineRemovedPreview3D(const AppCommandState& st, const ray3d::Vec3& f0, const ray3d::Vec3& f1,
+                                          std::vector<float>* previewLinesOut);
 /// Closest CAD entity within tolerance (later draw order wins on tie). False if none.
 /// \param outDistSq Optional: pass null when only the entity matters, not how near the pick was.
 /// \param pickRay When non-null AND valid, entities are measured against this world ray in 3D
