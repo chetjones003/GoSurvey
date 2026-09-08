@@ -1,0 +1,140 @@
+# REQ-323 increment 1, command half (D-2026-09-05-c, ADR-046 amendment (j), GitHub issue #148
+# acceptance 5 and 6) — FILLET on a solid EDGE.
+#
+# Paired with the REQ-318 sub-object selection exactly as PRESSPULL is: Ctrl+click names the edge,
+# FILLET rounds it. The same verb the 2D fillet uses — the two cannot be confused, because this path
+# is taken ONLY when the sub-object selection holds solid edges and nothing else, which the 2D flow
+# has never been able to reach. The last block here asserts that: with nothing selected, FILLET is
+# still the 2D command it always was.
+#
+# The numbers are the closed forms REQ-323 states, and the AREA among them is the one the kernel's
+# own unit test corrected: an end face loses `r^2 (1 - pi/4)`, the sliver between the arc and the old
+# square corner, NOT the quarter-disc inside the arc. Volume 1520 + 20pi, area 792 + 22pi.
+
+# --- One edge of a box -----------------------------------------------------------------------------
+# x in [-10,10], y in [-5,5], z in [0,8]. The top-back edge runs along X at y = 5, z = 8.
+
+NEW
+# Orbited, and this is not cosmetic: in PLAN view a ray aimed at a top edge also passes through
+# the bottom edge directly under it, and which one the pick returns is then a depth-order detail
+# rather than something the transcript states. The first draft of this file picked one top edge and
+# one BOTTOM edge without saying so, and the shared-corner case it was meant to assert quietly
+# became two independent fillets.
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# Ctrl+click the EDGE. Explicit tolerances so the pick is the edge and not the face beside it — the
+# same reason req318 and req319 state theirs.
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+
+CMD FILLET 2
+EXPECT SOLIDS 1
+# volume 1520 + 20pi, area 792 + 22pi, and the topology delta of ADR-046 amendment (j):
+# V+2, E+3, F+1, so 8/12/6 becomes 10/15/7.
+EXPECT SOLIDPROPS 0 1582.8318530718 861.1150383794 10 15 7
+EXPECT LOG "rounded at radius"
+
+# The selection is CLEARED, and that is the difference from PRESSPULL rather than an oversight.
+# Push/pull preserves the topology, so it re-points its reference at the replaced solid. A fillet
+# does not: the selected edge is gone and every index after it has shifted, so a kept reference would
+# name whatever edge inherited the number.
+EXPECT SUBOBJECTS 0
+
+# --- One Ctrl+Z, one step -------------------------------------------------------------------------
+
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- Refused, with the solid untouched (issue #148 acceptance 6) -----------------------------------
+# Every fillet refusal is a PRE-check, so "untouched" is true because nothing was built rather than
+# because something was rolled back.
+
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+# 8 is the exact height of the shorter adjacent face. At the limit the face does not thin, it
+# vanishes — so equality is refused, not just anything above it.
+CMD FILLET 8
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CMD FILLET 100
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CMD FILLET 0
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CMD FILLET banana
+EXPECT LOG "is not a number"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# The selection survives every refusal: nothing happened, so there is nothing to re-pick.
+EXPECT SUBOBJECTEDGES 1
+
+# --- A shared corner is refused BY NAME (issue #148 acceptance 5, still half open) ------------------
+# Two fillets meeting at a vertex leave a curved triangular gap that needs a spherical patch trimmed
+# against both. Until that exists, "on edge chains" is not delivered, and this asserts that the
+# refusal says so rather than reporting a geometric failure.
+
+# From a clean drawing: a plain sub-object click ACCUMULATES (SHIFT is how one is removed, not how
+# one is added), so the selection from the block above would otherwise still be here.
+NEW
+# Orbited, and this is not cosmetic: in PLAN view a ray aimed at a top edge also passes through
+# the bottom edge directly under it, and which one the pick returns is then a depth-order detail
+# rather than something the transcript states. The first draft of this file picked one top edge and
+# one BOTTOM edge without saying so, and the shared-corner case it was meant to assert quietly
+# became two independent fillets.
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT -10 0 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 2
+CMD FILLET 2
+EXPECT LOG "share a corner"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- Two edges that share NOTHING are one operation --------------------------------------------------
+# The opposite top edges. Twice the prism comes off, and the topology delta applies twice.
+
+NEW
+# Orbited, and this is not cosmetic: in PLAN view a ray aimed at a top edge also passes through
+# the bottom edge directly under it, and which one the pick returns is then a depth-order detail
+# rather than something the transcript states. The first draft of this file picked one top edge and
+# one BOTTOM edge without saying so, and the shared-corner case it was meant to assert quietly
+# became two independent fillets.
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+SUBOBJECT 0 -5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 2
+CMD FILLET 2
+EXPECT SOLIDPROPS 0 1565.6637061436 842.2300767580 12 18 8
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- A filleted solid survives a .gs round-trip ------------------------------------------------------
+
+NEW
+# Orbited, and this is not cosmetic: in PLAN view a ray aimed at a top edge also passes through
+# the bottom edge directly under it, and which one the pick returns is then a depth-order detail
+# rather than something the transcript states. The first draft of this file picked one top edge and
+# one BOTTOM edge without saying so, and the shared-corner case it was meant to assert quietly
+# became two independent fillets.
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+CMD FILLET 2
+SAVEAS %OUT%/fillet-solid.gs
+NEW
+EXPECT SOLIDS 0
+OPEN %OUT%/fillet-solid.gs
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1582.8318530718 861.1150383794 10 15 7
+
+# --- With nothing selected, FILLET is still the 2D command it always was ------------------------------
+# The whole safety of reusing the verb rests on this.
+
+NEW
+EXPECT SUBOBJECTS 0
+CMD FILLET
+EXPECT LOG "select first object"
+
+CHECK ALL
