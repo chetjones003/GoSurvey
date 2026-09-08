@@ -2068,6 +2068,56 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-08-12 — initial.
 
+### REQ-330 — Quadrant object snap for circles and arcs (GitHub issue #401)
+- Purpose: give users the AutoCAD `QUA` snap — the four "compass" points of a circle or arc — which
+  GoSurvey's object-snap set has never had (recorded as a gap in REQ-312's 2026-09-01 revision).
+- Priority: should
+- Type: functional
+- Statement: A new object snap, **Quadrant**, joins the existing set. It offers the four points on a
+  circle (or the subset on an arc) that lie one radius from the centre along the **active UCS X and
+  Y axes** — in a TOP view with the world UCS these are the East, West, North and South points,
+  matching AutoCAD. Rotate the UCS and the four points rotate with it.
+
+  The circle or arc need **not** lie in the UCS plane. The quadrant directions are resolved by
+  projecting the active UCS X and Y axes onto the curve's own plane (the same plane the Center snap
+  resolves against for a tilted curve — REQ-312 / `CurvePlane`), normalising, and stepping one
+  radius from the centre along each of `±X`, `±Y`. This keeps all four points exactly on the curve
+  for any curve orientation and any UCS. **Degenerate case:** when the curve's plane is
+  perpendicular to the UCS plane the projected axes collapse onto a single line (parallel or
+  antiparallel — only two distinct points); the snap then falls back to the curve plane's own local
+  X/Y axes, so four valid, evenly spaced, on-curve points are always returned (they will not align
+  with the UCS compass in that case — documented, per D-2026-09-08-d).
+
+  For an **arc**, only the quadrant points whose angle falls within the arc's sweep are offered.
+
+  Quadrant is a per-type toggle alongside Endpoint / Midpoint / Center, defaults **off** (matching
+  AutoCAD's OSMODE — Quadrant is not one of the default running object snaps), persists in
+  user preferences and `.gs`, is honoured by the F3 master OSNAP gate, and appears in the
+  Shift+right-click "snap once" override menu (issue #103). Its glyph is the standard 2D Object Snap
+  green diamond (AutoCAD's quadrant marker). It is ranked in the same priority tier as Center.
+
+  Out of scope, deferred to their own issues: ellipses, curved polyline segments, and a separate
+  NEAREST snap.
+- Acceptance:
+  - TOP view, world UCS: Quadrant snaps to the N/E/S/W points of a circle, within REQ-101 of the
+    hand-computed `(cx±r, cy)` / `(cx, cy±r)`.
+  - Rotated UCS (still plan view): the four quadrant points rotate to follow the UCS X/Y axes.
+  - Orbited 3D view, circle not in the UCS plane: all four reported points lie exactly on the
+    circle (distance from centre within REQ-101 of the radius) and on the circle's plane.
+  - Circle plane perpendicular to the UCS plane: still returns four valid, distinct, on-circle
+    points spaced 90° apart in the circle's own frame (the documented fallback).
+  - Arc: a quadrant point outside the sweep is not offered; one inside the sweep is.
+  - Respects the F3 master OSNAP toggle and the per-type Quadrant toggle (which defaults off);
+    reachable via Shift+right-click "snap once" even when the running toggle is off. Enabling the
+    toggle does not change any snap result where the cursor is not near a circle/arc rim.
+  - Plan-view / world-UCS behaviour matches the AutoCAD quadrant baseline.
+  - Happy-path and edge-case tests: rotated UCS, orbited camera, tilted circle, perpendicular
+    circle, arc partial sweep.
+- Owner-layer: viewport (snap candidate generation), UI (toggle, menu, glyph label), render (glyph),
+  IO (`.gs` + user-prefs persistence)
+- Status: accepted
+- Revisions: 2026-09-08 — proposed and accepted (D-2026-09-08-d, GitHub issue #401, TASK-224).
+
 ### REQ-063 — Triangle mesh entity
 - Purpose: hold imported 3D model geometry that GoSurvey does not author
 - Priority: must
@@ -8190,6 +8240,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
 | REQ-001 | IO | `<TEST-001>` | accepted |
+| REQ-330 | Viewport/UI/Render/IO | `CadSnapTests` `[CadSnap][issue401]` (TOP+world N/E/S/W within REQ-101; rotated UCS follows the axes; orbited camera + tilted circle all four on the circle; circle plane ⟂ UCS plane falls back to the curve's local axes with four distinct points; arc offers only in-sweep quadrants; F3 master gate + per-type toggle; Shift+right-click "snap once" override reaches it when the toggle is off) | accepted |
 | REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` / `BENCH SURFACE` / `BENCH MESH` commands on the reference machine (`project.md` §7), MSVC, RTX 5060 — segments 1.38 ms, meshes 1.97 ms, surface 10.28 ms vs 16 ms, 2026-08-15 (TASK-052, TASK-053) | accepted (device pending BUG-013) |
 | REQ-101 | Commands/compute | `headless.regression-req101-origin-at-entry` (a typed easting at 2e6 is stored within tolerance — measured 2000000.10 → origin 2000000 + local 0.10000000149, ~1.5e-9 ft, was 0.025 ft; establishment is one-time; an over-large magnitude is still refused; first resave byte-identical) + `headless.regression-59-circle-infinite-radius` / `-59b` (which double as the upper bound's guard) + `headless.regression-pick-local-coordinates` (picks are local, so picking adds no error of its own). Reference-dataset half still `<regression set>` — pending, see below | **accepted** (typed-storage half verified; reference dataset outstanding) |
 | REQ-010 | UI | manual (FBK import shows raw rows) | implemented |

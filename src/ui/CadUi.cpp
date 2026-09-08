@@ -9873,6 +9873,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
         ImGui::Checkbox("Endpoint", &cmd.objectSnapEndpoint);
         ImGui::Checkbox("Midpoint", &cmd.objectSnapMidpoint);
         ImGui::Checkbox("Center", &cmd.objectSnapCenter);
+        ImGui::Checkbox("Quadrant", &cmd.objectSnapQuadrant);
         ImGui::Checkbox("Perpendicular", &cmd.objectSnapPerpendicular);
         ImGui::Checkbox("Survey point", &cmd.objectSnapSurveyPoint);
         ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);
@@ -12001,6 +12002,8 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Midpoint";
   case CadSnap::Kind::Center:
     return "Center";
+  case CadSnap::Kind::Quadrant:
+    return "Quadrant";
   case CadSnap::Kind::Perpendicular:
     return "Perpendicular";
   case CadSnap::Kind::SurveyCenter:
@@ -18514,6 +18517,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       armOverride(CadSnap::Kind::Midpoint);
     if (ImGui::Selectable("Center"))
       armOverride(CadSnap::Kind::Center);
+    if (ImGui::Selectable("Quadrant"))
+      armOverride(CadSnap::Kind::Quadrant);
     if (CadSnap::CommandHasPerpendicularSnapReference(cmd, true, /*ignoreToggle=*/true) &&
         ImGui::Selectable("Perpendicular"))
       armOverride(CadSnap::Kind::Perpendicular);

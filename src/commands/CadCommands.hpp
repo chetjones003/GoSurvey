@@ -1823,6 +1823,11 @@ struct AppCommandState {
   bool objectSnapEndpoint = true;
   bool objectSnapMidpoint = true;
   bool objectSnapCenter = true;
+  /// Snap to the four "compass" points of a circle / arc — active-UCS X/Y projected onto the
+  /// curve plane (REQ-330). AutoCAD `QUA`. Default OFF, matching AutoCAD's OSMODE (Quadrant is
+  /// not one of the default running object snaps); reachable immediately via the Shift+right-click
+  /// "snap once" override.
+  bool objectSnapQuadrant = false;
   bool objectSnapPerpendicular = true;
   bool objectSnapSurveyPoint = true;
   bool objectSnapGeometricCenter = true;

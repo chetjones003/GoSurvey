@@ -488,6 +488,10 @@ static void DrawSettingsDraftingTab(AppCommandState& cmd) {
   ImGui::Checkbox("Endpoint", &cmd.objectSnapEndpoint);
   ImGui::Checkbox("Midpoint", &cmd.objectSnapMidpoint);
   ImGui::Checkbox("Center (circle / ellipse center)", &cmd.objectSnapCenter);
+  ImGui::Checkbox("Quadrant (circle / arc compass points)", &cmd.objectSnapQuadrant);
+  ItemHelpTooltip("Snaps to the four points of a circle or arc one radius out along the current "
+                  "UCS X and Y axes (North / East / South / West in a plan view). Arc offers only "
+                  "the quadrant points within its sweep.");
   ImGui::Checkbox("Perpendicular (when a reference point applies)", &cmd.objectSnapPerpendicular);
   ImGui::Checkbox("Survey point", &cmd.objectSnapSurveyPoint);
   ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);

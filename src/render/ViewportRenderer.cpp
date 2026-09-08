@@ -609,6 +609,10 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
   case CadSnap::Kind::Center:
     AppendSnapCircle(out, f, mh * 0.85f, snapCircSegs);
     break;
+  case CadSnap::Kind::Quadrant:
+    // AutoCAD's quadrant marker: a plain diamond. 2D Object Snap green (snap.solid == false).
+    AppendSnapDiamondOutline(out, f, mh);
+    break;
   case CadSnap::Kind::SurveyCenter: {
     const float R = mh * 0.62f;
     AppendSnapCircle(out, f, R, snapCircSegs);
