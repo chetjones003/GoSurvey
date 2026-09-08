@@ -4,10 +4,12 @@
 
 #include "CadCommands.hpp"
 #include "SurveyPoints.hpp"
+#include "util/ucs.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -385,6 +387,77 @@ TEST_CASE("LibreDWG imports the full layer table of a real R2018 DWG (issue #160
   for (const EntityAttributes& a : in.userPolylineAttrs)
     if (a.layer == "C-FIRE-PIPE-12IN") ++firePipe12;
   CHECK(firePipe12 > 100);
+}
+
+// GitHub issue #391 / REQ-312 — the DWG ARC writer never set `extrusion`, so a tilted arc
+// (`CadArc::nx/ny/nz` not world +Z) exported flat and silently. It must now write the normal as the
+// ARC's extrusion and the centre in the OCS frame that normal implies, matching how DxfIo.cpp's
+// `ocsPointOf` writes DXF groups 210/220/230. A flat arc must be byte-for-byte unchanged.
+TEST_CASE("DWG export writes a tilted ARC's extrusion and OCS centre (issue #391)",
+          "[dwg][libredwg][req312][issue391]") {
+  ScratchDir dir("tiltedarc");
+  const auto p = (dir.path / "arc.dwg").string();
+
+  AppCommandState st;
+  // A flat arc — extrusion +Z, centre unchanged.
+  CadArc flat{};
+  flat.cx = 5.f; flat.cy = 5.f; flat.z = 0.f; flat.r = 3.f;
+  flat.startRad = 0.f; flat.sweepRad = 1.2f;
+  flat.nx = 0.f; flat.ny = 0.f; flat.nz = 1.f;
+  // A tilted arc — normal pointing world +Y.
+  CadArc tilt{};
+  tilt.cx = 10.f; tilt.cy = 0.f; tilt.z = 4.f; tilt.r = 2.f;
+  tilt.startRad = 0.f; tilt.sweepRad = 1.5f;
+  tilt.nx = 0.f; tilt.ny = 1.f; tilt.nz = 0.f;
+  st.userArcs = {flat, tilt};
+  st.userArcAttrs = {EntityAttributes{}, EntityAttributes{}};
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  // The OCS centre a reader reconstructs for the tilted arc — same frame the writer used.
+  ucs::Ucs frame;
+  REQUIRE(ucs::FromNormal({0.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, &frame));
+  const ray3d::Vec3 tiltOcs = ucs::WorldToUcs(frame, {10.0, 0.0, 4.0});
+
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+
+  const Dwg_Entity_ARC* flatArc = nullptr;
+  const Dwg_Entity_ARC* tiltArc = nullptr;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype != DWG_TYPE_ARC || o->tio.entity == nullptr || o->tio.entity->tio.ARC == nullptr)
+      continue;
+    const Dwg_Entity_ARC* e = o->tio.entity->tio.ARC;
+    if (e->radius == Catch::Approx(3.0).margin(1e-6))
+      flatArc = e;
+    else if (e->radius == Catch::Approx(2.0).margin(1e-6))
+      tiltArc = e;
+  }
+  REQUIRE(flatArc != nullptr);
+  REQUIRE(tiltArc != nullptr);
+
+  // Flat arc: extrusion is the default +Z and the centre is the world centre, unchanged.
+  CHECK(flatArc->extrusion.x == Catch::Approx(0.0).margin(1e-9));
+  CHECK(flatArc->extrusion.y == Catch::Approx(0.0).margin(1e-9));
+  CHECK(flatArc->extrusion.z == Catch::Approx(1.0).margin(1e-9));
+  CHECK(flatArc->center.x == Catch::Approx(5.0).margin(1e-6));
+  CHECK(flatArc->center.y == Catch::Approx(5.0).margin(1e-6));
+  CHECK(flatArc->center.z == Catch::Approx(0.0).margin(1e-6));
+
+  // Tilted arc: extrusion carries the normal, centre is the OCS point.
+  CHECK(tiltArc->extrusion.x == Catch::Approx(0.0).margin(1e-9));
+  CHECK(tiltArc->extrusion.y == Catch::Approx(1.0).margin(1e-9));
+  CHECK(tiltArc->extrusion.z == Catch::Approx(0.0).margin(1e-9));
+  CHECK(tiltArc->center.x == Catch::Approx(tiltOcs.x).margin(1e-6));
+  CHECK(tiltArc->center.y == Catch::Approx(tiltOcs.y).margin(1e-6));
+  CHECK(tiltArc->center.z == Catch::Approx(tiltOcs.z).margin(1e-6));
+  // The OCS centre is genuinely different from the world centre (not a no-op path).
+  CHECK(std::fabs(tiltArc->center.z - 4.0) > 0.5);
+
+  dwg_free(&dwg);
 }
 
 TEST_CASE("Foreign DWG without payload still imports a LINE (REQ-175)", "[dwg][libredwg][req175]") {

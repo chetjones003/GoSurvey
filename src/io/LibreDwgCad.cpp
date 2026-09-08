@@ -722,9 +722,36 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     world(arc.cx, arc.cy, arc.z, &c);
     const double a0 = static_cast<double>(arc.startRad);
     const double a1 = a0 + static_cast<double>(arc.sweepRad);
+    // REQ-312 (GitHub issue #391): a tilted arc's normal is group 210's DWG equivalent — the ARC's
+    // own `extrusion` field. Without it every arc exported flat, silently. When the normal is not
+    // world +Z the centre (group 10) is an OCS coordinate in the Arbitrary Axis frame the normal
+    // defines, exactly as `ocsPointOf` writes it in DxfIo.cpp; `ucs::FromNormal` IS that algorithm
+    // and returns the world axes unchanged for +Z, so a flat arc's centre and extrusion are
+    // byte-identical to before.
+    const bool arcFlat = IsFlatNormal(arc.nx, arc.ny, arc.nz);
+    dwg_point_3d ext{0.0, 0.0, 1.0};
+    if (!arcFlat) {
+      ucs::Ucs frame;
+      if (ucs::FromNormal({0.0, 0.0, 0.0},
+                          {static_cast<double>(arc.nx), static_cast<double>(arc.ny),
+                           static_cast<double>(arc.nz)},
+                          &frame)) {
+        const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+        c.x = ocs.x;
+        c.y = ocs.y;
+        c.z = ocs.z;
+        ext.x = static_cast<double>(arc.nx);
+        ext.y = static_cast<double>(arc.ny);
+        ext.z = static_cast<double>(arc.nz);
+      }
+    }
     Dwg_Entity_ARC* e = dwg_add_ARC(hdr, &c, static_cast<double>(arc.r), a0, a1);
-    if (e != nullptr)
+    if (e != nullptr) {
+      e->extrusion.x = ext.x;
+      e->extrusion.y = ext.y;
+      e->extrusion.z = ext.z;
       apply(e->parent, AttrAt(st.userArcAttrs, i));
+    }
   }
   for (size_t i = 0; i + 1 < st.userPolylineOffsets.size(); ++i) {
     const int a = st.userPolylineOffsets[i];
@@ -745,10 +772,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
     // REQ-316 / ADR-047 (DWG side, REQ-325 / ADR-053 increment 4): per-vertex bulge (group-42
     // equivalent). A TILTED segment is written straight (bulge 0) here rather than flattened wrong
-    // — DWG's LWPOLYLINE has the same one-elevation/one-extrusion ceiling DXF's does, and unlike DXF
-    // this exporter has no existing tilted-ARC write path to split it out onto (a real, separate
-    // gap: `dwg_add_ARC` above takes no normal/extrusion at all), so refusing the curve rather than
-    // silently drawing it flat is the REQ-201 choice until that support exists.
+    // — DWG's LWPOLYLINE has the same one-elevation/one-extrusion ceiling DXF's does. The tilted-ARC
+    // write path the split needs now exists above (GitHub issue #391), but wiring the polyline
+    // split onto it — the DWG mirror of DxfIo.cpp's `emitSyntheticArc` loop — is a separate
+    // follow-up; until it lands, writing the segment straight rather than flattened wrong is the
+    // REQ-201 choice.
     if (lw != nullptr) {
       bool anyBulge = false;
       std::vector<double> bulges(static_cast<size_t>(nv), 0.0);
