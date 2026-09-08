@@ -1767,7 +1767,10 @@ requirements is a planning failure, not a sign of rigor.
   original. The live `TransformPreview` ARRAY ghost was likewise still world-XY / world-Z-rotation
   throughout (increments 1–3 only touched the commit path). Both now resolve picks and rotate in the
   active UCS plane, matching `CommitArrayPolar` / `ArrayCellWorldDelta`. Typed angle entry and the
-  commit loop were already correct.
+  commit loop were already correct. Also fixed: the polar Rotate-items = No path's rigid anchor
+  took its Z from the work-plane elevation (`CadCommitElevation`) not the selection's own, so a
+  selection well above/below the work plane rotated at an inflated radius and the copies flew
+  outward; the anchor Z now comes from the selection's 3D bounds centre (`CadGizmoAnchorWorld`).
   2026-09-07 — Acceptance 11's tilted-UCS refusal superseded by REQ-328 (D-2026-09-07-d):
   the general arbitrary-axis rotation primitive lifts it for Line/Polyline/Circle/Arc/FilledRegion;
   Ellipse/Annotation/Table/BlockRef/FeatureLine keep refusing under a tilted axis, the new, narrower
