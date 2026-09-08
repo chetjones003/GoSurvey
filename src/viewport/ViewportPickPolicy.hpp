@@ -243,6 +243,8 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     case APh::WaitType:
     case APh::Rect_WaitColumns:
     case APh::Rect_WaitRows:
+    case APh::Rect_WaitLevels:
+    case APh::Rect_WaitLevelSpacing:  // typed-number only (GitHub issue #400 inc 2, REQ-305 acc 12)
     case APh::Polar_WaitItemCount:
     case APh::Polar_WaitRotateAnswer:
       return R::Ignore;

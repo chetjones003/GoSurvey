@@ -10393,6 +10393,8 @@ static void ResetArrayDraft(AppCommandState& st) {
   st.arrayType = AppCommandState::ArrayType::Rectangular;
   st.arrayCols = st.arrayRows = 0;
   st.arrayColSpacing = st.arrayRowSpacing = 0.f;
+  st.arrayLevels = 1;
+  st.arrayLevelSpacing = 0.f;
   st.arrayAnchorX = st.arrayAnchorY = st.arrayAnchorZ = 0.f;
   st.arrayCenterX = st.arrayCenterY = st.arrayCenterZ = 0.f;
   st.arrayItemCount = 0;
@@ -10445,10 +10447,14 @@ static void FinishArrayCommand(AppCommandState& st, std::vector<std::string>& lo
 /// converted to a world (dx,dy,dz) via the same anchored frame \c CadSolveCircleThreePoints uses
 /// for its own plane-vs-flat split. Under the World UCS the frame's axes ARE world X/Y/Z, so this
 /// reduces to \p colOffset,\p rowOffset,0 exactly — the REQ-305 acceptance 10 regression guard.
+// levelOffset defaults to 0 (GitHub issue #400 increment 2's "levels" is the UCS-Z local
+// component of the same vector this always computed) so increment 1's two-argument call sites are
+// untouched.
 static void ArrayCellWorldDelta(const AppCommandState& st, float colOffset, float rowOffset,
-                                float* dx, float* dy, float* dz) {
+                                float* dx, float* dy, float* dz, float levelOffset = 0.f) {
   const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, st.arrayAnchorX, st.arrayAnchorY, st.arrayAnchorZ);
-  const ray3d::Vec3 local{static_cast<double>(colOffset), static_cast<double>(rowOffset), 0.0};
+  const ray3d::Vec3 local{static_cast<double>(colOffset), static_cast<double>(rowOffset),
+                          static_cast<double>(levelOffset)};
   const ray3d::Vec3 world = ucs::UcsVectorToWorld(frame, local);
   *dx = static_cast<float>(world.x);
   *dy = static_cast<float>(world.y);
@@ -10461,19 +10467,25 @@ static void ArrayCellWorldDelta(const AppCommandState& st, float colOffset, floa
 static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>& log) {
   const int cols = std::max(st.arrayCols, 1);
   const int rows = std::max(st.arrayRows, 1);
+  const int levels = std::max(st.arrayLevels, 1);  // GitHub issue #400 increment 2
   PushUndoSnapshot(st, "Array-Rectangular");
-  for (int r = 0; r < rows; ++r) {
-    for (int c = 0; c < cols; ++c) {
-      if (r == 0 && c == 0)
-        continue;  // the original selection IS cell (0,0) — REQ-305 acceptance 3
-      float dx = 0.f, dy = 0.f, dz = 0.f;
-      ArrayCellWorldDelta(st, static_cast<float>(c) * st.arrayColSpacing,
-                         static_cast<float>(r) * st.arrayRowSpacing, &dx, &dy, &dz);
-      DuplicateCadSelectionTranslated(st, dx, dy, dz);
+  for (int lv = 0; lv < levels; ++lv) {
+    for (int r = 0; r < rows; ++r) {
+      for (int c = 0; c < cols; ++c) {
+        if (lv == 0 && r == 0 && c == 0)
+          continue;  // the original selection IS cell (0,0,0) — REQ-305 acceptance 3
+        float dx = 0.f, dy = 0.f, dz = 0.f;
+        ArrayCellWorldDelta(st, static_cast<float>(c) * st.arrayColSpacing,
+                           static_cast<float>(r) * st.arrayRowSpacing, &dx, &dy, &dz,
+                           static_cast<float>(lv) * st.arrayLevelSpacing);
+        DuplicateCadSelectionTranslated(st, dx, dy, dz);
+      }
     }
   }
-  FinishArrayCommand(st, log, cols * rows,
-                     (std::to_string(cols) + " x " + std::to_string(rows)).c_str());
+  std::string shape = std::to_string(cols) + " x " + std::to_string(rows);
+  if (levels > 1)
+    shape += " x " + std::to_string(levels);
+  FinishArrayCommand(st, log, cols * rows * levels, shape.c_str());
 }
 
 /// Polar commit: \p arrayRotateItems == true loops the EXISTING \c DuplicateCadSelectionRotated
@@ -10586,6 +10598,37 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       return false;
     }
     st.arrayRowSpacing = v;
+    st.arrayPhase = AP::Rect_WaitLevels;
+    log.push_back("ARRAY Rectangular — number of levels <1 = 2D>:");
+    return true;
+  }
+  if (st.arrayPhase == AP::Rect_WaitLevels) {
+    // GitHub issue #400 increment 2 / REQ-305 acceptance 12: a blank Enter means "1 level" — the
+    // pre-#400 2D grid — so an ordinary 2D rectangular array is not forced through a level-spacing
+    // prompt it will never use. A blank line never reaches HERE, though: ProcessCommandLineSubmit's
+    // own `line.empty()` dispatcher consumes it first (the same convention FEATURELINE/UCS/Solid use)
+    // — this handler only ever sees a non-empty line.
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v >= 1.f) || !std::isfinite(v)) {
+      log.push_back("ARRAY Rectangular — number of levels must be a positive whole number (Enter for 1 = 2D).");
+      return false;
+    }
+    st.arrayLevels = static_cast<int>(v + 0.5f);
+    if (st.arrayLevels <= 1) {
+      CommitArrayRectangular(st, log);
+      return true;
+    }
+    st.arrayPhase = AP::Rect_WaitLevelSpacing;
+    log.push_back("ARRAY Rectangular — level spacing (type a distance):");
+    return true;
+  }
+  if (st.arrayPhase == AP::Rect_WaitLevelSpacing) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
+      log.push_back("ARRAY Rectangular — level spacing must be a finite number (may be negative).");
+      return false;
+    }
+    st.arrayLevelSpacing = v;
     CommitArrayRectangular(st, log);
     return true;
   }
@@ -30836,6 +30879,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           st.arrayAnchorZ = CadCommitElevation(st);  // issue #400: elevation for the UCS work plane
           log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
         }
+      } else if (st.arrayPhase == AP::Rect_WaitLevels) {
+        // GitHub issue #400 increment 2: a bare Enter here is "1 level" — the pre-#400 2D grid —
+        // handled HERE for the same reason FEATURELINE's/UCS's blank-Enter defaults above are: a
+        // blank line never reaches HandleArrayText, this block consumes it first.
+        st.arrayLevels = 1;
+        CommitArrayRectangular(st, log);
       }
     } else if (st.active == K::Align) {
       using AP = AppCommandState::AlignPhase;
