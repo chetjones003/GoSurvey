@@ -14466,7 +14466,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.trimPhase == TP::CuttingLine_WaitP1 || cmd.trimPhase == TP::CuttingLine_WaitP2;
       const float tx = trimCutLinePt ? commitX : rawPickX;
       const float ty = trimCutLinePt ? commitY : rawPickY;
-      SubmitTrimViewportPick(cmd, tx, ty, trimTol, log);
+      SubmitTrimViewportPick(cmd, tx, ty, trimTol, log, pickRayPtr);
       break;
     }
     case ViewportClickRoute::Ignore:

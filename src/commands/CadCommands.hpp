@@ -5367,7 +5367,8 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log);
 void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log);
 /// TRIM — pick cutting edges, Enter, trim clicks; or \p L then two points: draws the segment to trim (nearest edge),
 /// trims once at nearest crossing (fence disambiguates), then TRIM ends.
-bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld, std::vector<std::string>& log);
+bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld, std::vector<std::string>& log,
+                            const ray3d::Ray* pickRay = nullptr);
 /// Preview for TRIM \p L rubber phase; pass the drawn segment midpoint as \p pickPreview (same side rule as commit).
 void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1x, float fenceP1y, float fenceP2x,
                                         float fenceP2y, float pickPreviewX, float pickPreviewY,

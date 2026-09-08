@@ -23760,7 +23760,201 @@ static void ExecuteDrawnSegmentTrimOnce(AppCommandState& st, float p1x, float p1
   BumpCadGpuCache(st);
 }
 
-bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld, std::vector<std::string>& log) {
+/// issue #399 increment 1: closest approach of two finite 3D segments (Real-Time Collision
+/// Detection's ClosestPtSegmentSegment), clamped to [0,1] on each. \p outS is the parameter along
+/// \p p0-\p p1 (the TRIM target), \p outT along \p q0-\p q1 (a cutting edge). Returns the squared
+/// 3D gap between the two closest points — zero for genuinely coplanar/crossing lines, positive for
+/// skew ones.
+static double SegSegClosest3D(const ray3d::Vec3& p0, const ray3d::Vec3& p1, const ray3d::Vec3& q0,
+                              const ray3d::Vec3& q1, double* outS, double* outT) {
+  using namespace ray3d;
+  const Vec3 d1 = Sub(p1, p0);
+  const Vec3 d2 = Sub(q1, q0);
+  const Vec3 r = Sub(p0, q0);
+  const double a = Dot(d1, d1);
+  const double e = Dot(d2, d2);
+  const double f = Dot(d2, r);
+  double s = 0.0, t = 0.0;
+  if (a < 1e-24 && e < 1e-24) {
+    s = 0.0;
+    t = 0.0;
+  } else if (a < 1e-24) {
+    s = 0.0;
+    t = std::clamp(f / e, 0.0, 1.0);
+  } else {
+    const double c = Dot(d1, r);
+    if (e < 1e-24) {
+      t = 0.0;
+      s = std::clamp(-c / a, 0.0, 1.0);
+    } else {
+      const double b = Dot(d1, d2);
+      const double denom = a * e - b * b;
+      s = std::fabs(denom) > 1e-18 ? std::clamp((b * f - c * e) / denom, 0.0, 1.0) : 0.0;
+      t = (b * s + f) / e;
+      if (t < 0.0) {
+        t = 0.0;
+        s = std::clamp(-c / a, 0.0, 1.0);
+      } else if (t > 1.0) {
+        t = 1.0;
+        s = std::clamp((b - c) / a, 0.0, 1.0);
+      }
+    }
+  }
+  const Vec3 cp1 = Add(p0, Scale(d1, s));
+  const Vec3 cp2 = Add(q0, Scale(d2, t));
+  if (outS)
+    *outS = s;
+  if (outT)
+    *outT = t;
+  const Vec3 gap = Sub(cp1, cp2);
+  return Dot(gap, gap);
+}
+
+/// issue #399 increment 1: TRIM's target-pick, cutting-edge collection and pick-side math are all
+/// flat world-XY (\ref TrimSegmentIntersectPickSide, \ref PickClosestTrimTarget) — correct only in
+/// plan view under the world UCS. An orbited camera or a non-world UCS needs the pick resolved
+/// through the camera ray (same seam 3D Object Snap / issue #395 and FILLET / issue #373 use) and
+/// the crossing found in true 3D, not the screen-space projection. Scope is deliberately narrow
+/// (Line target, Line cutting edges only — REQ-399 increment 1); every other combination is refused
+/// by name rather than silently falling through to the wrong flat math. Returns true once the pick
+/// has been fully handled (trimmed or refused with a log message) so the caller must not also run
+/// the 2D path.
+static bool Try3DLineLineTrim(AppCommandState& st, double wx, double wy, float tolWorld,
+                              const ray3d::Ray& pickRay, std::vector<std::string>& log) {
+  auto typeName = [](SelectedEntity::Type t) -> const char* {
+    switch (t) {
+      case SelectedEntity::Type::Circle: return "circle";
+      case SelectedEntity::Type::Arc: return "arc";
+      case SelectedEntity::Type::Ellipse: return "ellipse";
+      case SelectedEntity::Type::Polyline: return "polyline";
+      default: return "object";
+    }
+  };
+
+  SelectedEntity hit{};
+  float hd2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, tolWorld, &hit, &hd2, &pickRay)) {
+    SelectedEntity under{};
+    float ud2 = 0.f;
+    if (PickClosestCadEntity(st, wx, wy, tolWorld, &under, &ud2, &pickRay) &&
+        under.type == SelectedEntity::Type::FeatureLine)
+      log.push_back("TRIM — 1 feature line ignored: trimming one has no defined elevation for the "
+                    "new end.");
+    else
+      log.push_back("TRIM — nothing to trim at pick.");
+    return false;
+  }
+  if (hit.type != SelectedEntity::Type::LineSeg) {
+    log.push_back(std::string("TRIM — 3D ") + typeName(hit.type) +
+                  " targets not yet supported in an orbited view or non-world UCS; refused.");
+    return false;
+  }
+  for (const SelectedEntity& c : st.trimCutters) {
+    if (c.type != SelectedEntity::Type::LineSeg) {
+      log.push_back(std::string("TRIM — 3D ") + typeName(c.type) +
+                    " cutting edges not yet supported in an orbited view or non-world UCS; refused.");
+      return false;
+    }
+  }
+
+  const size_t tk = static_cast<size_t>(hit.index) * 6;
+  if (tk + 5 >= st.userLinesFlat.size()) {
+    log.push_back("TRIM — nothing to trim at pick.");
+    return false;
+  }
+  const ray3d::Vec3 ta{st.userLinesFlat[tk], st.userLinesFlat[tk + 1], st.userLinesFlat[tk + 2]};
+  const ray3d::Vec3 tb{st.userLinesFlat[tk + 3], st.userLinesFlat[tk + 4], st.userLinesFlat[tk + 5]};
+  const double targetLen = ray3d::Length(ray3d::Sub(tb, ta));
+  if (targetLen < 1e-9) {
+    log.push_back("TRIM — degenerate segment.");
+    return false;
+  }
+
+  double epsGeom = 1e-5;
+  double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
+  if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
+    epsGeom = std::max(1e-5, 1e-4 * std::max(mxX - mnX, mxY - mnY));
+  const double epsT = std::clamp(epsGeom / targetLen, 1e-9, 0.05);
+
+  std::vector<double> ts;
+  ray3d::Vec3 bestPoint{};
+  bool haveBestPoint = false;
+  for (const SelectedEntity& c : st.trimCutters) {
+    if (c.type != SelectedEntity::Type::LineSeg || c.index == hit.index)
+      continue;
+    const size_t ck = static_cast<size_t>(c.index) * 6;
+    if (ck + 5 >= st.userLinesFlat.size())
+      continue;
+    const ray3d::Vec3 qa{st.userLinesFlat[ck], st.userLinesFlat[ck + 1], st.userLinesFlat[ck + 2]};
+    const ray3d::Vec3 qb{st.userLinesFlat[ck + 3], st.userLinesFlat[ck + 4], st.userLinesFlat[ck + 5]};
+    double s = 0., t = 0.;
+    const double gap2 = SegSegClosest3D(ta, tb, qa, qb, &s, &t);
+    if (gap2 > epsGeom * epsGeom)
+      continue;  // farther apart than tolerance at closest approach: not an intersection
+    if (s <= epsT || s >= 1.0 - epsT)
+      continue;  // touches only at (or past) an existing endpoint of the target
+    ts.push_back(s);
+    if (!haveBestPoint) {
+      haveBestPoint = true;
+      bestPoint = ray3d::Add(ta, ray3d::Scale(ray3d::Sub(tb, ta), s));
+    }
+  }
+  if (ts.empty()) {
+    log.push_back("TRIM — segment does not cross a cutting edge.");
+    return false;
+  }
+
+  // Pick side: the point on the target line's own infinite extension closest to the pick RAY
+  // (issue #386's own ray-line closest-approach approach), not the flattened 2D cursor position —
+  // the ray may cross the work plane far from where it actually points at an elevated/tilted line.
+  const ray3d::Vec3 lineDir = ray3d::Sub(tb, ta);
+  bool degenerate = false;
+  const ray3d::Vec3 pickOnLine = ray3d::ClosestPointOnLineToRay(pickRay, ta, lineDir, &degenerate);
+  const double lenSq = ray3d::Dot(lineDir, lineDir);
+  double u = degenerate || lenSq < 1e-24
+                ? 0.5
+                : ray3d::Dot(ray3d::Sub(pickOnLine, ta), lineDir) / lenSq;
+  u = std::clamp(u, 0.0, 1.0);
+
+  double tNear = ts.front();
+  double bestAbs = std::fabs(ts.front() - u);
+  for (double t : ts) {
+    const double d = std::fabs(t - u);
+    if (d < bestAbs - 1e-12) {
+      bestAbs = d;
+      tNear = t;
+    }
+  }
+
+  const ray3d::Vec3 cut = ray3d::Add(ta, ray3d::Scale(lineDir, tNear));
+  const bool trimA = u < tNear;
+
+  PushUndoSnapshot(st, "Trim");
+  if (trimA) {
+    st.userLinesFlat[tk] = static_cast<float>(cut.x);
+    st.userLinesFlat[tk + 1] = static_cast<float>(cut.y);
+    st.userLinesFlat[tk + 2] = static_cast<float>(cut.z);
+  } else {
+    st.userLinesFlat[tk + 3] = static_cast<float>(cut.x);
+    st.userLinesFlat[tk + 4] = static_cast<float>(cut.y);
+    st.userLinesFlat[tk + 5] = static_cast<float>(cut.z);
+  }
+  const double newLen = ray3d::Length(ray3d::Sub(
+      ray3d::Vec3{st.userLinesFlat[tk + 3], st.userLinesFlat[tk + 4], st.userLinesFlat[tk + 5]},
+      ray3d::Vec3{st.userLinesFlat[tk], st.userLinesFlat[tk + 1], st.userLinesFlat[tk + 2]}));
+  if (newLen < 1e-6) {
+    st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(tk),
+                           st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(tk + 6));
+    if (static_cast<size_t>(hit.index) < st.userLineAttrs.size())
+      st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(hit.index));
+  }
+  log.push_back("TRIM — segment shortened.");
+  BumpCadGpuCache(st);
+  return true;
+}
+
+bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld,
+                            std::vector<std::string>& log, const ray3d::Ray* pickRay) {
   ClearPendingOneShotObjectSnap(st);
   using K = AppCommandState::Kind;
   using TP = AppCommandState::TrimPhase;
@@ -23804,7 +23998,7 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
   if (st.trimPhase == TP::SelectCuttingEdges) {
     SelectedEntity hit{};
     float d2 = 0.f;
-    if (!PickClosestCadEntity(st, wx, wy, tolWorld, &hit, &d2)) {
+    if (!PickClosestCadEntity(st, wx, wy, tolWorld, &hit, &d2, pickRay)) {
       log.push_back("TRIM — no object at pick.");
       return false;
     }
@@ -23838,6 +24032,12 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
     log.push_back("TRIM — cutting edge added.");
     return true;
   }
+
+  // issue #399 increment 1: an orbited camera resolves through a real pick ray (\ref
+  // Try3DLineLineTrim); plan view / world UCS (pickRay null) falls through to the original,
+  // byte-identical flat-XY path below.
+  if (pickRay && pickRay->valid())
+    return Try3DLineLineTrim(st, wx, wy, tolWorld, *pickRay, log);
 
   TrimTargetEdge tgt{};
   float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, d2 = 0.f;
