@@ -10,12 +10,9 @@
 
 name: codeql
 
+# HOTFIX 2026-09-08: CodeQL disabled — automatic triggers removed, manual-only.
+# Restore the pull_request + schedule triggers below once the underlying issue is resolved.
 on:
-  pull_request:
-    branches: ['**']
-  schedule:
-    # Mondays, 06:00 UTC.
-    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 concurrency:
