@@ -33,6 +33,7 @@ CMD 3
 CMD 20
 CMD 2
 CMD 15
+CMD
 EXPECT LOG "6 total instance(s) (3 x 2)"
 EXPECT LINES 6
 CHECK ALL
@@ -62,6 +63,7 @@ CMD 2
 CMD -5
 CMD 1
 CMD 0
+CMD
 EXPECT LOG "2 total instance(s) (2 x 1)"
 EXPECT LINES 7
 CHECK ALL

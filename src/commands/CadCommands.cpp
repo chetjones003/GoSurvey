@@ -8770,6 +8770,290 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
     BumpCadGpuCache(st);
 }
 
+/// REQ-328: rotate every selected entity about the LINE through \p axisPoint with unit direction
+/// \p axisUnit by \p angleRad, appending the rotated duplicates the same way
+/// \c DuplicateCadSelectionRotated does (never mutating the source). This is the general primitive
+/// that function's world-Z-only math is a special case of — proven by \c Ray3dTests.cpp's own
+/// regression tests against `RotateAroundBase`.
+///
+/// Line/Circle/Arc/Ellipse/Polyline/FilledRegion/FeatureLine rotate fully in 3D: a bare point
+/// (Line/Polyline/FilledRegion/FeatureLine vertex) has no orientation to preserve, so rotating it is
+/// already completely well-defined; Circle/Arc/Ellipse additionally rotate their stored plane NORMAL
+/// (a direction, via \c RotateVectorAboutAxis) so the plane itself tips with the rotation, and an
+/// Arc re-anchors its start point exactly as the Z-only path already does.
+///
+/// Annotation/Table/BlockRef are refused when \p axisUnit is not parallel to world Z: none of the
+/// three stores a plane normal, so tipping one out of world/UCS XY has no representable result with
+/// today's data model (REQ-328 item 2) — the same class of stated boundary REQ-312 drew for why
+/// arcs/circles needed a normal and annotations did not get one. When the axis IS Z-parallel they
+/// rotate with the exact `RotateAroundBase`-equivalent math the 2D path always used.
+static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                                     const ray3d::Vec3& axisUnit, float angleRad,
+                                     std::vector<std::string>& log) {
+  const bool axisIsWorldZParallel = std::fabs(axisUnit.x) < 1e-9 && std::fabs(axisUnit.y) < 1e-9 &&
+                                    std::fabs(axisUnit.z) > 1e-9;
+  const double rad = static_cast<double>(angleRad);
+  const auto rotPt = [&](float x, float y, float z) -> ray3d::Vec3 {
+    return ray3d::RotatePointAboutAxis({x, y, z}, axisPoint, axisUnit, rad);
+  };
+  const auto rotDir = [&](float x, float y, float z) -> ray3d::Vec3 {
+    return ray3d::RotateVectorAboutAxis({x, y, z}, axisUnit, rad);
+  };
+
+  const size_t polyVertsBefore = st.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.featureLineVerts.size();
+  std::vector<float> newLines, newCircles, newCircleNormals;
+  std::vector<EntityAttributes> newLineAttrs, newCircleAttrs;
+  std::vector<CadAnnotation> newAnn;
+  std::vector<EntityAttributes> newAnnAttrs;
+  std::vector<CadTable> newTables;
+  std::vector<EntityAttributes> newTableAttrs;
+  std::vector<CadBlockRef> newBlockRefs;
+  std::vector<EntityAttributes> newBlockRefAttrs;
+  std::vector<CadArc> newArcs;
+  std::vector<EntityAttributes> newArcAttrs;
+  std::vector<CadEllipse> newEll;
+  std::vector<EntityAttributes> newEllAttrs;
+  std::vector<CadFilledRegion> newFills;
+  std::vector<EntityAttributes> newFillAttrs;
+  size_t excludedFlatOnly = 0;  // Annotation/Table/BlockRef refused under a tilted axis
+
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::LineSeg) {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 < st.userLinesFlat.size()) {
+        const ray3d::Vec3 p0 = rotPt(st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 2]);
+        const ray3d::Vec3 p1 = rotPt(st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5]);
+        newLines.push_back(static_cast<float>(p0.x));
+        newLines.push_back(static_cast<float>(p0.y));
+        newLines.push_back(static_cast<float>(p0.z));
+        newLines.push_back(static_cast<float>(p1.x));
+        newLines.push_back(static_cast<float>(p1.y));
+        newLines.push_back(static_cast<float>(p1.z));
+        EntityAttributes a{};
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
+          a = st.userLineAttrs[static_cast<size_t>(e.index)];
+        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
+    } else if (e.type == SelectedEntity::Type::Circle) {
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 < st.userCirclesCxCyZR.size()) {
+        const ray3d::Vec3 c = rotPt(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 2]);
+        newCircles.push_back(static_cast<float>(c.x));
+        newCircles.push_back(static_cast<float>(c.y));
+        newCircles.push_back(static_cast<float>(c.z));
+        newCircles.push_back(st.userCirclesCxCyZR[k + 3]);  // r
+        EntityAttributes a{};
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
+          a = st.userCircleAttrs[static_cast<size_t>(e.index)];
+        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
+        float nnx = 0.f, nny = 0.f, nnz = 1.f;
+        CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nnx, &nny, &nnz);
+        const ray3d::Vec3 n = rotDir(nnx, nny, nnz);
+        PushCircleNormal(newCircleNormals, static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z));
+      }
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userArcs.size()) {
+        CadArc a = st.userArcs[k];
+        const ray3d::Vec3 startWorld = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
+        const ray3d::Vec3 startRot = rotPt(static_cast<float>(startWorld.x), static_cast<float>(startWorld.y),
+                                           static_cast<float>(startWorld.z));
+        const ray3d::Vec3 c = rotPt(a.cx, a.cy, a.z);
+        const ray3d::Vec3 n = rotDir(a.nx, a.ny, a.nz);
+        a.cx = static_cast<float>(c.x);
+        a.cy = static_cast<float>(c.y);
+        a.z = static_cast<float>(c.z);
+        a.nx = static_cast<float>(n.x);
+        a.ny = static_cast<float>(n.y);
+        a.nz = static_cast<float>(n.z);
+        CadReanchorArcStart(&a, startRot);
+        newArcs.push_back(a);
+        EntityAttributes at{};
+        if (k < st.userArcAttrs.size())
+          at = st.userArcAttrs[k];
+        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
+      }
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      // Unlike Circle/Arc (REQ-312), CadEllipse has NO stored plane normal — it is "parallel to XY,
+      // absolute" by construction (CadEntities.hpp). Tipping one out of that plane has no
+      // representable result, the same reason Annotation/Table/BlockRef refuse a tilted axis.
+      if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userEllipses.size()) {
+        CadEllipse el = st.userEllipses[k];
+        const ray3d::Vec3 c = rotPt(el.cx, el.cy, el.z);
+        const ray3d::Vec3 maj = rotDir(el.majVx, el.majVy, 0.f);
+        el.cx = static_cast<float>(c.x);
+        el.cy = static_cast<float>(c.y);
+        el.z = static_cast<float>(c.z);
+        el.majVx = static_cast<float>(maj.x);
+        el.majVy = static_cast<float>(maj.y);
+        newEll.push_back(el);
+        EntityAttributes at{};
+        if (k < st.userEllAttrs.size())
+          at = st.userEllAttrs[k];
+        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
+      }
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        continue;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int nv = v1 - v0;
+      if (nv < 2)
+        continue;
+      if (st.userPolylineOffsets.empty())
+        st.userPolylineOffsets.push_back(0);
+      const int baseVert = st.userPolylineOffsets.back();
+      for (int vi = v0; vi < v1; ++vi) {
+        const ray3d::Vec3 p = rotPt(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)],
+                                    st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)],
+                                    st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+        st.userPolylineVerts.push_back(static_cast<float>(p.x));
+        st.userPolylineVerts.push_back(static_cast<float>(p.y));
+        st.userPolylineVerts.push_back(static_cast<float>(p.z));
+      }
+      st.userPolylineOffsets.push_back(baseVert + nv);
+      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+      uint8_t cl = 0;
+      if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
+        cl = st.userPolylineClosed[static_cast<size_t>(pi)];
+      st.userPolylineClosed.push_back(cl);
+      EntityAttributes at{};
+      if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
+        at = st.userPolylineAttrs[static_cast<size_t>(pi)];
+      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
+    } else if (e.type == SelectedEntity::Type::FilledRegion) {
+      const size_t fk = static_cast<size_t>(e.index);
+      if (fk < st.cadFilledRegions.size()) {
+        CadFilledRegion fr = st.cadFilledRegions[fk];
+        for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
+          const ray3d::Vec3 p = rotPt(fr.vertsXyz[v], fr.vertsXyz[v + 1], fr.vertsXyz[v + 2]);
+          fr.vertsXyz[v] = static_cast<float>(p.x);
+          fr.vertsXyz[v + 1] = static_cast<float>(p.y);
+          fr.vertsXyz[v + 2] = static_cast<float>(p.z);
+        }
+        newFills.push_back(std::move(fr));
+        newFillAttrs.push_back(DuplicatedEntityAttrs(
+            fk < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[fk] : EntityAttributes{}));
+      }
+    } else if (e.type == SelectedEntity::Type::Annotation) {
+      if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.cadAnnotations.size()) {
+        CadAnnotation c = st.cadAnnotations[k];
+        c.surveyPointLabelForId = -1;
+        const ray3d::Vec3 ins = rotPt(c.insX, c.insY, c.insZ);
+        c.insX = static_cast<float>(ins.x);
+        c.insY = static_cast<float>(ins.y);
+        c.insZ = static_cast<float>(ins.z);
+        if (c.kind == CadAnnotation::Kind::Text) {
+          c.rotationRad += angleRad;
+        } else if (c.kind == CadAnnotation::Kind::DimLinear) {
+          RotateCadDimLinearAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &c);
+        } else if (c.kind == CadAnnotation::Kind::DimAligned) {
+          RotateAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &c.dimExt1X, &c.dimExt1Y);
+          RotateAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &c.dimExt2X, &c.dimExt2Y);
+          float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+          if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+            c.rotationRad = std::atan2(ty, tx);
+        } else {
+          float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
+          float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
+          float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
+          for (int i = 0; i < 4; ++i) {
+            RotateAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &xs[i], &ys[i]);
+            mnX = std::min(mnX, xs[i]); mxX = std::max(mxX, xs[i]);
+            mnY = std::min(mnY, ys[i]); mxY = std::max(mxY, ys[i]);
+          }
+          c.boxMinX = mnX; c.boxMaxX = mxX; c.boxMinY = mnY; c.boxMaxY = mxY;
+          c.insX = mnX; c.insY = mnY;
+        }
+        newAnn.push_back(std::move(c));
+        EntityAttributes a{};
+        if (k < st.cadAnnotationAttrs.size())
+          a = st.cadAnnotationAttrs[k];
+        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
+    } else if (e.type == SelectedEntity::Type::Table) {
+      if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
+      const size_t tk = static_cast<size_t>(e.index);
+      if (tk < st.cadTables.size()) {
+        CadTable c = st.cadTables[tk];
+        CadTableRotateAround(&c, static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad);
+        newTables.push_back(std::move(c));
+        EntityAttributes a{};
+        if (tk < st.cadTableAttrs.size())
+          a = st.cadTableAttrs[tk];
+        newTableAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
+    } else if (e.type == SelectedEntity::Type::BlockRef) {
+      if (!axisIsWorldZParallel) { ++excludedFlatOnly; continue; }
+      const size_t bk = static_cast<size_t>(e.index);
+      if (bk < st.cadBlockRefs.size()) {
+        CadBlockRef c = st.cadBlockRefs[bk];
+        CadBlockRotateZ(&c, static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad);
+        newBlockRefs.push_back(std::move(c));
+        EntityAttributes a{};
+        if (bk < st.cadBlockRefAttrs.size())
+          a = st.cadBlockRefAttrs[bk];
+        newBlockRefAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
+    }
+  }
+  st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
+  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
+  st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
+  st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(), newCircleNormals.end());
+  st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
+  st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
+  st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
+  st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
+  st.cadBlockRefs.insert(st.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
+  st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
+  st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
+  st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
+  st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
+  st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
+  st.cadFilledRegions.insert(st.cadFilledRegions.end(), newFills.begin(), newFills.end());
+  st.cadFilledRegionAttrs.insert(st.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
+
+  // AppendFeatureLineCopy's xform only sees (x, y) — its own Z rides through untouched (see its
+  // declaration) — which is exactly right for a Z-parallel axis (the general formula's x'/y' never
+  // depend on z there, proven algebraically the same way Ray3dTests' off-origin-Z-axis case is) but
+  // WRONG for a tilted one, where x'/y' genuinely depend on the point's z. Rather than widen that
+  // shared helper's signature for one caller, a tilted axis refuses feature lines too.
+  size_t featureLinesExcluded = 0;
+  if (axisIsWorldZParallel) {
+    ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
+      AppendFeatureLineCopy(st, fi, v0, v1, [&](float* x, float* y) {
+        const ray3d::Vec3 p = rotPt(*x, *y, 0.f);
+        *x = static_cast<float>(p.x);
+        *y = static_cast<float>(p.y);
+      });
+    });
+  } else {
+    ForEachSelectedFeatureLine(st, [&](int /*fi*/, int /*v0*/, int /*v1*/) { ++featureLinesExcluded; });
+  }
+  excludedFlatOnly += featureLinesExcluded;
+
+  if (excludedFlatOnly > 0)
+    log.push_back("ARRAY Polar — " + std::to_string(excludedFlatOnly) +
+                  " entity(ies) excluded: text/table/block/feature-line/ellipse rotation about a"
+                  " tilted axis is not supported yet (REQ-328) — none of these store a plane normal"
+                  " to tip. Rotate about a UCS with an upright Z axis, or use Rectangular.");
+
+  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
+      !newBlockRefs.empty() || !newFills.empty() ||
+      st.userPolylineVerts.size() != polyVertsBefore ||
+      st.featureLineVerts.size() != featureVertsBefore)
+    BumpCadGpuCache(st);
+}
+
 static void FinalizeCopyTranslation(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
   st.pendingSurveyDupIsRotate = false;
   DuplicateCadSelectionTranslated(st, dx, dy);
@@ -10517,14 +10801,15 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
   FinishArrayCommand(st, log, cols * rows * levels, shape.c_str());
 }
 
-/// Polar commit: \p arrayRotateItems == true loops the EXISTING \c DuplicateCadSelectionRotated
-/// (already used by ROTATE's copy mode) — each instance is a genuine rotated duplicate, orientation
-/// included. \p arrayRotateItems == false needs every copy to KEEP the source orientation while
-/// still landing on the circle: reusing the existing selection-centroid helper
-/// (\c ComputeSelectionCentroidWorld, already used by ROTATE's reference path) as a single rigid-
-/// body anchor, rotating THAT ONE POINT about the center, and translating the whole selection by the
-/// resulting delta — so this reuses \c DuplicateCadSelectionTranslated too, with zero new per-type
-/// rotation-suppression logic (TASK-111 ASSUMPTION-2).
+/// Polar commit: \p arrayRotateItems == true rotates every instance about the active UCS Z axis
+/// through the picked centre via \c RotateSelectionAboutAxis (REQ-328) — a genuine 3D rotation, not
+/// just the world-Z-only case, so a tilted UCS (previously refused outright) now works for every
+/// entity type that primitive supports. \p arrayRotateItems == false needs every copy to KEEP the
+/// source orientation while still landing on the circle: reusing the existing selection-centroid
+/// helper (\c ComputeSelectionCentroidWorld, already used by ROTATE's reference path) as a single
+/// rigid-body anchor, rotating THAT ONE POINT about the axis, and translating the whole selection by
+/// the resulting 3D delta — this path has no per-entity-type orientation gap at all (nothing's
+/// orientation changes), so it already worked under a tilted UCS before REQ-328 existed.
 static void CommitArrayPolar(AppCommandState& st, std::vector<std::string>& log) {
   constexpr float kTwoPi = 6.28318530717958647692f;
   const int n = std::max(st.arrayItemCount, 1);
@@ -10534,16 +10819,21 @@ static void CommitArrayPolar(AppCommandState& st, std::vector<std::string>& log)
   const float fillRad = st.arrayFillAngleDeg * (kTwoPi / 360.f);
   const float step = (n <= 1) ? 0.f : (fullTurn ? fillRad / static_cast<float>(n)
                                                 : fillRad / static_cast<float>(n - 1));
-  const float anchorX = st.arrayAnchorX, anchorY = st.arrayAnchorY;
+  const float anchorX = st.arrayAnchorX, anchorY = st.arrayAnchorY, anchorZ = st.arrayAnchorZ;
+  const ray3d::Vec3 axisPoint{static_cast<double>(st.arrayCenterX), static_cast<double>(st.arrayCenterY),
+                              static_cast<double>(st.arrayCenterZ)};
+  const ucs::Ucs frame = CadActiveUcsStorage(st);
+  const ray3d::Vec3 axisUnit = ray3d::Normalize(ray3d::Vec3{frame.zAxis.x, frame.zAxis.y, frame.zAxis.z});
   PushUndoSnapshot(st, "Array-Polar");
   for (int i = 1; i < n; ++i) {
     const float ang = step * static_cast<float>(i);
     if (st.arrayRotateItems) {
-      DuplicateCadSelectionRotated(st, st.arrayCenterX, st.arrayCenterY, ang);
+      RotateSelectionAboutAxis(st, axisPoint, axisUnit, ang, log);
     } else {
-      float ax = anchorX, ay = anchorY;
-      RotateAroundBase(st.arrayCenterX, st.arrayCenterY, ang, &ax, &ay);
-      DuplicateCadSelectionTranslated(st, ax - anchorX, ay - anchorY);
+      const ray3d::Vec3 rotated = ray3d::RotatePointAboutAxis({anchorX, anchorY, anchorZ}, axisPoint, axisUnit, ang);
+      DuplicateCadSelectionTranslated(st, static_cast<float>(rotated.x) - anchorX,
+                                     static_cast<float>(rotated.y) - anchorY,
+                                     static_cast<float>(rotated.z) - anchorZ);
     }
   }
   FinishArrayCommand(st, log, n, "polar");
@@ -10567,18 +10857,13 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       return true;
     }
     if (low == "p" || low == "polar") {
-      // GitHub issue #400 increment 1 / REQ-305 acceptance 11: polar rotation reuses the existing
-      // world-Z-only rotate primitive (`RotateAroundBase`/`DuplicateCadSelectionRotated`); a UCS
-      // tilted out of horizontal would need genuine arbitrary-axis rotation, which ROTATE/SCALE
-      // themselves do not have yet (D-2026-09-04-g) — refused by name rather than silently rotating
-      // about the wrong axis.
-      if (!CadWorkPlaneIsWorldXy(st)) {
-        log.push_back("ARRAY Polar — refused: the active UCS is tilted out of horizontal (its Z "
-                      "axis is not parallel to world Z). Polar ARRAY needs the same arbitrary-axis "
-                      "rotation ROTATE/SCALE do not have yet; use a UCS with an upright Z axis "
-                      "(rotation/origin about Z is fine), or use Rectangular.");
-        return false;
-      }
+      // REQ-328 lifted the old blanket tilted-UCS refusal here: `RotateSelectionAboutAxis` now
+      // rotates most entity types about any axis. What remains is refused per-entity-type, at
+      // COMMIT time (`RotateSelectionAboutAxis`'s own log line), for the handful of types with no
+      // stored plane normal (Ellipse/Annotation/Table/BlockRef/FeatureLine) — not here, since
+      // whether that refusal even applies depends on Rotate-items (Yes rotates orientation and
+      // needs it; No only translates and has no such gap), which is not chosen until later.
+      //
       // GitHub issue #400 increment 3 / D-2026-09-07-c: Polar still refuses a solid — it would need
       // to TURN it, and no capability to rotate a brep::Solid about any axis exists yet. Dropped
       // here rather than at PickSelection (`DropArrayUnsupportedFromSelection`) because Rectangular
@@ -12412,7 +12697,11 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, st.arrayAnchorX, st.arrayAnchorY, st.arrayAnchorZ);
       const ucs::Point2D local = ucs::WorldToPlane(frame, {px, py, static_cast<double>(pz)});
       st.arrayRowSpacing = static_cast<float>(local.y);
-      CommitArrayRectangular(st, log);
+      // GitHub issue #400 increment 2: advance to the levels prompt, same as the typed path —
+      // this click-driven branch committing directly (skipping levels entirely) was a bug in
+      // increment 2, caught while adding increment 3's test coverage.
+      st.arrayPhase = AP::Rect_WaitLevels;
+      log.push_back("ARRAY Rectangular — number of levels <1 = 2D>:");
       return;
     }
     if (st.arrayPhase == AP::Polar_WaitCenter) {

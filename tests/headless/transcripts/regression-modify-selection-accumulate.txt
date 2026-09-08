@@ -78,6 +78,7 @@ CMD 2
 CMD 20
 CMD 1
 CMD 0
+CMD
 EXPECT LOG "2 total instance(s) (2 x 1)"
 EXPECT LINES 4
 CHECK ALL
