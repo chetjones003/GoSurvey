@@ -12720,10 +12720,24 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       // Interactive fill-angle entry: the absolute angle (standard math convention, CCW from +X)
       // from center to the click, taken directly as the sweep magnitude. Typed entry
       // (HandleArrayText) sets the same field from a plain number of degrees.
+      //
+      // GitHub issue #400 increment 4: the angle is measured IN THE ACTIVE UCS PLANE, not in world
+      // X/Y. Under FRONT/BACK/LEFT/RIGHT/orbited UCS the drawing plane's in-plane axes are world X
+      // and world Z (not Y), so a raw `atan2(py - centerY, px - centerX)` collapses to ~0/180 for
+      // every pick (the world-Y term is near-constant across the plane) and the polar array's step
+      // angle came out zero — every instance stacked on the original. Convert the pick and the
+      // centre into the plane's own local 2D frame (anchored at the centre, so the centre is the
+      // origin) and take the angle there — the same WorldToPlane conversion the rectangular
+      // spacing phases above already use. Under the World UCS this reduces to the old arithmetic.
       float px = 0.f, py = 0.f, pz = 0.f;
       CadResolveArrayPickOnWorkPlane(st, wx, wy, pickRay, st.arrayCenterX, st.arrayCenterY,
                                      st.arrayCenterZ, &px, &py, &pz);
-      float deg = std::atan2(py - st.arrayCenterY, px - st.arrayCenterX) * (180.f / 3.14159265358979323846f);
+      const ucs::Ucs angleFrame =
+          CadWorkPlaneAnchoredAt(st, st.arrayCenterX, st.arrayCenterY, st.arrayCenterZ);
+      const ucs::Point2D angleLocal =
+          ucs::WorldToPlane(angleFrame, {px, py, static_cast<double>(pz)});
+      float deg = std::atan2(static_cast<float>(angleLocal.y), static_cast<float>(angleLocal.x)) *
+                  (180.f / 3.14159265358979323846f);
       if (deg < 0.f)
         deg += 360.f;
       st.arrayFillAngleDeg = deg;
