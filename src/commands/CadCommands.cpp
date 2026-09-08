@@ -10694,24 +10694,31 @@ static bool HandleStretchText(AppCommandState& st, const std::string& lineIn, st
   std::string line = StringUtil::trimCopy(lineIn);
   using MP = AppCommandState::ModifyPhase;
   if (st.modifyPhase == MP::NeedBase) {
-    float px = 0.f, py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
-      return false;
-    st.modifyBaseX = px;
-    st.modifyBaseY = py;
+    // REQ-329 increment 4: base/second points carry an elevation and are read in the active UCS axes,
+    // the same shared helper HandleModifyText (MOVE/COPY) uses.
+    float bx = 0.f, by = 0.f, bwz = 0.f;
+    bool consumed = false;
+    if (!ResolveTypedModifyPoint(st, line, false, 0.f, 0.f, 0.f, "STRETCH", &bx, &by, &bwz, &consumed, log))
+      return consumed;
+    st.modifyBaseX = bx;
+    st.modifyBaseY = by;
+    st.modifyBaseZ = bwz;
     st.modifyPhase = MP::NeedDestination;
     log.push_back("STRETCH — specify second point (destination).");
     return true;
   }
   if (st.modifyPhase == MP::NeedDestination) {
-    float px = 0.f, py = 0.f;
-    if (!ParseStoragePoint(st, line, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
-      return false;
+    float px = 0.f, py = 0.f, dwz = 0.f;
+    bool consumed = false;
+    if (!ResolveTypedModifyPoint(st, line, true, st.modifyBaseX, st.modifyBaseY, st.modifyBaseZ, "STRETCH",
+                                 &px, &py, &dwz, &consumed, log))
+      return consumed;
     const float dx = px - st.modifyBaseX;
     const float dy = py - st.modifyBaseY;
+    const float dz = dwz - st.modifyBaseZ;
     PushUndoSnapshot(st, "Stretch");
-    ApplyStretchToSelection(st, dx, dy, st.stretchRectMnX, st.stretchRectMxX, st.stretchRectMnY,
-                            st.stretchRectMxY, log);
+    ApplyStretchToSelection(st, dx, dy, dz, st.stretchRectMnX, st.stretchRectMxX, st.stretchRectMnY,
+                            st.stretchRectMxY, st.stretchRectInUcsPlane, log);
     st.modifyPhase = MP::NeedBase;
     log.push_back("STRETCH complete — base point (ESC to exit):");
     return true;
@@ -12437,12 +12444,33 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
                              st.uiCursorWorldZ, windowSelectionSubtract, fenceLeftToRightWindowMode,
                              inclSurvey, boxSelCam, st.uiViewportWidthPx, st.uiViewportHeightPx);
     if (st.active == K::Stretch) {
-      // Captured in plain world XY, not camera-projected — REQ-103 STRETCH's stated simplification;
-      // entity CANDIDACY above still goes through ComputeSelectionFromRect's own camera-aware test.
-      st.stretchRectMnX = std::min(st.selBoxAnchorX, wx);
-      st.stretchRectMxX = std::max(st.selBoxAnchorX, wx);
-      st.stretchRectMnY = std::min(st.selBoxAnchorY, wy);
-      st.stretchRectMxY = std::max(st.selBoxAnchorY, wy);
+      if (CadWorkPlaneIsWorldXy(st)) {
+        // Plain world XY, not camera-projected — REQ-103 STRETCH's stated simplification; entity
+        // CANDIDACY above still goes through ComputeSelectionFromRect's own camera-aware test.
+        st.stretchRectMnX = std::min(st.selBoxAnchorX, wx);
+        st.stretchRectMxX = std::max(st.selBoxAnchorX, wx);
+        st.stretchRectMnY = std::min(st.selBoxAnchorY, wy);
+        st.stretchRectMxY = std::max(st.selBoxAnchorY, wy);
+        st.stretchRectInUcsPlane = false;
+      } else {
+        // REQ-329 increment 4: the crossing box is drawn ON the active work plane, so store it in
+        // that plane's own local 2D frame. Each corner's world Z rides along on selBoxAnchorZ /
+        // uiCursorWorldZ (set by BeginSelectionBoxCorner and the headless CLICKUCS box path), so the
+        // world point is recoverable and WorldToPlane gives its (u, v). `ApplyStretchToSelection`
+        // projects every candidate vertex the same way before the box test.
+        const ucs::Ucs frame = CadActiveUcsStorage(st);
+        const ucs::Point2D c1 = ucs::WorldToPlane(
+            frame, {static_cast<double>(st.selBoxAnchorX), static_cast<double>(st.selBoxAnchorY),
+                    static_cast<double>(st.selBoxAnchorZ)});
+        const ucs::Point2D c2 = ucs::WorldToPlane(
+            frame, {static_cast<double>(wx), static_cast<double>(wy),
+                    static_cast<double>(st.uiCursorWorldZ)});
+        st.stretchRectMnX = static_cast<float>(std::min(c1.x, c2.x));
+        st.stretchRectMxX = static_cast<float>(std::max(c1.x, c2.x));
+        st.stretchRectMnY = static_cast<float>(std::min(c1.y, c2.y));
+        st.stretchRectMxY = static_cast<float>(std::max(c1.y, c2.y));
+        st.stretchRectInUcsPlane = true;
+      }
     }
     st.selBoxWaitingSecond = false;
     // A completed fence IS an entity selection, so it takes the other side of REQ-318 item 9's
@@ -13142,6 +13170,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     if (st.modifyPhase == MP::NeedBase) {
       st.modifyBaseX = wx;
       st.modifyBaseY = wy;
+      st.modifyBaseZ = CadCommitElevation(st);  // REQ-329 increment 4
       st.modifyPhase = MP::NeedDestination;
       log.push_back("STRETCH — destination:");
       return;
@@ -13149,9 +13178,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     if (st.modifyPhase == MP::NeedDestination) {
       const float dx = wx - st.modifyBaseX;
       const float dy = wy - st.modifyBaseY;
+      const float dz = CadCommitElevation(st) - st.modifyBaseZ;  // REQ-329 increment 4
       PushUndoSnapshot(st, "Stretch");
-      ApplyStretchToSelection(st, dx, dy, st.stretchRectMnX, st.stretchRectMxX, st.stretchRectMnY,
-                              st.stretchRectMxY, log);
+      ApplyStretchToSelection(st, dx, dy, dz, st.stretchRectMnX, st.stretchRectMxX, st.stretchRectMnY,
+                              st.stretchRectMxY, st.stretchRectInUcsPlane, log);
       // Stay in STRETCH — same selection+box at new position, ready for another base+destination
       // (MOVE's own looping shape for repeated displacement rounds on one selection).
       st.modifyPhase = MP::NeedBase;
@@ -16423,11 +16453,22 @@ void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, floa
 /// in-box points move by (dx,dy). Line/Polyline/FeatureLine vertices are independent (the genuine
 /// stretch effect); Arc goes through \ref StretchOneArc; every other type has one definition point
 /// and moves as a whole only if that point is in-box (matching AutoCAD's own behavior for them).
-void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX, float mxX, float mnY,
-                             float mxY, std::vector<std::string>& log) {
+void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, float mnX, float mxX,
+                             float mnY, float mxY, bool rectInUcsPlane, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "STRETCH", log);
   DropSolidsFromSelectionForTransform(st, "STRETCH", log);
-  auto inBox = [&](float x, float y) { return PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY); };
+  // REQ-329 increment 4: when the crossing box lives in a tilted work plane's local 2D frame, each
+  // candidate vertex is projected the same way (WorldToPlane) before the box test; the displacement
+  // carries a Z component. Under the World UCS `rectInUcsPlane` is false and `dz` is 0, so this is
+  // the pre-REQ-329 flat test byte-for-byte.
+  const ucs::Ucs stretchFrame = CadActiveUcsStorage(st);
+  auto inBox = [&](float x, float y, float z = 0.f) {
+    if (!rectInUcsPlane)
+      return PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY);
+    const ucs::Point2D p = ucs::WorldToPlane(stretchFrame, {static_cast<double>(x), static_cast<double>(y),
+                                                            static_cast<double>(z)});
+    return PointInsideClosedRect(static_cast<float>(p.x), static_cast<float>(p.y), mnX, mxX, mnY, mxY);
+  };
 
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -16435,13 +16476,15 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
     const size_t k = static_cast<size_t>(e.index) * 6;
     if (k + 5 >= st.userLinesFlat.size())
       continue;
-    if (inBox(st.userLinesFlat[k], st.userLinesFlat[k + 1])) {
+    if (inBox(st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 2])) {
       st.userLinesFlat[k] += dx;
       st.userLinesFlat[k + 1] += dy;
+      st.userLinesFlat[k + 2] += dz;
     }
-    if (inBox(st.userLinesFlat[k + 3], st.userLinesFlat[k + 4])) {
+    if (inBox(st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5])) {
       st.userLinesFlat[k + 3] += dx;
       st.userLinesFlat[k + 4] += dy;
+      st.userLinesFlat[k + 5] += dz;
     }
   }
   for (const auto& e : st.selection) {
@@ -16450,9 +16493,10 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
     const size_t k = static_cast<size_t>(e.index) * 4;
     if (k + 3 >= st.userCirclesCxCyZR.size())
       continue;
-    if (inBox(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1])) {
+    if (inBox(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 2])) {
       st.userCirclesCxCyZR[k] += dx;
       st.userCirclesCxCyZR[k + 1] += dy;
+      st.userCirclesCxCyZR[k + 2] += dz;
     }
   }
   for (const auto& e : st.selection) {
@@ -16461,7 +16505,18 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
     const size_t k = static_cast<size_t>(e.index);
     if (k >= st.userArcs.size())
       continue;
-    StretchOneArc(st.userArcs[k], mnX, mxX, mnY, mxY, dx, dy, log);
+    if (rectInUcsPlane) {
+      // A tilted arc's endpoint math (`cx + r*cos`) is planar; degrade to a whole-arc move when the
+      // centre is in the box, matching the FilledRegion simplification just below.
+      CadArc& a = st.userArcs[k];
+      if (inBox(a.cx, a.cy, a.z)) {
+        a.cx += dx;
+        a.cy += dy;
+        a.z += dz;
+      }
+    } else {
+      StretchOneArc(st.userArcs[k], mnX, mxX, mnY, mxY, dx, dy, log);
+    }
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Ellipse)
@@ -16469,9 +16524,10 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
     const size_t k = static_cast<size_t>(e.index);
     if (k >= st.userEllipses.size())
       continue;
-    if (inBox(st.userEllipses[k].cx, st.userEllipses[k].cy)) {
+    if (inBox(st.userEllipses[k].cx, st.userEllipses[k].cy, st.userEllipses[k].z)) {
       st.userEllipses[k].cx += dx;
       st.userEllipses[k].cy += dy;
+      st.userEllipses[k].z += dz;
     }
   }
   for (const auto& e : st.selection) {
@@ -16484,9 +16540,10 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
     const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
     for (int vi = v0; vi < v1; ++vi) {
       const size_t b = static_cast<size_t>(vi) * 3;
-      if (inBox(st.userPolylineVerts[b], st.userPolylineVerts[b + 1])) {
+      if (inBox(st.userPolylineVerts[b], st.userPolylineVerts[b + 1], st.userPolylineVerts[b + 2])) {
         st.userPolylineVerts[b] += dx;
         st.userPolylineVerts[b + 1] += dy;
+        st.userPolylineVerts[b + 2] += dz;
       }
     }
   }
@@ -16497,10 +16554,11 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
     if (k >= st.cadAnnotations.size())
       continue;
     CadAnnotation& a = st.cadAnnotations[k];
-    if (!inBox(a.insX, a.insY))
+    if (!inBox(a.insX, a.insY, a.insZ))
       continue;
     a.insX += dx;
     a.insY += dy;
+    a.insZ += dz;
     if (a.kind == CadAnnotation::Kind::Mtext) {
       a.boxMinX += dx;
       a.boxMinY += dy;
@@ -16519,7 +16577,7 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.pdfAttachments.size())
       continue;
     PdfAttachment& att = st.pdfAttachments[static_cast<size_t>(e.index)];
-    if (inBox(att.insertX, att.insertY)) {
+    if (inBox(att.insertX, att.insertY)) {  // PDF underlay carries no elevation
       att.insertX += dx;
       att.insertY += dy;
     }
@@ -16530,8 +16588,10 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
       continue;
     CadTable& t = st.cadTables[static_cast<size_t>(e.index)];
-    if (inBox(t.insX, t.insY))
+    if (inBox(t.insX, t.insY, t.insZ)) {
       CadTableTranslate(&t, dx, dy);
+      t.insZ += dz;
+    }
   }
   // Filled regions (REQ-042): whole-region translate, gated on the first boundary vertex — no
   // per-vertex boundary stretch (spec-recorded simplification, REQ-103 STRETCH acceptance).
@@ -16541,15 +16601,23 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadFilledRegions.size())
       continue;
     CadFilledRegion& fr = st.cadFilledRegions[static_cast<size_t>(e.index)];
-    if (fr.vertsXyz.size() >= 2 && inBox(fr.vertsXyz[0], fr.vertsXyz[1]))
+    if (fr.vertsXyz.size() >= 3 && inBox(fr.vertsXyz[0], fr.vertsXyz[1], fr.vertsXyz[2])) {
       hatchgeom::Translate(fr, dx, dy);
+      if (dz != 0.f)
+        for (size_t i = 2; i < fr.vertsXyz.size(); i += 3)
+          fr.vertsXyz[i] += dz;
+    }
   }
-  // Feature lines (REQ-087): per-vertex, elevation untouched — same restriction
-  // TransformSelectedFeatureLinesInPlace's own comment documents for MOVE/ROTATE/SCALE.
-  TransformSelectedFeatureLinesInPlace(st, [&](float* x, float* y) {
-    if (inBox(*x, *y)) {
-      *x += dx;
-      *y += dy;
+  // Feature lines (REQ-087): per-vertex. Elevation moves only under a tilted UCS (REQ-329
+  // increment 4) — matching the "plan STRETCH leaves Z alone" restriction the other commands share.
+  ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
+    for (int vi = v0; vi < v1; ++vi) {
+      const size_t b = static_cast<size_t>(vi) * 3;
+      if (inBox(st.featureLineVerts[b], st.featureLineVerts[b + 1], st.featureLineVerts[b + 2])) {
+        st.featureLineVerts[b] += dx;
+        st.featureLineVerts[b + 1] += dy;
+        st.featureLineVerts[b + 2] += dz;
+      }
     }
   });
   {
@@ -16560,9 +16628,10 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
       if (i < 0 || static_cast<size_t>(i) >= st.surveyPoints.size())
         continue;
       SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(i)];
-      if (inBox(sp.easting, sp.northing)) {
+      if (inBox(sp.easting, sp.northing, sp.elevation)) {
         sp.easting += dx;
         sp.northing += dy;
+        sp.elevation += dz;
       }
     }
     for (int i : ix) {
