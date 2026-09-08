@@ -8880,9 +8880,13 @@ static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<
 /// modal), and that modal resolves a single offset/rotation, not N array instances at once, so
 /// survey points are excluded rather than silently mis-duplicated or given a policy they were never
 /// built for.
+///
+/// \c Solid is deliberately NOT dropped here (GitHub issue #400 increment 3 / D-2026-09-07-c):
+/// which array TYPE is chosen (Rectangular allows a solid, Polar still refuses one) is not known
+/// until AFTER selection, so the Polar-side exclusion happens later, at the 'p'/'polar' keystroke
+/// (\c HandleArrayText), not here.
 static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ARRAY", log);
-  DropSolidsFromSelectionForTransform(st, "ARRAY", log);
   size_t mesh = 0, pdf = 0;
   st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
                                     [&](const SelectedEntity& e) {
@@ -10461,6 +10465,30 @@ static void ArrayCellWorldDelta(const AppCommandState& st, float colOffset, floa
   *dz = static_cast<float>(world.z);
 }
 
+/// GitHub issue #400 increment 3 / D-2026-09-07-c: duplicate every selected \c Solid at
+/// (dx,dy,dz) via `brep::Translate`, exactly the operation REQ-322's `TranslateSelectedSolids`
+/// already uses for MOVE — the difference is APPENDING a fresh `CadSolidPtr` (a new instance)
+/// instead of replacing the selected one in place (a move). A dedicated helper, not folded into
+/// the shared `DuplicateCadSelectionTranslated` (also used by COPY): COPY was never part of this
+/// decision, and giving it solid support as an unannounced side effect would be exactly the
+/// silent scope creep CLAUDE.md warns against — REQ-322 item 6 names ARRAY specifically.
+static void DuplicateSelectedSolidsTranslated(AppCommandState& st, float dx, float dy, float dz) {
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.cadSolids.size())
+      continue;
+    const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
+    if (!sp)
+      continue;
+    st.cadSolids.push_back(std::make_shared<const brep::Solid>(
+        brep::Translate(*sp, ray3d::Vec3{static_cast<double>(dx), static_cast<double>(dy),
+                                         static_cast<double>(dz)})));
+    st.cadSolidAttrs.push_back(DuplicatedEntityAttrs(
+        static_cast<size_t>(e.index) < st.cadSolidAttrs.size() ? st.cadSolidAttrs[static_cast<size_t>(e.index)]
+                                                               : EntityAttributes{}));
+  }
+}
+
 /// Rectangular commit: the original selection occupies cell (0,0); every other cell is produced by
 /// looping the EXISTING \c DuplicateCadSelectionTranslated (already used by COPY) — no new
 /// per-type duplication code. One \c PushUndoSnapshot for the whole grid (REQ-305 acceptance 8).
@@ -10479,6 +10507,7 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
                            static_cast<float>(r) * st.arrayRowSpacing, &dx, &dy, &dz,
                            static_cast<float>(lv) * st.arrayLevelSpacing);
         DuplicateCadSelectionTranslated(st, dx, dy, dz);
+        DuplicateSelectedSolidsTranslated(st, dx, dy, dz);  // GitHub issue #400 increment 3
       }
     }
   }
@@ -10550,6 +10579,11 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
                       "(rotation/origin about Z is fine), or use Rectangular.");
         return false;
       }
+      // GitHub issue #400 increment 3 / D-2026-09-07-c: Polar still refuses a solid — it would need
+      // to TURN it, and no capability to rotate a brep::Solid about any axis exists yet. Dropped
+      // here rather than at PickSelection (`DropArrayUnsupportedFromSelection`) because Rectangular
+      // does not need this exclusion at all, and the array type is not known until now.
+      DropSolidsFromSelectionForTransform(st, "ARRAY Polar", log);
       st.arrayType = AT::Polar;
       st.arrayPhase = AP::Polar_WaitCenter;
       log.push_back("ARRAY Polar — specify center point:");

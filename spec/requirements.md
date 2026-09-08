@@ -1744,9 +1744,24 @@ requirements is a planning failure, not a sign of rigor.
       type (the parameter-vs-new-type choice was put to the user and decided in D-2026-09-07-b);
       `shapeDesc` reports `cols x rows x levels` only when levels > 1, matching the existing
       `cols x rows` wording when it is 1.
+  13. (GitHub issue #400, D-2026-09-07-c, increment 3 of 3) **Rectangular** ARRAY duplicates a
+      `Solid` in the selection instead of dropping it — one call to `brep::Translate` per instance
+      per solid, wrapped in a fresh `CadSolidPtr` and appended to `st.cadSolids`, exactly the
+      operation REQ-322 already uses for MOVE (grid cell (0,0,0) is untouched, matching every other
+      entity type). **Polar** ARRAY continues to drop a `Solid` from its selection with a named log
+      line (REQ-322 item 6, amended) — Polar needs to rotate the solid, and no capability to rotate a
+      `brep::Solid` about any axis exists anywhere in this codebase yet (D-2026-09-07-c). `Surface`
+      (the terrain/DTM entity type) stays excluded from ARRAY in both modes, unchanged — its shape
+      comes from its definition and is rebuilt from it (the same reason `DropSurfacesFromSelection-
+      ForTransform` already excludes it from every other transform), so "arraying" one would produce
+      copies the next rebuild silently discards rather than a real duplicate.
 - Owner-layer: Commands (`CadCommands.cpp`/`.hpp`), Viewport (`TransformPreview.cpp`, cursor hint)
 - Status: accepted
-- Revisions: 2026-09-07 — Acceptance 12 added (GitHub issue #400, increment 2 of 3): the "levels"
+- Revisions: 2026-09-07 — Acceptance 13 added (GitHub issue #400, D-2026-09-07-c, increment 3 of
+  3): Rectangular ARRAY duplicates solids, matching MOVE's REQ-322 translation case; Polar ARRAY
+  keeps refusing them (REQ-322 item 6 amended accordingly — see that requirement's own revision
+  note). Surfaces stay excluded from both, unchanged, matching every other transform command.
+  2026-09-07 — Acceptance 12 added (GitHub issue #400, increment 2 of 3): the "levels"
   parameter on Rectangular. Typed-only level spacing (no click) was a scope line drawn while
   implementing, not decided ahead of time — see Acceptance 12 for why a click cannot express it.
   2026-09-07 — Acceptance 10-11 added (GitHub issue #400, D-2026-09-07-b): ARRAY is
@@ -7053,10 +7068,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
      destination may be `@dx,dy,dz`. An omitted Z is zero, so every existing drawing, transcript and
      habit behaves exactly as before.
   5. **One undoable step**, as MOVE already is — the Z part is not a second operation.
-  6. **Nothing else changes.** ROTATE, SCALE, MIRROR, ARRAY and STRETCH keep refusing solids and keep
-     working in plan, and say so by name. Widening them means rotating every entity's stored frame
-     about an arbitrary axis, which is the work REQ-312 needed for a single tilted arc; it is a
-     separate requirement, not a footnote to this one.
+  6. **Nothing else changes, except Rectangular ARRAY (D-2026-09-07-c).** ROTATE, SCALE, MIRROR,
+     Polar ARRAY and STRETCH keep refusing solids and keep working in plan, and say so by name.
+     Widening them means rotating every entity's stored frame about an arbitrary axis, which is the
+     work REQ-312 needed for a single tilted arc; it is a separate requirement, not a footnote to
+     this one. **Rectangular ARRAY is the one exception**: it is pure translation, exactly this
+     requirement's own case, so GitHub issue #400 increment 3 lifts the refusal there and there
+     alone — see REQ-305 acceptance 13.
 - Acceptance:
   - a typed MOVE with a Z component moves a line, a circle, an arc, an ellipse, a polyline, a
     feature line, an annotation and a block reference by that Z, and their reported elevations change
@@ -7071,7 +7089,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
     `Validate`;
   - a moved solid saves and reloads from `.gs` at its new position;
   - one Ctrl+Z restores the pre-move position, solids included, in a single step;
-  - ROTATE, SCALE, MIRROR, ARRAY and STRETCH still refuse a solid by name, unchanged.
+  - ROTATE, SCALE, MIRROR, Polar ARRAY and STRETCH still refuse a solid by name, unchanged;
+    Rectangular ARRAY is the sole exception (D-2026-09-07-c, REQ-305 acceptance 13).
 - Owner-layer: Commands (the transform and the typed parse), Domain (`brep::Translate`, already there)
 - Status: accepted — increment 1 of REQ-060's prerequisites (D-2026-09-04-f, GitHub issue #148
   Phase 5 slice 4a).
@@ -7080,6 +7099,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   2026-09-06 — renumbered from REQ-320 to REQ-322 on rebase: `beta` had independently assigned
   REQ-320 to ACIS 3D-solid import (#299) and REQ-321 to general trimmed-boundary faces (#305) while
   this branch was in flight. No content change.
+  2026-09-07 — item 6 and its acceptance line amended (D-2026-09-07-c, GitHub issue #400): Rectangular
+  ARRAY is carved out of the "ROTATE/SCALE/MIRROR/ARRAY/STRETCH refuse solids" group, since it is
+  pure translation — this requirement's own solved case — unlike the other four, which all need
+  the not-yet-built arbitrary-axis rotation. See REQ-305 acceptance 13.
 ### REQ-323 — FILLET a solid's edge: round a sharp edge with a rolling ball
 
 - Purpose: GitHub issue #148 (Phase 5, direct modelling) asks that solid edges can be filleted and
