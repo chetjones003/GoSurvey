@@ -13,6 +13,31 @@ if(MSVC AND CMAKE_CXX_COMPILER_LAUNCHER)
 endif()
 
 # ---------------------------------------------------------------------------
+# MSVC exception + RTTI model (GitHub issue #375).
+#
+# CMake's MSVC toolchain seeds CMAKE_CXX_FLAGS with `/DWIN32 /D_WINDOWS /EHsc /GR`.
+# A first configure done with `-DCMAKE_CXX_FLAGS=...` on the command line (an early
+# REQ-324 /analyze experiment did exactly this) REPLACES that seed rather than
+# adding to it, silently dropping /EHsc. After that, any thrown C++ exception
+# (e.g. nlohmann::json::parse_error on a corrupt recent-files store) unwinds
+# through frames compiled with no unwind data, misses every catch, and hits
+# std::terminate -> abort -> __fastfail, which surfaces as exit code 0xC0000409
+# in ucrtbase.dll. build.bat only reconfigures when build.ninja is missing, so a
+# tree poisoned once stays poisoned across every incremental build.
+#
+# Restore the two flags here whenever they are absent, no matter how
+# CMAKE_CXX_FLAGS was seeded. Our targets and the vendored ones (Catch2, Dear
+# ImGui) all depend on working exceptions and RTTI.
+if(MSVC)
+  if(NOT CMAKE_CXX_FLAGS MATCHES "/EH")
+    string(APPEND CMAKE_CXX_FLAGS " /EHsc")
+  endif()
+  if(NOT CMAKE_CXX_FLAGS MATCHES "/GR")
+    string(APPEND CMAKE_CXX_FLAGS " /GR")
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Version (ADR-029 (a)) — `project(VERSION)` above is the ONE source.
 #
 # It names the release being worked toward, so it is bumped just after a stable
