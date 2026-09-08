@@ -7560,14 +7560,28 @@ capability that does not exist. They are recorded here rather than quietly dropp
   iterative solve of unverified accuracy. A Polyline cutting edge, or any target other than Line, is
   still refused by name whenever the pick ray is active.
 
-  **Deferred to later increments, refused by name rather than silently run through the old flat
-  math:** a Polyline cutting edge, or a Circle/Arc/Ellipse/Polyline TRIM target, whenever the pick
-  carries a valid ray. Increment 3 will extend to Polyline (as both target and cutting edge); a
-  skew line-vs-curve closest-approach solve, and Circle/Arc/Ellipse as a trim TARGET (a 2D-parity
-  gap, not specific to 3D), remain open follow-on scope beyond issue #399's three stated increments.
-  Plan view (world UCS, no orbit — pick ray is null) is completely unaffected for every entity type:
-  `SubmitTrimViewportPick` falls through to the original, byte-identical 2D code path whenever no
-  pick ray is supplied.
+  **Increment 3 (Polyline, both target and cutting edge, 2026-09-07):** extends the pick-ray-active
+  path so a Polyline may be EITHER the trim target or a cutting edge (or both, one polyline trimmed
+  against another). A polyline is walked as a chain of STRAIGHT chords — `FindNearestPolylineSegment3D`
+  for target selection, the same per-segment walk `CutterCurvePlaneAndConic`'s siblings use for
+  cutting edges — which is not a narrowing of this increment's scope: the pre-existing 2D TRIM
+  (`PickClosestTrimTarget`, `CollectAllDrawingCutSegmentsExceptTarget`) already treats every polyline
+  segment as its straight vi→vi+1 chord with no bulge/tilted-arc awareness at all, so increment 3
+  reaches exact 2D-behavior parity in 3D rather than adding a new limitation. A curved (bulge != 0)
+  polyline segment therefore intersects and trims correctly as long as its two flanking VERTICES are
+  used as a straight chord, same as the 2D path; true tilted-arc-segment curve intersection (REQ-325)
+  is a separate, unopened piece of follow-on work, not part of issue #399. When the target and a
+  cutting edge are the SAME polyline, every segment except the target's own picked segment remains a
+  valid cutter (a polyline can trim itself against one of its own other segments).
+
+  **Deferred, refused by name rather than silently run through the old flat math:** a skew
+  line/polyline-vs-curve closest-approach solve, and Circle/Arc/Ellipse as a trim TARGET (a 2D-parity
+  gap, not specific to 3D — Circle/Arc/Ellipse has never been a valid TRIM target even in the
+  pre-existing 2D implementation), remain open follow-on scope beyond issue #399's three stated
+  increments. A true curved (tilted-arc) polyline segment intersection is likewise open follow-on
+  scope. Plan view (world UCS, no orbit — pick ray is null) is completely unaffected for every entity
+  type: `SubmitTrimViewportPick` falls through to the original, byte-identical 2D code path whenever
+  no pick ray is supplied.
 - Acceptance:
   - in an orbited view, clicking the segment of a Line between two crossing coplanar 3D Line edges
     trims exactly that segment, at the true 3D crossing point;
@@ -7581,23 +7595,32 @@ capability that does not exist. They are recorded here rather than quietly dropp
     (including one tilted off world XY), at the true 3D crossing point;
   - a Circle/Arc/Ellipse cutting edge that does not share a plane with the target Line contributes no
     crossing (silently skipped, not guessed);
-  - a Polyline cutting edge, or a Circle/Arc/Ellipse/Polyline TRIM target, reached while a pick ray is
-    active is refused by name ("3D `<kind>` targets/cutting edges not yet supported...") — never
-    silently trimmed with the old flat math;
+  - in an orbited view, a Line target trims correctly against a Polyline cutting edge, and a Polyline
+    target trims correctly against a Line (or another Polyline) cutting edge, moving only the picked
+    segment's near vertex and leaving every other vertex untouched;
+  - a rotated-UCS crossing between two Polylines (coplanar in a non-world plane) is found the same as
+    the Line-vs-Line case; a skew Polyline cutting edge beyond tolerance is refused, not fabricated;
+  - a Circle/Arc/Ellipse TRIM target reached while a pick ray is active is refused by name — never
+    silently trimmed with the old flat math (open 2D-parity gap, stated above);
   - plan view / world UCS TRIM (no pick ray) is bit-for-bit unchanged for every entity type, including
-    Circle/Arc/Ellipse/Polyline cutting edges and targets (regression guard).
+    Polyline cutting edges and targets (regression guard).
 - Owner-layer: Commands (`CadCommands.cpp`: `SegSegClosest3D`, `CutterCurvePlaneAndConic`,
-  `Try3DLineTrim`, `SubmitTrimViewportPick`'s `pickRay` parameter) / UI (`CadUi.cpp`'s `TrimPick`
-  route, passing the click's already-computed `pickRayPtr`).
-- Status: **accepted (2026-09-07)** — increment 1 of 3 delivered (Line-vs-Line); increment 2 of 3
-  delivered (Circle/Arc/Ellipse cutting edges). Increment 3 (Polyline) is separate, not-yet-scheduled
-  follow-on work under the same issue #399.
+  `FindNearestPolylineSegment3D`, `Try3DLineTrim`, `SubmitTrimViewportPick`'s `pickRay` parameter) /
+  UI (`CadUi.cpp`'s `TrimPick` route, passing the click's already-computed `pickRayPtr`).
+- Status: **accepted (2026-09-07)** — all three planned increments delivered: increment 1
+  (Line-vs-Line), increment 2 (Circle/Arc/Ellipse cutting edges), increment 3 (Polyline as both
+  target and cutting edge). Issue #399's own four draft acceptance criteria are now met for every
+  entity combination it named, with the two 2D-parity gaps above (Circle/Arc/Ellipse as a TRIM
+  target; true curved-polyline-segment intersection) named as explicit follow-on scope rather than
+  silently left unstated.
 - Revisions: 2026-09-07 — proposed and accepted same day (`/implement-issue 399`); SPEC GAP on the
   skew-tolerance rule resolved with the user before implementation (D-2026-09-07-b). Same day,
   increment 2 delivered: extended cutting edges to Circle/Arc/Ellipse via the existing `curveisect`
   analytic library rather than tessellation; found and documented (not fixed) that Circle/Arc/Ellipse
   has never been a valid TRIM target even in the pre-existing 2D implementation, so that gap is
-  explicitly named as open scope beyond issue #399 rather than silently left unstated.
+  explicitly named as open scope beyond issue #399 rather than silently left unstated. Same day,
+  increment 3 delivered: extended target and cutting-edge support to Polyline (straight-chord
+  parity with the existing 2D path), closing out all three originally staged increments.
 
 ### REQ-203 — The command layer is drivable without a window
 - Purpose: debuggability, maintainability — the interactive surface is the largest part of the

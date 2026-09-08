@@ -132,7 +132,10 @@ TEST_CASE("3D TRIM finds a rotated-UCS crossing via the pick ray, independent of
   CHECK(st.userLinesFlat[2] == Approx(0.f));
 }
 
-TEST_CASE("3D TRIM refuses a polyline cutting edge by name instead of guessing", "[trim][issue399]") {
+TEST_CASE("3D TRIM cuts a line target against a polyline cutting edge from an orbited view",
+         "[trim][issue399]") {
+  // issue #399 increment 3: a Polyline cutting edge is now walked as a chain of straight chords
+  // (matching the 2D path's own treatment) instead of being refused by name.
   AppCommandState st;
   st.userLinesFlat = {0.f, 0.f, 0.f, 100.f, 0.f, 0.f};
   st.userPolylineOffsets = {0, 2};
@@ -145,15 +148,89 @@ TEST_CASE("3D TRIM refuses a polyline cutting edge by name instead of guessing",
 
   const ray3d::Ray pickRay{ray3d::Vec3{20.0, 0.0, 100.0}, ray3d::Vec3{0.0, 0.0, -1.0}};
   std::vector<std::string> log;
+  REQUIRE(SubmitTrimViewportPick(st, 20.f, 0.f, 1.f, log, &pickRay));
+
+  REQUIRE(st.userLinesFlat.size() == 6);
+  CHECK(st.userLinesFlat[0] == Approx(50.f));
+  CHECK(st.userLinesFlat[3] == Approx(100.f));
+}
+
+TEST_CASE("3D TRIM cuts a polyline target segment from an orbited view, other vertices untouched",
+         "[trim][issue399]") {
+  // issue #399 increment 3: the polyline itself can now be the trim TARGET. Three vertices
+  // (0,0,0)-(100,0,0)-(100,100,0); a cutter line crosses the first straight chord at x=50.
+  AppCommandState st;
+  st.userPolylineOffsets = {0, 3};
+  st.userPolylineVerts = {0.f, 0.f, 0.f, 100.f, 0.f, 0.f, 100.f, 100.f, 0.f};
+  st.userPolylineClosed = {false};
+  st.userLinesFlat = {50.f, -20.f, 0.f, 50.f, 20.f, 0.f};
+  SelectedEntity polyTarget{};
+  polyTarget.type = SelectedEntity::Type::Polyline;
+  polyTarget.index = 0;
+  ArmTrimWithCutters(st, {LineEntity(0)});
+
+  const ray3d::Ray pickRay{ray3d::Vec3{20.0, 0.0, 100.0}, ray3d::Vec3{0.0, 0.0, -1.0}};
+  std::vector<std::string> log;
+  REQUIRE(SubmitTrimViewportPick(st, 20.f, 0.f, 1.f, log, &pickRay));
+
+  REQUIRE(st.userPolylineVerts.size() == 9);
+  CHECK(st.userPolylineVerts[0] == Approx(50.f));  // trimmed vertex moved to the crossing
+  CHECK(st.userPolylineVerts[1] == Approx(0.f));
+  CHECK(st.userPolylineVerts[2] == Approx(0.f));
+  // Untouched vertices.
+  CHECK(st.userPolylineVerts[3] == Approx(100.f));
+  CHECK(st.userPolylineVerts[4] == Approx(0.f));
+  CHECK(st.userPolylineVerts[6] == Approx(100.f));
+  CHECK(st.userPolylineVerts[7] == Approx(100.f));
+}
+
+TEST_CASE("3D TRIM finds a rotated-UCS crossing between two polylines via the pick ray",
+         "[trim][issue399]") {
+  AppCommandState st;
+  // Both polylines live in the world X-Z plane (y=0); target (0,0,0)-(100,0,0), cutter chord
+  // (50,0,-20)-(50,0,20), crossing at (50,0,0) — a crossing a flat XY projection would miss.
+  st.userPolylineOffsets = {0, 2, 4};
+  st.userPolylineVerts = {
+      0.f,  0.f, 0.f,   100.f, 0.f, 0.f,
+      50.f, 0.f, -20.f, 50.f,  0.f, 20.f,
+  };
+  st.userPolylineClosed = {false, false};
+  SelectedEntity polyCutter{};
+  polyCutter.type = SelectedEntity::Type::Polyline;
+  polyCutter.index = 1;
+  ArmTrimWithCutters(st, {polyCutter});
+
+  const ray3d::Ray pickRay{ray3d::Vec3{20.0, 100.0, 0.0}, ray3d::Vec3{0.0, -1.0, 0.0}};
+  std::vector<std::string> log;
+
+  // Target is polyline 0's own single segment.
+  SelectedEntity dummy{};
+  (void)dummy;
+  REQUIRE(SubmitTrimViewportPick(st, 20.f, 0.f, 1.f, log, &pickRay));
+
+  CHECK(st.userPolylineVerts[0] == Approx(50.f));
+  CHECK(st.userPolylineVerts[2] == Approx(0.f));
+}
+
+TEST_CASE("3D TRIM skips a skew polyline cutting edge outside tolerance rather than guessing",
+         "[trim][issue399]") {
+  AppCommandState st;
+  st.userLinesFlat = {0.f, 0.f, 0.f, 100.f, 0.f, 0.f};
+  st.userPolylineOffsets = {0, 2};
+  // Cutter chord offset 5 units in Z at its closest approach — far past tolerance for this drawing size.
+  st.userPolylineVerts = {50.f, -10.f, 5.f, 50.f, 10.f, 5.f};
+  st.userPolylineClosed = {false};
+  SelectedEntity polyCutter{};
+  polyCutter.type = SelectedEntity::Type::Polyline;
+  polyCutter.index = 0;
+  ArmTrimWithCutters(st, {polyCutter});
+
+  const ray3d::Ray pickRay{ray3d::Vec3{20.0, 0.0, 100.0}, ray3d::Vec3{0.0, 0.0, -1.0}};
+  std::vector<std::string> log;
   CHECK_FALSE(SubmitTrimViewportPick(st, 20.f, 0.f, 1.f, log, &pickRay));
 
   REQUIRE(st.userLinesFlat.size() == 6);
   CHECK(st.userLinesFlat[0] == Approx(0.f));  // untouched
-  bool sawRefusal = false;
-  for (const std::string& line : log)
-    if (line.find("not yet supported") != std::string::npos)
-      sawRefusal = true;
-  CHECK(sawRefusal);
 }
 
 TEST_CASE("3D TRIM cuts a line against a coplanar circle cutting edge from an orbited view",
@@ -235,6 +312,28 @@ TEST_CASE("3D TRIM skips a skew circle cutting edge rather than guessing a cross
     if (line.find("does not cross") != std::string::npos)
       sawRefusal = true;
   CHECK(sawRefusal);
+}
+
+TEST_CASE("Plan view TRIM polyline target/cutting-edge pick is unchanged (regression guard)",
+         "[trim][issue399]") {
+  // issue #399 increment 3 must not touch the plan-view (pickRay == nullptr) path at all — it falls
+  // through to the original 2D TrimSegmentToCuttingEdges Poly branch, unaffected by this increment.
+  AppCommandState st;
+  st.userPolylineOffsets = {0, 2};
+  st.userPolylineVerts = {0.f, 0.f, 0.f, 100.f, 0.f, 0.f};
+  st.userPolylineClosed = {false};
+  st.userLinesFlat = {50.f, -20.f, 0.f, 50.f, 20.f, 0.f};
+  SelectedEntity polyTarget{};
+  polyTarget.type = SelectedEntity::Type::Polyline;
+  polyTarget.index = 0;
+  ArmTrimWithCutters(st, {LineEntity(0)});
+
+  std::vector<std::string> log;
+  REQUIRE(SubmitTrimViewportPick(st, 20.f, 0.f, 1.f, log));
+
+  REQUIRE(st.userPolylineVerts.size() == 6);
+  CHECK(st.userPolylineVerts[0] == Approx(50.f));
+  CHECK(st.userPolylineVerts[1] == Approx(0.f));
 }
 
 TEST_CASE("Plan view TRIM target pick is unchanged (regression guard, no pick ray)", "[trim][issue399]") {
