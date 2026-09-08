@@ -1156,14 +1156,30 @@ int main()
         cmd.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2)
     {
       // TRIM's cutting-line points commit through commitX/commitY too (SubmitTrimViewportPick).
+      // Both ends carry their real elevation (issue #399 increment 4): the first point keeps the Z
+      // it was clicked at (cmd.trimCutInfP1z — 0 in plan view, so the datum, as before), the far end
+      // takes the committed cursor/snap elevation, and the ortho lock runs through the UCS-aware
+      // helper so a Front/Left/Right-style UCS squares correctly. Without this the rubber band and
+      // the dashed removal hint drew on the world datum while the trim committed on the work plane.
       float lx = static_cast<float>(commitCurX);
       float ly = static_cast<float>(commitCurY);
-      ApplyOrthoConstrainFromAnchor(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled);
+      float lz = CadCommitElevation(cmd);
+      ApplyOrthoConstrainFromAnchor(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled,
+                                    cmd.trimCutInfP1z, cmd.uiCursorWorldZ, &lz);
       PushRubberSegViewRel(rubberLines, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, cmd.viewportPanX,
-                           cmd.viewportPanY);
-      const float midx = (cmd.trimCutInfP1x + lx) * 0.5f;
-      const float midy = (cmd.trimCutInfP1y + ly) * 0.5f;
-      CadTrimAppendCutLineRemovedPreview(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, midx, midy, &previewLines);
+                           cmd.viewportPanY, cmd.trimCutInfP1z, lz);
+      // The dashed removal hint. Orbited model view -> the true-3D solve (issue #399 increment 4), so
+      // the hint tracks the geometry's elevation the same way the commit does; plan view / paper keep
+      // the byte-identical 2D path (issue #166's per-frame perf tuning lives there).
+      if (cmd.activeSpaceIndex == kModelSpaceIndex && !CadViewIsPlan(cmd)) {
+        CadTrimAppendCutLineRemovedPreview3D(cmd,
+                                             ray3d::Vec3{cmd.trimCutInfP1x, cmd.trimCutInfP1y, cmd.trimCutInfP1z},
+                                             ray3d::Vec3{lx, ly, lz}, &previewLines);
+      } else {
+        const float midx = (cmd.trimCutInfP1x + lx) * 0.5f;
+        const float midy = (cmd.trimCutInfP1y + ly) * 0.5f;
+        CadTrimAppendCutLineRemovedPreview(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, midx, midy, &previewLines);
+      }
     }
     {
       // Where an armed gizmo drag would put a solid FACE (issue #148 acceptance 4). The ghost
