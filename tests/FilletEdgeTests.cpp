@@ -556,3 +556,109 @@ TEST_CASE("Fillet: a corner whose faces are not square to each other is refused"
   CHECK(w == Problem::FilletCornerNotOrthogonal);
   CHECK(out.faces.empty());
 }
+
+// --- REQ-323 item 4 as amended (D-2026-09-08-g, ADR-046 amendment (l)) ----------------------------
+//
+// The precondition used to be measured ONE EDGE AT A TIME against the ORIGINAL solid, which meant it
+// could not see two requested fillets running into each other. `FILLET 6` on the two 20-long top
+// edges of a 20 x 10 x 8 box — 10 apart across a 10-wide face, so the two setbacks total 12 — was
+// ACCEPTED, and returned a self-intersecting solid reporting volume 1290.97336. `Validate` is
+// topological and did not object; the only case it happened to catch was exact equality, where the
+// face reaches zero area.
+//
+// Found by `/code-review high` on the CHAMFER work (TASK-222 Finding 1), which inherited this
+// precondition from the fillet verbatim.
+
+TEST_CASE("Fillet: two fillets that would run into each other are refused", "[fillet][req323]") {
+  // The top face is only 10 wide and each fillet sets back `r` into it, so the two cut lines cross
+  // for any r > 5 and touch at exactly 5.
+  const brep::Solid box = Box(20.0, 10.0, 8.0);
+  const int back = EdgeAt(box, {0.0, 5.0, 8.0});
+  const int front = EdgeAt(box, {0.0, -5.0, 8.0});
+  REQUIRE(back >= 0);
+  REQUIRE(front >= 0);
+
+  for (const double r : {5.0, 6.0, 7.5}) {
+    brep::Solid out;
+    Problem why{};
+    CHECK_FALSE(brep::FilletEdges(box, {back, front}, r, &out, &why));
+    // Its OWN name, not `FilletRadiusTooLarge`: nothing is wrong with either edge on its own, and a
+    // user told "the far side of an adjacent face" would look for the wrong thing.
+    CHECK(why == Problem::FilletRadiusOverlapsAnother);
+    CHECK(out.faces.empty());
+    // Each edge alone at that radius is still perfectly fine, which is what makes the pairwise
+    // check the thing that was missing rather than the per-edge one being wrong.
+    brep::Solid alone;
+    Problem w{};
+    CHECK(brep::FilletEdge(box, back, r, &alone, &w));
+  }
+
+  // And the largest radius that DOES fit still lands on the closed form, so the new check has not
+  // quietly shrunk the envelope: two prisms of `L r^2 (1 - pi/4)` come off.
+  brep::Solid ok;
+  Problem why{};
+  REQUIRE(brep::FilletEdges(box, {back, front}, 4.9, &ok, &why));
+  CHECK(brep::Validate(ok) == Problem::Ok);
+  const brep::MassProperties mp = brep::ComputeMassProperties(ok);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Approx(1600.0 - 2.0 * 20.0 * 4.9 * 4.9 * (1.0 - kPi / 4.0)).epsilon(1e-12));
+}
+
+TEST_CASE("Fillet: an edge too short for the corners at both its ends is refused",
+          "[fillet][req323]") {
+  // A vertical edge is 8 long, and a corner fillet runs `r` along it before the fillet even begins.
+  // At r = 5 the two corners want 10 of the 8 available. The five edges here are that vertical plus
+  // both complete corners, so nothing else refuses first.
+  const brep::Solid box = Box(20.0, 10.0, 8.0);
+  const std::vector<int> five = {
+      EdgeAt(box, {-10.0, 5.0, 4.0}),  // the vertical
+      EdgeAt(box, {0.0, 5.0, 8.0}),   EdgeAt(box, {-10.0, 0.0, 8.0}),  // its top corner
+      EdgeAt(box, {0.0, 5.0, 0.0}),   EdgeAt(box, {-10.0, 0.0, 0.0}),  // its bottom corner
+  };
+  for (const int e : five)
+    REQUIRE(e >= 0);
+
+  brep::Solid out;
+  Problem why{};
+  CHECK_FALSE(brep::FilletEdges(box, five, 5.0, &out, &why));
+  CHECK(why == Problem::FilletEdgeTooShortForItsCorners);
+  CHECK(out.faces.empty());
+
+  // 3 fits: the two corners want 6 of the 8.
+  brep::Solid ok;
+  Problem w{};
+  REQUIRE(brep::FilletEdges(box, five, 3.0, &ok, &w));
+  CHECK(brep::Validate(ok) == Problem::Ok);
+}
+
+TEST_CASE("Fillet: all twelve edges have a real upper bound now", "[fillet][req323]") {
+  // The box is 8 in its shortest dimension, so the four edges along it are 8 long and a corner at
+  // each end takes `r`. `r = 4` is the exact limit and is refused; `r = 2` — the case the
+  // rounded-box acceptance uses — is unaffected, which is the point of running this beside it.
+  const brep::Solid box = Box(20.0, 10.0, 8.0);
+  std::vector<int> all;
+  for (std::size_t i = 0; i < box.edges.size(); ++i)
+    all.push_back(static_cast<int>(i));
+
+  for (const double r : {4.0, 5.0}) {
+    brep::Solid out;
+    Problem why{};
+    CHECK_FALSE(brep::FilletEdges(box, all, r, &out, &why));
+    CHECK(why == Problem::FilletEdgeTooShortForItsCorners);
+    CHECK(out.faces.empty());
+  }
+
+  brep::Solid ok;
+  Problem w{};
+  REQUIRE(brep::FilletEdges(box, all, 3.9, &ok, &w));
+  CHECK(brep::Validate(ok) == Problem::Ok);
+}
+
+TEST_CASE("Fillet: the two new refusals have their own messages", "[fillet][req323]") {
+  for (const Problem p :
+       {Problem::FilletRadiusOverlapsAnother, Problem::FilletEdgeTooShortForItsCorners}) {
+    const std::string text = brep::ProblemText(p);
+    CHECK(text != "The solid is not valid.");
+    CHECK(text != std::string(brep::ProblemText(Problem::FilletRadiusTooLarge)));
+  }
+}

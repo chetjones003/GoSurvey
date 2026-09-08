@@ -6321,6 +6321,7 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   // so ESC clears it: without this, cancelling would leave the flag set, and the NEXT typed line -
   // whatever it was - would be read as a fillet radius.
   st.filletSolidAwaitingRadius = false;
+  st.chamferSolidAwaitingDistance = false;  // and the same for the solid chamfer's (REQ-331)
 }
 
 // External linkage (CadCommandsInternal.hpp) for the split-out command slices — TASK-150 Phase 2.
@@ -6584,23 +6585,41 @@ const CmdEntry kRegistry[] = {
 /// chosen, neither wrong — so a user who believes they have finished types the next verb into a live
 /// point prompt and is told their coordinate syntax is bad. That reads as a freeze.
 void ReportUnparsedCommandInput(const AppCommandState& st, const std::string& line,
-                                const std::string& fallback, std::vector<std::string>& log) {
+                                const std::string& fallback, std::vector<std::string>& log,
+                                std::size_t markBeforeHandler) {
   const std::string trimmed = StringUtil::trimCopy(line);
   const CmdEntry* entry =
       trimmed.empty() ? nullptr : FindRegistryEntry(StringUtil::toLowerAsciiCopy(trimmed));
   const char* running = AppCommandState::KindName(st.active);
-  if (!entry || !running || running[0] == '\0') {
-    log.push_back(fallback);
+  if (entry && running && running[0] != '\0') {
+    // Name the CANONICAL command rather than echoing the alias back: a user who typed `c` is better
+    // served by "then type CIRCLE" than by being shown their own single letter.
+    //
+    // This half fires whether or not the handler already spoke, and deliberately: it answers a
+    // DIFFERENT confusion - "I thought this command had finished" - which the handler's own message
+    // about columns or radii does not address.
+    std::string wanted = entry->primary;
+    for (char& c : wanted)
+      c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    log.push_back(std::string(running) + " is still running, so \"" + trimmed +
+                  "\" was read as input to it rather than as a command. Press Esc to end " + running +
+                  ", then type " + wanted + ".");
     return;
   }
-  // Name the CANONICAL command rather than echoing the alias back: a user who typed `c` is better
-  // served by "then type CIRCLE" than by being shown their own single letter.
-  std::string wanted = entry->primary;
-  for (char& c : wanted)
-    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-  log.push_back(std::string(running) + " is still running, so \"" + trimmed +
-                "\" was read as input to it rather than as a command. Press Esc to end " + running +
-                ", then type " + wanted + ".");
+  // The generic fallback is a LAST resort. It is better than silence and worse than anything the
+  // handler said in the command's own words (REQ-201), so it is suppressed when the handler already
+  // spoke -- which \p markBeforeHandler is how the caller reports.
+  //
+  // **TASK-225, and the reason this is a rule rather than a per-command patch.** Under a message
+  // like "ARRAY Rectangular - number of columns must be a positive whole number", a following
+  // "Could not parse ARRAY input - see command hints." adds nothing when the input really was
+  // unparseable, and is flatly FALSE when it parsed and was declined on a rule -- `0` columns,
+  // a scale factor of `-2`, a mirror line whose two points coincide. Those two cases share one
+  // `return false` inside most handlers, so no return value can separate them; what CAN be observed,
+  // at the caller and uniformly, is whether the handler already explained itself.
+  if (log.size() > markBeforeHandler)
+    return;
+  log.push_back(fallback);
 }
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -17802,7 +17821,10 @@ bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vecto
     if (!CadApplyFilletToSelectedEdges(st, want, log)) {
       // Already reported by name, and the solid is untouched. Ask again rather than giving up.
       log.push_back("FILLET - specify a different radius, or ESC to cancel:");
-      return false;
+      // TRUE, and the value is the point: this input was UNDERSTOOD - the kernel refused it by
+      // name. Returning false would earn the caller's "Could not parse" trailer, which would be
+      // simply untrue and would contradict the sentence just logged (TASK-224).
+      return true;
     }
     st.filletRadius = static_cast<float>(want);
     st.filletSolidAwaitingRadius = false;
@@ -17851,7 +17873,9 @@ bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vecto
     if (answered) {
       if (!CadApplyFilletToSelectedEdges(st, want, log)) {
         log.push_back("FILLET - specify a different radius, or ESC to cancel:");
-        return false;  // the prompt stays up; nothing was built, so the edges are still selected
+        // Understood and refused, not unparsed - see the note in the prompt branch above. The
+        // prompt stays up either way; nothing was built, so the edges are still selected.
+        return true;
       }
       st.filletRadius = static_cast<float>(want);
       st.active = AppCommandState::Kind::None;
@@ -18565,6 +18589,7 @@ void StartChamferCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.chamferTextAwaitingSecondDist = false;
   st.chamferTextAwaitingAngle = false;
   st.chamferTextAwaitingTrim = false;
+  st.chamferSolidAwaitingDistance = false;
   log.push_back("CHAMFER — select first object or [Distance/Angle/Trim] " + ChamferPromptSuffix(st) +
                ". ESC cancels.");
 }
@@ -18699,6 +18724,33 @@ bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vect
     log.push_back("CHAMFER — pick the second object in the viewport, or ESC to cancel.");
     return false;
   }
+  // The solid-edge chamfer's distance prompt (REQ-331). Checked FIRST, exactly as the fillet's is:
+  // the edges are already chosen, so there is no "select first object" loop to fall back into, and
+  // the prompt STAYS UP on a bad or refused answer rather than dropping the user at the idle command
+  // line. Nothing is built until the kernel accepts, so the selection survives both cases.
+  if (st.chamferSolidAwaitingDistance) {
+    double want = static_cast<double>(st.chamferDist1);
+    if (!line.empty()) {
+      float v = 0.f;
+      if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
+        log.push_back("CHAMFER - distance must be a number. Type one, or ESC to cancel:");
+        return false;
+      }
+      want = static_cast<double>(v);
+    }
+    if (!CadApplyChamferToSelectedEdges(st, want, log)) {
+      // Already reported by name, and the solid is untouched. Ask again rather than giving up.
+      log.push_back("CHAMFER - specify a different distance, or ESC to cancel:");
+      // TRUE, and the value is the point: this input was UNDERSTOOD - the kernel refused it by
+      // name. Returning false would earn the caller's "Could not parse" trailer, which would be
+      // simply untrue and would contradict the sentence just logged (TASK-224).
+      return true;
+    }
+    st.chamferDist1 = static_cast<float>(want);
+    st.chamferSolidAwaitingDistance = false;
+    st.active = AppCommandState::Kind::None;
+    return true;
+  }
   if (st.chamferTextAwaitingFirstValue) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !(v >= 0.f) || !std::isfinite(v)) {
@@ -18751,6 +18803,34 @@ bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vect
     log.push_back(std::string("CHAMFER — trim mode set to ") + (st.cornerTrimMode ? "Trim" : "No trim") +
                  ". Select first object or [Distance/Angle/Trim]:");
     return true;
+  }
+  // Solid EDGES gathered by Ctrl+click while CHAMFER is running (REQ-331, the shape TASK-220 gave
+  // FILLET). A bare Enter or a typed number bevels them; `D`, `A` and `T` below still do what they
+  // always did, so the 2D command is intact underneath. Checked before those options because a
+  // number typed here can only mean a distance — the 2D flow has nothing to do with a bare number at
+  // "select first object".
+  if (CadSubObjectSelectionIsAllEdges(st)) {
+    double want = static_cast<double>(st.chamferDist1);
+    bool answered = line.empty();
+    if (!line.empty()) {
+      float v = 0.f;
+      if (ParseOneFloat(line, &v) && std::isfinite(v)) {
+        want = static_cast<double>(v);
+        answered = true;
+      }
+    }
+    if (answered) {
+      if (!CadApplyChamferToSelectedEdges(st, want, log)) {
+        log.push_back("CHAMFER - specify a different distance, or ESC to cancel:");
+        // Understood and refused, not unparsed - see the note in the prompt branch above. The
+        // prompt stays up either way; nothing was built, so the edges are still selected.
+        return true;
+      }
+      st.chamferDist1 = static_cast<float>(want);
+      st.active = AppCommandState::Kind::None;
+      return true;
+    }
+    // Not a number - fall through so Distance/Angle/Trim still work with edges selected.
   }
   if (low == "d" || low == "distance") {
     st.chamferMode = 0;
@@ -27034,6 +27114,7 @@ bool SubmitSubObjectPick(AppCommandState& st, const ray3d::Ray& ray, const solid
   // and anything later - which is the same reason the pick's own meaning lives in this function
   // rather than in `CadUi.cpp` (REQ-318 / D-2026-09-04-a).
   CadFilletReportEdgeSelection(st, log);
+  CadChamferReportEdgeSelection(st, log);
   return true;
 }
 bool SolidVisible(const AppCommandState& st, size_t solidIndex) {
@@ -29403,6 +29484,126 @@ void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
   }
   if (CadApplyFilletToSelectedEdges(st, radius, log))
     st.filletRadius = static_cast<float>(radius);  // remembered, as the 2D fillet's radius is
+}
+
+// --- CHAMFER on a solid EDGE (REQ-331, command half; issue #148 acceptance 5) ---------------------
+//
+// Deliberately the fillet's shape, function for function, because they are the same command with a
+// different surface behind them: Ctrl+click names the edges, the verb bevels them, one undo step,
+// the selection cleared afterwards because the topology changed. Every comment the fillet's half
+// earned applies here unchanged, so this half states only what DIFFERS - which is nothing about the
+// interaction and everything about the kernel it calls.
+
+bool CadApplyChamferToSelectedEdges(AppCommandState& st, double distance,
+                                    std::vector<std::string>& log) {
+  if (!CadSubObjectSelectionIsAllEdges(st)) {
+    log.push_back("CHAMFER - select solid EDGES first: hold Ctrl and click one.");
+    return false;
+  }
+  // One solid at a time, for the reason `CadApplyFilletToSelectedEdges` records: two solids from one
+  // line would be two edits under one undo step.
+  const int solidIndex = st.subObjectSelection.front().solidIndex;
+  for (const SelectedSubObject& s : st.subObjectSelection)
+    if (s.solidIndex != solidIndex) {
+      log.push_back("CHAMFER - the selected edges are on different solids; this bevels one solid at "
+                    "a time.");
+      return false;
+    }
+  const CadSolidPtr sp = st.subObjectSelection.front().owner.lock();
+  if (!sp || solidIndex < 0 || static_cast<size_t>(solidIndex) >= st.cadSolids.size() ||
+      st.cadSolids[static_cast<size_t>(solidIndex)] != sp) {
+    log.push_back("CHAMFER - that edge is no longer there.");
+    return false;
+  }
+
+  std::vector<int> edges;
+  edges.reserve(st.subObjectSelection.size());
+  for (const SelectedSubObject& s : st.subObjectSelection)
+    edges.push_back(s.index);
+
+  brep::Solid bevelled;
+  brep::Problem why = brep::Problem::Ok;
+  if (!brep::ChamferEdges(*sp, edges, distance, &bevelled, &why)) {
+    log.push_back(std::string("CHAMFER - ") + brep::ProblemText(why));
+    return false;
+  }
+
+  // One undo step for the whole edit, however many edges were named (REQ-331 item 11).
+  PushUndoSnapshot(st, "Chamfer");
+  const auto replaced = std::make_shared<const brep::Solid>(std::move(bevelled));
+  st.cadSolids[static_cast<size_t>(solidIndex)] = replaced;
+  // Cleared for the fillet's reason: a chamfer changes the TOPOLOGY, so the selected edge is gone
+  // and every index after it has shifted (the kernel compacts). ADR-049's expiring reference.
+  st.subObjectSelection.clear();
+
+  BumpCadGpuCache(st);
+  const brep::MassProperties mp = brep::ComputeMassProperties(*replaced);
+  char msg[256];
+  if (mp.valid)
+    std::snprintf(msg, sizeof(msg),
+                  "CHAMFER - %d edge(s) of solid %d bevelled at distance %.4f; volume now %.4f.",
+                  static_cast<int>(edges.size()), solidIndex + 1, distance, mp.volume);
+  else
+    std::snprintf(msg, sizeof(msg), "CHAMFER - %d edge(s) of solid %d bevelled at distance %.4f.",
+                  static_cast<int>(edges.size()), solidIndex + 1, distance);
+  log.push_back(msg);
+  return true;
+}
+
+void CadChamferReportEdgeSelection(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Chamfer)
+    return;
+  if (!CadSubObjectSelectionIsAllEdges(st)) {
+    if (!st.subObjectSelection.empty())
+      log.push_back("CHAMFER - that is not an edge. Ctrl+click a solid EDGE, or ESC to cancel.");
+    return;
+  }
+  char buf[200];
+  std::snprintf(buf, sizeof(buf),
+                "CHAMFER - %d solid edge(s) selected. Ctrl+click more, or type a distance <%.4f> "
+                "and Enter to bevel them.",
+                static_cast<int>(st.subObjectSelection.size()),
+                static_cast<double>(st.chamferDist1));
+  log.push_back(buf);
+}
+
+void CadChamferSolidEdges(AppCommandState& st, const std::string& args,
+                          std::vector<std::string>& log) {
+  if (!CadSubObjectSelectionIsAllEdges(st)) {
+    log.push_back("CHAMFER - select solid EDGES first: hold Ctrl and click one.");
+    return;
+  }
+  const std::string text = StringUtil::trimCopy(args);
+
+  // A bare `CHAMFER` prompts rather than printing usage — the trap TASK-219 found for FILLET, where
+  // entering no command state sent the next keystroke to the idle command line.
+  if (text.empty()) {
+    st.active = AppCommandState::Kind::Chamfer;
+    st.lastCommand = AppCommandState::Kind::Chamfer;
+    st.chamferPhase = AppCommandState::ChamferPhase::WaitFirstEntity;
+    st.chamferSolidAwaitingDistance = true;
+    st.chamferTextAwaitingFirstValue = false;
+    st.chamferTextAwaitingSecondDist = false;
+    st.chamferTextAwaitingAngle = false;
+    st.chamferTextAwaitingTrim = false;
+    char buf[176];
+    std::snprintf(buf, sizeof(buf),
+                  "CHAMFER - %d edge(s) selected. Specify chamfer distance <%.4f>, Enter to accept, "
+                  "ESC to cancel:",
+                  static_cast<int>(st.subObjectSelection.size()),
+                  static_cast<double>(st.chamferDist1));
+    log.push_back(buf);
+    return;
+  }
+
+  char* end = nullptr;
+  const double distance = std::strtod(text.c_str(), &end);
+  if (!end || *end != '\0' || !std::isfinite(distance)) {
+    log.push_back("CHAMFER - \"" + text + "\" is not a number.");
+    return;
+  }
+  if (CadApplyChamferToSelectedEdges(st, distance, log))
+    st.chamferDist1 = static_cast<float>(distance);  // remembered, as the 2D chamfer's distance is
 }
 
 bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& ref,
@@ -32443,8 +32644,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
     } else if (st.active == K::Chamfer) {
       using CP = AppCommandState::ChamferPhase;
+      // The solid chamfer's distance prompt and a live solid-edge selection both count as "waiting
+      // for a value", so blank Enter accepts the remembered distance instead of ending the command —
+      // the same two terms FILLET's branch above carries (REQ-331).
       const bool awaitingValue = st.chamferTextAwaitingFirstValue || st.chamferTextAwaitingSecondDist ||
-                                 st.chamferTextAwaitingAngle || st.chamferTextAwaitingTrim;
+                                 st.chamferTextAwaitingAngle || st.chamferTextAwaitingTrim ||
+                                 st.chamferSolidAwaitingDistance ||
+                                 CadSubObjectSelectionIsAllEdges(st);
       if (st.chamferPhase == CP::WaitFirstEntity && !awaitingValue) {
         // Blank Enter at "select first object" ends CHAMFER — same convention FILLET's loop uses.
         st.active = K::None;
@@ -32561,6 +32767,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
       CadFilletSolidEdges(st, restOfLine, log);
+      return;
+    }
+    // CHAMFER on a solid EDGE (REQ-331). Same gate, same reasoning: only reachable when the
+    // sub-object selection holds solid edges and nothing else, so every existing 2D CHAMFER habit
+    // and transcript is untouched. `cha` is the 2D command's own alias and is honoured here too, so
+    // the two spellings do not diverge.
+    if ((plotTok == "chamfer" || plotTok == "cha") && CadSubObjectSelectionIsAllEdges(st)) {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      CadChamferSolidEdges(st, restOfLine, log);
       return;
     }
     if (plotTok == "presspull" || plotTok == "pp") {
@@ -33622,74 +33838,83 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (st.active == AppCommandState::Kind::Move || st.active == AppCommandState::Kind::Copy) {
+    const std::size_t mark = log.size();
     if (HandleModifyText(st, st.active == AppCommandState::Kind::Copy, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Stretch) {
+    const std::size_t mark = log.size();
     if (HandleStretchText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse STRETCH input — use X,Y or @dx,dy from base.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse STRETCH input — use X,Y or @dx,dy from base.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Scale) {
+    const std::size_t mark = log.size();
     if (HandleScaleText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse SCALE input — see command hints (base X,Y; factor; R + reference/new length).", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse SCALE input — see command hints (base X,Y; factor; R + reference/new length).", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Rotate) {
+    const std::size_t mark = log.size();
     if (HandleRotateText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse ROTATE input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse ROTATE input — see command hints.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Mirror) {
+    const std::size_t mark = log.size();
     if (HandleMirrorText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse MIRROR input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse MIRROR input — see command hints.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Array) {
+    const std::size_t mark = log.size();
     if (HandleArrayText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse ARRAY input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse ARRAY input — see command hints.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Lengthen) {
+    const std::size_t mark = log.size();
     if (HandleLengthenText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse LENGTHEN input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse LENGTHEN input — see command hints.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Fillet) {
+    const std::size_t mark = log.size();
     if (HandleFilletText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse FILLET input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse FILLET input — see command hints.", log, mark);
     return;
   }
 
   if (st.active == AppCommandState::Kind::Chamfer) {
+    const std::size_t mark = log.size();
     if (HandleChamferText(st, line, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse CHAMFER input — see command hints.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse CHAMFER input — see command hints.", log, mark);
     return;
   }
 
@@ -34146,12 +34371,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
     }
 
+    // No handler ran for this one - the parsing above is inline - so nothing can have spoken for
+    // this input, and `log.size()` is the honest mark. The fallback below is the only message.
     ReportUnparsedCommandInput(
         st, line,
         std::string("Could not parse point. Use X,Y or X Y") +
             (allowRel ? "; @dx,dy; A / 2P (two picks); A 45 +90; ortho distance toward cursor."
                       : "."),
-        log);
+        log, log.size());
     return;
   }
 
@@ -34179,10 +34406,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (st.active == AppCommandState::Kind::Circle) {
+    const std::size_t mark = log.size();
     if (HandleCircleTextInput(line, st, log)) {
       return;
     }
-    ReportUnparsedCommandInput(st, line, "Could not parse input for current CIRCLE step — see hint below.", log);
+    ReportUnparsedCommandInput(st, line, "Could not parse input for current CIRCLE step — see hint below.", log, mark);
     return;
   }
 
@@ -34760,6 +34988,23 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
 
   if (st.active == K::Chamfer) {
     using CP = AppCommandState::ChamferPhase;
+    // Edges gathered by Ctrl+click while the command is running, then the distance prompt. Ahead of
+    // the 2D prompts because they are the more specific state — the order FILLET's block uses.
+    if (CadSubObjectSelectionIsAllEdges(st)) {
+      static char buf[128];
+      std::snprintf(buf, sizeof(buf),
+                    "CHAMFER: %d solid edge(s) | Ctrl+click more, distance <%.4f> | ESC cancel",
+                    static_cast<int>(st.subObjectSelection.size()),
+                    static_cast<double>(st.chamferDist1));
+      return buf;
+    }
+    if (st.chamferSolidAwaitingDistance) {
+      static char buf[128];
+      std::snprintf(buf, sizeof(buf), "CHAMFER: distance for %d solid edge(s) <%.4f> | ESC cancel",
+                    static_cast<int>(st.subObjectSelection.size()),
+                    static_cast<double>(st.chamferDist1));
+      return buf;
+    }
     if (st.chamferTextAwaitingFirstValue) {
       static char buf[96];
       if (st.chamferMode == 0)
