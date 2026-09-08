@@ -36,6 +36,34 @@ inline Vec3 Normalize(const Vec3& a) {
   return {a.x / len, a.y / len, a.z / len};
 }
 
+/// Rodrigues' rotation of DIRECTION \p v about UNIT axis \p axisUnit by \p angleRad, radians
+/// positive by the right-hand rule. A direction has no position, so there is no axis-point
+/// parameter here — that is exactly what distinguishes this from \ref RotatePointAboutAxis below,
+/// and why a plane NORMAL (a direction) and a plane's CENTRE (a point) are rotated by two different
+/// calls even though they share one angle and one axis (REQ-328).
+///
+/// \p axisUnit is trusted to already be a unit vector — every call site already has one (a plane
+/// normal, a UCS Z axis) and re-normalizing here would hide a degenerate axis instead of surfacing
+/// it. Equivalent to `brep.cpp`'s file-private `RotateAbout` (SWEEP/LOFT framing) — not merged into
+/// one symbol, since that one has no reason to leave `brep.cpp` and this one has every reason to be
+/// callable without a `Solid` in scope.
+inline Vec3 RotateVectorAboutAxis(const Vec3& v, const Vec3& axisUnit, double angleRad) {
+  const double c = std::cos(angleRad);
+  const double s = std::sin(angleRad);
+  return Add(Add(Scale(v, c), Scale(Cross(axisUnit, v), s)), Scale(axisUnit, Dot(axisUnit, v) * (1.0 - c)));
+}
+
+/// The same rotation, applied to a POINT about the LINE through \p axisPoint with unit direction
+/// \p axisUnit: translate the point so the axis passes through the origin, rotate the resulting
+/// direction, translate back. Reduces to a plain about-the-origin rotation when \p axisPoint is
+/// {0,0,0} — the case \ref RotateVectorAboutAxis already covers directly, which is why direction and
+/// point are not the same function with an ignored parameter: a caller rotating a plane normal has
+/// no axis point to give it, and a caller rotating a centre point always does.
+inline Vec3 RotatePointAboutAxis(const Vec3& p, const Vec3& axisPoint, const Vec3& axisUnit,
+                                 double angleRad) {
+  return Add(axisPoint, RotateVectorAboutAxis(Sub(p, axisPoint), axisUnit, angleRad));
+}
+
 /// A ray: a point and a direction. \c dir is expected normalized; a zero \c dir marks it invalid.
 struct Ray {
   Vec3 origin;

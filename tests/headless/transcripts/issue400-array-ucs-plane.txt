@@ -27,6 +27,7 @@ CMD 3
 CMD 20
 CMD 2
 CMD 15
+CMD
 EXPECT LOG "6 total instance(s) (3 x 2)"
 EXPECT LINES 6
 EXPECT LINEXYZ 1 20 0 0 30 0 0
@@ -53,6 +54,7 @@ CMD 3
 CLICKUCS 10 0
 CMD 1
 CMD 0
+CMD
 EXPECT LOG "3 total instance(s) (3 x 1)"
 EXPECT LINES 3
 CMD UCS
@@ -81,6 +83,7 @@ CMD 1
 CMD 0
 CMD 2
 CLICKUCS 0 10
+CMD
 EXPECT LOG "2 total instance(s) (1 x 2)"
 EXPECT LINES 2
 CMD UCS
@@ -114,7 +117,12 @@ CMD UCS
 CMD W
 CHECK ALL
 
-# --- Polar refused under a UCS tilted out of horizontal -------------------------------------------
+# --- Polar under a UCS tilted out of horizontal now WORKS (REQ-328 superseded the old refusal) ----
+# "UCS X 90" sends UCS +Z to world (0,-1,0) (see req312-arbitrary-plane-curves.txt's own worked
+# example). The circle sits at UCS (10,0) = world (10,0,0), on the tilted work plane, with normal
+# (0,-1,0). Rotating 90 degrees (n=4, full turn) about that tilted axis through the UCS origin sends
+# world (10,0,0) to world (0,0,10) — computed by hand via Rodrigues' rotation, not asserted against
+# whatever the implementation happens to produce.
 NEW
 CMD UCS
 CMD X
@@ -127,5 +135,68 @@ BOX 5 -5 15 5
 EXPECT SELECTED 1
 CMD ARRAY
 CMD p
-EXPECT LOG "ARRAY Polar — refused"
-EXPECT CIRCLES 1
+CLICKUCS 0 0
+CMD 4
+CMD 360
+CMD y
+EXPECT LOG "4 total instance(s) (polar)"
+EXPECT CIRCLES 4
+EXPECT CIRCLEXYZ 1 0 0 10 2 0 -1 0
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- Polar under a tilted axis still refuses Annotation (no stored plane normal, REQ-328 item 2) --
+# The circle in the same selection still arrays correctly; only the text is excluded, by name.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 10 0
+CMD 2
+ESC
+CMD TEXT
+CLICKUCS 10 0
+CMD 1
+CMD 0
+CMD HELLO
+ESC
+BOX 5 -5 15 5
+EXPECT SELECTED 2
+CMD ARRAY
+CMD p
+CLICKUCS 0 0
+CMD 4
+CMD 360
+CMD y
+EXPECT LOG "1 entity(ies) excluded"
+EXPECT LOG "4 total instance(s) (polar)"
+EXPECT CIRCLES 4
+CMD UCS
+CMD W
+
+# --- Polar under a tilted axis also rotates a Line correctly (REQ-328) -----------------------------
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 10 0
+CLICKUCS 10 5
+ESC
+BOX 5 -5 15 10
+EXPECT SELECTED 1
+CMD ARRAY
+CMD p
+CLICKUCS 0 0
+CMD 4
+CMD 360
+CMD y
+EXPECT LOG "4 total instance(s) (polar)"
+EXPECT LINES 4
+# Same Rodrigues computation as the circle case above (axis (0,-1,0) through the origin, 90 deg):
+# UCS (10,0) -> world (10,0,0) -> rotated (0,0,10); UCS (10,5) -> world (10,0,5) -> rotated (-5,0,10).
+EXPECT LINEXYZ 1 0 0 10 -5 0 10
+CMD UCS
+CMD W

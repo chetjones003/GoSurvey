@@ -299,3 +299,94 @@ TEST_CASE("Elevation separates points that are coincident in plan", "[ray3d]") {
   REQUIRE(RayPointDistance(alongX, Vec3{0.0, 0.0, 0.0}) == Approx(0.0).margin(1e-9));
   REQUIRE(RayPointDistance(alongX, Vec3{0.0, 0.0, 15.0}) == Approx(15.0));
 }
+
+// ---------------------------------------------------------------------------
+// RotateVectorAboutAxis / RotatePointAboutAxis — REQ-328, the general primitive Polar ARRAY's
+// tilted-UCS case (and eventually solid rotation / 3D ROTATE) is built on.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("RotatePointAboutAxis about world Z through the origin matches plain 2D rotation", "[ray3d][req328]") {
+  // REQ-328's own regression guard: the Z-through-origin case must reproduce
+  // CadCommands.cpp's RotateAroundBase bit-for-bit-equivalent arithmetic (x'=bx+c*dx-s*dy,
+  // y'=by+s*dx+c*dy), not a parallel formula that could silently drift from it.
+  const Vec3 axisPoint{0.0, 0.0, 0.0};
+  const Vec3 axisUnit{0.0, 0.0, 1.0};
+  const double rad = 1.2;  // an arbitrary angle, deliberately not a "nice" multiple of pi/2
+  const Vec3 p{3.0, 4.0, 7.5};
+  const Vec3 got = RotatePointAboutAxis(p, axisPoint, axisUnit, rad);
+  const double c = std::cos(rad);
+  const double s = std::sin(rad);
+  REQUIRE(got.x == Approx(c * p.x - s * p.y));
+  REQUIRE(got.y == Approx(s * p.x + c * p.y));
+  REQUIRE(got.z == Approx(p.z));  // a Z-axis rotation never touches elevation
+}
+
+TEST_CASE("RotatePointAboutAxis about world Z through an off-origin point matches RotateAroundBase", "[ray3d][req328]") {
+  const Vec3 axisPoint{10.0, -5.0, 3.0};
+  const Vec3 axisUnit{0.0, 0.0, 1.0};
+  const double rad = -0.7;
+  const Vec3 p{13.0, -1.0, 20.0};
+  const Vec3 got = RotatePointAboutAxis(p, axisPoint, axisUnit, rad);
+  const double c = std::cos(rad);
+  const double s = std::sin(rad);
+  const double dx = p.x - axisPoint.x;
+  const double dy = p.y - axisPoint.y;
+  REQUIRE(got.x == Approx(axisPoint.x + c * dx - s * dy));
+  REQUIRE(got.y == Approx(axisPoint.y + s * dx + c * dy));
+  REQUIRE(got.z == Approx(p.z));  // Z-axis rotation: the axis point's own Z is irrelevant to output Z
+}
+
+TEST_CASE("RotateVectorAboutAxis about a genuinely tilted axis, checked by hand", "[ray3d][req328]") {
+  // Axis = world X, angle = 90 degrees: +Y rotates onto +Z, +Z rotates onto -Y (right-hand rule).
+  const Vec3 axisUnit{1.0, 0.0, 0.0};
+  const double rad = 3.14159265358979323846 / 2.0;
+  const Vec3 gotY = RotateVectorAboutAxis(Vec3{0.0, 1.0, 0.0}, axisUnit, rad);
+  REQUIRE(gotY.x == Approx(0.0).margin(1e-9));
+  REQUIRE(gotY.y == Approx(0.0).margin(1e-9));
+  REQUIRE(gotY.z == Approx(1.0));
+  const Vec3 gotZ = RotateVectorAboutAxis(Vec3{0.0, 0.0, 1.0}, axisUnit, rad);
+  REQUIRE(gotZ.x == Approx(0.0).margin(1e-9));
+  REQUIRE(gotZ.y == Approx(-1.0));
+  REQUIRE(gotZ.z == Approx(0.0).margin(1e-9));
+  // The axis itself is a fixed point of its own rotation.
+  const Vec3 gotAxis = RotateVectorAboutAxis(axisUnit, axisUnit, rad);
+  REQUIRE(gotAxis.x == Approx(1.0));
+  REQUIRE(gotAxis.y == Approx(0.0).margin(1e-9));
+  REQUIRE(gotAxis.z == Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("RotatePointAboutAxis about a tilted axis translates then rotates then translates back", "[ray3d][req328]") {
+  // Axis: the vertical line... no, the LINE x=5,z=0 running along world Y (direction (0,1,0)),
+  // angle 90 degrees. A point on the axis is unmoved; a point off the axis sweeps around it.
+  const Vec3 axisPoint{5.0, 0.0, 0.0};
+  const Vec3 axisUnit{0.0, 1.0, 0.0};
+  const double rad = 3.14159265358979323846 / 2.0;
+  // On the axis: unchanged regardless of Y (translation along the axis direction is free).
+  const Vec3 onAxis = RotatePointAboutAxis(Vec3{5.0, 42.0, 0.0}, axisPoint, axisUnit, rad);
+  REQUIRE(onAxis.x == Approx(5.0));
+  REQUIRE(onAxis.y == Approx(42.0));
+  REQUIRE(onAxis.z == Approx(0.0).margin(1e-9));
+  // Off the axis: (8,0,0) is offset (3,0,0) from the axis point; rotating +X by 90 deg about +Y
+  // sends +X to -Z (right-hand rule: Y cross X = -Z, matches Rodrigues with k=(0,1,0), v=(1,0,0):
+  // k x v = (0*0-1*0, 1*1-0*0, 0*0-1*1) = (0,1,-1)... computed directly below instead of asserted
+  // by a second hand-rule sentence, to avoid two independently-fallible derivations agreeing by luck.
+  const Vec3 off = RotatePointAboutAxis(Vec3{8.0, 0.0, 0.0}, axisPoint, axisUnit, rad);
+  REQUIRE(off.y == Approx(0.0).margin(1e-9));
+  // Distance from the axis line is preserved by any rotation about it.
+  const double distBefore = std::sqrt((8.0 - 5.0) * (8.0 - 5.0));
+  const double distAfter = std::sqrt((off.x - 5.0) * (off.x - 5.0) + off.z * off.z);
+  REQUIRE(distAfter == Approx(distBefore));
+}
+
+TEST_CASE("RotateVectorAboutAxis ignores axis point, a direction has no position", "[ray3d][req328]") {
+  const Vec3 axisUnit{0.0, 0.0, 1.0};
+  const double rad = 0.9;
+  const Vec3 v{2.0, 5.0, -3.0};
+  // Rotating the vector directly must equal rotating it as a "point" about an axis through the
+  // origin — the whole point of the two-function split (REQ-328 item 1).
+  const Vec3 viaVector = RotateVectorAboutAxis(v, axisUnit, rad);
+  const Vec3 viaPoint = RotatePointAboutAxis(v, Vec3{0.0, 0.0, 0.0}, axisUnit, rad);
+  REQUIRE(viaVector.x == Approx(viaPoint.x));
+  REQUIRE(viaVector.y == Approx(viaPoint.y));
+  REQUIRE(viaVector.z == Approx(viaPoint.z));
+}

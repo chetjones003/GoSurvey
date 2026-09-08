@@ -1722,15 +1722,18 @@ requirements is a planning failure, not a sign of rigor.
       duplication-by-translation already carries a Z delta the same way REQ-322 MOVE does); in plan
       view under the World UCS, results are byte-identical to today (regression guard: the World UCS
       plane IS world XY);
-  11. Polar array rotates about the active UCS Z axis through the picked centre, for any UCS whose Z
-      axis is parallel to world Z (the UCS X/Y axes may be freely rotated and translated within a
-      horizontal plane — e.g. `UCS Z <angle>` / `UCS Origin`). Rotate-items = Yes carries each
-      instance's orientation through that same rotation. **A UCS tilted out of horizontal (Z axis not
-      parallel to world Z — e.g. an orbited-view "3-point" or "View" UCS) is refused for polar arrays
-      with a named log message**, matching this project's existing scope line for ROTATE/SCALE: solid
-      and 2D-entity rotation about an arbitrary 3D axis is not yet built anywhere in this codebase
-      (D-2026-09-04-g), and polar ARRAY reuses that same primitive rather than inventing a second one.
-      Lifting this refusal is tracked as future scope alongside 3D ROTATE, not part of this increment.
+  11. Polar array rotates about the active UCS Z axis through the picked centre, for ANY UCS
+      (**superseded by REQ-328**: the original tilted-UCS refusal below is lifted for
+      Line/Polyline/Circle/Arc/FilledRegion; Ellipse/Annotation/Table/BlockRef/FeatureLine still
+      refuse under a tilted axis specifically — see REQ-328 item 2). Rotate-items = Yes carries each
+      instance's orientation through that same
+      rotation. ~~A UCS tilted out of horizontal (Z axis not parallel to world Z — e.g. an
+      orbited-view "3-point" or "View" UCS) is refused for polar arrays with a named log message,
+      matching this project's existing scope line for ROTATE/SCALE: solid and 2D-entity rotation
+      about an arbitrary 3D axis is not yet built anywhere in this codebase (D-2026-09-04-g), and
+      polar ARRAY reuses that same primitive rather than inventing a second one.~~ (struck rather
+      than deleted: this is exactly the refusal REQ-328 was written to lift, and a future reader
+      should be able to see that it was a real, reasoned boundary at the time, not an oversight.)
   12. (GitHub issue #400, D-2026-09-07-b, increment 2 of 3) Rectangular ARRAY gains an optional third
       "levels" count + spacing, measured along the active UCS Z axis, stacking the whole 2D grid at
       `levelSpacing` intervals for `levels` layers. **0 or 1 level is the default (Enter at the
@@ -1757,7 +1760,12 @@ requirements is a planning failure, not a sign of rigor.
       copies the next rebuild silently discards rather than a real duplicate.
 - Owner-layer: Commands (`CadCommands.cpp`/`.hpp`), Viewport (`TransformPreview.cpp`, cursor hint)
 - Status: accepted
-- Revisions: 2026-09-07 — Acceptance 13 added (GitHub issue #400, D-2026-09-07-c, increment 3 of
+- Revisions: 2026-09-07 — Acceptance 11's tilted-UCS refusal superseded by REQ-328 (D-2026-09-07-d):
+  the general arbitrary-axis rotation primitive lifts it for Line/Polyline/Circle/Arc/FilledRegion;
+  Ellipse/Annotation/Table/BlockRef/FeatureLine keep refusing under a tilted axis, the new, narrower
+  boundary (widened from the original plan while implementing, once `CadEllipse`'s "always flat, no
+  stored normal" design and `AppendFeatureLineCopy`'s shared (x,y)-only signature were found).
+  2026-09-07 — Acceptance 13 added (GitHub issue #400, D-2026-09-07-c, increment 3 of
   3): Rectangular ARRAY duplicates solids, matching MOVE's REQ-322 translation case; Polar ARRAY
   keeps refusing them (REQ-322 item 6 amended accordingly — see that requirement's own revision
   note). Surfaces stay excluded from both, unchanged, matching every other transform command.
@@ -7685,6 +7693,103 @@ capability that does not exist. They are recorded here rather than quietly dropp
   explicitly named as open scope beyond issue #399 rather than silently left unstated. Same day,
   increment 3 delivered: extended target and cutting-edge support to Polyline (straight-chord
   parity with the existing 2D path), closing out all three originally staged increments.
+
+### REQ-328 — Rotate 2D entity geometry about an arbitrary 3D axis (GitHub issue #400)
+
+- Purpose: two independent refusals (Polar ARRAY under a tilted UCS, REQ-305 acceptance 11; ROTATE
+  and SCALE staying plan-only and refusing solids, REQ-322 item 6/D-2026-09-04-g) trace to the same
+  missing primitive: nothing in this codebase rotates anything about an axis that is not world Z.
+  `RotateAroundBase` (`CadCommands.cpp:7841`) and every duplication/in-place-rotate function built on
+  it (`DuplicateCadSelectionRotated`, `ApplyRotationToSelection`, `RotateNormalAboutZ`) are 2D-only by
+  construction — a bare (x, y) in, (x, y) out. Building the general primitive once, and re-pointing
+  the existing world-Z call sites at it, closes the Polar-ARRAY-under-a-tilted-UCS gap immediately
+  and makes 3D ROTATE/SCALE and solid rotation each a wiring exercise rather than a second geometry
+  problem.
+- Priority: should
+- Type: functional/architectural
+- Depends on: REQ-312 (Arbitrary Axis Algorithm groundwork — arcs/circles already carry a plane
+  normal this reuses), REQ-322 (3D MOVE — same "one place, not a per-field sweep" principle
+  `brep::Translate` established, applied here to rotation), REQ-305 acceptance 11 (the immediate
+  consumer).
+- Statement: **this increment is the 2D-entity primitive and its Polar ARRAY consumer only.** Solid
+  rotation (every vertex, arc-edge frame, face surface origin and NURBS control point of a
+  `brep::Solid`) is explicitly OUT of scope here — it is its own kernel-shaped problem, tracked as
+  follow-on scope for issue #400, not a footnote to this requirement. 3D ROTATE/SCALE as typed
+  commands, and the MOVE gizmo's rotate/scale handles (deferred by D-2026-09-04-g), are also
+  follow-on: this requirement supplies the primitive they will each call, not their own UI/command
+  wiring.
+
+  1. **The primitive.** `ray3d::RotateVectorAboutAxis(v, axisUnit, angleRad)` (Rodrigues' rotation of
+     a direction about a unit axis through the origin) and `ray3d::RotatePointAboutAxis(p, axisPoint,
+     axisUnit, angleRad)` (the same, translated to rotate about a LINE rather than through the
+     origin: subtract `axisPoint`, rotate the vector, add `axisPoint` back). Both are pure, dependency
+     -free additions to `ray3d.hpp` — no CAD session state, matching that header's existing contract.
+     `brep.cpp`'s private `RotateAbout` (used by SWEEP/LOFT framing, `brep.cpp:3974`) is UNCHANGED —
+     it already does exactly this and stays where it is; the public version is for callers outside
+     `brep.cpp` that do not need a `Solid`, and the two are not required to be merged into one
+     symbol just because they compute the same formula.
+  2. **`RotateSelectionAboutAxis(st, axisPoint, axisUnit, angleRad)`** — a new Commands-layer function
+     with the same duplication shape as `DuplicateCadSelectionRotated`, but general:
+     - Line, Polyline, FilledRegion: every vertex is a bare 3D point — rotating it is already
+       completely well-defined with no orientation concept to preserve. No entity-type gap here.
+     - Circle, Arc (REQ-312 plane-normal types): the centre point rotates via `RotatePointAboutAxis`;
+       the plane NORMAL rotates via `RotateVectorAboutAxis` (a direction, so the axis-point
+       translation does not apply); an Arc additionally re-anchors its start point exactly as
+       `DuplicateCadSelectionRotated` already does for the world-Z case (rotate the existing world
+       start point about the same axis, then `CadReanchorArcStart`).
+     - **Ellipse, Annotation, Table, BlockRef, FeatureLine are REFUSED when the axis is not parallel
+       to world Z**, with a named log line, rather than silently mis-rotated. None of these five
+       stores a plane normal: `CadEllipse` is documented "parallel to XY, absolute" by construction
+       (unlike Circle/Arc, which gained a normal for REQ-312) — a narrower finding made WHILE
+       implementing this requirement, not assumed ahead of it; `CadAnnotation`'s `rotationRad` and a
+       block reference's rotation are bare scalars with the same assumption; and
+       `AppendFeatureLineCopy`'s shared duplication helper only ever sees a vertex's (x, y), with Z
+       carried through untouched — correct for a Z-parallel axis (whose x'/y' output never depends on
+       z, the same fact `Ray3dTests`' off-origin-Z-axis case proves algebraically) but wrong for a
+       tilted one, where x'/y' genuinely depend on z. Tipping any of these five out of world/UCS XY
+       has no representable result with today's data model (Ellipse, Annotation, Table, BlockRef) or
+       would need a wider shared helper serving every OTHER caller too (FeatureLine) — a stated
+       boundary, not an oversight; lifting it is new scope, not part of this requirement. When the
+       axis IS parallel to world Z (including a translated axis point — any vertical line), all five
+       rotate exactly as they do today: this is not a regression for the case that already worked,
+       only a name for a case that previously never arose because nothing called this function with
+       any other axis.
+  3. **Polar ARRAY (REQ-305 acceptance 11) is rebuilt on this primitive.** The tilted-UCS refusal
+     added by increment 1 is LIFTED for Line/Polyline/Circle/Arc/FilledRegion; Ellipse/Annotation/
+     Table/BlockRef/FeatureLine keep refusing (item 2 above) under a tilted UCS specifically —
+     Rectangular ARRAY is unaffected (translation only, no gap to begin with). Rotate-items = Yes
+     still carries each instance's
+     orientation through the same rotation (the normal-rotation step above, generalized from the
+     world-Z-only `RotateNormalAboutZ`).
+- Acceptance:
+  - `RotateVectorAboutAxis`/`RotatePointAboutAxis` reproduce `RotateAroundBase`'s exact output when
+    the axis is (0,0,1) through the world origin (regression guard: the Z-only primitive is a special
+    case of the general one, not a parallel implementation that could drift from it);
+  - a Line, Polyline, Circle, Arc and FilledRegion each rotate correctly about a genuinely tilted axis
+    (not world-Z-parallel), verified against hand-computed coordinates within REQ-101; a rotated Arc's
+    start/end points and swept angle are unchanged in the arc's own rotated frame;
+  - Polar ARRAY under a UCS tilted out of horizontal (previously refused outright) now arrays a
+    selection of Line/Circle/Arc/Polyline/FilledRegion correctly, rotating about the UCS's own
+    (tilted) Z axis through the picked centre;
+  - Polar ARRAY under a tilted UCS still refuses Ellipse/Annotation/Table/BlockRef/FeatureLine in the
+    selection, by name, while arraying the rest — matching the existing Solid-refusal wording style
+    (REQ-305 acceptance 13);
+  - Polar ARRAY under a UCS whose Z axis IS parallel to world Z is bit-for-bit unchanged (regression
+    guard, covers every pre-existing transcript);
+  - plain ROTATE/typed-command behaviour is completely unaffected — this requirement adds a new
+    function and a new ARRAY consumer, it does not change `RotateAroundBase`, `ApplyRotationToSelection`
+    or any existing call site.
+- Owner-layer: Domain (`ray3d.hpp`), Commands (`CadCommands.cpp`: `RotateSelectionAboutAxis`,
+  `CommitArrayPolar`, the Polar-tilted-UCS refusal in `HandleArrayText`).
+- Status: proposed
+- Revisions: 2026-09-07 — catalogued from the scope note on GitHub issue #400 (comment following
+  increments 1-3): two independent refusals (Polar ARRAY under a tilted UCS; ROTATE/SCALE/solid
+  rotation) were found to share one missing primitive while implementing issue #400 increments 1 and
+  3. Scoped to the 2D-entity primitive and its Polar ARRAY consumer only — solid rotation and 3D
+  ROTATE/SCALE typed-command wiring are named explicitly as follow-on, not silently implied to be
+  included, since each is a substantial piece of work in its own right (solid rotation touches every
+  face/edge/vertex representation `brep::Translate` already had to handle; 3D ROTATE/SCALE need their
+  own command-flow and gizmo-handle design, which is REQ-060's own deferred scope, D-2026-09-04-g).
 
 ### REQ-203 — The command layer is drivable without a window
 - Purpose: debuggability, maintainability — the interactive surface is the largest part of the
