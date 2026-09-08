@@ -69,6 +69,32 @@ CMD -7
 EXPECT SOLIDS 3
 EXPECT SOLIDPROPS 2 4200 1900 8 12 6
 
+# --- Bare PRESSPULL FIRST, select the shape WHILE it is running, THEN a blank Enter advances -----
+# The order that matters: EXTRUDE already covers "select first, then type the bare command" above
+# (SUBOBJECT/BOX before `CMD PRESSPULL`); this is the other order — nothing selected when the
+# command opens, a click accumulates the selection while SelectTarget is the active phase, and a
+# blank Enter (the same signal a right-click-as-Enter or a raw Enter keypress sends) is what has to
+# notice the selection and move on. A regression here previously left PRESSPULL's blank-Enter
+# swallowed by ProcessCommandLineSubmit's early empty-line dispatch, which had no PressPull branch.
+# 15 x 8, PRESSPULL 4: volume 15*8*4 = 480. Area 2*120 + perimeter 46 * 4 = 240 + 184 = 424.
+CMD POLYLINE
+CMD 400,0
+CMD 415,0
+CMD 415,8
+CMD 400,8
+CMD CLOSE
+ESC
+EXPECT POLYLINES 3
+CMD PRESSPULL
+EXPECT LOG "closed polyline or circle"
+BOX 398 -2 417 10
+EXPECT SELECTED 1
+CMD
+EXPECT LOG "specify distance"
+CMD 4
+EXPECT SOLIDS 4
+EXPECT SOLIDPROPS 3 480 424 8 12 6
+
 # --- A line in the selection is reported, not silently swallowed -------------------------------
 CMD LINE
 CMD 300,0
@@ -78,7 +104,7 @@ BOX 299 -2 321 2
 EXPECT SELECTED 1
 CMD PRESSPULL 3
 EXPECT LOG "no face in it"
-EXPECT SOLIDS 3
+EXPECT SOLIDS 4
 
 # --- A bare PRESSPULL with NOTHING selected asks for a target rather than refusing outright ------
 CMD PRESSPULL

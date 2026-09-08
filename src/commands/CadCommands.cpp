@@ -30242,6 +30242,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // Enter confirms the selected profiles (SelectProfiles) or commits at the cursor height
       // (WaitHeight) — HandleExtrudeTextInput handles both, so the empty line is not swallowed here.
       (void)HandleExtrudeTextInput("", st, log);
+    } else if (st.active == K::PressPull) {
+      // Enter confirms the selected target (SelectTarget) or commits at the cursor distance
+      // (WaitDistance) — HandlePressPullTextInput handles both, so the empty line is not swallowed
+      // here. Without this branch a blank Enter (or right-click-as-Enter, or a raw Enter keypress
+      // with the command line focused) during PRESSPULL falls through this whole block's else-if
+      // chain, matches nothing, and is silently discarded by the `return` below — exactly EXTRUDE's
+      // note above, for the same reason.
+      (void)HandlePressPullTextInput("", st, log);
     } else if (st.active == K::Revolve) {
       // Enter confirms the selection, or (at the angle prompt) commits at the default angle.
       (void)HandleRevolveTextInput("", st, log);
