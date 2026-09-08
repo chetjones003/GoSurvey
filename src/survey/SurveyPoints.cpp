@@ -269,8 +269,8 @@ bool TryPlaceSurveyPoint(AppCommandState& st, float easting, float northing, flo
   return false;
 }
 
-void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, float dy, SurveyDuplicatePolicy policy,
-                                             std::vector<std::string>& log) {
+void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, float dy, float dz,
+                                             SurveyDuplicatePolicy policy, std::vector<std::string>& log) {
   auto& pts = st.surveyPoints;
   auto& buffers = st.surveyPointIdBuffers;
   std::vector<int> ix = st.selectedSurveyPointIndices;
@@ -290,6 +290,7 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
     SurveyPoint copy = pts[static_cast<size_t>(i)];
     copy.easting += dx;
     copy.northing += dy;
+    copy.elevation += dz;
     const int srcId = copy.id;
 
     auto findOtherWithId = [&](int id) -> int {

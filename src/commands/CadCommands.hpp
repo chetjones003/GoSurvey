@@ -3631,6 +3631,7 @@ struct AppCommandState {
   bool copySurveyDupModalOpenRequested = false;
   float pendingCopyDx = 0.f;
   float pendingCopyDy = 0.f;
+  float pendingCopyDz = 0.f;  // REQ-329 increment 1: COPY under a UCS carries a Z delta to survey points
   SurveyDuplicatePolicy copySurveyDuplicatePolicy = SurveyDuplicatePolicy::Renumber;
   /// DXF import merges its embedded survey points with existing ones. Points whose ID collides are held
   /// here (in WORLD coordinates) until the user resolves them via the conflict modal.

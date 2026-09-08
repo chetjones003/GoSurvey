@@ -9054,14 +9054,16 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
     BumpCadGpuCache(st);
 }
 
-static void FinalizeCopyTranslation(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
+static void FinalizeCopyTranslation(AppCommandState& st, float dx, float dy, float dz,
+                                    std::vector<std::string>& log) {
   st.pendingSurveyDupIsRotate = false;
-  DuplicateCadSelectionTranslated(st, dx, dy);
+  DuplicateCadSelectionTranslated(st, dx, dy, dz);
   // Stay in COPY — same selection + base, ready for another destination.
   st.modifyPhase = AppCommandState::ModifyPhase::NeedDestination;
   if (!st.selectedSurveyPointIndices.empty()) {
     st.pendingCopyDx = dx;
     st.pendingCopyDy = dy;
+    st.pendingCopyDz = dz;
     st.copySurveyDupModalOpen = true;
     st.copySurveyDupModalOpenRequested = true;
     log.push_back("COPY — CAD geometry duplicated; choose survey ID policy.");
@@ -10316,48 +10318,128 @@ static bool PeelTypedElevation(const std::string& raw, std::string* outXy, float
   return true;
 }
 
+/// REQ-329 increment 1 (GitHub issue #402): resolve a typed MOVE/COPY point to storage X/Y plus a
+/// world Z, honouring the active UCS.
+///
+/// Under the World UCS — and any in-plan survey drawing (\c CadWorkPlaneIsWorldXy) — this is exactly
+/// the pre-REQ-329 path: \c ParseStoragePoint for the X/Y pair (which already applies an in-plan UCS
+/// rotation) and the peeled elevation as a world Z, relative or absolute exactly as REQ-322 defined
+/// it. Under a rotated/tilted UCS the whole `(x, y, z)` — relative `@dx,dy,dz` or absolute `x,y,z` —
+/// is interpreted in the active UCS axes, matching how ARRAY (#400) and the draw commands read a
+/// typed point.
+///
+/// \p outConsumed distinguishes the two failure modes \c HandleModifyText already had: a bad
+/// elevation field is reported and the phase holds (\p outConsumed true); an unparseable point is
+/// left for the caller's "unknown command" fallthrough (\p outConsumed false).
+static bool ResolveTypedModifyPoint(AppCommandState& st, const std::string& raw, bool allowRelative,
+                                    float baseLocalX, float baseLocalY, float baseWorldZ,
+                                    const char* verbUpper, float* outLocalX, float* outLocalY,
+                                    float* outWorldZ, bool* outConsumed, std::vector<std::string>& log) {
+  *outConsumed = false;
+  std::string xy;
+  float z = 0.f;
+  bool hasZ = false;
+  if (!PeelTypedElevation(raw, &xy, &z, &hasZ, verbUpper, log)) {
+    *outConsumed = true;  // reported by name; stay in the phase
+    return false;
+  }
+  const bool relative = !xy.empty() && xy[0] == '@';
+
+  if (CadWorkPlaneIsWorldXy(st)) {
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseStoragePoint(st, xy, &px, &py, allowRelative, baseLocalX, baseLocalY))
+      return false;
+    *outLocalX = px;
+    *outLocalY = py;
+    // A relative destination states its own Z offset from the base; an absolute one states a Z, and
+    // with no explicit Z that is 0 — the caller then computes `dz = outWorldZ - baseWorldZ`, which
+    // keeps the historical "difference of the two elevations" semantics (req322-move-3d.txt).
+    *outWorldZ = relative ? baseWorldZ + z : z;
+    return true;
+  }
+
+  double a = 0.0;
+  double b = 0.0;
+  bool rel = false;
+  if (!ParsePointComponents(xy, &a, &b, &rel, allowRelative)) {
+    // Bearing / distance<angle typed forms are not decomposed here — they fall back to the flat
+    // in-plane parser (2D, no elevation change). A stated increment-1 limitation: explicit numeric
+    // coordinates get the full 3D UCS treatment, the surveyor's bearing entry keeps working in the
+    // work plane as it does today.
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseStoragePoint(st, xy, &px, &py, allowRelative, baseLocalX, baseLocalY))
+      return false;
+    *outLocalX = px;
+    *outLocalY = py;
+    *outWorldZ = baseWorldZ;
+    return true;
+  }
+
+  // `st.activeUcs` is the TRUE-WORLD frame (see CadActiveUcsStorage's contract note), and both
+  // `CadCoord::WorldFromLocal` below and `CadCoord::LocalFromWorld` further down work in true world —
+  // so the UCS transform here must too, exactly as `ParseStoragePointZ`'s own UCS branch does. Using
+  // the storage-origin frame would subtract the document origin twice once a drawing has been
+  // rebased.
+  ray3d::Vec3 world;
+  if (rel) {
+    double bwx = 0.0;
+    double bwy = 0.0;
+    CadCoord::WorldFromLocal(st, baseLocalX, baseLocalY, &bwx, &bwy);
+    world = ray3d::Add({bwx, bwy, static_cast<double>(baseWorldZ)},
+                       ucs::UcsVectorToWorld(st.activeUcs, {a, b, static_cast<double>(z)}));
+  } else {
+    world = ucs::UcsToWorld(st.activeUcs, {a, b, static_cast<double>(z)});
+  }
+  if (!std::isfinite(world.x) || !std::isfinite(world.y) || !std::isfinite(world.z))
+    return false;
+  CadCoord::LocalFromWorld(st, world.x, world.y, outLocalX, outLocalY);
+  if (!std::isfinite(*outLocalX) || !std::isfinite(*outLocalY))
+    return false;
+  *outWorldZ = static_cast<float>(world.z);
+  st.resolvedPointZValid = true;
+  st.resolvedPointZ = static_cast<float>(world.z);
+  return true;
+}
+
 bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineIn, std::vector<std::string>& log) {
   std::string line = StringUtil::trimCopy(lineIn);
   using MP = AppCommandState::ModifyPhase;
+  const char* verb = isCopy ? "COPY" : "MOVE";
   if (st.modifyPhase == MP::NeedBase) {
-    // REQ-322 item 4: a base point may carry an elevation. Peeled before the shared 2D parser sees
-    // it, because that parser reads two numbers and ignores the rest.
-    std::string baseXy;
-    float baseZ = 0.f;
-    bool baseHasZ = false;
-    if (!PeelTypedElevation(line, &baseXy, &baseZ, &baseHasZ, isCopy ? "COPY" : "MOVE", log))
-      return true;  // reported by name; stay in the phase rather than fall through as unparsed
-    float px = 0.f;
-    float py = 0.f;
-    if (!ParseStoragePoint(st, baseXy, &px, &py, false, 0.f, 0.f))
-      return false;
-    st.modifyBaseX = px;
-    st.modifyBaseY = py;
-    st.modifyBaseZ = baseZ;
+    // REQ-322 item 4 / REQ-329 increment 1: a base point may carry an elevation, and under a
+    // rotated/tilted UCS the whole point is read in the UCS axes.
+    float bx = 0.f;
+    float by = 0.f;
+    float bwz = 0.f;
+    bool consumed = false;
+    if (!ResolveTypedModifyPoint(st, line, false, 0.f, 0.f, 0.f, verb, &bx, &by, &bwz, &consumed, log))
+      return consumed;
+    st.modifyBaseX = bx;
+    st.modifyBaseY = by;
+    st.modifyBaseZ = bwz;
     st.modifyPhase = MP::NeedDestination;
     log.push_back(isCopy ? "COPY — specify second point (destination)." : "MOVE — specify second point (destination).");
     return true;
   }
   if (st.modifyPhase == MP::NeedDestination) {
-    std::string destXy;
-    float destZ = 0.f;
-    bool destHasZ = false;
-    if (!PeelTypedElevation(line, &destXy, &destZ, &destHasZ, isCopy ? "COPY" : "MOVE", log))
-      return true;
     float px = 0.f;
     float py = 0.f;
-    if (!ParseStoragePoint(st, destXy, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
-      return false;
-    float dx = px - st.modifyBaseX;
-    float dy = py - st.modifyBaseY;
-    // A RELATIVE destination (@dx,dy,dz) states the offset directly; an absolute one states a
-    // position, so the offset is the difference. An omitted Z is zero on either side, which is what
-    // keeps a plain `MOVE 0,0 / 10,0` moving nothing in Z (REQ-322 item 4).
-    const bool relative = !destXy.empty() && destXy[0] == '@';
-    const float dz = relative ? destZ : (destZ - st.modifyBaseZ);
+    float dwz = 0.f;
+    bool consumed = false;
+    if (!ResolveTypedModifyPoint(st, line, true, st.modifyBaseX, st.modifyBaseY, st.modifyBaseZ, verb,
+                                 &px, &py, &dwz, &consumed, log))
+      return consumed;
+    const float dx = px - st.modifyBaseX;
+    const float dy = py - st.modifyBaseY;
+    // ResolveTypedModifyPoint returns the destination as a resolved point (relative offsets already
+    // folded into the base), so the delta is always the difference. An omitted Z leaves dz at zero
+    // for a plain `MOVE 0,0 / 10,0` (REQ-322 item 4).
+    const float dz = dwz - st.modifyBaseZ;
     PushUndoSnapshot(st, isCopy ? "Copy" : "Move");
     if (isCopy)
-      FinalizeCopyTranslation(st, dx, dy, log);
+      FinalizeCopyTranslation(st, dx, dy, dz, log);
     else {
       ApplyTranslationToSelection(st, dx, dy, dz, log);
       // Stay in MOVE — same selection at new position, ready for another base+destination.
@@ -12651,6 +12733,11 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     if (st.modifyPhase == MP::NeedBase) {
       st.modifyBaseX = wx;
       st.modifyBaseY = wy;
+      // REQ-329 increment 1: the pick lands on the active work plane, so it carries that plane's
+      // elevation (or a snapped point's own Z). Plan view under the World UCS leaves this at the
+      // work-plane elevation for both picks, so the delta's Z is zero and every existing drag is
+      // byte-identical.
+      st.modifyBaseZ = CadCommitElevation(st);
       st.modifyPhase = MP::NeedDestination;
       log.push_back(st.active == K::Copy ? "COPY — destination:" : "MOVE — destination:");
       return;
@@ -12659,14 +12746,12 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       const bool wasCopy = (st.active == K::Copy);
       const float dx = wx - st.modifyBaseX;
       const float dy = wy - st.modifyBaseY;
+      const float dz = CadCommitElevation(st) - st.modifyBaseZ;  // REQ-329 increment 1
       PushUndoSnapshot(st, wasCopy ? "Copy" : "Move");
       if (wasCopy)
-        FinalizeCopyTranslation(st, dx, dy, log);
+        FinalizeCopyTranslation(st, dx, dy, dz, log);
       else {
-        ApplyTranslationToSelection(st, dx, dy, 0.f, log);
-        // The PICKED path stays plan-only for now (REQ-322 item 4 covers typed entry). A picked
-        // MOVE has always ignored the elevations of its two points, and quietly making it 3D would
-        // change what every existing drag does rather than adding something new.
+        ApplyTranslationToSelection(st, dx, dy, dz, log);
         // Stay in MOVE — same selection at new position, ready for another base+destination.
         st.modifyPhase = MP::NeedBase;
         log.push_back("MOVE complete — base point (ESC to exit):");
@@ -30737,7 +30822,8 @@ void ApplyCopySurveyDuplicateModalResult(AppCommandState& st, bool applySurveyDu
       DuplicateSelectedSurveyPointsRotated(st, st.pendingRotateCopyBx, st.pendingRotateCopyBy, st.pendingRotateCopyRad,
                                            st.copySurveyDuplicatePolicy, log);
     else
-      DuplicateSelectedSurveyPointsTranslated(st, st.pendingCopyDx, st.pendingCopyDy, st.copySurveyDuplicatePolicy,
+      DuplicateSelectedSurveyPointsTranslated(st, st.pendingCopyDx, st.pendingCopyDy, st.pendingCopyDz,
+                                              st.copySurveyDuplicatePolicy,
                                               log);
   } else if (wasMirrorDup)
     log.push_back("MIRROR COPY survey — skipped (CAD copy kept).");

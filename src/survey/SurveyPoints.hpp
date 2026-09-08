@@ -126,9 +126,11 @@ void ResetCreatePointsNextIdFromSettings(AppCommandState& st);
 bool TryPlaceSurveyPoint(AppCommandState& st, float easting, float northing, float elevation,
                          std::vector<std::string>& log);
 
-/// Copies viewport-selected survey rows by (\p dx, \p dy), applying \p policy when IDs collide with other points.
-void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, float dy, SurveyDuplicatePolicy policy,
-                                             std::vector<std::string>& log);
+/// Copies viewport-selected survey rows by (\p dx, \p dy, \p dz), applying \p policy when IDs collide
+/// with other points. \p dz is the elevation delta (REQ-329 increment 1 — a COPY under a rotated or
+/// tilted UCS carries a Z component); it is zero for every plan-view / World-UCS copy.
+void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, float dy, float dz,
+                                             SurveyDuplicatePolicy policy, std::vector<std::string>& log);
 
 /// Same ID policy as translated copy; positions are rotated about (\p bx,\p by) by \p rad radians.
 void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float by, float rad,
