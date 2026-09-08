@@ -13695,11 +13695,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // it nothing lit up under the cursor while FILLET ran, so the only way to find out what a click
       // would take was to take it (user request, 2026-09-08).
       //
-      // CHAMFER is the identical shape and is deliberately NOT included: no solid chamfer exists yet,
-      // so there is nothing for a sub-object pre-highlight to offer there. One line when it does.
-      const bool filletEntityPick = cmd.active == AK::Fillet;
+      // CHAMFER is the identical shape and joins it here now that REQ-331 gives a `Ctrl`+click
+      // during CHAMFER something to name — which is the one line TASK-221 DEBT-1 said it would be.
+      const bool cornerEntityPick = cmd.active == AK::Fillet || cmd.active == AK::Chamfer;
       const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick &&
-                                     !breakEntityPick && !lengthenEntityPick && !filletEntityPick) ||
+                                     !breakEntityPick && !lengthenEntityPick && !cornerEntityPick) ||
                                     cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
       // REQ-089: the rollover readout rides on this exact condition. Model space only — a sheet has

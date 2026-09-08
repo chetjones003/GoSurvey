@@ -2571,6 +2571,144 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   `paramLoops` becomes necessary at the *next* increment, where rounding a cylinder's rim leaves the
   cylinder wall irregularly trimmed.
 
+
+- **Amendment (k) — the same topology delta with none of the same surfaces: CHAMFER, and why its
+  corner is a POINT** (2026-09-08, D-2026-09-08-f, REQ-331, GitHub issue #148 Phase 5, slice 7).
+
+  Amendment (j) established the topology-adding operation through the fillet. The chamfer is the
+  second one, and it is worth its own amendment for a reason that is easy to miss: **it has exactly
+  the fillet's topology delta and none of the fillet's geometry.** Nothing here is a special case of
+  amendment (j); the two share a skeleton and differ in every surface.
+
+  **(1) The delta is identical, so the shape of the code is shared and the numbers are not.** One
+  chamfered edge, both endpoints on planar faces square to it: the edge is deleted, two tangent
+  lines and one straight end-edge at each end appear, one face appears, two vertices per endpoint.
+  `V + 2`, `E + 3`, `F + 1`, box `8/12/6 -> 10/15/7` — the same table amendment (j)(2) gives. What
+  differs is the *kind*: a `Plane` where the fillet builds a `Cylinder`, a `Line` where it builds an
+  `Arc`. The one-pass rule of (j)(4) carries over unchanged and for the identical reason.
+
+  **(2) There is no model to name, and that is the finding.** The fillet needed "a rolling ball"
+  stated up front because the model decides the setback: `d = r / tan(theta / 2)`, which is why
+  REQ-323 carries a wedge case whose whole job is to prove the conversion happened. A chamfer has no
+  such conversion — **the input IS the setback**, at every dihedral angle. The bevel plane is simply
+  the plane through the two cut lines, and its outward normal is `-normalize(u_A + u_B)` where `u`
+  is each face's in-face unit perpendicular to the edge, pointing into the material. Those `u`
+  vectors already exist in the fillet's own precondition check (they are what its concavity test is
+  built on), so the chamfer's construction reuses them rather than deriving anything new.
+
+  **(3) The corner is a VERTEX, not a facet, and the reason is three lines of linear algebra.** This
+  is the sharpest divergence from (j)(4) and it goes the easy way. Three bevel planes in general
+  position meet at exactly one point; the fillet's three cylinders do not, which is precisely why it
+  needs a spherical patch to close the gap. So an orthogonal corner with all three edges chamfered
+  gains **one vertex, three edges and no face**, against the fillet's one vertex-set plus an octant
+  face. For a box at `d`, the three planes `x+y=d`, `y+z=d`, `z+x=d` meet at `(d/2, d/2, d/2)`.
+
+  The visible consequence is that **each bevel face is a HEXAGON** — a rectangle with a V-notch
+  bitten out of each end by its two neighbours, the notch running from the tangent vertex down to
+  the corner point and back up. That is a six-vertex straight-edged loop on a plane, which
+  `PlaneFaceArea` integrates over already, so (j)(5)'s conclusion holds here too: REQ-321's
+  `paramLoops` are not a prerequisite.
+
+  **(4) Orthogonality is required, and NOT for the fillet's reason.** Amendment (j)(4) refuses a
+  non-orthogonal corner because a general spherical triangle is not an iso-rectangle and would trade
+  a closed-form area for a numeric one. That argument does not exist here — there is no patch. What
+  fails instead is the **tangent vertex**: the point where two bevels' cut lines meet inside a face
+  they share is `p + d*u1 + d*u2` only when `u1 ⊥ u2`, which is exactly what mutual orthogonality of
+  the three faces buys. Off-square it is a different in-face solve. Recording this matters because
+  the two refusals have the same name-shape and the same message-shape, and a reader who assumes the
+  fillet's reason carries over will look for a parametrisation problem that is not there.
+
+  **(5) An oblique end face is refused, and the reason was measured rather than predicted.** The
+  first reading of REQ-331 expected obliquity to come free: a plane meets a plane along a straight
+  line at any angle, where the fillet's cylinder gives an ellipse and has to be refused
+  (`FilletEndFaceUnsupported`). Working the construction showed otherwise. The tangent point
+  `p + d*u` sits on the end face only when that face is square to the edge — `u` is perpendicular to
+  the edge direction, so the point keeps its position along the edge, which is on the end plane
+  exactly when the end plane is normal to the edge. Off-square, the tangent lines must instead be
+  trimmed to where the bevel plane cuts the end face, which is a second construction. So the chamfer
+  keeps the fillet's restriction after all. **This is recorded because the wrong version of it was
+  believed first**, and the same "a plane cuts a plane in a line, so it must be free" reasoning will
+  present itself again at the next blend.
+
+  **(6) The two-distance form is deferred by decision, and it is coupled to (3).** AutoCAD's solid
+  chamfer takes `Distance1` into a chosen base face and `Distance2` into the other — `CHAMFER` asks
+  with a `Next/OK` base-surface toggle, `CHAMFEREDGE` instead forbids the ambiguity by requiring
+  every selected edge to lie on one shared face. Neither is increment 1 here: the toggle is an
+  interaction the codebase has nowhere yet, and `CHAMFEREDGE`'s restriction would throw away the
+  whole-edge-set pass that lets this kernel chamfer all twelve edges of a box in one operation —
+  something AutoCAD's own command cannot do. The cost is real and is stated rather than hidden: with
+  `D1 != D2` the corner remains a single point, but (3)'s tangent-vertex solve changes and REQ-331's
+  increment-2 closed forms are replaced by a second set.
+
+
+- **Amendment (l) — a precondition has to see the whole REQUEST, not one edge of it at a time**
+  (2026-09-08, D-2026-09-08-g, REQ-323 and REQ-331 item 4 amended, TASK-223).
+
+  Amendment (i) established the rule: a modifying operation owns its own precondition, because
+  `Validate` checks topology and not geometry. Amendment (j) applied it to the fillet and stated the
+  check — *"the radius must be strictly less than the distance from the edge to the far boundary of
+  each adjacent face"* — and amendment (k) carried the same sentence to the chamfer. **That sentence
+  is per-edge, and it is measured against the ORIGINAL solid.** It was correct for the operation
+  amendment (j) first described, which rounded one edge, and it stopped being sufficient the moment
+  increment 2 made the request a SET of edges. Nobody noticed, because the check kept passing.
+
+  **What it cannot see.** Two things, and they are separate statements rather than one:
+
+  1. **What another requested edge takes out of the same face.** Two edges bounding one face each cut
+     a strip into it. Asked one at a time, each strip fits. Asked together, they can overlap.
+  2. **One edge's two ends eating each other.** At a corner the blend runs some distance ALONG the
+     edge before it begins. With a corner at both ends, the two can want more than the edge has.
+
+  **What that produced.** Not a refusal and not a crash — a solid. `Validate` is topological, so a
+  face whose boundary has crossed over and inverted passes it, and `ComputeMassProperties` returns a
+  number for it. On a 20 x 10 x 8 box, the two 20-long top edges are 10 apart across a 10-wide face,
+  so any setback above 5 crosses:
+
+  | | before amendment (l) |
+  |---|---|
+  | `FILLET 6` | **accepted**, volume 1290.97336, self-intersecting |
+  | `CHAMFER 6` | **accepted**, volume 880, self-intersecting |
+  | either at exactly 5 | refused — but only because the face reaches ZERO area and `DegenerateFace` happens to catch it |
+
+  So the failure window was "the strips overlap", and the single case that was caught was caught by
+  accident. This is a defect against **issue #148 acceptance 6** — *"a fillet or chamfer that cannot
+  be built is refused with a clear message and leaves the solid unchanged"* — for both operations.
+
+  **Decision. The precondition is a property of the REQUEST**, and both operations answer it through
+  one shared implementation (`BlendSpan` / `BlendsFit` in `brep.cpp`) rather than two that could
+  drift. Two conditions are added to the per-edge one, which stays:
+
+  1. `length > consumed[0] + consumed[1]` per edge, where `consumed` is what a corner at that end
+     runs along the edge — zero at an open end, so an unchained request is unaffected;
+  2. for two requested edges bounding one face, the room between them must exceed the sum of their
+     setbacks. **Adjacent edges are exempt**, and that exemption is load-bearing rather than an
+     optimisation: their cuts are *meant* to meet, at the corner vertex, and it is condition (1) that
+     covers their interaction. Without the exemption every corner in increment 2 would refuse.
+
+  Equality is refused in both, for the reason the original check already gave: at the limit the face
+  does not become thin, it vanishes.
+
+  **Four refusals, not two, and not folded into the existing one.**
+  `FilletRadiusOverlapsAnother` / `ChamferDistanceOverlapsAnother` and
+  `FilletEdgeTooShortForItsCorners` / `ChamferEdgeTooShortForItsCorners`. Reusing
+  `FilletRadiusTooLarge` was considered and rejected: its sentence says the setback *"would reach
+  past the far side of an adjacent face"*, which is true of the per-edge case and false of both new
+  ones — a user whose real obstacle is a second edge they selected would go looking for the wrong
+  thing. REQ-323 and REQ-331 both say "refused by name"; a name that describes a different failure
+  is not one.
+
+  **The pairwise test is exact where it matters and conservative elsewhere.** It measures from the
+  nearer of the other edge's two endpoints, which is exact for the parallel case a box, wedge or
+  prism actually produces. For two edges of one face that are neither parallel nor adjacent —
+  reachable only on a face with more than four sides — it errs toward refusing something buildable.
+  That direction is deliberate: the failure this amendment exists to fix is the other one.
+
+  **This is also a note about how the defect was found.** Not by a test — every existing test passed
+  before and after, because none of them asked for two blends that collide. It came out of a
+  `/code-review high` pass on the chamfer, which noticed the check was reading the original solid,
+  and it was then reproduced with numbers on the *fillet*, which had shipped with it. A precondition
+  that is only ever exercised on requests it accepts is not evidence that it refuses the right things.
+
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
 - **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —

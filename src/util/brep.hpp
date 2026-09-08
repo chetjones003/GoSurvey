@@ -445,6 +445,15 @@ enum class Problem {
   /// The radius does not fit: the setback `r / tan(theta/2)` reaches the far side of one of the two
   /// adjacent faces. Refused at equality too — at the limit the face does not thin, it vanishes.
   FilletRadiusTooLarge,
+  /// The request does not fit ITSELF: two requested edges bounding one face would have their
+  /// fillets cut into each other. Separate from \ref Problem::FilletRadiusTooLarge, which is about
+  /// one edge against the face's own extent — a user told "the far side of an adjacent face" when
+  /// the obstacle is another edge they selected would look for the wrong thing. ADR-046 amendment
+  /// (l).
+  FilletRadiusOverlapsAnother,
+  /// An edge is too short for the corners at BOTH of its ends: each fillet runs some distance along
+  /// the edge before it begins, and together they use the edge up. Amendment (l).
+  FilletEdgeTooShortForItsCorners,
   /// A face at one end of the edge is not planar, or is not square to the edge. A planar end face
   /// square to the edge meets the fillet along a circle; an oblique one meets it along an ellipse,
   /// which is a second construction and its own increment.
@@ -462,6 +471,43 @@ enum class Problem {
   /// closed form. Increment 2 covers the orthogonal corner; the oblique one is its own.
   FilletCornerNotOrthogonal,
   FilletResultInvalid,       ///< The rounded solid did not validate. Should not happen; refused if it does.
+
+  // --- REQ-331 CHAMFER: a flat bevel in place of a sharp edge (ADR-046 amendment (k)). The same
+  //     shape of pre-check the fillet's block above uses, and for the same reason. They are separate
+  //     values rather than shared ones because the MESSAGES differ - "radius" and "distance" are not
+  //     the same word to a user - and because two of the reasons genuinely differ: see
+  //     `ChamferCornerNotOrthogonal` and `ChamferEndFaceUnsupported`. ---
+  ChamferDistanceNotPositive,  ///< A distance of zero or less: there is nothing to cut back.
+  ChamferEdgeNotLine,          ///< Increment 1 bevels a straight edge; a curved one is its own case.
+  ChamferFaceNotPlanar,        ///< One of the two faces meeting the edge is curved.
+  ChamferFacesParallel,        ///< The two faces are coplanar or facing each other: no edge to bevel.
+  ChamferEdgeConcave,          ///< A crease rather than a corner. Adds material; its own increment.
+  /// The distance does not fit: the cut reaches the far side of one of the two adjacent faces.
+  /// Refused at equality too. No trig here, unlike the fillet - the distance IS the setback.
+  ChamferDistanceTooLarge,
+  /// The request does not fit ITSELF: two requested edges bounding one face would have their bevels
+  /// cut into each other. Separate from \ref Problem::ChamferDistanceTooLarge for the reason its
+  /// fillet twin is. ADR-046 amendment (l).
+  ChamferDistanceOverlapsAnother,
+  /// An edge is too short for the corners at BOTH of its ends. Amendment (l).
+  ChamferEdgeTooShortForItsCorners,
+  /// A face at one end of the edge is not planar, or is not square to the edge. **Not the fillet's
+  /// reason.** A plane cuts a plane in a straight line at any angle, so obliquity was expected to be
+  /// free here; it is not. The cut point `p + d*u` lies ON the end face only while that face is
+  /// square to the edge, and off-square the cut lines must instead be trimmed to where the bevel
+  /// plane crosses the end face - a second construction. ADR-046 amendment (k)(5).
+  ChamferEndFaceUnsupported,
+  /// More than three edges meet at one end of the edge.
+  ChamferVertexNotSimple,
+  /// Only SOME of the edges meeting at a corner are in the request, so the bevel would run off onto
+  /// an edge staying sharp. A setback blend, and its own increment.
+  ChamferCornerPartial,
+  /// The three faces at a corner are not mutually perpendicular. **Not the fillet's reason either.**
+  /// There is no patch here to parametrise - the three bevel planes meet at a POINT. What fails is
+  /// the cut VERTEX: the meet of two bevels' cut lines inside a face they share is `p + d*u1 + d*u2`
+  /// only while `u1` and `u2` are perpendicular. ADR-046 amendment (k)(4).
+  ChamferCornerNotOrthogonal,
+  ChamferResultInvalid,        ///< The bevelled solid did not validate. Should not happen; refused if it does.
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -1059,5 +1105,57 @@ struct Tessellation {
 ///   needs REQ-321's general trim loops (and with them a numeric area rather than the closed form).
 [[nodiscard]] bool FilletEdges(const Solid& s, const std::vector<int>& edgeIndices, double radius,
                                Solid* out, Problem* outWhy);
+
+
+/// Bevel the edge \p edgeIndex of \p s by \p distance (REQ-331, ADR-046 amendment (k)). Writes the
+/// bevelled solid to \p out and returns true, or leaves \p out alone and writes the reason to
+/// \p outWhy.
+///
+/// **The bevel cuts back \p distance into EACH adjacent face**, measured in that face, perpendicular
+/// to the edge. There is no model to convert and nothing to derive: where \ref FilletEdge has to
+/// turn a radius into a setback through `r / tan(theta/2)` — which is why it carries a wedge case
+/// whose whole job is to prove the conversion happened — the chamfer's input IS the setback, at
+/// every dihedral angle. The bevel plane is simply the plane through the two cut lines, and its
+/// outward normal is `-normalize(uA + uB)` where `u` is each face's in-face unit perpendicular to
+/// the edge pointing into the material. The bevel's own width follows,
+/// `distance * sqrt(2 - 2*cos(theta))`, rather than being asked for.
+///
+/// **The topology delta is EXACTLY \ref FilletEdge's**, which is the point worth carrying away: the
+/// edge is deleted, and two cut lines, one straight edge at each end, one planar face and two
+/// vertices per endpoint take its place. `V + 2`, `E + 3`, `F + 1`, `V - E + F` unchanged, a box
+/// `8/12/6 -> 10/15/7`. Only the KINDS differ — a `Plane` here where the fillet builds a `Cylinder`,
+/// a `Line` where it builds an `Arc`.
+///
+/// Refused, each by name and with \p out untouched:
+/// \ref Problem::ChamferDistanceNotPositive, \ref Problem::NonFiniteParameter,
+/// \ref Problem::ChamferEdgeNotLine, \ref Problem::ChamferFaceNotPlanar,
+/// \ref Problem::ChamferFacesParallel, \ref Problem::ChamferEdgeConcave,
+/// \ref Problem::ChamferDistanceTooLarge (the pre-check, per amendment (i)),
+/// \ref Problem::ChamferEndFaceUnsupported and \ref Problem::ChamferVertexNotSimple.
+[[nodiscard]] bool ChamferEdge(const Solid& s, int edgeIndex, double distance, Solid* out,
+                               Problem* outWhy);
+
+/// Bevel several edges at once, as one operation, **including where their bevels meet at a corner**
+/// (REQ-331 increments 1 and 2).
+///
+/// One pass over the original solid, for the same reason \ref FilletEdges is: after the first bevel
+/// the shared vertex is gone, so a second arriving there would find a bevel where it needs a face.
+///
+/// **A corner is a VERTEX, not a face**, and this is where the chamfer diverges most sharply from
+/// the fillet — in the easy direction. Three planes in general position meet at exactly one point;
+/// three cylinders do not, which is precisely why \ref FilletEdges has to close its corner with a
+/// spherical patch. So an orthogonal corner whose three edges are all requested gains **one vertex
+/// and three edges and no new face**. The visible consequence is that each bevel face comes out a
+/// **hexagon** — a rectangle with a V-notch bitten out of each end by its two neighbours — which is
+/// a six-vertex straight-edged loop on a plane, so `PlaneFaceArea` covers it and REQ-321's general
+/// trim loops are not needed.
+///
+/// Refused, in addition to everything \ref ChamferEdge refuses:
+/// - \ref Problem::ChamferCornerPartial — some but not all of the edges at a corner are requested;
+/// - \ref Problem::ChamferCornerNotOrthogonal — **not for the fillet's reason.** There is no patch
+///   to parametrise here. What needs orthogonality is the cut VERTEX: the meet of two bevels' cut
+///   lines inside a face they share is `p + d*u1 + d*u2` only while `u1` and `u2` are perpendicular.
+[[nodiscard]] bool ChamferEdges(const Solid& s, const std::vector<int>& edgeIndices, double distance,
+                                Solid* out, Problem* outWhy);
 
 } // namespace brep

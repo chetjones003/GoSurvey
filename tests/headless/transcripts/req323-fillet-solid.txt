@@ -279,4 +279,90 @@ CMD 2
 EXPECT SOLIDPROPS 0 1565.6637061436 842.2300767580 12 18 8
 EXPECT SUBOBJECTS 0
 
+
+# --- The request has to fit ITSELF, not just each edge of it (REQ-323 item 4 as amended) --------------
+# D-2026-09-08-g, ADR-046 amendment (l). The precondition used to be measured one edge at a time
+# against the ORIGINAL solid, so two requested fillets running into each other went straight through and
+# produced a self-intersecting solid that Validate — which is topological — happily accepted. Found
+# by /code-review high on TASK-222.
+#
+# The top face is 10 wide and each blend sets back into it, so two opposite 20-long top edges collide
+# for any value above 5 and touch at exactly 5.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.1 0.1
+SUBOBJECT 0 -5 8 0.1 0.1
+EXPECT SUBOBJECTEDGES 2
+CMD FILLET 6
+EXPECT LOG "would run into each other"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# Equality is refused too, for the reason the original per-face check already gave: at the limit the
+# face does not thin, it vanishes.
+CMD FILLET 5
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# The selection survives, and the largest value that DOES fit is still accepted — the new check must
+# not have quietly shrunk the envelope.
+EXPECT SUBOBJECTEDGES 2
+CMD FILLET 4.9
+EXPECT SUBOBJECTS 0
+
+# An edge too short for the corners at BOTH its ends. The vertical is 8 long and each corner runs the
+# blend along it before the blend begins, so at 5 the two corners want 10 of the 8 available. This is
+# a different statement from the one above, and it gets its own sentence.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT -10 5 4 0.1 0.1
+SUBOBJECT 0 5 8 0.1 0.1
+SUBOBJECT -10 0 8 0.1 0.1
+SUBOBJECT 0 5 0 0.1 0.1
+SUBOBJECT -10 0 0 0.1 0.1
+EXPECT SUBOBJECTEDGES 5
+CMD FILLET 5
+EXPECT LOG "too short to round at both of its corners"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# 3 fits: the two corners want 6 of the 8.
+CMD FILLET 3
+EXPECT SUBOBJECTS 0
+
+
+# --- A REFUSED value is not an UNPARSED one (TASK-224) -----------------------------------------------
+# The kernel declining a radius used to be followed by "Could not parse FILLET input — see command
+# hints.", which contradicted the sentence printed one line above it: the input parsed perfectly well,
+# and the kernel refused it by name. `HandleFILLETText`'s return value was being read as "did the
+# command advance" when the only thing the caller does with it is decide whether to add that trailer,
+# so it now means "was this input UNDERSTOOD" instead.
+#
+# NOLOG rather than LOG, because the defect is a line that should NOT be there and no positive
+# assertion can catch a message being wrongly present.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.1 0.1
+CMD FILLET
+CMD 8
+EXPECT LOG "too large"
+EXPECT LOG "different radius"
+EXPECT NOLOG "Could not parse"
+# Still asking, still holding the edge, and the value that fits still applies.
+EXPECT SUBOBJECTEDGES 1
+CMD 2
+EXPECT SUBOBJECTS 0
+
+# A genuinely unparsed token still gets the trailer, because that is the case it is FOR: it names the
+# running command and tells the user how to leave it. Only the false half was removed.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.1 0.1
+CMD FILLET
+CMD CIRCLE
+EXPECT LOG "FILLET is still running"
+EXPECT LOG "Press Esc"
+
 CHECK ALL
