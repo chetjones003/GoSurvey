@@ -607,13 +607,16 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           }
         }
       }
-      // FeatureLine's shared preview helper is (x,y)-only; its Z carries through unshifted. A
-      // FeatureLine is refused by polar ARRAY under a tilted axis anyway (REQ-328 item 2), and a
-      // levels-shifted rectangular FeatureLine ghost is a known small gap, not this fix's concern.
-      appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
-        *x += dx;
-        *y += dy;
-      });
+      // FeatureLine's shared preview helper is (x,y)-only, so it cannot show a Z shift. When the
+      // instance delta has a Z component (a rectangular array whose UCS X/Y plane is tilted) the
+      // ghost would sit at the wrong elevation — omit the FeatureLine copies rather than draw them
+      // misplaced. `dz == 0` is exact for the World UCS and any in-plane-rotated UCS.
+      if (dz == 0.f) {
+        appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
+          *x += dx;
+          *y += dy;
+        });
+      }
     };
 
     // GitHub issue #400 increment 4: rotate about an arbitrary 3D axis (the active UCS Z axis
@@ -685,12 +688,17 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           if (k >= cmd.userEllipses.size())
             continue;
           CadEllipse el = cmd.userEllipses[k];
-          float mx = el.cx + el.majVx;
-          float my = el.cy + el.majVy;
-          rotatePreviewPt(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), ang, &el.cx, &el.cy);
-          rotatePreviewPt(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), ang, &mx, &my);
-          el.majVx = mx - el.cx;
-          el.majVy = my - el.cy;
+          // Same rp/rv the other types use, not a hand-rolled 2D rotation: a CadEllipse is flat in
+          // world XY, and for a world-Z-parallel axis (either sign) rp leaves its Z alone and rv
+          // turns the major-axis vector the correct way — matching the commit and every sibling in
+          // the array (a plain +Z `rotatePreviewPt` would spin backwards under an inverted-Z UCS).
+          const ray3d::Vec3 c = rp(el.cx, el.cy, el.z);
+          const ray3d::Vec3 maj = rv(el.majVx, el.majVy, 0.f);
+          el.cx = static_cast<float>(c.x);
+          el.cy = static_cast<float>(c.y);
+          el.z = static_cast<float>(c.z);
+          el.majVx = static_cast<float>(maj.x);
+          el.majVy = static_cast<float>(maj.y);
           appendEllipsePolylineStrip(prevLines, el.z, el, 56);
         } else if (e.type == SelectedEntity::Type::Polyline) {
           const int pi = e.index;
@@ -721,9 +729,12 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       if (axisIsWorldZ) {
         // FeatureLine's shared preview helper is (x,y)-only; a world-Z rotation leaves x'/y'
         // independent of z, so it is exact here. Under a tilted axis a FeatureLine is refused at
-        // commit — omit it from the ghost.
+        // commit — omit it from the ghost. Rotation about -Z by `ang` is rotation about +Z by
+        // `-ang`, so carry the axis sign into the 2D helper (an inverted-Z UCS otherwise spins the
+        // FeatureLine ghost the wrong way relative to the commit and its siblings).
+        const float zAng = ang * (axisUnit.z < 0.0 ? -1.f : 1.f);
         appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
-          rotatePreviewPt(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), ang, x, y);
+          rotatePreviewPt(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), zAng, x, y);
         });
       }
     };
