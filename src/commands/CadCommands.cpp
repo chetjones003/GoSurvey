@@ -17834,6 +17834,36 @@ bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vecto
                   ". Select first object or [Radius/Trim]:");
     return true;
   }
+  // Solid EDGES gathered by Ctrl+click while FILLET is running (user request, 2026-09-08). A bare
+  // Enter or a typed number rounds them; `R` and `T` below still do what they always did, so the
+  // 2D command is intact underneath. Checked before those options because a number typed here can
+  // only mean a radius - the 2D flow has nothing to do with one at "select first object".
+  if (CadSubObjectSelectionIsAllEdges(st)) {
+    double want = static_cast<double>(st.filletRadius);
+    bool answered = line.empty();
+    if (!line.empty()) {
+      float v = 0.f;
+      if (ParseOneFloat(line, &v) && std::isfinite(v)) {
+        want = static_cast<double>(v);
+        answered = true;
+      }
+    }
+    if (answered) {
+      if (!CadApplyFilletToSelectedEdges(st, want, log)) {
+        log.push_back("FILLET - specify a different radius, or ESC to cancel:");
+        return false;  // the prompt stays up; nothing was built, so the edges are still selected
+      }
+      st.filletRadius = static_cast<float>(want);
+      st.active = AppCommandState::Kind::None;
+      return true;
+    }
+    // Not a number. `R`/`T` still fall through to their handlers below; anything else is a
+    // mistyped radius, so say that here rather than letting it reach the generic 2D-pick message.
+    if (!line.empty() && low != "r" && low != "radius" && low != "t" && low != "trim") {
+      log.push_back("FILLET - radius must be a number. Type one, or ESC to cancel:");
+      return false;
+    }
+  }
   if (low == "r" || low == "radius") {
     st.filletTextAwaitingRadius = true;
     log.push_back("FILLET — specify fillet radius <" + std::to_string(st.filletRadius) + ">:");
@@ -26999,6 +27029,11 @@ bool SubmitSubObjectPick(AppCommandState& st, const ray3d::Ray& ray, const solid
                 solidpick::KindName(sub.kind) + " " + std::to_string(sub.index) + " of solid " +
                 std::to_string(sub.solidIndex + 1) + " (" + std::to_string(st.subObjectSelection.size()) +
                 " sub-object(s) selected).");
+  // If FILLET is running, say what the pick means FOR IT. Here rather than at the click site so
+  // every route into the pick gets it - the viewport's Ctrl+click, a transcript's SUBOBJECT verb,
+  // and anything later - which is the same reason the pick's own meaning lives in this function
+  // rather than in `CadUi.cpp` (REQ-318 / D-2026-09-04-a).
+  CadFilletReportEdgeSelection(st, log);
   return true;
 }
 bool SolidVisible(const AppCommandState& st, size_t solidIndex) {
@@ -29310,6 +29345,25 @@ bool CadApplyFilletToSelectedEdges(AppCommandState& st, double radius,
   return true;
 }
 
+
+void CadFilletReportEdgeSelection(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Fillet)
+    return;
+  if (!CadSubObjectSelectionIsAllEdges(st)) {
+    // Ctrl+clicking a FACE or a VERTEX mid-FILLET is not an error, but it is not something this
+    // command can round either - say so rather than leaving the prompt looking ready.
+    if (!st.subObjectSelection.empty())
+      log.push_back("FILLET - that is not an edge. Ctrl+click a solid EDGE, or ESC to cancel.");
+    return;
+  }
+  char buf[192];
+  std::snprintf(buf, sizeof(buf),
+                "FILLET - %d solid edge(s) selected. Ctrl+click more, or type a radius <%.4f> and "
+                "Enter to round them.",
+                static_cast<int>(st.subObjectSelection.size()),
+                static_cast<double>(st.filletRadius));
+  log.push_back(buf);
+}
 void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
                          std::vector<std::string>& log) {
   if (!CadSubObjectSelectionIsAllEdges(st)) {
@@ -32374,14 +32428,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     } else if (st.active == K::Fillet) {
       using FP = AppCommandState::FilletPhase;
       if (st.filletPhase == FP::WaitFirstEntity && !st.filletTextAwaitingRadius &&
-          !st.filletTextAwaitingTrim && !st.filletSolidAwaitingRadius) {
+          !st.filletTextAwaitingTrim && !st.filletSolidAwaitingRadius &&
+          !CadSubObjectSelectionIsAllEdges(st)) {
         // Blank Enter at "select first object" ends FILLET — same convention LENGTHEN/BREAK's loop
         // uses. (Mid-prompt for R/T it falls through to HandleFilletText's own "must be a number"/
         // "type T or N" refusal instead, which is the more useful message there.)
         st.active = K::None;
         log.push_back("FILLET — finished.");
       } else if (st.filletTextAwaitingRadius || st.filletTextAwaitingTrim ||
-                 st.filletSolidAwaitingRadius) {
+                 st.filletSolidAwaitingRadius || CadSubObjectSelectionIsAllEdges(st)) {
         HandleFilletText(st, "", log);
       } else {
         log.push_back("FILLET — specify second object in the viewport.");
@@ -34666,6 +34721,16 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
 
   if (st.active == K::Fillet) {
     using FP = AppCommandState::FilletPhase;
+    // Edges gathered by Ctrl+click while the command is running: say how many, and that a radius is
+    // what finishes it. Ahead of the 2D prompts because it is the more specific state.
+    if (CadSubObjectSelectionIsAllEdges(st)) {
+      static char buf[128];
+      std::snprintf(buf, sizeof(buf),
+                    "FILLET: %d solid edge(s) | Ctrl+click more, radius <%.4f> | ESC cancel",
+                    static_cast<int>(st.subObjectSelection.size()),
+                    static_cast<double>(st.filletRadius));
+      return buf;
+    }
     if (st.filletSolidAwaitingRadius) {
       static char buf[128];
       std::snprintf(buf, sizeof(buf), "FILLET: radius for %d solid edge(s) <%.4f> | ESC cancel",

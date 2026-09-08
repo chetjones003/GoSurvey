@@ -253,4 +253,30 @@ EXPECT SUBOBJECTEDGES 1
 CMD 2
 EXPECT SOLIDPROPS 0 1582.8318530718 861.1150383794 10 15 7
 
+# --- Edges can be gathered WHILE the FILLET command is running -----------------------------------
+# The user's own flow: type FILLET first (which, with nothing selected, opens the 2D command), then
+# Ctrl+click the edges. Before this, the click went to the 2D entity pick, which has nothing to say
+# about a solid's edge - so holding Ctrl and clicking an edge did nothing at all.
+#
+# The transcript reaches everything but the literal click routing: SUBOBJECT is the headless
+# equivalent of the Ctrl+click, and what is asserted here is that a radius typed afterwards rounds
+# the gathered edges rather than being read by the 2D flow.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+# Nothing selected, so this is the 2D command - the state the user was in.
+CMD FILLET
+EXPECT LOG "select first object"
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+EXPECT LOG "solid edge(s) selected"
+# A second edge that shares no corner with the first.
+SUBOBJECT 0 -5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 2
+CMD 2
+# 1440 + 40pi and 704 + 44pi - both edges rounded, in one operation, from inside the command.
+EXPECT SOLIDPROPS 0 1565.6637061436 842.2300767580 12 18 8
+EXPECT SUBOBJECTS 0
+
 CHECK ALL
