@@ -64,6 +64,20 @@ inline Vec3 RotatePointAboutAxis(const Vec3& p, const Vec3& axisPoint, const Vec
   return Add(axisPoint, RotateVectorAboutAxis(Sub(p, axisPoint), axisUnit, angleRad));
 }
 
+/// Reflect a DIRECTION through a plane with unit normal \p planeUnit (Householder, no translation):
+/// v' = v - 2 (v . n) n. \p planeUnit is trusted to be a unit vector, the same contract
+/// \ref RotateVectorAboutAxis keeps for its axis.
+inline Vec3 ReflectVectorAcrossPlane(const Vec3& v, const Vec3& planeUnit) {
+  return Sub(v, Scale(planeUnit, 2.0 * Dot(v, planeUnit)));
+}
+
+/// Reflect a POINT through the plane { x : (x - \p planePoint) . \p planeUnit = 0 }: subtract the
+/// plane point, reflect the direction, add it back — the point/direction split \ref RotatePointAboutAxis
+/// makes, and for the same reason (a caller reflecting a plane normal has no plane point to give).
+inline Vec3 ReflectPointAcrossPlane(const Vec3& p, const Vec3& planePoint, const Vec3& planeUnit) {
+  return Add(planePoint, ReflectVectorAcrossPlane(Sub(p, planePoint), planeUnit));
+}
+
 /// A ray: a point and a direction. \c dir is expected normalized; a zero \c dir marks it invalid.
 struct Ray {
   Vec3 origin;

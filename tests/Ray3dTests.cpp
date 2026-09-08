@@ -390,3 +390,60 @@ TEST_CASE("RotateVectorAboutAxis ignores axis point, a direction has no position
   REQUIRE(viaVector.y == Approx(viaPoint.y));
   REQUIRE(viaVector.z == Approx(viaPoint.z));
 }
+
+// ---------------------------------------------------------------------------------------------------
+// ReflectPointAcrossPlane / ReflectVectorAcrossPlane — REQ-329 increment 5 (MIRROR across a tilted
+// work plane). A reflection is an involution and an isometry.
+// ---------------------------------------------------------------------------------------------------
+
+TEST_CASE("ReflectPointAcrossPlane about a world-vertical plane matches the 2D line reflection",
+          "[ray3d][req329]") {
+  // The plane through the world Y axis with normal +X (i.e. the mirror line is the world Y axis on
+  // the ground): a point at (7, 3, 2) reflects to (-7, 3, 2).
+  const Vec3 planePt{0.0, 0.0, 0.0};
+  const Vec3 n{1.0, 0.0, 0.0};
+  const Vec3 got = ReflectPointAcrossPlane(Vec3{7.0, 3.0, 2.0}, planePt, n);
+  REQUIRE(got.x == Approx(-7.0));
+  REQUIRE(got.y == Approx(3.0));
+  REQUIRE(got.z == Approx(2.0));
+}
+
+TEST_CASE("ReflectPointAcrossPlane across a tilted plane, checked by hand and by involution",
+          "[ray3d][req329]") {
+  // Plane through (1,2,3) with unit normal (0, 1, 1)/sqrt(2) — a 45-degree plane. Reflecting a
+  // point twice returns it exactly; a point already on the plane is fixed.
+  const Vec3 planePt{1.0, 2.0, 3.0};
+  const double s = 1.0 / std::sqrt(2.0);
+  const Vec3 n{0.0, s, s};
+  const Vec3 p{10.0, -4.0, 6.0};
+  const Vec3 once = ReflectPointAcrossPlane(p, planePt, n);
+  const Vec3 twice = ReflectPointAcrossPlane(once, planePt, n);
+  REQUIRE(twice.x == Approx(p.x));
+  REQUIRE(twice.y == Approx(p.y));
+  REQUIRE(twice.z == Approx(p.z));
+  // signed distance to the plane flips sign, magnitude preserved.
+  const double dBefore = (p.x - planePt.x) * n.x + (p.y - planePt.y) * n.y + (p.z - planePt.z) * n.z;
+  const double dAfter = (once.x - planePt.x) * n.x + (once.y - planePt.y) * n.y + (once.z - planePt.z) * n.z;
+  REQUIRE(dAfter == Approx(-dBefore));
+  // A point on the plane: (1,2,3) + a vector perpendicular to n, e.g. (5, 0, 0).
+  const Vec3 onPlane = ReflectPointAcrossPlane(Vec3{6.0, 2.0, 3.0}, planePt, n);
+  REQUIRE(onPlane.x == Approx(6.0));
+  REQUIRE(onPlane.y == Approx(2.0));
+  REQUIRE(onPlane.z == Approx(3.0));
+}
+
+TEST_CASE("ReflectVectorAcrossPlane negates the normal and fixes an in-plane direction",
+          "[ray3d][req329]") {
+  const double s = 1.0 / std::sqrt(2.0);
+  const Vec3 n{0.0, s, s};
+  const Vec3 gotN = ReflectVectorAcrossPlane(n, n);
+  REQUIRE(gotN.x == Approx(0.0).margin(1e-12));
+  REQUIRE(gotN.y == Approx(-s));
+  REQUIRE(gotN.z == Approx(-s));
+  // A direction lying in the plane (perpendicular to n) is unchanged.
+  const Vec3 inPlane{1.0, 0.0, 0.0};
+  const Vec3 gotIn = ReflectVectorAcrossPlane(inPlane, n);
+  REQUIRE(gotIn.x == Approx(1.0));
+  REQUIRE(gotIn.y == Approx(0.0).margin(1e-12));
+  REQUIRE(gotIn.z == Approx(0.0).margin(1e-12));
+}
