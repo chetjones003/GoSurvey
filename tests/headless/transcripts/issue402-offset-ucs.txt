@@ -1,0 +1,129 @@
+# GitHub issue #402 / REQ-329 increment 7 — OFFSET's direction and side pick are in the active
+# work plane, not world XY.
+#
+# - A line's offset is perpendicular to it IN the work plane (UCS-Z x lineDir), so the copy stays
+#   in the plane instead of sliding along world XY off it.
+# - The side / through pick is decided in the plane's own 2D frame.
+# - Circle / arc offsets are already concentric (plane-preserved); only the pick side is projected.
+# - Polyline / ellipse offset on a tilted work plane is refused by name (follow-on).
+#
+# Regression guard: plan view, and any UCS whose Z axis is world-Z-parallel, are byte-for-byte
+# unchanged (they take the world-XY path).
+
+# --- Regression: World UCS, offset a line by a typed distance + side pick -----------------------
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD OFFSET
+PICK 5 0
+CMD 2
+PICK 5 3
+EXPECT LINES 2
+# +Y side => offset copy 2 north of the source.
+EXPECT LINEXYZ 1 0 2 0 10 2 0
+CHECK ALL
+
+# --- Tilted UCS (X 90): the line offset stays IN the work plane -------------------------------
+# UCS X 90: basis X=(1,0,0), Y=(0,0,1), Z=(0,-1,0); CLICKUCS u v -> world (u, 0, v).
+# Line UCS (0,0)-(10,0) = world (0,0,0)-(10,0,0). Distance 2, side pick at UCS (5,3) => +v side.
+# perp = UCS-Z x lineDir = (0,-1,0) x (1,0,0) = (0,0,1); so the copy is at world z = 2.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+CMD OFFSET
+CLICKUCS 5 0
+CMD 2
+CLICKUCS 5 3
+EXPECT LINES 2
+CMD UCS
+CMD W
+EXPECT LINEXYZ 1 0 0 2 10 0 2
+CHECK ALL
+
+# --- Tilted UCS: the other side ---------------------------------------------------------------
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+CMD OFFSET
+CLICKUCS 5 0
+CMD 3
+CLICKUCS 5 -4
+EXPECT LINES 2
+CMD UCS
+CMD W
+# side pick at UCS v = -4 => offset toward -v => world z = -3.
+EXPECT LINEXYZ 1 0 0 -3 10 0 -3
+CHECK ALL
+
+# --- Tilted UCS: a circle offsets concentrically, staying on its own plane --------------------
+# Circle UCS (5,5) = world (5,0,5), r 2, normal (0,-1,0). Distance 1, side pick OUTSIDE
+# (UCS (5,9), i.e. beyond the rim) => bigger radius 3; centre and normal unchanged.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 5 5
+CMD 2
+ESC
+CMD OFFSET
+CLICKUCS 5 5
+CMD 1
+CLICKUCS 5 9
+EXPECT CIRCLES 2
+CMD UCS
+CMD W
+EXPECT CIRCLEXYZ 1 5 0 5 3 0 -1 0
+CHECK ALL
+
+# --- Tilted UCS: a polyline offset is refused by name ----------------------------------------
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD POLYLINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+CLICKUCS 10 10
+CMD
+CMD OFFSET
+CLICKUCS 5 0
+CMD 2
+CLICKUCS 5 3
+EXPECT LOG "not supported yet"
+EXPECT POLYLINES 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- Regression: plan-rotated UCS (Z 30) takes the unchanged world-XY path -------------------
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD UCS
+CMD Z
+CMD 30
+CMD OFFSET
+PICK 5 0
+CMD 2
+PICK 5 3
+CMD UCS
+CMD W
+EXPECT LINES 2
+# World-Z-parallel UCS => world-XY offset, elevation 0, exactly as plan view.
+EXPECT LINEXYZ 1 0 2 0 10 2 0
+CHECK ALL
