@@ -10690,6 +10690,20 @@ static void ResetArrayDraft(AppCommandState& st) {
   st.arrayRotateItems = true;
 }
 
+/// The rigid reference point ARRAY hangs the pattern on: the selection centroid in X/Y, and the
+/// selection's own 3D bounds centre in Z (\c CadGizmoAnchorWorld, the same anchor the MOVE gizmo
+/// uses). Z must be the geometry's real elevation, NOT the work-plane elevation
+/// (\c CadCommitElevation): the polar no-rotate path rotates THIS point about the array axis and
+/// translates the selection by the result, so an anchor sitting at Z 0 while the geometry is 20 ft
+/// up rotates at a 20-ft-inflated radius and the copies fly out (GitHub issue #400 increment 4).
+/// Falls back to the work-plane elevation only when the selection bounds nothing measurable.
+static void SetArrayAnchorFromSelection(AppCommandState& st) {
+  ComputeSelectionCentroidWorld(st, &st.arrayAnchorX, &st.arrayAnchorY);
+  ray3d::Vec3 anchor3{};
+  st.arrayAnchorZ = CadGizmoAnchorWorld(st, &anchor3) ? static_cast<float>(anchor3.z)
+                                                      : CadCommitElevation(st);
+}
+
 /// GitHub issue #400 increment 1: resolve a viewport click for ARRAY's spatial phases (column/row
 /// spacing, polar center, fill angle) onto the active UCS work plane, anchored at (\p ax,\p ay,\p az)
 /// — the same camera-ray-onto-plane pattern \c CadSolveCircleThreePoints uses. In plan view / under
@@ -30528,8 +30542,7 @@ void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
   DropArrayUnsupportedFromSelection(st, log);
   if (!st.selection.empty()) {
     st.arrayPhase = AppCommandState::ArrayPhase::WaitType;
-    ComputeSelectionCentroidWorld(st, &st.arrayAnchorX, &st.arrayAnchorY);
-    st.arrayAnchorZ = CadCommitElevation(st);  // issue #400: elevation for the UCS work plane
+    SetArrayAnchorFromSelection(st);
     log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
   } else
     log.push_back(
@@ -31442,8 +31455,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
         else {
           st.arrayPhase = AP::WaitType;
-          ComputeSelectionCentroidWorld(st, &st.arrayAnchorX, &st.arrayAnchorY);
-          st.arrayAnchorZ = CadCommitElevation(st);  // issue #400: elevation for the UCS work plane
+          SetArrayAnchorFromSelection(st);
           log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
         }
       } else if (st.arrayPhase == AP::Rect_WaitLevels) {

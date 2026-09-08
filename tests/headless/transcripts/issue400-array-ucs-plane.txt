@@ -259,3 +259,45 @@ EXPECT CIRCLEXYZ 2 0 0 10 1 0 -1 0
 CMD UCS
 CMD W
 CHECK ALL
+
+# Increment 4: polar ROTATE-ITEMS = NO under a tilted UCS, with the selection OFF the work-plane
+# elevation. The array anchor's Z must be the geometry's real elevation (its 3D bounds centre), not
+# the work-plane elevation - otherwise the no-rotate path rotates the anchor at an inflated radius
+# and every copy flies outward (the user's 2026-09-08 report: preview correct, commit wrong).
+#
+# UCS X 90 => work plane world y=0, axis (0,-1,0) through the origin. Circle at UCS (0,10) =
+# world (0,0,10); centre at UCS (0,0) = world origin. n=3, fill angle picked at UCS (0,10) = 90 deg
+# => step 45 deg. no-rotate here == rotate-items (anchor coincides with the circle centre):
+# world (0,0,10) -> 45 deg -> (-7.07107, 0, 7.07107) -> 90 deg -> (-10, 0, 0).
+# Before the fix the anchor Z was 0 (== the axis), the per-copy delta was 0, and all three circles
+# stayed at (0,0,10).
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 0 10
+CMD 1
+ESC
+# A throwaway line drawn on the work-plane elevation (UCS z=0) leaves the last resolved cursor Z at
+# 0 - so `CadCommitElevation` alone would put the array anchor at Z 0 while the selected circle is
+# at Z 10. The fix reads the circle's own 3D bounds centre instead.
+CMD LINE
+CLICKUCS -20 0
+CLICKUCS -25 0
+ESC
+BOX -5 -5 5 5
+EXPECT SELECTED 1
+CMD ARRAY
+CMD p
+CLICKUCS 0 0
+CMD 3
+CLICKUCS 0 10
+CMD n
+EXPECT LOG "3 total instance(s) (polar)"
+EXPECT CIRCLES 3
+EXPECT CIRCLEXYZ 1 -7.07107 0 7.07107 1 0 -1 0
+EXPECT CIRCLEXYZ 2 -10 0 0 1 0 -1 0
+CMD UCS
+CMD W
+CHECK ALL
