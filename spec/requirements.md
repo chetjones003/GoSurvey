@@ -7646,14 +7646,43 @@ capability that does not exist. They are recorded here rather than quietly dropp
   cutting edge are the SAME polyline, every segment except the target's own picked segment remains a
   valid cutter (a polyline can trim itself against one of its own other segments).
 
+  **Increment 4 (smart / drawn-line TRIM — TRIMSTATE 0 default, 2026-09-08):** increments 1-3 all
+  covered the classic "pick cutting edges, then click the piece to remove" flow (TRIMSTATE 1).
+  TRIMSTATE 0 — the default a fresh profile starts in, where two clicks *draw a line across the
+  drawing* and the piece that line crosses is trimmed (`ExecuteDrawnSegmentTrimOnce`,
+  `PickTrimTargetClosestToDrawnSegment`, `CollectAllDrawingCutSegmentsExceptTarget`) — was still
+  flat world-XY throughout: it dropped the Z of both drawn points and of every candidate edge. Under
+  an orbited camera or a non-world UCS the drawn stroke landed on the ground plane, far from the
+  cursor and the geometry, and the trim picked the wrong target and a bogus XY-projected crossing
+  (issue #399's screenshot: geometry drawn in a Front UCS, the drawn trim line committed down at the
+  world origin). When the viewport click carries a valid pick ray, the drawn line's two points now
+  keep their real elevation (the committed cursor or object-snap Z), and `Try3DDrawnLineTrim`
+  resolves the whole operation in true 3D the same way `Try3DLineTrim` does: the target is the Line
+  or straight polyline chord whose true 3D closest approach to the drawn segment is smallest (within
+  the same match tolerance `ExecuteDrawnSegmentTrimOnce` already uses); crossings are found in 3D
+  against the whole drawing (`Collect3DTrimCrossings`, extracted from the increment-1-3 code and now
+  shared by both paths); the removed portion is the one that contains the drawn line's midpoint —
+  the 3D form of the existing 2D fence rule. The 3D crossing math (`SegSegClosest3D` for
+  Line/polyline-chord cutters, `curveisect::IntersectSegConic` for a coplanar Circle/Arc/Ellipse
+  cutter, skew curved cutters skipped) and the entity coverage (Line / straight-polyline-chord
+  target; Line / coplanar Circle/Arc/Ellipse / polyline-chord cutters) are identical to increments
+  1-3 — this increment is those same rules on the drawn-line trigger, not new geometry. ORTHO/POLAR
+  on the second drawn point now runs through `ApplyOrthoConstrainFromAnchor` (UCS-aware, carries Z)
+  on the pick-ray path; the flat path keeps its original world-XY axis lock unchanged.
+
   **Deferred, refused by name rather than silently run through the old flat math:** a skew
   line/polyline-vs-curve closest-approach solve, and Circle/Arc/Ellipse as a trim TARGET (a 2D-parity
   gap, not specific to 3D — Circle/Arc/Ellipse has never been a valid TRIM target even in the
-  pre-existing 2D implementation), remain open follow-on scope beyond issue #399's three stated
+  pre-existing 2D implementation), remain open follow-on scope beyond issue #399's stated
   increments. A true curved (tilted-arc) polyline segment intersection is likewise open follow-on
-  scope. Plan view (world UCS, no orbit — pick ray is null) is completely unaffected for every entity
-  type: `SubmitTrimViewportPick` falls through to the original, byte-identical 2D code path whenever
-  no pick ray is supplied.
+  scope. The **drawn trim-line preview** (the rubber band from the first point to the cursor and the
+  dashed removal hint, `CadTrimAppendCutLineRemovedPreview` / `main.cpp`'s `PushRubberSegViewRel`
+  block) is still drawn with the plan-view-only pan/zoom transform, so under an orbited camera the
+  preview line renders in the wrong place even though the committed trim (increment 4) is correct —
+  hooking the preview into the orbited rubber-band renderer is tracked as immediate follow-on, not
+  part of this increment. Plan view (world UCS, no orbit — pick ray is null) is completely
+  unaffected for every entity type and both triggers: `SubmitTrimViewportPick` falls through to the
+  original, byte-identical 2D code path whenever no pick ray is supplied.
 - Acceptance:
   - in an orbited view, clicking the segment of a Line between two crossing coplanar 3D Line edges
     trims exactly that segment, at the true 3D crossing point;
@@ -7674,18 +7703,32 @@ capability that does not exist. They are recorded here rather than quietly dropp
     the Line-vs-Line case; a skew Polyline cutting edge beyond tolerance is refused, not fabricated;
   - a Circle/Arc/Ellipse TRIM target reached while a pick ray is active is refused by name — never
     silently trimmed with the old flat math (open 2D-parity gap, stated above);
-  - plan view / world UCS TRIM (no pick ray) is bit-for-bit unchanged for every entity type, including
-    Polyline cutting edges and targets (regression guard).
+  - (increment 4) with the default TRIMSTATE 0 smart trim in an orbited view / non-world UCS, the two
+    drawn points keep the committed cursor/snap elevation, the target and crossing are found in true
+    3D, and the correct portion is removed — geometry stays on its original plane; the same drawn
+    trim in plan view / world UCS is bit-for-bit unchanged (regression guard);
+  - plan view / world UCS TRIM (no pick ray) is bit-for-bit unchanged for every entity type and both
+    triggers (classic pick and drawn line), including Polyline cutting edges and targets (regression
+    guard).
 - Owner-layer: Commands (`CadCommands.cpp`: `SegSegClosest3D`, `CutterCurvePlaneAndConic`,
-  `FindNearestPolylineSegment3D`, `Try3DLineTrim`, `SubmitTrimViewportPick`'s `pickRay` parameter) /
-  UI (`CadUi.cpp`'s `TrimPick` route, passing the click's already-computed `pickRayPtr`).
-- Status: **accepted (2026-09-07)** — all three planned increments delivered: increment 1
-  (Line-vs-Line), increment 2 (Circle/Arc/Ellipse cutting edges), increment 3 (Polyline as both
-  target and cutting edge). Issue #399's own four draft acceptance criteria are now met for every
-  entity combination it named, with the two 2D-parity gaps above (Circle/Arc/Ellipse as a TRIM
-  target; true curved-polyline-segment intersection) named as explicit follow-on scope rather than
-  silently left unstated.
-- Revisions: 2026-09-07 — proposed and accepted same day (`/implement-issue 399`); SPEC GAP on the
+  `FindNearestPolylineSegment3D`, `Collect3DTrimCrossings`, `Apply3DTrimCut`, `Try3DLineTrim`,
+  `Try3DDrawnLineTrim`, `SubmitTrimViewportPick`'s `pickRay` parameter) / UI (`CadUi.cpp`'s
+  `TrimPick` route, passing the click's already-computed `pickRayPtr`).
+- Status: **accepted (2026-09-07; increment 4 added 2026-09-08)** — four increments delivered:
+  increment 1 (Line-vs-Line), 2 (Circle/Arc/Ellipse cutting edges), 3 (Polyline as both target and
+  cutting edge), 4 (the default TRIMSTATE 0 drawn-line trim, not just the classic pick). Issue
+  #399's own four draft acceptance criteria are now met for both TRIM triggers, with the 2D-parity
+  gaps above (Circle/Arc/Ellipse as a TRIM target; true curved-polyline-segment intersection) and
+  the orbited drawn-trim-line PREVIEW named as explicit follow-on scope rather than silently left
+  unstated.
+- Revisions: 2026-09-08 — increment 4 added (D-2026-09-08-a): increments 1-3 covered only the
+  classic "click the piece to remove" flow (TRIMSTATE 1); the default TRIMSTATE 0 drawn-line trim
+  was still flat world-XY and committed the drawn line onto the ground plane under an orbited camera
+  / Front-style UCS (user-reported against issue #399's own screenshot). Same 3D rules and entity
+  matrix as increments 1-3, moved onto the drawn-line trigger; the increment-1-3 crossing loop was
+  extracted into the shared `Collect3DTrimCrossings` / `Apply3DTrimCut` so there is one copy, not
+  two. The orbited drawn-trim-line preview stays flat and is tracked as immediate follow-on.
+  2026-09-07 — proposed and accepted same day (`/implement-issue 399`); SPEC GAP on the
   skew-tolerance rule resolved with the user before implementation (D-2026-09-07-b). Same day,
   increment 2 delivered: extended cutting edges to Circle/Arc/Ellipse via the existing `curveisect`
   analytic library rather than tessellation; found and documented (not fixed) that Circle/Arc/Ellipse

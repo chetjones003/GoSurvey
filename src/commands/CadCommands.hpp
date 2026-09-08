@@ -2512,6 +2512,11 @@ struct AppCommandState {
   std::vector<SelectedEntity> trimCutters;
   /// Draft endpoints while TRIM \p L waits for second point (rubber band). First shot completes trim and clears TRIM.
   float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;
+  /// issue #399 increment 4: the drawn trim-line's two points carry a real elevation when the pick
+  /// arrives through a camera ray (orbited view / non-world UCS), so smart TRIM resolves in true 3D
+  /// the same way the classic "click the piece to remove" path already does. Left 0 on the plan-view
+  /// path, which is byte-for-byte unchanged.
+  float trimCutInfP1z = 0.f, trimCutInfP2z = 0.f;
   /// OFFSET: pick entity, then type distance + pick side, or click a through point (line / circle / arc).
   enum class OffsetPhase {
     WaitSelectEntity,

@@ -1048,6 +1048,8 @@ if(GOSURVEY_BUILD_TESTS)
     # issue #399 increment 1 — 3D Line-vs-Line TRIM via a pick ray. Same reason as
     # TrimLinePreviewTests above (needs gosurvey_domain for SubmitTrimViewportPick).
     tests/Trim3DLineLineTests.cpp
+    # issue #399 increment 4 — smart (drawn-line) TRIM in true 3D. Same reason as above.
+    tests/Trim3DDrawnLineTests.cpp
     # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
     # StartDistCommand, like TrimLinePreviewTests above.
     tests/DistCommandTests.cpp
