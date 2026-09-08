@@ -11838,6 +11838,13 @@ static bool LineLineIntersectInf(float ax, float ay, float bx, float by, float c
   return true;
 }
 
+/// REQ-329 increment 7: project a point into the active UCS plane's local 2D frame, so an OFFSET
+/// side / through pick on a tilted work plane is decided in that plane rather than in world XY.
+static ucs::Point2D OffsetPlaneLocal(const AppCommandState& st, float x, float y, float z) {
+  return ucs::WorldToPlane(CadActiveUcsStorage(st),
+                           {static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)});
+}
+
 static void UnitLeftNormal(float ax, float ay, float bx, float by, float* nx, float* ny) {
   float vx = bx - ax;
   float vy = by - ay;
@@ -11905,32 +11912,53 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   const float z1 = st.userLinesFlat[k + 5];
   const float dx = x1 - x0;
   const float dy = y1 - y0;
-  if (std::hypot(dx, dy) < 1e-8f) {
+  const float dz = z1 - z0;
+  if (std::hypot(std::hypot(dx, dy), dz) < 1e-8f) {
     log.push_back("OFFSET — zero-length line.");
     return false;
   }
-  float nx = 0.f, ny = 0.f;
-  UnitLeftNormal(x0, y0, x1, y1, &nx, &ny);
-  const float ox0 = x0 + nx * signedD;
-  const float oy0 = y0 + ny * signedD;
-  const float ox1 = x1 + nx * signedD;
-  const float oy1 = y1 + ny * signedD;
+  // REQ-329 increment 7: under a tilted UCS the offset direction is perpendicular to the line IN the
+  // active work plane (`UCS-Z × lineDir` — the same left-normal handedness `UnitLeftNormal` gives,
+  // which under the World UCS reduces to exactly it). The offset copy then stays in the work plane
+  // rather than sliding along world XY off it.
+  float ox0 = 0.f, oy0 = 0.f, ox1 = 0.f, oy1 = 0.f, oz0 = z0, oz1 = z1;
+  if (!CadWorkPlaneIsWorldXy(st)) {
+    const ucs::Ucs u = CadActiveUcsStorage(st);
+    const ray3d::Vec3 dir = ray3d::Normalize({static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)});
+    const ray3d::Vec3 perp = ray3d::Normalize(
+        ray3d::Cross({u.zAxis.x, u.zAxis.y, u.zAxis.z}, dir));
+    ox0 = x0 + static_cast<float>(perp.x) * signedD;
+    oy0 = y0 + static_cast<float>(perp.y) * signedD;
+    oz0 = z0 + static_cast<float>(perp.z) * signedD;
+    ox1 = x1 + static_cast<float>(perp.x) * signedD;
+    oy1 = y1 + static_cast<float>(perp.y) * signedD;
+    oz1 = z1 + static_cast<float>(perp.z) * signedD;
+  } else {
+    float nx = 0.f, ny = 0.f;
+    UnitLeftNormal(x0, y0, x1, y1, &nx, &ny);
+    ox0 = x0 + nx * signedD;
+    oy0 = y0 + ny * signedD;
+    ox1 = x1 + nx * signedD;
+    oy1 = y1 + ny * signedD;
+  }
   // Defense in depth (issue #122, REQ-204 `finite-coords`): `signedD` comes from a side test on the
   // source geometry, so a source coordinate large enough to overflow the projection makes the offset
   // result inf/NaN even though every input was "finite". Never write that into the store — mirror
   // CommitCircle's non-finite refusal, and report it (REQ-201).
-  if (!std::isfinite(ox0) || !std::isfinite(oy0) || !std::isfinite(ox1) || !std::isfinite(oy1)) {
+  if (!std::isfinite(ox0) || !std::isfinite(oy0) || !std::isfinite(oz0) || !std::isfinite(ox1) ||
+      !std::isfinite(oy1) || !std::isfinite(oz1)) {
     log.push_back("OFFSET — the offset result is not a finite coordinate.");
     return false;
   }
-  // The offset copy stays on the source line's plane — offsetting an elevated line must not
-  // flatten it (REQ-057). The offset itself is horizontal, so each end keeps its own Z.
+  // The offset copy stays on the source line's plane — under the World UCS the offset is horizontal
+  // so each end keeps its own Z; under a tilted UCS the perpendicular carries a Z component so the
+  // copy stays in the work plane (REQ-057 / REQ-329 increment 7).
   st.userLinesFlat.push_back(ox0);
   st.userLinesFlat.push_back(oy0);
-  st.userLinesFlat.push_back(z0);
+  st.userLinesFlat.push_back(oz0);
   st.userLinesFlat.push_back(ox1);
   st.userLinesFlat.push_back(oy1);
-  st.userLinesFlat.push_back(z1);
+  st.userLinesFlat.push_back(oz1);
   PushOffsetCopyAttrs(st, st.userLineAttrs, lineIx);
   BumpCadGpuCache(st);
   return true;
@@ -12156,34 +12184,49 @@ static void HandleOffsetThroughPick(AppCommandState& st, float px, float py, std
   if (!st.offsetEntityValid)
     return;
   const SelectedEntity& e = st.offsetEntity;
+  const bool tilted = !CadWorkPlaneIsWorldXy(st);  // REQ-329 increment 7
+  const ucs::Point2D cur = tilted ? OffsetPlaneLocal(st, px, py, CadCommitElevation(st))
+                                  : ucs::Point2D{static_cast<double>(px), static_cast<double>(py)};
   float signedD = 0.f;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(e.index) * 6;
     if (k + 5 >= st.userLinesFlat.size())
       return;
-    const float x0 = st.userLinesFlat[k];
-    const float y0 = st.userLinesFlat[k + 1];
-    const float x1 = st.userLinesFlat[k + 3];
-    const float y1 = st.userLinesFlat[k + 4];
-    signedD = SignedSideLine(x0, y0, x1, y1, px, py);
+    float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    if (tilted) {
+      const ucs::Point2D a = OffsetPlaneLocal(st, x0, y0, st.userLinesFlat[k + 2]);
+      const ucs::Point2D b = OffsetPlaneLocal(st, x1, y1, st.userLinesFlat[k + 5]);
+      x0 = static_cast<float>(a.x); y0 = static_cast<float>(a.y);
+      x1 = static_cast<float>(b.x); y1 = static_cast<float>(b.y);
+    }
+    signedD = SignedSideLine(x0, y0, x1, y1, static_cast<float>(cur.x), static_cast<float>(cur.y));
     break;
   }
   case SelectedEntity::Type::Circle: {
     const size_t k = static_cast<size_t>(e.index) * 4;
     if (k + 3 >= st.userCirclesCxCyZR.size())
       return;
-    const float cx = st.userCirclesCxCyZR[k];
-    const float cy = st.userCirclesCxCyZR[k + 1];
+    float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
     const float r = st.userCirclesCxCyZR[k + 3];
-    signedD = SignedSideCircle(cx, cy, r, px, py);
+    if (tilted) {
+      const ucs::Point2D c = OffsetPlaneLocal(st, cx, cy, st.userCirclesCxCyZR[k + 2]);
+      cx = static_cast<float>(c.x); cy = static_cast<float>(c.y);
+    }
+    signedD = SignedSideCircle(cx, cy, r, static_cast<float>(cur.x), static_cast<float>(cur.y));
     break;
   }
   case SelectedEntity::Type::Arc: {
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
       return;
     const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
-    signedD = SignedSideCircle(a.cx, a.cy, a.r, px, py);
+    float cx = a.cx, cy = a.cy;
+    if (tilted) {
+      const ucs::Point2D c = OffsetPlaneLocal(st, a.cx, a.cy, a.z);
+      cx = static_cast<float>(c.x); cy = static_cast<float>(c.y);
+    }
+    signedD = SignedSideCircle(cx, cy, a.r, static_cast<float>(cur.x), static_cast<float>(cur.y));
     break;
   }
   case SelectedEntity::Type::Polyline:
@@ -12208,14 +12251,25 @@ static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::v
     return;
   const float d = st.offsetTypedDistance;
   const SelectedEntity& e = st.offsetEntity;
+  const bool tilted = !CadWorkPlaneIsWorldXy(st);
+  // REQ-329 increment 7: on a tilted work plane the pick is resolved in the plane's own 2D frame.
+  const ucs::Point2D cur = tilted ? OffsetPlaneLocal(st, px, py, CadCommitElevation(st))
+                                  : ucs::Point2D{static_cast<double>(px), static_cast<double>(py)};
   float sgn = 1.f;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(e.index) * 6;
     if (k + 5 >= st.userLinesFlat.size())
       return;
-    const float sd = SignedSideLine(st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 3],
-                                    st.userLinesFlat[k + 4], px, py);
+    float ax = st.userLinesFlat[k], ay = st.userLinesFlat[k + 1];
+    float bx = st.userLinesFlat[k + 3], by = st.userLinesFlat[k + 4];
+    if (tilted) {
+      const ucs::Point2D a = OffsetPlaneLocal(st, ax, ay, st.userLinesFlat[k + 2]);
+      const ucs::Point2D b = OffsetPlaneLocal(st, bx, by, st.userLinesFlat[k + 5]);
+      ax = static_cast<float>(a.x); ay = static_cast<float>(a.y);
+      bx = static_cast<float>(b.x); by = static_cast<float>(b.y);
+    }
+    const float sd = SignedSideLine(ax, ay, bx, by, static_cast<float>(cur.x), static_cast<float>(cur.y));
     sgn = sd >= 0.f ? 1.f : -1.f;
     break;
   }
@@ -12223,10 +12277,13 @@ static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::v
     const size_t k = static_cast<size_t>(e.index) * 4;
     if (k + 3 >= st.userCirclesCxCyZR.size())
       return;
-    const float cx = st.userCirclesCxCyZR[k];
-    const float cy = st.userCirclesCxCyZR[k + 1];
+    float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
     const float r = st.userCirclesCxCyZR[k + 3];
-    const float side = SignedSideCircle(cx, cy, r, px, py);
+    if (tilted) {
+      const ucs::Point2D c = OffsetPlaneLocal(st, cx, cy, st.userCirclesCxCyZR[k + 2]);
+      cx = static_cast<float>(c.x); cy = static_cast<float>(c.y);
+    }
+    const float side = SignedSideCircle(cx, cy, r, static_cast<float>(cur.x), static_cast<float>(cur.y));
     sgn = side >= 0.f ? 1.f : -1.f;
     break;
   }
@@ -12234,12 +12291,24 @@ static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::v
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
       return;
     const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
-    const float side = SignedSideCircle(a.cx, a.cy, a.r, px, py);
+    float cx = a.cx, cy = a.cy;
+    if (tilted) {
+      const ucs::Point2D c = OffsetPlaneLocal(st, a.cx, a.cy, a.z);
+      cx = static_cast<float>(c.x); cy = static_cast<float>(c.y);
+    }
+    const float side = SignedSideCircle(cx, cy, a.r, static_cast<float>(cur.x), static_cast<float>(cur.y));
     sgn = side >= 0.f ? 1.f : -1.f;
     break;
   }
   case SelectedEntity::Type::Ellipse:
   case SelectedEntity::Type::Polyline: {
+    if (tilted) {
+      log.push_back(std::string("OFFSET — ") +
+                    (e.type == SelectedEntity::Type::Polyline ? "polyline" : "ellipse") +
+                    " offset on a tilted work plane is not supported yet (REQ-329) — offset a line,"
+                    " circle or arc, or work on a plan-view UCS.");
+      return;
+    }
     if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
       if (pi >= 0 && static_cast<size_t>(pi + 1) < st.userPolylineOffsets.size()) {
@@ -24688,6 +24757,13 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
   previewLines->clear();
   previewCircles->clear();
   if (!cmd.offsetEntityValid)
+    return;
+  // REQ-329 increment 7: this ghost is built with flat world-XY math (the `Ofs*` helpers). Under a
+  // tilted work plane the COMMITTED offset is resolved in that plane (CommitOffsetLine /
+  // HandleOffsetSidePick), so a flat ghost would sit somewhere the click will not. Suppress it
+  // there rather than mislead — the committed result is UCS-correct; a plane-aware preview is
+  // follow-on work.
+  if (!CadWorkPlaneIsWorldXy(cmd))
     return;
   float signedD = 0.f;
   if (!TryOffsetSignedDFromCursor(cmd, cursorWx, cursorWy, &signedD))

@@ -7943,8 +7943,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
      entity set: Line / Circle (+ plane normal) / Polyline. Arc (reflection reverses handedness),
      Ellipse / Annotation / Table / BlockRef / feature line (no stored plane normal / 2D-only helper)
      and survey points (2D duplicate-ID modal) are refused by name — the REQ-328 item 2 boundary.
-  6. **ALIGN** — source/destination point pairs ray + UCS resolved.
-  7. **OFFSET** — offset direction in the object's / UCS plane.
+  6. **ALIGN** — **no change needed** (D-2026-09-08-c). GoSurvey's ALIGN is a 2D survey Helmert
+     coordinate-fit (`SolveHelmert4x4` / `ApplyHelmertToAllGeometry`), not AutoCAD's 3D point-mapping
+     align — it fits a drawing to real-world ground control from easting/northing pairs, a plan-view
+     operation by definition. Its source picks already resolve on the active work plane; a Helmert
+     fit on a tilted plane has no meaningful use. Closed with no code change.
+  7. **OFFSET** — offset direction in the object's / UCS plane — TASK-223. Under a tilted UCS a
+     Line's offset is perpendicular to it IN the work plane (`UCS-Z × lineDir`), so the copy stays in
+     the plane; the side / through pick is decided in the plane's own 2D frame
+     (`OffsetPlaneLocal` / `ucs::WorldToPlane`). Circle / Arc offsets are already concentric
+     (plane-preserved) — only the pick side is projected. Polyline and Ellipse offset on a tilted
+     work plane are refused by name (the 2D miter geometry / no-normal boundary — follow-on). The
+     live ghost preview is suppressed under a tilted UCS rather than shown flat-and-wrong; the
+     committed result is UCS-correct.
 - Acceptance:
   - **(increment 1)** MOVE and COPY in an orbited view / under a tilted UCS: a picked base point and
     second point produce a translation along the active UCS plane under the cursor; a line, circle,
@@ -7966,8 +7977,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - **(increment 5)** MIRROR under a tilted UCS reflects a Line / Circle / Polyline across the plane
     that contains the picked mirror line (a circle's plane normal reflects with it); entity types
     REQ-328 refuses are refused by name — verified against hand-computed coordinates within REQ-101;
-  - **(increments 6-7)** ALIGN / OFFSET base points and reference
-    geometry are ray + UCS resolved, verified against hand-computed coordinates within REQ-101;
+  - **(increment 6)** ALIGN — no change (D-2026-09-08-c): a 2D survey Helmert coordinate-fit is a
+    plan-view operation by definition;
+  - **(increment 7)** OFFSET under a tilted UCS: a Line's offset copy stays in the work plane
+    (perpendicular = `UCS-Z × lineDir`) and the side pick is decided in the plane's 2D frame;
+    Circle / Arc stay concentric; Polyline / Ellipse are refused by name — verified against
+    hand-computed coordinates within REQ-101;
   - geometry not involved in an operation keeps its position on the axis normal to the operation;
   - **plan view + World UCS: byte-identical stored geometry to today for every command** — asserted
     by a transcript whose World-UCS scenario matches the pre-change numbers exactly, the REQ-327 /
@@ -7978,9 +7993,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   `FinalizeCopyTranslation`, and per later increment `RotateAroundBase`/`FinishRotateCommand`,
   `ApplyScaleToSelection`, `ApplyStretchToSelection`, the MIRROR/ALIGN/OFFSET paths), Survey
   (`DuplicateSelectedSurveyPointsTranslated`), Viewport (`TransformPreview.cpp` for the ghost).
-- Status: accepted — increments 1-4 (MOVE/COPY TASK-218, ROTATE TASK-219, SCALE TASK-220,
-  STRETCH TASK-221) delivered; increment 5 (MIRROR, TASK-222) in delivery (D-2026-09-08-b, GitHub
-  issue #402). Increments 6-7 (ALIGN, OFFSET) tracked in the issue.
+- Status: accepted — **DELIVERED** (D-2026-09-08-b, GitHub issue #402). Increments 1-5 and 7
+  (MOVE/COPY TASK-218, ROTATE TASK-219, SCALE TASK-220, STRETCH TASK-221, MIRROR TASK-222,
+  OFFSET TASK-223) delivered; increment 6 (ALIGN) closed as no-change (D-2026-09-08-c — a 2D survey
+  Helmert coordinate-fit is a plan-view operation by definition). Documented follow-ons: STRETCH
+  tilted-arc, ROTATE/MIRROR bulge-polyline and reference sub-modes, OFFSET polyline/ellipse and the
+  live preview, a full arbitrary-axis ROTATE3D.
 - Revisions: 2026-09-08 — initial (GitHub issue #402, D-2026-09-08-b). Written after the issue's own
   SPEC GAP was resolved with the user: one cross-cutting requirement sliced per command, and ROTATE
   stays UCS-Z-only (REQ-328's primitive) rather than growing an arbitrary-axis option now.
@@ -7998,6 +8016,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
   `ReflectVectorAcrossPlane` (new, `Ray3dTests` `[req329]`); `DuplicateCadSelectionReflectedAcrossPlane`
   reflects Line/Circle/Polyline across the plane containing the picked line under a tilted UCS; arc /
   ellipse / annotation / table / block / feature-line / survey-point refused (REQ-328 boundary).
+  2026-09-08 — increment 6 (ALIGN) closed as no-change (D-2026-09-08-c); increment 7 (OFFSET)
+  delivered: `OffsetPlaneLocal` decides the side/through pick in the work-plane 2D frame under a
+  tilted UCS; `CommitOffsetLine` offsets perpendicular in-plane (`UCS-Z × lineDir`); Circle/Arc stay
+  concentric; Polyline/Ellipse refused; the live ghost preview is suppressed under a tilted UCS.
+  **REQ-329 is fully delivered.**
 
 ### REQ-203 — The command layer is drivable without a window
 - Purpose: debuggability, maintainability — the interactive surface is the largest part of the
@@ -8327,7 +8350,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-305 | Commands/Viewport | done (GitHub issue #87, D-2026-08-25-m, TASK-111 — relabeled from REQ-304/TASK-109 while merging `master` into `beta`, see the requirement's own header note). ARRAY (rectangular + polar) follows the MOVE/COPY/ROTATE/SCALE/MIRROR transform-command shape end to end; survey points excluded from the array selection, confirmed with the user (D-2026-08-25-m addendum). Amended once (D-2026-08-25-n, TASK-112): the shared "select objects" step was click-or-box-and-accumulate-until-Enter for MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY (STRETCH excluded — its crossing box is load-bearing geometry, REQ-103 step 5), replacing the box-only shape all seven originally shared. `GoSurveyTests.exe` 542/542, headless transcript corpus green (1 pre-existing disabled, unrelated) | accepted |
 | REQ-318 | Domain/UI | accepted, increment 1 of 2 delivered — the SHARED pick query (GitHub issue #148, D-2026-09-03-c, ADR-049, TASK-189). **What was new is not what the issue claimed.** The ray/triangle → `triFace` → `ClosestPointOnSurface` pipeline already shipped with REQ-313, inside `src/viewport/CadSnap.cpp`; what it could not do was serve a second caller, because `RayHitSolidFace`, `ClosestRayPointToEdge` and `RayNearBounds` were file-private. So increment 1 is a *consolidation*: `ray3d::RayTriangleIntersect` and the new pure `src/util/solidpick.{hpp,cpp}` are the one home, and `CadSnap` now routes through both instead of keeping its own copies. That mattered concretely — the snap copy used an absolute determinant epsilon and exact barycentric bounds while the shared one is scale-relative with a barycentric slack, so on the hairline crack between two faces of the deliberately unwelded tessellation the two disagreed: snap reported nothing where a selection would report a hit, and a user would have seen the snap marker and the sub-object highlight name different things under one cursor. Above the geometry, what is genuinely new is the **expiring sub-object reference** (an index is durable across a topology-preserving edit and meaningless across one that changes the counts, so it is paired with a `weak_ptr` to the solid and expires rather than re-binding), and precedence and occlusion as stated rules. The projection remains the sharpest point and is measured: a raw triangle hit sits 0.00986 ft off a cylinder's true surface at the shipping chord tolerance — inside REQ-101's ±0.01 ft but 98.6% of the whole budget — and projected the residual is at the arithmetic floor. **The tests assert the picked AZIMUTH as well as the radius**, because `ClosestPointOnSurface` rescales any nearby point to exactly `r`: a radius assertion alone cannot fail for the reason it appears to test, and an earlier draft of this row cited one that could not. Occlusion is measured against the nearest *triangle* rather than the nearest usable face, so a corrupt face id cannot move the baseline to the far side of the solid; the ray is normalized on entry, because `RayTriangleIntersect`'s parameter scales as `1/\|dir\|` and `RayPointDistance`'s as `\|dir\|`, which on a non-unit ray makes the occlusion comparison meaningless rather than merely imprecise; and the curved-edge chord budget keys on the curve KIND, not on `sweep`, which a `CurveKind::Intersection` edge leaves zero. Increment 2 is the selection mode, its store, the highlight treatment and coexistence with the entity pick — where #148 acceptance criteria 1 and 2 are actually met. | `SolidPickTests` (21 cases: cylinder radius AND azimuth from 24 azimuths; the same oblique geometry passing at storage magnitude and failing at absolute state-plane magnitude, which pins the local-coordinates precondition with evidence rather than prose; near-face-wins from both directions; vertex/edge/face precedence; zero tolerance disables a kind; occluded far-side vertex refused, and still refused when the occluding triangle's id is corrupt; a non-unit ray giving an identical answer and an unchanged depth; a ray just outside the silhouette still reaching the edges; the rim picked on the true arc; and refusals for a miss, a solid behind the cursor, a degenerate ray, a null result, mismatched buffers and an empty solid) + `Ray3dTests` (10 new cases for the primitive, including a hit on a shared edge reported by both triangles and a 0.25 ft triangle at easting 2e6 — the case an absolute degeneracy epsilon would reject). The refactored snap path is covered by the existing `GoSurveySnapTests` and the `req313-solid-picked` headless transcript, both unchanged and green. Full suite 1062/1062. | accepted |
 | REQ-323 | Domain/Commands | increment 1 KERNEL delivered (GitHub issue #148 acceptance 5, D-2026-09-05-c, ADR-046 amendment (j), TASK-210). `FilletEdgeTests` — a box against both closed forms (volume 1520+20pi, area 792+22pi, topology 7/15/10), a WEDGE whose 68.199-degree dihedral gives setback 40/(sqrt(464)-8) and not r, every refusal by name, two opposite edges as one operation, and PRESSPULL still working on the result. The FILLET command is the next slice; the spherical corner patch that closes #148 acceptance 5, the concave edge, the oblique end face and the torus fillet are each their own increment. |
-| REQ-329 | Commands/Survey/Viewport | accepted, sliced per command (GitHub issue #402, D-2026-09-08-b). Increment 1 (MOVE/COPY 3D + active-UCS picks and typed input) done — TASK-218, `issue402-move-copy-ucs` transcript. Increment 2 (ROTATE about the UCS Z axis; `RotateSelectionInPlaceAboutAxis`; in-plane picked angle) done — TASK-219, `issue402-rotate-ucs` transcript. Increment 3 (SCALE uniform on every axis about the UCS-resolved base; `ScaleSelectionZAboutBase`) done — TASK-220, `issue402-scale-ucs` transcript. Increment 4 (STRETCH crossing box + displacement in the UCS plane; `stretchRectInUcsPlane`) done — TASK-221, `issue402-stretch-ucs` transcript. Increment 5 (MIRROR across the plane containing the mirror line; `ray3d::ReflectPointAcrossPlane`, `DuplicateCadSelectionReflectedAcrossPlane`) done — TASK-222, `issue402-mirror-ucs` transcript. Increments 6-7 (ALIGN, OFFSET) tracked in the issue; ROTATE is UCS-Z-only (REQ-328 primitive), a full ROTATE3D is a separate future issue. | accepted |
+| REQ-329 | Commands/Survey/Viewport | accepted, sliced per command (GitHub issue #402, D-2026-09-08-b). Increment 1 (MOVE/COPY 3D + active-UCS picks and typed input) done — TASK-218, `issue402-move-copy-ucs` transcript. Increment 2 (ROTATE about the UCS Z axis; `RotateSelectionInPlaceAboutAxis`; in-plane picked angle) done — TASK-219, `issue402-rotate-ucs` transcript. Increment 3 (SCALE uniform on every axis about the UCS-resolved base; `ScaleSelectionZAboutBase`) done — TASK-220, `issue402-scale-ucs` transcript. Increment 4 (STRETCH crossing box + displacement in the UCS plane; `stretchRectInUcsPlane`) done — TASK-221, `issue402-stretch-ucs` transcript. Increment 5 (MIRROR across the plane containing the mirror line; `ray3d::ReflectPointAcrossPlane`, `DuplicateCadSelectionReflectedAcrossPlane`) done — TASK-222, `issue402-mirror-ucs` transcript. Increment 6 (ALIGN) closed no-change (D-2026-09-08-c). Increment 7 (OFFSET in-plane perpendicular + plane-frame side pick; `OffsetPlaneLocal`) done — TASK-223, `issue402-offset-ucs` transcript. **REQ-329 fully delivered.** ROTATE is UCS-Z-only (REQ-328 primitive), a full ROTATE3D is a separate future issue. | accepted |
 | REQ-326 | Domain/Commands, UI | done (GitHub issue #395, D-2026-09-07-a). `CadSnapTests.cpp` `[CadSnap][issue395]` (7 cases: Vertex + F4 master gate, Midpoint-on-edge, Nearest-to-face regression, Center-of-face on a planar box face, Center-of-face on a cylinder end-cap landing on the axis rather than a vertex average, Perpendicular's foot on a planar face, Knot enumeration against a hand-built `nurbs::Patch`) plus the 3 pre-existing `[req313]` solid-snap cases updated to the new per-mode flags. Full suite 1277/1278 (the one failure, `a missing or corrupt store loads as an empty list`, is pre-existing on `beta` and unrelated — reproduced against `beta` directly). |
 
 ---
