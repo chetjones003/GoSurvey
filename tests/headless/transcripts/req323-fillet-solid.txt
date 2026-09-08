@@ -221,4 +221,36 @@ EXPECT SOLIDPROPS 0 1600 880 8 12 6
 CMD 2
 EXPECT SOLIDPROPS 0 1582.8318530718 861.1150383794 10 15 7
 
+# Bare Enter at the prompt accepts the shown default - the radius just used, remembered as the 2D
+# fillet's already is. Round at 2, undo, then the prompt offers <2.0000> and Enter takes it: the
+# same rounded box as typing `2`.
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+CMD FILLET
+CMD 2
+EXPECT SOLIDPROPS 0 1582.8318530718 861.1150383794 10 15 7
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+SUBOBJECT 0 5 8 0.5 0.5
+CMD FILLET
+EXPECT LOG "Specify fillet radius <2.0000>"
+CMD
+EXPECT SOLIDPROPS 0 1582.8318530718 861.1150383794 10 15 7
+EXPECT SUBOBJECTS 0
+
+# A viewport pick at the prompt is inert - the edges are already chosen, so it must not start a 2D
+# first-object selection on top of the pending radius.
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+CMD FILLET
+PICK 5 8
+EXPECT LOG "type a fillet radius"
+EXPECT SUBOBJECTEDGES 1
+CMD 2
+EXPECT SOLIDPROPS 0 1582.8318530718 861.1150383794 10 15 7
+
 CHECK ALL

@@ -17554,6 +17554,14 @@ void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log) {
 void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
                               const ray3d::Ray* pickRay) {
   using FP = AppCommandState::FilletPhase;
+  // The solid-edge fillet's radius prompt (REQ-323) borrows `K::Fillet` and `FP::WaitFirstEntity`,
+  // but its contract is "type a radius or ESC" — the edges are already chosen. A stray viewport
+  // click must not start a 2D first-object pick on top of it, which would leave the command in a
+  // mixed state the user cannot see.
+  if (st.filletSolidAwaitingRadius) {
+    log.push_back("FILLET — type a fillet radius for the selected edge(s), or ESC to cancel.");
+    return;
+  }
   SelectedEntity hit{};
   float d2 = 0.f;
   // issue #373 follow-up: `wx,wy` alone is the click's flattened work-plane intersection, which is

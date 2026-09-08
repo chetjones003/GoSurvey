@@ -59,12 +59,12 @@ be read as a radius. That is the same class of bug as the one being fixed, one s
 | file | change |
 |---|---|
 | `src/commands/CadCommands.hpp` | `filletSolidAwaitingRadius`; `CadApplyFilletToSelectedEdges` |
-| `src/commands/CadCommands.cpp` | the apply split out; the prompt in `CadFilletSolidEdges`; the answer in `HandleFilletText`; blank-Enter routing; the status-line prompt; the ESC reset |
-| `tests/headless/transcripts/req323-fillet-solid.txt` | three new blocks |
+| `src/commands/CadCommands.cpp` | the apply split out; the prompt in `CadFilletSolidEdges`; the answer in `HandleFilletText`; blank-Enter routing; the status-line prompt; the ESC reset; a viewport pick at the prompt is inert (`HandleFilletViewportPick` early-return) |
+| `tests/headless/transcripts/req323-fillet-solid.txt` | five new blocks |
 
 ## Test approach
 
-Three blocks, each pinning one half of the failure:
+Five blocks, each pinning one part of the failure or a follow-up:
 
 1. **A bare `FILLET` prompts**, and does **not** consume the selection it is about to round — asking
    for a radius must not eat the edges. `CMD 2` then applies, against the closed forms.
@@ -73,6 +73,12 @@ Three blocks, each pinning one half of the failure:
 3. **A bad answer and a refused answer both keep the prompt up.** `banana` → *"must be a number"*;
    `8` → *"too large"* plus *"specify a different radius"*; the selection intact and the solid
    untouched through both; then `2` succeeds.
+4. **Bare Enter accepts the shown default.** Round at `2`, undo, and the prompt now offers
+   `<2.0000>`; `CMD` with no argument (a bare Enter) rounds at that remembered radius — the same
+   closed forms as typing `2`.
+5. **A viewport pick at the prompt is inert.** The edges are already chosen, so `PICK` must not
+   start a 2D first-object selection on top of the pending radius — it reports *"type a fillet
+   radius"* and the edge selection is untouched.
 
 The regression the report is really about — a bare `FILLET` with **nothing** selected still opening
 the 2D command — was already asserted in this transcript before the fix and still passes, which is
