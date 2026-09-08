@@ -6120,6 +6120,7 @@ static void ResetModifyRotateDraft(AppCommandState& st) {
   st.rotateCopyMode = false;
   st.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
   st.mirrorP1X = st.mirrorP1Y = st.mirrorP2X = st.mirrorP2Y = 0.f;
+  st.mirrorP1Z = st.mirrorP2Z = 0.f;
   st.lengthenPhase = AppCommandState::LengthenPhase::WaitSelectOrMode;
   st.extendPhase = AppCommandState::ExtendPhase::SelectBoundaries;
   // TASK-099 F4. The phase enums above were reset without the collections and latched entities
@@ -13346,6 +13347,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     if (st.mirrorPhase == MirP::NeedP1) {
       st.mirrorP1X = wx;
       st.mirrorP1Y = wy;
+      st.mirrorP1Z = CadCommitElevation(st);  // REQ-329 increment 5
       st.mirrorPhase = MirP::NeedP2;
       log.push_back("MIRROR — specify second point of mirror line:");
       return;
@@ -13357,6 +13359,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       }
       st.mirrorP2X = wx;
       st.mirrorP2Y = wy;
+      st.mirrorP2Z = CadCommitElevation(st);  // REQ-329 increment 5
       st.mirrorPhase = MirP::NeedEraseAnswer;
       log.push_back("Erase source objects? [Yes/No] <N>:");
     }
@@ -23009,6 +23012,141 @@ static void EraseSelectedSurveyPointsNoUndo(AppCommandState& st) {
   st.selectedSurveyPointIndices.clear();
 }
 
+/// REQ-329 increment 5 (GitHub issue #402): mirror the selection across the PLANE that contains the
+/// picked line and is perpendicular to the active UCS plane (its normal = line direction x UCS Z).
+/// Appends the reflected duplicates the way \c DuplicateCadSelectionReflected does, and leaves
+/// \c st.selection holding the mirrored sources so \c FinishMirrorCommand's erase-source path is
+/// unchanged.
+///
+/// Entity set: Line / Circle (+ plane normal) / Polyline rotate fully in 3D — a bare vertex has no
+/// orientation to preserve, and a circle's normal is a direction. Arc (reflection reverses arc
+/// handedness — its own geometry problem), Ellipse / Annotation / Table / BlockRef / feature line
+/// (no stored plane normal, or a 2D-only duplication helper — the exact boundary REQ-328 item 2
+/// drew) and survey points (the 2D duplicate-ID modal) are REFUSED by name under a tilted mirror
+/// plane. Under the World UCS (and any plan-rotated UCS) `FinishMirrorCommand` never calls this —
+/// the flat `DuplicateCadSelectionReflected` runs unchanged.
+static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const ray3d::Vec3& planePt,
+                                                      const ray3d::Vec3& planeUnit,
+                                                      std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
+  DropSolidsFromSelectionForTransform(st, "MIRROR", log);
+  DropMirrorUnsupportedFromSelection(st, log);  // FilledRegion / Mesh / PdfUnderlay
+  const auto rp = [&](float x, float y, float z) {
+    return ray3d::ReflectPointAcrossPlane({x, y, z}, planePt, planeUnit);
+  };
+  const auto rv = [&](float x, float y, float z) {
+    return ray3d::ReflectVectorAcrossPlane({x, y, z}, planeUnit);
+  };
+  const size_t polyVertsBefore = st.userPolylineVerts.size();
+  std::vector<float> newLines, newCircles, newCircleNormals;
+  std::vector<EntityAttributes> newLineAttrs, newCircleAttrs;
+  size_t refused = 0;
+
+  for (const auto& e : st.selection) {
+    switch (e.type) {
+    case SelectedEntity::Type::LineSeg: {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 >= st.userLinesFlat.size())
+        break;
+      const ray3d::Vec3 p0 = rp(st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 2]);
+      const ray3d::Vec3 p1 = rp(st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5]);
+      for (const ray3d::Vec3& p : {p0, p1}) {
+        newLines.push_back(static_cast<float>(p.x));
+        newLines.push_back(static_cast<float>(p.y));
+        newLines.push_back(static_cast<float>(p.z));
+      }
+      EntityAttributes a{};
+      if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
+        a = st.userLineAttrs[static_cast<size_t>(e.index)];
+      newLineAttrs.push_back(DuplicatedEntityAttrs(a));
+      break;
+    }
+    case SelectedEntity::Type::Circle: {
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= st.userCirclesCxCyZR.size())
+        break;
+      const ray3d::Vec3 c = rp(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 2]);
+      newCircles.push_back(static_cast<float>(c.x));
+      newCircles.push_back(static_cast<float>(c.y));
+      newCircles.push_back(static_cast<float>(c.z));
+      newCircles.push_back(st.userCirclesCxCyZR[k + 3]);  // radius preserved (an isometry)
+      EntityAttributes a{};
+      if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
+        a = st.userCircleAttrs[static_cast<size_t>(e.index)];
+      newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nx, &ny, &nz);
+      const ray3d::Vec3 n = rv(nx, ny, nz);
+      PushCircleNormal(newCircleNormals, static_cast<float>(n.x), static_cast<float>(n.y),
+                       static_cast<float>(n.z));
+      break;
+    }
+    case SelectedEntity::Type::Polyline: {
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        break;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      if (v1 - v0 < 2)
+        break;
+      if (st.userPolylineOffsets.empty())
+        st.userPolylineOffsets.push_back(0);
+      const int baseVert = st.userPolylineOffsets.back();
+      for (int vi = v0; vi < v1; ++vi) {
+        const size_t b = static_cast<size_t>(vi) * 3;
+        const ray3d::Vec3 p = rp(st.userPolylineVerts[b], st.userPolylineVerts[b + 1], st.userPolylineVerts[b + 2]);
+        st.userPolylineVerts.push_back(static_cast<float>(p.x));
+        st.userPolylineVerts.push_back(static_cast<float>(p.y));
+        st.userPolylineVerts.push_back(static_cast<float>(p.z));
+      }
+      st.userPolylineOffsets.push_back(baseVert + (v1 - v0));
+      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+      st.userPolylineClosed.push_back(static_cast<size_t>(pi) < st.userPolylineClosed.size()
+                                          ? st.userPolylineClosed[static_cast<size_t>(pi)]
+                                          : static_cast<uint8_t>(0));
+      EntityAttributes at{};
+      if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
+        at = st.userPolylineAttrs[static_cast<size_t>(pi)];
+      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
+      break;
+    }
+    default:
+      break;
+    }
+  }
+  // Types this pass cannot reflect across a tilted plane are removed from the selection (not just
+  // counted) so FinishMirrorCommand's erase-source path leaves them untouched — the same contract
+  // DropMirrorUnsupportedFromSelection keeps for FilledRegion/Mesh/PDF.
+  const size_t beforeErase = st.selection.size();
+  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                    [](const SelectedEntity& e) {
+                                      return e.type == SelectedEntity::Type::Arc ||
+                                             e.type == SelectedEntity::Type::Ellipse ||
+                                             e.type == SelectedEntity::Type::Annotation ||
+                                             e.type == SelectedEntity::Type::Table ||
+                                             e.type == SelectedEntity::Type::BlockRef ||
+                                             e.type == SelectedEntity::Type::FeatureLine;
+                                    }),
+                     st.selection.end());
+  refused += beforeErase - st.selection.size();
+  refused += st.selectedSurveyPointIndices.size();
+
+  st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
+  st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
+  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
+  st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.userCircleNormals.insert(st.userCircleNormals.end(), newCircleNormals.begin(), newCircleNormals.end());
+
+  if (refused > 0)
+    log.push_back("MIRROR — " + std::to_string(refused) +
+                  " entity(ies) excluded: arc/ellipse/text/table/block/feature-line/survey-point"
+                  " reflection across a tilted mirror plane is not supported yet (REQ-328) — reflect"
+                  " across a mirror line on a work plane with an upright Z axis.");
+  if (!newLines.empty() || !newCircles.empty() || st.userPolylineVerts.size() != polyVertsBefore)
+    BumpCadGpuCache(st);
+}
+
 /// REQ-103 MIRROR. \c eraseSource decides what happens to the PRE-mirror selection after the
 /// duplicate commits — MIRROR always duplicates first (ASSUMPTION-2, TASK-094 — the reverse of
 /// ROTATE/SCALE, where duplication is the opt-in "copy" mode and in-place is the default).
@@ -23016,8 +23154,28 @@ static void FinishMirrorCommand(AppCommandState& st, float x0, float y0, float x
                                 std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
   PushUndoSnapshot(st, eraseSource ? "Mirror-erase" : "Mirror");
-  const bool hadSurveySelection = !st.selectedSurveyPointIndices.empty();
-  DuplicateCadSelectionReflected(st, x0, y0, x1, y1, log);
+  // Survey points ride the 2D duplicate-ID modal (pendingMirrorX0..Y1); a tilted mirror plane has
+  // no 2D line to hand it, so survey-point mirroring is left to the flat path (REQ-329 increment 5).
+  const bool hadSurveySelection =
+      !st.selectedSurveyPointIndices.empty() && CadWorkPlaneIsWorldXy(st);
+  // REQ-329 increment 5: a tilted work plane reflects across the plane that contains the picked
+  // line, not a world-vertical one. World / plan-rotated UCS keeps the flat path byte-for-byte.
+  if (CadWorkPlaneIsWorldXy(st)) {
+    DuplicateCadSelectionReflected(st, x0, y0, x1, y1, log);
+  } else {
+    const ray3d::Vec3 p1{static_cast<double>(x0), static_cast<double>(y0), static_cast<double>(st.mirrorP1Z)};
+    const ray3d::Vec3 p2{static_cast<double>(x1), static_cast<double>(y1), static_cast<double>(st.mirrorP2Z)};
+    const ucs::Ucs u = CadActiveUcsStorage(st);
+    const ray3d::Vec3 normal = ray3d::Cross(ray3d::Sub(p2, p1), {u.zAxis.x, u.zAxis.y, u.zAxis.z});
+    if (ray3d::Length(normal) < 1e-9) {
+      log.push_back("MIRROR — the mirror line must lie in the work plane (it is parallel to the UCS Z"
+                    " axis here); pick two points on the plane.");
+      st.active = K::None;
+      ResetModifyRotateDraft(st);
+      return;
+    }
+    DuplicateCadSelectionReflectedAcrossPlane(st, p1, ray3d::Normalize(normal), log);
+  }
   // st.selection now holds exactly what was mirrored (exclusions already logged) — erase THAT, not
   // the original selection, so an excluded Surface/hatch/underlay/mesh is left untouched either way.
   if (eraseSource && !st.selection.empty())
@@ -23048,6 +23206,7 @@ bool HandleMirrorText(AppCommandState& st, const std::string& lineIn, std::vecto
       return false;
     st.mirrorP1X = px;
     st.mirrorP1Y = py;
+    st.mirrorP1Z = CadCommitElevation(st);  // REQ-329 increment 5: the mirror line lies on the work plane
     st.mirrorPhase = MP::NeedP2;
     log.push_back("MIRROR — specify second point of mirror line:");
     return true;
@@ -23062,6 +23221,7 @@ bool HandleMirrorText(AppCommandState& st, const std::string& lineIn, std::vecto
     }
     st.mirrorP2X = px;
     st.mirrorP2Y = py;
+    st.mirrorP2Z = CadCommitElevation(st);  // REQ-329 increment 5
     st.mirrorPhase = MP::NeedEraseAnswer;
     log.push_back("Erase source objects? [Yes/No] <N>:");
     return true;
@@ -30961,6 +31121,7 @@ void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.lastCommand = AppCommandState::Kind::Mirror;
   st.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
   st.mirrorP1X = st.mirrorP1Y = st.mirrorP2X = st.mirrorP2Y = 0.f;
+  st.mirrorP1Z = st.mirrorP2Z = 0.f;
   st.pendingSurveyDupIsMirror = false;
   st.selBoxWaitingSecond = false;
   if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {

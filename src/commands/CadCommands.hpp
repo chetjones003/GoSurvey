@@ -3148,6 +3148,9 @@ struct AppCommandState {
 
   float mirrorP1X = 0.f, mirrorP1Y = 0.f;
   float mirrorP2X = 0.f, mirrorP2Y = 0.f;
+  /// REQ-329 increment 5: each mirror-line point's elevation on the active work plane, so a tilted
+  /// UCS reflects across the plane that contains the line rather than a world-vertical plane.
+  float mirrorP1Z = 0.f, mirrorP2Z = 0.f;
   /// COPY modal: when true, duplicate survey selection by pending reflection instead of
   /// translation/rotation. Checked ahead of \ref pendingSurveyDupIsRotate.
   bool pendingSurveyDupIsMirror = false;

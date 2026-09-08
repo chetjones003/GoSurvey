@@ -1,0 +1,150 @@
+# GitHub issue #402 / REQ-329 increment 5 — MIRROR reflects across the plane that CONTAINS the
+# picked mirror line and is perpendicular to the active UCS plane (normal = lineDir x UCS Z), not a
+# world-vertical plane.
+#
+# Regression guard: plan view, and any UCS whose Z axis is world-Z-parallel, keep the flat
+# `DuplicateCadSelectionReflected` (reflection about a world-vertical plane) byte-for-byte.
+
+# --- Regression: World UCS, mirror a line across a horizontal line ------------------------------
+NEW
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+BOX -10 -10 110 10
+EXPECT SELECTED 1
+CMD MIRROR
+CMD 0,50
+CMD 100,50
+CMD
+EXPECT LOG "MIRROR complete."
+EXPECT LINES 2
+EXPECT LINEXYZ 1 0 100 0 100 100 0
+CHECK ALL
+
+# --- Tilted UCS (X 90): the mirror plane contains the picked line ------------------------------
+# UCS X 90: basis X=(1,0,0), Y=(0,0,1), Z=(0,-1,0); CLICKUCS u v -> world (u, 0, v).
+# Line UCS (0,5)-(10,5) = world (0,0,5)-(10,0,5). Mirror line UCS (0,0)-(10,0) = world Y axis at
+# z = 0; the mirror plane (contains that line, normal perpendicular to it and in the work plane) is
+# the world plane z = 0. So the line reflects to z = -5.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 5
+CLICKUCS 10 5
+ESC
+BOX -5 -5 15 5
+EXPECT SELECTED 1
+CMD MIRROR
+CLICKUCS 0 0
+CLICKUCS 10 0
+CMD
+EXPECT LINES 2
+CMD UCS
+CMD W
+EXPECT LINEXYZ 1 0 0 -5 10 0 -5
+CHECK ALL
+
+# --- Tilted UCS: mirror plane offset from the origin ------------------------------------------
+# Same line at world z = 5; mirror line at UCS v = 10 => plane z = 10 => the line reflects to z = 15.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 5
+CLICKUCS 10 5
+ESC
+BOX -5 -5 15 5
+CMD MIRROR
+CLICKUCS 0 10
+CLICKUCS 10 10
+CMD
+EXPECT LINES 2
+CMD UCS
+CMD W
+EXPECT LINEXYZ 1 0 0 15 10 0 15
+CHECK ALL
+
+# --- Tilted UCS: a circle's centre and plane normal both reflect ------------------------------
+# Circle UCS (5,5) = world (5,0,5), r 2, normal (0,-1,0). Mirror plane z = 0: centre -> (5,0,-5);
+# the normal is perpendicular to the plane normal, so it is unchanged.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 5 5
+CMD 2
+ESC
+BOX 0 -5 10 5
+EXPECT SELECTED 1
+CMD MIRROR
+CLICKUCS 0 0
+CLICKUCS 10 0
+CMD
+EXPECT CIRCLES 2
+CMD UCS
+CMD W
+EXPECT CIRCLEXYZ 1 5 0 -5 2 0 -1 0
+CHECK ALL
+
+# --- Tilted UCS: text in the selection is refused by name; the line still mirrors ---------------
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 5
+CLICKUCS 10 5
+ESC
+CMD TEXT
+CLICKUCS 2 5
+CMD 1
+CMD 0
+CMD HI
+ESC
+BOX -5 -5 15 10
+EXPECT SELECTED 2
+CMD MIRROR
+CLICKUCS 0 0
+CLICKUCS 10 0
+CMD
+CMD UCS
+CMD W
+EXPECT LOG "entity(ies) excluded"
+EXPECT LINES 2
+EXPECT LINEXYZ 1 0 0 -5 10 0 -5
+CHECK ALL
+
+# --- Regression: plan-rotated UCS (Z 30) still uses the flat world-vertical reflection ---------
+# The reflection is about a VERTICAL plane, so a line's elevation is preserved. Under the tilted
+# path it would not be. The line is lifted to z = 5 first, mirrored under a Z-30 UCS, and its
+# elevation must still read 5.
+NEW
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+BOX -5 -5 15 5
+CMD MOVE
+CMD 0,0
+CMD 0,0,5
+ESC
+EXPECT LINEXYZ 0 0 0 5 10 0 5
+CMD UCS
+CMD Z
+CMD 30
+BOX -5 -5 15 10
+CMD MIRROR
+CLICK 0 5
+CLICK 10 5
+CMD
+CMD UCS
+CMD W
+EXPECT LINES 2
+# Flat reflection across world y = 5 (a vertical plane): X/Y move, elevation stays 5.
+EXPECT LINEXYZ 1 0 10 5 10 10 5
+CHECK ALL
