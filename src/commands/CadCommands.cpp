@@ -10366,10 +10366,109 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc, st
     ScalePtAroundBase(bx, by, sc, &att.insertX, &att.insertY);
     att.scale = std::max(att.scale * sc, 1e-9f);
   }
-  // Feature lines (REQ-087). Plan only — elevations are NOT scaled, matching the polyline above.
+  // Feature lines (REQ-087). Plan only — elevations are NOT scaled here, matching the polyline above;
+  // `ScaleSelectionZAboutBase` (REQ-329 increment 2 (SCALE)) scales Z under a tilted UCS.
   TransformSelectedFeatureLinesInPlace(
       st, [&](float* x, float* y) { ScalePtAroundBase(bx, by, sc, x, y); });
   ApplyScaleToSelectedSurveyPoints(st, bx, by, sc);
+  BumpCadGpuCache(st);
+}
+
+/// REQ-329 increment (SCALE): uniform scale is `p' = base + sc*(p - base)` on every axis, so once
+/// `ApplyScaleToSelection` has scaled X/Y (and every size) about (bx, by), this scales the Z of the
+/// same positions about \p bz. Called by \c FinishScaleCommand ONLY under a tilted UCS — plan view
+/// and any plan-rotated UCS keep the pre-REQ-329 "elevations untouched" behaviour byte-for-byte,
+/// because there the scale base sits on the world XY plane with the geometry and a Z pass would be
+/// a no-op at best and an unasked-for change at worst.
+static void ScaleSelectionZAboutBase(AppCommandState& st, float bz, float sc) {
+  const auto sz = [&](float* z) { *z = bz + sc * (*z - bz); };
+  for (const auto& e : st.selection) {
+    switch (e.type) {
+    case SelectedEntity::Type::LineSeg: {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 < st.userLinesFlat.size()) {
+        sz(&st.userLinesFlat[k + 2]);
+        sz(&st.userLinesFlat[k + 5]);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Circle: {
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 < st.userCirclesCxCyZR.size())
+        sz(&st.userCirclesCxCyZR[k + 2]);
+      break;
+    }
+    case SelectedEntity::Type::Arc: {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userArcs.size())
+        sz(&st.userArcs[k].z);
+      break;
+    }
+    case SelectedEntity::Type::Ellipse: {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userEllipses.size())
+        sz(&st.userEllipses[k].z);
+      break;
+    }
+    case SelectedEntity::Type::Polyline: {
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        break;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      for (int vi = v0; vi < v1; ++vi) {
+        const size_t b = static_cast<size_t>(vi) * 3 + 2;
+        if (b < st.userPolylineVerts.size())
+          sz(&st.userPolylineVerts[b]);
+      }
+      break;
+    }
+    case SelectedEntity::Type::FilledRegion: {
+      const size_t fk = static_cast<size_t>(e.index);
+      if (fk >= st.cadFilledRegions.size())
+        break;
+      auto& v = st.cadFilledRegions[fk].vertsXyz;
+      for (size_t i = 2; i < v.size(); i += 3)
+        sz(&v[i]);
+      break;
+    }
+    case SelectedEntity::Type::Annotation: {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.cadAnnotations.size())
+        sz(&st.cadAnnotations[k].insZ);
+      break;
+    }
+    case SelectedEntity::Type::Table: {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.cadTables.size())
+        sz(&st.cadTables[k].insZ);
+      break;
+    }
+    case SelectedEntity::Type::BlockRef: {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.cadBlockRefs.size())
+        sz(&st.cadBlockRefs[k].xf.z);
+      break;
+    }
+    default:
+      break;
+    }
+  }
+  // Feature lines and survey points carry their own Z too.
+  ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
+    for (int vi = v0; vi < v1; ++vi) {
+      const size_t b = static_cast<size_t>(vi) * 3 + 2;
+      if (b < st.featureLineVerts.size())
+        sz(&st.featureLineVerts[b]);
+    }
+  });
+  std::vector<int> spix = st.selectedSurveyPointIndices;
+  std::sort(spix.begin(), spix.end());
+  spix.erase(std::unique(spix.begin(), spix.end()), spix.end());
+  for (int idx : spix) {
+    if (idx >= 0 && static_cast<size_t>(idx) < st.surveyPoints.size())
+      sz(&st.surveyPoints[static_cast<size_t>(idx)].elevation);
+  }
   BumpCadGpuCache(st);
 }
 
@@ -10624,6 +10723,12 @@ static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vect
   PushUndoSnapshot(st, "Scale");
   const float s = std::max(scaleFactor, 1e-6f);
   ApplyScaleToSelection(st, st.modifyBaseX, st.modifyBaseY, s, log);
+  // REQ-329 increment (SCALE): a uniform scale is uniform on every axis. `ApplyScaleToSelection`
+  // scales X/Y (and sizes) about the base; under a tilted UCS the geometry also lives in Z, so the
+  // elevations scale about the base elevation too. Plan view and any plan-rotated UCS keep the
+  // pre-REQ-329 "elevations untouched" behaviour — byte-identical.
+  if (!CadWorkPlaneIsWorldXy(st))
+    ScaleSelectionZAboutBase(st, st.modifyBaseZ, s);
   st.active = AppCommandState::Kind::None;
   ResetModifyRotateDraft(st);
   log.push_back("SCALE complete.");
@@ -10640,6 +10745,7 @@ static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std:
       return false;
     st.modifyBaseX = px;
     st.modifyBaseY = py;
+    st.modifyBaseZ = CadCommitElevation(st);  // REQ-329 (SCALE): the scale is about this elevation too
     st.scaleRefDist = ComputeScaleReferenceDistance(st, px, py);
     st.scalePhase = SP::FactorPick;
     st.modifyPhase = MP::NeedDestination;
@@ -13070,6 +13176,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     if (st.modifyPhase == MP::NeedBase) {
       st.modifyBaseX = wx;
       st.modifyBaseY = wy;
+      st.modifyBaseZ = CadCommitElevation(st);  // REQ-329 (SCALE)
       st.scaleRefDist = ComputeScaleReferenceDistance(st, wx, wy);
       st.scalePhase = SP::FactorPick;
       st.modifyPhase = MP::NeedDestination;
