@@ -68,10 +68,10 @@ EXPECT SOLIDPROPS 0 1600 880 8 12 6
 # The selection survives every refusal: nothing happened, so there is nothing to re-pick.
 EXPECT SUBOBJECTEDGES 1
 
-# --- A shared corner is refused BY NAME (issue #148 acceptance 5, still half open) ------------------
-# Two fillets meeting at a vertex leave a curved triangular gap that needs a spherical patch trimmed
-# against both. Until that exists, "on edge chains" is not delivered, and this asserts that the
-# refusal says so rather than reporting a geometric failure.
+# --- A PARTIAL corner is refused BY NAME ------------------------------------------------------------
+# Increment 2 rounds a corner whose three edges are ALL selected. With only two of them, the ball
+# would have to roll off a rounded edge onto one staying sharp - a setback blend, and a different
+# construction. The refusal names which case it is rather than reporting a geometric failure.
 
 # From a clean drawing: a plain sub-object click ACCUMULATES (SHIFT is how one is removed, not how
 # one is added), so the selection from the block above would otherwise still be here.
@@ -88,7 +88,7 @@ EXPECT SUBOBJECTEDGES 1
 SUBOBJECT 0 5 8 0.5 0.5
 EXPECT SUBOBJECTEDGES 2
 CMD FILLET 2
-EXPECT LOG "share a corner"
+EXPECT LOG "select all three"
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
 # --- Two edges that share NOTHING are one operation --------------------------------------------------
@@ -136,5 +136,34 @@ NEW
 EXPECT SUBOBJECTS 0
 CMD FILLET
 EXPECT LOG "select first object"
+
+
+# --- REQ-323 increment 2: a CORNER, and then every edge of the box -----------------------------------
+# All three edges at one corner, so the ball that touches all three faces closes the gap their
+# fillets leave. This is the case increment 1 refused outright, and it is what "on edge chains"
+# (issue #148 acceptance 5) actually needs.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+SUBOBJECT -10 0 8 0.5 0.5
+SUBOBJECT -10 5 4 0.5 0.5
+EXPECT SUBOBJECTEDGES 3
+CMD FILLET 2
+EXPECT LOG "rounded at radius"
+EXPECT SOLIDS 1
+# Three edges (lengths 20, 10, 8) meeting at one corner, rounded at r = 2, asserted against the
+# closed forms rather than "the fillet ran". Each straight portion removes (L-r)*r^2*(1-pi/4); the
+# corner cube of side r keeps the ball octant pi*r^3/6, so
+#   V = 1600 - (32*(4-pi) + 8 - 4pi/3) = 1464 + 100pi/3 = 1568.7197551197.
+# The flat faces lose two strips each (the corner square counted once) and three of them also lose
+# an end-face sliver r^2*(1-pi/4); add three quarter-cylinders (pi*r/2)*(L-r) and one sphere octant
+# pi*r^2/2, giving A = 728 + 37pi = 844.2389281828.
+# Topology: 6 planes + 3 cylinders + 1 octant = 10 faces, 13 vertices, 21 edges, V - E + F = 2.
+EXPECT SOLIDPROPS 0 1568.7197551197 844.2389281828 13 21 10
+EXPECT SUBOBJECTS 0
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
 CHECK ALL

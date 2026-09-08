@@ -2532,14 +2532,35 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   after the solid was built, and only sometimes. The check is cheap and exact for a planar face:
   it is the extent of the face's own loop.
 
-  **(4) A shared vertex is refused, and that is a deliberate boundary rather than an omission.**
-  Where two filleted edges meet at a vertex, their two cylinders arrive at the corner and leave a
-  curved triangular gap. Closing it needs a **spherical** patch trimmed against both — the classic
-  rolling-ball corner — and a rule for corners where more than three edges meet or where the arriving
-  fillets have different radii. That is a second geometry problem, not a loop over the first, and it
-  is the whole distance between "round one edge" and issue #148's "chains of edges". So increment 1
-  refuses a vertex shared by two edges of the same request, by name, and issue #148's acceptance 5
-  stays open until the corner patch exists.
+  **(4) A shared vertex was refused in increment 1, and increment 2 (2026-09-08, D-2026-09-08-e)
+  lifted it.** Where filleted edges meet at a vertex their cylinders leave a curved triangular gap,
+  and closing it needs a **spherical** patch — the classic rolling-ball corner. Three facts make it
+  closed-form rather than a fitting problem:
+
+  - the corner ball touches all three faces, so its centre is at distance `r` from all three planes:
+    one 3x3 solve, the same shape a single edge uses with two planes and the edge direction;
+  - **each cylinder axis passes through that centre.** An axis is the locus of points at distance `r`
+    from its own two planes, and the centre is at distance `r` from all three — so the fillets do not
+    merely approach the corner, they terminate exactly on it;
+  - a cylinder of radius `r` whose axis passes through the centre, and a sphere of radius `r` centred
+    there, meet exactly on the GREAT circle perpendicular to that axis. So every fillet-to-patch
+    boundary is a great-circle arc, and the patch is a spherical triangle whose corners are the same
+    tangent points the fillets already land on.
+
+  With three mutually perpendicular faces that triangle is an OCTANT, which in the frame
+  `(x, y, z) = (n1, n2, n3)` is exactly the parameter rectangle `u, v in [0, pi/2]` — so its area and
+  volume stay closed-form. **That is why increment 2 asks for orthogonality:** a general spherical
+  triangle is bounded by three great circles that are not iso-parameter lines, so it would need
+  REQ-321's `paramLoops` and with them a numerically integrated area in place of the closed form.
+  Still refused, each its own increment: a corner with only SOME of its edges selected (the ball
+  would run off a rounded edge onto one staying sharp — a setback blend), a non-orthogonal corner,
+  and corners where more than three edges meet or the arriving fillets have different radii.
+
+  **The construction is ONE pass over the original solid, not a loop.** Filleting edges one after
+  another cannot work: after the first fillet the shared vertex is gone, so the second arrives at a
+  CYLINDER where it needs a plane. Increment 1's sequential form was retired when increment 2 landed,
+  and with it the position-based edge re-lookup that existed only to survive the compaction between
+  passes.
 
   **(5) What this does NOT need, corrected from a first reading.** REQ-321 / ADR-052's general trim
   loops are **not** a prerequisite here. A plane face's area has always been integrated over its
