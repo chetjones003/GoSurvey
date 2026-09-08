@@ -3128,6 +3128,7 @@ struct AppCommandState {
 
   float rotateBaseX = 0.f;
   float rotateBaseY = 0.f;
+  float rotateBaseZ = 0.f;  // REQ-329 increment 2: the rotation axis passes through this elevation
   float rotateRefX1 = 0.f, rotateRefY1 = 0.f;
   float rotateRefX2 = 0.f, rotateRefY2 = 0.f;
   float rotateAnglePt1X = 0.f, rotateAnglePt1Y = 0.f;
