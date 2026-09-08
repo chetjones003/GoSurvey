@@ -1760,7 +1760,18 @@ requirements is a planning failure, not a sign of rigor.
       copies the next rebuild silently discards rather than a real duplicate.
 - Owner-layer: Commands (`CadCommands.cpp`/`.hpp`), Viewport (`TransformPreview.cpp`, cursor hint)
 - Status: accepted
-- Revisions: 2026-09-07 — Acceptance 11's tilted-UCS refusal superseded by REQ-328 (D-2026-09-07-d):
+- Revisions: 2026-09-08 — no criteria change: a defect against the already-accepted acceptance 4/5/11
+  (GitHub issue #400 increment 4). The INTERACTIVE (click-driven) polar fill-angle pick measured its
+  sweep angle with `atan2` in world X/Y, which collapses to ~0 under any non-plan UCS (the world-Y
+  term is near-constant across a FRONT/orbited/tilted work plane) — every instance stacked on the
+  original. The live `TransformPreview` ARRAY ghost was likewise still world-XY / world-Z-rotation
+  throughout (increments 1–3 only touched the commit path). Both now resolve picks and rotate in the
+  active UCS plane, matching `CommitArrayPolar` / `ArrayCellWorldDelta`. Typed angle entry and the
+  commit loop were already correct. Also fixed: the polar Rotate-items = No path's rigid anchor
+  took its Z from the work-plane elevation (`CadCommitElevation`) not the selection's own, so a
+  selection well above/below the work plane rotated at an inflated radius and the copies flew
+  outward; the anchor Z now comes from the selection's 3D bounds centre (`CadGizmoAnchorWorld`).
+  2026-09-07 — Acceptance 11's tilted-UCS refusal superseded by REQ-328 (D-2026-09-07-d):
   the general arbitrary-axis rotation primitive lifts it for Line/Polyline/Circle/Arc/FilledRegion;
   Ellipse/Annotation/Table/BlockRef/FeatureLine keep refusing under a tilted axis, the new, narrower
   boundary (widened from the original plan while implementing, once `CadEllipse`'s "always flat, no

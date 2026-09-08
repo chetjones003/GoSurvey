@@ -527,15 +527,21 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  // REQ-305 ARRAY. Two local, per-instance append lambdas (translate / rotate-about-a-point) reuse
+  // REQ-305 ARRAY. Two local, per-instance append lambdas (translate / rotate-about-an-axis) reuse
   // the exact per-type walks the Move/Copy block above and the Rotate block below already do —
   // looped once per grid cell / polar item instead of once, so this is the same coverage
   // (LineSeg/Circle/Arc/Ellipse/Polyline/FeatureLine) as every other command's own preview, not a
   // new abstraction.
+  //
+  // GitHub issue #400 increment 4: both the translate delta and the rotation are computed IN THE
+  // ACTIVE UCS PLANE, mirroring `ArrayCellWorldDelta` / `RotateSelectionAboutAxis` at commit — so
+  // the ghost matches what the commit produces under a FRONT/orbited/tilted UCS instead of always
+  // rotating about world Z. The 3D cursor is reconstructed from `curX,curY` plus the work-plane Z
+  // CadUi already resolves every frame (`cmd.uiCursorWorldZ`), so this needs no signature change.
   if (cmd.active == K::Array) {
     using APh = AppCommandState::ArrayPhase;
 
-    auto appendTranslatedInstance = [&](float dx, float dy) {
+    auto appendTranslatedInstance = [&](float dx, float dy, float dz) {
       for (const auto& e : cmd.selection) {
         if (e.type == SelectedEntity::Type::LineSeg) {
           const size_t k = static_cast<size_t>(e.index) * 6;
@@ -544,7 +550,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           for (int i = 0; i < 2; ++i) {
             prevLines->push_back(cmd.userLinesFlat[k + i * 3] + dx);
             prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 1] + dy);
-            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2] + dz);
           }
         } else if (e.type == SelectedEntity::Type::Circle) {
           const size_t k = static_cast<size_t>(e.index) * 4;
@@ -555,7 +561,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           float cnz = kFlatNormalZ;
           CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
           appendPreviewCircle(prevLines, prevCircles, cmd.userCirclesCxCyZR[k] + dx,
-                              cmd.userCirclesCxCyZR[k + 1] + dy, cmd.userCirclesCxCyZR[k + 2],
+                              cmd.userCirclesCxCyZR[k + 1] + dy, cmd.userCirclesCxCyZR[k + 2] + dz,
                               cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
         } else if (e.type == SelectedEntity::Type::Arc) {
           const size_t k = static_cast<size_t>(e.index);
@@ -564,6 +570,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           CadArc a = cmd.userArcs[k];
           a.cx += dx;
           a.cy += dy;
+          a.z += dz;
           appendArcPolylineStrip(prevLines, a.z, a, 48);
         } else if (e.type == SelectedEntity::Type::Ellipse) {
           const size_t k = static_cast<size_t>(e.index);
@@ -572,6 +579,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           CadEllipse el = cmd.userEllipses[k];
           el.cx += dx;
           el.cy += dy;
+          el.z += dz;
           appendEllipsePolylineStrip(prevLines, el.z, el, 56);
         } else if (e.type == SelectedEntity::Type::Polyline) {
           const int pi = e.index;
@@ -584,85 +592,113 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           for (int vi = v0; vi + 1 < v1; ++vi) {
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3)] + dx);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)] + dz);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)] + dx);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)] + dz);
           }
           if (closed && v1 - v0 >= 2) {
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)] + dx);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)] + dz);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)] + dx);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)] + dz);
           }
         }
       }
-      appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
-        *x += dx;
-        *y += dy;
-      });
+      // FeatureLine's shared preview helper is (x,y)-only, so it cannot show a Z shift. When the
+      // instance delta has a Z component (a rectangular array whose UCS X/Y plane is tilted) the
+      // ghost would sit at the wrong elevation — omit the FeatureLine copies rather than draw them
+      // misplaced. `dz == 0` is exact for the World UCS and any in-plane-rotated UCS.
+      if (dz == 0.f) {
+        appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
+          *x += dx;
+          *y += dy;
+        });
+      }
     };
 
-    auto appendRotatedInstance = [&](float bx, float by, float theta) {
+    // GitHub issue #400 increment 4: rotate about an arbitrary 3D axis (the active UCS Z axis
+    // through the picked centre), a direct port of `RotateSelectionAboutAxis`'s per-type walk.
+    // `axisUnit` parallel to world Z reproduces the old `rotatePreviewPt`/`RotateNormalAboutZ`
+    // path exactly. Ellipse/FeatureLine keep the world-Z-only walk — polar ARRAY refuses them
+    // under a tilted axis at commit (REQ-328 item 2), so the ghost simply omits them there.
+    auto appendRotatedInstance = [&](const ray3d::Vec3& axisPoint, const ray3d::Vec3& axisUnit,
+                                     float ang) {
+      const double rad = static_cast<double>(ang);
+      const bool axisIsWorldZ =
+          std::fabs(axisUnit.x) < 1e-9 && std::fabs(axisUnit.y) < 1e-9 && std::fabs(axisUnit.z) > 1e-9;
+      const auto rp = [&](float x, float y, float z) {
+        return ray3d::RotatePointAboutAxis(ray3d::Vec3{x, y, z}, axisPoint, axisUnit, rad);
+      };
+      const auto rv = [&](float x, float y, float z) {
+        return ray3d::RotateVectorAboutAxis(ray3d::Vec3{x, y, z}, axisUnit, rad);
+      };
       for (const auto& e : cmd.selection) {
         if (e.type == SelectedEntity::Type::LineSeg) {
           const size_t k = static_cast<size_t>(e.index) * 6;
           if (k + 5 >= cmd.userLinesFlat.size())
             continue;
           for (int i = 0; i < 2; ++i) {
-            float x = cmd.userLinesFlat[k + i * 3];
-            float y = cmd.userLinesFlat[k + i * 3 + 1];
-            rotatePreviewPt(bx, by, theta, &x, &y);
-            prevLines->push_back(x);
-            prevLines->push_back(y);
-            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+            const ray3d::Vec3 p =
+                rp(cmd.userLinesFlat[k + i * 3], cmd.userLinesFlat[k + i * 3 + 1], cmd.userLinesFlat[k + i * 3 + 2]);
+            prevLines->push_back(static_cast<float>(p.x));
+            prevLines->push_back(static_cast<float>(p.y));
+            prevLines->push_back(static_cast<float>(p.z));
           }
         } else if (e.type == SelectedEntity::Type::Circle) {
           const size_t k = static_cast<size_t>(e.index) * 4;
           if (k + 3 >= cmd.userCirclesCxCyZR.size())
             continue;
-          float x = cmd.userCirclesCxCyZR[k];
-          float y = cmd.userCirclesCxCyZR[k + 1];
-          rotatePreviewPt(bx, by, theta, &x, &y);
+          const ray3d::Vec3 c = rp(cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1], cmd.userCirclesCxCyZR[k + 2]);
           float cnx = kFlatNormalX;
           float cny = kFlatNormalY;
           float cnz = kFlatNormalZ;
           CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
-          RotateNormalAboutZ(theta, &cnx, &cny);  // the plane turns with the circle (REQ-312)
-          appendPreviewCircle(prevLines, prevCircles, x, y, cmd.userCirclesCxCyZR[k + 2],
-                              cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
+          const ray3d::Vec3 n = rv(cnx, cny, cnz);  // the plane turns with the circle (REQ-312/328)
+          appendPreviewCircle(prevLines, prevCircles, static_cast<float>(c.x), static_cast<float>(c.y),
+                              static_cast<float>(c.z), cmd.userCirclesCxCyZR[k + 3], static_cast<float>(n.x),
+                              static_cast<float>(n.y), static_cast<float>(n.z));
         } else if (e.type == SelectedEntity::Type::Arc) {
           const size_t k = static_cast<size_t>(e.index);
           if (k >= cmd.userArcs.size())
             continue;
           CadArc a = cmd.userArcs[k];
-          // The same three steps the commit takes (REQ-312): move the arc, turn its plane, then
-          // re-anchor the sweep onto where the start point actually went. The ghost has to be the
-          // shape the commit will produce, and on a tilted arc `startRad += theta` is not it.
-          ray3d::Vec3 startPt = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
-          float spx = static_cast<float>(startPt.x);
-          float spy = static_cast<float>(startPt.y);
-          rotatePreviewPt(bx, by, theta, &spx, &spy);
-          startPt.x = static_cast<double>(spx);
-          startPt.y = static_cast<double>(spy);
-          rotatePreviewPt(bx, by, theta, &a.cx, &a.cy);
-          a.startRad += theta;
-          RotateNormalAboutZ(theta, &a.nx, &a.ny);
-          CadReanchorArcStart(&a, startPt);
+          // The same steps the commit takes (`RotateSelectionAboutAxis`): rotate the start point
+          // and centre as points, the plane normal as a direction, then re-anchor the sweep onto
+          // where the start point actually landed.
+          const ray3d::Vec3 startWorld = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
+          const ray3d::Vec3 startRot =
+              rp(static_cast<float>(startWorld.x), static_cast<float>(startWorld.y), static_cast<float>(startWorld.z));
+          const ray3d::Vec3 c = rp(a.cx, a.cy, a.z);
+          const ray3d::Vec3 n = rv(a.nx, a.ny, a.nz);
+          a.cx = static_cast<float>(c.x);
+          a.cy = static_cast<float>(c.y);
+          a.z = static_cast<float>(c.z);
+          a.nx = static_cast<float>(n.x);
+          a.ny = static_cast<float>(n.y);
+          a.nz = static_cast<float>(n.z);
+          CadReanchorArcStart(&a, startRot);
           appendArcPolylineStrip(prevLines, a.z, a, 48);
         } else if (e.type == SelectedEntity::Type::Ellipse) {
+          if (!axisIsWorldZ)
+            continue;  // refused at commit under a tilted axis — omit from the ghost too
           const size_t k = static_cast<size_t>(e.index);
           if (k >= cmd.userEllipses.size())
             continue;
           CadEllipse el = cmd.userEllipses[k];
-          float mx = el.cx + el.majVx;
-          float my = el.cy + el.majVy;
-          rotatePreviewPt(bx, by, theta, &el.cx, &el.cy);
-          rotatePreviewPt(bx, by, theta, &mx, &my);
-          el.majVx = mx - el.cx;
-          el.majVy = my - el.cy;
+          // Same rp/rv the other types use, not a hand-rolled 2D rotation: a CadEllipse is flat in
+          // world XY, and for a world-Z-parallel axis (either sign) rp leaves its Z alone and rv
+          // turns the major-axis vector the correct way — matching the commit and every sibling in
+          // the array (a plain +Z `rotatePreviewPt` would spin backwards under an inverted-Z UCS).
+          const ray3d::Vec3 c = rp(el.cx, el.cy, el.z);
+          const ray3d::Vec3 maj = rv(el.majVx, el.majVy, 0.f);
+          el.cx = static_cast<float>(c.x);
+          el.cy = static_cast<float>(c.y);
+          el.z = static_cast<float>(c.z);
+          el.majVx = static_cast<float>(maj.x);
+          el.majVy = static_cast<float>(maj.y);
           appendEllipsePolylineStrip(prevLines, el.z, el, 56);
         } else if (e.type == SelectedEntity::Type::Polyline) {
           const int pi = e.index;
@@ -672,52 +708,56 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
           const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
                               cmd.userPolylineClosed[static_cast<size_t>(pi)];
+          const auto pushVert = [&](int idx) {
+            const ray3d::Vec3 p = rp(cmd.userPolylineVerts[static_cast<size_t>(idx * 3)],
+                                     cmd.userPolylineVerts[static_cast<size_t>(idx * 3 + 1)],
+                                     cmd.userPolylineVerts[static_cast<size_t>(idx * 3 + 2)]);
+            prevLines->push_back(static_cast<float>(p.x));
+            prevLines->push_back(static_cast<float>(p.y));
+            prevLines->push_back(static_cast<float>(p.z));
+          };
           for (int vi = v0; vi + 1 < v1; ++vi) {
-            float x0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
-            float y0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-            float x1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
-            float y1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
-            rotatePreviewPt(bx, by, theta, &x0, &y0);
-            rotatePreviewPt(bx, by, theta, &x1, &y1);
-            prevLines->push_back(x0);
-            prevLines->push_back(y0);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
-            prevLines->push_back(x1);
-            prevLines->push_back(y1);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+            pushVert(vi);
+            pushVert(vi + 1);
           }
           if (closed && v1 - v0 >= 2) {
-            float x0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
-            float y0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
-            float x1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)];
-            float y1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
-            rotatePreviewPt(bx, by, theta, &x0, &y0);
-            rotatePreviewPt(bx, by, theta, &x1, &y1);
-            prevLines->push_back(x0);
-            prevLines->push_back(y0);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
-            prevLines->push_back(x1);
-            prevLines->push_back(y1);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+            pushVert(v1 - 1);
+            pushVert(v0);
           }
         }
       }
-      appendSelectedFeatureLinePreview(prevLines, cmd,
-                                       [&](float* x, float* y) { rotatePreviewPt(bx, by, theta, x, y); });
+      if (axisIsWorldZ) {
+        // FeatureLine's shared preview helper is (x,y)-only; a world-Z rotation leaves x'/y'
+        // independent of z, so it is exact here. Under a tilted axis a FeatureLine is refused at
+        // commit — omit it from the ghost. Rotation about -Z by `ang` is rotation about +Z by
+        // `-ang`, so carry the axis sign into the 2D helper (an inverted-Z UCS otherwise spins the
+        // FeatureLine ghost the wrong way relative to the commit and its siblings).
+        const float zAng = ang * (axisUnit.z < 0.0 ? -1.f : 1.f);
+        appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
+          rotatePreviewPt(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), zAng, x, y);
+        });
+      }
     };
 
     if (cmd.arrayType == AppCommandState::ArrayType::Rectangular) {
+      // The grid axes are the active UCS X/Y (REQ-305 acceptance 10). Spacings are UCS-local
+      // distances resolved from the cursor on the work plane, then each cell's local offset is
+      // mapped back to a world delta — the same arithmetic as `ArrayCellWorldDelta` at commit.
+      const ucs::Ucs frame =
+          CadWorkPlaneAnchoredAt(cmd, cmd.arrayAnchorX, cmd.arrayAnchorY, cmd.arrayAnchorZ);
+      const ucs::Point2D cursorLocal =
+          ucs::WorldToPlane(frame, ray3d::Vec3{curX, curY, cmd.uiCursorWorldZ});
       int cols = std::max(cmd.arrayCols, 1);
       float colSpacing = cmd.arrayColSpacing;
       int rows = 1;
       float rowSpacing = 0.f;
       if (cmd.arrayPhase == APh::Rect_WaitColumnSpacing) {
-        colSpacing = curX - cmd.arrayAnchorX;
+        colSpacing = static_cast<float>(cursorLocal.x);
       } else if (cmd.arrayPhase == APh::Rect_WaitRows) {
         // cols/colSpacing already fixed; rows not chosen yet — preview the single fixed row.
       } else if (cmd.arrayPhase == APh::Rect_WaitRowSpacing) {
         rows = std::max(cmd.arrayRows, 1);
-        rowSpacing = curY - cmd.arrayAnchorY;
+        rowSpacing = static_cast<float>(cursorLocal.y);
       } else {
         return;  // PickSelection / WaitType / Rect_WaitColumns — not enough entered yet to preview
       }
@@ -725,19 +765,29 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         for (int c = 0; c < cols; ++c) {
           if (r == 0 && c == 0)
             continue;
-          appendTranslatedInstance(static_cast<float>(c) * colSpacing, static_cast<float>(r) * rowSpacing);
+          const ray3d::Vec3 d = ucs::UcsVectorToWorld(
+              frame, ray3d::Vec3{static_cast<double>(c) * colSpacing, static_cast<double>(r) * rowSpacing, 0.0});
+          appendTranslatedInstance(static_cast<float>(d.x), static_cast<float>(d.y), static_cast<float>(d.z));
         }
       return;
     }
 
-    // Polar.
+    // Polar — rotation is about the active UCS Z axis through the picked centre (REQ-305
+    // acceptance 11 / REQ-328).
     if (cmd.arrayPhase != APh::Polar_WaitAngle && cmd.arrayPhase != APh::Polar_WaitRotateAnswer)
       return;
     constexpr float kPi = 3.14159265358979323846f;
     const int n = std::max(cmd.arrayItemCount, 1);
+    const ray3d::Vec3 axisPoint{cmd.arrayCenterX, cmd.arrayCenterY, cmd.arrayCenterZ};
+    const ucs::Ucs centreFrame =
+        CadWorkPlaneAnchoredAt(cmd, cmd.arrayCenterX, cmd.arrayCenterY, cmd.arrayCenterZ);
+    const ray3d::Vec3 axisUnit = ray3d::Normalize(centreFrame.zAxis);
     float fillDeg = cmd.arrayFillAngleDeg;
     if (cmd.arrayPhase == APh::Polar_WaitAngle) {
-      fillDeg = std::atan2(curY - cmd.arrayCenterY, curX - cmd.arrayCenterX) * (180.f / kPi);
+      // The sweep angle is measured IN THE UCS PLANE (local X/Y about the centre), not world X/Y —
+      // a raw world-XY `atan2` collapses to ~0 under any non-plan UCS and stacks every instance.
+      const ucs::Point2D lc = ucs::WorldToPlane(centreFrame, ray3d::Vec3{curX, curY, cmd.uiCursorWorldZ});
+      fillDeg = std::atan2(static_cast<float>(lc.y), static_cast<float>(lc.x)) * (180.f / kPi);
       if (fillDeg < 0.f)
         fillDeg += 360.f;
     }
@@ -748,11 +798,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     for (int i = 1; i < n; ++i) {
       const float ang = step * static_cast<float>(i);
       if (cmd.arrayRotateItems) {
-        appendRotatedInstance(cmd.arrayCenterX, cmd.arrayCenterY, ang);
+        appendRotatedInstance(axisPoint, axisUnit, ang);
       } else {
-        float ax = cmd.arrayAnchorX, ay = cmd.arrayAnchorY;
-        rotatePreviewPt(cmd.arrayCenterX, cmd.arrayCenterY, ang, &ax, &ay);
-        appendTranslatedInstance(ax - cmd.arrayAnchorX, ay - cmd.arrayAnchorY);
+        const ray3d::Vec3 a = ray3d::RotatePointAboutAxis(
+            ray3d::Vec3{cmd.arrayAnchorX, cmd.arrayAnchorY, cmd.arrayAnchorZ}, axisPoint, axisUnit,
+            static_cast<double>(ang));
+        appendTranslatedInstance(static_cast<float>(a.x) - cmd.arrayAnchorX,
+                                 static_cast<float>(a.y) - cmd.arrayAnchorY,
+                                 static_cast<float>(a.z) - cmd.arrayAnchorZ);
       }
     }
     return;
