@@ -3176,8 +3176,15 @@ struct AppCommandState {
   /// cursor's distance from this point) — the same point \ref FirstSelectionAnchorPoint computes,
   /// cached once at WaitType so it does not shift while spacing is being dragged.
   float arrayAnchorX = 0.f, arrayAnchorY = 0.f;
+  /// Z of the anchor above (GitHub issue #400 increment 1) — needed to build the UCS work plane
+  /// column/row spacing is measured in when the active UCS is not World.
+  float arrayAnchorZ = 0.f;
 
   float arrayCenterX = 0.f, arrayCenterY = 0.f;
+  /// Z of the polar center above (GitHub issue #400 increment 1). Only meaningful for logging /
+  /// the work-plane anchor — polar rotation itself is about a vertical (world-Z-parallel) axis
+  /// through (arrayCenterX, arrayCenterY) regardless of Z, per REQ-305 acceptance 11.
+  float arrayCenterZ = 0.f;
   int arrayItemCount = 0;
   float arrayFillAngleDeg = 360.f;
   bool arrayRotateItems = true;

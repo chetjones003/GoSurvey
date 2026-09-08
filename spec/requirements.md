@@ -1714,9 +1714,34 @@ requirements is a planning failure, not a sign of rigor.
   9. every entity type MOVE/COPY can duplicate (LineSeg, Circle, Arc, Ellipse, Polyline, Annotation,
      FilledRegion, FeatureLine) is duplicated correctly by ARRAY, including types not covered by
      the live preview (Annotation, FilledRegion — consistent with MOVE/COPY's own preview gap).
+  10. (GitHub issue #400, D-2026-09-07-b, increment 1 of 3) center/anchor/spacing picks are resolved
+      through the camera ray onto the active UCS plane (`CadActiveWorkPlane`/`CadWorkPlaneAnchoredAt`,
+      the same helpers TRIM/3D Object Snap use), not the XY projection of the mouse; rectangular
+      columns run along the active UCS X axis and rows along the active UCS Y axis, with full 3D
+      support (a UCS plane tilted out of horizontal moves instances along a real 3D grid, since
+      duplication-by-translation already carries a Z delta the same way REQ-322 MOVE does); in plan
+      view under the World UCS, results are byte-identical to today (regression guard: the World UCS
+      plane IS world XY);
+  11. Polar array rotates about the active UCS Z axis through the picked centre, for any UCS whose Z
+      axis is parallel to world Z (the UCS X/Y axes may be freely rotated and translated within a
+      horizontal plane — e.g. `UCS Z <angle>` / `UCS Origin`). Rotate-items = Yes carries each
+      instance's orientation through that same rotation. **A UCS tilted out of horizontal (Z axis not
+      parallel to world Z — e.g. an orbited-view "3-point" or "View" UCS) is refused for polar arrays
+      with a named log message**, matching this project's existing scope line for ROTATE/SCALE: solid
+      and 2D-entity rotation about an arbitrary 3D axis is not yet built anywhere in this codebase
+      (D-2026-09-04-g), and polar ARRAY reuses that same primitive rather than inventing a second one.
+      Lifting this refusal is tracked as future scope alongside 3D ROTATE, not part of this increment.
 - Owner-layer: Commands (`CadCommands.cpp`/`.hpp`), Viewport (`TransformPreview.cpp`, cursor hint)
 - Status: accepted
-- Revisions: 2026-08-25 — initial (GitHub issue #87, D-2026-08-25-m). Survey-point exclusion from
+- Revisions: 2026-09-07 — Acceptance 10-11 added (GitHub issue #400, D-2026-09-07-b): ARRAY is
+  purely world-XY today (rectangular offsets by world dx/dy, polar rotates about world Z), matching
+  #399/TRIM and #395/3D Object Snap before their own 3D work. Sequenced into 3 increments: (1) this
+  one — UCS-plane picks for the existing 2D entity set; (2) a third "levels" count+spacing on
+  Rectangular for a 3D grid along UCS Z, chosen over a separate 3D-array type so 0/1 levels is a
+  free regression guard rather than a second command surface (user decision); (3) Solid/Surface
+  duplication, which `DuplicateCadSelectionTranslated`/`Rotated` do not support for ANY modify
+  command today, not just ARRAY — new capability, not a 3D-ification of an existing path.
+  2026-08-25 — initial (GitHub issue #87, D-2026-08-25-m). Survey-point exclusion from
   the array selection was confirmed with the user ahead of implementation (see Statement).
   2026-08-25 — Acceptance 2 amended (D-2026-08-25-n): the user reported ARRAY's opening
   "select objects" step only accepted a two-corner window/crossing box, with no way to click an

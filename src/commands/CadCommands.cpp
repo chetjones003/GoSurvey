@@ -8071,7 +8071,10 @@ static void AppendFeatureLineCopy(AppCommandState& st, int fi, int v0, int v1, X
           : MakeNewEntityAttrs(st)));
 }
 
-static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float dy) {
+// dz defaults to 0 so every existing 2D caller (COPY, ARRAY rectangular under the World UCS) is
+// byte-identical to before this parameter existed. GitHub issue #400 increment 1 is ARRAY's own
+// UCS-plane rectangular case, the only caller that ever passes a non-zero dz.
+static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float dy, float dz = 0.f) {
   const size_t polyVertsBefore = st.userPolylineVerts.size();
   const size_t featureVertsBefore = st.featureLineVerts.size();
   std::vector<float> newLines;
@@ -8097,7 +8100,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
       const size_t fk = static_cast<size_t>(e.index);
       if (fk < st.cadFilledRegions.size()) {
         CadFilledRegion fr = st.cadFilledRegions[fk];
-        hatchgeom::Translate(fr, dx, dy);
+        hatchgeom::Translate(fr, dx, dy, dz);
         newFills.push_back(std::move(fr));
         newFillAttrs.push_back(DuplicatedEntityAttrs(
             fk < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[fk] : EntityAttributes{}));
@@ -8109,8 +8112,10 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
           newLines.push_back(st.userLinesFlat[k + static_cast<size_t>(j)]);
         newLines[newLines.size() - 6] += dx;
         newLines[newLines.size() - 5] += dy;
+        newLines[newLines.size() - 4] += dz;
         newLines[newLines.size() - 3] += dx;
         newLines[newLines.size() - 2] += dy;
+        newLines[newLines.size() - 1] += dz;
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
           a = st.userLineAttrs[static_cast<size_t>(e.index)];
@@ -8121,7 +8126,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
       if (k + 3 < st.userCirclesCxCyZR.size()) {
         newCircles.push_back(st.userCirclesCxCyZR[k] + dx);
         newCircles.push_back(st.userCirclesCxCyZR[k + 1] + dy);
-        newCircles.push_back(st.userCirclesCxCyZR[k + 2]);  // z
+        newCircles.push_back(st.userCirclesCxCyZR[k + 2] + dz);  // z (issue #400: UCS-plane arrays)
         newCircles.push_back(st.userCirclesCxCyZR[k + 3]);  // r
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
@@ -8138,6 +8143,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         c.surveyPointLabelForId = -1;
         c.insX += dx;
         c.insY += dy;
+        c.insZ += dz;  // issue #400: UCS-plane arrays, matching REQ-322 MOVE's own insZ handling
         if (c.kind == CadAnnotation::Kind::Mtext) {
           c.boxMinX += dx;
           c.boxMinY += dy;
@@ -8170,7 +8176,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
       const size_t bk = static_cast<size_t>(e.index);
       if (bk < st.cadBlockRefs.size()) {
         CadBlockRef c = st.cadBlockRefs[bk];
-        CadBlockTranslate(&c, dx, dy, 0.f);
+        CadBlockTranslate(&c, dx, dy, dz);  // issue #400: UCS-plane arrays
         newBlockRefs.push_back(std::move(c));
         EntityAttributes a{};
         if (bk < st.cadBlockRefAttrs.size())
@@ -8183,6 +8189,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         CadArc a = st.userArcs[k];
         a.cx += dx;
         a.cy += dy;
+        a.z += dz;  // issue #400: UCS-plane arrays
         newArcs.push_back(a);
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
@@ -8195,6 +8202,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         CadEllipse el = st.userEllipses[k];
         el.cx += dx;
         el.cy += dy;
+        el.z += dz;  // issue #400: UCS-plane arrays
         newEll.push_back(el);
         EntityAttributes at{};
         if (k < st.userEllAttrs.size())
@@ -8216,7 +8224,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
       for (int vi = v0; vi < v1; ++vi) {
         st.userPolylineVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)] + dx);
         st.userPolylineVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
-        st.userPolylineVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+        st.userPolylineVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)] + dz);  // issue #400
       }
       st.userPolylineOffsets.push_back(baseVert + nv);
       // REQ-316 / ADR-047: Inc 1 flattens a copied arc polyline to straight (bulges default 0);
@@ -10385,11 +10393,42 @@ static void ResetArrayDraft(AppCommandState& st) {
   st.arrayType = AppCommandState::ArrayType::Rectangular;
   st.arrayCols = st.arrayRows = 0;
   st.arrayColSpacing = st.arrayRowSpacing = 0.f;
-  st.arrayAnchorX = st.arrayAnchorY = 0.f;
-  st.arrayCenterX = st.arrayCenterY = 0.f;
+  st.arrayAnchorX = st.arrayAnchorY = st.arrayAnchorZ = 0.f;
+  st.arrayCenterX = st.arrayCenterY = st.arrayCenterZ = 0.f;
   st.arrayItemCount = 0;
   st.arrayFillAngleDeg = 360.f;
   st.arrayRotateItems = true;
+}
+
+/// GitHub issue #400 increment 1: resolve a viewport click for ARRAY's spatial phases (column/row
+/// spacing, polar center, fill angle) onto the active UCS work plane, anchored at (\p ax,\p ay,\p az)
+/// — the same camera-ray-onto-plane pattern \c CadSolveCircleThreePoints uses. In plan view / under
+/// the World UCS this is exactly the flat \p wx,\p wy pick (regression guard, REQ-305 acceptance 10):
+/// the anchored plane's axes ARE world X/Y there, so the ray/plane intersection reproduces the same
+/// point the old flat code read directly off the cursor.
+static void CadResolveArrayPickOnWorkPlane(const AppCommandState& st, float wx, float wy,
+                                           const ray3d::Ray* pickRay, float ax, float ay, float az,
+                                           float* outX, float* outY, float* outZ) {
+  if (!pickRay || !pickRay->valid() || CadWorkPlaneIsWorldXy(st)) {
+    *outX = wx;
+    *outY = wy;
+    if (outZ)
+      *outZ = CadCommitElevation(st);
+    return;
+  }
+  const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, ax, ay, az);
+  ray3d::Vec3 hit;
+  if (!ray3d::RayPlaneIntersect(*pickRay, ucs::WorkPlane(frame), &hit)) {
+    *outX = wx;
+    *outY = wy;
+    if (outZ)
+      *outZ = CadCommitElevation(st);
+    return;
+  }
+  *outX = static_cast<float>(hit.x);
+  *outY = static_cast<float>(hit.y);
+  if (outZ)
+    *outZ = static_cast<float>(hit.z);
 }
 
 static void FinishArrayCommand(AppCommandState& st, std::vector<std::string>& log, int instanceCount,
@@ -10399,6 +10438,21 @@ static void FinishArrayCommand(AppCommandState& st, std::vector<std::string>& lo
   ResetArrayDraft(st);
   log.push_back("ARRAY — " + std::to_string(instanceCount) + " total instance(s)" +
                 (shapeDesc[0] ? std::string(" (") + shapeDesc + ")." : std::string(".")));
+}
+
+/// GitHub issue #400 increment 1: a grid cell's offset is measured along the active UCS X/Y axes
+/// (colSpacing/rowSpacing are UCS-local distances — see \c CadResolveArrayPickOnWorkPlane), then
+/// converted to a world (dx,dy,dz) via the same anchored frame \c CadSolveCircleThreePoints uses
+/// for its own plane-vs-flat split. Under the World UCS the frame's axes ARE world X/Y/Z, so this
+/// reduces to \p colOffset,\p rowOffset,0 exactly — the REQ-305 acceptance 10 regression guard.
+static void ArrayCellWorldDelta(const AppCommandState& st, float colOffset, float rowOffset,
+                                float* dx, float* dy, float* dz) {
+  const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, st.arrayAnchorX, st.arrayAnchorY, st.arrayAnchorZ);
+  const ray3d::Vec3 local{static_cast<double>(colOffset), static_cast<double>(rowOffset), 0.0};
+  const ray3d::Vec3 world = ucs::UcsVectorToWorld(frame, local);
+  *dx = static_cast<float>(world.x);
+  *dy = static_cast<float>(world.y);
+  *dz = static_cast<float>(world.z);
 }
 
 /// Rectangular commit: the original selection occupies cell (0,0); every other cell is produced by
@@ -10412,8 +10466,10 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
     for (int c = 0; c < cols; ++c) {
       if (r == 0 && c == 0)
         continue;  // the original selection IS cell (0,0) — REQ-305 acceptance 3
-      DuplicateCadSelectionTranslated(st, static_cast<float>(c) * st.arrayColSpacing,
-                                      static_cast<float>(r) * st.arrayRowSpacing);
+      float dx = 0.f, dy = 0.f, dz = 0.f;
+      ArrayCellWorldDelta(st, static_cast<float>(c) * st.arrayColSpacing,
+                         static_cast<float>(r) * st.arrayRowSpacing, &dx, &dy, &dz);
+      DuplicateCadSelectionTranslated(st, dx, dy, dz);
     }
   }
   FinishArrayCommand(st, log, cols * rows,
@@ -10470,6 +10526,18 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       return true;
     }
     if (low == "p" || low == "polar") {
+      // GitHub issue #400 increment 1 / REQ-305 acceptance 11: polar rotation reuses the existing
+      // world-Z-only rotate primitive (`RotateAroundBase`/`DuplicateCadSelectionRotated`); a UCS
+      // tilted out of horizontal would need genuine arbitrary-axis rotation, which ROTATE/SCALE
+      // themselves do not have yet (D-2026-09-04-g) — refused by name rather than silently rotating
+      // about the wrong axis.
+      if (!CadWorkPlaneIsWorldXy(st)) {
+        log.push_back("ARRAY Polar — refused: the active UCS is tilted out of horizontal (its Z "
+                      "axis is not parallel to world Z). Polar ARRAY needs the same arbitrary-axis "
+                      "rotation ROTATE/SCALE do not have yet; use a UCS with an upright Z axis "
+                      "(rotation/origin about Z is fine), or use Rectangular.");
+        return false;
+      }
       st.arrayType = AT::Polar;
       st.arrayPhase = AP::Polar_WaitCenter;
       log.push_back("ARRAY Polar — specify center point:");
@@ -10528,6 +10596,7 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       return false;
     st.arrayCenterX = px;
     st.arrayCenterY = py;
+    st.arrayCenterZ = CadCommitElevation(st);  // issue #400: for a horizontal, non-World UCS's elevation
     st.arrayPhase = AP::Polar_WaitItemCount;
     log.push_back("ARRAY Polar — number of items (total, including the original):");
     return true;
@@ -12245,19 +12314,38 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       return;
     }
     if (st.arrayPhase == AP::Rect_WaitColumnSpacing) {
-      st.arrayColSpacing = wx - st.arrayAnchorX;
+      // GitHub issue #400: resolved onto the active UCS work plane, anchored at the selection's own
+      // anchor, then expressed as a LOCAL UCS-plane distance — colSpacing is a UCS-X distance, not a
+      // world-X one (REQ-305 acceptance 10). Under the World UCS this is byte-identical to the old
+      // `wx - st.arrayAnchorX`.
+      float px = 0.f, py = 0.f, pz = 0.f;
+      CadResolveArrayPickOnWorkPlane(st, wx, wy, pickRay, st.arrayAnchorX, st.arrayAnchorY,
+                                     st.arrayAnchorZ, &px, &py, &pz);
+      const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, st.arrayAnchorX, st.arrayAnchorY, st.arrayAnchorZ);
+      const ucs::Point2D local = ucs::WorldToPlane(frame, {px, py, static_cast<double>(pz)});
+      st.arrayColSpacing = static_cast<float>(local.x);
       st.arrayPhase = AP::Rect_WaitRows;
       log.push_back("ARRAY Rectangular — number of rows:");
       return;
     }
     if (st.arrayPhase == AP::Rect_WaitRowSpacing) {
-      st.arrayRowSpacing = wy - st.arrayAnchorY;
+      float px = 0.f, py = 0.f, pz = 0.f;
+      CadResolveArrayPickOnWorkPlane(st, wx, wy, pickRay, st.arrayAnchorX, st.arrayAnchorY,
+                                     st.arrayAnchorZ, &px, &py, &pz);
+      const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, st.arrayAnchorX, st.arrayAnchorY, st.arrayAnchorZ);
+      const ucs::Point2D local = ucs::WorldToPlane(frame, {px, py, static_cast<double>(pz)});
+      st.arrayRowSpacing = static_cast<float>(local.y);
       CommitArrayRectangular(st, log);
       return;
     }
     if (st.arrayPhase == AP::Polar_WaitCenter) {
-      st.arrayCenterX = wx;
-      st.arrayCenterY = wy;
+      // Only reached when the active UCS is horizontal (WaitType refused switching to Polar
+      // otherwise), so the flat wx/wy pick already lands correctly under an orbited camera once
+      // resolved through the ray/plane intersection — same helper as the rectangular phases.
+      float pz = 0.f;
+      CadResolveArrayPickOnWorkPlane(st, wx, wy, pickRay, st.arrayAnchorX, st.arrayAnchorY,
+                                     st.arrayAnchorZ, &st.arrayCenterX, &st.arrayCenterY, &pz);
+      st.arrayCenterZ = pz;
       st.arrayPhase = AP::Polar_WaitItemCount;
       log.push_back("ARRAY Polar — number of items (total, including the original):");
       return;
@@ -12266,7 +12354,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       // Interactive fill-angle entry: the absolute angle (standard math convention, CCW from +X)
       // from center to the click, taken directly as the sweep magnitude. Typed entry
       // (HandleArrayText) sets the same field from a plain number of degrees.
-      float deg = std::atan2(wy - st.arrayCenterY, wx - st.arrayCenterX) * (180.f / 3.14159265358979323846f);
+      float px = 0.f, py = 0.f, pz = 0.f;
+      CadResolveArrayPickOnWorkPlane(st, wx, wy, pickRay, st.arrayCenterX, st.arrayCenterY,
+                                     st.arrayCenterZ, &px, &py, &pz);
+      float deg = std::atan2(py - st.arrayCenterY, px - st.arrayCenterX) * (180.f / 3.14159265358979323846f);
       if (deg < 0.f)
         deg += 360.f;
       st.arrayFillAngleDeg = deg;
@@ -29828,6 +29919,7 @@ void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (!st.selection.empty()) {
     st.arrayPhase = AppCommandState::ArrayPhase::WaitType;
     ComputeSelectionCentroidWorld(st, &st.arrayAnchorX, &st.arrayAnchorY);
+    st.arrayAnchorZ = CadCommitElevation(st);  // issue #400: elevation for the UCS work plane
     log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
   } else
     log.push_back(
@@ -30741,6 +30833,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         else {
           st.arrayPhase = AP::WaitType;
           ComputeSelectionCentroidWorld(st, &st.arrayAnchorX, &st.arrayAnchorY);
+          st.arrayAnchorZ = CadCommitElevation(st);  // issue #400: elevation for the UCS work plane
           log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
         }
       }
