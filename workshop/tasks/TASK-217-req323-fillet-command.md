@@ -90,11 +90,12 @@ with nothing selected still being the 2D command.
 
 ## Technical debt
 
-- **DEBT-1 — no prompted form.** PRESSPULL grew one (`StartPressPullCommand`, issue #396) so a bare
-  verb walks the user through target and distance with a live ghost. `FILLET` on a solid takes its
-  radius as an argument or nothing happens; a bare `FILLET` with edges selected prints usage. A
-  prompted form with a radius preview is the obvious follow-up and would want the ghost geometry
-  that does not exist yet.
+- **DEBT-1 — no prompted form. CLOSED 2026-09-08 (TASK-219), and it was a real defect, not a
+  nicety.** The argument-only form printed usage and entered no command state, so the command line
+  went back to IDLE — and the user's next keystroke, `R` for the 2D fillet's Radius option, matched
+  the `RECT` command and started drawing a rectangle. Reported with a screenshot within a minute of
+  the first attempt to use it. A bare `FILLET` now asks for the radius, and the prompt survives a
+  mistyped or refused answer instead of dropping back to idle.
 - **DEBT-2 — inherited from TASK-210:** the concave edge, the oblique end face and the spherical
   corner are each refused by name and each their own increment. Only the corner blocks an issue-#148
   acceptance line.
