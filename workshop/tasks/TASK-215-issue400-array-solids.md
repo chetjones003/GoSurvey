@@ -1,7 +1,7 @@
 # TASK-215 — Issue #400 (increment 3 of 3): ARRAY duplicates solids (Rectangular only)
 
 - Type:    feature
-- Status:  done — PR pending (stacked on #409, #410)
+- Status:  done — PR #411 (stacked on #409, #410)
 - Opened:  2026-09-07
 - Owner:   Workshop
 - GitHub:  #400
