@@ -1,0 +1,16 @@
+# CodeQL configuration (REQ-324).
+#
+# Purpose: keep vendored third-party code out of CodeQL results. Large vendored libraries
+# carry unreferenced helpers, FIXME markers, and dead code that are not this project's to
+# fix; scanning them re-surfaces thousands of style/quality alerts every run and buries the
+# small amount of first-party signal. See issue #347.
+#
+# This only scopes the analysis paths — query selection stays in the workflow
+# (queries: security-and-quality).
+
+name: "GoSurvey CodeQL config"
+
+paths-ignore:
+  - third_party
+  - build
+  - samples

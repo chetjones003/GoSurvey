@@ -55,6 +55,7 @@ jobs:
         with:
           languages: cpp
           queries: security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Configure
         run: cmake --preset ninja-release
