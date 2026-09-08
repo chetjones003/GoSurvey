@@ -158,4 +158,59 @@ EXPECT SUBOBJECTS 0
 UNDO
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
+
+# --- The PROMPTED form: a bare FILLET asks for the radius --------------------------------------------
+# Printing usage and stopping was a dead end. The command entered no state, so the next keystroke went
+# to the IDLE command line - where `R`, the 2D fillet's Radius option and the natural thing to press,
+# matched the RECT command and started drawing a rectangle (user report with screenshot, 2026-09-08).
+# A bare FILLET now asks, and answering applies.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+CMD FILLET
+EXPECT LOG "Specify fillet radius"
+# The selection is still there: asking for a radius must not consume what it is about to round.
+EXPECT SUBOBJECTEDGES 1
+CMD 2
+EXPECT SOLIDPROPS 0 1582.8318530718 861.1150383794 10 15 7
+EXPECT SUBOBJECTS 0
+
+# ESC at the prompt must clear the waiting state, or the NEXT line typed - whatever it is - would be
+# read as a radius.
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+CMD FILLET
+EXPECT LOG "Specify fillet radius"
+ESC
+CMD CIRCLE
+EXPECT LOG "CIRCLE"
+ESC
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# A bad answer, and a REFUSED one, both leave the prompt up. Ending the command on either would drop
+# the user back at the idle command line - the exact trap the argument-only form set, where the next
+# keystroke ran RECT.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+CMD FILLET
+CMD banana
+EXPECT LOG "must be a number"
+# Still asking, and still holding the edge it is about to round.
+EXPECT SUBOBJECTEDGES 1
+CMD 8
+EXPECT LOG "too large"
+EXPECT LOG "different radius"
+EXPECT SUBOBJECTEDGES 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CMD 2
+EXPECT SOLIDPROPS 0 1582.8318530718 861.1150383794 10 15 7
+
 CHECK ALL

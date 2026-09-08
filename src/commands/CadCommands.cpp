@@ -6316,6 +6316,10 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitDialog;
   st.insertBlockAttrDialogOpen = false;
   st.insertBlockAttrRefIndex = -1;
+  // The solid-edge fillet's radius prompt (REQ-323). Here rather than only in `StartFilletCommand`
+  // so ESC clears it: without this, cancelling would leave the flag set, and the NEXT typed line -
+  // whatever it was - would be read as a fillet radius.
+  st.filletSolidAwaitingRadius = false;
 }
 
 // External linkage (CadCommandsInternal.hpp) for the split-out command slices — TASK-150 Phase 2.
@@ -16988,6 +16992,7 @@ void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.filletPhase = FP::WaitFirstEntity;
   st.filletFirstEntity = SelectedEntity{};
   st.filletFirstPolySeg = -1;
+  st.filletSolidAwaitingRadius = false;
   st.filletTextAwaitingRadius = false;
   st.filletTextAwaitingTrim = false;
   log.push_back("FILLET — select first object or [Radius/Trim] " + FilletPromptSuffix(st) + ". ESC cancels.");
@@ -17219,6 +17224,34 @@ bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vecto
   if (st.filletPhase != FP::WaitFirstEntity) {
     log.push_back("FILLET — pick the second object in the viewport, or ESC to cancel.");
     return false;
+  }
+  // The solid-edge fillet's radius prompt (REQ-323). Checked FIRST: the edges are already chosen, so
+  // there is no "select first object" loop to fall back into.
+  //
+  // **The prompt STAYS UP on a bad answer, and on a refused one.** A mistyped character or a radius
+  // that does not fit would otherwise end the command and drop the user back at the idle command
+  // line - which is the exact trap the argument-only form set, where the next keystroke ran RECT.
+  // The selection survives both cases (nothing is built until the kernel accepts), so re-typing is
+  // all that is needed.
+  if (st.filletSolidAwaitingRadius) {
+    double want = static_cast<double>(st.filletRadius);
+    if (!line.empty()) {
+      float v = 0.f;
+      if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
+        log.push_back("FILLET - radius must be a number. Type one, or ESC to cancel:");
+        return false;
+      }
+      want = static_cast<double>(v);
+    }
+    if (!CadApplyFilletToSelectedEdges(st, want, log)) {
+      // Already reported by name, and the solid is untouched. Ask again rather than giving up.
+      log.push_back("FILLET - specify a different radius, or ESC to cancel:");
+      return false;
+    }
+    st.filletRadius = static_cast<float>(want);
+    st.filletSolidAwaitingRadius = false;
+    st.active = AppCommandState::Kind::None;
+    return true;
   }
   if (st.filletTextAwaitingRadius) {
     float v = 0.f;
@@ -28261,11 +28294,11 @@ bool CadSubObjectSelectionIsAllEdges(const AppCommandState& st) {
   return true;
 }
 
-void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
-                         std::vector<std::string>& log) {
+bool CadApplyFilletToSelectedEdges(AppCommandState& st, double radius,
+                                   std::vector<std::string>& log) {
   if (!CadSubObjectSelectionIsAllEdges(st)) {
     log.push_back("FILLET - select solid EDGES first: hold Ctrl and click one.");
-    return;
+    return false;
   }
   // One solid at a time. Two solids filleted from one line would be two edits under one undo step,
   // and the second's radius would be checked against the first's result - a compound edit nobody
@@ -28275,25 +28308,13 @@ void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
     if (s.solidIndex != solidIndex) {
       log.push_back("FILLET - the selected edges are on different solids; this rounds one solid at "
                     "a time.");
-      return;
+      return false;
     }
   const CadSolidPtr sp = st.subObjectSelection.front().owner.lock();
   if (!sp || solidIndex < 0 || static_cast<size_t>(solidIndex) >= st.cadSolids.size() ||
       st.cadSolids[static_cast<size_t>(solidIndex)] != sp) {
     log.push_back("FILLET - that edge is no longer there.");
-    return;
-  }
-
-  const std::string text = StringUtil::trimCopy(args);
-  if (text.empty()) {
-    log.push_back("Usage: FILLET <radius> - rounds the selected solid edge(s).");
-    return;
-  }
-  char* end = nullptr;
-  const double radius = std::strtod(text.c_str(), &end);
-  if (!end || *end != '\0' || !std::isfinite(radius)) {
-    log.push_back("FILLET - \"" + text + "\" is not a number.");
-    return;
+    return false;
   }
 
   std::vector<int> edges;
@@ -28308,7 +28329,7 @@ void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
     // refusal is a PRE-check, so "untouched" is true because nothing was built, not because
     // something was rolled back.
     log.push_back(std::string("FILLET - ") + brep::ProblemText(why));
-    return;
+    return false;
   }
 
   // One undo step for the whole edit, however many edges were named (REQ-323 item 8).
@@ -28321,8 +28342,8 @@ void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
   // topology, so the face index still names the same face. A fillet does not: the edge that was
   // selected no longer exists, and every index after it has shifted (the kernel compacts). Keeping
   // the reference would leave it pointing at whatever edge inherited the number - a selection that
-  // looks live and names something the user never picked. Dropping it is the honest answer, and
-  // ADR-049's expiring reference is the precedent.
+  // looks live and names something the user never picked. ADR-049's expiring reference is the
+  // precedent.
   st.subObjectSelection.clear();
 
   BumpCadGpuCache(st);
@@ -28336,6 +28357,48 @@ void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
     std::snprintf(msg, sizeof(msg), "FILLET - %d edge(s) of solid %d rounded at radius %.4f.",
                   static_cast<int>(edges.size()), solidIndex + 1, radius);
   log.push_back(msg);
+  return true;
+}
+
+void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
+                         std::vector<std::string>& log) {
+  if (!CadSubObjectSelectionIsAllEdges(st)) {
+    log.push_back("FILLET - select solid EDGES first: hold Ctrl and click one.");
+    return;
+  }
+  const std::string text = StringUtil::trimCopy(args);
+
+  // A BARE `FILLET` asks for the radius rather than printing usage and stopping.
+  //
+  // Printing usage was a dead end, and a user found it: the command entered no state, so the next
+  // keystroke went to the IDLE command line - where `R`, the 2D fillet's Radius option and the
+  // natural thing to press, matched the `RECT` command and started drawing a rectangle. The
+  // prompted form is what PRESSPULL already grew for the same reason (issue #396).
+  if (text.empty()) {
+    st.active = AppCommandState::Kind::Fillet;
+    st.lastCommand = AppCommandState::Kind::Fillet;
+    st.filletPhase = AppCommandState::FilletPhase::WaitFirstEntity;
+    st.filletSolidAwaitingRadius = true;
+    st.filletTextAwaitingRadius = false;
+    st.filletTextAwaitingTrim = false;
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "FILLET - %d edge(s) selected. Specify fillet radius <%.4f>, Enter to accept, "
+                  "ESC to cancel:",
+                  static_cast<int>(st.subObjectSelection.size()),
+                  static_cast<double>(st.filletRadius));
+    log.push_back(buf);
+    return;
+  }
+
+  char* end = nullptr;
+  const double radius = std::strtod(text.c_str(), &end);
+  if (!end || *end != '\0' || !std::isfinite(radius)) {
+    log.push_back("FILLET - \"" + text + "\" is not a number.");
+    return;
+  }
+  if (CadApplyFilletToSelectedEdges(st, radius, log))
+    st.filletRadius = static_cast<float>(radius);  // remembered, as the 2D fillet's radius is
 }
 
 bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& ref,
@@ -31360,13 +31423,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
     } else if (st.active == K::Fillet) {
       using FP = AppCommandState::FilletPhase;
-      if (st.filletPhase == FP::WaitFirstEntity && !st.filletTextAwaitingRadius && !st.filletTextAwaitingTrim) {
+      if (st.filletPhase == FP::WaitFirstEntity && !st.filletTextAwaitingRadius &&
+          !st.filletTextAwaitingTrim && !st.filletSolidAwaitingRadius) {
         // Blank Enter at "select first object" ends FILLET — same convention LENGTHEN/BREAK's loop
         // uses. (Mid-prompt for R/T it falls through to HandleFilletText's own "must be a number"/
         // "type T or N" refusal instead, which is the more useful message there.)
         st.active = K::None;
         log.push_back("FILLET — finished.");
-      } else if (st.filletTextAwaitingRadius || st.filletTextAwaitingTrim) {
+      } else if (st.filletTextAwaitingRadius || st.filletTextAwaitingTrim ||
+                 st.filletSolidAwaitingRadius) {
         HandleFilletText(st, "", log);
       } else {
         log.push_back("FILLET — specify second object in the viewport.");
@@ -33651,6 +33716,13 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
 
   if (st.active == K::Fillet) {
     using FP = AppCommandState::FilletPhase;
+    if (st.filletSolidAwaitingRadius) {
+      static char buf[128];
+      std::snprintf(buf, sizeof(buf), "FILLET: radius for %d solid edge(s) <%.4f> | ESC cancel",
+                    static_cast<int>(st.subObjectSelection.size()),
+                    static_cast<double>(st.filletRadius));
+      return buf;
+    }
     if (st.filletTextAwaitingRadius) {
       static char buf[96];
       std::snprintf(buf, sizeof(buf), "FILLET: New radius <%.3f> | ESC cancel",

@@ -3292,6 +3292,18 @@ struct AppCommandState {
   /// the NUMBER that follows a typed `R`/`T` sub-command, at `WaitFirstEntity` only.
   bool filletTextAwaitingRadius = false;
   bool filletTextAwaitingTrim = false;
+  /// True while a solid-edge FILLET is asking for its radius (REQ-323; the prompted form).
+  ///
+  /// Its own flag rather than \ref filletTextAwaitingRadius: that one SETS the stored radius and
+  /// returns to "select first object", which is the 2D command's loop. This one is the whole
+  /// command — the edges are already chosen, so the radius is the last thing needed and answering it
+  /// applies the fillet.
+  ///
+  /// It exists because the argument-only form was a dead end: a bare `FILLET` printed usage and
+  /// entered no command state, so the next keystroke went to the IDLE command line, where `R` — the
+  /// 2D fillet's Radius option, and the natural thing to press — matched the `RECT` command instead
+  /// (user report with screenshot, 2026-09-08).
+  bool filletSolidAwaitingRadius = false;
 
   // --- CHAMFER (REQ-103 step 6b) ---
   enum class ChamferPhase { WaitFirstEntity, WaitSecondEntity } chamferPhase = ChamferPhase::WaitFirstEntity;
@@ -4388,6 +4400,12 @@ void StartPressPullCommand(AppCommandState& st, std::vector<std::string>& log);
 /// reference would name whatever edge inherited the number.
 void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
                          std::vector<std::string>& log);
+
+/// Round the selected solid edge(s) at \p radius, as one undoable step. The shared commit behind
+/// both the one-line `FILLET <radius>` and the prompted form, so the two cannot diverge about what a
+/// fillet does. False (and nothing changed) on any refusal, which is already logged by name.
+bool CadApplyFilletToSelectedEdges(AppCommandState& st, double radius,
+                                   std::vector<std::string>& log);
 void CancelPressPullCommand(AppCommandState& st);
 
 /// The prompt for whatever the PRESSPULL command is waiting for — the target, or the distance with

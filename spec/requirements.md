@@ -7212,8 +7212,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
     a solid that later operations refuse.
 - Owner-layer: Domain (`brep::FilletEdge` — the geometry and the precondition), Commands (the
   `FILLET` verb on a sub-object edge selection, and the undo step)
-- Status: accepted — **increments 1 and 2 delivered** (2026-09-05 / 2026-09-08). Increment 1: the
-  kernel (TASK-210) and the `FILLET` command on a sub-object edge selection (TASK-217). Increment 2:
+- Status: accepted — **increments 1 and 2 delivered** (2026-09-05 / 2026-09-08). Increment 1: the kernel (TASK-210) and
+  the `FILLET` command on a sub-object edge selection (TASK-217), with a prompted radius added
+  after a user report that the argument-only form was a dead end (TASK-219). Increment 2:
   edge CHAINS and the spherical corner patch (TASK-218), which **closes issue #148 acceptance 5 for
   the fillet** — all twelve edges of a box round in one operation, against the rounded-box closed
   forms. `brep::FilletEdges` builds every requested edge in ONE pass; the sequential form of
