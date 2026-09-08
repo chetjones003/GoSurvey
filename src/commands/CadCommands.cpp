@@ -6114,7 +6114,7 @@ static void ResetModifyRotateDraft(AppCommandState& st) {
   st.scaleRefP1X = st.scaleRefP1Y = 0.f;
   st.scaleNewLenP1X = st.scaleNewLenP1Y = 0.f;
   st.rotatePhase = AppCommandState::RotatePhase::PickSelection;
-  st.rotateBaseX = st.rotateBaseY = 0.f;
+  st.rotateBaseX = st.rotateBaseY = st.rotateBaseZ = 0.f;
   st.rotateRefX1 = st.rotateRefY1 = st.rotateRefX2 = st.rotateRefY2 = 0.f;
   st.rotateAnglePt1X = st.rotateAnglePt1Y = 0.f;
   st.rotateCopyMode = false;
@@ -8789,7 +8789,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
 /// rotate with the exact `RotateAroundBase`-equivalent math the 2D path always used.
 static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
                                      const ray3d::Vec3& axisUnit, float angleRad,
-                                     std::vector<std::string>& log) {
+                                     std::vector<std::string>& log,
+                                     const char* commandLabel = "ARRAY Polar") {
   const bool axisIsWorldZParallel = std::fabs(axisUnit.x) < 1e-9 && std::fabs(axisUnit.y) < 1e-9 &&
                                     std::fabs(axisUnit.z) > 1e-9;
   const double rad = static_cast<double>(angleRad);
@@ -9042,10 +9043,10 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
   excludedFlatOnly += featureLinesExcluded;
 
   if (excludedFlatOnly > 0)
-    log.push_back("ARRAY Polar — " + std::to_string(excludedFlatOnly) +
+    log.push_back(std::string(commandLabel) + " — " + std::to_string(excludedFlatOnly) +
                   " entity(ies) excluded: text/table/block/feature-line/ellipse rotation about a"
                   " tilted axis is not supported yet (REQ-328) — none of these store a plane normal"
-                  " to tip. Rotate about a UCS with an upright Z axis, or use Rectangular.");
+                  " to tip. Rotate about a UCS with an upright Z axis.");
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
       !newBlockRefs.empty() || !newFills.empty() ||
@@ -9614,6 +9615,141 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
   TransformSelectedFeatureLinesInPlace(
       st, [&](float* x, float* y) { RotateAroundBase(bx, by, rad, x, y); });
   ApplyRotationToSelectedSurveyPoints(st, bx, by, rad);
+  BumpCadGpuCache(st);
+}
+
+/// REQ-329 increment 2 (GitHub issue #402): rotate the selection IN PLACE about the LINE through
+/// \p axisPoint with unit direction \p axisUnit by \p angleRad — the in-place counterpart of
+/// \c RotateSelectionAboutAxis (which duplicates). Only ever reached with a genuinely TILTED axis:
+/// \c FinishRotateCommand routes a world-Z-parallel axis (plan view, or any UCS merely rotated in
+/// plan) to the unchanged \c ApplyRotationToSelection, so the pre-REQ-329 result is byte-identical
+/// for every case that already worked.
+///
+/// Entity support matches REQ-328's own tilted-axis set: Line / Circle / Arc / Polyline /
+/// FilledRegion rotate fully in 3D (a bare vertex has no orientation to preserve; Circle/Arc also
+/// rotate their stored plane normal, and an Arc re-anchors its start). Ellipse / Annotation / Table
+/// / BlockRef / PDF underlay / feature line / survey point are REFUSED by name — none stores a plane
+/// normal (the survey point has no 3D-rotate path yet), so tipping one out of world/UCS XY has no
+/// representable result today. Solids and surfaces are dropped by the shared helpers first, exactly
+/// as \c ApplyRotationToSelection does.
+static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                                            const ray3d::Vec3& axisUnit, float angleRad,
+                                            std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
+  DropSolidsFromSelectionForTransform(st, "ROTATE", log);
+  const double rad = static_cast<double>(angleRad);
+  const auto rotPt = [&](float x, float y, float z) -> ray3d::Vec3 {
+    return ray3d::RotatePointAboutAxis({x, y, z}, axisPoint, axisUnit, rad);
+  };
+  const auto rotDir = [&](float x, float y, float z) -> ray3d::Vec3 {
+    return ray3d::RotateVectorAboutAxis({x, y, z}, axisUnit, rad);
+  };
+  size_t refused = 0;
+
+  for (const auto& e : st.selection) {
+    switch (e.type) {
+    case SelectedEntity::Type::LineSeg: {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 >= st.userLinesFlat.size())
+        break;
+      const ray3d::Vec3 p0 = rotPt(st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 2]);
+      const ray3d::Vec3 p1 = rotPt(st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5]);
+      st.userLinesFlat[k] = static_cast<float>(p0.x);
+      st.userLinesFlat[k + 1] = static_cast<float>(p0.y);
+      st.userLinesFlat[k + 2] = static_cast<float>(p0.z);
+      st.userLinesFlat[k + 3] = static_cast<float>(p1.x);
+      st.userLinesFlat[k + 4] = static_cast<float>(p1.y);
+      st.userLinesFlat[k + 5] = static_cast<float>(p1.z);
+      break;
+    }
+    case SelectedEntity::Type::Circle: {
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= st.userCirclesCxCyZR.size())
+        break;
+      const ray3d::Vec3 c = rotPt(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 2]);
+      st.userCirclesCxCyZR[k] = static_cast<float>(c.x);
+      st.userCirclesCxCyZR[k + 1] = static_cast<float>(c.y);
+      st.userCirclesCxCyZR[k + 2] = static_cast<float>(c.z);
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      CircleNormalAt(st.userCircleNormals, static_cast<size_t>(e.index), &nx, &ny, &nz);
+      const ray3d::Vec3 n = rotDir(nx, ny, nz);
+      const size_t nk = static_cast<size_t>(e.index) * 3;
+      if (nk + 2 < st.userCircleNormals.size()) {
+        st.userCircleNormals[nk] = static_cast<float>(n.x);
+        st.userCircleNormals[nk + 1] = static_cast<float>(n.y);
+        st.userCircleNormals[nk + 2] = static_cast<float>(n.z);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Arc: {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.userArcs.size())
+        break;
+      CadArc& a = st.userArcs[k];
+      const ray3d::Vec3 startWorld = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
+      const ray3d::Vec3 startRot = rotPt(static_cast<float>(startWorld.x), static_cast<float>(startWorld.y),
+                                         static_cast<float>(startWorld.z));
+      const ray3d::Vec3 c = rotPt(a.cx, a.cy, a.z);
+      const ray3d::Vec3 n = rotDir(a.nx, a.ny, a.nz);
+      a.cx = static_cast<float>(c.x);
+      a.cy = static_cast<float>(c.y);
+      a.z = static_cast<float>(c.z);
+      a.nx = static_cast<float>(n.x);
+      a.ny = static_cast<float>(n.y);
+      a.nz = static_cast<float>(n.z);
+      CadReanchorArcStart(&a, startRot);
+      break;
+    }
+    case SelectedEntity::Type::Polyline: {
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        break;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      for (int vi = v0; vi < v1; ++vi) {
+        const size_t b = static_cast<size_t>(vi) * 3;
+        if (b + 2 >= st.userPolylineVerts.size())
+          break;
+        const ray3d::Vec3 p = rotPt(st.userPolylineVerts[b], st.userPolylineVerts[b + 1], st.userPolylineVerts[b + 2]);
+        st.userPolylineVerts[b] = static_cast<float>(p.x);
+        st.userPolylineVerts[b + 1] = static_cast<float>(p.y);
+        st.userPolylineVerts[b + 2] = static_cast<float>(p.z);
+      }
+      break;
+    }
+    case SelectedEntity::Type::FilledRegion: {
+      const size_t fk = static_cast<size_t>(e.index);
+      if (fk >= st.cadFilledRegions.size())
+        break;
+      CadFilledRegion& fr = st.cadFilledRegions[fk];
+      for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
+        const ray3d::Vec3 p = rotPt(fr.vertsXyz[v], fr.vertsXyz[v + 1], fr.vertsXyz[v + 2]);
+        fr.vertsXyz[v] = static_cast<float>(p.x);
+        fr.vertsXyz[v + 1] = static_cast<float>(p.y);
+        fr.vertsXyz[v + 2] = static_cast<float>(p.z);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Ellipse:
+    case SelectedEntity::Type::Annotation:
+    case SelectedEntity::Type::Table:
+    case SelectedEntity::Type::BlockRef:
+    case SelectedEntity::Type::PdfUnderlay:
+    case SelectedEntity::Type::FeatureLine:
+      ++refused;
+      break;
+    default:
+      break;
+    }
+  }
+  // Survey points ride a separate selection list, not `st.selection`.
+  refused += st.selectedSurveyPointIndices.size();
+
+  if (refused > 0)
+    log.push_back("ROTATE — " + std::to_string(refused) +
+                  " entity(ies) excluded: text/table/block/PDF/feature-line/ellipse/survey-point"
+                  " rotation about a tilted axis is not supported yet (REQ-328) — none stores a"
+                  " plane normal to tip. Rotate about a UCS with an upright Z axis.");
   BumpCadGpuCache(st);
 }
 
@@ -10616,12 +10752,36 @@ static bool TryRotateCopyToggle(AppCommandState& st, const std::string& lineIn, 
 static void FinishRotateCommand(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
   PushUndoSnapshot(st, st.rotateCopyMode ? "Rotate-copy" : "Rotate");
   using K = AppCommandState::Kind;
+
+  // REQ-329 increment 2 (GitHub issue #402): ROTATE turns the selection about an axis through the
+  // picked base point PARALLEL TO THE ACTIVE UCS Z. When that axis is world-Z-parallel — plan view,
+  // or any UCS merely rotated/translated in plan — this is identical to the old world-Z rotation
+  // through (bx, by), so the pre-REQ-329 path runs unchanged and the result is byte-identical. Only
+  // a genuinely tilted UCS takes the axis-aware branch (REQ-328's `RotateSelectionAboutAxis` for a
+  // copy, its new in-place sibling otherwise).
+  const bool tilted = !CadWorkPlaneIsWorldXy(st);
+
   if (st.rotateCopyMode) {
-    DuplicateCadSelectionRotated(st, bx, by, rad);
+    if (tilted) {
+      DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
+      DropSolidsFromSelectionForTransform(st, "ROTATE", log);
+      const ucs::Ucs u = CadActiveUcsStorage(st);
+      const ray3d::Vec3 axisUnit =
+          ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
+      RotateSelectionAboutAxis(st, {static_cast<double>(bx), static_cast<double>(by),
+                                    static_cast<double>(st.rotateBaseZ)},
+                               axisUnit, rad, log, "ROTATE");
+      if (!st.selectedSurveyPointIndices.empty())
+        log.push_back("ROTATE COPY — " + std::to_string(st.selectedSurveyPointIndices.size()) +
+                      " survey point(s) not duplicated: rotation about a tilted axis is not"
+                      " supported yet (REQ-328).");
+    } else {
+      DuplicateCadSelectionRotated(st, bx, by, rad);
+    }
     st.rotateCopyMode = false;
     st.active = K::None;
     ResetModifyRotateDraft(st);
-    if (!st.selectedSurveyPointIndices.empty()) {
+    if (!tilted && !st.selectedSurveyPointIndices.empty()) {
       st.pendingSurveyDupIsRotate = true;
       st.pendingRotateCopyBx = bx;
       st.pendingRotateCopyBy = by;
@@ -10633,7 +10793,16 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
       log.push_back("ROTATE COPY complete.");
     }
   } else {
-    ApplyRotationToSelection(st, bx, by, rad, log);
+    if (tilted) {
+      const ucs::Ucs u = CadActiveUcsStorage(st);
+      const ray3d::Vec3 axisUnit =
+          ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
+      RotateSelectionInPlaceAboutAxis(st, {static_cast<double>(bx), static_cast<double>(by),
+                                           static_cast<double>(st.rotateBaseZ)},
+                                      axisUnit, rad, log);
+    } else {
+      ApplyRotationToSelection(st, bx, by, rad, log);
+    }
     st.active = K::None;
     ResetModifyRotateDraft(st);
     log.push_back("ROTATE complete.");
@@ -10652,6 +10821,10 @@ bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vecto
       return false;
     st.rotateBaseX = px;
     st.rotateBaseY = py;
+    // REQ-329 increment 2: the axis passes through the base point's elevation. Under a non-World UCS
+    // `ParseStoragePoint` publishes the typed point's own Z through `resolvedPointZ`, which
+    // `CadCommitElevation` reads; under the World UCS it is the flat work-plane elevation.
+    st.rotateBaseZ = CadCommitElevation(st);
     st.rotatePhase = RP::NeedAngleOrReference;
     log.push_back("ROTATE — ° clockwise from north (decimal/DMS), R reference, C copy — click-drag preview.");
     return true;
@@ -10786,13 +10959,13 @@ static void SetArrayAnchorFromSelection(AppCommandState& st) {
                                                       : CadCommitElevation(st);
 }
 
-/// GitHub issue #400 increment 1: resolve a viewport click for ARRAY's spatial phases (column/row
-/// spacing, polar center, fill angle) onto the active UCS work plane, anchored at (\p ax,\p ay,\p az)
-/// — the same camera-ray-onto-plane pattern \c CadSolveCircleThreePoints uses. In plan view / under
-/// the World UCS this is exactly the flat \p wx,\p wy pick (regression guard, REQ-305 acceptance 10):
-/// the anchored plane's axes ARE world X/Y there, so the ray/plane intersection reproduces the same
-/// point the old flat code read directly off the cursor.
-static void CadResolveArrayPickOnWorkPlane(const AppCommandState& st, float wx, float wy,
+/// Resolve a viewport click onto the active UCS work plane, anchored at (\p ax,\p ay,\p az) — the
+/// same camera-ray-onto-plane pattern \c CadSolveCircleThreePoints uses. Used by ARRAY's spatial
+/// phases (GitHub issue #400 increment 1) and by ROTATE's base/angle picks (REQ-329 increment 2).
+/// In plan view / under the World UCS this is exactly the flat \p wx,\p wy pick (regression guard,
+/// REQ-305 acceptance 10 / REQ-329): the anchored plane's axes ARE world X/Y there, so the
+/// ray/plane intersection reproduces the same point the old flat code read directly off the cursor.
+static void CadResolvePickOnWorkPlaneAnchored(const AppCommandState& st, float wx, float wy,
                                            const ray3d::Ray* pickRay, float ax, float ay, float az,
                                            float* outX, float* outY, float* outZ) {
   if (!pickRay || !pickRay->valid() || CadWorkPlaneIsWorldXy(st)) {
@@ -10827,7 +11000,7 @@ static void FinishArrayCommand(AppCommandState& st, std::vector<std::string>& lo
 }
 
 /// GitHub issue #400 increment 1: a grid cell's offset is measured along the active UCS X/Y axes
-/// (colSpacing/rowSpacing are UCS-local distances — see \c CadResolveArrayPickOnWorkPlane), then
+/// (colSpacing/rowSpacing are UCS-local distances — see \c CadResolvePickOnWorkPlaneAnchored), then
 /// converted to a world (dx,dy,dz) via the same anchored frame \c CadSolveCircleThreePoints uses
 /// for its own plane-vs-flat split. Under the World UCS the frame's axes ARE world X/Y/Z, so this
 /// reduces to \p colOffset,\p rowOffset,0 exactly — the REQ-305 acceptance 10 regression guard.
@@ -12780,7 +12953,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       // world-X one (REQ-305 acceptance 10). Under the World UCS this is byte-identical to the old
       // `wx - st.arrayAnchorX`.
       float px = 0.f, py = 0.f, pz = 0.f;
-      CadResolveArrayPickOnWorkPlane(st, wx, wy, pickRay, st.arrayAnchorX, st.arrayAnchorY,
+      CadResolvePickOnWorkPlaneAnchored(st, wx, wy, pickRay, st.arrayAnchorX, st.arrayAnchorY,
                                      st.arrayAnchorZ, &px, &py, &pz);
       const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, st.arrayAnchorX, st.arrayAnchorY, st.arrayAnchorZ);
       const ucs::Point2D local = ucs::WorldToPlane(frame, {px, py, static_cast<double>(pz)});
@@ -12791,7 +12964,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     }
     if (st.arrayPhase == AP::Rect_WaitRowSpacing) {
       float px = 0.f, py = 0.f, pz = 0.f;
-      CadResolveArrayPickOnWorkPlane(st, wx, wy, pickRay, st.arrayAnchorX, st.arrayAnchorY,
+      CadResolvePickOnWorkPlaneAnchored(st, wx, wy, pickRay, st.arrayAnchorX, st.arrayAnchorY,
                                      st.arrayAnchorZ, &px, &py, &pz);
       const ucs::Ucs frame = CadWorkPlaneAnchoredAt(st, st.arrayAnchorX, st.arrayAnchorY, st.arrayAnchorZ);
       const ucs::Point2D local = ucs::WorldToPlane(frame, {px, py, static_cast<double>(pz)});
@@ -12808,7 +12981,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       // otherwise), so the flat wx/wy pick already lands correctly under an orbited camera once
       // resolved through the ray/plane intersection — same helper as the rectangular phases.
       float pz = 0.f;
-      CadResolveArrayPickOnWorkPlane(st, wx, wy, pickRay, st.arrayAnchorX, st.arrayAnchorY,
+      CadResolvePickOnWorkPlaneAnchored(st, wx, wy, pickRay, st.arrayAnchorX, st.arrayAnchorY,
                                      st.arrayAnchorZ, &st.arrayCenterX, &st.arrayCenterY, &pz);
       st.arrayCenterZ = pz;
       st.arrayPhase = AP::Polar_WaitItemCount;
@@ -12829,7 +13002,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       // origin) and take the angle there — the same WorldToPlane conversion the rectangular
       // spacing phases above already use. Under the World UCS this reduces to the old arithmetic.
       float px = 0.f, py = 0.f, pz = 0.f;
-      CadResolveArrayPickOnWorkPlane(st, wx, wy, pickRay, st.arrayCenterX, st.arrayCenterY,
+      CadResolvePickOnWorkPlaneAnchored(st, wx, wy, pickRay, st.arrayCenterX, st.arrayCenterY,
                                      st.arrayCenterZ, &px, &py, &pz);
       const ucs::Ucs angleFrame =
           CadWorkPlaneAnchoredAt(st, st.arrayCenterX, st.arrayCenterY, st.arrayCenterZ);
@@ -12961,6 +13134,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     if (st.rotatePhase == RP::NeedBase) {
       st.rotateBaseX = wx;
       st.rotateBaseY = wy;
+      st.rotateBaseZ = CadCommitElevation(st);  // REQ-329 increment 2: the axis passes through here
       st.rotatePhase = RP::NeedAngleOrReference;
       log.push_back(
           "ROTATE — ° clockwise from north or R reference or C copy; decimal/DMS or click-drag preview.");
@@ -12968,9 +13142,22 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     }
     if (st.rotatePhase == RP::NeedAngleOrReference) {
       // Click confirms the angle shown in the live preview: bearing CW from north, base→cursor.
-      const float dx = wx - st.rotateBaseX;
-      const float dy = wy - st.rotateBaseY;
-      FinishRotateCommand(st, st.rotateBaseX, st.rotateBaseY, -std::atan2(dx, dy), log);
+      float rad = 0.f;
+      if (CadWorkPlaneIsWorldXy(st)) {
+        rad = -std::atan2(wx - st.rotateBaseX, wy - st.rotateBaseY);  // unchanged
+      } else {
+        // REQ-329 increment 2: under a tilted UCS the click's world-XY delta does not describe an
+        // angle in the drawing plane (the failure #400 increment 4 fixed for ARRAY's fill angle) —
+        // measure it in the active work plane's own local X/Y.
+        float ax = 0.f, ay = 0.f, az = 0.f;
+        CadResolvePickOnWorkPlaneAnchored(st, wx, wy, pickRay, st.rotateBaseX, st.rotateBaseY,
+                                          st.rotateBaseZ, &ax, &ay, &az);
+        const ucs::Point2D loc = ucs::WorldToPlane(
+            CadWorkPlaneAnchoredAt(st, st.rotateBaseX, st.rotateBaseY, st.rotateBaseZ),
+            {ax, ay, static_cast<double>(az)});
+        rad = -std::atan2(static_cast<float>(loc.x), static_cast<float>(loc.y));
+      }
+      FinishRotateCommand(st, st.rotateBaseX, st.rotateBaseY, rad, log);
       return;
     }
     if (st.rotatePhase == RP::AfterReference_WaitAngleOrP) {
@@ -30550,7 +30737,7 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Rotate;
   st.rotatePhase = AppCommandState::RotatePhase::PickSelection;
-  st.rotateBaseX = st.rotateBaseY = 0.f;
+  st.rotateBaseX = st.rotateBaseY = st.rotateBaseZ = 0.f;
   st.rotateCopyMode = false;
   st.pendingSurveyDupIsRotate = false;
   st.selBoxWaitingSecond = false;
