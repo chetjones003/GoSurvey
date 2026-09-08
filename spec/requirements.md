@@ -1,5 +1,3 @@
-# Requirements Specification
-
 > **Template.** Requirements are the concrete, testable expression of the project
 > purpose in `project.md`. If a behavior is not written here, it is an
 > assumption — not a requirement. Every requirement must be specific enough that
@@ -7194,8 +7192,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
     meet the fillet along an *ellipse*. They do not — `MakeWedge` is a right prism, so its ends are
     square to the ridge and the boundary is a circle. An ellipse needs an end face OBLIQUE to the
     edge (a pyramid's base edge), which increment 1 refuses by name as `FilletEndFaceUnsupported`;
-  - two edges that share a vertex are refused **by name**, the solid unchanged, and the message says
-    that a shared corner is what is unsupported rather than reporting a geometric failure;
+  - **(increment 2)** all twelve edges of that box rounded at `r = 2` in ONE operation report volume
+    **`1120 + 344*pi/3` = 1480.2359576116** and surface area **`368 + 120*pi` = 744.9911184308**,
+    with topology **24 vertices, 48 edges, 26 faces** — 6 planes, 12 cylinders and 8 spherical
+    octants — and `V - E + F` unchanged. Each term is separately checkable: an inner box
+    `a*b*c`, six slabs `2r(ab+ac+bc)`, twelve quarter-cylinders `pi*r^2(a+b+c)` and eight octants
+    that together make one sphere `(4/3)pi*r^3`, with `a = L-2r` and so on;
+  - **(increment 2)** the three edges meeting at one corner round together, leaving exactly one
+    spherical patch whose three corners are the ball centre plus `r` along each face normal;
+  - a corner with only SOME of its edges selected is refused **by name**, the solid unchanged, and
+    the message says that is the case rather than reporting a geometric failure — the ball would
+    have to run off a rounded edge onto one staying sharp, which is a setback blend;
+  - a corner whose three faces are not mutually perpendicular is refused by name: its patch is a
+    general spherical triangle rather than an octant, so not an iso-rectangle and not closed-form;
   - a concave edge is refused by name;
   - one Ctrl+Z restores the pre-fillet solid in a single step;
   - a filleted solid saves and reloads from `.gs` with the same mass properties and topology;
@@ -7203,23 +7212,29 @@ capability that does not exist. They are recorded here rather than quietly dropp
     a solid that later operations refuse.
 - Owner-layer: Domain (`brep::FilletEdge` — the geometry and the precondition), Commands (the
   `FILLET` verb on a sub-object edge selection, and the undo step)
-- Status: accepted — **increment 1 delivered 2026-09-08**: the kernel (2026-09-05, TASK-210) and the
-  `FILLET` command on a sub-object edge selection (TASK-217). `brep::FilletEdge` rounds one straight
-  convex edge between two planar faces, `brep::FilletEdges` applies several that share no vertex as
-  one operation, and typed `FILLET <radius>` reaches both — Ctrl+click names the edge, exactly as
-  PRESSPULL is paired with the face pick. Every refusal is pre-checked and reported by name with the
-  solid untouched (issue #148 acceptance 6). **Issue #148 acceptance 5 remains HALF met**: single
-  edges work, edge CHAINS do not, because two fillets meeting at a corner need the spherical patch
-  of increment 2. Increment 3 is the concave edge; increment 4 is an OBLIQUE end face, whose
-  boundary is an ellipse rather than a circle; a circular rim between a plane and a cylinder (a
-  torus fillet) is its own requirement and is where REQ-321's general trim loops first become
-  necessary. CHAMFER is a separate requirement — it shares the edge selection and the refusal shape
-  but none of the surface geometry.
+- Status: accepted — **increments 1 and 2 delivered** (2026-09-05 / 2026-09-08). Increment 1: the
+  kernel (TASK-210) and the `FILLET` command on a sub-object edge selection (TASK-217). Increment 2:
+  edge CHAINS and the spherical corner patch (TASK-218), which **closes issue #148 acceptance 5 for
+  the fillet** — all twelve edges of a box round in one operation, against the rounded-box closed
+  forms. `brep::FilletEdges` builds every requested edge in ONE pass; the sequential form of
+  increment 1 was retired because after the first fillet the shared vertex is gone and a second
+  arriving there finds a cylinder where it needs a plane.
+  **Still refused, each by name and each its own increment:** a corner with only SOME of its edges
+  selected (`FilletCornerPartial` — the ball would run off onto an edge staying sharp, a setback
+  blend); a corner whose three faces are not mutually perpendicular (`FilletCornerNotOrthogonal` —
+  its patch is a general spherical triangle rather than an octant, so not an iso-rectangle, and it
+  needs REQ-321's general trim loops and with them a numeric area instead of the closed form); a
+  CONCAVE edge; and an OBLIQUE end face, whose boundary is an ellipse rather than a circle. A
+  circular rim between a plane and a cylinder (a torus fillet) is its own requirement. CHAMFER is a
+  separate requirement — it shares the edge selection and the refusal shape but none of the surface
+  geometry.
 - Revisions: 2026-09-05 — initial. Scope (straight convex edges between planar faces; a shared
   corner refused) chosen by the user, 2026-09-05. 2026-09-05 — two acceptance numbers corrected by
   the implementation: the filleted box's AREA (`792 + 22*pi`, not `800 + 18*pi`) and the claim that a
   wedge gives an elliptical end curve (it does not; that needs an oblique end face). See the two
-  bullets above, and D-2026-09-05-c.
+  bullets above, and D-2026-09-05-c. 2026-09-08 — increment 2 (D-2026-09-08-a): edge chains and the
+  spherical corner patch, with acceptance extended to the rounded-box closed forms `1120 + 344*pi/3`
+  and `368 + 120*pi` for a 20 x 10 x 8 box at r = 2, topology 24/48/26.
 
 
 ### REQ-100 — Frame budget
@@ -8120,7 +8135,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
 | REQ-305 | Commands/Viewport | done (GitHub issue #87, D-2026-08-25-m, TASK-111 — relabeled from REQ-304/TASK-109 while merging `master` into `beta`, see the requirement's own header note). ARRAY (rectangular + polar) follows the MOVE/COPY/ROTATE/SCALE/MIRROR transform-command shape end to end; survey points excluded from the array selection, confirmed with the user (D-2026-08-25-m addendum). Amended once (D-2026-08-25-n, TASK-112): the shared "select objects" step was click-or-box-and-accumulate-until-Enter for MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY (STRETCH excluded — its crossing box is load-bearing geometry, REQ-103 step 5), replacing the box-only shape all seven originally shared. `GoSurveyTests.exe` 542/542, headless transcript corpus green (1 pre-existing disabled, unrelated) | accepted |
 | REQ-318 | Domain/UI | accepted, increment 1 of 2 delivered — the SHARED pick query (GitHub issue #148, D-2026-09-03-c, ADR-049, TASK-189). **What was new is not what the issue claimed.** The ray/triangle → `triFace` → `ClosestPointOnSurface` pipeline already shipped with REQ-313, inside `src/viewport/CadSnap.cpp`; what it could not do was serve a second caller, because `RayHitSolidFace`, `ClosestRayPointToEdge` and `RayNearBounds` were file-private. So increment 1 is a *consolidation*: `ray3d::RayTriangleIntersect` and the new pure `src/util/solidpick.{hpp,cpp}` are the one home, and `CadSnap` now routes through both instead of keeping its own copies. That mattered concretely — the snap copy used an absolute determinant epsilon and exact barycentric bounds while the shared one is scale-relative with a barycentric slack, so on the hairline crack between two faces of the deliberately unwelded tessellation the two disagreed: snap reported nothing where a selection would report a hit, and a user would have seen the snap marker and the sub-object highlight name different things under one cursor. Above the geometry, what is genuinely new is the **expiring sub-object reference** (an index is durable across a topology-preserving edit and meaningless across one that changes the counts, so it is paired with a `weak_ptr` to the solid and expires rather than re-binding), and precedence and occlusion as stated rules. The projection remains the sharpest point and is measured: a raw triangle hit sits 0.00986 ft off a cylinder's true surface at the shipping chord tolerance — inside REQ-101's ±0.01 ft but 98.6% of the whole budget — and projected the residual is at the arithmetic floor. **The tests assert the picked AZIMUTH as well as the radius**, because `ClosestPointOnSurface` rescales any nearby point to exactly `r`: a radius assertion alone cannot fail for the reason it appears to test, and an earlier draft of this row cited one that could not. Occlusion is measured against the nearest *triangle* rather than the nearest usable face, so a corrupt face id cannot move the baseline to the far side of the solid; the ray is normalized on entry, because `RayTriangleIntersect`'s parameter scales as `1/\|dir\|` and `RayPointDistance`'s as `\|dir\|`, which on a non-unit ray makes the occlusion comparison meaningless rather than merely imprecise; and the curved-edge chord budget keys on the curve KIND, not on `sweep`, which a `CurveKind::Intersection` edge leaves zero. Increment 2 is the selection mode, its store, the highlight treatment and coexistence with the entity pick — where #148 acceptance criteria 1 and 2 are actually met. | `SolidPickTests` (21 cases: cylinder radius AND azimuth from 24 azimuths; the same oblique geometry passing at storage magnitude and failing at absolute state-plane magnitude, which pins the local-coordinates precondition with evidence rather than prose; near-face-wins from both directions; vertex/edge/face precedence; zero tolerance disables a kind; occluded far-side vertex refused, and still refused when the occluding triangle's id is corrupt; a non-unit ray giving an identical answer and an unchanged depth; a ray just outside the silhouette still reaching the edges; the rim picked on the true arc; and refusals for a miss, a solid behind the cursor, a degenerate ray, a null result, mismatched buffers and an empty solid) + `Ray3dTests` (10 new cases for the primitive, including a hit on a shared edge reported by both triangles and a 0.25 ft triangle at easting 2e6 — the case an absolute degeneracy epsilon would reject). The refactored snap path is covered by the existing `GoSurveySnapTests` and the `req313-solid-picked` headless transcript, both unchanged and green. Full suite 1062/1062. | accepted |
-| REQ-323 | Domain/Commands | increment 1 delivered — kernel (TASK-210) + the FILLET command (TASK-217). `FilletEdgeTests` (a box against both closed forms: volume 1520+20pi, area 792+22pi, topology 10/15/7; a WEDGE whose 68.199-degree dihedral gives setback 40/(sqrt(464)-8) and not r; every refusal by name) + `headless.req323-fillet-solid` (Ctrl+click an edge then `FILLET 2`; the selection CLEARED because the topology changed; one UNDO; refusals at r=8/100/0/non-numeric leaving the solid untouched; a shared corner refused BY NAME; two disjoint edges as one operation; a .gs round-trip; and a bare FILLET with nothing selected still being the 2D command). #148 acceptance 5 half met — single edges yes, CHAINS no, pending increment 2 |
+| REQ-323 | Domain/Commands | increments 1 and 2 delivered — kernel (TASK-210), the FILLET command (TASK-217), edge chains + the spherical corner patch (TASK-218). `FilletEdgeTests` (a box against the single-edge closed forms volume 1520+20pi / area 792+22pi; ALL TWELVE edges against the rounded-box forms 1120+344pi/3 and 368+120pi with topology 24/48/26 and 6 planes + 12 cylinders + 8 octants; a WEDGE whose 68.199-degree dihedral gives setback 40/(sqrt(464)-8); every refusal by name including a partial and an oblique corner) + `headless.req323-fillet-solid` (Ctrl+click edges then `FILLET 2`, a three-edge corner, the selection cleared, UNDO, four refusals leaving the solid untouched, a .gs round-trip, and a bare FILLET still being the 2D command). **#148 acceptance 5 closed for the fillet**; chamfer is a separate requirement |
 | REQ-326 | Domain/Commands, UI | done (GitHub issue #395, D-2026-09-07-a). `CadSnapTests.cpp` `[CadSnap][issue395]` (7 cases: Vertex + F4 master gate, Midpoint-on-edge, Nearest-to-face regression, Center-of-face on a planar box face, Center-of-face on a cylinder end-cap landing on the axis rather than a vertex average, Perpendicular's foot on a planar face, Knot enumeration against a hand-built `nurbs::Patch`) plus the 3 pre-existing `[req313]` solid-snap cases updated to the new per-mode flags. Full suite 1277/1278 (the one failure, `a missing or corrupt store loads as an empty list`, is pre-existing on `beta` and unrelated — reproduced against `beta` directly). |
 
 ---
