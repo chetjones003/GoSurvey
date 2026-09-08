@@ -23854,21 +23854,69 @@ static bool CutterCurvePlaneAndConic(const AppCommandState& st, const SelectedEn
   return false;
 }
 
-/// issue #399 increments 1-2: TRIM's target-pick, cutting-edge collection and pick-side math are all
+/// issue #399 increment 3: nearest STRAIGHT-CHORD segment of polyline \p polyIx to the pick ray (or
+/// the flat wx,wy when no ray applies). Matches the existing 2D TRIM's own polyline treatment
+/// exactly — \ref PickClosestTrimTarget and \ref CollectAllDrawingCutSegmentsExceptTarget both walk
+/// a polyline as a chain of straight vi→vi+1 chords, with no bulge/tilted-arc awareness at all — so
+/// this is not a narrowing of scope, it is the SAME limitation the 2D path already has. A curved
+/// (bulge != 0) polyline segment is a later, separate piece of work (REQ-325's tilted-arc machinery
+/// would be the way in), not part of issue #399. Returns false if the polyline has no segment within
+/// tolerance of the pick.
+static bool FindNearestPolylineSegment3D(const AppCommandState& st, int polyIx, double wx, double wy,
+                                         const ray3d::Ray* pickRay, int* outVi, ray3d::Vec3* outA,
+                                         ray3d::Vec3* outB) {
+  if (polyIx < 0 || static_cast<size_t>(polyIx) + 1 >= st.userPolylineOffsets.size())
+    return false;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(polyIx)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(polyIx) + 1];
+  const bool closed =
+      static_cast<size_t>(polyIx) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(polyIx)];
+  const bool useRay = pickRay != nullptr && pickRay->valid();
+  bool any = false;
+  double best = 0.0;
+  auto tryEdge = [&](int vi) {
+    const size_t a3 = static_cast<size_t>(vi) * 3, b3 = static_cast<size_t>(vi + 1) * 3;
+    if (b3 + 2 >= st.userPolylineVerts.size())
+      return;
+    const ray3d::Vec3 a{st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[a3 + 2]};
+    const ray3d::Vec3 b{st.userPolylineVerts[b3], st.userPolylineVerts[b3 + 1], st.userPolylineVerts[b3 + 2]};
+    double d2;
+    if (useRay) {
+      const double d = ray3d::RaySegmentDistance(*pickRay, a, b);
+      d2 = d * d;
+    } else {
+      d2 = PickDistSqPointSegmentD(wx, wy, a.x, a.y, b.x, b.y);
+    }
+    if (any && d2 >= best - 1e-12)
+      return;
+    any = true;
+    best = d2;
+    *outVi = vi;
+    *outA = a;
+    *outB = b;
+  };
+  for (int vi = v0; vi + 1 < v1; ++vi)
+    tryEdge(vi);
+  if (closed && v1 - v0 >= 2)
+    tryEdge(v1 - 1);
+  return any;
+}
+
+/// issue #399 increments 1-3: TRIM's target-pick, cutting-edge collection and pick-side math are all
 /// flat world-XY (\ref TrimSegmentIntersectPickSide, \ref PickClosestTrimTarget) — correct only in
 /// plan view under the world UCS. An orbited camera or a non-world UCS needs the pick resolved
 /// through the camera ray (same seam 3D Object Snap / issue #395 and FILLET / issue #373 use) and
 /// the crossing found in true 3D, not the screen-space projection.
 ///
-/// Scope: the TARGET being shortened must be a Line (matching the existing 2D TRIM, which likewise
-/// never supports Circle/Arc/Ellipse — only Line/Polyline — as a trim TARGET; Polyline targets are
-/// a later increment, not a regression here). The CUTTING edges may be Line (increment 1) or
-/// Circle/Arc/Ellipse (increment 2): a coplanar cutter intersects the target exactly; a skew one
-/// (no shared plane) is silently skipped rather than guessed at — REQ-399's "otherwise report no
+/// Scope: the TARGET being shortened is a Line (increments 1-2) or a straight polyline segment
+/// (increment 3, \ref FindNearestPolylineSegment3D). The CUTTING edges may be Line (increment 1),
+/// Circle/Arc/Ellipse (increment 2), or a polyline's straight segments (increment 3, walked chord by
+/// chord the same way the 2D path already does). A coplanar cutter intersects the target exactly; a
+/// skew line/polyline cutter uses closest-approach-within-tolerance (\ref SegSegClosest3D); a skew
+/// curved cutter is silently skipped rather than guessed at — REQ-399's "otherwise report no
 /// intersection" rule — since a closest-approach solve for a line against a curved cutting edge has
-/// no closed form and is deferred to a later increment. Any other cutting-edge type (Polyline) is
-/// refused by name. Returns true once the pick has been fully handled (trimmed or refused with a
-/// log message) so the caller must not also run the 2D path.
+/// no closed form and stays deferred. Returns true once the pick has been fully handled (trimmed or
+/// refused with a log message) so the caller must not also run the 2D path.
 static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWorld,
                           const ray3d::Ray& pickRay, std::vector<std::string>& log) {
   auto typeName = [](SelectedEntity::Type t) -> const char* {
@@ -23882,7 +23930,8 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
   };
   auto isSupportedCutter = [](SelectedEntity::Type t) {
     return t == SelectedEntity::Type::LineSeg || t == SelectedEntity::Type::Circle ||
-           t == SelectedEntity::Type::Arc || t == SelectedEntity::Type::Ellipse;
+           t == SelectedEntity::Type::Arc || t == SelectedEntity::Type::Ellipse ||
+           t == SelectedEntity::Type::Polyline;
   };
 
   SelectedEntity hit{};
@@ -23898,7 +23947,7 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
       log.push_back("TRIM — nothing to trim at pick.");
     return false;
   }
-  if (hit.type != SelectedEntity::Type::LineSeg) {
+  if (hit.type != SelectedEntity::Type::LineSeg && hit.type != SelectedEntity::Type::Polyline) {
     log.push_back(std::string("TRIM — 3D ") + typeName(hit.type) +
                   " targets not yet supported in an orbited view or non-world UCS; refused.");
     return false;
@@ -23911,13 +23960,27 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
     }
   }
 
-  const size_t tk = static_cast<size_t>(hit.index) * 6;
-  if (tk + 5 >= st.userLinesFlat.size()) {
-    log.push_back("TRIM — nothing to trim at pick.");
-    return false;
+  // issue #399 increment 3: a Polyline target resolves to the nearest STRAIGHT chord (same limit
+  // the 2D path already has, \ref FindNearestPolylineSegment3D); a Line target keeps using its own
+  // two endpoints directly, unchanged from increments 1-2.
+  const bool targetIsPoly = hit.type == SelectedEntity::Type::Polyline;
+  size_t tk = 0;
+  int targetVi = -1;
+  ray3d::Vec3 ta{}, tb{};
+  if (targetIsPoly) {
+    if (!FindNearestPolylineSegment3D(st, hit.index, wx, wy, &pickRay, &targetVi, &ta, &tb)) {
+      log.push_back("TRIM — nothing to trim at pick.");
+      return false;
+    }
+  } else {
+    tk = static_cast<size_t>(hit.index) * 6;
+    if (tk + 5 >= st.userLinesFlat.size()) {
+      log.push_back("TRIM — nothing to trim at pick.");
+      return false;
+    }
+    ta = {st.userLinesFlat[tk], st.userLinesFlat[tk + 1], st.userLinesFlat[tk + 2]};
+    tb = {st.userLinesFlat[tk + 3], st.userLinesFlat[tk + 4], st.userLinesFlat[tk + 5]};
   }
-  const ray3d::Vec3 ta{st.userLinesFlat[tk], st.userLinesFlat[tk + 1], st.userLinesFlat[tk + 2]};
-  const ray3d::Vec3 tb{st.userLinesFlat[tk + 3], st.userLinesFlat[tk + 4], st.userLinesFlat[tk + 5]};
   const double targetLen = ray3d::Length(ray3d::Sub(tb, ta));
   if (targetLen < 1e-9) {
     log.push_back("TRIM — degenerate segment.");
@@ -23933,26 +23996,59 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
   std::vector<double> ts;
   ray3d::Vec3 bestPoint{};
   bool haveBestPoint = false;
+  // Tries one candidate cutting segment q against the target, shared by the Line and Polyline-chord
+  // cutter branches below so the closest-approach/tolerance/endpoint rules stay in exactly one place.
+  auto tryLineCutSeg = [&](const ray3d::Vec3& qa, const ray3d::Vec3& qb) {
+    double s = 0., t = 0.;
+    const double gap2 = SegSegClosest3D(ta, tb, qa, qb, &s, &t);
+    if (gap2 > epsGeom * epsGeom)
+      return;  // farther apart than tolerance at closest approach: not an intersection
+    if (s <= epsT || s >= 1.0 - epsT)
+      return;  // touches only at (or past) an existing endpoint of the target
+    ts.push_back(s);
+    if (!haveBestPoint) {
+      haveBestPoint = true;
+      bestPoint = ray3d::Add(ta, ray3d::Scale(ray3d::Sub(tb, ta), s));
+    }
+  };
+
   for (const SelectedEntity& c : st.trimCutters) {
     if (c.type == SelectedEntity::Type::LineSeg) {
-      if (c.index == hit.index)
-        continue;
+      if (c.index == hit.index && !targetIsPoly)
+        continue;  // a line can't cut itself
       const size_t ck = static_cast<size_t>(c.index) * 6;
       if (ck + 5 >= st.userLinesFlat.size())
         continue;
       const ray3d::Vec3 qa{st.userLinesFlat[ck], st.userLinesFlat[ck + 1], st.userLinesFlat[ck + 2]};
       const ray3d::Vec3 qb{st.userLinesFlat[ck + 3], st.userLinesFlat[ck + 4], st.userLinesFlat[ck + 5]};
-      double s = 0., t = 0.;
-      const double gap2 = SegSegClosest3D(ta, tb, qa, qb, &s, &t);
-      if (gap2 > epsGeom * epsGeom)
-        continue;  // farther apart than tolerance at closest approach: not an intersection
-      if (s <= epsT || s >= 1.0 - epsT)
-        continue;  // touches only at (or past) an existing endpoint of the target
-      ts.push_back(s);
-      if (!haveBestPoint) {
-        haveBestPoint = true;
-        bestPoint = ray3d::Add(ta, ray3d::Scale(ray3d::Sub(tb, ta), s));
-      }
+      tryLineCutSeg(qa, qb);
+      continue;
+    }
+    if (c.type == SelectedEntity::Type::Polyline) {
+      // issue #399 increment 3: walk the cutter polyline as a chain of straight chords, same as the
+      // 2D path's own \ref CollectAllDrawingCutSegmentsExceptTarget — every segment is a candidate
+      // EXCEPT the target's own segment when the target is this same polyline (a segment can't cut
+      // itself, but every OTHER segment of the target's own polyline still can).
+      if (c.index < 0 || static_cast<size_t>(c.index) + 1 >= st.userPolylineOffsets.size())
+        continue;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(c.index)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(c.index) + 1];
+      const bool closed = static_cast<size_t>(c.index) < st.userPolylineClosed.size() &&
+                          st.userPolylineClosed[static_cast<size_t>(c.index)];
+      auto tryEdge = [&](int vi) {
+        if (targetIsPoly && c.index == hit.index && vi == targetVi)
+          return;
+        const size_t a3 = static_cast<size_t>(vi) * 3, b3 = static_cast<size_t>(vi + 1) * 3;
+        if (b3 + 2 >= st.userPolylineVerts.size())
+          return;
+        const ray3d::Vec3 qa{st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[a3 + 2]};
+        const ray3d::Vec3 qb{st.userPolylineVerts[b3], st.userPolylineVerts[b3 + 1], st.userPolylineVerts[b3 + 2]};
+        tryLineCutSeg(qa, qb);
+      };
+      for (int vi = v0; vi + 1 < v1; ++vi)
+        tryEdge(vi);
+      if (closed && v1 - v0 >= 2)
+        tryEdge(v1 - 1);
       continue;
     }
     // issue #399 increment 2: Circle/Arc/Ellipse cutting edge. Coplanarity is judged against the
@@ -24014,23 +24110,38 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
   const bool trimA = u < tNear;
 
   PushUndoSnapshot(st, "Trim");
-  if (trimA) {
-    st.userLinesFlat[tk] = static_cast<float>(cut.x);
-    st.userLinesFlat[tk + 1] = static_cast<float>(cut.y);
-    st.userLinesFlat[tk + 2] = static_cast<float>(cut.z);
+  if (targetIsPoly) {
+    // issue #399 increment 3: moves whichever end of the picked chord (\p targetVi / \p targetVi+1)
+    // sits nearer the cut point — the SAME vertex the 2D \ref TrimSegmentToCuttingEdges Poly branch
+    // moves, now written with all three coordinates instead of just x,y.
+    const int vi = trimA ? targetVi : targetVi + 1;
+    const size_t vk = static_cast<size_t>(vi) * 3;
+    if (vk + 2 >= st.userPolylineVerts.size()) {
+      log.push_back("TRIM — nothing to trim at pick.");
+      return false;
+    }
+    st.userPolylineVerts[vk] = static_cast<float>(cut.x);
+    st.userPolylineVerts[vk + 1] = static_cast<float>(cut.y);
+    st.userPolylineVerts[vk + 2] = static_cast<float>(cut.z);
   } else {
-    st.userLinesFlat[tk + 3] = static_cast<float>(cut.x);
-    st.userLinesFlat[tk + 4] = static_cast<float>(cut.y);
-    st.userLinesFlat[tk + 5] = static_cast<float>(cut.z);
-  }
-  const double newLen = ray3d::Length(ray3d::Sub(
-      ray3d::Vec3{st.userLinesFlat[tk + 3], st.userLinesFlat[tk + 4], st.userLinesFlat[tk + 5]},
-      ray3d::Vec3{st.userLinesFlat[tk], st.userLinesFlat[tk + 1], st.userLinesFlat[tk + 2]}));
-  if (newLen < 1e-6) {
-    st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(tk),
-                           st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(tk + 6));
-    if (static_cast<size_t>(hit.index) < st.userLineAttrs.size())
-      st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(hit.index));
+    if (trimA) {
+      st.userLinesFlat[tk] = static_cast<float>(cut.x);
+      st.userLinesFlat[tk + 1] = static_cast<float>(cut.y);
+      st.userLinesFlat[tk + 2] = static_cast<float>(cut.z);
+    } else {
+      st.userLinesFlat[tk + 3] = static_cast<float>(cut.x);
+      st.userLinesFlat[tk + 4] = static_cast<float>(cut.y);
+      st.userLinesFlat[tk + 5] = static_cast<float>(cut.z);
+    }
+    const double newLen = ray3d::Length(ray3d::Sub(
+        ray3d::Vec3{st.userLinesFlat[tk + 3], st.userLinesFlat[tk + 4], st.userLinesFlat[tk + 5]},
+        ray3d::Vec3{st.userLinesFlat[tk], st.userLinesFlat[tk + 1], st.userLinesFlat[tk + 2]}));
+    if (newLen < 1e-6) {
+      st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(tk),
+                             st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(tk + 6));
+      if (static_cast<size_t>(hit.index) < st.userLineAttrs.size())
+        st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(hit.index));
+    }
   }
   log.push_back("TRIM — segment shortened.");
   BumpCadGpuCache(st);
