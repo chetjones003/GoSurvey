@@ -1,7 +1,7 @@
 # TASK-217 — Issue #400 (increment 4): polar ARRAY interactive fill-angle + live preview honour the active UCS plane
 
 - Type:    bug fix (3D integration gap left by increments 1–3)
-- Status:  implemented — on branch feat/issue400-polar-angle-preview, pending manual GUI pass
+- Status:  COMPLETE — PR #418 (feat/issue400-polar-angle-preview → beta), manual GUI pass done
 - Opened:  2026-09-08
 - Owner:   Workshop
 - GitHub:  #400
@@ -127,3 +127,25 @@ centre-Z limitation actually bites a common workflow, raise it then as its own i
 - Known limitation (unchanged): typed polar centre `arrayCenterZ` from `CadCommitElevation`
   (UCS-origin elevation). Correct for a centre on the work plane; a 3D-off-plane typed centre is
   not covered and not in the report.
+
+## 8. Completion report
+
+- **Outcome:** PASS. Issue #400 increment 4 delivered on PR #418.
+- **Commits (feat/issue400-polar-angle-preview):**
+  1. fill-angle pick + live preview resolve in the active UCS plane
+  2. code-review follow-ups (inverted-Z UCS ghost sense; FeatureLine translate/rotate gaps)
+  3. polar no-rotate anchor Z from the selection's 3D bounds centre (`CadGizmoAnchorWorld`),
+     not `CadCommitElevation` — the "copies fly outward" defect found in the first manual pass
+  4. REQ-305 revision note
+- **Tests:** `tests/headless/transcripts/issue400-array-ucs-plane.txt` +3 cases (World-UCS picked
+  angle regression; tilted-UCS picked angle; tilted-UCS rotate-items=No with the selection off the
+  work-plane elevation). Each new case verified to fail without its fix. Full `dev/test`: pass
+  except the pre-existing unrelated `RecentDrawingsTests` "missing or corrupt store" failure on
+  `beta`.
+- **Manual GUI pass (FRONT UCS, user):** preview and committed result now match for both
+  rotate-items = Yes and No; the "Rotate items?" prompt semantics confirmed as intended
+  (AutoCAD parity — not a defect).
+- **SPEC:** no criteria change; REQ-305 revision note added (2026-09-08).
+- **Assumptions / debt:** the typed-centre-Z limitation above; the FeatureLine preview omits
+  copies when the instance delta has a Z component (tilted-plane rectangular array) rather than
+  drawing them misplaced.
