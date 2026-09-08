@@ -1138,3 +1138,169 @@ TEST_CASE("Orbited: a survey point CENTRE is acquired from over its marker at a 
   CHECK(hit.x == Approx(0.f).margin(1e-4));
   CHECK(hit.y == Approx(0.f).margin(1e-4));
 }
+
+// --- REQ-330 / GitHub issue #401: Quadrant object snap for circles and arcs -------------------
+//
+// The four "compass" points of a circle/arc: one radius from the centre along the active UCS X and
+// Y axes, projected onto the curve's own plane. N/E/S/W in a TOP view with the world UCS.
+
+namespace {
+// Only the Quadrant toggle on, so nothing else can answer and the assertions are unambiguous.
+AppCommandState QuadOnlyState() {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapMidpoint = false;
+  st.objectSnapCenter = false;
+  st.objectSnapPerpendicular = false;
+  st.objectSnapSurveyPoint = false;
+  st.objectSnapGeometricCenter = false;
+  st.objectSnapIntersection = false;
+  st.objectSnapQuadrant = true;
+  return st;
+}
+} // namespace
+
+TEST_CASE("Quadrant snap TOP view world UCS offers the circle's N/E/S/W points", "[CadSnap][issue401]") {
+  AppCommandState st = QuadOnlyState();
+  st.userCirclesCxCyZR = {0.f, 0.f, 0.f, 10.f};  // centre origin, radius 10, flat
+
+  const CadSnap::Hit east = CadSnap::FindBest(9.5, 0.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(east.valid);
+  CHECK(east.kind == Kind::Quadrant);
+  CHECK(east.x == Approx(10.f).margin(1e-3));
+  CHECK(east.y == Approx(0.f).margin(1e-3));
+
+  const CadSnap::Hit north = CadSnap::FindBest(0.0, 9.5, st, /*commandActive=*/true, kTol);
+  REQUIRE(north.valid);
+  CHECK(north.x == Approx(0.f).margin(1e-3));
+  CHECK(north.y == Approx(10.f).margin(1e-3));
+
+  const CadSnap::Hit west = CadSnap::FindBest(-9.5, 0.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(west.valid);
+  CHECK(west.x == Approx(-10.f).margin(1e-3));
+
+  const CadSnap::Hit south = CadSnap::FindBest(0.0, -9.5, st, /*commandActive=*/true, kTol);
+  REQUIRE(south.valid);
+  CHECK(south.y == Approx(-10.f).margin(1e-3));
+}
+
+TEST_CASE("Quadrant snap rotates to follow a UCS turned about Z", "[CadSnap][issue401]") {
+  AppCommandState st = QuadOnlyState();
+  st.userCirclesCxCyZR = {0.f, 0.f, 0.f, 10.f};
+  st.activeUcs = ucs::RotatedAboutZ(ucs::Ucs{}, 40.0);  // plan view, UCS spun 40 degrees
+
+  // The +UCS-X quadrant is now 10 * (cos40, sin40) = (7.6604, 6.4279).
+  const float qx = 10.f * std::cos(40.f * kPi / 180.f);
+  const float qy = 10.f * std::sin(40.f * kPi / 180.f);
+  const CadSnap::Hit hit = CadSnap::FindBest(qx, qy, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Quadrant);
+  CHECK(hit.x == Approx(qx).margin(1e-3));
+  CHECK(hit.y == Approx(qy).margin(1e-3));
+
+  // And the world-X point (10, 0) is no longer a quadrant of this circle.
+  const CadSnap::Hit worldEast = CadSnap::FindBest(10.0, 0.0, st, /*commandActive=*/true, /*tolWorld=*/1.0f);
+  CHECK_FALSE(worldEast.valid);
+}
+
+TEST_CASE("Quadrant snap keeps all four points on a tilted circle from an orbited camera",
+         "[CadSnap][issue401]") {
+  AppCommandState st = QuadOnlyState();
+  // Circle tilted 45 degrees about world X: normal (0, -sin45, cos45).
+  const float s = std::sqrt(0.5f);
+  st.userCirclesCxCyZR = {0.f, 0.f, 0.f, 10.f};
+  st.userCircleNormals = {0.f, -s, s};
+  // World UCS. +X projects onto the plane unchanged; +Y projects to (0, 0.7071, 0.7071) normalised,
+  // so that quadrant point is 10 * (0, 0.7071, 0.7071) = (0, 7.071, 7.071).
+  const ray3d::Ray ray = RayAt(0.0, 7.071, 7.071);
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 7.071, st, /*commandActive=*/false, kTol,
+                                             /*exclude=*/{}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Quadrant);
+  // On the circle: 10 from the centre.
+  const float d = std::sqrt(hit.x * hit.x + hit.y * hit.y + hit.z * hit.z);
+  CHECK(d == Approx(10.f).margin(1e-2));
+  // On the circle's plane: (point - centre) . normal == 0.
+  CHECK(hit.y * (-s) + hit.z * s == Approx(0.f).margin(1e-2));
+
+  // The +X quadrant is still exactly (10, 0, 0).
+  const ray3d::Ray rayX = RayAt(10.0, 0.0, 0.0);
+  const CadSnap::Hit hx = CadSnap::FindBest(10.0, 0.0, st, /*commandActive=*/false, kTol,
+                                            /*exclude=*/{}, &rayX);
+  REQUIRE(hx.valid);
+  CHECK(hx.x == Approx(10.f).margin(1e-2));
+  CHECK(hx.y == Approx(0.f).margin(1e-2));
+  CHECK(hx.z == Approx(0.f).margin(1e-2));
+}
+
+TEST_CASE("Quadrant snap falls back to the circle's own axes when its plane is perpendicular to the UCS",
+         "[CadSnap][issue401]") {
+  AppCommandState st = QuadOnlyState();
+  // The "wall" circle: normal (0, -1, 0), so its plane is perpendicular to the world UCS plane.
+  // Projecting +UCS-Y onto it degenerates, so the snap uses the circle plane's local axes:
+  // FromNormal((0,-1,0)) -> xAxis (1,0,0), yAxis (0,0,1). Four points: (10,0,0), (0,0,10),
+  // (-10,0,0), (0,0,-10) -- all distinct, all on the circle.
+  st.userCirclesCxCyZR = {0.f, 0.f, 0.f, 10.f};
+  st.userCircleNormals = {0.f, -1.f, 0.f};
+
+  const ray3d::Ray rup = RayAt(0.0, 0.0, 10.0);
+  const CadSnap::Hit top = CadSnap::FindBest(0.0, 0.0, st, /*commandActive=*/false, kTol,
+                                             /*exclude=*/{}, &rup);
+  REQUIRE(top.valid);
+  CHECK(top.kind == Kind::Quadrant);
+  CHECK(top.x == Approx(0.f).margin(1e-3));
+  CHECK(top.y == Approx(0.f).margin(1e-3));
+  CHECK(top.z == Approx(10.f).margin(1e-3));
+
+  const ray3d::Ray side = RayAt(10.0, 0.0, 0.0);
+  const CadSnap::Hit east = CadSnap::FindBest(10.0, 0.0, st, /*commandActive=*/false, kTol,
+                                              /*exclude=*/{}, &side);
+  REQUIRE(east.valid);
+  CHECK(east.x == Approx(10.f).margin(1e-3));
+  CHECK(east.z == Approx(0.f).margin(1e-3));
+}
+
+TEST_CASE("Quadrant snap on an arc offers only the quadrant points inside the sweep", "[CadSnap][issue401]") {
+  AppCommandState st = QuadOnlyState();
+  CadArc a;  // flat arc, centre origin, radius 10, sweeping 0 to 90 degrees
+  a.cx = 0.f;
+  a.cy = 0.f;
+  a.r = 10.f;
+  a.startRad = 0.f;
+  a.sweepRad = kPi * 0.5f;
+  st.userArcs.push_back(a);
+
+  // 0 degrees (10, 0) and 90 degrees (0, 10) are inside the sweep.
+  const CadSnap::Hit q0 = CadSnap::FindBest(9.5, 0.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(q0.valid);
+  CHECK(q0.kind == Kind::Quadrant);
+  CHECK(q0.x == Approx(10.f).margin(1e-3));
+
+  const CadSnap::Hit q90 = CadSnap::FindBest(0.0, 9.5, st, /*commandActive=*/true, kTol);
+  REQUIRE(q90.valid);
+  CHECK(q90.y == Approx(10.f).margin(1e-3));
+
+  // 180 degrees (-10, 0) and 270 degrees (0, -10) are outside the sweep -- nothing there.
+  const CadSnap::Hit q180 = CadSnap::FindBest(-9.5, 0.0, st, /*commandActive=*/true, kTol);
+  CHECK_FALSE(q180.valid);
+  const CadSnap::Hit q270 = CadSnap::FindBest(0.0, -9.5, st, /*commandActive=*/true, kTol);
+  CHECK_FALSE(q270.valid);
+}
+
+TEST_CASE("Quadrant snap obeys its per-type toggle and the snap-once override", "[CadSnap][issue401]") {
+  AppCommandState st = QuadOnlyState();
+  st.userCirclesCxCyZR = {0.f, 0.f, 0.f, 10.f};
+
+  // Toggle off: nothing offered even right on the quadrant point.
+  st.objectSnapQuadrant = false;
+  const CadSnap::Hit off = CadSnap::FindBest(10.0, 0.0, st, /*commandActive=*/true, kTol);
+  CHECK_FALSE(off.valid);
+
+  // Shift+right-click "snap once" override reaches it regardless of the toggle.
+  const Kind only = Kind::Quadrant;
+  const CadSnap::Hit forced = CadSnap::FindBest(9.5, 0.0, st, /*commandActive=*/true, kTol,
+                                                /*exclude=*/{}, /*pickRay=*/nullptr, &only);
+  REQUIRE(forced.valid);
+  CHECK(forced.kind == Kind::Quadrant);
+  CHECK(forced.x == Approx(10.f).margin(1e-3));
+}

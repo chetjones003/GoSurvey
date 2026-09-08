@@ -83,6 +83,71 @@ void ArcSnapPoint(const CadArc& a, const ucs::Ucs& plane, bool flat, double t, f
   *oz = static_cast<float>(p.z);
 }
 
+// --- Quadrant snap (REQ-330) -------------------------------------------------------------------
+
+/// True when angle \p t (radians) lies within the arc sweep [\p startRad, \p startRad+\p sweepRad],
+/// handling a negative sweep and wrap-around. A (near-)full turn contains every angle.
+[[nodiscard]] bool AngleWithinSweep(double startRad, double sweepRad, double t) {
+  constexpr double kTwoPi = 6.28318530717958647692;
+  if (std::fabs(sweepRad) >= kTwoPi - 1.e-9)
+    return true;
+  double rel = std::fmod((sweepRad >= 0.0 ? t - startRad : startRad - t), kTwoPi);
+  if (rel < 0.0)
+    rel += kTwoPi;
+  return rel <= std::fabs(sweepRad) + 1.e-9;
+}
+
+/// The four world-space unit directions from a circle/arc centre to its quadrant points: the active
+/// UCS X and Y axes projected onto the curve's plane \p curvePlane, normalised, as `+X, +Y, -X, -Y`.
+///
+/// When the curve plane is perpendicular to the UCS plane the two projected axes collapse onto one
+/// line (near-zero length, or near-parallel) — only two distinct points. \p dir is then filled with
+/// the curve plane's OWN local axes instead, so four evenly spaced on-curve points are always
+/// returned (REQ-330 / D-2026-09-08-d). Returns true when the UCS projection was used, false on the
+/// documented fallback.
+bool QuadrantDirections(const ucs::Ucs& curvePlane, const ucs::Ucs& activeUcs, ray3d::Vec3 dir[4]) {
+  const ray3d::Vec3 n = curvePlane.zAxis;
+  const auto projectOntoPlane = [&](const ray3d::Vec3& d) {
+    return ray3d::Sub(d, ray3d::Scale(n, ray3d::Dot(d, n)));
+  };
+  ray3d::Vec3 px = projectOntoPlane(activeUcs.xAxis);
+  ray3d::Vec3 py = projectOntoPlane(activeUcs.yAxis);
+  const double lx = ray3d::Length(px);
+  const double ly = ray3d::Length(py);
+  bool degenerate = lx < 1.e-6 || ly < 1.e-6;
+  if (!degenerate) {
+    px = ray3d::Scale(px, 1.0 / lx);
+    py = ray3d::Scale(py, 1.0 / ly);
+    // Curve plane perpendicular to the UCS plane also shows up here as the two projected axes
+    // being (anti)parallel — still just two distinct points, so take the same fallback.
+    if (std::fabs(ray3d::Dot(px, py)) > 0.9999)
+      degenerate = true;
+  }
+  if (degenerate) {
+    dir[0] = curvePlane.xAxis;
+    dir[1] = curvePlane.yAxis;
+    dir[2] = ray3d::Scale(curvePlane.xAxis, -1.0);
+    dir[3] = ray3d::Scale(curvePlane.yAxis, -1.0);
+    return false;
+  }
+  dir[0] = px;
+  dir[1] = py;
+  dir[2] = ray3d::Scale(px, -1.0);
+  dir[3] = ray3d::Scale(py, -1.0);
+  return true;
+}
+
+/// The plane a standalone circle lies in (REQ-312 side-car normal), world +Z for a flat circle.
+[[nodiscard]] ucs::Ucs CircleSnapPlane(const std::vector<float>& circleNormals, size_t circleIdx, float cx,
+                                       float cy, float cz) {
+  float nx = kFlatNormalX;
+  float ny = kFlatNormalY;
+  float nz = kFlatNormalZ;
+  CircleNormalAt(circleNormals, circleIdx, &nx, &ny, &nz);
+  return CurvePlane(static_cast<double>(cx), static_cast<double>(cy), static_cast<double>(cz),
+                    static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz));
+}
+
 [[nodiscard]] float CircleCenterPickDistSq(float wx, float wy, float cx, float cy, float r, float tolWorld) {
   if (r <= 1.e-6f)
     return kHugePickDistSq;
@@ -822,6 +887,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   const bool wantEndpoint = want(Kind::Endpoint, cmd.objectSnapEndpoint);
   const bool wantMidpoint = want(Kind::Midpoint, cmd.objectSnapMidpoint);
   const bool wantCenter = want(Kind::Center, cmd.objectSnapCenter);
+  const bool wantQuadrant = want(Kind::Quadrant, cmd.objectSnapQuadrant);
   const bool wantGeometricCenter = want(Kind::GeometricCenter, cmd.objectSnapGeometricCenter);
   const bool wantIntersection = want(Kind::Intersection, cmd.objectSnapIntersection);
   const bool wantApparentIntersection = want(Kind::ApparentIntersection, cmd.objectSnapApparentIntersection);
@@ -880,18 +946,32 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   }
 
   const auto& C = cmd.userCirclesCxCyZR;
-  if (C.size() % 4 == 0 && wantCenter) {  // cx,cy,z,r
+  if (C.size() % 4 == 0 && (wantCenter || wantQuadrant)) {  // cx,cy,z,r
     for (size_t i = 0; i + 3 < C.size(); i += 4) {
       if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
           exclude.index == static_cast<int>(i / 4)) continue;
       const float cx = C[i];
       const float cy = C[i + 1];
+      const float cz = C[i + 2];
       const float r = C[i + 3];
-      float hx = 0.f;
-      float hy = 0.f;
-      const bool heur = CenterHeuristicPoint(acc, wx, wy, C[i + 2], &hx, &hy);
-      const float p2 = CircleCenterPickDistSq(hx, hy, cx, cy, r, tolWorld);
-      ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld, C[i + 2], /*heuristicAccept=*/heur);
+      if (wantCenter) {
+        float hx = 0.f;
+        float hy = 0.f;
+        const bool heur = CenterHeuristicPoint(acc, wx, wy, cz, &hx, &hy);
+        const float p2 = CircleCenterPickDistSq(hx, hy, cx, cy, r, tolWorld);
+        ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld, cz, /*heuristicAccept=*/heur);
+      }
+      if (wantQuadrant && r > 1.e-6f) {
+        // REQ-330: four points one radius out along the active UCS X/Y axes projected onto the
+        // circle's own plane (REQ-312) — so they land exactly on the circle at any orientation.
+        const ucs::Ucs plane = CircleSnapPlane(cmd.userCircleNormals, i / 4, cx, cy, cz);
+        ray3d::Vec3 dir[4];
+        QuadrantDirections(plane, cmd.activeUcs, dir);
+        for (const ray3d::Vec3& d : dir) {
+          Consider(&acc, wx, wy, static_cast<float>(cx + r * d.x), static_cast<float>(cy + r * d.y),
+                   Kind::Quadrant, tolWorld, static_cast<float>(cz + r * d.z));
+        }
+      }
     }
   }
 
@@ -1030,6 +1110,23 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       Consider(&acc, wx, wy, ex, ey, Kind::Endpoint, tolWorld, ez);
       ArcSnapPoint(a, arcPlane, arcFlat, tEnd, &ex, &ey, &ez);
       Consider(&acc, wx, wy, ex, ey, Kind::Endpoint, tolWorld, ez);
+    }
+    if (wantQuadrant) {
+      // REQ-330: the circle's four quadrant points, kept only where they fall inside the sweep.
+      // The angle test is in the arc's own plane frame, so it works for a tilted arc too.
+      const ucs::Ucs plane = CurvePlane(a);
+      ray3d::Vec3 dir[4];
+      QuadrantDirections(plane, cmd.activeUcs, dir);
+      const ray3d::Vec3 c{static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.z)};
+      for (const ray3d::Vec3& d : dir) {
+        const ray3d::Vec3 p = ray3d::Add(c, ray3d::Scale(d, static_cast<double>(a.r)));
+        const ucs::Point2D local = ucs::WorldToPlane(plane, p);
+        const double phi = std::atan2(local.y, local.x);
+        if (!AngleWithinSweep(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), phi))
+          continue;
+        Consider(&acc, wx, wy, static_cast<float>(p.x), static_cast<float>(p.y), Kind::Quadrant, tolWorld,
+                 static_cast<float>(p.z));
+      }
     }
     for (int i = 0; i < kArcSnapSeg; ++i) {
       const double t0 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i,
@@ -1734,6 +1831,44 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       if (ma < 1e-8f)
         continue;
       PushSnapPickerEntry(el.cx, el.cy, Kind::Center, sortWorldX, sortWorldY, out, el.z);
+    }
+    break;
+  }
+  case Kind::Quadrant: {
+    // REQ-330: every circle's four quadrant points, and every arc's in-sweep subset.
+    const auto& C = cmd.userCirclesCxCyZR;
+    if (C.size() % 4 == 0) {  // cx,cy,z,r
+      for (size_t i = 0; i + 3 < C.size(); i += 4) {
+        const float cx = C[i];
+        const float cy = C[i + 1];
+        const float cz = C[i + 2];
+        const float r = C[i + 3];
+        if (r <= 1e-6f)
+          continue;
+        const ucs::Ucs plane = CircleSnapPlane(cmd.userCircleNormals, i / 4, cx, cy, cz);
+        ray3d::Vec3 dir[4];
+        QuadrantDirections(plane, cmd.activeUcs, dir);
+        for (const ray3d::Vec3& d : dir)
+          PushSnapPickerEntry(static_cast<float>(cx + r * d.x), static_cast<float>(cy + r * d.y), Kind::Quadrant,
+                              sortWorldX, sortWorldY, out, static_cast<float>(cz + r * d.z));
+      }
+    }
+    for (const CadArc& a : cmd.userArcs) {
+      if (a.r <= 1e-6f)
+        continue;
+      const ucs::Ucs plane = CurvePlane(a);
+      ray3d::Vec3 dir[4];
+      QuadrantDirections(plane, cmd.activeUcs, dir);
+      const ray3d::Vec3 c{static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.z)};
+      for (const ray3d::Vec3& d : dir) {
+        const ray3d::Vec3 p = ray3d::Add(c, ray3d::Scale(d, static_cast<double>(a.r)));
+        const ucs::Point2D local = ucs::WorldToPlane(plane, p);
+        if (!AngleWithinSweep(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad),
+                              std::atan2(local.y, local.x)))
+          continue;
+        PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Quadrant, sortWorldX,
+                            sortWorldY, out, static_cast<float>(p.z));
+      }
     }
     break;
   }

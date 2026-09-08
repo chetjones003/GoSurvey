@@ -8,6 +8,10 @@ enum class Kind {
   Endpoint,
   Midpoint,
   Center,
+  /// One of the four "compass" points of a circle or arc: one radius from the centre along the
+  /// active UCS X and Y axes, projected onto the curve's own plane (REQ-330). N/E/S/W in a TOP
+  /// view with the world UCS, matching AutoCAD `QUA`.
+  Quadrant,
   Perpendicular,
   SurveyCenter,
   GeometricCenter,
@@ -109,6 +113,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 2; ///< Same tier as circle center; distance breaks ties
   case Kind::Center:
     return 2; ///< Circle centers beat segment midpoint when snap distances tie
+  case Kind::Quadrant:
+    return 2; ///< Same tier as Center (REQ-330); distance breaks ties
   case Kind::Intersection:
     return 3; ///< As precise a feature as an endpoint — a real crossing of two objects (REQ-062)
   case Kind::GeometricCenter:
