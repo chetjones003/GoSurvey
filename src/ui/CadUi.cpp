@@ -14297,6 +14297,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // it — neither of which was possible while the decision lived inline here.
     switch (ViewportClickRouteFor(cmd)) {
     case ViewportClickRoute::RawEntityPick:
+      // FILLET gathers solid EDGES while it is RUNNING (user request, 2026-09-08). `Ctrl`+click
+      // means here exactly what it means when idle - name a sub-object - and without this the click
+      // went to the 2D entity pick, which has nothing to say about a solid's edge: the user held
+      // Ctrl, clicked an edge, and nothing happened.
+      //
+      // Checked inside this case rather than in `ViewportClickRouteFor` because that function
+      // decides on the COMMAND and this is a decision about the MODIFIER — the same split the idle
+      // sub-object pick already uses, and the reason the policy switch stays exhaustive.
+      if (modelSpace && ImGui::GetIO().KeyCtrl && cmd.active == AppCommandState::Kind::Fillet) {
+        const ray3d::Ray filletSubRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        solidpick::Tolerance filletSubTol;
+        filletSubTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
+        filletSubTol.edge = filletSubTol.vertex;
+        // `SubmitSubObjectPick` re-prompts for FILLET itself, so every route into the pick says the
+        // same thing - see its own note.
+        SubmitSubObjectPick(cmd, filletSubRay, filletSubTol, keyShift, log);
+        BumpCadGpuCache(cmd);
+        break;
+      }
       // Entity-pick commands (OFFSET, REQ-069's designators, REQ-103's LENGTHEN/EXTEND/BREAK,
       // FILLET/CHAMFER): the raw, unsnapped cursor position is what PickClosestCadEntity hit-tests
       // against, not an OSNAP-adjusted commit point. `pickRayPtr` (issue #373 follow-up) rides along
