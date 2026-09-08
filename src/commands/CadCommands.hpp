@@ -320,8 +320,8 @@ void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, floa
 /// REQ-103 STRETCH, model-space apply — see the definition's comment (CadCommands.cpp) for the
 /// full per-type rule. Declared here (not just in the .cpp) because the viewport-pick and typed-text
 /// dispatch sites that call it appear earlier in CadCommands.cpp than its own definition.
-void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX, float mxX, float mnY,
-                             float mxY, std::vector<std::string>& log);
+void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, float mnX, float mxX,
+                             float mnY, float mxY, bool rectInUcsPlane, std::vector<std::string>& log);
 
 // ================================================================================================
 // REQ-103 FILLET (step 6a) / CHAMFER (step 6b) — pure tangent-arc / corner-point geometry.
@@ -3265,6 +3265,10 @@ struct AppCommandState {
   /// STRETCH always runs its own fresh box-select (never consumes a pre-existing \ref selection),
   /// so this is always populated together with the selection it describes.
   float stretchRectMnX = 0.f, stretchRectMxX = 0.f, stretchRectMnY = 0.f, stretchRectMxY = 0.f;
+  /// REQ-329 increment 4: true when the rect above is in the active UCS plane's local 2D frame
+  /// (a tilted work plane) rather than world XY. `ApplyStretchToSelection` projects each candidate
+  /// vertex through `ucs::WorldToPlane` before the box test when this is set.
+  bool stretchRectInUcsPlane = false;
 
   // --- FILLET (REQ-103 step 6a) ---
   enum class FilletPhase {

@@ -653,7 +653,15 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         run.st.selBoxWaitingSecond = true;
         run.st.selBoxAnchorX = x;
         run.st.selBoxAnchorY = y;
+        // CLICKUCS resolved a point on a (possibly tilted) work plane and published its Z through
+        // resolvedPointZ; carry it so a STRETCH crossing box drawn on that plane can be projected
+        // back onto it (REQ-329 increment 4). Plain CLICK leaves resolvedPointZ untouched, so this
+        // is a no-op (Z 0) there — matching the pre-existing behaviour.
+        if (verb == "CLICKUCS")
+          run.st.selBoxAnchorZ = run.st.resolvedPointZ;
       } else {
+        if (verb == "CLICKUCS")
+          run.st.uiCursorWorldZ = run.st.resolvedPointZ;
         SubmitViewportPick(run.st, x, y, run.log, windowSelectionSubtract, fenceLeftToRightWindowMode);
       }
       break;
