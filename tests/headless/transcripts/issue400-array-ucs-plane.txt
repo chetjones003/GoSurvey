@@ -1,0 +1,131 @@
+# GitHub issue #400 increment 1 / REQ-305 acceptance 10-11 — ARRAY resolves picks through the
+# active UCS plane instead of raw world XY.
+#
+# Rectangular: columns run along the active UCS X axis, rows along the active UCS Y axis, and a
+# fully 3D (tilted) UCS moves later grid cells along a real 3D grid (translation-only, so it has no
+# arbitrary-axis-rotation gap).
+#
+# Polar: rotation is about the active UCS Z axis, but restricted to a UCS whose Z axis stays
+# parallel to world Z (D-2026-09-04-g's arbitrary-axis-rotation gap) — an in-plane rotated/translated
+# UCS works; a UCS tilted out of horizontal (UCS X 90 below) is refused by name.
+#
+# Regression guard (REQ-305 acceptance 10): the World-UCS scenario at the top must match
+# regression-87-array.txt's own rectangular/polar numbers exactly.
+
+NEW
+
+# --- Regression: World UCS / plan view is untouched ----------------------------------------------
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+CMD ARRAY
+CMD r
+CMD 3
+CMD 20
+CMD 2
+CMD 15
+EXPECT LOG "6 total instance(s) (3 x 2)"
+EXPECT LINES 6
+EXPECT LINEXYZ 1 20 0 0 30 0 0
+EXPECT LINEXYZ 5 40 15 0 50 15 0
+CHECK ALL
+
+# --- Rectangular under a UCS rotated 90 degrees about Z --------------------------------------------
+# UCS X now points along world +Y, and UCS Y along world -X. A 3x1 rectangular array with column
+# spacing 10 must therefore step along world Y, not world X.
+NEW
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 5 0
+ESC
+CMD UCS
+CMD Z
+EXPECT LOG "Specify rotation angle about Z axis"
+CMD 90
+BOX -1 -1 6 1
+EXPECT SELECTED 1
+CMD ARRAY
+CMD r
+CMD 3
+CLICKUCS 10 0
+CMD 1
+CMD 0
+EXPECT LOG "3 total instance(s) (3 x 1)"
+EXPECT LINES 3
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 0 5 0 0
+EXPECT LINEXYZ 1 0 10 0 5 10 0
+EXPECT LINEXYZ 2 0 20 0 5 20 0
+
+# --- Rectangular under a UCS tilted 90 degrees about X (a vertical work plane) --------------------
+# UCS +Y now points along world +Z: a "row" spacing of 10 in this UCS must move the copies up in
+# world Z, not world Y (REQ-305 acceptance 10's 3D-grid claim).
+NEW
+CMD UCS
+CMD X
+EXPECT LOG "Specify rotation angle about X axis"
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 5 0
+ESC
+BOX -1 -1 6 1
+EXPECT SELECTED 1
+CMD ARRAY
+CMD r
+CMD 1
+CMD 0
+CMD 2
+CLICKUCS 0 10
+EXPECT LOG "2 total instance(s) (1 x 2)"
+EXPECT LINES 2
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 0 5 0 0
+EXPECT LINEXYZ 1 0 0 10 5 0 10
+
+# --- Polar under a UCS rotated + translated within the horizontal plane --------------------------
+# The UCS Z axis stays world Z, so polar rotation (about world Z through the picked centre) is
+# unaffected by the UCS's own rotation — this exercises center-pick-through-the-UCS-plane, not a
+# change in the rotation math itself.
+NEW
+CMD UCS
+CMD Z
+CMD 30
+CMD CIRCLE
+CLICKUCS 10 0
+CMD 2
+ESC
+BOX 5 -5 15 5
+EXPECT SELECTED 1
+CMD ARRAY
+CMD p
+CLICKUCS 0 0
+CMD 4
+CMD 360
+CMD y
+EXPECT LOG "4 total instance(s) (polar)"
+EXPECT CIRCLES 4
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- Polar refused under a UCS tilted out of horizontal -------------------------------------------
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 10 0
+CMD 2
+ESC
+BOX 5 -5 15 5
+EXPECT SELECTED 1
+CMD ARRAY
+CMD p
+EXPECT LOG "ARRAY Polar — refused"
+EXPECT CIRCLES 1
