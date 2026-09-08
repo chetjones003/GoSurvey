@@ -13688,8 +13688,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // hover feedback (REQ-056). WaitDynamicTarget is a coordinate pick on an object already
       // chosen, so hover stays suppressed there — the same split BREAK's two phases make.
       const bool lengthenEntityPick = cmd.active == AK::Lengthen && cmd.lengthenPhase == LPh::WaitSelectOrMode;
+      // FILLET: both phases are entity SEARCHES - `ViewportPickPolicy` routes the command to
+      // `RawEntityPick`, and since REQ-323 a `Ctrl`+click there names a solid EDGE. So by this block's
+      // own rule ("their clicks mean coordinates rather than objects" is what earns suppression) it
+      // belongs with TRIM/EXTEND/BREAK/LENGTHEN rather than with the coordinate-entry commands. Without
+      // it nothing lit up under the cursor while FILLET ran, so the only way to find out what a click
+      // would take was to take it (user request, 2026-09-08).
+      //
+      // CHAMFER is the identical shape and is deliberately NOT included: no solid chamfer exists yet,
+      // so there is nothing for a sub-object pre-highlight to offer there. One line when it does.
+      const bool filletEntityPick = cmd.active == AK::Fillet;
       const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick &&
-                                     !breakEntityPick && !lengthenEntityPick) ||
+                                     !breakEntityPick && !lengthenEntityPick && !filletEntityPick) ||
                                     cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
       // REQ-089: the rollover readout rides on this exact condition. Model space only — a sheet has
