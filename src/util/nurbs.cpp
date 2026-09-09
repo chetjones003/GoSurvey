@@ -272,6 +272,20 @@ Patch Translate(const Patch& patch, const Vec3& delta) {
   return out;
 }
 
+Patch Rotate(const Patch& patch, const Vec3& axisPoint, const Vec3& axisUnit, double angleRad) {
+  Patch out = patch;
+  // Control points are POSITIONS, so they rotate about the axis LINE — weights, knots and degrees
+  // carry no position and are copied through untouched.
+  for (Vec3& c : out.ctrl) c = ray3d::RotatePointAboutAxis(c, axisPoint, axisUnit, angleRad);
+  return out;
+}
+
+Patch Scale(const Patch& patch, const Vec3& basePoint, double factor) {
+  Patch out = patch;
+  for (Vec3& c : out.ctrl) c = Add(basePoint, ray3d::Scale(Sub(c, basePoint), factor));
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Builders.
 // ---------------------------------------------------------------------------------------------

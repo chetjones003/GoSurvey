@@ -2716,6 +2716,67 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   and it was then reproduced with numbers on the *fillet*, which had shipped with it. A precondition
   that is only ever exercised on requests it accepts is not evidence that it refuses the right things.
 
+**(m) Placement transforms belong to the kernel: `Rotate` and `Scale` join `Translate`.**
+(2026-09-09, D-2026-09-09-a, REQ-332, TASK-230, GitHub issue #148 acceptance 4.)
+
+  **Context.** REQ-060 records the gizmo's rotate and scale handles as *blocked*, because ROTATE and
+  SCALE are plan-only and refuse solids, so a handle would have no typed command to agree with. That
+  refusal — `DropSolidsFromSelectionForTransform`, 9 call sites — reads like a policy awaiting a
+  decision. It is not. `brep.hpp` declared exactly four operations that touch an existing solid
+  (`Translate`, `PushPullFace`, `FilletEdge(s)`, `ChamferEdge(s)`) and **none of them turned or
+  resized one**. The refusal was covering for a capability that did not exist, and no amount of
+  command-layer work could lift it.
+
+  **Decision. A rigid rotation and a uniform scale are kernel operations, for exactly the reason
+  `Translate` already is** — *"only this header knows every place a coordinate hides in a `Solid`
+  ... open-coded at a call site, adding a field to `Surface` later would silently miss it, and a
+  solid that half-moved is not a shape at all."* Rotation reaches strictly more of those places than
+  translation does, which is the substance of the decision rather than a detail of it:
+
+  | | translation | rotation | uniform scale |
+  |---|---|---|---|
+  | a frame's **origin** (a point) | moves | rotates about the axis **line** | scales about the base |
+  | a frame's **three axes** (directions) | untouched | rotate about the axis **direction** | **untouched** |
+  | radii, heights, the recipe's dimensions (lengths) | untouched | untouched | `* k` |
+  | sweeps (angles) | untouched | untouched | untouched |
+
+  The point/direction split is REQ-328's, and this is the case that shows why it ships as two
+  primitives rather than one with an ignored parameter: a plane's centre and a plane's normal share
+  one angle and one axis and are still transformed by different calls.
+
+  **Why this is an architectural decision and not an implementation detail.** The wrong version does
+  not fail loudly. Deleting the three axis lines from the frame rotation and rebuilding splits by
+  axis: about world Z, `Validate` catches it and the rotation is refused; about a **tilted** axis it
+  does not — the solid comes back closed, manifold and positive-volume, `Validate` returns `Ok`, and
+  it reports a volume of **1142.5693570452 against a true 1600, 28.6% wrong**, because every face
+  still faces the direction it faced before the solid turned underneath it. A per-field sweep at a
+  call site produces precisely that defect, and `Validate` is not a net that catches it.
+
+  **The recipe follows the solid here, where a push or a fillet drops it.** REQ-319 item 9 and
+  REQ-323 item 9 drop the recipe because a pushed or rounded box is no longer the box its recipe
+  describes, and a stale recipe reads as authoritative while being false. A rotated box is still
+  exactly a box, and a uniformly scaled box is a box with scaled dimensions — so the recipe can
+  follow either precisely, and dropping it would discard a *true* description. `Translate` set that
+  precedent already. The rule is therefore not "editing operations drop the recipe" but **"a recipe
+  that can still describe its solid is kept and updated; one that cannot is dropped"**, which is the
+  form later operations should be measured against.
+
+  **Degenerate inputs are refused, not repaired**, and this is where the kernel deliberately departs
+  from `ray3d`'s contract. `ray3d::RotateVectorAboutAxis` trusts its axis to be unit, which is right
+  for its callers — they hold a stored plane normal or a UCS Z axis. A solid's rotation axis comes
+  from a user's picked points. Normalizing silently would turn a **zero** axis into an arbitrary one,
+  and Rodrigues' formula with a zero axis is `v * cos(angle)`: a uniform shrink wearing a rotation's
+  name. So `brep::Rotate` checks the axis once for the whole solid and refuses by name, and
+  `brep::Scale` refuses a factor that is zero (collapse), negative (a **mirror**, which is its own
+  operation and leaves left-handed frames) or non-finite.
+
+  **Non-uniform scale is excluded by the representation, not by preference.** `SurfaceKind` has no
+  ellipsoid and no elliptical cylinder, so an unevenly scaled sphere has nowhere to be stored. The
+  signature offers one factor, so there is no non-uniform request to refuse. `brep::Mirror` is
+  likewise not added here: a reflection inverts handedness, and every surface normal, `inward` flag
+  and the volume integrand would each have to be reconsidered against that. MIRROR keeps refusing
+  solids (REQ-322 item 6), unchanged.
+
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
 - **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —

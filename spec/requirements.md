@@ -7534,6 +7534,93 @@ capability that does not exist. They are recorded here rather than quietly dropp
   returned a self-intersecting solid reporting volume 880. Found by `/code-review high` on TASK-222;
   REQ-323 had the same defect and was corrected in the same change.
 
+### REQ-332 — A solid can be rotated about any axis and scaled uniformly
+
+- Purpose: **GitHub issue #148 acceptance 4** asks for a gizmo that operates on a selection and
+  "matches the equivalent typed command". REQ-060 records rotate and scale as *blocked, not deferred
+  by preference*: ROTATE and SCALE are plan-only and refuse solids, so a rotate handle would have no
+  typed command to agree with. Tracing that to its root gives one cause, and it is in the kernel —
+  `brep.hpp` declares exactly four operations that touch an existing solid (`Translate`,
+  `PushPullFace`, `FilletEdge(s)`, `ChamferEdge(s)`) and **not one of them turns or resizes it**.
+  `DropSolidsFromSelectionForTransform` (`CadCommands.cpp`, 9 call sites) is therefore not a policy
+  that can simply be deleted; it is covering for a capability that does not exist. This requirement
+  is that capability, and nothing above it.
+- Priority: must
+- Type: functional
+- Depends on: REQ-328 (`ray3d::RotateVectorAboutAxis` / `RotatePointAboutAxis`, which names solid
+  rotation as explicit follow-on: *"its own kernel-shaped problem ... not a footnote to this
+  requirement"*), REQ-313 / ADR-045 (the analytic representation being transformed), REQ-322 (the
+  "one place, not a per-field sweep" principle `brep::Translate` established).
+- Statement: the kernel gains **`brep::Rotate`** (rigid rotation about an arbitrary axis) and
+  **`brep::Scale`** (uniform scale about a base point), each producing a new solid.
+
+  1. **A frame is one POINT and three DIRECTIONS, and a transform treats them differently.** This is
+     the whole content of the requirement. Under a rotation both turn, but the origin turns about the
+     axis **line** and the axes about the axis **direction** with no axis-point term — REQ-328's own
+     split, and the reason it ships two primitives rather than one with an ignored parameter. Under a
+     uniform scale it is the mirror image: nothing turns, so every axis is copied through untouched
+     and only the origin moves.
+  2. **The transform must reach every frame the solid stores** — each face surface's, each curved
+     edge's, each `Intersection` edge's stored surfaces, and the recipe's placement frame — plus
+     every vertex and, for a freeform face, the NURBS control net.
+  3. **Lengths are invariant under a rotation and must all move under a scale.** A rotation leaves
+     every `radius`, `radius2`, `height` and `sweep` exactly as it found them. A uniform scale
+     multiplies every length by `k` and leaves `sweep` alone, because a sweep is an angle.
+  4. **The recipe follows the solid rather than being dropped.** This is a deliberate departure from
+     REQ-319 item 9 and REQ-323 item 9, where a push or a fillet **drops** the recipe because a
+     pushed or rounded box is no longer the box its recipe describes. A rotated box is still exactly
+     a box, and a uniformly scaled box is still a box with scaled dimensions — the recipe can follow
+     either precisely, so dropping it would discard a *true* description rather than a false one.
+     `Translate` already set this precedent by moving `recipe.frame.origin` and keeping the rest.
+     Under a scale the recipe's `length`, `width`, `height`, `radius`, `radius2` and the polysolid
+     `path` all resize; `sides` is a count and does not.
+  5. **A degenerate rotation axis is refused by name, not normalized.** Getting this wrong is silent:
+     Rodrigues' formula with a **zero** axis collapses to `v * cos(angle)` — a uniform shrink wearing
+     a rotation's name — and with an axis of length `L` the cross-product and projection terms scale
+     differently, shearing the solid. `ray3d`'s primitive documents its axis as *trusted*, which is
+     right for callers holding a stored plane normal or a UCS Z axis; a solid's rotation axis comes
+     from a user's picked points, which is a different guarantee. So the kernel checks it once, for
+     the whole solid.
+  6. **A scale factor that is zero, negative or non-finite is refused by name.** Zero collapses the
+     solid; negative **mirrors** it, leaving left-handed frames that would be rejected far away from
+     the command that caused them. A reflection is its own operation and is not this one.
+  7. **Non-uniform scale is out of scope, and not by omission**: `SurfaceKind` has no ellipsoid and
+     no elliptical cylinder, so an unevenly scaled sphere has nowhere to be stored. The signature
+     offers a single factor, so there is no non-uniform request to refuse.
+- Acceptance:
+  - a rotation is an **isometry**: volume and surface area are unchanged to the last digit the closed
+    forms give, for a rotation about world Z and about a genuinely tilted axis off the origin — any
+    drift is a defect rather than a tolerance, the same standard REQ-322 set for translation;
+  - **four quarter turns return every vertex to its original coordinates**, which is the single
+    sharpest check that the transform reached every frame and reached each by the right rule;
+  - a rotated solid's **surface frames turn with it** — a cylinder's axis, a direction with a meaning
+    independent of any vertex, ends up where the rotation puts it;
+  - **every frame is still right-handed and orthonormal** after a rotation
+    (`ucs::IsRightHandedOrthonormal`), the check that catches a sheared or mirrored frame;
+  - a uniform scale by `k` multiplies volume by exactly `k^3` and surface area by exactly `k^2`, on a
+    flat-faced and on a curved solid; scaling by `k` then by `1/k` returns the original coordinates;
+  - a uniform scale leaves every frame's three **axes** bit-for-bit unchanged;
+  - a rotated solid keeps its recipe with the placement turned and the dimensions untouched; a scaled
+    solid keeps its recipe with the dimensions resized, and the resized recipe **agrees with the
+    geometry it describes**;
+  - a rotated or scaled solid still `Validate`s, and a NURBS patch transformed through its control
+    net alone reproduces the transform at every evaluated parameter (weights and knots untouched);
+  - every refusal above is reported **by name** with a sentence a user can read (REQ-201).
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`, `src/util/nurbs.{hpp,cpp}`)
+- Status: **proposed** — drafted 2026-09-09 (D-2026-09-09-a, ADR-046 amendment (m), TASK-230) and
+  implemented against, per the standing arrangement for an unaccepted REQ: the implementation is part
+  of what the requirement is judged on.
+- **The measurement that decided item 1**, taken by deleting the three axis lines from the frame
+  rotation and rebuilding. The result splits, and the split is the useful part: about **world Z**,
+  `Validate` catches it and the rotation is refused; about a **tilted** axis it does not. The solid
+  comes back closed, manifold and positive-volume — `Validate` returns `Ok` — reporting a volume of
+  **1142.5693570452 against a true 1600, 28.6% wrong**, because every face still faces the direction
+  it faced before the solid turned underneath it. That is the same shape of defect REQ-319's
+  precondition exists for, and the reason this logic is in the kernel rather than at a call site.
+- Revisions: 2026-09-09 — initial. Slice 1 of the three GitHub issue #148 acceptance 4 needs; the
+  ROTATE / SCALE typed commands and the gizmo's rotate and scale handles are slices 2 and 3 and are
+  deliberately not in this requirement.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -8676,6 +8763,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-329 | Commands/Survey/Viewport | accepted, sliced per command (GitHub issue #402, D-2026-09-08-b). Increment 1 (MOVE/COPY 3D + active-UCS picks and typed input) done — TASK-218, `issue402-move-copy-ucs` transcript. Increment 2 (ROTATE about the UCS Z axis; `RotateSelectionInPlaceAboutAxis`; in-plane picked angle) done — TASK-219, `issue402-rotate-ucs` transcript. Increment 3 (SCALE uniform on every axis about the UCS-resolved base; `ScaleSelectionZAboutBase`) done — TASK-220, `issue402-scale-ucs` transcript. Increment 4 (STRETCH crossing box + displacement in the UCS plane; `stretchRectInUcsPlane`) done — TASK-221, `issue402-stretch-ucs` transcript. Increment 5 (MIRROR across the plane containing the mirror line; `ray3d::ReflectPointAcrossPlane`, `DuplicateCadSelectionReflectedAcrossPlane`) done — TASK-222, `issue402-mirror-ucs` transcript. Increment 6 (ALIGN) closed no-change (D-2026-09-08-c). Increment 7 (OFFSET in-plane perpendicular + plane-frame side pick; `OffsetPlaneLocal`) done — TASK-223, `issue402-offset-ucs` transcript. **REQ-329 fully delivered.** ROTATE is UCS-Z-only (REQ-328 primitive), a full ROTATE3D is a separate future issue. | accepted |
 | REQ-331 | Domain/Commands | increments 1 and 2 delivered 2026-09-08 (D-2026-09-08-f, ADR-046 amendment (k), TASK-222) — kernel + the `CHAMFER` verb on a sub-object edge selection, in one task because the delta over REQ-323 is small and entirely mechanical. `ChamferEdgeTests` (15 cases: a box against the single-edge closed forms volume **1560** / area **796+40*sqrt(2)**, topology 10/15/7, and every face planar and every edge straight; ALL TWELVE edges against the bevelled-box forms **1344** and **368+232*sqrt(2)** with topology **32/48/18** — 6 quads + 12 HEXAGONS, no corner face, and every vertex of degree 3; a WEDGE proving the setback does NOT move with the dihedral where REQ-323's proves that it does; the three-edge corner landing one vertex at the meet of the three bevel planes; every refusal by name including the partial and non-orthogonal corners, the oblique end face, NaN, and the same edge twice) + `headless.req331-chamfer-solid` (Ctrl+click edges then `CHAMFER 2`, a three-edge corner at **1530** / **734+67*sqrt(2)**, all twelve edges end-to-end through the pick, the selection cleared, UNDO, four refusals leaving the solid untouched, a .gs round-trip, the prompted form with ESC and with a bad then a refused answer, edges gathered from INSIDE the running command, and a bare CHAMFER with nothing selected still being the 2D command). **#148 acceptance 5 now closed for BOTH halves**, which closes the last of the seven slices #148's own pre-implementation survey listed. **The cross-check is the finding worth keeping:** the bevelled box's inner-box-plus-slabs term is **1120** and its planar-face total is **368** — the identical constants in REQ-323's rounded box `1120 + 344*pi/3` and `368 + 120*pi`, because a fillet and a chamfer share their inner box and slabs exactly and differ only in what fills the twelve edge channels and the eight corners. Two independently derived acceptances confirming each other; neither could do that alone. Also discharges **TASK-221 DEBT-1** — the sub-object pre-highlight now reaches CHAMFER, which that task deferred in as many words until a solid chamfer existed. **Deferred by decision, each by name:** the AutoCAD two-distance / base-face form (D-2026-09-08-f item 13 — and the coupling is stated: with `D1 != D2` the corner stays a point but the cut-vertex solve changes and the increment-2 closed forms are replaced), a concave edge, an oblique or curved end face, a curved edge, a partial corner and a non-orthogonal corner. **TASK-224** (same review, Finding 2): a value the kernel REFUSED was followed by "Could not parse CHAMFER input", contradicting the refusal one line above it — `Handle*Text`'s return value was being read as "did the command advance" when the caller's only use of it is the trailer decision, so it now means "was this input understood" and is documented as such. FILLET had the same defect and both were fixed together; the driver gains `EXPECT NOLOG` (scoped to the last command, because nothing resets the log) and it was proven to bite. **Item 4 AMENDED 2026-09-08 as item 4b** (D-2026-09-08-g, ADR-046 amendment (l), TASK-223) after `/code-review high` found the precondition was per-EDGE and read the ORIGINAL solid: `CHAMFER 6` on two opposite top edges was ACCEPTED and returned a self-intersecting solid reporting volume 880. REQ-323 had the same defect and both were fixed together through ONE shared implementation, on the user's instruction. 4 new `ChamferEdgeTests` cases assert the refusals and the largest value that still fits. Full suite 1333/1333. **TASK-229** (2026-09-09): driving the real GUI with the Developer Shell (REQ-161) found that only the HOVER half of the mid-command Ctrl+click had been added - `CadUi.cpp` routed the pick to the sub-object path for `Kind::Fillet` alone, so during CHAMFER an edge lit up under the cursor and clicking it did NOTHING. Invisible to every existing test: the transcripts drive the pick with the `SUBOBJECT` verb, which calls `SubmitSubObjectPick` DIRECTLY and never passes through that routing, so `headless.req331-chamfer-solid` ran green straight across the gap. Fixed, and covered by `--devshell-run req331-chamfer-viewport` - the first devshell test to reach the VIEWPORT, which also supplies the pre-highlight MEASUREMENT that TASK-221 DEBT-2 and TASK-222 had both stood in for with an argument from similarity | accepted |
 | REQ-326 | Domain/Commands, UI | done (GitHub issue #395, D-2026-09-07-a). `CadSnapTests.cpp` `[CadSnap][issue395]` (7 cases: Vertex + F4 master gate, Midpoint-on-edge, Nearest-to-face regression, Center-of-face on a planar box face, Center-of-face on a cylinder end-cap landing on the axis rather than a vertex average, Perpendicular's foot on a planar face, Knot enumeration against a hand-built `nurbs::Patch`) plus the 3 pre-existing `[req313]` solid-snap cases updated to the new per-mode flags. Full suite 1277/1278 (the one failure, `a missing or corrupt store loads as an empty list`, is pre-existing on `beta` and unrelated — reproduced against `beta` directly). |
+| REQ-332 | Domain | proposed, kernel delivered 2026-09-09 (D-2026-09-09-a, ADR-046 amendment (m), TASK-230) — `brep::Rotate` (rigid, arbitrary axis) and `brep::Scale` (uniform), plus `nurbs::Rotate` / `nurbs::Scale` on a control net. **Slice 1 of the three GitHub issue #148 acceptance 4 needs**; the typed ROTATE/SCALE commands and the gizmo handles are slices 2 and 3. **The root cause it removes:** `brep.hpp` declared exactly four operations touching an existing solid — `Translate`, `PushPullFace`, `FilletEdge(s)`, `ChamferEdge(s)` — and none turned or resized one, so `DropSolidsFromSelectionForTransform` (9 call sites) was covering for a missing capability rather than enforcing a policy. **The finding worth keeping is what a wrong version looks like.** Deleting the three axis lines from the frame rotation — the exact defect a per-field sweep at a call site produces — splits by axis: about world Z `Validate` catches it and the rotation is refused, but about a **tilted** axis it does not, returning a closed, manifold, positive-volume solid that `Validate` calls `Ok` and that reports volume **1142.5693570452 against a true 1600, 28.6% wrong**, because every face still faces where it faced before the solid turned under it. Measured by rebuilding, not argued. The second decision is the **recipe**: a push (REQ-319 item 9) and a fillet (REQ-323 item 9) both DROP it because the solid is no longer what it describes, but a rotated box is still a box and a uniformly scaled box is a box with scaled dimensions, so here the recipe FOLLOWS the solid — the precedent `Translate` set — and dropping it would discard a true description rather than a false one. A degenerate rotation axis is refused rather than normalized because the failure is silent: a zero axis reduces Rodrigues to `v * cos(angle)`, a shrink wearing a rotation's name. | `RotateSolidTests` (14 cases: the isometry about world Z and about a tilted off-origin axis; four quarter turns returning every vertex to 1e-12; a cylinder's own axis landing where the rotation puts it; `IsRightHandedOrthonormal` across EVERY stored frame; `k^3`/`k^2` on a flat-faced and a curved solid; scale-then-inverse returning to 1e-12; every frame axis bit-for-bit unchanged under a scale; the recipe turned, and resized so that it agrees with the geometry; a NURBS patch reproducing both transforms at every evaluated parameter with weights and knots untouched; the zero-axis shrink measured on the primitive; and every refusal by name). Full suite **1373/1373**, up from 1359. | proposed |
 
 ---
 

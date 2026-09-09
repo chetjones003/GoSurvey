@@ -97,6 +97,28 @@ struct SurfacePoint {
 /// The first caller is `brep::Translate` (the document-origin rebase, REQ-101).
 [[nodiscard]] Patch Translate(const Patch& patch, const Vec3& delta);
 
+/// \p patch with every control point rotated about the line through \p axisPoint with unit direction
+/// \p axisUnit, by \p angleRad (REQ-332). Weights, knots and degrees are unchanged.
+///
+/// **Only the control points move, and that is exact rather than an approximation.** A NURBS surface
+/// is an affine combination of its control points whose basis functions sum to one at every
+/// parameter, so applying a rigid motion to the control net applies exactly that motion to every
+/// point of the surface. The weights are ratios and carry no length, so a rotation leaves them alone.
+///
+/// \p axisUnit is trusted to be a unit vector, the same contract \ref ray3d::RotateVectorAboutAxis
+/// keeps. `brep::Rotate`, the only caller, checks it once for the whole solid rather than per patch.
+[[nodiscard]] Patch Rotate(const Patch& patch, const Vec3& axisPoint, const Vec3& axisUnit,
+                           double angleRad);
+
+/// \p patch with every control point scaled about \p basePoint by \p factor (REQ-332). Weights,
+/// knots and degrees are unchanged.
+///
+/// Uniform, and exact for the same affine-combination reason \ref Rotate is: scaling the control net
+/// scales the surface it defines. The weights are ratios, so scaling them would change the surface's
+/// SHAPE rather than its size. \p factor is trusted to be finite and positive — `brep::Scale` refuses
+/// anything else before it reaches here.
+[[nodiscard]] Patch Scale(const Patch& patch, const Vec3& basePoint, double factor);
+
 // ---------------------------------------------------------------------------------------------
 // Builders — the two shapes a loft between line-and-arc profiles produces (ADR-048 (f)).
 // A sweep (increment 2) will add path-frame builders here.

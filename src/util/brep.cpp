@@ -1772,6 +1772,14 @@ const char* ProblemText(Problem p) {
            "not yet bevel.";
   case Problem::ChamferResultInvalid:
     return "That chamfer would leave the solid invalid, so it was not applied.";
+  case Problem::RotateAxisNotUnit:
+    return "The rotation axis has no direction, so there is nothing to turn the solid about.";
+  case Problem::RotateResultInvalid:
+    return "That rotation would leave the solid invalid, so it was not applied.";
+  case Problem::ScaleFactorNonPositive:
+    return "A scale factor must be greater than zero.";
+  case Problem::ScaleResultInvalid:
+    return "That scale would leave the solid invalid, so it was not applied.";
   }
   return "The solid is not valid.";
 }
@@ -1833,6 +1841,124 @@ Solid Translate(const Solid& s, const Vec3& delta) {
   }
   out.recipe.frame.origin = ray3d::Add(out.recipe.frame.origin, delta);
   return out;
+}
+
+namespace {
+
+/// A frame is one POINT and three DIRECTIONS, and a rotation turns them with two different calls —
+/// the origin about the axis LINE, each axis about the axis DIRECTION with no axis-point term
+/// (REQ-328's split). Getting it wrong does not crash: it leaves a frame whose origin moved and whose
+/// axes did not, which is a solid sheared away from its own surfaces.
+void RotateFrameInPlace(ucs::Ucs& f, const Vec3& axisPoint, const Vec3& axisUnit, double angleRad) {
+  f.origin = ray3d::RotatePointAboutAxis(f.origin, axisPoint, axisUnit, angleRad);
+  f.xAxis = ray3d::RotateVectorAboutAxis(f.xAxis, axisUnit, angleRad);
+  f.yAxis = ray3d::RotateVectorAboutAxis(f.yAxis, axisUnit, angleRad);
+  f.zAxis = ray3d::RotateVectorAboutAxis(f.zAxis, axisUnit, angleRad);
+}
+
+/// Radii and heights are lengths, invariant under a rotation, so they are deliberately not touched
+/// here — only the frame and, for a freeform face, the control net that IS its shape.
+void RotateSurfaceInPlace(Surface& sf, const Vec3& axisPoint, const Vec3& axisUnit, double angleRad) {
+  RotateFrameInPlace(sf.frame, axisPoint, axisUnit, angleRad);
+  if (sf.kind == SurfaceKind::Nurbs)
+    sf.patch = nurbs::Rotate(sf.patch, axisPoint, axisUnit, angleRad);
+}
+
+/// The mirror image of \ref RotateFrameInPlace: a uniform scale turns nothing, so the three axes are
+/// left exactly as they are and only the origin moves.
+void ScaleFrameOriginInPlace(ucs::Ucs& f, const Vec3& basePoint, double factor) {
+  f.origin = ray3d::Add(basePoint, ray3d::Scale(ray3d::Sub(f.origin, basePoint), factor));
+}
+
+void ScaleSurfaceInPlace(Surface& sf, const Vec3& basePoint, double factor) {
+  ScaleFrameOriginInPlace(sf.frame, basePoint, factor);
+  sf.radius *= factor;
+  sf.radius2 *= factor;
+  sf.height *= factor;
+  if (sf.kind == SurfaceKind::Nurbs)
+    sf.patch = nurbs::Scale(sf.patch, basePoint, factor);
+}
+
+}  // namespace
+
+bool Rotate(const Solid& s, const Vec3& axisPoint, const Vec3& axisUnit, double angleRad, Solid* out,
+            Problem* outWhy) {
+  if (!out)
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
+  if (!FinitePoint(axisPoint) || !FinitePoint(axisUnit) || !std::isfinite(angleRad))
+    return Fail(Problem::NonFiniteParameter, outWhy);
+  // Not normalized for the caller: a zero axis would then become an arbitrary one, and a shrink or a
+  // shear would ship as a successful rotation. See Problem::RotateAxisNotUnit.
+  if (std::fabs(ray3d::Length(axisUnit) - 1.0) > 1e-9)
+    return Fail(Problem::RotateAxisNotUnit, outWhy);
+
+  Solid r = s;
+  for (Vertex& v : r.vertices)
+    v.p = ray3d::RotatePointAboutAxis(v.p, axisPoint, axisUnit, angleRad);
+  for (Edge& e : r.edges) {
+    if (e.kind != CurveKind::Line)  // a Line edge's frame is unused — the same rule Translate keeps
+      RotateFrameInPlace(e.frame, axisPoint, axisUnit, angleRad);
+    for (Surface& sf : e.isectSurfaces)  // Intersection: the stored surfaces turn with the edge
+      RotateSurfaceInPlace(sf, axisPoint, axisUnit, angleRad);
+  }
+  for (Face& f : r.faces)
+    RotateSurfaceInPlace(f.surface, axisPoint, axisUnit, angleRad);
+  // The recipe's DIMENSIONS are lengths and a rotation leaves them alone; only its placement turns.
+  RotateFrameInPlace(r.recipe.frame, axisPoint, axisUnit, angleRad);
+
+  const Problem why = Validate(r);
+  if (why != Problem::Ok)
+    return Fail(Problem::RotateResultInvalid, outWhy);
+  *out = std::move(r);
+  return Succeed(outWhy);
+}
+
+bool Scale(const Solid& s, const Vec3& basePoint, double factor, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
+  if (!FinitePoint(basePoint))
+    return Fail(Problem::NonFiniteParameter, outWhy);
+  if (!std::isfinite(factor) || factor <= 0.0)
+    return Fail(Problem::ScaleFactorNonPositive, outWhy);
+
+  Solid r = s;
+  for (Vertex& v : r.vertices)
+    v.p = ray3d::Add(basePoint, ray3d::Scale(ray3d::Sub(v.p, basePoint), factor));
+  for (Edge& e : r.edges) {
+    if (e.kind != CurveKind::Line) {
+      ScaleFrameOriginInPlace(e.frame, basePoint, factor);
+      e.radius *= factor;   // Arc radius / Ellipse semi-major
+      e.radius2 *= factor;  // Ellipse semi-minor
+      // `sweep` is an angle, so it does not scale.
+    }
+    for (Surface& sf : e.isectSurfaces)
+      ScaleSurfaceInPlace(sf, basePoint, factor);
+  }
+  for (Face& f : r.faces)
+    ScaleSurfaceInPlace(f.surface, basePoint, factor);
+
+  // The recipe resizes with the solid. It is description and never truth (ADR-050 (f)), but a
+  // description that still reports the old radius is false rather than merely unused.
+  ScaleFrameOriginInPlace(r.recipe.frame, basePoint, factor);
+  r.recipe.length *= factor;
+  r.recipe.width *= factor;
+  r.recipe.height *= factor;
+  r.recipe.radius *= factor;
+  r.recipe.radius2 *= factor;
+  // The polysolid path is 2D in the recipe frame's plane, so it scales with the solid; `sides` is a
+  // count and `sweep` an angle, and neither does.
+  r.recipe.path.start.x *= factor;
+  r.recipe.path.start.y *= factor;
+  for (PathSeg& seg : r.recipe.path.segs) {
+    seg.end.x *= factor;
+    seg.end.y *= factor;
+  }
+
+  const Problem why = Validate(r);
+  if (why != Problem::Ok)
+    return Fail(Problem::ScaleResultInvalid, outWhy);
+  *out = std::move(r);
+  return Succeed(outWhy);
 }
 
 

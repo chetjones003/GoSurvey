@@ -810,6 +810,10 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-319 / ADR-046 amendment (i) — push/pull, the first kernel op that EDITS a solid. Its own
     # file because its subject is the PRECONDITION Validate cannot enforce, not another builder.
     tests/PushPullTests.cpp
+    # REQ-332 / ADR-046 amendment (m) — rigid rotation and uniform scale. Its own file because its
+    # subject is the point/direction split: a frame's origin and its axes transform by different
+    # rules, and getting that wrong still produces a solid Validate accepts.
+    tests/RotateSolidTests.cpp
     # REQ-320 / ADR-051 — the ACIS SAT parser (GitHub issue #299). Pure, so a hand-authored SAT
     # fixture pins the supported plane/cylinder/cone shapes and every refusal without a DWG file.
     tests/AcisSatParserTests.cpp
