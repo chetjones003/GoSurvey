@@ -843,6 +843,18 @@ struct MassProperties {
   bool valid = false;
   double volume = 0.0;
   double surfaceArea = 0.0;
+
+  /// The volume centroid (REQ-334 / ADR-055, GitHub #149 acceptance 4) — the point a uniform-density
+  /// solid balances about, in world coordinates.
+  ///
+  /// **`centroidValid` is a SECOND flag on purpose, and can be false while \ref valid is true.**
+  /// The centroid's integrator covers fewer face shapes than the volume's in this increment: a face
+  /// carrying a general trim loop, a `Nurbs` surface, a hole, or a boundary edge that is an
+  /// `Ellipse` or an `Intersection` curve makes the centroid unavailable while leaving the volume
+  /// and surface area exactly as trustworthy as they were. One flag would have forced a choice
+  /// between suppressing two good figures and reporting a third that was not computed.
+  Vec3 centroid{};
+  bool centroidValid = false;
 };
 
 /// Exact volume and surface area of \p s, integrated over its **analytic** faces — not summed from
@@ -856,6 +868,13 @@ struct MassProperties {
 /// easting 2e6, so no term is a difference of two large nearly-equal numbers.
 ///
 /// `valid` is false — and both figures zero — when \p s does not pass \ref Validate.
+///
+/// **The centroid** (REQ-334 / ADR-055) is integrated the same way and about the same reference
+/// point, by quadrature over the exact analytic surfaces — never over the display mesh. It is
+/// reported through its own \ref MassProperties::centroidValid flag because it covers fewer face
+/// shapes than the volume does; see that field. It is also cross-checked before being reported: the
+/// volume its own integrator re-derives must agree with the volume above, since a centroid built on
+/// a different figure than the one being reported would describe a different solid.
 [[nodiscard]] MassProperties ComputeMassProperties(const Solid& s);
 
 // ---------------------------------------------------------------------------------------------

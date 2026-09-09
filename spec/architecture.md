@@ -3673,3 +3673,67 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   buffer (they stay `float` — (b)); a units/precision-mode UI (REQ-101 is a fixed internal guarantee,
   not a user setting); revisiting the rebase threshold or `kMaxEstablishableOriginMagnitude` (both
   unchanged — (c)); `.gs` (retired).
+
+### ADR-055 — The centroid is integrated by quadrature over the exact surfaces, in world axes, about a solid-local origin   (2026-09-09, accepted)
+
+- **Status:** accepted (2026-09-09, D-2026-09-09-h, GitHub issue #149 acceptance 4). Backs REQ-334.
+- **Context.** REQ-313 reports a solid's volume and surface area by closed-form integrals over its
+  analytic faces, reached through **ten** paths inside `IntegrateFace`: five closed forms (plane,
+  `ConicalFaceIntegrals`, `CylinderPlaneCutIntegrals`, `SphericalFaceIntegrals`,
+  `ToroidalFaceIntegrals`) and five numeric ones (the cylinder, cone and sphere carve-outs for
+  procedural edges, the `Nurbs` patch, and the general trim loop). A centroid needs the **first
+  moments of volume**, a third integrand with no closed form written for any surface kind, and
+  carrying it through all ten paths would be five new closed forms and five new numeric terms —
+  each a fresh chance at a plausible wrong centroid.
+
+**(a) The integral, and the two properties that shape everything else.** With `r = p - q`, the first
+moment is `integral of r dV`, and by the divergence theorem its k-th component is
+`1/2 * closed-surface-integral of r_k^2 n_k dA`. Two things about that integrand were established by
+measurement before any code was written, and both are counter-intuitive enough to be worth stating:
+
+- **It is not frame-covariant.** `r_k^2 n_k` in one Cartesian frame is not the k-th component of any
+  vector that transforms into `r_k^2 n_k` in a rotated one. A moment accumulated in each face's own
+  frame and rotated into world afterwards — the obvious implementation, and the one this project's
+  normals and tangents legitimately use — is **wrong**. It is also wrong *invisibly*: an
+  axis-aligned box, a sphere and a torus all come out exact under it, because their face frames are
+  the world's. A tilted box was measured 3.2 ft out and a tilted pyramid 2.3 ft.
+  **So every face contributes in one shared frame, and that frame is world.**
+- **The origin is what has to be local, not the axes.** `q` on the solid keeps every squared term at
+  model scale even at easting 2.2e6. Integrating about the world origin instead was measured at 46
+  to 6,978 ft of error, growing worse as the input is refined, and exact at (0,0,0) — so a test
+  suite written at the origin cannot see it.
+
+**(b) Quadrature over the exact surfaces, not five new closed forms.** A 16-point Gauss-Legendre
+rule over each face's parameter rectangle, and over each boundary edge for a planar face. This is
+**not** the display-mesh approximation GitHub #149's tessellation note rules out: it samples the
+analytic surface, and the primitives come out at 1e-12 ft or better — nine orders inside REQ-101.
+It is also not a departure. Four of `IntegrateFace`'s own paths are already numeric, and ADR-048
+already authorises "adaptive numerical quadrature" for the `Nurbs` kind's mass properties; this
+applies the same instrument to one more integrand rather than introducing a new kind of answer.
+
+**(c) A planar face is integrated along its BOUNDARY, by Green's theorem, with quadrature per edge.**
+Six region moments — area, `Sa`, `Sb`, `Saa`, `Sab`, `Sbb` in the face's own axes — from which each
+world component follows algebraically. Quadrature along each edge rather than a polygon formula is
+what lets **one** path cover a straight-edged face and an **arc-bounded** one: a cylinder's circular
+cap is a `Plane` face whose loop is two arc edges, and a polygon formula silently inscribes a polygon
+in it — measured at 0.16% on an r=8 cap by the per-face area work (D-2026-09-09-g). Edge tangents are
+**analytic**, never finite differences: a difference quotient lost seven digits to cancellation at
+easting 2.2e6 during development.
+
+**(d) Uncovered face shapes are refused, not approximated, and the centroid gets its OWN validity
+flag.** `MassProperties::centroidValid` is separate from `valid`. A `Nurbs` face, a general trim
+loop, a face with holes, or a boundary edge that is an `Ellipse` or an `Intersection` curve makes the
+centroid unavailable while leaving the volume and surface area exactly as trustworthy as they were.
+One flag would have forced a choice between suppressing two good figures and reporting a third that
+was not computed; two flags say precisely what is known. Increment 2 carries those cases.
+
+**(e) The centroid is cross-checked against the volume before it is reported.** The moment integrator
+re-derives the volume as it goes, and that figure must agree with the one `ComputeMassProperties`
+already reports to a relative 1e-9 or the centroid is withheld. A centroid divided by a volume the
+rest of the report disagrees with would describe a different solid.
+
+**(f) A self-intersecting solid reports no centroid, where `FaceArea` (D-2026-09-09-g) still reports
+an area.** Deliberately different answers from two neighbouring functions. A centroid is
+volume-**weighted**, so a shell enclosing part of space twice makes it exactly as meaningless as the
+volume it is weighted by; a single face's area is a property of one bounded patch and stays well
+defined. The rule is the quantity's own nature, not consistency for its own sake.
