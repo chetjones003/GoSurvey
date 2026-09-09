@@ -28486,9 +28486,11 @@ void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
 
+  const std::size_t undoDepthBefore = CadActiveUndoStackSize(st);
   PushUndoSnapshot(st, "Section");
 
   int made = 0;
+  int failed = 0;
   for (const Cut& c : cuts) {
     // The Path is 2D in its own plane; the polyline store is world XYZ.
     std::vector<float> xyz;
@@ -28510,8 +28512,12 @@ void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log) {
       bulges.push_back(static_cast<float>(std::tan(sg.sweep * 0.25)));
 
     const int before = static_cast<int>(st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back());
-    if (AppendXyzPathAsPolyline(st, xyz, /*closed=*/true) != 1)
+    if (AppendXyzPathAsPolyline(st, xyz, /*closed=*/true) != 1) {
+      // REQ-201: every case is explicitly reported, not silently dropped.
+      log.push_back("SECTION — a solid's section outline failed to append; skipped.");
+      ++failed;
       continue;
+    }
     SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
     SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
     for (std::size_t i = 0; i < bulges.size() && before + static_cast<int>(i) <
@@ -28521,10 +28527,25 @@ void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log) {
     ++made;
   }
 
+  if (made == 0) {
+    // Nothing was actually appended — the undo snapshot taken above would otherwise leave a
+    // stray no-op step, breaking "a refusal leaves the document unchanged".
+    CadTruncateActiveUndoStack(st, undoDepthBefore);
+    log.push_back("SECTION — no section outlines could be created; the solids are unchanged.");
+    return;
+  }
+
   BumpCadGpuCache(st);
-  char msg[160];
-  std::snprintf(msg, sizeof(msg), "SECTION — %d section outline%s created. The solid%s unchanged.",
-                made, made == 1 ? "" : "s", solids.size() == 1 ? " is" : "s are");
+  char msg[192];
+  if (failed == 0) {
+    std::snprintf(msg, sizeof(msg), "SECTION — %d section outline%s created. The solid%s unchanged.",
+                  made, made == 1 ? "" : "s", solids.size() == 1 ? " is" : "s are");
+  } else {
+    const int attempted = made + failed;
+    std::snprintf(msg, sizeof(msg),
+                  "SECTION — %d of %d section outline%s created. The solid%s unchanged.", made,
+                  attempted, attempted == 1 ? "" : "s", solids.size() == 1 ? " is" : "s are");
+  }
   log.push_back(msg);
 }
 
