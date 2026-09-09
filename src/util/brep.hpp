@@ -811,6 +811,33 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 [[nodiscard]] bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                          SliceKeep keep, Solid* outAbove, Solid* outBelow, Problem* outWhy);
 
+/// The **cross-section** of \p solid by the plane through \p planePoint with normal \p planeNormal
+/// — the shape a cut would expose, without cutting (REQ-335, GitHub #149 acceptance 5).
+///
+/// \p outPlane receives the section's own frame (origin \p planePoint, Z along \p planeNormal) and
+/// \p outLoop the section boundary **in that frame's 2D coordinates**, as a closed \ref Path of
+/// straight and circular segments. `Path` rather than a new type on purpose: it is already this
+/// kernel's chain-of-lines-and-arcs vocabulary, and like every other use of it the kernel stays
+/// ignorant of what a document entity is (ADR-048 (a)).
+///
+/// **Non-destructive is structural, not a promise.** \p solid is taken by const reference; the two
+/// pieces \ref Slice produces are local and discarded. There is no path by which this can modify
+/// its input.
+///
+/// The loop always winds **counter-clockwise about \p planeNormal**, whichever side of the cut the
+/// geometry was recovered from, so a caller can rely on the orientation without inspecting it.
+///
+/// **The accepted set is \ref Slice's, inherited rather than restated**: sectioning asks the same
+/// geometric question and simply keeps a different answer, so a solid Slice declines is declined
+/// here with Slice's own reason. Additionally refuses \ref Problem::SliceCurvedFace for a section
+/// boundary that is not expressible as lines and arcs — an **oblique cut of a cylinder** meets it
+/// along an `Ellipse` — and \ref Problem::SliceResultComplex for a section with holes or with more
+/// than one face on the plane. Refused by name rather than approximated with a chord or a nearby
+/// arc: a section is a measured figure, and one that is quietly the wrong shape is exactly the
+/// silent-wrong-answer failure REQ-201 exists to prevent.
+[[nodiscard]] bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                               ucs::Ucs* outPlane, Path* outLoop, Problem* outWhy);
+
 /// Boolean combination of two solids (REQ-314 increment 4 / ADR-046 — the B1 subset). The result is
 /// written to \p out as one or more solids: usually one, but a UNION of solids that do not touch is
 /// two, and a SUBTRACT that splits its operand is several. Nothing is written unless every piece

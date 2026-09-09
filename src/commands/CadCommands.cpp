@@ -6404,6 +6404,7 @@ const CmdEntry kRegistry[] = {
     {"presspull", "pp",
      "Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, select a target, then a distance"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
+    {"section",     "", "Cross-section of the selected solids by the active UCS plane, as a closed polyline"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
@@ -28428,6 +28429,105 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
   log.push_back(SolidCreatedMessage(spec->kind, mp));
 }
 
+
+/// `SECTION` — the cross-section of every selected solid by the **active UCS plane**, drawn as a
+/// closed polyline, leaving the solids alone (REQ-335, GitHub #149 acceptance 5).
+///
+/// **The plane is the active UCS, not three picked points, and that is a decision rather than a
+/// shortcut** (D-2026-09-09-i). `ucs::Ucs` IS this project's plane abstraction (REQ-311,
+/// D-2026-08-31-e), and since REQ-329 every modify command already resolves its work into the
+/// active UCS plane — so "set the work plane, then ask what the section looks like" is the gesture
+/// this codebase already teaches. SLICE's three-point form is the natural second increment for the
+/// case where a user wants a one-off plane without moving the UCS; REQ-335 records it as such.
+///
+/// One closed polyline per solid, on the current layer, in one undo step. Arcs ride as **bulges**
+/// (REQ-316 / ADR-047), so a cylinder's circular section is a circle and not a polygon — the
+/// kernel hands back a `brep::Path` of lines and arcs precisely so nothing has to be flattened
+/// here.
+void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log) {
+  std::vector<int> solids;
+  for (const SelectedEntity& e : st.selection)
+    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 &&
+        static_cast<std::size_t>(e.index) < st.cadSolids.size())
+      solids.push_back(e.index);
+
+  if (solids.empty()) {
+    log.push_back("SECTION — select one or more solids first.");
+    return;
+  }
+
+  const ucs::Ucs frame = CadActiveUcsStorage(st);
+  const ray3d::Vec3 planePoint = frame.origin;
+  const ray3d::Vec3 planeNormal = frame.zAxis;
+
+  // Section everything BEFORE touching the document, so a failure part-way leaves nothing behind
+  // (REQ-201) — the same all-or-nothing shape SLICE already uses.
+  struct Cut {
+    ucs::Ucs plane;
+    brep::Path loop;
+  };
+  std::vector<Cut> cuts;
+  cuts.reserve(solids.size());
+  for (const int idx : solids) {
+    const CadSolidPtr& sp = st.cadSolids[static_cast<std::size_t>(idx)];
+    if (!sp)
+      continue;
+    Cut c;
+    brep::Problem why = brep::Problem::Ok;
+    if (!brep::SectionLoop(*sp, planePoint, planeNormal, &c.plane, &c.loop, &why)) {
+      // The kernel's own reason, verbatim. Nothing is drawn and nothing is cut.
+      log.push_back(std::string("SECTION — ") + brep::ProblemText(why));
+      return;
+    }
+    cuts.push_back(std::move(c));
+  }
+  if (cuts.empty()) {
+    log.push_back("SECTION — nothing to section.");
+    return;
+  }
+
+  PushUndoSnapshot(st, "Section");
+
+  int made = 0;
+  for (const Cut& c : cuts) {
+    // The Path is 2D in its own plane; the polyline store is world XYZ.
+    std::vector<float> xyz;
+    std::vector<float> bulges;
+    const ray3d::Vec3 p0 = ucs::PlaneToWorld(c.plane, c.loop.start);
+    xyz.push_back(static_cast<float>(p0.x));
+    xyz.push_back(static_cast<float>(p0.y));
+    xyz.push_back(static_cast<float>(p0.z));
+    // A closed path's last segment returns to `start`, so its END is not a new vertex — but its
+    // BULGE belongs to the closing span and has to be carried, or a circular section would come
+    // back as a half-circle and a straight chord.
+    for (std::size_t i = 0; i + 1 < c.loop.segs.size(); ++i) {
+      const ray3d::Vec3 w = ucs::PlaneToWorld(c.plane, c.loop.segs[i].end);
+      xyz.push_back(static_cast<float>(w.x));
+      xyz.push_back(static_cast<float>(w.y));
+      xyz.push_back(static_cast<float>(w.z));
+    }
+    for (const brep::PathSeg& sg : c.loop.segs)
+      bulges.push_back(static_cast<float>(std::tan(sg.sweep * 0.25)));
+
+    const int before = static_cast<int>(st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back());
+    if (AppendXyzPathAsPolyline(st, xyz, /*closed=*/true) != 1)
+      continue;
+    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+    for (std::size_t i = 0; i < bulges.size() && before + static_cast<int>(i) <
+                                                     static_cast<int>(st.userPolylineVertsBulge.size());
+         ++i)
+      st.userPolylineVertsBulge[static_cast<std::size_t>(before) + i] = bulges[i];
+    ++made;
+  }
+
+  BumpCadGpuCache(st);
+  char msg[160];
+  std::snprintf(msg, sizeof(msg), "SECTION — %d section outline%s created. The solid%s unchanged.",
+                made, made == 1 ? "" : "s", solids.size() == 1 ? " is" : "s are");
+  log.push_back(msg);
+}
+
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log) {
   if (st.cadSolids.empty()) {
     log.push_back("No solids in this drawing.");
@@ -33888,6 +33988,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (plotTok == "solidlist" || plotTok == "solids") {
       CadReportSolids(st, log);
+      return;
+    }
+    // SECTION (REQ-335): the cross-section of the selected solids by the active UCS plane, drawn as
+    // a closed polyline. The solids themselves are untouched -- it inspects rather than cuts, which
+    // is what separates it from SLICE.
+    if (plotTok == "section") {
+      CadSectionSelection(st, log);
       return;
     }
     // EXTRUDE (REQ-314 / ADR-046 increment 1b): a selected closed polyline or circle becomes a
