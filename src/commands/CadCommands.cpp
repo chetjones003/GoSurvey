@@ -6405,6 +6405,7 @@ const CmdEntry kRegistry[] = {
      "Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, select a target, then a distance"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
     {"section",     "", "Cross-section of the selected solids by the active UCS plane, as a closed polyline"},
+    {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
@@ -28549,6 +28550,95 @@ void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back(msg);
 }
 
+/// `SOLIDCHECK` — say whether each solid is sound, and if not, why (REQ-313 as amended,
+/// D-2026-09-09-j, GitHub #149 acceptance 7).
+///
+/// Checks the current selection, or the whole drawing when nothing is selected. Read-only: no undo
+/// entry, nothing repaired. REQ-201's position is that a fault is reported rather than silently
+/// corrected, and this is the command that reports it.
+///
+/// **Two questions, not one, and that is the whole point of the command.** `brep::Validate` asks
+/// whether the TOPOLOGY holds up — closed, manifold, orientable, non-degenerate — and it already
+/// names each of those four faults apart. `brep::SelfIntersects` asks the separate geometric
+/// question of whether the surface passes through itself, which `Validate` deliberately calls Ok:
+/// a torus whose tube is wider than its ring is legitimate topology and draws correctly, but its
+/// surface encloses part of space twice, so its volume and centroid mean nothing and
+/// `ComputeMassProperties` declines them.
+///
+/// A command that answered only the first would call that torus sound and then leave the user to
+/// discover, from a Properties panel that has gone blank, that nothing can be measured about it —
+/// with no statement anywhere of why. So both are asked and both are reported.
+void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log) {
+  std::vector<int> targets;
+  bool fromSelection = false;
+  for (const SelectedEntity& e : st.selection)
+    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 &&
+        static_cast<std::size_t>(e.index) < st.cadSolids.size()) {
+      targets.push_back(e.index);
+      fromSelection = true;
+    }
+  if (targets.empty()) {
+    // A selection that holds only non-solid entities is NOT the same as no selection, and widening
+    // silently to the whole drawing would answer a question the user did not ask. Say so instead,
+    // the way EXTRUDE ("nothing in the selection could be extruded") and SLICE already do.
+    if (!st.selection.empty()) {
+      log.push_back("SOLIDCHECK — nothing in the selection is a solid. Select solids, or clear the "
+                    "selection to check the whole drawing.");
+      return;
+    }
+    for (int i = 0; i < static_cast<int>(st.cadSolids.size()); ++i)
+      targets.push_back(i);
+  }
+
+  if (targets.empty()) {
+    log.push_back("SOLIDCHECK — no solids in this drawing.");
+    return;
+  }
+
+  int sound = 0, faulty = 0, unmeasurable = 0;
+  log.push_back(std::string("SOLIDCHECK — checking ") + std::to_string(targets.size()) + " solid" +
+                (targets.size() == 1 ? "" : "s") + (fromSelection ? " (selected)." : " (whole drawing)."));
+
+  for (const int idx : targets) {
+    const CadSolidPtr& sp = st.cadSolids[static_cast<std::size_t>(idx)];
+    char buf[420];
+    if (!sp) {
+      std::snprintf(buf, sizeof(buf), "  [%d] missing — the drawing holds no solid at this index.", idx);
+      log.push_back(buf);
+      ++faulty;
+      continue;
+    }
+    const char* kind = brep::PrimitiveKindName(sp->recipe.kind);
+    const brep::Problem why = brep::Validate(*sp);
+    if (why != brep::Problem::Ok) {
+      // The kernel's own reason, verbatim — the four faults #149 acceptance 7 names are already
+      // distinct values with distinct messages, so there is nothing to translate or collapse here.
+      std::snprintf(buf, sizeof(buf), "  [%d] %s — NOT VALID: %s", idx, kind, brep::ProblemText(why));
+      log.push_back(buf);
+      ++faulty;
+      continue;
+    }
+    if (brep::SelfIntersects(*sp)) {
+      std::snprintf(buf, sizeof(buf),
+                    "  [%d] %s — topology is sound, but the surface passes through itself, so its "
+                    "volume, area and centroid are not reported.",
+                    idx, kind);
+      log.push_back(buf);
+      ++unmeasurable;
+      continue;
+    }
+    std::snprintf(buf, sizeof(buf), "  [%d] %s — valid: closed, manifold, consistently oriented.", idx,
+                  kind);
+    log.push_back(buf);
+    ++sound;
+  }
+
+  char tail[300];
+  std::snprintf(tail, sizeof(tail), "SOLIDCHECK — %d valid, %d not valid, %d self-intersecting.", sound,
+                faulty, unmeasurable);
+  log.push_back(tail);
+}
+
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log) {
   if (st.cadSolids.empty()) {
     log.push_back("No solids in this drawing.");
@@ -34016,6 +34106,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // is what separates it from SLICE.
     if (plotTok == "section") {
       CadSectionSelection(st, log);
+      return;
+    }
+    // SOLIDCHECK (REQ-313 as amended, D-2026-09-09-j): validity, and separately self-intersection —
+    // the geometric fault Validate deliberately calls Ok. Read-only; nothing is repaired.
+    if (plotTok == "solidcheck" || plotTok == "scheck") {
+      CadCheckSolids(st, log);
       return;
     }
     // EXTRUDE (REQ-314 / ADR-046 increment 1b): a selected closed polyline or circle becomes a

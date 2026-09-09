@@ -1608,6 +1608,8 @@ const char* ProblemText(Problem p) {
   case Problem::LoopNotClosed: return "A face boundary does not close.";
   case Problem::EmptyLoop: return "A face boundary has no edges.";
   case Problem::EdgeNotUsedTwice: return "The surface is not closed: an edge does not bound exactly two faces.";
+  case Problem::ShellOpenAtEdge: return "The surface is not closed: an edge bounds only one face.";
+  case Problem::EdgeNonManifold: return "The surface is not manifold: an edge bounds more than two faces.";
   case Problem::EdgeOrientationInconsistent: return "Two faces disagree about which way an edge runs.";
   case Problem::FaceHasNoLoop: return "A face has no boundary.";
   case Problem::DegenerateFace: return "A face has no area.";
@@ -6170,7 +6172,8 @@ struct PolyFace {
   AddSingleShell(&s);
   const Problem why = Validate(s);
   if (why != Problem::Ok) {
-    const bool topo = why == Problem::EdgeNotUsedTwice || why == Problem::EdgeOrientationInconsistent ||
+    const bool topo = why == Problem::EdgeNotUsedTwice || why == Problem::ShellOpenAtEdge ||
+                      why == Problem::EdgeNonManifold || why == Problem::EdgeOrientationInconsistent ||
                       why == Problem::NotClosed;
     return Fail(topo ? complexReason : why, outWhy);
   }
@@ -13079,8 +13082,15 @@ Problem Validate(const Solid& s) {
 
   for (int i = 0; i < en; ++i) {
     const int total = forwardUses[static_cast<std::size_t>(i)] + reverseUses[static_cast<std::size_t>(i)];
-    if (total != 2)
-      return Problem::EdgeNotUsedTwice;
+    // Fewer than two and more than two are DIFFERENT faults, and #149 acceptance 7 asks to be told
+    // them apart: fewer means the shell has a hole, more means the surface is not a manifold.
+    // `EdgeNotUsedTwice` reported both under one value whose text says "not closed", which is
+    // simply wrong for the three-face case — and the collision hid behind a test fixture that was
+    // tripping an earlier check, so it survived a slice written to look for exactly this.
+    if (total < 2)
+      return Problem::ShellOpenAtEdge;
+    if (total > 2)
+      return Problem::EdgeNonManifold;
     if (forwardUses[static_cast<std::size_t>(i)] != 1)
       return Problem::EdgeOrientationInconsistent;
     vertexUsed[static_cast<std::size_t>(s.edges[static_cast<std::size_t>(i)].v0)] = 1;

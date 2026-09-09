@@ -4735,6 +4735,10 @@ void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
 /// closed polyline. Non-destructive: the solids are left exactly as they were.
 void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log);
 
+/// REQ-313 as amended (D-2026-09-09-j) — SOLIDCHECK: report each solid's validity, and separately
+/// whether its surface passes through itself. Read-only; nothing is repaired.
+void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log);
+
 /// EXTRUDE (REQ-314 / ADR-046, GitHub issue #147): turn each eligible entity in the current
 /// selection — a closed polyline or a circle — into a B-rep solid, swept a signed height
 /// perpendicular to the profile's plane. One undo step; the source entities are left in place.
