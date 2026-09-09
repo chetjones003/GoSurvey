@@ -77,11 +77,17 @@ EXPECT SUBOBJECTFACES 1
 CMD PRESSPULL 12
 EXPECT SOLIDPROPS 0 4000 1600 8 12 6
 
-# --- An EDGE or a VERTEX selection gets NO gizmo ---------------------------------------------------
-# Not an omission. `brep::PushPullFace` is the only solid edit the kernel has, so there is no
-# operation that moves an edge or a vertex; a handle would advertise a move that cannot happen, and
-# refusing after the drag is worse than not offering it (D-2026-09-05-b). Issue #148 criterion 3's
-# other two thirds are unbuilt, and the gizmo says so by not appearing.
+# --- An EDGE gets TWO handles and a VERTEX gets THREE (REQ-333) -------------------------------------
+# This block asserted NO gizmo for either until 2026-09-09, on reasoning that was correct at the
+# time: `brep::PushPullFace` was the only solid edit the kernel had, so a handle on an edge or a
+# vertex would have advertised a move that could not happen (D-2026-09-05-b). `brep::MoveEdge` and
+# `brep::MoveVertex` are now the second and third, so the premise changed and the assertions with it.
+#
+# The COUNTS are the part worth pinning, because each is a statement about degrees of freedom:
+#   * an edge has TWO — the two adjacent planes each slide along their own normal, and together they
+#     span exactly the plane perpendicular to the edge. There is no third, because the along-the-edge
+#     direction is not a motion: an edge slid along its own line is the same edge;
+#   * a vertex has THREE — three planes meet, so every direction is reachable.
 
 NEW
 VIEWANGLES 135 20
@@ -89,17 +95,33 @@ CMD BOX 0,0 20 10 8
 # The top face's near edge, picked by giving the EDGE a tolerance and the face none.
 SUBOBJECT 0 5 8 0.5 0.5
 EXPECT SUBOBJECTEDGES 1
-EXPECT GIZMO 0
-EXPECT GIZMOAXES 0
+EXPECT GIZMO 1
+EXPECT GIZMOAXES 2
 
-# A vertex, the same way.
-CMD PRESSPULL 3
+# A vertex, on a FRESH drawing. It used to share the block above, and that hid something: a second
+# pick ADDS to the sub-object selection rather than replacing it, so the "vertex" case was really a
+# {edge, vertex} case. The old assertion here was `EXPECT GIZMO 0`, which passed either way, because
+# the pre-REQ-333 code returned None for ANY selection that was not a single face and so could not
+# tell the two apart. Asserting `SUBOBJECTS 1` is what makes this a vertex case at all.
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
 SUBOBJECT 10 5 8 0.5 0.5
 EXPECT SUBOBJECTVERTICES 1
-EXPECT GIZMO 0
-EXPECT GIZMOAXES 0
+EXPECT SUBOBJECTS 1
+EXPECT GIZMO 1
+EXPECT GIZMOAXES 3
 # And the solid is untouched by any of it.
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- Two sub-objects together get NO gizmo, and that is its own claim -------------------------------
+# There is no single thing to move, so there is nothing for a handle to mean. Worth asserting
+# separately now that a lone edge and a lone vertex each DO get one — before REQ-333 this case and
+# those two were indistinguishable.
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTS 2
+EXPECT GIZMO 0
+EXPECT GIZMOAXES 0
 
 # --- A face drag that goes nowhere is a cancel -----------------------------------------------------
 

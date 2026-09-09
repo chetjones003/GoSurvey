@@ -140,6 +140,14 @@ struct SelectedSubObject {
 /// only — which edge (0-based) the point lands on.
 struct BreakPoint {
   float x = 0.f, y = 0.f;
+  /// Elevation at the cut, interpolated along the segment the cut fell on.
+  ///
+  /// A break, fillet or chamfer creates a vertex that did not exist before, so its Z has to come
+  /// from somewhere. `param` and `segIndex` already say exactly where along which segment the cut
+  /// landed, so the honest answer is the linear interpolation between that segment's endpoints —
+  /// exact on a level segment and correct on a sloped one. Before this field existed the answer was
+  /// `0.f`, which is what flattened polylines to datum (issue 01).
+  float z = 0.f;
   float param = 0.f;
   float theta = 0.f;
   int segIndex = -1;
@@ -1359,6 +1367,32 @@ constexpr int kRibbonTabSurfaceCtx = 7;
 constexpr int kRibbonTabSurveyPointCtx = 8;
 /// Contextual Block Editor tab while BEDIT is open. Not counted in \c kRibbonTabCount / prefs.
 constexpr int kRibbonTabBlockEditor = 9;
+
+
+/// What the gizmo DOES — chosen by the user, unlike \ref CadGizmoMode which is derived (REQ-060
+/// rotate/scale, TASK-232).
+///
+/// **Stored, and that does not contradict the note above.** `CadGizmoMode` is derived because the
+/// selection already determines it, so a stored copy would be a third thing that could disagree with
+/// the two selections. Nothing in a selection says whether the user wants to MOVE, TURN or RESIZE
+/// it: the operation has no derivation to disagree with, so it is a setting. Different question,
+/// different answer.
+enum class CadGizmoOp {
+  /// Three handles along the active UCS, committing through `ApplyTranslationToSelection`.
+  Translate,
+  /// ONE ring, about the active UCS Z, committing through \ref ApplyRotationAboutUcsZ.
+  ///
+  /// One and not three because **typed ROTATE is UCS-Z-only** — REQ-329 says so in as many words
+  /// ("a full ROTATE3D is a separate future issue"). REQ-060 requires a handle to agree with the
+  /// equivalent typed command, and rings on UCS X and Y would have no such command to agree with.
+  Rotate,
+  /// ONE handle, uniform, committing through \ref ApplyUniformScaleAboutBase.
+  ///
+  /// One and not three because typed SCALE is uniform on every axis (REQ-329) and `brep::Scale` is
+  /// uniform because the representation has no ellipsoid to hold an unevenly scaled sphere
+  /// (REQ-332 item 7). A per-axis handle would advertise a shape the program cannot store.
+  Scale,
+};
 
 struct AppCommandState {
   enum class Kind {
@@ -2985,8 +3019,22 @@ struct AppCommandState {
   /// to the cursor on the first mouse move - and so the anchor's own precision cannot affect the
   /// result: it appears in both terms and cancels.
   double gizmoGrabParam = 0.0;
-  /// The live drag distance along \ref gizmoAxisDir, in drawing units. Zero when nothing is dragged.
+  /// The live drag's value **in the current operation's own units** (TASK-232):
+  ///
+  /// | \ref gizmoOp | meaning | "no drag" |
+  /// |---|---|---|
+  /// | `Translate` | distance along \ref gizmoAxisDir, in drawing units | 0 |
+  /// | `Rotate`    | angle about \ref gizmoAxisDir, in radians, CCW-positive by the right-hand rule | 0 |
+  /// | `Scale`     | the uniform factor | 1 |
+  ///
+  /// One field rather than three, because three would be three things that could disagree about
+  /// which drag is armed. Note the "no drag" column: the cancel test is per-operation, since a scale
+  /// of zero is a collapse rather than a no-op.
   double gizmoDragDistance = 0.0;
+
+  /// What the gizmo does — a user SETTING, not derived from the selection (\ref CadGizmoOp explains
+  /// why this one is stored where \ref CadGizmoMode is not). Set by the `GIZMO` command.
+  CadGizmoOp gizmoOp = CadGizmoOp::Translate;
 
   /// In face mode, WHICH face the armed drag is moving — captured at the grab like the anchor.
   ///
@@ -4519,9 +4567,45 @@ bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double 
 /// increment 2). False when \p ref does not resolve to a planar face of a live solid.
 ///
 /// The centroid rather than a corner, because a grip is a handle on the *face* — a corner handle
-/// would read as a vertex grip, which is a different edit (#148 criterion 3's other half, not built).
+/// reads as a vertex grip, which is a different edit (\ref CadSubObjectVertexGrip, REQ-333).
 [[nodiscard]] bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& ref,
                                         ray3d::Vec3* outAnchor, ray3d::Vec3* outAxis);
+
+/// The vertex grip's anchor: the vertex itself (REQ-333). False unless the vertex is one where
+/// **exactly three planar faces meet** — the only place `brep::MoveVertex` can work.
+///
+/// The check lives here so that no handle is drawn where the drag would be refused. A pyramid's apex
+/// and a cylinder's rim are both easy to pick and both impossible to move, and a grip that appears
+/// and then declines on release is worse than one that never appears — the same discipline
+/// \ref CadSubObjectFaceGrip already keeps by returning false for a non-planar face.
+[[nodiscard]] bool CadSubObjectVertexGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                                          ray3d::Vec3* outAnchor);
+
+/// The edge grip's anchor and its two slide axes: the edge's midpoint, and the outward normals of
+/// the two faces along it (REQ-333). False unless the edge is STRAIGHT with exactly two planar
+/// faces, for the reason \ref CadSubObjectVertexGrip gives.
+///
+/// The two normals rather than a pair of UCS axes because they are what the kernel actually offsets,
+/// and together they span exactly the plane perpendicular to the edge — which is the whole space of
+/// moves the edge has.
+[[nodiscard]] bool CadSubObjectEdgeGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                                        ray3d::Vec3* outAnchor, ray3d::Vec3* outAxisA,
+                                        ray3d::Vec3* outAxisB);
+
+/// Move one vertex, or one edge, and record it as a single undo step (REQ-333). The commit behind
+/// the vertex and edge grips, shaped exactly like \ref CadApplyPushPull: replace the solid, re-point
+/// every sub-object reference that named it, and log the kernel's own sentence on a refusal with the
+/// document untouched.
+///
+/// **Unlike push/pull these have no typed command to agree with**, because REQ-333 defines kernel
+/// operations and no requirement asks for a verb. REQ-060's "agrees with the equivalent typed
+/// command" therefore has nothing to compare against here; the discipline it exists to enforce is
+/// kept the only way it can be, by these being the single implementation — so a typed command added
+/// later calls them rather than growing a second one.
+bool CadApplyMoveVertex(AppCommandState& st, const SelectedSubObject& ref, const ray3d::Vec3& delta,
+                        std::vector<std::string>& log);
+bool CadApplyMoveEdge(AppCommandState& st, const SelectedSubObject& ref, const ray3d::Vec3& delta,
+                      std::vector<std::string>& log);
 
 /// One named dimension of a primitive: the letter that sets it, and what to call it in a prompt.
 ///
@@ -5480,6 +5564,9 @@ void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vec
 bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);
+/// QUICKSELECT's filter itself (issue 05). Lives here rather than in the UI layer so it is
+/// reachable from a headless transcript and from a unit test; the panel is a form that calls it.
+void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log);
 void StartQuickSelectCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -5677,6 +5764,27 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
 void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float dz,
                                  std::vector<std::string>& log);
 
+/// Rotate the whole selection by \p rad about the axis through (\p bx, \p by, \p bz) parallel to the
+/// ACTIVE UCS Z — the complete typed-ROTATE transform, dispatch included (REQ-329 increment 2,
+/// REQ-332 increment 2). The caller owns the undo snapshot.
+///
+/// Declared here, and extracted out of `FinishRotateCommand`, for REQ-060's reason: typed ROTATE
+/// does not call one function, it CHOOSES between two — `ApplyRotationToSelection` when the UCS Z is
+/// world-Z-parallel and `RotateSelectionInPlaceAboutAxis` when it is tilted. A gizmo that called
+/// only the inner function would agree with the typed command in plan view and diverge from it under
+/// a tilted UCS, which is the half-agreement a tolerance-based acceptance would never catch.
+void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, float rad,
+                            std::vector<std::string>& log);
+
+/// Scale the whole selection uniformly by \p sc about (\p bx, \p by, \p bz) — the complete typed
+/// SCALE transform (REQ-329 increment 3, REQ-332 increment 2). The caller owns the undo snapshot.
+///
+/// Extracted for the same reason as \ref ApplyRotationAboutUcsZ: typed SCALE calls
+/// `ApplyScaleToSelection` and THEN, only under a tilted UCS, `ScaleSelectionZAboutBase`. Both steps
+/// are the command, so both belong behind one name the gizmo can call too.
+void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float bz, float sc,
+                                std::vector<std::string>& log);
+
 /// What the gizmo is currently acting on, derived from the selection and never stored.
 ///
 /// The two selections are mutually exclusive already (D-2026-09-04-a), so a stored mode would be a
@@ -5696,13 +5804,28 @@ enum class CadGizmoMode {
   /// and nothing else. A handle along UCS X on a face whose normal is Z would advertise a move the
   /// kernel cannot make; drawing it and then refusing the drag is worse than not drawing it.
   SubObjectFace,
+  /// Exactly one solid EDGE: TWO handles, along the two adjacent faces' own outward normals,
+  /// committing through `CadApplyMoveEdge` (REQ-333).
+  ///
+  /// Two because two planes meet there and each has one degree of freedom that keeps it planar, and
+  /// together they span exactly the plane perpendicular to the edge. **There is deliberately no
+  /// third**: the along-the-edge direction is not a motion at all — an edge slid along its own line
+  /// is the same edge (REQ-333 item 4) — so a handle there would advertise a drag that does nothing.
+  SubObjectEdge,
+  /// Exactly one solid VERTEX: THREE handles, along the active UCS, committing through
+  /// `CadApplyMoveVertex` (REQ-333).
+  ///
+  /// Three because three planes meet there, which is three degrees of freedom — every direction is
+  /// reachable, so unlike the face and the edge there is nothing to leave out.
+  SubObjectVertex,
 };
 
 /// Which subject the gizmo has right now. \c None when no gizmo may be drawn.
+///
+/// Returns \c SubObjectFace only under \c CadGizmoOp::Translate: no kernel operation rotates or
+/// scales a single face, so under Rotate or Scale a face selection gets no gizmo at all — the same
+/// answer an edge or a vertex already gets, for the same reason.
 [[nodiscard]] CadGizmoMode CadGizmoModeFor(const AppCommandState& st);
-
-/// The one selected face, when \ref CadGizmoModeFor is \c SubObjectFace. False otherwise.
-[[nodiscard]] bool CadGizmoSubObjectFace(const AppCommandState& st, SelectedSubObject* out);
 
 /// Maximum gizmo axes. Three: the UCS X, Y and Z. Named so the loops below say why they are 3.
 inline constexpr int kGizmoAxisCount = 3;
@@ -5716,13 +5839,23 @@ inline constexpr float kGizmoHandleGrabPx = 7.f;
 
 /// Where the gizmo hangs, in WCS. False when there is nothing for it to hang off.
 ///
-/// **Entity mode:** the centre of the selection's bounding box. Its precision does not affect any
-/// move — a drag distance is the change in the axis parameter between the grab and the drop, so the
-/// anchor appears in both terms and cancels, and it decides only where the handles are DRAWN. That
-/// is why conservative per-type bounds are good enough, and why this is deliberately not
+/// **Entity mode:** the centre of the selection's bounding box. Deliberately not
 /// \ref ComputeSelectionCentroidWorld: that answers ROTATE's different question (a pivot, in plan,
 /// over ROTATE's own type set), and changing it to serve this one would change where ROTATE and
 /// ARRAY turn things about.
+///
+/// **What this anchor has to be depends on the operation, and the original note here was written
+/// when there was only one** (TASK-232). For a TRANSLATE it is cosmetic: a drag distance is the
+/// change in the axis parameter between the grab and the drop, so the anchor appears in both terms
+/// and cancels, and it decides only where the handles are DRAWN — which is why conservative
+/// per-type bounds were good enough. For a ROTATE or a SCALE it is the **pivot** and the **base**:
+/// it does not cancel, it decides the answer.
+///
+/// That does not make conservative bounds wrong here, but it changes what is being relied on. What
+/// REQ-060 requires is agreement with *the equivalent typed command*, and the equivalent command is
+/// ROTATE / SCALE **about this same anchor** — so the anchor must be DETERMINISTIC, not accurate.
+/// Widening the bounds later would move where a gizmo rotation pivots, which a reader of the
+/// original note would not have expected.
 ///
 /// **Face mode:** the face's centroid (\ref CadSubObjectFaceGrip), where the grip this replaced
 /// already put its handle. A corner would read as a vertex grip, which is a different edit.
@@ -5750,6 +5883,21 @@ inline constexpr float kGizmoHandleGrabPx = 7.f;
 [[nodiscard]] bool CadAxisDragParam(const ray3d::Vec3& anchor, const ray3d::Vec3& axisDir,
                                     const ray3d::Ray& ray, double* outParam,
                                     double parallelTol = 1.e-6);
+
+/// Angle of \p ray's hit on the plane through \p anchor with normal \p axisDir, measured in that
+/// plane's own frame, CCW-positive about \p axisDir (REQ-060 rotate, TASK-232).
+///
+/// The rotation counterpart of \ref CadAxisDragParam, and it refuses for the same kind of reason
+/// that one does. False when the ray is within \p parallelTol of PARALLEL to the plane — it never
+/// meets it, so the gesture names no point — and false when the hit lands within \p minRadius of the
+/// anchor, where there is no direction to take an angle of. Both are cases where a number could be
+/// produced and would be meaningless; returning one would read as the selection spinning wildly.
+///
+/// The frame is built from \p axisDir alone (not from the camera), so the angle a drag reports does
+/// not change when the view orbits.
+[[nodiscard]] bool CadAxisDragAngle(const ray3d::Vec3& anchor, const ray3d::Vec3& axisDir,
+                                    const ray3d::Ray& ray, double* outAngle,
+                                    double parallelTol = 1.e-6, double minRadius = 1.e-9);
 
 /// Which axis handle \p ray hits, or -1. \p tolWorld is the grab aperture in drawing units.
 ///

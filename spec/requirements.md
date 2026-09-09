@@ -1982,20 +1982,71 @@ requirements is a planning failure, not a sign of rigor.
   `CadGizmoAnchorWorld` / `CadGizmoAxisWorld` / `CadAxisDragParam` / `PickGizmoAxis` /
   `SubmitGizmoClick` / `UpdateGizmoDrag` / `CommitGizmoDrag`; overlay `CadGizmoOverlay` +
   `BuildGizmoOverlay`; headless `GIZMO GRAB|DROP|CANCEL` and `EXPECT GIZMO` / `EXPECT GIZMOAXIS`.
-  **Rotate and scale are NOT implemented and are blocked, not deferred by preference:** ROTATE and
-  SCALE are still plan-only and still refuse solids (REQ-322 item 6), so a rotate handle would again
-  have no typed command to agree with. Lifting them means turning every entity's stored frame about
-  an arbitrary axis — the work REQ-312 needed for one tilted arc, multiplied across every type — and
-  is its own requirement.
+  **Rotate and scale were NOT implemented and were blocked, not deferred by preference:** ROTATE and
+  SCALE were plan-only and refused solids (REQ-322 item 6), so a rotate handle would again have had
+  no typed command to agree with. Lifting them means turning every entity's stored frame about an
+  arbitrary axis — the work REQ-312 needed for one tilted arc, multiplied across every type — and is
+  its own requirement.
+
+  **UNBLOCKED 2026-09-09 (REQ-332).** That requirement now exists and is delivered: REQ-328 supplied
+  the arbitrary-axis primitive, REQ-332 slice 1 (TASK-230) the kernel `brep::Rotate` / `brep::Scale`,
+  and REQ-332 slice 2 (TASK-231, D-2026-09-09-b) lifted the refusal so **typed in-place ROTATE and
+  SCALE transform a solid**.
+
+  **ROTATE and SCALE handles IMPLEMENTED 2026-09-09** (D-2026-09-09-c, TASK-232, issue #148
+  acceptance 4 slice 3 of 3). What the gizmo DOES is now a stored setting — `CadGizmoOp`
+  { Translate, Rotate, Scale }, chosen with a new `GIZMO MOVE | ROTATE | SCALE` command. It is stored
+  where `CadGizmoMode` is derived, and the two answers differ for a reason: the *subject* is already
+  determined by the selection, so a stored copy could disagree with it, while nothing in a selection
+  says whether the user wants to move, turn or resize.
+
+  **The counts are the requirement's second bullet made structural.** ROTATE draws **one ring, about
+  the active UCS Z** — not three — because typed ROTATE is UCS-Z-only (REQ-329: *"a full ROTATE3D is
+  a separate future issue"*), so rings on UCS X and Y would have no typed command to agree with.
+  SCALE draws **one uniform handle** because typed SCALE and `brep::Scale` are uniform (REQ-332
+  item 7). This is the same rule that gave the face gizmo one handle instead of three, applied twice
+  more. A sub-object FACE selection gets **no gizmo at all** under Rotate or Scale, since no kernel
+  operation turns or resizes a single face.
+
+  **Agreement is by construction, and the extraction that makes it so is the substance of the
+  slice.** Typed ROTATE does not call one function — it CHOOSES between `ApplyRotationToSelection`
+  and `RotateSelectionInPlaceAboutAxis` on `CadWorkPlaneIsWorldXy` — and typed SCALE runs a second Z
+  pass under a tilted UCS. Both dispatches are lifted into `ApplyRotationAboutUcsZ` and
+  `ApplyUniformScaleAboutBase`, which the typed commands and the gizmo all call. Measured: wiring the
+  gizmo to the inner function instead fails the tilted-UCS agreement case and **passes every
+  World-UCS one**, which is exactly the half-agreement no tolerance-based check would catch.
+
+  **Rotate and scale are still not offered for a COPY**, and the two remaining rotate axes are still
+  absent — both wait on a typed ROTATE3D rather than on this requirement.
   **The gizmo also takes a SUB-OBJECT selection** (2026-09-05, D-2026-09-05-b, issue #148 acceptance
   4): with exactly one solid FACE selected it shows ONE handle along that face's own normal — purple,
   not the X handle's red, because it is not X — and commits through `CadApplyPushPull`, the function
   typed `PRESSPULL` calls. One handle and not three because `brep::PushPullFace` takes a distance
   along the normal and nothing else; a second would name a direction the kernel cannot move the face
-  in. An EDGE or a VERTEX selection gets no gizmo at all: no kernel operation moves either, so a
-  handle would advertise an edit that cannot happen. The mode is derived from the selection
-  (`CadGizmoModeFor`), never stored, because the two selections are already mutually exclusive
-  (D-2026-09-04-a).
+  in. The mode is derived from the selection (`CadGizmoModeFor`), never stored, because the two
+  selections are already mutually exclusive (D-2026-09-04-a).
+
+  **An EDGE and a VERTEX now get handles too** (2026-09-09, D-2026-09-09-e, REQ-333 increment 2,
+  TASK-234). This paragraph read *"an EDGE or a VERTEX selection gets no gizmo at all: no kernel
+  operation moves either, so a handle would advertise an edit that cannot happen"* until that date.
+  The reasoning was right and the premise expired: `brep::MoveEdge` and `brep::MoveVertex` are that
+  operation. **A vertex gets THREE handles** along the active UCS — three planes meet, which is three
+  degrees of freedom, so every direction is reachable — and **an edge gets TWO**, along the two
+  adjacent faces' own outward normals, which span exactly the plane perpendicular to it. There is no
+  third on an edge, because the along-the-edge direction is not a motion at all (REQ-333 item 4).
+  Each commits through `CadApplyMoveVertex` / `CadApplyMoveEdge`.
+
+  **These two have no typed command to agree with**, unlike the face's PRESSPULL: REQ-333 defines
+  kernel operations and no requirement asks for a verb. This requirement's second acceptance bullet
+  therefore has nothing to compare them against, and the discipline it exists to enforce is kept the
+  only way it can be — those functions are the single implementation, so a typed command added later
+  calls them rather than growing a second.
+
+  **A handle is drawn only where the drag would succeed.** The grip helpers return false wherever
+  their kernel operation could not run — a pyramid's apex (four planes), a cylinder's rim (a curved
+  neighbour), a non-planar face — so the gizmo is absent rather than present-then-refusing. That is
+  the same discipline the face grip already kept, and it matters more here because both refusals name
+  sub-objects a user can easily pick.
 - **Starting state — measured 2026-09-04, when this was first picked up.** Neither half of the
   acceptance above was reachable. `ApplyTranslationToSelection` takes `(dx, dy)` and never touches
   Z; `ApplyRotationToSelection` turns about a vertical axis only; `ApplyScaleToSelection` scales
@@ -2009,6 +2060,10 @@ requirements is a planning failure, not a sign of rigor.
   exist underneath it. 2026-09-04 — the TRANSLATE gizmo implemented (D-2026-09-04-g); rotate and
   scale recorded as blocked on plan-only ROTATE/SCALE rather than left silent. 2026-09-05 — the
   gizmo extended to a sub-object FACE selection (D-2026-09-05-b, issue #148 acceptance 4).
+  2026-09-09 — **the ROTATE and SCALE handles implemented** (D-2026-09-09-c, TASK-232), closing the
+  block recorded on 2026-09-04. `CadGizmoAnchorWorld`'s note that its precision "does not affect any
+  move" was corrected in the same change: that is true of a translation, where the anchor cancels
+  between grab and drop, and false of a rotation or a scale, where it is the pivot and the base.
 
 ### REQ-061 — Per-viewport camera in paper space
 - Purpose: put a plan view and an isometric on the same sheet
@@ -7195,6 +7250,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
      this one. **Rectangular ARRAY is the one exception**: it is pure translation, exactly this
      requirement's own case, so GitHub issue #400 increment 3 lifts the refusal there and there
      alone — see REQ-305 acceptance 13.
+
+     **6b. AMENDED 2026-09-09 (D-2026-09-09-b, REQ-332, TASK-231): ROTATE and SCALE are carved out
+     too, on this item's own terms.** Item 6 did not say those two commands *should* refuse solids —
+     it said widening them "means rotating every entity's stored frame about an arbitrary axis ... a
+     separate requirement, not a footnote to this one". REQ-328 supplied the primitive and REQ-332
+     the kernel operations, so the separate requirement now exists and the refusal has nothing left
+     to stand on. **MIRROR, Polar ARRAY and STRETCH still refuse**, each for a reason of its own that
+     this amendment does not touch: a mirror inverts handedness (its own operation — REQ-332 item 7),
+     and Polar ARRAY and STRETCH would each have to *duplicate* or *partially* transform a solid,
+     neither of which any kernel operation does. **ROTATE with Copy also still refuses**, because
+     duplicating a solid is entity-creation bookkeeping rather than a transform — the work
+     Rectangular ARRAY had to write separately.
 - Acceptance:
   - a typed MOVE with a Z component moves a line, a circle, an arc, an ellipse, a polyline, a
     feature line, an annotation and a block reference by that Z, and their reported elevations change
@@ -7209,8 +7276,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
     `Validate`;
   - a moved solid saves and reloads from `.gs` at its new position;
   - one Ctrl+Z restores the pre-move position, solids included, in a single step;
-  - ROTATE, SCALE, MIRROR, Polar ARRAY and STRETCH still refuse a solid by name, unchanged;
-    Rectangular ARRAY is the sole exception (D-2026-09-07-c, REQ-305 acceptance 13).
+  - **AMENDED 2026-09-09 (item 6b, REQ-332, TASK-231).** MIRROR, Polar ARRAY, STRETCH and
+    ROTATE-with-Copy still refuse a solid by name; Rectangular ARRAY (D-2026-09-07-c, REQ-305
+    acceptance 13) and now **in-place ROTATE and SCALE** are the exceptions. As originally written
+    this line also named ROTATE and SCALE among the refusers, and `req322-move-3d` asserted ROTATE's
+    refusal directly — that assertion was rewritten onto a still-refusing command rather than
+    deleted, because the list of which transforms accept a solid is exactly the fact that drifts.
 - Owner-layer: Commands (the transform and the typed parse), Domain (`brep::Translate`, already there)
 - Status: accepted — increment 1 of REQ-060's prerequisites (D-2026-09-04-f, GitHub issue #148
   Phase 5 slice 4a).
@@ -7630,7 +7701,36 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a rotated or scaled solid still `Validate`s, and a NURBS patch transformed through its control
     net alone reproduces the transform at every evaluated parameter (weights and knots untouched);
   - every refusal above is reported **by name** with a sentence a user can read (REQ-201).
-- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`, `src/util/nurbs.{hpp,cpp}`)
+- **Increment 2 — the typed commands (D-2026-09-09-b, TASK-231).** The kernel above is consumed by
+  ROTATE and SCALE, and REQ-322 item 6's blanket refusal is narrowed accordingly (see its item 6b).
+  1. **In-place ROTATE and SCALE transform a selected solid**; four of the nine
+     `DropSolidsFromSelectionForTransform` call sites give way to `RotateSelectedSolids` /
+     `ScaleSelectedSolids`, which follow `TranslateSelectedSolids` exactly — de-duplicate by solid
+     index, call the kernel, and **replace** rather than edit, because `CadSolidPtr` is
+     `shared_ptr<const brep::Solid>` and that immutability is what makes an undo snapshot a refcount
+     bump.
+  2. **ROTATE uses the ACTIVE UCS Z axis**, not world Z — the plan / plan-rotated path passes world Z
+     because that is what its own axis is, and the tilted path passes the axis it was already given.
+  3. **A solid scales uniformly about the whole 3D base point**, so `ApplyScaleToSelection` gains a
+     `bz` — the same move REQ-322 made when it gave `ApplyTranslationToSelection` a `dz`.
+  4. **A solid scales in Z even in plan view, where a 2D entity beside it keeps its elevation.** This
+     asymmetry is deliberate and is the one behavioural surprise in the increment.
+     `ScaleSelectionZAboutBase` runs only under a tilted UCS so plan view keeps its pre-REQ-329
+     "elevations untouched" behaviour byte-for-byte — but a solid cannot join that carve-out, because
+     "X and Y but not Z" is not a partial scale, it is a shape the representation cannot hold
+     (item 7). And no drawing can depend on the old behaviour: SCALE refused solids outright until
+     this increment, so there is no solid anywhere that scaled in plan without its elevation.
+  5. **A refusal leaves that solid exactly as it was and does not abandon the rest of the
+     selection**, reported by name (REQ-201). The kernel computes into a fresh solid and validates
+     before returning (ADR-046 (d)), so there is no half-transformed state to roll back.
+  6. **ROTATE with Copy still refuses**, and it is a boundary rather than an oversight:
+     `DuplicateCadSelectionRotated` and `DuplicateCadSelectionTranslated` contain no solid handling
+     at all. Duplicating a solid appends an entity — the id, layer and selection bookkeeping
+     Rectangular ARRAY had to write separately — which is a different operation from transforming
+     one. Transforming in place is what REQ-060's gizmo needs; a gizmo drags a selection, it never
+     copies it.
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`, `src/util/nurbs.{hpp,cpp}`), Commands
+  (`CadCommands.cpp`: `RotateSelectedSolids`, `ScaleSelectedSolids`, the four call sites)
 - Status: **proposed** — drafted 2026-09-09 (D-2026-09-09-a, ADR-046 amendment (m), TASK-230) and
   implemented against, per the standing arrangement for an unaccepted REQ: the implementation is part
   of what the requirement is judged on.
@@ -7641,9 +7741,94 @@ capability that does not exist. They are recorded here rather than quietly dropp
   **1142.5693570452 against a true 1600, 28.6% wrong**, because every face still faces the direction
   it faced before the solid turned underneath it. That is the same shape of defect REQ-319's
   precondition exists for, and the reason this logic is in the kernel rather than at a call site.
-- Revisions: 2026-09-09 — initial. Slice 1 of the three GitHub issue #148 acceptance 4 needs; the
-  ROTATE / SCALE typed commands and the gizmo's rotate and scale handles are slices 2 and 3 and are
-  deliberately not in this requirement.
+- Revisions: 2026-09-09 — initial (increment 1, the kernel). Slice 1 of the three GitHub issue #148
+  acceptance 4 needs. 2026-09-09 — **increment 2 added** (D-2026-09-09-b, TASK-231): the typed
+  ROTATE and SCALE commands, narrowing REQ-322 item 6 to item 6b. 2026-09-09 — the third and last
+  slice landed under **REQ-060** rather than here (D-2026-09-09-c, TASK-232): the gizmo's rotate and
+  scale handles are that requirement's own acceptance, so they are recorded against it. **With them,
+  GitHub issue #148 acceptance 4 is closed.**
+
+### REQ-333 — A solid's vertex or edge can be moved
+
+- Purpose: **GitHub issue #148 acceptance 3** asks that *"3D grips move faces, edges and vertices,
+  and the solid stays valid after each edit."* Faces have been movable since REQ-319. Nothing moves
+  an edge or a vertex, and `brep.hpp` has no operation that could — so the gizmo correctly shows no
+  handle for either (REQ-060), and the acceptance is two thirds unmet.
+- Priority: must
+- Type: functional
+- Depends on: REQ-319 / ADR-046 amendment (i) (the corner re-solve this generalises), REQ-313 /
+  ADR-045 (the analytic representation being edited), REQ-318 / ADR-049 (naming the sub-object).
+- **The question this requirement has to answer before it can state anything.** *What does moving a
+  vertex mean?* The obvious answer has no representation. A box corner is used by three
+  quadrilateral faces; move that corner alone and each of those quads has four points that are no
+  longer coplanar, and `SurfaceKind` has no non-planar face to store the result in. A version that
+  did it anyway would leave faces that do not contain their own boundaries — precisely the failure
+  REQ-319's precondition exists to prevent, and one `Validate` cannot see.
+- Statement: a vertex or an edge of a solid is moved by **offsetting the planar faces that meet
+  there**, each along its own outward normal by the component of the move perpendicular to it, and
+  then **re-solving every affected corner** as the meeting point of the planes around it.
+
+  1. **A planar face has exactly one degree of freedom that keeps it planar** — sliding along its own
+     normal. Three planes at a corner give three, and three is exactly a point; two planes along an
+     edge give two, and two is exactly a line. So this is not a compromise chosen for convenience,
+     it is the whole space of moves the representation can express.
+  2. **The dragged vertex lands exactly where it was asked to, not near it.** Each offset plane reads
+     `dot(n, x) = d + dot(n, delta)`, which `p + delta` satisfies identically.
+  3. **Every other corner of those faces moves too**, and that is the operation being honest rather
+     than a side effect: the faces moved, and their boundaries came with them.
+  4. **The component of an edge drag ALONG the edge is annihilated, and that is geometry rather than
+     a shortfall.** The edge direction lies in both faces, so it is perpendicular to both normals and
+     offsets neither. It should not: an edge slid along its own line is the same edge. A move that is
+     *entirely* along the edge therefore expresses no motion at all and is refused as such rather
+     than reported as a move that did nothing.
+  5. **The recipe is DROPPED**, exactly as a push (REQ-319 item 9) and a fillet (REQ-323 item 9) drop
+     it: a box with a corner pulled out is no longer the box its recipe describes. This is the
+     opposite answer from REQ-332's rotate and scale, which keep it, and the two agree under one
+     rule — *a recipe that can still describe its solid is kept and updated; one that cannot is
+     dropped* (ADR-046 amendment (m)).
+  6. **Refused by name** (REQ-201), each for a stated reason: a vertex where fewer or more than three
+     planar faces meet (`MoveVertexNotThreePlanes` — a pyramid's apex has four, and offsetting one
+     generally leaves no point satisfying all four, so the corner would have to SPLIT, which is a
+     topology change and a different operation); two parallel or coplanar faces along an edge
+     (`MoveEdgeFacesParallel`); a curved face at the moved sub-object
+     (`MoveSubObjectNeighbourCurved` — re-solving means intersecting the surfaces there, and a
+     cylinder is not a plane to intersect); a move expressing no motion (`MoveSubObjectNoMotion`); a
+     corner elsewhere in the move that cannot be rebuilt (`MoveSubObjectCornerUnsolvable`); and a
+     result that fails validation (`MoveSubObjectResultInvalid`).
+- Acceptance:
+  - a box corner dragged by `(dx, dy, dz)` lands **exactly** at `p + delta`, and the solid is still a
+    box — 8 vertices, 12 edges, 6 faces, every face planar, valid — with the volume its three offset
+    planes give in closed form;
+  - dragging that corner inward shrinks the box by the same rule, so the operation is signed rather
+    than one-directional;
+  - a box edge dragged perpendicular to itself moves the two faces along it, again against a closed
+    form;
+  - a drag entirely along an edge is refused as no motion, **and** a diagonal drag gives a solid
+    identical to its perpendicular component alone — the same claim stated twice, once as a refusal
+    and once as an equality;
+  - a **wedge**, whose corner planes are not mutually perpendicular, lands its dragged vertex exactly
+    too, so the three-plane solve is shown to be general rather than three independent coordinates;
+  - every refusal above is reported by name, with a sentence a user can read, and leaves the caller's
+    solid untouched;
+  - the recipe is dropped and every result `Validate`s.
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`)
+- Status: **proposed** — drafted 2026-09-09 (D-2026-09-09-d, ADR-046 amendment (n), TASK-233) and
+  implemented against, per the standing arrangement for an unaccepted REQ.
+- **Increment 2 — the grips (D-2026-09-09-e, TASK-234).** `CadGizmoMode` gains `SubObjectEdge` and
+  `SubObjectVertex`. The handle counts and the corrected "no gizmo on an edge or vertex" note live in
+  **REQ-060**, because the handles are that requirement's own acceptance.
+  1. **A handle is drawn only where the drag would succeed** — the grip helpers return false at a
+     pyramid's apex, a cylinder's rim and any non-planar neighbour, so the gizmo is absent rather
+     than present-then-refusing.
+  2. **The sub-object selection survives the edit.** These operations preserve the topology counts,
+     so the index still names the same sub-object — but the reference is keyed on the solid's
+     identity (ADR-049) and the solid is replaced, so it is re-pointed exactly as `CadApplyPushPull`
+     re-points it. Without that a second drag would need a re-pick.
+  3. **One undo step per drag**, and an edited solid round-trips through `.gs` (#148 acceptances 7
+     and 8) — both inherited from the replace-rather-than-edit shape rather than re-implemented.
+- Revisions: 2026-09-09 — initial (increment 1, the kernel). 2026-09-09 — **increment 2 added**
+  (D-2026-09-09-e, TASK-234): the vertex and edge grips, which is what makes issue #148 acceptance 3
+  a *grip* rather than a kernel capability nothing calls.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -8670,7 +8855,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-057 | Domain/IO/UI | planned — DXF group-30 round-trip within REQ-101; `.gs` Z bit-identical on reload; legacy `.gs` loads all-zero Z; Properties Z edit undoable; survey elevation reads back as Z; parallel Z arrays stay length-locked across insert/erase/undo | accepted |
 | REQ-058 | Renderer/UI/Commands | `CameraTests` (plan-view parity, anchor-before-rotation composition, billboard basis) + `Ray3dTests` + `LinetypeTessellationTests` (per-vertex Z) + `CurveIntersectTests` + `BenchSceneTests`; manual/scripted in-app before/after for the render, overlay and glyph stages that no test target can link (TASK-036/037/039) | accepted — signed off 2026-08-12 | **Fixed 2026-09-01 (TASK-170):** box selection off plan view projected its two drag corners at Z = 0 while lines project at their true Z, so on a work plane raised by `ELEV` or tilted by a UCS the fence both drew and selected at pixels the cursor was never over. Each corner now carries its own work-plane elevation (`selBoxAnchorZ`, published through `uiCursorWorldZ` rather than threaded through five call sites). Invisible until now because Z does not move a PLAN projection and is genuinely 0 on the world XY plane at elevation zero — and because `headless.req058-orbited-fence-elevation` is the FIRST transcript to orbit the view at all, via a new `VIEWANGLES` driver verb. That is the wider finding: every REQ-058 behaviour that only exists off plan view had no failing test available to it. Negative-tested — restoring the Z = 0 projection reports `SELECTED: expected 1, got 0`
 | REQ-059 | UI | planned — manual (+Z / −Y / an off-axis handle animate correctly and settle < 0.5 s; gizmo tracks the camera after orbit; clicks outside the gizmo still pick geometry). Appearance is ImOGuizmo stock — the mockup is not the target (amended 2026-08-11) | accepted |
-| REQ-060 | UI/Commands | translate (entities): `headless.req060-gizmo-translate` (a drag along X and along Z, the same offset typed as MOVE landing on the same coordinates, one UNDO, a cancel, and a solid moved and reloaded) + `GizmoTranslateTests` (the skew-line solve, the anchor, an empty selection, a click that misses every handle, the UCS-aligned axes). translate (a solid FACE): `headless.req148-gizmo-subobject` (the drag and `PRESSPULL 12` leaving identical mass properties; one handle not three; no gizmo on an edge or a vertex) + `SubObjectSelectionTests` (the mode derivation, vertex-for-vertex equality with PRESSPULL, the captured face reference). rotate/scale: not implemented — blocked on plan-only ROTATE/SCALE (REQ-322 item 6) | accepted |
+| REQ-060 | UI/Commands | translate (entities): `headless.req060-gizmo-translate` (a drag along X and along Z, the same offset typed as MOVE landing on the same coordinates, one UNDO, a cancel, and a solid moved and reloaded) + `GizmoTranslateTests` (the skew-line solve, the anchor, an empty selection, a click that misses every handle, the UCS-aligned axes). translate (a solid FACE): `headless.req148-gizmo-subobject` (the drag and `PRESSPULL 12` leaving identical mass properties; one handle not three; no gizmo on an edge or a vertex) + `SubObjectSelectionTests` (the mode derivation, vertex-for-vertex equality with PRESSPULL, the captured face reference). rotate/scale: **delivered 2026-09-09** (D-2026-09-09-c, TASK-232, issue #148 acceptance 4 slice 3 of 3) — `CadGizmoOp` as a stored setting with a `GIZMO MOVE\|ROTATE\|SCALE` command, ONE ring about the UCS Z (typed ROTATE is UCS-Z-only, REQ-329) and ONE uniform handle (typed SCALE and `brep::Scale` are uniform, REQ-332 item 7), a face selection getting no gizmo at all under either, and `CadAxisDragAngle` as the rotation counterpart of `CadAxisDragParam` with both of its refusals. Committed through `ApplyRotationAboutUcsZ` / `ApplyUniformScaleAboutBase` — the two typed dispatches lifted out of `FinishRotateCommand` / `FinishScaleCommand`, so the agreement holds under a tilted UCS and not only in plan. `GizmoRotateScaleTests` (9 cases: the angle solve across four quadrants and at two radii; both angle refusals; handle counts per operation and for an empty selection; a face getting a push handle under Translate and NONE under Rotate/Scale; **the gizmo-vs-typed agreement asserted coordinate for coordinate in the World UCS and under a tilted one**; a scale drag through the anchor held rather than mirrored; and the per-operation neutral, where a scale arms at 1 rather than 0) + `headless.req060-gizmo-rotate-scale` (the operation switch and its refusals, handle counts, a line turned and scaled through the camera with one UNDO each, and a SOLID turned — volume/area unchanged, an isometry — and scaled 1600→12800). **Proven to bite:** wiring the commit to `ApplyRotationToSelection` instead of the dispatch fails the tilted-UCS case and passes all 21 others. `CadGizmoAnchorWorld`'s "precision does not affect any move" note corrected in the same change — true for a translation, false for a rotation or scale, where the anchor IS the pivot. Full suite **1384/1384**. Still absent, each waiting on a typed ROTATE3D rather than on this requirement: rings on UCS X and Y, and rotate/scale for a COPY | accepted |
 | REQ-061 | Domain/Renderer/IO | `ViewportCameraTests` (plan-view projection == `ModelToPaperIn` bit-for-bit over a grid; SW-iso hand-computed sheet point; rect-centre invariant; sibling independence) + `GsIoViewportCameraTests` (camera round-trips `.gs`; legacy file with the keys stripped loads all-plan) + manual (two viewports one plan one isometric, on screen and in the PDF plot) | accepted — implemented 2026-08-31 (issue #175) |
 | REQ-063 | Domain/IO/Renderer | planned — `.gs` round-trip bit-identical; legacy `.gs` loads; extents include meshes; erase undoable in one step; layer freeze/off/non-plottable honoured; 2M-triangle model loads without index overflow | accepted |
 | REQ-064 | Renderer/UI/IO | planned — 2D Wireframe **pixel-identical** to pre-change (the parity gate, as REQ-058 had); occlusion correct in Hidden/Shaded; lighting follows the camera; style change does not alter geometry/selection/snap/plot; REQ-100 met in Shaded | accepted |
@@ -8788,7 +8973,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-329 | Commands/Survey/Viewport | accepted, sliced per command (GitHub issue #402, D-2026-09-08-b). Increment 1 (MOVE/COPY 3D + active-UCS picks and typed input) done — TASK-218, `issue402-move-copy-ucs` transcript. Increment 2 (ROTATE about the UCS Z axis; `RotateSelectionInPlaceAboutAxis`; in-plane picked angle) done — TASK-219, `issue402-rotate-ucs` transcript. Increment 3 (SCALE uniform on every axis about the UCS-resolved base; `ScaleSelectionZAboutBase`) done — TASK-220, `issue402-scale-ucs` transcript. Increment 4 (STRETCH crossing box + displacement in the UCS plane; `stretchRectInUcsPlane`) done — TASK-221, `issue402-stretch-ucs` transcript. Increment 5 (MIRROR across the plane containing the mirror line; `ray3d::ReflectPointAcrossPlane`, `DuplicateCadSelectionReflectedAcrossPlane`) done — TASK-222, `issue402-mirror-ucs` transcript. Increment 6 (ALIGN) closed no-change (D-2026-09-08-c). Increment 7 (OFFSET in-plane perpendicular + plane-frame side pick; `OffsetPlaneLocal`) done — TASK-223, `issue402-offset-ucs` transcript. **REQ-329 fully delivered.** ROTATE is UCS-Z-only (REQ-328 primitive), a full ROTATE3D is a separate future issue. | accepted |
 | REQ-331 | Domain/Commands | increments 1 and 2 delivered 2026-09-08 (D-2026-09-08-f, ADR-046 amendment (k), TASK-222) — kernel + the `CHAMFER` verb on a sub-object edge selection, in one task because the delta over REQ-323 is small and entirely mechanical. `ChamferEdgeTests` (15 cases: a box against the single-edge closed forms volume **1560** / area **796+40*sqrt(2)**, topology 10/15/7, and every face planar and every edge straight; ALL TWELVE edges against the bevelled-box forms **1344** and **368+232*sqrt(2)** with topology **32/48/18** — 6 quads + 12 HEXAGONS, no corner face, and every vertex of degree 3; a WEDGE proving the setback does NOT move with the dihedral where REQ-323's proves that it does; the three-edge corner landing one vertex at the meet of the three bevel planes; every refusal by name including the partial and non-orthogonal corners, the oblique end face, NaN, and the same edge twice) + `headless.req331-chamfer-solid` (Ctrl+click edges then `CHAMFER 2`, a three-edge corner at **1530** / **734+67*sqrt(2)**, all twelve edges end-to-end through the pick, the selection cleared, UNDO, four refusals leaving the solid untouched, a .gs round-trip, the prompted form with ESC and with a bad then a refused answer, edges gathered from INSIDE the running command, and a bare CHAMFER with nothing selected still being the 2D command). **#148 acceptance 5 now closed for BOTH halves**, which closes the last of the seven slices #148's own pre-implementation survey listed. **The cross-check is the finding worth keeping:** the bevelled box's inner-box-plus-slabs term is **1120** and its planar-face total is **368** — the identical constants in REQ-323's rounded box `1120 + 344*pi/3` and `368 + 120*pi`, because a fillet and a chamfer share their inner box and slabs exactly and differ only in what fills the twelve edge channels and the eight corners. Two independently derived acceptances confirming each other; neither could do that alone. Also discharges **TASK-221 DEBT-1** — the sub-object pre-highlight now reaches CHAMFER, which that task deferred in as many words until a solid chamfer existed. **Deferred by decision, each by name:** the AutoCAD two-distance / base-face form (D-2026-09-08-f item 13 — and the coupling is stated: with `D1 != D2` the corner stays a point but the cut-vertex solve changes and the increment-2 closed forms are replaced), a concave edge, an oblique or curved end face, a curved edge, a partial corner and a non-orthogonal corner. **TASK-224** (same review, Finding 2): a value the kernel REFUSED was followed by "Could not parse CHAMFER input", contradicting the refusal one line above it — `Handle*Text`'s return value was being read as "did the command advance" when the caller's only use of it is the trailer decision, so it now means "was this input understood" and is documented as such. FILLET had the same defect and both were fixed together; the driver gains `EXPECT NOLOG` (scoped to the last command, because nothing resets the log) and it was proven to bite. **Item 4 AMENDED 2026-09-08 as item 4b** (D-2026-09-08-g, ADR-046 amendment (l), TASK-223) after `/code-review high` found the precondition was per-EDGE and read the ORIGINAL solid: `CHAMFER 6` on two opposite top edges was ACCEPTED and returned a self-intersecting solid reporting volume 880. REQ-323 had the same defect and both were fixed together through ONE shared implementation, on the user's instruction. 4 new `ChamferEdgeTests` cases assert the refusals and the largest value that still fits. Full suite 1333/1333. **TASK-229** (2026-09-09): driving the real GUI with the Developer Shell (REQ-161) found that only the HOVER half of the mid-command Ctrl+click had been added - `CadUi.cpp` routed the pick to the sub-object path for `Kind::Fillet` alone, so during CHAMFER an edge lit up under the cursor and clicking it did NOTHING. Invisible to every existing test: the transcripts drive the pick with the `SUBOBJECT` verb, which calls `SubmitSubObjectPick` DIRECTLY and never passes through that routing, so `headless.req331-chamfer-solid` ran green straight across the gap. Fixed, and covered by `--devshell-run req331-chamfer-viewport` - the first devshell test to reach the VIEWPORT, which also supplies the pre-highlight MEASUREMENT that TASK-221 DEBT-2 and TASK-222 had both stood in for with an argument from similarity | accepted |
 | REQ-326 | Domain/Commands, UI | done (GitHub issue #395, D-2026-09-07-a). `CadSnapTests.cpp` `[CadSnap][issue395]` (7 cases: Vertex + F4 master gate, Midpoint-on-edge, Nearest-to-face regression, Center-of-face on a planar box face, Center-of-face on a cylinder end-cap landing on the axis rather than a vertex average, Perpendicular's foot on a planar face, Knot enumeration against a hand-built `nurbs::Patch`) plus the 3 pre-existing `[req313]` solid-snap cases updated to the new per-mode flags. Full suite 1277/1278 (the one failure, `a missing or corrupt store loads as an empty list`, is pre-existing on `beta` and unrelated — reproduced against `beta` directly). |
-| REQ-332 | Domain | proposed, kernel delivered 2026-09-09 (D-2026-09-09-a, ADR-046 amendment (m), TASK-230) — `brep::Rotate` (rigid, arbitrary axis) and `brep::Scale` (uniform), plus `nurbs::Rotate` / `nurbs::Scale` on a control net. **Slice 1 of the three GitHub issue #148 acceptance 4 needs**; the typed ROTATE/SCALE commands and the gizmo handles are slices 2 and 3. **The root cause it removes:** `brep.hpp` declared exactly four operations touching an existing solid — `Translate`, `PushPullFace`, `FilletEdge(s)`, `ChamferEdge(s)` — and none turned or resized one, so `DropSolidsFromSelectionForTransform` (9 call sites) was covering for a missing capability rather than enforcing a policy. **The finding worth keeping is what a wrong version looks like.** Deleting the three axis lines from the frame rotation — the exact defect a per-field sweep at a call site produces — splits by axis: about world Z `Validate` catches it and the rotation is refused, but about a **tilted** axis it does not, returning a closed, manifold, positive-volume solid that `Validate` calls `Ok` and that reports volume **1142.5693570452 against a true 1600, 28.6% wrong**, because every face still faces where it faced before the solid turned under it. Measured by rebuilding, not argued. The second decision is the **recipe**: a push (REQ-319 item 9) and a fillet (REQ-323 item 9) both DROP it because the solid is no longer what it describes, but a rotated box is still a box and a uniformly scaled box is a box with scaled dimensions, so here the recipe FOLLOWS the solid — the precedent `Translate` set — and dropping it would discard a true description rather than a false one. A degenerate rotation axis is refused rather than normalized because the failure is silent: a zero axis reduces Rodrigues to `v * cos(angle)`, a shrink wearing a rotation's name. | `RotateSolidTests` (14 cases: the isometry about world Z and about a tilted off-origin axis; four quarter turns returning every vertex to 1e-12; a cylinder's own axis landing where the rotation puts it; `IsRightHandedOrthonormal` across EVERY stored frame; `k^3`/`k^2` on a flat-faced and a curved solid; scale-then-inverse returning to 1e-12; every frame axis bit-for-bit unchanged under a scale; the recipe turned, and resized so that it agrees with the geometry; a NURBS patch reproducing both transforms at every evaluated parameter with weights and knots untouched; the zero-axis shrink measured on the primitive; and every refusal by name). Full suite **1373/1373**, up from 1359. | proposed |
+| REQ-333 | Domain | proposed, delivered 2026-09-09 (D-2026-09-09-d, ADR-046 amendment (n), TASK-233) — `brep::MoveVertex` and `brep::MoveEdge`, closing **GitHub issue #148 criterion 3's** other two thirds (faces were REQ-319). **The requirement is a DEFINITION, and it is forced rather than chosen:** moving a box corner and leaving everything else alone is not representable — the three quads meeting there would each end up with four non-coplanar points and `SurfaceKind` has nowhere to store that, so the result would be faces that do not contain their own boundaries, the exact failure REQ-319's precondition exists for and one `Validate` cannot see. A planar face has one degree of freedom that keeps it planar (sliding along its normal), three planes at a corner are exactly a point and two along an edge are exactly a line — so the move IS "offset the adjacent planes, re-solve every affected corner", which is amendment (i)'s algorithm with its one-face assumption lifted. Exact, not approximate: each offset plane reads `dot(n,x) = d + dot(n,delta)`, which `p + delta` satisfies identically. **Two things that look like shortfalls and are not:** every other corner of those faces moves too (the faces moved and their boundaries came with them), and the along-the-edge component of a drag is annihilated (the edge direction lies in both faces, and an edge slid along its own line is the same edge) — so a drag entirely along an edge is refused as no motion rather than reported as a move that did nothing. Recipe DROPPED, where REQ-332's rotate/scale keep it, under amendment (m)'s one rule. `PushPullFace` deliberately not routed through the shared core yet (its planar path is entangled with two curved paths); the core takes its failure codes as a parameter so that stays a wiring change. | `MoveSubObjectTests` (7 cases: a box corner landing EXACTLY at `p + delta` with the box still 8/12/6, every face planar, and volume 22x11x9 in closed form; the same corner dragged inward to 17x8x6; a box edge moving its two faces to 20x13x10; the along-edge drag refused AND a diagonal drag proven identical to its perpendicular component alone — the same claim as a refusal and as an equality; a WEDGE, whose corner planes are not mutually perpendicular, landing exactly too, so the three-plane solve is general rather than three independent coordinates; every refusal by name including a pyramid apex's four planes and a cylinder rim's curved neighbour; and every new refusal having a readable sentence). **Proven to bite:** replacing the per-plane projection `dot(delta, n)` with a uniform offset fails 3 of the 7. **A real defect this found in the writing:** `CollectFaceVertices` APPENDS rather than clears, so a reused buffer made every face after the first look as though it used the vertex — caught because the box case refused with `MoveVertexNotThreePlanes` while the vertex demonstrably had three faces. Full suite **1391/1391**. **Increment 2 (D-2026-09-09-e, TASK-234)** — the grips: `CadGizmoMode::SubObjectEdge` / `SubObjectVertex`, `CadSubObjectVertexGrip` / `CadSubObjectEdgeGrip`, `CadApplyMoveVertex` / `CadApplyMoveEdge`, and `brep::FacesAtVertex` / `FacesAlongEdge` made public so the UI can ask what meets where before offering a handle. Covered by `GizmoSubObjectMoveTests` (5 cases: three handles on a vertex anchored ON it and two on an edge anchored at its MIDPOINT with neither axis along the edge; no gizmo at all on a pyramid apex or a cylinder rim; a grip drag matching `brep::MoveVertex` called directly, vertex for vertex; the selection surviving so a SECOND drag compounds without a re-pick; and a refused drag leaving the document untouched) + `headless.req333-vertex-edge-grips` (a camera-driven vertex drag growing the box to 1840/988 with the selection still live, one UNDO restoring it, a `.gs` round trip, and a pyramid apex showing no handle). **Proven to bite:** deleting the three-planes guard makes the pyramid apex sprout a handle, failing both the unit case and the transcript. **A second stale assertion corrected, and it had been passing for the wrong reason:** `req148-gizmo-subobject`'s "a VERTEX gets no gizmo" block actually held TWO sub-objects, because a second pick ADDS rather than replaces — the pre-REQ-333 code returned None for any non-face selection and so could not tell a lone vertex from a pair. Split into a fresh-drawing vertex case and a separate two-sub-objects case, which are now different claims. Full suite **1397/1397**. | proposed |
+| REQ-332 | Domain | proposed, kernel delivered 2026-09-09 (D-2026-09-09-a, ADR-046 amendment (m), TASK-230) — `brep::Rotate` (rigid, arbitrary axis) and `brep::Scale` (uniform), plus `nurbs::Rotate` / `nurbs::Scale` on a control net. **Slice 1 of the three GitHub issue #148 acceptance 4 needs**; the typed ROTATE/SCALE commands and the gizmo handles are slices 2 and 3. **The root cause it removes:** `brep.hpp` declared exactly four operations touching an existing solid — `Translate`, `PushPullFace`, `FilletEdge(s)`, `ChamferEdge(s)` — and none turned or resized one, so `DropSolidsFromSelectionForTransform` (9 call sites) was covering for a missing capability rather than enforcing a policy. **The finding worth keeping is what a wrong version looks like.** Deleting the three axis lines from the frame rotation — the exact defect a per-field sweep at a call site produces — splits by axis: about world Z `Validate` catches it and the rotation is refused, but about a **tilted** axis it does not, returning a closed, manifold, positive-volume solid that `Validate` calls `Ok` and that reports volume **1142.5693570452 against a true 1600, 28.6% wrong**, because every face still faces where it faced before the solid turned under it. Measured by rebuilding, not argued. The second decision is the **recipe**: a push (REQ-319 item 9) and a fillet (REQ-323 item 9) both DROP it because the solid is no longer what it describes, but a rotated box is still a box and a uniformly scaled box is a box with scaled dimensions, so here the recipe FOLLOWS the solid — the precedent `Translate` set — and dropping it would discard a true description rather than a false one. A degenerate rotation axis is refused rather than normalized because the failure is silent: a zero axis reduces Rodrigues to `v * cos(angle)`, a shrink wearing a rotation's name. | `RotateSolidTests` (14 cases: the isometry about world Z and about a tilted off-origin axis; four quarter turns returning every vertex to 1e-12; a cylinder's own axis landing where the rotation puts it; `IsRightHandedOrthonormal` across EVERY stored frame; `k^3`/`k^2` on a flat-faced and a curved solid; scale-then-inverse returning to 1e-12; every frame axis bit-for-bit unchanged under a scale; the recipe turned, and resized so that it agrees with the geometry; a NURBS patch reproducing both transforms at every evaluated parameter with weights and knots untouched; the zero-axis shrink measured on the primitive; and every refusal by name). Full suite **1373/1373**, up from 1359. See also **REQ-333**, which closes issue #148 criterion 3's other two thirds. **Increment 2 (D-2026-09-09-b, TASK-231)** — the typed commands: `RotateSelectedSolids` / `ScaleSelectedSolids` replace 4 of the 9 `DropSolidsFromSelectionForTransform` sites, `ApplyScaleToSelection` gains `bz`, and REQ-322 item 6 becomes item 6b. Covered by `headless.req332-rotate-scale-solid` (ROTATE 90 in plan with the extents swapped and `EXPECT NOLOG` on the old refusal; UNDO restoring exactly; ROTATE under a **tilted UCS** landing at bounds `(0,-5,-10)-(8,5,10)` where world Z would give `(-5,-10,0)-(5,10,8)` — the single line that separates a correct axis from a hard-coded one; the plan-view Z asymmetry with a solid scaling `1600 -> 12800` beside a line holding `z = 5`; the scale base's own Z threaded through at elevation 4; a `.gs` round trip; and MIRROR still refusing). **Both new assertions were proven to bite**: hard-coding world Z fails the tilted case at `mnX -5 vs 0`, and hard-coding `bz = 0` fails the elevation case at `mnZ 8 vs 4`. `req322-move-3d`'s ROTATE-refusal assertion was rewritten onto MIRROR rather than deleted. Full suite **1374/1374**. | proposed |
 
 ---
 

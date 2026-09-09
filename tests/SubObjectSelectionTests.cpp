@@ -674,15 +674,26 @@ TEST_CASE("The gizmo mode is derived from the selection, never stored", "[subobj
     REQUIRE(std::fabs(axis.x) == Catch::Approx(0.0).margin(1e-9));
   }
 
-  SECTION("an EDGE or a VERTEX: no gizmo, and that is the honest answer") {
-    // The kernel has no operation that moves either, so a handle would advertise a move that cannot
-    // happen. Refusing after the drag would be worse than not offering it (D-2026-09-05-b).
+  SECTION("an EDGE gets TWO handles now (REQ-333)") {
+    // This section asserted NO gizmo until 2026-09-09, and the reasoning was right: the kernel had
+    // no operation that moved an edge, so a handle would have advertised a move that could not
+    // happen. `brep::MoveEdge` is that operation, so the premise changed and the assertion with it.
+    //
+    // TWO handles, not three: the two adjacent faces' normals span exactly the plane perpendicular
+    // to the edge, and the along-the-edge direction is not a motion at all (REQ-333 item 4).
     REQUIRE(SubmitSubObjectPick(st, RayAt({0, 100, 100}, {0, 5, 8}), Tol(0.5, 0.5), false, log));
     REQUIRE(st.subObjectSelection.size() == 1);
-    REQUIRE(st.subObjectSelection[0].kind != solidpick::Kind::Face);
-    REQUIRE(CadGizmoModeFor(st) == CadGizmoMode::None);
-    REQUIRE(CadGizmoAxisCountFor(st) == 0);
-    REQUIRE_FALSE(CadGizmoVisible(st));
+    REQUIRE(st.subObjectSelection[0].kind == solidpick::Kind::Edge);
+    REQUIRE(CadGizmoModeFor(st) == CadGizmoMode::SubObjectEdge);
+    REQUIRE(CadGizmoAxisCountFor(st) == 2);
+    REQUIRE(CadGizmoVisible(st));
+    // The handle directions are the two faces' outward normals — for the box's top-front edge, +Y
+    // and +Z — and neither is along the edge itself, which runs in X.
+    const ray3d::Vec3 a0 = CadGizmoAxisWorld(st, 0);
+    const ray3d::Vec3 a1 = CadGizmoAxisWorld(st, 1);
+    REQUIRE(std::fabs(a0.x) == Catch::Approx(0.0).margin(1e-9));
+    REQUIRE(std::fabs(a1.x) == Catch::Approx(0.0).margin(1e-9));
+    REQUIRE(std::fabs(ray3d::Dot(a0, a1)) == Catch::Approx(0.0).margin(1e-9));
   }
 
   SECTION("TWO faces: no gizmo, because there is no single normal to slide along") {

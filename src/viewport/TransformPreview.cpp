@@ -1812,6 +1812,35 @@ void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out) {
   const int lit = cmd.gizmoDragActive ? cmd.gizmoDragAxis : cmd.gizmoHoverAxis;
   const int axisCount = CadGizmoAxisCountFor(cmd);
   out->faceMode = CadGizmoModeFor(cmd) == CadGizmoMode::SubObjectFace;
+  out->soloOp = cmd.gizmoOp == CadGizmoOp::Rotate ? 1 : cmd.gizmoOp == CadGizmoOp::Scale ? 2 : 0;
+
+  // ROTATE: a RING in the plane the rotation happens in, rather than an arrow. An arrow says "drag
+  // along me" and this gesture is "drag around me" — the widget has to state which, because the two
+  // read identically once the view is orbited.
+  if (cmd.gizmoOp == CadGizmoOp::Rotate && axisCount == 1) {
+    const ray3d::Vec3 n = cmd.gizmoDragActive ? cmd.gizmoAxisDir : CadGizmoAxisWorld(cmd, 0);
+    // The ring's own frame, built from the AXIS and not the camera, so it does not swim when the
+    // view orbits — the same choice the arrowheads below make.
+    ray3d::Vec3 seed{0.0, 0.0, 1.0};
+    if (std::fabs(ray3d::Dot(n, seed)) > 0.9)
+      seed = ray3d::Vec3{1.0, 0.0, 0.0};
+    const ray3d::Vec3 e0 = ray3d::Normalize(ray3d::Cross(seed, n));
+    const ray3d::Vec3 e1 = ray3d::Cross(n, e0);
+    constexpr int kRingSegs = 64;
+    constexpr double kTwoPi = 6.28318530717958647692;
+    out->hot[0] = (cmd.gizmoDragActive || cmd.gizmoHoverAxis == 0);
+    ray3d::Vec3 prev{};
+    for (int i = 0; i <= kRingSegs; ++i) {
+      const double th = kTwoPi * static_cast<double>(i) / static_cast<double>(kRingSegs);
+      const ray3d::Vec3 p = ray3d::Add(
+          anchor, ray3d::Add(ray3d::Scale(e0, std::cos(th) * len), ray3d::Scale(e1, std::sin(th) * len)));
+      if (i > 0)
+        GizmoSeg(&out->axis[0], prev, p);
+      prev = p;
+    }
+    return;  // no arrow shafts, no drag guide: a rotation has no track to slide along
+  }
+
   for (int a = 0; a < axisCount; ++a) {
     // Mid-drag the direction is the one CAPTURED at the grab, not one re-derived from the live
     // selection: in face mode that direction comes from the face's own normal, and re-deriving it

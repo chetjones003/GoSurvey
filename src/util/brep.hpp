@@ -523,6 +523,32 @@ enum class Problem {
   /// command that caused them (`ucs::IsRightHandedOrthonormal`). A reflection is its own operation.
   ScaleFactorNonPositive,
   ScaleResultInvalid,          ///< The scaled solid did not validate. Should not happen; refused if it does.
+
+  // --- Moving a vertex or an edge (REQ-333, ADR-046 amendment (n)). ---
+  /// A vertex where fewer or more than three PLANAR faces meet. Three planes are exactly a point,
+  /// which is what makes a corner draggable at all; four — a pyramid's apex — generally leave no
+  /// single point satisfying all of them once one is offset, so the corner would have to SPLIT.
+  /// That is a topology change and a different operation. \ref Problem::PushPullVertexUnsolvable's
+  /// reasoning, at a vertex the user picked directly.
+  MoveVertexNotThreePlanes,
+  /// The two faces along the edge are parallel or coplanar, so their planes define no line for the
+  /// edge to lie on.
+  MoveEdgeFacesParallel,
+  /// A curved face meets the vertex or edge being moved. Re-solving a corner means intersecting the
+  /// surfaces meeting there, and a cylinder is not a plane to intersect. Push/pull can
+  /// re-parameterise a wall along its own axis; a corner dragged in an arbitrary direction has no
+  /// equivalent, so this is refused rather than approximated.
+  MoveSubObjectNeighbourCurved,
+  /// The requested move expresses no motion: zero, non-finite, or — for an edge — entirely ALONG the
+  /// edge. That last one is not a shortfall: an edge slid along its own line is the same edge, so
+  /// the component is a no-op by geometry rather than by omission.
+  MoveSubObjectNoMotion,
+  /// A corner touched by the move could not be re-solved: the planes there do not cross in one
+  /// point, or more than three meet and offsetting one leaves no point satisfying all of them. The
+  /// same situation \ref Problem::MoveVertexNotThreePlanes names at the picked vertex itself, found
+  /// instead at one of the OTHER corners the move drags along with it.
+  MoveSubObjectCornerUnsolvable,
+  MoveSubObjectResultInvalid,  ///< The edited solid did not validate — pushed through itself, inverted or collapsed.
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -1241,5 +1267,67 @@ struct Tessellation {
 ///   lines inside a face they share is `p + d*u1 + d*u2` only while `u1` and `u2` are perpendicular.
 [[nodiscard]] bool ChamferEdges(const Solid& s, const std::vector<int>& edgeIndices, double distance,
                                 Solid* out, Problem* outWhy);
+
+/// Move vertex \p vertexIndex of \p s by \p delta (REQ-333, ADR-046 amendment (n)).
+///
+/// **What "moving a vertex" means here, because the naive answer has no representation.** A box
+/// corner is used by three quadrilateral faces. Move that corner alone and each quad has four points
+/// that are no longer coplanar — and \ref SurfaceKind has no non-planar face to store the result in.
+/// A version that did it anyway would leave faces that do not contain their own boundaries, which is
+/// exactly what \ref PushPullFace's precondition exists to prevent and what \ref Validate cannot see.
+///
+/// So the move is expressed the only way a plane can move while staying a plane: **each of the three
+/// faces meeting at the vertex is offset along its own outward normal by
+/// `dot(delta, outward normal)`, and every affected corner is then re-solved** as the meeting point
+/// of the planes around it — \ref PushPullFace's algorithm with its "exactly one face moves"
+/// assumption lifted.
+///
+/// That is exact rather than approximate. Each offset plane reads `dot(n, x) = d + dot(n, delta)`,
+/// which `p + delta` satisfies identically, so the dragged vertex lands precisely where it was asked
+/// to. Every OTHER corner of those three faces moves too, which is the operation being honest: the
+/// faces moved, and their boundaries came with them.
+///
+/// Refused by name: \ref Problem::MoveVertexNotThreePlanes (a pyramid's apex, where four planes meet
+/// and the corner would have to split), \ref Problem::MoveSubObjectNeighbourCurved,
+/// \ref Problem::MoveSubObjectNoMotion, \ref Problem::MoveSubObjectResultInvalid.
+///
+/// The recipe is DROPPED, exactly as a push or a fillet drops it (REQ-319 item 9): a box with a
+/// corner pulled out is no longer the box its recipe describes, and a recipe that no longer
+/// describes its solid reads as authoritative while being false. That is the opposite answer from
+/// \ref Rotate and \ref Scale, which keep it — the rule is "a recipe that can still describe its
+/// solid is kept and updated; one that cannot is dropped" (ADR-046 amendment (m)).
+[[nodiscard]] bool MoveVertex(const Solid& s, int vertexIndex, const Vec3& delta, Solid* out,
+                              Problem* outWhy);
+
+/// Move edge \p edgeIndex of \p s by \p delta (REQ-333, ADR-046 amendment (n)).
+///
+/// \ref MoveVertex's statement with TWO planes instead of three: the faces on either side of the
+/// edge are each offset by `dot(delta, outward normal)` and every affected corner is re-solved.
+///
+/// **The component of \p delta along the edge is annihilated, and that is geometry rather than a
+/// limitation.** The edge direction lies in both faces, so it is perpendicular to both normals and
+/// contributes nothing to either offset. It should not: an edge slid along its own line is the same
+/// edge. A \p delta that is ENTIRELY along the edge therefore expresses no motion at all and is
+/// refused as such rather than reported as a move that did nothing.
+///
+/// Refused by name: \ref Problem::MoveEdgeFacesParallel (two planes that define no line),
+/// \ref Problem::MoveSubObjectNeighbourCurved, \ref Problem::MoveSubObjectNoMotion,
+/// \ref Problem::MoveSubObjectResultInvalid. The recipe is dropped, as \ref MoveVertex explains.
+[[nodiscard]] bool MoveEdge(const Solid& s, int edgeIndex, const Vec3& delta, Solid* out,
+                            Problem* outWhy);
+
+/// The faces of \p s whose loops use \p vertexIndex, in index order (REQ-333).
+///
+/// Public because the UI has to know what meets where BEFORE it offers a grip: \ref MoveVertex works
+/// only where exactly three planar faces meet, and a handle drawn on a pyramid's apex that then
+/// refuses on drop is worse than no handle at all. Answering that question in the kernel keeps the
+/// loop walking in the one place that owns the topology.
+void FacesAtVertex(const Solid& s, int vertexIndex, std::vector<int>* out);
+
+/// The two faces of \p s that use edge \p edgeIndex, or false when there are not exactly two.
+///
+/// A manifold solid always has two (\ref Validate enforces it), so `false` here means the caller is
+/// holding an index into a solid that is not one — worth saying rather than assuming.
+[[nodiscard]] bool FacesAlongEdge(const Solid& s, int edgeIndex, int* outA, int* outB);
 
 } // namespace brep
