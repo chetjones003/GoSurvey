@@ -13276,7 +13276,16 @@ struct PatchPoint {
 [[nodiscard]] FaceMoment CurvedFaceMoment(const Face& f, const Vec3& q) {
   FaceMoment out;
   const Surface& sf = f.surface;
-  const double v0 = f.vStart, v1 = f.vEnd;
+  double v0 = f.vStart, v1 = f.vEnd;
+  if (sf.kind == SurfaceKind::Cylinder || sf.kind == SurfaceKind::Cone) {
+    // `vStart`/`vEnd` on a Cylinder/Cone face is not the height range: the volume path
+    // (`IntegrateFace`) never reads it either, deriving the true height instead from
+    // `CylinderCutZExtent` or falling back to `sf.height`. The only face that height range differs
+    // from `[0, sf.height]` for is one bounded by an `Ellipse` cut edge, which `IntegrateFaceMoment`
+    // refuses by name before this is reached.
+    v0 = 0.0;
+    v1 = sf.height;
+  }
   const double u0 = f.uStart, u1 = f.uEnd;
   if (!(std::fabs(u1 - u0) > 0.0) || !(std::fabs(v1 - v0) > 0.0))
     return out;
