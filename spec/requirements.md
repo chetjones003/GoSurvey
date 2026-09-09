@@ -4092,10 +4092,31 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: should
 - Type: functional
 - Statement: Add the commands above, reusing existing geometry/snap infrastructure; read-only, no undo entry.
+
+  **DIST reports the four numbers a surveyor reads together**, not just the two it started with:
+  the **slope (3D) distance**, the **horizontal distance**, the **vertical difference** and the
+  **grade** (amended 2026-09-09 for GitHub #149 acceptance 1, D-2026-09-09-f). All four are measured
+  in the **active UCS**, the frame the deltas were already reported in — so on a tilted UCS
+  "horizontal" means horizontal in the frame the user is working in, which is the only reading
+  under which the four numbers are consistent with each other.
+
+  The grade is reported in **both conventions a surveyor uses** — percent, and run:rise — and in
+  **the same words REQ-074's SURFELEV uses**, so the same two points read the same way whichever
+  command asked. A pair with no horizontal separation is reported as **vertical, with no grade**,
+  rather than dividing by a zero run (REQ-201); a pair with no vertical difference is reported as
+  **level**, rather than stating a run:rise ratio that would divide by a zero rise.
 - Acceptance (sketch): AREA reports area/perimeter for polylines, rectangles and circles within REQ-101; DIST reports distance and delta X/Y/Z between two snapped/typed points, using current unit/precision settings (NumFormat.hpp); LIST prints an entity's stored properties; MASSPROP reports at least area/perimeter/centroid for a closed region.
+- Acceptance (DIST, amended):
+  - slope distance, horizontal distance, vertical difference and grade are each reported for a
+    two-point pick, and each agrees with the hand-computed value within REQ-101;
+  - the grade's wording matches REQ-074's — `grade <n>%  slope <n>:1  horiz <n>  vert <n>` — so the
+    two commands cannot describe the same slope differently;
+  - two points with no horizontal separation report "vertical … No grade" and no ratio;
+  - two points at the same elevation report "level (0.00%)" and no ratio;
+  - all four figures are taken in the active UCS, and a tilted UCS moves them together.
 - Owner-layer: Commands/UI
 - Status: accepted (DIST only — issue #382); AREA/LIST/MASSPROP remain proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i); 2026-09-07 — accepted scoped to DIST (issue #382)
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i); 2026-09-07 — accepted scoped to DIST (issue #382); 2026-09-09 — DIST amended to report horizontal distance and grade (D-2026-09-09-f, TASK-235, GitHub #149 acceptance 1)
 
 ### REQ-106 — View-management commands
 - Purpose: no view-stack undo, no named views, no isometric presets beyond the ViewCube's standard faces
@@ -8869,7 +8890,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-102 | Domain/Renderer/Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-103 | Commands/Domain/UI | planned — sequenced into 8 increments (D-2026-08-23-j); TASK-094 (MIRROR, step 1), TASK-095 (LENGTHEN, step 2), TASK-096 (EXTEND, step 3, model+paper space), TASK-097 (BREAK, step 4, model+paper space), and TASK-098 (STRETCH, step 5, model+paper space, full arc-parity geometry) all self-verified 2026-08-24, transcripts green (565/565 regression, plus 4 new unit tests pinning the arc-stretch formula). **All five then failed in model space**: none was routed in CadUi.cpp's model-space viewport click dispatch, so every click was silently discarded and each command hung on its first prompt (working in floating model space and pure paper space, which route separately). Fixed by TASK-099, which moved the routing decision into the pure `ViewportClickRouteFor` (viewport/ViewportPickPolicy.hpp) as an exhaustive switch with no `default:`, added the headless `CLICK` verb so a transcript exercises the routing the `PICK` verb bypasses, and converted the five REQ-103 transcripts onto it (red before the fix, green after; 571/571 regression). Two further GUI-only defects then surfaced and were fixed: LENGTHEN refused any pick made before its sub-mode had a value, making the ribbon button a dead end (TASK-100 — the pick now latches the object, reports its length and prompts, with Total as the new default sub-mode), and BREAK gained a live preview of the material a break removes, on its own opaque render channel because the shared translucent preview batch is invisible when painted over the object it describes (TASK-101). Both amendments recorded as D-2026-08-24-e / D-2026-08-24-f. **Steps 1-5 are complete**: 573/573 regression green, and the user confirmed the manual GUI pass on 2026-08-24, closing TASK-094..101. **Step 6 (FILLET/CHAMFER) is complete**: TASK-102 (FILLET, step 6a) and TASK-103 (CHAMFER, step 6b) both self-verified 2026-08-24 — full model+paper-space parity for both, tangent-arc/corner-point geometry unit-tested (8 + 3 cases), four headless transcripts (two CLICK-driven), two real bugs found and fixed during TASK-102's self-verification (triple undo-snapshot per apply; pick-based rather than computed-point-based near/far endpoint selection) — both fixes live in shared code, so CHAMFER's own transcripts passed on the first run rather than repeating either mistake. 588/588 regression green; manual GUI pass pending for both (this project's own no-UI-automation constraint). Steps 7-8 (ARRAY/EXPLODE) not started | accepted |
 | REQ-104 | Commands/Domain/IO/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-105 | Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-105 | Commands/UI | **DIST accepted and built** (GitHub issue #382): two-point slope distance + delta X/Y/Z in the active UCS, `DistCommandTests [req105]`. Amended 2026-09-09 (D-2026-09-09-f, TASK-235) to add the surveyor's other two numbers — horizontal distance and grade — in REQ-074's own wording, so SURFELEV and DIST cannot describe one slope two ways; the vertical and level cases are refusals with a stated reason (REQ-201) rather than divisions by a zero run or rise, covered by `DistCommandTests` and `headless.req105-dist-horiz-grade`. This row said "proposed — not yet scoped" until 2026-09-09, two days after the body was accepted — the summary table and the requirement text sit ~4,500 lines apart and drifted. AREA/LIST/MASSPROP remain proposed and unbuilt | accepted (DIST only) |
 | REQ-106 | UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-107 | Domain/Commands/IO/UI | proposed — not yet scoped, likely architectural; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-108 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
