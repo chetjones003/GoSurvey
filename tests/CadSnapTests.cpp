@@ -588,10 +588,10 @@ TEST_CASE("REQ-309 endpoint snap resolves under a perspective camera", "[CadSnap
 
   REQUIRE(hit.valid);
   CHECK(hit.kind == Kind::Endpoint);
-  // REQ-101 is 0.01 ft; these are hand-computed, not read back from the same code under test.
-  CHECK(hit.x == Approx(140.0).margin(0.01));
-  CHECK(hit.y == Approx(90.0).margin(0.01));
-  CHECK(hit.z == Approx(25.0).margin(0.01));
+  // REQ-101 is 0.002 ft; these are hand-computed, not read back from the same code under test.
+  CHECK(hit.x == Approx(140.0).margin(0.002));
+  CHECK(hit.y == Approx(90.0).margin(0.002));
+  CHECK(hit.z == Approx(25.0).margin(0.002));
 }
 
 TEST_CASE("REQ-309 perspective and orthographic snap to the same endpoint", "[CadSnap][req309]") {
@@ -623,9 +623,9 @@ TEST_CASE("REQ-309 perspective and orthographic snap to the same endpoint", "[Ca
   REQUIRE(orthoHit.valid);
   REQUIRE(perspHit.valid);
   CHECK(orthoHit.kind == perspHit.kind);
-  CHECK(perspHit.x == Approx(orthoHit.x).margin(0.01));
-  CHECK(perspHit.y == Approx(orthoHit.y).margin(0.01));
-  CHECK(perspHit.z == Approx(orthoHit.z).margin(0.01));
+  CHECK(perspHit.x == Approx(orthoHit.x).margin(0.002));
+  CHECK(perspHit.y == Approx(orthoHit.y).margin(0.002));
+  CHECK(perspHit.z == Approx(orthoHit.z).margin(0.002));
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -97,9 +97,11 @@ struct TinCrossingIssue {
 /// triangulation, so it can run before \ref BuildTin is even called and be reported up front.
 [[nodiscard]] std::vector<TinCrossingIssue> TinFindCrossingConflicts(const std::vector<TinConstraint>& constraints);
 
-/// Plan-distance below which two points are the same site. Matches REQ-101's ±0.01 ft: two shots
-/// closer than this in plan cannot be distinguished by the tolerance the rest of the system works to,
-/// and feeding both to Delaunay is undefined.
+/// Plan-distance below which two points are the same site — a field-shot de-dup threshold, not the
+/// REQ-101 coordinate-storage guarantee (issue #394/#444, D-2026-09-08-i): TIN vertex storage
+/// (`TinBuildResult::vertsXyz`) is still `float` (deferred to Phase G, issue #453), so pinning this to
+/// REQ-101's tightened 0.002 ft would promise precision the underlying store cannot hold. Left at
+/// 0.01 ft; revisit once Phase G widens TIN storage to `double`.
 inline constexpr double kTinPlanEpsilon = 0.01;
 
 /// Triangulate \p points in plan (X/Y), carrying Z through to the output vertices, honouring every
