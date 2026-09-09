@@ -1,7 +1,7 @@
 # TASK-228 — REQ-101 ±0.002 ft: widen coordinate storage `float` → `double`
 
 - Type:    refactor (spec-authorized architecture migration)
-- Status:  in progress — PR 1 done; Phase A done (#440); Phase B done (#441); Phases C–E + F open
+- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442) done; Phases D, E, F open
 - Opened:  2026-09-08
 - Owner:   Workshop
 - GitHub:  #394 (sub-issues #440 A, #441 B, #442 C, #443 D, #444 E, #447 F — SurveyPoint)
@@ -55,9 +55,19 @@ Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft asse
   **ADR-054 (a) amended:** paper-space stores stay `float` (sheet inches — `float` resolves ~1e-6 in,
   orders of magnitude inside ±0.002 ft; widening is pure churn). `SurveyPoint` split to Phase F (#447).
   Build clean; `ctest` 1359/1359.
-- **Phase C — snap / preview / pick read-back.** Every site that reads a coordinate back out of a
-  store for snapping, rubber-band preview, or pick resolution takes the `double` value. Confirm
-  REQ-101's bit-identical-snap property now delivers the full-precision value.
+- **Phase C — snap / pick read-back. DONE (#442).** `CadSnap::Hit::x/y/z` → `double`;
+  `AppCommandState::viewportSnapPickLocalX/Y/Z` → `double`; `SubmitViewportPick` /
+  `SubmitViewportPickImpl` / `UiSubmitViewportPick` entry coordinates → `double`;
+  `ApplySegmentAnglePickToViewportPick` → `double&`; `CadUi` `commitX/commitY` and the snapped
+  `curMX/curMY` submit calls stay `double` (dropped their `static_cast<float>`). The
+  snap→commit chain is now `double` end to end, so REQ-101's *bit-identical-snap* property holds at
+  any drawing magnitude (a `float` copy broke it above ~10,000 ft local). The ORTHO / polar /
+  angle-lock constraint helpers (`ApplyOrthoConstrainFromAnchor`, `ApplySegmentAngleLockToWorldPick`)
+  keep working in `float` — narrowed across the call and back — because an axis/ray-locked pick is a
+  computed, pixel-bounded point that REQ-101 scopes out, and it is mutually exclusive with an active
+  object snap. Rubber-band **preview** buffers stay `float` (render-only, GPU-bound). Build clean;
+  `ctest` 1359/1359. Only 12 boundary sites needed edits — the `float wx/wy` pick handlers compile
+  unchanged (double→float at their internal comparisons, warning-suppressed).
 - **Phase D — the GPU-upload narrowing point.** Audit that `float` appears on the geometry path in
   exactly one place (buffer assembly) and nowhere upstream; add a `docinvariants` / review check.
 - **Phase E — test-assertion sweep.** Every `0.01` literal and named constant that represents the

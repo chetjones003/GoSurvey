@@ -48,12 +48,12 @@ enum class Kind {
 struct Hit {
   bool valid = false;
   Kind kind = Kind::Endpoint;
-  float x = 0.f;
-  float y = 0.f;
+  double x = 0.0;
+  double y = 0.0;
   /// Elevation of the snapped point (REQ-057/058). Without it the snap glyph is drawn on the
   /// datum while the point it marks sits at its own elevation, so the marker floats away from the
   /// geometry as soon as the view is orbited. Zero for flat drawings, which is every pre-3D one.
-  float z = 0.f;
+  double z = 0.0;
   /// True when this candidate came from the 3D Object Snap system (REQ-325/#395) rather than the 2D
   /// one — used only to color the glyph (3D Object Snap purple #8803fc vs 2D Object Snap green), so
   /// a user can tell at a glance which snap system answered, even for a kind (Endpoint, Midpoint,
