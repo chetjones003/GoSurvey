@@ -29,7 +29,7 @@ Source: nine findings from the hands-on learning programme (probes 14–35), wri
 | 06 | harness cannot assert a coordinate; 3 commands undriveable | **fixed** — `EXPECT VERTEX` / `EXPECT ELEVATION`, `EXPORT POINTS`, `HATCH` + `PDFATTACH` click routes |
 | 01 | eight editing commands discard elevation | **fixed** — BREAK / FILLET / CHAMFER / JOIN / OVERKILL, lines and polylines |
 | 02 | OVERKILL and JOIN reach into model space from a sheet | **fixed** — refuse, matching ARRAY's existing guard |
-| 03 | CSV point import loses up to 0.123 ft per point | **fixed** — origin derived from the incoming rows |
+| 03 | CSV point import loses up to 0.123 ft per point | **fixed upstream during the rebase** — ADR-054 Phase F (#447 / #461) widened `SurveyPoint` to `double`. This task's own fix was measured redundant and deleted; only its transcript remains. See §8b |
 | 08 | JOIN and OVERKILL skip surfaces silently | **fixed** — both now name what they left out |
 | 05 | QUICKSELECT untestable; SELECTSIMILAR unreachable | **fixed** — function moved to the command layer; registry entry added |
 | 09 | DIMANGULAR not persisted | **already fixed upstream** (PR #127, `63ab63c`) — no change |
@@ -188,7 +188,7 @@ present. Five of the six are still live and unfixed:
 | 01 — elevation, BREAK / FILLET / CHAMFER | six `std::vector<std::pair<float, float>>` vertex records remain in the model- and paper-space helpers |
 | 01 — elevation, **JOIN** | **fixed upstream** — see below |
 | 02 — space scoping | no sheet guard on OVERKILL or JOIN |
-| 03 — import precision | `static_cast<float>(pr.worldE - st.worldDocumentOriginX)` still runs with the origin at 0 |
+| 03 — import precision | **fixed upstream mid-rebase** — see §8b |
 | 05 — SELECTSIMILAR | still absent from the command registry |
 | 08 — surface skips | still unreported |
 
@@ -222,11 +222,11 @@ handling at all** — only its space guard (issue 02) and its surface-skip messa
 
 - Clean release build, MSVC/Ninja. Two orphaned locals in `ApplyBreakToOpenPolyline` (`v0`, `v1`,
   unused once the helper reads through `PolylineVertsOf`) removed rather than left warning.
-- **ctest 1367/1367 green** — up from 743/743 when the task was written, so the suite this now
+- **ctest 1369/1369 green** — up from 743/743 when the task was written, so the suite this now
   passes is nearly twice the one it was verified against.
-- **Issue 03 re-proven to bite** on current `beta`, not merely asserted: disabling the pre-scan and
-  rebuilding turns `regression-issue03` red on a *value* difference, and the round trip comes back
-  wrong on four of five points —
+- **Issue 03 was re-proven to bite** against `beta` at `31c907c`, not merely asserted: disabling the
+  pre-scan and rebuilding turned `regression-issue03` red on a *value* difference, with the round
+  trip wrong on four of five points —
 
   | point | column | in the file | without the fix | lost |
   |---|---|---|---|---|
@@ -235,11 +235,72 @@ handling at all** — only its space guard (issue 02) and its surface-skip messa
   | 448 | E | 2385331.1420 | 2385331.2500 | **0.108 ft** |
   | 449 | E | 2385261.3320 | 2385261.2500 | 0.082 ft |
 
-  Worth restating against the tolerance that now applies: **0.108 ft is 54× REQ-101's ±0.002 ft.**
-  When this task was written REQ-101 was ±0.01 ft and the same error was 10.8×. ADR-054 did not
-  make this finding stale — it made it five times worse.
+  Against the tolerance that now applies, **0.108 ft is 54× REQ-101's ±0.002 ft** — when this task
+  was written REQ-101 was ±0.01 ft and the same error was 10.8×.
+
+  **And then ADR-054 fixed it outright, mid-rebase.** See §8b.
 - The `.gitattributes` `eol=lf` pin (the branch's second commit) proved itself during the rebase for
   the second time and for the same reason: the fixture was already in the working tree as CRLF, so
   the attribute did not apply until the file was re-checked-out. `SAMEFILE` failed at byte 9 on a
   six-byte length difference — one byte per line — which is exactly the failure that commit exists
   to prevent, and a fresh CI checkout would not have seen it.
+
+---
+
+## 8b. Second rebase, same afternoon — and issue 03's fix deleted
+
+The PR opened against `beta` at `31c907c` came back `CONFLICTING` within a minute: three more
+commits had landed while the first rebase was being verified, the last of them **fifteen minutes
+earlier**.
+
+| | |
+|---|---|
+| `8e5a9f8` | Phase E — 0.01 → 0.002 tolerance sweep (#454) |
+| `2f0e4eb` | DWG-trailer state-plane + legacy-float round trip (#459) |
+| `a32e613` | **Phase F — `SurveyPoint` easting / northing / elevation → `double` (#447, #461)** |
+
+Phase F is the fix for issue 03. `SurveyCsvImportFile` now reads
+
+```cpp
+pr.pt.easting  = pr.worldE - st.worldDocumentOriginX;   // no cast at all
+pr.pt.northing = pr.worldN - st.worldDocumentOriginY;
+```
+
+against a `SurveyPoint` whose members are `double`. There is no narrowing left for a pre-scan to get
+in front of.
+
+**Measured rather than assumed, because the same claim had been true four hours earlier:** the
+pre-scan was disabled and the tree rebuilt against the new `beta`. `regression-issue03`'s round trip
+came back **byte-for-byte exact on all five points**, where the same experiment against `31c907c` had
+lost up to 0.108 ft. The only remaining difference was the CRLF artefact §8 already describes.
+
+**So the pre-scan was deleted, not shipped.** It costs a second full parse of every imported CSV
+file, and it now buys nothing: `src/io/SurveyCsv.cpp` is byte-identical to `beta` and drops out of
+this task's diff entirely. Keeping a redundant fix because it was already written is how a codebase
+acquires two mechanisms for one problem — which is the argument this repo already makes for having
+exactly one plane type and one document origin.
+
+**The transcript stays.** It was red on the pre-Phase-F kernel and is green now, so it is the
+end-to-end round-trip guard the migration does not otherwise have, and it only exists at all because
+this task's `EXPORT POINTS` driver support made the CSV round trip expressible. Its header now says
+which change actually fixed it, so nobody reads it as evidence for a fix that is no longer there.
+
+One more relocation hazard caught, of the same shape as the `BlockRef` one in §8: Phase F also
+narrowed `ExecuteQuickSelect`'s three survey-point property cases at the comparison
+(`matchNum(static_cast<float>(sp.easting))` and its two neighbours). The relocated copy carries those
+casts forward. Without that, moving the function would have silently reverted a change made fifteen
+minutes earlier, through a clean merge and a clean build — the [[gosurvey-borrowed-predicate-drift]]
+failure mode exactly.
+
+**Final state: ctest 1369/1369 green**, five findings fixed, four now upstream's.
+
+### Two earlier notes this supersedes
+
+- **ASSUMPTION-3** (§4) was about the threshold the CSV pre-scan should use. There is no pre-scan any
+  more, so the assumption is withdrawn rather than validated. The question it raised in passing — that
+  `kLargeCoordinateRebaseThreshold` is 1e5 while a float already steps 0.0078 ft at 5e4 — belongs to
+  ADR-054, not here, and Phase F has made it moot for survey points specifically.
+- **Escalation (c)** (§5) recorded that `GsIo.cpp` had the same establish-the-origin-late ordering,
+  left alone because it was latent, and said it "becomes real the day `.gs` coordinates become
+  `double`". That day did not come: **issue #264 Stage 1 retired the standalone `.gs` document format
+  outright** while this branch was parked. The escalation is closed by deletion of its subject.
