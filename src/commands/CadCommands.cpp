@@ -1745,12 +1745,13 @@ void AppendContourLinesFrom(const ContourResult& r, std::vector<float>* out) {
 /// REQ-070, now the style's "triangles" component.
 void AppendTriangleEdges(const CadTin& t, std::vector<float>* out) {
   const auto emit = [&](std::uint32_t a, std::uint32_t b) {
-    out->push_back(t.vertsXyz[a * 3 + 0]);
-    out->push_back(t.vertsXyz[a * 3 + 1]);
-    out->push_back(t.vertsXyz[a * 3 + 2]);
-    out->push_back(t.vertsXyz[b * 3 + 0]);
-    out->push_back(t.vertsXyz[b * 3 + 1]);
-    out->push_back(t.vertsXyz[b * 3 + 2]);
+    // Narrowed here (ADR-054 (b)): `out` is the render buffer, GPU-bound `float`.
+    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 0]));
+    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 1]));
+    out->push_back(static_cast<float>(t.vertsXyz[a * 3 + 2]));
+    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 0]));
+    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 1]));
+    out->push_back(static_cast<float>(t.vertsXyz[b * 3 + 2]));
   };
   // Each interior edge is emitted twice, once per adjoining triangle. De-duplicating would cost a
   // hash of every edge to halve a buffer the line pipeline already handles at this size (REQ-100's
@@ -2531,9 +2532,9 @@ struct SurfaceBuildInputs {
   /// REQ-136: copy of parent TINs for a volume surface. When true, \ref RunSurfaceBuild ignores
   /// \c pts / \c constraints and calls \ref BuildTinVolumeSurface.
   bool isVolume = false;
-  std::vector<float> volumeBaseVertsXyz;
+  std::vector<double> volumeBaseVertsXyz;
   std::vector<std::uint32_t> volumeBaseIndices;
-  std::vector<float> volumeCompVertsXyz;
+  std::vector<double> volumeCompVertsXyz;
   std::vector<std::uint32_t> volumeCompIndices;
 };
 
@@ -2850,10 +2851,8 @@ std::shared_ptr<CadTin> ToLocalTin(const TinBuildResult& r, double originX, doub
   auto tin = std::make_shared<CadTin>();
   tin->vertsXyz.resize(r.vertsXyz.size());
   for (int i = 0; i < r.vertexCount(); ++i) {
-    tin->vertsXyz[static_cast<size_t>(i) * 3 + 0] =
-        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 0]) - originX);
-    tin->vertsXyz[static_cast<size_t>(i) * 3 + 1] =
-        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 1]) - originY);
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 0] = r.vertsXyz[static_cast<size_t>(i) * 3 + 0] - originX;
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 1] = r.vertsXyz[static_cast<size_t>(i) * 3 + 1] - originY;
     tin->vertsXyz[static_cast<size_t>(i) * 3 + 2] = r.vertsXyz[static_cast<size_t>(i) * 3 + 2];  // Z absolute
   }
   tin->indices = r.indices;
@@ -3678,7 +3677,7 @@ static bool SurfaceRefusesPointEdits(const CadSurface& s, const char* cmd, std::
   return true;
 }
 
-static void CommitSurfAddPointLocal(AppCommandState& st, CadSurface& s, double x, double y, float z,
+static void CommitSurfAddPointLocal(AppCommandState& st, CadSurface& s, double x, double y, double z,
                                     std::vector<std::string>& log) {
   if (SurfaceRefusesPointEdits(s, "SURFACEADDPOINT", log))
     return;
@@ -3687,8 +3686,8 @@ static void CommitSurfAddPointLocal(AppCommandState& st, CadSurface& s, double x
     return;
   }
   PushUndoSnapshot(st, "Add surface point");
-  s.addedPointXyz.push_back(static_cast<float>(x));
-  s.addedPointXyz.push_back(static_cast<float>(y));
+  s.addedPointXyz.push_back(x);
+  s.addedPointXyz.push_back(y);
   s.addedPointXyz.push_back(z);
   BumpCadGpuCache(st);
   log.push_back("SURFACEADDPOINT — added a definition point on \"" + s.name + "\".");
@@ -3714,7 +3713,7 @@ static void CommitSurfDelPointLocal(AppCommandState& st, CadSurface& s, double x
 }
 
 static void CommitSurfMovePointLocal(AppCommandState& st, CadSurface& s, double x1, double y1, double x2, double y2,
-                                     float z2, std::vector<std::string>& log) {
+                                     double z2, std::vector<std::string>& log) {
   if (SurfaceRefusesPointEdits(s, "SURFACEMOVEPOINT", log))
     return;
   if (!std::isfinite(x1) || !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2) || !std::isfinite(z2)) {
@@ -3725,8 +3724,8 @@ static void CommitSurfMovePointLocal(AppCommandState& st, CadSurface& s, double 
   CadSurface::MovedPoint m;
   m.fromX = x1;
   m.fromY = y1;
-  m.toX = static_cast<float>(x2);
-  m.toY = static_cast<float>(y2);
+  m.toX = x2;
+  m.toY = y2;
   m.toZ = z2;
   s.movedPoints.push_back(m);
   BumpCadGpuCache(st);
@@ -3844,10 +3843,10 @@ void RunSurfAddPoint(AppCommandState& st, const std::string& args, std::vector<s
     log.push_back("SURFACEADDPOINT — x, y, and z must be numbers.");
     return;
   }
-  float lx = 0.f;
-  float ly = 0.f;
+  double lx = 0.0;
+  double ly = 0.0;
   CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
-  CommitSurfAddPointLocal(st, s, static_cast<double>(lx), static_cast<double>(ly), static_cast<float>(wz), log);
+  CommitSurfAddPointLocal(st, s, lx, ly, wz, log);
 }
 
 void RunSurfDelPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
@@ -19523,6 +19522,30 @@ namespace {
 // "no layer", so this does too; otherwise freezing layer "0" would hide geometry on screen and
 // still drag the extents out to it.
 //
+/// Plan (X/Y) bounds of a TIN's `double` vertex store (Phase G, ADR-054) — `meshgeom::ComputeBounds`
+/// stays `float`, matching the GPU-mesh types it otherwise serves, so this stays a tiny local helper
+/// rather than widening that shared utility for its one non-mesh caller.
+struct TinPlanBounds {
+  bool valid = false;
+  double mnX = 0.0, mxX = 0.0, mnY = 0.0, mxY = 0.0;
+};
+
+[[nodiscard]] TinPlanBounds ComputeTinPlanBounds(const std::vector<double>& vertsXyz) {
+  TinPlanBounds b;
+  if (vertsXyz.size() < 3)
+    return b;
+  b.valid = true;
+  b.mnX = b.mxX = vertsXyz[0];
+  b.mnY = b.mxY = vertsXyz[1];
+  for (size_t i = 3; i + 2 < vertsXyz.size(); i += 3) {
+    b.mnX = std::min(b.mnX, vertsXyz[i]);
+    b.mxX = std::max(b.mxX, vertsXyz[i]);
+    b.mnY = std::min(b.mnY, vertsXyz[i + 1]);
+    b.mxY = std::max(b.mxY, vertsXyz[i + 1]);
+  }
+  return b;
+}
+
 // A null p vp means no filter at all, which is every caller but the floating-viewport one.
 [[nodiscard]] bool EntityHiddenInViewport(const Viewport* vp, const std::vector<EntityAttributes>& attrs,
                                           size_t idx) {
@@ -19756,11 +19779,11 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     const CadSurface& s = st.cadSurfaces[si];
     if (!s.tin)
       continue;
-    const meshgeom::Bounds sb = meshgeom::ComputeBounds(s.tin->vertsXyz);
+    const TinPlanBounds sb = ComputeTinPlanBounds(s.tin->vertsXyz);
     if (!sb.valid)
       continue;
-    consider(static_cast<double>(sb.mnX), static_cast<double>(sb.mnY));
-    consider(static_cast<double>(sb.mxX), static_cast<double>(sb.mxY));
+    consider(sb.mnX, sb.mnY);
+    consider(sb.mxX, sb.mxY);
   }
 
   if (!any)
@@ -20028,14 +20051,14 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     const CadSurface& s = st.cadSurfaces[si];
     if (!s.tin)
       continue;
-    const meshgeom::Bounds sb = meshgeom::ComputeBounds(s.tin->vertsXyz);
+    const TinPlanBounds sb = ComputeTinPlanBounds(s.tin->vertsXyz);
     if (!sb.valid)
       continue;
     EntityBox b{};
-    b.mnX = static_cast<double>(sb.mnX);
-    b.mxX = static_cast<double>(sb.mxX);
-    b.mnY = static_cast<double>(sb.mnY);
-    b.mxY = static_cast<double>(sb.mxY);
+    b.mnX = sb.mnX;
+    b.mxX = sb.mxX;
+    b.mnY = sb.mnY;
+    b.mxY = sb.mxY;
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -24539,7 +24562,7 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     if (!SurfaceVisible(st, si))
       continue;
     const CadTin& t = *st.cadSurfaces[si].tin;
-    const std::vector<float>& V = t.vertsXyz;
+    const std::vector<double>& V = t.vertsXyz;
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Surface;
     e.index = static_cast<int>(si);

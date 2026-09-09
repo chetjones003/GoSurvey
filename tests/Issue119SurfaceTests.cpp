@@ -39,7 +39,7 @@ TEST_CASE("TIN ISurfaceQuery matches TinElevationAt", "[req137][query]") {
 
 TEST_CASE("Due-east downhill reports aspect 90 and a slope angle", "[req138][aspect]") {
   // Z = -X: fall is due east.
-  const std::vector<float> v{0.f, 0.f, 0.f, 10.f, 0.f, -10.f, 0.f, 10.f, 0.f};
+  const std::vector<double> v{0.0, 0.0, 0.0, 10.0, 0.0, -10.0, 0.0, 10.0, 0.0};
   const std::vector<std::uint32_t> idx{0, 1, 2};
   TinSurfaceQuery q(v, idx);
   double asp = 0.0, ang = 0.0, z = 0.0;
@@ -51,7 +51,7 @@ TEST_CASE("Due-east downhill reports aspect 90 and a slope angle", "[req138][asp
 }
 
 TEST_CASE("Query miss does not invent a slope", "[req138][outside]") {
-  const std::vector<float> v{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+  const std::vector<double> v{0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
   const std::vector<std::uint32_t> idx{0, 1, 2};
   TinSurfaceQuery q(v, idx);
   double pct = 0.0;
@@ -83,7 +83,7 @@ TEST_CASE("Zero label spacing emits no labels", "[req138][labels]") {
 }
 
 TEST_CASE("Interior edge swap changes two triangles", "[req139][swap]") {
-  std::vector<float> verts{0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
+  std::vector<double> verts{0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
   std::vector<std::uint32_t> idx{0, 1, 2, 0, 2, 3};
   const auto a = idx;
   REQUIRE(TinSwapInteriorEdgeNear(verts, idx, 5.0, 5.0));
@@ -95,7 +95,7 @@ TEST_CASE("Interior edge swap changes two triangles", "[req139][swap]") {
 }
 
 TEST_CASE("Interior edge swap is refused when the new diagonal is not inside the quad", "[req139][swap]") {
-  std::vector<float> verts{0.f, 0.f, 0.f, 5.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 5.f, 0.f};
+  std::vector<double> verts{0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 5.0, 0.0};
   std::vector<std::uint32_t> idx{0, 1, 2, 0, 2, 3};
   const auto original = idx;
   REQUIRE_FALSE(TinSwapInteriorEdgeNear(verts, idx, 0.5, 0.5));
@@ -103,7 +103,7 @@ TEST_CASE("Interior edge swap is refused when the new diagonal is not inside the
 }
 
 TEST_CASE("Deleting an interior edge removes both triangles", "[req150][tin]") {
-  std::vector<float> verts{0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
+  std::vector<double> verts{0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
   std::vector<std::uint32_t> idx{0, 1, 2, 0, 2, 3};
   REQUIRE(TinDeleteInteriorEdgeNear(idx, verts, 5.0, 5.0));
   REQUIRE(idx.size() < 6);
@@ -113,7 +113,7 @@ TEST_CASE("Deleting an interior edge removes both triangles", "[req150][tin]") {
 }
 
 TEST_CASE("One-triangle stats min area equals max area", "[req140][stats]") {
-  const std::vector<float> verts{0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 0.f, 10.f, 0.f};
+  const std::vector<double> verts{0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0};
   const std::vector<std::uint32_t> idx{0, 1, 2};
   const SurfaceStats s = ComputeSurfaceStats(verts, idx);
   REQUIRE(s.built);

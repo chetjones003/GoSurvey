@@ -100,11 +100,35 @@ TEST_CASE("Vertex elevations are carried through untouched", "[tin][req101]") {
   REQUIRE(r.ok());
   REQUIRE(r.triangleCount() == 1);
   // Z is data, not geometry the triangulator may adjust: exact equality is the right assertion.
-  std::vector<float> zs = {r.vertsXyz[2], r.vertsXyz[5], r.vertsXyz[8]};
+  std::vector<double> zs = {r.vertsXyz[2], r.vertsXyz[5], r.vertsXyz[8]};
   std::sort(zs.begin(), zs.end());
-  REQUIRE(zs[0] == 99.75f);
-  REQUIRE(zs[1] == 100.25f);
-  REQUIRE(zs[2] == 101.5f);
+  REQUIRE(zs[0] == 99.75);
+  REQUIRE(zs[1] == 100.25);
+  REQUIRE(zs[2] == 101.5);
+}
+
+TEST_CASE("A TIN vertex built at state-plane magnitude is held within REQ-101's tolerance",
+          "[tin][req101][phaseG]") {
+  // Phase G (issue #453, ADR-054): TinBuildResult::vertsXyz widened float->double. A `float` resolves
+  // only ~0.008 ft at a ~2,000,000 ft state-plane easting — well outside REQ-101's ±0.002 ft — so a
+  // point typed at exactly this magnitude and read back must still land within tolerance. Mirrors
+  // `headless.regression-req101-origin-at-entry`'s own state-plane value for the four core stores,
+  // applied here to the TIN vertex store Phase G widened.
+  const double x = 2000000.10, y = 500000.03;
+  const TinBuildResult r = BuildTin(Pts({{x, y, 100.0}, {x + 10.0, y, 101.0}, {x, y + 10.0, 102.0}}));
+  REQUIRE(r.ok());
+  REQUIRE(r.vertexCount() == 3);
+
+  bool foundOrigin = false;
+  for (int i = 0; i < r.vertexCount(); ++i) {
+    if (std::fabs(r.vertsXyz[static_cast<size_t>(i) * 3] - x) < 1.0 &&
+        std::fabs(r.vertsXyz[static_cast<size_t>(i) * 3 + 1] - y) < 1.0) {
+      foundOrigin = true;
+      CHECK(std::fabs(r.vertsXyz[static_cast<size_t>(i) * 3] - x) <= 0.002);
+      CHECK(std::fabs(r.vertsXyz[static_cast<size_t>(i) * 3 + 1] - y) <= 0.002);
+    }
+  }
+  REQUIRE(foundOrigin);
 }
 
 TEST_CASE("A grid triangulates to the Euler-predicted triangle count", "[tin]") {

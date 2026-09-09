@@ -45,14 +45,14 @@ bool NearFt(double got, double want) { return std::abs(got - want) <= kTolFt; }
 /// The square [0,10]² as two triangles, with each corner's Z supplied — the smallest mesh that has
 /// an interior shared edge, which is where chaining either works or does not.
 struct Square {
-  std::vector<float> verts;
+  std::vector<double> verts;
   std::vector<std::uint32_t> tris;
 };
 
 Square MakeSquare(double z00, double z10, double z11, double z01) {
   Square s;
-  s.verts = {0.f,  0.f,  static_cast<float>(z00), 10.f, 0.f,  static_cast<float>(z10),
-             10.f, 10.f, static_cast<float>(z11), 0.f,  10.f, static_cast<float>(z01)};
+  s.verts = {0.0,  0.0,  z00, 10.0, 0.0,  z10,
+             10.0, 10.0, z11, 0.0,  10.0, z01};
   s.tris = {0, 1, 2, 0, 2, 3};
   return s;
 }
@@ -143,7 +143,7 @@ TEST_CASE("A tilted plane's contours land where the plane says they do",
   // One triangle on the plane z = y: A(0,0,0), B(10,0,0), C(0,10,10). At level L the contour is the
   // line y = L, running from the AC edge at (0,L) to the BC edge at (10-L, L) — both hand-computed
   // from the edge interpolation, not from the generator.
-  const std::vector<float> verts{0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 0.f, 10.f, 10.f};
+  const std::vector<double> verts{0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 10.0};
   const std::vector<std::uint32_t> tris{0, 1, 2};
   const std::vector<double> levels{2.0, 4.0, 6.0, 8.0};
 
@@ -205,8 +205,8 @@ TEST_CASE("A contour that rings a peak is reported closed", "[surface][req070][c
   // of apex-edge midpoints — (2.5,2.5), (7.5,2.5), (7.5,7.5), (2.5,7.5) — and it closes. Four
   // vertices, not five: the closing point IS the start point, and emitting it twice would put a
   // duplicate at the seam of every closed contour on the drawing.
-  const std::vector<float> verts{0.f,  0.f, 0.f, 10.f, 0.f,  0.f,  10.f, 10.f,
-                                 0.f,  0.f, 10.f, 0.f, 5.f,  5.f,  10.f};
+  const std::vector<double> verts{0.0,  0.0, 0.0, 10.0, 0.0,  0.0,  10.0, 10.0,
+                                  0.0,  0.0, 10.0, 0.0, 5.0,  5.0,  10.0};
   const std::vector<std::uint32_t> tris{0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4};
 
   ContourResult r;
@@ -243,11 +243,11 @@ TEST_CASE("A level exactly on a vertex keeps the contour continuous",
   // through V on one triangle and misses it on the neighbour, and what comes out is TWO contours
   // stopping either side of a vertex — a half-open contour that reads as a triangulation bug and is
   // not one. The assertion is therefore on the COUNT (one, not two) and on continuity through V.
-  const std::vector<float> verts{0.f,  0.f,  0.f,   // A, below
-                                 10.f, 0.f,  0.f,   // B, below
-                                 10.f, 10.f, 10.f,  // C, above
-                                 0.f,  10.f, 10.f,  // D, above
-                                 5.f,  5.f,  5.f};  // V, exactly on the level
+  const std::vector<double> verts{0.0,  0.0,  0.0,   // A, below
+                                  10.0, 0.0,  0.0,   // B, below
+                                  10.0, 10.0, 10.0,  // C, above
+                                  0.0,  10.0, 10.0,  // D, above
+                                  5.0,  5.0,  5.0};  // V, exactly on the level
   const std::vector<std::uint32_t> tris{0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4};
 
   ContourResult r;
@@ -301,13 +301,13 @@ TEST_CASE("Every contour vertex sits on its edge's linear interpolation within R
   // grid spacing is deliberately un-round, so a bug that happens to be exact on integers still
   // shows up here.
   constexpr int kN = 7;
-  std::vector<float> verts;
+  std::vector<double> verts;
   for (int j = 0; j < kN; ++j) {
     for (int i = 0; i < kN; ++i) {
       const double x = i * 3.7, y = j * 4.3;
-      verts.push_back(static_cast<float>(x));
-      verts.push_back(static_cast<float>(y));
-      verts.push_back(static_cast<float>(0.3 * x + 0.7 * y + 2.0));
+      verts.push_back(x);
+      verts.push_back(y);
+      verts.push_back(0.3 * x + 0.7 * y + 2.0);
     }
   }
   std::vector<std::uint32_t> tris;
@@ -395,7 +395,7 @@ TEST_CASE("A malformed index is skipped rather than trusted", "[surface][req070]
   // Defensive in the same shape as TinBorderEdges next door: an out-of-range index would read past
   // the vertex array, and a contour generator is not the layer that gets to decide a build was
   // corrupt. The valid triangle beside it still contours.
-  const std::vector<float> verts{0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 0.f, 10.f, 10.f};
+  const std::vector<double> verts{0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 10.0};
   const std::vector<std::uint32_t> tris{0, 1, 2, 0, 1, 99};
 
   ContourResult r;

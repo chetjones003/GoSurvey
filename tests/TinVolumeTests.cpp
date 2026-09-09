@@ -9,7 +9,7 @@
 namespace {
 
 // Two 10×10 squares, same plan, comparison 5 ft above base.
-void TwoPlanes(std::vector<float>* baseV, std::vector<std::uint32_t>* baseI, std::vector<float>* compV,
+void TwoPlanes(std::vector<double>* baseV, std::vector<std::uint32_t>* baseI, std::vector<double>* compV,
                std::vector<std::uint32_t>* compI, float dz) {
   *baseV = {0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
   *compV = {0, 0, dz, 10, 0, dz, 10, 10, dz, 0, 10, dz};
@@ -20,7 +20,7 @@ void TwoPlanes(std::vector<float>* baseV, std::vector<std::uint32_t>* baseI, std
 }  // namespace
 
 TEST_CASE("TIN volume surface Z is comparison minus base", "[tinvolume][req136]") {
-  std::vector<float> bv, cv;
+  std::vector<double> bv, cv;
   std::vector<std::uint32_t> bi, ci;
   TwoPlanes(&bv, &bi, &cv, &ci, 5.f);
   const TinBuildResult r = BuildTinVolumeSurface(bv, bi, cv, ci, 0.0, 0.0);
@@ -33,7 +33,7 @@ TEST_CASE("TIN volume surface Z is comparison minus base", "[tinvolume][req136]"
 }
 
 TEST_CASE("TIN volume surface with no plan overlap is empty", "[tinvolume][req136]") {
-  std::vector<float> bv, cv;
+  std::vector<double> bv, cv;
   std::vector<std::uint32_t> bi, ci;
   TwoPlanes(&bv, &bi, &cv, &ci, 5.f);
   for (size_t i = 0; i + 2 < cv.size(); i += 3) {
@@ -46,9 +46,9 @@ TEST_CASE("TIN volume surface with no plan overlap is empty", "[tinvolume][req13
 }
 
 TEST_CASE("TIN volume surface refuses a null triangulation", "[tinvolume][req136]") {
-  std::vector<float> bv = {0, 0, 0, 10, 0, 0, 10, 10, 0};
+  std::vector<double> bv = {0, 0, 0, 10, 0, 0, 10, 10, 0};
   std::vector<std::uint32_t> bi = {0, 1, 2};
-  std::vector<float> emptyV;
+  std::vector<double> emptyV;
   std::vector<std::uint32_t> emptyI;
   const TinBuildResult r = BuildTinVolumeSurface(bv, bi, emptyV, emptyI, 0.0, 0.0);
   REQUIRE_FALSE(r.ok());

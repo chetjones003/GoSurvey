@@ -217,7 +217,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     frameF = st.cadMeshes[0]->vertsXyz.data();
     frameN = st.cadMeshes[0]->vertsXyz.size();
   } else if (b.surfacePointCount > 0 && !st.cadSurfaces.empty() && st.cadSurfaces[0].tin) {
-    frameF = st.cadSurfaces[0].tin->vertsXyz.data();
+    frameD = st.cadSurfaces[0].tin->vertsXyz.data();
     frameN = st.cadSurfaces[0].tin->vertsXyz.size();
   } else {
     frameD = st.userPolylineVerts.data();

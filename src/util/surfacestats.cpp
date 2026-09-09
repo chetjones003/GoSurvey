@@ -69,7 +69,7 @@ void AccumulateClippedDifference(const DiffVert p[3], bool wantFill, SurfaceStat
 }
 }  // namespace
 
-SurfaceStats ComputeSurfaceStats(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+SurfaceStats ComputeSurfaceStats(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
                                  int breaklineEdgeCount, bool zIsDifference) {
   SurfaceStats s;
   s.breaklineEdges = breaklineEdgeCount;

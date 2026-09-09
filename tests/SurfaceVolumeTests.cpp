@@ -21,17 +21,17 @@ namespace {
 /// A flat, axis-aligned rectangle [x0,x1] x [y0,y1] at constant elevation \p z, as two CCW triangles
 /// — full control over the exact hand-computable area/volume the acceptance conditions ask for.
 struct FlatRect {
-  std::vector<float> vertsXyz;
+  std::vector<double> vertsXyz;
   std::vector<std::uint32_t> indices;
 };
 
-FlatRect MakeFlatRect(double x0, double y0, double x1, double y1, float z) {
+FlatRect MakeFlatRect(double x0, double y0, double x1, double y1, double z) {
   FlatRect r;
   r.vertsXyz = {
-      static_cast<float>(x0), static_cast<float>(y0), z,
-      static_cast<float>(x1), static_cast<float>(y0), z,
-      static_cast<float>(x1), static_cast<float>(y1), z,
-      static_cast<float>(x0), static_cast<float>(y1), z,
+      x0, y0, z,
+      x1, y0, z,
+      x1, y1, z,
+      x0, y1, z,
   };
   r.indices = {0, 1, 2, 0, 2, 3};
   return r;
@@ -161,7 +161,7 @@ TEST_CASE("Comparing a surface with itself reports zero net within tolerance", "
 }
 
 TEST_CASE("A degenerate (too-few-triangle) input reports no overlap rather than crashing", "[volume]") {
-  const std::vector<float> empty;
+  const std::vector<double> empty;
   const std::vector<std::uint32_t> emptyIdx;
   const FlatRect base = MakeFlatRect(0, 0, 10, 10, 100.f);
 
@@ -175,9 +175,9 @@ TEST_CASE("A degenerate (too-few-triangle) input reports no overlap rather than 
 TEST_CASE("The indexed elevation query agrees with the full-scan query everywhere", "[volume][tin]") {
   // A small, irregular (non-axis-aligned-friendly) triangulation so the index has more than one
   // occupied cell and a query can plausibly land in the wrong one if the bucketing were wrong.
-  const std::vector<float> verts = {
-      0.f, 0.f, 10.f,     10.f, 0.f, 12.f,   20.f, 0.f, 9.f,
-      0.f, 10.f, 11.f,    10.f, 10.f, 14.f,  20.f, 10.f, 8.f,
+  const std::vector<double> verts = {
+      0.0, 0.0, 10.0,     10.0, 0.0, 12.0,   20.0, 0.0, 9.0,
+      0.0, 10.0, 11.0,    10.0, 10.0, 14.0,  20.0, 10.0, 8.0,
   };
   const std::vector<std::uint32_t> idx = {
       0, 1, 4,  0, 4, 3,
@@ -203,7 +203,7 @@ TEST_CASE("The indexed elevation query agrees with the full-scan query everywher
 }
 
 TEST_CASE("An empty triangulation yields an empty spatial index, not a crash", "[volume][tin]") {
-  const std::vector<float> empty;
+  const std::vector<double> empty;
   const std::vector<std::uint32_t> emptyIdx;
   const TinSpatialIndex spIdx = BuildTinSpatialIndex(empty, emptyIdx);
   CHECK(spIdx.empty());
@@ -242,8 +242,8 @@ TEST_CASE("A clip that misses both surfaces reports no overlap", "[volume][req13
 TEST_CASE("A plane crossing a flat reports equal cut and fill areas", "[volume][req146][req147]") {
   // Base Z = X on [0,10]x[0,10], Comparison Z = 5. Cut where X>5, fill where X<5.
   // Volume each side: 10 * ∫_0^5 u du = 125 ft3. Areas 50 ft2 each.
-  const std::vector<float> baseVerts = {
-      0.f, 0.f, 0.f,  10.f, 0.f, 10.f,  10.f, 10.f, 10.f,  0.f, 10.f, 0.f,
+  const std::vector<double> baseVerts = {
+      0.0, 0.0, 0.0,  10.0, 0.0, 10.0,  10.0, 10.0, 10.0,  0.0, 10.0, 0.0,
   };
   const std::vector<std::uint32_t> baseIdx = {0, 1, 2, 0, 2, 3};
   const FlatRect comp = MakeFlatRect(0, 0, 10, 10, 5.f);
