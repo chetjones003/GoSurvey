@@ -3996,6 +3996,23 @@ struct AppCommandState {
   CadClipboard clipboard;
 };
 
+/// ADR-054 (a)/(b): coordinate stores are `double` until the single authorized narrowing point at
+/// GPU vertex-buffer assembly (ViewportRenderer). Checked on all three copies of each store — live
+/// state, undo snapshot, per-tab document (ADR-025 context) — so a reintroduced `float` on any one
+/// of them is a compile error, not a silent ±0.008 ft regression (TASK-228 Phase D).
+#define GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(Type, Field)                                            \
+  static_assert(std::is_same_v<decltype(Type::Field)::value_type, double>,                          \
+                #Type "::" #Field " must stay double (ADR-054 (a), REQ-101)")
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(AppCommandState, userLinesFlat);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(AppCommandState, userCirclesCxCyZR);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(AppCommandState, userPolylineVerts);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingGeometrySnapshot, userLinesFlat);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingGeometrySnapshot, userCirclesCxCyZR);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingGeometrySnapshot, userPolylineVerts);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingDocument, userLinesFlat);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingDocument, userCirclesCxCyZR);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingDocument, userPolylineVerts);
+#undef GOSURVEY_STATIC_ASSERT_DOUBLE_STORE
 
 inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {
   return st.defaultPlottedTextHeightInches * st.modelUnitsPerPlottedInch;

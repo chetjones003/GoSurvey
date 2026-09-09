@@ -1,7 +1,7 @@
 # TASK-228 — REQ-101 ±0.002 ft: widen coordinate storage `float` → `double`
 
 - Type:    refactor (spec-authorized architecture migration)
-- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442) done; Phases D, E, F open
+- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442), D (#443) done; Phases E, F open
 - Opened:  2026-09-08
 - Owner:   Workshop
 - GitHub:  #394 (sub-issues #440 A, #441 B, #442 C, #443 D, #444 E, #447 F — SurveyPoint)
@@ -68,8 +68,29 @@ Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft asse
   object snap. Rubber-band **preview** buffers stay `float` (render-only, GPU-bound). Build clean;
   `ctest` 1359/1359. Only 12 boundary sites needed edits — the `float wx/wy` pick handlers compile
   unchanged (double→float at their internal comparisons, warning-suppressed).
-- **Phase D — the GPU-upload narrowing point.** Audit that `float` appears on the geometry path in
-  exactly one place (buffer assembly) and nowhere upstream; add a `docinvariants` / review check.
+- **Phase D — the GPU-upload narrowing point. DONE (#443).** Audited `commands/`, `viewport/`,
+  `io/`, `util/` for a `float` coordinate carrying stored/authoritative geometry. Confirmed the four
+  flat stores and `CadFilledRegion::vertsXyz` are `double` on all three copies (live state, undo
+  snapshot, per-tab document) per Phases A-C, and the single narrowing point is
+  `WorldToViewRelativeFloat` (`util/geom2d.cpp`) — it takes `double` world coordinates and the view
+  anchor, subtracts in `double`, and narrows only the already view-local result; every GPU-buffer
+  builder in `ViewportRenderer.cpp` (`AppendChainEdgesVc` and the other `RenderScene` helpers) calls
+  through it or narrows an already-render-local (preview/hover/highlight/gizmo) buffer. Documented
+  both sites with a comment citing ADR-054 (b). No upstream narrowing bug found — every other
+  `float` coordinate site on the geometry path is a legitimate, already-decided exception (angles/
+  ratios — Phase B; paper-space sheet inches — ADR-054 (a) amendment; rubber-band preview and other
+  render-only buffers; ORTHO/polar/angle-lock constraint internals — Phase C). **New finding,
+  deliberately deferred, not fixed here:** TIN/surface mesh vertex storage (`util/tinbuild.cpp`
+  `TinBuildResult::vertsXyz` and the `TinTriangleElevationAt`/`TinElevationAt`/`TinCullByBoundaries`/
+  `TinBorderEdges`/`FindNearestInteriorEdge`/`TinSwapInteriorEdgeNear`/`TinDeleteInteriorEdgeNear`
+  family that reads it) is still `std::vector<float>`. ADR-054 (a) names "surface vertices" as an
+  authoritative store that should widen, but it was never one of the four named flat stores Phases
+  A-C covered, and widening it touches surface build/render/snap/volume/contour code well beyond a
+  one-PR audit. Same pattern as `SurveyPoint` (deferred to Phase F, #447): recommend a Phase G
+  sub-issue rather than silently expanding this PR. Added a compile-time guard (`static_assert` in
+  `CadCommands.hpp`/`CadEntities.hpp`) on the three copies of the four named stores so a reintroduced
+  `float` there is a build error, not a silent regression — proven red (reverted one store to `float`,
+  confirmed two `static_assert` failures) before green. Build clean; `ctest` 1359/1359.
 - **Phase E — test-assertion sweep.** Every `0.01` literal and named constant that represents the
   REQ-101 guarantee → `0.002`, audited one at a time:
   - `kReq101` (`src/viewport/CadSnap.cpp`) — is the guarantee, change.
