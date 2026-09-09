@@ -29,7 +29,7 @@ namespace benchscene {
 /// \returns the exact number of line segments produced — equal to \p targetSegments when it is at
 ///          least one segment, so the benchmark measures the density the requirement names rather
 ///          than whatever a rounded division happened to produce.
-int BuildContourScene(int targetSegments, std::vector<float>* verts, std::vector<int>* offsets,
+int BuildContourScene(int targetSegments, std::vector<double>* verts, std::vector<int>* offsets,
                       std::vector<std::uint8_t>* closed);
 
 /// Builds the point set for the REQ-100 **surface** cost profile: \p targetPoints scattered shots

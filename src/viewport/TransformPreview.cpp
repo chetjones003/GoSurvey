@@ -10,18 +10,20 @@
 
 namespace {
 
-void rotatePreviewPt(float baseX, float baseY, float angleRad, float* inOutX, float* inOutY) {
-  const float c = std::cos(angleRad);
-  const float s = std::sin(angleRad);
-  const float dx = *inOutX - baseX;
-  const float dy = *inOutY - baseY;
-  *inOutX = baseX + c * dx - s * dy;
-  *inOutY = baseY + s * dx + c * dy;
+template <class T>
+void rotatePreviewPt(double baseX, double baseY, double angleRad, T* inOutX, T* inOutY) {
+  const double c = std::cos(angleRad);
+  const double s = std::sin(angleRad);
+  const double dx = static_cast<double>(*inOutX) - baseX;
+  const double dy = static_cast<double>(*inOutY) - baseY;
+  *inOutX = static_cast<T>(baseX + c * dx - s * dy);
+  *inOutY = static_cast<T>(baseY + s * dx + c * dy);
 }
 
-void scalePreviewPt(float baseX, float baseY, float scale, float* inOutX, float* inOutY) {
-  *inOutX = baseX + scale * (*inOutX - baseX);
-  *inOutY = baseY + scale * (*inOutY - baseY);
+template <class T>
+void scalePreviewPt(double baseX, double baseY, double scale, T* inOutX, T* inOutY) {
+  *inOutX = static_cast<T>(baseX + scale * (static_cast<double>(*inOutX) - baseX));
+  *inOutY = static_cast<T>(baseY + scale * (static_cast<double>(*inOutY) - baseY));
 }
 
 /// REQ-103 MIRROR. Reflects (*inOutX,*inOutY) across the line through (x0,y0)-(x1,y1). Kept local
@@ -29,17 +31,18 @@ void scalePreviewPt(float baseX, float baseY, float scale, float* inOutX, float*
 /// \c ReflectPtAcrossLine — the same reason \c rotatePreviewPt above duplicates
 /// \c RotateAroundBase instead of linking it: this file previews, it does not commit, and the two
 /// must never accidentally share mutable state across a TU boundary.
-void mirrorPreviewPt(float x0, float y0, float x1, float y1, float* inOutX, float* inOutY) {
-  const float dx = x1 - x0;
-  const float dy = y1 - y0;
-  const float len2 = dx * dx + dy * dy;
-  if (len2 < 1e-12f)
+template <class T>
+void mirrorPreviewPt(double x0, double y0, double x1, double y1, T* inOutX, T* inOutY) {
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12)
     return;
-  const float t = ((*inOutX - x0) * dx + (*inOutY - y0) * dy) / len2;
-  const float px = x0 + t * dx;
-  const float py = y0 + t * dy;
-  *inOutX = 2.f * px - *inOutX;
-  *inOutY = 2.f * py - *inOutY;
+  const double t = ((static_cast<double>(*inOutX) - x0) * dx + (static_cast<double>(*inOutY) - y0) * dy) / len2;
+  const double px = x0 + t * dx;
+  const double py = y0 + t * dy;
+  *inOutX = static_cast<T>(2.0 * px - static_cast<double>(*inOutX));
+  *inOutY = static_cast<T>(2.0 * py - static_cast<double>(*inOutY));
 }
 
 /// See \c ReflectAngleAcrossLine in CadCommands.cpp — same formula, same reason for the duplicate.
@@ -331,7 +334,7 @@ void appendBreakRemovedSpan(std::vector<float>* out, const AppCommandState& cmd,
     } else {
       const float sgn = src.sweepRad >= 0.f ? 1.f : -1.f;
       const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
-      const float r = std::max(src.r, 1e-9f);
+      const double r = std::max(src.r, 1e-9);
       removed.startRad = src.startRad + sgn * (nearP / r);
       removed.sweepRad = sgn * ((farP - nearP) / r);
     }

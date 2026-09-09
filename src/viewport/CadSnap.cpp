@@ -211,7 +211,8 @@ bool QuadrantDirections(const ucs::Ucs& curvePlane, const ucs::Ucs& activeUcs, r
   return kHugePickDistSq;
 }
 
-[[nodiscard]] bool PointInClosedPoly(float wx, float wy, const std::vector<float>& V, int v0, int v1) {
+template <class VT>
+[[nodiscard]] bool PointInClosedPoly(float wx, float wy, const std::vector<VT>& V, int v0, int v1) {
   const int n = v1 - v0;
   if (n < 3)
     return false;
@@ -231,7 +232,8 @@ bool QuadrantDirections(const ucs::Ucs& curvePlane, const ucs::Ucs& activeUcs, r
   return c;
 }
 
-[[nodiscard]] float ClosedPolyGeometricPickDistSq(float wx, float wy, const std::vector<float>& V, int v0,
+template <class VT>
+[[nodiscard]] float ClosedPolyGeometricPickDistSq(float wx, float wy, const std::vector<VT>& V, int v0,
                                                   int v1) {
   const int n = v1 - v0;
   if (n < 3)
@@ -251,7 +253,8 @@ bool QuadrantDirections(const ucs::Ucs& curvePlane, const ucs::Ucs& activeUcs, r
   return minD2;
 }
 
-[[nodiscard]] bool ClosedPolylineCentroid(const std::vector<float>& V, int v0, int v1, float* outCx,
+template <class VT>
+[[nodiscard]] bool ClosedPolylineCentroid(const std::vector<VT>& V, int v0, int v1, float* outCx,
                                           float* outCy) {
   const int n = v1 - v0;
   if (n < 3 || !outCx || !outCy)
@@ -298,16 +301,16 @@ bool QuadrantDirections(const ucs::Ucs& curvePlane, const ucs::Ucs& activeUcs, r
     return true;
   if (v1 - v0 < 4)
     return false;  // first == last leaves only two distinct corners — no area
-  const std::vector<float>& V = cmd.userPolylineVerts;
-  float mnX = V[static_cast<size_t>(v0 * 3)], mxX = mnX;
-  float mnY = V[static_cast<size_t>(v0 * 3 + 1)], mxY = mnY;
+  const std::vector<double>& V = cmd.userPolylineVerts;
+  double mnX = V[static_cast<size_t>(v0 * 3)], mxX = mnX;
+  double mnY = V[static_cast<size_t>(v0 * 3 + 1)], mxY = mnY;
   for (int i = v0; i < v1; ++i) {
     mnX = std::min(mnX, V[static_cast<size_t>(i * 3)]);
     mxX = std::max(mxX, V[static_cast<size_t>(i * 3)]);
     mnY = std::min(mnY, V[static_cast<size_t>(i * 3 + 1)]);
     mxY = std::max(mxY, V[static_cast<size_t>(i * 3 + 1)]);
   }
-  const float tol = std::max(1.e-6f * std::hypot(mxX - mnX, mxY - mnY), 1.e-9f);
+  const double tol = std::max<double>(1.e-6 * std::hypot(mxX - mnX, mxY - mnY), 1.e-9);
   const float dx = V[static_cast<size_t>((v1 - 1) * 3)] - V[static_cast<size_t>(v0 * 3)];
   const float dy = V[static_cast<size_t>((v1 - 1) * 3 + 1)] - V[static_cast<size_t>(v0 * 3 + 1)];
   return std::hypot(dx, dy) <= tol;
@@ -415,7 +418,8 @@ void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind k
 /// A centroid has no single Z once the loop is non-planar, so it gets the same averaging the
 /// centroid already is in X and Y (REQ-058). Exact for the planar case, which is every rectangle
 /// and every pre-3D polyline.
-[[nodiscard]] float PolylineLoopMeanZ(const std::vector<float>& verts, int v0, int v1) {
+template <class VT>
+[[nodiscard]] float PolylineLoopMeanZ(const std::vector<VT>& verts, int v0, int v1) {
   if (v1 <= v0)
     return 0.f;
   double zSum = 0.;

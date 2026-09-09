@@ -767,7 +767,7 @@ struct CadExtendedGeometryInput {
   const std::vector<float>* circleNormals = nullptr;
   const std::vector<CadEllipse>* ellipses = nullptr;
   const std::vector<EntityAttributes>* ellAttrs = nullptr;
-  const std::vector<float>* polylineVerts = nullptr;
+  const std::vector<double>* polylineVerts = nullptr;
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
   const std::vector<EntityAttributes>* polylineAttrs = nullptr;
@@ -780,7 +780,7 @@ struct CadExtendedGeometryInput {
   const std::vector<float>* polylineNormal = nullptr;
   // Feature lines (REQ-087). Same four arrays, same shape — the renderer draws both through one
   // function, so a feature line cannot render differently from a polyline by accident.
-  const std::vector<float>* featureLineVerts = nullptr;
+  const std::vector<double>* featureLineVerts = nullptr;
   const std::vector<int>* featureLineOffsets = nullptr;
   const std::vector<uint8_t>* featureLineClosed = nullptr;
   const std::vector<EntityAttributes>* featureLineAttrs = nullptr;
@@ -800,7 +800,8 @@ struct CadExtendedGeometryInput {
 /// `offsets` is CSR: N entities need N+1 offsets, so fewer than two offsets is zero entities — and
 /// an "empty" store is legitimately either `{}` or `{0}` (issue #60), which is exactly why this is a
 /// named predicate rather than an `!empty()` written out at each call site.
-[[nodiscard]] inline bool CadChainHasEntities(const std::vector<float>* verts,
+template <class VT>
+[[nodiscard]] inline bool CadChainHasEntities(const std::vector<VT>* verts,
                                               const std::vector<int>* offsets) {
   return verts != nullptr && offsets != nullptr && offsets->size() >= 2;
 }
@@ -900,12 +901,12 @@ struct CadClipboard {
   float basePtX = 0.f; ///< Bounding-box center X used as paste anchor (local space).
   float basePtY = 0.f;
 
-  std::vector<float>            lines;
+  std::vector<double>            lines;
   std::vector<EntityAttributes> lineAttrs;
   /// Flat cx,cy,z,r quads (REQ-057 / ADR-025 (a)). A copy from paper space stores z = 0, and a
   /// paste into paper space drops z — the sheet is 2D (ADR-025 (g)), so Z collapses at that
   /// boundary rather than silently riding along.
-  std::vector<float>            circlesCxCyZR;
+  std::vector<double>            circlesCxCyZR;
   std::vector<EntityAttributes> circleAttrs;
   /// Circle plane normals, 3 floats each (REQ-312). A paste into paper space flattens them back
   /// to world +Z, the same boundary where z collapses -- the sheet is 2D (ADR-025 (g)).
@@ -915,7 +916,7 @@ struct CadClipboard {
   std::vector<CadEllipse>       ellipses;
   std::vector<EntityAttributes> ellAttrs;
   std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
-  std::vector<float>            polyVerts;
+  std::vector<double>            polyVerts;
   std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
   std::vector<uint8_t>          polyClosed;
   std::vector<EntityAttributes> polyAttrs;
@@ -969,9 +970,9 @@ inline constexpr int kPolyBulgeGripBase = 1 << 20;
 
 /// Geometry-only snapshot for undo/redo.  PDF glTexId is zeroed to avoid stale GPU references.
 struct DrawingGeometrySnapshot {
-  std::vector<float>            userLinesFlat;
+  std::vector<double>            userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
-  std::vector<float>            userCirclesCxCyZR;
+  std::vector<double>            userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
   /// Circle plane normals, 3 floats each (REQ-312) - see AppCommandState::userCircleNormals.
   std::vector<float>            userCircleNormals;
@@ -980,7 +981,7 @@ struct DrawingGeometrySnapshot {
   std::vector<CadEllipse>       userEllipses;
   std::vector<EntityAttributes> userEllAttrs;
   std::vector<int>              userPolylineOffsets;
-  std::vector<float>            userPolylineVerts;
+  std::vector<double>            userPolylineVerts;
   /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
   /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
   std::vector<float>            userPolylineVertsBulge;
@@ -993,7 +994,7 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
   std::vector<int>                featureLineOffsets;
-  std::vector<float>              featureLineVerts;
+  std::vector<double>              featureLineVerts;
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
@@ -1112,9 +1113,9 @@ struct DrawingDocument {
   /// number independently; see AppCommandState::nextEntityId for why undo never rewinds it.
   std::uint64_t nextEntityId = 1;
 
-  std::vector<float>            userLinesFlat;
+  std::vector<double>            userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
-  std::vector<float>            userCirclesCxCyZR;
+  std::vector<double>            userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
   /// Circle plane normals, 3 floats each (REQ-312) - see AppCommandState::userCircleNormals.
   std::vector<float>            userCircleNormals;
@@ -1123,7 +1124,7 @@ struct DrawingDocument {
   std::vector<CadEllipse>       userEllipses;
   std::vector<EntityAttributes> userEllAttrs;
   std::vector<int>              userPolylineOffsets;
-  std::vector<float>            userPolylineVerts;
+  std::vector<double>            userPolylineVerts;
   /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
   /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
   std::vector<float>            userPolylineVertsBulge;
@@ -1136,7 +1137,7 @@ struct DrawingDocument {
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
   std::vector<int>                featureLineOffsets;
-  std::vector<float>              featureLineVerts;
+  std::vector<double>              featureLineVerts;
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
@@ -1792,7 +1793,7 @@ struct AppCommandState {
     /// Total tessellated triangles across the solid scene, filled in when the scene is built.
     int solidTriangleCount = 0;
 
-    std::vector<float> savedPolyVerts;
+    std::vector<double> savedPolyVerts;
     std::vector<int> savedPolyOffsets;
     std::vector<std::uint8_t> savedPolyClosed;
     std::vector<EntityAttributes> savedPolyAttrs;
@@ -2171,7 +2172,7 @@ struct AppCommandState {
   std::uint64_t entityIdSweepRevision = kEntityIdSweepNever;
 
   /// Line vertices for GL: pairs (x,y,z) per endpoint; each segment is two endpoints.
-  std::vector<float> userLinesFlat;
+  std::vector<double> userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
 
   // --- Circle ---
@@ -2381,7 +2382,7 @@ struct AppCommandState {
   /// ADR-025 (a)). The centre's XYZ is contiguous so it reads like a point; the radius trails it.
   /// Z is absolute (ADR-025 D2). The circle lies in world XY unless `userCircleNormals`
   /// says otherwise (REQ-312), matching CadArc.
-  std::vector<float> userCirclesCxCyZR;
+  std::vector<double> userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
   /// Plane normal per circle, 3 floats each (REQ-312) - parallel to `userCirclesCxCyZR` the way
   /// `userCircleAttrs` already is, and maintained at the same sites. A side-car rather than a
@@ -2397,7 +2398,7 @@ struct AppCommandState {
   /// Each polyline: vertex indices [\ref userPolylineOffsets[i], \ref userPolylineOffsets[i+1]); XYZ triplets in
   /// \ref userPolylineVerts.
   std::vector<int> userPolylineOffsets;
-  std::vector<float> userPolylineVerts;
+  std::vector<double> userPolylineVerts;
   /// REQ-316 / ADR-047: per-vertex DXF bulge, parallel to userPolylineVerts (size()/3 entries).
   std::vector<float> userPolylineVertsBulge;
   /// REQ-325 / ADR-053: per-vertex curve plane normal, parallel to userPolylineVerts (see the
@@ -2419,7 +2420,7 @@ struct AppCommandState {
   /// must re-project the elevation points on its adjacent segments, or the line grows a visible kink
   /// (ADR-035 (b)).
   std::vector<int> featureLineOffsets;
-  std::vector<float> featureLineVerts;
+  std::vector<double> featureLineVerts;
   std::vector<uint8_t> featureLineClosed;
   std::vector<uint8_t> featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;

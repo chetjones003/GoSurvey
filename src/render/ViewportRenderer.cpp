@@ -257,7 +257,7 @@ float LineweightMmToDevicePx(float mm) {
 /// any other 3D chain. The elevation-point flag is deliberately not consulted — an elevation point
 /// lies on the line, so including it changes nothing about the plan shape (ADR-035 (a)).
 void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg,
-                        const std::vector<float>* V, const std::vector<int>* O,
+                        const std::vector<double>* V, const std::vector<int>* O,
                         const std::vector<uint8_t>* Cl, const std::vector<EntityAttributes>* At,
                         float defR, float defG, float defB, float dashPatScale, double viewAnchorX,
                         double viewAnchorY) {
@@ -983,7 +983,7 @@ void ViewportRenderer::SetSize(int width, int height) {
 }
 
 void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
-                                   const std::vector<float>& userLines, const std::vector<float>& circlesCxCyZR,
+                                   const std::vector<double>& userLines, const std::vector<double>& circlesCxCyZR,
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
                                    const std::vector<float>* previewLines,
@@ -1987,7 +1987,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         // on ITS OWN store. The feature-line append used to be nested inside the polyline block, so
         // it inherited whether polylines existed — a coupling with no reason behind it and a second
         // way for feature lines to vanish. REQ-087.
-        const auto appendChainStore = [&](const std::vector<float>* V, const std::vector<int>* O,
+        const auto appendChainStore = [&](const std::vector<double>* V, const std::vector<int>* O,
                                           const std::vector<uint8_t>* Cl,
                                           const std::vector<EntityAttributes>* At) {
           if (!CadChainHasEntities(V, O))

@@ -1,10 +1,10 @@
 # TASK-228 — REQ-101 ±0.002 ft: widen coordinate storage `float` → `double`
 
 - Type:    refactor (spec-authorized architecture migration)
-- Status:  in progress — PR 1 (spec + ADR + plan) done; phases 2–N not started
+- Status:  in progress — PR 1 (spec + ADR + plan) done; Phase A done (#440, PR to beta); Phases B–E open (#441–#444)
 - Opened:  2026-09-08
 - Owner:   Workshop
-- GitHub:  #394
+- GitHub:  #394 (sub-issues #440 Phase A, #441 B, #442 C, #443 D, #444 E)
 
 ## 1. Authority
 
@@ -30,16 +30,25 @@ representable in these stores. The stores must hold `double`; the GPU vertex for
 
 Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft assertions.
 
-- **Phase A — core entity stores + the three copies.** Widen the four flat stores to
-  `std::vector<double>` and every entity scalar coordinate field to `double`, across the live
-  `AppCommandState`, the undo `DrawingGeometrySnapshot`, and the per-tab struct. Fix every
-  compile break at the boundaries (command math, `docinvariants`). GPU upload path narrows
-  `double`→`float` at buffer assembly (ADR-054 (b)). `CadCoordinateFrame` / rebase logic stays;
-  drop REQ-101's "one-time establishment" enforcement per ADR-054 (c).
-- **Phase B — serialization.** DWG-trailer coordinate records → 8-byte `double` + trailer
-  format-version bump + legacy-load path (old `float` trailers load as-is). DXF importer/exporter
-  stop narrowing through `float` (format already ASCII decimal — no on-disk change). Confirm
-  LibreDWG path is already `double`.
+- **Phase A — core entity stores + the three copies. DONE (#440, commit `3fbd82f`).** Widened the
+  four flat stores to `std::vector<double>` and every entity scalar coordinate field to `double`,
+  across the live `AppCommandState`, the undo `DrawingGeometrySnapshot`, and the per-tab struct.
+  GPU upload path narrows `double`→`float` at buffer assembly — `RenderScene` / `AppendChainEdgesVc`
+  take `const std::vector<double>&` (ADR-054 (b)). Shared coordinate helpers templated on scalar type
+  so no call site changed. `.gs`/DWG-trailer JSON reader reads coordinate arrays as `double` (the
+  writer already emitted full precision — narrowing on read broke round-trip idempotence, caught by
+  `regression-61` + `fuzz-smoke`). `CadCoordinateFrame` / rebase logic unchanged and still runs; the
+  entry-time and load-time establishment both still fire (dropping the "one-time" *spec* acceptance
+  bullet per ADR-054 (c) does not require removing the guard — it still returns early when an origin
+  is already set). Build clean; `ctest` 1359/1359. **Deferred to Phase B:** DXF/DWG-native import
+  `static_cast<float>` narrowing sites, and paper-space stores (paper inches — small magnitudes).
+- **Phase B — serialization + remaining import narrowing.** DXF/DWG-native import: replace the
+  `static_cast<float>(x - worldDocumentOriginX)` sites in `LibreDwgCad.cpp` (`LocalLine`/`LocalCircle`
+  /`LocalArc`/…) and `DxfIo.cpp` polyline import with `double`. Paper-space stores (`PaperLayout`
+  `paperLines`/`paperCircles`/`paperPolyVerts`, `CadArc`/`CadEllipse` in paper) → `double` and their
+  `.gs` readers (`GsIo.cpp` ~1915/1948/1973). `.gs`/DWG-trailer coordinate records are already
+  emitted and read as `double` (Phase A). If a DWG trailer format-version bump is wanted for
+  explicit legacy-load semantics, do it here. Confirm LibreDWG codec path is `double` end to end.
 - **Phase C — snap / preview / pick read-back.** Every site that reads a coordinate back out of a
   store for snapping, rubber-band preview, or pick resolution takes the `double` value. Confirm
   REQ-101's bit-identical-snap property now delivers the full-precision value.
