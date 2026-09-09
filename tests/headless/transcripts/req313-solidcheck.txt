@@ -1,0 +1,71 @@
+# REQ-313 as amended (D-2026-09-09-j, TASK-239) — SOLIDCHECK.
+#
+# GitHub #149 (3D Phase 6 — Analysis) acceptance 7: "Solid validation detects non-manifold,
+# unclosed and inconsistently oriented solids."
+#
+# The DETECTION was already there and already named each fault apart — `BrepTests [req149]` pins
+# that, with fixtures built carefully enough to reach the check they are aiming at. What was missing
+# was a way for a user to ask. This transcript covers the asking.
+#
+# A transcript cannot build a broken solid: every command path refuses to store one (REQ-201), which
+# is what makes the kernel-level fixtures necessary and gives this file a different job. What it CAN
+# prove is the command's own behaviour — that it reports every solid, that it answers the SECOND
+# question as well as the first, and that it changes nothing.
+#
+# Order matters here: the selection case comes LAST, because a box selection persists until
+# something replaces it (ESC cancels a running command, it does not deselect) and every SOLIDCHECK
+# after it would silently narrow to that one solid.
+
+NEW
+
+# --- nothing to check ----------------------------------------------------------------------------
+
+CMD SOLIDCHECK
+EXPECT LOG "SOLIDCHECK — no solids in this drawing."
+
+# --- sound solids, checked as a whole drawing ----------------------------------------------------
+
+CMD BOX 0,0 30 20 12
+CMD CYLINDER 100,0 8 25
+EXPECT SOLIDS 2
+
+CMD SOLIDCHECK
+EXPECT LOG "SOLIDCHECK — checking 2 solids (whole drawing)."
+EXPECT LOG "  [0] Box — valid: closed, manifold, consistently oriented."
+EXPECT LOG "  [1] Cylinder — valid: closed, manifold, consistently oriented."
+EXPECT LOG "SOLIDCHECK — 2 valid, 0 not valid, 0 self-intersecting."
+
+# Read-only: an inquiry command draws nothing and makes no undo entry.
+EXPECT SOLIDS 2
+EXPECT POLYLINES 0
+CHECK ALL
+
+# --- the second question -------------------------------------------------------------------------
+#
+# A torus whose tube is wider than its ring PASSES validation — the topology is closed, manifold and
+# orientable, and it draws correctly. What it is not is a body whose volume means anything, because
+# the surface encloses part of space twice, and `ComputeMassProperties` declines it by name.
+#
+# A check that asked only "is the topology sound?" would call this fine and leave the user to
+# discover, from a Properties panel that has gone blank, that nothing can be measured — with no
+# statement anywhere of why. That is the whole reason SOLIDCHECK asks two questions rather than one.
+
+CMD TORUS 300,0 5 8
+EXPECT SOLIDS 3
+
+CMD SOLIDCHECK
+EXPECT LOG "  [2] Torus — topology is sound, but the surface passes through itself, so its volume, area and centroid are not reported."
+EXPECT LOG "SOLIDCHECK — 2 valid, 0 not valid, 1 self-intersecting."
+
+CHECK ALL
+
+# --- a selection narrows it ----------------------------------------------------------------------
+
+BOX -40 -40 40 40
+EXPECT SELECTED 1
+CMD SOLIDCHECK
+EXPECT LOG "SOLIDCHECK — checking 1 solid (selected)."
+EXPECT LOG "SOLIDCHECK — 1 valid, 0 not valid, 0 self-intersecting."
+
+EXPECT SOLIDS 3
+CHECK ALL
