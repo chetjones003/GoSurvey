@@ -1,10 +1,10 @@
 # TASK-228 — REQ-101 ±0.002 ft: widen coordinate storage `float` → `double`
 
 - Type:    refactor (spec-authorized architecture migration)
-- Status:  in progress — PR 1 (spec + ADR + plan) done; Phase A done (#440, PR to beta); Phases B–E open (#441–#444)
+- Status:  in progress — PR 1 done; Phase A done (#440); Phase B done (#441); Phases C–E + F open
 - Opened:  2026-09-08
 - Owner:   Workshop
-- GitHub:  #394 (sub-issues #440 Phase A, #441 B, #442 C, #443 D, #444 E)
+- GitHub:  #394 (sub-issues #440 A, #441 B, #442 C, #443 D, #444 E, #447 F — SurveyPoint)
 
 ## 1. Authority
 
@@ -42,13 +42,19 @@ Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft asse
   bullet per ADR-054 (c) does not require removing the guard — it still returns early when an origin
   is already set). Build clean; `ctest` 1359/1359. **Deferred to Phase B:** DXF/DWG-native import
   `static_cast<float>` narrowing sites, and paper-space stores (paper inches — small magnitudes).
-- **Phase B — serialization + remaining import narrowing.** DXF/DWG-native import: replace the
-  `static_cast<float>(x - worldDocumentOriginX)` sites in `LibreDwgCad.cpp` (`LocalLine`/`LocalCircle`
-  /`LocalArc`/…) and `DxfIo.cpp` polyline import with `double`. Paper-space stores (`PaperLayout`
-  `paperLines`/`paperCircles`/`paperPolyVerts`, `CadArc`/`CadEllipse` in paper) → `double` and their
-  `.gs` readers (`GsIo.cpp` ~1915/1948/1973). `.gs`/DWG-trailer coordinate records are already
-  emitted and read as `double` (Phase A). If a DWG trailer format-version bump is wanted for
-  explicit legacy-load semantics, do it here. Confirm LibreDWG codec path is `double` end to end.
+- **Phase B — import narrowing. DONE (#441).** `LibreDwgCad.cpp` (`LocalLine`/`LocalCircle`/`LocalArc`
+  /`LocalPolyline`/`LocalText`, ellipse import) and `DxfIo.cpp` (line/circle/arc/ellipse/polyline/
+  filled-region import) stop narrowing coordinates through `static_cast<float>`. **`CadArc::startRad`
+  /`sweepRad` and `CadEllipse::majVx/majVy/ratio` reverted to `float`** — they are angles / a
+  direction / a ratio, not coordinates (endpoint error is r·Δθ, well inside ±0.002 ft), and keeping
+  them `float` preserves the DXF writer's byte-stable angle round-trip. DXF writer: `worldX`/`worldY`
+  take `double`; the `$EXTMIN/$EXTMAX` extent sweep snaps every coordinate to the written six-decimal
+  grid (`q6`/`q6lx`/`q6ly`) so it sees what a reader reconstructs — `float` storage made that free
+  (float ≈ 6-7 sig digits at model magnitude), `double` does not, and a shallow huge-radius arc's
+  near-cancelling centre+radius otherwise lands ~1e-6 off on re-export (`regression-111`/`-113`).
+  **ADR-054 (a) amended:** paper-space stores stay `float` (sheet inches — `float` resolves ~1e-6 in,
+  orders of magnitude inside ±0.002 ft; widening is pure churn). `SurveyPoint` split to Phase F (#447).
+  Build clean; `ctest` 1359/1359.
 - **Phase C — snap / preview / pick read-back.** Every site that reads a coordinate back out of a
   store for snapping, rubber-band preview, or pick resolution takes the `double` value. Confirm
   REQ-101's bit-identical-snap property now delivers the full-precision value.

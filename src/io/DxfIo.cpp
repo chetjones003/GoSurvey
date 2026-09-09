@@ -740,12 +740,12 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     xf.apply(x1, y1, &ox1, &oy1);
     UpdateCoordMag(coordMagMax, ox0, oy0);
     UpdateCoordMag(coordMagMax, ox1, oy1);
-    st.userLinesFlat.push_back(static_cast<float>(ox0 - st.worldDocumentOriginX));
-    st.userLinesFlat.push_back(static_cast<float>(oy0 - st.worldDocumentOriginY));
-    st.userLinesFlat.push_back(static_cast<float>(z0));
-    st.userLinesFlat.push_back(static_cast<float>(ox1 - st.worldDocumentOriginX));
-    st.userLinesFlat.push_back(static_cast<float>(oy1 - st.worldDocumentOriginY));
-    st.userLinesFlat.push_back(static_cast<float>(z1));
+    st.userLinesFlat.push_back(ox0 - st.worldDocumentOriginX);
+    st.userLinesFlat.push_back(oy0 - st.worldDocumentOriginY);
+    st.userLinesFlat.push_back(z0);
+    st.userLinesFlat.push_back(ox1 - st.worldDocumentOriginX);
+    st.userLinesFlat.push_back(oy1 - st.worldDocumentOriginY);
+    st.userLinesFlat.push_back(z1);
     st.userLineAttrs.push_back(at);
   };
 
@@ -780,9 +780,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       double ox = 0, oy = 0;
       xf.apply(p.x, p.y, &ox, &oy);
       UpdateCoordMag(coordMagMax, ox, oy);
-      st.userPolylineVerts.push_back(static_cast<float>(ox - st.worldDocumentOriginX));
-      st.userPolylineVerts.push_back(static_cast<float>(oy - st.worldDocumentOriginY));
-      st.userPolylineVerts.push_back(static_cast<float>(p.z));
+      st.userPolylineVerts.push_back(ox - st.worldDocumentOriginX);
+      st.userPolylineVerts.push_back(oy - st.worldDocumentOriginY);
+      st.userPolylineVerts.push_back(p.z);
       if (anyBulge || !st.userPolylineVertsBulge.empty())
         st.userPolylineVertsBulge.push_back(static_cast<float>(p.bulge));
     }
@@ -842,8 +842,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       UpdateCoordMag(coordMagMax, ocx, ocy);
       UpdateCoordMag(coordMagMax, ocx + a, ocy + a);
       CadEllipse el{};
-      el.cx = static_cast<float>(ocx - st.worldDocumentOriginX);
-      el.cy = static_cast<float>(ocy - st.worldDocumentOriginY);
+      el.cx = ocx - st.worldDocumentOriginX;
+      el.cy = ocy - st.worldDocumentOriginY;
       // Groups 11/21 are a VECTOR from the centre, not a point, so they take no origin shift.
       el.majVx = static_cast<float>(majx);
       el.majVy = static_cast<float>(majy);
@@ -893,10 +893,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       xf.apply(cx, cy, &ocx, &ocy);
       UpdateCoordMag(coordMagMax, ocx, ocy);
       UpdateCoordMag(coordMagMax, ocx + rad, ocy);
-      st.userCirclesCxCyZR.push_back(static_cast<float>(ocx - st.worldDocumentOriginX));
-      st.userCirclesCxCyZR.push_back(static_cast<float>(ocy - st.worldDocumentOriginY));
-      st.userCirclesCxCyZR.push_back(static_cast<float>(cz));  // group 30 (REQ-057), unrebased
-      st.userCirclesCxCyZR.push_back(static_cast<float>(rad));
+      st.userCirclesCxCyZR.push_back(ocx - st.worldDocumentOriginX);
+      st.userCirclesCxCyZR.push_back(ocy - st.worldDocumentOriginY);
+      st.userCirclesCxCyZR.push_back(cz);  // group 30 (REQ-057), unrebased
+      st.userCirclesCxCyZR.push_back(rad);
       st.userCircleAttrs.push_back(at);
       PushCircleNormal(st.userCircleNormals, static_cast<float>(nx), static_cast<float>(ny),
                        static_cast<float>(nz));  // REQ-312: group 210
@@ -949,12 +949,12 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       UpdateCoordMag(coordMagMax, ocx, ocy);
       UpdateCoordMag(coordMagMax, ocx + rad, ocy);
       CadArc arc{};
-      arc.cx = static_cast<float>(ocx - st.worldDocumentOriginX);
-      arc.cy = static_cast<float>(ocy - st.worldDocumentOriginY);
-      arc.r = static_cast<float>(rad);
+      arc.cx = ocx - st.worldDocumentOriginX;
+      arc.cy = ocy - st.worldDocumentOriginY;
+      arc.r = rad;
       arc.startRad = static_cast<float>(a0);
       arc.sweepRad = static_cast<float>(sweep);
-      arc.z = static_cast<float>(cz);  // group 30 (REQ-057), unrebased
+      arc.z = cz;  // group 30 (REQ-057), unrebased
       arc.nx = static_cast<float>(nx);  // REQ-312: group 210
       arc.ny = static_cast<float>(ny);
       arc.nz = static_cast<float>(nz);
@@ -1058,12 +1058,12 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       double ox = 0, oy = 0;
       xf.apply(mx, my, &ox, &oy);
       UpdateCoordMag(coordMagMax, ox, oy);
-      region.vertsXyz.push_back(static_cast<float>(ox - st.worldDocumentOriginX));
-      region.vertsXyz.push_back(static_cast<float>(oy - st.worldDocumentOriginY));
+      region.vertsXyz.push_back(ox - st.worldDocumentOriginX);
+      region.vertsXyz.push_back(oy - st.worldDocumentOriginY);
       // Z: a HATCH's boundary vertices are 10/20 only — the elevation lives on the HATCH entity
       // itself (group 30), which this parser does not yet read. Kept at 0 so widening the store
       // is a pure refactor; real elevations land with the group-30 work (REQ-057, TASK-034 step 6).
-      region.vertsXyz.push_back(0.f);
+      region.vertsXyz.push_back(0.0);
     };
     auto endLoop = [&]() {
       // Drop a just-finished loop that has fewer than 3 vertices (degenerate).
@@ -2521,6 +2521,20 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   double extMnX = 0., extMxX = 0., extMnY = 0., extMxY = 0., extMnZ = 0., extMxZ = 0.;
   bool extAny = false;
   bool extZAny = false;
+
+  // The sweep MUST see the coordinates a READER reconstructs from this file, not the full-precision
+  // doubles in memory (the note further down on `ComputeWorldExtents` agreement). Every coordinate is
+  // written by `std::to_string` (six decimals), so the reader holds `stod(to_string(world))`. With
+  // `float` storage this was free — a `float` at model magnitude already round-trips through six-ish
+  // significant digits — but `double` storage carries 15+, so a large centre and radius that nearly
+  // cancel (a shallow, huge-radius arc — issue #111) land ~1e-6 apart on the second export unless
+  // each input is snapped to the written grid here first. `q6` snaps a bare value; `q6l` snaps a
+  // local X/Y the way the entity record does (world round-tripped, then back to local).
+  const auto q6 = [](double v) { return std::isfinite(v) ? std::stod(std::to_string(v)) : v; };
+  const double sweepOx = st.worldDocumentOriginX;
+  const double sweepOy = st.worldDocumentOriginY;
+  const auto q6lx = [&](double lx) { return q6(lx + sweepOx) - sweepOx; };
+  const auto q6ly = [&](double ly) { return q6(ly + sweepOy) - sweepOy; };
   auto accExt = [&](double x, double y) {
     if (!extAny) {
       extMnX = extMxX = x;
@@ -2543,15 +2557,15 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     }
   };
   for (size_t i = 0; i < nSeg; ++i) {
-    accExt(static_cast<double>(st.userLinesFlat[i * 6 + 0]), static_cast<double>(st.userLinesFlat[i * 6 + 1]));
-    accExt(static_cast<double>(st.userLinesFlat[i * 6 + 3]), static_cast<double>(st.userLinesFlat[i * 6 + 4]));
+    accExt(q6lx(st.userLinesFlat[i * 6 + 0]), q6ly(st.userLinesFlat[i * 6 + 1]));
+    accExt(q6lx(st.userLinesFlat[i * 6 + 3]), q6ly(st.userLinesFlat[i * 6 + 4]));
     accExtZ(static_cast<double>(st.userLinesFlat[i * 6 + 2]));
     accExtZ(static_cast<double>(st.userLinesFlat[i * 6 + 5]));
   }
   for (size_t ci = 0; ci < nCirc; ++ci) {
-    const double cx = static_cast<double>(st.userCirclesCxCyZR[ci * 4]);
-    const double cy = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 1]);
-    const double rr = std::fabs(static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 3]));
+    const double cx = q6lx(st.userCirclesCxCyZR[ci * 4]);
+    const double cy = q6ly(st.userCirclesCxCyZR[ci * 4 + 1]);
+    const double rr = q6(std::fabs(st.userCirclesCxCyZR[ci * 4 + 3]));
     accExt(cx - rr, cy - rr);
     accExt(cx + rr, cy + rr);
   }
@@ -2580,8 +2594,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const size_t nPolyVert =
         st.userPolylineOffsets.empty() ? 0u : static_cast<size_t>(st.userPolylineOffsets.back());
     for (size_t vi = 0; vi < nPolyVert && vi * 3 + 2 < st.userPolylineVerts.size(); ++vi) {
-      accExt(static_cast<double>(st.userPolylineVerts[vi * 3]),
-             static_cast<double>(st.userPolylineVerts[vi * 3 + 1]));
+      accExt(q6lx(st.userPolylineVerts[vi * 3]),
+                    q6ly(st.userPolylineVerts[vi * 3 + 1]));
       accExtZ(static_cast<double>(st.userPolylineVerts[vi * 3 + 2]));
     }
   }
@@ -2611,7 +2625,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // its `ComputeWorldExtents` matches this sweep rather than merely coming close.
   for (const CadArc& a : st.userArcs) {
     const DxfArcAsWritten aw = DxfArcToWrite(a);
-    const double dr = std::fabs(static_cast<double>(a.r));
+    const double dr = q6(std::fabs(a.r));
     if (dr <= 1e-12)
       continue;
     const int n =
@@ -2631,8 +2645,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     // byte-settles. Reconstructing the reader's centre here makes the rebase delta zero — its own
     // `< 1e-9` early-out then fires and nothing shifts. A flat arc's OCS point is its world point
     // unchanged, so this is a no-op for it.
-    double dcx = static_cast<double>(a.cx);
-    double dcy = static_cast<double>(a.cy);
+    double dcx = q6lx(a.cx);
+    double dcy = q6ly(a.cy);
     double dcz = static_cast<double>(a.z);
     if (!arcFlat) {
       const auto snap6 = [](double v) {
@@ -2681,8 +2695,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const double px = -uy;
     const double py = ux;
     const double mb = ma * static_cast<double>(ew.ratio);
-    const double ecx = static_cast<double>(el.cx);
-    const double ecy = static_cast<double>(el.cy);
+    const double ecx = q6lx(el.cx);
+    const double ecy = q6ly(el.cy);
     for (int i = 0; i < n; ++i) {
       const double ang = kTwoPi * static_cast<double>(i) / static_cast<double>(n);
       const double c = std::cos(ang);
@@ -3399,8 +3413,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
 
   const double ox = st.worldDocumentOriginX;
   const double oy = st.worldDocumentOriginY;
-  auto worldX = [&](float lx) { return static_cast<double>(lx) + ox; };
-  auto worldY = [&](float ly) { return static_cast<double>(ly) + oy; };
+  auto worldX = [&](double lx) { return static_cast<double>(lx) + ox; };
+  auto worldY = [&](double ly) { return static_cast<double>(ly) + oy; };
 
   // Group 210 is written at FULL double precision, not through `std::to_string` like every other
   // number here (REQ-312). It is the one value in a DXF whose error is ANGULAR rather than
