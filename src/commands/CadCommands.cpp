@@ -11626,8 +11626,34 @@ static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float 
   st.surveyInversePhase = SIP::WaitFrom;
 }
 
+/// Below this horizontal separation DIST reports a pair as vertical and declines to state a grade
+/// (REQ-105 as amended, D-2026-09-09-f).
+///
+/// The VALUE is REQ-074's, deliberately: `SURFELEV` already calls two picks closer than this "the
+/// same location" and refuses a grade for them, and a user who picks the same two points in both
+/// commands must not be told a grade exists in one and not the other. The NAME is DIST's own,
+/// because REQ-074 spells the condition `kTinPlanEpsilon` — a threshold that means "the TIN builder
+/// treats these as one shot" — and DIST has nothing to do with a TIN. Depending on that name would
+/// be borrowing a predicate whose name describes another subsystem's concern, which is how a
+/// redefinition upstream silently changes a branch here.
+///
+/// Note it is five times REQ-101's +/-0.002 ft: between the two, DIST calls a pair vertical while
+/// their plan separation is still measurable. That is the conservative end, and agreeing with
+/// SURFELEV was preferred over agreeing with the coordinate tolerance — see D-2026-09-09-f, which
+/// records the tension rather than pretending it is not there.
+static constexpr double kDistVerticalRunFt = 0.01;
+
 /// REQ-105: DIST — reports delta X/Y/Z and slope (true 3D) distance in the active UCS, the same
-/// frame ID reports in (CommitIdPointAt) so the numbers match what the user would type back in.
+/// frame ID reports in (CommitIdPointAt) so the numbers match what the user would type back in,
+/// and then the four numbers a surveyor reads together: horizontal distance, vertical difference,
+/// grade and run:rise (REQ-105 as amended for GitHub #149 acceptance 1).
+///
+/// The grade goes on its OWN log line, worded exactly as `SURFELEV`'s (REQ-074) rather than
+/// appended to the first: DIST's established line already says "slope dist" for the 3D distance,
+/// and "slope 1.67:1" for the run:rise ratio beside it would be two different meanings of the same
+/// word in one sentence. Two lines also leave the accepted line byte-identical, so this amendment
+/// only adds.
+///
 /// \p lx1,ly1 and \p lx2,ly2 are LOCAL X/Y (the same frame CommitIdPointAt's lx/ly parameters are
 /// in), converted to world here; \p wz1,wz2 are already WORLD Z (as returned by
 /// CadCommitElevation), matching CommitIdPointAt's convention.
@@ -11653,6 +11679,32 @@ static void CommitDistSecondPoint(AppCommandState& st, float lx1, float ly1, flo
   std::snprintf(buf, sizeof(buf), "DIST — dX = %s  dY = %s  dZ = %s  slope dist = %s", FormatLinear(dx, p).c_str(),
                 FormatLinear(dy, p).c_str(), FormatLinear(dz, p).c_str(), FormatLinear(slope, p).c_str());
   log.push_back(buf);
+
+  // The surveyor's four numbers. `run` is the HORIZONTAL distance and `rise` the VERTICAL
+  // difference, both in the active UCS like every figure on the line above — so on a tilted UCS
+  // "horizontal" means horizontal in the frame the user is working in, which is the same frame the
+  // deltas are already reported in.
+  const double run = std::hypot(dx, dy);
+  const double rise = dz;
+  if (run < kDistVerticalRunFt) {
+    // A true vertical. There IS a distance here (the line above reported it) but no grade: the run
+    // is the denominator, and a pair this close in plan is not separated in plan at all. Said
+    // rather than divided by, which is the REQ-201 shape.
+    std::snprintf(buf, sizeof(buf), "DIST — vertical: horiz %s  vert %s. No grade.",
+                  FormatLinear(run, p).c_str(), FormatLinear(rise, p).c_str());
+  } else if (std::abs(rise) < 1e-9) {
+    // Flat: a run:rise ratio would divide by zero, and "level" is what a surveyor writes on the
+    // sheet anyway. REQ-074's wording verbatim.
+    std::snprintf(buf, sizeof(buf), "DIST — level (0.00%%)  horiz %s  vert %s", FormatLinear(run, p).c_str(),
+                  FormatLinear(rise, p).c_str());
+  } else {
+    // Both conventions, because both are used: percent for the grade, run:rise for the slope.
+    // REQ-074's wording verbatim, so the same two points read the same way in either command.
+    std::snprintf(buf, sizeof(buf), "DIST — grade %.2f%%  slope %.2f:1  horiz %s  vert %s", rise / run * 100.0,
+                  run / std::abs(rise), FormatLinear(run, p).c_str(), FormatLinear(rise, p).c_str());
+  }
+  log.push_back(buf);
+
   st.active = K::None;
   st.distPhase = DP::WaitFrom;
 }
