@@ -2799,6 +2799,56 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
     `ScaleSelectionZAboutBase` exists to preserve. It costs nothing in compatibility because these
     commands refused solids outright until now, so no drawing can depend on the old behaviour.
 
+**(n) Moving a vertex or an edge IS offsetting the planes that meet there.**
+(2026-09-09, D-2026-09-09-d, REQ-333, TASK-233, GitHub issue #148 acceptance 3.)
+
+  **Context.** Issue #148 acceptance 3 asks that grips move faces, edges and vertices. Faces have
+  been movable since REQ-319; nothing moved the other two, and the gizmo correctly refused to draw a
+  handle for either because no kernel operation existed behind it.
+
+  **The decision is a DEFINITION, and it is forced rather than chosen.** Moving a box corner and
+  leaving everything else alone is not representable: the three quads meeting there would each end
+  up with four non-coplanar points, and `SurfaceKind` has no non-planar face to hold that. Storing
+  the result anyway would leave faces that do not contain their own boundaries — the failure
+  amendment (i)'s precondition exists to prevent, and one `Validate` cannot see.
+
+  A planar face has exactly one degree of freedom that keeps it planar: sliding along its own normal.
+  Three planes at a corner give three, which is exactly a point; two planes along an edge give two,
+  which is exactly a line. So:
+
+  > moving a vertex or an edge = offsetting each adjacent planar face by `dot(delta, outward normal)`,
+  > then re-solving every affected corner.
+
+  That is not an approximation of the "real" operation — within this representation it *is* the whole
+  space of moves that exists.
+
+  **Two consequences worth stating, because both look like shortfalls and neither is:**
+
+  - **Every other corner of those faces moves too.** The faces moved; their boundaries came with
+    them. A version that moved only the dragged vertex is the unrepresentable one.
+  - **The component of an edge drag along the edge is annihilated.** The edge direction lies in both
+    faces, so it is perpendicular to both normals and offsets neither — and it should not, because an
+    edge slid along its own line is the same edge. A drag *entirely* along the edge is therefore
+    refused as "no motion" rather than reported as a move that did nothing.
+
+  **One core, three eventual callers.** `OffsetPlanarFacesAndResolve` is amendment (i)'s algorithm
+  with its "exactly one face moves" assumption lifted, and it keeps both pieces that make that
+  algorithm correct: the best-conditioned triple of planes is solved (the first three would pick a
+  near-degenerate triple wherever two faces are nearly coplanar), and every other plane at the corner
+  must then pass through the answer (more than three planes generally have no common point once one
+  moves — a pyramid's apex).
+
+  **`PushPullFace` is deliberately NOT routed through it yet.** Its planar path is entangled with two
+  curved paths — the cylinder-wall radius change and the cap-push re-parameterisation — that the core
+  has no business knowing about, and unpicking them risks a shipping, well-tested operation for
+  tidiness alone. The core takes its failure codes as a parameter precisely so that push/pull keeps
+  its own error vocabulary when it is routed through later, making that a wiring change rather than a
+  rewrite. Recorded as debt rather than left implicit.
+
+  **The recipe is dropped here and kept by rotate/scale**, which is not an inconsistency: amendment
+  (m) states the rule both follow — *a recipe that can still describe its solid is kept and updated;
+  one that cannot is dropped.* A rotated box is still a box; a box with a corner pulled out is not.
+
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
 - **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —

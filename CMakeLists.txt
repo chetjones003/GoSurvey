@@ -810,6 +810,10 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-319 / ADR-046 amendment (i) — push/pull, the first kernel op that EDITS a solid. Its own
     # file because its subject is the PRECONDITION Validate cannot enforce, not another builder.
     tests/PushPullTests.cpp
+    # REQ-333 / ADR-046 amendment (n) — moving a VERTEX or an EDGE. Its own file because its subject
+    # is the DEFINITION: moving a corner and leaving everything else alone is not representable, so
+    # the operation is "offset the adjacent planes and re-solve", and these cases pin that.
+    tests/MoveSubObjectTests.cpp
     # REQ-332 / ADR-046 amendment (m) — rigid rotation and uniform scale. Its own file because its
     # subject is the point/direction split: a frame's origin and its axes transform by different
     # rules, and getting that wrong still produces a solid Validate accepts.
