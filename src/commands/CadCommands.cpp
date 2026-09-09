@@ -13670,26 +13670,6 @@ void GizmoGrowBounds(double x, double y, double z, ray3d::Vec3* mn, ray3d::Vec3*
 
 }  // namespace
 
-bool CadGizmoSubObjectFace(const AppCommandState& st, SelectedSubObject* out) {
-  // Exactly one face, and nothing else. More than one face has no single normal to slide along, and
-  // a face selected alongside an edge or a vertex is a selection whose meaning is not settled — both
-  // are refused rather than guessed at, which is what `CadPressPull` already does with its own
-  // selection (REQ-319).
-  const SelectedSubObject* found = nullptr;
-  for (const SelectedSubObject& s : st.subObjectSelection) {
-    if (s.kind != solidpick::Kind::Face)
-      return false;
-    if (found)
-      return false;
-    found = &s;
-  }
-  if (!found)
-    return false;
-  if (out)
-    *out = *found;
-  return true;
-}
-
 CadGizmoMode CadGizmoModeFor(const AppCommandState& st) {
   if (st.activeSpaceIndex != kModelSpaceIndex)
     return CadGizmoMode::None;  // a paper sheet is 2D (ADR-025 (g)); there is no third handle to draw

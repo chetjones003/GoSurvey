@@ -5816,9 +5816,6 @@ enum class CadGizmoMode {
 /// answer an edge or a vertex already gets, for the same reason.
 [[nodiscard]] CadGizmoMode CadGizmoModeFor(const AppCommandState& st);
 
-/// The one selected face, when \ref CadGizmoModeFor is \c SubObjectFace. False otherwise.
-[[nodiscard]] bool CadGizmoSubObjectFace(const AppCommandState& st, SelectedSubObject* out);
-
 /// Maximum gizmo axes. Three: the UCS X, Y and Z. Named so the loops below say why they are 3.
 inline constexpr int kGizmoAxisCount = 3;
 
