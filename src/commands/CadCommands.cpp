@@ -22728,6 +22728,220 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
     st.userPolylineAttrs.erase(st.userPolylineAttrs.begin() + static_cast<std::ptrdiff_t>(pi));
 }
 
+/// REQ-103 step 8 (EXPLODE) / GitHub issue #390. Replace every Polyline in the current selection with
+/// one standalone entity per segment: a LINE for a straight segment, an ARC for a bulge (curved)
+/// segment — flat or tilted (REQ-316 / ADR-047, REQ-325 / ADR-053), never tessellated to chords. Each
+/// output entity keeps the source polyline's own per-vertex Z (REQ-057) and a copy of its layer /
+/// colour / linetype attributes with a fresh id (REQ-076 / ADR-027). A closed polyline also emits its
+/// implied closing segment. Non-polyline, non-block selected entities are left untouched and named to
+/// \p log (REQ-201); block references are decomposed separately by the caller. Returns the number of
+/// polylines exploded. The caller owns the undo snapshot, the id sweep and the GPU-cache bump.
+int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log) {
+  std::vector<int> polyIdx;
+  std::set<std::string> otherKinds;
+  for (const SelectedEntity& e : st.selection) {
+    using T = SelectedEntity::Type;
+    switch (e.type) {
+      case T::Polyline:
+        if (e.index >= 0)
+          polyIdx.push_back(e.index);
+        break;
+      case T::BlockRef:
+        break;  // the caller's ExplodeRef path handles these
+      case T::LineSeg:      otherKinds.insert("line"); break;
+      case T::Circle:       otherKinds.insert("circle"); break;
+      case T::Arc:          otherKinds.insert("arc"); break;
+      case T::Ellipse:      otherKinds.insert("ellipse"); break;
+      case T::Annotation:   otherKinds.insert("text"); break;
+      case T::FilledRegion: otherKinds.insert("hatch"); break;
+      case T::Mesh:         otherKinds.insert("mesh"); break;
+      case T::FeatureLine:  otherKinds.insert("feature line"); break;
+      case T::Surface:      otherKinds.insert("surface"); break;
+      case T::Table:        otherKinds.insert("table"); break;
+      case T::Solid:        otherKinds.insert("solid"); break;
+      case T::PdfUnderlay:  otherKinds.insert("PDF underlay"); break;
+    }
+  }
+  std::sort(polyIdx.begin(), polyIdx.end());
+  polyIdx.erase(std::unique(polyIdx.begin(), polyIdx.end()), polyIdx.end());
+
+  for (const std::string& k : otherKinds)
+    log.push_back("EXPLODE — " + k + " skipped: not decomposable into line/arc segments (REQ-201).");
+
+  if (polyIdx.empty())
+    return 0;
+
+  // Model space only, matching the existing INSERT-explode paper-space note — the paper store is a
+  // separate PaperLayout, not st.userPolyline* (ADR-009/013).
+  if (ActivePaperGeometryTarget(st) != nullptr) {
+    log.push_back("EXPLODE — polyline explode is model space only.");
+    return 0;
+  }
+
+  struct OutLine {
+    float x0, y0, z0, x1, y1, z1;
+    EntityAttributes at;
+  };
+  struct OutArc {
+    CadArc a;
+    EntityAttributes at;
+  };
+  std::vector<OutLine> outLines;
+  std::vector<OutArc> outArcs;
+
+  const int np = static_cast<int>(st.userPolylineOffsets.size()) - 1;
+
+  auto vertAt = [&](int vi) -> ray3d::Vec3 {
+    const size_t k = static_cast<size_t>(vi) * 3;
+    return ray3d::Vec3{static_cast<double>(st.userPolylineVerts[k]),
+                       static_cast<double>(st.userPolylineVerts[k + 1]),
+                       static_cast<double>(st.userPolylineVerts[k + 2])};
+  };
+  auto bulgeAt = [&](int vi) -> float {
+    return static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
+               ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+               : 0.f;
+  };
+  auto normalAt = [&](int vi, float* nx, float* ny, float* nz) {
+    const size_t k = static_cast<size_t>(vi) * 3;
+    if (k + 2 < st.userPolylineVertsNormal.size()) {
+      *nx = st.userPolylineVertsNormal[k];
+      *ny = st.userPolylineVertsNormal[k + 1];
+      *nz = st.userPolylineVertsNormal[k + 2];
+    } else {
+      *nx = 0.f; *ny = 0.f; *nz = 1.f;
+    }
+  };
+
+  auto pushLine = [&](const ray3d::Vec3& A, const ray3d::Vec3& B, const EntityAttributes& at) {
+    outLines.push_back({static_cast<float>(A.x), static_cast<float>(A.y), static_cast<float>(A.z),
+                        static_cast<float>(B.x), static_cast<float>(B.y), static_cast<float>(B.z),
+                        DuplicatedEntityAttrs(at)});
+  };
+
+  // One polyline segment A->B carrying `bulge` in the plane `n` becomes a LINE (bulge ~ 0, or the
+  // bulge/tilt math degenerates) or an ARC. The tilted-arc construction is the same one issue #373's
+  // 3D FILLET solve, REQ-325's render/pick increments and DxfIo's split-on-export all use: an ad-hoc
+  // frame at A gives the true world centre, then the arc's own CANONICAL frame re-derives the angles,
+  // because that is the frame every reader of CadArc::startRad/sweepRad works in.
+  auto emitSegment = [&](const ray3d::Vec3& A, const ray3d::Vec3& B, float bulge, float nx, float ny,
+                         float nz, const EntityAttributes& at) {
+    if (std::fabs(bulge) <= 1e-9f) {
+      pushLine(A, B, at);
+      return;
+    }
+    CadArc arc{};
+    if (IsFlatNormal(nx, ny, nz)) {
+      // A flat-normal bulge whose ends sit at different elevations is inconsistent data (a flat arc
+      // lies in one Z plane) — keep the true 3D endpoints as a straight segment rather than pick one.
+      if (std::fabs(A.z - B.z) > 1e-6) {
+        pushLine(A, B, at);
+        return;
+      }
+      const BulgeArcSpan s = BulgeArc(A.x, A.y, B.x, B.y, static_cast<double>(bulge));
+      if (!s.valid) {
+        pushLine(A, B, at);
+        return;
+      }
+      arc.cx = static_cast<float>(s.cx);
+      arc.cy = static_cast<float>(s.cy);
+      arc.r = static_cast<float>(s.radius);
+      arc.z = static_cast<float>(A.z);  // flat arc: z is the plane elevation, shared by both ends
+      arc.startRad = static_cast<float>(s.startAngle);
+      arc.sweepRad = static_cast<float>(s.sweep);
+      arc.nx = 0.f; arc.ny = 0.f; arc.nz = 1.f;
+    } else {
+      const ray3d::Vec3 nrm{static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)};
+      ucs::Ucs plane{};
+      if (!ucs::FromNormal(A, nrm, &plane)) {
+        pushLine(A, B, at);
+        return;
+      }
+      const ucs::Point2D bLocal = ucs::WorldToPlane(plane, B);
+      const BulgeArcSpan s = BulgeArc(0.0, 0.0, bLocal.x, bLocal.y, static_cast<double>(bulge));
+      if (!s.valid) {
+        pushLine(A, B, at);
+        return;
+      }
+      const ray3d::Vec3 centreWorld = ucs::PlaneToWorld(plane, ucs::Point2D{s.cx, s.cy});
+      ucs::Ucs canon{};
+      if (!ucs::FromNormal(centreWorld, nrm, &canon)) {
+        pushLine(A, B, at);
+        return;
+      }
+      const ucs::Point2D sLocal = ucs::WorldToPlane(canon, A);
+      const ucs::Point2D eLocal = ucs::WorldToPlane(canon, B);
+      const double thetaA = std::atan2(sLocal.y, sLocal.x);
+      const double thetaB = std::atan2(eLocal.y, eLocal.x);
+      constexpr double kTwoPi = 6.28318530717958647692;
+      double sweep = thetaB - thetaA;
+      if (bulge >= 0.f) {
+        while (sweep < 0.0) sweep += kTwoPi;
+      } else {
+        while (sweep > 0.0) sweep -= kTwoPi;
+      }
+      arc.cx = static_cast<float>(centreWorld.x);
+      arc.cy = static_cast<float>(centreWorld.y);
+      arc.z = static_cast<float>(centreWorld.z);
+      arc.r = static_cast<float>(s.radius);
+      arc.startRad = static_cast<float>(thetaA);
+      arc.sweepRad = static_cast<float>(sweep);
+      arc.nx = nx; arc.ny = ny; arc.nz = nz;
+    }
+    outArcs.push_back({arc, DuplicatedEntityAttrs(at)});
+  };
+
+  // Read every segment out FIRST — the erase loop below rewrites the polyline arrays.
+  for (int pi : polyIdx) {
+    if (pi < 0 || pi >= np)
+      continue;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    if (v1 - v0 < 2)
+      continue;  // a degenerate 1-vertex polyline has no segment to make
+    const EntityAttributes at = static_cast<size_t>(pi) < st.userPolylineAttrs.size()
+                                    ? st.userPolylineAttrs[static_cast<size_t>(pi)]
+                                    : MakeNewEntityAttrs(st);
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      float nx, ny, nz;
+      normalAt(vi, &nx, &ny, &nz);
+      emitSegment(vertAt(vi), vertAt(vi + 1), bulgeAt(vi), nx, ny, nz, at);
+    }
+    const bool closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
+                        st.userPolylineClosed[static_cast<size_t>(pi)];
+    if (closed && v1 - v0 >= 3) {
+      // A closed polyline may or may not already repeat its first vertex at the end; only add the
+      // implied closing segment when the last vertex is genuinely distinct from the first.
+      const ray3d::Vec3 last = vertAt(v1 - 1);
+      const ray3d::Vec3 first = vertAt(v0);
+      if (ray3d::Length(ray3d::Sub(last, first)) > 1e-6) {
+        float nx, ny, nz;
+        normalAt(v1 - 1, &nx, &ny, &nz);
+        emitSegment(last, first, bulgeAt(v1 - 1), nx, ny, nz, at);
+      }
+    }
+  }
+
+  // Erase the source polylines high index first, so each removal leaves the lower ones addressable.
+  for (int i = static_cast<int>(polyIdx.size()) - 1; i >= 0; --i)
+    ErasePolylineByIndex(st, polyIdx[static_cast<size_t>(i)]);
+
+  for (const OutLine& L : outLines) {
+    st.userLinesFlat.push_back(L.x0);
+    st.userLinesFlat.push_back(L.y0);
+    st.userLinesFlat.push_back(L.z0);
+    st.userLinesFlat.push_back(L.x1);
+    st.userLinesFlat.push_back(L.y1);
+    st.userLinesFlat.push_back(L.z1);
+    st.userLineAttrs.push_back(L.at);
+  }
+  for (const OutArc& A : outArcs) {
+    st.userArcs.push_back(A.a);
+    st.userArcAttrs.push_back(A.at);
+  }
+  return static_cast<int>(polyIdx.size());
+}
+
 /// REQ-087. The polyline eraser's twin, with one extra array: the per-VERTEX elevation-point flags
 /// are cut over the same [3a, 3b) span the vertices are — in flags, that is [a, b), not the triplet
 /// range. Getting that wrong would leave the flag array the right length overall while shifting every
