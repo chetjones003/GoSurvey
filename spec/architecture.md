@@ -267,6 +267,9 @@ A change is rejected if it breaks any of these:
    (ADR-047) — is a parallel array by exception: a bulge is not a coordinate, so
    §11.8's anti-split does not reach it, and it follows the ADR-035 (c) /
    D-2026-08-31-f side-car pattern (count checked in `docinvariants`).*
+   *Amended 2026-09-08 (ADR-054, D-2026-09-08-i): the flat stores' scalar type widens `float`→`double`
+   for REQ-101's ±0.002 ft. This invariant is unchanged — it governs layout (Z inline, strides intact),
+   not scalar width; a widened store is still one coordinate in one allocation.*
 9. **A reference from one object to another is a stable id — never an array index.**
    Entities are stored in flat arrays that **compact on erase**, so an index is not a name: after a
    delete it silently designates a different entity. Storing an index across an object boundary, or
@@ -997,6 +1000,8 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   in-circle tests are the classic float-instability case: a sign flip yields a visibly wrong triangle
   or a non-terminating edge-flip loop, and REQ-101's ±0.01 ft leaves no margin for it. Coordinates
   are widened at the predicate, not in the store — §11.8 is unchanged.
+  *Amended 2026-09-08 (ADR-054, D-2026-09-08-i): storage widens to `double` too, so the
+  store→predicate narrowing this clause worked around disappears; no predicate code changes.*
   (e) **Rebuild is a §8 one-shot worker, coalesced per command.** The definition is marked dirty by an
   edit and **at most one** rebuild is issued per command / undo boundary, so a MOVE of 500 points
   rebuilds once. The worker gets a **copy** of its inputs and holds no pointer into
@@ -2137,6 +2142,8 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   the reason `CadMesh` and `CadTin` are (architecture §11.5): an undo snapshot is a refcount bump.
   It is the one store held in `double` rather than `float`, and the exception is narrow and earned:
   §11.8's float convention exists for arrays with millions of entries headed for a vertex buffer,
+  *(amended 2026-09-08, ADR-054: the geometry stores widen to `double` as well; this store stops being
+  the exception, and the millions-of-entries vertex/tessellation buffers remain the `float` case)*
   where a solid's B-rep is a handful of vertices — narrowing would throw away the exactness the
   closed-form volume depends on and buy nothing. The **tessellation**, which really is GPU-bound and
   really can be large, is narrowed to float in exactly one place.
@@ -3128,7 +3135,9 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   rescales *any* nearby point to exactly `r` — so the acceptance asserts the picked **azimuth** as
   well. The same distinction sets the module's precondition: the display buffers are `float`, which
   is adequate only because storage coordinates are document-local and so stay at model magnitude
-  (REQ-101's whole reason for being local). Fed triangles at absolute state-plane magnitude they
+  (REQ-101's whole reason for being local). *(ADR-054, 2026-09-08: authoritative storage widens to
+  `double`; display buffers stay `float` and this document-local precondition on them is unchanged.)*
+  Fed triangles at absolute state-plane magnitude they
   quantize to 0.125 ft, and at oblique incidence that displaces the answer *along* the surface by
   `d·tan(angle from normal)` where the projection cannot see it. Both cases are pinned in the tests
   with identical ray geometry, one passing and one failing.
@@ -3468,3 +3477,109 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   this ADR does not lift that for the polyline case either); `.gs` (retired, no code path); extents/
   length/area on a tilted polyline segment (folded into increment 2's render work, not called out
   separately since `CurvePointAt` sampling already answers both).
+
+### ADR-054 — Coordinate storage widens to `double`; the `float` narrowing moves to the GPU-upload boundary   (2026-09-08, accepted)
+
+- **Status:** accepted (2026-09-08, D-2026-09-08-i, GitHub issue #394). Backs REQ-101 at its tightened
+  ±0.002 ft. **Phased** — one geometry-owning subsystem per PR, sequence and status in TASK-228; this
+  ADR is the recorded authority for the whole migration, PR 1 is docs only.
+
+- **Context.** REQ-101's tolerance was tightened from ±0.01 ft to ±0.002 ft (D-2026-09-08-i): field
+  survey data is routinely better than ±0.005 ft, and the looser number had become "the" accuracy
+  guarantee the code and the ~955-case test suite lean on. But persistent geometry is held in flat
+  `std::vector<float>` stores (`userLinesFlat` stride 6, `userPolylineVerts` stride 3,
+  `userCirclesCxCyZR` stride 4, `CadFilledRegion::vertsXyz` stride 3) plus loose scalar fields
+  (`CadArc::cx/cy/z`, `CadEllipse`, `CadAnnotation::insX/insY/insZ`, …) — the layout ADR-025 (a) chose,
+  with the document-origin rebase (`world = local + worldDocumentOrigin`, §11.8, ADR-025 (b)) buying
+  `float` enough headroom for ±0.01 ft by keeping the narrowing magnitude local. A `float` resolves
+  only ~0.008 ft at the 100,000 ft `kLargeCoordinateRebaseThreshold` ceiling, so **±0.002 ft is not
+  representable in a `float` store however well the origin is placed** — a second large coordinate
+  outside the rebase box cannot be represented at all. The store itself has to widen. What number
+  coordinates are stored in is an architectural decision, not a Workshop choice (§2, §5, §11).
+
+- **Decision.**
+
+  **(a) Persistent geometry stores hold `double`.** The four flat stores become `std::vector<double>`;
+  every scalar coordinate field on an entity (`CadArc`, `CadEllipse`, `CadAnnotation`, block insert
+  points, dimension definition points, feature-line and surface vertices, paper-space geometry in
+  paper inches) becomes `double`. **The interleaved-XYZ layout and every stride are unchanged** —
+  invariant §11.8 governs *layout* (Z inline, never a sidecar), not scalar width, and it is not
+  weakened: a widened store is still one coordinate in one allocation. The three copies of each store
+  (live `AppCommandState`, the undo `DrawingGeometrySnapshot`, the per-tab struct — ADR-025 context)
+  widen together.
+
+  **(b) The `float` narrowing happens once, at GPU vertex-buffer assembly.** `ViewportRenderer`'s
+  upload path already subtracts the document origin before building the vertex buffer (REQ-101, §11.8);
+  it now also narrows `double`→`float` there. The GL vertex format stays 3×`float` — GPUs do not take
+  `double`, and a display vertex at local magnitude is well inside ±0.002 ft and is never read back as
+  authoritative geometry (object snap reads the `double` store, not the buffer — REQ-101's
+  bit-identical-snap property is *strengthened*, the snapped value is now the full-precision one). This
+  is §11.8's own "narrow once, at known-small magnitude" principle, moved down one layer.
+
+  **(c) The document-origin rebase stays, with a narrower job.** It is still needed: it keeps the
+  GPU-side `float` values small (b), and it keeps intermediate math (cross products, matrix chains,
+  predicate inputs) at local magnitude. It is **no longer load-bearing for stored accuracy** — a typed
+  coordinate is stored within ±0.002 ft by virtue of the `double` store regardless of when or whether
+  an origin is established. So REQ-101's origin-*establishment-timing* acceptance conditions relax, and
+  its "establishment is one-time" condition is **dropped** — it existed only because `float`
+  re-centring rounded every stored coordinate on each move (the compounding drift REQ-079 forbids);
+  `double` re-centring does not lose precision. `kMaxEstablishableOriginMagnitude` and the
+  finiteness/refusal guards (REQ-201) are unchanged.
+
+  **(d) Predicates are unaffected.** Orientation/in-circle (ADR-028), the B-rep kernel (ADR-045 (g),
+  ADR-046), and the curve-intersection solves already compute in `double` and were written to widen
+  *at the predicate* precisely because the store was `float` (architecture §11 "geometric predicates
+  are computed in `double`; storage stays `float`"). That clause is amended: storage is now `double`
+  too, so the store→predicate narrowing those sites worked around simply disappears. No predicate code
+  changes behavior.
+
+  **(e) Serialization.** The native DWG-trailer coordinate records (ADR-044) widen to 8-byte `double`
+  with a trailer format-version bump and a legacy-load path (older trailers load their `float` values,
+  which are still within the old ±0.01 ft — recorded, not silently upgraded). DXF is already ASCII
+  decimal text — no format change, the importer/exporter just stop narrowing through `float`. DWG via
+  LibreDWG is already `double` at the codec boundary (ADR-041). `.gs` is retired (no code path).
+
+  **(f) Phased, one subsystem per PR**, each with a full `./dev/build` + `./dev/test` gate and its own
+  Verification pass. Until a subsystem's phase lands it keeps its `float` stores and its existing
+  assertions at ±0.01 ft — REQ-101's revision note makes this per-subsystem staging explicit. Sequence
+  in TASK-228; the intended order is core entity stores + undo/tab copies → serialization → snapping /
+  preview / pick read-back → the GPU-upload narrowing point → the test-assertion sweep (every `0.01`
+  literal and named constant — `kReq101`, `kTinPlanEpsilon`, `kSolidChordToleranceFt`, the `kTol` in
+  `CadCommands.cpp`, and the per-assertion literals — audited one at a time to confirm it represents
+  the REQ-101 guarantee and not a coincidental unrelated use before it is changed to `0.002`).
+
+- **Alternatives.**
+  - **`std::vector<Vec3<double>>` / a point type** — the safest (a missed stride site is a compile
+    error) but the largest diff, rejected by ADR-025 (a) for the identical reason. Flat-`double` keeps
+    every stride site compiling; the migration is a mechanical scalar widening, not a layout change,
+    so the silent-misread hazard ADR-025 (a) feared (a renamed site still computing `i*3+2`) does not
+    apply — the layout and strides are untouched. A `float`/`double` mismatch left at a boundary site
+    is a narrowing-conversion the compiler warns on.
+  - **Keep `float`, shrink `kLargeCoordinateRebaseThreshold` to ~10,000 ft** so `float` resolves
+    ~0.002 ft locally — rejected: caps usable drawing extent at ~10,000 ft (many survey sites exceed
+    that), and a coordinate outside the rebase box still cannot be represented. It trades a storage
+    problem for a smaller-drawings-only product.
+  - **Tighten the number only where `float` already suffices** (scope REQ-101's guarantee to drawings
+    within ~10,000 ft of the origin, keep ±0.01 ft beyond) — put to the user 2026-09-08 and rejected:
+    a tolerance that silently means different things at different drawing sizes is exactly the "the
+    number relied on as *the* guarantee" ambiguity issue #394 was filed to remove.
+
+- **Consequences.**
+  - A large, mostly mechanical diff — on the order of the ~1,450 coordinate reference sites ADR-025
+    catalogued, spread across every geometry-owning subsystem, delivered over many PRs. Regression
+    exposure is the whole test suite, which is why (f) gates every phase on a green `ctest`.
+  - Memory for the authored-geometry stores roughly doubles. This is acceptable and bounded: the
+    arrays that are genuinely large (millions of entries headed for a vertex buffer — mesh and
+    tessellation buffers, §11.8 line ~2139) stay `float` on the GPU side under (b); the widened stores
+    are the authored-geometry stores, which are orders of magnitude smaller.
+  - Several existing clauses are amended to point here: ADR-025 (b) and its correction note (the
+    "storage stays `float`" rationale), ADR-028, ADR-045 (g), ADR-046, and the architecture §11
+    predicate-precision discussion. None of them change behavior — they lose a `float` constraint they
+    were written to work around.
+  - REQ-101's acceptance simplifies once the migration completes: "typed at state-plane magnitude is
+    stored within tolerance" holds unconditionally, not only when the origin was established at entry.
+
+- **Out of scope and not designed for:** widening the GPU vertex format or any render/tessellation
+  buffer (they stay `float` — (b)); a units/precision-mode UI (REQ-101 is a fixed internal guarantee,
+  not a user setting); revisiting the rebase threshold or `kMaxEstablishableOriginMagnitude` (both
+  unchanged — (c)); `.gs` (retired).

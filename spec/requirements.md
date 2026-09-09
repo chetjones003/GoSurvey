@@ -7668,45 +7668,52 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Purpose: domain correctness (CAD/survey)
 - Priority: must
 - Type: performance/quality
-- Statement: A coordinate is **stored** and **computed** within **±0.01 ft** of the value the user
+- Statement: A coordinate is **stored** and **computed** within **±0.002 ft** of the value the user
   supplied or the reference dataset states.
 
-  "Stored" is not a redundant word here. Geometry is held `local` in `float`, with
-  `world = local + worldDocumentOrigin`, so the error in a stored coordinate depends on the magnitude
-  of the value at the moment it is narrowed to `float` — not on the arithmetic that follows. Narrowing
-  a typed easting *before* the document origin is subtracted quantizes it at world magnitude: at
-  easting 2e6 the `float` spacing is 0.25 ft, so `2000000.10` was stored as `2000000.125`, an error of
-  0.025 ft that no later computation can undo. **The document origin is therefore established before a
-  coordinate of large magnitude is narrowed**, so the narrowing happens at local magnitude and the
-  same input stores within ~1e-4 ft.
+  "Stored" is not a redundant word here. The error in a stored coordinate depends on the numeric type
+  it is held in and the magnitude of the value at the moment it is narrowed to that type — not on the
+  arithmetic that follows. **Persistent geometry stores hold `double`** (ADR-054): a `double` resolves
+  better than ±0.002 ft at every magnitude the application accepts as a coordinate, so a typed value is
+  stored within tolerance regardless of drawing extent. The narrowing to `float` happens **once**, when
+  a vertex buffer is assembled for the GPU, after the document origin has been subtracted — at local
+  magnitude, where `float` still resolves well inside ±0.002 ft, and where the result is a display
+  approximation that is never read back as authoritative geometry.
 
-  Establishment is bounded at both ends, and both bounds are load-bearing. Below
-  `kLargeCoordinateRebaseThreshold` no frame is needed. Above
-  `kMaxEstablishableOriginMagnitude` a value is not a coordinate, and building a frame around it would
-  make garbage *representable* instead of refused — so it is left to the finiteness guards and
-  reported (REQ-201).
+  This supersedes the earlier rule, which held geometry `local` in `float` and relied on the
+  document-origin rebase (`world = local + worldDocumentOrigin`) to keep the narrowing magnitude small
+  enough for the looser ±0.01 ft. `float` resolves only ~0.008 ft at the 100,000 ft rebase ceiling, so
+  ±0.002 ft is not representable in a `float` store however well the origin is placed — the store
+  itself had to widen. The rebase machinery **stays**: it still keeps the GPU-side `float` values small
+  and keeps intermediate math at local magnitude, but it is no longer load-bearing for *stored*
+  accuracy, so the origin-establishment-timing conditions below are relaxed (ADR-054 (c)).
+
+  `kMaxEstablishableOriginMagnitude` still bounds what is a coordinate at all: above it a value is not
+  a coordinate, and it is left to the finiteness guards and reported (REQ-201).
+
+  **Phased rollout.** The `float`→`double` storage migration (ADR-054, TASK-228) is done one subsystem
+  at a time, each its own PR with a full `ctest` gate. Until a subsystem's phase lands it still carries
+  the old ±0.01 ft `float` limit and its existing assertions are unchanged; this requirement's ±0.002 ft
+  is met per-subsystem as the phases complete, and is fully met when TASK-228 closes.
 - Acceptance:
   - the regression dataset passes at the stated tolerance (assert against tolerance, never exact
     float equality);
   - **a coordinate typed at state-plane magnitude is STORED within tolerance**, not merely computed
-    within it — checked on a drawing whose document origin starts at `(0,0)`, which is the case that
-    fails if the origin is established too late;
-  - establishment is **one-time**: a second large coordinate does not move the frame again, since
-    re-centring would round every stored coordinate through `float` on each move (the compounding
-    drift REQ-079's idempotence condition forbids);
-  - a magnitude too large to be a coordinate does not become storable by acquiring a frame — the
-    refusal still happens and is still reported.
+    within it — checked on a drawing whose document origin starts at `(0,0)`. With `double` storage
+    (ADR-054) this holds without the origin being established at entry time; before that subsystem's
+    phase lands, the entry-time establishment still carries it at the old ±0.01 ft;
+  - a magnitude too large to be a coordinate does not become storable — the refusal still happens and
+    is still reported.
 
   **Picked points are scoped out of this tolerance, deliberately.** A viewport pick's accuracy is
-  bounded by the pixel it came from, so at a usable zoom it is coarser than ±0.01 ft and no arithmetic
+  bounded by the pixel it came from, so at a usable zoom it is coarser than ±0.002 ft and no arithmetic
   downstream can improve it — the information was never captured. What *is* required is that picking
   add no error of its own: picks are submitted in **local** storage coordinates (not world — see
   `SubmitViewportPick`), and an object snap overrides the cursor with a value read directly out of the
   geometry stores, so **a snapped pick is bit-identical to the vertex it snapped to**. That is the
-  property to protect, and it is why the pick path needs no widening to double. Exact values are
-  entered by typing, which is what the conditions above govern.
+  property to protect. Exact values are entered by typing, which is what the conditions above govern.
 - Owner-layer: Commands (`ParseWorldPointD`, the entry-time establishment), util/Commands
-  (`CadCoordinateFrame`)
+  (`CadCoordinateFrame`), all geometry-owning subsystems (the `double` storage migration, ADR-054)
 - Status: **accepted (2026-08-17)**
 - Revisions: 2026-08-17 — accepted, and the template placeholders replaced with the measured rule.
   Promoted from `proposed` by decision **D-2026-08-17-b**, on evidence rather than on principle: a
@@ -7715,6 +7722,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
   drafted but was unusable as authority while it stayed `proposed` — so the defect it describes could
   not be fixed without accepting it first. Scoped to **stored** as well as computed coordinates in the
   same change, because storage was where the violation actually was.
+  2026-09-08 — **D-2026-09-08-i, GitHub issue #394, TASK-228.** Tolerance tightened from ±0.01 ft to
+  **±0.002 ft**. Field survey data routinely achieves better than ±0.005 ft, so the app can promise
+  ±0.002 ft without overstating what the underlying data supports, and the looser number was being
+  relied on across the code and test suite as "the" accuracy guarantee. ±0.002 ft is not representable
+  in the `float` geometry stores at large drawing extents (`float` resolves ~0.008 ft at the 100,000 ft
+  rebase ceiling), so the decision also authorizes widening persistent coordinate storage to `double`
+  (**ADR-054**), with the `float` narrowing moved to the GPU-upload boundary. The migration is phased
+  (TASK-228), one subsystem per PR; this requirement's number is the target and is met per-subsystem as
+  the phases land. The origin-establishment-timing acceptance conditions (previously load-bearing for
+  `float` storage) are relaxed accordingly, and the "one-time establishment" bullet — which existed
+  because re-centring rounded every stored coordinate through `float` — is dropped, since `double`
+  re-centring does not lose precision.
 
 ---
 
@@ -8489,7 +8508,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-001 | IO | `<TEST-001>` | accepted |
 | REQ-330 | Viewport/UI/Render/IO | `CadSnapTests` `[CadSnap][issue401]` (TOP+world N/E/S/W within REQ-101; rotated UCS follows the axes; orbited camera + tilted circle all four on the circle; circle plane ⟂ UCS plane falls back to the curve's local axes with four distinct points; arc offers only in-sweep quadrants; F3 master gate + per-type toggle; Shift+right-click "snap once" override reaches it when the toggle is off) | accepted |
 | REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` / `BENCH SURFACE` / `BENCH MESH` commands on the reference machine (`project.md` §7), MSVC, RTX 5060 — segments 1.38 ms, meshes 1.97 ms, surface 10.28 ms vs 16 ms, 2026-08-15 (TASK-052, TASK-053) | accepted (device pending BUG-013) |
-| REQ-101 | Commands/compute | `headless.regression-req101-origin-at-entry` (a typed easting at 2e6 is stored within tolerance — measured 2000000.10 → origin 2000000 + local 0.10000000149, ~1.5e-9 ft, was 0.025 ft; establishment is one-time; an over-large magnitude is still refused; first resave byte-identical) + `headless.regression-59-circle-infinite-radius` / `-59b` (which double as the upper bound's guard) + `headless.regression-pick-local-coordinates` (picks are local, so picking adds no error of its own). Reference-dataset half still `<regression set>` — pending, see below | **accepted** (typed-storage half verified; reference dataset outstanding) |
+| REQ-101 | Commands/compute | `headless.regression-req101-origin-at-entry` (a typed easting at 2e6 is stored within tolerance — measured 2000000.10 → origin 2000000 + local 0.10000000149, ~1.5e-9 ft, was 0.025 ft; establishment is one-time; an over-large magnitude is still refused; first resave byte-identical) + `headless.regression-59-circle-infinite-radius` / `-59b` (which double as the upper bound's guard) + `headless.regression-pick-local-coordinates` (picks are local, so picking adds no error of its own). Reference-dataset half still `<regression set>` — pending, see below. **2026-09-08 (D-2026-09-08-i, #394): tolerance tightened to ±0.002 ft; `float`→`double` storage migration authorized (ADR-054) and phased in TASK-228 — each phase re-gates its subsystem's tests at the new number.** | **accepted** (typed-storage half verified at ±0.01 ft; ±0.002 ft + `double` migration phasing in per TASK-228; reference dataset outstanding) |
 | REQ-010 | UI | manual (FBK import shows raw rows) | implemented |
 | REQ-011 | compute | `TraverseTests` "ComputeStats" | implemented |
 | REQ-012 | compute | `TraverseTests` "Complementary distance" | implemented |

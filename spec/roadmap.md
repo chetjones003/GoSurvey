@@ -290,6 +290,11 @@ A lightweight board that complements the milestones. Keep each column honest.
 - Re-run the REQ-100 surface bench case per the roadmap's own sequencing note — and note ADR-036 (e):
   it must prove the display cache **holds across frames**, not merely that one regeneration is fast.
 - REQ-101's reference-dataset half (M2) — the typed-storage half is done; see M2 status above.
+- **REQ-101 ±0.002 ft + `float`→`double` storage migration (D-2026-09-08-i, ADR-054, TASK-228, issue
+  #394).** PR 1 (spec decision + ADR + plan) done. Remaining: one subsystem per PR, each with a full
+  `ctest` gate — core entity stores + undo/tab copies → DWG-trailer serialization → snap/preview/pick
+  read-back → the GPU-upload narrowing point → the test-assertion sweep (`0.01` → `0.002`, audited per
+  site). **No code past a phase until its Workshop sub-task passes Verification.**
 
 ### Later (real but deferred)
 - `<Second file format>` — **closed for the formats in File Format Specs** (D-2026-08-29-g).
