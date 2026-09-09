@@ -5475,6 +5475,11 @@ void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool 
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log);
 /// Join selected lines / polylines at coincident endpoints into polylines (window-select like DELETE).
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log);
+/// EXPLODE (REQ-103 step 8 / issue #390): decompose every selected Polyline into one LINE per straight
+/// segment and one ARC per bulge segment (flat or tilted), preserving per-vertex Z and the polyline's
+/// attributes; report other non-block selected kinds (REQ-201). Returns the polyline count exploded.
+/// The caller owns the undo snapshot, the id sweep and the GPU-cache bump.
+int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log);
 /// OVERKILL — remove zero-length segments, exact duplicates, collinear overlapping/contiguous lines
 /// (merged into one), duplicate circles/arcs, and arcs whose circle matches an existing full circle.
 /// Operates on the entire drawing immediately; no selection required.

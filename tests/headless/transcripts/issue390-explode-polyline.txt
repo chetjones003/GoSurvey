@@ -1,0 +1,135 @@
+# REQ-103 step 8 / GitHub issue #390 — EXPLODE decomposes a Polyline into its segments.
+#
+# Before this, the EXPLODE handler filtered the selection to BlockRef only, so a selected polyline
+# was silently dropped and nothing happened. EXPLODE now turns each polyline segment into a
+# standalone LINE (straight) or ARC (bulge / curved — flat or tilted, never tessellated to chords),
+# keeping each vertex's own Z (REQ-057) and the polyline's layer/colour attributes with fresh ids.
+# A closed polyline also emits its implied closing segment. Non-polyline, non-block selected kinds
+# are left alone and reported by name (REQ-201).
+
+# ── 1. Closed rectangle (a 4-vertex closed polyline, REQ-053) → 4 separate lines ───────────────
+NEW
+CMD RECT
+CMD 0,0
+CMD 40,20
+
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT LINES 0
+
+BOX -5 -5 45 25
+EXPECT SELECTED 1
+CMD EXPLODE
+EXPECT LOG "EXPLODE — 1 polyline(s)."
+
+CHECK ALL
+EXPECT POLYLINES 0
+EXPECT LINES 4
+EXPECT ARCS 0
+
+# One UNDO puts the rectangle back as a single polyline.
+CMD UNDO
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT LINES 0
+
+# ── 2. Open 3D polyline → lines that keep every vertex's own Z (REQ-057) ───────────────────────
+NEW
+CMD 3DPOLY
+CMD 0,0,5
+CMD 10,0,5
+CMD 10,10,8
+CMD END
+
+CHECK ALL
+EXPECT POLYLINES 1
+
+BOX -5 -5 15 15
+EXPECT SELECTED 1
+CMD EXPLODE
+EXPECT LOG "EXPLODE — 1 polyline(s)."
+
+CHECK ALL
+EXPECT POLYLINES 0
+EXPECT LINES 2
+EXPECT LINEXYZ 0 0 0 5 10 0 5
+EXPECT LINEXYZ 1 10 0 5 10 10 8
+
+# ── 3. A curved (bulge) segment becomes a real ARC, not a chord or a fan of tiny lines ─────────
+# Polyline: straight (0,0)->(10,0), then a 90 deg arc (10,0)->(20,0) (bulge = tan(22.5 deg)).
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD 10,0
+CMD ARC
+CMD CANGLE 90
+CMD 20,0
+CMD END
+
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 1
+
+BOX -5 -15 25 15
+EXPECT SELECTED 1
+CMD EXPLODE
+EXPECT LOG "EXPLODE — 1 polyline(s)."
+
+CHECK ALL
+EXPECT POLYLINES 0
+EXPECT LINES 1
+EXPECT ARCS 1
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+# The arc spans the segment's own endpoints exactly — not a tessellated approximation of them.
+EXPECT ARCPOINTS 0 10 0 0 20 0 0
+
+# STABILITY — the exploded result survives a DWG round trip unchanged.
+SAVEAS %OUT%/explode-a.dwg
+NEW
+OPEN %OUT%/explode-a.dwg
+CHECK ALL
+EXPECT LINES 1
+EXPECT ARCS 1
+EXPECT POLYLINES 0
+SAVEAS %OUT%/explode-b.dwg
+EXPECT SAMEFILE %OUT%/explode-a.dwg %OUT%/explode-b.dwg
+
+# ── 4. Non-polyline selected kinds are reported, not silently dropped (REQ-201) ────────────────
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD 10,0
+CMD 10,10
+CMD END
+CMD CIRCLE
+CMD 30,5
+CMD 3
+ESC
+
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT CIRCLES 1
+
+BOX -5 -5 40 15
+EXPECT SELECTED 2
+CMD EXPLODE
+EXPECT LOG "circle skipped: not decomposable"
+EXPECT LOG "EXPLODE — 1 polyline(s)."
+
+CHECK ALL
+EXPECT POLYLINES 0
+EXPECT LINES 2
+EXPECT CIRCLES 1
+
+# ── 5. EXPLODE with nothing eligible selected reports it, changes nothing ──────────────────────
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 5
+ESC
+BOX -10 -10 10 10
+EXPECT SELECTED 1
+CMD EXPLODE
+EXPECT LOG "EXPLODE — nothing to explode"
+CHECK ALL
+EXPECT CIRCLES 1

@@ -3751,7 +3751,7 @@ requirements is a planning failure, not a sign of rigor.
   5. **STRETCH** — crossing-window selection that only moves vertices inside the window; the one sub-item likely to need its own short design pass (crossing-vs-window selection doesn't exist yet).
   6. **FILLET / CHAMFER** — corner generation (arc or chamfer line) between two entities, trimming/extending them to meet it; follows EXTEND/TRIM naturally.
   7. **ARRAY** — rectangular + polar; N-copy repetition of the same duplication machinery MIRROR/COPY establish.
-  8. **EXPLODE** — decomposes a closed polyline (including rectangles, which are 4-vertex polylines per REQ-053) into line segments; reports what it can't decompose (arcs, ellipses, mesh, surface, fills) rather than doing nothing silently (REQ-201).
+  8. **EXPLODE** — decomposes a polyline (open or closed, including rectangles, which are 4-vertex polylines per REQ-053) into its segments: a LINE per straight segment, an ARC per curved (bulge) segment; reports what it can't decompose (mesh, surface, fills, …) rather than doing nothing silently (REQ-201). See the EXPLODE acceptance below for the delivered polyline increment (D-2026-09-08-h); other explodable kinds (Dimension, MTEXT, Hatch, Table, Solid) are later increments.
 - Acceptance — MIRROR (step 1, this increment):
   - a mirror line is specified by two points; text/mtext insertion points reflect across it, but glyphs stay upright and readable — no mirror-image flip (AutoCAD's MIRRTEXT=0 default; no MIRRTEXT-equivalent setting is added, this is fixed behavior for now);
   - after the mirror line, an "Erase source objects? [Yes/No] <N>" prompt appears, defaulting to **No** (source kept, mirrored copy added) — matching AutoCAD's own default;
@@ -3988,11 +3988,39 @@ requirements is a planning failure, not a sign of rigor.
     - reachable from the Modify ribbon (same new column as FILLET), typed `CHAMFER`/`CHA`, and
       right-click repeat; works in model space, floating model space, and native paper space (full
       parity, matching FILLET's own paper-space scope above).
-  - Acceptance for ARRAY/EXPLODE (steps 7–8) is written when each is accepted for implementation,
-    not spec'd in advance of that command's own design pass.
+  - Acceptance for ARRAY (step 7) is written when it is accepted for implementation, not spec'd in
+    advance of that command's own design pass.
+- Acceptance — EXPLODE (step 8, GitHub issue #390 — polyline increment, D-2026-09-08-h):
+  - eligible: a **Polyline** (2D or 3DPOLY; a rectangle is a 4-vertex polyline per REQ-053) in the
+    current selection is replaced by one standalone entity per segment — a **LINE** for a straight
+    segment, an **ARC** for a bulge (curved) segment. The block-reference explode that already
+    exists is unchanged and runs in the same command invocation; one selection may mix both.
+  - a curved segment becomes a true **ARC entity**, never tessellated to chords and never flattened
+    to its chord: a flat bulge → a flat ARC; a tilted bulge segment (REQ-325 / ADR-053) → an ARC
+    carrying that same plane, with centre, radius and start/sweep matching the arc the polyline
+    drew to REQ-101 tolerance. A segment whose bulge/plane data is degenerate falls back to a LINE
+    between its endpoints rather than being dropped.
+  - each output entity keeps the source polyline's **own per-vertex Z** (REQ-057): a segment
+    spanning two elevations produces a LINE between those two 3D points, not one flattened to a
+    single elevation.
+  - each output entity is a new entity with a **fresh stable id** (REQ-076 / ADR-027) and a copy of
+    the polyline's layer / colour / linetype attributes.
+  - a **closed** polyline also emits its implied **closing segment** — a closed 4-vertex rectangle
+    becomes 4 lines.
+  - the whole EXPLODE is **one undo step**: one UNDO restores every exploded polyline and removes
+    every entity the explode produced.
+  - a selected entity of any **other kind** (Circle, Arc, Ellipse, Annotation, FilledRegion, Mesh,
+    FeatureLine, Surface, Table, Solid, PdfUnderlay) is left untouched and **named in a logged
+    message** (REQ-201) — never silently ignored; EXPLODE with nothing eligible selected reports it
+    and changes nothing.
+  - reachable by typed `EXPLODE` / `X` and right-click repeat, acting on the current selection (the
+    shape the block-reference explode already had). **Model space only**, matching the existing
+    INSERT-explode paper-space note.
+  - **Not in this increment** (each its own future issue): exploding a Dimension, an MTEXT, a Hatch
+    boundary, a Mesh, a Table, or a Solid into component geometry; and ARRAY (step 7).
 - Owner-layer: Commands/Domain/UI
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097). 2026-08-24 — STRETCH's (step 5) acceptance conditions written; full AutoCAD-parity arc partial-stretch (center/radius recompute preserving included angle) and full paper-space vertex-level parity both confirmed with the user (D-2026-08-24-d, TASK-098). 2026-08-24 — after the first hand-driven GUI pass: LENGTHEN's valueless first pick amended from a refusal to a latch-and-prompt (the ribbon button was a dead end), and a live removed-span preview added to BREAK's acceptance (D-2026-08-24-e, TASK-100, TASK-101). 2026-08-24 — LENGTHEN's default sub-mode changed from DElta to Total, so pick-then-type-the-new-length is the out-of-the-box flow (D-2026-08-24-f, TASK-100). 2026-08-24 — FILLET's and CHAMFER's (step 6a/6b) acceptance conditions written; full AutoCAD-parity scope (Line/Arc/Polyline-segment eligibility, a Trim/No-trim toggle shared between the two commands, full paper-space parity, and both Distance/Distance and Distance/Angle chamfer input) confirmed with the user (D-2026-08-24-g, TASK-102/TASK-103). 2026-08-25 — the "select objects" shape MOVE/COPY/ROTATE/SCALE/MIRROR established and this REQ's later steps (STRETCH, ARRAY, ALIGN — REQ-039) all reused was two-corner window/crossing box only: no individual-entity click, no accumulating across more than one box, no confirm-on-Enter. A user report against ARRAY (REQ-305) found this the same real gap in every one of them, not ARRAY alone; the shared shape is now click-and/or-box, additive, accumulating until Enter confirms it (D-2026-08-25-n) — applied to MOVE, COPY, SCALE, ROTATE, MIRROR, and ALIGN. STRETCH (step 5) is deliberately excluded: its crossing box is load-bearing geometry (which vertices move), not just an object filter, so it keeps the original box-only shape.
+- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097). 2026-08-24 — STRETCH's (step 5) acceptance conditions written; full AutoCAD-parity arc partial-stretch (center/radius recompute preserving included angle) and full paper-space vertex-level parity both confirmed with the user (D-2026-08-24-d, TASK-098). 2026-08-24 — after the first hand-driven GUI pass: LENGTHEN's valueless first pick amended from a refusal to a latch-and-prompt (the ribbon button was a dead end), and a live removed-span preview added to BREAK's acceptance (D-2026-08-24-e, TASK-100, TASK-101). 2026-08-24 — LENGTHEN's default sub-mode changed from DElta to Total, so pick-then-type-the-new-length is the out-of-the-box flow (D-2026-08-24-f, TASK-100). 2026-08-24 — FILLET's and CHAMFER's (step 6a/6b) acceptance conditions written; full AutoCAD-parity scope (Line/Arc/Polyline-segment eligibility, a Trim/No-trim toggle shared between the two commands, full paper-space parity, and both Distance/Distance and Distance/Angle chamfer input) confirmed with the user (D-2026-08-24-g, TASK-102/TASK-103). 2026-08-25 — the "select objects" shape MOVE/COPY/ROTATE/SCALE/MIRROR established and this REQ's later steps (STRETCH, ARRAY, ALIGN — REQ-039) all reused was two-corner window/crossing box only: no individual-entity click, no accumulating across more than one box, no confirm-on-Enter. A user report against ARRAY (REQ-305) found this the same real gap in every one of them, not ARRAY alone; the shared shape is now click-and/or-box, additive, accumulating until Enter confirms it (D-2026-08-25-n) — applied to MOVE, COPY, SCALE, ROTATE, MIRROR, and ALIGN. STRETCH (step 5) is deliberately excluded: its crossing box is load-bearing geometry (which vertices move), not just an object filter, so it keeps the original box-only shape. 2026-09-08 — EXPLODE's (step 8) acceptance conditions written for the **polyline increment** (GitHub issue #390, D-2026-09-08-h, TASK-227): a Polyline decomposes into one LINE/ARC per segment (curved segments stay real arcs, flat or tilted — REQ-316/ADR-047, REQ-325/ADR-053), per-vertex Z preserved (REQ-057), closing segment included for a closed polyline, other selected kinds reported (REQ-201); the existing block-reference explode is unchanged. Dimension/MTEXT/Hatch/Mesh/Table/Solid explode and ARRAY (step 7) remain deferred to their own increments. Scope (polylines only now), full closed-polyline decomposition, REQ-201 reporting, and real-arc curved segments confirmed with the user.
 
 ### REQ-104 — Draw-command completeness
 - Purpose: SPLINE, XLINE, RAY, DONUT, SOLID, REVCLOUD, WIPEOUT, and MLINE have no command at all
@@ -6589,7 +6617,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   DWG's ARC writer carries no normal/extrusion at all, so a tilted polyline segment degrades to
   straight on DWG export rather than splitting onto a tilted ARC the way DXF now does (issue #391);
   EXPLODE never handled a Polyline at all, block-ref selections only (issue #390, found investigating
-  the same thread, unrelated to REQ-325 itself).
+  the same thread, unrelated to REQ-325 itself — since resolved under REQ-103 step 8, D-2026-09-08-h,
+  and it reuses this requirement's tilted-arc construction to keep a curved segment a real arc).
 - Revisions: 2026-09-07 — proposed (feature request via `/add-feature`, this session) and delivered
   same day; DXF/DWG split-on-export decided with the user rather than flattening or refusing; the
   object-snap increment's scope grew once in progress (2026-09-07, user-confirmed) after finding

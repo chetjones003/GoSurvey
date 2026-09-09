@@ -1226,9 +1226,25 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
         st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + k);
       ++n;
     }
+    // REQ-103 step 8 / issue #390: a Polyline (2D, 3DPOLY, or a rectangle — a 4-vertex polyline per
+    // REQ-053) explodes into one LINE/ARC per segment; other selected kinds are reported (REQ-201).
+    const int nPoly = ExplodeSelectedPolylines(st, log);
     st.selection.clear();
+    EnsureEntityIds(st);
     BumpCadGpuCache(st);
-    log.push_back("EXPLODE — " + std::to_string(n) + " block reference(s).");
+    if (n == 0 && nPoly == 0) {
+      log.push_back("EXPLODE — nothing to explode: select a block reference or a polyline.");
+    } else {
+      std::string msg = "EXPLODE —";
+      if (n > 0)
+        msg += " " + std::to_string(n) + " block reference(s)";
+      if (n > 0 && nPoly > 0)
+        msg += ",";
+      if (nPoly > 0)
+        msg += " " + std::to_string(nPoly) + " polyline(s)";
+      msg += ".";
+      log.push_back(msg);
+    }
     return true;
   }
 
