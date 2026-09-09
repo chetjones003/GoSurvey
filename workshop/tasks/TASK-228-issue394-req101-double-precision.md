@@ -1,10 +1,10 @@
 # TASK-228 — REQ-101 ±0.002 ft: widen coordinate storage `float` → `double`
 
 - Type:    refactor (spec-authorized architecture migration)
-- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442), D (#443) done; Phases E, F open
+- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442), D (#443) done; Phases E, F, G open
 - Opened:  2026-09-08
 - Owner:   Workshop
-- GitHub:  #394 (sub-issues #440 A, #441 B, #442 C, #443 D, #444 E, #447 F — SurveyPoint)
+- GitHub:  #394 (sub-issues #440 A, #441 B, #442 C, #443 D, #444 E, #447 F — SurveyPoint, #453 G — TIN/surface mesh)
 
 ## 1. Authority
 
@@ -103,6 +103,12 @@ Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft asse
     round-trips, survey-point import, grading, snapping) — each checked for "is this the REQ-101
     tolerance or a coincidental use" before edit. Assertions using `0.01` for unrelated reasons are
     left alone (issue #394 AC item 3).
+- **Phase G (#453) — TIN/surface mesh vertex storage.** Surfaced by Phase D's audit: `util/tinbuild.cpp`
+  still stores TIN/surface mesh vertices as `float`. Out of scope for Phases A-C (the four core flat
+  stores); split off as its own phase for the same reason `SurveyPoint` was split into Phase F —
+  larger, separate subsystem. Widen the TIN/surface vertex store(s) to `double`, keep the GPU-upload
+  narrowing at the single point established in Phase D, and reconcile `kTinPlanEpsilon` (Phase E)
+  against the widened store.
 
 OUT:
 - Widening any render / tessellation / mesh buffer or the GL vertex format (ADR-054 (b) — they stay
