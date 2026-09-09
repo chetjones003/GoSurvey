@@ -286,8 +286,8 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
   o.worldN = n;
   // pt.easting/northing are local-space; the importer fills them from worldE/worldN minus the
   // document origin. Seed with the world values so callers that don't convert still see coordinates.
-  o.pt.easting = static_cast<float>(e);
-  o.pt.northing = static_cast<float>(n);
+  o.pt.easting = e;
+  o.pt.northing = n;
   o.pt.elevation = z;
   o.pt.description = desc;
   // A CSV's description column IS the code the crew entered, so it is the raw description too
@@ -626,8 +626,8 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
 
     // CSV coordinates are world-space; survey points are stored local (world − document origin). Convert
     // in double precision so points land exactly on existing geometry (e.g. an imported DXF's endpoints).
-    pr.pt.easting = static_cast<float>(pr.worldE - st.worldDocumentOriginX);
-    pr.pt.northing = static_cast<float>(pr.worldN - st.worldDocumentOriginY);
+    pr.pt.easting = pr.worldE - st.worldDocumentOriginX;
+    pr.pt.northing = pr.worldN - st.worldDocumentOriginY;
 
     st.surveyPoints.push_back(pr.pt);
     EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);

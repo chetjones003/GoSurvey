@@ -8045,7 +8045,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputDouble("##svy_z", &dz, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
         if (ImGui::IsItemDeactivatedAfterEdit()) {
-          p.elevation = static_cast<float>(dz);
+          p.elevation = dz;
           EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
         }
       }
@@ -8092,10 +8092,10 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       "Point number, northing, easting, and elevation",
   };
 
-  constexpr float kHorizTol = 5e-5f;
-  constexpr float kElevTol = 5e-4f;
-  auto sameHoriz = [](float a, float b) { return std::fabs(a - b) <= kHorizTol; };
-  auto sameElev = [](float a, float b) { return std::fabs(a - b) <= kElevTol; };
+  constexpr double kHorizTol = 5e-5;
+  constexpr double kElevTol = 5e-4;
+  auto sameHoriz = [](double a, double b) { return std::fabs(a - b) <= kHorizTol; };
+  auto sameElev = [](double a, double b) { return std::fabs(a - b) <= kElevTol; };
 
   const uint64_t fp = [&]() {
     std::vector<int> sorted(ixv.begin(), ixv.end());
@@ -8200,7 +8200,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
     }
 
     auto applyCoord = [&](const char* label, const char* idSame, const char* idVaries, std::string* buf,
-                          bool sameFlag, float SurveyPoint::* memb, const char* fmt) {
+                          bool sameFlag, double SurveyPoint::* memb, const char* fmt) {
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
       ImGui::TextUnformatted(label);
@@ -8227,7 +8227,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
               const double wx = static_cast<double>(CadCoord::WorldXFromLocal(cmd, pt.easting));
               CadCoord::LocalFromWorld(cmd, wx, dv, &pt.easting, &pt.northing);
             } else
-              pt.*memb = static_cast<float>(dv);
+              pt.*memb = dv;
             EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(ix), log);
           }
           gMultiFp = ~0ull;
@@ -8259,7 +8259,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
               const double wx = static_cast<double>(CadCoord::WorldXFromLocal(cmd, pt.easting));
               CadCoord::LocalFromWorld(cmd, wx, v, &pt.easting, &pt.northing);
             } else
-              pt.*memb = static_cast<float>(v);
+              pt.*memb = v;
             EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(ix), log);
           }
           gMultiFp = ~0ull;
@@ -8722,7 +8722,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
         row("Points", std::to_string(s.vertexCount()));
         row("Triangles", std::to_string(s.triangleCount()));
         if (s.tin && s.tin->vertsXyz.size() >= 3) {
-          float lo = s.tin->vertsXyz[2], hi = lo;
+          double lo = s.tin->vertsXyz[2], hi = lo;
           for (size_t i = 2; i < s.tin->vertsXyz.size(); i += 3) {
             lo = std::min(lo, s.tin->vertsXyz[i]);
             hi = std::max(hi, s.tin->vertsXyz[i]);
@@ -12392,6 +12392,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   ImGui::Image(static_cast<ImTextureID>(static_cast<std::intptr_t>(viewportTextureId)), avail, ImVec2(0, 1),
                ImVec2(1, 0));
 
+  // REQ-161: hand the viewport's screen rect to the Developer Shell, so a Test Engine test can turn
+  // a WORLD point into a cursor position. `Camera::WorldToScreen` gives the offset inside this image;
+  // only `imgPos` says where the image is. No-op in Release.
+  DevShell_OnViewportRect(imgPos.x, imgPos.y, avail.x, avail.y);
+
   const bool hovered = ImGui::IsItemHovered();
   const ImVec2 mouse = ImGui::GetIO().MousePos;
   const float mx = mouse.x - imgPos.x;
@@ -14235,8 +14240,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           // Store what RepositionSurveyLabelMtextForPoint reads back: the LEFT edge in X, the
           // vertical CENTRE in Y. Mixing the two up would make a dragged label jump on the next
           // rebuild, by exactly half its own box.
-          gripAnn.surveyLabelUserOffsetEast  = gripAnn.boxMinX - sp.easting;
-          gripAnn.surveyLabelUserOffsetNorth = 0.5f * (gripAnn.boxMinY + gripAnn.boxMaxY) - sp.northing;
+          gripAnn.surveyLabelUserOffsetEast  = static_cast<float>(gripAnn.boxMinX - sp.easting);
+          gripAnn.surveyLabelUserOffsetNorth =
+              static_cast<float>(0.5f * (gripAnn.boxMinY + gripAnn.boxMaxY) - sp.northing);
           gripAnn.surveyLabelHasUserOffset   = true;
         }
       }
@@ -14319,7 +14325,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Checked inside this case rather than in `ViewportClickRouteFor` because that function
       // decides on the COMMAND and this is a decision about the MODIFIER — the same split the idle
       // sub-object pick already uses, and the reason the policy switch stays exhaustive.
-      if (modelSpace && ImGui::GetIO().KeyCtrl && cmd.active == AppCommandState::Kind::Fillet) {
+      // CHAMFER is here for the same reason FILLET is, and it was MISSING until a Developer Shell
+      // run found it (TASK-229): REQ-331 gave CHAMFER the pre-highlight, so an edge lit up under the
+      // cursor mid-command and then a click did nothing at all - the worst of both, because the
+      // highlight promises exactly what the click refuses. The headless transcripts could not see it:
+      // their `SUBOBJECT` verb calls `SubmitSubObjectPick` directly and never comes through here.
+      if (modelSpace && ImGui::GetIO().KeyCtrl &&
+          (cmd.active == AppCommandState::Kind::Fillet ||
+           cmd.active == AppCommandState::Kind::Chamfer)) {
         const ray3d::Ray filletSubRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
         solidpick::Tolerance filletSubTol;
         filletSubTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
@@ -16889,10 +16902,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             const float bwHalf = 0.5f * std::fabs(a.boxMaxX - a.boxMinX);
             const float bhHalf = 0.5f * std::fabs(a.boxMaxY - a.boxMinY);
             const float halfDiag = std::hypot(bwHalf, bhHalf);
-            const float distToPoint = std::hypot(lsp.easting - lcx, lsp.northing - lcy);
+            const float distToPoint =
+                static_cast<float>(std::hypot(lsp.easting - lcx, lsp.northing - lcy));
             if (distToPoint > halfDiag * 1.1f) {
               ImVec2 ptScreen{};
-              worldToScreen(lsp.easting, lsp.northing, &ptScreen, lsp.elevation);
+              // Screen-space render lambda stays float (render boundary) — narrow the double
+              // survey-point coordinate here.
+              worldToScreen(static_cast<float>(lsp.easting), static_cast<float>(lsp.northing), &ptScreen,
+                            static_cast<float>(lsp.elevation));
               const float cx_s = 0.5f * (rx0 + rx1);
               const float cy_s = 0.5f * (ry0 + ry1);
               // Direction from label to point in screen space.
@@ -17457,7 +17474,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     };
     for (const auto& p : cmd.surveyPoints) {
       ImVec2 sp{};
-      wts(p.easting, p.northing, p.elevation, &sp);  // elevation IS the point's Z (REQ-057)
+      // Screen-space overlay lambda stays float (render boundary); narrow the double coordinate here.
+      wts(static_cast<float>(p.easting), static_cast<float>(p.northing), static_cast<float>(p.elevation),
+          &sp);  // elevation IS the point's Z (REQ-057)
       char idb[32];
       std::snprintf(idb, sizeof(idb), "%d", p.id);
       dlS->AddText(fontL, fontPxL, ImVec2(sp.x + 6.f, sp.y - fontPxL * 0.35f), kPtIdCol, idb);
@@ -18767,9 +18786,9 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
     switch (cmd.qsProperty) {
     case QP::Layer:       return matchStr(sp.layer);
     case QP::Id:          return matchNum(static_cast<float>(sp.id));
-    case QP::Elevation:   return matchNum(sp.elevation);
-    case QP::Easting:     return matchNum(sp.easting);
-    case QP::Northing:    return matchNum(sp.northing);
+    case QP::Elevation:   return matchNum(static_cast<float>(sp.elevation));
+    case QP::Easting:     return matchNum(static_cast<float>(sp.easting));
+    case QP::Northing:    return matchNum(static_cast<float>(sp.northing));
     case QP::Description: return matchStr(sp.description);
     default:              return cmd.qsOperator == QO::SelectAll;
     }

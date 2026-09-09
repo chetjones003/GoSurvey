@@ -150,9 +150,10 @@ struct CadSubObjectOverlay {
 /// The chord tolerance solids are tessellated at, in drawing units.
 ///
 /// One value, not a per-solid setting: #120 asks that quality be configurable, and a single knob is
-/// what that needs today. 0.01 ft is REQ-101's own tolerance — the point at which a chord's
-/// departure from the true surface is smaller than the accuracy the drawing claims anywhere else,
-/// so a finer setting would be drawing detail the rest of the program does not promise.
+/// what that needs today. Deliberately independent of REQ-101 (issue #394/#444, D-2026-09-08-i):
+/// this is a rendering/pick tessellation density knob, not the stored-coordinate accuracy guarantee,
+/// and issue #394's own AC item 5 treats it as covered separately by #384's isoline work. Left at
+/// 0.01 ft rather than tightened to REQ-101's 0.002 ft.
 inline constexpr double kSolidChordToleranceFt = 0.01;
 
 /// Default number of isolines drawn around a curved face, per full turn (AutoCAD names this setting

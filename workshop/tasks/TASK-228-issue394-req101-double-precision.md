@@ -1,10 +1,10 @@
 # TASK-228 — REQ-101 ±0.002 ft: widen coordinate storage `float` → `double`
 
 - Type:    refactor (spec-authorized architecture migration)
-- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442) done; Phases D, E, F open
+- Status:  DONE — PR 1 + Phase A (#440), B (#441), C (#442), D (#443), E (#444), F (#447), G (#453) all done; #394 closed by Phase E, #453 closes this task
 - Opened:  2026-09-08
 - Owner:   Workshop
-- GitHub:  #394 (sub-issues #440 A, #441 B, #442 C, #443 D, #444 E, #447 F — SurveyPoint)
+- GitHub:  #394 (sub-issues #440 A, #441 B, #442 C, #443 D, #444 E, #447 F — SurveyPoint, #453 G — TIN/surface mesh)
 
 ## 1. Authority
 
@@ -54,7 +54,16 @@ Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft asse
   near-cancelling centre+radius otherwise lands ~1e-6 off on re-export (`regression-111`/`-113`).
   **ADR-054 (a) amended:** paper-space stores stay `float` (sheet inches — `float` resolves ~1e-6 in,
   orders of magnitude inside ±0.002 ft; widening is pure churn). `SurveyPoint` split to Phase F (#447).
-  Build clean; `ctest` 1359/1359.
+  Build clean; `ctest` 1359/1359. **Follow-up (closes #441):** the DWG-trailer document is the same
+  `double` GsIo JSON tree as `.gst` (Phase A already widened the reader/writer), so no further
+  production code was needed — only the two acceptance-criteria tests were missing. Added
+  `tests/LibreDwgCadTests.cpp` "DWG trailer round-trips a state-plane coordinate within REQ-101
+  tolerance" (compares world coordinates — `local + worldDocumentOrigin`, since a state-plane
+  magnitude rebases on import) and "A legacy float-precision DWG trailer still loads within the old
+  REQ-101 tolerance" (hand-builds a trailer whose JSON already carries only `float` resolution,
+  mirroring DwgIo.cpp's private magic/length trailer layout). No `kGsFormatVersion` bump: the trailer
+  JSON shape is unchanged, so there is nothing for a legacy reader to fail open on. Build clean;
+  `ctest` 1361/1361.
 - **Phase C — snap / pick read-back. DONE (#442).** `CadSnap::Hit::x/y/z` → `double`;
   `AppCommandState::viewportSnapPickLocalX/Y/Z` → `double`; `SubmitViewportPick` /
   `SubmitViewportPickImpl` / `UiSubmitViewportPick` entry coordinates → `double`;
@@ -68,20 +77,169 @@ Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft asse
   object snap. Rubber-band **preview** buffers stay `float` (render-only, GPU-bound). Build clean;
   `ctest` 1359/1359. Only 12 boundary sites needed edits — the `float wx/wy` pick handlers compile
   unchanged (double→float at their internal comparisons, warning-suppressed).
-- **Phase D — the GPU-upload narrowing point.** Audit that `float` appears on the geometry path in
-  exactly one place (buffer assembly) and nowhere upstream; add a `docinvariants` / review check.
-- **Phase E — test-assertion sweep.** Every `0.01` literal and named constant that represents the
-  REQ-101 guarantee → `0.002`, audited one at a time:
-  - `kReq101` (`src/viewport/CadSnap.cpp`) — is the guarantee, change.
-  - `kTinPlanEpsilon` (`src/util/tinbuild.hpp`) — "two shots are the same site" de-dup threshold;
-    confirm whether it should track REQ-101 or is an independent domain choice **before** changing.
-  - `kSolidChordToleranceFt` (`src/util/cadsolid.hpp`) — tessellation chord tolerance; reconcile
-    with #384's isoline work (issue #394 AC item 5) before changing.
-  - `kTol = 0.01f` (`src/commands/CadCommands.cpp` ~15751, endpoint-coincidence) — is the guarantee.
-  - per-assertion `0.01` literals across the Catch2 suite (arc/curve intersections, DXF/DWG
-    round-trips, survey-point import, grading, snapping) — each checked for "is this the REQ-101
-    tolerance or a coincidental use" before edit. Assertions using `0.01` for unrelated reasons are
-    left alone (issue #394 AC item 3).
+- **Phase D — the GPU-upload narrowing point. DONE (#443).** Audited `commands/`, `viewport/`,
+  `io/`, `util/` for a `float` coordinate carrying stored/authoritative geometry. Confirmed the four
+  flat stores and `CadFilledRegion::vertsXyz` are `double` on all three copies (live state, undo
+  snapshot, per-tab document) per Phases A-C, and the single narrowing point is
+  `WorldToViewRelativeFloat` (`util/geom2d.cpp`) — it takes `double` world coordinates and the view
+  anchor, subtracts in `double`, and narrows only the already view-local result; every GPU-buffer
+  builder in `ViewportRenderer.cpp` (`AppendChainEdgesVc` and the other `RenderScene` helpers) calls
+  through it or narrows an already-render-local (preview/hover/highlight/gizmo) buffer. Documented
+  both sites with a comment citing ADR-054 (b). No upstream narrowing bug found — every other
+  `float` coordinate site on the geometry path is a legitimate, already-decided exception (angles/
+  ratios — Phase B; paper-space sheet inches — ADR-054 (a) amendment; rubber-band preview and other
+  render-only buffers; ORTHO/polar/angle-lock constraint internals — Phase C). **New finding,
+  deliberately deferred, not fixed here:** TIN/surface mesh vertex storage (`util/tinbuild.cpp`
+  `TinBuildResult::vertsXyz` and the `TinTriangleElevationAt`/`TinElevationAt`/`TinCullByBoundaries`/
+  `TinBorderEdges`/`FindNearestInteriorEdge`/`TinSwapInteriorEdgeNear`/`TinDeleteInteriorEdgeNear`
+  family that reads it) is still `std::vector<float>`. ADR-054 (a) names "surface vertices" as an
+  authoritative store that should widen, but it was never one of the four named flat stores Phases
+  A-C covered, and widening it touches surface build/render/snap/volume/contour code well beyond a
+  one-PR audit. Same pattern as `SurveyPoint` (deferred to Phase F, #447): recommend a Phase G
+  sub-issue rather than silently expanding this PR. Added a compile-time guard (`static_assert` in
+  `CadCommands.hpp`/`CadEntities.hpp`) on the three copies of the four named stores so a reintroduced
+  `float` there is a build error, not a silent regression — proven red (reverted one store to `float`,
+  confirmed two `static_assert` failures) before green. Build clean; `ctest` 1359/1359.
+- **Phase E — test-assertion sweep. DONE (#444).** Every `0.01` literal and named constant that
+  represents the REQ-101 guarantee audited one at a time and, where it did, changed to `0.002`:
+  - `kReq101` (`src/viewport/CadSnap.cpp`) — is the guarantee → `0.002`.
+  - Model-space `kTol` in `src/commands/CadCommands.cpp` — `ApplyBreakToLine` (~15757),
+    `ApplyBreakToArc` (~15840), `ApplyBreakToOpenPolyline` (~15939): these read the four core `double`
+    flat stores (Phases A-D) but the local endpoint-coincidence arithmetic (`x0/y0/z0/x1/y1/z1`,
+    `totalLen`, `ux/uy`, `nearP/farP`, `kTol` itself) was still narrowing through `float`, which only
+    resolves ~0.008 ft at large coordinates — so a bare constant change would have been cosmetic.
+    Widened those locals to `double` and set `kTol = 0.002`, logic otherwise unchanged. (Residual note:
+    `ApplyBreakToOpenPolyline`'s `totalLen` still ultimately derives from `PolylineOpenLengthOf`, which
+    itself returns `float` — a pre-existing narrowing one level up that this phase's named-locals scope
+    did not reach; left for a future audit, does not fail any test at ±0.002 ft today.)
+  - Paper-space `kTol` (`ApplyBreakToPaperLine` ~16235, paper-arc break ~16316,
+    `ApplyBreakToPaperPolyline` ~16393) — deliberately left at `0.01f`: paper-space stores stay `float`
+    per ADR-054 (a)'s amendment (sheet inches, resolves ~1e-6 in), and REQ-101 is a world/model-space
+    guarantee.
+  - `kTinPlanEpsilon` (`src/util/tinbuild.hpp`) — independent domain "same field shot" de-dup
+    threshold; TIN vertex storage is still `float` (Phase G, #453). Left at `0.01`, comment updated to
+    say so explicitly.
+  - `kSolidChordToleranceFt` (`src/util/cadsolid.hpp`) — tessellation chord tolerance, a
+    rendering/pick density knob independent of coordinate storage (issue #394 AC item 5, covered by
+    #384's isoline work). Left at `0.01`, comment updated.
+  - Per-assertion `0.01` literals across the Catch2 suite: `tests/CurveIntersectTests.cpp` `kReq101`
+    (curve/curve intersection accuracy, `double` math) and `tests/CadSnapTests.cpp` (hand-computed
+    endpoint-snap and perspective/orthographic snap-agreement assertions reading the core `double`
+    stores) → `0.002`. Everything else across `tests/*.cpp` — TIN/surface-query assertions
+    (`TinQueryTests`, `Issue119SurfaceTests`, `SurfaceProfileTests`, `TinVolumeTests`,
+    `ContourGenTests`, `TinBuildTests`, `SurfaceAnalysisTests`, `SolidPickTests`, `SurfaceVolumeTests`,
+    `WatershedTests`, `PushPullTests`), still backed by `float` TIN storage or tessellation-chord/
+    volume tolerances; `GltfImportTests`/`StlImportTests` (`modelimport::Result::vertsXyz`, still
+    `float`, not one of the four core stores); `BrepTests`/`AcisSatParserTests`/`FilletGeomTests`
+    (chord-tessellation params/volume epsilons); `CadBlockImportTests` (an angle, not a coordinate);
+    `HoverDwellTests` (a wall-clock seconds argument); `Trim3DDrawnLineTests`/`Trim3DLineLineTests`/
+    `UcsTests` (comments only, no live assertion) — left at `0.01` with the reason recorded per site.
+  - Build clean; `ctest` 1359/1359.
+- **Phase F — SurveyPoint. DONE (#447).** Widened `SurveyPoint::easting/northing/elevation`
+  (`src/survey/SurveyPoints.hpp`) to `double`, plus every helper signature that carries a
+  survey-point coordinate: `AppendSurveyPointCrossVertices` (easting/northing/elevationZ; `outLines`
+  stays `std::vector<float>*`, narrowed once at the GPU-buffer `push_back` per ADR-054 (b), same
+  pattern as `WorldToViewRelativeFloat`), `TryPlaceSurveyPoint`, `DuplicateSelectedSurveyPointsTranslated`
+  /`Rotated`/`Reflected` (dx/dy/dz, bx/by, x0/y0/x1/y1 — `rad` stays `float`, an angle, Phase B
+  precedent), and the file-local `RotateSurveyCoords`/`ReflectSurveyCoords` helpers. Added `double`
+  overloads of `CadCoord::WorldXFromLocal`/`WorldYFromLocal`/`LocalFromWorld` (`CadCoordinateFrame.hpp`)
+  rather than narrowing every survey-point caller through the existing `float` overloads — those
+  stay for the viewport-cursor caller that is still `float`; the two are disambiguated by ordinary
+  overload resolution, so no call site needed a cast. `CadCoordinateFrame.cpp`'s `ShiftAllStorageBy`
+  needed no change at all: `add2` is already a generic lambda, so it started carrying survey points
+  through the document-origin rebase at full `double` precision for free.
+  **Real narrowing bugs fixed** (not just type-widening churn): `DxfIo.cpp`'s POINT/XDATA reader
+  (`sp.easting = static_cast<float>(wx - st.worldDocumentOriginX)`, the embedded-points-conflict
+  merge) and `SurveyCsv.cpp`'s CSV importer (`pr.pt.easting = static_cast<float>(pr.worldE -
+  st.worldDocumentOriginX)`) both narrowed to `float` at exactly the width the DXF-extent sweep and
+  entry-time-establishment precedents (Phase A/B) warn about — the CSV path in particular computes
+  the local coordinate at ORIGIN-ZERO magnitude (full state-plane value) before
+  `MaybeRebaseLargeCoordinates` ever runs, so the old `float` field quantized the point before the
+  rebase had a chance to help, exactly the "narrow-before-origin" hazard
+  `regression-req101-origin-at-entry` pins for typed LINE points. `GsIo.cpp`'s survey-point JSON
+  reader (`o.value("easting", 0.f)` → `0.0`) had the same Phase-A-pattern bug the `.gs`/DWG-trailer
+  coordinate arrays already had fixed. The internal VIEWPOINTS Save/Load JSON writer
+  (`SaveSurveyPointsToJsonFile`) also needed `std::setprecision(17)` added (it had none — `<<`'s
+  default 6-significant-digit precision cannot round-trip a `double` state-plane value; the reader's
+  `parseFloatField`/`strtof` became `parseDoubleField`/`strtod`). The DXF `$EXTMIN/$EXTMAX` extent
+  sweep for survey points (`DxfIo.cpp`) was not applying the `q6lx`/`q6ly` reader-agreement
+  quantization every other entity kind there uses — added, matching Phase B.
+  **Narrowing-boundary decisions** (left `float`, each at an established boundary): the ImGui
+  survey-point Properties/VIEWPOINTS-table editors and the multi-select `applyCoord` helper (widened
+  its `float SurveyPoint::* memb` pointer-to-member to `double SurveyPoint::*`, since it now
+  compares/writes against a double field — but the ImGui widgets themselves already used
+  `InputDouble`, so no precision was actually lost there before this phase either); `CadCommands.cpp`'s
+  viewport-pick/box-select screen-projection lambdas (`SP`, `worldToScreen`, `wts`) and
+  `CadSnap.cpp`'s whole snap-candidate pipeline (`ConsiderSnap`, `MinDistSqToSurveyMarker`,
+  `PushSnapPickerEntry`, the grip-candidate lambda) — render/pick boundary, Phase C/D precedent,
+  every other entity kind narrows there too; `CadUi.cpp`'s QuickSelect numeric-match lambda
+  (`matchNum`) and the survey-label annotation-box math in `SurveyPoints.cpp`
+  (`RepositionSurveyLabelMtextForPoint` — `CadAnnotation::boxMinX` etc. are a `float` store, not one
+  of the four core stores, ADR-054 scope); `CadUi_Toolspace.cpp`'s `ZoomToSurveyPoints` (widened the
+  accumulation locals to `double`, narrows only at the `float` `pendingZoomMnX` etc. viewport-state
+  assignment). `CadCommands_Align.cpp` (ALIGN) was intentionally left untouched — the 2D survey
+  Helmert-fit module the D-2026-09-08-c decision already closed no-change for REQ-329; its
+  `HelmertPt` is templated so it compiled unchanged against the now-`double` fields, and its own
+  `AlignControlPt`/`HelmertResult` stay `float` by that same decision. `CadUi_TraverseEditor.cpp`'s
+  "Commit to Drawing" button was widened (`startE/startN`, `locE/locN` locals `float`→`double`) since
+  its source fields (`TraverseData::startEasting` etc.) were already `double` — a real, if minor,
+  precision fix, not churn.
+  **Test:** `tests/LibreDwgCadTests.cpp` gained "DXF survey point XDATA round-trips a state-plane
+  coordinate within REQ-101 tolerance" and "CSV import stores a state-plane survey point within
+  REQ-101 tolerance" (the latter proven red against the pre-fix `SurveyCsv.cpp` narrowing cast, using
+  the same 2000000.10/500000.03 values `regression-req101-origin-at-entry` documents quantizing to
+  2000000.125 — both tests needed `Catch::Approx(...).margin(0.002).epsilon(0.0)`: Catch2's default
+  *relative* epsilon at a ~2e6 magnitude is worth ~2000+ ft on its own and silently swallows a 0.002
+  ft margin, which is a trap for every REQ-101 assertion at state-plane magnitude, not just this
+  one). Survey-point label creation reaches `ImGui::GetFont()`
+  (`EnsureSurveyPointLabelMtext`/`MtextRichNaturalContentPx`), so the CSV test needed the same
+  `HeadlessImGuiScope` fixture `GsMigrateLegacyBreaklineTests.cpp` established. Build clean; `ctest`
+  1363/1363 (1361 + 2 new). Traverse/adjustment math (`tests/TraverseTests.cpp`) does not read or
+  write `SurveyPoint` at all — it operates on its own `double` types already — so no residual
+  tolerance changed.
+  **Deferred, not fixed here** (recommend a follow-up issue, not created): `SurveyFilePoint::elevation`
+  (`src/io/SurveyCsv.hpp`, REQ-086 linked-surface point files) stays `float` — it feeds the TIN
+  builder, which is Phase G's (#453) scope, not Phase F's; `ApplyRotationToSelection`/
+  `ApplyScaleToSelection`'s own `bx`/`by`/`sc` parameters (the general MOVE/ROTATE/SCALE modify-command
+  entry points, REQ-329) are still `float` at that outer layer — untouched, pre-existing, and outside
+  this phase's named scope (only the survey-point-specific inner functions were named).
+- **Phase G (#453) — TIN/surface mesh vertex storage. DONE.** Widened `TinBuildResult::vertsXyz`/
+  `TinInputPoint::z`/`TinConstraint::az,bz`/`TinCrossingIssue::zFromA,zFromB` (`util/tinbuild.hpp`)
+  and `CadTin::vertsXyz` (`commands/CadEntities.hpp`) to `double`, plus every function in the family
+  that carries TIN vertices: `TinTriangleElevationAt`/`TinElevationAt`/`TinCullByBoundaries`/
+  `TinBorderEdges`/`TinSwapInteriorEdgeNear`/`TinDeleteInteriorEdgeNear` (`tinbuild`),
+  `BuildTinSpatialIndex`/`TinElevationAtIndexed`/`ComputeSurfaceVolume` (`surfacevolume`),
+  `TinSurfaceQuery` (`surfacequery`), `ComputeSurfaceStats` (`surfacestats`), `GenerateContours`
+  (`contourgen` — its OWN `ContourResult::vertsXyz` output stays `float`, display geometry per
+  ADR-054 (b)), `ComputeWatershed`/`ComputeWaterDrop`/`ComputeCatchment`/
+  `AppendWatershedBasinOutlines`/`AppendCatchmentBoundary` (`watershed` — `WaterDropResult::pathXyz`
+  and every `out` buffer stay `float`, same reason), and `BuildTinVolumeSurface` (`tinvolume`). Also
+  widened `CadSurface::addedPointXyz`/`MovedPoint::toX,toY,toZ` (REQ-144/150 point edits) — they feed
+  the TIN build directly, so they carry the same guarantee. GPU-upload narrowing stays at the single
+  points these call sites already used (`AppendTriangleEdges`, `BuildSurfaceAnalysisGeometry`,
+  `TinBorderEdges`'s own `out`, contour/watershed `out` buffers) — all `static_cast<float>` at the
+  render-buffer boundary, matching Phase D's rule. `GsIo.cpp`'s surface JSON reader/writer round-trips
+  `double` (`verts`, `addedPointXyz`, `movedPoints`' `toX/toY/toZ`) — no `kGsFormatVersion` bump, same
+  reasoning as Phase B (writer already emitted full precision).
+  **`kTinPlanEpsilon` reconciled** (`tinbuild.hpp`): left at 0.01 ft, re-justified as a field-shot
+  de-dup threshold (a surveying/data-quality judgment — "are two shots the same ground position") now
+  explicitly independent of what the store can represent, rather than "TIN storage is still float".
+  **Explicitly out of scope, documented in place:** `util/gridsurface.hpp`'s grid `z` arrays and
+  `CadSurface::gridZ` stay `float` — a distinct raster (regular-grid) representation, not a `vertsXyz`
+  store, and not named by the issue; `util/contourgen.hpp`'s `ContourResult::vertsXyz` and
+  `util/watershed.hpp`'s `WaterDropResult::pathXyz` stay `float` — derived DISPLAY geometry, never
+  stored, ADR-054 (b) exempts render buffers; `meshgeom::ComputeBounds` stays `float` (serves the
+  unrelated float mesh/glTF/STL/brep-tessellation family) — its two TIN-zoom-extents call sites in
+  `CadCommands.cpp` got a tiny local `ComputeTinPlanBounds` helper instead of widening the shared
+  utility for one non-mesh caller.
+  **Regression:** `tests/TinBuildTests.cpp` "A TIN vertex built at state-plane magnitude is held
+  within REQ-101's tolerance" (~2,000,000 ft easting, asserts ±0.002 ft — analogous to Phase A/F's
+  origin-at-entry tests). **Real-data fallout, not a regression:** the widened TIN store changed
+  `samples/surface-demo.dwg`'s computed common area from 229208.2107 to 229208.2109 ft² (a
+  0.0002 ft² shift from `float`-quantized to full-precision Delaunay), so
+  `tests/headless/transcripts/req073-surface-volumes.txt`'s three matching `EXPECT LOG` literals were
+  updated to the corrected value; the cut/fill/net numbers in the same transcript were unaffected.
+  Build clean; `ctest` 1363/1363.
 
 OUT:
 - Widening any render / tessellation / mesh buffer or the GL vertex format (ADR-054 (b) — they stay

@@ -50,4 +50,11 @@ void DevShell_RequestScreenshot(const char* pathUtf8);
 /// Resize the GLFW window (Debug driver / responsive-layout evidence). Yield a few frames after.
 void DevShell_SetWindowSize(int w, int h);
 
+/// Record / read the 3D viewport's screen rectangle (REQ-161). Written once a frame by `CadUi`
+/// through `DevShell_OnViewportRect`; read by a Test Engine test that needs to aim the cursor at a
+/// world point. Returns false until the viewport has drawn at least one frame.
+void DevShell_SetViewportRect(float originX, float originY, float sizeX, float sizeY);
+[[nodiscard]] bool DevShell_ViewportRect(float* outOriginX, float* outOriginY, float* outSizeX,
+                                        float* outSizeY);
+
 #endif

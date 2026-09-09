@@ -825,3 +825,39 @@ void DevShell_SetWindowSize(int w, int h)
 }
 
 #endif
+
+// --- The viewport's screen rectangle (REQ-161) ---------------------------------------------------
+//
+// One frame's worth of state, written by `CadUi` and read by tests. Debug-only by construction: the
+// whole translation unit is compiled out of Release.
+namespace {
+float g_vpOriginX = 0.f;
+float g_vpOriginY = 0.f;
+float g_vpSizeX = 0.f;
+float g_vpSizeY = 0.f;
+bool g_vpValid = false;
+}  // namespace
+
+void DevShell_SetViewportRect(float originX, float originY, float sizeX, float sizeY)
+{
+  g_vpOriginX = originX;
+  g_vpOriginY = originY;
+  g_vpSizeX = sizeX;
+  g_vpSizeY = sizeY;
+  g_vpValid = (sizeX > 1.f && sizeY > 1.f);
+}
+
+bool DevShell_ViewportRect(float* outOriginX, float* outOriginY, float* outSizeX, float* outSizeY)
+{
+  if (!g_vpValid)
+    return false;
+  if (outOriginX)
+    *outOriginX = g_vpOriginX;
+  if (outOriginY)
+    *outOriginY = g_vpOriginY;
+  if (outSizeX)
+    *outSizeX = g_vpSizeX;
+  if (outSizeY)
+    *outSizeY = g_vpSizeY;
+  return true;
+}

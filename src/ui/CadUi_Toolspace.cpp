@@ -203,30 +203,31 @@ void ZoomToSurveyPoints(AppCommandState& cmd, std::vector<std::string>* log) {
       log->push_back("TOOLSPACE — no survey points to zoom to.");
     return;
   }
-  float mnX = cmd.surveyPoints[0].easting;
-  float mxX = mnX;
-  float mnY = cmd.surveyPoints[0].northing;
-  float mxY = mnY;
+  double mnX = cmd.surveyPoints[0].easting;
+  double mxX = mnX;
+  double mnY = cmd.surveyPoints[0].northing;
+  double mxY = mnY;
   for (const SurveyPoint& p : cmd.surveyPoints) {
     mnX = std::min(mnX, p.easting);
     mxX = std::max(mxX, p.easting);
     mnY = std::min(mnY, p.northing);
     mxY = std::max(mxY, p.northing);
   }
-  if (mxX - mnX < 1.f) {
-    mnX -= 5.f;
-    mxX += 5.f;
+  if (mxX - mnX < 1.0) {
+    mnX -= 5.0;
+    mxX += 5.0;
   }
-  if (mxY - mnY < 1.f) {
-    mnY -= 5.f;
-    mxY += 5.f;
+  if (mxY - mnY < 1.0) {
+    mnY -= 5.0;
+    mxY += 5.0;
   }
   cmd.pendingZoomExtents = false;
   cmd.pendingZoomWindow = true;
-  cmd.pendingZoomMnX = mnX;
-  cmd.pendingZoomMxX = mxX;
-  cmd.pendingZoomMnY = mnY;
-  cmd.pendingZoomMxY = mxY;
+  // Viewport pan/zoom targets stay float (render-only viewport state) — narrow here.
+  cmd.pendingZoomMnX = static_cast<float>(mnX);
+  cmd.pendingZoomMxX = static_cast<float>(mxX);
+  cmd.pendingZoomMnY = static_cast<float>(mnY);
+  cmd.pendingZoomMxY = static_cast<float>(mxY);
 }
 
 void PanToSurveyPoints(AppCommandState& cmd, std::vector<std::string>* log) {
@@ -260,13 +261,13 @@ void OpenSurfaceProperties(AppCommandState& cmd, int si) {
 bool SurfacePlanBounds(const CadSurface& s, float* mnX, float* mxX, float* mnY, float* mxY) {
   if (!s.tin || s.tin->vertsXyz.size() < 3)
     return false;
-  *mnX = *mxX = s.tin->vertsXyz[0];
-  *mnY = *mxY = s.tin->vertsXyz[1];
+  *mnX = *mxX = static_cast<float>(s.tin->vertsXyz[0]);
+  *mnY = *mxY = static_cast<float>(s.tin->vertsXyz[1]);
   for (size_t i = 0; i + 2 < s.tin->vertsXyz.size(); i += 3) {
-    *mnX = std::min(*mnX, s.tin->vertsXyz[i]);
-    *mxX = std::max(*mxX, s.tin->vertsXyz[i]);
-    *mnY = std::min(*mnY, s.tin->vertsXyz[i + 1]);
-    *mxY = std::max(*mxY, s.tin->vertsXyz[i + 1]);
+    *mnX = std::min(*mnX, static_cast<float>(s.tin->vertsXyz[i]));
+    *mxX = std::max(*mxX, static_cast<float>(s.tin->vertsXyz[i]));
+    *mnY = std::min(*mnY, static_cast<float>(s.tin->vertsXyz[i + 1]));
+    *mxY = std::max(*mxY, static_cast<float>(s.tin->vertsXyz[i + 1]));
   }
   return true;
 }

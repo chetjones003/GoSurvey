@@ -625,7 +625,7 @@ struct IsectCandidate {
 /// elevations do not touch, and reporting a snap there would place geometry on nothing.
 void ComputeTrueIntersections(const std::vector<IsectSeg>& segs, const std::vector<IsectConic>& conics,
                               std::vector<IsectCandidate>* out) {
-  constexpr double kReq101 = 0.01;  ///< ±0.01 ft — the project coordinate tolerance.
+  constexpr double kReq101 = 0.002;  ///< ±0.002 ft — the project coordinate tolerance.
   std::vector<curveisect::Hit2> hits;
 
   for (size_t i = 0; i < segs.size(); ++i) {
@@ -1228,9 +1228,13 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       // orbited-view breakage (issue #372): evaluate it where the ray meets the point's own plane.
       float hx = 0.f;
       float hy = 0.f;
-      const bool heur = CenterHeuristicPoint(acc, wx, wy, sp.elevation, &hx, &hy);
-      const float p2 = MinDistSqToSurveyMarker(hx, hy, sp.easting, sp.northing, arm);
-      ConsiderSnap(&acc, wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, p2, tolWorld, sp.elevation,
+      // Snap-candidate pipeline stays float (established render/pick boundary, Phase D) — narrow the
+      // double survey-point coordinate here, same as every other entity kind in this loop.
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, static_cast<float>(sp.elevation), &hx, &hy);
+      const float p2 =
+          MinDistSqToSurveyMarker(hx, hy, static_cast<float>(sp.easting), static_cast<float>(sp.northing), arm);
+      ConsiderSnap(&acc, wx, wy, static_cast<float>(sp.easting), static_cast<float>(sp.northing), Kind::SurveyCenter,
+                   p2, tolWorld, static_cast<float>(sp.elevation),
                    /*heuristicAccept=*/heur);  // elevation IS the point's Z (REQ-057)
     }
   }
@@ -1973,8 +1977,9 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   }
   case Kind::SurveyCenter:
     for (const SurveyPoint& sp : cmd.surveyPoints)
-      PushSnapPickerEntry(sp.easting, sp.northing, Kind::SurveyCenter, sortWorldX, sortWorldY, out,
-                          sp.elevation);  // elevation IS the point's Z (REQ-057)
+      PushSnapPickerEntry(static_cast<float>(sp.easting), static_cast<float>(sp.northing), Kind::SurveyCenter,
+                          sortWorldX, sortWorldY, out,
+                          static_cast<float>(sp.elevation));  // elevation IS the point's Z (REQ-057)
     break;
   case Kind::Intersection:
   case Kind::ApparentIntersection: {
@@ -2097,9 +2102,10 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
   // Survey point grips (selected survey points)
   for (const int idx : cmd.selectedSurveyPointIndices) {
     if (idx >= 0 && static_cast<size_t>(idx) < cmd.surveyPoints.size())
-      gripCandidate(cmd.surveyPoints[static_cast<size_t>(idx)].easting,
-                    cmd.surveyPoints[static_cast<size_t>(idx)].northing,
-                    cmd.surveyPoints[static_cast<size_t>(idx)].elevation);  // elevation IS Z (REQ-057)
+      gripCandidate(static_cast<float>(cmd.surveyPoints[static_cast<size_t>(idx)].easting),
+                    static_cast<float>(cmd.surveyPoints[static_cast<size_t>(idx)].northing),
+                    static_cast<float>(
+                        cmd.surveyPoints[static_cast<size_t>(idx)].elevation));  // elevation IS Z (REQ-057)
   }
 
   return acc.best;

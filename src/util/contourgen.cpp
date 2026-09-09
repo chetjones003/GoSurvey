@@ -40,7 +40,7 @@ const Crossing& EndOn(const Segment& s, std::uint64_t edge) {
 
 } // namespace
 
-void GenerateContours(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+void GenerateContours(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
                       const std::vector<double>& levels, ContourResult* out) {
   if (!out)
     return;

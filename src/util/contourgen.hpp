@@ -74,7 +74,7 @@ struct ContourResult {
 /// triangles has no contours, which is not the same thing as a failure to generate them.
 ///
 /// \p out is cleared first, and is left empty when it is null-checked away.
-void GenerateContours(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+void GenerateContours(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
                       const std::vector<double>& levels, ContourResult* out);
 
 /// The whole multiples of \p interval lying within [\p minZ, \p maxZ] — the level list a contour

@@ -2489,7 +2489,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         }
       }
       if (el.contains("addedPointXyz") && el["addedPointXyz"].is_array())
-        s.addedPointXyz = el["addedPointXyz"].get<std::vector<float>>();
+        s.addedPointXyz = el["addedPointXyz"].get<std::vector<double>>();
       if (el.contains("deletedPointPicks") && el["deletedPointPicks"].is_array()) {
         for (const auto& dp : el["deletedPointPicks"]) {
           if (!dp.is_object())
@@ -2504,9 +2504,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           CadSurface::MovedPoint m;
           m.fromX = mo.value("fromX", 0.0);
           m.fromY = mo.value("fromY", 0.0);
-          m.toX = mo.value("toX", 0.f);
-          m.toY = mo.value("toY", 0.f);
-          m.toZ = mo.value("toZ", 0.f);
+          m.toX = mo.value("toX", 0.0);
+          m.toY = mo.value("toY", 0.0);
+          m.toZ = mo.value("toZ", 0.0);
           s.movedPoints.push_back(m);
         }
       }
@@ -2592,7 +2592,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (el.contains("verts") && el["verts"].is_array() && el.contains("indices") &&
           el["indices"].is_array()) {
         auto tin = std::make_shared<CadTin>();
-        tin->vertsXyz = el["verts"].get<std::vector<float>>();
+        tin->vertsXyz = el["verts"].get<std::vector<double>>();
         tin->indices = el["indices"].get<std::vector<std::uint32_t>>();
         // A triangulation whose arrays do not agree is corrupt; drop it rather than let the renderer
         // index past the end of the vertex array (REQ-201 — refuse, do not absorb).
@@ -2690,9 +2690,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["surveyPoints"]) {
       SurveyPoint p;
       p.id = o.value("id", 0);
-      p.easting = o.value("easting", 0.f);
-      p.northing = o.value("northing", 0.f);
-      p.elevation = o.value("elevation", 0.f);
+      p.easting = o.value("easting", 0.0);
+      p.northing = o.value("northing", 0.0);
+      p.elevation = o.value("elevation", 0.0);
       if (o.contains("description") && o["description"].is_string())
         p.description = o["description"].get<std::string>();
       // Absent in every pre-REQ-066 file, which is exactly the "loads empty and falls back to

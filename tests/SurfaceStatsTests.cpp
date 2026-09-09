@@ -16,14 +16,14 @@ TEST_CASE("Empty or malformed input reports not built", "[surface][req125][stats
   CHECK(a.points == 0);
   CHECK(a.triangles == 0);
 
-  const std::vector<float> verts{0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  const std::vector<double> verts{0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
   SurfaceStats b = ComputeSurfaceStats(verts, {0, 1, 0});
   CHECK_FALSE(b.built);
 }
 
 TEST_CASE("A right triangle reports plan area, 3D area, and slope", "[surface][req125][stats]") {
   // (0,0,0) (10,0,0) (0,10,0) — plan area 50, grade 0, 3D area 50.
-  const std::vector<float> verts{0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 0.f, 10.f, 0.f};
+  const std::vector<double> verts{0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 0.f, 10.f, 0.f};
   const std::vector<std::uint32_t> idx{0, 1, 2};
   const SurfaceStats s = ComputeSurfaceStats(verts, idx);
   REQUIRE(s.built);
@@ -39,7 +39,7 @@ TEST_CASE("A right triangle reports plan area, 3D area, and slope", "[surface][r
 }
 
 TEST_CASE("A 10% grade triangle reports that grade", "[surface][req125][stats]") {
-  const std::vector<float> verts{0.f, 0.f, 0.f, 10.f, 0.f, 1.f, 0.f, 10.f, 0.f};
+  const std::vector<double> verts{0.f, 0.f, 0.f, 10.f, 0.f, 1.f, 0.f, 10.f, 0.f};
   const std::vector<std::uint32_t> idx{0, 1, 2};
   const SurfaceStats s = ComputeSurfaceStats(verts, idx);
   REQUIRE(s.built);
@@ -49,7 +49,7 @@ TEST_CASE("A 10% grade triangle reports that grade", "[surface][req125][stats]")
 }
 
 TEST_CASE("A mixed-sign volume triangle reports both cut and fill", "[surface][req140][stats]") {
-  const std::vector<float> verts{0.f, 0.f, -1.f, 10.f, 0.f, 1.f, 0.f, 10.f, 1.f};
+  const std::vector<double> verts{0.f, 0.f, -1.f, 10.f, 0.f, 1.f, 0.f, 10.f, 1.f};
   const std::vector<std::uint32_t> idx{0, 1, 2};
   const SurfaceStats s = ComputeSurfaceStats(verts, idx, 0, true);
   REQUIRE(s.built);
@@ -58,7 +58,7 @@ TEST_CASE("A mixed-sign volume triangle reports both cut and fill", "[surface][r
 }
 
 TEST_CASE("An all-positive volume triangle is fill only", "[surface][req140][stats]") {
-  const std::vector<float> verts{0.f, 0.f, 1.f, 10.f, 0.f, 1.f, 0.f, 10.f, 1.f};
+  const std::vector<double> verts{0.f, 0.f, 1.f, 10.f, 0.f, 1.f, 0.f, 10.f, 1.f};
   const std::vector<std::uint32_t> idx{0, 1, 2};
   const SurfaceStats s = ComputeSurfaceStats(verts, idx, 0, true);
   REQUIRE(s.built);

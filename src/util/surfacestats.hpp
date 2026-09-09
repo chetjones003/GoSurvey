@@ -31,6 +31,6 @@ struct SurfaceStats {
 /// Returns zeros and \c built false when \p indices is empty or \p vertsXyz is too short.
 /// \p breaklineEdgeCount is reported unchanged. When \p zIsDifference, each triangle is clipped at
 /// Z = 0 so mixed-sign faces contribute cut and fill separately (same idea as REQ-147 sample volumes).
-[[nodiscard]] SurfaceStats ComputeSurfaceStats(const std::vector<float>& vertsXyz,
+[[nodiscard]] SurfaceStats ComputeSurfaceStats(const std::vector<double>& vertsXyz,
                                                const std::vector<std::uint32_t>& indices,
                                                int breaklineEdgeCount = 0, bool zIsDifference = false);

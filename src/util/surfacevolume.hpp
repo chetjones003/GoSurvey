@@ -38,7 +38,7 @@ struct TinSpatialIndex {
 /// triangles on average (a fixed triangles-per-cell target, not a fixed cell count — the index scales
 /// with the surface it is built for). An empty or too-small triangulation yields an empty index
 /// (`empty()` true), never a crash.
-[[nodiscard]] TinSpatialIndex BuildTinSpatialIndex(const std::vector<float>& vertsXyz,
+[[nodiscard]] TinSpatialIndex BuildTinSpatialIndex(const std::vector<double>& vertsXyz,
                                                    const std::vector<std::uint32_t>& indices);
 
 /// Elevation at (\p x, \p y), narrowing the candidate triangles through \p index instead of scanning
@@ -49,7 +49,7 @@ struct TinSpatialIndex {
 /// \param outZ receives the elevation; untouched when no triangle in the point's cell covers it.
 /// \param outTri when non-null, receives the covering triangle ordinal (`indices[ord*3]`).
 /// \returns true when a triangle covers the point.
-[[nodiscard]] bool TinElevationAtIndexed(const std::vector<float>& vertsXyz,
+[[nodiscard]] bool TinElevationAtIndexed(const std::vector<double>& vertsXyz,
                                          const std::vector<std::uint32_t>& indices,
                                          const TinSpatialIndex& index, double x, double y, double* outZ,
                                          size_t* outTri = nullptr);
@@ -93,9 +93,9 @@ struct SurfaceVolumeResult {
 ///        outside this closed plan ring contribute neither volume nor common area (REQ-131). Coordinates
 ///        must match \p baseVertsXyz / \p compVertsXyz (TIN local XY). Null or a short ring is "no clip"
 ///        — today's full-overlap behaviour.
-[[nodiscard]] SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<float>& baseVertsXyz,
+[[nodiscard]] SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<double>& baseVertsXyz,
                                                        const std::vector<std::uint32_t>& baseIndices,
-                                                       const std::vector<float>& compVertsXyz,
+                                                       const std::vector<double>& compVertsXyz,
                                                        const std::vector<std::uint32_t>& compIndices,
                                                        std::vector<float>* outCutTrianglesXyz = nullptr,
                                                        std::vector<float>* outFillTrianglesXyz = nullptr,

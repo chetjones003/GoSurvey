@@ -12,22 +12,21 @@ std::int64_t QuantizePlan(double v) {
   return static_cast<std::int64_t>(std::llround(v / kTinPlanEpsilon));
 }
 
-void CollectVerts(const std::vector<float>& vertsXyz, std::vector<std::pair<double, double>>* xy) {
+void CollectVerts(const std::vector<double>& vertsXyz, std::vector<std::pair<double, double>>* xy) {
   if (!xy)
     return;
   const int n = static_cast<int>(vertsXyz.size() / 3);
   xy->reserve(xy->size() + static_cast<size_t>(n));
   for (int i = 0; i < n; ++i) {
-    xy->push_back({static_cast<double>(vertsXyz[static_cast<size_t>(i) * 3 + 0]),
-                   static_cast<double>(vertsXyz[static_cast<size_t>(i) * 3 + 1])});
+    xy->push_back({vertsXyz[static_cast<size_t>(i) * 3 + 0], vertsXyz[static_cast<size_t>(i) * 3 + 1]});
   }
 }
 
 }  // namespace
 
-TinBuildResult BuildTinVolumeSurface(const std::vector<float>& baseVertsXyz,
+TinBuildResult BuildTinVolumeSurface(const std::vector<double>& baseVertsXyz,
                                      const std::vector<std::uint32_t>& baseIndices,
-                                     const std::vector<float>& comparisonVertsXyz,
+                                     const std::vector<double>& comparisonVertsXyz,
                                      const std::vector<std::uint32_t>& comparisonIndices,
                                      double originX, double originY) {
   TinBuildResult empty;
@@ -60,7 +59,7 @@ TinBuildResult BuildTinVolumeSurface(const std::vector<float>& baseVertsXyz,
     TinInputPoint p;
     p.x = xy.first + originX;
     p.y = xy.second + originY;
-    p.z = static_cast<float>(zc - zb);
+    p.z = zc - zb;
     uniq.emplace(key, p);
   }
 

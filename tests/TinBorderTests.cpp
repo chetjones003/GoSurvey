@@ -24,7 +24,7 @@ namespace {
 /// back to its vertex. Comparing indices rather than floats is deliberate: the assertion is about
 /// WHICH edges came out, and reading that off coordinates would turn a topology test into a
 /// floating-point one.
-std::vector<std::pair<int, int>> BorderPairs(const std::vector<float>& verts,
+std::vector<std::pair<int, int>> BorderPairs(const std::vector<double>& verts,
                                              const std::vector<std::uint32_t>& tris) {
   std::vector<float> out;
   TinBorderEdges(verts, tris, &out);
@@ -51,7 +51,7 @@ std::vector<std::pair<int, int>> BorderPairs(const std::vector<float>& verts,
 TEST_CASE("A single triangle is all border", "[surface][req068][border]") {
   // Three edges, no neighbours, so every edge is border. The degenerate base case: if this were
   // wrong, nothing above it could be right.
-  const std::vector<float> verts{0.f, 0.f, 10.f, 10.f, 0.f, 10.f, 0.f, 10.f, 10.f};
+  const std::vector<double> verts{0.f, 0.f, 10.f, 10.f, 0.f, 10.f, 0.f, 10.f, 10.f};
   const std::vector<std::uint32_t> tris{0, 1, 2};
 
   const auto pairs = BorderPairs(verts, tris);
@@ -66,7 +66,7 @@ TEST_CASE("The shared edge of two triangles is not border", "[surface][req068][b
   //   3---2
   //   | \ |
   //   0---1
-  const std::vector<float> verts{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 0.f};
+  const std::vector<double> verts{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 0.f};
   const std::vector<std::uint32_t> tris{0, 1, 2, 0, 2, 3};
 
   const auto pairs = BorderPairs(verts, tris);
@@ -91,7 +91,7 @@ TEST_CASE("A hole's rim is border, so the border is not the convex hull", "[surf
   //   | |   | |
   //   | 4---5 |
   //   0-------1
-  const std::vector<float> verts{
+  const std::vector<double> verts{
       0.f, 0.f, 0.f,  3.f, 0.f, 0.f,  3.f, 3.f, 0.f,  0.f, 3.f, 0.f,   // outer 0..3
       1.f, 1.f, 0.f,  2.f, 1.f, 0.f,  2.f, 2.f, 0.f,  1.f, 2.f, 0.f};  // inner 4..7
   // The ring: two triangles per side, each side of the outer square paired with the matching side
@@ -120,7 +120,7 @@ TEST_CASE("A concave outline keeps its notch", "[surface][req068][border]") {
   //   0---2
   //       | \
   //       3---4      (0-1-2 and 2-3-4 meet only at vertex 2, so nothing is shared)
-  const std::vector<float> verts{0.f, 0.f, 0.f, 0.f, 2.f, 0.f, 2.f, 0.f, 0.f,
+  const std::vector<double> verts{0.f, 0.f, 0.f, 0.f, 2.f, 0.f, 2.f, 0.f, 0.f,
                                  2.f, -2.f, 0.f, 4.f, -2.f, 0.f};
   const std::vector<std::uint32_t> tris{0, 1, 2, 2, 3, 4};
 

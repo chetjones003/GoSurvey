@@ -8,7 +8,7 @@
 #include <vector>
 
 TEST_CASE("Quick profile midpoint on plane Z=X is 5", "[req145][profile]") {
-  const std::vector<float> v{0.f, 0.f, 0.f, 10.f, 0.f, 10.f, 0.f, 10.f, 0.f};
+  const std::vector<double> v{0.f, 0.f, 0.f, 10.f, 0.f, 10.f, 0.f, 10.f, 0.f};
   const std::vector<std::uint32_t> idx{0, 1, 2};
   TinSurfaceQuery q(v, idx);
   std::vector<SurfaceProfileSample> s;
@@ -28,7 +28,7 @@ TEST_CASE("Quick profile midpoint on plane Z=X is 5", "[req145][profile]") {
 }
 
 TEST_CASE("Quick profile miss does not invent elevations", "[req145][profile]") {
-  const std::vector<float> v{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+  const std::vector<double> v{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f};
   const std::vector<std::uint32_t> idx{0, 1, 2};
   TinSurfaceQuery q(v, idx);
   std::vector<SurfaceProfileSample> s;
@@ -39,7 +39,7 @@ TEST_CASE("Quick profile miss does not invent elevations", "[req145][profile]") 
 }
 
 TEST_CASE("Quick profile zero length is refused", "[req145][profile]") {
-  const std::vector<float> v{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+  const std::vector<double> v{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f};
   const std::vector<std::uint32_t> idx{0, 1, 2};
   TinSurfaceQuery q(v, idx);
   std::vector<SurfaceProfileSample> s;

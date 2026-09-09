@@ -256,6 +256,10 @@ float LineweightMmToDevicePx(float mm) {
 /// FEATURE LINES too (REQ-087): their store has the same CSR shape, and a feature line is drawn like
 /// any other 3D chain. The elevation-point flag is deliberately not consulted — an elevation point
 /// lies on the line, so including it changes nothing about the plan shape (ADR-035 (a)).
+/// Takes `double` geometry (`V`) and writes `float` GPU vertices (`out`) — the `double`->`float`
+/// narrowing itself happens in `WorldToViewRelativeFloat` (util/geom2d.cpp), the single authorized
+/// narrowing point for geometry coordinates (ADR-054 (b), TASK-228 Phase D). Nothing upstream of
+/// this call should carry a `float` coordinate.
 void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg,
                         const std::vector<double>* V, const std::vector<int>* O,
                         const std::vector<uint8_t>* Cl, const std::vector<EntityAttributes>* At,

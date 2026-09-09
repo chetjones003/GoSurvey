@@ -1,13 +1,18 @@
 #include "DxfIo.hpp"
 #include "DwgIo.hpp"
+#include "GsIo.hpp"
 #include "LibreDwgCad.hpp"
 
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
+#include "io/SurveyCsv.hpp"
 #include "util/ucs.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+
+#include <imgui.h>
 
 #include <cmath>
 #include <cstdint>
@@ -48,6 +53,28 @@ void OneLine(AppCommandState& st) {
   st.userLineAttrs = {EntityAttributes{}};
 }
 
+// Survey-point labels are measured through ImGui::GetFont() while a point is placed/imported
+// (EnsureSurveyPointLabelMtext) — same fixture as GsMigrateLegacyBreaklineTests.cpp (ADR-031 (c')).
+struct HeadlessImGuiScope {
+  HeadlessImGuiScope() {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1920.f, 1080.f);
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+    io.Fonts->AddFontDefault();
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    ImGui::NewFrame();
+  }
+  ~HeadlessImGuiScope() {
+    ImGui::EndFrame();
+    ImGui::DestroyContext();
+  }
+};
+
 }  // namespace
 
 TEST_CASE("LibreDWG DXF round-trips a model-space LINE", "[dxf][libredwg]") {
@@ -75,6 +102,162 @@ TEST_CASE("LibreDWG DWG round-trips a model-space LINE", "[dwg][libredwg]") {
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.userLinesFlat.size() == 6);
   REQUIRE(in.userLinesFlat[3] == Catch::Approx(10.f).margin(0.05f));
+}
+
+// REQ-101 (D-2026-09-08-i) / ADR-054 Phase B (#441): the DWG-trailer document is the same `double`
+// GsIo JSON tree as `.gst` (Phase A widened the stores it reads/writes) — a state-plane-magnitude
+// coordinate must survive the trailer round trip within ±0.002 ft, not the pre-migration ±0.01 ft.
+TEST_CASE("DWG trailer round-trips a state-plane coordinate within REQ-101 tolerance",
+          "[dwg][libredwg][req101]") {
+  ScratchDir dir("dwg-req101");
+  const auto p = (dir.path / "stateplane.dwg").string();
+  AppCommandState st;
+  st.userLinesFlat = {2034567.891234, 891234.567891, 0.0, 2034577.891234, 891234.567891, 0.0};
+  st.userLineAttrs = {EntityAttributes{}};
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userLinesFlat.size() == 6);
+  // Local storage invariant: world = local + worldDocumentOrigin (a state-plane-magnitude
+  // coordinate rebases on load, per CadCoordinateFrame — that is unrelated to REQ-101's precision
+  // guarantee, which this test checks in world space).
+  CHECK(in.userLinesFlat[0] + in.worldDocumentOriginX == Catch::Approx(2034567.891234).margin(0.002));
+  CHECK(in.userLinesFlat[1] + in.worldDocumentOriginY == Catch::Approx(891234.567891).margin(0.002));
+  CHECK(in.userLinesFlat[3] + in.worldDocumentOriginX == Catch::Approx(2034577.891234).margin(0.002));
+}
+
+// A DWG saved by a pre-migration build stored coordinates as `float` before writing the trailer
+// JSON, so its text already carries only `float` resolution (~0.008 ft at state-plane magnitude).
+// Loading such a file today must not error and must still land within the old, documented ±0.01 ft
+// — the trailer JSON shape did not change, so there is no format-version gate to fail open on.
+TEST_CASE("A legacy float-precision DWG trailer still loads within the old REQ-101 tolerance",
+          "[dwg][libredwg][req101]") {
+  ScratchDir dir("dwg-legacy");
+  const auto p = (dir.path / "legacy.dwg").string();
+
+  const double trueX = 2034567.891234;
+  const double trueY = 891234.567891;
+  const double legacyX = static_cast<double>(static_cast<float>(trueX));
+  const double legacyY = static_cast<double>(static_cast<float>(trueY));
+
+  AppCommandState legacy;
+  legacy.userLinesFlat = {legacyX, legacyY, 0.0, legacyX + 10.0, legacyY, 0.0};
+  legacy.userLineAttrs = {EntityAttributes{}};
+  const std::string json = SerializeGoSurveyJson(legacy);
+
+  // Mirrors DwgIo.cpp's private trailer layout (REQ-175 / ADR-044): a placeholder "DWG" prefix +
+  // JSON document + 8-byte little-endian length + the 16-byte magic. TryGoSurveyDwgPayloadFromBytes
+  // only inspects the trailer, so the prefix need not be real LibreDWG bytes.
+  static constexpr unsigned char kMagic[16] = {'G', 'O', 'S', 'U', 'R', 'V', 'E', 'Y',
+                                                '_', 'D', 'O', 'C', 'v', '1', '\n', '\0'};
+  {
+    std::ofstream f(p, std::ios::binary);
+    f << "not-a-real-dwg-prefix";
+    f.write(json.data(), static_cast<std::streamsize>(json.size()));
+    std::uint64_t n = static_cast<std::uint64_t>(json.size());
+    unsigned char b[8];
+    for (int i = 0; i < 8; ++i)
+      b[static_cast<size_t>(i)] = static_cast<unsigned char>((n >> (8 * i)) & 0xFFu);
+    f.write(reinterpret_cast<const char*>(b), 8);
+    f.write(reinterpret_cast<const char*>(kMagic), sizeof(kMagic));
+  }
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userLinesFlat.size() == 6);
+  // Local storage invariant: world = local + worldDocumentOrigin.
+  CHECK(in.userLinesFlat[0] + in.worldDocumentOriginX == Catch::Approx(trueX).margin(0.01));
+  CHECK(in.userLinesFlat[1] + in.worldDocumentOriginY == Catch::Approx(trueY).margin(0.01));
+}
+
+// REQ-101 Phase F (#447): SurveyPoint::easting/northing/elevation widened `float` -> `double`. A
+// survey point round-tripped through DXF POINT + GOSURVEY XDATA (1071 id / 1070 labelStyle / 1000
+// desc, the format ADR-005/REQ-023 use) must land within +/-0.002 ft of a state-plane-magnitude
+// value — the same guarantee Phase B already proved for plain LINE/CIRCLE geometry. Before this
+// phase, DxfIo.cpp's reader narrowed `wx - worldDocumentOriginX` through `static_cast<float>` when
+// rebuilding the point (float resolves ~0.008 ft at this magnitude), so this assertion would have
+// failed at the old code with a margin tighter than 0.008.
+TEST_CASE("DXF survey point XDATA round-trips a state-plane coordinate within REQ-101 tolerance",
+          "[dxf][libredwg][req101][survey]") {
+  ScratchDir dir("dxf-survey-req101");
+  const auto p = (dir.path / "surveypoint.dxf").string();
+
+  AppCommandState st;
+  SurveyPoint sp;
+  sp.id = 501;
+  sp.easting = 2034567.891234;
+  sp.northing = 891234.567891;
+  sp.elevation = 456.789123;
+  sp.description = "IPF";
+  sp.rawDescription = "IPF";
+  sp.layer = "0";
+  sp.labelStyle = SurveyPointLabelStyle::None;  // no MTEXT needed for this round trip
+  st.surveyPoints.push_back(sp);
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+
+  AppCommandState in;
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.surveyPoints.size() == 1);
+
+  // Local storage invariant: world = local + worldDocumentOrigin (a state-plane-magnitude
+  // coordinate rebases on import) — REQ-101's guarantee is checked in world space, as the DWG-trailer
+  // test above does for plain geometry.
+  // `epsilon(0.0)` disables Catch2's default RELATIVE tolerance (~1.2e-3 of the larger operand) —
+  // at a ~2e6 magnitude that alone is +/-2000+ ft, which would swallow the 0.002 ft absolute margin
+  // entirely and let the test pass regardless of the actual error.
+  const SurveyPoint& got = in.surveyPoints[0];
+  CHECK(got.easting + in.worldDocumentOriginX == Catch::Approx(sp.easting).margin(0.002).epsilon(0.0));
+  CHECK(got.northing + in.worldDocumentOriginY == Catch::Approx(sp.northing).margin(0.002).epsilon(0.0));
+  CHECK(got.elevation == Catch::Approx(sp.elevation).margin(0.002).epsilon(0.0));
+  CHECK(got.id == sp.id);
+}
+
+// REQ-101 Phase F (#447): SurveyPoint::easting/northing widened `float` -> `double`. The CSV
+// importer computes each point's LOCAL coordinate as `worldE - worldDocumentOriginX` and stores it
+// BEFORE the post-import rebase (`MaybeRebaseLargeCoordinates`) runs — so on a fresh document
+// (origin still (0,0)) a state-plane-magnitude easting is assigned to `SurveyPoint::easting` at its
+// FULL magnitude, then rebased afterward. With `easting` as `float`, that first assignment alone
+// quantizes at ~0.008 ft (float spacing at 2e6), and the later rebase only rearranges an already
+//-quantized value — it cannot recover the lost precision. This is the same "narrow-before-origin"
+// hazard `regression-req101-origin-at-entry` pins for typed LINE points; this test pins the CSV
+// import path for survey points and would have failed at the pre-Phase-F `float` field (error
+// ~0.008-0.025 ft, outside +/-0.002 ft) — proven by reverting the field to `float` locally and
+// re-running, then restored.
+TEST_CASE("CSV import stores a state-plane survey point within REQ-101 tolerance", "[csv][survey][req101]") {
+  HeadlessImGuiScope imguiScope;
+  ScratchDir dir("csv-survey-req101");
+  const auto p = (dir.path / "points.csv").string();
+  {
+    std::ofstream f(p);
+    // ENZ layout (no point-id column): E,N,Z. Same state-plane easting/northing
+    // `regression-req101-origin-at-entry` uses for LINE — documented there to quantize to
+    // 2000000.125 through a bare `float` cast (error 0.025 ft), so this value is known to expose
+    // the hazard rather than happening to land within tolerance by luck.
+    f << "2000000.10,500000.03,456.789123\n";
+  }
+
+  AppCommandState st;
+  std::snprintf(st.surveyImportCsvPath, sizeof(st.surveyImportCsvPath), "%s", p.c_str());
+  st.surveyImportCsvLayoutIdx = 3;  // ENZ (SurveyCsvLayoutFromUiIndex)
+  st.surveyImportCsvSkipFirstRow = false;
+
+  std::vector<std::string> log;
+  REQUIRE(SurveyCsvImportFile(st, log));
+  REQUIRE(st.surveyPoints.size() == 1);
+
+  // Local storage invariant: world = local + worldDocumentOrigin — the point's magnitude triggers
+  // the post-import rebase, so this checks the guarantee in world space, as the DWG-trailer test
+  // above does for plain geometry.
+  // `epsilon(0.0)`: see the DXF survey-point test above — without it Catch2's default RELATIVE
+  // tolerance at this magnitude (~2000+ ft) would swallow the 0.002 ft margin entirely.
+  const SurveyPoint& got = st.surveyPoints[0];
+  CHECK(got.easting + st.worldDocumentOriginX == Catch::Approx(2000000.10).margin(0.002).epsilon(0.0));
+  CHECK(got.northing + st.worldDocumentOriginY == Catch::Approx(500000.03).margin(0.002).epsilon(0.0));
+  CHECK(got.elevation == Catch::Approx(456.789123).margin(0.002).epsilon(0.0));
 }
 
 TEST_CASE("DWG import refuses a non-DWG path", "[dwg][libredwg]") {

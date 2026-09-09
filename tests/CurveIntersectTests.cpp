@@ -3,7 +3,7 @@
 // This is the module the snaps stand on, and it is exactly the kind of code that is wrong in ways
 // no screenshot shows — a chord approximation looks perfect on screen and misses REQ-101 by 86×.
 // So the coordinates below are hand-computed, and the tolerance asserted against is REQ-101's
-// ±0.01 ft rather than "close enough to look right".
+// ±0.002 ft rather than "close enough to look right".
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -19,7 +19,7 @@ using namespace curveisect;
 
 namespace {
 
-constexpr double kReq101 = 0.01;  ///< ±0.01 ft — the project tolerance (REQ-101).
+constexpr double kReq101 = 0.002;  ///< ±0.002 ft — the project tolerance (REQ-101).
 
 Seg S(double x0, double y0, double x1, double y1) { return Seg{{x0, y0}, {x1, y1}}; }
 
