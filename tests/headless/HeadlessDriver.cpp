@@ -1385,6 +1385,12 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       kind = UpperAscii(kind);
 
       // Collect the entity's vertices as (localX, localY, absoluteZ), whatever store it lives in.
+      //
+      // `float`, matching `CadCoord::WorldFromLocal`'s own parameters below: the stores are
+      // `double` since ADR-054 Phase A, but the local->world conversion this oracle has to go
+      // through is still float-in, so widening the collection alone would buy no precision and
+      // would only move the narrowing one line further down. The casts are explicit so that is a
+      // stated limit of the oracle rather than an accident of the store's type.
       std::vector<std::array<float, 3>> verts;
       std::string why;
       if (kind == "LINE") {
@@ -1393,8 +1399,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
           why = "no line at index " + std::to_string(ei) + " (there are " +
                 std::to_string(run.st.userLinesFlat.size() / 6) + ")";
         else
-          verts = {{{run.st.userLinesFlat[base], run.st.userLinesFlat[base + 1], run.st.userLinesFlat[base + 2]}},
-                   {{run.st.userLinesFlat[base + 3], run.st.userLinesFlat[base + 4], run.st.userLinesFlat[base + 5]}}};
+          verts = {{{static_cast<float>(run.st.userLinesFlat[base]), static_cast<float>(run.st.userLinesFlat[base + 1]), static_cast<float>(run.st.userLinesFlat[base + 2])}},
+                   {{static_cast<float>(run.st.userLinesFlat[base + 3]), static_cast<float>(run.st.userLinesFlat[base + 4]), static_cast<float>(run.st.userLinesFlat[base + 5])}}};
       } else if (kind == "POLYLINE") {
         const size_t n = PolylineCountOf(run.st);
         if (ei < 0 || static_cast<size_t>(ei) >= n)
@@ -1405,8 +1411,9 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
           for (int v = b; v < e; ++v) {
             const size_t o = static_cast<size_t>(v) * 3;
             if (o + 2 < run.st.userPolylineVerts.size())
-              verts.push_back({{run.st.userPolylineVerts[o], run.st.userPolylineVerts[o + 1],
-                                run.st.userPolylineVerts[o + 2]}});
+              verts.push_back({{static_cast<float>(run.st.userPolylineVerts[o]),
+                                static_cast<float>(run.st.userPolylineVerts[o + 1]),
+                                static_cast<float>(run.st.userPolylineVerts[o + 2])}});
           }
         }
       } else if (kind == "CIRCLE") {
@@ -1415,15 +1422,15 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
           why = "no circle at index " + std::to_string(ei) + " (there are " +
                 std::to_string(run.st.userCirclesCxCyZR.size() / 4) + ")";
         else  // centre + elevation; the radius is not a coordinate
-          verts = {{{run.st.userCirclesCxCyZR[base], run.st.userCirclesCxCyZR[base + 1],
-                     run.st.userCirclesCxCyZR[base + 2]}}};
+          verts = {{{static_cast<float>(run.st.userCirclesCxCyZR[base]), static_cast<float>(run.st.userCirclesCxCyZR[base + 1]),
+                     static_cast<float>(run.st.userCirclesCxCyZR[base + 2])}}};
       } else if (kind == "ARC") {
         if (ei < 0 || static_cast<size_t>(ei) >= run.st.userArcs.size())
           why = "no arc at index " + std::to_string(ei) + " (there are " +
                 std::to_string(run.st.userArcs.size()) + ")";
         else {
           const CadArc& a = run.st.userArcs[static_cast<size_t>(ei)];
-          verts = {{{a.cx, a.cy, a.z}}};
+          verts = {{{static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.z)}}};
         }
       } else {
         Fail(run, "parse", "EXPECT " + what + ": unknown kind " + kind + " (LINE/POLYLINE/CIRCLE/ARC)",

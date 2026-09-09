@@ -15933,6 +15933,16 @@ static void ApplyBreakToArc(AppCommandState& st, int index, const BreakPoint& p1
 /// was nowhere to put one. That single missing field is why BREAK, FILLET and CHAMFER all flattened
 /// a polyline to datum (issue 01) — four commands, one root cause. Carrying Z here makes every
 /// caller supply it or fail to compile, which is the point.
+/// A polyline vertex being rewritten by FILLET / CHAMFER. Replaces the `std::pair<float, float>`
+/// these helpers used to carry, which had nowhere to put a Z and so discarded every elevation it
+/// touched (issue 01).
+///
+/// `float`, deliberately, and not because the store is: `userPolylineVerts` is `std::vector<double>`
+/// since ADR-054 Phase A, but the X and Y in this record already arrive through `readVert`, which
+/// narrows them. Z rides at the same width as the X and Y it belongs to rather than being the one
+/// wide member of a narrow record — widening this path is ADR-054's own audit to make (REQ-101
+/// Phase D), not this fix's. The casts at the push_back sites are explicit so that decision is
+/// visible rather than implied.
 struct PolyVert {
   float x = 0.f, y = 0.f, z = 0.f;
 };
@@ -15977,7 +15987,9 @@ static std::vector<PolyVert> PolylineVertsOf(const AppCommandState& st, int pi) 
   out.reserve(static_cast<size_t>(v1 - v0));
   for (int vi = v0; vi < v1; ++vi) {
     const size_t o = static_cast<size_t>(vi) * 3;
-    out.push_back({st.userPolylineVerts[o], st.userPolylineVerts[o + 1], st.userPolylineVerts[o + 2]});
+    out.push_back({static_cast<float>(st.userPolylineVerts[o]),
+                   static_cast<float>(st.userPolylineVerts[o + 1]),
+                   static_cast<float>(st.userPolylineVerts[o + 2])});
   }
   return out;
 }
@@ -16001,8 +16013,6 @@ static void AppendNewPolyline(AppCommandState& st, const std::vector<PolyVert>& 
 }
 static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
                                      std::vector<std::string>& log) {
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
   const double totalLen = PolylineOpenLengthOf(st, pi);
   constexpr double kTol = 0.002;
   const bool p1First = p1.param <= p2.param;
@@ -16087,7 +16097,9 @@ static void ApplyBreakToClosedPolyline(AppCommandState& st, int pi, const BreakP
     const float r = rot(vparam[static_cast<size_t>(i)]);
     if (r > 1e-6f && r < p1Rot - 1e-6f) {
       const size_t o = static_cast<size_t>(v0 + i) * 3;
-      outVerts.push_back({st.userPolylineVerts[o], st.userPolylineVerts[o + 1], st.userPolylineVerts[o + 2]});
+      outVerts.push_back({static_cast<float>(st.userPolylineVerts[o]),
+                          static_cast<float>(st.userPolylineVerts[o + 1]),
+                          static_cast<float>(st.userPolylineVerts[o + 2])});
     }
   }
   outVerts.push_back({p1.x, p1.y, p1.z});
@@ -17273,7 +17285,7 @@ static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, in
   for (int vi = v0; vi < v1; ++vi) {
     if (vi - v0 == sharedLocal) {
       if (radiusIsZero) {
-        newXY.push_back({cx, cy, vertZ(sharedVi)});
+        newXY.push_back({cx, cy, static_cast<float>(vertZ(sharedVi))});
       } else {
         newXY.push_back({inTx, inTy, inTz});
         newXY.push_back({outTx, outTy, outTz});
@@ -17281,7 +17293,7 @@ static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, in
     } else {
       float x = 0.f, y = 0.f;
       readVert(vi, &x, &y);
-      newXY.push_back({x, y, vertZ(vi)});
+      newXY.push_back({x, y, static_cast<float>(vertZ(vi))});
     }
   }
 
@@ -18654,7 +18666,7 @@ static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, i
   for (int vi = v0; vi < v1; ++vi) {
     if (vi - v0 == sharedLocal) {
       if (bothZero) {
-        newXY.push_back({px, py, vertZ(sharedVi)});
+        newXY.push_back({px, py, static_cast<float>(vertZ(sharedVi))});
       } else {
         newXY.push_back({inX, inY, inZ});
         newXY.push_back({outX, outY, outZ});
@@ -18662,7 +18674,7 @@ static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, i
     } else {
       float x = 0.f, y = 0.f;
       readVert(vi, &x, &y);
-      newXY.push_back({x, y, vertZ(vi)});
+      newXY.push_back({x, y, static_cast<float>(vertZ(vi))});
     }
   }
 

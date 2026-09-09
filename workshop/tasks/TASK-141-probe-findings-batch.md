@@ -169,3 +169,77 @@ COMPLETION REPORT — TASK-141 — 2026-08-28
 - Technical debt noted:    sections 5b, 5c, 5d
 - Build:                   reproducible, clean on Windows/MSVC
 - Docs updated:            this task log
+
+---
+
+## 8. Rebase onto `beta`, 2026-09-09
+
+PR #130 was **auto-closed on 2026-08-29** when `beta` was briefly deleted and recreated — collateral
+of that deletion, not a review verdict. Nothing in it was rejected and no reviewer comment was ever
+left. The work sat unmerged for eleven days; this section records what changed in bringing it
+forward, because the branch was authored against a `beta` that has since moved a long way.
+
+**Every finding was re-verified against current `beta` before rebasing**, rather than assumed still
+present. Five of the six are still live and unfixed:
+
+| finding | state on `beta` at 31c907c |
+|---|---|
+| 01 — elevation, OVERKILL | `struct LSeg { double x0, y0, x1, y1; … }` — still XY-only, still rebuilds `userLinesFlat` unconditionally |
+| 01 — elevation, BREAK / FILLET / CHAMFER | six `std::vector<std::pair<float, float>>` vertex records remain in the model- and paper-space helpers |
+| 01 — elevation, **JOIN** | **fixed upstream** — see below |
+| 02 — space scoping | no sheet guard on OVERKILL or JOIN |
+| 03 — import precision | `static_cast<float>(pr.worldE - st.worldDocumentOriginX)` still runs with the origin at 0 |
+| 05 — SELECTSIMILAR | still absent from the command registry |
+| 08 — surface skips | still unreported |
+
+### JOIN's elevation half is now upstream's, and this branch yields to it
+
+Issue **#373** gave `ExecuteJoinSelection`'s `Edge` its own `z0`/`z1` and carried Z through the
+cluster representatives, which is what this task's JOIN change did. Upstream's version is the one
+kept: it also carries REQ-316/ADR-047 bulges and REQ-325/ADR-053 tilted-arc planes, which this
+branch predates and knows nothing about. Six of the eleven rebase conflicts were that overlap, and
+all six were resolved in upstream's favour. **This branch no longer changes JOIN's elevation
+handling at all** — only its space guard (issue 02) and its surface-skip message (issue 08).
+
+### Three adaptations the eleven days made necessary
+
+1. **ADR-054 (REQ-101 ±0.002 ft) landed underneath this work**, widening the coordinate stores to
+   `double` in five PRs (#446, #448, #449, #451, #454). Three of this branch's records read from
+   those stores into `float` fields and became ill-formed narrowing conversions. Each is now an
+   explicit `static_cast` with the reason written at the declaration (`PolyVert`, and the
+   `EXPECT VERTEX` oracle's collection) rather than a silent one: both sit downstream of interfaces
+   that are still `float`-in — `readVert`, `CadCoord::WorldFromLocal` — so widening the record alone
+   would move the narrowing one line down and buy nothing. **Widening those paths is ADR-054's own
+   audit to make, not this fix's.**
+2. **Issue #264 Stage 1 retired the standalone `.gs` document format** while this was parked.
+   `regression-issue08` opened `samples/surface-demo.gs`; it now opens the `.dwg` every other surface
+   transcript uses.
+3. **`QUICKSELECT` gained `BlockRef` support upstream** (three sites) after this branch moved
+   `ExecuteQuickSelect` from `CadUi.cpp` to the command layer. The relocated copy carries those
+   three additions forward; the move would otherwise have silently reverted them.
+
+### Verification after the rebase
+
+- Clean release build, MSVC/Ninja. Two orphaned locals in `ApplyBreakToOpenPolyline` (`v0`, `v1`,
+  unused once the helper reads through `PolylineVertsOf`) removed rather than left warning.
+- **ctest 1367/1367 green** — up from 743/743 when the task was written, so the suite this now
+  passes is nearly twice the one it was verified against.
+- **Issue 03 re-proven to bite** on current `beta`, not merely asserted: disabling the pre-scan and
+  rebuilding turns `regression-issue03` red on a *value* difference, and the round trip comes back
+  wrong on four of five points —
+
+  | point | column | in the file | without the fix | lost |
+  |---|---|---|---|---|
+  | 446 | E | 2385261.0250 | 2385261.0000 | 0.025 ft |
+  | 447 | E | 2385330.8350 | 2385330.7500 | 0.085 ft |
+  | 448 | E | 2385331.1420 | 2385331.2500 | **0.108 ft** |
+  | 449 | E | 2385261.3320 | 2385261.2500 | 0.082 ft |
+
+  Worth restating against the tolerance that now applies: **0.108 ft is 54× REQ-101's ±0.002 ft.**
+  When this task was written REQ-101 was ±0.01 ft and the same error was 10.8×. ADR-054 did not
+  make this finding stale — it made it five times worse.
+- The `.gitattributes` `eol=lf` pin (the branch's second commit) proved itself during the rebase for
+  the second time and for the same reason: the fixture was already in the working tree as CRLF, so
+  the attribute did not apply until the file was re-checked-out. `SAMEFILE` failed at byte 9 on a
+  six-byte length difference — one byte per line — which is exactly the failure that commit exists
+  to prevent, and a fresh CI checkout would not have seen it.

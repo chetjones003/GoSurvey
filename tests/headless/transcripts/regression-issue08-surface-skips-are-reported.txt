@@ -9,7 +9,10 @@
 # had no equivalent branch for its neighbour Surface in the same enum. OVERKILL reported skipping
 # nothing of any kind: grep -cE "ignored|excluded|skipped" over its whole body returned 0.
 
-OPEN samples/surface-demo.gs
+# `.dwg`, not the `.gs` this transcript was written against: issue #264 Stage 1 retired the
+# standalone `.gs` document format while this branch was parked, and every surface transcript in the
+# suite now opens the same `.dwg` fixture.
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE Test EG, Existing Ground
 EXPECT SURFACES 1
 
