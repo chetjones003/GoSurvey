@@ -3501,12 +3501,19 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
 
   **(a) Persistent geometry stores hold `double`.** The four flat stores become `std::vector<double>`;
   every scalar coordinate field on an entity (`CadArc`, `CadEllipse`, `CadAnnotation`, block insert
-  points, dimension definition points, feature-line and surface vertices, paper-space geometry in
-  paper inches) becomes `double`. **The interleaved-XYZ layout and every stride are unchanged** —
-  invariant §11.8 governs *layout* (Z inline, never a sidecar), not scalar width, and it is not
-  weakened: a widened store is still one coordinate in one allocation. The three copies of each store
-  (live `AppCommandState`, the undo `DrawingGeometrySnapshot`, the per-tab struct — ADR-025 context)
-  widen together.
+  points, dimension definition points, feature-line and surface vertices) becomes `double`. **The
+  interleaved-XYZ layout and every stride are unchanged** — invariant §11.8 governs *layout* (Z
+  inline, never a sidecar), not scalar width, and it is not weakened: a widened store is still one
+  coordinate in one allocation. The three copies of each store (live `AppCommandState`, the undo
+  `DrawingGeometrySnapshot`, the per-tab struct — ADR-025 context) widen together.
+  *Amended 2026-09-08 (Phase B, #441): **paper-space geometry stays `float`.** Paper stores hold
+  sheet coordinates in paper inches (ADR-009) — a sheet is tens of inches, and `float` resolves
+  ~1e-6 in at that magnitude, orders of magnitude inside REQ-101's ±0.002 ft (≈0.024 in). REQ-101's
+  reason for widening — `float` quantization at survey/state-plane magnitude — does not exist on a
+  sheet, so widening the paper stores would be churn (paper render, snap, edit, `.gs`, clipboard)
+  with no precision gain. `SurveyPoint::easting/northing/elevation` — the reference dataset REQ-101
+  names directly — is a genuine `double` target but a separate, larger change: its own sub-issue,
+  not Phase B.*
 
   **(b) The `float` narrowing happens once, at GPU vertex-buffer assembly.** `ViewportRenderer`'s
   upload path already subtracts the document origin before building the vertex buffer (REQ-101, §11.8);

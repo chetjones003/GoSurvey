@@ -178,20 +178,20 @@ void NoteSkip(std::unordered_map<std::string, int>* hist, const char* name) {
 
 void LocalLine(AppCommandState& st, double x0, double y0, double z0, double x1, double y1, double z1,
                const EntityAttributes& at) {
-  st.userLinesFlat.push_back(static_cast<float>(x0 - st.worldDocumentOriginX));
-  st.userLinesFlat.push_back(static_cast<float>(y0 - st.worldDocumentOriginY));
-  st.userLinesFlat.push_back(static_cast<float>(z0));
-  st.userLinesFlat.push_back(static_cast<float>(x1 - st.worldDocumentOriginX));
-  st.userLinesFlat.push_back(static_cast<float>(y1 - st.worldDocumentOriginY));
-  st.userLinesFlat.push_back(static_cast<float>(z1));
+  st.userLinesFlat.push_back(x0 - st.worldDocumentOriginX);
+  st.userLinesFlat.push_back(y0 - st.worldDocumentOriginY);
+  st.userLinesFlat.push_back(z0);
+  st.userLinesFlat.push_back(x1 - st.worldDocumentOriginX);
+  st.userLinesFlat.push_back(y1 - st.worldDocumentOriginY);
+  st.userLinesFlat.push_back(z1);
   st.userLineAttrs.push_back(at);
 }
 
 void LocalCircle(AppCommandState& st, double cx, double cy, double r, double z, const EntityAttributes& at) {
-  st.userCirclesCxCyZR.push_back(static_cast<float>(cx - st.worldDocumentOriginX));
-  st.userCirclesCxCyZR.push_back(static_cast<float>(cy - st.worldDocumentOriginY));
-  st.userCirclesCxCyZR.push_back(static_cast<float>(z));
-  st.userCirclesCxCyZR.push_back(static_cast<float>(r));
+  st.userCirclesCxCyZR.push_back(cx - st.worldDocumentOriginX);
+  st.userCirclesCxCyZR.push_back(cy - st.worldDocumentOriginY);
+  st.userCirclesCxCyZR.push_back(z);
+  st.userCirclesCxCyZR.push_back(r);
   st.userCircleAttrs.push_back(at);
   PushCircleNormal(st.userCircleNormals);   // REQ-312: DWG extrusion not yet read
 }
@@ -207,8 +207,8 @@ void ArcFromAngles(double a0, double a1, T* startRad, T* sweepRad) {
     sweep -= 2.0 * kPi;
   if (sweep < 1e-12)
     sweep = 2.0 * kPi;
-  *startRad = static_cast<float>(a0);
-  *sweepRad = static_cast<float>(sweep);
+  *startRad = static_cast<T>(a0);
+  *sweepRad = static_cast<T>(sweep);
 }
 
 void LocalArc(AppCommandState& st, double cx, double cy, double r, double a0, double a1, double z,
@@ -216,11 +216,11 @@ void LocalArc(AppCommandState& st, double cx, double cy, double r, double a0, do
   if (r <= 1e-12)
     return;
   CadArc arc{};
-  arc.cx = static_cast<float>(cx - st.worldDocumentOriginX);
-  arc.cy = static_cast<float>(cy - st.worldDocumentOriginY);
-  arc.r = static_cast<float>(r);
+  arc.cx = cx - st.worldDocumentOriginX;
+  arc.cy = cy - st.worldDocumentOriginY;
+  arc.r = r;
   ArcFromAngles(a0, a1, &arc.startRad, &arc.sweepRad);
-  arc.z = static_cast<float>(z);
+  arc.z = z;
   st.userArcs.push_back(arc);
   st.userArcAttrs.push_back(at);
 }
@@ -237,9 +237,9 @@ void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool clo
   if (st.userPolylineOffsets.empty())
     st.userPolylineOffsets.push_back(base);
   for (size_t i = 0; i < nv; ++i) {
-    st.userPolylineVerts.push_back(static_cast<float>(xyz[i * 3 + 0] - st.worldDocumentOriginX));
-    st.userPolylineVerts.push_back(static_cast<float>(xyz[i * 3 + 1] - st.worldDocumentOriginY));
-    st.userPolylineVerts.push_back(static_cast<float>(xyz[i * 3 + 2]));
+    st.userPolylineVerts.push_back(xyz[i * 3 + 0] - st.worldDocumentOriginX);
+    st.userPolylineVerts.push_back(xyz[i * 3 + 1] - st.worldDocumentOriginY);
+    st.userPolylineVerts.push_back(xyz[i * 3 + 2]);
   }
   st.userPolylineOffsets.push_back(base + static_cast<int>(nv));
   st.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
@@ -263,9 +263,9 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
                const std::string& text, CadAnnotation::Kind kind, const EntityAttributes& at) {
   CadAnnotation a{};
   a.kind = kind;
-  a.insX = static_cast<float>(x - st.worldDocumentOriginX);
-  a.insY = static_cast<float>(y - st.worldDocumentOriginY);
-  a.insZ = static_cast<float>(z);
+  a.insX = x - st.worldDocumentOriginX;
+  a.insY = y - st.worldDocumentOriginY;
+  a.insZ = z;
   const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
   a.plottedHeightInches = static_cast<float>(height / mup);
   a.rotationRad = static_cast<float>(rotRad);
@@ -397,12 +397,12 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     double cx = 0, cy = 0;
     xf.apply(e->center.x, e->center.y, &cx, &cy);
     CadEllipse el{};
-    el.cx = static_cast<float>(cx - st.worldDocumentOriginX);
-    el.cy = static_cast<float>(cy - st.worldDocumentOriginY);
-    el.majVx = static_cast<float>(e->sm_axis.x * xf.sx);
-    el.majVy = static_cast<float>(e->sm_axis.y * xf.sy);
-    el.ratio = static_cast<float>(e->axis_ratio);
-    el.z = static_cast<float>(e->center.z);
+    el.cx = cx - st.worldDocumentOriginX;
+    el.cy = cy - st.worldDocumentOriginY;
+    el.majVx = e->sm_axis.x * xf.sx;
+    el.majVy = e->sm_axis.y * xf.sy;
+    el.ratio = e->axis_ratio;
+    el.z = e->center.z;
     st.userEllipses.push_back(el);
     st.userEllAttrs.push_back(at);
     return;

@@ -446,8 +446,11 @@ struct CadArc {
   double cx = 0.0;
   double cy = 0.0;
   double r = 0.0;
-  double startRad = 0.0;
-  double sweepRad = 0.0;
+  /// Angles stay `float` (REQ-101 governs *coordinates*; an arc's endpoint error is r·Δθ, and a
+  /// `float` radian ≈ 1e-7 rad keeps that well inside ±0.002 ft at any realistic radius). Keeping
+  /// them `float` also preserves the DXF writer's byte-stable angle round-trip (issue #111).
+  float startRad = 0.f;
+  float sweepRad = 0.f;
   /// Elevation of the arc plane (REQ-057 / ADR-025). Absolute (ADR-025 D2), always 0 in paper
   /// space (ADR-025 (g)). On a tilted arc this is the CENTRE point of the plane, not an
   /// elevation every point on the arc shares.
@@ -724,9 +727,11 @@ inline void CurveEndpointsWorld(const CadArc& a, ray3d::Vec3* outStart, ray3d::V
 struct CadEllipse {
   double cx = 0.0;
   double cy = 0.0;
-  double majVx = 1.0;
-  double majVy = 0.0;
-  double ratio = 0.5;
+  /// Major-axis vector and ratio stay `float` — a direction and a shape ratio, not coordinates
+  /// (see \ref CadArc angle note). Keeps the DXF ellipse round-trip byte-stable (issue #113).
+  float majVx = 1.f;
+  float majVy = 0.f;
+  float ratio = 0.5f;
   /// Elevation of the ellipse's plane (REQ-057 / ADR-025) — parallel to XY, absolute
   /// (ADR-025 D2), always 0 in paper space (ADR-025 (g)). Same rationale as \ref CadArc::z.
   double z = 0.0;
