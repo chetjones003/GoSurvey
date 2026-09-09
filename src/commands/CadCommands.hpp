@@ -4731,6 +4731,10 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
 
+/// REQ-335 — SECTION: the cross-section of every selected solid by the active UCS plane, drawn as a
+/// closed polyline. Non-destructive: the solids are left exactly as they were.
+void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log);
+
 /// EXTRUDE (REQ-314 / ADR-046, GitHub issue #147): turn each eligible entity in the current
 /// selection — a closed polyline or a circle — into a B-rep solid, swept a signed height
 /// perpendicular to the profile's plane. One undo step; the source entities are left in place.

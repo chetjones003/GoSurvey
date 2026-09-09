@@ -5733,6 +5733,16 @@ TEST_CASE("A general trim loop's hole is excluded from a planar face's tessellat
 }
 
 // ================================================================================================
+// Section — the cross-section of a solid by a plane, without cutting it (REQ-335, TASK-238)
+// — GitHub #149 acceptance 5.
+//
+// The acceptance criterion has two halves, "produces correct section geometry" and "does not modify
+// the model", and both have oracles that need no recorded output:
+//
+//   - the section of a known solid by a known plane has a closed-form area and vertex count;
+//   - the input solid must be byte-identical afterwards, which is asserted directly rather than
+//     inferred from the signature.
+//
 // The centroid (REQ-334 / ADR-055, TASK-237) — GitHub #149 acceptance 4.
 //
 // Every figure below is a closed form, never a recorded output. Two properties of the integrand
@@ -5749,6 +5759,61 @@ TEST_CASE("A general trim loop's hole is excluded from a planar face's tessellat
 
 namespace {
 
+/// Area enclosed by a section Path, by the shoelace formula plus each arc's circular segment.
+/// Positive means counter-clockwise about the plane normal, which \ref brep::SectionLoop promises.
+double SectionArea(const brep::Path& p) {
+  std::vector<ucs::Point2D> pts;
+  pts.push_back(p.start);
+  for (const brep::PathSeg& s : p.segs)
+    pts.push_back(s.end);
+  if (pts.size() > 1)
+    pts.pop_back();  // a closed path's last segment returns to `start`
+
+  double a = 0.0;
+  for (std::size_t i = 0; i < pts.size(); ++i) {
+    const ucs::Point2D& A = pts[i];
+    const ucs::Point2D& B = pts[(i + 1) % pts.size()];
+    a += A.x * B.y - B.x * A.y;
+  }
+  a *= 0.5;
+
+  // Each arc adds (or removes) the circular segment between its chord and the arc itself.
+  for (std::size_t i = 0; i < p.segs.size(); ++i) {
+    const double sweep = p.segs[i].sweep;
+    if (sweep == 0.0)
+      continue;
+    const ucs::Point2D A = (i == 0) ? p.start : p.segs[i - 1].end;
+    const ucs::Point2D B = p.segs[i].end;
+    const double chord = std::hypot(B.x - A.x, B.y - A.y);
+    const double half = 0.5 * std::fabs(sweep);
+    if (!(std::sin(half) > 1e-12))
+      continue;
+    const double r = 0.5 * chord / std::sin(half);
+    // Signed: a CCW (positive) sweep bulges outward and adds area.
+    a += 0.5 * r * r * (sweep - std::sin(sweep));
+  }
+  return a;
+}
+
+/// Byte-for-byte equality of the parts of a solid a section could plausibly disturb.
+bool SameGeometry(const Solid& a, const Solid& b) {
+  if (a.vertices.size() != b.vertices.size() || a.edges.size() != b.edges.size() ||
+      a.faces.size() != b.faces.size() || a.shells.size() != b.shells.size())
+    return false;
+  for (std::size_t i = 0; i < a.vertices.size(); ++i) {
+    if (a.vertices[i].p.x != b.vertices[i].p.x || a.vertices[i].p.y != b.vertices[i].p.y ||
+        a.vertices[i].p.z != b.vertices[i].p.z)
+      return false;
+  }
+  for (std::size_t i = 0; i < a.edges.size(); ++i) {
+    if (a.edges[i].kind != b.edges[i].kind || a.edges[i].v0 != b.edges[i].v0 ||
+        a.edges[i].v1 != b.edges[i].v1 || a.edges[i].sweep != b.edges[i].sweep ||
+        a.edges[i].radius != b.edges[i].radius)
+      return false;
+  }
+  return true;
+}
+
 /// The analytic centroid of each primitive, in its own frame's axes, so the same expectations can
 /// be re-used on a translated or tilted placement.
 Vec3 InFrame(const ucs::Ucs& f, double a, double b, double c) {
@@ -5764,6 +5829,181 @@ double CentroidError(const Solid& s, const Vec3& want) {
 }
 
 } // namespace
+
+TEST_CASE("A box's section is its rectangle, and the solid is untouched", "[brep][req335][req149]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &s, &why));
+  const Solid before = s;
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, Vec3{0, 0, 6}, Vec3{0, 0, 1}, &plane, &loop, &why));
+
+  CHECK(loop.closed);
+  CHECK(loop.segs.size() == 4);
+  for (const brep::PathSeg& sg : loop.segs)
+    CHECK(sg.sweep == 0.0);  // a box cuts along straight edges only
+  // 30 x 20, and POSITIVE because the loop is promised counter-clockwise about the plane normal.
+  CHECK(SectionArea(loop) == Approx(600.0).epsilon(1e-12));
+
+  // "does not modify the model" — asserted, not inferred from the const reference.
+  CHECK(SameGeometry(before, s));
+}
+
+TEST_CASE("An oblique section of a box is larger than the perpendicular one, by exactly 1/cos",
+          "[brep][req335][req149]") {
+  // The section of a prism by a plane tilted through theta has area A/cos(theta). That is a closed
+  // form rather than a recorded number, and it is the check that the loop is measured IN ITS OWN
+  // PLANE rather than projected back to the horizontal -- a projection would return 600 here.
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &s, &why));
+
+  const Vec3 n{0.0, 0.2, 1.0};
+  const double cosTheta = 1.0 / std::sqrt(0.2 * 0.2 + 1.0);
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, Vec3{0, 0, 6}, n, &plane, &loop, &why));
+  CHECK(SectionArea(loop) == Approx(600.0 / cosTheta).epsilon(1e-9));
+}
+
+TEST_CASE("A cylinder's perpendicular section is its circle, as two arcs", "[brep][req335][req149]") {
+  // The case that decides this increment's shape: a cylinder cut square across meets the plane along
+  // ARCS, which a Path carries as sweeps and a polyline as bulges. Nothing is approximated.
+  const double r = 8.0;
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeCylinder(World(), r, 25, &s, &why));
+  const Solid before = s;
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, Vec3{0, 0, 12}, Vec3{0, 0, 1}, &plane, &loop, &why));
+
+  REQUIRE(loop.segs.size() == 2);  // split at the seam
+  for (const brep::PathSeg& sg : loop.segs)
+    CHECK(sg.sweep != 0.0);
+  // The two sweeps together are a full turn, counter-clockwise.
+  double total = 0.0;
+  for (const brep::PathSeg& sg : loop.segs)
+    total += sg.sweep;
+  CHECK(total == Approx(2.0 * kPi).epsilon(1e-12));
+  CHECK(SectionArea(loop) == Approx(kPi * r * r).epsilon(1e-9));
+  CHECK(SameGeometry(before, s));
+}
+
+TEST_CASE("A cone's perpendicular section is the circle at that height", "[brep][req335][req149]") {
+  // r(z) = r0 * (1 - z/h) for a cone. Cutting at half height must give a quarter of the base area,
+  // which no recorded output could have told us.
+  const double r0 = 9.0, h = 20.0;
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeCone(World(), r0, 0.0, h, &s, &why));
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, Vec3{0, 0, h * 0.5}, Vec3{0, 0, 1}, &plane, &loop, &why));
+  const double rHalf = r0 * 0.5;
+  CHECK(SectionArea(loop) == Approx(kPi * rHalf * rHalf).epsilon(1e-9));
+}
+
+TEST_CASE("A section is taken in the plane the caller asked for, not the one the cut face carries",
+          "[brep][req335][req149]") {
+  // The returned frame's origin and Z must be the caller's, so that the 2D coordinates mean what
+  // the caller expects. The cut face's own frame is anti-parallel on the 'above' piece, and a
+  // section built from it would come back wound the wrong way and offset.
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &s, &why));
+
+  const Vec3 p{0, 0, 6};
+  const Vec3 n = ray3d::Normalize(Vec3{0.3, 0.2, 1.0});
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, p, n, &plane, &loop, &why));
+
+  CHECK(plane.origin.x == Approx(p.x).margin(1e-12));
+  CHECK(plane.origin.y == Approx(p.y).margin(1e-12));
+  CHECK(plane.origin.z == Approx(p.z).margin(1e-12));
+  CHECK(ray3d::Dot(plane.zAxis, n) == Approx(1.0).epsilon(1e-12));
+  CHECK(SectionArea(loop) > 0.0);  // counter-clockwise about the caller's normal
+
+  // Every section vertex lies ON the plane, which is the property the 2D coordinates encode.
+  for (const brep::PathSeg& sg : loop.segs) {
+    const Vec3 w = ucs::PlaneToWorld(plane, sg.end);
+    CHECK(std::fabs(ray3d::Dot(ray3d::Sub(w, p), n)) < 1e-9);
+  }
+}
+
+TEST_CASE("An oblique cut of a cylinder is refused by name rather than approximated",
+          "[brep][req335][req149][req201]") {
+  // It meets the wall along an ELLIPSE, which a Path of lines and arcs cannot carry. Returning a
+  // near-circle, or the chord polygon, would be a section that is quietly the wrong shape -- the
+  // failure REQ-201 exists to prevent. Increment 2's work.
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeCylinder(World(), 8, 25, &s, &why));
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  why = Problem::Ok;
+  CHECK_FALSE(brep::SectionLoop(s, Vec3{0, 0, 12}, Vec3{0.3, 0.0, 1.0}, &plane, &loop, &why));
+  CHECK(why != Problem::Ok);
+}
+
+TEST_CASE("A section inherits Slice's accepted set, with Slice's own reason",
+          "[brep][req335][req149][req201]") {
+  // A sphere is refused by Slice today, so it is refused here -- and by the SAME Problem, not a
+  // second reason invented alongside it. If Slice's accepted set grows, this grows with it.
+  Problem why = Problem::Ok;
+  Solid sphere;
+  REQUIRE(brep::MakeSphere(World(), 15, &sphere, &why));
+
+  Solid a, b;
+  Problem sliceWhy = Problem::Ok;
+  const bool sliced = brep::Slice(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b,
+                                  &sliceWhy);
+  REQUIRE_FALSE(sliced);  // the premise of this test
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  Problem sectionWhy = Problem::Ok;
+  CHECK_FALSE(brep::SectionLoop(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &sectionWhy));
+  CHECK(sectionWhy == sliceWhy);
+}
+
+TEST_CASE("A plane that misses the solid reports that, and a degenerate normal is refused",
+          "[brep][req335][req149][req201]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &s, &why));
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  why = Problem::Ok;
+  CHECK_FALSE(brep::SectionLoop(s, Vec3{0, 0, 500}, Vec3{0, 0, 1}, &plane, &loop, &why));
+  CHECK(why != Problem::Ok);
+
+  why = Problem::Ok;
+  CHECK_FALSE(brep::SectionLoop(s, Vec3{0, 0, 6}, Vec3{0, 0, 0}, &plane, &loop, &why));
+  CHECK(why == Problem::SliceDegeneratePlane);
+}
+
+TEST_CASE("A section holds at survey coordinate magnitudes", "[brep][req335][req149][req101]") {
+  // The same rectangle, 2.2e6 ft east. The section's own 2D coordinates are measured from the plane
+  // origin, so they stay at model scale however far out the solid is.
+  Problem why = Problem::Ok;
+  Solid s;
+  const ucs::Ucs at = At(2196000.0, 1400000.0, 1035.0);
+  REQUIRE(brep::MakeBox(at, 30, 20, 12, &s, &why));
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, ray3d::Add(at.origin, Vec3{0, 0, 6}), Vec3{0, 0, 1}, &plane, &loop, &why));
+  CHECK(loop.segs.size() == 4);
+  CHECK(SectionArea(loop) == Approx(600.0).epsilon(1e-9));
+}
 
 TEST_CASE("Every primitive's centroid matches its closed form", "[brep][req334][req149]") {
   Problem why = Problem::Ok;

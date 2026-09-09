@@ -1,0 +1,89 @@
+# REQ-335 (D-2026-09-09-i, TASK-238) — SECTION: the cross-section of a solid, without cutting it.
+#
+# GitHub #149 (3D Phase 6 — Analysis) acceptance 5: "Sectioning produces correct section geometry
+# and does not modify the model."
+#
+# The second half is the one worth driving end to end, because it is the half a kernel unit test
+# argues rather than demonstrates: `SectionLoop` takes its solid by const reference, so it CANNOT
+# modify it — but the COMMAND could, by cutting and re-storing, or by leaving the section's pieces
+# behind. This transcript asserts the document's own counts before and after.
+#
+# The section plane is the ACTIVE UCS's (D-2026-09-09-i). Rather than move the UCS in Z — typed
+# coordinate entry is two-dimensional outside 3DPOLY, so `0,0,6` would silently drop its Z — the box
+# is drawn so the WORLD XY plane already passes through its middle. ELEV is how a transcript sets
+# the height a solid is built at.
+
+NEW
+
+# --- a box sectioned by a rotated UCS plane ------------------------------------------------------
+#
+# The box spans x -15..15, y -10..10, z 0..12. Rotating the UCS 90 degrees about X turns its XY
+# plane into the world XZ plane through the origin, which passes straight through the middle of the
+# box in y -- so the section is a 30 x 12 rectangle. Rotating the UCS rather than translating it in
+# Z is deliberate: typed coordinate entry is 2D outside 3DPOLY, so a "0,0,6" origin would silently
+# drop its Z, and this way the section plane is a NON-WORLD one, which is the more interesting case.
+
+CMD BOX 0,0 30 20 12
+
+EXPECT SOLIDS 1
+EXPECT POLYLINES 0
+
+CMD UCS
+CMD X
+CMD 90
+
+BOX -40 -40 40 40
+EXPECT SELECTED 1
+CMD SECTION
+
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+
+# ONE closed polyline, and the solid is still there and still one solid.
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- it inspects rather than cuts ----------------------------------------------------------------
+#
+# The distinction from SLICE, asserted rather than described: after SLICE the drawing holds two
+# solids and the original is gone. After SECTION it holds the one it started with. Undo returns the
+# drawing to exactly the state before it, which also proves the whole command was ONE undo step
+# rather than one per polyline vertex.
+
+CMD UNDO
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CHECK ALL
+
+CMD REDO
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- a refused section leaves nothing behind -----------------------------------------------------
+#
+# A sphere is one of the two solids `Slice` declines today, and SECTION inherits that accepted set
+# rather than restating it — so this also pins that the refusal arrives with the KERNEL's reason,
+# not a second one invented in the command layer. Drawn well clear of the box so the selection box
+# below catches the sphere alone.
+#
+# Nothing half-drawn, no empty polyline, and the counts are unchanged (REQ-201).
+
+# Back to the world UCS first: the sphere is placed and box-selected in plan, and the rotated UCS
+# above would put both somewhere else entirely.
+CMD UCS
+CMD W
+
+CMD SPHERE 200,200 10
+
+EXPECT SOLIDS 2
+
+BOX 180 180 220 220
+EXPECT SELECTED 1
+CMD SECTION
+
+EXPECT LOG "SECTION — This release slices solids with flat faces only (a box or a straight extrusion)."
+
+EXPECT POLYLINES 1
+EXPECT SOLIDS 2
+CHECK ALL

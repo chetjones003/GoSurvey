@@ -7115,6 +7115,113 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
 }
 
 // ---------------------------------------------------------------------------------------------
+// Section — the cross-section of a solid by a plane, without cutting it (REQ-335, GitHub #149
+// acceptance 5).
+// ---------------------------------------------------------------------------------------------
+
+bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                 ucs::Ucs* outPlane, Path* outLoop, Problem* outWhy) {
+  const auto fail = [&](Problem p) {
+    if (outWhy)
+      *outWhy = p;
+    return false;
+  };
+  if (!outPlane || !outLoop)
+    return fail(Problem::IndexOutOfRange);
+
+  ucs::Ucs frame{};
+  if (!ucs::FromNormal(planePoint, planeNormal, &frame))
+    return fail(Problem::SliceDegeneratePlane);
+
+  // The cut itself is \ref Slice's, unchanged and un-extended: sectioning is the same geometry
+  // question asked without keeping the answer, so it inherits Slice's accepted set exactly (planar
+  // solids and cylinder/cone walls today; a sphere or torus is refused there and therefore here,
+  // by Slice's own reason rather than a second one invented alongside it).
+  //
+  // Non-destructiveness is not a property this has to implement. `Slice` takes its input by const
+  // reference and writes to out-parameters, so the source solid is untouched by construction, and
+  // the two pieces are simply dropped when this returns.
+  Solid above, below;
+  Problem why = Problem::Ok;
+  if (!Slice(solid, planePoint, planeNormal, SliceKeep::Both, &above, &below, &why))
+    return fail(why);
+
+  // The section is the face of the ABOVE piece that lies ON the cut plane. Taking it from the
+  // result rather than intersecting the faces by hand is the whole reason this is cheap: Slice has
+  // already done the classification, the ordering and the seam handling.
+  const Face* cut = nullptr;
+  for (const Face& f : above.faces) {
+    if (f.surface.kind != SurfaceKind::Plane)
+      continue;
+    if (std::fabs(std::fabs(ray3d::Dot(f.surface.frame.zAxis, frame.zAxis)) - 1.0) > 1e-9)
+      continue;
+    if (std::fabs(ray3d::Dot(ray3d::Sub(f.surface.frame.origin, planePoint), frame.zAxis)) > 1e-9)
+      continue;
+    if (cut)
+      return fail(Problem::SliceResultComplex);  // more than one face on the plane
+    cut = &f;
+  }
+  if (!cut)
+    return fail(Problem::SlicePlaneMissesSolid);
+  if (cut->loops.size() != 1)
+    return fail(Problem::SliceResultComplex);  // a section with holes is increment 2
+
+  // Every edge must be expressible as a straight or circular segment, because that is what a
+  // \ref Path is. An `Ellipse` — what an OBLIQUE cut of a cylinder produces — and an `Intersection`
+  // curve are refused BY NAME rather than approximated by a chord or a nearby arc: a section is a
+  // measured figure, and one that is quietly the wrong shape is the failure REQ-201 exists to stop.
+  const std::vector<EdgeUse>& uses = cut->loops.front().uses;
+  if (uses.size() < 2)
+    return fail(Problem::SliceResultComplex);
+  for (const EdgeUse& u : uses) {
+    const CurveKind k = above.edges[static_cast<std::size_t>(u.edge)].kind;
+    if (k != CurveKind::Line && k != CurveKind::Arc)
+      return fail(Problem::SliceCurvedFace);
+  }
+
+  // The `above` piece's cut face looks DOWN — its outward normal points away from the material
+  // above it, so it is anti-parallel to the section normal. Its loop therefore winds clockwise
+  // about `frame.zAxis`, and is reversed here so the Path a caller receives always winds CCW about
+  // the plane normal it asked for, whichever side the geometry happened to come from.
+  const bool flip = ray3d::Dot(cut->surface.frame.zAxis, frame.zAxis) < 0.0;
+
+  const std::size_t n = uses.size();
+  std::vector<const EdgeUse*> order;
+  order.reserve(n);
+  for (std::size_t i = 0; i < n; ++i)
+    order.push_back(&uses[flip ? (n - 1 - i) : i]);
+
+  Path path;
+  path.closed = true;
+  path.segs.clear();
+  for (std::size_t i = 0; i < n; ++i) {
+    const EdgeUse& u = *order[i];
+    const Edge& e = above.edges[static_cast<std::size_t>(u.edge)];
+    // Reversing the loop's ORDER also reverses each edge's own direction of travel.
+    const bool rev = flip ? !u.reversed : u.reversed;
+    const Vec3 aW = above.vertices[static_cast<std::size_t>(rev ? e.v1 : e.v0)].p;
+    const Vec3 bW = above.vertices[static_cast<std::size_t>(rev ? e.v0 : e.v1)].p;
+    if (i == 0)
+      path.start = ucs::WorldToPlane(frame, aW);
+
+    PathSeg seg;
+    seg.end = ucs::WorldToPlane(frame, bW);
+    if (e.kind == CurveKind::Arc) {
+      // `PathSeg::sweep` is signed CCW about the PATH frame's +Z; `Edge::sweep` is signed about the
+      // EDGE frame's own +Z. Two independent sign flips: whether the arc's normal agrees with the
+      // section plane's, and whether this traversal runs the edge backwards.
+      const double align = ray3d::Dot(e.frame.zAxis, frame.zAxis) < 0.0 ? -1.0 : 1.0;
+      seg.sweep = e.sweep * align * (rev ? -1.0 : 1.0);
+    }
+    path.segs.push_back(seg);
+  }
+
+  *outPlane = frame;
+  *outLoop = std::move(path);
+  return true;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Feature operations — Booleans, the B1 subset (REQ-314 / ADR-046, GitHub issue #147).
 //
 // B1 combines CONVEX, planar-faced solids. Every face of A is split by B's face planes into
