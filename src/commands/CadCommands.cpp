@@ -12457,7 +12457,7 @@ static void HandleOffsetViewportPick(AppCommandState& st, float wx, float wy, st
 // Returns true when the bearing-pick state fully consumed the click (caller must return).
 // When false, the caller should call SubmitLineVertex / SubmitPolylineVertex with the
 // (possibly angle-locked or ortho-clamped) wx/wy.
-static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, float& wx, float& wy,
+static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, double& wx, double& wy,
                                                 bool inNextPtPhase, std::vector<std::string>& log) {
   using SAP = AppCommandState::SegmentAnglePickPhase;
   if (!inNextPtPhase) return false;
@@ -12486,9 +12486,15 @@ static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, float& wx, 
     log.push_back("Bearing pick — press Enter to lock (or type +90 / -45); viewport click ignored in this step.");
     return true;
   }
-  if (st.segmentAngleLockActive)
-    ApplySegmentAngleLockToWorldPick(st.anchorX, st.anchorY, st.segmentLockUx, st.segmentLockUy, &wx, &wy, false);
-  else {
+  if (st.segmentAngleLockActive) {
+    // These constraint helpers work in `float` (an axis/ray-locked pick is a computed, pixel-bounded
+    // point — REQ-101 scopes picks out of ±0.002 ft — and object snap, the bit-identical path, is
+    // mutually exclusive with an active angle lock). Narrow across the call and back.
+    float lwx = static_cast<float>(wx), lwy = static_cast<float>(wy);
+    ApplySegmentAngleLockToWorldPick(st.anchorX, st.anchorY, st.segmentLockUx, st.segmentLockUy, &lwx, &lwy, false);
+    wx = lwx;
+    wy = lwy;
+  } else {
     // no-op when ORTHO off (REQ-047); anchorZ/the cursor's resolved Z are passed so a tilted or
     // edge-on UCS plane constrains correctly (issue #371) instead of guessing Z from x,y.
     //
@@ -12497,14 +12503,17 @@ static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, float& wx, 
     // CadCommitElevation() reads resolvedPointZ for the vertex this pick is about to commit. Without
     // updating it here, the commit would read the cursor's raw (unlocked) elevation and the geometry
     // would land off the ORTHO line wx/wy just reported.
-    ApplyOrthoConstrainFromAnchor(st, st.anchorX, st.anchorY, &wx, &wy, st.orthoMode, st.anchorZ, st.resolvedPointZ,
-                                  &st.resolvedPointZ);
+    float owx = static_cast<float>(wx), owy = static_cast<float>(wy);
+    ApplyOrthoConstrainFromAnchor(st, st.anchorX, st.anchorY, &owx, &owy, st.orthoMode, st.anchorZ,
+                                  st.resolvedPointZ, &st.resolvedPointZ);
+    wx = owx;
+    wy = owy;
     st.resolvedPointZValid = true;
   }
   return false;
 }
 
-void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
+void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vector<std::string>& log,
                              bool windowSelectionSubtract, bool fenceLeftToRightWindowMode,
                              const ray3d::Ray* pickRay) {
   using K = AppCommandState::Kind;
@@ -12545,10 +12554,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       if (CadWorkPlaneIsWorldXy(st)) {
         // Plain world XY, not camera-projected — REQ-103 STRETCH's stated simplification; entity
         // CANDIDACY above still goes through ComputeSelectionFromRect's own camera-aware test.
-        st.stretchRectMnX = std::min(st.selBoxAnchorX, wx);
-        st.stretchRectMxX = std::max(st.selBoxAnchorX, wx);
-        st.stretchRectMnY = std::min(st.selBoxAnchorY, wy);
-        st.stretchRectMxY = std::max(st.selBoxAnchorY, wy);
+        st.stretchRectMnX = std::min<double>(st.selBoxAnchorX, wx);
+        st.stretchRectMxX = std::max<double>(st.selBoxAnchorX, wx);
+        st.stretchRectMnY = std::min<double>(st.selBoxAnchorY, wy);
+        st.stretchRectMxY = std::max<double>(st.selBoxAnchorY, wy);
         st.stretchRectInUcsPlane = false;
       } else {
         // REQ-329 increment 4: the crossing box is drawn ON the active work plane, so store it in
@@ -13099,10 +13108,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 
   if (st.active == K::Zoom) {
     if (st.selBoxWaitingSecond) {
-      st.pendingZoomMnX = std::min(st.selBoxAnchorX, wx);
-      st.pendingZoomMxX = std::max(st.selBoxAnchorX, wx);
-      st.pendingZoomMnY = std::min(st.selBoxAnchorY, wy);
-      st.pendingZoomMxY = std::max(st.selBoxAnchorY, wy);
+      st.pendingZoomMnX = std::min<double>(st.selBoxAnchorX, wx);
+      st.pendingZoomMxX = std::max<double>(st.selBoxAnchorX, wx);
+      st.pendingZoomMnY = std::min<double>(st.selBoxAnchorY, wy);
+      st.pendingZoomMxY = std::max<double>(st.selBoxAnchorY, wy);
       st.selBoxWaitingSecond = false;
       st.pendingZoomWindow = true;
       st.active = K::None;
@@ -32386,7 +32395,7 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
 // names appear hundreds of times across the pick handlers, and renaming them would bury this
 // two-line clarification in an unreviewable diff. The space is stated here, at the entry point, which
 // is where a caller looks.
-void SubmitViewportPick(AppCommandState& st, float localX, float localY, std::vector<std::string>& log,
+void SubmitViewportPick(AppCommandState& st, double localX, double localY, std::vector<std::string>& log,
                          bool windowSelectionSubtract, bool fenceLeftToRightWindowMode,
                          const ray3d::Ray* pickRay) {
   ClearPendingOneShotObjectSnap(st);

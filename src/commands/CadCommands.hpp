@@ -1693,14 +1693,15 @@ struct AppCommandState {
   /// the `local-storage` invariant exists to catch (a world value stored without subtracting the
   /// origin lands the geometry a full origin away). `CadSnap::Hit` carries stored coordinates
   /// straight out of `userLinesFlat` and friends, so a snapped pick is bit-identical to the vertex it
-  /// snapped to — which is also why nothing here needs widening to double.
-  float viewportSnapPickLocalX = 0.f;
-  float viewportSnapPickLocalY = 0.f;
+  /// snapped to — widened to `double` with the stores (ADR-054 Phase C, #442) so that identity holds
+  /// at any drawing magnitude; a `float` copy here broke it above ~10,000 ft local.
+  double viewportSnapPickLocalX = 0.0;
+  double viewportSnapPickLocalY = 0.0;
   /// Elevation of the snapped point. An object snap yields the object's ACTUAL 3D point, so it
   /// overrides the current work-plane elevation — snapping to the end of a line on the datum while
   /// ELEV is 5 must give you that endpoint, not a point 5 above it (AutoCAD-faithful, REQ-058).
   /// Only meaningful while \ref viewportSnapPickValid.
-  float viewportSnapPickLocalZ = 0.f;
+  double viewportSnapPickLocalZ = 0.0;
   /// Command-line log cache for the selectable read-only multiline (rebuilt each frame from \ref log).
   std::vector<char> commandLogCacheBytes;
   size_t commandLogLastSizeForAutoscroll = 0;
@@ -5814,7 +5815,7 @@ float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, floa
 // Threaded through so a RawEntityPick command (FILLET today) can hit-test the TRUE 3D distance from
 // the ray to elevated geometry instead of the click's flattened work-plane intersection, which is
 // nowhere near a line that does not lie on the current work plane.
-void SubmitViewportPick(AppCommandState& st, float localX, float localY, std::vector<std::string>& log,
+void SubmitViewportPick(AppCommandState& st, double localX, double localY, std::vector<std::string>& log,
                         bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
                         const ray3d::Ray* pickRay = nullptr);
 

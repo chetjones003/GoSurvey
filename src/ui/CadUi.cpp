@@ -75,7 +75,7 @@ static void SubmitRibbonCommand(AppCommandState& cmd, std::vector<std::string>& 
   ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, log);
 }
 
-static void UiSubmitViewportPick(AppCommandState& cmd, float x, float y, std::vector<std::string>& log,
+static void UiSubmitViewportPick(AppCommandState& cmd, double x, double y, std::vector<std::string>& log,
                                  bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
                                  const ray3d::Ray* pickRay = nullptr)
 {
@@ -13379,10 +13379,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             BumpCadGpuCache(cmd);
             log.push_back("Grip edit committed.");
           } else if (cmd.active != AppCommandState::Kind::None) {
-            UiSubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log);
+            UiSubmitViewportPick(cmd, curMX, curMY, log);
           } else if (cmd.selBoxWaitingSecond) {
             const bool fenceWindowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;  // L→R window, R→L crossing
-            UiSubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log,
+            UiSubmitViewportPick(cmd, curMX, curMY, log,
                                ImGui::GetIO().KeyShift, fenceWindowMode);
           } else if (TryBeginEntityGripAtLocal(cmd, static_cast<float>(curMX), static_cast<float>(curMY),
                                                gripTolWorld)) {
@@ -14248,8 +14248,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // tests moved into ViewportClickRouteFor with it (TASK-099).
 
     const bool haveSnapPick = outCursorX && outCursorY && cmd.viewportSnapPickValid;
-    const float commitX = haveSnapPick ? cmd.viewportSnapPickLocalX : *outCursorX;
-    const float commitY = haveSnapPick ? cmd.viewportSnapPickLocalY : *outCursorY;
+    const double commitX = haveSnapPick ? cmd.viewportSnapPickLocalX : *outCursorX;
+    const double commitY = haveSnapPick ? cmd.viewportSnapPickLocalY : *outCursorY;
 
     // Mouse -> world for CLICK handling. This is a second, independent conversion from the hover
     // seam above and must branch the same way, or hover highlights an entity that the click then
