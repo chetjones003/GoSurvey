@@ -28,6 +28,14 @@ struct CadGizmoOverlay {
   /// instead of the X handle's red, because it is not X and should not claim to be.
   bool faceMode = false;
 
+  /// Which operation the single handle in `axis[0]` belongs to when there is only one, so the
+  /// renderer can colour it without re-deriving the mode (TASK-232). 0 = translate (the normal
+  /// three-axis case, or the purple face handle), 1 = rotate, 2 = scale.
+  ///
+  /// An int rather than the `CadGizmoOp` enum for the reason this whole struct exists: it is a plain
+  /// carrier between two layers that do not include each other's headers.
+  int soloOp = 0;
+
   [[nodiscard]] bool empty() const {
     return axis[0].empty() && axis[1].empty() && axis[2].empty() && guide.empty();
   }
