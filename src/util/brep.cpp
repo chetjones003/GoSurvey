@@ -12966,11 +12966,7 @@ struct PatchPoint {
 [[nodiscard]] FaceMoment CurvedFaceMoment(const Face& f, const Vec3& q) {
   FaceMoment out;
   const Surface& sf = f.surface;
-  double v0 = f.vStart, v1 = f.vEnd;
-  if (sf.kind == SurfaceKind::Cylinder || sf.kind == SurfaceKind::Cone) {
-    v0 = 0.0;
-    v1 = sf.height;
-  }
+  const double v0 = f.vStart, v1 = f.vEnd;
   const double u0 = f.uStart, u1 = f.uEnd;
   if (!(std::fabs(u1 - u0) > 0.0) || !(std::fabs(v1 - v0) > 0.0))
     return out;
@@ -13024,10 +13020,12 @@ struct PatchPoint {
     return PlanarFaceMoment(s, f, q);
   if (f.surface.kind == SurfaceKind::Nurbs)
     return FaceMoment{};
+  if (f.loops.size() != 1)
+    return FaceMoment{};  // a hole needs the loops summed with sign; increment 2 (ADR-055 (d))
   for (const Loop& lp : f.loops)
     for (const EdgeUse& u : lp.uses) {
       const CurveKind k = s.edges[static_cast<std::size_t>(u.edge)].kind;
-      if (k == CurveKind::Intersection)
+      if (k == CurveKind::Intersection || k == CurveKind::Ellipse)
         return FaceMoment{};
     }
   return CurvedFaceMoment(f, q);
