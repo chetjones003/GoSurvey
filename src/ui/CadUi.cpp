@@ -12392,6 +12392,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   ImGui::Image(static_cast<ImTextureID>(static_cast<std::intptr_t>(viewportTextureId)), avail, ImVec2(0, 1),
                ImVec2(1, 0));
 
+  // REQ-161: hand the viewport's screen rect to the Developer Shell, so a Test Engine test can turn
+  // a WORLD point into a cursor position. `Camera::WorldToScreen` gives the offset inside this image;
+  // only `imgPos` says where the image is. No-op in Release.
+  DevShell_OnViewportRect(imgPos.x, imgPos.y, avail.x, avail.y);
+
   const bool hovered = ImGui::IsItemHovered();
   const ImVec2 mouse = ImGui::GetIO().MousePos;
   const float mx = mouse.x - imgPos.x;
@@ -14319,7 +14324,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Checked inside this case rather than in `ViewportClickRouteFor` because that function
       // decides on the COMMAND and this is a decision about the MODIFIER — the same split the idle
       // sub-object pick already uses, and the reason the policy switch stays exhaustive.
-      if (modelSpace && ImGui::GetIO().KeyCtrl && cmd.active == AppCommandState::Kind::Fillet) {
+      // CHAMFER is here for the same reason FILLET is, and it was MISSING until a Developer Shell
+      // run found it (TASK-229): REQ-331 gave CHAMFER the pre-highlight, so an edge lit up under the
+      // cursor mid-command and then a click did nothing at all - the worst of both, because the
+      // highlight promises exactly what the click refuses. The headless transcripts could not see it:
+      // their `SUBOBJECT` verb calls `SubmitSubObjectPick` directly and never comes through here.
+      if (modelSpace && ImGui::GetIO().KeyCtrl &&
+          (cmd.active == AppCommandState::Kind::Fillet ||
+           cmd.active == AppCommandState::Kind::Chamfer)) {
         const ray3d::Ray filletSubRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
         solidpick::Tolerance filletSubTol;
         filletSubTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
