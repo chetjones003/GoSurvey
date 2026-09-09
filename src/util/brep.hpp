@@ -903,6 +903,32 @@ struct MassProperties {
 /// a different figure than the one being reported would describe a different solid.
 [[nodiscard]] MassProperties ComputeMassProperties(const Solid& s);
 
+/// Exact area of the **single face** \p faceIndex of \p s, in \p outArea (REQ-313 as amended,
+/// D-2026-09-09-g, GitHub #149 acceptance 2).
+///
+/// Integrated over the face's own **analytic** surface, exactly as \ref ComputeMassProperties
+/// integrates the whole shell — so a cylinder's cap reports `pi r^2` and its wall `2 pi r h`, and
+/// neither figure moves when the display tessellation changes. Summing this over every face of a
+/// valid solid gives \ref MassProperties::surfaceArea exactly, because it is the same integrator
+/// called with the same reference point.
+///
+/// **Why this is not just "read the mesh".** A caller could tessellate and sum triangles by
+/// \ref Tessellation::triFace, and that answer is wrong in a way that looks right: at the display
+/// chord tolerance a cylinder cap of r=8 comes back **0.16% light**, because a `Plane` face bounded
+/// by an *arc* is triangulated as an inscribed polygon. `Tessellate`'s "plane faces are exact at any
+/// tolerance" is true of a straight-edged plane and not of that cap — which is exactly the class of
+/// error GitHub #149 exists to keep out of reported figures.
+///
+/// Refuses \ref Problem::IndexOutOfRange for a null \p outArea or a face index outside \p s, and
+/// reports \ref Validate's own reason when the topology does not hold up — the boundary walk needs
+/// the edge and vertex indices to be real.
+///
+/// **Unlike \ref ComputeMassProperties this does NOT refuse a self-intersecting solid**, and the
+/// asymmetry is deliberate: that gate exists because a self-passing shell makes a *volume*
+/// meaningless, while a face's area is a property of one bounded patch and stays well defined. The
+/// implementation states the consequence in full.
+[[nodiscard]] bool FaceArea(const Solid& s, int faceIndex, double* outArea, Problem* outWhy);
+
 // ---------------------------------------------------------------------------------------------
 // Bounds.
 // ---------------------------------------------------------------------------------------------
