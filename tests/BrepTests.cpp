@@ -5731,3 +5731,208 @@ TEST_CASE("A general trim loop's hole is excluded from a planar face's tessellat
   }
   REQUIRE(faceArea == Approx(100.0 - 4.0).margin(1e-6));
 }
+
+// ================================================================================================
+// Per-face area (REQ-313 as amended, D-2026-09-09-g, TASK-236) — GitHub #149 acceptance 2.
+//
+// `MassProperties` reports the area of the WHOLE shell. #149 asks for a face's area as well, which
+// the kernel has always computed per face internally and never exposed. These cases pin three
+// things: each face's closed form, that the parts sum to the whole, and that the answer does NOT
+// come from the display mesh.
+//
+// The last one is why this exists at all, rather than the caller summing triangles by
+// `Tessellation::triFace`: at the display chord tolerance that route reports a cylinder cap of
+// r = 8 as 200.7391 against a true 201.0619 — 0.16% light, because a `Plane` face bounded by an
+// ARC is triangulated as an inscribed polygon. `Tessellate`'s "plane faces are exact at any
+// tolerance" holds for a straight-edged plane and not for that cap. It is a plausible wrong answer
+// of exactly the kind #149's tessellation note exists to keep out of a reported figure.
+// ================================================================================================
+
+TEST_CASE("A cylinder's cap and wall each report their closed-form area", "[brep][req313][req149]") {
+  const double r = 8.0, h = 25.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), r, h, &s, &why));
+
+  // A cylinder is two caps and a wall; the wall is split at its seam, so it is TWO faces of half
+  // the lateral area each. Classify by surface kind rather than by index, so the assertion does not
+  // silently start checking a different face if the builder's ordering ever changes.
+  double capTotal = 0.0, wallTotal = 0.0;
+  int caps = 0, walls = 0;
+  for (int i = 0; i < static_cast<int>(s.faces.size()); ++i) {
+    double a = 0.0;
+    REQUIRE(brep::FaceArea(s, i, &a, &why));
+    REQUIRE(a > 0.0);
+    if (s.faces[static_cast<std::size_t>(i)].surface.kind == brep::SurfaceKind::Plane) {
+      capTotal += a;
+      ++caps;
+    } else {
+      wallTotal += a;
+      ++walls;
+    }
+  }
+  REQUIRE(caps == 2);
+  REQUIRE(walls >= 1);
+  // Each cap is pi r^2 = 201.06193, and the two together are twice that. The MESH route reports
+  // 200.7391 per cap - the number this assertion exists to exclude.
+  CHECK(capTotal == Approx(2.0 * kPi * r * r).epsilon(1e-12));
+  CHECK(wallTotal == Approx(kTwoPiTest * r * h).epsilon(1e-12));
+}
+
+TEST_CASE("Per-face areas sum to the solid's surface area, for every primitive",
+          "[brep][req313][req149]") {
+  // The identity that makes the new accessor trustworthy: it is the same integrator over the same
+  // faces, so the parts must reconstruct the whole exactly rather than nearly. A cone, a sphere and
+  // a torus are in the list because they are the three #149 names as the tessellation-error cases.
+  struct Case {
+    const char* name;
+    Solid s;
+  };
+  std::vector<Case> cases;
+  Problem why = Problem::Ok;
+  {
+    Solid s;
+    REQUIRE(brep::MakeBox(World(), 30, 20, 12, &s, &why));
+    cases.push_back({"box", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeWedge(World(), 30, 20, 12, &s, &why));
+    cases.push_back({"wedge", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakePyramid(World(), 6, 10, 0.0, 18, &s, &why));
+    cases.push_back({"pyramid", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 9, 0.0, 20, &s, &why));
+    cases.push_back({"cone", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 9, 4, 20, &s, &why));
+    cases.push_back({"frustum", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeSphere(World(), 15, &s, &why));
+    cases.push_back({"sphere", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeTorus(World(), 20, 5, &s, &why));
+    cases.push_back({"torus", std::move(s)});
+  }
+
+  for (const Case& c : cases) {
+    INFO("primitive: " << c.name);
+    const brep::MassProperties mp = brep::ComputeMassProperties(c.s);
+    REQUIRE(mp.valid);
+    double sum = 0.0;
+    for (int i = 0; i < static_cast<int>(c.s.faces.size()); ++i) {
+      double a = 0.0;
+      Problem w = Problem::Ok;
+      REQUIRE(brep::FaceArea(c.s, i, &a, &w));
+      sum += a;
+    }
+    CHECK(sum == Approx(mp.surfaceArea).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("A face's area is invariant under placement, including at survey magnitudes",
+          "[brep][req313][req149][req101]") {
+  // #149 acceptance 8 in miniature. A face's area is a property of the patch, so moving and tilting
+  // the solid must not move the number - and the interesting placement is the one at easting 2e6,
+  // where a formula referenced to the world origin instead of the solid loses its low bits.
+  const double r = 8.0, h = 25.0;
+  Solid atOrigin, placed;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), r, h, &atOrigin, &why));
+  REQUIRE(brep::MakeCylinder(TiltedAt(2196000.0, 1400000.0, 1035.0), r, h, &placed, &why));
+  REQUIRE(atOrigin.faces.size() == placed.faces.size());
+
+  for (int i = 0; i < static_cast<int>(atOrigin.faces.size()); ++i) {
+    INFO("face " << i);
+    double a0 = 0.0, a1 = 0.0;
+    Problem w = Problem::Ok;
+    REQUIRE(brep::FaceArea(atOrigin, i, &a0, &w));
+    REQUIRE(brep::FaceArea(placed, i, &a1, &w));
+    CHECK(a1 == Approx(a0).epsilon(1e-10));
+  }
+}
+
+TEST_CASE("FaceArea refuses a face index that is not there, and a null out", "[brep][req313][req149]") {
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &s, &why));
+
+  double a = 0.0;
+  Problem w = Problem::Ok;
+  CHECK_FALSE(brep::FaceArea(s, -1, &a, &w));
+  CHECK(w == Problem::IndexOutOfRange);
+
+  w = Problem::Ok;
+  CHECK_FALSE(brep::FaceArea(s, static_cast<int>(s.faces.size()), &a, &w));
+  CHECK(w == Problem::IndexOutOfRange);
+
+  w = Problem::Ok;
+  CHECK_FALSE(brep::FaceArea(s, 0, nullptr, &w));
+  CHECK(w == Problem::IndexOutOfRange);
+
+  // A null `outWhy` is allowed - the refusal must not require somewhere to put the reason.
+  CHECK_FALSE(brep::FaceArea(s, 99, &a, nullptr));
+}
+
+TEST_CASE("FaceArea reports a broken shell's own validity reason rather than a number",
+          "[brep][req313][req149][req201]") {
+  Solid good;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &good, &why));
+
+  // Drop a face from the shell: the topology now refers to geometry the shell does not carry, and
+  // the boundary walk cannot be trusted. The reason returned is Validate's, not a generic one.
+  Solid broken = good;
+  REQUIRE_FALSE(broken.shells.empty());
+  REQUIRE_FALSE(broken.shells[0].faces.empty());
+  broken.shells[0].faces.pop_back();
+  REQUIRE(brep::Validate(broken) != Problem::Ok);
+
+  double a = 0.0;
+  Problem w = Problem::Ok;
+  CHECK_FALSE(brep::FaceArea(broken, 0, &a, &w));
+  CHECK(w == brep::Validate(broken));
+  CHECK(a == 0.0);  // untouched on failure
+}
+
+TEST_CASE("A self-intersecting solid still reports a face area, where mass properties will not",
+          "[brep][req313][req149]") {
+  // The one place this accessor's contract deliberately differs from ComputeMassProperties.
+  //
+  // A torus whose tube radius exceeds its ring radius passes Validate - it is legitimate topology -
+  // but its surface encloses part of space twice, so its VOLUME is a number with no meaning and the
+  // mass-property report refuses it by name. A face's area is not that kind of quantity: the face is
+  // one bounded patch of one surface, and REQ-318 lets a user click it. Answering "unavailable" for
+  // a figure that is perfectly well defined would be the worse wrong answer.
+  const double R = 5.0, tube = 8.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeTorus(World(), R, tube, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE_FALSE(mp.valid);  // the premise: the whole-solid report declines
+
+  double sum = 0.0;
+  for (int i = 0; i < static_cast<int>(s.faces.size()); ++i) {
+    double a = 0.0;
+    Problem w = Problem::Ok;
+    REQUIRE(brep::FaceArea(s, i, &a, &w));  // ... and the per-face one does not
+    CHECK(a > 0.0);
+    sum += a;
+  }
+  // And the areas are real, not placeholders: a torus' surface is 4 pi^2 R r whether or not the
+  // tube passes through the axis.
+  CHECK(sum == Approx(4.0 * kPi * kPi * R * tube).epsilon(1e-9));
+}

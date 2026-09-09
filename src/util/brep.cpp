@@ -12736,6 +12736,42 @@ bool SelfIntersects(const Solid& s) {
   return false;
 }
 
+bool FaceArea(const Solid& s, int faceIndex, double* outArea, Problem* outWhy) {
+  const auto fail = [&](Problem p) {
+    if (outWhy)
+      *outWhy = p;
+    return false;
+  };
+  if (!outArea)
+    return fail(Problem::IndexOutOfRange);
+  if (faceIndex < 0 || static_cast<size_t>(faceIndex) >= s.faces.size())
+    return fail(Problem::IndexOutOfRange);
+  // Topology first: a face's boundary is walked through `Solid::edges` and `Solid::vertices`, so a
+  // shell that does not validate can send the integrator at indices that are not there. This is the
+  // same gate `ComputeMassProperties` opens with, and for the same reason.
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return fail(why);
+
+  // NOT gated on `SelfIntersects`, deliberately, and this is the one place this function's contract
+  // differs from `ComputeMassProperties` — see REQ-313 as amended, D-2026-09-09-g.
+  //
+  // That gate exists because a self-passing shell encloses part of space twice, which makes its
+  // VOLUME a number with no meaning. A single face's area is not that kind of quantity: the face is
+  // one bounded patch of one surface, and its area is exactly as well defined whether or not some
+  // other face crosses it. REQ-318 lets a user click that face, and answering "unavailable" for a
+  // figure that is perfectly well defined would be the worse of the two wrong answers.
+  //
+  // The visible consequence, stated rather than hidden: on a self-intersecting solid the per-face
+  // areas still sum to the true surface area while `ComputeMassProperties` reports `valid == false`
+  // and zero. That asymmetry is intentional. On every solid that passes both gates the sum and the
+  // total agree by construction, because this calls the same integrator with the same reference
+  // point — which `BrepTests`' per-face area cases assert rather than assume.
+  const Vec3 q = ReferencePoint(s);
+  *outArea = std::fabs(IntegrateFace(s, s.faces[static_cast<size_t>(faceIndex)], q).area);
+  return true;
+}
+
 MassProperties ComputeMassProperties(const Solid& s) {
   MassProperties mp;
   if (Validate(s) != Problem::Ok)
