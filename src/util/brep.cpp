@@ -1780,6 +1780,18 @@ const char* ProblemText(Problem p) {
     return "A scale factor must be greater than zero.";
   case Problem::ScaleResultInvalid:
     return "That scale would leave the solid invalid, so it was not applied.";
+  case Problem::MoveVertexNotThreePlanes:
+    return "That corner is not where exactly three flat faces meet, so it cannot be dragged.";
+  case Problem::MoveEdgeFacesParallel:
+    return "The two faces along that edge are flat against each other, so the edge cannot be moved.";
+  case Problem::MoveSubObjectNeighbourCurved:
+    return "A curved face meets there, and a curved face cannot follow a dragged corner yet.";
+  case Problem::MoveSubObjectNoMotion:
+    return "That drag does not move the geometry anywhere.";
+  case Problem::MoveSubObjectCornerUnsolvable:
+    return "One of the corners this drag moves cannot be rebuilt, so it was not applied.";
+  case Problem::MoveSubObjectResultInvalid:
+    return "That move would leave the solid invalid, so it was not applied.";
   }
   return "The solid is not valid.";
 }
@@ -3673,6 +3685,292 @@ bool ChamferEdge(const Solid& s, int edgeIndex, double distance, Solid* out, Pro
 bool ChamferEdges(const Solid& s, const std::vector<int>& edgeIndices, double distance, Solid* out,
                   Problem* outWhy) {
   return ChamferEdgesGeneral(s, edgeIndices, distance, out, outWhy);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Moving a VERTEX or an EDGE (REQ-333 / ADR-046 amendment (n), GitHub issue #148 acceptance 3).
+//
+// The header states what these mean and why; this is the machinery. One core does the work:
+// offset some planar faces along their own normals and re-solve every corner they touch. That is
+// `PushPullFace`'s algorithm with its "exactly one face moves" assumption lifted, which is the whole
+// content of the generalisation — a vertex offsets THREE planes and an edge offsets TWO.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// Which faces of \p s use \p vertexIndex.
+void FacesUsingVertex(const Solid& s, int vertexIndex, std::vector<int>* out) {
+  out->clear();
+  std::vector<int> fv;
+  for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+    fv.clear();  // `CollectFaceVertices` APPENDS — a reused buffer must be emptied first
+    CollectFaceVertices(s, s.faces[fi], &fv);
+    if (std::find(fv.begin(), fv.end(), vertexIndex) != fv.end())
+      out->push_back(static_cast<int>(fi));
+  }
+}
+
+/// Which faces of \p s have a loop using edge \p edgeIndex. Two, on a manifold solid.
+void FacesUsingEdge(const Solid& s, int edgeIndex, std::vector<int>* out) {
+  out->clear();
+  for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+    bool uses = false;
+    for (const Loop& lp : s.faces[fi].loops) {
+      for (const EdgeUse& eu : lp.uses) {
+        if (eu.edge == edgeIndex) {
+          uses = true;
+          break;
+        }
+      }
+      if (uses)
+        break;
+    }
+    if (uses)
+      out->push_back(static_cast<int>(fi));
+  }
+}
+
+/// A face's OUTWARD unit normal, honouring \ref Surface::inward. False on a degenerate frame.
+bool FaceOutwardNormal(const Face& f, Vec3* out) {
+  Vec3 n = f.surface.frame.zAxis;
+  if (f.surface.inward)
+    n = ray3d::Scale(n, -1.0);
+  const double len = ray3d::Length(n);
+  if (!(len > 1e-12))
+    return false;
+  *out = ray3d::Scale(n, 1.0 / len);
+  return true;
+}
+
+/// The failure codes a caller of \ref OffsetPlanarFacesAndResolve wants reported, so the core can be
+/// shared without any caller inheriting another's vocabulary. `PushPullFace` says
+/// "PushPullVertexUnsolvable" and these operations say "MoveVertexNotThreePlanes" about the same
+/// geometric situation, and both are right for their own user.
+struct ResolveProblems {
+  Problem neighbourCurved;
+  Problem cornerUnsolvable;
+  Problem resultInvalid;
+};
+
+/// Offset each listed planar face along its own outward normal by its distance, then re-solve every
+/// corner those faces touch as the meeting point of the planes around it.
+///
+/// The re-solve is `PushPullFace`'s, and the two pieces that make it correct are kept: the
+/// BEST-CONDITIONED triple of planes is used rather than the first three (any vertex where two faces
+/// are nearly coplanar would otherwise solve from a near-degenerate triple and land far from where
+/// it belongs), and every OTHER plane at the corner must then pass through the answer, because more
+/// than three planes generally have no common point once one of them moves.
+bool OffsetPlanarFacesAndResolve(const Solid& s, const std::vector<std::pair<int, double>>& offsets,
+                                 const ResolveProblems& probs, Solid* out, Problem* outWhy) {
+  const auto fail = [&](Problem p) { return Fail(p, outWhy); };
+  if (!out || offsets.empty())
+    return false;
+
+  // The new plane of each offset face, and the set of corners that therefore move.
+  std::vector<int> offsetFaces;
+  std::vector<PushFacePlane> newPlanes;
+  std::vector<Vec3> newOrigins;
+  std::vector<int> moved;
+  for (const auto& od : offsets) {
+    const int fi = od.first;
+    if (fi < 0 || static_cast<size_t>(fi) >= s.faces.size())
+      return fail(Problem::IndexOutOfRange);
+    const Face& f = s.faces[static_cast<size_t>(fi)];
+    if (f.surface.kind != SurfaceKind::Plane)
+      return fail(probs.neighbourCurved);
+    Vec3 n{};
+    if (!FaceOutwardNormal(f, &n))
+      return fail(Problem::DegenerateFrame);
+    // The frame origin TRANSLATES with the plane rather than being re-derived from (n, d). Any point
+    // on the plane satisfies the equation, but a re-derived one lands at the foot of the
+    // perpendicular from the world origin — arbitrarily far from the face, and at state-plane
+    // magnitudes that is a large number standing in for a small one.
+    const Vec3 origin = ray3d::Add(f.surface.frame.origin, ray3d::Scale(n, od.second));
+    offsetFaces.push_back(fi);
+    newPlanes.push_back(PushFacePlane{n, ray3d::Dot(n, origin)});
+    newOrigins.push_back(origin);
+    CollectFaceVertices(s, f, &moved);
+  }
+  std::sort(moved.begin(), moved.end());
+  moved.erase(std::unique(moved.begin(), moved.end()), moved.end());
+  if (moved.empty())
+    return fail(Problem::FaceHasNoLoop);
+
+  // Every face touching a moving corner must be a PLANE: re-solving means intersecting the surfaces
+  // there, and a curved surface is not a plane to intersect. Push/pull can re-parameterise a wall
+  // along its own axis; a corner dragged in an arbitrary direction has no such single parameter.
+  {
+    std::vector<int> fv;
+    for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+      if (s.faces[fi].surface.kind == SurfaceKind::Plane)
+        continue;
+      fv.clear();  // `CollectFaceVertices` APPENDS
+      CollectFaceVertices(s, s.faces[fi], &fv);
+      for (int v : fv) {
+        if (std::binary_search(moved.begin(), moved.end(), v))
+          return fail(probs.neighbourCurved);
+      }
+    }
+  }
+
+  Solid r = s;
+  std::vector<PushFacePlane> planesAt;
+  std::vector<int> fv;
+  for (int v : moved) {
+    planesAt.clear();
+    for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+      fv.clear();  // `CollectFaceVertices` APPENDS
+      CollectFaceVertices(s, s.faces[fi], &fv);
+      if (std::find(fv.begin(), fv.end(), v) == fv.end())
+        continue;
+      // An offset face contributes its NEW plane; every other face contributes the plane it already
+      // has, which is what keeps its own boundary on its own surface.
+      const auto it = std::find(offsetFaces.begin(), offsetFaces.end(), static_cast<int>(fi));
+      if (it != offsetFaces.end()) {
+        planesAt.push_back(newPlanes[static_cast<size_t>(it - offsetFaces.begin())]);
+        continue;
+      }
+      const Surface& sf = s.faces[fi].surface;
+      Vec3 n = sf.frame.zAxis;
+      const double nl = ray3d::Length(n);
+      if (!(nl > 1e-12))
+        return fail(Problem::DegenerateFrame);
+      n = ray3d::Scale(n, 1.0 / nl);
+      planesAt.push_back(PushFacePlane{n, ray3d::Dot(n, sf.frame.origin)});
+    }
+    if (planesAt.size() < 3)
+      return fail(probs.cornerUnsolvable);  // a corner needs three planes to be a point
+
+    Vec3 solved{};
+    double bestDet = 0.0;
+    bool found = false;
+    for (size_t a = 0; a < planesAt.size(); ++a)
+      for (size_t b = a + 1; b < planesAt.size(); ++b)
+        for (size_t c = b + 1; c < planesAt.size(); ++c) {
+          const double det =
+              std::fabs(ray3d::Dot(planesAt[a].n, ray3d::Cross(planesAt[b].n, planesAt[c].n)));
+          if (det <= bestDet)
+            continue;
+          Vec3 p;
+          if (!ThreePlanePoint(planesAt[a], planesAt[b], planesAt[c], &p))
+            continue;
+          bestDet = det;
+          solved = p;
+          found = true;
+        }
+    if (!found)
+      return fail(probs.cornerUnsolvable);
+
+    // Scale-relative, because a residual of a millimetre means something different on a 1 ft solid
+    // than on one at state-plane magnitude.
+    const double tol = 1e-9 * (1.0 + ray3d::Length(solved));
+    for (const PushFacePlane& pe : planesAt)
+      if (std::fabs(ray3d::Dot(pe.n, solved) - pe.d) > tol)
+        return fail(probs.cornerUnsolvable);
+
+    r.vertices[static_cast<size_t>(v)].p = solved;
+  }
+
+  // The offset faces' own surfaces follow their boundaries. Without this the face would report a
+  // plane its own corners no longer lie on — the defect the whole precondition above exists for.
+  for (size_t i = 0; i < offsetFaces.size(); ++i)
+    r.faces[static_cast<size_t>(offsetFaces[i])].surface.frame.origin = newOrigins[i];
+
+  // Dropped, not quietly updated (REQ-319 item 9): a box with a corner pulled out is no longer the
+  // box its recipe describes, and a recipe that no longer describes its solid reads as authoritative
+  // while being false.
+  r.recipe = Recipe{};
+  const Problem why = Validate(r);
+  if (why != Problem::Ok)
+    return fail(probs.resultInvalid);
+  *out = std::move(r);
+  return Succeed(outWhy);
+}
+
+constexpr ResolveProblems kMoveProblems{Problem::MoveSubObjectNeighbourCurved,
+                                        Problem::MoveSubObjectCornerUnsolvable,
+                                        Problem::MoveSubObjectResultInvalid};
+
+}  // namespace
+
+bool MoveVertex(const Solid& s, int vertexIndex, const Vec3& delta, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
+  if (vertexIndex < 0 || static_cast<size_t>(vertexIndex) >= s.vertices.size())
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  if (!FinitePoint(delta) || ray3d::Length(delta) <= 1e-12)
+    return Fail(Problem::MoveSubObjectNoMotion, outWhy);
+
+  std::vector<int> faces;
+  FacesUsingVertex(s, vertexIndex, &faces);
+  // EXACTLY three, and both bounds matter. Fewer than three planes do not meet in a point at all;
+  // more than three — a pyramid's apex — generally have no common point once one of them is offset,
+  // so the corner would have to split into several. A topology change, and a different operation.
+  if (faces.size() != 3)
+    return Fail(Problem::MoveVertexNotThreePlanes, outWhy);
+
+  std::vector<std::pair<int, double>> offsets;
+  for (int fi : faces) {
+    const Face& f = s.faces[static_cast<size_t>(fi)];
+    if (f.surface.kind != SurfaceKind::Plane)
+      return Fail(Problem::MoveSubObjectNeighbourCurved, outWhy);
+    Vec3 n{};
+    if (!FaceOutwardNormal(f, &n))
+      return Fail(Problem::DegenerateFrame, outWhy);
+    // Each plane slides by the part of the move that is perpendicular to it. Together the three
+    // offsets put their intersection at exactly `p + delta`.
+    offsets.push_back({fi, ray3d::Dot(delta, n)});
+  }
+  // Three planes whose normals do not span space cannot be steered to an arbitrary point: they
+  // share a line or are parallel, and the corner is not a corner.
+  {
+    Vec3 n0{}, n1{}, n2{};
+    if (!FaceOutwardNormal(s.faces[static_cast<size_t>(faces[0])], &n0) ||
+        !FaceOutwardNormal(s.faces[static_cast<size_t>(faces[1])], &n1) ||
+        !FaceOutwardNormal(s.faces[static_cast<size_t>(faces[2])], &n2))
+      return Fail(Problem::DegenerateFrame, outWhy);
+    if (std::fabs(ray3d::Dot(n0, ray3d::Cross(n1, n2))) < 1e-9)
+      return Fail(Problem::MoveVertexNotThreePlanes, outWhy);
+  }
+  return OffsetPlanarFacesAndResolve(s, offsets, kMoveProblems, out, outWhy);
+}
+
+bool MoveEdge(const Solid& s, int edgeIndex, const Vec3& delta, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
+  if (edgeIndex < 0 || static_cast<size_t>(edgeIndex) >= s.edges.size())
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  if (!FinitePoint(delta) || ray3d::Length(delta) <= 1e-12)
+    return Fail(Problem::MoveSubObjectNoMotion, outWhy);
+
+  std::vector<int> faces;
+  FacesUsingEdge(s, edgeIndex, &faces);
+  if (faces.size() != 2)
+    return Fail(Problem::MoveEdgeFacesParallel, outWhy);
+
+  Vec3 n0{}, n1{};
+  const Face& f0 = s.faces[static_cast<size_t>(faces[0])];
+  const Face& f1 = s.faces[static_cast<size_t>(faces[1])];
+  if (f0.surface.kind != SurfaceKind::Plane || f1.surface.kind != SurfaceKind::Plane)
+    return Fail(Problem::MoveSubObjectNeighbourCurved, outWhy);
+  if (!FaceOutwardNormal(f0, &n0) || !FaceOutwardNormal(f1, &n1))
+    return Fail(Problem::DegenerateFrame, outWhy);
+  // Parallel or coplanar planes define no line for the edge to lie on, so there is nothing to move
+  // the edge ALONG and no two-freedom system to solve.
+  if (ray3d::Length(ray3d::Cross(n0, n1)) < 1e-9)
+    return Fail(Problem::MoveEdgeFacesParallel, outWhy);
+
+  const double t0 = ray3d::Dot(delta, n0);
+  const double t1 = ray3d::Dot(delta, n1);
+  // A move entirely ALONG the edge lands here: the edge direction lies in both faces, so it is
+  // perpendicular to both normals and contributes nothing to either offset. It should not — an edge
+  // slid along its own line is the same edge — so this is refused as "no motion" rather than
+  // reported as a move that did nothing.
+  if (std::fabs(t0) <= 1e-12 && std::fabs(t1) <= 1e-12)
+    return Fail(Problem::MoveSubObjectNoMotion, outWhy);
+
+  const std::vector<std::pair<int, double>> offsets{{faces[0], t0}, {faces[1], t1}};
+  return OffsetPlanarFacesAndResolve(s, offsets, kMoveProblems, out, outWhy);
 }
 namespace {
 
