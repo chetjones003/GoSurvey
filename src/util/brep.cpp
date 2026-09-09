@@ -3698,38 +3698,6 @@ bool ChamferEdges(const Solid& s, const std::vector<int>& edgeIndices, double di
 
 namespace {
 
-/// Which faces of \p s use \p vertexIndex.
-void FacesUsingVertex(const Solid& s, int vertexIndex, std::vector<int>* out) {
-  out->clear();
-  std::vector<int> fv;
-  for (size_t fi = 0; fi < s.faces.size(); ++fi) {
-    fv.clear();  // `CollectFaceVertices` APPENDS — a reused buffer must be emptied first
-    CollectFaceVertices(s, s.faces[fi], &fv);
-    if (std::find(fv.begin(), fv.end(), vertexIndex) != fv.end())
-      out->push_back(static_cast<int>(fi));
-  }
-}
-
-/// Which faces of \p s have a loop using edge \p edgeIndex. Two, on a manifold solid.
-void FacesUsingEdge(const Solid& s, int edgeIndex, std::vector<int>* out) {
-  out->clear();
-  for (size_t fi = 0; fi < s.faces.size(); ++fi) {
-    bool uses = false;
-    for (const Loop& lp : s.faces[fi].loops) {
-      for (const EdgeUse& eu : lp.uses) {
-        if (eu.edge == edgeIndex) {
-          uses = true;
-          break;
-        }
-      }
-      if (uses)
-        break;
-    }
-    if (uses)
-      out->push_back(static_cast<int>(fi));
-  }
-}
-
 /// A face's OUTWARD unit normal, honouring \ref Surface::inward. False on a degenerate frame.
 bool FaceOutwardNormal(const Face& f, Vec3* out) {
   Vec3 n = f.surface.frame.zAxis;
@@ -3893,6 +3861,49 @@ constexpr ResolveProblems kMoveProblems{Problem::MoveSubObjectNeighbourCurved,
 
 }  // namespace
 
+void FacesAtVertex(const Solid& s, int vertexIndex, std::vector<int>* out) {
+  if (!out)
+    return;
+  out->clear();
+  std::vector<int> fv;
+  for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+    fv.clear();  // `CollectFaceVertices` APPENDS — a reused buffer must be emptied first
+    CollectFaceVertices(s, s.faces[fi], &fv);
+    if (std::find(fv.begin(), fv.end(), vertexIndex) != fv.end())
+      out->push_back(static_cast<int>(fi));
+  }
+}
+
+bool FacesAlongEdge(const Solid& s, int edgeIndex, int* outA, int* outB) {
+  if (!outA || !outB)
+    return false;
+  int found[2] = {-1, -1};
+  int n = 0;
+  for (size_t fi = 0; fi < s.faces.size(); ++fi) {
+    bool uses = false;
+    for (const Loop& lp : s.faces[fi].loops) {
+      for (const EdgeUse& eu : lp.uses) {
+        if (eu.edge == edgeIndex) {
+          uses = true;
+          break;
+        }
+      }
+      if (uses)
+        break;
+    }
+    if (!uses)
+      continue;
+    if (n >= 2)
+      return false;  // three faces on one edge is not a manifold solid
+    found[n++] = static_cast<int>(fi);
+  }
+  if (n != 2)
+    return false;
+  *outA = found[0];
+  *outB = found[1];
+  return true;
+}
+
 bool MoveVertex(const Solid& s, int vertexIndex, const Vec3& delta, Solid* out, Problem* outWhy) {
   if (!out)
     return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
@@ -3902,7 +3913,7 @@ bool MoveVertex(const Solid& s, int vertexIndex, const Vec3& delta, Solid* out, 
     return Fail(Problem::MoveSubObjectNoMotion, outWhy);
 
   std::vector<int> faces;
-  FacesUsingVertex(s, vertexIndex, &faces);
+  FacesAtVertex(s, vertexIndex, &faces);
   // EXACTLY three, and both bounds matter. Fewer than three planes do not meet in a point at all;
   // more than three — a pyramid's apex — generally have no common point once one of them is offset,
   // so the corner would have to split into several. A topology change, and a different operation.
@@ -3943,10 +3954,11 @@ bool MoveEdge(const Solid& s, int edgeIndex, const Vec3& delta, Solid* out, Prob
   if (!FinitePoint(delta) || ray3d::Length(delta) <= 1e-12)
     return Fail(Problem::MoveSubObjectNoMotion, outWhy);
 
-  std::vector<int> faces;
-  FacesUsingEdge(s, edgeIndex, &faces);
-  if (faces.size() != 2)
+  int fa = -1;
+  int fb = -1;
+  if (!FacesAlongEdge(s, edgeIndex, &fa, &fb))
     return Fail(Problem::MoveEdgeFacesParallel, outWhy);
+  const std::vector<int> faces{fa, fb};
 
   Vec3 n0{}, n1{};
   const Face& f0 = s.faces[static_cast<size_t>(faces[0])];

@@ -4559,9 +4559,45 @@ bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double 
 /// increment 2). False when \p ref does not resolve to a planar face of a live solid.
 ///
 /// The centroid rather than a corner, because a grip is a handle on the *face* — a corner handle
-/// would read as a vertex grip, which is a different edit (#148 criterion 3's other half, not built).
+/// reads as a vertex grip, which is a different edit (\ref CadSubObjectVertexGrip, REQ-333).
 [[nodiscard]] bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& ref,
                                         ray3d::Vec3* outAnchor, ray3d::Vec3* outAxis);
+
+/// The vertex grip's anchor: the vertex itself (REQ-333). False unless the vertex is one where
+/// **exactly three planar faces meet** — the only place `brep::MoveVertex` can work.
+///
+/// The check lives here so that no handle is drawn where the drag would be refused. A pyramid's apex
+/// and a cylinder's rim are both easy to pick and both impossible to move, and a grip that appears
+/// and then declines on release is worse than one that never appears — the same discipline
+/// \ref CadSubObjectFaceGrip already keeps by returning false for a non-planar face.
+[[nodiscard]] bool CadSubObjectVertexGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                                          ray3d::Vec3* outAnchor);
+
+/// The edge grip's anchor and its two slide axes: the edge's midpoint, and the outward normals of
+/// the two faces along it (REQ-333). False unless the edge is STRAIGHT with exactly two planar
+/// faces, for the reason \ref CadSubObjectVertexGrip gives.
+///
+/// The two normals rather than a pair of UCS axes because they are what the kernel actually offsets,
+/// and together they span exactly the plane perpendicular to the edge — which is the whole space of
+/// moves the edge has.
+[[nodiscard]] bool CadSubObjectEdgeGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                                        ray3d::Vec3* outAnchor, ray3d::Vec3* outAxisA,
+                                        ray3d::Vec3* outAxisB);
+
+/// Move one vertex, or one edge, and record it as a single undo step (REQ-333). The commit behind
+/// the vertex and edge grips, shaped exactly like \ref CadApplyPushPull: replace the solid, re-point
+/// every sub-object reference that named it, and log the kernel's own sentence on a refusal with the
+/// document untouched.
+///
+/// **Unlike push/pull these have no typed command to agree with**, because REQ-333 defines kernel
+/// operations and no requirement asks for a verb. REQ-060's "agrees with the equivalent typed
+/// command" therefore has nothing to compare against here; the discipline it exists to enforce is
+/// kept the only way it can be, by these being the single implementation — so a typed command added
+/// later calls them rather than growing a second one.
+bool CadApplyMoveVertex(AppCommandState& st, const SelectedSubObject& ref, const ray3d::Vec3& delta,
+                        std::vector<std::string>& log);
+bool CadApplyMoveEdge(AppCommandState& st, const SelectedSubObject& ref, const ray3d::Vec3& delta,
+                      std::vector<std::string>& log);
 
 /// One named dimension of a primitive: the letter that sets it, and what to call it in a prompt.
 ///
@@ -5757,6 +5793,20 @@ enum class CadGizmoMode {
   /// and nothing else. A handle along UCS X on a face whose normal is Z would advertise a move the
   /// kernel cannot make; drawing it and then refusing the drag is worse than not drawing it.
   SubObjectFace,
+  /// Exactly one solid EDGE: TWO handles, along the two adjacent faces' own outward normals,
+  /// committing through `CadApplyMoveEdge` (REQ-333).
+  ///
+  /// Two because two planes meet there and each has one degree of freedom that keeps it planar, and
+  /// together they span exactly the plane perpendicular to the edge. **There is deliberately no
+  /// third**: the along-the-edge direction is not a motion at all — an edge slid along its own line
+  /// is the same edge (REQ-333 item 4) — so a handle there would advertise a drag that does nothing.
+  SubObjectEdge,
+  /// Exactly one solid VERTEX: THREE handles, along the active UCS, committing through
+  /// `CadApplyMoveVertex` (REQ-333).
+  ///
+  /// Three because three planes meet there, which is three degrees of freedom — every direction is
+  /// reachable, so unlike the face and the edge there is nothing to leave out.
+  SubObjectVertex,
 };
 
 /// Which subject the gizmo has right now. \c None when no gizmo may be drawn.
