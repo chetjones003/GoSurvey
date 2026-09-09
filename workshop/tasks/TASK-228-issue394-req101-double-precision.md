@@ -1,7 +1,7 @@
 # TASK-228 — REQ-101 ±0.002 ft: widen coordinate storage `float` → `double`
 
 - Type:    refactor (spec-authorized architecture migration)
-- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442), D (#443), E (#444) done, closes #394; Phases F, G open
+- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442), D (#443), E (#444), F (#447) done, closes #394; Phase G open
 - Opened:  2026-09-08
 - Owner:   Workshop
 - GitHub:  #394 (sub-issues #440 A, #441 B, #442 C, #443 D, #444 E, #447 F — SurveyPoint, #453 G — TIN/surface mesh)
@@ -135,6 +135,74 @@ Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft asse
     `HoverDwellTests` (a wall-clock seconds argument); `Trim3DDrawnLineTests`/`Trim3DLineLineTests`/
     `UcsTests` (comments only, no live assertion) — left at `0.01` with the reason recorded per site.
   - Build clean; `ctest` 1359/1359.
+- **Phase F — SurveyPoint. DONE (#447).** Widened `SurveyPoint::easting/northing/elevation`
+  (`src/survey/SurveyPoints.hpp`) to `double`, plus every helper signature that carries a
+  survey-point coordinate: `AppendSurveyPointCrossVertices` (easting/northing/elevationZ; `outLines`
+  stays `std::vector<float>*`, narrowed once at the GPU-buffer `push_back` per ADR-054 (b), same
+  pattern as `WorldToViewRelativeFloat`), `TryPlaceSurveyPoint`, `DuplicateSelectedSurveyPointsTranslated`
+  /`Rotated`/`Reflected` (dx/dy/dz, bx/by, x0/y0/x1/y1 — `rad` stays `float`, an angle, Phase B
+  precedent), and the file-local `RotateSurveyCoords`/`ReflectSurveyCoords` helpers. Added `double`
+  overloads of `CadCoord::WorldXFromLocal`/`WorldYFromLocal`/`LocalFromWorld` (`CadCoordinateFrame.hpp`)
+  rather than narrowing every survey-point caller through the existing `float` overloads — those
+  stay for the viewport-cursor caller that is still `float`; the two are disambiguated by ordinary
+  overload resolution, so no call site needed a cast. `CadCoordinateFrame.cpp`'s `ShiftAllStorageBy`
+  needed no change at all: `add2` is already a generic lambda, so it started carrying survey points
+  through the document-origin rebase at full `double` precision for free.
+  **Real narrowing bugs fixed** (not just type-widening churn): `DxfIo.cpp`'s POINT/XDATA reader
+  (`sp.easting = static_cast<float>(wx - st.worldDocumentOriginX)`, the embedded-points-conflict
+  merge) and `SurveyCsv.cpp`'s CSV importer (`pr.pt.easting = static_cast<float>(pr.worldE -
+  st.worldDocumentOriginX)`) both narrowed to `float` at exactly the width the DXF-extent sweep and
+  entry-time-establishment precedents (Phase A/B) warn about — the CSV path in particular computes
+  the local coordinate at ORIGIN-ZERO magnitude (full state-plane value) before
+  `MaybeRebaseLargeCoordinates` ever runs, so the old `float` field quantized the point before the
+  rebase had a chance to help, exactly the "narrow-before-origin" hazard
+  `regression-req101-origin-at-entry` pins for typed LINE points. `GsIo.cpp`'s survey-point JSON
+  reader (`o.value("easting", 0.f)` → `0.0`) had the same Phase-A-pattern bug the `.gs`/DWG-trailer
+  coordinate arrays already had fixed. The internal VIEWPOINTS Save/Load JSON writer
+  (`SaveSurveyPointsToJsonFile`) also needed `std::setprecision(17)` added (it had none — `<<`'s
+  default 6-significant-digit precision cannot round-trip a `double` state-plane value; the reader's
+  `parseFloatField`/`strtof` became `parseDoubleField`/`strtod`). The DXF `$EXTMIN/$EXTMAX` extent
+  sweep for survey points (`DxfIo.cpp`) was not applying the `q6lx`/`q6ly` reader-agreement
+  quantization every other entity kind there uses — added, matching Phase B.
+  **Narrowing-boundary decisions** (left `float`, each at an established boundary): the ImGui
+  survey-point Properties/VIEWPOINTS-table editors and the multi-select `applyCoord` helper (widened
+  its `float SurveyPoint::* memb` pointer-to-member to `double SurveyPoint::*`, since it now
+  compares/writes against a double field — but the ImGui widgets themselves already used
+  `InputDouble`, so no precision was actually lost there before this phase either); `CadCommands.cpp`'s
+  viewport-pick/box-select screen-projection lambdas (`SP`, `worldToScreen`, `wts`) and
+  `CadSnap.cpp`'s whole snap-candidate pipeline (`ConsiderSnap`, `MinDistSqToSurveyMarker`,
+  `PushSnapPickerEntry`, the grip-candidate lambda) — render/pick boundary, Phase C/D precedent,
+  every other entity kind narrows there too; `CadUi.cpp`'s QuickSelect numeric-match lambda
+  (`matchNum`) and the survey-label annotation-box math in `SurveyPoints.cpp`
+  (`RepositionSurveyLabelMtextForPoint` — `CadAnnotation::boxMinX` etc. are a `float` store, not one
+  of the four core stores, ADR-054 scope); `CadUi_Toolspace.cpp`'s `ZoomToSurveyPoints` (widened the
+  accumulation locals to `double`, narrows only at the `float` `pendingZoomMnX` etc. viewport-state
+  assignment). `CadCommands_Align.cpp` (ALIGN) was intentionally left untouched — the 2D survey
+  Helmert-fit module the D-2026-09-08-c decision already closed no-change for REQ-329; its
+  `HelmertPt` is templated so it compiled unchanged against the now-`double` fields, and its own
+  `AlignControlPt`/`HelmertResult` stay `float` by that same decision. `CadUi_TraverseEditor.cpp`'s
+  "Commit to Drawing" button was widened (`startE/startN`, `locE/locN` locals `float`→`double`) since
+  its source fields (`TraverseData::startEasting` etc.) were already `double` — a real, if minor,
+  precision fix, not churn.
+  **Test:** `tests/LibreDwgCadTests.cpp` gained "DXF survey point XDATA round-trips a state-plane
+  coordinate within REQ-101 tolerance" and "CSV import stores a state-plane survey point within
+  REQ-101 tolerance" (the latter proven red against the pre-fix `SurveyCsv.cpp` narrowing cast, using
+  the same 2000000.10/500000.03 values `regression-req101-origin-at-entry` documents quantizing to
+  2000000.125 — both tests needed `Catch::Approx(...).margin(0.002).epsilon(0.0)`: Catch2's default
+  *relative* epsilon at a ~2e6 magnitude is worth ~2000+ ft on its own and silently swallows a 0.002
+  ft margin, which is a trap for every REQ-101 assertion at state-plane magnitude, not just this
+  one). Survey-point label creation reaches `ImGui::GetFont()`
+  (`EnsureSurveyPointLabelMtext`/`MtextRichNaturalContentPx`), so the CSV test needed the same
+  `HeadlessImGuiScope` fixture `GsMigrateLegacyBreaklineTests.cpp` established. Build clean; `ctest`
+  1363/1363 (1361 + 2 new). Traverse/adjustment math (`tests/TraverseTests.cpp`) does not read or
+  write `SurveyPoint` at all — it operates on its own `double` types already — so no residual
+  tolerance changed.
+  **Deferred, not fixed here** (recommend a follow-up issue, not created): `SurveyFilePoint::elevation`
+  (`src/io/SurveyCsv.hpp`, REQ-086 linked-surface point files) stays `float` — it feeds the TIN
+  builder, which is Phase G's (#453) scope, not Phase F's; `ApplyRotationToSelection`/
+  `ApplyScaleToSelection`'s own `bx`/`by`/`sc` parameters (the general MOVE/ROTATE/SCALE modify-command
+  entry points, REQ-329) are still `float` at that outer layer — untouched, pre-existing, and outside
+  this phase's named scope (only the survey-point-specific inner functions were named).
 - **Phase G (#453) — TIN/surface mesh vertex storage.** Surfaced by Phase D's audit: `util/tinbuild.cpp`
   still stores TIN/surface mesh vertices as `float`. Out of scope for Phases A-C (the four core flat
   stores); split off as its own phase for the same reason `SurveyPoint` was split into Phase F —

@@ -2618,8 +2618,8 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
       // Triangulate in WORLD coordinates, in double: at state-plane magnitudes the local frame is
       // what keeps float storage precise, but the predicates need the real spacing between points
       // (ADR-028 (d)). The result is converted back to local by \ref ToLocalTin.
-      in.pts.push_back({static_cast<double>(p.easting) + st.worldDocumentOriginX,
-                        static_cast<double>(p.northing) + st.worldDocumentOriginY, p.elevation});
+      in.pts.push_back({p.easting + st.worldDocumentOriginX, p.northing + st.worldDocumentOriginY,
+                        static_cast<float>(p.elevation)});  // TIN vertex Z stays float (Phase G, #453)
     }
   }
   (void)unresolvedGroups;
@@ -7748,7 +7748,10 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       // The point's elevation IS its Z (REQ-057), so an orbited box-select tests it where it is
       // actually drawn rather than at its plan position.
       float spx, spy;
-      SP(sp.easting, sp.northing, sp.elevation, &spx, &spy);
+      // Screen-space pick projection stays float (render/pick boundary, Phase C precedent) —
+      // narrow the double survey-point coordinate here.
+      SP(static_cast<float>(sp.easting), static_cast<float>(sp.northing), static_cast<float>(sp.elevation), &spx,
+         &spy);
       const bool hitPoint = PointInsideClosedRect(spx, spy, mnX, mxX, mnY, mxY);
       bool hitLabel = false;
       const int lix = FindSurveyLabelAnnIndex(st, sp);
@@ -7991,8 +7994,8 @@ static void ApplyRotationToSelectedSurveyPoints(AppCommandState& st, float bx, f
   for (int i : ix) {
     if (i < 0 || static_cast<size_t>(i) >= st.surveyPoints.size())
       continue;
-    float x = st.surveyPoints[static_cast<size_t>(i)].easting;
-    float y = st.surveyPoints[static_cast<size_t>(i)].northing;
+    double x = st.surveyPoints[static_cast<size_t>(i)].easting;
+    double y = st.surveyPoints[static_cast<size_t>(i)].northing;
     RotateAroundBase(bx, by, rad, &x, &y);
     st.surveyPoints[static_cast<size_t>(i)].easting = x;
     st.surveyPoints[static_cast<size_t>(i)].northing = y;
@@ -10245,8 +10248,8 @@ static void ApplyScaleToSelectedSurveyPoints(AppCommandState& st, float bx, floa
   for (int i : ix) {
     if (i < 0 || static_cast<size_t>(i) >= st.surveyPoints.size())
       continue;
-    float x = st.surveyPoints[static_cast<size_t>(i)].easting;
-    float y = st.surveyPoints[static_cast<size_t>(i)].northing;
+    double x = st.surveyPoints[static_cast<size_t>(i)].easting;
+    double y = st.surveyPoints[static_cast<size_t>(i)].northing;
     ScalePtAroundBase(bx, by, sc, &x, &y);
     st.surveyPoints[static_cast<size_t>(i)].easting = x;
     st.surveyPoints[static_cast<size_t>(i)].northing = y;

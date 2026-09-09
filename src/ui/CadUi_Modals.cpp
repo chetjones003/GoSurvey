@@ -406,7 +406,7 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
       ImGui::SetNextItemWidth(-FLT_MIN);
       ImGui::InputDouble("##z", &dz, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
-        p.elevation = static_cast<float>(dz);
+        p.elevation = dz;
         EnsureSurveyPointLabelMtext(cmd, i, &log);
       }
       ImGui::TableNextColumn();

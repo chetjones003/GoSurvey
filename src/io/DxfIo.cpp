@@ -1474,9 +1474,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         xf.apply(px, py, &wx, &wy);
         SurveyPoint sp;
         sp.id        = sid;
-        sp.easting   = static_cast<float>(wx - st.worldDocumentOriginX);
-        sp.northing  = static_cast<float>(wy - st.worldDocumentOriginY);
-        sp.elevation = static_cast<float>(pz);
+        sp.easting   = wx - st.worldDocumentOriginX;
+        sp.northing  = wy - st.worldDocumentOriginY;
+        sp.elevation = pz;
         sp.description = sdesc;
         sp.rawDescription = sraw;  // empty for a pre-REQ-066 DXF — the documented fallback case
         sp.layer = at.layer.empty() ? std::string("0") : at.layer;
@@ -2292,8 +2292,8 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     for (SurveyPoint& sp : embeddedPoints) {
       if (hadExistingPoints && idInUse(sp.id)) {
         SurveyPoint w = sp;
-        w.easting = static_cast<float>(static_cast<double>(sp.easting) + st.worldDocumentOriginX);
-        w.northing = static_cast<float>(static_cast<double>(sp.northing) + st.worldDocumentOriginY);
+        w.easting = sp.easting + st.worldDocumentOriginX;
+        w.northing = sp.northing + st.worldDocumentOriginY;
         embeddedConflictsWorld.push_back(w);
       } else {
         sp.labelMtextAnnId = 0;
@@ -2583,8 +2583,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     accExtZ(static_cast<double>(t.insZ));
   }
   for (const SurveyPoint& p : st.surveyPoints) {
-    accExt(static_cast<double>(p.easting), static_cast<double>(p.northing));
-    accExtZ(static_cast<double>(p.elevation));
+    // Same q6 reader-agreement technique as every other entity kind here (Phase B): the extent
+    // sweep must see what a reader reconstructs from the written six-decimal-place text, not the
+    // in-memory double.
+    accExt(q6lx(p.easting), q6ly(p.northing));
+    accExtZ(q6(p.elevation));
   }
   // Polylines are geometry too, and this sweep did not know they existed — REQ-053 gave the exporter
   // a LWPOLYLINE branch but not an extents branch. The omission travels, because the IMPORTER sets

@@ -203,30 +203,31 @@ void ZoomToSurveyPoints(AppCommandState& cmd, std::vector<std::string>* log) {
       log->push_back("TOOLSPACE — no survey points to zoom to.");
     return;
   }
-  float mnX = cmd.surveyPoints[0].easting;
-  float mxX = mnX;
-  float mnY = cmd.surveyPoints[0].northing;
-  float mxY = mnY;
+  double mnX = cmd.surveyPoints[0].easting;
+  double mxX = mnX;
+  double mnY = cmd.surveyPoints[0].northing;
+  double mxY = mnY;
   for (const SurveyPoint& p : cmd.surveyPoints) {
     mnX = std::min(mnX, p.easting);
     mxX = std::max(mxX, p.easting);
     mnY = std::min(mnY, p.northing);
     mxY = std::max(mxY, p.northing);
   }
-  if (mxX - mnX < 1.f) {
-    mnX -= 5.f;
-    mxX += 5.f;
+  if (mxX - mnX < 1.0) {
+    mnX -= 5.0;
+    mxX += 5.0;
   }
-  if (mxY - mnY < 1.f) {
-    mnY -= 5.f;
-    mxY += 5.f;
+  if (mxY - mnY < 1.0) {
+    mnY -= 5.0;
+    mxY += 5.0;
   }
   cmd.pendingZoomExtents = false;
   cmd.pendingZoomWindow = true;
-  cmd.pendingZoomMnX = mnX;
-  cmd.pendingZoomMxX = mxX;
-  cmd.pendingZoomMnY = mnY;
-  cmd.pendingZoomMxY = mxY;
+  // Viewport pan/zoom targets stay float (render-only viewport state) — narrow here.
+  cmd.pendingZoomMnX = static_cast<float>(mnX);
+  cmd.pendingZoomMxX = static_cast<float>(mxX);
+  cmd.pendingZoomMnY = static_cast<float>(mnY);
+  cmd.pendingZoomMxY = static_cast<float>(mxY);
 }
 
 void PanToSurveyPoints(AppCommandState& cmd, std::vector<std::string>* log) {
