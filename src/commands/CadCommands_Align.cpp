@@ -90,10 +90,11 @@ static bool SolveHelmert4x4(
 }
 
 // Applies X' = a*x - b*y + tx, Y' = b*x + a*y + ty to a 2D point.
-static inline void HelmertPt(float a, float b, float tx, float ty, float* x, float* y) {
-  const float ox = *x, oy = *y;
-  *x = a * ox - b * oy + tx;
-  *y = b * ox + a * oy + ty;
+template <class T>
+static inline void HelmertPt(double a, double b, double tx, double ty, T* x, T* y) {
+  const double ox = *x, oy = *y;
+  *x = static_cast<T>(a * ox - b * oy + tx);
+  *y = static_cast<T>(b * ox + a * oy + ty);
 }
 
 static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, float tx, float ty,

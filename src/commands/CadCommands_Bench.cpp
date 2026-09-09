@@ -208,12 +208,24 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   // Whichever store the profile filled: the contour scene lives in the polylines, the surface
   // profile in the TIN, the mesh profile in the mesh. Framing from the wrong one would put the
   // scene off screen and measure a viewport with nothing in it.
-  const std::vector<float>& frameVerts =
-      (b.meshTriangleCount > 0 && !st.cadMeshes.empty() && st.cadMeshes[0])
-          ? st.cadMeshes[0]->vertsXyz
-          : ((b.surfacePointCount > 0 && !st.cadSurfaces.empty() && st.cadSurfaces[0].tin)
-                 ? st.cadSurfaces[0].tin->vertsXyz
-                 : st.userPolylineVerts);
+  // Whichever store the profile filled — held as a pointer pair (data + size) so a float mesh/TIN
+  // store and the double polyline store can both feed the same bounds walk below.
+  const float* frameF = nullptr;
+  const double* frameD = nullptr;
+  size_t frameN = 0;
+  if (b.meshTriangleCount > 0 && !st.cadMeshes.empty() && st.cadMeshes[0]) {
+    frameF = st.cadMeshes[0]->vertsXyz.data();
+    frameN = st.cadMeshes[0]->vertsXyz.size();
+  } else if (b.surfacePointCount > 0 && !st.cadSurfaces.empty() && st.cadSurfaces[0].tin) {
+    frameF = st.cadSurfaces[0].tin->vertsXyz.data();
+    frameN = st.cadSurfaces[0].tin->vertsXyz.size();
+  } else {
+    frameD = st.userPolylineVerts.data();
+    frameN = st.userPolylineVerts.size();
+  }
+  const auto frameVertAt = [&](size_t i) -> double {
+    return frameD ? frameD[i] : static_cast<double>(frameF[i]);
+  };
   // The solid profile frames from the solids' ANALYTIC bounds instead — there is no vertex array to
   // walk, and a sphere's two stored vertices would frame a line segment rather than a scene, putting
   // most of the geometry off screen and measuring a viewport with nothing in it.
@@ -232,13 +244,13 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
       mxZ = std::max(mxZ, bb.mx.z);
     }
   }
-  for (size_t i = 0; i + 2 < frameVerts.size(); i += 3) {
-    mnX = std::min(mnX, static_cast<double>(frameVerts[i]));
-    mxX = std::max(mxX, static_cast<double>(frameVerts[i]));
-    mnY = std::min(mnY, static_cast<double>(frameVerts[i + 1]));
-    mxY = std::max(mxY, static_cast<double>(frameVerts[i + 1]));
-    mnZ = std::min(mnZ, static_cast<double>(frameVerts[i + 2]));
-    mxZ = std::max(mxZ, static_cast<double>(frameVerts[i + 2]));
+  for (size_t i = 0; i + 2 < frameN; i += 3) {
+    mnX = std::min(mnX, frameVertAt(i));
+    mxX = std::max(mxX, frameVertAt(i));
+    mnY = std::min(mnY, frameVertAt(i + 1));
+    mxY = std::max(mxY, frameVertAt(i + 1));
+    mnZ = std::min(mnZ, frameVertAt(i + 2));
+    mxZ = std::max(mxZ, frameVertAt(i + 2));
   }
   const double cx = 0.5 * (mnX + mxX);
   const double cy = 0.5 * (mnY + mxY);

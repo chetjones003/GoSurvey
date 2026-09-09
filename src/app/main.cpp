@@ -1395,8 +1395,9 @@ int main()
     const bool startTab = (cmd.activeDrawingIdx == 0);
 
     static const std::vector<float> kEmptyVerts;
-    const std::vector<float> &sceneLines = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
-    const std::vector<float> &sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyZR;
+    static const std::vector<double> kEmptyVertsD;
+    const std::vector<double> &sceneLines = paperSpace ? kEmptyVertsD : cmd.userLinesFlat;
+    const std::vector<double> &sceneCircles = paperSpace ? kEmptyVertsD : cmd.userCirclesCxCyZR;
     const std::vector<float> &sceneRubber = paperSpace ? kEmptyVerts : rubberLines;
     // The camera is derived from the canonical pan/zoom plus the two orientation angles, so it
     // cannot disagree with the view state (REQ-058 / ADR-025 (c)).

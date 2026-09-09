@@ -7306,7 +7306,8 @@ static char PropRowAxis(const char* label) {
   return (c == 'X' || c == 'Y' || c == 'Z') ? c : 0;
 }
 
-static void PropGeomRow(AppCommandState& cmd, const char* label, const char* id, float* v,
+template <class T>
+static void PropGeomRow(AppCommandState& cmd, const char* label, const char* id, T* v,
                         const char* fmt, const char* undoLabel) {
   ImGui::TableNextRow();
   ImGui::TableNextColumn();
@@ -7331,7 +7332,8 @@ static void PropGeomRow(AppCommandState& cmd, const char* label, const char* id,
   }
 
   ImGui::SetNextItemWidth(-1);
-  ImGui::InputFloat(id, v, 0.f, 0.f, fmt);
+  ImGui::InputScalar(id, sizeof(T) == sizeof(double) ? ImGuiDataType_Double : ImGuiDataType_Float, v,
+                     nullptr, nullptr, fmt);
   if (ImGui::IsItemActivated())
     PushUndoSnapshot(cmd, undoLabel);
   if (ImGui::IsItemDeactivatedAfterEdit())
@@ -7344,12 +7346,12 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
   const size_t k = static_cast<size_t>(lineIdx) * 6;
   if (k + 5 >= cmd.userLinesFlat.size())
     return;
-  float* x0 = &cmd.userLinesFlat[k];
-  float* y0 = &cmd.userLinesFlat[k + 1];
-  float* z0 = &cmd.userLinesFlat[k + 2];
-  float* x1 = &cmd.userLinesFlat[k + 3];
-  float* y1 = &cmd.userLinesFlat[k + 4];
-  float* z1 = &cmd.userLinesFlat[k + 5];
+  double* x0 = &cmd.userLinesFlat[k];
+  double* y0 = &cmd.userLinesFlat[k + 1];
+  double* z0 = &cmd.userLinesFlat[k + 2];
+  double* x1 = &cmd.userLinesFlat[k + 3];
+  double* y1 = &cmd.userLinesFlat[k + 4];
+  double* z1 = &cmd.userLinesFlat[k + 5];
   const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
 
   if (ImGui::BeginTable("props_geom_line_ed", 2, kPropTableFlags)) {
@@ -7405,10 +7407,10 @@ void DrawSingleCircleGeometryEditable(AppCommandState& cmd, int circleIdx) {
   const size_t k = static_cast<size_t>(circleIdx) * 4;
   if (k + 3 >= cmd.userCirclesCxCyZR.size())
     return;
-  float* cx = &cmd.userCirclesCxCyZR[k];
-  float* cy = &cmd.userCirclesCxCyZR[k + 1];
-  float* cz = &cmd.userCirclesCxCyZR[k + 2];
-  float* r = &cmd.userCirclesCxCyZR[k + 3];
+  double* cx = &cmd.userCirclesCxCyZR[k];
+  double* cy = &cmd.userCirclesCxCyZR[k + 1];
+  double* cz = &cmd.userCirclesCxCyZR[k + 2];
+  double* r = &cmd.userCirclesCxCyZR[k + 3];
   const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
 
   if (ImGui::BeginTable("props_geom_circ_ed", 2, kPropTableFlags)) {
@@ -8439,11 +8441,13 @@ static void DrawPaperEntityProps(AppCommandState& cmd) {
   const PaperEntityRef r = selp.front();
   const size_t i = static_cast<size_t>(r.index);
   auto bump = [&]() { if (ImGui::IsItemDeactivatedAfterEdit()) BumpCadGpuCache(cmd); };
-  auto geomRow = [&](const char* label, float* v) {
+  auto geomRow = [&](const char* label, auto* v) {
     ImGui::TableNextRow();
     ImGui::TableNextColumn(); ImGui::TextUnformatted(label);
     ImGui::TableNextColumn(); ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat((std::string("##pg_") + label).c_str(), v, 0.f, 0.f, "%.4f");
+    ImGui::InputScalar((std::string("##pg_") + label).c_str(),
+                       sizeof(*v) == sizeof(double) ? ImGuiDataType_Double : ImGuiDataType_Float, v,
+                       nullptr, nullptr, "%.4f");
     bump();
   };
 

@@ -24,9 +24,9 @@ void WorldFromLocal(const AppCommandState& st, float lx, float ly, double* wx, d
 }
 
 void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
-  auto add2 = [&](float* x, float* y) {
-    *x = static_cast<float>(static_cast<double>(*x) + dx);
-    *y = static_cast<float>(static_cast<double>(*y) + dy);
+  auto add2 = [&](auto* x, auto* y) {
+    *x = static_cast<decltype(+*x)>(static_cast<double>(*x) + dx);
+    *y = static_cast<decltype(+*y)>(static_cast<double>(*y) + dy);
   };
 
   for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {

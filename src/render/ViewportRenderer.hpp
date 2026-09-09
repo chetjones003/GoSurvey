@@ -45,7 +45,7 @@ public:
   ///            parameter reduction rather than an addition to an already long signature.
   ///            A plan-view camera reproduces the pre-3D pipeline exactly.
   void RenderScene(const Camera& cam, int fbWidth, int fbHeight,
-                   const std::vector<float>& userLines, const std::vector<float>& circlesCxCyZR,
+                   const std::vector<double>& userLines, const std::vector<double>& circlesCxCyZR,
                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
                    const std::vector<float>* previewLines,

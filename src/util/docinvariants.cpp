@@ -24,8 +24,9 @@ void CheckStride(std::vector<InvariantViolation>* out, const char* store, size_t
 
 /// Every float in a flat store must be finite. Reports the FIRST offending index only: a NaN
 /// usually arrives in a whole run, and one report per float would bury the finding in its own noise.
+template <class VT>
 void CheckFinite(std::vector<InvariantViolation>* out, const char* store,
-                 const std::vector<float>& v) {
+                 const std::vector<VT>& v) {
   for (size_t i = 0; i < v.size(); ++i) {
     if (std::isfinite(v[i]))
       continue;
@@ -37,12 +38,12 @@ void CheckFinite(std::vector<InvariantViolation>* out, const char* store,
   }
 }
 
-void CheckFiniteScalar(std::vector<InvariantViolation>* out, const char* what, float value,
+void CheckFiniteScalar(std::vector<InvariantViolation>* out, const char* what, double value,
                        int entityIndex) {
   if (std::isfinite(value))
     return;
   char buf[64];
-  std::snprintf(buf, sizeof buf, "%g", static_cast<double>(value));
+  std::snprintf(buf, sizeof buf, "%g", value);
   Add(out, docinv::kFiniteCoords, std::string(what) + " = " + buf, entityIndex);
 }
 

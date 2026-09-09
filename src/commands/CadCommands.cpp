@@ -943,7 +943,7 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
   if (!L || st.selectedPaperEntities.empty())
     return;
   const float c = std::cos(angRad), s = std::sin(angRad);
-  auto rot = [&](float& x, float& y) {
+  auto rot = [&](auto& x, auto& y) {
     const float dx = x - baseX, dy = y - baseY;
     x = baseX + dx * c - dy * s;
     y = baseY + dx * s + dy * c;
@@ -1027,7 +1027,7 @@ void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, fl
   // shape for the same reason, a local \c rot lambda rather than calling \c RotateAroundBase).
   const float mdx = x1In - x0In, mdy = y1In - y0In;
   const float mlen2 = mdx * mdx + mdy * mdy;
-  auto refl = [&](float& x, float& y) {
+  auto refl = [&](auto& x, auto& y) {
     if (mlen2 < 1e-12f)
       return;
     const float t = ((x - x0In) * mdx + (y - y0In) * mdy) / mlen2;
@@ -7313,7 +7313,8 @@ void SampleEllipseWorld(std::vector<ray3d::Vec3>& out, const CadEllipse& e, int 
 ///        (REQ-058). Per-vertex projection keeps the polyline test exact rather than conservative.
 /// Takes the three arrays explicitly so FEATURE LINES box-select through the identical test
 /// (REQ-087): same CSR shape, so a separate copy could only drift.
-bool ChainHitsRect(const std::vector<int>& OFF, const std::vector<float>& V,
+template <class VT>
+bool ChainHitsRect(const std::vector<int>& OFF, const std::vector<VT>& V,
                    const std::vector<uint8_t>& CLOSED, int pi, float mnX, float mxX, float mnY,
                    float mxY, bool windowMode,
                    const std::function<void(float, float, float, float*, float*)>* toTest,
@@ -7862,30 +7863,32 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   }
 }
 
-void RotateAroundBase(float bx, float by, float rad, float* x, float* y) {
-  const float c = std::cos(rad);
-  const float s = std::sin(rad);
-  float dx = *x - bx;
-  float dy = *y - by;
-  *x = bx + c * dx - s * dy;
-  *y = by + s * dx + c * dy;
+template <class T>
+void RotateAroundBase(double bx, double by, double rad, T* x, T* y) {
+  const double c = std::cos(rad);
+  const double s = std::sin(rad);
+  const double dx = static_cast<double>(*x) - bx;
+  const double dy = static_cast<double>(*y) - by;
+  *x = static_cast<T>(bx + c * dx - s * dy);
+  *y = static_cast<T>(by + s * dx + c * dy);
 }
 
 /// REQ-103 MIRROR. Reflects (*x,*y) across the line through (x0,y0)-(x1,y1). A degenerate
 /// (near-zero-length) mirror line leaves the point unchanged rather than dividing by ~0 — callers
 /// require two distinct points before a mirror commits (see \c HandleMirrorText), so this is a
 /// safety net, not a user-facing path.
-void ReflectPtAcrossLine(float x0, float y0, float x1, float y1, float* x, float* y) {
-  const float dx = x1 - x0;
-  const float dy = y1 - y0;
-  const float len2 = dx * dx + dy * dy;
-  if (len2 < 1e-12f)
+template <class T>
+void ReflectPtAcrossLine(double x0, double y0, double x1, double y1, T* x, T* y) {
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12)
     return;
-  const float t = ((*x - x0) * dx + (*y - y0) * dy) / len2;
-  const float projX = x0 + t * dx;
-  const float projY = y0 + t * dy;
-  *x = 2.f * projX - *x;
-  *y = 2.f * projY - *y;
+  const double t = ((static_cast<double>(*x) - x0) * dx + (static_cast<double>(*y) - y0) * dy) / len2;
+  const double projX = x0 + t * dx;
+  const double projY = y0 + t * dy;
+  *x = static_cast<T>(2.0 * projX - static_cast<double>(*x));
+  *y = static_cast<T>(2.0 * projY - static_cast<double>(*y));
 }
 
 /// Reflects a direction/angle across the mirror line's own direction angle phi = atan2(dy,dx):
@@ -8784,7 +8787,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   // function, which is exactly why both go through AppendFeatureLineCopy.
   ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
     AppendFeatureLineCopy(st, fi, v0, v1,
-                          [&](float* x, float* y) { RotateAroundBase(bx, by, rad, x, y); });
+                          [&](auto* x, auto* y) { RotateAroundBase(bx, by, rad, x, y); });
   });
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
@@ -9637,7 +9640,7 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
   // Feature lines (REQ-087) — every vertex, PIs and elevation points alike, so the elevation points
   // stay on the line (ADR-035 (b)).
   TransformSelectedFeatureLinesInPlace(
-      st, [&](float* x, float* y) { RotateAroundBase(bx, by, rad, x, y); });
+      st, [&](auto* x, auto* y) { RotateAroundBase(bx, by, rad, x, y); });
   ApplyRotationToSelectedSurveyPoints(st, bx, by, rad);
   BumpCadGpuCache(st);
 }
@@ -9943,7 +9946,8 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
     CadBlockTranslate(&st.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, dz);
   }
   // Feature lines (REQ-087) — see ApplyRotationToSelection.
-  TransformSelectedFeatureLinesInPlace(st, [&](float* x, float* y) {
+  TransformSelectedFeatureLinesInPlace(
+      st, [&](auto* x, auto* y) {
     *x += dx;
     *y += dy;
   });
@@ -9964,9 +9968,10 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
 namespace {  // reopened; see the note above ApplyTranslationToSelection
 
 
-static void ScalePtAroundBase(float bx, float by, float sc, float* x, float* y) {
-  *x = bx + sc * (*x - bx);
-  *y = by + sc * (*y - by);
+template <class T>
+static void ScalePtAroundBase(double bx, double by, double sc, T* x, T* y) {
+  *x = static_cast<T>(bx + sc * (static_cast<double>(*x) - bx));
+  *y = static_cast<T>(by + sc * (static_cast<double>(*y) - by));
 }
 
 static void ScaleCadDimLinearAroundBase(float bx, float by, float sc, CadAnnotation* ann) {
@@ -10118,7 +10123,7 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
         for (int i = 0; i < 2; ++i) {
           const float x = st.userLinesFlat[k + i * 3];
           const float y = st.userLinesFlat[k + i * 3 + 1];
-          m = std::max(m, std::hypot(x - bx, y - by));
+          m = std::max<double>(m, std::hypot(x - bx, y - by));
         }
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
@@ -10127,13 +10132,13 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
         const float cx = st.userCirclesCxCyZR[k];
         const float cy = st.userCirclesCxCyZR[k + 1];
         const float r = st.userCirclesCxCyZR[k + 3];
-        m = std::max(m, std::hypot(cx - bx, cy - by) + r);
+        m = std::max<double>(m, std::hypot(cx - bx, cy - by) + r);
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.userArcs.size()) {
         const CadArc& a = st.userArcs[k];
-        m = std::max(m, std::hypot(a.cx - bx, a.cy - by) + a.r);
+        m = std::max<double>(m, std::hypot(a.cx - bx, a.cy - by) + a.r);
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
@@ -10141,7 +10146,7 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
         const CadEllipse& el = st.userEllipses[k];
         const float ma = std::hypot(el.majVx, el.majVy);
         const float mb = ma * el.ratio;
-        m = std::max(m, std::hypot(el.cx - bx, el.cy - by) + std::max(ma, mb));
+        m = std::max<double>(m, std::hypot(el.cx - bx, el.cy - by) + std::max(ma, mb));
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
@@ -10152,7 +10157,7 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
       for (int vi = v0; vi < v1; ++vi) {
         const float x = st.userPolylineVerts[static_cast<size_t>(vi * 3)];
         const float y = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-        m = std::max(m, std::hypot(x - bx, y - by));
+        m = std::max<double>(m, std::hypot(x - bx, y - by));
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -10163,18 +10168,18 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
         float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
         float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
         for (int i = 0; i < 4; ++i)
-          m = std::max(m, std::hypot(xs[i] - bx, ys[i] - by));
+          m = std::max<double>(m, std::hypot(xs[i] - bx, ys[i] - by));
       } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
-        m = std::max(m, std::hypot(a.dimExt1X - bx, a.dimExt1Y - by));
-        m = std::max(m, std::hypot(a.dimExt2X - bx, a.dimExt2Y - by));
-        m = std::max(m, std::hypot(a.insX - bx, a.insY - by));
+        m = std::max<double>(m, std::hypot(a.dimExt1X - bx, a.dimExt1Y - by));
+        m = std::max<double>(m, std::hypot(a.dimExt2X - bx, a.dimExt2Y - by));
+        m = std::max<double>(m, std::hypot(a.insX - bx, a.insY - by));
       } else if (a.kind == CadAnnotation::Kind::DimAngular) {
-        m = std::max(m, std::hypot(a.dimAngVertexX - bx, a.dimAngVertexY - by));
-        m = std::max(m, std::hypot(a.dimExt1X - bx, a.dimExt1Y - by));
-        m = std::max(m, std::hypot(a.dimExt2X - bx, a.dimExt2Y - by));
-        m = std::max(m, std::hypot(a.insX - bx, a.insY - by));
+        m = std::max<double>(m, std::hypot(a.dimAngVertexX - bx, a.dimAngVertexY - by));
+        m = std::max<double>(m, std::hypot(a.dimExt1X - bx, a.dimExt1Y - by));
+        m = std::max<double>(m, std::hypot(a.dimExt2X - bx, a.dimExt2Y - by));
+        m = std::max<double>(m, std::hypot(a.insX - bx, a.insY - by));
       }       else
-        m = std::max(m, std::hypot(a.insX - bx, a.insY - by));
+        m = std::max<double>(m, std::hypot(a.insX - bx, a.insY - by));
     } else if (e.type == SelectedEntity::Type::Table) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.cadTables.size())
@@ -10183,7 +10188,7 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
       for (int i = 0; i < 4; ++i) {
         float cx = 0.f, cy = 0.f;
         CadTableWorldCorner(t, i, &cx, &cy);
-        m = std::max(m, std::hypot(cx - bx, cy - by));
+        m = std::max<double>(m, std::hypot(cx - bx, cy - by));
       }
     } else if (e.type == SelectedEntity::Type::PdfUnderlay) {
       const size_t k = static_cast<size_t>(e.index);
@@ -10200,7 +10205,7 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
           for (int ci = 0; ci < 4; ++ci) {
             const float wx = patt.insertX + cosR * lcx[ci] - sinR * lcy[ci];
             const float wy = patt.insertY + sinR * lcx[ci] + cosR * lcy[ci];
-            m = std::max(m, std::hypot(wx - bx, wy - by));
+            m = std::max<double>(m, std::hypot(wx - bx, wy - by));
           }
         }
       }
@@ -10211,13 +10216,13 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
     for (int vi = v0; vi < v1; ++vi) {
       const float x = st.featureLineVerts[static_cast<size_t>(vi) * 3];
       const float y = st.featureLineVerts[static_cast<size_t>(vi) * 3 + 1];
-      m = std::max(m, std::hypot(x - bx, y - by));
+      m = std::max<double>(m, std::hypot(x - bx, y - by));
     }
   });
   for (int si : st.selectedSurveyPointIndices) {
     if (si >= 0 && static_cast<size_t>(si) < st.surveyPoints.size()) {
       const SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(si)];
-      m = std::max(m, std::hypot(sp.easting - bx, sp.northing - by));
+      m = std::max<double>(m, std::hypot(sp.easting - bx, sp.northing - by));
     }
   }
   *outMax = m;
@@ -10393,7 +10398,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc, st
   // Feature lines (REQ-087). Plan only — elevations are NOT scaled here, matching the polyline above;
   // `ScaleSelectionZAboutBase` (REQ-329 increment 2 (SCALE)) scales Z under a tilted UCS.
   TransformSelectedFeatureLinesInPlace(
-      st, [&](float* x, float* y) { ScalePtAroundBase(bx, by, sc, x, y); });
+      st, [&](auto* x, auto* y) { ScalePtAroundBase(bx, by, sc, x, y); });
   ApplyScaleToSelectedSurveyPoints(st, bx, by, sc);
   BumpCadGpuCache(st);
 }
@@ -10405,7 +10410,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc, st
 /// because there the scale base sits on the world XY plane with the geometry and a Z pass would be
 /// a no-op at best and an unasked-for change at worst.
 static void ScaleSelectionZAboutBase(AppCommandState& st, float bz, float sc) {
-  const auto sz = [&](float* z) { *z = bz + sc * (*z - bz); };
+  const auto sz = [&](auto* z) { *z = static_cast<decltype(+*z)>(bz + sc * (static_cast<double>(*z) - bz)); };
   for (const auto& e : st.selection) {
     switch (e.type) {
     case SelectedEntity::Type::LineSeg: {
@@ -15169,7 +15174,7 @@ static bool LengthenDynamicTargetLength(const AppCommandState& st, float wx, flo
     // deliberately simple, directionally-honest live-preview approximation; a change larger than
     // that is what Total mode's typed value is for.
     const float delta = NormalizeAngleRadMinusPiToPi(pickAngle - fixedAngle);
-    *outLen = std::max(a.r * std::fabs(delta), 1e-6f);
+    *outLen = std::max<double>(a.r * std::fabs(delta), 1e-6);
     return true;
   }
   default:
@@ -15853,8 +15858,8 @@ static void ApplyBreakToArc(AppCommandState& st, int index, const BreakPoint& p1
     return;
   }
   const float sgn = src.sweepRad >= 0.f ? 1.f : -1.f;
-  const float nearTheta = src.startRad + sgn * (nearP / std::max(src.r, 1e-9f));
-  const float farTheta = src.startRad + sgn * (farP / std::max(src.r, 1e-9f));
+  const float nearTheta = src.startRad + sgn * (nearP / std::max<double>(src.r, 1e-9));
+  const float farTheta = src.startRad + sgn * (farP / std::max<double>(src.r, 1e-9));
   const float endRad0 = src.startRad + src.sweepRad;
   PushUndoSnapshot(st, "Break");
   if (nearIsStart) {
@@ -16308,8 +16313,8 @@ static bool ApplyBreakToPaperArc(AppCommandState& st, PaperLayout* L, int index,
     return false;
   }
   const float sgn = src.sweepRad >= 0.f ? 1.f : -1.f;
-  const float nearTheta = src.startRad + sgn * (nearP / std::max(src.r, 1e-9f));
-  const float farTheta = src.startRad + sgn * (farP / std::max(src.r, 1e-9f));
+  const float nearTheta = src.startRad + sgn * (nearP / std::max<double>(src.r, 1e-9));
+  const float farTheta = src.startRad + sgn * (farP / std::max<double>(src.r, 1e-9));
   const float endRad0 = src.startRad + src.sweepRad;
   PushUndoSnapshot(st, "Break paper geometry");
   if (nearIsStart) {
@@ -20803,7 +20808,7 @@ bool BuildFeatureLineElevTable(const AppCommandState& st, int fi, std::vector<Fe
 namespace {
 
 /// Writable Z of point \p i of feature line \p fi. Callers have already validated the range.
-float& FeatureLineZ(AppCommandState& st, int v0, int i) {
+double& FeatureLineZ(AppCommandState& st, int v0, int i) {
   return st.featureLineVerts[static_cast<size_t>(v0 + i) * 3 + 2];
 }
 
@@ -22327,9 +22332,9 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
     if (static_cast<size_t>(idx) * 4 + 3 >= st.userCirclesCxCyZR.size())
       return;
     const size_t k = static_cast<size_t>(idx) * 4;
-    float& cx = st.userCirclesCxCyZR[k];
-    float& cy = st.userCirclesCxCyZR[k + 1];
-    float& r = st.userCirclesCxCyZR[k + 3];
+    double& cx = st.userCirclesCxCyZR[k];
+    double& cy = st.userCirclesCxCyZR[k + 1];
+    double& r = st.userCirclesCxCyZR[k + 3];
     if (st.entityGripWhich == 0) {
       cx = x;
       cy = y;
@@ -22402,7 +22407,7 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
       const float majLen2 = el.majVx * el.majVx + el.majVy * el.majVy;
       if (majLen2 < 1e-12f)
         return;
-      el.ratio = std::clamp(((x - el.cx) * -el.majVy + (y - el.cy) * el.majVx) / majLen2, 0.f, 1.f);
+      el.ratio = std::clamp<double>(((x - el.cx) * -el.majVy + (y - el.cy) * el.majVx) / majLen2, 0.0, 1.0);
     }
     return;
   }
@@ -23710,13 +23715,13 @@ static bool SelectedEntityMatches(const SelectedEntity& a, const SelectedEntity&
 }
 
 static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& cut,
-                               std::vector<std::array<float, 4>>* out) {
+                               std::vector<std::array<double, 4>>* out) {
   using ST = SelectedEntity::Type;
   if (cut.type == ST::LineSeg) {
     const size_t k = static_cast<size_t>(cut.index) * 6;
     if (k + 5 < st.userLinesFlat.size())
-      out->push_back({st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 3],
-                      st.userLinesFlat[k + 4]});
+      out->push_back({static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]),
+                      static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4])});
     return;
   }
   if (cut.type == ST::Circle) {
@@ -23826,7 +23831,7 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
 }
 
 static void AppendPolylineCutEdgesExcept(const AppCommandState& st, int pi, int skipEdgeVi,
-                                         std::vector<std::array<float, 4>>* out) {
+                                         std::vector<std::array<double, 4>>* out) {
   if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
     return;
   const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
@@ -23857,7 +23862,7 @@ static void AppendPolylineCutEdgesExcept(const AppCommandState& st, int pi, int 
 }
 
 static void CollectAllDrawingCutSegmentsExceptTarget(const AppCommandState& st, const TrimTargetEdge* excludeEdge,
-                                                     std::vector<std::array<float, 4>>* out) {
+                                                     std::vector<std::array<double, 4>>* out) {
   out->clear();
   const auto& Lf = st.userLinesFlat;
   if (Lf.size() % 6 == 0) {
@@ -23907,7 +23912,7 @@ static void CollectAllDrawingCutSegmentsExceptTarget(const AppCommandState& st, 
 }
 
 static void BuildTrimCutSegments(const AppCommandState& st, const std::vector<SelectedEntity>& cutters,
-                                 const TrimTargetEdge* excludeEdge, std::vector<std::array<float, 4>>* out) {
+                                 const TrimTargetEdge* excludeEdge, std::vector<std::array<double, 4>>* out) {
   out->clear();
   for (const SelectedEntity& cut : cutters) {
     if (excludeEdge && cut.type == SelectedEntity::Type::LineSeg && excludeEdge->kind == TrimTargetEdge::Line &&
@@ -24080,7 +24085,7 @@ static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float
 }
 
 static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by, float pickX, float pickY,
-                                         const std::vector<std::array<float, 4>>& cuts, const AppCommandState& st,
+                                         const std::vector<std::array<double, 4>>& cuts, const AppCommandState& st,
                                          float fenceFx, float fenceFy, float fenceGx, float fenceGy,
                                          bool useFenceToPickIntersection,
                                          float* outIx, float* outIy, bool* trimFromA, std::vector<std::string>* log) {
@@ -24183,7 +24188,7 @@ static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by,
 /// removed).
 static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge& tgt, float ax, float ay, float bx,
                                       float by, float pickX, float pickY,
-                                      const std::vector<std::array<float, 4>>& cuts, bool useFence,
+                                      const std::vector<std::array<double, 4>>& cuts, bool useFence,
                                       float fenceFx, float fenceFy, float fenceGx, float fenceGy,
                                       std::vector<std::string>& log) {
   float ix = 0.f, iy = 0.f;
@@ -25242,7 +25247,7 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
                                            &bx, &by, &dEdge))
     return;
 
-  std::vector<std::array<float, 4>> cuts;
+  std::vector<std::array<double, 4>> cuts;
   CollectAllDrawingCutSegmentsExceptTarget(st, &tgt, &cuts);
   if (cuts.empty())
     return;
@@ -25280,7 +25285,7 @@ static void ExecuteDrawnSegmentTrimOnce(AppCommandState& st, float p1x, float p1
     log.push_back("TRIM — no segment close enough to your line (draw along the edge to shorten).");
     return;
   }
-  std::vector<std::array<float, 4>> cuts;
+  std::vector<std::array<double, 4>> cuts;
   CollectAllDrawingCutSegmentsExceptTarget(st, &tgt, &cuts);
   if (cuts.empty()) {
     log.push_back("TRIM — nothing crosses that segment.");
@@ -26015,7 +26020,7 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
     return false;
   }
 
-  std::vector<std::array<float, 4>> cuts;
+  std::vector<std::array<double, 4>> cuts;
   BuildTrimCutSegments(st, st.trimCutters, &tgt, &cuts);
   if (cuts.empty()) {
     log.push_back("TRIM — no cutting segments (check cutting edges).");
@@ -26564,7 +26569,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // 1. LINE SEGMENTS
   // =========================================================================
   {
-    struct LSeg { float x0, y0, x1, y1; EntityAttributes attr; };
+    struct LSeg { double x0, y0, x1, y1; EntityAttributes attr; };
 
     // Snapshot into a working vector that carries attrs
     const size_t nL = st.userLinesFlat.size() / 6;
@@ -26771,7 +26776,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // =========================================================================
   {
     const size_t nC = st.userCirclesCxCyZR.size() / 4;
-    struct Circ { float cx, cy, z, r, nx, ny, nz; EntityAttributes attr; };
+    struct Circ { double cx, cy, z, r; float nx, ny, nz; EntityAttributes attr; };
     std::vector<Circ> cs;
     cs.reserve(nC);
     for (size_t i = 0; i < nC; ++i) {

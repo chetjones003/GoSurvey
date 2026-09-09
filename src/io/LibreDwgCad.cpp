@@ -196,7 +196,8 @@ void LocalCircle(AppCommandState& st, double cx, double cy, double r, double z, 
   PushCircleNormal(st.userCircleNormals);   // REQ-312: DWG extrusion not yet read
 }
 
-void ArcFromAngles(double a0, double a1, float* startRad, float* sweepRad) {
+template <class T>
+void ArcFromAngles(double a0, double a1, T* startRad, T* sweepRad) {
   double sweep = a1 - a0;
   if (std::fabs(sweep) < 1e-12)
     sweep = 2.0 * kPi;

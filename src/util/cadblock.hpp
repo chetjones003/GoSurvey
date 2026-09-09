@@ -106,10 +106,10 @@ struct CadBlockNested {
 };
 
 struct CadBlockContent {
-  std::vector<float> lines;
+  std::vector<double> lines;
   std::vector<EntityAttributes> lineAttrs;
   std::vector<std::string> lineVis;
-  std::vector<float> circles;
+  std::vector<double> circles;
   std::vector<EntityAttributes> circleAttrs;
   std::vector<std::string> circleVis;
   /// Plane normal per circle, 3 floats each (REQ-312) - the block-definition counterpart of
@@ -122,7 +122,7 @@ struct CadBlockContent {
   std::vector<CadEllipse> ellipses;
   std::vector<EntityAttributes> ellAttrs;
   std::vector<int> polyOffsets;
-  std::vector<float> polyVerts;
+  std::vector<double> polyVerts;
   /// REQ-316 / ADR-047: per-vertex bulge, parallel to polyVerts (size()/3). Empty on a legacy
   /// block definition, which reads as an all-straight polyline.
   std::vector<float> polyVertsBulge;
@@ -1005,7 +1005,7 @@ inline void CadBlockLineYExtent(const CadBlockDefinition& def, float* yMin, floa
   *yMin = 0.f;
   *yMax = 0.f;
   bool any = false;
-  const std::vector<float>& L = def.content.lines;
+  const std::vector<double>& L = def.content.lines;
   for (size_t i = 0; i + 4 < L.size(); i += 6) {
     const float y0 = L[i + 1];
     const float y1 = L[i + 4];

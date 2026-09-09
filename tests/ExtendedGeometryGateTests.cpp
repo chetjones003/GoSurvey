@@ -20,7 +20,7 @@
 TEST_CASE("A drawing holding only a feature line has drawable geometry", "[render][featureline][req087]") {
   // Exactly what main.cpp hands the renderer: every pointer wired, most stores empty. Pointers being
   // non-null is NOT the question — having entities is.
-  std::vector<float> noVerts;
+  std::vector<double> noVerts;
   std::vector<int> noOffsets;
   std::vector<uint8_t> noClosed;
   std::vector<EntityAttributes> noAttrs;
@@ -28,7 +28,7 @@ TEST_CASE("A drawing holding only a feature line has drawable geometry", "[rende
   std::vector<CadEllipse> noEllipses;
 
   // One feature line, two vertices: CSR offsets {0, 2}.
-  std::vector<float> flVerts = {0.f, 0.f, 10.f, 100.f, 0.f, 12.f};
+  std::vector<double> flVerts = {0.0, 0.0, 10.0, 100.0, 0.0, 12.0};
   std::vector<int> flOffsets = {0, 2};
   std::vector<uint8_t> flClosed = {0};
   std::vector<EntityAttributes> flAttrs(1);
@@ -51,7 +51,7 @@ TEST_CASE("A drawing holding only a feature line has drawable geometry", "[rende
 TEST_CASE("An input wired but holding nothing has no drawable geometry", "[render][req087]") {
   // The complement, and the reason the predicate cannot simply test the pointers: main.cpp wires
   // every store on every frame, so a null check would report "yes, draw" for an empty drawing.
-  std::vector<float> noVerts;
+  std::vector<double> noVerts;
   std::vector<int> noOffsets;
   std::vector<CadArc> noArcs;
   std::vector<CadEllipse> noEllipses;
@@ -71,11 +71,11 @@ TEST_CASE("A one-entry CSR offsets table describes zero entities", "[render][req
   // An "empty" CSR store is legitimately either {} or {0} — issue #60's lesson. One offset claims a
   // table exists while describing no entities, and reading it as one entity walks off the end of the
   // vertex array.
-  std::vector<float> noVerts;
+  std::vector<double> noVerts;
   std::vector<int> oneOffset = {0};
   REQUIRE_FALSE(CadChainHasEntities(&noVerts, &oneOffset));
 
-  std::vector<float> verts = {0.f, 0.f, 0.f, 1.f, 1.f, 0.f};
+  std::vector<double> verts = {0.0, 0.0, 0.0, 1.0, 1.0, 0.0};
   std::vector<int> twoOffsets = {0, 2};
   REQUIRE(CadChainHasEntities(&verts, &twoOffsets));
 }
@@ -83,9 +83,9 @@ TEST_CASE("A one-entry CSR offsets table describes zero entities", "[render][req
 TEST_CASE("Polylines still gate the draw on their own, unchanged", "[render][req087]") {
   // The feature-line append used to be NESTED inside the polyline block, so it inherited whether
   // polylines existed. Un-nesting them must not have made polylines depend on feature lines either.
-  std::vector<float> pvVerts = {0.f, 0.f, 0.f, 5.f, 5.f, 0.f};
+  std::vector<double> pvVerts = {0.0, 0.0, 0.0, 5.0, 5.0, 0.0};
   std::vector<int> pvOffsets = {0, 2};
-  std::vector<float> noVerts;
+  std::vector<double> noVerts;
   std::vector<int> noOffsets;
 
   CadExtendedGeometryInput e;

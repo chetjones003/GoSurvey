@@ -443,15 +443,15 @@ inline void CadTextAnnotationBounds(const CadAnnotation& a, float heightUnits, f
 /// Dependency-free so both the model store (CadCommands.hpp) and the paper-space store (PaperSpace.hpp,
 /// ADR-013) can hold arcs without a circular include.
 struct CadArc {
-  float cx = 0.f;
-  float cy = 0.f;
-  float r = 0.f;
-  float startRad = 0.f;
-  float sweepRad = 0.f;
+  double cx = 0.0;
+  double cy = 0.0;
+  double r = 0.0;
+  double startRad = 0.0;
+  double sweepRad = 0.0;
   /// Elevation of the arc plane (REQ-057 / ADR-025). Absolute (ADR-025 D2), always 0 in paper
   /// space (ADR-025 (g)). On a tilted arc this is the CENTRE point of the plane, not an
   /// elevation every point on the arc shares.
-  float z = 0.f;
+  double z = 0.0;
   /// Plane normal (REQ-312). World +Z is the flat case, which is every arc that existed before
   /// this field, and `ucs::FromNormal` maps a +Z normal onto the world X and Y axes exactly -- so
   /// `startRad` and `sweepRad` keep the meaning they have always had and a flat arc stays
@@ -722,14 +722,14 @@ inline void CurveEndpointsWorld(const CadArc& a, ray3d::Vec3* outStart, ray3d::V
 
 /// Axis-aligned ellipse: center + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1].
 struct CadEllipse {
-  float cx = 0.f;
-  float cy = 0.f;
-  float majVx = 1.f;
-  float majVy = 0.f;
-  float ratio = 0.5f;
+  double cx = 0.0;
+  double cy = 0.0;
+  double majVx = 1.0;
+  double majVy = 0.0;
+  double ratio = 0.5;
   /// Elevation of the ellipse's plane (REQ-057 / ADR-025) — parallel to XY, absolute
   /// (ADR-025 D2), always 0 in paper space (ADR-025 (g)). Same rationale as \ref CadArc::z.
-  float z = 0.f;
+  double z = 0.0;
 };
 
 /// One named sub-range of a mesh — a single object from the imported model (REQ-063).
@@ -981,7 +981,7 @@ struct CadFilledRegion {
   /// absolute — ADR-025 D2). Renamed from `verts` when Z was interleaved (REQ-057 / ADR-025 (a)): the
   /// rename is deliberate, so every site that assumed the old stride-2 layout fails to compile rather
   /// than silently reading a Y as an X. Z is always 0 for paper-space regions — a sheet is 2D (ADR-025 (g)).
-  std::vector<float> vertsXyz;
+  std::vector<double> vertsXyz;
   std::vector<int>   loopStart;  ///< Vertex index where each loop begins; loopStart[0]==0. Loop k spans
                                  ///< [loopStart[k], loopStart[k+1]) (last loop runs to vertsXyz.size()/3).
   /// Hatch pattern (REQ-043, ADR-018). Empty or "SOLID" → a solid fill (the ADR-011 behaviour). Otherwise a

@@ -296,7 +296,7 @@ json CadBlockContentToJson(const CadBlockContent& c) {
 CadBlockContent CadBlockContentFromJson(const json& o) {
   CadBlockContent c;
   if (o.contains("lines") && o["lines"].is_array())
-    c.lines = o["lines"].get<std::vector<float>>();
+    c.lines = o["lines"].get<std::vector<double>>();
   if (o.contains("lineAttrs") && o["lineAttrs"].is_array()) {
     for (const auto& e : o["lineAttrs"])
       c.lineAttrs.push_back(EntityAttributesFromJson(e));
@@ -304,7 +304,7 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
   if (o.contains("lineVis") && o["lineVis"].is_array())
     c.lineVis = o["lineVis"].get<std::vector<std::string>>();
   if (o.contains("circles") && o["circles"].is_array())
-    c.circles = o["circles"].get<std::vector<float>>();
+    c.circles = o["circles"].get<std::vector<double>>();
   EntityAttrArrayFromJson(o, "circleAttrs", c.circleAttrs);
   if (o.contains("circleVis") && o["circleVis"].is_array())
     c.circleVis = o["circleVis"].get<std::vector<std::string>>();
@@ -325,7 +325,7 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
   if (o.contains("polyOffsets") && o["polyOffsets"].is_array())
     c.polyOffsets = o["polyOffsets"].get<std::vector<int>>();
   if (o.contains("polyVerts") && o["polyVerts"].is_array())
-    c.polyVerts = o["polyVerts"].get<std::vector<float>>();
+    c.polyVerts = o["polyVerts"].get<std::vector<double>>();
   if (o.contains("polyVertsBulge") && o["polyVertsBulge"].is_array())  // REQ-316 / ADR-047
     c.polyVertsBulge = o["polyVertsBulge"].get<std::vector<float>>();
   if (o.contains("polyClosed") && o["polyClosed"].is_array())
@@ -1998,9 +1998,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
               if (el.contains("verts")) {
                 const auto& pv = el["verts"];
                 for (size_t i = 0; i + 1 < pv.size(); i += 2) {
-                  fr.vertsXyz.push_back(pv[i + 0].get<float>());
-                  fr.vertsXyz.push_back(pv[i + 1].get<float>());
-                  fr.vertsXyz.push_back(0.f);
+                  fr.vertsXyz.push_back(pv[i + 0].get<double>());
+                  fr.vertsXyz.push_back(pv[i + 1].get<double>());
+                  fr.vertsXyz.push_back(0.0);
                 }
               }
               if (el.contains("loops"))
@@ -2191,7 +2191,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 
   st.userLinesFlat.clear();
   for (const auto& v : doc["lineVerts"])
-    st.userLinesFlat.push_back(v.get<float>());
+    st.userLinesFlat.push_back(v.get<double>());
   st.userLineAttrs.clear();
   for (const auto& o : doc["lineAttrs"])
     st.userLineAttrs.push_back(EntityAttributesFromJson(o));
@@ -2205,10 +2205,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     const auto& cz = hasZ ? doc["circlesZ"] : cxyr;  // cz unread unless hasZ
     size_t ci = 0;
     for (size_t i = 0; i + 2 < cxyr.size(); i += 3, ++ci) {
-      st.userCirclesCxCyZR.push_back(cxyr[i + 0].get<float>());          // cx
-      st.userCirclesCxCyZR.push_back(cxyr[i + 1].get<float>());          // cy
-      st.userCirclesCxCyZR.push_back(hasZ && ci < cz.size() ? cz[ci].get<float>() : 0.f);
-      st.userCirclesCxCyZR.push_back(cxyr[i + 2].get<float>());          // r
+      st.userCirclesCxCyZR.push_back(cxyr[i + 0].get<double>());          // cx
+      st.userCirclesCxCyZR.push_back(cxyr[i + 1].get<double>());          // cy
+      st.userCirclesCxCyZR.push_back(hasZ && ci < cz.size() ? cz[ci].get<double>() : 0.0);
+      st.userCirclesCxCyZR.push_back(cxyr[i + 2].get<double>());          // r
     }
   }
   // The plane normals (REQ-312), from the additive "circlesN" written beside "circles". Absent
@@ -2249,7 +2249,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.userPolylineOffsets.push_back(v.get<int>());
   st.userPolylineVerts.clear();
   for (const auto& v : doc["polylineVerts"])
-    st.userPolylineVerts.push_back(v.get<float>());
+    st.userPolylineVerts.push_back(v.get<double>());
   // REQ-316 / ADR-047: additive, guarded (no kGsFormatVersion bump) — a pre-ADR-047 file has no
   // "polylineVertsBulge" key and loads with the array left EMPTY, which every reader treats as
   // "all segments straight". Kept empty (not zero-filled) so a straight drawing re-saves identically.
@@ -2280,7 +2280,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.featureLineOffsets.push_back(v.get<int>());
   if (doc.contains("featureLineVerts") && doc["featureLineVerts"].is_array())
     for (const auto& v : doc["featureLineVerts"])
-      st.featureLineVerts.push_back(v.get<float>());
+      st.featureLineVerts.push_back(v.get<double>());
   if (doc.contains("featureLineClosed") && doc["featureLineClosed"].is_array())
     for (const auto& v : doc["featureLineClosed"])
       st.featureLineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
@@ -2646,9 +2646,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           const auto& pz = hasZ ? el["vertsZ"] : pv;  // pz unread unless hasZ
           size_t vi = 0;
           for (size_t i = 0; i + 1 < pv.size(); i += 2, ++vi) {
-            fr.vertsXyz.push_back(pv[i + 0].get<float>());
-            fr.vertsXyz.push_back(pv[i + 1].get<float>());
-            fr.vertsXyz.push_back(hasZ && vi < pz.size() ? pz[vi].get<float>() : 0.f);
+            fr.vertsXyz.push_back(pv[i + 0].get<double>());
+            fr.vertsXyz.push_back(pv[i + 1].get<double>());
+            fr.vertsXyz.push_back(hasZ && vi < pz.size() ? pz[vi].get<double>() : 0.0);
           }
         }
         if (el.contains("loops"))
@@ -2663,9 +2663,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       } else if (el.is_array()) {
         // Legacy pre-multi-loop form: a bare flat XY array = one loop. Expand to XYZ at Z = 0.
         for (size_t i = 0; i + 1 < el.size(); i += 2) {
-          fr.vertsXyz.push_back(el[i + 0].get<float>());
-          fr.vertsXyz.push_back(el[i + 1].get<float>());
-          fr.vertsXyz.push_back(0.f);
+          fr.vertsXyz.push_back(el[i + 0].get<double>());
+          fr.vertsXyz.push_back(el[i + 1].get<double>());
+          fr.vertsXyz.push_back(0.0);
         }
       }
       if (fr.loopStart.empty() && fr.vertsXyz.size() >= 9)  // >= 3 vertices × 3 floats
