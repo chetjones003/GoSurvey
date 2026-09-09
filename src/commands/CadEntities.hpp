@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "util/ucs.hpp"
@@ -1004,3 +1005,9 @@ struct CadFilledRegion {
     return end - begin;
   }
 };
+
+/// ADR-054 (a)/(b): coordinate stores are `double` until the single authorized narrowing point at
+/// GPU vertex-buffer assembly (ViewportRenderer). A reintroduced `float` here silently reopens the
+/// ~0.008 ft quantization REQ-101 tightened away; catch it at compile time (TASK-228 Phase D).
+static_assert(std::is_same_v<decltype(CadFilledRegion::vertsXyz)::value_type, double>,
+              "CadFilledRegion::vertsXyz must stay double (ADR-054 (a), REQ-101)");

@@ -65,6 +65,12 @@ bool PointInsideClosedRect(float x, float y, float mnX, float mxX, float mnY, fl
   return x >= mnX && x <= mxX && y >= mnY && y <= mxY;
 }
 
+/// ADR-054 (b): this is the single authorized `double`->`float` narrowing point for geometry
+/// coordinates on the way to the GPU vertex buffer (TASK-228 Phase D). It takes `double` world
+/// coordinates from the authoritative stores, subtracts the view anchor while still in `double`
+/// (§11.8's document-origin rebase, moved down one layer), and only then narrows — so the value
+/// narrowed is already at view-local magnitude, not survey/state-plane magnitude, and is never read
+/// back as authoritative geometry (object snap reads the `double` store, never this output).
 void WorldToViewRelativeFloat(double worldX, double worldY, double anchorX, double anchorY, float* relX,
                               float* relY) {
   *relX = static_cast<float>(worldX - anchorX);
