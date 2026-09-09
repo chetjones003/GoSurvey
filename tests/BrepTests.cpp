@@ -5733,6 +5733,237 @@ TEST_CASE("A general trim loop's hole is excluded from a planar face's tessellat
 }
 
 // ================================================================================================
+// The centroid (REQ-334 / ADR-055, TASK-237) — GitHub #149 acceptance 4.
+//
+// Every figure below is a closed form, never a recorded output. Two properties of the integrand
+// make the choice of cases load-bearing rather than decorative, and both were measured before the
+// implementation was written:
+//
+//   1. `M_k = 1/2 * integral of r_k^2 n_k dA` is NOT frame-covariant, so a moment accumulated in
+//      each face's own frame and rotated into world is wrong -- but wrong ONLY when something is
+//      rotated. An axis-aligned box, a sphere and a torus all still came out exact with that bug in
+//      place. Hence the TILTED cases: they are the ones that catch it.
+//   2. A SYMMETRIC solid cannot detect a bad centroid at all, because the errors cancel across the
+//      symmetry. Hence the wedge, the pyramid and the frustum, which are not symmetric in Z.
+// ================================================================================================
+
+namespace {
+
+/// The analytic centroid of each primitive, in its own frame's axes, so the same expectations can
+/// be re-used on a translated or tilted placement.
+Vec3 InFrame(const ucs::Ucs& f, double a, double b, double c) {
+  return ray3d::Add(f.origin, ray3d::Add(ray3d::Add(ray3d::Scale(f.xAxis, a), ray3d::Scale(f.yAxis, b)),
+                                         ray3d::Scale(f.zAxis, c)));
+}
+
+double CentroidError(const Solid& s, const Vec3& want) {
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.centroidValid);
+  return ray3d::Length(ray3d::Sub(mp.centroid, want));
+}
+
+} // namespace
+
+TEST_CASE("Every primitive's centroid matches its closed form", "[brep][req334][req149]") {
+  Problem why = Problem::Ok;
+  const ucs::Ucs f = World();
+  Solid s;
+
+  // Box: the frame origin is the base centre, so the centroid is H/2 up.
+  REQUIRE(brep::MakeBox(f, 30, 20, 12, &s, &why));
+  CHECK(CentroidError(s, InFrame(f, 0, 0, 6)) < 1e-9);
+
+  // Wedge: a right triangular prism. The triangle's centroid is a third of the way along each leg
+  // from the right angle, which puts it at -L/2 + L/3 along X and H/3 up.
+  REQUIRE(brep::MakeWedge(f, 30, 20, 12, &s, &why));
+  CHECK(CentroidError(s, InFrame(f, -15.0 + 30.0 / 3.0, 0, 12.0 / 3.0)) < 1e-9);
+
+  // Pyramid (any pyramid, however many sides): h/4 above the base.
+  REQUIRE(brep::MakePyramid(f, 6, 10, 0.0, 18, &s, &why));
+  CHECK(CentroidError(s, InFrame(f, 0, 0, 18.0 / 4.0)) < 1e-9);
+
+  // Cylinder: on the axis at h/2.
+  REQUIRE(brep::MakeCylinder(f, 8, 25, &s, &why));
+  CHECK(CentroidError(s, InFrame(f, 0, 0, 12.5)) < 1e-9);
+
+  // Cone: on the axis at h/4 above the base.
+  REQUIRE(brep::MakeCone(f, 9, 0.0, 20, &s, &why));
+  CHECK(CentroidError(s, InFrame(f, 0, 0, 5.0)) < 1e-9);
+
+  // Frustum: zbar = h/4 * (r1^2 + 2 r1 r2 + 3 r2^2) / (r1^2 + r1 r2 + r2^2). Asymmetric in Z, which
+  // is what makes it one of the two cases a symmetric fixture could not have caught.
+  {
+    const double r1 = 9, r2 = 4, h = 20;
+    const double zbar = h / 4.0 * (r1 * r1 + 2 * r1 * r2 + 3 * r2 * r2) / (r1 * r1 + r1 * r2 + r2 * r2);
+    REQUIRE(brep::MakeCone(f, r1, r2, h, &s, &why));
+    CHECK(CentroidError(s, InFrame(f, 0, 0, zbar)) < 1e-9);
+  }
+
+  // Sphere and torus: the frame origin IS the centre.
+  REQUIRE(brep::MakeSphere(f, 15, &s, &why));
+  CHECK(CentroidError(s, f.origin) < 1e-9);
+  REQUIRE(brep::MakeTorus(f, 20, 5, &s, &why));
+  CHECK(CentroidError(s, f.origin) < 1e-9);
+}
+
+TEST_CASE("A centroid survives a tilted frame - the case a per-face frame gets wrong",
+          "[brep][req334][req149]") {
+  // With the moment accumulated in each face's own frame and rotated afterwards, the box below is
+  // out by 3.2 ft and the pyramid by 2.3 ft, while every axis-aligned case above still passes. This
+  // is the assertion that keeps that bug out.
+  Problem why = Problem::Ok;
+  const ucs::Ucs t = TiltedAt(0, 0, 0);
+  Solid s;
+
+  REQUIRE(brep::MakeBox(t, 30, 20, 12, &s, &why));
+  CHECK(CentroidError(s, InFrame(t, 0, 0, 6)) < 1e-9);
+
+  REQUIRE(brep::MakePyramid(t, 6, 10, 0.0, 18, &s, &why));
+  CHECK(CentroidError(s, InFrame(t, 0, 0, 18.0 / 4.0)) < 1e-9);
+
+  REQUIRE(brep::MakeCone(t, 9, 0.0, 20, &s, &why));
+  CHECK(CentroidError(s, InFrame(t, 0, 0, 5.0)) < 1e-9);
+
+  REQUIRE(brep::MakeSphere(t, 15, &s, &why));
+  CHECK(CentroidError(s, t.origin) < 1e-9);
+}
+
+TEST_CASE("A centroid holds at survey coordinate magnitudes", "[brep][req334][req149][req101]") {
+  // GitHub #149 acceptance 8. The centroid is where this is easiest to lose: integrating about the
+  // world origin instead of a point on the solid was measured at 46 to 6,978 ft of error out here,
+  // and it looks perfect at (0,0,0). REQ-101 is +/-0.002 ft; these assert five orders inside it.
+  Problem why = Problem::Ok;
+  Solid s;
+
+  const ucs::Ucs at = At(2196000.0, 1400000.0, 1035.0);
+  REQUIRE(brep::MakeCylinder(at, 8, 25, &s, &why));
+  CHECK(CentroidError(s, InFrame(at, 0, 0, 12.5)) < 1e-7);
+
+  {
+    const double r1 = 9, r2 = 4, h = 20;
+    const double zbar = h / 4.0 * (r1 * r1 + 2 * r1 * r2 + 3 * r2 * r2) / (r1 * r1 + r1 * r2 + r2 * r2);
+    REQUIRE(brep::MakeCone(at, r1, r2, h, &s, &why));
+    CHECK(CentroidError(s, InFrame(at, 0, 0, zbar)) < 1e-7);
+
+    // Tilted AND at magnitude, which is what a real drawing on a state plane actually looks like.
+    const ucs::Ucs tilted = TiltedAt(2196000.0, 1400000.0, 1035.0);
+    REQUIRE(brep::MakeCone(tilted, r1, r2, h, &s, &why));
+    CHECK(CentroidError(s, InFrame(tilted, 0, 0, zbar)) < 1e-7);
+  }
+
+  REQUIRE(brep::MakeSphere(at, 15, &s, &why));
+  CHECK(CentroidError(s, at.origin) < 1e-7);
+}
+
+TEST_CASE("A centroid is invariant under translation, and moves exactly with the solid",
+          "[brep][req334][req149]") {
+  // Independent of the closed forms above: whatever the centroid of this wedge is, translating the
+  // solid must translate it by the same vector and nothing else. A formula that quietly referenced
+  // the world origin would fail this even where a symmetric primitive passed.
+  Problem why = Problem::Ok;
+  Solid a, b;
+  REQUIRE(brep::MakeWedge(World(), 30, 20, 12, &a, &why));
+  REQUIRE(brep::MakeWedge(At(1234.5, -678.25, 90.125), 30, 20, 12, &b, &why));
+
+  const brep::MassProperties ma = brep::ComputeMassProperties(a);
+  const brep::MassProperties mb = brep::ComputeMassProperties(b);
+  REQUIRE(ma.centroidValid);
+  REQUIRE(mb.centroidValid);
+  const Vec3 moved = ray3d::Add(ma.centroid, Vec3{1234.5, -678.25, 90.125});
+  CHECK(ray3d::Length(ray3d::Sub(mb.centroid, moved)) < 1e-9);
+}
+
+TEST_CASE("A solid that does not validate reports no centroid", "[brep][req334][req149][req201]") {
+  Problem why = Problem::Ok;
+  Solid good;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &good, &why));
+  REQUIRE(brep::ComputeMassProperties(good).centroidValid);
+
+  Solid broken = good;
+  REQUIRE_FALSE(broken.shells.empty());
+  broken.shells[0].faces.pop_back();
+  const brep::MassProperties mp = brep::ComputeMassProperties(broken);
+  CHECK_FALSE(mp.valid);
+  CHECK_FALSE(mp.centroidValid);
+}
+
+TEST_CASE("A self-intersecting solid reports no centroid, as it reports no volume",
+          "[brep][req334][req149][req201]") {
+  // The centroid follows the VOLUME's contract, and deliberately not the one `FaceArea` will have
+  // once D-2026-09-09-g lands: a centroid is a volume-WEIGHTED quantity, so a shell that encloses
+  // part of space twice makes it exactly as meaningless as the volume it is weighted by, where a
+  // single face's area stays perfectly well defined. Two neighbouring functions, two different
+  // answers, each for a stated reason. (Asserted here on the volume side only, because this branch
+  // sits on `beta` and `FaceArea` is still in flight — see ADR-055's note.)
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeTorus(World(), 5.0, 8.0, &s, &why));  // tube > ring
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  CHECK_FALSE(mp.valid);
+  CHECK_FALSE(mp.centroidValid);
+}
+
+TEST_CASE("A Boolean result's centroid matches the composite of its parts", "[brep][req334][req149]") {
+  // GitHub #149 acceptance 4 names a Boolean result explicitly, and it is the case a symmetric
+  // fixture cannot check: subtracting an off-centre pocket moves the centroid along X only, by an
+  // amount the composite formula predicts exactly.
+  //
+  //     c = (V_box * c_box - V_cut * c_cut) / (V_box - V_cut)
+  //
+  // A rectangular through-cut is used rather than a bore, because a box-minus-box leaves planar
+  // faces bounded by lines -- the shapes this increment's integrator covers. A CYLINDRICAL bore
+  // produces `Intersection` edges, which are refused by name (ADR-055 (d)) rather than
+  // approximated; the case below pins that refusal.
+  Problem why = Problem::Ok;
+  Solid box, cut;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &box, &why));
+  // 6 x 6 through-cut, offset +9 in X, running past both faces in Z so the result is one shell.
+  REQUIRE(brep::MakeBox(At(9, 0, -1), 6, 6, 14, &cut, &why));
+
+  std::vector<Solid> out;
+  REQUIRE(brep::BooleanSubtract(box, cut, &out, &why));
+  REQUIRE(out.size() == 1);
+
+  const double vBox = 30.0 * 20.0 * 12.0;
+  const double vCut = 6.0 * 6.0 * 12.0;  // only the part inside the box counts
+  const double cx = (vBox * 0.0 - vCut * 9.0) / (vBox - vCut);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(out[0]);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Approx(vBox - vCut).epsilon(1e-12));
+  REQUIRE(mp.centroidValid);
+  CHECK(mp.centroid.x == Approx(cx).margin(1e-9));
+  CHECK(mp.centroid.y == Approx(0.0).margin(1e-9));
+  CHECK(mp.centroid.z == Approx(6.0).margin(1e-9));
+}
+
+TEST_CASE("A solid whose faces this increment does not cover reports no centroid, and still reports "
+          "its volume", "[brep][req334][req149][req201]") {
+  // ADR-055 (d). A cylindrical bore meets the box along `Intersection` curves, and a face bounded by
+  // one has a domain this increment's integrator does not describe. The refusal is the point: the
+  // volume and surface area stay exactly as trustworthy as they were, and only the figure that was
+  // not computed is withheld. Reporting a centroid here as though the face were simple would be the
+  // plausible-wrong-number failure REQ-201 exists to prevent.
+  Problem why = Problem::Ok;
+  Solid box, bore;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &box, &why));
+  REQUIRE(brep::MakeCylinder(At(8, 0, -1), 4, 14, &bore, &why));
+
+  std::vector<Solid> out;
+  if (!brep::BooleanSubtract(box, bore, &out, &why) || out.size() != 1)
+    return;  // the boolean itself is Phase 4's; if it declines, there is nothing to assert here
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(out[0]);
+  REQUIRE(mp.valid);           // volume and area are unaffected ...
+  CHECK(mp.volume > 0.0);
+  CHECK(mp.surfaceArea > 0.0);
+  CHECK_FALSE(mp.centroidValid);  // ... and only the centroid is withheld
+}
+
+// ================================================================================================
 // Per-face area (REQ-313 as amended, D-2026-09-09-g, TASK-236) — GitHub #149 acceptance 2.
 //
 // `MassProperties` reports the area of the WHOLE shell. #149 asks for a face's area as well, which
