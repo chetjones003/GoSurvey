@@ -2690,9 +2690,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["surveyPoints"]) {
       SurveyPoint p;
       p.id = o.value("id", 0);
-      p.easting = o.value("easting", 0.f);
-      p.northing = o.value("northing", 0.f);
-      p.elevation = o.value("elevation", 0.f);
+      p.easting = o.value("easting", 0.0);
+      p.northing = o.value("northing", 0.0);
+      p.elevation = o.value("elevation", 0.0);
       if (o.contains("description") && o["description"].is_string())
         p.description = o["description"].get<std::string>();
       // Absent in every pre-REQ-066 file, which is exactly the "loads empty and falls back to

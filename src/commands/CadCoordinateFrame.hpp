@@ -38,6 +38,15 @@ inline double WorldOriginX(const AppCommandState& st) { return st.worldDocumentO
 inline double WorldOriginY(const AppCommandState& st) { return st.worldDocumentOriginY; }
 
 void LocalFromWorld(const AppCommandState& st, double wx, double wy, float* lx, float* ly);
+/// `double`-output overload for a full-precision store (survey points, Phase F) — see the
+/// `WorldXFromLocal`/`WorldYFromLocal` `double` overloads above for why a separate overload rather
+/// than narrowing through the `float*` one.
+inline void LocalFromWorld(const AppCommandState& st, double wx, double wy, double* lx, double* ly) {
+  if (!lx || !ly)
+    return;
+  *lx = wx - st.worldDocumentOriginX;
+  *ly = wy - st.worldDocumentOriginY;
+}
 void WorldFromLocal(const AppCommandState& st, float lx, float ly, double* wx, double* wy);
 
 inline float WorldXFromLocal(const AppCommandState& st, float lx) {
@@ -47,6 +56,14 @@ inline float WorldXFromLocal(const AppCommandState& st, float lx) {
 inline float WorldYFromLocal(const AppCommandState& st, float ly) {
   return static_cast<float>(static_cast<double>(ly) + st.worldDocumentOriginY);
 }
+
+/// `double` overloads for callers carrying a full-precision coordinate (survey points, Phase F) —
+/// the `float` overloads above stay for callers still on `float` storage (viewport cursor, other
+/// still-`float` entity fields); narrowing through them would throw away the very precision REQ-101
+/// widened `SurveyPoint::easting/northing` to keep.
+inline double WorldXFromLocal(const AppCommandState& st, double lx) { return lx + st.worldDocumentOriginX; }
+
+inline double WorldYFromLocal(const AppCommandState& st, double ly) { return ly + st.worldDocumentOriginY; }
 
 void ShiftAllStorageBy(AppCommandState& st, double dx, double dy);
 

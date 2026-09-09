@@ -32,9 +32,9 @@ struct SurveyLabelStyleTemplates {
 
 struct SurveyPoint {
   int id = 0;
-  float easting = 0.f;
-  float northing = 0.f;
-  float elevation = 0.f;
+  double easting = 0.0;
+  double northing = 0.0;
+  double elevation = 0.0;
   std::string description;
   /// The field code as collected, never rewritten by an edit to \ref description (REQ-066).
   ///
@@ -88,7 +88,7 @@ struct MarkerBillboardBasis {
 /// The X is built in the \p basis plane, not in world XY: it is a marker, not geometry, so it must
 /// stay readable at any orientation instead of foreshortening to an edge near a horizontal view
 /// (REQ-058 / GAP-2).
-void AppendSurveyPointCrossVertices(float easting, float northing, float elevationZ, float halfExtentWorld,
+void AppendSurveyPointCrossVertices(double easting, double northing, double elevationZ, float halfExtentWorld,
                                     std::vector<float>* outLines, const MarkerBillboardBasis& basis = {});
 
 void AppendAllSurveyPointMarkers(float crossHalfWorld, const std::vector<SurveyPoint>& pts,
@@ -123,23 +123,23 @@ void ResetCreatePointsNextIdFromSettings(AppCommandState& st);
 
 /// Places a survey point using create-points options & duplicate policy. Updates next ID when sequential.
 
-bool TryPlaceSurveyPoint(AppCommandState& st, float easting, float northing, float elevation,
+bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, double elevation,
                          std::vector<std::string>& log);
 
 /// Copies viewport-selected survey rows by (\p dx, \p dy, \p dz), applying \p policy when IDs collide
 /// with other points. \p dz is the elevation delta (REQ-329 increment 1 — a COPY under a rotated or
 /// tilted UCS carries a Z component); it is zero for every plan-view / World-UCS copy.
-void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, float dy, float dz,
+void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, double dx, double dy, double dz,
                                              SurveyDuplicatePolicy policy, std::vector<std::string>& log);
 
 /// Same ID policy as translated copy; positions are rotated about (\p bx,\p by) by \p rad radians.
-void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float by, float rad,
+void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, double bx, double by, float rad,
                                           SurveyDuplicatePolicy policy, std::vector<std::string>& log);
 
 /// Same ID policy as translated copy; positions are reflected across the line through
 /// (\p x0,\p y0)-(\p x1,\p y1) (REQ-103 MIRROR). Elevation is untouched, matching the CAD-side
 /// reflection funnel (a mirror is a plan-view operation).
-void DuplicateSelectedSurveyPointsReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
+void DuplicateSelectedSurveyPointsReflected(AppCommandState& st, double x0, double y0, double x1, double y1,
                                             SurveyDuplicatePolicy policy, std::vector<std::string>& log);
 
 void RemoveSurveyPointAt(AppCommandState& st, size_t index);
