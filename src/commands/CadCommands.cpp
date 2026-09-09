@@ -28578,6 +28578,14 @@ void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log) {
       fromSelection = true;
     }
   if (targets.empty()) {
+    // A selection that holds only non-solid entities is NOT the same as no selection, and widening
+    // silently to the whole drawing would answer a question the user did not ask. Say so instead,
+    // the way EXTRUDE ("nothing in the selection could be extruded") and SLICE already do.
+    if (!st.selection.empty()) {
+      log.push_back("SOLIDCHECK — nothing in the selection is a solid. Select solids, or clear the "
+                    "selection to check the whole drawing.");
+      return;
+    }
     for (int i = 0; i < static_cast<int>(st.cadSolids.size()); ++i)
       targets.push_back(i);
   }
@@ -34098,6 +34106,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // is what separates it from SLICE.
     if (plotTok == "section") {
       CadSectionSelection(st, log);
+      return;
+    }
     // SOLIDCHECK (REQ-313 as amended, D-2026-09-09-j): validity, and separately self-intersection —
     // the geometric fault Validate deliberately calls Ok. Read-only; nothing is repaired.
     if (plotTok == "solidcheck" || plotTok == "scheck") {

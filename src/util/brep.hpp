@@ -549,6 +549,23 @@ enum class Problem {
   /// instead at one of the OTHER corners the move drags along with it.
   MoveSubObjectCornerUnsolvable,
   MoveSubObjectResultInvalid,  ///< The edited solid did not validate — pushed through itself, inverted or collapsed.
+
+  // --- The edge-use tally, split apart (REQ-313 as amended, D-2026-09-09-k, GitHub #149) ---
+  //
+  // \ref EdgeNotUsedTwice says "an edge bounding one face, or three" — ONE value for TWO of the
+  // four faults #149 acceptance 7 asks to be told apart, and its text ("not closed") is simply
+  // wrong for the three-face case. \ref Validate now returns the two below instead, so an unclosed
+  // shell and a non-manifold one are distinguishable and each is described correctly.
+  //
+  // `EdgeNotUsedTwice` is deliberately NOT renamed or retired: FILLET and CHAMFER raise it as a
+  // PRECONDITION ("I need an edge with exactly two faces and this is not one"), where the count on
+  // either side is not the point and the existing wording is right.
+
+  /// An edge bounds fewer than two faces, so the shell is open — a hole in the surface.
+  ShellOpenAtEdge,
+  /// An edge bounds three or more faces, so the surface is not a manifold: more than two sheets
+  /// meet along it and there is no consistent inside.
+  EdgeNonManifold,
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.

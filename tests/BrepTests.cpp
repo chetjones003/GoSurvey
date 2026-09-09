@@ -413,6 +413,12 @@ TEST_CASE("Every failure reason and every primitive has its own name", "[brep][r
       Problem::UnusedVertex,
       Problem::PlaneFaceNotSimple,
       Problem::NonPositiveTolerance,
+      // The edge-use tally, split apart (D-2026-09-09-k). Listed here because this case's whole
+      // job is to catch two values sharing one string — which is precisely what these two did
+      // while they were both `EdgeNotUsedTwice`, and what let a non-manifold solid be reported to
+      // the user as "not closed".
+      Problem::ShellOpenAtEdge,
+      Problem::EdgeNonManifold,
   };
   std::vector<std::string> seen;
   for (Problem p : all) {
@@ -479,7 +485,7 @@ TEST_CASE("Validate rejects broken topology", "[brep][req313]") {
     Solid s = good;
     s.faces.pop_back();
     s.shells[0].faces.pop_back();
-    REQUIRE(brep::Validate(s) == Problem::EdgeNotUsedTwice);
+    REQUIRE(brep::Validate(s) == Problem::ShellOpenAtEdge);
   }
 
   SECTION("two faces agreeing on an edge's direction is not orientable") {
@@ -909,7 +915,7 @@ TEST_CASE("Edge tessellation follows the same chord rule as the faces", "[brep][
   broken.faces.pop_back();
   broken.shells[0].faces.pop_back();
   REQUIRE_FALSE(brep::TessellateEdges(broken, 0.01, &fine, &why));
-  REQUIRE(why == Problem::EdgeNotUsedTwice);
+  REQUIRE(why == Problem::ShellOpenAtEdge);
 }
 
 TEST_CASE("Tessellation refuses a bad tolerance and a bad solid", "[brep][req313]") {
@@ -927,7 +933,7 @@ TEST_CASE("Tessellation refuses a bad tolerance and a bad solid", "[brep][req313
   broken.faces.pop_back();
   broken.shells[0].faces.pop_back();
   REQUIRE_FALSE(brep::Tessellate(broken, 0.01, &t, &why));
-  REQUIRE(why == Problem::EdgeNotUsedTwice);
+  REQUIRE(why == Problem::ShellOpenAtEdge);
 }
 
 TEST_CASE("A torus whose tube exceeds its ring is built, and reports no volume", "[brep][req313]") {
@@ -1071,7 +1077,7 @@ TEST_CASE("Isolines make a curved face read as curved", "[brep][req313]") {
     broken.faces.pop_back();
     broken.shells[0].faces.pop_back();
     REQUIRE_FALSE(brep::TessellateIsolines(broken, 4, 0.01, &iso, &why));
-    REQUIRE(why == Problem::EdgeNotUsedTwice);
+    REQUIRE(why == Problem::ShellOpenAtEdge);
   }
 }
 
@@ -6430,24 +6436,10 @@ TEST_CASE("A self-intersecting solid still reports a face area, where mass prope
 // Each case below therefore asserts the SPECIFIC Problem, never merely that validation failed.
 // ================================================================================================
 
-TEST_CASE("Validation names an inconsistently oriented shell, not a broken loop",
-          "[brep][req313][req149]") {
-  Problem why = Problem::Ok;
-  Solid good;
-  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &good, &why));
-  REQUIRE(brep::Validate(good) == Problem::Ok);
-
-  // Reverse the ORDER and the flags together, which is what reversing a loop actually means. Every
-  // consecutive pair still meets, so the ring closes and the tally is reached: both uses of each of
-  // this face's edges now run the same way.
-  Solid s = good;
-  auto& uses = s.faces[0].loops[0].uses;
-  std::reverse(uses.begin(), uses.end());
-  for (auto& u : uses)
-    u.reversed = !u.reversed;
-
-  CHECK(brep::Validate(s) == Problem::EdgeOrientationInconsistent);
-}
+// The inconsistently-oriented fault has no case of its own here: `Validate rejects broken topology`
+// (this file, "two faces agreeing on an edge's direction is not orientable") already covers it with
+// the same fixture, and duplicating it would inflate the count without adding coverage. It is
+// asserted below as one of the four, which is where this section's subject actually lies.
 
 TEST_CASE("Validation names a non-manifold shell, not a degenerate face", "[brep][req313][req149]") {
   Problem why = Problem::Ok;
@@ -6460,7 +6452,7 @@ TEST_CASE("Validation names a non-manifold shell, not a degenerate face", "[brep
   s.faces.push_back(s.faces[0]);
   s.shells[0].faces.push_back(static_cast<int>(s.faces.size()) - 1);
 
-  CHECK(brep::Validate(s) == Problem::EdgeNotUsedTwice);
+  CHECK(brep::Validate(s) == Problem::EdgeNonManifold);
 }
 
 TEST_CASE("Validation names an unclosed shell and a degenerate edge apart", "[brep][req313][req149]") {
@@ -6468,10 +6460,16 @@ TEST_CASE("Validation names an unclosed shell and a degenerate edge apart", "[br
   Solid good;
   REQUIRE(brep::MakeBox(World(), 30, 20, 12, &good, &why));
 
+  // Pop the face from BOTH `faces` and the shell. Removing it from the shell alone leaves an
+  // ORPHAN face, which trips the "every face belongs to exactly one shell" check long before the
+  // edge tally — so the fixture would report `IndexOutOfRange` and never build an unclosed shell at
+  // all. That mistake is what let the `ShellOpenAtEdge` / `EdgeNonManifold` collision survive a
+  // slice written to look for exactly it.
   Solid dropped = good;
   dropped.shells[0].faces.pop_back();
+  dropped.faces.pop_back();
   const Problem a = brep::Validate(dropped);
-  CHECK(a != Problem::Ok);
+  CHECK(a == Problem::ShellOpenAtEdge);
 
   Solid collapsed = good;
   collapsed.vertices[1].p = collapsed.vertices[0].p;
@@ -6482,15 +6480,43 @@ TEST_CASE("Validation names an unclosed shell and a degenerate edge apart", "[br
   CHECK(a != b);
 }
 
+TEST_CASE("An orphan face is its own fault, not an unclosed shell", "[brep][req313][req149]") {
+  // The fixture mistake, pinned so it cannot be made again silently. Removing a face's index from
+  // the shell while leaving the `Face` behind is neither an unclosed shell nor a non-manifold one —
+  // it is a face belonging to no shell, and `Validate` says so, from a check that runs before the
+  // edge tally. A test aiming at the tally and landing here would pass for the wrong reason.
+  Problem why = Problem::Ok;
+  Solid good;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &good, &why));
+
+  Solid orphan = good;
+  orphan.shells[0].faces.pop_back();
+  CHECK(brep::Validate(orphan) == Problem::IndexOutOfRange);
+
+  Solid reallyUnclosed = good;
+  reallyUnclosed.shells[0].faces.pop_back();
+  reallyUnclosed.faces.pop_back();
+  CHECK(brep::Validate(reallyUnclosed) == Problem::ShellOpenAtEdge);
+
+  CHECK(brep::Validate(orphan) != brep::Validate(reallyUnclosed));
+}
+
 TEST_CASE("The four faults #149 names each report a different reason", "[brep][req313][req149]") {
-  // The assertion the phase's earlier probe could not make, because its fixtures collapsed two of
-  // the four onto one message. Four faults, four distinct Problems, four distinct texts.
+  // Four faults, four distinct Problems, four distinct texts — true only since `ShellOpenAtEdge`
+  // and `EdgeNonManifold` were split apart (D-2026-09-09-k). Before that, unclosed and non-manifold
+  // both returned `EdgeNotUsedTwice`, whose text says "not closed" and is therefore wrong for the
+  // non-manifold case.
+  //
+  // **This test passed before the split, on a fixture that was not unclosed at all** — it popped
+  // only the shell's index and tripped the orphan-face check. Each fixture below is now asserted
+  // individually as well, so a repeat cannot hide inside the pairwise loop.
   Problem why = Problem::Ok;
   Solid good;
   REQUIRE(brep::MakeBox(World(), 30, 20, 12, &good, &why));
 
   Solid unclosed = good;
   unclosed.shells[0].faces.pop_back();
+  unclosed.faces.pop_back();
 
   Solid oriented = good;
   {
@@ -6507,6 +6533,13 @@ TEST_CASE("The four faults #149 names each report a different reason", "[brep][r
   Solid degenerate = good;
   degenerate.vertices[1].p = degenerate.vertices[0].p;
 
+  // Each fixture asserted by NAME first: pairwise distinctness alone is satisfiable by four
+  // unrelated faults, which is exactly how the earlier version passed while testing the wrong thing.
+  CHECK(brep::Validate(unclosed) == Problem::ShellOpenAtEdge);
+  CHECK(brep::Validate(oriented) == Problem::EdgeOrientationInconsistent);
+  CHECK(brep::Validate(nonManifold) == Problem::EdgeNonManifold);
+  CHECK(brep::Validate(degenerate) == Problem::DegenerateEdge);
+
   const Problem ps[4] = {brep::Validate(unclosed), brep::Validate(oriented),
                          brep::Validate(nonManifold), brep::Validate(degenerate)};
   for (int i = 0; i < 4; ++i) {
@@ -6515,6 +6548,12 @@ TEST_CASE("The four faults #149 names each report a different reason", "[brep][r
     for (int j = i + 1; j < 4; ++j)
       CHECK(ps[i] != ps[j]);
   }
+
+  // And the two that used to collide describe themselves correctly: the non-manifold one must not
+  // be reported to a user as "not closed", which is what SOLIDCHECK printed before the split.
+  const std::string manifoldText = brep::ProblemText(brep::Validate(nonManifold));
+  CHECK(manifoldText.find("not manifold") != std::string::npos);
+  CHECK(manifoldText.find("not closed") == std::string::npos);
 }
 
 TEST_CASE("A self-intersecting solid is sound topology whose measurements are withheld",

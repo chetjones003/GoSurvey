@@ -1,4 +1,8 @@
-# TASK-239 — SOLIDCHECK, and a planned kernel change that turned out not to be needed
+# TASK-239 — SOLIDCHECK, and the kernel split it turned out to need after all
+
+> **Read §7 first.** Sections 2-6 record a conclusion that was WRONG: they argue no kernel change
+> was needed. A code review disproved it the same day and §7 is the correction. The earlier sections
+> are kept because how the wrong answer was reached is the useful part.
 
 - Type:    feat (amendment to an accepted requirement)
 - Status:  review
@@ -109,7 +113,7 @@ None. The premise was re-measured rather than assumed, which is the whole story 
 - **dependency-audit** — none added.
 - **performance-review** — one `Validate` and one `SelfIntersects` per solid, on a command the user
   invokes by hand.
-- **testing** — full suite **1424/1424 green**, 5 new unit cases and 1 new transcript.
+- **testing** — full suite **1441/1441 green**, 5 new unit cases and 1 new transcript.
 
 COMPLETION REPORT — TASK-239 — 2026-09-09
 - Requirements satisfied:  REQ-313 as amended (D-2026-09-09-j); GitHub #149 acceptance 7
@@ -123,3 +127,88 @@ COMPLETION REPORT — TASK-239 — 2026-09-09
 - Build:                   reproducible, clean on Windows/MSVC
 - Docs updated:            REQ-313 acceptance + revisions, a traceability row, D-2026-09-09-j,
                            this task log
+
+---
+
+## 7. CORRECTION, same day — the collision was real after all (D-2026-09-09-k)
+
+**Everything above §6 that says "no kernel change was needed" is wrong.** A code review of the PR
+disproved this task's central claim, and re-probing confirmed the review. The correction is recorded
+here rather than by rewriting the sections above, because how the wrong answer was reached is more
+useful than a tidy log.
+
+### What was actually true
+
+`Validate`'s edge-use tally read:
+
+```cpp
+const int total = forwardUses[i] + reverseUses[i];
+if (total != 2)
+  return Problem::EdgeNotUsedTwice;
+```
+
+**One value for two different faults** — `total < 2` is an edge bounding one face (the shell is
+**open**), `total > 2` is an edge bounding three (the surface is **not a manifold**) — and its text
+says *"The surface is not closed"*, which is simply wrong for the second. So a non-manifold solid was
+reported, through the SOLIDCHECK this task added, as an unclosed one.
+
+The enum's own comment said so the whole time: *"A non-manifold **or** open shell: an edge bounding
+one face, **or three**."* It was read during this task and not registered.
+
+### Why the corrected probe missed it
+
+P6 replaced P3's fixtures and got the orientation case right. Its "unclosed" fixture was careless in
+a **new** way: it popped the face's index from `shells[0].faces` and left the `Face` in `s.faces`.
+That is an **orphan face**, and `Validate` checks "every face belongs to exactly one shell" *before*
+the edge tally, so the fixture returned `IndexOutOfRange` and never built an unclosed shell at all.
+
+P6's own output said as much — *"refers to a face, edge or vertex that does not exist"* is not an
+unclosed shell — and it was quoted verbatim into this log, the requirement and the PR description
+without being read.
+
+**So there are TWO checks standing between a fixture and the edge tally**, not one:
+
+| trap | what a naive fixture reports instead | the fix |
+|---|---|---|
+| ring closure | `LoopNotClosed` | reverse a loop's **order** as well as its `reversed` flags |
+| face ownership | `IndexOutOfRange` (orphan face) | pop the face from **both** `faces` and the shell |
+
+### The part that should have caught it
+
+**A correct fixture already existed in the same file**, ~300 lines above the new ones:
+`Validate rejects broken topology` → *"a missing face leaves edges bounding only one face"*, which
+pops from both and asserted `EdgeNotUsedTwice`. Reading the existing validation tests before writing
+new ones would have produced both the right fixture and the collision immediately. Instead new
+fixtures were written from scratch, and one of the new cases duplicated a pre-existing one verbatim.
+
+### What changed
+
+- **Kernel**: `Problem::ShellOpenAtEdge` and `Problem::EdgeNonManifold`, each with its own text.
+  `EdgeNotUsedTwice` is kept unrenamed for FILLET/CHAMFER, which raise it as a precondition where
+  "exactly two" genuinely is the condition, and where the existing wording is right.
+- **Tests**: the unclosed fixture pops from both; every fault is asserted **by name**; a new case
+  pins the orphan-face trap so it cannot be mistaken for an unclosed shell again; the duplicate
+  orientation case was removed in favour of the pre-existing one; both new values were added to the
+  every-reason-has-its-own-text case, which is the guard that catches exactly this class of bug.
+  Three pre-existing tessellation tests moved from `EdgeNotUsedTwice` to `ShellOpenAtEdge`.
+- **Command**: a selection holding no solids now says so instead of silently widening to the whole
+  drawing (the review's finding 5).
+- **Spec**: REQ-313's clause, its traceability row and D-2026-09-09-k all state the corrected
+  position, and the rule is strengthened — **do not accept pairwise distinctness as evidence**, since
+  four unrelated faults are pairwise distinct too, which is precisely how the wrong claim passed its
+  own test.
+
+### Verification after the correction
+
+Full suite **1441/1441 green**. The three tessellation tests that changed value are the proof the
+split reaches real call sites rather than only the new cases.
+
+COMPLETION REPORT — TASK-239 — 2026-09-09 (superseding §6)
+- Requirements satisfied:  REQ-313 as amended (D-2026-09-09-j **as corrected by -k**); #149 acc. 7
+- Summary:                 the kernel split WAS needed; SOLIDCHECK ships on top of it
+- Tests:                   corrected fixtures, each fault asserted by name, orphan-face trap pinned
+- Verification verdict:    PASS
+- Assumptions:             none — the premise was re-measured twice, and wrong the first time
+- Architectural decisions: D-2026-09-09-k, reversing -j
+- Technical debt noted:    none
+- Docs updated:            REQ-313 clause + traceability row, D-2026-09-09-k, this section

@@ -69,3 +69,28 @@ EXPECT LOG "SOLIDCHECK — 1 valid, 0 not valid, 0 self-intersecting."
 
 EXPECT SOLIDS 3
 CHECK ALL
+
+# --- a selection that holds no solids says so, rather than widening silently ---------------------
+#
+# A selection holding only non-solid entities is not the same as no selection: quietly checking the
+# whole drawing would answer a question the user did not ask. EXTRUDE and SLICE both state it
+# instead, and this follows them (REQ-201).
+#
+# A fresh drawing, because the driver's BOX verb ADDS to the selection rather than replacing it —
+# the earlier box solid would otherwise still be in there and the command would have a solid to
+# check after all.
+
+NEW
+CMD BOX 0,0 30 20 12
+CMD LINE
+CMD 500,500
+CMD 520,500
+ESC
+
+BOX 490 490 530 530
+EXPECT SELECTED 1
+CMD SOLIDCHECK
+EXPECT LOG "SOLIDCHECK — nothing in the selection is a solid. Select solids, or clear the selection to check the whole drawing."
+
+EXPECT SOLIDS 1
+CHECK ALL
