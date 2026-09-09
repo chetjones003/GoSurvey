@@ -22,7 +22,7 @@ struct TriGeom {
   double area2d = 0.0;
 };
 
-bool LoadTri(const std::vector<float>& verts, const std::vector<std::uint32_t>& idx, int t,
+bool LoadTri(const std::vector<double>& verts, const std::vector<std::uint32_t>& idx, int t,
              TriGeom* out) {
   if (!out)
     return false;
@@ -137,7 +137,7 @@ void BuildNeighbors(const std::vector<std::uint32_t>& indices, int nTri,
   }
 }
 
-int CoveringTriangle(const std::vector<float>& verts, const std::vector<std::uint32_t>& idx, double x,
+int CoveringTriangle(const std::vector<double>& verts, const std::vector<std::uint32_t>& idx, double x,
                      double y, double* zOut) {
   const int nTri = static_cast<int>(idx.size() / 3);
   for (int t = 0; t < nTri && t < kMaxWalk; ++t) {
@@ -153,7 +153,7 @@ int CoveringTriangle(const std::vector<float>& verts, const std::vector<std::uin
   return -1;
 }
 
-void CollectCovering(const std::vector<float>& verts, const std::vector<std::uint32_t>& idx, double x,
+void CollectCovering(const std::vector<double>& verts, const std::vector<std::uint32_t>& idx, double x,
                      double y, std::vector<int>* out) {
   out->clear();
   const int nTri = static_cast<int>(idx.size() / 3);
@@ -178,7 +178,7 @@ void PushSeg(std::vector<float>* out, double x0, double y0, double z0, double x1
 
 } // namespace
 
-WatershedResult ComputeWatershed(const std::vector<float>& vertsXyz,
+WatershedResult ComputeWatershed(const std::vector<double>& vertsXyz,
                                  const std::vector<std::uint32_t>& indices) {
   WatershedResult r;
   const int nTri = static_cast<int>(indices.size() / 3);
@@ -335,7 +335,7 @@ WatershedResult ComputeWatershed(const std::vector<float>& vertsXyz,
   return r;
 }
 
-WaterDropResult ComputeWaterDrop(const std::vector<float>& vertsXyz,
+WaterDropResult ComputeWaterDrop(const std::vector<double>& vertsXyz,
                                  const std::vector<std::uint32_t>& indices, double x, double y) {
   WaterDropResult d;
   const int nTri = static_cast<int>(indices.size() / 3);
@@ -407,7 +407,7 @@ WaterDropResult ComputeWaterDrop(const std::vector<float>& vertsXyz,
   return d;
 }
 
-CatchmentResult ComputeCatchment(const std::vector<float>& vertsXyz,
+CatchmentResult ComputeCatchment(const std::vector<double>& vertsXyz,
                                  const std::vector<std::uint32_t>& indices, double x, double y) {
   CatchmentResult c;
   const int nTri = static_cast<int>(indices.size() / 3);
@@ -540,7 +540,7 @@ CatchmentResult ComputeCatchment(const std::vector<float>& vertsXyz,
   return c;
 }
 
-void AppendWatershedBasinOutlines(const WatershedResult& w, const std::vector<float>& vertsXyz,
+void AppendWatershedBasinOutlines(const WatershedResult& w, const std::vector<double>& vertsXyz,
                                   const std::vector<std::uint32_t>& indices, std::vector<float>* out) {
   if (!out || !w.ok)
     return;
@@ -573,7 +573,7 @@ void AppendWatershedBasinOutlines(const WatershedResult& w, const std::vector<fl
   }
 }
 
-void AppendCatchmentBoundary(const CatchmentResult& c, const std::vector<float>& vertsXyz,
+void AppendCatchmentBoundary(const CatchmentResult& c, const std::vector<double>& vertsXyz,
                              const std::vector<std::uint32_t>& indices, std::vector<float>* out) {
   if (!out || !c.ok || c.outside)
     return;

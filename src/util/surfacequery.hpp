@@ -32,14 +32,14 @@ public:
 
 class TinSurfaceQuery final : public ISurfaceQuery {
 public:
-  TinSurfaceQuery(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices);
+  TinSurfaceQuery(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices);
   [[nodiscard]] bool elevationAt(double x, double y, double* outZ) const override;
   [[nodiscard]] bool slopePercentAt(double x, double y, double* outPct) const override;
   [[nodiscard]] bool slopeAngleDegAt(double x, double y, double* outDeg) const override;
   [[nodiscard]] bool aspectDegAt(double x, double y, double* outDeg) const override;
 
 private:
-  const std::vector<float>* verts_ = nullptr;
+  const std::vector<double>* verts_ = nullptr;
   const std::vector<std::uint32_t>* indices_ = nullptr;
   TinSpatialIndex index_;
   [[nodiscard]] bool triangleAt(double x, double y, double* outZ, size_t* outTri) const;

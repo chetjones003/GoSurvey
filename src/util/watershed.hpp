@@ -42,23 +42,23 @@ struct CatchmentResult {
 };
 
 /// Drain graph and basins. Empty indices → \c ok false, error "null TIN".
-[[nodiscard]] WatershedResult ComputeWatershed(const std::vector<float>& vertsXyz,
+[[nodiscard]] WatershedResult ComputeWatershed(const std::vector<double>& vertsXyz,
                                                const std::vector<std::uint32_t>& indices);
 
 /// Downhill walk from plan (\p x, \p y) until a REQ-132 drain. Outside → \c outside true, empty path.
-[[nodiscard]] WaterDropResult ComputeWaterDrop(const std::vector<float>& vertsXyz,
+[[nodiscard]] WaterDropResult ComputeWaterDrop(const std::vector<double>& vertsXyz,
                                                const std::vector<std::uint32_t>& indices, double x, double y);
 
 /// Reverse-flow set of every triangle covering (\p x, \p y). Shared-edge (ridge) picks union both.
-[[nodiscard]] CatchmentResult ComputeCatchment(const std::vector<float>& vertsXyz,
+[[nodiscard]] CatchmentResult ComputeCatchment(const std::vector<double>& vertsXyz,
                                                const std::vector<std::uint32_t>& indices, double x, double y);
 
 /// Unique edges between different basin ids, plus remaining border edges. `GL_LINES` (six floats/seg).
-void AppendWatershedBasinOutlines(const WatershedResult& w, const std::vector<float>& vertsXyz,
+void AppendWatershedBasinOutlines(const WatershedResult& w, const std::vector<double>& vertsXyz,
                                   const std::vector<std::uint32_t>& indices, std::vector<float>* out);
 
 /// Border of the catchment triangle set. `GL_LINES`.
-void AppendCatchmentBoundary(const CatchmentResult& c, const std::vector<float>& vertsXyz,
+void AppendCatchmentBoundary(const CatchmentResult& c, const std::vector<double>& vertsXyz,
                              const std::vector<std::uint32_t>& indices, std::vector<float>* out);
 
 /// Path as `GL_LINES` segments (skip if fewer than two vertices).

@@ -8722,7 +8722,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
         row("Points", std::to_string(s.vertexCount()));
         row("Triangles", std::to_string(s.triangleCount()));
         if (s.tin && s.tin->vertsXyz.size() >= 3) {
-          float lo = s.tin->vertsXyz[2], hi = lo;
+          double lo = s.tin->vertsXyz[2], hi = lo;
           for (size_t i = 2; i < s.tin->vertsXyz.size(); i += 3) {
             lo = std::min(lo, s.tin->vertsXyz[i]);
             hi = std::max(hi, s.tin->vertsXyz[i]);

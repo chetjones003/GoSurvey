@@ -1,7 +1,7 @@
 # TASK-228 — REQ-101 ±0.002 ft: widen coordinate storage `float` → `double`
 
 - Type:    refactor (spec-authorized architecture migration)
-- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442), D (#443), E (#444), F (#447) done, closes #394; Phase G open
+- Status:  DONE — PR 1 + Phase A (#440), B (#441), C (#442), D (#443), E (#444), F (#447), G (#453) all done; #394 closed by Phase E, #453 closes this task
 - Opened:  2026-09-08
 - Owner:   Workshop
 - GitHub:  #394 (sub-issues #440 A, #441 B, #442 C, #443 D, #444 E, #447 F — SurveyPoint, #453 G — TIN/surface mesh)
@@ -203,12 +203,43 @@ Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft asse
   `ApplyScaleToSelection`'s own `bx`/`by`/`sc` parameters (the general MOVE/ROTATE/SCALE modify-command
   entry points, REQ-329) are still `float` at that outer layer — untouched, pre-existing, and outside
   this phase's named scope (only the survey-point-specific inner functions were named).
-- **Phase G (#453) — TIN/surface mesh vertex storage.** Surfaced by Phase D's audit: `util/tinbuild.cpp`
-  still stores TIN/surface mesh vertices as `float`. Out of scope for Phases A-C (the four core flat
-  stores); split off as its own phase for the same reason `SurveyPoint` was split into Phase F —
-  larger, separate subsystem. Widen the TIN/surface vertex store(s) to `double`, keep the GPU-upload
-  narrowing at the single point established in Phase D, and reconcile `kTinPlanEpsilon` (Phase E)
-  against the widened store.
+- **Phase G (#453) — TIN/surface mesh vertex storage. DONE.** Widened `TinBuildResult::vertsXyz`/
+  `TinInputPoint::z`/`TinConstraint::az,bz`/`TinCrossingIssue::zFromA,zFromB` (`util/tinbuild.hpp`)
+  and `CadTin::vertsXyz` (`commands/CadEntities.hpp`) to `double`, plus every function in the family
+  that carries TIN vertices: `TinTriangleElevationAt`/`TinElevationAt`/`TinCullByBoundaries`/
+  `TinBorderEdges`/`TinSwapInteriorEdgeNear`/`TinDeleteInteriorEdgeNear` (`tinbuild`),
+  `BuildTinSpatialIndex`/`TinElevationAtIndexed`/`ComputeSurfaceVolume` (`surfacevolume`),
+  `TinSurfaceQuery` (`surfacequery`), `ComputeSurfaceStats` (`surfacestats`), `GenerateContours`
+  (`contourgen` — its OWN `ContourResult::vertsXyz` output stays `float`, display geometry per
+  ADR-054 (b)), `ComputeWatershed`/`ComputeWaterDrop`/`ComputeCatchment`/
+  `AppendWatershedBasinOutlines`/`AppendCatchmentBoundary` (`watershed` — `WaterDropResult::pathXyz`
+  and every `out` buffer stay `float`, same reason), and `BuildTinVolumeSurface` (`tinvolume`). Also
+  widened `CadSurface::addedPointXyz`/`MovedPoint::toX,toY,toZ` (REQ-144/150 point edits) — they feed
+  the TIN build directly, so they carry the same guarantee. GPU-upload narrowing stays at the single
+  points these call sites already used (`AppendTriangleEdges`, `BuildSurfaceAnalysisGeometry`,
+  `TinBorderEdges`'s own `out`, contour/watershed `out` buffers) — all `static_cast<float>` at the
+  render-buffer boundary, matching Phase D's rule. `GsIo.cpp`'s surface JSON reader/writer round-trips
+  `double` (`verts`, `addedPointXyz`, `movedPoints`' `toX/toY/toZ`) — no `kGsFormatVersion` bump, same
+  reasoning as Phase B (writer already emitted full precision).
+  **`kTinPlanEpsilon` reconciled** (`tinbuild.hpp`): left at 0.01 ft, re-justified as a field-shot
+  de-dup threshold (a surveying/data-quality judgment — "are two shots the same ground position") now
+  explicitly independent of what the store can represent, rather than "TIN storage is still float".
+  **Explicitly out of scope, documented in place:** `util/gridsurface.hpp`'s grid `z` arrays and
+  `CadSurface::gridZ` stay `float` — a distinct raster (regular-grid) representation, not a `vertsXyz`
+  store, and not named by the issue; `util/contourgen.hpp`'s `ContourResult::vertsXyz` and
+  `util/watershed.hpp`'s `WaterDropResult::pathXyz` stay `float` — derived DISPLAY geometry, never
+  stored, ADR-054 (b) exempts render buffers; `meshgeom::ComputeBounds` stays `float` (serves the
+  unrelated float mesh/glTF/STL/brep-tessellation family) — its two TIN-zoom-extents call sites in
+  `CadCommands.cpp` got a tiny local `ComputeTinPlanBounds` helper instead of widening the shared
+  utility for one non-mesh caller.
+  **Regression:** `tests/TinBuildTests.cpp` "A TIN vertex built at state-plane magnitude is held
+  within REQ-101's tolerance" (~2,000,000 ft easting, asserts ±0.002 ft — analogous to Phase A/F's
+  origin-at-entry tests). **Real-data fallout, not a regression:** the widened TIN store changed
+  `samples/surface-demo.dwg`'s computed common area from 229208.2107 to 229208.2109 ft² (a
+  0.0002 ft² shift from `float`-quantized to full-precision Delaunay), so
+  `tests/headless/transcripts/req073-surface-volumes.txt`'s three matching `EXPECT LOG` literals were
+  updated to the corrected value; the cut/fill/net numbers in the same transcript were unaffected.
+  Build clean; `ctest` 1363/1363.
 
 OUT:
 - Widening any render / tessellation / mesh buffer or the GL vertex format (ADR-054 (b) — they stay

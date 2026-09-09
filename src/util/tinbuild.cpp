@@ -46,9 +46,9 @@ std::vector<TinCrossingIssue> TinFindCrossingConflicts(const std::vector<TinCons
       // are the ordinary case of a breakline chain.
       if (t <= 0.0 || t >= 1.0 || u <= 0.0 || u >= 1.0)
         continue;
-      const float za = a.az + static_cast<float>(t) * (a.bz - a.az);
-      const float zb = b.az + static_cast<float>(u) * (b.bz - b.az);
-      if (std::fabs(za - zb) > static_cast<float>(kTinPlanEpsilon)) {
+      const double za = a.az + t * (a.bz - a.az);
+      const double zb = b.az + u * (b.bz - b.az);
+      if (std::fabs(za - zb) > kTinPlanEpsilon) {
         TinCrossingIssue issue;
         issue.constraintIndexA = i;
         issue.constraintIndexB = j;
@@ -135,7 +135,7 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vec
         // survey point); a duplicate whose elevation actually DISAGREES is a data conflict and is
         // counted separately so it can be reported rather than silently resolved by "first wins"
         // (REQ-069, REQ-201).
-        if (std::fabs(static_cast<double>(p.z) - static_cast<double>(uniq[k].z)) > kTinPlanEpsilon)
+        if (std::fabs(p.z - uniq[k].z) > kTinPlanEpsilon)
           ++r.conflictingDuplicates;
         break;
       }
@@ -738,8 +738,8 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vec
   // --- 6. Strip the super-triangle and emit -----------------------------------------------------
   r.vertsXyz.reserve(uniq.size() * 3);
   for (const TinInputPoint& p : uniq) {
-    r.vertsXyz.push_back(static_cast<float>(p.x));
-    r.vertsXyz.push_back(static_cast<float>(p.y));
+    r.vertsXyz.push_back(p.x);
+    r.vertsXyz.push_back(p.y);
     r.vertsXyz.push_back(p.z);
   }
   for (const Tri& t : tris) {
@@ -779,7 +779,7 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vec
 /// spatial-indexed volume query (`util/surfacevolume.cpp`) — tests the SAME containment/plane-eval
 /// rule a full linear scan does, rather than a second copy that could drift from it (CLAUDE.md rule
 /// 2: two present-day uses justify sharing).
-bool TinTriangleElevationAt(const std::vector<float>& vertsXyz, std::uint32_t ia, std::uint32_t ib,
+bool TinTriangleElevationAt(const std::vector<double>& vertsXyz, std::uint32_t ia, std::uint32_t ib,
                             std::uint32_t ic, double x, double y, double* outZ) {
   const std::uint32_t vertexCount = static_cast<std::uint32_t>(vertsXyz.size() / 3);
   // A corrupt index would read past the vertex array; a surface loaded from a file is not
@@ -814,7 +814,7 @@ bool TinTriangleElevationAt(const std::vector<float>& vertsXyz, std::uint32_t ia
   return true;
 }
 
-bool TinElevationAt(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices, double x,
+bool TinElevationAt(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices, double x,
                     double y, double* outZ) {
   if (!outZ || indices.size() < 3 || vertsXyz.size() < 9)
     return false;
@@ -826,7 +826,7 @@ bool TinElevationAt(const std::vector<float>& vertsXyz, const std::vector<std::u
   return false;
 }
 
-void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz,
+void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<double>& vertsXyz,
                          const std::vector<TinBoundaryLoop>& loops) {
   if (loops.empty() || indices.size() < 3)
     return;
@@ -899,7 +899,7 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
   indices = std::move(kept);
 }
 
-void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+void TinBorderEdges(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
                     std::vector<float>* out) {
   if (!out)
     return;
@@ -935,12 +935,13 @@ void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::u
       const size_t a = static_cast<size_t>(edges[i].first);
       const size_t b = static_cast<size_t>(edges[i].second);
       if (a < vcount && b < vcount) {
-        out->push_back(vertsXyz[a * 3]);
-        out->push_back(vertsXyz[a * 3 + 1]);
-        out->push_back(vertsXyz[a * 3 + 2]);
-        out->push_back(vertsXyz[b * 3]);
-        out->push_back(vertsXyz[b * 3 + 1]);
-        out->push_back(vertsXyz[b * 3 + 2]);
+        // Narrowed here (ADR-054 (b)): `out` is the render/highlight buffer, GPU-bound `float`.
+        out->push_back(static_cast<float>(vertsXyz[a * 3]));
+        out->push_back(static_cast<float>(vertsXyz[a * 3 + 1]));
+        out->push_back(static_cast<float>(vertsXyz[a * 3 + 2]));
+        out->push_back(static_cast<float>(vertsXyz[b * 3]));
+        out->push_back(static_cast<float>(vertsXyz[b * 3 + 1]));
+        out->push_back(static_cast<float>(vertsXyz[b * 3 + 2]));
       }
     }
     i = j;
@@ -975,7 +976,7 @@ namespace {
   return lo;
 }
 
-[[nodiscard]] bool FindNearestInteriorEdge(const std::vector<float>& vertsXyz,
+[[nodiscard]] bool FindNearestInteriorEdge(const std::vector<double>& vertsXyz,
                                            const std::vector<std::uint32_t>& indices, double x, double y,
                                            int* t0, int* t1, std::uint32_t* lo, std::uint32_t* hi) {
   if (!t0 || !t1 || !lo || !hi)
@@ -1048,7 +1049,7 @@ namespace {
 
 }  // namespace
 
-bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std::uint32_t>& indices, double x,
+bool TinSwapInteriorEdgeNear(const std::vector<double>& vertsXyz, std::vector<std::uint32_t>& indices, double x,
                              double y) {
   int bestT0 = -1, bestT1 = -1;
   std::uint32_t bestLo = 0, bestHi = 0;
@@ -1064,8 +1065,8 @@ bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std
   const size_t nVert = vertsXyz.size() / 3;
   if (b >= nVert || d >= nVert || bestLo >= nVert || bestHi >= nVert)
     return false;
-  const auto vx = [&](std::uint32_t i) { return static_cast<double>(vertsXyz[static_cast<size_t>(i) * 3]); };
-  const auto vy = [&](std::uint32_t i) { return static_cast<double>(vertsXyz[static_cast<size_t>(i) * 3 + 1]); };
+  const auto vx = [&](std::uint32_t i) { return vertsXyz[static_cast<size_t>(i) * 3]; };
+  const auto vy = [&](std::uint32_t i) { return vertsXyz[static_cast<size_t>(i) * 3 + 1]; };
   const double oLo = TinOrient2D(vx(b), vy(b), vx(d), vy(d), vx(bestLo), vy(bestLo));
   const double oHi = TinOrient2D(vx(b), vy(b), vx(d), vy(d), vx(bestHi), vy(bestHi));
   if (oLo * oHi >= 0.0)
@@ -1080,7 +1081,7 @@ bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std
   return true;
 }
 
-bool TinDeleteInteriorEdgeNear(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz, double x,
+bool TinDeleteInteriorEdgeNear(std::vector<std::uint32_t>& indices, const std::vector<double>& vertsXyz, double x,
                                double y) {
   int bestT0 = -1, bestT1 = -1;
   std::uint32_t bestLo = 0, bestHi = 0;

@@ -49,10 +49,10 @@ std::string NextSurfaceName(const AppCommandState& cmd) {
 bool SurfaceElevationRange(const CadSurface& s, float* lo, float* hi) {
   if (!s.tin || s.tin->vertsXyz.size() < 3)
     return false;
-  float mn = s.tin->vertsXyz[2], mx = mn;
+  float mn = static_cast<float>(s.tin->vertsXyz[2]), mx = mn;
   for (size_t i = 2; i < s.tin->vertsXyz.size(); i += 3) {
-    mn = std::min(mn, s.tin->vertsXyz[i]);
-    mx = std::max(mx, s.tin->vertsXyz[i]);
+    mn = std::min(mn, static_cast<float>(s.tin->vertsXyz[i]));
+    mx = std::max(mx, static_cast<float>(s.tin->vertsXyz[i]));
   }
   *lo = mn;
   *hi = mx;

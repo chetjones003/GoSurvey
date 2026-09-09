@@ -13,21 +13,21 @@ using Catch::Approx;
 namespace {
 
 // Rectangle 0..10 × 0..10, z = 0.5 y (south is downhill). Two triangles, one basin to y = 0.
-void PlaneSouth(std::vector<float>* v, std::vector<std::uint32_t>* i) {
-  *v = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 10.f, 10.f, 5.f, 0.f, 10.f, 5.f};
+void PlaneSouth(std::vector<double>* v, std::vector<std::uint32_t>* i) {
+  *v = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 5.0, 0.0, 10.0, 5.0};
   *i = {0, 1, 2, 0, 2, 3};
 }
 
 // West z = x (drains to x = 0); east z = 20 − x (drains to x = 20). Ridge at x = 10.
-void Ridge(std::vector<float>* v, std::vector<std::uint32_t>* i) {
-  *v = {0.f,  0.f, 0.f,  10.f, 0.f,  10.f, 10.f, 10.f, 10.f, 0.f,  10.f, 0.f,
-        20.f, 0.f, 0.f,  20.f, 10.f, 0.f};
+void Ridge(std::vector<double>* v, std::vector<std::uint32_t>* i) {
+  *v = {0.0,  0.0, 0.0,  10.0, 0.0,  10.0, 10.0, 10.0, 10.0, 0.0,  10.0, 0.0,
+        20.0, 0.0, 0.0,  20.0, 10.0, 0.0};
   *i = {0, 1, 3, 1, 2, 3, 1, 4, 5, 1, 5, 2};
 }
 
 // Square rim at z = 10, centre at z = 0.
-void Pit(std::vector<float>* v, std::vector<std::uint32_t>* i) {
-  *v = {0.f, 0.f, 10.f, 10.f, 0.f, 10.f, 10.f, 10.f, 10.f, 0.f, 10.f, 10.f, 5.f, 5.f, 0.f};
+void Pit(std::vector<double>* v, std::vector<std::uint32_t>* i) {
+  *v = {0.0, 0.0, 10.0, 10.0, 0.0, 10.0, 10.0, 10.0, 10.0, 0.0, 10.0, 10.0, 5.0, 5.0, 0.0};
   *i = {0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4};
 }
 
@@ -38,14 +38,14 @@ TEST_CASE("Null TIN is refused", "[surface][req132][watershed]") {
   CHECK_FALSE(a.ok);
   CHECK(a.error == "null TIN");
 
-  const std::vector<float> verts{0.f, 0.f, 0.f};
+  const std::vector<double> verts{0.0, 0.0, 0.0};
   const WatershedResult b = ComputeWatershed(verts, {});
   CHECK_FALSE(b.ok);
   CHECK(b.error == "null TIN");
 }
 
 TEST_CASE("Single-basin plane drains to the south boundary", "[surface][req132][watershed]") {
-  std::vector<float> v;
+  std::vector<double> v;
   std::vector<std::uint32_t> i;
   PlaneSouth(&v, &i);
   const WatershedResult w = ComputeWatershed(v, i);
@@ -59,7 +59,7 @@ TEST_CASE("Single-basin plane drains to the south boundary", "[surface][req132][
 }
 
 TEST_CASE("Ridge yields two basins that do not cross", "[surface][req132][watershed]") {
-  std::vector<float> v;
+  std::vector<double> v;
   std::vector<std::uint32_t> i;
   Ridge(&v, &i);
   const WatershedResult w = ComputeWatershed(v, i);
@@ -79,7 +79,7 @@ TEST_CASE("Ridge yields two basins that do not cross", "[surface][req132][waters
 }
 
 TEST_CASE("Internal depression is classified as such", "[surface][req132][watershed]") {
-  std::vector<float> v;
+  std::vector<double> v;
   std::vector<std::uint32_t> i;
   Pit(&v, &i);
   const WatershedResult w = ComputeWatershed(v, i);
@@ -98,7 +98,7 @@ TEST_CASE("Internal depression is classified as such", "[surface][req132][waters
 }
 
 TEST_CASE("Water-drop on a plane is a straight downhill line", "[surface][req133][watershed]") {
-  std::vector<float> v;
+  std::vector<double> v;
   std::vector<std::uint32_t> i;
   PlaneSouth(&v, &i);
   const WaterDropResult d = ComputeWaterDrop(v, i, 5.0, 8.0);
@@ -114,7 +114,7 @@ TEST_CASE("Water-drop on a plane is a straight downhill line", "[surface][req133
 }
 
 TEST_CASE("Water-drop in a pit terminates at the pit", "[surface][req133][watershed]") {
-  std::vector<float> v;
+  std::vector<double> v;
   std::vector<std::uint32_t> i;
   Pit(&v, &i);
   const WaterDropResult d = ComputeWaterDrop(v, i, 4.2, 3.8);
@@ -124,7 +124,7 @@ TEST_CASE("Water-drop in a pit terminates at the pit", "[surface][req133][waters
 }
 
 TEST_CASE("Water-drop outside reports outside and draws nothing", "[surface][req133][watershed]") {
-  std::vector<float> v;
+  std::vector<double> v;
   std::vector<std::uint32_t> i;
   PlaneSouth(&v, &i);
   const WaterDropResult d = ComputeWaterDrop(v, i, 50.0, 50.0);
@@ -134,7 +134,7 @@ TEST_CASE("Water-drop outside reports outside and draws nothing", "[surface][req
 }
 
 TEST_CASE("Catchment at a pour-point matches the basin area", "[surface][req134][watershed]") {
-  std::vector<float> v;
+  std::vector<double> v;
   std::vector<std::uint32_t> i;
   Ridge(&v, &i);
   const WatershedResult w = ComputeWatershed(v, i);
@@ -148,7 +148,7 @@ TEST_CASE("Catchment at a pour-point matches the basin area", "[surface][req134]
 }
 
 TEST_CASE("A planar catchment reports the plane's mean elevation", "[surface][req152][watershed]") {
-  std::vector<float> v;
+  std::vector<double> v;
   std::vector<std::uint32_t> i;
   PlaneSouth(&v, &i);
   const CatchmentResult c = ComputeCatchment(v, i, 5.0, 5.0);
@@ -158,7 +158,7 @@ TEST_CASE("A planar catchment reports the plane's mean elevation", "[surface][re
 }
 
 TEST_CASE("Catchment on a ridge unions both sides", "[surface][req134][watershed]") {
-  std::vector<float> v;
+  std::vector<double> v;
   std::vector<std::uint32_t> i;
   Ridge(&v, &i);
   const CatchmentResult c = ComputeCatchment(v, i, 10.0, 5.0);
@@ -168,7 +168,7 @@ TEST_CASE("Catchment on a ridge unions both sides", "[surface][req134][watershed
 }
 
 TEST_CASE("Catchment miss is a named outside", "[surface][req134][watershed]") {
-  std::vector<float> v;
+  std::vector<double> v;
   std::vector<std::uint32_t> i;
   PlaneSouth(&v, &i);
   const CatchmentResult c = ComputeCatchment(v, i, -10.0, -10.0);

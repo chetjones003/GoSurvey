@@ -20,13 +20,13 @@ const char* kBandPalette[] = {"#3148F5", "#31A2F5", "#31F5C8", "#7CF531", "#F5E6
 bool SurfacePlanBounds(const CadSurface& s, float* mnX, float* mxX, float* mnY, float* mxY) {
   if (!s.tin || s.tin->vertsXyz.size() < 3)
     return false;
-  *mnX = *mxX = s.tin->vertsXyz[0];
-  *mnY = *mxY = s.tin->vertsXyz[1];
+  *mnX = *mxX = static_cast<float>(s.tin->vertsXyz[0]);
+  *mnY = *mxY = static_cast<float>(s.tin->vertsXyz[1]);
   for (size_t i = 0; i + 2 < s.tin->vertsXyz.size(); i += 3) {
-    *mnX = std::min(*mnX, s.tin->vertsXyz[i]);
-    *mxX = std::max(*mxX, s.tin->vertsXyz[i]);
-    *mnY = std::min(*mnY, s.tin->vertsXyz[i + 1]);
-    *mxY = std::max(*mxY, s.tin->vertsXyz[i + 1]);
+    *mnX = std::min(*mnX, static_cast<float>(s.tin->vertsXyz[i]));
+    *mxX = std::max(*mxX, static_cast<float>(s.tin->vertsXyz[i]));
+    *mnY = std::min(*mnY, static_cast<float>(s.tin->vertsXyz[i + 1]));
+    *mxY = std::max(*mxY, static_cast<float>(s.tin->vertsXyz[i + 1]));
   }
   return true;
 }
@@ -51,7 +51,7 @@ void MoveSameKind(std::vector<T>* v, size_t i, int delta) {
   std::swap((*v)[i], (*v)[static_cast<size_t>(j)]);
 }
 
-void MoveAddedPointTriple(std::vector<float>* v, size_t i, int delta) {
+void MoveAddedPointTriple(std::vector<double>* v, size_t i, int delta) {
   if (v == nullptr || v->size() % 3u != 0u)
     return;
   const size_t n = v->size() / 3;

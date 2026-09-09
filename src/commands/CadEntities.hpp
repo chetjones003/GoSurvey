@@ -793,7 +793,9 @@ struct CadMesh {
 struct CadTin {
   /// Interleaved x,y,z (architecture §11.8). X/Y are local storage coordinates (world = local +
   /// worldDocumentOrigin); Z is absolute, per ADR-025 D2 — the same convention as every other store.
-  std::vector<float> vertsXyz;
+  /// `double` (Phase G, issue #453, ADR-054): authoritative TIN/surface vertex geometry, so it holds
+  /// REQ-101's ±0.002 ft; the `float` narrowing moves to the GPU-upload boundary (ADR-054 (b)).
+  std::vector<double> vertsXyz;
   /// Triangle list, 3 indices per triangle, counter-clockwise. `uint32` to match \ref CadMesh and to
   /// leave headroom well past REQ-100's ~200k-triangle surface profile.
   std::vector<std::uint32_t> indices;
@@ -894,13 +896,15 @@ struct CadSurface {
   std::vector<std::pair<double, double>> swappedEdgePicks;
   std::vector<std::pair<double, double>> deletedEdgePicks;
   /// REQ-144: extra vertices in the local frame (world = local + origin), stored as x,y,z triples.
-  std::vector<float> addedPointXyz;
+  /// `double` (Phase G, issue #453, ADR-054): feeds the TIN build directly, so it holds the same
+  /// REQ-101 guarantee as `CadTin::vertsXyz`.
+  std::vector<double> addedPointXyz;
   /// REQ-144: each pick removes the nearest remaining assembled input point at rebuild (local XY).
   std::vector<std::pair<double, double>> deletedPointPicks;
   /// REQ-150: replace nearest assembled point (from local XY) with to-XYZ (local).
   struct MovedPoint {
     double fromX = 0.0, fromY = 0.0;
-    float toX = 0.f, toY = 0.f, toZ = 0.f;
+    double toX = 0.0, toY = 0.0, toZ = 0.0;
   };
   std::vector<MovedPoint> movedPoints;
   std::vector<CadSurfaceBreakline> corridorFeatureLines;

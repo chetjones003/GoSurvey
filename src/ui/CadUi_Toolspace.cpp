@@ -261,13 +261,13 @@ void OpenSurfaceProperties(AppCommandState& cmd, int si) {
 bool SurfacePlanBounds(const CadSurface& s, float* mnX, float* mxX, float* mnY, float* mxY) {
   if (!s.tin || s.tin->vertsXyz.size() < 3)
     return false;
-  *mnX = *mxX = s.tin->vertsXyz[0];
-  *mnY = *mxY = s.tin->vertsXyz[1];
+  *mnX = *mxX = static_cast<float>(s.tin->vertsXyz[0]);
+  *mnY = *mxY = static_cast<float>(s.tin->vertsXyz[1]);
   for (size_t i = 0; i + 2 < s.tin->vertsXyz.size(); i += 3) {
-    *mnX = std::min(*mnX, s.tin->vertsXyz[i]);
-    *mxX = std::max(*mxX, s.tin->vertsXyz[i]);
-    *mnY = std::min(*mnY, s.tin->vertsXyz[i + 1]);
-    *mxY = std::max(*mxY, s.tin->vertsXyz[i + 1]);
+    *mnX = std::min(*mnX, static_cast<float>(s.tin->vertsXyz[i]));
+    *mxX = std::max(*mxX, static_cast<float>(s.tin->vertsXyz[i]));
+    *mnY = std::min(*mnY, static_cast<float>(s.tin->vertsXyz[i + 1]));
+    *mxY = std::max(*mxY, static_cast<float>(s.tin->vertsXyz[i + 1]));
   }
   return true;
 }
