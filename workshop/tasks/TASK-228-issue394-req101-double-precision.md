@@ -54,7 +54,16 @@ Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft asse
   near-cancelling centre+radius otherwise lands ~1e-6 off on re-export (`regression-111`/`-113`).
   **ADR-054 (a) amended:** paper-space stores stay `float` (sheet inches — `float` resolves ~1e-6 in,
   orders of magnitude inside ±0.002 ft; widening is pure churn). `SurveyPoint` split to Phase F (#447).
-  Build clean; `ctest` 1359/1359.
+  Build clean; `ctest` 1359/1359. **Follow-up (closes #441):** the DWG-trailer document is the same
+  `double` GsIo JSON tree as `.gst` (Phase A already widened the reader/writer), so no further
+  production code was needed — only the two acceptance-criteria tests were missing. Added
+  `tests/LibreDwgCadTests.cpp` "DWG trailer round-trips a state-plane coordinate within REQ-101
+  tolerance" (compares world coordinates — `local + worldDocumentOrigin`, since a state-plane
+  magnitude rebases on import) and "A legacy float-precision DWG trailer still loads within the old
+  REQ-101 tolerance" (hand-builds a trailer whose JSON already carries only `float` resolution,
+  mirroring DwgIo.cpp's private magic/length trailer layout). No `kGsFormatVersion` bump: the trailer
+  JSON shape is unchanged, so there is nothing for a legacy reader to fail open on. Build clean;
+  `ctest` 1361/1361.
 - **Phase C — snap / pick read-back. DONE (#442).** `CadSnap::Hit::x/y/z` → `double`;
   `AppCommandState::viewportSnapPickLocalX/Y/Z` → `double`; `SubmitViewportPick` /
   `SubmitViewportPickImpl` / `UiSubmitViewportPick` entry coordinates → `double`;
