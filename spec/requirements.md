@@ -1991,13 +1991,33 @@ requirements is a planning failure, not a sign of rigor.
   **UNBLOCKED 2026-09-09 (REQ-332).** That requirement now exists and is delivered: REQ-328 supplied
   the arbitrary-axis primitive, REQ-332 slice 1 (TASK-230) the kernel `brep::Rotate` / `brep::Scale`,
   and REQ-332 slice 2 (TASK-231, D-2026-09-09-b) lifted the refusal so **typed in-place ROTATE and
-  SCALE transform a solid**. The remaining work for this requirement's rotate and scale handles is
-  therefore UI wiring, not geometry — and the same "agrees by construction" rule the translate handle
-  used applies: the handles must commit through `ApplyRotationToSelection` / `ApplyScaleToSelection`,
-  the functions the typed commands call, rather than through a second implementation that could
-  drift. Note `ApplyScaleToSelection` gained a `bz` parameter in slice 2, and that neither function is
-  declared in `CadCommands.hpp` yet — exposing them is part of the handles' own slice, exactly as
-  `ApplyTranslationToSelection` had to be made public for the translate handle.
+  SCALE transform a solid**.
+
+  **ROTATE and SCALE handles IMPLEMENTED 2026-09-09** (D-2026-09-09-c, TASK-232, issue #148
+  acceptance 4 slice 3 of 3). What the gizmo DOES is now a stored setting — `CadGizmoOp`
+  { Translate, Rotate, Scale }, chosen with a new `GIZMO MOVE | ROTATE | SCALE` command. It is stored
+  where `CadGizmoMode` is derived, and the two answers differ for a reason: the *subject* is already
+  determined by the selection, so a stored copy could disagree with it, while nothing in a selection
+  says whether the user wants to move, turn or resize.
+
+  **The counts are the requirement's second bullet made structural.** ROTATE draws **one ring, about
+  the active UCS Z** — not three — because typed ROTATE is UCS-Z-only (REQ-329: *"a full ROTATE3D is
+  a separate future issue"*), so rings on UCS X and Y would have no typed command to agree with.
+  SCALE draws **one uniform handle** because typed SCALE and `brep::Scale` are uniform (REQ-332
+  item 7). This is the same rule that gave the face gizmo one handle instead of three, applied twice
+  more. A sub-object FACE selection gets **no gizmo at all** under Rotate or Scale, since no kernel
+  operation turns or resizes a single face.
+
+  **Agreement is by construction, and the extraction that makes it so is the substance of the
+  slice.** Typed ROTATE does not call one function — it CHOOSES between `ApplyRotationToSelection`
+  and `RotateSelectionInPlaceAboutAxis` on `CadWorkPlaneIsWorldXy` — and typed SCALE runs a second Z
+  pass under a tilted UCS. Both dispatches are lifted into `ApplyRotationAboutUcsZ` and
+  `ApplyUniformScaleAboutBase`, which the typed commands and the gizmo all call. Measured: wiring the
+  gizmo to the inner function instead fails the tilted-UCS agreement case and **passes every
+  World-UCS one**, which is exactly the half-agreement no tolerance-based check would catch.
+
+  **Rotate and scale are still not offered for a COPY**, and the two remaining rotate axes are still
+  absent — both wait on a typed ROTATE3D rather than on this requirement.
   **The gizmo also takes a SUB-OBJECT selection** (2026-09-05, D-2026-09-05-b, issue #148 acceptance
   4): with exactly one solid FACE selected it shows ONE handle along that face's own normal — purple,
   not the X handle's red, because it is not X — and commits through `CadApplyPushPull`, the function
@@ -2020,6 +2040,10 @@ requirements is a planning failure, not a sign of rigor.
   exist underneath it. 2026-09-04 — the TRANSLATE gizmo implemented (D-2026-09-04-g); rotate and
   scale recorded as blocked on plan-only ROTATE/SCALE rather than left silent. 2026-09-05 — the
   gizmo extended to a sub-object FACE selection (D-2026-09-05-b, issue #148 acceptance 4).
+  2026-09-09 — **the ROTATE and SCALE handles implemented** (D-2026-09-09-c, TASK-232), closing the
+  block recorded on 2026-09-04. `CadGizmoAnchorWorld`'s note that its precision "does not affect any
+  move" was corrected in the same change: that is true of a translation, where the anchor cancels
+  between grab and drop, and false of a rotation or a scale, where it is the pivot and the base.
 
 ### REQ-061 — Per-viewport camera in paper space
 - Purpose: put a plan view and an isometric on the same sheet
@@ -7675,8 +7699,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   precondition exists for, and the reason this logic is in the kernel rather than at a call site.
 - Revisions: 2026-09-09 — initial (increment 1, the kernel). Slice 1 of the three GitHub issue #148
   acceptance 4 needs. 2026-09-09 — **increment 2 added** (D-2026-09-09-b, TASK-231): the typed
-  ROTATE and SCALE commands, narrowing REQ-322 item 6 to item 6b and unblocking REQ-060's rotate and
-  scale handles, which remain slice 3 and are deliberately not in this requirement.
+  ROTATE and SCALE commands, narrowing REQ-322 item 6 to item 6b. 2026-09-09 — the third and last
+  slice landed under **REQ-060** rather than here (D-2026-09-09-c, TASK-232): the gizmo's rotate and
+  scale handles are that requirement's own acceptance, so they are recorded against it. **With them,
+  GitHub issue #148 acceptance 4 is closed.**
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -8703,7 +8729,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-057 | Domain/IO/UI | planned — DXF group-30 round-trip within REQ-101; `.gs` Z bit-identical on reload; legacy `.gs` loads all-zero Z; Properties Z edit undoable; survey elevation reads back as Z; parallel Z arrays stay length-locked across insert/erase/undo | accepted |
 | REQ-058 | Renderer/UI/Commands | `CameraTests` (plan-view parity, anchor-before-rotation composition, billboard basis) + `Ray3dTests` + `LinetypeTessellationTests` (per-vertex Z) + `CurveIntersectTests` + `BenchSceneTests`; manual/scripted in-app before/after for the render, overlay and glyph stages that no test target can link (TASK-036/037/039) | accepted — signed off 2026-08-12 | **Fixed 2026-09-01 (TASK-170):** box selection off plan view projected its two drag corners at Z = 0 while lines project at their true Z, so on a work plane raised by `ELEV` or tilted by a UCS the fence both drew and selected at pixels the cursor was never over. Each corner now carries its own work-plane elevation (`selBoxAnchorZ`, published through `uiCursorWorldZ` rather than threaded through five call sites). Invisible until now because Z does not move a PLAN projection and is genuinely 0 on the world XY plane at elevation zero — and because `headless.req058-orbited-fence-elevation` is the FIRST transcript to orbit the view at all, via a new `VIEWANGLES` driver verb. That is the wider finding: every REQ-058 behaviour that only exists off plan view had no failing test available to it. Negative-tested — restoring the Z = 0 projection reports `SELECTED: expected 1, got 0`
 | REQ-059 | UI | planned — manual (+Z / −Y / an off-axis handle animate correctly and settle < 0.5 s; gizmo tracks the camera after orbit; clicks outside the gizmo still pick geometry). Appearance is ImOGuizmo stock — the mockup is not the target (amended 2026-08-11) | accepted |
-| REQ-060 | UI/Commands | translate (entities): `headless.req060-gizmo-translate` (a drag along X and along Z, the same offset typed as MOVE landing on the same coordinates, one UNDO, a cancel, and a solid moved and reloaded) + `GizmoTranslateTests` (the skew-line solve, the anchor, an empty selection, a click that misses every handle, the UCS-aligned axes). translate (a solid FACE): `headless.req148-gizmo-subobject` (the drag and `PRESSPULL 12` leaving identical mass properties; one handle not three; no gizmo on an edge or a vertex) + `SubObjectSelectionTests` (the mode derivation, vertex-for-vertex equality with PRESSPULL, the captured face reference). rotate/scale: not implemented — blocked on plan-only ROTATE/SCALE (REQ-322 item 6) | accepted |
+| REQ-060 | UI/Commands | translate (entities): `headless.req060-gizmo-translate` (a drag along X and along Z, the same offset typed as MOVE landing on the same coordinates, one UNDO, a cancel, and a solid moved and reloaded) + `GizmoTranslateTests` (the skew-line solve, the anchor, an empty selection, a click that misses every handle, the UCS-aligned axes). translate (a solid FACE): `headless.req148-gizmo-subobject` (the drag and `PRESSPULL 12` leaving identical mass properties; one handle not three; no gizmo on an edge or a vertex) + `SubObjectSelectionTests` (the mode derivation, vertex-for-vertex equality with PRESSPULL, the captured face reference). rotate/scale: **delivered 2026-09-09** (D-2026-09-09-c, TASK-232, issue #148 acceptance 4 slice 3 of 3) — `CadGizmoOp` as a stored setting with a `GIZMO MOVE\|ROTATE\|SCALE` command, ONE ring about the UCS Z (typed ROTATE is UCS-Z-only, REQ-329) and ONE uniform handle (typed SCALE and `brep::Scale` are uniform, REQ-332 item 7), a face selection getting no gizmo at all under either, and `CadAxisDragAngle` as the rotation counterpart of `CadAxisDragParam` with both of its refusals. Committed through `ApplyRotationAboutUcsZ` / `ApplyUniformScaleAboutBase` — the two typed dispatches lifted out of `FinishRotateCommand` / `FinishScaleCommand`, so the agreement holds under a tilted UCS and not only in plan. `GizmoRotateScaleTests` (9 cases: the angle solve across four quadrants and at two radii; both angle refusals; handle counts per operation and for an empty selection; a face getting a push handle under Translate and NONE under Rotate/Scale; **the gizmo-vs-typed agreement asserted coordinate for coordinate in the World UCS and under a tilted one**; a scale drag through the anchor held rather than mirrored; and the per-operation neutral, where a scale arms at 1 rather than 0) + `headless.req060-gizmo-rotate-scale` (the operation switch and its refusals, handle counts, a line turned and scaled through the camera with one UNDO each, and a SOLID turned — volume/area unchanged, an isometry — and scaled 1600→12800). **Proven to bite:** wiring the commit to `ApplyRotationToSelection` instead of the dispatch fails the tilted-UCS case and passes all 21 others. `CadGizmoAnchorWorld`'s "precision does not affect any move" note corrected in the same change — true for a translation, false for a rotation or scale, where the anchor IS the pivot. Full suite **1384/1384**. Still absent, each waiting on a typed ROTATE3D rather than on this requirement: rings on UCS X and Y, and rotate/scale for a COPY | accepted |
 | REQ-061 | Domain/Renderer/IO | `ViewportCameraTests` (plan-view projection == `ModelToPaperIn` bit-for-bit over a grid; SW-iso hand-computed sheet point; rect-centre invariant; sibling independence) + `GsIoViewportCameraTests` (camera round-trips `.gs`; legacy file with the keys stripped loads all-plan) + manual (two viewports one plan one isometric, on screen and in the PDF plot) | accepted — implemented 2026-08-31 (issue #175) |
 | REQ-063 | Domain/IO/Renderer | planned — `.gs` round-trip bit-identical; legacy `.gs` loads; extents include meshes; erase undoable in one step; layer freeze/off/non-plottable honoured; 2M-triangle model loads without index overflow | accepted |
 | REQ-064 | Renderer/UI/IO | planned — 2D Wireframe **pixel-identical** to pre-change (the parity gate, as REQ-058 had); occlusion correct in Hidden/Shaded; lighting follows the camera; style change does not alter geometry/selection/snap/plot; REQ-100 met in Shaded | accepted |

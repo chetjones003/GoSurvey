@@ -6460,6 +6460,7 @@ const CmdEntry kRegistry[] = {
     {"flelev", "", "Feature line elevations: FLELEV <n> [SET|GRADEAHEAD|GRADEBACK|RAISE|INSERT|DELETE …]"},
     {"flelevedit", "", "Open the feature line elevation editor: FLELEVEDIT [<n>]"},
     {"plotscale", "pscale", "Set the plot scale"},
+    {"gizmo", "", "What the 3D gizmo does: GIZMO MOVE | ROTATE | SCALE"},
     {"move", "m", "Move objects"},
     {"copy", "cp", "Copy objects"},
     {"rotate", "ro", "Rotate objects"},
@@ -10859,16 +10860,55 @@ static bool HandleStretchText(AppCommandState& st, const std::string& lineIn, st
   return false;
 }
 
-static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vector<std::string>& log) {
-  PushUndoSnapshot(st, "Scale");
-  const float s = std::max(scaleFactor, 1e-6f);
-  ApplyScaleToSelection(st, st.modifyBaseX, st.modifyBaseY, st.modifyBaseZ, s, log);
+// The surrounding anonymous namespace is closed for these TWO functions and reopened after them.
+//
+// Both are the COMPLETE typed transform — the dispatch included, not just its inner half — and both
+// are public because REQ-060 requires a gizmo drag and the equivalent typed command to produce the
+// same coordinates. The only way to make that a property rather than a hope is for one function to
+// be what both call, which means the gizmo's translation unit and the test that asserts the
+// agreement each have to be able to name it. This is the same move `ApplyTranslationToSelection`
+// made for the translate handle in slice 4b.
+}  // namespace
+
+void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, float rad,
+                            std::vector<std::string>& log) {
+  // REQ-329 increment 2: ROTATE turns the selection about an axis through the base point PARALLEL
+  // TO THE ACTIVE UCS Z. When that axis is world-Z-parallel — plan view, or any UCS merely
+  // rotated/translated in plan — this is identical to the old world-Z rotation through (bx, by), so
+  // the pre-REQ-329 path runs unchanged and the result is byte-identical. Only a genuinely tilted
+  // UCS takes the axis-aware branch.
+  if (!CadWorkPlaneIsWorldXy(st)) {
+    const ucs::Ucs u = CadActiveUcsStorage(st);
+    const ray3d::Vec3 axisUnit = ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
+    RotateSelectionInPlaceAboutAxis(
+        st, {static_cast<double>(bx), static_cast<double>(by), static_cast<double>(bz)}, axisUnit,
+        rad, log);
+    return;
+  }
+  ApplyRotationToSelection(st, bx, by, rad, log);
+}
+
+void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float bz, float sc,
+                                std::vector<std::string>& log) {
+  ApplyScaleToSelection(st, bx, by, bz, sc, log);
   // REQ-329 increment (SCALE): a uniform scale is uniform on every axis. `ApplyScaleToSelection`
   // scales X/Y (and sizes) about the base; under a tilted UCS the geometry also lives in Z, so the
   // elevations scale about the base elevation too. Plan view and any plan-rotated UCS keep the
   // pre-REQ-329 "elevations untouched" behaviour — byte-identical.
+  //
+  // **Both steps are the command**, which is why they live behind one name (TASK-232): REQ-060's
+  // gizmo has to produce the same coordinates as typed SCALE, and a gizmo that called only
+  // `ApplyScaleToSelection` would agree in plan view and diverge under a tilted UCS.
   if (!CadWorkPlaneIsWorldXy(st))
-    ScaleSelectionZAboutBase(st, st.modifyBaseZ, s);
+    ScaleSelectionZAboutBase(st, bz, sc);
+}
+
+namespace {
+
+static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vector<std::string>& log) {
+  PushUndoSnapshot(st, "Scale");
+  const float s = std::max(scaleFactor, 1e-6f);
+  ApplyUniformScaleAboutBase(st, st.modifyBaseX, st.modifyBaseY, st.modifyBaseZ, s, log);
   st.active = AppCommandState::Kind::None;
   ResetModifyRotateDraft(st);
   log.push_back("SCALE complete.");
@@ -11039,16 +11079,7 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
       log.push_back("ROTATE COPY complete.");
     }
   } else {
-    if (tilted) {
-      const ucs::Ucs u = CadActiveUcsStorage(st);
-      const ray3d::Vec3 axisUnit =
-          ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
-      RotateSelectionInPlaceAboutAxis(st, {static_cast<double>(bx), static_cast<double>(by),
-                                           static_cast<double>(st.rotateBaseZ)},
-                                      axisUnit, rad, log);
-    } else {
-      ApplyRotationToSelection(st, bx, by, rad, log);
-    }
+    ApplyRotationAboutUcsZ(st, bx, by, st.rotateBaseZ, rad, log);
     st.active = K::None;
     ResetModifyRotateDraft(st);
     log.push_back("ROTATE complete.");
@@ -13668,6 +13699,12 @@ CadGizmoMode CadGizmoModeFor(const AppCommandState& st) {
   // narrower, more specific edit rather than silently translating a solid whose face was picked.
   SelectedSubObject face;
   if (CadGizmoSubObjectFace(st, &face)) {
+    // A face can be PUSHED and nothing else: no kernel operation rotates or scales one. So under
+    // Rotate or Scale a face selection gets no gizmo at all — the same answer an edge or a vertex
+    // gets a few lines below, for the same reason, rather than a handle that would refuse on drop
+    // (TASK-232).
+    if (st.gizmoOp != CadGizmoOp::Translate)
+      return CadGizmoMode::None;
     // Only a PLANAR face has a normal to slide along; `CadSubObjectFaceGrip` is the one place that
     // decides that, so asking it here means the gizmo appears exactly where a push can be applied.
     ray3d::Vec3 a{};
@@ -13686,7 +13723,11 @@ CadGizmoMode CadGizmoModeFor(const AppCommandState& st) {
 int CadGizmoAxisCountFor(const AppCommandState& st) {
   switch (CadGizmoModeFor(st)) {
   case CadGizmoMode::Entity:
-    return kGizmoAxisCount;
+    // THREE only for translate. Rotate gets ONE ring because typed ROTATE is UCS-Z-only (REQ-329:
+    // "a full ROTATE3D is a separate future issue"), and scale gets ONE handle because typed SCALE
+    // and `brep::Scale` are uniform. In both cases a second handle would advertise an edit with no
+    // equivalent typed command, which is exactly what REQ-060's second acceptance bullet forbids.
+    return st.gizmoOp == CadGizmoOp::Translate ? kGizmoAxisCount : 1;
   case CadGizmoMode::SubObjectFace:
     // ONE, because `brep::PushPullFace` takes a distance along the face normal and nothing else. A
     // second handle would name a direction the kernel cannot move the face in.
@@ -13854,11 +13895,20 @@ ray3d::Vec3 CadGizmoAxisWorld(const AppCommandState& st, int axis) {
   // would be the only thing in the viewport pointing somewhere else. In the World UCS — the default,
   // and what every existing drawing has — the two are identical.
   const ucs::Ucs& u = st.activeUcs;
-  const ray3d::Vec3 v = axis == 0 ? u.xAxis : axis == 1 ? u.yAxis : u.zAxis;
+  // ROTATE: the single handle is the UCS Z axis — the ring's own normal, and the only axis typed
+  // ROTATE can turn about. SCALE: the single handle is the UCS X axis, and it is a DIRECTION TO
+  // DRAG ALONG rather than an axis of the transform, because a uniform scale has no axis. Which one
+  // it is does not affect the result; it only has to be somewhere pickable and deterministic.
+  int pick = axis;
+  if (st.gizmoOp == CadGizmoOp::Rotate)
+    pick = 2;
+  else if (st.gizmoOp == CadGizmoOp::Scale)
+    pick = 0;
+  const ray3d::Vec3 v = pick == 0 ? u.xAxis : pick == 1 ? u.yAxis : u.zAxis;
   const double len = ray3d::Length(v);
   if (len > 1.e-12)
     return ray3d::Scale(v, 1.0 / len);
-  return ray3d::Vec3{axis == 0 ? 1.0 : 0.0, axis == 1 ? 1.0 : 0.0, axis == 2 ? 1.0 : 0.0};
+  return ray3d::Vec3{pick == 0 ? 1.0 : 0.0, pick == 1 ? 1.0 : 0.0, pick == 2 ? 1.0 : 0.0};
 }
 
 /// The ortho half-height \ref CadViewCamera builds its projection from, repeated rather than
@@ -13909,6 +13959,42 @@ bool CadAxisDragParam(const ray3d::Vec3& anchor, const ray3d::Vec3& axisDir, con
   return true;
 }
 
+bool CadAxisDragAngle(const ray3d::Vec3& anchor, const ray3d::Vec3& axisDir, const ray3d::Ray& ray,
+                      double* outAngle, double parallelTol, double minRadius) {
+  if (!outAngle)
+    return false;
+  const double axisLen = ray3d::Length(axisDir);
+  const double dirLen = ray3d::Length(ray.dir);
+  if (axisLen < 1.e-12 || dirLen < 1.e-12)
+    return false;
+  const ray3d::Vec3 n = ray3d::Scale(axisDir, 1.0 / axisLen);
+  const ray3d::Vec3 d = ray3d::Scale(ray.dir, 1.0 / dirLen);
+  // Where the ray meets the ROTATION PLANE — the plane through the anchor whose normal is the axis.
+  // A ray parallel to that plane never reaches it, so the gesture names no point at all; that is the
+  // rotation counterpart of `CadAxisDragParam`'s end-on refusal, and it is refused for the same
+  // reason rather than answered from a near-singular divide.
+  const double denom = ray3d::Dot(n, d);
+  if (std::fabs(denom) < parallelTol)
+    return false;
+  const double t = ray3d::Dot(n, ray3d::Sub(anchor, ray.origin)) / denom;
+  const ray3d::Vec3 hit = ray3d::Add(ray.origin, ray3d::Scale(d, t));
+  const ray3d::Vec3 r = ray3d::Sub(hit, anchor);
+  // Dead centre there is no direction to take an angle OF. A hit within `minRadius` of the anchor is
+  // refused rather than given whatever `atan2(0, 0)` happens to return.
+  if (ray3d::Length(r) < minRadius)
+    return false;
+  // The measuring frame is built from the AXIS alone, never from the camera, so the angle a drag
+  // reports does not change when the view orbits underneath it — the same choice the arrowhead
+  // geometry makes a few hundred lines below, and for the same reason.
+  ray3d::Vec3 seed{0.0, 0.0, 1.0};
+  if (std::fabs(ray3d::Dot(n, seed)) > 0.9)
+    seed = ray3d::Vec3{1.0, 0.0, 0.0};
+  const ray3d::Vec3 e0 = ray3d::Normalize(ray3d::Cross(seed, n));
+  const ray3d::Vec3 e1 = ray3d::Cross(n, e0);  // right-handed: e0 x e1 = n, so CCW is positive
+  *outAngle = std::atan2(ray3d::Dot(r, e1), ray3d::Dot(r, e0));
+  return true;
+}
+
 int PickGizmoAxis(const AppCommandState& st, const ray3d::Ray& ray, double tolWorld) {
   ray3d::Vec3 anchor{};
   if (!CadGizmoVisible(st) || !CadGizmoAnchorWorld(st, &anchor))
@@ -13921,6 +14007,22 @@ int PickGizmoAxis(const AppCommandState& st, const ray3d::Ray& ray, double tolWo
   int best = -1;
   double bestDist = tolWorld;
   const int axisCount = CadGizmoAxisCountFor(st);
+
+  // ROTATE's handle is a RING, not a segment, so it needs its own hit test: meet the rotation plane
+  // and ask how far the hit is from the ring's radius. Running the segment test below on it would
+  // grab along the UCS Z AXIS — the one line the ring never occupies — so the widget would be
+  // ungrabbable everywhere it is drawn and grabbable where it is not.
+  if (st.gizmoOp == CadGizmoOp::Rotate && axisCount == 1) {
+    const ray3d::Vec3 n = CadGizmoAxisWorld(st, 0);
+    const double denom = ray3d::Dot(n, d);
+    if (std::fabs(denom) < 1.e-6)
+      return -1;  // looking along the ring's plane: it projects to a line and cannot be aimed at
+    const double t = ray3d::Dot(n, ray3d::Sub(anchor, ray.origin)) / denom;
+    const ray3d::Vec3 hit = ray3d::Add(ray.origin, ray3d::Scale(d, t));
+    const double r = ray3d::Length(ray3d::Sub(hit, anchor));
+    return std::fabs(r - len) <= tolWorld ? 0 : -1;
+  }
+
   for (int axis = 0; axis < axisCount; ++axis) {
     const ray3d::Vec3 u = CadGizmoAxisWorld(st, axis);
     double s = 0.0;
@@ -13951,16 +14053,48 @@ void UpdateGizmoHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorl
 void UpdateGizmoDrag(AppCommandState& st, const ray3d::Ray& ray) {
   if (!st.gizmoDragActive)
     return;
+  // Each operation reads the cursor through its own solve, and each holds the last good value rather
+  // than jumping when the gesture stops meaning anything (see both solves' refusal notes).
+  if (st.gizmoOp == CadGizmoOp::Rotate) {
+    double a = 0.0;
+    if (!CadAxisDragAngle(st.gizmoAnchor, st.gizmoAxisDir, ray, &a))
+      return;  // ray parallel to the rotation plane, or dead centre: no angle is being expressed
+    // Wrapped into (-pi, pi] so a drag past the far side reads as a turn the short way rather than
+    // as a jump of nearly a full revolution.
+    constexpr double kPi = 3.14159265358979323846;
+    double delta = a - st.gizmoGrabParam;
+    while (delta > kPi)
+      delta -= 2.0 * kPi;
+    while (delta <= -kPi)
+      delta += 2.0 * kPi;
+    st.gizmoDragDistance = delta;
+    return;
+  }
   double s = 0.0;
   if (!CadAxisDragParam(st.gizmoAnchor, st.gizmoAxisDir, ray, &s))
     return;  // sighting down the axis: hold the last distance rather than jump
+  if (st.gizmoOp == CadGizmoOp::Scale) {
+    // The RATIO of where the handle is now to where it was grabbed. A grab parameter at the anchor
+    // gives no baseline to divide by, and a non-positive ratio means the cursor has crossed the
+    // anchor and come out the far side — which is a MIRROR, its own operation (REQ-332 item 7) and
+    // emphatically not a scale. Both hold the last good factor instead of inventing one.
+    if (std::fabs(st.gizmoGrabParam) < 1.e-9)
+      return;
+    const double f = s / st.gizmoGrabParam;
+    if (!(f > 0.0) || !std::isfinite(f))
+      return;
+    st.gizmoDragDistance = f;
+    return;
+  }
   st.gizmoDragDistance = s - st.gizmoGrabParam;
 }
 
 void CancelGizmoDrag(AppCommandState& st) {
   st.gizmoDragActive = false;
   st.gizmoDragAxis = -1;
-  st.gizmoDragDistance = 0.0;
+  // The neutral value is the operation's own: a scale of ZERO is a collapse, not "no drag" (see
+  // `gizmoDragDistance`'s table).
+  st.gizmoDragDistance = st.gizmoOp == CadGizmoOp::Scale ? 1.0 : 0.0;
   st.gizmoDragIsSubObject = false;
 }
 
@@ -13972,9 +14106,38 @@ bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
   const ray3d::Vec3 u = st.gizmoAxisDir;
   const bool onFace = st.gizmoDragIsSubObject;
   const SelectedSubObject face = st.gizmoDragSubObject;
+  const CadGizmoOp op = st.gizmoOp;
+  const ray3d::Vec3 anchor = st.gizmoAnchor;
   CancelGizmoDrag(st);
-  if (std::fabs(dist) < 1.e-12)
-    return false;  // a click that moved nothing is a cancel, not an empty undo step
+  // "Nothing happened" is measured against the OPERATION's neutral value, because a scale of zero is
+  // a collapse rather than a no-op (see `gizmoDragDistance`'s table).
+  const double neutral = op == CadGizmoOp::Scale ? 1.0 : 0.0;
+  if (std::fabs(dist - neutral) < 1.e-12)
+    return false;  // a click that changed nothing is a cancel, not an empty undo step
+
+  // ROTATE / SCALE act on the ENTITY selection only — `CadGizmoModeFor` already returns None for a
+  // sub-object selection under either, so a face drag can only be a translate.
+  if (!onFace && op == CadGizmoOp::Rotate) {
+    // ONE undo snapshot for the whole drag, and then the SAME function typed ROTATE calls — dispatch
+    // included, so the agreement holds under a tilted UCS as well as in plan (REQ-060 acceptance 2).
+    PushUndoSnapshot(st, "Rotate");
+    ApplyRotationAboutUcsZ(st, static_cast<float>(anchor.x), static_cast<float>(anchor.y),
+                           static_cast<float>(anchor.z), static_cast<float>(dist), log);
+    char rbuf[128];
+    std::snprintf(rbuf, sizeof(rbuf), "Gizmo rotate: %.4f degrees about the UCS Z axis.",
+                  dist * 180.0 / 3.14159265358979323846);
+    log.push_back(rbuf);
+    return true;
+  }
+  if (!onFace && op == CadGizmoOp::Scale) {
+    PushUndoSnapshot(st, "Scale");
+    ApplyUniformScaleAboutBase(st, static_cast<float>(anchor.x), static_cast<float>(anchor.y),
+                               static_cast<float>(anchor.z), static_cast<float>(dist), log);
+    char sbuf[128];
+    std::snprintf(sbuf, sizeof(sbuf), "Gizmo scale: %.4f about the selection centre.", dist);
+    log.push_back(sbuf);
+    return true;
+  }
 
   // FACE MODE: the SAME function typed `PRESSPULL` calls, which is what makes issue #148's fourth
   // criterion ("the gizmo ... matches the equivalent typed command within REQ-101") true by
@@ -14023,8 +14186,16 @@ bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorl
     return false;
   const ray3d::Vec3 u = CadGizmoAxisWorld(st, axis);
   double s = 0.0;
-  if (!CadAxisDragParam(anchor, u, ray, &s))
+  // The grab is captured through the SAME solve the drag will use, so the two are measured in one
+  // set of units and the difference (or ratio) between them is meaningful.
+  if (st.gizmoOp == CadGizmoOp::Rotate) {
+    if (!CadAxisDragAngle(anchor, u, ray, &s))
+      return false;  // grabbed while looking along the rotation plane: no angle to measure from
+  } else if (!CadAxisDragParam(anchor, u, ray, &s)) {
     return false;  // grabbed while sighting down the handle: nothing to measure from
+  } else if (st.gizmoOp == CadGizmoOp::Scale && std::fabs(s) < 1.e-9) {
+    return false;  // grabbed at the anchor: a scale is a RATIO, and there is no baseline here
+  }
   // WHICH face, captured now rather than read at the commit: the selection can be cleared or
   // re-picked between the two clicks, and the drag belongs to the face the user actually grabbed.
   const bool onFace = CadGizmoModeFor(st) == CadGizmoMode::SubObjectFace;
@@ -14036,7 +14207,7 @@ bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorl
   st.gizmoAnchor = anchor;
   st.gizmoAxisDir = u;
   st.gizmoGrabParam = s;
-  st.gizmoDragDistance = 0.0;
+  st.gizmoDragDistance = st.gizmoOp == CadGizmoOp::Scale ? 1.0 : 0.0;  // the operation's neutral
   st.gizmoHoverAxis = axis;
   st.gizmoDragIsSubObject = onFace;
   st.gizmoDragSubObject = face;
@@ -32584,6 +32755,46 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     st.cmdEnteredHistory.push_back(line);
     if (st.cmdEnteredHistory.size() > 20)
       st.cmdEnteredHistory.erase(st.cmdEnteredHistory.begin());
+  }
+
+  // GIZMO MOVE | ROTATE | SCALE — what the REQ-060 gizmo does (TASK-232). Consumed here, ahead of
+  // the main dispatch, because it is a one-line SETTING with no phases: it takes its argument
+  // inline, prompts for nothing and starts no command. Bare `GIZMO` reports the current setting
+  // rather than changing it, so the command is safe to type when you have forgotten where it is.
+  {
+    std::istringstream gz(StringUtil::toLowerAsciiCopy(line));
+    std::string gzCmd;
+    if ((gz >> gzCmd) && gzCmd == "gizmo") {
+      std::string mode;
+      const bool haveMode = static_cast<bool>(gz >> mode);
+      const auto opName = [](CadGizmoOp o) {
+        return o == CadGizmoOp::Translate ? "MOVE" : o == CadGizmoOp::Rotate ? "ROTATE" : "SCALE";
+      };
+      if (!haveMode) {
+        log.push_back(std::string("GIZMO — currently ") + opName(st.gizmoOp) +
+                      ". Use GIZMO MOVE, GIZMO ROTATE or GIZMO SCALE.");
+        return;
+      }
+      CadGizmoOp want = st.gizmoOp;
+      if (mode == "move" || mode == "m" || mode == "translate")
+        want = CadGizmoOp::Translate;
+      else if (mode == "rotate" || mode == "ro" || mode == "r")
+        want = CadGizmoOp::Rotate;
+      else if (mode == "scale" || mode == "sc" || mode == "s")
+        want = CadGizmoOp::Scale;
+      else {
+        log.push_back("GIZMO — unknown mode '" + mode + "'. Use MOVE, ROTATE or SCALE.");
+        return;
+      }
+      // An armed drag was measured in the OLD operation's units, so it cannot survive the switch.
+      // Cancelled before the change, because the cancel's neutral value depends on the op it is
+      // ending (see `gizmoDragDistance`).
+      CancelGizmoDrag(st);
+      st.gizmoOp = want;
+      st.gizmoHoverAxis = -1;
+      log.push_back(std::string("GIZMO — ") + opName(want) + ".");
+      return;
+    }
   }
 
   using K = AppCommandState::Kind;

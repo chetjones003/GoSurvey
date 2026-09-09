@@ -2543,6 +2543,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         // handle's red: it is not X, and a widget that said it was would be lying about the one
         // thing it exists to communicate (issue #148 acceptance 4).
         drawGizmo(gizmoOverlay->axis[a], kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB, kLwGizmo);
+      else if (gizmoOverlay->soloOp == 1)
+        // The rotate ring turns about the UCS Z, so it wears Z's blue — the axis colour it actually
+        // belongs to, rather than the red `axis[0]` would otherwise imply (TASK-232).
+        drawGizmo(gizmoOverlay->axis[a], kAxisRgb[2][0], kAxisRgb[2][1], kAxisRgb[2][2], kLwGizmo);
+      else if (gizmoOverlay->soloOp == 2)
+        // The uniform-scale handle belongs to NO axis — its direction is only somewhere to drag —
+        // so it takes an off-axis amber rather than borrowing a colour that would name one.
+        drawGizmo(gizmoOverlay->axis[a], 0.95f, 0.7f, 0.25f, kLwGizmo);
       else
         drawGizmo(gizmoOverlay->axis[a], kAxisRgb[a][0], kAxisRgb[a][1], kAxisRgb[a][2], kLwGizmo);
     }

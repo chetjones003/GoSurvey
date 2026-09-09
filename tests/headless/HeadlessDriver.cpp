@@ -2343,6 +2343,13 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // breaks silently.
       else if (what == "GIZMOAXIS")
         got = static_cast<long>(run.st.gizmoDragActive ? run.st.gizmoDragAxis : -1);
+      // Which OPERATION the gizmo is set to: 0 move, 1 rotate, 2 scale (TASK-232). Its own verb
+      // because the operation is a stored SETTING rather than something derived from the selection,
+      // so nothing else a transcript can read would reveal it.
+      else if (what == "GIZMOOP")
+        got = run.st.gizmoOp == CadGizmoOp::Translate ? 0L
+              : run.st.gizmoOp == CadGizmoOp::Rotate  ? 1L
+                                                      : 2L;
       // How many handles the gizmo has: 3 on an entity selection, 1 on a solid FACE, 0 for none.
       // The count is the difference between the two modes made assertable — a face gizmo that grew
       // a second handle would be offering a direction `brep::PushPullFace` cannot move a face in.
