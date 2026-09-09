@@ -15759,18 +15759,18 @@ static void ApplyBreakToLine(AppCommandState& st, int index, const BreakPoint& p
   const size_t k = static_cast<size_t>(index) * 6;
   if (k + 5 >= st.userLinesFlat.size())
     return;
-  const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1], z0 = st.userLinesFlat[k + 2];
-  const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4], z1 = st.userLinesFlat[k + 5];
-  const float totalLen = std::hypot(x1 - x0, y1 - y0);
-  constexpr float kTol = 0.01f;  // REQ-101 endpoint-coincidence tolerance
-  const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+  const double x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1], z0 = st.userLinesFlat[k + 2];
+  const double x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4], z1 = st.userLinesFlat[k + 5];
+  const double totalLen = std::hypot(x1 - x0, y1 - y0);
+  constexpr double kTol = 0.002;  // REQ-101 endpoint-coincidence tolerance
+  const double nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
   const bool nearIsStart = nearP <= kTol;
   const bool farIsEnd = farP >= totalLen - kTol;
   if (nearIsStart && farIsEnd) {
     log.push_back("BREAK — that would remove the entire line; refused.");
     return;
   }
-  const float ux = (x1 - x0) / std::max(totalLen, 1e-9f), uy = (y1 - y0) / std::max(totalLen, 1e-9f);
+  const double ux = (x1 - x0) / std::max(totalLen, 1e-9), uy = (y1 - y0) / std::max(totalLen, 1e-9);
   PushUndoSnapshot(st, "Break");
   if (nearIsStart) {
     st.userLinesFlat[k] = x0 + ux * farP;
@@ -15857,9 +15857,9 @@ static void ApplyBreakToArc(AppCommandState& st, int index, const BreakPoint& p1
                            : "BREAK — full-circle arc broken.");
     return;
   }
-  const float totalLen = src.r * std::fabs(src.sweepRad);
-  constexpr float kTol = 0.01f;
-  const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+  const double totalLen = src.r * std::fabs(src.sweepRad);
+  constexpr double kTol = 0.002;
+  const double nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
   const bool nearIsStart = nearP <= kTol;
   const bool farIsEnd = farP >= totalLen - kTol;
   if (nearIsStart && farIsEnd) {
@@ -15940,8 +15940,8 @@ static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoi
                                      std::vector<std::string>& log) {
   const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
   const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-  const float totalLen = PolylineOpenLengthOf(st, pi);
-  constexpr float kTol = 0.01f;
+  const double totalLen = PolylineOpenLengthOf(st, pi);
+  constexpr double kTol = 0.002;
   const bool p1First = p1.param <= p2.param;
   const BreakPoint& nearBp = p1First ? p1 : p2;
   const BreakPoint& farBp = p1First ? p2 : p1;

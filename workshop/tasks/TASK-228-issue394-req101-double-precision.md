@@ -1,7 +1,7 @@
 # TASK-228 — REQ-101 ±0.002 ft: widen coordinate storage `float` → `double`
 
 - Type:    refactor (spec-authorized architecture migration)
-- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442), D (#443) done; Phases E, F, G open
+- Status:  in progress — PR 1 done; Phase A (#440), B (#441), C (#442), D (#443), E (#444) done, closes #394; Phases F, G open
 - Opened:  2026-09-08
 - Owner:   Workshop
 - GitHub:  #394 (sub-issues #440 A, #441 B, #442 C, #443 D, #444 E, #447 F — SurveyPoint, #453 G — TIN/surface mesh)
@@ -91,18 +91,41 @@ Until a phase lands, its subsystem keeps `float` and its existing ±0.01 ft asse
   `CadCommands.hpp`/`CadEntities.hpp`) on the three copies of the four named stores so a reintroduced
   `float` there is a build error, not a silent regression — proven red (reverted one store to `float`,
   confirmed two `static_assert` failures) before green. Build clean; `ctest` 1359/1359.
-- **Phase E — test-assertion sweep.** Every `0.01` literal and named constant that represents the
-  REQ-101 guarantee → `0.002`, audited one at a time:
-  - `kReq101` (`src/viewport/CadSnap.cpp`) — is the guarantee, change.
-  - `kTinPlanEpsilon` (`src/util/tinbuild.hpp`) — "two shots are the same site" de-dup threshold;
-    confirm whether it should track REQ-101 or is an independent domain choice **before** changing.
-  - `kSolidChordToleranceFt` (`src/util/cadsolid.hpp`) — tessellation chord tolerance; reconcile
-    with #384's isoline work (issue #394 AC item 5) before changing.
-  - `kTol = 0.01f` (`src/commands/CadCommands.cpp` ~15751, endpoint-coincidence) — is the guarantee.
-  - per-assertion `0.01` literals across the Catch2 suite (arc/curve intersections, DXF/DWG
-    round-trips, survey-point import, grading, snapping) — each checked for "is this the REQ-101
-    tolerance or a coincidental use" before edit. Assertions using `0.01` for unrelated reasons are
-    left alone (issue #394 AC item 3).
+- **Phase E — test-assertion sweep. DONE (#444).** Every `0.01` literal and named constant that
+  represents the REQ-101 guarantee audited one at a time and, where it did, changed to `0.002`:
+  - `kReq101` (`src/viewport/CadSnap.cpp`) — is the guarantee → `0.002`.
+  - Model-space `kTol` in `src/commands/CadCommands.cpp` — `ApplyBreakToLine` (~15757),
+    `ApplyBreakToArc` (~15840), `ApplyBreakToOpenPolyline` (~15939): these read the four core `double`
+    flat stores (Phases A-D) but the local endpoint-coincidence arithmetic (`x0/y0/z0/x1/y1/z1`,
+    `totalLen`, `ux/uy`, `nearP/farP`, `kTol` itself) was still narrowing through `float`, which only
+    resolves ~0.008 ft at large coordinates — so a bare constant change would have been cosmetic.
+    Widened those locals to `double` and set `kTol = 0.002`, logic otherwise unchanged. (Residual note:
+    `ApplyBreakToOpenPolyline`'s `totalLen` still ultimately derives from `PolylineOpenLengthOf`, which
+    itself returns `float` — a pre-existing narrowing one level up that this phase's named-locals scope
+    did not reach; left for a future audit, does not fail any test at ±0.002 ft today.)
+  - Paper-space `kTol` (`ApplyBreakToPaperLine` ~16235, paper-arc break ~16316,
+    `ApplyBreakToPaperPolyline` ~16393) — deliberately left at `0.01f`: paper-space stores stay `float`
+    per ADR-054 (a)'s amendment (sheet inches, resolves ~1e-6 in), and REQ-101 is a world/model-space
+    guarantee.
+  - `kTinPlanEpsilon` (`src/util/tinbuild.hpp`) — independent domain "same field shot" de-dup
+    threshold; TIN vertex storage is still `float` (Phase G, #453). Left at `0.01`, comment updated to
+    say so explicitly.
+  - `kSolidChordToleranceFt` (`src/util/cadsolid.hpp`) — tessellation chord tolerance, a
+    rendering/pick density knob independent of coordinate storage (issue #394 AC item 5, covered by
+    #384's isoline work). Left at `0.01`, comment updated.
+  - Per-assertion `0.01` literals across the Catch2 suite: `tests/CurveIntersectTests.cpp` `kReq101`
+    (curve/curve intersection accuracy, `double` math) and `tests/CadSnapTests.cpp` (hand-computed
+    endpoint-snap and perspective/orthographic snap-agreement assertions reading the core `double`
+    stores) → `0.002`. Everything else across `tests/*.cpp` — TIN/surface-query assertions
+    (`TinQueryTests`, `Issue119SurfaceTests`, `SurfaceProfileTests`, `TinVolumeTests`,
+    `ContourGenTests`, `TinBuildTests`, `SurfaceAnalysisTests`, `SolidPickTests`, `SurfaceVolumeTests`,
+    `WatershedTests`, `PushPullTests`), still backed by `float` TIN storage or tessellation-chord/
+    volume tolerances; `GltfImportTests`/`StlImportTests` (`modelimport::Result::vertsXyz`, still
+    `float`, not one of the four core stores); `BrepTests`/`AcisSatParserTests`/`FilletGeomTests`
+    (chord-tessellation params/volume epsilons); `CadBlockImportTests` (an angle, not a coordinate);
+    `HoverDwellTests` (a wall-clock seconds argument); `Trim3DDrawnLineTests`/`Trim3DLineLineTests`/
+    `UcsTests` (comments only, no live assertion) — left at `0.01` with the reason recorded per site.
+  - Build clean; `ctest` 1359/1359.
 - **Phase G (#453) — TIN/surface mesh vertex storage.** Surfaced by Phase D's audit: `util/tinbuild.cpp`
   still stores TIN/surface mesh vertices as `float`. Out of scope for Phases A-C (the four core flat
   stores); split off as its own phase for the same reason `SurveyPoint` was split into Phase F —

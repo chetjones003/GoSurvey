@@ -625,7 +625,7 @@ struct IsectCandidate {
 /// elevations do not touch, and reporting a snap there would place geometry on nothing.
 void ComputeTrueIntersections(const std::vector<IsectSeg>& segs, const std::vector<IsectConic>& conics,
                               std::vector<IsectCandidate>* out) {
-  constexpr double kReq101 = 0.01;  ///< ±0.01 ft — the project coordinate tolerance.
+  constexpr double kReq101 = 0.002;  ///< ±0.002 ft — the project coordinate tolerance.
   std::vector<curveisect::Hit2> hits;
 
   for (size_t i = 0; i < segs.size(); ++i) {
