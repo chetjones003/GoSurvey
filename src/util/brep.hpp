@@ -1290,4 +1290,18 @@ struct Tessellation {
 [[nodiscard]] bool MoveEdge(const Solid& s, int edgeIndex, const Vec3& delta, Solid* out,
                             Problem* outWhy);
 
+/// The faces of \p s whose loops use \p vertexIndex, in index order (REQ-333).
+///
+/// Public because the UI has to know what meets where BEFORE it offers a grip: \ref MoveVertex works
+/// only where exactly three planar faces meet, and a handle drawn on a pyramid's apex that then
+/// refuses on drop is worse than no handle at all. Answering that question in the kernel keeps the
+/// loop walking in the one place that owns the topology.
+void FacesAtVertex(const Solid& s, int vertexIndex, std::vector<int>* out);
+
+/// The two faces of \p s that use edge \p edgeIndex, or false when there are not exactly two.
+///
+/// A manifold solid always has two (\ref Validate enforces it), so `false` here means the caller is
+/// holding an index into a solid that is not one — worth saying rather than assuming.
+[[nodiscard]] bool FacesAlongEdge(const Solid& s, int edgeIndex, int* outA, int* outB);
+
 } // namespace brep

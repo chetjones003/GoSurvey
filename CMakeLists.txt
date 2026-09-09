@@ -1078,6 +1078,10 @@ if(GOSURVEY_BUILD_TESTS)
     # AGREEMENT: a gizmo drag and the function the typed command calls, compared coordinate for
     # coordinate — which is the acceptance itself rather than a proxy for it.
     tests/GizmoRotateScaleTests.cpp
+    # REQ-333 increment 2 (TASK-234) — the vertex and edge grips. Its own file because its subject is
+    # the handle COUNTS (each a statement about degrees of freedom) and the rule that no handle is
+    # drawn where the kernel would refuse the drag.
+    tests/GizmoSubObjectMoveTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into

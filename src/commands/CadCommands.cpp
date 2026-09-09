@@ -13695,26 +13695,41 @@ CadGizmoMode CadGizmoModeFor(const AppCommandState& st) {
   // the two stores are mutually exclusive by decision (D-2026-09-04-a), so they are never both
   // non-empty. Testing this one first means that if that invariant ever breaks, the gizmo shows the
   // narrower, more specific edit rather than silently translating a solid whose face was picked.
-  SelectedSubObject face;
-  if (CadGizmoSubObjectFace(st, &face)) {
-    // A face can be PUSHED and nothing else: no kernel operation rotates or scales one. So under
-    // Rotate or Scale a face selection gets no gizmo at all — the same answer an edge or a vertex
-    // gets a few lines below, for the same reason, rather than a handle that would refuse on drop
+  // Exactly one sub-object, of any kind. More than one has no single thing to move, and a mixed
+  // selection is one whose meaning is not settled — both refused rather than guessed at.
+  if (st.subObjectSelection.size() == 1) {
+    const SelectedSubObject& sub = st.subObjectSelection.front();
+    // A sub-object can be MOVED and nothing else: no kernel operation rotates or scales one. So
+    // under Rotate or Scale it gets no gizmo at all rather than a handle that would refuse on drop
     // (TASK-232).
     if (st.gizmoOp != CadGizmoOp::Translate)
       return CadGizmoMode::None;
-    // Only a PLANAR face has a normal to slide along; `CadSubObjectFaceGrip` is the one place that
-    // decides that, so asking it here means the gizmo appears exactly where a push can be applied.
+    // In every case the GRIP decides, not this function. Each grip helper returns false wherever its
+    // kernel operation could not run — a non-planar face, a pyramid's apex, a cylinder's rim — so
+    // the gizmo appears exactly where a drag can be applied rather than appearing and then
+    // declining on release.
     ray3d::Vec3 a{};
     ray3d::Vec3 n{};
-    return CadSubObjectFaceGrip(st, face, &a, &n) ? CadGizmoMode::SubObjectFace : CadGizmoMode::None;
+    ray3d::Vec3 n2{};
+    switch (sub.kind) {
+    case solidpick::Kind::Face:
+      return CadSubObjectFaceGrip(st, sub, &a, &n) ? CadGizmoMode::SubObjectFace
+                                                   : CadGizmoMode::None;
+    // REQ-333 replaced the note that stood here. An edge and a vertex got no gizmo because
+    // `brep::PushPullFace` was the only solid edit there was; `brep::MoveEdge` and
+    // `brep::MoveVertex` are now the second and third.
+    case solidpick::Kind::Edge:
+      return CadSubObjectEdgeGrip(st, sub, &a, &n, &n2) ? CadGizmoMode::SubObjectEdge
+                                                        : CadGizmoMode::None;
+    case solidpick::Kind::Vertex:
+      return CadSubObjectVertexGrip(st, sub, &a) ? CadGizmoMode::SubObjectVertex
+                                                 : CadGizmoMode::None;
+    default:
+      return CadGizmoMode::None;
+    }
   }
-  // An EDGE or a VERTEX selection deliberately gets no gizmo. The kernel has no operation that moves
-  // one - `brep::PushPullFace` is the only solid edit there is - so a handle would advertise a move
-  // that cannot happen. Issue #148 criterion 3's other two thirds are unbuilt, and the gizmo says so
-  // by not appearing rather than by refusing after the drag (D-2026-09-05-b).
   if (!st.subObjectSelection.empty())
-    return CadGizmoMode::None;
+    return CadGizmoMode::None;  // several sub-objects: no single thing to move
   return st.selection.empty() ? CadGizmoMode::None : CadGizmoMode::Entity;
 }
 
@@ -13730,6 +13745,15 @@ int CadGizmoAxisCountFor(const AppCommandState& st) {
     // ONE, because `brep::PushPullFace` takes a distance along the face normal and nothing else. A
     // second handle would name a direction the kernel cannot move the face in.
     return 1;
+  case CadGizmoMode::SubObjectEdge:
+    // TWO: two planes meet along an edge, each with one degree of freedom that keeps it planar, and
+    // together they span exactly the plane perpendicular to the edge. No third, because the
+    // along-the-edge direction is not a motion — an edge slid along its own line is the same edge.
+    return 2;
+  case CadGizmoMode::SubObjectVertex:
+    // THREE: three planes meet, which is three degrees of freedom, so every direction is reachable
+    // and there is nothing to leave out.
+    return kGizmoAxisCount;
   case CadGizmoMode::None:
     break;
   }
@@ -13740,10 +13764,23 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
   if (!out)
     return false;
   {
-    SelectedSubObject face;
-    if (CadGizmoModeFor(st) == CadGizmoMode::SubObjectFace && CadGizmoSubObjectFace(st, &face)) {
+    const CadGizmoMode mode = CadGizmoModeFor(st);
+    if (mode != CadGizmoMode::Entity && mode != CadGizmoMode::None &&
+        st.subObjectSelection.size() == 1) {
+      const SelectedSubObject& sub = st.subObjectSelection.front();
       ray3d::Vec3 axis{};
-      return CadSubObjectFaceGrip(st, face, out, &axis);
+      ray3d::Vec3 axisB{};
+      switch (mode) {
+      case CadGizmoMode::SubObjectFace:
+        return CadSubObjectFaceGrip(st, sub, out, &axis);
+      case CadGizmoMode::SubObjectEdge:
+        return CadSubObjectEdgeGrip(st, sub, out, &axis, &axisB);
+      case CadGizmoMode::SubObjectVertex:
+        return CadSubObjectVertexGrip(st, sub, out);
+      default:
+        break;
+      }
+      return false;
     }
   }
   if (st.selection.empty())
@@ -13880,12 +13917,22 @@ ray3d::Vec3 CadGizmoAxisWorld(const AppCommandState& st, int axis) {
   // move it in. There is one handle, so `axis` is ignored - the caller's loop is bounded by
   // `CadGizmoAxisCountFor`, which returns 1 here.
   {
-    SelectedSubObject face;
-    if (CadGizmoModeFor(st) == CadGizmoMode::SubObjectFace && CadGizmoSubObjectFace(st, &face)) {
+    const CadGizmoMode mode = CadGizmoModeFor(st);
+    if (mode != CadGizmoMode::Entity && mode != CadGizmoMode::None &&
+        st.subObjectSelection.size() == 1) {
+      const SelectedSubObject& sub = st.subObjectSelection.front();
       ray3d::Vec3 anchor{};
-      ray3d::Vec3 normal{};
-      if (CadSubObjectFaceGrip(st, face, &anchor, &normal))
-        return normal;
+      ray3d::Vec3 nA{};
+      ray3d::Vec3 nB{};
+      if (mode == CadGizmoMode::SubObjectFace && CadSubObjectFaceGrip(st, sub, &anchor, &nA))
+        return nA;
+      // An EDGE's two handles are the two adjacent faces' own outward normals — what the kernel
+      // actually offsets, and together exactly the plane perpendicular to the edge.
+      if (mode == CadGizmoMode::SubObjectEdge && CadSubObjectEdgeGrip(st, sub, &anchor, &nA, &nB))
+        return axis == 0 ? nA : nB;
+      // A VERTEX deliberately falls through to the UCS axes below: three planes meet there, so every
+      // direction is reachable, and the natural basis is the one the grid, ORTHO and the entity
+      // gizmo already use (REQ-154).
     }
   }
   // ENTITY MODE: the ACTIVE UCS, not the world frame. The grid, ORTHO and coordinate entry all take
@@ -14104,6 +14151,7 @@ bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
   const ray3d::Vec3 u = st.gizmoAxisDir;
   const bool onFace = st.gizmoDragIsSubObject;
   const SelectedSubObject face = st.gizmoDragSubObject;
+  const solidpick::Kind subKind = face.kind;
   const CadGizmoOp op = st.gizmoOp;
   const ray3d::Vec3 anchor = st.gizmoAnchor;
   CancelGizmoDrag(st);
@@ -14146,6 +14194,27 @@ bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
   // The distance passes through unchanged because the gizmo's axis IS the face normal
   // (`CadSubObjectFaceGrip` supplies both), so positive is outward in both.
   if (onFace) {
+    // Which of the three sub-object edits this is, captured at the grab like everything else about
+    // the drag. Each goes through the one function that owns it, so the undo step, the re-pointed
+    // selection and the kernel's refusal sentence are said once rather than three times.
+    if (subKind == solidpick::Kind::Vertex) {
+      if (!CadApplyMoveVertex(st, face, ray3d::Scale(u, dist), log))
+        return false;
+      char vBuf[128];
+      std::snprintf(vBuf, sizeof(vBuf), "Gizmo move vertex: %.4f along %s.", dist,
+                    axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
+      log.push_back(vBuf);
+      return true;
+    }
+    if (subKind == solidpick::Kind::Edge) {
+      if (!CadApplyMoveEdge(st, face, ray3d::Scale(u, dist), log))
+        return false;
+      char eBuf[128];
+      std::snprintf(eBuf, sizeof(eBuf), "Gizmo move edge: %.4f along face %d's normal.", dist,
+                    axis);
+      log.push_back(eBuf);
+      return true;
+    }
     if (!CadApplyPushPull(st, face, dist, log))
       return false;  // refused by the kernel and already reported; the document is untouched
     char faceBuf[128];
@@ -14196,10 +14265,19 @@ bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorl
   }
   // WHICH face, captured now rather than read at the commit: the selection can be cleared or
   // re-picked between the two clicks, and the drag belongs to the face the user actually grabbed.
-  const bool onFace = CadGizmoModeFor(st) == CadGizmoMode::SubObjectFace;
+  // A sub-object drag of ANY kind — face, edge or vertex — captures its target now rather than
+  // reading it at the commit, for the reason the face case already gave: the selection can be
+  // cleared or re-picked between the two clicks, and the drag belongs to what the user grabbed.
+  const CadGizmoMode grabMode = CadGizmoModeFor(st);
+  const bool onFace = grabMode == CadGizmoMode::SubObjectFace ||
+                      grabMode == CadGizmoMode::SubObjectEdge ||
+                      grabMode == CadGizmoMode::SubObjectVertex;
   SelectedSubObject face;
-  if (onFace && !CadGizmoSubObjectFace(st, &face))
-    return false;
+  if (onFace) {
+    if (st.subObjectSelection.size() != 1)
+      return false;
+    face = st.subObjectSelection.front();
+  }
   st.gizmoDragActive = true;
   st.gizmoDragAxis = axis;
   st.gizmoAnchor = anchor;
@@ -29846,6 +29924,89 @@ bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double 
   return true;
 }
 
+// --- Moving a VERTEX or an EDGE (REQ-333 increment 2, TASK-234; issue #148 acceptance 3) ---------
+//
+// Both are `CadApplyPushPull` with a different kernel call in the middle, deliberately: the solid is
+// replaced, every sub-object reference that named it is re-pointed, the kernel's own sentence is
+// logged on a refusal, and the whole thing is one undo step. Those four are properties of editing a
+// solid rather than of pushing a face, and stating them three times in three shapes is how they
+// start to differ.
+
+namespace {
+
+/// The half of `CadApplyPushPull` that is not about pushing: resolve the reference against the live
+/// document, replace the solid, re-point the selection, and report.
+bool CadCommitSolidEdit(AppCommandState& st, const SelectedSubObject& ref, brep::Solid&& edited,
+                        const char* verb, const char* undoLabel, const char* whatMoved,
+                        std::vector<std::string>& log) {
+  PushUndoSnapshot(st, undoLabel);
+  const auto replaced = std::make_shared<const brep::Solid>(std::move(edited));
+  st.cadSolids[static_cast<size_t>(ref.solidIndex)] = replaced;
+  // The selection FOLLOWS the edit, exactly as it does after a push. These operations preserve the
+  // topology counts, so the index still names the same sub-object — but the reference is keyed on
+  // the solid's IDENTITY (ADR-049) and the solid has just been replaced, so left alone it would
+  // expire on the next sweep and a second drag would need a re-pick.
+  for (SelectedSubObject& s : st.subObjectSelection)
+    if (s.solidIndex == ref.solidIndex)
+      s.owner = replaced;
+  BumpCadGpuCache(st);
+  const brep::MassProperties mp = brep::ComputeMassProperties(*replaced);
+  char msg[240];
+  if (mp.valid)
+    std::snprintf(msg, sizeof(msg), "%s - %s %d of solid %d moved; volume now %.4f.", verb,
+                  whatMoved, ref.index, ref.solidIndex + 1, mp.volume);
+  else
+    std::snprintf(msg, sizeof(msg), "%s - %s %d of solid %d moved.", verb, whatMoved, ref.index,
+                  ref.solidIndex + 1);
+  log.push_back(msg);
+  return true;
+}
+
+/// The live solid behind \p ref, or null when the reference no longer names one.
+CadSolidPtr CadLiveSolidFor(const AppCommandState& st, const SelectedSubObject& ref,
+                            solidpick::Kind want) {
+  const CadSolidPtr sp = ref.owner.lock();
+  if (ref.kind != want || !sp || ref.index < 0 || ref.solidIndex < 0 ||
+      static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size() ||
+      st.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp)
+    return nullptr;
+  return sp;
+}
+
+}  // namespace
+
+bool CadApplyMoveVertex(AppCommandState& st, const SelectedSubObject& ref, const ray3d::Vec3& delta,
+                        std::vector<std::string>& log) {
+  const CadSolidPtr sp = CadLiveSolidFor(st, ref, solidpick::Kind::Vertex);
+  if (!sp) {
+    log.push_back("MOVE - that vertex is no longer there.");
+    return false;
+  }
+  brep::Solid edited;
+  brep::Problem why = brep::Problem::Ok;
+  if (!brep::MoveVertex(*sp, ref.index, delta, &edited, &why)) {
+    log.push_back(std::string("MOVE - ") + brep::ProblemText(why));
+    return false;
+  }
+  return CadCommitSolidEdit(st, ref, std::move(edited), "MOVE", "Move vertex", "vertex", log);
+}
+
+bool CadApplyMoveEdge(AppCommandState& st, const SelectedSubObject& ref, const ray3d::Vec3& delta,
+                      std::vector<std::string>& log) {
+  const CadSolidPtr sp = CadLiveSolidFor(st, ref, solidpick::Kind::Edge);
+  if (!sp) {
+    log.push_back("MOVE - that edge is no longer there.");
+    return false;
+  }
+  brep::Solid edited;
+  brep::Problem why = brep::Problem::Ok;
+  if (!brep::MoveEdge(*sp, ref.index, delta, &edited, &why)) {
+    log.push_back(std::string("MOVE - ") + brep::ProblemText(why));
+    return false;
+  }
+  return CadCommitSolidEdit(st, ref, std::move(edited), "MOVE", "Move edge", "edge", log);
+}
+
 // --- FILLET on a solid EDGE (REQ-323 increment 1, command half; issue #148 acceptance 5) ---------
 //
 // Paired with the REQ-318 sub-object selection exactly as PRESSPULL is: Ctrl+click names the edge,
@@ -30184,6 +30345,79 @@ bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& re
   if (!(len > 1e-12))
     return false;
   *outAxis = ray3d::Scale(dir, 1.0 / len);
+  return true;
+}
+
+namespace {
+
+/// A face's outward unit normal in the command layer, honouring `Surface::inward` the same way the
+/// kernel does. False on a degenerate frame.
+bool CadFaceOutwardNormal(const brep::Face& f, ray3d::Vec3* out) {
+  ray3d::Vec3 n = f.surface.frame.zAxis;
+  if (f.surface.inward)
+    n = ray3d::Scale(n, -1.0);
+  const double len = ray3d::Length(n);
+  if (!(len > 1e-12))
+    return false;
+  *out = ray3d::Scale(n, 1.0 / len);
+  return true;
+}
+
+}  // namespace
+
+bool CadSubObjectVertexGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                            ray3d::Vec3* outAnchor) {
+  if (!outAnchor)
+    return false;
+  const CadSolidPtr sp = CadLiveSolidFor(st, ref, solidpick::Kind::Vertex);
+  if (!sp || static_cast<size_t>(ref.index) >= sp->vertices.size())
+    return false;
+  // Only where `brep::MoveVertex` can actually work: exactly three faces, every one of them planar.
+  // Asked here rather than discovered on release, so a pyramid's apex and a cylinder's rim — both
+  // easy to pick, both impossible to move — simply have no handle.
+  std::vector<int> faces;
+  brep::FacesAtVertex(*sp, ref.index, &faces);
+  if (faces.size() != 3)
+    return false;
+  for (int fi : faces)
+    if (sp->faces[static_cast<size_t>(fi)].surface.kind != brep::SurfaceKind::Plane)
+      return false;
+  *outAnchor = sp->vertices[static_cast<size_t>(ref.index)].p;
+  return true;
+}
+
+bool CadSubObjectEdgeGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                          ray3d::Vec3* outAnchor, ray3d::Vec3* outAxisA, ray3d::Vec3* outAxisB) {
+  if (!outAnchor || !outAxisA || !outAxisB)
+    return false;
+  const CadSolidPtr sp = CadLiveSolidFor(st, ref, solidpick::Kind::Edge);
+  if (!sp || static_cast<size_t>(ref.index) >= sp->edges.size())
+    return false;
+  const brep::Edge& e = sp->edges[static_cast<size_t>(ref.index)];
+  if (e.kind != brep::CurveKind::Line)
+    return false;  // a curved edge's faces are curved, and those cannot follow a dragged edge
+  int fa = -1;
+  int fb = -1;
+  if (!brep::FacesAlongEdge(*sp, ref.index, &fa, &fb))
+    return false;
+  const brep::Face& f0 = sp->faces[static_cast<size_t>(fa)];
+  const brep::Face& f1 = sp->faces[static_cast<size_t>(fb)];
+  if (f0.surface.kind != brep::SurfaceKind::Plane || f1.surface.kind != brep::SurfaceKind::Plane)
+    return false;
+  ray3d::Vec3 n0{};
+  ray3d::Vec3 n1{};
+  if (!CadFaceOutwardNormal(f0, &n0) || !CadFaceOutwardNormal(f1, &n1))
+    return false;
+  // Parallel faces give no line for the edge to lie on, which is `MoveEdge`'s own refusal.
+  if (ray3d::Length(ray3d::Cross(n0, n1)) < 1e-9)
+    return false;
+  // The MIDPOINT, so the handle sits on the edge rather than at one of its ends, where it would read
+  // as a vertex grip — the same reason the face grip uses a centroid rather than a corner.
+  const ray3d::Vec3 p0 = sp->vertices[static_cast<size_t>(e.v0)].p;
+  const ray3d::Vec3 p1 = sp->vertices[static_cast<size_t>(e.v1)].p;
+  *outAnchor = ray3d::Scale(ray3d::Add(p0, p1), 0.5);
+  *outAxisA = n0;
+  *outAxisB = n1;
   return true;
 }
 
