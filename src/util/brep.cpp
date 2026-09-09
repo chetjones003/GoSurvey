@@ -13153,6 +13153,348 @@ bool SelfIntersects(const Solid& s) {
   return false;
 }
 
+// ---------------------------------------------------------------------------------------------
+// First moments of volume — the centroid (REQ-334, ADR-055, GitHub #149 acceptance 4).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// The centroid needs `integral of r dV`, and by the divergence theorem its k-th component is
+/// `1/2 * closed-surface-integral of r_k^2 n_k dA`. Two properties of that integrand shape
+/// everything below, and both were established by measurement before any of this was written
+/// (`Desktop\Notes for claude\issue149-analysis\probes\p4_centroid_quadrature.cpp`):
+///
+///  - **It is NOT frame-covariant.** `r_k^2 n_k` in one Cartesian frame is not the k-th component
+///    of any vector that transforms into `r_k^2 n_k` in a rotated one. So the moment cannot be
+///    accumulated in each face's own frame and rotated at the end the way a normal or a tangent
+///    can. Every face must contribute in ONE shared frame, and that frame is world.
+///    Measured cost of getting this wrong: a tilted box's centroid off by 3.2 ft, while an
+///    axis-aligned box, sphere and torus all still came out exact — the error is invisible until
+///    something is rotated.
+///
+///  - **The ORIGIN, not the axes, is what has to be local.** `r = p - q` with `q` on the solid
+///    keeps every squared term at model scale even when the solid sits at easting 2.2e6. This is
+///    the same rule \ref ComputeMassProperties already follows for the volume, and P2 measured the
+///    alternative at 46 to 6,978 ft of error.
+struct FaceMoment {
+  bool ok = false;      ///< false when this face's shape is outside the covered set (see below).
+  double area = 0.0;
+  double volTerm = 0.0; ///< integral of (p-q).n dA
+  Vec3 m{0, 0, 0};      ///< integral of 1/2 (r_x^2 n_x, r_y^2 n_y, r_z^2 n_z) dA, WORLD axes
+};
+
+/// 16-point Gauss-Legendre on [-1, 1], built once.
+///
+/// Quadrature rather than five new closed forms, and that is a deliberate choice recorded in
+/// ADR-055 rather than a shortcut: it samples the **exact analytic surface**, never the display
+/// mesh, so it is not the approximation GitHub #149's tessellation note rules out. It is also not
+/// novel here — four of `IntegrateFace`'s own paths are already numeric, and ADR-048 authorises
+/// "adaptive numerical quadrature" for the Nurbs kind's mass properties. A 16-point rule is exact
+/// for degree 31, and every integrand below is a low-degree polynomial or low-order trigonometric
+/// function of its parameter, so the residual is round-off and not truncation: the primitives come
+/// out at 1e-12 ft or better, nine orders inside REQ-101.
+struct GaussRule {
+  double x[16];
+  double w[16];
+};
+
+[[nodiscard]] const GaussRule& Gauss16() {
+  static const GaussRule g = [] {
+    GaussRule r{};
+    for (int i = 0; i < 16; ++i) {
+      double t = std::cos(kPi * (static_cast<double>(i) + 0.75) / 16.5);
+      for (int it = 0; it < 100; ++it) {
+        double p0 = 1.0, p1 = 0.0;
+        for (int j = 0; j < 16; ++j) {
+          const double p2 = p1;
+          p1 = p0;
+          p0 = ((2.0 * j + 1.0) * t * p1 - static_cast<double>(j) * p2) / (static_cast<double>(j) + 1.0);
+        }
+        const double dp = 16.0 * (t * p0 - p1) / (t * t - 1.0);
+        const double dt = -p0 / dp;
+        t += dt;
+        if (std::fabs(dt) < 1e-16)
+          break;
+      }
+      double p0 = 1.0, p1 = 0.0;
+      for (int j = 0; j < 16; ++j) {
+        const double p2 = p1;
+        p1 = p0;
+        p0 = ((2.0 * j + 1.0) * t * p1 - static_cast<double>(j) * p2) / (static_cast<double>(j) + 1.0);
+      }
+      const double dp = 16.0 * (t * p0 - p1) / (t * t - 1.0);
+      r.x[i] = t;
+      r.w[i] = 2.0 / ((1.0 - t * t) * dp * dp);
+    }
+    return r;
+  }();
+  return g;
+}
+
+/// A surface point and its two parametric derivatives, in the surface's own frame. The
+/// parametrisations are the ones \ref Surface documents for each kind, so this cannot drift from
+/// what the tessellator and the closest-point queries use.
+struct PatchPoint {
+  Vec3 p, du, dv;
+};
+
+[[nodiscard]] PatchPoint EvalSurfaceLocal(const Surface& sf, double u, double v) {
+  PatchPoint o;
+  const double cu = std::cos(u), su = std::sin(u);
+  switch (sf.kind) {
+  case SurfaceKind::Cylinder:
+    o.p = {sf.radius * cu, sf.radius * su, v};
+    o.du = {-sf.radius * su, sf.radius * cu, 0.0};
+    o.dv = {0.0, 0.0, 1.0};
+    break;
+  case SurfaceKind::Cone: {
+    const double t = (sf.height != 0.0) ? v / sf.height : 0.0;
+    const double r = sf.radius + (sf.radius2 - sf.radius) * t;
+    const double drdv = (sf.height != 0.0) ? (sf.radius2 - sf.radius) / sf.height : 0.0;
+    o.p = {r * cu, r * su, v};
+    o.du = {-r * su, r * cu, 0.0};
+    o.dv = {drdv * cu, drdv * su, 1.0};
+    break;
+  }
+  case SurfaceKind::Sphere: {
+    const double cv = std::cos(v), sv = std::sin(v);
+    o.p = {sf.radius * cv * cu, sf.radius * cv * su, sf.radius * sv};
+    o.du = {-sf.radius * cv * su, sf.radius * cv * cu, 0.0};
+    o.dv = {-sf.radius * sv * cu, -sf.radius * sv * su, sf.radius * cv};
+    break;
+  }
+  case SurfaceKind::Torus: {
+    const double cv = std::cos(v), sv = std::sin(v);
+    const double rr = sf.radius + sf.radius2 * cv;
+    o.p = {rr * cu, rr * su, sf.radius2 * sv};
+    o.du = {-rr * su, rr * cu, 0.0};
+    o.dv = {-sf.radius2 * sv * cu, -sf.radius2 * sv * su, sf.radius2 * cv};
+    break;
+  }
+  default:
+    break;
+  }
+  return o;
+}
+
+/// A boundary edge's point and tangent at parameter \p t in [0, 1], **analytically** — never by
+/// finite difference. The probe used a difference quotient and lost seven digits to cancellation at
+/// easting 2.2e6 (2.8e-5 ft of centroid error, still inside REQ-101 but needlessly); the closed
+/// tangent restores it to round-off. Returns false for a curve kind this path does not cover.
+[[nodiscard]] bool EdgePointAndTangent(const Solid& s, const Edge& e, double t, Vec3* p, Vec3* d) {
+  switch (e.kind) {
+  case CurveKind::Line: {
+    const Vec3 a = s.vertices[static_cast<std::size_t>(e.v0)].p;
+    const Vec3 b = s.vertices[static_cast<std::size_t>(e.v1)].p;
+    *p = ray3d::Add(a, ray3d::Scale(ray3d::Sub(b, a), t));
+    *d = ray3d::Sub(b, a);
+    return true;
+  }
+  case CurveKind::Arc: {
+    // Centre at frame.origin, X toward v0, sweeping `sweep` about Z — the one parametrisation
+    // \ref EdgePointAt uses, so the boundary integral and the tessellator agree by construction.
+    const double th = e.sweep * t;
+    const double c = std::cos(th), sn = std::sin(th);
+    *p = ray3d::Add(e.frame.origin, ray3d::Add(ray3d::Scale(e.frame.xAxis, e.radius * c),
+                                               ray3d::Scale(e.frame.yAxis, e.radius * sn)));
+    *d = ray3d::Add(ray3d::Scale(e.frame.xAxis, -e.radius * e.sweep * sn),
+                    ray3d::Scale(e.frame.yAxis, e.radius * e.sweep * c));
+    return true;
+  }
+  case CurveKind::Ellipse:
+  case CurveKind::Intersection:
+  default:
+    return false;  // increment 2's work — see ADR-055 (d)
+  }
+}
+
+/// A planar face's contribution, by Green's theorem evaluated along its boundary.
+///
+/// Quadrature along each edge rather than a polygon formula, because that is what makes ONE code
+/// path cover a straight-edged face and an **arc-bounded** one. A cylinder's circular cap is a
+/// `Plane` face whose loop is two arc edges, and a polygon formula silently inscribes a polygon in
+/// it — the same 0.16% error the per-face area work (D-2026-09-09-g) measured on exactly that cap.
+///
+///   A   = contour integral of a db          Sa  = contour integral of (a^2/2) db
+///   Sb  = -contour integral of (b^2/2) da   Saa = contour integral of (a^3/3) db
+///   Sbb = -contour integral of (b^3/3) da   Sab = contour integral of (a^2 b/2) db
+///
+/// where (a, b) are the face frame's own axes. A point of the face is `p = O + a*X + b*Y`, so with
+/// `c = O - q` each world component is `r_k = c_k + a*X_k + b*Y_k` and
+///   `integral of r_k^2 dA = c_k^2*A + 2 c_k X_k Sa + 2 c_k Y_k Sb + X_k^2 Saa + 2 X_k Y_k Sab
+///                           + Y_k^2 Sbb`.
+/// Everything is referenced to `q` only through `c`, so no term is squared at survey magnitude.
+[[nodiscard]] FaceMoment PlanarFaceMoment(const Solid& s, const Face& f, const Vec3& q) {
+  FaceMoment out;
+  if (f.loops.size() != 1)
+    return out;  // a hole needs the loops summed with sign; increment 2 (ADR-055 (d))
+  const Surface& sf = f.surface;
+  const GaussRule& g = Gauss16();
+
+  double A = 0.0, Sa = 0.0, Sb = 0.0, Saa = 0.0, Sab = 0.0, Sbb = 0.0;
+  for (const EdgeUse& u : f.loops.front().uses) {
+    const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+    for (int i = 0; i < 16; ++i) {
+      const double tRaw = 0.5 * (g.x[i] + 1.0);
+      const double t = u.reversed ? (1.0 - tRaw) : tRaw;
+      // 0.5 folds in the [-1,1] -> [0,1] change of variable; the sign flips when the loop traverses
+      // the stored edge backwards, which is what makes the contour close in one consistent sense.
+      const double w = 0.5 * g.w[i] * (u.reversed ? -1.0 : 1.0);
+      Vec3 pw{0, 0, 0}, dw{0, 0, 0};
+      if (!EdgePointAndTangent(s, e, t, &pw, &dw))
+        return out;  // not covered
+      const Vec3 pl = ucs::WorldToUcs(sf.frame, pw);
+      // The tangent is a DIRECTION: rotate it into the face frame without translating.
+      const Vec3 dl{ray3d::Dot(dw, sf.frame.xAxis), ray3d::Dot(dw, sf.frame.yAxis),
+                    ray3d::Dot(dw, sf.frame.zAxis)};
+      const double a = pl.x, b = pl.y;
+      const double da = dl.x * w, db = dl.y * w;
+      A += a * db;
+      Sa += 0.5 * a * a * db;
+      Sb += -0.5 * b * b * da;
+      Saa += (a * a * a / 3.0) * db;
+      Sbb += -(b * b * b / 3.0) * da;
+      Sab += 0.5 * a * a * b * db;
+    }
+  }
+
+  const Vec3 c = ray3d::Sub(sf.frame.origin, q);
+  const Vec3 X = sf.frame.xAxis, Y = sf.frame.yAxis;
+  const Vec3 n = sf.inward ? ray3d::Scale(sf.frame.zAxis, -1.0) : sf.frame.zAxis;
+  const double ck[3] = {c.x, c.y, c.z};
+  const double Xk[3] = {X.x, X.y, X.z};
+  const double Yk[3] = {Y.x, Y.y, Y.z};
+  const double nk[3] = {n.x, n.y, n.z};
+  double mk[3] = {0.0, 0.0, 0.0};
+  for (int k = 0; k < 3; ++k) {
+    const double i2 = ck[k] * ck[k] * A + 2.0 * ck[k] * Xk[k] * Sa + 2.0 * ck[k] * Yk[k] * Sb +
+                      Xk[k] * Xk[k] * Saa + 2.0 * Xk[k] * Yk[k] * Sab + Yk[k] * Yk[k] * Sbb;
+    mk[k] = 0.5 * i2 * nk[k];
+  }
+  out.ok = true;
+  out.area = std::fabs(A);
+  out.m = Vec3{mk[0], mk[1], mk[2]};
+  // (p - q).n is constant over a plane face; `A` carries the loop's own orientation.
+  out.volTerm = ray3d::Dot(c, n) * A;
+  return out;
+}
+
+/// A curved face's contribution, by quadrature over its (u, v) rectangle.
+[[nodiscard]] FaceMoment CurvedFaceMoment(const Face& f, const Vec3& q) {
+  FaceMoment out;
+  const Surface& sf = f.surface;
+  double v0 = f.vStart, v1 = f.vEnd;
+  if (sf.kind == SurfaceKind::Cylinder || sf.kind == SurfaceKind::Cone) {
+    // `vStart`/`vEnd` on a Cylinder/Cone face is not the height range: the volume path
+    // (`IntegrateFace`) never reads it either, deriving the true height instead from
+    // `CylinderCutZExtent` or falling back to `sf.height`. The only face that height range differs
+    // from `[0, sf.height]` for is one bounded by an `Ellipse` cut edge, which `IntegrateFaceMoment`
+    // refuses by name before this is reached.
+    v0 = 0.0;
+    v1 = sf.height;
+  }
+  const double u0 = f.uStart, u1 = f.uEnd;
+  if (!(std::fabs(u1 - u0) > 0.0) || !(std::fabs(v1 - v0) > 0.0))
+    return out;
+
+  const GaussRule& g = Gauss16();
+  const double hu = 0.5 * (u1 - u0), mu = 0.5 * (u1 + u0);
+  const double hv = 0.5 * (v1 - v0), mv = 0.5 * (v1 + v0);
+  for (int i = 0; i < 16; ++i) {
+    const double u = mu + hu * g.x[i];
+    for (int j = 0; j < 16; ++j) {
+      const double v = mv + hv * g.x[j];
+      const PatchPoint pt = EvalSurfaceLocal(sf, u, v);
+      Vec3 nl = ray3d::Cross(pt.du, pt.dv);
+      const double jac = ray3d::Length(nl);
+      if (!(jac > 0.0))
+        continue;  // a pole: zero-measure, contributes nothing
+      nl = ray3d::Scale(nl, 1.0 / jac);
+      if (sf.inward)
+        nl = ray3d::Scale(nl, -1.0);
+      const double w = g.w[i] * g.w[j] * hu * hv * jac;
+
+      const Vec3 pW = ucs::UcsToWorld(sf.frame, pt.p);
+      const Vec3 nW = ray3d::Add(
+          ray3d::Add(ray3d::Scale(sf.frame.xAxis, nl.x), ray3d::Scale(sf.frame.yAxis, nl.y)),
+          ray3d::Scale(sf.frame.zAxis, nl.z));
+      const Vec3 r = ray3d::Sub(pW, q);
+      out.area += w;
+      out.volTerm += ray3d::Dot(r, nW) * w;
+      out.m.x += 0.5 * r.x * r.x * nW.x * w;
+      out.m.y += 0.5 * r.y * r.y * nW.y * w;
+      out.m.z += 0.5 * r.z * r.z * nW.z * w;
+    }
+  }
+  out.ok = true;
+  return out;
+}
+
+/// One face's moment, or `ok == false` when its shape is outside the covered set.
+///
+/// **What is deliberately NOT covered in this increment** (ADR-055 (d)), each refused rather than
+/// approximated: a face carrying a general trim loop (`paramLoops`, ADR-052), a `Nurbs` surface
+/// (REQ-315 lofts), a face with holes, and any boundary edge that is an `Ellipse` or an
+/// `Intersection` curve — the procedural cases a Phase 4 boolean produces. Those are exactly the
+/// faces whose *domain* is not a rectangle or a simple loop, and each needs the same treatment
+/// `IntegrateFace` already gives them for the volume. Reporting a centroid computed as though they
+/// were simple would be the plausible-wrong-number failure REQ-201 exists to prevent.
+[[nodiscard]] FaceMoment IntegrateFaceMoment(const Solid& s, const Face& f, const Vec3& q) {
+  if (!f.paramLoops.empty())
+    return FaceMoment{};
+  if (f.surface.kind == SurfaceKind::Plane)
+    return PlanarFaceMoment(s, f, q);
+  if (f.surface.kind == SurfaceKind::Nurbs)
+    return FaceMoment{};
+  if (f.loops.size() != 1)
+    return FaceMoment{};  // a hole needs the loops summed with sign; increment 2 (ADR-055 (d))
+  for (const Loop& lp : f.loops)
+    for (const EdgeUse& u : lp.uses) {
+      const CurveKind k = s.edges[static_cast<std::size_t>(u.edge)].kind;
+      if (k == CurveKind::Intersection || k == CurveKind::Ellipse)
+        return FaceMoment{};
+    }
+  return CurvedFaceMoment(f, q);
+}
+
+} // namespace
+
+bool FaceArea(const Solid& s, int faceIndex, double* outArea, Problem* outWhy) {
+  const auto fail = [&](Problem p) {
+    if (outWhy)
+      *outWhy = p;
+    return false;
+  };
+  if (!outArea)
+    return fail(Problem::IndexOutOfRange);
+  if (faceIndex < 0 || static_cast<size_t>(faceIndex) >= s.faces.size())
+    return fail(Problem::IndexOutOfRange);
+  // Topology first: a face's boundary is walked through `Solid::edges` and `Solid::vertices`, so a
+  // shell that does not validate can send the integrator at indices that are not there. This is the
+  // same gate `ComputeMassProperties` opens with, and for the same reason.
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return fail(why);
+
+  // NOT gated on `SelfIntersects`, deliberately, and this is the one place this function's contract
+  // differs from `ComputeMassProperties` — see REQ-313 as amended, D-2026-09-09-g.
+  //
+  // That gate exists because a self-passing shell encloses part of space twice, which makes its
+  // VOLUME a number with no meaning. A single face's area is not that kind of quantity: the face is
+  // one bounded patch of one surface, and its area is exactly as well defined whether or not some
+  // other face crosses it. REQ-318 lets a user click that face, and answering "unavailable" for a
+  // figure that is perfectly well defined would be the worse of the two wrong answers.
+  //
+  // The visible consequence, stated rather than hidden: on a self-intersecting solid the per-face
+  // areas still sum to the true surface area while `ComputeMassProperties` reports `valid == false`
+  // and zero. That asymmetry is intentional. On every solid that passes both gates the sum and the
+  // total agree by construction, because this calls the same integrator with the same reference
+  // point — which `BrepTests`' per-face area cases assert rather than assume.
+  const Vec3 q = ReferencePoint(s);
+  *outArea = std::fabs(IntegrateFace(s, s.faces[static_cast<size_t>(faceIndex)], q).area);
+  return true;
+}
+
 MassProperties ComputeMassProperties(const Solid& s) {
   MassProperties mp;
   if (Validate(s) != Problem::Ok)
@@ -13170,6 +13512,39 @@ MassProperties ComputeMassProperties(const Solid& s) {
   mp.valid = true;
   mp.volume = VolumeAbout(s, q, nullptr);
   mp.surfaceArea = area;
+
+  // The centroid (REQ-334 / ADR-055). Separate from the loop above because it is allowed to fail
+  // where the volume is not: its integrator covers fewer face shapes in this increment, and a face
+  // it does not cover makes the centroid unavailable while leaving the volume and area untouched.
+  //
+  // Referenced to the SAME `q` the volume is, which is what keeps every squared term at model scale
+  // at survey magnitudes. `M` accumulates in WORLD axes because the integrand is not
+  // frame-covariant — see \ref FaceMoment.
+  Vec3 M{0.0, 0.0, 0.0};
+  double volAbout = 0.0;
+  bool covered = !s.faces.empty();
+  for (const Face& f : s.faces) {
+    const FaceMoment fm = IntegrateFaceMoment(s, f, q);
+    if (!fm.ok) {
+      covered = false;
+      break;
+    }
+    M = ray3d::Add(M, fm.m);
+    volAbout += fm.volTerm;
+  }
+  volAbout /= 3.0;
+  // The volume this integrator re-derives must agree with the one already reported, or the two are
+  // not describing the same solid and the centroid built on it means nothing. A relative 1e-9 is
+  // far looser than the 1e-12 the primitives actually achieve and far tighter than anything that
+  // could hide a real disagreement.
+  if (covered && std::fabs(volAbout) > 1e-12 && std::isfinite(volAbout) &&
+      std::fabs(volAbout - mp.volume) <= 1e-9 * std::fabs(mp.volume)) {
+    const Vec3 cen = ray3d::Add(q, ray3d::Scale(M, 1.0 / volAbout));
+    if (std::isfinite(cen.x) && std::isfinite(cen.y) && std::isfinite(cen.z)) {
+      mp.centroid = cen;
+      mp.centroidValid = true;
+    }
+  }
   return mp;
 }
 
