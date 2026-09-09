@@ -1,0 +1,38 @@
+# Issue 05 — SELECTSIMILAR existed but nothing could invoke it by name.
+#
+# The function was in the command layer, declared in the header, and perfectly reachable — but there
+# was no command-registry entry, so its only caller in the whole codebase was one right-click menu
+# item. Users had no command-bar route and the suite had no way to reach it at all: coverage was
+# zero.
+#
+# "Similar" = same object type AND same layer AND same colour (matching AutoCAD's SELECTSIMILAR with
+# layer and colour in SELECTSIMILARMODE). Type alone would sweep up every line in the drawing, which
+# is not a useful selection — so this asserts the narrowing, not just that something got selected.
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+CMD LINE
+CMD 0,50
+CMD 100,50
+ESC
+CMD CIRCLE
+CMD 500,500
+CMD 25
+ESC
+EXPECT LINES 2
+EXPECT CIRCLES 1
+
+# Select one line by crossing box over the lower line only.
+CMD SELECT
+CLICK -10 -10
+CLICK 110 10
+EXPECT SELECTED 1
+
+# Similar = the other line too, but NOT the circle: same type, same layer, same colour.
+CMD SELECTSIMILAR
+EXPECT SELECTED 2
+
+CHECK ALL

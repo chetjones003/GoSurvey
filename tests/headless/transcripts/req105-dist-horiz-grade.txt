@@ -1,0 +1,61 @@
+# REQ-105 as amended (D-2026-09-09-f, TASK-235) — DIST reports the surveyor's FOUR numbers.
+#
+# GitHub #149 (3D Phase 6 — Analysis) acceptance 1 asks for 3D distance, horizontal distance,
+# vertical difference and grade. DIST already reported the first; the other three are the amendment.
+#
+# WHAT THIS TRANSCRIPT COVERS, AND WHAT IT DELIBERATELY DOES NOT.
+#
+# Typed coordinate entry is TWO-dimensional everywhere except 3DPOLY — the shared parser reads two
+# numbers and REQ-085 peels a third only for that one command, on the stated grounds that widening
+# it would put every other command's REQ-101-critical coordinate handling at risk. `ELEV` sets the
+# current elevation, and DIST consumes the command line for its own point prompts, so it cannot be
+# changed BETWEEN a DIST's two points. A transcript therefore cannot give one DIST pick a different
+# elevation from the other without snapping onto existing 3D geometry.
+#
+# So the split is deliberate, not a gap:
+#   - the LEVEL case is here, end to end through the real command line, because it is the one whose
+#     two points legitimately share an elevation;
+#   - the GRADED case and the VERTICAL case are in `DistCommandTests [req105]`, driven through
+#     ProcessCommandLineSubmit — the same entry point this transcript uses — with the elevation
+#     varied through `resolvedPointZ`, and asserted against hand-computed values (a 3-4-5 triangle,
+#     chosen so 60.00% and 1.67:1 are exact at display precision rather than rounded).
+#
+# The line under test is the SECOND log line. The first is DIST's accepted output and is unchanged
+# by this amendment — asserted here too, precisely because it must not move.
+
+NEW
+
+# --- a level pair: same elevation, 3-4-5 scaled to 30-40-50 --------------------------------------
+#
+# run = hypot(30, 40) = 50 exactly. rise = 0, so a run:rise ratio would divide by zero. REQ-201's
+# shape is to say so rather than to divide, and "level" is what a surveyor writes on the sheet —
+# REQ-074's SURFELEV has reported it in exactly these words since 2026-08-12.
+
+CMD ELEV 12.5
+CMD DIST
+CMD 0,0
+CMD 30,40
+
+EXPECT LOG "DIST — dX = 30.0000  dY = 40.0000  dZ = 0.0000  slope dist = 50.0000"
+EXPECT LOG "DIST — level (0.00%)  horiz 50.0000  vert 0.0000"
+
+# --- the command returns to idle, as a read-only inquiry must ------------------------------------
+#
+# REQ-105: "read-only, no undo entry". Nothing was drawn, so nothing is there to undo.
+
+CHECK ALL
+EXPECT LINES 0
+
+# --- a second level pair, to pin that `horiz` is a DISTANCE and not a delta -----------------------
+#
+# Picked so dX is negative and dY is zero: a naive implementation reporting dX as the horizontal
+# distance would print -18.0000 here and pass every assertion above.
+
+CMD DIST
+CMD 20,7
+CMD 2,7
+
+EXPECT LOG "DIST — dX = -18.0000  dY = 0.0000  dZ = 0.0000  slope dist = 18.0000"
+EXPECT LOG "DIST — level (0.00%)  horiz 18.0000  vert 0.0000"
+
+CHECK ALL
