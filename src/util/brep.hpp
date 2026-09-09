@@ -508,6 +508,21 @@ enum class Problem {
   /// only while `u1` and `u2` are perpendicular. ADR-046 amendment (k)(4).
   ChamferCornerNotOrthogonal,
   ChamferResultInvalid,        ///< The bevelled solid did not validate. Should not happen; refused if it does.
+
+  // --- Placement transforms (REQ-332, ADR-046 amendment (m)). ---
+  /// The rotation axis is not a unit vector. **Refused rather than normalized, because getting this
+  /// wrong is silent.** Rodrigues' formula with a ZERO axis reduces to `v * cos(angle)` — a uniform
+  /// shrink, not a no-op — and with an axis of length `L` the cross-product and projection terms
+  /// scale differently, shearing the solid into something that still validates. `ray3d`'s primitive
+  /// trusts its axis because its callers hold a stored plane normal or a UCS Z axis; a solid's
+  /// rotation axis comes from a user's picked points, which is a different guarantee.
+  RotateAxisNotUnit,
+  RotateResultInvalid,         ///< The rotated solid did not validate. An isometry cannot do this; refused if it does.
+  /// A scale factor that is zero, negative, or not finite. Zero collapses the solid to nothing;
+  /// negative MIRRORS it, leaving left-handed frames that would be rejected far away from the
+  /// command that caused them (`ucs::IsRightHandedOrthonormal`). A reflection is its own operation.
+  ScaleFactorNonPositive,
+  ScaleResultInvalid,          ///< The scaled solid did not validate. Should not happen; refused if it does.
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -990,6 +1005,49 @@ struct Tessellation {
 /// document-origin rebase (REQ-101), where a store that does not follow the origin is a solid that
 /// silently jumps by the origin's whole magnitude.
 [[nodiscard]] Solid Translate(const Solid& s, const Vec3& delta);
+
+/// \p s rotated about the line through \p axisPoint with unit direction \p axisUnit by \p angleRad,
+/// radians positive by the right-hand rule (REQ-332, ADR-046 amendment (m)).
+///
+/// Lives here for the reason \ref Translate does — only this header knows every place a coordinate
+/// hides in a `Solid` — but it must reach **strictly more** of them, and that is the whole content of
+/// this function. A translation moves POSITIONS and leaves every direction alone. A rotation turns
+/// both, and they are turned by two different calls: a frame's origin is a point and rotates about
+/// the axis LINE, while its three axes are directions and rotate about the axis DIRECTION with no
+/// axis-point term. That split is REQ-328's, and it is why the primitive ships as two functions
+/// rather than one with an ignored parameter.
+///
+/// So, beyond everything \ref Translate touches: the three axes of every curved edge's frame, of
+/// every face surface's frame, of every `Intersection` edge's stored surfaces, and of the recipe's
+/// placement frame. Lengths — radii, heights, sweeps, the recipe's dimensions — are invariant under a
+/// rotation and are left exactly as they are, not recomputed.
+///
+/// **Unlike \ref Translate this refuses**, because unlike a delta its input can be degenerate and the
+/// failure is silent: see \ref Problem::RotateAxisNotUnit. Given a unit axis it cannot fail on a
+/// valid solid — a rotation is an isometry, so volume, area and validity are preserved exactly.
+[[nodiscard]] bool Rotate(const Solid& s, const Vec3& axisPoint, const Vec3& axisUnit,
+                          double angleRad, Solid* out, Problem* outWhy);
+
+/// \p s scaled uniformly about \p basePoint by \p factor (REQ-332, ADR-046 amendment (m)).
+///
+/// Uniform because that is the only scale this representation can hold: \ref SurfaceKind has no
+/// ellipsoid and no elliptical cylinder, so a sphere scaled unevenly has nowhere to be stored. With
+/// one factor there is no non-uniform request to refuse.
+///
+/// The mirror image of \ref Rotate's rule about what a transform reaches. Here the directions are
+/// the invariant ones — a uniform scale turns nothing, so every frame axis is copied through
+/// untouched — and it is the **lengths** that must all move: each surface's `radius` / `radius2` /
+/// `height`, each curved edge's `radius` / `radius2`, and the NURBS control net. Sweeps are angles
+/// and do not scale.
+///
+/// **The recipe's dimensions scale too**, which is the row a per-field sweep at a call site would
+/// miss. The recipe is description and never truth (ADR-050 (f)) — nothing in validity, mass
+/// properties or tessellation reads it — but it exists so the Properties panel can report
+/// "Radius 12", and a scaled solid still claiming its old radius reports a number that is false.
+///
+/// Refuses a factor that is zero, negative or non-finite (\ref Problem::ScaleFactorNonPositive).
+[[nodiscard]] bool Scale(const Solid& s, const Vec3& basePoint, double factor, Solid* out,
+                         Problem* outWhy);
 
 /// Move face \p faceIndex of \p s along its own outward normal by \p distance (REQ-319).
 ///
