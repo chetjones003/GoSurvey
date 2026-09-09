@@ -1,0 +1,149 @@
+# REQ-332 command increment (D-2026-09-09-b, TASK-231, GitHub issue #148 acceptance 4) — typed
+# ROTATE and SCALE stop refusing solids.
+#
+# The kernel numbers are TASK-230's and are asserted there, against closed forms. What can only be
+# tested HERE is the WIRING, and there are exactly three things it can get wrong:
+#
+#   1. the rotation axis. Under a tilted UCS, ROTATE must turn a solid about the UCS Z axis, not
+#      world Z. Hard-coding world Z passes every plan-view test and fails only here;
+#   2. the scale BASE. A solid scales uniformly about (bx, by, bz) — the whole 3D base point, which
+#      is why `ApplyScaleToSelection` gained a `bz`;
+#   3. the plan-view Z asymmetry. A solid scales in Z even in plan view, where a 2D entity beside it
+#      in the SAME selection keeps its elevation. That is deliberate (a solid cannot be scaled
+#      non-uniformly — there is no ellipsoid to store the result in) and it is pinned here so it
+#      cannot drift into looking like a bug either way.
+#
+# THE BOX. `CMD BOX 0,0 20 10 8` is centred on (0,0) with its base at the current elevation:
+# x in [-10,10], y in [-5,5], z in [0,8]. Volume 1600, area 880, topology 8/12/6.
+#
+# Rotation is an ISOMETRY and uniform scale multiplies volume by k^3 — so every SOLIDPROPS line below
+# is a closed-form claim, not a tolerance.
+
+# --- ROTATE 90 in plan: the extents swap, the shape does not -------------------------------------
+# 90 CW-from-north about world Z maps (x,y) -> (y,-x), so x in [-10,10] / y in [-5,5] becomes
+# x in [-5,5] / y in [-10,10]. Z is on the axis and does not move.
+NEW
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+CMD ROTATE
+CMD 0,0
+CMD 90
+ESC
+EXPECT LOG "ROTATE complete."
+# The refusal REQ-322 item 6 used to emit is gone — asserted, because no positive check can catch a
+# message being wrongly PRESENT.
+EXPECT NOLOG "transforming a solid is not supported yet"
+EXPECT SOLIDBOUNDS 0 -5 -10 0 5 10 8
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CHECK ALL
+
+# --- One Ctrl+Z restores the prior solid exactly (#148 acceptance 7) ------------------------------
+UNDO
+EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CHECK ALL
+
+# --- ROTATE under a TILTED UCS turns about the UCS Z axis, not world Z ----------------------------
+# UCS X 90: basis X=(1,0,0), Y=(0,0,1), Z=(0,-1,0). The box is drawn in WORLD first, so only the
+# rotation is under the tilted frame. Rodrigues about (0,-1,0) by -pi/2 maps (x,y,z) -> (z,y,-x)
+# (the same map the issue402 transcript pins with world (10,0,0) -> (0,0,-10)).
+#
+#   x in [-10,10] -> z' in [-10,10]
+#   y in [-5,5]   -> y' unchanged
+#   z in [0,8]    -> x' in [0,8]
+#
+# Under world Z this would instead read x [-5,5] / y [-10,10] / z [0,8] — so this single line is what
+# distinguishes a correct axis from a hard-coded one.
+NEW
+CMD BOX 0,0 20 10 8
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+CMD UCS
+CMD X
+CMD 90
+CMD ROTATE
+CLICKUCS 0 0
+CMD 90
+ESC
+CMD UCS
+CMD W
+EXPECT SOLIDBOUNDS 0 0 -5 -10 8 5 10
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CHECK ALL
+
+# --- SCALE by 2 in PLAN VIEW scales the solid in Z too, and the line beside it does not -----------
+# The asymmetry, stated as numbers. The line is drawn at elevation 5 and the box at elevation 0, so
+# the scale base sits at z = 0 (`CadCommitElevation`) and the two cases are told apart:
+#
+#   * the SOLID scales uniformly about (0,0,0): z in [0,8] -> [0,16], volume 1600 -> 12800;
+#   * the LINE keeps z = 5, because `ScaleSelectionZAboutBase` runs only under a tilted UCS and plan
+#     view keeps its pre-REQ-329 "elevations untouched" behaviour byte-for-byte.
+#
+# A solid cannot join that carve-out: "X and Y but not Z" is not a partial scale, it is a shape the
+# representation cannot hold. And no drawing can depend on the old behaviour, because SCALE refused
+# solids outright until this change.
+NEW
+CMD ELEV 5
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+CMD ELEV 0
+CMD BOX 0,0 20 10 8
+BOX -30 -30 30 30
+EXPECT SELECTED 2
+CMD SCALE
+CMD 0,0
+CMD 2
+EXPECT LOG "SCALE complete."
+EXPECT NOLOG "transforming a solid is not supported yet"
+EXPECT SOLIDBOUNDS 0 -20 -10 0 20 10 16
+EXPECT SOLIDPROPS 0 12800 3520 8 12 6
+EXPECT LINEXYZ 0 20 0 5 40 0 5
+CHECK ALL
+
+# --- A scaled and rotated solid survives .gs save/reopen (#148 acceptance 8) ----------------------
+SAVEAS %OUT%/rotscale.gs
+NEW
+EXPECT SOLIDS 0
+OPEN %OUT%/rotscale.gs
+EXPECT SOLIDS 1
+EXPECT SOLIDBOUNDS 0 -20 -10 0 20 10 16
+EXPECT SOLIDPROPS 0 12800 3520 8 12 6
+CHECK ALL
+
+# --- The scale base's Z is actually threaded through ----------------------------------------------
+# The plan-view case above cannot see a hard-coded `bz = 0`, because its base elevation IS 0. This
+# one can: at elevation 4 the base is (0,0,4) and the box sits at z in [4,12], so scaling by 2 gives
+# z' = 4 + 2*(z - 4) = [4,20]. A hard-coded zero would give [8,24] instead — same volume, same area,
+# same topology, wrong position. Only a bounds check separates the two.
+NEW
+CMD ELEV 4
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDBOUNDS 0 -10 -5 4 10 5 12
+BOX -30 -30 30 30
+EXPECT SELECTED 1
+CMD SCALE
+CMD 0,0
+CMD 2
+EXPECT SOLIDBOUNDS 0 -20 -10 4 20 10 20
+EXPECT SOLIDPROPS 0 12800 3520 8 12 6
+CHECK ALL
+
+# --- The refusal was NARROWED, not deleted -------------------------------------------------------
+# MIRROR, Polar ARRAY and STRETCH still refuse a solid by name — REQ-322 item 6 as amended. Asserted
+# here as well as in `req322-move-3d` because the list of which transforms accept a solid is exactly
+# the kind of fact that drifts once one of them changes.
+NEW
+CMD BOX 0,0 20 10 8
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+CMD MIRROR
+CMD 0,-50
+CMD 0,50
+CMD
+EXPECT LOG "transforming a solid is not supported yet"
+EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
+CHECK ALL

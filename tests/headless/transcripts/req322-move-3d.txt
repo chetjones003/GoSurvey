@@ -127,19 +127,27 @@ EXPECT SELECTED 0
 BOX 80 30 120 70
 EXPECT SELECTED 1
 
-# --- Every OTHER transform still refuses a solid, by name -----------------------------------------
-# REQ-322 item 6. Rotating a solid means turning every surface frame and every arc-edge frame in its
-# topology — the work REQ-312 needed for one tilted arc — and is a separate requirement. Asserted so
-# that "MOVE works now" cannot be read as "transforms work now".
+# --- The transforms that still refuse a solid, by name ---------------------------------------------
+# REQ-322 item 6, AS AMENDED by REQ-332 (D-2026-09-09-b, TASK-231).
+#
+# This block asserted ROTATE's refusal until 2026-09-09, on item 6's original reasoning: rotating a
+# solid means turning every surface frame and every arc-edge frame in its topology, which was "a
+# separate requirement rather than a footnote to this one". REQ-328 and REQ-332 have since supplied
+# exactly that requirement, so **ROTATE and SCALE no longer refuse** — their coverage moved to
+# `req332-rotate-scale-solid`, which asserts the transforms rather than the refusals.
+#
+# What is asserted here is what item 6 still says: MIRROR, Polar ARRAY and STRETCH refuse a solid by
+# name. The block is kept rather than deleted because its point is unchanged — "MOVE works now" must
+# not read as "every transform works now", and the list of which do is exactly the thing that drifts.
 
 NEW
 CMD BOX 0,0 20 10 8
 BOX -20 -20 20 20
 EXPECT SELECTED 1
-CMD ROTATE
-CMD 0,0
-CMD 90
-ESC
+CMD MIRROR
+CMD 0,-50
+CMD 0,50
+CMD
 EXPECT LOG "transforming a solid is not supported yet"
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 

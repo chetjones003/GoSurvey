@@ -9491,9 +9491,98 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
     BumpCadGpuCache(st);
 }
 
+/// Apply \p op to every selected solid, replacing each rather than editing it, and report anything
+/// the kernel refuses by name (REQ-201, REQ-332 / TASK-231).
+///
+/// The de-duplication is `TranslateSelectedSolids`' and is load-bearing for the same reason: a
+/// selection should not hold one solid twice, and transforming it twice would turn or scale it twice
+/// — a defect that only shows up on the drawing where it happened.
+///
+/// A refusal leaves that solid EXACTLY as it was and does not abandon the rest of the selection. The
+/// kernel computes into a fresh solid and validates before returning (ADR-046 (d)), so there is no
+/// half-transformed state to roll back — the old `shared_ptr` is simply not replaced.
+template <typename Op>
+static void TransformSelectedSolids(AppCommandState& st, const char* commandName, Op op,
+                                    std::vector<std::string>& log) {
+  std::set<int> seen;
+  size_t refused = 0;
+  brep::Problem lastWhy = brep::Problem::Ok;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.cadSolids.size())
+      continue;
+    if (!seen.insert(e.index).second)
+      continue;
+    const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
+    if (!sp)
+      continue;
+    brep::Solid out;
+    brep::Problem why = brep::Problem::Ok;
+    if (!op(*sp, &out, &why)) {
+      ++refused;
+      lastWhy = why;
+      continue;
+    }
+    st.cadSolids[static_cast<size_t>(e.index)] = std::make_shared<const brep::Solid>(std::move(out));
+  }
+  // One line naming the LAST reason, not one line per solid. With several solids refused for
+  // different reasons that is lossy, and it is accepted here because the case is close to
+  // unreachable: the axis is normalized by both callers and the factor is clamped positive, so a
+  // refusal means `RotateResultInvalid` / `ScaleResultInvalid` — an isometry or a positive scale
+  // failing to validate, which cannot happen on a solid that was valid going in. This is a safety
+  // net that says something true if it ever fires, not a routine path.
+  if (refused != 0)
+    log.push_back(std::string(commandName) + " — " + std::to_string(refused) +
+                  " solid(s) unchanged: " + brep::ProblemText(lastWhy));
+}
+
+/// Turn every selected solid about the line through \p axisPoint with unit direction \p axisUnit
+/// (REQ-332 / TASK-231). Replaces REQ-322 item 6's blanket refusal for ROTATE.
+static void RotateSelectedSolids(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                                 const ray3d::Vec3& axisUnit, float angleRad,
+                                 std::vector<std::string>& log) {
+  if (angleRad == 0.f)
+    return;
+  const double rad = static_cast<double>(angleRad);
+  TransformSelectedSolids(
+      st, "ROTATE",
+      [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
+        return brep::Rotate(s, axisPoint, axisUnit, rad, out, why);
+      },
+      log);
+}
+
+/// Scale every selected solid uniformly about \p basePoint (REQ-332 / TASK-231).
+///
+/// **Uniform on every axis, including in plan view, where a 2D entity's elevation is left alone.**
+/// That asymmetry is deliberate. `ScaleSelectionZAboutBase` runs only under a tilted UCS so that
+/// plan view keeps its pre-REQ-329 "elevations untouched" behaviour byte-for-byte — but a solid
+/// cannot join that carve-out: `brep::Scale` is uniform because the representation has no ellipsoid
+/// and no elliptical cylinder, so "X and Y but not Z" is unrepresentable rather than merely partial.
+/// And a solid has no legacy behaviour to protect, because every one of these commands refused it
+/// outright until this change.
+static void ScaleSelectedSolids(AppCommandState& st, const ray3d::Vec3& basePoint, float factor,
+                                std::vector<std::string>& log) {
+  if (factor == 1.f)
+    return;
+  const double k = static_cast<double>(factor);
+  TransformSelectedSolids(
+      st, "SCALE",
+      [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
+        return brep::Scale(s, basePoint, k, out, why);
+      },
+      log);
+}
+
 void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
-  DropSolidsFromSelectionForTransform(st, "ROTATE", log);
+  // Solids are NOT dropped any more (REQ-332, amending REQ-322 item 6): `brep::Rotate` turns one
+  // completely — every vertex, every surface frame's AXES as well as its origin, every arc-edge
+  // frame — which is the work item 6 named as "a separate requirement" and REQ-328/REQ-332 supplied.
+  // This is the plan / plan-rotated-UCS path, so the axis is world Z through the base point; the
+  // axis point's own Z is irrelevant to a rotation about a vertical line.
+  RotateSelectedSolids(st, {static_cast<double>(bx), static_cast<double>(by), 0.0}, {0.0, 0.0, 1.0},
+                       rad, log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -9663,7 +9752,9 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
                                             const ray3d::Vec3& axisUnit, float angleRad,
                                             std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
-  DropSolidsFromSelectionForTransform(st, "ROTATE", log);
+  // The tilted-UCS twin of the branch in `ApplyRotationToSelection`: same kernel call, but about the
+  // UCS Z axis this function was already given rather than world Z (REQ-332, amending REQ-322 item 6).
+  RotateSelectedSolids(st, axisPoint, axisUnit, angleRad, log);
   const double rad = static_cast<double>(angleRad);
   const auto rotPt = [&](float x, float y, float z) -> ray3d::Vec3 {
     return ray3d::RotatePointAboutAxis({x, y, z}, axisPoint, axisUnit, rad);
@@ -10257,11 +10348,22 @@ static void ApplyScaleToSelectedSurveyPoints(AppCommandState& st, float bx, floa
   }
 }
 
-void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc, std::vector<std::string>& log) {
+void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, float sc,
+                           std::vector<std::string>& log) {
   if (!(sc > 0.f) || !std::isfinite(sc))
     return;
   DropSurfacesFromSelectionForTransform(st, "SCALE", log);
-  DropSolidsFromSelectionForTransform(st, "SCALE", log);
+  // Solids are NOT dropped any more (REQ-332, amending REQ-322 item 6), and they take the FULL 3D
+  // base point — which is why this function gained `bz`, the same move REQ-322 made when it gave
+  // `ApplyTranslationToSelection` a `dz`.
+  //
+  // A selected solid scales uniformly on every axis even in plan view, where the 2D entities beside
+  // it keep their elevations (`ScaleSelectionZAboutBase` runs only under a tilted UCS). That
+  // asymmetry is deliberate: `brep::Scale` is uniform because the representation has no ellipsoid,
+  // so "X and Y but not Z" is unrepresentable rather than partial — and no drawing can depend on the
+  // old behaviour, because SCALE refused solids outright until now. See ScaleSelectedSolids.
+  ScaleSelectedSolids(st, {static_cast<double>(bx), static_cast<double>(by), static_cast<double>(bz)},
+                      sc, log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -10758,7 +10860,7 @@ static bool HandleStretchText(AppCommandState& st, const std::string& lineIn, st
 static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Scale");
   const float s = std::max(scaleFactor, 1e-6f);
-  ApplyScaleToSelection(st, st.modifyBaseX, st.modifyBaseY, s, log);
+  ApplyScaleToSelection(st, st.modifyBaseX, st.modifyBaseY, st.modifyBaseZ, s, log);
   // REQ-329 increment (SCALE): a uniform scale is uniform on every axis. `ApplyScaleToSelection`
   // scales X/Y (and sizes) about the base; under a tilted UCS the geometry also lives in Z, so the
   // elevations scale about the base elevation too. Plan view and any plan-rotated UCS keep the

@@ -2777,6 +2777,28 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   and the volume integrand would each have to be reconsidered against that. MIRROR keeps refusing
   solids (REQ-322 item 6), unchanged.
 
+  **The command layer consumes this the way REQ-322 consumed `Translate`** (2026-09-09,
+  D-2026-09-09-b, TASK-231). `RotateSelectedSolids` and `ScaleSelectedSolids` sit beside
+  `TranslateSelectedSolids` and share its shape exactly: de-duplicate the selection by solid index —
+  a selection should not hold one solid twice, and transforming it twice would turn or scale it twice
+  — call the kernel, and **replace** rather than edit, because `CadSolidPtr` is
+  `shared_ptr<const brep::Solid>` and that immutability is the precondition for undo being a refcount
+  bump. Four of the nine `DropSolidsFromSelectionForTransform` call sites give way to them; the rest
+  stay, so **the refusal was narrowed, not deleted**.
+
+  Two consequences are worth recording here rather than only in the requirement, because both are
+  places a later change could quietly go wrong:
+
+  - **The rotation axis is the caller's, never world Z.** The plan path passes world Z because that
+    genuinely is its axis; the tilted path passes the UCS Z it was already handed. Hard-coding world
+    Z passes every plan-view test and fails only under a tilted UCS — measured, and now pinned by one
+    transcript line.
+  - **A solid scales in Z even in plan view, where a 2D entity beside it does not.** That asymmetry
+    is forced by the representation, not chosen: a uniform scale is the only one `SurfaceKind` can
+    hold, so a solid cannot join the "elevations untouched" compatibility carve-out that
+    `ScaleSelectionZAboutBase` exists to preserve. It costs nothing in compatibility because these
+    commands refused solids outright until now, so no drawing can depend on the old behaviour.
+
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
 - **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —
