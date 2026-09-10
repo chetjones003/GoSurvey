@@ -101,6 +101,33 @@ bool CadLogHas(std::string_view needle)
   return DevShell_CommandLogContains(needle);
 }
 
+/// Click a clickable prompt option in the command bar by its visible text (REQ-040 / REQ-336).
+///
+/// By ID rather than by path, and the reason is worth keeping: the option links ARE ordinary ImGui
+/// items — a gather of the command bar lists them as `ON`, `OFF`, `FLIP` — but they are not
+/// addressable as `//##CommandBarFloat/ON`, because they sit inside the bar's own ID scope rather
+/// than at the window root. Gathering and matching the label sidesteps the path question entirely,
+/// and fails loudly (returns false) if the link is not on screen at all, which is the thing a test
+/// actually wants to know.
+bool ClickCommandBarLink(ImGuiTestContext* ctx, const char* label)
+{
+  assert(ctx != nullptr);
+  assert(label != nullptr);
+  ImGuiTestItemList items;
+  ctx->GatherItems(&items, "");
+  for (int i = 0; i < items.GetSize(); ++i)
+  {
+    const ImGuiTestItemInfo* it = items.GetByIndex(i);
+    if (it && std::strcmp(it->DebugLabel, label) == 0)
+    {
+      ctx->ItemClick(it->ID);
+      return true;
+    }
+  }
+  IM_CHECK_NO_RET(false);
+  return false;
+}
+
 bool ClickRibbonTool(ImGuiTestContext* ctx, const char* itemId, AppCommandState::Kind expect)
 {
   assert(ctx != nullptr);
@@ -235,6 +262,132 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   // The screenshots are the evidence for the first; the test surviving to its own end — every
   // `SubmitCad` after the clip is on still finding its widgets and the log still readable — is the
   // assertion for the second.
+  // --- REQ-336: the ON / OFF / FLIP keywords are CLICKABLE (TASK-240 increment) ------------------
+  //
+  // The whole point of the prompt is that these three can be clicked instead of typed, and that
+  // cannot be checked anywhere but the real GUI: the transcript can only type the tokens the links
+  // submit, which proves the receiving end works and says nothing about whether a link is there to
+  // click. A screenshot cannot show it either — the links are drawn in the command bar, which is
+  // ImGui, not in the viewport framebuffer the other test captures.
+  //
+  // So the test CLICKS them by name. That covers both halves at once: the link exists as a real
+  // ImGui item with that label, and clicking it reaches the command.
+  // --- REQ-336 REPRO: what a user actually sees, with nothing set up for them -------------------
+  //
+  // The other GUI test forces `VISUALSTYLE SHADED` and an orbited camera before it clips anything.
+  // A user typing SECTIONCLIP on a fresh box has neither, and reported the feature as not working.
+  // This captures the DEFAULT path, one frame per step, so the difference can be looked at rather
+  // than guessed at.
+  ImGuiTest* sclipRepro = IM_REGISTER_TEST(engine, "gosurvey", "req336-section-clip-repro");
+  sclipRepro->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    if (s_cmd->activeDrawingIdx == 0) {
+      std::vector<std::string>* log = DevShell_CommandLog();
+      IM_CHECK(log != nullptr);
+      NewDrawingInTab(*s_cmd, *log);
+      ctx->Yield(6);
+    }
+    SubmitCad(ctx, "SECTIONCLIP OFF");
+    SubmitCad(ctx, "BOX 0,0 20 14 12");
+    ctx->Yield(4);
+    IM_CHECK_EQ(s_cmd->cadSolids.size(), static_cast<std::size_t>(1));
+
+    // Frame it, but change NOTHING else: default visual style (2D Wireframe) and the default PLAN
+    // view are exactly what a user has on a fresh drawing.
+    s_cmd->viewportPanX = 10.f;
+    s_cmd->viewportPanY = 7.f;
+    s_cmd->viewportPanZ = 6.f;
+    s_cmd->viewportZoom = 2.4f;
+    ctx->Yield(8);
+
+    DevShell_RequestViewportCapture("repro-1-plan-wire-noclip.bmp", 1400);
+    ctx->Yield(4);
+    SubmitCad(ctx, "SECTIONCLIP 6");
+    ctx->Yield(6);
+    IM_CHECK(s_cmd->viewportSectionClip);
+    DevShell_RequestViewportCapture("repro-2-plan-wire-clip6.bmp", 1400);
+    ctx->Yield(4);
+
+    // Now orbit, still in the DEFAULT wireframe style.
+    s_cmd->viewportAzimuthDeg = 135.f;
+    s_cmd->viewportElevationDeg = 22.f;
+    ctx->Yield(8);
+    DevShell_RequestViewportCapture("repro-3-orbit-wire-clip6.bmp", 1400);
+    ctx->Yield(4);
+    SubmitCad(ctx, "SECTIONCLIP OFF");
+    ctx->Yield(6);
+    DevShell_RequestViewportCapture("repro-4-orbit-wire-noclip.bmp", 1400);
+    ctx->Yield(4);
+
+    // And the same orbited view SHADED, which is the one already known to look right.
+    SubmitCad(ctx, "VISUALSTYLE SHADED");
+    SubmitCad(ctx, "SECTIONCLIP 6");
+    ctx->Yield(8);
+    DevShell_RequestViewportCapture("repro-5-orbit-shaded-clip6.bmp", 1400);
+    ctx->Yield(4);
+
+    IM_CHECK(CancelToIdle(ctx));
+  };
+
+  ImGuiTest* sclipLinks = IM_REGISTER_TEST(engine, "gosurvey", "req336-section-clip-links");
+  sclipLinks->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    if (s_cmd->activeDrawingIdx == 0) {
+      std::vector<std::string>* log = DevShell_CommandLog();
+      IM_CHECK(log != nullptr);
+      NewDrawingInTab(*s_cmd, *log);
+      ctx->Yield(6);
+    }
+    IM_CHECK(s_cmd->activeDrawingIdx != 0);
+
+    // A known starting state, so each click below is a visible transition rather than a no-op.
+    SubmitCad(ctx, "SECTIONCLIP OFF");
+    ctx->Yield(2);
+    IM_CHECK(!s_cmd->viewportSectionClip);
+
+    // Bare SECTIONCLIP opens the prompt that carries the links.
+    SubmitCad(ctx, "SECTIONCLIP");
+    ctx->Yield(4);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::SectionClip);
+
+    // The links only exist when the FLOATING bar is actually being drawn: the classic docked panel
+    // takes a different branch, and a hidden bar leaves a stale ImGui window that `WindowInfo` still
+    // finds while nothing is drawn into it. Both are asserted so a failure below says which.
+    DevShell_Logf("ui", "cmdBarVisible=%d cmdLineClassicDock=%d", s_cmd->cmdBarVisible ? 1 : 0,
+                  s_cmd->cmdLineClassicDock ? 1 : 0);
+    IM_CHECK(s_cmd->cmdBarVisible);
+    IM_CHECK(!s_cmd->cmdLineClassicDock);
+
+    IM_CHECK(RefCommandBar(ctx));
+
+    // ON — the link is an ImGui item labelled with its own text.
+    IM_CHECK(ClickCommandBarLink(ctx, "ON"));
+    ctx->Yield(4);
+    IM_CHECK(s_cmd->viewportSectionClip);                              // the click reached the command
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::None);           // and closed the prompt
+
+    // FLIP — reopen, click, and check the half swapped.
+    const bool flipBefore = s_cmd->viewportSectionClipFlip;
+    SubmitCad(ctx, "SECTIONCLIP");
+    ctx->Yield(4);
+    IM_CHECK(RefCommandBar(ctx));
+    IM_CHECK(ClickCommandBarLink(ctx, "FLIP"));
+    ctx->Yield(4);
+    IM_CHECK(s_cmd->viewportSectionClipFlip != flipBefore);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::None);
+
+    // OFF — the third one, and the one that proves the links are not all wired to the same handler.
+    SubmitCad(ctx, "SECTIONCLIP");
+    ctx->Yield(4);
+    IM_CHECK(RefCommandBar(ctx));
+    IM_CHECK(ClickCommandBarLink(ctx, "OFF"));
+    ctx->Yield(4);
+    IM_CHECK(!s_cmd->viewportSectionClip);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::None);
+
+    IM_CHECK(CancelToIdle(ctx));
+  };
+
   ImGuiTest* sclip = IM_REGISTER_TEST(engine, "gosurvey", "req336-section-clip-viewport");
   sclip->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
