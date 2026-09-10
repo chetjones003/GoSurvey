@@ -334,3 +334,126 @@ TEST_CASE("The clip offset keeps REQ-101 precision at survey magnitude",
     CHECK_FALSE(ShaderKeeps(v4, ox, kSurveyN, 0.0, kSurveyE, kSurveyN));
   }
 }
+
+// --- The visible plane indicator (REQ-336) -----------------------------------------------------
+//
+// The rectangle drawn to show the user WHERE the clip cuts. It exists because without it the
+// command has no visible effect at all in the default view: a level cut seen from directly above
+// leaves the solid's outline in exactly the same place on screen. Two captures of that case came
+// back byte-identical before this was added.
+
+TEST_CASE("An inactive clip has no indicator to draw", "[sectionclip][req336][req149]") {
+  const SectionClipPlane off{};
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(off, ray3d::Vec3{0, 0, 0}, ray3d::Vec3{10, 10, 10});
+  CHECK_FALSE(ind.valid);
+}
+
+TEST_CASE("The indicator lies ON the plane it describes", "[sectionclip][req336][req149]") {
+  // Every corner must satisfy the plane equation, or the rectangle is drawn somewhere the cut is
+  // not — which is worse than drawing nothing, because it would be believed.
+  const ucs::Ucs tilted =
+      ucs::WithOrigin(ucs::RotatedAboutY(ucs::RotatedAboutX(ucs::Ucs{}, 25.0), 40.0),
+                      ray3d::Vec3{3.0, -7.0, 11.0});
+  for (const double offset : {-6.0, 0.0, 4.5}) {
+    const SectionClipPlane p = SectionClipFromUcs(tilted, offset, false);
+    const SectionClipIndicator ind =
+        SectionClipIndicatorQuad(p, ray3d::Vec3{-20, -14, -2}, ray3d::Vec3{20, 14, 30});
+    REQUIRE(ind.valid);
+    for (int i = 0; i < 4; ++i) {
+      INFO("offset " << offset << " corner " << i);
+      CHECK(p.nx * ind.corner[i].x + p.ny * ind.corner[i].y + p.nz * ind.corner[i].z ==
+            Approx(p.c).margin(1e-9));
+    }
+  }
+}
+
+TEST_CASE("The indicator is a rectangle, and it covers the model", "[sectionclip][req336][req149]") {
+  const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 5.0, false);
+  const ray3d::Vec3 mn{-20, -14, 0};
+  const ray3d::Vec3 mx{20, 14, 12};
+  const SectionClipIndicator ind = SectionClipIndicatorQuad(p, mn, mx, 0.15);
+  REQUIRE(ind.valid);
+
+  // Opposite sides equal and adjacent sides perpendicular — a rectangle, not a general quad.
+  auto sub = [](const ray3d::Vec3& a, const ray3d::Vec3& b) { return ray3d::Sub(a, b); };
+  const ray3d::Vec3 e0 = sub(ind.corner[1], ind.corner[0]);
+  const ray3d::Vec3 e1 = sub(ind.corner[2], ind.corner[1]);
+  const ray3d::Vec3 e2 = sub(ind.corner[3], ind.corner[2]);
+  CHECK(ray3d::Length(e0) == Approx(ray3d::Length(e2)));
+  CHECK(ray3d::Dot(e0, e1) == Approx(0.0).margin(1e-9));
+
+  // And it COVERS the model, stated the only way that is basis-independent: every corner of the
+  // model box projects inside the rectangle's own two edge directions.
+  //
+  // Not "edge 0 is longer than the model's X span" — the in-plane axes are built from the normal
+  // and are NOT world X and Y. For a level cut they come out as (-Y, +X), so that assertion compares
+  // the edge running along Y against the model's X extent and fails on a rectangle that is perfectly
+  // correct. It did.
+  const double len0 = ray3d::Length(e0);
+  const double len1 = ray3d::Length(e1);
+  const ray3d::Vec3 d0 = ray3d::Normalize(e0);
+  const ray3d::Vec3 d1 = ray3d::Normalize(e1);
+  for (int i = 0; i < 8; ++i) {
+    const ray3d::Vec3 c{(i & 1) ? mx.x : mn.x, (i & 2) ? mx.y : mn.y, (i & 4) ? mx.z : mn.z};
+    const ray3d::Vec3 rel = ray3d::Sub(c, ind.corner[0]);
+    // The out-of-plane component does not disturb these: both edge directions lie IN the plane, so
+    // a corner's height above it contributes nothing to either dot product.
+    const double t0 = ray3d::Dot(rel, d0);
+    const double t1 = ray3d::Dot(rel, d1);
+    INFO("model corner " << i << " at (" << t0 << ", " << t1 << ") in a " << len0 << " x " << len1
+                         << " rectangle");
+    CHECK(t0 > 0.0);
+    CHECK(t0 < len0);
+    CHECK(t1 > 0.0);
+    CHECK(t1 < len1);
+  }
+}
+
+TEST_CASE("A level cut still gets an indicator, which is the case that needed one",
+          "[sectionclip][req336][req149]") {
+  // n = +Z is the default cut and the one that shows nothing on screen without this. It is also
+  // the orientation that breaks a naive in-plane basis built from a fixed helper axis.
+  const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 6.0, false);
+  REQUIRE(p.nz == Approx(1.0));
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-20, -14, 0}, ray3d::Vec3{20, 14, 12});
+  REQUIRE(ind.valid);
+  for (int i = 0; i < 4; ++i) {
+    INFO("corner " << i);
+    CHECK(ind.corner[i].z == Approx(6.0));  // flat, at the cut height
+  }
+  // Non-degenerate: a zero-area rectangle would draw as nothing and read as "no indicator".
+  CHECK(ray3d::Length(ray3d::Sub(ind.corner[1], ind.corner[0])) > 1.0);
+  CHECK(ray3d::Length(ray3d::Sub(ind.corner[2], ind.corner[1])) > 1.0);
+}
+
+TEST_CASE("A flat drawing still gets a drawable indicator", "[sectionclip][req336][req149]") {
+  // Every solid at one elevation gives a box with zero Z span. A vertical cut through it has zero
+  // extent in one in-plane direction, and a rectangle of zero width would look like nothing was
+  // added at all.
+  const ucs::Ucs vertical = ucs::RotatedAboutY(ucs::Ucs{}, 90.0);
+  const SectionClipPlane p = SectionClipFromUcs(vertical, 0.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-30, -20, 4}, ray3d::Vec3{30, 20, 4});
+  REQUIRE(ind.valid);
+  CHECK(ray3d::Length(ray3d::Sub(ind.corner[1], ind.corner[0])) > 1e-3);
+  CHECK(ray3d::Length(ray3d::Sub(ind.corner[2], ind.corner[1])) > 1e-3);
+}
+
+TEST_CASE("The indicator holds at survey coordinate magnitudes",
+          "[sectionclip][req336][req149][req101]") {
+  const ucs::Ucs frame = ucs::WithOrigin(ucs::RotatedAboutX(ucs::Ucs{}, 15.0),
+                                         ray3d::Vec3{kSurveyE, kSurveyN, 850.0});
+  const SectionClipPlane p = SectionClipFromUcs(frame, 3.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{kSurveyE - 40, kSurveyN - 25, 840},
+                               ray3d::Vec3{kSurveyE + 40, kSurveyN + 25, 890});
+  REQUIRE(ind.valid);
+  for (int i = 0; i < 4; ++i) {
+    INFO("corner " << i);
+    // On the plane to REQ-101, at a magnitude where a careless formulation loses its low bits.
+    CHECK(p.nx * ind.corner[i].x + p.ny * ind.corner[i].y + p.nz * ind.corner[i].z ==
+          Approx(p.c).margin(0.002));
+  }
+}

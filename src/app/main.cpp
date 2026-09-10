@@ -1335,6 +1335,38 @@ int main()
     if (cmd.viewportSectionClip) {
       tuning.sectionClip = SectionClipFromUcs(CadActiveUcsStorage(cmd), cmd.viewportSectionClipOffset,
                                               cmd.viewportSectionClipFlip);
+      // REQ-336: and the rectangle that SHOWS where it cuts. Sized here rather than in the renderer
+      // because this is the side that knows how big the drawing is — the renderer is handed four
+      // corners and draws them.
+      //
+      // Sized from the SOLIDS, which are what a section clip is for. A drawing with none still gets
+      // a plane to look at, sized around the UCS origin, so turning the clip on always shows
+      // something: an indicator that appears only once you happen to own a solid would be at its
+      // least helpful exactly when a user is working out what the command does.
+      brep::Bounds bb;
+      for (const CadSolidPtr& sp : cmd.cadSolids) {
+        if (!sp)
+          continue;
+        const brep::Bounds b = brep::ComputeBounds(*sp);
+        if (!b.valid)
+          continue;
+        if (!bb.valid) {
+          bb = b;
+          continue;
+        }
+        bb.mn.x = std::min(bb.mn.x, b.mn.x); bb.mn.y = std::min(bb.mn.y, b.mn.y); bb.mn.z = std::min(bb.mn.z, b.mn.z);
+        bb.mx.x = std::max(bb.mx.x, b.mx.x); bb.mx.y = std::max(bb.mx.y, b.mx.y); bb.mx.z = std::max(bb.mx.z, b.mx.z);
+      }
+      if (!bb.valid) {
+        const ucs::Ucs f = CadActiveUcsStorage(cmd);
+        const double r = std::max(10.0, static_cast<double>(cmd.viewportZoom) > 1e-9
+                                            ? 50.0 / static_cast<double>(cmd.viewportZoom)
+                                            : 50.0);
+        bb.valid = true;
+        bb.mn = ray3d::Vec3{f.origin.x - r, f.origin.y - r, f.origin.z - r};
+        bb.mx = ray3d::Vec3{f.origin.x + r, f.origin.y + r, f.origin.z + r};
+      }
+      tuning.sectionClipIndicator = SectionClipIndicatorQuad(tuning.sectionClip, bb.mn, bb.mx);
     }
     // Build PDF render list: committed attachments + cursor-follow preview when picking insert point.
     std::vector<PdfAttachment> pdfRenderList;

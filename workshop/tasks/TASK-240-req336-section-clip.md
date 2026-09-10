@@ -326,3 +326,59 @@ bar, which is ImGui, not in the viewport framebuffer the other GUI test captures
   toggle.
 
 Full suite **1452/1452**; both devshell GUI tests green.
+
+---
+
+## 10. Increment: the clip plane is VISIBLE (2026-09-10, user request)
+
+Asked for after §8's repro: *"make it so that the plane is visible to the user once it is made."*
+This is the first of the two things §8 identified as missing, and the one that turns the feature
+from working-but-invisible into usable.
+
+**The problem it fixes, restated as a measurement.** In the default plan view a level cut removes
+the top of a solid and leaves its outline in exactly the same screen position — the before and after
+captures were **byte-identical**. The clip was correct and had nothing to show for it. That is what
+"it doesn't work on a box" was.
+
+**What it draws.** A rectangle lying on the clip plane: a translucent blue fill so it reads as a
+surface, and a solid outline so its edges are still legible at a grazing angle where the fill is
+nearly invisible. Sized to the solids' combined bounds with a 15% margin, so its edges stand clear
+of the geometry rather than coinciding with it.
+
+**Three decisions inside it worth keeping:**
+
+- **Drawn UNCLIPPED, in the overlay pass.** The rectangle lies exactly on the clip plane, so a
+  clipped copy of it would be cut by itself — half kept, half dropped, at the driver's discretion —
+  and at offset 0 it would z-fight with the geometry it exists to explain.
+- **Built in the plane's OWN axes, not world X/Y**, so it stays a rectangle on the plane under any
+  orientation. The in-plane basis takes its helper axis from whichever world axis is *least* aligned
+  with the normal: a fixed helper collapses exactly when the plane faces along it, which for a level
+  cut — normal `+Z`, the most common case there is — is every time.
+- **Sized by the caller, drawn by the renderer.** `main.cpp` knows how big the drawing is; the
+  renderer is handed four corners. A drawing with no solids still gets a plane sized around the UCS
+  origin, because an indicator that appeared only once you owned a solid would be missing exactly
+  when someone is working out what the command does.
+
+**Tests: 6 new cases** in `SectionClipTests` (15 total, 163 assertions) — the corners lie ON the
+plane at three offsets on a moved-and-turned frame; the quad is a true rectangle (opposite sides
+equal, adjacent perpendicular); it covers the model; a **level cut** still produces a usable
+rectangle, which is both the case that needed the indicator and the one that breaks a naive basis; a
+**flat drawing** (zero Z span) still gets a drawable rectangle rather than a zero-width sliver; and
+the corners hold on the plane to REQ-101 at survey magnitudes.
+
+**A test bug worth recording, because it looked like a code bug.** "It covers the model" was first
+written as *edge 0 is longer than the model's X span* — and failed at 36.4 > 40. The rectangle was
+right: for a level cut the in-plane axes come out as `(-Y, +X)`, so edge 0 runs along **Y** and was
+being compared against the model's **X** extent. Rewritten to the claim that is actually meant and is
+basis-independent: every one of the model box's eight corners projects **inside** the rectangle's own
+two edge directions. Same lesson as the naive-packing cases in §6 — an assertion that assumes a frame
+tests the frame, not the thing.
+
+Full suite **1458/1458**. Visual evidence in
+`Notes for claude/issue149-analysis/req336-clip-evidence/i-*.png`: the plan view that used to show
+nothing, the orbited wireframe that used to look like dangling lines, and the shaded view.
+
+**Still open, and now the only thing on §8's list:** the cut is not capped. The indicator covers the
+opening well enough that a clipped solid reads as sectioned rather than broken, but it is the PLANE
+being drawn, not the cut face — a solid whose cut is genuinely filled is REQ-336 increment 2, and
+`brep::SectionLoop` (REQ-335) is still the geometry that would do it.

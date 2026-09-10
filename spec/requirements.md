@@ -8137,6 +8137,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
   moving it changes the next frame and invalidates no cached geometry — nothing is re-tessellated
   and nothing is re-uploaded. See ADR-057.
 
+  **The plane is DRAWN while the clip is on**, as a translucent rectangle with a solid outline,
+  covering the model's extent on that plane with a margin. This is not decoration. Without it the
+  command has no visible effect at all in the view a user starts in: a level cut seen from directly
+  above removes the top of a solid and leaves its outline in exactly the same place on screen, so
+  the picture does not change and the feature reads as broken — measured, not supposed, as two
+  captures of that case that came back byte-identical. The indicator is drawn **unclipped**, because
+  it lies exactly on the clip plane and a clipped copy would cut itself in half.
+
+  Sized from the solids' combined bounds; a drawing with no solids still gets a plane, sized around
+  the UCS origin, so turning the clip on always shows something — an indicator that appeared only
+  once a user happened to own a solid would be missing exactly when they were working out what the
+  command does.
+
   **Scope boundary — what the clip reaches.** It cuts everything drawn through OpenGL: solids,
   meshes, surfaces, linework, filled regions and PDF underlays. It does **not** cut the grid, which
   is a drafting aid drawn on the UCS plane and therefore coincident with the clip plane at offset 0;
@@ -8163,6 +8176,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
     reach the command when clicked; a bare Enter closes it unchanged, ESC cancels, and a refused
     answer leaves it open;
   - `0` and `1` are read as **offsets, not as ON/OFF** — this command's argument is a distance;
+  - **the clip plane is visible while the clip is on**: a rectangle lying on the plane, covering the
+    model with a margin, drawn unclipped so it does not cut itself, and present in **plan view**,
+    which is the case that shows nothing without it;
+  - the indicator's corners lie **on** the plane to REQ-101, at survey magnitudes and on a tilted
+    frame, and the rectangle covers every corner of the model's bounds;
   - the clip does not survive into a new drawing;
   - the interface is unaffected while the clip is on.
 - Owner-layer: Render (`src/render/SectionClip.hpp`, `ViewportRenderer`), Commands

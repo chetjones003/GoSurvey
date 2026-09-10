@@ -2558,6 +2558,62 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // handle hidden behind the geometry it manipulates is not a handle. Never depth-tested, for the
   // same reason.
   //
+  // --- REQ-336: the section-clip plane indicator -------------------------------------------------
+  //
+  // Drawn in the OVERLAY pass, which means unclipped — and that is not a detail. The rectangle lies
+  // exactly ON the clip plane, so a clipped copy of it would be cut by itself: half the driver
+  // would keep it and half would drop it, and at offset 0 it would z-fight with the geometry it is
+  // there to explain.
+  //
+  // Two parts, because one alone does not read: a translucent fill says "this is a surface you are
+  // looking at edge-on or face-on", and a solid outline says where its edges are when the fill is
+  // nearly invisible at a grazing angle.
+  if (tuning.sectionClipIndicator.valid) {
+    depthForOverlay();
+    clipForOverlay();
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+    const SectionClipIndicator& ind = tuning.sectionClipIndicator;
+    float rel[4][3];
+    for (int i = 0; i < 4; ++i) {
+      rel[i][0] = static_cast<float>(ind.corner[i].x - viewAnchorX);
+      rel[i][1] = static_cast<float>(ind.corner[i].y - viewAnchorY);
+      rel[i][2] = static_cast<float>(ind.corner[i].z);
+    }
+    glBindVertexArray(vaoLines_);
+    glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
+
+    // The fill, as two triangles.
+    {
+      const float tris[18] = {rel[0][0], rel[0][1], rel[0][2], rel[1][0], rel[1][1], rel[1][2],
+                              rel[2][0], rel[2][1], rel[2][2], rel[0][0], rel[0][1], rel[0][2],
+                              rel[2][0], rel[2][1], rel[2][2], rel[3][0], rel[3][1], rel[3][2]};
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glUniform4f(locCol, 0.30f, 0.62f, 1.f, 0.16f);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(tris), tris, GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+      glDisable(GL_BLEND);
+    }
+    // The outline, as a closed loop of four lines.
+    {
+      float loop[24];
+      for (int i = 0; i < 4; ++i) {
+        const int j = (i + 1) & 3;
+        loop[i * 6 + 0] = rel[i][0]; loop[i * 6 + 1] = rel[i][1]; loop[i * 6 + 2] = rel[i][2];
+        loop[i * 6 + 3] = rel[j][0]; loop[i * 6 + 4] = rel[j][1]; loop[i * 6 + 5] = rel[j][2];
+      }
+      glUniform4f(locCol, 0.35f, 0.70f, 1.f, 1.f);
+      glLineWidth(kLwHiLine);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(loop), loop, GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, 8);
+      glLineWidth(kLwMain);
+    }
+    glBindVertexArray(0);
+  }
+
+
   // Handle colours match the REQ-154 UCS icon / REQ-310 crosshair axis hues so the gizmo and the
   // on-screen frame indicator never disagree about which axis is which.
   if (gizmoOverlay && !gizmoOverlay->empty()) {
