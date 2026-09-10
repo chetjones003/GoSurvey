@@ -51,6 +51,15 @@
 /// A record's leading "$" pointer fields resolve to another record's 0-based position in the file
 /// (the modern, non-indexed ACIS SAT convention); "$-1" is the null pointer.
 ///
+/// **Real ACIS/ASM SAT** (what Civil 3D's `ACISOUT` and every real `.dwg`/`.dxf` `3DSOLID` write,
+/// GitHub #473) uses a richer record layout than the simplified schema above — a leading
+/// `$attrib -1 $pattern` triple on every record, edge parameter ranges, `I` bound markers, `@n`
+/// strings, interleaved `color-adesk-attrib` records, a `body` `transform`, and a full cone/cylinder
+/// wall listed as two single-edge rim loops rather than one two-edge loop. `NormalizeRealAcisSchema`
+/// rewrites such a stream's records into the simplified layout above (and `Build` applies the
+/// `transform`), so everything below this comment only ever sees the simplified form. The
+/// hand-authored fixtures remain in the simplified schema and are detected as such (unchanged).
+///
 /// No exceptions (this project builds with them disabled): every step below returns `bool` and
 /// writes a specific message to `error_` on the first failure, exactly like `brep::Make*`'s
 /// `Problem* outWhy` pattern — a refusal the caller can show, not a crash.
@@ -130,10 +139,120 @@ std::vector<SatRecord> Tokenize(const std::string& sat) {
   return records;
 }
 
-bool IsFinite(const Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
-
 constexpr double kTol = 1e-6;
 constexpr double kPi = 3.14159265358979323846;
+
+/// The ACIS header's third line is `<mm-per-unit> <resabs> <resnor>`; a standalone `.sat` file
+/// carries no other unit hint. Returns 0 when the line cannot be read.
+double HeaderMmPerUnit(const std::string& sat) {
+  std::istringstream iss(sat);
+  std::string line;
+  int seen = 0;
+  while (std::getline(iss, line)) {
+    if (Trim(line).empty())
+      continue;
+    if (++seen < 3)
+      continue;
+    const std::string t = Trim(line);
+    char* end = nullptr;
+    const double v = std::strtod(t.c_str(), &end);
+    return (end != t.c_str() && std::isfinite(v) && v > 0.0) ? v : 0.0;
+  }
+  return 0.0;
+}
+
+/// Real ACIS/ASM writes each entity record with a leading `$attribute -1 $pattern` triple and, on
+/// several records, extra pointer/parameter fields the hand-authored fixture schema this parser was
+/// first built against (ADR-051, GitHub #299) omits. Rather than fork every field accessor, this
+/// rewrites a real-format record's `fields` in place to that simplified layout — dropping the
+/// attribute/pattern/id fields and the fields this importer never reads (edge parameter ranges,
+/// curve/surface bound markers, `pcurve` back-pointers) and keeping only what `BuildConeFace` &c.
+/// index. Unknown record types (`color-adesk-attrib`, and `transform`, which `Build` reads with its
+/// real layout) are left untouched so `$n` record numbering stays intact (GitHub #473).
+///
+/// Detection: a real-format `body` record's second field is the bare id `-1`; the fixture schema's
+/// is the `$lump` pointer. Returns true when the stream was real-format (and was rewritten).
+bool NormalizeRealAcisSchema(std::vector<SatRecord>& recs) {
+  const SatRecord* body = nullptr;
+  for (const SatRecord& r : recs)
+    if (r.type == "body") {
+      body = &r;
+      break;
+    }
+  if (body == nullptr || body->fields.size() < 2 || body->fields[1].empty() || body->fields[1][0] == '$')
+    return false;  // fixture schema, or no body — leave it to the existing path / error
+
+  auto pick = [](const SatRecord& r, std::initializer_list<size_t> idx) {
+    std::vector<std::string> out;
+    for (size_t i : idx)
+      out.push_back(i < r.fields.size() ? r.fields[i] : std::string("$-1"));
+    return out;
+  };
+  for (SatRecord& r : recs) {
+    // Field indices below are into the real record, AFTER the record type name:
+    //   [0]=$attrib [1]=id(-1) [2]=$pattern, then the record-specific fields.
+    if (r.type == "body")            r.fields = pick(r, {0, 3, 4, 5});                 // attrib lump wire transform
+    else if (r.type == "lump")       r.fields = pick(r, {0, 3, 4});                    // attrib next shell
+    else if (r.type == "shell")      r.fields = pick(r, {0, 3, 4, 5});                 // attrib next subshell face
+    else if (r.type == "face")       r.fields = pick(r, {0, 3, 4, 5, 7, 8, 9});        // attrib next loop owner surface sense sides
+    else if (r.type == "loop")       r.fields = pick(r, {0, 3, 4});                    // attrib next coedge
+    else if (r.type == "coedge")     r.fields = pick(r, {0, 3, 4, 5, 6, 7});           // attrib next prev partner edge sense
+    else if (r.type == "edge")       r.fields = pick(r, {0, 3, 5, 8});                 // attrib start-vtx end-vtx curve ([7]=coedge, skipped)
+    else if (r.type == "vertex")     r.fields = pick(r, {0, 3, 4});                    // attrib edge point
+    else if (r.type == "point")      r.fields = pick(r, {0, 3, 4, 5});                 // attrib x y z
+    else if (r.type == "ellipse-curve")
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});                        // attrib centre[3] normal[3] major[3] ratio
+    else if (r.type == "straight-curve")
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8});                                       // attrib root[3] dir[3] (unread; type name is enough)
+    else if (r.type == "plane-surface")
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11});                            // attrib origin[3] normal[3] refdir[3]
+    else if (r.type == "cone-surface")
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 12});            // attrib origin[3] axis[3] refdir[3] sin cos radius ratio
+    // else: attribute records, transform, or an unknown type — untouched.
+  }
+  return true;
+}
+
+/// Decompose a proper rotation matrix (row-major `m[0..8]`) into an axis/angle. Returns false only
+/// when `m` is not close to a rotation (its trace gives an out-of-range angle); an angle near zero
+/// yields `angleRad == 0` with an arbitrary unit axis.
+bool RotationMatrixToAxisAngle(const double m[9], Vec3* axis, double* angleRad) {
+  const double trace = m[0] + m[4] + m[8];
+  double c = (trace - 1.0) * 0.5;
+  if (c > 1.0) c = 1.0;
+  if (c < -1.0) c = -1.0;
+  const double angle = std::acos(c);
+  *angleRad = angle;
+  if (angle < 1e-9) {
+    *axis = Vec3{0.0, 0.0, 1.0};
+    return true;
+  }
+  if (kPi - angle < 1e-6) {
+    // 180 degrees: R is symmetric, axis from the largest diagonal term of (R + I)/2.
+    const double xx = (m[0] + 1.0) * 0.5, yy = (m[4] + 1.0) * 0.5, zz = (m[8] + 1.0) * 0.5;
+    Vec3 a{};
+    if (xx >= yy && xx >= zz) {
+      a.x = std::sqrt(std::max(xx, 0.0));
+      a.y = (m[1] + m[3]) * 0.25 / (a.x != 0.0 ? a.x : 1.0);
+      a.z = (m[2] + m[6]) * 0.25 / (a.x != 0.0 ? a.x : 1.0);
+    } else if (yy >= zz) {
+      a.y = std::sqrt(std::max(yy, 0.0));
+      a.x = (m[1] + m[3]) * 0.25 / (a.y != 0.0 ? a.y : 1.0);
+      a.z = (m[5] + m[7]) * 0.25 / (a.y != 0.0 ? a.y : 1.0);
+    } else {
+      a.z = std::sqrt(std::max(zz, 0.0));
+      a.x = (m[2] + m[6]) * 0.25 / (a.z != 0.0 ? a.z : 1.0);
+      a.y = (m[5] + m[7]) * 0.25 / (a.z != 0.0 ? a.z : 1.0);
+    }
+    *axis = ray3d::Normalize(a);
+    return ray3d::Length(*axis) > 0.5;
+  }
+  const double s = 2.0 * std::sin(angle);
+  *axis = ray3d::Normalize(Vec3{(m[7] - m[5]) / s, (m[2] - m[6]) / s, (m[3] - m[1]) / s});
+  return ray3d::Length(*axis) > 0.5;
+}
+
+bool IsFinite(const Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
 
 struct BuiltEdge {
   int edgeIndex = -1;
@@ -386,33 +505,6 @@ class Importer {
     return true;
   }
 
-  /// This SAT schema carries no loop-type field (see the field-layout comment at the top of this
-  /// file), so a face's loops arrive in whatever order the ACIS `loop.next` chain happens to list
-  /// them — not necessarily outer-boundary-first, which is what `brep::Face::loops` requires
-  /// (`loops[0]` is the outer boundary; `Problem::PlaneFaceNotSimple` etc. all trust that order). A
-  /// hole is, by construction, smaller than the boundary it is cut from, so the loop with the larger
-  /// polygon area IS the outer one — reorder rather than trust ACIS's listing order.
-  double PolygonAreaMagnitude(const brep::Solid& out, const ucs::Ucs& planeFrame, const LoopWalk& lw) {
-    double acc = 0.0;
-    for (const brep::EdgeUse& u : lw.uses) {
-      const brep::Edge& e = out.edges[static_cast<size_t>(u.edge)];
-      const int startV = u.reversed ? e.v1 : e.v0;
-      const int endV = u.reversed ? e.v0 : e.v1;
-      const ucs::Point2D a = ucs::WorldToPlane(planeFrame, out.vertices[static_cast<size_t>(startV)].p);
-      const ucs::Point2D b = ucs::WorldToPlane(planeFrame, out.vertices[static_cast<size_t>(endV)].p);
-      acc += 0.5 * (a.x * b.y - b.x * a.y);
-    }
-    return std::fabs(acc);
-  }
-
-  void OrderPlaneLoopsOuterFirst(const brep::Solid& out, const ucs::Ucs& planeFrame,
-                                  std::vector<LoopWalk>* loops) {
-    if (loops->size() < 2)
-      return;
-    if (PolygonAreaMagnitude(out, planeFrame, (*loops)[1]) > PolygonAreaMagnitude(out, planeFrame, (*loops)[0]))
-      std::swap((*loops)[0], (*loops)[1]);
-  }
-
   /// A plane face's boundary has no rectangle restriction — the kernel already accepts an arbitrary
   /// simple polygon of Line/Arc edges. `Face::uStart/uEnd/vStart/vEnd` are unused for
   /// `SurfaceKind::Plane` (brep.hpp).
@@ -429,6 +521,100 @@ class Importer {
       return Fail("plane-surface has a degenerate normal");
     outFace->surface.kind = brep::SurfaceKind::Plane;
     outFace->surface.frame = frame;
+    return true;
+  }
+
+  /// A planar face with more than one hole — a flange's flat face pierced by a bolt circle, say —
+  /// cannot be the kernel's "simple polygon, at most one hole" plane face. It goes in as a general
+  /// trim loop (`Face::paramLoops`, ADR-052 / issue #306) instead, exactly as a partial cone revolve
+  /// does via \ref BuildConeGeneralTrim: every loop is projected into the plane's own (x, y) frame,
+  /// curved edges sampled, the largest-area loop taken as the outer boundary and wound
+  /// counter-clockwise with every hole wound the other way (what `brep::Validate` requires of
+  /// `paramLoops`). \p loops is reordered in place so `loops[0]` is that outer boundary — the caller
+  /// builds `Face::loops` from it in order, and the two must stay index-aligned.
+  bool BuildPlaneGeneralTrim(const SatRecord& surface, const std::string& faceSense,
+                             const brep::Solid& out, std::vector<LoopWalk>* loops, brep::Face* outFace) {
+    if (!BuildPlaneFace(surface, faceSense, outFace))
+      return false;
+    const ucs::Ucs frame = outFace->surface.frame;
+    constexpr int kArcSamples = 32;  // a bolt hole near the rim must still nest inside the outer polygon
+
+    auto project = [&](const LoopWalk& lw) {
+      std::vector<curveisect::Vec2> poly;
+      for (const brep::EdgeUse& u : lw.uses) {
+        const brep::Edge& e = out.edges[static_cast<size_t>(u.edge)];
+        const int samples = (e.kind == brep::CurveKind::Line) ? 1 : kArcSamples;
+        for (int k = 0; k < samples; ++k) {
+          const double tTraverse = static_cast<double>(k) / samples;
+          const double s = u.reversed ? (1.0 - tTraverse) : tTraverse;
+          const Vec3 w = brep::EdgePointAt(out, e, s);
+          const Vec3 local = ucs::WorldToUcs(frame, w);
+          poly.push_back(curveisect::Vec2{local.x, local.y});
+        }
+      }
+      return poly;
+    };
+    auto signedArea = [](const std::vector<curveisect::Vec2>& p) {
+      double a = 0.0;
+      for (size_t i = 0, n = p.size(); i < n; ++i) {
+        const curveisect::Vec2& q0 = p[i];
+        const curveisect::Vec2& q1 = p[(i + 1) % n];
+        a += q0.x * q1.y - q1.x * q0.y;
+      }
+      return 0.5 * a;
+    };
+
+    std::vector<std::vector<curveisect::Vec2>> polys;
+    polys.reserve(loops->size());
+    size_t outerIdx = 0;
+    double outerArea = -1.0;
+    for (size_t i = 0; i < loops->size(); ++i) {
+      polys.push_back(project((*loops)[i]));
+      if (polys.back().size() < 3)
+        return Fail("planar face's general trim loop has too few points to enclose an area");
+      const double a = std::fabs(signedArea(polys.back()));
+      if (a > outerArea) {
+        outerArea = a;
+        outerIdx = i;
+      }
+    }
+
+    std::vector<size_t> order;
+    order.push_back(outerIdx);
+    for (size_t i = 0; i < loops->size(); ++i)
+      if (i != outerIdx)
+        order.push_back(i);
+
+    std::vector<LoopWalk> reLoops;
+    std::vector<std::vector<curveisect::Vec2>> reParam;
+    double xLo = 0, xHi = 0, yLo = 0, yHi = 0;
+    bool first = true;
+    for (size_t j = 0; j < order.size(); ++j) {
+      std::vector<curveisect::Vec2> poly = std::move(polys[order[j]]);
+      const bool wantCcw = (j == 0);
+      if ((wantCcw && signedArea(poly) < 0.0) || (!wantCcw && signedArea(poly) > 0.0))
+        std::reverse(poly.begin(), poly.end());
+      for (const curveisect::Vec2& p : poly) {
+        if (first) {
+          xLo = xHi = p.x;
+          yLo = yHi = p.y;
+          first = false;
+        } else {
+          xLo = std::min(xLo, p.x);
+          xHi = std::max(xHi, p.x);
+          yLo = std::min(yLo, p.y);
+          yHi = std::max(yHi, p.y);
+        }
+      }
+      reParam.push_back(std::move(poly));
+      reLoops.push_back(std::move((*loops)[order[j]]));
+    }
+    *loops = std::move(reLoops);
+    outFace->paramLoops = std::move(reParam);
+    outFace->uStart = xLo;
+    outFace->uEnd = xHi;
+    outFace->vStart = yLo;
+    outFace->vEnd = yHi;
     return true;
   }
 
@@ -489,6 +675,15 @@ class Importer {
     }
     if (poly.size() < 3)
       return Fail("cylindrical/conical face's general trim loop has too few points to enclose an area");
+    // `brep::Validate` requires the outer trim loop to wind counter-clockwise (positive signed
+    // area); the raw ACIS coedge order can list it either way, so normalise here.
+    {
+      double a = 0.0;
+      for (size_t i = 0, n = poly.size(); i < n; ++i)
+        a += poly[i].x * poly[(i + 1) % n].y - poly[(i + 1) % n].x * poly[i].y;
+      if (a < 0.0)
+        std::reverse(poly.begin(), poly.end());
+    }
     double uLo = poly[0].x, uHi = poly[0].x, vLo = poly[0].y, vHi = poly[0].y;
     for (const curveisect::Vec2& p : poly) {
       uLo = std::min(uLo, p.x);
@@ -760,14 +955,24 @@ class Importer {
     if (!Req(surfaceId, "surface", &surface))
       return false;
     if (surface->type == "plane-surface") {
-      if (loops->size() > 2)
-        return Fail("planar face has more than one hole loop — not supported by this importer");
-      if (!BuildPlaneFace(*surface, faceSense, outFace))
-        return false;
-      OrderPlaneLoopsOuterFirst(*out, outFace->surface.frame, loops);
-      return true;
+      if (loops->size() >= 2)
+        return BuildPlaneGeneralTrim(*surface, faceSense, *out, loops, outFace);
+      return BuildPlaneFace(*surface, faceSense, outFace);
     }
     if (surface->type == "cone-surface") {
+      // Real ACIS lists a full cone/cylinder wall's two rim circles as two separate single-edge
+      // loops; `BuildConeFace` wants them as one loop of two rim edges (its "full revolve" shape).
+      auto isFullRim = [&](const LoopWalk& lw) {
+        if (lw.uses.size() != 1)
+          return false;
+        const brep::Edge& e = out->edges[static_cast<size_t>(lw.uses[0].edge)];
+        return e.kind == brep::CurveKind::Arc && e.v0 == e.v1;
+      };
+      if (loops->size() == 2 && isFullRim((*loops)[0]) && isFullRim((*loops)[1])) {
+        LoopWalk merged;
+        merged.uses = {(*loops)[0].uses[0], (*loops)[1].uses[0]};
+        *loops = std::vector<LoopWalk>{std::move(merged)};
+      }
       if (loops->size() != 1)
         return Fail("cylindrical/conical face has a hole loop — not a supported loop shape (issue #302)");
       return BuildConeFace(*surface, faceSense, &loops->front(), out, outFace);
@@ -809,6 +1014,9 @@ class Importer {
     int wireId = 0, lumpId = 0;
     if (!Ptr(*body, 2, "body.wire", &wireId) || !Ptr(*body, 1, "body.lump", &lumpId))
       return false;
+    int transformId = -1;
+    if (body->fields.size() > 3 && !body->fields[3].empty() && body->fields[3][0] == '$')
+      (void)Ptr(*body, 3, "body.transform", &transformId);
     if (lumpId < 0) {
       if (wireId >= 0)
         return Fail("body is a wire (curves only, no faces) — not a solid; wire import is out of scope (#299)");
@@ -894,9 +1102,64 @@ class Importer {
       sh.faces[i] = static_cast<int>(i);
     out->shells.push_back(std::move(sh));
 
+    if (transformId >= 0 && !ApplyBodyTransform(transformId, out))
+      return false;
+
     const brep::Problem why = brep::Validate(*out);
     if (why != brep::Problem::Ok)
       return Fail(std::string("imported topology failed validation: ") + brep::ProblemText(why));
+    return true;
+  }
+
+  /// Applies the `body`'s `transform` record — a 3x3 rotation, a translation, and a uniform scale —
+  /// to the fully built solid, in the order ACIS composes them (`p' = scale * R * p + t`). Real ASM
+  /// bodies keep their placement here rather than baked into the geometry; the fixture schema has no
+  /// transform record so this is never reached for those. Reflection or shear is refused (out of
+  /// scope, and neither maps onto `brep`'s rigid transforms).
+  bool ApplyBodyTransform(int transformId, brep::Solid* out) {
+    const SatRecord* t = nullptr;
+    if (!Req(transformId, "transform", &t))
+      return false;
+    // ACIS stores the 3x3 row-major and applies it to ROW vectors (`p' = p * A`); `brep::Rotate`
+    // and `RotationMatrixToAxisAngle` below work on column vectors (`p' = M * p`), so transpose:
+    // M = A^T.
+    double a[9] = {};
+    for (int i = 0; i < 9; ++i)
+      if (!Num(*t, static_cast<size_t>(2 + i), "transform.matrix", &a[i]))
+        return false;
+    const double m[9] = {a[0], a[3], a[6], a[1], a[4], a[7], a[2], a[5], a[8]};
+    Vec3 trans{};
+    double scale = 1.0;
+    if (!Vec(*t, 11, "transform.translation", &trans) || !Num(*t, 14, "transform.scale", &scale))
+      return false;
+    std::string reflect, shear;
+    if (Word(*t, 16, "transform.reflect", &reflect) && reflect == "reflect")
+      return Fail("body transform includes a reflection — not supported by this importer");
+    if (Word(*t, 17, "transform.shear", &shear) && shear == "shear")
+      return Fail("body transform includes a shear — not supported by this importer");
+    if (!(scale > 0.0) || !std::isfinite(scale))
+      return Fail("body transform has a non-positive scale");
+
+    brep::Solid work = std::move(*out);
+    if (std::fabs(scale - 1.0) > 1e-12) {
+      brep::Solid scaled;
+      brep::Problem why = brep::Problem::Ok;
+      if (!brep::Scale(work, Vec3{0, 0, 0}, scale, &scaled, &why))
+        return Fail(std::string("body transform scale rejected: ") + brep::ProblemText(why));
+      work = std::move(scaled);
+    }
+    Vec3 axis{};
+    double angle = 0.0;
+    if (!RotationMatrixToAxisAngle(m, &axis, &angle))
+      return Fail("body transform's matrix is not a rotation (reflection or non-orthogonal)");
+    if (angle > 1e-9) {
+      brep::Solid rotated;
+      brep::Problem why = brep::Problem::Ok;
+      if (!brep::Rotate(work, Vec3{0, 0, 0}, axis, angle, &rotated, &why))
+        return Fail(std::string("body transform rotation rejected: ") + brep::ProblemText(why));
+      work = std::move(rotated);
+    }
+    *out = brep::Translate(work, trans);
     return true;
   }
 
@@ -911,12 +1174,14 @@ class Importer {
 
 ImportResult ImportSatSolid(const std::string& sat, const std::string& entityLabel) {
   ImportResult result;
+  result.mmPerUnit = HeaderMmPerUnit(sat);
   std::vector<SatRecord> recs = Tokenize(sat);
   if (recs.empty()) {
     result.error = (entityLabel.empty() ? std::string() : entityLabel + ": ") +
                     "ACIS SAT stream is empty or has no records";
     return result;
   }
+  NormalizeRealAcisSchema(recs);
   Importer importer(std::move(recs), entityLabel);
   brep::Solid solid;
   if (!importer.Run(&solid)) {

@@ -2,6 +2,7 @@
 #include "CadCommands.hpp"
 #include "CadRubberPreview.hpp"
 #include "HeadlessFileDialogs.hpp"
+#include "util/brep.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -552,4 +553,58 @@ TEST_CASE("INSERT preview is inert with no definition selected", "[issue124][blo
   std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "MISSING");
   CadBlockXform pv;
   CHECK_FALSE(CadBlockInsertPreviewXform(st, 1.f, 1.f, &pv));
+}
+
+// GitHub issue #473 — a standalone ACIS .sat file (Civil 3D / AutoCAD ACISOUT) imports through
+// BLOCKIMPORT: the solid drops straight into the drawing, re-based onto the origin (the .sat
+// carries its absolute position — ~4999 units — from the source drawing), and a block definition
+// is kept. INSERT cannot place a 3D solid (it is a 2D command). Fixture is the real 4" weld-neck
+// flange (samples/CJ_4in_WELD_NECK_FLANGE.sat).
+TEST_CASE("BLOCKIMPORT of a standalone ACIS .sat drops the solid on the origin",
+          "[issue473][blockimport][sat]") {
+  const std::string sat = std::string(GOSURVEY_SAMPLES_DIR) + "/CJ_4in_WELD_NECK_FLANGE.sat";
+  REQUIRE(std::filesystem::exists(sat));
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportCadBlocksFromPath(st, sat.c_str(), log));
+
+  // The solid is in the drawing, re-based: centred in X/Y, its lowest point at Z 0 — NOT ~4999
+  // units out where the .sat put it.
+  REQUIRE(st.cadSolids.size() == 1);
+  REQUIRE(st.cadSolids[0]);
+  CHECK(st.cadSolids[0]->faces.size() == 16);
+  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+  const brep::Bounds ib = brep::ComputeBounds(*st.cadSolids[0]);
+  REQUIRE(ib.valid);
+  CHECK(std::fabs(ib.mn.x + ib.mx.x) < 1e-6);   // centred in X
+  CHECK(std::fabs(ib.mn.y + ib.mx.y) < 1e-6);   // centred in Y
+  CHECK(ib.mn.z == Catch::Approx(0.0).margin(1e-6));  // sits on Z 0
+  CHECK(st.cadBlockRefs.empty());
+
+  // The block definition is kept (for a future 3D INSERT), carrying the same re-based solid.
+  const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
+  REQUIRE(di >= 0);
+  REQUIRE(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
+}
+
+TEST_CASE("BLOCKIMPORT rejects a malformed .sat file with a message, no crash",
+          "[issue473][blockimport][sat]") {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "gosurvey-satbad";
+  fs::create_directories(dir);
+  const fs::path bad = dir / "bad.sat";
+  {
+    std::ofstream f(bad, std::ios::binary);
+    f << "700 0 1 0\nnot really 20 an ASM header\n1 1e-6 1e-10\nbody $-1 -1 $-1 $99 $-1 $-1 #\n";
+  }
+  AppCommandState st;
+  std::vector<std::string> log;
+  CHECK_FALSE(ImportCadBlocksFromPath(st, bad.u8string().c_str(), log));
+  CHECK(st.blockDefs.empty());
+  bool named = false;
+  for (const std::string& l : log)
+    if (l.find("BLOCKIMPORT") != std::string::npos)
+      named = true;
+  CHECK(named);
 }

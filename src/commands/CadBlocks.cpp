@@ -6,6 +6,7 @@
 #include "DwgIo.hpp"
 #include "AppPaths.hpp"
 #include "WinFileDialogs.hpp"
+#include "AcisSatParser.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -325,6 +326,40 @@ int MergeBlockDef(AppCommandState& dest, CadBlockDefinition def, std::vector<std
   return 1;
 }
 
+/// A standalone ACIS `.sat` file (Civil 3D / AutoCAD `ACISOUT`, GitHub issue #473) — one or more 3D
+/// solids and nothing else. Reads the solid into \p scratch, re-based so it sits on the origin.
+bool ImportSatFileToScratch(AppCommandState& scratch, const char* pathUtf8, std::vector<std::string>& log) {
+  std::ifstream f(std::filesystem::u8path(pathUtf8), std::ios::binary);
+  if (!f.is_open()) {
+    log.push_back("BLOCKIMPORT — cannot open \"" + std::string(pathUtf8) + "\".");
+    return false;
+  }
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  const acissat::ImportResult r = acissat::ImportSatSolid(ss.str(), FileStemUtf8(pathUtf8));
+  if (!r.ok) {
+    log.push_back("BLOCKIMPORT — " + (r.error.empty() ? std::string("the ACIS SAT file could not be read") : r.error));
+    return false;
+  }
+  // A `.sat` carries the model's absolute position from the drawing it was exported out of (the
+  // ACIS `body` transform's translation — often thousands of units from the origin). Re-base the
+  // solid so it sits ON the origin — centred in X/Y, its lowest point at Z 0 — a predictable
+  // reference for MOVE-ing it into place (GitHub issue #473). The transform's orientation is kept.
+  brep::Solid based = r.solid;
+  const brep::Bounds bb = brep::ComputeBounds(based);
+  if (bb.valid)
+    based = brep::Translate(
+        based, brep::Vec3{-(bb.mn.x + bb.mx.x) * 0.5, -(bb.mn.y + bb.mx.y) * 0.5, -bb.mn.z});
+  scratch.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(based)));
+  scratch.cadSolidAttrs.push_back(EntityAttributes{});
+  // Keep the block definition units-neutral: a `.sat` header's millimetres-per-model-unit is
+  // unreliable in practice (Civil 3D wrote 25.4 for a foot-scaled model), and INSERT scaling a
+  // solid it cannot place has no benefit. The solid imports at the file's own coordinates.
+  scratch.drawingInsUnits = 0;
+  log.push_back("BLOCKIMPORT — imported an ACIS solid from \"" + std::string(pathUtf8) + "\".");
+  return true;
+}
+
 int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
     log.push_back("BLOCKIMPORT — no path.");
@@ -337,10 +372,12 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
     ok = ImportDxfFile(scratch, pathUtf8, log);
   else if (ext == ".dwg")
     ok = ImportDwgFile(scratch, pathUtf8, log);
+  else if (ext == ".sat")
+    ok = ImportSatFileToScratch(scratch, pathUtf8, log);
   else {
     // .gs block-library import was removed by issue #264 (D-2026-09-03-h); re-adding a
     // block-library container is tracked as issue #284, not part of this one.
-    log.push_back("BLOCKIMPORT — expected a .dxf or .dwg file.");
+    log.push_back("BLOCKIMPORT — expected a .dxf, .dwg or .sat file.");
     return -1;
   }
   if (!ok)
@@ -356,6 +393,16 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
     CadBlockCaptureDrawing(scratch, &wrap.content);
     CadBlockBakeBasePoint(&wrap);
     n += MergeBlockDef(dest, std::move(wrap), log);
+  }
+  // A `.sat` is a single model, not a block library, and INSERT cannot place a 3D solid (issue
+  // #473). Drop its solid straight into the drawing, re-based onto the origin, so the user can see
+  // it and MOVE it into position; the block definition above is kept for a future 3D INSERT.
+  if (ext == ".sat") {
+    for (std::size_t i = 0; i < scratch.cadSolids.size(); ++i) {
+      dest.cadSolids.push_back(scratch.cadSolids[i]);
+      dest.cadSolidAttrs.push_back(i < scratch.cadSolidAttrs.size() ? scratch.cadSolidAttrs[i]
+                                                                    : EntityAttributes{});
+    }
   }
   for (CadBlockDefinition& d : dest.blockDefs)
     CadBlockAuthorMatchlineDynamics(&d);
@@ -381,6 +428,9 @@ void LoadBundledBlockLibraryImpl(AppCommandState& dest, std::vector<std::string>
     if (!e.is_regular_file(ec))
       continue;
     const std::string ext = LowerExt(e.path().u8string().c_str());
+    // .sat is deliberately not globbed here: a bundled-library sweep must not drop a loose solid
+    // into the user's drawing (the .sat branch of ImportCadBlocksFromPathImpl does). BLOCKIMPORT
+    // of a .sat is always an explicit user action.
     if (ext == ".dxf" || ext == ".dwg")
       files.push_back(e.path());
   }
@@ -545,6 +595,14 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
       st.cadBlockRefAttrs.pop_back();
     }
   }
+  // A block that carries a B-rep solid (a `.sat` import) has no path through the block-reference
+  // renderer for that solid, and INSERT is a 2D command (no Z pick) so it cannot place one in a 3D
+  // scene anyway. Such a block is imported straight into the drawing by BLOCKIMPORT instead
+  // (issue #473); the reference placed above still carries any 2D content it also has.
+  if (!def.content.solids.empty())
+    log.push_back("INSERT — \"" + def.name +
+                  "\" carries a 3D solid, which INSERT cannot place; use the solid BLOCKIMPORT "
+                  "dropped in the drawing and MOVE it into position.");
   NoteRecent(st, r.defName);
   EnsureEntityIds(st);
   BumpCadGpuCache(st);

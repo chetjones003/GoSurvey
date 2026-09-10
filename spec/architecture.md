@@ -3445,6 +3445,47 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (impossible without Autodesk's SDK, ADR-026); the ACDS/SAB work in #366/#301, which is the
   distinct case of files that *do* carry portable ACIS data in the newer storage format.
 
+#### ADR-051 addendum — the real ACIS SAT schema, and standalone `.sat` import   (2026-09-10, accepted)
+
+- **Context (GitHub issue #473, D-2026-09-10-c).** ADR-051 (a) built `AcisSatParser` against a
+  *simplified, hand-authored* record schema because no real ACIS corpus existed to test against.
+  One now does: `samples/CJ_4in_WELD_NECK_FLANGE.sat`, a 4" weld-neck flange exported from Civil 3D
+  with `ACISOUT` — 312 records, 16 analytic faces (12 cone/cylinder, 4 planar, two of them pierced
+  by an 8-bolt circle), one `body` `transform`. Real ACIS/ASM SAT differs from the simplified
+  schema in framing only: a leading `$attrib -1 $pattern` triple on every record, edge parameter
+  ranges, `I` unset-markers, `@n` length-prefixed strings, interleaved `color-adesk-attrib`
+  records, and a full cone/cylinder wall listed as **two single-edge rim loops** rather than one
+  two-edge loop.
+- **Decision.**
+  1. **A normalization pass, not a rewrite.** `NormalizeRealAcisSchema` detects a real-format stream
+     (a `body` whose second field is the bare id `-1`, not a `$` pointer) and rewrites each record's
+     fields into the simplified layout ADR-051 already documents — dropping the attribute/pattern/id
+     fields and the fields this importer never reads. Everything downstream (the topology walk, the
+     surface builders, ADR-052's general-trim support) is unchanged and still covered by the
+     hand-authored fixtures, which are detected as the simplified schema and left alone.
+  2. **The `body` `transform` is applied** to the finished solid (`p' = scale·R·p + t`), decomposing
+     the 3×3 into an axis/angle for `brep::Rotate` and using `brep::Scale` / `brep::Translate`.
+     Reflection or shear is refused (neither maps onto `brep`'s rigid transforms; REQ-201).
+  3. **Multi-hole planar faces** (a flat face pierced by a bolt circle) go in as an ADR-052
+     `Face::paramLoops` general trim loop — every loop projected into the plane's frame, the
+     largest-area loop taken as the outer boundary and wound CCW with holes wound CW. This is the
+     plane counterpart of the existing `BuildConeGeneralTrim`; a full cone/cylinder wall's two rim
+     loops are merged back into one two-edge loop for `BuildConeFace`'s full-revolve path.
+  4. **Standalone `.sat` import.** `BLOCKIMPORT` (and the Import Block file dialog) accept `.sat`.
+     The solid is **re-based onto the origin** — centred in X/Y, its lowest point at Z 0 — because a
+     `.sat` carries the model's absolute position from the drawing it was exported out of (the
+     `body` transform's translation, often thousands of units out). It is then **dropped straight
+     into the drawing** as an ordinary drawing solid, *and* a block definition named after the file
+     is kept. It is not placed via INSERT: `CadBlockContent::solids` is never drawn from a block
+     reference, and INSERT is a 2D command (it picks no Z), so it cannot position a solid in a 3D
+     scene. The user MOVEs the dropped solid into place — MOVE is 3D- and osnap-aware where INSERT
+     is not. Units are left neutral (`unitless`): a `.sat` header's millimetres-per-model-unit is
+     unreliable in practice (Civil 3D wrote 25.4 for a foot-scaled model), so the solid imports at
+     the file's own coordinates and the user scales it if needed.
+- **Out of scope.** A block-*reference* path for a `CadBlockContent::solids` entry — instancing it
+  on INSERT, or a 3D INSERT with a real Z pick — is future work, tracked in #473. Free-form /
+  spline / sphere / torus surfaces (#300); SAB binary (#301).
+
 ### ADR-052 — General trimmed-boundary faces: an additive parameter-space loop, not a rectangle replacement   (2026-09-05, accepted)
 
 - **Context.** Issue #302 (split from #299/ADR-051 (c)): `brep::Face`'s boundary is today always the

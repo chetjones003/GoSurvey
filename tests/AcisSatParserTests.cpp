@@ -1,8 +1,12 @@
 #include "util/AcisSatParser.hpp"
 
+#include "util/brep.hpp"
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <fstream>
+#include <sstream>
 #include <string>
 
 /// REQ-320 / ADR-051 (GitHub issue #299): the ACIS SAT parser. No real vendor SAT corpus is
@@ -433,4 +437,59 @@ TEST_CASE("ACIS SAT import: a cylindrical face with a hole loop is still refused
   const acissat::ImportResult r = acissat::ImportSatSolid(sat, "");
   CHECK_FALSE(r.ok);
   CHECK(Contains(r.error, "hole loop"));
+}
+
+// GitHub issue #473 — a REAL ACIS SAT file, exported by Civil 3D's ACISOUT from a 4" weld-neck
+// flange (samples/CJ_4in_WELD_NECK_FLANGE.sat). This is the first real ASM-authored SAT corpus
+// this parser has: it exercises the real record schema (a `$attrib -1 $pattern` prefix on every
+// record, edge parameter ranges, `I` bound markers, `@n` strings, interleaved `color-adesk-attrib`
+// records) and a `body` `transform`. All 16 faces are plane/cone (a turned part), so it is within
+// REQ-320's analytic-primitive scope.
+TEST_CASE("ACIS SAT import: a real Civil 3D flange (.sat, ACISOUT) imports as a valid solid",
+          "[acissat][issue473]") {
+  const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/CJ_4in_WELD_NECK_FLANGE.sat";
+  std::ifstream f(path, std::ios::binary);
+  REQUIRE(f.is_open());
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  const std::string sat = ss.str();
+  REQUIRE(sat.size() > 1000);
+
+  const acissat::ImportResult r = acissat::ImportSatSolid(sat, "CJ_4in_WELD_NECK_FLANGE.sat");
+  INFO("import error: " << r.error);
+  REQUIRE(r.ok);
+  CHECK(r.mmPerUnit == Catch::Approx(25.4));
+  CHECK(r.solid.faces.size() == 16);
+  CHECK(r.solid.shells.size() == 1);
+  CHECK(brep::Validate(r.solid) == brep::Problem::Ok);
+
+  int planeCount = 0, coneOrCylCount = 0;
+  for (const brep::Face& fc : r.solid.faces) {
+    if (fc.surface.kind == brep::SurfaceKind::Plane)
+      ++planeCount;
+    else if (fc.surface.kind == brep::SurfaceKind::Cylinder ||
+             fc.surface.kind == brep::SurfaceKind::Cone)
+      ++coneOrCylCount;
+  }
+  CHECK(planeCount == 4);
+  CHECK(coneOrCylCount == 12);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(r.solid);
+  CHECK(mp.volume > 0.0);
+
+  // It also tessellates — the multi-hole planar faces (bolt circle) go through the ADR-052
+  // general-loop mesher, so this is what proves the renderer has triangles to draw.
+  brep::Tessellation tess;
+  brep::Problem tessWhy = brep::Problem::Ok;
+  REQUIRE(brep::Tessellate(r.solid, 0.001, &tess, &tessWhy));
+  CHECK(tess.indices.size() % 3 == 0);
+  CHECK(tess.indices.size() > 60);   // 16 faces, several with holes
+
+  // The body transform places the part near (4998.96, 4998.90) — its bounds must be there, not at
+  // the origin where the raw ACIS geometry lives.
+  const brep::Bounds b = brep::ComputeBounds(r.solid);
+  REQUIRE(b.valid);
+  CHECK(b.mn.x == Catch::Approx(4998.59457).margin(0.01));   // the body transform placed the part
+  CHECK(b.mn.y == Catch::Approx(4998.52899).margin(0.01));
+  CHECK(b.mx.z == Catch::Approx(0.25).margin(0.01));
 }

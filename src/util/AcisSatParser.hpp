@@ -59,6 +59,10 @@ struct ImportResult {
   /// Set only when \ref ok is false: a short, specific, user-facing sentence naming what could not be
   /// represented (e.g. "edge 12: curve kind 'intcurve' is not supported (ACIS import, GitHub #300)").
   std::string error;
+  /// The ACIS header's millimetres-per-model-unit (third header line, first value): 25.4 for a file
+  /// authored in inches, 1000 for metres, 1 for millimetres. 0 when the header could not be read.
+  /// A standalone `.sat` file carries no other unit hint (GitHub issue #473).
+  double mmPerUnit = 0.0;
 };
 
 /// Parses \p sat (the decrypted SAT text LibreDWG exposes as `Dwg_Entity__3DSOLID::acis_data`) and

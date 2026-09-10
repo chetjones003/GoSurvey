@@ -206,9 +206,10 @@ bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lpstrFile = wfile;
   ofn.nMaxFile = MAX_PATH;
   ofn.lpstrTitle = L"Import Block";
-  ofn.lpstrFilter = L"Blocks (*.dxf;*.dwg)\0*.dxf;*.dwg\0"
+  ofn.lpstrFilter = L"Blocks (*.dxf;*.dwg;*.sat)\0*.dxf;*.dwg;*.sat\0"
                     L"Drawing Exchange (*.dxf)\0*.dxf\0"
                     L"AutoCAD Drawing (*.dwg)\0*.dwg\0"
+                    L"ACIS solid (*.sat)\0*.sat\0"
                     L"All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER | OFN_ENABLESIZING;
