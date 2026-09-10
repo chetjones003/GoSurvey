@@ -48,6 +48,24 @@ std::string DecodeDwgString(const void* raw, bool utf16le) {
   return std::string(reinterpret_cast<const char*>(raw));
 }
 
+// GitHub issue #369 / D-2026-09-10-b. A Civil 3D "parts catalog" component — a pressure pipe,
+// a fitting, a structure — carries no portable geometry: its shape is regenerated at open time
+// by Civil 3D's proprietary Parts Catalog engine from a parametric catalog reference, the same
+// way Plant 3D's AcPp* custom objects are unreachable by any third-party reader (ADR-026). Such
+// a file's only 3DSOLID is an empty placeholder, and its class table is full of AECC_* custom
+// classes. When that signature is present, a skipped empty 3DSOLID is named for its real cause
+// rather than the ambiguous "(empty)". \p dwg may be null.
+bool DwgHasCivil3dCatalogClasses(const Dwg_Data* dwg) {
+  if (dwg == nullptr || dwg->dwg_class == nullptr)
+    return false;
+  for (BITCODE_BS i = 0; i < dwg->num_classes; ++i) {
+    const char* name = dwg->dwg_class[i].dxfname;
+    if (name != nullptr && std::strncmp(name, "AECC_", 5) == 0)
+      return true;
+  }
+  return false;
+}
+
 std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   if (method == 0xc0)
     return "ByLayer";
@@ -282,10 +300,17 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
 /// payload — SAT (v1, text) or SAB (v2+, binary), per `version` (DXF 70). This importer supports SAT
 /// only (issue #301 tracks SAB); a SAB stream, or anything AcisSatParser refuses, is reported through
 /// the same `NoteSkip` mechanism an unrecognized entity type already uses (REQ-201: never silent).
-void ImportAcisSolid(AppCommandState& st, const Dwg_Entity__3DSOLID* sol, const Xf2& xf,
-                     const EntityAttributes& at, std::unordered_map<std::string, int>* skipHist) {
+void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity__3DSOLID* sol,
+                     const Xf2& xf, const EntityAttributes& at,
+                     std::unordered_map<std::string, int>* skipHist) {
   if (sol->acis_empty || sol->acis_data == nullptr) {
-    NoteSkip(skipHist, "3DSOLID(empty)");
+    // GitHub issue #369 / D-2026-09-10-b: name a Civil 3D parts-catalog placeholder for what it
+    // is, rather than the ambiguous "(empty)" that reads like a decode failure. The block's other
+    // 2D/annotation content still imports (BLOCKIMPORT keeps it).
+    NoteSkip(skipHist,
+             libredwgcad_detail::DwgHasCivil3dCatalogClasses(dwg)
+                 ? "3DSOLID(Civil3D parts-catalog part, no portable geometry)"
+                 : "3DSOLID(empty)");
     return;
   }
   // A rotated or non-uniformly-scaled placement (a 3DSOLID reached through a rotated/scaled nested
@@ -491,7 +516,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE__3DSOLID && ent->tio._3DSOLID != nullptr) {
-    ImportAcisSolid(st, ent->tio._3DSOLID, xf, at, skipHist);
+    ImportAcisSolid(st, dwg, ent->tio._3DSOLID, xf, at, skipHist);
     return;
   }
   if (ty == DWG_TYPE_SEQEND || ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_ENDBLK)
