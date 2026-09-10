@@ -42,6 +42,12 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
           cmd.sweepPhase == AppCommandState::SweepPhase::SelectInputs) ||
          (cmd.active == K::Slice &&
           cmd.slicePhase == AppCommandState::SlicePhase::SelectSolids) ||
+         // REQ-335 increment 2: SECTION's selection step, the same accumulate-and-Enter shape as
+         // SLICE's directly above. Missing from this list is the ALIGN accident recorded above,
+         // repeated — a command whose state machine has a selection phase but whose CLICKS were
+         // never routed to it, so the prompt appears and nothing can be picked.
+         (cmd.active == K::Section &&
+          cmd.sectionPhase == AppCommandState::SectionPhase::SelectSolids) ||
          cmd.active == K::Boolean;
 }
 
@@ -213,6 +219,21 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     case SP::WaitP2:
     case SP::WaitP3:
     case SP::WaitKeepSide:
+      return R::SnappedPointPick;
+    }
+    return R::Ignore;
+  }
+  // SECTION (REQ-335 increment 2): select solids, then three snapped points for the plane. The same
+  // shape as SLICE above minus the keep-side step, because SECTION keeps neither piece — it keeps
+  // the outline.
+  case K::Section: {
+    using SecP = AppCommandState::SectionPhase;
+    switch (cmd.sectionPhase) {
+    case SecP::SelectSolids:
+      return R::SelectionAccumulate;
+    case SecP::WaitP1:
+    case SecP::WaitP2:
+    case SecP::WaitP3:
       return R::SnappedPointPick;
     }
     return R::Ignore;
