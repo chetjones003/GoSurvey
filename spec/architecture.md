@@ -3792,6 +3792,34 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   not a user setting); revisiting the rebase threshold or `kMaxEstablishableOriginMagnitude` (both
   unchanged — (c)); `.gs` (retired).
 
+### ADR-056 — What's New billboard: shipped Markdown, vendored md4c, Help → About is the same window   (2026-09-10, accepted)
+
+- **Status:** accepted (2026-09-10, D-2026-09-10-d). Backs REQ-336.
+- **Context.** REQ-308's Start tab shows version and recent drawings but has no place for release
+  notes. REQ-078 already shows release notes, but only when offering a **newer** update. Users need
+  "what's new in the build I just installed" without a network fetch and without inventing a second
+  About surface.
+- **Decision:**
+  (a) **Content is `resources/whats-new.md`**, copied into the install tree with other resources.
+      Edited for each version bump; offline by construction.
+  (b) **Parse with vendored md4c** (MIT CommonMark) under `third_party/md4c/` with `VENDORED.md`
+      (REQ-300 / D-2026-08-31-b). An **in-tree** UI module turns md4c callbacks into ImGui draws
+      (headings, paragraphs, emphasis, lists, links). No FetchContent.
+  (c) **One window, two openers:** auto-open from Start (once per launch when not dismissed for this
+      version) and **Help → About** (new menu). About is not a separate dialog.
+  (d) **Dismiss** is a version string in `gosurvey-user.json` (UserPrefs), parallel to
+      `updateSkippedVersion`. About must not clear it.
+  (e) **GitHub control** opens the releases **list** URL, not `releases/tag/v…`, because beta
+      publishes to `channel-beta`.
+  (f) **Runtime fallback** if the file is missing; **CI fails** packaging without it.
+  (g) **Authoring lock** (agent rule + git hook) is process, not runtime architecture — recorded so
+      Workshop does not omit the hook/rule when implementing REQ-336.
+- **Consequences:** new UI module + menu item; one new vendored dependency; prefs schema gains one
+  string field; CMake must install `whats-new.md` into `build/resources/`; release workflow asserts
+  presence. No Domain/Commands change. No network on the billboard path.
+- **Out of scope:** fetching notes from GitHub; a second About dialog; rich HTML/CSS; images inside
+  the markdown body beyond what a minimal ImGui layer can reasonably show (links open externally).
+
 ### ADR-055 — The centroid is integrated by quadrature over the exact surfaces, in world axes, about a solid-local origin   (2026-09-09, accepted)
 
 - **Status:** accepted (2026-09-09, D-2026-09-09-h, GitHub issue #149 acceptance 4). Backs REQ-334.

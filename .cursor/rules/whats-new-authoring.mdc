@@ -1,0 +1,20 @@
+---
+description: REQ-336 — never commit or push resources/whats-new.md without Chet's explicit review approval
+globs: resources/whats-new.md
+alwaysApply: true
+---
+
+# What's New authoring lock (REQ-336)
+
+`resources/whats-new.md` is the shipped What's New billboard body.
+
+## Hard rule for agents
+
+- You may **edit** the file locally when implementing a version's notes.
+- You must **not** `git add`, `git commit`, or `git push` that file unless the user has **explicitly** said they reviewed the content and approve (e.g. "I reviewed the billboard notes and approve — unlock for push").
+- After that approval, run `pwsh tools/approve-whats-new.ps1` to create the one-time unlock, then commit/push only as the user directed.
+- Never invent approval. Never bypass the hook with `--no-verify` unless the user explicitly orders it.
+
+## Hook
+
+`tools/git-hooks/pre-push` refuses a push that includes `resources/whats-new.md` unless `.whats-new-push-unlock` exists. Install with `pwsh tools/install-git-hooks.ps1`.

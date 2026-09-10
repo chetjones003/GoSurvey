@@ -187,6 +187,17 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      - name: REQ-336 assert whats-new.md is packaged
+        # Runtime falls back if the file is missing; CI must still refuse to ship without it.
+        shell: pwsh
+        run: |
+          foreach ($path in @("build/resources/whats-new.md", "build/resources/whats-new-bg.png")) {
+            if (-not (Test-Path $path)) {
+              throw "REQ-336: missing $path after build — installer would ship without What's New assets."
+            }
+            Write-Host "OK: $path present"
+          }
+
       - name: Test
         # Gates publication: a failing suite fails the job before any package/release step runs.
         run: ctest --test-dir build --output-on-failure
@@ -232,6 +243,15 @@ jobs:
         with:
           name: gosurvey-bin
           path: build
+
+      - name: REQ-336 assert whats-new.md in packaging inputs
+        shell: pwsh
+        run: |
+          foreach ($path in @("build/resources/whats-new.md", "build/resources/whats-new-bg.png")) {
+            if (-not (Test-Path $path)) {
+              throw "REQ-336: missing $path in packaging artifact."
+            }
+          }
 
       # ---------------------------------------------------------------------
       # Package
