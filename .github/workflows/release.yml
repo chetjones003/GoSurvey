@@ -191,9 +191,10 @@ jobs:
         # Runtime falls back if the file is missing; CI must still refuse to ship without it.
         shell: pwsh
         run: |
-          foreach ($path in @("build/resources/whats-new.md", "build/resources/whats-new-bg.png")) {
+          foreach ($path in @("build/resources/whats-new.md", "build/resources/whats-new-bg.png",
+                              "build/resources/splash-bg.png")) {
             if (-not (Test-Path $path)) {
-              throw "REQ-336: missing $path after build — installer would ship without What's New assets."
+              throw "REQ-336/REQ-093: missing $path after build — installer would ship without bundled UI assets."
             }
             Write-Host "OK: $path present"
           }
@@ -247,9 +248,10 @@ jobs:
       - name: REQ-336 assert whats-new.md in packaging inputs
         shell: pwsh
         run: |
-          foreach ($path in @("build/resources/whats-new.md", "build/resources/whats-new-bg.png")) {
+          foreach ($path in @("build/resources/whats-new.md", "build/resources/whats-new-bg.png",
+                              "build/resources/splash-bg.png")) {
             if (-not (Test-Path $path)) {
-              throw "REQ-336: missing $path in packaging artifact."
+              throw "REQ-336/REQ-093: missing $path in packaging artifact."
             }
           }
 
