@@ -28144,6 +28144,28 @@ bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
   return true;
 }
 
+bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
+                            SelectedEntity* out, double* outRayT) {
+  if (!out)
+    return false;
+  solidpick::Tolerance tol;
+  tol.vertex = static_cast<double>(tolWorld);
+  tol.edge = tol.vertex;
+  SelectedSubObject sub{};
+  solidpick::Pick pick{};
+  if (!PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick))
+    return false;
+  if (sub.solidIndex < 0 || static_cast<std::size_t>(sub.solidIndex) >= st.cadSolids.size())
+    return false;
+  SelectedEntity e{};
+  e.type = SelectedEntity::Type::Solid;
+  e.index = sub.solidIndex;
+  *out = e;
+  if (outRayT)
+    *outRayT = pick.rayT;
+  return true;
+}
+
 bool BuildSubObjectHoverRow(const AppCommandState& st, const SelectedSubObject& s,
                             SubObjectHoverRow* out) {
   if (!out || s.kind == solidpick::Kind::None || s.index < 0)

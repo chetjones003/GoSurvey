@@ -13723,8 +13723,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // CHAMFER is the identical shape and joins it here now that REQ-331 gives a `Ctrl`+click
       // during CHAMFER something to name — which is the one line TASK-221 DEBT-1 said it would be.
       const bool cornerEntityPick = cmd.active == AK::Fillet || cmd.active == AK::Chamfer;
+      // Every "select objects" step earns hover feedback, by this block's OWN stated rule: what
+      // buys suppression is that a command's "clicks mean coordinates rather than objects", and a
+      // selection step's clicks mean objects by definition. Expressed through the existing
+      // predicate rather than by naming commands, so the next command with a selection phase is
+      // covered when it is written instead of when someone reports that nothing lights up — which
+      // is how SECTION, and ALIGN before it, each arrived here (user report, 2026-09-10).
+      const bool objectSelectionStep = ViewportIsObjectSelectionStep(cmd);
       const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick &&
-                                     !breakEntityPick && !lengthenEntityPick && !cornerEntityPick) ||
+                                     !breakEntityPick && !lengthenEntityPick && !cornerEntityPick &&
+                                     !objectSelectionStep) ||
                                     cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
       // REQ-089: the rollover readout rides on this exact condition. Model space only — a sheet has
@@ -13850,6 +13858,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           // while the click measured the true distance from the ray, and off plan view those two
           // disagree: the XY distance over-measures along the foreshortened screen direction, so
           // geometry the click would take highlighted on one side of the cursor and not the other.
+          SelectedEntity solidHover{};
+          // A solid is a VOLUME, so its pick is a ray-versus-triangle test and there is nothing
+          // sensible to do with a bare plan XY. `cursorRayPtr` is deliberately null in plan view to
+          // keep REQ-058's byte-identical pre-3D path — but that guarantee is about entities that
+          // ALREADY had a plan-view pick, and a solid never did: `PickClosestCadEntity` has never
+          // returned one. So building a ray here for the solid pick alone cannot change any
+          // existing answer, and without it the highlight would work only when orbited, which is
+          // not the view most drawings sit in.
+          const bool solidPickable = modelSpace && !cmd.cadSolids.empty();
+          const ray3d::Ray solidRay =
+              solidPickable ? CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y) : ray3d::Ray{};
           std::vector<CadPickCandidate> hoverCandidates;
           if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2, cursorRayPtr,
                                    &hoverCandidates)) {
@@ -13862,6 +13881,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               cmd.viewportPickCandidates.clear();
               cmd.viewportPickAmbiguous = false;
             }
+          } else if (solidPickable && PickClosestSolidEntity(cmd, solidRay, hoverTol, &solidHover)) {
+            // Solids sit below linework and above filled regions. Below linework because a line
+            // lying over a solid is the more specific thing to mean by a click; above fills because
+            // a solid is real geometry and a fill is a decoration on the plane beneath it.
+            cmd.viewportHoverEntityValid = true;
+            cmd.viewportHoverEntity = solidHover;
+            // The disambiguation list belongs to the linework pick that produced it; a solid
+            // answered instead, so there is no ambiguity to offer (beta's #22ba365 invariant).
+            cmd.viewportPickCandidates.clear();
+            cmd.viewportPickAmbiguous = false;
           } else {
             cmd.viewportPickCandidates.clear();
             cmd.viewportPickAmbiguous = false;
@@ -14506,6 +14535,28 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
 
+      // A whole SOLID, below linework and above fills — the same order the hover pick uses, because
+      // what highlights has to be what selects. Before this, `ComputeSelectionFromRect` was the only
+      // thing that ever put a solid in a selection, so a solid could be chosen by dragging a
+      // rectangle around it and by no other gesture, in this step or any other.
+      if (!handled && modelSpace && !cmd.cadSolids.empty()) {
+        SelectedEntity solidHit{};
+        const ray3d::Ray solidRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        if (PickClosestSolidEntity(cmd, solidRay, CadOffsetEntityPickTolWorld(cmd), &solidHit)) {
+          auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+            return x.type == SelectedEntity::Type::Solid && x.index == solidHit.index;
+          });
+          if (keyShift) {
+            if (it != cmd.selection.end())
+              cmd.selection.erase(it);
+          } else if (it == cmd.selection.end()) {
+            cmd.selection.push_back(solidHit);
+          }
+          EnsureAttrCounts(cmd);
+          handled = true;
+        }
+      }
+
       if (!handled) {
         const int frIx = PickFilledRegionAt(cmd, rawPickX, rawPickY);
         if (frIx >= 0) {
@@ -15080,6 +15131,31 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             cmd.selBoxWaitingSecond = false;
             handled = true;
           }
+        }
+      }
+
+      // A whole SOLID, in the same slot it takes in the hover chain and in SelectionAccumulate:
+      // below linework, above fills. Idle click-to-select never reached a solid before this, which
+      // is half of why "the section command will not let me select the object" was reported — the
+      // gesture did not exist anywhere, not only inside SECTION.
+      if (!handled && modelSpace && !cmd.cadSolids.empty()) {
+        SelectedEntity solidHit{};
+        const ray3d::Ray solidRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        if (PickClosestSolidEntity(cmd, solidRay, CadOffsetEntityPickTolWorld(cmd), &solidHit)) {
+          AbortMtextGripInteraction(cmd);
+          ClearDimGripInteraction(cmd);
+          auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+            return x.type == SelectedEntity::Type::Solid && x.index == solidHit.index;
+          });
+          if (keyShift) {
+            if (it != cmd.selection.end())
+              cmd.selection.erase(it);
+          } else if (it == cmd.selection.end()) {
+            cmd.selection.push_back(solidHit);
+          }
+          EnsureAttrCounts(cmd);
+          cmd.selBoxWaitingSecond = false;
+          handled = true;
         }
       }
 

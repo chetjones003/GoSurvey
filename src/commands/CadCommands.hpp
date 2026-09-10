@@ -5743,6 +5743,26 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
 /// From a non-empty candidate list, pick the entity nearest the camera (ray mode) or highest Z (plan).
 bool PickCadEntityByDepth(const std::vector<CadPickCandidate>& candidates, SelectedEntity* out,
                           const ray3d::Ray* pickRay);
+/// The nearest whole SOLID under \p ray, as a `SelectedEntity` of `Type::Solid`. False if none.
+///
+/// **`PickClosestCadEntity` above cannot answer this and never could**: it returns only `LineSeg`,
+/// `Arc`, `Circle`, `Ellipse` and `Polyline`. Every consumer of it — the hover pre-highlight and
+/// every click that selects one entity — therefore behaved as though solids were not there, and the
+/// only thing that ever put a solid in a selection was `ComputeSelectionFromRect`. So a solid could
+/// be selected by dragging a rectangle around it and by nothing else, with no highlight beforehand,
+/// in every command and when idle. Reported from the real app twice in one session, as two separate
+/// complaints that turned out to be this one gap.
+///
+/// Built on \ref PickSubObjectAcrossSolids, which already does ray-versus-solid hit testing for the
+/// `Ctrl`+click sub-object pick (REQ-318): the geometry was there, only a whole-solid caller was
+/// missing. **Any sub-object hit — face, edge or vertex — names the solid**, so clicking anywhere on
+/// it works rather than only on an edge. That is more forgiving than AutoCAD's wireframe behaviour
+/// and deliberately so: the reported problem was a solid that could not be selected at all.
+///
+/// Like the sub-object pick it never tessellates (REQ-318 item 7) — a solid absent from the display
+/// cache is simply not picked.
+[[nodiscard]] bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
+                                          SelectedEntity* out, double* outRayT = nullptr);
 /// True if (x,y) is inside the filled region: inside its outer loop (0) and outside every hole loop (REQ-042).
 bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y);
 /// HATCH command (REQ-043): begin picking an internal point.

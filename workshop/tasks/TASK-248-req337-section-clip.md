@@ -487,3 +487,77 @@ phase needs a `ViewportPickPolicyTests` entry, not just a transcript.** The tran
 the command does with input; only that file tests whether input reaches it.
 
 Full suite **1470/1470**.
+
+---
+
+## 13. Solids were not participants in the pick system (2026-09-10)
+
+Third report in the same area, and the one that explains the previous two: *"okay that click works
+it is just not highlighting the object that is about to be selected."*
+
+**One gap, two symptoms, and §12 only closed the routing half.** `PickClosestCadEntity` — the
+function behind BOTH click-to-select and the hover pre-highlight — returns exactly five types:
+
+    LineSeg · Arc · Circle · Ellipse · Polyline
+
+No solid. So `ComputeSelectionFromRect` was the only thing in the application that ever put a solid
+in a selection: **a solid could be chosen by dragging a rectangle around it and by no other gesture,
+in any command or idle, with nothing lit up beforehand.** Both of the user's earlier reports —
+"clicking does not select" and "nothing highlights" — are that one sentence.
+
+`PickClosestSolidEntity` closes it, built on `PickSubObjectAcrossSolids`, which has done
+ray-versus-solid hit testing since REQ-318 for the `Ctrl`+click sub-object pick. The geometry was
+already there; only a whole-solid caller was missing. Any sub-object hit — face, edge or vertex —
+names the solid, so "click anywhere on it" works rather than only "click exactly an edge". Wired
+into three places, solids slotting below linework and above filled regions in each: the hover chain,
+`SelectionAccumulate`'s click, and the idle click.
+
+**A ray is built for the solid pick even in plan view.** `cursorRayPtr` is deliberately null there to
+keep REQ-058's byte-identical pre-3D path — but that guarantee protects entities that ALREADY had a
+plan-view pick, and a solid never did. Without a ray the fix would work only when orbited, which is
+not the view most drawings sit in.
+
+**The hover gate** also blocked every active command except six entity-pick ones, so even a
+solid-aware hover would have stayed dark during a selection step. Now exempted through
+`ViewportIsObjectSelectionStep` rather than by naming SECTION — by this block's own stated rule,
+what earns suppression is that a command's "clicks mean coordinates rather than objects", and a
+selection step's clicks mean objects by definition. Expressed as the predicate, the next command
+with a selection phase is covered when it is written rather than when someone reports the dark.
+
+### A wrong turn worth recording
+
+I also "added" a `Type::Solid` branch to `AppendEntityHighlight` — **which already had one.** The
+highlight and the selection rendering were ready all along; they simply never received a solid,
+because nothing ever picked one.
+
+How the wrong conclusion was reached: `grep -n AppendEntityHighlight` returns a COMMENT mentioning
+the function at line 427 before the definition at 1387, and I enumerated the types in the 120 lines
+after the first hit. That window belongs to a different function. Every type I listed was real and
+the conclusion drawn from them was not.
+
+Same shape as the two probe failures earlier in this phase and worth stating as the same rule: **an
+enumeration is only as good as the region it enumerated.** Reverted; the duplicate is gone.
+
+### Tests
+
+`SubObjectSelectionTests [solidentity]` — 2 cases, 28 assertions, on the existing `AddBox` fixture
+that builds its display cache through the product's own `RefreshSolidDisplayGeometry`:
+
+| case | what it pins |
+|---|---|
+| a ray onto the top face | the solid is named, as `Type::Solid` |
+| an edge and a corner | any sub-object hit names the solid, not just a face |
+| a ray that misses | nothing is picked |
+| two boxes in line, from above and from below | the NEAREST wins, both ways |
+| a null out | refused, not crashed on |
+| hover with nothing / a solid / an already-selected solid / a bad index | the highlight draws twelve edges, and nothing in the other three |
+
+**Proven to bite:** making `PickClosestSolidEntity` return false fails 3 assertions. The highlight
+cases guard code that already existed and are a regression net, not a claim of new work.
+
+Full suite **1472/1472**.
+
+**Still not covered, and it is the same hole as §12:** no automated test drives a real viewport
+click. `ViewportPickPolicyTests` pins the routing decision and these pin the pick, but the wire
+between a mouse button and those two is checked by a person. The devshell cannot synthesize a
+viewport click that reaches the selection code — tried, and it reaches nothing, idle or in-command.
