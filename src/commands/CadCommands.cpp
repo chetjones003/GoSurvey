@@ -32523,12 +32523,18 @@ bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vec
   for (char& ch : v)
     ch = static_cast<char>((ch >= 'A' && ch <= 'Z') ? (ch - 'A' + 'a') : ch);
 
-  if (v == "on" || v == "1" || v == "yes") {
+  // **No numeric aliases for ON and OFF here**, unlike `PERSPECTIVE` and `CROSSHAIR3D` which accept
+  // `1` and `0`. Those two have nothing but on and off to say, so a digit is unambiguous. This
+  // command's main argument is a DISTANCE, and `SECTIONCLIP 0` — the most natural way to ask for a
+  // cut exactly at the UCS plane — would otherwise be read as "off" and switch the feature off
+  // instead. For a command that takes a number, digits mean the number. Caught in the real GUI
+  // (TASK-240); a transcript had typed `SECTIONCLIP 0` and only checked that nothing was rebuilt.
+  if (v == "on" || v == "yes") {
     st.viewportSectionClip = true;
     log.push_back(SectionClipReport(st));
     return true;
   }
-  if (v == "off" || v == "0" || v == "no") {
+  if (v == "off" || v == "no") {
     st.viewportSectionClip = false;
     log.push_back(SectionClipReport(st));
     return true;

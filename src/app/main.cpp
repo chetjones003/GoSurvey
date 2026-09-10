@@ -1511,6 +1511,19 @@ int main()
     // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
+#ifdef GOSURVEY_DEVELOPER_SHELL
+    // REQ-161 (TASK-240): a devshell test capturing the VIEWPORT, serviced here because this is the
+    // one point in the frame where the renderer has just drawn and its framebuffer still holds the
+    // image.
+    //
+    // Separate from `DevShell_RequestScreenshot`, which reads the WINDOW's GL_FRONT buffer, and the
+    // reason is measured rather than assumed: on a window the compositor is not presenting — which
+    // is the normal case for an automated run — that read returns **pure black**, and six
+    // screenshots of a clip plane moving came back byte-identical. Reading the renderer's own
+    // `fbo_` through `CaptureThumbnailBmp` does not depend on the window being composited at all,
+    // so it captures what was actually drawn.
+    DevShell_ServiceViewportCapture(activeRenderer);
+#endif
     }
 
     // Frame profiler overlay (PERFHUD) — after the render so its render-ms is this frame's, not
