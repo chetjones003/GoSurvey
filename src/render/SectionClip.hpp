@@ -95,6 +95,85 @@ inline void SectionClipToShaderVec4(const SectionClipPlane& p, double anchorX, d
   out4[3] = static_cast<float>(p.c - p.nx * anchorX - p.ny * anchorY);
 }
 
+/// The four corners of the rectangle drawn to SHOW the user where the clip plane is (REQ-336).
+///
+/// The plane itself is infinite and invisible; this is the finite patch of it that gets drawn.
+/// Without it the command has no visible effect at all in the view a user starts in: a level cut
+/// seen from directly above removes the top of a solid and leaves its outline in exactly the same
+/// place on screen, so the picture does not change and the feature reads as broken. Measured, not
+/// supposed — two captures of that case came back byte-identical.
+struct SectionClipIndicator {
+  bool valid = false;
+  ray3d::Vec3 corner[4]{};  ///< world space, wound counter-clockwise about the plane normal
+};
+
+/// Build the indicator rectangle for \p p, sized to cover the world box \p bbMin..\p bbMax with a
+/// margin so its edges stand clear of the model rather than coinciding with it.
+///
+/// The rectangle is built in the plane's OWN axes, not in world X/Y, so it stays a rectangle on the
+/// plane under any orientation — a tilted UCS included. The two in-plane axes come from an
+/// orthonormal basis around the normal; which way they point is arbitrary and does not matter,
+/// because the extent is measured from the model's own corners either way.
+[[nodiscard]] inline SectionClipIndicator SectionClipIndicatorQuad(const SectionClipPlane& p,
+                                                                   const ray3d::Vec3& bbMin,
+                                                                   const ray3d::Vec3& bbMax,
+                                                                   double marginFrac = 0.15) {
+  SectionClipIndicator out;
+  if (!p.active)
+    return out;
+  const ray3d::Vec3 n = ray3d::Normalize(ray3d::Vec3{p.nx, p.ny, p.nz});
+  if (!(std::isfinite(n.x) && std::isfinite(n.y) && std::isfinite(n.z)))
+    return out;
+  if (std::fabs(ray3d::Length(n) - 1.0) > 1e-6)
+    return out;  // a degenerate normal has no plane to draw
+
+  // An in-plane basis. The helper axis is chosen to be the one LEAST aligned with the normal, so
+  // the cross product never collapses — picking a fixed axis breaks precisely when the plane faces
+  // along it, which for a level cut (normal = +Z) is the most common case there is.
+  const ray3d::Vec3 helper = (std::fabs(n.z) < 0.9) ? ray3d::Vec3{0.0, 0.0, 1.0} : ray3d::Vec3{1.0, 0.0, 0.0};
+  const ray3d::Vec3 u = ray3d::Normalize(ray3d::Cross(helper, n));
+  const ray3d::Vec3 v = ray3d::Cross(n, u);
+
+  // Measure the model's extent in those axes, from all eight box corners: an oblique plane through
+  // a box is not covered by projecting only two of them.
+  double uMin = 1e300, uMax = -1e300, vMin = 1e300, vMax = -1e300;
+  for (int i = 0; i < 8; ++i) {
+    const ray3d::Vec3 c{(i & 1) ? bbMax.x : bbMin.x, (i & 2) ? bbMax.y : bbMin.y,
+                        (i & 4) ? bbMax.z : bbMin.z};
+    const double du = ray3d::Dot(c, u);
+    const double dv = ray3d::Dot(c, v);
+    uMin = std::fmin(uMin, du);
+    uMax = std::fmax(uMax, du);
+    vMin = std::fmin(vMin, dv);
+    vMax = std::fmax(vMax, dv);
+  }
+  if (!(uMax >= uMin && vMax >= vMin))
+    return out;
+
+  // A degenerate span still has to draw something, or a flat drawing (every solid at one
+  // elevation, say) would produce a zero-size rectangle and look like nothing was added.
+  const double spanU = std::fmax(uMax - uMin, 1e-6);
+  const double spanV = std::fmax(vMax - vMin, 1e-6);
+  const double base = std::fmax(spanU, spanV);
+  const double padU = std::fmax(spanU * marginFrac, base * 0.02);
+  const double padV = std::fmax(spanV * marginFrac, base * 0.02);
+  const double u0 = uMin - padU, u1 = uMax + padU;
+  const double v0 = vMin - padV, v1 = vMax + padV;
+
+  // Lift the rectangle onto the plane: any point with the right (u, v) plus the plane's own offset
+  // along the normal, which is `c` because n is a unit vector.
+  auto at = [&](double su, double sv) {
+    return ray3d::Vec3{u.x * su + v.x * sv + n.x * p.c, u.y * su + v.y * sv + n.y * p.c,
+                       u.z * su + v.z * sv + n.z * p.c};
+  };
+  out.corner[0] = at(u0, v0);
+  out.corner[1] = at(u1, v0);
+  out.corner[2] = at(u1, v1);
+  out.corner[3] = at(u0, v1);
+  out.valid = true;
+  return out;
+}
+
 /// A vec4 that keeps every vertex, for the passes that must not clip (the grid, and every UI
 /// overlay). Stated as a function rather than written out at each call site so "what does 'do not
 /// clip' look like?" has one answer.

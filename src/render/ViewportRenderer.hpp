@@ -30,6 +30,10 @@ struct RenderTuning {
   /// It lives in `RenderTuning` rather than becoming parameter 31 for the reason this struct was
   /// created: `RenderScene`'s signature is already 30 long.
   SectionClipPlane sectionClip{};
+  /// REQ-336 — the rectangle drawn to SHOW where \ref sectionClip cuts. Built by the caller, which
+  /// is the side that knows how big the drawing is; the renderer only draws it. Invalid means draw
+  /// nothing, which is what every existing call site gets by default.
+  SectionClipIndicator sectionClipIndicator{};
 };
 
 class ViewportRenderer {
