@@ -358,10 +358,70 @@ static bool UcsAlignedToDirection(const ray3d::Vec3& origin, const ray3d::Vec3& 
   return ucs::AlignedToDirection(origin, dir, out);
 }
 
+// UCS Object on a planar FACE of a B-rep solid (issue #156, REQ-154). The deferral decision
+// D-2026-08-31-d chose "a real sub-object selection subsystem" over a UCS-local ray-triangle test,
+// so this is the thin consumer that subsystem (REQ-318 / ADR-049) was built to carry — the same
+// pick the hover pre-highlight and PRESSPULL use, with faces only (vertex/edge tolerances zero).
+//
+// \p handled is set when a solid WAS under the cursor: on a curved or degenerate face the caller
+// must refuse rather than fall through to the 2D entity pick, or a click that plainly aimed at the
+// solid would silently select a line behind it.
+static bool UcsFromSolidFacePick(const AppCommandState& st, const ray3d::Ray& ray,
+                                 std::vector<std::string>& log, ucs::Ucs* out, bool* handled) {
+  *handled = false;
+  const solidpick::Tolerance facesOnly{};  // vertex == edge == 0 -> only a face can be reported
+  SelectedSubObject sub;
+  solidpick::Pick pick;
+  if (!PickSubObjectAcrossSolids(st, ray, facesOnly, &sub, &pick))
+    return false;  // no solid under the cursor — the 2D entity pick still applies
+  *handled = true;
+  if (sub.kind != solidpick::Kind::Face)
+    return false;
+
+  const CadSolidPtr sp = sub.owner.lock();
+  if (!sp || sub.index < 0 || static_cast<size_t>(sub.index) >= sp->faces.size()) {
+    log.push_back("UCS Object - that face is no longer there.");
+    return false;
+  }
+  const brep::Face& f = sp->faces[static_cast<size_t>(sub.index)];
+  if (f.surface.kind != brep::SurfaceKind::Plane) {
+    // REQ-201: a curved wall (cylinder, cone, sphere, torus) has a normal that varies across it, so
+    // there is no single frame to align to. Refused with a reason; the current UCS is untouched.
+    log.push_back("UCS Object - that face is curved. Pick a flat face to align the UCS to.");
+    return false;
+  }
+
+  // Face plane -> UCS XY, face outward normal -> UCS +Z, honouring Surface::inward exactly as the
+  // kernel does. A direction is identical in storage and world space (they differ by a translation
+  // only), so the normal needs no rebase; the origin does.
+  ray3d::Vec3 n = f.surface.frame.zAxis;
+  if (f.surface.inward)
+    n = ray3d::Scale(n, -1.0);
+  double wx = 0.;
+  double wy = 0.;
+  CadCoord::WorldFromLocal(st, pick.point.x, pick.point.y, &wx, &wy);
+  const ray3d::Vec3 originWorld{wx, wy, pick.point.z};
+  if (!ucs::FromNormal(originWorld, n, out)) {
+    log.push_back("UCS Object - that face has no usable normal to align to.");
+    return false;
+  }
+  return true;
+}
+
 // Derive a UCS from the entity under \p pickWorld. Returns false, with a reason logged, for the
-// entity kinds whose alignment is not defined here.
+// entity kinds whose alignment is not defined here. \p pickRay, when valid, lets a planar face of a
+// B-rep solid be the target (issue #156) — the true-3D pick a flattened work-plane XY cannot do.
 static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pickWorld,
-                              std::vector<std::string>& log, ucs::Ucs* out) {
+                              std::vector<std::string>& log, ucs::Ucs* out,
+                              const ray3d::Ray* pickRay) {
+  if (pickRay && pickRay->valid()) {
+    bool handledBySolid = false;
+    if (UcsFromSolidFacePick(st, *pickRay, log, out, &handledBySolid))
+      return true;
+    if (handledBySolid)
+      return false;  // a solid face was clicked and refused — do not also try the 2D entity pick
+  }
+
   // The pick runs in storage space, like every other pick in the application.
   float px = 0.f;
   float py = 0.f;
@@ -452,12 +512,13 @@ static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pick
       return true;
     }
     default:
-      // Meshes, surfaces, feature lines, polylines and hatch fills. A mesh or a solid WOULD be the
-      // most useful Object target of all - "align to this face" is the 3D modelling workflow the
-      // issue names - but it needs face-level picking, which does not exist: PickClosestCadEntity
-      // resolves a mesh as one object with no face identity. Refused with a reason, not guessed at.
-      log.push_back("UCS Object - alignment to that object type is not supported yet. Faces of meshes "
-                    "and solids need face-level picking, which this build does not have.");
+      // Meshes, surfaces, feature lines and hatch fills. A planar face of a B-rep SOLID is now a
+      // valid target and is handled above via the sub-object pick (issue #156); a mesh or a
+      // triangulated surface still resolves as one object with no planar-face identity, so there is
+      // nothing here to align to. Refused with a reason, not guessed at (REQ-201).
+      log.push_back("UCS Object - alignment to that object type is not supported. Meshes and "
+                    "surfaces have no face to align to; click a line, arc, circle, ellipse, text, "
+                    "or a flat face of a solid.");
       return false;
   }
 }
@@ -925,7 +986,8 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
   }
 }
 
-bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log) {
+bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log,
+                            const ray3d::Ray* pickRay) {
   if (st.active != AppCommandState::Kind::Ucs)
     return false;
   switch (st.ucsPhase) {
@@ -977,7 +1039,7 @@ bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, 
     }
     case AppCommandState::UcsPhase::WaitObjectPick: {
       ucs::Ucs next;
-      if (!UcsFromObjectPick(st, worldPoint, log, &next))
+      if (!UcsFromObjectPick(st, worldPoint, log, &next, pickRay))
         return true;  // stay in the pick phase so the user can try another object
       SetActiveUcs(st, next, log);
       EndUcsCommand(st);

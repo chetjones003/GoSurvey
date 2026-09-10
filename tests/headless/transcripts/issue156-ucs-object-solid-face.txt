@@ -1,0 +1,95 @@
+# GitHub #156 (REQ-154) — UCS Object aligned to a planar FACE of a B-rep solid.
+#
+# Deferred at REQ-154 ("Not in this requirement" item 4) until face-level picking existed, then
+# recorded again as D-2026-08-31-d: implement as a thin consumer of the sub-object pick subsystem
+# (REQ-318 / ADR-049) once it landed. It has. This transcript proves the consumer.
+#
+# Every success assertion is on the resulting GEOMETRY, not just the log: a log line proves the
+# message changed, not that the frame is the plane the face lies in. The regression check is
+# REQ-154's own — geometry drawn at UCS (x, y, 0) must land on the picked face's plane.
+#
+# THE BOX. `CMD BOX 0,0 20 10 8` is centred on (0,0) with its base at z = 0: x in [-10, 10],
+# y in [-5, 5], z in [0, 8]. So (10, 0, 4) is the middle of the +X side face and its outward normal
+# is world +X. The third coordinate on CLICK aims the camera ray at that point off the work plane —
+# the one way a transcript can point at a spot on a vertical face. At VIEWANGLES -45 35 the +X and
+# -Y faces and the top are front-facing (probed against the shipped camera before asserting).
+
+NEW
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+VIEWANGLES -45 35
+
+# --- Align to the +X side face ------------------------------------------------------------------
+# Face plane -> UCS XY, outward normal (1,0,0) -> UCS +Z. FromNormal (the Arbitrary Axis Algorithm)
+# derives X = worldZ x n = (0, 1, 0); origin is the picked point on the face's own plane.
+CMD UCS
+EXPECT LOG "Specify origin of UCS"
+CMD OB
+EXPECT LOG "Select object to align UCS with"
+CLICK 10 0 4
+EXPECT LOG "UCS = origin (10.0000, 0.0000, 4.0000), X axis (0.0000, 1.0000, 0.0000)"
+
+# The regression check: UCS (3, 2, 0) has z = 0 in the frame, so it must land on the face plane
+# world-X = 10. Frame Y axis is (0, 0, 1), so it lands at (10, 3, 6).
+CMD LINE
+CMD 0,0
+CMD 3,2
+ESC
+EXPECT LINES 1
+EXPECT LINEXYZ 0 10 0 4 10 3 6
+
+CMD UCS
+CMD W
+EXPECT LOG "UCS = World"
+# The frame change did not move the box or the line.
+EXPECT LINEXYZ 0 10 0 4 10 3 6
+
+# --- Align to the top face (an axis-aligned normal still works) -----------------------------------
+# (3, 1, 8) is on the top face, normal world +Z. Near the pole, FromNormal breaks the tie with
+# world Y, giving X = (1, 0, 0); the frame is the world axes translated to the pick point.
+CMD UCS
+CMD OB
+CLICK 3 1 8
+EXPECT LOG "UCS = origin (3.0000, 1.0000, 8.0000), X axis (1.0000, 0.0000, 0.0000)"
+CMD LINE
+CMD 0,0
+CMD 4,2
+ESC
+EXPECT LINES 2
+EXPECT LINEXYZ 1 3 1 8 7 3 8
+
+CMD UCS
+CMD W
+
+# --- A curved face is refused with a reason, and the command stays in its pick phase (REQ-201) ----
+NEW
+CMD CYLINDER 0,0 5 20
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Cylinder
+VIEWANGLES -45 35
+
+CMD UCS
+CMD OB
+# (5, 0, 10) is on the cylinder wall — radius 5, half height.
+CLICK 5 0 10
+EXPECT LOG "UCS Object - that face is curved. Pick a flat face to align the UCS to."
+
+# Still in the pick phase: a click on the flat top cap now succeeds.
+CLICK 1 1 20
+EXPECT LOG "UCS = origin (1.0000, 1.0000, 20.0000)"
+
+CMD UCS
+CMD W
+
+# --- A miss falls through to the ordinary 2D entity pick -----------------------------------------
+# No solid under the ray, so the 2D path runs and reports its own honest "nothing there".
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+CMD UCS
+CMD OB
+CLICK 500 500 4
+EXPECT LOG "UCS Object - no object found at that point"
+
+CHECK ALL
