@@ -3473,13 +3473,21 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
      loops are merged back into one two-edge loop for `BuildConeFace`'s full-revolve path.
   4. **Standalone `.sat` import.** `BLOCKIMPORT` (and the Import Block file dialog) accept `.sat`. A
      `.sat` holds one model, not a block library, so it imports as a **block definition named after
-     the file** *and* its solid is placed directly in the drawing so it is visible at once. The
-     ACIS header's `num_mm_units` (25.4 / 304.8 / 1000) sets the block units.
-- **Out of scope, tracked.** Placing/rendering a *block-stored* solid — `CadBlockContent::solids` is
-  captured and round-trips through save/WBLOCK but is never instanced on INSERT/EXPLODE nor drawn
-  from a block reference. This is a pre-existing REQ-320 (#299) gap affecting every block-stored
-  solid, not `.sat` specifically; the direct-placement above is the interim path. Also unchanged:
-  free-form/spline/sphere/torus surfaces (#300), SAB binary (#301).
+     the file** — BLOCKIMPORT defines only, INSERT places. The solid is **re-centred on the origin**
+     first: a `.sat` carries the model's absolute position from the drawing it was exported out of
+     (the `body` transform's translation, often thousands of units out), which is noise for a
+     reusable block and would land it far from the cursor. The ACIS header's `num_mm_units`
+     (25.4 / 304.8 / 1000) sets the block units.
+  5. **INSERT materialises a block's B-rep solids.** `CadBlockContent::solids` is captured and
+     round-trips through save/WBLOCK but the block-*reference* renderer never draws it. So
+     `PlaceInsertImpl` (and `ExplodeRef`) turn each `content.solids` entry into a real drawing solid
+     transformed by the insert frame — translation, Z rotation and a uniform scale, the parameters a
+     `brep::Solid` can hold; a reference tilt or non-uniform scale is dropped with a logged note. A
+     **solids-only** block (what a `.sat` produces) then needs no visible reference at all — INSERT
+     leaves just the solid; a mixed block keeps its reference for the rest of its content. A
+     *linked* block-reference solid (one that re-derives from the definition when the definition
+     changes, like a referenced line does) is still future.
+- **Out of scope.** Free-form/spline/sphere/torus surfaces (#300), SAB binary (#301).
 
 ### ADR-052 — General trimmed-boundary faces: an additive parameter-space loop, not a rectangle replacement   (2026-09-05, accepted)
 

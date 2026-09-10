@@ -342,7 +342,18 @@ bool ImportSatFileToScratch(AppCommandState& scratch, const char* pathUtf8, std:
     log.push_back("BLOCKIMPORT — " + (r.error.empty() ? std::string("the ACIS SAT file could not be read") : r.error));
     return false;
   }
-  scratch.cadSolids.push_back(std::make_shared<const brep::Solid>(r.solid));
+  // A `.sat` carries the model's absolute position from the drawing it was exported out of (the
+  // ACIS `body` transform's translation — often thousands of units from the origin). That is noise
+  // for a reusable block; re-centre the solid on the origin so INSERT places it where the cursor
+  // is, not thousands of units away (GitHub issue #473). The orientation from the transform is
+  // kept.
+  brep::Solid centred = r.solid;
+  const brep::Bounds bb = brep::ComputeBounds(centred);
+  if (bb.valid) {
+    centred = brep::Translate(centred, brep::Vec3{-(bb.mn.x + bb.mx.x) * 0.5, -(bb.mn.y + bb.mx.y) * 0.5,
+                                                  -(bb.mn.z + bb.mx.z) * 0.5});
+  }
+  scratch.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(centred)));
   scratch.cadSolidAttrs.push_back(EntityAttributes{});
   // A standalone .sat carries no drawing header; the ACIS header's millimetres-per-unit is the only
   // unit hint (25.4 = inches, 304.8 = feet, 1000 = metres).
@@ -391,16 +402,6 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
     CadBlockCaptureDrawing(scratch, &wrap.content);
     CadBlockBakeBasePoint(&wrap);
     n += MergeBlockDef(dest, std::move(wrap), log);
-  }
-  // A standalone .sat is a single model, not a block library. Place its solid(s) directly in the
-  // drawing as well as capturing the definition, so the user sees the geometry immediately — a
-  // block-stored solid is not yet instanced on INSERT (issue #473, a pre-existing REQ-320 gap).
-  if (ext == ".sat") {
-    for (std::size_t i = 0; i < scratch.cadSolids.size(); ++i) {
-      dest.cadSolids.push_back(scratch.cadSolids[i]);
-      dest.cadSolidAttrs.push_back(i < scratch.cadSolidAttrs.size() ? scratch.cadSolidAttrs[i]
-                                                                    : EntityAttributes{});
-    }
   }
   for (CadBlockDefinition& d : dest.blockDefs)
     CadBlockAuthorMatchlineDynamics(&d);
@@ -531,6 +532,56 @@ void EraseSelectedSources(AppCommandState& st) {
   st.selection.clear();
 }
 
+/// A block whose only geometry is B-rep solids — the shape a `.sat` import produces (GitHub issue
+/// #473). Such a block has nothing for a `CadBlockRef` to draw, so INSERT materialises its solids
+/// as real drawing solids instead of leaving an invisible reference.
+bool BlockIsSolidsOnly(const CadBlockDefinition& def) {
+  const CadBlockContent& c = def.content;
+  return !c.solids.empty() && c.lines.empty() && c.circles.empty() && c.arcs.empty() &&
+         c.ellipses.empty() && c.polyOffsets.size() < 2 && c.texts.empty() && c.meshes.empty() &&
+         c.nested.empty() && def.attrDefs.empty();
+}
+
+/// Place a block definition's B-rep solids into the drawing, transformed by the insert \p ref's own
+/// frame (`CadBlockContent::solids` is never instanced by the block-reference renderer — issue
+/// #473). Supports the insert parameters a solid representation can hold: a translation, a Z
+/// rotation, and a uniform scale. A tilt (rotX/rotY) or a non-uniform scale on the reference is
+/// dropped with a logged note rather than approximated.
+void InstantiateBlockSolids(AppCommandState& st, const CadBlockDefinition& def, const CadBlockRef& ref,
+                            const EntityAttributes& insertAttr, std::vector<std::string>& log) {
+  const CadBlockContent& c = def.content;
+  if (c.solids.empty())
+    return;
+  const CadBlockXform& xf = ref.xf;
+  const bool uniform = std::fabs(xf.sx - xf.sy) < 1e-6f && std::fabs(xf.sx - xf.sz) < 1e-6f;
+  const bool tilted = xf.rotX != 0.f || xf.rotY != 0.f;
+  if (!uniform || tilted)
+    log.push_back("INSERT — \"" + def.name +
+                  "\": a solid honours only a uniform scale and a Z rotation; placed with those.");
+  const double scale = static_cast<double>(xf.sx);
+  for (size_t i = 0; i < c.solids.size(); ++i) {
+    if (!c.solids[i])
+      continue;
+    brep::Solid s = *c.solids[i];
+    brep::Problem why = brep::Problem::Ok;
+    if (std::fabs(scale - 1.0) > 1e-9) {
+      brep::Solid t;
+      if (brep::Scale(s, brep::Vec3{0, 0, 0}, scale, &t, &why))
+        s = std::move(t);
+    }
+    if (xf.rotZ != 0.f) {
+      brep::Solid t;
+      if (brep::Rotate(s, brep::Vec3{0, 0, 0}, brep::Vec3{0, 0, 1}, static_cast<double>(xf.rotZ), &t, &why))
+        s = std::move(t);
+    }
+    s = brep::Translate(s, brep::Vec3{xf.x, xf.y, xf.z});
+    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    EntityAttributes a = insertAttr;
+    a.id = 0;
+    st.cadSolidAttrs.push_back(std::move(a));
+  }
+}
+
 void ExplodeRef(AppCommandState& st, const CadBlockRef& ref, const EntityAttributes& insertAttr) {
   std::vector<CadBlockWorldSeg> segs;
   CadBlockCollectWorldLines(st.blockDefs, ref, insertAttr, &segs);
@@ -552,6 +603,11 @@ void ExplodeRef(AppCommandState& st, const CadBlockRef& ref, const EntityAttribu
     EntityAttributes a = insertAttr;
     a.id = 0;
     st.cadAnnotationAttrs.push_back(std::move(a));
+  }
+  const int di = CadBlockFindDef(st.blockDefs, ref.defName);
+  if (di >= 0) {
+    std::vector<std::string> ignored;
+    InstantiateBlockSolids(st, st.blockDefs[static_cast<size_t>(di)], ref, insertAttr, ignored);
   }
 }
 
@@ -581,16 +637,25 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
     explode = false;
   }
   if (paper) {
+    if (BlockIsSolidsOnly(def))
+      log.push_back("INSERT — \"" + def.name + "\" is a 3D solid; it has no paper-space representation.");
     PaperLayout* L = ActivePaperGeometryTarget(st);
     L->paperBlockRefs.push_back(r);
     L->paperBlockRefAttrs.push_back(attr);
-  } else {
+  } else if (explode) {
     st.cadBlockRefs.push_back(r);
     st.cadBlockRefAttrs.push_back(attr);
-    if (explode) {
-      ExplodeRef(st, st.cadBlockRefs.back(), st.cadBlockRefAttrs.back());
-      st.cadBlockRefs.pop_back();
-      st.cadBlockRefAttrs.pop_back();
+    ExplodeRef(st, st.cadBlockRefs.back(), st.cadBlockRefAttrs.back());
+    st.cadBlockRefs.pop_back();
+    st.cadBlockRefAttrs.pop_back();
+  } else {
+    // A block's B-rep solids are never drawn from a reference (issue #473), so materialise them as
+    // real solids at the insert point. A solids-only block (a `.sat` import) then needs no visible
+    // reference at all; a mixed block keeps its reference for the rest of its content.
+    InstantiateBlockSolids(st, def, r, attr, log);
+    if (!BlockIsSolidsOnly(def)) {
+      st.cadBlockRefs.push_back(r);
+      st.cadBlockRefAttrs.push_back(attr);
     }
   }
   NoteRecent(st, r.defName);

@@ -46,20 +46,32 @@ window and chose "block definition" as the import target.
   `BuildConeFace`'s full-revolve path.
 
 ### `.sat` file type (`src/commands/CadBlocks.cpp`, `src/platform/WinFileDialogs.cpp`, `CadCommands.cpp`)
-- `ImportSatFileToScratch` — reads the file, runs `acissat::ImportSatSolid`, pushes the solid into
-  the scratch state and sets `drawingInsUnits` from `mmPerUnit`.
+- `ImportSatFileToScratch` — reads the file, runs `acissat::ImportSatSolid`, **re-centres the solid
+  on the origin** (`ComputeBounds` → `Translate` by `-bboxCentre`; a `.sat` carries its absolute
+  position from the source drawing, ~4999 units for the fixture), pushes it into the scratch state
+  and sets `drawingInsUnits` from `mmPerUnit`.
 - `ImportCadBlocksFromPathImpl` — `.sat` branch; the shared block-capture path wraps it into a
-  definition named after the file, and the `.sat` case *also* copies the solid into `dest.cadSolids`
-  so it is visible immediately.
+  definition named after the file. BLOCKIMPORT defines only.
 - `BrowseOpenFileBlockUtf8` filter gains `*.sat`; BLOCKIMPORT help text updated.
 
-## 4. Out of scope (tracked in #473)
+### INSERT materialises block solids (`src/commands/CadBlocks.cpp`)
+- `InstantiateBlockSolids` — turns each `CadBlockContent::solids` entry into a real drawing solid
+  transformed by the insert `CadBlockXform` (translation, Z rotation, uniform scale via
+  `brep::Translate` / `Rotate` / `Scale`); a reference tilt (`rotX`/`rotY`) or non-uniform scale is
+  dropped with a logged note.
+- `BlockIsSolidsOnly` — a block whose only geometry is solids (a `.sat` import). `PlaceInsertImpl`
+  places no `CadBlockRef` for one — INSERT leaves just the solid.
+- Wired into `PlaceInsertImpl` (non-explode) and `ExplodeRef`.
 
-**Placing / rendering a block-stored solid.** `CadBlockContent::solids` is captured and survives
-save / WBLOCK, but no code instances it on INSERT/EXPLODE or draws it from a block reference. This
-is a pre-existing REQ-320 (#299) gap affecting every block-stored solid (ACIS-from-DWG too). The
-direct placement on `.sat` import is the interim path. Also unchanged: #300 (free-form surfaces),
-#301 (SAB binary).
+## 4. Why this went past the original scope
+
+The first cut left placing a block-stored solid out of scope ("`CadBlockContent::solids` is
+captured but never instanced"). The user hit that immediately: inserting the flange put it
+**~2500 ft from the snapped point** — the solid still carried Civil 3D's `body`-transform world
+position, and INSERT drew nothing for it. So the re-centring and the INSERT materialisation are
+both in this task now. A *linked* block-reference solid (one that re-derives from the definition
+when the definition changes) is still future. Also unchanged: #300 (free-form surfaces), #301 (SAB
+binary).
 
 ## 5. Tests
 
@@ -67,9 +79,11 @@ direct placement on `.sat` import is the interim path. Also unchanged: #300 (fre
   cone/cyl), `Validate == Ok`, positive volume, `mmPerUnit == 25.4`, bounds near (4998, 4998)
   proving the `body` transform was applied.
 - `CadBlockImportTests [issue473]` — `.sat` through `ImportCadBlocksFromPath` → a block definition
-  named after the file with a 16-face valid solid, `units == "inches"`, no block reference placed,
-  and the solid also loose in `st.cadSolids`. A malformed `.sat` → refused, `blockDefs` empty, a
-  `BLOCKIMPORT` message logged.
+  named after the file with a 16-face valid solid re-centred on the origin, `units == "inches"`,
+  nothing placed; then `CadBlockPlaceInsert` at (100, 200) → one drawing solid straddling that
+  point, no `CadBlockRef`. A malformed `.sat` → refused, `blockDefs` empty, a `BLOCKIMPORT` message.
+- `headless.issue473-sat-blockimport` — BLOCKIMPORT (SOLIDS still 0), then `INSERT … 100,200` →
+  SOLIDS 1 with bounds at the insert point, a second INSERT → SOLIDS 2, UNDO → 1.
 - Full suite green; the 14 existing `[acissat]` hand-authored fixtures unchanged (detected as the
   simplified schema).
 
