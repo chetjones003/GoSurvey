@@ -172,23 +172,61 @@ test appearing to fail against itself. Now `%.10g` with the difference stated.
   group. Nothing is re-tessellated or re-uploaded, which the transcript asserts rather than assumes.
 - **testing** — 9 new unit cases (96 assertions) + 1 new transcript (87 steps); **1451/1451**.
 
-**One verification is NOT complete, and it is the visual one.** A devshell test
-(`--devshell-run req336-section-clip-viewport`) is written and committed: it builds a box, orbits,
-shades it, and captures six screenshots across clip off → cut at the UCS plane → two moved planes →
-flipped → off again, checking the solid is unchanged throughout. **It could not be run in this
-session** — synthesized input does not reach the window in this environment, and the devshell CLI
-mode produced no output or screenshots. Everything it would show about the *arithmetic* is already
-measured by P7 in a real GL context using these exact shader sources; what remains unconfirmed is the
-**integration** — that the uniform reaches the shader in the running app, and that the interface
-survives with the clip on (the `finish_render` disable in (e)). That is a real gap and it is flagged
-in the PR rather than papered over.
+**The GUI check RAN, and it found a bug.** `--devshell-run req336-section-clip-viewport` builds a
+box, orbits, shades it, and captures the viewport across clip off → cut at the UCS plane → two moved
+planes → flipped → off again, checking the solid is unchanged throughout. Result: **Success**, six
+captures, five of them distinct and `off` byte-identical to `off-again`.
+
+Two things had to be fixed to get there, and both are worth recording.
+
+**(1) The devshell is compiled out of a Release build.** `CMakeLists.txt:148` forces
+`GOSURVEY_DEVELOPER_SHELL` OFF for `CMAKE_BUILD_TYPE=Release` (REQ-161), so `--devshell-run` is
+parsed by nothing and the app simply launches as normal and waits. It looks exactly like a hang, and
+it was misread as one. **The devshell needs `build/debug`.** Written down because the failure gives
+no diagnostic at all — no message, no log, no non-zero exit.
+
+**(2) `DevShell_RequestScreenshot` captures pure black here, and it did so silently.** It reads the
+window's `GL_FRONT` buffer, which returns black on a window the compositor is not presenting — the
+normal case for an automated run. The first six captures came back **byte-identical**, which reads
+exactly like "the clip does nothing" and would have been a plausible, wrong conclusion; only
+checking the image itself showed it was a black frame. Added
+`DevShell_RequestViewportCapture` / `DevShell_ServiceViewportCapture`, which read the RENDERER's own
+framebuffer through the existing `CaptureThumbnailBmp` (REQ-308) and so do not depend on the window
+being composited. The existing screenshot hook is left in place, with its limitation now documented
+at its declaration.
+
+**The bug the GUI caught, which every other test missed: `SECTIONCLIP 0` turned the clip OFF.**
+`PERSPECTIVE` and `CROSSHAIR3D` both accept `1`/`0` as ON/OFF and this command was written the same
+way — but its main argument is a **distance**, so `0`, the obvious way to ask for a cut exactly at
+the UCS plane, was read as "off". The numeric aliases are gone: for a command that takes a number,
+digits mean the number.
+
+**It reached the GUI because the transcript had the same blind spot.** The liveness block already
+typed `CMD SECTIONCLIP 0` and then asserted only `EXPECT SOLIDTESSGEN 1` — which is trivially true of
+a command that did nothing at all. A "nothing was rebuilt" assertion cannot tell a working feature
+from an inert one. Four lines now pin `0` and `1` as offsets, and the liveness block keeps its
+counter check.
+
+What the six captures show, in order: the whole box; **only the bottom face** surviving a cut at
+offset 0 (the plane keeps `z <= c`, so the face lying *on* it remains — the plane is exactly where it
+was asked for); a third of the box at offset 4 and two thirds at offset 8, both **open at the top**,
+which is ADR-056 (f)'s uncapped cut seen directly; the **complement** slab under FLIP; and the whole
+box again. Parked in `Notes for claude/issue149-analysis/req336-clip-evidence/`.
+
+**One thing is still correct-by-construction rather than observed**: that the interface survives with
+the clip on — the unconditional `glDisable(GL_CLIP_DISTANCE0)` at `finish_render` in (e). The
+captures are of the viewport framebuffer, so they do not contain the UI, and the test engine drives
+ImGui through its item registry rather than through pixels, so it would not notice either. The guard
+is a one-line read against a clear rule (an unwritten `gl_ClipDistance` under an enabled clip plane
+is undefined), but it has not been *seen* working, and it is named here rather than counted as
+verified.
 
 COMPLETION REPORT — TASK-240 — 2026-09-10
 - Requirements satisfied:  REQ-336 (new, accepted); GitHub #149 acceptance 6
 - Summary:                 SECTIONCLIP — a live clip plane as a per-frame shader uniform, rebased
                            onto the view anchor; GL geometry only, uncapped, both stated in the REQ
-- Tests:                   9 unit cases (96 assertions) + 1 transcript (87 steps); 1451/1451
-- Verification verdict:    PASS, with one gap — the GUI/devshell check is committed but unrun
+- Tests:                   9 unit cases (96 assertions) + 1 transcript (101 steps) + 1 devshell GUI test; 1451/1451
+- Verification verdict:    PASS — devshell GUI run green, six viewport captures as evidence
 - Assumptions:             none
 - Architectural decisions: ADR-056, D-2026-09-10-a
 - Dependencies:            none added

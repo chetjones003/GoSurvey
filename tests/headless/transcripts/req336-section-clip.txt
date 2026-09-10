@@ -53,6 +53,32 @@ CMD SECTIONCLIP OFFSET -4
 EXPECT SECTIONCLIPOFFSET -4
 EXPECT SECTIONCLIP ON
 
+# --- 0 and 1 are OFFSETS, not ON and OFF ----------------------------------------------------------
+#
+# `PERSPECTIVE` and `CROSSHAIR3D` both accept 1 and 0 as ON and OFF, and this command was first
+# written the same way. It is wrong here: the main argument is a DISTANCE, and `SECTIONCLIP 0` — the
+# obvious way to ask for a cut exactly at the UCS plane — switched the feature OFF instead.
+#
+# The bug reached the real GUI because the transcript below already typed `SECTIONCLIP 0` and only
+# asserted that nothing was rebuilt, which is true of a command that did nothing at all. These four
+# lines are the assertion that was missing.
+
+CMD SECTIONCLIP 0
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 0
+
+CMD SECTIONCLIP OFF
+CMD SECTIONCLIP 1
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 1
+
+# The words still work, and OFF still means off.
+CMD SECTIONCLIP OFF
+EXPECT SECTIONCLIP OFF
+CMD SECTIONCLIP ON
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 1
+
 # A negative offset is a plane below the UCS, not a refusal.
 CMD SECTIONCLIP -0.002
 EXPECT SECTIONCLIPOFFSET -0.002
