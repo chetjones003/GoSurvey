@@ -29,6 +29,7 @@
 #include "GsIo.hpp"
 #include "DwgIo.hpp"
 #include "SplashScreen.hpp"
+#include "WinFrameControls.hpp"
 #ifdef GOSURVEY_DEVELOPER_SHELL
 #include "DevShell.hpp"
 #endif
@@ -276,8 +277,8 @@ int main()
   // transparency isn't guaranteed by every compositor) maximized window. GlfwApplyMainStageWindowChrome
   // (called after RunStartupSplash below) is the only maximize call now, so the window makes one
   // clean size/decoration transition instead of two.
-  constexpr int kSplashWinW = 440;
-  constexpr int kSplashWinH = 320;
+  constexpr int kSplashWinW = 880;
+  constexpr int kSplashWinH = 640;
   GLFWwindow *window = glfwCreateWindow(kSplashWinW, kSplashWinH, "GoSurvey", nullptr, nullptr);
   if (!window)
   {
@@ -361,6 +362,8 @@ int main()
   // Shown only now (GlfwApplySplashStageWindowHints set GLFW_VISIBLE false) so it never flashes
   // at an unpositioned spot before glfwSetWindowPos above took effect.
   glfwShowWindow(window);
+  GlfwPlatformApplySplashRoundedRegion(
+      window, 8.f * std::max(1.f, static_cast<float>(kSplashWinH) / 320.f));
 
   // REQ-093: hardcoded 5 s regardless of how fast the real preload below finishes — the app is
   // still low-resource enough that the actual load is imperceptible, so the splash's duration is
@@ -370,7 +373,7 @@ int main()
 #else
   RunStartupSplash(window, 5.0);
 #endif
-  // The splash ran in a small (~440x320) window. Maximizing it for the main stage leaves the stale
+  // The splash ran in a small (~880x640) window. Maximizing it for the main stage leaves the stale
   // splash front buffer stretched fullscreen for the frames it takes DWM to catch up — the "glitchy
   // maximized splash". Fix: hide the window across the maximize and the entire pre-loop setup, and
   // only reveal it once the first REAL UI frame has been rendered and swapped (see mainWindowShown

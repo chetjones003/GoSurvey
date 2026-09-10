@@ -120,4 +120,35 @@ void GlfwPlatformSetTitleBarMetrics(float rowHeightPx, float btnStripWidthPx) {
   g_btnStripWidthPx = btnStripWidthPx;
 }
 
+void GlfwPlatformApplySplashRoundedRegion(GLFWwindow* window, float cornerRadiusPx) {
+  if (!window || cornerRadiusPx < 0.5f)
+    return;
+  HWND hwnd = glfwGetWin32Window(window);
+  if (!hwnd)
+    return;
+  RECT rc{};
+  if (!GetClientRect(hwnd, &rc))
+    return;
+  const int w = rc.right - rc.left;
+  const int h = rc.bottom - rc.top;
+  if (w <= 0 || h <= 0)
+    return;
+  const int r = std::max(1, static_cast<int>(cornerRadiusPx + 0.5f));
+  const int diam = std::max(2, r * 2);
+  HRGN rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, diam, diam);
+  if (!rgn)
+    return;
+  if (!SetWindowRgn(hwnd, rgn, TRUE))
+    DeleteObject(rgn);
+}
+
+void GlfwPlatformClearWindowRegion(GLFWwindow* window) {
+  if (!window)
+    return;
+  HWND hwnd = glfwGetWin32Window(window);
+  if (!hwnd)
+    return;
+  SetWindowRgn(hwnd, NULL, TRUE);
+}
+
 #endif // _WIN32

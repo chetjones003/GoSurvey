@@ -644,6 +644,7 @@ set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES SKIP_PRECOMPILE_HEA
 set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gst")
 set(GOSURVEY_WHATS_NEW_MD "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new.md")
 set(GOSURVEY_WHATS_NEW_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new-bg.png")
+set(GOSURVEY_SPLASH_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/splash-bg.png")
 # REQ-336: the billboard content must exist at configure time so a missing file fails the build,
 # not only a packaged installer.
 if(NOT EXISTS "${GOSURVEY_WHATS_NEW_MD}")
@@ -651,6 +652,9 @@ if(NOT EXISTS "${GOSURVEY_WHATS_NEW_MD}")
 endif()
 if(NOT EXISTS "${GOSURVEY_WHATS_NEW_BG}")
   message(FATAL_ERROR "REQ-336: resources/whats-new-bg.png is required (What's New backdrop).")
+endif()
+if(NOT EXISTS "${GOSURVEY_SPLASH_BG}")
+  message(FATAL_ERROR "REQ-093: resources/splash-bg.png is required (startup splash backdrop).")
 endif()
 add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
@@ -671,6 +675,9 @@ add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_WHATS_NEW_BG}"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new-bg.png"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${GOSURVEY_SPLASH_BG}"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/splash-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
