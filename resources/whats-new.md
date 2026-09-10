@@ -1,10 +1,13 @@
 # What's New
+---
 
 ## Key Features
 
 - Start screen with recent drawings
 - In-app update checks
 - Survey and CAD drafting tools
+
+---
 
 ## Release Notes
 

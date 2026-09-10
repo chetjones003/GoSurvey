@@ -2,6 +2,7 @@
 
 #include "AppIcon.hpp"
 #include "AppPaths.hpp"
+#include "FontRegistry.hpp"
 #include "CadCommands.hpp"
 #include "MarkdownImGui.hpp"
 #include "UserPrefs.hpp"
@@ -25,7 +26,8 @@
 namespace {
 
 constexpr const char* kReleasesUrl = "https://github.com/chetjones003/GoSurvey/releases";
-constexpr float kBackdropAlpha = 0.36f;  // visible watermark; text stays readable on top
+// Dark slate tint (not white): matches SplashScreen backdrop so launch → What's New reads as one product.
+constexpr ImVec4 kBackdropTint {0.25f, 0.30f, 0.40f, 0.80f};
 
 ImVec4 Lerp(const ImVec4& a, const ImVec4& b, float t) {
   return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t,
@@ -135,7 +137,7 @@ void DrawFaintBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b) {
     uv1.y = 0.5f + visible * 0.5f;
   }
 
-  const ImU32 tint = ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, kBackdropAlpha));
+  const ImU32 tint = ImGui::GetColorU32(kBackdropTint);
   dl->AddImage(static_cast<ImTextureID>(static_cast<std::intptr_t>(bg.tex)), a, b, uv0, uv1, tint);
 }
 
@@ -214,6 +216,8 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
     return;
   }
 
+  ImGui::PushFont(FontReg::Billboard());
+
   {
     ImDrawList* bg = ImGui::GetBackgroundDrawList();
     const ImVec2 a = ImGui::GetWindowPos();
@@ -225,20 +229,17 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
                 ImGui::GetColorU32(AccentHi()), rnd + 1.f, 0, 2.f);
   }
 
-  // Accent stripe + centered app logo (crisp GS badge — same mark as the Start hero).
+  // Centered app logo (crisp GS badge — same mark as the Start hero).
   {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 stripeA = ImGui::GetCursorScreenPos();
+    const ImVec2 logoRow = ImGui::GetCursorScreenPos();
     const float contentW = ImGui::GetContentRegionAvail().x;
-    dl->AddRectFilled(stripeA, ImVec2(stripeA.x + contentW, stripeA.y + 4.f),
-                      ImGui::GetColorU32(Accent()));
     constexpr float kLogo = 72.f;
     // Extra top pad so the badge sits clear of the title-bar clip (avoids squared top corners).
     constexpr float kLogoPadTop = 22.f;
     constexpr float kLogoPadBot = 16.f;
-    ImGui::Dummy(ImVec2(0.f, 4.f + kLogoPadTop + kLogo + kLogoPadBot));
-    const ImVec2 logoCenter(stripeA.x + contentW * 0.5f,
-                            stripeA.y + 4.f + kLogoPadTop + kLogo * 0.5f);
+    ImGui::Dummy(ImVec2(0.f, kLogoPadTop + kLogo + kLogoPadBot));
+    const ImVec2 logoCenter(logoRow.x + contentW * 0.5f, logoRow.y + kLogoPadTop + kLogo * 0.5f);
     DrawGsBadge(dl, logoCenter, kLogo);
   }
 
@@ -284,6 +285,7 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
   if (AccentButton("Close", false))
     open = false;
 
+  ImGui::PopFont();
   ImGui::End();
   ImGui::PopStyleColor(10);
   ImGui::PopStyleVar(3);

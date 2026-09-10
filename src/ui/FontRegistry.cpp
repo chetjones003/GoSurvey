@@ -11,6 +11,7 @@ namespace {
 
 ImFont* g_default = nullptr;
 ImFont* g_toolspace = nullptr;
+ImFont* g_billboard = nullptr;
 // Cache key "family|b|i" → resolved font + which styles it actually carries (so callers can apply faux
 // bold/italic). A null font means "tried, unavailable" → use default. Cached to avoid per-frame disk I/O.
 struct CachedFont {
@@ -204,6 +205,16 @@ void SetToolspace(ImFont* f) {
 
 ImFont* Toolspace() {
   return g_toolspace ? g_toolspace : g_default;
+}
+
+void SetBillboard(ImFont* f) {
+  g_billboard = f;
+}
+
+ImFont* Billboard() {
+  if (g_billboard)
+    return g_billboard;
+  return Toolspace();
 }
 
 }  // namespace FontReg

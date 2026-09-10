@@ -36973,6 +36973,24 @@ bool LoadApplicationFont() {
       break;
   }
   FontReg::SetToolspace(tsFont != nullptr ? tsFont : loaded);
+
+  // What's New billboard: Segoe UI (regular) — readable product-announcement face; Semilight fallback.
+  ImFontConfig bbCfg;
+  bbCfg.OversampleH = 3;
+  bbCfg.OversampleV = 2;
+  bbCfg.PixelSnapH = true;
+  const char* bbCandidates[] = {
+      "C:/Windows/Fonts/segoeui.ttf",
+      "C:/Windows/Fonts/segoeuisl.ttf",
+      "C:/Windows/Fonts/calibri.ttf",
+  };
+  ImFont* bbFont = nullptr;
+  for (const char* path : bbCandidates) {
+    bbFont = io.Fonts->AddFontFromFileTTF(path, 20.0f, &bbCfg);
+    if (bbFont)
+      break;
+  }
+  FontReg::SetBillboard(bbFont != nullptr ? bbFont : (tsFont != nullptr ? tsFont : loaded));
   return true;
 }
 

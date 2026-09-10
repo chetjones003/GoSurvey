@@ -656,38 +656,58 @@ endif()
 if(NOT EXISTS "${GOSURVEY_SPLASH_BG}")
   message(FATAL_ERROR "REQ-093: resources/splash-bg.png is required (startup splash backdrop).")
 endif()
-add_custom_command(TARGET GoSurvey POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
+# Stage bundled resources beside the executable. A POST_BUILD hook only runs when GoSurvey is
+# relinked, so changing splash-bg.png (or any other resource) left a stale copy in build/resources/
+# until a code change forced a rebuild. This stamp target re-runs whenever any listed resource
+# changes, even on an incremental build that skips linking.
+file(GLOB_RECURSE GOSURVEY_RESOURCE_DIR_FILES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/*"
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches/*"
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks/*")
+set(GOSURVEY_BUNDLED_RESOURCE_FILES
+  "${GOSURVEY_DEFAULT_TEMPLATE}"
+  "${GOSURVEY_WHATS_NEW_MD}"
+  "${GOSURVEY_WHATS_NEW_BG}"
+  "${GOSURVEY_SPLASH_BG}"
+  ${GOSURVEY_RESOURCE_DIR_FILES})
+set(_GOSURVEY_RESOURCE_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_resources.stamp")
+add_custom_command(
+  OUTPUT "${_GOSURVEY_RESOURCE_STAMP}"
+  DEPENDS ${GOSURVEY_BUNDLED_RESOURCE_FILES}
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/resources"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/resources/layouts"
   # `copy_directory` never removes files that were deleted or renamed in the source tree, so a
   # rebuild after dropping an old icon left the stale copy beside the exe (and in the installer
   # payload) forever. Wipe the mirrored dirs first so the deploy is an exact copy of source.
   COMMAND ${CMAKE_COMMAND} -E rm -rf
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/icons"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/hatches"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/blocks"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gst"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/default-template.gst"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_WHATS_NEW_MD}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new.md"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new.md"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_WHATS_NEW_BG}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new-bg.png"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_SPLASH_BG}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/splash-bg.png"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/splash-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/icons"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/hatches"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
-  COMMENT "Copy resources beside executable")
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/blocks"
+  COMMAND ${CMAKE_COMMAND} -E touch "${_GOSURVEY_RESOURCE_STAMP}"
+  COMMENT "Stage bundled resources beside GoSurvey executable")
+add_custom_target(gosurvey_stage_resources DEPENDS "${_GOSURVEY_RESOURCE_STAMP}")
+add_dependencies(GoSurvey gosurvey_stage_resources)
 
 # Copy pdfium.dll next to the executable so it can be found at runtime.
 if(WIN32)

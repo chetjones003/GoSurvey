@@ -23,7 +23,9 @@ namespace {
 // Same steel-blue accent the Start screen uses, so launch → landing reads as one product (REQ-308).
 constexpr ImVec4 kAccent  {0.26f, 0.56f, 0.86f, 1.f};
 constexpr ImVec4 kAccentHi{0.34f, 0.64f, 0.95f, 1.f};
-constexpr float kBackdropAlpha = 0.36f;  // faint watermark; matches What's New billboard
+// Dark slate tint (not white): ImGui modulates texture RGB by this color, so a light gradient
+// behind the card no longer washes a low-alpha white tint out to milky gray.
+constexpr ImVec4 kBackdropTint {0.25f, 0.30f, 0.40f, 0.80f};
 
 ImVec4 MixV(const ImVec4& a, const ImVec4& b, float t) {
   return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1.f};
@@ -90,7 +92,7 @@ void DrawFaintBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding) {
     uv1.y = 0.5f + visible * 0.5f;
   }
 
-  const ImU32 tint = ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, kBackdropAlpha));
+  const ImU32 tint = ImGui::GetColorU32(kBackdropTint);
   const ImTextureRef tex(static_cast<ImTextureID>(static_cast<std::intptr_t>(bg.tex)));
   if (rounding >= 0.5f)
     dl->AddImageRounded(tex, a, b, uv0, uv1, tint, rounding, ImDrawFlags_RoundCornersAll);

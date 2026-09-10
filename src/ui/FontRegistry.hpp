@@ -23,4 +23,8 @@ void SetDefault(ImFont* f);
 void SetToolspace(ImFont* f);
 ImFont* Toolspace();
 
+/// What's New / billboard body (Segoe UI Semilight). Falls back to Toolspace then default.
+void SetBillboard(ImFont* f);
+ImFont* Billboard();
+
 }  // namespace FontReg
