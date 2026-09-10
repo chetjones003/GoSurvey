@@ -442,3 +442,48 @@ Full suite **1458/1458**.
 offers (`Object/Zaxis/View/XY/YZ/ZX/3points`). This delivers `3points` — their default and the only
 one the screenshots exercise — plus `UCS`, which is ours. The rest are a menu on top of a working
 command rather than a change to it.
+
+---
+
+## 12. The selection prompt had nowhere for its clicks to go (2026-09-10)
+
+Reported immediately after §11 shipped: *"on my end there is no object select for the section
+command"* — with a screenshot showing the prompt drawn correctly, *"SECTION — select solids, Enter
+when done. ESC cancels."*, and clicking the box doing nothing.
+
+**§11 fixed half the problem.** The command's state machine gained a `SelectSolids` phase and its
+prompt appeared — but `ViewportPickPolicy.hpp` decides what a click in the model viewport MEANS, and
+it had no case for `K::Section`. So the click routed to `Ignore` and was discarded. A prompt that
+asks for a selection while every click is thrown away is indistinguishable, from the user's side,
+from the refusal it replaced.
+
+**This file's own header describes the bug it just suffered.** `ViewportPickPolicyTests.cpp` opens
+with: *"A command missing from that whitelist did not error, did not log, and did not draw — it
+silently discarded every click and appeared to hang on its first prompt. It happened to RECT. Then
+to FEATURELINE. Then, at once, to all five of REQ-103's MIRROR, LENGTHEN, EXTEND, BREAK and
+STRETCH."* SECTION is the sixth. The two guards that file names are an exhaustive `switch` with no
+`default:` and a list of every pick-driven command — the switch caught nothing because `K::Section`
+compiles fine when the case returns from the enclosing function's fallthrough, and **the list was
+never extended**.
+
+Fixed in two places, both of which SLICE already occupied one line above:
+
+- `ViewportClickRouteFor` gains a `K::Section` case: `SelectSolids` → `SelectionAccumulate`, the
+  three point phases → `SnappedPointPick`.
+- `ViewportIsObjectSelectionStep` gains SECTION's selection phase. Omitting it is the ALIGN accident
+  recorded in that function's own comment — a selection step whose fence corners come from SNAPPED
+  coordinates while its siblings use unsnapped ones.
+
+**Tests.** `K::Section` added to *"Every pick-driven command is routed by the model-space viewport"*
+— the list whose omission caused this — plus a dedicated case asserting the route for all four
+phases and the selection-step predicate. **Proven to bite:** routing `SelectSolids` to `Ignore`
+fails it.
+
+**The lesson worth keeping, and it is not "add SECTION to the list".** A transcript cannot catch
+this class of bug at all: the driver's `PICK` verb calls `SubmitViewportPick` directly and never
+touches the routing layer — which is exactly why `req337-section-clip.txt` and the extended
+`req335-section.txt` were both green while the command was unusable. **A command with a selection
+phase needs a `ViewportPickPolicyTests` entry, not just a transcript.** The transcripts test what
+the command does with input; only that file tests whether input reaches it.
+
+Full suite **1470/1470**.
