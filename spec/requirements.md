@@ -8115,6 +8115,20 @@ capability that does not exist. They are recorded here rather than quietly dropp
   is made. That is the whole distinction from `SECTION`, which asks the same plane the same question
   and answers it with a polyline in the drawing.
 
+  **A bare `SECTIONCLIP` reports the current state and then WAITS**, with `[ON/OFF/FLIP]` shown as
+  clickable options in the command line — the same bracketed-keyword form REQ-040 already uses for
+  `[A]`, `[2P]` and `[CLOSE]`. The waiting state is what makes the options clickable at all: a
+  bracketed option draws as a link that submits its own keyword as the next line of input, and only
+  a command that is waiting can consume that. A one-shot command printing `ON | OFF | FLIP` as plain
+  text would offer nothing to click.
+
+  Answering closes the prompt; a bare Enter accepts the current state unchanged, as `TRIMSTATE`'s
+  system-variable prompt does; ESC cancels. **A refused answer leaves the prompt open** rather than
+  dropping to idle — the options are still on screen and still the quickest way to answer, so a typo
+  must not take away the thing the user was reaching for. The inline forms (`SECTIONCLIP ON`,
+  `SECTIONCLIP 12`) never enter the prompt: someone who already knows what they want is not made to
+  answer a question.
+
   **It is not persisted to the drawing.** Unlike REQ-309's projection, which is a property of a
   saved view, this is an inspection mode: opening a file to find half of it invisible, with the
   reason three menus away, is the failure that choice avoids.
@@ -8145,6 +8159,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - **panning the view does not move the clip** — the plane is fixed to the drawing, not the screen;
   - `ON`, `OFF`, `FLIP` and an offset are each accepted, a bare command reports the current state,
     and every refusal leaves the previous state intact (REQ-201);
+  - a bare `SECTIONCLIP` opens a prompt whose `ON` / `OFF` / `FLIP` options are **clickable** and
+    reach the command when clicked; a bare Enter closes it unchanged, ESC cancels, and a refused
+    answer leaves it open;
+  - `0` and `1` are read as **offsets, not as ON/OFF** — this command's argument is a distance;
   - the clip does not survive into a new drawing;
   - the interface is unaffected while the clip is on.
 - Owner-layer: Render (`src/render/SectionClip.hpp`, `ViewportRenderer`), Commands

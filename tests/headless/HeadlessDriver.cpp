@@ -1878,6 +1878,25 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              sourceLine);
         return false;
       }
+    } else if (what == "ACTIVE") {
+      // EXPECT ACTIVE <KIND> — which command is currently running, by the same name
+      // `AppCommandState::KindName` reports (NONE when idle). General-purpose: any transcript
+      // driving a command that PROMPTS needs to assert that the prompt actually opened and actually
+      // closed, and neither is visible in the log — a command that never opened its prompt and one
+      // that opened and closed it look identical from the outside.
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      // `KindName` has no case for `Kind::None` and returns an empty string for it. Mapped here
+      // rather than in production: that return value is already formatted into driver messages and
+      // possibly elsewhere, and a test verb is not a reason to change what the app reports.
+      std::string got = AppCommandState::KindName(run.st.active);
+      if (got.empty())
+        got = "NONE";
+      if (got != wantS) {
+        Fail(run, "expect", "EXPECT ACTIVE: is " + got + ", expected " + wantS, sourceLine);
+        return false;
+      }
     } else if (what == "SECTIONCLIP") {
       // EXPECT SECTIONCLIP <ON|OFF> — the LIVE section clip (REQ-336). Same reason as EXPECT
       // CROSSHAIR3D: EXPECT LOG matches the whole accumulated log, so once a toggle has reported

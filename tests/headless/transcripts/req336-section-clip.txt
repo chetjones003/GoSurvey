@@ -23,7 +23,76 @@ NEW
 
 EXPECT SECTIONCLIP OFF
 CMD SECTIONCLIP
-EXPECT LOG "Section clip = OFF. Usage: SECTIONCLIP ON | OFF | FLIP | <offset along the UCS Z>."
+EXPECT LOG "Section clip = OFF."
+
+# --- the bare command WAITS, so its keywords can be clicked -----------------------------------
+#
+# `SECTIONCLIP` on its own reports and then holds an open prompt. That is not decoration: a
+# bracketed option in the command hint draws as a LINK, and clicking it submits that option's own
+# shortcut as the next line of input. Nothing can consume that submission unless a command is
+# waiting for it — a one-shot command would render three links that submit `on`, `off` and `flip`
+# into nothing.
+#
+# So the transcript answers the prompt with exactly the tokens the links submit. The click path and
+# the typed path are the same path, which is what makes typing them here real coverage of clicking.
+
+CMD SECTIONCLIP
+EXPECT ACTIVE SECTIONCLIP
+CMD on
+EXPECT SECTIONCLIP ON
+EXPECT ACTIVE NONE
+
+CMD SECTIONCLIP
+CMD flip
+EXPECT SECTIONCLIPFLIP ON
+EXPECT ACTIVE NONE
+
+CMD SECTIONCLIP
+CMD off
+EXPECT SECTIONCLIP OFF
+EXPECT ACTIVE NONE
+
+# An offset answers the same prompt.
+CMD SECTIONCLIP
+CMD 7.5
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 7.5
+EXPECT ACTIVE NONE
+
+# A bare Enter leaves everything alone and closes the prompt, as TRIMSTATE's does.
+CMD SECTIONCLIP
+EXPECT ACTIVE SECTIONCLIP
+CMD
+EXPECT ACTIVE NONE
+EXPECT SECTIONCLIPOFFSET 7.5
+EXPECT SECTIONCLIP ON
+
+# A bad answer keeps the prompt OPEN — the links are still on screen and still the quickest way to
+# answer, so a typo must not throw the user out of the command.
+CMD SECTIONCLIP
+CMD sideways
+EXPECT ACTIVE SECTIONCLIP
+CMD 3
+EXPECT ACTIVE NONE
+EXPECT SECTIONCLIPOFFSET 3
+
+# ESC cancels and changes nothing.
+CMD SECTIONCLIP
+EXPECT ACTIVE SECTIONCLIP
+ESC
+EXPECT ACTIVE NONE
+EXPECT SECTIONCLIPOFFSET 3
+EXPECT SECTIONCLIP ON
+
+# Reset for the sections below, which assume a FRESH clip — all three fields, not just the toggle.
+# The flip above is the one that bites: left on, every later report reads "..., flipped" and the
+# EXPECT LOG lines below stop matching for a reason that has nothing to do with what they test.
+CMD SECTIONCLIP FLIP
+CMD SECTIONCLIP 0
+CMD SECTIONCLIP OFF
+EXPECT SECTIONCLIP OFF
+EXPECT SECTIONCLIPOFFSET 0
+EXPECT SECTIONCLIPFLIP OFF
 
 # --- ON / OFF ------------------------------------------------------------------------------------
 

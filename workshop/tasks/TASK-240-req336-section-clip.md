@@ -259,3 +259,70 @@ origin). Both are noted here so the phase's own record shows where they stand.
 
 Moments of inertia and principal axes are **out of #149 by decision** (2026-09-09) and carried by
 issue #460, which depends on this phase.
+
+---
+
+## 9. Increment: the keywords are CLICKABLE (2026-09-10, user request)
+
+Asked for after the first GUI pass: make `ON`, `OFF` and `FLIP` selectable from the command line
+rather than typed. Folded into this task rather than filed as a follow-up, because REQ-336 has not
+merged yet — there is no accepted requirement to amend, only a draft to finish.
+
+**The capability already existed and was not written for this.** `cmdbar::ParsePromptSegments` +
+`LayoutCommandHint` (REQ-040) already turn a bracketed keyword into a clickable link, which is how
+`[A]`, `[2P]` and `[CLOSE]` work in LINE and POLYLINE. Checking for that first is what kept this to
+a hint string and a command state instead of a new UI mechanism.
+
+**Why it needed a command STATE and not just brackets.** A link submits its own keyword as the next
+line of input. Nothing can consume that unless a command is waiting for it — a one-shot `SECTIONCLIP`
+would have rendered three links submitting `on`, `off` and `flip` into the top-level dispatcher,
+where they mean nothing. So bare `SECTIONCLIP` now reports and holds `Kind::SectionClip` open, and
+the same `ApplySectionClipValue` serves the typed and the clicked path. Five touchpoints, all
+following the shape `Kind::TrimState` already sets: the enum value, `StartSectionClipCommand`, the
+ESC branch, the input consumer, and the hint in `CommandInputHint`.
+
+**The keywords are written all-caps deliberately.** `VariantShortcut` takes a variant's leading
+uppercase run, so `[ON/OFF/FLIP]` submits `on`, `off` and `flip` in full — exactly the tokens the
+parser already accepted. The codebase's mixed-case convention (`DElta`, `DYnamic`) would submit `of`
+and `fl`, which it does not.
+
+**A bare Enter is handled in the global `line.empty()` block, not in the command's own branch.** That
+block consumes every blank line before the per-command branches run, and each prompting command that
+wants a meaningful Enter handles it there with a comment saying why. The command's own branch
+therefore carries no empty check — a dead one that looked live would invite the next reader to
+maintain two answers to one question. (`Kind::TrimState`'s branch has exactly that dead check.)
+
+### Verified by clicking, not by screenshot
+
+`--devshell-run req336-section-clip-links` opens the prompt and **clicks each of the three links**,
+asserting the state changed and the prompt closed. **Success.** That covers the half a transcript
+structurally cannot: typing `on` proves the receiving end works and says nothing about whether a link
+exists to click. A screenshot could not have shown it either — the links are drawn in the command
+bar, which is ImGui, not in the viewport framebuffer the other GUI test captures.
+
+**Two things had to be found out rather than assumed to get there:**
+
+- The links are **not addressable by path**. `ctx->ItemClick("ON")` fails with *"Unable to locate item
+  '##CommandBarFloat/ON'"* — but a `GatherItems` dump of that same window lists `ON`, `OFF` and
+  `FLIP` plainly. They are real items sitting inside the bar's own ID scope rather than at the window
+  root. `ClickCommandBarLink` gathers and matches the label, then clicks by ID. Worth keeping: the
+  path failure looks exactly like "the feature is missing", and it is not.
+- Dumping the item list was what settled it. Two rounds of reading the draw code had produced only
+  plausible theories (a stale window, a clipped item, the wrong label); one dump answered it.
+
+### Also in this increment
+
+- **`EXPECT ACTIVE <KIND>`**, a new transcript verb reading `AppCommandState::KindName`. General
+  rather than specific to this command: any transcript driving a prompting command needs to assert
+  the prompt opened and later closed, and neither is visible in the log — a command that never
+  prompted and one that prompted and finished look identical from outside. `Kind::None` has no case
+  in `KindName` and returns an empty string; that is mapped to `NONE` in the driver rather than in
+  production, since the app's own reporting should not change to suit a test verb.
+- The transcript gains the prompt cases: each keyword answered as the link submits it, an offset
+  answer, bare Enter, ESC, and a bad answer leaving the prompt open. **143 steps.**
+- A transcript trap worth recording: the new block left `flip` ON, and every later `EXPECT LOG` in
+  the file then failed because the report reads "..., flipped" — a failure with nothing to do with
+  what those lines test. The reset between sections now restores **all three** fields, not just the
+  toggle.
+
+Full suite **1452/1452**; both devshell GUI tests green.

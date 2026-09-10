@@ -1511,6 +1511,13 @@ struct AppCommandState {
     Rect,
     /// TRIMSTATE: system-variable prompt waiting for a new value (REQ-056).
     TrimState,
+    /// SECTIONCLIP: keyword prompt waiting for ON / OFF / FLIP or an offset (REQ-336).
+    ///
+    /// The prompt exists so the three keywords can be CLICKED rather than typed: a bracketed
+    /// option in `CommandInputHint` becomes a link that submits its own shortcut, and that
+    /// submission is only meaningful while a command is waiting to consume it. Without a waiting
+    /// state, clicking `ON` would submit `on` as a top-level command, which is nothing.
+    SectionClip,
     Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
     /// ORBIT: interactive free orbit — left-drag tumbles the model view; Esc/Enter/right-click
     /// exits (REQ-084 (c)). Deliberately shaped like \c Kind::Pan, and reuses the same
@@ -1612,6 +1619,7 @@ struct AppCommandState {
     case Kind::VpThaw:        return "VPTHAW";
     case Kind::Rect:          return "RECT";
     case Kind::TrimState:     return "TRIMSTATE";
+    case Kind::SectionClip:   return "SECTIONCLIP";
     case Kind::Orbit:         return "ORBIT";
     case Kind::Ucs:           return "UCS";
     case Kind::Plan:          return "PLAN";

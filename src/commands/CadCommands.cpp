@@ -32573,6 +32573,23 @@ bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vec
   return true;
 }
 
+/// Bare `SECTIONCLIP` — report the current state, then WAIT, so the keywords can be clicked.
+///
+/// The waiting state is the whole point. A bracketed option in the command hint
+/// (`CommandInputHint`) draws as a link, and clicking it submits that option's shortcut as the next
+/// line of input — which only means anything if a command is waiting to consume it. A one-shot
+/// command that printed `ON | OFF | FLIP` and returned to idle would render three links that submit
+/// `on`, `off` and `flip` into nothing.
+///
+/// The inline forms (`SECTIONCLIP ON`, `SECTIONCLIP 12`) are untouched and never enter this state:
+/// a user who already knows what they want should not be made to answer a prompt.
+void StartSectionClipCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::SectionClip;
+  log.push_back(SectionClipReport(st));
+}
+
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper space: geometry + viewports
     const bool hadEntities = !st.selectedPaperEntities.empty();
@@ -33236,6 +33253,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("RECT canceled.");
   else if (st.active == AppCommandState::Kind::TrimState)
     log.push_back("TRIMSTATE unchanged (" + std::to_string(st.trimState) + ").");
+  else if (st.active == AppCommandState::Kind::SectionClip)
+    log.push_back("SECTIONCLIP canceled. " + SectionClipReport(st));
   else if (st.active == AppCommandState::Kind::Elev)
     log.push_back("Elevation unchanged.");
   else if (st.active == AppCommandState::Kind::Ucs)
@@ -33938,6 +33957,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandlePolysolidTextInput(line, st, log);
       return;
     }
+    // REQ-336 SECTIONCLIP: a bare Enter accepts the current state and closes the prompt, the way
+    // TRIMSTATE's system-variable prompt does. Handled HERE for the reason every note above gives —
+    // this block consumes a blank line and the Kind-keyed branch further down never sees one.
+    if (st.active == K::SectionClip) {
+      log.push_back(SectionClipReport(st));
+      st.active = K::None;
+      return;
+    }
     if (st.active == K::Pan) {
       // Enter (or right-click in Enter mode) exits PAN; Esc exits via CancelActiveCommand.
       st.active = K::None;
@@ -34481,8 +34508,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       if (!clipArg.empty()) {
         ApplySectionClipValue(st, clipArg, log);
       } else {
-        log.push_back(SectionClipReport(st) +
-                      " Usage: SECTIONCLIP ON | OFF | FLIP | <offset along the UCS Z>.");
+        // Bare form: report and WAIT, so the keywords in the hint are clickable. The usage text
+        // that used to live here is now the hint itself, where the options are links.
+        StartSectionClipCommand(st, log);
       }
       return;
     }
@@ -35029,6 +35057,22 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     if (ApplyTrimStateValue(st, tv, log))
+      st.active = AppCommandState::Kind::None;
+    return;
+  }
+
+  // SECTIONCLIP's keyword prompt (REQ-336). Reached by a typed answer OR by clicking one of the
+  // `[ON/OFF/FLIP]` links in the hint, which submit `on`, `off` and `flip` — the same three tokens
+  // `ApplySectionClipValue` already accepts, so the click path and the typed path are one path.
+  if (st.active == AppCommandState::Kind::SectionClip) {
+    // A bare Enter never arrives here — the `line.empty()` block far above consumes every blank
+    // line, and that is where this command's Enter is handled. No empty check, deliberately: one
+    // that looked live here would be dead code inviting the next reader to maintain two answers.
+    const std::string scIn = StringUtil::trimCopy(line);
+    // A refusal keeps the prompt OPEN rather than dropping to idle: the links are still on screen
+    // and still the fastest way to answer, so throwing the user out for a typo would take away the
+    // thing they were most likely reaching for.
+    if (ApplySectionClipValue(st, scIn, log))
       st.active = AppCommandState::Kind::None;
     return;
   }

@@ -8994,6 +8994,13 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   }
   if (cmd.active == AppCommandState::Kind::TrimState)
     return "TRIMSTATE — 0 = draw a line to trim, 1 = pick cutting edges:";
+  // REQ-336. The three keywords are bracketed so they draw as LINKS: clicking one submits its own
+  // shortcut, which `Kind::SectionClip` is waiting to consume. Written all-caps deliberately —
+  // `VariantShortcut` takes the leading uppercase run, so `ON`/`OFF`/`FLIP` submit `on`/`off`/`flip`
+  // in full, which is exactly what the parser accepts. A mixed-case spelling like `OFf` would
+  // submit `of`, which it does not.
+  if (cmd.active == AppCommandState::Kind::SectionClip)
+    return "SECTIONCLIP — [ON/OFF/FLIP] or an offset along the UCS Z:";
   if (cmd.active == AppCommandState::Kind::Arc) {
     switch (cmd.arcPhase) {
     case AppCommandState::ArcPhase::WaitStart:
