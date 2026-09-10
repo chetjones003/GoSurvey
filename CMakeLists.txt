@@ -857,7 +857,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/UcsTests.cpp
     tests/Ray3dTests.cpp
     tests/CameraTests.cpp
-    # REQ-336 live section clip (GitHub #149 acceptance 6). Header-only and pure for the same reason
+    # REQ-337 live section clip (GitHub #149 acceptance 6). Header-only and pure for the same reason
     # Camera is, and for one more: the plane the shader receives is NOT in world coordinates, and a
     # version that forgets that is exact at the origin and 2,196,000 ft out at state-plane
     # coordinates. That cannot be checked by looking at a window.

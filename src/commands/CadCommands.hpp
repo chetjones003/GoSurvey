@@ -1511,7 +1511,7 @@ struct AppCommandState {
     Rect,
     /// TRIMSTATE: system-variable prompt waiting for a new value (REQ-056).
     TrimState,
-    /// SECTIONCLIP: keyword prompt waiting for ON / OFF / FLIP or an offset (REQ-336).
+    /// SECTIONCLIP: keyword prompt waiting for ON / OFF / FLIP or an offset (REQ-337).
     ///
     /// The prompt exists so the three keywords can be CLICKED rather than typed: a bracketed
     /// option in `CommandInputHint` becomes a link that submits its own shortcut, and that
@@ -3644,7 +3644,7 @@ struct AppCommandState {
   /// UCS. **Off by default** — on, the cursor changes colour and orientation, and a display change
   /// no one asked for is the one thing REQ-064 was careful to avoid when it added visual styles.
   bool viewportCrosshair3d = false;
-  /// Live section clipping (REQ-336 / ADR-056, GitHub issue #149 acceptance 6): hide everything on
+  /// Live section clipping (REQ-337 / ADR-057, GitHub issue #149 acceptance 6): hide everything on
   /// the far side of a plane so the inside of a model can be looked at, updating as the plane moves.
   ///
   /// **The plane is the active UCS plane**, slid along its own Z by \ref viewportSectionClipOffset —
@@ -3653,7 +3653,7 @@ struct AppCommandState {
   ///
   /// **Deliberately NOT persisted to `.gs`**, unlike \ref viewportProjection which sits beside a
   /// named view. This is an inspection mode, not a property of the drawing: opening a file to find
-  /// half of it invisible, with the reason three menus away, is the failure this avoids. REQ-336
+  /// half of it invisible, with the reason three menus away, is the failure this avoids. REQ-337
   /// records persistence as a possible increment rather than an oversight.
   bool viewportSectionClip = false;
   /// Offset of the clip plane from the UCS origin, along the UCS Z, in drawing units.

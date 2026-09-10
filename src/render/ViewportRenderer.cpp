@@ -19,7 +19,7 @@
 
 namespace {
 
-// REQ-336 / ADR-056 — the live section clip.
+// REQ-337 / ADR-057 — the live section clip.
 //
 // Every vertex shader below that draws model geometry carries the same two added lines: a
 // `uClipPlane` uniform and one write to `gl_ClipDistance[0]`. The plane is a UNIFORM and not a
@@ -1164,7 +1164,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   float mvp[16];
   MulMat4(projRot, model, mvp);
 
-  // --- REQ-336 / ADR-056: the live section clip ---------------------------------------------------
+  // --- REQ-337 / ADR-057: the live section clip ---------------------------------------------------
   //
   // Rebased onto the view anchor HERE, where the anchor is known, and set on every program that
   // draws model geometry once per frame. Uniforms are per-program state that survives until the
@@ -1291,11 +1291,11 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
   // --- Grid: centered on view, step scales with zoom (stable in world space) ---
   //
-  // REQ-336: the grid is the one thing in the geometry region that does NOT clip. It is a drafting
+  // REQ-337: the grid is the one thing in the geometry region that does NOT clip. It is a drafting
   // aid drawn ON the UCS plane, and the clip plane IS the UCS plane offset along its own normal —
   // so at offset 0 the two are coincident and clipping the grid by itself gives z-fighting and a
   // half-vanished aid. An aid that disappears where you are working tells you nothing. Stated as a
-  // scope boundary in REQ-336 rather than left as an accident of pass ordering.
+  // scope boundary in REQ-337 rather than left as an accident of pass ordering.
   if (showGrid) {
     glDisable(GL_CLIP_DISTANCE0);
     auto niceStep = [](float worldSpan) -> float {
@@ -1461,7 +1461,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glDrawArrays(GL_LINES, 0, gridVertexCount_);
     glDisable(GL_BLEND);
     glBindVertexArray(0);
-    clipForGeometry();  // REQ-336: back on for the model geometry below
+    clipForGeometry();  // REQ-337: back on for the model geometry below
   }
 
   // --- Imported meshes (REQ-063) -----------------------------------------------------------------
@@ -2227,7 +2227,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // once meshes land (REQ-063), when there will be real surfaces to hide behind.
   // ============================================================================================
   depthForOverlay();
-  clipForOverlay();  // REQ-336: everything from here down is UI, and UI is never clipped away
+  clipForOverlay();  // REQ-337: everything from here down is UI, and UI is never clipped away
 
   // --- Hover highlight (subtle blue stroke drawn before selection so selection always wins) ---
   if (hoverLines && !hoverLines->empty() && hoverLines->size() % 6 == 0) {
@@ -2558,7 +2558,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // handle hidden behind the geometry it manipulates is not a handle. Never depth-tested, for the
   // same reason.
   //
-  // --- REQ-336: the section-clip plane indicator -------------------------------------------------
+  // --- REQ-337: the section-clip plane indicator -------------------------------------------------
   //
   // Drawn in the OVERLAY pass, which means unclipped — and that is not a detail. The rectangle lies
   // exactly ON the clip plane, so a clipped copy of it would be cut by itself: half the driver
@@ -2664,7 +2664,7 @@ finish_render:
   glBindVertexArray(0);
   glUseProgram(0);
   glDepthMask(GL_TRUE);
-  // REQ-336: the clip must not outlive this call. ImGui draws the whole UI immediately after with
+  // REQ-337: the clip must not outlive this call. ImGui draws the whole UI immediately after with
   // its own shaders, which do not write `gl_ClipDistance` — and a shader that leaves it unwritten
   // while GL_CLIP_DISTANCE0 is enabled has UNDEFINED clip distances, so leaving this on can delete
   // arbitrary parts of the interface. Unconditional, and outside the geometry block so the

@@ -5,7 +5,7 @@
 #include "util/ray3d.hpp"
 #include "util/ucs.hpp"
 
-/// The live section clip plane (REQ-336 / ADR-056, GitHub issue #149 acceptance 6).
+/// The live section clip plane (REQ-337 / ADR-057, GitHub issue #149 acceptance 6).
 ///
 /// **Header-only and GL-free, for the reason `Camera.hpp` gives for the same choice**: the plane
 /// arithmetic is where this feature can silently go wrong, and it must be unit-testable without a
@@ -34,7 +34,7 @@ struct SectionClipPlane {
   }
 };
 
-/// Build the clip plane from the active UCS (REQ-336).
+/// Build the clip plane from the active UCS (REQ-337).
 ///
 /// **The plane IS the active UCS plane**, offset along its own Z — the same decision `SECTION`
 /// made (D-2026-09-09-i) and for the same reason: `ucs::Ucs` is this project's plane abstraction
@@ -95,7 +95,7 @@ inline void SectionClipToShaderVec4(const SectionClipPlane& p, double anchorX, d
   out4[3] = static_cast<float>(p.c - p.nx * anchorX - p.ny * anchorY);
 }
 
-/// The four corners of the rectangle drawn to SHOW the user where the clip plane is (REQ-336).
+/// The four corners of the rectangle drawn to SHOW the user where the clip plane is (REQ-337).
 ///
 /// The plane itself is infinite and invisible; this is the finite patch of it that gets drawn.
 /// Without it the command has no visible effect at all in the view a user starts in: a level cut

@@ -101,7 +101,7 @@ bool CadLogHas(std::string_view needle)
   return DevShell_CommandLogContains(needle);
 }
 
-/// Click a clickable prompt option in the command bar by its visible text (REQ-040 / REQ-336).
+/// Click a clickable prompt option in the command bar by its visible text (REQ-040 / REQ-337).
 ///
 /// By ID rather than by path, and the reason is worth keeping: the option links ARE ordinary ImGui
 /// items — a gather of the command bar lists them as `ON`, `OFF`, `FLIP` — but they are not
@@ -244,13 +244,13 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   };
 
 
-  // --- REQ-336 live section clip, driven through the REAL GUI (TASK-240) -------------------------
+  // --- REQ-337 live section clip, driven through the REAL GUI (TASK-248) -------------------------
   //
   // GitHub #149 acceptance 6 is the one criterion in the whole phase that is about PIXELS, and two
   // of its failure modes cannot be reached anywhere else:
   //
   //   * whether the clip actually removes geometry from the screen. `SectionClipTests` proves the
-  //     plane arithmetic and `headless.req336-section-clip` proves the command surface, but neither
+  //     plane arithmetic and `headless.req337-section-clip` proves the command surface, but neither
   //     has a GL context, so neither can see a single pixel disappear.
   //   * whether the clip STAYS in the viewport. `gl_ClipDistance` is global GL state, and ImGui
   //     draws the entire interface immediately after `RenderScene` with shaders that never write
@@ -262,7 +262,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   // The screenshots are the evidence for the first; the test surviving to its own end — every
   // `SubmitCad` after the clip is on still finding its widgets and the log still readable — is the
   // assertion for the second.
-  // --- REQ-336: the ON / OFF / FLIP keywords are CLICKABLE (TASK-240 increment) ------------------
+  // --- REQ-337: the ON / OFF / FLIP keywords are CLICKABLE (TASK-248 increment) ------------------
   //
   // The whole point of the prompt is that these three can be clicked instead of typed, and that
   // cannot be checked anywhere but the real GUI: the transcript can only type the tokens the links
@@ -272,13 +272,13 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   //
   // So the test CLICKS them by name. That covers both halves at once: the link exists as a real
   // ImGui item with that label, and clicking it reaches the command.
-  // --- REQ-336 REPRO: what a user actually sees, with nothing set up for them -------------------
+  // --- REQ-337 REPRO: what a user actually sees, with nothing set up for them -------------------
   //
   // The other GUI test forces `VISUALSTYLE SHADED` and an orbited camera before it clips anything.
   // A user typing SECTIONCLIP on a fresh box has neither, and reported the feature as not working.
   // This captures the DEFAULT path, one frame per step, so the difference can be looked at rather
   // than guessed at.
-  ImGuiTest* sclipRepro = IM_REGISTER_TEST(engine, "gosurvey", "req336-section-clip-repro");
+  ImGuiTest* sclipRepro = IM_REGISTER_TEST(engine, "gosurvey", "req337-section-clip-repro");
   sclipRepro->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
     if (s_cmd->activeDrawingIdx == 0) {
@@ -329,7 +329,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
-  ImGuiTest* sclipLinks = IM_REGISTER_TEST(engine, "gosurvey", "req336-section-clip-links");
+  ImGuiTest* sclipLinks = IM_REGISTER_TEST(engine, "gosurvey", "req337-section-clip-links");
   sclipLinks->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
     if (s_cmd->activeDrawingIdx == 0) {
@@ -388,7 +388,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
-  ImGuiTest* sclip = IM_REGISTER_TEST(engine, "gosurvey", "req336-section-clip-viewport");
+  ImGuiTest* sclip = IM_REGISTER_TEST(engine, "gosurvey", "req337-section-clip-viewport");
   sclip->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
 

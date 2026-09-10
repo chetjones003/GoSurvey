@@ -1329,13 +1329,13 @@ int main()
     tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
     tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
     tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
-    // REQ-336 — the live section clip. Derived from the ACTIVE UCS every frame rather than stored
+    // REQ-337 — the live section clip. Derived from the ACTIVE UCS every frame rather than stored
     // as a plane, which is what makes it track the UCS: move or turn the work plane and the cut
     // follows on the next frame, with no command to re-run and no geometry rebuilt.
     if (cmd.viewportSectionClip) {
       tuning.sectionClip = SectionClipFromUcs(CadActiveUcsStorage(cmd), cmd.viewportSectionClipOffset,
                                               cmd.viewportSectionClipFlip);
-      // REQ-336: and the rectangle that SHOWS where it cuts. Sized here rather than in the renderer
+      // REQ-337: and the rectangle that SHOWS where it cuts. Sized here rather than in the renderer
       // because this is the side that knows how big the drawing is — the renderer is handed four
       // corners and draws them.
       //
@@ -1544,7 +1544,7 @@ int main()
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
 #ifdef GOSURVEY_DEVELOPER_SHELL
-    // REQ-161 (TASK-240): a devshell test capturing the VIEWPORT, serviced here because this is the
+    // REQ-161 (TASK-248): a devshell test capturing the VIEWPORT, serviced here because this is the
     // one point in the frame where the renderer has just drawn and its framebuffer still holds the
     // image.
     //

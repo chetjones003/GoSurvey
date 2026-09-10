@@ -3884,9 +3884,9 @@ volume-**weighted**, so a shell enclosing part of space twice makes it exactly a
 volume it is weighted by; a single face's area is a property of one bounded patch and stays well
 defined. The rule is the quantity's own nature, not consistency for its own sake.
 
-### ADR-056 — The section clip is a shader uniform, rebased onto the view anchor by the renderer   (2026-09-10, accepted)
+### ADR-057 — The section clip is a shader uniform, rebased onto the view anchor by the renderer   (2026-09-10, accepted)
 
-- **Status:** accepted (2026-09-10, D-2026-09-10-a, GitHub issue #149 acceptance 6). Backs REQ-336.
+- **Status:** accepted (2026-09-10, D-2026-09-10-e, GitHub issue #149 acceptance 6). Backs REQ-337.
 - **Context.** `#149` acceptance 6 asks that "section clipping updates live as the plane moves". No
   clip-plane machinery existed anywhere in `src/render/` — the whole directory is `Camera.hpp`,
   `ViewportProjection.hpp` and `ViewportRenderer.{hpp,cpp}` — so unlike the four criteria before it,
@@ -3943,7 +3943,7 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   `gl_ClipDistance[0]` unconditionally and the plane is *neutralised* to `(0,0,0,1)` when inactive,
   rather than the shaders branching or being permuted.
 
-  **(e) Increment 1 clips GL geometry only, and REQ-336 says so.** Dimensions, annotation text and
+  **(e) Increment 1 clips GL geometry only, and REQ-337 says so.** Dimensions, annotation text and
   line-pattern hatches are drawn by the ImGui overlay through `Camera::WorldToScreen`, not by the
   renderer, and no GPU clip plane can reach them. Three options were weighed: state the limit;
   clip those on the CPU at each `WorldToScreen` site; or move them into GL. The first was chosen —
@@ -3955,7 +3955,7 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   **(f) The cut is not capped, and that is deferred by name.** A clip plane removes fragments; it
   does not close the hole it leaves. With no face culling anywhere in the renderer, a clipped solid
   shows its interior surfaces rather than a cut face — measured, not assumed: the centre-pixel depth
-  moves by exactly the box's own depth extent when the near half is cut away. Capping is REQ-336
+  moves by exactly the box's own depth extent when the near half is cut away. Capping is REQ-337
   increment 2, and `brep::SectionLoop` (REQ-335, shipped in the previous slice) already returns
   precisely the cross-section geometry a cap needs.
 - **Consequences.** One uniform on four programs, one GL-free header (`src/render/SectionClip.hpp`)
