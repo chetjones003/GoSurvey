@@ -1878,6 +1878,66 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              sourceLine);
         return false;
       }
+    } else if (what == "SECTIONCLIP") {
+      // EXPECT SECTIONCLIP <ON|OFF> — the LIVE section clip (REQ-336). Same reason as EXPECT
+      // CROSSHAIR3D: EXPECT LOG matches the whole accumulated log, so once a toggle has reported
+      // any value it can no longer be used to assert the CURRENT one.
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      bool want = false;
+      if (wantS == "ON" || wantS == "1")
+        want = true;
+      else if (wantS == "OFF" || wantS == "0")
+        want = false;
+      else {
+        Fail(run, "parse", "EXPECT SECTIONCLIP needs ON or OFF", sourceLine);
+        return false;
+      }
+      if (run.st.viewportSectionClip != want) {
+        Fail(run, "expect",
+             std::string("EXPECT SECTIONCLIP: is ") + (run.st.viewportSectionClip ? "ON" : "OFF") +
+                 ", expected " + (want ? "ON" : "OFF"),
+             sourceLine);
+        return false;
+      }
+    } else if (what == "SECTIONCLIPOFFSET") {
+      // EXPECT SECTIONCLIPOFFSET <distance> — where the clip plane sits along the UCS Z (REQ-336).
+      // Compared at REQ-101's +/-0.002 ft, because this offset IS a coordinate the user typed.
+      std::istringstream is(arg);
+      double want = 0.0;
+      if (!(is >> want)) {
+        Fail(run, "parse", "EXPECT SECTIONCLIPOFFSET needs <distance>", sourceLine);
+        return false;
+      }
+      const double got = run.st.viewportSectionClipOffset;
+      if (std::fabs(got - want) > 0.002) {
+        // %.10g, not %.6g: this verb's tolerance is REQ-101's 0.002 ft, and at the magnitudes that
+        // matter here a 6-digit format prints BOTH sides of a real 0.0056 ft miss as "200000",
+        // which reads as a test failing against itself.
+        char buf[192];
+        std::snprintf(buf, sizeof(buf), "EXPECT SECTIONCLIPOFFSET: is %.10g, expected %.10g (differ by %.6g)",
+                      got, want, got - want);
+        Fail(run, "expect", buf, sourceLine);
+        return false;
+      }
+    } else if (what == "SECTIONCLIPFLIP") {
+      // EXPECT SECTIONCLIPFLIP <ON|OFF> — which half survives (REQ-336).
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      const bool want = (wantS == "ON" || wantS == "1");
+      if (wantS != "ON" && wantS != "1" && wantS != "OFF" && wantS != "0") {
+        Fail(run, "parse", "EXPECT SECTIONCLIPFLIP needs ON or OFF", sourceLine);
+        return false;
+      }
+      if (run.st.viewportSectionClipFlip != want) {
+        Fail(run, "expect",
+             std::string("EXPECT SECTIONCLIPFLIP: is ") + (run.st.viewportSectionClipFlip ? "ON" : "OFF") +
+                 ", expected " + (want ? "ON" : "OFF"),
+             sourceLine);
+        return false;
+      }
     } else if (what == "FOV") {
       // EXPECT FOV <degrees> — the LIVE field of view (REQ-309). Same reason as EXPECT PROJECTION.
       std::istringstream is(arg);

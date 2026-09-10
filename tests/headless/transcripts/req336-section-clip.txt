@@ -1,0 +1,177 @@
+# REQ-336 / ADR-056 (D-2026-09-10-a, TASK-240) — SECTIONCLIP, live section clipping.
+#
+# GitHub #149 (3D Phase 6 — Analysis) acceptance 6: "Section clipping updates live as the plane
+# moves." The LAST of #149's eight criteria.
+#
+# What a transcript can and cannot prove here, stated up front because it shapes the whole file:
+#
+#   CAN  — the command surface: report-or-set, every spelling, every refusal, and the state each
+#          one leaves behind; that the clip is a VIEW state, so it creates nothing, erases nothing
+#          and makes no undo entry; and — the criterion's own word — that moving the plane rebuilds
+#          NOTHING, asserted through SOLIDTESSGEN, the display-regeneration counter.
+#   CANNOT — that pixels disappear. There is no GL context here. The plane arithmetic that decides
+#          which pixels those are lives in `SectionClipTests` (`[sectionclip]`), which measures it
+#          at state-plane coordinates and across a pan, where a plausible wrong version fails.
+#
+# The state assertions use EXPECT SECTIONCLIP / SECTIONCLIPOFFSET / SECTIONCLIPFLIP rather than
+# EXPECT LOG, for the reason EXPECT PROJECTION exists: LOG matches the whole accumulated log, so
+# once a toggle has reported a value it can never again be used to assert the CURRENT one.
+
+NEW
+
+# --- it starts off, and says so ------------------------------------------------------------------
+
+EXPECT SECTIONCLIP OFF
+CMD SECTIONCLIP
+EXPECT LOG "Section clip = OFF. Usage: SECTIONCLIP ON | OFF | FLIP | <offset along the UCS Z>."
+
+# --- ON / OFF ------------------------------------------------------------------------------------
+
+CMD SECTIONCLIP ON
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 0
+EXPECT LOG "Section clip = ON at offset 0 along the UCS Z."
+
+CMD SECTIONCLIP OFF
+EXPECT SECTIONCLIP OFF
+
+# The short spelling and the third alias reach the same command.
+CMD SCLIP ON
+EXPECT SECTIONCLIP ON
+CMD CLIP OFF
+EXPECT SECTIONCLIP OFF
+
+# --- an offset turns it on, because asking for a cut means wanting to see it ----------------------
+
+CMD SECTIONCLIP 12.5
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 12.5
+EXPECT LOG "Section clip = ON at offset 12.5 along the UCS Z."
+
+# `OFFSET <n>` is the same request as a bare number.
+CMD SECTIONCLIP OFFSET -4
+EXPECT SECTIONCLIPOFFSET -4
+EXPECT SECTIONCLIP ON
+
+# A negative offset is a plane below the UCS, not a refusal.
+CMD SECTIONCLIP -0.002
+EXPECT SECTIONCLIPOFFSET -0.002
+
+# The offset is a coordinate the user typed, so it is parsed and stored as a DOUBLE. This value is
+# chosen to prove it: at 200,000 the spacing between adjacent floats is about 0.0156 ft, so a float
+# round trip lands 0.0056 ft away — outside REQ-101's +/-0.002, which is this verb's tolerance. The
+# line fails if anyone reintroduces a float on the way in.
+CMD SECTIONCLIP 200000.01
+EXPECT SECTIONCLIPOFFSET 200000.01
+
+# --- FLIP ----------------------------------------------------------------------------------------
+
+CMD SECTIONCLIP 5
+EXPECT SECTIONCLIPFLIP OFF
+CMD SECTIONCLIP FLIP
+EXPECT SECTIONCLIPFLIP ON
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 5
+EXPECT LOG "Section clip = ON at offset 5 along the UCS Z, flipped."
+
+# FLIP again returns it, and leaves the offset where it was.
+CMD SECTIONCLIP FLIP
+EXPECT SECTIONCLIPFLIP OFF
+EXPECT SECTIONCLIPOFFSET 5
+
+# FLIP from OFF turns the clip on: the user asked to see the other half, and a half is a visible
+# thing. Asserted rather than left to chance, because the alternative — flipping invisibly and
+# changing what a later ON means — is the kind of hidden state REQ-201 exists to prevent.
+CMD SECTIONCLIP OFF
+EXPECT SECTIONCLIP OFF
+CMD SECTIONCLIP FLIP
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFLIP ON
+CMD SECTIONCLIP FLIP
+
+# --- refusals: the previous state survives every one of them --------------------------------------
+
+CMD SECTIONCLIP 20
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 20
+
+CMD SECTIONCLIP sideways
+EXPECT LOG "SECTIONCLIP - enter ON, OFF, FLIP, or an offset distance along the UCS Z."
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 20
+
+CMD SECTIONCLIP nan
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 20
+
+CMD SECTIONCLIP OFFSET
+EXPECT SECTIONCLIPOFFSET 20
+
+# --- it is a VIEW state, not an edit --------------------------------------------------------------
+#
+# This is the half that separates SECTIONCLIP from SECTION (REQ-335), which asks the same plane the
+# same question and DOES create geometry. Nothing here appends, deletes or undoes.
+
+CMD BOX 0,0 30 20 12
+EXPECT SOLIDS 1
+EXPECT POLYLINES 0
+EXPECT SOLIDPROPS 0 7200 2400 8 12 6
+
+CMD SECTIONCLIP 6
+EXPECT SOLIDS 1
+EXPECT POLYLINES 0
+EXPECT LINES 0
+# The solid is untouched — same volume, same area, same topology, with half of it hidden.
+EXPECT SOLIDPROPS 0 7200 2400 8 12 6
+
+# UNDO must reach past the clip to the BOX, because the clip made no undo entry at all. If it had,
+# this UNDO would consume it and the box would still be here.
+UNDO
+EXPECT SOLIDS 0
+# ...and the clip is still on, because undo has nothing to do with the view.
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPOFFSET 6
+
+REDO
+EXPECT SOLIDS 1
+
+# --- LIVE: moving the plane rebuilds nothing -------------------------------------------------------
+#
+# Acceptance 6's own word. The clip is a shader uniform re-read every frame, so moving it changes
+# the next frame and invalidates no cached geometry: no re-tessellation, no re-upload, no rebuild
+# step between moving the plane and seeing the result.
+#
+# SOLIDTESSGEN is the display-regeneration counter — the same instrument #120 uses to assert the
+# render mesh is not rebuilt every frame. It must not move while the plane does. If a future change
+# ever makes the clip invalidate the cache, this is the line that says so.
+
+CMD SOLIDLIST
+EXPECT SOLIDTESSGEN 1
+
+CMD SECTIONCLIP 0
+EXPECT SOLIDTESSGEN 1
+CMD SECTIONCLIP 3
+EXPECT SOLIDTESSGEN 1
+CMD SECTIONCLIP 6
+EXPECT SOLIDTESSGEN 1
+CMD SECTIONCLIP FLIP
+EXPECT SOLIDTESSGEN 1
+CMD SECTIONCLIP OFF
+EXPECT SOLIDTESSGEN 1
+CMD SECTIONCLIP ON
+EXPECT SOLIDTESSGEN 1
+
+# And the solid itself is still exactly what it was after all of that.
+EXPECT SOLIDPROPS 0 7200 2400 8 12 6
+
+# --- the clip does not follow the drawing into a new one -------------------------------------------
+#
+# It is an inspection mode, not a property of the drawing (REQ-336): opening a file to find half of
+# it invisible, with the reason three menus away, is the failure this avoids.
+
+CMD SECTIONCLIP 9
+EXPECT SECTIONCLIP ON
+NEW
+EXPECT SECTIONCLIP OFF
+EXPECT SECTIONCLIPOFFSET 0
+EXPECT SECTIONCLIPFLIP OFF

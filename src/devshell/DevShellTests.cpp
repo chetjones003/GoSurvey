@@ -217,6 +217,110 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   };
 
 
+  // --- REQ-336 live section clip, driven through the REAL GUI (TASK-240) -------------------------
+  //
+  // GitHub #149 acceptance 6 is the one criterion in the whole phase that is about PIXELS, and two
+  // of its failure modes cannot be reached anywhere else:
+  //
+  //   * whether the clip actually removes geometry from the screen. `SectionClipTests` proves the
+  //     plane arithmetic and `headless.req336-section-clip` proves the command surface, but neither
+  //     has a GL context, so neither can see a single pixel disappear.
+  //   * whether the clip STAYS in the viewport. `gl_ClipDistance` is global GL state, and ImGui
+  //     draws the entire interface immediately after `RenderScene` with shaders that never write
+  //     it — a shader that leaves it unwritten while GL_CLIP_DISTANCE0 is enabled has UNDEFINED
+  //     clip distances, so a missing `glDisable` can delete arbitrary parts of the UI. Nothing
+  //     without a real frame can catch that, and the symptom would be a ribbon that flickers away
+  //     only while the clip is on.
+  //
+  // The screenshots are the evidence for the first; the test surviving to its own end — every
+  // `SubmitCad` after the clip is on still finding its widgets and the log still readable — is the
+  // assertion for the second.
+  ImGuiTest* sclip = IM_REGISTER_TEST(engine, "gosurvey", "req336-section-clip-viewport");
+  sclip->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+
+    // The app opens on the Start tab (REQ-308, index 0), which draws no 3D viewport at all.
+    if (s_cmd->activeDrawingIdx == 0) {
+      std::vector<std::string>* log = DevShell_CommandLog();
+      IM_CHECK(log != nullptr);
+      NewDrawingInTab(*s_cmd, *log);
+      ctx->Yield(6);
+    }
+    IM_CHECK(s_cmd->activeDrawingIdx != 0);
+
+    // A box tall enough that a horizontal cut through it is unmistakable, shaded so the cut shows
+    // as surface rather than as a gap in a wireframe.
+    SubmitCad(ctx, "BOX 0,0 20 14 12");
+    ctx->Yield(4);
+    IM_CHECK_EQ(s_cmd->cadSolids.size(), static_cast<std::size_t>(1));
+    SubmitCad(ctx, "VISUALSTYLE SHADED");
+    ctx->Yield(2);
+
+    // Orbited and framed explicitly, for the reason the chamfer test above gives: ZOOM EXTENTS
+    // frames the plan footprint and leaves the target at z = 0, which puts a 12-tall box's top off
+    // the image.
+    s_cmd->viewportAzimuthDeg = 135.f;
+    s_cmd->viewportElevationDeg = 22.f;
+    s_cmd->viewportPanX = 0.f;
+    s_cmd->viewportPanY = 0.f;
+    s_cmd->viewportPanZ = 6.f;
+    s_cmd->viewportZoom = 2.6f;
+    ctx->Yield(10);
+
+    // 1 — the whole box, for comparison.
+    IM_CHECK(!s_cmd->viewportSectionClip);
+    DevShell_RequestScreenshot("devshell-req336-clip-0-off.bmp");
+    ctx->Yield(4);
+
+    // 2 — cut at the UCS plane (z = 0). The box spans z 0..12, so this removes ALL of it: the
+    // strongest possible statement that the clip reaches the pixels, and the frame that would look
+    // identical to the one above if the plane were being ignored.
+    SubmitCad(ctx, "SECTIONCLIP 0");
+    ctx->Yield(6);
+    IM_CHECK(s_cmd->viewportSectionClip);
+    IM_CHECK(std::fabs(s_cmd->viewportSectionClipOffset - 0.0) < 1e-9);
+    DevShell_RequestScreenshot("devshell-req336-clip-1-at-zero.bmp");
+    ctx->Yield(4);
+
+    // 3 and 4 — the plane MOVES, which is the word acceptance 6 actually uses. Two heights through
+    // the body of the box; the visible remainder must grow with the offset.
+    SubmitCad(ctx, "SECTIONCLIP 4");
+    ctx->Yield(6);
+    IM_CHECK(std::fabs(s_cmd->viewportSectionClipOffset - 4.0) < 1e-9);
+    DevShell_RequestScreenshot("devshell-req336-clip-2-at-four.bmp");
+    ctx->Yield(4);
+
+    SubmitCad(ctx, "SECTIONCLIP 8");
+    ctx->Yield(6);
+    IM_CHECK(std::fabs(s_cmd->viewportSectionClipOffset - 8.0) < 1e-9);
+    DevShell_RequestScreenshot("devshell-req336-clip-3-at-eight.bmp");
+    ctx->Yield(4);
+
+    // 5 — FLIP keeps the other half. Together with shot 3 this covers the whole box between them.
+    SubmitCad(ctx, "SECTIONCLIP FLIP");
+    ctx->Yield(6);
+    IM_CHECK(s_cmd->viewportSectionClipFlip);
+    DevShell_RequestScreenshot("devshell-req336-clip-4-flipped.bmp");
+    ctx->Yield(4);
+
+    // 6 — and OFF restores the whole box, so the clip left nothing behind.
+    SubmitCad(ctx, "SECTIONCLIP OFF");
+    ctx->Yield(6);
+    IM_CHECK(!s_cmd->viewportSectionClip);
+    DevShell_RequestScreenshot("devshell-req336-clip-5-off-again.bmp");
+    ctx->Yield(4);
+
+    // The solid is untouched by all of it — a view state changed nothing in the document. Checked
+    // here as well as in the transcript because this is the path that actually rendered.
+    IM_CHECK_EQ(s_cmd->cadSolids.size(), static_cast<std::size_t>(1));
+    const brep::MassProperties mp = brep::ComputeMassProperties(*s_cmd->cadSolids[0]);
+    IM_CHECK(mp.valid);
+    IM_CHECK(std::fabs(mp.volume - 20.0 * 14.0 * 12.0) < 1e-6);
+    IM_CHECK_EQ(s_cmd->cadSolids[0]->faces.size(), static_cast<std::size_t>(6));
+
+    IM_CHECK(CancelToIdle(ctx));
+  };
+
   // --- REQ-331 CHAMFER, driven through the REAL GUI (TASK-229) -----------------------------------
   //
   // Everything else about the solid chamfer is covered by unit tests and headless transcripts. Two
