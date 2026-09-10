@@ -22,7 +22,7 @@ struct RenderTuning {
   /// REQ-064. Defaulting to Wireframe2D is what keeps every existing call site — and the pixel
   /// output it produces — unchanged: that style takes the same depth-off path as before.
   VisualStyle visualStyle = VisualStyle::Wireframe2D;
-  /// REQ-336 / ADR-056 — the live section clip. Stated in WORLD coordinates; the renderer rebases
+  /// REQ-337 / ADR-057 — the live section clip. Stated in WORLD coordinates; the renderer rebases
   /// it onto the view anchor, because the anchor is the renderer's own float-precision device and
   /// no caller should have to know it exists. Default-inactive, so every existing call site renders
   /// exactly what it rendered before.
@@ -30,7 +30,7 @@ struct RenderTuning {
   /// It lives in `RenderTuning` rather than becoming parameter 31 for the reason this struct was
   /// created: `RenderScene`'s signature is already 30 long.
   SectionClipPlane sectionClip{};
-  /// REQ-336 — the rectangle drawn to SHOW where \ref sectionClip cuts. Built by the caller, which
+  /// REQ-337 — the rectangle drawn to SHOW where \ref sectionClip cuts. Built by the caller, which
   /// is the side that knows how big the drawing is; the renderer only draws it. Invalid means draw
   /// nothing, which is what every existing call site gets by default.
   SectionClipIndicator sectionClipIndicator{};

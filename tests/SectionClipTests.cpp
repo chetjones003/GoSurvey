@@ -1,4 +1,4 @@
-// Live section clip plane tests (REQ-336 / ADR-056, GitHub issue #149 acceptance 6).
+// Live section clip plane tests (REQ-337 / ADR-057, GitHub issue #149 acceptance 6).
 //
 // The single most important test here is ANCHOR REBASING, and it is worth saying why before the
 // code: `ViewportRenderer` does not upload world coordinates. Vertices arrive with XY relative to
@@ -335,7 +335,7 @@ TEST_CASE("The clip offset keeps REQ-101 precision at survey magnitude",
   }
 }
 
-// --- The visible plane indicator (REQ-336) -----------------------------------------------------
+// --- The visible plane indicator (REQ-337) -----------------------------------------------------
 //
 // The rectangle drawn to show the user WHERE the clip cuts. It exists because without it the
 // command has no visible effect at all in the default view: a level cut seen from directly above

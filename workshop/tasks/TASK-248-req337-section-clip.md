@@ -1,4 +1,4 @@
-# TASK-240 — SECTIONCLIP: the live section clip, and the frame the plane has to be stated in
+# TASK-248 — SECTIONCLIP: the live section clip, and the frame the plane has to be stated in
 
 - Type:    feat (new requirement + new ADR)
 - Status:  review
@@ -8,8 +8,8 @@
 
 ## 1. Authority
 
-- **REQ-336** (new, accepted 2026-09-10, D-2026-09-10-a) — the requirement this delivers.
-- **ADR-056** (new) — the six decisions behind it. A new render capability needs an ADR and an
+- **REQ-337** (new, accepted 2026-09-10, D-2026-09-10-e) — the requirement this delivers.
+- **ADR-057** (new) — the six decisions behind it. A new render capability needs an ADR and an
   accepted REQ before implementation (CLAUDE.md §4); both were drafted locally and ship here with
   the code, per the one-PR rule.
 - **REQ-058 / ADR-025 (c)** — the camera. The whole shape of (a) below exists to leave it alone.
@@ -73,7 +73,7 @@ move that geometry into GL.
 Per [[gosurvey-one-pr-per-issue]] rule 3 this was **put to Nathan before any code was written**
 rather than noted in a PR body afterwards. **Decision, 2026-09-10: state the limit.** Acceptance 6
 is met as written, the other two options are a rendering-architecture change out of proportion to
-one criterion of one phase, and REQ-336 + ADR-056 (e) now carry the cost of closing it in writing.
+one criterion of one phase, and REQ-337 + ADR-057 (e) now carry the cost of closing it in writing.
 
 ## 5. Approach
 
@@ -134,7 +134,7 @@ out *why* it passed produced a better test than the one intended.
 **Proven to bite:** replacing the rebased constant with the world one fails **4 of 9 cases and 13
 assertions**.
 
-**`headless.req336-section-clip` — 87 steps.** Every spelling and alias; every refusal with the
+**`headless.req337-section-clip` — 87 steps.** Every spelling and alias; every refusal with the
 previous state intact; `UNDO` reaching **past** the clip to the previous edit (which only works
 because the clip makes no undo entry); the solid byte-identical after clipping; the clip not
 surviving a new drawing; and the **no-rebuild sweep** — `SOLIDTESSGEN`, the display-regeneration
@@ -172,7 +172,7 @@ test appearing to fail against itself. Now `%.10g` with the difference stated.
   group. Nothing is re-tessellated or re-uploaded, which the transcript asserts rather than assumes.
 - **testing** — 9 new unit cases (96 assertions) + 1 new transcript (87 steps); **1451/1451**.
 
-**The GUI check RAN, and it found a bug.** `--devshell-run req336-section-clip-viewport` builds a
+**The GUI check RAN, and it found a bug.** `--devshell-run req337-section-clip-viewport` builds a
 box, orbits, shades it, and captures the viewport across clip off → cut at the UCS plane → two moved
 planes → flipped → off again, checking the solid is unchanged throughout. Result: **Success**, six
 captures, five of them distinct and `off` byte-identical to `off-again`.
@@ -210,7 +210,7 @@ counter check.
 What the six captures show, in order: the whole box; **only the bottom face** surviving a cut at
 offset 0 (the plane keeps `z <= c`, so the face lying *on* it remains — the plane is exactly where it
 was asked for); a third of the box at offset 4 and two thirds at offset 8, both **open at the top**,
-which is ADR-056 (f)'s uncapped cut seen directly; the **complement** slab under FLIP; and the whole
+which is ADR-057 (f)'s uncapped cut seen directly; the **complement** slab under FLIP; and the whole
 box again. Parked in `Notes for claude/issue149-analysis/req336-clip-evidence/`.
 
 **One thing is still correct-by-construction rather than observed**: that the interface survives with
@@ -221,19 +221,19 @@ is a one-line read against a clear rule (an unwritten `gl_ClipDistance` under an
 is undefined), but it has not been *seen* working, and it is named here rather than counted as
 verified.
 
-COMPLETION REPORT — TASK-240 — 2026-09-10
-- Requirements satisfied:  REQ-336 (new, accepted); GitHub #149 acceptance 6
+COMPLETION REPORT — TASK-248 — 2026-09-10
+- Requirements satisfied:  REQ-337 (new, accepted); GitHub #149 acceptance 6
 - Summary:                 SECTIONCLIP — a live clip plane as a per-frame shader uniform, rebased
                            onto the view anchor; GL geometry only, uncapped, both stated in the REQ
 - Tests:                   9 unit cases (96 assertions) + 1 transcript (101 steps) + 1 devshell GUI test; 1451/1451
 - Verification verdict:    PASS — devshell GUI run green, six viewport captures as evidence
 - Assumptions:             none
-- Architectural decisions: ADR-056, D-2026-09-10-a
+- Architectural decisions: ADR-057, D-2026-09-10-e
 - Dependencies:            none added
-- Technical debt noted:    the uncapped cut and the ImGui-overlay entities are recorded as REQ-336
+- Technical debt noted:    the uncapped cut and the ImGui-overlay entities are recorded as REQ-337
                            increments, each with the cost of closing it written down
 - Build:                   reproducible, clean on Windows/MSVC
-- Docs updated:            REQ-336 + its traceability row, ADR-056, D-2026-09-10-a, this task log
+- Docs updated:            REQ-337 + its traceability row, ADR-057, D-2026-09-10-e, this task log
 
 ## 8. What this closes
 
@@ -246,7 +246,7 @@ With acceptance 6 met, **all eight of #149's acceptance criteria have been deliv
 | 3 | analytic volume, not tessellated | the #146 kernel and its `BrepTests [req313]` cases |
 | 4 | centroid, primitive and Boolean | PR #466, REQ-334 + ADR-055, TASK-237 |
 | 5 | sectioning, non-destructive | PR #468, REQ-335, TASK-238 |
-| 6 | **section clipping, live** | **this task, REQ-336 + ADR-056** |
+| 6 | **section clipping, live** | **this task, REQ-337 + ADR-057** |
 | 7 | validation names each fault | PR #469, REQ-313 amended, TASK-239 + D-2026-09-09-k |
 | 8 | accurate at survey magnitudes | pinned per slice; this one adds the clip plane at E 2.196e6 |
 
@@ -265,7 +265,7 @@ issue #460, which depends on this phase.
 ## 9. Increment: the keywords are CLICKABLE (2026-09-10, user request)
 
 Asked for after the first GUI pass: make `ON`, `OFF` and `FLIP` selectable from the command line
-rather than typed. Folded into this task rather than filed as a follow-up, because REQ-336 has not
+rather than typed. Folded into this task rather than filed as a follow-up, because REQ-337 has not
 merged yet — there is no accepted requirement to amend, only a draft to finish.
 
 **The capability already existed and was not written for this.** `cmdbar::ParsePromptSegments` +
@@ -294,7 +294,7 @@ maintain two answers to one question. (`Kind::TrimState`'s branch has exactly th
 
 ### Verified by clicking, not by screenshot
 
-`--devshell-run req336-section-clip-links` opens the prompt and **clicks each of the three links**,
+`--devshell-run req337-section-clip-links` opens the prompt and **clicks each of the three links**,
 asserting the state changed and the prompt closed. **Success.** That covers the half a transcript
 structurally cannot: typing `on` proves the receiving end works and says nothing about whether a link
 exists to click. A screenshot could not have shown it either — the links are drawn in the command
@@ -380,7 +380,7 @@ nothing, the orbited wireframe that used to look like dangling lines, and the sh
 
 **Still open, and now the only thing on §8's list:** the cut is not capped. The indicator covers the
 opening well enough that a clipped solid reads as sectioned rather than broken, but it is the PLANE
-being drawn, not the cut face — a solid whose cut is genuinely filled is REQ-336 increment 2, and
+being drawn, not the cut face — a solid whose cut is genuinely filled is REQ-337 increment 2, and
 `brep::SectionLoop` (REQ-335) is still the geometry that would do it.
 
 ---

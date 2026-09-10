@@ -1,4 +1,4 @@
-# REQ-336 / ADR-056 (D-2026-09-10-a, TASK-240) — SECTIONCLIP, live section clipping.
+# REQ-337 / ADR-057 (D-2026-09-10-e, TASK-248) — SECTIONCLIP, live section clipping.
 #
 # GitHub #149 (3D Phase 6 — Analysis) acceptance 6: "Section clipping updates live as the plane
 # moves." The LAST of #149's eight criteria.
@@ -261,7 +261,7 @@ EXPECT SOLIDPROPS 0 7200 2400 8 12 6
 
 # --- the clip does not follow the drawing into a new one -------------------------------------------
 #
-# It is an inspection mode, not a property of the drawing (REQ-336): opening a file to find half of
+# It is an inspection mode, not a property of the drawing (REQ-337): opening a file to find half of
 # it invisible, with the reason three menus away, is the failure this avoids.
 
 CMD SECTIONCLIP 9

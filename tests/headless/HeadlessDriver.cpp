@@ -1898,7 +1898,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
     } else if (what == "SECTIONCLIP") {
-      // EXPECT SECTIONCLIP <ON|OFF> — the LIVE section clip (REQ-336). Same reason as EXPECT
+      // EXPECT SECTIONCLIP <ON|OFF> — the LIVE section clip (REQ-337). Same reason as EXPECT
       // CROSSHAIR3D: EXPECT LOG matches the whole accumulated log, so once a toggle has reported
       // any value it can no longer be used to assert the CURRENT one.
       std::string wantS = Trim(arg);
@@ -1921,7 +1921,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
     } else if (what == "SECTIONCLIPOFFSET") {
-      // EXPECT SECTIONCLIPOFFSET <distance> — where the clip plane sits along the UCS Z (REQ-336).
+      // EXPECT SECTIONCLIPOFFSET <distance> — where the clip plane sits along the UCS Z (REQ-337).
       // Compared at REQ-101's +/-0.002 ft, because this offset IS a coordinate the user typed.
       std::istringstream is(arg);
       double want = 0.0;
@@ -1941,7 +1941,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
     } else if (what == "SECTIONCLIPFLIP") {
-      // EXPECT SECTIONCLIPFLIP <ON|OFF> — which half survives (REQ-336).
+      // EXPECT SECTIONCLIPFLIP <ON|OFF> — which half survives (REQ-337).
       std::string wantS = Trim(arg);
       for (char& c : wantS)
         c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
