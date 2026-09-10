@@ -5415,7 +5415,13 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
 bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
 
 /// Feed a viewport pick (world coordinates) to the UCS command. Returns true when consumed.
-bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log);
+///
+/// \p pickRay, when non-null and valid, is the camera ray behind this click in an orbited/non-plan
+/// model view (issue #156). `UCS Object` uses it to align the frame to a planar face of a B-rep
+/// solid under the cursor — the true-3D sub-object pick, which a flattened work-plane XY cannot do.
+/// Null in plan view and paper space, where the 2D entity pick is all that applies.
+bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log,
+                            const ray3d::Ray* pickRay = nullptr);
 
 /// Orient the view to a PLAN view of \p frame without touching the active UCS.
 void ApplyPlanViewOf(AppCommandState& st, const ucs::Ucs& frame, std::vector<std::string>& log);

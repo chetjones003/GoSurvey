@@ -12730,7 +12730,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     double ucsWx = 0.;
     double ucsWy = 0.;
     CadCoord::WorldFromLocal(st, wx, wy, &ucsWx, &ucsWy);
-    if (ProcessUcsViewportPick(st, {ucsWx, ucsWy, static_cast<double>(CadCommitElevation(st))}, log))
+    if (ProcessUcsViewportPick(st, {ucsWx, ucsWy, static_cast<double>(CadCommitElevation(st))}, log, pickRay))
       return;
   }
 

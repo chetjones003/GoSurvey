@@ -5661,6 +5661,12 @@ requirements is a planning failure, not a sign of rigor.
   a restore does not itself extend); `View`; `X` / `Y` / `Z` rotation about the UCS's **own** axes,
   positive by the right-hand rule; `ZAxis`; `Object`; and `Named`.
 
+  **`Object` aligns to the entity the user clicks:** a line, arc, circle, ellipse or text (X along
+  the entity, tilted as little as possible from world XY), or — in an orbited model view — a
+  **planar face of a B-rep solid**, whose plane becomes the UCS XY plane and whose outward normal
+  becomes UCS +Z. A curved face, a mesh, a surface, or any other entity kind is refused with a
+  stated reason and the pick prompt stands (REQ-201).
+
   **`Named` saves, and only saves.** `UCS N` asks for a name immediately - there is no
   Save / Restore / Delete question in front of it, because by the time a user has built a frame and
   typed `N` they have already answered it. `?` still lists at that prompt, and an existing name is
@@ -5735,6 +5741,9 @@ requirements is a planning failure, not a sign of rigor.
   - every listed `UCS` option works, and each invalid input is refused with a stated reason rather
     than producing a degenerate frame (REQ-201);
   - `Previous` walks back through the history and a restore does not itself become a history entry;
+  - `Object` on a planar face of a B-rep solid sets the UCS XY plane to that face's plane and UCS
+    +Z to its outward normal, asserted by drawing at UCS (x, y, 0) and checking the geometry lands
+    on the face's plane; a curved face is refused with a reason and the pick prompt stands;
   - named definitions save, restore, delete, list, and survive a `.gs` round trip byte-identically;
   - `World` cannot be saved over or deleted;
   - geometry drawn under a rotated UCS lands at the world coordinates the frame implies, asserted on
@@ -5759,7 +5768,9 @@ requirements is a planning failure, not a sign of rigor.
   the frame selector under the ViewCube; all three requested from hands-on testing. 2026-09-06 —
   both frame selectors gained the six orthographic UCS presets (Top/Bottom/Left/Right/Front/Back),
   a shared computed constant table, at the user's request for one-click plane switching in 3D
-  solid-modelling work (D-2026-09-06-a, TASK-153).
+  solid-modelling work (D-2026-09-06-a, TASK-153). 2026-09-10 — `Object` now aligns to a planar
+  face of a B-rep solid (deferred item 4 partially lifted), a thin consumer of the REQ-318
+  sub-object pick; meshes and surfaces stay refused (D-2026-09-10-a, GitHub #156, TASK-243).
 
 #### Not in this requirement — and why
 
@@ -5777,9 +5788,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
    `ucs::Ucs` frame value while named definitions stay shared on `ucsNamed`. Multiple simultaneous
    model-space viewports (`VPORTS` split) remain an explicitly open scope question and are **not**
    part of REQ-155.
-4. **`Object` alignment to 3D faces, meshes, surfaces and solids** — resolving a face needs
-   face-level picking, which does not exist: a mesh picks as one object with no face identity, and
-   solids/surfaces as editable entities are issue #120's scope. `Object` covers lines, arcs,
+4. **`Object` alignment to a planar face of a B-rep solid — now IN this requirement** (added
+   2026-09-10, D-2026-09-10-a, GitHub #156). The blocker named here — "face-level picking does not
+   exist" — was removed when the sub-object pick subsystem landed (REQ-318 / ADR-049, GitHub #148).
+   `Object` now also aligns to a **planar face of a solid**: the face plane becomes the UCS XY
+   plane, the face's outward normal becomes UCS +Z (via `ucs::FromNormal`), and the origin is the
+   picked point on that plane. A **curved** face (cylinder / cone / sphere / torus wall) is refused
+   with a stated reason (REQ-201) and the command stays in its pick phase. Only reachable in an
+   orbited (non-plan) model view, where a real camera ray exists.
+
+   **Still NOT in this requirement:** `Object` alignment to a **mesh** or a **triangulated
+   surface** — both resolve as one object with no planar-face identity, and grouping coplanar
+   triangles into a pickable face is a separate subsystem. `Object` otherwise covers lines, arcs,
    circles, ellipses and text, and refuses anything else with a stated reason.
 
 ### REQ-155 — Per-viewport active UCS and UCSFOLLOW (GitHub issue #155)
@@ -9111,7 +9131,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-151 | Commands | done (TASK-136) — arc breaklines; DESIGNATEBOUNDARY refuses arcs | accepted |
 | REQ-152 | util/Commands | done (TASK-136) — catchment mean Z; `[req152]` | accepted |
 | REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
-| REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126) | accepted |
+| REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126). 2026-09-10 (TASK-243, D-2026-09-10-a, GitHub #156): `Object` now aligns to a planar face of a B-rep solid — deferred item 4 partially lifted, thin consumer of the REQ-318 sub-object pick; `headless.issue156-ucs-object-solid-face` | accepted |
 | REQ-155 | Commands/Renderer/UI/IO | done (TASK-157) — `ViewportUcsTests` T1–T6: point typed while floating resolves in the viewport frame; `UCSFOLLOW=1` re-plans only the active viewport (sibling + model-view camera unchanged); viewport-UCS field independence; `.gs` round-trip + legacy load all-World; readout resolves in the viewport frame; save-while-floating records the drawing frame. Manual GUI spot-check (float a viewport, `UCS`, grid/crosshair rotate in that viewport only) pending — headless cannot render. (GitHub issue #155, D-2026-08-31-c) | accepted |
 | REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
 | REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2004 default write; no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
