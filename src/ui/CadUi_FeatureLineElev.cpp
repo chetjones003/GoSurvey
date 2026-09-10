@@ -115,11 +115,14 @@ void DrawFeatureLineElevationWindow(AppCommandState& cmd, std::vector<std::strin
 
   ImGui::SetNextWindowSize(ImVec2(760, 460), ImGuiCond_FirstUseEver);
   bool open = cmd.showFeatureLineElevWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Feature Line Elevations", &open)) {
     cmd.showFeatureLineElevWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
   cmd.showFeatureLineElevWindow = open;
   BeginStyledDialog();
 
@@ -130,6 +133,7 @@ void DrawFeatureLineElevationWindow(AppCommandState& cmd, std::vector<std::strin
     ImGui::Spacing();
     ImGui::TextDisabled("Draw one with FEATURELINE, then reopen this window.");
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
   if (cmd.featureLineElevIndex >= flCount)
@@ -160,6 +164,7 @@ void DrawFeatureLineElevationWindow(AppCommandState& cmd, std::vector<std::strin
   if (!BuildFeatureLineElevTable(cmd, cmd.featureLineElevIndex, &rows) || rows.empty()) {
     ImGui::TextUnformatted("That feature line has no points to show.");
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
 
@@ -266,6 +271,7 @@ void DrawFeatureLineElevationWindow(AppCommandState& cmd, std::vector<std::strin
     pending = "INSERT " + CellText(insStation, 6) + " " + CellText(insElev, 6);
 
   ImGui::End();
+  PopProductDialogAccent();
 
   if (!pending.empty())
     RunFlElev(cmd, log, flNumber, pending);

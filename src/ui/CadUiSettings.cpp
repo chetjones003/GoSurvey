@@ -846,9 +846,14 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
 
   ImGui::SetNextWindowSize(ImVec2(960, 720), ImGuiCond_FirstUseEver);
   bool open = cmd.showSettingsWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Options", &open, ImGuiWindowFlags_NoCollapse)) {
-    cmd.showSettingsWindow = open; ImGui::End(); return;
+    cmd.showSettingsWindow = open;
+    ImGui::End();
+    PopProductDialogAccent();
+    return;
   }
+  PaintProductDialogAccentFrame();
   BeginStyledDialog();
   cmd.showSettingsWindow = open;
   DrawSettingsHeader(cmd);
@@ -903,6 +908,7 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::SameLine();
   ImGui::BeginDisabled(); StyledButton("Help", ImVec2(90.f, 0.f)); ImGui::EndDisabled();
   ImGui::End();
+  PopProductDialogAccent();
 
   DrawGraphicsPerformanceDialog(cmd, log);
 }

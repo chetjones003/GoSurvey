@@ -1112,6 +1112,7 @@ int main()
     DrawBlockAuthoringPalettes(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);
+    DrawSelectColorPopup(cmd);
     DrawUpdateDialog(cmd, updateState);
     // REQ-091 (amended): blocks every launch until authGateResolved — signed in, or no internet
     // at all to sign in with. Stacks beneath the update dialog's modal (both gate the session;

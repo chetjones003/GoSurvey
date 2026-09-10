@@ -1,5 +1,6 @@
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
+#include "CadColor.hpp"
 #include "CadBlocks.hpp"
 #include "ToolspaceCatalog.hpp"
 #include "OrthoConstrain.hpp"
@@ -36604,86 +36605,6 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
   return "";
 }
 
-static bool ParseHexColorForViewport(const std::string& s, float* r, float* g, float* b) {
-  if (s.size() < 4 || s[0] != '#')
-    return false;
-  auto hexVal = [](char c) -> int {
-    if (c >= '0' && c <= '9')
-      return c - '0';
-    if (c >= 'a' && c <= 'f')
-      return 10 + (c - 'a');
-    if (c >= 'A' && c <= 'F')
-      return 10 + (c - 'A');
-    return -1;
-  };
-  if (s.size() == 4) {
-    const int rh = hexVal(s[1]);
-    const int gh = hexVal(s[2]);
-    const int bh = hexVal(s[3]);
-    if (rh < 0 || gh < 0 || bh < 0)
-      return false;
-    *r = static_cast<float>(rh | (rh << 4)) / 255.f;
-    *g = static_cast<float>(gh | (gh << 4)) / 255.f;
-    *b = static_cast<float>(bh | (bh << 4)) / 255.f;
-    return true;
-  }
-  if (s.size() != 7)
-    return false;
-  int rv = 0;
-  int gv = 0;
-  int bv = 0;
-  for (int i = 0; i < 2; ++i) {
-    const int d = hexVal(s[static_cast<size_t>(1 + i)]);
-    if (d < 0)
-      return false;
-    rv = rv * 16 + d;
-  }
-  for (int i = 0; i < 2; ++i) {
-    const int d = hexVal(s[static_cast<size_t>(3 + i)]);
-    if (d < 0)
-      return false;
-    gv = gv * 16 + d;
-  }
-  for (int i = 0; i < 2; ++i) {
-    const int d = hexVal(s[static_cast<size_t>(5 + i)]);
-    if (d < 0)
-      return false;
-    bv = bv * 16 + d;
-  }
-  *r = static_cast<float>(rv) / 255.f;
-  *g = static_cast<float>(gv) / 255.f;
-  *b = static_cast<float>(bv) / 255.f;
-  return true;
-}
-
-struct NamedRgbPreset {
-  const char* storage;
-  float r;
-  float g;
-  float b;
-};
-
-// Keep storage strings aligned with Properties combo (except ByLayer handled separately).
-
-static const NamedRgbPreset kViewportColorPresets[] = {
-    {"Red", 1.f, 0.f, 0.f},       {"Yellow", 1.f, 1.f, 0.f}, {"Green", 0.f, 1.f, 0.f},
-    {"Cyan", 0.f, 1.f, 1.f},      {"Blue", 0.f, 0.f, 1.f}, {"Magenta", 1.f, 0.f, 1.f},
-    {"White", 1.f, 1.f, 1.f},     {"Gray", 0.5f, 0.5f, 0.5f}, {"Black", 0.f, 0.f, 0.f},
-    {"Orange", 1.f, 0.5f, 0.f},
-};
-
-static bool LookupNamedRgbPreset(const std::string& c, float* r, float* g, float* b) {
-  for (const auto& p : kViewportColorPresets) {
-    if (c == p.storage) {
-      *r = p.r;
-      *g = p.g;
-      *b = p.b;
-      return true;
-    }
-  }
-  return false;
-}
-
 void ResolveStoredColorForViewport(const std::string& colorStorage, float transparency, float defaultR,
                                   float defaultG, float defaultB, float* outRgba) {
   const float tr = transparency < 0.f ? 0.f : std::clamp(transparency, 0.f, 1.f);
@@ -36697,28 +36618,11 @@ void ResolveStoredColorForViewport(const std::string& colorStorage, float transp
     outRgba[3] = alpha;
     return;
   }
-  float r = defaultR;
-  float g = defaultG;
-  float bl = defaultB;
-  if (!c.empty() && c[0] == '#') {
-    if (ParseHexColorForViewport(c, &r, &g, &bl)) {
-      outRgba[0] = r;
-      outRgba[1] = g;
-      outRgba[2] = bl;
-      outRgba[3] = alpha;
-      return;
-    }
-  }
-  if (LookupNamedRgbPreset(c, &r, &g, &bl)) {
-    outRgba[0] = r;
-    outRgba[1] = g;
-    outRgba[2] = bl;
-    outRgba[3] = alpha;
-    return;
-  }
-  outRgba[0] = defaultR;
-  outRgba[1] = defaultG;
-  outRgba[2] = defaultB;
+  float rgb[3];
+  CadColorResolveRgb(c, defaultR, defaultG, defaultB, rgb);
+  outRgba[0] = rgb[0];
+  outRgba[1] = rgb[1];
+  outRgba[2] = rgb[2];
   outRgba[3] = alpha;
 }
 
@@ -37129,15 +37033,19 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     case QP::Layer:   return attrs ? matchStr(attrs->layer) : (cmd.qsOperator == QO::SelectAll);
     case QP::Color: {
       if (!attrs) return cmd.qsOperator == QO::SelectAll;
-      // Resolve "ByLayer" to the layer's actual color so filtering by "Red" finds
-      // entities that visually appear red even when their stored color is ByLayer.
-      std::string effectiveColor = attrs->color;
-      if (effectiveColor == "ByLayer") {
-        const CadLayerRow* row = FindDrawingLayerRowCi(cmd, attrs->layer);
-        if (row && !row->color.empty())
-          effectiveColor = row->color;
-      }
-      return matchStr(effectiveColor);
+      std::string layerColor;
+      const CadLayerRow* row = FindDrawingLayerRowCi(cmd, attrs->layer);
+      if (row && !row->color.empty())
+        layerColor = row->color;
+      const std::string effective =
+          CadColorEffectiveStorage(attrs->color, layerColor);
+      if (cmd.qsOperator == QO::SelectAll)
+        return true;
+      if (cmd.qsOperator == QO::Equals)
+        return CadColorStorageMatches(effective, strVal);
+      if (cmd.qsOperator == QO::NotEquals)
+        return !CadColorStorageMatches(effective, strVal);
+      return false;
     }
     case QP::Length: {
       float len = 0.f;

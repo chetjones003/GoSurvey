@@ -1038,14 +1038,18 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
 
   ImGui::SetNextWindowSize(ImVec2(540.f, 520.f), ImGuiCond_FirstUseEver);
   bool open = cmd.showCreateSurfaceWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Create Surface", &open, ImGuiWindowFlags_NoCollapse)) {
     cmd.showCreateSurfaceWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
   cmd.showCreateSurfaceWindow = open;
   if (!open) {
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
   BeginStyledDialog();
@@ -1272,6 +1276,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
     cmd.showCreateSurfaceWindow = false;
 
   ImGui::End();
+  PopProductDialogAccent();
 }
 
 }  // namespace

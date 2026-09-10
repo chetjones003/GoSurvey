@@ -69,6 +69,14 @@ void DrawFloatingWindowChrome();
 /// — migrate opportunistically, each call is one line.
 void BeginStyledDialog();
 
+/// Steel-blue product accent frame (matches What's New / Start screen). Call
+/// PushProductDialogAccent before ImGui::Begin, PaintProductDialogAccentFrame
+/// after a successful Begin, PopProductDialogAccent after ImGui::End. On an
+/// early Begin failure, Pop before returning.
+void PushProductDialogAccent();
+void PaintProductDialogAccentFrame();
+void PopProductDialogAccent();
+
 /// A 3D-bevelled button for dialog actions (REQ-081 rev 7): gradient face, lit
 /// top-left edge, dark bottom-right edge, sunken pressed state. `primary` picks
 /// the accented gradient (OK/Import/Apply); false draws the quieter existing
@@ -230,6 +238,14 @@ void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log)
 /// Modal shown when the user tries to close the application with unsaved drawings.
 /// Sets cmd.closeConfirmed = true when the user accepts close (with or without saving).
 void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log);
+
+/// AutoCAD-style Select Color dialog (ACI index grid + true colour).
+void RequestSelectColor(AppCommandState& cmd, const std::string& initialStorage,
+                        AppCommandState::SelectColorTarget target, bool allowByLayer, bool allowByBlock,
+                        size_t layerRowIndex = 0, const std::string& vpLayerName = {});
+void DrawSelectColorPopup(AppCommandState& cmd);
+/// Layer-manager / properties cell: colour swatch + `"Color N"` label; returns true when clicked.
+bool DrawColorStorageCell(const std::string& storage, float defaultR, float defaultG, float defaultB);
 
 namespace update { struct UpdateState; }
 /// REQ-078: presents an available update and waits for an explicit choice. Draws nothing while

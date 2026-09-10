@@ -78,8 +78,13 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
   }
 
   ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-  if (!ImGui::BeginPopupModal("Unsaved Changes##closeconf", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+  PushProductDialogAccent();
+  if (!ImGui::BeginPopupModal("Unsaved Changes##closeconf", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopProductDialogAccent();
     return;
+  }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
 
   // Collect dirty drawings: active doc first, then inactive snapshots.
   struct DirtyEntry { int idx; std::string name; };
@@ -98,6 +103,7 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
     cmd.closeConfirmed = true;
     ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
+    PopProductDialogAccent();
     return;
   }
 
@@ -156,6 +162,7 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
     ImGui::CloseCurrentPopup();
 
   ImGui::EndPopup();
+  PopProductDialogAccent();
 }
 
 void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log) {
@@ -266,11 +273,14 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
 
   ImGui::SetNextWindowSize(ImVec2(960, 480), ImGuiCond_FirstUseEver);
   bool open = cmd.showViewPointsWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Viewpoints — survey database", &open)) {
     cmd.showViewPointsWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
   BeginStyledDialog();
   cmd.showViewPointsWindow = open;
 
@@ -437,4 +447,5 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
     RemoveSurveyPointAt(cmd, static_cast<size_t>(pendingDelete));
 
   ImGui::End();
+  PopProductDialogAccent();
 }

@@ -22,6 +22,8 @@
 #include "CadLinetype.hpp"
 #include "TextStyle.hpp"
 #include "CadUiStyleWidgets.hpp"  // the shared colour / linetype / lineweight vocabulary
+#include "CadColor.hpp"
+#include "DxfColors.hpp"
 #include "HatchPattern.hpp"
 #include "CommandBar.hpp"
 #include "NumFormat.hpp"
@@ -1057,6 +1059,49 @@ void BeginStyledDialog() {
     return;
   w->DrawList->AddRectFilledMultiColor(mn, mx, g_chrome.dlgWindowFillTop, g_chrome.dlgWindowFillTop,
                                         g_chrome.dlgWindowFillBottom, g_chrome.dlgWindowFillBottom);
+}
+
+namespace {
+
+ImVec4 ProductAccent()   { return ImVec4(0.26f, 0.56f, 0.86f, 1.f); }
+ImVec4 ProductAccentHi() { return ImVec4(0.34f, 0.64f, 0.95f, 1.f); }
+ImVec4 ProductAccentLo() { return ImVec4(0.20f, 0.45f, 0.72f, 1.f); }
+
+ImVec4 LerpColor(const ImVec4& a, const ImVec4& b, float t) {
+  return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t,
+                a.w + (b.w - a.w) * t);
+}
+
+} // namespace
+
+void PushProductDialogAccent() {
+  const ImVec4 accent = ProductAccent();
+  const ImVec4 accentLo = ProductAccentLo();
+  const bool dark = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x < 0.35f;
+  const ImVec4 titleBase = dark ? ImVec4(0.10f, 0.12f, 0.15f, 1.f) : ImVec4(0.88f, 0.92f, 0.97f, 1.f);
+  const ImVec4 titleBg = LerpColor(titleBase, accent, 0.55f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.5f);
+  ImGui::PushStyleColor(ImGuiCol_Border, accent);
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, titleBg);
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, accentLo);
+  ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, titleBg);
+}
+
+void PaintProductDialogAccentFrame() {
+  ImDrawList* bg = ImGui::GetBackgroundDrawList();
+  const ImVec2 a = ImGui::GetWindowPos();
+  const ImVec2 b(a.x + ImGui::GetWindowSize().x, a.y + ImGui::GetWindowSize().y);
+  const float rnd = ImGui::GetStyle().WindowRounding;
+  bg->AddRectFilled(ImVec2(a.x + 8.f, a.y + 10.f), ImVec2(b.x + 8.f, b.y + 10.f),
+                    ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.45f)), rnd);
+  bg->AddRect(ImVec2(a.x - 1.f, a.y - 1.f), ImVec2(b.x + 1.f, b.y + 1.f),
+              ImGui::GetColorU32(ProductAccentHi()), rnd + 1.f, 0, 2.f);
+}
+
+void PopProductDialogAccent() {
+  ImGui::PopStyleColor(4);
+  ImGui::PopStyleVar(2);
 }
 
 // A 3D-bevelled button for dialog primary/secondary actions (REQ-081 rev 7):
@@ -6496,22 +6541,34 @@ static const char* kTextStyleFonts[] = {
 static void CollectQsColorOptions(const AppCommandState& cmd,
                                    std::vector<std::pair<std::string, std::string>>* out) {
   out->clear();
-  for (const auto& p : kNamedColors)
-    out->push_back({ p.label, p.storage });
   std::set<std::string> known;
-  for (const auto& p : kNamedColors) known.insert(p.storage);
+  for (int aci = 1; aci <= 255; ++aci) {
+    const std::string storage = CadColorStorageFromAci(aci);
+    out->push_back({CadColorDisplayLabel(storage), storage});
+    known.insert(storage);
+  }
   auto addExtra = [&](const std::string& c) {
-    if (!c.empty() && known.find(c) == known.end()) {
-      out->push_back({ c, c });
-      known.insert(c);
-    }
+    if (c.empty() || c == "ByLayer" || c == "ByBlock")
+      return;
+    if (known.find(c) != known.end())
+      return;
+    out->push_back({CadColorDisplayLabel(c), c});
+    known.insert(c);
   };
-  for (const auto& a : cmd.userLineAttrs)      addExtra(a.color);
-  for (const auto& a : cmd.userCircleAttrs)    addExtra(a.color);
-  for (const auto& a : cmd.userArcAttrs)       addExtra(a.color);
-  for (const auto& a : cmd.userEllAttrs)       addExtra(a.color);
-  for (const auto& a : cmd.userPolylineAttrs)  addExtra(a.color);
-  for (const auto& a : cmd.cadAnnotationAttrs) addExtra(a.color);
+  for (const auto& row : cmd.drawingLayerTable)
+    addExtra(row.color);
+  for (const auto& a : cmd.userLineAttrs)
+    addExtra(a.color);
+  for (const auto& a : cmd.userCircleAttrs)
+    addExtra(a.color);
+  for (const auto& a : cmd.userArcAttrs)
+    addExtra(a.color);
+  for (const auto& a : cmd.userEllAttrs)
+    addExtra(a.color);
+  for (const auto& a : cmd.userPolylineAttrs)
+    addExtra(a.color);
+  for (const auto& a : cmd.cadAnnotationAttrs)
+    addExtra(a.color);
 }
 
 static int EntityLinetypeComboIndex(const std::string& s) {
@@ -6624,17 +6681,7 @@ bool LookupNamedColorRgb(const std::string& storage, float* r, float* g, float* 
 std::string ColorStorageToPreviewLabel(const std::string& mergedFromSelection) {
   if (mergedFromSelection == kVaries)
     return "(mixed)";
-  if (mergedFromSelection == "---" || mergedFromSelection.empty())
-    return "---";
-  if (mergedFromSelection == "ByLayer")
-    return "By Layer";
-  for (const auto& p : kNamedColors) {
-    if (mergedFromSelection == p.storage)
-      return p.label;
-  }
-  if (!mergedFromSelection.empty() && mergedFromSelection[0] == '#')
-    return std::string("Custom ") + mergedFromSelection;
-  return mergedFromSelection;
+  return CadColorDisplayLabel(mergedFromSelection);
 }
 
 static float gCustomColorPicker[4] = {1.f, 1.f, 1.f, 1.f};
@@ -6807,6 +6854,8 @@ void ApplyLayerToSelection(AppCommandState& cmd, const std::string& v) {
   RefreshMixedHintFlags(cmd);
 }
 
+} // namespace — ApplyColorToSelection is shared with CadUi_ColorPicker.cpp
+
 void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
   if (v.empty())
     return;
@@ -6858,6 +6907,8 @@ void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
   BumpCadGpuCache(cmd);
   RefreshMixedHintFlags(cmd);
 }
+
+namespace {
 
 void ApplyLinetypeToSelection(AppCommandState& cmd, const std::string& v) {
   if (v.empty())
@@ -7000,7 +7051,6 @@ void ApplyTransparencyToSelection(AppCommandState& cmd, float a) {
 
 /// \return true if user chose Custom — caller must `OpenPopup("GoSurveyCustomColor")` after combo/popups close.
 bool DrawColorPickerRow(AppCommandState& cmd) {
-  bool requestCustomPopup = false;
   std::vector<std::string> layers, colors, ltypes;
   std::vector<float> lws, trans;
   CollectGeneralAttrs(cmd, cmd.selection, &layers, &colors, &ltypes, &lws, &trans);
@@ -7088,37 +7138,30 @@ bool DrawColorPickerRow(AppCommandState& cmd) {
       bool hit = ImGui::ColorButton("##rowsw", ImVec4(prgba[0], prgba[1], prgba[2], prgba[3]), rowSwatchFlags,
                                     rowSwatchSize);
       ImGui::SameLine(0.f, 8.f);
-      hit |= ImGui::Selectable(p.label, selected, ImGuiSelectableFlags_SpanAvailWidth, ImVec2(0.f, rowSwatchSize.y));
-      if (hit)
-        ApplyColorToSelection(cmd, p.storage);
+      hit |= ImGui::Selectable(p.label, selected, 0, ImVec2(0.f, rowSwatchSize.y));
+      if (hit) {
+        int aci = -1;
+        if (CadColorTryGetAci(p.storage, &aci))
+          ApplyColorToSelection(cmd, CadColorStorageFromAci(aci));
+        else
+          ApplyColorToSelection(cmd, p.storage);
+      }
       ImGui::PopID();
     }
     ImGui::Separator();
 
-    ImGui::PushID("custom_row");
-    float customPreview[4];
-    if (!merged.empty() && merged[0] == '#' && merged != kVaries)
-      ResolveStoredColorForViewport(merged, mergedTrans, dr, dg, db, customPreview);
-    else {
-      customPreview[0] = customPreview[1] = customPreview[2] = 1.f;
-      customPreview[3] = 1.f;
-    }
-    bool openCustom = ImGui::ColorButton(
-        "##customrowsw", ImVec4(customPreview[0], customPreview[1], customPreview[2], customPreview[3]), rowSwatchFlags,
-        rowSwatchSize);
-    ImGui::SameLine(0.f, 8.f);
-    openCustom |= ImGui::Selectable("Custom color…", false, ImGuiSelectableFlags_SpanAvailWidth,
-                                  ImVec2(0.f, rowSwatchSize.y));
-    if (openCustom) {
-      PrepareCustomColorPicker(cmd);
-      requestCustomPopup = true;
+    ImGui::PushID("picker_row");
+    bool openPicker = ImGui::Selectable("Color Picker…", false, 0, ImVec2(0.f, rowSwatchSize.y));
+    if (openPicker) {
+      RequestSelectColor(cmd, merged == kVaries || merged == "---" ? std::string("ByLayer") : merged,
+                         AppCommandState::SelectColorTarget::EntitySelection, true, true);
     }
     ImGui::PopID();
 
     ImGui::EndCombo();
   }
 
-  return requestCustomPopup;
+  return false;
 }
 
 void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<SelectedEntity>& sel) {
@@ -7127,8 +7170,6 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
     return;
 
   const ImGuiInputTextFlags tflags = ImGuiInputTextFlags_EnterReturnsTrue;
-  bool requestCustomColorPopup = false;
-
   if (ImGui::BeginTable("props_gen_ed", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
@@ -7169,7 +7210,7 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
       }
     }
 
-    requestCustomColorPopup = DrawColorPickerRow(cmd);
+    (void)DrawColorPickerRow(cmd);
 
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
@@ -7301,26 +7342,6 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
     ImGui::EndTable();
   }
 
-  if (requestCustomColorPopup)
-    ImGui::OpenPopup("GoSurveyCustomColor");
-
-  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-
-  if (ImGui::BeginPopupModal("GoSurveyCustomColor", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::ColorPicker4("##custpick", gCustomColorPicker,
-                        ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_InputRGB |
-                            ImGuiColorEditFlags_NoAlpha);
-    ImGui::Separator();
-    if (ImGui::Button("Apply", ImVec2(120.f, 0.f))) {
-      ApplyColorToSelection(cmd, FormatHexColorRgb(gCustomColorPicker[0], gCustomColorPicker[1],
-                                                   gCustomColorPicker[2]));
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.f, 0.f)))
-      ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-  }
 }
 
 // One editable coordinate row in the model-space Properties panel.
@@ -18924,23 +18945,33 @@ void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log) 
   } else if (cmd.qsProperty == QP::Color) {
     std::vector<std::pair<std::string, std::string>> colorOpts;
     CollectQsColorOptions(cmd, &colorOpts);
-    // Ensure the stored value is valid; default to first option.
     const std::string curStorage = cmd.qsValueBuf;
     const bool curValid = std::any_of(colorOpts.begin(), colorOpts.end(),
-      [&](const std::pair<std::string,std::string>& p){ return p.second == curStorage; });
+                                      [&](const std::pair<std::string, std::string>& p) {
+                                        return p.second == curStorage;
+                                      });
     if (!curValid && !colorOpts.empty())
       std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", colorOpts[0].second.c_str());
-    // Find current display label for preview.
-    const char* preview = cmd.qsValueBuf;
-    for (const auto& opt : colorOpts)
-      if (opt.second == cmd.qsValueBuf) { preview = opt.first.c_str(); break; }
+    const char* preview = CadColorDisplayLabel(cmd.qsValueBuf).c_str();
     if (ImGui::BeginCombo("##qs_val_color", preview)) {
       for (const auto& opt : colorOpts) {
         const bool sel = (opt.second == cmd.qsValueBuf);
-        if (ImGui::Selectable(opt.first.c_str(), sel))
+        float rgb[3];
+        CadColorResolveRgb(opt.second, 1.f, 1.f, 1.f, rgb);
+        ImGui::PushID(opt.second.c_str());
+        ImGui::ColorButton("##qssw", ImVec4(rgb[0], rgb[1], rgb[2], 1.f),
+                           ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop,
+                           ImVec2(16.f, 16.f));
+        ImGui::SameLine(0.f, 6.f);
+        if (ImGui::Selectable(opt.first.c_str(), sel, 0))
           std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", opt.second.c_str());
-        if (sel) ImGui::SetItemDefaultFocus();
+        ImGui::PopID();
+        if (sel)
+          ImGui::SetItemDefaultFocus();
       }
+      ImGui::Separator();
+      if (ImGui::Selectable("Color Picker…"))
+        RequestSelectColor(cmd, cmd.qsValueBuf, AppCommandState::SelectColorTarget::QuickSelectValue, false, false);
       ImGui::EndCombo();
     }
   } else if (cmd.qsProperty == QP::Closed) {
@@ -19372,11 +19403,15 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
 
   ImGui::SetNextWindowSize(ImVec2(420, 340), ImGuiCond_FirstUseEver);
   bool open = cmd.showCreatePointsWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Create points", &open)) {
     cmd.showCreatePointsWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
   cmd.showCreatePointsWindow = open;
 
   ImGui::TextDisabled("Click in the drawing to place points. Clicks on existing markers select them.");
@@ -19410,6 +19445,7 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
     LoadSurveyPointsFromJsonFile(cmd, pathBuf, log);
 
   ImGui::End();
+  PopProductDialogAccent();
 }
 
 // Quick-pick fonts shared by the dialog combo: a TrueType family ("Arial") or an SHX file name
@@ -20049,11 +20085,14 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
 
   ImGui::SetNextWindowSize(ImVec2(1040, 520), ImGuiCond_FirstUseEver);
   bool open = cmd.showLayerManagerWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Layer Manager", &open)) {
     cmd.showLayerManagerWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
   BeginStyledDialog();
   cmd.showLayerManagerWindow = open;
 
@@ -20183,23 +20222,10 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
       ImGui::TableNextColumn();
       ImGui::SetNextItemWidth(-1);
       {
-        char cprev[120];
-        ImStrncpy(cprev, ColorStorageToPreviewLabel(row.color).c_str(), sizeof(cprev));
-        cprev[sizeof(cprev) - 1] = '\0';
-        if (ImGui::BeginCombo("##laycol", cprev)) {
-          for (const auto& p : kNamedColors) {
-            if (std::string(p.storage) == "ByLayer")
-              continue;
-            const bool sel = (row.color == p.storage);
-            if (ImGui::Selectable(p.label, sel)) {
-              row.color = p.storage;
-              BumpCadGpuCache(cmd);
-            }
-            if (sel)
-              ImGui::SetItemDefaultFocus();
-          }
-          ImGui::EndCombo();
-        }
+        ImGui::PushID(static_cast<int>(i + 70000));
+        if (DrawColorStorageCell(row.color, 1.f, 1.f, 1.f))
+          RequestSelectColor(cmd, row.color, AppCommandState::SelectColorTarget::LayerTable, false, false, i);
+        ImGui::PopID();
       }
 
       ImGui::TableNextColumn();
@@ -20294,27 +20320,15 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
       {
         ImGui::BeginDisabled(vpCur == nullptr);
         const std::string* ov = vpCur ? ViewportLayerColorOverride(*vpCur, row.name) : nullptr;
-        char vcprev[120];
-        ImStrncpy(vcprev, ov ? ColorStorageToPreviewLabel(*ov).c_str() : "(none)", sizeof(vcprev));
-        vcprev[sizeof(vcprev) - 1] = '\0';
-        if (ImGui::BeginCombo("##vpcol", vcprev)) {
-          if (ImGui::Selectable("(none)", ov == nullptr) && vpCur) {
-            ClearViewportLayerColor(*vpCur, row.name);
-            BumpCadGpuCache(cmd);
-          }
-          for (const auto& p : kNamedColors) {
-            if (std::string(p.storage) == "ByLayer")
-              continue;
-            const bool sel = ov && *ov == p.storage;
-            if (ImGui::Selectable(p.label, sel) && vpCur) {
-              SetViewportLayerColor(*vpCur, row.name, p.storage);
-              BumpCadGpuCache(cmd);
-            }
-            if (sel)
-              ImGui::SetItemDefaultFocus();
-          }
-          ImGui::EndCombo();
+        ImGui::PushID(static_cast<int>(i + 80000));
+        if (ov == nullptr) {
+          if (ImGui::Selectable("(none)", false, 0))
+            RequestSelectColor(cmd, "ACI:7", AppCommandState::SelectColorTarget::VpLayerColor, false, false, i,
+                               row.name);
+        } else if (DrawColorStorageCell(*ov, 1.f, 1.f, 1.f)) {
+          RequestSelectColor(cmd, *ov, AppCommandState::SelectColorTarget::VpLayerColor, false, false, i, row.name);
         }
+        ImGui::PopID();
         ImGui::EndDisabled();
       }
 
@@ -20346,6 +20360,7 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
       "Color, linetype, lineweight, and transparency apply to entities set to ByLayer / defaults.");
 
   ImGui::End();
+  PopProductDialogAccent();
 }
 
 // Settings panel implementation lives in CadUiSettings.cpp.

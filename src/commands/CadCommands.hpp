@@ -3500,6 +3500,22 @@ struct AppCommandState {
   bool showSettingsWindow = false;
   bool showQuickSelectWindow = false;
 
+  /// Select Color dialog (ACI palette + true colour) — layer manager, properties, quick select.
+  enum class SelectColorTarget : uint8_t {
+    None = 0,
+    LayerTable,
+    VpLayerColor,
+    EntitySelection,
+    QuickSelectValue,
+  };
+  bool showSelectColorPopup = false;
+  std::string selectColorInitial;
+  SelectColorTarget selectColorTarget = SelectColorTarget::None;
+  bool selectColorAllowByLayer = false;
+  bool selectColorAllowByBlock = false;
+  size_t selectColorLayerRowIndex = 0;
+  std::string selectColorVpLayerName;
+
   /// Quick Select filter state (QUICKSELECT / QS command).
   enum class QsApplyTo    : uint8_t { EntireDrawing = 0, CurrentSelection = 1 };
   enum class QsObjectType : uint8_t { All=0, Line, Circle, Arc, Ellipse, Polyline, Text, Mtext, DimAligned, DimLinear, DimAngular, SurveyPoint };

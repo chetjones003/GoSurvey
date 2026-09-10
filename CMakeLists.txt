@@ -315,6 +315,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/EntityId.cpp
   src/survey/PointGroupRule.cpp
   src/commands/CadCoordinateFrame.cpp
+  src/commands/CadColor.cpp
 
   # Object snapping (pure geometry; no GL despite living under viewport/)
   src/viewport/CadSnap.cpp
@@ -485,6 +486,7 @@ add_executable(GoSurvey
   src/ui/CadUi_SignInGate.cpp
   src/ui/CadUi_StartScreen.cpp
   src/ui/CadUi_WhatsNew.cpp
+  src/ui/CadUi_ColorPicker.cpp
   src/ui/MarkdownImGui.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp

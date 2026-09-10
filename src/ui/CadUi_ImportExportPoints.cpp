@@ -25,11 +25,14 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
 
   ImGui::SetNextWindowSize(ImVec2(560, 620), ImGuiCond_FirstUseEver);
   bool open = cmd.showImportPointsWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Import points", &open)) {
     cmd.showImportPointsWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
   BeginStyledDialog();
   cmd.showImportPointsWindow = open;
 
@@ -111,6 +114,7 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   }
 
   ImGui::End();
+  PopProductDialogAccent();
 }
 
 void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
@@ -119,11 +123,14 @@ void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
 
   ImGui::SetNextWindowSize(ImVec2(520, 340), ImGuiCond_FirstUseEver);
   bool open = cmd.showExportPointsWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Export points", &open)) {
     cmd.showExportPointsWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
   BeginStyledDialog();
   cmd.showExportPointsWindow = open;
 
@@ -141,4 +148,5 @@ void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
     SurveyCsvExportFile(cmd, log);
 
   ImGui::End();
+  PopProductDialogAccent();
 }

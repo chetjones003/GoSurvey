@@ -471,15 +471,19 @@ void DrawSurfacePropertiesWindow(AppCommandState& cmd, std::vector<std::string>*
   const std::string title = "Surface Properties - " + s.name;
   ImGui::SetNextWindowSize(ImVec2(640.f, 520.f), ImGuiCond_FirstUseEver);
   bool open = cmd.showSurfacePropertiesWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin(title.c_str(), &open)) {
     cmd.showSurfacePropertiesWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
   cmd.showSurfacePropertiesWindow = open;
   if (!open) {
     loadedFor = -1;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
   BeginStyledDialog();
@@ -528,4 +532,5 @@ void DrawSurfacePropertiesWindow(AppCommandState& cmd, std::vector<std::string>*
   ImGui::EndDisabled();
 
   ImGui::End();
+  PopProductDialogAccent();
 }

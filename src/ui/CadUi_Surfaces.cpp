@@ -138,11 +138,15 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
 
   ImGui::SetNextWindowSize(ImVec2(860, 520), ImGuiCond_FirstUseEver);
   bool open = cmd.showSurfaceManagerWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Surfaces", &open)) {
     cmd.showSurfaceManagerWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
   cmd.showSurfaceManagerWindow = open;
 
   static int selIdx = 0;
@@ -806,6 +810,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
   }
 
   ImGui::End();
+  PopProductDialogAccent();
 
   // ── Deferred mutations ────────────────────────────────────────────────────────────────────────
   // Applied after the tree walk so nothing resizes a vector the walk is iterating.
