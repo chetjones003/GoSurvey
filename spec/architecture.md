@@ -3418,6 +3418,33 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   matching REQ-313's "the solid kernel" framing; a future issue would need to name wire/sheet import if
   wanted.
 
+#### ADR-051 addendum — Civil 3D parts-catalog components have no portable geometry   (2026-09-10, accepted)
+
+- **Context (GitHub issue #369).** `BLOCKIMPORT` of `CS150_4in_WELD_NECK_FLANGE.dwg` logged
+  `skipped "3DSOLID(empty)" × 2`. A LibreDWG diagnostic confirmed the single `3DSOLID` has
+  `acis_empty=1`, `version=0`, `num_blocks=0` and **no ACDS handle** — there is no ACIS stream
+  anywhere in the file, inline or via the newer ACDS datastorage section (#366). The class table is
+  full of Civil 3D Pressure Pipes Network classes (`AECC_FITTING_STYLE`, `AECC_PRESSURE_PIPE_STYLE`,
+  `AECC_DISP_REP_FITTING`, …). The flange's shape is **generated at open time** by Civil 3D's
+  proprietary Parts Catalog engine from a parametric catalog reference — exactly the ADR-026
+  situation for Plant 3D's `AcPp*` objects: unreachable by any third-party reader, not now and not
+  with a native codec. There is nothing to parse.
+- **Decision.**
+  1. The importer detects the signature — a payload-less `3DSOLID` (the `acis_empty` branch of
+     `ImportAcisSolid`) **and** any `AECC_*` entry in `Dwg_Data::dwg_class` — and emits
+     `3DSOLID(Civil3D parts-catalog part, no portable geometry)` through the same `NoteSkip` path,
+     so the log explains the real cause instead of reading like a decode failure. Detection is
+     conservative: both signs are required, so an ordinary drawing with a genuinely empty legacy
+     `3DSOLID` still logs `(empty)`.
+  2. **`BLOCKIMPORT` keeps the block's other 2D / annotation content** and names the solid as
+     skipped; it does not refuse the whole block. This matches ADR-051 (d) (an unsupported ACIS
+     solid is refused by name while the rest of the file imports) and ADR-026's lower-fidelity-plus-
+     explicit-refusal posture. Refusing the block outright would discard usable centerlines and
+     labels and be stricter than the importer is anywhere else (D-2026-09-10-b).
+- **Out of scope, unchanged:** reimplementing or vendoring Civil 3D's Parts Catalog engine
+  (impossible without Autodesk's SDK, ADR-026); the ACDS/SAB work in #366/#301, which is the
+  distinct case of files that *do* carry portable ACIS data in the newer storage format.
+
 ### ADR-052 — General trimmed-boundary faces: an additive parameter-space loop, not a rectangle replacement   (2026-09-05, accepted)
 
 - **Context.** Issue #302 (split from #299/ADR-051 (c)): `brep::Face`'s boundary is today always the

@@ -346,6 +346,37 @@ TEST_CASE("LibreDWG layer colour: negative ACI keeps its colour", "[dwg][libredw
   CHECK(libredwgcad_detail::ColorToStorage(256, 0xc3, 0x100u) == "ByLayer");  // 0xc3 sentinel
 }
 
+// issue #369 / D-2026-09-10-b — a Civil 3D parts-catalog file (pressure pipe / fitting /
+// structure) stores no portable 3D geometry; its 3DSOLID is an empty placeholder and its class
+// table is full of AECC_* custom classes. The importer names that skip for what it is rather than
+// the ambiguous "3DSOLID(empty)".
+TEST_CASE("Civil3D parts-catalog class signature is detected from the class table",
+          "[dwg][libredwg][issue369]") {
+  Dwg_Class classes[3] = {};
+  classes[0].dxfname = const_cast<char*>("ACDBDICTIONARYWDFLT");
+  classes[1].dxfname = const_cast<char*>("AECC_PRESSURE_PIPE");
+  classes[2].dxfname = const_cast<char*>("AECC_FITTING_STYLE");
+
+  Dwg_Data dwg = {};
+  dwg.num_classes = 3;
+  dwg.dwg_class = classes;
+  CHECK(libredwgcad_detail::DwgHasCivil3dCatalogClasses(&dwg));
+
+  // A plain drawing (no AECC_* classes) is not flagged.
+  Dwg_Class plain[2] = {};
+  plain[0].dxfname = const_cast<char*>("ACDBDICTIONARYWDFLT");
+  plain[1].dxfname = const_cast<char*>("LWPOLYLINE");
+  Dwg_Data ordinary = {};
+  ordinary.num_classes = 2;
+  ordinary.dwg_class = plain;
+  CHECK_FALSE(libredwgcad_detail::DwgHasCivil3dCatalogClasses(&ordinary));
+
+  // No class table, and a null drawing, are both safe.
+  Dwg_Data empty = {};
+  CHECK_FALSE(libredwgcad_detail::DwgHasCivil3dCatalogClasses(&empty));
+  CHECK_FALSE(libredwgcad_detail::DwgHasCivil3dCatalogClasses(nullptr));
+}
+
 // issue #140 / DEBT-151-a — end-to-end against a real LibreDWG-decoded file: a multi-layer table
 // must import names, colours (incl. off-layer negative ACI), assigned linetypes and freeze/lock
 // flags intact. Fixture is R2000 because LibreDWG 0.13.3's own encoder does not round-trip
