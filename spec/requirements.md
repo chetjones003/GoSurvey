@@ -8098,6 +8098,67 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-09-10 — accepted (D-2026-09-10-d, ADR-056). Content is shipped Markdown (not
   fetched); link is always the releases list; About *is* the billboard; md4c vendored for CommonMark.
 
+### REQ-337 — SECTIONCLIP: live section clipping of the model view
+- Purpose: look inside a model without taking it apart — hide whatever stands between the eye and
+  the interior, and move that boundary while watching
+- Priority: should
+- Type: functional
+- Statement: `SECTIONCLIP` hides the part of the model view lying in front of a plane, and updates
+  as the plane moves.
+
+  **The plane is the active UCS plane**, slid along its own Z by an offset the user sets — the same
+  choice REQ-335's `SECTION` made (D-2026-09-09-i) and for the same reason: `ucs::Ucs` is this
+  project's plane abstraction (REQ-311, D-2026-08-31-e), and the two commands then cut on one plane,
+  so a user can section exactly what they are looking into. `FLIP` reverses which half survives.
+
+  **This is a view state, not an edit.** No geometry is created, moved or deleted, and no undo entry
+  is made. That is the whole distinction from `SECTION`, which asks the same plane the same question
+  and answers it with a polyline in the drawing.
+
+  **It is not persisted to the drawing.** Unlike REQ-309's projection, which is a property of a
+  saved view, this is an inspection mode: opening a file to find half of it invisible, with the
+  reason three menus away, is the failure that choice avoids.
+
+  **Live means no rebuild.** The plane reaches the GPU as a shader uniform re-read every frame, so
+  moving it changes the next frame and invalidates no cached geometry — nothing is re-tessellated
+  and nothing is re-uploaded. See ADR-057.
+
+  **Scope boundary — what the clip reaches.** It cuts everything drawn through OpenGL: solids,
+  meshes, surfaces, linework, filled regions and PDF underlays. It does **not** cut the grid, which
+  is a drafting aid drawn on the UCS plane and therefore coincident with the clip plane at offset 0;
+  nor any UI overlay (selection highlights, snap glyphs, grips, gizmos), which are never occluded by
+  policy. It also does **not** cut **dimensions, annotation text or line-pattern hatches**, because
+  those are drawn by the ImGui overlay through `Camera::WorldToScreen` rather than by the renderer,
+  and a GPU clip plane cannot reach them. That last exclusion is a **stated limit of increment 1**,
+  decided 2026-09-10, not an accident of pass ordering — see ADR-057 (e) and the Revisions note.
+- Acceptance:
+  - the clip removes model geometry in front of the plane from the view, and restores it when
+    turned off;
+  - the plane is the active UCS plane offset along its Z, so moving or turning the UCS moves the cut
+    with no command re-run;
+  - moving the plane **rebuilds nothing** — the solid display-regeneration count is unchanged across
+    a sequence of offset changes, a flip, and an off/on;
+  - the clipped geometry is **byte-identical** afterwards: same volume, same area, same topology;
+  - no undo entry is made, so `UNDO` after clipping reaches past it to the previous edit;
+  - the clip plane is correct at **survey coordinate magnitudes** to REQ-101, on an axis-aligned,
+    an oblique and a horizontal plane, in plan and orbited;
+  - **panning the view does not move the clip** — the plane is fixed to the drawing, not the screen;
+  - `ON`, `OFF`, `FLIP` and an offset are each accepted, a bare command reports the current state,
+    and every refusal leaves the previous state intact (REQ-201);
+  - the clip does not survive into a new drawing;
+  - the interface is unaffected while the clip is on.
+- Owner-layer: Render (`src/render/SectionClip.hpp`, `ViewportRenderer`), Commands
+- Status: accepted (2026-09-10) — see D-2026-09-10-a.
+- Revisions: 2026-09-10 — proposed and accepted (D-2026-09-10-a, ADR-057, TASK-240). Increment 1:
+  one plane, the active UCS, GL geometry only, uncapped. **Three things are recorded as increments
+  rather than omissions.** (1) **The cut is not capped** — a clipped solid shows its interior, since
+  the renderer enables no face culling; capping wants a cross-section face, and `brep::SectionLoop`
+  (REQ-335) already produces exactly that geometry. (2) **The ImGui-overlay entities above do not
+  clip**, which is a rendering-architecture limit, not a bug in this feature; closing it means either
+  clipping those on the CPU at each `WorldToScreen` site or moving them into GL. (3) A one-off
+  three-point plane, and persistence to `.gs`, each if asked for. Phase 6 of GitHub #120, filed as
+  #149, **acceptance 6 — the last of that issue's eight criteria.**
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -9248,6 +9309,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-334 | Domain | accepted, increment 1 delivered (GitHub issue #149 acceptance 4, D-2026-09-09-h, ADR-055, TASK-237). The volume **centroid**, the first of #120's mass properties that needed a genuinely new integrand — the first moments of volume, with no closed form previously written for any surface kind. Integrated by 16-point Gauss-Legendre over the **exact analytic** surfaces (never the display mesh), in **world axes** because the integrand `1/2 r_k^2 n_k` is not frame-covariant, about a **solid-local** reference point because otherwise it loses its low bits at survey magnitude. Planar faces go through Green's theorem along the boundary with quadrature per edge, which is what makes one path cover a straight-edged face and an **arc-bounded** cap alike. Reported through its own `centroidValid` flag: a `Nurbs` face, a general trim loop, a face with holes or an `Ellipse`/`Intersection` boundary edge is **refused by name** (increment 2's work) while the volume and surface area stay untouched. Two errors were measured out during development and are now pinned by tests that would otherwise pass: a per-face-frame moment rotated into world is exact for every axis-aligned solid and **3.2 ft wrong on a tilted box**, and a symmetric primitive's centroid comes out right even from a badly wrong integrand, so the wedge, pyramid and frustum carry the load. `BrepTests [req334]` — 8 cases: seven primitives against closed forms, a tilted frame, survey magnitudes (tilted included), translation covariance, a Boolean result against the composite of its parts, the two refusals, and the uncovered-face case that keeps its volume | accepted |
 | REQ-335 | Domain/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 5, D-2026-09-09-i, TASK-238). `SECTION` — the cross-section of the selected solids by the **active UCS plane**, as a closed polyline, leaving the solids alone. `brep::SectionLoop` returns the section as a closed `brep::Path` of lines and arcs — the kernel's existing vocabulary, so no new type and no knowledge of document entities (ADR-048 (a)) — and arcs reach the drawing as **bulges** (REQ-316/ADR-047), so a cylinder's circular section is a circle and not a polygon. **The cut is `Slice`'s, unchanged**: sectioning asks the same question and keeps a different answer, so the accepted set is inherited rather than restated and a refusal carries `Slice`'s own `Problem` — asserted by a test that reads the reason off `Slice` and compares. Non-destructive is structural (const reference in, pieces discarded) and asserted byte-for-byte anyway. Refused by name: an oblique cylinder cut (`Ellipse` boundary), a section with holes, a plane that misses, a degenerate normal. `BrepTests [req335]` — 9 cases incl. the `A/cos θ` oblique-area check that a plan projection would fail, and `headless.req335-section`, which pins the command's one-undo-step behaviour and that a refusal leaves the document unchanged. **Increment 2**: a three-point plane form matching SLICE's, elliptical boundaries, sections with holes | accepted |
 | REQ-336 | UI/IO/Build | planned (D-2026-09-10-d, ADR-056). What's New billboard: `resources/whats-new.md` + vendored md4c + ImGui draw layer; auto-open once per launch from Start unless prefs dismiss version matches; Help → About reopens same window without clearing dismiss; releases-list URL; missing-file fallback; CI presence gate; agent rule + git hook authoring lock | accepted |
+| REQ-337 | Render/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 6 — **the last of that issue's eight criteria**, D-2026-09-10-e, ADR-057, TASK-248). `SECTIONCLIP` — hide the model in front of the **active UCS plane**, offset along its Z, `FLIP` to keep the other half. A **view state**: no geometry, no undo entry, not persisted to `.gs`. **Live means no rebuild** — the plane is a `gl_ClipDistance[0]` uniform re-read every frame, so moving it invalidates no cached geometry; the transcript asserts the display-regeneration counter is unchanged across five plane moves, a flip and an off/on. `uMVP` and every REQ-058 camera path are untouched, which is what keeps plan-view parity intact. **The decision that carries the risk is the anchor rebasing** (ADR-057 (c)): vertices arrive with XY relative to the view anchor and the anchor IS the pan point, so a world-stated plane is **bit-identical to the correct one at the origin**, sits **2,196,000 ft out at easting 2.196e6**, and **moves one foot per foot of pan** — while a horizontal cut is exact in *both*, so neither an origin test nor a level plane can catch it. `SectionClipTests` (9 cases: the UCS plane and its offset, FLIP, a moved-and-turned frame, CPU/shader predicate parity, survey magnitudes on an axis-aligned/oblique/horizontal plane, the origin bit-identity, an anchor sweep, and REQ-101 resolution at 0.002 ft steps on a 2.2e6 constant) **measures where the plane actually lands by bisection** rather than checking that two answers differ — the P3 lesson. **Proven to bite:** removing the anchor term fails 4 of the 9 cases and 13 assertions. Plus `headless.req336-section-clip` (87 steps: every spelling and refusal with the previous state surviving each, UNDO reaching *past* the clip to the previous edit, the solid byte-identical, the no-rebuild sweep, and the clip not surviving a new drawing). Full suite **1451/1451**, up from 1441. **Two limits stated as increments, not gaps:** dimensions, annotation text and line-pattern hatches are ImGui-overlay drawn and **no GPU clip plane can reach them**; and the cut is **uncapped**, so a clipped solid shows its interior — `brep::SectionLoop` (REQ-335) is already the geometry a cap needs. A GUI check (`--devshell-run req336-section-clip-viewport`, six screenshots) is committed but **not yet run** — see TASK-248 | accepted |
 
 ---
 

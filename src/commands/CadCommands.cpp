@@ -6391,6 +6391,7 @@ const CmdEntry kRegistry[] = {
      "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE [points] | BENCH MESH [triangles] | BENCH SOLID [count]"},
     {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
     {"perspective", "projection, persp", "View projection: ON (perspective) / OFF (orthographic)"},
+    {"sectionclip", "sclip, clip", "Live section clip by the UCS plane: ON / OFF / FLIP / <offset>"},
     {"fov", "lens", "Perspective field of view, in degrees"},
     {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
@@ -32489,6 +32490,83 @@ bool ApplyFovValue(AppCommandState& st, const std::string& raw, std::vector<std:
   log.push_back(buf);
   return true;
 }
+
+/// One line describing the clip's current state, used by the bare command and after every change so
+/// a user never has to guess where the plane is (REQ-336).
+std::string SectionClipReport(const AppCommandState& st) {
+  if (!st.viewportSectionClip)
+    return "Section clip = OFF.";
+  char buf[192];
+  std::snprintf(buf, sizeof(buf), "Section clip = ON at offset %.4g along the UCS Z%s.",
+                st.viewportSectionClipOffset, st.viewportSectionClipFlip ? ", flipped" : "");
+  return buf;
+}
+
+/// `SECTIONCLIP` — hide everything in front of a plane so the inside of a model can be looked at
+/// (REQ-336 / ADR-056, GitHub issue #149 acceptance 6).
+///
+/// `ON` / `OFF` toggle it, `FLIP` swaps which half survives, and a bare number sets the offset of
+/// the plane along the active UCS Z. A bare `SECTIONCLIP` reports — the same report-or-set shape as
+/// `PERSPECTIVE` and `CROSSHAIR3D` (REQ-309, REQ-310), so a third view toggle behaves like the two
+/// that came before it.
+///
+/// **This is a view state, not an edit.** No undo entry, no geometry touched, nothing appended: the
+/// clip is a uniform the renderer re-reads every frame. That is also what makes it live — setting
+/// the offset changes the next frame and invalidates no cached geometry, so there is no rebuild
+/// step between moving the plane and seeing the result. Compare `SECTION` (REQ-335), which is the
+/// same plane asked a different question and DOES create geometry.
+///
+/// A number is accepted with or without `OFFSET` in front of it, because "SECTIONCLIP 12" is what a
+/// user types once they know the command; the keyword exists so the help line can name the unit.
+bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
+  std::string v = StringUtil::trimCopy(raw);
+  for (char& ch : v)
+    ch = static_cast<char>((ch >= 'A' && ch <= 'Z') ? (ch - 'A' + 'a') : ch);
+
+  if (v == "on" || v == "1" || v == "yes") {
+    st.viewportSectionClip = true;
+    log.push_back(SectionClipReport(st));
+    return true;
+  }
+  if (v == "off" || v == "0" || v == "no") {
+    st.viewportSectionClip = false;
+    log.push_back(SectionClipReport(st));
+    return true;
+  }
+  if (v == "flip" || v == "reverse" || v == "invert") {
+    // Flipping while the clip is off would silently change what ON later means, so it turns the
+    // clip on as well: the user asked to see the other half, and the other half is a visible thing.
+    st.viewportSectionClipFlip = !st.viewportSectionClipFlip;
+    st.viewportSectionClip = true;
+    log.push_back(SectionClipReport(st));
+    return true;
+  }
+
+  // `OFFSET <n>` and a bare `<n>` are the same request.
+  std::string numTok = v;
+  if (v.rfind("offset", 0) == 0)
+    numTok = StringUtil::trimCopy(v.substr(6));
+
+  // Parsed as a DOUBLE, not through `ParseOneFloat`: this offset is a coordinate the user typed,
+  // the field it lands in is a double, and REQ-101 is +/-0.002 ft. A float round trip resolves that
+  // only up to about 16,000 ft — narrowing it here and widening it again on the next line is
+  // precisely the one-narrowing-point defect ADR-054 Phase D audited out.
+  double parsed = 0.0;
+  {
+    std::istringstream ns(numTok);
+    if (numTok.empty() || !(ns >> parsed) || !std::isfinite(parsed)) {
+      log.push_back("SECTIONCLIP - enter ON, OFF, FLIP, or an offset distance along the UCS Z.");
+      return false;
+    }
+  }
+  // A non-finite offset would produce a plane constant that clips everything or nothing with no
+  // way back, so it is refused above rather than stored (REQ-201).
+  st.viewportSectionClipOffset = parsed;
+  st.viewportSectionClip = true;  // typing an offset means "show me that cut"
+  log.push_back(SectionClipReport(st));
+  return true;
+}
+
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper space: geometry + viewports
     const bool hadEntities = !st.selectedPaperEntities.empty();
@@ -34381,6 +34459,24 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       } else {
         log.push_back(std::string("Projection = ") + ProjectionName(st.viewportProjection) +
                       ". Usage: PERSPECTIVE ON | OFF.");
+      }
+      return;
+    }
+    // SECTIONCLIP (REQ-336): live section clipping — hide what is in front of the active UCS plane
+    // so the interior can be inspected. Report-or-set, same shape as PERSPECTIVE and CROSSHAIR3D.
+    // A view state: no undo entry and no geometry, which is what separates it from SECTION.
+    if (plotTok == "sectionclip" || plotTok == "sclip" || plotTok == "clip") {
+      // The REST of the line, not one token: `OFFSET -4` is two words and is a documented form, so
+      // reading a single token would silently drop the number and refuse a request that was
+      // perfectly well formed. `ON` and a bare `-4` come through the same path unchanged.
+      std::string clipArg;
+      std::getline(issIdle, clipArg);
+      clipArg = StringUtil::trimCopy(clipArg);
+      if (!clipArg.empty()) {
+        ApplySectionClipValue(st, clipArg, log);
+      } else {
+        log.push_back(SectionClipReport(st) +
+                      " Usage: SECTIONCLIP ON | OFF | FLIP | <offset along the UCS Z>.");
       }
       return;
     }

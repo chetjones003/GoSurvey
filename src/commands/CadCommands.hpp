@@ -3611,6 +3611,23 @@ struct AppCommandState {
   /// UCS. **Off by default** — on, the cursor changes colour and orientation, and a display change
   /// no one asked for is the one thing REQ-064 was careful to avoid when it added visual styles.
   bool viewportCrosshair3d = false;
+  /// Live section clipping (REQ-336 / ADR-056, GitHub issue #149 acceptance 6): hide everything on
+  /// the far side of a plane so the inside of a model can be looked at, updating as the plane moves.
+  ///
+  /// **The plane is the active UCS plane**, slid along its own Z by \ref viewportSectionClipOffset —
+  /// the same decision `SECTION` made (D-2026-09-09-i) and for the same reason, so the two commands
+  /// cut on the same plane and a user can section exactly what they are looking into.
+  ///
+  /// **Deliberately NOT persisted to `.gs`**, unlike \ref viewportProjection which sits beside a
+  /// named view. This is an inspection mode, not a property of the drawing: opening a file to find
+  /// half of it invisible, with the reason three menus away, is the failure this avoids. REQ-336
+  /// records persistence as a possible increment rather than an oversight.
+  bool viewportSectionClip = false;
+  /// Offset of the clip plane from the UCS origin, along the UCS Z, in drawing units.
+  double viewportSectionClipOffset = 0.0;
+  /// Which half survives. False keeps the half the UCS +Z points AWAY from — so the material in
+  /// front of the plane is what disappears, which is the direction that reads as "cut towards me".
+  bool viewportSectionClipFlip = false;
   /// Viewport background (model-space clear color): RGB 0–1. Default #141A24 steel-blue tint.
   float viewportBgR = 0.08f;
   float viewportBgG = 0.10f;

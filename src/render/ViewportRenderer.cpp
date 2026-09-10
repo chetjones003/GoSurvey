@@ -19,11 +19,29 @@
 
 namespace {
 
+// REQ-336 / ADR-056 — the live section clip.
+//
+// Every vertex shader below that draws model geometry carries the same two added lines: a
+// `uClipPlane` uniform and one write to `gl_ClipDistance[0]`. The plane is a UNIFORM and not a
+// matrix, which is what keeps the REQ-058 camera untouched by this feature — `uMVP` and every path
+// that builds it are exactly as they were.
+//
+// `uClipPlane` is in the space `aPos` is in — XY relative to the view anchor, Z absolute — NOT in
+// world coordinates. `SectionClipToShaderVec4` does that conversion and documents what skipping it
+// costs (up to 2,196,000 ft at state-plane coordinates, and a clip that slides when the view pans).
+// A vertex survives when `dot(uClipPlane.xyz, aPos) + uClipPlane.w >= 0`.
+//
+// `gl_ClipDistance[0]` is written UNCONDITIONALLY, and the plane is neutralised (0,0,0,1) rather
+// than the shader branching, for two reasons: a vertex shader that leaves gl_ClipDistance
+// unwritten while GL_CLIP_DISTANCE0 is enabled has undefined contents, and a uniform swap is
+// cheaper than a shader permutation.
 const char* kLineVs = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
 uniform mat4 uMVP;
+uniform vec4 uClipPlane;
 void main() {
   gl_Position = uMVP * vec4(aPos, 1.0);
+  gl_ClipDistance[0] = dot(uClipPlane.xyz, aPos) + uClipPlane.w;
 }
 )";
 
@@ -39,9 +57,11 @@ const char* kLineVcVs = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec4 aColor;
 uniform mat4 uMVP;
+uniform vec4 uClipPlane;
 out vec4 vColor;
 void main() {
   gl_Position = uMVP * vec4(aPos, 1.0);
+  gl_ClipDistance[0] = dot(uClipPlane.xyz, aPos) + uClipPlane.w;
   vColor = aColor;
 }
 )";
@@ -73,9 +93,11 @@ const char* kShadedVs = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 uniform mat4 uMVP;
+uniform vec4 uClipPlane;
 out vec3 vNormal;
 void main() {
   gl_Position = uMVP * vec4(aPos, 1.0);
+  gl_ClipDistance[0] = dot(uClipPlane.xyz, aPos) + uClipPlane.w;
   vNormal = aNormal;
 }
 )";
@@ -95,13 +117,17 @@ void main() {
 )";
 
 // Textured quad — used for PDF underlay rendering
+// The PDF underlay's aPos is a vec2 in model XY at Z = 0, so its clip term takes the same
+// vec3(aPos, 0.0) the position does. An underlay is model content and clips with the rest of it.
 const char* kTexVs = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aUV;
 uniform mat4 uMVP;
+uniform vec4 uClipPlane;
 out vec2 vUV;
 void main() {
   gl_Position = uMVP * vec4(aPos, 0.0, 1.0);
+  gl_ClipDistance[0] = dot(uClipPlane.xyz, vec3(aPos, 0.0)) + uClipPlane.w;
   vUV = aUV;
 }
 )";
@@ -1138,6 +1164,46 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   float mvp[16];
   MulMat4(projRot, model, mvp);
 
+  // --- REQ-336 / ADR-056: the live section clip ---------------------------------------------------
+  //
+  // Rebased onto the view anchor HERE, where the anchor is known, and set on every program that
+  // draws model geometry once per frame. Uniforms are per-program state that survives until the
+  // next `glUseProgram` of that program, so setting them once is enough and the passes below only
+  // ever flip `GL_CLIP_DISTANCE0`.
+  //
+  // Doing it once per frame is also what makes the clip LIVE in the sense acceptance 6 asks for:
+  // the plane is re-read and re-packed every frame from `tuning`, so moving it changes the next
+  // frame and invalidates NO cached geometry — `cadGpuRevision`, the mesh cache and the solid batch
+  // signature are all untouched by it. Nothing is re-tessellated and nothing is re-uploaded.
+  float clipVec[4];
+  if (tuning.sectionClip.active)
+    SectionClipToShaderVec4(tuning.sectionClip, viewAnchorX, viewAnchorY, clipVec);
+  else
+    SectionClipDisabledVec4(clipVec);
+  const bool sectionClipOn = tuning.sectionClip.active;
+  {
+    const unsigned int clipped[] = {lineProgram_, vcLineProgram_, shadedProgram_, texProgram_};
+    for (const unsigned int prog : clipped) {
+      if (!prog)
+        continue;
+      glUseProgram(prog);
+      const GLint loc = glGetUniformLocation(prog, "uClipPlane");
+      if (loc >= 0)
+        glUniform4fv(loc, 1, clipVec);
+    }
+  }
+  // Model geometry clips; UI overlays do not. This is the same split `depthForGeometry` /
+  // `depthForOverlay` already draw, for a related reason: a selection highlight or a snap marker
+  // that vanished into the cut would be hiding the very thing the user is pointing at.
+  const auto clipForGeometry = [&]() {
+    if (sectionClipOn)
+      glEnable(GL_CLIP_DISTANCE0);
+    else
+      glDisable(GL_CLIP_DISTANCE0);
+  };
+  const auto clipForOverlay = [&]() { glDisable(GL_CLIP_DISTANCE0); };
+  clipForGeometry();
+
   // issue #383: this is the fallback stroke for entities with no resolvable lineweight AND the
   // width rubber-band previews inherit (they draw right after the highlight passes below, which
   // restore glLineWidth(kLwMain)). Thinned to match AutoCAD's default look.
@@ -1224,7 +1290,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
 
   // --- Grid: centered on view, step scales with zoom (stable in world space) ---
+  //
+  // REQ-336: the grid is the one thing in the geometry region that does NOT clip. It is a drafting
+  // aid drawn ON the UCS plane, and the clip plane IS the UCS plane offset along its own normal —
+  // so at offset 0 the two are coincident and clipping the grid by itself gives z-fighting and a
+  // half-vanished aid. An aid that disappears where you are working tells you nothing. Stated as a
+  // scope boundary in REQ-336 rather than left as an accident of pass ordering.
   if (showGrid) {
+    glDisable(GL_CLIP_DISTANCE0);
     auto niceStep = [](float worldSpan) -> float {
       float s = worldSpan / 20.f;
       if (s < 1e-9f)
@@ -1388,6 +1461,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glDrawArrays(GL_LINES, 0, gridVertexCount_);
     glDisable(GL_BLEND);
     glBindVertexArray(0);
+    clipForGeometry();  // REQ-336: back on for the model geometry below
   }
 
   // --- Imported meshes (REQ-063) -----------------------------------------------------------------
@@ -2153,6 +2227,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // once meshes land (REQ-063), when there will be real surfaces to hide behind.
   // ============================================================================================
   depthForOverlay();
+  clipForOverlay();  // REQ-336: everything from here down is UI, and UI is never clipped away
 
   // --- Hover highlight (subtle blue stroke drawn before selection so selection always wins) ---
   if (hoverLines && !hoverLines->empty() && hoverLines->size() % 6 == 0) {
@@ -2533,6 +2608,12 @@ finish_render:
   glBindVertexArray(0);
   glUseProgram(0);
   glDepthMask(GL_TRUE);
+  // REQ-336: the clip must not outlive this call. ImGui draws the whole UI immediately after with
+  // its own shaders, which do not write `gl_ClipDistance` — and a shader that leaves it unwritten
+  // while GL_CLIP_DISTANCE0 is enabled has UNDEFINED clip distances, so leaving this on can delete
+  // arbitrary parts of the interface. Unconditional, and outside the geometry block so the
+  // paper-space `goto` above reaches it too.
+  glDisable(GL_CLIP_DISTANCE0);
 
   if (useMsaa && msFbo_ && fbo_) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo_);
