@@ -3471,23 +3471,20 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
      largest-area loop taken as the outer boundary and wound CCW with holes wound CW. This is the
      plane counterpart of the existing `BuildConeGeneralTrim`; a full cone/cylinder wall's two rim
      loops are merged back into one two-edge loop for `BuildConeFace`'s full-revolve path.
-  4. **Standalone `.sat` import.** `BLOCKIMPORT` (and the Import Block file dialog) accept `.sat`. A
-     `.sat` holds one model, not a block library, so it imports as a **block definition named after
-     the file** — BLOCKIMPORT defines only, INSERT places. The solid is **re-centred on the origin**
-     first: a `.sat` carries the model's absolute position from the drawing it was exported out of
-     (the `body` transform's translation, often thousands of units out), which is noise for a
-     reusable block and would land it far from the cursor. The ACIS header's `num_mm_units`
-     (25.4 / 304.8 / 1000) sets the block units.
-  5. **INSERT materialises a block's B-rep solids.** `CadBlockContent::solids` is captured and
-     round-trips through save/WBLOCK but the block-*reference* renderer never draws it. So
-     `PlaceInsertImpl` (and `ExplodeRef`) turn each `content.solids` entry into a real drawing solid
-     transformed by the insert frame — translation, Z rotation and a uniform scale, the parameters a
-     `brep::Solid` can hold; a reference tilt or non-uniform scale is dropped with a logged note. A
-     **solids-only** block (what a `.sat` produces) then needs no visible reference at all — INSERT
-     leaves just the solid; a mixed block keeps its reference for the rest of its content. A
-     *linked* block-reference solid (one that re-derives from the definition when the definition
-     changes, like a referenced line does) is still future.
-- **Out of scope.** Free-form/spline/sphere/torus surfaces (#300), SAB binary (#301).
+  4. **Standalone `.sat` import.** `BLOCKIMPORT` (and the Import Block file dialog) accept `.sat`.
+     The solid is **re-based onto the origin** — centred in X/Y, its lowest point at Z 0 — because a
+     `.sat` carries the model's absolute position from the drawing it was exported out of (the
+     `body` transform's translation, often thousands of units out). It is then **dropped straight
+     into the drawing** as an ordinary drawing solid, *and* a block definition named after the file
+     is kept. It is not placed via INSERT: `CadBlockContent::solids` is never drawn from a block
+     reference, and INSERT is a 2D command (it picks no Z), so it cannot position a solid in a 3D
+     scene. The user MOVEs the dropped solid into place — MOVE is 3D- and osnap-aware where INSERT
+     is not. Units are left neutral (`unitless`): a `.sat` header's millimetres-per-model-unit is
+     unreliable in practice (Civil 3D wrote 25.4 for a foot-scaled model), so the solid imports at
+     the file's own coordinates and the user scales it if needed.
+- **Out of scope.** A block-*reference* path for a `CadBlockContent::solids` entry — instancing it
+  on INSERT, or a 3D INSERT with a real Z pick — is future work, tracked in #473. Free-form /
+  spline / sphere / torus surfaces (#300); SAB binary (#301).
 
 ### ADR-052 — General trimmed-boundary faces: an additive parameter-space loop, not a rectangle replacement   (2026-09-05, accepted)
 

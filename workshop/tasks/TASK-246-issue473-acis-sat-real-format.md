@@ -46,44 +46,44 @@ window and chose "block definition" as the import target.
   `BuildConeFace`'s full-revolve path.
 
 ### `.sat` file type (`src/commands/CadBlocks.cpp`, `src/platform/WinFileDialogs.cpp`, `CadCommands.cpp`)
-- `ImportSatFileToScratch` — reads the file, runs `acissat::ImportSatSolid`, **re-centres the solid
-  on the origin** (`ComputeBounds` → `Translate` by `-bboxCentre`; a `.sat` carries its absolute
-  position from the source drawing, ~4999 units for the fixture), pushes it into the scratch state
-  and sets `drawingInsUnits` from `mmPerUnit`.
-- `ImportCadBlocksFromPathImpl` — `.sat` branch; the shared block-capture path wraps it into a
-  definition named after the file. BLOCKIMPORT defines only.
+- `ImportSatFileToScratch` — reads the file, runs `acissat::ImportSatSolid`, **re-bases the solid
+  onto the origin** (`ComputeBounds` → `Translate` by `{-Xcentre, -Ycentre, -Zmin}`; a `.sat`
+  carries its absolute position from the source drawing, ~4999 units for the fixture), pushes it
+  into the scratch state, leaves units `unitless`.
+- `ImportCadBlocksFromPathImpl` — `.sat` branch: the shared block-capture path keeps a definition
+  named after the file, *and* the re-based solid is copied straight into `dest.cadSolids` so it is
+  a visible, MOVE-able drawing solid.
+- `PlaceInsertImpl` — a block whose `content.solids` is non-empty logs that INSERT cannot place its
+  solid and places only the block's 2D content.
 - `BrowseOpenFileBlockUtf8` filter gains `*.sat`; BLOCKIMPORT help text updated.
 
-### INSERT materialises block solids (`src/commands/CadBlocks.cpp`)
-- `InstantiateBlockSolids` — turns each `CadBlockContent::solids` entry into a real drawing solid
-  transformed by the insert `CadBlockXform` (translation, Z rotation, uniform scale via
-  `brep::Translate` / `Rotate` / `Scale`); a reference tilt (`rotX`/`rotY`) or non-uniform scale is
-  dropped with a logged note.
-- `BlockIsSolidsOnly` — a block whose only geometry is solids (a `.sat` import). `PlaceInsertImpl`
-  places no `CadBlockRef` for one — INSERT leaves just the solid.
-- Wired into `PlaceInsertImpl` (non-explode) and `ExplodeRef`.
+## 4. What was tried and abandoned
 
-## 4. Why this went past the original scope
+The first cut re-centred the solid on its bbox centre and left it in a block definition only —
+INSERT was expected to place it. The user's first test put the flange ~2500 ft away, because
+INSERT never draws a block-stored solid and the flange still had Civil 3D's world position.
 
-The first cut left placing a block-stored solid out of scope ("`CadBlockContent::solids` is
-captured but never instanced"). The user hit that immediately: inserting the flange put it
-**~2500 ft from the snapped point** — the solid still carried Civil 3D's `body`-transform world
-position, and INSERT drew nothing for it. So the re-centring and the INSERT materialisation are
-both in this task now. A *linked* block-reference solid (one that re-derives from the definition
-when the definition changes) is still future. Also unchanged: #300 (free-form surfaces), #301 (SAB
-binary).
+The second cut added `InstantiateBlockSolids` — INSERT materialising the block's solids
+transformed by the insert frame. The user's second test: the flange came in **12× oversized**
+(block units defaulted to feet against an inch drawing → `CadBlockUnitsScale` = 12) and **still
+mislocated**, because `SubmitInsertBlockPick` takes only `(wx, wy)` — INSERT has no Z pick, so a
+3D snap to a pipe-end face collapsed to `(x, y, 0)`.
+
+**Conclusion: INSERT is a 2D command and a 3D solid needs a 3D placement.** So the solid is dropped
+straight into the drawing on the origin and positioned with `MOVE` (3D- and osnap-aware). A
+block-reference path for a solid — instancing on INSERT, or a real 3D INSERT — is future work in
+#473. Also unchanged: #300 (free-form surfaces), #301 (SAB binary).
 
 ## 5. Tests
 
 - `AcisSatParserTests [issue473]` — the real flange file → `r.ok`, 16 faces (4 plane + 12
   cone/cyl), `Validate == Ok`, positive volume, `mmPerUnit == 25.4`, bounds near (4998, 4998)
   proving the `body` transform was applied.
-- `CadBlockImportTests [issue473]` — `.sat` through `ImportCadBlocksFromPath` → a block definition
-  named after the file with a 16-face valid solid re-centred on the origin, `units == "inches"`,
-  nothing placed; then `CadBlockPlaceInsert` at (100, 200) → one drawing solid straddling that
-  point, no `CadBlockRef`. A malformed `.sat` → refused, `blockDefs` empty, a `BLOCKIMPORT` message.
-- `headless.issue473-sat-blockimport` — BLOCKIMPORT (SOLIDS still 0), then `INSERT … 100,200` →
-  SOLIDS 1 with bounds at the insert point, a second INSERT → SOLIDS 2, UNDO → 1.
+- `CadBlockImportTests [issue473]` — `.sat` through `ImportCadBlocksFromPath` → one drawing solid
+  (16 faces, valid) re-based onto the origin (`X/Y` centred, `Zmin == 0`), a block definition kept,
+  no `CadBlockRef`. A malformed `.sat` → refused, `blockDefs` empty, a `BLOCKIMPORT` message.
+- `headless.issue473-sat-blockimport` — BLOCKIMPORT → SOLIDS 1 on the origin; box-select + `MOVE`
+  0,0 → 10,20 relocates it; UNDO restores it.
 - Full suite green; the 14 existing `[acissat]` hand-authored fixtures unchanged (detected as the
   simplified schema).
 

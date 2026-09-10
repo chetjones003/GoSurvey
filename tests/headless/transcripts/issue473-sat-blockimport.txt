@@ -1,34 +1,33 @@
-# GitHub issue #473 — BLOCKIMPORT of a standalone ACIS .sat file (Civil 3D ACISOUT), then INSERT.
+# GitHub issue #473 — BLOCKIMPORT of a standalone ACIS .sat file (Civil 3D ACISOUT).
 #
 # samples/CJ_4in_WELD_NECK_FLANGE.sat is a real 4" weld-neck flange: 16 analytic faces, two of
 # them planar faces pierced by an 8-bolt circle. The .sat carries the model's absolute position
-# from the drawing it was exported from (~4999 units); the importer re-centres it on the origin so
-# INSERT places it at the cursor, not thousands of units away.
+# from the drawing it was exported from (~4999 units); BLOCKIMPORT drops the solid straight into
+# the drawing, re-based onto the origin (centred in X/Y, lowest point at Z 0), and keeps a block
+# definition. (INSERT cannot place a 3D solid — a 2D command; the user MOVEs it into position.)
 
 NEW
 EXPECT SOLIDS 0
 
-# BLOCKIMPORT defines the block; it does not place anything.
 DIALOG OPEN %DATA%/CJ_4in_WELD_NECK_FLANGE.sat
 CMD BLOCKIMPORT
-EXPECT LOG "BLOCKIMPORT — imported"
-EXPECT LOG CJ_4in_WELD_NECK_FLANGE
-EXPECT SOLIDS 0
+EXPECT LOG "BLOCKIMPORT — imported an ACIS solid"
+
+# The flange is in the drawing, on the origin — not ~4999 units out where the .sat put it.
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Solid
+EXPECT SOLIDBOUNDS 0 -0.37503 -0.37503 0.0 0.37503 0.37503 0.25000
+
+# The block definition is registered too.
 CMD BLOCKLIST
 EXPECT LOG "CJ_4in_WELD_NECK_FLANGE"
 
-# INSERT places the flange's solid at the given point — a solids-only block leaves no reference.
-# The .sat is authored in inches and this drawing's INSUNITS default is feet, so INSERT scales the
-# 0.75-unit-wide flange by 1/12; what matters here is that it lands AT (100, 200), not at ~4999.
-CMD INSERT CJ_4in_WELD_NECK_FLANGE, 100, 200
-EXPECT LOG "INSERT — placed"
-EXPECT SOLIDS 1
-EXPECT SOLIDKIND 0 Solid
-EXPECT SOLIDBOUNDS 0 99.96875 199.96875 -0.0104 100.03125 200.03125 0.0104
-
-# A second INSERT is a second flange.
-CMD INSERT CJ_4in_WELD_NECK_FLANGE, 100, 210
-EXPECT SOLIDS 2
-
+# It is a normal drawing solid — box-select it and MOVE it into position.
+BOX -1 -1 1 1
+EXPECT SELECTED 1
+CMD MOVE
+CMD 0,0
+CMD 10,20
+EXPECT SOLIDBOUNDS 0 9.62497 19.62497 0.0 10.37503 20.37503 0.25000
 UNDO
-EXPECT SOLIDS 1
+EXPECT SOLIDBOUNDS 0 -0.37503 -0.37503 0.0 0.37503 0.37503 0.25000

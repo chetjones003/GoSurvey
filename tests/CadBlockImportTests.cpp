@@ -556,10 +556,11 @@ TEST_CASE("INSERT preview is inert with no definition selected", "[issue124][blo
 }
 
 // GitHub issue #473 — a standalone ACIS .sat file (Civil 3D / AutoCAD ACISOUT) imports through
-// BLOCKIMPORT as a block definition named after the file. The solid is re-centred on the origin
-// (the .sat carries its absolute position from the source drawing), and INSERT materialises it at
-// the insert point. Fixture is the real 4" weld-neck flange (samples/CJ_4in_WELD_NECK_FLANGE.sat).
-TEST_CASE("BLOCKIMPORT reads a standalone ACIS .sat file; INSERT places it at the cursor",
+// BLOCKIMPORT: the solid drops straight into the drawing, re-based onto the origin (the .sat
+// carries its absolute position — ~4999 units — from the source drawing), and a block definition
+// is kept. INSERT cannot place a 3D solid (it is a 2D command). Fixture is the real 4" weld-neck
+// flange (samples/CJ_4in_WELD_NECK_FLANGE.sat).
+TEST_CASE("BLOCKIMPORT of a standalone ACIS .sat drops the solid on the origin",
           "[issue473][blockimport][sat]") {
   const std::string sat = std::string(GOSURVEY_SAMPLES_DIR) + "/CJ_4in_WELD_NECK_FLANGE.sat";
   REQUIRE(std::filesystem::exists(sat));
@@ -568,37 +569,23 @@ TEST_CASE("BLOCKIMPORT reads a standalone ACIS .sat file; INSERT places it at th
   std::vector<std::string> log;
   REQUIRE(ImportCadBlocksFromPath(st, sat.c_str(), log));
 
-  const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
-  REQUIRE(di >= 0);
-  const CadBlockDefinition& d = st.blockDefs[static_cast<size_t>(di)];
-  REQUIRE(d.content.solids.size() == 1);
-  REQUIRE(d.content.solids[0]);
-  CHECK(d.content.solids[0]->faces.size() == 16);
-  CHECK(brep::Validate(*d.content.solids[0]) == brep::Problem::Ok);
-  CHECK(d.units == "inches");           // ACIS header num_mm_units == 25.4
-  // The definition's solid is re-centred near the origin, NOT ~4999 units out where the .sat put it.
-  const brep::Bounds db = brep::ComputeBounds(*d.content.solids[0]);
-  REQUIRE(db.valid);
-  CHECK(std::fabs(db.mn.x + db.mx.x) < 1e-6);
-  CHECK(std::fabs(db.mn.y + db.mx.y) < 1e-6);
-
-  // BLOCKIMPORT defines only — nothing is placed.
-  CHECK(st.cadSolids.empty());
-  CHECK(st.cadBlockRefs.empty());
-
-  // INSERT materialises the solid at the point; a solids-only block leaves no reference.
-  CadBlockXform xf;
-  xf.x = 100.f;
-  xf.y = 200.f;
-  REQUIRE(CadBlockPlaceInsert(st, "CJ_4in_WELD_NECK_FLANGE", xf, /*explode=*/false, log));
+  // The solid is in the drawing, re-based: centred in X/Y, its lowest point at Z 0 — NOT ~4999
+  // units out where the .sat put it.
   REQUIRE(st.cadSolids.size() == 1);
   REQUIRE(st.cadSolids[0]);
   CHECK(st.cadSolids[0]->faces.size() == 16);
-  CHECK(st.cadBlockRefs.empty());
+  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
   const brep::Bounds ib = brep::ComputeBounds(*st.cadSolids[0]);
   REQUIRE(ib.valid);
-  CHECK(ib.mn.x == Catch::Approx(100.0).margin(1.0));   // straddles the insert point
-  CHECK(ib.mn.y == Catch::Approx(200.0).margin(1.0));
+  CHECK(std::fabs(ib.mn.x + ib.mx.x) < 1e-6);   // centred in X
+  CHECK(std::fabs(ib.mn.y + ib.mx.y) < 1e-6);   // centred in Y
+  CHECK(ib.mn.z == Catch::Approx(0.0).margin(1e-6));  // sits on Z 0
+  CHECK(st.cadBlockRefs.empty());
+
+  // The block definition is kept (for a future 3D INSERT), carrying the same re-based solid.
+  const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
+  REQUIRE(di >= 0);
+  REQUIRE(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
 }
 
 TEST_CASE("BLOCKIMPORT rejects a malformed .sat file with a message, no crash",
