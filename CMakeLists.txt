@@ -333,6 +333,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   # (ADR-031 (c′)) — these need ImGui core, never a backend.
   src/ui/MtextRichFormat.cpp
   src/ui/FontRegistry.cpp
+  # REQ-302/ADR-053 (issue #323) — ribbon measure pass runtime (icon side override for tests + app).
+  src/ui/RibbonLayoutMeasure.cpp
   # SHX stroke text emitter. Here because MtextRichFormat's layout calls Shx::DrawText to measure
   # SHX runs — it takes an ImDrawList but issues no GL of its own, so headless links it happily.
   src/ui/ShxDraw.cpp

@@ -64,6 +64,8 @@ struct UiChrome {
   float ribbonBottomGutter;
   float ribbonTitleH;
   float ribbonBodyFontScale;
+  /// Minimum square side for ribbon toolbar icons (matches bundled 32×32 PNG assets).
+  float ribbonIconSideMin;
 };
 
 UiChrome& CadUiChrome();

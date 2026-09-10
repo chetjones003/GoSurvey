@@ -160,24 +160,28 @@ void MaybeAutoOpenWhatsNew(AppCommandState& cmd) {
 }
 
 void DrawWhatsNewWindow(AppCommandState& cmd) {
-  if (!cmd.showWhatsNewWindow)
-    return;
+  const char* kPopupId = "What's New##GoSurvey336";
 
   static bool contentLoaded = false;
   static WhatsNewContent cachedContent{};
   static bool wasOpen = false;
-  if (cmd.showWhatsNewWindow && !wasOpen) {
+  if (!cmd.showWhatsNewWindow) {
+    wasOpen = false;
+    return;
+  }
+  if (!wasOpen) {
     cachedContent = LoadWhatsNewContent();
     contentLoaded = true;
   }
-  wasOpen = cmd.showWhatsNewWindow;
+  wasOpen = true;
+
+  if (!ImGui::IsPopupOpen(kPopupId))
+    ImGui::OpenPopup(kPopupId);
 
   constexpr ImVec2 kWhatsNewSize(1120.f, 960.f);
-  const std::string title = std::string("What's New — GoSurvey ") + GOSURVEY_VERSION_FULL;
   ImGui::SetNextWindowSize(kWhatsNewSize, ImGuiCond_Always);
   ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always,
                           ImVec2(0.5f, 0.5f));
-  ImGui::SetNextWindowFocus();
 
   const ImVec4 winBg = IsDark() ? ImVec4(0.14f, 0.16f, 0.19f, 1.f) : ImVec4(0.98f, 0.99f, 1.f, 1.f);
   const ImVec4 titleBg = Lerp(IsDark() ? ImVec4(0.10f, 0.12f, 0.15f, 1.f)
@@ -199,20 +203,15 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
   ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Lerp(winBg, Accent(), 0.20f));
   ImGui::PushStyleColor(ImGuiCol_Separator, Lerp(winBg, Accent(), 0.45f));
 
+  // Modal: blocks every click/hover to windows behind until Close (same pattern as SignInGate /
+  // UpdateDialog). No close button — exit is explicit Close or View release notes only.
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
                                  ImGuiWindowFlags_NoSavedSettings;
 
-  bool open = cmd.showWhatsNewWindow;
-  if (!ImGui::Begin(title.c_str(), &open, flags)) {
-    ImGui::End();
+  if (!ImGui::BeginPopupModal(kPopupId, nullptr, flags)) {
     ImGui::PopStyleColor(10);
     ImGui::PopStyleVar(3);
-    if (!open) {
-      ApplyDismissOnClose(cmd);
-      cmd.showWhatsNewWindow = false;
-      wasOpen = false;
-    }
     return;
   }
 
@@ -282,17 +281,15 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
   if (AccentButton("View release notes on GitHub", true))
     OpenReleasesPage();
   ImGui::SameLine();
-  if (AccentButton("Close", false))
-    open = false;
-
-  ImGui::PopFont();
-  ImGui::End();
-  ImGui::PopStyleColor(10);
-  ImGui::PopStyleVar(3);
-
-  if (!open) {
+  if (AccentButton("Close", false)) {
     ApplyDismissOnClose(cmd);
     cmd.showWhatsNewWindow = false;
     wasOpen = false;
+    ImGui::CloseCurrentPopup();
   }
+
+  ImGui::PopFont();
+  ImGui::EndPopup();
+  ImGui::PopStyleColor(10);
+  ImGui::PopStyleVar(3);
 }

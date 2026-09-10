@@ -522,6 +522,7 @@ void ApplyCadDarkTheme() {
   g_chrome.ribbonBottomGutter  = 12.f;
   g_chrome.ribbonTitleH        = 20.f;
   g_chrome.ribbonBodyFontScale = 0.80f;
+  g_chrome.ribbonIconSideMin   = 32.f;
 }
 
 void ApplyCadLightTheme() {
@@ -688,6 +689,7 @@ void ApplyCadLightTheme() {
   g_chrome.ribbonBottomGutter  = 12.f;
   g_chrome.ribbonTitleH        = 20.f;
   g_chrome.ribbonBodyFontScale = 0.80f;
+  g_chrome.ribbonIconSideMin   = 32.f;
 }
 
 // ---------------------------------------------------------------------------
@@ -3257,7 +3259,8 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
   ImVec2 iconMin, iconMax, labelPos;
   if (mode == RibbonLabel::Below && hasLabel) {
     constexpr float botPad = 4.f;
-    const float iconArea = std::max(18.f, size.y - ts.y - iconPad - botPad - 1.f);
+    const float iconArea = std::max(CadUiChrome().ribbonIconSideMin,
+                                    size.y - ts.y - iconPad - botPad - 1.f);
     const float sideMax = std::min(size.x - iconPad * 2.f, iconArea);
     const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + iconPad + iconArea * 0.5f + shift);
     iconMin = ImVec2(ctr.x - sideMax * 0.5f, ctr.y - sideMax * 0.5f);
@@ -3562,6 +3565,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     dl->AddLine(ImVec2(rMin.x, rMax.y - 1.f), ImVec2(rMax.x, rMax.y - 1.f), HexU32(0x1E1E1E), 1.f);
   }
 
+  // REQ-308: the Start tab is a landing page — show the ribbon but do not route clicks to it.
+  const bool ribbonInteractive = (cmd.activeDrawingIdx != 0);
+  if (!ribbonInteractive)
+    ImGui::BeginDisabled();
+
   const bool ribbonPaperSpaceEarly =
       cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
   const int selSurfIdx = ribbonPaperSpaceEarly ? -1 : FirstSelectedSurfaceIndex(cmd);
@@ -3706,8 +3714,22 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   constexpr float kLayerPanelW = 288.f;
 
   // Civil 3D-style panel metrics: a button column fills the height above the bottom title.
-  const float colH = std::max(48.f, RibbonPanelContentH(panelH) - 8.f);
-  constexpr float largeW = 60.f;
+  const float colH = std::max(56.f, RibbonPanelContentH(panelH) - 4.f);
+  const float homeRowGapY = st.ItemSpacing.y;
+  // Draw/Modify/Palettes icon grids divide the panel column height evenly across their rows so the
+  // icons fill the ribbon instead of sitting as tiny AutoFit squares in a tall panel.
+  const auto gridIconSideForRows = [&](const int rows) {
+    assert(rows >= 1);
+    assert(rows <= 8);
+    const float gaps = homeRowGapY * static_cast<float>(rows - 1);
+    return std::max(g_chrome.ribbonIconSideMin, std::floor((colH - gaps) / static_cast<float>(rows)));
+  };
+  const float gridIconSide3Row = gridIconSideForRows(3);
+  const float gridIconSide2Row = gridIconSideForRows(2);
+  const float ribbonIconSide =
+      cmd.displayResizeRibbonIcons ? gridIconSide3Row : ImGui::GetFrameHeight();
+  ribbonlayout::SetRibbonMeasureIconSide(ribbonIconSide);
+  constexpr float largeW = 68.f;
   constexpr float kTsLargeW = 76.f;
   auto belowW = [&](const char* label) { return RibbonBelowButtonWidth(label, kTsLargeW); };
   auto capW = [&](const char* caption) { return std::max(kTsLargeW, RibbonMaxLineWidth(caption) + 16.f); };
@@ -3786,19 +3808,24 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // RenderRibbonFit, after the Home block has exited. Declaring them in the block left dangling
   // references that a Release build's stack reuse turned into a crash (same class of bug the
   // pre-existing nyiGrid/nyiRow/homeRow comment above already warned about).
-  const float homeRowGapY = ImGui::GetStyle().ItemSpacing.y;
-
-  // Icon-only square button (grid buttons) — AutoFit sizes it to the icon square.
-  auto iconBtn = [](const char* id, int iconKind, const char* iconName, bool disabled,
-                     const char* tooltip) {
-    ribbonlayout::RibbonButtonSpec b;
-    b.id = id;
-    b.iconKind = iconKind;
-    if (iconName) b.iconName = iconName;
-    b.disabled = disabled;
-    if (tooltip) b.tooltip = tooltip;
-    return b;
+  // Icon-only square button (grid buttons) — fixed size so each row fills the panel height.
+  auto iconBtnSized = [](const float side) {
+    return [side](const char* id, int iconKind, const char* iconName, bool disabled,
+                  const char* tooltip) {
+      ribbonlayout::RibbonButtonSpec b;
+      b.id = id;
+      b.iconKind = iconKind;
+      if (iconName) b.iconName = iconName;
+      b.disabled = disabled;
+      if (tooltip) b.tooltip = tooltip;
+      b.sizePolicy = ribbonlayout::RibbonSizePolicy::Fixed;
+      b.fixedSize = side;
+      b.fixedHeight = side;
+      return b;
+    };
   };
+  const auto iconBtn = iconBtnSized(gridIconSide3Row);
+  const auto iconBtn2Row = iconBtnSized(gridIconSide2Row);
   // Icon + label row button (label to the right); AutoFit sizes it from the label's own text.
   // `compact` (Medium breakpoint) drops the label so the button shrinks to just the icon.
   auto rowBtn = [](const char* id, int iconKind, const char* iconName, const char* label,
@@ -3878,12 +3905,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                                          false,
                                          "Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE")};
       ribbonlayout::RibbonGroupSpec grid = gridOfButtons({
-          iconBtn("##PalPanorama", -1, "c3d_panorama", true, "Panorama — not implemented yet."),
-          iconBtn("##PalProps", -1, "c3d_properties", true, "Properties — not implemented yet."),
-          iconBtn("##PalRefMgr", -1, "c3d_refmgr", true, "Reference Manager — not implemented yet."),
-          iconBtn("##PalCompEd", -1, "c3d_comped", true, "Component Editor — not implemented yet."),
-          iconBtn("##PalSettings", -1, "c3d_dwgsettings", true, "Drawing Settings — not implemented yet."),
-          iconBtn("##PalWorkFolder", -1, "c3d_workfolder", true, "Set Working Folder — not implemented yet."),
+          iconBtn2Row("##PalPanorama", -1, "c3d_panorama", true, "Panorama — not implemented yet."),
+          iconBtn2Row("##PalProps", -1, "c3d_properties", true, "Properties — not implemented yet."),
+          iconBtn2Row("##PalRefMgr", -1, "c3d_refmgr", true, "Reference Manager — not implemented yet."),
+          iconBtn2Row("##PalCompEd", -1, "c3d_comped", true, "Component Editor — not implemented yet."),
+          iconBtn2Row("##PalSettings", -1, "c3d_dwgsettings", true, "Drawing Settings — not implemented yet."),
+          iconBtn2Row("##PalWorkFolder", -1, "c3d_workfolder", true, "Set Working Folder — not implemented yet."),
       }, 3, 4.f);
       spec.groups = {toolspace, grid};
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
@@ -3897,9 +3924,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // ---- Explore ----------------------------------------------------------
     {
       ribbonlayout::RibbonSectionSpec spec;
-      ribbonlayout::RibbonButtonSpec b = largeBtnSpec("##ExpProjExplorer", -1, "Project\nExplorer", true,
-                                        "Project Explorer — not implemented yet.");
-      b.iconName = "c3d_projexplorer";
+      ribbonlayout::RibbonButtonSpec b =
+          largeBtnSpecEx("##ExpProjExplorer", -1, "c3d_projexplorer", "Project\nExplorer", true,
+                         "Project Explorer — not implemented yet.", belowW("Project\nExplorer"));
       ribbonlayout::RibbonGroupSpec g;
       g.buttons = {b};
       spec.groups = {g};
@@ -3912,9 +3939,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // ---- Optimize -----------------------------------------------------------
     {
       ribbonlayout::RibbonSectionSpec spec;
-      ribbonlayout::RibbonButtonSpec b = largeBtnSpec("##OptGrading", -1, "Grading\nOptimization", true,
-                                        "Grading Optimization — not implemented yet.");
-      b.iconName = "c3d_gradingopt";
+      ribbonlayout::RibbonButtonSpec b =
+          largeBtnSpecEx("##OptGrading", -1, "c3d_gradingopt", "Grading\nOptimization", true,
+                         "Grading Optimization — not implemented yet.", belowW("Grading\nOptimization"));
       ribbonlayout::RibbonGroupSpec g;
       g.buttons = {b};
       spec.groups = {g};
@@ -4141,11 +4168,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       pasteGroup.buttons = {largeBtnSpec("##RibbonPasteHome", (int)RibbonIconKind::ClipboardPaste, "Paste", !hasClip,
                                          "Paste (Ctrl+V) — place clipboard objects at cursor position.")};
       ribbonlayout::RibbonGroupSpec grid = gridOfButtons({
-          iconBtn("##RibbonCopyClipHome", (int)RibbonIconKind::ClipboardCopy, nullptr, !hasSel,
+          iconBtn2Row("##RibbonCopyClipHome", (int)RibbonIconKind::ClipboardCopy, nullptr, !hasSel,
                   "Copy (Ctrl+C) — copy selected objects to clipboard."),
-          iconBtn("##ClipCut", -1, "c3d_cut", true, "Cut — not implemented yet."),
-          iconBtn("##ClipMatchProps", -1, "c3d_matchprops", true, "Match Properties — not implemented yet."),
-          iconBtn("##ClipPasteSpecial", -1, "c3d_pastespecial", true, "Paste Special — not implemented yet."),
+          iconBtn2Row("##ClipCut", -1, "c3d_cut", true, "Cut — not implemented yet."),
+          iconBtn2Row("##ClipMatchProps", -1, "c3d_matchprops", true, "Match Properties — not implemented yet."),
+          iconBtn2Row("##ClipPasteSpecial", -1, "c3d_pastespecial", true, "Paste Special — not implemented yet."),
       }, 2, 4.f);
       spec.groups = {pasteGroup, grid};
 
@@ -6217,6 +6244,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if ((g_chrome.plateShadow >> IM_COL32_A_SHIFT) != 0)
       dl->AddLine(ImVec2(mn.x, mx.y - 0.5f), ImVec2(mx.x, mx.y - 0.5f), g_chrome.bandShadow, 1.f);
   }
+
+  if (!ribbonInteractive)
+    ImGui::EndDisabled();
 
   ImGui::EndChild();
   ImGui::SetWindowFontScale(1.f);

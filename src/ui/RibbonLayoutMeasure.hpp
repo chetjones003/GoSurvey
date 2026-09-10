@@ -20,14 +20,18 @@
 
 namespace ribbonlayout {
 
+// Set once per frame from DrawRibbonBar (honours Display → "Resize ribbon icons to standard sizes").
+void SetRibbonMeasureIconSide(float side);
+float RibbonMeasureIconSide();
+
 // Matches RibbonButtonEx's Right-mode icon inset (CadUi.cpp:3232, "icons hug the button edge").
 inline constexpr float kMeasureIconPad = 1.f;
 // Matches RibbonButtonEx's Right-mode icon-to-label gap (CadUi.cpp:3261, `iconMax.x + 3.f`).
 inline constexpr float kMeasureLabelGap = 3.f;
-// A button with no label still needs an icon square; ImGui's own row height (GetFrameHeight())
-// is the same "one text line plus frame padding" metric CadUi.cpp derives its row heights from
-// (e.g. CadUi.cpp:3694 `rowH`), so it is a reasonable icon side for content with no explicit size.
-inline float MeasureIconSide() { return ImGui::GetFrameHeight(); }
+// A button with no label still needs an icon square. Default side is at least ribbonIconSideMin
+// (32px, matching bundled PNG assets) so icons stay identifiable; DrawRibbonBar may lower this
+// when the user turns off "Resize ribbon icons to standard sizes".
+inline float MeasureIconSide() { return RibbonMeasureIconSide(); }
 
 struct RibbonMeasuredButton {
   const RibbonButtonSpec* spec = nullptr;
@@ -140,8 +144,12 @@ inline RibbonMeasuredSection MeasureRibbonSection(const RibbonSectionSpec& secti
   out.groups.reserve(section.groups.size());
 
   ImVec2 size(0.f, 0.f);
-  for (const RibbonGroupSpec& group : section.groups) {
+  const float groupGap = section.groupGapX;
+  for (size_t i = 0; i < section.groups.size(); ++i) {
+    const RibbonGroupSpec& group = section.groups[i];
     RibbonMeasuredGroup mg = MeasureRibbonGroup(group);
+    if (i > 0)
+      size.x += groupGap;
     size.x += mg.size.x;
     size.y = std::max(size.y, mg.size.y);
     out.groups.push_back(std::move(mg));

@@ -32,7 +32,11 @@ int DrawSection(const ribbonlayout::RibbonSectionSpec& section, float availableW
     ++drawnCount;
   }
 
-  ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + measured.size.y));
+  // Absolute SetCursorScreenPos placement above can extend past the child's prior content
+  // bounds (Manage → Customization is the first tab that hit this with groupGapX). ImGui
+  // requires a Dummy() so the parent grows to the laid-out footprint.
+  ImGui::SetCursorScreenPos(origin);
+  ImGui::Dummy(measured.size);
   return drawnCount;
 }
 
