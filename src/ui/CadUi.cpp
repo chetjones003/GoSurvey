@@ -8924,7 +8924,7 @@ static void ItemHelpTooltip(const char* text) {
 }
 
 /// \p modelUnitsPerPlottedInch matches common civil notation (e.g. 50 → 1"=50' when model unit is feet).
-static void DrawPlotScaleCombo(AppCommandState& cmd) {
+static void DrawPlotScaleCombo(AppCommandState& cmd, float width = 158.f) {
   static constexpr struct {
     const char* label;
     float modelUnitsPerPlottedInch;
@@ -8969,7 +8969,7 @@ static void DrawPlotScaleCombo(AppCommandState& cmd) {
     std::snprintf(preview, sizeof(preview), "%s1\" = %.3g' (custom)", pfx, static_cast<double>(curVal));
 
   ImGui::PushID("plotscalecombo");
-  ImGui::SetNextItemWidth(158.f);
+  ImGui::SetNextItemWidth(width);
   if (ImGui::BeginCombo("##plotscale", preview, ImGuiComboFlags_HeightLargest)) {
     for (int i = 0; i < kN; ++i) {
       const bool isSel = (selected == i);
@@ -9696,9 +9696,78 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   const float statusBtnH = ImGui::GetFrameHeight();
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
   ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.statusStripFace);
-  ImGui::BeginChild("StatusBarStrip", ImVec2(0, statusBtnH), false, ImGuiWindowFlags_HorizontalScrollbar);
+  // NoScrollbar alone only hides the bar — content a hair wider than the strip was still
+  // wheel-scrollable with no visible bar (same fix as ribbon panels, 2026-08-25).
+  ImGui::BeginChild("StatusBarStrip", ImVec2(0, statusBtnH), false,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.f, 0.f));
+
+  const ImGuiStyle& statusSty = ImGui::GetStyle();
+  const float contentW = ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x;
+  auto statusBtnW = [&](const char* t) {
+    return ImGui::CalcTextSize(t).x + statusSty.FramePadding.x * 2.f;
+  };
+
+  // Coordinate readout string (built up front so we can truncate to the middle gap).
+  const int coordPrec = cmd.displayLinearPrecision;
+  std::string coordText;
+  if (CadUcsIsWorld(cmd)) {
+    coordText = std::string("X ") + FormatLinear(cursorX, coordPrec) + "  Y " + FormatLinear(cursorY, coordPrec) +
+                "  Z " + FormatLinear(cursorZ, coordPrec) + "  |  UCS: World";
+  } else {
+    const ray3d::Vec3 inUcs =
+        ucs::WorldToUcs(cmd.activeUcs, {cursorX, cursorY, static_cast<double>(cursorZ)});
+    coordText = std::string("X ") + FormatLinear(inUcs.x, coordPrec) + "  Y " + FormatLinear(inUcs.y, coordPrec) +
+                "  Z " + FormatLinear(inUcs.z, coordPrec) + "  |  UCS: current (world " +
+                FormatLinear(cursorX, coordPrec) + ", " + FormatLinear(cursorY, coordPrec) + ")";
+  }
+
+  // Pre-measure fixed left chrome (menu + tabs + separator) so the middle readout and right tools
+  // share whatever width remains instead of overflowing into a horizontal scrollbar.
+  float leftW = statusBtnH + 6.f;
+  leftW += statusBtnW("Model") + 2.f;
+  for (int i = 0; i < static_cast<int>(cmd.paperLayouts.size()); ++i)
+    leftW += statusBtnW(cmd.paperLayouts[static_cast<size_t>(i)].name.c_str()) + 2.f;
+  leftW += statusBtnW("+") + 2.f;
+  leftW += 6.f + ImGui::CalcTextSize("|").x + 6.f;
+
+  const char* spaceLbl = InFloatingModelSpace(cmd) ? "FLOAT"
+                                                   : (cmd.activeSpaceIndex != kModelSpaceIndex ? "PAPER" : "MODEL");
+  float plotScaleW = 158.f;
+  float btnSp = 4.f;
+  constexpr float kRightLeadGap = 8.f;
+  constexpr float kMinPlotScaleW = 72.f;
+  const int rightItemCount =
+      9
+#ifdef GOSURVEY_DEVELOPER_SHELL
+      + 1
+#endif
+      ;
+  auto measureRightW = [&]() {
+    float w = statusBtnW(spaceLbl) + statusBtnW("VPLOCK") + statusBtnW("OSNAP") + statusBtnW("3D OSNAP") +
+              statusBtnW("ORTHO") + statusBtnW("GRID") + statusBtnW("POLAR")
+#ifdef GOSURVEY_DEVELOPER_SHELL
+              + statusBtnW("DEV")
+#endif
+              + plotScaleW + statusBtnW("SEL");
+    w += btnSp * static_cast<float>(rightItemCount - 1);
+    return w;
+  };
+  float rightW = measureRightW();
+  while (leftW + rightW + kRightLeadGap + 48.f > contentW && plotScaleW > kMinPlotScaleW) {
+    plotScaleW = std::max(kMinPlotScaleW, plotScaleW - 12.f);
+    rightW = measureRightW();
+  }
+  while (leftW + rightW + kRightLeadGap + 48.f > contentW && btnSp > 2.f) {
+    btnSp -= 1.f;
+    rightW = measureRightW();
+  }
+  const float coordMaxW =
+      std::max(0.f, contentW - leftW - rightW - kRightLeadGap - ImGui::GetStyle().ItemSpacing.x);
+  if (ImGui::CalcTextSize(coordText.c_str()).x > coordMaxW)
+    coordText = RibbonTruncate(coordText.c_str(), coordMaxW);
+  const float rightX = ImGui::GetWindowContentRegionMax().x - rightW;
 
   // ---- LEFT: hamburger menu + layout tabs ----
   {
@@ -9796,47 +9865,17 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
     ImGui::SameLine(0, 6);
   }
 
-  // Coordinate readout (left side, after the layout tabs).
-  {
-    const int p = cmd.displayLinearPrecision;
+  // Coordinate readout (middle gap — truncated above when the window is narrow).
+  if (!coordText.empty()) {
     ImGui::AlignTextToFramePadding();
-    // The UCS field used to be the literal word "World". It now reports the actual work plane, so
-    // a raised elevation is visible — otherwise geometry silently lands somewhere the user did not
-    // expect and nothing on screen says why (REQ-058 / REQ-201).
-    if (CadUcsIsWorld(cmd)) {
-      ImGui::Text("X %s  Y %s  Z %s  |  UCS: World", FormatLinear(cursorX, p).c_str(),
-                  FormatLinear(cursorY, p).c_str(), FormatLinear(cursorZ, p).c_str());
-    } else {
-      // Under a UCS the readout reports UCS coordinates (REQ-154), because those are the numbers the
-      // user would type back in to return here. Reporting world coordinates while entry is read in
-      // the UCS is how a value gets copied off the screen and re-entered somewhere else entirely.
-      // The label says which frame it is, and the world position is kept alongside so the two are
-      // never confused.
-      const ray3d::Vec3 inUcs =
-          ucs::WorldToUcs(cmd.activeUcs, {cursorX, cursorY, static_cast<double>(cursorZ)});
-      ImGui::Text("X %s  Y %s  Z %s  |  UCS: current (world %s, %s)", FormatLinear(inUcs.x, p).c_str(),
-                  FormatLinear(inUcs.y, p).c_str(), FormatLinear(inUcs.z, p).c_str(),
-                  FormatLinear(cursorX, p).c_str(), FormatLinear(cursorY, p).c_str());
-    }
+    ImGui::TextUnformatted(coordText.c_str(), coordText.c_str() + coordText.size());
   }
 
   // ---- RIGHT (right-aligned): space toggle + mode tools ----
   {
-    const ImGuiStyle& sty = ImGui::GetStyle();
-    auto bw = [&](const char* t) { return ImGui::CalcTextSize(t).x + sty.FramePadding.x * 2.f; };
-    const char* spaceLbl = InFloatingModelSpace(cmd)
-                               ? "FLOAT"
-                               : (cmd.activeSpaceIndex != kModelSpaceIndex ? "PAPER" : "MODEL");
-    constexpr float sp = 4.f;
-    const float rightW = bw(spaceLbl) + bw("VPLOCK") + bw("OSNAP") + bw("ORTHO") + bw("GRID") + bw("POLAR") +
-#ifdef GOSURVEY_DEVELOPER_SHELL
-                         bw("DEV") +
-#endif
-                         140.f /*plot scale combo*/ + bw("SEL") + sp * 8.f + 24.f;
-    ImGui::SameLine(0, 8);
-    const float rx = ImGui::GetWindowContentRegionMax().x - rightW;
-    if (rx > ImGui::GetCursorPosX())
-      ImGui::SetCursorPosX(rx);
+    ImGui::SameLine(0, kRightLeadGap);
+    ImGui::SetCursorPosX(rightX);
+    const float sp = btnSp;
 
     // Space toggle (MODEL / PAPER / FLOAT) — REQ-025/036.
     if (InFloatingModelSpace(cmd)) {
@@ -9992,7 +10031,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
       ImGui::SameLine(0, sp);
     }
 #endif
-    DrawPlotScaleCombo(cmd);
+    DrawPlotScaleCombo(cmd, plotScaleW);
     ImGui::SameLine(0, sp);
     {
       const bool on = cmd.showSelectionCyclingWindow;
