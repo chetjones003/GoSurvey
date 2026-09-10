@@ -6,6 +6,7 @@
 #include "DwgIo.hpp"
 #include "AppPaths.hpp"
 #include "WinFileDialogs.hpp"
+#include "AcisSatParser.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -325,6 +326,38 @@ int MergeBlockDef(AppCommandState& dest, CadBlockDefinition def, std::vector<std
   return 1;
 }
 
+/// A standalone ACIS `.sat` file (Civil 3D / AutoCAD `ACISOUT`, GitHub issue #473) — one or more 3D
+/// solids and nothing else. Read it into \p scratch's solid store so the shared block-capture path
+/// wraps it into a definition named after the file, exactly as a `.dwg`/`.dxf` block would be.
+bool ImportSatFileToScratch(AppCommandState& scratch, const char* pathUtf8, std::vector<std::string>& log) {
+  std::ifstream f(std::filesystem::u8path(pathUtf8), std::ios::binary);
+  if (!f.is_open()) {
+    log.push_back("BLOCKIMPORT — cannot open \"" + std::string(pathUtf8) + "\".");
+    return false;
+  }
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  const acissat::ImportResult r = acissat::ImportSatSolid(ss.str(), FileStemUtf8(pathUtf8));
+  if (!r.ok) {
+    log.push_back("BLOCKIMPORT — " + (r.error.empty() ? std::string("the ACIS SAT file could not be read") : r.error));
+    return false;
+  }
+  scratch.cadSolids.push_back(std::make_shared<const brep::Solid>(r.solid));
+  scratch.cadSolidAttrs.push_back(EntityAttributes{});
+  // A standalone .sat carries no drawing header; the ACIS header's millimetres-per-unit is the only
+  // unit hint (25.4 = inches, 304.8 = feet, 1000 = metres).
+  if (r.mmPerUnit > 0.0) {
+    if (std::fabs(r.mmPerUnit - 25.4) < 0.5)
+      scratch.drawingInsUnits = 1;
+    else if (std::fabs(r.mmPerUnit - 304.8) < 1.0)
+      scratch.drawingInsUnits = 2;
+    else if (std::fabs(r.mmPerUnit - 1000.0) < 1.0)
+      scratch.drawingInsUnits = 6;
+  }
+  log.push_back("BLOCKIMPORT — imported an ACIS solid from \"" + std::string(pathUtf8) + "\".");
+  return true;
+}
+
 int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
     log.push_back("BLOCKIMPORT — no path.");
@@ -337,10 +370,12 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
     ok = ImportDxfFile(scratch, pathUtf8, log);
   else if (ext == ".dwg")
     ok = ImportDwgFile(scratch, pathUtf8, log);
+  else if (ext == ".sat")
+    ok = ImportSatFileToScratch(scratch, pathUtf8, log);
   else {
     // .gs block-library import was removed by issue #264 (D-2026-09-03-h); re-adding a
     // block-library container is tracked as issue #284, not part of this one.
-    log.push_back("BLOCKIMPORT — expected a .dxf or .dwg file.");
+    log.push_back("BLOCKIMPORT — expected a .dxf, .dwg or .sat file.");
     return -1;
   }
   if (!ok)
@@ -356,6 +391,16 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
     CadBlockCaptureDrawing(scratch, &wrap.content);
     CadBlockBakeBasePoint(&wrap);
     n += MergeBlockDef(dest, std::move(wrap), log);
+  }
+  // A standalone .sat is a single model, not a block library. Place its solid(s) directly in the
+  // drawing as well as capturing the definition, so the user sees the geometry immediately — a
+  // block-stored solid is not yet instanced on INSERT (issue #473, a pre-existing REQ-320 gap).
+  if (ext == ".sat") {
+    for (std::size_t i = 0; i < scratch.cadSolids.size(); ++i) {
+      dest.cadSolids.push_back(scratch.cadSolids[i]);
+      dest.cadSolidAttrs.push_back(i < scratch.cadSolidAttrs.size() ? scratch.cadSolidAttrs[i]
+                                                                    : EntityAttributes{});
+    }
   }
   for (CadBlockDefinition& d : dest.blockDefs)
     CadBlockAuthorMatchlineDynamics(&d);
@@ -381,6 +426,9 @@ void LoadBundledBlockLibraryImpl(AppCommandState& dest, std::vector<std::string>
     if (!e.is_regular_file(ec))
       continue;
     const std::string ext = LowerExt(e.path().u8string().c_str());
+    // .sat is deliberately not globbed here: a bundled-library sweep must not drop a loose solid
+    // into the user's drawing (the .sat branch of ImportCadBlocksFromPathImpl does). BLOCKIMPORT
+    // of a .sat is always an explicit user action.
     if (ext == ".dxf" || ext == ".dwg")
       files.push_back(e.path());
   }

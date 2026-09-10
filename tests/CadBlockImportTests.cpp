@@ -2,6 +2,7 @@
 #include "CadCommands.hpp"
 #include "CadRubberPreview.hpp"
 #include "HeadlessFileDialogs.hpp"
+#include "util/brep.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -552,4 +553,54 @@ TEST_CASE("INSERT preview is inert with no definition selected", "[issue124][blo
   std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "MISSING");
   CadBlockXform pv;
   CHECK_FALSE(CadBlockInsertPreviewXform(st, 1.f, 1.f, &pv));
+}
+
+// GitHub issue #473 — a standalone ACIS .sat file (Civil 3D / AutoCAD ACISOUT) imports through
+// BLOCKIMPORT as a block definition carrying the solid, named after the file, and the solid is
+// also placed directly in the drawing so it is visible immediately. Fixture is the real 4"
+// weld-neck flange (samples/CJ_4in_WELD_NECK_FLANGE.sat).
+TEST_CASE("BLOCKIMPORT reads a standalone ACIS .sat file as a block definition",
+          "[issue473][blockimport][sat]") {
+  const std::string sat = std::string(GOSURVEY_SAMPLES_DIR) + "/CJ_4in_WELD_NECK_FLANGE.sat";
+  REQUIRE(std::filesystem::exists(sat));
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportCadBlocksFromPath(st, sat.c_str(), log));
+
+  const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
+  REQUIRE(di >= 0);
+  const CadBlockDefinition& d = st.blockDefs[static_cast<size_t>(di)];
+  REQUIRE(d.content.solids.size() == 1);
+  REQUIRE(d.content.solids[0]);
+  CHECK(d.content.solids[0]->faces.size() == 16);
+  CHECK(brep::Validate(*d.content.solids[0]) == brep::Problem::Ok);
+  CHECK(d.units == "inches");           // ACIS header num_mm_units == 25.4
+  CHECK(st.cadBlockRefs.empty());       // BLOCKIMPORT defines, it does not place a reference
+
+  // The solid is also loose in the drawing (block-stored solids are not yet instanced on INSERT).
+  REQUIRE(st.cadSolids.size() == 1);
+  REQUIRE(st.cadSolids[0]);
+  CHECK(st.cadSolids[0]->faces.size() == 16);
+}
+
+TEST_CASE("BLOCKIMPORT rejects a malformed .sat file with a message, no crash",
+          "[issue473][blockimport][sat]") {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "gosurvey-satbad";
+  fs::create_directories(dir);
+  const fs::path bad = dir / "bad.sat";
+  {
+    std::ofstream f(bad, std::ios::binary);
+    f << "700 0 1 0\nnot really 20 an ASM header\n1 1e-6 1e-10\nbody $-1 -1 $-1 $99 $-1 $-1 #\n";
+  }
+  AppCommandState st;
+  std::vector<std::string> log;
+  CHECK_FALSE(ImportCadBlocksFromPath(st, bad.u8string().c_str(), log));
+  CHECK(st.blockDefs.empty());
+  bool named = false;
+  for (const std::string& l : log)
+    if (l.find("BLOCKIMPORT") != std::string::npos)
+      named = true;
+  CHECK(named);
 }
