@@ -144,6 +144,12 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log = nul
 /// from the menu-bar account dropdown. Shows the signed-in email and a "more coming soon" note.
 void DrawAccountDetailsWindow(AppCommandState& cmd);
 
+/// REQ-336 — What's New billboard (also Help → About). Auto-open from Start once per launch when
+/// the running version has not been dismissed.
+void DrawWhatsNewWindow(AppCommandState& cmd);
+void MaybeAutoOpenWhatsNew(AppCommandState& cmd);
+void RequestWhatsNewWindow(AppCommandState& cmd);
+
 /// Drawing Units dialog (UNITS command). REQ-020. Owns displayLinearPrecision.
 void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 

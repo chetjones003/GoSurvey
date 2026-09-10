@@ -8032,6 +8032,72 @@ capability that does not exist. They are recorded here rather than quietly dropp
   Phase 6 of GitHub #120, filed as #149, acceptance 5. Section CLIPPING — the live view clipping in
   the same acceptance list — is separate work and is not part of this requirement.
 
+### REQ-336 — Start Screen Billboard (What's New)
+- Purpose: Users launching a new version do not know what changed unless they hunt for release notes.
+  Surface Key Features and Release Notes for the **installed** version on the Start screen, with a
+  way to hide auto-open for that version and to reopen the same window from Help → About.
+- Priority: should
+- Type: functional
+- Statement: A **"What's New" billboard** is a separate application window that presents the current
+  build's release content for the running `GOSURVEY_VERSION_FULL` (ADR-029 (a)).
+
+  **Content.** The body is a Markdown file shipped with the application at
+  **`resources/whats-new.md`**. It is rendered with the **vendored md4c** CommonMark parser
+  (ADR-056) and an in-tree ImGui draw layer. The window title (or equivalent prominent heading)
+  includes the running version string. A control at the bottom opens
+  **`https://github.com/chetjones003/GoSurvey/releases`** in the system browser (stable and beta
+  alike — the releases list, not a per-tag URL that may 404 on the rolling beta channel).
+
+  **Auto-open.** When the Start tab is shown after launch, if the user has **not** dismissed
+  auto-open for this exact version, the billboard opens **once per application launch**. Closing
+  the window without checking the dismiss box means it auto-opens again on the **next** launch.
+  Switching away from Start and back within the same launch does **not** re-auto-open it.
+
+  **Dismiss preference.** A checkbox labeled **"Don't show this screen again for this version?"**
+  records the current version string in user preferences (same persistence pattern as REQ-078's
+  skipped-version field). While that stored version equals the running version, auto-open is
+  suppressed. When the running version changes, auto-open resumes until the user dismisses the new
+  version. Opening the window via Help → About **must not** clear or uncheck that preference — the
+  preference controls startup auto-open only.
+
+  **Help → About.** The main menu bar gains a **Help** menu with an **About** item. About opens the
+  **same** What's New window (not a second About dialog). About works whether or not auto-open is
+  dismissed for the current version.
+
+  **Missing or unreadable notes.** If `resources/whats-new.md` is missing or cannot be read, the
+  window still opens and shows a clear fallback message naming the problem, the running version, and
+  the GitHub releases link. The application does not crash and does not block the session.
+
+  **Pipeline gate.** The GitHub Actions build and installer packaging paths **fail** if
+  `resources/whats-new.md` is absent from the packaged `resources/` tree (so a missing file cannot
+  ship even though the runtime fallback exists).
+
+  **Authoring lock.** Agents must not commit or push changes to `resources/whats-new.md` until the
+  user explicitly states they have reviewed the content and approve. Enforcement is **both** a
+  Cursor/agent rule and a git hook that blocks push of that file unless a one-time local unlock is
+  present; the unlock clears after a successful push (or equivalent one-shot use) so the next edit
+  requires a fresh approval.
+- Acceptance:
+  - on a version that has not been dismissed, the What's New window auto-opens once when Start is
+    shown after launch;
+  - the window renders the Markdown body from `resources/whats-new.md` (CommonMark via md4c) and
+    shows the running version prominently;
+  - the bottom link opens `https://github.com/chetjones003/GoSurvey/releases` in the system browser;
+  - checking the dismiss box and closing suppresses auto-open on later launches of the same version;
+    a newer running version auto-opens again until dismissed;
+  - closing without the box checked causes auto-open again on the next launch;
+  - Help → About opens the same window anytime and does not clear a stored dismiss preference;
+  - with the notes file missing or unreadable, the window still opens with a fallback message and the
+    releases link;
+  - CI build/package fails when `resources/whats-new.md` is missing from packaged resources;
+  - a push that includes `resources/whats-new.md` without the review unlock is refused by the hook.
+- Owner-layer: UI (billboard window, Help → About, ImGui md4c draw layer); IO (prefs dismiss field,
+  load of `resources/whats-new.md`); Platform (ShellExecute URL open — existing); Build/CI (resource
+  copy + presence check); third_party (vendored md4c + VENDORED.md per REQ-300)
+- Status: accepted (2026-09-10)
+- Revisions: 2026-09-10 — accepted (D-2026-09-10-d, ADR-056). Content is shipped Markdown (not
+  fetched); link is always the releases list; About *is* the billboard; md4c vendored for CommonMark.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -9181,6 +9247,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-333 | Domain | proposed, delivered 2026-09-09 (D-2026-09-09-d, ADR-046 amendment (n), TASK-233) — `brep::MoveVertex` and `brep::MoveEdge`, closing **GitHub issue #148 criterion 3's** other two thirds (faces were REQ-319). **The requirement is a DEFINITION, and it is forced rather than chosen:** moving a box corner and leaving everything else alone is not representable — the three quads meeting there would each end up with four non-coplanar points and `SurfaceKind` has nowhere to store that, so the result would be faces that do not contain their own boundaries, the exact failure REQ-319's precondition exists for and one `Validate` cannot see. A planar face has one degree of freedom that keeps it planar (sliding along its normal), three planes at a corner are exactly a point and two along an edge are exactly a line — so the move IS "offset the adjacent planes, re-solve every affected corner", which is amendment (i)'s algorithm with its one-face assumption lifted. Exact, not approximate: each offset plane reads `dot(n,x) = d + dot(n,delta)`, which `p + delta` satisfies identically. **Two things that look like shortfalls and are not:** every other corner of those faces moves too (the faces moved and their boundaries came with them), and the along-the-edge component of a drag is annihilated (the edge direction lies in both faces, and an edge slid along its own line is the same edge) — so a drag entirely along an edge is refused as no motion rather than reported as a move that did nothing. Recipe DROPPED, where REQ-332's rotate/scale keep it, under amendment (m)'s one rule. `PushPullFace` deliberately not routed through the shared core yet (its planar path is entangled with two curved paths); the core takes its failure codes as a parameter so that stays a wiring change. | `MoveSubObjectTests` (7 cases: a box corner landing EXACTLY at `p + delta` with the box still 8/12/6, every face planar, and volume 22x11x9 in closed form; the same corner dragged inward to 17x8x6; a box edge moving its two faces to 20x13x10; the along-edge drag refused AND a diagonal drag proven identical to its perpendicular component alone — the same claim as a refusal and as an equality; a WEDGE, whose corner planes are not mutually perpendicular, landing exactly too, so the three-plane solve is general rather than three independent coordinates; every refusal by name including a pyramid apex's four planes and a cylinder rim's curved neighbour; and every new refusal having a readable sentence). **Proven to bite:** replacing the per-plane projection `dot(delta, n)` with a uniform offset fails 3 of the 7. **A real defect this found in the writing:** `CollectFaceVertices` APPENDS rather than clears, so a reused buffer made every face after the first look as though it used the vertex — caught because the box case refused with `MoveVertexNotThreePlanes` while the vertex demonstrably had three faces. Full suite **1391/1391**. **Increment 2 (D-2026-09-09-e, TASK-234)** — the grips: `CadGizmoMode::SubObjectEdge` / `SubObjectVertex`, `CadSubObjectVertexGrip` / `CadSubObjectEdgeGrip`, `CadApplyMoveVertex` / `CadApplyMoveEdge`, and `brep::FacesAtVertex` / `FacesAlongEdge` made public so the UI can ask what meets where before offering a handle. Covered by `GizmoSubObjectMoveTests` (5 cases: three handles on a vertex anchored ON it and two on an edge anchored at its MIDPOINT with neither axis along the edge; no gizmo at all on a pyramid apex or a cylinder rim; a grip drag matching `brep::MoveVertex` called directly, vertex for vertex; the selection surviving so a SECOND drag compounds without a re-pick; and a refused drag leaving the document untouched) + `headless.req333-vertex-edge-grips` (a camera-driven vertex drag growing the box to 1840/988 with the selection still live, one UNDO restoring it, a `.gs` round trip, and a pyramid apex showing no handle). **Proven to bite:** deleting the three-planes guard makes the pyramid apex sprout a handle, failing both the unit case and the transcript. **A second stale assertion corrected, and it had been passing for the wrong reason:** `req148-gizmo-subobject`'s "a VERTEX gets no gizmo" block actually held TWO sub-objects, because a second pick ADDS rather than replaces — the pre-REQ-333 code returned None for any non-face selection and so could not tell a lone vertex from a pair. Split into a fresh-drawing vertex case and a separate two-sub-objects case, which are now different claims. Full suite **1397/1397**. | proposed |
 | REQ-334 | Domain | accepted, increment 1 delivered (GitHub issue #149 acceptance 4, D-2026-09-09-h, ADR-055, TASK-237). The volume **centroid**, the first of #120's mass properties that needed a genuinely new integrand — the first moments of volume, with no closed form previously written for any surface kind. Integrated by 16-point Gauss-Legendre over the **exact analytic** surfaces (never the display mesh), in **world axes** because the integrand `1/2 r_k^2 n_k` is not frame-covariant, about a **solid-local** reference point because otherwise it loses its low bits at survey magnitude. Planar faces go through Green's theorem along the boundary with quadrature per edge, which is what makes one path cover a straight-edged face and an **arc-bounded** cap alike. Reported through its own `centroidValid` flag: a `Nurbs` face, a general trim loop, a face with holes or an `Ellipse`/`Intersection` boundary edge is **refused by name** (increment 2's work) while the volume and surface area stay untouched. Two errors were measured out during development and are now pinned by tests that would otherwise pass: a per-face-frame moment rotated into world is exact for every axis-aligned solid and **3.2 ft wrong on a tilted box**, and a symmetric primitive's centroid comes out right even from a badly wrong integrand, so the wedge, pyramid and frustum carry the load. `BrepTests [req334]` — 8 cases: seven primitives against closed forms, a tilted frame, survey magnitudes (tilted included), translation covariance, a Boolean result against the composite of its parts, the two refusals, and the uncovered-face case that keeps its volume | accepted |
 | REQ-335 | Domain/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 5, D-2026-09-09-i, TASK-238). `SECTION` — the cross-section of the selected solids by the **active UCS plane**, as a closed polyline, leaving the solids alone. `brep::SectionLoop` returns the section as a closed `brep::Path` of lines and arcs — the kernel's existing vocabulary, so no new type and no knowledge of document entities (ADR-048 (a)) — and arcs reach the drawing as **bulges** (REQ-316/ADR-047), so a cylinder's circular section is a circle and not a polygon. **The cut is `Slice`'s, unchanged**: sectioning asks the same question and keeps a different answer, so the accepted set is inherited rather than restated and a refusal carries `Slice`'s own `Problem` — asserted by a test that reads the reason off `Slice` and compares. Non-destructive is structural (const reference in, pieces discarded) and asserted byte-for-byte anyway. Refused by name: an oblique cylinder cut (`Ellipse` boundary), a section with holes, a plane that misses, a degenerate normal. `BrepTests [req335]` — 9 cases incl. the `A/cos θ` oblique-area check that a plan projection would fail, and `headless.req335-section`, which pins the command's one-undo-step behaviour and that a refusal leaves the document unchanged. **Increment 2**: a three-point plane form matching SLICE's, elliptical boundaries, sections with holes | accepted |
+| REQ-336 | UI/IO/Build | planned (D-2026-09-10-d, ADR-056). What's New billboard: `resources/whats-new.md` + vendored md4c + ImGui draw layer; auto-open once per launch from Start unless prefs dismiss version matches; Help → About reopens same window without clearing dismiss; releases-list URL; missing-file fallback; CI presence gate; agent rule + git hook authoring lock | accepted |
 
 ---
 

@@ -201,6 +201,21 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# md4c (REQ-336 / ADR-056) — CommonMark parser for the What's New billboard.
+# Vendored under third_party/md4c/; UI draw layer is in-tree (MarkdownImGui).
+# ---------------------------------------------------------------------------
+if(NOT EXISTS "${GOSURVEY_TP}/md4c/md4c.c")
+  message(FATAL_ERROR "REQ-336: third_party/md4c/md4c.c is missing. See third_party/md4c/VENDORED.md.")
+endif()
+add_library(md4c STATIC "${GOSURVEY_TP}/md4c/md4c.c")
+target_include_directories(md4c PUBLIC "${GOSURVEY_TP}/md4c")
+if(MSVC)
+  target_compile_options(md4c PRIVATE /w)
+else()
+  target_compile_options(md4c PRIVATE -w)
+endif()
+
+# ---------------------------------------------------------------------------
 # ImGui, split into core and backends (ADR-031 (c′)).
 #
 # The split exists because the headless target (REQ-203) needs ImGui *core* and must not have a
@@ -341,6 +356,9 @@ set(GOSURVEY_DOMAIN_SOURCES
   # REQ-308 recent-drawings MRU store (D-2026-08-30-b). Pure — <filesystem>/<fstream>/json, path
   # and clock passed in by the caller — so GoSurveyTests links it directly too (see that target).
   src/io/RecentDrawings.cpp
+  # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
+  src/io/WhatsNewContent.cpp
+  src/util/WhatsNewLogic.cpp
   src/io/SurveyCsv.cpp
   src/io/DxfIo.cpp
   src/io/DwgIo.cpp
@@ -464,6 +482,8 @@ add_executable(GoSurvey
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/CadUi_SignInGate.cpp
   src/ui/CadUi_StartScreen.cpp
+  src/ui/CadUi_WhatsNew.cpp
+  src/ui/MarkdownImGui.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
   src/ui/RichTextEdit.cpp
@@ -526,6 +546,7 @@ target_link_libraries(GoSurvey PRIVATE
   glew_static
   pdfium
   LibreDWG::libredwg
+  md4c
 )
 target_include_directories(GoSurvey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/devshell)
 if(GOSURVEY_DEVELOPER_SHELL)
@@ -556,7 +577,7 @@ if(WIN32)
   # ole32 is for the Network List Manager connectivity query in HttpFetch.cpp (REQ-077).
   # ws2_32 is the REQ-091 loopback OAuth listener's raw Winsock socket calls (ADR-037 (b));
   # advapi32 is Windows Credential Manager (ADR-037 (c)). Both ship with Windows.
-  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32)
+  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32 shell32)
   target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
 
   # Embed the application icon so Windows shows it in Explorer, the taskbar,
@@ -621,6 +642,16 @@ gosurvey_enable_pch(GoSurvey)
 set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gst")
+set(GOSURVEY_WHATS_NEW_MD "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new.md")
+set(GOSURVEY_WHATS_NEW_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new-bg.png")
+# REQ-336: the billboard content must exist at configure time so a missing file fails the build,
+# not only a packaged installer.
+if(NOT EXISTS "${GOSURVEY_WHATS_NEW_MD}")
+  message(FATAL_ERROR "REQ-336: resources/whats-new.md is required (What's New billboard).")
+endif()
+if(NOT EXISTS "${GOSURVEY_WHATS_NEW_BG}")
+  message(FATAL_ERROR "REQ-336: resources/whats-new-bg.png is required (What's New backdrop).")
+endif()
 add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
@@ -634,6 +665,12 @@ add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gst"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${GOSURVEY_WHATS_NEW_MD}"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new.md"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${GOSURVEY_WHATS_NEW_BG}"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
@@ -896,6 +933,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the
     # tab-index sentinel invariant and the thumbnail-cache naming/eviction (header-only, pure).
     tests/RecentDrawingsTests.cpp
+    # REQ-336 What's New dismiss / auto-open predicates (pure).
+    tests/WhatsNewLogicTests.cpp
+    src/util/WhatsNewLogic.cpp
     tests/StartScreenTests.cpp
     src/io/RecentDrawings.cpp
     tests/TelemetryPingTests.cpp

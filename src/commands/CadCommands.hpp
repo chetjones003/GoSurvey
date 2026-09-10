@@ -2545,6 +2545,11 @@ struct AppCommandState {
                                              ///< the menu-bar account dropdown — REQ-091 amendment)
   bool        showAccountDetailsWindow = false;  ///< REQ-091 amendment: menu-bar "Account Details"
                                                  ///< opens a small read-only placeholder window
+  /// REQ-336 — What's New billboard (Help → About opens the same window).
+  bool        showWhatsNewWindow = false;
+  bool        whatsNewAutoOpenedThisLaunch = false;  ///< suppresses re-auto-open within one launch
+  bool        whatsNewDontShowChecked = false;       ///< checkbox state while the window is open
+  std::string whatsNewDismissedVersion;              ///< prefs: suppress auto-open for this version
   /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
   /// launch until this is true. Set true on a successful sign-in (interactive or silent) OR when
   /// there is no internet connectivity at all (same offline exception REQ-077's update gate

@@ -196,6 +196,10 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   // (REQ-077 amended: every launch checks). A key left behind in an existing prefs file is
   // simply ignored, so no migration is needed.
 
+  // REQ-336 — What's New auto-open dismiss (same shape as updateSkippedVersion).
+  if (s.contains("whatsNewDismissedVersion") && s["whatsNewDismissedVersion"].is_string())
+    st.whatsNewDismissedVersion = s["whatsNewDismissedVersion"].get<std::string>();
+
   // --- Undo/Redo ---
   if (s.contains("undoHistoryMaxSize") && s["undoHistoryMaxSize"].is_number_integer())
     st.undoHistoryMaxSize = std::clamp(s["undoHistoryMaxSize"].get<int>(), 1, 200);
@@ -422,6 +426,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["updateCheckEnabled"]   = st.updatePrefs.enabled;
   s["updateUseBetaChannel"] = st.updatePrefs.useBetaChannel;
   s["updateSkippedVersion"] = st.updatePrefs.skippedVersion;
+  s["whatsNewDismissedVersion"] = st.whatsNewDismissedVersion;
 
   // Right-click behavior
   s["rightClickRepeatLastCommand"] = st.rightClickRepeatLastCommand;

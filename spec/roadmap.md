@@ -68,7 +68,9 @@ when" and the requirements it closes.
 A lightweight board that complements the milestones. Keep each column honest.
 
 ### Now (in flight — keep short)
-- *(empty)*
+- **REQ-336 — Start Screen Billboard (What's New)** (D-2026-09-10-d, ADR-056). Shipped
+  `resources/whats-new.md`, vendored md4c, auto-open from Start + Help → About, dismiss-per-version,
+  CI presence gate, authoring lock on the notes file.
 
 ### M-PaperSpace — Paper space & plotting (incremental)
 - **Goal:** compose the model onto sheets and plot them.

@@ -1056,6 +1056,7 @@ int main()
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd, &cmdLog);
     DrawAccountDetailsWindow(cmd);
+    DrawWhatsNewWindow(cmd);  // REQ-336
     DrawUnitsDialog(cmd, &cmdLog);
     DrawRightClickCustomizationDialog(cmd, &cmdLog);  // REQ-084 (a)
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);

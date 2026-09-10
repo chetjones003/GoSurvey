@@ -1589,6 +1589,12 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.showSettingsWindow = true;
     ImGui::EndMenu();
   }
+  // REQ-336: Help → About opens the What's New billboard (same window as Start auto-open).
+  if (ImGui::BeginMenu("Help")) {
+    if (ImGui::MenuItem("About"))
+      RequestWhatsNewWindow(cmd);
+    ImGui::EndMenu();
+  }
 
   // REQ-091: sign-in status at the far right of the menu bar — the same placement familiar CAD
   // tools (e.g. Civil 3D) use for the signed-in account. Nothing shown while signed out, which

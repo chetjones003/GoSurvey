@@ -617,6 +617,9 @@ void DrawConnectColumn(AppCommandState& cmd) {
 }  // namespace
 
 void DrawStartScreen(AppCommandState& cmd, std::vector<std::string>& log) {
+  // REQ-336: once per launch when Start is shown and this version is not dismissed.
+  MaybeAutoOpenWhatsNew(cmd);
+
   ImDrawList* dl = ImGui::GetWindowDrawList();
   // Paint from the content-area top-left (below the drawing tab bar), not the window origin.
   const ImVec2 winMin = ImGui::GetCursorScreenPos();
