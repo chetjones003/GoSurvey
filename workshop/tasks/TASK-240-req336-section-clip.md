@@ -382,3 +382,63 @@ nothing, the orbited wireframe that used to look like dangling lines, and the sh
 opening well enough that a clipped solid reads as sectioned rather than broken, but it is the PLANE
 being drawn, not the cut face — a solid whose cut is genuinely filled is REQ-336 increment 2, and
 `brep::SectionLoop` (REQ-335) is still the geometry that would do it.
+
+---
+
+## 11. REQ-335 increment 2: SECTION prompts instead of refusing (2026-09-10)
+
+Reported from the real app: *"it gets to the select-an-object stage, and then when selecting the
+object it takes me out of the section and just selects the object by itself."*
+
+**The report was exact, and the diagnosis is one line.** Increment 1's `SECTION` had no phases. It
+read the current selection, and with nothing selected it printed
+
+    SECTION — select one or more solids first.
+
+and **ended**. That text reads as a prompt while the command behaves as a refusal, so the next click
+lands with nothing running and does the only thing a click does then: selects the solid.
+
+**Reproduced before touching anything** — `CMD SECTION` followed by `EXPECT ACTIVE NONE` **passed**,
+which is the whole bug in two lines.
+
+### The fix, and why it is the shape it is
+
+`SECTION` gains SLICE's phase machine, because it is the same gesture: choose solids, then define a
+plane by three points. Not a new pattern — SLICE has asked in that order since REQ-314, and AutoCAD's
+own SECTION asks in that order too, which is what the screenshots in the request show. Five entry
+points mirroring SLICE's exactly (`StartSectionCommand`, `CancelSectionCommand`,
+`CadSectionPromptText`, `HandleSectionTextInput`, `SubmitSectionViewportPick`) plus the click routing,
+the Enter hook, the ESC branch and the prompt hint.
+
+**Nothing that shipped was taken away.** The sectioning core was split out as
+`CadSectionSolidsByPlane`, which takes any plane; `[UCS]` at the first-point prompt feeds it the
+active work plane, which is increment 1's exact behaviour one keystroke away. It is bracketed, so it
+is also clickable — the mechanism §9 wired up for SECTIONCLIP paying for itself immediately.
+
+**The behaviour change that needed the existing transcript updated:** pick-first used to mean
+"section by the UCS plane now"; it now means "go straight to the plane prompt". `req335-section.txt`
+gains `CMD UCS` after each `CMD SECTION`, with a note saying why. That is a real change to a shipped
+command and it is deliberate: a command that silently chooses a plane cannot be given a different one,
+and the request was specifically for the plane to be asked about.
+
+### Tests
+
+`req335-section.txt` grows from 35 to **84 steps**, and the new cases are the report itself:
+
+| case | what it pins |
+|---|---|
+| `SECTION` then `EXPECT ACTIVE SECTION` | **the bug**: the command is still running after it asks |
+| select WHILE running, then `EXPECT ACTIVE SECTION` | the click selects and does **not** end the command |
+| Enter → "first point on the section plane" | the selection is confirmed rather than re-asked |
+| three points → one polyline, solid untouched | the plane actually gets used |
+| Enter with nothing selected | prompt stays open, does not fall through to idle |
+| three **collinear** points | refused by name, command open at the third point, and a different third point still commits |
+| pick-first | goes straight to the plane |
+| ESC at each step | cancels, draws nothing |
+
+Full suite **1458/1458**.
+
+**Still not done, and now explicitly the next thing:** the seven plane-definition keywords AutoCAD
+offers (`Object/Zaxis/View/XY/YZ/ZX/3points`). This delivers `3points` — their default and the only
+one the screenshots exercise — plus `UCS`, which is ours. The rest are a menu on top of a working
+command rather than a change to it.

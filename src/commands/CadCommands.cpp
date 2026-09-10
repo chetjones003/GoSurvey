@@ -13268,6 +13268,19 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     return;
   }
 
+  // SECTION (REQ-335 increment 2), the same shape as SLICE above. During the selection phase a
+  // click must fall through to ordinary SELECTING — that is what makes picking the solid work —
+  // and only afterwards does a click mean a point on the plane.
+  if (st.active == K::Section) {
+    if (st.sectionPhase == AppCommandState::SectionPhase::SelectSolids) {
+      if (st.selBoxWaitingSecond)
+        finishBox();
+      return;
+    }
+    SubmitSectionViewportPick(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::Boolean) {
     if (st.selBoxWaitingSecond)
       finishBox();  // every phase is a selection step; Enter advances it
@@ -28657,21 +28670,14 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
 /// (REQ-316 / ADR-047), so a cylinder's circular section is a circle and not a polygon — the
 /// kernel hands back a `brep::Path` of lines and arcs precisely so nothing has to be flattened
 /// here.
-void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log) {
-  std::vector<int> solids;
-  for (const SelectedEntity& e : st.selection)
-    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 &&
-        static_cast<std::size_t>(e.index) < st.cadSolids.size())
-      solids.push_back(e.index);
-
-  if (solids.empty()) {
-    log.push_back("SECTION — select one or more solids first.");
-    return;
-  }
-
-  const ucs::Ucs frame = CadActiveUcsStorage(st);
-  const ray3d::Vec3 planePoint = frame.origin;
-  const ray3d::Vec3 planeNormal = frame.zAxis;
+/// Section \p solids by the plane through \p planePoint with normal \p planeNormal.
+///
+/// Split out from `CadSectionSelection` so the plane can come from anywhere: the active UCS (the
+/// original form, REQ-335 increment 1) or three picked points (increment 2). Everything below this
+/// line was already here and is unchanged — only where the plane comes from moved out.
+static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>& solids,
+                                    const ray3d::Vec3& planePoint, const ray3d::Vec3& planeNormal,
+                                    std::vector<std::string>& log) {
 
   // Section everything BEFORE touching the document, so a failure part-way leaves nothing behind
   // (REQ-201) — the same all-or-nothing shape SLICE already uses.
@@ -28760,6 +28766,164 @@ void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log) {
                   attempted, attempted == 1 ? "" : "s", solids.size() == 1 ? " is" : "s are");
   }
   log.push_back(msg);
+}
+
+std::string CadSectionPromptText(const AppCommandState& st) {
+  switch (st.sectionPhase) {
+  case AppCommandState::SectionPhase::SelectSolids:
+    return "SECTION — select solids, Enter when done. ESC cancels.";
+  case AppCommandState::SectionPhase::WaitP1:
+    // `[UCS]` is bracketed so it draws as a clickable option (REQ-040), and it is what keeps
+    // increment 1's behaviour reachable: the active work plane, without picking three points.
+    return "SECTION — first point on the section plane, or [UCS] for the work plane. ESC cancels.";
+  case AppCommandState::SectionPhase::WaitP2:
+    return "SECTION — second point on the plane. ESC cancels.";
+  case AppCommandState::SectionPhase::WaitP3:
+    return "SECTION — third point on the plane. ESC cancels.";
+  }
+  return "SECTION";
+}
+
+/// Resolve the selection into solid indices and move to the plane phase, or say why not.
+static void SectionEnterPlanePhase(AppCommandState& st, std::vector<std::string>& log) {
+  st.sectionSolidIndices.clear();
+  const int nSolid = static_cast<int>(st.cadSolids.size());
+  for (const SelectedEntity& e : st.selection)
+    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < nSolid)
+      st.sectionSolidIndices.push_back(e.index);
+  if (st.sectionSolidIndices.empty()) {
+    // Stays in the selection phase rather than ending: the user picked something, it just was not
+    // a solid, and throwing them out of the command for that is the behaviour this increment exists
+    // to remove.
+    log.push_back("SECTION — that is not a solid. Select one or more solids, Enter when done.");
+    st.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
+    return;
+  }
+  st.sectionPhase = AppCommandState::SectionPhase::WaitP1;
+  log.push_back(CadSectionPromptText(st));
+}
+
+void CancelSectionCommand(AppCommandState& st) {
+  st.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
+  st.sectionSolidIndices.clear();
+}
+
+/// `SECTION` — choose solids, then define the section plane by three points (REQ-335 increment 2).
+///
+/// Pick-first is honoured: with solids already selected it goes straight to the plane, which is the
+/// convention every modify command in this application already follows.
+void StartSectionCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelSectionCommand(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Section;
+  st.lastCommand = AppCommandState::Kind::Section;
+  st.selBoxWaitingSecond = false;
+  if (!st.selection.empty()) {
+    SectionEnterPlanePhase(st, log);
+    if (st.sectionPhase != AppCommandState::SectionPhase::SelectSolids)
+      return;
+    st.selection.clear();
+  }
+  st.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
+  log.push_back(CadSectionPromptText(st));
+}
+
+/// Build the plane from the three picked points and section with it.
+static void CommitSectionFromPoints(AppCommandState& st, std::vector<std::string>& log) {
+  const ray3d::Vec3 n =
+      ray3d::Cross(ray3d::Sub(st.sectionP2, st.sectionP1), ray3d::Sub(st.sectionP3, st.sectionP1));
+  if (!(ray3d::Length(n) > 1e-9)) {
+    // Collinear points are a plane with no orientation. Said, not guessed at — and the command
+    // stays open at the third point so the pick can simply be repeated.
+    log.push_back("SECTION — the three points are in a line; they do not define a plane.");
+    st.sectionPhase = AppCommandState::SectionPhase::WaitP3;
+    log.push_back(CadSectionPromptText(st));
+    return;
+  }
+  CadSectionSolidsByPlane(st, st.sectionSolidIndices, st.sectionP1, ray3d::Normalize(n), log);
+  st.active = AppCommandState::Kind::None;
+  CancelSectionCommand(st);
+}
+
+/// Section by the ACTIVE UCS plane — increment 1's behaviour, reached now by the `[UCS]` option.
+static void CommitSectionByUcs(AppCommandState& st, std::vector<std::string>& log) {
+  const ucs::Ucs frame = CadActiveUcsStorage(st);
+  CadSectionSolidsByPlane(st, st.sectionSolidIndices, frame.origin, frame.zAxis, log);
+  st.active = AppCommandState::Kind::None;
+  CancelSectionCommand(st);
+}
+
+bool HandleSectionTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Section)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  using SP = AppCommandState::SectionPhase;
+
+  if (st.sectionPhase == SP::SelectSolids) {
+    if (!line.empty())
+      return false;  // a typed line during selection is not ours; let the dispatcher have it
+    if (st.selection.empty()) {
+      log.push_back("SECTION — nothing selected. Click a solid, or ESC.");
+      return true;
+    }
+    SectionEnterPlanePhase(st, log);
+    return true;
+  }
+
+  if (line.empty())
+    return true;  // Enter at a point prompt: nothing to accept, keep waiting
+
+  if (st.sectionPhase == SP::WaitP1) {
+    const std::string low = StringUtil::toLowerAsciiCopy(line);
+    if (low == "ucs" || low == "u") {
+      CommitSectionByUcs(st, log);
+      return true;
+    }
+  }
+
+  ray3d::Vec3 p{};
+  if (!ParseSolidBasePoint(st, line, &p, log, "SECTION")) {
+    log.push_back("SECTION — could not read the point. Use X,Y or X,Y,Z.");
+    return true;
+  }
+  if (st.sectionPhase == SP::WaitP1) {
+    st.sectionP1 = p;
+    st.sectionPhase = SP::WaitP2;
+  } else if (st.sectionPhase == SP::WaitP2) {
+    st.sectionP2 = p;
+    st.sectionPhase = SP::WaitP3;
+  } else {
+    st.sectionP3 = p;
+    CommitSectionFromPoints(st, log);
+    return true;
+  }
+  log.push_back(CadSectionPromptText(st));
+  return true;
+}
+
+void SubmitSectionViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Section)
+    return;
+  using SP = AppCommandState::SectionPhase;
+  const ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
+                      static_cast<double>(CadCommitElevation(st))};
+  switch (st.sectionPhase) {
+  case SP::WaitP1:
+    st.sectionP1 = p;
+    st.sectionPhase = SP::WaitP2;
+    break;
+  case SP::WaitP2:
+    st.sectionP2 = p;
+    st.sectionPhase = SP::WaitP3;
+    break;
+  case SP::WaitP3:
+    st.sectionP3 = p;
+    CommitSectionFromPoints(st, log);
+    return;
+  case SP::SelectSolids:
+    return;
+  }
+  log.push_back(CadSectionPromptText(st));
 }
 
 /// `SOLIDCHECK` — say whether each solid is sound, and if not, why (REQ-313 as amended,
@@ -33223,6 +33387,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("SLICE canceled.");
     CancelSliceCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Section) {
+    log.push_back("SECTION canceled — nothing was drawn.");
+    CancelSectionCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Loft) {
     log.push_back("LOFT canceled.");
     CancelLoftCommand(st);
@@ -34065,6 +34233,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandleSweepTextInput("", st, log);
     } else if (st.active == K::Slice) {
       (void)HandleSliceTextInput("", st, log);
+    } else if (st.active == K::Section) {
+      // Enter CONFIRMS the solid selection. This is the step that turns SECTION from a refusal into
+      // a prompt (REQ-335 increment 2) — without it, the command ends before the first click.
+      (void)HandleSectionTextInput("", st, log);
     } else if (st.active == K::Boolean) {
       (void)HandleBooleanTextInput("", st, log);
     } else if (st.active == K::Offset) {
@@ -34423,11 +34595,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       CadReportSolids(st, log);
       return;
     }
-    // SECTION (REQ-335): the cross-section of the selected solids by the active UCS plane, drawn as
-    // a closed polyline. The solids themselves are untouched -- it inspects rather than cuts, which
-    // is what separates it from SLICE.
+    // SECTION (REQ-335 increment 2): choose solids, then three points defining the plane — the
+    // same order SLICE asks in, and the same order AutoCAD's SECTION asks in. The solids themselves
+    // are untouched: it inspects rather than cuts, which is what separates it from SLICE.
     if (plotTok == "section") {
-      CadSectionSelection(st, log);
+      StartSectionCommand(st, log);
       return;
     }
     // SOLIDCHECK (REQ-313 as amended, D-2026-09-09-j): validity, and separately self-intersection —
@@ -36099,6 +36271,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleSliceTextInput(line, st, log))
       return;
     log.push_back(CadSlicePromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Section) {
+    if (HandleSectionTextInput(line, st, log))
+      return;
+    log.push_back(CadSectionPromptText(st));
     return;
   }
 

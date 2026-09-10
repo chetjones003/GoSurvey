@@ -8022,7 +8022,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
     are each refused by name and draw nothing;
   - the command creates one closed polyline per solid in **one undo step**, and a refusal leaves the
     document unchanged;
-  - the figures hold at survey coordinate magnitudes.
+  - the figures hold at survey coordinate magnitudes;
+  - **the command PROMPTS rather than refusing**: after asking for a selection it is still running,
+    a click during that step selects without ending it, Enter confirms, and three points then define
+    the plane — with `[UCS]` reaching the active work plane instead;
+  - three points **in a line** are refused by name and leave the command open at the third point, so
+    the pick can be repeated without restarting;
+  - ESC at any step cancels and draws nothing.
 - Owner-layer: Domain (`src/util/brep.{hpp,cpp}`), Commands
 - Status: accepted (2026-09-09) — see D-2026-09-09-i.
 - Revisions: 2026-09-09 — proposed and accepted (D-2026-09-09-i, TASK-238). Increment 1: the active
@@ -8031,6 +8037,22 @@ capability that does not exist. They are recorded here rather than quietly dropp
   oversight — along with elliptical boundaries (oblique cylinder cuts) and sections with holes.
   Phase 6 of GitHub #120, filed as #149, acceptance 5. Section CLIPPING — the live view clipping in
   the same acceptance list — is separate work and is not part of this requirement.
+
+  **2026-09-10 — increment 2 delivered (TASK-248): `SECTION` PROMPTS.** It now asks for solids, then
+  for three points defining the plane, in that order — the order SLICE already asks in and the order
+  AutoCAD's own SECTION asks in. `[UCS]` at the first point gives increment 1's answer, so the work
+  plane is still one keystroke away and nothing that shipped was taken away.
+
+  **Raised as a defect from the real app, and it was a fair report:** increment 1 had no phases at
+  all. With nothing selected it printed *"SECTION — select one or more solids first."* and **ended**.
+  That text reads as a prompt while the command behaves as a refusal, so the user's next click landed
+  with nothing running and simply selected the solid — reported as *"it takes me out of the section
+  and just selects the object by itself."* Reproduced exactly before any code was written: after
+  `SECTION`, `EXPECT ACTIVE NONE` passed.
+
+  So the requirement gains an acceptance clause it was missing: **a command that asks for a selection
+  must still be running after it asks.** A message that names what to do next, from a command that
+  has already ended, is worse than no message.
 
 ### REQ-336 — Start Screen Billboard (What's New)
 - Purpose: Users launching a new version do not know what changed unless they hunt for release notes.

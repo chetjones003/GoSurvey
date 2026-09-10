@@ -9123,6 +9123,13 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     sliceHint = CadSlicePromptText(cmd);
     return sliceHint.c_str();
   }
+  // REQ-335 increment 2. Computed like SLICE's for the same reason: the prompt changes with the
+  // phase, so a literal would be wrong at three of the four steps.
+  if (cmd.active == AppCommandState::Kind::Section) {
+    static std::string sectionHint;
+    sectionHint = CadSectionPromptText(cmd);
+    return sectionHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Boolean) {
     static std::string boolHint;
     boolHint = CadBooleanPromptText(cmd);

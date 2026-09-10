@@ -1552,6 +1552,8 @@ struct AppCommandState {
     /// SLICE (REQ-314 / ADR-046, GitHub #147): select solids, define a cutting plane with three
     /// points, then pick which side to keep (or both).
     Slice,
+    /// SECTION: choose solids, then three points defining the plane (REQ-335 increment 2).
+    Section,
     /// LOFT (REQ-315 / ADR-048, GitHub #241): select two or more closed polylines / circles in
     /// lofting order, Enter to skin a solid through them (SurfaceKind::Nurbs side faces). One
     /// select-objects phase and nothing else — no height, no axis.
@@ -1639,6 +1641,7 @@ struct AppCommandState {
     case Kind::Extrude:           return "EXTRUDE";
     case Kind::Revolve:          return "REVOLVE";
     case Kind::Slice:            return "SLICE";
+    case Kind::Section:          return "SECTION";
     case Kind::Loft:             return "LOFT";
     case Kind::Sweep:            return "SWEEP";
     case Kind::Boolean:          return "BOOLEAN";
@@ -2348,6 +2351,28 @@ struct AppCommandState {
     WaitP3,
     WaitKeepSide,   ///< Pick a point on the side to keep, or [B]oth.
   } slicePhase = SlicePhase::SelectSolids;
+
+  // --- The SECTION command (REQ-335 increment 2, GitHub #149) -----------------------------------
+  //
+  // Deliberately the SAME shape as SLICE above, because it is the same gesture: choose solids, then
+  // define a plane by three points. The two commands ask one question and keep different answers —
+  // SLICE keeps the pieces, SECTION keeps the outline — so a user who has learned one has learned
+  // the other, and AutoCAD's own SECTION prompts in exactly this order.
+  //
+  // Increment 1 had no phases at all: it read the current selection and used the active UCS plane,
+  // so typing SECTION with nothing selected printed "select one or more solids first" and ENDED.
+  // That reads as a prompt and behaves as a refusal — the next click lands with the command already
+  // over and merely selects the solid, which is precisely how it was reported.
+  enum class SectionPhase {
+    SelectSolids,  ///< Accumulate a selection of solids; Enter confirms.
+    WaitP1,        ///< First of three points defining the section plane, or [UCS] for the work plane.
+    WaitP2,
+    WaitP3,
+  } sectionPhase = SectionPhase::SelectSolids;
+  std::vector<int> sectionSolidIndices;  ///< resolved at the end of the selection phase
+  ray3d::Vec3 sectionP1{};
+  ray3d::Vec3 sectionP2{};
+  ray3d::Vec3 sectionP3{};
 
   // --- The LOFT command (REQ-315 / ADR-048, GitHub #241) ---------------------------------------
 
@@ -4947,6 +4972,16 @@ void CancelSliceCommand(AppCommandState& st);
 [[nodiscard]] bool HandleSliceTextInput(const std::string& line, AppCommandState& st,
                                         std::vector<std::string>& log);
 void SubmitSliceViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+// SECTION (REQ-335 increment 2) — the same five entry points as SLICE above, because it is the same
+// gesture: choose solids, then define a plane. Increment 1 had none of these; it read the current
+// selection and ended, which is why a click during "select an object" fell through to plain picking.
+void StartSectionCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelSectionCommand(AppCommandState& st);
+[[nodiscard]] std::string CadSectionPromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleSectionTextInput(const std::string& line, AppCommandState& st,
+                                          std::vector<std::string>& log);
+void SubmitSectionViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
