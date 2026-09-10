@@ -766,6 +766,11 @@ int main()
         CancelTableCellEditor(cmd);
         cmdBuf[0] = '\0';
       }
+      else if (cmd.pickDisambiguationPopupOpen)
+      {
+        CancelPickDisambiguationPopup(cmd);
+        cmdBuf[0] = '\0';
+      }
       else if (cmd.gizmoDragActive)
       {
         // A TRUE cancel, not an undo: a live gizmo drag changes nothing in the store until it is
@@ -1056,6 +1061,7 @@ int main()
 
     DrawQuickSelectWindow(cmd, cmdLog);
     DrawSelectionCyclingPanel(cmd);
+    DrawPickDisambiguationPopup(cmd, cmdLog);
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd, &cmdLog);
     DrawAccountDetailsWindow(cmd);

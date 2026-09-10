@@ -24809,8 +24809,191 @@ static double PickDistSqPointSegmentD(double px, double py, double ax, double ay
   return dx * dx + dy * dy;
 }
 
+namespace {
+
+/// Depth sort key for one entity at a pick — ray \p t when orbited, closest-point Z in plan view.
+double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity& e, double wx, double wy,
+                                const ray3d::Ray* pickRay) {
+  const bool useRay = pickRay != nullptr && pickRay->valid();
+  using T = SelectedEntity::Type;
+  switch (e.type) {
+  case T::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    const auto& L = st.userLinesFlat;
+    if (k + 5 >= L.size())
+      return 0.0;
+    if (useRay) {
+      double t = 0.0;
+      (void)ray3d::RaySegmentDistance(*pickRay, ray3d::Vec3{L[k], L[k + 1], L[k + 2]},
+                                      ray3d::Vec3{L[k + 3], L[k + 4], L[k + 5]}, &t);
+      return t;
+    }
+    const double ax = L[k], ay = L[k + 1], az = L[k + 2];
+    const double bx = L[k + 3], by = L[k + 4], bz = L[k + 5];
+    const double vx = bx - ax, vy = by - ay;
+    const double len2 = vx * vx + vy * vy;
+    if (len2 < 1e-24)
+      return az;
+    const double u = std::clamp(((wx - ax) * vx + (wy - ay) * vy) / len2, 0.0, 1.0);
+    return az + u * (bz - az);
+  }
+  case T::Circle: {
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    const auto& C = st.userCirclesCxCyZR;
+    if (k + 3 >= C.size())
+      return 0.0;
+    if (useRay) {
+      double bestT = 1e300;
+      constexpr int n = 24;
+      constexpr double twopi = 6.28318530717958647692;
+      const double cx = C[k], cy = C[k + 1], cz = C[k + 2], r = C[k + 3];
+      for (int i = 0; i < n; ++i) {
+        const double ang = twopi * static_cast<double>(i) / static_cast<double>(n);
+        double t = 0.0;
+        (void)ray3d::RayPointDistance(*pickRay, ray3d::Vec3{cx + r * std::cos(ang), cy + r * std::sin(ang), cz},
+                                     &t);
+        bestT = std::min(bestT, t);
+      }
+      return bestT;
+    }
+    return static_cast<double>(C[k + 2]);
+  }
+  case T::Arc: {
+    if (static_cast<size_t>(e.index) >= st.userArcs.size())
+      return 0.0;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    if (useRay) {
+      double bestT = 1e300;
+      constexpr int n = 24;
+      for (int i = 0; i <= n; ++i) {
+        const double u = static_cast<double>(i) / static_cast<double>(n);
+        const double ang = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
+        const double x = static_cast<double>(a.cx) + static_cast<double>(a.r) * std::cos(ang);
+        const double y = static_cast<double>(a.cy) + static_cast<double>(a.r) * std::sin(ang);
+        double t = 0.0;
+        (void)ray3d::RayPointDistance(*pickRay, ray3d::Vec3{x, y, static_cast<double>(a.z)}, &t);
+        bestT = std::min(bestT, t);
+      }
+      return bestT;
+    }
+    return static_cast<double>(a.z);
+  }
+  case T::Ellipse: {
+    if (static_cast<size_t>(e.index) >= st.userEllipses.size())
+      return 0.0;
+    const CadEllipse& el = st.userEllipses[static_cast<size_t>(e.index)];
+    return static_cast<double>(el.z);
+  }
+  case T::Polyline: {
+    if (static_cast<size_t>(e.index) + 1 >= st.userPolylineOffsets.size())
+      return 0.0;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(e.index)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(e.index + 1)];
+    double bestDepth = useRay ? 1e300 : -1e300;
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+      if (B + 2 >= st.userPolylineVerts.size())
+        break;
+      if (useRay) {
+        double t = 0.0;
+        (void)ray3d::RaySegmentDistance(
+            *pickRay,
+            ray3d::Vec3{st.userPolylineVerts[A], st.userPolylineVerts[A + 1], st.userPolylineVerts[A + 2]},
+            ray3d::Vec3{st.userPolylineVerts[B], st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]}, &t);
+        bestDepth = std::min(bestDepth, t);
+      } else {
+        const double az = st.userPolylineVerts[A + 2], bz = st.userPolylineVerts[B + 2];
+        bestDepth = std::max(bestDepth, std::max(az, bz));
+      }
+    }
+    return bestDepth;
+  }
+  case T::FeatureLine: {
+    if (static_cast<size_t>(e.index) + 1 >= st.featureLineOffsets.size())
+      return 0.0;
+    const int v0 = st.featureLineOffsets[static_cast<size_t>(e.index)];
+    const int v1 = st.featureLineOffsets[static_cast<size_t>(e.index + 1)];
+    double bestDepth = useRay ? 1e300 : -1e300;
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+      if (B + 2 >= st.featureLineVerts.size())
+        break;
+      if (useRay) {
+        double t = 0.0;
+        (void)ray3d::RaySegmentDistance(
+            *pickRay,
+            ray3d::Vec3{static_cast<float>(st.featureLineVerts[A]),
+                        static_cast<float>(st.featureLineVerts[A + 1]),
+                        static_cast<float>(st.featureLineVerts[A + 2])},
+            ray3d::Vec3{static_cast<float>(st.featureLineVerts[B]),
+                        static_cast<float>(st.featureLineVerts[B + 1]),
+                        static_cast<float>(st.featureLineVerts[B + 2])},
+            &t);
+        bestDepth = std::min(bestDepth, t);
+      } else {
+        const double az = st.featureLineVerts[A + 2], bz = st.featureLineVerts[B + 2];
+        bestDepth = std::max(bestDepth, std::max(az, bz));
+      }
+    }
+    return bestDepth;
+  }
+  case T::Solid: {
+    if (static_cast<size_t>(e.index) >= st.cadSolids.size())
+      return 0.0;
+    const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
+    double bestDepth = useRay ? 1e300 : -1e300;
+    for (const brep::Edge& ed : sp->edges) {
+      const int steps = ed.kind == brep::CurveKind::Arc ? 12 : 1;
+      ray3d::Vec3 prev = brep::EdgePointAt(*sp, ed, 0.0);
+      for (int i = 1; i <= steps; ++i) {
+        const ray3d::Vec3 next = brep::EdgePointAt(*sp, ed, static_cast<double>(i) / steps);
+        if (useRay) {
+          double t = 0.0;
+          (void)ray3d::RaySegmentDistance(*pickRay, prev, next, &t);
+          bestDepth = std::min(bestDepth, t);
+        } else {
+          bestDepth = std::max(bestDepth, std::max(prev.z, next.z));
+        }
+        prev = next;
+      }
+    }
+    return bestDepth;
+  }
+  case T::Surface:
+  case T::BlockRef:
+  case T::Table:
+  case T::Annotation:
+  case T::FilledRegion:
+  case T::PdfUnderlay:
+  case T::Mesh:
+    return static_cast<double>(e.index);
+  }
+  return 0.0;
+}
+
+} // namespace
+
+bool PickCadEntityByDepth(const std::vector<CadPickCandidate>& candidates, SelectedEntity* out,
+                          const ray3d::Ray* pickRay) {
+  if (candidates.empty() || !out)
+    return false;
+  const bool useRay = pickRay != nullptr && pickRay->valid();
+  const CadPickCandidate* best = &candidates.front();
+  for (const CadPickCandidate& c : candidates) {
+    if (useRay) {
+      if (c.depthKey < best->depthKey - 1e-9)
+        best = &c;
+    } else if (c.depthKey > best->depthKey + 1e-9) {
+      best = &c;
+    }
+  }
+  *out = best->entity;
+  return true;
+}
+
 bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float tolWorld, SelectedEntity* out,
-                          float* outDistSq, const ray3d::Ray* pickRay) {
+                          float* outDistSq, const ray3d::Ray* pickRay,
+                          std::vector<CadPickCandidate>* allCandidates) {
   // \p outDistSq is optional: a caller that wants only the entity passes null. Rejecting null
   // here is what made every `UCS Object` pick answer "no object found at that point" - the
   // option could not succeed anywhere, at any zoom, on any drawing, under a green suite.
@@ -24855,6 +25038,8 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     // so there is no per-type gate to forget.
     if (CadSelectedEntityHidden(st, e))
       return;
+    if (allCandidates)
+      allCandidates->push_back({e, d2, 0.0});
     if (!any || d2 < best - 1e-12) {
       any = true;
       best = d2;
@@ -25187,6 +25372,10 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
 
   if (!any)
     return false;
+  if (allCandidates) {
+    for (CadPickCandidate& c : *allCandidates)
+      c.depthKey = CadEntityPickDepthAtPick(st, c.entity, wx, wy, pickRay);
+  }
   *out = bestE;
   *outDistSq = static_cast<float>(best);
   return true;

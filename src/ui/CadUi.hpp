@@ -133,6 +133,11 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 /// Floating panel listing all currently selected entities; each entry has a checkbox to deselect it.
 void DrawSelectionCyclingPanel(AppCommandState& cmd);
 
+/// Cursor-anchored list of overlapping pick candidates (opened when Multi Selection is on and the user clicks).
+void DrawPickDisambiguationPopup(AppCommandState& cmd, std::vector<std::string>& log);
+/// Dismiss the pick list without selecting; clears hover preview tied to the popup.
+void CancelPickDisambiguationPopup(AppCommandState& cmd);
+
 /// QUICKSELECT (QS) filter window — builds a selection by entity type and property criteria.
 void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log);
 

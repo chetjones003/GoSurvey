@@ -96,6 +96,15 @@ struct SelectedEntity {
   int index = 0; ///< Entity index in the parallel container for \p type
 };
 
+/// One CAD entity within the pick aperture, with the metrics used to break ties.
+struct CadPickCandidate {
+  SelectedEntity entity{};
+  double distSq = 0.0;
+  /// Plan view: Z at the closest point on the entity (higher = nearer the viewer looking down).
+  /// Orbited view: ray parameter \p t of closest approach (smaller = nearer the camera).
+  double depthKey = 0.0;
+};
+
 /// One selected FACE, EDGE or VERTEX of one solid (REQ-318 increment 2 / ADR-049, issue #148).
 ///
 /// **Why this is not a `SelectedEntity::Type`.** A sub-object is not an entity: it has no
@@ -3420,10 +3429,23 @@ struct AppCommandState {
   CreatePointsOptions createPointsOpts;
   int createPointsNextId = 1;
   bool showCreatePointsWindow = false;
+  /// Status-bar toggle: when on, overlapping picks show a cursor marker and open a pick list on click.
+  bool multiSelectionEnabled = false;
+  /// Floating Selection panel (checkbox list), opened from the right-click menu — not from the toggle.
   bool showSelectionCyclingWindow = false;
-  /// Stable snapshot of the selection taken when the SEL panel is opened; entities remain listed even after deselection.
+  /// Stable snapshot of the selection taken when the Selection panel is opened; entities remain listed even after deselection.
   std::vector<SelectedEntity> selectionCycleEntities;
   std::vector<int> selectionCycleSurveyPoints;
+  /// All CAD entities currently under the idle pick aperture (from the throttled hover scan).
+  std::vector<CadPickCandidate> viewportPickCandidates;
+  /// True when \ref viewportPickCandidates holds more than one entry.
+  bool viewportPickAmbiguous = false;
+  /// Cursor-anchored pick list opened by a click on an ambiguous pick (SEL toggle on).
+  bool pickDisambiguationPopupOpen = false;
+  std::vector<CadPickCandidate> pickDisambiguationCandidates;
+  float pickDisambiguationScreenX = 0.f;
+  float pickDisambiguationScreenY = 0.f;
+  bool pickDisambiguationShiftClick = false;
   enum class SurveyInversePhase { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
   float surveyInverseFromX = 0.f;
   float surveyInverseFromY = 0.f;
@@ -5631,7 +5653,11 @@ void CadTrimAppendCutLineRemovedPreview3D(const AppCommandState& st, const ray3d
 ///        the plan test would measure to the wrong place. Null (the default) keeps the exact
 ///        pre-3D behaviour, which is what plan view continues to use.
 bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float tolWorld, SelectedEntity* out,
-                          float* outDistSq, const ray3d::Ray* pickRay = nullptr);
+                          float* outDistSq, const ray3d::Ray* pickRay = nullptr,
+                          std::vector<CadPickCandidate>* allCandidates = nullptr);
+/// From a non-empty candidate list, pick the entity nearest the camera (ray mode) or highest Z (plan).
+bool PickCadEntityByDepth(const std::vector<CadPickCandidate>& candidates, SelectedEntity* out,
+                          const ray3d::Ray* pickRay);
 /// True if (x,y) is inside the filled region: inside its outer loop (0) and outside every hole loop (REQ-042).
 bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y);
 /// HATCH command (REQ-043): begin picking an internal point.

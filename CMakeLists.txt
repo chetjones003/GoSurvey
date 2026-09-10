@@ -1149,6 +1149,8 @@ if(GOSURVEY_BUILD_TESTS)
     # select-target / wait-distance flow and widened to closed 2D shapes. Needs gosurvey_domain
     # for HandlePressPullTextInput / StartPressPullCommand, like DistCommandTests above.
     tests/PressPullTypedDistanceDirectionTests.cpp
+    # Overlapping pick disambiguation — depth tie-break when SEL is off.
+    tests/PickDisambiguationTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

@@ -9750,7 +9750,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
 #ifdef GOSURVEY_DEVELOPER_SHELL
               + statusBtnW("DEV")
 #endif
-              + plotScaleW + statusBtnW("SEL");
+              + plotScaleW + statusBtnW("Multi Selection");
     w += btnSp * static_cast<float>(rightItemCount - 1);
     return w;
   };
@@ -10034,19 +10034,16 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
     DrawPlotScaleCombo(cmd, plotScaleW);
     ImGui::SameLine(0, sp);
     {
-      const bool on = cmd.showSelectionCyclingWindow;
+      const bool on = cmd.multiSelectionEnabled;
       PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
-      if (ImGui::Button("SEL", ImVec2(0.f, statusBtnH))) {
-        if (!cmd.showSelectionCyclingWindow) {
-          cmd.selectionCycleEntities      = cmd.selection;
-          cmd.selectionCycleSurveyPoints  = cmd.selectedSurveyPointIndices;
-          cmd.showSelectionCyclingWindow  = true;
-        } else {
-          cmd.showSelectionCyclingWindow = false;
-        }
+      if (ImGui::Button("Multi Selection", ImVec2(0.f, statusBtnH))) {
+        cmd.multiSelectionEnabled = !cmd.multiSelectionEnabled;
+        if (!cmd.multiSelectionEnabled)
+          CancelPickDisambiguationPopup(cmd);
       }
       PopModeToggleButtonColors(on);
-      ItemHelpTooltip("Selection panel — lists selected entities so you can toggle each one on or off.");
+      ItemHelpTooltip("Multi Selection — when on, overlapping picks show a marker at the cursor and "
+                      "open a pick list on click; when off, the topmost / nearest object is chosen.");
     }
   }
 
@@ -13841,9 +13838,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (blockEntityHover) {
         cmd.viewportHoverEntityValid = false;
         cmd.viewportHoverPickGate.primed = false;
+        cmd.viewportPickCandidates.clear();
+        cmd.viewportPickAmbiguous = false;
       } else if (subObjectHovering) {
         // Handled above; the entity hover stays off while Ctrl is held.
-      } else if (runHoverPick) {
+      } else if (runHoverPick && !cmd.pickDisambiguationPopupOpen) {
         // Text annotations are picked by bounding box and take priority over geometry, mirroring
         // click-to-select (the annotation pick runs before the entity pick on a click). Hovering text
         // pre-highlights it in model space, matching the paper-space hover (REQ-039). Dims keep their
@@ -13877,10 +13876,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           // while the click measured the true distance from the ray, and off plan view those two
           // disagree: the XY distance over-measures along the foreshortened screen direction, so
           // geometry the click would take highlighted on one side of the cursor and not the other.
-          if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2, cursorRayPtr)) {
+          std::vector<CadPickCandidate> hoverCandidates;
+          if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2, cursorRayPtr,
+                                   &hoverCandidates)) {
             cmd.viewportHoverEntityValid = true;
             cmd.viewportHoverEntity = hoverHit;
+            if (cmd.active == AppCommandState::Kind::None) {
+              cmd.viewportPickCandidates = std::move(hoverCandidates);
+              cmd.viewportPickAmbiguous = cmd.viewportPickCandidates.size() > 1;
+            } else {
+              cmd.viewportPickCandidates.clear();
+              cmd.viewportPickAmbiguous = false;
+            }
           } else {
+            cmd.viewportPickCandidates.clear();
+            cmd.viewportPickAmbiguous = false;
             // Filled-region hover (REQ-042): lowest priority, only when no linework is under the cursor.
             const int frHover = PickFilledRegionAt(cmd, rawX, rawY);
             if (frHover >= 0) {
@@ -15054,27 +15064,48 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         SelectedEntity clickHit{};
         float clickD2 = 0.f;
         const float clickTol = CadOffsetEntityPickTolWorld(cmd);
+        std::vector<CadPickCandidate> clickCandidates;
         // Same ray the hover used, so what highlights is what selects (REQ-058).
-        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2, pickRayPtr)) {
-          AbortMtextGripInteraction(cmd);
-          ClearDimGripInteraction(cmd);
-          if (keyShift) {
-            // Shift+click: remove entity from selection (subtractive).
-            auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
-              return x.type == clickHit.type && x.index == clickHit.index;
-            });
-            if (it != cmd.selection.end())
-              cmd.selection.erase(it);
+        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2, pickRayPtr,
+                                 &clickCandidates)) {
+          if (clickCandidates.size() > 1 && cmd.multiSelectionEnabled) {
+            cmd.pickDisambiguationCandidates = std::move(clickCandidates);
+            if (s_lastCrosshairScreen.x >= 0.f) {
+              cmd.pickDisambiguationScreenX = s_lastCrosshairScreen.x;
+              cmd.pickDisambiguationScreenY = s_lastCrosshairScreen.y;
+            } else {
+              const ImVec2 mp = ImGui::GetIO().MousePos;
+              cmd.pickDisambiguationScreenX = mp.x;
+              cmd.pickDisambiguationScreenY = mp.y;
+            }
+            cmd.pickDisambiguationShiftClick = keyShift;
+            cmd.pickDisambiguationPopupOpen = true;
+            cmd.viewportHoverEntityValid = false;
+            cmd.selBoxWaitingSecond = false;
+            handled = true;
           } else {
-            // Plain click: add entity to selection (additive).
-            const bool alreadySelected = std::any_of(cmd.selection.begin(), cmd.selection.end(),
-              [&](const SelectedEntity& x) { return x.type == clickHit.type && x.index == clickHit.index; });
-            if (!alreadySelected)
-              cmd.selection.push_back(clickHit);
+            if (clickCandidates.size() > 1 && !cmd.multiSelectionEnabled)
+              PickCadEntityByDepth(clickCandidates, &clickHit, pickRayPtr);
+            AbortMtextGripInteraction(cmd);
+            ClearDimGripInteraction(cmd);
+            if (keyShift) {
+              // Shift+click: remove entity from selection (subtractive).
+              auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+                return x.type == clickHit.type && x.index == clickHit.index;
+              });
+              if (it != cmd.selection.end())
+                cmd.selection.erase(it);
+            } else {
+              // Plain click: add entity to selection (additive).
+              const bool alreadySelected = std::any_of(cmd.selection.begin(), cmd.selection.end(),
+                [&](const SelectedEntity& x) { return x.type == clickHit.type && x.index == clickHit.index; });
+              if (!alreadySelected)
+                cmd.selection.push_back(clickHit);
+            }
+            EnsureAttrCounts(cmd);
+            cmd.selBoxWaitingSecond = false;
+            handled = true;
           }
-          EnsureAttrCounts(cmd);
-          cmd.selBoxWaitingSecond = false;
-          handled = true;
         }
       }
 
@@ -18158,6 +18189,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     wdl->AddLine(ImVec2(r, t), ImVec2(r, b), kCad, hair);
     wdl->AddLine(ImVec2(r, b), ImVec2(l, b), kCad, hair);
     wdl->AddLine(ImVec2(l, b), ImVec2(l, t), kCad, hair);
+    // Overlapping pick marker: two offset squares beside the pick aperture when Multi Selection is on.
+    if (cmd.multiSelectionEnabled && cmd.viewportPickAmbiguous && cmd.active == AppCommandState::Kind::None &&
+        !InFloatingModelSpace(cmd)) {
+      const float ix = cx + phx + 10.f;
+      const float iy = cy - phy - 14.f;
+      const float sz = 7.f;
+      const ImU32 back = IM_COL32(180, 180, 180, 220);
+      const ImU32 front = IM_COL32(255, 255, 255, 240);
+      wdl->AddRect(ImVec2(ix, iy), ImVec2(ix + sz, iy + sz), back, 0.f, 0, 1.2f);
+      wdl->AddRect(ImVec2(ix + 4.f, iy + 4.f), ImVec2(ix + 4.f + sz, iy + 4.f + sz), front, 0.f, 0, 1.2f);
+    }
     wdl->PopClipRect();
   }
 
@@ -18907,6 +18949,98 @@ void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::End();
 }
 
+static const EntityAttributes& SelectedEntityAttr(const AppCommandState& cmd, const SelectedEntity& e) {
+  static const EntityAttributes kDef{};
+  using T = SelectedEntity::Type;
+  switch (e.type) {
+  case T::LineSeg:      return LineAttr(cmd, e.index);
+  case T::Circle:       return CircleAttr(cmd, e.index);
+  case T::Arc:          return ArcAttr(cmd, e.index);
+  case T::Ellipse:      return EllipseAttr(cmd, e.index);
+  case T::Polyline:     return PolylineAttr(cmd, e.index);
+  case T::Annotation:   return AnnAttr(cmd, e.index);
+  case T::Table:        return TableAttr(cmd, e.index);
+  case T::FeatureLine:
+    if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.featureLineAttrs.size())
+      return cmd.featureLineAttrs[static_cast<size_t>(e.index)];
+    return kDef;
+  case T::FilledRegion:
+    if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadFilledRegionAttrs.size())
+      return cmd.cadFilledRegionAttrs[static_cast<size_t>(e.index)];
+    return kDef;
+  case T::Mesh:
+    if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadMeshAttrs.size())
+      return cmd.cadMeshAttrs[static_cast<size_t>(e.index)];
+    return kDef;
+  case T::Surface:
+    if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadSurfaceAttrs.size())
+      return cmd.cadSurfaceAttrs[static_cast<size_t>(e.index)];
+    return kDef;
+  case T::BlockRef:
+    if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadBlockRefAttrs.size())
+      return cmd.cadBlockRefAttrs[static_cast<size_t>(e.index)];
+    return kDef;
+  case T::Solid:
+    if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadSolidAttrs.size())
+      return cmd.cadSolidAttrs[static_cast<size_t>(e.index)];
+    return kDef;
+  case T::PdfUnderlay:
+    return kDef;
+  }
+  return kDef;
+}
+
+/// Resolved display color for a pick-list swatch — same ByLayer / palette path the viewport uses.
+static void ResolveSelectedEntitySwatchRgba(const AppCommandState& cmd, const SelectedEntity& e,
+                                            float* rgba) {
+  const EntityAttributes& attr = SelectedEntityAttr(cmd, e);
+  const CadLayerRow* lr =
+      FindDrawingLayerRowCi(cmd, attr.layer.empty() ? std::string("0") : attr.layer);
+  ResolveEntityRgbaForViewport(attr, lr, 0.9f, 0.9f, 0.9f, rgba);
+  rgba[3] = 1.f;  // swatch is opaque — transparency would wash out the color cue
+}
+
+/// Type-only label for the pick-disambiguation list — no object index.
+static void FormatPickCandidateTypeLabel(const AppCommandState& cmd, const SelectedEntity& e, char* buf,
+                                         size_t bufSize) {
+  using T = SelectedEntity::Type;
+  switch (e.type) {
+  case T::LineSeg:    std::snprintf(buf, bufSize, "Line"); break;
+  case T::Circle:     std::snprintf(buf, bufSize, "Circle"); break;
+  case T::Arc:        std::snprintf(buf, bufSize, "Arc"); break;
+  case T::Ellipse:    std::snprintf(buf, bufSize, "Ellipse"); break;
+  case T::Polyline:   std::snprintf(buf, bufSize, "Polyline"); break;
+  case T::FeatureLine:
+    std::snprintf(buf, bufSize, "Feature Line");
+    break;
+  case T::Annotation: {
+    const char* kindStr = "Text";
+    if (static_cast<size_t>(e.index) < cmd.cadAnnotations.size()) {
+      switch (cmd.cadAnnotations[static_cast<size_t>(e.index)].kind) {
+      case CadAnnotation::Kind::Text:       kindStr = "Text"; break;
+      case CadAnnotation::Kind::Mtext:      kindStr = "MText"; break;
+      case CadAnnotation::Kind::Table:      kindStr = "Table"; break;
+      case CadAnnotation::Kind::DimAligned: kindStr = "Aligned Dimension"; break;
+      case CadAnnotation::Kind::DimLinear:  kindStr = "Linear Dimension"; break;
+      case CadAnnotation::Kind::DimAngular: kindStr = "Angular Dimension"; break;
+      }
+    }
+    std::snprintf(buf, bufSize, "%s", kindStr);
+    break;
+  }
+  case T::Table:        std::snprintf(buf, bufSize, "Table"); break;
+  case T::BlockRef:     std::snprintf(buf, bufSize, "Block"); break;
+  case T::PdfUnderlay:  std::snprintf(buf, bufSize, "PDF Underlay"); break;
+  case T::FilledRegion: std::snprintf(buf, bufSize, "Hatch"); break;
+  case T::Mesh:         std::snprintf(buf, bufSize, "Mesh"); break;
+  case T::Surface:
+    std::snprintf(buf, bufSize, "Surface");
+    break;
+  case T::Solid:        std::snprintf(buf, bufSize, "Solid"); break;
+  default:              std::snprintf(buf, bufSize, "Object"); break;
+  }
+}
+
 // Returns a display label for a SelectedEntity, e.g. "Line 3", "MTEXT 2".
 static void FormatSelectedEntityLabel(const AppCommandState& cmd, const SelectedEntity& e,
                                       char* buf, size_t bufSize) {
@@ -19076,6 +19210,130 @@ void DrawSelectionCyclingPanel(AppCommandState& cmd) {
   }
 
   ImGui::End();
+}
+
+void CancelPickDisambiguationPopup(AppCommandState& cmd) {
+  cmd.pickDisambiguationPopupOpen = false;
+  cmd.pickDisambiguationCandidates.clear();
+  cmd.viewportHoverEntityValid = false;
+}
+
+void DrawPickDisambiguationPopup(AppCommandState& cmd, std::vector<std::string>& log) {
+  (void)log;
+  if (!cmd.pickDisambiguationPopupOpen)
+    return;
+
+  const int n = static_cast<int>(cmd.pickDisambiguationCandidates.size());
+  if (n <= 0) {
+    cmd.pickDisambiguationPopupOpen = false;
+    return;
+  }
+
+  constexpr float kSwatch = 14.f;
+  constexpr float kSwatchGap = 8.f;
+  const float rowH = std::max(ImGui::GetTextLineHeight() + 6.f, kSwatch + 8.f);
+  const float pad = ImGui::GetStyle().WindowPadding.y * 2.f;
+  const float listH = pad + rowH * static_cast<float>(n);
+  const float swatchColW = kSwatch + kSwatchGap;
+  float contentW = 0.f;
+  for (const CadPickCandidate& c : cmd.pickDisambiguationCandidates) {
+    char label[128];
+    FormatPickCandidateTypeLabel(cmd, c.entity, label, sizeof(label));
+    contentW = std::max(contentW, swatchColW + ImGui::CalcTextSize(label).x);
+  }
+  const float listW = std::clamp(contentW + 20.f, 160.f, 320.f);
+
+  const float offX = 16.f, offY = 18.f;
+  ImVec2 pos(cmd.pickDisambiguationScreenX + offX, cmd.pickDisambiguationScreenY + offY);
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  const ImVec2 wmax(vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y);
+  if (pos.y + listH > wmax.y)
+    pos.y = cmd.pickDisambiguationScreenY - offY - listH;
+  if (pos.x + listW > wmax.x)
+    pos.x = wmax.x - listW;
+  pos.x = std::max(pos.x, vp->WorkPos.x);
+  pos.y = std::max(pos.y, vp->WorkPos.y);
+
+  ImGui::SetNextWindowPos(pos);
+  ImGui::SetNextWindowSize(ImVec2(listW, listH));
+  const ImGuiWindowFlags pf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                              ImGuiWindowFlags_NoFocusOnAppearing;
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, g_chrome.popupFace);
+  ImGui::PushStyleColor(ImGuiCol_Border, g_chrome.popupBorder);
+  if (!ImGui::Begin("##PickDisambiguationPopup", nullptr, pf)) {
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+    return;
+  }
+
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const float rowW = ImGui::GetContentRegionAvail().x;
+  int hoveredRow = -1;
+  for (int i = 0; i < n; ++i) {
+    const CadPickCandidate& c = cmd.pickDisambiguationCandidates[static_cast<size_t>(i)];
+    char label[128];
+    FormatPickCandidateTypeLabel(cmd, c.entity, label, sizeof(label));
+    ImGui::PushID(i);
+    const ImVec2 rmin = ImGui::GetCursorScreenPos();
+    if (ImGui::InvisibleButton("row", ImVec2(rowW, rowH))) {
+      AbortMtextGripInteraction(cmd);
+      ClearDimGripInteraction(cmd);
+      const SelectedEntity picked = c.entity;
+      if (cmd.pickDisambiguationShiftClick) {
+        auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+          return x.type == picked.type && x.index == picked.index;
+        });
+        if (it != cmd.selection.end())
+          cmd.selection.erase(it);
+        else
+          cmd.selection.push_back(picked);
+      } else {
+        const bool alreadySelected = std::any_of(cmd.selection.begin(), cmd.selection.end(),
+                                                 [&](const SelectedEntity& x) {
+                                                   return x.type == picked.type && x.index == picked.index;
+                                                 });
+        if (!alreadySelected)
+          cmd.selection.push_back(picked);
+      }
+      EnsureAttrCounts(cmd);
+      BumpCadGpuCache(cmd);
+      cmd.pickDisambiguationPopupOpen = false;
+    }
+    const bool rowHovered = ImGui::IsItemHovered();
+    if (rowHovered)
+      hoveredRow = i;
+    if (rowHovered)
+      dl->AddRectFilled(rmin, ImVec2(rmin.x + rowW, rmin.y + rowH), IM_COL32(60, 92, 134, 255));
+
+    float rgba[4] = {0.9f, 0.9f, 0.9f, 1.f};
+    ResolveSelectedEntitySwatchRgba(cmd, c.entity, rgba);
+    const ImU32 swatchFill =
+        IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                 static_cast<int>(rgba[2] * 255.f), 255);
+    const ImVec2 swatchMin(rmin.x + 4.f, rmin.y + (rowH - kSwatch) * 0.5f);
+    const ImVec2 swatchMax(swatchMin.x + kSwatch, swatchMin.y + kSwatch);
+    dl->AddRectFilled(swatchMin, swatchMax, swatchFill);
+    dl->AddRect(swatchMin, swatchMax, IM_COL32(40, 40, 40, 255));
+
+    const ImVec2 textPos(swatchMax.x + kSwatchGap, rmin.y + (rowH - ImGui::GetTextLineHeight()) * 0.5f);
+    dl->AddText(textPos, IM_COL32(230, 232, 238, 255), label);
+    ImGui::SetCursorScreenPos(ImVec2(rmin.x, rmin.y + rowH));
+    ImGui::PopID();
+  }
+
+  if (hoveredRow >= 0) {
+    cmd.viewportHoverEntityValid = true;
+    cmd.viewportHoverEntity = cmd.pickDisambiguationCandidates[static_cast<size_t>(hoveredRow)].entity;
+  } else {
+    cmd.viewportHoverEntityValid = false;
+  }
+
+  if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
+    CancelPickDisambiguationPopup(cmd);
+
+  ImGui::End();
+  ImGui::PopStyleColor(2);
 }
 
 void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
