@@ -621,7 +621,9 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
 
   // --- 2D legacy path still yields Z=0 via the 2-arg overload ---
   {
-    AppCommandState s2 = st;
+    AppCommandState s2;
+    s2.blockDefs = st.blockDefs;
+    s2.drawingInsUnits = st.drawingInsUnits;
     StartInsertBlockCommand(s2, log);
     std::snprintf(s2.insertBlockName, sizeof(s2.insertBlockName), "TEST3D");
     s2.insertBlockSpecifyPoint = true;
@@ -659,7 +661,9 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
 
   // --- Typed X,Y,Z via the command line (WCS) ---
   {
-    AppCommandState s3 = st;
+    AppCommandState s3;
+    s3.blockDefs = st.blockDefs;
+    s3.drawingInsUnits = st.drawingInsUnits;
     s3.cadBlockRefs.clear();
     StartInsertBlockCommand(s3, log);
     std::snprintf(s3.insertBlockName, sizeof(s3.insertBlockName), "TEST3D");
