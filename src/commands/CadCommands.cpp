@@ -35108,9 +35108,33 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         }
       }
     }
+    if (st.insertBlockPhase == IPh::WaitInsertPoint) {
+      float px = 0.f;
+      float py = 0.f;
+      float wz = 0.f;
+      bool consumed = false;
+      if (!ResolveTypedModifyPoint(st, line, false, 0.f, 0.f, 0.f, "INSERT", &px, &py, &wz, &consumed, log)) {
+        if (consumed)
+          return;
+        log.push_back("INSERT — type X,Y or X,Y,Z or pick in the viewport.");
+        return;
+      }
+      // ResolveTypedModifyPoint returns 0 for WCS with no explicit Z; the insertion point should
+      // sit on the work plane in that case (CadCommitElevation), not at Z=0 when ELEV is set.
+      // Detect explicit Z by counting commas in the raw input (PeelTypedElevation's hasZ).
+      {
+        int commas = 0;
+        for (char c : line) if (c == ',') ++commas;
+        bool hasExplicitZ = commas >= 2;
+        if (!hasExplicitZ && CadWorkPlaneIsWorldXy(st))
+          wz = CadCommitElevation(st);
+      }
+      SubmitInsertBlockPick(st, px, py, wz, log);
+      return;
+    }
     float px = 0.f;
     float py = 0.f;
-    const bool rel = st.insertBlockPhase != IPh::WaitInsertPoint;
+    const bool rel = true;
     if (!ParseStoragePoint(st, line, &px, &py, rel, st.insertBlockX, st.insertBlockY)) {
       log.push_back("INSERT — type X,Y or pick in the viewport.");
       return;
@@ -36414,7 +36438,7 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
   if (st.active == K::InsertBlock) {
     using IPh = AppCommandState::InsertBlockPhase;
     if (st.insertBlockPhase == IPh::WaitInsertPoint)
-      return "INSERT: Insertion point — click or X,Y | ESC cancel";
+      return "INSERT: Insertion point — click or X,Y or X,Y,Z | ESC cancel";
     if (st.insertBlockPhase == IPh::WaitScale)
       return "INSERT: Scale point — click or X,Y | ESC cancel";
     if (st.insertBlockPhase == IPh::WaitRotation)

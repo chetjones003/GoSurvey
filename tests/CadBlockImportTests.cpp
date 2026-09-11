@@ -608,3 +608,72 @@ TEST_CASE("BLOCKIMPORT rejects a malformed .sat file with a message, no crash",
       named = true;
   CHECK(named);
 }
+
+// Issue #475 increment 1 — INSERT insertion point is 3D, with Z from snap / typed X,Y,Z / ghost preview.
+TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[issue475][block][insert][3d]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "TEST3D";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+
+  // --- 2D legacy path still yields Z=0 via the 2-arg overload ---
+  {
+    AppCommandState s2 = st;
+    StartInsertBlockCommand(s2, log);
+    std::snprintf(s2.insertBlockName, sizeof(s2.insertBlockName), "TEST3D");
+    s2.insertBlockSpecifyPoint = true;
+    s2.insertBlockSpecifyScale = false;
+    s2.insertBlockSpecifyRot = false;
+    s2.insertBlockDialogOpen = false;
+    s2.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+    SubmitInsertBlockPick(s2, 10.f, 20.f, log);
+    REQUIRE(s2.cadBlockRefs.size() == 1);
+    CHECK(s2.cadBlockRefs[0].xf.z == Catch::Approx(0.f));
+  }
+
+  // --- 3D pick via the 4-arg overload ---
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "TEST3D");
+  st.insertBlockSpecifyPoint = true;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+
+  // Preview during WaitInsertPoint must be at the cursor Z, not at stored 0.
+  CadBlockXform pv{};
+  REQUIRE(CadBlockInsertPreviewXform(st, 10.f, 20.f, 5.f, &pv));
+  CHECK(pv.x == Catch::Approx(10.f));
+  CHECK(pv.y == Catch::Approx(20.f));
+  CHECK(pv.z == Catch::Approx(5.f));
+
+  SubmitInsertBlockPick(st, 10.f, 20.f, 5.f, log);
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].xf.x == Catch::Approx(10.f));
+  CHECK(st.cadBlockRefs[0].xf.y == Catch::Approx(20.f));
+  CHECK(st.cadBlockRefs[0].xf.z == Catch::Approx(5.f));
+  CHECK(st.cadBlockRefs[0].xf.z == Catch::Approx(pv.z));
+
+  // --- Typed X,Y,Z via the command line (WCS) ---
+  {
+    AppCommandState s3 = st;
+    s3.cadBlockRefs.clear();
+    StartInsertBlockCommand(s3, log);
+    std::snprintf(s3.insertBlockName, sizeof(s3.insertBlockName), "TEST3D");
+    s3.insertBlockSpecifyPoint = true;
+    s3.insertBlockSpecifyScale = false;
+    s3.insertBlockSpecifyRot = false;
+    s3.insertBlockDialogOpen = false;
+    s3.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+    s3.active = AppCommandState::Kind::InsertBlock;
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "30,40,7.5");
+    ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), s3, log);
+    REQUIRE(s3.cadBlockRefs.size() == 1);
+    CHECK(s3.cadBlockRefs[0].xf.z == Catch::Approx(7.5f).margin(1e-4));
+  }
+}
+

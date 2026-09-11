@@ -14271,6 +14271,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const bool haveSnapPick = outCursorX && outCursorY && cmd.viewportSnapPickValid;
     const double commitX = haveSnapPick ? cmd.viewportSnapPickLocalX : *outCursorX;
     const double commitY = haveSnapPick ? cmd.viewportSnapPickLocalY : *outCursorY;
+    const double commitZ = haveSnapPick ? cmd.viewportSnapPickLocalZ : cmd.uiCursorWorldZ;
 
     // Mouse -> world for CLICK handling. This is a second, independent conversion from the hover
     // seam above and must branch the same way, or hover highlights an entity that the click then
@@ -14371,7 +14372,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);
       break;
     case ViewportClickRoute::InsertBlockPick:
-      SubmitInsertBlockPick(cmd, commitX, commitY, log);
+      SubmitInsertBlockPick(cmd, static_cast<float>(commitX), static_cast<float>(commitY), static_cast<float>(commitZ), log);
       break;
     case ViewportClickRoute::HatchPick: {
       // HATCH (REQ-043): trace the region under the click and fill it; the command stays active on a miss

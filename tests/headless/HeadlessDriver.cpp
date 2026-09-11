@@ -718,7 +718,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       SubmitPdfAttachInsertPoint(run.st, static_cast<float>(x), static_cast<float>(y), run.log);
       break;
     case ViewportClickRoute::InsertBlockPick:
-      SubmitInsertBlockPick(run.st, x, y, run.log);
+      SubmitInsertBlockPick(run.st, x, y, clickHasZ ? clickZ : 0.f, run.log);
       break;
     case ViewportClickRoute::Ignore:
       // The whole point of this verb: a command the UI does not route is a failure, not a no-op.

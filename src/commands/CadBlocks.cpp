@@ -900,6 +900,10 @@ void CadBlockRestoreDynGripOrig(AppCommandState& st, CadBlockRef* r) {
 }
 
 bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float curY, CadBlockXform* out) {
+  return CadBlockInsertPreviewXform(st, curX, curY, 0.f, out);
+}
+
+bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float curY, float curZ, CadBlockXform* out) {
   assert(out != nullptr);
   using Ph = AppCommandState::InsertBlockPhase;
   if (st.insertBlockPhase != Ph::WaitInsertPoint && st.insertBlockPhase != Ph::WaitScale &&
@@ -913,11 +917,12 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
   if (st.insertBlockPhase == Ph::WaitInsertPoint) {
     xf.x = curX;
     xf.y = curY;
+    xf.z = curZ;
   } else {
     xf.x = st.insertBlockX;
     xf.y = st.insertBlockY;
+    xf.z = st.insertBlockZ;
   }
-  xf.z = st.insertBlockZ;
 
   float sx = st.insertBlockSx;
   float sy = st.insertBlockSy;
@@ -950,12 +955,17 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
 }
 
 void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  SubmitInsertBlockPick(st, wx, wy, 0.f, log);
+}
+
+void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
   using Ph = AppCommandState::InsertBlockPhase;
   if (st.active != AppCommandState::Kind::InsertBlock)
     return;
   if (st.insertBlockPhase == Ph::WaitInsertPoint) {
     st.insertBlockX = wx;
     st.insertBlockY = wy;
+    st.insertBlockZ = wz;
     if (st.insertBlockSpecifyScale) {
       st.insertBlockPhase = Ph::WaitScale;
       log.push_back("INSERT — specify scale (click a point).");
