@@ -383,6 +383,27 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->bestPri = pri;
     return;
   }
+  // Class before distance: a named feature inside the aperture beats a nearest-anywhere point
+  // however far off it is, and a nearest-anywhere point never displaces a feature. Without this
+  // the `Face` candidate — always sitting exactly under the cursor, so always at distance ~0 —
+  // wins every comparison, and a solid's midpoints and vertices can only be reached by landing on
+  // them to within `eps`. See `SnapClass` for the measurements.
+  {
+    const int cls = SnapClass(kind);
+    const int bestCls = SnapClass(acc->best.kind);
+    if (cls != bestCls) {
+      if (cls > bestCls) {
+        acc->best.kind = kind;
+        acc->best.x = snapX;
+        acc->best.y = snapY;
+        acc->best.z = snapZ;
+        acc->best.solid = solid;
+        acc->bestRankDistSq = rankDistSq;
+        acc->bestPri = pri;
+      }
+      return;
+    }
+  }
   if (rankDistSq < acc->bestRankDistSq - eps) {
     acc->best.kind = kind;
     acc->best.x = snapX;
