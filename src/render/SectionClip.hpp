@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <vector>
 
 #include "util/ray3d.hpp"
 #include "util/ucs.hpp"
@@ -170,6 +171,110 @@ struct SectionClipIndicator {
   out.corner[1] = at(u1, v0);
   out.corner[2] = at(u1, v1);
   out.corner[3] = at(u0, v1);
+  out.valid = true;
+  return out;
+}
+
+/// How the section plane is DRAWN (REQ-338 / ADR-058, GitHub issue #479 acceptance 3).
+///
+/// A translucent rectangle with an outline is enough to say "a plane is here"; it is not enough to
+/// find at a glance in a busy drawing, and at a grazing angle it is very nearly nothing at all.
+/// AutoCAD draws its section plane **hatched, with a heavy line along its base**, and that is what
+/// the user asked for by name — "visually similar to AutoCAD's, for ease of use".
+///
+/// The geometry is in world coordinates, like the indicator's corners: the renderer rebases it to
+/// the view anchor at draw time, along with everything else.
+struct SectionPlaneGraphics {
+  bool valid = false;
+  /// Hatch segments as consecutive PAIRS — `hatch[2i]` to `hatch[2i+1]` — which is `GL_LINES`
+  /// order, so the renderer uploads the vector without rearranging it.
+  std::vector<ray3d::Vec3> hatch;
+  /// The section line: the rectangle's base edge, drawn heavier than the outline. In AutoCAD this
+  /// is the edge the direction arrows hang off; the arrows are slice 3's, with the grips.
+  ray3d::Vec3 lineA{};
+  ray3d::Vec3 lineB{};
+};
+
+/// Hatch density, as a count across the rectangle's diagonal.
+///
+/// Derived from the rectangle's own size rather than from a world distance, so the pattern reads
+/// the same on a 4 ft manhole and a 900 ft parcel, and so the segment count cannot run away at
+/// survey scale. It is deliberately not screen-derived: this geometry is built once per frame from
+/// world quantities and must not change with zoom, or the plane would shimmer while the view moves.
+inline constexpr int kSectionPlaneHatchAcrossDiagonal = 22;
+
+/// A hard ceiling on emitted segments. Nothing in the sizing above should approach it; it is here
+/// so a degenerate rectangle cannot turn into an unbounded upload.
+inline constexpr int kSectionPlaneHatchMaxSegments = 256;
+
+/// Build the hatch and section line for the rectangle in \p ind.
+///
+/// The hatch runs at **45 degrees in the plane's own axes**, so it is diagonal on the plane however
+/// the plane is oriented in space, and it is clipped to the rectangle analytically rather than
+/// drawn long and masked — there is no mask available in the overlay pass this is drawn in.
+[[nodiscard]] inline SectionPlaneGraphics SectionPlaneGraphicsFor(const SectionClipIndicator& ind) {
+  SectionPlaneGraphics out;
+  if (!ind.valid)
+    return out;
+
+  // Rebuild the rectangle's own frame from its corners: corner[0] is the origin, and the two edges
+  // leaving it are the in-plane axes. Taken from the corners rather than recomputed from the plane
+  // normal so the hatch cannot land on a different basis than the quad it fills.
+  const ray3d::Vec3 org = ind.corner[0];
+  const ray3d::Vec3 eu = ray3d::Sub(ind.corner[1], ind.corner[0]);
+  const ray3d::Vec3 ev = ray3d::Sub(ind.corner[3], ind.corner[0]);
+  const double lu = ray3d::Length(eu);
+  const double lv = ray3d::Length(ev);
+  if (!(lu > 1e-9 && lv > 1e-9))
+    return out;
+  const ray3d::Vec3 u = ray3d::Scale(eu, 1.0 / lu);
+  const ray3d::Vec3 v = ray3d::Scale(ev, 1.0 / lv);
+
+  // Work in (s, t) = distance along u, distance along v. The rectangle is [0, lu] x [0, lv], and a
+  // 45-degree line is `s - t = k`. Perpendicular spacing between consecutive k is k/sqrt(2), so the
+  // k step for a wanted spacing is spacing*sqrt(2).
+  const double diag = std::sqrt(lu * lu + lv * lv);
+  const double spacing = diag / static_cast<double>(kSectionPlaneHatchAcrossDiagonal);
+  if (!(spacing > 1e-12))
+    return out;
+  const double kStep = spacing * 1.4142135623730951;
+
+  auto at = [&](double s, double t) {
+    return ray3d::Vec3{org.x + u.x * s + v.x * t, org.y + u.y * s + v.y * t,
+                       org.z + u.z * s + v.z * t};
+  };
+
+  // k spans (-lv, lu): at k = -lv the line touches the corner (0, lv), at k = lu the corner (lu, 0).
+  // Both ends are skipped, since a line through one corner has zero length.
+  int emitted = 0;
+  for (double k = -lv + kStep; k < lu - 1e-12 && emitted < kSectionPlaneHatchMaxSegments; k += kStep) {
+    // s = t + k, so t is bounded by both the rectangle's t range and its s range.
+    const double t0 = std::fmax(0.0, -k);
+    const double t1 = std::fmin(lv, lu - k);
+    if (!(t1 - t0 > 1e-9))
+      continue;
+    out.hatch.push_back(at(t0 + k, t0));
+    out.hatch.push_back(at(t1 + k, t1));
+    ++emitted;
+  }
+
+  // The section line is the rectangle's LOWEST edge in world Z — "base" meaning what a person
+  // looking at the model would call the bottom. A level plane has four edges at one elevation, so
+  // the comparison is strict and the first edge wins: an arbitrary but stable choice, and a plane
+  // seen face-on has no visible base anyway.
+  int best = 0;
+  double bestZ = 1e300;
+  for (int i = 0; i < 4; ++i) {
+    const ray3d::Vec3& a = ind.corner[i];
+    const ray3d::Vec3& b = ind.corner[(i + 1) & 3];
+    const double midZ = 0.5 * (a.z + b.z);
+    if (midZ < bestZ) {
+      bestZ = midZ;
+      best = i;
+    }
+  }
+  out.lineA = ind.corner[best];
+  out.lineB = ind.corner[(best + 1) & 3];
   out.valid = true;
   return out;
 }

@@ -1525,6 +1525,13 @@ struct AppCommandState {
     /// submission is only meaningful while a command is waiting to consume it. Without a waiting
     /// state, clicking `ON` would submit `on` as a top-level command, which is nothing.
     SectionClip,
+    /// SECTIONPLANE: waiting for the user to pick a solid FACE to put the section plane on
+    /// (REQ-338 / ADR-058, GitHub issue #479 acceptance 1).
+    ///
+    /// A single phase, so there is no `SectionPlanePhase` enum: being active IS "waiting for a
+    /// face". The phases arrive with the manipulation slice, and an enum with one value now would
+    /// be an abstraction with no second use.
+    SectionPlane,
     Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
     /// ORBIT: interactive free orbit — left-drag tumbles the model view; Esc/Enter/right-click
     /// exits (REQ-084 (c)). Deliberately shaped like \c Kind::Pan, and reuses the same
@@ -1629,6 +1636,7 @@ struct AppCommandState {
     case Kind::Rect:          return "RECT";
     case Kind::TrimState:     return "TRIMSTATE";
     case Kind::SectionClip:   return "SECTIONCLIP";
+    case Kind::SectionPlane:  return "SECTIONPLANE";
     case Kind::Orbit:         return "ORBIT";
     case Kind::Ucs:           return "UCS";
     case Kind::Plan:          return "PLAN";
@@ -3693,6 +3701,23 @@ struct AppCommandState {
   /// Which half survives. False keeps the half the UCS +Z points AWAY from — so the material in
   /// front of the plane is what disappears, which is the direction that reads as "cut towards me".
   bool viewportSectionClipFlip = false;
+  /// **One clip plane, two ways to aim it** (REQ-338 / D-2026-09-11-b, GitHub issue #479).
+  ///
+  /// When false the plane is the active UCS plane, exactly as REQ-337 shipped it: derived every
+  /// frame, so it follows the work plane. When true it is \ref viewportSectionClipFrame, which
+  /// `SECTIONPLANE` set from a solid's face and which does NOT follow the UCS.
+  ///
+  /// Two independent planes were the alternative and were rejected: they can disagree, and the
+  /// first thing a user would do is turn one on while the other was already cutting and see a
+  /// result neither command explains. \ref viewportSectionClipOffset and
+  /// \ref viewportSectionClipFlip apply to whichever frame is in force, so `SECTIONCLIP OFF`,
+  /// `FLIP` and a typed offset keep working on a face-defined plane without a second vocabulary.
+  bool viewportSectionClipFrameValid = false;
+  /// The face-derived clip frame. Its Z is the face's **outward** normal (`brep::Surface::frame`,
+  /// measured across every primitive, Boolean and oblique-slice result in probe P1/P2), so at
+  /// offset 0 the whole solid is on the kept side and nothing disappears — the plane simply
+  /// appears on the face it was made from, which is what AutoCAD does and what the user asked for.
+  ucs::Ucs viewportSectionClipFrame{};
   /// Viewport background (model-space clear color): RGB 0–1. Default #141A24 steel-blue tint.
   float viewportBgR = 0.08f;
   float viewportBgG = 0.10f;
@@ -4406,10 +4431,13 @@ inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
 /// The live section clip as it stands (REQ-341), in STORAGE coordinates like everything the renderer
 /// and the picks see. Inactive when the clip is off. The one derivation the renderer, the solid pick
 /// and the snap all read, so the three cannot disagree about where the cut is.
+[[nodiscard]] ucs::Ucs CadEffectiveSectionClipFrame(const AppCommandState& st);
 inline SectionClipPlane CadActiveSectionClip(const AppCommandState& st) {
   if (!st.viewportSectionClip)
     return SectionClipPlane{};
-  return SectionClipFromUcs(CadActiveUcsStorage(st), st.viewportSectionClipOffset, st.viewportSectionClipFlip);
+  // REQ-338: the face SECTIONPLANE was given, or the active UCS when it was never given one.
+  return SectionClipFromUcs(CadEffectiveSectionClipFrame(st), st.viewportSectionClipOffset,
+                            st.viewportSectionClipFlip);
 }
 
 /// The active work plane (UCS XY) a viewport click resolves against (REQ-058 / ADR-025 (e)).
@@ -5834,6 +5862,22 @@ bool PickCadEntityByDepth(const std::vector<CadPickCandidate>& candidates, Selec
 /// cache is simply not picked.
 [[nodiscard]] bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
                                           SelectedEntity* out, double* outRayT = nullptr);
+
+// --- SECTIONPLANE (REQ-338 / ADR-058, GitHub issue #479) -------------------------------------
+
+/// `SECTIONPLANE` — place the section clip plane on a solid's flat face. Opens the face-select step.
+void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log);
+/// End the face-select step without placing anything (ESC).
+void CancelSectionPlaneCommand(AppCommandState& st);
+/// The one prompt the command shows, so the hint and the log cannot word it differently.
+[[nodiscard]] const char* CadSectionPlanePromptText();
+/// The viewport click that answers "select a flat face". Returns true when a plane was placed;
+/// on any refusal the command stays open and the reason is in \p log.
+bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
+                                const solidpick::Tolerance& tol, std::vector<std::string>& log);
+/// The frame the clip plane is currently built from: the face `SECTIONPLANE` was given, or the
+/// active UCS when it was never given one (D-2026-09-11-b).
+[[nodiscard]] ucs::Ucs CadEffectiveSectionClipFrame(const AppCommandState& st);
 /// True if (x,y) is inside the filled region: inside its outer loop (0) and outside every hole loop (REQ-042).
 bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y);
 /// HATCH command (REQ-043): begin picking an internal point.

@@ -6400,6 +6400,7 @@ const CmdEntry kRegistry[] = {
     {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
     {"perspective", "projection, persp", "View projection: ON (perspective) / OFF (orthographic)"},
     {"sectionclip", "sclip, clip", "Live section clip by the UCS plane: ON / OFF / FLIP / <offset>"},
+    {"sectionplane", "splane", "Place the section plane on a solid's flat face"},
     {"fov", "lens", "Perspective field of view, in degrees"},
     {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
@@ -33279,6 +33280,148 @@ void StartSectionClipCommand(AppCommandState& st, std::vector<std::string>& log)
   log.push_back(SectionClipReport(st));
 }
 
+// ---------------------------------------------------------------------------------------------
+// SECTIONPLANE (REQ-338 / ADR-058, GitHub issue #479 acceptance 1-3)
+// ---------------------------------------------------------------------------------------------
+
+/// The frame the clip plane is currently built from — the face `SECTIONPLANE` was given, or the
+/// active UCS when it was never given one (REQ-338 / D-2026-09-11-b).
+///
+/// One function so the renderer, the report line and the tests cannot disagree about which plane is
+/// in force. See \ref AppCommandState::viewportSectionClipFrameValid for why there is one plane
+/// rather than two.
+ucs::Ucs CadEffectiveSectionClipFrame(const AppCommandState& st) {
+  if (st.viewportSectionClipFrameValid)
+    return st.viewportSectionClipFrame;
+  return CadActiveUcsStorage(st);
+}
+
+const char* CadSectionPlanePromptText() {
+  return "SECTIONPLANE — select a flat face to place the section plane on. ESC cancels.";
+}
+
+void CancelSectionPlaneCommand(AppCommandState& st) {
+  if (st.active == AppCommandState::Kind::SectionPlane)
+    st.active = AppCommandState::Kind::None;
+}
+
+/// `SECTIONPLANE` — put a section plane on a face of a solid, and show it (REQ-338).
+///
+/// The command has one step, so being active IS "waiting for a face". Note what it does NOT do:
+/// it does not ask which solids to section, the way `SECTION` does. A clip plane is a property of
+/// the view and cuts everything in the drawing, so a per-solid selection would be a question whose
+/// answer is never used — and #479's own screenshots show AutoCAD asking for the face and nothing
+/// else.
+void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::SectionPlane;
+  st.lastCommand = AppCommandState::Kind::SectionPlane;
+  st.selBoxWaitingSecond = false;
+  if (st.cadSolids.empty()) {
+    // Said before the user hunts for something to click. The command still opens: a solid can be
+    // created and picked without retyping, and refusing outright would be a command that works or
+    // not depending on drawing order.
+    log.push_back("SECTIONPLANE — there are no solids in the drawing yet.");
+  }
+  log.push_back(CadSectionPlanePromptText());
+}
+
+/// The surface kind, for the refusal message. Local rather than added to `brep` because this is
+/// the only caller: a name for the user, not a kernel facility.
+static const char* SectionPlaneSurfaceWord(brep::SurfaceKind k) {
+  switch (k) {
+  case brep::SurfaceKind::Plane:    return "flat";
+  case brep::SurfaceKind::Cylinder: return "cylindrical";
+  case brep::SurfaceKind::Cone:     return "conical";
+  case brep::SurfaceKind::Sphere:   return "spherical";
+  case brep::SurfaceKind::Torus:    return "toroidal";
+  case brep::SurfaceKind::Nurbs:    return "freeform";
+  }
+  return "curved";
+}
+
+/// Put the clip plane on \p face of \p solid, or say why that face cannot carry one.
+///
+/// **Only a planar face.** Every other surface kind carries a frame too, and its Z is the surface's
+/// AXIS rather than a normal — a cylinder's frame Z runs up the middle of it. Accepting one would
+/// silently produce a plane through the centre of the solid at right angles to what was clicked:
+/// plausible, wrong, and invisible in a screenshot. Refused by name instead (REQ-201).
+static bool ApplySectionPlaneFromFace(AppCommandState& st, const brep::Solid& solid, int faceIndex,
+                                      std::vector<std::string>& log) {
+  if (faceIndex < 0 || static_cast<size_t>(faceIndex) >= solid.faces.size()) {
+    log.push_back("SECTIONPLANE — that face is no longer part of the solid.");
+    return false;
+  }
+  const brep::Face& f = solid.faces[static_cast<size_t>(faceIndex)];
+  if (f.surface.kind != brep::SurfaceKind::Plane) {
+    char buf[192];
+    std::snprintf(buf, sizeof(buf),
+                  "SECTIONPLANE — that is a %s face; a section plane needs a flat one.",
+                  SectionPlaneSurfaceWord(f.surface.kind));
+    log.push_back(buf);
+    return false;
+  }
+
+  // The face's frame IS the plane. Its origin lies on the face's plane and its Z is the OUTWARD
+  // normal — measured across every primitive, both B1 Booleans and an oblique SLICE in probe P1/P2
+  // (2026-09-11), with no counterexample and no difference at survey magnitudes.
+  st.viewportSectionClipFrame = f.surface.frame;
+  st.viewportSectionClipFrameValid = true;
+  // Offset 0, so at the moment of creation the plane sits ON the face and the whole solid is on the
+  // kept side: nothing disappears. That is deliberate and it is what AutoCAD does — creating a
+  // section plane should show you a plane, not make half your model vanish. Sliding it in is the
+  // next gesture, and the manipulation slice is what makes that direct.
+  st.viewportSectionClipOffset = 0.0;
+  st.viewportSectionClipFlip = false;
+  st.viewportSectionClip = true;
+  log.push_back("SECTIONPLANE — plane placed on the face. SECTIONCLIP FLIP reverses it, "
+                "SECTIONCLIP <distance> slides it, SECTIONCLIP OFF hides it.");
+  return true;
+}
+
+/// The viewport click that answers "select a flat face" (REQ-338 acceptance 1).
+///
+/// Takes the cursor RAY and a world tolerance rather than a plan-space point, because a face is a
+/// 3D thing and plan view is the default view: `PickSubObjectAcrossSolids` is the same entry point
+/// `Ctrl`+click has used since REQ-318, so the face this takes is the face that highlighted.
+bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
+                                const solidpick::Tolerance& tol, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::SectionPlane)
+    return false;
+  SelectedSubObject hit{};
+  solidpick::Pick pick{};
+  if (!PickSubObjectAcrossSolids(st, ray, tol, &hit, &pick)) {
+    // The command STAYS OPEN. A missed click is a missed click, not a reason to throw the user out
+    // of a command they are halfway through — the rule REQ-335's selection step had to learn after
+    // it ended itself and left the next click landing on nothing.
+    log.push_back("SECTIONPLANE — no face there.");
+    log.push_back(CadSectionPlanePromptText());
+    return false;
+  }
+  if (hit.kind != solidpick::Kind::Face) {
+    // An edge or a vertex was nearer. Say which, so the user knows to aim at the middle of the face
+    // rather than wondering why the click did nothing.
+    log.push_back(hit.kind == solidpick::Kind::Vertex
+                      ? "SECTIONPLANE — that is a vertex; click the middle of a flat face."
+                      : "SECTIONPLANE — that is an edge; click the middle of a flat face.");
+    log.push_back(CadSectionPlanePromptText());
+    return false;
+  }
+  const std::shared_ptr<const brep::Solid> owner = hit.owner.lock();
+  if (!owner) {
+    log.push_back("SECTIONPLANE — that solid is no longer in the drawing.");
+    log.push_back(CadSectionPlanePromptText());
+    return false;
+  }
+  if (!ApplySectionPlaneFromFace(st, *owner, hit.index, log)) {
+    log.push_back(CadSectionPlanePromptText());
+    return false;  // still open, so the next click can pick a different face
+  }
+  CancelSectionPlaneCommand(st);
+  return true;
+}
+
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper space: geometry + viewports
     const bool hadEntities = !st.selectedPaperEntities.empty();
@@ -33922,6 +34065,12 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   else if (st.active == AppCommandState::Kind::Section) {
     log.push_back("SECTION canceled — nothing was drawn.");
     CancelSectionCommand(st);
+  }
+  else if (st.active == AppCommandState::Kind::SectionPlane) {
+    // "no plane was placed", not "nothing changed": an ESC out of SECTIONPLANE leaves any plane a
+    // PREVIOUS run placed exactly where it was, and saying otherwise would be wrong.
+    log.push_back("SECTIONPLANE canceled — no plane was placed.");
+    CancelSectionPlaneCommand(st);
   }
   else if (st.active == AppCommandState::Kind::Loft) {
     log.push_back("LOFT canceled.");
@@ -35221,6 +35370,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         // that used to live here is now the hint itself, where the options are links.
         StartSectionClipCommand(st, log);
       }
+      return;
+    }
+    // SECTIONPLANE (REQ-338): put that same clip plane on a face of a solid, and draw it hatched so
+    // it can be found. Aiming, not a new cut — see D-2026-09-11-b for why there is one plane.
+    if (plotTok == "sectionplane" || plotTok == "splane") {
+      StartSectionPlaneCommand(st, log);
       return;
     }
     // `CROSSHAIR3D ON` in one line; bare reports (REQ-310), same shape as VS and PERSPECTIVE.

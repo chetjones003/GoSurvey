@@ -1381,6 +1381,8 @@ int main()
         bbMax = ray3d::Vec3{viewCam.targetX + r, viewCam.targetY + r, viewCam.targetZ};
       }
       tuning.sectionClipIndicator = SectionClipIndicatorQuad(tuning.sectionClip, bbMin, bbMax);
+      // REQ-338: the hatch and the section line that make the plane findable.
+      tuning.sectionPlaneGraphics = SectionPlaneGraphicsFor(tuning.sectionClipIndicator);
     }
     // Build PDF render list: committed attachments + cursor-follow preview when picking insert point.
     std::vector<PdfAttachment> pdfRenderList;

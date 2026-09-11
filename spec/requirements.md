@@ -8708,6 +8708,77 @@ capability that does not exist. They are recorded here rather than quietly dropp
   solids with a UCS-origin fallback. The first four were defects against the text as written; the
   fifth and the per-tab rule were decisions, put to the user and recorded.
 
+
+### REQ-338 — SECTIONPLANE: place the section plane on a face, and draw it so it can be found
+- Purpose: aim the section cut the way a person thinks about it — "cut on this face" — and make the
+  plane a visible thing rather than a number typed along an axis
+- Priority: should
+- Type: functional
+- Statement: `SECTIONPLANE` asks the user to click a flat face of a solid and places REQ-337's clip
+  plane on that face's own plane. The plane is drawn hatched, with a heavier line along its base.
+
+  **One clip plane, two ways to aim it** (D-2026-09-11-b). `SECTIONCLIP` continues to derive the
+  plane from the active UCS every frame; `SECTIONPLANE` gives it a stored frame taken from a face,
+  which does not follow the UCS. `CadEffectiveSectionClipFrame` is the single place that decides
+  which is in force, so the renderer and the report line cannot name different planes. The offset,
+  `FLIP` and `OFF` all keep working on a face-defined plane — a user must not have to know which
+  command created a plane before they can move it.
+
+  **A planar face's frame IS the plane.** `brep::Surface::frame` is a `ucs::Ucs` whose origin lies on
+  the face's plane and whose Z is the face's **outward** normal, so the conversion is
+  `SectionClipFromUcs(frame, 0, false)` and nothing else. Measured in probe P1/P2 (2026-09-11)
+  against the shipping kernel: 22 of 22 planar faces across BOX, WEDGE, PYRAMID, CYLINDER and CONE
+  had their frame origin on their own plane with deviation exactly `0.000e+00`, and the outward
+  claim held with **no counterexample** for `BooleanSubtract`, `BooleanUnion` (46 planar faces each)
+  and an oblique `Slice`. Both passes were run at the origin and at **E 2,196,000 / N 1,400,000**
+  with identical results.
+
+  **The offset starts at zero, so nothing disappears when the plane is created.** With the outward
+  normal and no offset the whole solid is on the kept side: creating a section plane shows you a
+  plane, it does not make half the model vanish. Sliding it in is the next gesture, and is the
+  manipulation increment's work.
+
+  **Only a planar face.** Every other surface kind carries a frame too, and its Z is the surface's
+  **axis**, not a normal — a cylinder's runs up the middle of it. Accepting one would silently
+  produce a plane through the centre of the solid at right angles to what was clicked: plausible,
+  wrong, and invisible in a screenshot. A curved face is refused **by name** (REQ-201), as is an
+  edge or a vertex, and the command **stays open** so the next click can pick a different face.
+
+  **The plane is drawn hatched with a section line**, because a translucent rectangle with an
+  outline is enough to say "a plane is here" and not enough to find at a glance — and at a grazing
+  angle it is very nearly nothing at all. The hatch is parallel lines at 45 degrees **in the plane's
+  own axes**, clipped analytically to the rectangle, with density derived from the rectangle's
+  diagonal rather than from a world distance, so the pattern reads the same on a 4 ft fitting and a
+  900 ft parcel and the segment count cannot run away at survey scale. The section line is the
+  rectangle's lowest edge in world Z. It is **not** drawn with `HatchPat`/`HatchGeom`: those are 2D,
+  boundary-traced and drawn in the ImGui overlay, which has no depth and no clip.
+- Acceptance:
+  - `SECTIONPLANE` prompts for a face, and **is still running after it asks** — the clause REQ-335's
+    selection step was missing;
+  - the face under the cursor **pre-highlights before the click**, without `Ctrl` being held;
+  - a click on a flat face places the plane on that face's plane, with the face's outward normal,
+    offset 0 and flip off;
+  - at offset 0 **every vertex of the picked solid survives the clip**;
+  - a curved face, an edge, a vertex and a miss are each refused **by name**, and the command stays
+    open after every one of them;
+  - picking a second face re-aims the same plane and **resets the offset and flip**, which were
+    measured from the face that is no longer in force;
+  - `SECTIONCLIP`'s offset, `FLIP` and `OFF` all act on a face-defined plane;
+  - every hatch endpoint and the section line lie **on** the plane and **inside** the rectangle,
+    holding to REQ-101's 0.002 ft at E 2,196,000;
+  - the hatch is emitted in `GL_LINES` pairs, bounded, with no zero-length segments, and its count
+    is **invariant to the rectangle's size**;
+  - it remains a view state: no geometry, no undo entry, and `UNDO` reaches past it to the previous
+    edit.
+- Owner-layer: Render (`src/render/SectionClip.hpp`, `ViewportRenderer`), Commands, Viewport
+  (`ViewportPickPolicy`)
+- Status: accepted (2026-09-11) — see D-2026-09-11-b.
+- Revisions: 2026-09-11 — proposed and accepted (D-2026-09-11-b, ADR-058, TASK-250). Slice 1 of
+  GitHub #479: create-from-face, the hatched plane and the section line. **Three things are
+  increments rather than omissions.** (1) The plane is **not yet an entity** — it cannot be selected,
+  erased, inspected in Properties or saved to `.gs`; slice 2. (2) It has **no grips** — sliding it
+  along its normal and resizing its extent are typed operations for now; slice 3. (3) The section
+  line carries **no direction arrows**; they belong with the grips that move them.
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -9896,6 +9967,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-335 | Domain/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 5, D-2026-09-09-i, TASK-238). `SECTION` — the cross-section of the selected solids by the **active UCS plane**, as a closed polyline, leaving the solids alone. `brep::SectionLoop` returns the section as a closed `brep::Path` of lines and arcs — the kernel's existing vocabulary, so no new type and no knowledge of document entities (ADR-048 (a)) — and arcs reach the drawing as **bulges** (REQ-316/ADR-047), so a cylinder's circular section is a circle and not a polygon. **The cut is `Slice`'s, unchanged**: sectioning asks the same question and keeps a different answer, so the accepted set is inherited rather than restated and a refusal carries `Slice`'s own `Problem` — asserted by a test that reads the reason off `Slice` and compares. Non-destructive is structural (const reference in, pieces discarded) and asserted byte-for-byte anyway. Refused by name: an oblique cylinder cut (`Ellipse` boundary), a section with holes, a plane that misses, a degenerate normal. `BrepTests [req335]` — 9 cases incl. the `A/cos θ` oblique-area check that a plan projection would fail, and `headless.req335-section`, which pins the command's one-undo-step behaviour and that a refusal leaves the document unchanged. **Increment 2**: a three-point plane form matching SLICE's, elliptical boundaries, sections with holes | accepted |
 | REQ-336 | UI/IO/Build | planned (D-2026-09-10-d, ADR-056). What's New billboard: `resources/whats-new.md` + vendored md4c + ImGui draw layer; auto-open once per launch from Start unless prefs dismiss version matches; Help → About reopens same window without clearing dismiss; releases-list URL; missing-file fallback; CI presence gate; agent rule + git hook authoring lock | accepted |
 | REQ-341 | Render/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 6 — **the last of that issue's eight criteria**, D-2026-09-10-e, ADR-058, TASK-249). `SECTIONCLIP` — hide the model in front of the **active UCS plane**, offset along its Z, `FLIP` to keep the other half. A **view state**: no geometry, no undo entry, not persisted to `.gs`. **Live means no rebuild** — the plane is a `gl_ClipDistance[0]` uniform re-read every frame, so moving it invalidates no cached geometry; the transcript asserts the display-regeneration counter is unchanged across five plane moves, a flip and an off/on. `uMVP` and every REQ-058 camera path are untouched, which is what keeps plan-view parity intact. **The decision that carries the risk is the anchor rebasing** (ADR-058 (c)): vertices arrive with XY relative to the view anchor and the anchor IS the pan point, so a world-stated plane is **bit-identical to the correct one at the origin**, sits **2,196,000 ft out at easting 2.196e6**, and **moves one foot per foot of pan** — while a horizontal cut is exact in *both*, so neither an origin test nor a level plane can catch it. `SectionClipTests` (9 cases: the UCS plane and its offset, FLIP, a moved-and-turned frame, CPU/shader predicate parity, survey magnitudes on an axis-aligned/oblique/horizontal plane, the origin bit-identity, an anchor sweep, and REQ-101 resolution at 0.002 ft steps on a 2.2e6 constant) **measures where the plane actually lands by bisection** rather than checking that two answers differ — the P3 lesson. **Proven to bite:** removing the anchor term fails 4 of the 9 cases and 13 assertions. Plus `headless.req341-section-clip` (87 steps: every spelling and refusal with the previous state surviving each, UNDO reaching *past* the clip to the previous edit, the solid byte-identical, the no-rebuild sweep, and the clip not surviving a new drawing). Full suite **1451/1451**, up from 1441. **Two limits stated as increments, not gaps:** dimensions, annotation text and line-pattern hatches are ImGui-overlay drawn and **no GPU clip plane can reach them**; and the cut is **uncapped**, so a clipped solid shows its interior — `brep::SectionLoop` (REQ-335) is already the geometry a cap needs. **The GUI check `--devshell-run req341-section-clip-viewport` RAN GREEN** (six viewport captures: the whole box; only the BOTTOM FACE surviving a cut at offset 0, which places the plane exactly where it was asked for; a third and then two thirds of the box at offsets 4 and 8, both open at the top — ADR-058 (f)'s uncapped cut seen directly; the COMPLEMENT slab under FLIP; and `off-again` byte-identical to `off`). **It caught a bug nothing else did: `SECTIONCLIP 0` switched the clip OFF**, because the command had copied `PERSPECTIVE`'s `1`/`0` aliases into a command whose argument is a distance. The numeric aliases are removed and four transcript lines pin `0` and `1` as offsets. It reached the GUI because the transcript's liveness block already typed `SECTIONCLIP 0` and asserted only that nothing was rebuilt — which is trivially true of a command that did nothing. Two harness facts were established getting there and are recorded in TASK-249: the devshell is **compiled out of Release builds** (CMakeLists:148, REQ-161) so it needs `build/debug`, and `DevShell_RequestScreenshot` reads the window's `GL_FRONT` and returns **pure black** on an uncomposited window — six identical black frames that read exactly like "the clip does nothing". `DevShell_RequestViewportCapture` was added, reading the renderer's own framebuffer through `CaptureThumbnailBmp` (REQ-308). **Still correct-by-construction rather than observed:** the unconditional `glDisable(GL_CLIP_DISTANCE0)` at `finish_render` that keeps the clip out of ImGui's draws — the captures hold no UI and the test engine drives items, not pixels. **Amended 2026-09-16 after the code review on #478** (D-2026-09-16-b, TASK-249 §15): the plane is packed against each draw's OWN cached anchor, so a tilted cut no longer slides while the view pans (GUI-measured: a cached frame and a freshly uploaded frame at the same pan differ by 0 px); TIN surfaces clip; the clip is per tab; picks and snaps ignore what it hides; the indicator sizes from the drawing's extents | accepted |
+| REQ-338 | Render/Commands/Viewport | accepted, slice 1 delivered (GitHub issue #479 acceptance 1-3, D-2026-09-11-b, ADR-058, TASK-250). `SECTIONPLANE` — click a flat face, and REQ-337's clip plane is placed on that face's own plane, drawn **hatched with a section line** along its base. **One clip plane, two ways to aim it**: `SECTIONCLIP` still derives it from the active UCS, `SECTIONPLANE` gives it a stored face frame, and `CadEffectiveSectionClipFrame` is the single place that decides — so the offset, `FLIP` and `OFF` act on a face-defined plane without a second vocabulary. **A planar face's frame IS the plane**: `brep::Surface::frame` is a `ucs::Ucs` with its origin on the face and its Z the outward normal, so the conversion is `SectionClipFromUcs(frame, 0, false)` and nothing more — measured in probe P1/P2 (2026-09-11, linking the shipping kernel) across 22 planar faces of BOX/WEDGE/PYRAMID/CYLINDER/CONE with frame-origin deviation exactly `0.000e+00`, and the outward claim holding with **no counterexample** for `BooleanSubtract`, `BooleanUnion` (46 planar faces each) and an oblique `Slice`, identically at the origin and at **E 2,196,000 / N 1,400,000**. The offset starts at **zero**, so creating a plane shows a plane and hides nothing — asserted as "every vertex of the picked solid survives the clip". A **curved** face is refused **by name** ("that is a cylindrical face"), as are an edge, a vertex and a miss, and the command **stays open** after each. Tests: `SectionClipTests` `[sectionplane]` (7 cases / 390 assertions — every hatch endpoint on the plane under a tilted frame, inside the rectangle measured in its own axes, `GL_LINES` pairs with no zero-length segments and a bounded count, density invariant between a 4 ft and a 900 ft rectangle, REQ-101's 0.002 ft at E 2.196e6, and the section line being the lowest real edge); `SubObjectSelectionTests` `[sectionplaneface]` (3 cases / 52 assertions — the face rules, with the pick tolerance **stated**, which the headless driver cannot do because `CadOffsetEntityPickTolWorld` is screen-derived and collapses to ~0.002 ft with no window); `ViewportPickPolicyTests` `[req338]`; and `headless.req338-section-plane` (71 steps, driven with **CLICK** rather than PICK so the routing layer is actually exercised). **Proven to bite:** routing `SectionPlane` to `Ignore` fails the policy tests, removing the hatch clipping puts endpoints 29 ft outside the rectangle, and a world hatch spacing gives 2 lines where 512 are expected. Full suite **1489/1489**, up from 1478. **The routing is the part worth recording**: `ViewportClickRoute::SubObjectFacePick` + `ViewportIsFacePickStep` exist because the sub-object pick had only ever been `Ctrl`+click dispatched *above* the route table, with the hover carrying a **second, separate** gate — the shape that produced two user-reported bugs in one session on the previous slice. It nearly produced a third: the first implementation put the face branch inside the `IdleSelection` case, a **different route**, so the click would have fallen out of the switch silently — and **`/W4` omits MSVC's unhandled-enumerator warning (C4061/C4062)**, so it compiled clean. Caught by reading the switch. **Not yet delivered, as stated increments:** the plane is **not an entity** (no selection, erase, Properties or `.gs` — slice 2), has **no grips** (slice 3), and the section line carries **no direction arrows**. **Not verified by automation:** that any of it is actually drawn — there is no GL context in any test, and the hatch geometry is measured rather than seen | accepted |
 
 ---
 

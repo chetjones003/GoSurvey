@@ -19,6 +19,7 @@
 
 #include "CadCommands.hpp"
 #include "viewport/TransformPreview.hpp"  // BuildSubObjectHighlight
+#include "render/SectionClip.hpp"       // SectionClipPlane, for REQ-338's keep-side check
 
 namespace {
 
@@ -937,4 +938,157 @@ TEST_CASE("A hovered solid draws a highlight", "[subobject][solidentity]") {
     BuildHoverHighlight(st, &hoverLines, &hoverCircles);
     CHECK(hoverLines.empty());
   }
+}
+
+// --- SECTIONPLANE's face rules (REQ-338 / ADR-058, GitHub issue #479 acceptance 1-2) ------------
+//
+// These live here rather than in the transcript because they turn on the PICK TOLERANCE, and the
+// headless driver cannot state one: `CadOffsetEntityPickTolWorld` is screen-derived, and with no
+// window it collapses to a geometric floor of about 0.002 ft. Whether a click on a cylinder wall
+// resolves to the face or to a rim a few feet away would then be decided by arithmetic rather than
+// by the rule under test — a test that passes or fails for the wrong reason either way. The
+// SUBOBJECT verb takes explicit tolerances for exactly this reason; here they are arguments.
+
+TEST_CASE("SECTIONPLANE takes a flat face and refuses a curved one",
+          "[subobject][sectionplaneface][req338]") {
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  AddBox(st, World(), 20.0, 10.0, 8.0);  // x [-10,10], y [-5,5], z [0,8]
+  std::vector<std::string> log;
+
+  SECTION("the command must be running for a pick to mean anything") {
+    // Not merely defensive. The face click is routed by `ViewportClickRouteFor`, which only names
+    // this route while SECTIONPLANE is active — so a pick arriving with the command closed is a
+    // routing bug, and answering it anyway would hide one.
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), log));
+    CHECK_FALSE(st.viewportSectionClip);
+  }
+
+  SECTION("a flat face places the plane on that face's own plane") {
+    StartSectionPlaneCommand(st, log);
+    REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), log));
+    CHECK(st.viewportSectionClip);
+    CHECK(st.viewportSectionClipFrameValid);
+    // The TOP face, and its frame Z is the OUTWARD normal — measured in probe P1/P2 across every
+    // primitive, both B1 Booleans and an oblique slice, with no counterexample.
+    CHECK(st.viewportSectionClipFrame.zAxis.z == Catch::Approx(1.0));
+    // The frame's origin lies ON that plane: z = 8 is the top face.
+    CHECK(st.viewportSectionClipFrame.origin.z == Catch::Approx(8.0));
+    // Offset and flip start clean, so the plane sits exactly on the face it was made from.
+    CHECK(st.viewportSectionClipOffset == Catch::Approx(0.0));
+    CHECK_FALSE(st.viewportSectionClipFlip);
+    // And the command is done — it asked one question and got its answer.
+    CHECK(st.active == AppCommandState::Kind::None);
+  }
+
+  SECTION("at offset 0 the whole solid survives the clip") {
+    // The point of creating a section plane is to SEE a plane, not to lose half the model. With the
+    // outward normal and no offset every vertex is on the kept side, so this is a property of the
+    // frame choice rather than a coincidence of this box.
+    StartSectionPlaneCommand(st, log);
+    REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), log));
+    const SectionClipPlane p = SectionClipFromUcs(CadEffectiveSectionClipFrame(st),
+                                                 st.viewportSectionClipOffset,
+                                                 st.viewportSectionClipFlip);
+    for (const brep::Vertex& v : st.cadSolids[0]->vertices) {
+      INFO("vertex (" << v.p.x << ", " << v.p.y << ", " << v.p.z << ")");
+      CHECK(p.KeepsWorldPoint(v.p.x, v.p.y, v.p.z));
+    }
+  }
+
+  SECTION("a different face re-aims the same plane and resets the offset") {
+    StartSectionPlaneCommand(st, log);
+    REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), log));
+    st.viewportSectionClipOffset = 4.0;  // as though the user had slid it
+    st.viewportSectionClipFlip = true;
+
+    // Now the -X face, from outside it.
+    StartSectionPlaneCommand(st, log);
+    REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({-100, 0, 4}, {-10, 0, 4}), Tol(0.5, 0.5), log));
+    CHECK(st.viewportSectionClipFrame.zAxis.x == Catch::Approx(-1.0));
+    // Carrying the old offset over would put the plane 4 ft from a face the user never measured
+    // from. It is measured from the NEW face, so it starts at zero.
+    CHECK(st.viewportSectionClipOffset == Catch::Approx(0.0));
+    CHECK_FALSE(st.viewportSectionClipFlip);
+  }
+
+  SECTION("a miss keeps the command open") {
+    StartSectionPlaneCommand(st, log);
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({500, 500, 500}, {600, 600, 600}),
+                                           Tol(0.5, 0.5), log));
+    CHECK(st.active == AppCommandState::Kind::SectionPlane);
+    CHECK_FALSE(st.viewportSectionClip);
+  }
+
+  SECTION("an EDGE is refused by name, and the command stays open") {
+    // A generous edge tolerance so the edge genuinely wins the pick — which is the case worth
+    // pinning, because saying nothing here is how a user ends up clicking repeatedly at what looks
+    // like the right place.
+    StartSectionPlaneCommand(st, log);
+    const size_t before = log.size();
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -60, 60}, {0, -5, 8}), Tol(0.0, 3.0), log));
+    CHECK(st.active == AppCommandState::Kind::SectionPlane);
+    CHECK_FALSE(st.viewportSectionClip);
+    bool said = false;
+    for (size_t i = before; i < log.size(); ++i)
+      if (log[i].find("edge") != std::string::npos)
+        said = true;
+    CHECK(said);
+  }
+}
+
+TEST_CASE("SECTIONPLANE refuses a cylinder's wall by name", "[subobject][sectionplaneface][req338]") {
+  // The refusal that matters most, and the one a plausible implementation gets wrong: a curved face
+  // carries a `ucs::Ucs` frame exactly like a flat one, so nothing stops it being used. Its Z is the
+  // surface's AXIS, though — straight up the middle of the cylinder — so the plane would come out at
+  // right angles to the wall that was clicked and pass through the centre of the solid. Plausible,
+  // wrong, and invisible in a screenshot.
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  {
+    brep::Solid cyl;
+    brep::Problem why{};
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &cyl, &why));
+    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(cyl)));
+    st.cadSolidAttrs.push_back(EntityAttributes{});
+    RefreshSolidDisplayGeometry(st);
+  }
+  std::vector<std::string> log;
+
+  // Straight at the wall, halfway up — far from both rims, and zero tolerances so neither can win.
+  StartSectionPlaneCommand(st, log);
+  const size_t before = log.size();
+  CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({-60, 0, 5}, {-5, 0, 5}), Tol(0.0, 0.0), log));
+  CHECK(st.active == AppCommandState::Kind::SectionPlane);
+  CHECK_FALSE(st.viewportSectionClip);
+  bool named = false;
+  for (size_t i = before; i < log.size(); ++i)
+    if (log[i].find("cylindrical") != std::string::npos)
+      named = true;
+  CHECK(named);  // BY NAME — "that is a cylindrical face", not "cannot use that"
+
+  // The flat CAP of the same solid is accepted, from the still-open command.
+  REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({0, 0, 100}, {0, 0, 10}), Tol(0.0, 0.0), log));
+  CHECK(st.viewportSectionClip);
+  CHECK(st.viewportSectionClipFrame.zAxis.z == Catch::Approx(1.0));
+  CHECK(st.active == AppCommandState::Kind::None);
+}
+
+TEST_CASE("The clip frame falls back to the UCS until a face is given", "[sectionplaneface][req338]") {
+  // One plane, two ways to aim it (D-2026-09-11-b). `CadEffectiveSectionClipFrame` is the single
+  // place that decides which, so the renderer and the report line cannot name different planes.
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  AddBox(st, World(), 20.0, 10.0, 8.0);
+  std::vector<std::string> log;
+
+  // Nothing placed yet: the active UCS answers.
+  CHECK_FALSE(st.viewportSectionClipFrameValid);
+  CHECK(CadEffectiveSectionClipFrame(st).zAxis.z == Catch::Approx(CadActiveUcsStorage(st).zAxis.z));
+
+  StartSectionPlaneCommand(st, log);
+  REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({-100, 0, 4}, {-10, 0, 4}), Tol(0.5, 0.5), log));
+  // Now the FACE answers, and it is not the UCS plane — a level UCS would have given +Z.
+  CHECK(st.viewportSectionClipFrameValid);
+  CHECK(CadEffectiveSectionClipFrame(st).zAxis.x == Catch::Approx(-1.0));
 }

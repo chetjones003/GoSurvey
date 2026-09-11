@@ -657,6 +657,37 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         SubmitViewportPick(run.st, x, y, run.log);
       }
       break;
+    // REQ-338 — SECTIONPLANE's face pick. Needs its own case here for the reason this whole verb
+    // exists: a route with no case falls out of the switch doing nothing, and MSVC's /W4 does not
+    // include the unhandled-enumerator warning, so the transcript would pass while the command did
+    // nothing at all.
+    //
+    // The third coordinate is not optional in practice. A face is a 3D thing: aiming at a plan
+    // (x, y) sends the ray down through the solid and takes whichever face it meets first, which
+    // for a box viewed from above is always the top. `CLICK x y z` aims at the actual point, so a
+    // transcript can say "the north face" and mean it.
+    case ViewportClickRoute::SubObjectFacePick: {
+      const double aimZ = clickHasZ ? static_cast<double>(clickZ)
+                                    : ucs::WorkPlaneZAt(CadActiveWorkPlane(run.st),
+                                                        static_cast<double>(x), static_cast<double>(y));
+      // A projection needs a viewport size, and a transcript has no window — the same definite one
+      // SUBOBJECT and VIEWANGLES use, so the ray is the CAMERA's own rather than a synthetic
+      // axis-aligned one no viewport would ever cast.
+      if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+        run.st.uiViewportWidthPx = 1200.f;
+        run.st.uiViewportHeightPx = 700.f;
+      }
+      const Camera cam = CadViewCamera(run.st);
+      float sx = 0.f, sy = 0.f;
+      cam.WorldToScreen(static_cast<double>(x), static_cast<double>(y), aimZ,
+                        run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &sx, &sy);
+      const ray3d::Ray faceRay = cam.ScreenRay(sx, sy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+      solidpick::Tolerance faceTol;
+      faceTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(run.st));
+      faceTol.edge = faceTol.vertex;
+      (void)SubmitSectionPlaneFacePick(run.st, faceRay, faceTol, run.log);
+      break;
+    }
     case ViewportClickRoute::SelectionBox:
     case ViewportClickRoute::IdleSelection:
     case ViewportClickRoute::SelectionAccumulate:
@@ -1955,6 +1986,54 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              std::string("EXPECT SECTIONCLIPFLIP: is ") + (run.st.viewportSectionClipFlip ? "ON" : "OFF") +
                  ", expected " + (want ? "ON" : "OFF"),
              sourceLine);
+        return false;
+      }
+    } else if (what == "SECTIONCLIPFRAME") {
+      // EXPECT SECTIONCLIPFRAME <UCS|FACE> — which plane the clip is built on (REQ-338).
+      //
+      // There is ONE clip plane and two ways to aim it (D-2026-09-11-b), so "is it on?" and "where
+      // is it?" no longer answer "which command put it there?". A transcript that ran SECTIONPLANE
+      // and then checked only the offset would pass just as happily if the face had been ignored
+      // and the active UCS used instead.
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      bool want = false;
+      if (wantS == "FACE")
+        want = true;
+      else if (wantS == "UCS")
+        want = false;
+      else {
+        Fail(run, "parse", "EXPECT SECTIONCLIPFRAME needs UCS or FACE", sourceLine);
+        return false;
+      }
+      if (run.st.viewportSectionClipFrameValid != want) {
+        Fail(run, "expect",
+             std::string("EXPECT SECTIONCLIPFRAME: is ") +
+                 (run.st.viewportSectionClipFrameValid ? "FACE" : "UCS") + ", expected " + wantS,
+             sourceLine);
+        return false;
+      }
+    } else if (what == "SECTIONCLIPNORMAL") {
+      // EXPECT SECTIONCLIPNORMAL <nx> <ny> <nz> — the clip frame's Z axis (REQ-338).
+      //
+      // WHICH face was picked, which SECTIONCLIPFRAME cannot say: every face of a box answers
+      // "FACE" and offset 0. Without this, a transcript aiming at the bottom of a box and silently
+      // hitting the top — which is what a plan-view ray does — passes while proving nothing.
+      std::istringstream is(arg);
+      double wx = 0.0, wy = 0.0, wz = 0.0;
+      if (!(is >> wx >> wy >> wz)) {
+        Fail(run, "parse", "EXPECT SECTIONCLIPNORMAL needs <nx> <ny> <nz>", sourceLine);
+        return false;
+      }
+      const ray3d::Vec3 got = run.st.viewportSectionClipFrame.zAxis;
+      if (std::fabs(got.x - wx) > 1e-6 || std::fabs(got.y - wy) > 1e-6 ||
+          std::fabs(got.z - wz) > 1e-6) {
+        char buf[224];
+        std::snprintf(buf, sizeof(buf),
+                      "EXPECT SECTIONCLIPNORMAL: is (%.6g, %.6g, %.6g), expected (%.6g, %.6g, %.6g)",
+                      got.x, got.y, got.z, wx, wy, wz);
+        Fail(run, "expect", buf, sourceLine);
         return false;
       }
     } else if (what == "FOV") {

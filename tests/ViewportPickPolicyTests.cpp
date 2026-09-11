@@ -61,6 +61,9 @@ TEST_CASE("Every pick-driven command is routed by the model-space viewport", "[v
       // prompt whose clicks went nowhere: the state machine had the phase, the policy did not, so
       // the prompt appeared and nothing could be picked. Reported from the real app.
       K::Section,
+      // REQ-338. SECTIONPLANE's one and only step is a click, so an `Ignore` here is the whole
+      // command.
+      K::SectionPlane,
   };
 
   for (K kind : kPickDriven) {
@@ -452,4 +455,35 @@ TEST_CASE("REQ-335: SECTION selects solids by click, then takes three snapped po
     CHECK(ViewportClickRouteFor(pt) == ViewportClickRoute::SnappedPointPick);
     CHECK_FALSE(ViewportIsObjectSelectionStep(pt));
   }
+}
+
+TEST_CASE("REQ-338: SECTIONPLANE asks the viewport for a face", "[viewport][pick][req338]") {
+  // Three separate things have to be true for the face-select step to work in the app, and each
+  // one of them shipped BROKEN on the previous slice's equivalent step. They are asserted apart
+  // rather than together, so a failure names which.
+  AppCommandState st = AtFirstPrompt(K::SectionPlane);
+
+  // 1. The click reaches the command at all. `Ignore` here is the bug that made SECTION's prompt
+  //    appear with nothing able to answer it.
+  REQUIRE(ViewportClickRouteFor(st) != ViewportClickRoute::Ignore);
+  CHECK(ViewportClickRouteFor(st) == ViewportClickRoute::SubObjectFacePick);
+
+  // 2. `ViewportIsFacePickStep` is what the CLICK gate and the HOVER gate in CadUi both test. The
+  //    hover is a separate gate from the click, which is why fixing one left the other reported as
+  //    "that click works, it is just not highlighting the object".
+  CHECK(ViewportIsFacePickStep(st));
+
+  // 3. It counts as an object-selection step: the pickbox cursor and OSNAP suppression that go with
+  //    pointing at a thing are right here, and a face is a thing.
+  CHECK(ViewportIsObjectSelectionStep(st));
+
+  // And none of that leaks into idle, where a plain click must keep meaning what it always meant.
+  AppCommandState idle;
+  CHECK_FALSE(ViewportIsFacePickStep(idle));
+  CHECK(ViewportClickRouteFor(idle) == ViewportClickRoute::IdleSelection);
+
+  // Nor into the OTHER section command, which selects whole solids rather than a face.
+  AppCommandState sec = AtFirstPrompt(K::Section);
+  sec.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
+  CHECK_FALSE(ViewportIsFacePickStep(sec));
 }

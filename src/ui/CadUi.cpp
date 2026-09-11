@@ -9043,6 +9043,10 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   // submit `of`, which it does not.
   if (cmd.active == AppCommandState::Kind::SectionClip)
     return "SECTIONCLIP — [ON/OFF/FLIP] or an offset along the UCS Z:";
+  // REQ-338. No bracketed options: the answer is a click on a face, not a keyword, and a link that
+  // submits text here would have nothing to consume it.
+  if (cmd.active == AppCommandState::Kind::SectionPlane)
+    return CadSectionPlanePromptText();
   if (cmd.active == AppCommandState::Kind::Arc) {
     switch (cmd.arcPhase) {
     case AppCommandState::ArcPhase::WaitStart:
@@ -13918,7 +13922,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // hover, it is the same budget. It also SUPPRESSES the entity hover rather than drawing beside
       // it — two highlights answering one cursor is the defect, not the feature.
       // (The live gizmo drag, which covers a face drag too since slice 4c, is a few lines below.)
-      const bool subObjectHovering = modelSpace && !blockEntityHover && ImGui::GetIO().KeyCtrl &&
+      // REQ-338: OR'd with the face-pick step, because a command that ASKS for a face must
+      // pre-highlight one without the user also having to know about Ctrl. Ctrl remains the way to
+      // reach a sub-object when no command is asking.
+      const bool subObjectHovering = modelSpace && !blockEntityHover &&
+                                     (ImGui::GetIO().KeyCtrl || ViewportIsFacePickStep(cmd)) &&
                                      !cmd.gizmoDragActive;
       if (subObjectHovering) {
         cmd.viewportHoverEntityValid = false;
@@ -14768,6 +14776,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float tx = trimCutLinePt ? commitX : rawPickX;
       const float ty = trimCutLinePt ? commitY : rawPickY;
       SubmitTrimViewportPick(cmd, tx, ty, trimTol, log, pickRayPtr);
+      break;
+    }
+    // REQ-338 — SECTIONPLANE is asking for one FACE of a solid.
+    //
+    // Its own case rather than a branch inside `IdleSelection` below, which is where the sub-object
+    // pick has always lived. That placement would have been silently dead: `IdleSelection` is a
+    // DIFFERENT route, so a command routed to `SubObjectFacePick` never reaches it, the click would
+    // have fallen out of this switch doing nothing, and `/W4` does not include MSVC's
+    // unhandled-enumerator warning (C4061/C4062), so nothing would have said so at build time.
+    // Caught by reading the switch; it compiled clean either way.
+    case ViewportClickRoute::SubObjectFacePick: {
+      // The RAY, not the plan point, and built here because the command layer has neither the
+      // camera nor the pixel scale. Plan view is the default view and a solid has faces to pick in
+      // it, so this must not depend on `pickRayPtr`, which is null when the view is not orbited.
+      const ray3d::Ray faceRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+      solidpick::Tolerance faceTol;
+      faceTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
+      faceTol.edge = faceTol.vertex;
+      (void)SubmitSectionPlaneFacePick(cmd, faceRay, faceTol, log);
+      BumpCadGpuCache(cmd);
       break;
     }
     case ViewportClickRoute::Ignore:

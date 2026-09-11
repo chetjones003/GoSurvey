@@ -2629,6 +2629,31 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glDrawArrays(GL_TRIANGLES, 0, 6);
       glDisable(GL_BLEND);
     }
+    // REQ-338: the hatch. Drawn between the fill and the outline so the outline stays the crispest
+    // thing on the plane, and dimmer than it, because the hatch is texture rather than an edge —
+    // hatch as bright as the border reads as a solid panel and hides the model behind it.
+    //
+    // Unclipped like everything else in this block, and for the same reason: these lines lie
+    // exactly ON the clip plane, so a clipped copy would be cut by itself and half of every line
+    // would vanish at the driver's discretion.
+    const SectionPlaneGraphics& gfx = tuning.sectionPlaneGraphics;
+    if (gfx.valid && !gfx.hatch.empty()) {
+      std::vector<float> verts;
+      verts.reserve(gfx.hatch.size() * 3);
+      for (const ray3d::Vec3& p : gfx.hatch) {
+        verts.push_back(static_cast<float>(p.x - viewAnchorX));
+        verts.push_back(static_cast<float>(p.y - viewAnchorY));
+        verts.push_back(static_cast<float>(p.z));
+      }
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glUniform4f(locCol, 0.35f, 0.70f, 1.f, 0.45f);
+      glLineWidth(kLwMain);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
+                   verts.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(gfx.hatch.size()));
+      glDisable(GL_BLEND);
+    }
     // The outline, as a closed loop of four lines.
     {
       float loop[24];
@@ -2641,6 +2666,21 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glLineWidth(kLwHiLine);
       glBufferData(GL_ARRAY_BUFFER, sizeof(loop), loop, GL_STREAM_DRAW);
       glDrawArrays(GL_LINES, 0, 8);
+      glLineWidth(kLwMain);
+    }
+    // REQ-338: the section line — the plane's base edge, heavier and brighter than the rest of the
+    // outline. It is what tells you which way is down on a plane you are looking at edge-on, where
+    // fill and hatch both collapse to nothing.
+    if (gfx.valid) {
+      const float seg[6] = {
+          static_cast<float>(gfx.lineA.x - viewAnchorX), static_cast<float>(gfx.lineA.y - viewAnchorY),
+          static_cast<float>(gfx.lineA.z),
+          static_cast<float>(gfx.lineB.x - viewAnchorX), static_cast<float>(gfx.lineB.y - viewAnchorY),
+          static_cast<float>(gfx.lineB.z)};
+      glUniform4f(locCol, 0.60f, 0.82f, 1.f, 1.f);
+      glLineWidth(kLwHiLine * 2.f);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(seg), seg, GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, 2);
       glLineWidth(kLwMain);
     }
     glBindVertexArray(0);

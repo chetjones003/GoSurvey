@@ -34,6 +34,10 @@ struct RenderTuning {
   /// is the side that knows how big the drawing is; the renderer only draws it. Invalid means draw
   /// nothing, which is what every existing call site gets by default.
   SectionClipIndicator sectionClipIndicator{};
+  /// REQ-338 — the hatch and section line that make that rectangle findable at a glance. Built from
+  /// the indicator by `SectionPlaneGraphicsFor`, on the same side and for the same reason. Invalid
+  /// means the plane draws as REQ-337 shipped it, fill and outline only.
+  SectionPlaneGraphics sectionPlaneGraphics{};
 };
 
 class ViewportRenderer {

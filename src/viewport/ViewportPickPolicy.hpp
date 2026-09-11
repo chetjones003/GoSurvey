@@ -105,6 +105,16 @@ enum class ViewportClickRoute : std::uint8_t {
   InsertBlockAlignFacePick,
   /// BCONNECT face pick while BEDIT is open (issue #475 inc5).
   BconnectFacePick,
+  /// A command is asking for one **face of a solid** — `SECTIONPLANE`'s only step (REQ-338).
+  ///
+  /// A sub-object pick, not an entity pick, and until now it existed only as `Ctrl`+click in
+  /// `CadUi.cpp`, dispatched ABOVE this table and invisible to it. That is exactly how REQ-335's
+  /// selection step shipped broken twice: the click fell through to ordinary entity selection and
+  /// pulled the user out of the command, and then the face did not pre-highlight because the hover
+  /// carries its own separate `Ctrl` gate. Naming the step here is what lets a test assert it —
+  /// `HeadlessDriver`'s `PICK` verb calls `SubmitViewportPick` directly and never reaches the
+  /// routing layer at all, so no transcript can cover this, however many steps it has.
+  SubObjectFacePick,
 };
 
 /// \see ViewportClickRoute. Model space (and floating model space) only — pure paper space has its
@@ -245,6 +255,11 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     }
     return R::Ignore;
   }
+  // SECTIONPLANE (REQ-338): one step, and it wants a FACE. Unlike SECTION above it never asks which
+  // solids to cut — a clip plane is a property of the view and cuts everything, so there is nothing
+  // to select but the face the plane goes on.
+  case K::SectionPlane:
+    return R::SubObjectFacePick;
   case K::Align:
     return cmd.alignPhase == AppCommandState::AlignPhase::PickSelection ? R::SelectionAccumulate
                                                                        : R::SnappedPointPick;
@@ -459,6 +474,10 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::SelectionAccumulate:
   case R::RawEntityPick:
   case R::TrimPick:
+  // A face of a solid IS an object to point at, so the pickbox cursor and the OSNAP suppression
+  // that go with a selection step are both right here (REQ-338). What it is NOT is an ENTITY
+  // selection — see ViewportIsFacePickStep, which is what the click and hover gates test.
+  case R::SubObjectFacePick:
     return true;
 
   // "Which point?", or nothing at all.
@@ -473,6 +492,25 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
     return false;
   }
   return false;  // unreachable; see ViewportClickRouteFor's tail note
+}
+
+/// True while a command is asking for one **face of a solid** (REQ-338, GitHub issue #479).
+///
+/// Two gates in `CadUi.cpp` decide whether a sub-object is picked and whether one pre-highlights,
+/// and both required `Ctrl` to be held:
+///
+///   - the click, `subObjectClick` — without this predicate the click falls straight through to
+///     ordinary entity selection, which pulls the user out of the command they are in the middle
+///     of. Reported against `SECTION` on 2026-09-10: *"it takes me out of the section and just
+///     selects the object by itself."*
+///   - the hover, `subObjectHovering` — a SEPARATE gate, so fixing only the click gives a command
+///     whose clicks work and whose faces never light up. Reported immediately after the first fix:
+///     *"that click works, it is just not highlighting the object."*
+///
+/// Both bugs were found by hand in the running app, twice, because nothing automated could see
+/// them. This predicate is the thing a test can hold on to.
+[[nodiscard]] inline bool ViewportIsFacePickStep(const AppCommandState& cmd) {
+  return ViewportClickRouteFor(cmd) == ViewportClickRoute::SubObjectFacePick;
 }
 
 /// Paper-space counterpart of \ref ViewportIsObjectSelectionStep (REQ-307, GitHub #106).

@@ -457,3 +457,162 @@ TEST_CASE("The indicator holds at survey coordinate magnitudes",
           Approx(p.c).margin(0.002));
   }
 }
+
+// -------------------------------------------------------------------------------------------
+// REQ-338 / ADR-058 (GitHub issue #479 acceptance 3) — how the plane is DRAWN.
+//
+// The hatch is what makes the plane findable, and it is geometry rebuilt every frame from the
+// rectangle, so the two failures worth pinning are "it is not on the plane" and "it does not stay
+// inside the rectangle". A hatch line that escapes its quad draws a stray line across the model
+// with nothing to explain it; one off the plane draws a shape that is believed and is wrong.
+// -------------------------------------------------------------------------------------------
+
+TEST_CASE("An invalid rectangle produces no plane graphics", "[sectionplane][req338][req479]") {
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(SectionClipIndicator{});
+  CHECK_FALSE(g.valid);
+  CHECK(g.hatch.empty());
+}
+
+TEST_CASE("Every hatch endpoint lies ON the plane", "[sectionplane][req338][req479]") {
+  // Same requirement the indicator corners have, and for the same reason: this is drawn unclipped
+  // and will be believed. A tilted frame, because an axis-aligned one is satisfied by arithmetic
+  // that has dropped a basis vector entirely.
+  const ucs::Ucs tilted =
+      ucs::WithOrigin(ucs::RotatedAboutY(ucs::RotatedAboutX(ucs::Ucs{}, 25.0), 40.0),
+                      ray3d::Vec3{3.0, -7.0, 11.0});
+  for (const double offset : {-6.0, 0.0, 4.5}) {
+    const SectionClipPlane p = SectionClipFromUcs(tilted, offset, false);
+    const SectionClipIndicator ind =
+        SectionClipIndicatorQuad(p, ray3d::Vec3{-20, -14, -2}, ray3d::Vec3{20, 14, 30});
+    REQUIRE(ind.valid);
+    const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+    REQUIRE(g.valid);
+    REQUIRE_FALSE(g.hatch.empty());
+    for (size_t i = 0; i < g.hatch.size(); ++i) {
+      INFO("offset " << offset << " hatch point " << i);
+      CHECK(p.nx * g.hatch[i].x + p.ny * g.hatch[i].y + p.nz * g.hatch[i].z ==
+            Approx(p.c).margin(1e-9));
+    }
+    // The section line is an edge of the rectangle, so it is on the plane too.
+    CHECK(p.nx * g.lineA.x + p.ny * g.lineA.y + p.nz * g.lineA.z == Approx(p.c).margin(1e-9));
+    CHECK(p.nx * g.lineB.x + p.ny * g.lineB.y + p.nz * g.lineB.z == Approx(p.c).margin(1e-9));
+  }
+}
+
+TEST_CASE("Every hatch endpoint stays inside the rectangle", "[sectionplane][req338][req479]") {
+  // Measured in the rectangle's OWN axes rather than in world XY, so this holds for a tilted plane
+  // — and a tilted plane is where a clipping mistake would otherwise hide.
+  const ucs::Ucs tilted = ucs::RotatedAboutX(ucs::Ucs{}, 35.0);
+  const SectionClipPlane p = SectionClipFromUcs(tilted, 2.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-30, -9, 0}, ray3d::Vec3{30, 9, 14});
+  REQUIRE(ind.valid);
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+  REQUIRE(g.valid);
+
+  const ray3d::Vec3 eu = ray3d::Sub(ind.corner[1], ind.corner[0]);
+  const ray3d::Vec3 ev = ray3d::Sub(ind.corner[3], ind.corner[0]);
+  const double lu = ray3d::Length(eu);
+  const double lv = ray3d::Length(ev);
+  REQUIRE(lu > 1e-9);
+  REQUIRE(lv > 1e-9);
+  const ray3d::Vec3 u = ray3d::Scale(eu, 1.0 / lu);
+  const ray3d::Vec3 v = ray3d::Scale(ev, 1.0 / lv);
+  for (size_t i = 0; i < g.hatch.size(); ++i) {
+    const ray3d::Vec3 d = ray3d::Sub(g.hatch[i], ind.corner[0]);
+    const double s = ray3d::Dot(d, u);
+    const double t = ray3d::Dot(d, v);
+    INFO("hatch point " << i << " at (s,t) = (" << s << ", " << t << ") in a "
+                        << lu << " x " << lv << " rectangle");
+    CHECK(s >= -1e-9);
+    CHECK(s <= lu + 1e-9);
+    CHECK(t >= -1e-9);
+    CHECK(t <= lv + 1e-9);
+  }
+}
+
+TEST_CASE("The hatch comes in drawable pairs and is bounded", "[sectionplane][req338][req479]") {
+  const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-40, -30, 0}, ray3d::Vec3{40, 30, 12});
+  REQUIRE(ind.valid);
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+  REQUIRE(g.valid);
+
+  // GL_LINES order: an odd count would draw one endpoint into whatever followed it in the buffer.
+  CHECK(g.hatch.size() % 2 == 0);
+  CHECK(static_cast<int>(g.hatch.size() / 2) <= kSectionPlaneHatchMaxSegments);
+  // Enough lines to read as a hatch rather than as a couple of stray diagonals.
+  CHECK(g.hatch.size() / 2 >= 8);
+  // No zero-length segments: they cost an upload and draw nothing.
+  for (size_t i = 0; i + 1 < g.hatch.size(); i += 2)
+    CHECK(ray3d::Length(ray3d::Sub(g.hatch[i + 1], g.hatch[i])) > 1e-6);
+}
+
+TEST_CASE("The hatch is scale-invariant, not distance-dependent", "[sectionplane][req338][req479]") {
+  // Density comes from the rectangle's own diagonal, so a 4 ft fitting and a 900 ft parcel get the
+  // same NUMBER of lines. Were it a world spacing instead, one of those two would be either a solid
+  // block of ink or a single line, and the segment count at survey scale could run away.
+  const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);
+  const SectionPlaneGraphics small = SectionPlaneGraphicsFor(
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-2, -2, 0}, ray3d::Vec3{2, 2, 1}));
+  const SectionPlaneGraphics large = SectionPlaneGraphicsFor(
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-450, -450, 0}, ray3d::Vec3{450, 450, 40}));
+  REQUIRE(small.valid);
+  REQUIRE(large.valid);
+  CHECK(small.hatch.size() == large.hatch.size());
+}
+
+TEST_CASE("The hatch holds at survey coordinate magnitudes", "[sectionplane][req338][req479][req101]") {
+  // The whole feature's hazard is that everything is exact at the origin. The pattern is built from
+  // the rectangle's corners, which at E 2,196,000 are large numbers whose DIFFERENCES are small —
+  // the same shape as the anchor-rebasing bug, so it is checked rather than assumed.
+  const ucs::Ucs frame = ucs::WithOrigin(ucs::Ucs{}, ray3d::Vec3{2196000.0, 1400000.0, 0.0});
+  const SectionClipPlane p = SectionClipFromUcs(frame, 6.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{2195980.0, 1399985.0, 0.0},
+                               ray3d::Vec3{2196020.0, 1400015.0, 12.0});
+  REQUIRE(ind.valid);
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+  REQUIRE(g.valid);
+  REQUIRE_FALSE(g.hatch.empty());
+  for (size_t i = 0; i < g.hatch.size(); ++i) {
+    INFO("hatch point " << i);
+    // REQ-101's own tolerance, not a looser one: the point of the case is that nothing is lost.
+    CHECK(p.nx * g.hatch[i].x + p.ny * g.hatch[i].y + p.nz * g.hatch[i].z ==
+          Approx(p.c).margin(0.002));
+  }
+  // And the count matches the same rectangle drawn at the origin — the pattern is a function of
+  // the shape, not of where it sits.
+  const SectionClipPlane atOrigin = SectionClipFromUcs(ucs::Ucs{}, 6.0, false);
+  const SectionPlaneGraphics og = SectionPlaneGraphicsFor(
+      SectionClipIndicatorQuad(atOrigin, ray3d::Vec3{-20, -15, 0}, ray3d::Vec3{20, 15, 12}));
+  REQUIRE(og.valid);
+  CHECK(og.hatch.size() == g.hatch.size());
+}
+
+TEST_CASE("The section line is the rectangle's lowest edge", "[sectionplane][req338][req479]") {
+  // "Base" means what a person looking at the model would call the bottom, so the line is where a
+  // section mark belongs on a vertical cut. A level plane has all four edges at one elevation and
+  // any of them is as good as another; what matters there is that the choice is STABLE, since a
+  // line that hops between edges as the plane slides would read as flicker.
+  const ucs::Ucs upright = ucs::RotatedAboutX(ucs::Ucs{}, 90.0);  // normal now horizontal
+  const SectionClipPlane p = SectionClipFromUcs(upright, 0.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-20, -15, 0}, ray3d::Vec3{20, 15, 25});
+  REQUIRE(ind.valid);
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+  REQUIRE(g.valid);
+
+  const double lineMidZ = 0.5 * (g.lineA.z + g.lineB.z);
+  for (int i = 0; i < 4; ++i) {
+    const double edgeMidZ = 0.5 * (ind.corner[i].z + ind.corner[(i + 1) & 3].z);
+    INFO("edge " << i);
+    CHECK(lineMidZ <= edgeMidZ + 1e-9);
+  }
+  // It is a real edge of the rectangle, not a diagonal or a chord.
+  const double lineLen = ray3d::Length(ray3d::Sub(g.lineB, g.lineA));
+  const double eu = ray3d::Length(ray3d::Sub(ind.corner[1], ind.corner[0]));
+  const double ev = ray3d::Length(ray3d::Sub(ind.corner[3], ind.corner[0]));
+  CHECK((lineLen == Approx(eu).margin(1e-9) || lineLen == Approx(ev).margin(1e-9)));
+}
