@@ -82,7 +82,7 @@ constexpr double kSurveyN = 1400000.0;
 
 }  // namespace
 
-TEST_CASE("An inactive clip keeps every point", "[sectionclip][req336][req149]") {
+TEST_CASE("An inactive clip keeps every point", "[sectionclip][req337][req149]") {
   const SectionClipPlane off{};
   REQUIRE_FALSE(off.active);
   CHECK(off.KeepsWorldPoint(0.0, 0.0, 0.0));
@@ -99,7 +99,7 @@ TEST_CASE("An inactive clip keeps every point", "[sectionclip][req336][req149]")
 }
 
 TEST_CASE("The plane is the UCS plane, and the offset slides it along the UCS Z",
-          "[sectionclip][req336][req149]") {
+          "[sectionclip][req337][req149]") {
   const ucs::Ucs world{};
 
   const SectionClipPlane at0 = SectionClipFromUcs(world, 0.0, false);
@@ -124,7 +124,7 @@ TEST_CASE("The plane is the UCS plane, and the offset slides it along the UCS Z"
   CHECK_FALSE(belowUcs.KeepsWorldPoint(0.0, 0.0, -3.9));
 }
 
-TEST_CASE("FLIP keeps the other half and moves nothing else", "[sectionclip][req336][req149]") {
+TEST_CASE("FLIP keeps the other half and moves nothing else", "[sectionclip][req337][req149]") {
   const ucs::Ucs world{};
   const SectionClipPlane a = SectionClipFromUcs(world, 12.0, false);
   const SectionClipPlane b = SectionClipFromUcs(world, 12.0, true);
@@ -145,7 +145,7 @@ TEST_CASE("FLIP keeps the other half and moves nothing else", "[sectionclip][req
   }
 }
 
-TEST_CASE("The plane follows a UCS that has been moved and turned", "[sectionclip][req336][req149]") {
+TEST_CASE("The plane follows a UCS that has been moved and turned", "[sectionclip][req337][req149]") {
   // A frame tilted about X and then moved: neither the normal nor the constant is an axis value any
   // more, which is the case an axis-aligned test cannot distinguish from a wrong one.
   const ucs::Ucs tilted =
@@ -176,7 +176,7 @@ TEST_CASE("The plane follows a UCS that has been moved and turned", "[sectioncli
 }
 
 TEST_CASE("The shader packing agrees with the CPU predicate at the origin",
-          "[sectionclip][req336][req149]") {
+          "[sectionclip][req337][req149]") {
   const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 12.0, false);
   float v4[4];
   SectionClipToShaderVec4(p, 0.0, 0.0, v4);
@@ -187,7 +187,7 @@ TEST_CASE("The shader packing agrees with the CPU predicate at the origin",
 }
 
 TEST_CASE("The clip lands in the right place at survey coordinate magnitudes",
-          "[sectionclip][req336][req149][req101]") {
+          "[sectionclip][req337][req149][req101]") {
   // The UCS sits at state-plane coordinates and is tilted, so the plane normal has real X and Y
   // components and the anchor term is worth millions of feet. This is the case P7 measured.
   const ucs::Ucs frame = ucs::WithOrigin(ucs::RotatedAboutY(ucs::RotatedAboutX(ucs::Ucs{}, 20.0), 35.0),
@@ -216,7 +216,7 @@ TEST_CASE("The clip lands in the right place at survey coordinate magnitudes",
 }
 
 TEST_CASE("A world-stated plane is exact at the origin and wrong at survey magnitude",
-          "[sectionclip][req336][req149][req101]") {
+          "[sectionclip][req337][req149][req101]") {
   // The finding P7 measured, as an assertion: the naive packing is INDISTINGUISHABLE from the
   // correct one at the origin, which is why a test written there proves nothing.
   {
@@ -264,7 +264,7 @@ TEST_CASE("A world-stated plane is exact at the origin and wrong at survey magni
   CHECK(ShaderKeeps(naive, eastX, kSurveyN, 0.0, kSurveyE, kSurveyN));
 }
 
-TEST_CASE("Panning the view does not move the clip plane", "[sectionclip][req336][req149][req101]") {
+TEST_CASE("Panning the view does not move the clip plane", "[sectionclip][req337][req149][req101]") {
   // The anchor is the pan point, so this is the assertion that a correct implementation makes and
   // a naive one fails: same drawing, same plane, same test point, two different view anchors.
   const ucs::Ucs vertical =
@@ -308,7 +308,7 @@ TEST_CASE("Panning the view does not move the clip plane", "[sectionclip][req336
 }
 
 TEST_CASE("The clip offset keeps REQ-101 precision at survey magnitude",
-          "[sectionclip][req336][req149][req101]") {
+          "[sectionclip][req337][req149][req101]") {
   // The plane constant at state-plane coordinates is ~2.2e6. Computing `c - anchor` in float would
   // quantize it to about 0.25 ft -- 125x REQ-101's +/-0.002 ft -- so the subtraction is done in
   // double and narrowed once. This case walks the plane in 0.002 ft steps and requires each one to
@@ -342,14 +342,14 @@ TEST_CASE("The clip offset keeps REQ-101 precision at survey magnitude",
 // leaves the solid's outline in exactly the same place on screen. Two captures of that case came
 // back byte-identical before this was added.
 
-TEST_CASE("An inactive clip has no indicator to draw", "[sectionclip][req336][req149]") {
+TEST_CASE("An inactive clip has no indicator to draw", "[sectionclip][req337][req149]") {
   const SectionClipPlane off{};
   const SectionClipIndicator ind =
       SectionClipIndicatorQuad(off, ray3d::Vec3{0, 0, 0}, ray3d::Vec3{10, 10, 10});
   CHECK_FALSE(ind.valid);
 }
 
-TEST_CASE("The indicator lies ON the plane it describes", "[sectionclip][req336][req149]") {
+TEST_CASE("The indicator lies ON the plane it describes", "[sectionclip][req337][req149]") {
   // Every corner must satisfy the plane equation, or the rectangle is drawn somewhere the cut is
   // not — which is worse than drawing nothing, because it would be believed.
   const ucs::Ucs tilted =
@@ -368,7 +368,7 @@ TEST_CASE("The indicator lies ON the plane it describes", "[sectionclip][req336]
   }
 }
 
-TEST_CASE("The indicator is a rectangle, and it covers the model", "[sectionclip][req336][req149]") {
+TEST_CASE("The indicator is a rectangle, and it covers the model", "[sectionclip][req337][req149]") {
   const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 5.0, false);
   const ray3d::Vec3 mn{-20, -14, 0};
   const ray3d::Vec3 mx{20, 14, 12};
@@ -411,7 +411,7 @@ TEST_CASE("The indicator is a rectangle, and it covers the model", "[sectionclip
 }
 
 TEST_CASE("A level cut still gets an indicator, which is the case that needed one",
-          "[sectionclip][req336][req149]") {
+          "[sectionclip][req337][req149]") {
   // n = +Z is the default cut and the one that shows nothing on screen without this. It is also
   // the orientation that breaks a naive in-plane basis built from a fixed helper axis.
   const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 6.0, false);
@@ -428,7 +428,7 @@ TEST_CASE("A level cut still gets an indicator, which is the case that needed on
   CHECK(ray3d::Length(ray3d::Sub(ind.corner[2], ind.corner[1])) > 1.0);
 }
 
-TEST_CASE("A flat drawing still gets a drawable indicator", "[sectionclip][req336][req149]") {
+TEST_CASE("A flat drawing still gets a drawable indicator", "[sectionclip][req337][req149]") {
   // Every solid at one elevation gives a box with zero Z span. A vertical cut through it has zero
   // extent in one in-plane direction, and a rectangle of zero width would look like nothing was
   // added at all.
@@ -442,7 +442,7 @@ TEST_CASE("A flat drawing still gets a drawable indicator", "[sectionclip][req33
 }
 
 TEST_CASE("The indicator holds at survey coordinate magnitudes",
-          "[sectionclip][req336][req149][req101]") {
+          "[sectionclip][req337][req149][req101]") {
   const ucs::Ucs frame = ucs::WithOrigin(ucs::RotatedAboutX(ucs::Ucs{}, 15.0),
                                          ray3d::Vec3{kSurveyE, kSurveyN, 850.0});
   const SectionClipPlane p = SectionClipFromUcs(frame, 3.0, false);

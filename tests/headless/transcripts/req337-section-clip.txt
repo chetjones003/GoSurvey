@@ -99,7 +99,7 @@ EXPECT SECTIONCLIPFLIP OFF
 CMD SECTIONCLIP ON
 EXPECT SECTIONCLIP ON
 EXPECT SECTIONCLIPOFFSET 0
-EXPECT LOG "Section clip = ON at offset 0 along the UCS Z."
+EXPECT LOG "Section clip = ON at offset 0.0000 along the UCS Z."
 
 CMD SECTIONCLIP OFF
 EXPECT SECTIONCLIP OFF
@@ -115,7 +115,7 @@ EXPECT SECTIONCLIP OFF
 CMD SECTIONCLIP 12.5
 EXPECT SECTIONCLIP ON
 EXPECT SECTIONCLIPOFFSET 12.5
-EXPECT LOG "Section clip = ON at offset 12.5 along the UCS Z."
+EXPECT LOG "Section clip = ON at offset 12.5000 along the UCS Z."
 
 # `OFFSET <n>` is the same request as a bare number.
 CMD SECTIONCLIP OFFSET -4
@@ -167,7 +167,7 @@ CMD SECTIONCLIP FLIP
 EXPECT SECTIONCLIPFLIP ON
 EXPECT SECTIONCLIP ON
 EXPECT SECTIONCLIPOFFSET 5
-EXPECT LOG "Section clip = ON at offset 5 along the UCS Z, flipped."
+EXPECT LOG "Section clip = ON at offset 5.0000 along the UCS Z, flipped."
 
 # FLIP again returns it, and leaves the offset where it was.
 CMD SECTIONCLIP FLIP
@@ -193,6 +193,34 @@ EXPECT SECTIONCLIPOFFSET 20
 CMD SECTIONCLIP sideways
 EXPECT LOG "SECTIONCLIP - enter ON, OFF, FLIP, or an offset distance along the UCS Z."
 EXPECT SECTIONCLIP ON
+
+# --- a number with trailing rubbish is REFUSED, not half-read -------------------------------------
+#
+# `istringstream >> double` stops at the first character it cannot use and reports success for
+# whatever it managed — so each of these silently committed a WRONG offset and said "Section clip =
+# ON at offset ..." as though it had understood. `12,5` is the one that matters most: a decimal
+# comma is ordinary outside the US and it quietly set 12 instead of 12.5. The parse now requires the
+# whole token, the way `ParseSolidBasePoint` does.
+#
+# The previous offset must survive each refusal untouched (REQ-201).
+
+CMD SECTIONCLIP 12abc
+EXPECT LOG "SECTIONCLIP - enter ON, OFF, FLIP, or an offset distance along the UCS Z."
+EXPECT SECTIONCLIPOFFSET 20
+
+CMD SECTIONCLIP 12,5
+EXPECT SECTIONCLIPOFFSET 20
+
+CMD SECTIONCLIP 4 8
+EXPECT SECTIONCLIPOFFSET 20
+
+# ...and a plain, whole number still works, so the tightening did not cost the ordinary case.
+CMD SECTIONCLIP 7.25
+EXPECT SECTIONCLIPOFFSET 7.25
+EXPECT LOG "Section clip = ON at offset 7.2500 along the UCS Z."
+
+CMD SECTIONCLIP 20
+EXPECT SECTIONCLIPOFFSET 20
 EXPECT SECTIONCLIPOFFSET 20
 
 CMD SECTIONCLIP nan

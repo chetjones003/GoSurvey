@@ -422,7 +422,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
 
     // 1 — the whole box, for comparison.
     IM_CHECK(!s_cmd->viewportSectionClip);
-    DevShell_RequestViewportCapture("devshell-req336-clip-0-off.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req337-clip-0-off.bmp", 1400);
     ctx->Yield(4);
 
     // 2 — cut at the UCS plane (z = 0). The box spans z 0..12, so this removes ALL of it: the
@@ -432,7 +432,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     ctx->Yield(6);
     IM_CHECK(s_cmd->viewportSectionClip);
     IM_CHECK(std::fabs(s_cmd->viewportSectionClipOffset - 0.0) < 1e-9);
-    DevShell_RequestViewportCapture("devshell-req336-clip-1-at-zero.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req337-clip-1-at-zero.bmp", 1400);
     ctx->Yield(4);
 
     // 3 and 4 — the plane MOVES, which is the word acceptance 6 actually uses. Two heights through
@@ -440,27 +440,27 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     SubmitCad(ctx, "SECTIONCLIP 4");
     ctx->Yield(6);
     IM_CHECK(std::fabs(s_cmd->viewportSectionClipOffset - 4.0) < 1e-9);
-    DevShell_RequestViewportCapture("devshell-req336-clip-2-at-four.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req337-clip-2-at-four.bmp", 1400);
     ctx->Yield(4);
 
     SubmitCad(ctx, "SECTIONCLIP 8");
     ctx->Yield(6);
     IM_CHECK(std::fabs(s_cmd->viewportSectionClipOffset - 8.0) < 1e-9);
-    DevShell_RequestViewportCapture("devshell-req336-clip-3-at-eight.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req337-clip-3-at-eight.bmp", 1400);
     ctx->Yield(4);
 
     // 5 — FLIP keeps the other half. Together with shot 3 this covers the whole box between them.
     SubmitCad(ctx, "SECTIONCLIP FLIP");
     ctx->Yield(6);
     IM_CHECK(s_cmd->viewportSectionClipFlip);
-    DevShell_RequestViewportCapture("devshell-req336-clip-4-flipped.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req337-clip-4-flipped.bmp", 1400);
     ctx->Yield(4);
 
     // 6 — and OFF restores the whole box, so the clip left nothing behind.
     SubmitCad(ctx, "SECTIONCLIP OFF");
     ctx->Yield(6);
     IM_CHECK(!s_cmd->viewportSectionClip);
-    DevShell_RequestViewportCapture("devshell-req336-clip-5-off-again.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req337-clip-5-off-again.bmp", 1400);
     ctx->Yield(4);
 
     // The solid is untouched by all of it — a view state changed nothing in the document. Checked
