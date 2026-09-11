@@ -28,6 +28,11 @@ bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXfo
                          std::vector<std::string>& log);
 
 void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log);
+void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log);
+void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+void CommitBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log);
+void CancelBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log);
 /// Seed INSERT defaults for the current \p insertBlockName (matchlines default to 90°).
 void CadBlocksApplyInsertNameDefaults(AppCommandState& st);
 void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);

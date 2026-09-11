@@ -314,3 +314,128 @@ void DrawEditBlockDefinitionDialog(AppCommandState& cmd, std::vector<std::string
     ImGui::CloseCurrentPopup();
   ImGui::EndPopup();
 }
+
+void DrawBlockCreateDialog(AppCommandState& cmd, std::vector<std::string>& log) {
+  using Ph = AppCommandState::BlockCreatePhase;
+  if (!cmd.blockCreateDialogOpen && cmd.blockCreatePhase != Ph::WaitBasePoint)
+    return;
+
+  if (!cmd.blockCreateDialogOpen && cmd.blockCreatePhase == Ph::WaitBasePoint) {
+    ImGui::SetNextWindowPos(ImVec2(10.f, ImGui::GetIO().DisplaySize.y - 60.f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.75f);
+    ImGui::Begin("##BlockCreatePickHint", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoMove);
+    ImGui::TextUnformatted("BLOCK — pick base point (ESC cancels).");
+    ImGui::End();
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+      CancelBlockCreateDialog(cmd, log);
+    return;
+  }
+
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    CancelBlockCreateDialog(cmd, log);
+    return;
+  }
+  ImGui::SetNextWindowSize(ImVec2(420.f, 0.f), ImGuiCond_FirstUseEver);
+  bool open = true;
+  if (!ImGui::Begin("Create Block", &open, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::End();
+    if (!open)
+      CancelBlockCreateDialog(cmd, log);
+    return;
+  }
+  if (!open) {
+    ImGui::End();
+    CancelBlockCreateDialog(cmd, log);
+    return;
+  }
+
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Name:");
+  ImGui::SameLine(90.f);
+  ImGui::SetNextItemWidth(220.f);
+  ImGui::InputText("##BlockCreateName", cmd.blockCreateName, sizeof(cmd.blockCreateName));
+  ImGui::SameLine();
+  ImGui::TextDisabled("(?)");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Block definition name. Must be unique.");
+
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Description:");
+  ImGui::SameLine(90.f);
+  ImGui::SetNextItemWidth(220.f);
+  ImGui::InputText("##BlockCreateDesc", cmd.blockCreateDescription, sizeof(cmd.blockCreateDescription));
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+
+  const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
+
+  ImGui::TextUnformatted("Base point");
+  ImGui::Checkbox("Specify On-screen##BlkPt", &cmd.blockCreateSpecifyBase);
+  ImGui::BeginDisabled(cmd.blockCreateSpecifyBase);
+  ImGui::SetNextItemWidth(90.f);
+  ImGui::InputFloat("X##BlkX", &cmd.blockCreateBaseX, 0.f, 0.f, cfmt.c_str());
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90.f);
+  ImGui::InputFloat("Y##BlkY", &cmd.blockCreateBaseY, 0.f, 0.f, cfmt.c_str());
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90.f);
+  ImGui::InputFloat("Z##BlkZ", &cmd.blockCreateBaseZ, 0.f, 0.f, cfmt.c_str());
+  ImGui::EndDisabled();
+
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Objects");
+  int selCount = static_cast<int>(cmd.selection.size());
+  ImGui::Text("Selected: %d object(s)", selCount);
+  if (selCount == 0)
+    ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.f), "No objects selected — select geometry before creating a block.");
+  ImGui::TextUnformatted("Objects action:");
+  ImGui::RadioButton("Retain##BlkRet", &cmd.blockCreateConvertMode, 0);
+  ImGui::SameLine();
+  ImGui::RadioButton("Convert to block##BlkConv", &cmd.blockCreateConvertMode, 1);
+  ImGui::SameLine();
+  ImGui::RadioButton("Delete##BlkDel", &cmd.blockCreateConvertMode, 2);
+
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Settings");
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Block unit:");
+  ImGui::SameLine(90.f);
+  ImGui::SetNextItemWidth(160.f);
+  ImGui::InputText("##BlkUnit", cmd.blockCreateUnits, sizeof(cmd.blockCreateUnits));
+  ImGui::SameLine();
+  ImGui::TextDisabled("(?)");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Block insertion unit (AutoCAD INSUNITS). Leave as drawing unit for no scaling.");
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+  std::string nameTrim = StringUtil::trimCopy(std::string(cmd.blockCreateName));
+  bool nameOk = !nameTrim.empty() && CadBlockFindDef(cmd.blockDefs, nameTrim) < 0;
+  bool canOk = nameOk && selCount > 0;
+  std::string why;
+  if (!nameOk) {
+    if (nameTrim.empty()) why = "Enter a block name.";
+    else why = "Name already exists.";
+  } else if (selCount == 0) {
+    why = "Select objects to include.";
+  }
+  if (!canOk && !why.empty()) {
+    ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.f), "%s", why.c_str());
+  }
+  ImGui::BeginDisabled(!canOk);
+  if (ImGui::Button("OK", ImVec2(90.f, 0.f)))
+    CommitBlockCreateDialog(cmd, log);
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(90.f, 0.f)))
+    CancelBlockCreateDialog(cmd, log);
+
+  ImGui::End();
+}
+

@@ -5596,8 +5596,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           if (id == "##RibbonInsInsert") {
             StartInsertBlockCommand(cmd, log);
           } else if (id == "##RibbonInsCreate") {
-            char buf[8] = "BLOCK";
-            ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+            StartBlockCreateDialog(cmd, log);
           } else if (id == "##RibbonInsEdit") {
             CadBlocksOpenEditPicker(cmd, log);
           }
@@ -14322,6 +14321,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else {
         TryPlaceSurveyPoint(cmd, commitX, commitY, cmd.createPointsOpts.defaultElevation, log);
       }
+    } else if (cmd.blockCreatePhase == AppCommandState::BlockCreatePhase::WaitBasePoint) {
+      SubmitBlockCreateBasePointPick(cmd, static_cast<float>(commitX), static_cast<float>(commitY), static_cast<float>(commitZ), log);
     } else {
     // TASK-099. One authority decides what a click means here: ViewportClickRouteFor
     // (viewport/ViewportPickPolicy.hpp). This was an if/else-if whitelist on cmd.active, and a

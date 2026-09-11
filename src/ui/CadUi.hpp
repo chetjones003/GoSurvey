@@ -244,6 +244,7 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log);
 
 /// INSERT configuration dialog + pick-phase hint overlay (GitHub issue #124).
 void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log);
+void DrawBlockCreateDialog(AppCommandState& cmd, std::vector<std::string>& log);
 /// Civil 3D-style Edit Block Definition picker (BEDIT with no name).
 void DrawEditBlockDefinitionDialog(AppCommandState& cmd, std::vector<std::string>& log);
 

@@ -699,6 +699,138 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   log.push_back("INSERT — select a block in the Insert dialog.");
 }
 
+void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::None)
+    CancelActiveCommand(st, log);
+  st.blockCreateDialogOpen = true;
+  st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+  st.blockCreateName[0] = '\0';
+  st.blockCreateBaseX = 0.f;
+  st.blockCreateBaseY = 0.f;
+  st.blockCreateBaseZ = 0.f;
+  st.blockCreateSpecifyBase = true;
+  st.blockCreateConvertMode = 1;
+  st.blockCreateDescription[0] = '\0';
+  std::string du = CadDrawingInsUnitsName(st.drawingInsUnits);
+  std::snprintf(st.blockCreateUnits, sizeof(st.blockCreateUnits), "%s", du.c_str());
+  log.push_back("BLOCK \u2014 define a new block in the Create dialog.");
+}
+
+static bool CommitBlockCreateFromState(AppCommandState& st, std::vector<std::string>& log) {
+  std::string name = StringUtil::trimCopy(std::string(st.blockCreateName));
+  if (name.empty()) {
+    log.push_back("BLOCK \u2014 block name is required.");
+    return false;
+  }
+  if (CadBlockFindDef(st.blockDefs, name) >= 0) {
+    log.push_back("BLOCK \u2014 name \"" + name + "\" is already used.");
+    return false;
+  }
+  if (st.selection.empty()) {
+    log.push_back("BLOCK \u2014 select geometry first, then run BLOCK.");
+    return false;
+  }
+  float bx = st.blockCreateBaseX;
+  float by = st.blockCreateBaseY;
+  float bz = st.blockCreateBaseZ;
+  std::string mode = "convert";
+  if (st.blockCreateConvertMode == 0) mode = "retain";
+  else if (st.blockCreateConvertMode == 2) mode = "delete";
+  PushUndoSnapshot(st, "Block");
+  CadBlockDefinition def;
+  def.name = name;
+  def.description = StringUtil::trimCopy(std::string(st.blockCreateDescription));
+  def.baseX = bx;
+  def.baseY = by;
+  def.baseZ = bz;
+  std::string unitStr = StringUtil::trimCopy(std::string(st.blockCreateUnits));
+  if (unitStr.empty()) unitStr = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.units = unitStr;
+  CaptureSelectionInto(st, &def.content, bx, by, bz);
+  CadBlockBakeBasePoint(&def);
+  for (const CadBlockNested& n : def.content.nested) {
+    if (CadBlockWouldCycle(st.blockDefs, def.name, n.defName)) {
+      log.push_back("BLOCK \u2014 refused: nested block would create a circular reference.");
+      return false;
+    }
+  }
+  st.blockDefs.push_back(std::move(def));
+  if (mode == "delete" || mode == "convert")
+    EraseSelectedSources(st);
+  st.selection.clear();
+  if (mode == "convert") {
+    CadBlockRef r;
+    r.defName = name;
+    r.xf.x = bx;
+    r.xf.y = by;
+    r.xf.z = bz;
+    st.cadBlockRefs.push_back(std::move(r));
+    st.cadBlockRefAttrs.push_back(NewBlockAttr(st));
+    st.selection.push_back({SelectedEntity::Type::BlockRef, static_cast<int>(st.cadBlockRefs.size()) - 1});
+  }
+  NoteRecent(st, name);
+  BumpCadGpuCache(st);
+  log.push_back("BLOCK \u2014 created \"" + name + "\".");
+  st.blockCreateDialogOpen = false;
+  st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+  return true;
+}
+
+void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  SubmitBlockCreateBasePointPick(st, wx, wy, 0.f, log);
+}
+
+void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
+  if (st.blockCreatePhase != AppCommandState::BlockCreatePhase::WaitBasePoint)
+    return;
+  st.blockCreateBaseX = wx;
+  st.blockCreateBaseY = wy;
+  st.blockCreateBaseZ = wz;
+  st.blockCreateSpecifyBase = false;
+  // If name and selection are already valid, create immediately; otherwise re-open dialog for user to complete.
+  std::string name = StringUtil::trimCopy(std::string(st.blockCreateName));
+  bool canCreate = !name.empty() && CadBlockFindDef(st.blockDefs, name) < 0 && !st.selection.empty();
+  if (canCreate) {
+    st.blockCreateDialogOpen = false;
+    st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+    CommitBlockCreateFromState(st, log);
+  } else {
+    st.blockCreateDialogOpen = true;
+    st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+    log.push_back("BLOCK \u2014 base point picked; complete the dialog and click OK.");
+  }
+}
+
+void CommitBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.blockCreateDialogOpen) return;
+  std::string name = StringUtil::trimCopy(std::string(st.blockCreateName));
+  if (name.empty()) {
+    log.push_back("BLOCK \u2014 block name is required.");
+    return;
+  }
+  if (CadBlockFindDef(st.blockDefs, name) >= 0) {
+    log.push_back("BLOCK \u2014 name \"" + name + "\" is already used.");
+    return;
+  }
+  if (st.selection.empty()) {
+    log.push_back("BLOCK \u2014 select geometry first, then run BLOCK.");
+    return;
+  }
+  if (st.blockCreateSpecifyBase) {
+    st.blockCreateDialogOpen = false;
+    st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitBasePoint;
+    log.push_back("BLOCK \u2014 pick base point (ESC cancels).");
+    return;
+  }
+  CommitBlockCreateFromState(st, log);
+}
+
+void CancelBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log) {
+  (void)log;
+  st.blockCreateDialogOpen = false;
+  st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+}
+
 void CadBlocksApplyInsertNameDefaults(AppCommandState& st) {
   // Previously forced 90° for matchline blocks — a workaround for INSERT applying rotation
   // counter-clockwise. The bundled matchline definitions are authored pointing north, and INSERT
