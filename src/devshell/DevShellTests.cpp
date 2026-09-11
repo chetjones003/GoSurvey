@@ -3,9 +3,13 @@
 #ifdef GOSURVEY_DEVELOPER_SHELL
 
 #include "CadBlocks.hpp"
+#include "CadUi.hpp"
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "util/cadblock.hpp"
+#include "brep.hpp"
+#include "solidpick.hpp"
+#include "render/Camera.hpp"
 
 #include <imgui.h>
 #include <imgui_te_context.h>
@@ -212,6 +216,136 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(std::strstr(actClip, "// Developer Shell activity log") != nullptr);
   };
 
+
+  // --- REQ-331 CHAMFER, driven through the REAL GUI (TASK-229) -----------------------------------
+  //
+  // Everything else about the solid chamfer is covered by unit tests and headless transcripts. Two
+  // things are not, and neither can be:
+  //
+  //   * the sub-object pre-highlight, which needs a MODIFIER-HELD CURSOR over a specific 3D edge.
+  //     TASK-221 left this as DEBT-2 and TASK-222 shipped an "argument from similarity" in place of
+  //     a measurement. This is the measurement.
+  //   * that a Ctrl+click in the viewport reaches the chamfer at all. The transcripts use a
+  //     `SUBOBJECT` driver verb, which is the pick's INTERNALS - it never exercises the routing from
+  //     a real mouse button through `ViewportPickPolicy` to the sub-object pick.
+  //
+  // The cursor is aimed by projecting a world point with the same camera the viewport draws with,
+  // then offsetting by the viewport image's screen origin (`DevShell_ViewportRect`, REQ-161).
+  ImGuiTest* chamfer = IM_REGISTER_TEST(engine, "gosurvey", "req331-chamfer-viewport");
+  chamfer->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+
+    // The app opens on the Start tab (REQ-308, index 0), which backs no document and draws no 3D
+    // viewport at all. Everything below needs a real drawing, so make one the way a user does.
+    if (s_cmd->activeDrawingIdx == 0) {
+      // `NewDrawingInTab` is what the start screen's "New Drawing" button and the tab strip's "+"
+      // both call. Reached directly rather than by clicking, for the reason the headless driver
+      // reaches `SetActiveSpace` directly: the button is inside a child region whose ImGui path is an
+      // implementation detail of the start screen, and this test is about the CHAMFER, not about how
+      // that screen is laid out.
+      std::vector<std::string>* log = DevShell_CommandLog();
+      IM_CHECK(log != nullptr);
+      NewDrawingInTab(*s_cmd, *log);
+      ctx->Yield(6);
+    }
+    IM_CHECK(s_cmd->activeDrawingIdx != 0);
+
+    SubmitCad(ctx, "BOX 0,0 20 10 8");
+    ctx->Yield(4);
+    IM_CHECK_EQ(s_cmd->cadSolids.size(), static_cast<std::size_t>(1));
+
+    // Orbit, so a top edge is not directly behind the bottom edge under it - in PLAN view a ray at
+    // one also passes through the other and which comes back is a depth-order detail. There is no
+    // typed verb for this (the product routes are the ViewCube and a mouse drag), so the test writes
+    // the same two fields they do - which is exactly what the headless driver's VIEWANGLES does.
+    s_cmd->viewportAzimuthDeg = 135.f;
+    s_cmd->viewportElevationDeg = 20.f;
+
+    // Framed EXPLICITLY rather than with ZOOM EXTENTS, and the measurement is why: extents frames the
+    // plan FOOTPRINT (its own log line says "span 20 x 10") and leaves the target at z = 0, so on an
+    // orbited view of a box 8 tall the top-back edge projected to y = -33 - just off the top of the
+    // image, which is where the cursor was landing. Target the box centre and give the view room:
+    // orthoHalfH is 50/zoom, so zoom 3.2 shows +-15.6 vertically against a box whose largest half
+    // extent is about 12.
+    s_cmd->viewportPanX = 0.f;
+    s_cmd->viewportPanY = 0.f;
+    s_cmd->viewportPanZ = 4.f;
+    s_cmd->viewportZoom = 3.2f;
+    ctx->Yield(10);  // the rect is written while the viewport DRAWS, so let it draw
+
+    float ox = 0.f;
+    float oy = 0.f;
+    float sw = 0.f;
+    float sh = 0.f;
+    IM_CHECK(DevShell_ViewportRect(&ox, &oy, &sw, &sh));
+
+    // The top-back edge of a 20 x 10 x 8 box centred on the origin runs along X at y = 5, z = 8.
+    const Camera cam = CadViewCamera(*s_cmd);
+    float px = 0.f;
+    float py = 0.f;
+    cam.WorldToScreen(0.0, 5.0, 8.0, sw, sh, &px, &py);
+    const ImVec2 onEdge(ox + px, oy + py);
+
+    // --- The PRE-HIGHLIGHT, which is the whole reason this test is in the GUI ----------------------
+    // CHAMFER with nothing selected opens the 2D command; holding Ctrl over a solid edge must then
+    // light that edge up. Before REQ-331 nothing lit up at all while CHAMFER ran.
+    SubmitCad(ctx, "CHAMFER");
+    ctx->Yield();
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::Chamfer);
+
+    // Ctrl goes down BEFORE the cursor arrives, and the cursor then arrives in two steps. The hover
+    // pick is rate-gated and only re-runs when the cursor, the view or the geometry moves (issue
+    // #166), so pressing Ctrl after the move can land in a window where the gate has already decided
+    // "no hover" and has nothing to make it look again. Ordering it this way was flaky-then-green
+    // once before this comment existed.
+    ctx->KeyDown(ImGuiMod_Ctrl);
+    ctx->Yield(2);
+    ctx->MouseMoveToPos(ImVec2(onEdge.x + 24.f, onEdge.y + 24.f));
+    ctx->Yield(2);
+    ctx->MouseMoveToPos(onEdge);
+    ctx->Yield(10);  // the hover pick is rate-gated to ~30 Hz, so one frame is not enough
+    IM_CHECK(s_cmd->subObjectHoverValid);
+    IM_CHECK_EQ(s_cmd->subObjectHover.kind, solidpick::Kind::Edge);
+    DevShell_Logf("test", "hovered edge %d of solid %d", s_cmd->subObjectHover.index,
+                  s_cmd->subObjectHover.solidIndex);
+
+    // --- What lights up is what SELECTS -------------------------------------------------------------
+    const int hoveredEdge = s_cmd->subObjectHover.index;
+    ctx->MouseClick(ImGuiMouseButton_Left);
+    ctx->Yield(2);
+    ctx->KeyUp(ImGuiMod_Ctrl);
+    ctx->Yield();
+    IM_CHECK_EQ(s_cmd->subObjectSelection.size(), static_cast<std::size_t>(1));
+    IM_CHECK_EQ(s_cmd->subObjectSelection[0].kind, solidpick::Kind::Edge);
+    IM_CHECK_EQ(s_cmd->subObjectSelection[0].index, hoveredEdge);
+
+    // --- The refusal, by name, with the solid untouched ---------------------------------------------
+    SubmitCad(ctx, "100");
+    ctx->Yield(2);
+    IM_CHECK(CadLogHas("too large"));
+    IM_CHECK(CadLogHas("specify a different distance"));
+    // TASK-224: the refusal must NOT be followed by a contradictory parse complaint.
+    IM_CHECK(!CadLogHas("Could not parse CHAMFER"));
+    IM_CHECK_EQ(s_cmd->subObjectSelection.size(), static_cast<std::size_t>(1));
+
+    // --- And the bevel itself, against REQ-331's closed form ----------------------------------------
+    SubmitCad(ctx, "2");
+    ctx->Yield(2);
+    IM_CHECK_EQ(s_cmd->cadSolids.size(), static_cast<std::size_t>(1));
+    const brep::MassProperties mp = brep::ComputeMassProperties(*s_cmd->cadSolids[0]);
+    IM_CHECK(mp.valid);
+    IM_CHECK(std::fabs(mp.volume - 1560.0) < 1e-6);
+    IM_CHECK(std::fabs(mp.surfaceArea - (796.0 + 40.0 * 1.41421356237309504880)) < 1e-6);
+    IM_CHECK_EQ(s_cmd->cadSolids[0]->faces.size(), static_cast<std::size_t>(7));
+    IM_CHECK(s_cmd->subObjectSelection.empty());
+
+    // Queued, not `DevShell_SaveWindowScreenshot`: that one reads the GL FRONT buffer as it is called,
+    // and at the end of a test the frame it wants has not been presented - it captured pure black.
+    DevShell_RequestScreenshot("devshell-req331-chamfer.bmp");
+    ctx->Yield(4);
+    IM_CHECK(CancelToIdle(ctx));
+  };
+
   ImGuiTest* blocks = IM_REGISTER_TEST(engine, "gosurvey", "issue124-blocks");
   blocks->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
@@ -305,15 +439,14 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(!s_cmd->paperLayouts[0].paperBlockRefs.empty());
     SubmitCad(ctx, "BLOCKMODEL");
 
-    SubmitCad(ctx, "WBLOCK HYDRANT, issue124-wblock.gs");
-    IM_CHECK(CadLogHas("WBLOCK"));
-    SubmitCad(ctx, "BLOCKIMPORT issue124-wblock.gs");
+    // WBLOCK/BLOCKIMPORT's .gs round-trip was removed by issue #264 (D-2026-09-03-h) and
+    // replaced with a .dwg-based one by issue #284 (CadBlockImportTests.cpp covers it).
 
     std::vector<std::string> ioLog;
-    IM_CHECK(SaveGoSurveyFile(*s_cmd, "issue124-roundtrip.gs", ioLog));
+    IM_CHECK(SaveGoSurveyTemplateFile(*s_cmd, "issue124-roundtrip.json", ioLog));
     {
       AppCommandState loaded;
-      IM_CHECK(LoadGoSurveyFile(loaded, "issue124-roundtrip.gs", ioLog));
+      IM_CHECK(LoadGoSurveyTemplateFile(loaded, "issue124-roundtrip.json", ioLog));
       IM_CHECK(!loaded.blockDefs.empty());
       IM_CHECK(!loaded.cadBlockRefs.empty());
     }

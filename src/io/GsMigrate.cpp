@@ -2,23 +2,38 @@
 
 namespace {
 
-// No migrations yet: `.gs` is at version 1, and every change through REQ-044…REQ-076 was additive
-// and handled by the tolerant-key pattern (ADR-030 (f)), which stays the right tool for those.
-//
-// The first entry here will be added by whichever change cannot be expressed additively — a
-// renamed field, a changed unit, a restructured store. When that happens: bump kGsFormatVersion
-// in GsIo.cpp, add a step with fromVersion equal to the OLD version, and add a test that loads a
-// document in the old shape and asserts the new one.
+// v1 -> v2 (REQ-314 B2b-1, D-2026-09-02-h): a `brep` solid edge may now be `CurveKind::Ellipse`
+// (kind 2), carrying a second radius `r2`. A v1 document has no such edge — every solid edge is a
+// line or an arc — so carrying it forward is a pure relabel and the resave is byte-identical. The
+// version bump exists so an *older* GoSurvey refuses an ellipse-edge drawing by name (via the
+// downgrade branch above) rather than silently mis-reading the edge.
+bool MigrateV1ToV2(nlohmann::json& /*doc*/, std::string& /*err*/) { return true; }
+
+// v2 -> v3 (REQ-314 B2b-2, D-2026-09-03-a): a `brep` solid edge may now be `CurveKind::Intersection`
+// (kind 3), the procedural quartic where two surfaces cross — it carries its two surfaces and an
+// on-curve witness point instead of a radius/sweep. A v2 document has no such edge, so carrying it
+// forward is a pure relabel and the resave is byte-identical. The bump exists so an older GoSurvey
+// refuses a drawing with one by name rather than mis-reading the edge as an arc.
+bool MigrateV2ToV3(nlohmann::json& /*doc*/, std::string& /*err*/) { return true; }
+
+// v3 -> v4 (REQ-315 / ADR-048, D-2026-09-03-b): a `brep` solid face may now carry a
+// `SurfaceKind::Nurbs` freeform surface — the patch a loft (and later a sweep) raises over its
+// profiles. A v3 document has no such face (loft did not exist), so carrying it forward is a pure
+// relabel and the resave is byte-identical. The bump exists so an older GoSurvey refuses a drawing
+// with a NURBS face by name rather than mis-reading the surface as a plane.
+bool MigrateV3ToV4(nlohmann::json& /*doc*/, std::string& /*err*/) { return true; }
+
 const GsMigrationStep kSteps[] = {
-    // { 1, "example: circles gain a Z coordinate", &MigrateV1ToV2 },
-    {0, nullptr, nullptr},   // placeholder so the array is never zero-length; count is 0 below
+    {1, "solids may carry elliptical intersection edges (B2b-1)", &MigrateV1ToV2},
+    {2, "solids may carry procedural intersection-curve edges (B2b-2)", &MigrateV2ToV3},
+    {3, "solids may carry freeform NURBS surface faces (REQ-315 loft)", &MigrateV3ToV4},
 };
 
 }  // namespace
 
 const GsMigrationStep* GsMigrationTable(size_t& countOut)
 {
-  countOut = 0;   // deliberately 0 — kSteps holds only the placeholder entry
+  countOut = sizeof(kSteps) / sizeof(kSteps[0]);
   return kSteps;
 }
 

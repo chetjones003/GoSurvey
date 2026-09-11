@@ -8,7 +8,7 @@
 # rebuild is dispatched by TickSurfaceRebuilds, which main.cpp's frame loop drives and this driver
 # has no frame loop for; SURFACEREBUILD is what makes the same work assertable here.
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 
 # --- nothing yet -------------------------------------------------------------------------------
 CMD SURFACELIST

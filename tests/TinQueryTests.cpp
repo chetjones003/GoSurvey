@@ -154,7 +154,7 @@ TEST_CASE("Two picks at the same location are a zero distance, not a division", 
 
 TEST_CASE("The elevation query is safe on empty and malformed input", "[tin][req074]") {
   double z = 0.0;
-  const std::vector<float> noVerts;
+  const std::vector<double> noVerts;
   const std::vector<std::uint32_t> noIndices;
   CHECK_FALSE(TinElevationAt(noVerts, noIndices, 0.0, 0.0, &z));
 
@@ -168,7 +168,7 @@ TEST_CASE("The elevation query is safe on empty and malformed input", "[tin][req
   CHECK_FALSE(TinElevationAt(t.vertsXyz, corrupt, 250.0, 250.0, &z));
 
   // A degenerate (zero-area) triangle covers no ground: it must not answer with an infinity.
-  const std::vector<float> collinear = {0, 0, 10, 100, 0, 20, 200, 0, 30};
+  const std::vector<double> collinear = {0, 0, 10, 100, 0, 20, 200, 0, 30};
   const std::vector<std::uint32_t> oneTri = {0, 1, 2};
   CHECK_FALSE(TinElevationAt(collinear, oneTri, 100.0, 0.0, &z));
 }

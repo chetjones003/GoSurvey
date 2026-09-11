@@ -1,0 +1,116 @@
+# GitHub issue #402 / REQ-329 increment 4 — STRETCH's crossing box and displacement are evaluated
+# in the active UCS plane.
+#
+# - Base / second points resolve on the work plane -> a 3D displacement (dx, dy, dz).
+# - Under a TILTED UCS the crossing box is stored in the work plane's own local 2D frame and every
+#   candidate vertex is projected the same way before the in-box test.
+#
+# Regression guard: plan view, and any UCS whose Z axis is world-Z-parallel, keep the pre-REQ-329
+# world-XY box test and 2D displacement byte-for-byte.
+
+# --- Regression: World UCS, STRETCH a line endpoint --------------------------------------------
+NEW
+CMD LINE
+CMD 0,0
+CMD 40,0
+ESC
+CMD STRETCH
+BOX 30 -10 50 10
+CLICK 0 0
+CLICK 5 0
+ESC
+# The (40,0) endpoint is in the crossing box and moves +5 in X; (0,0) stays; Z untouched.
+EXPECT LINEXYZ 0 0 0 0 45 0 0
+CHECK ALL
+
+# --- Tilted UCS (X 90): the crossing box lives in the work plane; displacement carries Z --------
+# UCS X 90: basis X=(1,0,0), Y=(0,0,1), Z=(0,-1,0); CLICKUCS u v -> world (u, 0, v).
+# Line UCS (0,0)-(10,0) = world (0,0,0)-(10,0,0). Crossing box UCS u in [5,15], v in [-5,5] catches
+# the (10,0) end only. Base UCS (0,0), destination UCS (0,10) -> displacement world (0,0,10).
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+CMD STRETCH
+CLICKUCS 5 -5
+CLICKUCS 15 5
+CLICKUCS 0 0
+CLICKUCS 0 10
+ESC
+CMD UCS
+CMD W
+# The far endpoint rose 10 in world Z; the near one is outside the box and did not move.
+EXPECT LINEXYZ 0 0 0 0 10 0 10
+CHECK ALL
+
+# --- Tilted UCS: a vertex outside the box IN THE WORK-PLANE FRAME is left alone -----------------
+# The line's endpoints sit at UCS v = 0; this box covers the right u range but UCS v in [10,20], so
+# the flat world-XY candidacy still picks the line (it ignores the v/Z axis) yet neither endpoint
+# is in the box once projected into the plane -> a legitimate no-op. Before REQ-329 the box test
+# ignored the plane entirely and both endpoints would have moved.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+CMD STRETCH
+CLICKUCS -5 10
+CLICKUCS 15 20
+CLICKUCS 0 0
+CLICKUCS 0 10
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+CHECK ALL
+
+# --- Tilted UCS: a polyline — only the in-box vertices move, in 3D ------------------------------
+# Polyline UCS (0,0)-(10,0)-(20,0) = world (0,0,0)-(10,0,0)-(20,0,0). Box UCS u in [15,25] catches
+# the last vertex only. Displacement UCS (0,0)->(0,5) = world (0,0,5).
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD POLYLINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+CLICKUCS 20 0
+CMD
+CMD STRETCH
+CLICKUCS 15 -5
+CLICKUCS 25 5
+CLICKUCS 0 0
+CLICKUCS 0 5
+ESC
+CMD UCS
+CMD W
+EXPECT POLYVERT 0 0 0 0 0
+EXPECT POLYVERT 0 1 10 0 0
+EXPECT POLYVERT 0 2 20 0 5
+CHECK ALL
+
+# --- Regression: plan-rotated UCS (Z 30) keeps the world-XY box and 2D displacement -------------
+NEW
+CMD LINE
+CMD 0,0
+CMD 40,0
+ESC
+CMD UCS
+CMD Z
+CMD 30
+CMD STRETCH
+BOX 30 -10 50 10
+CLICK 0 0
+CLICK 5 0
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 0 45 0 0
+CHECK ALL

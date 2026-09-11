@@ -37,6 +37,17 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
   if (upd.phase == Phase::Idle)
     return;
 
+  // REQ-077 runs during the splash; if a check is still in flight here, do not modal-block the
+  // main session — the splash should have waited it out.
+  if (upd.phase == Phase::Checking)
+    return;
+
+  // REQ-078 takes priority over REQ-336 What's New when an update is offered or installing.
+  // Clearing the flag is enough: DrawWhatsNewWindow stops opening it on the next frame, and this
+  // modal is drawn after What's New so it sits on top of the ImGui modal stack anyway.
+  cmd.showWhatsNewWindow     = false;
+  cmd.whatsNewOpeningPending = false;
+
   const char* kTitle = "Software Update";
   if (!ImGui::IsPopupOpen(kTitle))
     ImGui::OpenPopup(kTitle);
@@ -66,36 +77,6 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
 
   switch (upd.phase)
   {
-    case Phase::Checking:
-    {
-      // REQ-077 (amended): the check gates the session. This dialog is the gate — modal, so no
-      // drawing can be started on a build that is about to ask to replace itself.
-      //
-      // A negative fraction makes ImGui animate an indeterminate bar. That animation is only
-      // possible because the fetch is on a worker: a UI thread blocked on a socket cannot
-      // repaint, so a literally-blocking check would show a frozen window and Windows would
-      // paint it as "Not Responding".
-      ImGui::TextUnformatted("Checking for updates...");
-      ImGui::ProgressBar(-1.f * static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f), "");
-      ImGui::TextDisabled("GoSurvey %s - %s channel", upd.runningVersion.c_str(),
-                          upd.prefs.useBetaChannel ? "beta" : "stable");
-      ImGui::Separator();
-      // An escape hatch for the case the connectivity pre-check cannot catch: a captive portal or
-      // a network that answers but never completes, where the gate would otherwise hold the user
-      // for the full timeout.
-      if (ImGui::Button("Continue without checking", ImVec2(220.f, 0.f)))
-      {
-        // The worker is deliberately left running rather than cancelled. WinHttpReadData is
-        // already blocked and cannot be interrupted, and destroying the task here would join that
-        // thread on the UI thread — reintroducing exactly the freeze this button exists to avoid.
-        // Dropping to Idle means PollUpdateTask discards the result when it lands (the stale-task
-        // path), which is correct: the user has said they do not want it.
-        upd.phase = Phase::Idle;
-        ImGui::CloseCurrentPopup();
-      }
-      break;
-    }
-
     case Phase::UpdateReady:
     {
       ImGui::Text("GoSurvey %s is available.", upd.available.version.c_str());

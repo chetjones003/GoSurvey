@@ -30,7 +30,13 @@ std::string DwgVersionName(const char* pathUtf8);
 bool ImportDwgFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 
-/// REQ-175: Open/Save a drawing path. `.gs` uses GsIo; otherwise DWG (payload when present).
+/// Append the GoSurvey JSON trailer to an on-disk DWG (LibreDWG bytes only). Used by ExportDwgFile;
+/// exposed for regression tests of the locked-file retry path (issue #167).
+bool AppendGoSurveyPayloadToDwgFile(const char* pathUtf8, const AppCommandState& st,
+                                    std::vector<std::string>& log);
+
+/// REQ-175: Open/Save a drawing path. `.dwg` (payload when present) — `.gs` is no longer an
+/// openable document format (issue #264).
 bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 

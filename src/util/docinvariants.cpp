@@ -24,8 +24,9 @@ void CheckStride(std::vector<InvariantViolation>* out, const char* store, size_t
 
 /// Every float in a flat store must be finite. Reports the FIRST offending index only: a NaN
 /// usually arrives in a whole run, and one report per float would bury the finding in its own noise.
+template <class VT>
 void CheckFinite(std::vector<InvariantViolation>* out, const char* store,
-                 const std::vector<float>& v) {
+                 const std::vector<VT>& v) {
   for (size_t i = 0; i < v.size(); ++i) {
     if (std::isfinite(v[i]))
       continue;
@@ -37,12 +38,12 @@ void CheckFinite(std::vector<InvariantViolation>* out, const char* store,
   }
 }
 
-void CheckFiniteScalar(std::vector<InvariantViolation>* out, const char* what, float value,
+void CheckFiniteScalar(std::vector<InvariantViolation>* out, const char* what, double value,
                        int entityIndex) {
   if (std::isfinite(value))
     return;
   char buf[64];
-  std::snprintf(buf, sizeof buf, "%g", static_cast<double>(value));
+  std::snprintf(buf, sizeof buf, "%g", value);
   Add(out, docinv::kFiniteCoords, std::string(what) + " = " + buf, entityIndex);
 }
 
@@ -100,6 +101,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   // --- Flat store strides (architecture §11.8) -----------------------------------------------
   CheckStride(out, "userLinesFlat", st.userLinesFlat.size(), 6);       // two XYZ endpoints
   CheckStride(out, "userCirclesCxCyZR", st.userCirclesCxCyZR.size(), 4);
+  CheckStride(out, "userCircleNormals", st.userCircleNormals.size(), 3);   // REQ-312
   CheckStride(out, "userPolylineVerts", st.userPolylineVerts.size(), 3);
   CheckStride(out, "featureLineVerts", st.featureLineVerts.size(), 3);   // REQ-087, §11.8
   for (size_t i = 0; i < st.cadFilledRegions.size(); ++i) {
@@ -110,8 +112,43 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   // --- Finite coordinates ---------------------------------------------------------------------
   CheckFinite(out, "userLinesFlat", st.userLinesFlat);
   CheckFinite(out, "userCirclesCxCyZR", st.userCirclesCxCyZR);
+  CheckFinite(out, "userCircleNormals", st.userCircleNormals);
   CheckFinite(out, "userPolylineVerts", st.userPolylineVerts);
   CheckFinite(out, "featureLineVerts", st.featureLineVerts);
+  // REQ-316 / ADR-047: per-vertex bulge array — empty, or exactly one entry per vertex, all finite.
+  if (!st.userPolylineVertsBulge.empty() &&
+      st.userPolylineVertsBulge.size() != st.userPolylineVerts.size() / 3) {
+    Add(out, docinv::kPolylineBulge,
+        "userPolylineVertsBulge holds " + std::to_string(st.userPolylineVertsBulge.size()) +
+            " entries but userPolylineVerts holds " + std::to_string(st.userPolylineVerts.size() / 3) +
+            " vertices; the bulge array is per vertex (0 = straight)");
+  }
+  for (size_t i = 0; i < st.userPolylineVertsBulge.size(); ++i)
+    if (!std::isfinite(st.userPolylineVertsBulge[i]))
+      Add(out, docinv::kPolylineBulge,
+          "userPolylineVertsBulge[" + std::to_string(i) + "] is not finite");
+  // REQ-325 / ADR-053: per-vertex curve-plane normal — empty, or exactly one (stride-3) entry per
+  // vertex, same additive/omit-when-default rule bulge itself follows one line up.
+  CheckStride(out, "userPolylineVertsNormal", st.userPolylineVertsNormal.size(), 3);
+  if (!st.userPolylineVertsNormal.empty() &&
+      st.userPolylineVertsNormal.size() / 3 != st.userPolylineVerts.size() / 3) {
+    Add(out, docinv::kPolylineBulge,
+        "userPolylineVertsNormal holds " + std::to_string(st.userPolylineVertsNormal.size() / 3) +
+            " entries but userPolylineVerts holds " + std::to_string(st.userPolylineVerts.size() / 3) +
+            " vertices; the normal array is per vertex");
+  }
+  for (size_t i = 0; i + 2 < st.userPolylineVertsNormal.size(); i += 3) {
+    const float nx = st.userPolylineVertsNormal[i], ny = st.userPolylineVertsNormal[i + 1],
+               nz = st.userPolylineVertsNormal[i + 2];
+    if (!std::isfinite(nx) || !std::isfinite(ny) || !std::isfinite(nz)) {
+      Add(out, docinv::kPolylineBulge, "userPolylineVertsNormal[" + std::to_string(i / 3) + "] is not finite");
+      continue;
+    }
+    const float len2 = nx * nx + ny * ny + nz * nz;
+    if (std::fabs(len2 - 1.0f) > 1e-3f)
+      Add(out, docinv::kPolylineBulge,
+          "userPolylineVertsNormal[" + std::to_string(i / 3) + "] is not a unit vector");
+  }
   for (size_t i = 0; i < st.userArcs.size(); ++i) {
     const CadArc& a = st.userArcs[i];
     const std::string p = "userArcs[" + std::to_string(i) + "].";
@@ -121,6 +158,9 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     CheckFiniteScalar(out, (p + "startRad").c_str(), a.startRad, static_cast<int>(i));
     CheckFiniteScalar(out, (p + "sweepRad").c_str(), a.sweepRad, static_cast<int>(i));
     CheckFiniteScalar(out, (p + "z").c_str(), a.z, static_cast<int>(i));
+    CheckFiniteScalar(out, (p + "nx").c_str(), a.nx, static_cast<int>(i));
+    CheckFiniteScalar(out, (p + "ny").c_str(), a.ny, static_cast<int>(i));
+    CheckFiniteScalar(out, (p + "nz").c_str(), a.nz, static_cast<int>(i));
   }
   for (size_t i = 0; i < st.userEllipses.size(); ++i) {
     const CadEllipse& e = st.userEllipses[i];
@@ -148,12 +188,15 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   // --- Parallel attribute arrays ----------------------------------------------------------------
   CheckAttrCount(out, "lines", st.userLinesFlat.size() / 6, st.userLineAttrs.size());
   CheckAttrCount(out, "circles", st.userCirclesCxCyZR.size() / 4, st.userCircleAttrs.size());
+  CheckAttrCount(out, "circle normals", st.userCirclesCxCyZR.size() / 4,
+                 st.userCircleNormals.size() / 3);   // REQ-312 side-car (D-2026-08-31-f)
   CheckAttrCount(out, "arcs", st.userArcs.size(), st.userArcAttrs.size());
   CheckAttrCount(out, "ellipses", st.userEllipses.size(), st.userEllAttrs.size());
   CheckAttrCount(out, "annotations", st.cadAnnotations.size(), st.cadAnnotationAttrs.size());
   CheckAttrCount(out, "filled regions", st.cadFilledRegions.size(), st.cadFilledRegionAttrs.size());
   CheckAttrCount(out, "meshes", st.cadMeshes.size(), st.cadMeshAttrs.size());
   CheckAttrCount(out, "surfaces", st.cadSurfaces.size(), st.cadSurfaceAttrs.size());
+  CheckAttrCount(out, "solids", st.cadSolids.size(), st.cadSolidAttrs.size());  // REQ-313
   CheckAttrCount(out, "tables", st.cadTables.size(), st.cadTableAttrs.size());
   CheckAttrCount(out, "block refs", st.cadBlockRefs.size(), st.cadBlockRefAttrs.size());
   CheckAttrCount(out, "polylines", PolylineCount(st), st.userPolylineAttrs.size());
@@ -328,6 +371,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       case T::Surface:      return st.cadSurfaces.size();  // REQ-068 / ADR-036 (b)
       case T::Table:        return st.cadTables.size();
       case T::BlockRef:     return st.cadBlockRefs.size();  // GitHub issue #124
+      case T::Solid:        return st.cadSolids.size();      // REQ-313 / ADR-045
       }
       return 0;
     };

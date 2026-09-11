@@ -20,7 +20,7 @@
 namespace hatchboundary {
 
 struct Seg {
-  float x0, y0, x1, y1;
+  double x0, y0, x1, y1;
 };
 
 namespace detail {

@@ -1,0 +1,146 @@
+# REQ-060 rotate and scale handles (TASK-232, GitHub issue #148 acceptance 4, slice 3 of 3).
+#
+# The companion to `req060-gizmo-translate`, driving the two new operations through the CAMERA the
+# same way — GRAB and DROP aim a ray at a world point and let the pick, the projection and the
+# transform decide the rest. `GizmoRotateScaleTests` owns the agreement-with-the-typed-command
+# assertion, which needs the handle length in hand; what only this file can show is the whole chain
+# working end to end in a drawing, including the operation switch and the undo.
+#
+# Handle geometry, carried over from the translate transcript because the arithmetic below depends on
+# it: the default view has zoom 1, so the camera's ortho half-height is 50 world units and a
+# windowless run gets a 1200 x 700 viewport. That is 100 / 700 world units per pixel, so the
+# 70-pixel handle — and therefore the rotate RING's radius — is 10 units, and the 7-pixel grab
+# aperture is 1 unit.
+#
+# THE RING'S FRAME. `CadAxisDragAngle` builds its measuring frame from the AXIS alone, never the
+# camera, so a transcript can name a point on the ring exactly. For a ring about world Z the frame
+# comes out e0 = (0,-1,0) and e1 = (1,0,0), so the point at parameter t is
+# anchor + 10*(sin t, -cos t, 0): parameter 0 is 10 units in -Y, and a quarter turn is 10 units in +X.
+
+# --- The operation is a stored SETTING, and GIZMO switches it -------------------------------------
+NEW
+EXPECT GIZMOOP 0
+CMD GIZMO ROTATE
+EXPECT LOG "GIZMO — ROTATE."
+EXPECT GIZMOOP 1
+CMD GIZMO SCALE
+EXPECT GIZMOOP 2
+CMD GIZMO MOVE
+EXPECT GIZMOOP 0
+# Bare GIZMO reports rather than changes — safe to type when you have forgotten where it is.
+CMD GIZMO
+EXPECT LOG "currently MOVE"
+EXPECT GIZMOOP 0
+CMD GIZMO SIDEWAYS
+EXPECT LOG "unknown mode"
+EXPECT GIZMOOP 0
+CHECK ALL
+
+# --- Handle counts: three to move, ONE to turn, ONE to resize -------------------------------------
+# Not an implementation detail. A ring on UCS X or Y would have no typed command to agree with
+# (typed ROTATE is UCS-Z-only, REQ-329), and a per-axis scale handle would advertise a non-uniform
+# scale the representation cannot hold (REQ-332 item 7). The counts ARE that decision.
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+EXPECT SELECTED 1
+CMD GIZMO MOVE
+EXPECT GIZMOAXES 3
+CMD GIZMO ROTATE
+EXPECT GIZMOAXES 1
+EXPECT GIZMO 1
+CMD GIZMO SCALE
+EXPECT GIZMOAXES 1
+CHECK ALL
+
+# REQ-060 bullet 3 holds under every operation, not only the one it was written against: an empty
+# selection has no anchor, so nothing is drawn whatever the gizmo is set to.
+NEW
+CMD GIZMO ROTATE
+EXPECT SELECTED 0
+EXPECT GIZMO 0
+EXPECT GIZMOAXES 0
+CMD GIZMO SCALE
+EXPECT GIZMO 0
+EXPECT GIZMOAXES 0
+CHECK ALL
+
+# --- A rotate drag turns the selection, and one Ctrl+Z puts it back -------------------------------
+# The line (10,0)-(20,0) has its bounding-box centre at (15,0), so that is where the ring hangs.
+# GRAB at parameter 0 = (15,-10) and DROP at a quarter turn = (25,0). A quarter turn CCW about
+# (15,0) takes (10,0) to (15,-5) and (20,0) to (15,5).
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+EXPECT SELECTED 1
+CMD GIZMO ROTATE
+GIZMO GRAB 15 -10 0
+EXPECT GIZMOAXIS 0
+GIZMO DROP 25 0 0
+EXPECT LINEXYZ 0 15 -5 0 15 5 0
+UNDO
+EXPECT LINEXYZ 0 10 0 0 20 0 0
+CHECK ALL
+
+# --- A scale drag resizes it, about the same anchor ------------------------------------------------
+# The scale handle runs along UCS X from the anchor, and the factor is the RATIO of the drop's
+# distance from the anchor to the grab's. GRAB at the tip (25,0) is 10 out; DROP at (35,0) is 20 out;
+# so the factor is exactly 2. Doubling about (15,0) sends (10,0) to (5,0) and (20,0) to (25,0).
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+CMD GIZMO SCALE
+GIZMO GRAB 25 0 0
+EXPECT GIZMOAXIS 0
+GIZMO DROP 35 0 0
+EXPECT LINEXYZ 0 5 0 0 25 0 0
+UNDO
+EXPECT LINEXYZ 0 10 0 0 20 0 0
+CHECK ALL
+
+# --- A solid turns and resizes through the gizmo too (REQ-332) -------------------------------------
+# The whole point of the chain: slice 1 gave the kernel `brep::Rotate` / `brep::Scale`, slice 2 let
+# the typed commands reach a solid, and this handle commits through those same typed functions. A
+# rotation is an isometry, so volume and area are unchanged; a scale by 2 multiplies them by 8 and 4.
+NEW
+CMD BOX 0,0 20 10 8
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
+CMD GIZMO ROTATE
+# The box's bounding-box centre is (0,0,4), so the ring hangs there: parameter 0 is (0,-10,4) and a
+# quarter turn is (10,0,4). Turning 90 CCW about the vertical through (0,0) swaps the extents.
+GIZMO GRAB 0 -10 4
+GIZMO DROP 10 0 4
+EXPECT SOLIDBOUNDS 0 -5 -10 0 5 10 8
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+UNDO
+EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
+CHECK ALL
+
+# --- ...and the scale handle, on the same solid ----------------------------------------------------
+# Anchor (0,0,4). GRAB 10 out along X at (10,0,4), DROP 20 out at (20,0,4) — a factor of 2 about
+# (0,0,4), so z in [0,8] becomes [-4,12] and the volume goes 1600 -> 12800.
+# Re-selected explicitly: the UNDO above restores the document, and the selection does not survive
+# it. Stated rather than assumed, since a grab with nothing selected fails as a missing handle and
+# would read as a broken pick.
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+CMD GIZMO SCALE
+GIZMO GRAB 10 0 4
+GIZMO DROP 20 0 4
+EXPECT SOLIDBOUNDS 0 -20 -10 -4 20 10 12
+EXPECT SOLIDPROPS 0 12800 3520 8 12 6
+UNDO
+EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CHECK ALL

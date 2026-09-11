@@ -4,8 +4,10 @@
 #include "geom2d.hpp"
 #include "util/cadblock.hpp"
 #include "util/curveintersect.hpp"
+#include "util/solidpick.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -45,6 +47,105 @@ constexpr float kHugePickDistSq = 1.e30f;
   const float d1 = DistSqPointToSegment(wx, wy, e - s, n - s, e + s, n + s);
   const float d2 = DistSqPointToSegment(wx, wy, e - s, n + s, e + s, n - s);
   return std::min(d1, d2);
+}
+
+/// An arc's plane, and whether it is the flat one (REQ-312).
+///
+/// True means the arc lies in a plane parallel to world XY -- every arc that predates the normal --
+/// and \p outPlane is left alone so the caller keeps its existing two-dimensional arithmetic, bit
+/// for bit. Otherwise the arc's own frame is built here, once per arc rather than once per sample.
+[[nodiscard]] bool ArcSnapPlane(const CadArc& a, ucs::Ucs* outPlane) {
+  if (IsFlatNormal(a.nx, a.ny, a.nz))
+    return true;
+  if (outPlane)
+    *outPlane = CurvePlane(a);
+  return false;
+}
+
+/// The point at angle \p t on an arc, in the plane the arc actually lies in.
+///
+/// A snap has to offer points that are ON the drawn curve. A tilted arc walked in the XY projection
+/// puts every candidate somewhere the curve does not go, so the glyph marks empty space and a click
+/// commits to a point that is not on the object it claims to have snapped to (REQ-062, REQ-201).
+void ArcSnapPoint(const CadArc& a, const ucs::Ucs& plane, bool flat, double t, float* ox, float* oy, float* oz) {
+  if (flat) {
+    double x = 0.;
+    double y = 0.;
+    CirclePointWorld(static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.r), t, &x, &y);
+    *ox = static_cast<float>(x);
+    *oy = static_cast<float>(y);
+    *oz = a.z;
+    return;
+  }
+  const ray3d::Vec3 p = CurvePointAt(plane, static_cast<double>(a.r), t);
+  *ox = static_cast<float>(p.x);
+  *oy = static_cast<float>(p.y);
+  *oz = static_cast<float>(p.z);
+}
+
+// --- Quadrant snap (REQ-330) -------------------------------------------------------------------
+
+/// True when angle \p t (radians) lies within the arc sweep [\p startRad, \p startRad+\p sweepRad],
+/// handling a negative sweep and wrap-around. A (near-)full turn contains every angle.
+[[nodiscard]] bool AngleWithinSweep(double startRad, double sweepRad, double t) {
+  constexpr double kTwoPi = 6.28318530717958647692;
+  if (std::fabs(sweepRad) >= kTwoPi - 1.e-9)
+    return true;
+  double rel = std::fmod((sweepRad >= 0.0 ? t - startRad : startRad - t), kTwoPi);
+  if (rel < 0.0)
+    rel += kTwoPi;
+  return rel <= std::fabs(sweepRad) + 1.e-9;
+}
+
+/// The four world-space unit directions from a circle/arc centre to its quadrant points: the active
+/// UCS X and Y axes projected onto the curve's plane \p curvePlane, normalised, as `+X, +Y, -X, -Y`.
+///
+/// When the curve plane is perpendicular to the UCS plane the two projected axes collapse onto one
+/// line (near-zero length, or near-parallel) — only two distinct points. \p dir is then filled with
+/// the curve plane's OWN local axes instead, so four evenly spaced on-curve points are always
+/// returned (REQ-330 / D-2026-09-08-d). Returns true when the UCS projection was used, false on the
+/// documented fallback.
+bool QuadrantDirections(const ucs::Ucs& curvePlane, const ucs::Ucs& activeUcs, ray3d::Vec3 dir[4]) {
+  const ray3d::Vec3 n = curvePlane.zAxis;
+  const auto projectOntoPlane = [&](const ray3d::Vec3& d) {
+    return ray3d::Sub(d, ray3d::Scale(n, ray3d::Dot(d, n)));
+  };
+  ray3d::Vec3 px = projectOntoPlane(activeUcs.xAxis);
+  ray3d::Vec3 py = projectOntoPlane(activeUcs.yAxis);
+  const double lx = ray3d::Length(px);
+  const double ly = ray3d::Length(py);
+  bool degenerate = lx < 1.e-6 || ly < 1.e-6;
+  if (!degenerate) {
+    px = ray3d::Scale(px, 1.0 / lx);
+    py = ray3d::Scale(py, 1.0 / ly);
+    // Curve plane perpendicular to the UCS plane also shows up here as the two projected axes
+    // being (anti)parallel — still just two distinct points, so take the same fallback.
+    if (std::fabs(ray3d::Dot(px, py)) > 0.9999)
+      degenerate = true;
+  }
+  if (degenerate) {
+    dir[0] = curvePlane.xAxis;
+    dir[1] = curvePlane.yAxis;
+    dir[2] = ray3d::Scale(curvePlane.xAxis, -1.0);
+    dir[3] = ray3d::Scale(curvePlane.yAxis, -1.0);
+    return false;
+  }
+  dir[0] = px;
+  dir[1] = py;
+  dir[2] = ray3d::Scale(px, -1.0);
+  dir[3] = ray3d::Scale(py, -1.0);
+  return true;
+}
+
+/// The plane a standalone circle lies in (REQ-312 side-car normal), world +Z for a flat circle.
+[[nodiscard]] ucs::Ucs CircleSnapPlane(const std::vector<float>& circleNormals, size_t circleIdx, float cx,
+                                       float cy, float cz) {
+  float nx = kFlatNormalX;
+  float ny = kFlatNormalY;
+  float nz = kFlatNormalZ;
+  CircleNormalAt(circleNormals, circleIdx, &nx, &ny, &nz);
+  return CurvePlane(static_cast<double>(cx), static_cast<double>(cy), static_cast<double>(cz),
+                    static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz));
 }
 
 [[nodiscard]] float CircleCenterPickDistSq(float wx, float wy, float cx, float cy, float r, float tolWorld) {
@@ -110,7 +211,8 @@ constexpr float kHugePickDistSq = 1.e30f;
   return kHugePickDistSq;
 }
 
-[[nodiscard]] bool PointInClosedPoly(float wx, float wy, const std::vector<float>& V, int v0, int v1) {
+template <class VT>
+[[nodiscard]] bool PointInClosedPoly(float wx, float wy, const std::vector<VT>& V, int v0, int v1) {
   const int n = v1 - v0;
   if (n < 3)
     return false;
@@ -130,7 +232,8 @@ constexpr float kHugePickDistSq = 1.e30f;
   return c;
 }
 
-[[nodiscard]] float ClosedPolyGeometricPickDistSq(float wx, float wy, const std::vector<float>& V, int v0,
+template <class VT>
+[[nodiscard]] float ClosedPolyGeometricPickDistSq(float wx, float wy, const std::vector<VT>& V, int v0,
                                                   int v1) {
   const int n = v1 - v0;
   if (n < 3)
@@ -150,7 +253,8 @@ constexpr float kHugePickDistSq = 1.e30f;
   return minD2;
 }
 
-[[nodiscard]] bool ClosedPolylineCentroid(const std::vector<float>& V, int v0, int v1, float* outCx,
+template <class VT>
+[[nodiscard]] bool ClosedPolylineCentroid(const std::vector<VT>& V, int v0, int v1, float* outCx,
                                           float* outCy) {
   const int n = v1 - v0;
   if (n < 3 || !outCx || !outCy)
@@ -197,16 +301,16 @@ constexpr float kHugePickDistSq = 1.e30f;
     return true;
   if (v1 - v0 < 4)
     return false;  // first == last leaves only two distinct corners — no area
-  const std::vector<float>& V = cmd.userPolylineVerts;
-  float mnX = V[static_cast<size_t>(v0 * 3)], mxX = mnX;
-  float mnY = V[static_cast<size_t>(v0 * 3 + 1)], mxY = mnY;
+  const std::vector<double>& V = cmd.userPolylineVerts;
+  double mnX = V[static_cast<size_t>(v0 * 3)], mxX = mnX;
+  double mnY = V[static_cast<size_t>(v0 * 3 + 1)], mxY = mnY;
   for (int i = v0; i < v1; ++i) {
     mnX = std::min(mnX, V[static_cast<size_t>(i * 3)]);
     mxX = std::max(mxX, V[static_cast<size_t>(i * 3)]);
     mnY = std::min(mnY, V[static_cast<size_t>(i * 3 + 1)]);
     mxY = std::max(mxY, V[static_cast<size_t>(i * 3 + 1)]);
   }
-  const float tol = std::max(1.e-6f * std::hypot(mxX - mnX, mxY - mnY), 1.e-9f);
+  const double tol = std::max<double>(1.e-6 * std::hypot(mxX - mnX, mxY - mnY), 1.e-9);
   const float dx = V[static_cast<size_t>((v1 - 1) * 3)] - V[static_cast<size_t>(v0 * 3)];
   const float dy = V[static_cast<size_t>((v1 - 1) * 3 + 1)] - V[static_cast<size_t>(v0 * 3 + 1)];
   return std::hypot(dx, dy) <= tol;
@@ -234,19 +338,35 @@ struct SnapPickAccum {
 ///        Ranking against other candidates always uses the true point distance, never this value,
 ///        so a kind with a generous heuristic acceptance radius cannot out-rank a kind that is
 ///        genuinely closer to the cursor (issue #103).
+/// \param heuristicAccept true when \p pickDistSq is a "cursor is over the SHAPE" heuristic (a
+///        circle / ellipse / closed-polyline / survey-point CENTRE is offered whenever the cursor
+///        is anywhere over the shape, not only near the centroid). The plan-XY heuristic is
+///        meaningless once the view tilts, so an ORBITED caller passes true only after recomputing
+///        \p pickDistSq at the cursor ray's crossing of the shape's own plane (see
+///        \ref CenterHeuristicPoint); it passes false — plain ray-distance acceptance only — when
+///        that crossing does not exist (an edge-on view). With it set, the ray path accepts on
+///        EITHER that recomputed heuristic OR the plain ray distance, whichever is smaller (issue
+///        #372). Ranking is always the true ray distance, as issue #103 requires.
 void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float snapY, Kind kind, float pickDistSq,
-                  float tolWorld, float snapZ = 0.f) {
+                  float tolWorld, float snapZ = 0.f, bool heuristicAccept = false, bool solid = false) {
   const float tol2 = tolWorld * tolWorld;
   float rankDistSq = (snapX - wx) * (snapX - wx) + (snapY - wy) * (snapY - wy);
   // Orbited: re-measure the candidate against the cursor ray in 3D. Doing it here — at the one
   // place every candidate funnels through — means each generator keeps its own 2D construction
-  // logic and only the comparison changes. The ray distance to the actual point serves as both the
-  // acceptance and ranking metric here — there is no separate heuristic once measured against the ray.
+  // logic and only the comparison changes. The ray distance to the actual point is always the
+  // ranking metric; for an ordinary kind it is the acceptance metric too (the caller's plan-XY
+  // pickDistSq means nothing once the view tilts). A \p heuristicAccept kind keeps the caller's
+  // pickDistSq — which for the orbited path the caller has already recomputed in the shape's plane.
   if (acc->ray) {
     const double d = ray3d::RayPointDistance(
         *acc->ray, ray3d::Vec3{static_cast<double>(snapX), static_cast<double>(snapY), static_cast<double>(snapZ)});
-    pickDistSq = static_cast<float>(d * d);
-    rankDistSq = pickDistSq;
+    rankDistSq = static_cast<float>(d * d);
+    // Ordinary kind: the ray distance IS the acceptance test. Heuristic kind: accept on EITHER the
+    // shape heuristic (cursor is over the shape) OR the plain ray distance (cursor points almost
+    // straight at the point) — the latter keeps the pre-#372 envelope for a shape smaller than the
+    // aperture, which "over the shape" alone would shrink. A phantom needs BOTH to be large, so
+    // taking the min never revives one.
+    pickDistSq = heuristicAccept ? std::min(pickDistSq, rankDistSq) : rankDistSq;
   }
   if (!(pickDistSq <= tol2) || pickDistSq > 1.e28f)
     return;
@@ -258,6 +378,7 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
+    acc->best.solid = solid;
     acc->bestRankDistSq = rankDistSq;
     acc->bestPri = pri;
     return;
@@ -267,6 +388,7 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
+    acc->best.solid = solid;
     acc->bestRankDistSq = rankDistSq;
     acc->bestPri = pri;
     return;
@@ -279,15 +401,16 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
+    acc->best.solid = solid;
     acc->bestPri = pri;
   }
 }
 
 void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind kind, float tolWorld,
-              float pz = 0.f) {
+              float pz = 0.f, bool solid = false) {
   const float dx = px - wx;
   const float dy = py - wy;
-  ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz);
+  ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz, /*heuristicAccept=*/false, solid);
 }
 
 /// Mean vertex elevation of polyline loop [\p v0,\p v1) — the elevation of its geometric centre.
@@ -295,13 +418,57 @@ void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind k
 /// A centroid has no single Z once the loop is non-planar, so it gets the same averaging the
 /// centroid already is in X and Y (REQ-058). Exact for the planar case, which is every rectangle
 /// and every pre-3D polyline.
-[[nodiscard]] float PolylineLoopMeanZ(const std::vector<float>& verts, int v0, int v1) {
+template <class VT>
+[[nodiscard]] float PolylineLoopMeanZ(const std::vector<VT>& verts, int v0, int v1) {
   if (v1 <= v0)
     return 0.f;
   double zSum = 0.;
   for (int vi = v0; vi < v1; ++vi)
     zSum += static_cast<double>(verts[static_cast<size_t>(vi * 3 + 2)]);
   return static_cast<float>(zSum / static_cast<double>(v1 - v0));
+}
+
+/// Where the cursor ray crosses the horizontal plane z = \p planeZ, as XY. Returns false when the
+/// ray is (near-)parallel to that plane or the crossing is behind the camera.
+///
+/// This is the point at which a "cursor is over the SHAPE" CENTRE heuristic must be evaluated once
+/// the view is orbited (issue #372). `wx,wy` handed to \ref FindBest is the ray's crossing of the
+/// WORK plane, a different plane — testing containment there let a ray passing over an elevated
+/// shape's footprint, or above a large one in a shallow orbit, read "inside" and fire a phantom
+/// CENTRE. Every plan-view CENTRE heuristic (`CircleCenterPickDistSq` and friends) is a pure-XY
+/// test, i.e. it already treats a curve as living in the plane z = its own elevation; this feeds it
+/// the cursor position in that same plane. A ray parallel to the plane (an edge-on FRONT / LEFT /
+/// RIGHT / BACK view of a plan drawing) has no crossing; the caller then falls back to accepting
+/// CENTRE only when the ray points almost exactly at the point (see \ref CenterHeuristicPoint).
+[[nodiscard]] bool RayXyAtPlaneZ(const ray3d::Ray& ray, double planeZ, float* hx, float* hy) {
+  const double dz = ray.dir.z;
+  if (dz > -1.e-6 && dz < 1.e-6)
+    return false;
+  const double t = (planeZ - ray.origin.z) / dz;
+  if (t < 0.0)
+    return false;
+  *hx = static_cast<float>(ray.origin.x + t * ray.dir.x);
+  *hy = static_cast<float>(ray.origin.y + t * ray.dir.y);
+  return true;
+}
+
+/// Resolves where a plan-view CENTRE-family heuristic (`CircleCenterPickDistSq` and friends) should
+/// be evaluated for a candidate whose plane is z = \p planeZ, and whether that point can be trusted.
+///
+/// \p px,\p py always come back usable: the plain cursor (\p wx,\p wy) in plan / paper space, or —
+/// orbited — the cursor ray's crossing of the shape's plane. The return value is whether the
+/// heuristic applies: false when an orbited ray is (near-)parallel to the plane (an edge-on
+/// FRONT / LEFT / RIGHT / BACK view), in which case \p px,\p py stay at the raw cursor and the
+/// caller should fall back to the plain ray-distance acceptance (\c heuristicAccept = false) —
+/// i.e. the CENTRE still resolves when the ray points almost exactly at it, as it did before
+/// issue #372, just not from "anywhere over the shape".
+[[nodiscard]] bool CenterHeuristicPoint(const SnapPickAccum& acc, double wx, double wy, float planeZ, float* px,
+                                        float* py) {
+  *px = static_cast<float>(wx);
+  *py = static_cast<float>(wy);
+  if (!acc.ray)
+    return true;
+  return RayXyAtPlaneZ(*acc.ray, static_cast<double>(planeZ), px, py);
 }
 
 /// Foot of perpendicular from \p ref onto segment AB (clamped). Cursor \p wx,\p wy only gates distance.
@@ -339,7 +506,15 @@ struct IsectSeg {
   [[nodiscard]] double zAt(double t) const { return z0 + (z1 - z0) * t; }
 };
 
-/// A circle, arc or ellipse. These are planar and parallel to XY (ADR-025), so one elevation.
+/// A circle, arc or ellipse in a plane parallel to XY, so one elevation describes it.
+///
+/// REQ-312 lets an arc or circle lie in an arbitrary plane, and such a curve is NOT representable
+/// here: a tilted circle projects to an ellipse whose intersection with another curve is a
+/// different problem from the planar one this type solves. Tilted curves are therefore left out of
+/// the candidate set by the collector below rather than flattened into it -- flattening would offer
+/// an intersection point that is not on either curve, which is a wrong answer presented as a
+/// correct one (REQ-201). True 3D curve-curve intersection belongs with the modelling kernel
+/// (issue #146).
 struct IsectConic {
   curveisect::Conic k;
   double z = 0.0;
@@ -412,6 +587,10 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
     for (size_t i = 0; i + 3 < C.size(); i += 4) {
       if (C[i + 3] <= 1.e-6f)
         continue;
+      // A tilted circle (REQ-312) is not a planar-XY conic; see IsectConic. Skipped, so INTERSECTION
+      // offers nothing on it rather than offering a point that lies on neither curve.
+      if (!CircleIsFlat(cmd.userCircleNormals, i / 4))
+        continue;
       if (NearCursor(ray, wx, wy, C[i], C[i + 1], C[i + 2], C[i + 3], tol))
         conics->push_back(IsectConic{curveisect::MakeCircle(C[i], C[i + 1], C[i + 3]), C[i + 2]});
     }
@@ -419,6 +598,8 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
 
   for (const CadArc& a : cmd.userArcs) {
     if (a.r <= 1.e-6f)
+      continue;
+    if (!IsFlatNormal(a.nx, a.ny, a.nz))  // same exclusion as tilted circles above
       continue;
     if (NearCursor(ray, wx, wy, a.cx, a.cy, a.z, a.r, tol))
       conics->push_back(IsectConic{curveisect::MakeArc(a.cx, a.cy, a.r, a.startRad, a.sweepRad), a.z});
@@ -444,7 +625,7 @@ struct IsectCandidate {
 /// elevations do not touch, and reporting a snap there would place geometry on nothing.
 void ComputeTrueIntersections(const std::vector<IsectSeg>& segs, const std::vector<IsectConic>& conics,
                               std::vector<IsectCandidate>* out) {
-  constexpr double kReq101 = 0.01;  ///< ±0.01 ft — the project coordinate tolerance.
+  constexpr double kReq101 = 0.002;  ///< ±0.002 ft — the project coordinate tolerance.
   std::vector<curveisect::Hit2> hits;
 
   for (size_t i = 0; i < segs.size(); ++i) {
@@ -615,6 +796,86 @@ void ComputeApparentIntersections(const Camera& cam, const std::vector<IsectSeg>
   return false;
 }
 
+
+/// The point ON THE RAY nearest to \p e — a starting point for the projection back onto the edge.
+///
+/// A coarse scan and then one projection, rather than a closed form. The closed form exists for a
+/// line but not for a general arc-against-a-ray, and a two-code-path version of this would be a
+/// place for the two to disagree about which point is "nearest" — which shows up as a snap that
+/// jumps between a straight edge and a curved one under the same cursor. 32 samples puts the coarse
+/// answer within a hundredth of a turn, and \ref brep::ClosestPointOnEdge does the rest exactly.
+ray3d::Vec3 ClosestRayPointToEdge(const ray3d::Ray& ray, const brep::Solid& s, const brep::Edge& e) {
+  const int n = e.kind == brep::CurveKind::Line ? 1 : 32;
+  double bestD = std::numeric_limits<double>::max();
+  ray3d::Vec3 best = brep::EdgePointAt(s, e, 0.0);
+  for (int i = 0; i <= n; ++i) {
+    const ray3d::Vec3 p = brep::EdgePointAt(s, e, static_cast<double>(i) / static_cast<double>(n));
+    const double d = ray3d::RayPointDistance(ray, p);
+    if (d < bestD) {
+      bestD = d;
+      best = p;
+    }
+  }
+  const double t = ray3d::Dot(ray3d::Sub(best, ray.origin), ray.dir);
+  return ray.at(t > 0.0 ? t : 0.0);
+}
+
+/// Does \p ray come near \p b at all? A slab test, used to reject a whole solid before its triangles
+/// are walked.
+///
+/// This is not a micro-optimisation. Object snapping runs on HOVER, every frame, and the triangle
+/// walk below is O(triangles) per solid — a few hundred solids at a couple of thousand triangles
+/// each is most of a million ray-triangle tests per frame, which is REQ-100's budget gone on a
+/// cursor that is not near any of them. Four compares that discard a solid first is the difference.
+///
+/// The box is padded by \p pad so a ray passing just outside a solid still reaches the triangles: a
+/// snap that silently misses is worse than a slow one, which is the same call the surface pick makes
+/// about its own plan-AABB reject.
+/// Delegates to \ref solidpick::RayNearBounds, which is the same slab test lifted into the shared
+/// pick module (REQ-318). Kept as a local name so the call sites below read unchanged; the point of
+/// the move is that the snap and the sub-object pick cannot drift apart in what they reject.
+[[nodiscard]] bool RayNearBounds(const ray3d::Ray& ray, const brep::Bounds& b, double pad) {
+  return solidpick::RayNearBounds(ray, b, pad);
+}
+
+/// Nearest front-facing triangle hit along \p ray, over the flat 9-floats-per-triangle buffer the
+/// solid display cache holds. Writes the hit point and the FACE the triangle belongs to.
+///
+/// The ray/triangle test itself is \ref ray3d::RayTriangleIntersect, shared with the sub-object
+/// pick (REQ-318). It was open-coded here before that existed; two copies of a pick are two sets of
+/// numerics that can disagree under one cursor, which is what the move prevents — the local copy
+/// used an absolute determinant epsilon and exact barycentric bounds, so it fell through the
+/// hairline crack between two faces of the deliberately unwelded tessellation where the shared one
+/// reports a hit.
+///
+/// Two-sided, unchanged: a solid can be viewed from inside (an orbit that puts the camera in
+/// the middle of a box is ordinary), and a one-sided test would report nothing there rather than the
+/// far wall. Nearest hit wins, which is what makes the snap land on the surface facing the user.
+bool RayHitSolidFace(const ray3d::Ray& ray, const std::vector<float>& triVerts,
+                     const std::vector<int>& triFaceIds, ray3d::Vec3* outHit, int* outFace) {
+  const size_t triCount = triVerts.size() / 9;
+  double bestT = std::numeric_limits<double>::max();
+  bool found = false;
+  for (size_t t = 0; t < triCount; ++t) {
+    const size_t b = t * 9;
+    const ray3d::Vec3 v0{triVerts[b], triVerts[b + 1], triVerts[b + 2]};
+    const ray3d::Vec3 v1{triVerts[b + 3], triVerts[b + 4], triVerts[b + 5]};
+    const ray3d::Vec3 v2{triVerts[b + 6], triVerts[b + 7], triVerts[b + 8]};
+    ray3d::Vec3 hit;
+    double hitT = 0.0;
+    if (!ray3d::RayTriangleIntersect(ray, v0, v1, v2, &hit, &hitT))
+      continue;
+    if (hitT >= bestT)
+      continue;
+    bestT = hitT;
+    found = true;
+    if (outHit)
+      *outHit = hit;
+    if (outFace)
+      *outFace = t < triFaceIds.size() ? triFaceIds[t] : -1;
+  }
+  return found;
+}
 } // namespace
 
 Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive, float tolWorld,
@@ -630,16 +891,24 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   const bool wantEndpoint = want(Kind::Endpoint, cmd.objectSnapEndpoint);
   const bool wantMidpoint = want(Kind::Midpoint, cmd.objectSnapMidpoint);
   const bool wantCenter = want(Kind::Center, cmd.objectSnapCenter);
+  const bool wantQuadrant = want(Kind::Quadrant, cmd.objectSnapQuadrant);
   const bool wantGeometricCenter = want(Kind::GeometricCenter, cmd.objectSnapGeometricCenter);
   const bool wantIntersection = want(Kind::Intersection, cmd.objectSnapIntersection);
   const bool wantApparentIntersection = want(Kind::ApparentIntersection, cmd.objectSnapApparentIntersection);
   const bool wantSurveyPoint = want(Kind::SurveyCenter, cmd.objectSnapSurveyPoint);
   const bool wantPerpendicular = want(Kind::Perpendicular, cmd.objectSnapPerpendicular);
   const bool wantSurface = want(Kind::Surface, cmd.objectSnapSurface);
+  const bool wantCenterOfFace = want(Kind::CenterOfFace, cmd.objectSnap3dEnabled && cmd.objectSnap3dCenterFace);
+  const bool wantKnot = want(Kind::Knot, cmd.objectSnap3dEnabled && cmd.objectSnap3dKnot);
 
   float refPx = 0.f;
   float refPy = 0.f;
   const bool havePerpRef = commandActive && wantPerpendicular && PerpendicularReference(cmd, &refPx, &refPy);
+  // 3D Object Snap's own Perpendicular mode (REQ-325/#395) uses the SAME reference-point machinery
+  // as the 2D Perpendicular toggle above, but is gated independently by the F4 master + its own
+  // per-mode flag — it must fire even when the 2D `objectSnapPerpendicular` toggle is off.
+  const bool have3dPerpRef = commandActive && cmd.objectSnap3dEnabled && cmd.objectSnap3dPerpendicular &&
+                             PerpendicularReference(cmd, &refPx, &refPy);
 
   // REQ-118: while a POLYLINE/3DPOLY draft is open, its STARTING vertex is an Endpoint candidate,
   // so the cursor can land on it exactly and the ordinary snap marker shows it. This is the only
@@ -681,15 +950,32 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   }
 
   const auto& C = cmd.userCirclesCxCyZR;
-  if (C.size() % 4 == 0 && wantCenter) {  // cx,cy,z,r
+  if (C.size() % 4 == 0 && (wantCenter || wantQuadrant)) {  // cx,cy,z,r
     for (size_t i = 0; i + 3 < C.size(); i += 4) {
       if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
           exclude.index == static_cast<int>(i / 4)) continue;
       const float cx = C[i];
       const float cy = C[i + 1];
+      const float cz = C[i + 2];
       const float r = C[i + 3];
-      const float p2 = CircleCenterPickDistSq(wx, wy, cx, cy, r, tolWorld);
-      ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld, C[i + 2]);
+      if (wantCenter) {
+        float hx = 0.f;
+        float hy = 0.f;
+        const bool heur = CenterHeuristicPoint(acc, wx, wy, cz, &hx, &hy);
+        const float p2 = CircleCenterPickDistSq(hx, hy, cx, cy, r, tolWorld);
+        ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld, cz, /*heuristicAccept=*/heur);
+      }
+      if (wantQuadrant && r > 1.e-6f) {
+        // REQ-330: four points one radius out along the active UCS X/Y axes projected onto the
+        // circle's own plane (REQ-312) — so they land exactly on the circle at any orientation.
+        const ucs::Ucs plane = CircleSnapPlane(cmd.userCircleNormals, i / 4, cx, cy, cz);
+        ray3d::Vec3 dir[4];
+        QuadrantDirections(plane, cmd.activeUcs, dir);
+        for (const ray3d::Vec3& d : dir) {
+          Consider(&acc, wx, wy, static_cast<float>(cx + r * d.x), static_cast<float>(cy + r * d.y),
+                   Kind::Quadrant, tolWorld, static_cast<float>(cz + r * d.z));
+        }
+      }
     }
   }
 
@@ -712,10 +998,71 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
         Consider(&acc, wx, wy, ax, ay, Kind::Endpoint, tolWorld, az);
         Consider(&acc, wx, wy, bx, by, Kind::Endpoint, tolWorld, bz);
       }
-      if (wantMidpoint)
-        Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
-      if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
+      const float bulge = static_cast<size_t>(ia) < cmd.userPolylineVertsBulge.size()
+                              ? cmd.userPolylineVertsBulge[static_cast<size_t>(ia)] : 0.f;
+      if (bulge == 0.f) {
+        if (wantMidpoint)
+          Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
+        if (havePerpRef)
+          AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
+        return;
+      }
+      // REQ-325 / ADR-053 increment 3: a curved segment's own Midpoint candidates follow the TRUE
+      // curve (flat or tilted), the same dense chord-sampling the standalone ARC entity already
+      // offers below (kArcSnapSeg) — not the single straight-chord point every polyline bulge
+      // segment silently fell back to before, which was wrong even for a flat arc.
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      if (static_cast<size_t>(ia) * 3 + 2 < cmd.userPolylineVertsNormal.size()) {
+        nx = cmd.userPolylineVertsNormal[static_cast<size_t>(ia) * 3];
+        ny = cmd.userPolylineVertsNormal[static_cast<size_t>(ia) * 3 + 1];
+        nz = cmd.userPolylineVertsNormal[static_cast<size_t>(ia) * 3 + 2];
+      }
+      const bool flat = IsFlatNormal(nx, ny, nz);
+      ucs::Ucs plane{};
+      BulgeArcSpan arc{};
+      if (flat) {
+        arc = BulgeArc(ax, ay, bx, by, static_cast<double>(bulge));
+      } else if (ucs::FromNormal(ray3d::Vec3{ax, ay, az},
+                                 ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                             static_cast<double>(nz)},
+                                 &plane)) {
+        const ucs::Point2D p1Local = ucs::WorldToPlane(plane, ray3d::Vec3{bx, by, bz});
+        arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
+      }
+      if (!arc.valid) {
+        // Degenerate bulge or plane — same fallback the chord path above already uses.
+        if (wantMidpoint)
+          Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
+        if (havePerpRef)
+          AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
+        return;
+      }
+      auto sampleWorld = [&](double u, float* ox, float* oy, float* oz) {
+        const double lx = arc.cx + arc.radius * std::cos(u);
+        const double ly = arc.cy + arc.radius * std::sin(u);
+        if (flat) {
+          *ox = static_cast<float>(lx);
+          *oy = static_cast<float>(ly);
+          *oz = az;  // both ends share Z on a flat (world +Z) segment
+          return;
+        }
+        const ray3d::Vec3 wp = ucs::PlaneToWorld(plane, ucs::Point2D{lx, ly});
+        *ox = static_cast<float>(wp.x);
+        *oy = static_cast<float>(wp.y);
+        *oz = static_cast<float>(wp.z);
+      };
+      constexpr int kPolyArcSnapSeg = 24;  // matches the standalone ARC entity's own kArcSnapSeg
+      for (int i = 0; i < kPolyArcSnapSeg; ++i) {
+        const double t0 = arc.startAngle + arc.sweep * (static_cast<double>(i) / kPolyArcSnapSeg);
+        const double t1 = arc.startAngle + arc.sweep * (static_cast<double>(i + 1) / kPolyArcSnapSeg);
+        float x0 = 0.f, y0 = 0.f, z0 = 0.f, x1 = 0.f, y1 = 0.f, z1 = 0.f;
+        sampleWorld(t0, &x0, &y0, &z0);
+        sampleWorld(t1, &x1, &y1, &z1);
+        if (wantMidpoint)
+          Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, 0.5f * (z0 + z1));
+        if (havePerpRef)
+          AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
+      }
     };
     for (int vi = v0; vi + 1 < v1; ++vi)
       considerEdge(vi, vi + 1);
@@ -726,9 +1073,12 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       float gcx = 0.f;
       float gcy = 0.f;
       if (ClosedPolylineCentroid(cmd.userPolylineVerts, v0, v1, &gcx, &gcy)) {
-        const float p2 = ClosedPolyGeometricPickDistSq(wx, wy, cmd.userPolylineVerts, v0, v1);
-        ConsiderSnap(&acc, wx, wy, gcx, gcy, Kind::GeometricCenter, p2, tolWorld,
-                     PolylineLoopMeanZ(cmd.userPolylineVerts, v0, v1));
+        const float meanZ = PolylineLoopMeanZ(cmd.userPolylineVerts, v0, v1);
+        float hx = 0.f;
+        float hy = 0.f;
+        const bool heur = CenterHeuristicPoint(acc, wx, wy, meanZ, &hx, &hy);
+        const float p2 = ClosedPolyGeometricPickDistSq(hx, hy, cmd.userPolylineVerts, v0, v1);
+        ConsiderSnap(&acc, wx, wy, gcx, gcy, Kind::GeometricCenter, p2, tolWorld, meanZ, /*heuristicAccept=*/heur);
       }
     }
   }
@@ -753,35 +1103,55 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     const CadArc& a = cmd.userArcs[arcIdx];
     if (a.r <= 1e-6f || kArcSnapSeg < 1)
       continue;
-    const double dcx = static_cast<double>(a.cx);
-    const double dcy = static_cast<double>(a.cy);
-    const double dr = static_cast<double>(a.r);
+    ucs::Ucs arcPlane;
+    const bool arcFlat = ArcSnapPlane(a, &arcPlane);
     const double tEnd = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad);
     if (wantEndpoint) {
-      double ex = 0.;
-      double ey = 0.;
-      CirclePointWorld(dcx, dcy, dr, static_cast<double>(a.startRad), &ex, &ey);
-      Consider(&acc, wx, wy, static_cast<float>(ex), static_cast<float>(ey), Kind::Endpoint, tolWorld, a.z);
-      CirclePointWorld(dcx, dcy, dr, tEnd, &ex, &ey);
-      Consider(&acc, wx, wy, static_cast<float>(ex), static_cast<float>(ey), Kind::Endpoint, tolWorld, a.z);
+      float ex = 0.f;
+      float ey = 0.f;
+      float ez = 0.f;
+      ArcSnapPoint(a, arcPlane, arcFlat, static_cast<double>(a.startRad), &ex, &ey, &ez);
+      Consider(&acc, wx, wy, ex, ey, Kind::Endpoint, tolWorld, ez);
+      ArcSnapPoint(a, arcPlane, arcFlat, tEnd, &ex, &ey, &ez);
+      Consider(&acc, wx, wy, ex, ey, Kind::Endpoint, tolWorld, ez);
+    }
+    if (wantQuadrant) {
+      // REQ-330: the circle's four quadrant points, kept only where they fall inside the sweep.
+      // The angle test is in the arc's own plane frame, so it works for a tilted arc too.
+      const ucs::Ucs plane = CurvePlane(a);
+      ray3d::Vec3 dir[4];
+      QuadrantDirections(plane, cmd.activeUcs, dir);
+      const ray3d::Vec3 c{static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.z)};
+      for (const ray3d::Vec3& d : dir) {
+        const ray3d::Vec3 p = ray3d::Add(c, ray3d::Scale(d, static_cast<double>(a.r)));
+        const ucs::Point2D local = ucs::WorldToPlane(plane, p);
+        const double phi = std::atan2(local.y, local.x);
+        if (!AngleWithinSweep(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), phi))
+          continue;
+        Consider(&acc, wx, wy, static_cast<float>(p.x), static_cast<float>(p.y), Kind::Quadrant, tolWorld,
+                 static_cast<float>(p.z));
+      }
     }
     for (int i = 0; i < kArcSnapSeg; ++i) {
-      const double u0 = static_cast<double>(i) / static_cast<double>(kArcSnapSeg);
-      const double u1 = static_cast<double>(i + 1) / static_cast<double>(kArcSnapSeg);
-      const double t0 = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u0;
-      const double t1 = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u1;
-      double x0 = 0.;
-      double y0 = 0.;
-      double x1 = 0.;
-      double y1 = 0.;
-      CirclePointWorld(dcx, dcy, dr, t0, &x0, &y0);
-      CirclePointWorld(dcx, dcy, dr, t1, &x1, &y1);
+      const double t0 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i,
+                                         kArcSnapSeg);
+      const double t1 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i + 1,
+                                         kArcSnapSeg);
+      float x0 = 0.f;
+      float y0 = 0.f;
+      float z0 = 0.f;
+      float x1 = 0.f;
+      float y1 = 0.f;
+      float z1 = 0.f;
+      ArcSnapPoint(a, arcPlane, arcFlat, t0, &x0, &y0, &z0);
+      ArcSnapPoint(a, arcPlane, arcFlat, t1, &x1, &y1, &z1);
       if (wantMidpoint)
-        Consider(&acc, wx, wy, static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
-                 tolWorld, a.z);  // the arc's plane, same as its endpoint candidates above
+        // The chord's own midpoint, elevation included. On a flat arc both ends share a.z and this
+        // is the previous value exactly; on a tilted one the two ends genuinely differ in Z.
+        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld,
+                 0.5f * (z0 + z1));
       if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, static_cast<float>(x0), static_cast<float>(y0),
-                                   static_cast<float>(x1), static_cast<float>(y1), tolWorld, &acc, a.z, a.z);
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
     }
   }
 
@@ -795,8 +1165,11 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     if (ma < 1e-8f || kEllSnapSeg < 3)
       continue;
     if (wantCenter) {
-      const float p2 = EllipseCenterPickDistSq(wx, wy, el, tolWorld);
-      ConsiderSnap(&acc, wx, wy, el.cx, el.cy, Kind::Center, p2, tolWorld, el.z);
+      float hx = 0.f;
+      float hy = 0.f;
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, el.z, &hx, &hy);
+      const float p2 = EllipseCenterPickDistSq(hx, hy, el, tolWorld);
+      ConsiderSnap(&acc, wx, wy, el.cx, el.cy, Kind::Center, p2, tolWorld, el.z, /*heuristicAccept=*/heur);
     }
     const float ux = el.majVx / ma;
     const float uy = el.majVy / ma;
@@ -850,8 +1223,19 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     const float arm =
         SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
     for (const SurveyPoint& sp : cmd.surveyPoints) {
-      const float p2 = MinDistSqToSurveyMarker(wx, wy, sp.easting, sp.northing, arm);
-      ConsiderSnap(&acc, wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, p2, tolWorld, sp.elevation);  // elevation IS the point's Z (REQ-057)
+      // The X marker's half-span is a fixed plotted size, so at a zoomed-out view it is many
+      // apertures wide — the same "cursor is over the SHAPE" heuristic circles get, and the same
+      // orbited-view breakage (issue #372): evaluate it where the ray meets the point's own plane.
+      float hx = 0.f;
+      float hy = 0.f;
+      // Snap-candidate pipeline stays float (established render/pick boundary, Phase D) — narrow the
+      // double survey-point coordinate here, same as every other entity kind in this loop.
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, static_cast<float>(sp.elevation), &hx, &hy);
+      const float p2 =
+          MinDistSqToSurveyMarker(hx, hy, static_cast<float>(sp.easting), static_cast<float>(sp.northing), arm);
+      ConsiderSnap(&acc, wx, wy, static_cast<float>(sp.easting), static_cast<float>(sp.northing), Kind::SurveyCenter,
+                   p2, tolWorld, static_cast<float>(sp.elevation),
+                   /*heuristicAccept=*/heur);  // elevation IS the point's Z (REQ-057)
     }
   }
 
@@ -882,8 +1266,187 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       if (wantCenter) {
         bctr.clear();
         CadBlockCollectWorldCenters(cmd.blockDefs, br, &bctr);
+        // Only the centre POINTS are collected, not each shape's radius/extent, so a block circle's
+        // CENTRE cannot get the "cursor is over the shape" acceptance native circles get under an
+        // orbited camera (issue #372) — it resolves only when the ray passes near the centre point
+        // itself. Widening CadBlockCollectWorldCenters is a separate change; #372's repro is a
+        // native CIRCLE.
         for (const CadBlockWorldPoint& p : bctr)
           Consider(&acc, wx, wy, p.x, p.y, Kind::Center, tolWorld, p.z);
+      }
+    }
+  }
+
+  // --- 3D Object Snap: B-rep solid snaps (REQ-325/#395, supersedes REQ-313/REQ-301/ADR-045) --------
+  //
+  // Every kind below is gated by the F4 master (`cmd.objectSnap3dEnabled`) AND its own per-mode
+  // flag — the 3D Object Snap tab is deliberately independent of the 2D Object Snap toggles (F3),
+  // matching AutoCAD. Six AutoCAD-parity modes:
+  //
+  //   Vertex            its VERTICES               -> Kind::Endpoint, objectSnap3dVertex
+  //   Midpoint on edge  its EDGE MIDDLES            -> Kind::Midpoint, objectSnap3dMidpointEdge
+  //   Nearest to face   nearest point ON a face,    -> Kind::Face,     objectSnap3dNearestFace
+  //                     or along an edge (kept as
+  //                     one flag: same "nearest to
+  //                     the solid under the cursor"
+  //                     claim REQ-301 already made)   Kind::Edge,     objectSnap3dNearestFace
+  //   Center of face    a face's centroid           -> Kind::CenterOfFace, objectSnap3dCenterFace
+  //   Knot              a NURBS face's knot points  -> Kind::Knot,     objectSnap3dKnot
+  //   Perpendicular     foot of the perpendicular   -> Kind::Perpendicular, objectSnap3dPerpendicular
+  //                     from a command reference
+  //                     onto a PLANAR face
+  //
+  // The FACE answer needs care. The ray is tested against the cached triangles to decide which face
+  // is under the cursor, and the hit is then projected onto that face's ANALYTIC surface — so on a
+  // cylinder the point comes back on the cylinder rather than a sagitta short of it, on the chord
+  // the tessellator happened to draw (#120: "the resulting point should lie exactly on the selected
+  // face"). Face/CenterOfFace/Knot all need a pick ray and are skipped without one: in a plan view
+  // with no ray there is no "under the cursor" to resolve, and answering with the work-plane point
+  // would be an invention.
+  if (!cmd.cadSolids.empty() && cmd.objectSnap3dEnabled) {
+    const bool wantSolidVertex = want(Kind::Endpoint, cmd.objectSnap3dVertex);
+    const bool wantSolidMidpoint = want(Kind::Midpoint, cmd.objectSnap3dMidpointEdge);
+    const bool wantSolidNearest = want(Kind::Face, cmd.objectSnap3dNearestFace) ||
+                                  want(Kind::Edge, cmd.objectSnap3dNearestFace);
+    const bool wantSolidCenterFace = wantCenterOfFace;
+    const bool wantSolidKnot = wantKnot;
+    const ray3d::Vec3 cursor{wx, wy, acc.ray ? acc.ray->origin.z : 0.0};
+
+    for (size_t si = 0; si < cmd.cadSolids.size(); ++si) {
+      if (!SolidVisible(cmd, si))
+        continue;  // layer off/frozen or isolated out — invisible and unclickable must not disagree
+      if (exclude.valid && exclude.type == SelectedEntity::Type::Solid &&
+          exclude.index == static_cast<int>(si))
+        continue;
+      const CadSolidPtr& sp = cmd.cadSolids[si];
+      if (!sp)
+        continue;
+
+      if (wantSolidVertex || wantSolidMidpoint || wantSolidNearest) {
+        if (wantSolidVertex) {
+          for (const brep::Vertex& v : sp->vertices)
+            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(v.p.x),
+                     static_cast<float>(v.p.y), Kind::Endpoint, tolWorld, static_cast<float>(v.p.z), true);
+        }
+        for (const brep::Edge& e : sp->edges) {
+          if (wantSolidMidpoint) {
+            const ray3d::Vec3 mid = brep::EdgePointAt(*sp, e, 0.5);
+            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(mid.x),
+                     static_cast<float>(mid.y), Kind::Midpoint, tolWorld, static_cast<float>(mid.z), true);
+          }
+          if (wantSolidNearest) {
+            // Measured from the cursor RAY where there is one, so an orbited view snaps to the edge
+            // the user is pointing at rather than to whatever passes under the same plan XY.
+            //
+            // With no ray — a plan view — the probe is the cursor at the datum, and the answer is
+            // still a point ON the edge; `ConsiderSnap` then ranks it by plan XY distance, which is
+            // what plan view does for every other kind. For the horizontal and vertical edges every
+            // primitive is mostly made of, that lands on the same point a proper 2D projection
+            // would; on a slanted edge it can favour the lower end, which is a bias in WHICH point
+            // of the edge is offered, never in whether the point is on it.
+            const ray3d::Vec3 probe = acc.ray ? ClosestRayPointToEdge(*acc.ray, *sp, e) : cursor;
+            const ray3d::Vec3 on = brep::ClosestPointOnEdge(*sp, e, probe);
+            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(on.x),
+                     static_cast<float>(on.y), Kind::Edge, tolWorld, static_cast<float>(on.z), true);
+          }
+        }
+      }
+
+      if ((wantSolidNearest || wantSolidCenterFace || wantSolidKnot || have3dPerpRef) && acc.ray) {
+        // Reject the whole solid before touching its triangles — see RayNearBounds. Hover runs this
+        // every frame, and the walk below is O(triangles).
+        if (!RayNearBounds(*acc.ray, brep::ComputeBounds(*sp), static_cast<double>(tolWorld)))
+          continue;
+        const auto it = std::find_if(cmd.solidDisplayCache.begin(), cmd.solidDisplayCache.end(),
+                                     [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+        const bool tessellated = it != cmd.solidDisplayCache.end() && !it->triVerts.empty();
+
+        if (wantSolidNearest && tessellated) {
+          ray3d::Vec3 hit{};
+          int faceIndex = -1;
+          if (RayHitSolidFace(*acc.ray, it->triVerts, it->triFaceIds, &hit, &faceIndex) && faceIndex >= 0 &&
+              static_cast<size_t>(faceIndex) < sp->faces.size()) {
+            // The triangle told us WHICH face; the surface tells us WHERE on it.
+            const ray3d::Vec3 exact = brep::ClosestPointOnSurface(sp->faces[static_cast<size_t>(faceIndex)].surface, hit);
+            Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(exact.x),
+                     static_cast<float>(exact.y), Kind::Face, tolWorld, static_cast<float>(exact.z), true);
+          }
+        }
+
+        // Center of face and Perpendicular both need to know WHICH face is under the cursor, the
+        // same ray/triangle test Nearest-to-face uses above — resolved independently here so either
+        // mode works even when Nearest-to-face itself is toggled off.
+        if ((wantSolidCenterFace || have3dPerpRef) && tessellated) {
+          ray3d::Vec3 hit{};
+          int faceIndex = -1;
+          if (RayHitSolidFace(*acc.ray, it->triVerts, it->triFaceIds, &hit, &faceIndex) && faceIndex >= 0 &&
+              static_cast<size_t>(faceIndex) < sp->faces.size()) {
+            const brep::Face& face = sp->faces[static_cast<size_t>(faceIndex)];
+
+            if (wantSolidCenterFace) {
+              ray3d::Vec3 c{};
+              if (face.surface.kind == brep::SurfaceKind::Plane) {
+                c = brep::PlanarFaceCentroid(*sp, face);
+              } else {
+                // Curved (and Nurbs) faces: the parameter-domain midpoint, NOT an area-weighted
+                // triangle centroid. A full-revolution face (e.g. a cylinder's whole lateral
+                // surface) is rotationally symmetric about its axis, so a triangle-area centroid
+                // averages to a point ON THE AXIS — a degenerate input to `ClosestPointOnSurface`,
+                // which for a Cylinder/Cone returns that axis point UNPROJECTED (there is no single
+                // nearest point on the surface from the axis itself), landing the glyph nowhere
+                // near the visible face. `CurvedFaceMidpoint` evaluates the surface directly at its
+                // own (u, v) midpoint instead, which has no such degeneracy.
+                c = brep::CurvedFaceMidpoint(face);
+              }
+              // heuristicAccept: the cursor ray already hit THIS face (that is what put us inside
+              // this block), so — matching AutoCAD, and the same "cursor anywhere over the shape"
+              // treatment CENTER already gets on a circle (issue #372) — Center of face is offered
+              // no matter where on the face the cursor sits, not only when it happens to land within
+              // the ordinary aperture of the centroid itself. pickDistSq=0 always clears the
+              // tolerance test; ranking against other candidates still uses the true ray distance to
+              // the centroid, so a genuinely closer Endpoint/Edge on the same face still wins.
+              ConsiderSnap(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(c.x),
+                           static_cast<float>(c.y), Kind::CenterOfFace, 0.f, tolWorld, static_cast<float>(c.z),
+                           /*heuristicAccept=*/true, /*solid=*/true);
+            }
+
+            if (have3dPerpRef && face.surface.kind == brep::SurfaceKind::Plane) {
+              // A true 90-degree foot only exists for a planar feature; curved faces have no single
+              // well-defined "perpendicular" point in general, matching AutoCAD's own 3D Perpendicular.
+              const ray3d::Vec3 refW{static_cast<double>(refPx), static_cast<double>(refPy), 0.0};
+              const ray3d::Vec3 foot = brep::ClosestPointOnSurface(face.surface, refW);
+              Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(foot.x),
+                       static_cast<float>(foot.y), Kind::Perpendicular, tolWorld, static_cast<float>(foot.z), true);
+            }
+          }
+        }
+
+        if (wantSolidKnot) {
+          for (const brep::Face& face : sp->faces) {
+            if (face.surface.kind != brep::SurfaceKind::Nurbs)
+              continue;
+            const nurbs::Patch& patch = face.surface.patch;
+            auto distinctKnots = [](const std::vector<double>& knots, double lo, double hi) {
+              std::vector<double> out;
+              for (double k : knots) {
+                if (k < lo - 1e-9 || k > hi + 1e-9)
+                  continue;
+                if (out.empty() || std::fabs(out.back() - k) > 1e-9)
+                  out.push_back(k);
+              }
+              return out;
+            };
+            const std::vector<double> us = distinctKnots(patch.knotsU, face.uStart, face.uEnd);
+            const std::vector<double> vs = distinctKnots(patch.knotsV, face.vStart, face.vEnd);
+            for (double u : us) {
+              for (double v : vs) {
+                const ray3d::Vec3 p = nurbs::Evaluate(patch, u, v);
+                Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(p.x),
+                         static_cast<float>(p.y), Kind::Knot, tolWorld, static_cast<float>(p.z), true);
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -1024,8 +1587,13 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
           float lcx = 0.f, lcy = 0.f;
           pdfToLocal(SC[i], SC[i + 1], &lcx, &lcy);
           const float lr = SC[i + 2] * sc;
-          const float p2 = CircleCenterPickDistSq(wx, wy, lcx, lcy, lr, tolWorld);
-          ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld);
+          float hx = 0.f;
+          float hy = 0.f;
+          // planeZ 0: a PDF underlay's snap geometry sits on the drawing datum, the same assumption
+          // the committed snapZ (0, below) already makes. If underlays gain an elevation both move.
+          const bool heur = CenterHeuristicPoint(acc, wx, wy, 0.f, &hx, &hy);
+          const float p2 = CircleCenterPickDistSq(hx, hy, lcx, lcy, lr, tolWorld);
+          ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld, 0.f, /*heuristicAccept=*/heur);
         }
       }
 
@@ -1151,11 +1719,19 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     for (const CadArc& a : cmd.userArcs) {
       if (a.r <= 1e-6f)
         continue;
-      const float tEnd = a.startRad + a.sweepRad;
-      PushSnapPickerEntry(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), Kind::Endpoint,
-                          sortWorldX, sortWorldY, out, a.z);
-      PushSnapPickerEntry(a.cx + a.r * std::cos(tEnd), a.cy + a.r * std::sin(tEnd), Kind::Endpoint, sortWorldX,
-                          sortWorldY, out, a.z);
+      // Through the arc's own plane (REQ-312), and through the same walk the live snap uses. This
+      // list and the live accumulator previously computed the same two endpoints in different
+      // precisions, which is the shape of defect the shared parametrisation exists to remove.
+      ucs::Ucs arcPlane;
+      const bool arcFlat = ArcSnapPlane(a, &arcPlane);
+      float ex = 0.f;
+      float ey = 0.f;
+      float ez = 0.f;
+      ArcSnapPoint(a, arcPlane, arcFlat, static_cast<double>(a.startRad), &ex, &ey, &ez);
+      PushSnapPickerEntry(ex, ey, Kind::Endpoint, sortWorldX, sortWorldY, out, ez);
+      ArcSnapPoint(a, arcPlane, arcFlat, static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad), &ex,
+                   &ey, &ez);
+      PushSnapPickerEntry(ex, ey, Kind::Endpoint, sortWorldX, sortWorldY, out, ez);
     }
     break;
   }
@@ -1203,22 +1779,23 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     for (const CadArc& a : cmd.userArcs) {
       if (a.r <= 1e-6f || kArcSnapSeg < 1)
         continue;
-      const double dcx = static_cast<double>(a.cx);
-      const double dcy = static_cast<double>(a.cy);
-      const double dr = static_cast<double>(a.r);
+      ucs::Ucs arcPlane;
+      const bool arcFlat = ArcSnapPlane(a, &arcPlane);
       for (int i = 0; i < kArcSnapSeg; ++i) {
-        const double u0 = static_cast<double>(i) / static_cast<double>(kArcSnapSeg);
-        const double u1 = static_cast<double>(i + 1) / static_cast<double>(kArcSnapSeg);
-        const double t0 = static_cast<double>(a.startRad + a.sweepRad * static_cast<float>(u0));
-        const double t1 = static_cast<double>(a.startRad + a.sweepRad * static_cast<float>(u1));
-        double x0 = 0.;
-        double y0 = 0.;
-        double x1 = 0.;
-        double y1 = 0.;
-        CirclePointWorld(dcx, dcy, dr, t0, &x0, &y0);
-        CirclePointWorld(dcx, dcy, dr, t1, &x1, &y1);
-        PushSnapPickerEntry(static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
-                            sortWorldX, sortWorldY, out, a.z);
+        const double t0 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i,
+                                           kArcSnapSeg);
+        const double t1 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i + 1,
+                                           kArcSnapSeg);
+        float x0 = 0.f;
+        float y0 = 0.f;
+        float z0 = 0.f;
+        float x1 = 0.f;
+        float y1 = 0.f;
+        float z1 = 0.f;
+        ArcSnapPoint(a, arcPlane, arcFlat, t0, &x0, &y0, &z0);
+        ArcSnapPoint(a, arcPlane, arcFlat, t1, &x1, &y1, &z1);
+        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out,
+                            0.5f * (z0 + z1));
       }
     }
     constexpr int kEllSnapSeg = 36;
@@ -1265,6 +1842,44 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     break;
   }
+  case Kind::Quadrant: {
+    // REQ-330: every circle's four quadrant points, and every arc's in-sweep subset.
+    const auto& C = cmd.userCirclesCxCyZR;
+    if (C.size() % 4 == 0) {  // cx,cy,z,r
+      for (size_t i = 0; i + 3 < C.size(); i += 4) {
+        const float cx = C[i];
+        const float cy = C[i + 1];
+        const float cz = C[i + 2];
+        const float r = C[i + 3];
+        if (r <= 1e-6f)
+          continue;
+        const ucs::Ucs plane = CircleSnapPlane(cmd.userCircleNormals, i / 4, cx, cy, cz);
+        ray3d::Vec3 dir[4];
+        QuadrantDirections(plane, cmd.activeUcs, dir);
+        for (const ray3d::Vec3& d : dir)
+          PushSnapPickerEntry(static_cast<float>(cx + r * d.x), static_cast<float>(cy + r * d.y), Kind::Quadrant,
+                              sortWorldX, sortWorldY, out, static_cast<float>(cz + r * d.z));
+      }
+    }
+    for (const CadArc& a : cmd.userArcs) {
+      if (a.r <= 1e-6f)
+        continue;
+      const ucs::Ucs plane = CurvePlane(a);
+      ray3d::Vec3 dir[4];
+      QuadrantDirections(plane, cmd.activeUcs, dir);
+      const ray3d::Vec3 c{static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.z)};
+      for (const ray3d::Vec3& d : dir) {
+        const ray3d::Vec3 p = ray3d::Add(c, ray3d::Scale(d, static_cast<double>(a.r)));
+        const ucs::Point2D local = ucs::WorldToPlane(plane, p);
+        if (!AngleWithinSweep(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad),
+                              std::atan2(local.y, local.x)))
+          continue;
+        PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Quadrant, sortWorldX,
+                            sortWorldY, out, static_cast<float>(p.z));
+      }
+    }
+    break;
+  }
   case Kind::Perpendicular: {
     if (!havePerpRef)
       break;
@@ -1299,16 +1914,22 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     for (const CadArc& a : cmd.userArcs) {
       if (a.r <= 1e-6f || kArcSnapSeg < 1)
         continue;
+      ucs::Ucs arcPlane;
+      const bool arcFlat = ArcSnapPlane(a, &arcPlane);
       for (int i = 0; i < kArcSnapSeg; ++i) {
-        const float u0 = static_cast<float>(i) / static_cast<float>(kArcSnapSeg);
-        const float u1 = static_cast<float>(i + 1) / static_cast<float>(kArcSnapSeg);
-        const float t0 = a.startRad + a.sweepRad * u0;
-        const float t1 = a.startRad + a.sweepRad * u1;
-        const float x0 = a.cx + a.r * std::cos(t0);
-        const float y0 = a.cy + a.r * std::sin(t0);
-        const float x1 = a.cx + a.r * std::cos(t1);
-        const float y1 = a.cy + a.r * std::sin(t1);
-        PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out, a.z, a.z);
+        const double t0 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i,
+                                           kArcSnapSeg);
+        const double t1 = CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i + 1,
+                                           kArcSnapSeg);
+        float x0 = 0.f;
+        float y0 = 0.f;
+        float z0 = 0.f;
+        float x1 = 0.f;
+        float y1 = 0.f;
+        float z1 = 0.f;
+        ArcSnapPoint(a, arcPlane, arcFlat, t0, &x0, &y0, &z0);
+        ArcSnapPoint(a, arcPlane, arcFlat, t1, &x1, &y1, &z1);
+        PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out, z0, z1);
       }
     }
     constexpr int kEllSnapSeg = 36;
@@ -1356,8 +1977,9 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   }
   case Kind::SurveyCenter:
     for (const SurveyPoint& sp : cmd.surveyPoints)
-      PushSnapPickerEntry(sp.easting, sp.northing, Kind::SurveyCenter, sortWorldX, sortWorldY, out,
-                          sp.elevation);  // elevation IS the point's Z (REQ-057)
+      PushSnapPickerEntry(static_cast<float>(sp.easting), static_cast<float>(sp.northing), Kind::SurveyCenter,
+                          sortWorldX, sortWorldY, out,
+                          static_cast<float>(sp.elevation));  // elevation IS the point's Z (REQ-057)
     break;
   case Kind::Intersection:
   case Kind::ApparentIntersection: {
@@ -1384,6 +2006,13 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   }
   case Kind::Grip:
     break; // grip snap points are per-selection, not gathered globally
+  // A solid's edge and face have no global list to gather: both are resolved from the cursor RAY
+  // against the solid under it, so there is no aperture-free "every one of these in the drawing"
+  // for the snap picker to enumerate. Listed explicitly rather than left to a default, so adding
+  // a Kind later is a compile error here rather than a silently missing entry.
+  case Kind::Edge:
+  case Kind::Face:
+    break;
   case Kind::Surface: {
     float z = 0.f;
     if (SurfaceSnapElevation(cmd, static_cast<double>(sortWorldX), static_cast<double>(sortWorldY), &z))
@@ -1473,9 +2102,10 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
   // Survey point grips (selected survey points)
   for (const int idx : cmd.selectedSurveyPointIndices) {
     if (idx >= 0 && static_cast<size_t>(idx) < cmd.surveyPoints.size())
-      gripCandidate(cmd.surveyPoints[static_cast<size_t>(idx)].easting,
-                    cmd.surveyPoints[static_cast<size_t>(idx)].northing,
-                    cmd.surveyPoints[static_cast<size_t>(idx)].elevation);  // elevation IS Z (REQ-057)
+      gripCandidate(static_cast<float>(cmd.surveyPoints[static_cast<size_t>(idx)].easting),
+                    static_cast<float>(cmd.surveyPoints[static_cast<size_t>(idx)].northing),
+                    static_cast<float>(
+                        cmd.surveyPoints[static_cast<size_t>(idx)].elevation));  // elevation IS Z (REQ-057)
   }
 
   return acc.best;

@@ -151,13 +151,13 @@ CMD
 EXPECT LOG "UCS Named - enter a name."
 
 # --- Named UCS definitions survive a save/reload ------------------------------------------------------
-SAVEAS %OUT%/ucs-a.gs
-OPEN %OUT%/ucs-a.gs
+SAVEAS %OUT%/ucs-a.dwg
+OPEN %OUT%/ucs-a.dwg
 CMD UCS
 CMD ?
 EXPECT LOG "Diagonal"
-SAVEAS %OUT%/ucs-b.gs
-EXPECT SAMEFILE %OUT%/ucs-a.gs %OUT%/ucs-b.gs
+SAVEAS %OUT%/ucs-b.dwg
+EXPECT SAMEFILE %OUT%/ucs-a.dwg %OUT%/ucs-b.dwg
 
 # --- Restore and delete: the View Manager's, not the command's ----------------------------------------
 # UCSNAMED is the driver's stand-in for the dialog's two buttons; it calls the same functions they do.

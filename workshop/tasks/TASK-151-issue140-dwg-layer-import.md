@@ -65,7 +65,23 @@ build-project / code-review / testing skills, loop to PASS, completion report.
 - Build clean (MSVC/Ninja release). `ctest`: 846/846 pass.
 
 ### Technical debt / follow-ups (not blocking this fix)
-- DEBT-151-a (partly addressed 2026-08-31): added an end-to-end test that builds a multi-layer
+- DEBT-151-a (**closed 2026-08-31 by issue #160**): `samples/duke-main-clean-r2018.dwg` — a real
+  AutoCAD 2018 (AC1032, `from_version == R_2018`) survey drawing, 154 named layers / ~2300 lines /
+  ~1500 polylines — is now committed and asserted end to end by `LibreDwgCadTests.cpp`
+  "LibreDWG imports the full layer table of a real R2018 DWG (issue #160)". The test confirms
+  `from_version >= R_2007` (so the `BITCODE_TU` name-decode path runs), the exact imported layer
+  count, multi-word / punctuated layer names decode intact, per-layer colours and linetypes, the
+  on/frozen/locked flags, and that a sample entity (174 on `C-FIRE-PIPE-12IN`) resolves to its
+  named layer. The `tests/` fixture mechanism is the existing `GOSURVEY_SAMPLES_DIR` compile
+  definition (no new machinery); `*.dwg` added to `.gitattributes` as binary.
+  This fixture also surfaced and fixed a colour bug: AutoCAD 2018 writes an *indexed* layer
+  colour as a `0xc3` CMC with the ACI in the low rgb byte (`0xc3000007` == ACI 7); LibreDWG does
+  not resolve it, so `ColorToStorage` was importing every such layer as near-black `#0000NN`.
+  `ColorToStorage` now treats a `0xc3` payload with only the low byte set as an ACI index.
+  Not covered by this drawing: off / frozen / locked layers (none present) — those stay with the
+  R2000 "multi-layer table end to end" case; and AutoCAD-visual colour verification (no
+  AutoCAD/ODA in the env, REQ-170).
+- DEBT-151-a (superseded — original note kept for history): added an end-to-end test that builds a multi-layer
   drawing with the LibreDWG C API, writes it, re-imports via `ImportDwgFile`, and asserts the
   full `drawingLayerTable` (names, ACI + negative-ACI colour, `DASHED` linetype resolved from the
   LTYPE handle, freeze/lock flags). Fixture is **R2000**: LibreDWG 0.13.3's own encoder returns

@@ -100,11 +100,7 @@ bool BrowseSaveFileDwgUtf8(char* utf8Out, size_t utf8Cap, const char*) {
   return NextAnswer(utf8Out, utf8Cap);
 }
 
-bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
-
-bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char*) {
-  return NextAnswer(utf8Out, utf8Cap);
-}
+bool BrowseOpenFileGstUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
 bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 

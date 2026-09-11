@@ -4,7 +4,13 @@
 
 #include <algorithm>
 #include <cctype>
-#include <fstream>
+#include <cstdio>
+#include <string_view>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 namespace recent {
 
@@ -29,14 +35,65 @@ std::string StemOf(const std::string& p) {
   return s.empty() ? p : s;
 }
 
+bool ReadAllBytes(const std::filesystem::path& path, std::string* bytesOut) {
+  if (bytesOut == nullptr)
+    return false;
+  bytesOut->clear();
+  std::FILE* fp = nullptr;
+#if defined(_MSC_VER)
+  if (_wfopen_s(&fp, path.wstring().c_str(), L"rb") != 0 || fp == nullptr)
+    return false;
+#else
+  fp = std::fopen(path.string().c_str(), "rb");
+  if (fp == nullptr)
+    return false;
+#endif
+  if (std::fseek(fp, 0, SEEK_END) != 0) {
+    std::fclose(fp);
+    return false;
+  }
+  long sz = std::ftell(fp);
+  if (sz < 0) {
+    std::fclose(fp);
+    return false;
+  }
+  if (std::fseek(fp, 0, SEEK_SET) != 0) {
+    std::fclose(fp);
+    return false;
+  }
+  bytesOut->resize(static_cast<size_t>(sz));
+  if (sz > 0 &&
+      std::fread(bytesOut->data(), 1, static_cast<size_t>(sz), fp) != static_cast<size_t>(sz)) {
+    std::fclose(fp);
+    bytesOut->clear();
+    return false;
+  }
+  return std::fclose(fp) == 0;
+}
+
+bool WriteAllBytes(const std::filesystem::path& path, std::string_view bytes) {
+  std::FILE* fp = nullptr;
+#if defined(_MSC_VER)
+  if (_wfopen_s(&fp, path.wstring().c_str(), L"wb") != 0 || fp == nullptr)
+    return false;
+#else
+  fp = std::fopen(path.string().c_str(), "wb");
+  if (fp == nullptr)
+    return false;
+#endif
+  const bool ok =
+      (bytes.empty() || std::fwrite(bytes.data(), 1, bytes.size(), fp) == bytes.size()) &&
+      !std::ferror(fp);
+  return ok && std::fclose(fp) == 0;
+}
+
 std::vector<Entry> ReadRaw(const std::filesystem::path& jsonFile) {
   std::vector<Entry> out;
-  std::ifstream f(jsonFile, std::ios::binary);
-  if (!f)
+  std::string bytes;
+  if (!ReadAllBytes(jsonFile, &bytes))
     return out;
   try {
-    nlohmann::json j;
-    f >> j;
+    nlohmann::json j = nlohmann::json::parse(bytes);
     if (!j.is_array())
       return out;
     for (const auto& e : j) {
@@ -76,11 +133,7 @@ bool WriteRaw(const std::filesystem::path& jsonFile, const std::vector<Entry>& e
       std::error_code ec;
       std::filesystem::create_directories(dir, ec);
     }
-    std::ofstream f(jsonFile, std::ios::out | std::ios::binary | std::ios::trunc);
-    if (!f)
-      return false;
-    f << j.dump(2);
-    return f.good();
+    return WriteAllBytes(jsonFile, j.dump(2));
   } catch (...) {
     return false;
   }
@@ -134,6 +187,10 @@ void Remove(const std::filesystem::path& jsonFile, const std::string& drawingPat
           v.end());
   if (v.size() != before)
     WriteRaw(jsonFile, v);
+}
+
+void Clear(const std::filesystem::path& jsonFile) {
+  WriteRaw(jsonFile, {});
 }
 
 }  // namespace recent

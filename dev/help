@@ -10,7 +10,10 @@ agent running under WSL/Linux/Git Bash drive the existing Windows build, test
 and GitHub tooling. They do not replace any of it.
 
 Build & test  (bridge into Windows: cmd.exe -> build.bat -> CMake/MSVC/Ninja)
-  ./dev/build [cmake-build args]   Canonical release build (build.bat)
+  ./dev/build [release|debug] [cmake-build args]
+                                  Canonical build (build.bat). Default release ->
+                                  build/ ; debug -> build/debug/
+  ./dev/run   [release|debug]      Launch the built GoSurvey.exe (run.bat; does not build)
   ./dev/clean [--all]              Delete build tree(s); build.bat re-configures
   ./dev/test  [ctest args]         Build test targets, then ctest --output-on-failure
 
@@ -29,7 +32,8 @@ Escape hatch  (bridge into Windows)
   ./dev/help                       Show this help
 
 Canonical commands this layer wraps:
-  build : cmake --preset ninja-release  (first run)  +  cmake --build build
-  test  : ctest --test-dir build --output-on-failure
-  clean : rm -rf build/
+  build (release) : cmake --preset ninja-release (first run) + cmake --build build
+  build debug     : cmake --preset ninja-debug   (first run) + cmake --build build\debug
+  test            : ctest --test-dir build --output-on-failure
+  clean           : rm -rf build/
 EOF

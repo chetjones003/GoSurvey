@@ -43,7 +43,7 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
 
   // --- Display / System settings ---
   if (s.contains("displayColorThemeIdx") && s["displayColorThemeIdx"].is_number_integer())
-    st.displayColorThemeIdx = std::clamp(s["displayColorThemeIdx"].get<int>(), 0, 1);
+    st.displayColorThemeIdx = 0;  // only Dark; legacy Light (1) migrates to 0
   if (s.contains("settingsActiveTabIdx") && s["settingsActiveTabIdx"].is_number_integer())
     st.settingsActiveTabIdx = std::clamp(s["settingsActiveTabIdx"].get<int>(), 0, 10);
   if (s.contains("displayArcCircleSmoothness") && s["displayArcCircleSmoothness"].is_number_integer())
@@ -196,6 +196,10 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   // (REQ-077 amended: every launch checks). A key left behind in an existing prefs file is
   // simply ignored, so no migration is needed.
 
+  // REQ-336 — What's New auto-open dismiss (same shape as updateSkippedVersion).
+  if (s.contains("whatsNewDismissedVersion") && s["whatsNewDismissedVersion"].is_string())
+    st.whatsNewDismissedVersion = s["whatsNewDismissedVersion"].get<std::string>();
+
   // --- Undo/Redo ---
   if (s.contains("undoHistoryMaxSize") && s["undoHistoryMaxSize"].is_number_integer())
     st.undoHistoryMaxSize = std::clamp(s["undoHistoryMaxSize"].get<int>(), 1, 200);
@@ -236,12 +240,25 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   b  ("objectSnapEndpoint",        &st.objectSnapEndpoint);
   b  ("objectSnapMidpoint",        &st.objectSnapMidpoint);
   b  ("objectSnapCenter",          &st.objectSnapCenter);
+  b  ("objectSnapQuadrant",        &st.objectSnapQuadrant);
   b  ("objectSnapPerpendicular",   &st.objectSnapPerpendicular);
   b  ("objectSnapSurveyPoint",     &st.objectSnapSurveyPoint);
   b  ("objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
   b  ("objectSnapIntersection", &st.objectSnapIntersection);
   b  ("objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   b  ("objectSnapSurface",             &st.objectSnapSurface);
+  // --- 3D Object Snap (REQ-325/#395, supersedes REQ-301's objectSnapSolid) ---
+  b  ("objectSnap3dEnabled",           &st.objectSnap3dEnabled);
+  b  ("objectSnap3dVertex",            &st.objectSnap3dVertex);
+  b  ("objectSnap3dMidpointEdge",      &st.objectSnap3dMidpointEdge);
+  b  ("objectSnap3dNearestFace",       &st.objectSnap3dNearestFace);
+  b  ("objectSnap3dCenterFace",        &st.objectSnap3dCenterFace);
+  b  ("objectSnap3dKnot",              &st.objectSnap3dKnot);
+  b  ("objectSnap3dPerpendicular",     &st.objectSnap3dPerpendicular);
+  // ISOLINES (REQ-313 as amended). Range-checked on read for the same reason the visual style below
+  // is: a bad value should fall back to the default, not strip every curved solid to its edges.
+  if (s.contains("viewportSolidIsolines") && s["viewportSolidIsolines"].is_number_integer())
+    st.viewportSolidIsolines = std::clamp(s["viewportSolidIsolines"].get<int>(), 0, kSolidMaxIsolines);
   num("objectSnapAperturePx",      &st.objectSnapAperturePx,  4.f, 64.f);
   num("objectSnapGlyphHalfPx",     &st.objectSnapGlyphHalfPx, 3.f, 48.f);
   num("gripSizePx",                &st.gripSizePx,            2.f, 20.f);
@@ -409,6 +426,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["updateCheckEnabled"]   = st.updatePrefs.enabled;
   s["updateUseBetaChannel"] = st.updatePrefs.useBetaChannel;
   s["updateSkippedVersion"] = st.updatePrefs.skippedVersion;
+  s["whatsNewDismissedVersion"] = st.whatsNewDismissedVersion;
 
   // Right-click behavior
   s["rightClickRepeatLastCommand"] = st.rightClickRepeatLastCommand;
@@ -447,6 +465,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["objectSnapEndpoint"]         = st.objectSnapEndpoint;
   s["objectSnapMidpoint"]         = st.objectSnapMidpoint;
   s["objectSnapCenter"]           = st.objectSnapCenter;
+  s["objectSnapQuadrant"]         = st.objectSnapQuadrant;
   s["objectSnapPerpendicular"]    = st.objectSnapPerpendicular;
   s["objectSnapSurveyPoint"]      = st.objectSnapSurveyPoint;
   s["objectSnapGeometricCenter"]  = st.objectSnapGeometricCenter;
@@ -454,6 +473,14 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["objectSnapIntersection"]     = st.objectSnapIntersection;
   s["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   s["objectSnapSurface"]              = st.objectSnapSurface;
+  s["objectSnap3dEnabled"]            = st.objectSnap3dEnabled;
+  s["objectSnap3dVertex"]             = st.objectSnap3dVertex;
+  s["objectSnap3dMidpointEdge"]       = st.objectSnap3dMidpointEdge;
+  s["objectSnap3dNearestFace"]        = st.objectSnap3dNearestFace;
+  s["objectSnap3dCenterFace"]         = st.objectSnap3dCenterFace;
+  s["objectSnap3dKnot"]               = st.objectSnap3dKnot;
+  s["objectSnap3dPerpendicular"]      = st.objectSnap3dPerpendicular;
+  s["viewportSolidIsolines"]          = st.viewportSolidIsolines;
   s["objectSnapAperturePx"]       = st.objectSnapAperturePx;
   s["objectSnapGlyphHalfPx"]      = st.objectSnapGlyphHalfPx;
   s["gripSizePx"]                 = st.gripSizePx;

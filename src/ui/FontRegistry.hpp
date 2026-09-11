@@ -23,4 +23,20 @@ void SetDefault(ImFont* f);
 void SetToolspace(ImFont* f);
 ImFont* Toolspace();
 
+/// What's New / billboard body (Segoe UI Semilight). Falls back to Toolspace then default.
+void SetBillboard(ImFont* f);
+ImFont* Billboard();
+
+/// In-app wiki reader body (IBM Plex Sans, bundled). Falls back to Billboard then default.
+void SetWiki(ImFont* f);
+ImFont* Wiki();
+
+/// Wiki headings (IBM Plex Sans Condensed). Falls back to Wiki body font.
+void SetWikiHeading(ImFont* f);
+ImFont* WikiHeading();
+
+/// Wiki code blocks (IBM Plex Mono). Falls back to Wiki body font.
+void SetWikiMono(ImFont* f);
+ImFont* WikiMono();
+
 }  // namespace FontReg

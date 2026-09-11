@@ -20,9 +20,9 @@ bool BrowseOpenFileDwgUtf8(char* utf8Out, size_t utf8Cap);
 
 bool BrowseSaveFileDwgUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
-bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap);
-
-bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+/// GoSurvey workspace-template (.gst) picker for the Settings > Files startup-template setting.
+/// Not a general drawing-document format — see issue #264.
+bool BrowseOpenFileGstUtf8(char* utf8Out, size_t utf8Cap);
 
 bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap);
 
@@ -35,5 +35,5 @@ bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap);
 /// glTF / GLB 3D model for import (REQ-065).
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap);
 
-/// Block definition import — `.gs`, `.dxf`, or `.dwg` (WBLOCK drawings included).
+/// Block definition import — `.dxf` or `.dwg` (WBLOCK drawings included).
 bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap);

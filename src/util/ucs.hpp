@@ -2,6 +2,7 @@
 
 #include "ray3d.hpp"
 
+#include <array>
 #include <cmath>
 
 /// The User Coordinate System: one authoritative WCS <-> UCS implementation (REQ-154, GitHub #126).
@@ -117,6 +118,74 @@ struct Ucs {
   p.point = u.origin;
   p.normal = u.zAxis;
   return p;
+}
+
+/// Elevation of \p plane at world (x, y) -- the Z a viewport click at that XY commits at when the
+/// plane is the active work plane (REQ-058 / REQ-154). For a plane parallel to world XY (every
+/// pre-UCS drawing) the two offset terms vanish and this is exactly the plane origin's Z.
+///
+/// Falls back to the plane origin's Z for a near-vertical plane (`|n.z| < 1e-9`), where XY does not
+/// determine Z. Single definition so the viewport's plan-view branch and the headless test driver
+/// cannot silently drift (issue #201).
+[[nodiscard]] inline double WorkPlaneZAt(const ray3d::Plane& plane, double x, double y) {
+  const ray3d::Vec3 n = ray3d::Normalize(plane.normal);
+  if (!(std::fabs(n.z) > 1e-9)) return plane.point.z;
+  return plane.point.z - (n.x * (x - plane.point.x) + n.y * (y - plane.point.y)) / n.z;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The plane contract (REQ-311). A `Ucs` IS the plane abstraction #120 asks for: an origin, a
+// normal, and an in-plane X/Y axis pair are exactly the four members it already carries. Rather
+// than add a second type saying the same thing -- which could then disagree with the UCS about what
+// a plane is, the very failure the requirement exists to prevent -- the plane operations live here,
+// on the frame the UCS already uses. `ray3d::Plane` stays the origin+normal form used for ray
+// casting; it carries no in-plane axes and so cannot express a 2D coordinate at all.
+// ---------------------------------------------------------------------------------------------
+
+/// A point in a plane's own 2D coordinates: signed distances along its X and Y axes from its origin.
+struct Point2D {
+  double x = 0.0;
+  double y = 0.0;
+};
+
+/// World XYZ -> \p u's 2D plane coordinates, with the off-plane part reported separately.
+///
+/// \p outOffset is the signed distance along the normal, positive on the +Z side. It is an explicit
+/// output rather than something quietly dropped: flattening a point onto a plane and measuring how
+/// far off it a point sits are different operations, and discarding the third component in silence
+/// is how a point gets treated as lying on a plane it does not lie on.
+[[nodiscard]] inline Point2D WorldToPlane(const Ucs& u, const Vec3& world, double* outOffset = nullptr) {
+  const Vec3 local = WorldToUcs(u, world);
+  if (outOffset)
+    *outOffset = local.z;
+  return {local.x, local.y};
+}
+
+/// \p u's 2D plane coordinates -> world XYZ. The exact inverse of \ref WorldToPlane: for a point on
+/// the plane with the default \p offset, and for the (point, offset) pair otherwise.
+[[nodiscard]] inline Vec3 PlaneToWorld(const Ucs& u, const Point2D& p, double offset = 0.0) {
+  return UcsToWorld(u, Vec3{p.x, p.y, offset});
+}
+
+/// The signed distance from \p world to \p u's XY plane, positive on the +Z side.
+[[nodiscard]] inline double SignedDistanceToPlane(const Ucs& u, const Vec3& world) {
+  return Dot(ray3d::Sub(world, u.origin), u.zAxis);
+}
+
+/// \p world dropped onto \p u's XY plane along the normal.
+[[nodiscard]] inline Vec3 ProjectOntoPlane(const Ucs& u, const Vec3& world) {
+  return ray3d::Sub(world, ray3d::Scale(u.zAxis, SignedDistanceToPlane(u, world)));
+}
+
+/// The point at \p angleRad around a circle of \p radius centred on \p u's origin, measured from
+/// \p u's +X axis toward its +Y.
+///
+/// The single place a planar curve's parametrisation is written down. A circle or arc carrying a
+/// normal is rendered, hit-tested, snapped to and exported through this one function, so those four
+/// cannot disagree about which way a tilted curve winds -- and with the frame built by
+/// \ref FromNormal, that winding is the one a DXF consumer reconstructs from group 210.
+[[nodiscard]] inline Vec3 PointOnPlaneCircle(const Ucs& u, double radius, double angleRad) {
+  return PlaneToWorld(u, Point2D{radius * std::cos(angleRad), radius * std::sin(angleRad)});
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -324,6 +393,83 @@ inline void SpinPair(Vec3* a, Vec3* b, double deg) {
   return true;
 }
 
+/// POLAR tracking: snap \p target onto the nearest polar ray around \p anchor (issue #154, REQ-154).
+///
+/// A polar ray is a direction in \p u's XY plane at a multiple of \p incrementDeg from the UCS +X,
+/// plus any one-off bearings passed in \p extraDeg (\p extraCount entries; pass nullptr / 0 for
+/// none). The angle is measured with the *same* reference \ref AngleInRotationPlaneDeg and the UCS
+/// `2P` option use — from +X, positive toward +Y — so a frame rotated about Z carries the rays with
+/// it: a 90 deg pull under a 45 deg UCS lands on the UCS axis, not the world axis.
+///
+/// The distance from the anchor and any out-of-plane (UCS Z) component of \p target are preserved;
+/// only the in-plane bearing is quantised. Returns \p target unchanged when it sits on \p anchor
+/// (no direction to snap) or when \p incrementDeg is not positive and no extra angles are given.
+[[nodiscard]] inline Vec3 SnapToPolarRay(const Ucs& u, const Vec3& anchor, const Vec3& target,
+                                         double incrementDeg, const double* extraDeg = nullptr,
+                                         int extraCount = 0) {
+  const Vec3 d = WorldVectorToUcs(u, ray3d::Sub(target, anchor));
+  const double planar = std::sqrt(d.x * d.x + d.y * d.y);
+  if (planar < 1e-9)
+    return target;
+  const double kRad = detail::kDegToRad;
+  const double cur = std::atan2(d.y, d.x) / kRad;  // degrees, UCS +X reference
+  auto wrap180 = [](double deg) {
+    double w = std::fmod(deg + 180.0, 360.0);
+    if (w < 0.0)
+      w += 360.0;
+    return w - 180.0;
+  };
+  bool have = false;
+  double best = 0.0, bestErr = 0.0;
+  auto consider = [&](double cand) {
+    const double err = std::fabs(wrap180(cur - cand));
+    if (!have || err < bestErr) {
+      have = true;
+      best = cand;
+      bestErr = err;
+    }
+  };
+  if (incrementDeg >= 1e-6)
+    consider(std::round(cur / incrementDeg) * incrementDeg);
+  for (int i = 0; i < extraCount && extraDeg; ++i)
+    consider(extraDeg[i]);
+  if (!have)
+    return target;
+  const double r = best * kRad;
+  const Vec3 snapped{planar * std::cos(r), planar * std::sin(r), d.z};
+  return ray3d::Add(anchor, UcsVectorToWorld(u, snapped));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Orthographic presets (REQ-154, D-2026-09-06-a).
+//
+// The six standard views as WORK FRAMES: each makes one world face the XY work plane, with the
+// origin at the world origin. `Top` is the WCS itself. This is AutoCAD's standard orthographic-UCS
+// axis mapping. Kept as one shared table so the View-tab "Coordinate system" combo and the
+// ViewCube frame selector cannot offer different lists (REQ-154: the two must not disagree).
+//
+// The frames are computed constants — nothing here is persisted; a preset selected in the UI is
+// fed straight to the ordinary `SetActiveUcs` path, so ORTHO, the grid and UCSFOLLOW treat it as
+// any other frame.
+// ---------------------------------------------------------------------------------------------
+
+struct OrthoPreset {
+  const char* name;
+  Ucs frame;
+};
+
+[[nodiscard]] inline const std::array<OrthoPreset, 6>& OrthographicPresets() {
+  static const std::array<OrthoPreset, 6> kPresets = {{
+      {"Top", Ucs{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}}},
+      {"Bottom", Ucs{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, {0.0, 0.0, -1.0}}},
+      {"Front", Ucs{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, -1.0, 0.0}}},
+      {"Back", Ucs{{0.0, 0.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 1.0, 0.0}}},
+      {"Left", Ucs{{0.0, 0.0, 0.0}, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0}}},
+      {"Right", Ucs{{0.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0}}},
+  }};
+  return kPresets;
+}
+
 // ---------------------------------------------------------------------------------------------
 // PLAN support.
 // ---------------------------------------------------------------------------------------------
@@ -347,11 +493,11 @@ inline void SpinPair(Vec3* a, Vec3* b, double deg) {
 /// a lot line is a pure rotation about world Z, and it is precisely there that the eye direction
 /// carries no azimuth information at all.
 ///
-/// **This orients the camera, it does not roll it.** `Camera` stores azimuth and elevation only —
-/// a deliberate choice (Camera.hpp) that avoids the pole flip a free eye/up pair suffers. So for a
-/// UCS whose Z is tilted away from world Z, the resulting view looks squarely at the UCS XY plane
-/// but its screen-up is the azimuth/elevation convention's up rather than the UCS's own +Y. Callers
-/// that care use \ref PlanViewIsExact to say so; see the requirement's documented limitation.
+/// **This derives azimuth/elevation only; it does not compute the roll.** For a UCS whose Z is
+/// world +Z the roll is zero and screen-up is already the UCS +Y. For a tilted UCS the caller pairs
+/// this with `Camera::RollToPlaceUp(az, el, u.yAxis)` to turn screen-up onto the UCS +Y — the two
+/// steps together make PLAN exact for every frame (GitHub #153). Kept split so this stays pure of
+/// the `Camera` convention.
 inline void PlanViewAngles(const Ucs& u, float* azimuthDeg, float* elevationDeg) {
   const Vec3 eye = Normalize(u.zAxis);
   if (Dot(eye, eye) < 0.5)  // degenerate: leave the caller's values alone
@@ -379,14 +525,15 @@ inline void PlanViewAngles(const Ucs& u, float* azimuthDeg, float* elevationDeg)
   *azimuthDeg = static_cast<float>(az);
 }
 
-/// True when \ref PlanViewAngles can reproduce \p u's in-plane orientation exactly — that is, when
-/// the UCS +Y really will point up the screen.
+/// True when PLAN of \p u can place the UCS +Y up the screen exactly — now the case for every valid
+/// frame (GitHub #153).
 ///
-/// Holds for every UCS whose Z axis is world +Z (any translation, any rotation about Z), which is
-/// the whole 2D survey case and the default. It fails only for a genuinely tilted UCS, where the
-/// missing degree of freedom is camera roll.
+/// Before `Camera` gained a roll axis this held only for a UCS whose Z was world +Z; a tilted frame
+/// was oriented correctly but its in-plane spin could not be set. `Camera::RollToPlaceUp` supplies
+/// that missing degree of freedom, so the only frame this now rejects is a degenerate one — which
+/// `ucs` construction refuses to produce in the first place.
 [[nodiscard]] inline bool PlanViewIsExact(const Ucs& u, double tol = 1e-6) {
-  return std::fabs(u.zAxis.x) <= tol && std::fabs(u.zAxis.y) <= tol && u.zAxis.z > 0.0;
+  return IsRightHandedOrthonormal(u, tol);
 }
 
 /// The UCS's rotation about world +Z, in degrees — what the ViewCube's compass and square-up arrows

@@ -15,17 +15,22 @@
 #include "CadBlocks.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadRubberPreview.hpp"
+#include "util/gizmooverlay.hpp"  // CadGizmoOverlay, constructed here (REQ-060)
 #include "TransformPreview.hpp"
 #include "CadUi.hpp"
+#include "WikiHelp.hpp"
+#include "util/framewatch.hpp"
 #include "PdfAttachDialog.hpp"
 #include "ViewportRenderer.hpp"
 #include "CadSnap.hpp"
 #include "PdfAttach.hpp"
 #include "SurveyPoints.hpp"
 #include "AppIcon.hpp"
+#include "AppPaths.hpp"
 #include "GsIo.hpp"
 #include "DwgIo.hpp"
 #include "SplashScreen.hpp"
+#include "WinFrameControls.hpp"
 #ifdef GOSURVEY_DEVELOPER_SHELL
 #include "DevShell.hpp"
 #endif
@@ -34,8 +39,11 @@
 #include "UpdateService.hpp"
 #include "TelemetryService.hpp"
 #include "AuthService.hpp"
+#include "HttpFetch.hpp"  // HasInternetConnectivity — launch auth spinner timer
 #include "Version.hpp"
+#include "WhatsNewLogic.hpp"
 
+#include <chrono>
 #include <ctime>
 
 #ifdef _WIN32
@@ -56,6 +64,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -64,9 +73,11 @@ namespace
 
   /// Returns the first command-line argument naming an existing file, as UTF-8, or empty.
   ///
-  /// BUG-012: the installer registers `.gs` with `shell\open\command = "...GoSurvey.exe" "%1"`,
-  /// so Explorer has always passed the path — and `main()` took no arguments, so it was silently
-  /// dropped and double-clicking a drawing opened an empty session.
+  /// BUG-012: the installer used to register `.gs` with `shell\open\command = "...GoSurvey.exe"
+  /// "%1"` (removed by issue #264 — `.gs` is no longer an openable document), so Explorer passed
+  /// the path — and `main()` took no arguments, so it was silently dropped and double-clicking a
+  /// drawing opened an empty session. Still handling this so a path passed on the command line
+  /// any other way (a shortcut, a shell verb someone adds later) keeps working.
   ///
   /// Reads the WIDE command line rather than adding `argc`/`argv` to `main`. `argv` is encoded in
   /// the process ANSI codepage, so a drawing under a path containing characters outside it would
@@ -114,7 +125,7 @@ namespace
         return false;
       std::vector<std::string> boot;
       const std::string u8 = p.u8string();
-      if (!LoadGoSurveyFile(cmd, u8.c_str(), boot))
+      if (!LoadGoSurveyTemplateFile(cmd, u8.c_str(), boot))
         return false;
       appendLines(boot);
       return true;
@@ -127,26 +138,26 @@ namespace
       {
         std::vector<std::string> boot;
         const std::string u8 = custom.u8string();
-        if (LoadGoSurveyFile(cmd, u8.c_str(), boot))
+        if (LoadGoSurveyTemplateFile(cmd, u8.c_str(), boot))
         {
           appendLines(boot);
           LoadBundledBlockLibrary(cmd, cmdLog);
           return;
         }
         appendLines(boot);
-        cmdLog.push_back("Startup: custom template failed to load; trying bundled default-template.gs.");
+        cmdLog.push_back("Startup: custom template failed to load; trying bundled default-template.gst.");
       }
       else
       {
-        cmdLog.push_back("Startup: custom template path not found; trying bundled default-template.gs.");
+        cmdLog.push_back("Startup: custom template path not found; trying bundled default-template.gst.");
       }
     }
 
-    if (tryLoadPath(ResolveDefaultWorkspaceTemplateGsPath())) {
+    if (tryLoadPath(ResolveDefaultWorkspaceTemplateGstPath())) {
       LoadBundledBlockLibrary(cmd, cmdLog);
       return;
     }
-    cmdLog.push_back("Startup: bundled default-template.gs not found; starting with an empty drawing.");
+    cmdLog.push_back("Startup: bundled default-template.gst not found; starting with an empty drawing.");
     LoadBundledBlockLibrary(cmd, cmdLog);
   }
 
@@ -199,6 +210,54 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 #endif
 
+// GitHub issue #168 — append one diagnostic line per stall episode to
+// `%APPDATA%\GoSurvey\frame-watch.log`. Written to a file, not the command line, for the same reason
+// BENCH is (CadCommands_Bench.cpp): a stall that forces a kill of the app takes the scrollback with
+// it, and the numbers are what the investigation needs. Best-effort — a failed open is silently
+// skipped rather than allowed to disturb the frame loop it is diagnosing.
+static void AppendFrameWatchLog(const AppCommandState& cmd, const framewatch::Tick& tick)
+{
+  namespace fs = std::filesystem;
+  const fs::path dir = UserDataDirectory();
+  if (dir.empty())
+    return;
+  std::error_code ec;
+  fs::create_directories(dir, ec);
+  std::ofstream f(dir / "frame-watch.log", std::ios::app);
+  if (!f)
+    return;
+
+  const std::time_t t = std::time(nullptr);
+  char timeBuf[32] = "0000-00-00 00:00:00";
+  struct tm tmInfo{};
+  if (localtime_s(&tmInfo, &t) == 0)
+    std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tmInfo);
+
+  const char* phase = tick.event == framewatch::Event::StallBegan ? "STALL BEGAN" : "STALL ENDED";
+  const SelectedEntity& hov = cmd.viewportHoverEntity;
+
+  f << timeBuf << "  " << phase << "  frame=" << tick.frameMs << "ms"
+    << "  episode=" << tick.stalledFrames << "frames/" << tick.stalledMs << "ms\n";
+  f << "    perf: viewportUi=" << cmd.perfViewportUiMs << "  render=" << cmd.perfRenderMs
+    << "  hoverPick=" << cmd.perfHoverPickMs << (cmd.perfHoverPickRan ? "(ran)" : "(cached)")
+    << "  snap=" << cmd.perfSnapMs << "\n";
+  f << "    cmd: active=" << AppCommandState::KindName(cmd.active)
+    << "  last=" << AppCommandState::KindName(cmd.lastCommand)
+    << "  selBoxDrag=" << (cmd.selBoxWaitingSecond ? 1 : 0)
+    << "  selection=" << cmd.selection.size()
+    << "  selSurveyPts=" << cmd.selectedSurveyPointIndices.size()
+    << "  hover=" << (cmd.viewportHoverEntityValid ? static_cast<int>(hov.type) : -1) << "\n";
+  f << "    drawing: tab=" << cmd.activeDrawingIdx << "  space=" << cmd.activeSpaceIndex
+    << "  lines=" << cmd.userLineAttrs.size()
+    << "  polylines=" << (cmd.userPolylineOffsets.empty() ? size_t{0} : cmd.userPolylineOffsets.size() - 1)
+    << "  circles=" << cmd.userCircleAttrs.size() << "  arcs=" << cmd.userArcs.size()
+    << "  ellipses=" << cmd.userEllipses.size() << "  points=" << cmd.surveyPoints.size()
+    << "  annotations=" << cmd.cadAnnotations.size() << "  surfaces=" << cmd.cadSurfaces.size()
+    << "  filledRegions=" << cmd.cadFilledRegions.size()
+    << "  zoom=" << cmd.viewportZoom << "  pan=(" << cmd.viewportPanX << "," << cmd.viewportPanY << ")\n";
+  f.flush();
+}
+
 int main()
 {
 #ifdef _WIN32
@@ -221,8 +280,8 @@ int main()
   // transparency isn't guaranteed by every compositor) maximized window. GlfwApplyMainStageWindowChrome
   // (called after RunStartupSplash below) is the only maximize call now, so the window makes one
   // clean size/decoration transition instead of two.
-  constexpr int kSplashWinW = 440;
-  constexpr int kSplashWinH = 320;
+  constexpr int kSplashWinW = 880;
+  constexpr int kSplashWinH = 640;
   GLFWwindow *window = glfwCreateWindow(kSplashWinW, kSplashWinH, "GoSurvey", nullptr, nullptr);
   if (!window)
   {
@@ -275,7 +334,7 @@ int main()
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
 
-  ApplyCadLightTheme();
+  ApplyCadDarkTheme();
   if (!LoadApplicationFont())
     std::fprintf(stderr, "Calibri not found; using ImGui default font.\n");
   io.FontGlobalScale = 1.35f;
@@ -306,16 +365,30 @@ int main()
   // Shown only now (GlfwApplySplashStageWindowHints set GLFW_VISIBLE false) so it never flashes
   // at an unpositioned spot before glfwSetWindowPos above took effect.
   glfwShowWindow(window);
+  GlfwPlatformApplySplashRoundedRegion(
+      window, 8.f * std::max(1.f, static_cast<float>(kSplashWinH) / 320.f));
+
+  // REQ-077: the update check runs during the splash so the main window (and REQ-336 What's New)
+  // is never blocked by a "Checking for updates" modal. Only the persisted settings live in
+  // AppCommandState; the worker state is owned here.
+  update::UpdateState updateState;
+  updateState.prefs = cmd.updatePrefs;
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  if (!devshellCli)
+#endif
+    update::BeginStartupCheck(updateState, "chetjones003/GoSurvey");
 
   // REQ-093: hardcoded 5 s regardless of how fast the real preload below finishes — the app is
   // still low-resource enough that the actual load is imperceptible, so the splash's duration is
-  // deliberately decoupled from it rather than trying to track real progress.
+  // deliberately decoupled from it rather than trying to track real progress. When the update
+  // check is still in flight after 5 s, the splash stays up until it resolves (bounded by the
+  // check timeout in UpdateService).
 #ifdef GOSURVEY_DEVELOPER_SHELL
-  RunStartupSplash(window, devshellCli ? 0.0 : 5.0);
+  RunStartupSplash(window, devshellCli ? 0.0 : 5.0, &updateState);
 #else
-  RunStartupSplash(window, 5.0);
+  RunStartupSplash(window, 5.0, &updateState);
 #endif
-  // The splash ran in a small (~440x320) window. Maximizing it for the main stage leaves the stale
+  // The splash ran in a small (~880x640) window. Maximizing it for the main stage leaves the stale
   // splash front buffer stretched fullscreen for the frames it takes DWM to catch up — the "glitchy
   // maximized splash". Fix: hide the window across the maximize and the entire pre-loop setup, and
   // only reveal it once the first REAL UI frame has been rendered and swapped (see mainWindowShown
@@ -330,16 +403,13 @@ int main()
   glfwPollEvents();
   bool mainWindowShown = false;
 
-  // REQ-077: the update check. Only the persisted settings live in AppCommandState; the worker
-  // state is owned here, so no drawing state is ever touched from a background thread.
-  update::UpdateState updateState;
-  updateState.prefs = cmd.updatePrefs;
-  // Runs on EVERY launch (no throttle) and gates the session: the dialog stays modal until it
-  // resolves. Does nothing at all when the user has switched the check off.
-#ifdef GOSURVEY_DEVELOPER_SHELL
-  if (!devshellCli)
-#endif
-  update::BeginStartupCheck(updateState, "chetjones003/GoSurvey");
+  // REQ-078 before REQ-336: if the splash check found an update, do not auto-open What's New.
+  if (updateState.phase == update::Phase::UpdateReady)
+    cmd.whatsNewAutoOpenedThisLaunch = true;
+  else if (cmd.activeDrawingIdx == 0 &&
+           WhatsNewShouldAutoOpen(GOSURVEY_VERSION_FULL, cmd.whatsNewDismissedVersion, false))
+    cmd.whatsNewOpeningPending = true;
+
   /// Set once the user has confirmed an update and the app is exiting to hand over to the
   /// installer, so the normal quit path can tell the two cases apart.
   bool updateExitPending = false;
@@ -364,15 +434,15 @@ int main()
   // and it failed" (REQ-201: shown, not swallowed) — both complete through the same poll below.
   std::unique_ptr<auth::AuthTask> authTask;
   bool                            authLastAttemptInteractive = false;
-  authTask                                                   = auth::BeginSilentRefresh();
-  cmd.authBusy                                                = true;
+  authTask     = auth::BeginSilentRefresh();
+  cmd.authBusy = true;
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
   cmdLog.push_back("Regenerating model.");
   cmdLog.push_back("Drawing Created.");
   cmdLog.push_back("JSON database - ready...");
   // BUG-012: a drawing passed on the command line wins over the startup template. Someone who
-  // double-clicked a .gs wants that drawing, not a blank sheet built from their template.
+  // opened a drawing this way wants that drawing, not a blank sheet built from their template.
   bool openedFromCommandLine = false;
   {
     const std::string startupFile = FirstExistingFileArgumentUtf8();
@@ -389,16 +459,16 @@ int main()
         cmdLog.push_back("Could not open " + startupFile + "; starting from the usual template.");
       else
       {
-        // BUG-027: loading a drawing is not the same as OWNING it. Until this ran, a .gs opened by
-        // double-click was loaded but anonymous - the tab still read "Drawing 1", and the first
-        // Save (menu or Ctrl+S) opened Save As and then asked permission to overwrite the user's
-        // own drawing. File > Open adopts its path for exactly this reason; the startup argument
-        // never did.
+        // BUG-027: loading a drawing is not the same as OWNING it. Until this ran, a drawing opened
+        // this way was loaded but anonymous - the tab still read "Drawing 1", and the first Save
+        // (menu or Ctrl+S) opened Save As and then asked permission to overwrite the user's own
+        // drawing. File > Open adopts its path for exactly this reason; the startup argument never
+        // did.
         //
-        // Adopted HERE and not inside LoadGoSurveyFile: the startup TEMPLATE loads through that
-        // same function, and a blank drawing that adopted default-template.gs as its save target
-        // would overwrite the template on the next Ctrl+S. Only the caller knows whether the file
-        // it just read is the document or the mould for one.
+        // Adopted HERE and not inside LoadGoSurveyTemplateFile: the startup TEMPLATE loads through
+        // that same function, and a blank drawing that adopted default-template.gst as its save
+        // target would overwrite the template on the next Ctrl+S. Only the caller knows whether the
+        // file it just read is the document or the mould for one.
         std::error_code             absEc;
         const std::filesystem::path argPath(startupFile);
         // Absolute, because a relative argument would otherwise be re-resolved later against
@@ -435,10 +505,8 @@ int main()
   // Re-apply user preferences so they override any template defaults (crosshair, snap, survey, etc.).
   LoadUserStartupPrefSettings(cmd);
   // Re-apply theme now that displayColorThemeIdx is known from saved prefs.
-  if (cmd.displayColorThemeIdx == 0)
-    ApplyCadDarkTheme();
-  else
-    ApplyCadLightTheme();
+  cmd.displayColorThemeIdx = 0;
+  ApplyCadDarkTheme();
   if (!cmd.surveyPoints.empty())
   {
     RepositionAllSurveyPointLabels(cmd);
@@ -457,7 +525,7 @@ int main()
   // 130 of tools + gutter under panel titles, plus the REQ-302 tab strip and gap
   // (kRibbonTabStripH + kRibbonTabStripGapY). Extra 10px keeps two-line captions
   // above the title strip after the Survey-tab label layout.
-  const float ribbonH = 139.f + 28.f + 4.f + 10.f + 34.f;  // +34: taller rows → more readable icons
+  const float ribbonH = 139.f + 28.f + 4.f + 10.f + 34.f + 16.f;  // +16: larger 32px-standard icons
   bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
@@ -469,9 +537,38 @@ int main()
   int devshellFrames = 0;
 #endif
 
+  auto perfPrevFrame = std::chrono::steady_clock::now();
+  framewatch::FrameWatch frameWatch;
+  bool launchAuthTimerArmed = false;
   while (true)
   {
     glfwPollEvents();
+
+    cmd.appWindowFocused = (glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE);
+
+    if (!launchAuthTimerArmed && HasInternetConnectivity() && !cmd.authGateResolved) {
+      BeginLaunchAuthOverlayTimer();
+      launchAuthTimerArmed = true;
+    }
+
+    // Frame-time HUD (issue #166 investigation, PERFHUD command). Frame-to-frame wall clock,
+    // measured at the top so it is the whole cost — poll, UI, render, swap, vsync wait.
+    {
+      const auto now = std::chrono::steady_clock::now();
+      cmd.perfFrameMs = std::chrono::duration<double, std::milli>(now - perfPrevFrame).count();
+      perfPrevFrame = now;
+    }
+
+    // GitHub issue #168 — freeze/stall detector. The frame time just measured is the full cost of
+    // the PREVIOUS iteration; on a slow frame `cmd`'s state is still that iteration's (the loop has
+    // not run again yet), so the snapshot names the subsystem that stalled. One line per episode:
+    // the first slow frame and the first healthy frame after it. See util/framewatch.hpp for why
+    // this cannot catch a true never-returning infinite loop.
+    {
+      const framewatch::Tick fwTick = framewatch::FrameWatchTick(&frameWatch, cmd.perfFrameMs);
+      if (fwTick.event == framewatch::Event::StallBegan || fwTick.event == framewatch::Event::StallEnded)
+        AppendFrameWatchLog(cmd, fwTick);
+    }
 
     // --- REQ-100 frame-budget benchmark ---------------------------------------------------------
     // Timed at the TOP of the iteration, so each sample is the full frame-to-frame cost the user
@@ -502,13 +599,17 @@ int main()
           // work that recurred while orbiting. It must stay 0.
           if (!cmd.bench.regenBaselineTaken)
           {
-            cmd.bench.regenAtStart      = cmd.surfaceDisplayRegenCount;
+            // Both caches, summed: the surface profile grows surfaceDisplayRegenCount and the solid
+            // profile grows solidDisplayRegenCount, only one profile runs at a time, and the other
+            // term is constant across the run — so the delta is whichever cache the profile exercises.
+            cmd.bench.regenAtStart      = cmd.surfaceDisplayRegenCount + cmd.solidDisplayRegenCount;
             cmd.bench.regenBaselineTaken = true;
             // Captured here, not at FinishFrameBudgetBench: by then the bench scene has already been
             // swapped back out for the user's drawing and the cache holds their surfaces, not this one.
             cmd.bench.surfaceContourSegs = SurfaceDisplayContourSegs(cmd);
           }
-          cmd.bench.regenDuringRun = cmd.surfaceDisplayRegenCount - cmd.bench.regenAtStart;
+          cmd.bench.regenDuringRun =
+              (cmd.surfaceDisplayRegenCount + cmd.solidDisplayRegenCount) - cmd.bench.regenAtStart;
         }
         benchPrevTime = nowT;
       }
@@ -627,13 +728,32 @@ int main()
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    WikiHelpBeginFrame();
+    CadUiBeginHelpFrame();
+
+    cmd.whatsNewModalVisible = false;
+    if (cmd.activeDrawingIdx == 0)
+      MaybeAutoOpenWhatsNew(cmd);
+
     // REQ-047: F3 (object snap) and F8 (ortho) are MODE toggles — like AutoCAD they must work even while
     // the command bar has keyboard focus. They are not text characters, so handling them during
     // WantTextInput never interferes with typing a command.
     if (ImGui::IsKeyPressed(ImGuiKey_F3, false))
       cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
-    if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
+    // REQ-325/#395: F4 is 3D Object Snap's OWN master toggle — independent of F3 above, matching
+    // AutoCAD's separate 2D/3D Object Snap systems.
+    if (ImGui::IsKeyPressed(ImGuiKey_F4, false))
+      cmd.objectSnap3dEnabled = !cmd.objectSnap3dEnabled;
+    if (ImGui::IsKeyPressed(ImGuiKey_F8, false)) {
       orthoEnabled = !orthoEnabled;
+      if (orthoEnabled)
+        cmd.polarMode = false;  // ORTHO and POLAR are mutually exclusive (issue #154)
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_F10, false)) {
+      cmd.polarMode = !cmd.polarMode;
+      if (cmd.polarMode)
+        orthoEnabled = false;
+    }
     cmd.orthoMode = orthoEnabled;
 
     // Ctrl+S (BUG-026). The File menu has always ADVERTISED this shortcut, but ImGui's MenuItem
@@ -669,6 +789,21 @@ int main()
       else if (cmd.tableCellEditorOpen)
       {
         CancelTableCellEditor(cmd);
+        cmdBuf[0] = '\0';
+      }
+      else if (cmd.pickDisambiguationPopupOpen)
+      {
+        CancelPickDisambiguationPopup(cmd);
+        cmdBuf[0] = '\0';
+      }
+      else if (cmd.gizmoDragActive)
+      {
+        // A TRUE cancel, not an undo: a live gizmo drag changes nothing in the store until it is
+        // committed, so abandoning one costs an undo step nobody spent. Ahead of the other grips
+        // for the same reason it is ahead of them on click — it is the gesture in progress.
+        CancelGizmoDrag(cmd);
+        BumpCadGpuCache(cmd);
+        cmdLog.push_back("Gizmo drag cancelled.");
         cmdBuf[0] = '\0';
       }
       else if (cmd.mtextGripMoveActive)
@@ -761,6 +896,16 @@ int main()
     // from regenerating every surface's geometry (REQ-070: a style change must not retriangulate,
     // and a line drawn elsewhere must not re-contour).
     RefreshSurfaceDisplayGeometry(cmd);
+    // The solid tessellation cache (REQ-313). Same placement and the same reason as the surface
+    // refresh above: keyed on its own staleness key, so an unrelated edit does not retessellate a
+    // solid, and #120's "do not regenerate a solid's render mesh every frame" holds by construction.
+    RefreshSolidDisplayGeometry(cmd);
+    // A sub-object reference is an index PLUS the solid it came from, and it EXPIRES rather than
+    // re-binding when that solid is replaced (REQ-318 item 10 / ADR-049). Swept here, once a frame,
+    // rather than at each of the many places a solid can be erased, undone or replaced — one sweep
+    // that cannot be forgotten beats a dozen call sites that can. Costs nothing when the selection
+    // is empty, which is the overwhelming case.
+    ExpireSubObjectSelection(cmd);
 
     const ImGuiViewport *mainVp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainVp->WorkPos);
@@ -929,6 +1074,11 @@ int main()
                           CadCoord::WorldYFromLocal(cmd, static_cast<float>(curY)), cmd.uiCursorWorldZ,
                           &orthoEnabled, &gridVisible);
 
+    // Contextual F1: after ribbon, command bar, and status bar so hover + fuzzy autocomplete state
+    // are from this frame (WikiHelpBeginFrame clears hover at frame start).
+    if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
+      RequestContextualWikiWindow(cmd, cmdBuf);
+
     // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
     // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.
     {
@@ -941,8 +1091,12 @@ int main()
 
     DrawQuickSelectWindow(cmd, cmdLog);
     DrawSelectionCyclingPanel(cmd);
+    DrawPickDisambiguationPopup(cmd, cmdLog);
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd, &cmdLog);
+    DrawAccountDetailsWindow(cmd);
+    DrawWhatsNewWindow(cmd);  // REQ-336
+    DrawWikiWindow(cmd);
     DrawUnitsDialog(cmd, &cmdLog);
     DrawRightClickCustomizationDialog(cmd, &cmdLog);  // REQ-084 (a)
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
@@ -989,11 +1143,14 @@ int main()
     DrawBlockAuthoringPalettes(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);
+    DrawSelectColorPopup(cmd);
     DrawUpdateDialog(cmd, updateState);
     // REQ-091 (amended): blocks every launch until authGateResolved — signed in, or no internet
     // at all to sign in with. Stacks beneath the update dialog's modal (both gate the session;
     // ImGui's modal stack lets whichever opened first take input priority).
-    DrawSignInGate(cmd);
+    const bool updateOfferBlocks = (updateState.phase == update::Phase::UpdateReady);
+    if (!LaunchSequenceOverlayActive(cmd, updateOfferBlocks))
+      DrawSignInGate(cmd);
     // The dialog writes skip state into cmd.updatePrefs; the throttle anchor is written by the
     // check itself. Sync the rest back so SaveUserStartupPrefs persists both.
     cmd.updatePrefs.enabled        = updateState.prefs.enabled;
@@ -1043,24 +1200,83 @@ int main()
         cmd.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2)
     {
       // TRIM's cutting-line points commit through commitX/commitY too (SubmitTrimViewportPick).
+      // Both ends carry their real elevation (issue #399 increment 4): the first point keeps the Z
+      // it was clicked at (cmd.trimCutInfP1z — 0 in plan view, so the datum, as before), the far end
+      // takes the committed cursor/snap elevation, and the ortho lock runs through the UCS-aware
+      // helper so a Front/Left/Right-style UCS squares correctly. Without this the rubber band and
+      // the dashed removal hint drew on the world datum while the trim committed on the work plane.
       float lx = static_cast<float>(commitCurX);
       float ly = static_cast<float>(commitCurY);
-      ApplyOrthoConstrainFromAnchor(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled);
+      float lz = CadCommitElevation(cmd);
+      ApplyOrthoConstrainFromAnchor(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled,
+                                    cmd.trimCutInfP1z, cmd.uiCursorWorldZ, &lz);
       PushRubberSegViewRel(rubberLines, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, cmd.viewportPanX,
-                           cmd.viewportPanY);
-      const float midx = (cmd.trimCutInfP1x + lx) * 0.5f;
-      const float midy = (cmd.trimCutInfP1y + ly) * 0.5f;
-      CadTrimAppendCutLineRemovedPreview(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, midx, midy, &previewLines);
+                           cmd.viewportPanY, cmd.trimCutInfP1z, lz);
+      // The dashed removal hint. Orbited model view -> the true-3D solve (issue #399 increment 4), so
+      // the hint tracks the geometry's elevation the same way the commit does; plan view / paper keep
+      // the byte-identical 2D path (issue #166's per-frame perf tuning lives there).
+      if (cmd.activeSpaceIndex == kModelSpaceIndex && !CadViewIsPlan(cmd)) {
+        CadTrimAppendCutLineRemovedPreview3D(cmd,
+                                             ray3d::Vec3{cmd.trimCutInfP1x, cmd.trimCutInfP1y, cmd.trimCutInfP1z},
+                                             ray3d::Vec3{lx, ly, lz}, &previewLines);
+      } else {
+        const float midx = (cmd.trimCutInfP1x + lx) * 0.5f;
+        const float midy = (cmd.trimCutInfP1y + ly) * 0.5f;
+        CadTrimAppendCutLineRemovedPreview(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, midx, midy, &previewLines);
+      }
+    }
+    {
+      // Where an armed gizmo drag would put a solid FACE (issue #148 acceptance 4). The ghost
+      // channel, with every other "this is what you would get" preview - the same reasoning that
+      // put the transform ghost there rather than in the highlight.
+      std::vector<float> faceGhost;
+      BuildSubObjectFaceGhost(cmd, &faceGhost);
+      previewLines.insert(previewLines.end(), faceGhost.begin(), faceGhost.end());
     }
 
     std::vector<float> highlightLines;
     std::vector<float> highlightCircles;
     BuildSelectionHighlight(cmd, &highlightLines, &highlightCircles);
 
+    // The sub-object selection (REQ-318 item 11) and the pre-highlight of what a Ctrl click would
+    // take (item 14). Their edge and vertex linework is APPENDED to the ordinary highlight and hover
+    // channels — which is what gives each the never-occluded treatment and the colour it should
+    // have, without a new channel for either. Only the face tints need a channel of their own,
+    // because only they are depth-tested.
+    CadSubObjectOverlay subObjectOverlay;
+    {
+      std::vector<float> subObjectLines;
+      BuildSubObjectHighlight(cmd, &subObjectOverlay.selectedFaceTris, &subObjectOverlay.selectedFaceEdges,
+                              &subObjectLines);
+      highlightLines.insert(highlightLines.end(), subObjectLines.begin(), subObjectLines.end());
+    }
+
     std::vector<float> hoverLines;
     std::vector<float> hoverCircles;
-    if (cmd.activeSpaceIndex == kModelSpaceIndex) // no model-entity hover in paper space (incl. floating)
+    if (cmd.activeSpaceIndex == kModelSpaceIndex) { // no model-entity hover in paper space (incl. floating)
       BuildHoverHighlight(cmd, &hoverLines, &hoverCircles);
+      // The sub-object pre-highlight rides the same channel, so a hovered edge or vertex gets the
+      // hover blue rather than the selection yellow with no second colour to define. `CadUi` has
+      // already suppressed the entity hover while Ctrl is held, so the two cannot both be here.
+      std::vector<float> subHoverLines;
+      BuildSubObjectHoverHighlight(cmd, &subObjectOverlay.hoverFaceTris, &subObjectOverlay.hoverFaceEdges,
+                                   &subHoverLines);
+      hoverLines.insert(hoverLines.end(), subHoverLines.begin(), subHoverLines.end());
+    }
+
+    // The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b), and the ghost of what an
+    // armed drag is about to do. The ghost rides the ordinary PREVIEW channel — that channel already
+    // means "what is about to happen" for MOVE, ROTATE and OFFSET, and a gizmo drag is the same
+    // statement made with a handle instead of two typed points.
+    CadGizmoOverlay gizmoOverlay;
+    BuildGizmoOverlay(cmd, &gizmoOverlay);
+    if (cmd.gizmoDragActive) {
+      std::vector<float> ghostLines;
+      std::vector<float> ghostCircles;
+      BuildGizmoDragGhost(cmd, &ghostLines, &ghostCircles);
+      previewLines.insert(previewLines.end(), ghostLines.begin(), ghostLines.end());
+      previewCircles.insert(previewCircles.end(), ghostCircles.begin(), ghostCircles.end());
+    }
 
     std::vector<float> surveyMarkers;
     if (!cmd.surveyPoints.empty())
@@ -1085,12 +1301,15 @@ int main()
     CadExtendedGeometryInput ext{};
     ext.arcs = &cmd.userArcs;
     ext.arcAttrs = &cmd.userArcAttrs;
+    ext.circleNormals = &cmd.userCircleNormals;  // REQ-312
     ext.ellipses = &cmd.userEllipses;
     ext.ellAttrs = &cmd.userEllAttrs;
     ext.polylineVerts = &cmd.userPolylineVerts;
     ext.polylineOffsets = &cmd.userPolylineOffsets;
     ext.polylineClosed = &cmd.userPolylineClosed;
     ext.polylineAttrs = &cmd.userPolylineAttrs;
+    ext.polylineBulge = &cmd.userPolylineVertsBulge;  // REQ-316 / ADR-047
+    ext.polylineNormal = &cmd.userPolylineVertsNormal;  // REQ-325 / ADR-053
     ext.featureLineVerts = &cmd.featureLineVerts;      // REQ-087
     ext.featureLineOffsets = &cmd.featureLineOffsets;
     ext.featureLineClosed = &cmd.featureLineClosed;
@@ -1220,8 +1439,9 @@ int main()
     const bool startTab = (cmd.activeDrawingIdx == 0);
 
     static const std::vector<float> kEmptyVerts;
-    const std::vector<float> &sceneLines = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
-    const std::vector<float> &sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyZR;
+    static const std::vector<double> kEmptyVertsD;
+    const std::vector<double> &sceneLines = paperSpace ? kEmptyVertsD : cmd.userLinesFlat;
+    const std::vector<double> &sceneCircles = paperSpace ? kEmptyVertsD : cmd.userCirclesCxCyZR;
     const std::vector<float> &sceneRubber = paperSpace ? kEmptyVerts : rubberLines;
     // The camera is derived from the canonical pan/zoom plus the two orientation angles, so it
     // cannot disagree with the view state (REQ-058 / ADR-025 (c)).
@@ -1229,6 +1449,7 @@ int main()
     // Held in a named local because RenderScene takes a pointer to it and the call outlives any
     // temporary: the grid frame must still be alive when the renderer reads it.
     const ucs::Ucs ucsGridFrame = CadActiveUcsStorage(cmd);
+    const auto perfRenderT0 = std::chrono::steady_clock::now();
     activeRenderer.RenderScene(CadViewCamera(cmd), fbW, fbH, sceneLines,
                                sceneCircles, cmd.cadGpuRevision,
                                sceneRubber, (paperSpace || !snapHit.valid) ? nullptr : &snapHit,
@@ -1249,6 +1470,11 @@ int main()
                                // Meshes are model-space only, like every other GL entity (REQ-063).
                                (paperSpace || cmd.cadMeshes.empty()) ? nullptr : &cmd.cadMeshes,
                                (paperSpace || cmd.cadMeshAttrs.empty()) ? nullptr : &cmd.cadMeshAttrs,
+                               // B-rep solids (REQ-313), model space only like every GL entity. The
+                               // batches borrow buffers owned by `cmd`, which outlives this call.
+                               (paperSpace || cmd.solidDisplayGeometry.empty())
+                                   ? nullptr
+                                   : &cmd.solidDisplayGeometry,
                                // Generated surface geometry (REQ-068/REQ-070), model space only like
                                // every GL entity. The batches borrow buffers owned by `cmd`, which
                                // outlives this call — and nothing between the refresh above and here
@@ -1262,16 +1488,36 @@ int main()
                                // The grid follows the UCS (REQ-154). Storage space, like the camera
                                // and every vertex the renderer receives. Paper space keeps its own
                                // 2D sheet grid and is deliberately excluded.
-                               paperSpace ? nullptr : &ucsGridFrame);
+                               paperSpace ? nullptr : &ucsGridFrame,
+                               // The selected and hovered solid FACE tints (REQ-318 items 11 and
+                               // 14). Model space only, like every other GL overlay here; the edges
+                               // and vertices of both went into the highlight and hover line
+                               // channels above and are drawn never-occluded, while these two are
+                               // depth-tested — see the renderer's own note at the draw.
+                               (paperSpace || subObjectOverlay.empty()) ? nullptr : &subObjectOverlay,
+                               // The gizmo handles. Model space only for the same reason — a paper
+                               // sheet is 2D (ADR-025 (g)) and has no third axis to offer.
+                               (paperSpace || gizmoOverlay.empty()) ? nullptr : &gizmoOverlay);
+    cmd.perfRenderMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfRenderT0).count();
 
     // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
     }
 
+    // Frame profiler overlay (PERFHUD) — after the render so its render-ms is this frame's, not
+    // last frame's. No-op unless toggled on. Before DrawFloatingWindowChrome for the same reason
+    // every other window is.
+    DrawPerfHud(cmd);
+
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.
     DrawFloatingWindowChrome();
+
+    // REQ-336 / REQ-091: last UI — launch spinner over the shell; sign-in (when required) sits
+    // beneath this overlay until the user is signed in, then What's New opens.
+    DrawLaunchSequenceOverlay(cmd, updateOfferBlocks);
 
     ImGui::Render();
     int displayW = 0;

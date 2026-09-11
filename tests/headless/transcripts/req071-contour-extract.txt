@@ -5,7 +5,7 @@
 # surface is erased. None of that is reachable from a unit test, which is why this file carries the
 # whole acceptance set.
 #
-# **On the numbers.** `samples/surface-demo.gs` spans 103.52 to 136.70 ft, so at Standard's 2 ft / 10
+# **On the numbers.** `samples/surface-demo.dwg` spans 103.52 to 136.70 ft, so at Standard's 2 ft / 10
 # ft intervals it displays 21 minor and 5 major contours — 26 polylines. Those are properties of the
 # fixture, read out of the running program with DUMP SURFACES, and they move if the sample's points
 # ever do.
@@ -16,7 +16,7 @@
 # segments the created polylines carry, vertex for vertex, which is the pair REQ-071 says must be
 # equal.
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 
 CMD SURFACECREATE Test EG, Existing Ground
 EXPECT SURFACES 1
@@ -106,7 +106,7 @@ CHECK ALL
 # --- contours disabled: creates nothing, and says so -------------------------------------------------
 # REQ-071's last acceptance condition, and the reason it is stated at all: silently extracting an
 # interval the user cannot see is worse than refusing.
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE Test EG, Existing Ground
 CMD SURFSTYLE HIDE Standard, minor
 CMD SURFSTYLE HIDE Standard, major

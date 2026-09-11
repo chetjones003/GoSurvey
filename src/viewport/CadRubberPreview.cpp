@@ -34,86 +34,112 @@ void AppendWorldRectRubberViewRel(std::vector<float>& o, float xa, float ya, flo
 
 namespace {
 
-bool ComputeCircumcircleRubber(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
-                               float* r) {
-  const float d = 2.f * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-  if (std::fabs(d) < 1e-6f)
-    return false;
-  const float a2 = ax * ax + ay * ay;
-  const float b2 = bx * bx + by * by;
-  const float c2 = cx * cx + cy * cy;
-  const float ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
-  const float uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
-  const float dx = ux - ax;
-  const float dy = uy - ay;
-  *ox = ux;
-  *oy = uy;
-  *r = std::sqrt(dx * dx + dy * dy);
-  return true;
-}
-
-void AppendArcRubberWorld(std::vector<float>& out, float ax, float ay, float bx, float by, float cx, float cy,
-                          float orthoHalfH, int fbHeightPx, int maxSegmentCap, float z) {
-  float ox = 0.f;
-  float oy = 0.f;
-  float r = 0.f;
-  if (!ComputeCircumcircleRubber(ax, ay, bx, by, cx, cy, &ox, &oy, &r) || r <= 1e-6f)
+/// A curve as rubber-band segments, walked in the plane it will COMMIT into (REQ-312).
+///
+/// The preview and the commit now share their geometry: the caller solves the picks with the same
+/// CadSolve* function the commit calls, and this only turns that answer into segments. What used to
+/// be here -- a second circumcircle, a second sweep rule and a second XY tessellation -- was a
+/// parallel implementation of the commit, and the file's own note at `commitCurX` explains what
+/// that costs: a preview that draws a shape the commit does not produce.
+void AppendCurveRubber(std::vector<float>& out, const ucs::Ucs& plane, double r, double startRad,
+                       double sweepRad, float orthoHalfH, int fbHeightPx, int maxSegmentCap) {
+  if (!(r > 1e-6))
     return;
-  constexpr double twopi = 6.28318530717958647692;
-  auto normPos = [](double x) {
-    double t = std::fmod(x, twopi);
-    if (t < 0)
-      t += twopi;
-    return t;
-  };
-  const double ta = std::atan2(static_cast<double>(ay - oy), static_cast<double>(ax - ox));
-  const double tb = std::atan2(static_cast<double>(by - oy), static_cast<double>(bx - ox));
-  const double tc = std::atan2(static_cast<double>(cy - oy), static_cast<double>(cx - ox));
-  const double arc_ab = normPos(tb - ta);
-  const double arc_ac = normPos(tc - ta);
-  const bool useCcw = arc_ab <= arc_ac + 1e-10;
-  double sweep = useCcw ? arc_ac : arc_ac - twopi;
-  if (std::fabs(sweep) < 1e-12)
-    sweep = twopi;
-  const double sr = ta;
-  // Sweep-scaled cap for arc rubber: keep chord-pixel target consistent with the cached arc tessellation.
-  const double sweepFrac = std::clamp(std::fabs(sweep) / twopi, 0.05, 1.0);
-  const int arcCap = std::max(8, static_cast<int>(std::ceil(maxSegmentCap * sweepFrac)));
-  const int nseg = std::max(
-      8, CircleTessellationSegmentCount(r, static_cast<double>(orthoHalfH), fbHeightPx, arcCap));
-  for (int i = 0; i < nseg; ++i) {
-    const double t0 = sr + sweep * static_cast<double>(i) / static_cast<double>(nseg);
-    const double t1 = sr + sweep * static_cast<double>(i + 1) / static_cast<double>(nseg);
-    double wx0 = 0.;
-    double wy0 = 0.;
-    double wx1 = 0.;
-    double wy1 = 0.;
-    CirclePointWorld(ox, oy, r, t0, &wx0, &wy0);
-    CirclePointWorld(ox, oy, r, t1, &wx1, &wy1);
-    PushRubberSegViewRel(out, wx0, wy0, wx1, wy1, 0., 0., z, z);
-  }
-}
-
-void AppendCircleRubberWorld(std::vector<float>& out, float cx, float cy, float r, float orthoHalfH, int fbHeightPx,
-                             int maxSegmentCap, float z) {
-  if (r <= 1e-6f)
-    return;
-  const int segments =
-      CircleTessellationSegmentCount(static_cast<double>(r), static_cast<double>(orthoHalfH), fbHeightPx, maxSegmentCap);
-  const double dcx = static_cast<double>(cx);
-  const double dcy = static_cast<double>(cy);
-  const double dr = static_cast<double>(r);
   constexpr double kTwoPi = 6.283185307179586;
-  for (int i = 0; i < segments; ++i) {
-    const double t0 = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
-    const double t1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(segments);
-    double wx0 = 0.;
-    double wy0 = 0.;
-    double wx1 = 0.;
-    double wy1 = 0.;
-    CirclePointWorld(dcx, dcy, dr, t0, &wx0, &wy0);
-    CirclePointWorld(dcx, dcy, dr, t1, &wx1, &wy1);
-    PushRubberSegViewRel(out, wx0, wy0, wx1, wy1, 0., 0., z, z);
+  // Sweep-scaled cap, so the chord-pixel target matches the cached arc/circle tessellation.
+  const double sweepFrac = std::clamp(std::fabs(sweepRad) / kTwoPi, 0.05, 1.0);
+  const int cap = std::max(8, static_cast<int>(std::ceil(static_cast<double>(maxSegmentCap) * sweepFrac)));
+  const int n = std::max(8, CircleTessellationSegmentCount(r, static_cast<double>(orthoHalfH), fbHeightPx, cap));
+  AppendCurveWorldSegs(out, plane, r, startRad, sweepRad, n);
+}
+
+/// The plane a solved circle lies in.
+[[nodiscard]] ucs::Ucs CircleSolutionPlane(const CadCircleSolution& s) {
+  return CurvePlane(static_cast<double>(s.cx), static_cast<double>(s.cy), static_cast<double>(s.cz),
+                    static_cast<double>(s.nx), static_cast<double>(s.ny), static_cast<double>(s.nz));
+}
+
+/// A solved circle as rubber-band segments.
+void AppendCircleSolutionRubber(std::vector<float>& out, const CadCircleSolution& s, float orthoHalfH,
+                                int fbHeightPx, int maxSegmentCap) {
+  constexpr double kTwoPi = 6.283185307179586;
+  AppendCurveRubber(out, CircleSolutionPlane(s), static_cast<double>(s.r), 0.0, kTwoPi, orthoHalfH, fbHeightPx,
+                    maxSegmentCap);
+}
+
+} // namespace
+
+namespace {
+
+/// The BASE outline of the solid being drawn, for the phases where the whole solid is not yet
+/// determined — a cylinder's circle before its height is known, a box's rectangle before it is
+/// raised, a pyramid's polygon as it turns with the cursor.
+///
+/// This is what AutoCAD shows at those prompts, and it is the half of the preview that cannot come
+/// from `CadBuildSolidFromCommand`: there is no solid to build yet. The base is still fully
+/// determined, so drawing it is honest — it is the part the cursor has decided.
+void AppendSolidBaseProfile(const AppCommandState& cmd, std::vector<float>& out) {
+  const int picking = CadSolidCurrentPickParam(cmd);
+  if (picking < 0 || !cmd.solidPickValid)
+    return;
+  int specCount = 0;
+  const SolidParamSpec* specs = CadSolidParamSpecs(cmd.solidKind, &specCount);
+  const ucs::Ucs f = CadSolidPlacementFrameFor(cmd);
+  const ray3d::Vec3 b = cmd.solidBase;
+
+  auto seg = [&](const ray3d::Vec3& p, const ray3d::Vec3& q) {
+    PushRubberSegViewRel(out, p.x, p.y, q.x, q.y, 0., 0., static_cast<float>(p.z),
+                         static_cast<float>(q.z));
+  };
+  auto inPlane = [&](double u, double v) {
+    return ray3d::Add(b, ray3d::Add(ray3d::Scale(f.xAxis, u), ray3d::Scale(f.yAxis, v)));
+  };
+
+  if (specs[picking].pick == SolidPickKind::CornerXY) {
+    // BOX / WEDGE: the rectangle between the two corners.
+    const double dx = cmd.solidPickA;
+    const double dy = cmd.solidPickB;
+    const ray3d::Vec3 p00 = inPlane(0.0, 0.0);
+    const ray3d::Vec3 p10 = inPlane(dx, 0.0);
+    const ray3d::Vec3 p11 = inPlane(dx, dy);
+    const ray3d::Vec3 p01 = inPlane(0.0, dy);
+    seg(p00, p10);
+    seg(p10, p11);
+    seg(p11, p01);
+    seg(p01, p00);
+    return;
+  }
+  if (specs[picking].pick != SolidPickKind::Radius)
+    return;
+
+  const double r = cmd.solidPickA;
+  if (!(r > 1e-9))
+    return;
+  // A pyramid's base is its polygon, turned to follow the cursor — the rotation is as much a part of
+  // what the pick decides as the size is. Everything else previews as a circle.
+  int sides = 0;
+  double startAngle = 0.0;
+  if (cmd.solidKind == brep::PrimitiveKind::Pyramid) {
+    sides = cmd.solidParamSet[0] ? static_cast<int>(cmd.solidParamValue[0]) : 4;
+    if (sides < 3 || sides > brep::kMaxPyramidSides)
+      sides = 4;
+    startAngle = cmd.solidPickAngleRad;
+  } else {
+    sides = 64;  // smooth enough to read as a circle at any working zoom
+  }
+  double drawR = r;
+  if (cmd.solidKind == brep::PrimitiveKind::Pyramid && !cmd.solidInscribed) {
+    const double k = std::cos(3.14159265358979323846 / static_cast<double>(sides));
+    if (k > 1e-9)
+      drawR = r / k;  // the pick is the apothem when circumscribed; the polygon reaches further
+  }
+  ray3d::Vec3 prev = inPlane(drawR * std::cos(startAngle), drawR * std::sin(startAngle));
+  for (int i = 1; i <= sides; ++i) {
+    const double a = startAngle + 2.0 * 3.14159265358979323846 * static_cast<double>(i) /
+                                      static_cast<double>(sides);
+    const ray3d::Vec3 cur = inPlane(drawR * std::cos(a), drawR * std::sin(a));
+    seg(prev, cur);
+    prev = cur;
   }
 }
 
@@ -133,6 +159,10 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
   // elevation (CadArc::z / CadEllipse::z), and their draft state keeps no Z for the first pick, so
   // both ends of their construction rubber sit on the plane the entity will land on.
   const float zc = CadCommitElevation(cmd);
+  // Whether the work plane is world XY (REQ-312). Under it, every construction rubber keeps the
+  // single-elevation behaviour above; off it, a pick's own Z is the only thing that says where on
+  // the plane it sat.
+  const bool planeIsFlat = CadWorkPlaneIsWorldXy(cmd);
 
   if (cmd.active == AppCommandState::Kind::Line && cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
@@ -151,13 +181,18 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     } else {
       float lx = curXf;
       float ly = curYf;
+      float lz = zc;
       if (cmd.segmentAngleLockActive)
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
                                          false);
       else
-        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
+        // lz picks up the ortho-locked Z (issue #371 follow-up) when squaring to a Front/Left/Right-
+        // style UCS's vertical axis — without it the preview kept rendering at the cursor's raw
+        // (unlocked) elevation even though lx/ly reported a squared point.
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled, cmd.anchorZ,
+                                      cmd.uiCursorWorldZ, &lz);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
-                           zc);  // preview at the elevation it will commit to
+                           lz);  // preview at the elevation it will commit to
     }
   }
 
@@ -167,8 +202,30 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     float ly = curYf;
     using SAP = AppCommandState::SegmentAnglePickPhase;
     const auto& d = cmd.polylineDraftVerts;
-    for (size_t i = 0; i + 5 < d.size(); i += 3)
-      PushRubberSegViewRel(rubberLines, d[i], d[i + 1], d[i + 3], d[i + 4], 0., 0., d[i + 2], d[i + 5]);
+    // REQ-316 / ADR-047: preview an arc-mode segment as a curve, not a chord — both the segments
+    // already committed to the draft and the one being rubber-banded to the cursor.
+    auto pushMaybeArc = [&](double x0, double y0, double x1, double y1, double z0, double z1, float bulge) {
+      const BulgeArcSpan a = (bulge != 0.f) ? BulgeArc(x0, y0, x1, y1, static_cast<double>(bulge)) : BulgeArcSpan{};
+      if (!a.valid) {
+        PushRubberSegViewRel(rubberLines, x0, y0, x1, y1, 0., 0., static_cast<float>(z0), static_cast<float>(z1));
+        return;
+      }
+      constexpr double kPi = 3.14159265358979323846;
+      const int n = std::clamp(static_cast<int>(std::ceil(std::fabs(a.sweep) / (kPi / 24.0))), 2, 96);
+      double px = x0, py = y0;
+      for (int s = 1; s <= n; ++s) {
+        const double u = a.startAngle + a.sweep * (static_cast<double>(s) / n);
+        const double qx = a.cx + a.radius * std::cos(u);
+        const double qy = a.cy + a.radius * std::sin(u);
+        PushRubberSegViewRel(rubberLines, px, py, qx, qy, 0., 0., static_cast<float>(z0), static_cast<float>(z1));
+        px = qx;
+        py = qy;
+      }
+    };
+    for (size_t i = 0, seg = 0; i + 5 < d.size(); i += 3, ++seg) {
+      const float b = seg < cmd.polylineDraftBulge.size() ? cmd.polylineDraftBulge[seg] : 0.f;
+      pushMaybeArc(d[i], d[i + 1], d[i + 3], d[i + 4], d[i + 2], d[i + 5], b);
+    }
 
     if (cmd.segmentAnglePickPhase == SAP::WaitP2)
       PushRubberSegViewRel(rubberLines, cmd.segmentPickRefX1, cmd.segmentPickRefY1, curXf, curYf, 0., 0.,
@@ -183,13 +240,19 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
                            zc);
     } else {
+      float lz = zc;
       if (cmd.segmentAngleLockActive)
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
                                          false);
       else
-        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
-      PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
-                           zc);
+        // lz picks up the ortho-locked Z (issue #371 follow-up) — see the LINE branch above.
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled, cmd.anchorZ,
+                                      cmd.uiCursorWorldZ, &lz);
+      // REQ-316 / ADR-047: in ARC mode the rubber-band to the cursor previews the pending arc,
+      // computed by the SAME function the commit uses so what is drawn is what will be committed.
+      const float pendBulge =
+          cmd.polylineArcMode ? CadPolylineDraftBulgeForNextPoint(cmd, lx, ly) : 0.f;
+      pushMaybeArc(cmd.anchorX, cmd.anchorY, lx, ly, cmd.anchorZ, lz, pendBulge);
     }
   }
 
@@ -218,8 +281,10 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       } else {
         float lx = curXf;
         float ly = curYf;
-        ApplyOrthoConstrainFromAnchor(cmd, ax, ay, &lx, &ly, orthoEnabled);
-        PushRubberSegViewRel(rubberLines, ax, ay, lx, ly, 0., 0., az, zc);
+        float lz = zc;
+        // lz picks up the ortho-locked Z (issue #371 follow-up) — see the LINE branch above.
+        ApplyOrthoConstrainFromAnchor(cmd, ax, ay, &lx, &ly, orthoEnabled, az, cmd.uiCursorWorldZ, &lz);
+        PushRubberSegViewRel(rubberLines, ax, ay, lx, ly, 0., 0., az, lz);
       }
     }
   }
@@ -234,10 +299,19 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
   if (cmd.active == AppCommandState::Kind::Arc) {
     using AP = AppCommandState::ArcPhase;
     if (cmd.arcPhase == AP::WaitMid)
-      PushRubberSegViewRel(rubberLines, cmd.arcAx, cmd.arcAy, curXf, curYf, 0., 0., zc, zc);
-    else if (cmd.arcPhase == AP::WaitEnd)
-      AppendArcRubberWorld(rubberLines, cmd.arcAx, cmd.arcAy, cmd.arcBx, cmd.arcBy, curXf, curYf, orthoHalfH,
-                           fbHeightPx, cmd.displayArcCircleSmoothness, zc);
+      // On a tilted work plane the first pick's own elevation is not the cursor's: two picks on a
+      // wall differ only in height, and drawing both ends at zc would flatten the construction line
+      // onto one contour of the wall.
+      PushRubberSegViewRel(rubberLines, cmd.arcAx, cmd.arcAy, curXf, curYf, 0., 0.,
+                           planeIsFlat ? zc : cmd.arcAz, zc);
+    else if (cmd.arcPhase == AP::WaitEnd) {
+      CadArc a{};
+      if (CadSolveArcThreePoints(cmd, cmd.arcAx, cmd.arcAy, cmd.arcAz, cmd.arcBx, cmd.arcBy, cmd.arcBz, curXf,
+                                 curYf, zc, &a))
+        AppendCurveRubber(rubberLines, CurvePlane(a), static_cast<double>(a.r), static_cast<double>(a.startRad),
+                          static_cast<double>(a.sweepRad), orthoHalfH, fbHeightPx,
+                          cmd.displayArcCircleSmoothness);
+    }
   }
 
   if (cmd.active == AppCommandState::Kind::Ellipse && cmd.ellPhase == AppCommandState::EllipsePhase::WaitMajorEnd)
@@ -250,6 +324,9 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
   if (cmd.active == AppCommandState::Kind::SurveyInverse &&
       cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitTo)
     PushRubberSegViewRel(rubberLines, cmd.surveyInverseFromX, cmd.surveyInverseFromY, curXf, curYf, 0., 0., zc, zc);
+
+  if (cmd.active == AppCommandState::Kind::Dist && cmd.distPhase == AppCommandState::DistPhase::WaitTo)
+    PushRubberSegViewRel(rubberLines, cmd.distFromX, cmd.distFromY, curXf, curYf, 0., 0., cmd.distFromZ, zc);
 
   if (cmd.active == AppCommandState::Kind::DimAngular) {
     using DAP = AppCommandState::DimAngularPhase;
@@ -267,25 +344,28 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
   if (cmd.active == AppCommandState::Kind::Circle) {
     using CP = AppCommandState::CirclePhase;
     if (cmd.circlePhase == CP::WaitRadius) {
-      const float dx = curXf - cmd.circleCx;
-      const float dy = curYf - cmd.circleCy;
-      AppendCircleRubberWorld(rubberLines, cmd.circleCx, cmd.circleCy, std::sqrt(dx * dx + dy * dy), orthoHalfH,
-                              fbHeightPx, cmd.displayArcCircleSmoothness, zc);
+      // Solved by the function CIRCLE itself commits with, so the ring under the cursor is the ring
+      // that lands -- including the radius, which on a tilted plane is the 3D distance to the rim
+      // pick and not its XY projection (REQ-312).
+      AppendCircleSolutionRubber(
+          rubberLines,
+          CadSolveCircleFromRimPick(cmd, cmd.circleCx, cmd.circleCy, cmd.circleCz, curXf, curYf, zc), orthoHalfH,
+          fbHeightPx, cmd.displayArcCircleSmoothness);
     } else if (cmd.circlePhase == CP::ThreeP_WaitP2) {
-      const float dx = curXf - cmd.c3p1x;
-      const float dy = curYf - cmd.c3p1y;
-      const float chord = std::sqrt(dx * dx + dy * dy);
-      const float rPrev = 0.5f * chord;
-      if (rPrev > 1e-6f)
-        AppendCircleRubberWorld(rubberLines, (cmd.c3p1x + curXf) * 0.5f, (cmd.c3p1y + curYf) * 0.5f, rPrev, orthoHalfH,
-                                fbHeightPx, cmd.displayArcCircleSmoothness, zc);
+      // Two picks so far, so the preview is the circle on the diameter between them: centre at their
+      // midpoint IN SPACE, radius the distance from there to the cursor. Routed through the rim-pick
+      // solver, which is where the work-plane normal and the 3D radius come from.
+      const float mx = (cmd.c3p1x + curXf) * 0.5f;
+      const float my = (cmd.c3p1y + curYf) * 0.5f;
+      const float mz = (cmd.c3p1z + zc) * 0.5f;
+      const CadCircleSolution s = CadSolveCircleFromRimPick(cmd, mx, my, mz, curXf, curYf, zc);
+      if (s.r > 1e-6f)
+        AppendCircleSolutionRubber(rubberLines, s, orthoHalfH, fbHeightPx, cmd.displayArcCircleSmoothness);
     } else if (cmd.circlePhase == CP::ThreeP_WaitP3) {
-      float ox = 0.f;
-      float oy = 0.f;
-      float rCirc = 0.f;
-      if (ComputeCircumcircle(cmd.c3p1x, cmd.c3p1y, cmd.c3p2x, cmd.c3p2y, curXf, curYf, &ox, &oy, &rCirc))
-        AppendCircleRubberWorld(rubberLines, ox, oy, rCirc, orthoHalfH, fbHeightPx, cmd.displayArcCircleSmoothness,
-                                zc);
+      CadCircleSolution s;
+      if (CadSolveCircleThreePoints(cmd, cmd.c3p1x, cmd.c3p1y, cmd.c3p1z, cmd.c3p2x, cmd.c3p2y, cmd.c3p2z, curXf,
+                                    curYf, zc, &s))
+        AppendCircleSolutionRubber(rubberLines, s, orthoHalfH, fbHeightPx, cmd.displayArcCircleSmoothness);
     }
   }
 
@@ -294,7 +374,13 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     if (cmd.mtextPhase == MPtxt::WaitCorner2) {
       float lx = curXf;
       float ly = curYf;
-      ApplyOrthoConstrainFromAnchor(cmd, cmd.mtxtX1, cmd.mtxtY1, &lx, &ly, orthoEnabled);
+      // MTEXT is a single-elevation planar entity — both corners land at zc (REQ-058), so that is the
+      // real Z for BOTH ends, not the "no Z available" NaN default. Passing NaN here (as before) sent
+      // ApplyOrthoConstrainFromAnchor's UCS branch into the broken plane-equation fallback under a
+      // Front/Left/Right-style UCS (issue #371's edge-on-plane defect), which can derive the WRONG
+      // world Z for each end and therefore pick the WRONG axis to lock — not just render wrong, the
+      // rectangle itself could come out square to the wrong side.
+      ApplyOrthoConstrainFromAnchor(cmd, cmd.mtxtX1, cmd.mtxtY1, &lx, &ly, orthoEnabled, zc, zc);
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, lx, ly, 0., 0., zc);
     } else if (cmd.mtextPhase == MPtxt::WaitString)
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, cmd.mtxtX2, cmd.mtxtY2, 0., 0.,
@@ -374,8 +460,13 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       if (cmd.insertBlockPhase != IPh::WaitInsertPoint) {
         float lx = curXf;
         float ly = curYf;
-        ApplyOrthoConstrainFromAnchor(cmd, cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled);
-        PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0., zc, zc);
+        float lz = zc;
+        // lz picks up the ortho-locked Z (issue #371 follow-up) — see the LINE branch above. The
+        // scale/rotation VALUES (InsertLiveScaleDist/InsertLiveRotDeg) are X/Y-only and unaffected,
+        // but the drag-indicator segment itself should render where ORTHO actually locked it.
+        ApplyOrthoConstrainFromAnchor(cmd, cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled,
+                                      cmd.insertBlockZ, cmd.uiCursorWorldZ, &lz);
+        PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0., zc, lz);
       }
       // Live ghost of the block at the transform this pick would commit (REQ-107, D-2026-08-29-i).
       CadBlockXform gxf;
@@ -387,6 +478,212 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         CadBlockCollectWorldLines(cmd.blockDefs, ghost, EntityAttributes{}, &segs);
         for (const CadBlockWorldSeg& s : segs)
           PushRubberSegViewRel(rubberLines, s.x0, s.y0, s.x1, s.y1, 0., 0., s.z0, s.z1);
+      }
+    }
+  }
+
+  // --- The prompted solid primitives (REQ-313 as amended) -----------------------------------------
+  //
+  // The whole candidate solid, drawn as its own wireframe, rebuilt from the cursor every frame. Not
+  // a bespoke ghost per primitive: `CadBuildSolidFromCommand` is the same function the click and
+  // Enter commit through, and `brep::TessellateEdges` is the same edge walk the finished solid is
+  // drawn with. So the preview cannot show a shape the commit would not build, and it cannot draw
+  // its edges by a different rule than the real thing — the two failure modes a hand-written ghost
+  // has, and the reason there is no hand-written ghost here.
+  //
+  // A solid that does not build yet — a radius still zero before the cursor has moved — draws
+  // nothing, which is the honest answer while a value is still being chosen.
+  if (cmd.active == AppCommandState::Kind::Solid &&
+      cmd.solidPhase == AppCommandState::SolidPhase::WaitParameters) {
+    brep::Solid ghost;
+    brep::Problem why = brep::Problem::Ok;
+    if (!CadBuildSolidFromCommand(cmd, /*applyPick=*/true, &ghost, &why)) {
+      // Not enough dimensions yet for a solid - preview the BASE, which the cursor has decided.
+      AppendSolidBaseProfile(cmd, rubberLines);
+    } else {
+      std::vector<double> segs;
+      // A coarser chord tolerance than the committed solid's: this is rebuilt on every mouse move,
+      // and a preview is read for its shape rather than measured.
+      if (brep::TessellateEdges(ghost, kSolidChordToleranceFt, &segs, &why)) {
+        for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+          PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                               static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+      }
+    }
+    // The measuring line from the base point out to the cursor, which is what makes a radius or a
+    // height readable as a DISTANCE rather than just a shape that happens to be that big.
+    const int picking = CadSolidCurrentPickParam(cmd);
+    if (cmd.solidPickValid && picking >= 0) {
+      int specCount = 0;
+      const SolidParamSpec* specs = CadSolidParamSpecs(cmd.solidKind, &specCount);
+      const ucs::Ucs f = CadSolidPlacementFrameFor(cmd);
+      const ray3d::Vec3 b = cmd.solidBase;
+      ray3d::Vec3 tip = b;
+      if (specs[picking].pick == SolidPickKind::Radius) {
+        tip = ray3d::Add(b, ray3d::Scale(ray3d::Add(ray3d::Scale(f.xAxis, std::cos(cmd.solidPickAngleRad)),
+                                                    ray3d::Scale(f.yAxis, std::sin(cmd.solidPickAngleRad))),
+                                         cmd.solidPickA));
+      } else if (specs[picking].pick == SolidPickKind::Height) {
+        tip = ray3d::Add(b, ray3d::Scale(f.zAxis, cmd.solidPickA));
+      } else {
+        tip = ray3d::Add(b, ray3d::Add(ray3d::Scale(f.xAxis, cmd.solidPickA),
+                                       ray3d::Scale(f.yAxis, cmd.solidPickB)));
+      }
+      PushRubberSegViewRel(rubberLines, b.x, b.y, tip.x, tip.y, 0., 0., static_cast<float>(b.z),
+                           static_cast<float>(tip.z));
+    }
+  }
+
+  // --- EXTRUDE: the candidate solid(s) as a wireframe ghost, rebuilt from the cursor height every
+  //     frame (REQ-314 / ADR-046). Same builder the click commits through, so the ghost cannot show
+  //     a shape the commit would not build.
+  if (cmd.active == AppCommandState::Kind::Extrude &&
+      cmd.extrudePhase == AppCommandState::ExtrudePhase::WaitHeight && cmd.extrudeHeightPickValid) {
+    std::vector<brep::Solid> ghosts;
+    if (CadBuildExtrudeSolids(cmd, cmd.extrudeHeightPick, &ghosts)) {
+      for (const brep::Solid& g : ghosts) {
+        std::vector<double> segs;
+        brep::Problem why = brep::Problem::Ok;
+        if (brep::TessellateEdges(g, kSolidChordToleranceFt, &segs, &why)) {
+          for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+            PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                                 static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+        }
+      }
+    }
+    // The measuring line along the extrusion axis, so the height reads as a distance.
+    if (!cmd.extrudeProfiles.empty()) {
+      const ucs::Ucs& pl = cmd.extrudeProfiles.front().plane;
+      const ray3d::Vec3 tip = ray3d::Add(pl.origin, ray3d::Scale(pl.zAxis, cmd.extrudeHeightPick));
+      PushRubberSegViewRel(rubberLines, pl.origin.x, pl.origin.y, tip.x, tip.y, 0., 0.,
+                           static_cast<float>(pl.origin.z), static_cast<float>(tip.z));
+    }
+  }
+
+  // --- PRESSPULL: the candidate solid as a wireframe ghost, rebuilt from the cursor distance every
+  //     frame (GitHub issue #396). Same builder the click commits through, so the ghost cannot show
+  //     a shape the commit would not build — EXTRUDE's own rule, applied here too.
+  if (cmd.active == AppCommandState::Kind::PressPull &&
+      cmd.pressPullPhase == AppCommandState::PressPullPhase::WaitDistance && cmd.pressPullDistPickValid) {
+    brep::Solid ghost;
+    if (CadBuildPressPullSolid(cmd, cmd.pressPullDistPick, &ghost)) {
+      std::vector<double> segs;
+      brep::Problem why = brep::Problem::Ok;
+      if (brep::TessellateEdges(ghost, kSolidChordToleranceFt, &segs, &why)) {
+        for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+          PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                               static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+      }
+    }
+    // The measuring line along the push/pull axis, so the distance reads as a distance.
+    ray3d::Vec3 anchor{};
+    ray3d::Vec3 axis{};
+    bool haveAxis = false;
+    if (cmd.pressPullOnFace) {
+      haveAxis = CadSubObjectFaceGrip(cmd, cmd.pressPullFace, &anchor, &axis);
+    } else {
+      anchor = cmd.pressPullProfile.plane.origin;
+      axis = cmd.pressPullProfile.plane.zAxis;
+      haveAxis = true;
+    }
+    if (haveAxis) {
+      const ray3d::Vec3 tip = ray3d::Add(anchor, ray3d::Scale(axis, cmd.pressPullDistPick));
+      PushRubberSegViewRel(rubberLines, anchor.x, anchor.y, tip.x, tip.y, 0., 0.,
+                           static_cast<float>(anchor.z), static_cast<float>(tip.z));
+    }
+  }
+
+  // --- REVOLVE: the axis line, and once both ends and a profile are set, a ghost of the solid at
+  //     the current angle (REQ-314 / ADR-046).
+  if (cmd.active == AppCommandState::Kind::Revolve) {
+    if (cmd.revolveAxisStartSet &&
+        cmd.revolvePhase != AppCommandState::RevolvePhase::WaitAxisStart) {
+      const ray3d::Vec3& a = cmd.revolveAxisStart;
+      const ray3d::Vec3& b = cmd.revolveAxisEnd;
+      PushRubberSegViewRel(rubberLines, a.x, a.y, b.x, b.y, 0., 0., static_cast<float>(a.z),
+                           static_cast<float>(b.z));
+    }
+    if (cmd.revolvePhase == AppCommandState::RevolvePhase::WaitAngle) {
+      std::vector<brep::Solid> ghosts;
+      if (CadBuildRevolveSolids(cmd, cmd.revolveAngleDeg, &ghosts)) {
+        for (const brep::Solid& g : ghosts) {
+          std::vector<double> segs;
+          brep::Problem why = brep::Problem::Ok;
+          if (brep::TessellateEdges(g, kSolidChordToleranceFt, &segs, &why)) {
+            for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+              PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                                   static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+          }
+        }
+      }
+    }
+  }
+
+  // --- LOFT: a wireframe ghost of the skinned solid, rebuilt from the current selection every frame
+  //     (REQ-315 / ADR-048). Same builder the Enter commits through, so the ghost cannot show a
+  //     shape the commit would not build.
+  if (cmd.active == AppCommandState::Kind::Loft &&
+      cmd.loftPhase == AppCommandState::LoftPhase::SelectProfiles) {
+    brep::Solid g;
+    if (CadBuildLoftSolid(cmd, &g)) {
+      std::vector<double> segs;
+      brep::Problem why = brep::Problem::Ok;
+      if (brep::TessellateEdges(g, kSolidChordToleranceFt, &segs, &why)) {
+        for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+          PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                               static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+      }
+    }
+  }
+
+  // --- SWEEP: the same live wireframe ghost, from the selected profile + path (REQ-315).
+  if (cmd.active == AppCommandState::Kind::Sweep &&
+      cmd.sweepPhase == AppCommandState::SweepPhase::SelectInputs) {
+    brep::Solid g;
+    if (CadBuildSweepSolid(cmd, &g)) {
+      std::vector<double> segs;
+      brep::Problem why = brep::Problem::Ok;
+      if (brep::TessellateEdges(g, kSolidChordToleranceFt, &segs, &why)) {
+        for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+          PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                               static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+      }
+    }
+  }
+
+  // --- SLICE: the triangle the three picked points span, as a hint of the cutting plane.
+  if (cmd.active == AppCommandState::Kind::Slice) {
+    using SP = AppCommandState::SlicePhase;
+    auto seg = [&](const ray3d::Vec3& a, const ray3d::Vec3& b) {
+      PushRubberSegViewRel(rubberLines, a.x, a.y, b.x, b.y, 0., 0., static_cast<float>(a.z),
+                           static_cast<float>(b.z));
+    };
+    if (cmd.slicePhase == SP::WaitP3 || cmd.slicePhase == SP::WaitKeepSide)
+      seg(cmd.sliceP1, cmd.sliceP2);
+    if (cmd.slicePhase == SP::WaitKeepSide) {
+      seg(cmd.sliceP2, cmd.sliceP3);
+      seg(cmd.sliceP3, cmd.sliceP1);
+    }
+  }
+  // REQ-317 POLYSOLID. The wall the cursor is currently proposing, drawn from the SAME
+  // `CadBuildPolysolidFromCommand` the next click commits and Enter finishes — so what is on screen
+  // is the wall that will be created, not a separately-drawn approximation of it.
+  //
+  // Nothing is drawn while a corner is impossible: a bend too sharp for the width, or a curve too
+  // tight, makes the builder refuse, and an empty preview is the honest picture of "there is no wall
+  // there" — the message on the command line says which.
+  if (cmd.active == AppCommandState::Kind::Polysolid &&
+      cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitNextPoint) {
+    const ucs::Point2D cursor = ucs::WorldToPlane(
+        CadPolysolidFrameFor(cmd), ray3d::Vec3{curX, curY, CadCommitElevation(cmd)});
+    brep::Solid ghost;
+    brep::Problem why = brep::Problem::Ok;
+    if (CadBuildPolysolidFromCommand(cmd, &cursor, &ghost, &why)) {
+      std::vector<double> segs;
+      if (brep::TessellateEdges(ghost, kSolidChordToleranceFt, &segs, &why)) {
+        for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+          PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                               static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
       }
     }
   }

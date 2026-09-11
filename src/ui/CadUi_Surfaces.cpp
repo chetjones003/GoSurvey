@@ -49,10 +49,10 @@ std::string NextSurfaceName(const AppCommandState& cmd) {
 bool SurfaceElevationRange(const CadSurface& s, float* lo, float* hi) {
   if (!s.tin || s.tin->vertsXyz.size() < 3)
     return false;
-  float mn = s.tin->vertsXyz[2], mx = mn;
+  float mn = static_cast<float>(s.tin->vertsXyz[2]), mx = mn;
   for (size_t i = 2; i < s.tin->vertsXyz.size(); i += 3) {
-    mn = std::min(mn, s.tin->vertsXyz[i]);
-    mx = std::max(mx, s.tin->vertsXyz[i]);
+    mn = std::min(mn, static_cast<float>(s.tin->vertsXyz[i]));
+    mx = std::max(mx, static_cast<float>(s.tin->vertsXyz[i]));
   }
   *lo = mn;
   *hi = mx;
@@ -138,11 +138,15 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
 
   ImGui::SetNextWindowSize(ImVec2(860, 520), ImGuiCond_FirstUseEver);
   bool open = cmd.showSurfaceManagerWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Surfaces", &open)) {
     cmd.showSurfaceManagerWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
   cmd.showSurfaceManagerWindow = open;
 
   static int selIdx = 0;
@@ -806,6 +810,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
   }
 
   ImGui::End();
+  PopProductDialogAccent();
 
   // ── Deferred mutations ────────────────────────────────────────────────────────────────────────
   // Applied after the tree walk so nothing resizes a vector the walk is iterating.

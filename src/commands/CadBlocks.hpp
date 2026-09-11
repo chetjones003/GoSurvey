@@ -15,7 +15,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
 
 int PickCadBlockRefAt(float wx, float wy, const AppCommandState& st, float orthoHalfHeightWorld);
 
-/// Import block definitions from a .gs / .dxf / .dwg path without replacing the current drawing.
+/// Import block definitions from a .dxf / .dwg path without replacing the current drawing.
 /// WBLOCK-style files (geometry in model space, empty BLOCKS table) become one definition named
 /// after the file stem.
 bool ImportCadBlocksFromPath(AppCommandState& dest, const char* pathUtf8, std::vector<std::string>& log);

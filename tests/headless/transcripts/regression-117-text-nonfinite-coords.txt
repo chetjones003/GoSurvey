@@ -35,8 +35,8 @@ EXPECT LOG "TEXT rejected"
 
 # The original bug only surfaced on the round trip, so drive it: a save/open must
 # stay clean, with the origin never rebased.
-SAVEAS %OUT%/rt-117.gs
-OPEN %OUT%/rt-117.gs
+SAVEAS %OUT%/rt-117.dwg
+OPEN %OUT%/rt-117.dwg
 EXPECT ANNOTATIONS 0
 
 CHECK ALL

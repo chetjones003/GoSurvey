@@ -1,0 +1,167 @@
+# GitHub issue #402 / REQ-329 increment 1 — MOVE and COPY resolve their base/second points on the
+# active UCS work plane and produce a full 3D (dx, dy, dz) delta. Typed `@dx,dy,dz` and `x,y,z` are
+# interpreted in the active UCS axes.
+#
+# Regression guard (REQ-329 acceptance): the World-UCS scenarios must match req322-move-3d.txt's own
+# numbers exactly — plan view under the World UCS is byte-identical to before this change.
+
+# --- Regression: World UCS, typed MOVE — unchanged from req322-move-3d.txt --------------------------
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+CMD MOVE
+CMD 0,0
+CMD @3,4,5
+ESC
+EXPECT LINEXYZ 0 3 4 5 13 4 5
+CHECK ALL
+
+# --- Regression: World UCS, PICKED MOVE — the two picks resolve on the world XY plane, dz = 0 -------
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+CMD MOVE
+CLICKUCS 0 0
+CLICKUCS 5 2
+ESC
+EXPECT LINEXYZ 0 5 2 0 15 2 0
+CHECK ALL
+
+# --- UCS rotated 90 degrees about Z: typed `@5,0,0` steps along world +Y --------------------------
+# UCS X points along world +Y. A relative move of 5 along UCS X must move the line 5 in world Y.
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD UCS
+CMD Z
+CMD 90
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+CMD MOVE
+CMD 0,0
+CMD @5,0,0
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 5 0 10 5 0
+CHECK ALL
+
+# --- UCS rotated 90 about Z: typed absolute `x,y,z` lands at that UCS coordinate -------------------
+# Base at UCS origin; destination UCS (0,0,7) => world (0,0,7). Straight up in Z.
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD UCS
+CMD Z
+CMD 90
+BOX -1 -1 11 1
+CMD MOVE
+CMD 0,0
+CMD 0,0,7
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 7 10 0 7
+CHECK ALL
+
+# --- UCS tilted 90 degrees about X (a vertical work plane): PICKED MOVE moves in world Z ----------
+# UCS +Y now points along world +Z. Picking the base at UCS (0,0) and the destination at UCS (0,10)
+# must lift the line 10 in world Z, not world Y.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 5 0
+ESC
+BOX -1 -1 6 1
+EXPECT SELECTED 1
+CMD MOVE
+CLICKUCS 0 0
+CLICKUCS 0 10
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 10 5 0 10
+CHECK ALL
+
+# --- UCS tilted 90 about X: typed `@0,0,3` moves along the UCS Z axis = world (0,-1,0) ------------
+# "UCS X 90" sends UCS +Z to world (0,-1,0). A relative move of 3 along UCS Z is world (0,-3,0).
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 5 0
+ESC
+BOX -1 -1 6 1
+CMD MOVE
+CMD 0,0
+CMD @0,0,3
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 -3 0 5 -3 0
+CHECK ALL
+
+# --- COPY under a tilted UCS: the duplicate carries the 3D delta ---------------------------------
+# UCS X 90; a circle drawn at UCS (0,0) = world origin, radius 2. COPY base UCS (0,0), destination
+# UCS (0,10) => the copy sits at world (0,0,10). The original stays put.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 0 0
+CMD 2
+ESC
+BOX -5 -5 5 5
+EXPECT SELECTED 1
+CMD COPY
+CLICKUCS 0 0
+CLICKUCS 0 10
+ESC
+CMD UCS
+CMD W
+EXPECT CIRCLES 2
+EXPECT CIRCLEXYZ 0 0 0 0 2 0 -1 0
+EXPECT CIRCLEXYZ 1 0 0 10 2 0 -1 0
+CHECK ALL
+
+# --- A picked MOVE under a rotated-in-plan UCS keeps Z at 0 --------------------------------------
+# UCS Z is still world Z, so the work plane is still world XY at elevation 0 — the picks resolve
+# exactly as under the World UCS and no Z creeps in. The line is drawn along the tilted UCS X axis
+# (world (8.66025, 5, 0) at its far end) and then moved 5 further along it.
+NEW
+CMD UCS
+CMD Z
+CMD 30
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+CMD MOVE
+CLICKUCS 0 0
+CLICKUCS 5 0
+ESC
+CMD UCS
+CMD W
+# Moved 5 along the 30-degree UCS X axis = world (+4.33013, +2.5, 0), in the Z=0 plane.
+EXPECT LINEXYZ 0 4.33013 2.5 0 12.99038 7.5 0
+CHECK ALL

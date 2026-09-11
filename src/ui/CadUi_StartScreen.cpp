@@ -98,6 +98,24 @@ void InvalidateThumbTex(const std::string& drawingPath) {
   }
 }
 
+void InvalidateAllThumbTex() {
+  for (auto& [path, slot] : g_thumbTex)
+    DestroyIconTexture(slot.tex);
+  g_thumbTex.clear();
+}
+
+// Open the system file manager with `utf8Path` selected. UI-layer glue (like OpenUrl below) — it
+// must not live in the pure RecentDrawings module.
+void RevealInFileManager(const std::string& utf8Path) {
+#if defined(_WIN32)
+  const std::wstring w = std::filesystem::u8path(utf8Path).make_preferred().wstring();
+  const std::wstring params = L"/select,\"" + w + L"\"";
+  ::ShellExecuteW(nullptr, L"open", L"explorer.exe", params.c_str(), nullptr, SW_SHOWNORMAL);
+#else
+  (void)utf8Path;
+#endif
+}
+
 std::string DisplayNameFromEmail(const std::string& email) {
   const auto at = email.find('@');
   std::string name = (at == std::string::npos) ? email : email.substr(0, at);
@@ -125,10 +143,41 @@ ImVec4 Accent()        { return ImVec4(0.26f, 0.56f, 0.86f, 1.f); }
 ImVec4 AccentHi()      { return ImVec4(0.34f, 0.64f, 0.95f, 1.f); }
 ImVec4 AccentLo()      { return ImVec4(0.20f, 0.45f, 0.72f, 1.f); }
 bool   IsDark()        { return ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x < 0.35f; }
-ImVec4 CardBg()        { return IsDark() ? ImVec4(0.17f, 0.18f, 0.20f, 1.f) : ImVec4(0.97f, 0.97f, 0.98f, 1.f); }
-ImVec4 CardBgHover()   { return IsDark() ? ImVec4(0.21f, 0.23f, 0.26f, 1.f) : ImVec4(1.f, 1.f, 1.f, 1.f); }
-ImVec4 CardBorder()    { return IsDark() ? ImVec4(0.30f, 0.32f, 0.36f, 1.f) : ImVec4(0.80f, 0.82f, 0.85f, 1.f); }
-ImVec4 HeroBg()        { return IsDark() ? ImVec4(0.13f, 0.14f, 0.16f, 1.f) : ImVec4(0.93f, 0.94f, 0.96f, 1.f); }
+constexpr float kStartBlueTint = kCadThemeBlueTintDark;
+ImVec4 CardBg() {
+  return IsDark() ? BlueTintNeutral(ImVec4(0.17f, 0.18f, 0.20f, 1.f), kStartBlueTint)
+                  : ImVec4(0.97f, 0.97f, 0.98f, 1.f);
+}
+ImVec4 CardBgHover() {
+  return IsDark() ? BlueTintNeutral(ImVec4(0.21f, 0.23f, 0.26f, 1.f), kStartBlueTint)
+                  : ImVec4(1.f, 1.f, 1.f, 1.f);
+}
+ImVec4 CardBorder() {
+  return IsDark() ? BlueTintNeutral(ImVec4(0.30f, 0.32f, 0.36f, 1.f), kStartBlueTint)
+                  : ImVec4(0.80f, 0.82f, 0.85f, 1.f);
+}
+ImVec4 HeroBg() {
+  return IsDark() ? BlueTintNeutral(ImVec4(0.13f, 0.14f, 0.16f, 1.f), kStartBlueTint)
+                  : ImVec4(0.93f, 0.94f, 0.96f, 1.f);
+}
+
+// Smooth radial wash — stacked rings with quadratic alpha falloff (no hard circle edges).
+void DrawSmoothRadialGlow(ImDrawList* dl, ImVec2 center, float outerRadius, const ImVec4& color,
+                          float peakAlpha) {
+  assert(outerRadius > 0.f);
+  assert(peakAlpha >= 0.f);
+  constexpr int kRings = 36;
+  for (int i = kRings; i >= 0; --i) {
+    const float t     = static_cast<float>(i) / static_cast<float>(kRings);
+    const float radius = outerRadius * t;
+    const float u     = 1.f - t;
+    ImVec4 ring       = color;
+    ring.w            = peakAlpha * u * u;
+    if (ring.w <= 0.001f)
+      continue;
+    dl->AddCircleFilled(center, radius, ImGui::GetColorU32(ring), 64);
+  }
+}
 
 // A rounded shadow cast straight down from a rect — cheap "lift" for cards and the hero band.
 void SoftShadow(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, float drop) {
@@ -177,23 +226,17 @@ void SectionHeading(const char* text) {
   ImGui::Dummy(ImVec2(0.f, 8.f));
 }
 
-// Crisp vector "GS" app badge for the hero — resolution-independent, so it stays sharp at any DPI
-// (the shipped title-bar icon is ~32px and blurs when scaled up here).
+// Crisp GS badge — solid rounded blue only (matches What's New / splash). Do not use
+// AddRectFilledMultiColor here: that API fills a sharp quad, so a top sheen paints
+// whitish square corners outside the rounded blue body.
 void DrawGsBadge(ImDrawList* dl, ImVec2 c, float sz) {
   const ImVec2 a(c.x - sz * 0.5f, c.y - sz * 0.5f);
   const ImVec2 b(c.x + sz * 0.5f, c.y + sz * 0.5f);
   const float rnd = sz * 0.24f;
   dl->AddRectFilled(ImVec2(a.x + 2.f, a.y + 3.f), ImVec2(b.x + 3.f, b.y + 4.f),
-                    ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.35f)), rnd);
-  dl->AddRectFilled(a, b, ImGui::GetColorU32(Accent()), rnd);
-  // Smooth top-down sheen, clipped to the rounded body — no hard midline.
-  dl->PushClipRect(a, b, true);
-  dl->AddRectFilledMultiColor(a, b, ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.16f)),
-                              ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.16f)),
-                              ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.f)),
-                              ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.f)));
-  dl->PopClipRect();
-  dl->AddRect(a, b, ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.30f)), rnd, 0, 1.5f);
+                    ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.35f)), rnd,
+                    ImDrawFlags_RoundCornersAll);
+  dl->AddRectFilled(a, b, ImGui::GetColorU32(Accent()), rnd, ImDrawFlags_RoundCornersAll);
   const float fs = sz / ImGui::GetFontSize() * 0.52f;
   ImGui::SetWindowFontScale(fs);
   const ImVec2 t = ImGui::CalcTextSize("GS");
@@ -363,6 +406,27 @@ void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
   }
 
   const char* clickedPath = nullptr;
+  // Context-menu actions that mutate the recent store are deferred until after EndChild(), so the
+  // `entries` vector this loop iterates is never invalidated mid-frame (same rule as clickedPath).
+  std::string revealPath, copyPath, removePath;
+  bool        clearAllRequested = false;
+  auto entryContextMenu = [&](const recent::Entry& e, bool fileExists) {
+    if (!ImGui::BeginPopupContextItem("##recentctx"))
+      return;
+    if (ImGui::MenuItem("Open", nullptr, false, fileExists))
+      clickedPath = e.path.c_str();
+    if (ImGui::MenuItem("Open Containing Folder", nullptr, false, fileExists))
+      revealPath = e.path;
+    if (ImGui::MenuItem("Copy Full Path"))
+      copyPath = e.path;
+    ImGui::Separator();
+    if (ImGui::MenuItem("Remove From List"))
+      removePath = e.path;
+    if (ImGui::MenuItem("Clear All Recent\xE2\x80\xA6"))
+      clearAllRequested = true;
+    ImGui::EndPopup();
+  };
+
   ImDrawList* dl = ImGui::GetWindowDrawList();
 
   if (gridView) {
@@ -404,6 +468,7 @@ void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
       dl->AddRect(p0, p1, ImGui::GetColorU32(hov ? Accent() : CardBorder()), 8.f, 0, hov ? 2.f : 1.f);
       if (hov)
         ImGui::SetTooltip("%s\n%s", e.name.c_str(), e.path.c_str());
+      entryContextMenu(e, std::filesystem::exists(std::filesystem::u8path(e.path)));
       ImGui::PopID();
       if (++col < perRow)
         ImGui::SameLine(0.f, gap);
@@ -443,12 +508,39 @@ void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
       dl->AddLine(ImVec2(p0.x, p1.y), ImVec2(p1.x, p1.y), ImGui::GetColorU32(CardBorder()), 1.f);
       if (hov)
         ImGui::SetTooltip("%s\n%s", e.name.c_str(), e.path.c_str());
+      entryContextMenu(e, std::filesystem::exists(std::filesystem::u8path(e.path)));
       ImGui::PopID();
     }
   }
 
   ImGui::EndChild();
   ImGui::PopStyleColor();
+
+  if (!copyPath.empty())
+    ImGui::SetClipboardText(AbsPathUtf8(copyPath).c_str());
+  if (!revealPath.empty())
+    RevealInFileManager(AbsPathUtf8(revealPath));
+  if (!removePath.empty()) {
+    RemoveRecentDrawing(removePath);
+    InvalidateThumbTex(removePath);  // texture cache is keyed by the stored entry path
+    log.push_back("Removed from Recent: " + removePath);
+  }
+  if (clearAllRequested)
+    ImGui::OpenPopup("Clear Recent Drawings?");
+
+  if (ImGui::BeginPopupModal("Clear Recent Drawings?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Remove every drawing from the Recent list?\nThis cannot be undone.");
+    ImGui::Dummy(ImVec2(0.f, 8.f));
+    if (ImGui::Button("Clear All", ImVec2(120.f, 0.f))) {
+      ClearRecentDrawings();
+      log.push_back("Cleared the Recent Drawings list");
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.f, 0.f)))
+      ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
 
   if (clickedPath) {
     // Copy — OpenDrawingInNewTab mutates the recent store, invalidating `entries`.
@@ -473,7 +565,7 @@ void DrawConnectColumn(AppCommandState& cmd) {
 
   if (cmd.authSignedIn) {
     const std::string name = DisplayNameFromEmail(cmd.authEmail);
-    const float cardH = 108.f;
+    const float cardH = 172.f;  // room for Sign Out + bottom padding (issue #182)
     const ImVec2 c1(c0.x + cardW, c0.y + cardH);
     SoftShadow(dl, c0, c1, 8.f, 8.f);
     dl->AddRectFilled(c0, c1, ImGui::GetColorU32(CardBg()), 8.f);
@@ -481,7 +573,7 @@ void DrawConnectColumn(AppCommandState& cmd) {
 
     // Avatar: accent disc with the first initial.
     const float r = 24.f;
-    const ImVec2 ac(c0.x + 20.f + r, c0.y + cardH * 0.5f);
+    const ImVec2 ac(c0.x + 20.f + r, c0.y + 52.f);
     dl->AddCircleFilled(ac, r, ImGui::GetColorU32(Accent()), 32);
     const std::string initial(1, name.empty() ? 'G' : static_cast<char>(std::toupper(
                                                           static_cast<unsigned char>(name[0]))));
@@ -492,12 +584,20 @@ void DrawConnectColumn(AppCommandState& cmd) {
 
     const float tx = c0.x + 20.f + r * 2.f + 16.f;
     ImGui::SetWindowFontScale(1.15f);
-    dl->AddText(ImVec2(tx, c0.y + 30.f), ImGui::GetColorU32(ImGuiCol_Text),
+    dl->AddText(ImVec2(tx, c0.y + 40.f), ImGui::GetColorU32(ImGuiCol_Text),
                 (std::string("Welcome ") + (name.empty() ? "back" : name) + "!").c_str());
     ImGui::SetWindowFontScale(1.f);
     if (!cmd.authEmail.empty())
-      dl->AddText(ImVec2(tx, c0.y + 54.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+      dl->AddText(ImVec2(tx, c0.y + 64.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
                   cmd.authEmail.c_str());
+
+    // Sign Out — same request path Settings uses (main.cpp: auth::SignOut()).
+    ImGui::SetCursorScreenPos(ImVec2(c0.x + 20.f, c0.y + cardH - 58.f));
+    ImGui::BeginDisabled(cmd.authBusy);
+    if (StyledButton("Sign Out", false, ImVec2(cardW - 40.f, 0.f)))
+      cmd.authSignOutRequested = true;
+    ImGui::EndDisabled();
+    ImGui::SetCursorScreenPos(c0);
     ImGui::Dummy(ImVec2(cardW, cardH));
   } else {
     const float cardH = 150.f;
@@ -535,13 +635,16 @@ void DrawConnectColumn(AppCommandState& cmd) {
   ImGui::PopTextWrapPos();
   ImGui::PopStyleColor();
   ImGui::Dummy(ImVec2(0.f, 8.f));
-  if (StyledButton("Send Feedback", false, ImVec2(0.f, 0.f)))
+  if (StyledButton("Send Feedback", true, ImVec2(0.f, 0.f)))
     OpenUrl(kFeedbackUrl);
 }
 
 }  // namespace
 
 void DrawStartScreen(AppCommandState& cmd, std::vector<std::string>& log) {
+  // REQ-336: once per launch when Start is shown and this version is not dismissed.
+  MaybeAutoOpenWhatsNew(cmd);
+
   ImDrawList* dl = ImGui::GetWindowDrawList();
   // Paint from the content-area top-left (below the drawing tab bar), not the window origin.
   const ImVec2 winMin = ImGui::GetCursorScreenPos();
@@ -556,40 +659,53 @@ void DrawStartScreen(AppCommandState& cmd, std::vector<std::string>& log) {
                               ImGui::GetColorU32(Lerp(bg, ImVec4(0, 0, 0, 1), IsDark() ? 0.18f : 0.f)));
 
   const float hpad = 28.f;
-  const float heroH = 128.f;
+  const float heroH = 136.f;
 
-  // --- Hero band ---
+  // --- Hero band — stronger accent wash so the brand row reads above the body. ---
   const ImVec2 h0(winMin.x, winMin.y);
   const ImVec2 h1(winMax.x, winMin.y + heroH);
-  dl->AddRectFilledMultiColor(h0, h1, ImGui::GetColorU32(Lerp(HeroBg(), Accent(), 0.10f)),
-                              ImGui::GetColorU32(HeroBg()), ImGui::GetColorU32(HeroBg()),
-                              ImGui::GetColorU32(Lerp(HeroBg(), Accent(), 0.10f)));
-  dl->AddRectFilled(ImVec2(h0.x, h1.y - 3.f), h1, ImGui::GetColorU32(Accent()));
-  dl->AddRectFilled(h0, ImVec2(h0.x + 5.f, h1.y), ImGui::GetColorU32(Accent()));
+  const ImVec4 heroTopL = Lerp(HeroBg(), Accent(), 0.24f);
+  const ImVec4 heroTopR = Lerp(HeroBg(), Accent(), 0.12f);
+  const ImVec4 heroBotL = Lerp(HeroBg(), ImVec4(0.f, 0.f, 0.f, 1.f), IsDark() ? 0.14f : 0.04f);
+  const ImVec4 heroBotR = Lerp(HeroBg(), Accent(), 0.06f);
+  dl->AddRectFilledMultiColor(h0, h1, ImGui::GetColorU32(heroTopL), ImGui::GetColorU32(heroTopR),
+                              ImGui::GetColorU32(heroBotR), ImGui::GetColorU32(heroBotL));
 
   float textX = winMin.x + hpad;
   {
-    const float badge = 60.f;
-    DrawGsBadge(dl, ImVec2(textX + badge * 0.5f, winMin.y + heroH * 0.5f), badge);
-    textX += badge + 22.f;
+    const float badge = 68.f;
+    const ImVec2 badgeCenter(textX + badge * 0.5f, winMin.y + heroH * 0.5f);
+    DrawSmoothRadialGlow(dl, badgeCenter, badge * 0.95f, AccentHi(), 0.20f);
+    DrawGsBadge(dl, badgeCenter, badge);
+    textX += badge + 24.f;
   }
 
   ImGui::SetWindowFontScale(2.6f);
-  dl->AddText(ImVec2(textX, winMin.y + 26.f), ImGui::GetColorU32(ImGuiCol_Text), "GoSurvey");
+  const ImVec2 titlePos(textX, winMin.y + 28.f);
+  dl->AddText(ImVec2(titlePos.x + 1.f, titlePos.y + 1.f), ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.40f)),
+              "GoSurvey");
+  dl->AddText(titlePos, IM_COL32(255, 255, 255, 255), "GoSurvey");
   const float wordW = ImGui::CalcTextSize("GoSurvey").x;
   ImGui::SetWindowFontScale(1.f);
 
-  // Version pill.
+  // Version pill — accent fill + rim so it reads as part of the brand cluster.
   {
     const std::string ver = std::string("v") + GOSURVEY_VERSION_FULL;
     const ImVec2 ts = ImGui::CalcTextSize(ver.c_str());
-    const ImVec2 pillMin(textX + wordW + 14.f, winMin.y + 34.f);
+    const ImVec2 pillMin(textX + wordW + 14.f, winMin.y + 36.f);
     const ImVec2 pillMax(pillMin.x + ts.x + 16.f, pillMin.y + ts.y + 8.f);
-    dl->AddRectFilled(pillMin, pillMax, ImGui::GetColorU32(Lerp(HeroBg(), Accent(), 0.35f)), 10.f);
-    dl->AddText(ImVec2(pillMin.x + 8.f, pillMin.y + 4.f), ImGui::GetColorU32(ImGuiCol_Text), ver.c_str());
+    dl->AddRectFilled(pillMin, pillMax, ImGui::GetColorU32(Lerp(AccentLo(), Accent(), 0.55f)), 10.f);
+    dl->AddRect(pillMin, pillMax, ImGui::GetColorU32(Lerp(Accent(), AccentHi(), 0.65f)), 10.f, 0, 1.5f);
+    dl->AddText(ImVec2(pillMin.x + 8.f, pillMin.y + 4.f), IM_COL32(255, 255, 255, 255), ver.c_str());
   }
-  dl->AddText(ImVec2(textX + 2.f, winMin.y + 78.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
-              "Land surveying \xC2\xB7 civil drafting \xC2\xB7 CAD");
+  {
+    const ImVec4 tagCol = Lerp(ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled), AccentHi(), 0.42f);
+    dl->AddText(ImVec2(textX + 2.f, winMin.y + 84.f), ImGui::GetColorU32(tagCol),
+                "Land surveying \xC2\xB7 civil drafting \xC2\xB7 CAD");
+  }
+
+  // Light accent rim on all four sides — drawn last so it sits on top of the band fill.
+  dl->AddRect(h0, h1, ImGui::GetColorU32(AccentHi()), 0.f, 0, 2.f);
 
   // --- Body: three columns below the hero. ---
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + heroH + 18.f);
@@ -619,6 +735,35 @@ void DrawStartScreen(AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::Unindent(hpad);
 }
 
+void DrawAccountDetailsWindow(AppCommandState& cmd) {
+  if (!cmd.showAccountDetailsWindow)
+    return;
+  // Only meaningful while signed in; a sign-out with the window open just closes it.
+  if (!cmd.authSignedIn) {
+    cmd.showAccountDetailsWindow = false;
+    return;
+  }
+  // Fixed 800x400, centered in the main viewport every frame it opens.
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowSize(ImVec2(800.f, 400.f), ImGuiCond_Always);
+  ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f),
+                          ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  bool open = cmd.showAccountDetailsWindow;
+  if (ImGui::Begin("Account Details", &open,
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
+                       ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
+    BeginStyledDialog();
+    ImGui::TextDisabled("Email");
+    ImGui::TextUnformatted(cmd.authEmail.empty() ? "(no email on file)" : cmd.authEmail.c_str());
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextWrapped("More account settings are coming soon.");
+  }
+  ImGui::End();
+  cmd.showAccountDetailsWindow = open;
+}
+
 void RecordRecentDrawing(AppCommandState& cmd, const std::string& absDrawingPath) {
   if (absDrawingPath.empty())
     return;
@@ -631,6 +776,11 @@ void RecordRecentDrawing(AppCommandState& cmd, const std::string& absDrawingPath
 
 void RemoveRecentDrawing(const std::string& absDrawingPath) {
   recent::Remove(RecentJsonPath(), AbsPathUtf8(absDrawingPath));
+}
+
+void ClearRecentDrawings() {
+  recent::Clear(RecentJsonPath());
+  InvalidateAllThumbTex();
 }
 
 void ServicePendingThumbnail(AppCommandState& cmd, const ViewportRenderer& renderer) {

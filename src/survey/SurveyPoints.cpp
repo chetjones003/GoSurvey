@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 
 float SurveyPointCrossHalfWorldFromPaper(float crossSpanPlottedInches, float modelUnitsPerPlottedInch) {
   const float mup = std::max(modelUnitsPerPlottedInch, 1.e-6f);
@@ -18,17 +19,19 @@ float SurveyPointCrossHalfWorldFromPaper(float crossSpanPlottedInches, float mod
   return 0.5f * span * mup;
 }
 
-void AppendSurveyPointCrossVertices(float easting, float northing, float elevationZ, float halfExtentWorld,
+void AppendSurveyPointCrossVertices(double easting, double northing, double elevationZ, float halfExtentWorld,
                                     std::vector<float>* outLines, const MarkerBillboardBasis& basis) {
   if (!outLines || halfExtentWorld <= 0.f)
     return;
   const float s = halfExtentWorld;
   // Offsets are in the marker's own plane (u across, v up), mapped into world through the basis.
-  // With the default basis this reduces to the previous world-XY arithmetic exactly.
+  // With the default basis this reduces to the previous world-XY arithmetic exactly. The point
+  // coordinates stay double through the offset math; only the final GPU-buffer push narrows to
+  // float, matching the single narrowing point established in Phase D (ADR-054 (b)).
   auto emit = [&](float u, float v) {
-    outLines->push_back(easting + basis.rightX * u + basis.upX * v);
-    outLines->push_back(northing + basis.rightY * u + basis.upY * v);
-    outLines->push_back(elevationZ + basis.rightZ * u + basis.upZ * v);
+    outLines->push_back(static_cast<float>(easting + static_cast<double>(basis.rightX * u + basis.upX * v)));
+    outLines->push_back(static_cast<float>(northing + static_cast<double>(basis.rightY * u + basis.upY * v)));
+    outLines->push_back(static_cast<float>(elevationZ + static_cast<double>(basis.rightZ * u + basis.upZ * v)));
   };
   emit(-s, -s);
   emit(s, s);
@@ -185,7 +188,7 @@ void ResetCreatePointsNextIdFromSettings(AppCommandState& st) {
   st.createPointsNextId = st.createPointsOpts.startNumber;
 }
 
-bool TryPlaceSurveyPoint(AppCommandState& st, float easting, float northing, float elevation,
+bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, double elevation,
                          std::vector<std::string>& log) {
   auto& opts = st.createPointsOpts;
   const int idTry = st.createPointsNextId;
@@ -269,8 +272,8 @@ bool TryPlaceSurveyPoint(AppCommandState& st, float easting, float northing, flo
   return false;
 }
 
-void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, float dy, SurveyDuplicatePolicy policy,
-                                             std::vector<std::string>& log) {
+void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, double dx, double dy, double dz,
+                                             SurveyDuplicatePolicy policy, std::vector<std::string>& log) {
   auto& pts = st.surveyPoints;
   auto& buffers = st.surveyPointIdBuffers;
   std::vector<int> ix = st.selectedSurveyPointIndices;
@@ -290,6 +293,7 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
     SurveyPoint copy = pts[static_cast<size_t>(i)];
     copy.easting += dx;
     copy.northing += dy;
+    copy.elevation += dz;
     const int srcId = copy.id;
 
     auto findOtherWithId = [&](int id) -> int {
@@ -399,11 +403,11 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
 
 namespace {
 
-void RotateSurveyCoords(float bx, float by, float rad, float* x, float* y) {
-  const float c = std::cos(rad);
-  const float s = std::sin(rad);
-  float dx = *x - bx;
-  float dy = *y - by;
+void RotateSurveyCoords(double bx, double by, float rad, double* x, double* y) {
+  const double c = std::cos(static_cast<double>(rad));
+  const double s = std::sin(static_cast<double>(rad));
+  double dx = *x - bx;
+  double dy = *y - by;
   *x = bx + c * dx - s * dy;
   *y = by + s * dx + c * dy;
 }
@@ -411,22 +415,22 @@ void RotateSurveyCoords(float bx, float by, float rad, float* x, float* y) {
 /// Reflects (*x,*y) across the line through (x0,y0)-(x1,y1). A degenerate (near-zero-length)
 /// mirror line leaves the point unchanged rather than dividing by ~0 — callers require two
 /// distinct points before a mirror commits, so this is a safety net, not a user-facing path.
-void ReflectSurveyCoords(float x0, float y0, float x1, float y1, float* x, float* y) {
-  const float dx = x1 - x0;
-  const float dy = y1 - y0;
-  const float len2 = dx * dx + dy * dy;
-  if (len2 < 1e-12f)
+void ReflectSurveyCoords(double x0, double y0, double x1, double y1, double* x, double* y) {
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12)
     return;
-  const float t = ((*x - x0) * dx + (*y - y0) * dy) / len2;
-  const float projX = x0 + t * dx;
-  const float projY = y0 + t * dy;
-  *x = 2.f * projX - *x;
-  *y = 2.f * projY - *y;
+  const double t = ((*x - x0) * dx + (*y - y0) * dy) / len2;
+  const double projX = x0 + t * dx;
+  const double projY = y0 + t * dy;
+  *x = 2.0 * projX - *x;
+  *y = 2.0 * projY - *y;
 }
 
 } // namespace
 
-void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float by, float rad,
+void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, double bx, double by, float rad,
                                             SurveyDuplicatePolicy policy, std::vector<std::string>& log) {
   auto& pts = st.surveyPoints;
   auto& buffers = st.surveyPointIdBuffers;
@@ -553,7 +557,7 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
   }
 }
 
-void DuplicateSelectedSurveyPointsReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
+void DuplicateSelectedSurveyPointsReflected(AppCommandState& st, double x0, double y0, double x1, double y1,
                                             SurveyDuplicatePolicy policy, std::vector<std::string>& log) {
   auto& pts = st.surveyPoints;
   auto& buffers = st.surveyPointIdBuffers;
@@ -842,8 +846,11 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   // swallowed the very point it described. Y has no such exposure. The box already stands
   // `offsetE` clear to the east, so it cannot touch the marker no matter how tall it gets, and
   // centring there is what puts the label beside the point rather than hanging beneath it.
-  const float ax = p.easting + offsetE;
-  const float cy = p.northing + offsetN;
+  // Annotation boxes are a float store (CadAnnotation, not one of the four core coordinate stores
+  // widened by Phase A) — narrow the double survey-point coordinate here, at this established
+  // boundary, per ADR-054 (b).
+  const float ax = static_cast<float>(p.easting) + offsetE;
+  const float cy = static_cast<float>(p.northing) + offsetN;
   a.boxMinX = ax;
   a.boxMaxX = ax + bwClamped;
   a.boxMaxY = cy + bhClamped * 0.5f;
@@ -854,7 +861,7 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   // and insZ is absolute (ADR-025 D2), so every label was pinned to the datum while its point moved
   // to real elevation, which is exactly what an orbit made visible. The draw path already reads
   // insZ everywhere; this assignment was the only thing missing.
-  a.insZ = p.elevation;
+  a.insZ = static_cast<float>(p.elevation);
 }
 
 void RepositionAllSurveyPointLabels(AppCommandState& st) {
@@ -884,8 +891,8 @@ void ResolveConflictingWorldSurveyPoints(AppCommandState& st, const std::vector<
     }
     SurveyPoint sp = w;
     sp.id = id;
-    sp.easting = static_cast<float>(static_cast<double>(w.easting) - st.worldDocumentOriginX);
-    sp.northing = static_cast<float>(static_cast<double>(w.northing) - st.worldDocumentOriginY);
+    sp.easting = w.easting - st.worldDocumentOriginX;
+    sp.northing = w.northing - st.worldDocumentOriginY;
     sp.labelMtextAnnId = 0;
     st.surveyPoints.push_back(sp);
     EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, log);
@@ -948,6 +955,11 @@ bool SaveSurveyPointsToJsonFile(const AppCommandState& st, const char* path, std
     log.push_back("Could not open file for saving survey points.");
     return false;
   }
+  // std::ofstream's default precision is 6 significant digits — plenty for `float` but not enough
+  // to round-trip a `double` state-plane easting/northing within REQ-101's ±0.002 ft (a 7-digit
+  // magnitude needs ~10 significant digits to keep 3 decimal places). setprecision(17) is the
+  // shortest-round-trip guarantee for IEEE-754 double, matching DxfIo.cpp's writer.
+  f << std::setprecision(17);
   f << "{\"points\":[";
   for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
     const SurveyPoint& p = st.surveyPoints[i];
@@ -987,14 +999,14 @@ bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::ve
     *out = static_cast<int>(v);
     return true;
   };
-  auto parseFloatField = [](const std::string& o, const char* key, float* out) -> bool {
+  auto parseDoubleField = [](const std::string& o, const char* key, double* out) -> bool {
     const std::string pat = std::string("\"") + key + "\":";
     const size_t p0 = o.find(pat);
     if (p0 == std::string::npos)
       return false;
     const char* str = o.c_str() + p0 + pat.size();
     char* end = nullptr;
-    *out = std::strtof(str, &end);
+    *out = std::strtod(str, &end);
     return end != str;
   };
 
@@ -1011,8 +1023,8 @@ bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::ve
     }
     const std::string obj = s.substr(objStart, objEnd - objStart + 1);
     SurveyPoint p{};
-    if (!parseIntField(obj, "id", &p.id) || !parseFloatField(obj, "easting", &p.easting) ||
-        !parseFloatField(obj, "northing", &p.northing) || !parseFloatField(obj, "elevation", &p.elevation)) {
+    if (!parseIntField(obj, "id", &p.id) || !parseDoubleField(obj, "easting", &p.easting) ||
+        !parseDoubleField(obj, "northing", &p.northing) || !parseDoubleField(obj, "elevation", &p.elevation)) {
       search = objEnd + 1;
       continue;
     }

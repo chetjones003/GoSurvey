@@ -14,7 +14,7 @@ struct PlanBounds {
   bool hasAny = false;
 };
 
-PlanBounds ComputePlanBounds(const std::vector<float>& vertsXyz) {
+PlanBounds ComputePlanBounds(const std::vector<double>& vertsXyz) {
   PlanBounds b;
   for (size_t v = 0; v + 1 < vertsXyz.size(); v += 3) {
     const double x = vertsXyz[v];
@@ -46,7 +46,7 @@ constexpr long long kMaxIndexCells = 4'000'000;
 
 } // namespace
 
-TinSpatialIndex BuildTinSpatialIndex(const std::vector<float>& vertsXyz,
+TinSpatialIndex BuildTinSpatialIndex(const std::vector<double>& vertsXyz,
                                      const std::vector<std::uint32_t>& indices) {
   TinSpatialIndex idx;
   const size_t triCount = indices.size() / 3;
@@ -108,7 +108,7 @@ TinSpatialIndex BuildTinSpatialIndex(const std::vector<float>& vertsXyz,
   return idx;
 }
 
-bool TinElevationAtIndexed(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+bool TinElevationAtIndexed(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
                            const TinSpatialIndex& index, double x, double y, double* outZ, size_t* outTri) {
   if (!outZ || index.empty())
     return false;
@@ -137,9 +137,9 @@ constexpr double kTargetVolumeSamples = 250000.0;
 
 } // namespace
 
-SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<float>& baseVertsXyz,
+SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<double>& baseVertsXyz,
                                          const std::vector<std::uint32_t>& baseIndices,
-                                         const std::vector<float>& compVertsXyz,
+                                         const std::vector<double>& compVertsXyz,
                                          const std::vector<std::uint32_t>& compIndices,
                                          std::vector<float>* outCutTrianglesXyz,
                                          std::vector<float>* outFillTrianglesXyz,

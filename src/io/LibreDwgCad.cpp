@@ -1,11 +1,13 @@
 #include "LibreDwgCad.hpp"
 
+#include "AcisSatParser.hpp"
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "DxfColors.hpp"
 #include "DwgIo.hpp"
 #include "SurveyPoints.hpp"
 #include "TextStyle.hpp"
+#include "util/SaveTrace.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -47,6 +49,24 @@ std::string DecodeDwgString(const void* raw, bool utf16le) {
   return std::string(reinterpret_cast<const char*>(raw));
 }
 
+// GitHub issue #369 / D-2026-09-10-b. A Civil 3D "parts catalog" component — a pressure pipe,
+// a fitting, a structure — carries no portable geometry: its shape is regenerated at open time
+// by Civil 3D's proprietary Parts Catalog engine from a parametric catalog reference, the same
+// way Plant 3D's AcPp* custom objects are unreachable by any third-party reader (ADR-026). Such
+// a file's only 3DSOLID is an empty placeholder, and its class table is full of AECC_* custom
+// classes. When that signature is present, a skipped empty 3DSOLID is named for its real cause
+// rather than the ambiguous "(empty)". \p dwg may be null.
+bool DwgHasCivil3dCatalogClasses(const Dwg_Data* dwg) {
+  if (dwg == nullptr || dwg->dwg_class == nullptr)
+    return false;
+  for (BITCODE_BS i = 0; i < dwg->num_classes; ++i) {
+    const char* name = dwg->dwg_class[i].dxfname;
+    if (name != nullptr && std::strncmp(name, "AECC_", 5) == 0)
+      return true;
+  }
+  return false;
+}
+
 std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   if (method == 0xc0)
     return "ByLayer";
@@ -55,10 +75,22 @@ std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   if (method == 0xc3) {
     // 0xc3 is truecolor, except for the documented sentinels (dwg.h): rgb 0 = ByBlock,
     // 0x100 = ByLayer, 0x101 = none. Fall through to the index path for those.
+    //
+    // AutoCAD 2018 (AC1032) also writes an *indexed* layer/entity colour as a 0xc3 CMC whose
+    // rgb payload is just the ACI in the low byte (e.g. 0xc3000007 == ACI 7). LibreDWG does not
+    // resolve that to RGB the way it does for 0xc2. A real 24-bit truecolour always has a
+    // non-zero red or green byte; when only the low byte is set, treat it as an ACI index so a
+    // 0xc3-encoded "layer 0 white" does not import as near-black #000007.
     const unsigned c = rgb & 0xFFFFFFu;
-    if (c != 0 && c != 0x100u && c != 0x101u) {
+    if (c != 0 && c != 0x100u && c != 0x101u && (c & 0xFFFF00u) != 0) {
       char buf[16];
       std::snprintf(buf, sizeof(buf), "#%06X", c);
+      return std::string(buf);
+    }
+    if ((c & 0xFFFF00u) == 0 && c >= 1 && c <= 255) {
+      char buf[16];
+      std::snprintf(buf, sizeof(buf), "#%06X",
+                    static_cast<unsigned>(DxfRgbPackedFromAci(static_cast<int>(c)) & 0xFFFFFFu));
       return std::string(buf);
     }
   }
@@ -165,24 +197,26 @@ void NoteSkip(std::unordered_map<std::string, int>* hist, const char* name) {
 
 void LocalLine(AppCommandState& st, double x0, double y0, double z0, double x1, double y1, double z1,
                const EntityAttributes& at) {
-  st.userLinesFlat.push_back(static_cast<float>(x0 - st.worldDocumentOriginX));
-  st.userLinesFlat.push_back(static_cast<float>(y0 - st.worldDocumentOriginY));
-  st.userLinesFlat.push_back(static_cast<float>(z0));
-  st.userLinesFlat.push_back(static_cast<float>(x1 - st.worldDocumentOriginX));
-  st.userLinesFlat.push_back(static_cast<float>(y1 - st.worldDocumentOriginY));
-  st.userLinesFlat.push_back(static_cast<float>(z1));
+  st.userLinesFlat.push_back(x0 - st.worldDocumentOriginX);
+  st.userLinesFlat.push_back(y0 - st.worldDocumentOriginY);
+  st.userLinesFlat.push_back(z0);
+  st.userLinesFlat.push_back(x1 - st.worldDocumentOriginX);
+  st.userLinesFlat.push_back(y1 - st.worldDocumentOriginY);
+  st.userLinesFlat.push_back(z1);
   st.userLineAttrs.push_back(at);
 }
 
 void LocalCircle(AppCommandState& st, double cx, double cy, double r, double z, const EntityAttributes& at) {
-  st.userCirclesCxCyZR.push_back(static_cast<float>(cx - st.worldDocumentOriginX));
-  st.userCirclesCxCyZR.push_back(static_cast<float>(cy - st.worldDocumentOriginY));
-  st.userCirclesCxCyZR.push_back(static_cast<float>(z));
-  st.userCirclesCxCyZR.push_back(static_cast<float>(r));
+  st.userCirclesCxCyZR.push_back(cx - st.worldDocumentOriginX);
+  st.userCirclesCxCyZR.push_back(cy - st.worldDocumentOriginY);
+  st.userCirclesCxCyZR.push_back(z);
+  st.userCirclesCxCyZR.push_back(r);
   st.userCircleAttrs.push_back(at);
+  PushCircleNormal(st.userCircleNormals);   // REQ-312: DWG extrusion not yet read
 }
 
-void ArcFromAngles(double a0, double a1, float* startRad, float* sweepRad) {
+template <class T>
+void ArcFromAngles(double a0, double a1, T* startRad, T* sweepRad) {
   double sweep = a1 - a0;
   if (std::fabs(sweep) < 1e-12)
     sweep = 2.0 * kPi;
@@ -192,8 +226,8 @@ void ArcFromAngles(double a0, double a1, float* startRad, float* sweepRad) {
     sweep -= 2.0 * kPi;
   if (sweep < 1e-12)
     sweep = 2.0 * kPi;
-  *startRad = static_cast<float>(a0);
-  *sweepRad = static_cast<float>(sweep);
+  *startRad = static_cast<T>(a0);
+  *sweepRad = static_cast<T>(sweep);
 }
 
 void LocalArc(AppCommandState& st, double cx, double cy, double r, double a0, double a1, double z,
@@ -201,17 +235,20 @@ void LocalArc(AppCommandState& st, double cx, double cy, double r, double a0, do
   if (r <= 1e-12)
     return;
   CadArc arc{};
-  arc.cx = static_cast<float>(cx - st.worldDocumentOriginX);
-  arc.cy = static_cast<float>(cy - st.worldDocumentOriginY);
-  arc.r = static_cast<float>(r);
+  arc.cx = cx - st.worldDocumentOriginX;
+  arc.cy = cy - st.worldDocumentOriginY;
+  arc.r = r;
   ArcFromAngles(a0, a1, &arc.startRad, &arc.sweepRad);
-  arc.z = static_cast<float>(z);
+  arc.z = z;
   st.userArcs.push_back(arc);
   st.userArcAttrs.push_back(at);
 }
 
+// REQ-316 / ADR-047: `bulge`, when given, is one entry per vertex (DXF group 42's own convention) —
+// null or shorter than `xyz`'s vertex count means every segment stays straight, matching every
+// caller that predates bulge support (POLYLINE_2D/POLYLINE_3D below have no bulge concept at all).
 void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool closed,
-                   const EntityAttributes& at) {
+                   const EntityAttributes& at, const std::vector<double>* bulge = nullptr) {
   const size_t nv = xyz.size() / 3;
   if (nv < 2)
     return;
@@ -219,22 +256,35 @@ void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool clo
   if (st.userPolylineOffsets.empty())
     st.userPolylineOffsets.push_back(base);
   for (size_t i = 0; i < nv; ++i) {
-    st.userPolylineVerts.push_back(static_cast<float>(xyz[i * 3 + 0] - st.worldDocumentOriginX));
-    st.userPolylineVerts.push_back(static_cast<float>(xyz[i * 3 + 1] - st.worldDocumentOriginY));
-    st.userPolylineVerts.push_back(static_cast<float>(xyz[i * 3 + 2]));
+    st.userPolylineVerts.push_back(xyz[i * 3 + 0] - st.worldDocumentOriginX);
+    st.userPolylineVerts.push_back(xyz[i * 3 + 1] - st.worldDocumentOriginY);
+    st.userPolylineVerts.push_back(xyz[i * 3 + 2]);
   }
   st.userPolylineOffsets.push_back(base + static_cast<int>(nv));
   st.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
   st.userPolylineAttrs.push_back(at);
+  bool anyBulge = bulge != nullptr;
+  if (anyBulge) {
+    anyBulge = false;
+    for (size_t i = 0; i < nv && i < bulge->size(); ++i)
+      if ((*bulge)[i] != 0.0) { anyBulge = true; break; }
+  }
+  if (anyBulge || !st.userPolylineVertsBulge.empty()) {
+    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+    const size_t tail = st.userPolylineVertsBulge.size() >= nv ? st.userPolylineVertsBulge.size() - nv : 0;
+    if (bulge)
+      for (size_t i = 0; i < nv && i < bulge->size(); ++i)
+        st.userPolylineVertsBulge[tail + i] = static_cast<float>((*bulge)[i]);
+  }
 }
 
 void LocalText(AppCommandState& st, double x, double y, double z, double height, double rotRad,
                const std::string& text, CadAnnotation::Kind kind, const EntityAttributes& at) {
   CadAnnotation a{};
   a.kind = kind;
-  a.insX = static_cast<float>(x - st.worldDocumentOriginX);
-  a.insY = static_cast<float>(y - st.worldDocumentOriginY);
-  a.insZ = static_cast<float>(z);
+  a.insX = x - st.worldDocumentOriginX;
+  a.insY = y - st.worldDocumentOriginY;
+  a.insZ = z;
   const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
   a.plottedHeightInches = static_cast<float>(height / mup);
   a.rotationRad = static_cast<float>(rotRad);
@@ -245,6 +295,66 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
 
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
                   std::unordered_map<std::string, int>* skipHist);
+
+/// REQ-320 / ADR-051 (GitHub issue #299): a `3DSOLID` entity's geometry is an ACIS record stream,
+/// not lines/circles LibreDWG can hand back directly. `acis_data` is LibreDWG's already-decrypted
+/// payload — SAT (v1, text) or SAB (v2+, binary), per `version` (DXF 70). This importer supports SAT
+/// only (issue #301 tracks SAB); a SAB stream, or anything AcisSatParser refuses, is reported through
+/// the same `NoteSkip` mechanism an unrecognized entity type already uses (REQ-201: never silent).
+void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity__3DSOLID* sol,
+                     const Xf2& xf, const EntityAttributes& at,
+                     std::unordered_map<std::string, int>* skipHist) {
+  if (sol->acis_empty || sol->acis_data == nullptr) {
+    // GitHub issue #369 / D-2026-09-10-b: name a Civil 3D parts-catalog placeholder for what it
+    // is, rather than the ambiguous "(empty)" that reads like a decode failure. The block's other
+    // 2D/annotation content still imports (BLOCKIMPORT keeps it).
+    NoteSkip(skipHist,
+             libredwgcad_detail::DwgHasCivil3dCatalogClasses(dwg)
+                 ? "3DSOLID(Civil3D parts-catalog part, no portable geometry)"
+                 : "3DSOLID(empty)");
+    return;
+  }
+  // A rotated or non-uniformly-scaled placement (a 3DSOLID reached through a rotated/scaled nested
+  // INSERT) would need every surface/edge frame in the imported solid transformed consistently, not
+  // just its vertices — out of scope this increment. The primary case (a block DEFINITION's own
+  // 3DSOLID, imported directly by BLOCKIMPORT) always reaches here with an identity transform.
+  const bool identityXf = std::fabs(xf.ox) < 1e-9 && std::fabs(xf.oy) < 1e-9 &&
+                           std::fabs(xf.ang) < 1e-9 && std::fabs(xf.sx - 1.0) < 1e-9 &&
+                           std::fabs(xf.sy - 1.0) < 1e-9;
+  if (!identityXf) {
+    NoteSkip(skipHist, "3DSOLID(rotated/scaled placement not supported)");
+    return;
+  }
+  if (sol->version >= 2) {
+    NoteSkip(skipHist, "3DSOLID(SAB binary ACIS not supported, issue #301)");
+    return;
+  }
+  // `acis_data` is LibreDWG's decrypted buffer; the SAT-decryption cipher preserves length, so the
+  // encrypted blocks' summed size is the decrypted length — read exactly that many bytes rather than
+  // trusting a NUL terminator, which a corrupted or unusually-encoded file need not have.
+  std::string sat;
+  if (sol->num_blocks > 0 && sol->block_size != nullptr) {
+    std::size_t total = 0;
+    for (BITCODE_BL i = 0; i < sol->num_blocks; ++i)
+      total += sol->block_size[i];
+    sat.assign(reinterpret_cast<const char*>(sol->acis_data), total);
+  } else {
+    sat.assign(reinterpret_cast<const char*>(sol->acis_data));
+  }
+  const acissat::ImportResult r = acissat::ImportSatSolid(sat, "3DSOLID");
+  if (!r.ok) {
+    NoteSkip(skipHist, ("3DSOLID(" + r.error + ")").c_str());
+    return;
+  }
+  // Every other imported entity localizes against the document origin (LocalLine/LocalCircle/etc.,
+  // above) — a solid's vertices and surface/edge frames need the identical shift, or it renders and
+  // exports offset from every other entity in a state-plane drawing (REQ-101's Local storage
+  // invariant).
+  const brep::Solid localized =
+      brep::Translate(r.solid, ray3d::Vec3{-st.worldDocumentOriginX, -st.worldDocumentOriginY, 0.0});
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(localized));
+  st.cadSolidAttrs.push_back(at);
+}
 
 void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
                    std::unordered_map<std::string, int>* skipHist) {
@@ -313,12 +423,12 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     double cx = 0, cy = 0;
     xf.apply(e->center.x, e->center.y, &cx, &cy);
     CadEllipse el{};
-    el.cx = static_cast<float>(cx - st.worldDocumentOriginX);
-    el.cy = static_cast<float>(cy - st.worldDocumentOriginY);
-    el.majVx = static_cast<float>(e->sm_axis.x * xf.sx);
-    el.majVy = static_cast<float>(e->sm_axis.y * xf.sy);
-    el.ratio = static_cast<float>(e->axis_ratio);
-    el.z = static_cast<float>(e->center.z);
+    el.cx = cx - st.worldDocumentOriginX;
+    el.cy = cy - st.worldDocumentOriginY;
+    el.majVx = e->sm_axis.x * xf.sx;
+    el.majVy = e->sm_axis.y * xf.sy;
+    el.ratio = e->axis_ratio;
+    el.z = e->center.z;
     st.userEllipses.push_back(el);
     st.userEllAttrs.push_back(at);
     return;
@@ -335,7 +445,15 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       xyz.push_back(e->elevation);
     }
     const bool closed = (e->flag & 512) != 0 || (e->flag & 1) != 0;
-    LocalPolyline(st, xyz, closed, at);
+    // REQ-316 / ADR-047 (DWG side, REQ-325 / ADR-053 increment 4): group-42-equivalent bulges, one
+    // per vertex, present whenever `bulges` is non-null — LibreDWG's own `num_bulges` flag bit (16).
+    std::vector<double> bulge;
+    if (e->bulges != nullptr && e->num_bulges > 0) {
+      bulge.reserve(e->num_bulges);
+      for (BITCODE_BL i = 0; i < e->num_bulges; ++i)
+        bulge.push_back(e->bulges[i]);
+    }
+    LocalPolyline(st, xyz, closed, at, bulge.empty() ? nullptr : &bulge);
     return;
   }
   if ((ty == DWG_TYPE_POLYLINE_2D || ty == DWG_TYPE_POLYLINE_3D)) {
@@ -398,6 +516,10 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     ExplodeInsert(st, dwg, ent, depth, skipHist);
     return;
   }
+  if (ty == DWG_TYPE__3DSOLID && ent->tio._3DSOLID != nullptr) {
+    ImportAcisSolid(st, dwg, ent->tio._3DSOLID, xf, at, skipHist);
+    return;
+  }
   if (ty == DWG_TYPE_SEQEND || ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_ENDBLK)
     return;
   NoteSkip(skipHist, obj->dxfname != nullptr ? obj->dxfname : "UNKNOWN");
@@ -439,7 +561,7 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
     }
     CadLayerRow row{};
     row.name = name;
-    row.on = ly->on != 0;
+    row.on = ly->off == 0;
     row.frozen = ly->frozen != 0;
     row.locked = ly->locked != 0;
     row.color = ColorStorage(ly->color);
@@ -500,12 +622,20 @@ Dwg_Object_BLOCK_HEADER* ModelHeader(Dwg_Data* dwg) {
 // emitted geometry only, so a saved drawing lost every layer).
 struct TableWriter {
   Dwg_Data* dwg = nullptr;
-  std::unordered_map<std::string, Dwg_Object*> layers;   // lower(name) -> LAYER object
-  std::unordered_map<std::string, Dwg_Object*> ltypes;   // lower(name) -> LTYPE object
+  // Store LibreDWG object indices, not Dwg_Object* — dwg_add_* can reallocate dwg->object and
+  // invalidate raw pointers cached from an earlier BuildLayerTable / EnsureLtype call.
+  std::unordered_map<std::string, BITCODE_BL> layers;  // lower(name) -> parent objid
+  std::unordered_map<std::string, BITCODE_BL> ltypes;  // lower(name) -> parent objid
 
   static bool IsPlainLinetype(const std::string& n) {
     const std::string l = LowerAscii(n);
     return l.empty() || l == "continuous" || l == "bylayer" || l == "byblock";
+  }
+
+  Dwg_Object* ObjectAt(BITCODE_BL objid) const {
+    if (dwg == nullptr || objid < 0 || static_cast<BITCODE_BL>(objid) >= dwg->num_objects)
+      return nullptr;
+    return &dwg->object[objid];
   }
 
   Dwg_Object* EnsureLtype(const std::string& name) {
@@ -514,15 +644,20 @@ struct TableWriter {
     const std::string key = LowerAscii(name);
     auto it = ltypes.find(key);
     if (it != ltypes.end())
-      return it->second;
+      return ObjectAt(it->second);
     Dwg_Object_LTYPE* lt = dwg_add_LTYPE(dwg, name.c_str());
-    Dwg_Object* o = lt != nullptr ? &dwg->object[lt->parent->objid] : nullptr;
-    ltypes[key] = o;
-    return o;
+    if (lt == nullptr || lt->parent == nullptr)
+      return nullptr;
+    ltypes[key] = lt->parent->objid;
+    return ObjectAt(lt->parent->objid);
   }
 
   BITCODE_H Ref(Dwg_Object* o) {
     return o != nullptr ? dwg_add_handleref(dwg, 5, o->handle.value, o) : nullptr;
+  }
+
+  BITCODE_H RefObjId(BITCODE_BL objid) {
+    return Ref(ObjectAt(objid));
   }
 
   void BuildLayerTable(const AppCommandState& st) {
@@ -530,21 +665,21 @@ struct TableWriter {
       if (row.name.empty() || LowerAscii(row.name) == "0")
         continue;
       Dwg_Object_LAYER* ly = dwg_add_LAYER(dwg, row.name.c_str());
-      if (ly == nullptr)
+      if (ly == nullptr || ly->parent == nullptr)
         continue;
       uint32_t rgb = 0;
       const int aci = DxfColorStringToRgbPacked(row.color, &rgb) ? DxfNearestAciFromRgbPacked(rgb) : 7;
       ly->color.index = static_cast<BITCODE_BSd>(row.on ? aci : -aci);
-      ly->color.method = 0xc2;
+      ly->color.method = DWG_COLOR_METHOD_ACI;
       ly->color.rgb = 0;
-      ly->on = row.on ? 1 : 0;
+      ly->off = row.on ? 0 : 1;
       ly->frozen = row.frozen ? 1 : 0;
       ly->locked = row.locked ? 1 : 0;
       ly->flag0 = static_cast<BITCODE_BS>((row.frozen ? 1 : 0) | (row.on ? 2 : 0) |
                                          (row.locked ? 8 : 0) | 16);
       if (Dwg_Object* lt = EnsureLtype(row.linetype))
         ly->ltype = Ref(lt);
-      layers[LowerAscii(row.name)] = &dwg->object[ly->parent->objid];
+      layers[LowerAscii(row.name)] = ly->parent->objid;
     }
   }
 
@@ -553,20 +688,20 @@ struct TableWriter {
       return;
     if (!a.layer.empty() && LowerAscii(a.layer) != "0") {
       auto it = layers.find(LowerAscii(a.layer));
-      if (it != layers.end() && it->second != nullptr)
-        ent->layer = Ref(it->second);
+      if (it != layers.end())
+        ent->layer = RefObjId(it->second);
     }
     if (a.color == "ByBlock") {
       ent->color.index = 0;
-      ent->color.method = 0xc1;
+      ent->color.method = DWG_COLOR_METHOD_BYBLOCK;
     } else if (a.color.empty() || a.color == "ByLayer") {
       ent->color.index = 256;
-      ent->color.method = 0xc0;
+      ent->color.method = DWG_COLOR_METHOD_BYLAYER;
     } else {
       uint32_t rgb = 0;
       if (DxfColorStringToRgbPacked(a.color, &rgb)) {
         ent->color.index = static_cast<BITCODE_BSd>(DxfNearestAciFromRgbPacked(rgb));
-        ent->color.method = 0xc2;
+        ent->color.method = DWG_COLOR_METHOD_ACI;
       }
     }
     if (Dwg_Object* lt = EnsureLtype(a.linetype)) {
@@ -627,9 +762,36 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     world(arc.cx, arc.cy, arc.z, &c);
     const double a0 = static_cast<double>(arc.startRad);
     const double a1 = a0 + static_cast<double>(arc.sweepRad);
+    // REQ-312 (GitHub issue #391): a tilted arc's normal is group 210's DWG equivalent — the ARC's
+    // own `extrusion` field. Without it every arc exported flat, silently. When the normal is not
+    // world +Z the centre (group 10) is an OCS coordinate in the Arbitrary Axis frame the normal
+    // defines, exactly as `ocsPointOf` writes it in DxfIo.cpp; `ucs::FromNormal` IS that algorithm
+    // and returns the world axes unchanged for +Z, so a flat arc's centre and extrusion are
+    // byte-identical to before.
+    const bool arcFlat = IsFlatNormal(arc.nx, arc.ny, arc.nz);
+    dwg_point_3d ext{0.0, 0.0, 1.0};
+    if (!arcFlat) {
+      ucs::Ucs frame;
+      if (ucs::FromNormal({0.0, 0.0, 0.0},
+                          {static_cast<double>(arc.nx), static_cast<double>(arc.ny),
+                           static_cast<double>(arc.nz)},
+                          &frame)) {
+        const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+        c.x = ocs.x;
+        c.y = ocs.y;
+        c.z = ocs.z;
+        ext.x = static_cast<double>(arc.nx);
+        ext.y = static_cast<double>(arc.ny);
+        ext.z = static_cast<double>(arc.nz);
+      }
+    }
     Dwg_Entity_ARC* e = dwg_add_ARC(hdr, &c, static_cast<double>(arc.r), a0, a1);
-    if (e != nullptr)
+    if (e != nullptr) {
+      e->extrusion.x = ext.x;
+      e->extrusion.y = ext.y;
+      e->extrusion.z = ext.z;
       apply(e->parent, AttrAt(st.userArcAttrs, i));
+    }
   }
   for (size_t i = 0; i + 1 < st.userPolylineOffsets.size(); ++i) {
     const int a = st.userPolylineOffsets[i];
@@ -648,6 +810,46 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, nv, pts.data());
     if (lw != nullptr && i < st.userPolylineClosed.size() && st.userPolylineClosed[i])
       lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
+    // REQ-316 / ADR-047 (DWG side, REQ-325 / ADR-053 increment 4): per-vertex bulge (group-42
+    // equivalent). A TILTED segment is written straight (bulge 0) here rather than flattened wrong
+    // — DWG's LWPOLYLINE has the same one-elevation/one-extrusion ceiling DXF's does. The tilted-ARC
+    // write path the split needs now exists above (GitHub issue #391), but wiring the polyline
+    // split onto it — the DWG mirror of DxfIo.cpp's `emitSyntheticArc` loop — is a separate
+    // follow-up; until it lands, writing the segment straight rather than flattened wrong is the
+    // REQ-201 choice.
+    if (lw != nullptr) {
+      bool anyBulge = false;
+      std::vector<double> bulges(static_cast<size_t>(nv), 0.0);
+      for (int v = 0; v < nv; ++v) {
+        const int vi = a + v;
+        const float b2 = static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
+                             ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.f;
+        if (b2 == 0.f)
+          continue;
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        const size_t nk = static_cast<size_t>(vi) * 3;
+        if (nk + 2 < st.userPolylineVertsNormal.size()) {
+          nx = st.userPolylineVertsNormal[nk];
+          ny = st.userPolylineVertsNormal[nk + 1];
+          nz = st.userPolylineVertsNormal[nk + 2];
+        }
+        if (!IsFlatNormal(nx, ny, nz))
+          continue;  // left straight — see the comment above
+        bulges[static_cast<size_t>(v)] = static_cast<double>(b2);
+        anyBulge = true;
+      }
+      if (anyBulge) {
+        lw->num_bulges = static_cast<BITCODE_BL>(nv);
+        lw->bulges = static_cast<BITCODE_BD*>(calloc(static_cast<size_t>(nv), sizeof(BITCODE_BD)));
+        if (lw->bulges != nullptr) {
+          for (int v = 0; v < nv; ++v)
+            lw->bulges[v] = bulges[static_cast<size_t>(v)];
+          lw->flag = static_cast<BITCODE_BS>(lw->flag | 16);
+        } else {
+          lw->num_bulges = 0;
+        }
+      }
+    }
     if (lw != nullptr)
       apply(lw->parent, AttrAt(st.userPolylineAttrs, i));
   }
@@ -699,6 +901,14 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     log.push_back("CAD export — skipped mesh(es); not written to DXF/DWG.");
   if (!st.cadSurfaces.empty())
     log.push_back("CAD export — skipped TIN surface(s); not written to DXF/DWG.");
+  // B-rep solids (ADR-045 (i)). Named and counted, never dropped in silence (REQ-201). A real solid
+  // in DXF/DWG is an ACIS 3DSOLID — a proprietary binary B-rep GoSurvey cannot write without a
+  // third-party kernel REQ-300 does not permit — and writing a tessellated approximation instead
+  // would hand the user a picture of their solid that round-trips back as an uneditable bag of
+  // triangles with an approximate volume. The same boundary ADR-026 (c) drew for meshes.
+  if (!st.cadSolids.empty())
+    log.push_back("CAD export — skipped " + std::to_string(st.cadSolids.size()) +
+                  " solid(s); DXF/DWG has no lossless representation for them (ADR-045).");
   (void)dwg;
 }
 
@@ -821,22 +1031,28 @@ bool WriteDxfFile(const char* pathUtf8, Dwg_Data* dwg, std::vector<std::string>&
 }
 
 bool WriteDwgFile(const char* pathUtf8, Dwg_Data* dwg, std::vector<std::string>& log) {
-  const std::filesystem::path dst(pathUtf8);
-  const std::filesystem::path tmp = dst.string() + ".gosurvey-tmp.dwg";
+  if (pathUtf8 == nullptr || pathUtf8[0] == '\0')
+    return false;
+  const std::filesystem::path dst = std::filesystem::u8path(pathUtf8);
+  const std::filesystem::path tmp =
+      std::filesystem::path(dst.u8string() + u8".gosurvey-tmp.dwg");
   std::error_code ec;
   std::filesystem::remove(tmp, ec);
-  const int err = dwg_write_file(tmp.string().c_str(), dwg);
+  const std::string tmpUtf8 = tmp.u8string();
+  AppendSaveTrace("export: dwg_write_file");
+  const int err = dwg_write_file(tmpUtf8.c_str(), dwg);
   if (err != DWG_NOERR) {
     log.push_back("DWG export — LibreDWG encode failed.");
     std::filesystem::remove(tmp, ec);
     return false;
   }
+  AppendSaveTrace("export: dwg rename staged");
   std::filesystem::rename(tmp, dst, ec);
   if (ec) {
     std::filesystem::copy_file(tmp, dst, std::filesystem::copy_options::overwrite_existing, ec);
     std::filesystem::remove(tmp, ec);
     if (ec) {
-      log.push_back("DWG export failed: could not write " + dst.string() + ".");
+      log.push_back(std::string("DWG export failed: could not write ") + pathUtf8 + ".");
       return false;
     }
   }
@@ -965,7 +1181,9 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     log.push_back("CAD export — missing model space.");
     return false;
   }
+  AppendSaveTrace("export: fill from state");
   FillFromState(st, dwg, hdr, log);
+  AppendSaveTrace("export: encode to disk");
 
   bool ok = false;
   if (asDxf) {

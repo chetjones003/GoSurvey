@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits>
+
 #include "CadEntities.hpp"
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
@@ -28,12 +30,16 @@
 // curveisect::Vec2/Seg/Conic + Intersect*, for FILLET's tangent-arc solve (REQ-103 step 6a) below.
 // Dependency-free by its own design (curveintersect.hpp's own doc comment), so this adds no cycle.
 #include "util/curveintersect.hpp"
+#include "util/geom2d.hpp"        // BulgeArc, for the polyline arc-segment grips (REQ-316 / ADR-047)
 // HoverDwell, for AppCommandState's surface rollover timer (REQ-089). Pure and dependency-free
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
 #include "util/hoverdwell.hpp"
+#include "util/hoverpickgate.hpp"  // per-frame viewport hover-pick throttle (GitHub issue #166)
 #include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
 #include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
+#include "util/cadsolid.hpp"   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
+#include "util/solidpick.hpp"  // solidpick::Kind, for SelectedSubObject (REQ-318 / ADR-049)
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.
@@ -74,10 +80,63 @@ struct SelectedEntity {
     Table = 11,
     /// Block INSERT (GitHub issue #124). Appended after Table so existing type values stay stable.
     /// Lightweight: transform + attributes; geometry lives on the named definition.
-    BlockRef = 12
+    BlockRef = 12,
+    /// B-rep solid (REQ-313 / ADR-045). Appended after BlockRef so existing type values stay stable.
+    ///
+    /// **Display-and-erase only in this increment, like Mesh** — it selects, highlights, erases and
+    /// reports its volume, and no transform command moves it. That is a stated boundary rather than
+    /// an oversight: moving a solid means transforming every surface frame and every arc-edge frame
+    /// in its topology, which is the same class of work REQ-312 found for a single tilted arc, and
+    /// it belongs with #120's Phase 5 direct-modelling requirement. Every transform command refuses
+    /// a solid with a stated reason (REQ-201) rather than silently dropping it from the operation —
+    /// the rule Surface already established.
+    Solid = 13
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
+};
+
+/// One CAD entity within the pick aperture, with the metrics used to break ties.
+struct CadPickCandidate {
+  SelectedEntity entity{};
+  double distSq = 0.0;
+  /// Plan view: Z at the closest point on the entity (higher = nearer the viewer looking down).
+  /// Orbited view: ray parameter \p t of closest approach (smaller = nearer the camera).
+  double depthKey = 0.0;
+};
+
+/// One selected FACE, EDGE or VERTEX of one solid (REQ-318 increment 2 / ADR-049, issue #148).
+///
+/// **Why this is not a `SelectedEntity::Type`.** A sub-object is not an entity: it has no
+/// attributes, no layer, no id, and nothing that consumes `AppCommandState::selection` — MOVE,
+/// DELETE, the Properties panel, DXF export, the highlight walk — can act on one until #148's
+/// criteria 3-6 land. Folding it in would put a branch for it in every one of those consumers, and
+/// the first one that forgot would be a sub-object silently deleted or exported. Its own store makes
+/// REQ-318 item 9's "does not interfere" a structural property rather than a promise
+/// (D-2026-09-04-a).
+///
+/// **Why the index alone is not the reference.** ADR-049 measured this: a face index keeps its
+/// meaning across an edit that preserves the topology — a box's face indices survive a height
+/// change, a length change, a frame translation — and loses it across one that changes the counts,
+/// such as a cone frustum collapsing to an apex (4 faces to 3) or any boolean. So the index is
+/// paired with the identity of the solid it came from and the reference **expires** rather than
+/// re-binding to whatever now occupies that slot. A `weak_ptr` and not a raw pointer for the reason
+/// `CadSolidTessellation::key` gives: a raw address can be matched by a new allocation.
+struct SelectedSubObject {
+  /// Index into \ref AppCommandState::cadSolids. Kept alongside \ref owner because the store is
+  /// addressed by index everywhere else in this file; \ref owner is what decides validity.
+  int solidIndex = -1;
+  solidpick::Kind kind = solidpick::Kind::None;
+  /// Index into the owning solid's `faces`, `edges` or `vertices`, per \ref kind.
+  int index = -1;
+  /// The solid this reference was taken from. Empty (expired) means the solid is gone; pointing at
+  /// a *different* solid than `cadSolids[solidIndex]` means it was replaced by an edit, and either
+  /// way the reference is dropped rather than followed.
+  std::weak_ptr<const brep::Solid> owner;
+
+  [[nodiscard]] bool sameTarget(const SelectedSubObject& o) const {
+    return solidIndex == o.solidIndex && kind == o.kind && index == o.index;
+  }
 };
 
 /// REQ-103 BREAK (step 4): a break point resolved onto a specific entity — the exact coordinate
@@ -90,6 +149,14 @@ struct SelectedEntity {
 /// only — which edge (0-based) the point lands on.
 struct BreakPoint {
   float x = 0.f, y = 0.f;
+  /// Elevation at the cut, interpolated along the segment the cut fell on.
+  ///
+  /// A break, fillet or chamfer creates a vertex that did not exist before, so its Z has to come
+  /// from somewhere. `param` and `segIndex` already say exactly where along which segment the cut
+  /// landed, so the honest answer is the linear interpolation between that segment's endpoints —
+  /// exact on a level segment and correct on a sloped one. Before this field existed the answer was
+  /// `0.f`, which is what flattened polylines to datum (issue 01).
+  float z = 0.f;
   float param = 0.f;
   float theta = 0.f;
   int segIndex = -1;
@@ -270,8 +337,8 @@ void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, floa
 /// REQ-103 STRETCH, model-space apply — see the definition's comment (CadCommands.cpp) for the
 /// full per-type rule. Declared here (not just in the .cpp) because the viewport-pick and typed-text
 /// dispatch sites that call it appear earlier in CadCommands.cpp than its own definition.
-void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX, float mxX, float mnY,
-                             float mxY, std::vector<std::string>& log);
+void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, float mnX, float mxX,
+                             float mnY, float mxY, bool rectInUcsPlane, std::vector<std::string>& log);
 
 // ================================================================================================
 // REQ-103 FILLET (step 6a) / CHAMFER (step 6b) — pure tangent-arc / corner-point geometry.
@@ -301,6 +368,10 @@ struct FilletCurve {
   bool isLine = true;
   float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
   float cx = 0.f, cy = 0.f, r = 0.f;
+  // issue #373: a Line's own Z at each endpoint, in WORLD space (unused for Arc/Circle). Only
+  // consulted by the two-line 3D fillet path — every other consumer keeps working entirely in
+  // whatever 2D frame it was already given (world XY, or a projected plane's own 2D coordinates).
+  float az0 = 0.f, az1 = 0.f;
 };
 
 /// A curveisect::Seg standing in for curve `(ax,ay)-(bx,by)`'s INFINITE extension. curveisect has no
@@ -702,15 +773,31 @@ inline bool ChamferRayIntersect(const FilletCurve& c, float fromX, float fromY, 
 struct CadExtendedGeometryInput {
   const std::vector<CadArc>* arcs = nullptr;
   const std::vector<EntityAttributes>* arcAttrs = nullptr;
+  /// Plane normals for the circle store, three floats per circle (REQ-312, D-2026-08-31-f).
+  ///
+  /// An arc carries its normal inside `CadArc`, so `arcs` above needs no companion; a circle
+  /// cannot, and the renderer has to know a circle's plane or it draws a tilted one flat. Carried
+  /// here rather than as another `RenderScene` parameter for the reason this struct already
+  /// states: it is exactly "the extra per-entity data the renderer needs". Null, or shorter than
+  /// the circle store, means the missing entries are flat -- which is what every circle that
+  /// predates REQ-312 is.
+  const std::vector<float>* circleNormals = nullptr;
   const std::vector<CadEllipse>* ellipses = nullptr;
   const std::vector<EntityAttributes>* ellAttrs = nullptr;
-  const std::vector<float>* polylineVerts = nullptr;
+  const std::vector<double>* polylineVerts = nullptr;
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
   const std::vector<EntityAttributes>* polylineAttrs = nullptr;
+  /// REQ-316 / ADR-047: per-vertex bulge (parallel to polylineVerts, one per vertex). Null or
+  /// empty means every polyline segment is straight — the pre-ADR-047 behaviour.
+  const std::vector<float>* polylineBulge = nullptr;
+  /// REQ-325 / ADR-053: per-vertex curve-plane normal (stride 3, parallel to polylineVerts). Null
+  /// or empty means every curved segment is flat (world +Z) — the pre-ADR-053 behaviour, and what
+  /// every polyline that predates it still is.
+  const std::vector<float>* polylineNormal = nullptr;
   // Feature lines (REQ-087). Same four arrays, same shape — the renderer draws both through one
   // function, so a feature line cannot render differently from a polyline by accident.
-  const std::vector<float>* featureLineVerts = nullptr;
+  const std::vector<double>* featureLineVerts = nullptr;
   const std::vector<int>* featureLineOffsets = nullptr;
   const std::vector<uint8_t>* featureLineClosed = nullptr;
   const std::vector<EntityAttributes>* featureLineAttrs = nullptr;
@@ -730,7 +817,8 @@ struct CadExtendedGeometryInput {
 /// `offsets` is CSR: N entities need N+1 offsets, so fewer than two offsets is zero entities — and
 /// an "empty" store is legitimately either `{}` or `{0}` (issue #60), which is exactly why this is a
 /// named predicate rather than an `!empty()` written out at each call site.
-[[nodiscard]] inline bool CadChainHasEntities(const std::vector<float>* verts,
+template <class VT>
+[[nodiscard]] inline bool CadChainHasEntities(const std::vector<VT>* verts,
                                               const std::vector<int>* offsets) {
   return verts != nullptr && offsets != nullptr && offsets->size() >= 2;
 }
@@ -830,19 +918,23 @@ struct CadClipboard {
   float basePtX = 0.f; ///< Bounding-box center X used as paste anchor (local space).
   float basePtY = 0.f;
 
-  std::vector<float>            lines;
+  std::vector<double>            lines;
   std::vector<EntityAttributes> lineAttrs;
   /// Flat cx,cy,z,r quads (REQ-057 / ADR-025 (a)). A copy from paper space stores z = 0, and a
   /// paste into paper space drops z — the sheet is 2D (ADR-025 (g)), so Z collapses at that
   /// boundary rather than silently riding along.
-  std::vector<float>            circlesCxCyZR;
+  std::vector<double>            circlesCxCyZR;
   std::vector<EntityAttributes> circleAttrs;
+  /// Circle plane normals, 3 floats each (REQ-312). A paste into paper space flattens them back
+  /// to world +Z, the same boundary where z collapses -- the sheet is 2D (ADR-025 (g)).
+  std::vector<float>            circleNormals;
   std::vector<CadArc>           arcs;
   std::vector<EntityAttributes> arcAttrs;
   std::vector<CadEllipse>       ellipses;
   std::vector<EntityAttributes> ellAttrs;
   std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
-  std::vector<float>            polyVerts;
+  std::vector<double>            polyVerts;
+  std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
   std::vector<uint8_t>          polyClosed;
   std::vector<EntityAttributes> polyAttrs;
   std::vector<CadAnnotation>    annotations;
@@ -864,24 +956,62 @@ struct CadClipboard {
   }
 };
 
+/// REQ-316 / ADR-047: keep the parallel per-vertex polyline bulge array the right length for the
+/// vertex list (3 floats per vertex). Entries added here default to 0 (a straight segment). Call
+/// after any operation that changes a polyline's vertex count without maintaining bulges itself.
+inline void SyncPolylineBulge(std::vector<float>& bulge, std::size_t vertsFloatCount) {
+  bulge.resize(vertsFloatCount / 3, 0.0f);
+}
+
+/// REQ-325 / ADR-053: keep the parallel per-vertex polyline curve-plane-normal array the right
+/// length for the vertex list (stride 3, one normal per vertex). New entries default to world +Z
+/// (a flat/straight segment's normal is never consulted, but a uniform default keeps every entry
+/// a valid unit vector for docinvariants). Called at every site \ref SyncPolylineBulge already is —
+/// the two arrays' lengths must never drift apart, the same reason bulge itself is synced there.
+inline void SyncPolylineNormal(std::vector<float>& normal, std::size_t vertsFloatCount) {
+  const std::size_t n = vertsFloatCount / 3;
+  const std::size_t oldN = normal.size() / 3;
+  normal.resize(n * 3);
+  for (std::size_t i = oldN; i < n; ++i) {
+    normal[i * 3] = 0.f;
+    normal[i * 3 + 1] = 0.f;
+    normal[i * 3 + 2] = 1.f;
+  }
+}
+
+/// REQ-316 / ADR-047: grip index base for a polyline ARC segment's midpoint (bulge) grip. Vertex
+/// grips are `0..vertexCount-1`; a bulge grip for segment `s` is `kPolyBulgeGripBase + s`. The base
+/// is far above any realistic vertex count so the two grip families never collide.
+inline constexpr int kPolyBulgeGripBase = 1 << 20;
+
 
 /// Geometry-only snapshot for undo/redo.  PDF glTexId is zeroed to avoid stale GPU references.
 struct DrawingGeometrySnapshot {
-  std::vector<float>            userLinesFlat;
+  std::vector<double>            userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
-  std::vector<float>            userCirclesCxCyZR;
+  std::vector<double>            userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
+  /// Circle plane normals, 3 floats each (REQ-312) - see AppCommandState::userCircleNormals.
+  std::vector<float>            userCircleNormals;
   std::vector<CadArc>           userArcs;
   std::vector<EntityAttributes> userArcAttrs;
   std::vector<CadEllipse>       userEllipses;
   std::vector<EntityAttributes> userEllAttrs;
   std::vector<int>              userPolylineOffsets;
-  std::vector<float>            userPolylineVerts;
+  std::vector<double>            userPolylineVerts;
+  /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
+  /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
+  std::vector<float>            userPolylineVertsBulge;
+  /// REQ-325 / ADR-053: the plane of the (bulge-curved) segment leaving this vertex, 3 floats each
+  /// (stride 3, parallel to userPolylineVerts — see AppCommandState::userPolylineVertsNormal).
+  /// Consulted only when the paired bulge is non-zero; omitted from persistence when every entry is
+  /// world +Z, the same additive/byte-identical-legacy rule REQ-312 used for userCircleNormals.
+  std::vector<float>            userPolylineVertsNormal;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
   std::vector<int>                featureLineOffsets;
-  std::vector<float>              featureLineVerts;
+  std::vector<double>              featureLineVerts;
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
@@ -897,6 +1027,9 @@ struct DrawingGeometrySnapshot {
   /// TIN surfaces (REQ-068). Shared payload, not copied — see CadTin and architecture §11.5.
   std::vector<CadSurface>       cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
+  /// B-rep solids (REQ-313 / ADR-045). Shared, not copied — see CadSolidPtr's note.
+  std::vector<CadSolidPtr>      cadSolids;
+  std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
   std::vector<CadBlockDefinition> blockDefs;
@@ -953,6 +1086,12 @@ struct NamedView {
   float zoom = 1.f;
   float azimuthDeg = 0.f;
   float elevationDeg = 90.f;
+  float rollDeg = 0.f;  ///< Screen roll (#153); nonzero only for a view saved on a tilted-UCS PLAN.
+  /// Projection travels with the view (REQ-309). Without these a view saved in perspective would
+  /// restore as orthographic — the same silent-mismatch reason the UCS is stored here rather than
+  /// left to whatever happens to be active at restore time.
+  Camera::Projection projection = Camera::Projection::Orthographic;
+  float fovDeg = kDefaultFovDeg;
   ucs::Ucs ucs;
 };
 
@@ -971,6 +1110,11 @@ struct DrawingDocument {
   double viewportPanZ = 0.0;          ///< Camera target elevation per tab (REQ-058).
   float  viewportAzimuthDeg = 0.f;    ///< Camera orientation per tab (REQ-058); plan view by default.
   float  viewportElevationDeg = 90.f;
+  float  viewportRollDeg = 0.f;       ///< Screen roll per tab (#153); nonzero only after PLAN of a tilted UCS.
+  /// Projection per tab (REQ-309). Saved and restored with the orientation above, so switching
+  /// tabs cannot carry one drawing's projection into another's.
+  Camera::Projection viewportProjection = Camera::Projection::Orthographic;
+  float  viewportFovDeg = kDefaultFovDeg;
   /// The UCS is per drawing, not per session (REQ-154): switching tabs must not carry one drawing's
   /// coordinate frame into another's, which is the "UCS state does not leak between viewports"
   /// condition in as strong a form as a one-model-view-per-tab application can state it.
@@ -986,21 +1130,31 @@ struct DrawingDocument {
   /// number independently; see AppCommandState::nextEntityId for why undo never rewinds it.
   std::uint64_t nextEntityId = 1;
 
-  std::vector<float>            userLinesFlat;
+  std::vector<double>            userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
-  std::vector<float>            userCirclesCxCyZR;
+  std::vector<double>            userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
+  /// Circle plane normals, 3 floats each (REQ-312) - see AppCommandState::userCircleNormals.
+  std::vector<float>            userCircleNormals;
   std::vector<CadArc>           userArcs;
   std::vector<EntityAttributes> userArcAttrs;
   std::vector<CadEllipse>       userEllipses;
   std::vector<EntityAttributes> userEllAttrs;
   std::vector<int>              userPolylineOffsets;
-  std::vector<float>            userPolylineVerts;
+  std::vector<double>            userPolylineVerts;
+  /// REQ-316 / ADR-047: per-vertex DXF bulge (tan(theta/4); 0 = straight segment leaving this
+  /// vertex). Parallel to the vertex list: size() == userPolylineVerts.size() / 3.
+  std::vector<float>            userPolylineVertsBulge;
+  /// REQ-325 / ADR-053: the plane of the (bulge-curved) segment leaving this vertex, 3 floats each
+  /// (stride 3, parallel to userPolylineVerts — see AppCommandState::userPolylineVertsNormal).
+  /// Consulted only when the paired bulge is non-zero; omitted from persistence when every entry is
+  /// world +Z, the same additive/byte-identical-legacy rule REQ-312 used for userCircleNormals.
+  std::vector<float>            userPolylineVertsNormal;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
   // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
   std::vector<int>                featureLineOffsets;
-  std::vector<float>              featureLineVerts;
+  std::vector<double>              featureLineVerts;
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
@@ -1013,6 +1167,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadMeshAttrs;
   std::vector<CadSurface>       cadSurfaces;       ///< TIN surfaces (REQ-068).
   std::vector<EntityAttributes> cadSurfaceAttrs;
+  std::vector<CadSolidPtr>      cadSolids;         ///< B-rep solids (REQ-313); shared, not copied.
+  std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
   std::vector<CadBlockDefinition> blockDefs;
@@ -1221,6 +1377,32 @@ constexpr int kRibbonTabSurveyPointCtx = 8;
 /// Contextual Block Editor tab while BEDIT is open. Not counted in \c kRibbonTabCount / prefs.
 constexpr int kRibbonTabBlockEditor = 9;
 
+
+/// What the gizmo DOES — chosen by the user, unlike \ref CadGizmoMode which is derived (REQ-060
+/// rotate/scale, TASK-232).
+///
+/// **Stored, and that does not contradict the note above.** `CadGizmoMode` is derived because the
+/// selection already determines it, so a stored copy would be a third thing that could disagree with
+/// the two selections. Nothing in a selection says whether the user wants to MOVE, TURN or RESIZE
+/// it: the operation has no derivation to disagree with, so it is a setting. Different question,
+/// different answer.
+enum class CadGizmoOp {
+  /// Three handles along the active UCS, committing through `ApplyTranslationToSelection`.
+  Translate,
+  /// ONE ring, about the active UCS Z, committing through \ref ApplyRotationAboutUcsZ.
+  ///
+  /// One and not three because **typed ROTATE is UCS-Z-only** — REQ-329 says so in as many words
+  /// ("a full ROTATE3D is a separate future issue"). REQ-060 requires a handle to agree with the
+  /// equivalent typed command, and rings on UCS X and Y would have no such command to agree with.
+  Rotate,
+  /// ONE handle, uniform, committing through \ref ApplyUniformScaleAboutBase.
+  ///
+  /// One and not three because typed SCALE is uniform on every axis (REQ-329) and `brep::Scale` is
+  /// uniform because the representation has no ellipsoid to hold an unevenly scaled sphere
+  /// (REQ-332 item 7). A per-axis handle would advertise a shape the program cannot store.
+  Scale,
+};
+
 struct AppCommandState {
   enum class Kind {
     None,
@@ -1285,6 +1467,8 @@ struct AppCommandState {
     IdPoint,
     /// Two-point inverse: horizontal distance and bearing (clockwise from north) between picks (World X=E, Y=N).
     SurveyInverse,
+    /// REQ-105: two-point 3D distance — delta X/Y/Z and slope (true 3D) distance between picks.
+    Dist,
     /// REQ-074: one pick reports interpolated surface elevation, a second reports grade between them.
     SurfaceElevGrade,
     /// REQ-133: one pick traces a water-drop path on a named surface.
@@ -1342,6 +1526,47 @@ struct AppCommandState {
     Plan,
     /// INSERT dialog (GitHub issue #124): pick a definition, then optional on-screen point/scale/rotation.
     InsertBlock,
+    /// The seven B-rep primitives, driven as a prompted command (REQ-313 as amended): pick or type
+    /// the base point, then set each named dimension by its letter — `R` radius, `H` height, and so
+    /// on — before Enter creates it.
+    ///
+    /// **One Kind for all seven**, not seven Kinds. They differ only in which named parameters they
+    /// carry, and that difference is data (\ref SolidParamSpec), not control flow — seven near-identical
+    /// state machines is exactly the duplication that lets one of them quietly miss a fix.
+    Solid,
+    /// EXTRUDE (REQ-314 / ADR-046, GitHub #147): select closed polylines / circles, then give a
+    /// height — typed, or dragged from the cursor with a live ghost. Its own Kind because it has a
+    /// select-objects phase and then a height phase, neither of which the primitive `Solid` command
+    /// has.
+    Extrude,
+    /// REVOLVE (REQ-314 / ADR-046, GitHub #147): select closed polylines / circles, pick the two
+    /// ends of the revolve axis, then an angle in degrees.
+    Revolve,
+    /// SLICE (REQ-314 / ADR-046, GitHub #147): select solids, define a cutting plane with three
+    /// points, then pick which side to keep (or both).
+    Slice,
+    /// LOFT (REQ-315 / ADR-048, GitHub #241): select two or more closed polylines / circles in
+    /// lofting order, Enter to skin a solid through them (SurfaceKind::Nurbs side faces). One
+    /// select-objects phase and nothing else — no height, no axis.
+    Loft,
+    /// SWEEP (REQ-315 / ADR-048, GitHub #241): select one closed profile and one line-or-arc path,
+    /// Enter to sweep the profile along the path. One select-objects phase; the closed loop is the
+    /// profile and the open curve is the path.
+    Sweep,
+    /// UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046, GitHub #147): SUBTRACT prompts twice —
+    /// solids to subtract from, then solids to subtract; UNION and INTERSECT prompt once.
+    Boolean,
+    /// REQ-317 POLYSOLID: a wall swept along a picked path. Its OWN Kind, unlike the seven
+    /// primitives that share one - a polysolid is built from a PATH rather than from a fixed set of
+    /// named dimensions, so it has different state and a different state machine, and folding it
+    /// into `Solid` would mean a table with a variable-length entry no other row uses.
+    Polysolid,
+    /// PRESSPULL (REQ-319 / D-2026-09-04-c, widened by GitHub issue #396): move a solid FACE along
+    /// its own normal, or turn a closed polyline/circle into (or out of) a solid along its plane
+    /// normal. Its own Kind because — like EXTRUDE — it has a select-target phase and then a
+    /// distance phase with a live cursor-driven pick, neither of which the old one-shot
+    /// `CadPressPull(st, args, log)` free function had.
+    PressPull,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1376,6 +1601,7 @@ struct AppCommandState {
     case Kind::Offset:        return "OFFSET";
     case Kind::IdPoint:       return "ID";
     case Kind::SurveyInverse: return "INVERSE";
+    case Kind::Dist:          return "DIST";
     case Kind::PdfAttach:     return "PDFATTACH";
     case Kind::Align:         return "ALIGN";
     case Kind::Paste:         return "PASTE";
@@ -1401,6 +1627,15 @@ struct AppCommandState {
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     case Kind::InsertBlock:        return "INSERT";
+    case Kind::Solid:              return "SOLID";  // REQ-313: one Kind, all seven primitives
+    case Kind::Extrude:           return "EXTRUDE";
+    case Kind::Revolve:          return "REVOLVE";
+    case Kind::Slice:            return "SLICE";
+    case Kind::Loft:             return "LOFT";
+    case Kind::Sweep:            return "SWEEP";
+    case Kind::Boolean:          return "BOOLEAN";
+    case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
+    case Kind::PressPull:          return "PRESSPULL";
     default:                  return "";
     }
   }
@@ -1472,6 +1707,11 @@ struct AppCommandState {
   /// Drawing viewport: CAD entity under cursor when idle (no command active), for hover highlight feedback.
   bool viewportHoverEntityValid = false;
   SelectedEntity viewportHoverEntity{};
+  /// Throttle for the per-frame hover pick above (GitHub issue #166). The pick is a full entity
+  /// scan; it runs both when idle and during TRIM/EXTEND/BREAK/LENGTHEN entity selection (REQ-056).
+  /// This gate lets the call site reuse the previous result while the cursor, view and geometry are
+  /// unchanged, and caps the re-run rate while the cursor sweeps. See `util/hoverpickgate.hpp`.
+  HoverPickGate viewportHoverPickGate{};
   /// Paper layout: native paper-space entity under the cursor when idle, for hover highlight parity (REQ-039).
   bool paperHoverValid = false;
   PaperEntityRef paperHover{};
@@ -1496,14 +1736,15 @@ struct AppCommandState {
   /// the `local-storage` invariant exists to catch (a world value stored without subtracting the
   /// origin lands the geometry a full origin away). `CadSnap::Hit` carries stored coordinates
   /// straight out of `userLinesFlat` and friends, so a snapped pick is bit-identical to the vertex it
-  /// snapped to — which is also why nothing here needs widening to double.
-  float viewportSnapPickLocalX = 0.f;
-  float viewportSnapPickLocalY = 0.f;
+  /// snapped to — widened to `double` with the stores (ADR-054 Phase C, #442) so that identity holds
+  /// at any drawing magnitude; a `float` copy here broke it above ~10,000 ft local.
+  double viewportSnapPickLocalX = 0.0;
+  double viewportSnapPickLocalY = 0.0;
   /// Elevation of the snapped point. An object snap yields the object's ACTUAL 3D point, so it
   /// overrides the current work-plane elevation — snapping to the end of a line on the datum while
   /// ELEV is 5 must give you that endpoint, not a point 5 above it (AutoCAD-faithful, REQ-058).
   /// Only meaningful while \ref viewportSnapPickValid.
-  float viewportSnapPickLocalZ = 0.f;
+  double viewportSnapPickLocalZ = 0.0;
   /// Command-line log cache for the selectable read-only multiline (rebuilt each frame from \ref log).
   std::vector<char> commandLogCacheBytes;
   size_t commandLogLastSizeForAutoscroll = 0;
@@ -1513,7 +1754,7 @@ struct AppCommandState {
   bool cmdBarVisible = true;          ///< floating bar shown; × hides, Ctrl+9 restores. Persisted.
   bool cmdBarAnchorValid = false;     ///< false → place at the default bottom-left this frame. Persisted.
   float cmdBarAnchorX = 0.f;          ///< persisted floating-bar bottom-LEFT x anchor (screen px); Y is pinned to the bottom.
-  float cmdBarTopYPx = 0.f;           ///< floating bar's top edge this frame (screen px); 0 = not floating/not drawn. NOT persisted — recomputed every frame, and read by the UCS icon so it can stay clear of the bar.
+  float cmdBarTopYPx = 0.f;           ///< floating bar's top edge this frame (screen px); 0 = not floating/not drawn. NOT persisted — recomputed every frame.
   float cmdBarAnchorY = 0.f;          ///< (legacy/unused: the bar is always pinned to the viewport bottom).
   float cmdBarWidth = 0.f;            ///< user-resized bar width (px); 0 → default. Persisted.
   float cmdConsoleHeight = 0.f;       ///< user-resized F2 console height (px); 0 → default. Persisted.
@@ -1584,7 +1825,19 @@ struct AppCommandState {
     /// this and \ref surfacePointCount is non-zero; both zero means the line-segment profile.
     int meshTriangleCount = 0;
 
-    std::vector<float> savedPolyVerts;
+    /// Solids in the B-rep profile (REQ-313 / REQ-100). 0 = not the solid profile; at most one
+    /// of this, ef meshTriangleCount and ef surfacePointCount is non-zero.
+    ///
+    /// A profile of its OWN rather than an assumption that the mesh number covers it, for the
+    /// same reason the surface profile is not implied by the mesh one: a solid's cost is not one
+    /// big indexed upload. It is N stream-uploaded batches plus N edge batches plus a per-frame
+    /// cache lookup, and #120's "do not regenerate a solid's render mesh every frame" is a claim
+    /// about exactly that per-frame work. Measuring it is the only way to know.
+    int solidCount = 0;
+    /// Total tessellated triangles across the solid scene, filled in when the scene is built.
+    int solidTriangleCount = 0;
+
+    std::vector<double> savedPolyVerts;
     std::vector<int> savedPolyOffsets;
     std::vector<std::uint8_t> savedPolyClosed;
     std::vector<EntityAttributes> savedPolyAttrs;
@@ -1592,12 +1845,15 @@ struct AppCommandState {
     std::vector<EntityAttributes> savedSurfaceAttrs;
     std::vector<std::shared_ptr<const CadMesh>> savedMeshes;  ///< restored verbatim after a mesh run
     std::vector<EntityAttributes> savedMeshAttrs;
+    std::vector<CadSolidPtr> savedSolids;             ///< restored verbatim after a solid run
+    std::vector<EntityAttributes> savedSolidAttrs;
     /// The mesh profile forces Shaded (REQ-100 (b) measures *shaded* meshes, and REQ-064's budget
     /// condition is stated in Shaded). Saved so a bench run cannot leave the user in a style they
     /// did not choose — which would also silently invalidate ADR-026 (e)'s 2D Wireframe parity.
     VisualStyle savedVisualStyle = VisualStyle::Wireframe2D;
     float savedAzimuthDeg = 0.f;
     float savedElevationDeg = 90.f;
+    float savedRollDeg = 0.f;  // #153
     float savedZoom = 1.f;
     double savedPanX = 0.0;
     double savedPanY = 0.0;
@@ -1612,6 +1868,11 @@ struct AppCommandState {
   bool objectSnapEndpoint = true;
   bool objectSnapMidpoint = true;
   bool objectSnapCenter = true;
+  /// Snap to the four "compass" points of a circle / arc — active-UCS X/Y projected onto the
+  /// curve plane (REQ-330). AutoCAD `QUA`. Default OFF, matching AutoCAD's OSMODE (Quadrant is
+  /// not one of the default running object snaps); reachable immediately via the Shift+right-click
+  /// "snap once" override.
+  bool objectSnapQuadrant = false;
   bool objectSnapPerpendicular = true;
   bool objectSnapSurveyPoint = true;
   bool objectSnapGeometricCenter = true;
@@ -1621,6 +1882,25 @@ struct AppCommandState {
   /// as in AutoCAD: it fires on objects that do not touch, which is surprising unless asked for.
   bool objectSnapApparentIntersection = false;
   bool objectSnapSurface = true;
+  /// --- 3D Object Snap (REQ-325/#395, supersedes REQ-301) ---------------------------------------
+  /// AutoCAD's "3D Object Snap" tab is a SEPARATE system from the 2D Object Snap above: its own
+  /// master toggle (F4, independent of F3's `objectSnapEnabled`) and its own six per-mode toggles.
+  /// REQ-301 previously argued a single `objectSnapSolid` toggle was correct because "no requirement
+  /// asks to enable one [face/edge] without the other" — #395 is exactly that requirement, adding
+  /// four more AutoCAD-parity modes besides, so the single toggle is retired (D-2026-09-07-a) in
+  /// favor of one flag per mode. Solid Vertex/Midpoint-on-edge snapping used to ride on the 2D
+  /// Endpoint/Midpoint toggles; they now live here exclusively, so 3D Object Snap really is
+  /// independent of 2D Object Snap.
+  bool objectSnap3dEnabled = true;        ///< Master toggle, F4.
+  bool objectSnap3dVertex = true;         ///< A solid's topology vertices (was objectSnapEndpoint).
+  bool objectSnap3dMidpointEdge = true;   ///< An edge's midpoint (was objectSnapMidpoint).
+  bool objectSnap3dNearestFace = true;    ///< Nearest point on a face under the cursor (was objectSnapSolid/Face).
+  bool objectSnap3dCenterFace = false;    ///< Centroid of a face — every SurfaceKind, including Nurbs.
+  bool objectSnap3dKnot = false;          ///< A NURBS (freeform) face's knot points.
+  bool objectSnap3dPerpendicular = false; ///< Foot of the perpendicular from a command reference onto a planar face.
+  /// Isolines drawn around a curved solid face, per full turn (AutoCAD calls this ISOLINES).
+  /// Per drawing, persisted in `.gs` and in user preferences like every other display setting.
+  int viewportSolidIsolines = kSolidDefaultIsolines;
   /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
   float objectSnapAperturePx = 14.f;
   /// Half-size in screen pixels for green object-snap glyphs (square / triangle / circle overlay).
@@ -1662,6 +1942,7 @@ struct AppCommandState {
 
   float arcAx = 0.f, arcAy = 0.f;
   float arcBx = 0.f, arcBy = 0.f;
+  float arcAz = 0.f, arcBz = 0.f;   ///< work-plane elevation of each pick (REQ-312), as circleCz
 
   enum class EllipsePhase { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
 
@@ -1767,6 +2048,13 @@ struct AppCommandState {
   float anchorZ = 0.f;
   /// From UI — ortho constrains LINE segment picks / typed ortho distances toward cursor.
   bool orthoMode = false;
+  /// POLAR tracking (issue #154, REQ-154). Mutually exclusive with \ref orthoMode, as in AutoCAD:
+  /// enabling one clears the other. When on, rubber-band picks snap to the nearest polar ray —
+  /// a multiple of \ref polarIncrementDeg, or one of \ref polarExtraAnglesDeg — measured in the
+  /// active UCS's XY plane from its +X, so a rotated frame rotates the rays with it.
+  bool polarMode = false;
+  double polarIncrementDeg = 90.0;
+  std::vector<double> polarExtraAnglesDeg;
   /// Last drawing viewport cursor (world), updated each frame for LINE ortho distance entry.
   float uiCursorWorldX = 0.f;
   float uiCursorWorldY = 0.f;
@@ -1785,14 +2073,28 @@ struct AppCommandState {
   /// Defaults are plan view, which reproduces the pre-3D pipeline exactly.
   float viewportAzimuthDeg = 0.f;
   float viewportElevationDeg = 90.f;
+  /// Screen roll about the view axis (GitHub #153). Zero for plan view, every ViewCube orientation
+  /// and every hand orbit; set only by `PLAN` of a UCS whose Z is tilted off world +Z, so that the
+  /// UCS +Y comes out up the screen. Persisted per drawing alongside azimuth/elevation.
+  float viewportRollDeg = 0.f;
+
+  /// How the view projects (REQ-309 / D-2026-08-31-g). `Camera` has implemented both projections
+  /// since REQ-058; these two fields are what finally *select* between them — before them nothing
+  /// in the application ever assigned `Camera::projection`, so perspective was unreachable.
+  ///
+  /// They sit here, beside azimuth/elevation, because they share exactly that lifetime: per
+  /// drawing, saved per tab, persisted in `.gs`, restored by a named view. **Orthographic is the
+  /// default everywhere**, which is what keeps REQ-058's plan-view parity guarantee intact.
+  Camera::Projection viewportProjection = Camera::Projection::Orthographic;
+  float viewportFovDeg = kDefaultFovDeg;  ///< Perspective vertical FOV; ignored when orthographic.
 
   /// ViewCube orientation animation (REQ-059). A face/arrow/home press sets a target and the view
   /// eases to it over \ref kViewAnimSeconds instead of snapping, so the user keeps their bearings —
   /// a hard jump makes it easy to lose track of which way the model turned. Orbiting by hand
   /// cancels any animation in flight so the drag is never fighting an interpolation.
   bool  viewAnimActive = false;
-  float viewAnimFromAz = 0.f, viewAnimFromEl = 90.f;
-  float viewAnimToAz = 0.f, viewAnimToEl = 90.f;
+  float viewAnimFromAz = 0.f, viewAnimFromEl = 90.f, viewAnimFromRoll = 0.f;
+  float viewAnimToAz = 0.f, viewAnimToEl = 90.f, viewAnimToRoll = 0.f;
   float viewAnimT = 0.f;  ///< 0..1 progress.
 
   /// The active User Coordinate System (REQ-058 / ADR-025 (e); REQ-154, GitHub #126).
@@ -1914,11 +2216,188 @@ struct AppCommandState {
   std::uint64_t entityIdSweepRevision = kEntityIdSweepNever;
 
   /// Line vertices for GL: pairs (x,y,z) per endpoint; each segment is two endpoints.
-  std::vector<float> userLinesFlat;
+  std::vector<double> userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
 
   // --- Circle ---
   enum class CircleStyle { CenterRadius, ThreePoint } circleStyle = CircleStyle::CenterRadius;
+
+  // --- The prompted solid-primitive command (REQ-313 as amended) ---------------------------------
+
+  /// The most named dimensions any primitive has (PYRAMID: sides, base radius, top radius, height).
+  static constexpr int kMaxSolidParams = 4;
+
+  enum class SolidPhase {
+    WaitBasePoint,   ///< Click, or type X,Y[,Z]. The base centre — or the centre, for sphere/torus.
+    WaitParameters,  ///< Base set: type a letter + value, a bare value for the next unset one, or Enter.
+  } solidPhase = SolidPhase::WaitBasePoint;
+
+  /// Which primitive is being built. `None` means no solid command is running.
+  brep::PrimitiveKind solidKind = brep::PrimitiveKind::None;
+  /// The base point, in STORAGE coordinates (X/Y local, Z absolute) — the same convention the store
+  /// itself uses, so the commit needs no second conversion.
+  ray3d::Vec3 solidBase;
+  double solidParamValue[kMaxSolidParams] = {0.0, 0.0, 0.0, 0.0};
+  bool solidParamSet[kMaxSolidParams] = {false, false, false, false};
+
+  // --- What the cursor is currently worth, republished every frame -------------------------------
+  //
+  // Resolved in the viewport, where the pick RAY lives, and read by BOTH the live preview and the
+  // click that commits it. One value, two consumers: a preview computed separately from the commit
+  // is a preview that eventually shows a solid the click does not build, which is worse than no
+  // preview at all.
+  bool solidPickValid = false;
+  double solidPickA = 0.0;      ///< radius, height, or the corner's in-plane X offset.
+  double solidPickB = 0.0;      ///< the corner's in-plane Y offset (CornerXY only).
+  double solidPickAngleRad = 0.0;  ///< direction from the base point — the pyramid's base rotation.
+
+  /// PYRAMID base rotation, radians in the work plane, taken from the radius pick's direction so the
+  /// base turns with the cursor the way AutoCAD's does.
+  double solidBaseAngleRad = 0.0;
+  /// PYRAMID: is the given radius the polygon's circumradius (inscribed in that circle) or its
+  /// apothem (circumscribed about it)? AutoCAD's default is circumscribed, and `I` toggles.
+  bool solidInscribed = false;
+  /// BOX / WEDGE only: the base point is the first CORNER, not the centre, so the commit shifts the
+  /// frame origin to the midpoint of the two corners. Signed, in the work plane's own axes — the
+  /// sign is what says which way the box was dragged, which `length` and `width` cannot.
+  bool solidBaseIsCorner = false;
+  double solidCornerDx = 0.0;
+  double solidCornerDy = 0.0;
+  /// A letter typed on its own arms the parameter and waits for the value on the next line, which is
+  /// what makes `R` then `4` work as well as `R 4`. -1 = nothing armed.
+  int solidPendingParam = -1;
+  /// The armed parameter was reached through `D`, so the next value is a DIAMETER and is halved
+  /// into the radius. Halved in exactly one place, so a diameter can never reach the kernel as a
+  /// radius.
+  bool solidPendingIsDiameter = false;
+
+  // --- The EXTRUDE command (REQ-314 / ADR-046, GitHub #147) --------------------------------------
+
+  enum class ExtrudePhase {
+    SelectProfiles,  ///< Accumulate a selection of closed polylines / circles; Enter confirms.
+    WaitHeight,      ///< Profiles gathered: type a height, or move the cursor and click.
+  } extrudePhase = ExtrudePhase::SelectProfiles;
+
+  /// The profiles gathered when the command left \ref ExtrudePhase::SelectProfiles, in STORAGE
+  /// coordinates — kept so the live ghost and the commit build from exactly the same input, the
+  /// same one-source-of-truth rule the prompted solid command follows.
+  std::vector<brep::Profile> extrudeProfiles;
+  /// What the cursor is currently worth as a height, republished every frame from the viewport (the
+  /// only place the pick ray lives). Read by the ghost and by the click that commits it. Signed
+  /// along the first profile's plane normal; positive is the +normal side.
+  bool extrudeHeightPickValid = false;
+  double extrudeHeightPick = 0.0;
+
+  // --- The PRESSPULL command (REQ-319 / D-2026-09-04-c, widened by GitHub issue #396) ------------
+  // Brought in line with EXTRUDE's flow: a select-target phase (a Ctrl+clicked solid FACE, or a
+  // selected closed polyline/circle — mutually exclusive per D-2026-09-04-a), then a distance phase
+  // with the same typed-or-dragged-with-a-live-ghost shape.
+
+  enum class PressPullPhase {
+    SelectTarget,  ///< A face named by Ctrl+click, or a closed-shape entity selection; Enter confirms.
+    WaitDistance,  ///< Target gathered: type a distance, or move the cursor and click.
+  } pressPullPhase = PressPullPhase::SelectTarget;
+
+  /// True when the gathered target is an existing solid FACE (\ref pressPullFace); false when it is
+  /// a closed 2D shape (\ref pressPullProfile) that PRESSPULL will extrude into — or out of — a new
+  /// solid. Exactly one of the two is meaningful at a time, decided when \ref PressPullPhase leaves
+  /// \c SelectTarget.
+  bool pressPullOnFace = false;
+  /// The face reference, valid when \ref pressPullOnFace is true. Keyed on the solid's identity
+  /// (ADR-049), the same reference \ref subObjectSelection uses.
+  SelectedSubObject pressPullFace;
+  /// The closed profile, in STORAGE coordinates, valid when \ref pressPullOnFace is false. Kept so
+  /// the live ghost and the commit build from exactly the same input, the same one-source-of-truth
+  /// rule EXTRUDE's \ref extrudeProfiles follows.
+  brep::Profile pressPullProfile;
+  /// What the cursor is currently worth as a push/pull distance, republished every frame from the
+  /// viewport. Read by the ghost and by the click that commits it. Signed along the target's own
+  /// outward normal (face mode) or plane normal (profile mode); positive is outward / +normal.
+  bool pressPullDistPickValid = false;
+  double pressPullDistPick = 0.0;
+
+  // --- The REVOLVE command (REQ-314 / ADR-046 increment 2, GitHub #147) --------------------------
+
+  enum class RevolvePhase {
+    SelectProfiles,  ///< Accumulate a selection of closed polylines / circles; Enter confirms.
+    WaitAxisStart,   ///< Pick or type the first point of the revolve axis.
+    WaitAxisEnd,     ///< Pick or type the second point of the revolve axis.
+    WaitAngle,       ///< Type the angle in degrees; Enter takes the default (a full turn).
+  } revolvePhase = RevolvePhase::SelectProfiles;
+
+  std::vector<brep::Profile> revolveProfiles;
+  ray3d::Vec3 revolveAxisStart;
+  bool revolveAxisStartSet = false;
+  ray3d::Vec3 revolveAxisEnd;
+  double revolveAngleDeg = 360.0;
+
+  // --- The SLICE command (REQ-314 / ADR-046 increment 3, GitHub #147) ---------------------------
+
+  enum class SlicePhase {
+    SelectSolids,   ///< Accumulate a selection of solids; Enter confirms.
+    WaitP1,         ///< First of three points that define the cutting plane.
+    WaitP2,
+    WaitP3,
+    WaitKeepSide,   ///< Pick a point on the side to keep, or [B]oth.
+  } slicePhase = SlicePhase::SelectSolids;
+
+  // --- The LOFT command (REQ-315 / ADR-048, GitHub #241) ---------------------------------------
+
+  enum class LoftPhase {
+    SelectProfiles,  ///< Accumulate an ORDERED selection of closed polylines / circles; Enter builds.
+  } loftPhase = LoftPhase::SelectProfiles;
+
+  // --- The SWEEP command (REQ-315 / ADR-048, GitHub #241) --------------------------------------
+
+  enum class SweepPhase {
+    SelectInputs,  ///< Accumulate a closed profile and a line/arc path; Enter builds.
+  } sweepPhase = SweepPhase::SelectInputs;
+
+  double sweepTwistDeg = 0.0;      ///< SWEEP `T` keyword: constant twist over the path, degrees.
+  bool sweepAlignToPath = true;    ///< SWEEP `A` keyword: stand the profile normal to the path.
+
+  std::vector<int> sliceSolidIndices;  ///< indices into cadSolids, gathered when SelectSolids ends
+  ray3d::Vec3 sliceP1;
+  ray3d::Vec3 sliceP2;
+  ray3d::Vec3 sliceP3;
+
+  // --- The prompted UNION / SUBTRACT / INTERSECT command (REQ-314 / ADR-046, GitHub #147) --------
+
+  enum class BooleanPhase {
+    SelectOperands,     ///< UNION / INTERSECT: one "select objects" step.
+    SelectMinuend,      ///< SUBTRACT step 1: the solids to subtract from.
+    SelectSubtrahend,   ///< SUBTRACT step 2: the solids to subtract.
+  } booleanPhase = BooleanPhase::SelectOperands;
+
+  /// 0 = Union, 1 = Subtract, 2 = Intersect (matches CadBooleanOp; kept as int so the enum stays in
+  /// the .cpp).
+  int booleanOp = 0;
+  std::vector<int> booleanMinuend;  ///< SUBTRACT: cadSolids indices gathered by step 1.
+  // --- REQ-317 POLYSOLID: a wall swept along a picked path ---------------------------------------
+
+  enum class PolysolidPhase {
+    WaitFirstPoint,  ///< the start of the run, or `O` to convert something already drawn
+    WaitObject,      ///< `O` was given: the next click names the entity to sweep along
+    WaitNextPoint    ///< a run is under way; each further point commits a segment
+  } polysolidPhase = PolysolidPhase::WaitFirstPoint;
+
+  /// The path being drawn, in \ref polysolidBase's work-plane coordinates — the same form
+  /// `brep::MakePolysolid` takes, so the command never holds a second representation of it.
+  brep::Path polysolidPath;
+  /// The first point, in storage coordinates: the origin of the placement frame.
+  ray3d::Vec3 polysolidBase{};
+  /// `A` draws arc segments and `L` straight ones, exactly as PLINE's own option does.
+  bool polysolidArcMode = false;
+  /// A letter typed on its own, waiting for its value on the next line (`H` then `4`, as well as
+  /// `H 4`). 0 = nothing armed; otherwise the uppercase letter.
+  char polysolidPending = 0;
+
+  /// Remembered between invocations, the way AutoCAD remembers PSOLWIDTH and PSOLHEIGHT: a wall is
+  /// almost always drawn at the same size as the last one, and re-typing it every time is the
+  /// friction that makes a command feel wrong. Saved with the drawing.
+  double polysolidWidth = 0.25;
+  double polysolidHeight = 4.0;
+  brep::Justify polysolidJustify = brep::Justify::Center;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -1933,12 +2412,29 @@ struct AppCommandState {
 
   float c3p1x = 0.f, c3p1y = 0.f;
   float c3p2x = 0.f, c3p2y = 0.f;
+  /// Each draft pick keeps the work-plane elevation it was made at (REQ-312).
+  ///
+  /// A tilted work plane makes Z vary from point to point, and a VERTICAL one makes (x, y) stop
+  /// determining Z at all -- two picks on a wall can share an (x, y) and differ only in height. So
+  /// the elevation cannot be recovered at commit time from the coordinates; it has to be kept with
+  /// the pick that produced it. Under the WCS every one of these is the single commit elevation and
+  /// nothing reads them.
+  float circleCz = 0.f;
+  float c3p1z = 0.f, c3p2z = 0.f;
 
   /// Each circle: center X, center Y, center Z, radius (world units) — stride 4 (REQ-057 /
   /// ADR-025 (a)). The centre's XYZ is contiguous so it reads like a point; the radius trails it.
-  /// Z is absolute (ADR-025 D2) and the circle's plane stays parallel to XY, matching CadArc::z.
-  std::vector<float> userCirclesCxCyZR;
+  /// Z is absolute (ADR-025 D2). The circle lies in world XY unless `userCircleNormals`
+  /// says otherwise (REQ-312), matching CadArc.
+  std::vector<double> userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
+  /// Plane normal per circle, 3 floats each (REQ-312) - parallel to `userCirclesCxCyZR` the way
+  /// `userCircleAttrs` already is, and maintained at the same sites. A side-car rather than a
+  /// wider stride because that 4-float stride is read directly at roughly 300 call sites and a
+  /// stride mistake in a flat float array is silent (D-2026-08-31-f). World +Z is the default,
+  /// which is every circle that existed before this field; `docinvariants` checks the count, so a
+  /// desynchronised insert or erase fails loudly rather than mis-orienting a circle (REQ-204).
+  std::vector<float> userCircleNormals;
   std::vector<CadArc> userArcs;
   std::vector<EntityAttributes> userArcAttrs;
   std::vector<CadEllipse> userEllipses;
@@ -1946,7 +2442,12 @@ struct AppCommandState {
   /// Each polyline: vertex indices [\ref userPolylineOffsets[i], \ref userPolylineOffsets[i+1]); XYZ triplets in
   /// \ref userPolylineVerts.
   std::vector<int> userPolylineOffsets;
-  std::vector<float> userPolylineVerts;
+  std::vector<double> userPolylineVerts;
+  /// REQ-316 / ADR-047: per-vertex DXF bulge, parallel to userPolylineVerts (size()/3 entries).
+  std::vector<float> userPolylineVertsBulge;
+  /// REQ-325 / ADR-053: per-vertex curve plane normal, parallel to userPolylineVerts (see the
+  /// AppCommandState field of the same name for the full contract).
+  std::vector<float> userPolylineVertsNormal;
   std::vector<uint8_t> userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
 
@@ -1963,7 +2464,7 @@ struct AppCommandState {
   /// must re-project the elevation points on its adjacent segments, or the line grows a visible kink
   /// (ADR-035 (b)).
   std::vector<int> featureLineOffsets;
-  std::vector<float> featureLineVerts;
+  std::vector<double> featureLineVerts;
   std::vector<uint8_t> featureLineClosed;
   std::vector<uint8_t> featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
@@ -1994,6 +2495,16 @@ struct AppCommandState {
 
   /// POLYLINE command draft — XYZ vertices (two or more before commit).
   std::vector<float> polylineDraftVerts;
+  /// REQ-316 / ADR-047: per-draft-vertex bulge, parallel to polylineDraftVerts (one per vertex;
+  /// the bulge of the segment LEAVING that vertex). Same length as the vertex count.
+  std::vector<float> polylineDraftBulge;
+  /// REQ-316: while true, the next POLYLINE segment is a circular arc (keyword `Arc`/`A`; `Line`/`L`
+  /// switches back). The arc is tangent to the previous segment unless a radius or included angle
+  /// is given for the next pick.
+  bool polylineArcMode = false;
+  float polylineArcRadius = 0.f;      ///< REQ-316: radius for the next arc segment (0 = unset)
+  float polylineArcAngleDeg = 0.f;    ///< REQ-316: included angle (deg) for the next arc segment
+  bool polylineArcAngleValid = false; ///< REQ-316: an included angle was typed for the next pick
   /// TRIM has two modes, chosen by the \c TRIMSTATE system variable (REQ-056):
   ///   0 (default) — smart trim: two clicks draw a line across the pieces to remove, no edges to pick;
   ///   1           — classic: pick cutting edges, Enter, then click the pieces to trim.
@@ -2039,7 +2550,22 @@ struct AppCommandState {
   std::string authEmail;                ///< display only; the accounts-worker is the trust boundary
   std::string authError;                ///< set only after a user-initiated sign-in attempt fails
   bool        authSignInRequested  = false;  ///< set by the Settings panel's Sign In button
-  bool        authSignOutRequested = false;  ///< set by the Settings panel's Sign Out button
+  bool        authSignOutRequested = false;  ///< set by a Sign Out button (Settings, Start screen, or
+                                             ///< the menu-bar account dropdown — REQ-091 amendment)
+  bool        showAccountDetailsWindow = false;  ///< REQ-091 amendment: menu-bar "Account Details"
+                                                 ///< opens a small read-only placeholder window
+  /// REQ-336 — What's New billboard (Help → About opens the same window).
+  bool        showWhatsNewWindow = false;
+  bool        whatsNewAutoOpenedThisLaunch = false;  ///< suppresses re-auto-open within one launch
+  bool        whatsNewDontShowChecked = false;       ///< checkbox state while the window is open
+  std::string whatsNewDismissedVersion;              ///< prefs: suppress auto-open for this version
+  bool        whatsNewOpeningPending = false;        ///< auto/manual open requested; spinner until modal shows
+  bool        whatsNewModalVisible = false;          ///< set each frame while BeginPopupModal is active
+  /// Shipped user manual (GitHub wiki mirror). F1 and Help → User Manual open this window.
+  bool        showWikiWindow = false;
+  std::string wikiCurrentPage = "Home";
+  std::string wikiScrollToCommand;  ///< lowercase primary; scroll to matching ## heading once
+  bool        appWindowFocused = true;               ///< GLFW focused; auto-open What's New waits for this
   /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
   /// launch until this is true. Set true on a successful sign-in (interactive or silent) OR when
   /// there is no internet connectivity at all (same offline exception REQ-077's update gate
@@ -2048,6 +2574,11 @@ struct AppCommandState {
   std::vector<SelectedEntity> trimCutters;
   /// Draft endpoints while TRIM \p L waits for second point (rubber band). First shot completes trim and clears TRIM.
   float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;
+  /// issue #399 increment 4: the drawn trim-line's two points carry a real elevation when the pick
+  /// arrives through a camera ray (orbited view / non-world UCS), so smart TRIM resolves in true 3D
+  /// the same way the classic "click the piece to remove" path already does. Left 0 on the plan-view
+  /// path, which is byte-for-byte unchanged.
+  float trimCutInfP1z = 0.f, trimCutInfP2z = 0.f;
   /// OFFSET: pick entity, then type distance + pick side, or click a through point (line / circle / arc).
   enum class OffsetPhase {
     WaitSelectEntity,
@@ -2083,6 +2614,34 @@ struct AppCommandState {
   std::vector<CadSurface> cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
 
+  /// B-rep solids (REQ-313 / ADR-045). `shared_ptr<const>` for the same reason meshes are: an undo
+  /// snapshot shares the payload instead of copying it, and immutability is what makes that safe.
+  /// A solid is REPLACED, never written through.
+  std::vector<CadSolidPtr> cadSolids;
+  std::vector<EntityAttributes> cadSolidAttrs;
+
+  /// The per-solid tessellation cache (#120: "do not regenerate a solid's render mesh every
+  /// frame"). Rebuilt by \ref RefreshSolidDisplayGeometry only when a solid or the tessellation
+  /// quality has actually changed, and — like the surface display cache it is modelled on (ADR-036
+  /// (e)) — deliberately **outside** every undo snapshot, because it is derived from the solids.
+  std::vector<CadSolidTessellation> solidDisplayCache;
+  /// What the renderer is handed for solids this frame: a small number of COALESCED batches, each the
+  /// merged geometry of every visible solid sharing a resolved colour and edge lineweight, already
+  /// filtered for layer visibility and object isolation. Turns a per-solid draw call (GitHub #194)
+  /// into a per-appearance one. Rebuilt only when \ref solidDisplayAssemblySig changes.
+  CadSolidDisplayGeometry solidDisplayGeometry;
+  /// A fingerprint of everything \ref RefreshSolidDisplayGeometry's assembly pass reads — the visible
+  /// solids in order, their cache buffer sizes, their resolved colours and lineweights, and the
+  /// regen count. Unchanged means the merged buffers in \ref solidDisplayGeometry are still current
+  /// and the (now vertex-copying) concatenation can be skipped — the §11 invariant 7 early-out, so
+  /// an orbit that changes only the camera does not re-merge a million triangles every frame.
+  std::uint64_t solidDisplayAssemblySig = 0;
+  /// How many times \ref RefreshSolidDisplayGeometry has actually (re)tessellated a solid — the solid
+  /// twin of \ref surfaceDisplayRegenCount. #120 asks that the render mesh not be regenerated every
+  /// frame; `BENCH SOLID` takes a baseline at the first timed frame and this must not grow during a
+  /// scripted orbit.
+  std::uint64_t solidDisplayRegenCount = 0;
+
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
   std::vector<EntityAttributes> cadTableAttrs;
@@ -2110,7 +2669,7 @@ struct AppCommandState {
   bool blockEditCloseAsked = false;   ///< UI shows the close modal while true.
   /// Camera to restore when the session closes (the view BEDIT was invoked from).
   double blockEditCamPanX = 0.0, blockEditCamPanY = 0.0, blockEditCamPanZ = 0.0;
-  float  blockEditCamZoom = 1.f, blockEditCamAz = 0.f, blockEditCamEl = 90.f;
+  float  blockEditCamZoom = 1.f, blockEditCamAz = 0.f, blockEditCamEl = 90.f, blockEditCamRoll = 0.f;
   /// Debug Developer Shell (REQ-161). Default off; status-bar DEV toggles it. Release ignores it.
   bool devShellVisible = false;
   std::vector<std::string> blockRecent;
@@ -2416,6 +2975,95 @@ struct AppCommandState {
   // --- Selection (idle box pick + move/copy/rotate) ---
   std::vector<SelectedEntity> selection;
 
+  /// Selected faces / edges / vertices of solids (REQ-318 increment 2, issue #148).
+  ///
+  /// **Mutually exclusive with \ref selection**, by decision D-2026-09-04-a: a plain click clears
+  /// this, a `Ctrl` click clears that. Never both at once, which is what makes #148's "sub-object
+  /// selection does not interfere with whole-entity selection" hold without every consumer of
+  /// \ref selection having to know this exists.
+  ///
+  /// **Session state, like \ref hiddenEntityIds** — not written to `.gs` and not carried in an undo
+  /// snapshot. A selection is not part of the drawing, and a reference that expires on a topology
+  /// change (\ref SelectedSubObject) would be meaningless after a reload anyway.
+  std::vector<SelectedSubObject> subObjectSelection;
+
+  /// What a `Ctrl` click WOULD take, under the cursor right now (REQ-318 item 14). Refreshed behind
+  /// the same gate as the entity hover pick, and by the same query the click uses — so what lights
+  /// up is what selects, by construction rather than by two code paths agreeing.
+  bool subObjectHoverValid = false;
+  SelectedSubObject subObjectHover;
+  /// Rest timer for the rollover readout, exactly as REQ-089's surface readout uses one: the
+  /// pre-highlight is immediate, the panel waits for the cursor to settle. A readout that tracks the
+  /// cursor continuously covers the geometry being picked.
+  HoverDwell subObjectHoverDwell{};
+
+  // --- The translate gizmo (REQ-060 + GitHub issue #148 acceptance 4, Phase 5 slices 4b and 4c) ---
+  //
+  // ONE widget, two subjects. With entities selected it shows three handles along the active UCS
+  // and commits through `ApplyTranslationToSelection`; with exactly one solid FACE selected it
+  // shows one handle along that face's own normal and commits through `CadApplyPushPull`. Which of
+  // the two is derived from the selection (\ref CadGizmoModeFor), never stored, because the two
+  // selections are already mutually exclusive (D-2026-09-04-a) — a stored mode would be a third
+  // thing that can disagree with them.
+  //
+  // The face mode REPLACED the separate face grip REQ-319 increment 2 first shipped: two handles
+  // for one operation is worse than either, and the gizmo brings the arrow, the pre-highlight, the
+  // live ghost and the shared skew-line solve the grip's screen-space dot did not have.
+
+  /// Which axis handle the cursor is over right now, or -1. In entity mode 0/1/2 are the active
+  /// UCS X, Y and Z; in face mode 0 is the face normal and there is no other.
+  ///
+  /// Pre-highlight only. It is refreshed by the same hit test the click uses, so the handle that
+  /// lights up is the handle that grabs - the rule REQ-318's sub-object hover already follows, and
+  /// for the same reason: two code paths that agree by inspection stop agreeing.
+  int gizmoHoverAxis = -1;
+
+  /// True between the click that grabs an axis handle and the click that commits or cancels it.
+  ///
+  /// Click-arm / click-commit rather than press-drag-release, because that is what every other grip
+  /// in this viewport already does (\ref mtextGripMoveActive, \ref dimGripMoveActive) - and it is
+  /// the only shape a transcript can drive, a headless run having no mouse to hold down.
+  bool gizmoDragActive = false;
+  int gizmoDragAxis = -1;
+
+  /// Where the gizmo sat when the handle was grabbed, in WCS.
+  ///
+  /// Captured rather than recomputed per frame, and in face mode that is load-bearing: the anchor
+  /// is the face's centroid, and re-deriving it mid-drag would derive it from geometry the drag is
+  /// about to change.
+  ray3d::Vec3 gizmoAnchor{0.0, 0.0, 0.0};
+  /// The axis direction grabbed, in WCS - captured with the anchor, and for the same reason.
+  ray3d::Vec3 gizmoAxisDir{1.0, 0.0, 0.0};
+  /// Signed position along that axis, measured at the moment of the grab.
+  ///
+  /// The drag distance is the CHANGE in this, never its absolute value, so the handle does not jump
+  /// to the cursor on the first mouse move - and so the anchor's own precision cannot affect the
+  /// result: it appears in both terms and cancels.
+  double gizmoGrabParam = 0.0;
+  /// The live drag's value **in the current operation's own units** (TASK-232):
+  ///
+  /// | \ref gizmoOp | meaning | "no drag" |
+  /// |---|---|---|
+  /// | `Translate` | distance along \ref gizmoAxisDir, in drawing units | 0 |
+  /// | `Rotate`    | angle about \ref gizmoAxisDir, in radians, CCW-positive by the right-hand rule | 0 |
+  /// | `Scale`     | the uniform factor | 1 |
+  ///
+  /// One field rather than three, because three would be three things that could disagree about
+  /// which drag is armed. Note the "no drag" column: the cancel test is per-operation, since a scale
+  /// of zero is a collapse rather than a no-op.
+  double gizmoDragDistance = 0.0;
+
+  /// What the gizmo does — a user SETTING, not derived from the selection (\ref CadGizmoOp explains
+  /// why this one is stored where \ref CadGizmoMode is not). Set by the `GIZMO` command.
+  CadGizmoOp gizmoOp = CadGizmoOp::Translate;
+
+  /// In face mode, WHICH face the armed drag is moving — captured at the grab like the anchor.
+  ///
+  /// The selection could be cleared or re-picked between arming and committing; the drag applies to
+  /// the face the user actually grabbed, not to whatever is selected when they let go.
+  bool gizmoDragIsSubObject = false;
+  SelectedSubObject gizmoDragSubObject;
+
   /// Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS, as **stable entity ids** (REQ-084 (d),
   /// ADR-034). Kept SORTED so the per-entity test is a `binary_search`; empty is the overwhelming
   /// case and every gate early-outs on it, so nothing is paid for a drawing with no isolation.
@@ -2429,6 +3077,15 @@ struct AppCommandState {
   bool selBoxWaitingSecond = false;
   float selBoxAnchorX = 0.f;
   float selBoxAnchorY = 0.f;
+  /// Elevation of the fence's first corner — the WORK PLANE's Z there, not the datum.
+  ///
+  /// Carried because a fence is projected to screen under an orbited camera, and a projection needs
+  /// all three coordinates. Both the drawn rectangle and the hit test used to project the two drag
+  /// corners at Z = 0, which is invisible in plan view (Z does not move a plan projection) and
+  /// invisible on the world XY plane at elevation zero — but as soon as the work plane is TILTED by
+  /// a UCS, or merely raised by `ELEV`, the corners project to pixels the mouse is nowhere near, and
+  /// the box both draws and selects in the wrong place (user report, 2026-09-01).
+  float selBoxAnchorZ = 0.f;
   /// Viewport-image XY (Drawing1 content coords) at fence first corner — compares with second-click mx for
   /// window vs crossing mode.
   float selBoxAnchorScreenX = 0.f;
@@ -2484,6 +3141,10 @@ struct AppCommandState {
   // Polyline: moved vertex's global index into userPolylineVerts (x coordinate).
   int entityGripOrigPolylineXIdx = -1;
   float entityGripOrigPolyVertX = 0.f, entityGripOrigPolyVertY = 0.f;
+  /// REQ-316 / ADR-047: for an arc-segment (bulge) grip drag — the global vertex index whose bulge
+  /// is being dragged, and its value before the drag, so RMB / Esc restores it.
+  int entityGripOrigPolyBulgeVi = -1;
+  float entityGripOrigPolyBulge = 0.f;
 
   // Ellipse originals.
   float entityGripOrigEllMajVx = 0.f, entityGripOrigEllMajVy = 0.f;
@@ -2512,6 +3173,9 @@ struct AppCommandState {
 
   float modifyBaseX = 0.f;
   float modifyBaseY = 0.f;
+  /// REQ-322: the base point's elevation, so a typed MOVE can carry a Z. Zero when the base was
+  /// typed without one, which is every drawing that predates 3D MOVE.
+  float modifyBaseZ = 0.f;
   /// \c Kind::Scale — after base pick: reference length (world) so scale = new length / this value (or distance /
   /// base-to-cursor over this value in \c ScalePhase::FactorPick).
   float scaleRefDist = 1.f;
@@ -2540,6 +3204,7 @@ struct AppCommandState {
 
   float rotateBaseX = 0.f;
   float rotateBaseY = 0.f;
+  float rotateBaseZ = 0.f;  // REQ-329 increment 2: the rotation axis passes through this elevation
   float rotateRefX1 = 0.f, rotateRefY1 = 0.f;
   float rotateRefX2 = 0.f, rotateRefY2 = 0.f;
   float rotateAnglePt1X = 0.f, rotateAnglePt1Y = 0.f;
@@ -2559,6 +3224,9 @@ struct AppCommandState {
 
   float mirrorP1X = 0.f, mirrorP1Y = 0.f;
   float mirrorP2X = 0.f, mirrorP2Y = 0.f;
+  /// REQ-329 increment 5: each mirror-line point's elevation on the active work plane, so a tilted
+  /// UCS reflects across the plane that contains the line rather than a world-vertical plane.
+  float mirrorP1Z = 0.f, mirrorP2Z = 0.f;
   /// COPY modal: when true, duplicate survey selection by pending reflection instead of
   /// translation/rotation. Checked ahead of \ref pendingSurveyDupIsRotate.
   bool pendingSurveyDupIsMirror = false;
@@ -2578,7 +3246,9 @@ struct AppCommandState {
     Rect_WaitColumns,       ///< typed integer only — not spatial
     Rect_WaitColumnSpacing, ///< typed number, or click (horizontal distance from the anchor)
     Rect_WaitRows,          ///< typed integer only
-    Rect_WaitRowSpacing,    ///< typed number, or click (vertical distance from the anchor); commits on completion
+    Rect_WaitRowSpacing,    ///< typed number, or click (vertical distance from the anchor)
+    Rect_WaitLevels,        ///< typed integer only (GitHub issue #400 inc 2); Enter/0/1 = 2D, commits immediately
+    Rect_WaitLevelSpacing,  ///< typed number ONLY — no click (REQ-305 acceptance 12); commits on completion
     Polar_WaitCenter,       ///< click / typed X,Y / object snap — the normal point-input path
     Polar_WaitItemCount,    ///< typed integer only — TOTAL instances including the original
     Polar_WaitAngle,        ///< typed degrees, or click (angle from center to cursor)
@@ -2589,12 +3259,27 @@ struct AppCommandState {
   int arrayRows = 0;
   float arrayColSpacing = 0.f;
   float arrayRowSpacing = 0.f;
+  /// GitHub issue #400 increment 2 / REQ-305 acceptance 12. 1 level (the default) is the pre-#400
+  /// 2D grid; the level-spacing prompt is skipped entirely at 0 or 1, so an ordinary 2D rectangular
+  /// array types no more than it always has.
+  int arrayLevels = 1;
+  /// Distance between levels along the active UCS Z axis. Typed-number entry only (no interactive
+  /// click) — see REQ-305 acceptance 12 for why a viewport click cannot express a distance along the
+  /// work plane's own normal.
+  float arrayLevelSpacing = 0.f;
   /// Anchor for interactive column/row-spacing entry (Rect_WaitColumnSpacing/RowSpacing read the
   /// cursor's distance from this point) — the same point \ref FirstSelectionAnchorPoint computes,
   /// cached once at WaitType so it does not shift while spacing is being dragged.
   float arrayAnchorX = 0.f, arrayAnchorY = 0.f;
+  /// Z of the anchor above (GitHub issue #400 increment 1) — needed to build the UCS work plane
+  /// column/row spacing is measured in when the active UCS is not World.
+  float arrayAnchorZ = 0.f;
 
   float arrayCenterX = 0.f, arrayCenterY = 0.f;
+  /// Z of the polar center above (GitHub issue #400 increment 1). Only meaningful for logging /
+  /// the work-plane anchor — polar rotation itself is about a vertical (world-Z-parallel) axis
+  /// through (arrayCenterX, arrayCenterY) regardless of Z, per REQ-305 acceptance 11.
+  float arrayCenterZ = 0.f;
   int arrayItemCount = 0;
   float arrayFillAngleDeg = 360.f;
   bool arrayRotateItems = true;
@@ -2659,6 +3344,10 @@ struct AppCommandState {
   /// STRETCH always runs its own fresh box-select (never consumes a pre-existing \ref selection),
   /// so this is always populated together with the selection it describes.
   float stretchRectMnX = 0.f, stretchRectMxX = 0.f, stretchRectMnY = 0.f, stretchRectMxY = 0.f;
+  /// REQ-329 increment 4: true when the rect above is in the active UCS plane's local 2D frame
+  /// (a tilted work plane) rather than world XY. `ApplyStretchToSelection` projects each candidate
+  /// vertex through `ucs::WorldToPlane` before the box test when this is set.
+  bool stretchRectInUcsPlane = false;
 
   // --- FILLET (REQ-103 step 6a) ---
   enum class FilletPhase {
@@ -2673,6 +3362,14 @@ struct AppCommandState {
   SelectedEntity filletFirstEntity{};
   int filletFirstPolySeg = -1;
   float filletFirstPickX = 0.f, filletFirstPickY = 0.f;
+  /// issue #373 follow-up: the first pick's own camera ray (default-constructed/invalid in plan
+  /// view or paper space, matching `ray3d::Ray::valid()`). The 3D fillet solve's candidate-side
+  /// disambiguation needs the click's TRUE off-line position — projecting a pick exactly onto the
+  /// curve it is nearest to (the only option without a ray) throws away the one signal that tells
+  /// two mathematically valid tangent arcs apart, tying the choice to iteration order instead of
+  /// where the user actually clicked (a real report: a small-radius fillet rounding the OUTSIDE of
+  /// a corner instead of the inside).
+  ray3d::Ray filletFirstPickRay{};
   /// Persisted app-level (gosurvey-user.json), like `trimState` — NOT per-drawing (D-2026-08-24-g:
   /// a generalized "system variable registry" was considered and explicitly declined here; see that
   /// decision's rationale for why). Default 0.5, matching AutoCAD's own FILLETRAD default.
@@ -2684,6 +3381,18 @@ struct AppCommandState {
   /// the NUMBER that follows a typed `R`/`T` sub-command, at `WaitFirstEntity` only.
   bool filletTextAwaitingRadius = false;
   bool filletTextAwaitingTrim = false;
+  /// True while a solid-edge FILLET is asking for its radius (REQ-323; the prompted form).
+  ///
+  /// Its own flag rather than \ref filletTextAwaitingRadius: that one SETS the stored radius and
+  /// returns to "select first object", which is the 2D command's loop. This one is the whole
+  /// command — the edges are already chosen, so the radius is the last thing needed and answering it
+  /// applies the fillet.
+  ///
+  /// It exists because the argument-only form was a dead end: a bare `FILLET` printed usage and
+  /// entered no command state, so the next keystroke went to the IDLE command line, where `R` — the
+  /// 2D fillet's Radius option, and the natural thing to press — matched the `RECT` command instead
+  /// (user report with screenshot, 2026-09-08).
+  bool filletSolidAwaitingRadius = false;
 
   // --- CHAMFER (REQ-103 step 6b) ---
   enum class ChamferPhase { WaitFirstEntity, WaitSecondEntity } chamferPhase = ChamferPhase::WaitFirstEntity;
@@ -2709,6 +3418,16 @@ struct AppCommandState {
   bool chamferTextAwaitingSecondDist = false;
   bool chamferTextAwaitingAngle = false;
   bool chamferTextAwaitingTrim = false;
+  /// Transient: true while a bare `CHAMFER` with solid edges selected is waiting for the distance
+  /// that applies the bevel (REQ-331). The exact twin of `filletSolidAwaitingRadius`, and it exists
+  /// for the reason that field records: an argument-only form is a dead end, because the command
+  /// enters no state and the next keystroke reaches the IDLE command line.
+  ///
+  /// The remembered value is `chamferDist1`, reused rather than duplicated — the way `filletRadius`
+  /// serves both the 2D and the solid fillet. REQ-331's increment 1 is a single SYMMETRIC distance,
+  /// so `chamferDist2` and `chamferMode` have no meaning here; the two-distance form is deferred
+  /// (D-2026-09-08-f item 13), and when it arrives this is where it picks them up.
+  bool chamferSolidAwaitingDistance = false;
 
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
@@ -2717,13 +3436,32 @@ struct AppCommandState {
   CreatePointsOptions createPointsOpts;
   int createPointsNextId = 1;
   bool showCreatePointsWindow = false;
+  /// Status-bar toggle: when on, overlapping picks show a cursor marker and open a pick list on click.
+  bool multiSelectionEnabled = false;
+  /// Floating Selection panel (checkbox list), opened from the right-click menu — not from the toggle.
   bool showSelectionCyclingWindow = false;
-  /// Stable snapshot of the selection taken when the SEL panel is opened; entities remain listed even after deselection.
+  /// Stable snapshot of the selection taken when the Selection panel is opened; entities remain listed even after deselection.
   std::vector<SelectedEntity> selectionCycleEntities;
   std::vector<int> selectionCycleSurveyPoints;
+  /// All CAD entities currently under the idle pick aperture (from the throttled hover scan).
+  std::vector<CadPickCandidate> viewportPickCandidates;
+  /// True when \ref viewportPickCandidates holds more than one entry.
+  bool viewportPickAmbiguous = false;
+  /// Cursor-anchored pick list opened by a click on an ambiguous pick (SEL toggle on).
+  bool pickDisambiguationPopupOpen = false;
+  std::vector<CadPickCandidate> pickDisambiguationCandidates;
+  float pickDisambiguationScreenX = 0.f;
+  float pickDisambiguationScreenY = 0.f;
+  bool pickDisambiguationShiftClick = false;
   enum class SurveyInversePhase { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
   float surveyInverseFromX = 0.f;
   float surveyInverseFromY = 0.f;
+
+  /// REQ-105: DIST — two-point 3D distance (delta X/Y/Z + slope distance).
+  enum class DistPhase { WaitFrom, WaitTo } distPhase = DistPhase::WaitFrom;
+  float distFromX = 0.f;
+  float distFromY = 0.f;
+  float distFromZ = 0.f;
 
   /// REQ-074 spot elevation / grade. The first pick is kept so the second can report grade against
   /// it; the elevations are kept per surface, by name, because a point can be covered by more than
@@ -2768,6 +3506,22 @@ struct AppCommandState {
   bool showViewPointsWindow = false;
   bool showSettingsWindow = false;
   bool showQuickSelectWindow = false;
+
+  /// Select Color dialog (ACI palette + true colour) — layer manager, properties, quick select.
+  enum class SelectColorTarget : uint8_t {
+    None = 0,
+    LayerTable,
+    VpLayerColor,
+    EntitySelection,
+    QuickSelectValue,
+  };
+  bool showSelectColorPopup = false;
+  std::string selectColorInitial;
+  SelectColorTarget selectColorTarget = SelectColorTarget::None;
+  bool selectColorAllowByLayer = false;
+  bool selectColorAllowByBlock = false;
+  size_t selectColorLayerRowIndex = 0;
+  std::string selectColorVpLayerName;
 
   /// Quick Select filter state (QUICKSELECT / QS command).
   enum class QsApplyTo    : uint8_t { EntireDrawing = 0, CurrentSelection = 1 };
@@ -2852,10 +3606,15 @@ struct AppCommandState {
   float viewportCrosshairPickHalfPxX = 4.f;
   float viewportCrosshairPickHalfPxY = 4.f;
   float viewportCrosshairHairPx = 1.f;
-  /// Viewport background (model-space clear color): RGB 0–1. Default #1F1F2A dark gray.
-  float viewportBgR = 0.1f;
-  float viewportBgG = 0.1f;
-  float viewportBgB = 0.1f;
+  /// 3D crosshair cursor (REQ-310): draw the active UCS's X/Y/Z axes instead of two screen-aligned
+  /// arms, so the cursor shows which way the drawing plane runs under an orbited view or a rotated
+  /// UCS. **Off by default** — on, the cursor changes colour and orientation, and a display change
+  /// no one asked for is the one thing REQ-064 was careful to avoid when it added visual styles.
+  bool viewportCrosshair3d = false;
+  /// Viewport background (model-space clear color): RGB 0–1. Default #141A24 steel-blue tint.
+  float viewportBgR = 0.08f;
+  float viewportBgG = 0.10f;
+  float viewportBgB = 0.14f;
 
   // ---------------------------------------------------------------------------------------------------------
   // Settings (AutoCAD-style Options dialog). Live tab is preserved across opens/closes via settingsActiveTabIdx.
@@ -2878,7 +3637,7 @@ struct AppCommandState {
   bool displayDrawTrueSilhouettes = false;
 
   // Display tab — Window Elements (placeholders + theme tag).
-  int displayColorThemeIdx = 1; ///< 0=Dark, 1=Light.
+  int displayColorThemeIdx = 0; ///< 0=Dark (only theme for now).
   bool displayScrollbars = false;
   bool displayLargeToolbarButtons = false;
   bool displayResizeRibbonIcons = true;
@@ -2946,6 +3705,17 @@ struct AppCommandState {
   bool systemOpenTablesReadOnly = false;
   int systemLayoutRegenOption = 0; ///< 0=Regen on switch, 1=Cache model+last, 2=Cache model+all.
 
+  /// Frame-time diagnostic HUD (issue #166 investigation). Toggled by the `PERFHUD` command. The
+  /// millisecond fields are written each frame by whoever owns that section — `perfRenderMs` in the
+  /// app frame loop, the rest in the viewport draw — and read only by the overlay.
+  bool   perfHudVisible = false;
+  double perfFrameMs = 0.0;        ///< whole frame, wall-clock frame-to-frame
+  double perfRenderMs = 0.0;       ///< the GL RenderScene call
+  double perfHoverPickMs = 0.0;    ///< the viewport entity hover-pick block (issue #166)
+  bool   perfHoverPickRan = false; ///< did the hover pick actually run this frame, or reuse cache
+  double perfSnapMs = 0.0;         ///< the object-snap FindBest block
+  double perfViewportUiMs = 0.0;   ///< the whole DrawDrawingViewport call
+
   // System → Graphics Performance sub-dialog.
   bool showGraphicsPerformanceDialog = false;
   bool gfxSmoothLineDisplay = true;            ///< Wired: GL_LINE_SMOOTH + MSAA when systemHardwareAcceleration on.
@@ -2962,7 +3732,7 @@ struct AppCommandState {
   bool showExportPointsWindow = false;
   char surveyImportCsvPath[512]{};
   char surveyExportCsvPath[512]{};
-  /// UTF-8 path to optional startup .gs (Settings → Startup). Empty = use bundled resources/default-template.gs.
+  /// UTF-8 path to optional startup .gst template (Settings → Startup). Empty = use bundled resources/default-template.gst.
   char defaultWorkspaceTemplatePathUtf8[768]{};
   /// Active UI layout stem (file resources/layouts/<stem>.ini). See View → Layout.
   char activeUiLayoutNameUtf8[64]{"default"};
@@ -2996,6 +3766,7 @@ struct AppCommandState {
   bool copySurveyDupModalOpenRequested = false;
   float pendingCopyDx = 0.f;
   float pendingCopyDy = 0.f;
+  float pendingCopyDz = 0.f;  // REQ-329 increment 1: COPY under a UCS carries a Z delta to survey points
   SurveyDuplicatePolicy copySurveyDuplicatePolicy = SurveyDuplicatePolicy::Renumber;
   /// DXF import merges its embedded survey points with existing ones. Points whose ID collides are held
   /// here (in WORLD coordinates) until the user resolves them via the conflict modal.
@@ -3259,6 +4030,14 @@ struct AppCommandState {
   // the paper layout (sheet + viewports stay visible); model edit/snap/draw is routed through the viewport.
   int    floatingViewportLayout = -1;   ///< paper layout of the floating viewport, or -1 if not floating.
   int    floatingViewportIndex = -1;    ///< viewport being edited in place, or -1.
+  /// REQ-155 (issue #155): while floating model space is entered, \ref activeUcs holds that
+  /// VIEWPORT's active UCS (so coordinate entry / grid / ORTHO / readout / UCSFOLLOW resolve
+  /// against the viewport's frame). The drawing-scoped UCS is parked here for the duration and
+  /// restored on exit. \ref CadDrawingScopedUcs reads the right one; persistence (`.gs` save,
+  /// per-tab snapshot) must go through it so a save/tab-switch WHILE floating records the
+  /// drawing's frame, not the viewport's. Session-only — never written to `.gs`.
+  ucs::Ucs drawingActiveUcsStash;
+  bool     floatingUcsSwapActive = false;
   /// Viewport zoom lock (user request): when ON, pan/zoom always targets the sheet; when OFF and editing a
   /// viewport in place, pan/zoom adjusts that viewport's model framing (scale/center).
   bool   viewportZoomLocked = false;
@@ -3315,9 +4094,62 @@ struct AppCommandState {
   CadClipboard clipboard;
 };
 
+/// ADR-054 (a)/(b): coordinate stores are `double` until the single authorized narrowing point at
+/// GPU vertex-buffer assembly (ViewportRenderer). Checked on all three copies of each store — live
+/// state, undo snapshot, per-tab document (ADR-025 context) — so a reintroduced `float` on any one
+/// of them is a compile error, not a silent ±0.008 ft regression (TASK-228 Phase D).
+#define GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(Type, Field)                                            \
+  static_assert(std::is_same_v<decltype(Type::Field)::value_type, double>,                          \
+                #Type "::" #Field " must stay double (ADR-054 (a), REQ-101)")
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(AppCommandState, userLinesFlat);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(AppCommandState, userCirclesCxCyZR);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(AppCommandState, userPolylineVerts);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingGeometrySnapshot, userLinesFlat);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingGeometrySnapshot, userCirclesCxCyZR);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingGeometrySnapshot, userPolylineVerts);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingDocument, userLinesFlat);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingDocument, userCirclesCxCyZR);
+GOSURVEY_STATIC_ASSERT_DOUBLE_STORE(DrawingDocument, userPolylineVerts);
+#undef GOSURVEY_STATIC_ASSERT_DOUBLE_STORE
 
 inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {
   return st.defaultPlottedTextHeightInches * st.modelUnitsPerPlottedInch;
+}
+
+/// REQ-316 / ADR-047: call `fn(seg, midX, midY, midZ)` for every ARC segment of polyline `pi`, with
+/// the midpoint at the arc's apex (the point at half sweep). `seg` is the 0-based segment index —
+/// the same one `kPolyBulgeGripBase + seg` encodes. Straight segments are skipped. Shared by the
+/// four grip sites (model + floating-viewport, draw + grab) so they cannot disagree.
+template <class F>
+inline void CadForEachPolylineArcMidGrip(const AppCommandState& st, int pi, F&& fn) {
+  const int np = st.userPolylineOffsets.size() > 0 ? static_cast<int>(st.userPolylineOffsets.size() - 1) : 0;
+  if (pi < 0 || pi >= np)
+    return;
+  const int v0 = st.userPolylineOffsets[static_cast<std::size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<std::size_t>(pi + 1)];
+  const bool closed = static_cast<std::size_t>(pi) < st.userPolylineClosed.size() &&
+                      st.userPolylineClosed[static_cast<std::size_t>(pi)];
+  const int nseg = (v1 - v0) - 1 + (closed && (v1 - v0) >= 2 ? 1 : 0);
+  for (int s = 0; s < nseg; ++s) {
+    const int va = v0 + s;
+    const int vb = (s == (v1 - v0) - 1) ? v0 : v0 + s + 1;  // wrap on the closing segment
+    if (static_cast<std::size_t>(vb) * 3 + 2 >= st.userPolylineVerts.size())
+      break;
+    const float bulge = static_cast<std::size_t>(va) < st.userPolylineVertsBulge.size()
+                            ? st.userPolylineVertsBulge[static_cast<std::size_t>(va)]
+                            : 0.f;
+    if (bulge == 0.f)
+      continue;
+    const std::size_t A = static_cast<std::size_t>(va) * 3, B = static_cast<std::size_t>(vb) * 3;
+    const BulgeArcSpan arc = BulgeArc(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
+                                      st.userPolylineVerts[B], st.userPolylineVerts[B + 1],
+                                      static_cast<double>(bulge));
+    if (!arc.valid)
+      continue;
+    const double mid = arc.startAngle + arc.sweep * 0.5;
+    fn(s, static_cast<float>(arc.cx + arc.radius * std::cos(mid)),
+       static_cast<float>(arc.cy + arc.radius * std::sin(mid)), st.userPolylineVerts[A + 2]);
+  }
 }
 
 /// Build the model viewport's camera from the canonical view state (REQ-058 / ADR-025 (c)).
@@ -3341,6 +4173,9 @@ inline Camera CadViewCamera(const AppCommandState& st) {
   c.targetZ = st.viewportPanZ;
   c.azimuthDeg = st.viewportAzimuthDeg;
   c.elevationDeg = st.viewportElevationDeg;
+  c.rollDeg = st.viewportRollDeg;  // #153: nonzero only under a tilted-UCS PLAN
+  c.projection = st.viewportProjection;
+  c.fovDeg = st.viewportFovDeg;
   c.nearZ = -100000.f;
   c.farZ = 100000.f;
   return c;
@@ -3359,12 +4194,16 @@ inline constexpr float kViewAnimSeconds = 0.28f;
 
 /// Begin easing the view to \p az / \p el (REQ-059). Azimuth travels the SHORT way around, so a
 /// move from 350° to 45° turns 55° forward rather than 305° backward.
-inline void CadStartViewAnimation(AppCommandState& st, float az, float el) {
+inline void CadStartViewAnimation(AppCommandState& st, float az, float el, float roll = 0.f) {
   st.viewAnimFromAz = st.viewportAzimuthDeg;
   st.viewAnimFromEl = st.viewportElevationDeg;
+  st.viewAnimFromRoll = st.viewportRollDeg;
   // Unwrapped target, so the lerp below cannot take the long way round (Camera::ShortestAzimuthDelta).
   st.viewAnimToAz = st.viewportAzimuthDeg + Camera::ShortestAzimuthDelta(st.viewportAzimuthDeg, az);
   st.viewAnimToEl = el;
+  // Roll wraps like azimuth, so ease it the short way too (#153). Callers that do not pass a roll
+  // get 0 here, which returns a rolled view to upright — the correct move for every non-PLAN caller.
+  st.viewAnimToRoll = st.viewportRollDeg + Camera::ShortestAzimuthDelta(st.viewportRollDeg, roll);
   st.viewAnimT = 0.f;
   st.viewAnimActive = true;
 }
@@ -3387,6 +4226,12 @@ inline void CadTickViewAnimation(AppCommandState& st, float dtSeconds) {
     az -= 360.f;
   st.viewportAzimuthDeg = az;
   st.viewportElevationDeg = st.viewAnimFromEl + (st.viewAnimToEl - st.viewAnimFromEl) * e;
+  float roll = st.viewAnimFromRoll + (st.viewAnimToRoll - st.viewAnimFromRoll) * e;
+  while (roll < 0.f)
+    roll += 360.f;
+  while (roll >= 360.f)
+    roll -= 360.f;
+  st.viewportRollDeg = roll;
 }
 
 /// Elevation at which newly drawn geometry lands — the active work plane's Z (REQ-058 / REQ-154).
@@ -3423,6 +4268,14 @@ inline float CadCommitElevation(const AppCommandState& st) {
 /// reports as "World".
 inline bool CadUcsIsWorld(const AppCommandState& st) { return ucs::IsWorld(st.activeUcs); }
 
+/// The DRAWING-scoped active UCS (REQ-154), correct even while a per-viewport frame is live in
+/// \ref AppCommandState::activeUcs because floating model space is entered (REQ-155). Persistence —
+/// the `.gs` save and the per-tab document snapshot — must read this, never `activeUcs` directly,
+/// or a save/tab-switch performed while floating would record the viewport's frame as the drawing's.
+inline const ucs::Ucs& CadDrawingScopedUcs(const AppCommandState& st) {
+  return st.floatingUcsSwapActive ? st.drawingActiveUcsStash : st.activeUcs;
+}
+
 /// The active UCS expressed in **storage space** (local XY, absolute Z).
 ///
 /// \ref AppCommandState::activeUcs is stored in TRUE WORLD coordinates, so that a document-origin
@@ -3443,6 +4296,87 @@ inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
 /// The active work plane (UCS XY) a viewport click resolves against (REQ-058 / ADR-025 (e)).
 /// In storage space, because that is the space the ray is in.
 inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) { return ucs::WorkPlane(CadActiveUcsStorage(st)); }
+
+/// True when the active work plane is parallel to world XY and faces up (REQ-312).
+///
+/// Every UCS that is a translation and/or a rotation about Z satisfies this - which is the whole
+/// 2D survey case, and the default. It is the branch guard for the arbitrary-plane drawing paths,
+/// and it is deliberately NOT `CadUcsIsWorld`: a UCS squared to a road centreline is still a
+/// flat drawing, and it must keep the exact float path every existing drawing, transcript and test
+/// already goes through. That is REQ-154's own reasoning for its WCS branch, applied one level out.
+inline bool CadWorkPlaneIsWorldXy(const AppCommandState& st) {
+  // States the condition directly rather than borrowing `ucs::PlanViewIsExact`, which this used to
+  // call. That predicate answers the CAMERA's question - "can PLAN put UCS +Y up the screen
+  // exactly?" - and issue #153 gave `Camera` a roll axis, after which the answer became yes for
+  // EVERY valid frame. The name did not change and neither did the call site, so a tilted drawing
+  // silently began taking the flat branch here: the guard inverted without a compiler error, and
+  // the four REQ-312 transcripts are what caught it. A predicate named for another subsystem's
+  // concern is not a safe way to ask whether a plane is parallel to world XY, so this asks.
+  const ucs::Ucs& u = st.activeUcs;
+  constexpr double kTol = 1e-6;
+  return std::fabs(u.zAxis.x) <= kTol && std::fabs(u.zAxis.y) <= kTol && u.zAxis.z > 0.0;
+}
+
+/// The work plane, moved so its origin sits on \p ox,\p oy,\p oz (REQ-312).
+///
+/// Anchoring on the first pick rather than on the UCS origin keeps the 2D coordinates that come out
+/// of it small. The planar maths the draw commands use (circumcircle, swept angle) runs in float,
+/// and at state-plane magnitude a float has a quarter-foot of resolution - the same REQ-101
+/// narrowing hazard the document origin exists to avoid, arriving through a different door.
+inline ucs::Ucs CadWorkPlaneAnchoredAt(const AppCommandState& st, float ox, float oy, float oz) {
+  return ucs::WithOrigin(CadActiveUcsStorage(st),
+                         {static_cast<double>(ox), static_cast<double>(oy), static_cast<double>(oz)});
+}
+
+/// The normal of the plane a new curve commits into: the active UCS's Z axis (REQ-312).
+inline void CadActiveDrawPlaneNormal(const AppCommandState& st, float* nx, float* ny, float* nz) {
+  const ucs::Ucs u = st.activeUcs;  // a translation cannot rotate a basis, so storage vs world is moot
+  if (nx)
+    *nx = static_cast<float>(u.zAxis.x);
+  if (ny)
+    *ny = static_cast<float>(u.zAxis.y);
+  if (nz)
+    *nz = static_cast<float>(u.zAxis.z);
+}
+
+/// A circle solved from picks: where its centre is, how big it is, and which way its plane faces.
+///
+/// The return type of the CIRCLE solvers below. It exists so the geometry a set of picks defines can
+/// be computed WITHOUT committing it -- the rubber-band preview needs exactly that, and computing it
+/// a second way in the preview is how a preview comes to show a shape the commit does not produce.
+struct CadCircleSolution {
+  float cx = 0.f;
+  float cy = 0.f;
+  float cz = 0.f;
+  float r = 0.f;
+  float nx = kFlatNormalX;
+  float ny = kFlatNormalY;
+  float nz = kFlatNormalZ;
+};
+
+/// CIRCLE centre-and-radius: the circle a centre pick and a rim pick define on the work plane.
+///
+/// On a flat work plane this is the pre-REQ-312 arithmetic to the bit. On a tilted one the rim pick
+/// is displaced in Z as well, so the radius is the 3D distance to it -- its XY projection is short
+/// by cos(tilt), and on a vertical plane it collapses to nothing at all.
+[[nodiscard]] CadCircleSolution CadSolveCircleFromRimPick(const AppCommandState& st, float cx, float cy, float cz,
+                                                          float px, float py, float pz);
+
+/// CIRCLE 3P: the circle through three picks on the active work plane.
+///
+/// False when the picks are collinear -- in the plane, which on a tilted plane is not the same
+/// question as collinear in the XY projection.
+[[nodiscard]] bool CadSolveCircleThreePoints(const AppCommandState& st, float ax, float ay, float az, float bx,
+                                             float by, float bz, float cx, float cy, float cz,
+                                             CadCircleSolution* out);
+
+/// ARC 3P: the arc through three picks on the active work plane, angles measured in the arc's own
+/// frame (`ucs::FromNormal`), which is where CadArc::startRad and CadArc::sweepRad live.
+///
+/// False when the picks are collinear. \p out is left untouched on failure. The caller decides what
+/// a failure means -- the commit reports it and resets the draft, the preview just draws nothing.
+[[nodiscard]] bool CadSolveArcThreePoints(const AppCommandState& st, float ax, float ay, float az, float bx,
+                                          float by, float bz, float cx, float cy, float cz, CadArc* out);
 
 /// The **camera-azimuth offset** that squares the view with the active UCS's north (REQ-059).
 ///
@@ -3471,7 +4405,11 @@ enum class EntityKind : std::uint8_t {
   /// REQ-148 / D-2026-08-28-i. Appended after Surface so the id sweep does not renumber legacy drawings.
   Table,
   /// GitHub issue #124. Appended after Table so the id sweep does not renumber legacy drawings.
-  BlockRef
+  BlockRef,
+  /// REQ-313 / ADR-045. Appended after BlockRef, for the reason Surface's note above spells out:
+  /// the id sweep walks the attribute arrays in `kEntityKindsInSweepOrder`, so inserting anywhere
+  /// but the end would renumber every entity in every existing drawing on its next load.
+  Solid
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -3546,6 +4484,444 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st);
 /// predicate is that "invisible" and "unclickable" cannot disagree — which is exactly what REQ-084
 /// (d) requires of every entity kind.
 [[nodiscard]] bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex);
+
+// ---------------------------------------------------------------------------------------------
+// B-rep solids (REQ-313 / ADR-045, GitHub issue #146).
+// ---------------------------------------------------------------------------------------------
+
+/// True when solid \p solidIndex is drawn AND clickable. One predicate for both, for the reason
+/// \ref SurfaceVisible gives for itself: "invisible" and "unclickable" must not be able to disagree
+/// (REQ-084 (d)).
+[[nodiscard]] bool SolidVisible(const AppCommandState& st, size_t solidIndex);
+
+/// Bring \ref AppCommandState::solidDisplayCache and \ref AppCommandState::solidDisplayGeometry up
+/// to date. Called once a frame, beside \ref RefreshSurfaceDisplayGeometry.
+///
+/// Regenerates a solid's triangles and edges only when its staleness key — the solid pointer plus
+/// the chord tolerance — has moved, which is #120's "do not regenerate a solid's render mesh every
+/// frame" stated as a property of what the function does rather than as an intention. Entries whose
+/// solid no longer exists are reaped in the same pass, so an erased solid's triangles do not outlive
+/// it. The batch list at the end is rebuilt every call — it copies pointers and colours, never
+/// vertices — because layer visibility and object isolation change with no solid changing at all.
+void RefreshSolidDisplayGeometry(AppCommandState& st);
+
+/// Create one of the seven primitives from a typed command line (REQ-313). \p verb is the
+/// already-lowercased command token; \p rest is everything after it.
+///
+/// Every failure is reported by name and creates nothing (REQ-201): a bad dimension, a bad base
+/// point, a wrong argument count, or a solid the kernel refuses to build.
+void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const std::string& rest,
+                             std::vector<std::string>& log);
+
+/// True when \p verb names one of the seven primitive commands. Used by the command dispatch and by
+/// the help registry, so the two cannot disagree about which commands exist.
+[[nodiscard]] bool CadIsSolidPrimitiveVerb(const std::string& verb);
+
+/// PRESSPULL (REQ-319, widened by GitHub issue #396) — the one-line shortcut `PRESSPULL <distance>`.
+/// Its target is either the one Ctrl+clicked solid FACE (the REQ-318 sub-object selection) or a
+/// selected closed polyline/circle, which PRESSPULL extrudes into (or out of) a new solid the same
+/// way EXTRUDE does. Refuses — by name, with the document untouched — an empty or ineligible
+/// selection, more than one candidate, a distance that is not a number, and every geometric refusal
+/// `brep::PushPullFace` / `brep::Extrude` raises. One undo step for the whole edit.
+///
+/// `StartPressPullCommand` is the prompted form a bare `PRESSPULL` opens: select a target (if none is
+/// yet), then a distance that can be typed or dragged from the cursor with a live ghost — EXTRUDE's
+/// own shape.
+void CadPressPull(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void StartPressPullCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// True when the REQ-318 sub-object selection holds solid EDGES and nothing else — the one state in
+/// which a typed `FILLET` means the solid fillet rather than the 2D one (REQ-323).
+[[nodiscard]] bool CadSubObjectSelectionIsAllEdges(const AppCommandState& st);
+
+/// FILLET on the selected solid edge(s) (REQ-323 increment 1, GitHub issue #148 acceptance 5).
+///
+/// Paired with the sub-object selection exactly as `CadPressPull` is: Ctrl+click names the edge,
+/// this rounds it. One solid at a time, one undo step however many edges are named, and every
+/// refusal is the kernel's own sentence with the document untouched — `brep::FilletEdges` pre-checks
+/// everything, so nothing was built rather than something rolled back.
+///
+/// **Clears the sub-object selection on success**, unlike push/pull, which re-points it. A fillet
+/// changes the TOPOLOGY: the selected edge is gone and every index after it has shifted, so a kept
+/// reference would name whatever edge inherited the number.
+void CadFilletSolidEdges(AppCommandState& st, const std::string& args,
+                         std::vector<std::string>& log);
+
+/// Round the selected solid edge(s) at \p radius, as one undoable step. The shared commit behind
+/// both the one-line `FILLET <radius>` and the prompted form, so the two cannot diverge about what a
+/// fillet does. False (and nothing changed) on any refusal, which is already logged by name.
+bool CadApplyFilletToSelectedEdges(AppCommandState& st, double radius,
+                                   std::vector<std::string>& log);
+
+/// Re-prompt after a `Ctrl`+click gathered (or failed to gather) a solid edge while FILLET is
+/// running. Says how many edges are held and that a radius is what finishes the command.
+void CadFilletReportEdgeSelection(AppCommandState& st, std::vector<std::string>& log);
+
+/// CHAMFER on a solid EDGE (REQ-331, GitHub issue #148 acceptance 5). The same verb the 2D chamfer
+/// uses and the same split `CadFilletSolidEdges` has: a bare `CHAMFER` with solid edges selected
+/// prompts for the distance, `CHAMFER <d>` applies it in one line. The 2D flow is untouched — this
+/// path is taken only when the sub-object selection holds solid edges and nothing else, a state the
+/// 2D flow has never been able to reach.
+void CadChamferSolidEdges(AppCommandState& st, const std::string& args,
+                          std::vector<std::string>& log);
+
+/// Bevel the selected solid edge(s) by \p distance, as one undoable step. The shared commit behind
+/// both the one-line and the prompted form. False (and nothing changed) on any refusal, which is
+/// already logged by name — every `brep::ChamferEdges` refusal is a pre-check, so "unchanged" is
+/// true because nothing was built rather than because something was rolled back.
+bool CadApplyChamferToSelectedEdges(AppCommandState& st, double distance,
+                                    std::vector<std::string>& log);
+
+/// Re-prompt after a `Ctrl`+click gathered (or failed to gather) a solid edge while CHAMFER is
+/// running. The twin of `CadFilletReportEdgeSelection`.
+void CadChamferReportEdgeSelection(AppCommandState& st, std::vector<std::string>& log);
+void CancelPressPullCommand(AppCommandState& st);
+
+/// The prompt for whatever the PRESSPULL command is waiting for — the target, or the distance with
+/// the live cursor value shown. Shared by the command line and the at-cursor dynamic input (REQ-304).
+[[nodiscard]] std::string CadPressPullPromptText(const AppCommandState& st);
+
+/// Feed one typed line to a running PRESSPULL command. Returns false when the text was not
+/// understood, which leaves the command where it was rather than cancelling it.
+[[nodiscard]] bool HandlePressPullTextInput(const std::string& line, AppCommandState& st,
+                                            std::vector<std::string>& log);
+
+/// A viewport click during PRESSPULL: confirms the target (SelectTarget) or commits at the
+/// cursor-resolved distance (WaitDistance).
+void SubmitPressPullViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Resolve what the cursor is currently worth as a push/pull distance and publish it on \p st as
+/// `pressPullDistPickValid` / `pressPullDistPick`. The same closest-approach-between-cursor-ray-and-
+/// axis geometry \ref CadResolveExtrudePick uses, along the gathered target's own normal (face mode,
+/// via \ref CadSubObjectFaceGrip) or plane normal (profile mode). \p cursorOnPlane is storage
+/// coordinates; \p ray is the pick ray, or null in plan view (where a distance cannot be read off the
+/// screen).
+void CadResolvePressPullPick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray);
+
+/// The candidate solid the running PRESSPULL command describes at \p distance, for the live ghost and
+/// for the commit — one function, so the ghost cannot show a shape the click would not build. Returns
+/// false (and leaves \p out untouched) when the number does not yet describe a solid.
+[[nodiscard]] bool CadBuildPressPullSolid(const AppCommandState& st, double distance, brep::Solid* out);
+
+/// Apply one push/pull and record it as a single undo step. The shared commit behind both the typed
+/// `PRESSPULL` and the grip drag, so the two cannot diverge about what a push does — the same
+/// single-implementation rule REQ-318 item 1 states for the pick.
+///
+/// Replaces the solid, re-points every sub-object reference that named it (the reference is keyed on
+/// identity, and the solid has just been replaced), and logs the kernel's own sentence on a refusal
+/// with the document untouched.
+bool CadApplyPushPull(AppCommandState& st, const SelectedSubObject& ref, double distance,
+                      std::vector<std::string>& log);
+
+/// The face grip's anchor and slide axis: the face's centroid, and its outward normal (REQ-319
+/// increment 2). False when \p ref does not resolve to a planar face of a live solid.
+///
+/// The centroid rather than a corner, because a grip is a handle on the *face* — a corner handle
+/// reads as a vertex grip, which is a different edit (\ref CadSubObjectVertexGrip, REQ-333).
+[[nodiscard]] bool CadSubObjectFaceGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                                        ray3d::Vec3* outAnchor, ray3d::Vec3* outAxis);
+
+/// The vertex grip's anchor: the vertex itself (REQ-333). False unless the vertex is one where
+/// **exactly three planar faces meet** — the only place `brep::MoveVertex` can work.
+///
+/// The check lives here so that no handle is drawn where the drag would be refused. A pyramid's apex
+/// and a cylinder's rim are both easy to pick and both impossible to move, and a grip that appears
+/// and then declines on release is worse than one that never appears — the same discipline
+/// \ref CadSubObjectFaceGrip already keeps by returning false for a non-planar face.
+[[nodiscard]] bool CadSubObjectVertexGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                                          ray3d::Vec3* outAnchor);
+
+/// The edge grip's anchor and its two slide axes: the edge's midpoint, and the outward normals of
+/// the two faces along it (REQ-333). False unless the edge is STRAIGHT with exactly two planar
+/// faces, for the reason \ref CadSubObjectVertexGrip gives.
+///
+/// The two normals rather than a pair of UCS axes because they are what the kernel actually offsets,
+/// and together they span exactly the plane perpendicular to the edge — which is the whole space of
+/// moves the edge has.
+[[nodiscard]] bool CadSubObjectEdgeGrip(const AppCommandState& st, const SelectedSubObject& ref,
+                                        ray3d::Vec3* outAnchor, ray3d::Vec3* outAxisA,
+                                        ray3d::Vec3* outAxisB);
+
+/// Move one vertex, or one edge, and record it as a single undo step (REQ-333). The commit behind
+/// the vertex and edge grips, shaped exactly like \ref CadApplyPushPull: replace the solid, re-point
+/// every sub-object reference that named it, and log the kernel's own sentence on a refusal with the
+/// document untouched.
+///
+/// **Unlike push/pull these have no typed command to agree with**, because REQ-333 defines kernel
+/// operations and no requirement asks for a verb. REQ-060's "agrees with the equivalent typed
+/// command" therefore has nothing to compare against here; the discipline it exists to enforce is
+/// kept the only way it can be, by these being the single implementation — so a typed command added
+/// later calls them rather than growing a second one.
+bool CadApplyMoveVertex(AppCommandState& st, const SelectedSubObject& ref, const ray3d::Vec3& delta,
+                        std::vector<std::string>& log);
+bool CadApplyMoveEdge(AppCommandState& st, const SelectedSubObject& ref, const ray3d::Vec3& delta,
+                      std::vector<std::string>& log);
+
+/// One named dimension of a primitive: the letter that sets it, and what to call it in a prompt.
+///
+/// `optional` marks a parameter the primitive can be built without — only a cone's and a pyramid's
+/// top radius, which default to zero and give an apex. Everything else must be set before Enter will
+/// create anything, so a half-specified solid is refused with the missing names rather than built at
+/// some assumed size (REQ-201).
+/// How the cursor supplies a dimension, which is what the live preview and the click both read.
+///
+/// `Typed` is a real answer, not a gap: a pyramid's side count and a cone's top radius have no
+/// natural mouse gesture, so they stay keyword-and-default and the pick sequence skips them.
+enum class SolidPickKind : std::uint8_t {
+  Typed,     ///< keyword + value only; never picked.
+  Radius,    ///< distance from the base point, measured IN the work plane.
+  Height,    ///< signed distance along the work plane's normal, from the axis nearest the cursor ray.
+  CornerXY,  ///< box / wedge: one pick sets length AND width from the opposite corner.
+};
+
+struct SolidParamSpec {
+  char letter = '\0';
+  const char* label = "";
+  bool optional = false;
+  SolidPickKind pick = SolidPickKind::Typed;
+  /// What an optional parameter is worth when the user never sets it — a cone's apex (0) and a
+  /// pyramid's four sides. Ignored unless \ref optional.
+  double defaultValue = 0.0;
+};
+
+/// The named dimensions of \p kind, in the order a bare typed number fills them — which is also the
+/// order the one-line form takes its arguments, so `CYLINDER 0,0 4 25` and `CYLINDER` / `0,0` /
+/// `4` / `25` mean the same thing.
+///
+/// **The single table both the prompt and the commit read.** A prompt that offered a letter the
+/// commit did not know, or a commit that needed a value the prompt never asked for, is the failure
+/// this exists to make impossible.
+[[nodiscard]] const SolidParamSpec* CadSolidParamSpecs(brep::PrimitiveKind kind, int* outCount);
+
+/// The placement frame the prompted solid command is building in: the active UCS's orientation moved
+/// to the base point. Exposed so the live preview measures its rubber line along the SAME axes the
+/// solid is built on - a measuring line drawn on the world frame would drift off a tilted solid.
+[[nodiscard]] ucs::Ucs CadSolidPlacementFrameFor(const AppCommandState& st);
+
+/// Work out what the cursor is currently worth to the prompted solid command, and publish it on
+/// \p st as `solidPickValid` / `solidPickA` / `solidPickB` / `solidPickAngleRad`.
+///
+/// \p cursorOnPlane is the cursor resolved onto the work plane, in storage coordinates.
+/// \p ray is the pick ray, or null in plan view.
+///
+/// **Domain logic, not viewport logic**, even though the viewport is what calls it every frame: it
+/// is geometry — a distance in a plane, an angle, a closest approach between a ray and an axis — and
+/// putting it here is what lets a transcript drive the same resolution the mouse does. A height
+/// resolved one way for the preview and another for the test would be a test of nothing.
+void CadResolveSolidPick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray);
+
+/// Index of the dimension the prompted command is currently picking — the first required one still
+/// unset whose \ref SolidParamSpec::pick is not `Typed`. -1 when nothing is left to pick.
+[[nodiscard]] int CadSolidCurrentPickParam(const AppCommandState& st);
+
+/// Build the solid the prompted command currently describes.
+///
+/// **The one place a set of numbers becomes a shape**, called by the live preview, by the click that
+/// commits a dimension, and by Enter. A preview computed separately from the commit is a preview
+/// that eventually shows a solid the click does not build, which is worse than no preview at all.
+///
+/// \p applyPick folds `solidPickA`/`solidPickB` into the dimension currently being picked, which is
+/// what makes the preview follow the cursor; false uses only what has been committed.
+///
+/// Returns false with \p outWhy set when the numbers so far do not describe a solid — a zero radius
+/// before the cursor has moved, a dimension still missing. The preview simply draws nothing then,
+/// which is the honest answer while a value is still being chosen.
+[[nodiscard]] bool CadBuildSolidFromCommand(const AppCommandState& st, bool applyPick, brep::Solid* out,
+                                            brep::Problem* outWhy);
+
+/// Begin the prompted form of a primitive command: `CYLINDER` with no arguments. \p verb is the
+/// already-lowercased command token.
+void StartSolidPrimitiveCommand(AppCommandState& st, const std::string& verb, std::vector<std::string>& log);
+
+/// The prompt for whatever the solid command is waiting for — the base point, or the named
+/// dimensions with the ones already set shown back. Shared by the command line and the at-cursor
+/// dynamic input so the two cannot say different things (REQ-304).
+[[nodiscard]] std::string CadSolidPromptText(const AppCommandState& st);
+
+/// Feed one typed line to the running solid command. Returns false when the text was not understood,
+/// which leaves the command where it was rather than cancelling it.
+[[nodiscard]] bool HandleSolidTextInput(const std::string& line, AppCommandState& st,
+                                        std::vector<std::string>& log);
+
+/// Feed a picked point (storage X/Y, at the current work-plane elevation) to the running solid
+/// command.
+void SubmitSolidViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Clear the prompted solid command's state. Called by Esc and by every other command start, so a
+/// half-built solid cannot leak into the next command.
+void CancelSolidCommand(AppCommandState& st);
+
+// --- REQ-317 POLYSOLID ---------------------------------------------------------------------------
+/// Open the command: pick a start point, or `O` to sweep along something already drawn.
+void StartPolysolidCommand(AppCommandState& st, std::vector<std::string>& log);
+/// The prompt line, computed rather than literal: it echoes the height, width and justification in
+/// force, which is what makes them discoverable without a separate report command (REQ-304).
+[[nodiscard]] std::string CadPolysolidPromptText(const AppCommandState& st);
+/// Handle one typed line: a coordinate, or one of `A L C U H W J O`. \return false if not consumed.
+bool HandlePolysolidTextInput(const std::string& line, AppCommandState& st,
+                              std::vector<std::string>& log);
+/// Handle a viewport click: a path point, or — at the `O`bject prompt — the entity to sweep along.
+void SubmitPolysolidViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Convert the Line / Arc / Circle / Polyline under (\p wx, \p wy) into a wall, or say why not.
+void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Reset the path, keeping the remembered height, width and justification.
+void CancelPolysolidCommand(AppCommandState& st);
+/// The frame a polysolid is built in: the active UCS anchored at the first picked point. Exposed so
+/// the viewport can put the cursor into the same plane the builder reads it from - one frame, not two.
+[[nodiscard]] ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st);
+/// The candidate wall, optionally including the segment \p cursor is currently proposing.
+///
+/// ONE builder for the preview, the click that commits a point and the Enter that finishes — a
+/// preview computed separately from the commit is a preview that eventually shows a wall the click
+/// does not build (ADR-046 (a)).
+[[nodiscard]] bool CadBuildPolysolidFromCommand(const AppCommandState& st, const ucs::Point2D* cursor,
+                                                brep::Solid* out, brep::Problem* outWhy);
+
+/// Report a solid's properties into \p log — kind, dimensions, volume, surface area, and its
+/// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.
+void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-335 — SECTION: the cross-section of every selected solid by the active UCS plane, drawn as a
+/// closed polyline. Non-destructive: the solids are left exactly as they were.
+void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-313 as amended (D-2026-09-09-j) — SOLIDCHECK: report each solid's validity, and separately
+/// whether its surface passes through itself. Read-only; nothing is repaired.
+void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log);
+
+/// EXTRUDE (REQ-314 / ADR-046, GitHub issue #147): turn each eligible entity in the current
+/// selection — a closed polyline or a circle — into a B-rep solid, swept a signed height
+/// perpendicular to the profile's plane. One undo step; the source entities are left in place.
+/// Every failure is reported by name and stores nothing (REQ-201).
+///
+/// `CadExtrudeSelection` is the one-line shortcut `EXTRUDE <height>`. `StartExtrudeCommand` is the
+/// prompted form a bare `EXTRUDE` opens: select objects (if none are yet), then a height that can
+/// be typed or dragged from the cursor with a live ghost.
+void CadExtrudeSelection(AppCommandState& st, const std::string& rest, std::vector<std::string>& log);
+void StartExtrudeCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelExtrudeCommand(AppCommandState& st);
+
+/// The prompt for whatever the EXTRUDE command is waiting for — the selection, or the height with
+/// the live cursor value shown. Shared by the command line and the at-cursor dynamic input (REQ-304).
+[[nodiscard]] std::string CadExtrudePromptText(const AppCommandState& st);
+
+/// Feed one typed line to a running EXTRUDE command. Returns false when the text was not understood,
+/// which leaves the command where it was rather than cancelling it.
+[[nodiscard]] bool HandleExtrudeTextInput(const std::string& line, AppCommandState& st,
+                                          std::vector<std::string>& log);
+
+/// A viewport click during EXTRUDE: confirms the selection (SelectProfiles) or commits the solid at
+/// the cursor-resolved height (WaitHeight).
+void SubmitExtrudeViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Resolve what the cursor is currently worth as an extrusion height and publish it on \p st as
+/// `extrudeHeightPickValid` / `extrudeHeightPick`. Domain logic, not viewport logic — it is the
+/// closest approach between the cursor ray and the profile's plane normal, the same geometry the
+/// prompted solid command's Height pick uses. \p cursorOnPlane is storage coordinates; \p ray is
+/// the pick ray, or null in plan view (where a height cannot be read off the screen).
+void CadResolveExtrudePick(AppCommandState& st, const ray3d::Vec3& cursorOnPlane, const ray3d::Ray* ray);
+
+/// The candidate solids the running EXTRUDE command describes at \p height, for the live ghost and
+/// for the commit — one function, so the ghost cannot show a shape the click would not build.
+/// Returns false (and clears \p out) when the numbers do not yet describe a solid.
+[[nodiscard]] bool CadBuildExtrudeSolids(const AppCommandState& st, double height,
+                                         std::vector<brep::Solid>* out);
+
+// --- LOFT (REQ-315 / ADR-048, GitHub issue #241) ---------------------------------------------
+
+/// Begin the LOFT command: select two or more closed polylines / circles **in lofting order**, then
+/// Enter to skin one B-rep solid through them (`brep::Loft` — freeform `SurfaceKind::Nurbs` side
+/// faces). If two or more eligible profiles are already selected, a bare `LOFT` builds immediately.
+/// One undo step; the source entities are left in place; every failure is reported by name (REQ-201).
+void StartLoftCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelLoftCommand(AppCommandState& st);
+
+/// The prompt for the running LOFT command — always the "select profiles" line, with a count of what
+/// is selected so far. Shared by the command line and the at-cursor dynamic input (REQ-304).
+[[nodiscard]] std::string CadLoftPromptText(const AppCommandState& st);
+
+/// Feed one typed line to a running LOFT command. An empty line (Enter) builds; anything else is not
+/// understood and leaves the command running. Returns false when the command is not LOFT.
+[[nodiscard]] bool HandleLoftTextInput(const std::string& line, AppCommandState& st,
+                                       std::vector<std::string>& log);
+
+/// The candidate solid the running LOFT command describes from the current selection, for the live
+/// ghost and for the commit — one function, so the ghost cannot show a shape the Enter would not
+/// build. Returns false when the selection does not yet hold two loftable profiles.
+[[nodiscard]] bool CadBuildLoftSolid(const AppCommandState& st, brep::Solid* out);
+
+// --- SWEEP (REQ-315 / ADR-048, GitHub issue #241) -------------------------------------------
+
+/// Begin the SWEEP command: select **one** closed polyline / circle (the profile) and **one** line,
+/// arc or open polyline (the path), then Enter to sweep the profile along the path (`brep::Sweep`).
+/// The closed loop is taken as the profile and the open curve as the path, so the selection order
+/// does not matter. A polyline path's per-vertex bulges become its arc segments (REQ-316); a sharp
+/// corner in the path is refused by name (`brep::Problem::SweepPathCorner`). If both operands are
+/// already selected, a bare `SWEEP` builds immediately. One undo step; the source entities are left
+/// in place; every failure is reported by name (REQ-201).
+void StartSweepCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelSweepCommand(AppCommandState& st);
+
+/// The prompt for the running SWEEP command. Shared by the command line and the at-cursor dynamic
+/// input (REQ-304).
+[[nodiscard]] std::string CadSweepPromptText(const AppCommandState& st);
+
+/// Feed one typed line to a running SWEEP command. An empty line (Enter) builds; anything else is
+/// not understood. Returns false when the command is not SWEEP.
+[[nodiscard]] bool HandleSweepTextInput(const std::string& line, AppCommandState& st,
+                                        std::vector<std::string>& log);
+
+/// The candidate solid the running SWEEP command describes from the current selection, for the live
+/// ghost and the commit. Returns false when the selection does not yet hold a profile and a path.
+[[nodiscard]] bool CadBuildSweepSolid(const AppCommandState& st, brep::Solid* out);
+
+// --- REVOLVE (REQ-314 / ADR-046 increment 2b) -------------------------------------------------
+
+/// Begin the prompted REVOLVE command a bare `REVOLVE` opens: select a closed polyline or circle
+/// (if none is selected), then the two ends of the revolve axis, then an angle. `REVOLVE <deg>`
+/// with a selection and axis is not offered — the axis needs two points.
+void StartRevolveCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelRevolveCommand(AppCommandState& st);
+[[nodiscard]] std::string CadRevolvePromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleRevolveTextInput(const std::string& line, AppCommandState& st,
+                                          std::vector<std::string>& log);
+void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// The candidate solids the running REVOLVE command describes at \p angleDeg — for the live ghost
+/// and the commit. False (and \p out cleared) until a profile and both axis points are set.
+[[nodiscard]] bool CadBuildRevolveSolids(const AppCommandState& st, double angleDeg,
+                                         std::vector<brep::Solid>* out);
+
+// --- UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046 increment 4, B1) -----------------------
+
+enum class CadBooleanOp { Union, Subtract, Intersect };
+
+/// Combine the two B-rep solids in the current selection (REQ-314 B1). UNION and INTERSECT do not
+/// care about order; SUBTRACT keeps the first selected solid and removes the second. Both operands
+/// are replaced by the result in one undo step. A pair the kernel refuses (a curved or non-convex
+/// operand, no shared volume for INTERSECT) is reported and nothing in the document changes
+/// (REQ-201). Needs exactly two selected solids.
+void CadBooleanSelection(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log);
+
+/// Begin the prompted UNION / SUBTRACT / INTERSECT command. SUBTRACT prompts for the solids to
+/// subtract from, then the solids to subtract; UNION and INTERSECT prompt once. Honors a
+/// pre-selection as the answer to the first prompt.
+void StartBooleanCommand(AppCommandState& st, CadBooleanOp op, std::vector<std::string>& log);
+void CancelBooleanCommand(AppCommandState& st);
+[[nodiscard]] std::string CadBooleanPromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleBooleanTextInput(const std::string& line, AppCommandState& st,
+                                          std::vector<std::string>& log);
+
+// --- SLICE (REQ-314 / ADR-046 increment 3b) -------------------------------------------------
+
+/// Begin the prompted SLICE command a bare `SLICE` opens: select solids (if none are selected),
+/// three points for the cutting plane, then a point on the side to keep (or `B` for both).
+void StartSliceCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelSliceCommand(AppCommandState& st);
+[[nodiscard]] std::string CadSlicePromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleSliceTextInput(const std::string& line, AppCommandState& st,
+                                        std::vector<std::string>& log);
+void SubmitSliceViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
@@ -3822,6 +5198,11 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     break;
   }
   case SelectedEntity::Type::Polyline: {
+    if (st.entityGripOrigPolyBulgeVi >= 0) {  // REQ-316 / ADR-047: an arc-segment bulge grip
+      if (static_cast<size_t>(st.entityGripOrigPolyBulgeVi) < st.userPolylineVertsBulge.size())
+        st.userPolylineVertsBulge[static_cast<size_t>(st.entityGripOrigPolyBulgeVi)] = st.entityGripOrigPolyBulge;
+      break;
+    }
     if (st.entityGripOrigPolylineXIdx < 0)
       return;
     const size_t xIdx = static_cast<size_t>(st.entityGripOrigPolylineXIdx);
@@ -3914,8 +5295,41 @@ bool ParseWorldPointD(const std::string& raw, double* ox, double* oy, bool allow
                       double baseY);
 
 /// If ortho: snaps dx/dy so segment from anchor is horizontal or vertical (CAD-style).
+/// When \p ortho is false but \p st has POLAR tracking on, applies the polar snap instead — the two
+/// share this one entry point so every existing ortho call site picks up polar with no change
+/// (\ref AppCommandState::polarMode is mutually exclusive with ortho).
+///
+/// \p anchorZ / \p targetZ are the REAL, already-resolved elevations of the anchor and the cursor
+/// pick (issue #371) — e.g. \c AppCommandState::anchorZ and \c AppCommandState::resolvedPointZ /
+/// \c uiCursorWorldZ. When both are finite they are used as-is. When either is left at its default
+/// NaN, the UCS branch falls back to solving the work-plane equation for Z from (x,y) alone, which
+/// is only valid while the plane is close enough to horizontal that Z is a function of (x,y) — it
+/// degenerates for a plane that stands on edge to world Z (a Front/Left/Right-style UCS), which is
+/// exactly issue #371's repro. New call sites should always pass the real Z when they have it.
+///
+/// \p wz (optional, issue #371 follow-up) receives the ortho-adjusted world Z when the locked UCS
+/// axis maps onto world Z, e.g. squaring to a Front/Left/Right-style UCS's vertical axis. Left
+/// untouched when \p wz is null, when ORTHO/POLAR did not fire, or under the World UCS (ORTHO never
+/// touches Z there). A caller that commits or previews a point's elevation independently (via
+/// \c CadCommitElevation / \c uiCursorWorldZ) MUST pass \p wz and use the value it comes back with
+/// instead of re-deriving Z from the raw cursor, or the lock silently fails to reach the render or
+/// the committed geometry even though \p wx / \p wy report a locked point.
 void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
-                                   bool ortho);
+                                   bool ortho, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float targetZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float* wz = nullptr);
+
+/// POLAR tracking (issue #154, REQ-154): snap the world pick onto the nearest polar ray around the
+/// anchor, measured in the active UCS's XY plane from +X. No-op unless \p polar and
+/// \ref AppCommandState::polarMode. Called from \ref ApplyOrthoConstrainFromAnchor; exposed for the
+/// preview paths that want it explicitly.
+///
+/// \p anchorZ / \p targetZ — see \ref ApplyOrthoConstrainFromAnchor; the same edge-on-plane caveat
+/// applies here.
+void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool polar, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float targetZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float* wz = nullptr);
 
 /// Snap pick onto anchor + t*(ux,uy). Negative \p t allowed unless \p forwardOnly.
 void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx, float lockUy, float* wx, float* wy,
@@ -3925,6 +5339,17 @@ void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx
 /// into local storage first (REQ-047). False if the crosshair coincides with the anchor.
 /// The pure form lives in `OrthoConstrain.hpp` as \c OrthoUnitTowardPoint (both points in one frame).
 bool OrthoUnitTowardUiCursorFromAnchor(const AppCommandState& st, float* ux, float* uy);
+
+/// Direct-distance entry under a UCS (issue #371 5th follow-up): the UCS/screen-aware counterpart of
+/// \ref OrthoUnitTowardUiCursorFromAnchor, for every UCS other than World. Runs the anchor and the
+/// raw cursor hit through the same UCS-ortho decision \ref ApplyOrthoConstrainFromAnchor uses and
+/// returns the point \p dist units from the anchor along whichever axis it locked onto, landing in
+/// the plane through the anchor. Publishes the resulting elevation through
+/// \c AppCommandState::resolvedPointZ (which \c CadCommitElevation reads), so the caller's ordinary
+/// commit path picks it up unchanged. False when the cursor coincides with the anchor's locked
+/// direction.
+bool OrthoUcsDirectDistancePoint(AppCommandState& st, float dist, float* outX, float* outY);
+
 /// Trimmed input parses as exactly one float (allows negative).
 bool ParseSingleFloatToken(const std::string& raw, float* out);
 
@@ -4040,7 +5465,13 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
 bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
 
 /// Feed a viewport pick (world coordinates) to the UCS command. Returns true when consumed.
-bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log);
+///
+/// \p pickRay, when non-null and valid, is the camera ray behind this click in an orbited/non-plan
+/// model view (issue #156). `UCS Object` uses it to align the frame to a planar face of a B-rep
+/// solid under the cursor — the true-3D sub-object pick, which a flattened work-plane XY cannot do.
+/// Null in plan view and paper space, where the 2D entity pick is all that applies.
+bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log,
+                            const ray3d::Ray* pickRay = nullptr);
 
 /// Orient the view to a PLAN view of \p frame without touching the active UCS.
 void ApplyPlanViewOf(AppCommandState& st, const ucs::Ucs& frame, std::vector<std::string>& log);
@@ -4085,6 +5516,16 @@ bool ProcessViewCommandLine(AppCommandState& st, const std::string& rest, std::v
 /// WCS this reduces exactly to the world-axis constraint the 2D path always applied.
 ray3d::Vec3 ConstrainToUcsOrtho(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target);
 
+/// \ref ConstrainToUcsOrtho's screen-aware counterpart (issue #371 second follow-up). Under an
+/// orbited (non-plan) camera, comparing raw UCS-delta magnitude no longer reliably says which axis
+/// the cursor is "farther along" — an oblique view mixes both in-plane axes into any one screen
+/// direction. This instead projects both candidate locked points and the raw cursor hit through
+/// \p cam and keeps whichever candidate is actually closer to the cursor on screen, matching
+/// AutoCAD's observed behavior (a Front-UCS ORTHO drag stays screen-vertical from any orbit).
+/// Reduces to \ref ConstrainToUcsOrtho's decision in plan view, where the two always agree.
+ray3d::Vec3 ConstrainToUcsOrthoOnScreen(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target,
+                                        const Camera& cam, float viewportWidthPx, float viewportHeightPx);
+
 /// RECT (REQ-053): two opposite corners create an axis-aligned rectangle.
 void StartRectCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Store the rectangle spanned by the two corners as a 4-vertex closed polyline, ending the command.
@@ -4128,7 +5569,10 @@ void StartDesignateContourCommand(AppCommandState& st, const std::string& surfac
 void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfaceName, CadBoundaryKind kind,
                                    std::vector<std::string>& log);
 
+void StartTraverseEditorCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartOptionsCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartDistCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -4160,21 +5604,35 @@ void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Model-space + floating-model-space viewport-pick handler for FILLET. Non-static for the same
 /// anonymous-namespace/global-scope reason `HandleLengthenViewportPick`/`HandleExtendViewportPick`/
 /// `HandleBreakViewportPick` are — `SubmitViewportPickImpl` needs to see it via this header.
-void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
+                              const ray3d::Ray* pickRay = nullptr);
 /// Typed command-line handling for FILLET's R(adius)/T(rim) sub-commands (REQ-103 step 6a) — the
 /// mode-letter shape LENGTHEN's own `HandleLengthenText` established, simplified: FILLET has no
 /// pending-pick-awaiting-a-value latch, since R/T only ever change a persisted setting, never
 /// apply to an already-picked object.
+/// **The return value means "was this input UNDERSTOOD", not "did the command advance"**, and the
+/// distinction is load-bearing: the one and only thing the caller does with it is decide whether to
+/// append `ReportUnparsedCommandInput`'s trailer. So a value the kernel REFUSED returns **true** —
+/// it was understood, it was declined by name, and the prompt is still up — while a stray token
+/// returns **false**, which is what earns the genuinely useful "FILLET is still running, so
+/// \"circle\" was read as input to it; press Esc" hint.
+///
+/// Conflating the two is what TASK-224 fixed: a refused radius used to be followed by "Could not
+/// parse FILLET input", which contradicted the refusal printed one line above it.
 bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 void StartChamferCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Model-space + floating-model-space viewport-pick handler for CHAMFER. Non-static for the same
 /// anonymous-namespace/global-scope reason `HandleFilletViewportPick` is.
 void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 /// Typed command-line handling for CHAMFER's D(istance)/A(ngle)/T(rim) sub-commands (REQ-103 step
-/// 6b) — same shape as `HandleFilletText`.
+/// 6b) — same shape as `HandleFilletText`, **including what its return value means**: true when the
+/// input was understood (a refused distance included), false only when it was not.
 bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);
+/// QUICKSELECT's filter itself (issue 05). Lives here rather than in the UI layer so it is
+/// reachable from a headless transcript and from a unit test; the panel is a form that calls it.
+void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log);
 void StartQuickSelectCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -4189,17 +5647,29 @@ void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool 
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log);
 /// Join selected lines / polylines at coincident endpoints into polylines (window-select like DELETE).
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log);
+/// EXPLODE (REQ-103 step 8 / issue #390): decompose every selected Polyline into one LINE per straight
+/// segment and one ARC per bulge segment (flat or tilted), preserving per-vertex Z and the polyline's
+/// attributes; report other non-block selected kinds (REQ-201). Returns the polyline count exploded.
+/// The caller owns the undo snapshot, the id sweep and the GPU-cache bump.
+int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log);
 /// OVERKILL — remove zero-length segments, exact duplicates, collinear overlapping/contiguous lines
 /// (merged into one), duplicate circles/arcs, and arcs whose circle matches an existing full circle.
 /// Operates on the entire drawing immediately; no selection required.
 void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log);
 /// TRIM — pick cutting edges, Enter, trim clicks; or \p L then two points: draws the segment to trim (nearest edge),
 /// trims once at nearest crossing (fence disambiguates), then TRIM ends.
-bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld, std::vector<std::string>& log);
+bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld, std::vector<std::string>& log,
+                            const ray3d::Ray* pickRay = nullptr);
 /// Preview for TRIM \p L rubber phase; pass the drawn segment midpoint as \p pickPreview (same side rule as commit).
 void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1x, float fenceP1y, float fenceP2x,
                                         float fenceP2y, float pickPreviewX, float pickPreviewY,
                                         std::vector<float>* previewLinesOut);
+/// issue #399 increment 4: the orbited-view / non-world-UCS counterpart. Given the drawn trim
+/// segment in true 3D (\p f0 -> \p f1, real elevations), appends the portion the commit would remove
+/// as one XYZ line segment — resolved by the same 3D solve the commit uses (\ref Try3DDrawnLineTrim),
+/// so the dashed hint lands on the geometry, not the datum. No-op when there is no trim to make.
+void CadTrimAppendCutLineRemovedPreview3D(const AppCommandState& st, const ray3d::Vec3& f0, const ray3d::Vec3& f1,
+                                          std::vector<float>* previewLinesOut);
 /// Closest CAD entity within tolerance (later draw order wins on tie). False if none.
 /// \param outDistSq Optional: pass null when only the entity matters, not how near the pick was.
 /// \param pickRay When non-null AND valid, entities are measured against this world ray in 3D
@@ -4208,7 +5678,11 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
 ///        the plan test would measure to the wrong place. Null (the default) keeps the exact
 ///        pre-3D behaviour, which is what plan view continues to use.
 bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float tolWorld, SelectedEntity* out,
-                          float* outDistSq, const ray3d::Ray* pickRay = nullptr);
+                          float* outDistSq, const ray3d::Ray* pickRay = nullptr,
+                          std::vector<CadPickCandidate>* allCandidates = nullptr);
+/// From a non-empty candidate list, pick the entity nearest the camera (ray mode) or highest Z (plan).
+bool PickCadEntityByDepth(const std::vector<CadPickCandidate>& candidates, SelectedEntity* out,
+                          const ray3d::Ray* pickRay);
 /// True if (x,y) is inside the filled region: inside its outer loop (0) and outside every hole loop (REQ-042).
 bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y);
 /// HATCH command (REQ-043): begin picking an internal point.
@@ -4259,6 +5733,77 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
 
 /// Clears window-selection draft state and CAD entity selection only (not survey point pick).
 void ClearCadSelection(AppCommandState& st);
+
+// --- Sub-object selection (REQ-318 increment 2 / D-2026-09-04-a, issue #148) ------------------
+//
+// Free functions rather than members for the reason every other selection operation in this header
+// is: `AppCommandState` is plain data (architecture §11), and these are testable against a
+// hand-built state with no window and no document.
+
+/// Drop every sub-object reference whose solid is gone or has been REPLACED (REQ-318 item 10).
+///
+/// A solid is immutable and replaced rather than edited (`CadSolidPtr` is `shared_ptr<const>`), so
+/// "replaced" is exactly "the `weak_ptr` no longer locks to `cadSolids[solidIndex]`" — which covers
+/// an erase, an undo, a boolean, and any direct edit, without any of them having to remember to call
+/// something. Also drops references whose index no longer addresses anything on the solid it names.
+///
+/// Returns the number dropped, so a caller can report an expiry rather than have a selection quietly
+/// shrink (REQ-201).
+int ExpireSubObjectSelection(AppCommandState& st);
+
+/// Add \p pick to the sub-object selection, or remove it when \p toggle and it is already there.
+///
+/// \p toggle is Shift's meaning, kept identical to Shift's meaning for entities. A plain add of a
+/// sub-object already selected is a no-op rather than a duplicate.
+void ToggleSubObjectSelection(AppCommandState& st, const SelectedSubObject& pick, bool toggle);
+
+/// The nearest sub-object under \p ray across EVERY visible solid, or false for a miss.
+///
+/// This is where TASK-189's DEBT-1 is closed. `solidpick::PickSubObject` sees one solid at a time,
+/// so its occlusion rule cannot reach across solids: a vertex hidden behind a *different* solid is
+/// still a hit as far as that function knows. Ordering the per-solid answers on `Pick::rayT` — the
+/// distance the query returns for exactly this purpose — is the caller's job, and this is the
+/// caller.
+///
+/// Honours layer visibility and isolation through `SolidVisible`, so a pick cannot name geometry the
+/// renderer is not drawing (the rule REQ-084 (d) already applies to the entity pick). Solids with no
+/// cached tessellation are skipped rather than tessellated: a pick must not cost a tessellation
+/// (REQ-318 item 7).
+[[nodiscard]] bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
+                                             const solidpick::Tolerance& tol, SelectedSubObject* out,
+                                             solidpick::Pick* outPick = nullptr);
+
+/// ONE sub-object click, whole: pick along \p ray, apply the mutual-exclusion rule, update the
+/// store, and say what happened. Returns true when something was picked.
+///
+/// The *rule* lives here rather than in the viewport's mouse handler on purpose. What the click
+/// does — the entity selection is cleared because the two are mutually exclusive (REQ-318 item 9),
+/// `toggle` (Shift) removes an already-selected sub-object, and a miss CLEARS rather than arming a
+/// selection fence — is behaviour a transcript has to be able to drive and assert. Left inline in
+/// `CadUi.cpp` it would have been reachable only by hand, which is the shape of defect TASK-099
+/// found five times over. The UI keeps exactly one decision of its own: that `Ctrl` is what asks
+/// for this.
+bool SubmitSubObjectPick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
+                         bool toggle, std::vector<std::string>& log);
+
+/// What the sub-object rollover says (REQ-318 item 14) — the same four fields AutoCAD's rollover
+/// shows for an object, with the sub-object's KIND as the title.
+///
+/// Strings, resolved here rather than at draw time, for the reason \ref SurfaceHoverRow is: the
+/// readout is then purely presentational and the resolution — which is where "ByLayer" and a missing
+/// attribute row have to be handled — is testable without a window.
+struct SubObjectHoverRow {
+  std::string title;     ///< "Solid face" / "Solid edge" / "Solid vertex", plus the index.
+  std::string solid;     ///< which solid, 1-based, as the command line numbers them.
+  std::string color;
+  std::string layer;
+  std::string linetype;
+};
+
+/// Describe \p s for the rollover. False (and \p out untouched) when the reference no longer
+/// resolves — an expired reference has nothing truthful to say about a solid that is gone.
+[[nodiscard]] bool BuildSubObjectHoverRow(const AppCommandState& st, const SelectedSubObject& s,
+                                          SubObjectHoverRow* out);
 /// Replace selection with all entities of the same kind as the first selected item (or all survey points).
 /// Move the armed grip to (x, y) in local storage coordinates — the one place grip geometry is written, so
 /// the mouse drag and command-line distance entry cannot drift apart. No-op when no grip is armed.
@@ -4266,6 +5811,200 @@ void ClearCadSelection(AppCommandState& st);
 void ApplyEntityGripPoint(AppCommandState& st, float x, float y);
 
 void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::string>* log);
+
+// --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) --------------------------
+//
+// One rule decides the shape of everything below: **the gizmo commits through
+// `ApplyTranslationToSelection`, the same function typed MOVE calls.** REQ-060 requires that "a
+// gizmo drag and the equivalent typed command produce coordinates agreeing within REQ-101"; going
+// through the one function makes that hold by construction rather than by two implementations
+// happening to match, which is the failure mode a tolerance-based acceptance invites.
+//
+// The gizmo aligns with the ACTIVE UCS, not with world axes. Everything else in this program that
+// takes a direction from the user - the grid, ORTHO, coordinate entry - follows the UCS (REQ-154),
+// and in the World UCS the two are identical, so the default view is unchanged.
+
+/// Translate the whole selection by (\p dx, \p dy, \p dz) in WCS (REQ-322). Surfaces are dropped by
+/// name (REQ-201); solids move through `brep::Translate`. The caller owns the undo snapshot.
+///
+/// Declared here — it had been a definition private to `CadCommands.cpp` — because REQ-060's
+/// acceptance is that a gizmo drag and the typed command agree, and the only way to make that a
+/// property rather than a hope is for both to call this. A test that asserts the agreement has to be
+/// able to name it too.
+void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float dz,
+                                 std::vector<std::string>& log);
+
+/// Rotate the whole selection by \p rad about the axis through (\p bx, \p by, \p bz) parallel to the
+/// ACTIVE UCS Z — the complete typed-ROTATE transform, dispatch included (REQ-329 increment 2,
+/// REQ-332 increment 2). The caller owns the undo snapshot.
+///
+/// Declared here, and extracted out of `FinishRotateCommand`, for REQ-060's reason: typed ROTATE
+/// does not call one function, it CHOOSES between two — `ApplyRotationToSelection` when the UCS Z is
+/// world-Z-parallel and `RotateSelectionInPlaceAboutAxis` when it is tilted. A gizmo that called
+/// only the inner function would agree with the typed command in plan view and diverge from it under
+/// a tilted UCS, which is the half-agreement a tolerance-based acceptance would never catch.
+void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, float rad,
+                            std::vector<std::string>& log);
+
+/// Scale the whole selection uniformly by \p sc about (\p bx, \p by, \p bz) — the complete typed
+/// SCALE transform (REQ-329 increment 3, REQ-332 increment 2). The caller owns the undo snapshot.
+///
+/// Extracted for the same reason as \ref ApplyRotationAboutUcsZ: typed SCALE calls
+/// `ApplyScaleToSelection` and THEN, only under a tilted UCS, `ScaleSelectionZAboutBase`. Both steps
+/// are the command, so both belong behind one name the gizmo can call too.
+void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float bz, float sc,
+                                std::vector<std::string>& log);
+
+/// What the gizmo is currently acting on, derived from the selection and never stored.
+///
+/// The two selections are mutually exclusive already (D-2026-09-04-a), so a stored mode would be a
+/// third thing that can disagree with them. `None` is the answer whenever no gizmo may be drawn —
+/// which is REQ-060's third acceptance bullet and, for a face, the honest answer for a selection the
+/// kernel has no operation for.
+enum class CadGizmoMode {
+  None,
+  /// The entity selection: three handles along the active UCS, committing through
+  /// `ApplyTranslationToSelection`.
+  Entity,
+  /// Exactly one solid FACE: ONE handle along that face's own normal, committing through
+  /// `CadApplyPushPull` — so a drag and the typed `PRESSPULL` agree by construction (issue #148
+  /// acceptance 4).
+  ///
+  /// One handle and not three, because `brep::PushPullFace` takes a distance along the face normal
+  /// and nothing else. A handle along UCS X on a face whose normal is Z would advertise a move the
+  /// kernel cannot make; drawing it and then refusing the drag is worse than not drawing it.
+  SubObjectFace,
+  /// Exactly one solid EDGE: TWO handles, along the two adjacent faces' own outward normals,
+  /// committing through `CadApplyMoveEdge` (REQ-333).
+  ///
+  /// Two because two planes meet there and each has one degree of freedom that keeps it planar, and
+  /// together they span exactly the plane perpendicular to the edge. **There is deliberately no
+  /// third**: the along-the-edge direction is not a motion at all — an edge slid along its own line
+  /// is the same edge (REQ-333 item 4) — so a handle there would advertise a drag that does nothing.
+  SubObjectEdge,
+  /// Exactly one solid VERTEX: THREE handles, along the active UCS, committing through
+  /// `CadApplyMoveVertex` (REQ-333).
+  ///
+  /// Three because three planes meet there, which is three degrees of freedom — every direction is
+  /// reachable, so unlike the face and the edge there is nothing to leave out.
+  SubObjectVertex,
+};
+
+/// Which subject the gizmo has right now. \c None when no gizmo may be drawn.
+///
+/// Returns \c SubObjectFace only under \c CadGizmoOp::Translate: no kernel operation rotates or
+/// scales a single face, so under Rotate or Scale a face selection gets no gizmo at all — the same
+/// answer an edge or a vertex already gets, for the same reason.
+[[nodiscard]] CadGizmoMode CadGizmoModeFor(const AppCommandState& st);
+
+/// Maximum gizmo axes. Three: the UCS X, Y and Z. Named so the loops below say why they are 3.
+inline constexpr int kGizmoAxisCount = 3;
+
+/// How many handles the gizmo actually has right now: 3 in entity mode, 1 in face mode, 0 for none.
+[[nodiscard]] int CadGizmoAxisCountFor(const AppCommandState& st);
+/// Handle length, in screen pixels, held constant at every zoom (REQ-060's "as displayed").
+inline constexpr float kGizmoHandleLenPx = 70.f;
+/// Grab aperture around a handle, in screen pixels.
+inline constexpr float kGizmoHandleGrabPx = 7.f;
+
+/// Where the gizmo hangs, in WCS. False when there is nothing for it to hang off.
+///
+/// **Entity mode:** the centre of the selection's bounding box. Deliberately not
+/// \ref ComputeSelectionCentroidWorld: that answers ROTATE's different question (a pivot, in plan,
+/// over ROTATE's own type set), and changing it to serve this one would change where ROTATE and
+/// ARRAY turn things about.
+///
+/// **What this anchor has to be depends on the operation, and the original note here was written
+/// when there was only one** (TASK-232). For a TRANSLATE it is cosmetic: a drag distance is the
+/// change in the axis parameter between the grab and the drop, so the anchor appears in both terms
+/// and cancels, and it decides only where the handles are DRAWN — which is why conservative
+/// per-type bounds were good enough. For a ROTATE or a SCALE it is the **pivot** and the **base**:
+/// it does not cancel, it decides the answer.
+///
+/// That does not make conservative bounds wrong here, but it changes what is being relied on. What
+/// REQ-060 requires is agreement with *the equivalent typed command*, and the equivalent command is
+/// ROTATE / SCALE **about this same anchor** — so the anchor must be DETERMINISTIC, not accurate.
+/// Widening the bounds later would move where a gizmo rotation pivots, which a reader of the
+/// original note would not have expected.
+///
+/// **Face mode:** the face's centroid (\ref CadSubObjectFaceGrip), where the grip this replaced
+/// already put its handle. A corner would read as a vertex grip, which is a different edit.
+[[nodiscard]] bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out);
+
+/// Unit direction of gizmo axis \p axis in WCS: the active UCS's X / Y / Z in entity mode, and the
+/// selected face's outward normal (axis 0, the only one) in face mode.
+[[nodiscard]] ray3d::Vec3 CadGizmoAxisWorld(const AppCommandState& st, int axis);
+
+/// Handle length in drawing units for the current view - \ref kGizmoHandleLenPx converted through
+/// the same ortho half-height \ref CadViewCamera builds its projection from, so the handle is the
+/// stated pixel length on screen and a transcript with no window still gets a definite answer.
+[[nodiscard]] float CadGizmoHandleLenWorld(const AppCommandState& st);
+
+/// True when a gizmo should be drawn at all: \ref CadGizmoModeFor is not \c None and an anchor
+/// resolves. REQ-060's third acceptance bullet ("no gizmo when the selection is empty") is this.
+[[nodiscard]] bool CadGizmoVisible(const AppCommandState& st);
+
+/// Signed position along the line (\p anchor, \p axisDir) of the point on it nearest \p ray.
+///
+/// The standard skew-line solve. False when the ray is within \p parallelTol of parallel to the
+/// axis - looking straight down a handle, every point of it projects to the same pixel and there is
+/// no distance the gesture could mean. Refusing is the honest answer; the alternative is a huge
+/// number from a near-singular divide, which reads as the selection flying off the screen.
+[[nodiscard]] bool CadAxisDragParam(const ray3d::Vec3& anchor, const ray3d::Vec3& axisDir,
+                                    const ray3d::Ray& ray, double* outParam,
+                                    double parallelTol = 1.e-6);
+
+/// Angle of \p ray's hit on the plane through \p anchor with normal \p axisDir, measured in that
+/// plane's own frame, CCW-positive about \p axisDir (REQ-060 rotate, TASK-232).
+///
+/// The rotation counterpart of \ref CadAxisDragParam, and it refuses for the same kind of reason
+/// that one does. False when the ray is within \p parallelTol of PARALLEL to the plane — it never
+/// meets it, so the gesture names no point — and false when the hit lands within \p minRadius of the
+/// anchor, where there is no direction to take an angle of. Both are cases where a number could be
+/// produced and would be meaningless; returning one would read as the selection spinning wildly.
+///
+/// The frame is built from \p axisDir alone (not from the camera), so the angle a drag reports does
+/// not change when the view orbits.
+[[nodiscard]] bool CadAxisDragAngle(const ray3d::Vec3& anchor, const ray3d::Vec3& axisDir,
+                                    const ray3d::Ray& ray, double* outAngle,
+                                    double parallelTol = 1.e-6, double minRadius = 1.e-9);
+
+/// Which axis handle \p ray hits, or -1. \p tolWorld is the grab aperture in drawing units.
+///
+/// Nearest handle wins, measured as the true 3D distance between the ray and the handle SEGMENT -
+/// so a handle pointing away from the camera, which projects to almost nothing, is hard to grab by
+/// accident and the one pointing across the view is easy.
+[[nodiscard]] int PickGizmoAxis(const AppCommandState& st, const ray3d::Ray& ray, double tolWorld);
+
+/// One click on the gizmo, in the command layer where a transcript can drive it.
+///
+/// Grabs the handle under \p ray if one is there and nothing is armed yet; otherwise commits the
+/// armed drag at the ray's position. Returns true when the click was the gizmo's - the caller must
+/// then NOT treat it as an ordinary selection click.
+bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorld,
+                      std::vector<std::string>& log);
+
+/// Refresh \ref AppCommandState::gizmoDragDistance from the cursor. No-op when nothing is armed.
+void UpdateGizmoDrag(AppCommandState& st, const ray3d::Ray& ray);
+
+/// Refresh \ref AppCommandState::gizmoHoverAxis from the cursor. No-op while a drag is armed - the
+/// grabbed handle stays lit, and a pre-highlight of a handle the click cannot reach is a lie.
+void UpdateGizmoHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorld);
+
+/// Apply the armed drag as ONE undoable step, and disarm.
+///
+/// Entity mode goes through `ApplyTranslationToSelection`, the function typed MOVE calls; face mode
+/// goes through `CadApplyPushPull`, the function typed `PRESSPULL` calls. Both agreements are then
+/// structural rather than two implementations that happen to match today — REQ-060's second
+/// acceptance bullet and issue #148's fourth, stated the same way.
+///
+/// False (and nothing changed) when no drag is armed, when the distance is zero, or when the kernel
+/// refuses the push - in which case `CadApplyPushPull` has already logged its own sentence and the
+/// document is untouched.
+bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log);
+
+/// Disarm without moving anything. Safe to call at any time; ESC and a right-click both do.
+void CancelGizmoDrag(AppCommandState& st);
 /// Removes all committed CAD lines/circles and clears CAD selection (survey points unchanged).
 void ClearCadGeometry(AppCommandState& st);
 /// Ends active LINE/CIRCLE/MOVE/etc. draft without logging — used after DXF import.
@@ -4286,6 +6025,12 @@ void ApplyCopySurveyDuplicateModalResult(AppCommandState& st, bool applySurveyDu
 
 bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);
 
+/// REQ-316 / ADR-047: the bulge for the segment leaving the last POLYLINE draft vertex if the next
+/// point were (x,y). 0 in LINE mode; in ARC mode the arc is tangent to the previous segment unless
+/// a radius or included angle was typed. Shared by the vertex-commit path and the live preview so
+/// the drawn arc matches the committed one exactly.
+float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, float y);
+
 /// Viewport left-click during active commands.
 ///
 /// \param localX,localY  **LOCAL** storage coordinates, NOT world — `world = local +
@@ -4300,8 +6045,14 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
 ///   (`ApplyDocumentOriginRebase` shifts `viewportPanX/Y`), and an OSNAP overrides them with a value
 ///   read directly out of the geometry stores — so a snapped pick is exact and an unsnapped one is
 ///   bounded by the pixel it came from (REQ-101).
-void SubmitViewportPick(AppCommandState& st, float localX, float localY, std::vector<std::string>& log,
-                        bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false);
+// `pickRay` (issue #373 follow-up): the camera ray behind this click, in an orbited/non-plan model
+// view — nullptr in plan view and paper space, matching PickClosestCadEntity's own convention.
+// Threaded through so a RawEntityPick command (FILLET today) can hit-test the TRUE 3D distance from
+// the ray to elevated geometry instead of the click's flattened work-plane intersection, which is
+// nowhere near a line that does not lie on the current work plane.
+void SubmitViewportPick(AppCommandState& st, double localX, double localY, std::vector<std::string>& log,
+                        bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
+                        const ray3d::Ray* pickRay = nullptr);
 
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log);
 void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log);

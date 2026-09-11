@@ -17,6 +17,7 @@
 #include <cstring>
 
 #include "render/Camera.hpp"
+#include "util/ucs.hpp"
 
 using Catch::Approx;
 
@@ -367,6 +368,75 @@ TEST_CASE("Azimuth is left alone at the poles rather than snapped", "[camera]") 
 }
 
 // ---------------------------------------------------------------------------
+// Screen roll — PLAN of a tilted UCS (GitHub #153).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Roll defaults to zero and leaves plan view an identity rotation", "[camera][roll]") {
+  Camera c = Camera::Plan(0.0, 0.0, 50.f);
+  REQUIRE(c.rollDeg == Approx(0.f));
+  float m[16];
+  c.ViewRotation(m);
+  const float ident[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  for (int i = 0; i < 16; ++i)
+    REQUIRE(m[i] == Approx(ident[i]).margin(1e-6));
+}
+
+TEST_CASE("Roll turns screen-up but not the view direction", "[camera][roll]") {
+  Camera c;
+  c.azimuthDeg = 20.f;
+  c.elevationDeg = 35.f;
+  const ray3d::Vec3 fwd0 = c.ForwardWorld();
+  c.rollDeg = 40.f;
+  const ray3d::Vec3 fwd1 = c.ForwardWorld();
+  REQUIRE(fwd1.x == Approx(fwd0.x).margin(1e-6));
+  REQUIRE(fwd1.y == Approx(fwd0.y).margin(1e-6));
+  REQUIRE(fwd1.z == Approx(fwd0.z).margin(1e-6));
+  // right/up must stay orthonormal to forward under the roll.
+  const ray3d::Vec3 up = c.UpWorld();
+  const ray3d::Vec3 right = c.RightWorld();
+  REQUIRE(ray3d::Dot(up, fwd1) == Approx(0.f).margin(1e-6));
+  REQUIRE(ray3d::Dot(right, up) == Approx(0.f).margin(1e-6));
+  REQUIRE(ray3d::Length(up) == Approx(1.f).margin(1e-6));
+}
+
+TEST_CASE("PLAN of a 45-degree UCS places its +Y up the screen exactly", "[camera][roll][plan]") {
+  // A UCS built from three points on a plane tilted 45 degrees about the Y axis (issue #153's
+  // regression case). PLAN must look straight down its +Z AND put its +Y up the screen.
+  const ucs::Ucs u = ucs::RotatedAboutY(ucs::Ucs{}, 45.0);
+  float az = 0.f, el = 0.f;
+  ucs::PlanViewAngles(u, &az, &el);
+  Camera c;
+  c.azimuthDeg = az;
+  c.elevationDeg = el;
+  c.rollDeg = Camera::RollToPlaceUp(az, el, u.yAxis);
+  REQUIRE(c.rollDeg != Approx(0.f).margin(1e-3));  // a genuinely tilted frame needs a real roll
+
+  const ray3d::Vec3 fwd = c.ForwardWorld();
+  REQUIRE(fwd.x == Approx(-u.zAxis.x).margin(1e-6));
+  REQUIRE(fwd.y == Approx(-u.zAxis.y).margin(1e-6));
+  REQUIRE(fwd.z == Approx(-u.zAxis.z).margin(1e-6));
+
+  const ray3d::Vec3 up = c.UpWorld();
+  const ray3d::Vec3 want = ray3d::Normalize(u.yAxis);
+  REQUIRE(up.x == Approx(want.x).margin(1e-6));
+  REQUIRE(up.y == Approx(want.y).margin(1e-6));
+  REQUIRE(up.z == Approx(want.z).margin(1e-6));
+}
+
+TEST_CASE("A bare view matrix carries no roll back", "[camera][roll]") {
+  Camera c;
+  c.azimuthDeg = 30.f;
+  c.elevationDeg = 20.f;
+  c.rollDeg = 15.f;
+  float m[16];
+  c.ViewRotation(m);
+  Camera d;
+  d.rollDeg = 99.f;
+  d.SetFromViewRotation(m);
+  REQUIRE(d.rollDeg == Approx(0.f));
+}
+
+// ---------------------------------------------------------------------------
 // ShortestAzimuthDelta — the wrap logic behind ViewCube animation (REQ-059).
 //
 // A view change eases between orientations, and interpolating raw degrees would send the model
@@ -532,4 +602,110 @@ TEST_CASE("The billboard axes are the screen axes at any orientation", "[camera]
       REQUIRE(std::fabs(rxS - cxS) == Approx(std::fabs(uyS - cyS)).margin(1e-3));
     }
   }
+}
+
+// ================================================================================================
+// REQ-309 — selectable projection.
+//
+// The perspective branches of WorldToScreen and ScreenRay have existed since REQ-058 but were
+// UNREACHABLE: nothing in src/ ever assigned Camera::projection, so no test had ever exercised
+// them either. These cases cover the maths the new PERSPECTIVE command finally makes selectable.
+//
+// The load-bearing property is the round trip. WorldToScreen and ScreenRay are inverses, and under
+// perspective they are inverses in a different way from orthographic — a diverging ray from an eye
+// point rather than parallel rays differing only in origin. If they disagree there, picking misses
+// what is drawn, which is exactly the class of bug REQ-058's own history records at non-zero
+// azimuth.
+
+TEST_CASE("REQ-309 perspective projection round-trips screen and world", "[camera][req309]") {
+  constexpr float kW = 1024.f, kH = 768.f;
+
+  Camera cam = Camera::Plan(500.0, 300.0, 80.f);
+  cam.azimuthDeg = 35.f;
+  cam.elevationDeg = 40.f;
+  cam.projection = Camera::Projection::Perspective;
+  cam.fovDeg = 60.f;
+
+  // A point off the camera target in all three axes, so no coordinate is accidentally right.
+  const double wx = 530.0, wy = 275.0, wz = 12.0;
+
+  float px = 0.f, py = 0.f;
+  cam.WorldToScreen(wx, wy, wz, kW, kH, &px, &py);
+
+  // The pixel must land inside the viewport, or the round trip below proves nothing.
+  REQUIRE(px > 0.f);
+  REQUIRE(px < kW);
+  REQUIRE(py > 0.f);
+  REQUIRE(py < kH);
+
+  // Casting a ray back through that pixel must pass through the original world point: the closest
+  // approach of the ray to the point is zero.
+  const ray3d::Ray r = cam.ScreenRay(px, py, kW, kH);
+  const ray3d::Vec3 toPt{wx - r.origin.x, wy - r.origin.y, wz - r.origin.z};
+  const double t = ray3d::Dot(toPt, r.dir);
+  REQUIRE(t > 0.0);  // in front of the eye, not behind it
+  const ray3d::Vec3 onRay{r.origin.x + r.dir.x * t, r.origin.y + r.dir.y * t,
+                          r.origin.z + r.dir.z * t};
+  const double miss = ray3d::Length(ray3d::Vec3{onRay.x - wx, onRay.y - wy, onRay.z - wz});
+  REQUIRE(miss == Approx(0.0).margin(1e-4));
+}
+
+TEST_CASE("REQ-309 perspective diverges and orthographic does not", "[camera][req309]") {
+  constexpr float kW = 800.f, kH = 600.f;
+
+  // Two rays through two different pixels. Under orthographic they are parallel; under perspective
+  // they converge on the eye. This is the property that makes perspective perspective, and the one
+  // that makes every ScreenRay consumer behave differently under it.
+  Camera ortho = Camera::Plan(0.0, 0.0, 50.f);
+  ortho.elevationDeg = 55.f;
+  const ray3d::Ray a1 = ortho.ScreenRay(100.f, 100.f, kW, kH);
+  const ray3d::Ray a2 = ortho.ScreenRay(700.f, 500.f, kW, kH);
+  REQUIRE(ray3d::Dot(a1.dir, a2.dir) == Approx(1.0).margin(1e-6));
+
+  Camera persp = ortho;
+  persp.projection = Camera::Projection::Perspective;
+  persp.fovDeg = 60.f;
+  const ray3d::Ray b1 = persp.ScreenRay(100.f, 100.f, kW, kH);
+  const ray3d::Ray b2 = persp.ScreenRay(700.f, 500.f, kW, kH);
+  REQUIRE(ray3d::Dot(b1.dir, b2.dir) < 0.999);
+  // Both perspective rays start at the same eye point.
+  REQUIRE(b1.origin.x == Approx(b2.origin.x).margin(1e-6));
+  REQUIRE(b1.origin.y == Approx(b2.origin.y).margin(1e-6));
+  REQUIRE(b1.origin.z == Approx(b2.origin.z).margin(1e-6));
+}
+
+TEST_CASE("REQ-309 switching projection leaves orthographic output untouched", "[camera][req309]") {
+  // The regression guard: adding the projection selector must not perturb the orthographic path,
+  // because REQ-058's plan-view parity guarantee rests on it. Switching to perspective and back
+  // must reproduce the original pixel exactly, not merely closely.
+  constexpr float kW = 640.f, kH = 480.f;
+  Camera cam = Camera::Plan(1200.0, 900.0, 30.f);
+  cam.azimuthDeg = 20.f;
+  cam.elevationDeg = 70.f;
+
+  float ax = 0.f, ay = 0.f;
+  cam.WorldToScreen(1210.0, 890.0, 5.0, kW, kH, &ax, &ay);
+
+  cam.projection = Camera::Projection::Perspective;
+  float px = 0.f, py = 0.f;
+  cam.WorldToScreen(1210.0, 890.0, 5.0, kW, kH, &px, &py);
+
+  cam.projection = Camera::Projection::Orthographic;
+  float bx = 0.f, by = 0.f;
+  cam.WorldToScreen(1210.0, 890.0, 5.0, kW, kH, &bx, &by);
+
+  REQUIRE(bx == ax);
+  REQUIRE(by == ay);
+  // And the perspective result genuinely differed, so the test above is not vacuous.
+  REQUIRE(std::fabs(px - ax) + std::fabs(py - ay) > 1e-3f);
+}
+
+TEST_CASE("REQ-309 default camera is orthographic at the default FOV", "[camera][req309]") {
+  // REQ-309: orthographic is the default everywhere, which is what keeps REQ-058's plan-view
+  // parity intact for every drawing that never asks for perspective.
+  const Camera c;
+  REQUIRE(c.projection == Camera::Projection::Orthographic);
+  REQUIRE(c.fovDeg == kDefaultFovDeg);
+  REQUIRE(kDefaultFovDeg > kMinFovDeg);
+  REQUIRE(kDefaultFovDeg < kMaxFovDeg);
 }

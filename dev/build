@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 # dev/build — invoke GoSurvey's canonical Windows build.
 #
-# Delegates to build.bat (sources vcvars64, configures the ninja-release preset
-# on first run, then `cmake --build build`). Extra arguments are forwarded to
+# Delegates to build.bat (sources vcvars64, configures the preset on first run,
+# then `cmake --build`). An optional first argument `release` / `debug` selects
+# the configuration (default: release); anything after it is forwarded to
 # `cmake --build`, e.g.:
 #
-#   ./dev/build                       # incremental release build
-#   ./dev/build --target GoSurveyTests
-#   ./dev/build --clean-first
-#   ./dev/build -- -v                 # verbose ninja output
+#   ./dev/build                       # incremental release build  -> build/
+#   ./dev/build debug                 # incremental debug build    -> build/debug/
+#   ./dev/build release --target GoSurveyTests
+#   ./dev/build debug --clean-first
+#   ./dev/build -- -v                 # verbose ninja output (release)
+#
+# `debug` uses the ninja-debug preset, which enables the Developer Shell and
+# needs third_party/imgui_test_engine/ vendored — see build.bat's header if the
+# first debug configure fails.
 #
 # Exit code is build.bat's exit code (0 = success, non-zero = failure).
 source "$(dirname "$0")/_common.sh"
 
-info "building GoSurvey (Windows MSVC/Ninja, release) ..."
+info "building GoSurvey (Windows MSVC/Ninja) ..."
 # `.\` is required: this shell runs with NoDefaultCurrentDirectoryInExePath set,
 # so cmd.exe will not resolve build.bat from the working directory alone.
 win_cmd "call .\\build.bat $*"

@@ -1,0 +1,95 @@
+# A box selection in an ORBITED view must select what the fence actually encloses, on a work plane
+# that is not at elevation zero (user report, 2026-09-01).
+#
+# The defect: both the drawn selection rectangle and the region that selects projected their two
+# drag corners at Z = 0, while LINES project at their true Z ("lines are projected endpoint-wise and
+# stay exact" - ComputeSelectionFromRect's own note). On the world XY plane at elevation zero those
+# agree, and in plan view Z does not move a projection at all, so it was invisible in the default
+# view and in every existing transcript. Raise the work plane with ELEV, or tilt it with a UCS, and
+# the fence lands on pixels the mouse never visited.
+#
+# This is the first transcript to ORBIT the view, which is why the defect had no failing test
+# available to it: picking, snapping and box-selection all leave the plan-view XY path and become a
+# camera projection off plan view (REQ-058). Each case gets a fresh drawing, and each hit is paired
+# with a deliberate MISS - otherwise a stale selection would let a broken fence pass.
+
+# --- Plan view at elevation 50: the control ---------------------------------------------------------
+NEW
+CMD ELEV
+CMD 50
+ESC
+CMD LINE
+CMD 0,0
+CMD 20,0
+ESC
+EXPECT LINEXYZ 0 0 0 50 20 0 50
+BOX -10 -10 30 10
+EXPECT SELECTED 1
+
+NEW
+CMD ELEV
+CMD 50
+ESC
+CMD LINE
+CMD 0,0
+CMD 20,0
+ESC
+BOX 200 200 240 220
+EXPECT SELECTED 0
+
+# --- Orbited, work plane 50 feet up ------------------------------------------------------------------
+# Projected from Z = 0 the fence lands where the line is not, and this selects nothing.
+NEW
+CMD ELEV
+CMD 50
+ESC
+CMD LINE
+CMD 0,0
+CMD 20,0
+ESC
+VIEWANGLES -45 35
+BOX -10 -10 30 10
+EXPECT SELECTED 1
+
+NEW
+CMD ELEV
+CMD 50
+ESC
+CMD LINE
+CMD 0,0
+CMD 20,0
+ESC
+VIEWANGLES -45 35
+BOX 200 200 240 220
+EXPECT SELECTED 0
+
+# --- A second orientation, so it is not one lucky angle -----------------------------------------------
+NEW
+CMD ELEV
+CMD 50
+ESC
+CMD LINE
+CMD 0,0
+CMD 20,0
+ESC
+VIEWANGLES 120 20
+BOX -10 -10 30 10
+EXPECT SELECTED 1
+
+# --- A TILTED work plane (a UCS), which is what the report was about -----------------------------------
+# UCS ZAxis puts the work plane's normal along the given direction, so its XY plane is tilted and a
+# point on it has an elevation that VARIES across the plane rather than being constant.
+NEW
+CMD UCS ZA
+CMD 0,0
+CMD 1,0
+CMD LINE
+CMD 0,0
+CMD 0,20
+ESC
+EXPECT LINES 1
+VIEWANGLES -45 35
+BOX -10 -10 10 30
+EXPECT SELECTED 1
+
+CHECK ALL

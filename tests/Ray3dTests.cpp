@@ -99,6 +99,131 @@ TEST_CASE("Degenerate ray and degenerate plane are rejected, not NaN", "[ray3d]"
 }
 
 // ---------------------------------------------------------------------------
+// RayTriangleIntersect - how a solid's FACES are picked (REQ-318 / GitHub #148).
+//
+// A face is analytic, but a cursor can only be tested against the tessellation, so every face pick
+// runs through here and then projects onto the surface. These tests pin the arithmetic and, just as
+// importantly, the refusals: a click that hits no triangle must yield NO coordinate rather than a
+// plausible one (REQ-201).
+// ---------------------------------------------------------------------------
+
+namespace {
+// A unit triangle in the world XY plane: (0,0) (1,0) (0,1), wound CCW seen from +Z.
+const Vec3 kTa{0.0, 0.0, 0.0};
+const Vec3 kTb{1.0, 0.0, 0.0};
+const Vec3 kTc{0.0, 1.0, 0.0};
+}  // namespace
+
+TEST_CASE("A ray through a triangle's interior reports the hit point and its depth", "[ray3d]") {
+  Vec3 hit;
+  double t = 0.0, u = 0.0, v = 0.0;
+  REQUIRE(RayTriangleIntersect(DownAt(0.25, 0.25), kTa, kTb, kTc, &hit, &t, &u, &v));
+  REQUIRE(hit.x == Approx(0.25));
+  REQUIRE(hit.y == Approx(0.25));
+  REQUIRE(hit.z == Approx(0.0));
+  REQUIRE(t == Approx(100.0));  // DownAt starts at z = 100 and travels -Z
+  REQUIRE(u == Approx(0.25));   // barycentric along a->b
+  REQUIRE(v == Approx(0.25));   // barycentric along a->c
+}
+
+TEST_CASE("A ray outside the triangle but inside its plane reports no hit", "[ray3d]") {
+  // (0.8, 0.8) is beyond the hypotenuse: u + v > 1. The plane is hit, the TRIANGLE is not, and the
+  // difference is the whole point - a pick must not select a face the cursor is not over.
+  Vec3 hit{-1.0, -1.0, -1.0};
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(0.8, 0.8), kTa, kTb, kTc, &hit));
+  REQUIRE(hit.x == -1.0);  // untouched
+  REQUIRE(hit.y == -1.0);
+  REQUIRE(hit.z == -1.0);
+
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(-0.1, 0.5), kTa, kTb, kTc, &hit));  // u < 0
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(0.5, -0.1), kTa, kTb, kTc, &hit));  // v < 0
+}
+
+TEST_CASE("A triangle behind the ray origin is not hit", "[ray3d]") {
+  // Cursor below the triangle looking further down: the face is behind, so there is no pick.
+  Vec3 hit;
+  const Ray up{{0.25, 0.25, -5.0}, {0.0, 0.0, -1.0}};
+  REQUIRE_FALSE(RayTriangleIntersect(up, kTa, kTb, kTc, &hit));
+}
+
+TEST_CASE("A ray parallel to the triangle's plane reports no hit", "[ray3d]") {
+  Vec3 hit;
+  const Ray along{{-5.0, 0.25, 0.0}, {1.0, 0.0, 0.0}};
+  REQUIRE_FALSE(RayTriangleIntersect(along, kTa, kTb, kTc, &hit));
+}
+
+TEST_CASE("A degenerate triangle is rejected, not divided by", "[ray3d]") {
+  Vec3 hit;
+  // Collinear "triangle": all three points on the X axis. It bounds no area and cannot be hit.
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(0.5, 0.0), Vec3{0, 0, 0}, Vec3{1, 0, 0}, Vec3{2, 0, 0}, &hit));
+  // All three points coincident.
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(0.0, 0.0), kTa, kTa, kTa, &hit));
+}
+
+TEST_CASE("A degenerate ray and a null out-param are rejected", "[ray3d]") {
+  Vec3 hit;
+  const Ray zero{{0.25, 0.25, 100.0}, {0.0, 0.0, 0.0}};
+  REQUIRE_FALSE(RayTriangleIntersect(zero, kTa, kTb, kTc, &hit));
+  REQUIRE_FALSE(RayTriangleIntersect(DownAt(0.25, 0.25), kTa, kTb, kTc, nullptr));
+}
+
+TEST_CASE("Winding does not decide whether a triangle is hit", "[ray3d]") {
+  // A solid's tessellation winds every triangle outward, so a face seen from inside the solid -
+  // which is what a section view or a pick through a bore shows - presents its back. Refusing a
+  // back-facing hit here would make those faces unpickable, so the test pins that it is hit.
+  Vec3 hit;
+  REQUIRE(RayTriangleIntersect(DownAt(0.25, 0.25), kTa, kTc, kTb, &hit));  // reversed winding
+  REQUIRE(hit.z == Approx(0.0));
+}
+
+TEST_CASE("A hit exactly on a shared edge is reported by both triangles", "[ray3d]") {
+  // Two triangles meeting along the line x + y = 1, forming the unit square. A ray down the shared
+  // edge must hit at least one - and here both - rather than falling through the crack between
+  // them. Across FACES the solid tessellation is deliberately unwelded, so this is the case that
+  // decides whether a click on a solid's silhouette selects anything at all.
+  const Vec3 d{1.0, 1.0, 0.0};
+  Vec3 h1, h2;
+  const bool first = RayTriangleIntersect(DownAt(0.5, 0.5), kTa, kTb, kTc, &h1);
+  const bool second = RayTriangleIntersect(DownAt(0.5, 0.5), kTb, d, kTc, &h2);
+  REQUIRE(first);
+  REQUIRE(second);
+  REQUIRE(h1.z == Approx(0.0));
+  REQUIRE(h2.z == Approx(0.0));
+}
+
+TEST_CASE("A small triangle at state-plane coordinates is hit accurately", "[ray3d]") {
+  // The REQ-101 stress case: an absolute epsilon on the determinant would reject this outright,
+  // which is why the degeneracy test is scale-relative. A 0.25 ft feature at easting 2e6 is an
+  // ordinary thing in a survey drawing.
+  const double ex = 2000000.0, ny = 500000.0;
+  const Vec3 a{ex, ny, 12.0};
+  const Vec3 b{ex + 0.25, ny, 12.0};
+  const Vec3 c{ex, ny + 0.25, 12.0};
+  Vec3 hit;
+  double t = 0.0;
+  REQUIRE(RayTriangleIntersect(Ray{{ex + 0.05, ny + 0.05, 112.0}, {0.0, 0.0, -1.0}}, a, b, c, &hit, &t));
+  REQUIRE(hit.x == Approx(ex + 0.05));
+  REQUIRE(hit.y == Approx(ny + 0.05));
+  REQUIRE(hit.z == Approx(12.0).margin(1e-9));
+  REQUIRE(t == Approx(100.0));
+}
+
+TEST_CASE("An oblique ray hits a tilted triangle where the geometry says", "[ray3d]") {
+  // A 45-degree triangle in the XZ-ish plane, hit by a horizontal ray: confirms the routine is not
+  // quietly assuming a horizontal face.
+  const Vec3 a{0.0, -1.0, 0.0};
+  const Vec3 b{0.0, 1.0, 0.0};
+  const Vec3 c{0.0, 0.0, 2.0};
+  Vec3 hit;
+  double t = 0.0;
+  REQUIRE(RayTriangleIntersect(Ray{{-4.0, 0.0, 0.5}, {1.0, 0.0, 0.0}}, a, b, c, &hit, &t));
+  REQUIRE(hit.x == Approx(0.0));
+  REQUIRE(hit.y == Approx(0.0));
+  REQUIRE(hit.z == Approx(0.5));
+  REQUIRE(t == Approx(4.0));
+}
+
+// ---------------------------------------------------------------------------
 // RaySegmentDistance — how picking works once the camera tilts.
 // ---------------------------------------------------------------------------
 
@@ -173,4 +298,152 @@ TEST_CASE("Elevation separates points that are coincident in plan", "[ray3d]") {
   const Ray alongX{{-100.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
   REQUIRE(RayPointDistance(alongX, Vec3{0.0, 0.0, 0.0}) == Approx(0.0).margin(1e-9));
   REQUIRE(RayPointDistance(alongX, Vec3{0.0, 0.0, 15.0}) == Approx(15.0));
+}
+
+// ---------------------------------------------------------------------------
+// RotateVectorAboutAxis / RotatePointAboutAxis — REQ-328, the general primitive Polar ARRAY's
+// tilted-UCS case (and eventually solid rotation / 3D ROTATE) is built on.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("RotatePointAboutAxis about world Z through the origin matches plain 2D rotation", "[ray3d][req328]") {
+  // REQ-328's own regression guard: the Z-through-origin case must reproduce
+  // CadCommands.cpp's RotateAroundBase bit-for-bit-equivalent arithmetic (x'=bx+c*dx-s*dy,
+  // y'=by+s*dx+c*dy), not a parallel formula that could silently drift from it.
+  const Vec3 axisPoint{0.0, 0.0, 0.0};
+  const Vec3 axisUnit{0.0, 0.0, 1.0};
+  const double rad = 1.2;  // an arbitrary angle, deliberately not a "nice" multiple of pi/2
+  const Vec3 p{3.0, 4.0, 7.5};
+  const Vec3 got = RotatePointAboutAxis(p, axisPoint, axisUnit, rad);
+  const double c = std::cos(rad);
+  const double s = std::sin(rad);
+  REQUIRE(got.x == Approx(c * p.x - s * p.y));
+  REQUIRE(got.y == Approx(s * p.x + c * p.y));
+  REQUIRE(got.z == Approx(p.z));  // a Z-axis rotation never touches elevation
+}
+
+TEST_CASE("RotatePointAboutAxis about world Z through an off-origin point matches RotateAroundBase", "[ray3d][req328]") {
+  const Vec3 axisPoint{10.0, -5.0, 3.0};
+  const Vec3 axisUnit{0.0, 0.0, 1.0};
+  const double rad = -0.7;
+  const Vec3 p{13.0, -1.0, 20.0};
+  const Vec3 got = RotatePointAboutAxis(p, axisPoint, axisUnit, rad);
+  const double c = std::cos(rad);
+  const double s = std::sin(rad);
+  const double dx = p.x - axisPoint.x;
+  const double dy = p.y - axisPoint.y;
+  REQUIRE(got.x == Approx(axisPoint.x + c * dx - s * dy));
+  REQUIRE(got.y == Approx(axisPoint.y + s * dx + c * dy));
+  REQUIRE(got.z == Approx(p.z));  // Z-axis rotation: the axis point's own Z is irrelevant to output Z
+}
+
+TEST_CASE("RotateVectorAboutAxis about a genuinely tilted axis, checked by hand", "[ray3d][req328]") {
+  // Axis = world X, angle = 90 degrees: +Y rotates onto +Z, +Z rotates onto -Y (right-hand rule).
+  const Vec3 axisUnit{1.0, 0.0, 0.0};
+  const double rad = 3.14159265358979323846 / 2.0;
+  const Vec3 gotY = RotateVectorAboutAxis(Vec3{0.0, 1.0, 0.0}, axisUnit, rad);
+  REQUIRE(gotY.x == Approx(0.0).margin(1e-9));
+  REQUIRE(gotY.y == Approx(0.0).margin(1e-9));
+  REQUIRE(gotY.z == Approx(1.0));
+  const Vec3 gotZ = RotateVectorAboutAxis(Vec3{0.0, 0.0, 1.0}, axisUnit, rad);
+  REQUIRE(gotZ.x == Approx(0.0).margin(1e-9));
+  REQUIRE(gotZ.y == Approx(-1.0));
+  REQUIRE(gotZ.z == Approx(0.0).margin(1e-9));
+  // The axis itself is a fixed point of its own rotation.
+  const Vec3 gotAxis = RotateVectorAboutAxis(axisUnit, axisUnit, rad);
+  REQUIRE(gotAxis.x == Approx(1.0));
+  REQUIRE(gotAxis.y == Approx(0.0).margin(1e-9));
+  REQUIRE(gotAxis.z == Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("RotatePointAboutAxis about a tilted axis translates then rotates then translates back", "[ray3d][req328]") {
+  // Axis: the vertical line... no, the LINE x=5,z=0 running along world Y (direction (0,1,0)),
+  // angle 90 degrees. A point on the axis is unmoved; a point off the axis sweeps around it.
+  const Vec3 axisPoint{5.0, 0.0, 0.0};
+  const Vec3 axisUnit{0.0, 1.0, 0.0};
+  const double rad = 3.14159265358979323846 / 2.0;
+  // On the axis: unchanged regardless of Y (translation along the axis direction is free).
+  const Vec3 onAxis = RotatePointAboutAxis(Vec3{5.0, 42.0, 0.0}, axisPoint, axisUnit, rad);
+  REQUIRE(onAxis.x == Approx(5.0));
+  REQUIRE(onAxis.y == Approx(42.0));
+  REQUIRE(onAxis.z == Approx(0.0).margin(1e-9));
+  // Off the axis: (8,0,0) is offset (3,0,0) from the axis point; rotating +X by 90 deg about +Y
+  // sends +X to -Z (right-hand rule: Y cross X = -Z, matches Rodrigues with k=(0,1,0), v=(1,0,0):
+  // k x v = (0*0-1*0, 1*1-0*0, 0*0-1*1) = (0,1,-1)... computed directly below instead of asserted
+  // by a second hand-rule sentence, to avoid two independently-fallible derivations agreeing by luck.
+  const Vec3 off = RotatePointAboutAxis(Vec3{8.0, 0.0, 0.0}, axisPoint, axisUnit, rad);
+  REQUIRE(off.y == Approx(0.0).margin(1e-9));
+  // Distance from the axis line is preserved by any rotation about it.
+  const double distBefore = std::sqrt((8.0 - 5.0) * (8.0 - 5.0));
+  const double distAfter = std::sqrt((off.x - 5.0) * (off.x - 5.0) + off.z * off.z);
+  REQUIRE(distAfter == Approx(distBefore));
+}
+
+TEST_CASE("RotateVectorAboutAxis ignores axis point, a direction has no position", "[ray3d][req328]") {
+  const Vec3 axisUnit{0.0, 0.0, 1.0};
+  const double rad = 0.9;
+  const Vec3 v{2.0, 5.0, -3.0};
+  // Rotating the vector directly must equal rotating it as a "point" about an axis through the
+  // origin — the whole point of the two-function split (REQ-328 item 1).
+  const Vec3 viaVector = RotateVectorAboutAxis(v, axisUnit, rad);
+  const Vec3 viaPoint = RotatePointAboutAxis(v, Vec3{0.0, 0.0, 0.0}, axisUnit, rad);
+  REQUIRE(viaVector.x == Approx(viaPoint.x));
+  REQUIRE(viaVector.y == Approx(viaPoint.y));
+  REQUIRE(viaVector.z == Approx(viaPoint.z));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// ReflectPointAcrossPlane / ReflectVectorAcrossPlane — REQ-329 increment 5 (MIRROR across a tilted
+// work plane). A reflection is an involution and an isometry.
+// ---------------------------------------------------------------------------------------------------
+
+TEST_CASE("ReflectPointAcrossPlane about a world-vertical plane matches the 2D line reflection",
+          "[ray3d][req329]") {
+  // The plane through the world Y axis with normal +X (i.e. the mirror line is the world Y axis on
+  // the ground): a point at (7, 3, 2) reflects to (-7, 3, 2).
+  const Vec3 planePt{0.0, 0.0, 0.0};
+  const Vec3 n{1.0, 0.0, 0.0};
+  const Vec3 got = ReflectPointAcrossPlane(Vec3{7.0, 3.0, 2.0}, planePt, n);
+  REQUIRE(got.x == Approx(-7.0));
+  REQUIRE(got.y == Approx(3.0));
+  REQUIRE(got.z == Approx(2.0));
+}
+
+TEST_CASE("ReflectPointAcrossPlane across a tilted plane, checked by hand and by involution",
+          "[ray3d][req329]") {
+  // Plane through (1,2,3) with unit normal (0, 1, 1)/sqrt(2) — a 45-degree plane. Reflecting a
+  // point twice returns it exactly; a point already on the plane is fixed.
+  const Vec3 planePt{1.0, 2.0, 3.0};
+  const double s = 1.0 / std::sqrt(2.0);
+  const Vec3 n{0.0, s, s};
+  const Vec3 p{10.0, -4.0, 6.0};
+  const Vec3 once = ReflectPointAcrossPlane(p, planePt, n);
+  const Vec3 twice = ReflectPointAcrossPlane(once, planePt, n);
+  REQUIRE(twice.x == Approx(p.x));
+  REQUIRE(twice.y == Approx(p.y));
+  REQUIRE(twice.z == Approx(p.z));
+  // signed distance to the plane flips sign, magnitude preserved.
+  const double dBefore = (p.x - planePt.x) * n.x + (p.y - planePt.y) * n.y + (p.z - planePt.z) * n.z;
+  const double dAfter = (once.x - planePt.x) * n.x + (once.y - planePt.y) * n.y + (once.z - planePt.z) * n.z;
+  REQUIRE(dAfter == Approx(-dBefore));
+  // A point on the plane: (1,2,3) + a vector perpendicular to n, e.g. (5, 0, 0).
+  const Vec3 onPlane = ReflectPointAcrossPlane(Vec3{6.0, 2.0, 3.0}, planePt, n);
+  REQUIRE(onPlane.x == Approx(6.0));
+  REQUIRE(onPlane.y == Approx(2.0));
+  REQUIRE(onPlane.z == Approx(3.0));
+}
+
+TEST_CASE("ReflectVectorAcrossPlane negates the normal and fixes an in-plane direction",
+          "[ray3d][req329]") {
+  const double s = 1.0 / std::sqrt(2.0);
+  const Vec3 n{0.0, s, s};
+  const Vec3 gotN = ReflectVectorAcrossPlane(n, n);
+  REQUIRE(gotN.x == Approx(0.0).margin(1e-12));
+  REQUIRE(gotN.y == Approx(-s));
+  REQUIRE(gotN.z == Approx(-s));
+  // A direction lying in the plane (perpendicular to n) is unchanged.
+  const Vec3 inPlane{1.0, 0.0, 0.0};
+  const Vec3 gotIn = ReflectVectorAcrossPlane(inPlane, n);
+  REQUIRE(gotIn.x == Approx(1.0));
+  REQUIRE(gotIn.y == Approx(0.0).margin(1e-12));
+  REQUIRE(gotIn.z == Approx(0.0).margin(1e-12));
 }

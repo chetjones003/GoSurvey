@@ -8,6 +8,10 @@ enum class Kind {
   Endpoint,
   Midpoint,
   Center,
+  /// One of the four "compass" points of a circle or arc: one radius from the centre along the
+  /// active UCS X and Y axes, projected onto the curve's own plane (REQ-330). N/E/S/W in a TOP
+  /// view with the world UCS, matching AutoCAD `QUA`.
+  Quadrant,
   Perpendicular,
   SurveyCenter,
   GeometricCenter,
@@ -19,18 +23,42 @@ enum class Kind {
   /// points differ, the one nearer the camera is returned (REQ-062).
   ApparentIntersection,
   Grip,
-  Surface
+  Surface,
+  /// A point on a B-rep solid's EDGE (REQ-313). The nearest point along the edge itself, clamped to
+  /// its extent — so on a cylinder's rim the answer is on the circle, not on the chord the
+  /// tessellator drew across it.
+  Edge,
+  /// A point on a B-rep solid's FACE (REQ-313). The cursor ray is tested against the face's
+  /// triangles to decide WHICH face is under it, and the hit is then projected onto that face's
+  /// analytic surface — so the returned point lies exactly on the cylinder, not on a chord that is
+  /// a sagitta short of it (#120: "the resulting point should lie exactly on the selected face").
+  Face,
+  /// The centroid of a B-rep solid FACE (REQ-325/#395, "3D Object Snap" -> "Center of face"),
+  /// AutoCAD-parity mode independent of `Face`'s "nearest point under the cursor". Supported for
+  /// every face type including NURBS (freeform LOFT/SWEEP): planar faces get an exact area-weighted
+  /// polygon centroid (`brep::PlanarFaceCentroid`), curved faces (including Nurbs) get a
+  /// triangulation-based area-weighted centroid projected back onto the analytic surface.
+  CenterOfFace,
+  /// A knot point of a NURBS (freeform) face's parametrization (REQ-325/#395, AutoCAD "Knot"). Only
+  /// meaningful for `brep::SurfaceKind::Nurbs` faces — the distinct knot values of the patch's U and
+  /// V knot vectors, evaluated on the surface.
+  Knot
 };
 
 struct Hit {
   bool valid = false;
   Kind kind = Kind::Endpoint;
-  float x = 0.f;
-  float y = 0.f;
+  double x = 0.0;
+  double y = 0.0;
   /// Elevation of the snapped point (REQ-057/058). Without it the snap glyph is drawn on the
   /// datum while the point it marks sits at its own elevation, so the marker floats away from the
   /// geometry as soon as the view is orbited. Zero for flat drawings, which is every pre-3D one.
-  float z = 0.f;
+  double z = 0.0;
+  /// True when this candidate came from the 3D Object Snap system (REQ-325/#395) rather than the 2D
+  /// one — used only to color the glyph (3D Object Snap purple #8803fc vs 2D Object Snap green), so
+  /// a user can tell at a glance which snap system answered, even for a kind (Endpoint, Midpoint,
+  /// Perpendicular) shared between both.
+  bool solid = false;
 };
 
 struct SnapCandidateEntry {
@@ -85,6 +113,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 2; ///< Same tier as circle center; distance breaks ties
   case Kind::Center:
     return 2; ///< Circle centers beat segment midpoint when snap distances tie
+  case Kind::Quadrant:
+    return 2; ///< Same tier as Center (REQ-330); distance breaks ties
   case Kind::Intersection:
     return 3; ///< As precise a feature as an endpoint — a real crossing of two objects (REQ-062)
   case Kind::GeometricCenter:
@@ -97,6 +127,14 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 0;
   case Kind::Surface:
     return 0;  ///< Weaker than endpoints so vertices still win (REQ-127).
+  case Kind::Edge:
+    return 1;  ///< As strong a claim as a midpoint: a real curve, but any point along it (REQ-313).
+  case Kind::Face:
+    return 0;  ///< The weakest solid claim — a vertex or an edge under the same cursor must win.
+  case Kind::CenterOfFace:
+    return 0;  ///< Same tier as Face: a computed point on the same face, not a stronger claim.
+  case Kind::Knot:
+    return 1;  ///< A named parametric feature of the surface — as strong a claim as an edge midpoint.
   case Kind::Grip:
     return 4; ///< Beats all geometry snaps; no glyph is drawn for this kind.
   }

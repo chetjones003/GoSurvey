@@ -28,7 +28,7 @@
 struct TinInputPoint {
   double x = 0.0;
   double y = 0.0;
-  float  z = 0.f;
+  double z = 0.0;
 };
 
 /// Why a build produced no surface. Every one of these is reported, never absorbed (REQ-201).
@@ -42,8 +42,10 @@ struct TinBuildResult {
   TinBuildStatus status = TinBuildStatus::TooFewPoints;
 
   /// Interleaved x,y,z (architecture §11.8), one triplet per surviving vertex. De-duplicated: see
-  /// \ref duplicatesDropped.
-  std::vector<float> vertsXyz;
+  /// \ref duplicatesDropped. `double` (Phase G, issue #453, ADR-054): TIN/surface vertex storage is
+  /// authoritative geometry, so it holds REQ-101's ±0.002 ft the same as every other store; the
+  /// `float` narrowing moves to the GPU-upload boundary (ADR-054 (b)).
+  std::vector<double> vertsXyz;
   /// Triangle list, 3 indices per triangle into \ref vertsXyz. Every triangle is counter-clockwise.
   std::vector<std::uint32_t> indices;
 
@@ -77,9 +79,9 @@ struct TinBuildResult {
 /// side, closing back to the first vertex.
 struct TinConstraint {
   double ax = 0.0, ay = 0.0;
-  float  az = 0.f;
+  double az = 0.0;
   double bx = 0.0, by = 0.0;
-  float  bz = 0.f;
+  double bz = 0.0;
 };
 
 /// Two constraint segments that cross in plan but disagree on elevation at the crossing point, by
@@ -89,7 +91,7 @@ struct TinCrossingIssue {
   size_t constraintIndexA = 0;
   size_t constraintIndexB = 0;
   double x = 0.0, y = 0.0;
-  float  zFromA = 0.f, zFromB = 0.f;
+  double zFromA = 0.0, zFromB = 0.0;
 };
 
 /// Finds every pair of \p constraints that cross in plan with a Z disagreement at the crossing point.
@@ -97,9 +99,12 @@ struct TinCrossingIssue {
 /// triangulation, so it can run before \ref BuildTin is even called and be reported up front.
 [[nodiscard]] std::vector<TinCrossingIssue> TinFindCrossingConflicts(const std::vector<TinConstraint>& constraints);
 
-/// Plan-distance below which two points are the same site. Matches REQ-101's ±0.01 ft: two shots
-/// closer than this in plan cannot be distinguished by the tolerance the rest of the system works to,
-/// and feeding both to Delaunay is undefined.
+/// Plan-distance below which two points are the same site — a field-shot de-dup threshold, not the
+/// REQ-101 coordinate-storage guarantee (issue #394/#444/#453, D-2026-09-08-i): even though TIN
+/// vertex storage now holds `double` (Phase G, ADR-054), this constant decides whether two SHOTS are
+/// the same ground position, a surveying/data-quality judgment independent of what the store can
+/// represent. Left at 0.01 ft — tightening it would start treating distinct nearby shots as
+/// duplicates, which is not what Phase G's storage widening was for.
 inline constexpr double kTinPlanEpsilon = 0.01;
 
 /// Triangulate \p points in plan (X/Y), carrying Z through to the output vertices, honouring every
@@ -139,7 +144,7 @@ struct TinBoundaryLoop {
 ///
 /// \p indices is filtered in place; \p vertsXyz is left untouched (culled vertices simply go
 /// unreferenced, exactly as convex-hull exclusion already works in \ref BuildTin).
-void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz,
+void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<double>& vertsXyz,
                          const std::vector<TinBoundaryLoop>& loops);
 
 /// Plan containment by ray casting (winding-independent). Empty ring is outside.
@@ -157,8 +162,8 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
 /// per triangle makes concavities, and later REQ-069's boundary voids, outside by construction:
 /// there is simply no triangle there.
 ///
-/// The arithmetic is done in `double` even though the vertices are `float` (architecture §11.8).
-/// At state-plane magnitudes a barycentric solve in float loses far more than REQ-101's ±0.01 ft to
+/// The arithmetic is done in `double`, matching the `double` vertex storage (Phase G, ADR-054): at
+/// state-plane magnitudes a barycentric solve in `float` loses far more than REQ-101's ±0.002 ft to
 /// cancellation — the same failure BUG-001 hit in picking and ADR-028 (d) recorded for the
 /// triangulation predicates.
 ///
@@ -168,7 +173,7 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
 ///
 /// \param outZ receives the elevation; untouched when the point is not on the surface.
 /// \returns true when a triangle covers the point.
-[[nodiscard]] bool TinElevationAt(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+[[nodiscard]] bool TinElevationAt(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
                                   double x, double y, double* outZ);
 
 /// One triangle's containment/plane-eval test — the inner loop \ref TinElevationAt runs once per
@@ -178,7 +183,7 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
 ///
 /// \returns true and writes \p outZ when (\p x, \p y) is inside triangle (\p ia, \p ib, \p ic);
 ///          false, \p outZ untouched, for outside, a degenerate triangle, or an out-of-range index.
-[[nodiscard]] bool TinTriangleElevationAt(const std::vector<float>& vertsXyz, std::uint32_t ia,
+[[nodiscard]] bool TinTriangleElevationAt(const std::vector<double>& vertsXyz, std::uint32_t ia,
                                           std::uint32_t ib, std::uint32_t ic, double x, double y,
                                           double* outZ);
 
@@ -195,17 +200,17 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
 ///
 /// \param out receives flat x,y,z pairs — six floats per border edge, the layout the line renderer
 ///            and the highlight buffer both already consume. Cleared first.
-void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+void TinBorderEdges(const std::vector<double>& vertsXyz, const std::vector<std::uint32_t>& indices,
                     std::vector<float>* out);
 
 /// Flip the interior edge nearest (\p x, \p y) in plan. Writes a new index array when successful.
 /// False when the pick is not on an interior edge (REQ-139).
-[[nodiscard]] bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std::uint32_t>& indices,
+[[nodiscard]] bool TinSwapInteriorEdgeNear(const std::vector<double>& vertsXyz, std::vector<std::uint32_t>& indices,
                                            double x, double y);
 
 /// Remove the two triangles that share the interior edge nearest (\p x, \p y) in plan (REQ-150).
 /// False when the pick is not on an interior edge.
-[[nodiscard]] bool TinDeleteInteriorEdgeNear(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz,
+[[nodiscard]] bool TinDeleteInteriorEdgeNear(std::vector<std::uint32_t>& indices, const std::vector<double>& vertsXyz,
                                              double x, double y);
 
 // --- Predicates, exposed for testing -----------------------------------------------------------

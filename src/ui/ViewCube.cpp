@@ -179,35 +179,28 @@ Result Draw(ImDrawList* dl, const Camera& cam, float originX, float originY, flo
   RotationArrow(dl, cx, cy, arrR, kArrowMidDeg + kArrowGapDeg, /*ccw=*/true, arrCcwHot);
   RotationArrow(dl, cx, cy, arrR, kArrowMidDeg - kArrowGapDeg, /*ccw=*/false, arrCwHot);
 
-  // ---- compass ring ----------------------------------------------------------------------------
-  dl->AddCircleFilled(ImVec2(cx, cy), ringR, IM_COL32(48, 52, 60, 210), 48);
-  dl->AddCircle(ImVec2(cx, cy), ringR, IM_COL32(96, 102, 112, 255), 48, 1.5f);
-
-  // Compass letters sit where their direction actually projects, so they stay truthful at any
-  // orientation (they converge as the view goes edge-on rather than lying about where north is).
-  // Directions are expressed in the ACTIVE coordinate system: under a rotated UCS, "N" points
-  // along the UCS's north, which is what the rotation arrows below square up to.
-  struct Compass { float deg; const char* s; };
-  const Compass kCompass[4] = {{0.f, "N"}, {90.f, "E"}, {180.f, "S"}, {270.f, "W"}};
-  for (const Compass& c : kCompass) {
-    const float a = (c.deg + ucsAzimuthOffsetDeg) * kDeg;
-    const float wx = std::sin(a);  // 0 deg = +Y (north), 90 deg = +X (east)
-    const float wy = std::cos(a);
-    const float camX = R[0] * wx + R[4] * wy;
-    const float camY = R[1] * wx + R[5] * wy;
-    const float len = std::sqrt(camX * camX + camY * camY);
-    if (len < 1e-4f)
-      continue;  // edge-on: no stable place for the letter
-    const float lx = cx + (camX / len) * (ringR * 0.80f);
-    const float ly = cy - (camY / len) * (ringR * 0.80f);
-    const ImVec2 ts = ImGui::CalcTextSize(c.s);
-    dl->AddText(ImVec2(lx - ts.x * 0.5f, ly - ts.y * 0.5f), IM_COL32(222, 226, 234, 255), c.s);
+  // ---- compass ring (horizontal ground plane, like AutoCAD) ------------------------------------
+  // N/E/S/W sit on a circle in the active XY plane at the cube base. The ring is projected with
+  // the same camera as the cube so it tilts with the view instead of staying a flat screen disc.
+  const float ucsRad = ucsAzimuthOffsetDeg * kDeg;
+  const float groundR = ringR / cubeScale;
+  constexpr float kGroundZ = -0.92f;  // cube-local Z at the base — the "ground" under the cube
+  constexpr int kRingSeg = 48;
+  ImVec2 ringPts[kRingSeg];
+  for (int i = 0; i < kRingSeg; ++i) {
+    const float a = ucsRad + (static_cast<float>(i) / static_cast<float>(kRingSeg)) * (2.f * kPi);
+    float sx = 0.f, sy = 0.f, dz = 0.f;
+    proj(groundR * std::sin(a), groundR * std::cos(a), kGroundZ, &sx, &sy, &dz);
+    ringPts[i] = ImVec2(sx, sy);
   }
+  dl->AddConvexPolyFilled(ringPts, kRingSeg, IM_COL32(48, 52, 60, 210));
+  dl->AddPolyline(ringPts, kRingSeg, IM_COL32(96, 102, 112, 255), ImDrawFlags_Closed, 1.5f);
 
   // ---- cube --------------------------------------------------------------------------------------
   struct Drawn {
     int face;
     float depth;
+    float nz;
     ImVec2 pts[4];
     bool visible;
   };
@@ -226,8 +219,8 @@ Result Draw(ImDrawList* dl, const Camera& cam, float originX, float originY, flo
       d.depth += dz;
     }
     d.depth *= 0.25f;
-    const float nz = R[2] * f.nx + R[6] * f.ny + R[10] * f.nz;
-    d.visible = nz > 0.01f;
+    d.nz = R[2] * f.nx + R[6] * f.ny + R[10] * f.nz;
+    d.visible = d.nz > 0.01f;
   }
   std::sort(drawn, drawn + 6, [](const Drawn& a, const Drawn& b) { return a.depth < b.depth; });
 
@@ -249,8 +242,9 @@ Result Draw(ImDrawList* dl, const Camera& cam, float originX, float originY, flo
     dl->AddConvexPolyFilled(d.pts, 4, hot ? IM_COL32(120, 150, 190, 245) : IM_COL32(150, 154, 162, 235));
     dl->AddPolyline(d.pts, 4, IM_COL32(70, 74, 82, 255), ImDrawFlags_Closed, 1.4f);
 
-    // EVERY visible face is labelled, shrunk to fit its projected width. Dropping labels that did
-    // not fit (the first implementation) meant BOTTOM and FRONT silently never appeared.
+    // Label every face that is clearly facing the camera (not a grazing sliver during orbit).
+    // Shrunk to fit its projected width — dropping labels that did not fit meant BOTTOM and FRONT
+    // silently never appeared in the first implementation.
     const Face& f = kFaces[d.face];
     float lx = 0.f, ly = 0.f, mnX = 1e30f, mxX = -1e30f;
     for (int k = 0; k < 4; ++k) {
@@ -262,8 +256,59 @@ Result Draw(ImDrawList* dl, const Camera& cam, float originX, float originY, flo
     lx *= 0.25f;
     ly *= 0.25f;
     const float availW = (mxX - mnX) * 0.86f;
-    if (availW > 8.f)
+    if (availW > 8.f && d.nz > 0.28f)
       CenteredLabel(dl, lx, ly, f.label, IM_COL32(28, 30, 36, 255), availW);
+  }
+
+  // ---- compass labels (on the ground ring, drawn over the cube rim) ----------------------------
+  struct CompassDir {
+    float deg;
+    const char* text;
+  };
+  const CompassDir kCompass[4] = {{0.f, "N"}, {90.f, "E"}, {180.f, "S"}, {270.f, "W"}};
+  struct CompassLabel {
+    const char* text;
+    float lx;
+    float ly;
+    float depth;
+    bool keep;
+  };
+  CompassLabel compass[4];
+  for (int i = 0; i < 4; ++i) {
+    const float a = ucsRad + kCompass[i].deg * kDeg;
+    float sx = 0.f, sy = 0.f, dz = 0.f;
+    proj(groundR * std::sin(a), groundR * std::cos(a), kGroundZ, &sx, &sy, &dz);
+    compass[i] = {kCompass[i].text, sx, sy, dz, true};
+  }
+  // Only suppress a label when two bearings collapse to the same screen spot (edge-on views).
+  for (int i = 0; i < 4; ++i) {
+    for (int j = i + 1; j < 4; ++j) {
+      if (compass[j].depth > compass[i].depth)
+        std::swap(compass[i], compass[j]);
+    }
+  }
+  constexpr float kLabelStackPx = 10.f;
+  const float stackSq = kLabelStackPx * kLabelStackPx;
+  for (int i = 0; i < 4; ++i) {
+    if (!compass[i].keep)
+      continue;
+    for (int j = 0; j < i; ++j) {
+      if (!compass[j].keep)
+        continue;
+      const float dx = compass[i].lx - compass[j].lx;
+      const float dy = compass[i].ly - compass[j].ly;
+      if (dx * dx + dy * dy < stackSq) {
+        compass[i].keep = false;
+        break;
+      }
+    }
+  }
+  for (int i = 0; i < 4; ++i) {
+    if (!compass[i].keep)
+      continue;
+    const ImVec2 ts = ImGui::CalcTextSize(compass[i].text);
+    dl->AddText(ImVec2(compass[i].lx - ts.x * 0.5f, compass[i].ly - ts.y * 0.5f), IM_COL32(222, 226, 234, 255),
+                compass[i].text);
   }
 
   // ---- interaction --------------------------------------------------------------------------------

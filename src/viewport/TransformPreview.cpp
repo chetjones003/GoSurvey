@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "geom2d.hpp"
+#include "gizmooverlay.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -9,18 +10,20 @@
 
 namespace {
 
-void rotatePreviewPt(float baseX, float baseY, float angleRad, float* inOutX, float* inOutY) {
-  const float c = std::cos(angleRad);
-  const float s = std::sin(angleRad);
-  const float dx = *inOutX - baseX;
-  const float dy = *inOutY - baseY;
-  *inOutX = baseX + c * dx - s * dy;
-  *inOutY = baseY + s * dx + c * dy;
+template <class T>
+void rotatePreviewPt(double baseX, double baseY, double angleRad, T* inOutX, T* inOutY) {
+  const double c = std::cos(angleRad);
+  const double s = std::sin(angleRad);
+  const double dx = static_cast<double>(*inOutX) - baseX;
+  const double dy = static_cast<double>(*inOutY) - baseY;
+  *inOutX = static_cast<T>(baseX + c * dx - s * dy);
+  *inOutY = static_cast<T>(baseY + s * dx + c * dy);
 }
 
-void scalePreviewPt(float baseX, float baseY, float scale, float* inOutX, float* inOutY) {
-  *inOutX = baseX + scale * (*inOutX - baseX);
-  *inOutY = baseY + scale * (*inOutY - baseY);
+template <class T>
+void scalePreviewPt(double baseX, double baseY, double scale, T* inOutX, T* inOutY) {
+  *inOutX = static_cast<T>(baseX + scale * (static_cast<double>(*inOutX) - baseX));
+  *inOutY = static_cast<T>(baseY + scale * (static_cast<double>(*inOutY) - baseY));
 }
 
 /// REQ-103 MIRROR. Reflects (*inOutX,*inOutY) across the line through (x0,y0)-(x1,y1). Kept local
@@ -28,17 +31,18 @@ void scalePreviewPt(float baseX, float baseY, float scale, float* inOutX, float*
 /// \c ReflectPtAcrossLine — the same reason \c rotatePreviewPt above duplicates
 /// \c RotateAroundBase instead of linking it: this file previews, it does not commit, and the two
 /// must never accidentally share mutable state across a TU boundary.
-void mirrorPreviewPt(float x0, float y0, float x1, float y1, float* inOutX, float* inOutY) {
-  const float dx = x1 - x0;
-  const float dy = y1 - y0;
-  const float len2 = dx * dx + dy * dy;
-  if (len2 < 1e-12f)
+template <class T>
+void mirrorPreviewPt(double x0, double y0, double x1, double y1, T* inOutX, T* inOutY) {
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12)
     return;
-  const float t = ((*inOutX - x0) * dx + (*inOutY - y0) * dy) / len2;
-  const float px = x0 + t * dx;
-  const float py = y0 + t * dy;
-  *inOutX = 2.f * px - *inOutX;
-  *inOutY = 2.f * py - *inOutY;
+  const double t = ((static_cast<double>(*inOutX) - x0) * dx + (static_cast<double>(*inOutY) - y0) * dy) / len2;
+  const double px = x0 + t * dx;
+  const double py = y0 + t * dy;
+  *inOutX = static_cast<T>(2.0 * px - static_cast<double>(*inOutX));
+  *inOutY = static_cast<T>(2.0 * py - static_cast<double>(*inOutY));
 }
 
 /// See \c ReflectAngleAcrossLine in CadCommands.cpp — same formula, same reason for the duplicate.
@@ -54,14 +58,50 @@ float g_previewOrthoHalfH = -1.f;
 int g_previewFbHeightPx = 0;
 int g_previewSmoothnessCap = 20000;
 
-void appendArcPolylineStrip(std::vector<float>* out, float z, const CadArc& a, int fallbackN) {
-  int n = fallbackN;
+/// Segment count for a curve of radius \p r at the current preview zoom.
+[[nodiscard]] int previewCurveSegments(float r, int fallbackN) {
   if (g_previewOrthoHalfH > 0.f && g_previewFbHeightPx > 0)
-    n = std::max(8, CircleTessellationSegmentCount(static_cast<double>(a.r),
-                                                   static_cast<double>(g_previewOrthoHalfH),
-                                                   g_previewFbHeightPx, g_previewSmoothnessCap));
+    return std::max(8, CircleTessellationSegmentCount(static_cast<double>(r),
+                                                      static_cast<double>(g_previewOrthoHalfH),
+                                                      g_previewFbHeightPx, g_previewSmoothnessCap));
+  return fallbackN;
+}
+
+void appendArcPolylineStrip(std::vector<float>* out, float z, const CadArc& a, int fallbackN) {
+  const int n = previewCurveSegments(a.r, fallbackN);
+  // A tilted arc (REQ-312) is walked in its own plane; every sample then carries its own Z, which
+  // the flat AppendArcLineSegments cannot express -- it takes one elevation for the whole strip.
+  if (!IsFlatNormal(a.nx, a.ny, a.nz)) {
+    AppendCurveWorldSegs(*out, CurvePlane(a), static_cast<double>(a.r), static_cast<double>(a.startRad),
+                         static_cast<double>(a.sweepRad), n);
+    return;
+  }
   AppendArcLineSegments(*out, static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.r),
                         static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), n, z);
+}
+
+/// One circle into the preview buffers, in the plane it actually lies in (REQ-312).
+///
+/// A flat circle goes into the circle buffer exactly as before, so every existing preview is
+/// unchanged. A tilted one is emitted as a tessellated strip into the LINE buffer instead: the
+/// preview circle buffer is a (cx, cy, z, r) quad with nowhere to put a normal, and this is the
+/// choice arcs have always made -- they have no circle buffer either and have always previewed as
+/// strips. Adding a fifth to seventh float to the quad would touch every producer and consumer of
+/// four separate preview buffers to carry a value that is +Z in every drawing that exists.
+void appendPreviewCircle(std::vector<float>* prevLines, std::vector<float>* prevCircles, float cx, float cy,
+                         float z, float r, float nx, float ny, float nz) {
+  if (IsFlatNormal(nx, ny, nz)) {
+    prevCircles->push_back(cx);
+    prevCircles->push_back(cy);
+    prevCircles->push_back(z);
+    prevCircles->push_back(r);
+    return;
+  }
+  constexpr double kTwoPiD = 6.283185307179586;
+  AppendCurveWorldSegs(*prevLines,
+                       CurvePlane(static_cast<double>(cx), static_cast<double>(cy), static_cast<double>(z),
+                                  static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)),
+                       static_cast<double>(r), 0.0, kTwoPiD, previewCurveSegments(r, 64));
 }
 
 void appendEllipsePolylineStrip(std::vector<float>* out, float z, const CadEllipse& el, int fallbackN) {
@@ -89,12 +129,86 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
       static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
   auto emit = [&](int a, int b) {
     const size_t A = static_cast<size_t>(a) * 3, B = static_cast<size_t>(b) * 3;
-    out->push_back(cmd.userPolylineVerts[A]);
-    out->push_back(cmd.userPolylineVerts[A + 1]);
-    out->push_back(cmd.userPolylineVerts[A + 2]);
-    out->push_back(cmd.userPolylineVerts[B]);
-    out->push_back(cmd.userPolylineVerts[B + 1]);
-    out->push_back(cmd.userPolylineVerts[B + 2]);
+    const float za = cmd.userPolylineVerts[A + 2];
+    // REQ-316 / ADR-047: a curved segment is traced as an arc, not a chord, so the selection /
+    // hover highlight follows the shape the renderer drew.
+    const float bulge =
+        static_cast<size_t>(a) < cmd.userPolylineVertsBulge.size() ? cmd.userPolylineVertsBulge[static_cast<size_t>(a)] : 0.f;
+    if (bulge == 0.f) {
+      out->push_back(cmd.userPolylineVerts[A]);
+      out->push_back(cmd.userPolylineVerts[A + 1]);
+      out->push_back(za);
+      out->push_back(cmd.userPolylineVerts[B]);
+      out->push_back(cmd.userPolylineVerts[B + 1]);
+      out->push_back(cmd.userPolylineVerts[B + 2]);
+      return;
+    }
+    // REQ-325 / ADR-053: this segment's own plane, when it is not flat +Z — the same construction
+    // the renderer's own AppendChainEdgesVc (ViewportRenderer.cpp) and PickClosestCadEntity's
+    // polySegD2 already use, so a tilted curve's highlight traces the curve actually drawn instead
+    // of a flat approximation sitting somewhere else entirely (a real report: a joined polyline's
+    // tilted arc segment never lit up yellow when the polyline was selected).
+    float nx = 0.f, ny = 0.f, nz = 1.f;
+    if (A + 2 < cmd.userPolylineVertsNormal.size()) {
+      nx = cmd.userPolylineVertsNormal[A];
+      ny = cmd.userPolylineVertsNormal[A + 1];
+      nz = cmd.userPolylineVertsNormal[A + 2];
+    }
+    const bool flat = IsFlatNormal(nx, ny, nz);
+    ucs::Ucs plane{};
+    BulgeArcSpan arc{};
+    if (flat) {
+      arc = BulgeArc(cmd.userPolylineVerts[A], cmd.userPolylineVerts[A + 1], cmd.userPolylineVerts[B],
+                     cmd.userPolylineVerts[B + 1], static_cast<double>(bulge));
+    } else if (ucs::FromNormal(ray3d::Vec3{cmd.userPolylineVerts[A], cmd.userPolylineVerts[A + 1], za},
+                               ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                           static_cast<double>(nz)},
+                               &plane)) {
+      const ucs::Point2D p1Local = ucs::WorldToPlane(
+          plane, ray3d::Vec3{cmd.userPolylineVerts[B], cmd.userPolylineVerts[B + 1], cmd.userPolylineVerts[B + 2]});
+      arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
+    }
+    if (!arc.valid) {
+      out->push_back(cmd.userPolylineVerts[A]);
+      out->push_back(cmd.userPolylineVerts[A + 1]);
+      out->push_back(za);
+      out->push_back(cmd.userPolylineVerts[B]);
+      out->push_back(cmd.userPolylineVerts[B + 1]);
+      out->push_back(cmd.userPolylineVerts[B + 2]);
+      return;
+    }
+    constexpr double kPi = 3.14159265358979323846;
+    const int n = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 24.0))), 2, 96);
+    auto sampleWorld = [&](double u, float* ox, float* oy, float* oz) {
+      const double lx = arc.cx + arc.radius * std::cos(u);
+      const double ly = arc.cy + arc.radius * std::sin(u);
+      if (flat) {
+        *ox = static_cast<float>(lx);
+        *oy = static_cast<float>(ly);
+        *oz = za;
+        return;
+      }
+      const ray3d::Vec3 wp = ucs::PlaneToWorld(plane, ucs::Point2D{lx, ly});
+      *ox = static_cast<float>(wp.x);
+      *oy = static_cast<float>(wp.y);
+      *oz = static_cast<float>(wp.z);
+    };
+    float px = 0.f, py = 0.f, pz = 0.f;
+    sampleWorld(arc.startAngle, &px, &py, &pz);
+    for (int s = 1; s <= n; ++s) {
+      const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / n);
+      float qx = 0.f, qy = 0.f, qz = 0.f;
+      sampleWorld(u, &qx, &qy, &qz);
+      out->push_back(px);
+      out->push_back(py);
+      out->push_back(pz);
+      out->push_back(qx);
+      out->push_back(qy);
+      out->push_back(qz);
+      px = qx;
+      py = qy;
+      pz = qz;
+    }
   };
   for (int vi = v0; vi + 1 < v1; ++vi)
     emit(vi, vi + 1);
@@ -220,7 +334,7 @@ void appendBreakRemovedSpan(std::vector<float>* out, const AppCommandState& cmd,
     } else {
       const float sgn = src.sweepRad >= 0.f ? 1.f : -1.f;
       const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
-      const float r = std::max(src.r, 1e-9f);
+      const double r = std::max(src.r, 1e-9);
       removed.startRad = src.startRad + sgn * (nearP / r);
       removed.sweepRad = sgn * ((farP - nearP) / r);
     }
@@ -359,10 +473,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
         if (k + 3 >= cmd.userCirclesCxCyZR.size())
           continue;
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k] + dx);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 1] + dy);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);  // z rides along unchanged
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+        float cnx = kFlatNormalX;
+        float cny = kFlatNormalY;
+        float cnz = kFlatNormalZ;
+        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);  // a translation cannot tilt a plane
+        appendPreviewCircle(prevLines, prevCircles, cmd.userCirclesCxCyZR[k] + dx,
+                            cmd.userCirclesCxCyZR[k + 1] + dy,
+                            cmd.userCirclesCxCyZR[k + 2],  // z rides along unchanged
+                            cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -412,15 +530,21 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  // REQ-305 ARRAY. Two local, per-instance append lambdas (translate / rotate-about-a-point) reuse
+  // REQ-305 ARRAY. Two local, per-instance append lambdas (translate / rotate-about-an-axis) reuse
   // the exact per-type walks the Move/Copy block above and the Rotate block below already do —
   // looped once per grid cell / polar item instead of once, so this is the same coverage
   // (LineSeg/Circle/Arc/Ellipse/Polyline/FeatureLine) as every other command's own preview, not a
   // new abstraction.
+  //
+  // GitHub issue #400 increment 4: both the translate delta and the rotation are computed IN THE
+  // ACTIVE UCS PLANE, mirroring `ArrayCellWorldDelta` / `RotateSelectionAboutAxis` at commit — so
+  // the ghost matches what the commit produces under a FRONT/orbited/tilted UCS instead of always
+  // rotating about world Z. The 3D cursor is reconstructed from `curX,curY` plus the work-plane Z
+  // CadUi already resolves every frame (`cmd.uiCursorWorldZ`), so this needs no signature change.
   if (cmd.active == K::Array) {
     using APh = AppCommandState::ArrayPhase;
 
-    auto appendTranslatedInstance = [&](float dx, float dy) {
+    auto appendTranslatedInstance = [&](float dx, float dy, float dz) {
       for (const auto& e : cmd.selection) {
         if (e.type == SelectedEntity::Type::LineSeg) {
           const size_t k = static_cast<size_t>(e.index) * 6;
@@ -429,16 +553,19 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           for (int i = 0; i < 2; ++i) {
             prevLines->push_back(cmd.userLinesFlat[k + i * 3] + dx);
             prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 1] + dy);
-            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2] + dz);
           }
         } else if (e.type == SelectedEntity::Type::Circle) {
           const size_t k = static_cast<size_t>(e.index) * 4;
           if (k + 3 >= cmd.userCirclesCxCyZR.size())
             continue;
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k] + dx);
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 1] + dy);
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+          float cnx = kFlatNormalX;
+          float cny = kFlatNormalY;
+          float cnz = kFlatNormalZ;
+          CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+          appendPreviewCircle(prevLines, prevCircles, cmd.userCirclesCxCyZR[k] + dx,
+                              cmd.userCirclesCxCyZR[k + 1] + dy, cmd.userCirclesCxCyZR[k + 2] + dz,
+                              cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
         } else if (e.type == SelectedEntity::Type::Arc) {
           const size_t k = static_cast<size_t>(e.index);
           if (k >= cmd.userArcs.size())
@@ -446,6 +573,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           CadArc a = cmd.userArcs[k];
           a.cx += dx;
           a.cy += dy;
+          a.z += dz;
           appendArcPolylineStrip(prevLines, a.z, a, 48);
         } else if (e.type == SelectedEntity::Type::Ellipse) {
           const size_t k = static_cast<size_t>(e.index);
@@ -454,6 +582,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           CadEllipse el = cmd.userEllipses[k];
           el.cx += dx;
           el.cy += dy;
+          el.z += dz;
           appendEllipsePolylineStrip(prevLines, el.z, el, 56);
         } else if (e.type == SelectedEntity::Type::Polyline) {
           const int pi = e.index;
@@ -466,71 +595,113 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           for (int vi = v0; vi + 1 < v1; ++vi) {
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3)] + dx);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)] + dz);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)] + dx);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)] + dz);
           }
           if (closed && v1 - v0 >= 2) {
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)] + dx);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)] + dz);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)] + dx);
             prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)] + dz);
           }
         }
       }
-      appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
-        *x += dx;
-        *y += dy;
-      });
+      // FeatureLine's shared preview helper is (x,y)-only, so it cannot show a Z shift. When the
+      // instance delta has a Z component (a rectangular array whose UCS X/Y plane is tilted) the
+      // ghost would sit at the wrong elevation — omit the FeatureLine copies rather than draw them
+      // misplaced. `dz == 0` is exact for the World UCS and any in-plane-rotated UCS.
+      if (dz == 0.f) {
+        appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
+          *x += dx;
+          *y += dy;
+        });
+      }
     };
 
-    auto appendRotatedInstance = [&](float bx, float by, float theta) {
+    // GitHub issue #400 increment 4: rotate about an arbitrary 3D axis (the active UCS Z axis
+    // through the picked centre), a direct port of `RotateSelectionAboutAxis`'s per-type walk.
+    // `axisUnit` parallel to world Z reproduces the old `rotatePreviewPt`/`RotateNormalAboutZ`
+    // path exactly. Ellipse/FeatureLine keep the world-Z-only walk — polar ARRAY refuses them
+    // under a tilted axis at commit (REQ-328 item 2), so the ghost simply omits them there.
+    auto appendRotatedInstance = [&](const ray3d::Vec3& axisPoint, const ray3d::Vec3& axisUnit,
+                                     float ang) {
+      const double rad = static_cast<double>(ang);
+      const bool axisIsWorldZ =
+          std::fabs(axisUnit.x) < 1e-9 && std::fabs(axisUnit.y) < 1e-9 && std::fabs(axisUnit.z) > 1e-9;
+      const auto rp = [&](float x, float y, float z) {
+        return ray3d::RotatePointAboutAxis(ray3d::Vec3{x, y, z}, axisPoint, axisUnit, rad);
+      };
+      const auto rv = [&](float x, float y, float z) {
+        return ray3d::RotateVectorAboutAxis(ray3d::Vec3{x, y, z}, axisUnit, rad);
+      };
       for (const auto& e : cmd.selection) {
         if (e.type == SelectedEntity::Type::LineSeg) {
           const size_t k = static_cast<size_t>(e.index) * 6;
           if (k + 5 >= cmd.userLinesFlat.size())
             continue;
           for (int i = 0; i < 2; ++i) {
-            float x = cmd.userLinesFlat[k + i * 3];
-            float y = cmd.userLinesFlat[k + i * 3 + 1];
-            rotatePreviewPt(bx, by, theta, &x, &y);
-            prevLines->push_back(x);
-            prevLines->push_back(y);
-            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+            const ray3d::Vec3 p =
+                rp(cmd.userLinesFlat[k + i * 3], cmd.userLinesFlat[k + i * 3 + 1], cmd.userLinesFlat[k + i * 3 + 2]);
+            prevLines->push_back(static_cast<float>(p.x));
+            prevLines->push_back(static_cast<float>(p.y));
+            prevLines->push_back(static_cast<float>(p.z));
           }
         } else if (e.type == SelectedEntity::Type::Circle) {
           const size_t k = static_cast<size_t>(e.index) * 4;
           if (k + 3 >= cmd.userCirclesCxCyZR.size())
             continue;
-          float x = cmd.userCirclesCxCyZR[k];
-          float y = cmd.userCirclesCxCyZR[k + 1];
-          rotatePreviewPt(bx, by, theta, &x, &y);
-          prevCircles->push_back(x);
-          prevCircles->push_back(y);
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
-          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+          const ray3d::Vec3 c = rp(cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1], cmd.userCirclesCxCyZR[k + 2]);
+          float cnx = kFlatNormalX;
+          float cny = kFlatNormalY;
+          float cnz = kFlatNormalZ;
+          CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+          const ray3d::Vec3 n = rv(cnx, cny, cnz);  // the plane turns with the circle (REQ-312/328)
+          appendPreviewCircle(prevLines, prevCircles, static_cast<float>(c.x), static_cast<float>(c.y),
+                              static_cast<float>(c.z), cmd.userCirclesCxCyZR[k + 3], static_cast<float>(n.x),
+                              static_cast<float>(n.y), static_cast<float>(n.z));
         } else if (e.type == SelectedEntity::Type::Arc) {
           const size_t k = static_cast<size_t>(e.index);
           if (k >= cmd.userArcs.size())
             continue;
           CadArc a = cmd.userArcs[k];
-          rotatePreviewPt(bx, by, theta, &a.cx, &a.cy);
-          a.startRad += theta;
+          // The same steps the commit takes (`RotateSelectionAboutAxis`): rotate the start point
+          // and centre as points, the plane normal as a direction, then re-anchor the sweep onto
+          // where the start point actually landed.
+          const ray3d::Vec3 startWorld = CurveWorldPointOnArc(a, static_cast<double>(a.startRad));
+          const ray3d::Vec3 startRot =
+              rp(static_cast<float>(startWorld.x), static_cast<float>(startWorld.y), static_cast<float>(startWorld.z));
+          const ray3d::Vec3 c = rp(a.cx, a.cy, a.z);
+          const ray3d::Vec3 n = rv(a.nx, a.ny, a.nz);
+          a.cx = static_cast<float>(c.x);
+          a.cy = static_cast<float>(c.y);
+          a.z = static_cast<float>(c.z);
+          a.nx = static_cast<float>(n.x);
+          a.ny = static_cast<float>(n.y);
+          a.nz = static_cast<float>(n.z);
+          CadReanchorArcStart(&a, startRot);
           appendArcPolylineStrip(prevLines, a.z, a, 48);
         } else if (e.type == SelectedEntity::Type::Ellipse) {
+          if (!axisIsWorldZ)
+            continue;  // refused at commit under a tilted axis — omit from the ghost too
           const size_t k = static_cast<size_t>(e.index);
           if (k >= cmd.userEllipses.size())
             continue;
           CadEllipse el = cmd.userEllipses[k];
-          float mx = el.cx + el.majVx;
-          float my = el.cy + el.majVy;
-          rotatePreviewPt(bx, by, theta, &el.cx, &el.cy);
-          rotatePreviewPt(bx, by, theta, &mx, &my);
-          el.majVx = mx - el.cx;
-          el.majVy = my - el.cy;
+          // Same rp/rv the other types use, not a hand-rolled 2D rotation: a CadEllipse is flat in
+          // world XY, and for a world-Z-parallel axis (either sign) rp leaves its Z alone and rv
+          // turns the major-axis vector the correct way — matching the commit and every sibling in
+          // the array (a plain +Z `rotatePreviewPt` would spin backwards under an inverted-Z UCS).
+          const ray3d::Vec3 c = rp(el.cx, el.cy, el.z);
+          const ray3d::Vec3 maj = rv(el.majVx, el.majVy, 0.f);
+          el.cx = static_cast<float>(c.x);
+          el.cy = static_cast<float>(c.y);
+          el.z = static_cast<float>(c.z);
+          el.majVx = static_cast<float>(maj.x);
+          el.majVy = static_cast<float>(maj.y);
           appendEllipsePolylineStrip(prevLines, el.z, el, 56);
         } else if (e.type == SelectedEntity::Type::Polyline) {
           const int pi = e.index;
@@ -540,52 +711,56 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
           const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
                               cmd.userPolylineClosed[static_cast<size_t>(pi)];
+          const auto pushVert = [&](int idx) {
+            const ray3d::Vec3 p = rp(cmd.userPolylineVerts[static_cast<size_t>(idx * 3)],
+                                     cmd.userPolylineVerts[static_cast<size_t>(idx * 3 + 1)],
+                                     cmd.userPolylineVerts[static_cast<size_t>(idx * 3 + 2)]);
+            prevLines->push_back(static_cast<float>(p.x));
+            prevLines->push_back(static_cast<float>(p.y));
+            prevLines->push_back(static_cast<float>(p.z));
+          };
           for (int vi = v0; vi + 1 < v1; ++vi) {
-            float x0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
-            float y0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-            float x1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
-            float y1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
-            rotatePreviewPt(bx, by, theta, &x0, &y0);
-            rotatePreviewPt(bx, by, theta, &x1, &y1);
-            prevLines->push_back(x0);
-            prevLines->push_back(y0);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
-            prevLines->push_back(x1);
-            prevLines->push_back(y1);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+            pushVert(vi);
+            pushVert(vi + 1);
           }
           if (closed && v1 - v0 >= 2) {
-            float x0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
-            float y0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
-            float x1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)];
-            float y1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
-            rotatePreviewPt(bx, by, theta, &x0, &y0);
-            rotatePreviewPt(bx, by, theta, &x1, &y1);
-            prevLines->push_back(x0);
-            prevLines->push_back(y0);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
-            prevLines->push_back(x1);
-            prevLines->push_back(y1);
-            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+            pushVert(v1 - 1);
+            pushVert(v0);
           }
         }
       }
-      appendSelectedFeatureLinePreview(prevLines, cmd,
-                                       [&](float* x, float* y) { rotatePreviewPt(bx, by, theta, x, y); });
+      if (axisIsWorldZ) {
+        // FeatureLine's shared preview helper is (x,y)-only; a world-Z rotation leaves x'/y'
+        // independent of z, so it is exact here. Under a tilted axis a FeatureLine is refused at
+        // commit — omit it from the ghost. Rotation about -Z by `ang` is rotation about +Z by
+        // `-ang`, so carry the axis sign into the 2D helper (an inverted-Z UCS otherwise spins the
+        // FeatureLine ghost the wrong way relative to the commit and its siblings).
+        const float zAng = ang * (axisUnit.z < 0.0 ? -1.f : 1.f);
+        appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
+          rotatePreviewPt(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), zAng, x, y);
+        });
+      }
     };
 
     if (cmd.arrayType == AppCommandState::ArrayType::Rectangular) {
+      // The grid axes are the active UCS X/Y (REQ-305 acceptance 10). Spacings are UCS-local
+      // distances resolved from the cursor on the work plane, then each cell's local offset is
+      // mapped back to a world delta — the same arithmetic as `ArrayCellWorldDelta` at commit.
+      const ucs::Ucs frame =
+          CadWorkPlaneAnchoredAt(cmd, cmd.arrayAnchorX, cmd.arrayAnchorY, cmd.arrayAnchorZ);
+      const ucs::Point2D cursorLocal =
+          ucs::WorldToPlane(frame, ray3d::Vec3{curX, curY, cmd.uiCursorWorldZ});
       int cols = std::max(cmd.arrayCols, 1);
       float colSpacing = cmd.arrayColSpacing;
       int rows = 1;
       float rowSpacing = 0.f;
       if (cmd.arrayPhase == APh::Rect_WaitColumnSpacing) {
-        colSpacing = curX - cmd.arrayAnchorX;
+        colSpacing = static_cast<float>(cursorLocal.x);
       } else if (cmd.arrayPhase == APh::Rect_WaitRows) {
         // cols/colSpacing already fixed; rows not chosen yet — preview the single fixed row.
       } else if (cmd.arrayPhase == APh::Rect_WaitRowSpacing) {
         rows = std::max(cmd.arrayRows, 1);
-        rowSpacing = curY - cmd.arrayAnchorY;
+        rowSpacing = static_cast<float>(cursorLocal.y);
       } else {
         return;  // PickSelection / WaitType / Rect_WaitColumns — not enough entered yet to preview
       }
@@ -593,19 +768,29 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         for (int c = 0; c < cols; ++c) {
           if (r == 0 && c == 0)
             continue;
-          appendTranslatedInstance(static_cast<float>(c) * colSpacing, static_cast<float>(r) * rowSpacing);
+          const ray3d::Vec3 d = ucs::UcsVectorToWorld(
+              frame, ray3d::Vec3{static_cast<double>(c) * colSpacing, static_cast<double>(r) * rowSpacing, 0.0});
+          appendTranslatedInstance(static_cast<float>(d.x), static_cast<float>(d.y), static_cast<float>(d.z));
         }
       return;
     }
 
-    // Polar.
+    // Polar — rotation is about the active UCS Z axis through the picked centre (REQ-305
+    // acceptance 11 / REQ-328).
     if (cmd.arrayPhase != APh::Polar_WaitAngle && cmd.arrayPhase != APh::Polar_WaitRotateAnswer)
       return;
     constexpr float kPi = 3.14159265358979323846f;
     const int n = std::max(cmd.arrayItemCount, 1);
+    const ray3d::Vec3 axisPoint{cmd.arrayCenterX, cmd.arrayCenterY, cmd.arrayCenterZ};
+    const ucs::Ucs centreFrame =
+        CadWorkPlaneAnchoredAt(cmd, cmd.arrayCenterX, cmd.arrayCenterY, cmd.arrayCenterZ);
+    const ray3d::Vec3 axisUnit = ray3d::Normalize(centreFrame.zAxis);
     float fillDeg = cmd.arrayFillAngleDeg;
     if (cmd.arrayPhase == APh::Polar_WaitAngle) {
-      fillDeg = std::atan2(curY - cmd.arrayCenterY, curX - cmd.arrayCenterX) * (180.f / kPi);
+      // The sweep angle is measured IN THE UCS PLANE (local X/Y about the centre), not world X/Y —
+      // a raw world-XY `atan2` collapses to ~0 under any non-plan UCS and stacks every instance.
+      const ucs::Point2D lc = ucs::WorldToPlane(centreFrame, ray3d::Vec3{curX, curY, cmd.uiCursorWorldZ});
+      fillDeg = std::atan2(static_cast<float>(lc.y), static_cast<float>(lc.x)) * (180.f / kPi);
       if (fillDeg < 0.f)
         fillDeg += 360.f;
     }
@@ -616,11 +801,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     for (int i = 1; i < n; ++i) {
       const float ang = step * static_cast<float>(i);
       if (cmd.arrayRotateItems) {
-        appendRotatedInstance(cmd.arrayCenterX, cmd.arrayCenterY, ang);
+        appendRotatedInstance(axisPoint, axisUnit, ang);
       } else {
-        float ax = cmd.arrayAnchorX, ay = cmd.arrayAnchorY;
-        rotatePreviewPt(cmd.arrayCenterX, cmd.arrayCenterY, ang, &ax, &ay);
-        appendTranslatedInstance(ax - cmd.arrayAnchorX, ay - cmd.arrayAnchorY);
+        const ray3d::Vec3 a = ray3d::RotatePointAboutAxis(
+            ray3d::Vec3{cmd.arrayAnchorX, cmd.arrayAnchorY, cmd.arrayAnchorZ}, axisPoint, axisUnit,
+            static_cast<double>(ang));
+        appendTranslatedInstance(static_cast<float>(a.x) - cmd.arrayAnchorX,
+                                 static_cast<float>(a.y) - cmd.arrayAnchorY,
+                                 static_cast<float>(a.z) - cmd.arrayAnchorZ);
       }
     }
     return;
@@ -652,10 +840,12 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           continue;
         float cx = cmd.userCirclesCxCyZR[k], cy = cmd.userCirclesCxCyZR[k + 1];
         if (inBox(cx, cy)) { cx += dx; cy += dy; }
-        prevCircles->push_back(cx);
-        prevCircles->push_back(cy);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+        float cnx = kFlatNormalX;
+        float cny = kFlatNormalY;
+        float cnz = kFlatNormalZ;
+        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);  // STRETCH moves, so the plane holds
+        appendPreviewCircle(prevLines, prevCircles, cx, cy, cmd.userCirclesCxCyZR[k + 2],
+                            cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -725,10 +915,12 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     }
     // Circles
     for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size() + 1; i += 4) {  // cx,cy,z,r
-      prevCircles->push_back(cb.circlesCxCyZR[i + 0] + dx);
-      prevCircles->push_back(cb.circlesCxCyZR[i + 1] + dy);
-      prevCircles->push_back(cb.circlesCxCyZR[i + 2]);
-      prevCircles->push_back(cb.circlesCxCyZR[i + 3]);
+      float cnx = kFlatNormalX;
+      float cny = kFlatNormalY;
+      float cnz = kFlatNormalZ;
+      CircleNormalAt(cb.circleNormals, i / 4, &cnx, &cny, &cnz);
+      appendPreviewCircle(prevLines, prevCircles, cb.circlesCxCyZR[i + 0] + dx, cb.circlesCxCyZR[i + 1] + dy,
+                          cb.circlesCxCyZR[i + 2], cb.circlesCxCyZR[i + 3], cnx, cny, cnz);
     }
     // Arcs
     for (const auto& a : cb.arcs) {
@@ -819,10 +1011,13 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         float r = cmd.userCirclesCxCyZR[k + 3];
         scalePreviewPt(bx, by, sc, &x, &y);
         r *= sc;
-        prevCircles->push_back(x);
-        prevCircles->push_back(y);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);  // SCALE is planar here — z unscaled
-        prevCircles->push_back(r);
+        float cnx = kFlatNormalX;
+        float cny = kFlatNormalY;
+        float cnz = kFlatNormalZ;
+        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);  // a uniform scale keeps the normal
+        appendPreviewCircle(prevLines, prevCircles, x, y,
+                            cmd.userCirclesCxCyZR[k + 2],  // SCALE is planar here - z unscaled
+                            r, cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -921,10 +1116,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         float x = cmd.userCirclesCxCyZR[k];
         float y = cmd.userCirclesCxCyZR[k + 1];
         mirrorPreviewPt(x0, y0, x1, y1, &x, &y);
-        prevCircles->push_back(x);
-        prevCircles->push_back(y);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
-        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);  // radius preserved (isometry)
+        float cnx = kFlatNormalX;
+        float cny = kFlatNormalY;
+        float cnz = kFlatNormalZ;
+        CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+        ReflectNormalAcrossLine(x0, y0, x1, y1, &cnx, &cny);  // the plane is mirrored too (REQ-312)
+        appendPreviewCircle(prevLines, prevCircles, x, y, cmd.userCirclesCxCyZR[k + 2],
+                            cmd.userCirclesCxCyZR[k + 3],  // radius preserved (isometry)
+                            cnx, cny, cnz);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -932,9 +1131,18 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         CadArc a = cmd.userArcs[k];
         // Same reflect-the-old-end-angle-into-the-new-start rule as the committed path
         // (CadCommands.cpp's DuplicateCadSelectionReflected) — a reflection reverses handedness.
+        ray3d::Vec3 farEnd = CurveWorldPointOnArc(a, static_cast<double>(a.startRad) +
+                                                         static_cast<double>(a.sweepRad));
+        float fex = static_cast<float>(farEnd.x);
+        float fey = static_cast<float>(farEnd.y);
+        mirrorPreviewPt(x0, y0, x1, y1, &fex, &fey);
+        farEnd.x = static_cast<double>(fex);
+        farEnd.y = static_cast<double>(fey);
         const float newStart = mirrorPreviewAngle(x0, y0, x1, y1, a.startRad + a.sweepRad);
         mirrorPreviewPt(x0, y0, x1, y1, &a.cx, &a.cy);
         a.startRad = newStart;
+        ReflectNormalAcrossLine(x0, y0, x1, y1, &a.nx, &a.ny);  // REQ-312, as the commit does
+        CadReanchorArcStart(&a, farEnd);
         appendArcPolylineStrip(prevLines, a.z, a, 48);
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
@@ -1103,10 +1311,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       float x = cmd.userCirclesCxCyZR[k];
       float y = cmd.userCirclesCxCyZR[k + 1];
       rotatePreviewPt(bx, by, theta, &x, &y);
-      prevCircles->push_back(x);
-      prevCircles->push_back(y);
-      prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);  // rotation is about the Z axis
-      prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+      float cnx = kFlatNormalX;
+      float cny = kFlatNormalY;
+      float cnz = kFlatNormalZ;
+      CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+      RotateNormalAboutZ(theta, &cnx, &cny);  // rotation is about the Z axis, and so is the normal's
+      appendPreviewCircle(prevLines, prevCircles, x, y,
+                          cmd.userCirclesCxCyZR[k + 2],  // rotation is about the Z axis
+                          cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= cmd.userArcs.size())
@@ -1190,10 +1402,14 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
     if (k + 3 >= cmd.userCirclesCxCyZR.size())
       return;
-    hlCircles->push_back(cmd.userCirclesCxCyZR[k]);
-    hlCircles->push_back(cmd.userCirclesCxCyZR[k + 1]);
-    hlCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
-    hlCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+    // Through the same emitter the previews use, so a selected tilted circle is highlighted on the
+    // plane it is drawn on rather than ringed flat beside itself (REQ-312).
+    float cnx = kFlatNormalX;
+    float cny = kFlatNormalY;
+    float cnz = kFlatNormalZ;
+    CircleNormalAt(cmd.userCircleNormals, k / 4, &cnx, &cny, &cnz);
+    appendPreviewCircle(hlLines, hlCircles, cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1],
+                        cmd.userCirclesCxCyZR[k + 2], cmd.userCirclesCxCyZR[k + 3], cnx, cny, cnz);
   } else if (e.type == SelectedEntity::Type::Arc) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.userArcs.size())
@@ -1222,6 +1438,28 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // per-frame path this function is called from.
     if (const std::vector<float>* border = SurfaceBorderEdges(cmd, static_cast<size_t>(e.index)))
       hlLines->insert(hlLines->end(), border->begin(), border->end());
+  } else if (e.type == SelectedEntity::Type::Solid) {
+    // REQ-318 item 12. Before this, a selected solid drew NO highlight at all — it picked, box-
+    // selected and erased correctly while giving the user nothing on screen to confirm what was
+    // selected. Exactly the omission REQ-087's feature line had, three branches up.
+    //
+    // The solid's own EDGES, which is what the entity pick tests against (`PickClosestCadEntity`
+    // picks solid edges and deliberately not triangles, because in 2D Wireframe the edges are the
+    // only thing on screen). So the highlight traces the thing that selects, in every visual style.
+    //
+    // Read from the tessellation cache rather than rebuilt from the topology: an arc edge is walked
+    // into chords there already, and this function is on the per-frame path (the Surface branch
+    // above records the same reasoning for the same reason).
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= cmd.cadSolids.size() || !cmd.cadSolids[k])
+      return;
+    const CadSolidPtr& sp = cmd.cadSolids[k];
+    for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
+      if (t.key.lock() != sp)
+        continue;
+      hlLines->insert(hlLines->end(), t.edgeVerts.begin(), t.edgeVerts.end());
+      break;
+    }
   } else if (e.type == SelectedEntity::Type::FilledRegion) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.cadFilledRegions.size())
@@ -1295,6 +1533,202 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlL
     AppendEntityHighlight(cmd, cmd.chamferFirstEntity, hlLines, hlCircles);
 }
 
+namespace {
+
+/// Chords to draw one solid edge with.
+///
+/// A DISPLAY budget, deliberately not `solidpick.cpp`'s `EdgeSearchChords`, which is a SEARCH
+/// budget: that one only has to be fine enough that the right edge wins a nearest-approach contest
+/// (the winner is then placed exactly by `ClosestPointOnEdge`), while this one is the line the user
+/// looks at. pi/24 per chord is the step `ChainHitsRect` and the curve fences already use, so a
+/// highlighted arc bends the same way everywhere in the program.
+int SubObjectEdgeChords(const brep::Edge& e) {
+  if (e.kind == brep::CurveKind::Line)
+    return 1;
+  constexpr double kPi = 3.14159265358979323846;
+  const double sweep = std::fabs(e.sweep);
+  // `sweep` is documented as meaningful for Arc and Ellipse only — an Intersection edge (the
+  // procedural surface-crossing curve REQ-314's booleans produce) leaves it zero, and keying on it
+  // would draw that edge as a single straight chord across a curve. Key on the KIND, as the pick
+  // does and for the same reason.
+  if (e.kind == brep::CurveKind::Intersection || !(sweep > 0.0) || !std::isfinite(sweep))
+    return 64;
+  return std::clamp(static_cast<int>(std::ceil(sweep / (kPi / 24.0))), 8, 96);
+}
+
+void AppendSeg(std::vector<float>* out, const ray3d::Vec3& a, const ray3d::Vec3& b) {
+  out->push_back(static_cast<float>(a.x));
+  out->push_back(static_cast<float>(a.y));
+  out->push_back(static_cast<float>(a.z));
+  out->push_back(static_cast<float>(b.x));
+  out->push_back(static_cast<float>(b.y));
+  out->push_back(static_cast<float>(b.z));
+}
+
+}  // namespace
+
+namespace {
+
+/// One sub-object's drawable geometry, appended. Shared by the selection highlight and the hover
+/// pre-highlight so the two cannot draw a picked face differently from a hovered one.
+/// Walk one solid edge into \p out as `GL_LINES`. Shared by the edge highlight and the face
+/// boundary, so a face's outline bends exactly as that same edge does when picked on its own.
+void AppendSolidEdge(const brep::Solid& sp, const brep::Edge& e, std::vector<float>* out) {
+  const int n = SubObjectEdgeChords(e);
+  ray3d::Vec3 prev = brep::EdgePointAt(sp, e, 0.0);
+  for (int i = 1; i <= n; ++i) {
+    const ray3d::Vec3 cur = brep::EdgePointAt(sp, e, static_cast<double>(i) / n);
+    AppendSeg(out, prev, cur);
+    prev = cur;
+  }
+}
+
+void AppendSubObjectGeometry(const AppCommandState& cmd, const SelectedSubObject& s, double armWorld,
+                             std::vector<float>* faceTris, std::vector<float>* faceEdges,
+                             std::vector<float>* lines) {
+  {
+    if (s.solidIndex < 0 || static_cast<size_t>(s.solidIndex) >= cmd.cadSolids.size())
+      return;
+    const CadSolidPtr& sp = cmd.cadSolids[static_cast<size_t>(s.solidIndex)];
+    // The reference expires rather than re-binds (ADR-049): if the solid it names is not the solid
+    // it came from, an edit has replaced it and this index no longer means what it meant. Draw
+    // nothing rather than highlight a face the user never picked. `ExpireSubObjectSelection` sweeps
+    // these once a frame; this guard is what makes the order of the two not matter.
+    if (!sp || s.owner.lock() != sp)
+      return;
+    if (s.kind == solidpick::Kind::Face) {
+      if (s.index < 0 || static_cast<size_t>(s.index) >= sp->faces.size())
+        return;
+      // The face's BOUNDARY first, because it is what the user actually sees. Every loop — the
+      // outer one and any holes — walked as its own edges, so a curved face outlines as a curve
+      // and a face with a hole shows the hole.
+      if (faceEdges) {
+        for (const brep::Loop& loop : sp->faces[static_cast<size_t>(s.index)].loops) {
+          for (const brep::EdgeUse& use : loop.uses) {
+            if (use.edge < 0 || static_cast<size_t>(use.edge) >= sp->edges.size())
+              continue;
+            AppendSolidEdge(*sp, sp->edges[static_cast<size_t>(use.edge)], faceEdges);
+          }
+        }
+      }
+      if (!faceTris)
+        return;
+      // The face's OWN triangles, from the per-solid cache. Not from `solidDisplayGeometry`, which
+      // merges solids into shared buffers and keeps no face channel (REQ-318 item 13).
+      for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
+        if (t.key.lock() != sp)
+          continue;
+        if (t.triVerts.size() != t.triFaceIds.size() * 9)
+          break;  // inconsistent buffers: draw nothing rather than read past the end (REQ-201)
+        for (size_t tri = 0; tri < t.triFaceIds.size(); ++tri) {
+          if (t.triFaceIds[tri] != s.index)
+            continue;
+          faceTris->insert(faceTris->end(), t.triVerts.begin() + static_cast<std::ptrdiff_t>(tri * 9),
+                           t.triVerts.begin() + static_cast<std::ptrdiff_t>(tri * 9 + 9));
+        }
+        break;
+      }
+    } else if (s.kind == solidpick::Kind::Edge) {
+      if (!lines || s.index < 0 || static_cast<size_t>(s.index) >= sp->edges.size())
+        return;
+      AppendSolidEdge(*sp, sp->edges[static_cast<size_t>(s.index)], lines);
+    } else if (s.kind == solidpick::Kind::Vertex) {
+      if (!lines || s.index < 0 || static_cast<size_t>(s.index) >= sp->vertices.size())
+        return;
+      const ray3d::Vec3 v = sp->vertices[static_cast<size_t>(s.index)].p;
+      // A three-axis cross, not a dot: a dot is one pixel of a colour the drawing may already use,
+      // while a cross reads as a marker at any zoom and from any camera angle.
+      AppendSeg(lines, ray3d::Vec3{v.x - armWorld, v.y, v.z}, ray3d::Vec3{v.x + armWorld, v.y, v.z});
+      AppendSeg(lines, ray3d::Vec3{v.x, v.y - armWorld, v.z}, ray3d::Vec3{v.x, v.y + armWorld, v.z});
+      AppendSeg(lines, ray3d::Vec3{v.x, v.y, v.z - armWorld}, ray3d::Vec3{v.x, v.y, v.z + armWorld});
+    }
+  }
+}
+
+/// A vertex marker's arm, as a fixed fraction of the VIEW rather than of the model: a marker sized
+/// in world units is a speck when zoomed out and fills the screen when zoomed in, which is the same
+/// reason the snap glyphs are screen-sized (REQ-058).
+double SubObjectMarkerArm(const AppCommandState& cmd) {
+  return std::max(1.e-9, static_cast<double>(cmd.viewportLastSurveyLayoutOrthoHalfH) * 0.012);
+}
+
+}  // namespace
+
+void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* faceTris,
+                             std::vector<float>* faceEdges, std::vector<float>* lines) {
+  if (faceTris)
+    faceTris->clear();
+  if (faceEdges)
+    faceEdges->clear();
+  if (lines)
+    lines->clear();
+  const double arm = SubObjectMarkerArm(cmd);
+  for (const SelectedSubObject& s : cmd.subObjectSelection)
+    AppendSubObjectGeometry(cmd, s, arm, faceTris, faceEdges, lines);
+}
+
+void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>* faceTris,
+                                  std::vector<float>* faceEdges, std::vector<float>* lines) {
+  if (faceTris)
+    faceTris->clear();
+  if (faceEdges)
+    faceEdges->clear();
+  if (lines)
+    lines->clear();
+  if (!cmd.subObjectHoverValid)
+    return;
+  // Already selected? Say nothing. The selection highlight is the stronger statement, and drawing a
+  // quieter one over it only muddies the colour — the rule BuildHoverHighlight already applies to
+  // entities ("skip if already selected — selection highlight takes visual precedence").
+  for (const SelectedSubObject& s : cmd.subObjectSelection)
+    if (s.sameTarget(cmd.subObjectHover))
+      return;
+  AppendSubObjectGeometry(cmd, cmd.subObjectHover, SubObjectMarkerArm(cmd), faceTris, faceEdges, lines);
+}
+
+void BuildSubObjectFaceGhost(const AppCommandState& cmd, std::vector<float>* preview) {
+  if (!preview)
+    return;
+  preview->clear();
+  // Only while a gizmo drag is armed ON A FACE. The square handle this function used to draw is
+  // gone: the gizmo's arrow is the handle now (issue #148 acceptance 4), and two handles for one
+  // operation is worse than either.
+  if (!cmd.gizmoDragActive || !cmd.gizmoDragIsSubObject)
+    return;
+  const SelectedSubObject& ref = cmd.gizmoDragSubObject;
+  const ray3d::Vec3 anchor = cmd.gizmoAnchor;
+  const ray3d::Vec3 delta = ray3d::Scale(cmd.gizmoAxisDir, cmd.gizmoDragDistance);
+  const CadSolidPtr sp = ref.owner.lock();
+  if (!sp || ref.index < 0 || static_cast<size_t>(ref.index) >= sp->faces.size())
+    return;
+  // The face's boundary where it would land. Translated, not rebuilt: `brep::PushPullFace` copies
+  // the whole solid and validates it, which is the right cost once on commit and the wrong cost
+  // every frame of a drag.
+  //
+  // It is a PICTURE of the distance, not a promise about the result: a real push also re-solves
+  // every neighbouring face, and the corners of this outline are where the face's own vertices
+  // would go if nothing else moved. That is the honest thing to show for the same reason the ghost
+  // is not the rebuilt solid — the rebuild can still be refused, and it happens on commit where a
+  // refusal can be reported (ADR-046 (d)).
+  for (const brep::Loop& loop : sp->faces[static_cast<size_t>(ref.index)].loops) {
+    for (const brep::EdgeUse& use : loop.uses) {
+      if (use.edge < 0 || static_cast<size_t>(use.edge) >= sp->edges.size())
+        continue;
+      std::vector<float> seg;
+      AppendSolidEdge(*sp, sp->edges[static_cast<size_t>(use.edge)], &seg);
+      for (size_t i = 0; i + 2 < seg.size(); i += 3) {
+        preview->push_back(seg[i] + static_cast<float>(delta.x));
+        preview->push_back(seg[i + 1] + static_cast<float>(delta.y));
+        preview->push_back(seg[i + 2] + static_cast<float>(delta.z));
+      }
+    }
+  }
+  // A leader from the face's centroid to where it is going, so the drag distance is readable even
+  // when the moved boundary happens to sit behind other geometry.
+  AppendSeg(preview, anchor, ray3d::Add(anchor, delta));
+}
+
+
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,
                          std::vector<float>* hoverCircles) {
   hoverLines->clear();
@@ -1337,4 +1771,142 @@ void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLi
       cmd.chamferFirstEntity.type == e.type && cmd.chamferFirstEntity.index == e.index)
     return;
   AppendEntityHighlight(cmd, e, hoverLines, hoverCircles);
+}
+
+// --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) --------------------------
+
+namespace {
+
+void GizmoSeg(std::vector<float>* out, const ray3d::Vec3& a, const ray3d::Vec3& b) {
+  out->push_back(static_cast<float>(a.x));
+  out->push_back(static_cast<float>(a.y));
+  out->push_back(static_cast<float>(a.z));
+  out->push_back(static_cast<float>(b.x));
+  out->push_back(static_cast<float>(b.y));
+  out->push_back(static_cast<float>(b.z));
+}
+
+}  // namespace
+
+void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out) {
+  if (!out)
+    return;
+  for (int i = 0; i < 3; ++i) {
+    out->axis[i].clear();
+    out->hot[i] = false;
+  }
+  out->guide.clear();
+  out->faceMode = false;
+  // REQ-060 acceptance 3, and the whole of it: an empty selection has no anchor, so nothing is
+  // emitted and nothing is drawn. Stated by the anchor's own return rather than by a separate
+  // "is the selection empty" test, which is a second thing that could disagree with the first.
+  ray3d::Vec3 anchor{};
+  if (!CadGizmoVisible(cmd) || !CadGizmoAnchorWorld(cmd, &anchor))
+    return;
+  // The gizmo does NOT follow the ghost during a drag: the handles stay where they were grabbed,
+  // which is what the drag distance is measured from. A widget that slid along with the preview
+  // would be measuring from a moving origin, and the number under the cursor would be nonsense.
+  if (cmd.gizmoDragActive)
+    anchor = cmd.gizmoAnchor;
+  const double len = static_cast<double>(CadGizmoHandleLenWorld(cmd));
+  const int lit = cmd.gizmoDragActive ? cmd.gizmoDragAxis : cmd.gizmoHoverAxis;
+  const int axisCount = CadGizmoAxisCountFor(cmd);
+  out->faceMode = CadGizmoModeFor(cmd) == CadGizmoMode::SubObjectFace;
+  out->soloOp = cmd.gizmoOp == CadGizmoOp::Rotate ? 1 : cmd.gizmoOp == CadGizmoOp::Scale ? 2 : 0;
+
+  // ROTATE: a RING in the plane the rotation happens in, rather than an arrow. An arrow says "drag
+  // along me" and this gesture is "drag around me" — the widget has to state which, because the two
+  // read identically once the view is orbited.
+  if (cmd.gizmoOp == CadGizmoOp::Rotate && axisCount == 1) {
+    const ray3d::Vec3 n = cmd.gizmoDragActive ? cmd.gizmoAxisDir : CadGizmoAxisWorld(cmd, 0);
+    // The ring's own frame, built from the AXIS and not the camera, so it does not swim when the
+    // view orbits — the same choice the arrowheads below make.
+    ray3d::Vec3 seed{0.0, 0.0, 1.0};
+    if (std::fabs(ray3d::Dot(n, seed)) > 0.9)
+      seed = ray3d::Vec3{1.0, 0.0, 0.0};
+    const ray3d::Vec3 e0 = ray3d::Normalize(ray3d::Cross(seed, n));
+    const ray3d::Vec3 e1 = ray3d::Cross(n, e0);
+    constexpr int kRingSegs = 64;
+    constexpr double kTwoPi = 6.28318530717958647692;
+    out->hot[0] = (cmd.gizmoDragActive || cmd.gizmoHoverAxis == 0);
+    ray3d::Vec3 prev{};
+    for (int i = 0; i <= kRingSegs; ++i) {
+      const double th = kTwoPi * static_cast<double>(i) / static_cast<double>(kRingSegs);
+      const ray3d::Vec3 p = ray3d::Add(
+          anchor, ray3d::Add(ray3d::Scale(e0, std::cos(th) * len), ray3d::Scale(e1, std::sin(th) * len)));
+      if (i > 0)
+        GizmoSeg(&out->axis[0], prev, p);
+      prev = p;
+    }
+    return;  // no arrow shafts, no drag guide: a rotation has no track to slide along
+  }
+
+  for (int a = 0; a < axisCount; ++a) {
+    // Mid-drag the direction is the one CAPTURED at the grab, not one re-derived from the live
+    // selection: in face mode that direction comes from the face's own normal, and re-deriving it
+    // would read it off geometry the drag is about to change.
+    const ray3d::Vec3 u = (cmd.gizmoDragActive && a == cmd.gizmoDragAxis) ? cmd.gizmoAxisDir
+                                                                         : CadGizmoAxisWorld(cmd, a);
+    const ray3d::Vec3 tip = ray3d::Add(anchor, ray3d::Scale(u, len));
+    out->hot[a] = (a == lit);
+    GizmoSeg(&out->axis[a], anchor, tip);
+    // Four barbs back from the tip, on a small ring around the axis. Built in the AXIS's own frame
+    // rather than the camera's, so the arrowhead is part of the widget's geometry and does not swim
+    // when the view orbits — the opposite choice from a survey point's marker cross, which is a
+    // screen-space annotation and should billboard.
+    ray3d::Vec3 seed{0.0, 0.0, 1.0};
+    if (std::fabs(ray3d::Dot(u, seed)) > 0.9)
+      seed = ray3d::Vec3{1.0, 0.0, 0.0};
+    const ray3d::Vec3 p = ray3d::Normalize(ray3d::Cross(u, seed));
+    const ray3d::Vec3 q = ray3d::Cross(u, p);
+    const double back = len * 0.82;
+    const double flare = len * 0.07;
+    const ray3d::Vec3 base = ray3d::Add(anchor, ray3d::Scale(u, back));
+    for (int i = 0; i < 4; ++i) {
+      const ray3d::Vec3 side = i == 0   ? ray3d::Scale(p, flare)
+                               : i == 1 ? ray3d::Scale(p, -flare)
+                               : i == 2 ? ray3d::Scale(q, flare)
+                                        : ray3d::Scale(q, -flare);
+      GizmoSeg(&out->axis[a], tip, ray3d::Add(base, side));
+    }
+  }
+  if (cmd.gizmoDragActive) {
+    // The track, extended well past the handle in both directions: the drag is not limited to the
+    // handle's length, and a guide that stopped at the tip would say it was.
+    const ray3d::Vec3 u = cmd.gizmoAxisDir;
+    const double reach = len * 12.0;
+    GizmoSeg(&out->guide, ray3d::Sub(anchor, ray3d::Scale(u, reach)),
+             ray3d::Add(anchor, ray3d::Scale(u, reach)));
+  }
+}
+
+void BuildGizmoDragGhost(const AppCommandState& cmd, std::vector<float>* outLines,
+                         std::vector<float>* outCircles) {
+  if (!outLines || !outCircles)
+    return;
+  outLines->clear();
+  outCircles->clear();
+  if (!cmd.gizmoDragActive || std::fabs(cmd.gizmoDragDistance) < 1.e-12)
+    return;
+  // The selection's own highlight linework, translated. Built from `AppendEntityHighlight` rather
+  // than from a second per-type walk: the ghost is then, by construction, a picture of exactly what
+  // the drag is about to move — every type it covers and no type it does not.
+  for (const auto& e : cmd.selection)
+    AppendEntityHighlight(cmd, e, outLines, outCircles);
+  const double d = cmd.gizmoDragDistance;
+  const ray3d::Vec3 u = cmd.gizmoAxisDir;
+  const float dx = static_cast<float>(d * u.x);
+  const float dy = static_cast<float>(d * u.y);
+  const float dz = static_cast<float>(d * u.z);
+  for (size_t i = 0; i + 2 < outLines->size(); i += 3) {
+    (*outLines)[i] += dx;
+    (*outLines)[i + 1] += dy;
+    (*outLines)[i + 2] += dz;
+  }
+  // Circles are carried as (cx, cy, z, r) rather than as chords, so only the centre moves.
+  for (size_t i = 0; i + 3 < outCircles->size(); i += 4) {
+    (*outCircles)[i] += dx;
+    (*outCircles)[i + 1] += dy;
+    (*outCircles)[i + 2] += dz;
+  }
 }

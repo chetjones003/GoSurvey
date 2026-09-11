@@ -33,6 +33,8 @@ void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std::string
 void PushGridCellStyle();
 void PopGridCellStyle();
 
+void ApplyColorToSelection(AppCommandState& cmd, const std::string& storage);
+
 /// Flags every spreadsheet-style grid uses, so they cannot drift: Sortable +
 /// Reorderable + Resizable + a frozen header (the Sheets contract).
 inline constexpr ImGuiTableFlags kGridTableFlags =

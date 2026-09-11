@@ -90,10 +90,11 @@ static bool SolveHelmert4x4(
 }
 
 // Applies X' = a*x - b*y + tx, Y' = b*x + a*y + ty to a 2D point.
-static inline void HelmertPt(float a, float b, float tx, float ty, float* x, float* y) {
-  const float ox = *x, oy = *y;
-  *x = a * ox - b * oy + tx;
-  *y = b * ox + a * oy + ty;
+template <class T>
+static inline void HelmertPt(double a, double b, double tx, double ty, T* x, T* y) {
+  const double ox = *x, oy = *y;
+  *x = static_cast<T>(a * ox - b * oy + tx);
+  *y = static_cast<T>(b * ox + a * oy + ty);
 }
 
 static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, float tx, float ty,
@@ -127,18 +128,37 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
 
   // Circles
   for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {
-    if (selective && !sCircles.count(static_cast<int>(i / 3))) continue;
+    if (selective && !sCircles.count(static_cast<int>(i / 4))) continue;
     HelmertPt(a, b, tx, ty, &st.userCirclesCxCyZR[i], &st.userCirclesCxCyZR[i + 1]);
     st.userCirclesCxCyZR[i + 3] *= sc;
+    float anx = 0.f, any = 0.f, anz = 1.f;   // REQ-312: the plane turns with the circle
+    CircleNormalAt(st.userCircleNormals, i / 4, &anx, &any, &anz);
+    RotateNormalAboutZ(rad, &anx, &any);
+    if (i / 4 * 3 + 2 < st.userCircleNormals.size()) {
+      st.userCircleNormals[i / 4 * 3 + 0] = anx;
+      st.userCircleNormals[i / 4 * 3 + 1] = any;
+      st.userCircleNormals[i / 4 * 3 + 2] = anz;
+    }
   }
 
   // Arcs
   for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
     if (selective && !sArcs.count(static_cast<int>(ai))) continue;
     auto& arc = st.userArcs[ai];
+    // The start point, taken through the arc's OWN plane before anything moves (REQ-312).
+    // `HelmertPt` applies the same rotation + uniform scale + translation the centre gets, so a
+    // tilted arc is re-anchored to where its start actually lands rather than trusting `+= rad`,
+    // which is only exact while the arc is flat (see the ROTATE / MIRROR paths).
+    ray3d::Vec3 sp = CurveWorldPointOnArc(arc, static_cast<double>(arc.startRad));
+    float spx = static_cast<float>(sp.x), spy = static_cast<float>(sp.y);
+    HelmertPt(a, b, tx, ty, &spx, &spy);   // Helmert is planar; the start point's Z is unchanged
+    sp.x = static_cast<double>(spx);
+    sp.y = static_cast<double>(spy);
     HelmertPt(a, b, tx, ty, &arc.cx, &arc.cy);
     arc.r        *= sc;
     arc.startRad += rad;
+    RotateNormalAboutZ(rad, &arc.nx, &arc.ny);   // REQ-312: so does the arc plane
+    CadReanchorArcStart(&arc, sp);   // REQ-312: a no-op on a flat arc, where += rad is exact
   }
 
   // Ellipses

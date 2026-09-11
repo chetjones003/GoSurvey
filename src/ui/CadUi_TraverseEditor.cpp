@@ -760,21 +760,21 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         PushUndoSnapshot(cmd, "Traverse commit");
 
         // Place starting point
-        const float startE = static_cast<float>(td.startEasting  - cmd.worldDocumentOriginX);
-        const float startN = static_cast<float>(td.startNorthing - cmd.worldDocumentOriginY);
+        const double startE = td.startEasting  - cmd.worldDocumentOriginX;
+        const double startN = td.startNorthing - cmd.worldDocumentOriginY;
         cmd.createPointsOpts.startNumber = td.startStationId;
         cmd.createPointsOpts.sequentialNumbering = false;
         cmd.createPointsOpts.duplicatePolicy = SurveyDuplicatePolicy::Renumber;
-        TryPlaceSurveyPoint(cmd, startE, startN, static_cast<float>(td.startElevation), log);
+        TryPlaceSurveyPoint(cmd, startE, startN, td.startElevation, log);
 
         // Place foresight points
         for (const auto& leg : td.legs) {
             if (!leg.computed)
                 break;
-            const float locE = static_cast<float>(leg.computedEasting  - cmd.worldDocumentOriginX);
-            const float locN = static_cast<float>(leg.computedNorthing - cmd.worldDocumentOriginY);
+            const double locE = leg.computedEasting  - cmd.worldDocumentOriginX;
+            const double locN = leg.computedNorthing - cmd.worldDocumentOriginY;
             cmd.createPointsOpts.startNumber = leg.stationId;
-            TryPlaceSurveyPoint(cmd, locE, locN, static_cast<float>(leg.computedElevation), log);
+            TryPlaceSurveyPoint(cmd, locE, locN, leg.computedElevation, log);
         }
 
         log.push_back("TRAVERSE — committed points to drawing.");

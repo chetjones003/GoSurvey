@@ -64,8 +64,8 @@ SAVEAS %OUT%/fl-b.dwg
 EXPECT SAMEFILE %OUT%/fl-a.dwg %OUT%/fl-b.dwg
 
 # --- a drawing written before REQ-087 has none of these arrays and must load unchanged -------------
-# samples/surface-demo.gs predates feature lines entirely.
-OPEN samples/surface-demo.gs
+# samples/surface-demo.dwg predates feature lines entirely.
+OPEN samples/surface-demo.dwg
 CMD FEATURELINELIST
 EXPECT LOG "no feature lines in the drawing"
 

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Sync the GitHub wiki into resources/wiki/ for the shipped in-app user manual.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+git clone --depth 1 "https://github.com/chetjones003/GoSurvey.wiki.git" "$TMP/wiki"
+rm -rf "$ROOT/resources/wiki"
+mkdir -p "$ROOT/resources/wiki/images"
+cp "$TMP/wiki"/*.md "$ROOT/resources/wiki/"
+cp "$TMP/wiki/images/"* "$ROOT/resources/wiki/images/" 2>/dev/null || true
+python3 "$ROOT/dev/generate-wiki-commands.py"
+echo "Synced wiki to resources/wiki/ ($(find "$ROOT/resources/wiki" -type f | wc -l | tr -d ' ') files)"

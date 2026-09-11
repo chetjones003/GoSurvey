@@ -14,7 +14,7 @@ CMD CATCHMENT Empty, 0, 0
 EXPECT LOG "not built"
 CMD SURFACEDELETE Empty
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE EG, Existing Ground
 CMD WATERSHED EG
 EXPECT LOG "basin"

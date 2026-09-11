@@ -25,11 +25,15 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
 
   ImGui::SetNextWindowSize(ImVec2(560, 620), ImGuiCond_FirstUseEver);
   bool open = cmd.showImportPointsWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Import points", &open)) {
     cmd.showImportPointsWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
   cmd.showImportPointsWindow = open;
 
   if (ImGui::Button("Browse…")) {
@@ -81,7 +85,7 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   const bool blocked = cmd.surveyImportFileBlocked;
   if (blocked)
     ImGui::BeginDisabled();
-  if (ImGui::Button("Import")) {
+  if (StyledButton("Import", ImVec2(0, 0), /*primary=*/true)) {
     if (cmd.surveyImportBadRowCount > 0)
       ImGui::OpenPopup("Confirm import##imp"); // row-level problems: confirm skipping them first
     else
@@ -90,7 +94,7 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   if (blocked)
     ImGui::EndDisabled();
   ImGui::SameLine();
-  if (ImGui::Button("Refresh preview"))
+  if (StyledButton("Refresh preview"))
     cmd.surveyImportPreviewDirty = true;
 
   // REQ-041: row-level problems don't block, but the user confirms importing the valid
@@ -110,6 +114,7 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   }
 
   ImGui::End();
+  PopProductDialogAccent();
 }
 
 void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
@@ -118,11 +123,15 @@ void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
 
   ImGui::SetNextWindowSize(ImVec2(520, 340), ImGuiCond_FirstUseEver);
   bool open = cmd.showExportPointsWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Export points", &open)) {
     cmd.showExportPointsWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
   cmd.showExportPointsWindow = open;
 
   if (ImGui::Button("Browse…")) {
@@ -135,8 +144,9 @@ void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::Combo("Column order##exp", &cmd.surveyExportCsvLayoutIdx, kSurveyCsvLayoutComboItems);
   ImGui::Checkbox("Write header row", &cmd.surveyExportCsvWriteHeader);
 
-  if (ImGui::Button("Export"))
+  if (StyledButton("Export", ImVec2(0, 0), /*primary=*/true))
     SurveyCsvExportFile(cmd, log);
 
   ImGui::End();
+  PopProductDialogAccent();
 }

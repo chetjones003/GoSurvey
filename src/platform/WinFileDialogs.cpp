@@ -9,8 +9,33 @@
 
 #include <cstring>
 #include <cwchar>
+#include <exception>
+#include <locale>
 
 namespace {
+
+/// GetOpenFileNameW / GetSaveFileNameW can leave MSVC's global C++ locale in a bad state. The next
+/// std::filesystem::path::string() or iostream write then crashes (null+0xC4 in the CRT). Restore the
+/// classic "C" locale before any post-dialog file work (issue #167 follow-up).
+void RestoreStdLocaleAfterNativeDialog() {
+  try {
+    std::locale::global(std::locale::classic());
+  } catch (const std::exception&) {
+  }
+}
+
+bool ShowOpenFileNameW(OPENFILENAMEW* ofn) {
+  const bool ok = GetOpenFileNameW(ofn) != FALSE;
+  RestoreStdLocaleAfterNativeDialog();
+  return ok;
+}
+
+bool ShowSaveFileNameW(OPENFILENAMEW* ofn) {
+  const bool ok = GetSaveFileNameW(ofn) != FALSE;
+  RestoreStdLocaleAfterNativeDialog();
+  return ok;
+}
+
 
 // REQ-083: a point file is comma-delimited content that may be spelled `.csv` or `.txt`, so both
 // choosers offer the pair first and the single-extension entries after it for a user who wants to
@@ -62,7 +87,7 @@ bool BrowseOpenFileCsvUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lpstrFilter = kPointFileFilter;
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-  if (!GetOpenFileNameW(&ofn))
+  if (!ShowOpenFileNameW(&ofn))
     return false;
   return WideToUtf8(wfile, utf8Out, utf8Cap);
 }
@@ -78,7 +103,7 @@ bool BrowseOpenFileDxfUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lpstrFilter = L"Drawing Exchange (*.dxf)\0*.dxf\0All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-  if (!GetOpenFileNameW(&ofn))
+  if (!ShowOpenFileNameW(&ofn))
     return false;
   return WideToUtf8(wfile, utf8Out, utf8Cap);
 }
@@ -94,7 +119,7 @@ bool BrowseOpenFileDwgUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lpstrFilter = L"AutoCAD Drawing (*.dwg)\0*.dwg\0All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-  if (!GetOpenFileNameW(&ofn))
+  if (!ShowOpenFileNameW(&ofn))
     return false;
   return WideToUtf8(wfile, utf8Out, utf8Cap);
 }
@@ -114,8 +139,9 @@ bool BrowseSaveFileDwgUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNam
   ofn.nMaxFile = MAX_PATH;
   ofn.lpstrFilter = L"AutoCAD Drawing (*.dwg)\0*.dwg\0All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
-  ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
-  if (!GetSaveFileNameW(&ofn))
+  ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR | OFN_EXPLORER | OFN_ENABLESIZING;
+  PrepareNativeFileDialog(&ofn);
+  if (!ShowSaveFileNameW(&ofn))
     return false;
 
   wchar_t path[MAX_PATH]{};
@@ -127,7 +153,7 @@ bool BrowseSaveFileDwgUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNam
   return WideToUtf8(path, utf8Out, utf8Cap);
 }
 
-bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap) {
+bool BrowseOpenFileGstUtf8(char* utf8Out, size_t utf8Cap) {
   if (!utf8Out || utf8Cap < 4)
     return false;
   wchar_t wfile[MAX_PATH]{};
@@ -135,10 +161,10 @@ bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lStructSize = sizeof(ofn);
   ofn.lpstrFile = wfile;
   ofn.nMaxFile = MAX_PATH;
-  ofn.lpstrFilter = L"GoSurvey (*.gs)\0*.gs\0All (*.*)\0*.*\0\0";
+  ofn.lpstrFilter = L"GoSurvey Template (*.gst)\0*.gst\0All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-  if (!GetOpenFileNameW(&ofn))
+  if (!ShowOpenFileNameW(&ofn))
     return false;
   return WideToUtf8(wfile, utf8Out, utf8Cap);
 }
@@ -154,7 +180,7 @@ bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lpstrFilter = L"PDF (*.pdf)\0*.pdf\0All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-  if (!GetOpenFileNameW(&ofn))
+  if (!ShowOpenFileNameW(&ofn))
     return false;
   return WideToUtf8(wfile, utf8Out, utf8Cap);
 }
@@ -170,7 +196,7 @@ bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lpstrFilter = L"Autodesk Field Book (*.fbk)\0*.fbk\0All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-  if (!GetOpenFileNameW(&ofn))
+  if (!ShowOpenFileNameW(&ofn))
     return false;
   return WideToUtf8(wfile, utf8Out, utf8Cap);
 }
@@ -192,7 +218,7 @@ bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) {
                     L"All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-  if (!GetOpenFileNameW(&ofn))
+  if (!ShowOpenFileNameW(&ofn))
     return false;
   return WideToUtf8(wfile, utf8Out, utf8Cap);
 }
@@ -206,45 +232,17 @@ bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lpstrFile = wfile;
   ofn.nMaxFile = MAX_PATH;
   ofn.lpstrTitle = L"Import Block";
-  ofn.lpstrFilter = L"Blocks (*.gs;*.dxf;*.dwg)\0*.gs;*.dxf;*.dwg\0"
-                    L"GoSurvey (*.gs)\0*.gs\0"
+  ofn.lpstrFilter = L"Blocks (*.dxf;*.dwg;*.sat)\0*.dxf;*.dwg;*.sat\0"
                     L"Drawing Exchange (*.dxf)\0*.dxf\0"
                     L"AutoCAD Drawing (*.dwg)\0*.dwg\0"
+                    L"ACIS solid (*.sat)\0*.sat\0"
                     L"All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER | OFN_ENABLESIZING;
   PrepareNativeFileDialog(&ofn);
-  if (!GetOpenFileNameW(&ofn))
+  if (!ShowOpenFileNameW(&ofn))
     return false;
   return WideToUtf8(wfile, utf8Out, utf8Cap);
-}
-
-bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8) {
-  if (!utf8Out || utf8Cap < 4)
-    return false;
-  wchar_t wfile[MAX_PATH]{};
-  if (defaultNameUtf8 && defaultNameUtf8[0] != '\0')
-    Utf8ToWide(defaultNameUtf8, wfile, MAX_PATH);
-  else
-    wcscpy_s(wfile, L"drawing.gs");
-
-  OPENFILENAMEW ofn{};
-  ofn.lStructSize = sizeof(ofn);
-  ofn.lpstrFile = wfile;
-  ofn.nMaxFile = MAX_PATH;
-  ofn.lpstrFilter = L"GoSurvey (*.gs)\0*.gs\0All (*.*)\0*.*\0\0";
-  ofn.nFilterIndex = 1;
-  ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
-  if (!GetSaveFileNameW(&ofn))
-    return false;
-
-  wchar_t path[MAX_PATH]{};
-  wcscpy_s(path, wfile);
-  const size_t L = wcslen(path);
-  const bool hasExt = L >= 3 && (_wcsicmp(path + L - 3, L".gs") == 0);
-  if (!hasExt && L + 3 < MAX_PATH)
-    wcscat_s(path, MAX_PATH, L".gs");
-  return WideToUtf8(path, utf8Out, utf8Cap);
 }
 
 bool BrowseSaveFileDxfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8) {
@@ -263,7 +261,7 @@ bool BrowseSaveFileDxfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNam
   ofn.lpstrFilter = L"Drawing Exchange (*.dxf)\0*.dxf\0All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
-  if (!GetSaveFileNameW(&ofn))
+  if (!ShowSaveFileNameW(&ofn))
     return false;
 
   wchar_t path[MAX_PATH]{};
@@ -292,7 +290,7 @@ bool BrowseSaveFilePdfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNam
   ofn.lpstrFilter = L"PDF (*.pdf)\0*.pdf\0All (*.*)\0*.*\0\0";
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
-  if (!GetSaveFileNameW(&ofn))
+  if (!ShowSaveFileNameW(&ofn))
     return false;
 
   wchar_t path[MAX_PATH]{};
@@ -320,7 +318,7 @@ bool BrowseSaveFileCsvUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNam
   ofn.lpstrFilter = kPointFileFilter;
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
-  if (!GetSaveFileNameW(&ofn))
+  if (!ShowSaveFileNameW(&ofn))
     return false;
 
   if (!WideToUtf8(wfile, utf8Out, utf8Cap))
@@ -385,14 +383,7 @@ bool BrowseSaveFileDwgUtf8(char* utf8Out, size_t utf8Cap, const char*) {
   return false;
 }
 
-bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap) {
-  if (utf8Out && utf8Cap > 0)
-    utf8Out[0] = '\0';
-  (void)utf8Cap;
-  return false;
-}
-
-bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+bool BrowseOpenFileGstUtf8(char* utf8Out, size_t utf8Cap) {
   if (utf8Out && utf8Cap > 0)
     utf8Out[0] = '\0';
   (void)utf8Cap;

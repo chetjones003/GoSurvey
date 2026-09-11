@@ -4,6 +4,7 @@
 #include "CadUi.hpp"
 #include "CadUiHelpers.hpp"
 #include "AppIcon.hpp"
+#include "AppPaths.hpp"
 #include "GpuPreference.hpp"
 #include "MtextRichFormat.hpp"
 #include "NumFormat.hpp"
@@ -30,6 +31,25 @@ static void BoxBegin(const char* label, float height = 0.f) {
 
 static void BoxEnd() { ImGui::EndChild(); }
 
+// A bare description paragraph at the top of a tab used to sit directly on the
+// dialog body — fine while that body was one flat colour, but once dialogs
+// gained their own gradient fill (REQ-081 rev 7 / issue #183) unboxed text
+// read as "just laid over" the background instead of belonging to the dialog.
+// This gives it the same bordered, recessed treatment every other section in
+// this dialog already has (see BoxBegin), sized to fit: the box's own width
+// drives the wrap (so it always matches the current window width, never a
+// stale one), and its height is computed from that wrapped text every frame,
+// so the paragraph is never clipped and never leaves dead space either.
+static void DrawSettingsNote(const char* text) {
+  const float wrapW = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().WindowPadding.x * 2.f;
+  const ImVec2 textSize = ImGui::CalcTextSize(text, nullptr, false, wrapW);
+  const float boxH = textSize.y + ImGui::GetStyle().WindowPadding.y * 2.f;
+  ImGui::BeginChild("##settings_note", ImVec2(0.f, boxH), true);
+  ImGui::TextWrapped("%s", text);
+  ImGui::EndChild();
+  ImGui::Spacing();
+}
+
 static void DrawSettingsHeader(const AppCommandState& cmd) {
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.85f, 0.85f, 1.f));
   ImGui::Text("Current profile:   <<GoSurvey>>");
@@ -41,15 +61,13 @@ static void DrawSettingsHeader(const AppCommandState& cmd) {
 }
 
 static void DrawDisplayWindowElements(AppCommandState& cmd) {
-  const char* themes[] = {"Dark", "Light"};
+  cmd.displayColorThemeIdx = 0;
+  const char* themes[] = {"Dark"};
+  ImGui::BeginDisabled();
   ImGui::SetNextItemWidth(150.f);
-  if (ImGui::Combo("Color theme:", &cmd.displayColorThemeIdx, themes, IM_ARRAYSIZE(themes))) {
-    cmd.displayColorThemeIdx = std::clamp(cmd.displayColorThemeIdx, 0, 1);
-    if (cmd.displayColorThemeIdx == 0)
-      ApplyCadDarkTheme();
-    else
-      ApplyCadLightTheme();
-  }
+  int themeIdx = 0;
+  ImGui::Combo("Color theme:", &themeIdx, themes, IM_ARRAYSIZE(themes));
+  ImGui::EndDisabled();
   {
     float bg[3] = {cmd.viewportBgR, cmd.viewportBgG, cmd.viewportBgB};
     ImGui::SetNextItemWidth(150.f);
@@ -59,7 +77,7 @@ static void DrawDisplayWindowElements(AppCommandState& cmd) {
     ItemHelpTooltip("Model-space background (clear) color for the drawing viewport.");
     ImGui::SameLine();
     if (ImGui::SmallButton("Reset##bgReset")) {
-      cmd.viewportBgR = 0.1f; cmd.viewportBgG = 0.1f; cmd.viewportBgB = 0.1f;
+      cmd.viewportBgR = 0.08f; cmd.viewportBgG = 0.10f; cmd.viewportBgB = 0.14f;
     }
   }
   ImGui::Spacing();
@@ -142,11 +160,20 @@ static void DrawDisplayCrosshair(AppCommandState& cmd) {
     cmd.viewportCrosshairArmFracY = std::clamp(f, 0.002f, 0.5f);
   }
   ImGui::Spacing();
+  // REQ-310. Sits with the crosshair settings rather than under the 3D placeholders below, because
+  // it is a real, working property of the cursor and those are not.
+  ImGui::Checkbox("3D crosshair (show UCS axes)##xhair3d", &cmd.viewportCrosshair3d);
+  ItemHelpTooltip("Draw the cursor as the active UCS's X (red), Y (green) and Z (blue) axes instead "
+                  "of two screen-aligned arms, so it shows which way the drawing plane runs under "
+                  "an orbited view. Model space only. Command bar: CROSSHAIR3D ON | OFF.");
+  ImGui::Spacing();
   if (ImGui::TreeNode("Crosshair details##xhairDetail")) {
     float xc[3] = {cmd.viewportCrosshairR, cmd.viewportCrosshairG, cmd.viewportCrosshairB};
     if (ImGui::ColorEdit3("Color##xhair", xc)) {
       cmd.viewportCrosshairR = xc[0]; cmd.viewportCrosshairG = xc[1]; cmd.viewportCrosshairB = xc[2];
     }
+    ItemHelpTooltip("The 2D crosshair's colour. The 3D crosshair uses fixed per-axis colours "
+                    "matching the UCS icon, so the two always agree about which axis is which.");
     ImGui::DragFloat("Line thickness (px)##xhairThick", &cmd.viewportCrosshairHairPx, 0.05f, 0.75f, 4.f, "%.2f");
     ImGui::TreePop();
   }
@@ -194,29 +221,28 @@ static void DrawSettingsDisplayTab(AppCommandState& cmd) {
 }
 
 static void DrawSettingsFilesTab(AppCommandState& cmd, std::vector<std::string>* log) {
-  ImGui::TextWrapped(
-      "Search paths, file locations, and startup template. GoSurvey loads a workspace .gs at startup; an empty "
-      "Custom path uses the bundled resources/default-template.gs next to the executable. Preferences are saved "
+  DrawSettingsNote(
+      "Search paths, file locations, and startup template. GoSurvey loads a workspace template .gst at startup; an empty "
+      "Custom path uses the bundled resources/default-template.gst next to the executable. Preferences are saved "
       "in gosurvey-user.json beside the executable.");
-  ImGui::Separator();
-  BoxBegin("Startup template (.gs)", 140.f);
-  ImGui::InputText("Custom .gs path (UTF-8)##startup_gs", cmd.defaultWorkspaceTemplatePathUtf8,
+  BoxBegin("Startup template (.gst)", 140.f);
+  ImGui::InputText("Custom .gst path (UTF-8)##startup_gst", cmd.defaultWorkspaceTemplatePathUtf8,
                    IM_ARRAYSIZE(cmd.defaultWorkspaceTemplatePathUtf8));
   ImGui::SameLine();
 #if defined(_WIN32)
-  if (ImGui::Button("Browse##startup_gs")) {
-    if (BrowseOpenFileGsUtf8(cmd.defaultWorkspaceTemplatePathUtf8, sizeof(cmd.defaultWorkspaceTemplatePathUtf8)) && log)
+  if (ImGui::Button("Browse##startup_gst")) {
+    if (BrowseOpenFileGstUtf8(cmd.defaultWorkspaceTemplatePathUtf8, sizeof(cmd.defaultWorkspaceTemplatePathUtf8)) && log)
       log->push_back("Startup template path set from file dialog.");
   }
 #else
-  ImGui::BeginDisabled(); ImGui::Button("Browse##startup_gs"); ImGui::EndDisabled();
+  ImGui::BeginDisabled(); ImGui::Button("Browse##startup_gst"); ImGui::EndDisabled();
   ItemHelpTooltip("File browse for startup template is only implemented on Windows in this build.");
 #endif
-  const std::filesystem::path bundled = ResolveDefaultWorkspaceTemplateGsPath();
+  const std::filesystem::path bundled = ResolveDefaultWorkspaceTemplateGstPath();
   if (!bundled.empty())
     ImGui::TextDisabled("Bundled template resolved to: %s", bundled.u8string().c_str());
   else
-    ImGui::TextDisabled("Bundled template not found (expected resources/default-template.gs beside exe or cwd).");
+    ImGui::TextDisabled("Bundled template not found (expected resources/default-template.gst beside exe or cwd).");
   if (ImGui::Button("Save startup preferences##startup_save")) {
     if (SaveUserStartupPrefs(cmd)) {
       if (log) log->push_back("Saved startup preferences (gosurvey-user.json).");
@@ -460,6 +486,10 @@ static void DrawSettingsDraftingTab(AppCommandState& cmd) {
   ImGui::Checkbox("Endpoint", &cmd.objectSnapEndpoint);
   ImGui::Checkbox("Midpoint", &cmd.objectSnapMidpoint);
   ImGui::Checkbox("Center (circle / ellipse center)", &cmd.objectSnapCenter);
+  ImGui::Checkbox("Quadrant (circle / arc compass points)", &cmd.objectSnapQuadrant);
+  ItemHelpTooltip("Snaps to the four points of a circle or arc one radius out along the current "
+                  "UCS X and Y axes (North / East / South / West in a plan view). Arc offers only "
+                  "the quadrant points within its sweep.");
   ImGui::Checkbox("Perpendicular (when a reference point applies)", &cmd.objectSnapPerpendicular);
   ImGui::Checkbox("Survey point", &cmd.objectSnapSurveyPoint);
   ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);
@@ -476,10 +506,59 @@ static void DrawSettingsDraftingTab(AppCommandState& cmd) {
   ItemHelpTooltip("Snaps to the covering visible surface's triangle plane at the cursor (REQ-127). "
                   "Weaker than endpoints so vertices still win. Off: no surface snap.");
   ImGui::Separator();
+  ImGui::TextDisabled("Snapping to B-rep SOLIDS is configured separately, in the \"3D Object Snap\" tab (F4).");
+  ImGui::Separator();
   ImGui::TextWrapped(
       "With a command active (LINE, CIRCLE, …), Shift+right-click anywhere on the drawing: choose a snap type, "
       "then pick one from every matching snap in the model (list is sorted by distance from that click). "
       "That choice applies to the next left-click only.");
+  BoxEnd();
+}
+
+/// REQ-325/#395: AutoCAD-style "3D Object Snap" tab. A separate system from 2D Object Snap
+/// (Drafting tab above): its own master toggle (F4) and six per-mode toggles, two-column layout
+/// with Select All / Clear All, matching AutoCAD's own 3D Object Snap dialog.
+static void DrawSettings3dObjectSnapTab(AppCommandState& cmd) {
+  BoxBegin("3D Object Snap", 0.f);
+  ImGui::TextUnformatted("Cursor snaps to B-rep solid geometry when 3D Object Snap is on (status bar or F4).");
+  ImGui::TextWrapped("Independent of the 2D Object snap above (F3) — the two systems can be on, off, or "
+                      "configured differently at the same time, matching AutoCAD.");
+  ImGui::Separator();
+  ImGui::Checkbox("Enable 3D Object Snap", &cmd.objectSnap3dEnabled);
+  ImGui::Separator();
+
+  bool* const flags[] = {
+      &cmd.objectSnap3dVertex,        &cmd.objectSnap3dMidpointEdge, &cmd.objectSnap3dCenterFace,
+      &cmd.objectSnap3dKnot,          &cmd.objectSnap3dPerpendicular, &cmd.objectSnap3dNearestFace,
+  };
+  if (ImGui::Button("Select All")) {
+    for (bool* f : flags) *f = true;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Clear All")) {
+    for (bool* f : flags) *f = false;
+  }
+  ImGui::Separator();
+
+  if (ImGui::BeginTable("##osnap3d_layout", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::Checkbox("Vertex", &cmd.objectSnap3dVertex);
+    ItemHelpTooltip("A solid's topology corners.");
+    ImGui::Checkbox("Midpoint on edge", &cmd.objectSnap3dMidpointEdge);
+    ItemHelpTooltip("The midpoint of a solid edge.");
+    ImGui::Checkbox("Center of face", &cmd.objectSnap3dCenterFace);
+    ItemHelpTooltip("A face's centroid — supported for every face type, including curved and NURBS "
+                    "(freeform LOFT/SWEEP) faces.");
+    ImGui::TableSetColumnIndex(1);
+    ImGui::Checkbox("Knot", &cmd.objectSnap3dKnot);
+    ItemHelpTooltip("A NURBS (freeform) face's knot points.");
+    ImGui::Checkbox("Perpendicular", &cmd.objectSnap3dPerpendicular);
+    ItemHelpTooltip("Foot of the perpendicular from a command reference point onto a planar face.");
+    ImGui::Checkbox("Nearest to face", &cmd.objectSnap3dNearestFace);
+    ItemHelpTooltip("Nearest point on a face (and, as one preference, along an edge) under the cursor.");
+    ImGui::EndTable();
+  }
   BoxEnd();
 }
 
@@ -756,7 +835,7 @@ static void DrawSettingsSelectionTab(AppCommandState& cmd) {
 
 static void DrawSettingsPlaceholderTab(const char* title, const char* description) {
   ImGui::TextUnformatted(title); ImGui::Separator();
-  ImGui::TextWrapped("%s", description); ImGui::Spacing();
+  DrawSettingsNote(description);
   ImGui::BeginDisabled(); ImGui::TextDisabled("(No GoSurvey-specific controls in this section yet.)"); ImGui::EndDisabled();
 }
 
@@ -765,9 +844,15 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
 
   ImGui::SetNextWindowSize(ImVec2(960, 720), ImGuiCond_FirstUseEver);
   bool open = cmd.showSettingsWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Options", &open, ImGuiWindowFlags_NoCollapse)) {
-    cmd.showSettingsWindow = open; ImGui::End(); return;
+    cmd.showSettingsWindow = open;
+    ImGui::End();
+    PopProductDialogAccent();
+    return;
   }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
   cmd.showSettingsWindow = open;
   DrawSettingsHeader(cmd);
 
@@ -803,7 +888,7 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       if (ImGui::BeginTabItem("System"))         { cmd.settingsActiveTabIdx = 4; DrawSettingsSystemTab(cmd);                                                           ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("User Preferences")){ cmd.settingsActiveTabIdx = 5; DrawSettingsUserPrefsTab(cmd);                                                        ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("Drafting"))       { cmd.settingsActiveTabIdx = 6; DrawSettingsDraftingTab(cmd);                                                         ImGui::EndTabItem(); }
-      if (ImGui::BeginTabItem("3D Modeling"))    { cmd.settingsActiveTabIdx = 7; DrawSettingsPlaceholderTab("3D Modeling", "GoSurvey is 2D; 3D options are reserved."); ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("3D Object Snap")) { cmd.settingsActiveTabIdx = 7; DrawSettings3dObjectSnapTab(cmd);                                                     ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("Selection"))      { cmd.settingsActiveTabIdx = 8; DrawSettingsSelectionTab(cmd);                                                       ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("Profiles"))       { cmd.settingsActiveTabIdx = 9; DrawSettingsPlaceholderTab("Profiles", "Saved option profiles. Current: <<GoSurvey>>.");ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("AEC Editor"))     { cmd.settingsActiveTabIdx = 10; DrawSettingsPlaceholderTab("AEC Editor", "Civil/AEC-specific editor preferences.");   ImGui::EndTabItem(); }
@@ -813,14 +898,15 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::EndChild();
 
   ImGui::Separator();
-  if (ImGui::Button("OK", ImVec2(90.f, 0.f)))     { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings saved (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } cmd.showSettingsWindow = false; }
+  if (StyledButton("OK", ImVec2(90.f, 0.f), /*primary=*/true))     { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings saved (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } cmd.showSettingsWindow = false; }
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(90.f, 0.f))) cmd.showSettingsWindow = false;
+  if (StyledButton("Cancel", ImVec2(90.f, 0.f))) cmd.showSettingsWindow = false;
   ImGui::SameLine();
-  if (ImGui::Button("Apply", ImVec2(90.f, 0.f)))  { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings applied (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } }
+  if (StyledButton("Apply", ImVec2(90.f, 0.f), /*primary=*/true))  { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings applied (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } }
   ImGui::SameLine();
-  ImGui::BeginDisabled(); ImGui::Button("Help", ImVec2(90.f, 0.f)); ImGui::EndDisabled();
+  ImGui::BeginDisabled(); StyledButton("Help", ImVec2(90.f, 0.f)); ImGui::EndDisabled();
   ImGui::End();
+  PopProductDialogAccent();
 
   DrawGraphicsPerformanceDialog(cmd, log);
 }
@@ -1132,7 +1218,7 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
     }
     ItemHelpTooltip("AutoCAD INSUNITS. A relabel only: it tells the drawing (and the DXF $INSUNITS header) what unit it is in. It never rescales or converts geometry.");
   }
-  ImGui::TextDisabled("Relabel only — saved to the drawing (.gs) and DXF $INSUNITS; geometry unchanged.");
+  ImGui::TextDisabled("Relabel only — saved to the drawing and DXF $INSUNITS; geometry unchanged.");
   BoxEnd();
 
   // ---- Sample Output (live) ----

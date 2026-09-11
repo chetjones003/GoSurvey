@@ -1,6 +1,9 @@
 #include "SplashScreen.hpp"
 
+#include "AppIcon.hpp"
+#include "AppPaths.hpp"
 #include "CadUi.hpp"
+#include "UpdateService.hpp"
 #include "Version.hpp"
 #include "WinFrameControls.hpp"
 
@@ -21,30 +24,81 @@ namespace {
 // Same steel-blue accent the Start screen uses, so launch → landing reads as one product (REQ-308).
 constexpr ImVec4 kAccent  {0.26f, 0.56f, 0.86f, 1.f};
 constexpr ImVec4 kAccentHi{0.34f, 0.64f, 0.95f, 1.f};
+// Dark slate tint (not white): ImGui modulates texture RGB by this color, so a light gradient
+// behind the card no longer washes a low-alpha white tint out to milky gray.
+constexpr ImVec4 kBackdropTint {0.25f, 0.30f, 0.40f, 0.80f};
 
 ImVec4 MixV(const ImVec4& a, const ImVec4& b, float t) {
   return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1.f};
 }
 
-// Crisp vector "GS" badge — matches DrawGsBadge on the Start screen. Vector, so sharp at any size.
+// Crisp GS badge — solid rounded blue only (matches What's New / DrawGsBadge). Do not use
+// AddRectFilledMultiColor here: that API fills a sharp quad, so a top sheen paints whitish square
+// corners outside the rounded blue body.
 void SplashGsBadge(ImDrawList* dl, ImVec2 c, float sz, float alpha) {
   const ImVec2 a(c.x - sz * 0.5f, c.y - sz * 0.5f);
   const ImVec2 b(c.x + sz * 0.5f, c.y + sz * 0.5f);
   const float rnd = sz * 0.24f;
   auto A = [&](ImVec4 v) { v.w *= alpha; return ImGui::ColorConvertFloat4ToU32(v); };
-  dl->AddRectFilled(ImVec2(a.x + 2.f, a.y + 3.f), ImVec2(b.x + 3.f, b.y + 4.f), A({0.f, 0.f, 0.f, 0.40f}), rnd);
-  dl->AddRectFilled(a, b, A({kAccent.x, kAccent.y, kAccent.z, 1.f}), rnd);
-  // Smooth top-down sheen, clipped to the rounded body — no hard midline.
-  dl->PushClipRect(a, b, true);
-  dl->AddRectFilledMultiColor(a, b, A({1.f, 1.f, 1.f, 0.16f}), A({1.f, 1.f, 1.f, 0.16f}),
-                              A({1.f, 1.f, 1.f, 0.f}), A({1.f, 1.f, 1.f, 0.f}));
-  dl->PopClipRect();
-  dl->AddRect(a, b, A({1.f, 1.f, 1.f, 0.30f}), rnd, 0, 1.5f);
+  dl->AddRectFilled(ImVec2(a.x + 2.f, a.y + 3.f), ImVec2(b.x + 3.f, b.y + 4.f),
+                    A({0.f, 0.f, 0.f, 0.35f}), rnd, ImDrawFlags_RoundCornersAll);
+  dl->AddRectFilled(a, b, A(kAccent), rnd, ImDrawFlags_RoundCornersAll);
   const float fs = sz / ImGui::GetFontSize() * 0.52f;
   ImGui::SetWindowFontScale(fs);
   const ImVec2 t = ImGui::CalcTextSize("GS");
   dl->AddText(ImVec2(c.x - t.x * 0.5f, c.y - t.y * 0.5f), A({1.f, 1.f, 1.f, 1.f}), "GS");
   ImGui::SetWindowFontScale(1.f);
+}
+
+struct BackdropTex {
+  unsigned int tex = 0;
+  int w = 0;
+  int h = 0;
+  bool tried = false;
+};
+
+BackdropTex& SplashBackdrop() {
+  static BackdropTex slot;
+  if (!slot.tried) {
+    slot.tried = true;
+    const std::filesystem::path path =
+        ResolveBundledAssetPath(std::filesystem::path("resources") / "splash-bg.png");
+    if (!path.empty())
+      slot.tex = LoadIconTextureRgba(path, &slot.w, &slot.h);
+  }
+  return slot;
+}
+
+void DrawFaintBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding) {
+  const BackdropTex& bg = SplashBackdrop();
+  if (bg.tex == 0 || bg.w <= 0 || bg.h <= 0)
+    return;
+
+  const float boxW = b.x - a.x;
+  const float boxH = b.y - a.y;
+  if (boxW <= 1.f || boxH <= 1.f)
+    return;
+
+  const float texAspect = static_cast<float>(bg.w) / static_cast<float>(bg.h);
+  const float boxAspect = boxW / boxH;
+  ImVec2 uv0(0.f, 0.f);
+  ImVec2 uv1(1.f, 1.f);
+  if (texAspect > boxAspect) {
+    const float visible = boxAspect / texAspect;
+    uv0.x = 0.5f - visible * 0.5f;
+    uv1.x = 0.5f + visible * 0.5f;
+  } else {
+    const float visible = texAspect / boxAspect;
+    uv0.y = 0.5f - visible * 0.5f;
+    uv1.y = 0.5f + visible * 0.5f;
+  }
+
+  const ImU32 tint = ImGui::GetColorU32(kBackdropTint);
+  const ImTextureRef tex(static_cast<ImTextureID>(static_cast<std::intptr_t>(bg.tex)));
+  if (rounding >= 0.5f)
+    dl->AddImageRounded(tex, a, b, uv0, uv1, tint, rounding, ImDrawFlags_RoundCornersAll);
+  else
+    dl->AddImage(tex, a, b, uv0, uv1, tint);
 }
 
 }  // namespace
@@ -65,6 +119,7 @@ void GlfwApplySplashStageWindowHints() {
 void GlfwApplyMainStageWindowChrome(GLFWwindow* window) {
   if (!window)
     return;
+  GlfwPlatformClearWindowRegion(window);
   // REQ-077: the running build states its version. GOSURVEY_VERSION_FULL is generated from
   // the one CMake project version (ADR-029 (a)), so this cannot drift from the installer.
   static const std::string kWindowTitle =
@@ -144,7 +199,7 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
   const ImGuiStyle& st = ImGui::GetStyle();
   float rowH = ImGui::GetFrameHeight() + 8.f;
   // Title bar is always dark regardless of the active application theme.
-  const ImVec4 barBg     = ImVec4(0.10f, 0.10f, 0.10f, 1.f);  // neutral gray — matches the viewport background
+  const ImVec4 barBg     = BlueTintNeutral(ImVec4(0.10f, 0.10f, 0.10f, 1.f), kCadThemeBlueTintDark);
   const ImU32  iconCol   = IM_COL32(199, 207, 219, 255);           // resting icon color
   const ImU32  iconColHov = IM_COL32(255, 255, 255, 255);          // brighter on hover / press
 
@@ -248,10 +303,17 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
 #endif
 }
 
-void RunStartupSplash(GLFWwindow* window, double durationSec) {
-  if (!window || durationSec <= 0.0)
+void RunStartupSplash(GLFWwindow* window, double durationSec, update::UpdateState* updateState) {
+  if (!window)
     return;
 
+  const auto updateCheckInFlight = [&]() {
+    return updateState && updateState->phase == update::Phase::Checking;
+  };
+
+  // Developer-shell fast path: zero duration and no update wait.
+  if (durationSec <= 0.0 && !updateCheckInFlight())
+    return;
 
   // REQ-093 (amended): per-pixel window transparency is not reliable across compositors/drivers —
   // where it isn't actually honored, clearing alpha 0 paints solid black instead of showing the
@@ -263,7 +325,11 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
   while (!glfwWindowShouldClose(window)) {
     const double now = glfwGetTime();
     const double elapsed = now - t0;
-    if (elapsed >= durationSec)
+    if (updateState)
+      update::PollUpdateTask(*updateState);
+    const bool minDurationMet = elapsed >= durationSec;
+    const bool updateDone     = !updateCheckInFlight();
+    if (minDurationMet && updateDone)
       break;
 
     glfwPollEvents();
@@ -293,12 +359,16 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     ImDrawList* bg = ImGui::GetBackgroundDrawList();
     const ImVec2 workPos = vp->WorkPos;
     const ImVec2 work = vp->WorkSize;
+    // Layout constants were tuned for a 440×320 splash card; scale with window height.
+    const float layoutScale = std::max(1.f, work.y / 320.f);
 
-    // The window IS the card (main.cpp creates/sizes it for exactly this) — no margin to dim, no
-    // backdrop rect, nothing surrounding it to fake-transparent. A 1px inset keeps the 2px-wide
-    // border stroke below fully inside the window instead of getting clipped at its exact edge.
-    const ImVec2 card0(workPos.x + 1.f, workPos.y + 1.f);
-    const ImVec2 card1(workPos.x + work.x - 1.f, workPos.y + work.y - 1.f);
+    // The window IS the card (main.cpp creates/sizes it for exactly this) — draw flush to the
+    // viewport so rounded corners align with the physical window edge.
+    const ImVec2 card0 = workPos;
+    const ImVec2 card1(workPos.x + work.x, workPos.y + work.y);
+    const float cardRnd = 8.f * layoutScale;
+    const float borderW = 2.f * layoutScale;
+    const float borderRnd = std::max(0.f, cardRnd - borderW * 0.5f);
 
     // Blue-tinted gradient matching the Start screen: accent glow top, darkening toward the base.
     (void)themeMenuBg;
@@ -309,11 +379,25 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     const ImVec4 botL = MixV(themeWinBg, ImVec4(0.f, 0.f, 0.f, 1.f), 0.22f);
     bg->AddRectFilledMultiColor(card0, card1, ImGui::ColorConvertFloat4ToU32(topL), ImGui::ColorConvertFloat4ToU32(topR),
                                 ImGui::ColorConvertFloat4ToU32(botR), ImGui::ColorConvertFloat4ToU32(botL));
+    DrawFaintBackdrop(bg, card0, card1, cardRnd);
 
     // Bright accent bar across the top, plus a subtle theme rim.
-    bg->AddRectFilled(card0, ImVec2(card1.x, card0.y + 4.f), ImGui::ColorConvertFloat4ToU32(kAccent),
-                      8.f, ImDrawFlags_RoundCornersTop);
-    bg->AddRect(card0, card1, ImGui::ColorConvertFloat4ToU32(themeBorder), 8.f, ImDrawFlags_RoundCornersAll, 2.f);
+    // The stripe is only a few px tall; ImGui clamps AddRectFilled rounding to ~height/2, which
+    // would square off the corners and let blue poke past the card's rounded border. Draw a tall
+    // top-rounded rect at the full card radius, then clip to the visible stripe height.
+    {
+      const float stripeH = 4.f * layoutScale;
+      const ImVec2 stripeClipBot(card1.x, card0.y + stripeH);
+      const float stripePathH = 2.f * (cardRnd + 1.f);
+      bg->PushClipRect(card0, stripeClipBot, true);
+      bg->AddRectFilled(card0, ImVec2(card1.x, card0.y + stripePathH), ImGui::ColorConvertFloat4ToU32(kAccent),
+                        cardRnd, ImDrawFlags_RoundCornersTop);
+      bg->PopClipRect();
+    }
+    // Inset the stroke so its outer edge sits on the window bounds with radius cardRnd.
+    bg->AddRect(ImVec2(card0.x + borderW * 0.5f, card0.y + borderW * 0.5f),
+                ImVec2(card1.x - borderW * 0.5f, card1.y - borderW * 0.5f),
+                ImGui::ColorConvertFloat4ToU32(themeBorder), borderRnd, ImDrawFlags_RoundCornersAll, borderW);
 
     ImGui::SetNextWindowPos(card0);
     ImGui::SetNextWindowSize(card1 - card0);
@@ -331,7 +415,7 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     // upscaled 32px app.png, which is what made the previous splash look pixelated.
     {
       const float badgeFade = std::min(1.f, static_cast<float>(elapsed / 0.14));
-      const float badge = std::min(96.f, ws.y * 0.20f);
+      const float badge = std::min(96.f * layoutScale, ws.y * 0.20f);
       SplashGsBadge(ImGui::GetWindowDrawList(),
                     ImVec2(ImGui::GetWindowPos().x + ws.x * 0.5f,
                            ImGui::GetWindowPos().y + ws.y * 0.24f),
@@ -341,7 +425,7 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     // --- Title block, centered under the badge ---
     ImGui::SetCursorPosY(ws.y * 0.42f);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f * intro, 0.93f * intro, 0.96f * intro, intro));
-    ImGui::SetWindowFontScale(2.6f);
+    ImGui::SetWindowFontScale(2.6f * layoutScale);
     const char* title = "GoSurvey";
     float tw = ImGui::CalcTextSize(title).x;
     ImGui::SetCursorPosX((ws.x - tw) * 0.5f);
@@ -361,14 +445,17 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     {
       const std::string ver = std::string("v") + GOSURVEY_VERSION_FULL;
       const ImVec2 vts = ImGui::CalcTextSize(ver.c_str());
-      ImGui::Dummy(ImVec2(1.f, 5.f));
+      ImGui::Dummy(ImVec2(1.f, 5.f * layoutScale));
       const ImVec2 pc = ImGui::GetCursorScreenPos();
-      const float px0 = pc.x + (ws.x - vts.x - 16.f) * 0.5f;
+      const float pillPadX = 16.f * layoutScale;
+      const float pillPadY = 6.f * layoutScale;
+      const float px0 = pc.x + (ws.x - vts.x - pillPadX) * 0.5f;
       ImVec4 pf = kAccent; pf.w = 0.32f * intro;
-      ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(px0, pc.y), ImVec2(px0 + vts.x + 16.f, pc.y + vts.y + 6.f),
-                                                ImGui::ColorConvertFloat4ToU32(pf), 9.f);
+      ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(px0, pc.y), ImVec2(px0 + vts.x + pillPadX, pc.y + vts.y + pillPadY),
+                                                ImGui::ColorConvertFloat4ToU32(pf), 9.f * layoutScale);
       ImVec4 pt{0.85f, 0.90f, 0.97f, intro};
-      ImGui::GetWindowDrawList()->AddText(ImVec2(px0 + 8.f, pc.y + 3.f), ImGui::ColorConvertFloat4ToU32(pt), ver.c_str());
+      ImGui::GetWindowDrawList()->AddText(ImVec2(px0 + 8.f * layoutScale, pc.y + 3.f * layoutScale),
+                                          ImGui::ColorConvertFloat4ToU32(pt), ver.c_str());
     }
 
     // --- Phase text + progress bar, anchored to the bottom of the card so they never clip ---
@@ -380,21 +467,23 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
                              "Preparing workspace…",    "Loading blocks…",    "Almost ready…"};
     constexpr int kPhaseCount = static_cast<int>(sizeof(phases) / sizeof(phases[0]));
     const int phaseIdx = std::min(kPhaseCount - 1, static_cast<int>(raw * static_cast<float>(kPhaseCount)));
+    const char* statusLine =
+        updateCheckInFlight() ? "Checking for updates…" : phases[phaseIdx];
 
-    ImGui::SetCursorPosY(ws.y - 52.f);
+    ImGui::SetCursorPosY(ws.y - 52.f * layoutScale);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.63f, 0.74f, 0.92f * intro));
-    tw = ImGui::CalcTextSize(phases[phaseIdx]).x;
+    tw = ImGui::CalcTextSize(statusLine).x;
     ImGui::SetCursorPosX((ws.x - tw) * 0.5f);
-    ImGui::TextUnformatted(phases[phaseIdx]);
+    ImGui::TextUnformatted(statusLine);
     ImGui::PopStyleColor();
 
-    ImGui::SetCursorPosY(ws.y - 26.f);
-    const float barW = std::min(400.f, ws.x * 0.82f);
+    ImGui::SetCursorPosY(ws.y - 26.f * layoutScale);
+    const float barW = std::min(400.f * layoutScale, ws.x * 0.82f);
     ImGui::SetCursorPosX((ws.x - barW) * 0.5f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.f * layoutScale);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(1.f, 1.f, 1.f, 0.08f));
     ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAccentHi);
-    ImGui::ProgressBar(bar, ImVec2(barW, 8.f), "");
+    ImGui::ProgressBar(bar, ImVec2(barW, 8.f * layoutScale), "");
     ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 

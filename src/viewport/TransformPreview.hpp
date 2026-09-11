@@ -3,6 +3,7 @@
 #include <vector>
 
 struct AppCommandState;
+struct CadGizmoOverlay;
 
 /// Translucent preview for MOVE/COPY/SCALE/ROTATE and OFFSET live preview (viewport line/circle batches).
 ///
@@ -38,6 +39,66 @@ void BuildBreakRemovalPreview(const AppCommandState& cmd, float cursorWorldX, fl
 void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* outHighlightLines,
                              std::vector<float>* outHighlightCircles);
 
+/// The SUB-OBJECT selection's drawable form (REQ-318 item 11, issue #148).
+///
+/// Two buffers because the two halves are drawn under different depth rules, which is the decision
+/// (D-2026-09-04-a) and not an implementation detail:
+///
+///   * \p outFaceTris — `GL_TRIANGLES`, nine floats per triangle, storage coordinates. **Drawn
+///     depth-tested.** A never-occluded face tint would show a back face glowing through the body of
+///     the solid, which is the one place the renderer's blanket "overlays are never occluded" rule
+///     (written for 2D linework) gives the wrong answer.
+///   * \p outLines — `GL_LINES`, appended to the ordinary never-occluded highlight channel. An edge
+///     is one line thick and a vertex marker is a few pixels; depth-testing them would sink them
+///     into the very surface they lie on.
+///
+/// In **2D Wireframe** — the default style — solids draw no faces and the depth test is off, so
+/// there is nothing for the tint to be occluded by and it simply draws. Intended: in wireframe the
+/// tint is the only way a face selection can be shown at all.
+///
+/// Built from the per-solid `CadSolidTessellation`, never from `CadSolidDisplayGeometry`: the
+/// display batches coalesce solids that draw identically into shared buffers for REQ-100's
+/// draw-call budget (#194) and carry no per-face channel, so a face's own triangles cannot be
+/// recovered from them (REQ-318 item 13).
+void BuildSubObjectHighlight(const AppCommandState& cmd, std::vector<float>* outFaceTris,
+                             std::vector<float>* outFaceEdges, std::vector<float>* outLines);
+
+/// The same, for the sub-object under the cursor that a `Ctrl` click WOULD take (REQ-318 item 14).
+///
+/// A separate call rather than a flag on the one above, because the two are drawn in different
+/// colours through different channels — the hover's linework joins the ordinary blue hover channel
+/// and its face tint is quieter than the selection's. Emits nothing when the hovered sub-object is
+/// already selected: the selection highlight is the stronger statement and drawing both over one
+/// another only muddies it, which is the rule `BuildHoverHighlight` already applies to entities.
+void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>* outFaceTris,
+                                  std::vector<float>* outFaceEdges, std::vector<float>* outLines);
+
+/// Where a face would land under an armed gizmo drag (REQ-319 increment 2, re-driven by issue #148
+/// acceptance 4). Empty unless a gizmo drag is armed on a face.
+///
+/// The face's boundary translated by the live drag distance, plus a leader from the centroid to it.
+/// **The solid is not rebuilt per frame to draw this** — a push is a whole-solid copy and a
+/// validation, and the drag runs on the frame path. Translating the boundary shows where the face
+/// is heading at a cost that does not grow with the solid, and the real geometry is computed once,
+/// on commit, where a refusal can still be reported (ADR-046 (d)).
+///
+/// The square HANDLE this used to draw beside the preview is gone: slice 4c made the gizmo's arrow
+/// the handle, and two handles for one operation is worse than either.
+void BuildSubObjectFaceGhost(const AppCommandState& cmd, std::vector<float>* outPreview);
+
 /// Hover highlight geometry for the viewport (entity under idle cursor, distinct from selection).
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* outHoverLines,
                          std::vector<float>* outHoverCircles);
+
+/// The translate gizmo's handles (REQ-060, GitHub issue #148 Phase 5 slice 4b).
+///
+/// Emits nothing when the selection is empty, which IS REQ-060's third acceptance bullet: there is
+/// no separate "should the gizmo be drawn" flag for a caller to get wrong.
+void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out);
+
+/// The selection, drawn where an armed gizmo drag is about to put it. Empty when nothing is armed.
+///
+/// Rides the ordinary PREVIEW channel at the call site rather than owning one: a ghost of what is
+/// about to happen is exactly what that channel already carries for MOVE, ROTATE and OFFSET.
+void BuildGizmoDragGhost(const AppCommandState& cmd, std::vector<float>* outLines,
+                         std::vector<float>* outCircles);

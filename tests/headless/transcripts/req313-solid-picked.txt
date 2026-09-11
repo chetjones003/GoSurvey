@@ -1,0 +1,221 @@
+# REQ-313 as amended - picking a solid's dimensions with the mouse, with a live preview.
+#
+# The prompted form used to take typed numbers only. Now every dimension that has a natural mouse
+# gesture is picked: a radius is a distance in the work plane, a height is the closest approach
+# between the cursor ray and the solid's axis, and a box's "other corner" sets length AND width at
+# once. A pyramid's side count and a cone's top radius stay keyword-and-default, because there is no
+# gesture for them.
+#
+# What makes this testable at all is that the resolution lives in the COMMAND layer
+# (CadResolveSolidPick), not in the viewport: the transcript drives the same function the mouse
+# does. A test that resolved a radius its own way would be a test of its own arithmetic.
+#
+# VIEWANGLES orbits the view, which HEIGHT needs - in plan view the cursor is on the work plane and
+# there is no "how far up" to read.
+
+NEW
+VIEWANGLES -45 35
+
+# --- CYLINDER: centre, radius, height - entirely by mouse -------------------------------------------
+CMD CYLINDER
+CLICK 0 0
+EXPECT LOG "specify radius"
+CLICK 4 0
+EXPECT LOG "radius = 4"
+EXPECT LOG "specify height"
+EXPECT SOLIDS 0
+CLICK 0 0 25
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Cylinder
+# The last pick CREATES it - a click is a deliberate final act, so no extra Enter is needed.
+EXPECT SOLIDBOUNDS 0 -4 -4 0 4 4 25
+
+# --- The picked radius is a DISTANCE, not a coordinate -----------------------------------------------
+# Picked off-axis at (3,4): the radius is 5, not 3 and not 4. This is the assertion that a radius is
+# being measured rather than a coordinate being copied.
+NEW
+CMD SPHERE
+CLICK 0 0
+CLICK 3 4
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 523.5987755982989 314.1592653589793 2 2 2
+EXPECT SOLIDBOUNDS 0 -5 -5 -5 5 5 5
+
+# --- SPHERE takes a Diameter -------------------------------------------------------------------------
+NEW
+CMD SPHERE
+CMD 0,0
+CMD D 10
+EXPECT LOG "radius = 5"
+CMD
+EXPECT SOLIDPROPS 0 523.5987755982989 314.1592653589793 2 2 2
+
+# D on its own arms it, and the next line is the diameter.
+NEW
+CMD SPHERE
+CMD 0,0
+CMD D
+EXPECT LOG "diameter:"
+CMD 10
+EXPECT LOG "radius = 5"
+CMD
+EXPECT SOLIDPROPS 0 523.5987755982989 314.1592653589793 2 2 2
+
+# --- BOX: one pick sets LENGTH and WIDTH from the opposite corner --------------------------------------
+# The base point is the first CORNER here, like AutoCAD - so the solid is centred on the midpoint of
+# the two corners, not on the first one. A box from (0,0) to (20,10) spans exactly that.
+NEW
+VIEWANGLES -45 35
+CMD BOX
+EXPECT LOG "first corner"
+CLICK 0 0
+EXPECT LOG "opposite corner"
+CLICK 20 10
+EXPECT LOG "length = 20"
+EXPECT LOG "width = 10"
+CLICK 0 0 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+EXPECT SOLIDBOUNDS 0 0 0 0 20 10 8
+
+# A corner dragged in the NEGATIVE direction gives the same box on the other side, which is what the
+# signed offsets are for - `length` and `width` alone cannot say which way it was dragged.
+NEW
+VIEWANGLES -45 35
+CMD BOX
+CLICK 0 0
+CLICK -20 -10
+CLICK 0 0 8
+EXPECT SOLIDBOUNDS 0 -20 -10 0 0 0 8
+
+# --- WEDGE picks the same way ---------------------------------------------------------------------------
+NEW
+VIEWANGLES -45 35
+CMD WEDGE
+CLICK 0 0
+CLICK 12 5
+CLICK 0 0 9
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Wedge
+EXPECT SOLIDPROPS 0 270 288 6 9 5
+
+# --- CONE: radius then height; the top radius stays a keyword with a default ------------------------------
+NEW
+VIEWANGLES -45 35
+CMD CONE
+CLICK 0 0
+CLICK 3 0
+CLICK 0 0 11
+EXPECT SOLIDS 1
+# Apex, because the top radius defaulted to 0 rather than blocking the sequence.
+EXPECT SOLIDPROPS 0 103.67255756846318 135.7333360 3 4 3
+
+# --- PYRAMID: four sides by default, and the base TURNS with the pick ------------------------------------
+# Circumscribed is AutoCAD's default, so a base radius of 6 is the apothem and the circumradius is
+# 6/cos(pi/4) = 8.485281374238571. Base area = 0.5*4*r^2*sin(pi/2) = 2*72 = 72... with r as the
+# circumradius: 0.5*4*8.485281374238571^2*1 = 144. Volume = 144*15/3 = 720.
+# side = 2R sin(pi/4) = 12; apothem = R cos(pi/4) = 6; slant = sqrt(225+36) = 16.15549442140351
+# lateral = 0.5*4*12*16.15549442140351 = 387.7318661; area = 144 + 387.7318661 = 531.7318661
+NEW
+VIEWANGLES -45 35
+CMD PYRAMID
+CLICK 0 0
+EXPECT LOG "circumscribed"
+CLICK 6 0
+CLICK 0 0 15
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Pyramid
+EXPECT SOLIDPROPS 0 720 531.7318661 5 8 5
+
+# Inscribed makes the same typed radius the CIRCUMRADIUS instead, so the pyramid is smaller.
+NEW
+VIEWANGLES -45 35
+CMD PYRAMID
+CMD 0,0
+CMD I
+EXPECT LOG "now INSCRIBED"
+CMD R 6
+CMD H 15
+CMD
+EXPECT SOLIDPROPS 0 360 336.5448913 5 8 5
+
+# --- TORUS: ring then tube, both picked as a distance from the centre -------------------------------------
+NEW
+VIEWANGLES -45 35
+CMD TORUS
+CLICK 0 0
+CLICK 10 0
+EXPECT LOG "radius = 10"
+CLICK 2 0
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 789.5683520871486 789.5683520871486 4 8 4
+
+# Dragging the tube out PAST the ring builds the self-intersecting shape, rather than refusing.
+NEW
+VIEWANGLES -45 35
+CMD TORUS
+CLICK 0 0
+CLICK 4 0
+CLICK 9 0
+EXPECT SOLIDS 1
+EXPECT LOG "passes through itself"
+
+# --- Esc part way through leaves nothing, and the next command starts clean --------------------------------
+NEW
+VIEWANGLES -45 35
+CMD CYLINDER
+CLICK 0 0
+CLICK 4 0
+ESC
+EXPECT LOG "CYLINDER canceled"
+EXPECT SOLIDS 0
+CMD CYLINDER
+CLICK 0 0
+EXPECT LOG "specify radius"
+
+CHECK ALL
+
+# --- The PREVIEW shows what the click will build ------------------------------------------------------
+# The claim the whole feature rests on. HOVER resolves the cursor exactly as the viewport does each
+# frame and stops there, so the rubber can be measured; then a CLICK at the same place commits, and
+# the finished solid has to occupy the same space the preview did.
+#
+# Asserting a segment COUNT would only prove something was drawn. Asserting the BOUNDS proves the
+# preview is the shape the cursor implies - and matching it against the committed solid proves the
+# two come from one builder rather than two that happen to agree today.
+NEW
+VIEWANGLES -45 35
+CMD CYLINDER
+CLICK 0 0
+
+# Hovering 6 out: a radius-6 disc, flat on the work plane, no height yet.
+HOVER 6 0
+EXPECT PREVIEWBOUNDS -6 -6 0 6 6 0
+# Hover somewhere else and the preview follows.
+HOVER 3 0
+EXPECT PREVIEWBOUNDS -3 -3 0 3 3 0
+
+CLICK 6 0
+EXPECT LOG "radius = 6"
+# Now hovering up the axis previews the whole cylinder, radius included.
+HOVER 0 0 20
+EXPECT PREVIEWBOUNDS -6 -6 0 6 6 20
+CLICK 0 0 20
+EXPECT SOLIDS 1
+# The committed solid occupies exactly the space the preview did.
+EXPECT SOLIDBOUNDS 0 -6 -6 0 6 6 20
+
+# A BOX previews from its first corner the same way.
+NEW
+VIEWANGLES -45 35
+CMD BOX
+CLICK 0 0
+HOVER 20 10
+EXPECT PREVIEWBOUNDS 0 0 0 20 10 0
+CLICK 20 10
+HOVER 0 0 8
+EXPECT PREVIEWBOUNDS 0 0 0 20 10 8
+CLICK 0 0 8
+EXPECT SOLIDBOUNDS 0 0 0 0 20 10 8
+
+CHECK ALL

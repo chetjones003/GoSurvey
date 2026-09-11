@@ -16,8 +16,10 @@
 //     difference REQ-203's "save a .gs and diff" condition exists to detect.
 
 #include "CadCommands.hpp"
+#include "viewport/CadRubberPreview.hpp"
 #include "CadBlocks.hpp"
-#include "CadCoordinateFrame.hpp"  // CadCoord::WorldFromLocal, for EXPECT LINEXYZ (REQ-154)
+// CadCoord::WorldFromLocal, for EXPECT LINEXYZ (REQ-154) and EXPECT VERTEX / EXPECT ELEVATION
+#include "CadCoordinateFrame.hpp"
 #include "DxfIo.hpp"
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
@@ -26,6 +28,7 @@
 #include "SurveyCsv.hpp"
 #include "SurveyPoints.hpp"
 #include "TransformPreview.hpp"
+#include "viewport/CadSnap.hpp"  // WorldToleranceFromPixels, for the GIZMO verb's screen-derived aperture
 #include "ViewportPickPolicy.hpp"
 #include "docinvariants.hpp"
 
@@ -130,6 +133,12 @@ struct Run {
   bool checkEveryStep = true;
   std::vector<Failure> failures;
 
+  /// Log length before the most recent CMD, so `EXPECT NOLOG` can ask what THAT command did and
+  /// did not say. A whole-log search would be useless for it: a transcript that legitimately
+  /// provokes a message once could never then assert its absence anywhere later, and NEW does not
+  /// reset the log (nothing does).
+  size_t logMarkBeforeLastCmd = 0;
+
   /// Log length before the current step, so a step's own output can be isolated (REQ-201 checks).
   size_t logMarkBeforeStep = 0;
 
@@ -138,6 +147,9 @@ struct Run {
   /// change here means a retriangulation happened and an unchanged value means one did not — which
   /// is REQ-070's "without rebuilding the triangulation", stated as something a transcript can fail.
   int surfaceTinGeneration = 0;
+  /// Last HOVER position, so EXPECT PREVIEWBOUNDS can rebuild the rubber the viewport would draw.
+  double hoverX = 0.0;
+  double hoverY = 0.0;
   std::weak_ptr<const CadTin> lastSurfaceTin;
   bool sawSurfaceTin = false;
 };
@@ -209,6 +221,11 @@ void TickFrame(Run& run) {
   // it: after ids, because it is keyed on them. TickSurfaceRebuilds is deliberately NOT called here —
   // see the req069 transcript's header on why this driver uses the synchronous SURFACEREBUILD.
   RefreshSurfaceDisplayGeometry(run.st);
+  // The solid tessellation cache (REQ-313), in main.cpp's own order — right after the surface
+  // refresh. Running it here is what lets a transcript assert the CACHE rather than only the
+  // document: "tessellation is cached" and "a solid is drawn" are claims about this call's output,
+  // and without it the driver would only ever see solids that exist and never solids that draw.
+  RefreshSolidDisplayGeometry(run.st);
 
   // Watch surface 0's triangulation identity, for EXPECT SURFACETINGEN. Compared with
   // `owner_before`-free pointer equality against a locked weak_ptr rather than by holding a
@@ -427,18 +444,31 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // and the GUI's Import button is what fills these three fields and calls the importer. The
       // driver sets exactly those fields and calls exactly that function, so the path under test is
       // still the user's path — the window is a form, not logic.
+      // EXPORT POINTS drives the real SurveyCsvExportFile the same way the Export points panel
+      // does: set the fields its widgets bind to, then call it. DrawExportPointsPanel is the same
+      // shape as the import one — a path box, a column-order combo, a header checkbox and a button
+      // whose whole body is this call — so the argument above applies unchanged, and refusing only
+      // this direction made the CSV round trip inexpressible as a transcript.
+      //
+      // surveyExportCsvWriteHeader keeps its AppCommandState default deliberately, so a transcript
+      // exercises the file a user actually gets rather than a driver-only variant.
       if (verb == "EXPORT") {
-        Fail(run, "parse", "EXPORT POINTS is not driven; use IMPORT POINTS", sourceLine);
-        return false;
-      }
-      std::snprintf(run.st.surveyImportCsvPath, sizeof run.st.surveyImportCsvPath, "%s", path.c_str());
-      run.st.surveyImportCsvLayoutIdx = 0;  // P,N,E,Z,D — the layout every samples/ point file uses
-      // Skip a header row if there is one. The importer would otherwise reject it as an unparsable
-      // row and say so, which is correct behavior but reads as a failure in a transcript log.
-      run.st.surveyImportCsvSkipFirstRow = FirstRowLooksLikeHeader(path);
-      if (!SurveyCsvImportFile(run.st, run.log)) {
-        Fail(run, "io", "IMPORT POINTS failed: " + path, sourceLine);
-        return false;
+        std::snprintf(run.st.surveyExportCsvPath, sizeof run.st.surveyExportCsvPath, "%s", path.c_str());
+        run.st.surveyExportCsvLayoutIdx = 0;  // P,N,E,Z,D — the panel default
+        if (!SurveyCsvExportFile(run.st, run.log)) {
+          Fail(run, "io", "EXPORT POINTS failed: " + path, sourceLine);
+          return false;
+        }
+      } else {
+        std::snprintf(run.st.surveyImportCsvPath, sizeof run.st.surveyImportCsvPath, "%s", path.c_str());
+        run.st.surveyImportCsvLayoutIdx = 0;  // P,N,E,Z,D — the layout every samples/ point file uses
+        // Skip a header row if there is one. The importer would otherwise reject it as an unparsable
+        // row and say so, which is correct behavior but reads as a failure in a transcript log.
+        run.st.surveyImportCsvSkipFirstRow = FirstRowLooksLikeHeader(path);
+        if (!SurveyCsvImportFile(run.st, run.log)) {
+          Fail(run, "io", "IMPORT POINTS failed: " + path, sourceLine);
+          return false;
+        }
       }
     } else if (fmt == "DXF") {
       const bool ok = (verb == "EXPORT") ? ExportDxfFile(run.st, path.c_str(), run.log)
@@ -465,6 +495,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       return false;
     }
   } else if (verb == "CMD") {
+    run.logMarkBeforeLastCmd = run.log.size();
     // `CMD` with no argument is a bare Enter, which is how half the commands terminate — an empty
     // argument is meaningful here, never a no-op.
     char buf[1024];
@@ -512,7 +543,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       }
     }
     SubmitViewportPick(run.st, x, y, run.log, windowSelectionSubtract, fenceLeftToRightWindowMode);
-  } else if (verb == "CLICK") {
+  } else if (verb == "CLICK" || verb == "CLICKUCS") {
     // CLICK <x> <y> [SUBTRACT] [CROSSING] — a viewport click routed the way the GUI routes it.
     //
     // TASK-099. PICK above hands its coordinates straight to SubmitViewportPick, which skips the
@@ -529,6 +560,34 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     if (!(is >> x >> y)) {
       Fail(run, "parse", "CLICK expects two world coordinates, got: " + rest, sourceLine);
       return false;
+    }
+    // An optional third coordinate: see the solid-pick note below for what it is for.
+    float clickZ = 0.f;
+    bool clickHasZ = false;
+    {
+      const std::streampos save = is.tellg();
+      if (is >> clickZ) {
+        clickHasZ = true;
+      } else {
+        is.clear();
+        if (save != std::streampos(-1))
+          is.seekg(save);
+      }
+    }
+    if (verb == "CLICKUCS") {
+      // CLICKUCS <u> <v> - a viewport click at (u, v) in the ACTIVE UCS XY plane (REQ-312).
+      //
+      // CLICK and PICK hand storage coordinates straight through, which cannot express a click on
+      // a TILTED work plane at all: the GUI resolves one by intersecting the cursor ray with that
+      // plane and publishing the hit point's own Z (AppCommandState::resolvedPointZ), and a pair
+      // of storage X/Y carries none of that. On a VERTICAL work plane it is not even well posed:
+      // two points on a wall share an (x, y) and differ only in height. So this states the pick
+      // where the user actually made it, in the plane being drawn on. Under the WCS it is CLICK.
+      const ray3d::Vec3 world =
+          ucs::UcsToWorld(run.st.activeUcs, {static_cast<double>(x), static_cast<double>(y), 0.0});
+      CadCoord::LocalFromWorld(run.st, world.x, world.y, &x, &y);
+      run.st.resolvedPointZValid = true;
+      run.st.resolvedPointZ = static_cast<float>(world.z);
     }
     std::string mod;
     bool windowSelectionSubtract = false;
@@ -551,7 +610,52 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // The GUI's raw-vs-snapped distinction is an OSNAP adjustment, and a transcript has no
       // OSNAP — both land on the coordinates the transcript named. What CLICK is testing here is
       // that the command is routed AT ALL.
-      SubmitViewportPick(run.st, x, y, run.log);
+      //
+      // A prompted solid command reads the cursor through `CadResolveSolidPick` rather than from the
+      // click coordinates directly — a radius is a distance, a height is a closest approach — so the
+      // same resolution the viewport performs each frame is performed here first. Doing it in the
+      // driver rather than duplicating the arithmetic in a verb is the point: a test that resolved
+      // the pick its own way would be a test of its own arithmetic.
+      if (run.st.active == AppCommandState::Kind::Solid) {
+        double z = ucs::WorkPlaneZAt(CadActiveWorkPlane(run.st), static_cast<double>(x),
+                                     static_cast<double>(y));
+        // An explicit third coordinate aims the ray at a point OFF the work plane, which is the only
+        // way a transcript can say "point at the spot 25 feet up the axis". A height is the closest
+        // approach between the cursor ray and that axis, so aiming at a plan XY resolves to whatever
+        // height that sight line happens to cross — geometrically right, and impossible to write an
+        // expectation for.
+        if (clickHasZ)
+          z = static_cast<double>(clickZ);
+        const ray3d::Ray* rayPtr = nullptr;
+        ray3d::Ray camRay;
+        if (!CadViewIsPlan(run.st) && run.st.uiViewportWidthPx > 0.f) {
+          // Off plan view a height IS pickable, and it needs the ray the camera would cast. Aimed
+          // at the cursor point itself, which is what the viewport's own ray does.
+          const Camera cam = CadViewCamera(run.st);
+          float sx = 0.f, sy = 0.f;
+          cam.WorldToScreen(static_cast<double>(x), static_cast<double>(y), z, run.st.uiViewportWidthPx,
+                            run.st.uiViewportHeightPx, &sx, &sy);
+          camRay = cam.ScreenRay(sx, sy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+          rayPtr = &camRay;
+        }
+        CadResolveSolidPick(run.st, ray3d::Vec3{static_cast<double>(x), static_cast<double>(y), z}, rayPtr);
+        SubmitViewportPick(run.st, x, y, run.log);
+      } else if (ViewportClickRouteFor(run.st) == ViewportClickRoute::RawEntityPick && clickHasZ &&
+                !CadViewIsPlan(run.st) && run.st.uiViewportWidthPx > 0.f) {
+        // issue #373 follow-up: an explicit third coordinate on a RawEntityPick CLICK (FILLET,
+        // OFFSET, LENGTHEN, EXTEND, BREAK, ...) is the one way a transcript can name a point OFF
+        // the current work plane and still exercise the same camera-ray hit-test the real viewport
+        // performs for an orbited/ortho non-plan view — mirrors the CadResolveSolidPick ray build
+        // just above, aimed at (x, y, clickZ) instead of the work plane's own Z.
+        const Camera cam = CadViewCamera(run.st);
+        float sx = 0.f, sy = 0.f;
+        cam.WorldToScreen(static_cast<double>(x), static_cast<double>(y), static_cast<double>(clickZ),
+                          run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &sx, &sy);
+        const ray3d::Ray camRay = cam.ScreenRay(sx, sy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+        SubmitViewportPick(run.st, x, y, run.log, false, false, &camRay);
+      } else {
+        SubmitViewportPick(run.st, x, y, run.log);
+      }
       break;
     case ViewportClickRoute::SelectionBox:
     case ViewportClickRoute::IdleSelection:
@@ -570,7 +674,15 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         run.st.selBoxWaitingSecond = true;
         run.st.selBoxAnchorX = x;
         run.st.selBoxAnchorY = y;
+        // CLICKUCS resolved a point on a (possibly tilted) work plane and published its Z through
+        // resolvedPointZ; carry it so a STRETCH crossing box drawn on that plane can be projected
+        // back onto it (REQ-329 increment 4). Plain CLICK leaves resolvedPointZ untouched, so this
+        // is a no-op (Z 0) there — matching the pre-existing behaviour.
+        if (verb == "CLICKUCS")
+          run.st.selBoxAnchorZ = run.st.resolvedPointZ;
       } else {
+        if (verb == "CLICKUCS")
+          run.st.uiCursorWorldZ = run.st.resolvedPointZ;
         SubmitViewportPick(run.st, x, y, run.log, windowSelectionSubtract, fenceLeftToRightWindowMode);
       }
       break;
@@ -579,18 +691,32 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // derive one from). CLICK subsumes TRIMPICK; TRIMPICK stays for the transcripts using it.
       SubmitTrimViewportPick(run.st, x, y, 1.f, run.log);
       break;
-    case ViewportClickRoute::HatchPick:
-      Fail(run, "state",
-           "CLICK cannot drive this command yet (HATCH boundary tracing is not wired into the "
-           "driver); add the route here when a transcript needs it",
-           sourceLine);
-      return false;
+    case ViewportClickRoute::HatchPick: {
+      // HATCH (REQ-043): trace the region under the click and fill it, exactly as CadUi's own
+      // HatchPick case does — same two calls, same order, same miss message. Until this existed no
+      // filled region could be created headless, so nothing about hatches had a transcript at all:
+      // not their rendering, not their Z, not their round trip through `.gs` or DXF.
+      //
+      // A miss deliberately leaves the command ACTIVE and logs rather than failing the step, because
+      // that is the behaviour under test (REQ-201 — nothing is placed when no closed boundary is
+      // found, and the user gets to click again). A transcript asserts the miss with EXPECT LOG.
+      std::vector<float> loop;
+      if (CadHatchTraceAt(run.st, x, y, &loop) && CadHatchCommitLoop(run.st, loop, run.log)) {
+        run.st.active = AppCommandState::Kind::None;
+        run.st.hatchPreviewValid = false;
+        run.st.hatchPreviewLoop.clear();
+      } else {
+        run.log.push_back(
+            "HATCH — no closed boundary found there; click inside a closed area (Esc to cancel).");
+      }
+      break;
+    }
     case ViewportClickRoute::PdfAttachInsertPoint:
-      Fail(run, "state",
-           "CLICK cannot drive this command yet (PDFATTACH insertion is not wired into the "
-           "driver); add the route here when a transcript needs it",
-           sourceLine);
-      return false;
+      // PDFATTACH's insertion point is a plain coordinate, handed to the same entry point the GUI
+      // uses. No snapping is applied here for the same reason PICK applies none: a transcript has no
+      // viewport from which to derive a screen-space tolerance.
+      SubmitPdfAttachInsertPoint(run.st, static_cast<float>(x), static_cast<float>(y), run.log);
+      break;
     case ViewportClickRoute::InsertBlockPick:
       SubmitInsertBlockPick(run.st, x, y, run.log);
       break;
@@ -601,6 +727,150 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
                AppCommandState::KindName(run.st.active) +
                ") takes no model-space viewport click in its current phase — the click would be "
                "discarded, which is the bug this verb exists to catch",
+           sourceLine);
+      return false;
+    }
+  } else if (verb == "SUBOBJECT") {
+    // SUBOBJECT <x> <y> <z> [SHIFT] — one Ctrl+click on a solid's face, edge or vertex (REQ-318
+    // increment 2, issue #148).
+    //
+    // Its own verb rather than a modifier on CLICK, because the two ask different questions. CLICK
+    // routes through `ViewportClickRouteFor` to prove a command receives clicks at all; this drives
+    // a SELECTION, which that router deliberately has nothing to say about — and idle click-select
+    // has no headless equivalent at all (see CLICK's own note), which is exactly why the sub-object
+    // click's meaning was moved OUT of `CadUi.cpp` into `SubmitSubObjectPick` before this verb was
+    // written. The verb calls that shared function; it does not re-implement the rule.
+    //
+    // A full XYZ, not a plan XY: the target is a point on a solid's surface in three dimensions, and
+    // naming it in plan alone cannot distinguish the top face of a box from the bottom one directly
+    // beneath it. The ray is then the one the CAMERA would cast at that point — built exactly as
+    // CLICK builds one for a prompted solid — so what is tested is the pick the user gets, not a
+    // synthetic axis-aligned ray no viewport would ever produce.
+    std::istringstream is(rest);
+    float sx = 0.f, sy = 0.f, sz = 0.f;
+    if (!(is >> sx >> sy >> sz)) {
+      Fail(run, "parse",
+           "SUBOBJECT expects <x> <y> <z> [<vertexTol> <edgeTol>] [SHIFT], got: " + rest, sourceLine);
+      return false;
+    }
+    // Optional explicit tolerances, and the reason they are worth a verb argument: in the GUI these
+    // are screen-derived (REQ-318 item 5) from the cursor aperture and the viewport's height in
+    // pixels — neither of which a transcript has. Left to the default they come out around 3 units
+    // on a 20 x 10 x 8 box, which swallows the whole precedence rule: a click in the MIDDLE of a
+    // face lands within 3 units of that face's edge and the edge wins, so every assertion would be
+    // about the default's size rather than about the pick. Stating them makes each case say what
+    // geometry it is actually distinguishing, and makes REQ-318's "a zero tolerance means that kind
+    // is never reported" expressible here as well as in the unit tests.
+    bool haveTol = false;
+    float tolV = 0.f, tolE = 0.f;
+    {
+      const std::streampos save = is.tellg();
+      if (is >> tolV >> tolE) {
+        haveTol = true;
+      } else {
+        is.clear();
+        if (save != std::streampos(-1))
+          is.seekg(save);
+      }
+    }
+    bool toggle = false;
+    std::string mod;
+    while (is >> mod) {
+      if (UpperAscii(mod) == "SHIFT") {
+        toggle = true;
+      } else {
+        Fail(run, "parse", "SUBOBJECT: unknown modifier " + mod + " (expected SHIFT)", sourceLine);
+        return false;
+      }
+    }
+    // A projection needs a viewport size; a transcript has no window, so give it the same definite
+    // one VIEWANGLES does.
+    if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+      run.st.uiViewportWidthPx = 1200.f;
+      run.st.uiViewportHeightPx = 700.f;
+    }
+    const Camera subCam = CadViewCamera(run.st);
+    float ssx = 0.f, ssy = 0.f;
+    subCam.WorldToScreen(static_cast<double>(sx), static_cast<double>(sy), static_cast<double>(sz),
+                         run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &ssx, &ssy);
+    const ray3d::Ray subRay =
+        subCam.ScreenRay(ssx, ssy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+    solidpick::Tolerance subTol;
+    if (haveTol) {
+      subTol.vertex = static_cast<double>(tolV);
+      subTol.edge = static_cast<double>(tolE);
+    } else {
+      // No explicit budget: the same function the GUI calls, so an unstated transcript still gets
+      // the product's own answer rather than a number invented here.
+      subTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(run.st));
+      subTol.edge = subTol.vertex;
+    }
+    SubmitSubObjectPick(run.st, subRay, subTol, toggle, run.log);
+  } else if (verb == "GIZMO") {
+    // GIZMO GRAB <x> <y> <z>  |  GIZMO DROP <x> <y> <z>  |  GIZMO CANCEL
+    //
+    // The translate gizmo (REQ-060, issue #148 slice 4b), driven the way a mouse drives it: each
+    // form casts the ray the CAMERA would cast at the named world point and hands it to
+    // `SubmitGizmoClick`, exactly as SUBOBJECT does a few verbs up.
+    //
+    // **A ray, not a distance, and that is the whole point of the verb.** REQ-060's second
+    // acceptance bullet is that "a gizmo drag and the equivalent typed command produce coordinates
+    // agreeing within REQ-101". A verb that handed the command layer a ready-made offset would
+    // assert that two ways of calling one function agree, which is not a fact about the product. By
+    // aiming at a point and letting the skew-line solve decide the distance, what is asserted is the
+    // pick, the projection and the transform together — the same three the user's drag goes through.
+    //
+    // GRAB fails loudly when no handle is under the ray: a transcript whose grab silently missed
+    // would then assert that a move did not happen, which is exactly what a broken gizmo does.
+    std::istringstream is(rest);
+    std::string what;
+    if (!(is >> what)) {
+      Fail(run, "parse", "GIZMO expects GRAB <x> <y> <z>, DROP <x> <y> <z> or CANCEL", sourceLine);
+      return false;
+    }
+    what = UpperAscii(what);
+    if (what == "CANCEL") {
+      CancelGizmoDrag(run.st);
+      return true;
+    }
+    if (what != "GRAB" && what != "DROP") {
+      Fail(run, "parse", "GIZMO: unknown form " + what + " (expected GRAB, DROP or CANCEL)", sourceLine);
+      return false;
+    }
+    float gx = 0.f, gy = 0.f, gz = 0.f;
+    if (!(is >> gx >> gy >> gz)) {
+      Fail(run, "parse", "GIZMO " + what + " expects <x> <y> <z>, got: " + rest, sourceLine);
+      return false;
+    }
+    // A projection needs a viewport size; a transcript has no window, so give it the same definite
+    // one VIEWANGLES and SUBOBJECT do. It also fixes the handle length and the grab aperture, both
+    // of which are screen-derived — so a transcript's gizmo is the same size as the user's.
+    if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+      run.st.uiViewportWidthPx = 1200.f;
+      run.st.uiViewportHeightPx = 700.f;
+    }
+    const Camera gizCam = CadViewCamera(run.st);
+    float gsx = 0.f, gsy = 0.f;
+    gizCam.WorldToScreen(static_cast<double>(gx), static_cast<double>(gy), static_cast<double>(gz),
+                         run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &gsx, &gsy);
+    const ray3d::Ray gizRay =
+        gizCam.ScreenRay(gsx, gsy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+    const double gizTol = static_cast<double>(CadSnap::WorldToleranceFromPixels(
+        run.st.uiViewportHeightPx,
+        (1.f / std::max(run.st.viewportZoom, 1.e-9f)) * 50.f, kGizmoHandleGrabPx));
+    if (what == "GRAB" && run.st.gizmoDragActive) {
+      Fail(run, "state", "GIZMO GRAB while a drag is already armed - DROP or CANCEL it first",
+           sourceLine);
+      return false;
+    }
+    if (what == "DROP" && !run.st.gizmoDragActive) {
+      Fail(run, "state", "GIZMO DROP with no armed drag - GRAB a handle first", sourceLine);
+      return false;
+    }
+    if (!SubmitGizmoClick(run.st, gizRay, gizTol, run.log)) {
+      Fail(run, "pick",
+           "GIZMO GRAB found no handle under (" + std::to_string(gx) + ", " + std::to_string(gy) +
+               ", " + std::to_string(gz) + ") - is anything selected, and is the point on a handle?",
            sourceLine);
       return false;
     }
@@ -637,6 +907,19 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     run.st.selBoxWaitingSecond = true;
     run.st.selBoxAnchorX = x0;
     run.st.selBoxAnchorY = y0;
+    // Each corner's ELEVATION, solved on the active work plane the way the viewport's own plan-view
+    // branch does. Without these both corners default to Z = 0, and the fence is then projected from
+    // a plane the drag never happened on — which is the defect this verb exists to be able to catch,
+    // so leaving them at zero would build the bug into the test.
+    {
+      const ray3d::Plane wp = CadActiveWorkPlane(run.st);
+      auto planeZ = [&](float x, float y) {
+        return static_cast<float>(
+            ucs::WorkPlaneZAt(wp, static_cast<double>(x), static_cast<double>(y)));
+      };
+      run.st.selBoxAnchorZ = planeZ(x0, y0);
+      run.st.uiCursorWorldZ = planeZ(x1, y1);
+    }
     SubmitViewportPick(run.st, x1, y1, run.log, subtract, windowMode);
   } else if (verb == "TRIMPICK") {
     // TRIMPICK <x> <y> — one object pick while TRIM is active.
@@ -735,6 +1018,134 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     run.st.currentLayer = name;
     // Registers the name in the drawing's layer table, exactly as the Layer manager's OK does.
     SyncDrawingLayerTableWithGeometry(run.st);
+  } else if (verb == "VIEWANGLES") {
+    // VIEWANGLES <azimuthDeg> <elevationDeg> — orbit the model view.
+    //
+    // Here for the same reason CLAYER and LAYERSTATE are: the only routes to these in the product
+    // are the ViewCube and a mouse drag, so without this verb NO transcript can exercise anything
+    // that only happens once the view is orbited — and that is a whole class of behaviour, because
+    // picking, snapping and box-selection all switch from the plan-view XY path to a camera
+    // PROJECTION there (REQ-058). A defect that only appears off plan view had no failing test
+    // available to it, which is exactly how the Z = 0 fence projection survived.
+    std::istringstream is(rest);
+    float az = 0.f;
+    float el = 90.f;
+    if (!(is >> az >> el)) {
+      Fail(run, "parse", "VIEWANGLES expects <azimuthDeg> <elevationDeg>", sourceLine);
+      return false;
+    }
+    run.st.viewportAzimuthDeg = az;
+    run.st.viewportElevationDeg = el;
+    // The projection needs a viewport size; a transcript has no window, so give it a definite one.
+    if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+      run.st.uiViewportWidthPx = 1200.f;
+      run.st.uiViewportHeightPx = 700.f;
+    }
+  } else if (verb == "LAYERSTATE") {
+    // LAYERSTATE <name> ON|OFF|FREEZE|THAW — flip a layer's visibility, exactly as the Layer
+    // manager's checkboxes do.
+    //
+    // Here for the same reason CLAYER is: the Layer manager is a DIALOG, so there is no typed route
+    // to this, and without it a transcript cannot state the rule every entity kind is held to —
+    // that what is invisible is also unclickable (REQ-084 (d)). A visibility filter that silently
+    // stopped working would otherwise have no failing test available to it.
+    std::string stateRaw;
+    const std::string name = Trim(FirstWord(rest, &stateRaw));
+    std::string stateArgRaw;
+    const std::string state = UpperAscii(Trim(FirstWord(Trim(stateRaw), &stateArgRaw)));
+    if (name.empty() || state.empty()) {
+      Fail(run, "parse", "LAYERSTATE expects <name> ON|OFF|FREEZE|THAW|COLOR <name>", sourceLine);
+      return false;
+    }
+    CadLayerRow* row = nullptr;
+    for (CadLayerRow& r : run.st.drawingLayerTable) {
+      if (UpperAscii(r.name) == UpperAscii(name)) {
+        row = &r;
+        break;
+      }
+    }
+    if (!row) {
+      Fail(run, "state", "LAYERSTATE: no layer named " + name, sourceLine);
+      return false;
+    }
+    if (state == "ON")
+      row->on = true;
+    else if (state == "OFF")
+      row->on = false;
+    else if (state == "FREEZE")
+      row->frozen = true;
+    else if (state == "THAW")
+      row->frozen = false;
+    else if (state == "COLOR") {
+      // LAYERSTATE <name> COLOR <colorname> — the Layer manager's swatch. Here so a transcript can
+      // give two layers different resolved colours, which is what GitHub #194's draw-batch
+      // coalescing splits on (same colour/lineweight merges, a colour difference does not).
+      const std::string colorName = Trim(stateArgRaw);
+      if (colorName.empty()) {
+        Fail(run, "parse", "LAYERSTATE ... COLOR expects a colour name", sourceLine);
+        return false;
+      }
+      row->color = colorName;
+    } else {
+      Fail(run, "parse", "LAYERSTATE: unknown state " + state + " (ON|OFF|FREEZE|THAW|COLOR)", sourceLine);
+      return false;
+    }
+  } else if (verb == "HOVER") {
+    // HOVER <x> <y> [z] — move the cursor without clicking, so the live preview can be asserted.
+    //
+    // The preview is the whole point of the feature and it is the half a CLICK cannot show: by the
+    // time a click has landed the value is committed and the rubber is gone. This resolves the pick
+    // exactly as the viewport does each frame and stops there.
+    std::istringstream is(rest);
+    float hx = 0.f;
+    float hy = 0.f;
+    if (!(is >> hx >> hy)) {
+      Fail(run, "parse", "HOVER expects <x> <y> [z]", sourceLine);
+      return false;
+    }
+    float hz = 0.f;
+    bool hasHz = false;
+    if (is >> hz)
+      hasHz = true;
+    double hzWorld = ucs::WorkPlaneZAt(CadActiveWorkPlane(run.st), static_cast<double>(hx),
+                                       static_cast<double>(hy));
+    if (hasHz)
+      hzWorld = static_cast<double>(hz);
+    ray3d::Ray hray;
+    const ray3d::Ray* hrayPtr = nullptr;
+    if (!CadViewIsPlan(run.st) && run.st.uiViewportWidthPx > 0.f) {
+      const Camera hcam = CadViewCamera(run.st);
+      float hsx = 0.f, hsy = 0.f;
+      hcam.WorldToScreen(static_cast<double>(hx), static_cast<double>(hy), hzWorld,
+                         run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &hsx, &hsy);
+      hray = hcam.ScreenRay(hsx, hsy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+      hrayPtr = &hray;
+    }
+    CadResolveSolidPick(run.st, ray3d::Vec3{static_cast<double>(hx), static_cast<double>(hy), hzWorld},
+                        hrayPtr);
+    run.hoverX = static_cast<double>(hx);
+    run.hoverY = static_cast<double>(hy);
+  } else if (verb == "VIEWANGLES") {
+    // VIEWANGLES <azimuthDeg> <elevationDeg> — orbit the model view.
+    //
+    // Here for the same reason CLAYER and LAYERSTATE are: the only routes to this in the product are
+    // the ViewCube and a mouse drag, so without it no transcript can exercise anything that only
+    // happens once the view is orbited. For the solid commands that is not a nicety — a HEIGHT is
+    // read off the cursor RAY, and in plan view there is no ray and no height to read.
+    std::istringstream is(rest);
+    float az = 0.f;
+    float el = 90.f;
+    if (!(is >> az >> el)) {
+      Fail(run, "parse", "VIEWANGLES expects <azimuthDeg> <elevationDeg>", sourceLine);
+      return false;
+    }
+    run.st.viewportAzimuthDeg = az;
+    run.st.viewportElevationDeg = el;
+    // The projection needs a viewport size; a transcript has no window, so give it a definite one.
+    if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+      run.st.uiViewportWidthPx = 1200.f;
+      run.st.uiViewportHeightPx = 700.f;
+    }
   } else if (verb == "UCSNAMED") {
     // UCSNAMED RESTORE|DELETE <name> — the View Manager's two named-UCS buttons.
     //
@@ -938,6 +1349,137 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              "ANNKIND: annotation " + std::to_string(ix) + " expected " + want + ", got " + got, sourceLine);
         return false;
       }
+    } else if (what == "VERTEX" || what == "ELEVATION") {
+      // EXPECT VERTEX    <kind> <entity> <vertex> <x> <y> <z>   — one vertex, in WORLD coordinates
+      // EXPECT ELEVATION <kind> <entity> <z>                    — EVERY vertex of one entity, at z
+      //
+      // The oracle this suite was missing. Every other EXPECT counts entities, matches log text, or
+      // checks a structural invariant, and none of those can see a drawing whose coordinates are
+      // well-formed and wrong. `CheckDocumentInvariants` is a CORRUPTION oracle: a polyline with
+      // every Z replaced by 0 is correctly strided, entirely finite, unchanged in count and id, and
+      // so passes it — which is precisely how eight commands discarded elevation under a green
+      // suite.
+      //
+      // ELEVATION asserts the whole entity rather than one vertex on purpose: "this polyline is at
+      // 12" is the claim worth making, and it also catches a PARTIAL flattening that a single-vertex
+      // check would walk past.
+      //
+      // Storage is local in XY and absolute in Z (ADR-025 (b)), so XY is lifted back to world before
+      // comparing — otherwise expected numbers would silently depend on whether the drawing had been
+      // rebased. Compared with VPFRAME's relative tolerance, and for the reason its comment gives.
+      const bool wantVertex = (what == "VERTEX");
+      std::istringstream vs(arg);
+      std::string kind;
+      long ei = -1;
+      long vi = 0;
+      double wx = 0., wy = 0., wz = 0.;
+      const bool parsed = wantVertex ? static_cast<bool>(vs >> kind >> ei >> vi >> wx >> wy >> wz)
+                                     : static_cast<bool>(vs >> kind >> ei >> wz);
+      if (!parsed) {
+        Fail(run, "parse",
+             wantVertex ? "EXPECT VERTEX needs <kind> <entity> <vertex> <x> <y> <z>, got: " + arg
+                        : "EXPECT ELEVATION needs <kind> <entity> <z>, got: " + arg,
+             sourceLine);
+        return false;
+      }
+      kind = UpperAscii(kind);
+
+      // Collect the entity's vertices as (localX, localY, absoluteZ), whatever store it lives in.
+      //
+      // `float`, matching `CadCoord::WorldFromLocal`'s own parameters below: the stores are
+      // `double` since ADR-054 Phase A, but the local->world conversion this oracle has to go
+      // through is still float-in, so widening the collection alone would buy no precision and
+      // would only move the narrowing one line further down. The casts are explicit so that is a
+      // stated limit of the oracle rather than an accident of the store's type.
+      std::vector<std::array<float, 3>> verts;
+      std::string why;
+      if (kind == "LINE") {
+        const size_t base = static_cast<size_t>(ei) * 6;
+        if (ei < 0 || base + 5 >= run.st.userLinesFlat.size())
+          why = "no line at index " + std::to_string(ei) + " (there are " +
+                std::to_string(run.st.userLinesFlat.size() / 6) + ")";
+        else
+          verts = {{{static_cast<float>(run.st.userLinesFlat[base]), static_cast<float>(run.st.userLinesFlat[base + 1]), static_cast<float>(run.st.userLinesFlat[base + 2])}},
+                   {{static_cast<float>(run.st.userLinesFlat[base + 3]), static_cast<float>(run.st.userLinesFlat[base + 4]), static_cast<float>(run.st.userLinesFlat[base + 5])}}};
+      } else if (kind == "POLYLINE") {
+        const size_t n = PolylineCountOf(run.st);
+        if (ei < 0 || static_cast<size_t>(ei) >= n)
+          why = "no polyline at index " + std::to_string(ei) + " (there are " + std::to_string(n) + ")";
+        else {
+          const int b = run.st.userPolylineOffsets[static_cast<size_t>(ei)];
+          const int e = run.st.userPolylineOffsets[static_cast<size_t>(ei) + 1];
+          for (int v = b; v < e; ++v) {
+            const size_t o = static_cast<size_t>(v) * 3;
+            if (o + 2 < run.st.userPolylineVerts.size())
+              verts.push_back({{static_cast<float>(run.st.userPolylineVerts[o]),
+                                static_cast<float>(run.st.userPolylineVerts[o + 1]),
+                                static_cast<float>(run.st.userPolylineVerts[o + 2])}});
+          }
+        }
+      } else if (kind == "CIRCLE") {
+        const size_t base = static_cast<size_t>(ei) * 4;
+        if (ei < 0 || base + 3 >= run.st.userCirclesCxCyZR.size())
+          why = "no circle at index " + std::to_string(ei) + " (there are " +
+                std::to_string(run.st.userCirclesCxCyZR.size() / 4) + ")";
+        else  // centre + elevation; the radius is not a coordinate
+          verts = {{{static_cast<float>(run.st.userCirclesCxCyZR[base]), static_cast<float>(run.st.userCirclesCxCyZR[base + 1]),
+                     static_cast<float>(run.st.userCirclesCxCyZR[base + 2])}}};
+      } else if (kind == "ARC") {
+        if (ei < 0 || static_cast<size_t>(ei) >= run.st.userArcs.size())
+          why = "no arc at index " + std::to_string(ei) + " (there are " +
+                std::to_string(run.st.userArcs.size()) + ")";
+        else {
+          const CadArc& a = run.st.userArcs[static_cast<size_t>(ei)];
+          verts = {{{static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.z)}}};
+        }
+      } else {
+        Fail(run, "parse", "EXPECT " + what + ": unknown kind " + kind + " (LINE/POLYLINE/CIRCLE/ARC)",
+             sourceLine);
+        return false;
+      }
+      if (!why.empty()) {
+        Fail(run, "expect", "EXPECT " + what + ": " + why, sourceLine);
+        return false;
+      }
+
+      auto near = [](double got, double want) {
+        return std::fabs(got - want) <= 1e-4 * std::max(1.0, std::fabs(want));
+      };
+      if (wantVertex) {
+        if (vi < 0 || static_cast<size_t>(vi) >= verts.size()) {
+          Fail(run, "expect",
+               "EXPECT VERTEX: " + kind + " " + std::to_string(ei) + " has no vertex " +
+                   std::to_string(vi) + " (it has " + std::to_string(verts.size()) + ")",
+               sourceLine);
+          return false;
+        }
+        const auto& v = verts[static_cast<size_t>(vi)];
+        double gx = 0., gy = 0.;
+        CadCoord::WorldFromLocal(run.st, v[0], v[1], &gx, &gy);
+        const double got[3] = {gx, gy, static_cast<double>(v[2])};
+        const double wantXYZ[3] = {wx, wy, wz};
+        const char* names[3] = {"x", "y", "z"};
+        for (int k = 0; k < 3; ++k) {
+          if (!near(got[k], wantXYZ[k])) {
+            char msg[224];
+            std::snprintf(msg, sizeof(msg), "EXPECT VERTEX %s %ld vertex %ld: %s is %.6f, expected %.6f",
+                          kind.c_str(), ei, vi, names[k], got[k], wantXYZ[k]);
+            Fail(run, "expect", msg, sourceLine);
+            return false;
+          }
+        }
+      } else {
+        for (size_t k = 0; k < verts.size(); ++k) {
+          if (!near(static_cast<double>(verts[k][2]), wz)) {
+            char msg[224];
+            std::snprintf(msg, sizeof(msg),
+                          "EXPECT ELEVATION %s %ld: vertex %zu is at z %.6f, expected %.6f",
+                          kind.c_str(), ei, k, static_cast<double>(verts[k][2]), wz);
+            Fail(run, "expect", msg, sourceLine);
+            return false;
+          }
+        }
+      }
     } else if (what == "VPFRAME") {
       // EXPECT VPFRAME <centreX> <centreY> <scaleModelPerPaperIn> — the FLOATING viewport's framing
       // (REQ-123 / GitHub #100).
@@ -1026,6 +1568,48 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
                  " bytes) — the step between them changed nothing, so any check that follows is "
                  "vacuous",
              sourceLine);
+        return false;
+      }
+    } else if (what == "FILECONTAINS" || what == "FILELACKS") {
+      // EXPECT FILECONTAINS <path> "<text>"   /   EXPECT FILELACKS <path> "<text>"
+      //
+      // A literal substring test over a saved document, reading the `.gs` JSON out of a DWG trailer
+      // exactly as SAMEFILE above does, so it works on either extension.
+      //
+      // It exists for a shape of acceptance condition no count and no byte comparison can state:
+      // that a key is ABSENT. REQ-312 requires a flat drawing to save with NO plane-normal key at
+      // all — that omission is the whole mechanism by which a legacy drawing re-saves byte for byte
+      // — and a save/reopen/re-save round trip passes just as happily with the key written on every
+      // circle in the file. FILELACKS is the half that can fail.
+      const std::string expanded = ExpandVars(run, arg);
+      std::istringstream fs3(expanded);
+      std::string path;
+      if (!(fs3 >> path)) {
+        Fail(run, "parse", "EXPECT " + what + " needs <path> then the text to look for", sourceLine);
+        return false;
+      }
+      std::string needle = Trim(expanded.substr(std::min(expanded.size(), expanded.find(path) + path.size())));
+      if (needle.size() >= 2 && needle.front() == '"' && needle.back() == '"')
+        needle = needle.substr(1, needle.size() - 2);
+      if (needle.empty()) {
+        Fail(run, "parse", "EXPECT " + what + ": the text to look for is empty", sourceLine);
+        return false;
+      }
+      std::ifstream ff(path, std::ios::binary);
+      if (!ff) {
+        Fail(run, "io", "EXPECT " + what + ": cannot open " + path, sourceLine);
+        return false;
+      }
+      const std::string rawBytes((std::istreambuf_iterator<char>(ff)), std::istreambuf_iterator<char>());
+      std::string payload;
+      const std::string& hay = TryGoSurveyDwgPayloadFromBytes(rawBytes, payload) ? payload : rawBytes;
+      const bool found = hay.find(needle) != std::string::npos;
+      if (what == "FILECONTAINS" && !found) {
+        Fail(run, "expect", "FILECONTAINS: " + path + " does not contain: " + needle, sourceLine);
+        return false;
+      }
+      if (what == "FILELACKS" && found) {
+        Fail(run, "expect", "FILELACKS: " + path + " contains: " + needle, sourceLine);
         return false;
       }
     } else if (what == "LAYERSDEFINED") {
@@ -1222,6 +1806,268 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "expect", "no log line contains: " + needle, sourceLine);
         return false;
       }
+    } else if (what == "NOLOG") {
+      // EXPECT NOLOG "text" — the mirror of LOG, and it exists because some defects are a line that
+      // should NOT be there. TASK-224: a FILLET/CHAMFER value the kernel refused was followed by
+      // "Could not parse ... input", which is false — the input parsed, the kernel declined it — and
+      // no positive assertion can catch a message being wrongly PRESENT.
+      //
+      // Scoped to the MOST RECENT CMD, unlike LOG, which searches the whole accumulated log. A
+      // whole-log search would be near-useless here: nothing resets the log (NEW included), so a
+      // transcript that legitimately provokes a message once could never assert its absence again.
+      // "That command did not say this" is both the stronger claim and the one worth making.
+      std::string needle = Trim(arg);
+      if (needle.size() >= 2 && needle.front() == '"' && needle.back() == '"')
+        needle = needle.substr(1, needle.size() - 2);
+      for (std::size_t i = run.logMarkBeforeLastCmd; i < run.log.size(); ++i) {
+        if (run.log[i].find(needle) != std::string::npos) {
+          Fail(run, "expect", "the last command logged what must not be said: " + needle,
+               sourceLine);
+          return false;
+        }
+      }
+    } else if (what == "PROJECTION") {
+      // EXPECT PROJECTION <ORTHOGRAPHIC|PERSPECTIVE> — the LIVE projection (REQ-309).
+      //
+      // Needed because `EXPECT LOG` is a substring match over the WHOLE accumulated log, so once a
+      // transcript has switched to perspective even once, every later `EXPECT LOG "Projection =
+      // Perspective"` passes whether or not it is still true. That makes exactly the assertions
+      // this requirement most needs — the ones after a save/reopen and after restoring a named
+      // view — silently vacuous. Proven, not assumed: suppressing the named-view projection write
+      // in `GsIo` left the log-based transcript green.
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      bool wantPersp = false;
+      if (wantS == "PERSPECTIVE" || wantS == "P")
+        wantPersp = true;
+      else if (wantS == "ORTHOGRAPHIC" || wantS == "ORTHO" || wantS == "O")
+        wantPersp = false;
+      else {
+        Fail(run, "parse", "EXPECT PROJECTION needs ORTHOGRAPHIC or PERSPECTIVE", sourceLine);
+        return false;
+      }
+      const bool isPersp = run.st.viewportProjection == Camera::Projection::Perspective;
+      if (isPersp != wantPersp) {
+        Fail(run, "expect",
+             std::string("EXPECT PROJECTION: is ") + (isPersp ? "Perspective" : "Orthographic") +
+                 ", expected " + (wantPersp ? "Perspective" : "Orthographic"),
+             sourceLine);
+        return false;
+      }
+    } else if (what == "CROSSHAIR3D") {
+      // EXPECT CROSSHAIR3D <ON|OFF> — the LIVE setting (REQ-310). Same reason as EXPECT PROJECTION:
+      // EXPECT LOG matches the whole accumulated log, so it cannot assert a toggle's CURRENT value
+      // once that value has been reported at least once.
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      bool want = false;
+      if (wantS == "ON" || wantS == "1")
+        want = true;
+      else if (wantS == "OFF" || wantS == "0")
+        want = false;
+      else {
+        Fail(run, "parse", "EXPECT CROSSHAIR3D needs ON or OFF", sourceLine);
+        return false;
+      }
+      if (run.st.viewportCrosshair3d != want) {
+        Fail(run, "expect",
+             std::string("EXPECT CROSSHAIR3D: is ") + (run.st.viewportCrosshair3d ? "ON" : "OFF") +
+                 ", expected " + (want ? "ON" : "OFF"),
+             sourceLine);
+        return false;
+      }
+    } else if (what == "FOV") {
+      // EXPECT FOV <degrees> — the LIVE field of view (REQ-309). Same reason as EXPECT PROJECTION.
+      std::istringstream is(arg);
+      double want = 0.0;
+      if (!(is >> want)) {
+        Fail(run, "parse", "EXPECT FOV needs <degrees>", sourceLine);
+        return false;
+      }
+      const double got = static_cast<double>(run.st.viewportFovDeg);
+      if (std::fabs(got - want) > 1e-3) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "EXPECT FOV: is %.6g, expected %.6g", got, want);
+        Fail(run, "expect", buf, sourceLine);
+        return false;
+      }
+    } else if (what == "SOLIDPROPS") {
+      // EXPECT SOLIDPROPS <index> <volume> <area> <vertices> <edges> <faces>
+      //
+      // One verb for all six numbers, because they are one claim: this solid is the shape it was
+      // asked for. Splitting them into six verbs would let a transcript assert the volume of a solid
+      // whose topology had silently changed, which is exactly the failure that must not pass.
+      //
+      // Volume and area are compared to a RELATIVE 1e-6, not to REQ-101's 0.01: these come from
+      // closed-form integrals over analytic faces (REQ-313), so a figure that merely scraped under
+      // 0.01 would mean something had been faceted or narrowed on the way through.
+      std::istringstream is(arg);
+      long idx = -1;
+      double wantVol = 0.0;
+      double wantArea = 0.0;
+      long wantV = 0;
+      long wantE = 0;
+      long wantF = 0;
+      if (!(is >> idx >> wantVol >> wantArea >> wantV >> wantE >> wantF)) {
+        Fail(run, "parse",
+             "EXPECT SOLIDPROPS needs <index> <volume> <area> <vertices> <edges> <faces>", sourceLine);
+        return false;
+      }
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.cadSolids.size() ||
+          !run.st.cadSolids[static_cast<size_t>(idx)]) {
+        Fail(run, "expect",
+             "EXPECT SOLIDPROPS: no solid at index " + std::to_string(idx) + " (there are " +
+                 std::to_string(run.st.cadSolids.size()) + ")",
+             sourceLine);
+        return false;
+      }
+      const brep::Solid& s = *run.st.cadSolids[static_cast<size_t>(idx)];
+      const brep::Problem why = brep::Validate(s);
+      if (why != brep::Problem::Ok) {
+        Fail(run, "expect",
+             std::string("EXPECT SOLIDPROPS: solid ") + std::to_string(idx) + " is not valid — " +
+                 brep::ProblemText(why),
+             sourceLine);
+        return false;
+      }
+      const brep::MassProperties mp = brep::ComputeMassProperties(s);
+      const double volTol = std::max(1e-6, std::fabs(wantVol) * 1e-6);
+      const double areaTol = std::max(1e-6, std::fabs(wantArea) * 1e-6);
+      char buf[220];
+      if (std::fabs(mp.volume - wantVol) > volTol) {
+        std::snprintf(buf, sizeof(buf), "EXPECT SOLIDPROPS %ld: volume is %.9g, expected %.9g", idx,
+                      mp.volume, wantVol);
+        Fail(run, "expect", buf, sourceLine);
+        return false;
+      }
+      if (std::fabs(mp.surfaceArea - wantArea) > areaTol) {
+        std::snprintf(buf, sizeof(buf), "EXPECT SOLIDPROPS %ld: area is %.9g, expected %.9g", idx,
+                      mp.surfaceArea, wantArea);
+        Fail(run, "expect", buf, sourceLine);
+        return false;
+      }
+      const long gotV = static_cast<long>(s.vertices.size());
+      const long gotE = static_cast<long>(s.edges.size());
+      const long gotF = static_cast<long>(s.faces.size());
+      if (gotV != wantV || gotE != wantE || gotF != wantF) {
+        std::snprintf(buf, sizeof(buf),
+                      "EXPECT SOLIDPROPS %ld: topology is %ld/%ld/%ld (v/e/f), expected %ld/%ld/%ld",
+                      idx, gotV, gotE, gotF, wantV, wantE, wantF);
+        Fail(run, "expect", buf, sourceLine);
+        return false;
+      }
+    } else if (what == "PREVIEWBOUNDS") {
+      // EXPECT PREVIEWBOUNDS <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ> — the bounding box of the RUBBER
+      // the viewport would draw right now, in world coordinates, to REQ-101's 0.01 ft.
+      //
+      // This is what makes the live preview a tested claim rather than a screenshot. Asserting a
+      // segment COUNT would prove only that something was drawn; asserting the bounds proves the
+      // preview is the shape the cursor implies — and paired with a CLICK at the same place, that it
+      // is the same shape the commit builds.
+      std::istringstream is(arg);
+      double want[6] = {0, 0, 0, 0, 0, 0};
+      if (!(is >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5])) {
+        Fail(run, "parse", "EXPECT PREVIEWBOUNDS needs <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ>", sourceLine);
+        return false;
+      }
+      std::vector<float> rubber;
+      AppendCadDraftRubberLines(run.st, run.hoverX, run.hoverY, /*orthoEnabled=*/false, 0.0, 0.0,
+                                run.st.viewportZoom > 0.f ? 50.f / run.st.viewportZoom : 50.f, 700,
+                                rubber);
+      if (rubber.size() < 6) {
+        Fail(run, "expect", "EXPECT PREVIEWBOUNDS: the preview is empty", sourceLine);
+        return false;
+      }
+      double got[6] = {1e300, 1e300, 1e300, -1e300, -1e300, -1e300};
+      for (std::size_t i = 0; i + 2 < rubber.size(); i += 3) {
+        for (int k = 0; k < 3; ++k) {
+          const double c = static_cast<double>(rubber[i + static_cast<std::size_t>(k)]) +
+                           (k == 0 ? run.st.worldDocumentOriginX : (k == 1 ? run.st.worldDocumentOriginY : 0.0));
+          got[k] = std::min(got[k], c);
+          got[k + 3] = std::max(got[k + 3], c);
+        }
+      }
+      const char* names[6] = {"mnX", "mnY", "mnZ", "mxX", "mxY", "mxZ"};
+      for (int k = 0; k < 6; ++k) {
+        // Looser than REQ-101 on purpose, and the reason is geometric rather than sloppy: the preview
+        // is CHORDED, so a circle of radius r has its extreme vertex up to a sagitta inside r. Twice
+        // the chord tolerance covers that and still fails on any real error - a wrong radius is out
+        // by feet, not by hundredths.
+        if (std::fabs(got[k] - want[k]) > 2.0 * kSolidChordToleranceFt) {
+          char msg[160];
+          std::snprintf(msg, sizeof(msg), "EXPECT PREVIEWBOUNDS: %s is %.6f, expected %.6f", names[k],
+                        got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+    } else if (what == "SOLIDBOUNDS") {
+      // EXPECT SOLIDBOUNDS <index> <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ> — the solid's analytic bounds
+      // in WORLD coordinates, to REQ-101's 0.01 ft.
+      //
+      // The only verb here that says WHERE a solid is. Every other one says what shape it is, and a
+      // review found exactly the defect that gap allows: a solid that did not follow the document
+      // origin when it was established silently moved by the origin's whole magnitude, with correct
+      // volume, correct area and correct topology the entire time.
+      std::istringstream is(arg);
+      long idx = -1;
+      double want[6] = {0, 0, 0, 0, 0, 0};
+      if (!(is >> idx >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5])) {
+        Fail(run, "parse", "EXPECT SOLIDBOUNDS needs <index> <mnX> <mnY> <mnZ> <mxX> <mxY> <mxZ>",
+             sourceLine);
+        return false;
+      }
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.cadSolids.size() ||
+          !run.st.cadSolids[static_cast<size_t>(idx)]) {
+        Fail(run, "expect", "EXPECT SOLIDBOUNDS: no solid at index " + std::to_string(idx), sourceLine);
+        return false;
+      }
+      const brep::Bounds b = brep::ComputeBounds(*run.st.cadSolids[static_cast<size_t>(idx)]);
+      if (!b.valid) {
+        Fail(run, "expect", "EXPECT SOLIDBOUNDS: the solid has no bounds", sourceLine);
+        return false;
+      }
+      // Storage is local in XY and absolute in Z (ADR-025 D2), so the box is lifted back to world
+      // before comparing — otherwise the expected numbers would depend on where the origin happens
+      // to sit, which is the very thing this verb exists to check.
+      const double got[6] = {b.mn.x + run.st.worldDocumentOriginX, b.mn.y + run.st.worldDocumentOriginY,
+                             b.mn.z,
+                             b.mx.x + run.st.worldDocumentOriginX, b.mx.y + run.st.worldDocumentOriginY,
+                             b.mx.z};
+      const char* names[6] = {"mnX", "mnY", "mnZ", "mxX", "mxY", "mxZ"};
+      for (int k = 0; k < 6; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[160];
+          std::snprintf(msg, sizeof(msg), "EXPECT SOLIDBOUNDS %ld: %s is %.6f, expected %.6f", idx,
+                        names[k], got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+    } else if (what == "SOLIDKIND") {
+      // EXPECT SOLIDKIND <index> <name> — the recipe the solid remembers (ADR-045 (c)). Separate
+      // from SOLIDPROPS on purpose: the recipe is NOT the geometry, and a test that could only
+      // check them together could not tell the two apart.
+      std::istringstream is(arg);
+      long idx = -1;
+      std::string wantName;
+      if (!(is >> idx >> wantName)) {
+        Fail(run, "parse", "EXPECT SOLIDKIND needs <index> <kind name>", sourceLine);
+        return false;
+      }
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.cadSolids.size() ||
+          !run.st.cadSolids[static_cast<size_t>(idx)]) {
+        Fail(run, "expect", "EXPECT SOLIDKIND: no solid at index " + std::to_string(idx), sourceLine);
+        return false;
+      }
+      const std::string got = brep::PrimitiveKindName(run.st.cadSolids[static_cast<size_t>(idx)]->recipe.kind);
+      if (got != wantName) {
+        Fail(run, "expect", "EXPECT SOLIDKIND " + std::to_string(idx) + ": is " + got + ", expected " + wantName,
+             sourceLine);
+        return false;
+      }
     } else if (what == "LINEXYZ") {
       // EXPECT LINEXYZ <index> <x1> <y1> <z1> <x2> <y2> <z2> — one line's endpoints, in WORLD
       // coordinates, to REQ-101's 0.01 ft.
@@ -1264,6 +2110,242 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
           char msg[256];
           std::snprintf(msg, sizeof(msg), "EXPECT LINEXYZ %ld: %s is %.6f, expected %.6f", idx, names[k], got[k],
                         want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+      return true;
+    } else if (what == "POLYBULGE") {
+      // EXPECT POLYBULGE <polylineIndex> <vertexIndexWithinPolyline> <bulge> — one polyline
+      // segment's per-vertex bulge (REQ-316 / ADR-047). A count or a log line cannot state that a
+      // segment is the RIGHT amount of curved; a wrong sign or a flattened arc is silent in plan
+      // view, the same reason EXPECT LINEXYZ exists for the UCS work. An empty bulge array reads as
+      // 0 for every vertex (a straight polyline).
+      std::istringstream is(arg);
+      long pi = -1, vi = -1;
+      double want = 0.0;
+      if (!(is >> pi) || !(is >> vi) || !(is >> want)) {
+        Fail(run, "parse", "EXPECT POLYBULGE needs <polylineIndex> <vertexIndex> <bulge>", sourceLine);
+        return false;
+      }
+      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.userPolylineOffsets.size()) {
+        Fail(run, "expect", "EXPECT POLYBULGE: no polyline at index " + std::to_string(pi), sourceLine);
+        return false;
+      }
+      const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      if (vi < 0 || vi >= (v1 - v0)) {
+        Fail(run, "expect", "EXPECT POLYBULGE: vertex index out of range for that polyline", sourceLine);
+        return false;
+      }
+      const size_t gv = static_cast<size_t>(v0 + vi);
+      const double got = gv < run.st.userPolylineVertsBulge.size()
+                             ? static_cast<double>(run.st.userPolylineVertsBulge[gv])
+                             : 0.0;
+      if (std::fabs(got - want) > 1e-4) {
+        char msg[192];
+        std::snprintf(msg, sizeof(msg), "EXPECT POLYBULGE %ld %ld: is %.6f, expected %.6f", pi, vi, got, want);
+        Fail(run, "expect", msg, sourceLine);
+        return false;
+      }
+      return true;
+    } else if (what == "POLYVERT") {
+      // EXPECT POLYVERT <polylineIndex> <vertexIndexWithinPolyline> <x> <y> <z> — one polyline
+      // vertex's WORLD coordinates (REQ-057, issue #373). Added because JOIN's own polyline output
+      // had no test able to see Z at all: EXPECT POLYLINES only counts, and EXPECT POLYBULGE checks
+      // curvature, not position — a real bug (JOIN silently writing 0 for every vertex's Z) passed
+      // every existing JOIN transcript.
+      std::istringstream is(arg);
+      long pi = -1, vi = -1;
+      double want[3] = {0, 0, 0};
+      if (!(is >> pi) || !(is >> vi) || !(is >> want[0] >> want[1] >> want[2])) {
+        Fail(run, "parse", "EXPECT POLYVERT needs <polylineIndex> <vertexIndex> <x> <y> <z>", sourceLine);
+        return false;
+      }
+      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.userPolylineOffsets.size()) {
+        Fail(run, "expect", "EXPECT POLYVERT: no polyline at index " + std::to_string(pi), sourceLine);
+        return false;
+      }
+      const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      if (vi < 0 || vi >= (v1 - v0)) {
+        Fail(run, "expect", "EXPECT POLYVERT: vertex index out of range for that polyline", sourceLine);
+        return false;
+      }
+      const size_t gv = static_cast<size_t>(v0 + vi) * 3;
+      if (gv + 2 >= run.st.userPolylineVerts.size()) {
+        Fail(run, "expect", "EXPECT POLYVERT: vertex storage out of range", sourceLine);
+        return false;
+      }
+      double gx = 0., gy = 0.;
+      CadCoord::WorldFromLocal(run.st, run.st.userPolylineVerts[gv], run.st.userPolylineVerts[gv + 1], &gx, &gy);
+      const double got[3] = {gx, gy, static_cast<double>(run.st.userPolylineVerts[gv + 2])};
+      const char* names[3] = {"x", "y", "z"};
+      for (int k = 0; k < 3; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[192];
+          std::snprintf(msg, sizeof(msg), "EXPECT POLYVERT %ld %ld: %s is %.6f, expected %.6f", pi, vi, names[k],
+                        got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+      return true;
+    } else if (what == "PICKAT") {
+      // EXPECT PICKAT <x> <y> <tolWorld> <NONE|LINE|ARC|POLYLINE|CIRCLE|ELLIPSE> — what
+      // PickClosestCadEntity resolves at a world point within a world tolerance. The screen-space
+      // hover/click plumbing has no headless equivalent, but the geometry math (REQ-316: a curved
+      // polyline segment / an arc must be pickable ON the curve, not only near its chord) does.
+      std::istringstream is(arg);
+      double px = 0.0, py = 0.0, tol = 0.0;
+      std::string want;
+      if (!(is >> px >> py >> tol >> want)) {
+        Fail(run, "parse", "EXPECT PICKAT needs <x> <y> <tolWorld> <TYPE>", sourceLine);
+        return false;
+      }
+      SelectedEntity hit{};
+      float d2 = 0.f;
+      const bool got = PickClosestCadEntity(run.st, px, py, static_cast<float>(tol), &hit, &d2, nullptr);
+      const std::string gotType =
+          !got ? "NONE"
+               : (hit.type == SelectedEntity::Type::LineSeg     ? "LINE"
+                  : hit.type == SelectedEntity::Type::Arc        ? "ARC"
+                  : hit.type == SelectedEntity::Type::Polyline   ? "POLYLINE"
+                  : hit.type == SelectedEntity::Type::Circle     ? "CIRCLE"
+                  : hit.type == SelectedEntity::Type::Ellipse    ? "ELLIPSE"
+                                                                 : "OTHER");
+      if (gotType != UpperAscii(want)) {
+        Fail(run, "expect",
+             "EXPECT PICKAT (" + std::to_string(px) + "," + std::to_string(py) + " tol " +
+                 std::to_string(tol) + "): got " + gotType + ", expected " + UpperAscii(want),
+             sourceLine);
+        return false;
+      }
+      return true;
+    } else if (what == "POLYARCS") {
+      // EXPECT POLYARCS <polylineIndex> <count> — how many of a polyline's segments are curved
+      // (non-zero bulge). Direction-independent, so it is the right assertion for a JOIN result
+      // whose Eulerian walk may traverse an arc either way (REQ-316 / ADR-047).
+      std::istringstream is(arg);
+      long pi = -1, want = -1;
+      if (!(is >> pi) || !(is >> want)) {
+        Fail(run, "parse", "EXPECT POLYARCS needs <polylineIndex> <count>", sourceLine);
+        return false;
+      }
+      if (pi < 0 || static_cast<size_t>(pi) + 1 >= run.st.userPolylineOffsets.size()) {
+        Fail(run, "expect", "EXPECT POLYARCS: no polyline at index " + std::to_string(pi), sourceLine);
+        return false;
+      }
+      const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      long got = 0;
+      for (int vi = v0; vi < v1; ++vi)
+        if (static_cast<size_t>(vi) < run.st.userPolylineVertsBulge.size() &&
+            std::fabs(run.st.userPolylineVertsBulge[static_cast<size_t>(vi)]) > 1e-9)
+          ++got;
+      if (got != want) {
+        Fail(run, "expect",
+             "EXPECT POLYARCS " + std::to_string(pi) + ": " + std::to_string(got) +
+                 " curved segments, expected " + std::to_string(want),
+             sourceLine);
+        return false;
+      }
+      return true;
+    } else if (what == "CIRCLEXYZ") {
+      // EXPECT CIRCLEXYZ <index> <cx> <cy> <cz> <r> <nx> <ny> <nz> — one circle's centre in WORLD
+      // coordinates, its radius, and its PLANE NORMAL (REQ-312).
+      //
+      // The normal is the half no count and no log line can see. A circle drawn on a tilted UCS
+      // whose normal came out world +Z is a flat circle in the wrong plane, and it passes every
+      // other oracle in this file — which is exactly how the gap this requirement closes survived.
+      std::istringstream is(arg);
+      long idx = -1;
+      double want[7] = {0, 0, 0, 0, 0, 0, 1};
+      if (!(is >> idx) || !(is >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5] >> want[6])) {
+        Fail(run, "parse", "EXPECT CIRCLEXYZ needs <index> <cx> <cy> <cz> <r> <nx> <ny> <nz>", sourceLine);
+        return false;
+      }
+      const size_t base = static_cast<size_t>(idx) * 4;
+      if (idx < 0 || base + 3 >= run.st.userCirclesCxCyZR.size()) {
+        Fail(run, "expect",
+             "EXPECT CIRCLEXYZ: no circle at index " + std::to_string(idx) + " (there are " +
+                 std::to_string(run.st.userCirclesCxCyZR.size() / 4) + ")",
+             sourceLine);
+        return false;
+      }
+      double gcx = 0.;
+      double gcy = 0.;
+      CadCoord::WorldFromLocal(run.st, run.st.userCirclesCxCyZR[base], run.st.userCirclesCxCyZR[base + 1], &gcx,
+                               &gcy);
+      float nx = 0.f;
+      float ny = 0.f;
+      float nz = 1.f;
+      CircleNormalAt(run.st.userCircleNormals, static_cast<size_t>(idx), &nx, &ny, &nz);
+      const double got[7] = {gcx,
+                             gcy,
+                             static_cast<double>(run.st.userCirclesCxCyZR[base + 2]),
+                             static_cast<double>(run.st.userCirclesCxCyZR[base + 3]),
+                             static_cast<double>(nx),
+                             static_cast<double>(ny),
+                             static_cast<double>(nz)};
+      const char* names[7] = {"cx", "cy", "cz", "r", "nx", "ny", "nz"};
+      for (int k = 0; k < 7; ++k) {
+        // The first four are lengths and get REQ-101's 0.01 ft. The normal is a unit direction with
+        // no unit of length at all, so it is held to 1e-4 — loose enough for the float round trip
+        // through the store, tight enough that a plane off by a fifth of a degree still fails.
+        const double tol = k < 4 ? 0.01 : 1e-4;
+        if (std::fabs(got[k] - want[k]) > tol) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "EXPECT CIRCLEXYZ %ld: %s is %.6f, expected %.6f", idx, names[k],
+                        got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+      return true;
+    } else if (what == "ARCPOINTS") {
+      // EXPECT ARCPOINTS <index> <sx> <sy> <sz> <ex> <ey> <ez> — where an arc actually STARTS and
+      // ENDS, in WORLD coordinates, to REQ-101's 0.01 ft.
+      //
+      // The arc counterpart of LINEXYZ, and deliberately expressed as endpoints rather than as
+      // centre/start/sweep: REQ-312's acceptance is written about where an arc's ends land, and a
+      // centre, a start angle and a sweep can each be individually plausible while the plane they
+      // are measured in is the wrong one. Resolved through the one shared parametrisation
+      // (`CurvePlane` + `CurvePointAt`), so this asserts the same maths the renderer draws with.
+      std::istringstream is(arg);
+      long idx = -1;
+      double want[6] = {0, 0, 0, 0, 0, 0};
+      if (!(is >> idx) || !(is >> want[0] >> want[1] >> want[2] >> want[3] >> want[4] >> want[5])) {
+        Fail(run, "parse", "EXPECT ARCPOINTS needs <index> <sx> <sy> <sz> <ex> <ey> <ez>", sourceLine);
+        return false;
+      }
+      if (idx < 0 || static_cast<size_t>(idx) >= run.st.userArcs.size()) {
+        Fail(run, "expect",
+             "EXPECT ARCPOINTS: no arc at index " + std::to_string(idx) + " (there are " +
+                 std::to_string(run.st.userArcs.size()) + ")",
+             sourceLine);
+        return false;
+      }
+      const CadArc& a = run.st.userArcs[static_cast<size_t>(idx)];
+      const ucs::Ucs plane = CurvePlane(a);
+      const ray3d::Vec3 s = CurvePointAt(plane, static_cast<double>(a.r), static_cast<double>(a.startRad));
+      const ray3d::Vec3 e =
+          CurvePointAt(plane, static_cast<double>(a.r), static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad));
+      // Storage is local in XY, absolute in Z (ADR-025 (b)) — lifted to world so a transcript's
+      // numbers do not silently depend on whether the drawing happened to have been rebased.
+      double sx = 0.;
+      double sy = 0.;
+      double ex = 0.;
+      double ey = 0.;
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(s.x), static_cast<float>(s.y), &sx, &sy);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(e.x), static_cast<float>(e.y), &ex, &ey);
+      const double got[6] = {sx, sy, s.z, ex, ey, e.z};
+      const char* names[6] = {"sx", "sy", "sz", "ex", "ey", "ez"};
+      for (int k = 0; k < 6; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "EXPECT ARCPOINTS %ld: %s is %.6f, expected %.6f", idx, names[k],
+                        got[k], want[k]);
           Fail(run, "expect", msg, sourceLine);
           return false;
         }
@@ -1402,6 +2484,48 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // still in the drawing and must simply refuse to be picked.
       else if (what == "SELECTED")
         got = static_cast<long>(run.st.selection.size());
+      // How many FACES / EDGES / VERTICES of solids are selected (REQ-318 increment 2). A separate
+      // count from SELECTED and not a subset of it: the two stores are mutually exclusive by
+      // decision (D-2026-09-04-a), so "SELECTED 0 / SUBOBJECTS 1" is the assertion that says the
+      // sub-object selection did not leak into the entity one — which is #148's criterion 2 stated
+      // as a number rather than as a promise.
+      else if (what == "SUBOBJECTS")
+        got = static_cast<long>(run.st.subObjectSelection.size());
+      // Whether a translate gizmo is drawn at all (REQ-060 acceptance 3: "no gizmo is drawn when
+      // the selection is empty"). Asserted through `CadGizmoVisible`, which is the same predicate
+      // `BuildGizmoOverlay` early-outs on — so this is the drawing decision itself, not a
+      // restatement of it that could drift.
+      else if (what == "GIZMO")
+        got = CadGizmoVisible(run.st) ? 1L : 0L;
+      // Which handle is armed: -1 none, 0 X, 1 Y, 2 Z. "A drag is armed" and "the drag is along the
+      // axis you aimed at" are different claims, and the second is the one a mis-projected pick
+      // breaks silently.
+      else if (what == "GIZMOAXIS")
+        got = static_cast<long>(run.st.gizmoDragActive ? run.st.gizmoDragAxis : -1);
+      // Which OPERATION the gizmo is set to: 0 move, 1 rotate, 2 scale (TASK-232). Its own verb
+      // because the operation is a stored SETTING rather than something derived from the selection,
+      // so nothing else a transcript can read would reveal it.
+      else if (what == "GIZMOOP")
+        got = run.st.gizmoOp == CadGizmoOp::Translate ? 0L
+              : run.st.gizmoOp == CadGizmoOp::Rotate  ? 1L
+                                                      : 2L;
+      // How many handles the gizmo has: 3 on an entity selection, 1 on a solid FACE, 0 for none.
+      // The count is the difference between the two modes made assertable — a face gizmo that grew
+      // a second handle would be offering a direction `brep::PushPullFace` cannot move a face in.
+      else if (what == "GIZMOAXES")
+        got = static_cast<long>(CadGizmoAxisCountFor(run.st));
+      else if (what == "SUBOBJECTFACES" || what == "SUBOBJECTEDGES" || what == "SUBOBJECTVERTICES") {
+        const solidpick::Kind want = what == "SUBOBJECTFACES"   ? solidpick::Kind::Face
+                                     : what == "SUBOBJECTEDGES" ? solidpick::Kind::Edge
+                                                                : solidpick::Kind::Vertex;
+        // By KIND, because "one sub-object is selected" and "the selected sub-object is the face
+        // you aimed at" are different claims — the same distinction SELECTEDSURFACES draws below,
+        // and here it is load-bearing: precedence is vertex, then edge, then face, so a pick that
+        // silently returned the wrong KIND is precisely the failure this increment can have.
+        got = static_cast<long>(std::count_if(
+            run.st.subObjectSelection.begin(), run.st.subObjectSelection.end(),
+            [&](const SelectedSubObject& s) { return s.kind == want; }));
+      }
       else if (what == "SURFACES")
         got = static_cast<long>(run.st.cadSurfaces.size());
       // How many of the CURRENT selection are TIN surfaces (REQ-068 / ADR-036 (b)). Distinct from
@@ -1433,6 +2557,50 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // How many batches the renderer would be handed, across every visible surface. Zero means
       // nothing is drawn for surfaces at all, which is how "a surface on a frozen layer" and "a
       // style with everything switched off" are told apart from a cache that simply never filled.
+      else if (what == "SOLIDS")
+        got = static_cast<long>(run.st.cadSolids.size());
+      // How many solids the renderer would be handed this frame — the cache and the visibility
+      // filter, not the document. A solid on a frozen layer counts in SOLIDS and not in SOLIDBATCHES,
+      // which is the only way a transcript can state REQ-084 (d) for a solid.
+      else if (what == "SOLIDBATCHES")
+        got = static_cast<long>(run.st.solidDisplayGeometry.solids.size());
+      // How many visible solids feed the batches this frame — the visibility filter's output BEFORE
+      // GitHub #194's coalescing merges solids that share an appearance. SOLIDBATCHES went from "one
+      // per drawn solid" to "one per resolved colour/lineweight"; this is what still lets a transcript
+      // count what layer off/freeze removed. Derived the same way the assembly pass does it.
+      else if (what == "SOLIDVISIBLE") {
+        got = 0;
+        for (size_t si = 0; si < run.st.cadSolids.size(); ++si) {
+          if (!SolidVisible(run.st, si))
+            continue;
+          const CadSolidPtr& sp = run.st.cadSolids[si];
+          const auto ce = std::find_if(run.st.solidDisplayCache.begin(), run.st.solidDisplayCache.end(),
+                                       [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+          if (ce != run.st.solidDisplayCache.end() && !ce->empty())
+            ++got;
+        }
+      }
+      // Distinct (re)tessellations across the run — #120's "do not regenerate a solid's render mesh
+      // every frame" expressed as a count. Paired with SOLIDTRIS: the cache HAS content and is not
+      // being silently rebuilt behind an orbit.
+      else if (what == "SOLIDTESSGEN")
+        got = static_cast<long>(run.st.solidDisplayRegenCount);
+      // Triangles in the whole solid tessellation cache. #120 asks that the render mesh not be
+      // regenerated every frame; this is what lets a transcript assert the cache HAS content and,
+      // paired with SOLIDTESSGEN below, that it is not being rebuilt behind the scenes.
+      // Segments in the solid wireframe the renderer is handed - edges PLUS isolines, which share one
+      // buffer. This is how a transcript can say that ISOLINES actually reaches the display rather
+      // than only being stored.
+      else if (what == "SOLIDEDGESEGS") {
+        got = 0;
+        for (const CadSolidTessellation& e : run.st.solidDisplayCache)
+          got += static_cast<long>(e.edgeVerts.size() / 6);
+      }
+      else if (what == "SOLIDTRIS") {
+        got = 0;
+        for (const CadSolidTessellation& e : run.st.solidDisplayCache)
+          got += static_cast<long>(e.triVerts.size() / 9);
+      }
       else if (what == "SURFACEBATCHES")
         got = static_cast<long>(run.st.surfaceDisplayGeometry.lines.size());
       // REQ-072 band-fill and slope-arrow geometry, surface 0's cache entry only — see
@@ -1465,7 +2633,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
                  " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
                  " EXTRACTMATCHESDISPLAY"
                  " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN SURFACEBANDTRIS SURFACEARROWSEGS"
-                 " SURFACEBANDBATCHES)",
+                 " SURFACEBANDBATCHES SOLIDS SOLIDBATCHES SOLIDTRIS SOLIDEDGESEGS)",
              sourceLine);
         return false;
       }

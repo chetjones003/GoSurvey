@@ -1,0 +1,116 @@
+# REQ-316 / ADR-047 increment 3 — JOIN welds lines and arcs into ONE polyline, the arc kept as a
+# bulge segment (not tessellated, not flattened to a chord).
+#
+# Before this, ExecuteJoinSelection built edges only from LineSeg and Polyline selections; an ARC
+# in the selection was silently ignored, and a joined polyline was always straight.
+
+# ── 1. line + ARC entity sharing an endpoint → one polyline, one curved segment ────────────────
+NEW
+
+CMD LINE
+CMD -15,0
+CMD 0,0
+ESC
+
+# 3-point arc through (0,0) (10,10) (20,0): centre (10,0), radius 10, a half turn — |bulge| = 1.
+CMD ARC
+CLICK 0 0
+CLICK 10 10
+CLICK 20 0
+ESC
+
+CHECK ALL
+EXPECT LINES 1
+EXPECT ARCS 1
+
+CMD JOIN
+CLICK -20 -5
+CLICK 25 15
+EXPECT SELECTED 2
+CMD
+EXPECT LOG JOIN — created 1 polyline(s).
+CHECK ALL
+EXPECT LINES 0
+EXPECT ARCS 0
+EXPECT POLYLINES 1
+# One straight segment + one curved (arc) segment, whichever way the Eulerian walk ran.
+EXPECT POLYARCS 0 1
+
+# STABILITY — the joined arc polyline survives a DXF round trip as one polyline (arc, not chord).
+EXPORT DXF %OUT%/join-a.dxf
+NEW
+IMPORT DXF %OUT%/join-a.dxf
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT LINES 0
+EXPECT POLYARCS 0 1
+
+# ── 2. line + polyline-with-an-arc-segment → the polyline's bulge is carried through ───────────
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD ARC
+CMD CANGLE 90
+CMD 10,0
+CMD END
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT LINES 1
+
+CMD JOIN
+CLICK -5 -8
+CLICK 25 8
+EXPECT SELECTED 2
+CMD
+EXPECT LOG JOIN — created 1 polyline(s).
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT LINES 0
+EXPECT POLYARCS 0 1
+
+# ── 3. objects that do not connect are left alone and reported ─────────────────────────────────
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 100,100
+CMD 110,100
+ESC
+
+CMD JOIN
+CLICK -5 -5
+CLICK 120 105
+EXPECT SELECTED 2
+CMD
+# Nothing merges: the two legs never touch. The drawing is unchanged.
+EXPECT LINES 2
+EXPECT POLYLINES 0
+EXPECT LOG JOIN — nothing merged: the selected objects' endpoints do not connect.
+
+# ── 4. Undo restores the pre-JOIN drawing in one step ─────────────────────────────────────────
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 10,0
+CMD 10,10
+ESC
+CMD JOIN
+CLICK -5 -5
+CLICK 15 15
+CMD
+EXPECT POLYLINES 1
+EXPECT LINES 0
+CMD UNDO
+EXPECT POLYLINES 0
+EXPECT LINES 2
+CHECK ALL

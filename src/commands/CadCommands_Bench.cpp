@@ -47,15 +47,80 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.savedSurfaceAttrs = st.cadSurfaceAttrs;
   b.savedMeshes = st.cadMeshes;
   b.savedMeshAttrs = st.cadMeshAttrs;
+  b.savedSolids = st.cadSolids;
+  b.savedSolidAttrs = st.cadSolidAttrs;
   b.savedVisualStyle = st.viewportVisualStyle;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
+  b.savedRollDeg = st.viewportRollDeg;  // #153
   b.savedZoom = st.viewportZoom;
   b.savedPanX = st.viewportPanX;
   b.savedPanY = st.viewportPanY;
   b.savedPanZ = st.viewportPanZ;
 
-  if (b.meshTriangleCount > 0) {
+  if (b.solidCount > 0) {
+    // B-rep solid profile (REQ-313 / REQ-100). The line, surface and mesh stores are emptied for the
+    // same reason the other large profiles empty them: the number has to be the solids' cost and
+    // nothing else.
+    //
+    // The scene is MANY solids rather than one big one, and that is the measurement's whole point. A
+    // solid's per-frame cost is not one large indexed upload — it is a cache lookup, a stream upload
+    // and a draw call per solid for the faces, and another for the edges. Ten thousand triangles in
+    // one solid and in a hundred solids are completely different frames, and the second is what a
+    // real model looks like. This is also the profile that can catch the failure #120 names
+    // directly: if the tessellation were being regenerated per frame, it would show up here and
+    // nowhere else.
+    st.userPolylineVerts.clear();
+    st.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
+    st.userPolylineClosed.clear();
+    st.userPolylineAttrs.clear();
+    st.cadSurfaces.clear();
+    st.cadSurfaceAttrs.clear();
+    st.cadMeshes.clear();
+    st.cadMeshAttrs.clear();
+    st.cadSolids.clear();
+    st.cadSolidAttrs.clear();
+    st.solidDisplayCache.clear();
+    st.solidDisplayGeometry.solids.clear();
+
+    // A grid of alternating cylinders and spheres — the two curved primitives, so the tessellation
+    // is real work rather than a box's twelve triangles.
+    const int side = std::max(1, static_cast<int>(std::ceil(std::sqrt(static_cast<double>(b.solidCount)))));
+    int made = 0;
+    for (int gy = 0; gy < side && made < b.solidCount; ++gy) {
+      for (int gx = 0; gx < side && made < b.solidCount; ++gx) {
+        ucs::Ucs frame;
+        frame.origin = {static_cast<double>(gx) * 30.0, static_cast<double>(gy) * 30.0, 0.0};
+        brep::Solid s;
+        brep::Problem why = brep::Problem::Ok;
+        const bool ok = (made % 2 == 0) ? brep::MakeCylinder(frame, 8.0, 20.0, &s, &why)
+                                        : brep::MakeSphere(frame, 9.0, &s, &why);
+        if (!ok) {
+          log.push_back(std::string("BENCH — solid scene failed to build: ") + brep::ProblemText(why));
+          return false;
+        }
+        st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+        st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+        ++made;
+      }
+    }
+    b.solidCount = made;
+
+    // Count the triangles the profile will actually draw, so the report states a DENSITY rather than
+    // an object count nobody can compare against REQ-100's other profiles.
+    b.solidTriangleCount = 0;
+    for (const CadSolidPtr& sp : st.cadSolids) {
+      brep::Tessellation t;
+      brep::Problem tw = brep::Problem::Ok;
+      if (brep::Tessellate(*sp, kSolidChordToleranceFt, &t, &tw))
+        b.solidTriangleCount += t.triangleCount();
+    }
+
+    // Shaded, for the reason the mesh profile forces it: that is the style REQ-064's budget
+    // condition is stated in, and it is the only style in which a solid's FACES are drawn at all.
+    st.viewportVisualStyle = VisualStyle::Shaded;
+    b.segmentCount = 0;
+  } else if (b.meshTriangleCount > 0) {
     // Shaded-mesh profile (REQ-100 (b), density decided 2026-08-15). The line stores are emptied
     // for the same reason the surface profile empties them: the number has to be the mesh's cost
     // and nothing else. Surfaces are cleared too, so the two large profiles can never overlap.
@@ -129,8 +194,6 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
       b.surfaceMinorIntervalFt = bstyle->minorIntervalFt;
       b.surfaceMajorIntervalFt = bstyle->majorIntervalFt;
     }
-    b.regenBaselineTaken = false;
-    b.regenDuringRun = 0;
   } else {
     b.segmentCount = benchscene::BuildContourScene(segments, &st.userPolylineVerts, &st.userPolylineOffsets,
                                                    &st.userPolylineClosed);
@@ -145,19 +208,49 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   // Whichever store the profile filled: the contour scene lives in the polylines, the surface
   // profile in the TIN, the mesh profile in the mesh. Framing from the wrong one would put the
   // scene off screen and measure a viewport with nothing in it.
-  const std::vector<float>& frameVerts =
-      (b.meshTriangleCount > 0 && !st.cadMeshes.empty() && st.cadMeshes[0])
-          ? st.cadMeshes[0]->vertsXyz
-          : ((b.surfacePointCount > 0 && !st.cadSurfaces.empty() && st.cadSurfaces[0].tin)
-                 ? st.cadSurfaces[0].tin->vertsXyz
-                 : st.userPolylineVerts);
-  for (size_t i = 0; i + 2 < frameVerts.size(); i += 3) {
-    mnX = std::min(mnX, static_cast<double>(frameVerts[i]));
-    mxX = std::max(mxX, static_cast<double>(frameVerts[i]));
-    mnY = std::min(mnY, static_cast<double>(frameVerts[i + 1]));
-    mxY = std::max(mxY, static_cast<double>(frameVerts[i + 1]));
-    mnZ = std::min(mnZ, static_cast<double>(frameVerts[i + 2]));
-    mxZ = std::max(mxZ, static_cast<double>(frameVerts[i + 2]));
+  // Whichever store the profile filled — held as a pointer pair (data + size) so a float mesh/TIN
+  // store and the double polyline store can both feed the same bounds walk below.
+  const float* frameF = nullptr;
+  const double* frameD = nullptr;
+  size_t frameN = 0;
+  if (b.meshTriangleCount > 0 && !st.cadMeshes.empty() && st.cadMeshes[0]) {
+    frameF = st.cadMeshes[0]->vertsXyz.data();
+    frameN = st.cadMeshes[0]->vertsXyz.size();
+  } else if (b.surfacePointCount > 0 && !st.cadSurfaces.empty() && st.cadSurfaces[0].tin) {
+    frameD = st.cadSurfaces[0].tin->vertsXyz.data();
+    frameN = st.cadSurfaces[0].tin->vertsXyz.size();
+  } else {
+    frameD = st.userPolylineVerts.data();
+    frameN = st.userPolylineVerts.size();
+  }
+  const auto frameVertAt = [&](size_t i) -> double {
+    return frameD ? frameD[i] : static_cast<double>(frameF[i]);
+  };
+  // The solid profile frames from the solids' ANALYTIC bounds instead — there is no vertex array to
+  // walk, and a sphere's two stored vertices would frame a line segment rather than a scene, putting
+  // most of the geometry off screen and measuring a viewport with nothing in it.
+  if (b.solidCount > 0) {
+    for (const CadSolidPtr& sp : st.cadSolids) {
+      if (!sp)
+        continue;
+      const brep::Bounds bb = brep::ComputeBounds(*sp);
+      if (!bb.valid)
+        continue;
+      mnX = std::min(mnX, bb.mn.x);
+      mxX = std::max(mxX, bb.mx.x);
+      mnY = std::min(mnY, bb.mn.y);
+      mxY = std::max(mxY, bb.mx.y);
+      mnZ = std::min(mnZ, bb.mn.z);
+      mxZ = std::max(mxZ, bb.mx.z);
+    }
+  }
+  for (size_t i = 0; i + 2 < frameN; i += 3) {
+    mnX = std::min(mnX, frameVertAt(i));
+    mxX = std::max(mxX, frameVertAt(i));
+    mnY = std::min(mnY, frameVertAt(i + 1));
+    mxY = std::max(mxY, frameVertAt(i + 1));
+    mnZ = std::min(mnZ, frameVertAt(i + 2));
+    mxZ = std::max(mxZ, frameVertAt(i + 2));
   }
   const double cx = 0.5 * (mnX + mxX);
   const double cy = 0.5 * (mnY + mxY);
@@ -171,12 +264,23 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   st.viewportZoom = static_cast<float>(50.0 / halfH);
   st.viewportAzimuthDeg = 0.f;
   st.viewportElevationDeg = 55.f;
+  st.viewportRollDeg = 0.f;  // #153
 
   b.frameMs.clear();
   b.frameMs.reserve(static_cast<size_t>(frames));
   b.framesTotal = frames;
   b.warmupFrames = 60;
   b.frameIndex = 0;
+  // Reset the cache-regeneration baseline for EVERY profile, not just the surface one. `frameIndex`
+  // is zeroed just above, so a second `BENCH` in the same session re-enters warmup — but
+  // `regenBaselineTaken` / `regenAtStart` persist on `AppCommandState::bench`, and
+  // `solidDisplayRegenCount` (like `surfaceDisplayRegenCount`) is cumulative across the session. Left
+  // stale, the second run's baseline is the FIRST run's, so its own scene-build tessellation is
+  // counted as "regenerated during the run" and the report cries NOT HELD on a cache that held fine.
+  // (GitHub issue #194: this was the whole of the apparent 400/1200-regen failure.)
+  b.regenBaselineTaken = false;
+  b.regenAtStart = 0;
+  b.regenDuringRun = 0;
   b.orbitDegPerFrame = 0.5;  // a full turn every 720 frames — continuous, and never repeats a frame
   b.sceneInstalled = true;
   b.active = true;
@@ -214,9 +318,13 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
     st.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
     st.cadMeshes = std::move(b.savedMeshes);
     st.cadMeshAttrs = std::move(b.savedMeshAttrs);
+    st.cadSolids = std::move(b.savedSolids);
+    st.cadSolidAttrs = std::move(b.savedSolidAttrs);
     st.viewportVisualStyle = b.savedVisualStyle;
     b.savedMeshes.clear();
     b.savedMeshAttrs.clear();
+    b.savedSolids.clear();
+    b.savedSolidAttrs.clear();
     b.savedPolyVerts.clear();
     b.savedPolyOffsets.clear();
     b.savedPolyClosed.clear();
@@ -225,6 +333,7 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
     b.savedSurfaceAttrs.clear();
     st.viewportAzimuthDeg = b.savedAzimuthDeg;
     st.viewportElevationDeg = b.savedElevationDeg;
+    st.viewportRollDeg = b.savedRollDeg;  // #153
     st.viewportZoom = b.savedZoom;
     st.viewportPanX = b.savedPanX;
     st.viewportPanY = b.savedPanY;
@@ -250,7 +359,14 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
   const char* profileName = "line segments";
   char scene[128];
   std::snprintf(scene, sizeof(scene), "%d segments", b.segmentCount);
-  if (b.meshTriangleCount > 0) {
+  if (b.solidCount > 0) {
+    profileName = "B-rep solids";
+    // Both numbers, deliberately: the triangle count is what makes this comparable with the mesh
+    // profile, and the SOLID count is what the per-object cost scales with. A p95 quoted for
+    // "40,000 triangles" alone would not say whether it came from one solid or four hundred.
+    std::snprintf(scene, sizeof(scene), "%d solids, %d triangles, Shaded", b.solidCount,
+                  b.solidTriangleCount);
+  } else if (b.meshTriangleCount > 0) {
     profileName = "shaded meshes";
     std::snprintf(scene, sizeof(scene), "%d triangles, Shaded", b.meshTriangleCount);
   } else if (b.surfacePointCount > 0) {
@@ -278,6 +394,16 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
                   "(expected 0) — %s.",
                   static_cast<unsigned long long>(b.regenDuringRun), s.frames,
                   cacheHeld ? "HELD" : "NOT HELD, contours are being regenerated per frame");
+    log.push_back(msg);
+  } else if (b.solidCount > 0) {
+    // ADR-036 (e)'s obligation for the solid profile: #120 asks that a solid's render mesh not be
+    // regenerated every frame, and on a fast machine the p95 above cannot tell a held cache from one
+    // silently rebuilding. Reported as its own claim, exactly as the surface line is.
+    std::snprintf(msg, sizeof(msg),
+                  "BENCH — solid tessellation cache regenerated %llu time(s) across %d timed frames "
+                  "(expected 0) — %s.",
+                  static_cast<unsigned long long>(b.regenDuringRun), s.frames,
+                  cacheHeld ? "HELD" : "NOT HELD, solids are being retessellated per frame");
     log.push_back(msg);
   }
 
@@ -318,6 +444,10 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
           << " ft, major " << SurfaceStyles::FormatFt(b.surfaceMajorIntervalFt) << " ft\n"
           << "  contour segs      " << b.surfaceContourSegs << "\n"
           << "  cache regens      " << b.regenDuringRun << " during the timed frames (expected 0)  => "
+          << (cacheHeld ? "HELD" : "NOT HELD") << "\n";
+      }
+      if (b.solidCount > 0) {
+        f << "  cache regens      " << b.regenDuringRun << " during the timed frames (expected 0)  => "
           << (cacheHeld ? "HELD" : "NOT HELD") << "\n";
       }
       f << "\n";

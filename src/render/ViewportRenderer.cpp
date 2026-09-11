@@ -240,8 +240,12 @@ const CadLayerRow* LookupLayerRowCi(const std::vector<CadLayerRow>* layers, cons
   return nullptr;
 }
 
+// issue #383: AutoCAD's default (0.18mm/ByLayer) linework reads as a near-hairline in the
+// viewport, not the noticeably-bold stroke the old 0.65+mm*5.25 mapping produced (1.6px at
+// 0.18mm). Rescaled so the common 0.18mm case lands just above the 1px floor while heavier
+// explicit lineweights still scale up visibly.
 float LineweightMmToDevicePx(float mm) {
-  return std::clamp(0.65f + mm * 5.25f, 1.f, 16.f);
+  return std::clamp(0.5f + mm * 4.f, 1.f, 16.f);
 }
 
 /// A polyline is the one committed type whose vertices each carry their own elevation (REQ-057), so
@@ -252,8 +256,12 @@ float LineweightMmToDevicePx(float mm) {
 /// FEATURE LINES too (REQ-087): their store has the same CSR shape, and a feature line is drawn like
 /// any other 3D chain. The elevation-point flag is deliberately not consulted — an elevation point
 /// lies on the line, so including it changes nothing about the plan shape (ADR-035 (a)).
+/// Takes `double` geometry (`V`) and writes `float` GPU vertices (`out`) — the `double`->`float`
+/// narrowing itself happens in `WorldToViewRelativeFloat` (util/geom2d.cpp), the single authorized
+/// narrowing point for geometry coordinates (ADR-054 (b), TASK-228 Phase D). Nothing upstream of
+/// this call should carry a `float` coordinate.
 void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg,
-                        const std::vector<float>* V, const std::vector<int>* O,
+                        const std::vector<double>* V, const std::vector<int>* O,
                         const std::vector<uint8_t>* Cl, const std::vector<EntityAttributes>* At,
                         float defR, float defG, float defB, float dashPatScale, double viewAnchorX,
                         double viewAnchorY) {
@@ -281,16 +289,84 @@ void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput&
     const int nv = v1 - v0;
     if (nv < 2)
       continue;
-    std::vector<float> xy(static_cast<size_t>(nv * 2));
-    std::vector<float> zs(static_cast<size_t>(nv));
+    // REQ-316 / ADR-047: a segment whose leaving vertex carries a non-zero bulge is a circular arc,
+    // expanded here into a fan of chord points so the existing linetype-chain path draws it as a
+    // curve. Only applies to the polyline store (feature lines pass a different V and no bulges).
+    const std::vector<float>* B =
+        (V == eg.polylineVerts && eg.polylineBulge && !eg.polylineBulge->empty()) ? eg.polylineBulge : nullptr;
+    // REQ-325 / ADR-053: the plane a curved segment lies in, when it is not flat +Z. Same
+    // restriction as B above — only the polyline store carries this, feature lines have no curves.
+    const std::vector<float>* N =
+        (V == eg.polylineVerts && eg.polylineNormal && !eg.polylineNormal->empty()) ? eg.polylineNormal : nullptr;
+    std::vector<float> xy;
+    std::vector<float> zs;
+    xy.reserve(static_cast<size_t>(nv * 2));
+    zs.reserve(static_cast<size_t>(nv));
+    auto pushViewRel = [&](double wx, double wy, float z) {
+      float rx = 0.f, ry = 0.f;
+      WorldToViewRelativeFloat(wx, wy, viewAnchorX, viewAnchorY, &rx, &ry);
+      xy.push_back(rx);
+      xy.push_back(ry);
+      zs.push_back(z);
+    };
+    const int lastK = closed ? nv : nv - 1;  // closed adds the wrap segment nv-1 -> 0
     for (int k = 0; k < nv; ++k) {
       const int vi = v0 + k;
-      WorldToViewRelativeFloat(static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 0)]),
-                               static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 1)]), viewAnchorX,
-                               viewAnchorY, &xy[static_cast<size_t>(k * 2)], &xy[static_cast<size_t>(k * 2 + 1)]);
-      zs[static_cast<size_t>(k)] = (*V)[static_cast<size_t>(vi * 3 + 2)];  // absolute, not view-relative (ADR-025 D2)
+      const double wx0 = static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 0)]);
+      const double wy0 = static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 1)]);
+      const float z0 = (*V)[static_cast<size_t>(vi * 3 + 2)];  // absolute, not view-relative (ADR-025 D2)
+      pushViewRel(wx0, wy0, z0);
+      if (k >= lastK)
+        continue;
+      const float bulge = B ? (*B)[static_cast<size_t>(vi)] : 0.f;
+      if (bulge == 0.f)
+        continue;
+      const int nk = (k + 1) % nv;
+      const double wx1 = static_cast<double>((*V)[static_cast<size_t>((v0 + nk) * 3 + 0)]);
+      const double wy1 = static_cast<double>((*V)[static_cast<size_t>((v0 + nk) * 3 + 1)]);
+      const float z1 = (*V)[static_cast<size_t>((v0 + nk) * 3 + 2)];
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      if (N && static_cast<size_t>(vi) * 3 + 2 < N->size()) {
+        nx = (*N)[static_cast<size_t>(vi) * 3];
+        ny = (*N)[static_cast<size_t>(vi) * 3 + 1];
+        nz = (*N)[static_cast<size_t>(vi) * 3 + 2];
+      }
+      constexpr double kPi = 3.14159265358979323846;
+      if (IsFlatNormal(nx, ny, nz)) {
+        const BulgeArcSpan arc = BulgeArc(wx0, wy0, wx1, wy1, static_cast<double>(bulge));
+        if (!arc.valid)
+          continue;
+        const int nseg = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 24.0))), 2, 96);
+        for (int s = 1; s < nseg; ++s) {  // interior points only; endpoints are the polyline vertices
+          const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / nseg);
+          pushViewRel(arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u), z0);
+        }
+        continue;
+      }
+      // REQ-325 / ADR-053: a tilted segment leaves the XY plane, so its own bulge (a purely
+      // geometric, frame-agnostic quantity) is solved in ITS OWN plane's 2D coordinates — built
+      // from the leaving vertex as origin — the same technique the 3D FILLET solve (issue #373)
+      // and AppendArcVcDashed's own tilted-ARC branch below both use, not a fourth invention.
+      ucs::Ucs plane{};
+      if (!ucs::FromNormal(ray3d::Vec3{wx0, wy0, z0}, ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                                                  static_cast<double>(nz)},
+                           &plane))
+        continue;
+      const ucs::Point2D p1Local =
+          ucs::WorldToPlane(plane, ray3d::Vec3{wx1, wy1, static_cast<double>(z1)});
+      const BulgeArcSpan arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
+      if (!arc.valid)
+        continue;
+      const int nseg = std::clamp(static_cast<int>(std::ceil(std::fabs(arc.sweep) / (kPi / 24.0))), 2, 96);
+      for (int s = 1; s < nseg; ++s) {
+        const double u = arc.startAngle + arc.sweep * (static_cast<double>(s) / nseg);
+        const ray3d::Vec3 wp = ucs::PlaneToWorld(
+            plane, ucs::Point2D{arc.cx + arc.radius * std::cos(u), arc.cy + arc.radius * std::sin(u)});
+        pushViewRel(wp.x, wp.y, static_cast<float>(wp.z));
+      }
     }
-    CadTessellateLinetypeChainVc(xy.data(), nv, 0.f, closed, lt, dashPatScale, rgba, &out, zs.data());
+    const int chainN = static_cast<int>(zs.size());
+    CadTessellateLinetypeChainVc(xy.data(), chainN, 0.f, closed, lt, dashPatScale, rgba, &out, zs.data());
   }
 }
 
@@ -308,6 +384,23 @@ void AppendArcVcDashed(std::vector<float>& out, const CadArc& a, int n, float z,
   const double rcx = dcx - viewAnchorX;
   const double rcy = dcy - viewAnchorY;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(n) + 1u) * 2u));
+  // A tilted arc (REQ-312) leaves the XY plane, so no single elevation describes it: each sample
+  // carries its own Z and the chain is dashed against the per-vertex array a sloped POLYLINE
+  // already uses. Sampled through CurvePointAt, so the drawn curve is the curve the snap picks
+  // and the DXF writer emits, not a fourth opinion about where it goes.
+  if (!IsFlatNormal(a.nx, a.ny, a.nz)) {
+    const ucs::Ucs plane = CurvePlane(a);
+    std::vector<float> zs(static_cast<size_t>(n) + 1u);
+    for (int i = 0; i <= n; ++i) {
+      const ray3d::Vec3 p = CurvePointAt(
+          plane, dr, CurveSampleAngle(static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), i, n));
+      xy[static_cast<size_t>(i * 2)] = static_cast<float>(p.x - viewAnchorX);
+      xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(p.y - viewAnchorY);
+      zs[static_cast<size_t>(i)] = static_cast<float>(p.z);
+    }
+    CadTessellateLinetypeChainVc(xy.data(), n + 1, z, false, lt, dashPatScale, rgba, &out, zs.data());
+    return;
+  }
   for (int i = 0; i <= n; ++i) {
     const float u = static_cast<float>(i) / static_cast<float>(n);
     const double ang = static_cast<double>(a.startRad + a.sweepRad * u);
@@ -352,8 +445,9 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
 
 void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
                           float dashPatScale, const EntityAttributes& attr, const CadLayerRow* lr, float defR,
-                          float defG, float defB, double viewAnchorX, double viewAnchorY) {
-  if (r <= 1e-6f)
+                          float defG, float defB, double viewAnchorX, double viewAnchorY, float nx = kFlatNormalX,
+                          float ny = kFlatNormalY, float nz = kFlatNormalZ) {
+  if (r <= 1e-6f || segments < 1)
     return;
   float rgba[4];
   ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
@@ -363,6 +457,23 @@ void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, 
   const double dr = static_cast<double>(r);
   constexpr double kTwoPi = 6.283185307179586;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(segments) + 1u) * 2u));
+  // Tilted (REQ-312): same per-vertex-Z chain as a tilted arc, sampled through the same
+  // parametrisation. The circle's plane is built from its centre and normal, so the ring closes
+  // where the frame says it does rather than where a flat projection would put it.
+  if (!IsFlatNormal(nx, ny, nz)) {
+    const ucs::Ucs plane =
+        CurvePlane(dcx, dcy, static_cast<double>(z), static_cast<double>(nx), static_cast<double>(ny),
+                   static_cast<double>(nz));
+    std::vector<float> zs(static_cast<size_t>(segments) + 1u);
+    for (int i = 0; i <= segments; ++i) {
+      const ray3d::Vec3 p = CurvePointAt(plane, dr, CurveSampleAngle(0.0, kTwoPi, i, segments));
+      xy[static_cast<size_t>(i * 2)] = static_cast<float>(p.x - viewAnchorX);
+      xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(p.y - viewAnchorY);
+      zs[static_cast<size_t>(i)] = static_cast<float>(p.z);
+    }
+    CadTessellateLinetypeChainVc(xy.data(), segments + 1, z, true, lt, dashPatScale, rgba, &out, zs.data());
+    return;
+  }
   for (int i = 0; i <= segments; ++i) {
     const double t = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
     float rx = 0.f;
@@ -473,16 +584,25 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
   SnapGlyphFrame f;
   WorldToViewRelativeFloat(static_cast<double>(snap.x), static_cast<double>(snap.y), viewAnchorX, viewAnchorY, &f.cx,
                            &f.cy);
-  // The glyph sits at the snapped point's own elevation, with a hair of lift so it still draws
-  // over coincident geometry (REQ-057/058). Pinning it to a constant put the marker on the datum
-  // while the point it marks was elevated, so it drifted away from the geometry under orbit.
-  f.cz = snap.z + 0.045f;
+  // The glyph sits EXACTLY at the snapped point's own elevation (REQ-057/058). No lift: the snap
+  // overlay is drawn with the depth test off (`depthForOverlay` is in effect here), and after the
+  // geometry passes, so draw order already puts it over coincident lines and circles. A world-Z
+  // nudge bought nothing there — and under an orbited camera it projected to a visible on-screen
+  // gap between the marker and both the geometry and the point a click commits (#372).
+  f.cz = snap.z;
   // Screen-facing, not work-plane-aligned (REQ-058 / GAP-2). In plan view right/up are world +X/+Y,
   // so every glyph below is built from exactly the offsets it used before.
   f.right = cam.RightWorld();
   f.up = cam.UpWorld();
   const float mh = std::clamp(glyphHalfPx, 3.f, 48.f) * (2.f * halfWorld) / static_cast<float>(std::max(fbHeight, 1));
-  const int snapCircSegs = std::max(16, static_cast<int>(mh * 40.f));
+  // Segment count for the CENTER/SurveyCenter glyph's circle: this has to come from the glyph's
+  // fixed ON-SCREEN pixel size, not from `mh` above. `mh` is that same size converted into WORLD
+  // units so the glyph itself stays screen-stable — at extreme zoom-out `halfWorld` (and so `mh`)
+  // can run into the billions, and using it directly here turned into an uncapped, effectively
+  // unbounded segment count (even int-overflowing) that froze the app building one circle (issue
+  // #381). The glyph never draws larger than `glyphHalfPx` screen pixels, so a small constant range
+  // driven by THAT is all the smoothness a few dozen screen pixels can ever show.
+  const int snapCircSegs = std::clamp(static_cast<int>(std::clamp(glyphHalfPx, 3.f, 48.f) * 1.5f), 16, 96);
   switch (snap.kind) {
   case CadSnap::Kind::Endpoint:
     AppendSnapSquareOutline(out, f, mh);
@@ -492,6 +612,10 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     break;
   case CadSnap::Kind::Center:
     AppendSnapCircle(out, f, mh * 0.85f, snapCircSegs);
+    break;
+  case CadSnap::Kind::Quadrant:
+    // AutoCAD's quadrant marker: a plain diamond. 2D Object Snap green (snap.solid == false).
+    AppendSnapDiamondOutline(out, f, mh);
     break;
   case CadSnap::Kind::SurveyCenter: {
     const float R = mh * 0.62f;
@@ -518,6 +642,27 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     break;
   case CadSnap::Kind::Surface:
     AppendSnapDiamondOutline(out, f, mh);
+    break;
+  // A solid's edge and face get glyphs of their own rather than borrowing the surface diamond: they
+  // are the only two snaps that can land on the SAME pixel as each other, so a shared glyph would
+  // leave the user unable to tell which one they are about to commit (REQ-313).
+  case CadSnap::Kind::Edge:
+    AppendSnapSquareOutline(out, f, mh * 0.55f);
+    break;
+  case CadSnap::Kind::Face:
+    AppendSnapDiamondOutline(out, f, mh * 0.62f);
+    AppendSnapSquareOutline(out, f, mh);
+    break;
+  case CadSnap::Kind::CenterOfFace:
+    // A triangle with an inscribed circle — deliberately distinct from Face's diamond+square and
+    // from Midpoint's plain triangle (REQ-325/#395).
+    AppendSnapTriangleOutline(out, f, mh);
+    AppendSnapCircle(out, f, mh * 0.4f, snapCircSegs);
+    break;
+  case CadSnap::Kind::Knot:
+    // A diamond inside a square — not used by any other kind (REQ-325/#395).
+    AppendSnapSquareOutline(out, f, mh);
+    AppendSnapDiamondOutline(out, f, mh * 0.55f);
     break;
   case CadSnap::Kind::Grip:
     break; // grip snap is silent — no glyph drawn
@@ -559,6 +704,17 @@ void ViewportRenderer::ReleaseMeshGpu() {
     if (e.vao) glDeleteVertexArrays(1, &e.vao);
   }
   meshGpu_.clear();
+}
+
+void ViewportRenderer::ReleaseSolidGpu() {
+  for (SolidGpuBatch& e : solidGpu_) {
+    if (e.faceVbo) glDeleteBuffers(1, &e.faceVbo);
+    if (e.faceVao) glDeleteVertexArrays(1, &e.faceVao);
+    if (e.edgeVbo) glDeleteBuffers(1, &e.edgeVbo);
+    if (e.edgeVao) glDeleteVertexArrays(1, &e.edgeVao);
+  }
+  solidGpu_.clear();
+  solidGpuSig_ = 0;
 }
 
 bool ViewportRenderer::EnsureShader() {
@@ -691,6 +847,7 @@ void ViewportRenderer::DestroyShader() {
   }
   gridProgram_ = 0;
   ReleaseMeshGpu();
+  ReleaseSolidGpu();
   if (shadedProgram_) {
     glDeleteProgram(shadedProgram_);
     shadedProgram_ = 0;
@@ -830,7 +987,7 @@ void ViewportRenderer::SetSize(int width, int height) {
 }
 
 void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
-                                   const std::vector<float>& userLines, const std::vector<float>& circlesCxCyZR,
+                                   const std::vector<double>& userLines, const std::vector<double>& circlesCxCyZR,
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
                                    const std::vector<float>* previewLines,
@@ -847,10 +1004,13 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<EntityAttributes>* filledRegionAttrs,
                                    const std::vector<std::shared_ptr<const CadMesh>>* meshes,
                                    const std::vector<EntityAttributes>* meshAttrs,
+                                   const CadSolidDisplayGeometry* solidGeometry,
                                    const CadSurfaceDisplayGeometry* surfaceGeometry,
                                    const VolumeMapDisplayGeometry* volumeMap,
                                    const std::vector<float>* removalLines,
-                                   const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame) {
+                                   const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame,
+                                   const CadSubObjectOverlay* subObjectOverlay,
+                                   const CadGizmoOverlay* gizmoOverlay) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -942,7 +1102,18 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // plan view where Z cannot affect what is on screen — and a surveyed site sits a few thousand feet
   // up, so that is the entire drawing. Depth testing is off (draw order decides), so a wide range
   // costs nothing.
-  Ortho(-halfW, halfW, -halfH, halfH, cam.nearZ, cam.farZ, proj);
+  //
+  // cam.nearZ/farZ's fixed +/-100000 stops being "a wide range" once the view is orbited/tilted and
+  // zoomed far out: an oblique plane's camera-space DEPTH grows with how far its points sit from the
+  // view centre in world space, same as its on-screen extent does. At extreme zoom-out the tilted
+  // grid (and any real geometry) can need a depth range of MILLIONS of units even though every point
+  // is legitimately on screen — measured directly at halfH ~600k, worst-case grid depth ran to +/-4.3M
+  // against a fixed +/-100000 clip, so all but a thin sliver near zero depth was silently clipped
+  // (issue #381: "grid messes up" after zooming out far under an orbited/tilted UCS). Scaling the pad
+  // with halfH keeps it generous at every zoom level instead of only the levels the fixed constant
+  // happened to cover; depth testing being off means the wider range still costs nothing.
+  const float depthPad = std::max({cam.farZ, -cam.nearZ, halfH * 20.f});
+  Ortho(-halfW, halfW, -halfH, halfH, -depthPad, depthPad, proj);
 
   // The camera rotation (REQ-058). Identity in plan view, so the composed matrices below are
   // bit-identical to the pre-3D pipeline until the user actually orbits.
@@ -967,12 +1138,23 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   float mvp[16];
   MulMat4(projRot, model, mvp);
 
-  constexpr GLfloat kLwMain = 1.35f;
+  // issue #383: this is the fallback stroke for entities with no resolvable lineweight AND the
+  // width rubber-band previews inherit (they draw right after the highlight passes below, which
+  // restore glLineWidth(kLwMain)). Thinned to match AutoCAD's default look.
+  constexpr GLfloat kLwMain = 1.f;
   constexpr GLfloat kLwHiLine = 2.65f;
   constexpr GLfloat kLwHiCirc = 2.45f;
   constexpr GLfloat kLwSurvey = 1.65f;
   constexpr GLfloat kLwSnap = 1.35f;
   constexpr GLfloat kLwGizmo = 1.1f;
+  // REQ-318 item 14: a hovered FACE reads purple, where a hovered edge or vertex reads the ordinary
+  // hover blue. Three sub-object kinds share one cursor and precedence decides between them within
+  // a few pixels, so telling them apart has to be possible at a glance rather than by reading the
+  // command line (user request, 2026-09-04). Named once here because the fill and the outline must
+  // be the same colour or they read as two different things.
+  constexpr GLfloat kSubFaceHoverR = 0.72f;
+  constexpr GLfloat kSubFaceHoverG = 0.45f;
+  constexpr GLfloat kSubFaceHoverB = 1.f;
 
   GLint locMvp = glGetUniformLocation(lineProgram_, "uMVP");
   GLint locCol = glGetUniformLocation(lineProgram_, "uColor");
@@ -1058,10 +1240,66 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       return 10.f * p;
     };
     const float step = niceStep(std::max(halfW, halfH) * 2.f);
-    const float spanW = halfW * 2.15f + step * 2.f;
-    const float spanH = halfH * 2.15f + step * 2.f;
-    const int rawNi = static_cast<int>(std::ceil(spanW / std::max(step, 1e-12f))) + 2;
-    const int ni = std::min(512, std::max(4, rawNi));
+
+    // How far the grid has to extend along the PLANE's own two axes to cover the visible screen
+    // rectangle, given how that plane sits relative to the camera. Screen halfW/halfH alone are only
+    // the right extent when the plane's axes line up with the camera's right/up (plan view on the
+    // World UCS) — once the view is orbited, or the plane is a tilted/vertical UCS (e.g. "Front"),
+    // one plane axis can project onto the screen far more compressed than the other. Using a single
+    // shared span for both directions under-covers whichever axis foreshortens harder, which is what
+    // made the grid look sparse or one-axis-only after repeated orbit/zoom (issue #381). This inverts
+    // the exact (for an orthographic camera) linear map from plane (u,v) to screen (right,up) offsets,
+    // so each axis gets the span it actually needs.
+    auto planeSpanForScreen = [&](const ray3d::Vec3& uAxis, const ray3d::Vec3& vAxis, float* outSpanU,
+                                  float* outSpanV) {
+      const ray3d::Vec3 rightW = cam.RightWorld();
+      const ray3d::Vec3 upW = cam.UpWorld();
+      const double m00 = ray3d::Dot(uAxis, rightW);
+      const double m01 = ray3d::Dot(vAxis, rightW);
+      const double m10 = ray3d::Dot(uAxis, upW);
+      const double m11 = ray3d::Dot(vAxis, upW);
+      const double det = m00 * m11 - m01 * m10;
+      const double halfWd = static_cast<double>(halfW) * 2.15;
+      const double halfHd = static_cast<double>(halfH) * 2.15;
+      // Near-zero determinant means the plane is (close to) edge-on to the screen: a screen pixel
+      // maps to an unbounded distance in-plane, so no finite span can fully cover it. Fall back to
+      // the flat estimate — the existing ni cap below still bounds the vertex count.
+      if (std::fabs(det) < 1e-6) {
+        *outSpanU = static_cast<float>(halfWd);
+        *outSpanV = static_cast<float>(halfHd);
+        return;
+      }
+      const double inv00 = m11 / det, inv01 = -m01 / det;
+      const double inv10 = -m10 / det, inv11 = m00 / det;
+      *outSpanU = static_cast<float>(std::fabs(inv00) * halfWd + std::fabs(inv01) * halfHd);
+      *outSpanV = static_cast<float>(std::fabs(inv10) * halfWd + std::fabs(inv11) * halfHd);
+    };
+    const bool useUcsFrame = gridFrame && !ucs::IsWorld(*gridFrame);
+    float spanU = 0.f;
+    float spanV = 0.f;
+    if (useUcsFrame)
+      planeSpanForScreen(gridFrame->xAxis, gridFrame->yAxis, &spanU, &spanV);
+    else
+      planeSpanForScreen(ray3d::Vec3{1.0, 0.0, 0.0}, ray3d::Vec3{0.0, 1.0, 0.0}, &spanU, &spanV);
+    // A near-edge-on plane (tiny determinant in planeSpanForScreen) can still slip a huge-but-finite
+    // span past that function's own guard. The line-count cap below bounds the vertex COUNT, but the
+    // span is also used directly as a segment ENDPOINT coordinate (ov ± spanV / ou ± spanW), so an
+    // uncapped span sends near-infinite world coordinates to the GPU — which is what hung the app
+    // rather than just drawing a sparse grid. Cap both to what the eventual 512-line limit can
+    // actually reach, and fall back to the flat estimate if the math produced something non-finite.
+    const float maxReach = step * 600.f;
+    if (!std::isfinite(spanU) || spanU < 0.f)
+      spanU = halfW * 2.15f;
+    if (!std::isfinite(spanV) || spanV < 0.f)
+      spanV = halfH * 2.15f;
+    spanU = std::min(spanU, maxReach);
+    spanV = std::min(spanV, maxReach);
+    const float spanW = spanU + step * 2.f;
+    const float spanH = spanV + step * 2.f;
+    const int rawNiU = static_cast<int>(std::ceil(spanW / std::max(step, 1e-12f))) + 2;
+    const int rawNiV = static_cast<int>(std::ceil(spanH / std::max(step, 1e-12f))) + 2;
+    const int niU = std::min(512, std::max(4, rawNiU));
+    const int niV = std::min(512, std::max(4, rawNiV));
     const double stepD = static_cast<double>(step);
     const double originX = std::floor(viewAnchorX / stepD) * stepD;
     const double originY = std::floor(viewAnchorY / stepD) * stepD;
@@ -1102,26 +1340,35 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       gridVerts.push_back(static_cast<float>(b.z) + gz);
     };
 
-    if (gridFrame && !ucs::IsWorld(*gridFrame)) {
+    if (useUcsFrame) {
       // Anchor the grid to the view centre projected INTO the frame, so panning still slides the
       // grid with the drawing instead of leaving it stranded around the UCS origin.
-      const ray3d::Vec3 anchorUcs = ucs::WorldToUcs(*gridFrame, {viewAnchorX, viewAnchorY, gridFrame->origin.z});
+      // The anchor has to be the camera's REAL 3D target (targetX, targetY, targetZ), not the UCS
+      // plane's own origin Z substituted in for the unknown Z. WorldToUcs projects the offset onto
+      // each axis independently (u = dot(offset, xAxis), v = dot(offset, yAxis)); for a plane whose
+      // xAxis or yAxis has a Z component — e.g. the vertical "Front" UCS, where yAxis IS world Z —
+      // that axis's anchor coordinate comes ENTIRELY from the offset's Z. Substituting the plane's
+      // own origin Z there zeroes that offset outright, so the anchor stops following the camera the
+      // moment the user pans/orbits vertically: it stays pinned near the UCS origin no matter how far
+      // targetZ has moved, and the grid ends up generated around a point nowhere near what is on
+      // screen (issue #381).
+      const ray3d::Vec3 anchorUcs = ucs::WorldToUcs(*gridFrame, {viewAnchorX, viewAnchorY, cam.targetZ});
       const double ou = std::floor(anchorUcs.x / stepD) * stepD;
       const double ov = std::floor(anchorUcs.y / stepD) * stepD;
-      for (int i = -ni; i <= ni; ++i) {
+      for (int i = -niU; i <= niU; ++i) {
         const double u = ou + static_cast<double>(i) * stepD;
         pushUcsGridSeg(*gridFrame, u, ov - static_cast<double>(spanH), u, ov + static_cast<double>(spanH));
       }
-      for (int i = -ni; i <= ni; ++i) {
+      for (int i = -niV; i <= niV; ++i) {
         const double v = ov + static_cast<double>(i) * stepD;
         pushUcsGridSeg(*gridFrame, ou - static_cast<double>(spanW), v, ou + static_cast<double>(spanW), v);
       }
     } else {
-      for (int i = -ni; i <= ni; ++i) {
+      for (int i = -niU; i <= niU; ++i) {
         const double x = originX + static_cast<double>(i) * stepD;
         pushGridSeg(x, viewAnchorY - static_cast<double>(spanH), x, viewAnchorY + static_cast<double>(spanH));
       }
-      for (int i = -ni; i <= ni; ++i) {
+      for (int i = -niV; i <= niV; ++i) {
         const double y = originY + static_cast<double>(i) * stepD;
         pushGridSeg(viewAnchorX - static_cast<double>(spanW), y, viewAnchorX + static_cast<double>(spanW), y);
       }
@@ -1283,6 +1530,177 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glBindVertexArray(0);
     glUseProgram(lineProgram_);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+  }
+
+  // --- B-rep solids (REQ-313 / ADR-045) ------------------------------------------------------------
+  // Drawn in EVERY visual style, which is the opposite of the mesh rule above and for the reason
+  // ADR-026 (c) records: a solid HAS real edges, where a mesh's "edges" are artefacts of whatever
+  // resolution an exporter chose. What each style means for a solid:
+  //
+  //   2D Wireframe  edges only, depth test off — every edge visible, the pre-3D reading.
+  //   Hidden        the faces go into the DEPTH buffer with colour writes OFF, then the edges on
+  //                 top. That is real hidden-line removal; without the depth-only pass "Hidden"
+  //                 would mean nothing for a solid, because there would be nothing to hide behind.
+  //   Shaded        lit faces, then the edges on top.
+  //
+  // The polygon offset is load-bearing, not a tweak: an edge lies EXACTLY on the face it bounds, so
+  // without a depth bias half of every silhouette drops out in speckles as the two z-fight.
+  //
+  // Placed with the meshes, before the linework, so CAD geometry at the same elevation reads on top
+  // of a solid rather than being z-fought by it.
+  if (solidGeometry && !solidGeometry->empty()) {
+    // Persistent GPU residency for the coalesced solid batches (GitHub issue #194). Batching the
+    // draw calls was not enough for REQ-100 profile (d): the per-frame CPU vertex transform + stream
+    // upload cost ~38 ms at 400 solids on its own. The fix is the mesh path's fix — upload once,
+    // then let the MVP do the work every frame — keyed on the assembly signature (the batch list is
+    // immutable within one signature) with the same view-anchor-drift re-upload as the mesh cache.
+    const size_t nBatches = solidGeometry->solids.size();
+    const bool rebuild =
+        solidGpuSig_ != solidGeometry->assemblySig || solidGpu_.size() != nBatches;
+    if (rebuild) {
+      ReleaseSolidGpu();
+      solidGpu_.resize(nBatches);
+      for (size_t i = 0; i < nBatches; ++i) {
+        const CadSolidDisplayBatch& b = solidGeometry->solids[i];
+        SolidGpuBatch& e = solidGpu_[i];
+        std::memcpy(e.rgba, b.rgba, sizeof(e.rgba));
+        e.lineweightMm = b.lineweightMm;
+        e.faceVertCount = (!b.triVerts.empty() && b.triVerts.size() % 9 == 0)
+                              ? static_cast<int>(b.triVerts.size() / 3)
+                              : 0;
+        e.edgeVertCount = (!b.edgeVerts.empty() && b.edgeVerts.size() % 6 == 0)
+                              ? static_cast<int>(b.edgeVerts.size() / 3)
+                              : 0;
+        if (e.faceVertCount > 0) {
+          glGenVertexArrays(1, &e.faceVao);
+          glGenBuffers(1, &e.faceVbo);
+          glBindVertexArray(e.faceVao);
+          glBindBuffer(GL_ARRAY_BUFFER, e.faceVbo);
+          const GLsizei shStride = static_cast<GLsizei>(6 * sizeof(float));
+          glEnableVertexAttribArray(0);
+          glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, shStride, nullptr);
+          glEnableVertexAttribArray(1);
+          glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, shStride,
+                                reinterpret_cast<const void*>(sizeof(float) * 3));
+        }
+        if (e.edgeVertCount > 0) {
+          glGenVertexArrays(1, &e.edgeVao);
+          glGenBuffers(1, &e.edgeVbo);
+          glBindVertexArray(e.edgeVao);
+          glBindBuffer(GL_ARRAY_BUFFER, e.edgeVbo);
+          glEnableVertexAttribArray(0);
+          glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(3 * sizeof(float)), nullptr);
+        }
+        glBindVertexArray(0);
+        e.anchorX = std::numeric_limits<double>::quiet_NaN();  // force the vertex upload below
+      }
+      solidGpuSig_ = solidGeometry->assemblySig;
+    }
+
+    // Same drift budget as the mesh/linework caches: vertices are stored relative to the anchor they
+    // were built with, and the residual pan is absorbed by the MVP until it grows large enough to
+    // matter for float precision. An orbit changes only the camera rotation, so the anchor holds and
+    // this loop uploads nothing.
+    const double solidDriftBudget = std::max(halfHd * 0.5, 1.e-12);
+    std::vector<float> solidRel;
+    for (size_t i = 0; i < solidGpu_.size(); ++i) {
+      SolidGpuBatch& e = solidGpu_[i];
+      const bool anchorStale = !(std::fabs(viewAnchorX - e.anchorX) <= solidDriftBudget &&
+                                 std::fabs(viewAnchorY - e.anchorY) <= solidDriftBudget);
+      if (!anchorStale)
+        continue;
+      const CadSolidDisplayBatch& b = solidGeometry->solids[i];
+      if (e.faceVertCount > 0) {
+        const bool haveNormals = b.triNormals.size() == b.triVerts.size();
+        cpuShadedTris_.clear();
+        cpuShadedTris_.resize(static_cast<size_t>(e.faceVertCount) * 6);
+        for (int v = 0; v < e.faceVertCount; ++v) {
+          float rx = 0.f;
+          float ry = 0.f;
+          WorldToViewRelativeFloat(static_cast<double>(b.triVerts[static_cast<size_t>(v) * 3]),
+                                   static_cast<double>(b.triVerts[static_cast<size_t>(v) * 3 + 1]),
+                                   viewAnchorX, viewAnchorY, &rx, &ry);
+          float* o = &cpuShadedTris_[static_cast<size_t>(v) * 6];
+          o[0] = rx;
+          o[1] = ry;
+          o[2] = b.triVerts[static_cast<size_t>(v) * 3 + 2];  // Z is absolute (ADR-025 D2)
+          o[3] = haveNormals ? b.triNormals[static_cast<size_t>(v) * 3] : 0.f;
+          o[4] = haveNormals ? b.triNormals[static_cast<size_t>(v) * 3 + 1] : 0.f;
+          o[5] = haveNormals ? b.triNormals[static_cast<size_t>(v) * 3 + 2] : 1.f;
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, e.faceVbo);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cpuShadedTris_.size() * sizeof(float)),
+                     cpuShadedTris_.data(), GL_STATIC_DRAW);
+      }
+      if (e.edgeVertCount > 0) {
+        ConvertLineVertsWorldToView(b.edgeVerts, viewAnchorX, viewAnchorY, &solidRel);
+        glBindBuffer(GL_ARRAY_BUFFER, e.edgeVbo);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(solidRel.size() * sizeof(float)),
+                     solidRel.data(), GL_STATIC_DRAW);
+      }
+      e.anchorX = viewAnchorX;
+      e.anchorY = viewAnchorY;
+    }
+
+    // Faces. Depth-on styles only: 2D Wireframe draws no faces (there would be nothing to hide
+    // behind). Hidden occludes without painting; Shaded lights them.
+    if (depthOn) {
+      glUseProgram(shadedProgram_);
+      const ray3d::Vec3 solidFwd = cam.ForwardWorld();
+      glUniform3f(glGetUniformLocation(shadedProgram_, "uViewDir"), static_cast<float>(solidFwd.x),
+                  static_cast<float>(solidFwd.y), static_cast<float>(solidFwd.z));
+      glUniform1f(glGetUniformLocation(shadedProgram_, "uAmbient"), kShadedAmbient);
+      const GLint locSolidColor = glGetUniformLocation(shadedProgram_, "uColor");
+      const GLint locSolidMvp = glGetUniformLocation(shadedProgram_, "uMVP");
+      glDisable(GL_BLEND);
+      glEnable(GL_POLYGON_OFFSET_FILL);
+      glPolygonOffset(1.f, 1.f);
+      if (!shadeSurfaces)
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+      for (const SolidGpuBatch& e : solidGpu_) {
+        if (e.faceVertCount <= 0)
+          continue;
+        float solidModel[16];
+        TranslateMat(static_cast<float>(e.anchorX - panX), static_cast<float>(e.anchorY - panY), -panZf,
+                     solidModel);
+        float solidMvp[16];
+        MulMat4(projRot, solidModel, solidMvp);
+        glUniformMatrix4fv(locSolidMvp, 1, GL_FALSE, solidMvp);
+        glUniform4f(locSolidColor, e.rgba[0], e.rgba[1], e.rgba[2], 1.f);
+        glBindVertexArray(e.faceVao);
+        glDrawArrays(GL_TRIANGLES, 0, e.faceVertCount);
+      }
+      glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+      glDisable(GL_POLYGON_OFFSET_FILL);
+      glBindVertexArray(0);
+    }
+
+    // The edges, in every style — including 2D Wireframe, where they are the only thing a solid
+    // draws at all.
+    {
+      glUseProgram(lineProgram_);
+      for (const SolidGpuBatch& e : solidGpu_) {
+        if (e.edgeVertCount <= 0)
+          continue;
+        float solidModel[16];
+        TranslateMat(static_cast<float>(e.anchorX - panX), static_cast<float>(e.anchorY - panY), -panZf,
+                     solidModel);
+        float solidMvp[16];
+        MulMat4(projRot, solidModel, solidMvp);
+        glUniformMatrix4fv(locMvp, 1, GL_FALSE, solidMvp);
+        glUniform4f(locCol, e.rgba[0], e.rgba[1], e.rgba[2], e.rgba[3]);
+        glLineWidth(e.lineweightMm >= 0.f ? LineweightMmToDevicePx(e.lineweightMm) : kLwMain);
+        glBindVertexArray(e.edgeVao);
+        glDrawArrays(GL_LINES, 0, e.edgeVertCount);
+      }
+      glLineWidth(kLwMain);
+      glBindVertexArray(0);
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);  // restore the shared MVP for later line passes
+    }
+  } else if (!solidGpu_.empty()) {
+    // No solids to draw this frame (all erased, all hidden, or the drawing was replaced). Free the
+    // GPU buffers rather than hold megabytes of a closed drawing's solids until the next rebuild.
+    ReleaseSolidGpu();
   }
 
   // --- Solid-filled regions (ADR-011): even-odd stencil fill, drawn under the linework so it is plottable
@@ -1573,7 +1991,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         // on ITS OWN store. The feature-line append used to be nested inside the polyline block, so
         // it inherited whether polylines existed — a coupling with no reason behind it and a second
         // way for feature lines to vanish. REQ-087.
-        const auto appendChainStore = [&](const std::vector<float>* V, const std::vector<int>* O,
+        const auto appendChainStore = [&](const std::vector<double>* V, const std::vector<int>* O,
                                           const std::vector<uint8_t>* Cl,
                                           const std::vector<EntityAttributes>* At) {
           if (!CadChainHasEntities(V, O))
@@ -1641,9 +2059,16 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           const float cr = circlesCxCyZR[ci * 4 + 3];
           const int circSegs = CircleTessellationSegmentCount(static_cast<double>(cr), static_cast<double>(halfH),
                                                               fbHeight, tuning.arcCircleSmoothnessCap);
+          // The circle's plane (REQ-312). Absent side-car means flat, which is every circle drawn
+          // before the normal existed.
+          float cnx = kFlatNormalX;
+          float cny = kFlatNormalY;
+          float cnz = kFlatNormalZ;
+          if (extended && extended->circleNormals)
+            CircleNormalAt(*extended->circleNormals, ci, &cnx, &cny, &cnz);
           AppendCircleVcDashed(cpuVcCircles_, circlesCxCyZR[ci * 4], circlesCxCyZR[ci * 4 + 1], cr,
                                circSegs, circlesCxCyZR[ci * 4 + 2], dashPatScale, attr, lr, kCircDefaultR,
-                               kCircDefaultG, kCircDefaultB, viewAnchorX, viewAnchorY);
+                               kCircDefaultG, kCircDefaultB, viewAnchorX, viewAnchorY, cnx, cny, cnz);
           circVert = static_cast<int>(cpuVcCircles_.size() / 7);
         }
         if (circVert > circBatchStart && circBatchPx >= 0.f)
@@ -1762,6 +2187,80 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hvCircGeom.size() / 3));
       glLineWidth(kLwMain);
     }
+  }
+
+  // --- Sub-object face tint (REQ-318 item 11) — THE ONE DEPTH-TESTED OVERLAY -------------------
+  //
+  // The block comment above states the rule this deliberately breaks, so the exception is written
+  // where someone changing the rule will read it. A selected FACE of a solid is a patch of a closed
+  // volume, not a stroke of 2D linework: drawn never-occluded, a face on the far side glows through
+  // the body and reads as being on the near side. The sub-object selection's edges and vertices are
+  // NOT here — they arrive through `highlightLines` below and keep the never-occluded treatment,
+  // because a line one pixel wide sunk into the surface it lies on is simply gone (D-2026-09-04-a).
+  //
+  // In 2D Wireframe no solid faces are drawn and nothing has written depth, so every fragment
+  // passes GL_LEQUAL against the cleared buffer and the tint draws. That is the intent, not an
+  // accident of the state: in the default style the tint is the only way a face selection is
+  // visible at all.
+  if (subObjectOverlay && !subObjectOverlay->empty()) {
+    std::vector<float> subTriRel;
+    const auto drawTint = [&](const std::vector<float>& tris, float r, float g, float b, float a) {
+      if (tris.empty() || tris.size() % 9 != 0)
+        return;
+      ConvertLineVertsWorldToView(tris, viewAnchorX, viewAnchorY, &subTriRel);
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+      glUniform4f(locCol, r, g, b, a);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(subTriRel.size() * sizeof(float)),
+                   subTriRel.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(subTriRel.size() / 3));
+    };
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_FALSE);  // tint the face; do not become the surface for anything drawn after it
+    // Pulled toward the viewer, or the tint and the face it covers are the same depth and the
+    // result is z-fighting speckle rather than a highlight.
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.f, -1.f);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Hover FIRST, so a selected face drawn over a hovered one wins — the same "selection always
+    // wins" ordering the hover and highlight line channels use a few lines above. In practice the
+    // two never overlap (BuildSubObjectHoverHighlight emits nothing for an already-selected
+    // sub-object); the order is what makes that a belt rather than the only brace.
+    //
+    // PURPLE for a face, against the blue an edge or a vertex gets, so the three kinds are told
+    // apart at a glance rather than by reading the command line (user request, 2026-09-04).
+    drawTint(subObjectOverlay->hoverFaceTris, kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB, 0.30f);
+    // The selection accent, translucent: opaque would hide the shading that says which way the face
+    // turns, and on a curved face that shading is how the user reads the shape they just picked.
+    drawTint(subObjectOverlay->selectedFaceTris, 1.f, 0.92f, 0.15f, 0.42f);
+    glDisable(GL_BLEND);
+    glPolygonOffset(0.f, 0.f);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    depthForOverlay();  // back to the rule for everything below
+
+    // The face BOUNDARY, and this is the half that actually reads. A translucent fill tints
+    // whatever is behind it, and in 2D Wireframe — the default — there is nothing behind it: solids
+    // draw no faces there, so the wash lands on the empty viewport and comes out near black. The
+    // outline is what makes a face selection visible at all in the style users spend most of their
+    // time in, and it is how every CAD package shows this.
+    //
+    // NOT depth-tested, unlike the fill: it is linework, one pixel wide, and the rule the fill has
+    // to break is the rule this obeys — sunk into the surface it traces, it would disappear.
+    const auto drawFaceEdges = [&](const std::vector<float>& segs, float r, float g, float b) {
+      if (segs.empty() || segs.size() % 6 != 0)
+        return;
+      ConvertLineVertsWorldToView(segs, viewAnchorX, viewAnchorY, &subTriRel);
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+      glUniform4f(locCol, r, g, b, 1.f);
+      glLineWidth(kLwHiLine);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(subTriRel.size() * sizeof(float)),
+                   subTriRel.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(subTriRel.size() / 3));
+      glLineWidth(kLwMain);
+    };
+    drawFaceEdges(subObjectOverlay->hoverFaceEdges, kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB);
+    drawFaceEdges(subObjectOverlay->selectedFaceEdges, 1.f, 0.92f, 0.15f);
   }
 
   // --- Selection highlight (accent stroke on top of committed geometry) ---
@@ -1958,13 +2457,19 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glLineWidth(kLwMain);
   }
 
-  // --- Object snap glyph (green, screen-stable size) ---
+  // --- Object snap glyph (screen-stable size) ---
+  // 2D Object Snap (F3) glyphs stay green; 3D Object Snap (F4, REQ-325/#395) glyphs are purple
+  // (#8803fc) so a user can tell at a glance which system answered, even for a kind (Endpoint,
+  // Midpoint, Perpendicular) shared between both.
   if (snapOverlay && snapOverlay->valid) {
     std::vector<float> snapGeom;
     BuildSnapOverlayLines(*snapOverlay, cam, halfH, fbH_, snapGlyphHalfPx, viewAnchorX, viewAnchorY, snapGeom);
     if (!snapGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-      glUniform4f(locCol, 0.15f, 0.92f, 0.38f, 1.f);
+      if (snapOverlay->solid)
+        glUniform4f(locCol, 0x88 / 255.f, 0x03 / 255.f, 0xfc / 255.f, 1.f);
+      else
+        glUniform4f(locCol, 0.15f, 0.92f, 0.38f, 1.f);
       glLineWidth(kLwSnap);
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(snapGeom.size() * sizeof(float)), snapGeom.data(),
                    GL_STREAM_DRAW);
@@ -1972,32 +2477,56 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
   }
 
-  // --- Axes gizmo (screen-fixed pixels: ignores pan/zoom) ---
-  float overlayProj[16];
-  Ortho(0.f, static_cast<float>(fbW_), 0.f, static_cast<float>(fbH_), -1000.f, 1000.f, overlayProj);
-  constexpr float kGizmoMarginPx = 5.f;
-  constexpr float kAxisLenPx = 70.f;
-  float gizmoModel[16];
-  TranslateMat(kGizmoMarginPx, kGizmoMarginPx, 0.f, gizmoModel);
-  float gizmoMvp[16];
-  MulMat4(overlayProj, gizmoModel, gizmoMvp);
-  glUniformMatrix4fv(locMvp, 1, GL_FALSE, gizmoMvp);
-
-  const float axisVerts[] = {
-      0.f, 0.f, 0.f, kAxisLenPx, 0.f, 0.f,
-      0.f, 0.f, 0.f, 0.f, kAxisLenPx, 0.f,
-      0.f, 0.f, 0.f, 0.f, 0.f, kAxisLenPx,
-  };
-  glBufferData(GL_ARRAY_BUFFER, sizeof(axisVerts), axisVerts, GL_STREAM_DRAW);
-
-  glLineWidth(kLwGizmo);
-  glUniform4f(locCol, 0.9f, 0.2f, 0.2f, 1.f);
-  glDrawArrays(GL_LINES, 0, 2);
-  glUniform4f(locCol, 0.2f, 0.85f, 0.35f, 1.f);
-  glDrawArrays(GL_LINES, 2, 2);
-  glUniform4f(locCol, 0.25f, 0.55f, 1.f, 1.f);
-  glDrawArrays(GL_LINES, 4, 2);
-  glLineWidth(kLwMain);
+  // --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) --------------------------
+  //
+  // LAST, so it sits on top of everything: it is the one overlay the user is about to click, and a
+  // handle hidden behind the geometry it manipulates is not a handle. Never depth-tested, for the
+  // same reason.
+  //
+  // Handle colours match the REQ-154 UCS icon / REQ-310 crosshair axis hues so the gizmo and the
+  // on-screen frame indicator never disagree about which axis is which.
+  if (gizmoOverlay && !gizmoOverlay->empty()) {
+    depthForOverlay();
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);  // back to WORLD space, off the triad's screen matrix
+    std::vector<float> gizRel;
+    const auto drawGizmo = [&](const std::vector<float>& segs, float r, float g, float b, float w) {
+      if (segs.empty() || segs.size() % 6 != 0)
+        return;
+      ConvertLineVertsWorldToView(segs, viewAnchorX, viewAnchorY, &gizRel);
+      glUniform4f(locCol, r, g, b, 1.f);
+      glLineWidth(w);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(gizRel.size() * sizeof(float)),
+                   gizRel.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(gizRel.size() / 3));
+    };
+    // The drag track first, thin, so the handles draw over it.
+    drawGizmo(gizmoOverlay->guide, 0.55f, 0.55f, 0.6f, kLwMain);
+    static const float kAxisRgb[3][3] = {
+        {0.9f, 0.2f, 0.2f}, {0.2f, 0.85f, 0.35f}, {0.25f, 0.55f, 1.f}};
+    for (int a = 0; a < 3; ++a) {
+      // A hot handle takes the selection accent rather than a brighter version of its own colour:
+      // "this is what the click will take" is the same statement a highlight makes everywhere else
+      // in this viewport, and it should look the same wherever it is made.
+      if (gizmoOverlay->hot[a])
+        drawGizmo(gizmoOverlay->axis[a], 1.f, 0.92f, 0.15f, kLwGizmo + 1.f);
+      else if (gizmoOverlay->faceMode)
+        // The single face-normal handle takes the PURPLE a selected face already wears, not the X
+        // handle's red: it is not X, and a widget that said it was would be lying about the one
+        // thing it exists to communicate (issue #148 acceptance 4).
+        drawGizmo(gizmoOverlay->axis[a], kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB, kLwGizmo);
+      else if (gizmoOverlay->soloOp == 1)
+        // The rotate ring turns about the UCS Z, so it wears Z's blue — the axis colour it actually
+        // belongs to, rather than the red `axis[0]` would otherwise imply (TASK-232).
+        drawGizmo(gizmoOverlay->axis[a], kAxisRgb[2][0], kAxisRgb[2][1], kAxisRgb[2][2], kLwGizmo);
+      else if (gizmoOverlay->soloOp == 2)
+        // The uniform-scale handle belongs to NO axis — its direction is only somewhere to drag —
+        // so it takes an off-axis amber rather than borrowing a colour that would name one.
+        drawGizmo(gizmoOverlay->axis[a], 0.95f, 0.7f, 0.25f, kLwGizmo);
+      else
+        drawGizmo(gizmoOverlay->axis[a], kAxisRgb[a][0], kAxisRgb[a][1], kAxisRgb[a][2], kLwGizmo);
+    }
+    glLineWidth(kLwMain);
+  }
   }  // end model-space geometry scope (see the note at its opening brace)
 
 finish_render:

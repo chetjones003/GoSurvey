@@ -31,7 +31,7 @@ int SegmentsIn(const std::vector<int>& offsets) {
 TEST_CASE("The bench scene contains exactly the requested segment count", "[bench]") {
   // REQ-100 names 250,000 segments. If the generator rounded to whole contours the benchmark would
   // quietly measure a different density than the requirement specifies.
-  std::vector<float> verts;
+  std::vector<double> verts;
   std::vector<int> offsets;
   std::vector<std::uint8_t> closed;
   for (int target : {1, 2, 499, 500, 501, 12345, 250000}) {
@@ -47,7 +47,7 @@ TEST_CASE("The bench scene contains exactly the requested segment count", "[benc
 
 TEST_CASE("The bench scene is byte-identical across runs", "[bench]") {
   // "Committed bench scene" only means something if regenerating it reproduces it exactly.
-  std::vector<float> v1, v2;
+  std::vector<double> v1, v2;
   std::vector<int> o1, o2;
   std::vector<std::uint8_t> c1, c2;
   benchscene::BuildContourScene(20000, &v1, &o1, &c1);
@@ -62,7 +62,7 @@ TEST_CASE("The bench scene is byte-identical across runs", "[bench]") {
 TEST_CASE("Bench contours are separated in elevation", "[bench]") {
   // Orbit is the worst case only if the scene has depth to reveal. Flat contours would let the
   // benchmark pass on a renderer that ignored Z entirely — which is the bug TASK-036 just fixed.
-  std::vector<float> verts;
+  std::vector<double> verts;
   std::vector<int> offsets;
   std::vector<std::uint8_t> closed;
   benchscene::BuildContourScene(5000, &verts, &offsets, &closed);
@@ -83,11 +83,11 @@ TEST_CASE("Segment count changes scene DENSITY, not its extent", "[bench]") {
   // rasterised only part of it and 250k benchmarked FASTER than 20k. A benchmark that measures less
   // geometry as you ask for more is worse than none. Extent must not grow with count.
   auto extentOf = [](int segs) {
-    std::vector<float> v;
+    std::vector<double> v;
     std::vector<int> o;
     std::vector<std::uint8_t> c;
     benchscene::BuildContourScene(segs, &v, &o, &c);
-    float mnX = v[0], mxX = v[0], mnY = v[1], mxY = v[1];
+    double mnX = v[0], mxX = v[0], mnY = v[1], mxY = v[1];
     for (size_t i = 0; i + 2 < v.size(); i += 3) {
       mnX = std::min(mnX, v[i]);     mxX = std::max(mxX, v[i]);
       mnY = std::min(mnY, v[i + 1]); mxY = std::max(mxY, v[i + 1]);
@@ -103,7 +103,7 @@ TEST_CASE("Segment count changes scene DENSITY, not its extent", "[bench]") {
 }
 
 TEST_CASE("An empty or degenerate request produces an empty scene", "[bench]") {
-  std::vector<float> verts;
+  std::vector<double> verts;
   std::vector<int> offsets;
   std::vector<std::uint8_t> closed;
   CHECK(benchscene::BuildContourScene(0, &verts, &offsets, &closed) == 0);

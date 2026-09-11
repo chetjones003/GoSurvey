@@ -41,7 +41,7 @@ constexpr double kElevRange = 400.0;     ///< Relief across the site: enough tha
 
 } // namespace
 
-int BuildContourScene(int targetSegments, std::vector<float>* verts, std::vector<int>* offsets,
+int BuildContourScene(int targetSegments, std::vector<double>* verts, std::vector<int>* offsets,
                       std::vector<std::uint8_t>* closed) {
   if (!verts || !offsets || !closed)
     return 0;

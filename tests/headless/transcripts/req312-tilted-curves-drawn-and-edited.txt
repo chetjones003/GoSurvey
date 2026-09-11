@@ -1,0 +1,124 @@
+# REQ-312 (GitHub #145, Phase 2 of #120) - a tilted curve stays in its own plane through selection
+# and through the editing commands.
+#
+# The companion to req312-arbitrary-plane-curves.txt, which proved a tilted curve is CREATED and
+# STORED correctly. This one is about everything that reads one back afterwards: the bounds a box
+# selection is tested against, and the transforms that have to carry a curve's plane along with its
+# coordinates.
+#
+# All three were blind spots by construction. Every normal in the store was +Z until a tilted curve
+# could be authored, so every path that walks a curve in the XY projection was RIGHT for every input
+# it had ever been given - and stayed right through step 2, which is why the step-2 log recorded the
+# mirror rule as ASSUMPTION-3 and deferred its test to here, where the case can finally be built.
+#
+# It was built, and the assumption was WRONG. See the MIRROR section below.
+#
+# UCS X 90 makes the work plane the world plane y = 0 - a wall - with normal (0, -1, 0). A UCS pick
+# (u, v) is world (u, 0, v). Everything is drawn on the wall first; the UCS then goes back to World,
+# so every selection box and every transform below is stated in world coordinates.
+
+NEW
+
+CMD UCS
+CMD X
+CMD 90
+
+# A half circle about world (200, 0, 0), radius 10, standing on the wall: from (210, 0, 0) up
+# through (200, 0, 10) and down to (190, 0, 0).
+CMD ARC
+CLICKUCS 210 0
+CLICKUCS 200 10
+CLICKUCS 190 0
+EXPECT ARCS 1
+EXPECT ARCPOINTS 0 210 0 0 190 0 0
+
+# A quarter of the same circle, moved along the wall to (400, 0, 0): from (410, 0, 0) up to
+# (400, 0, 10). A quarter, deliberately - a half circle's ends are symmetric about the mirror line
+# used below, so it reads as correct even when the arc comes back turned inside its own plane.
+CMD ARC
+CLICKUCS 410 0
+CLICKUCS 407.0710678 7.0710678
+CLICKUCS 400 10
+EXPECT ARCS 2
+EXPECT ARCPOINTS 1 410 0 0 400 0 10
+
+# And a circle on the wall at world (100, 0, 0), radius 20.
+CMD CIRCLE
+CLICKUCS 100 0
+CLICKUCS 100 20
+ESC
+EXPECT CIRCLES 1
+EXPECT CIRCLEXYZ 0 100 0 0 20 0 -1 0
+
+CMD UCS
+CMD W
+EXPECT LOG "UCS = World"
+
+# --- Bounds: a tilted arc must be found where it actually is -----------------------------------------
+# The half circle's true XY footprint is the SEGMENT y = 0, 190 <= x <= 210 - it has no extent in Y
+# at all. A WINDOW select (fully-inside) around that footprint with 5 ft to spare therefore holds it.
+#
+# Walked in the XY projection instead, its bounds come out as 190 <= x <= 210, 0 <= y <= 10: a shape
+# this box does not contain, so the select finds nothing. Bounds larger OR smaller than the object
+# are both wrong, and this is the direction that loses geometry - from window selection and from
+# ZOOM EXTENTS alike.
+BOX 185 -5 215 5 WINDOW
+EXPECT SELECTED 1
+
+# --- MIRROR carries the plane AND re-anchors the sweep (ASSUMPTION-3 was wrong) ----------------------
+# Mirror the half circle across the world line y = x, which maps (x, y) -> (y, x). Its plane y = 0
+# maps to the plane x = 0, so the normal turns from (0, -1, 0) to (-1, 0, 0), the centre moves from
+# (200, 0, 0) to (0, 200, 0), and the two ends land on (0, 210, 0) and (0, 190, 0). The copy keeps
+# the flat convention of starting at the image of the original's END, so its start is (0, 190, 0).
+#
+# ASSUMPTION-3 said the existing `2*phi - theta` sweep rule and the new normal rule would agree.
+# They do not. That rule reflects the angle in WORLD XY, but a tilted arc's startRad is measured in
+# its own frame, `ucs::FromNormal(centre, normal)` - and once the normal is reflected, the rebuilt
+# frame is not the reflection of the old one. Before the fix this arc came back in the right plane,
+# at the right centre, with the right radius, and its ends at (0, 200, -10) and (0, 200, 10): the
+# same circle, turned a quarter turn inside its own plane. The angle is now not transformed at all -
+# the arc's far END is, and the start angle is re-measured from where it landed.
+CMD MIRROR
+CMD 0,0
+CMD 1,1
+CMD
+EXPECT LOG "MIRROR complete."
+EXPECT ARCS 3
+EXPECT ARCPOINTS 0 210 0 0 190 0 0
+EXPECT ARCPOINTS 2 0 190 0 0 210 0
+
+# --- MIRROR across a line the arc's own plane is unmoved by ------------------------------------------
+# The quarter arc, mirrored across x = 400. The wall stays a wall, so the normal does not change and
+# this case tests the SWEEP alone: the copy starts at the image of the original's end - (400, 0, 10),
+# which the mirror line leaves where it is - and finishes at (390, 0, 0).
+CMD SELECT
+ESC
+BOX 395 -5 415 5 WINDOW
+EXPECT SELECTED 1
+CMD MIRROR
+CMD 400,-50
+CMD 400,50
+CMD
+EXPECT ARCS 4
+EXPECT ARCPOINTS 1 410 0 0 400 0 10
+EXPECT ARCPOINTS 3 400 0 10 390 0 0
+
+# --- ROTATE turns a circle's plane with it -----------------------------------------------------------
+# ROTATE with copy mode off rotates the selection IN PLACE, and that path was missed when the normal was threaded
+# through the copying paths in step 2 - with every normal +Z there was nothing there to see. Ninety
+# ROTATE 90 about the origin turns the drawing clockwise in plan here (the same convention
+# req087-feature-line-modify records), sending this circle's centre from (100, 0, 0) to (0, -100, 0)
+# and its normal from (0, -1, 0) to (-1, 0, 0): the wall becomes the plane x = 0. Left uncarried, the
+# normal would still say "the plane y = 0", which no longer contains the circle at all.
+CMD SELECT
+ESC
+BOX 75 -25 125 25 WINDOW
+EXPECT SELECTED 1
+CMD ROTATE
+CMD 0,0
+CMD 90
+ESC
+EXPECT CIRCLES 1
+EXPECT CIRCLEXYZ 0 0 -100 0 20 -1 0 0
+
+CHECK ALL

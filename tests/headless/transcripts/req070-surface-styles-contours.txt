@@ -13,13 +13,13 @@
 # path and not a test-only shortcut.
 #
 # **The numbers are properties of the FIXTURE, read out of the running program with DUMP SURFACES.**
-# `samples/surface-demo.gs` triangulates to 982 triangles (2,946 directed edges, drawn only when the
+# `samples/surface-demo.dwg` triangulates to 982 triangles (2,946 directed edges, drawn only when the
 # style's triangle component is switched on) with a 16-segment border, and at the Standard 2 ft /
 # 10 ft intervals it contours to 867 minor and 203 major segments.
 # If the sample's points ever change, these change with it — they are facts about that data, not
 # magic constants, and DUMP SURFACES is how the next person re-reads them.
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 
 CMD SURFACECREATE Test EG, Existing Ground
 EXPECT SURFACES 1

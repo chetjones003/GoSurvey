@@ -4,6 +4,7 @@
 /// Header-only so Catch2 can cover transforms, nesting, and cycle detection without GL.
 
 #include "CadEntities.hpp"
+#include "cadsolid.hpp"
 
 #include <algorithm>
 #include <array>
@@ -105,18 +106,26 @@ struct CadBlockNested {
 };
 
 struct CadBlockContent {
-  std::vector<float> lines;
+  std::vector<double> lines;
   std::vector<EntityAttributes> lineAttrs;
   std::vector<std::string> lineVis;
-  std::vector<float> circles;
+  std::vector<double> circles;
   std::vector<EntityAttributes> circleAttrs;
   std::vector<std::string> circleVis;
+  /// Plane normal per circle, 3 floats each (REQ-312) - the block-definition counterpart of
+  /// AppCommandState::userCircleNormals, and a third parallel array beside circleAttrs/circleVis
+  /// exactly as those two already are. Stored so that BLOCK and BEDIT cannot silently flatten a
+  /// tilted circle on the way in or out (REQ-201).
+  std::vector<float> circleNormals;
   std::vector<CadArc> arcs;
   std::vector<EntityAttributes> arcAttrs;
   std::vector<CadEllipse> ellipses;
   std::vector<EntityAttributes> ellAttrs;
   std::vector<int> polyOffsets;
-  std::vector<float> polyVerts;
+  std::vector<double> polyVerts;
+  /// REQ-316 / ADR-047: per-vertex bulge, parallel to polyVerts (size()/3). Empty on a legacy
+  /// block definition, which reads as an all-straight polyline.
+  std::vector<float> polyVertsBulge;
   std::vector<std::uint8_t> polyClosed;
   std::vector<EntityAttributes> polyAttrs;
   std::vector<CadAnnotation> texts;
@@ -124,6 +133,10 @@ struct CadBlockContent {
   std::vector<CadBlockNested> nested;
   std::vector<std::shared_ptr<const CadMesh>> meshes;
   std::vector<EntityAttributes> meshAttrs;
+  /// REQ-320 / ADR-051: B-rep solids (native or ACIS-imported), so INSERT/WBLOCK/BLOCKIMPORT round-
+  /// trip a 3D-solid block the same way \ref meshes already round-trips a mesh block.
+  std::vector<CadSolidPtr> solids;
+  std::vector<EntityAttributes> solidAttrs;
 };
 
 struct CadBlockDefinition {
@@ -483,12 +496,40 @@ inline void CadBlockCollectWorldLines(const std::vector<CadBlockDefinition>& def
         pa = c.circleAttrs[i];
       const EntityAttributes ra = CadBlockResolveAttr(pa, insertAttr);
       constexpr int kSteps = 24;
+      // The circle's own plane, walked BEFORE the block transform (REQ-312). Generating the ring
+      // flat and then transforming it draws a tilted block circle in the wrong plane entirely --
+      // the store has carried the normal since step 2, and until now nothing here read it.
+      float cnx = kFlatNormalX, cny = kFlatNormalY, cnz = kFlatNormalZ;
+      CircleNormalAt(c.circleNormals, i, &cnx, &cny, &cnz);
+      const bool circFlat = IsFlatNormal(cnx, cny, cnz);
+      const ucs::Ucs cPlane =
+          circFlat ? ucs::Ucs{}
+                   : CurvePlane(static_cast<double>(cx), static_cast<double>(cy), static_cast<double>(cz),
+                                static_cast<double>(cnx), static_cast<double>(cny), static_cast<double>(cnz));
+      // Step \p k in block space. The flat branch is the pre-REQ-312 float arithmetic, unchanged.
+      const auto stepPt = [&](int k, float* ox, float* oy, float* oz) {
+        if (circFlat) {
+          const float ang = (6.28318530718f * static_cast<float>(k)) / static_cast<float>(kSteps);
+          *ox = cx + r * std::cos(ang);
+          *oy = cy + r * std::sin(ang);
+          *oz = cz;
+          return;
+        }
+        constexpr double kTwoPi = 6.283185307179586;
+        const ray3d::Vec3 p =
+            CurvePointAt(cPlane, static_cast<double>(r), CurveSampleAngle(0.0, kTwoPi, k, kSteps));
+        *ox = static_cast<float>(p.x);
+        *oy = static_cast<float>(p.y);
+        *oz = static_cast<float>(p.z);
+      };
+      float bx = 0.f, by = 0.f, bz = 0.f;
       float px = 0.f, py = 0.f, pz = 0.f;
-      xformPt(cx + r, cy, cz, &px, &py, &pz);
+      stepPt(0, &bx, &by, &bz);
+      xformPt(bx, by, bz, &px, &py, &pz);
       for (int k = 1; k <= kSteps; ++k) {
-        const float ang = (6.28318530718f * static_cast<float>(k)) / static_cast<float>(kSteps);
+        stepPt(k, &bx, &by, &bz);
         float qx = 0.f, qy = 0.f, qz = 0.f;
-        xformPt(cx + r * std::cos(ang), cy + r * std::sin(ang), cz, &qx, &qy, &qz);
+        xformPt(bx, by, bz, &qx, &qy, &qz);
         out->push_back(CadBlockWorldSeg{px, py, pz, qx, qy, qz, ra});
         px = qx;
         py = qy;
@@ -964,7 +1005,7 @@ inline void CadBlockLineYExtent(const CadBlockDefinition& def, float* yMin, floa
   *yMin = 0.f;
   *yMax = 0.f;
   bool any = false;
-  const std::vector<float>& L = def.content.lines;
+  const std::vector<double>& L = def.content.lines;
   for (size_t i = 0; i + 4 < L.size(); i += 6) {
     const float y0 = L[i + 1];
     const float y1 = L[i + 4];

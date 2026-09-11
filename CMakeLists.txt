@@ -13,6 +13,31 @@ if(MSVC AND CMAKE_CXX_COMPILER_LAUNCHER)
 endif()
 
 # ---------------------------------------------------------------------------
+# MSVC exception + RTTI model (GitHub issue #375).
+#
+# CMake's MSVC toolchain seeds CMAKE_CXX_FLAGS with `/DWIN32 /D_WINDOWS /EHsc /GR`.
+# A first configure done with `-DCMAKE_CXX_FLAGS=...` on the command line (an early
+# REQ-324 /analyze experiment did exactly this) REPLACES that seed rather than
+# adding to it, silently dropping /EHsc. After that, any thrown C++ exception
+# (e.g. nlohmann::json::parse_error on a corrupt recent-files store) unwinds
+# through frames compiled with no unwind data, misses every catch, and hits
+# std::terminate -> abort -> __fastfail, which surfaces as exit code 0xC0000409
+# in ucrtbase.dll. build.bat only reconfigures when build.ninja is missing, so a
+# tree poisoned once stays poisoned across every incremental build.
+#
+# Restore the two flags here whenever they are absent, no matter how
+# CMAKE_CXX_FLAGS was seeded. Our targets and the vendored ones (Catch2, Dear
+# ImGui) all depend on working exceptions and RTTI.
+if(MSVC)
+  if(NOT CMAKE_CXX_FLAGS MATCHES "/EH")
+    string(APPEND CMAKE_CXX_FLAGS " /EHsc")
+  endif()
+  if(NOT CMAKE_CXX_FLAGS MATCHES "/GR")
+    string(APPEND CMAKE_CXX_FLAGS " /GR")
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Version (ADR-029 (a)) — `project(VERSION)` above is the ONE source.
 #
 # It names the release being worked toward, so it is bumped just after a stable
@@ -64,6 +89,17 @@ endfunction()
 #   4245       signed/unsigned mismatch on Win32 API constants.
 #   4456/4457/4458/4459  local/param/member/global shadowing — style, not a bug.
 # _CRT_SECURE_NO_WARNINGS silences C4996 for standard C functions (getenv, strncpy).
+#
+# GOSURVEY_ENABLE_ANALYZE (REQ-324, off by default) adds MSVC's /analyze as a per-target
+# compile option, not a CMAKE_CXX_FLAGS override: CMake's MSVC platform module supplies
+# CMAKE_CXX_FLAGS' default content (/EHsc /GR among it), and a command-line
+# -DCMAKE_CXX_FLAGS=... on first configure REPLACES that default rather than adding to it
+# — losing /EHsc silently. That broke exception-using tests with a stack-buffer-overrun
+# crash the first time this was tried (CI run for REQ-324's own PR). Routing it through
+# this function keeps it scoped to our own targets (third_party/ vendored code is never
+# passed through gosurvey_target_warnings) and additive to whatever flags CMake already set.
+option(GOSURVEY_ENABLE_ANALYZE
+  "Add MSVC /analyze to our own targets (REQ-324). Report-only: not paired with /WX." OFF)
 function(gosurvey_target_warnings tgt)
   if(MSVC)
     target_compile_options(${tgt} PRIVATE
@@ -71,6 +107,9 @@ function(gosurvey_target_warnings tgt)
       /wd4244 /wd4305 /wd4267 /wd4245
       /wd4456 /wd4457 /wd4458 /wd4459)
     target_compile_definitions(${tgt} PRIVATE _CRT_SECURE_NO_WARNINGS)
+    if(GOSURVEY_ENABLE_ANALYZE)
+      target_compile_options(${tgt} PRIVATE /analyze)
+    endif()
   else()
     target_compile_options(${tgt} PRIVATE
       -Wall -Wextra
@@ -159,6 +198,21 @@ if(MSVC)
   target_compile_options(glew_static PRIVATE /w)
 else()
   target_compile_options(glew_static PRIVATE -w)
+endif()
+
+# ---------------------------------------------------------------------------
+# md4c (REQ-336 / ADR-056) — CommonMark parser for the What's New billboard.
+# Vendored under third_party/md4c/; UI draw layer is in-tree (MarkdownImGui).
+# ---------------------------------------------------------------------------
+if(NOT EXISTS "${GOSURVEY_TP}/md4c/md4c.c")
+  message(FATAL_ERROR "REQ-336: third_party/md4c/md4c.c is missing. See third_party/md4c/VENDORED.md.")
+endif()
+add_library(md4c STATIC "${GOSURVEY_TP}/md4c/md4c.c")
+target_include_directories(md4c PUBLIC "${GOSURVEY_TP}/md4c")
+if(MSVC)
+  target_compile_options(md4c PRIVATE /w)
+else()
+  target_compile_options(md4c PRIVATE -w)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -261,6 +315,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/EntityId.cpp
   src/survey/PointGroupRule.cpp
   src/commands/CadCoordinateFrame.cpp
+  src/commands/CadColor.cpp
 
   # Object snapping (pure geometry; no GL despite living under viewport/)
   src/viewport/CadSnap.cpp
@@ -279,6 +334,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   # (ADR-031 (c′)) — these need ImGui core, never a backend.
   src/ui/MtextRichFormat.cpp
   src/ui/FontRegistry.cpp
+  # REQ-302/ADR-053 (issue #323) — ribbon measure pass runtime (icon side override for tests + app).
+  src/ui/RibbonLayoutMeasure.cpp
   # SHX stroke text emitter. Here because MtextRichFormat's layout calls Shx::DrawText to measure
   # SHX runs — it takes an ImDrawList but issues no GL of its own, so headless links it happily.
   src/ui/ShxDraw.cpp
@@ -302,6 +359,11 @@ set(GOSURVEY_DOMAIN_SOURCES
   # REQ-308 recent-drawings MRU store (D-2026-08-30-b). Pure — <filesystem>/<fstream>/json, path
   # and clock passed in by the caller — so GoSurveyTests links it directly too (see that target).
   src/io/RecentDrawings.cpp
+  # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
+  src/io/WhatsNewContent.cpp
+  src/io/WikiContent.cpp
+  src/io/WikiHelp.cpp
+  src/util/WhatsNewLogic.cpp
   src/io/SurveyCsv.cpp
   src/io/DxfIo.cpp
   src/io/DwgIo.cpp
@@ -337,9 +399,26 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/surfacequery.cpp
   src/util/gridsurface.cpp
   src/util/benchscene.cpp
+  # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). Pure by that ADR — no GL, no ImGui, no
+  # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
+  # expectation rather than by looking at a shaded viewport.
+  src/util/brep.cpp
+  # REQ-320 / ADR-051: the ACIS SAT record parser feeding 3DSOLID import (GitHub issue #299). Pure
+  # and dependency-free like brep.cpp itself — no LibreDWG, no GL — so a malformed or unsupported
+  # record is caught against a hand-authored SAT fixture rather than a real vendor block library.
+  src/util/AcisSatParser.cpp
+  # REQ-315 / ADR-048: the freeform (NURBS) surface patch — pure math (evaluation, derivatives,
+  # validation, the loft builders), no GL and no brep coupling, so its correctness is pinned against
+  # closed-form circle / plane expectations rather than a viewport.
+  src/util/nurbs.cpp
+  # REQ-318 sub-object picking (ADR-049, GitHub issue #148). Pure for the same reason the kernel
+  # above it is: the precedence between a face, an edge and a vertex, and the refusal to report a
+  # pick it cannot justify, are decided without a window.
+  src/util/solidpick.cpp
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
   src/util/docinvariants.cpp
+  src/util/SaveTrace.cpp
 )
 
 # One static library so CadCommands.cpp (and the rest of the domain list) is compiled
@@ -384,6 +463,10 @@ add_executable(GoSurvey
 
   # UI panels
   src/ui/CadUi.cpp
+  # REQ-302/ADR-053 (issue #325) — RibbonLayout::DrawSection. Calls RibbonDrawButtonForLayout
+  # (CadUi.cpp), so it needs a live ImGui window like the rest of this list; no test target links
+  # CadUi.cpp (it pulls GLFW/OpenGL through the windowed app), so this is exercised manually.
+  src/ui/RibbonLayoutDraw.cpp
   # Cohesive panels split out of the CadUi.cpp mega-TU (TASK-150 Phase 2, issue
   # #142). Shared helpers go through src/ui/CadUiInternal.hpp.
   src/ui/CadUi_Modals.cpp
@@ -405,6 +488,10 @@ add_executable(GoSurvey
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/CadUi_SignInGate.cpp
   src/ui/CadUi_StartScreen.cpp
+  src/ui/CadUi_WhatsNew.cpp
+  src/ui/CadUi_Wiki.cpp
+  src/ui/CadUi_ColorPicker.cpp
+  src/ui/MarkdownImGui.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
   src/ui/RichTextEdit.cpp
@@ -467,6 +554,7 @@ target_link_libraries(GoSurvey PRIVATE
   glew_static
   pdfium
   LibreDWG::libredwg
+  md4c
 )
 target_include_directories(GoSurvey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/devshell)
 if(GOSURVEY_DEVELOPER_SHELL)
@@ -497,7 +585,7 @@ if(WIN32)
   # ole32 is for the Network List Manager connectivity query in HttpFetch.cpp (REQ-077).
   # ws2_32 is the REQ-091 loopback OAuth listener's raw Winsock socket calls (ADR-037 (b));
   # advapi32 is Windows Credential Manager (ADR-037 (c)). Both ship with Windows.
-  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32)
+  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32 shell32)
   target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
 
   # Embed the application icon so Windows shows it in Explorer, the taskbar,
@@ -544,8 +632,8 @@ target_compile_definitions(GoSurvey PRIVATE GLEW_STATIC)
 
 if(WIN32)
   # Stable, version-free filename (ADR-029 (b)). A version-stamped name changes the path
-  # of the installed program on every release, which breaks shortcuts, the .gs association's
-  # shell\open\command, and any form of self-replacement — all three of which REQ-078 needs.
+  # of the installed program on every release, which breaks shortcuts and any form of
+  # self-replacement — both of which REQ-078 needs.
   # Existing GoSurvey-<version>.exe files are swept by [InstallDelete] in installer/GoSurvey.iss.
   set_target_properties(GoSurvey PROPERTIES OUTPUT_NAME "GoSurvey" WIN32_EXECUTABLE TRUE)
   if(MSVC)
@@ -561,30 +649,87 @@ gosurvey_enable_pch(GoSurvey)
 # project default (C++17), so it cannot consume it (D-2026-08-31-a).
 set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
-set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gs")
-add_custom_command(TARGET GoSurvey POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
+set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gst")
+set(GOSURVEY_WHATS_NEW_MD "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new.md")
+set(GOSURVEY_WHATS_NEW_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new-bg.png")
+set(GOSURVEY_SPLASH_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/splash-bg.png")
+# REQ-336: the billboard content must exist at configure time so a missing file fails the build,
+# not only a packaged installer.
+if(NOT EXISTS "${GOSURVEY_WHATS_NEW_MD}")
+  message(FATAL_ERROR "REQ-336: resources/whats-new.md is required (What's New billboard).")
+endif()
+if(NOT EXISTS "${GOSURVEY_WHATS_NEW_BG}")
+  message(FATAL_ERROR "REQ-336: resources/whats-new-bg.png is required (What's New backdrop).")
+endif()
+if(NOT EXISTS "${GOSURVEY_SPLASH_BG}")
+  message(FATAL_ERROR "REQ-093: resources/splash-bg.png is required (startup splash backdrop).")
+endif()
+set(GOSURVEY_WIKI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki")
+if(NOT EXISTS "${GOSURVEY_WIKI_DIR}/Home.md")
+  message(FATAL_ERROR "resources/wiki/Home.md is required (shipped user manual).")
+endif()
+# Stage bundled resources beside the executable. A POST_BUILD hook only runs when GoSurvey is
+# relinked, so changing splash-bg.png (or any other resource) left a stale copy in build/resources/
+# until a code change forced a rebuild. This stamp target re-runs whenever any listed resource
+# changes, even on an incremental build that skips linking.
+file(GLOB_RECURSE GOSURVEY_RESOURCE_DIR_FILES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/*"
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches/*"
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks/*"
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/*"
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki/*")
+set(GOSURVEY_BUNDLED_RESOURCE_FILES
+  "${GOSURVEY_DEFAULT_TEMPLATE}"
+  "${GOSURVEY_WHATS_NEW_MD}"
+  "${GOSURVEY_WHATS_NEW_BG}"
+  "${GOSURVEY_SPLASH_BG}"
+  ${GOSURVEY_RESOURCE_DIR_FILES})
+set(_GOSURVEY_RESOURCE_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_resources.stamp")
+add_custom_command(
+  OUTPUT "${_GOSURVEY_RESOURCE_STAMP}"
+  DEPENDS ${GOSURVEY_BUNDLED_RESOURCE_FILES}
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/resources"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/resources/layouts"
   # `copy_directory` never removes files that were deleted or renamed in the source tree, so a
   # rebuild after dropping an old icon left the stale copy beside the exe (and in the installer
   # payload) forever. Wipe the mirrored dirs first so the deploy is an exact copy of source.
   COMMAND ${CMAKE_COMMAND} -E rm -rf
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/icons"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/hatches"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/blocks"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/fonts"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/wiki"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gs"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/default-template.gst"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${GOSURVEY_WHATS_NEW_MD}"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new.md"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${GOSURVEY_WHATS_NEW_BG}"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new-bg.png"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${GOSURVEY_SPLASH_BG}"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/splash-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/icons"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/hatches"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
-  COMMENT "Copy resources beside executable")
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/blocks"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/fonts"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/wiki"
+  COMMAND ${CMAKE_COMMAND} -E touch "${_GOSURVEY_RESOURCE_STAMP}"
+  COMMENT "Stage bundled resources beside GoSurvey executable")
+add_custom_target(gosurvey_stage_resources DEPENDS "${_GOSURVEY_RESOURCE_STAMP}")
+add_dependencies(GoSurvey gosurvey_stage_resources)
 
 # Copy pdfium.dll next to the executable so it can be found at runtime.
 if(WIN32)
@@ -646,6 +791,29 @@ if(GOSURVEY_BUILD_HEADLESS)
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
 
   gosurvey_target_warnings(gosurvey_headless)
+
+  # GsJsonDwgFixture (issue #264): converts between raw GoSurvey JSON (the .gst template shape,
+  # REQ-175) and a .dwg carrying it as the ADR-044 trailer. Used by tools/Make-*.ps1 to author
+  # samples/*.dwg test fixtures from readable JSON — not shipped, like gosurvey_headless.
+  add_executable(GsJsonDwgFixture
+    tools/GsJsonDwgFixture.cpp
+    src/platform/HeadlessFileDialogs.cpp
+    src/platform/HeadlessPdfAttach.cpp
+  )
+  target_include_directories(GsJsonDwgFixture PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/font
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${NLOHMANN_JSON_INCLUDE}
+    ${CMAKE_BINARY_DIR}/generated
+  )
+  target_link_libraries(GsJsonDwgFixture PRIVATE gosurvey_domain LibreDWG::libredwg)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -677,6 +845,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
     tests/DimViewportTests.cpp
+    tests/ViewportCameraTests.cpp
     tests/CommandLineTests.cpp
     tests/RightClickTests.cpp
     tests/SurveyCsvValidateTests.cpp
@@ -688,6 +857,10 @@ if(GOSURVEY_BUILD_TESTS)
     tests/UcsTests.cpp
     tests/Ray3dTests.cpp
     tests/CameraTests.cpp
+    # REQ-310 3D crosshair (GitHub #144). Header-only and pure for the same reason Camera is: an
+    # axis arm drawn along the wrong screen direction still looks like a 3D cursor, so the sign
+    # conventions need a test that does not depend on a window.
+    tests/Crosshair3dTests.cpp
     # REQ-122 zoom framing (GitHub issue #88, TASK-117). Header-only and pure, like OrthoConstrain
     # above it: the ZOOMEXTENTS acceptance list (margin, aspect, no edge clipping, degenerate extents,
     # never a NaN camera) is decided entirely in this arithmetic, and the deferred consumer that calls
@@ -698,6 +871,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ColorContrastTests.cpp
     tests/PlotFontTests.cpp
     tests/CadFontNameTests.cpp
+    # REQ-302/ADR-053 (issue #322) — ribbon layout data model. Header-only and pure: plain
+    # structs with no ImGui calls, so it belongs with the other header-only pure tests above.
+    tests/RibbonLayoutTypesTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
     tests/MtextTextOpsTests.cpp
@@ -709,6 +885,41 @@ if(GOSURVEY_BUILD_TESTS)
     tests/BenchSceneTests.cpp
     tests/VisualStyleTests.cpp
     tests/MeshGeomTests.cpp
+    # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). The whole point of the kernel being
+    # graphics-free is that this suite can exist: every primitive's topology, its closed-form volume
+    # and surface area, its refusals, and its behaviour at state-plane coordinate magnitudes are all
+    # decided here, with no window and no document.
+    tests/BrepTests.cpp
+    # REQ-323 / ADR-046 (j) — FILLET. Closed-form acceptance numbers, written before the code.
+    tests/ChamferEdgeTests.cpp
+    tests/FilletEdgeTests.cpp
+    # REQ-319 / ADR-046 amendment (i) — push/pull, the first kernel op that EDITS a solid. Its own
+    # file because its subject is the PRECONDITION Validate cannot enforce, not another builder.
+    tests/PushPullTests.cpp
+    # REQ-333 / ADR-046 amendment (n) — moving a VERTEX or an EDGE. Its own file because its subject
+    # is the DEFINITION: moving a corner and leaving everything else alone is not representable, so
+    # the operation is "offset the adjacent planes and re-solve", and these cases pin that.
+    tests/MoveSubObjectTests.cpp
+    # REQ-332 / ADR-046 amendment (m) — rigid rotation and uniform scale. Its own file because its
+    # subject is the point/direction split: a frame's origin and its axes transform by different
+    # rules, and getting that wrong still produces a solid Validate accepts.
+    tests/RotateSolidTests.cpp
+    # REQ-320 / ADR-051 — the ACIS SAT parser (GitHub issue #299). Pure, so a hand-authored SAT
+    # fixture pins the supported plane/cylinder/cone shapes and every refusal without a DWG file.
+    tests/AcisSatParserTests.cpp
+    src/util/AcisSatParser.cpp
+    src/util/brep.cpp
+    # REQ-315 / ADR-048: the NURBS patch math. Partition-of-unity, a bilinear patch reproducing a
+    # plane, a rational arc row that is exactly on its circle, and derivative agreement with finite
+    # differences are all decided here, with no window — the same reason BrepTests exists.
+    tests/NurbsTests.cpp
+    src/util/nurbs.cpp
+    # REQ-315 acceptance: a solid survives `.gs` save/reopen with topology counts identical and
+    # volume/area stable. BrepJson.hpp is header-only and pulls in only nlohmann/json + brep.hpp, so
+    # the serializer the saver actually runs is exercised directly here (GsIo.cpp is not linkable).
+    tests/BrepJsonTests.cpp
+    tests/SolidPickTests.cpp
+    src/util/solidpick.cpp
     tests/MeshGsRoundTripTests.cpp
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
@@ -753,10 +964,27 @@ if(GOSURVEY_BUILD_TESTS)
     # SurfaceStyleTests' already-pinned calls — and the one-shot it asserts is what keeps the
     # per-rest surface query off the per-frame path REQ-100 profile (c) measures.
     tests/HoverDwellTests.cpp
+    # GitHub issue #166. Header-only and pure, like HoverDwellTests above. The gate is the only new
+    # logic in the fix for the TRIM frame-rate drop — it decides whether the per-frame entity hover
+    # scan re-runs — and both failure directions (scans too often / highlight goes stale) are the
+    # ones a user would report, so both are pinned here with no GL context.
+    tests/HoverPickGateTests.cpp
+    # GitHub issue #168. Header-only and pure, like HoverPickGateTests above. The stall detector is
+    # the only new logic in the investigation instrument for the multi-select freeze — it decides
+    # where in a stall episode a frame sits — and its edges (began / ended) are what gate the one
+    # diagnostic snapshot per episode, so both are pinned here with no GL context.
+    tests/FrameWatchTests.cpp
+    # REQ-316 / ADR-047: the bulge -> arc (centre, radius, start, sweep) helper and arc-segment
+    # length. Pure geom2d, double math; the tangency and quarter-circle cases are what POLYLINE arc
+    # mode and JOIN both rest on, and a sign error here is silent in plan view.
+    tests/BulgeArcTests.cpp
     tests/UpdateCheckTests.cpp
     # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the
     # tab-index sentinel invariant and the thumbnail-cache naming/eviction (header-only, pure).
     tests/RecentDrawingsTests.cpp
+    # REQ-336 What's New dismiss / auto-open predicates (pure).
+    tests/WhatsNewLogicTests.cpp
+    src/util/WhatsNewLogic.cpp
     tests/StartScreenTests.cpp
     src/io/RecentDrawings.cpp
     tests/TelemetryPingTests.cpp
@@ -768,6 +996,7 @@ if(GOSURVEY_BUILD_TESTS)
     # module exist at all under architecture §11.4.
     tests/DocInvariantsTests.cpp
     src/util/docinvariants.cpp
+    src/util/SaveTrace.cpp
     # REQ-069: the background rebuild worker's lifetime. Header-only against CadCommands.hpp (the
     # struct and its destructor), so it needs no extra domain source on the link line.
     tests/SurfaceRebuildLifetimeTests.cpp
@@ -811,6 +1040,9 @@ if(GOSURVEY_BUILD_TESTS)
     # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose:
     # this is where REQ-101 is actually enforced, and it must be testable without a GL context.
     src/util/curveintersect.cpp
+    # REQ-316 / ADR-047 bulge -> arc math (BulgeArcTests). Pure geom2d — <cmath> only — so the
+    # quarter-circle and tangency cases POLYLINE arc mode and JOIN rest on are pinned without GL.
+    src/util/geom2d.cpp
     # REQ-100 bench scene generator + frame statistics. Pure and deterministic by design.
     src/util/benchscene.cpp
     # REQ-063 mesh validation + bounds + normals. Pure; the GPU-facing checks must be testable.
@@ -908,8 +1140,60 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
     tests/GsIoDimAngularTests.cpp
+    tests/GsIoViewportCameraTests.cpp
+    tests/GsMigrateLegacyBreaklineTests.cpp
+    # REQ-302/ADR-053 (issue #323) — ribbon layout measure pass. Header-only, but needs a live
+    # ImGui frame for CalcTextSize (font metrics), same headless-font-atlas pattern
+    # GsMigrateLegacyBreaklineTests.cpp uses above — that's why it rides with GoSurveySnapTests
+    # (links imgui_core) rather than the imgui-free GoSurveyTests.
+    tests/RibbonLayoutMeasureTests.cpp
+    # REQ-302/ADR-053 (issue #324) — ribbon layout place pass. Pure layout math (no live ImGui
+    # frame needed), but includes RibbonLayoutMeasure.hpp for ImVec2/RibbonMeasuredButton, so it
+    # rides with GoSurveySnapTests (has the imgui include path) rather than GoSurveyTests.
+    tests/RibbonLayoutPlaceTests.cpp
+    tests/ViewportUcsTests.cpp
+    # REQ-154 / issue #371 — ORTHO squaring to a vertical (Front/Left/Right-style) UCS. Needs
+    # gosurvey_domain for ApplyOrthoConstrainFromAnchor, so it rides with GoSurveySnapTests like
+    # ViewportUcsTests.cpp above.
+    tests/OrthoUcsConstrainTests.cpp
+    # REQ-318 increment 2 (issue #148) — the sub-object SELECTION: its store, the expiring
+    # reference, mutual exclusion and cross-solid depth order. Needs gosurvey_domain for
+    # SubmitSubObjectPick / ExpireSubObjectSelection, like ViewportUcsTests above.
+    tests/SubObjectSelectionTests.cpp
+    # REQ-060 (issue #148 Phase 5 slice 4b) — the TRANSLATE gizmo: the skew-line solve, the anchor,
+    # and the two negatives (a click that misses every handle, an empty selection). Needs
+    # gosurvey_domain for SubmitGizmoClick / ApplyTranslationToSelection.
+    tests/GizmoTranslateTests.cpp
+    # REQ-060 rotate/scale handles (TASK-232, slice 4c). Its own file because its subject is the
+    # AGREEMENT: a gizmo drag and the function the typed command calls, compared coordinate for
+    # coordinate — which is the acceptance itself rather than a proxy for it.
+    tests/GizmoRotateScaleTests.cpp
+    # REQ-333 increment 2 (TASK-234) — the vertex and edge grips. Its own file because its subject is
+    # the handle COUNTS (each a statement about degrees of freedom) and the rule that no handle is
+    # drawn where the kernel would refuse the drag.
+    tests/GizmoSubObjectMoveTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
+    # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
+    # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
+    tests/TrimLinePreviewTests.cpp
+    # issue #399 increment 1 — 3D Line-vs-Line TRIM via a pick ray. Same reason as
+    # TrimLinePreviewTests above (needs gosurvey_domain for SubmitTrimViewportPick).
+    tests/Trim3DLineLineTests.cpp
+    # issue #399 increment 4 — smart (drawn-line) TRIM in true 3D. Same reason as above.
+    tests/Trim3DDrawnLineTests.cpp
+    # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
+    # StartDistCommand, like TrimLinePreviewTests above.
+    tests/DistCommandTests.cpp
+    # GitHub issue #396 — EXTRUDE's typed height must take its sign from the live preview
+    # direction. Needs gosurvey_domain for HandleExtrudeTextInput, like DistCommandTests above.
+    tests/ExtrudeTypedHeightDirectionTests.cpp
+    # GitHub issue #396 (PRESSPULL addendum) — PRESSPULL was brought in line with EXTRUDE's own
+    # select-target / wait-distance flow and widened to closed 2D shapes. Needs gosurvey_domain
+    # for HandlePressPullTextInput / StartPressPullCommand, like DistCommandTests above.
+    tests/PressPullTypedDistanceDirectionTests.cpp
+    # Overlapping pick disambiguation — depth tie-break when SEL is off.
+    tests/PickDisambiguationTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

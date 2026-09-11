@@ -295,6 +295,94 @@ section{padding:clamp(3.5rem,7vw,6.5rem) 0}
 
 .dl-fallback{padding:1.25rem;border:1px dashed var(--rule-strong);color:var(--ink-2);font-size:.92rem}
 
+/* ---------------- install-help modal ---------------- */
+.modal-backdrop{
+  position:fixed;inset:0;z-index:200;
+  display:flex;align-items:center;justify-content:center;
+  padding:1.25rem;
+  background:color-mix(in srgb,var(--ink) 42%,transparent);
+}
+.modal{
+  width:min(100%,34rem);
+  max-height:min(88vh,100%);
+  overflow:auto;
+  background:var(--surface);
+  /* --ink flips to near-white in dark mode, which reads as a harsh white frame. */
+  border:1px solid var(--rule-strong);
+  box-shadow:var(--shadow);
+  border-radius:3px;
+  scrollbar-width:thin;
+  scrollbar-color:var(--rule-strong) var(--surface-2);
+}
+.modal::-webkit-scrollbar{width:10px}
+.modal::-webkit-scrollbar-track{background:var(--surface-2)}
+.modal::-webkit-scrollbar-thumb{
+  background:var(--rule-strong);
+  border:2px solid var(--surface-2);
+  border-radius:6px;
+}
+.modal::-webkit-scrollbar-thumb:hover{background:var(--ink-3)}
+.modal-head{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;
+  padding:1.15rem 1.25rem .9rem;
+  border-bottom:1px solid var(--rule);
+}
+.modal-head h2{font-size:var(--step-1);letter-spacing:-.015em}
+.modal-close{
+  flex:none;
+  font:inherit;color:var(--ink-3);background:none;border:0;
+  padding:.15rem .35rem;cursor:pointer;line-height:1;
+  font-size:1.35rem;
+}
+.modal-close:hover,.modal-close:focus-visible{color:var(--ink)}
+.modal-body{padding:1.1rem 1.25rem 1.25rem;display:flex;flex-direction:column;gap:1rem}
+.modal-lede{color:var(--ink-2);font-size:.95rem}
+.modal-steps{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:.85rem}
+.modal-steps li{
+  display:grid;grid-template-columns:auto 1fr;gap:.65rem .85rem;
+  align-items:start;
+}
+.modal-steps .num{
+  font-family:"IBM Plex Mono",monospace;font-size:.72rem;font-weight:500;
+  width:1.55rem;height:1.55rem;display:grid;place-items:center;
+  border:1px solid var(--rule-strong);border-radius:2px;color:var(--ink-3);
+}
+/* Title only — `strong` inside the paragraph must stay inline or button names break across lines. */
+.modal-steps li > div > strong{display:block;font-weight:600;margin-bottom:.15rem}
+.modal-steps p{margin:0;color:var(--ink-2);font-size:.92rem;line-height:1.55}
+.modal-steps p strong{font-weight:600}
+.modal-callout{
+  padding:.85rem 1rem;border:1px solid var(--rule);background:var(--surface-2);
+  font-size:.88rem;color:var(--ink-2);
+}
+.modal-foot{
+  display:flex;flex-wrap:wrap;gap:.65rem;align-items:center;
+  padding:0 1.25rem 1.25rem;
+}
+.modal-ack{
+  flex:1 1 100%;
+  display:flex;align-items:flex-start;gap:.65rem;
+  font-size:.92rem;color:var(--ink-2);cursor:pointer;
+  padding:.15rem 0 .35rem;
+}
+.modal-ack input{
+  flex:none;width:1rem;height:1rem;margin-top:.15rem;accent-color:var(--accent);
+}
+.btn-modal-secondary{
+  display:inline-flex;align-items:center;gap:.55rem;
+  padding:.72rem 1.25rem;border-radius:2px;
+  font-weight:600;font-size:.95rem;text-decoration:none;
+  border:1px solid var(--rule-strong);
+  background:var(--surface-2);color:var(--ink);
+  cursor:pointer;transition:background .15s,border-color .15s,color .15s;
+}
+.btn-modal-secondary:hover{border-color:var(--ink-3);background:color-mix(in srgb,var(--surface-2) 70%,var(--ink))}
+.modal-foot .btn-primary:disabled{
+  opacity:.42;cursor:not-allowed;
+  background:color-mix(in srgb,var(--accent) 55%,var(--surface-2));
+}
+.modal-foot .note{font-size:.82rem;color:var(--ink-3);margin:0;flex:1 1 100%}
+
 /* ---------------- steps ---------------- */
 .steps{display:grid;gap:1.25rem;counter-reset:s}
 @media (min-width:52rem){.steps{grid-template-columns:repeat(3,1fr)}}
@@ -358,8 +446,8 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
         </div>
       </div>
       <figure class="shot" style="margin:0">
-        <img src="img/01-main-window.png" alt="The GoSurvey main window, showing the ribbon, the drawing area and the command line." width="2560" height="1528">
-        <figcaption>The main window — ribbon, drawing area and command line.</figcaption>
+        <img src="img/01-main-window.png" alt="The GoSurvey start screen with recent drawings, the ribbon, and the status bar." width="2560" height="1528">
+        <figcaption>The start screen — recent drawings, ribbon, and status bar.</figcaption>
       </figure>
     </div>
   </section>
@@ -438,12 +526,12 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
       </div>
       <div class="gallery">
         <figure class="shot" style="margin:0">
-          <img src="img/16-model-space.png" alt="GoSurvey model space with drawing geometry and the ribbon interface." loading="lazy" width="2560" height="1528">
-          <figcaption>Model space and the command line.</figcaption>
+          <img src="img/16-model-space.png" alt="GoSurvey model space with a TIN surface, contours, slope arrows, and the View tab ribbon." loading="lazy" width="2560" height="1528">
+          <figcaption>Model space — TIN surface with contours and slope arrows.</figcaption>
         </figure>
         <figure class="shot" style="margin:0">
-          <img src="img/15-3d-piping.png" alt="The GoSurvey 3d model view." loading="lazy" width="2560" height="1528">
-          <figcaption>3d model view with shaded rendering</figcaption>
+          <img src="img/15-3d-piping.png" alt="GoSurvey 3D model space with a shaded pipe assembly and the View tab ribbon." loading="lazy" width="2560" height="1528">
+          <figcaption>3D model view with shaded rendering.</figcaption>
         </figure>
         <figure class="shot" style="margin:0">
           <img src="img/10b-traverse-closure.png" alt="The GoSurvey Traverse Closure Analysis window comparing unadjusted misclosure against a least-squares adjustment, with observations, redundancy and residuals." loading="lazy" width="2560" height="1528">
@@ -540,6 +628,76 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
   </section>
 
 </main>
+
+<div id="install-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="install-modal-title">
+  <div class="modal" id="install-modal-panel">
+    <div class="modal-head">
+      <h2 id="install-modal-title">Before you install</h2>
+      <button type="button" class="modal-close" id="install-modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-lede">GoSurvey is free to install, but your browser or Windows may flag the download because the installer is not code-signed yet. Those warnings are normal — follow the steps below and you can install safely.</p>
+      <ol class="modal-steps">
+        <li>
+          <span class="num">1</span>
+          <div>
+            <strong>Download the installer</strong>
+            <p>Click <em>Continue download</em> below. Your browser saves a file named like <span class="mono">GoSurvey-…-Installer.exe</span>.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num">2</span>
+          <div>
+            <strong>If your browser blocks or removes the download</strong>
+            <p>Chrome and Edge often flag an unsigned <span class="mono">.exe</span> with <em>This file isn&rsquo;t commonly downloaded</em> and may discard it. Press <span class="mono">Ctrl+J</span> to open Downloads, find the file, and choose <strong>Keep</strong> or <strong>Keep anyway</strong>. If it was removed, open <a href="https://github.com/chetjones003/GoSurvey/releases/latest" rel="noopener">the release on GitHub</a>, download <span class="mono">GoSurvey-…-Installer.exe</span> from Assets, and choose <strong>Keep</strong> when the browser warns again.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num">3</span>
+          <div>
+            <strong>If SmartScreen appears when you run the installer</strong>
+            <p>Windows may show <em>Windows protected your PC</em> or say the publisher is unrecognised. Click <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num">4</span>
+          <div>
+            <strong>If the downloaded file is still blocked</strong>
+            <p>Right-click the <span class="mono">.exe</span>, choose <strong>Properties</strong>, check <strong>Unblock</strong> at the bottom, click OK, then run it again.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num">5</span>
+          <div>
+            <strong>Approve the installer</strong>
+            <p>Follow the setup wizard. Windows may ask for permission to install to Program Files — choose Yes. GoSurvey adds a Start Menu entry when finished.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num">6</span>
+          <div>
+            <strong>If GoSurvey will not start</strong>
+            <p>Install the <a href="https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist" rel="noopener">Microsoft Visual C++ Redistributable (x64)</a>, then run GoSurvey again.</p>
+          </div>
+        </li>
+      </ol>
+      <p class="modal-callout">
+        Every release publishes a SHA-256 checksum on GitHub so you can verify the file was not
+        altered in transit. The checksum proves integrity; it does not remove the SmartScreen prompt.
+      </p>
+    </div>
+    <div class="modal-foot">
+      <label class="modal-ack" for="install-modal-ack">
+        <input type="checkbox" id="install-modal-ack">
+        I have read the install instructions above.
+      </label>
+      <button type="button" class="btn btn-primary" id="install-modal-continue" disabled>Continue download</button>
+      <button type="button" class="btn-modal-secondary" id="install-modal-cancel">Not now</button>
+      <p class="note">Need help after installing? See <a href="https://github.com/chetjones003/GoSurvey/wiki">the manual</a>
+        or <a href="https://github.com/chetjones003/GoSurvey/issues">report an issue</a>.</p>
+    </div>
+  </div>
+</div>
 
 <footer>
   <div class="wrap">
@@ -783,6 +941,99 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
       var n = document.getElementById("dl-note");
       if(n) n.hidden = false;
     }
+  });
+})();
+</script>
+
+<script>
+/* ---------------------------------------------------------------------------
+   Install help modal. Shown before any download starts so users see SmartScreen
+   guidance while they still have context — not after they are already stuck.
+--------------------------------------------------------------------------- */
+(function(){
+  "use strict";
+
+  var modal = document.getElementById("install-modal");
+  var panel = document.getElementById("install-modal-panel");
+  var btnContinue = document.getElementById("install-modal-continue");
+  var btnCancel = document.getElementById("install-modal-cancel");
+  var btnClose = document.getElementById("install-modal-close");
+  var chkAck = document.getElementById("install-modal-ack");
+  if(!modal || !panel || !btnContinue || !chkAck || !btnClose) return;
+
+  var pendingUrl = "";
+  var lastFocus = null;
+
+  function syncContinue(){
+    btnContinue.disabled = !chkAck.checked;
+  }
+
+  function resetModal(){
+    chkAck.checked = false;
+    syncContinue();
+  }
+
+  function openModal(url){
+    pendingUrl = url || "";
+    lastFocus = document.activeElement;
+    resetModal();
+    modal.hidden = false;
+    document.body.style.overflow = "hidden";
+    // Opening used to land on the footer checkbox, which scrolled the panel to the bottom.
+    panel.scrollTop = 0;
+    btnClose.focus({preventScroll:true});
+  }
+
+  function closeModal(){
+    modal.hidden = true;
+    document.body.style.overflow = "";
+    panel.scrollTop = 0;
+    pendingUrl = "";
+    resetModal();
+    if(lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
+  }
+
+  function triggerDownload(url){
+    if(!url) return;
+    // Cross-origin (GitHub release assets): the download attribute is ignored, but
+    // navigation still starts the browser's save dialog without leaving the help page.
+    var a = document.createElement("a");
+    a.href = url;
+    a.rel = "noopener";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  document.addEventListener("click", function(e){
+    var dl = e.target.closest('[data-f="dl"]');
+    if(!dl || dl.hidden) return;
+    var href = dl.getAttribute("href");
+    if(!href || href.charAt(0) === "#") return;
+    e.preventDefault();
+    openModal(href);
+  });
+
+  chkAck.addEventListener("change", syncContinue);
+
+  btnContinue.addEventListener("click", function(){
+    if(btnContinue.disabled) return;
+    var url = pendingUrl;
+    closeModal();
+    triggerDownload(url);
+  });
+
+  btnCancel.addEventListener("click", closeModal);
+  btnClose.addEventListener("click", closeModal);
+
+  modal.addEventListener("click", function(e){
+    if(e.target === modal) closeModal();
+  });
+
+  document.addEventListener("keydown", function(e){
+    if(modal.hidden) return;
+    if(e.key === "Escape") closeModal();
   });
 })();
 </script>

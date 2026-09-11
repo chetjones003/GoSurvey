@@ -28,7 +28,21 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
          // list was never extended when ALIGN joined them, so ALIGN alone built its box from SNAPPED
          // coordinates. Nobody decided that; it is the per-command accident an unstated rule
          // produces, and closing it is part of REQ-121 rather than a separate fix.
-         (cmd.active == K::Align && cmd.alignPhase == AppCommandState::AlignPhase::PickSelection);
+         (cmd.active == K::Align && cmd.alignPhase == AppCommandState::AlignPhase::PickSelection) ||
+         // REQ-314: EXTRUDE's / REVOLVE's SelectProfiles step is the same accumulate-and-Enter shape.
+         (cmd.active == K::Extrude &&
+          cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles) ||
+         (cmd.active == K::PressPull &&
+          cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) ||
+         (cmd.active == K::Revolve &&
+          cmd.revolvePhase == AppCommandState::RevolvePhase::SelectProfiles) ||
+         (cmd.active == K::Loft &&
+          cmd.loftPhase == AppCommandState::LoftPhase::SelectProfiles) ||
+         (cmd.active == K::Sweep &&
+          cmd.sweepPhase == AppCommandState::SweepPhase::SelectInputs) ||
+         (cmd.active == K::Slice &&
+          cmd.slicePhase == AppCommandState::SlicePhase::SelectSolids) ||
+         cmd.active == K::Boolean;
 }
 
 /// What a left-click in the **model-space** viewport means for the currently active command.
@@ -97,6 +111,10 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   // --- Point-picking draw commands: the click is a coordinate, handed to the state machine. ---
   case K::Line:
   case K::Circle:
+  // The prompted solid primitives (REQ-313 as amended): the base point is an ordinary snapped
+  // coordinate pick, exactly like CIRCLE's centre. Past that the command wants typed numbers and
+  // says so rather than swallowing the click — see SubmitSolidViewportPick.
+  case K::Solid:
   case K::Polyline:
   case K::FeatureLine:
   case K::Rect:
@@ -109,6 +127,7 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::DimAngular:
   case K::IdPoint:
   case K::SurveyInverse:
+  case K::Dist:
   case K::Paste:
   case K::SurfaceElevGrade:
   case K::WaterDrop:
@@ -127,6 +146,12 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::DesignateBoundary:
     return R::RawEntityPick;
 
+  // REQ-317 POLYSOLID: points, except at the `O`bject prompt, where the click names an existing
+  // Line, Arc, Circle or Polyline to sweep along instead of a coordinate.
+  case K::Polysolid:
+    return cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject ? R::RawEntityPick
+                                                                             : R::SnappedPointPick;
+
   // --- Select-then-point modify commands: window-select first, then coordinates. ---
   case K::Move:
   case K::Copy:
@@ -140,6 +165,58 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Rotate:
     return cmd.rotatePhase == AppCommandState::RotatePhase::PickSelection ? R::SelectionAccumulate
                                                                           : R::SnappedPointPick;
+  // EXTRUDE (REQ-314): select closed polylines / circles (the accumulate-and-Enter shape its
+  // siblings use), then a height that is either typed or picked off the cursor ray — a snapped
+  // point pick, resolved to a height by SubmitExtrudeViewportPick.
+  case K::Extrude:
+    return cmd.extrudePhase == AppCommandState::ExtrudePhase::SelectProfiles ? R::SelectionAccumulate
+                                                                            : R::SnappedPointPick;
+  // PRESSPULL (REQ-319, widened by GitHub issue #396): the same select-then-distance shape as
+  // EXTRUDE. SelectTarget accumulates entities the same way (a Ctrl+click sub-object face is a
+  // separate selection this route never sees — ViewportClickRouteFor only decides ordinary
+  // model-space clicks); WaitDistance is a snapped point resolved to a distance by
+  // SubmitPressPullViewportPick.
+  case K::PressPull:
+    return cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget
+               ? R::SelectionAccumulate
+               : R::SnappedPointPick;
+  // LOFT / SWEEP (REQ-315): one phase, the accumulate-and-Enter "select objects" step — nothing is
+  // picked by point, so this is their only route.
+  case K::Loft:
+  case K::Sweep:
+    return R::SelectionAccumulate;
+  // REVOLVE (REQ-314): select profiles, then two snapped points for the axis; the angle is typed.
+  case K::Revolve: {
+    using RP = AppCommandState::RevolvePhase;
+    switch (cmd.revolvePhase) {
+    case RP::SelectProfiles:
+      return R::SelectionAccumulate;
+    case RP::WaitAxisStart:
+    case RP::WaitAxisEnd:
+      return R::SnappedPointPick;
+    case RP::WaitAngle:
+      return R::Ignore;  // a typed value; SubmitViewportPickImpl has no branch for it
+    }
+    return R::Ignore;
+  }
+  // UNION / SUBTRACT / INTERSECT (REQ-314): every phase is a "select solids" step.
+  case K::Boolean:
+    return R::SelectionAccumulate;
+  // SLICE (REQ-314): select solids, then three snapped points for the plane, then a point on the
+  // side to keep (or a typed B).
+  case K::Slice: {
+    using SP = AppCommandState::SlicePhase;
+    switch (cmd.slicePhase) {
+    case SP::SelectSolids:
+      return R::SelectionAccumulate;
+    case SP::WaitP1:
+    case SP::WaitP2:
+    case SP::WaitP3:
+    case SP::WaitKeepSide:
+      return R::SnappedPointPick;
+    }
+    return R::Ignore;
+  }
   case K::Align:
     return cmd.alignPhase == AppCommandState::AlignPhase::PickSelection ? R::SelectionAccumulate
                                                                        : R::SnappedPointPick;
@@ -166,6 +243,8 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     case APh::WaitType:
     case APh::Rect_WaitColumns:
     case APh::Rect_WaitRows:
+    case APh::Rect_WaitLevels:
+    case APh::Rect_WaitLevelSpacing:  // typed-number only (GitHub issue #400 inc 2, REQ-305 acc 12)
     case APh::Polar_WaitItemCount:
     case APh::Polar_WaitRotateAnswer:
       return R::Ignore;

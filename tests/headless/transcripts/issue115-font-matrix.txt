@@ -2,8 +2,8 @@
 #
 # The issue's Testing section asks for a drawing carrying as many text types as possible, inspected in
 # model space, in paper space, and through viewports at different scales. This transcript builds that
-# drawing and asserts the parts a transcript CAN hold; `tools/Make-FontDemoGs.ps1` stamps the font
-# families onto it and writes `samples/font-demo.gs` for the visual half.
+# drawing and asserts the parts a transcript CAN hold; `tools/Make-FontDemoDwg.ps1` stamps the font
+# families onto it and writes `samples/font-demo.dwg` for the visual half.
 #
 # WHAT A TRANSCRIPT CAN AND CANNOT SEE HERE
 # The driver has no framebuffer and no font atlas (FontRegistry answers with the default font when the

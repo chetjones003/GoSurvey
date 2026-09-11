@@ -2,7 +2,7 @@
 
 NEW
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE Base, Existing Ground
 CMD SURFACECREATE Comp, Existing Ground
 CMD VOLUMESURFACE CutFill, Base, Comp

@@ -14,6 +14,7 @@
 #include "util/ucs.hpp"
 
 #include <cmath>
+#include <string>
 
 using Catch::Approx;
 using ucs::Ucs;
@@ -287,6 +288,53 @@ TEST_CASE("A tilted work plane gives a click a varying elevation", "[ucs]") {
 }
 
 // ---------------------------------------------------------------------------
+// POLAR tracking (issue #154, REQ-154): snap a pick onto the nearest polar ray,
+// measured in the active UCS's XY plane from +X.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("POLAR snaps to the nearest increment ray under the WCS", "[ucs][polar]") {
+  const Vec3 anchor{10.0, 10.0, 0.0};
+  // A pick roughly north-east but closer to due east: 90 deg increment -> due east.
+  const Vec3 target{40.0, 15.0, 0.0};
+  const Vec3 got = ucs::SnapToPolarRay(Ucs{}, anchor, target, 90.0);
+  // Snapped to due east: Y collapses to the anchor row, the pick distance is preserved (AutoCAD).
+  RequireVec(got, 10.0 + std::hypot(30.0, 5.0), 10.0, 0.0);
+}
+
+TEST_CASE("POLAR 45-degree increment keeps a diagonal pick on the diagonal", "[ucs][polar]") {
+  const Vec3 anchor{0.0, 0.0, 0.0};
+  const Vec3 got = ucs::SnapToPolarRay(Ucs{}, anchor, {10.0, 9.0, 0.0}, 45.0);
+  REQUIRE(got.x == Approx(got.y));  // landed on the 45 deg ray
+}
+
+TEST_CASE("POLAR additional angles win when nearer than any increment", "[ucs][polar]") {
+  const Vec3 anchor{0.0, 0.0, 0.0};
+  const double extra[] = {30.0};
+  // Pick at ~28 deg: nearest 90 deg multiple is 0, but the 30 deg extra angle is closer.
+  const Vec3 got = ucs::SnapToPolarRay(Ucs{}, anchor, {10.0, 5.32, 0.0}, 90.0, extra, 1);
+  double deg = 0.0;
+  REQUIRE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', got, &deg));
+  REQUIRE(deg == Approx(30.0).margin(1e-6));
+}
+
+// AC-6: the headless regression. Under a UCS rotated 45 deg about Z, a 90 deg polar pull must land
+// along the UCS axis, not the world axis.
+TEST_CASE("POLAR follows a rotated UCS: a 90-degree pull lands on the UCS axis", "[ucs][polar]") {
+  const Ucs u = ucs::RotatedAboutZ(Ucs{}, 45.0);
+  const Vec3 anchor{0.0, 0.0, 0.0};
+  // A pick near the UCS +X direction (world 45 deg) but pulled off it.
+  const Vec3 target{7.0, 8.0, 0.0};
+  const Vec3 got = ucs::SnapToPolarRay(u, anchor, target, 90.0);
+
+  // The committed point lies on the UCS +X ray: its UCS-local Y is zero, X is the planar distance.
+  const Vec3 local = ucs::WorldToUcs(u, got);
+  REQUIRE(local.y == Approx(0.0).margin(1e-9));
+  REQUIRE(local.x == Approx(std::hypot(7.0, 8.0)).margin(1e-9));
+  // And it is emphatically NOT on a world axis (that would be y == 0 in world).
+  REQUIRE(got.y > 1.0);
+}
+
+// ---------------------------------------------------------------------------
 // PLAN camera derivation.
 // ---------------------------------------------------------------------------
 
@@ -334,17 +382,24 @@ TEST_CASE("PLAN of a vertical UCS looks horizontally along its normal", "[ucs][p
   ucs::PlanViewAngles(u, &az, &el);
   REQUIRE(el == Approx(0.0f).margin(1e-4));  // on the horizon
   REQUIRE(az == Approx(0.0f).margin(1e-4));  // eye to the south, looking north
-  // ...and this is the case camera roll cannot express exactly: the view direction is right, but
-  // nothing in an azimuth/elevation camera can also put the UCS +Y (world +Z here) up the screen.
-  REQUIRE_FALSE(ucs::PlanViewIsExact(u));
+  // Now that Camera has a roll axis (#153) even this frame is exact: the caller adds the roll that
+  // places the UCS +Y (world +Z here) up the screen. Here the azimuth/elevation up is already +Z,
+  // so the roll is zero.
+  REQUIRE(ucs::PlanViewIsExact(u));
 }
 
-TEST_CASE("PlanViewIsExact separates flat UCSs from tilted ones", "[ucs][plan]") {
+TEST_CASE("PlanViewIsExact holds for every valid frame (#153)", "[ucs][plan]") {
   REQUIRE(ucs::PlanViewIsExact(ucs::RotatedAboutZ(Ucs{}, 217.0)));
   REQUIRE(ucs::PlanViewIsExact(ucs::WithOrigin(Ucs{}, {1.0, 2.0, 3.0})));
-  REQUIRE_FALSE(ucs::PlanViewIsExact(ucs::RotatedAboutX(Ucs{}, 10.0)));
-  // Upside down is not "flat": Z must point up, or the view is from underneath.
-  REQUIRE_FALSE(ucs::PlanViewIsExact(ucs::RotatedAboutX(Ucs{}, 180.0)));
+  REQUIRE(ucs::PlanViewIsExact(ucs::RotatedAboutX(Ucs{}, 10.0)));
+  REQUIRE(ucs::PlanViewIsExact(ucs::RotatedAboutX(Ucs{}, 180.0)));  // upside down is still a valid frame
+  Ucs tilted;
+  REQUIRE(ucs::FromThreePoints({0, 0, 0}, {1, 0, 0}, {0, 1, 1}, &tilted));
+  REQUIRE(ucs::PlanViewIsExact(tilted));
+  // Only a degenerate basis is rejected.
+  Ucs bad;
+  bad.yAxis = bad.xAxis;  // X and Y collinear: not an orthonormal frame
+  REQUIRE_FALSE(ucs::PlanViewIsExact(bad));
 }
 
 // ---------------------------------------------------------------------------
@@ -442,4 +497,221 @@ TEST_CASE("A direction with no component in the rotation plane is refused", "[uc
   REQUIRE_FALSE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', Vec3{1e-9, 0.0, 5280.0}, &deg));
   // An unknown axis letter is refused rather than silently treated as Z.
   REQUIRE_FALSE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Q', Vec3{1.0, 0.0, 0.0}, &deg));
+}
+
+// ---------------------------------------------------------------------------
+// The plane contract (REQ-311).
+//
+// A `Ucs` is the plane abstraction: origin, normal, and an in-plane axis pair. These cases prove
+// the 2D <-> world conversion is a true inverse and that the off-plane component is REPORTED rather
+// than dropped, which is the failure the explicit offset output exists to prevent.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("On the world frame, plane coordinates are just X and Y", "[ucs][req311]") {
+  const Ucs w;
+  double off = 99.0;
+  const ucs::Point2D p = ucs::WorldToPlane(w, Vec3{3.0, -4.0, 7.5}, &off);
+  REQUIRE(p.x == Approx(3.0));
+  REQUIRE(p.y == Approx(-4.0));
+  // The Z is the OFFSET, not a third plane coordinate, and not silently discarded.
+  REQUIRE(off == Approx(7.5));
+  RequireVec(ucs::PlaneToWorld(w, p, off), 3.0, -4.0, 7.5);
+  // Without the offset the point lands on the plane itself.
+  RequireVec(ucs::PlaneToWorld(w, p), 3.0, -4.0, 0.0);
+}
+
+TEST_CASE("A tilted plane round-trips a survey-magnitude point well inside REQ-101", "[ucs][req311]") {
+  Ucs tilted;
+  // A 3-4-5 normal, so nothing here is axis-aligned and a dropped or swapped axis cannot pass.
+  REQUIRE(ucs::FromNormal(Vec3{1200.0, -800.0, 42.0}, Vec3{3.0, 4.0, 5.0}, &tilted));
+  REQUIRE(ucs::IsRightHandedOrthonormal(tilted));
+
+  const Vec3 world{2143.75, -1288.5, 311.25};
+  double off = 0.0;
+  const ucs::Point2D p = ucs::WorldToPlane(tilted, world, &off);
+  const Vec3 back = ucs::PlaneToWorld(tilted, p, off);
+  // REQ-101 is +/-0.01 ft; the plane maths is in double, so the real error is ~1e-12. Asserting the
+  // tight bound is the point - a round trip that merely scrapes under 0.01 ft would mean something
+  // had been narrowed to float on the way through.
+  REQUIRE(back.x == Approx(world.x).margin(1e-9));
+  REQUIRE(back.y == Approx(world.y).margin(1e-9));
+  REQUIRE(back.z == Approx(world.z).margin(1e-9));
+}
+
+TEST_CASE("Signed distance is positive on the plane's +Z side", "[ucs][req311]") {
+  Ucs w;
+  w.origin = {0.0, 0.0, 10.0};
+  REQUIRE(ucs::SignedDistanceToPlane(w, Vec3{5.0, 5.0, 12.0}) == Approx(2.0));
+  REQUIRE(ucs::SignedDistanceToPlane(w, Vec3{5.0, 5.0, 8.0}) == Approx(-2.0));
+  REQUIRE(ucs::SignedDistanceToPlane(w, Vec3{-100.0, 250.0, 10.0}) == Approx(0.0).margin(1e-12));
+
+  // A 45-degree plane through the origin: the distance from (1,0,0) is cos(45).
+  Ucs tilt;
+  REQUIRE(ucs::FromNormal(Vec3{0.0, 0.0, 0.0}, Vec3{1.0, 0.0, 1.0}, &tilt));
+  REQUIRE(ucs::SignedDistanceToPlane(tilt, Vec3{1.0, 0.0, 0.0}) == Approx(std::sqrt(0.5)));
+  REQUIRE(ucs::SignedDistanceToPlane(tilt, Vec3{-1.0, 0.0, 0.0}) == Approx(-std::sqrt(0.5)));
+}
+
+TEST_CASE("Projecting onto a plane leaves a point with no offset", "[ucs][req311]") {
+  Ucs tilt;
+  REQUIRE(ucs::FromNormal(Vec3{5.0, 5.0, 5.0}, Vec3{-2.0, 1.0, 3.0}, &tilt));
+  const Vec3 world{101.0, -37.5, 63.25};
+  const Vec3 flat = ucs::ProjectOntoPlane(tilt, world);
+  REQUIRE(ucs::SignedDistanceToPlane(tilt, flat) == Approx(0.0).margin(1e-9));
+  // What was removed is exactly the normal component - the projection moves the point along the
+  // normal and in no other direction.
+  const Vec3 removed = ray3d::Sub(world, flat);
+  const double d = ucs::SignedDistanceToPlane(tilt, world);
+  RequireVec(removed, tilt.zAxis.x * d, tilt.zAxis.y * d, tilt.zAxis.z * d);
+  // A point already on the plane is left where it is.
+  RequireVec(ucs::ProjectOntoPlane(tilt, flat), flat.x, flat.y, flat.z);
+}
+
+TEST_CASE("A circle parametrised on the world plane is the familiar cos/sin", "[ucs][req311]") {
+  Ucs w;
+  w.origin = {10.0, 20.0, 3.0};
+  const double r = 4.0;
+  RequireVec(ucs::PointOnPlaneCircle(w, r, 0.0), 14.0, 20.0, 3.0);
+  RequireVec(ucs::PointOnPlaneCircle(w, r, 3.14159265358979323846 / 2.0), 10.0, 24.0, 3.0);
+  RequireVec(ucs::PointOnPlaneCircle(w, r, 3.14159265358979323846), 6.0, 20.0, 3.0);
+}
+
+TEST_CASE("A circle on a vertical plane stays in that plane at a constant radius", "[ucs][req311]") {
+  Ucs vert;
+  // Normal along world +X: the circle lives in the YZ plane, the case a flat-only arc store cannot
+  // represent at all.
+  REQUIRE(ucs::FromNormal(Vec3{50.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0}, &vert));
+  const double r = 7.5;
+  for (int i = 0; i < 16; ++i) {
+    const double a = (2.0 * 3.14159265358979323846) * static_cast<double>(i) / 16.0;
+    const Vec3 p = ucs::PointOnPlaneCircle(vert, r, a);
+    // Every point is on the plane...
+    REQUIRE(ucs::SignedDistanceToPlane(vert, p) == Approx(0.0).margin(1e-9));
+    REQUIRE(p.x == Approx(50.0).margin(1e-9));
+    // ...and exactly the radius from the centre.
+    REQUIRE(ray3d::Length(ray3d::Sub(p, vert.origin)) == Approx(r));
+  }
+}
+
+TEST_CASE("The circle parametrisation and the plane conversion agree", "[ucs][req311]") {
+  // The renderer, the hit test and the DXF writer all go through PointOnPlaneCircle; this is the
+  // assertion that its angle really is measured in the frame's own 2D coordinates, so a consumer
+  // that reconstructs the frame from the normal alone lands on the same points.
+  Ucs plane;
+  REQUIRE(ucs::FromNormal(Vec3{-3.0, 8.0, 1.5}, Vec3{2.0, -3.0, 6.0}, &plane));
+  const double r = 12.25;
+  const double a = 1.1;
+  double off = 1.0;
+  const ucs::Point2D p = ucs::WorldToPlane(plane, ucs::PointOnPlaneCircle(plane, r, a), &off);
+  REQUIRE(off == Approx(0.0).margin(1e-9));
+  REQUIRE(p.x == Approx(r * std::cos(a)));
+  REQUIRE(p.y == Approx(r * std::sin(a)));
+}
+
+TEST_CASE("A +Z normal reproduces the world X and Y axes exactly", "[ucs][req312]") {
+  // The property the whole flat-case guarantee rests on. An arc or circle whose normal is world +Z
+  // measures startRad and sweepRad from world +X toward world +Y - exactly as every arc did before
+  // REQ-312 gave it a normal at all - so no existing drawing shifts.
+  //
+  // Exact equality, not a tolerance: the Arbitrary Axis Algorithm on a +Z normal is arithmetic on
+  // zeros and ones, and "close enough" here would mean every legacy arc rotated by a hair.
+  ucs::Ucs f;
+  REQUIRE(ucs::FromNormal(Vec3{12.5, -7.25, 3.0}, Vec3{0.0, 0.0, 1.0}, &f));
+  REQUIRE(f.xAxis.x == 1.0);
+  REQUIRE(f.xAxis.y == 0.0);
+  REQUIRE(f.xAxis.z == 0.0);
+  REQUIRE(f.yAxis.x == 0.0);
+  REQUIRE(f.yAxis.y == 1.0);
+  REQUIRE(f.yAxis.z == 0.0);
+  REQUIRE(f.zAxis.x == 0.0);
+  REQUIRE(f.zAxis.y == 0.0);
+  REQUIRE(f.zAxis.z == 1.0);
+  // So angle 0 on a flat curve is the centre offset along world +X, which is where every existing
+  // renderer and DXF writer already starts one.
+  RequireVec(ucs::PointOnPlaneCircle(f, 4.0, 0.0), 16.5, -7.25, 3.0);
+}
+
+TEST_CASE("A vertical plane keeps a stable frame either side of the pole", "[ucs][req312]") {
+  // A wall: the normal is horizontal, and this is the case a flat-only arc store cannot express.
+  // The 1/64 pole test in FromNormal does not fire here, so the X axis comes from world Z.
+  ucs::Ucs f;
+  REQUIRE(ucs::FromNormal(Vec3{100.0, 0.0, 0.0}, Vec3{0.0, -1.0, 0.0}, &f));
+  REQUIRE(ucs::IsRightHandedOrthonormal(f));
+  RequireVec(f.zAxis, 0.0, -1.0, 0.0);
+  RequireVec(f.xAxis, 1.0, 0.0, 0.0);
+  RequireVec(f.yAxis, 0.0, 0.0, 1.0);
+  // Half a turn about that plane from +X lands the far side of the circle, still on the wall.
+  RequireVec(ucs::PointOnPlaneCircle(f, 10.0, 0.0), 110.0, 0.0, 0.0);
+  RequireVec(ucs::PointOnPlaneCircle(f, 10.0, 3.14159265358979323846), 90.0, 0.0, 0.0);
+  // A quarter turn goes UP, which is the whole point: no XY-plane store can put a curve there.
+  RequireVec(ucs::PointOnPlaneCircle(f, 10.0, 3.14159265358979323846 / 2.0), 100.0, 0.0, 10.0);
+}
+
+// --- Orthographic presets (REQ-154, D-2026-09-06-a) -------------------------------------------
+
+TEST_CASE("The orthographic UCS presets are the six standard views, named in order", "[ucs]") {
+  const auto& p = ucs::OrthographicPresets();
+  REQUIRE(p.size() == 6);
+  REQUIRE(std::string(p[0].name) == "Top");
+  REQUIRE(std::string(p[1].name) == "Bottom");
+  REQUIRE(std::string(p[2].name) == "Front");
+  REQUIRE(std::string(p[3].name) == "Back");
+  REQUIRE(std::string(p[4].name) == "Left");
+  REQUIRE(std::string(p[5].name) == "Right");
+}
+
+TEST_CASE("Every orthographic preset is a right-handed orthonormal frame at the world origin", "[ucs]") {
+  for (const ucs::OrthoPreset& preset : ucs::OrthographicPresets()) {
+    INFO("preset " << preset.name);
+    REQUIRE(ucs::IsRightHandedOrthonormal(preset.frame));
+    RequireVec(preset.frame.origin, 0.0, 0.0, 0.0);
+  }
+}
+
+TEST_CASE("The Top preset is exactly the World Coordinate System", "[ucs]") {
+  const ucs::OrthoPreset& top = ucs::OrthographicPresets()[0];
+  REQUIRE(ucs::IsWorld(top.frame));
+}
+
+TEST_CASE("Each orthographic preset makes the named world face the XY work plane", "[ucs]") {
+  // The work plane's outward normal is the preset's Z axis; it must be the world direction you
+  // would be looking ALONG to see that face. This is the AutoCAD orthographic-UCS table.
+  auto planeNormal = [](const char* name) {
+    for (const ucs::OrthoPreset& p : ucs::OrthographicPresets())
+      if (std::string(p.name) == name)
+        return ucs::WorkPlane(p.frame).normal;
+    return Vec3{0.0, 0.0, 0.0};
+  };
+  RequireVec(planeNormal("Top"), 0.0, 0.0, 1.0);
+  RequireVec(planeNormal("Bottom"), 0.0, 0.0, -1.0);
+  RequireVec(planeNormal("Front"), 0.0, -1.0, 0.0);
+  RequireVec(planeNormal("Back"), 0.0, 1.0, 0.0);
+  RequireVec(planeNormal("Left"), -1.0, 0.0, 0.0);
+  RequireVec(planeNormal("Right"), 1.0, 0.0, 0.0);
+
+  // Front: screen-right is world +X, screen-up is world +Z - a coordinate typed as 1,0 lands one
+  // unit east and 0,1 lands one unit up, which is what "draw on the front" has to mean.
+  auto frame = [](const char* name) {
+    for (const ucs::OrthoPreset& p : ucs::OrthographicPresets())
+      if (std::string(p.name) == name)
+        return p.frame;
+    return Ucs{};
+  };
+  RequireVec(ucs::UcsToWorld(frame("Front"), Vec3{1.0, 0.0, 0.0}), 1.0, 0.0, 0.0);
+  RequireVec(ucs::UcsToWorld(frame("Front"), Vec3{0.0, 1.0, 0.0}), 0.0, 0.0, 1.0);
+  RequireVec(ucs::UcsToWorld(frame("Right"), Vec3{1.0, 0.0, 0.0}), 0.0, 1.0, 0.0);
+}
+
+TEST_CASE("The orthographic presets are all distinct, and a survey UCS matches none of them", "[ucs]") {
+  const auto& presets = ucs::OrthographicPresets();
+  for (size_t i = 0; i < presets.size(); ++i)
+    for (size_t j = i + 1; j < presets.size(); ++j) {
+      INFO(presets[i].name << " vs " << presets[j].name);
+      REQUIRE_FALSE(ucs::FramesMatch(presets[i].frame, presets[j].frame));
+    }
+  // A frame squared to a lot line (rotated 30 deg about Z, origin moved) is a user frame, not a
+  // preset - the label lookup must not call it "Front".
+  const Ucs survey = ucs::WithOrigin(ucs::RotatedAboutZ(Ucs{}, 30.0), Vec3{1000.0, 2000.0, 0.0});
+  for (const ucs::OrthoPreset& p : ucs::OrthographicPresets())
+    REQUIRE_FALSE(ucs::FramesMatch(p.frame, survey));
 }

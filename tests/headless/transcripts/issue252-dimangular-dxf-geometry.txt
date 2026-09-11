@@ -1,0 +1,56 @@
+# Issue #252 — DIMANGULAR must export its GEOMETRY to DXF, not just its label.
+#
+# The bug: `DxfIo.cpp` rebuilt dimension geometry by hand and its branch tested
+# `DimAligned || DimLinear` only, so an angular dimension fell through to the plain-text path. The
+# exported DXF carried the measurement as a floating label with no arc, no extension rays and no
+# vertex — a recipient saw `90°0'0.0"` in space with nothing to say which angle it measured, and no
+# geometry from which to recover it.
+#
+# Measured on the unfixed code, one of each dimension type exported together:
+#
+#     LINE 6   TEXT 2   MTEXT 1   ARC 0
+#     ^ three lines each for DIMLINEAR and DIMALIGNED; the angular contributed the MTEXT alone.
+#
+# This transcript draws ONLY an angular dimension, so the assertion cannot be satisfied by some
+# other entity's geometry: before the fix the ENTITIES section of this file contained no LINE at
+# all. That is the whole test, and it is why the drawing deliberately holds nothing else.
+#
+# The fix routes DXF through `CadDimBuildWorldStrokes` — the same module the viewport (CadUi) and
+# the plot (PdfPlot) already use — so the three output paths cannot disagree about what a dimension
+# looks like, and any dimension kind added later is exported for free.
+#
+# Vertex at the origin, rays along +X and +Y (90 degrees), arc pick on the bisector — the same
+# figure issue #125's round-trip transcript uses.
+
+NEW
+
+CMD DIMANGULAR
+CMD 0,0
+CMD 50,0
+CMD 0,50
+CMD 20,20
+ESC
+
+EXPECT ANNOTATIONS 1
+EXPECT ANNKIND 0 dimangular
+
+EXPORT DXF %OUT%/issue252-angular.dxf
+
+# The label still exports. TEXT rather than MTEXT now: the dimension no longer falls through to the
+# plain-annotation path, it goes through the dimension path like the other two kinds.
+EXPECT FILECONTAINS %OUT%/issue252-angular.dxf "TEXT"
+
+# The geometry exports. This is the assertion that fails on the unfixed code — a drawing whose only
+# entity is an angular dimension produced a DXF with zero LINE entities.
+EXPECT FILECONTAINS %OUT%/issue252-angular.dxf "LINE"
+EXPECT FILECONTAINS %OUT%/issue252-angular.dxf "AcDbLine"
+
+# Re-importing the export is the recipient's view of the file, and the thing the bug actually cost.
+#
+# Deliberately NOT asserted here: the number of segments the arc tessellates into. `EXPECT LINEXYZ`
+# would pin it, but only by hard-coding one tessellated vertex, and that fails the day the chord
+# tolerance changes — for a refinement, not a regression. The presence assertions above are what
+# distinguish fixed from broken; the count is an implementation detail.
+NEW
+IMPORT DXF %OUT%/issue252-angular.dxf
+CHECK ALL

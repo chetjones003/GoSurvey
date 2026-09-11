@@ -207,9 +207,11 @@ Let tools enforce mechanical style so reviews can focus on substance.
   `/W4`-tier warnings is disabled in `CMakeLists.txt` (`gosurvey_target_warnings`)
   because this codebase has a deliberate, consistent convention that fires them by
   design — not because they were noticed and shrugged off:
-  - **4244 / 4305** (double→float narrowing): geometry is stored in `float`;
-    REQ-101's precision rule governs the *world→local subtraction* (done in
-    `double` first), not the storage narrowing.
+  - **4244 / 4305** (double→float narrowing): **transitional** — as of D-2026-09-08-i /
+    ADR-054, persistent coordinate storage is migrating `float`→`double` (REQ-101 ±0.002 ft,
+    phased in TASK-228). Until the migration completes, subsystems still on `float` stores narrow
+    at their existing sites and these stay suppressed; the last phase (issue #443) audits that
+    `float` survives only at the GPU-upload boundary and may re-enable them there.
   - **4267 / 4245**: `size_t`→32-bit and signed/unsigned at Win32 / ImGui / vendored
     API boundaries.
   - **4456–4459**: local / parameter / member / global shadowing — style, not a bug.

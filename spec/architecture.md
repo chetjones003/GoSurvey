@@ -217,6 +217,8 @@ src/
                 tinanalysis — slope, downhill direction, surface-to-surface volumes (ADR-028)
                 surfacestats — 2D/3D area, slope extrema, extents from a TIN (ADR-039)
                 watershed — drain graph, basins, water-drop, catchment (ADR-039; Phase 3)
+                brep — B-rep solid kernel: topology, the seven primitives, validity,
+                       exact mass properties, tessellation (ADR-045)
   update/       version ordering + manifest parse — pure, no network (ADR-029)
   platform/     window, files, GL context, WinHTTP fetch + SHA-256 (ADR-029)
 third_party/    vendored dependencies (each recorded in the decision log; REQ-300)
@@ -260,7 +262,14 @@ A change is rejected if it breaks any of these:
    existing store is a blocking finding: it splits one coordinate across two
    allocations (§5) and introduces a desync failure mode that interleaving cannot
    have. Widening a stride is done **with a rename**, so every affected site is a
-   compile error rather than a silent misread (ADR-025 (a)).
+   compile error rather than a silent misread (ADR-025 (a)). *A per-vertex
+   non-coordinate channel — the polyline `userPolylineVertsBulge` array
+   (ADR-047) — is a parallel array by exception: a bulge is not a coordinate, so
+   §11.8's anti-split does not reach it, and it follows the ADR-035 (c) /
+   D-2026-08-31-f side-car pattern (count checked in `docinvariants`).*
+   *Amended 2026-09-08 (ADR-054, D-2026-09-08-i): the flat stores' scalar type widens `float`→`double`
+   for REQ-101's ±0.002 ft. This invariant is unchanged — it governs layout (Z inline, strides intact),
+   not scalar width; a widened store is still one coordinate in one allocation.*
 9. **A reference from one object to another is a stable id — never an array index.**
    Entities are stored in flat arrays that **compact on erase**, so an index is not a name: after a
    delete it silently designates a different entity. Storing an index across an object boundary, or
@@ -765,6 +774,19 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   so there is one transform, not two that can disagree.
   (e) **Drawing resolves against an active work plane (UCS)** stored on `AppCommandState` (the settings
   pattern — no new global), defaulting to world XY so plan-view behaviour is unchanged.
+  (e·2) **Per-viewport active UCS (REQ-155, D-2026-08-31-c).** The drawing-scoped `activeUcs` on
+  `AppCommandState` continues to own the frame for the single non-floating model-space view. In
+  addition, each paper-space `Viewport` carries an **active UCS frame** — a `ucs::Ucs` value,
+  default World, typically one of the drawing's named UCSs but able to hold an ad-hoc frame built
+  while floating (AutoCAD `UCSVP`). While **floating model space** (REQ-036) is entered for a
+  viewport, that frame is what coordinate entry, the grid, ORTHO, the readout and `UCSFOLLOW`
+  resolve against; `UCSFOLLOW=1` re-plans that viewport's REQ-061 camera only. Named UCS
+  **definitions** and named views stay per drawing — one owner, `AppCommandState.ucsNamed` (§10.1).
+  This is a value field on an existing owned type (`Viewport`, owned by `PaperLayout`) — the
+  viewport holds a working frame exactly as the drawing holds `activeUcs` — not a new abstraction
+  (§11.4) and not a new owner.
+  Persisted additively in `.gs`. **Split model space (multiple simultaneous model viewports) stays
+  out of scope** — a future decision, not this one.
   (f) **Two vendored dependencies** (REQ-300, decision log 2026-08-11): **ImGuizmo** (MIT) for the REQ-060
   manipulator and **ImOGuizmo** for the REQ-059 orientation gizmo. Both consume the matrices (c) produces
   and neither introduces a rendering abstraction. They are `third_party/` code and are not modified in
@@ -978,6 +1000,8 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   in-circle tests are the classic float-instability case: a sign flip yields a visibly wrong triangle
   or a non-terminating edge-flip loop, and REQ-101's ±0.01 ft leaves no margin for it. Coordinates
   are widened at the predicate, not in the store — §11.8 is unchanged.
+  *Amended 2026-09-08 (ADR-054, D-2026-09-08-i): storage widens to `double` too, so the
+  store→predicate narrowing this clause worked around disappears; no predicate code changes.*
   (e) **Rebuild is a §8 one-shot worker, coalesced per command.** The definition is marked dirty by an
   edit and **at most one** rebuild is issued per command / undo boundary, so a MOVE of 500 points
   rebuilds once. The worker gets a **copy** of its inputs and holds no pointer into
@@ -1889,6 +1913,12 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (c) **No second schema and no new dictionary/EED mapping in this increment.** Per-field EED /
       XRECORD (dwg-plan P-01..P-05) remains a later option. DM-08 is still not claimed.
   (d) **`.gs` APIs stay.** Workspace template and an explicit `.gs` path still use `GsIo`.
+      **Amended D-2026-09-03-h / issue #264 (2026-09-04):** standalone `.gs` as an openable
+      document is retired outright — no explicit `.gs` path anywhere, including WBLOCK/BLOCKIMPORT
+      (block-library replacement spun to issue #284). The workspace template moved to
+      its own narrower format, `.gst`, with a dedicated reader/writer
+      (`SaveGoSurveyTemplateFile`/`LoadGoSurveyTemplateFile`) — same JSON shape, no file
+      association. `BuildRoot`/`LoadGoSurveyFromJsonUtf8` (clause (b)) are unaffected.
   (e) **Headless SAMEFILE** on two GoSurvey DWGs compares **trailer JSON**, not the synthesized CAD
       body, because LibreDWG encode is not the document-identity oracle (REQ-079 still applies to
       the JSON tree).
@@ -1954,3 +1984,1902 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   session (stash is not persisted) but never corrupts the `.gs` — the definition is only written on
   an explicit Save. If a later requirement needs simultaneous multi-block editing or editing a
   block from a paper layout, this swap does not extend to it and a new decision is required.
+
+### ADR-045 — The B-rep solid kernel: analytic faces, a remembered recipe, derived tessellation   (2026-09-01, accepted)
+- Context:    GitHub issue #146 (Phase 3 of #120) asks for a boundary-representation kernel and the
+  seven primitive solids on top of it. There was no solid kernel in GoSurvey at all: no B-rep, no
+  face or edge topology, no solid entity. `CadMesh` (ADR-026 (c)) is explicitly import-only
+  reference geometry and cannot answer any of the questions a solid must — it has no volume, no
+  centre, and no faces that mean anything. Everything in issue #120's Phases 4–6 (extrude, revolve,
+  sweep, loft, boolean union/subtract/intersect, slice, fillet, chamfer, sectioning, mass
+  properties) is built on whatever is decided here, so this is the decision the rest of the epic
+  inherits. Issue #120 states one constraint directly: *"do not tightly couple geometric
+  calculations to the renderer. The geometry engine should be usable without a graphics context."*
+  ADR-026 (b) already recorded the counterpart fact — that a B-rep format "needs a geometry kernel
+  to tessellate, which is a larger project than everything else here combined."
+- Decision:
+  (a) **Topology is the stored truth, and it is a real B-rep**: solid → shells → faces → loops →
+  edges → vertices, exactly the hierarchy issue #146 names. Edge uses are directed, so a loop is an
+  ordered ring of (edge, reversed) pairs. This is what gives a Phase 4 boolean somewhere to write its
+  result: a subtraction produces a shape that is not any of the seven primitives, and no parametric
+  description can express it.
+  (b) **Every face carries an ANALYTIC surface, never a facet**: `Plane`, `Cylinder`, `Cone`,
+  `Sphere`, `Torus`, each with the frame it lives in. A whole sphere is ONE face. Every edge
+  likewise carries a `Line` or an `Arc`. Three things follow, and each is a requirement rather than
+  a nicety: volume and surface area are *integrated in closed form*, so a sphere reports
+  `4/3 pi r^3` rather than a facet sum that drifts with display settings (REQ-101 is ±0.01 and a
+  faceted sphere cannot meet it without an absurd facet count); a stored solid is a handful of faces
+  rather than megabytes of triangles; and tessellation quality becomes a pure display setting, which
+  is what issue #120 means by *"changing tessellation quality should not modify the underlying
+  solid."*
+  **Amended 2026-09-02 (D-2026-09-02-i): closed-form is the rule for every *analytic* face; a face
+  bounded by a procedural intersection curve (B2b-2, `CurveKind::Intersection`) is integrated by
+  adaptive numerical quadrature** to a tolerance far inside REQ-101's ±0.01 ft.
+  **Widened 2026-09-03 (D-2026-09-03-b, ADR-048): a face whose surface is `SurfaceKind::Nurbs`
+  (the freeform loft / sweep face) is integrated by the same adaptive quadrature.** The quadrature
+  grid stays independent of the display chord tolerance, so tessellation quality is still not part of
+  the model; every *analytic* face keeps its exact closed form. The quartic where two
+  non-coaxial cylinders meet has no elementary integral, so a `T`-pipe's saddle face is the one face
+  type that cannot be exact — every other face still is, and the quadrature tolerance keeps the
+  answer's *error* below the display-drift a facet count would cause anyway. Tessellation quality is
+  still not part of the model: the quadrature grid is independent of the display chord tolerance.
+  (c) **A primitive also remembers the recipe it was built from** — kind, placement frame, and its
+  dimensions. It is *not* the geometry: `Validate`, `ComputeMassProperties` and `Tessellate` all read
+  the topology and never the recipe, so a recipe that disagreed with its solid could not silently
+  change an answer. It exists so the Properties panel can say "Radius 12" instead of "one
+  cylindrical face", and so #120's parametric-modelling section is not designed out. A solid with no
+  recipe (`PrimitiveKind::None`) is a first-class citizen, which is the case that proves the
+  topology and not the recipe is the truth.
+  **Amended 2026-09-02 (D-2026-09-02-h): `CurveKind` is `{Line, Arc, Ellipse}`.** An oblique plane
+  cutting a cylinder meets it along an ellipse — closed-form (centre, semi-major, semi-minor,
+  parameter span), so an `Ellipse` edge carries the same `frame + radius + sweep` an `Arc` does plus
+  one field, `radius2` (the semi-minor axis). This is Boolean increment B2b-1 (ADR-046). It is the
+  first stored geometry kind an older `.gs` reader cannot tolerate, so it bumps `kGsFormatVersion`
+  (the bump ADR-045 (e) said would land "in the increment that first" needs it); a drawing with no
+  ellipse edges still serializes byte-identically. The general intersection curve (a
+  cylinder∩cylinder quartic) is a *procedural* `CurveKind` still deferred, to B2b-2.
+  (d) **Curved surfaces are split at seams into faces that each bound normally.** A cylinder side is
+  two half-faces, a sphere two half-spheres cut by a meridian, a torus four patches. The alternative
+  — one face with a seam edge used twice by itself — makes "every edge bounds exactly two faces" a
+  special case rather than an invariant, and that invariant is the single most useful thing
+  `Validate` has.
+  **Amended 2026-09-02 (D-2026-09-02-c): a curved face may carry `Surface::inward`.** As originally
+  built, a curved face's outward direction was fixed by its surface (+radial for cylinder/cone/
+  sphere/torus) with no reversed form — "one fewer thing that can disagree with the topology", and
+  `Problem::ProfileArcReflex` refused the extrude shapes that would need one. The Booleans (increment
+  B2a) force the general answer, exactly as this ADR's own alternatives note anticipated: subtracting
+  a cylinder leaves a hole wall whose material is on the −radial side. A single `bool inward` on
+  `Surface`, default false and never set by the seven primitives, marks that. The normal evaluators
+  negate, the tessellator reverses winding, and the volume integrand flips sign, so an inward face
+  correctly *subtracts* the void it bounds; `ClosestPointOnSurface`, `Validate` and `.gs` are
+  unaffected (`.gs` gains an additive tolerant key — no `kGsFormatVersion` bump). `ProfileArcReflex`
+  stays for now; a reflex profile arc in an extrude is a separate feature, now unblocked.
+  **Taken up 2026-09-03 (D-2026-09-03-e): `Extrude` no longer raises `Problem::ProfileArcReflex` and builds
+  a reflex arc.** It needed nothing but the flag above. After the builder's walk the loop runs CCW
+  about the extrusion direction, so an arc whose sweep is still positive has its centre on the
+  interior side and sweeps an ordinary outward cylinder, while a negative one has its centre outside
+  and sweeps precisely the inward face B2a already defined. The span is stored increasing and the
+  orientation carried by `inward`, which is the convention the bore walls set — a negative
+  `uEnd - uStart` would make the face's own AREA come out negative, and an area is a magnitude. Both
+  halves are load-bearing and measured: with the flag left false, or the span left decreasing,
+  `Validate`'s geometric closure probe rejects the solid outright and `Extrude` returns false. The
+  reason no other code changed is that (d) above had already done the work — this is the caller that
+  collects it.
+  (e) **`Validate` proves manifoldness, orientability and closure — including GEOMETRIC closure.**
+  Beyond the index/ring/tally checks, the volume integral is taken about two different reference
+  points and required to agree. On a closed surface it must (the closed integral of `n dA` vanishes);
+  on a face whose parametric span disagrees with its own boundary loop it does not. That case is
+  topologically flawless and geometrically a hole, it is exactly what a Phase 4 trim can produce,
+  and nothing else in the check can see it.
+  (f) **Self-intersection is refused at construction, not detected afterwards.** **Amended
+  2026-09-01 (D-2026-09-01-f): a torus whose tube EXCEEDS its ring radius is now BUILT** - the
+  self-intersecting shape AutoCAD makes and users draw deliberately - and only the exactly-equal case
+  stays refused, where the inner equator collapses to a point and the rim edges have zero radius. Such
+  a solid is valid topology and draws correctly, but reports NO volume or surface area
+  (`brep::SelfIntersects` gates `ComputeMassProperties`): a surface that encloses part of space twice
+  makes the closed form a number rather than an answer, and printing it would be the silent wrong
+  answer REQ-201 exists to prevent. The original clause read: For the seven
+  primitives the only route to a self-intersecting shell is a bad parameter — a torus whose tube
+  swallows its own axis — and each such parameter is refused by name (REQ-201). A general
+  surface-surface intersection test belongs with the Phase 4 booleans, which are the first operation
+  that can actually produce one; building it now would be an untested engine with no caller.
+  (g) **The kernel is `double`, frame-agnostic, and knows nothing about the document.** It is a pure
+  `util/` module beside `ray3d`, `ucs` and `tinbuild` — no GL, no ImGui, no `AppCommandState` — which
+  is the ADR-002 layering that makes the whole suite reachable without a window. Narrowing to the
+  `float` local storage the GPU wants happens **above** this layer, once, where the document origin
+  is known (REQ-101, architecture §11.8). Numerical stability at state-plane magnitudes comes from
+  integrating every face about a reference point ON the solid, so no term is a difference of two
+  large nearly-equal numbers.
+  (h) **`ucs::Ucs` is the frame type throughout** — for a surface, for an arc edge, and for
+  placement. REQ-311 already settled that there is exactly one plane/frame type in this project, and
+  a kernel that introduced a second would reopen the disagreement that decision closed.
+  (i) **Solids are EXCLUDED from DXF/DWG export, with an explicit message naming what was skipped.**
+  A real solid in DXF/DWG is an ACIS `3DSOLID` — a proprietary binary B-rep we cannot write without
+  a large third-party kernel that REQ-300 does not permit. This is the same boundary ADR-026 (c)
+  drew for `CadMesh` and for the same reason, and it is stated out loud rather than dropped
+  silently (REQ-201). Writing a tessellated approximation instead was considered and rejected by the
+  user: it hands back a picture of the solid that round-trips as an uneditable bag of triangles with
+  an approximate volume. If that is wanted it is an explicit opt-in export and its own issue.
+- Alternatives: **(1) Recipe-only parametric primitives** (no topology; faces generated on demand) —
+  smallest possible kernel, exact volumes for free, tiny files. Rejected because Phase 4 has nowhere
+  to put a boolean result, so the real kernel would have to be built anyway, *and* every solid
+  already saved in a customer's file would then need migrating. The saving is borrowed, not earned.
+  **(2) Faceted B-rep** (real topology, curved surfaces baked to triangles at creation) — simplest
+  maths, and booleans are conceptually easier. Rejected on three counts, any one of which is fatal:
+  a faceted sphere's volume misses REQ-101 unless the facet count is enormous; the file grows by
+  orders of magnitude; and the tessellation quality becomes part of the model, which #120 explicitly
+  forbids.
+  **(3) Vendor an existing kernel** (OpenCASCADE, or ACIS/Parasolid under licence) — the honest
+  comparison, and the reason it is not taken is REQ-300 and project.md §7: OCCT is a dependency an
+  order of magnitude larger than everything in `third_party/` combined, and the commercial kernels
+  are not licensable on this project's terms. Recorded so the choice is not re-litigated from
+  scratch; the trigger to revisit is Phase 4 booleans proving intractable in-tree, which is a real
+  possibility and a far better place to make that call than here, with a working primitive kernel
+  already in hand.
+  **(4) Reuse `CadMesh`** — a mesh has no faces, no edges and no volume; ADR-026 (c) already ruled it
+  reference geometry precisely so that mesh editing, mesh snapping and mesh export stayed out of
+  scope. Nothing about it is closer to a solid than starting from nothing.
+- Consequences: a new pure `util/brep` module (header + one TU) and its Catch2 suite. **Increment 1
+  changes no existing source file at all**, which is what makes it unable to regress anything — the
+  only edits outside `src/util/brep.*` are two CMake source-list entries. Increment 2 is where the
+  blast radius lands: a `CadSolid` entity and its store, seven commands, `.gs` persistence, the
+  REQ-064 shaded/hidden render path, a tessellation cache keyed so it is not rebuilt per frame
+  (REQ-100), face and edge snapping in `CadSnap`, and the DXF/DWG exclusion message from (i).
+  **Deliberately not addressed here**, each to be decided when it has a caller: general polygon
+  triangulation for non-convex or holed plane faces (the centroid fan used now is correct for every
+  face the seven primitives make, and is refused rather than guessed for anything else); centroid and
+  moments of inertia (#120 Phase 6); a general self-intersection test (Phase 4, per (f)); and any
+  interchange format for solids (STEP/STL/OBJ), which ADR-026's interchange discussion covers and
+  which no accepted requirement asks for.
+
+#### ADR-045 addendum — the document-facing half   (2026-09-01, accepted)
+- Context: ADR-045 settled the kernel and named increment 2's blast radius without deciding its
+  shape. These are the calls made building it, recorded here rather than left in the code, because
+  four of them are visible to the user and one changes the `.gs` format.
+- Decision:
+  (a) **A solid is a `shared_ptr<const brep::Solid>` in the store, in STORAGE coordinates** — X/Y
+  local, Z absolute, the ADR-025 D2 convention every geometry store uses. Shared and immutable for
+  the reason `CadMesh` and `CadTin` are (architecture §11.5): an undo snapshot is a refcount bump.
+  It is the one store held in `double` rather than `float`, and the exception is narrow and earned:
+  §11.8's float convention exists for arrays with millions of entries headed for a vertex buffer,
+  *(amended 2026-09-08, ADR-054: the geometry stores widen to `double` as well; this store stops being
+  the exception, and the millions-of-entries vertex/tessellation buffers remain the `float` case)*
+  where a solid's B-rep is a handful of vertices — narrowing would throw away the exactness the
+  closed-form volume depends on and buy nothing. The **tessellation**, which really is GPU-bound and
+  really can be large, is narrowed to float in exactly one place.
+  (b) **Authoring is one typed line per primitive, with the active UCS supplying the orientation.**
+  `BOX <X,Y[,Z]> <length> <width> <height>` and its six siblings. This is what REQ-313's acceptance
+  asks for — "exact dimensions typed at the command line" — and no more. Reusing the UCS is what
+  gives a cylinder or cone an arbitrary 3D axis with no new command and no axis argument, which is
+  the rule REQ-312 already settled for tilted arcs and circles. **No interactive pick-and-drag flow**
+  in this increment: rubber-banding a solid needs a 3D draft preview, that is #120's Phase 5
+  direct-modelling work, and inventing it here would be scope no requirement asks for. The usage
+  text says so, so a bare `BOX` explains what the command wants rather than opening a prompt that
+  never comes.
+  (c) **Solids render in EVERY visual style, and "Hidden" means hidden-line.** This is the opposite
+  of ADR-026 (e)'s mesh rule and for the reason ADR-026 (c) itself gives: a solid HAS real edges,
+  where a mesh's "edges" are artefacts of an exporter's resolution. 2D Wireframe draws the edges
+  only; **Hidden writes the faces into the depth buffer with colour writes off** and then draws the
+  edges on top; Shaded lights the faces and draws the edges over them. Without the depth-only pass,
+  "Hidden" would mean nothing for a solid — there would be nothing to hide behind. A polygon offset
+  separates an edge from the face it bounds; that is load-bearing, not a tweak, because an edge lies
+  exactly ON its face and without a bias half of every silhouette drops out in speckles.
+  (d) **The tessellation cache is keyed on `(solid pointer, chord tolerance, isoline count)` and
+  nothing else** (isoline count added 2026-09-01, D-2026-09-01-g, per (j) below). A
+  solid is immutable, so an unchanged pointer means unchanged geometry; the early-out sits before any
+  allocation (the §11 invariant 7 lesson the surface cache already learned). The cache lives on
+  `AppCommandState` and is **outside every undo snapshot**, exactly as ADR-036 (e) put the surface
+  display cache outside one, and for the same reason: it is derived. Entries key on a `weak_ptr`, so
+  an erased solid's entry expires and is reaped rather than being matched by a new solid allocated at
+  the freed address.
+  (e) **REQ-100 gains a fourth profile, `BENCH SOLID`.** Not implied by the mesh profile: a solid
+  scene is many small stream-uploaded batches with a cache lookup each, where the mesh profile is one
+  large indexed upload, and those are different frames. It is also the only instrument that can catch
+  the failure #120 names directly — a tessellation being regenerated per frame would show up here and
+  nowhere else. The scene is many solids rather than one big one for exactly that reason.
+  (f) **`.gs` gains a `solids` section carrying the TOPOLOGY, not the recipe.** Rebuilding from the
+  recipe on load would mean a Phase 4 boolean result — which has no recipe — could not be saved at
+  all. Additive and omitted when there are none, so every pre-REQ-313 drawing still serializes
+  byte-identically (the ADR-020 (d) tolerant-key precedent). Every solid is **validated on load** and
+  refused with the kernel's own reason (REQ-201): an invalid solid does not crash, it quietly reports
+  a wrong volume and hands Phase 4 a shape that is not closed. Frames are written through the
+  `UcsFrameToJson` pair REQ-154 already defined, and that reuse is worth more than the saved lines —
+  its reader refuses a frame that is not right-handed orthonormal, so a hand-edited file cannot
+  present a skewed surface frame that would silently shear a solid.
+  (g) **Two new object-snap kinds, `Edge` and `Face`, behind ONE `objectSnapSolid` preference.** A
+  solid's VERTICES answer the existing Endpoint toggle and its edge MIDDLES answer Midpoint — those
+  snaps already mean exactly that, and a user with Endpoint on expects a box corner to snap. Edge and
+  Face are the two halves of "snap to a solid" and no requirement asks to enable one without the
+  other, so a second preference would be an unearned option (REQ-301). **The face answer is projected
+  onto the analytic surface**: the ray finds the triangle, `Tessellation::triFace` says which face it
+  belongs to, and `ClosestPointOnSurface` puts the point on the real surface — so on a cylinder it
+  lands on the cylinder rather than a sagitta short of it on the tessellator's chord (#120: "the
+  resulting point should lie exactly on the selected face"). Face snapping needs a pick ray and is
+  skipped without one; in a plan view there is no "under the cursor" to resolve, and answering with
+  the work-plane point would be an invention.
+  (h) **A solid is selectable and erasable; every transform REFUSES it with a stated reason.** The
+  click funnel picks against the solid's EDGES — what is drawn in every style, and in 2D Wireframe
+  the only thing on screen — and the box-selection walk uses the analytic bounds, because a sphere's
+  two stored vertices describe almost none of it. MOVE/COPY/ROTATE/SCALE/MIRROR/ARRAY/STRETCH each
+  drop solids from the selection and say how many and why, the rule Surface already established:
+  a solid silently left behind while everything selected with it moves is the outcome that must not
+  happen (REQ-201). Transforming a solid means transforming every surface frame and every arc-edge
+  frame in its topology — the same class of work REQ-312 needed for one tilted arc — and belongs with
+  #120's Phase 5.
+  (i) **Solids are not captured into block definitions**, matching surfaces, tables and feature lines,
+  which are not either. They ARE cleared when the block editor isolates the model (ADR-043's store
+  swap), so a solid from the drawing cannot leak into a block being edited.
+  (j) **A curved face's wireframe carries ISOLINES, generated in the kernel and appended to the EDGE
+  buffer** (added 2026-09-01, D-2026-09-01-g). They live in `brep::TessellateIsolines` rather than in
+  the renderer because they are geometry: they come from the same analytic `SurfacePointAt` the shaded
+  triangles use, so an isoline and the shading beside it cannot disagree about where the surface is,
+  and putting them in the render layer would be a second surface evaluator to keep in step. **The
+  directions are per surface kind** — cylinder and cone rulings along the axis only, sphere meridians
+  and latitudes, torus tube and ring circles, plane none — because one blanket rule would draw a ring
+  part way up a cylinder, which reads as an edge that is not there: a seam, or the join of two stacked
+  solids. **The grid is global to the surface's own frame and sampled strictly inside each face's
+  span**, since every curved primitive here is seamed into half-faces per the parent ADR: a per-face
+  grid bunches the lines where two faces meet, and a non-strict test doubles a seam edge that is
+  already drawn. They go into the **same** vertex buffer as the edges rather than a batch of their
+  own, because they are the same colour and weight as the object — a separate stream would be another
+  thing to keep in step for no visible difference, and the evidence the seam is in the right place is
+  that **the renderer needed no change at all**. The count is per full turn (AutoCAD's `ISOLINES`
+  semantics), is a viewport setting rather than a per-solid property — it is a display preference like
+  the visual style, and per-solid would mean a `.gs` change and a property no one asked to vary — and
+  it joins the cache key in (d) because a derived representation that ignores an input that changes it
+  is a stale one.
+- Consequences: `.gs` grows one additive section and two settings keys (`objectSnapSolid`,
+  `viewportSolidIsolines`); no `kGsFormatVersion` bump. `RenderScene` gains one parameter, not four — the faces and edges of a
+  solid are always built together and always consumed together, the same argument
+  `CadSurfaceDisplayGeometry` records for itself. **Still not addressed**, each waiting for a caller:
+  interactive placement and 3D grips (#120 Phase 5), transforming a solid (same), booleans (Phase 4),
+  centroid and moments (Phase 6), any interchange format for solids, and **view-dependent silhouette
+  curves** — AutoCAD draws those too, they move as the view orbits, and being a render pass rather
+  than geometry they do not belong in the kernel alongside (j)'s isolines.
+
+### ADR-046 — Feature operations on the solid kernel: analytic extrude / revolve / slice, and phased analytic Booleans   (2026-09-02, accepted)
+
+- **Status:** accepted (2026-09-02, D-2026-09-02-a). The Boolean *method* (analytic B-rep, not
+  mesh-based) and the spec-first, sliced delivery were chosen by the user, who then accepted this
+  ADR text as written. Backs REQ-314 and REQ-315. GitHub issue #147, Phase 4 of #120.
+
+- **Context.** REQ-313 / ADR-045 gave GoSurvey a boundary-representation kernel whose defining
+  choice is *analytic faces*: a face is a plane, cylinder, cone, sphere or torus, an edge is a line
+  or an arc, and volume and area are closed-form integrals so they do not move when the display
+  changes. Phase 4 (issue #147) must build on that kernel: extrude and revolve a profile into a
+  solid, slice a solid with a plane, and union / subtract / intersect two solids. Issue #147 calls
+  the Booleans *"the highest-risk item in all of #120 — where solid modellers classically fail on
+  degenerate input,"* and REQ-201 forbids ever storing a solid that fails validation.
+
+- **Decision.**
+
+  **(a) Extrude and revolve are analytic and exact, and they are first.** Every face an extrude or
+  revolve of a line-and-arc profile can produce is already one of ADR-045's five surface kinds, and
+  every edge is a line or an arc:
+  - extrude: line → plane, arc → cylinder, tapered line → plane, tapered arc → cone;
+  - revolve: line ∥ axis → cylinder, line skew to axis → cone, line meeting axis → plane/cone,
+    arc centred on axis → sphere, arc centred off axis in the axis plane → torus.
+  So these two need **no new surface or curve type** — only a builder that walks the profile,
+  emits the swept face for each segment, and closes the ends with cap faces. They are the first
+  increment because they deliver visible value with zero kernel-representation risk.
+
+  **(b) Slice is next, and it is the stepping stone to Booleans.** Cutting a solid by a plane needs
+  plane-∩-face intersection, face splitting, and inside/outside classification against a
+  half-space — every ingredient a Boolean needs, minus surface-∩-surface intersection between two
+  curved operands. Slice is where that machinery is built and tested against a case whose answer is
+  easy to hand-check (the two pieces' volumes sum to the original).
+
+  **(c) Booleans are analytic B-rep, and phased by intersection-curve difficulty.** The user chose
+  the analytic route over mesh-based Booleans, keeping faith with ADR-045: a subtracted cylinder
+  leaves a true cylindrical hole, not a faceted one, and the result's volume stays closed-form.
+  The cost is that a general analytic Boolean needs to represent the curve where two surfaces
+  cross, and that curve is often **not** a line or an arc — a plane cutting a cylinder obliquely
+  gives an ellipse; two non-coaxial cylinders give a quartic space curve. The kernel's `CurveKind`
+  is `{Line, Arc}` today. Rather than block all Boolean work on a general intersection-curve
+  representation, the Booleans are delivered in two increments:
+  - **Increment B1** — operand pairs whose every intersection curve is already a line or an arc:
+    box ∩ box, box ∩ axis-aligned cylinder, coaxial cylinder ∩ cylinder, sphere ∩ plane, and the
+    like. A pair that would need a curve outside `{Line, Arc}` is **refused by name** (REQ-201),
+    never approximated. This ships a working, verifiable Boolean. **Refined 2026-09-02
+    (D-2026-09-02-b):** within B1, curved operands are supported for **UNION and INTERSECT only** —
+    those create only outward-facing curved faces. A curved **SUBTRACT** (a round hole / bore) leaves
+    a cylindrical wall facing *inward*, which ADR-045's `Surface` cannot express (no reversed flag),
+    so it moves to B2 — the increment that adds the general answer to inward-curving faces. Curved
+    SUBTRACT is refused by name in B1.
+  - **Increment B2** — lifts B1's refusals. **Split 2026-09-02 (D-2026-09-02-c) into B2a then B2b:**
+    - **B2a** — **inward-facing analytic faces** (`Surface::inward`, see ADR-045 (d) amendment). No
+      new curve type: the operand pairs B1 already recognises geometrically (cylinder / sphere /
+      coaxial-cylinder cut) have circular intersection curves, already `CurveKind::Arc`. This lifts
+      **curved SUBTRACT** — round through-holes, blind pockets, spherical dimples, counterbores —
+      the highest-value refusal, since "subtract a cylinder to drill a hole" is the defining Boolean.
+    - **B2b** — a **general analytic intersection-curve type** (a parametric procedural curve
+      evaluated from its two surfaces, tessellated on demand), lifting the oblique / non-coaxial
+      refusals (ellipse, quartic) pair by pair.
+
+  **(d) Operands are consumed only after the result validates.** A feature operation computes its
+  result into a fresh `Solid`, runs `brep::Validate` (and, for Booleans, `brep::SelfIntersects`),
+  and only then does the command layer replace the operands in the `CadSolid` store — as one undo
+  snapshot. A failure returns a named reason and the document is untouched. This is REQ-201 applied
+  to geometry that can fail in a hundred subtle ways.
+
+  **(e) A feature result stores topology, and optionally a recipe.** ADR-045 already made the recipe
+  optional and named the Boolean result as the recipe-less case. Extrude and revolve **may** record
+  an operation recipe (source-profile entity id + parameters) for future parametric edit, but it is
+  never consulted by validity, mass properties or tessellation, and a re-opened solid whose recipe
+  will not resolve still loads from its stored topology. Booleans and slice store topology only.
+  `.gs` persistence reuses REQ-313's solid serialization unchanged; `kGsFormatVersion` bumps only
+  in the increment that first actually writes a recipe, if any does.
+
+  **(f) A disjoint Boolean result is a multi-shell solid when valid, else refused.** `SUBTRACT` can
+  split one solid into two. ADR-045's `Solid` already carries *shells* (plural). A result with more
+  than one shell that passes `brep::Validate` is stored as one multi-shell `CadSolid`; one that does
+  not is refused. An **empty** result (`INTERSECT` of disjoint operands) stores nothing and is
+  reported.
+
+- **Rejected alternatives.**
+  - **Mesh-based Booleans** (tessellate both operands, cut the triangle meshes, keep triangles).
+    Far more robust on degenerate input and realistic to ship — but it makes the display mesh part
+    of the model, which ADR-045 and #120 forbid in as many words, turns every Boolean result's
+    faces flat and its volume approximate, and would need its own carve-out from ADR-045. The user
+    weighed this explicitly and chose fidelity.
+  - **A full general analytic Boolean in one step.** This is commercial-CAD-kernel work — years of
+    specialist effort, and the degenerate cases are exactly where it breaks. Phasing by
+    intersection-curve difficulty (c) lets a real Boolean ship and be trusted before the hardest
+    geometry is attempted.
+  - **A third-party kernel (OpenCascade, ACIS).** REQ-300 dependency discipline, and REQ-313 already
+    committed to an in-tree kernel; bolting on a foreign B-rep now would mean two solid
+    representations and a translation layer between them.
+
+- **Open question — RESOLVED 2026-09-03 by ADR-048 (D-2026-09-03-b): freeform surfaces (was blocking
+  REQ-315).** Sweep and loft produce surfaces that are none of ADR-045's five kinds. The resolution:
+  a new `SurfaceKind::Nurbs` — a hand-rolled, in-tree, **minimal-subset** rational B-spline patch
+  (degree ≤ 3, untrimmed, split at seams like the analytic curved faces), its volume and area
+  integrated by the adaptive numerical quadrature D-2026-09-02-i already opened for the
+  procedural-intersection face, `.gs` bumped to version 4. REQ-315 is unblocked; **loft ships before
+  sweep**, each its own increment. Everything below in this ADR is unchanged. See ADR-048 for the
+  full decision.
+
+- **Consequences.**
+  - `src/util/brep.{hpp,cpp}` grows a feature-operation section: `Extrude`, `Revolve`, `Slice`,
+    `BooleanUnion` / `BooleanSubtract` / `BooleanIntersect`, plus internal face-split and
+    point-classification helpers. It stays graphics-free and directly unit-tested, per ADR-045.
+  - Increment **B2a** adds `Surface::inward` (a `bool`, ADR-045 (d) amendment) — no new curve type,
+    no `.gs` version bump. Increment **B2b-1** adds `CurveKind::Ellipse` + `Edge::radius2` — closed
+    form, and bumps `kGsFormatVersion` (ADR-045 (d) amendment). Increment **B2b-2** adds a procedural
+    `CurveKind::Intersection` carrying its two surface references, and a tessellator for it — the
+    quartic case; not built until then.
+  - The command layer gains `EXTRUDE`, `REVOLVE`, `SLICE`, `UNION`, `SUBTRACT`, `INTERSECT`, each in
+    the typed / prompted shape the primitive commands already use, each one undo step.
+  - No renderer change — feature results tessellate through REQ-313's cached path and REQ-100
+    profile (d) is unaffected.
+  - DXF / DWG export is unchanged: ADR-045 (i) already excludes every `CadSolid` with a counted,
+    named message.
+  - **Still not addressed here** (sweep / loft moved to ADR-048, accepted 2026-09-03): multi-loop profiles; fillet / chamfer
+    on a solid edge (#120 Phase 5); sectioning, centroid, moments of inertia (#120 Phase 6);
+    interactive placement and 3D grips for a feature result (#120 Phase 5).
+
+- **Delivery order (increments, each independently shippable and verifiable):**
+  1. **Extrude** — straight, single-loop profile, no taper. (b) of REQ-314.
+  2. **Revolve** — line and arc profiles, full and partial, plus the extrude taper option.
+  3. **Slice** — by plane, one side or both.
+  4. **Booleans Increment B1** — line/arc-intersection operand pairs only, others refused by name.
+     Curved operands: UNION / INTERSECT only (D-2026-09-02-b); curved SUBTRACT deferred to B2.
+  5. **Booleans Increment B2a** — inward-facing analytic faces (`Surface::inward`): curved SUBTRACT
+     for the pairs B1 already recognises (round hole, blind pocket, spherical dimple, counterbore).
+     No new curve type. (D-2026-09-02-c.)
+  6. **Booleans Increment B2b-1** — `CurveKind::Ellipse` (closed-form): oblique plane ∩ cylinder, for
+     SLICE then Boolean; plus a **Steinmetz coda** — perpendicular equal-radius cylinders meet along
+     two ellipses (D-2026-09-02-i). Bumps `kGsFormatVersion`. (D-2026-09-02-h.)
+  7. **Booleans Increment B2b-2** — procedural `CurveKind::Intersection`: cylinder ∩ cylinder
+     (quartic), sphere ∩ cylinder, non-elliptical cone sections. A face bounded by one is integrated
+     numerically (ADR-045 (b) amendment, D-2026-09-02-i). Refusals lifted pair by pair.
+  8. *(separate REQ-315, ADR-048 — accepted 2026-09-03)* — `SurfaceKind::Nurbs` freeform surface,
+     then **loft**, then **sweep**.
+  9. *(REQ-319, amendment (i) below — accepted 2026-09-04)* — **push/pull a planar face**, the first
+     operation that edits an existing solid rather than building one.
+
+- **Amendment (i) — a MODIFYING operation, and a precondition `Validate` cannot enforce**
+  (2026-09-04, D-2026-09-04-c, REQ-319, GitHub issue #148 Phase 5).
+
+  Every operation this ADR planned *builds*: from a profile (extrude, revolve, loft, sweep), from two
+  solids (the Booleans), or by cutting one (slice). Phase 5's direct modelling needs the other kind —
+  take a solid, change part of it, return a solid. `brep::PushPullFace` is the first, and the shape
+  it establishes is:
+
+  **A modifying operation copies, edits the copy, and validates before returning.** Not an in-place
+  mutation. `CadSolidPtr` is `shared_ptr<const brep::Solid>` precisely so that undo snapshots are a
+  refcount bump (architecture §11.5), and a solid is *replaced*, never edited. Decision (d)'s
+  compute-validate-replace therefore applies unchanged; only the input differs.
+
+  **The new part is a geometric precondition that `Validate` does not cover, and the case proving
+  it was measured rather than argued.** Moving a face's vertices along its normal leaves each
+  neighbouring face's *surface* untouched — correct when the neighbour is a plane parallel to the
+  push, wrong for anything else, because that neighbour's own vertices then leave its own surface.
+  `Validate` checks topology and degeneracy: closed shells, edges used twice with consistent
+  orientation, no degenerate face or edge, finite coordinates, positive volume. **It has no check
+  that a face's vertices lie on that face's surface.**
+
+  Removing the precondition and measuring:
+
+  - a **cylinder's flat cap** pushed by 3 ft **builds**, `Validate` returns **Ok**, and the analytic
+    volume comes out **863.938 against a true 1021.02** — 15% wrong — because the wall surface still
+    reports `height = 10` while its top boundary sits at 13. A closed, manifold, positive-volume
+    solid whose volume is a lie, and the case this decision rests on;
+  - a **wedge's slanted plane** neighbour, by contrast, `Validate` *does* reject, at every distance
+    from 0.001 ft to 2 ft. There the pre-check buys an accurate refusal rather than safety — without
+    it the user is told "that push would turn the solid inside out", which is false — which matters
+    under REQ-201 but is the smaller claim.
+
+  **The first draft of this amendment asserted the wedge as the proof and was wrong.** It is
+  recorded that way because the distinction is the whole content of the decision: some geometric
+  breakage happens to trip a topological check, and some does not, and only measurement tells them
+  apart.
+
+  **Amendment (i), revised the same day — corners are RE-SOLVED, not translated.** The first
+  implementation moved each corner of the pushed face ALONG the push. That is correct only where
+  every neighbouring face contains the push direction, and measured against the shipped primitives
+  it managed **box 6/6, wedge 2/5, pyramid 0/6** — a pyramid is entirely flat-faced and could not be
+  pushed at all, which is what showed the algorithm was a special case wearing the name of a general
+  one. Each corner is now recomputed as the point where the planes of the faces meeting there cross,
+  which gives **box 6/6, wedge 5/5, pyramid 6/6** and identical answers on the box.
+
+  Two user-visible consequences follow from the neighbours keeping their planes, and both are the
+  correct behaviour rather than side effects: extending a wedge's end face makes the wedge TALLER
+  (the ramp keeps its slope), and raising a pyramid frustum's top makes that top NARROWER (the walls
+  keep theirs). A translation would have produced a wedge whose corners no longer touch its own
+  slope, and a frustum whose walls bend.
+
+  The refusal set changed with it. `PushPullNeighbourNotParallel` is gone — parallelism is no longer
+  required — replaced by `PushPullNeighbourCurved` (a curved surface is not a plane to intersect)
+  and `PushPullVertexUnsolvable` (the planes at a corner do not meet in one point, or more than
+  three faces meet there and moving one would split it). A true pyramid's apex is the second case:
+  four planes, and pushing a side face would break it into several points — a topology change, and a
+  different operation. Its base still pushes.
+
+  **Amendment (i), extended — a curved neighbour is RE-PARAMETERISED, not refused** (2026-09-04,
+  D-2026-09-04-d). The user reported push/pull not working on cylinders or cones. A cap is a plane,
+  so it always passed the face test; what refused it was the wall beside it. A curved surface cannot
+  be intersected the way a plane can, but it CAN be re-parameterised, and that is a third kind of
+  move this ADR did not have:
+
+  - **translate** a plane (the face being pushed);
+  - **re-solve** a corner as the meeting point of the planes around it (amendment (i) proper);
+  - **re-parameterise** a curved wall: a cylinder's stored height, a cone's end radius.
+
+  The taper choice was put to the user and is the substance of the decision: **a cone keeps its
+  slope and lets the radius change**, so pushing its cap extends the same cone rather than bending
+  its wall. The alternative - keep the radius, change the slope - produces a volume 13% different on
+  the worked example, so it is a real fork rather than a rounding preference.
+
+  This is also the case that measures worst when got wrong rather than refused, and it is the one
+  the earlier amendment cited: leave the wall's height alone while its boundary moves and the push
+  still builds and still passes `Validate`, reporting **863.938 against a true 1021.02**. The
+  guarantee is now positive rather than defensive - the wall is made to match its boundary instead
+  of the move being declined because it might not.
+
+  Still refused, each by name: a curved wall pushed along its own normal (a radius change, not a
+  translation), a sphere or torus (no height or taper to follow), an axis oblique to the push, and a
+  cap whose corners also touch an unrelated plane (two constraints, a different solve).
+
+  **Amendment (i), extended again — a cylinder WALL is a radius change** (2026-09-04,
+  D-2026-09-04-e). The fourth kind of move, and the one that is least like a push: a wall's outward
+  normal points a different way at every point of the surface, so there is no single direction to
+  translate along. The gesture means every point moves along its OWN normal by the same amount,
+  which is what adding to the radius does. So the operation's four moves are now:
+
+  - **translate** a plane; **re-solve** a corner; **re-parameterise** a wall's height or taper;
+    and **re-radius** a cylinder wall.
+
+  `Surface::inward` decides the sign, and it is the detail worth writing down: a hole's wall has
+  its outward normal pointing AT the axis, so pushing it outward makes the hole SMALLER and the
+  solid heavier. Got wrong, the feature still appears to work — on a boss. The test builds its hole
+  with a real `BooleanSubtract` rather than by setting the flag on a hand-made solid, because the
+  flag alone is not the case: what has to hold is that this operation reads the same geometry the
+  Booleans produce.
+
+  A CONE wall stays refused, and the reason is a genuine second decision rather than effort:
+  offsetting a cone along its own normal moves both radii by `d / cos(half-angle)` and leaves the
+  apex where it was. That is an offset surface, not a radius change, and which of the two a drag
+  should mean is exactly the kind of fork D-2026-09-04-d had to put to the user for the cap.
+
+  Adding such a check to `Validate` was considered and rejected: for a Boolean result it is a
+  tolerance question rather than a boolean one, and making every existing operation pay for it —
+  and possibly newly fail on it — to guard one new operation is the wrong place to put the cost.
+
+  So **a modifying operation owns its own preconditions**, checked before it builds anything, and
+  refuses by name. This is the same conclusion #148's fillet planning reached independently about
+  the over-radius case: `SelfIntersects` is documented as not general, and the refusal has to be a
+  pre-check against adjacent face extents rather than an after-the-fact test. Two operations, one
+  lesson: **the kernel's safety nets catch the topology, not the geometry, and a new operation that
+  can break the geometry must bring its own net.**
+
+- **Amendment (j) — a modifying operation that ADDS topology, and the rolling-ball model**
+  (2026-09-05, D-2026-09-05-c, REQ-323, GitHub issue #148 Phase 5).
+
+  Amendment (i) established the modifying operation: copy, edit the copy, validate before returning,
+  and bring your own precondition because `Validate` checks topology rather than geometry.
+  `PushPullFace` moves what is already there — the same faces, edges and vertices come out as went
+  in. FILLET is the first operation that **changes the topology itself**: it deletes an edge and
+  creates a face, two edges and two vertices in its place.
+
+  **(1) The model is a rolling ball, and it is worth naming because it decides every number.** A
+  fillet of radius `r` on an edge is the surface traced by a ball of radius `r` rolling along the
+  edge while touching both adjacent faces. For a straight edge between two planes that ball's centre
+  travels along a straight line — the intersection of the two planes each offset by `r` toward the
+  material — so the swept surface is a **cylinder** of radius `r` about that line, and every
+  boundary is closed-form. Nothing is sampled or marched.
+
+  The setback follows from the same picture: where the fillet meets each face, it does so at
+  distance
+
+      d = r / tan(theta / 2)
+
+  from the original edge, measured in that face, where `theta` is the interior dihedral angle. At a
+  box's 90-degree edge that is exactly `r`; at a shallow joint it tends to zero, and at a sharp one
+  it grows without bound — which is *why* a large radius on a sharp edge has to be refused rather
+  than clamped.
+
+  **(2) The topology delta is exact and worth stating, because it is what a test can assert.** One
+  filleted edge, both endpoints landing on planar faces:
+
+  | | before | after |
+  |---|---|---|
+  | vertices | `v0`, `v1` | four: the ends of the two tangent lines |
+  | edges | the edge itself | two tangent lines + one arc at each end |
+  | faces | — | one cylindrical fillet face |
+
+  Net: `V + 2`, `E + 3`, `F + 1`, so `V - E + F` is unchanged and the shell stays Euler-consistent.
+  A box filleted on one edge goes from `8/12/6` to `10/15/7`.
+
+  **(3) The precondition, per amendment (i), and what it is measured against.** `SelfIntersects` is
+  documented as not general, so the refusal is a **pre-check** and not an after-the-fact test. The
+  radius must be strictly less than the distance from the edge to the far boundary of *each*
+  adjacent face, measured perpendicular to the edge within that face. At the limit the face does not
+  merely become thin — it vanishes, leaving a zero-area face that `DegenerateFace` would catch only
+  after the solid was built, and only sometimes. The check is cheap and exact for a planar face:
+  it is the extent of the face's own loop.
+
+  **(4) A shared vertex was refused in increment 1, and increment 2 (2026-09-08, D-2026-09-08-e)
+  lifted it.** Where filleted edges meet at a vertex their cylinders leave a curved triangular gap,
+  and closing it needs a **spherical** patch — the classic rolling-ball corner. Three facts make it
+  closed-form rather than a fitting problem:
+
+  - the corner ball touches all three faces, so its centre is at distance `r` from all three planes:
+    one 3x3 solve, the same shape a single edge uses with two planes and the edge direction;
+  - **each cylinder axis passes through that centre.** An axis is the locus of points at distance `r`
+    from its own two planes, and the centre is at distance `r` from all three — so the fillets do not
+    merely approach the corner, they terminate exactly on it;
+  - a cylinder of radius `r` whose axis passes through the centre, and a sphere of radius `r` centred
+    there, meet exactly on the GREAT circle perpendicular to that axis. So every fillet-to-patch
+    boundary is a great-circle arc, and the patch is a spherical triangle whose corners are the same
+    tangent points the fillets already land on.
+
+  With three mutually perpendicular faces that triangle is an OCTANT, which in the frame
+  `(x, y, z) = (n1, n2, n3)` is exactly the parameter rectangle `u, v in [0, pi/2]` — so its area and
+  volume stay closed-form. **That is why increment 2 asks for orthogonality:** a general spherical
+  triangle is bounded by three great circles that are not iso-parameter lines, so it would need
+  REQ-321's `paramLoops` and with them a numerically integrated area in place of the closed form.
+  Still refused, each its own increment: a corner with only SOME of its edges selected (the ball
+  would run off a rounded edge onto one staying sharp — a setback blend), a non-orthogonal corner,
+  and corners where more than three edges meet or the arriving fillets have different radii.
+
+  **The construction is ONE pass over the original solid, not a loop.** Filleting edges one after
+  another cannot work: after the first fillet the shared vertex is gone, so the second arrives at a
+  CYLINDER where it needs a plane. Increment 1's sequential form was retired when increment 2 landed,
+  and with it the position-based edge re-lookup that existed only to survive the compaction between
+  passes.
+
+  **(5) What this does NOT need, corrected from a first reading.** REQ-321 / ADR-052's general trim
+  loops are **not** a prerequisite here. A plane face's area has always been integrated over its
+  own boundary loops rather than its parameter rectangle (`PlaneFaceArea`), which is why a Boolean
+  can already leave a plane with a circular hole in it — so the quarter-circle bite a fillet takes
+  out of the faces at each end of the edge is representable with the machinery REQ-313 shipped. The
+  fillet's own cylindrical face is bounded by an iso-rectangle: one angular span, one length.
+  `paramLoops` becomes necessary at the *next* increment, where rounding a cylinder's rim leaves the
+  cylinder wall irregularly trimmed.
+
+
+- **Amendment (k) — the same topology delta with none of the same surfaces: CHAMFER, and why its
+  corner is a POINT** (2026-09-08, D-2026-09-08-f, REQ-331, GitHub issue #148 Phase 5, slice 7).
+
+  Amendment (j) established the topology-adding operation through the fillet. The chamfer is the
+  second one, and it is worth its own amendment for a reason that is easy to miss: **it has exactly
+  the fillet's topology delta and none of the fillet's geometry.** Nothing here is a special case of
+  amendment (j); the two share a skeleton and differ in every surface.
+
+  **(1) The delta is identical, so the shape of the code is shared and the numbers are not.** One
+  chamfered edge, both endpoints on planar faces square to it: the edge is deleted, two tangent
+  lines and one straight end-edge at each end appear, one face appears, two vertices per endpoint.
+  `V + 2`, `E + 3`, `F + 1`, box `8/12/6 -> 10/15/7` — the same table amendment (j)(2) gives. What
+  differs is the *kind*: a `Plane` where the fillet builds a `Cylinder`, a `Line` where it builds an
+  `Arc`. The one-pass rule of (j)(4) carries over unchanged and for the identical reason.
+
+  **(2) There is no model to name, and that is the finding.** The fillet needed "a rolling ball"
+  stated up front because the model decides the setback: `d = r / tan(theta / 2)`, which is why
+  REQ-323 carries a wedge case whose whole job is to prove the conversion happened. A chamfer has no
+  such conversion — **the input IS the setback**, at every dihedral angle. The bevel plane is simply
+  the plane through the two cut lines, and its outward normal is `-normalize(u_A + u_B)` where `u`
+  is each face's in-face unit perpendicular to the edge, pointing into the material. Those `u`
+  vectors already exist in the fillet's own precondition check (they are what its concavity test is
+  built on), so the chamfer's construction reuses them rather than deriving anything new.
+
+  **(3) The corner is a VERTEX, not a facet, and the reason is three lines of linear algebra.** This
+  is the sharpest divergence from (j)(4) and it goes the easy way. Three bevel planes in general
+  position meet at exactly one point; the fillet's three cylinders do not, which is precisely why it
+  needs a spherical patch to close the gap. So an orthogonal corner with all three edges chamfered
+  gains **one vertex, three edges and no face**, against the fillet's one vertex-set plus an octant
+  face. For a box at `d`, the three planes `x+y=d`, `y+z=d`, `z+x=d` meet at `(d/2, d/2, d/2)`.
+
+  The visible consequence is that **each bevel face is a HEXAGON** — a rectangle with a V-notch
+  bitten out of each end by its two neighbours, the notch running from the tangent vertex down to
+  the corner point and back up. That is a six-vertex straight-edged loop on a plane, which
+  `PlaneFaceArea` integrates over already, so (j)(5)'s conclusion holds here too: REQ-321's
+  `paramLoops` are not a prerequisite.
+
+  **(4) Orthogonality is required, and NOT for the fillet's reason.** Amendment (j)(4) refuses a
+  non-orthogonal corner because a general spherical triangle is not an iso-rectangle and would trade
+  a closed-form area for a numeric one. That argument does not exist here — there is no patch. What
+  fails instead is the **tangent vertex**: the point where two bevels' cut lines meet inside a face
+  they share is `p + d*u1 + d*u2` only when `u1 ⊥ u2`, which is exactly what mutual orthogonality of
+  the three faces buys. Off-square it is a different in-face solve. Recording this matters because
+  the two refusals have the same name-shape and the same message-shape, and a reader who assumes the
+  fillet's reason carries over will look for a parametrisation problem that is not there.
+
+  **(5) An oblique end face is refused, and the reason was measured rather than predicted.** The
+  first reading of REQ-331 expected obliquity to come free: a plane meets a plane along a straight
+  line at any angle, where the fillet's cylinder gives an ellipse and has to be refused
+  (`FilletEndFaceUnsupported`). Working the construction showed otherwise. The tangent point
+  `p + d*u` sits on the end face only when that face is square to the edge — `u` is perpendicular to
+  the edge direction, so the point keeps its position along the edge, which is on the end plane
+  exactly when the end plane is normal to the edge. Off-square, the tangent lines must instead be
+  trimmed to where the bevel plane cuts the end face, which is a second construction. So the chamfer
+  keeps the fillet's restriction after all. **This is recorded because the wrong version of it was
+  believed first**, and the same "a plane cuts a plane in a line, so it must be free" reasoning will
+  present itself again at the next blend.
+
+  **(6) The two-distance form is deferred by decision, and it is coupled to (3).** AutoCAD's solid
+  chamfer takes `Distance1` into a chosen base face and `Distance2` into the other — `CHAMFER` asks
+  with a `Next/OK` base-surface toggle, `CHAMFEREDGE` instead forbids the ambiguity by requiring
+  every selected edge to lie on one shared face. Neither is increment 1 here: the toggle is an
+  interaction the codebase has nowhere yet, and `CHAMFEREDGE`'s restriction would throw away the
+  whole-edge-set pass that lets this kernel chamfer all twelve edges of a box in one operation —
+  something AutoCAD's own command cannot do. The cost is real and is stated rather than hidden: with
+  `D1 != D2` the corner remains a single point, but (3)'s tangent-vertex solve changes and REQ-331's
+  increment-2 closed forms are replaced by a second set.
+
+
+- **Amendment (l) — a precondition has to see the whole REQUEST, not one edge of it at a time**
+  (2026-09-08, D-2026-09-08-g, REQ-323 and REQ-331 item 4 amended, TASK-223).
+
+  Amendment (i) established the rule: a modifying operation owns its own precondition, because
+  `Validate` checks topology and not geometry. Amendment (j) applied it to the fillet and stated the
+  check — *"the radius must be strictly less than the distance from the edge to the far boundary of
+  each adjacent face"* — and amendment (k) carried the same sentence to the chamfer. **That sentence
+  is per-edge, and it is measured against the ORIGINAL solid.** It was correct for the operation
+  amendment (j) first described, which rounded one edge, and it stopped being sufficient the moment
+  increment 2 made the request a SET of edges. Nobody noticed, because the check kept passing.
+
+  **What it cannot see.** Two things, and they are separate statements rather than one:
+
+  1. **What another requested edge takes out of the same face.** Two edges bounding one face each cut
+     a strip into it. Asked one at a time, each strip fits. Asked together, they can overlap.
+  2. **One edge's two ends eating each other.** At a corner the blend runs some distance ALONG the
+     edge before it begins. With a corner at both ends, the two can want more than the edge has.
+
+  **What that produced.** Not a refusal and not a crash — a solid. `Validate` is topological, so a
+  face whose boundary has crossed over and inverted passes it, and `ComputeMassProperties` returns a
+  number for it. On a 20 x 10 x 8 box, the two 20-long top edges are 10 apart across a 10-wide face,
+  so any setback above 5 crosses:
+
+  | | before amendment (l) |
+  |---|---|
+  | `FILLET 6` | **accepted**, volume 1290.97336, self-intersecting |
+  | `CHAMFER 6` | **accepted**, volume 880, self-intersecting |
+  | either at exactly 5 | refused — but only because the face reaches ZERO area and `DegenerateFace` happens to catch it |
+
+  So the failure window was "the strips overlap", and the single case that was caught was caught by
+  accident. This is a defect against **issue #148 acceptance 6** — *"a fillet or chamfer that cannot
+  be built is refused with a clear message and leaves the solid unchanged"* — for both operations.
+
+  **Decision. The precondition is a property of the REQUEST**, and both operations answer it through
+  one shared implementation (`BlendSpan` / `BlendsFit` in `brep.cpp`) rather than two that could
+  drift. Two conditions are added to the per-edge one, which stays:
+
+  1. `length > consumed[0] + consumed[1]` per edge, where `consumed` is what a corner at that end
+     runs along the edge — zero at an open end, so an unchained request is unaffected;
+  2. for two requested edges bounding one face, the room between them must exceed the sum of their
+     setbacks. **Adjacent edges are exempt**, and that exemption is load-bearing rather than an
+     optimisation: their cuts are *meant* to meet, at the corner vertex, and it is condition (1) that
+     covers their interaction. Without the exemption every corner in increment 2 would refuse.
+
+  Equality is refused in both, for the reason the original check already gave: at the limit the face
+  does not become thin, it vanishes.
+
+  **Four refusals, not two, and not folded into the existing one.**
+  `FilletRadiusOverlapsAnother` / `ChamferDistanceOverlapsAnother` and
+  `FilletEdgeTooShortForItsCorners` / `ChamferEdgeTooShortForItsCorners`. Reusing
+  `FilletRadiusTooLarge` was considered and rejected: its sentence says the setback *"would reach
+  past the far side of an adjacent face"*, which is true of the per-edge case and false of both new
+  ones — a user whose real obstacle is a second edge they selected would go looking for the wrong
+  thing. REQ-323 and REQ-331 both say "refused by name"; a name that describes a different failure
+  is not one.
+
+  **The pairwise test is exact where it matters and conservative elsewhere.** It measures from the
+  nearer of the other edge's two endpoints, which is exact for the parallel case a box, wedge or
+  prism actually produces. For two edges of one face that are neither parallel nor adjacent —
+  reachable only on a face with more than four sides — it errs toward refusing something buildable.
+  That direction is deliberate: the failure this amendment exists to fix is the other one.
+
+  **This is also a note about how the defect was found.** Not by a test — every existing test passed
+  before and after, because none of them asked for two blends that collide. It came out of a
+  `/code-review high` pass on the chamfer, which noticed the check was reading the original solid,
+  and it was then reproduced with numbers on the *fillet*, which had shipped with it. A precondition
+  that is only ever exercised on requests it accepts is not evidence that it refuses the right things.
+
+**(m) Placement transforms belong to the kernel: `Rotate` and `Scale` join `Translate`.**
+(2026-09-09, D-2026-09-09-a, REQ-332, TASK-230, GitHub issue #148 acceptance 4.)
+
+  **Context.** REQ-060 records the gizmo's rotate and scale handles as *blocked*, because ROTATE and
+  SCALE are plan-only and refuse solids, so a handle would have no typed command to agree with. That
+  refusal — `DropSolidsFromSelectionForTransform`, 9 call sites — reads like a policy awaiting a
+  decision. It is not. `brep.hpp` declared exactly four operations that touch an existing solid
+  (`Translate`, `PushPullFace`, `FilletEdge(s)`, `ChamferEdge(s)`) and **none of them turned or
+  resized one**. The refusal was covering for a capability that did not exist, and no amount of
+  command-layer work could lift it.
+
+  **Decision. A rigid rotation and a uniform scale are kernel operations, for exactly the reason
+  `Translate` already is** — *"only this header knows every place a coordinate hides in a `Solid`
+  ... open-coded at a call site, adding a field to `Surface` later would silently miss it, and a
+  solid that half-moved is not a shape at all."* Rotation reaches strictly more of those places than
+  translation does, which is the substance of the decision rather than a detail of it:
+
+  | | translation | rotation | uniform scale |
+  |---|---|---|---|
+  | a frame's **origin** (a point) | moves | rotates about the axis **line** | scales about the base |
+  | a frame's **three axes** (directions) | untouched | rotate about the axis **direction** | **untouched** |
+  | radii, heights, the recipe's dimensions (lengths) | untouched | untouched | `* k` |
+  | sweeps (angles) | untouched | untouched | untouched |
+
+  The point/direction split is REQ-328's, and this is the case that shows why it ships as two
+  primitives rather than one with an ignored parameter: a plane's centre and a plane's normal share
+  one angle and one axis and are still transformed by different calls.
+
+  **Why this is an architectural decision and not an implementation detail.** The wrong version does
+  not fail loudly. Deleting the three axis lines from the frame rotation and rebuilding splits by
+  axis: about world Z, `Validate` catches it and the rotation is refused; about a **tilted** axis it
+  does not — the solid comes back closed, manifold and positive-volume, `Validate` returns `Ok`, and
+  it reports a volume of **1142.5693570452 against a true 1600, 28.6% wrong**, because every face
+  still faces the direction it faced before the solid turned underneath it. A per-field sweep at a
+  call site produces precisely that defect, and `Validate` is not a net that catches it.
+
+  **The recipe follows the solid here, where a push or a fillet drops it.** REQ-319 item 9 and
+  REQ-323 item 9 drop the recipe because a pushed or rounded box is no longer the box its recipe
+  describes, and a stale recipe reads as authoritative while being false. A rotated box is still
+  exactly a box, and a uniformly scaled box is a box with scaled dimensions — so the recipe can
+  follow either precisely, and dropping it would discard a *true* description. `Translate` set that
+  precedent already. The rule is therefore not "editing operations drop the recipe" but **"a recipe
+  that can still describe its solid is kept and updated; one that cannot is dropped"**, which is the
+  form later operations should be measured against.
+
+  **Degenerate inputs are refused, not repaired**, and this is where the kernel deliberately departs
+  from `ray3d`'s contract. `ray3d::RotateVectorAboutAxis` trusts its axis to be unit, which is right
+  for its callers — they hold a stored plane normal or a UCS Z axis. A solid's rotation axis comes
+  from a user's picked points. Normalizing silently would turn a **zero** axis into an arbitrary one,
+  and Rodrigues' formula with a zero axis is `v * cos(angle)`: a uniform shrink wearing a rotation's
+  name. So `brep::Rotate` checks the axis once for the whole solid and refuses by name, and
+  `brep::Scale` refuses a factor that is zero (collapse), negative (a **mirror**, which is its own
+  operation and leaves left-handed frames) or non-finite.
+
+  **Non-uniform scale is excluded by the representation, not by preference.** `SurfaceKind` has no
+  ellipsoid and no elliptical cylinder, so an unevenly scaled sphere has nowhere to be stored. The
+  signature offers one factor, so there is no non-uniform request to refuse. `brep::Mirror` is
+  likewise not added here: a reflection inverts handedness, and every surface normal, `inward` flag
+  and the volume integrand would each have to be reconsidered against that. MIRROR keeps refusing
+  solids (REQ-322 item 6), unchanged.
+
+  **The command layer consumes this the way REQ-322 consumed `Translate`** (2026-09-09,
+  D-2026-09-09-b, TASK-231). `RotateSelectedSolids` and `ScaleSelectedSolids` sit beside
+  `TranslateSelectedSolids` and share its shape exactly: de-duplicate the selection by solid index —
+  a selection should not hold one solid twice, and transforming it twice would turn or scale it twice
+  — call the kernel, and **replace** rather than edit, because `CadSolidPtr` is
+  `shared_ptr<const brep::Solid>` and that immutability is the precondition for undo being a refcount
+  bump. Four of the nine `DropSolidsFromSelectionForTransform` call sites give way to them; the rest
+  stay, so **the refusal was narrowed, not deleted**.
+
+  Two consequences are worth recording here rather than only in the requirement, because both are
+  places a later change could quietly go wrong:
+
+  - **The rotation axis is the caller's, never world Z.** The plan path passes world Z because that
+    genuinely is its axis; the tilted path passes the UCS Z it was already handed. Hard-coding world
+    Z passes every plan-view test and fails only under a tilted UCS — measured, and now pinned by one
+    transcript line.
+  - **A solid scales in Z even in plan view, where a 2D entity beside it does not.** That asymmetry
+    is forced by the representation, not chosen: a uniform scale is the only one `SurfaceKind` can
+    hold, so a solid cannot join the "elevations untouched" compatibility carve-out that
+    `ScaleSelectionZAboutBase` exists to preserve. It costs nothing in compatibility because these
+    commands refused solids outright until now, so no drawing can depend on the old behaviour.
+
+**(n) Moving a vertex or an edge IS offsetting the planes that meet there.**
+(2026-09-09, D-2026-09-09-d, REQ-333, TASK-233, GitHub issue #148 acceptance 3.)
+
+  **Context.** Issue #148 acceptance 3 asks that grips move faces, edges and vertices. Faces have
+  been movable since REQ-319; nothing moved the other two, and the gizmo correctly refused to draw a
+  handle for either because no kernel operation existed behind it.
+
+  **The decision is a DEFINITION, and it is forced rather than chosen.** Moving a box corner and
+  leaving everything else alone is not representable: the three quads meeting there would each end
+  up with four non-coplanar points, and `SurfaceKind` has no non-planar face to hold that. Storing
+  the result anyway would leave faces that do not contain their own boundaries — the failure
+  amendment (i)'s precondition exists to prevent, and one `Validate` cannot see.
+
+  A planar face has exactly one degree of freedom that keeps it planar: sliding along its own normal.
+  Three planes at a corner give three, which is exactly a point; two planes along an edge give two,
+  which is exactly a line. So:
+
+  > moving a vertex or an edge = offsetting each adjacent planar face by `dot(delta, outward normal)`,
+  > then re-solving every affected corner.
+
+  That is not an approximation of the "real" operation — within this representation it *is* the whole
+  space of moves that exists.
+
+  **Two consequences worth stating, because both look like shortfalls and neither is:**
+
+  - **Every other corner of those faces moves too.** The faces moved; their boundaries came with
+    them. A version that moved only the dragged vertex is the unrepresentable one.
+  - **The component of an edge drag along the edge is annihilated.** The edge direction lies in both
+    faces, so it is perpendicular to both normals and offsets neither — and it should not, because an
+    edge slid along its own line is the same edge. A drag *entirely* along the edge is therefore
+    refused as "no motion" rather than reported as a move that did nothing.
+
+  **One core, three eventual callers.** `OffsetPlanarFacesAndResolve` is amendment (i)'s algorithm
+  with its "exactly one face moves" assumption lifted, and it keeps both pieces that make that
+  algorithm correct: the best-conditioned triple of planes is solved (the first three would pick a
+  near-degenerate triple wherever two faces are nearly coplanar), and every other plane at the corner
+  must then pass through the answer (more than three planes generally have no common point once one
+  moves — a pyramid's apex).
+
+  **`PushPullFace` is deliberately NOT routed through it yet.** Its planar path is entangled with two
+  curved paths — the cylinder-wall radius change and the cap-push re-parameterisation — that the core
+  has no business knowing about, and unpicking them risks a shipping, well-tested operation for
+  tidiness alone. The core takes its failure codes as a parameter precisely so that push/pull keeps
+  its own error vocabulary when it is routed through later, making that a wiring change rather than a
+  rewrite. Recorded as debt rather than left implicit.
+
+  **The recipe is dropped here and kept by rotate/scale**, which is not an inconsistency: amendment
+  (m) states the rule both follow — *a recipe that can still describe its solid is kept and updated;
+  one that cannot is dropped.* A rotated box is still a box; a box with a corner pulled out is not.
+
+### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
+
+- **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —
+  corrected before any storage code from an initially-accepted stride 3→4 rename-widen (see the
+  correction in (a)) — and the phased delivery were chosen by the user, who accepted this ADR text.
+  Backs REQ-316. Paired with a new requirement because the feature request had no accepted
+  `REQ-NNN` behind it. Increments 1 (storage + POLYLINE arc mode + render + DXF/`.gs`), 3 (JOIN of
+  lines + arcs), and the pick/box-select/arc-grip work of increment 2 delivered 2026-09-02
+  (D-2026-09-02-f keyword choice, D-2026-09-02-g hover aperture; TASK-180..183).
+
+- **Context.** A feature request asks for two things that are one thing: (1) POLYLINE should switch
+  between "line mode" and "arc mode" mid-command so a single polyline can contain straight *and*
+  curved segments, and (2) JOIN should weld lines and arcs together into one such polyline. The
+  obstacle is storage. A polyline is `userPolylineVerts` (stride-3 XYZ) + `userPolylineOffsets` +
+  `userPolylineClosed` + `userPolylineAttrs`, and it holds **only corner points** — the renderer,
+  snap engine, pick, extents, length, OFFSET, TRIM and both file writers all assume the piece
+  between vertex *i* and *i+1* is a straight chord. The CAD term for "how much this segment bows"
+  is a **bulge** (`tan(θ/4)`, θ = the arc's included angle; the DXF `LWPOLYLINE` group-42 value,
+  one per vertex, 0 = straight). Nothing in the domain stores it:
+  - `requirements.md` REQ-085 (3DPOLY) states in as many words that the ordinary POLYLINE command
+    is "unchanged" and that adding curvature would be "a storage change" it is avoiding.
+  - `io/DxfIo.cpp` **already parses** group-42 bulges and then discards them — it tessellates each
+    arc into short straight chords on import because "the polyline store carries no per-vertex
+    bulge." The exporter emits no bulges at all (group 72 `0` on HATCH boundaries).
+  - The polyline arrays have ~**922 reference sites across 17 files** (490 in `CadCommands.cpp`
+    alone, 29 in `DxfIo.cpp`); ADR-035's measured count for the comparable `userPolyline*`
+    footprint was **612 sites across 11 files**.
+
+  Choosing the storage layout and the file-format change is an architectural decision (§2, §5,
+  §11.4, §11.8), not a Workshop choice — hence this ADR.
+
+- **Decision.**
+
+  **(a) A per-vertex bulge is a parallel array beside the vertex store** —
+  `std::vector<float> userPolylineVertsBulge`, one entry per vertex, so
+  `userPolylineVertsBulge.size() == userPolylineVerts.size() / 3` always. The vertex store keeps
+  its stride-3 XYZ layout unchanged. The bulge at vertex *i* describes the segment **leaving**
+  vertex *i*; the last vertex's bulge is consulted only when `userPolylineClosed` is set (the
+  closing segment). All three copies of the store — live `AppCommandState`, the undo
+  `DrawingGeometrySnapshot`, and the per-tab `DrawingDocument` — gain the parallel array, mirrored
+  at the handful of vertex-mutation sites (append, erase-polyline, clear, undo restore, `.gs` load,
+  DXF load). `docinvariants` gains `userPolylineVertsBulge.size() * 3 == userPolylineVerts.size()`
+  and "every bulge is finite".
+
+  *Correction (2026-09-02, before any storage code landed).* As first accepted, (a) chose to
+  **widen the vertex stride 3→4 with a rename** (`userPolylineVerts` → `userPolylineVertsXyzB`) on
+  the stated ground that "renaming makes every one of the ~600 access sites a compile error rather
+  than a silently-misread stride." **That ground is false.** The store is `std::vector<float>`;
+  widening it to `x,y,z,bulge` leaves it `std::vector<float>`, so a renamed site that still
+  computes `verts[i*3 + 2]` compiles cleanly and reads the wrong float — the rename catches the
+  *name*, not the *stride arithmetic*. With the rename-widen's only advantage over the parallel
+  array gone, and 401 `userPolylineVerts` reference sites across 16 files to hand-audit with no
+  compiler net, the parallel array is the lower-risk choice: existing XYZ code is untouched, only
+  the ~12 arc-aware sites read the new array, and the ~6 vertex-mutation sites that must mirror it
+  are enumerable and invariant-checked. This is the same call ADR-035 (c) made for feature-line
+  per-vertex data. Recorded rather than silently rewritten, per the ADR-025 correction-note
+  precedent.
+
+  **(b) An all-zero-bulge polyline is bit-for-bit today's behaviour.** Every existing consumer that
+  walks vertex pairs keeps working; it reads a 4th float it can ignore. Curvature-aware behaviour
+  is added as an **`if (bulge != 0)` arc branch** at a fixed, enumerated set of sites — render,
+  snap, pick, extents, length/area, OFFSET, TRIM, FILLET/CHAMFER, transform-preview, `docinvariants`,
+  DXF/DWG/`.gs` IO. That enumeration is an **acceptance condition, not a review habit** (the
+  ADR-035 (g) discipline): a missed site is a curve that silently renders or snaps as a chord.
+
+  **(c) Arc geometry is derived, never stored.** The bulge→(centre, radius, start/end angle, sweep)
+  math already inside `DxfIo.cpp`'s import path is promoted to a pure, unit-tested helper in
+  `util/geom2d` (`BulgeArc(p0, p1, bulge) → ArcSpan`). It has ≥3 present-day uses — the DXF
+  importer, the renderer's tessellation, and the snap engine — so it is a value helper, not a
+  speculative abstraction (§11.4). The renderer tessellates each arc segment to a chord-height
+  tolerance at draw time and feeds the **existing** line/GL path; **no new GL code, no new shader.**
+
+  **(d) POLYLINE gains `ARC` / `LINE` sub-modes.** While drawing (`polylinePhase == NeedNextPoint`)
+  the keywords `ARC` and `LINE` (full words — `A` / `ANGLE` are the existing segment-bearing lock,
+  D-2026-09-02-f) toggle the mode carried on the polyline draft state. Arc mode's default is an arc
+  **tangent to the previous segment**, its far end at the next pick; `RADIUS` and `CANGLE` (included
+  angle) set the next arc segment. `CEnter`, `Second point`, `Direction` are deferred past increment
+  1. `UNDO` removes the last segment. 3DPOLY stays line-only (arc + independent per-vertex Z is out
+  of scope).
+
+  **(e) JOIN becomes arc-aware.** The edge walk in `ExecuteJoinSelection` carries a bulge per edge.
+  An `ARC` entity in the selection contributes one bulge segment; a bulge polyline contributes its
+  per-segment bulges; a `CIRCLE` is refused (no endpoints — the existing pattern). Tangency between
+  joined pieces is **not required** (AutoCAD JOIN does not require it). Non-contiguous selections
+  continue to report which pieces were left out (REQ-201), and the whole operation stays one undo
+  step.
+
+  **(f) File formats.** DXF/DWG export emits group 42 per vertex; the importer **stops
+  tessellating** and stores the parsed bulge directly (removing the straight-chord fallback).
+  `.gs` gains an **additive** per-vertex bulge array read tolerantly with a default of 0 and **no
+  `kGsFormatVersion` bump** (the ADR-020 (d) / ADR-030 precedent) — a legacy drawing loads with
+  every polyline straight. `RECT` and contour/EXTRACT output write bulge 0 and are unaffected.
+
+  **(g) Snapping** on arc segments covers endpoint, midpoint, nearest, **centre** and **quadrant**
+  (the last two new for polylines), plus tangent/perpendicular where the engine already offers them
+  for arcs.
+
+  **(h) Grips:** an arc segment gets a midpoint grip that edits its bulge (AutoCAD behaviour).
+  **Deferred to phase 3.**
+
+- **Rejected alternatives.**
+  - **Widening the vertex stride 3→4 with a rename** (the originally-accepted (a)) — rejected on the
+    correction above: `std::vector<float>` stays `std::vector<float>` through the widening, so the
+    rename does not turn stride arithmetic into compile errors, and 401 reference sites would be
+    hand-audited with no compiler net.
+  - **A distinct `PolyArc` / arc-polyline entity kind with its own store** — rejected: ADR-035 (g)
+    measured this at ~600 sites across 11 files for exactly this store shape, and it still would
+    not satisfy the request, which is lines **and** arcs in **one** entity. A second store makes
+    JOIN's output ambiguous (which store does a mixed join land in?).
+  - **"Faked" arcs — arc mode inserts many short straight segments** — rejected: fails REQ-316's
+    tangent-arc, arc-centre-snap and DXF-bulge-round-trip criteria, bloats every file, and is not
+    editable as a curve. It would be redone as this ADR.
+  - **Bump `kGsFormatVersion`** — rejected: the strict version-equality check would reject older
+    files; additive tolerant keys keep them loadable (the ADR-020 (e) reasoning).
+
+- **Consequences.** The polyline vertex store and its two shadow copies gain a parallel
+  `userPolylineVertsBulge` array, mirrored at the ~6 vertex-mutation sites; one pure `BulgeArc`
+  helper enters `util/geom2d` with tests; ~12 consumer sites gain an `if (bulge != 0)` arc branch,
+  and *every modify command names the arc case or deliberately refuses it* as an acceptance
+  condition; POLYLINE grows `Arc`/`Line` sub-modes and arc-option parsing; JOIN's edge walk carries
+  bulges; the DXF importer's tessellation fallback is removed and the exporter gains group 42;
+  `.gs` gains an additive bulge array with **no version bump**; `docinvariants` gains
+  `userPolylineVertsBulge.size() * 3 == userPolylineVerts.size()` and "every bulge is finite".
+  **Blast radius acknowledged** — this touches
+  the two big command files, the renderer, all of IO, snapping, picking, extents and the invariant
+  checks — which is why it is split into four independently shippable increments, each passing
+  Verification on its own:
+  1. **Storage + POLYLINE arc mode + render + DXF/`.gs` round-trip.**
+  2. **Snap + pick + extents + length/area + Properties** on bulge segments.
+  3. **JOIN of lines + arcs**, and arc-segment grips.
+  4. **TRIM / OFFSET / FILLET / CHAMFER** of bulge polylines.
+
+- **Out of scope and not designed for:** spline / fit-curve / smoothed polylines; polyline segment
+  width and taper (DXF group 40/41); variable global width; arc segments in 3DPOLY; DWG *write* of
+  bulges beyond what ADR-041's R2004 writer already supports.
+
+### ADR-048 — The kernel's freeform surface: a hand-rolled minimal NURBS patch, numerically integrated; REQ-315 delivers loft then sweep   (2026-09-03, accepted)
+
+- **Status:** accepted (2026-09-03, D-2026-09-03-b). The representation (NURBS), its scope (a minimal
+  subset), its implementation (hand-rolled, in-tree), its mass-property method (numerical quadrature)
+  and the delivery order (loft before sweep) were each explained to the user in plain English and the
+  recommendation accepted. This is the "separate REQ-315, separate ADR revision" ADR-046's delivery
+  order named as item 8, and it resolves ADR-046's open question *"freeform surfaces (blocks
+  REQ-315)"*. Backs **REQ-315**. GitHub issue #147, Phase 4 of #120. No code has landed under this ADR
+  yet — the increments are filed separately, loft first.
+
+- **Context.** REQ-315 (sweep and loft) has been accepted-but-blocked since 2026-09-02. ADR-045 (b)
+  built the kernel on *analytic faces*: every face is a plane, cylinder, cone, sphere or torus, so
+  volume and area are closed-form and do not drift when the display changes. ADR-046 established that
+  extrude and revolve of a line-and-arc profile stay inside those five kinds, and delivered analytic
+  Booleans in increments. But a **general swept or lofted surface is none of the five** — dragging a
+  profile along a curved 3D path, or skinning between two dissimilar profiles, produces a smooth
+  freeform sheet. ADR-046 deferred *how the kernel represents that* as an explicit open question,
+  parked REQ-315, and said sweep / loft are not built until it is answered. This ADR answers it.
+
+  D-2026-09-02-i already opened the one crack in ADR-045 (b)'s closed-form rule: a face bounded by a
+  procedural intersection curve (Boolean increment B2b-2) is integrated by **adaptive numerical
+  quadrature** to a tolerance far inside REQ-101's ±0.01 ft, because the cylinder∩cylinder quartic
+  has no elementary integral. A NURBS face is the second citizen of that same carve-out.
+
+- **Decision.**
+
+  **(a) The freeform surface is a NURBS patch — `SurfaceKind::Nurbs`.** A new sixth `SurfaceKind`
+  carries a **rational tensor-product B-spline patch**: degree `pu, pv` (each ≤ 3), knot vectors
+  `Uu, Uv`, and an `(nu × nv)` grid of control points each with a weight (`std::vector` of
+  `{ucs::Vec3 P; double w;}`, row-major). Its `frame` (an `ucs::Ucs`, per ADR-045 (h)) is the patch's
+  local frame; control points are stored in that frame so a patch at survey-coordinate magnitude is
+  built from small numbers (ADR-045 (g)). Evaluation is Cox–de Boor basis functions and the standard
+  rational patch sum `S(u,v) = Σ Nᵢ(u)Nⱼ(v)wᵢⱼPᵢⱼ / Σ Nᵢ(u)Nⱼ(v)wᵢⱼ`; the first derivatives come from
+  the same recurrence for the surface normal and the tessellation grid.
+
+  **(b) Minimal subset — only what loft and sweep generate.** Degree is capped at 3 per direction;
+  weights are non-unit **only** where a lofted or swept *circular arc* profile edge requires them
+  (a quarter circle is exact as a rational quadratic). Patches are **untrimmed** — a face's boundary
+  is its four patch edges, and the patch is split at any internal seam into faces that each bound
+  normally, exactly as ADR-045 (d) splits a cylinder into two half-faces and a sphere into two.
+  **Explicitly not built:** trimmed NURBS (a hole cut in the middle of a patch), degree > 3,
+  surface–surface intersection *against* a NURBS face (so a NURBS solid is not yet a Boolean
+  operand), and NURBS *curve* edges (`CurveKind` is unchanged — a loft/sweep between line-and-arc
+  profiles has line, arc and ellipse edges only, and the profile-to-profile "rail" edges are lines
+  or arcs of the profiles themselves). Each of these becomes its own decision if a later feature
+  needs it.
+
+  **(c) Hand-rolled, in-tree.** The basis functions, patch evaluation, derivatives, bounding box and
+  adaptive tessellation are written in this repository — either extending `src/util/brep.cpp` or a
+  sibling pure module `src/util/nurbs.{hpp,cpp}` beside it — with direct unit tests, no graphics.
+  **No third-party NURBS or geometry library.** REQ-300, ADR-045's alternative (3) and ADR-046's
+  rejected alternatives all already refused a foreign kernel; a NURBS *evaluator* (as opposed to a
+  NURBS *modeller* with trimming and intersection) is a bounded, well-documented few hundred lines,
+  and the project's dependency policy (project.md §7) answers "can this be done simply in-tree?" with
+  yes.
+
+  **(d) A NURBS face's volume and area are numerically integrated.** ADR-045 (b) as amended by
+  D-2026-09-02-i already says a face bounded by a non-analytic curve falls back to adaptive
+  quadrature; this ADR widens that clause to read *a face whose surface is `SurfaceKind::Nurbs`, or
+  whose boundary loop contains a procedural intersection edge, is integrated by adaptive numerical
+  quadrature* to a tolerance far inside REQ-101's ±0.01 ft. The divergence-theorem volume integrand
+  (∫ x·n dA over the face, summed over the shell) is evaluated on a Gauss–Legendre grid refined
+  until it converges; area is ∫ |Sᵤ × Sᵥ| du dv the same way. **The quadrature grid is independent
+  of the display chord tolerance** — tessellation quality is still not part of the model (#120).
+  ADR-045 (e)'s two-reference-point closure check still applies and still catches a lofted shell
+  that does not actually close.
+
+  **(e) `.gs` gains a `SurfaceKind::Nurbs` encoding and bumps `kGsFormatVersion` 3 → 4.** The patch
+  serializes its degrees, knot vectors and weighted control net as additive JSON keys under the
+  surface object. This is a geometry kind an older reader cannot tolerate (it would not know the
+  face's shape at all), so — as with the B2b-1 ellipse bump (2 → 3) and the B2b-2 procedural-curve
+  bump (already 2 → 3; this is the next integer) — `kGsFormatVersion` goes to **4**. A drawing with
+  no NURBS face still serializes byte-identically to a version-3 build. A malformed patch (knot
+  vector not non-decreasing, control count disagreeing with knots and degree, non-finite weight) is
+  refused on load with the kernel's own reason (REQ-201), not clamped.
+
+  **(f) Loft is delivered before sweep.**
+  - **Loft (increment 1)** — a closed solid skinned between **two or more coplanar-or-not planar
+    profiles**, each a closed loop of line / arc / ellipse edges with the **same edge count**
+    (matched in order; a divided-profile / point-cap loft is out of scope for increment 1). Each
+    corresponding pair of profile edges spans one NURBS patch (a ruled patch for a straight span, a
+    rational patch where a profile edge is an arc); the profiles themselves cap the ends as planar
+    faces. Volume is checked against hand-computed prism / frustum / barrel values within REQ-101.
+  - **Sweep (increment 2)** — a single closed planar profile run along an arbitrary 3D path (a line,
+    an arc, or a bulge polyline), the profile's orientation carried by a **rotation-minimizing frame**
+    (double-reflection method) with an **optional constant twist** and an optional "keep profile
+    normal to path" vs. "keep profile vertical" choice. A straight path is the existing extrude
+    (asserted to agree); a circular-arc path with the profile in the plane of the arc is a torus /
+    revolve (asserted to agree where analytic); every other path produces NURBS side faces.
+  - Each increment is its own `workshop/tasks/` entry and its own PR, exactly as REQ-314's seven
+    increments were.
+
+  **(g) A loft / sweep result stores topology only.** Like the Booleans (ADR-046 (e)), a feature
+  result carries no recipe by default; it may optionally record `{profile entity ids, path entity
+  id, parameters}` for future parametric edit, never consulted by `Validate`, `ComputeMassProperties`
+  or `Tessellate`. Operands (the source profiles / path) are consumed only after the result validates
+  (ADR-046 (d)), as one undo step (REQ-314 acceptance, unchanged).
+
+- **Rejected alternatives.**
+  - **A tessellated freeform surface** (store the loft/sweep as a triangle mesh face). This is the
+    fallback ADR-046's open question named. Rejected for the same three reasons ADR-045 alternative
+    (2) rejected a faceted B-rep: the volume misses REQ-101 without an enormous facet count, the file
+    grows by orders of magnitude, and tessellation quality becomes part of the model — which #120
+    forbids in as many words. The user weighed this and chose NURBS.
+  - **A full general NURBS modeller now** (arbitrary degree, trimmed patches, NURBS–NURBS
+    intersection so a lofted solid is a Boolean operand). Rejected as speculative: loft and sweep
+    generate none of it, it multiplies the test surface, and CLAUDE.md §7 forbids an abstraction
+    without two present uses. Added incrementally if a real feature needs it.
+  - **Vendor a NURBS library** (OpenNURBS, tinynurbs, …). Rejected: REQ-300 dependency discipline and
+    the standing in-tree-kernel commitment (ADR-045, ADR-046). An evaluator is small enough to own.
+  - **Approximate loft with analytic faces** (fit a cone / cylinder frustum between each profile pair
+    and refuse the rest). Rejected: it silently mis-reports a barrel or a twisted hull as a straight
+    frustum, the REQ-201 failure the analytic-Boolean phasing exists to avoid, and it does not
+    generalise to sweep at all.
+
+- **Consequences.**
+  - `SurfaceKind` gains `Nurbs`; `Surface` gains the patch payload (degrees, knot vectors, weighted
+    control net) — additive, defaulted, never set by the seven primitives or by extrude / revolve /
+    slice / Boolean.
+  - `src/util/brep.cpp` (or a new `src/util/nurbs.*`) gains: Cox–de Boor basis, rational patch
+    evaluation + first derivatives, adaptive tessellation, an adaptive Gauss–Legendre area / volume
+    quadrature, and a patch validator. All graphics-free, all directly unit-tested (ADR-045).
+  - `brep::ComputeMassProperties` routes a `Nurbs` face (and, already, a procedural-intersection
+    face) through the quadrature path; every analytic face keeps its exact closed form.
+  - The command layer gains `LOFT` then `SWEEP`, each in the typed / prompted shape the primitive and
+    REQ-314 commands use, each one undo step.
+  - `io/GsMigrate.hpp` `kGsFormatVersion` → **4**; `.gs` reader/writer gain the `Nurbs` surface
+    encoding; CI's format-version check updates.
+  - **No renderer change of substance** — a NURBS face tessellates through REQ-313's cached path and
+    the existing GL; isolines on a NURBS face are iso-parameter curves from the same evaluator
+    (REQ-313 isoline precedent). REQ-100 profile (d) is measured on a scene with loft/sweep solids
+    and must still hold.
+  - DXF / DWG export is unchanged — ADR-045 (i) already excludes every `CadSolid` with a named,
+    counted message.
+  - **Still not addressed:** trimmed NURBS; a NURBS solid as a Boolean operand; multi-loop / divided
+    profiles; point-capped loft; fillet / chamfer / section / moments (#120 Phases 5–6); interactive
+    3D placement and grips for a loft / sweep result (#120 Phase 5).
+
+- **Delivery order:**
+  1. **Loft** — `SurfaceKind::Nurbs`, the evaluator, the quadrature, `.gs` v4, and `LOFT` between
+     two-or-more equal-edge-count planar profiles.
+  2. **Sweep** — a profile along a line / arc / bulge-polyline path with a rotation-minimizing frame
+     and optional twist; agreement asserted against extrude and revolve where the path is analytic.
+### ADR-050 — POLYSOLID: offset-and-mitre in the kernel   (2026-09-03, accepted)
+- Context: REQ-317 asks for a wall swept along a picked path. ADR-045 settled how a *primitive* is
+  built — a formula, a frame, a closed shell — and ADR-046 settled the feature operations that cut
+  and combine finished solids. A polysolid is neither: it is the first builder whose output topology
+  depends on the length and shape of its **input path** rather than on a fixed template or on two
+  operands. What has to be decided before any of it is written is where the corner geometry lives.
+- Decision:
+  (a) **The sweep lives in the kernel as `brep::MakePolysolid`, alongside the seven `MakeX`
+  builders, and takes a path rather than an entity.** Its input is a frame, a list of straight and
+  arc segments in that frame's plane, a closed flag, a width, a height and a justification — plain
+  geometry, no document, no `CadPolyline`, no entity index. The `O`bject option is therefore a
+  **command-layer conversion** that reads an entity and produces that path, which is what lets a
+  clicked path and a converted Line reach exactly one builder. It is the same argument ADR-045 (b)
+  made for the UCS supplying orientation: the kernel gets geometry, and the command layer translates.
+  (b) **Corners are MITRED, by offsetting the path to each side and intersecting adjacent offsets.**
+  The tempting alternative — one box per straight run, one cylinder patch per arc — is far easier
+  and is wrong three ways at once: the runs **overlap** at every bend, so the volume double-counts
+  every corner; the drawing holds N objects where the user drew one, so a single MOVE or ERASE
+  cannot address the wall; and the overlap is invisible in the shaded view, which makes it exactly
+  the silent wrong answer REQ-201 exists to prevent. Line/line intersects two offset lines, line/arc
+  a line and a circle, arc/arc two circles — three cases, all closed-form, none iterative. A
+  **smooth** join is taken directly rather than solved for, because its two offsets are tangent there
+  and the intersection is a double root; every arc the command draws is tangent to the run before it,
+  so that is the common path and not the exception.
+  (c) **A corner that cannot be mitred is REFUSED by name, never approximated.** Three shapes have
+  no wall: a bend so sharp that the inner offset runs back past its own segment, a segment shorter
+  than the mitre its neighbours demand, and an arc whose inner offset radius reaches zero — the wall
+  turning inside out around the curve. Each gets its own `Problem` and creates nothing. A **path that
+  crosses its own run** is refused too, and the asymmetry with ADR-045 (f)'s self-intersecting torus
+  is deliberate: a torus that passes through itself is a shape people draw on purpose, so it is built
+  and only its mass properties are withheld, where a wall crossing its own run is an authoring
+  mistake. That check is exact for straight-segment paths, where a rail is a polygon, and is
+  deliberately **not applied** when the path contains an arc: testing a curve by its chords would
+  refuse walls that are perfectly fine, and a false refusal is strictly worse than no check. The
+  general case is the same Phase 4 self-intersection test ADR-045 already defers.
+  (d) **A curved run produces a CYLINDER patch, not a torus, and no new surface kind is added.**
+  Extruding a planar arc perpendicular to its own plane sweeps a cylinder; a torus would arise only
+  if a round *profile* were swept along a curve, which is not what a polysolid does. Recorded because
+  the opposite was assumed out loud while scoping this, and it is the difference between reusing a
+  surface the kernel already integrates in closed form and deriving a new one. It is also why
+  REQ-317 is not blocked behind REQ-315's freeform-surface question.
+  (e) **`Surface::inward` is REUSED, not reinvented.** A curved wall's inner face has its material on
+  the far side from its own axis — the same situation as the wall of a bore, which REQ-314 B2a
+  already added that flag for (D-2026-09-02-c). This work was first written with a `sense` field of
+  its own and that duplicate was removed on discovering the existing one: two flags meaning the same
+  thing is the disagreement ADR-045's original "no reversed flag" rule was trying to prevent, and it
+  would have been that rule's failure mode rather than its absence.
+  (f) **The tessellator is NOT touched.** A wall's cap is non-convex the moment its path bends, and
+  annular when the path closes on a circle — and REQ-314 had already taught the plane branch both:
+  a convex ring is fanned from its centroid, a non-convex one is ear-clipped, and a two-loop face is
+  stripped by angle about the hole. This is the first caller to reach those from a **swept** solid
+  rather than a sliced or booleaned one, so the pairing is pinned by a test instead of by new code.
+  (g) **The recipe carries the PATH — the first recipe whose length is not fixed.** ADR-045 (f) keeps
+  the topology as the stored truth and the recipe as description, and that split is what makes this
+  safe: a variable-length recipe field cannot change any answer, because validity, mass properties
+  and tessellation read the topology and never the recipe. Written additively to `.gs`, so a file
+  with no polysolids is byte-identical.
+  (h) **`PLINE`'s arc rule is reused: an arc segment is TANGENT to the segment before it and ends at
+  the picked point.** That determines the arc uniquely from one pick, which is what makes it a
+  gesture rather than a form to fill in. An arc asked for as the **first** segment has no incoming
+  direction and is refused by name rather than defaulting to some direction the user did not choose.
+  A converted POLYLINE brings its arc segments with it: REQ-316 gave the polyline store per-vertex
+  bulges, and `tan(theta/4)` converts to `PathSeg::sweep` as `4*atan(bulge)` — sign and all — so the
+  two stores share the DXF convention rather than each having its own.
+- Consequences: `brep` gains one builder, one `PrimitiveKind`, two recipe fields and the named
+  refusals of (c); no new surface kind, no new curve kind, and no change to the tessellator, the
+  integrals or the validity checks. `.gs` gains an optional recipe key and three settings keys
+  (`polysolidWidth`, `polysolidHeight`, `polysolidJustify`, remembered between invocations the way
+  AutoCAD's PSOLWIDTH and PSOLHEIGHT are); no `kGsFormatVersion` bump. **Still not addressed:**
+  sweeping an arbitrary profile along an arbitrary 3D path (REQ-315, blocked on the freeform-surface
+  question in ADR-046), and editing a placed polysolid's path — #120 Phase 5, alongside transforming
+  any solid at all.
+  Note that this project's `CadPolyline` store is **straight-only** — it carries no bulges — so the
+  `O`bject option's curved paths come from `Arc` and `Circle` entities, not from polylines.
+
+### ADR-049 — Sub-object picking: one shared pick, an expiring reference, and the projection as part of the answer   (2026-09-03, accepted)
+
+- **Context.** REQ-318 needs the system to name the face, edge or vertex under the cursor.
+
+  **The starting point was not what issue #148 said it was, and the correction is the reason this
+  ADR has the shape it does.** The issue's "existing foundation" section, and the first draft of this
+  decision, both rested on PR #180's finding that `src/util/ray3d.hpp` had ray/plane and ray/segment
+  but no ray/triangle — concluding that solid faces were unpickable. PR #180 was written
+  2026-08-31, *before* REQ-313 landed on 2026-09-01, and it was quoted without being re-checked
+  against `beta`. In fact object snapping has picked solid faces, edges and vertices since REQ-313:
+  `CadSnap.cpp` already had a Möller–Trumbore test over the display cache's triangle buffer
+  (`RayHitSolidFace`), the `triFace` lookup, the `ClosestPointOnSurface` projection, a ray/edge
+  approach (`ClosestRayPointToEdge`) and a padded bounds reject (`RayNearBounds`).
+
+  So the real problem was never "can we hit a triangle". It was that all of that was file-private,
+  and a second caller could only re-implement it. Three things then had to be decided.
+
+  **(a) One pick, shared — the snap path is refactored onto it rather than left alongside.** A
+  second implementation is a second set of numerics, and the two drafted here already disagreed: the
+  snap copy used an absolute determinant epsilon (`1e-12`) and exact barycentric bounds, while the
+  shared test is scale-relative with a small outward barycentric slack. On the hairline crack
+  between two faces of the tessellation — which is deliberately *unwelded*, because "a solid's edges
+  are creases" — the snap copy falls through and reports nothing where the shared one reports a hit.
+  A user would have seen the snap marker and the sub-object highlight name different things under
+  one cursor, and #156's "UCS from the picked face" would have aligned to a face object snap said
+  was not there. The scale-relative epsilon is also the one that survives survey coordinates: an
+  absolute threshold rejects a legitimate 0.25 ft triangle at easting 2e6.
+
+  `ray3d::RayTriangleIntersect` is therefore the only ray/triangle test, `solidpick::RayNearBounds`
+  the only broad phase, and `CadSnap` calls both. The alternative — leave both and document the
+  split — was rejected: CLAUDE.md §7 names duplicate architecture directly, and the divergence above
+  is what it looks like in practice.
+
+  **(b) A sub-object reference is an index PLUS the identity of the solid it came from, and it
+  EXPIRES rather than re-binding.** This is the part that is genuinely new, since snapping returns a
+  *point* and never has to remember what it hit. The only names the kernel offers are indices into
+  `Solid::faces` / `::edges` / `::vertices`. Measured: two identical `Make*` calls produce
+  byte-identical topology, and an index keeps its meaning across an edit that *preserves* the
+  topology — a box's face indices survive a height change, a length change and a frame translation,
+  compared face-by-face on surface kind, outward normal and the `inward` flag. It loses its meaning
+  across anything that changes the counts: a cone frustum collapsing to an apex goes 4 faces → 3, and
+  every boolean rebuilds wholesale.
+
+  The reference therefore pairs the index with a `weak_ptr<const brep::Solid>`, following the
+  precedent `CadSolidTessellation` already sets for its cache key — "a raw key could be matched by a
+  NEW solid allocated at the freed address", and the cache would then draw the wrong shape while
+  looking plausible. A topology-changing edit lets the reference expire. A persistent per-sub-object
+  id minted at construction was considered and **deferred, not dismissed**: it is what a mature
+  kernel does and the only thing that survives a boolean, but it changes every builder and every
+  operation in `brep.cpp` for a benefit Phase 5 does not need. If a later phase needs a selection to
+  survive a boolean, that is the decision to revisit; this one does not preclude it.
+
+  **(c) The projection is part of the answer — and it fixes one error, not both.** The triangle
+  locates the sub-object; `ClosestPointOnSurface` (faces) and `ClosestPointOnEdge` (edges, clamped to
+  the edge's own extent, so an arc answer is on the circle) place the point. At the shipping chord
+  tolerance a raw triangle hit sits **0.00986 ft** off a cylinder's true surface — *inside* REQ-101's
+  ±0.01 ft, which is exactly the trap, while spending 98.6% of the budget before any other error
+  joins in.
+
+  The sharper half of this decision, and the one an earlier draft got wrong: **the projection
+  removes distance-from-surface error and does nothing whatever for position-along-surface error.**
+  A test that asserts only the picked radius on a cylinder therefore cannot fail — the projection
+  rescales *any* nearby point to exactly `r` — so the acceptance asserts the picked **azimuth** as
+  well. The same distinction sets the module's precondition: the display buffers are `float`, which
+  is adequate only because storage coordinates are document-local and so stay at model magnitude
+  (REQ-101's whole reason for being local). *(ADR-054, 2026-09-08: authoritative storage widens to
+  `double`; display buffers stay `float` and this document-local precondition on them is unchanged.)*
+  Fed triangles at absolute state-plane magnitude they
+  quantize to 0.125 ft, and at oblique incidence that displaces the answer *along* the surface by
+  `d·tan(angle from normal)` where the projection cannot see it. Both cases are pinned in the tests
+  with identical ray geometry, one passing and one failing.
+
+  **(d) Precedence is vertex → edge → face, bounded by occlusion measured against the nearest
+  TRIANGLE.** Every vertex lies on an edge and every edge on a face, so a pure nearest-hit rule makes
+  a vertex unpickable — the same argument object snapping already makes for preferring an endpoint
+  to a nearest-point. Each kind has its own screen-derived tolerance; zero means "do not offer this
+  kind". A candidate more than its own tolerance behind the front surface is refused, or a click on a
+  near face selects the back silhouette. The baseline is the nearest *triangle* and not the nearest
+  usable *face*: a triangle whose face id is out of range still proves a front surface is there, and
+  using the next valid face's depth would put the baseline on the far side of the solid.
+
+  **(e) The pick normalizes the ray it is given.** `RayTriangleIntersect`'s parameter scales as
+  `1/|dir|` while `ray3d::RayPointDistance`'s scales as `|dir|`, so on a non-unit ray a face depth
+  and a vertex depth are a factor of `|dir|²` apart and the occlusion test in (d) is meaningless
+  rather than merely imprecise. A caller that builds its ray by unprojecting a near and a far point —
+  `dir = far - near`, the natural construction — would get no vertex or edge pick at all. Normalizing
+  on entry was chosen over documenting a precondition because the failure is silent.
+
+  **(f) The pick is a pure module in the Domain layer, in the solid's own coordinates.**
+  `src/util/solidpick.{hpp,cpp}` depends on `brep` and `ray3d` and nothing else — no GL, no ImGui, no
+  `AppCommandState` — so precedence, occlusion and every refusal are decided in the test target
+  without a window (the ADR-002 pressure that already governs `brep`, `meshgeom`, `traverse` and
+  `hatch`). Note this moves the shared pick *out* of `src/viewport`: snapping is one consumer of the
+  query, not its owner. Coordinates are the solid's own storage coordinates and the caller converts
+  the ray; taking a world ray plus an origin offset would put the local/world seam inside a geometry
+  module, the class of error REQ-101's document-origin rebase exists to prevent.
+
+- **Consequences.**
+  - `CadSnap`'s solid pick changes behaviour slightly and deliberately: it now reports a hit on a
+    face/face boundary where it previously fell through, and it accepts small triangles at survey
+    magnitude that its absolute epsilon rejected. Both are fixes, and both are why the change is
+    recorded rather than done quietly.
+  - Issue **#156** becomes a thin consumer of the face answer, which is what PR #180 chose when it
+    deferred #156 onto #148.
+  - The pick sees one solid at a time, so occlusion between *different* solids is the caller's to
+    resolve by depth-ordering the per-solid answers; `Pick::rayT` is a distance for that purpose.
+  - A selection that must survive a boolean is not expressible. That is decision (b)'s accepted cost.
+  - **A process consequence worth recording.** This decision was first drafted on a stale premise
+    taken from a PR older than the code it described, and the error survived until review. The
+    cheap defence is the one that was skipped: a claim about what the codebase does not have is a
+    `grep` against `beta`, not a quotation.
+
+- **Out of scope and not designed for:** the selection *mode* and its store, the highlight treatment
+  (including whether a sub-object highlight may be occluded — the selection overlay is deliberately
+  never depth-tested, which is right for 2D linework and wrong for a solid's far-side face, and that
+  wants a screenshot rather than an argument); grips; gizmos; fillet and chamfer; picking a
+  sub-object of a mesh or a TIN surface, neither of which has face identity (ADR-026 (g), REQ-070).
+
+### ADR-051 — ACIS 3D-solid import: SAT-only, analytic primitives that fit the existing rectangular face model, refuse otherwise   (2026-09-05, accepted)
+
+- **Context.** Issue #299: vendor block-library `.dwg`/`.dxf` files (e.g. Plant 3D piping symbols) commonly
+  hold their only geometry as an ACIS `3DSOLID` entity — LibreDWG decrypts the container but exposes only
+  the raw ACIS record stream (`Dwg_Entity__3DSOLID::acis_data`), never tessellating it. Three questions
+  needed a recorded answer before any code, per CLAUDE.md's SPEC GAP process:
+
+  **(a) SAT vs. SAB.** `_3DSOLID_FIELDS::version` (DXF 70) distinguishes ACIS v1 text (SAT) from v2+
+  binary (SAB) framing of the same record model. **Decision: SAT only for the first increment.** SAT's
+  tokens are whitespace-delimited text, trivial to hand-parse; SAB uses typed binary tokens and would
+  double the parser surface for the same topology-interpretation logic. Deferred to **#301**, which reuses
+  whatever record-interpretation code this ADR's implementation produces.
+
+  **(b) Surface/curve scope.** ACIS analytic surfaces (`plane-surface`, `cone-surface` — which also
+  encodes a cylinder as the zero-half-angle case, `sphere-surface`, `torus-surface`) map directly onto
+  GoSurvey's existing `brep::SurfaceKind` (`Plane`/`Cylinder`/`Cone`/`Sphere`/`Torus`, ADR-045). ACIS
+  free-form surfaces (`spline-surface`) and derived surfaces (blends, sweeps, lofts not already reduced to
+  an analytic type by the file writer) have no such direct mapping and would route through
+  `SurfaceKind::Nurbs` (ADR-048), which needs its own knot/control-point/trim design. **Decision: analytic
+  primitive surfaces only for the first increment.** Deferred to **#300**.
+
+  **(b-1) Within "analytic primitives", plane/cylinder/cone ship first, and only their FULL-revolve
+  form; sphere/torus, and a PARTIAL cylinder/cone revolve, are each a fast-follow of this same
+  feature.** A full revolve (two full-circle rim edges, no seam) has a fixed `u` span — `[0, 2*pi)` —
+  independent of the loop's actual geometry, so it needs no derivation beyond recognizing the shape.
+  A partial revolve (a seam line, an arc, a seam line, an arc) is an equally recognizable loop shape,
+  but its `u` span is NOT fixed — it has to come from the seam edges' actual angular position in the
+  face's own frame, a materially different derivation this increment does not implement. **Review of
+  this very change caught a first draft that recognized the partial shape but then defaulted its span
+  to the full revolve's `[0, 2*pi)` regardless — a real defect (silently over-reporting area/volume on
+  a partial cylindrical wall) that would have shipped invisibly, since `Validate` checks topology, not
+  a face's span against its loop's actual geometric extent.** Landing the correct derivation needs its
+  own fixture that actually exercises a non-full span, which this ADR's revision does not yet have;
+  the honest fix is to ship only the shape this increment can prove correct (a hand-authored full
+  cylinder fixture, ADR-051's own sanctioned approach) and refuse the partial shape by name, rather
+  than land an unverified formula. A sphere's loop can pinch to a point at a pole (a degenerate
+  "vertex" the loop's edges meet at rather than a fourth corner) and a torus has its own seam/pole
+  combinations; both need a genuinely different loop-shape recognizer than the cylinder/cone one, not
+  a parameter change to it. Rather than risk a hastily-generalized recognizer being subtly wrong in
+  exactly the cases that are hardest to unit test by hand, **this increment ships plane and the
+  full-revolve form of cylinder/cone only**; sphere, torus, and the partial-revolve span derivation are
+  each refused by
+  name ("recognized but not yet mapped") and tracked as the next increment of #299 itself, not a new
+  issue — the parser, topology walk and refusal plumbing this ADR builds are unchanged by adding them.
+
+  **(c) The face-boundary mismatch, and why it forced a second decision (issue #302).** A general ACIS
+  face's boundary is an arbitrary closed loop of edges in parameter space. `brep::Face` (ADR-045) instead
+  carries a **rectangular** parametric span (`uStart/uEnd/vStart/vEnd`) — every existing primitive and
+  Boolean-result builder produces faces whose boundary is exactly one such rectangle, and `Validate`, mass
+  properties and tessellation all assume it. Making the kernel accept a general trimmed loop is a real
+  architectural extension (it touches every one of those consumers, for every face kind, not just the ones
+  ACIS exercises) — far beyond an importer's scope, and requiring a REQ/ADR of its own. **Decision:
+  #299 accepts only ACIS solids whose every face's boundary reduces to that rectangle** (checked by
+  walking each face's loop, converting vertices to the surface's own parameters, and confirming the loop
+  is exactly the surface's iso-parameter rectangle at those bounds, with at most a hole loop the kernel's
+  existing "extra loop" convention already supports). Anything else — an irregularly trimmed face, a loop
+  that doesn't close onto an axis-aligned parameter rectangle — is refused by name. General trimmed-face
+  support is tracked separately as **#302** and is not a prerequisite for #299.
+
+  **(d) Unsupported content: refuse, never approximate.** Matches the export precedent already recorded
+  (D-2026-09-01-b, which refuses to tessellate a GoSurvey solid into DWG rather than write a lossy
+  `3DSOLID`) and REQ-201 (no silent data loss). Every refusal names the entity handle and the specific
+  record/face that could not be represented — an empty block definition with no message is exactly the
+  failure issue #299 was filed to fix, and a silently-approximated one would be worse: a shape that reads
+  as authoritative but disagrees with the source file.
+
+- **Decision.**
+  1. A new pure, dependency-free module, `src/util/AcisSatParser.{hpp,cpp}` (Domain layer, no LibreDWG/GL/
+     ImGui dependency — same ADR-002 pressure as `brep` itself), tokenizes a SAT text stream into records
+     keyed by their `$n` position, and resolves the body → lump → shell → face → loop → coedge → edge →
+     vertex → point graph into a `brep::Solid` by direct translation (ACIS already gives explicit topology,
+     so this is a graph translation, not a primitive-recognition problem) — checking (c)'s rectangle
+     constraint per face and returning a per-face/per-entity `Problem`-style reason on the first mismatch.
+  2. `src/io/LibreDwgCad.cpp`'s `ImportObject` gains a `DWG_TYPE__3DSOLID` case (alongside the existing
+     flat dispatch chain) that refuses immediately on `version` indicating SAB, then hands `acis_data` to
+     the new parser; a refusal reaches the same `NoteSkip` mechanism the dispatch's fallthrough already
+     uses, so the entity is reported, not silently dropped.
+  3. `CadBlockContent` (`src/util/cadblock.hpp`) gains a `solids` member alongside its existing `meshes`,
+     and `CadBlocks.cpp`'s capture/load-back/`DrawingHasCaptureableGeometry` functions treat it the same
+     way they already treat meshes — closing the round-trip gap issue #299 named for *any* solid-bearing
+     block (including a native GoSurvey solid WBLOCK'd), not only an ACIS-derived one.
+
+- **Consequences.**
+  - A real-world file using free-form/blend surfaces, SAB encoding, or a non-rectangular trim (e.g. a
+    filleted edge written back as an analytic-looking but irregularly-bounded face) imports nothing from
+    that `3DSOLID` and reports why, rather than the silent empty result issue #299 was filed against.
+  - #300, #301 and #302 each build on this ADR's module/plumbing rather than duplicating it.
+  - `kGsFormatVersion` is unaffected: an imported solid becomes an ordinary `brep::Solid` with
+    `PrimitiveKind::None` (ADR-045's "no recipe" case, already handled — a Boolean result has the same
+    shape), so nothing about `.gs` serialization changes.
+
+- **Out of scope and not designed for:** SAB (#301); spline/blend/swept surfaces (#300); general trimmed
+  face boundaries (#302); DWG *export* of solids (unchanged, D-2026-09-01-b); ACIS `wire` bodies (curves
+  with no faces) and `sheet` bodies (open shells) — this ADR covers solid (`is_solid` lump) bodies only,
+  matching REQ-313's "the solid kernel" framing; a future issue would need to name wire/sheet import if
+  wanted.
+
+#### ADR-051 addendum — Civil 3D parts-catalog components have no portable geometry   (2026-09-10, accepted)
+
+- **Context (GitHub issue #369).** `BLOCKIMPORT` of `CS150_4in_WELD_NECK_FLANGE.dwg` logged
+  `skipped "3DSOLID(empty)" × 2`. A LibreDWG diagnostic confirmed the single `3DSOLID` has
+  `acis_empty=1`, `version=0`, `num_blocks=0` and **no ACDS handle** — there is no ACIS stream
+  anywhere in the file, inline or via the newer ACDS datastorage section (#366). The class table is
+  full of Civil 3D Pressure Pipes Network classes (`AECC_FITTING_STYLE`, `AECC_PRESSURE_PIPE_STYLE`,
+  `AECC_DISP_REP_FITTING`, …). The flange's shape is **generated at open time** by Civil 3D's
+  proprietary Parts Catalog engine from a parametric catalog reference — exactly the ADR-026
+  situation for Plant 3D's `AcPp*` objects: unreachable by any third-party reader, not now and not
+  with a native codec. There is nothing to parse.
+- **Decision.**
+  1. The importer detects the signature — a payload-less `3DSOLID` (the `acis_empty` branch of
+     `ImportAcisSolid`) **and** any `AECC_*` entry in `Dwg_Data::dwg_class` — and emits
+     `3DSOLID(Civil3D parts-catalog part, no portable geometry)` through the same `NoteSkip` path,
+     so the log explains the real cause instead of reading like a decode failure. Detection is
+     conservative: both signs are required, so an ordinary drawing with a genuinely empty legacy
+     `3DSOLID` still logs `(empty)`.
+  2. **`BLOCKIMPORT` keeps the block's other 2D / annotation content** and names the solid as
+     skipped; it does not refuse the whole block. This matches ADR-051 (d) (an unsupported ACIS
+     solid is refused by name while the rest of the file imports) and ADR-026's lower-fidelity-plus-
+     explicit-refusal posture. Refusing the block outright would discard usable centerlines and
+     labels and be stricter than the importer is anywhere else (D-2026-09-10-b).
+- **Out of scope, unchanged:** reimplementing or vendoring Civil 3D's Parts Catalog engine
+  (impossible without Autodesk's SDK, ADR-026); the ACDS/SAB work in #366/#301, which is the
+  distinct case of files that *do* carry portable ACIS data in the newer storage format.
+
+#### ADR-051 addendum — the real ACIS SAT schema, and standalone `.sat` import   (2026-09-10, accepted)
+
+- **Context (GitHub issue #473, D-2026-09-10-c).** ADR-051 (a) built `AcisSatParser` against a
+  *simplified, hand-authored* record schema because no real ACIS corpus existed to test against.
+  One now does: `samples/CJ_4in_WELD_NECK_FLANGE.sat`, a 4" weld-neck flange exported from Civil 3D
+  with `ACISOUT` — 312 records, 16 analytic faces (12 cone/cylinder, 4 planar, two of them pierced
+  by an 8-bolt circle), one `body` `transform`. Real ACIS/ASM SAT differs from the simplified
+  schema in framing only: a leading `$attrib -1 $pattern` triple on every record, edge parameter
+  ranges, `I` unset-markers, `@n` length-prefixed strings, interleaved `color-adesk-attrib`
+  records, and a full cone/cylinder wall listed as **two single-edge rim loops** rather than one
+  two-edge loop.
+- **Decision.**
+  1. **A normalization pass, not a rewrite.** `NormalizeRealAcisSchema` detects a real-format stream
+     (a `body` whose second field is the bare id `-1`, not a `$` pointer) and rewrites each record's
+     fields into the simplified layout ADR-051 already documents — dropping the attribute/pattern/id
+     fields and the fields this importer never reads. Everything downstream (the topology walk, the
+     surface builders, ADR-052's general-trim support) is unchanged and still covered by the
+     hand-authored fixtures, which are detected as the simplified schema and left alone.
+  2. **The `body` `transform` is applied** to the finished solid (`p' = scale·R·p + t`), decomposing
+     the 3×3 into an axis/angle for `brep::Rotate` and using `brep::Scale` / `brep::Translate`.
+     Reflection or shear is refused (neither maps onto `brep`'s rigid transforms; REQ-201).
+  3. **Multi-hole planar faces** (a flat face pierced by a bolt circle) go in as an ADR-052
+     `Face::paramLoops` general trim loop — every loop projected into the plane's frame, the
+     largest-area loop taken as the outer boundary and wound CCW with holes wound CW. This is the
+     plane counterpart of the existing `BuildConeGeneralTrim`; a full cone/cylinder wall's two rim
+     loops are merged back into one two-edge loop for `BuildConeFace`'s full-revolve path.
+  4. **Standalone `.sat` import.** `BLOCKIMPORT` (and the Import Block file dialog) accept `.sat`.
+     The solid is **re-based onto the origin** — centred in X/Y, its lowest point at Z 0 — because a
+     `.sat` carries the model's absolute position from the drawing it was exported out of (the
+     `body` transform's translation, often thousands of units out). It is then **dropped straight
+     into the drawing** as an ordinary drawing solid, *and* a block definition named after the file
+     is kept. It is not placed via INSERT: `CadBlockContent::solids` is never drawn from a block
+     reference, and INSERT is a 2D command (it picks no Z), so it cannot position a solid in a 3D
+     scene. The user MOVEs the dropped solid into place — MOVE is 3D- and osnap-aware where INSERT
+     is not. Units are left neutral (`unitless`): a `.sat` header's millimetres-per-model-unit is
+     unreliable in practice (Civil 3D wrote 25.4 for a foot-scaled model), so the solid imports at
+     the file's own coordinates and the user scales it if needed.
+- **Out of scope.** A block-*reference* path for a `CadBlockContent::solids` entry — instancing it
+  on INSERT, or a 3D INSERT with a real Z pick — is future work, tracked in #473. Free-form /
+  spline / sphere / torus surfaces (#300); SAB binary (#301).
+
+### ADR-052 — General trimmed-boundary faces: an additive parameter-space loop, not a rectangle replacement   (2026-09-05, accepted)
+
+- **Context.** Issue #302 (split from #299/ADR-051 (c)): `brep::Face`'s boundary is today always the
+  surface's own iso-parameter **rectangle** — `uStart/uEnd/vStart/vEnd` — and every consumer (`Validate`,
+  mass-property quadrature, tessellation, sub-object picking) assumes it. ADR-051 (c) refused any ACIS
+  face whose loop is not that rectangle rather than guess at a general representation under an
+  importer's time pressure. Issue #305 asks for that representation decision on its own, design only, no
+  kernel code. `brep::Face` already carries `loops` — an ordered ring of 3D `Edge`/`EdgeUse` records
+  (`Line`/`Arc`/`Ellipse`/`Intersection`, ADR-045) — but today those edges are always constrained to trace
+  exactly the iso-parameter rectangle; `uStart/uEnd/vStart/vEnd` is carried explicitly alongside them
+  rather than derived from the loop, because for a rectangle the two must always agree and re-deriving
+  the span from the loop every time it's needed would be strictly more work for the same answer. The open
+  question is how to represent a loop that does **not** reduce to that rectangle.
+
+  Three sub-decisions, matching the issue's checklist:
+
+  **(a) Representation: additive field, not a replacement.** `Face` gains a new field —
+  `std::vector<std::vector<curveintersect::Vec2>> paramLoops` — index-aligned with `loops` (one 2D
+  polygon per 3D loop: `paramLoops[0]` for the outer boundary, further entries for holes, matching the
+  existing "extra loop is a hole" convention). **Empty `paramLoops` (the default) means the face is
+  unchanged: rectangle form, `uStart/uEnd/vStart/vEnd` is the authoritative boundary, exactly today's
+  behavior, byte-identical validation.** A non-empty `paramLoops` marks the face as **general form**;
+  `uStart/uEnd/vStart/vEnd` on a general-form face is retained anyway, but repurposed as a cheap
+  axis-aligned bounding box of `paramLoops[0]` — an optional fast-reject before the real point-in-loop
+  test in #307/#308/#309's implementations, not a second source of truth (a general-form face's bbox is
+  computed from its polygon, never authored independently, so the two can't disagree). This was chosen
+  over replacing the rectangle fields outright because every existing primitive and Boolean-result
+  builder (REQ-313/314/315) already emits valid rectangle-form faces; forcing all of them to also
+  populate a parameter polygon for a rectangle they already describe exactly would be churn with no
+  behavioral change, for dozens of call sites, to satisfy a consumer (ACIS import) that doesn't need it.
+
+  **(b) Rectangle stays the fast path.** No existing primitive or Boolean builder changes as part of this
+  ADR or its own implementation issue (#306): they keep emitting rectangle-form faces, and `Validate`,
+  mass properties, tessellation and picking keep using today's closed-form/rectangle-quadrature paths for
+  them unchanged. General-form handling in #307–#309 is an **additive branch** keyed on `paramLoops`
+  being non-empty, not a replacement of the existing code paths.
+
+  **(c) What bounds a general loop, and why not reuse `Edge` curve kinds directly.** `paramLoops`'
+  polygon is a **straight-line polyline in (u,v) space** — literally a sequence of `Vec2` points, closed
+  by wrapping back to the first. This is deliberately the narrowest option the issue offers ("an
+  arbitrary polyline of param-space points"), sized to what #310 (the first real consumer, ACIS import)
+  actually needs: ACIS coedges resolve to line, circle/arc, or ellipse curves (never the procedural
+  `Intersection` kind, which has no closed-form parameter-space projection and is not something an
+  imported file can produce), and REQ-314's precedent for those already gives a way to sample a curved
+  edge finely into (u,v) points at import time — the polyline is a **classification aid**, not the
+  boundary's geometric record. **The true 3D boundary curve stays the existing `loops`/`Edge` data**
+  (used for the shell's manifold "every edge twice" check, for rendering the actual edge, and as the
+  parameterization the surface evaluator maps through) — `paramLoops` exists only so #307's quadrature,
+  #308's tessellation clipping and #309's picking each have a fast, uniform "is this (u,v) inside the
+  face" test without every one of them re-deriving a point-in-loop test from `Edge` curve kinds
+  individually. A curved (`Arc`/`Ellipse`) boundary edge therefore contributes several polyline vertices
+  to `paramLoops` rather than one; the sampling density needed to keep classification error under
+  REQ-314's existing relative-1e-6 tolerance is an implementation detail for #306 (which builds the first
+  populated `paramLoops`) to pick and test against a known shape, not fixed by this ADR. Because
+  `paramLoops` never carries the authoritative geometry, an under-sampled polyline is a latent bug in a
+  later increment's numbers, never a silent loss of the imported shape itself — the exact curve is still
+  in `loops`.
+
+  **(d) Scope handed to follow-ups, in order.** This ADR decides representation only; no kernel code
+  changes here (issue #305's own "not in scope"). The accepted follow-up order is **#306** (add
+  `paramLoops` to `Face`, extend `Validate` for closed/simple/correctly-wound/nested-holes general loops,
+  decide `.gs` round-trip for a hand-built fixture) → **#307** (mass-property quadrature restricted to a
+  general loop's interior) → **#308** (tessellation clipped to a general loop) → **#309** (point-in-loop
+  sub-object picking) → **#310** (ACIS import stops refusing non-rectangular faces, wiring its coedge
+  data into `paramLoops`/`loops` per (c)). Each is independently reviewable and each can ship without the
+  ones after it still working (a `paramLoops`-bearing `Face` that #307 doesn't yet integrate over
+  correctly is a bug in #307, not a reason to hold back #306).
+
+  **(e) Interaction with `SurfaceKind::Nurbs` (ADR-048).** No special case needed. A `Nurbs` face already
+  repurposes `uStart/uEnd/vStart/vEnd` as the patch's parameter rectangle rather than an angular span
+  (ADR-048); `paramLoops` sits at the same level — a boundary within that surface's own (u,v) domain,
+  analytic or freeform alike. A trimmed freeform patch (the fully-general case a real kernel supports,
+  named in #302's own checklist) is therefore already representable as a `Nurbs` surface with a
+  non-empty `paramLoops`, with no further design decision required here; whether any near-term issue
+  actually builds one is separate from whether the representation supports it.
+
+- **Decision.**
+  1. `brep::Face` gains `std::vector<std::vector<curveintersect::Vec2>> paramLoops;` (default empty),
+     index-aligned with `loops`, per (a).
+  2. Empty `paramLoops` is the rectangle form and is byte-identical to today's behavior in every consumer;
+     non-empty is the general form and is handled by an additive branch in each consumer, never a
+     replacement of the rectangle-form path.
+  3. `paramLoops` holds only straight-line (u,v) polygons (outer + hole), used exclusively for
+     inside/outside classification; `loops`' existing `Edge` records remain the sole authoritative record
+     of the 3D boundary curve.
+  4. Implementation is sequenced #306 → #307 → #308 → #309 → #310, each its own issue/PR.
+
+- **Consequences.**
+  - No behavior change for any existing solid: every current primitive/Boolean builder leaves
+    `paramLoops` empty, so `Validate`/mass-properties/tessellation/picking see only the rectangle form
+    they already handle.
+  - #306–#310 each have an unambiguous, narrow scope with a clear "done" test, per (d).
+  - A face kind or trim shape ACIS (or any future importer) produces that cannot be reduced to a closed
+    polyline in (u,v) — e.g. a loop that is not a simple polygon once sampled — is still refused by name
+    at import time (REQ-201); `paramLoops` gives the importer a target to hit, not a guarantee every ACIS
+    face can hit it.
+
+- **Out of scope and not designed for:** any kernel code (issue #305 is design-only; #306 makes the first
+  code change); a general (u,v) *curve* record for `paramLoops` beyond straight polylines (deferred
+  indefinitely — no consumer needs it, per (c)); `Intersection`-kind boundary edges in a general loop
+  (no imported or generated content produces one yet); serialization details for a general-form face
+  (`.gs` field layout, version bump if any) — left to #306 to decide and record.
+
+### ADR-053 — Tilted polyline curve segments: a per-vertex normal side-car, split-on-export to DXF/DWG   (2026-09-07, accepted)
+
+- **Status:** accepted (2026-09-07), **all four increments delivered same day** (storage+JOIN,
+  render+pick, snap, DXF split-on-export + DWG bulge). Backs REQ-325. Phased delivery chosen by the
+  user, mirroring ADR-047's own four-increment delivery of the flat version of this same feature.
+  DWG's own tilted-ARC write path does not exist (issue #391, filed rather than built silently or
+  left unnoted) — DWG export of a tilted polyline segment degrades to straight instead.
+
+- **Context.** REQ-312 gave a single ARC or CIRCLE an arbitrary plane. REQ-316/ADR-047 then gave
+  polylines curved (bulge) segments — but `BulgeArc(x0, y0, x1, y1, bulge)` is a pure 2D function; a
+  polyline's curved segment is implicitly assumed to lie flat in world XY, the same assumption the
+  pre-REQ-312 ARC made. The 3D FILLET fix (issue #373) now produces a genuinely tilted ARC when
+  rounding a corner between two lines that do not share the world XY plane, and JOIN refuses to fold
+  that arc into the polyline it completes ("tilted arc ignored: cannot fold a non-planar arc into a
+  polyline") — a real, working refusal (REQ-316 had nowhere to put the plane), now the gap between
+  two accepted features.
+
+- **Decision.**
+
+  **(a) A per-vertex normal is a second parallel array**, `std::vector<float> userPolylineVertsNormal`
+  (stride 3, one normal per vertex, `size() == userPolylineVerts.size()`), beside the existing vertex
+  store and ADR-047's own bulge array — not a widened stride (ADR-047's own correction already ruled
+  that out for the identical reason: a `std::vector<float>` widened in place leaves stride-arithmetic
+  bugs the compiler cannot catch), and not folded into the bulge array (a normal is three numbers, a
+  bulge is one, and REQ-312 already established the precedent of a SEPARATE side-car for a normal
+  next to a store that cannot carry one — `userCircleNormals` beside the 4-float circle quads). The
+  normal at vertex *i* is the plane of the segment LEAVING vertex *i*, consulted only when that
+  vertex's own bulge (ADR-047 (a)) is non-zero AND the normal is not world +Z (`IsFlatNormal`,
+  REQ-312's own exact-comparison guard) — an all-flat polyline never allocates or reads this array,
+  matching ADR-047 (b)'s "today's behaviour is the zero case" rule one layer up.
+
+  **(b) JOIN's coplanarity test is the 3D FILLET solve's own test, not a new one.** `ExecuteJoinSelection`
+  already builds one bulge-carrying edge per selected Line/Polyline/Arc (ADR-047 (e)); it now also
+  builds a normal per edge — world +Z for a flat Line/Polyline edge or a flat Arc, the ARC's own
+  `nx/ny/nz` for a tilted one. Before folding a TILTED arc's edge into a walked component, JOIN checks
+  it is coplanar with the edges it connects to using the identical construction issue #373's
+  `HandleFillet3DLineLine` already added (`ucs::FromThreePoints` from three of the touching points,
+  then a signed-distance tolerance check against the fourth) — the same tolerance, not a
+  independently-tuned one, so JOIN and FILLET cannot disagree about what counts as "the same plane."
+  A tilted arc that fails this check is refused by name (REQ-201), same wording pattern as today's
+  blanket refusal, now conditioned on actual non-coplanarity rather than "any tilt at all."
+
+  **(c) Increment 1 (this ADR's immediate scope) is storage + JOIN + docinvariants only.** Render,
+  pick, and object snap on a tilted curved polyline segment fall back to being wrong (rendered/picked
+  as if flat) until increment 2 lands — an explicitly accepted, temporary gap (not silently discovered
+  later), because a polyline JOIN produces is otherwise correct data the moment increment 2 ships, and
+  gating increment 1 on having all four ready at once is exactly the single-PR risk ADR-047 already
+  rejected for the flat version. `docinvariants` gains
+  `userPolylineVertsNormal.size() == userPolylineVerts.size()` and "every normal is either exactly
+  world +Z or a finite unit-length-within-tolerance vector," mirroring REQ-312's own circle-normal
+  invariant.
+
+  **(d) Render/pick (increment 2) reuse `CurvePlane`/`CurvePointAt` unchanged** — REQ-312's one shared
+  parametrisation, already plane-aware; a tilted polyline segment becomes a THIRD caller alongside the
+  ARC entity and the DXF importer, not a new tessellation path. Object snap (increment 3) is the same
+  shape: REQ-312's existing plane-aware Endpoint/Midpoint/Center/Quadrant snap logic, extended to walk
+  a polyline's per-segment normal instead of assuming the polyline's own flat +Z.
+
+  **(e) DXF/DWG (increment 4): split on export, not flatten, not refuse.** `LWPOLYLINE` (DXF) and
+  DWG's own polyline entities carry exactly ONE elevation and ONE extrusion direction (group
+  38/210-220-230) for the WHOLE entity — a hard format ceiling REQ-312 already documented when it
+  scoped tilted-circle DXF bounds, not something increment 4 can negotiate around. A polyline
+  containing a tilted curved segment is written as its flat run(s), each its own `LWPOLYLINE`, PLUS
+  one separate ARC entity per tilted segment carrying that segment's own plane (REQ-312's existing
+  tilted-ARC DXF/DWG support, unchanged) — geometrically exact and re-`JOIN`-able after reimport, at
+  the cost of no longer being literally one object once it leaves GoSurvey. Considered and rejected:
+  flattening the tilted segment (REQ-201 — a flattened curve lies on neither the original arc nor
+  anywhere the user drew) and refusing the whole export (unnecessarily destructive when a correct,
+  if split, representation exists). Decided with the user 2026-09-07. An all-flat polyline keeps
+  exporting as one `LWPOLYLINE`/`POLYLINE`, byte-identical to today.
+
+- **Consequences.**
+  - No behavior change for any existing polyline: `userPolylineVertsNormal` is empty (or all-+Z) for
+    every polyline that exists today, and every consumer that does not yet know about it (increments
+    2-4, until each lands) keeps reading the vertex/bulge stores exactly as before.
+  - JOIN gains ONE new accept path (a coplanar tilted arc) and keeps its existing refusal for every
+    other tilted-arc case, worded to say WHY (not coplanar) rather than blanket-refusing by kind.
+  - A polyline saved to DXF/DWG before increment 4 ships still flattens or drops a tilted segment
+    exactly as today (increment 4 is what changes export behavior) — recorded as a known gap between
+    increments 1 and 4, not a silent one.
+  - Increments 2-4 are each their own PR and Verification pass, per REQ-325's own phasing.
+
+- **Out of scope and not designed for:** a general per-segment plane for anything other than a
+  circular-arc bulge segment (polylines have no other curved segment kind); OFFSET, TRIM, FILLET or
+  CHAMFER operating ON a tilted polyline segment (REQ-312's own arc-entity scope note already excludes
+  TRIM/BREAK and OFFSET against a tilted curve for the identical reason — planar-XY geometry — and
+  this ADR does not lift that for the polyline case either); `.gs` (retired, no code path); extents/
+  length/area on a tilted polyline segment (folded into increment 2's render work, not called out
+  separately since `CurvePointAt` sampling already answers both).
+
+### ADR-054 — Coordinate storage widens to `double`; the `float` narrowing moves to the GPU-upload boundary   (2026-09-08, accepted)
+
+- **Status:** accepted (2026-09-08, D-2026-09-08-i, GitHub issue #394). Backs REQ-101 at its tightened
+  ±0.002 ft. **Phased** — one geometry-owning subsystem per PR, sequence and status in TASK-228; this
+  ADR is the recorded authority for the whole migration, PR 1 is docs only.
+
+- **Context.** REQ-101's tolerance was tightened from ±0.01 ft to ±0.002 ft (D-2026-09-08-i): field
+  survey data is routinely better than ±0.005 ft, and the looser number had become "the" accuracy
+  guarantee the code and the ~955-case test suite lean on. But persistent geometry is held in flat
+  `std::vector<float>` stores (`userLinesFlat` stride 6, `userPolylineVerts` stride 3,
+  `userCirclesCxCyZR` stride 4, `CadFilledRegion::vertsXyz` stride 3) plus loose scalar fields
+  (`CadArc::cx/cy/z`, `CadEllipse`, `CadAnnotation::insX/insY/insZ`, …) — the layout ADR-025 (a) chose,
+  with the document-origin rebase (`world = local + worldDocumentOrigin`, §11.8, ADR-025 (b)) buying
+  `float` enough headroom for ±0.01 ft by keeping the narrowing magnitude local. A `float` resolves
+  only ~0.008 ft at the 100,000 ft `kLargeCoordinateRebaseThreshold` ceiling, so **±0.002 ft is not
+  representable in a `float` store however well the origin is placed** — a second large coordinate
+  outside the rebase box cannot be represented at all. The store itself has to widen. What number
+  coordinates are stored in is an architectural decision, not a Workshop choice (§2, §5, §11).
+
+- **Decision.**
+
+  **(a) Persistent geometry stores hold `double`.** The four flat stores become `std::vector<double>`;
+  every scalar coordinate field on an entity (`CadArc`, `CadEllipse`, `CadAnnotation`, block insert
+  points, dimension definition points, feature-line and surface vertices) becomes `double`. **The
+  interleaved-XYZ layout and every stride are unchanged** — invariant §11.8 governs *layout* (Z
+  inline, never a sidecar), not scalar width, and it is not weakened: a widened store is still one
+  coordinate in one allocation. The three copies of each store (live `AppCommandState`, the undo
+  `DrawingGeometrySnapshot`, the per-tab struct — ADR-025 context) widen together.
+  *Amended 2026-09-08 (Phase B, #441): **paper-space geometry stays `float`.** Paper stores hold
+  sheet coordinates in paper inches (ADR-009) — a sheet is tens of inches, and `float` resolves
+  ~1e-6 in at that magnitude, orders of magnitude inside REQ-101's ±0.002 ft (≈0.024 in). REQ-101's
+  reason for widening — `float` quantization at survey/state-plane magnitude — does not exist on a
+  sheet, so widening the paper stores would be churn (paper render, snap, edit, `.gs`, clipboard)
+  with no precision gain. `SurveyPoint::easting/northing/elevation` — the reference dataset REQ-101
+  names directly — is a genuine `double` target but a separate, larger change: its own sub-issue,
+  not Phase B.*
+
+  **(b) The `float` narrowing happens once, at GPU vertex-buffer assembly.** `ViewportRenderer`'s
+  upload path already subtracts the document origin before building the vertex buffer (REQ-101, §11.8);
+  it now also narrows `double`→`float` there. The GL vertex format stays 3×`float` — GPUs do not take
+  `double`, and a display vertex at local magnitude is well inside ±0.002 ft and is never read back as
+  authoritative geometry (object snap reads the `double` store, not the buffer — REQ-101's
+  bit-identical-snap property is *strengthened*, the snapped value is now the full-precision one). This
+  is §11.8's own "narrow once, at known-small magnitude" principle, moved down one layer.
+
+  **(c) The document-origin rebase stays, with a narrower job.** It is still needed: it keeps the
+  GPU-side `float` values small (b), and it keeps intermediate math (cross products, matrix chains,
+  predicate inputs) at local magnitude. It is **no longer load-bearing for stored accuracy** — a typed
+  coordinate is stored within ±0.002 ft by virtue of the `double` store regardless of when or whether
+  an origin is established. So REQ-101's origin-*establishment-timing* acceptance conditions relax, and
+  its "establishment is one-time" condition is **dropped** — it existed only because `float`
+  re-centring rounded every stored coordinate on each move (the compounding drift REQ-079 forbids);
+  `double` re-centring does not lose precision. `kMaxEstablishableOriginMagnitude` and the
+  finiteness/refusal guards (REQ-201) are unchanged.
+
+  **(d) Predicates are unaffected.** Orientation/in-circle (ADR-028), the B-rep kernel (ADR-045 (g),
+  ADR-046), and the curve-intersection solves already compute in `double` and were written to widen
+  *at the predicate* precisely because the store was `float` (architecture §11 "geometric predicates
+  are computed in `double`; storage stays `float`"). That clause is amended: storage is now `double`
+  too, so the store→predicate narrowing those sites worked around simply disappears. No predicate code
+  changes behavior.
+
+  **(e) Serialization.** The native DWG-trailer coordinate records (ADR-044) widen to 8-byte `double`
+  with a trailer format-version bump and a legacy-load path (older trailers load their `float` values,
+  which are still within the old ±0.01 ft — recorded, not silently upgraded). DXF is already ASCII
+  decimal text — no format change, the importer/exporter just stop narrowing through `float`. DWG via
+  LibreDWG is already `double` at the codec boundary (ADR-041). `.gs` is retired (no code path).
+
+  **(f) Phased, one subsystem per PR**, each with a full `./dev/build` + `./dev/test` gate and its own
+  Verification pass. Until a subsystem's phase lands it keeps its `float` stores and its existing
+  assertions at ±0.01 ft — REQ-101's revision note makes this per-subsystem staging explicit. Sequence
+  in TASK-228; the intended order is core entity stores + undo/tab copies → serialization → snapping /
+  preview / pick read-back → the GPU-upload narrowing point → the test-assertion sweep (every `0.01`
+  literal and named constant — `kReq101`, `kTinPlanEpsilon`, `kSolidChordToleranceFt`, the `kTol` in
+  `CadCommands.cpp`, and the per-assertion literals — audited one at a time to confirm it represents
+  the REQ-101 guarantee and not a coincidental unrelated use before it is changed to `0.002`).
+
+- **Alternatives.**
+  - **`std::vector<Vec3<double>>` / a point type** — the safest (a missed stride site is a compile
+    error) but the largest diff, rejected by ADR-025 (a) for the identical reason. Flat-`double` keeps
+    every stride site compiling; the migration is a mechanical scalar widening, not a layout change,
+    so the silent-misread hazard ADR-025 (a) feared (a renamed site still computing `i*3+2`) does not
+    apply — the layout and strides are untouched. A `float`/`double` mismatch left at a boundary site
+    is a narrowing-conversion the compiler warns on.
+  - **Keep `float`, shrink `kLargeCoordinateRebaseThreshold` to ~10,000 ft** so `float` resolves
+    ~0.002 ft locally — rejected: caps usable drawing extent at ~10,000 ft (many survey sites exceed
+    that), and a coordinate outside the rebase box still cannot be represented. It trades a storage
+    problem for a smaller-drawings-only product.
+  - **Tighten the number only where `float` already suffices** (scope REQ-101's guarantee to drawings
+    within ~10,000 ft of the origin, keep ±0.01 ft beyond) — put to the user 2026-09-08 and rejected:
+    a tolerance that silently means different things at different drawing sizes is exactly the "the
+    number relied on as *the* guarantee" ambiguity issue #394 was filed to remove.
+
+- **Consequences.**
+  - A large, mostly mechanical diff — on the order of the ~1,450 coordinate reference sites ADR-025
+    catalogued, spread across every geometry-owning subsystem, delivered over many PRs. Regression
+    exposure is the whole test suite, which is why (f) gates every phase on a green `ctest`.
+  - Memory for the authored-geometry stores roughly doubles. This is acceptable and bounded: the
+    arrays that are genuinely large (millions of entries headed for a vertex buffer — mesh and
+    tessellation buffers, §11.8 line ~2139) stay `float` on the GPU side under (b); the widened stores
+    are the authored-geometry stores, which are orders of magnitude smaller.
+  - Several existing clauses are amended to point here: ADR-025 (b) and its correction note (the
+    "storage stays `float`" rationale), ADR-028, ADR-045 (g), ADR-046, and the architecture §11
+    predicate-precision discussion. None of them change behavior — they lose a `float` constraint they
+    were written to work around.
+  - REQ-101's acceptance simplifies once the migration completes: "typed at state-plane magnitude is
+    stored within tolerance" holds unconditionally, not only when the origin was established at entry.
+
+- **Out of scope and not designed for:** widening the GPU vertex format or any render/tessellation
+  buffer (they stay `float` — (b)); a units/precision-mode UI (REQ-101 is a fixed internal guarantee,
+  not a user setting); revisiting the rebase threshold or `kMaxEstablishableOriginMagnitude` (both
+  unchanged — (c)); `.gs` (retired).
+
+### ADR-056 — What's New billboard: shipped Markdown, vendored md4c, Help → About is the same window   (2026-09-10, accepted)
+
+- **Status:** accepted (2026-09-10, D-2026-09-10-d). Backs REQ-336.
+- **Context.** REQ-308's Start tab shows version and recent drawings but has no place for release
+  notes. REQ-078 already shows release notes, but only when offering a **newer** update. Users need
+  "what's new in the build I just installed" without a network fetch and without inventing a second
+  About surface.
+- **Decision:**
+  (a) **Content is `resources/whats-new.md`**, copied into the install tree with other resources.
+      Edited for each version bump; offline by construction.
+  (b) **Parse with vendored md4c** (MIT CommonMark) under `third_party/md4c/` with `VENDORED.md`
+      (REQ-300 / D-2026-08-31-b). An **in-tree** UI module turns md4c callbacks into ImGui draws
+      (headings, paragraphs, emphasis, lists, links). No FetchContent.
+  (c) **One window, two openers:** auto-open from Start (once per launch when not dismissed for this
+      version) and **Help → About** (new menu). About is not a separate dialog.
+  (d) **Dismiss** is a version string in `gosurvey-user.json` (UserPrefs), parallel to
+      `updateSkippedVersion`. About must not clear it.
+  (e) **GitHub control** opens the releases **list** URL, not `releases/tag/v…`, because beta
+      publishes to `channel-beta`.
+  (f) **Runtime fallback** if the file is missing; **CI fails** packaging without it.
+  (g) **Authoring lock** (agent rule + git hook) is process, not runtime architecture — recorded so
+      Workshop does not omit the hook/rule when implementing REQ-336.
+- **Consequences:** new UI module + menu item; one new vendored dependency; prefs schema gains one
+  string field; CMake must install `whats-new.md` into `build/resources/`; release workflow asserts
+  presence. No Domain/Commands change. No network on the billboard path.
+- **Out of scope:** fetching notes from GitHub; a second About dialog; rich HTML/CSS; images inside
+  the markdown body beyond what a minimal ImGui layer can reasonably show (links open externally).
+
+### ADR-055 — The centroid is integrated by quadrature over the exact surfaces, in world axes, about a solid-local origin   (2026-09-09, accepted)
+
+- **Status:** accepted (2026-09-09, D-2026-09-09-h, GitHub issue #149 acceptance 4). Backs REQ-334.
+- **Context.** REQ-313 reports a solid's volume and surface area by closed-form integrals over its
+  analytic faces, reached through **ten** paths inside `IntegrateFace`: five closed forms (plane,
+  `ConicalFaceIntegrals`, `CylinderPlaneCutIntegrals`, `SphericalFaceIntegrals`,
+  `ToroidalFaceIntegrals`) and five numeric ones (the cylinder, cone and sphere carve-outs for
+  procedural edges, the `Nurbs` patch, and the general trim loop). A centroid needs the **first
+  moments of volume**, a third integrand with no closed form written for any surface kind, and
+  carrying it through all ten paths would be five new closed forms and five new numeric terms —
+  each a fresh chance at a plausible wrong centroid.
+
+**(a) The integral, and the two properties that shape everything else.** With `r = p - q`, the first
+moment is `integral of r dV`, and by the divergence theorem its k-th component is
+`1/2 * closed-surface-integral of r_k^2 n_k dA`. Two things about that integrand were established by
+measurement before any code was written, and both are counter-intuitive enough to be worth stating:
+
+- **It is not frame-covariant.** `r_k^2 n_k` in one Cartesian frame is not the k-th component of any
+  vector that transforms into `r_k^2 n_k` in a rotated one. A moment accumulated in each face's own
+  frame and rotated into world afterwards — the obvious implementation, and the one this project's
+  normals and tangents legitimately use — is **wrong**. It is also wrong *invisibly*: an
+  axis-aligned box, a sphere and a torus all come out exact under it, because their face frames are
+  the world's. A tilted box was measured 3.2 ft out and a tilted pyramid 2.3 ft.
+  **So every face contributes in one shared frame, and that frame is world.**
+- **The origin is what has to be local, not the axes.** `q` on the solid keeps every squared term at
+  model scale even at easting 2.2e6. Integrating about the world origin instead was measured at 46
+  to 6,978 ft of error, growing worse as the input is refined, and exact at (0,0,0) — so a test
+  suite written at the origin cannot see it.
+
+**(b) Quadrature over the exact surfaces, not five new closed forms.** A 16-point Gauss-Legendre
+rule over each face's parameter rectangle, and over each boundary edge for a planar face. This is
+**not** the display-mesh approximation GitHub #149's tessellation note rules out: it samples the
+analytic surface, and the primitives come out at 1e-12 ft or better — nine orders inside REQ-101.
+It is also not a departure. Four of `IntegrateFace`'s own paths are already numeric, and ADR-048
+already authorises "adaptive numerical quadrature" for the `Nurbs` kind's mass properties; this
+applies the same instrument to one more integrand rather than introducing a new kind of answer.
+
+**(c) A planar face is integrated along its BOUNDARY, by Green's theorem, with quadrature per edge.**
+Six region moments — area, `Sa`, `Sb`, `Saa`, `Sab`, `Sbb` in the face's own axes — from which each
+world component follows algebraically. Quadrature along each edge rather than a polygon formula is
+what lets **one** path cover a straight-edged face and an **arc-bounded** one: a cylinder's circular
+cap is a `Plane` face whose loop is two arc edges, and a polygon formula silently inscribes a polygon
+in it — measured at 0.16% on an r=8 cap by the per-face area work (D-2026-09-09-g). Edge tangents are
+**analytic**, never finite differences: a difference quotient lost seven digits to cancellation at
+easting 2.2e6 during development.
+
+**(d) Uncovered face shapes are refused, not approximated, and the centroid gets its OWN validity
+flag.** `MassProperties::centroidValid` is separate from `valid`. A `Nurbs` face, a general trim
+loop, a face with holes, or a boundary edge that is an `Ellipse` or an `Intersection` curve makes the
+centroid unavailable while leaving the volume and surface area exactly as trustworthy as they were.
+One flag would have forced a choice between suppressing two good figures and reporting a third that
+was not computed; two flags say precisely what is known. Increment 2 carries those cases.
+
+**(e) The centroid is cross-checked against the volume before it is reported.** The moment integrator
+re-derives the volume as it goes, and that figure must agree with the one `ComputeMassProperties`
+already reports to a relative 1e-9 or the centroid is withheld. A centroid divided by a volume the
+rest of the report disagrees with would describe a different solid.
+
+**(f) A self-intersecting solid reports no centroid, where `FaceArea` (D-2026-09-09-g) still reports
+an area.** Deliberately different answers from two neighbouring functions. A centroid is
+volume-**weighted**, so a shell enclosing part of space twice makes it exactly as meaningless as the
+volume it is weighted by; a single face's area is a property of one bounded patch and stays well
+defined. The rule is the quantity's own nature, not consistency for its own sake.

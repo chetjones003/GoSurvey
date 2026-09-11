@@ -1,0 +1,168 @@
+#pragma once
+
+/// The drawing-facing half of the B-rep solid kernel (REQ-313 / ADR-045, GitHub issue #146).
+///
+/// The kernel in `brep.hpp` knows nothing about documents, layers or the GPU. This header is the
+/// seam where a kernel solid becomes a drawing entity: the store's coordinate convention, the
+/// tessellation cache, and the batches the renderer is handed. It is still pure — no GL, no ImGui,
+/// no `AppCommandState` — so the cache's staleness rule stays testable without a window.
+
+#include "brep.hpp"
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+/// A solid in the drawing.
+///
+/// **Coordinates are storage coordinates**, not world: X/Y are local (`world = local +
+/// worldDocumentOrigin`) and Z is absolute — ADR-025 D2, the same convention every other geometry
+/// store uses. The kernel is frame-agnostic, so it computes volume and area correctly in whichever
+/// frame it is handed; putting the store in local coordinates is what keeps a solid at easting 2e6
+/// as accurate as one at the origin (REQ-101).
+///
+/// Unlike every other store, these coordinates are `double` rather than `float`. Architecture §11.8's
+/// float convention exists for arrays with millions of entries headed for a vertex buffer; a solid's
+/// B-rep is a handful of vertices and faces, so the narrowing buys nothing and would throw away the
+/// exactness the closed-form volume depends on. The *tessellation* — which really is GPU-bound and
+/// really can be large — is narrowed to float, once, in \ref CadSolidTessellation.
+///
+/// **Held as `shared_ptr<const brep::Solid>`**, exactly as `CadMesh` and `CadTin` are and for the
+/// same reason (architecture §11.5): every undo snapshot deep-copies the geometry stores, and a
+/// shared immutable payload makes that a refcount bump. Immutability is the precondition, so a solid
+/// is *replaced*, never edited in place.
+using CadSolidPtr = std::shared_ptr<const brep::Solid>;
+
+/// One solid's cached display geometry — the derived representation, regenerated only when the
+/// solid or the tessellation quality changes, and **never** stored in the solid itself (#120:
+/// "changing tessellation quality should not modify the underlying solid").
+///
+/// Not part of any undo snapshot, deliberately: it is derived from the solid, so snapshotting it
+/// would put megabytes of regenerable triangles into the undo stack for nothing. That is exactly the
+/// split ADR-036 (e) already made for the surface display cache.
+struct CadSolidTessellation {
+  /// Which solid this was built from. A `weak_ptr` and not a raw pointer: a raw key could be matched
+  /// by a NEW solid allocated at a freed address, and the cache would then draw the wrong shape from
+  /// a stale buffer — the same trap the renderer's mesh cache already avoids this way.
+  std::weak_ptr<const brep::Solid> key;
+  /// The chord tolerance these triangles were generated at. Part of the staleness key, so changing
+  /// quality regenerates and changing nothing else does not.
+  double chordTolerance = 0.0;
+  /// The isoline count the wireframe was generated at — also part of the staleness key, for the
+  /// same reason: turning ISOLINES up has to redraw the wireframe and nothing else.
+  int isolineCount = -1;
+
+  /// Shaded faces: `GL_TRIANGLES`, nine floats per triangle, storage coordinates. Expanded rather
+  /// than indexed — a primitive's tessellation is thousands of triangles, not millions, so the
+  /// index array would save less than it costs in a second code path.
+  std::vector<float> triVerts;
+  /// One unit normal per triangle vertex, parallel to \ref triVerts. These are the **analytic**
+  /// surface normals, not facet normals, which is what makes a tessellated cylinder shade as a
+  /// cylinder instead of as a prism.
+  std::vector<float> triNormals;
+  /// Which `brep::Solid::faces` entry each triangle belongs to — one entry per TRIANGLE, so
+  /// `triFaceIds.size() * 9 == triVerts.size()`.
+  ///
+  /// This is what makes a face snap land on the surface rather than on a chord: the ray test finds
+  /// the triangle, this says which face that triangle is part of, and the answer is then projected
+  /// onto that face's analytic surface (`brep::ClosestPointOnSurface`).
+  std::vector<int> triFaceIds;
+  /// The solid's real edges: `GL_LINES`, six floats per segment, storage coordinates. A solid has
+  /// genuine edges — unlike a mesh, whose "edges" are artefacts of an exporter's resolution — which
+  /// is why a solid can be drawn as a wireframe at all and a mesh cannot (ADR-026 (c)).
+  std::vector<float> edgeVerts;
+
+  [[nodiscard]] bool empty() const { return triVerts.empty() && edgeVerts.empty(); }
+};
+
+/// One *coalesced* draw batch: the merged geometry of every visible solid that shares GPU-relevant
+/// state (resolved colour and edge lineweight), plus the appearance to draw it with.
+///
+/// **The vertex buffers are OWNED here**, unlike `SurfaceDisplayBatch` and unlike this type before
+/// GitHub issue #194. The reason is the whole point of the change: a few-hundred-solid scene drawn
+/// as one batch per solid is one stream upload and one draw call per solid — ~40 µs of fixed cost
+/// each, linear in object count, which blows REQ-100's frame budget at a realistic density long
+/// before the triangle total would. Merging solids that would draw identically anyway into a shared
+/// buffer turns hundreds of draw calls into a handful. The concatenation is not redone every frame:
+/// \ref RefreshSolidDisplayGeometry keeps an assembly signature and rebuilds these buffers only when
+/// the set of visible solids, their resolved appearance, or the tessellation actually changes — an
+/// orbit (camera only) reuses them untouched, which is the case REQ-100 profile (d) measures.
+struct CadSolidDisplayBatch {
+  std::vector<float> triVerts;    ///< `GL_TRIANGLES`, nine floats per triangle, storage coordinates.
+  std::vector<float> triNormals;  ///< one unit normal per vertex, parallel to \ref triVerts.
+  std::vector<float> edgeVerts;   ///< `GL_LINES`, six floats per segment, storage coordinates.
+  /// Resolved entity colour (REQ-048) — shading multiplies it, the wireframe edges use it directly.
+  float rgba[4] = {1.f, 1.f, 1.f, 1.f};
+  /// Millimetres on paper for the edges, or -1 for the renderer's default width.
+  float lineweightMm = -1.f;
+};
+
+/// Everything drawn for the drawing's solids this frame, as a small number of coalesced batches.
+///
+/// One struct rather than three parameters on a `RenderScene` signature that is already 30 long —
+/// the faces and the edges of a solid are always built together and always consumed together, which
+/// is the same argument `CadSurfaceDisplayGeometry` records for itself.
+struct CadSolidDisplayGeometry {
+  std::vector<CadSolidDisplayBatch> solids;
+  /// The assembly signature these batches were built from (mirrors
+  /// `AppCommandState::solidDisplayAssemblySig`). The renderer keys its persistent solid vertex
+  /// buffers on this: an unchanged signature means the batch list is byte-for-byte what it drew last
+  /// frame, so nothing needs re-uploading — the orbit case REQ-100 profile (d) measures.
+  std::uint64_t assemblySig = 0;
+  [[nodiscard]] bool empty() const { return solids.empty(); }
+};
+
+/// The sub-object overlay's FACE fills — the one selected, and the one the cursor is over
+/// (REQ-318 items 11 and 14).
+///
+/// One struct rather than two parameters on a `RenderScene` signature that is already 30 long, the
+/// same argument \ref CadSolidDisplayGeometry records for itself: these two are always built
+/// together and always consumed together, one frame apart at most.
+///
+/// **Faces only.** The sub-object selection's edge and vertex linework goes through the renderer's
+/// ordinary highlight and hover line channels, because there it gets exactly the treatment it
+/// wants — never occluded, since a line one pixel wide sunk into the surface it lies on is
+/// invisible. A face fill is the one part that must be depth-tested (D-2026-09-04-a), and that is
+/// why it needs a channel of its own at all.
+struct CadSubObjectOverlay {
+  std::vector<float> selectedFaceTris;  ///< `GL_TRIANGLES`, nine floats per triangle, storage coords.
+  std::vector<float> hoverFaceTris;     ///< the same, for what a `Ctrl` click would take.
+  /// The same faces' BOUNDARY loops: `GL_LINES`, six floats per segment.
+  ///
+  /// **This is what actually makes a face selection visible, and the fill is the supporting act.**
+  /// A translucent tint reads only where there is something behind it to tint. In 2D Wireframe —
+  /// the default style, where solids draw no faces at all — the background is the empty viewport,
+  /// and a 20%-alpha wash over black comes out around RGB(23,37,51): black, to any eye, beside the
+  /// bright wireframe next to it. Outlining the face is how every CAD package shows this, for
+  /// exactly that reason.
+  ///
+  /// Their own channels rather than the shared highlight/hover line buffers because they carry
+  /// their own colour: a face reads PURPLE so it cannot be mistaken for the blue an edge or a
+  /// vertex uses (user request, 2026-09-04).
+  std::vector<float> selectedFaceEdges;
+  std::vector<float> hoverFaceEdges;
+  [[nodiscard]] bool empty() const {
+    return selectedFaceTris.empty() && hoverFaceTris.empty() && selectedFaceEdges.empty() &&
+           hoverFaceEdges.empty();
+  }
+};
+
+/// The chord tolerance solids are tessellated at, in drawing units.
+///
+/// One value, not a per-solid setting: #120 asks that quality be configurable, and a single knob is
+/// what that needs today. Deliberately independent of REQ-101 (issue #394/#444, D-2026-09-08-i):
+/// this is a rendering/pick tessellation density knob, not the stored-coordinate accuracy guarantee,
+/// and issue #394's own AC item 5 treats it as covered separately by #384's isoline work. Left at
+/// 0.01 ft rather than tightened to REQ-101's 0.002 ft.
+inline constexpr double kSolidChordToleranceFt = 0.01;
+
+/// Default number of isolines drawn around a curved face, per full turn (AutoCAD names this setting
+/// ISOLINES and defaults it to 4). Issue #384: 4, and even 8, still read as sparse next to the dense
+/// meridian/latitude cage a user showed from their own AutoCAD session — that reading comes from
+/// having many crossing circles, not from any one circle being smoother. 16 quadruples the original
+/// default and visually matches that reference screenshot, while staying far under the REQ-100
+/// frame-budget ceiling below.
+inline constexpr int kSolidDefaultIsolines = 16;
+/// Ceiling, so a hand-edited file or a mistyped command cannot ask for a wireframe dense enough to
+/// cost the frame budget (REQ-100). AutoCAD caps ISOLINES at 2047; this is well past useful.
+inline constexpr int kSolidMaxIsolines = 256;

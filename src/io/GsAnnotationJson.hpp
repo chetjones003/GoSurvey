@@ -8,7 +8,8 @@
 
 #include <nlohmann/json.hpp>
 
-// Annotation JSON used by Save/LoadGoSurveyFile. Header-only so the DIMANGULAR kind+vertex
+// Annotation JSON used by SerializeGoSurveyJson/LoadGoSurveyFromJsonUtf8. Header-only so the
+// DIMANGULAR kind+vertex
 // round-trip (issue #125) is unit-testable without linking GsIo.cpp (command layer).
 
 [[nodiscard]] inline const char* AnnotationKindTag(CadAnnotation::Kind k) {

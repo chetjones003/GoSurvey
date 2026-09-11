@@ -6,10 +6,16 @@
 #include <imgui.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 void ApplyCadDarkTheme();
-void ApplyCadLightTheme();
+
+/// Shift an achromatic neutral toward product steel-blue while preserving its luminance step.
+ImVec4 BlueTintNeutral(const ImVec4& neutral, float strength);
+
+/// Global neutral blue-tint strength for the Dark theme and chrome that follows it.
+constexpr float kCadThemeBlueTintDark = 0.48f;
 
 /// Optional app logo texture (from \p LoadAppLogoFromPngFile via \ref ResolveAppLogoPngPath). On Windows it appears in the custom title bar;
 /// on other platforms, at the left of the main menu bar.
@@ -35,16 +41,65 @@ void NewDrawingInTab(AppCommandState& cmd, std::vector<std::string>& log);
 void OpenDrawingInNewTab(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8);
 /// REQ-308 — drop a drawing from the recent-drawings store (used when a recent tile fails to open).
 void RemoveRecentDrawing(const std::string& absDrawingPath);
+void ClearRecentDrawings();
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
 /// Ribbon under the menu bar: sectioned icon toolbars (Draw, Modify, View, …) plus a fixed-width layer strip; hover for tooltips.
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log);
+/// REQ-302/ADR-053 (issue #325) — draws one ribbon button with the exact chrome every hand-built
+/// ribbon section already uses (3D bevel, icon art, label), for the data-driven RibbonLayout API
+/// (ui/RibbonLayoutDraw.hpp) to call per placed item without duplicating that chrome. `iconName`
+/// is a c3d_* icon id or empty (falls back to the generic "not yet implemented" glyph — real
+/// icon-kind mapping is a later sub-issue). Must be called inside an ImGui window. Returns true
+/// on the frame the button is clicked.
+bool RibbonDrawButtonForLayout(const char* str_id, const char* label, const char* iconName, const ImVec2& size,
+                               bool labelBelow = false, bool disabled = false, const char* tooltip = nullptr,
+                               int iconKind = -1);
 /// Drop shadow + lit top edge on every floating window and popup, so dialogs lift
 /// off the shell (REQ-081). Call once per frame AFTER all windows are submitted
 /// and BEFORE ImGui::Render(); it appends to each window's own draw list, which
 /// is what keeps each shadow at its own window's depth. No-op in a theme that
 /// sets no window shadow.
 void DrawFloatingWindowChrome();
+
+/// REQ-081 revision 7 — call once, immediately after a successful ImGui::Begin()
+/// on a dialog, to paint a subtle top/bottom gradient into its body (behind
+/// whatever the caller draws next). No matching End call — nothing to pop yet;
+/// keep calling ImGui::End() as normal. No-op in a theme that sets no dialog
+/// fill. Migration checklist (issue #183) — styled: Settings (Options), Layer
+/// Manager, Viewpoints, Import points, Export points, PDF Attach, Account
+/// Details, Create Surface, Surface Properties, Feature Line Elevations. Still
+/// flat: every other CadUi_*.cpp dialog/modal (Quick Select, Selection, Create
+/// points, Text Style, Dimension Style, View Manager, ALIGN, the traverse
+/// editor, the save-before-close prompt, the small BeginPopupModal popups, …)
+/// — migrate opportunistically, each call is one line.
+void BeginStyledDialog();
+
+/// Steel-blue product accent frame (matches What's New / Start screen). Call
+/// PushProductDialogAccent before ImGui::Begin, PaintProductDialogAccentFrame
+/// after a successful Begin, PopProductDialogAccent after ImGui::End. On an
+/// early Begin failure, Pop before returning.
+void PushProductDialogAccent();
+void PaintProductDialogAccentFrame();
+void PopProductDialogAccent();
+
+/// A 3D-bevelled button for dialog actions (REQ-081 rev 7): gradient face, lit
+/// top-left edge, dark bottom-right edge, sunken pressed state. `primary` picks
+/// the accented gradient (OK/Import/Apply); false draws the quieter existing
+/// ribbon-bevel treatment (Cancel/secondary actions). Same call shape as
+/// ImGui::Button.
+bool StyledButton(const char* label, const ImVec2& size = ImVec2(0, 0), bool primary = false);
+
+/// Property-grid "paper" styling for the surface dialogs (Create Surface,
+/// Surface Properties): light-gray rows, white bordered fields, dark body text,
+/// dark header strip kept as-is. `themeIdx` is reserved for future themes.
+/// Call order: PushPropertyPaperColors → BeginTable → TableSetupColumn(s) →
+/// TableHeadersRow → PushPropertyPaperBodyText → rows → PopPropertyPaperBodyText
+/// → EndTable → PopPropertyPaperColors.
+void PushPropertyPaperColors(int themeIdx);
+void PopPropertyPaperColors();
+void PushPropertyPaperBodyText(int themeIdx);
+void PopPropertyPaperBodyText();
 
 void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
@@ -68,6 +123,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                          double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
                          CadSnap::Hit* out_snap);
 
+/// Frame-time diagnostic overlay (issue #166 investigation). No-op unless the PERFHUD command has
+/// toggled it on. Call once per frame, after DrawDrawingViewport.
+void DrawPerfHud(const AppCommandState& cmd);
+
 /// REQ-308 — the Start screen shown for drawingTabs[0]: GoSurvey/version, Open/New, the project
 /// website link, the Recent-drawings grid/list, and the sign-in / Welcome column. Drawn in place of
 /// the GL viewport by DrawDrawingViewport when the Start tab is active.
@@ -87,12 +146,40 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 /// Floating panel listing all currently selected entities; each entry has a checkbox to deselect it.
 void DrawSelectionCyclingPanel(AppCommandState& cmd);
 
+/// Cursor-anchored list of overlapping pick candidates (opened when Multi Selection is on and the user clicks).
+void DrawPickDisambiguationPopup(AppCommandState& cmd, std::vector<std::string>& log);
+/// Dismiss the pick list without selecting; clears hover preview tied to the popup.
+void CancelPickDisambiguationPopup(AppCommandState& cmd);
+
 /// QUICKSELECT (QS) filter window — builds a selection by entity type and property criteria.
 void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+
+/// REQ-091 amendment (GitHub issue #182) — read-only "Account Details" placeholder window opened
+/// from the menu-bar account dropdown. Shows the signed-in email and a "more coming soon" note.
+void DrawAccountDetailsWindow(AppCommandState& cmd);
+
+/// REQ-336 — What's New billboard (also Help → About). Auto-open from Start once per launch when
+/// the running version has not been dismissed.
+void DrawWhatsNewWindow(AppCommandState& cmd);
+void BeginLaunchAuthOverlayTimer();
+void DrawLaunchSequenceOverlay(AppCommandState& cmd, bool updateOfferBlocks);
+bool LaunchSequenceOverlayActive(const AppCommandState& cmd, bool updateOfferBlocks);
+void MaybeAutoOpenWhatsNew(AppCommandState& cmd);
+void RequestWhatsNewWindow(AppCommandState& cmd);
+
+/// Shipped user manual (resources/wiki). F1 and Help → User Manual.
+void RequestWikiWindow(AppCommandState& cmd, std::string_view pageSlug = "Home");
+void RequestContextualWikiWindow(AppCommandState& cmd, const char* cmdBuf);
+void DrawWikiWindow(AppCommandState& cmd);
+/// Clears per-frame command-bar help state (call once at frame start; Start tab skips DrawCommandLinePanel).
+void CadUiBeginHelpFrame();
+bool CadUiIsCommandInputActive();
+/// Lowercase primary from the command-bar fuzzy suggestion list, or empty.
+const std::string& QueryCommandBarFuzzyPrimary();
 
 /// Drawing Units dialog (UNITS command). REQ-020. Owns displayLinearPrecision.
 void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
@@ -170,7 +257,18 @@ void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log)
 /// Sets cmd.closeConfirmed = true when the user accepts close (with or without saving).
 void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log);
 
-namespace update { struct UpdateState; }
+/// AutoCAD-style Select Color dialog (ACI index grid + true colour).
+void RequestSelectColor(AppCommandState& cmd, const std::string& initialStorage,
+                        AppCommandState::SelectColorTarget target, bool allowByLayer, bool allowByBlock,
+                        size_t layerRowIndex = 0, const std::string& vpLayerName = {});
+void DrawSelectColorPopup(AppCommandState& cmd);
+/// Layer-manager / properties cell: colour swatch + `"Color N"` label; returns true when clicked.
+bool DrawColorStorageCell(const std::string& storage, float defaultR, float defaultG, float defaultB);
+
+namespace update {
+struct UpdateState;
+enum class Phase;
+}
 /// REQ-078: presents an available update and waits for an explicit choice. Draws nothing while
 /// the background check is running — the check itself is never shown to the user.
 void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd);
@@ -179,6 +277,7 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd);
 /// or no internet connectivity at all (REQ-077's same offline exception). Draws nothing once
 /// resolved; never re-opens later in the same session (e.g. after a manual sign-out).
 void DrawSignInGate(AppCommandState& cmd);
+void DrawSignInGateBody(AppCommandState& cmd);
 
 /// Confirms a DWG export before anything is written, stating LibreDWG R2000 encode limits
 /// (REQ-170). Writes to \c cmd.dwgPendingExportPath only when the user accepts.

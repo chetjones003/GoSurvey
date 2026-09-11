@@ -290,13 +290,17 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
   ImGui::SetNextWindowSize(ImVec2(760, 520), ImGuiCond_FirstUseEver);
   bool open = cmd.showSurfaceStyleWindow;
   const char* title = cmd.surfaceStyleUseSurfacesTitle ? "Surfaces" : "Surface Style";
+  PushProductDialogAccent();
   if (!ImGui::Begin(title, &open)) {
     cmd.showSurfaceStyleWindow = open;
     if (!open)
       cmd.surfaceStyleUseSurfacesTitle = false;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
   cmd.showSurfaceStyleWindow = open;
   if (!open)
     cmd.surfaceStyleUseSurfacesTitle = false;
@@ -662,4 +666,5 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
     BumpCadGpuCache(cmd);
 
   ImGui::End();
+  PopProductDialogAccent();
 }

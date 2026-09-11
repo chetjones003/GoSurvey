@@ -111,6 +111,17 @@ TEST_CASE("Translate moves every loop vertex and preserves containment", "[hatch
   REQUIRE_FALSE(hatchgeom::ContainsPoint(fr, 1.0, 5.0));  // old location no longer covered
 }
 
+TEST_CASE("Translate carries an explicit dz (REQ-320)", "[hatch]") {
+  // The two-argument call above stays Z-untouched via the default; a 3D MOVE has to be able to
+  // move a filled region's elevation like every other entity type REQ-320 names.
+  CadFilledRegion fr = SquareWithHole();
+  hatchgeom::Translate(fr, 100.f, -50.f, 25.f);
+  REQUIRE(fr.vertsXyz[0] == 100.f);
+  REQUIRE(fr.vertsXyz[1] == -50.f);
+  REQUIRE(fr.vertsXyz[2] == 25.f);
+  REQUIRE(fr.vertsXyz[14] == 25.f);  // the hole vertex's elevation moved too
+}
+
 namespace {
 
 // Four line segments forming the rectangle (x0,y0)-(x1,y1).

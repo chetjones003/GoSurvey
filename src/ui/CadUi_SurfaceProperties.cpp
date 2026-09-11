@@ -20,13 +20,13 @@ const char* kBandPalette[] = {"#3148F5", "#31A2F5", "#31F5C8", "#7CF531", "#F5E6
 bool SurfacePlanBounds(const CadSurface& s, float* mnX, float* mxX, float* mnY, float* mxY) {
   if (!s.tin || s.tin->vertsXyz.size() < 3)
     return false;
-  *mnX = *mxX = s.tin->vertsXyz[0];
-  *mnY = *mxY = s.tin->vertsXyz[1];
+  *mnX = *mxX = static_cast<float>(s.tin->vertsXyz[0]);
+  *mnY = *mxY = static_cast<float>(s.tin->vertsXyz[1]);
   for (size_t i = 0; i + 2 < s.tin->vertsXyz.size(); i += 3) {
-    *mnX = std::min(*mnX, s.tin->vertsXyz[i]);
-    *mxX = std::max(*mxX, s.tin->vertsXyz[i]);
-    *mnY = std::min(*mnY, s.tin->vertsXyz[i + 1]);
-    *mxY = std::max(*mxY, s.tin->vertsXyz[i + 1]);
+    *mnX = std::min(*mnX, static_cast<float>(s.tin->vertsXyz[i]));
+    *mxX = std::max(*mxX, static_cast<float>(s.tin->vertsXyz[i]));
+    *mnY = std::min(*mnY, static_cast<float>(s.tin->vertsXyz[i + 1]));
+    *mxY = std::max(*mxY, static_cast<float>(s.tin->vertsXyz[i + 1]));
   }
   return true;
 }
@@ -51,7 +51,7 @@ void MoveSameKind(std::vector<T>* v, size_t i, int delta) {
   std::swap((*v)[i], (*v)[static_cast<size_t>(j)]);
 }
 
-void MoveAddedPointTriple(std::vector<float>* v, size_t i, int delta) {
+void MoveAddedPointTriple(std::vector<double>* v, size_t i, int delta) {
   if (v == nullptr || v->size() % 3u != 0u)
     return;
   const size_t n = v->size() / 3;
@@ -117,11 +117,12 @@ void DrawInformationTab(AppCommandState& cmd, std::string* name, std::string* de
 
 void DrawDefinitionTab(AppCommandState& cmd, CadSurface& s) {
   ImGui::Spacing();
-  ImGui::PushStyleColor(ImGuiCol_TableRowBg, ImVec4(1.f, 0.97f, 0.82f, 1.f));
+  PushPropertyPaperColors(cmd.displayColorThemeIdx);
   if (ImGui::BeginTable("##spdefopts", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
     ImGui::TableSetupColumn("Definition Options", ImGuiTableColumnFlags_WidthStretch, 0.45f);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.55f);
     ImGui::TableHeadersRow();
+    PushPropertyPaperBodyText(cmd.displayColorThemeIdx);
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::TextUnformatted("Build");
@@ -140,9 +141,10 @@ void DrawDefinitionTab(AppCommandState& cmd, CadSurface& s) {
     ImGui::Text("%d edge swap(s), %d added point(s), %d deleted point(s)",
                 static_cast<int>(s.swappedEdgePicks.size()), static_cast<int>(s.addedPointXyz.size() / 3),
                 static_cast<int>(s.deletedPointPicks.size()));
+    PopPropertyPaperBodyText();
     ImGui::EndTable();
   }
-  ImGui::PopStyleColor();
+  PopPropertyPaperColors();
 
   struct Row {
     const char* type;
@@ -469,17 +471,22 @@ void DrawSurfacePropertiesWindow(AppCommandState& cmd, std::vector<std::string>*
   const std::string title = "Surface Properties - " + s.name;
   ImGui::SetNextWindowSize(ImVec2(640.f, 520.f), ImGuiCond_FirstUseEver);
   bool open = cmd.showSurfacePropertiesWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin(title.c_str(), &open)) {
     cmd.showSurfacePropertiesWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
   cmd.showSurfacePropertiesWindow = open;
   if (!open) {
     loadedFor = -1;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  BeginStyledDialog();
 
   const float footer = ImGui::GetFrameHeightWithSpacing() + 10.f;
   ImGui::BeginChild("##spbody", ImVec2(0.f, -footer), false);
@@ -506,23 +513,24 @@ void DrawSurfacePropertiesWindow(AppCommandState& cmd, std::vector<std::string>*
 
   const float bw = 88.f;
   ImGui::SetCursorPosX(ImGui::GetWindowWidth() - (bw + 8.f) * 4.f);
-  if (ImGui::Button("OK", ImVec2(bw, 0.f))) {
+  if (StyledButton("OK", ImVec2(bw, 0.f), /*primary=*/true)) {
     ApplyInfo(cmd, cmd.surfacePropertiesIndex, name, description, styleName, *log);
     cmd.showSurfacePropertiesWindow = false;
     loadedFor = -1;
   }
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(bw, 0.f))) {
+  if (StyledButton("Cancel", ImVec2(bw, 0.f))) {
     cmd.showSurfacePropertiesWindow = false;
     loadedFor = -1;
   }
   ImGui::SameLine();
-  if (ImGui::Button("Apply", ImVec2(bw, 0.f)))
+  if (StyledButton("Apply", ImVec2(bw, 0.f), /*primary=*/true))
     ApplyInfo(cmd, cmd.surfacePropertiesIndex, name, description, styleName, *log);
   ImGui::SameLine();
   ImGui::BeginDisabled();
-  ImGui::Button("Help", ImVec2(bw, 0.f));
+  StyledButton("Help", ImVec2(bw, 0.f));
   ImGui::EndDisabled();
 
   ImGui::End();
+  PopProductDialogAccent();
 }

@@ -1,18 +1,33 @@
 #include "DxfIo.hpp"
 #include "DwgIo.hpp"
+#include "GsIo.hpp"
 #include "LibreDwgCad.hpp"
 
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
+#include "io/SurveyCsv.hpp"
+#include "util/ucs.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <imgui.h>
+
+#include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 #if defined(__cplusplus) && !defined(restrict)
 #define restrict
@@ -45,6 +60,28 @@ void OneLine(AppCommandState& st) {
   st.userLineAttrs = {EntityAttributes{}};
 }
 
+// Survey-point labels are measured through ImGui::GetFont() while a point is placed/imported
+// (EnsureSurveyPointLabelMtext) — same fixture as GsMigrateLegacyBreaklineTests.cpp (ADR-031 (c')).
+struct HeadlessImGuiScope {
+  HeadlessImGuiScope() {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1920.f, 1080.f);
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+    io.Fonts->AddFontDefault();
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    ImGui::NewFrame();
+  }
+  ~HeadlessImGuiScope() {
+    ImGui::EndFrame();
+    ImGui::DestroyContext();
+  }
+};
+
 }  // namespace
 
 TEST_CASE("LibreDWG DXF round-trips a model-space LINE", "[dxf][libredwg]") {
@@ -72,6 +109,162 @@ TEST_CASE("LibreDWG DWG round-trips a model-space LINE", "[dwg][libredwg]") {
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.userLinesFlat.size() == 6);
   REQUIRE(in.userLinesFlat[3] == Catch::Approx(10.f).margin(0.05f));
+}
+
+// REQ-101 (D-2026-09-08-i) / ADR-054 Phase B (#441): the DWG-trailer document is the same `double`
+// GsIo JSON tree as `.gst` (Phase A widened the stores it reads/writes) — a state-plane-magnitude
+// coordinate must survive the trailer round trip within ±0.002 ft, not the pre-migration ±0.01 ft.
+TEST_CASE("DWG trailer round-trips a state-plane coordinate within REQ-101 tolerance",
+          "[dwg][libredwg][req101]") {
+  ScratchDir dir("dwg-req101");
+  const auto p = (dir.path / "stateplane.dwg").string();
+  AppCommandState st;
+  st.userLinesFlat = {2034567.891234, 891234.567891, 0.0, 2034577.891234, 891234.567891, 0.0};
+  st.userLineAttrs = {EntityAttributes{}};
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userLinesFlat.size() == 6);
+  // Local storage invariant: world = local + worldDocumentOrigin (a state-plane-magnitude
+  // coordinate rebases on load, per CadCoordinateFrame — that is unrelated to REQ-101's precision
+  // guarantee, which this test checks in world space).
+  CHECK(in.userLinesFlat[0] + in.worldDocumentOriginX == Catch::Approx(2034567.891234).margin(0.002));
+  CHECK(in.userLinesFlat[1] + in.worldDocumentOriginY == Catch::Approx(891234.567891).margin(0.002));
+  CHECK(in.userLinesFlat[3] + in.worldDocumentOriginX == Catch::Approx(2034577.891234).margin(0.002));
+}
+
+// A DWG saved by a pre-migration build stored coordinates as `float` before writing the trailer
+// JSON, so its text already carries only `float` resolution (~0.008 ft at state-plane magnitude).
+// Loading such a file today must not error and must still land within the old, documented ±0.01 ft
+// — the trailer JSON shape did not change, so there is no format-version gate to fail open on.
+TEST_CASE("A legacy float-precision DWG trailer still loads within the old REQ-101 tolerance",
+          "[dwg][libredwg][req101]") {
+  ScratchDir dir("dwg-legacy");
+  const auto p = (dir.path / "legacy.dwg").string();
+
+  const double trueX = 2034567.891234;
+  const double trueY = 891234.567891;
+  const double legacyX = static_cast<double>(static_cast<float>(trueX));
+  const double legacyY = static_cast<double>(static_cast<float>(trueY));
+
+  AppCommandState legacy;
+  legacy.userLinesFlat = {legacyX, legacyY, 0.0, legacyX + 10.0, legacyY, 0.0};
+  legacy.userLineAttrs = {EntityAttributes{}};
+  const std::string json = SerializeGoSurveyJson(legacy);
+
+  // Mirrors DwgIo.cpp's private trailer layout (REQ-175 / ADR-044): a placeholder "DWG" prefix +
+  // JSON document + 8-byte little-endian length + the 16-byte magic. TryGoSurveyDwgPayloadFromBytes
+  // only inspects the trailer, so the prefix need not be real LibreDWG bytes.
+  static constexpr unsigned char kMagic[16] = {'G', 'O', 'S', 'U', 'R', 'V', 'E', 'Y',
+                                                '_', 'D', 'O', 'C', 'v', '1', '\n', '\0'};
+  {
+    std::ofstream f(p, std::ios::binary);
+    f << "not-a-real-dwg-prefix";
+    f.write(json.data(), static_cast<std::streamsize>(json.size()));
+    std::uint64_t n = static_cast<std::uint64_t>(json.size());
+    unsigned char b[8];
+    for (int i = 0; i < 8; ++i)
+      b[static_cast<size_t>(i)] = static_cast<unsigned char>((n >> (8 * i)) & 0xFFu);
+    f.write(reinterpret_cast<const char*>(b), 8);
+    f.write(reinterpret_cast<const char*>(kMagic), sizeof(kMagic));
+  }
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userLinesFlat.size() == 6);
+  // Local storage invariant: world = local + worldDocumentOrigin.
+  CHECK(in.userLinesFlat[0] + in.worldDocumentOriginX == Catch::Approx(trueX).margin(0.01));
+  CHECK(in.userLinesFlat[1] + in.worldDocumentOriginY == Catch::Approx(trueY).margin(0.01));
+}
+
+// REQ-101 Phase F (#447): SurveyPoint::easting/northing/elevation widened `float` -> `double`. A
+// survey point round-tripped through DXF POINT + GOSURVEY XDATA (1071 id / 1070 labelStyle / 1000
+// desc, the format ADR-005/REQ-023 use) must land within +/-0.002 ft of a state-plane-magnitude
+// value — the same guarantee Phase B already proved for plain LINE/CIRCLE geometry. Before this
+// phase, DxfIo.cpp's reader narrowed `wx - worldDocumentOriginX` through `static_cast<float>` when
+// rebuilding the point (float resolves ~0.008 ft at this magnitude), so this assertion would have
+// failed at the old code with a margin tighter than 0.008.
+TEST_CASE("DXF survey point XDATA round-trips a state-plane coordinate within REQ-101 tolerance",
+          "[dxf][libredwg][req101][survey]") {
+  ScratchDir dir("dxf-survey-req101");
+  const auto p = (dir.path / "surveypoint.dxf").string();
+
+  AppCommandState st;
+  SurveyPoint sp;
+  sp.id = 501;
+  sp.easting = 2034567.891234;
+  sp.northing = 891234.567891;
+  sp.elevation = 456.789123;
+  sp.description = "IPF";
+  sp.rawDescription = "IPF";
+  sp.layer = "0";
+  sp.labelStyle = SurveyPointLabelStyle::None;  // no MTEXT needed for this round trip
+  st.surveyPoints.push_back(sp);
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+
+  AppCommandState in;
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.surveyPoints.size() == 1);
+
+  // Local storage invariant: world = local + worldDocumentOrigin (a state-plane-magnitude
+  // coordinate rebases on import) — REQ-101's guarantee is checked in world space, as the DWG-trailer
+  // test above does for plain geometry.
+  // `epsilon(0.0)` disables Catch2's default RELATIVE tolerance (~1.2e-3 of the larger operand) —
+  // at a ~2e6 magnitude that alone is +/-2000+ ft, which would swallow the 0.002 ft absolute margin
+  // entirely and let the test pass regardless of the actual error.
+  const SurveyPoint& got = in.surveyPoints[0];
+  CHECK(got.easting + in.worldDocumentOriginX == Catch::Approx(sp.easting).margin(0.002).epsilon(0.0));
+  CHECK(got.northing + in.worldDocumentOriginY == Catch::Approx(sp.northing).margin(0.002).epsilon(0.0));
+  CHECK(got.elevation == Catch::Approx(sp.elevation).margin(0.002).epsilon(0.0));
+  CHECK(got.id == sp.id);
+}
+
+// REQ-101 Phase F (#447): SurveyPoint::easting/northing widened `float` -> `double`. The CSV
+// importer computes each point's LOCAL coordinate as `worldE - worldDocumentOriginX` and stores it
+// BEFORE the post-import rebase (`MaybeRebaseLargeCoordinates`) runs — so on a fresh document
+// (origin still (0,0)) a state-plane-magnitude easting is assigned to `SurveyPoint::easting` at its
+// FULL magnitude, then rebased afterward. With `easting` as `float`, that first assignment alone
+// quantizes at ~0.008 ft (float spacing at 2e6), and the later rebase only rearranges an already
+//-quantized value — it cannot recover the lost precision. This is the same "narrow-before-origin"
+// hazard `regression-req101-origin-at-entry` pins for typed LINE points; this test pins the CSV
+// import path for survey points and would have failed at the pre-Phase-F `float` field (error
+// ~0.008-0.025 ft, outside +/-0.002 ft) — proven by reverting the field to `float` locally and
+// re-running, then restored.
+TEST_CASE("CSV import stores a state-plane survey point within REQ-101 tolerance", "[csv][survey][req101]") {
+  HeadlessImGuiScope imguiScope;
+  ScratchDir dir("csv-survey-req101");
+  const auto p = (dir.path / "points.csv").string();
+  {
+    std::ofstream f(p);
+    // ENZ layout (no point-id column): E,N,Z. Same state-plane easting/northing
+    // `regression-req101-origin-at-entry` uses for LINE — documented there to quantize to
+    // 2000000.125 through a bare `float` cast (error 0.025 ft), so this value is known to expose
+    // the hazard rather than happening to land within tolerance by luck.
+    f << "2000000.10,500000.03,456.789123\n";
+  }
+
+  AppCommandState st;
+  std::snprintf(st.surveyImportCsvPath, sizeof(st.surveyImportCsvPath), "%s", p.c_str());
+  st.surveyImportCsvLayoutIdx = 3;  // ENZ (SurveyCsvLayoutFromUiIndex)
+  st.surveyImportCsvSkipFirstRow = false;
+
+  std::vector<std::string> log;
+  REQUIRE(SurveyCsvImportFile(st, log));
+  REQUIRE(st.surveyPoints.size() == 1);
+
+  // Local storage invariant: world = local + worldDocumentOrigin — the point's magnitude triggers
+  // the post-import rebase, so this checks the guarantee in world space, as the DWG-trailer test
+  // above does for plain geometry.
+  // `epsilon(0.0)`: see the DXF survey-point test above — without it Catch2's default RELATIVE
+  // tolerance at this magnitude (~2000+ ft) would swallow the 0.002 ft margin entirely.
+  const SurveyPoint& got = st.surveyPoints[0];
+  CHECK(got.easting + st.worldDocumentOriginX == Catch::Approx(2000000.10).margin(0.002).epsilon(0.0));
+  CHECK(got.northing + st.worldDocumentOriginY == Catch::Approx(500000.03).margin(0.002).epsilon(0.0));
+  CHECK(got.elevation == Catch::Approx(456.789123).margin(0.002).epsilon(0.0));
 }
 
 TEST_CASE("DWG import refuses a non-DWG path", "[dwg][libredwg]") {
@@ -112,6 +305,64 @@ TEST_CASE("GoSurvey DWG preserves a survey point (REQ-175)", "[dwg][libredwg][re
   REQUIRE(in.userLinesFlat.size() == 6);
 }
 
+// issue #167 — save staged the file beside the target then replaced it; the reopen-append race on
+// the final (possibly sync-locked) path is gone, and no staging file is left behind.
+TEST_CASE("DWG save overwrites an existing file with a full GoSurvey document (issue #167)",
+          "[dwg][libredwg][issue167]") {
+  ScratchDir dir("resave");
+  const auto p = (dir.path / "resave.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  SurveyPoint pt;
+  pt.id = 7;
+  pt.description = "REBAR";
+  pt.labelStyle = SurveyPointLabelStyle::None;
+  st.surveyPoints.push_back(pt);
+  std::vector<std::string> log;
+
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  st.surveyPoints[0].description = "IPF";
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));  // overwrite the existing target
+
+  CHECK_FALSE(std::filesystem::exists(p + ".gosurvey-save.tmp"));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.surveyPoints.size() == 1);
+  CHECK(in.surveyPoints[0].description == "IPF");
+}
+
+#if defined(_WIN32)
+// issue #167 follow-up — re-opening the same std::ofstream after a failed append (clear() only)
+// could leave MSVC's stream locale null and crash on write. Hold the staged DWG exclusively,
+// release after the first retry sleep, and assert the trailer still lands.
+TEST_CASE("DWG trailer append retries through a briefly locked staged file", "[dwg][io][issue167]") {
+  ScratchDir dir("append-lock");
+  const std::string stagedUtf8 = (dir.path / "staged.dwg").u8string();
+  AppCommandState st;
+  OneLine(st);
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, stagedUtf8.c_str(), log, false));
+
+  const std::wstring wstaged = std::filesystem::u8path(stagedUtf8).wstring();
+  const HANDLE lock =
+      CreateFileW(wstaged.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                  FILE_ATTRIBUTE_NORMAL, nullptr);
+  REQUIRE(lock != INVALID_HANDLE_VALUE);
+
+  std::thread releaser([lock] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    CloseHandle(lock);
+  });
+
+  REQUIRE(AppendGoSurveyPayloadToDwgFile(stagedUtf8.c_str(), st, log));
+  releaser.join();
+
+  AppCommandState loaded;
+  REQUIRE(ImportDwgFile(loaded, stagedUtf8.c_str(), log));
+  REQUIRE(loaded.userLinesFlat.size() == 6);
+}
+#endif
+
 // issue #140 — the DWG layer table imported with garbled names / wrong colours / no linetypes.
 TEST_CASE("LibreDWG decodes UTF-16LE (R2007+) table strings", "[dwg][libredwg][issue140]") {
   // The pre-fix code did std::string((char*)buf), which truncates a TU buffer at the first
@@ -132,6 +383,37 @@ TEST_CASE("LibreDWG layer colour: negative ACI keeps its colour", "[dwg][libredw
   CHECK(libredwgcad_detail::ColorToStorage(0, 0xc3, 0x1E90FFu) == "#1E90FF"); // true colour
   CHECK(libredwgcad_detail::ColorToStorage(0, 0xc3, 0) == "ByBlock");         // 0xc3 sentinel
   CHECK(libredwgcad_detail::ColorToStorage(256, 0xc3, 0x100u) == "ByLayer");  // 0xc3 sentinel
+}
+
+// issue #369 / D-2026-09-10-b — a Civil 3D parts-catalog file (pressure pipe / fitting /
+// structure) stores no portable 3D geometry; its 3DSOLID is an empty placeholder and its class
+// table is full of AECC_* custom classes. The importer names that skip for what it is rather than
+// the ambiguous "3DSOLID(empty)".
+TEST_CASE("Civil3D parts-catalog class signature is detected from the class table",
+          "[dwg][libredwg][issue369]") {
+  Dwg_Class classes[3] = {};
+  classes[0].dxfname = const_cast<char*>("ACDBDICTIONARYWDFLT");
+  classes[1].dxfname = const_cast<char*>("AECC_PRESSURE_PIPE");
+  classes[2].dxfname = const_cast<char*>("AECC_FITTING_STYLE");
+
+  Dwg_Data dwg = {};
+  dwg.num_classes = 3;
+  dwg.dwg_class = classes;
+  CHECK(libredwgcad_detail::DwgHasCivil3dCatalogClasses(&dwg));
+
+  // A plain drawing (no AECC_* classes) is not flagged.
+  Dwg_Class plain[2] = {};
+  plain[0].dxfname = const_cast<char*>("ACDBDICTIONARYWDFLT");
+  plain[1].dxfname = const_cast<char*>("LWPOLYLINE");
+  Dwg_Data ordinary = {};
+  ordinary.num_classes = 2;
+  ordinary.dwg_class = plain;
+  CHECK_FALSE(libredwgcad_detail::DwgHasCivil3dCatalogClasses(&ordinary));
+
+  // No class table, and a null drawing, are both safe.
+  Dwg_Data empty = {};
+  CHECK_FALSE(libredwgcad_detail::DwgHasCivil3dCatalogClasses(&empty));
+  CHECK_FALSE(libredwgcad_detail::DwgHasCivil3dCatalogClasses(nullptr));
 }
 
 // issue #140 / DEBT-151-a — end-to-end against a real LibreDWG-decoded file: a multi-layer table
@@ -169,8 +451,8 @@ TEST_CASE("LibreDWG imports a multi-layer table end to end", "[dwg][libredwg][is
       Dwg_Object_LAYER* ly = dwg_add_LAYER(dwg, s.name);
       REQUIRE(ly != nullptr);
       ly->color.index = s.aci;
-      ly->color.method = 0xc2;
-      ly->on = s.on ? 1 : 0;
+      ly->color.method = DWG_COLOR_METHOD_ACI;
+      ly->off = s.on ? 0 : 1;
       ly->frozen = s.frozen ? 1 : 0;
       ly->locked = s.locked ? 1 : 0;
       // R2000 encode serialises the packed flag0 bits, not the decoded booleans.
@@ -262,6 +544,219 @@ TEST_CASE("DWG export writes the layer table and per-entity layer (DEBT-151-b)",
 
   REQUIRE(in.userLineAttrs.size() == 1);
   CHECK(in.userLineAttrs[0].layer == "V-CONTOUR");
+}
+
+// Save-As crash (issue #167 follow-up): TableWriter cached Dwg_Object* into dwg->object[], which
+// LibreDWG can reallocate while later dwg_add_ARC calls run. Re-resolve by objid instead.
+TEST_CASE("DWG export keeps layer handles valid after many entities (issue #167)",
+          "[dwg][libredwg][issue140]") {
+  ScratchDir dir("layerexport-realloc");
+  const auto p = (dir.path / "many-arcs.dwg").string();
+
+  AppCommandState st;
+  CadLayerRow contour;
+  contour.name = "V-CONTOUR";
+  contour.color = "#00FF00";
+  contour.linetype = "DASHED";
+  st.drawingLayerTable.push_back(contour);
+  CadLayerRow border;
+  border.name = "BORDER";
+  border.color = "Red";
+  border.linetype = "CENTER";
+  st.drawingLayerTable.push_back(border);
+
+  EntityAttributes at;
+  at.layer = "V-CONTOUR";
+  at.color = "ByLayer";
+  at.linetype = "DASHED";
+
+  for (int i = 0; i < 200; ++i) {
+    CadArc arc;
+    arc.cx = static_cast<double>(i);
+    arc.cy = 0.0;
+    arc.r = 1.0;
+    arc.startRad = 0.f;
+    arc.sweepRad = 3.14159265f;
+    st.userArcs.push_back(arc);
+    st.userArcAttrs.push_back(at);
+  }
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userArcs.size() == 200);
+  REQUIRE(in.userArcAttrs.size() == 200);
+  CHECK(in.userArcAttrs[0].layer == "V-CONTOUR");
+  CHECK(in.userArcAttrs[0].linetype == "DASHED");
+}
+
+// issue #160 / DEBT-151-a — end-to-end against a genuine AutoCAD 2018 (AC1032, from_version
+// R_2018) file, committed as samples/duke-main-clean-r2018.dwg (a real survey/topo drawing:
+// 154 named layers, ~2300 lines, ~1500 polylines). LibreDWG 0.13.3's own encoder cannot produce
+// an R2004+ file its decoder can re-read, so a real committed fixture is the only way to run the
+// UTF-16LE (BITCODE_TU) name-decode path (IS_FROM_TU_DWG, from_version >= R_2007) end to end
+// rather than via the hand-built uint16_t buffer in the DecodeDwgString unit case above.
+//
+// Fixture path: GOSURVEY_SAMPLES_DIR is defined on this target by CMakeLists.txt.
+// Note: this drawing has no off / frozen / locked layers — those flags stay covered by the
+// R2000 "multi-layer table end to end" case. AutoCAD-visual verification of the colours is out
+// of scope here (no AutoCAD/ODA in the build env; REQ-170).
+namespace {
+std::string SamplePath(const char* name) {
+  return std::string(GOSURVEY_SAMPLES_DIR) + "/" + name;
+}
+}  // namespace
+
+TEST_CASE("LibreDWG imports the full layer table of a real R2018 DWG (issue #160)",
+          "[dwg][libredwg][issue140][issue160]") {
+  const std::string p = SamplePath("duke-main-clean-r2018.dwg");
+  REQUIRE(std::filesystem::exists(p));
+
+  // Criterion 4: the fixture really is R2007+, so the BITCODE_TU decode branch runs.
+  CHECK(DwgVersionName(p.c_str()) == "AutoCAD 2018");
+  {
+    Dwg_Data dwg;
+    std::memset(&dwg, 0, sizeof(dwg));
+    REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+    CHECK(dwg.header.from_version >= R_2007);
+    CHECK(dwg.header.from_version == R_2018);
+    dwg_free(&dwg);
+  }
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  const bool ok = ImportDwgFile(in, p.c_str(), log);
+  for (const std::string& l : log) UNSCOPED_INFO(l);
+  REQUIRE(ok);
+
+  bool sawVersion = false, sawCount = false;
+  for (const std::string& l : log) {
+    if (l.find("AutoCAD 2018") != std::string::npos) sawVersion = true;
+    if (l.find("154 layer(s)") != std::string::npos) sawCount = true;
+  }
+  CHECK(sawVersion);
+  CHECK(sawCount);
+
+  // 154 imported + the always-present default layer "0".
+  CHECK(in.drawingLayerTable.size() == 155);
+
+  auto row = [&](const char* n) -> const CadLayerRow* {
+    for (const CadLayerRow& r : in.drawingLayerTable)
+      if (r.name == n) return &r;
+    return nullptr;
+  };
+
+  // Names: multi-word and punctuated names decode intact (not truncated at the first UTF-16 NUL).
+  REQUIRE(row("1 Node") != nullptr);
+  REQUIRE(row("0 Center Lines") != nullptr);
+  REQUIRE(row("JM- Ehouse 4") != nullptr);
+  REQUIRE(row("CJ-TOPO-DRAINLINE") != nullptr);
+  REQUIRE(row("C-FIRE-PIPE-12IN") != nullptr);
+
+  // Colours: 0xc3-encoded indexed colours resolve through the ACI palette (regression: they used
+  // to import as near-black #0000NN); 0xc2 colours keep their true-colour RGB.
+  CHECK(row("1 Node")->color == "#FF0000");             // ACI 10
+  CHECK(row("0 Center Lines")->color == "#BFFF00");     // ACI 60
+  CHECK(row("CJ-TOPO-DRAINLINE")->color == "#FF007F");  // ACI 230
+  CHECK(row("C-FIRE-PIPE-12IN")->color == "#00BFFF");   // ACI 140
+  CHECK(row("C-TOPO-MAJR")->color == "#0000FF");        // 0xc2 true colour, unchanged
+  CHECK(row("V-SSWR-PIPE")->color == "#BF00FF");        // 0xc2 true colour
+  CHECK(row("C-PRKG-STRP")->color == "ByLayer");
+
+  // Linetypes: the layer's assigned LTYPE name is imported, not forced to Continuous.
+  CHECK(row("0 Center Lines")->linetype == "CENTER2");
+  CHECK(row("CJ-TOPO-DRAINLINE")->linetype == "PHANTOM2");
+  CHECK(row("C-FIRE-PIPE-12IN")->linetype == "UT-FIRE12''");
+  CHECK(row("C-FENC")->linetype == "Fence");
+  CHECK(row("1 Node")->linetype == "Continuous");
+
+  // Flags: every layer in this drawing is on / thawed / unlocked.
+  for (const CadLayerRow& r : in.drawingLayerTable) {
+    CHECK(r.on);
+    CHECK_FALSE(r.frozen);
+    CHECK_FALSE(r.locked);
+  }
+
+  // A sample entity resolves to the correct (named, non-"0") layer.
+  int firePipe12 = 0;
+  for (const EntityAttributes& a : in.userLineAttrs)
+    if (a.layer == "C-FIRE-PIPE-12IN") ++firePipe12;
+  for (const EntityAttributes& a : in.userPolylineAttrs)
+    if (a.layer == "C-FIRE-PIPE-12IN") ++firePipe12;
+  CHECK(firePipe12 > 100);
+}
+
+// GitHub issue #391 / REQ-312 — the DWG ARC writer never set `extrusion`, so a tilted arc
+// (`CadArc::nx/ny/nz` not world +Z) exported flat and silently. It must now write the normal as the
+// ARC's extrusion and the centre in the OCS frame that normal implies, matching how DxfIo.cpp's
+// `ocsPointOf` writes DXF groups 210/220/230. A flat arc must be byte-for-byte unchanged.
+TEST_CASE("DWG export writes a tilted ARC's extrusion and OCS centre (issue #391)",
+          "[dwg][libredwg][req312][issue391]") {
+  ScratchDir dir("tiltedarc");
+  const auto p = (dir.path / "arc.dwg").string();
+
+  AppCommandState st;
+  // A flat arc — extrusion +Z, centre unchanged.
+  CadArc flat{};
+  flat.cx = 5.f; flat.cy = 5.f; flat.z = 0.f; flat.r = 3.f;
+  flat.startRad = 0.f; flat.sweepRad = 1.2f;
+  flat.nx = 0.f; flat.ny = 0.f; flat.nz = 1.f;
+  // A tilted arc — normal pointing world +Y.
+  CadArc tilt{};
+  tilt.cx = 10.f; tilt.cy = 0.f; tilt.z = 4.f; tilt.r = 2.f;
+  tilt.startRad = 0.f; tilt.sweepRad = 1.5f;
+  tilt.nx = 0.f; tilt.ny = 1.f; tilt.nz = 0.f;
+  st.userArcs = {flat, tilt};
+  st.userArcAttrs = {EntityAttributes{}, EntityAttributes{}};
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  // The OCS centre a reader reconstructs for the tilted arc — same frame the writer used.
+  ucs::Ucs frame;
+  REQUIRE(ucs::FromNormal({0.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, &frame));
+  const ray3d::Vec3 tiltOcs = ucs::WorldToUcs(frame, {10.0, 0.0, 4.0});
+
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+
+  const Dwg_Entity_ARC* flatArc = nullptr;
+  const Dwg_Entity_ARC* tiltArc = nullptr;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype != DWG_TYPE_ARC || o->tio.entity == nullptr || o->tio.entity->tio.ARC == nullptr)
+      continue;
+    const Dwg_Entity_ARC* e = o->tio.entity->tio.ARC;
+    if (e->radius == Catch::Approx(3.0).margin(1e-6))
+      flatArc = e;
+    else if (e->radius == Catch::Approx(2.0).margin(1e-6))
+      tiltArc = e;
+  }
+  REQUIRE(flatArc != nullptr);
+  REQUIRE(tiltArc != nullptr);
+
+  // Flat arc: extrusion is the default +Z and the centre is the world centre, unchanged.
+  CHECK(flatArc->extrusion.x == Catch::Approx(0.0).margin(1e-9));
+  CHECK(flatArc->extrusion.y == Catch::Approx(0.0).margin(1e-9));
+  CHECK(flatArc->extrusion.z == Catch::Approx(1.0).margin(1e-9));
+  CHECK(flatArc->center.x == Catch::Approx(5.0).margin(1e-6));
+  CHECK(flatArc->center.y == Catch::Approx(5.0).margin(1e-6));
+  CHECK(flatArc->center.z == Catch::Approx(0.0).margin(1e-6));
+
+  // Tilted arc: extrusion carries the normal, centre is the OCS point.
+  CHECK(tiltArc->extrusion.x == Catch::Approx(0.0).margin(1e-9));
+  CHECK(tiltArc->extrusion.y == Catch::Approx(1.0).margin(1e-9));
+  CHECK(tiltArc->extrusion.z == Catch::Approx(0.0).margin(1e-9));
+  CHECK(tiltArc->center.x == Catch::Approx(tiltOcs.x).margin(1e-6));
+  CHECK(tiltArc->center.y == Catch::Approx(tiltOcs.y).margin(1e-6));
+  CHECK(tiltArc->center.z == Catch::Approx(tiltOcs.z).margin(1e-6));
+  // The OCS centre is genuinely different from the world centre (not a no-op path).
+  CHECK(std::fabs(tiltArc->center.z - 4.0) > 0.5);
+
+  dwg_free(&dwg);
 }
 
 TEST_CASE("Foreign DWG without payload still imports a LINE (REQ-175)", "[dwg][libredwg][req175]") {

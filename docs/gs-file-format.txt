@@ -2,6 +2,14 @@
   GoSurvey workspace file (.gs) — format specification and load behavior
 ================================================================================
 
+NOTE (2026-09-04, D-2026-09-03-h / issue #264): standalone .gs as an openable document
+format is RETIRED — there is no File > Open/Save, no OPEN/SAVEAS verb, and no Windows
+file association for .gs any more. The JSON schema this document describes lives on in
+two places only: (1) embedded as a trailer inside every .dwg (ADR-044; the drawing
+document is .dwg), and (2) as the .gst workspace-template format (same shape, its own
+narrow reader/writer, no file association). Everything below still describes that JSON
+schema accurately — only the file extension and the ability to open it standalone changed.
+
 This document describes the native GoSurvey workspace file format (extension
 .gs), how it is structured on disk, and exactly how the application reads it.
 It is derived from the implementation in:
@@ -147,6 +155,17 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
             paperWIn, paperHIn        (numbers) rect size in paper inches
             modelCenterX, modelCenterY(numbers) model-space (world) point shown at the rect center
             scaleModelPerPaperIn      (number)  model units per paper inch (viewport scale)
+            camAzimuthDeg, camElevationDeg, camRollDeg (numbers, optional) — REQ-061; the camera this
+                                        viewport views model space through (same convention as the
+                                        model viewport). Absent / 0,90,0 = the straight-down plan
+                                        view, identical to the pre-REQ-061 flat projection.
+            camPerspective            (bool, optional)   — REQ-061; false (default) = orthographic
+            camFovDeg                 (number, optional) — REQ-061; perspective vertical FOV
+            ucs                       (object, optional) — REQ-155; this viewport's active UCS frame
+                                        ({origin,xAxis,yAxis,zAxis}, each a 3-number array), used
+                                        while editing the model through it in floating model space
+                                        (REQ-036). Absent = World (every pre-REQ-155 file). A frame
+                                        that fails its orthonormal check on load falls back to World.
             layer                     (string)  viewport's layer (for plotting)
             frozenLayers              (array of strings, optional) — REQ-028; layers hidden only in this viewport
             vpColorLayers             (array of strings, optional) — REQ-046; layers with a per-viewport color

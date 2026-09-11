@@ -145,17 +145,28 @@ TEST_CASE("A failing step reports which version pair failed and why", "[gsmigrat
 
 TEST_CASE("The production entry point accepts a current-version document", "[gsmigrate]")
 {
-  // The shipped table is empty (still format version 1), so the only behaviour it can exhibit is
-  // the no-op path. Pinned so that adding the first real migration cannot silently break the
-  // case that every existing drawing takes today.
   json doc = json::object();
   std::vector<std::string> log;
   std::string err;
 
-  REQUIRE(MigrateGsDocument(doc, 1, 1, log, err));
+  REQUIRE(MigrateGsDocument(doc, kGsFormatVersion, kGsFormatVersion, log, err));
   CHECK(log.empty());
   CHECK(err.empty());
 
-  CHECK_FALSE(MigrateGsDocument(doc, 2, 1, log, err));   // newer file, current build
+  CHECK_FALSE(MigrateGsDocument(doc, kGsFormatVersion + 1, kGsFormatVersion, log, err));  // newer file
   CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("The production migration chain reaches every version up to the current one", "[gsmigrate]")
+{
+  // Every solid-geometry bump so far (ellipse edges, procedural edges, NURBS faces) is a pure
+  // relabel: an older document has none of the new geometry, so it carries forward byte-identically
+  // and the chain must simply not have a gap.
+  json doc = json::object();
+  std::vector<std::string> log;
+  std::string err;
+
+  REQUIRE(MigrateGsDocument(doc, 1, kGsFormatVersion, log, err));
+  CHECK(err.empty());
+  CHECK(static_cast<int>(log.size()) == kGsFormatVersion - 1);
 }

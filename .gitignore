@@ -86,5 +86,7 @@ desktop.ini
 *.rdbg
 
 # --- DevShell test scratch outputs (written at runtime by src/devshell) ---
-/issue124-roundtrip.gs
-/issue124-wblock.gs
+/issue124-roundtrip.json
+
+# REQ-336 — one-time unlock for pushing resources/whats-new.md (tools/approve-whats-new.ps1)
+.whats-new-push-unlock

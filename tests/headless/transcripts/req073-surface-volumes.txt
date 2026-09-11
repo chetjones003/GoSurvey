@@ -14,21 +14,23 @@
 # algorithm the way the Catch2 suite's hand-built rectangles are).
 #
 # **The numbers are properties of the FIXTURE**, read out of the running program with `--print-log`,
-# the same convention `req070`/`req072` use: `samples/surface-demo.gs` triangulates to 982 triangles
-# over 229,208.2107 ft^2. Two surfaces built from the SAME point group ("Existing Ground") are
+# the same convention `req070`/`req072` use: `samples/surface-demo.dwg` triangulates to 982 triangles
+# over 229,208.2109 ft^2 (Phase G, ADR-054: TIN vertex storage widened float->double, REQ-101 #453 —
+# the area shifted by 0.0002 ft^2 from the old float-quantized value). Two surfaces built from the
+# SAME point group ("Existing Ground") are
 # independently-triangulated but topologically IDENTICAL (Delaunay is deterministic for the same
 # point set), so comparing them nets exactly zero — a stronger end-to-end version of "compare a
 # surface with itself" than passing one `CadTin` to itself, since these are two distinct `CadSurface`
 # objects reached by two distinct names.
 
-OPEN samples/surface-demo.gs
+OPEN samples/surface-demo.dwg
 CMD SURFACECREATE Base, Existing Ground
 CMD SURFACECREATE Twin, Existing Ground
 EXPECT SURFACES 2
 
 # --- two independently-built surfaces from the same source data volume to exactly zero --------------
 CMD VOLUMES Base, Twin
-EXPECT LOG "cut 0.0000 yd3, fill 0.0000 yd3, net 0.0000 yd3, cut area 0.0000 ft2, fill area 0.0000 ft2, common area 229208.2107 ft2"
+EXPECT LOG "cut 0.0000 yd3, fill 0.0000 yd3, net 0.0000 yd3, cut area 0.0000 ft2, fill area 0.0000 ft2, common area 229208.2109 ft2"
 CHECK ALL
 
 # REQ-131: omitting the clip keeps full overlap; a nonsense id is refused; a missing id is not a volume.
@@ -52,7 +54,7 @@ CMD SURFACEADDFILE Pad, samples/pad-points.csv
 CMD SURFACEREBUILD Pad
 CMD VOLUMES Base, Pad
 EXPECT LOG "cut 62.8000 yd3, fill 0.1489 yd3, net -62.6511 yd3"
-EXPECT LOG "common area 229208.2107 ft2"
+EXPECT LOG "common area 229208.2109 ft2"
 CHECK ALL
 
 # --- failure modes: a missing surface, a bad argument count -----------------------------------------

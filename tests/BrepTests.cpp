@@ -1,0 +1,6573 @@
+// The B-rep solid kernel (REQ-313 / ADR-045, GitHub issue #146 — Phase 3 of #120).
+//
+// Everything below runs with no window, no GL context and no document, which is the property the
+// requirement exists to protect. Two whole classes of defect are only catchable here:
+//
+//   1. A shell that is not closed, or whose faces disagree about which way an edge runs. On screen
+//      that renders as a perfectly ordinary-looking solid; it goes wrong later, in a volume report
+//      or a Phase 4 boolean, far from the command that built it.
+//   2. A volume or surface area that is *plausible*. A sphere whose volume is off by 3% looks
+//      exactly like one that is right. So every figure here is asserted against the closed form,
+//      not against a previously-recorded output.
+//
+// The tessellation cross-check is deliberately independent: it re-derives each volume from the
+// triangles by the divergence theorem, so the analytic integrals and the triangulation have to
+// agree with each other as well as with the textbook.
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+#include "util/brep.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
+
+using Catch::Approx;
+using brep::Problem;
+using brep::Solid;
+using brep::Vec3;
+
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kTwoPiTest = 2.0 * kPi;
+
+ucs::Ucs World() { return ucs::Ucs{}; }
+
+ucs::Ucs At(double x, double y, double z) {
+  ucs::Ucs u;
+  u.origin = {x, y, z};
+  return u;
+}
+
+/// A frame that is rotated in all three axes and translated to a state-plane-sized coordinate — the
+/// case where a formula that quietly assumes the world frame stops agreeing with one that does not.
+ucs::Ucs TiltedAt(double x, double y, double z) {
+  ucs::Ucs u;
+  REQUIRE(ucs::FromNormal(Vec3{x, y, z}, Vec3{0.3, -0.5, 0.81}, &u));
+  REQUIRE(ucs::IsRightHandedOrthonormal(u, 1e-9));
+  return u;
+}
+
+struct Counts {
+  int v = 0;
+  int e = 0;
+  int f = 0;
+};
+
+Counts CountOf(const Solid& s) {
+  return Counts{static_cast<int>(s.vertices.size()), static_cast<int>(s.edges.size()),
+                static_cast<int>(s.faces.size())};
+}
+
+/// Volume re-derived from the triangles alone, by the divergence theorem. Referenced to the first
+/// vertex so the arithmetic stays at model scale even when the mesh sits at easting 2e6.
+double TessellatedVolume(const brep::Tessellation& t) {
+  if (t.triangleCount() == 0)
+    return 0.0;
+  const Vec3 ref{t.vertsXyz[0], t.vertsXyz[1], t.vertsXyz[2]};
+  auto at = [&](std::uint32_t i) {
+    return Vec3{t.vertsXyz[3 * i] - ref.x, t.vertsXyz[3 * i + 1] - ref.y, t.vertsXyz[3 * i + 2] - ref.z};
+  };
+  double acc = 0.0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    const Vec3 a = at(t.indices[i]);
+    const Vec3 b = at(t.indices[i + 1]);
+    const Vec3 c = at(t.indices[i + 2]);
+    acc += ray3d::Dot(a, ray3d::Cross(b, c));
+  }
+  return acc / 6.0;
+}
+
+/// Surface area re-derived from the triangles alone.
+double TessellatedArea(const brep::Tessellation& t) {
+  auto at = [&](std::uint32_t i) {
+    return Vec3{t.vertsXyz[3 * i], t.vertsXyz[3 * i + 1], t.vertsXyz[3 * i + 2]};
+  };
+  double acc = 0.0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    const Vec3 a = at(t.indices[i]);
+    const Vec3 b = at(t.indices[i + 1]);
+    const Vec3 c = at(t.indices[i + 2]);
+    acc += 0.5 * ray3d::Length(ray3d::Cross(ray3d::Sub(b, a), ray3d::Sub(c, a)));
+  }
+  return acc;
+}
+
+/// Every triangle's winding must agree with the analytic normal stored on its vertices. A face
+/// tessellated inside-out still shades and still fills; it is only wrong once something culls or
+/// lights it, which is much later and much harder to attribute.
+void RequireWindingMatchesNormals(const brep::Tessellation& t) {
+  auto pos = [&](std::uint32_t i) {
+    return Vec3{t.vertsXyz[3 * i], t.vertsXyz[3 * i + 1], t.vertsXyz[3 * i + 2]};
+  };
+  auto nrm = [&](std::uint32_t i) {
+    return Vec3{t.normalsXyz[3 * i], t.normalsXyz[3 * i + 1], t.normalsXyz[3 * i + 2]};
+  };
+  int checked = 0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    const Vec3 a = pos(t.indices[i]);
+    const Vec3 b = pos(t.indices[i + 1]);
+    const Vec3 c = pos(t.indices[i + 2]);
+    const Vec3 geo = ray3d::Cross(ray3d::Sub(b, a), ray3d::Sub(c, a));
+    if (ray3d::Length(geo) < 1e-12)
+      continue;  // a pole sliver; it has no winding to check
+    const Vec3 n = nrm(t.indices[i]);
+    REQUIRE(ray3d::Dot(ray3d::Normalize(geo), n) > 0.0);
+    ++checked;
+  }
+  REQUIRE(checked > 0);
+}
+
+/// The whole tessellation must sit inside the reported bounds. `ComputeBounds` is allowed to be
+/// generous and is never allowed to be tight — a box that clips geometry out of zoom extents is the
+/// failure this pins.
+void RequireBoundsContain(const brep::Bounds& b, const brep::Tessellation& t) {
+  REQUIRE(b.valid);
+  for (int i = 0; i < t.vertexCount(); ++i) {
+    REQUIRE(t.vertsXyz[3 * i] >= b.mn.x - 1e-6);
+    REQUIRE(t.vertsXyz[3 * i] <= b.mx.x + 1e-6);
+    REQUIRE(t.vertsXyz[3 * i + 1] >= b.mn.y - 1e-6);
+    REQUIRE(t.vertsXyz[3 * i + 1] <= b.mx.y + 1e-6);
+    REQUIRE(t.vertsXyz[3 * i + 2] >= b.mn.z - 1e-6);
+    REQUIRE(t.vertsXyz[3 * i + 2] <= b.mx.z + 1e-6);
+  }
+}
+
+/// Build, validate, and confirm the analytic figures — the shape every primitive case below takes.
+void RequireSolid(const Solid& s, Counts expect, int euler, double volume, double area) {
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  const Counts got = CountOf(s);
+  REQUIRE(got.v == expect.v);
+  REQUIRE(got.e == expect.e);
+  REQUIRE(got.f == expect.f);
+  REQUIRE(brep::EulerCharacteristic(s) == euler);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(volume).epsilon(1e-12));
+  REQUIRE(mp.surfaceArea == Approx(area).epsilon(1e-12));
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// The seven primitives: topology, then the two numbers a user actually reads.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Box is a closed solid with exact volume and area", "[brep][req313]") {
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeBox(World(), 20.0, 10.0, 8.0, &s, &why));
+  REQUIRE(why == Problem::Ok);
+
+  RequireSolid(s, Counts{8, 12, 6}, 2, 20.0 * 10.0 * 8.0,
+               2.0 * (20.0 * 10.0 + 20.0 * 8.0 + 10.0 * 8.0));
+  REQUIRE(s.recipe.kind == brep::PrimitiveKind::Box);
+  REQUIRE(s.recipe.length == Approx(20.0));
+  REQUIRE(s.shells.size() == 1);
+  REQUIRE(s.shells[0].faces.size() == 6);
+}
+
+TEST_CASE("Wedge is a closed solid with exact volume and area", "[brep][req313]") {
+  const double L = 12.0;
+  const double W = 5.0;
+  const double H = 9.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeWedge(World(), L, W, H, &s, &why));
+
+  const double area = L * W                              // base
+                      + W * std::sqrt(L * L + H * H)     // the slope
+                      + W * H                            // the vertical back
+                      + L * H;                           // two triangular ends
+  RequireSolid(s, Counts{6, 9, 5}, 2, 0.5 * L * W * H, area);
+}
+
+TEST_CASE("Pyramid on a square base is a closed solid with exact volume and area", "[brep][req313]") {
+  const int n = 4;
+  const double r = 6.0;
+  const double h = 15.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakePyramid(World(), n, r, 0.0, h, &s, &why));
+
+  const double baseArea = 0.5 * n * r * r * std::sin(2.0 * kPi / n);
+  const double side = 2.0 * r * std::sin(kPi / n);
+  const double apothem = r * std::cos(kPi / n);
+  const double slant = std::sqrt(h * h + apothem * apothem);
+  RequireSolid(s, Counts{5, 8, 5}, 2, baseArea * h / 3.0, baseArea + 0.5 * n * side * slant);
+}
+
+TEST_CASE("Truncated pyramid is a closed solid with exact volume and area", "[brep][req313]") {
+  const int n = 6;
+  const double r0 = 8.0;
+  const double r1 = 3.0;
+  const double h = 4.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakePyramid(World(), n, r0, r1, h, &s, &why));
+
+  const double a0 = 0.5 * n * r0 * r0 * std::sin(2.0 * kPi / n);
+  const double a1 = 0.5 * n * r1 * r1 * std::sin(2.0 * kPi / n);
+  const double s0 = 2.0 * r0 * std::sin(kPi / n);
+  const double s1 = 2.0 * r1 * std::sin(kPi / n);
+  const double dApothem = (r0 - r1) * std::cos(kPi / n);
+  const double slant = std::sqrt(h * h + dApothem * dApothem);
+  const double lateral = n * 0.5 * (s0 + s1) * slant;
+  RequireSolid(s, Counts{2 * n, 3 * n, n + 2}, 2,
+               (h / 3.0) * (a0 + a1 + std::sqrt(a0 * a1)), a0 + a1 + lateral);
+}
+
+TEST_CASE("Cylinder is a closed solid with exact volume and area", "[brep][req313]") {
+  const double r = 4.0;
+  const double h = 25.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), r, h, &s, &why));
+
+  RequireSolid(s, Counts{4, 6, 4}, 2, kPi * r * r * h, 2.0 * kPi * r * r + 2.0 * kPi * r * h);
+}
+
+TEST_CASE("Cone with an apex is a closed solid with exact volume and area", "[brep][req313]") {
+  const double r = 3.0;
+  const double h = 11.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCone(World(), r, 0.0, h, &s, &why));
+
+  RequireSolid(s, Counts{3, 4, 3}, 2, kPi * r * r * h / 3.0,
+               kPi * r * r + kPi * r * std::sqrt(r * r + h * h));
+}
+
+TEST_CASE("Truncated cone is a closed solid with exact volume and area", "[brep][req313]") {
+  const double r0 = 7.0;
+  const double r1 = 2.5;
+  const double h = 6.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCone(World(), r0, r1, h, &s, &why));
+
+  const double slant = std::sqrt(h * h + (r0 - r1) * (r0 - r1));
+  RequireSolid(s, Counts{4, 6, 4}, 2, (kPi * h / 3.0) * (r0 * r0 + r0 * r1 + r1 * r1),
+               kPi * (r0 * r0 + r1 * r1) + kPi * (r0 + r1) * slant);
+}
+
+TEST_CASE("Sphere is a closed solid with exact volume and area", "[brep][req313]") {
+  const double R = 5.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeSphere(World(), R, &s, &why));
+
+  RequireSolid(s, Counts{2, 2, 2}, 2, 4.0 / 3.0 * kPi * R * R * R, 4.0 * kPi * R * R);
+}
+
+TEST_CASE("Torus is a closed solid of genus one with exact volume and area", "[brep][req313]") {
+  const double R = 10.0;
+  const double r = 2.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeTorus(World(), R, r, &s, &why));
+
+  // Euler characteristic 0, not 2 — a torus has a hole, and reporting 2 would mean the topology
+  // had quietly closed it.
+  RequireSolid(s, Counts{4, 8, 4}, 0, 2.0 * kPi * kPi * R * r * r, 4.0 * kPi * kPi * R * r);
+}
+
+// ---------------------------------------------------------------------------
+// Placement: the figures cannot depend on where or how the solid is oriented.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Volume and area are invariant under placement and rotation", "[brep][req313]") {
+  const double r = 4.0;
+  const double h = 25.0;
+  const double volume = kPi * r * r * h;
+  const double area = 2.0 * kPi * r * r + 2.0 * kPi * r * h;
+
+  for (const ucs::Ucs& frame : {World(), At(100.0, -250.0, 37.5), TiltedAt(12.0, -8.0, 3.0)}) {
+    Solid s;
+    Problem why = Problem::Ok;
+    REQUIRE(brep::MakeCylinder(frame, r, h, &s, &why));
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(volume).epsilon(1e-12));
+    REQUIRE(mp.surfaceArea == Approx(area).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("Solids stay accurate at survey coordinate magnitudes", "[brep][req313]") {
+  // A 10 ft object modelled on a state-plane grid: the case issue #120 calls out by name, and the
+  // one where a formula that subtracts two world-magnitude numbers loses every digit that matters.
+  const double e = 3'500'000.0;
+  const double n = 12'400'000.0;
+  const double z = 500.0;
+
+  SECTION("box") {
+    Solid s;
+    Problem why = Problem::Ok;
+    REQUIRE(brep::MakeBox(At(e, n, z), 10.0, 10.0, 10.0, &s, &why));
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    REQUIRE(mp.valid);
+    // REQ-101 is +/-0.01 on a coordinate; a 1000 ft^3 volume held to 1e-6 ft^3 is far inside it.
+    REQUIRE(mp.volume == Approx(1000.0).margin(1e-6));
+    REQUIRE(mp.surfaceArea == Approx(600.0).margin(1e-6));
+  }
+
+  SECTION("sphere on a tilted frame") {
+    Solid s;
+    Problem why = Problem::Ok;
+    REQUIRE(brep::MakeSphere(TiltedAt(e, n, z), 5.0, &s, &why));
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(4.0 / 3.0 * kPi * 125.0).margin(1e-6));
+    REQUIRE(mp.surfaceArea == Approx(4.0 * kPi * 25.0).margin(1e-6));
+  }
+
+  SECTION("torus, whose integrals carry the most cancellation") {
+    Solid s;
+    Problem why = Problem::Ok;
+    REQUIRE(brep::MakeTorus(At(e, n, z), 6.0, 1.5, &s, &why));
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(2.0 * kPi * kPi * 6.0 * 1.5 * 1.5).margin(1e-6));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Refusals. Each one is a solid a user could ask for and must not get.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Invalid dimensions are refused with a specific reason", "[brep][req313]") {
+  Solid s;
+  Problem why = Problem::Ok;
+
+  REQUIRE_FALSE(brep::MakeBox(World(), 0.0, 1.0, 1.0, &s, &why));
+  REQUIRE(why == Problem::NonPositiveLength);
+  REQUIRE_FALSE(brep::MakeBox(World(), 1.0, -2.0, 1.0, &s, &why));
+  REQUIRE(why == Problem::NonPositiveWidth);
+  REQUIRE_FALSE(brep::MakeBox(World(), 1.0, 1.0, 0.0, &s, &why));
+  REQUIRE(why == Problem::NonPositiveHeight);
+  REQUIRE_FALSE(brep::MakeBox(World(), std::nan(""), 1.0, 1.0, &s, &why));
+  REQUIRE(why == Problem::NonFiniteParameter);
+
+  REQUIRE_FALSE(brep::MakeCylinder(World(), -1.0, 5.0, &s, &why));
+  REQUIRE(why == Problem::NonPositiveRadius);
+
+  REQUIRE_FALSE(brep::MakeCone(World(), 5.0, -1.0, 5.0, &s, &why));
+  REQUIRE(why == Problem::NegativeTopRadius);
+  REQUIRE_FALSE(brep::MakeCone(World(), 5.0, 5.0, 5.0, &s, &why));
+  REQUIRE(why == Problem::TopRadiusNotBelowBase);
+
+  REQUIRE_FALSE(brep::MakeSphere(World(), 0.0, &s, &why));
+  REQUIRE(why == Problem::NonPositiveRadius);
+
+  // A tube EXACTLY as fat as the ring collapses the inner equator to a point — the inner rim edges
+  // have zero radius, so it is not a solid at all and is refused by name rather than left to
+  // surface later as "degenerate edge".
+  REQUIRE_FALSE(brep::MakeTorus(World(), 4.0, 4.0, &s, &why));
+  REQUIRE(why == Problem::MinorRadiusEqualsMajor);
+
+  REQUIRE_FALSE(brep::MakePyramid(World(), 2, 5.0, 0.0, 5.0, &s, &why));
+  REQUIRE(why == Problem::SideCountOutOfRange);
+  REQUIRE_FALSE(brep::MakePyramid(World(), brep::kMaxPyramidSides + 1, 5.0, 0.0, 5.0, &s, &why));
+  REQUIRE(why == Problem::SideCountOutOfRange);
+
+  // Every reason has to be sayable, or the command layer has nothing to print (REQ-201).
+  REQUIRE(std::string(brep::ProblemText(Problem::MinorRadiusEqualsMajor)).size() > 0);
+  REQUIRE(std::string(brep::ProblemText(Problem::NotClosed)).size() > 0);
+}
+
+TEST_CASE("Every failure reason and every primitive has its own name", "[brep][req313]") {
+  // Both of these are `switch`es over an enum, and both fail the same silent way: a missing case
+  // falls through to the default and every value starts reporting the same string. The command
+  // layer would then refuse a torus and tell the user its length was wrong.
+  const Problem all[] = {
+      Problem::Ok,
+      Problem::NonFiniteParameter,
+      Problem::NonPositiveLength,
+      Problem::NonPositiveWidth,
+      Problem::NonPositiveHeight,
+      Problem::NonPositiveRadius,
+      Problem::NegativeTopRadius,
+      Problem::TopRadiusNotBelowBase,
+      Problem::MinorRadiusEqualsMajor,
+      Problem::SideCountOutOfRange,
+      Problem::DegenerateFrame,
+      Problem::NoShell,
+      Problem::EmptyShell,
+      Problem::IndexOutOfRange,
+      Problem::LoopNotClosed,
+      Problem::EmptyLoop,
+      Problem::EdgeNotUsedTwice,
+      Problem::EdgeOrientationInconsistent,
+      Problem::FaceHasNoLoop,
+      Problem::DegenerateFace,
+      Problem::DegenerateEdge,
+      Problem::NonFiniteCoordinate,
+      Problem::NotClosed,
+      Problem::UnusedVertex,
+      Problem::PlaneFaceNotSimple,
+      Problem::NonPositiveTolerance,
+      // The edge-use tally, split apart (D-2026-09-09-k). Listed here because this case's whole
+      // job is to catch two values sharing one string — which is precisely what these two did
+      // while they were both `EdgeNotUsedTwice`, and what let a non-manifold solid be reported to
+      // the user as "not closed".
+      Problem::ShellOpenAtEdge,
+      Problem::EdgeNonManifold,
+  };
+  std::vector<std::string> seen;
+  for (Problem p : all) {
+    const std::string text = brep::ProblemText(p);
+    INFO(text);
+    REQUIRE_FALSE(text.empty());
+    // The distinctness check alone would not catch a *single* missing case, because the first
+    // value to fall through picks up the default sentence and nothing has claimed it yet. Naming
+    // the sentinel closes that: no enumerated value is allowed to reach the fallthrough.
+    REQUIRE(text != "The solid is not valid.");
+    REQUIRE(std::find(seen.begin(), seen.end(), text) == seen.end());
+    seen.push_back(text);
+  }
+
+  const brep::PrimitiveKind kinds[] = {
+      brep::PrimitiveKind::None,     brep::PrimitiveKind::Box,      brep::PrimitiveKind::Wedge,
+      brep::PrimitiveKind::Pyramid,  brep::PrimitiveKind::Cylinder, brep::PrimitiveKind::Cone,
+      brep::PrimitiveKind::Sphere,   brep::PrimitiveKind::Torus,
+  };
+  std::vector<std::string> names;
+  for (brep::PrimitiveKind k : kinds) {
+    const std::string name = brep::PrimitiveKindName(k);
+    INFO(name);
+    REQUIRE_FALSE(name.empty());
+    REQUIRE(std::find(names.begin(), names.end(), name) == names.end());
+    names.push_back(name);
+  }
+
+  // And the name a built solid reports is the one for the kind it actually is.
+  Solid built;
+  Problem builtWhy = Problem::Ok;
+  REQUIRE(brep::MakeTorus(World(), 5.0, 1.0, &built, &builtWhy));
+  REQUIRE(std::string(brep::PrimitiveKindName(built.recipe.kind)) == "Torus");
+}
+
+TEST_CASE("A skewed or mirrored placement frame is refused", "[brep][req313]") {
+  ucs::Ucs mirrored;
+  mirrored.xAxis = {1.0, 0.0, 0.0};
+  mirrored.yAxis = {0.0, 1.0, 0.0};
+  mirrored.zAxis = {0.0, 0.0, -1.0};  // left-handed: X cross Y is +Z, not -Z
+
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE_FALSE(brep::MakeBox(mirrored, 1.0, 1.0, 1.0, &s, &why));
+  REQUIRE(why == Problem::DegenerateFrame);
+
+  ucs::Ucs skewed;
+  skewed.yAxis = {0.5, 0.5, 0.0};  // not unit, not perpendicular
+  REQUIRE_FALSE(brep::MakeSphere(skewed, 1.0, &s, &why));
+  REQUIRE(why == Problem::DegenerateFrame);
+}
+
+// ---------------------------------------------------------------------------
+// Validity: what a deliberately broken solid must be caught doing.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Validate rejects broken topology", "[brep][req313]") {
+  Solid good;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeBox(World(), 4.0, 3.0, 2.0, &good, &why));
+  REQUIRE(brep::IsValid(good));
+
+  SECTION("a missing face leaves edges bounding only one face") {
+    Solid s = good;
+    s.faces.pop_back();
+    s.shells[0].faces.pop_back();
+    REQUIRE(brep::Validate(s) == Problem::ShellOpenAtEdge);
+  }
+
+  SECTION("two faces agreeing on an edge's direction is not orientable") {
+    // Reverse one face's boundary but leave its normal alone. The ring still closes — so this is
+    // not caught by the cheaper closure check — but every edge it touches is now used twice in the
+    // same direction, which is the definition of a shell that cannot be consistently oriented.
+    Solid s = good;
+    brep::Loop& lp = s.faces[0].loops[0];
+    for (brep::EdgeUse& u : lp.uses)
+      u.reversed = !u.reversed;
+    std::reverse(lp.uses.begin(), lp.uses.end());
+    REQUIRE(brep::Validate(s) == Problem::EdgeOrientationInconsistent);
+  }
+
+  SECTION("a boundary that does not close") {
+    Solid s = good;
+    s.faces[0].loops[0].uses.pop_back();
+    REQUIRE(brep::Validate(s) == Problem::LoopNotClosed);
+  }
+
+  SECTION("a face pointing the wrong way turns the volume negative") {
+    // Reverse every face's outward normal and its loop winding: the topology stays manifold and
+    // orientable, but the shell now describes the outside of the universe rather than a solid.
+    Solid s = good;
+    for (brep::Face& f : s.faces) {
+      f.surface.frame.zAxis = ray3d::Scale(f.surface.frame.zAxis, -1.0);
+      f.surface.frame.xAxis = ray3d::Scale(f.surface.frame.xAxis, -1.0);
+      for (brep::Loop& lp : f.loops) {
+        for (brep::EdgeUse& u : lp.uses)
+          u.reversed = !u.reversed;
+        std::reverse(lp.uses.begin(), lp.uses.end());
+      }
+    }
+    REQUIRE(brep::Validate(s) == Problem::NotClosed);
+  }
+
+  SECTION("a curved face whose span disagrees with its boundary") {
+    // The case the topological checks cannot see: every edge still bounds exactly two faces, every
+    // loop still closes, and the shell is still orientable — but one cylinder face now claims a
+    // quarter turn while its boundary runs a half turn, so the surface has a hole in it. Caught
+    // only by the geometric closure test, and it is exactly the shape a Phase 4 boolean could
+    // produce by trimming a face without re-cutting its loop.
+    Solid cyl;
+    Problem cylWhy = Problem::Ok;
+    REQUIRE(brep::MakeCylinder(World(), 3.0, 7.0, &cyl, &cylWhy));
+    REQUIRE(brep::IsValid(cyl));
+
+    bool narrowed = false;
+    for (brep::Face& f : cyl.faces) {
+      if (f.surface.kind == brep::SurfaceKind::Cylinder && !narrowed) {
+        f.uEnd = f.uStart + (f.uEnd - f.uStart) * 0.5;
+        narrowed = true;
+      }
+    }
+    REQUIRE(narrowed);
+    REQUIRE(brep::Validate(cyl) == Problem::NotClosed);
+  }
+
+  SECTION("a non-finite coordinate") {
+    Solid s = good;
+    s.vertices[0].p.x = std::nan("");
+    REQUIRE(brep::Validate(s) == Problem::NonFiniteCoordinate);
+  }
+
+  SECTION("a solid with no shell is not a solid") {
+    Solid s = good;
+    s.shells.clear();
+    REQUIRE(brep::Validate(s) == Problem::NoShell);
+  }
+
+  SECTION("mass properties refuse an invalid solid rather than reporting a number") {
+    Solid s = good;
+    s.faces.pop_back();
+    s.shells[0].faces.pop_back();
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    REQUIRE_FALSE(mp.valid);
+    REQUIRE(mp.volume == 0.0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Edges: one parametrisation, and it starts and ends where the topology says.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Every edge runs from its start vertex to its end vertex", "[brep][req313]") {
+  for (int which = 0; which < 3; ++which) {
+    Solid s;
+    Problem why = Problem::Ok;
+    if (which == 0)
+      REQUIRE(brep::MakeCylinder(TiltedAt(1000.0, 2000.0, 30.0), 4.0, 9.0, &s, &why));
+    else if (which == 1)
+      REQUIRE(brep::MakeSphere(TiltedAt(1000.0, 2000.0, 30.0), 6.0, &s, &why));
+    else
+      REQUIRE(brep::MakeTorus(TiltedAt(1000.0, 2000.0, 30.0), 8.0, 2.0, &s, &why));
+
+    for (const brep::Edge& e : s.edges) {
+      const Vec3 a = brep::EdgePointAt(s, e, 0.0);
+      const Vec3 b = brep::EdgePointAt(s, e, 1.0);
+      REQUIRE(ray3d::Length(ray3d::Sub(a, s.vertices[e.v0].p)) == Approx(0.0).margin(1e-9));
+      REQUIRE(ray3d::Length(ray3d::Sub(b, s.vertices[e.v1].p)) == Approx(0.0).margin(1e-9));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tessellation: derived, cross-checking, and never allowed to change the solid.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Tessellation agrees with the analytic figures and winds outward", "[brep][req313]") {
+  struct Case {
+    const char* name;
+    Solid s;
+  };
+  std::vector<Case> cases;
+  Problem why = Problem::Ok;
+
+  {
+    Solid s;
+    REQUIRE(brep::MakeBox(World(), 20.0, 10.0, 8.0, &s, &why));
+    cases.push_back({"box", s});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeWedge(World(), 12.0, 5.0, 9.0, &s, &why));
+    cases.push_back({"wedge", s});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakePyramid(World(), 5, 6.0, 0.0, 15.0, &s, &why));
+    cases.push_back({"pyramid", s});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakePyramid(World(), 6, 8.0, 3.0, 4.0, &s, &why));
+    cases.push_back({"pyramid frustum", s});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 4.0, 25.0, &s, &why));
+    cases.push_back({"cylinder", s});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 3.0, 0.0, 11.0, &s, &why));
+    cases.push_back({"cone", s});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 7.0, 2.5, 6.0, &s, &why));
+    cases.push_back({"cone frustum", s});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeSphere(World(), 5.0, &s, &why));
+    cases.push_back({"sphere", s});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeTorus(World(), 10.0, 2.0, &s, &why));
+    cases.push_back({"torus", s});
+  }
+
+  for (const Case& c : cases) {
+    INFO(c.name);
+    const brep::MassProperties mp = brep::ComputeMassProperties(c.s);
+    REQUIRE(mp.valid);
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(c.s, 0.001, &t, &why));
+    REQUIRE(t.triangleCount() > 0);
+    REQUIRE(t.vertsXyz.size() == t.normalsXyz.size());
+
+    RequireWindingMatchesNormals(t);
+    RequireBoundsContain(brep::ComputeBounds(c.s), t);
+
+    // An inscribed triangulation always understates a convex curved surface, so the tolerance is
+    // one-sided in spirit; 0.5% at a 0.001 chord tolerance is loose enough not to be brittle and
+    // tight enough that a wrong analytic formula cannot hide behind it.
+    REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(0.005));
+    REQUIRE(TessellatedArea(t) == Approx(mp.surfaceArea).epsilon(0.005));
+  }
+}
+
+TEST_CASE("Tessellation quality does not change the solid", "[brep][req313]") {
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeSphere(World(), 5.0, &s, &why));
+  const brep::MassProperties before = brep::ComputeMassProperties(s);
+
+  brep::Tessellation coarse;
+  brep::Tessellation fine;
+  REQUIRE(brep::Tessellate(s, 0.5, &coarse, &why));
+  REQUIRE(brep::Tessellate(s, 0.0005, &fine, &why));
+  REQUIRE(fine.triangleCount() > coarse.triangleCount());
+
+  const brep::MassProperties after = brep::ComputeMassProperties(s);
+  REQUIRE(after.volume == before.volume);
+  REQUIRE(after.surfaceArea == before.surfaceArea);
+
+  // The finer mesh must be the closer one, or "quality" would not mean anything.
+  const double coarseErr = std::fabs(TessellatedVolume(coarse) - before.volume);
+  const double fineErr = std::fabs(TessellatedVolume(fine) - before.volume);
+  REQUIRE(fineErr < coarseErr);
+}
+
+// ---------------------------------------------------------------------------
+// Closest-point queries — what object snapping is built on. The failure these
+// pin is not a crash: it is a snap that lands on the CHORD instead of on the
+// surface, wrong by the sagitta, plausible on screen, and smaller every time
+// the user zooms in to check it.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ClosestPointOnSurface lands exactly on the surface", "[brep][req313]") {
+  Problem why = Problem::Ok;
+
+  SECTION("cylinder") {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 4.0, 20.0, &s, &why));
+    const brep::Surface& side = [&]() -> const brep::Surface& {
+      for (const brep::Face& f : s.faces)
+        if (f.surface.kind == brep::SurfaceKind::Cylinder)
+          return f.surface;
+      return s.faces[0].surface;
+    }();
+    // A point well outside the cylinder comes back on the wall: same height, radius exactly 4.
+    const Vec3 got = brep::ClosestPointOnSurface(side, Vec3{30.0, 40.0, 7.5});
+    REQUIRE(std::sqrt(got.x * got.x + got.y * got.y) == Approx(4.0).epsilon(1e-12));
+    REQUIRE(got.z == Approx(7.5).margin(1e-12));
+    // A point on the axis has no nearest point; it must come back unchanged rather than as a NaN
+    // or as an arbitrary direction (REQ-201).
+    const Vec3 axis = brep::ClosestPointOnSurface(side, Vec3{0.0, 0.0, 3.0});
+    REQUIRE(axis.x == Approx(0.0).margin(1e-12));
+    REQUIRE(axis.z == Approx(3.0).margin(1e-12));
+  }
+
+  SECTION("sphere on a tilted frame at survey magnitude") {
+    const ucs::Ucs frame = TiltedAt(3'500'000.0, 12'400'000.0, 500.0);
+    Solid s;
+    REQUIRE(brep::MakeSphere(frame, 5.0, &s, &why));
+    const brep::Surface& sf = s.faces[0].surface;
+    const Vec3 probe = ray3d::Add(frame.origin, Vec3{100.0, -40.0, 60.0});
+    const Vec3 got = brep::ClosestPointOnSurface(sf, probe);
+    REQUIRE(ray3d::Length(ray3d::Sub(got, frame.origin)) == Approx(5.0).margin(1e-6));
+  }
+
+  SECTION("cone — the taper is respected, not treated as a cylinder") {
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 10.0, 2.0, 8.0, &s, &why));
+    const brep::Surface& side = [&]() -> const brep::Surface& {
+      for (const brep::Face& f : s.faces)
+        if (f.surface.kind == brep::SurfaceKind::Cone)
+          return f.surface;
+      return s.faces[0].surface;
+    }();
+    // Straight out from the mid-height point: the radius there is (10+2)/2 = 6.
+    const Vec3 got = brep::ClosestPointOnSurface(side, Vec3{50.0, 0.0, 4.0});
+    // The nearest point on a slanted wall is not at the same z as the probe, so the check is that
+    // the point is ON the cone: its radius matches the cone's radius at its own height.
+    const double rho = std::sqrt(got.x * got.x + got.y * got.y);
+    const double expected = 10.0 + (2.0 - 10.0) * (got.z / 8.0);
+    REQUIRE(rho == Approx(expected).margin(1e-9));
+  }
+
+  SECTION("torus") {
+    Solid s;
+    REQUIRE(brep::MakeTorus(World(), 10.0, 3.0, &s, &why));
+    const brep::Surface& sf = s.faces[0].surface;
+    const Vec3 got = brep::ClosestPointOnSurface(sf, Vec3{40.0, 0.0, 0.0});
+    // On the tube: distance from the tube's centre circle is exactly the minor radius.
+    const double rho = std::sqrt(got.x * got.x + got.y * got.y);
+    const double dRing = std::sqrt((rho - 10.0) * (rho - 10.0) + got.z * got.z);
+    REQUIRE(dRing == Approx(3.0).margin(1e-9));
+  }
+}
+
+TEST_CASE("ClosestPointOnEdge stays on the edge, not on the line behind it", "[brep][req313]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10.0, 10.0, 10.0, &box, &why));
+
+  // A point far beyond a line edge's end clamps to that end — the whole reason this is not just a
+  // projection onto the infinite line.
+  for (const brep::Edge& e : box.edges) {
+    const Vec3 a = box.vertices[e.v0].p;
+    const Vec3 b = box.vertices[e.v1].p;
+    const Vec3 beyond = ray3d::Add(b, ray3d::Scale(ray3d::Sub(b, a), 5.0));
+    const Vec3 got = brep::ClosestPointOnEdge(box, e, beyond);
+    REQUIRE(ray3d::Length(ray3d::Sub(got, b)) == Approx(0.0).margin(1e-9));
+  }
+
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), 6.0, 10.0, &cyl, &why));
+  for (const brep::Edge& e : cyl.edges) {
+    if (e.kind != brep::CurveKind::Arc)
+      continue;
+    // Every answer is ON the arc's circle, at the arc's own radius from its own centre.
+    const Vec3 got = brep::ClosestPointOnEdge(cyl, e, Vec3{100.0, 55.0, -20.0});
+    const Vec3 rel = ray3d::Sub(got, e.frame.origin);
+    REQUIRE(ray3d::Length(rel) == Approx(e.radius).margin(1e-9));
+    REQUIRE(ray3d::Dot(rel, e.frame.zAxis) == Approx(0.0).margin(1e-9));
+    // And it is within the SWEPT half, not on the other half of the circle: the point nearest a
+    // probe outside the far half would otherwise come back there, which is the clamp's whole job.
+    const ucs::Point2D flat = ucs::WorldToPlane(e.frame, got);
+    const double angle = std::atan2(flat.y, flat.x);
+    const double lo = std::min(0.0, e.sweep) - 1e-9;
+    const double hi = std::max(0.0, e.sweep) + 1e-9;
+    REQUIRE(angle >= lo);
+    REQUIRE(angle <= hi);
+  }
+}
+
+TEST_CASE("A probe outside an arc gets the NEARER end, not the smaller angle", "[brep][req313]") {
+  // The case a review found, and the reason "is the answer on the arc?" is not a sufficient test.
+  //
+  // A half-arc runs from angle 0 to pi. A probe at -2.0 rad is 2.0 rad from the start and only
+  // 1.14 rad from the end, so the end is the nearest point on that arc. Clamping the raw `atan2`
+  // value picks the START instead — because -2.0 is the smaller number — and the result is still
+  // ON the arc, which is exactly why it went unnoticed.
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), 10.0, 5.0, &s, &why));
+
+  const brep::Edge* rim = nullptr;
+  for (const brep::Edge& e : s.edges) {
+    if (e.kind != brep::CurveKind::Arc)
+      continue;
+    // The bottom rim half that runs (10,0,0) -> (-10,0,0) counter-clockwise, through +Y.
+    if (s.vertices[e.v0].p.x > 9.0 && s.vertices[e.v1].p.x < -9.0 &&
+        std::fabs(s.vertices[e.v0].p.z) < 1e-9) {
+      rim = &e;
+      break;
+    }
+  }
+  REQUIRE(rim != nullptr);
+
+  auto probeAt = [&](double angleRad) {
+    return brep::ClosestPointOnEdge(s, *rim, Vec3{30.0 * std::cos(angleRad), 30.0 * std::sin(angleRad), 0.0});
+  };
+
+  // -2.0 rad: nearer to the pi end.
+  REQUIRE(probeAt(-2.0).x == Approx(-10.0).margin(1e-9));
+  REQUIRE(probeAt(-2.0).y == Approx(0.0).margin(1e-9));
+  // -0.5 rad: nearer to the 0 end.
+  REQUIRE(probeAt(-0.5).x == Approx(10.0).margin(1e-9));
+  // Just inside either end stays inside, and the midpoint of the sweep is returned exactly.
+  REQUIRE(probeAt(0.1).y > 0.0);
+  REQUIRE(probeAt(kPi * 0.5).x == Approx(0.0).margin(1e-9));
+  REQUIRE(probeAt(kPi * 0.5).y == Approx(10.0).margin(1e-9));
+
+  // The two halves of a rim tile the whole circle, so for EVERY direction at least one of them
+  // returns the exact point rather than an end. That is what masked the defect in the snap path,
+  // and it is worth pinning so the masking is a stated property rather than a lucky one.
+  for (int i = 0; i < 72; ++i) {
+    const double a = -kPi + (kTwoPiTest * i) / 72.0;
+    const Vec3 target{10.0 * std::cos(a), 10.0 * std::sin(a), 0.0};
+    double best = 1e300;
+    for (const brep::Edge& e : s.edges) {
+      if (e.kind != brep::CurveKind::Arc || std::fabs(s.vertices[e.v0].p.z) > 1e-9)
+        continue;
+      const Vec3 got = brep::ClosestPointOnEdge(s, e, ray3d::Scale(target, 3.0));
+      best = std::min(best, ray3d::Length(ray3d::Sub(got, target)));
+    }
+    INFO("direction " << a);
+    REQUIRE(best == Approx(0.0).margin(1e-9));
+  }
+}
+
+TEST_CASE("Every triangle knows which face it came from", "[brep][req313]") {
+  // Without this the face snap could find the right triangle and then project onto the wrong
+  // surface — a point exactly on a face the user was not pointing at.
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), 4.0, 12.0, &s, &why));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.01, &t, &why));
+  REQUIRE(t.triFace.size() == static_cast<size_t>(t.triangleCount()));
+
+  std::vector<int> seen(s.faces.size(), 0);
+  for (size_t i = 0; i < t.triFace.size(); ++i) {
+    const int f = t.triFace[i];
+    REQUIRE(f >= 0);
+    REQUIRE(f < static_cast<int>(s.faces.size()));
+    seen[static_cast<size_t>(f)] = 1;
+    // Every vertex of the triangle must lie on the surface its face claims — which is the property
+    // the snap projection depends on and the one a mismatched id would break.
+    for (int k = 0; k < 3; ++k) {
+      const std::uint32_t vi = t.indices[i * 3 + static_cast<size_t>(k)];
+      const Vec3 p{t.vertsXyz[vi * 3], t.vertsXyz[vi * 3 + 1], t.vertsXyz[vi * 3 + 2]};
+      const Vec3 on = brep::ClosestPointOnSurface(s.faces[static_cast<size_t>(f)].surface, p);
+      REQUIRE(ray3d::Length(ray3d::Sub(on, p)) == Approx(0.0).margin(1e-9));
+    }
+  }
+  for (size_t f = 0; f < seen.size(); ++f) {
+    INFO("face " << f);
+    REQUIRE(seen[f] == 1);  // every face contributes triangles; none is silently dropped
+  }
+}
+
+TEST_CASE("Edge tessellation follows the same chord rule as the faces", "[brep][req313]") {
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), 5.0, 9.0, &s, &why));
+
+  std::vector<double> coarse;
+  std::vector<double> fine;
+  REQUIRE(brep::TessellateEdges(s, 0.5, &coarse, &why));
+  REQUIRE(brep::TessellateEdges(s, 0.001, &fine, &why));
+  REQUIRE(coarse.size() % 6 == 0);
+  REQUIRE(fine.size() > coarse.size());
+
+  // Every emitted point is on the solid: each segment endpoint lies on one of its edges. Checked
+  // against the arcs' own radius, because a wireframe that floats off the shading it outlines is
+  // exactly what a divergent chord rule looks like.
+  for (size_t i = 0; i + 5 < fine.size(); i += 6) {
+    const Vec3 a{fine[i], fine[i + 1], fine[i + 2]};
+    double best = 1e300;
+    for (const brep::Edge& e : s.edges)
+      best = std::min(best, ray3d::Length(ray3d::Sub(brep::ClosestPointOnEdge(s, e, a), a)));
+    REQUIRE(best == Approx(0.0).margin(1e-6));
+  }
+
+  REQUIRE_FALSE(brep::TessellateEdges(s, 0.0, &fine, &why));
+  REQUIRE(why == Problem::NonPositiveTolerance);
+
+  Solid broken = s;
+  broken.faces.pop_back();
+  broken.shells[0].faces.pop_back();
+  REQUIRE_FALSE(brep::TessellateEdges(broken, 0.01, &fine, &why));
+  REQUIRE(why == Problem::ShellOpenAtEdge);
+}
+
+TEST_CASE("Tessellation refuses a bad tolerance and a bad solid", "[brep][req313]") {
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeBox(World(), 2.0, 2.0, 2.0, &s, &why));
+
+  brep::Tessellation t;
+  REQUIRE_FALSE(brep::Tessellate(s, 0.0, &t, &why));
+  REQUIRE(why == Problem::NonPositiveTolerance);
+  REQUIRE_FALSE(brep::Tessellate(s, -1.0, &t, &why));
+  REQUIRE(why == Problem::NonPositiveTolerance);
+
+  Solid broken = s;
+  broken.faces.pop_back();
+  broken.shells[0].faces.pop_back();
+  REQUIRE_FALSE(brep::Tessellate(broken, 0.01, &t, &why));
+  REQUIRE(why == Problem::ShellOpenAtEdge);
+}
+
+TEST_CASE("A torus whose tube exceeds its ring is built, and reports no volume", "[brep][req313]") {
+  // AutoCAD builds this and users draw it on purpose (ADR-045 (f) as amended): the tube grows
+  // through the centre and the surface passes through itself.
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeTorus(World(), 4.0, 9.0, &s, &why));
+  REQUIRE(why == Problem::Ok);
+
+  // The TOPOLOGY is perfectly sound — manifold, orientable, closed — which is why it draws.
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::EulerCharacteristic(s) == 0);
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.01, &t, &why));
+  REQUIRE(t.triangleCount() > 0);
+
+  // What it is not is a body with a meaningful volume: the surface encloses part of space twice, so
+  // `2 pi^2 R r^2` is a number rather than an answer. Reported as unavailable, never as that number.
+  REQUIRE(brep::SelfIntersects(s));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE_FALSE(mp.valid);
+  REQUIRE(mp.volume == 0.0);
+  REQUIRE(mp.surfaceArea == 0.0);
+
+  // An ordinary torus is unaffected: still valid, still reports both figures.
+  Solid ok;
+  REQUIRE(brep::MakeTorus(World(), 10.0, 2.0, &ok, &why));
+  REQUIRE_FALSE(brep::SelfIntersects(ok));
+  const brep::MassProperties okMp = brep::ComputeMassProperties(ok);
+  REQUIRE(okMp.valid);
+  REQUIRE(okMp.volume == Approx(2.0 * kPi * kPi * 10.0 * 4.0).epsilon(1e-12));
+}
+
+TEST_CASE("Isolines make a curved face read as curved", "[brep][req313]") {
+  // A solid's EDGES alone are a poor picture of it: a cylinder's are two rims and two seams, which
+  // draws as two circles joined by two lines. These are the extra curves every CAD package adds,
+  // and the counts below are what AutoCAD's ISOLINES = 4 produces.
+  Problem why = Problem::Ok;
+
+  // How many distinct iso-curves a buffer holds, counted by their start points — each curve is
+  // emitted as a run of segments, so counting segments would count tessellation instead.
+  auto curveCount = [](const std::vector<double>& segs) {
+    int runs = 0;
+    for (std::size_t i = 0; i + 5 < segs.size(); i += 6) {
+      const bool continues = i >= 6 && std::fabs(segs[i] - segs[i - 3]) < 1e-9 &&
+                             std::fabs(segs[i + 1] - segs[i - 2]) < 1e-9 &&
+                             std::fabs(segs[i + 2] - segs[i - 1]) < 1e-9;
+      if (!continues)
+        ++runs;
+    }
+    return runs;
+  };
+
+  SECTION("a cylinder gets four rulings and no rings") {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &iso, &why));
+    // Four lines around the turn. The two at 0 and pi land on the seams and are excluded, so the
+    // grid contributes the two at pi/2 and 3pi/2 — one inside each half-face — plus the seams which
+    // are already real edges. Four vertical lines on screen, which is what AutoCAD shows.
+    REQUIRE(curveCount(iso) == 2);
+    // Every ruling is a single straight segment: the surface is ruled, so a chord is exact.
+    REQUIRE(iso.size() == 2 * 6);
+    // And they are ON the cylinder — at the radius, spanning the full height.
+    for (std::size_t i = 0; i + 5 < iso.size(); i += 6) {
+      REQUIRE(std::sqrt(iso[i] * iso[i] + iso[i + 1] * iso[i + 1]) == Approx(5.0).margin(1e-9));
+      REQUIRE(std::fabs(iso[i + 5] - iso[i + 2]) == Approx(10.0).margin(1e-9));
+    }
+  }
+
+  SECTION("a sphere gets meridians AND latitude circles") {
+    Solid s;
+    REQUIRE(brep::MakeSphere(World(), 5.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &iso, &why));
+    // Two meridians from the global grid (the other two are the seams), plus two latitude circles
+    // per half — a net rather than a lens.
+    REQUIRE(curveCount(iso) == 6);
+    // Every point is on the sphere.
+    for (std::size_t i = 0; i + 2 < iso.size(); i += 3)
+      REQUIRE(std::sqrt(iso[i] * iso[i] + iso[i + 1] * iso[i + 1] + iso[i + 2] * iso[i + 2]) ==
+              Approx(5.0).margin(1e-6));
+  }
+
+  SECTION("a torus gets tube circles and ring circles") {
+    Solid s;
+    REQUIRE(brep::MakeTorus(World(), 10.0, 2.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &iso, &why));
+    REQUIRE(curveCount(iso) > 0);
+    // Every point is on the tube: its distance from the ring's centre circle is the minor radius.
+    for (std::size_t i = 0; i + 2 < iso.size(); i += 3) {
+      const double rho = std::sqrt(iso[i] * iso[i] + iso[i + 1] * iso[i + 1]);
+      const double dRing = std::sqrt((rho - 10.0) * (rho - 10.0) + iso[i + 2] * iso[i + 2]);
+      REQUIRE(dRing == Approx(2.0).margin(1e-6));
+    }
+  }
+
+  SECTION("a box gets none — it is flat, and its edges already say everything") {
+    Solid s;
+    REQUIRE(brep::MakeBox(World(), 4.0, 4.0, 4.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &iso, &why));
+    REQUIRE(iso.empty());
+  }
+
+  SECTION("zero is a legal setting and means edges only") {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE(brep::TessellateIsolines(s, 0, 0.01, &iso, &why));
+    REQUIRE(iso.empty());
+  }
+
+  SECTION("more isolines means more curves, and never one on a seam") {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &s, &why));
+    std::vector<double> four;
+    std::vector<double> sixteen;
+    REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &four, &why));
+    REQUIRE(brep::TessellateIsolines(s, 16, 0.01, &sixteen, &why));
+    REQUIRE(curveCount(sixteen) > curveCount(four));
+    // A ruling exactly on a seam would double an edge that is already drawn. The seams are at
+    // angle 0 and pi, so no isoline may sit at either.
+    for (std::size_t i = 0; i + 1 < sixteen.size(); i += 6) {
+      const double a = std::atan2(sixteen[i + 1], sixteen[i]);
+      REQUIRE(std::fabs(a) > 1e-6);
+      REQUIRE(std::fabs(std::fabs(a) - kPi) > 1e-6);
+    }
+  }
+
+  SECTION("refuses a bad tolerance and an invalid solid, like the other tessellators") {
+    Solid s;
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 10.0, &s, &why));
+    std::vector<double> iso;
+    REQUIRE_FALSE(brep::TessellateIsolines(s, 4, 0.0, &iso, &why));
+    REQUIRE(why == Problem::NonPositiveTolerance);
+    Solid broken = s;
+    broken.faces.pop_back();
+    broken.shells[0].faces.pop_back();
+    REQUIRE_FALSE(brep::TessellateIsolines(broken, 4, 0.01, &iso, &why));
+    REQUIRE(why == Problem::ShellOpenAtEdge);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Feature operations — Extrude (REQ-314 / ADR-046 increment 1, GitHub issue #147).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A straight-edged profile from 2D points in \p plane's own coordinates.
+brep::Profile PolyProfile(const ucs::Ucs& plane, const std::vector<ucs::Point2D>& pts2) {
+  brep::Profile pr;
+  pr.plane = plane;
+  for (const ucs::Point2D& q : pts2)
+    pr.vertices.push_back(ucs::PlaneToWorld(plane, q));
+  pr.edges.assign(pts2.size(), brep::ProfileEdge{});
+  return pr;
+}
+
+/// A full circle expressed the way the cylinder builder expresses its rims: two opposite points,
+/// two half-turn arcs.
+brep::Profile CircleProfile(const ucs::Ucs& plane, double r) {
+  brep::Profile pr;
+  pr.plane = plane;
+  pr.vertices = {ucs::PlaneToWorld(plane, {r, 0.0}), ucs::PlaneToWorld(plane, {-r, 0.0})};
+  brep::ProfileEdge e;
+  e.arc = true;
+  e.centre = plane.origin;
+  e.sweep = kPi;
+  pr.edges = {e, e};
+  return pr;
+}
+
+}  // namespace
+
+TEST_CASE("Extrude of a rectangle is the box the primitive builder makes", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double w = 8.0, d = 5.0, h = 3.0;
+  Solid ex;
+  REQUIRE(brep::Extrude(PolyProfile(World(), {{-w / 2, -d / 2}, {w / 2, -d / 2}, {w / 2, d / 2}, {-w / 2, d / 2}}),
+                        h, &ex, &why));
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), w, d, h, &box, &why));
+
+  REQUIRE(CountOf(ex).v == CountOf(box).v);
+  REQUIRE(CountOf(ex).e == CountOf(box).e);
+  REQUIRE(CountOf(ex).f == CountOf(box).f);
+  REQUIRE(brep::EulerCharacteristic(ex) == 2);
+
+  const brep::MassProperties me = brep::ComputeMassProperties(ex);
+  const brep::MassProperties mb = brep::ComputeMassProperties(box);
+  REQUIRE(me.valid);
+  REQUIRE(me.volume == Approx(mb.volume).epsilon(1e-9));
+  REQUIRE(me.surfaceArea == Approx(mb.surfaceArea).epsilon(1e-9));
+  REQUIRE(me.volume == Approx(w * d * h).epsilon(1e-9));
+}
+
+TEST_CASE("Extrude of a full circle is the cylinder the primitive builder makes", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 4.0, h = 9.0;
+  Solid ex;
+  REQUIRE(brep::Extrude(CircleProfile(World(), r), h, &ex, &why));
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), r, h, &cyl, &why));
+
+  REQUIRE(CountOf(ex).v == CountOf(cyl).v);
+  REQUIRE(CountOf(ex).e == CountOf(cyl).e);
+  REQUIRE(CountOf(ex).f == CountOf(cyl).f);
+
+  const brep::MassProperties me = brep::ComputeMassProperties(ex);
+  REQUIRE(me.valid);
+  REQUIRE(me.volume == Approx(kPi * r * r * h).epsilon(1e-9));
+  REQUIRE(me.surfaceArea == Approx(2.0 * kPi * r * r + 2.0 * kPi * r * h).epsilon(1e-9));
+
+  // The swept face is a real cylinder, so a snap lands on it rather than a chord short of it.
+  for (const brep::Face& f : ex.faces) {
+    if (f.surface.kind != brep::SurfaceKind::Cylinder)
+      continue;
+    const Vec3 probe{100.0, 0.3, h * 0.5};
+    const Vec3 on = brep::ClosestPointOnSurface(f.surface, probe);
+    REQUIRE(std::sqrt(on.x * on.x + on.y * on.y) == Approx(r).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("Extrude of a non-convex L is a valid solid with the hand-computed volume", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double h = 2.0;
+  // An L: 3 wide at the bottom, 1 wide at the top, 3 tall. Area = 3*1 + 1*2 = 5.
+  const brep::Profile pr =
+      PolyProfile(World(), {{0, 0}, {3, 0}, {3, 1}, {1, 1}, {1, 3}, {0, 3}});
+  Solid s;
+  REQUIRE(brep::Extrude(pr, h, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(CountOf(s).v == 12);
+  REQUIRE(CountOf(s).e == 18);
+  REQUIRE(CountOf(s).f == 8);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(5.0 * h).epsilon(1e-9));
+
+  // The tessellation must re-derive the same volume by the divergence theorem — this is what
+  // exercises the ear-clipped non-convex cap.
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.01, &t, &why));
+  REQUIRE(TessellatedVolume(t) == Approx(5.0 * h).epsilon(1e-6));
+  RequireWindingMatchesNormals(t);
+  RequireBoundsContain(brep::ComputeBounds(s), t);
+}
+
+TEST_CASE("Extrude of a half-disk sweeps a cylinder face and a flat face", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 6.0, h = 4.0;
+  brep::Profile pr;
+  pr.plane = World();
+  pr.vertices = {Vec3{r, 0, 0}, Vec3{-r, 0, 0}};
+  brep::ProfileEdge arc;
+  arc.arc = true;
+  arc.centre = Vec3{0, 0, 0};
+  arc.sweep = kPi;  // the semicircle, over the top
+  pr.edges = {arc, brep::ProfileEdge{}};  // then the diameter, straight
+
+  Solid s;
+  REQUIRE(brep::Extrude(pr, h, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(0.5 * kPi * r * r * h).epsilon(1e-9));
+
+  int cyl = 0, plane = 0;
+  for (const brep::Face& f : s.faces)
+    (f.surface.kind == brep::SurfaceKind::Cylinder ? cyl : plane)++;
+  REQUIRE(cyl == 1);
+  REQUIRE(plane == 3);  // two caps + the flat rectangular face
+}
+
+TEST_CASE("Extrude stays accurate on a tilted frame at survey magnitude", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double w = 10.0, d = 4.0, h = 7.0;
+  const std::vector<ucs::Point2D> rect = {{-w / 2, -d / 2}, {w / 2, -d / 2}, {w / 2, d / 2}, {-w / 2, d / 2}};
+
+  Solid flat;
+  REQUIRE(brep::Extrude(PolyProfile(World(), rect), h, &flat, &why));
+  Solid tilted;
+  REQUIRE(brep::Extrude(PolyProfile(TiltedAt(3.5e6, 1.24e7, 250.0), rect), h, &tilted, &why));
+
+  const brep::MassProperties mf = brep::ComputeMassProperties(flat);
+  const brep::MassProperties mt = brep::ComputeMassProperties(tilted);
+  REQUIRE(mt.valid);
+  REQUIRE(mt.volume == Approx(mf.volume).epsilon(1e-6));
+  REQUIRE(mt.surfaceArea == Approx(mf.surfaceArea).epsilon(1e-6));
+  REQUIRE(mt.volume == Approx(w * d * h).epsilon(1e-6));
+}
+
+TEST_CASE("A negative extrude distance sweeps the other way and still validates", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const std::vector<ucs::Point2D> rect = {{0, 0}, {4, 0}, {4, 2}, {0, 2}};
+  Solid up, down;
+  REQUIRE(brep::Extrude(PolyProfile(World(), rect), 3.0, &up, &why));
+  REQUIRE(brep::Extrude(PolyProfile(World(), rect), -3.0, &down, &why));
+  REQUIRE(brep::Validate(down) == Problem::Ok);
+
+  const brep::MassProperties mu = brep::ComputeMassProperties(up);
+  const brep::MassProperties md = brep::ComputeMassProperties(down);
+  REQUIRE(md.valid);
+  REQUIRE(md.volume == Approx(mu.volume).epsilon(1e-9));
+
+  brep::Bounds bd = brep::ComputeBounds(down);
+  REQUIRE(bd.mn.z == Approx(-3.0).margin(1e-9));
+  REQUIRE(bd.mx.z == Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("A profile winding does not matter and the builder orients the result", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const std::vector<ucs::Point2D> ccw = {{0, 0}, {4, 0}, {4, 3}, {0, 3}};
+  std::vector<ucs::Point2D> cw = ccw;
+  std::reverse(cw.begin(), cw.end());
+
+  Solid a, b;
+  REQUIRE(brep::Extrude(PolyProfile(World(), ccw), 2.0, &a, &why));
+  REQUIRE(brep::Extrude(PolyProfile(World(), cw), 2.0, &b, &why));
+  REQUIRE(brep::Validate(a) == Problem::Ok);
+  REQUIRE(brep::Validate(b) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(a).volume == Approx(brep::ComputeMassProperties(b).volume).epsilon(1e-9));
+  REQUIRE(brep::ComputeMassProperties(a).volume == Approx(24.0).epsilon(1e-9));
+
+  // The same, with an arc in the loop — the reversal path has to permute the edge list and flip
+  // each sweep, which the all-straight case above does not exercise.
+  const double r = 5.0, hgt = 3.0;
+  brep::Profile ccwHalf;
+  ccwHalf.plane = World();
+  ccwHalf.vertices = {Vec3{r, 0, 0}, Vec3{-r, 0, 0}};
+  brep::ProfileEdge topArc;
+  topArc.arc = true;
+  topArc.centre = Vec3{0, 0, 0};
+  topArc.sweep = kPi;
+  ccwHalf.edges = {topArc, brep::ProfileEdge{}};
+
+  brep::Profile cwHalf;
+  cwHalf.plane = World();
+  cwHalf.vertices = {Vec3{r, 0, 0}, Vec3{-r, 0, 0}};
+  brep::ProfileEdge topArcCw = topArc;
+  topArcCw.sweep = -kPi;  // diameter first, then the arc back over the top the CW way
+  cwHalf.edges = {brep::ProfileEdge{}, topArcCw};
+
+  Solid hc, hw;
+  REQUIRE(brep::Extrude(ccwHalf, hgt, &hc, &why));
+  REQUIRE(brep::Extrude(cwHalf, hgt, &hw, &why));
+  REQUIRE(brep::Validate(hw) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(hw).volume ==
+          Approx(brep::ComputeMassProperties(hc).volume).epsilon(1e-9));
+  REQUIRE(brep::ComputeMassProperties(hw).volume == Approx(0.5 * kPi * r * r * hgt).epsilon(1e-9));
+}
+
+TEST_CASE("Extrude refuses bad input by name and stores nothing", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const std::vector<ucs::Point2D> rect = {{0, 0}, {4, 0}, {4, 2}, {0, 2}};
+  Solid s;
+
+  SECTION("a zero distance") {
+    REQUIRE_FALSE(brep::Extrude(PolyProfile(World(), rect), 0.0, &s, &why));
+    REQUIRE(why == Problem::NonPositiveDistance);
+  }
+  SECTION("a non-finite distance") {
+    REQUIRE_FALSE(brep::Extrude(PolyProfile(World(), rect), std::nan(""), &s, &why));
+    REQUIRE(why == Problem::NonPositiveDistance);
+  }
+  SECTION("fewer than two edges") {
+    REQUIRE_FALSE(brep::Extrude(PolyProfile(World(), {{0, 0}}), 3.0, &s, &why));
+    REQUIRE(why == Problem::ProfileTooFewEdges);
+  }
+  SECTION("vertex and edge counts disagree") {
+    brep::Profile pr = PolyProfile(World(), rect);
+    pr.edges.pop_back();
+    REQUIRE_FALSE(brep::Extrude(pr, 3.0, &s, &why));
+    REQUIRE(why == Problem::ProfileMalformed);
+  }
+  SECTION("a point off the profile plane") {
+    brep::Profile pr = PolyProfile(World(), rect);
+    pr.vertices[2].z = 1.0;
+    REQUIRE_FALSE(brep::Extrude(pr, 3.0, &s, &why));
+    REQUIRE(why == Problem::ProfilePointOffPlane);
+  }
+  SECTION("an arc whose endpoints are not equidistant from its centre") {
+    brep::Profile pr;
+    pr.plane = World();
+    pr.vertices = {Vec3{6, 0, 0}, Vec3{-4, 0, 0}};
+    brep::ProfileEdge arc;
+    arc.arc = true;
+    arc.centre = Vec3{0, 0, 0};
+    arc.sweep = kPi;
+    pr.edges = {arc, brep::ProfileEdge{}};
+    REQUIRE_FALSE(brep::Extrude(pr, 3.0, &s, &why));
+    REQUIRE(why == Problem::ProfileArcRadiusMismatch);
+  }
+  SECTION("a figure-eight self-intersecting loop") {
+    REQUIRE_FALSE(brep::Extrude(PolyProfile(World(), {{0, 0}, {4, 0}, {0, 3}, {4, 3}}), 2.0, &s, &why));
+    REQUIRE(why == Problem::ProfileSelfIntersects);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Feature operations — Revolve (REQ-314 / ADR-046 increment 2, GitHub issue #147).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Revolve of a rectangle on the axis is the cylinder the primitive builder makes", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 4.0, h = 9.0;
+  // A rectangle with its left edge ON the Z axis: (0,0)-(4,0)-(4,9)-(0,9), in the world XZ plane.
+  brep::Profile pr;
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{0, 1, 0}, &xz));  // plane normal +Y -> plane is XZ
+  pr.plane = xz;
+  pr.vertices = {ucs::PlaneToWorld(xz, {0, 0}), ucs::PlaneToWorld(xz, {r, 0}),
+                 ucs::PlaneToWorld(xz, {r, h}), ucs::PlaneToWorld(xz, {0, h})};
+  pr.edges.assign(4, brep::ProfileEdge{});
+
+  Solid rev;
+  REQUIRE(brep::Revolve(pr, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &rev, &why));
+  REQUIRE(brep::Validate(rev) == Problem::Ok);
+
+  const brep::MassProperties m = brep::ComputeMassProperties(rev);
+  REQUIRE(m.valid);
+  REQUIRE(m.volume == Approx(kPi * r * r * h).epsilon(1e-9));
+  REQUIRE(m.surfaceArea == Approx(2.0 * kPi * r * r + 2.0 * kPi * r * h).epsilon(1e-9));
+}
+
+TEST_CASE("Revolve of a right triangle on the axis is a cone", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 5.0, h = 12.0;
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  // (0,0) base centre, (r,0) base rim, (0,h) apex.
+  pr.vertices = {ucs::PlaneToWorld(xz, {0, 0}), ucs::PlaneToWorld(xz, {r, 0}), ucs::PlaneToWorld(xz, {0, h})};
+  pr.edges.assign(3, brep::ProfileEdge{});
+
+  Solid rev;
+  REQUIRE(brep::Revolve(pr, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &rev, &why));
+  REQUIRE(brep::Validate(rev) == Problem::Ok);
+  const brep::MassProperties m = brep::ComputeMassProperties(rev);
+  REQUIRE(m.valid);
+  REQUIRE(m.volume == Approx(kPi * r * r * h / 3.0).epsilon(1e-9));
+  const double slant = std::sqrt(r * r + h * h);
+  REQUIRE(m.surfaceArea == Approx(kPi * r * r + kPi * r * slant).epsilon(1e-9));
+}
+
+TEST_CASE("Revolve volume obeys Pappus's theorem, partial and full", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  // An L touching the axis: (0,0)-(3,0)-(3,1)-(1,1)-(1,4)-(0,4). Area = 3*1 + 1*3 = 6.
+  // Centroid r = (3*1*1.5 + 1*3*0.5) / 6 = (4.5 + 1.5) / 6 = 1.0.
+  const std::vector<ucs::Point2D> pts = {{0, 0}, {3, 0}, {3, 1}, {1, 1}, {1, 4}, {0, 4}};
+  for (const ucs::Point2D& q : pts)
+    pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  pr.edges.assign(pts.size(), brep::ProfileEdge{});
+  const double area = 6.0, rc = 1.0;
+
+  SECTION("full turn") {
+    Solid rev;
+    REQUIRE(brep::Revolve(pr, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &rev, &why));
+    REQUIRE(brep::ComputeMassProperties(rev).volume == Approx(kTwoPiTest * rc * area).epsilon(1e-9));
+    // A coarse-mesh sanity check: the tessellation tracks the shape (inscribed, so a little under).
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(rev, 0.001, &t, &why));
+    const double want = kTwoPiTest * rc * area;
+    REQUIRE(TessellatedVolume(t) > 0.99 * want);
+    REQUIRE(TessellatedVolume(t) < 1.001 * want);
+  }
+  SECTION("a 90-degree wedge, with its two caps") {
+    Solid rev;
+    REQUIRE(brep::Revolve(pr, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kPi / 2.0, &rev, &why));
+    REQUIRE(brep::Validate(rev) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(rev).volume == Approx((kPi / 2.0) * rc * area).epsilon(1e-9));
+    // The two caps are each the profile area.
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(rev, 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+}
+
+TEST_CASE("Revolve stays accurate on a tilted axis at survey magnitude", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 3.0, h = 8.0;
+  // Axis along a tilted direction, profile plane containing it, anchored at a state-plane point.
+  const Vec3 anchor{3.5e6, 1.24e7, 300.0};
+  const Vec3 axisDir = ray3d::Normalize(Vec3{0.4, -0.2, 1.0});
+  ucs::Ucs plane;
+  // plane normal perpendicular to the axis: any vector orthogonal to axisDir.
+  const Vec3 nrm = ray3d::Normalize(ray3d::Cross(axisDir, Vec3{1, 0, 0}));
+  REQUIRE(ucs::FromNormal(anchor, nrm, &plane));
+  // Rebuild the plane so its X axis is the radial direction and Y is the axis.
+  ucs::Ucs pl2;
+  pl2.origin = anchor;
+  pl2.zAxis = nrm;
+  pl2.yAxis = axisDir;
+  pl2.xAxis = ray3d::Normalize(ray3d::Cross(pl2.yAxis, pl2.zAxis));
+  REQUIRE(ucs::IsRightHandedOrthonormal(pl2, 1e-9));
+
+  brep::Profile pr;
+  pr.plane = pl2;
+  pr.vertices = {ucs::PlaneToWorld(pl2, {0, 0}), ucs::PlaneToWorld(pl2, {r, 0}),
+                 ucs::PlaneToWorld(pl2, {r, h}), ucs::PlaneToWorld(pl2, {0, h})};
+  pr.edges.assign(4, brep::ProfileEdge{});
+
+  Solid rev;
+  REQUIRE(brep::Revolve(pr, anchor, axisDir, kTwoPiTest, &rev, &why));
+  REQUIRE(brep::Validate(rev) == Problem::Ok);
+  const brep::MassProperties m = brep::ComputeMassProperties(rev);
+  REQUIRE(m.valid);
+  REQUIRE(m.volume == Approx(kPi * r * r * h).epsilon(1e-6));
+  REQUIRE(m.surfaceArea == Approx(2.0 * kPi * r * r + 2.0 * kPi * r * h).epsilon(1e-6));
+}
+
+TEST_CASE("Revolve refuses bad input by name and stores nothing", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{0, 1, 0}, &xz));
+  brep::Profile onAxisRect;
+  onAxisRect.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{0, 0}, {4, 0}, {4, 6}, {0, 6}})
+    onAxisRect.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  onAxisRect.edges.assign(4, brep::ProfileEdge{});
+  Solid s;
+
+  SECTION("a zero angle") {
+    REQUIRE_FALSE(brep::Revolve(onAxisRect, Vec3{0, 0, 0}, Vec3{0, 0, 1}, 0.0, &s, &why));
+    REQUIRE(why == Problem::NonPositiveAngle);
+  }
+  SECTION("an angle past a full turn") {
+    REQUIRE_FALSE(brep::Revolve(onAxisRect, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest * 1.5, &s, &why));
+    REQUIRE(why == Problem::NonPositiveAngle);
+  }
+  SECTION("a zero-length axis") {
+    REQUIRE_FALSE(brep::Revolve(onAxisRect, Vec3{0, 0, 0}, Vec3{0, 0, 0}, kPi, &s, &why));
+    REQUIRE(why == Problem::RevolveAxisDegenerate);
+  }
+  SECTION("an axis not in the profile plane") {
+    // The plane normal itself is the most out-of-plane a direction can be.
+    REQUIRE_FALSE(brep::Revolve(onAxisRect, Vec3{0, 0, 0}, Vec3{0, 1, 0}, kPi, &s, &why));
+    REQUIRE(why == Problem::RevolveAxisNotInPlane);
+  }
+  SECTION("a profile that does not touch the axis") {
+    brep::Profile tube;
+    tube.plane = xz;
+    for (const ucs::Point2D& q : {ucs::Point2D{2, 0}, {4, 0}, {4, 6}, {2, 6}})
+      tube.vertices.push_back(ucs::PlaneToWorld(xz, q));
+    tube.edges.assign(4, brep::ProfileEdge{});
+    REQUIRE_FALSE(brep::Revolve(tube, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &s, &why));
+    REQUIRE(why == Problem::RevolveProfileMissesAxis);
+  }
+  SECTION("a profile that straddles the axis") {
+    brep::Profile straddle;
+    straddle.plane = xz;
+    for (const ucs::Point2D& q : {ucs::Point2D{-2, 0}, {3, 0}, {3, 5}, {-2, 5}})
+      straddle.vertices.push_back(ucs::PlaneToWorld(xz, q));
+    straddle.edges.assign(4, brep::ProfileEdge{});
+    REQUIRE_FALSE(brep::Revolve(straddle, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &s, &why));
+    REQUIRE(why == Problem::RevolveProfileCrossesAxis);
+  }
+  SECTION("an arc in the profile") {
+    brep::Profile arced = onAxisRect;
+    arced.edges[1].arc = true;
+    arced.edges[1].centre = ucs::PlaneToWorld(xz, {4, 3});
+    arced.edges[1].sweep = kPi / 4.0;
+    REQUIRE_FALSE(brep::Revolve(arced, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &s, &why));
+    REQUIRE(why == Problem::RevolveArcInProfile);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Feature operations — Slice (REQ-314 / ADR-046 increment 3, GitHub issue #147).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Slice of a box in half gives two boxes whose volumes sum to the original", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(At(50, 50, 0), 20, 12, 8, &box, &why));
+  const double v0 = brep::ComputeMassProperties(box).volume;
+
+  Solid top, bot;
+  // A horizontal plane at z = 3 (the box rises from z = 0 to z = 8).
+  REQUIRE(brep::Slice(box, Vec3{50, 50, 3}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &top, &bot, &why));
+  REQUIRE(brep::Validate(top) == Problem::Ok);
+  REQUIRE(brep::Validate(bot) == Problem::Ok);
+  const brep::MassProperties mt = brep::ComputeMassProperties(top);
+  const brep::MassProperties mb = brep::ComputeMassProperties(bot);
+  REQUIRE(mt.valid);
+  REQUIRE(mb.valid);
+  REQUIRE(mt.volume + mb.volume == Approx(v0).epsilon(1e-9));
+  REQUIRE(mt.volume == Approx(20.0 * 12.0 * 5.0).epsilon(1e-9));  // z 3..8
+  REQUIRE(mb.volume == Approx(20.0 * 12.0 * 3.0).epsilon(1e-9));  // z 0..3
+}
+
+TEST_CASE("Slice of a box by an oblique plane keeps both wedges", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const double v0 = brep::ComputeMassProperties(box).volume;
+
+  Solid a, b;
+  // MakeBox centres the box in X/Y and rises from z=0, so its centre is (0,0,5).
+  REQUIRE(brep::Slice(box, Vec3{0, 0, 5}, ray3d::Normalize(Vec3{1, 0, 1}), brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(brep::Validate(a) == Problem::Ok);
+  REQUIRE(brep::Validate(b) == Problem::Ok);
+  const double va = brep::ComputeMassProperties(a).volume;
+  const double vb = brep::ComputeMassProperties(b).volume;
+  REQUIRE(va + vb == Approx(v0).epsilon(1e-9));
+  REQUIRE(va == Approx(v0 / 2.0).epsilon(1e-9));  // a plane through the centre halves it
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(a, 0.01, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(va).epsilon(1e-9));
+}
+
+TEST_CASE("Slice keeps only the requested side", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 6, 6, 6, &box, &why));
+
+  Solid above;
+  Solid untouched;
+  brep::Problem w2 = brep::Problem::Ok;
+  REQUIRE(brep::Slice(box, Vec3{0, 0, 2}, Vec3{0, 0, 1}, brep::SliceKeep::Above, &above, &untouched, &why));
+  REQUIRE(brep::Validate(above) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(above).volume == Approx(6.0 * 6.0 * 4.0).epsilon(1e-9));
+  // The `below` output was not requested, so it stays empty.
+  REQUIRE(untouched.faces.empty());
+  (void)w2;
+}
+
+TEST_CASE("Slice of an extruded L is valid and conserves volume", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  // An L, extruded 4.
+  const brep::Profile pr = /* reuse PolyProfile from the extrude section */ [] {
+    brep::Profile p;
+    p.plane = World();
+    for (const ucs::Point2D& q : {ucs::Point2D{0, 0}, {3, 0}, {3, 1}, {1, 1}, {1, 3}, {0, 3}})
+      p.vertices.push_back(ucs::PlaneToWorld(World(), q));
+    p.edges.assign(6, brep::ProfileEdge{});
+    return p;
+  }();
+  Solid solid;
+  REQUIRE(brep::Extrude(pr, 4.0, &solid, &why));
+  const double v0 = brep::ComputeMassProperties(solid).volume;
+
+  Solid a, b;
+  REQUIRE(brep::Slice(solid, Vec3{0, 0, 1.5}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(brep::Validate(a) == Problem::Ok);
+  REQUIRE(brep::Validate(b) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(a).volume + brep::ComputeMassProperties(b).volume ==
+          Approx(v0).epsilon(1e-9));
+}
+
+TEST_CASE("Slice refuses what it cannot do, by name", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 8, 8, 8, &box, &why));
+  Solid a, b;
+
+  SECTION("a plane that misses the solid") {
+    REQUIRE_FALSE(brep::Slice(box, Vec3{0, 0, 20}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+  }
+  SECTION("a degenerate plane normal") {
+    REQUIRE_FALSE(brep::Slice(box, Vec3{0, 0, 4}, Vec3{0, 0, 0}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceDegeneratePlane);
+  }
+  SECTION("an OBLIQUE cut that would clip a cap is reported, not sliced") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &cyl, &why));
+    // Steep tilt near the top: the ellipse would run off the end of the cylinder.
+    REQUIRE_FALSE(brep::Slice(cyl, Vec3{0, 0, 9.5}, ray3d::Normalize(Vec3{3, 0, 1}),
+                              brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceResultComplex);
+  }
+  SECTION("a sphere — no primitive pieces") {
+    Solid sph;
+    REQUIRE(brep::MakeSphere(World(), 5, &sph, &why));
+    REQUIRE_FALSE(brep::Slice(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceCurvedFace);
+  }
+}
+
+TEST_CASE("Curved B2b-1: an oblique plane slices a cylinder into two elliptical-ended pieces",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), 4, 10, &cyl, &why));  // r 4, z 0..10 about +Z
+  Solid up;
+  Solid dn;
+  // Plane through z=4 on the axis, tilted so cos(theta) = 2/sqrt(5) from the axis.
+  REQUIRE(brep::Slice(cyl, Vec3{0, 0, 4}, ray3d::Normalize(Vec3{1, 0, 2}), brep::SliceKeep::Both, &up,
+                      &dn, &why));
+  REQUIRE(brep::Validate(up) == Problem::Ok);
+  REQUIRE(brep::Validate(dn) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(up));
+  REQUIRE_FALSE(brep::SelfIntersects(dn));
+
+  const auto mUp = brep::ComputeMassProperties(up);
+  const auto mDn = brep::ComputeMassProperties(dn);
+  REQUIRE(mUp.valid);
+  REQUIRE(mDn.valid);
+  // A cylinder cut by an oblique plane at mean axis height z-bar has volume pi r^2 z-bar.
+  REQUIRE(mDn.volume == Approx(kPi * 16.0 * 4.0).epsilon(1e-9));
+  REQUIRE(mUp.volume == Approx(kPi * 16.0 * 6.0).epsilon(1e-9));
+  REQUIRE(mUp.volume + mDn.volume == Approx(kPi * 16.0 * 10.0).epsilon(1e-9));
+
+  // After the cut the pieces' lateral areas still sum to the whole cylinder's (2 pi r h), the two
+  // original circular caps are unchanged, and each piece gains one elliptical cap of area pi a b
+  // (b = r, a = r / cos theta).
+  const double a = 4.0 / (2.0 / std::sqrt(5.0));
+  const double wholeCyl = 2.0 * kPi * 16.0 + 2.0 * kPi * 4.0 * 10.0;  // 2 circular caps + lateral
+  REQUIRE(mUp.surfaceArea + mDn.surfaceArea ==
+          Approx(wholeCyl + 2.0 * kPi * a * 4.0).epsilon(1e-6));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(dn, 0.02, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(kPi * 16.0 * 4.0).epsilon(0.01));  // chorded ellipse + slant
+
+  // A .gs round-trip preserves the ellipse edge.
+  Solid reopened = dn;  // Translate is the cheap in-kernel proxy for the store path
+  reopened = brep::Translate(reopened, Vec3{0, 0, 0});
+  bool sawEllipse = false;
+  for (const auto& e : reopened.edges)
+    if (e.kind == brep::CurveKind::Ellipse) {
+      sawEllipse = true;
+      REQUIRE(e.radius > e.radius2);  // semi-major > semi-minor
+      REQUIRE(e.radius2 == Approx(4.0).epsilon(1e-9));
+    }
+  REQUIRE(sawEllipse);
+}
+
+TEST_CASE("Curved B2b-2 tail: an oblique plane slices a cone into two elliptical-ended pieces",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid cone;
+  REQUIRE(brep::MakeCone(World(), 6, 2, 8, &cone, &why));  // base r6 at z0, top r2 at z8
+
+  const Vec3 planePoint{0, 0, 4};
+  const Vec3 pn = ray3d::Normalize(Vec3{0.3, 0.0, 1.0});
+  const double nx = pn.x, ny = pn.y, nz = pn.z;
+  const double C = ray3d::Dot(pn, planePoint);
+  const double k = (2.0 - 6.0) / 8.0;
+
+  // Independent reference (no reuse of the ellipse-derivation code under test): at each height z the
+  // cone's cross-section is a disk of radius rho(z), cut by the line nx*x+ny*y = C - nz*z, a standard
+  // circular-segment area in closed form. Integrate that over z numerically (fine but 1-D, cheap).
+  auto segmentAreaBelow = [&](double rho, double dist) {
+    // Area of {x^2+y^2<=rho^2, x<=dist} in a frame where the cut line is x = dist.
+    if (dist >= rho) return kPi * rho * rho;
+    if (dist <= -rho) return 0.0;
+    return dist * std::sqrt(rho * rho - dist * dist) + rho * rho * std::asin(dist / rho) +
+           rho * rho * kPi * 0.5;
+  };
+  double vBelowRef = 0.0;
+  const int nZ = 200000;
+  for (int i = 0; i < nZ; ++i) {
+    const double z = 8.0 * (i + 0.5) / nZ;
+    const double rho = 6.0 + k * z;
+    const double amp = std::sqrt(nx * nx + ny * ny);
+    const double dist = (C - nz * z) / amp;  // signed distance (in the rotated frame) of the cut line
+    vBelowRef += segmentAreaBelow(rho, dist) * (8.0 / nZ);
+  }
+  const double coneVol = kPi * 8.0 / 3.0 * (36.0 + 12.0 + 4.0);  // r0=6,r1=2,h=8
+  const double vAboveRef = coneVol - vBelowRef;
+
+  Solid up;
+  Solid dn;
+  REQUIRE(brep::Slice(cone, planePoint, pn, brep::SliceKeep::Both, &up, &dn, &why));
+  REQUIRE(brep::Validate(up) == Problem::Ok);
+  REQUIRE(brep::Validate(dn) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(up));
+  REQUIRE_FALSE(brep::SelfIntersects(dn));
+  REQUIRE(up.recipe.kind == brep::PrimitiveKind::None);  // no longer a plain cone recipe
+
+  const auto mUp = brep::ComputeMassProperties(up);
+  const auto mDn = brep::ComputeMassProperties(dn);
+  REQUIRE(mUp.valid);
+  REQUIRE(mDn.valid);
+  REQUIRE(mDn.volume == Approx(vBelowRef).epsilon(1e-4));
+  REQUIRE(mUp.volume == Approx(vAboveRef).epsilon(1e-4));
+  REQUIRE(mUp.volume + mDn.volume == Approx(coneVol).epsilon(1e-9));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(dn, 0.02, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(vBelowRef).epsilon(0.01));
+
+  // .gs round trip preserves the ellipse edge (Translate is the cheap in-kernel proxy).
+  Solid reopened = brep::Translate(dn, Vec3{0, 0, 0});
+  bool sawEllipse = false;
+  for (const auto& e : reopened.edges)
+    if (e.kind == brep::CurveKind::Ellipse)
+      sawEllipse = true;
+  REQUIRE(sawEllipse);
+  REQUIRE(brep::Validate(reopened) == Problem::Ok);
+
+  SECTION("surviving Translate at a survey-magnitude offset") {
+    const Solid moved = brep::Translate(dn, Vec3{1.9e6, 6.4e6, 1200.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vBelowRef).epsilon(1e-4));
+  }
+
+  SECTION("a cut that would clip a cap is refused by name") {
+    Solid up2, dn2;
+    REQUIRE_FALSE(brep::Slice(cone, Vec3{0, 0, 0.5}, pn, brep::SliceKeep::Both, &up2, &dn2, &why));
+    REQUIRE(why == Problem::SliceResultComplex);
+  }
+
+  SECTION("a steeper cut past the half-angle, tangent to the top cap, is still refused (two merged notches)") {
+    // Cone half-angle here is atan(|k|) = atan(0.5); a plane tilted past that off the axis leaves the
+    // ellipse regime. This particular plane's hump peaks exactly at the top rim, giving 4 level
+    // crossings (not the 2 a single same-rim notch needs) - still refused, not the case TASK-204
+    // slice (b) built.
+    Solid up2, dn2;
+    const Vec3 steep = ray3d::Normalize(Vec3{2.0, 0.0, 1.0});  // well past atan(0.5) from the axis
+    REQUIRE_FALSE(brep::Slice(cone, planePoint, steep, brep::SliceKeep::Both, &up2, &dn2, &why));
+    REQUIRE(why == Problem::SliceCurvedFace);
+  }
+}
+
+TEST_CASE("Curved B2b-2 tail: a steep cone slice with a single same-rim notch (parabola regime)",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid cone;
+  REQUIRE(brep::MakeCone(World(), 6, 2, 8, &cone, &why));  // base r6 at z0, top r2 at z8, k=-0.5
+
+  const Vec3 planePoint{0, 0, 2.5};
+  const Vec3 pn = ray3d::Normalize(Vec3{0.8, 0.0, 0.4});  // parabola-tangent direction (nz=|k|*amp)
+  const double nx = pn.x, ny = pn.y, nz = pn.z;
+  const double C = ray3d::Dot(pn, planePoint);
+  const double k = (2.0 - 6.0) / 8.0;
+
+  // Independent reference (no reuse of any code under test): at each height z the cone's
+  // cross-section is a disk of radius rho(z), cut by the line nx*x+ny*y = C - nz*z - a standard
+  // circular-segment area in closed form, same method as the ellipse-regime test above (this
+  // reasoning holds regardless of regime: at any FIXED height, a plane always cuts a circle in one
+  // simple chord). Integrate over z numerically.
+  auto segmentAreaBelow = [&](double rho, double dist) {
+    if (dist >= rho) return kPi * rho * rho;
+    if (dist <= -rho) return 0.0;
+    return dist * std::sqrt(rho * rho - dist * dist) + rho * rho * std::asin(dist / rho) +
+           rho * rho * kPi * 0.5;
+  };
+  const double amp = std::sqrt(nx * nx + ny * ny);
+  double vBelowRef = 0.0;
+  const int nZ = 400000;
+  for (int i = 0; i < nZ; ++i) {
+    const double z = 8.0 * (i + 0.5) / nZ;
+    const double rho = 6.0 + k * z;
+    const double dist = (C - nz * z) / amp;
+    vBelowRef += segmentAreaBelow(rho, dist) * (8.0 / nZ);
+  }
+  const double coneVol = kPi * 8.0 / 3.0 * (36.0 + 12.0 + 4.0);
+  const double vAboveRef = coneVol - vBelowRef;
+
+  Solid up;
+  Solid dn;
+  REQUIRE(brep::Slice(cone, planePoint, pn, brep::SliceKeep::Both, &up, &dn, &why));
+  REQUIRE(brep::Validate(up) == Problem::Ok);
+  REQUIRE(brep::Validate(dn) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(up));
+  REQUIRE_FALSE(brep::SelfIntersects(dn));
+
+  const auto mUp = brep::ComputeMassProperties(up);
+  const auto mDn = brep::ComputeMassProperties(dn);
+  REQUIRE(mUp.valid);
+  REQUIRE(mDn.valid);
+  // Unlike the closed-form ellipse regime, this cut is a marched Intersection curve (ADR-045 (b)),
+  // so exact equality isn't achievable - same 1e-4 tolerance as the reference-volume checks below.
+  REQUIRE(mUp.volume + mDn.volume == Approx(coneVol).epsilon(1e-4));
+  // "above" is the +pn side, matching every other Slice recogniser's convention.
+  REQUIRE(mDn.volume == Approx(vBelowRef).epsilon(1e-4));
+  REQUIRE(mUp.volume == Approx(vAboveRef).epsilon(1e-4));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(dn, 0.02, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(vBelowRef).epsilon(0.01));
+
+  SECTION("surviving Translate at a survey-magnitude offset") {
+    const Solid moved = brep::Translate(dn, Vec3{1.9e6, 6.4e6, 1200.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vBelowRef).epsilon(1e-4));
+  }
+}
+
+TEST_CASE("Curved B2b-1: a tilted cylinder INTERSECT a box is an oblique elliptical-ended plug",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 20, 20, 10, &box, &why));  // z 0..10, x,y[-10,10]
+  ucs::Ucs axis;
+  const Vec3 dir = ray3d::Normalize(Vec3{0.3, 0.0, 1.0});
+  REQUIRE(ucs::FromNormal(Vec3{-3, 0, -10}, dir, &axis));
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(axis, 2, 30, &cyl, &why));  // long enough to cross both faces
+
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanIntersect(box, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+  // Volume = pi r^2 * (axial gap) = pi * 4 * (10 / dir.z).
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+          Approx(kPi * 4.0 * (10.0 / dir.z)).epsilon(1e-9));
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+  RequireWindingMatchesNormals(t);
+
+  // SUBTRACT drills a slanted elliptical-mouthed hole through the box.
+  r.clear();
+  REQUIRE(brep::BooleanSubtract(box, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+          Approx(4000.0 - kPi * 4.0 * (10.0 / dir.z)).epsilon(1e-9));
+  brep::Tessellation ts;
+  REQUIRE(brep::Tessellate(r[0], 0.05, &ts, &why));
+  RequireWindingMatchesNormals(ts);
+
+  // UNION adds the two slanted stubs that stick out past each face (an elliptical-mouthed boss).
+  r.clear();
+  REQUIRE(brep::BooleanUnion(box, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+          Approx(4000.0 + kPi * 4.0 * (30.0 - 10.0 / dir.z)).epsilon(1e-9));
+  brep::Tessellation tu;
+  REQUIRE(brep::Tessellate(r[0], 0.05, &tu, &why));
+  RequireWindingMatchesNormals(tu);
+}
+
+TEST_CASE("Slice of a cylinder or cone perpendicular to its axis cuts it to length", "[brep][req314]") {
+  Problem why = Problem::Ok;
+
+  SECTION("cylinder -> two cylinders") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &cyl, &why));  // z 0..10 about +Z
+    Solid top, bot;
+    REQUIRE(brep::Slice(cyl, Vec3{0, 0, 6}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &top, &bot, &why));
+    REQUIRE(brep::Validate(top) == Problem::Ok);
+    REQUIRE(brep::Validate(bot) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(top).volume == Approx(kPi * 16.0 * 4.0).epsilon(1e-9));  // z 6..10
+    REQUIRE(brep::ComputeMassProperties(bot).volume == Approx(kPi * 16.0 * 6.0).epsilon(1e-9));  // z 0..6
+    REQUIRE(top.recipe.kind == brep::PrimitiveKind::Cylinder);
+  }
+
+  SECTION("truncated cone -> two frustums, radius interpolated at the cut") {
+    Solid cone;
+    REQUIRE(brep::MakeCone(World(), 6, 2, 8, &cone, &why));  // base r6 at z0, top r2 at z8
+    Solid top, bot;
+    REQUIRE(brep::Slice(cone, Vec3{0, 0, 2}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &top, &bot, &why));
+    REQUIRE(brep::Validate(top) == Problem::Ok);
+    REQUIRE(brep::Validate(bot) == Problem::Ok);
+    // r at z=2 is 6 + (2-6)*2/8 = 5.  Bottom frustum r6..r5 over h2; top frustum r5..r2 over h6.
+    const double vBot = kPi * 2.0 / 3.0 * (36.0 + 30.0 + 25.0);
+    const double vTop = kPi * 6.0 / 3.0 * (25.0 + 10.0 + 4.0);
+    REQUIRE(brep::ComputeMassProperties(bot).volume == Approx(vBot).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(top).volume == Approx(vTop).epsilon(1e-9));
+  }
+
+  SECTION("keep only one side") {
+    Solid cyl;
+    Solid above, below;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), 3, 12, &cyl, &why));
+    REQUIRE(brep::Slice(cyl, Vec3{0, 0, 5}, Vec3{0, 0, 1}, brep::SliceKeep::Below, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(kPi * 9.0 * 5.0).epsilon(1e-9));  // z 0..5
+    REQUIRE(above.faces.empty());
+  }
+
+  SECTION("a plane that misses the cylinder's height is reported") {
+    Solid cyl;
+    Solid a, b;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &cyl, &why));
+    REQUIRE_FALSE(brep::Slice(cyl, Vec3{0, 0, 20}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Feature operations — Booleans, B1 (REQ-314 / ADR-046 increment 4, GitHub issue #147).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Booleans of two overlapping boxes match the hand-computed volumes", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  // A: x[-5,5] y[-5,5] z[0,10].  B: x[-1,9] y[-5,5] z[4,14].  Overlap: 6 x 10 x 6 = 360.
+  Solid a;
+  Solid b;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &a, &why));
+  REQUIRE(brep::MakeBox(At(4, 0, 4), 10, 10, 10, &b, &why));
+
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanIntersect(a, b, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(6.0 * 10.0 * 6.0).epsilon(1e-9));
+
+  r.clear();
+  REQUIRE(brep::BooleanUnion(a, b, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(1000.0 + 1000.0 - 360.0).epsilon(1e-9));
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(1640.0).epsilon(1e-6));
+
+  r.clear();
+  REQUIRE(brep::BooleanSubtract(a, b, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(1000.0 - 360.0).epsilon(1e-9));
+}
+
+TEST_CASE("Booleans report and refuse the cases B1 does not cover", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  Solid farBox;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 4, 4, 4, &box, &why));
+  REQUIRE(brep::MakeBox(At(100, 0, 0), 4, 4, 4, &farBox, &why));
+  REQUIRE(brep::MakeCylinder(World(), 3, 6, &cyl, &why));
+  std::vector<Solid> r;
+
+  SECTION("INTERSECT of solids that do not touch is reported as empty") {
+    REQUIRE_FALSE(brep::BooleanIntersect(box, farBox, &r, &why));
+    REQUIRE(why == Problem::BooleanEmptyResult);
+  }
+  SECTION("UNION of solids that do not touch returns both, untouched") {
+    REQUIRE(brep::BooleanUnion(box, farBox, &r, &why));
+    REQUIRE(r.size() == 2);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(64.0).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(r[1]).volume == Approx(64.0).epsilon(1e-9));
+  }
+  SECTION("SUBTRACT of a solid that is not touched leaves it unchanged") {
+    REQUIRE(brep::BooleanSubtract(box, farBox, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(64.0).epsilon(1e-9));
+  }
+  SECTION("a curved operand is refused") {
+    REQUIRE_FALSE(brep::BooleanUnion(box, cyl, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
+TEST_CASE("SUBTRACT punches a blind hole through one face of a box", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  // A 10-cube from z 0..10, minus a 2x2 bar entering the top and stopping at z = 4.
+  Solid block;
+  Solid bar;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeBox(At(0, 0, 4), 2, 2, 8, &bar, &why));  // z 4..12, pokes out the top
+
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, bar, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  // Removed volume is the bar's part inside the block: 2 x 2 x 6 (z 4..10) = 24.
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(1000.0 - 24.0).epsilon(1e-9));
+  REQUIRE(brep::EulerCharacteristic(r[0]) == 2);  // still genus 0 — a blind pocket, not a tunnel
+}
+
+TEST_CASE("Booleans chain on a non-convex result", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  // Start with a 10-cube, cut a corner notch out to make a non-convex L, then subtract again.
+  Solid cube;
+  Solid notch;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &cube, &why));       // x,y[-5,5] z[0,10]
+  REQUIRE(brep::MakeBox(At(4, 4, 6), 6, 6, 6, &notch, &why));     // x[1,7] y[1,7] z[6,12]
+  // Removed part inside the cube: x[1,5] y[1,5] z[6,10] = 4 x 4 x 4 = 64.
+  std::vector<Solid> ell;
+  REQUIRE(brep::BooleanSubtract(cube, notch, &ell, &why));
+  REQUIRE(ell.size() == 1);
+  REQUIRE(brep::Validate(ell[0]) == Problem::Ok);
+  const double vEll = brep::ComputeMassProperties(ell[0]).volume;
+  REQUIRE(vEll == Approx(1000.0 - 64.0).epsilon(1e-9));
+
+  // Now subtract a second bar from that NON-CONVEX solid.
+  Solid bar;
+  REQUIRE(brep::MakeBox(At(-3, -3, 5), 2, 2, 20, &bar, &why));  // x[-4,-2] y[-4,-2] z[5,25]
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(ell[0], bar, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  // Bar's part inside the L: x[-4,-2] y[-4,-2] z[5,10] = 2 x 2 x 5 = 20 (that corner is not in the notch).
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(vEll - 20.0).epsilon(1e-9));
+}
+
+namespace {
+constexpr double kPiT = 3.14159265358979323846;
+}
+
+TEST_CASE("Curved B1: a cylinder axis-aligned through a box - plug, boss, and the refused cases",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));       // x,y[-5,5] z[0,10]
+  REQUIRE(brep::MakeCylinder(At(0, 0, -5), 2, 20, &cyl, &why));  // z[-5,15], r 2, clear of the edges
+
+  std::vector<Solid> r;
+
+  SECTION("INTERSECT is the plug where they overlap") {
+    REQUIRE(brep::BooleanIntersect(box, cyl, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(kPiT * 4.0 * 10.0).epsilon(1e-9));
+    // Ties the curved path to the primitive: it must BE a plain cylinder.
+    Solid ref;
+    REQUIRE(brep::MakeCylinder(World(), 2, 10, &ref, &why));
+    REQUIRE(brep::ComputeMassProperties(r[0]).surfaceArea ==
+            Approx(brep::ComputeMassProperties(ref).surfaceArea).epsilon(1e-9));
+  }
+
+  SECTION("UNION is a boss — the box plus the two stubs, no tunnel") {
+    REQUIRE(brep::BooleanUnion(box, cyl, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(1000.0 + kPiT * 4.0 * 10.0).epsilon(1e-6));
+    // A bored face is an annulus, not a disk, so naive V-E+F is not 2 here — Validate is the check.
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(1000.0 + kPiT * 4.0 * 10.0).epsilon(2e-3));
+  }
+
+  SECTION("SUBTRACT drills a round hole through the box (B2a — an inward wall)") {
+    REQUIRE(brep::BooleanSubtract(box, cyl, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(1000.0 - kPiT * 4.0 * 10.0).epsilon(1e-9));
+    // The two bored faces are annuli, not disks, so naive V-E+F is not the genus formula here.
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
+    RequireWindingMatchesNormals(t);  // the bore wall shades as a concave surface
+    REQUIRE(TessellatedVolume(t) == Approx(1000.0 - kPiT * 4.0 * 10.0).epsilon(3e-3));
+  }
+
+  SECTION("SUBTRACT of a cylinder that stops inside is a blind round pocket") {
+    ucs::Ucs down;
+    REQUIRE(ucs::FromNormal(Vec3{0, 0, 12}, Vec3{0, 0, -1}, &down));
+    Solid drill;
+    REQUIRE(brep::MakeCylinder(down, 2, 8, &drill, &why));  // base z=12, axis down, floor at z=4
+    REQUIRE(brep::BooleanSubtract(box, drill, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+    // removed = the cylinder's part inside the box: z[4,10] -> pi r^2 * 6
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(1000.0 - kPiT * 4.0 * 6.0).epsilon(1e-9));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("SUBTRACT the other way (cylinder - box), box shorter than the cylinder, is refused") {
+    // The box spans z[0,10] but the cylinder runs z[-5,15]; a partial-length pocket is a later slice.
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+
+  SECTION("an oblique cylinder is refused by name") {
+    ucs::Ucs oblique;
+    REQUIRE(ucs::FromNormal(Vec3{0, 0, -4}, Vec3{0.32, 0.19, 0.93}, &oblique));
+    Solid tilted;
+    REQUIRE(brep::MakeCylinder(oblique, 1.5, 20, &tilted, &why));
+    REQUIRE_FALSE(brep::BooleanUnion(box, tilted, &r, &why));
+    REQUIRE(why == Problem::BooleanObliqueCylinder);
+  }
+
+  SECTION("a cone operand is still refused as a curved face") {
+    Solid cone;
+    REQUIRE(brep::MakeCone(At(0, 0, -5), 2, 0, 20, &cone, &why));
+    REQUIRE_FALSE(brep::BooleanUnion(box, cone, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
+TEST_CASE("Curved B1: a failed curved Boolean leaves the operands untouched", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -5), 2, 20, &cyl, &why));
+  Solid cone;
+  REQUIRE(brep::MakeCone(At(0, 0, -5), 2, 0, 20, &cone, &why));
+  const Solid boxBefore = box;
+  const Solid coneBefore = cone;
+  std::vector<Solid> r;
+  REQUIRE_FALSE(brep::BooleanSubtract(box, cone, &r, &why));  // a cone operand is still refused
+  REQUIRE(box.vertices.size() == boxBefore.vertices.size());
+  REQUIRE(cone.faces.size() == coneBefore.faces.size());
+  REQUIRE(brep::ComputeMassProperties(box).volume == Approx(1000.0).epsilon(1e-12));
+  REQUIRE(brep::ComputeMassProperties(cone).volume ==
+          Approx(brep::ComputeMassProperties(coneBefore).volume).epsilon(1e-12));
+  (void)cyl;
+}
+
+TEST_CASE("Curved B2b-2: cylinder - box mills a single lengthwise flat (a notch)", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 4.0;
+  const double L = 10.0;
+  const double px = 2.0;  // cut plane at local x = 2, material x > 2 removed
+  const double q = std::sqrt(r * r - px * px);
+  const double seg = r * r * std::acos(px / r) - px * q;  // removed circular-segment area
+  const double wantVol = L * (kPi * r * r - seg);
+
+  SECTION("axis-aligned - closed form, 4v/6e/4f, winding, tessellated volume") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(12, 0, -15), 20, 40, 40, &box, &why));  // -x face at x=2, engulfs the rest
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    const Counts c = CountOf(out[0]);
+    REQUIRE(c.v == 4);
+    REQUIRE(c.e == 6);
+    REQUIRE(c.f == 4);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(wantVol).epsilon(1e-9));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.004, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(wantVol).epsilon(3e-3));
+  }
+
+  SECTION("tilted survey-magnitude frame - same volume") {
+    const ucs::Ucs fr = TiltedAt(2100000.0, 5900000.0, 300.0);
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(fr, r, L, &cyl, &why));
+    // A box whose -x face (local) sits at x = px and which runs well past the cylinder every other way.
+    ucs::Ucs bf = fr;
+    bf.origin = ucs::UcsToWorld(fr, Vec3{px + 10.0, 0.0, -15.0});
+    Solid box;
+    REQUIRE(brep::MakeBox(bf, 20, 40, 40, &box, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(wantVol).epsilon(1e-6));
+  }
+
+  SECTION("reversed roles are unaffected - box - cylinder still drills a hole") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, -5), 1.5, 20, &cyl, &why));
+    REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(box, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume ==
+            Approx(1000.0 - kPi * 1.5 * 1.5 * 10.0).epsilon(1e-9));
+  }
+
+  SECTION("a partial-length box mills a pocket that reaches neither end") {
+    const double za = 3.0;
+    const double zb = 7.0;
+    const double wantPocket = kPi * r * r * L - (zb - za) * seg;
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(12, 0, za), 20, 40, zb - za, &box, &why));  // z[3,7] only - inside the length
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    const Counts pc = CountOf(out[0]);
+    REQUIRE(pc.v == 8);
+    REQUIRE(pc.e == 16);
+    REQUIRE(pc.f == 10);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(wantPocket).epsilon(1e-9));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.006, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(wantPocket).epsilon(3e-3));
+  }
+
+  SECTION("a pocket that touches a cap is refused by name (not the interior shape)") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(12, 0, 6), 20, 40, 8, &box, &why));  // z[6,14] - runs past the top cap
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+
+  SECTION("a slot bounded by two parallel faces leaves two wings") {
+    const double pxw = -2.0;  // each wing's own kept-side threshold (symmetric slot: +/-2)
+    const double qw = std::sqrt(r * r - pxw * pxw);
+    const double wingSeg = r * r * std::acos(pxw / r) - pxw * qw;  // area of x > pxw
+    const double wingVol = L * (kPi * r * r - wingSeg);  // kept x <= pxw (or the mirror x >= -pxw)
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(0, 0, -15), 4, 40, 40, &box, &why));  // x[-2,2] - cuts two flats
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(out.size() == 2);
+    double total = 0.0;
+    for (const Solid& wing : out) {
+      REQUIRE(brep::Validate(wing) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(wing));
+      REQUIRE(CountOf(wing).v == 4);
+      REQUIRE(CountOf(wing).e == 6);
+      REQUIRE(CountOf(wing).f == 4);
+      const double v = brep::ComputeMassProperties(wing).volume;
+      REQUIRE(v == Approx(wingVol).epsilon(1e-9));
+      total += v;
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(wing, 0.006, &t, &why));
+      RequireWindingMatchesNormals(t);
+    }
+    REQUIRE(total < kPi * r * r * L);  // strictly less than the full cylinder - the slot is real
+  }
+
+  SECTION("a slot that reaches only part of the length is still refused by name") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(0, 0, 3), 4, 40, 4, &box, &why));  // x[-2,2], z[3,7] only
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+
+  SECTION("a box that swallows the whole cylinder reports an empty result") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(0, 0, -15), 40, 40, 40, &box, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(why == Problem::BooleanEmptyResult);
+  }
+
+  SECTION("a disjoint box leaves the cylinder unchanged") {
+    Solid cyl;
+    Solid box;
+    REQUIRE(brep::MakeCylinder(At(0, 0, 0), r, L, &cyl, &why));
+    REQUIRE(brep::MakeBox(At(100, 0, 0), 10, 10, 10, &box, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, box, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(kPi * r * r * L).epsilon(1e-9));
+  }
+}
+
+TEST_CASE("Curved B2b-1: the Steinmetz bicylinder - INTERSECT of two equal perpendicular cylinders",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 3.0;
+
+  SECTION("axes crossing at the origin - volume 16 r^3 / 3, area 16 r^2, four elliptical edges") {
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));  // axis +z, z in [-6, 6]
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(Vec3{-6, 0, 0}, Vec3{1, 0, 0}, &alongX));
+    REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));  // axis +x, x in [-6, 6]
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    RequireSolid(out[0], Counts{2, 4, 4}, 2, 16.0 * r * r * r / 3.0, 16.0 * r * r);
+
+    int ellipses = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Ellipse)
+        ++ellipses;
+    REQUIRE(ellipses == 4);
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.002, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(16.0 * r * r * r / 3.0).epsilon(3e-3));
+  }
+
+  SECTION("the same figure on a tilted frame at survey coordinate magnitude, and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs alongZ = frame;
+    alongZ.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -6});
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-6, 0, 0}), frame.xAxis, &alongX));
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(alongZ, r, 12, &cylZ, &why));
+    REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume ==
+            Approx(16.0 * r * r * r / 3.0).epsilon(1e-9));
+
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume ==
+            Approx(16.0 * r * r * r / 3.0).epsilon(1e-9));
+  }
+
+  SECTION("SUBTRACT bores a clean perpendicular channel - volume vol(A) - 16 r^3 / 3") {
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));  // vol pi r^2 * 12
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(Vec3{-6, 0, 0}, Vec3{1, 0, 0}, &alongX));
+    REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    const double vA = kPi * r * r * 12.0;
+    RequireSolid(out[0], Counts{6, 12, 8}, 2, vA - 16.0 * r * r * r / 3.0,
+                 // area: A's wall (2 pi r * 12 minus the bicylinder's A-share 8 r^2) + two caps
+                 //       + the channel wall (the bicylinder's B-share 8 r^2)
+                 2.0 * kPi * r * 12.0 - 8.0 * r * r + 2.0 * kPi * r * r + 8.0 * r * r);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vA - 16.0 * r * r * r / 3.0).epsilon(3e-3));
+  }
+
+  SECTION("SUBTRACT stays exact on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs alongZ = frame;
+    alongZ.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -6});
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-6, 0, 0}), frame.xAxis, &alongX));
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(alongZ, r, 12, &cylZ, &why));
+    REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    const double want = kPi * r * r * 12.0 - 16.0 * r * r * r / 3.0;
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(1e-9));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(want).epsilon(1e-9));
+  }
+
+  SECTION("UNION is a T-pipe - volume vol(A) + vol(B) - 16 r^3 / 3") {
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));  // vol pi r^2 * 12
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(Vec3{-9, 0, 0}, Vec3{1, 0, 0}, &alongX));
+    REQUIRE(brep::MakeCylinder(alongX, r, 18, &cylX, &why));  // vol pi r^2 * 18, x in [-9, 9]
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    const double vA = kPi * r * r * 12.0;
+    const double vB = kPi * r * r * 18.0;
+    const double want = vA + vB - 16.0 * r * r * r / 3.0;
+    RequireSolid(out[0], Counts{10, 20, 12}, 2, want,
+                 // each cylinder's wall (2 pi r * len) loses its 8 r^2 elliptical bite; four caps.
+                 (2.0 * kPi * r * 12.0 - 8.0 * r * r) + (2.0 * kPi * r * 18.0 - 8.0 * r * r) +
+                     4.0 * kPi * r * r);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.003, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(3e-3));
+  }
+
+  SECTION("UNION stays exact on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs alongZ = frame;
+    alongZ.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -6});
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-6, 0, 0}), frame.xAxis, &alongX));
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(alongZ, r, 12, &cylZ, &why));
+    REQUIRE(brep::MakeCylinder(alongX, r, 12, &cylX, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(cylZ, cylX, &out, &why));
+    REQUIRE(out.size() == 1);
+    const double want = 2.0 * kPi * r * r * 12.0 - 16.0 * r * r * r / 3.0;
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(1e-9));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(want).epsilon(1e-9));
+  }
+
+  SECTION("unequal radii are the branch-pipe recogniser (B2b-2), not the Steinmetz one") {
+    Solid cylZ;
+    Solid cylX;
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cylZ, &why));
+    ucs::Ucs alongX;
+    REQUIRE(ucs::FromNormal(Vec3{-6, 0, 0}, Vec3{1, 0, 0}, &alongX));
+    REQUIRE(brep::MakeCylinder(alongX, r * 0.5, 12, &cylX, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(cylZ, cylX, &out, &why));  // a pipe-tee lens now
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(CountOf(out[0]).f == 4);
+  }
+}
+
+TEST_CASE("Curved B2b-2 first pair: sphere INTERSECT cylinder, axis through the centre",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double Rs = 5.0;
+  const double r = 3.0;
+  const double h = 4.0;  // sqrt(Rs^2 - r^2)
+  // Centred: the intersection is two plane circles, so the result is closed-form — a cylindrical
+  // band (z in [-h, h]) capped by the two spherical zones the cylinder encloses.
+  const double vol = 2.0 * kPi * r * r * h + 2.0 * (kPi * (Rs - h) * (Rs - h) * (2.0 * Rs + h) / 3.0);
+  const double area = 4.0 * kPi * r * h + 4.0 * kPi * Rs * (Rs - h);
+
+  SECTION("axis at the origin - closed-form volume and area, 6 v / 10 e / 6 f") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cyl, &why));  // axis +z, clears the sphere both ends
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    RequireSolid(out[0], Counts{6, 10, 6}, 2, vol, area);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.002, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vol).epsilon(3e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(cyl, sph, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vol).epsilon(1e-12));
+  }
+
+  SECTION("the same figure on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{0, 0, -6}), frame.zAxis, &axis));
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(axis, r, 12, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vol).epsilon(1e-9));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vol).epsilon(1e-9));
+  }
+
+  SECTION("sphere - cylinder is a clean drilled ball, genus one") {
+    const double vol = 4.0 / 3.0 * kPi * Rs * Rs * Rs -
+                       (2.0 * kPi * r * r * h + 2.0 * (kPi * (Rs - h) * (Rs - h) * (2.0 * Rs + h) / 3.0));
+    const double area = 4.0 * kPi * h * (Rs + r);
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    RequireSolid(out[0], Counts{4, 8, 4}, 0, vol, area);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.002, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vol).epsilon(3e-3));
+
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{0, 0, -6}), frame.zAxis, &axis));
+    Solid sph2;
+    Solid cyl2;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph2, &why));
+    REQUIRE(brep::MakeCylinder(axis, r, 12, &cyl2, &why));
+    std::vector<Solid> far;
+    REQUIRE(brep::BooleanSubtract(sph2, cyl2, &far, &why));
+    REQUIRE(brep::Validate(far[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(far[0]).volume == Approx(vol).epsilon(1e-9));
+    const brep::Solid moved = brep::Translate(far[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vol).epsilon(1e-9));
+  }
+
+  SECTION("cylinder - sphere leaves two stubs, each with a spherical dimple") {
+    const double stubVol = kPi * r * r * (6.0 - h) - kPi * (Rs - h) * (Rs - h) * (2.0 * Rs + h) / 3.0;
+    const double stubArea = kPi * r * r + 2.0 * kPi * r * (6.0 - h) + 2.0 * kPi * Rs * (Rs - h);
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, sph, &out, &why));
+    REQUIRE(out.size() == 2);
+    for (const Solid& stub : out) {
+      RequireSolid(stub, Counts{5, 8, 5}, 2, stubVol, stubArea);
+      REQUIRE_FALSE(brep::SelfIntersects(stub));
+    }
+  }
+
+  SECTION("sphere union cylinder is a ball with a boss out each side") {
+    const double vol = 4.0 / 3.0 * kPi * Rs * Rs * Rs + kPi * r * r * 12.0 -
+                       (2.0 * kPi * r * r * h + 2.0 * (kPi * (Rs - h) * (Rs - h) * (2.0 * Rs + h) / 3.0));
+    const double area = 4.0 * kPi * Rs * h + 2.0 * (2.0 * kPi * r * (6.0 - h)) + 2.0 * kPi * r * r;
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -6), r, 12, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    RequireSolid(out[0], Counts{8, 14, 8}, 2, vol, area);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.002, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vol).epsilon(3e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanUnion(cyl, sph, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vol).epsilon(1e-12));
+  }
+
+  SECTION("an offset axis with d ~= r (axis tangent to the pole) is refused as degenerate") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(1.5, 0, -6), 1.5, 12, &cyl, &why));  // d = 1.5 = cyl radius
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE_FALSE(brep::BooleanSubtract(sph, cyl, &out, &why));
+  }
+
+  SECTION("an offset axis with d < r (the pole-covered sub-case) - INTERSECT is a polar-capped plug") {
+    const double dp = 1.0;
+    const double rp = 2.0;  // dp < rp: the cylinder swallows each pole; dp + rp = 3 < Rs = 5
+    // Reference: integrate 2*sqrt(Rs^2 - x^2 - y^2) over the disk (x-dp)^2 + y^2 <= rp^2.
+    double vref = 0.0;
+    const int nr = 1400;
+    const int nt = 1400;
+    for (int i = 0; i < nr; ++i) {
+      const double rho = rp * (i + 0.5) / nr;
+      for (int j = 0; j < nt; ++j) {
+        const double th = kTwoPiTest * (j + 0.5) / nt;
+        const double x = dp + rho * std::cos(th);
+        const double y = rho * std::sin(th);
+        vref += 2.0 * std::sqrt(std::max(0.0, Rs * Rs - x * x - y * y)) * rho * (rp / nr) *
+                (kTwoPiTest / nt);
+      }
+    }
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(dp, 0, -12), rp, 24, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 4);
+    REQUIRE(CountOf(out[0]).e == 6);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 4);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(3e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(8e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(cyl, sph, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vref).epsilon(3e-3));
+
+    const double sphereVol = 4.0 / 3.0 * kPi * Rs * Rs * Rs;
+    const double cylVol = kPi * rp * rp * 24.0;
+
+    std::vector<Solid> sub;
+    REQUIRE(brep::BooleanSubtract(sph, cyl, &sub, &why));  // sphere - cylinder: the drilled ball
+    REQUIRE(sub.size() == 1);
+    REQUIRE(brep::Validate(sub[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(sub[0]));
+    REQUIRE(CountOf(sub[0]).v == 4);
+    REQUIRE(CountOf(sub[0]).e == 8);
+    REQUIRE(CountOf(sub[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(sub[0]) == 0);  // genus 1
+    REQUIRE(brep::ComputeMassProperties(sub[0]).volume == Approx(sphereVol - vref).epsilon(3e-3));
+    brep::Tessellation ts;
+    REQUIRE(brep::Tessellate(sub[0], 0.01, &ts, &why));
+    RequireWindingMatchesNormals(ts);
+    REQUIRE(TessellatedVolume(ts) == Approx(sphereVol - vref).epsilon(6e-3));
+
+    std::vector<Solid> stubs;
+    REQUIRE(brep::BooleanSubtract(cyl, sph, &stubs, &why));  // cylinder - sphere: two stubs
+    REQUIRE(stubs.size() == 2);
+    double stubTotal = 0.0;
+    for (const Solid& st : stubs) {
+      REQUIRE(brep::Validate(st) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(st));
+      REQUIRE(CountOf(st).v == 4);
+      REQUIRE(CountOf(st).f == 4);
+      REQUIRE(brep::EulerCharacteristic(st) == 2);
+      stubTotal += brep::ComputeMassProperties(st).volume;
+    }
+    REQUIRE(stubTotal == Approx(cylVol - vref).epsilon(3e-3));
+
+    std::vector<Solid> uni;
+    REQUIRE(brep::BooleanUnion(sph, cyl, &uni, &why));  // sphere u cylinder: ball with a boss each side
+    REQUIRE(uni.size() == 1);
+    REQUIRE(brep::Validate(uni[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(uni[0]));
+    REQUIRE(CountOf(uni[0]).v == 8);
+    REQUIRE(CountOf(uni[0]).e == 14);
+    REQUIRE(CountOf(uni[0]).f == 8);
+    REQUIRE(brep::ComputeMassProperties(uni[0]).volume ==
+            Approx(sphereVol + cylVol - vref).epsilon(3e-3));
+    brep::Tessellation tu;
+    REQUIRE(brep::Tessellate(uni[0], 0.01, &tu, &why));
+    RequireWindingMatchesNormals(tu);
+    REQUIRE(TessellatedVolume(tu) == Approx(sphereVol + cylVol - vref).epsilon(6e-3));
+  }
+
+  SECTION("a d < r plug on a tilted survey-magnitude frame") {
+    const double dp = 1.0;
+    const double rp = 2.0;
+    const ucs::Ucs frame = TiltedAt(2.7e6, 9.1e6, 180.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{dp, 0, -12}), frame.zAxis, &axis));
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(axis, rp, 24, &cyl, &why));
+    std::vector<Solid> flat;
+    Solid sphF;
+    Solid cylF;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sphF, &why));
+    REQUIRE(brep::MakeCylinder(At(dp, 0, -12), rp, 24, &cylF, &why));
+    REQUIRE(brep::BooleanIntersect(sphF, cylF, &flat, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume ==
+            Approx(brep::ComputeMassProperties(flat[0]).volume).epsilon(1e-6));
+  }
+
+  SECTION("a cylinder cap that reaches into the sphere is refused, not mis-built") {
+    // The cap at z = -2 sits h(=4) past the centre but still inside the sphere (Rs = 5), so the
+    // clean spherical-ended barrel is not the answer here.
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -2), r, 12, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanIntersect(sph, cyl, &out, &why));
+  }
+}
+
+TEST_CASE("Curved B2b-2: sphere INTERSECT cylinder with an offset axis (the quartic)",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double Rs = 10.0;
+  const double r = 2.0;
+  const double d = 5.0;  // axis offset: d > r (misses the pole), d + r < Rs (clears the equator)
+
+  // Reference plug volume: integrate 2*sqrt(Rs^2 - x^2 - y^2) over the disk (x-d)^2 + y^2 <= r^2.
+  auto plugVolume = [&]() {
+    const int nRho = 1400;
+    const int nTh = 1400;
+    double v = 0.0;
+    for (int i = 0; i < nRho; ++i) {
+      const double rho = r * (i + 0.5) / nRho;
+      for (int j = 0; j < nTh; ++j) {
+        const double th = kTwoPiTest * (j + 0.5) / nTh;
+        const double x = d + rho * std::cos(th);
+        const double y = rho * std::sin(th);
+        v += 2.0 * std::sqrt(std::max(0.0, Rs * Rs - x * x - y * y)) * rho * (r / nRho) *
+             (kTwoPiTest / nTh);
+      }
+    }
+    return v;
+  };
+  const double vref = plugVolume();
+
+  SECTION("axis parallel to +z, offset by d in x - a clean through-plug") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));  // caps at z = +/-12 clear the sphere
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 4);
+    REQUIRE(CountOf(out[0]).e == 6);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 4);
+
+    const brep::MassProperties mp = brep::ComputeMassProperties(out[0]);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(vref).epsilon(2e-3));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(8e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(cyl, sph, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vref).epsilon(2e-3));
+  }
+
+  SECTION("the same plug on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{d, 0, -12}), frame.zAxis, &axis));
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(axis, r, 24, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(2e-3));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vref).epsilon(2e-3));
+  }
+
+  SECTION("sphere - cylinder is an off-centre hole drilled clean through, genus one") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 6);
+    REQUIRE(CountOf(out[0]).e == 10);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 0);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 4);
+
+    const double want = 4.0 / 3.0 * kPi * Rs * Rs * Rs - vref;
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(2e-3));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(8e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanSubtract(sph, cyl, &rev, &why));
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(2e-3));
+
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{d, 0, -12}), frame.zAxis, &axis));
+    Solid sph2;
+    Solid cyl2;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph2, &why));
+    REQUIRE(brep::MakeCylinder(axis, r, 24, &cyl2, &why));
+    std::vector<Solid> far;
+    REQUIRE(brep::BooleanSubtract(sph2, cyl2, &far, &why));
+    REQUIRE(brep::Validate(far[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(far[0]).volume == Approx(want).epsilon(2e-3));
+    const brep::Solid moved = brep::Translate(far[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(want).epsilon(2e-3));
+  }
+
+  SECTION("sphere union cylinder is a ball with an off-centre boss out each side") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(sph, cyl, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 10);
+    REQUIRE(CountOf(out[0]).e == 16);
+    REQUIRE(CountOf(out[0]).f == 8);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 4);
+
+    const double want = 4.0 / 3.0 * kPi * Rs * Rs * Rs + kPi * r * r * 24.0 - vref;
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(2e-3));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(8e-3));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanUnion(cyl, sph, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(2e-3));
+  }
+
+  SECTION("cylinder - sphere with an offset axis leaves two stubs, each with a lens dimple") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -12), r, 24, &cyl, &why));  // caps at z = +/-12 clear the sphere
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(cyl, sph, &out, &why));
+    REQUIRE(out.size() == 2);
+    for (const auto& stub : out) {
+      REQUIRE(brep::Validate(stub) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(stub));
+      REQUIRE(CountOf(stub).v == 4);
+      REQUIRE(CountOf(stub).e == 6);
+      REQUIRE(CountOf(stub).f == 4);
+      REQUIRE(brep::EulerCharacteristic(stub) == 2);
+      int isect = 0;
+      for (const auto& e : stub.edges)
+        if (e.kind == brep::CurveKind::Intersection)
+          ++isect;
+      REQUIRE(isect == 2);
+    }
+
+    // Total kept volume = the whole cylinder minus the sphere-cylinder intersection plug.
+    const double want = kPi * r * r * 24.0 - vref;
+    double vol = 0.0;
+    for (const auto& stub : out)
+      vol += brep::ComputeMassProperties(stub).volume;
+    REQUIRE(vol == Approx(want).epsilon(3e-3));
+
+    double tvol = 0.0;
+    for (const auto& stub : out) {
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(stub, 0.01, &t, &why));
+      RequireWindingMatchesNormals(t);
+      tvol += TessellatedVolume(t);
+    }
+    REQUIRE(tvol == Approx(want).epsilon(1e-2));
+
+    // A tilted survey-magnitude frame, then Translate back to the origin.
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs axis;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{d, 0, -12}), frame.zAxis, &axis));
+    Solid sph2;
+    Solid cyl2;
+    REQUIRE(brep::MakeSphere(frame, Rs, &sph2, &why));
+    REQUIRE(brep::MakeCylinder(axis, r, 24, &cyl2, &why));
+    std::vector<Solid> far;
+    REQUIRE(brep::BooleanSubtract(cyl2, sph2, &far, &why));
+    REQUIRE(far.size() == 2);
+    double fvol = 0.0;
+    for (const auto& stub : far) {
+      REQUIRE(brep::Validate(stub) == Problem::Ok);
+      const brep::Solid moved = brep::Translate(stub, Vec3{-3.5e6, -1.24e7, -250.0});
+      REQUIRE(brep::Validate(moved) == Problem::Ok);
+      fvol += brep::ComputeMassProperties(moved).volume;
+    }
+    REQUIRE(fvol == Approx(want).epsilon(3e-3));
+  }
+
+  SECTION("an offset cylinder - sphere with a cap inside the sphere is still refused") {
+    Solid sph;
+    Solid cyl;
+    REQUIRE(brep::MakeSphere(World(), Rs, &sph, &why));
+    REQUIRE(brep::MakeCylinder(At(d, 0, -4), r, 8, &cyl, &why));  // caps at z = +/-4 sit inside
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(cyl, sph, &out, &why));
+  }
+}
+
+TEST_CASE("Curved B2b-2: a procedural Intersection edge marches along both cylinders",
+          "[brep][req314]") {
+  // The pipe-tee intersection curve: small cyl A (axis +x, radius r) meets big cyl B (axis +z,
+  // radius R) along x = sqrt(R^2 - r^2 cos^2 theta), y = r cos theta, z = r sin theta.
+  const double r = 2.0;
+  const double R = 5.0;
+  auto curve = [&](double th) {
+    return Vec3{std::sqrt(R * R - r * r * std::cos(th) * std::cos(th)), r * std::cos(th),
+                r * std::sin(th)};
+  };
+
+  brep::Surface a;
+  a.kind = brep::SurfaceKind::Cylinder;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{1, 0, 0}, &a.frame));
+  a.radius = r;
+  a.height = 40.0;
+  brep::Surface b;
+  b.kind = brep::SurfaceKind::Cylinder;
+  b.frame = ucs::Ucs{};
+  b.radius = R;
+  b.height = 40.0;
+
+  Solid s;
+  s.vertices.push_back(brep::Vertex{curve(0.0)});
+  s.vertices.push_back(brep::Vertex{curve(kPi * 0.5)});
+  brep::Edge e;
+  e.kind = brep::CurveKind::Intersection;
+  e.v0 = 0;
+  e.v1 = 1;
+  e.frame.origin = curve(kPi * 0.25);  // the witness
+  e.isectSurfaces = {a, b};
+  s.edges.push_back(e);
+
+  auto onBoth = [](const Solid& sol, const brep::Edge& ed, double t) {
+    const Vec3 p = brep::EdgePointAt(sol, ed, t);
+    const Vec3 qa = brep::ClosestPointOnSurface(ed.isectSurfaces[0], p);
+    const Vec3 qb = brep::ClosestPointOnSurface(ed.isectSurfaces[1], p);
+    REQUIRE(ray3d::Length(ray3d::Sub(p, qa)) < 1e-6);
+    REQUIRE(ray3d::Length(ray3d::Sub(p, qb)) < 1e-6);
+    return p;
+  };
+
+  SECTION("every sampled point lies on both surfaces; the ends are the two vertices") {
+    for (int i = 0; i <= 20; ++i)
+      onBoth(s, s.edges[0], i / 20.0);
+    REQUIRE(ray3d::Length(ray3d::Sub(brep::EdgePointAt(s, s.edges[0], 0.0), curve(0.0))) < 1e-6);
+    REQUIRE(ray3d::Length(ray3d::Sub(brep::EdgePointAt(s, s.edges[0], 1.0), curve(kPi * 0.5))) < 1e-6);
+    // the walk follows the curvature: its midpoint is well off the straight chord between the ends
+    const Vec3 v0p = curve(0.0);
+    const Vec3 v1p = curve(kPi * 0.5);
+    const Vec3 mid = brep::EdgePointAt(s, s.edges[0], 0.5);
+    const Vec3 chordMid = ray3d::Scale(ray3d::Add(v0p, v1p), 0.5);
+    REQUIRE(ray3d::Length(ray3d::Sub(mid, chordMid)) > 0.1);
+    // and the marched point matches the closed-form curve at its own angle (theta from y,z)
+    for (int k = 1; k < 20; ++k) {
+      const Vec3 p = brep::EdgePointAt(s, s.edges[0], k / 20.0);
+      const double th = std::atan2(p.z / r, p.y / r);
+      REQUIRE(ray3d::Length(ray3d::Sub(p, curve(th))) < 1e-6);
+    }
+  }
+
+  SECTION("Translate carries the stored surfaces, so the curve still lands on them") {
+    const brep::Solid moved = brep::Translate(s, Vec3{3.5e6, -1.24e7, 250.0});
+    for (int i = 0; i <= 20; ++i)
+      onBoth(moved, moved.edges[0], i / 20.0);
+  }
+
+  SECTION("bounds contain the marched curve; the edge asks for several segments") {
+    const brep::Bounds bnd = brep::ComputeBounds(s);
+    REQUIRE(bnd.valid);
+    for (int i = 0; i <= 20; ++i) {
+      const Vec3 p = brep::EdgePointAt(s, s.edges[0], i / 20.0);
+      REQUIRE(p.x >= bnd.mn.x - 1e-6);
+      REQUIRE(p.x <= bnd.mx.x + 1e-6);
+      REQUIRE(p.y >= bnd.mn.y - 1e-6);
+      REQUIRE(p.z <= bnd.mx.z + 1e-6);
+    }
+  }
+}
+
+TEST_CASE("Curved B2b-2: INTERSECT of a thin pipe crossing a thick one is the lens", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 2.0;
+  const double R = 5.0;
+
+  // lens volume = 4 * integral_{-r}^{r} sqrt(R^2 - y^2) sqrt(r^2 - y^2) dy  (a fine reference)
+  auto lensVolume = [&](double rr, double RR) {
+    const int N = 400000;
+    double v = 0.0;
+    for (int i = 0; i < N; ++i) {
+      const double y = -rr + 2.0 * rr * (i + 0.5) / N;
+      v += (2.0 * rr / N) * 4.0 * std::sqrt(RR * RR - y * y) * std::sqrt(rr * rr - y * y);
+    }
+    return v;
+  };
+  const double vref = lensVolume(r, R);
+
+  SECTION("axes crossing at the origin — volume matches the numerical reference") {
+    Solid thin;
+    Solid thick;
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(Vec3{-12, 0, 0}, Vec3{1, 0, 0}, &ax));
+    REQUIRE(brep::MakeCylinder(ax, r, 24, &thin, &why));  // axis +x, x in [-12, 12]
+    REQUIRE(brep::MakeCylinder(At(0, 0, -12), R, 24, &thick, &why));  // axis +z
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thin, thick, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 10);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 8);
+
+    const brep::MassProperties mp = brep::ComputeMassProperties(out[0]);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(vref).epsilon(2e-4));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(5e-3));
+  }
+
+  SECTION("INTERSECT order does not matter") {
+    Solid thin;
+    Solid thick;
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(Vec3{-12, 0, 0}, Vec3{1, 0, 0}, &ax));
+    REQUIRE(brep::MakeCylinder(ax, r, 24, &thin, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -12), R, 24, &thick, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thick, thin, &out, &why));  // reversed
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(2e-4));
+  }
+
+  SECTION("stable on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-12, 0, 0}), frame.xAxis, &ax));
+    ucs::Ucs bx = frame;
+    bx.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -12});
+    Solid thin;
+    Solid thick;
+    REQUIRE(brep::MakeCylinder(ax, r, 24, &thin, &why));
+    REQUIRE(brep::MakeCylinder(bx, R, 24, &thick, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thin, thick, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-4));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(vref).epsilon(5e-4));
+  }
+}
+
+TEST_CASE("Curved B2b-2: INTERSECT of a fully general (tilted AND skew) branch pipe",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 1.8;
+  const double R = 5.0;
+  const double alpha = 25.0 * kPi / 180.0;  // tilt off perpendicular
+  const double g = 1.5;                    // AND an offset - axes neither coplanar nor perpendicular
+  const double ca = std::cos(alpha);
+  const double sa = std::sin(alpha);
+
+  // lens volume = integral over the thin cross-section (rho,phi) of the thick chord length
+  //   2 sqrt(R^2 - (g - rho sin phi)^2) / cos(alpha)   times   rho drho dphi
+  double vref = 0.0;
+  const int nRho = 1400;
+  const int nPhi = 1400;
+  for (int i = 0; i < nRho; ++i) {
+    const double rho = r * (i + 0.5) / nRho;
+    for (int j = 0; j < nPhi; ++j) {
+      const double phi = kTwoPiTest * (j + 0.5) / nPhi;
+      const double py = g - rho * std::sin(phi);
+      vref += 2.0 * std::sqrt(std::max(0.0, R * R - py * py)) / ca * rho * (r / nRho) *
+              (kTwoPiTest / nPhi);
+    }
+  }
+
+  const Vec3 thinDir{ca, 0.0, sa};
+  Solid thin;
+  Solid thick;
+  ucs::Ucs ax;
+  REQUIRE(ucs::FromNormal(Vec3{-15.0 * ca, g, -15.0 * sa}, thinDir, &ax));  // closest approach at param 15
+  REQUIRE(brep::MakeCylinder(ax, r, 30, &thin, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -15), R, 30, &thick, &why));  // axis +z
+
+  SECTION("tilted and offset at once - volume matches the numerical reference") {
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 10);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 8);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(8e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(2e-2));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(thin, thick, &rev, &why));  // order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vref).epsilon(8e-3));
+  }
+
+  SECTION("the general lens on a survey-magnitude frame") {
+    const ucs::Ucs frame = TiltedAt(1.9e6, 6.4e6, 210.0);
+    ucs::Ucs axF;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-15.0 * ca, g, -15.0 * sa}),
+                            ucs::UcsVectorToWorld(frame, thinDir), &axF));
+    ucs::Ucs bxF = frame;
+    bxF.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -15});
+    Solid thinF;
+    Solid thickF;
+    REQUIRE(brep::MakeCylinder(axF, r, 30, &thinF, &why));
+    REQUIRE(brep::MakeCylinder(bxF, R, 30, &thickF, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thickF, thinF, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(8e-3));
+  }
+
+  SECTION("SUBTRACT bores the general branch clean through the main - genus 1") {
+    const double thickVol = kPi * R * R * 30.0;
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 12);
+    REQUIRE(CountOf(out[0]).f == 6);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(thickVol - vref).epsilon(8e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(thickVol - vref).epsilon(2e-2));
+  }
+
+  SECTION("UNION fuses the general branch and the main into one solid") {
+    const double want = kPi * R * R * 30.0 + kPi * r * r * 30.0 - vref;
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 12);
+    REQUIRE(CountOf(out[0]).e == 18);
+    REQUIRE(CountOf(out[0]).f == 10);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(8e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(2e-2));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanUnion(thin, thick, &rev, &why));  // order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(8e-3));
+  }
+
+  SECTION("thin - thick of the general case splits the branch into two stubs") {
+    const double thinVol = kPi * r * r * 30.0;
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(out.size() == 2);
+    double total = 0.0;
+    for (const auto& sol : out) {
+      REQUIRE(brep::Validate(sol) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(sol));
+      REQUIRE(CountOf(sol).v == 4);
+      REQUIRE(CountOf(sol).e == 6);
+      REQUIRE(CountOf(sol).f == 4);
+      REQUIRE(brep::EulerCharacteristic(sol) == 2);
+      total += brep::ComputeMassProperties(sol).volume;
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(sol, 0.01, &t, &why));
+      RequireWindingMatchesNormals(t);
+    }
+    REQUIRE(total == Approx(thinVol - vref).epsilon(8e-3));
+  }
+}
+
+TEST_CASE("Curved B2b-2: INTERSECT of a SKEW (offset) perpendicular branch pipe is the lens",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 1.5;
+  const double R = 5.0;
+  const double g = 2.0;  // the two axes miss each other by g; g + r < R
+
+  // lens volume = integral over the thin cross-section (rho,phi) of the thick chord length
+  //   2 sqrt(R^2 - (g + rho sin phi)^2)   times   rho drho dphi
+  double vref = 0.0;
+  const int nRho = 1400;
+  const int nPhi = 1400;
+  for (int i = 0; i < nRho; ++i) {
+    const double rho = r * (i + 0.5) / nRho;
+    for (int j = 0; j < nPhi; ++j) {
+      const double phi = kTwoPiTest * (j + 0.5) / nPhi;
+      const double px = g + rho * std::sin(phi);
+      vref += 2.0 * std::sqrt(std::max(0.0, R * R - px * px)) * rho * (r / nRho) * (kTwoPiTest / nPhi);
+    }
+  }
+
+  Solid thin;
+  Solid thick;
+  ucs::Ucs ax;
+  REQUIRE(ucs::FromNormal(Vec3{g, -15, 0}, Vec3{0, 1, 0}, &ax));  // axis +y, offset g in x
+  REQUIRE(brep::MakeCylinder(ax, r, 30, &thin, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -15), R, 30, &thick, &why));  // axis +z
+
+  SECTION("offset axes, right angles - volume matches the numerical reference") {
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 10);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 8);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.008, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(1e-2));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(thin, thick, &rev, &why));  // order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vref).epsilon(5e-3));
+  }
+
+  SECTION("the skew lens on a survey-magnitude frame") {
+    const ucs::Ucs frame = TiltedAt(3.9e6, 1.7e6, 90.0);
+    ucs::Ucs axF;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{g, -15, 0}),
+                            ucs::UcsVectorToWorld(frame, Vec3{0, 1, 0}), &axF));
+    ucs::Ucs bxF = frame;
+    bxF.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -15});
+    Solid thinF;
+    Solid thickF;
+    REQUIRE(brep::MakeCylinder(axF, r, 30, &thinF, &why));
+    REQUIRE(brep::MakeCylinder(bxF, R, 30, &thickF, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thickF, thinF, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-3));
+  }
+
+  SECTION("SUBTRACT bores the offset branch clean through the main - genus 1") {
+    const double thickVol = kPi * R * R * 30.0;
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 12);
+    REQUIRE(CountOf(out[0]).f == 6);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(thickVol - vref).epsilon(5e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.008, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(thickVol - vref).epsilon(1e-2));
+  }
+
+  SECTION("UNION fuses the offset branch and the main into one solid") {
+    const double want = kPi * R * R * 30.0 + kPi * r * r * 30.0 - vref;
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 12);
+    REQUIRE(CountOf(out[0]).e == 18);
+    REQUIRE(CountOf(out[0]).f == 10);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(5e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.008, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(1e-2));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanUnion(thin, thick, &rev, &why));
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(5e-3));
+  }
+
+  SECTION("thin - thick of a skew pair bites the branch in two - a stub each side") {
+    const double total = kPi * r * r * 30.0 - vref;
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(out.size() == 2);
+    double sum = 0.0;
+    for (const Solid& stub : out) {
+      REQUIRE(brep::Validate(stub) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(stub));
+      REQUIRE(CountOf(stub).v == 4);
+      REQUIRE(CountOf(stub).e == 6);
+      REQUIRE(CountOf(stub).f == 4);
+      REQUIRE(brep::EulerCharacteristic(stub) == 2);
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(stub, 0.008, &t, &why));
+      RequireWindingMatchesNormals(t);
+      sum += brep::ComputeMassProperties(stub).volume;
+    }
+    REQUIRE(sum == Approx(total).epsilon(5e-3));
+  }
+}
+
+TEST_CASE("Curved B2b-2: INTERSECT of a NON-perpendicular branch pipe is the tilted lens",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 2.0;
+  const double R = 5.0;
+  const double alpha = kPi / 6.0;  // 30 deg off perpendicular, axes coplanar and crossing
+  const double ca = std::cos(alpha);
+  const double sa = std::sin(alpha);
+
+  // lens volume = integral over the thin cross-section (rho,phi) of the thick-cylinder chord length
+  //   2 sqrt(R^2 - rho^2 sin^2 phi) / cos(alpha)   times   rho drho dphi
+  double vref = 0.0;
+  const int nRho = 1200;
+  const int nPhi = 1200;
+  for (int i = 0; i < nRho; ++i) {
+    const double rho = r * (i + 0.5) / nRho;
+    for (int j = 0; j < nPhi; ++j) {
+      const double phi = kTwoPiTest * (j + 0.5) / nPhi;
+      vref += 2.0 * std::sqrt(std::max(0.0, R * R - rho * rho * std::sin(phi) * std::sin(phi))) / ca *
+              rho * (r / nRho) * (kTwoPiTest / nPhi);
+    }
+  }
+
+  const Vec3 thinDir{ca, 0.0, sa};
+  Solid thin;
+  Solid thick;
+  ucs::Ucs ax;
+  REQUIRE(ucs::FromNormal(Vec3{-15.0 * ca, 0.0, -15.0 * sa}, thinDir, &ax));  // meet at param 15
+  REQUIRE(brep::MakeCylinder(ax, r, 30, &thin, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -15), R, 30, &thick, &why));
+
+  SECTION("axes crossing at the origin - volume matches the numerical reference") {
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 10);
+    REQUIRE(CountOf(out[0]).f == 4);
+    REQUIRE(brep::EulerCharacteristic(out[0]) == 2);
+    int isect = 0;
+    for (const auto& e : out[0].edges)
+      if (e.kind == brep::CurveKind::Intersection)
+        ++isect;
+    REQUIRE(isect == 8);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(vref).epsilon(1e-2));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanIntersect(thin, thick, &rev, &why));  // operand order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(vref).epsilon(5e-3));
+  }
+
+  SECTION("the tilted lens on a survey-magnitude frame") {
+    const ucs::Ucs frame = TiltedAt(4.1e6, 2.2e6, 130.0);
+    ucs::Ucs axF;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-15.0 * ca, 0.0, -15.0 * sa}),
+                            ucs::UcsVectorToWorld(frame, thinDir), &axF));
+    ucs::Ucs bxF = frame;
+    bxF.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -15});
+    Solid thinF;
+    Solid thickF;
+    REQUIRE(brep::MakeCylinder(axF, r, 30, &thinF, &why));
+    REQUIRE(brep::MakeCylinder(bxF, R, 30, &thickF, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanIntersect(thickF, thinF, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(vref).epsilon(5e-3));
+  }
+
+  SECTION("SUBTRACT bores the tilted branch clean through the main - genus 1") {
+    const double thickVol = kPi * R * R * 30.0;
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 12);
+    REQUIRE(CountOf(out[0]).f == 6);  // two B-wall faces carry the mouth as an inner loop (genus 1)
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(thickVol - vref).epsilon(5e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(thickVol - vref).epsilon(1e-2));
+  }
+
+  SECTION("UNION fuses the tilted branch and the main into one solid pipe-tee") {
+    const double want = kPi * R * R * 30.0 + kPi * r * r * 30.0 - vref;
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 12);
+    REQUIRE(CountOf(out[0]).e == 18);
+    REQUIRE(CountOf(out[0]).f == 10);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(5e-3));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(1e-2));
+
+    std::vector<Solid> rev;
+    REQUIRE(brep::BooleanUnion(thin, thick, &rev, &why));  // order does not matter
+    REQUIRE(brep::ComputeMassProperties(rev[0]).volume == Approx(want).epsilon(5e-3));
+  }
+
+  SECTION("thin - thick bites the tilted branch in two - a stub each side, each with a dimple") {
+    const double total = kPi * r * r * 30.0 - vref;  // both stubs
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(out.size() == 2);
+    double sum = 0.0;
+    for (const Solid& stub : out) {
+      REQUIRE(brep::Validate(stub) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(stub));
+      REQUIRE(CountOf(stub).v == 4);
+      REQUIRE(CountOf(stub).e == 6);
+      REQUIRE(CountOf(stub).f == 4);
+      REQUIRE(brep::EulerCharacteristic(stub) == 2);
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(stub, 0.01, &t, &why));
+      RequireWindingMatchesNormals(t);
+      sum += brep::ComputeMassProperties(stub).volume;
+    }
+    REQUIRE(sum == Approx(total).epsilon(5e-3));
+  }
+
+  SECTION("skew (non-coplanar) axes are refused") {
+    Solid skew;
+    ucs::Ucs sx;
+    REQUIRE(ucs::FromNormal(Vec3{-15.0 * ca, 4.0, -15.0 * sa}, thinDir, &sx));  // offset in y
+    REQUIRE(brep::MakeCylinder(sx, r, 30, &skew, &why));
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanIntersect(thick, skew, &out, &why));
+  }
+}
+
+TEST_CASE("Curved B2b-2: SUBTRACT bores a branch clean through the main pipe", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 2.0;
+  const double R = 5.0;
+  const double L = 24.0;  // thick cylinder length, z in [-12, 12]
+  auto lensVolume = [&](double rr, double RR) {
+    const int N = 400000;
+    double v = 0.0;
+    for (int i = 0; i < N; ++i) {
+      const double y = -rr + 2.0 * rr * (i + 0.5) / N;
+      v += (2.0 * rr / N) * 4.0 * std::sqrt(RR * RR - y * y) * std::sqrt(rr * rr - y * y);
+    }
+    return v;
+  };
+  const double want = kPi * R * R * L - lensVolume(r, R);
+
+  SECTION("main minus branch — volume vol(main) - lens, genus one") {
+    Solid thin;
+    Solid thick;
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(Vec3{-12, 0, 0}, Vec3{1, 0, 0}, &ax));
+    REQUIRE(brep::MakeCylinder(ax, r, 24, &thin, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -12), R, L, &thick, &why));
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 8);
+    REQUIRE(CountOf(out[0]).e == 12);
+    REQUIRE(CountOf(out[0]).f == 6);
+
+    const brep::MassProperties mp = brep::ComputeMassProperties(out[0]);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(want).epsilon(5e-4));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(6e-3));
+  }
+
+  SECTION("thin − thick bites the branch in two — a stub each side, each with a dimple") {
+    Solid thin;
+    Solid thick;
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(Vec3{-12, 0, 0}, Vec3{1, 0, 0}, &ax));
+    REQUIRE(brep::MakeCylinder(ax, r, 24, &thin, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -12), R, L, &thick, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(thin, thick, &out, &why));
+    REQUIRE(out.size() == 2);
+    const double total = kPi * r * r * 24.0 - lensVolume(r, R);
+    double sum = 0.0;
+    for (const Solid& stub : out) {
+      REQUIRE(brep::Validate(stub) == Problem::Ok);
+      REQUIRE_FALSE(brep::SelfIntersects(stub));
+      REQUIRE(CountOf(stub).v == 4);
+      REQUIRE(CountOf(stub).e == 6);
+      REQUIRE(CountOf(stub).f == 4);
+      REQUIRE(brep::EulerCharacteristic(stub) == 2);
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(stub, 0.01, &t, &why));
+      RequireWindingMatchesNormals(t);
+      sum += brep::ComputeMassProperties(stub).volume;
+    }
+    REQUIRE(sum == Approx(total).epsilon(5e-3));
+  }
+
+  SECTION("stable on a tilted survey-magnitude frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-12, 0, 0}), frame.xAxis, &ax));
+    ucs::Ucs bx = frame;
+    bx.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -12});
+    Solid thin;
+    Solid thick;
+    REQUIRE(brep::MakeCylinder(ax, r, 24, &thin, &why));
+    REQUIRE(brep::MakeCylinder(bx, R, L, &thick, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(thick, thin, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(1e-3));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(want).epsilon(1e-3));
+  }
+}
+
+TEST_CASE("Curved B2b-2: UNION fuses the branch and the main into a solid pipe-tee", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double r = 2.0;
+  const double R = 5.0;
+  const double L = 24.0;    // main length, z in [-12, 12]
+  const double bl = 24.0;   // branch length, x in [-12, 12]
+  auto lensVolume = [&](double rr, double RR) {
+    const int N = 400000;
+    double v = 0.0;
+    for (int i = 0; i < N; ++i) {
+      const double y = -rr + 2.0 * rr * (i + 0.5) / N;
+      v += (2.0 * rr / N) * 4.0 * std::sqrt(RR * RR - y * y) * std::sqrt(rr * rr - y * y);
+    }
+    return v;
+  };
+  const double want = kPi * r * r * bl + kPi * R * R * L - lensVolume(r, R);
+
+  SECTION("volume vol(branch) + vol(main) - lens; a genus-zero solid") {
+    Solid thin;
+    Solid thick;
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(Vec3{-12, 0, 0}, Vec3{1, 0, 0}, &ax));
+    REQUIRE(brep::MakeCylinder(ax, r, bl, &thin, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, -12), R, L, &thick, &why));
+
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(thin, thick, &out, &why));
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(out[0]));
+    REQUIRE(CountOf(out[0]).v == 12);
+    REQUIRE(CountOf(out[0]).e == 18);
+    REQUIRE(CountOf(out[0]).f == 10);
+
+    const brep::MassProperties mp = brep::ComputeMassProperties(out[0]);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(want).epsilon(5e-4));
+
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(out[0], 0.01, &t, &why));
+    RequireWindingMatchesNormals(t);
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(6e-3));
+  }
+
+  SECTION("operand order does not matter; stays exact on a tilted survey frame and after Translate") {
+    const ucs::Ucs frame = TiltedAt(3.5e6, 1.24e7, 250.0);
+    ucs::Ucs ax;
+    REQUIRE(ucs::FromNormal(ucs::UcsToWorld(frame, Vec3{-12, 0, 0}), frame.xAxis, &ax));
+    ucs::Ucs bx = frame;
+    bx.origin = ucs::UcsToWorld(frame, Vec3{0, 0, -12});
+    Solid thin;
+    Solid thick;
+    REQUIRE(brep::MakeCylinder(ax, r, bl, &thin, &why));
+    REQUIRE(brep::MakeCylinder(bx, R, L, &thick, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(thick, thin, &out, &why));  // reversed order
+    REQUIRE(out.size() == 1);
+    REQUIRE(brep::Validate(out[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(out[0]).volume == Approx(want).epsilon(1e-3));
+    const brep::Solid moved = brep::Translate(out[0], Vec3{-3.5e6, -1.24e7, -250.0});
+    REQUIRE(brep::Validate(moved) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(moved).volume == Approx(want).epsilon(1e-3));
+  }
+}
+
+TEST_CASE("Curved B1: two coaxial cylinders - union and intersect", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  std::vector<Solid> r;
+
+  SECTION("equal radius, overlapping — union merges to one cylinder, intersect is the overlap") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 3, 10, &a, &why));       // z[0,10]
+    REQUIRE(brep::MakeCylinder(At(0, 0, 5), 3, 10, &b, &why));   // z[5,15]
+
+    REQUIRE(brep::BooleanUnion(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(kPiT * 9.0 * 15.0).epsilon(1e-9));
+
+    r.clear();
+    REQUIRE(brep::BooleanIntersect(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(kPiT * 9.0 * 5.0).epsilon(1e-9));
+  }
+
+  SECTION("different radius — union is a stepped stack") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &a, &why));       // z[0,10] r4
+    REQUIRE(brep::MakeCylinder(At(0, 0, 4), 2, 10, &b, &why));   // z[4,14] r2
+
+    REQUIRE(brep::BooleanUnion(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(kPiT * 16.0 * 10.0 + kPiT * 4.0 * 4.0).epsilon(1e-9));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
+    RequireWindingMatchesNormals(t);
+
+    r.clear();
+    REQUIRE(brep::BooleanIntersect(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(kPiT * 4.0 * 6.0).epsilon(1e-9));
+  }
+
+  SECTION("disjoint along the axis — union returns both") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 3, 5, &a, &why));         // z[0,5]
+    REQUIRE(brep::MakeCylinder(At(0, 0, 20), 3, 5, &b, &why));    // z[20,25]
+    REQUIRE(brep::BooleanUnion(a, b, &r, &why));
+    REQUIRE(r.size() == 2);
+    r.clear();
+    REQUIRE_FALSE(brep::BooleanIntersect(a, b, &r, &why));
+    REQUIRE(why == Problem::BooleanEmptyResult);
+  }
+}
+
+TEST_CASE("Curved B2a: coaxial SUBTRACT bores a tube and a counterbore", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  std::vector<Solid> r;
+
+  SECTION("a narrower cylinder through the whole length is a tube") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &a, &why));           // z[0,10] r4
+    REQUIRE(brep::MakeCylinder(At(0, 0, -1), 2, 12, &b, &why));      // z[-1,11] r2, clears both ends
+    REQUIRE(brep::BooleanSubtract(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(kPiT * (16.0 - 4.0) * 10.0).epsilon(1e-9));  // pi (rA^2 - rB^2) L
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("a narrower cylinder into one end is a counterbore (blind)") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &a, &why));           // z[0,10] r4
+    REQUIRE(brep::MakeCylinder(At(0, 0, -1), 2, 7, &b, &why));       // z[-1,6] r2, opens at z=0 only
+    REQUIRE(brep::BooleanSubtract(a, b, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    // removed = the bore inside A: z[0,6] * pi rB^2 = pi 4 * 6
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(kPiT * 16.0 * 10.0 - kPiT * 4.0 * 6.0).epsilon(1e-9));
+  }
+
+  SECTION("a wider cylinder over the middle splits A in two") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 2, 12, &a, &why));           // z[0,12] r2
+    REQUIRE(brep::MakeCylinder(At(0, 0, 4), 3, 4, &b, &why));        // z[4,8] r3 > rA
+    REQUIRE(brep::BooleanSubtract(a, b, &r, &why));
+    REQUIRE(r.size() == 2);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(kPiT * 4.0 * 4.0).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(r[1]).volume == Approx(kPiT * 4.0 * 4.0).epsilon(1e-9));
+  }
+
+  SECTION("a fully-internal narrower cylinder (a sealed cavity) is refused") {
+    Solid a;
+    Solid b;
+    REQUIRE(brep::MakeCylinder(World(), 4, 10, &a, &why));
+    REQUIRE(brep::MakeCylinder(At(0, 0, 3), 2, 4, &b, &why));        // z[3,7], both ends inside A
+    REQUIRE_FALSE(brep::BooleanSubtract(a, b, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
+TEST_CASE("Curved B1: a sphere cut by one face of a box - cap and boss", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid sphere;
+  Solid box;
+  REQUIRE(brep::MakeSphere(World(), 5, &sphere, &why));       // centre origin, r 5
+  REQUIRE(brep::MakeBox(At(0, 0, 2), 20, 20, 10, &box, &why)); // z[2,12], x,y[-10,10]
+  std::vector<Solid> r;
+
+  SECTION("INTERSECT is the spherical cap inside the box") {
+    REQUIRE(brep::BooleanIntersect(sphere, box, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    // Cap of height h = r - d = 3 (d = 2): V = pi h^2 (3r - h) / 3.
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(kPiT * 9.0 * (15.0 - 3.0) / 3.0).epsilon(1e-6));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("UNION is a boss - the box plus the cap that pokes out the bored face") {
+    REQUIRE(brep::BooleanUnion(sphere, box, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    // Outside cap height h = r + d = 7: box 4000 + pi 49 (15 - 7) / 3.
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(4000.0 + kPiT * 49.0 * 8.0 / 3.0).epsilon(1e-6));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("SUBTRACT scoops a spherical dimple out of the box face (B2a)") {
+    REQUIRE(brep::BooleanSubtract(box, sphere, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(r[0]));
+    // removed = the cap inside the box, height h = r - d = 3: V = pi h^2 (3r - h) / 3
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(4000.0 - kPiT * 9.0 * (15.0 - 3.0) / 3.0).epsilon(1e-6));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("SUBTRACT the other way (sphere - box) is still refused") {
+    REQUIRE_FALSE(brep::BooleanSubtract(sphere, box, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
+TEST_CASE("Curved B1: a sphere against a box - the refused and trivial cases", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid sphere;
+  std::vector<Solid> r;
+
+  SECTION("a sphere straddling a box corner (many cutting planes) is refused") {
+    REQUIRE(brep::MakeSphere(World(), 5, &sphere, &why));
+    Solid smallBox;
+    REQUIRE(brep::MakeBox(World(), 6, 6, 6, &smallBox, &why));  // x,y[-3,3] z[0,6]
+    REQUIRE_FALSE(brep::BooleanUnion(sphere, smallBox, &r, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+
+  SECTION("a sphere wholly inside a box - intersect is the sphere, union is the box") {
+    REQUIRE(brep::MakeSphere(At(0, 0, 50), 5, &sphere, &why));
+    Solid bigBox;
+    REQUIRE(brep::MakeBox(World(), 100, 100, 100, &bigBox, &why));
+    REQUIRE(brep::BooleanIntersect(sphere, bigBox, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+            Approx(4.0 / 3.0 * kPiT * 125.0).epsilon(1e-9));
+    r.clear();
+    REQUIRE(brep::BooleanUnion(sphere, bigBox, &r, &why));
+    REQUIRE(r.size() == 1);
+    REQUIRE(brep::ComputeMassProperties(r[0]).volume == Approx(1.0e6).epsilon(1e-9));
+  }
+
+  SECTION("a sphere far from the box - disjoint") {
+    REQUIRE(brep::MakeSphere(At(100, 0, 0), 5, &sphere, &why));
+    Solid box;
+    REQUIRE(brep::MakeBox(World(), 6, 6, 6, &box, &why));
+    REQUIRE(brep::BooleanUnion(sphere, box, &r, &why));
+    REQUIRE(r.size() == 2);
+  }
+}
+
+TEST_CASE("Curved B2a: a drilled hole stays exact at survey coordinate magnitude, and survives Translate",
+          "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(At(3.5e6, 1.24e7, 0), 10, 10, 10, &box, &why));
+  REQUIRE(brep::MakeCylinder(At(3.5e6, 1.24e7, -5), 2, 20, &cyl, &why));
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(box, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+          Approx(1000.0 - kPiT * 4.0 * 10.0).epsilon(1e-6));
+
+  // Translate must carry the inward flag and every coordinate (REQ-101 rebase).
+  const brep::Solid moved = brep::Translate(r[0], Vec3{-3.5e6, -1.24e7, 0});
+  REQUIRE(brep::Validate(moved) == Problem::Ok);
+  bool sawInward = false;
+  for (const auto& f : moved.faces)
+    if (f.surface.inward)
+      sawInward = true;
+  REQUIRE(sawInward);
+  REQUIRE(brep::ComputeMassProperties(moved).volume ==
+          Approx(1000.0 - kPiT * 4.0 * 10.0).epsilon(1e-9));
+}
+
+TEST_CASE("Curved B1: a boss stays exact at survey coordinate magnitude", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(At(3.5e6, 1.24e7, 0), 10, 10, 10, &box, &why));
+  REQUIRE(brep::MakeCylinder(At(3.5e6, 1.24e7, -5), 2, 20, &cyl, &why));
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanUnion(box, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(r[0]).volume ==
+          Approx(1000.0 + kPiT * 4.0 * 10.0).epsilon(1e-6));
+}
+
+// ---------------------------------------------------------------------------
+// Feature operations - Loft (REQ-315 / ADR-048, GitHub issue #241). The side faces are
+// SurfaceKind::Nurbs patches integrated by quadrature; every figure below is asserted against the
+// closed form, not a recorded output.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A square profile of side `side`, centred on `plane`'s origin, on `plane`.
+brep::Profile SquareProfile(const ucs::Ucs& plane, double side) {
+  const double h = 0.5 * side;
+  return PolyProfile(plane, {{-h, -h}, {h, -h}, {h, h}, {-h, h}});
+}
+
+/// A plane parallel to `base`, its origin moved `along` up `base`'s normal.
+ucs::Ucs PlaneAlong(const ucs::Ucs& base, double along) {
+  ucs::Ucs u = base;
+  u.origin = {base.origin.x + base.zAxis.x * along, base.origin.y + base.zAxis.y * along,
+              base.origin.z + base.zAxis.z * along};
+  return u;
+}
+
+double ConeFrustumVolume(double ra, double rb, double h) {
+  return kPi * h / 3.0 * (ra * ra + ra * rb + rb * rb);
+}
+
+}  // namespace
+
+TEST_CASE("Loft between two identical squares is the box the primitive builder makes", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double w = 6.0, h = 4.0;
+  Solid lofted;
+  REQUIRE(brep::Loft({SquareProfile(World(), w), SquareProfile(PlaneAlong(World(), h), w)}, &lofted, &why));
+  Solid box;
+  REQUIRE(brep::MakeBox(At(0, 0, h * 0.5), w, w, h, &box, &why));
+
+  REQUIRE(CountOf(lofted).v == CountOf(box).v);
+  REQUIRE(CountOf(lofted).e == CountOf(box).e);
+  REQUIRE(CountOf(lofted).f == CountOf(box).f);
+  REQUIRE(brep::EulerCharacteristic(lofted) == 2);
+  REQUIRE_FALSE(brep::SelfIntersects(lofted));
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(lofted);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(w * w * h).epsilon(1e-7));
+  REQUIRE(mp.surfaceArea == Approx(2.0 * w * w + 4.0 * w * h).epsilon(1e-7));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(lofted, 0.01, &t, &why));
+  REQUIRE(t.triangleCount() > 0);
+  std::vector<double> iso;
+  REQUIRE(brep::TessellateIsolines(lofted, 4, 0.01, &iso, &why));
+}
+
+TEST_CASE("Loft from a square to a smaller square is the pyramid frustum", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double s0 = 8.0, s1 = 3.0, H = 5.0;
+  Solid s;
+  REQUIRE(brep::Loft({SquareProfile(World(), s0), SquareProfile(PlaneAlong(World(), H), s1)}, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const double a0 = s0 * s0, a1 = s1 * s1;
+  const double expected = H / 3.0 * (a0 + a1 + std::sqrt(a0 * a1));
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-6));
+}
+
+TEST_CASE("Loft through three circles is a stack of cone frustums", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double r0 = 5.0, r1 = 8.0, r2 = 3.5;
+  const double z1 = 4.0, z2 = 11.0;
+  Solid s;
+  REQUIRE(brep::Loft({CircleProfile(World(), r0), CircleProfile(PlaneAlong(World(), z1), r1),
+                      CircleProfile(PlaneAlong(World(), z2), r2)},
+                     &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+
+  const double expected = ConeFrustumVolume(r0, r1, z1) + ConeFrustumVolume(r1, r2, z2 - z1);
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(expected).epsilon(1e-5));
+
+  // A face snap lands ON the freeform patch: at mid-height of the lower band the frustum radius is
+  // (r0 + r1) / 2, and a probe far out in +X must snap to exactly that radius.
+  for (const brep::Face& f : s.faces) {
+    if (f.surface.kind != brep::SurfaceKind::Nurbs)
+      continue;
+    const Vec3 on = brep::ClosestPointOnSurface(f.surface, Vec3{100.0, 0.0, z1 * 0.5});
+    if (std::fabs(on.z - z1 * 0.5) < 1e-6) {
+      const double rho = std::sqrt(on.x * on.x + on.y * on.y);
+      REQUIRE(rho == Approx(0.5 * (r0 + r1)).epsilon(1e-6));
+    }
+  }
+}
+
+TEST_CASE("Loft stays accurate on a tilted frame at survey magnitude", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  auto barrel = [&](const ucs::Ucs& base) {
+    Solid s;
+    REQUIRE(brep::Loft({CircleProfile(base, 5.0), CircleProfile(PlaneAlong(base, 4.0), 7.0),
+                        CircleProfile(PlaneAlong(base, 10.0), 4.0)},
+                       &s, &why));
+    return s;
+  };
+  const Solid flat = barrel(World());
+  const Solid tilted = barrel(TiltedAt(3.5e6, 1.24e7, 250.0));
+  REQUIRE(brep::Validate(tilted) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(tilted).volume ==
+          Approx(brep::ComputeMassProperties(flat).volume).epsilon(1e-6));
+}
+
+TEST_CASE("Translate moves every point of a lofted NURBS face by exactly the offset", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::Loft({CircleProfile(World(), 4.0), CircleProfile(PlaneAlong(World(), 6.0), 6.0)}, &s, &why));
+  const Vec3 delta{-3.5e6, 1.24e7, -812.0};
+  const Solid moved = brep::Translate(s, delta);
+  REQUIRE(brep::Validate(moved) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(moved).volume ==
+          Approx(brep::ComputeMassProperties(s).volume).epsilon(1e-9));
+
+  bool checkedNurbs = false;
+  for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
+    if (s.faces[fi].surface.kind != brep::SurfaceKind::Nurbs)
+      continue;
+    checkedNurbs = true;
+    const nurbs::Patch& a = s.faces[fi].surface.patch;
+    const nurbs::Patch& b = moved.faces[fi].surface.patch;
+    for (double u : {0.0, 0.3, 1.0})
+      for (double v : {0.0, 0.7, 1.0}) {
+        const Vec3 pa = nurbs::Evaluate(a, nurbs::UMin(a) + u * (nurbs::UMax(a) - nurbs::UMin(a)),
+                                        nurbs::VMin(a) + v * (nurbs::VMax(a) - nurbs::VMin(a)));
+        const Vec3 pb = nurbs::Evaluate(b, nurbs::UMin(b) + u * (nurbs::UMax(b) - nurbs::UMin(b)),
+                                        nurbs::VMin(b) + v * (nurbs::VMax(b) - nurbs::VMin(b)));
+        REQUIRE(pb.x - pa.x == Approx(delta.x));
+        REQUIRE(pb.y - pa.y == Approx(delta.y));
+        REQUIRE(pb.z - pa.z == Approx(delta.z));
+      }
+  }
+  REQUIRE(checkedNurbs);
+}
+
+TEST_CASE("Loft refuses bad input by name and stores nothing", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  SECTION("fewer than two profiles") {
+    REQUIRE_FALSE(brep::Loft({SquareProfile(World(), 4.0)}, &s, &why));
+    REQUIRE(why == Problem::LoftNeedsTwoProfiles);
+  }
+  SECTION("different edge counts") {
+    REQUIRE_FALSE(brep::Loft({SquareProfile(World(), 4.0),
+                              PolyProfile(PlaneAlong(World(), 3.0), {{0, 0}, {4, 0}, {2, 4}})},
+                             &s, &why));
+    REQUIRE(why == Problem::LoftProfileMismatch);
+  }
+  SECTION("a straight edge paired with an arc") {
+    REQUIRE_FALSE(brep::Loft({SquareProfile(World(), 6.0), CircleProfile(PlaneAlong(World(), 3.0), 3.0)},
+                             &s, &why));
+    REQUIRE(why == Problem::LoftProfileMismatch);
+  }
+  SECTION("a non-planar profile") {
+    brep::Profile bad = SquareProfile(World(), 4.0);
+    bad.vertices[2].z += 1.0;
+    REQUIRE_FALSE(brep::Loft({bad, SquareProfile(PlaneAlong(World(), 3.0), 4.0)}, &s, &why));
+    REQUIRE(why == Problem::ProfilePointOffPlane);
+  }
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("A lofted-prism volume does not move when tessellation quality changes", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAlong(World(), 8.0), 5.0)}, &s, &why));
+  const double v = brep::ComputeMassProperties(s).volume;
+  REQUIRE(v == Approx(kPi * 25.0 * 8.0).epsilon(1e-6));
+
+  brep::Tessellation coarse;
+  brep::Tessellation fine;
+  REQUIRE(brep::Tessellate(s, 0.5, &coarse, &why));
+  REQUIRE(brep::Tessellate(s, 0.002, &fine, &why));
+  REQUIRE(brep::ComputeMassProperties(s).volume == v);  // unchanged by the tessellation calls
+  REQUIRE(TessellatedVolume(fine) == Approx(v).epsilon(0.01));
+}
+
+// ---------------------------------------------------------------------------
+// Feature operations - Sweep (REQ-315 / ADR-048, GitHub issue #241). One profile along one path
+// segment. A straight path reproduces Extrude; a circular-arc path reproduces the solid of
+// revolution (Pappus volume). Side faces are SurfaceKind::Nurbs.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+brep::SweepPath LinePath(const Vec3& a, const Vec3& b) {
+  brep::SweepPath p;
+  p.points = {a, b};
+  p.segments = {brep::SweepSegment{}};
+  return p;
+}
+
+brep::SweepPath ArcPath(const Vec3& start, const Vec3& centre, const Vec3& axis, double sweep) {
+  brep::SweepSegment seg;
+  seg.arc = true;
+  seg.centre = centre;
+  seg.normal = axis;
+  seg.sweep = sweep;
+  const Vec3 r0 = ray3d::Sub(start, centre);
+  const double c = std::cos(sweep), s = std::sin(sweep);
+  const Vec3 k = ray3d::Normalize(axis);
+  const Vec3 end = ray3d::Add(
+      centre, ray3d::Add(ray3d::Add(ray3d::Scale(r0, c), ray3d::Scale(ray3d::Cross(k, r0), s)),
+                         ray3d::Scale(k, ray3d::Dot(k, r0) * (1.0 - c))));
+  brep::SweepPath p;
+  p.points = {start, end};
+  p.segments = {seg};
+  return p;
+}
+
+}  // namespace
+
+TEST_CASE("Sweep along a straight path is the extrude of the same profile", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double w = 8.0, d = 5.0, h = 4.0;
+  const brep::Profile rect =
+      PolyProfile(World(), {{-w / 2, -d / 2}, {w / 2, -d / 2}, {w / 2, d / 2}, {-w / 2, d / 2}});
+
+  Solid swept;
+  REQUIRE(brep::Sweep(rect, LinePath(Vec3{0, 0, 0}, Vec3{0, 0, h}), brep::SweepOptions{}, &swept, &why));
+  Solid extruded;
+  REQUIRE(brep::Extrude(rect, h, &extruded, &why));
+
+  REQUIRE(CountOf(swept).v == CountOf(extruded).v);
+  REQUIRE(CountOf(swept).e == CountOf(extruded).e);
+  REQUIRE(CountOf(swept).f == CountOf(extruded).f);
+  REQUIRE(brep::EulerCharacteristic(swept) == 2);
+
+  const brep::MassProperties ms = brep::ComputeMassProperties(swept);
+  REQUIRE(ms.valid);
+  REQUIRE(ms.volume == Approx(w * d * h).epsilon(1e-7));
+  REQUIRE(ms.surfaceArea == Approx(brep::ComputeMassProperties(extruded).surfaceArea).epsilon(1e-7));
+}
+
+TEST_CASE("Sweep along an oblique straight path is an extrude perpendicular to the path", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double side = 4.0;
+  const brep::Profile sq =
+      PolyProfile(World(), {{-side / 2, -side / 2}, {side / 2, -side / 2}, {side / 2, side / 2},
+                            {-side / 2, side / 2}});
+  const Vec3 a{0, 0, 0};
+  const Vec3 b{6, 2, 9};  // an arbitrary 3D direction
+  Solid s;
+  REQUIRE(brep::Sweep(sq, LinePath(a, b), brep::SweepOptions{}, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  // alignToPath rotates the profile square onto the plane perpendicular to the path, so the solid is
+  // a right prism of length |b - a|.
+  const double len = std::sqrt(36.0 + 4.0 + 81.0);
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(side * side * len).epsilon(1e-6));
+}
+
+TEST_CASE("Sweep along a circular-arc path is the solid of revolution (Pappus volume)", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // A rectangle in the XZ plane, radius 2..5, height 3 — clear of the Z axis. Area 9, centroid r 3.5.
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{3.5, 0.0, 1.5}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{-1.5, -1.5}, ucs::Point2D{1.5, -1.5},
+                                ucs::Point2D{1.5, 1.5}, ucs::Point2D{-1.5, 1.5}})
+    pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  pr.edges.assign(4, brep::ProfileEdge{});
+
+  const double area = 9.0;
+  const double centroidR = 3.5;
+
+  for (const double ang : {kPi / 2.0, kPi, 1.7 * kPi}) {
+    Solid s;
+    const bool ok = brep::Sweep(pr, ArcPath(xz.origin, Vec3{0, 0, 1.5}, Vec3{0, 0, 1}, ang),
+                                brep::SweepOptions{}, &s, &why);
+    INFO("ang=" << ang << " why=" << brep::ProblemText(why));
+    REQUIRE(ok);
+    REQUIRE(brep::Validate(s) == Problem::Ok);
+    REQUIRE_FALSE(brep::SelfIntersects(s));
+    REQUIRE(brep::ComputeMassProperties(s).volume == Approx(ang * centroidR * area).epsilon(1e-5));
+  }
+}
+
+TEST_CASE("Sweep stays accurate on a tilted arc path at survey magnitude", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  auto build = [&](const ucs::Ucs& base) {
+    // A small square at radius ~10 on a plane containing the base normal, swept 120 deg about base Z.
+    ucs::Ucs prof;
+    const Vec3 o = ucs::UcsToWorld(base, Vec3{10, 0, 0});
+    REQUIRE(ucs::FromNormal(o, ucs::UcsVectorToWorld(base, Vec3{0, 1, 0}), &prof));
+    brep::Profile pr;
+    pr.plane = prof;
+    for (const ucs::Point2D& q :
+         {ucs::Point2D{-1, -1}, ucs::Point2D{1, -1}, ucs::Point2D{1, 1}, ucs::Point2D{-1, 1}})
+      pr.vertices.push_back(ucs::PlaneToWorld(prof, q));
+    pr.edges.assign(4, brep::ProfileEdge{});
+    const brep::SweepPath path = ArcPath(o, base.origin, base.zAxis, 2.0 * kPi / 3.0);
+    Solid s;
+    REQUIRE(brep::Sweep(pr, path, brep::SweepOptions{}, &s, &why));
+    return s;
+  };
+  const Solid flat = build(World());
+  const Solid tilted = build(TiltedAt(3.5e6, 1.24e7, 250.0));
+  REQUIRE(brep::Validate(tilted) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(tilted).volume ==
+          Approx(brep::ComputeMassProperties(flat).volume).epsilon(1e-6));
+}
+
+TEST_CASE("A twisted straight sweep is a valid closed solid a little under the untwisted prism", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const double side = 4.0, h = 10.0;
+  const brep::Profile sq =
+      PolyProfile(World(), {{-side / 2, -side / 2}, {side / 2, -side / 2}, {side / 2, side / 2},
+                            {-side / 2, side / 2}});
+  brep::SweepOptions opt;
+  opt.twistRad = kPi / 3.0;  // 60 degrees over the length
+  Solid s;
+  REQUIRE(brep::Sweep(sq, LinePath(Vec3{0, 0, 0}, Vec3{0, 0, h}), opt, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  // The ruled side faces pinch as they twist, so the solid is smaller than the straight prism but
+  // still a genuine positive volume. The real invariant is that the analytic integral and an
+  // independent triangle sum agree.
+  const double prism = side * side * h;
+  const double v = brep::ComputeMassProperties(s).volume;
+  REQUIRE(v > 0.6 * prism);
+  REQUIRE(v < prism);
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.002, &t, &why));
+  REQUIRE(TessellatedVolume(t) == Approx(v).epsilon(0.02));
+}
+
+TEST_CASE("Sweep translate at state-plane magnitude matches the origin build", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-2, -2}, {2, -2}, {2, 2}, {-2, 2}});
+  Solid s;
+  REQUIRE(brep::Sweep(sq, LinePath(Vec3{0, 0, 0}, Vec3{1, 0, 5}), brep::SweepOptions{}, &s, &why));
+  const Vec3 delta{3.5e6, -1.24e7, 812.0};
+  const Solid moved = brep::Translate(s, delta);
+  REQUIRE(brep::Validate(moved) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(moved).volume ==
+          Approx(brep::ComputeMassProperties(s).volume).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep refuses bad input by name and stores nothing", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-2, -2}, {2, -2}, {2, 2}, {-2, 2}});
+  Solid s;
+  SECTION("a zero-length line path") {
+    REQUIRE_FALSE(brep::Sweep(sq, LinePath(Vec3{1, 1, 1}, Vec3{1, 1, 1}), brep::SweepOptions{}, &s, &why));
+    REQUIRE(why == Problem::SweepPathDegenerate);
+  }
+  SECTION("a profile that reaches the arc path axis") {
+    ucs::Ucs xz;
+    REQUIRE(ucs::FromNormal(Vec3{2, 0, 0}, Vec3{0, 1, 0}, &xz));
+    brep::Profile pr;
+    pr.plane = xz;
+    for (const ucs::Point2D& q : {ucs::Point2D{-2, -1}, ucs::Point2D{2, -1}, ucs::Point2D{2, 1},
+                                  ucs::Point2D{-2, 1}})  // spans radius 0..4 -> touches the axis
+      pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+    pr.edges.assign(4, brep::ProfileEdge{});
+    REQUIRE_FALSE(brep::Sweep(pr, ArcPath(xz.origin, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kPi / 2.0),
+                              brep::SweepOptions{}, &s, &why));
+    REQUIRE(why == Problem::SweepProfileTouchesAxis);
+  }
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep along a bulge polyline path is a bent pipe with the summed volume", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // A circle (r 1, area pi) along: line +X of length 10, a tangent quarter arc (radius 5) turning to
+  // +Y, then line +Y of length 8. Volume = 18*pi (straight) + (pi/2)*5*pi (Pappus, the elbow).
+  const brep::Profile circ = CircleProfile(World(), 1.0);
+
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{15, 5, 0}, Vec3{15, 13, 0}};
+  brep::SweepSegment arcSeg;
+  arcSeg.arc = true;
+  arcSeg.centre = Vec3{10, 5, 0};
+  arcSeg.normal = Vec3{0, 0, 1};
+  arcSeg.sweep = kPi / 2.0;
+  path.segments = {brep::SweepSegment{}, arcSeg, brep::SweepSegment{}};
+
+  Solid s;
+  const bool ok = brep::Sweep(circ, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+
+  const double expected = 18.0 * kPi + (kPi / 2.0) * 5.0 * kPi;
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-4));
+}
+
+// ---------------------------------------------------------------------------------------------
+// A mitred sweep-path corner (REQ-315, 2026-09-04, GitHub issue #259): a sharp corner where both
+// adjoining path segments are straight and the profile is polygonal mitres — cut on the plane that
+// bisects the two tangents — rather than being refused. Its own volume identity (area x leg length,
+// summed) is what makes it testable without a numerical reference: the bisector plane passes through
+// the path's own vertex, so each leg keeps its full nominal length regardless of the plane's tilt.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("Sweep mitres a 90-degree corner between two straight segments", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}};  // a 90-degree corner at the joint
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  // One shared ring at the corner (mitred, not duplicated): 3 rings x 4 vertices, 2 bands x 4 side
+  // faces + 2 caps.
+  REQUIRE(CountOf(s).v == 12);
+  REQUIRE(CountOf(s).f == 10);
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(4.0 * 10.0 + 4.0 * 10.0).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep mitres both corners of a Z-shaped 3-segment path", "[brep][req315]") {
+  // Two corners in a row (not coplanar with each other) — the case that would catch a frame that
+  // does not correctly re-derive each leg's own orientation after the first mitre.
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{8, 0, 0}, Vec3{8, 0, 6}, Vec3{8, 5, 6}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE(CountOf(s).v == 16);  // 4 rings x 4 vertices
+  REQUIRE(CountOf(s).f == 14);  // 3 bands x 4 side faces + 2 caps
+  REQUIRE(brep::ComputeMassProperties(s).volume ==
+          Approx(4.0 * 8.0 + 4.0 * 6.0 + 4.0 * 5.0).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep mitres three consecutive corners of a helix-like 4-segment path", "[brep][req315]") {
+  // Three mitred corners in a row, none coplanar with the others (each turn is about a different
+  // axis) — a stress test for whether TurnFrameToTangent's running frame stays correct after TWO
+  // turns in a row, not just one.
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{5, 0, 0}, Vec3{5, 4, 0}, Vec3{5, 4, 3}, Vec3{9, 4, 3}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{},
+                   brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE(CountOf(s).v == 20);  // 5 rings x 4 vertices
+  REQUIRE(CountOf(s).f == 18);  // 4 bands x 4 side faces + 2 caps
+  REQUIRE(brep::ComputeMassProperties(s).volume ==
+          Approx(4.0 * 5.0 + 4.0 * 4.0 + 4.0 * 3.0 + 4.0 * 4.0).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep mitres every corner of a closed rectangular path", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-0.5, -0.5}, {0.5, -0.5}, {0.5, 0.5}, {-0.5, 0.5}});
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{6, 0, 0}, Vec3{6, 4, 0}, Vec3{0, 4, 0}, Vec3{0, 0, 0}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{},
+                   brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 0);  // no caps, closed — same as any closed sweep path
+  REQUIRE(CountOf(s).v == 16);                 // 4 rings (ring 4 aliased onto ring 0) x 4 vertices
+  REQUIRE(CountOf(s).f == 16);                 // 4 bands x 4 side faces, no caps
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(1.0 * (6.0 + 4.0 + 6.0 + 4.0)).epsilon(1e-9));
+}
+
+TEST_CASE("Sweep still refuses a sharp corner touching an arc segment, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  brep::SweepPath path;
+  // A quarter-circle arc from (0,0,0) to (5,5,0), centre (0,5,0), ending heading +Y — then a
+  // straight leg heading +X instead of continuing +Y: a sharp joint that touches an arc segment.
+  path.points = {Vec3{0, 0, 0}, Vec3{5, 5, 0}, Vec3{15, 5, 0}};
+  brep::SweepSegment arcSeg;
+  arcSeg.arc = true;
+  arcSeg.centre = Vec3{0, 5, 0};
+  arcSeg.normal = Vec3{0, 0, 1};
+  arcSeg.sweep = kPi / 2.0;
+  path.segments = {arcSeg, brep::SweepSegment{}};
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why));
+  REQUIRE(why == Problem::SweepPathCorner);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep refuses a mitred corner whose profile has an arc edge, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile circ = CircleProfile(World(), 1.0);
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}};  // the same 90-degree corner
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(circ, path, brep::SweepOptions{}, &s, &why));
+  REQUIRE(why == Problem::SweepMitreProfileArc);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep refuses a corner too sharp to mitre, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  brep::SweepPath path;
+  // A near-total reversal: out along +X, back almost exactly along -X — the bisector plane is
+  // degenerate (the tangents' sum is within the kernel's own collapse tolerance of zero).
+  const double delta = 1e-8;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0},
+                 Vec3{10 - 10.0 * std::cos(delta), 10.0 * std::sin(delta), 0}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why));
+  REQUIRE(why == Problem::SweepMitreCollapsed);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep along collinear polyline segments equals the single-segment sweep", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-2, -2}, {2, -2}, {2, 2}, {-2, 2}});
+
+  Solid one;
+  REQUIRE(brep::Sweep(sq, LinePath(Vec3{0, 0, 0}, Vec3{0, 0, 12}), brep::SweepOptions{}, &one, &why));
+
+  brep::SweepPath split;
+  split.points = {Vec3{0, 0, 0}, Vec3{0, 0, 5}, Vec3{0, 0, 12}};
+  split.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid two;
+  REQUIRE(brep::Sweep(sq, split, brep::SweepOptions{}, &two, &why));
+  REQUIRE(brep::Validate(two) == Problem::Ok);
+
+  REQUIRE(brep::ComputeMassProperties(two).volume ==
+          Approx(brep::ComputeMassProperties(one).volume).epsilon(1e-9));
+  REQUIRE(brep::ComputeMassProperties(two).volume == Approx(4.0 * 4.0 * 12.0).epsilon(1e-7));
+}
+
+// ---------------------------------------------------------------------------------------------
+// A closed sweep path (REQ-315, 2026-09-04, GitHub issue #259): a single full-circle arc segment,
+// or a multi-segment path that returns to its own start. No end caps, the first and last rings
+// shared, and a full-circle single-arc path equals a full-turn Revolve — the same reasoning REQ-315
+// already applies to a partial arc path and REQ-314 extrude.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("Sweep along a full-circle arc path builds a capless ring at the Pappus volume",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // Same rectangle profile as the partial-arc-path test: radius 2..5, height 3, clear of the Z axis.
+  // brep::Revolve cannot build this shape for comparison — it requires the profile to TOUCH its
+  // axis, the opposite of what Sweep already requires of an arc segment's axis
+  // (Problem::SweepProfileTouchesAxis) — so this is checked against Pappus directly, the same way
+  // the existing partial-arc-path case already is.
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{3.5, 0.0, 1.5}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{-1.5, -1.5}, ucs::Point2D{1.5, -1.5},
+                                ucs::Point2D{1.5, 1.5}, ucs::Point2D{-1.5, 1.5}})
+    pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  pr.edges.assign(4, brep::ProfileEdge{});
+
+  Solid swept;
+  const bool ok = brep::Sweep(pr, ArcPath(xz.origin, Vec3{0, 0, 1.5}, Vec3{0, 0, 1}, 2.0 * kPi),
+                              brep::SweepOptions{}, &swept, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(swept) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(swept));
+  REQUIRE(brep::EulerCharacteristic(swept) == 0);  // no caps — a torus-like ring, genus 1
+  REQUIRE(CountOf(swept).v == 8);  // two split half-turn rings of 4 vertices each, shared at the seam
+  REQUIRE(CountOf(swept).f == 8);  // two bands x 4 profile edges, no caps
+
+  const brep::MassProperties ms = brep::ComputeMassProperties(swept);
+  REQUIRE(ms.valid);
+  REQUIRE(ms.volume == Approx(2.0 * kPi * 3.5 * 9.0).epsilon(1e-5));  // Pappus
+}
+
+TEST_CASE("Sweep along a multi-segment path that closes into a loop builds with no end caps",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile circ = CircleProfile(World(), 0.5);
+
+  // Three 120-degree arcs about the same centre/axis, forming a closed circular path of radius 4.
+  const Vec3 centre{0, 0, 0};
+  const Vec3 axis{0, 0, 1};
+  const double r = 4.0;
+  brep::SweepPath path;
+  for (int k = 0; k < 3; ++k) {
+    const double a = (2.0 * kPi / 3.0) * static_cast<double>(k);
+    path.points.push_back(Vec3{r * std::cos(a), r * std::sin(a), 0});
+  }
+  path.points.push_back(path.points.front());  // closes the loop
+  brep::SweepSegment seg;
+  seg.arc = true;
+  seg.centre = centre;
+  seg.normal = axis;
+  seg.sweep = 2.0 * kPi / 3.0;
+  path.segments = {seg, seg, seg};
+
+  Solid s;
+  const bool ok = brep::Sweep(circ, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 0);  // no caps — genus 1, same as the full-circle case
+  // Euler characteristic alone can't tell a correctly-closed 3-ring loop from some other
+  // topologically-valid-but-wrong wiring that happens to integrate to the same volume — so check
+  // the counts directly: 3 rings of the circle profile's 2 vertices/edges each, none duplicated.
+  REQUIRE(CountOf(s).v == 6);
+  REQUIRE(CountOf(s).f == 6);
+
+  const double expected = 2.0 * kPi * r * (kPi * 0.5 * 0.5);  // Pappus: circle profile, area pi*r^2
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(expected).epsilon(1e-4));
+}
+
+TEST_CASE("Sweep mitres a closed triangular path, including the closing seam", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // area 4
+  // Three straight segments returning to the start, mitred at every one of the three corners —
+  // including the closing seam back to the start, not tangent-continuous anywhere.
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 10, 0}, Vec3{0, 0, 0}};
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(brep::EulerCharacteristic(s) == 0);  // closed, no caps
+  REQUIRE(CountOf(s).v == 12);                 // 3 rings (closing seam aliased) x 4 vertices
+  REQUIRE(CountOf(s).f == 12);                 // 3 bands x 4 side faces, no caps
+  const double perimeter = 10.0 + 10.0 + std::sqrt(200.0);
+  REQUIRE(brep::ComputeMassProperties(s).volume == Approx(4.0 * perimeter).epsilon(1e-9));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Twist and fixed orientation on a curved or multi-segment path (REQ-315, 2026-09-04, GitHub issue
+// #259 — the last of its three items). Twist accumulates proportionally to distance travelled;
+// fixed orientation carries the profile's original axes unrotated through every segment, straight
+// or arc. Both were previously refused on anything but a single straight segment.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("Sweep twist accumulates proportionally to distance travelled", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // A 1x3 rectangle — deliberately asymmetric, so a wrong twist angle is not masked by symmetry.
+  const brep::Profile rect =
+      PolyProfile(World(), {{-0.5, -1.5}, {0.5, -1.5}, {0.5, 1.5}, {-0.5, 1.5}});
+  brep::SweepOptions opt;
+  opt.twistRad = kPi / 2.0;
+
+  // Two COLLINEAR straight segments (lengths 4 and 6, both +X) — tangent-continuous, not a corner —
+  // so ring 1 (the joint) sits at length fraction 4/10 of the total twist.
+  brep::SweepPath path2;
+  path2.points = {Vec3{0, 0, 0}, Vec3{4, 0, 0}, Vec3{10, 0, 0}};
+  path2.segments = {brep::SweepSegment{}, brep::SweepSegment{}};
+  Solid s2;
+  const bool ok2 = brep::Sweep(rect, path2, opt, &s2, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok2);
+  REQUIRE(brep::Validate(s2) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s2));
+
+  // Reference: an independent single-segment sweep of the FIRST leg alone, with its twist scaled to
+  // its own share (4/10) of the total — the already-verified "rotate only the end frame" rule for a
+  // single straight segment. Ring 1 of the two-segment sweep must match this reference's end ring
+  // exactly: both are the profile placed in the same frame, twisted by the same accumulated angle.
+  brep::SweepOptions optRef;
+  optRef.twistRad = opt.twistRad * (4.0 / 10.0);
+  Solid sRef;
+  REQUIRE(brep::Sweep(rect, LinePath(Vec3{0, 0, 0}, Vec3{4, 0, 0}), optRef, &sRef, &why));
+
+  REQUIRE(CountOf(s2).v == 12);   // 3 rings x 4 vertices
+  REQUIRE(CountOf(sRef).v == 8);  // 2 rings x 4 vertices
+  for (int j = 0; j < 4; ++j) {
+    const Vec3& a = s2.vertices[static_cast<std::size_t>(4 + j)].p;    // s2's ring 1
+    const Vec3& b = sRef.vertices[static_cast<std::size_t>(4 + j)].p;  // sRef's end ring
+    REQUIRE(a.x == Approx(b.x).epsilon(1e-9));
+    REQUIRE(a.y == Approx(b.y).epsilon(1e-9));
+    REQUIRE(a.z == Approx(b.z).epsilon(1e-9));
+  }
+
+  // Not asserted: an exact total volume. Each band's surface is a RULED (straight-line) interpolation
+  // between its two — differently twisted — end rings, not a true continuous rotation, so it does
+  // not preserve `area x length` the way an untwisted or uniformly-translated band does; the ring
+  // positions above are the correctness signal for this construction, not a volume identity.
+}
+
+TEST_CASE("Sweep refuses a twist combined with an arc path segment, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{3.5, 0.0, 1.5}, Vec3{0, 1, 0}, &xz));
+  brep::Profile pr;
+  pr.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{-1.5, -1.5}, ucs::Point2D{1.5, -1.5},
+                                ucs::Point2D{1.5, 1.5}, ucs::Point2D{-1.5, 1.5}})
+    pr.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  pr.edges.assign(4, brep::ProfileEdge{});
+  const brep::SweepPath path = ArcPath(xz.origin, Vec3{0, 0, 1.5}, Vec3{0, 0, 1}, kPi);
+
+  brep::SweepOptions twisted;
+  twisted.twistRad = 1.1;
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(pr, path, twisted, &s, &why));
+  REQUIRE(why == Problem::SweepTwistNeedsStraightPath);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep refuses a nonzero twist on a closed path, by name", "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile circ = CircleProfile(World(), 0.5);
+  const brep::SweepPath path = ArcPath(Vec3{4, 0, 0}, Vec3{0, 0, 0}, Vec3{0, 0, 1}, 2.0 * kPi);
+  brep::SweepOptions opt;
+  opt.twistRad = 0.1;
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(circ, path, opt, &s, &why));
+  REQUIRE(why == Problem::SweepUnsupportedOption);
+  REQUIRE(s.faces.empty());
+}
+
+TEST_CASE("Sweep with fixed orientation translates the profile without rotating it along an arc",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  // Profile normal (0,1,0) is perpendicular to the arc's axis (0,0,1) — an ordinary "duct" placement,
+  // like every other arc-path test in this file (a normal PARALLEL to the axis would lay the profile
+  // flat in the arc's own plane, a degenerate setup for a sweep).
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{5, 0, 0}, Vec3{0, 1, 0}, &xz));
+  brep::Profile rect;
+  rect.plane = xz;
+  for (const ucs::Point2D& q : {ucs::Point2D{-0.5, -1.5}, ucs::Point2D{0.5, -1.5},
+                                ucs::Point2D{0.5, 1.5}, ucs::Point2D{-0.5, 1.5}})
+    rect.vertices.push_back(ucs::PlaneToWorld(xz, q));
+  rect.edges.assign(4, brep::ProfileEdge{});
+
+  brep::SweepOptions opt;
+  opt.alignToPath = false;
+  const brep::SweepPath path = ArcPath(xz.origin, Vec3{0, 0, 0}, Vec3{0, 0, 1}, kPi / 2.0);
+  Solid s;
+  const bool ok = brep::Sweep(rect, path, opt, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE_FALSE(brep::SelfIntersects(s));
+  REQUIRE(CountOf(s).v == 8);  // 2 rings x 4 vertices
+
+  // Fixed orientation never rotates: ring 1 must be ring 0 translated by (points[1] - points[0]),
+  // pointwise — no other relationship between the two rings is possible without a rotation.
+  const Vec3 translate = ray3d::Sub(path.points[1], path.points[0]);
+  for (int j = 0; j < 4; ++j) {
+    const Vec3 expected = ray3d::Add(s.vertices[static_cast<std::size_t>(j)].p, translate);
+    const Vec3& actual = s.vertices[static_cast<std::size_t>(4 + j)].p;
+    REQUIRE(actual.x == Approx(expected.x).epsilon(1e-9));
+    REQUIRE(actual.y == Approx(expected.y).epsilon(1e-9));
+    REQUIRE(actual.z == Approx(expected.z).epsilon(1e-9));
+  }
+}
+
+// Deliberately no test for "fixed orientation folds over itself, refused by name": there is no such
+// refusal. `brep::SelfIntersects` is a narrow, torus-specific check (ADR-045 (f)), not a general
+// overlap detector, so Sweep cannot and does not catch a fixed-orientation sweep that occupies the
+// same space twice on a sufficiently tight curve or oversized profile — a known, documented
+// limitation (REQ-315 2026-09-04), not a checked-and-refused case. Building a real detector (checking
+// every face against every other) is a separate undertaking, decided against for this task.
+
+// GAP CHECK (independent review): the mitre shear (applied at a sharp corner) was gated on the
+// corner being mitre-classified, but NOT on `alignToPath` — a fixed-orientation ring at a sharp
+// corner was sheared off the true path point even though fixed orientation needs no shear at all
+// (every ring already IS the profile translated there, corner or not, since the frame never
+// rotates). Fixed, and this is the open-path case that exercises it: three straight segments with
+// two sharp, non-coplanar corners.
+TEST_CASE("Sweep with fixed orientation keeps every ring a plain translation through sharp corners",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});  // flat in XY
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{9, 1, 4}, Vec3{3, 11, -6}, Vec3{-2, 4, 8}};  // open, non-planar
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  brep::SweepOptions opt;
+  opt.alignToPath = false;
+  Solid s;
+  const bool ok = brep::Sweep(sq, path, opt, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);  // open, capped
+  REQUIRE(CountOf(s).v == 16);                 // 4 rings x 4 vertices
+
+  // Fixed orientation never rotates, corner or not: every ring must be ring 0 translated by
+  // (points[k] - points[0]), pointwise — including the two sharp corners in between.
+  for (int k = 0; k < 4; ++k) {
+    const Vec3 translate = ray3d::Sub(path.points[static_cast<std::size_t>(k)], path.points[0]);
+    for (int j = 0; j < 4; ++j) {
+      const Vec3 expected = ray3d::Add(s.vertices[static_cast<std::size_t>(j)].p, translate);
+      const Vec3& actual = s.vertices[static_cast<std::size_t>(4 * k + j)].p;
+      REQUIRE(actual.x == Approx(expected.x).epsilon(1e-9));
+      REQUIRE(actual.y == Approx(expected.y).epsilon(1e-9));
+      REQUIRE(actual.z == Approx(expected.z).epsilon(1e-9));
+    }
+  }
+}
+
+// A fixed-orientation sweep along a CLOSED path is a special case worth stating plainly: since the
+// frame never rotates, the profile returns to its exact starting position AND orientation, and the
+// "tube" this sweeps is provably zero-volume (a rigid, non-rotating cross-section translated around
+// any closed loop back to itself encloses no net interior — confirmed empirically here against two
+// independent non-planar triangular paths before writing this down, not assumed). The kernel's
+// existing generic closure check catches this on its own (no special-casing needed): a solid with no
+// enclosed volume is refused as `Problem::NotClosed`, the same as any other degenerate closed
+// surface, REQ-201.
+TEST_CASE("Sweep refuses a fixed-orientation closed path as having no enclosed volume",
+          "[brep][req315]") {
+  Problem why = Problem::Ok;
+  const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  brep::SweepPath path;
+  path.points = {Vec3{0, 0, 0}, Vec3{9, 1, 4}, Vec3{3, 11, -6}, Vec3{0, 0, 0}};  // closed, non-planar
+  path.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{}};
+  brep::SweepOptions opt;
+  opt.alignToPath = false;
+  Solid s;
+  REQUIRE_FALSE(brep::Sweep(sq, path, opt, &s, &why));
+  REQUIRE(why == Problem::NotClosed);
+  REQUIRE(s.faces.empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// REQ-314 increment 1, amended: a profile arc may curve INTO its loop.
+//
+// ADR-046 (d) recorded this as "a separate feature, now unblocked" the moment B2a gave `Surface`
+// an `inward` flag for the wall of a Boolean bore. A reflex profile arc needs exactly that face and
+// nothing else: after the builder's walk the loop runs CCW about the extrusion direction, so an arc
+// with a positive sweep has its centre on the INTERIOR side and sweeps an ordinary outward cylinder,
+// while a negative one has its centre outside and sweeps a face whose material is on the far side
+// from its own axis.
+//
+// The figures are what make this a test rather than a demonstration: an annular sector has a volume
+// and a surface area that can be written down, and both are wrong in a different way if the inner
+// face's orientation is mishandled — the volume by twice the void, the area not at all.
+// ---------------------------------------------------------------------------------------------
+namespace {
+
+/// A quarter annulus between \p rIn and \p rOut, in the first quadrant of \p plane.
+brep::Profile QuarterAnnulus(const ucs::Ucs& plane, double rOut, double rIn) {
+  brep::Profile pr;
+  pr.plane = plane;
+  pr.vertices = {ucs::UcsToWorld(plane, Vec3{rOut, 0.0, 0.0}),
+                 ucs::UcsToWorld(plane, Vec3{0.0, rOut, 0.0}),
+                 ucs::UcsToWorld(plane, Vec3{0.0, rIn, 0.0}),
+                 ucs::UcsToWorld(plane, Vec3{rIn, 0.0, 0.0})};
+  pr.edges.resize(4);
+  pr.edges[0] = {true, plane.origin, kPi * 0.5};   // outer rim, curving away from the material
+  pr.edges[1] = {false, Vec3{}, 0.0};              // the far end
+  pr.edges[2] = {true, plane.origin, -kPi * 0.5};  // inner rim, curving INTO the material
+  pr.edges[3] = {false, Vec3{}, 0.0};              // the near end
+  return pr;
+}
+
+} // namespace
+
+TEST_CASE("Extrude builds a profile arc that curves inward", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double rOut = 11.0;
+  const double rIn = 9.0;
+  const double h = 5.0;
+  // A quarter of an annulus: (pi/4)(11^2 - 9^2) = 10pi of plan, 5 tall.
+  const double wantVolume = 0.25 * kPi * (rOut * rOut - rIn * rIn) * h;
+  // Outer and inner walls, two flat ends, and the two caps.
+  const double wantArea = kPi * 0.5 * rOut * h + kPi * 0.5 * rIn * h +
+                          2.0 * (rOut - rIn) * h + 2.0 * 0.25 * kPi * (rOut * rOut - rIn * rIn);
+
+  Solid s;
+  REQUIRE(brep::Extrude(QuarterAnnulus(World(), rOut, rIn), h, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(wantVolume).margin(1e-9));
+  REQUIRE(mp.surfaceArea == Approx(wantArea).margin(1e-9));
+
+  // Exactly one face looks inward: the concave wall. If the flag were set on both curved faces the
+  // volume would come out as the DIFFERENCE of the two sectors' negatives and still be positive, so
+  // this is asserted directly rather than inferred from the figures.
+  std::size_t inward = 0;
+  std::size_t cylinders = 0;
+  for (const brep::Face& f : s.faces) {
+    cylinders += f.surface.kind == brep::SurfaceKind::Cylinder ? 1u : 0u;
+    inward += f.surface.inward ? 1u : 0u;
+  }
+  REQUIRE(cylinders == 2);
+  REQUIRE(inward == 1);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.0005, &t, &why));
+  RequireWindingMatchesNormals(t);
+  RequireBoundsContain(brep::ComputeBounds(s), t);
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(0.005));
+  REQUIRE(TessellatedArea(t) == Approx(mp.surfaceArea).epsilon(0.005));
+}
+
+TEST_CASE("A reflex extrude is the same solid whichever way it is described", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  const double wantVolume = 0.25 * kPi * (11.0 * 11.0 - 9.0 * 9.0) * 5.0;
+
+  // The builder normalises the walk, so a profile given the other way round, or extruded downward,
+  // has to land on the same solid. That normalisation is where a reflex arc's sign could quietly be
+  // read against the wrong direction, which is why it is asserted rather than assumed.
+  brep::Profile fwd = QuarterAnnulus(World(), 11.0, 9.0);
+  brep::Profile rev;
+  rev.plane = fwd.plane;
+  const std::size_t n = fwd.vertices.size();
+  for (std::size_t i = 0; i < n; ++i) {
+    rev.vertices.push_back(fwd.vertices[n - 1 - i]);
+    brep::ProfileEdge e = fwd.edges[(2 * n - i - 2) % n];
+    e.sweep = -e.sweep;
+    rev.edges.push_back(e);
+  }
+
+  Solid a;
+  Solid b;
+  Solid down;
+  REQUIRE(brep::Extrude(fwd, 5.0, &a, &why));
+  REQUIRE(brep::Extrude(rev, 5.0, &b, &why));
+  REQUIRE(brep::Extrude(fwd, -5.0, &down, &why));
+  REQUIRE(brep::ComputeMassProperties(a).volume == Approx(wantVolume).margin(1e-9));
+  REQUIRE(brep::ComputeMassProperties(b).volume == Approx(wantVolume).margin(1e-9));
+  REQUIRE(brep::ComputeMassProperties(down).volume == Approx(wantVolume).margin(1e-9));
+  REQUIRE(brep::ComputeMassProperties(b).surfaceArea ==
+          Approx(brep::ComputeMassProperties(a).surfaceArea).margin(1e-9));
+
+  // Downward puts the same shape on the other side of the plane, and nowhere else.
+  const brep::Bounds bd = brep::ComputeBounds(down);
+  REQUIRE(bd.mn.z == Approx(-5.0).margin(1e-9));
+  REQUIRE(bd.mx.z == Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("A reflex extrude keeps its figures on a tilted frame at survey scale", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  REQUIRE(ucs::FromNormal(Vec3{3500000.0, 850000.0, 420.0},
+                          ray3d::Normalize(Vec3{0.3, -0.4, 0.866}), &plane));
+  Solid s;
+  REQUIRE(brep::Extrude(QuarterAnnulus(plane, 11.0, 9.0), 5.0, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::ComputeMassProperties(s).volume ==
+          Approx(0.25 * kPi * (11.0 * 11.0 - 9.0 * 9.0) * 5.0).epsilon(1e-9));
+}
+
+TEST_CASE("A reflex arc can bite a bay out of a rectangle", "[brep][req314]") {
+  Problem why = Problem::Ok;
+  // The shape REQ-314 increment 1 used to name as the thing it could not build: a 10 x 6 rectangle
+  // whose top edge is a half-circle bulging DOWN into it. Kept as the case rather than replaced,
+  // because it is a deeper reflex than an annulus wall — the arc reaches most of the way across the
+  // shape, so a mishandled orientation cannot hide in a thin sliver.
+  brep::Profile pr;
+  pr.plane = World();
+  pr.vertices = {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{10, 6, 0}, Vec3{0, 6, 0}};
+  pr.edges.assign(4, brep::ProfileEdge{});
+  pr.edges[2].arc = true;                  // the top edge, (10,6) -> (0,6)
+  pr.edges[2].centre = Vec3{5, 6, 0};
+  pr.edges[2].sweep = -kPi;                // bulges down through (5,1), into the rectangle
+
+  Solid s;
+  REQUIRE(brep::Extrude(pr, 3.0, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  // 60 square feet of rectangle less a half-disc of radius 5, three feet tall.
+  const double plan = 60.0 - 0.5 * kPi * 25.0;
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.volume == Approx(plan * 3.0).margin(1e-9));
+  // Two caps, three straight walls totalling 22 feet of run, and a half-circle wall of 5pi.
+  REQUIRE(mp.surfaceArea == Approx(2.0 * plan + 22.0 * 3.0 + kPi * 5.0 * 3.0).margin(1e-9));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.0005, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(0.005));
+}
+
+// ---------------------------------------------------------------------------------------------
+// REQ-317 POLYSOLID.
+//
+// The figure worth understanding before reading these: for CENTRE justification, a mitred wall's
+// plan area is exactly `width * centreline length`, whatever mix of straight runs and curves the
+// path is and whatever angles it turns through — the triangle a mitre adds on the outside of a bend
+// is congruent to the one it removes on the inside. So the volume is `width * height * length` and
+// can be written down for every case below.
+//
+// That figure does NOT distinguish a mitred wall from a run of overlapping boxes, which sum to the
+// same number, so it is never asserted alone. The SURFACE AREA is what separates them: a mitred wall
+// has two end caps and no internal ones, where a run of boxes has two per joint.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+brep::Path StraightPath(std::vector<std::pair<double, double>> pts, bool closed = false) {
+  brep::Path p;
+  p.start = ucs::Point2D{pts.front().first, pts.front().second};
+  for (std::size_t i = 1; i < pts.size(); ++i)
+    p.segs.push_back(brep::PathSeg{ucs::Point2D{pts[i].first, pts[i].second}, 0.0});
+  p.closed = closed;
+  return p;
+}
+
+/// Every face that looks INWARD — a curved wall's inner face, the same situation as a bore wall
+/// express, and what REQ-314 B2a's `Surface::inward` records for the wall of a bore.
+std::size_t InwardFaceCount(const Solid& s) {
+  std::size_t n = 0;
+  for (const brep::Face& f : s.faces)
+    n += f.surface.inward ? 1u : 0u;
+  return n;
+}
+
+} // namespace
+
+TEST_CASE("A one-segment polysolid is exactly a box", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakePolysolid(World(), StraightPath({{0.0, 0.0}, {10.0, 0.0}}), 2.0, 3.0,
+                              brep::Justify::Center, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(60.0).margin(1e-9));       // 10 long, 2 wide, 3 high
+  REQUIRE(mp.surfaceArea == Approx(112.0).margin(1e-9)); // 2*20 + 2*30 + 2*6
+
+  REQUIRE(s.vertices.size() == 8);
+  REQUIRE(s.edges.size() == 12);
+  REQUIRE(s.faces.size() == 6);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  REQUIRE(s.recipe.kind == brep::PrimitiveKind::Polysolid);
+  REQUIRE(InwardFaceCount(s) == 0);
+}
+
+TEST_CASE("A corner is mitred, so it belongs to the wall exactly once", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  // Two 10 ft legs meeting at a right angle, 2 wide and 3 high.
+  REQUIRE(brep::MakePolysolid(World(), StraightPath({{0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}}), 2.0,
+                              3.0, brep::Justify::Center, &s, &why));
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  // Plan area = width * centreline length = 2 * 20. The mitre gives back on the outside of the bend
+  // exactly what it takes on the inside, which is why this is the length and not something less.
+  REQUIRE(mp.volume == Approx(120.0).margin(1e-9));
+  // THE assertion of this test. The outer rail runs 11 + 11 and the inner 9 + 9, so the sides are
+  // 3 * 40; the two flat faces are 2 * 40; and there are exactly TWO end caps at 2 * 3.
+  //
+  // A wall built as one box per leg would report the same 120 cubic feet — the volumes coincide —
+  // but 224 square feet, because it would carry four end caps instead of two. That is the difference
+  // between one wall and two boxes that happen to touch, and it is only visible here.
+  REQUIRE(mp.surfaceArea == Approx(212.0).margin(1e-9));
+
+  REQUIRE(s.vertices.size() == 12);
+  REQUIRE(s.edges.size() == 18);
+  REQUIRE(s.faces.size() == 8);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+
+  const brep::Bounds bb = brep::ComputeBounds(s);
+  REQUIRE(bb.mn.x == Approx(0.0).margin(1e-9));
+  REQUIRE(bb.mx.x == Approx(11.0).margin(1e-9));  // the outer rail, past the centreline's 10
+  REQUIRE(bb.mn.y == Approx(-1.0).margin(1e-9));
+  REQUIRE(bb.mx.y == Approx(10.0).margin(1e-9));
+}
+
+TEST_CASE("A closed rectangular wall is the difference of two prisms", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakePolysolid(
+      World(), StraightPath({{0.0, 0.0}, {20.0, 0.0}, {20.0, 10.0}, {0.0, 10.0}, {0.0, 0.0}}, true),
+      2.0, 4.0, brep::Justify::Center, &s, &why));
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  // Outer 22 x 12 less inner 18 x 8 = 120 sq ft of plan, 4 ft high. Also 2 * 60, the width times the
+  // centreline's own perimeter — the two derivations agree, which is the point of writing both.
+  REQUIRE(mp.volume == Approx(480.0).margin(1e-9));
+  REQUIRE(mp.surfaceArea == Approx(720.0).margin(1e-9));  // 4*(68+52) sides + 2*120 flat, no caps
+
+  REQUIRE(s.vertices.size() == 16);
+  REQUIRE(s.edges.size() == 24);
+  REQUIRE(s.faces.size() == 10);
+
+  // The two flat faces each have a HOLE — an outer loop and an inner one. This is the shape the
+  // centroid fan could not draw and the reason it was replaced (ADR-046 (d)).
+  std::size_t withHoles = 0;
+  for (const brep::Face& f : s.faces)
+    withHoles += f.loops.size() == 2 ? 1u : 0u;
+  REQUIRE(withHoles == 2);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.001, &t, &why));
+  RequireWindingMatchesNormals(t);
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(1e-9));
+  REQUIRE(TessellatedArea(t) == Approx(mp.surfaceArea).epsilon(1e-9));
+}
+
+TEST_CASE("A curved wall sweeps cylinders, and its inner face looks inward", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  // A full ring of radius 10, as the two half turns every closed curve here is seamed into.
+  brep::Path p;
+  p.start = ucs::Point2D{10.0, 0.0};
+  p.segs.push_back(brep::PathSeg{ucs::Point2D{-10.0, 0.0}, kPi});
+  p.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, kPi});
+  p.closed = true;
+
+  Solid s;
+  REQUIRE(brep::MakePolysolid(World(), p, 2.0, 1.0, brep::Justify::Center, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(kPi * (11.0 * 11.0 - 9.0 * 9.0)).margin(1e-9));
+  // Outer 2*pi*11 and inner 2*pi*9 walls, one foot high, plus two annular faces of 40*pi.
+  REQUIRE(mp.surfaceArea == Approx(120.0 * kPi).margin(1e-9));
+
+  // A polysolid extrudes a flat profile straight up, so a curved run is a CYLINDER patch and not a
+  // torus — the point ADR-046 (e) records because the opposite was assumed out loud while scoping.
+  std::size_t cylinders = 0;
+  for (const brep::Face& f : s.faces)
+    cylinders += f.surface.kind == brep::SurfaceKind::Cylinder ? 1u : 0u;
+  REQUIRE(cylinders == 4);
+  REQUIRE(InwardFaceCount(s) == 2);  // the two halves of the inner wall
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.0005, &t, &why));
+  RequireWindingMatchesNormals(t);
+  RequireBoundsContain(brep::ComputeBounds(s), t);
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(0.005));
+  REQUIRE(TessellatedArea(t) == Approx(mp.surfaceArea).epsilon(0.005));
+}
+
+TEST_CASE("An arc tangent to the run before it needs no mitre", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  // Straight along +x to (10,0), then a quarter turn to the LEFT ending at (20,10): the arc's centre
+  // is at (10,10) and its start tangent is +x, so the join is smooth. This is what the command draws
+  // every time, and a smooth join must be taken directly rather than solved for — the two offsets
+  // are tangent there, so an intersection would be a double root.
+  brep::Path p;
+  p.start = ucs::Point2D{0.0, 0.0};
+  p.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, 0.0});
+  p.segs.push_back(brep::PathSeg{ucs::Point2D{20.0, 10.0}, kPi * 0.5});
+
+  Solid s;
+  REQUIRE(brep::MakePolysolid(World(), p, 2.0, 5.0, brep::Justify::Center, &s, &why));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  // width * height * centreline length, the straight 10 plus a quarter of a 10 ft radius turn.
+  REQUIRE(mp.volume == Approx(2.0 * 5.0 * (10.0 + 10.0 * kPi * 0.5)).margin(1e-9));
+
+  // The join is smooth, so both rails pass through the offset of the shared point exactly: the left
+  // rail at (10, 1) and the right at (10, -1). A mitre computed there instead would move them.
+  bool leftJoin = false;
+  bool rightJoin = false;
+  for (const brep::Vertex& v : s.vertices) {
+    if (std::fabs(v.p.z) > 1e-12)
+      continue;
+    leftJoin = leftJoin || (std::fabs(v.p.x - 10.0) < 1e-12 && std::fabs(v.p.y - 1.0) < 1e-12);
+    rightJoin = rightJoin || (std::fabs(v.p.x - 10.0) < 1e-12 && std::fabs(v.p.y + 1.0) < 1e-12);
+  }
+  REQUIRE(leftJoin);
+  REQUIRE(rightJoin);
+}
+
+TEST_CASE("Justification moves the wall without changing its size", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  const brep::Path p = StraightPath({{0.0, 0.0}, {10.0, 0.0}});
+  struct Case {
+    brep::Justify j;
+    double minY;
+    double maxY;
+  };
+  // Travel is +x, so "left" is +y. Left justification puts the PATH on the wall's left edge, which
+  // leaves the wall entirely to the right of it.
+  const Case cases[] = {{brep::Justify::Left, -4.0, 0.0},
+                        {brep::Justify::Center, -2.0, 2.0},
+                        {brep::Justify::Right, 0.0, 4.0}};
+  for (const Case& c : cases) {
+    Solid s;
+    REQUIRE(brep::MakePolysolid(World(), p, 4.0, 3.0, c.j, &s, &why));
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    REQUIRE(mp.valid);
+    REQUIRE(mp.volume == Approx(120.0).margin(1e-9));
+    const brep::Bounds bb = brep::ComputeBounds(s);
+    REQUIRE(bb.mn.y == Approx(c.minY).margin(1e-9));
+    REQUIRE(bb.mx.y == Approx(c.maxY).margin(1e-9));
+  }
+}
+
+TEST_CASE("A polysolid keeps its figures at survey coordinate magnitudes", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs far = World();
+  far.origin = Vec3{3500000.0, 850000.0, 420.0};
+  Solid s;
+  REQUIRE(brep::MakePolysolid(far, StraightPath({{0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}}), 2.0, 3.0,
+                              brep::Justify::Center, &s, &why));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(120.0).epsilon(1e-9));
+  REQUIRE(mp.surfaceArea == Approx(212.0).epsilon(1e-9));
+}
+
+TEST_CASE("A path that does not describe a wall is refused by name", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  const brep::Path ok = StraightPath({{0.0, 0.0}, {10.0, 0.0}});
+
+  REQUIRE_FALSE(brep::MakePolysolid(World(), ok, 0.0, 3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::NonPositiveWidth);
+  REQUIRE_FALSE(brep::MakePolysolid(World(), ok, 2.0, 0.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::NonPositiveHeight);
+
+  brep::Path empty;
+  empty.start = ucs::Point2D{0.0, 0.0};
+  REQUIRE_FALSE(brep::MakePolysolid(World(), empty, 2.0, 3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PathTooShort);
+
+  brep::Path oneClosed = StraightPath({{0.0, 0.0}, {10.0, 0.0}}, true);
+  REQUIRE_FALSE(brep::MakePolysolid(World(), oneClosed, 2.0, 3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PathTooShort);
+
+  REQUIRE_FALSE(brep::MakePolysolid(World(), StraightPath({{0.0, 0.0}, {0.0, 0.0}, {5.0, 0.0}}), 2.0,
+                                    3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PathSegmentDegenerate);
+
+  // Closed, but the last segment does not come back to the start.
+  REQUIRE_FALSE(brep::MakePolysolid(World(),
+                                    StraightPath({{0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}}, true), 2.0,
+                                    3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PathSegmentDegenerate);
+
+  // Doubling straight back on itself: the two offsets are anti-parallel, so there is no corner point
+  // at all, not merely an awkward one.
+  REQUIRE_FALSE(brep::MakePolysolid(World(), StraightPath({{0.0, 0.0}, {10.0, 0.0}, {0.0, 0.0}}), 2.0,
+                                    3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PolysolidCornerCollapsed);
+
+  // A 4 ft wall cannot follow a 1 ft radius turn: the inner rail would have a negative radius.
+  brep::Path tight;
+  tight.start = ucs::Point2D{1.0, 0.0};
+  tight.segs.push_back(brep::PathSeg{ucs::Point2D{-1.0, 0.0}, kPi});
+  REQUIRE_FALSE(brep::MakePolysolid(World(), tight, 4.0, 3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PolysolidCurveTooTight);
+  // The same turn is fine for a wall narrow enough to take it.
+  REQUIRE(brep::MakePolysolid(World(), tight, 1.0, 3.0, brep::Justify::Center, &s, &why));
+
+  // A path crossing its own run would enclose the same ground twice, so its volume would count that
+  // ground twice. Refused outright — unlike a self-intersecting torus, which is a shape people draw
+  // deliberately and where only the mass properties are withheld (ADR-045 (f)).
+  REQUIRE_FALSE(brep::MakePolysolid(
+      World(), StraightPath({{0.0, 0.0}, {10.0, 0.0}, {10.0, 5.0}, {5.0, 5.0}, {5.0, -5.0}}), 1.0,
+      3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::PolysolidPathSelfIntersects);
+
+  ucs::Ucs skewed = World();
+  skewed.yAxis = Vec3{1.0, 1.0, 0.0};
+  REQUIRE_FALSE(brep::MakePolysolid(skewed, ok, 2.0, 3.0, brep::Justify::Center, &s, &why));
+  REQUIRE(why == Problem::DegenerateFrame);
+}
+
+TEST_CASE("A wall that bends meets the tessellator with a NON-CONVEX cap", "[brep][req317]") {
+  Problem why = Problem::Ok;
+  // An L on plan. Its top and bottom faces are six-sided and non-convex, which is the case the
+  // centroid fan cannot draw - fanning one emits triangles that fall outside the face and overlap
+  // each other, and the mesh stops agreeing with the analytic area. REQ-314 added the ear clipper
+  // for exactly that; this is the first caller that reaches it from a SWEPT solid rather than a
+  // sliced or booleaned one, so the two are pinned together here.
+  Solid s;
+  REQUIRE(brep::MakePolysolid(World(), StraightPath({{0.0, 0.0}, {10.0, 0.0}, {10.0, 10.0}}), 2.0,
+                              3.0, brep::Justify::Center, &s, &why));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.001, &t, &why));
+  RequireWindingMatchesNormals(t);
+  RequireBoundsContain(brep::ComputeBounds(s), t);
+  // Flat faces and straight rails throughout, so the mesh is not an approximation of anything: it
+  // must reproduce the analytic figures exactly, not merely closely.
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(1e-9));
+  REQUIRE(TessellatedArea(t) == Approx(mp.surfaceArea).epsilon(1e-9));
+
+  // The two routes are visible in the count: the six convex quad faces are FANNED (four triangles
+  // apiece, 24) and the two non-convex six-sided caps are EAR-CLIPPED (m-2, so four apiece, 8).
+  REQUIRE(t.triangleCount() == 32);
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// REQ-317 x REQ-314: a polysolid is an ordinary operand for the feature operations.
+//
+// Worth asserting rather than assuming. A polysolid is the first solid in the project that is
+// neither a primitive nor the output of a feature operation, and the whole value of putting it in
+// the same `brep::Solid` is that everything already built for solids accepts it — a wall you can cut
+// a doorway out of is a far more useful thing than a wall.
+//
+// The figures below are the ones that would catch a wrong answer, not just a returned `true`: a
+// boolean that silently kept the wrong side, or a slice that lost the mitred corner, still succeeds.
+// ---------------------------------------------------------------------------------------------
+TEST_CASE("A polysolid is an ordinary operand for extrude-era operations", "[brep][req317][req314]") {
+  Problem why = Problem::Ok;
+  auto volumeOf = [](const Solid& s) { return brep::ComputeMassProperties(s).volume; };
+
+  // A straight wall: 20 long, 2 wide, 8 high = 320 cubic feet.
+  Solid wall;
+  brep::Path p;
+  p.start = ucs::Point2D{0.0, 0.0};
+  p.segs.push_back(brep::PathSeg{ucs::Point2D{20.0, 0.0}, 0.0});
+  REQUIRE(brep::MakePolysolid(World(), p, 2.0, 8.0, brep::Justify::Center, &wall, &why));
+  REQUIRE(volumeOf(wall) == Approx(320.0).margin(1e-9));
+
+  // A doorway: x[6.5, 9.5], y[-2, 2], z[0, 7]. It overhangs the wall in Y and stops short in Z, so
+  // the overlap is 3 x 2 x 7 = 42 — chosen that way so the answer is not simply the box's volume.
+  Solid door;
+  ucs::Ucs at = World();
+  at.origin = Vec3{8.0, 0.0, 0.0};
+  REQUIRE(brep::MakeBox(at, 3.0, 4.0, 7.0, &door, &why));
+
+  SECTION("a doorway subtracts out of a wall, and takes exactly its overlap") {
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(wall, door, &out, &why));
+    double v = 0.0;
+    for (const Solid& s : out)
+      v += volumeOf(s);
+    REQUIRE(v == Approx(320.0 - 42.0).margin(1e-9));
+  }
+
+  SECTION("a union adds only the part that was not already wall") {
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanUnion(wall, door, &out, &why));
+    double v = 0.0;
+    for (const Solid& s : out)
+      v += volumeOf(s);
+    REQUIRE(v == Approx(320.0 + 84.0 - 42.0).margin(1e-9));
+  }
+
+  SECTION("a wall slices in two, and the two halves still add up") {
+    Solid above;
+    Solid below;
+    REQUIRE(brep::Slice(wall, Vec3{10.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0}, brep::SliceKeep::Both,
+                        &above, &below, &why));
+    REQUIRE(volumeOf(above) == Approx(160.0).margin(1e-9));
+    REQUIRE(volumeOf(below) == Approx(160.0).margin(1e-9));
+  }
+
+  SECTION("a wall that BENDS slices too, and the mitred corner survives the cut") {
+    // The case that could quietly go wrong: an L wall is non-convex, and the cut is on the leg away
+    // from the corner, so the corner has to come through untouched in the larger piece.
+    Solid lwall;
+    brep::Path lp;
+    lp.start = ucs::Point2D{0.0, 0.0};
+    lp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, 0.0});
+    lp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 10.0}, 0.0});
+    REQUIRE(brep::MakePolysolid(World(), lp, 2.0, 3.0, brep::Justify::Center, &lwall, &why));
+    REQUIRE(volumeOf(lwall) == Approx(120.0).margin(1e-9));
+
+    Solid above;
+    Solid below;
+    REQUIRE(brep::Slice(lwall, Vec3{5.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0}, brep::SliceKeep::Both,
+                        &above, &below, &why));
+    // Below the cut is a plain 5 x 2 x 3 block; everything else, corner included, is above it.
+    REQUIRE(volumeOf(below) == Approx(30.0).margin(1e-9));
+    REQUIRE(volumeOf(above) == Approx(90.0).margin(1e-9));
+  }
+
+  SECTION("a bent wall is a legal boolean operand") {
+    Solid lwall;
+    brep::Path lp;
+    lp.start = ucs::Point2D{0.0, 0.0};
+    lp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, 0.0});
+    lp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 10.0}, 0.0});
+    REQUIRE(brep::MakePolysolid(World(), lp, 2.0, 3.0, brep::Justify::Center, &lwall, &why));
+    ucs::Ucs g = World();
+    g.origin = Vec3{5.0, 0.0, 0.0};
+    Solid notch;
+    REQUIRE(brep::MakeBox(g, 2.0, 4.0, 2.0, &notch, &why));
+    std::vector<Solid> out;
+    REQUIRE(brep::BooleanSubtract(lwall, notch, &out, &why));
+    double v = 0.0;
+    for (const Solid& s : out)
+      v += volumeOf(s);
+    REQUIRE(v == Approx(120.0 - 2.0 * 2.0 * 2.0).margin(1e-9));
+  }
+
+  SECTION("a CURVED wall is refused, by the boundary REQ-314 states for itself") {
+    // Not a polysolid defect and not a gap in this requirement: SLICE handles flat faces only
+    // (increment 3a) and B1 combines uncurved operands only. This asserts WHICH refusal comes back,
+    // so that when those increments land, this test fails and says so rather than a curved wall
+    // quietly staying unusable.
+    Solid curved;
+    brep::Path cp;
+    cp.start = ucs::Point2D{0.0, 0.0};
+    cp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, 0.0});
+    cp.segs.push_back(brep::PathSeg{ucs::Point2D{20.0, 10.0}, kPi * 0.5});
+    REQUIRE(brep::MakePolysolid(World(), cp, 2.0, 5.0, brep::Justify::Center, &curved, &why));
+
+    Solid above;
+    Solid below;
+    REQUIRE_FALSE(brep::Slice(curved, Vec3{5.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0},
+                              brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SliceCurvedFace);
+
+    std::vector<Solid> out;
+    REQUIRE_FALSE(brep::BooleanSubtract(curved, door, &out, &why));
+    REQUIRE(why == Problem::BooleanCurvedFace);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Why `MakePolysolid` is its own builder rather than a call to `Extrude`.
+//
+// A wall's plan outline IS a closed planar loop of lines and arcs, which is exactly what `Extrude`
+// takes, so the refactor is the obvious one to reach for. This records the measurement rather than
+// the opinion.
+//
+// It was TWO reasons, and one of them has since gone: `Extrude` used to refuse an arc curving into
+// its loop, which the inner rail of every bend is — lifted separately (D-2026-09-03-b), after this
+// requirement's own test pointed at it. What remains is the one below, and it is not going away by
+// itself: `Profile` is a SINGLE loop, and a closed wall's plan is an annulus with two.
+//
+// Extruding the outer rail alone does not approximate the wall — it fills the courtyard in. The gap
+// between the two numbers is the whole of the argument.
+// ---------------------------------------------------------------------------------------------
+TEST_CASE("A closed wall's plan needs two loops, where Extrude takes one", "[brep][req317][req314]") {
+  Problem why = Problem::Ok;
+  const double rOut = 11.0;
+  const double rIn = 9.0;
+  const double h = 4.0;
+
+  // The ring wall itself: a closed circular path, 2 wide and 4 high.
+  brep::Path rp;
+  rp.start = ucs::Point2D{10.0, 0.0};
+  rp.segs.push_back(brep::PathSeg{ucs::Point2D{-10.0, 0.0}, kPi});
+  rp.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, kPi});
+  rp.closed = true;
+  Solid ring;
+  REQUIRE(brep::MakePolysolid(World(), rp, 2.0, h, brep::Justify::Center, &ring, &why));
+  const double wallVolume = kPi * (rOut * rOut - rIn * rIn) * h;
+  REQUIRE(brep::ComputeMassProperties(ring).volume == Approx(wallVolume).margin(1e-9));
+
+  // Its OUTER rail, as the single loop `Extrude` accepts — two half turns, the way every closed
+  // curve in this kernel is seamed.
+  brep::Profile outer;
+  outer.plane = World();
+  outer.vertices = {Vec3{rOut, 0.0, 0.0}, Vec3{-rOut, 0.0, 0.0}};
+  outer.edges.resize(2);
+  outer.edges[0] = {true, Vec3{0.0, 0.0, 0.0}, kPi};
+  outer.edges[1] = {true, Vec3{0.0, 0.0, 0.0}, kPi};
+
+  Solid disc;
+  REQUIRE(brep::Extrude(outer, h, &disc, &why));
+  // A solid cylinder, not a wall: the courtyard is filled in, and by more than the wall itself is.
+  REQUIRE(brep::ComputeMassProperties(disc).volume == Approx(kPi * rOut * rOut * h).margin(1e-9));
+  REQUIRE(brep::ComputeMassProperties(disc).volume > 3.0 * wallVolume);
+}
+
+// ---------------------------------------------------------------------------------------------
+// General trim loops (ADR-052, GitHub issue #306): `Face::paramLoops` is an additive field that
+// nothing yet renders, measures or picks. These tests exercise only what #306 itself owns — that
+// `Validate` accepts a well-formed general loop and refuses a malformed one by name — on hand-built
+// fixtures, since no primitive or Boolean builder populates the field yet (that stays true through
+// #307-#310).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// A face whose `loops` describes a single square ring (any planar box face will do — the general
+/// loop checks in `Validate` do not require `paramLoops` to geometrically match the 3D boundary,
+/// only to be internally well-formed, per ADR-052 (c): the polygon is a classification aid, not the
+/// authoritative curve).
+int FindSingleLoopPlaneFace(const Solid& s) {
+  for (std::size_t i = 0; i < s.faces.size(); ++i) {
+    if (s.faces[i].surface.kind == brep::SurfaceKind::Plane && s.faces[i].loops.size() == 1)
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+int FindTwoLoopPlaneFace(const Solid& s) {
+  for (std::size_t i = 0; i < s.faces.size(); ++i) {
+    if (s.faces[i].surface.kind == brep::SurfaceKind::Plane && s.faces[i].loops.size() == 2)
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+}  // namespace
+
+TEST_CASE("Validate accepts a face with a well-formed general trim loop", "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  brep::Face& f = box.faces[static_cast<std::size_t>(fi)];
+  // A simple CCW pentagon in (u,v).
+  f.paramLoops = {{{0.0, 0.0}, {4.0, 0.0}, {4.0, 2.0}, {2.0, 4.0}, {0.0, 2.0}}};
+  REQUIRE(brep::Validate(box) == Problem::Ok);
+}
+
+TEST_CASE("Validate refuses a general trim loop with too few points, by name", "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  box.faces[static_cast<std::size_t>(fi)].paramLoops = {{{0.0, 0.0}, {1.0, 1.0}}};
+  REQUIRE(brep::Validate(box) == Problem::GeneralLoopOpen);
+}
+
+TEST_CASE("Validate refuses a self-intersecting general trim loop, by name", "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  // A bow-tie: edges (0,0)-(4,4) and (4,0)-(0,4) cross in the middle.
+  box.faces[static_cast<std::size_t>(fi)].paramLoops = {{{0.0, 0.0}, {4.0, 4.0}, {4.0, 0.0}, {0.0, 4.0}}};
+  REQUIRE(brep::Validate(box) == Problem::GeneralLoopSelfIntersects);
+}
+
+TEST_CASE("Validate refuses a general trim loop wound the wrong way, by name", "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  // Same square as the accepted case, wound CW instead of CCW.
+  box.faces[static_cast<std::size_t>(fi)].paramLoops = {{{0.0, 0.0}, {0.0, 4.0}, {4.0, 4.0}, {4.0, 0.0}}};
+  REQUIRE(brep::Validate(box) == Problem::GeneralLoopWrongWinding);
+}
+
+TEST_CASE("Validate refuses a general trim loop whose paramLoops count disagrees with loops, by name",
+          "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  // The face has one 3D loop; give it two param loops.
+  box.faces[static_cast<std::size_t>(fi)].paramLoops = {{{0.0, 0.0}, {4.0, 0.0}, {4.0, 4.0}, {0.0, 4.0}},
+                                                         {{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}, {1.0, 2.0}}};
+  REQUIRE(brep::Validate(box) == Problem::GeneralLoopCountMismatch);
+}
+
+TEST_CASE("Validate accepts a general trim loop's hole nested inside its outer boundary",
+          "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid block;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -1), 1.0, 12.0, &cyl, &why));  // through-hole, z -1..11
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  const int fi = FindTwoLoopPlaneFace(r[0]);
+  REQUIRE(fi >= 0);
+  brep::Face& f = r[0].faces[static_cast<std::size_t>(fi)];
+  REQUIRE(f.loops.size() == 2);
+  // Outer CCW square, hole (a smaller square) CW, fully inside.
+  f.paramLoops = {{{-5.0, -5.0}, {5.0, -5.0}, {5.0, 5.0}, {-5.0, 5.0}},
+                  {{-1.0, -1.0}, {-1.0, 1.0}, {1.0, 1.0}, {1.0, -1.0}}};
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+}
+
+TEST_CASE("Validate refuses a general trim loop hole that lies outside its outer boundary, by name",
+          "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid block;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -1), 1.0, 12.0, &cyl, &why));
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  const int fi = FindTwoLoopPlaneFace(r[0]);
+  REQUIRE(fi >= 0);
+  brep::Face& f = r[0].faces[static_cast<std::size_t>(fi)];
+  // Hole entirely outside the outer square.
+  f.paramLoops = {{{-5.0, -5.0}, {5.0, -5.0}, {5.0, 5.0}, {-5.0, 5.0}},
+                  {{20.0, 20.0}, {20.0, 22.0}, {22.0, 22.0}, {22.0, 20.0}}};
+  REQUIRE(brep::Validate(r[0]) == Problem::GeneralLoopHoleNotNested);
+}
+
+TEST_CASE("A rectangle-form face validates byte-identically with an empty general trim loop",
+          "[brep][req306][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 20, 10, 8, &box, &why));
+  for (const brep::Face& f : box.faces)
+    REQUIRE(f.paramLoops.empty());
+  REQUIRE(brep::Validate(box) == Problem::Ok);
+}
+
+// ---------------------------------------------------------------------------------------------
+// General trim loop mass properties (GitHub issue #307): the numeric integration path over
+// `Face::paramLoops`, additive alongside the closed-form rectangle path exercised everywhere else
+// in this file.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("A general trim loop tracing the full u/v rectangle matches the closed-form cylinder "
+          "integral",
+          "[brep][req307][adr052]") {
+  Problem why = Problem::Ok;
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), 3.0, 5.0, &cyl, &why));
+  const brep::MassProperties before = brep::ComputeMassProperties(cyl);
+  REQUIRE(before.valid);
+
+  int fi = -1;
+  for (std::size_t i = 0; i < cyl.faces.size(); ++i)
+    if (cyl.faces[i].surface.kind == brep::SurfaceKind::Cylinder) {
+      fi = static_cast<int>(i);
+      break;
+    }
+  REQUIRE(fi >= 0);
+  brep::Face& f = cyl.faces[static_cast<std::size_t>(fi)];
+  const double u0 = f.uStart;
+  const double u1 = f.uEnd;
+  const double h = f.surface.height;
+  // The exact same rectangle the closed-form path already integrates over, just handed to the
+  // general-loop path instead — CCW per Validate's winding rule.
+  f.paramLoops = {{{u0, 0.0}, {u1, 0.0}, {u1, h}, {u0, h}}};
+  REQUIRE(brep::Validate(cyl) == Problem::Ok);
+
+  const brep::MassProperties after = brep::ComputeMassProperties(cyl);
+  REQUIRE(after.valid);
+  REQUIRE(after.volume == Approx(before.volume).epsilon(1e-6));
+  REQUIRE(after.surfaceArea == Approx(before.surfaceArea).epsilon(1e-6));
+}
+
+TEST_CASE("A non-rectangular general trim loop integrates to the correct triangle area",
+          "[brep][req307][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  const double L = 10.0;
+  const double W = 6.0;
+  const double H = 4.0;
+  REQUIRE(brep::MakeBox(World(), L, W, H, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  brep::Face& f = box.faces[static_cast<std::size_t>(fi)];
+  // A right triangle with legs 3 and 4 (area 6) in the face's own (u,v) plane. It need not match the
+  // face's real rectangular 3D boundary — ADR-052 (c) treats `paramLoops` purely as a classification
+  // aid, so `Validate` does not require geometric agreement (see the pentagon test above).
+  f.paramLoops = {{{0.0, 0.0}, {3.0, 0.0}, {0.0, 4.0}}};
+  REQUIRE(brep::Validate(box) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(box);
+  REQUIRE(mp.valid);
+  const double triangleArea = 0.5 * 3.0 * 4.0;
+  const double expectedTotal = 2.0 * (L * W + L * H + W * H) - (L * W) + triangleArea;
+  REQUIRE(mp.surfaceArea == Approx(expectedTotal).margin(1e-6));
+}
+
+TEST_CASE("A general trim loop's hole is subtracted from a planar face's area",
+          "[brep][req307][adr052]") {
+  Problem why = Problem::Ok;
+  Solid block;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -1), 1.0, 12.0, &cyl, &why));  // through-hole, radius 1, z -1..11
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  const int fi = FindTwoLoopPlaneFace(r[0]);
+  REQUIRE(fi >= 0);
+
+  // Baseline: this face's real area is a 10x10 square minus the drilled circle (area 100 - pi).
+  const brep::MassProperties baseline = brep::ComputeMassProperties(r[0]);
+  REQUIRE(baseline.valid);
+
+  brep::Face& f = r[0].faces[static_cast<std::size_t>(fi)];
+  REQUIRE(f.loops.size() == 2);
+  // Replace the classification-aid polygon with an outer CCW square and a CW square hole (area 4)
+  // fully nested inside it — ADR-052 (c) does not require `paramLoops` to match the real 3D boundary
+  // (here a circle), only to be well-formed, so this exercises hole subtraction with simple
+  // arithmetic: the face's area should become exactly 100 - 4, replacing the true 100 - pi.
+  f.paramLoops = {{{-5.0, -5.0}, {5.0, -5.0}, {5.0, 5.0}, {-5.0, 5.0}},
+                  {{-1.0, -1.0}, {-1.0, 1.0}, {1.0, 1.0}, {1.0, -1.0}}};
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(r[0]);
+  REQUIRE(mp.valid);
+  const double expectedDelta = (100.0 - 4.0) - (100.0 - kPi);  // new face area minus the true one
+  REQUIRE(mp.surfaceArea - baseline.surfaceArea == Approx(expectedDelta).margin(1e-4));
+}
+
+// ---------------------------------------------------------------------------------------------
+// General trim loop tessellation (GitHub issue #308): the ear-clip-and-map path over
+// `Face::paramLoops`, whose triangulated area must agree with #307's numeric integral for the
+// same face.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("A general trim loop tracing the full u/v rectangle tessellates to the same area as the "
+          "closed-form cylinder",
+          "[brep][req308][adr052]") {
+  Problem why = Problem::Ok;
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), 3.0, 5.0, &cyl, &why));
+  brep::Tessellation before;
+  REQUIRE(brep::Tessellate(cyl, 0.05, &before, &why));
+
+  int fi = -1;
+  for (std::size_t i = 0; i < cyl.faces.size(); ++i)
+    if (cyl.faces[i].surface.kind == brep::SurfaceKind::Cylinder) {
+      fi = static_cast<int>(i);
+      break;
+    }
+  REQUIRE(fi >= 0);
+  brep::Face& f = cyl.faces[static_cast<std::size_t>(fi)];
+  const double u0 = f.uStart;
+  const double u1 = f.uEnd;
+  const double h = f.surface.height;
+  f.paramLoops = {{{u0, 0.0}, {u1, 0.0}, {u1, h}, {u0, h}}};
+  REQUIRE(brep::Validate(cyl) == Problem::Ok);
+
+  brep::Tessellation after;
+  REQUIRE(brep::Tessellate(cyl, 0.05, &after, &why));
+  REQUIRE(TessellatedArea(after) == Approx(TessellatedArea(before)).epsilon(0.01));
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(cyl);
+  REQUIRE(mp.valid);
+  REQUIRE(TessellatedArea(after) == Approx(mp.surfaceArea).epsilon(0.02));
+}
+
+TEST_CASE("A non-rectangular general trim loop on a planar face tessellates to the correct "
+          "triangle area with no gaps",
+          "[brep][req308][adr052]") {
+  Problem why = Problem::Ok;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 10.0, 6.0, 4.0, &box, &why));
+  const int fi = FindSingleLoopPlaneFace(box);
+  REQUIRE(fi >= 0);
+  brep::Face& f = box.faces[static_cast<std::size_t>(fi)];
+  f.paramLoops = {{{0.0, 0.0}, {3.0, 0.0}, {0.0, 4.0}}};
+  REQUIRE(brep::Validate(box) == Problem::Ok);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(box, 0.05, &t, &why));
+
+  // Only the modified face's tessellation should reflect the triangle; find its triangles by face
+  // index and sum their area directly.
+  double faceArea = 0.0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    if (t.triFace[i / 3] != fi)
+      continue;
+    const Vec3 a{t.vertsXyz[3 * t.indices[i]], t.vertsXyz[3 * t.indices[i] + 1], t.vertsXyz[3 * t.indices[i] + 2]};
+    const Vec3 b{t.vertsXyz[3 * t.indices[i + 1]], t.vertsXyz[3 * t.indices[i + 1] + 1],
+                 t.vertsXyz[3 * t.indices[i + 1] + 2]};
+    const Vec3 c{t.vertsXyz[3 * t.indices[i + 2]], t.vertsXyz[3 * t.indices[i + 2] + 1],
+                 t.vertsXyz[3 * t.indices[i + 2] + 2]};
+    faceArea += 0.5 * ray3d::Length(ray3d::Cross(ray3d::Sub(b, a), ray3d::Sub(c, a)));
+  }
+  REQUIRE(faceArea == Approx(0.5 * 3.0 * 4.0).margin(1e-9));
+}
+
+TEST_CASE("A general trim loop's hole is excluded from a planar face's tessellation", "[brep][req308][adr052]") {
+  Problem why = Problem::Ok;
+  Solid block;
+  Solid cyl;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &block, &why));
+  REQUIRE(brep::MakeCylinder(At(0, 0, -1), 1.0, 12.0, &cyl, &why));
+  std::vector<Solid> r;
+  REQUIRE(brep::BooleanSubtract(block, cyl, &r, &why));
+  REQUIRE(r.size() == 1);
+  const int fi = FindTwoLoopPlaneFace(r[0]);
+  REQUIRE(fi >= 0);
+
+  brep::Face& f = r[0].faces[static_cast<std::size_t>(fi)];
+  REQUIRE(f.loops.size() == 2);
+  f.paramLoops = {{{-5.0, -5.0}, {5.0, -5.0}, {5.0, 5.0}, {-5.0, 5.0}},
+                  {{-1.0, -1.0}, {-1.0, 1.0}, {1.0, 1.0}, {1.0, -1.0}}};
+  REQUIRE(brep::Validate(r[0]) == Problem::Ok);
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(r[0], 0.05, &t, &why));
+
+  double faceArea = 0.0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    if (t.triFace[i / 3] != fi)
+      continue;
+    const Vec3 a{t.vertsXyz[3 * t.indices[i]], t.vertsXyz[3 * t.indices[i] + 1], t.vertsXyz[3 * t.indices[i] + 2]};
+    const Vec3 b{t.vertsXyz[3 * t.indices[i + 1]], t.vertsXyz[3 * t.indices[i + 1] + 1],
+                 t.vertsXyz[3 * t.indices[i + 1] + 2]};
+    const Vec3 c{t.vertsXyz[3 * t.indices[i + 2]], t.vertsXyz[3 * t.indices[i + 2] + 1],
+                 t.vertsXyz[3 * t.indices[i + 2] + 2]};
+    faceArea += 0.5 * ray3d::Length(ray3d::Cross(ray3d::Sub(b, a), ray3d::Sub(c, a)));
+  }
+  REQUIRE(faceArea == Approx(100.0 - 4.0).margin(1e-6));
+}
+
+// ================================================================================================
+// Section — the cross-section of a solid by a plane, without cutting it (REQ-335, TASK-238)
+// — GitHub #149 acceptance 5.
+//
+// The acceptance criterion has two halves, "produces correct section geometry" and "does not modify
+// the model", and both have oracles that need no recorded output:
+//
+//   - the section of a known solid by a known plane has a closed-form area and vertex count;
+//   - the input solid must be byte-identical afterwards, which is asserted directly rather than
+//     inferred from the signature.
+//
+// The centroid (REQ-334 / ADR-055, TASK-237) — GitHub #149 acceptance 4.
+//
+// Every figure below is a closed form, never a recorded output. Two properties of the integrand
+// make the choice of cases load-bearing rather than decorative, and both were measured before the
+// implementation was written:
+//
+//   1. `M_k = 1/2 * integral of r_k^2 n_k dA` is NOT frame-covariant, so a moment accumulated in
+//      each face's own frame and rotated into world is wrong -- but wrong ONLY when something is
+//      rotated. An axis-aligned box, a sphere and a torus all still came out exact with that bug in
+//      place. Hence the TILTED cases: they are the ones that catch it.
+//   2. A SYMMETRIC solid cannot detect a bad centroid at all, because the errors cancel across the
+//      symmetry. Hence the wedge, the pyramid and the frustum, which are not symmetric in Z.
+// ================================================================================================
+
+namespace {
+
+/// Area enclosed by a section Path, by the shoelace formula plus each arc's circular segment.
+/// Positive means counter-clockwise about the plane normal, which \ref brep::SectionLoop promises.
+double SectionArea(const brep::Path& p) {
+  std::vector<ucs::Point2D> pts;
+  pts.push_back(p.start);
+  for (const brep::PathSeg& s : p.segs)
+    pts.push_back(s.end);
+  if (pts.size() > 1)
+    pts.pop_back();  // a closed path's last segment returns to `start`
+
+  double a = 0.0;
+  for (std::size_t i = 0; i < pts.size(); ++i) {
+    const ucs::Point2D& A = pts[i];
+    const ucs::Point2D& B = pts[(i + 1) % pts.size()];
+    a += A.x * B.y - B.x * A.y;
+  }
+  a *= 0.5;
+
+  // Each arc adds (or removes) the circular segment between its chord and the arc itself.
+  for (std::size_t i = 0; i < p.segs.size(); ++i) {
+    const double sweep = p.segs[i].sweep;
+    if (sweep == 0.0)
+      continue;
+    const ucs::Point2D A = (i == 0) ? p.start : p.segs[i - 1].end;
+    const ucs::Point2D B = p.segs[i].end;
+    const double chord = std::hypot(B.x - A.x, B.y - A.y);
+    const double half = 0.5 * std::fabs(sweep);
+    if (!(std::sin(half) > 1e-12))
+      continue;
+    const double r = 0.5 * chord / std::sin(half);
+    // Signed: a CCW (positive) sweep bulges outward and adds area.
+    a += 0.5 * r * r * (sweep - std::sin(sweep));
+  }
+  return a;
+}
+
+/// Byte-for-byte equality of the parts of a solid a section could plausibly disturb.
+bool SameGeometry(const Solid& a, const Solid& b) {
+  if (a.vertices.size() != b.vertices.size() || a.edges.size() != b.edges.size() ||
+      a.faces.size() != b.faces.size() || a.shells.size() != b.shells.size())
+    return false;
+  for (std::size_t i = 0; i < a.vertices.size(); ++i) {
+    if (a.vertices[i].p.x != b.vertices[i].p.x || a.vertices[i].p.y != b.vertices[i].p.y ||
+        a.vertices[i].p.z != b.vertices[i].p.z)
+      return false;
+  }
+  for (std::size_t i = 0; i < a.edges.size(); ++i) {
+    if (a.edges[i].kind != b.edges[i].kind || a.edges[i].v0 != b.edges[i].v0 ||
+        a.edges[i].v1 != b.edges[i].v1 || a.edges[i].sweep != b.edges[i].sweep ||
+        a.edges[i].radius != b.edges[i].radius)
+      return false;
+  }
+  return true;
+}
+
+/// The analytic centroid of each primitive, in its own frame's axes, so the same expectations can
+/// be re-used on a translated or tilted placement.
+Vec3 InFrame(const ucs::Ucs& f, double a, double b, double c) {
+  return ray3d::Add(f.origin, ray3d::Add(ray3d::Add(ray3d::Scale(f.xAxis, a), ray3d::Scale(f.yAxis, b)),
+                                         ray3d::Scale(f.zAxis, c)));
+}
+
+double CentroidError(const Solid& s, const Vec3& want) {
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.centroidValid);
+  return ray3d::Length(ray3d::Sub(mp.centroid, want));
+}
+
+} // namespace
+
+TEST_CASE("A box's section is its rectangle, and the solid is untouched", "[brep][req335][req149]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &s, &why));
+  const Solid before = s;
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, Vec3{0, 0, 6}, Vec3{0, 0, 1}, &plane, &loop, &why));
+
+  CHECK(loop.closed);
+  CHECK(loop.segs.size() == 4);
+  for (const brep::PathSeg& sg : loop.segs)
+    CHECK(sg.sweep == 0.0);  // a box cuts along straight edges only
+  // 30 x 20, and POSITIVE because the loop is promised counter-clockwise about the plane normal.
+  CHECK(SectionArea(loop) == Approx(600.0).epsilon(1e-12));
+
+  // "does not modify the model" — asserted, not inferred from the const reference.
+  CHECK(SameGeometry(before, s));
+}
+
+TEST_CASE("An oblique section of a box is larger than the perpendicular one, by exactly 1/cos",
+          "[brep][req335][req149]") {
+  // The section of a prism by a plane tilted through theta has area A/cos(theta). That is a closed
+  // form rather than a recorded number, and it is the check that the loop is measured IN ITS OWN
+  // PLANE rather than projected back to the horizontal -- a projection would return 600 here.
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &s, &why));
+
+  const Vec3 n{0.0, 0.2, 1.0};
+  const double cosTheta = 1.0 / std::sqrt(0.2 * 0.2 + 1.0);
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, Vec3{0, 0, 6}, n, &plane, &loop, &why));
+  CHECK(SectionArea(loop) == Approx(600.0 / cosTheta).epsilon(1e-9));
+}
+
+TEST_CASE("A cylinder's perpendicular section is its circle, as two arcs", "[brep][req335][req149]") {
+  // The case that decides this increment's shape: a cylinder cut square across meets the plane along
+  // ARCS, which a Path carries as sweeps and a polyline as bulges. Nothing is approximated.
+  const double r = 8.0;
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeCylinder(World(), r, 25, &s, &why));
+  const Solid before = s;
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, Vec3{0, 0, 12}, Vec3{0, 0, 1}, &plane, &loop, &why));
+
+  REQUIRE(loop.segs.size() == 2);  // split at the seam
+  for (const brep::PathSeg& sg : loop.segs)
+    CHECK(sg.sweep != 0.0);
+  // The two sweeps together are a full turn, counter-clockwise.
+  double total = 0.0;
+  for (const brep::PathSeg& sg : loop.segs)
+    total += sg.sweep;
+  CHECK(total == Approx(2.0 * kPi).epsilon(1e-12));
+  CHECK(SectionArea(loop) == Approx(kPi * r * r).epsilon(1e-9));
+  CHECK(SameGeometry(before, s));
+}
+
+TEST_CASE("A cone's perpendicular section is the circle at that height", "[brep][req335][req149]") {
+  // r(z) = r0 * (1 - z/h) for a cone. Cutting at half height must give a quarter of the base area,
+  // which no recorded output could have told us.
+  const double r0 = 9.0, h = 20.0;
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeCone(World(), r0, 0.0, h, &s, &why));
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, Vec3{0, 0, h * 0.5}, Vec3{0, 0, 1}, &plane, &loop, &why));
+  const double rHalf = r0 * 0.5;
+  CHECK(SectionArea(loop) == Approx(kPi * rHalf * rHalf).epsilon(1e-9));
+}
+
+TEST_CASE("A section is taken in the plane the caller asked for, not the one the cut face carries",
+          "[brep][req335][req149]") {
+  // The returned frame's origin and Z must be the caller's, so that the 2D coordinates mean what
+  // the caller expects. The cut face's own frame is anti-parallel on the 'above' piece, and a
+  // section built from it would come back wound the wrong way and offset.
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &s, &why));
+
+  const Vec3 p{0, 0, 6};
+  const Vec3 n = ray3d::Normalize(Vec3{0.3, 0.2, 1.0});
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, p, n, &plane, &loop, &why));
+
+  CHECK(plane.origin.x == Approx(p.x).margin(1e-12));
+  CHECK(plane.origin.y == Approx(p.y).margin(1e-12));
+  CHECK(plane.origin.z == Approx(p.z).margin(1e-12));
+  CHECK(ray3d::Dot(plane.zAxis, n) == Approx(1.0).epsilon(1e-12));
+  CHECK(SectionArea(loop) > 0.0);  // counter-clockwise about the caller's normal
+
+  // Every section vertex lies ON the plane, which is the property the 2D coordinates encode.
+  for (const brep::PathSeg& sg : loop.segs) {
+    const Vec3 w = ucs::PlaneToWorld(plane, sg.end);
+    CHECK(std::fabs(ray3d::Dot(ray3d::Sub(w, p), n)) < 1e-9);
+  }
+}
+
+TEST_CASE("An oblique cut of a cylinder is refused by name rather than approximated",
+          "[brep][req335][req149][req201]") {
+  // It meets the wall along an ELLIPSE, which a Path of lines and arcs cannot carry. Returning a
+  // near-circle, or the chord polygon, would be a section that is quietly the wrong shape -- the
+  // failure REQ-201 exists to prevent. Increment 2's work.
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeCylinder(World(), 8, 25, &s, &why));
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  why = Problem::Ok;
+  CHECK_FALSE(brep::SectionLoop(s, Vec3{0, 0, 12}, Vec3{0.3, 0.0, 1.0}, &plane, &loop, &why));
+  CHECK(why != Problem::Ok);
+}
+
+TEST_CASE("A section inherits Slice's accepted set, with Slice's own reason",
+          "[brep][req335][req149][req201]") {
+  // A sphere is refused by Slice today, so it is refused here -- and by the SAME Problem, not a
+  // second reason invented alongside it. If Slice's accepted set grows, this grows with it.
+  Problem why = Problem::Ok;
+  Solid sphere;
+  REQUIRE(brep::MakeSphere(World(), 15, &sphere, &why));
+
+  Solid a, b;
+  Problem sliceWhy = Problem::Ok;
+  const bool sliced = brep::Slice(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b,
+                                  &sliceWhy);
+  REQUIRE_FALSE(sliced);  // the premise of this test
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  Problem sectionWhy = Problem::Ok;
+  CHECK_FALSE(brep::SectionLoop(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &sectionWhy));
+  CHECK(sectionWhy == sliceWhy);
+}
+
+TEST_CASE("A plane that misses the solid reports that, and a degenerate normal is refused",
+          "[brep][req335][req149][req201]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &s, &why));
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  why = Problem::Ok;
+  CHECK_FALSE(brep::SectionLoop(s, Vec3{0, 0, 500}, Vec3{0, 0, 1}, &plane, &loop, &why));
+  CHECK(why != Problem::Ok);
+
+  why = Problem::Ok;
+  CHECK_FALSE(brep::SectionLoop(s, Vec3{0, 0, 6}, Vec3{0, 0, 0}, &plane, &loop, &why));
+  CHECK(why == Problem::SliceDegeneratePlane);
+}
+
+TEST_CASE("A section holds at survey coordinate magnitudes", "[brep][req335][req149][req101]") {
+  // The same rectangle, 2.2e6 ft east. The section's own 2D coordinates are measured from the plane
+  // origin, so they stay at model scale however far out the solid is.
+  Problem why = Problem::Ok;
+  Solid s;
+  const ucs::Ucs at = At(2196000.0, 1400000.0, 1035.0);
+  REQUIRE(brep::MakeBox(at, 30, 20, 12, &s, &why));
+
+  ucs::Ucs plane{};
+  brep::Path loop;
+  REQUIRE(brep::SectionLoop(s, ray3d::Add(at.origin, Vec3{0, 0, 6}), Vec3{0, 0, 1}, &plane, &loop, &why));
+  CHECK(loop.segs.size() == 4);
+  CHECK(SectionArea(loop) == Approx(600.0).epsilon(1e-9));
+}
+
+TEST_CASE("Every primitive's centroid matches its closed form", "[brep][req334][req149]") {
+  Problem why = Problem::Ok;
+  const ucs::Ucs f = World();
+  Solid s;
+
+  // Box: the frame origin is the base centre, so the centroid is H/2 up.
+  REQUIRE(brep::MakeBox(f, 30, 20, 12, &s, &why));
+  CHECK(CentroidError(s, InFrame(f, 0, 0, 6)) < 1e-9);
+
+  // Wedge: a right triangular prism. The triangle's centroid is a third of the way along each leg
+  // from the right angle, which puts it at -L/2 + L/3 along X and H/3 up.
+  REQUIRE(brep::MakeWedge(f, 30, 20, 12, &s, &why));
+  CHECK(CentroidError(s, InFrame(f, -15.0 + 30.0 / 3.0, 0, 12.0 / 3.0)) < 1e-9);
+
+  // Pyramid (any pyramid, however many sides): h/4 above the base.
+  REQUIRE(brep::MakePyramid(f, 6, 10, 0.0, 18, &s, &why));
+  CHECK(CentroidError(s, InFrame(f, 0, 0, 18.0 / 4.0)) < 1e-9);
+
+  // Cylinder: on the axis at h/2.
+  REQUIRE(brep::MakeCylinder(f, 8, 25, &s, &why));
+  CHECK(CentroidError(s, InFrame(f, 0, 0, 12.5)) < 1e-9);
+
+  // Cone: on the axis at h/4 above the base.
+  REQUIRE(brep::MakeCone(f, 9, 0.0, 20, &s, &why));
+  CHECK(CentroidError(s, InFrame(f, 0, 0, 5.0)) < 1e-9);
+
+  // Frustum: zbar = h/4 * (r1^2 + 2 r1 r2 + 3 r2^2) / (r1^2 + r1 r2 + r2^2). Asymmetric in Z, which
+  // is what makes it one of the two cases a symmetric fixture could not have caught.
+  {
+    const double r1 = 9, r2 = 4, h = 20;
+    const double zbar = h / 4.0 * (r1 * r1 + 2 * r1 * r2 + 3 * r2 * r2) / (r1 * r1 + r1 * r2 + r2 * r2);
+    REQUIRE(brep::MakeCone(f, r1, r2, h, &s, &why));
+    CHECK(CentroidError(s, InFrame(f, 0, 0, zbar)) < 1e-9);
+  }
+
+  // Sphere and torus: the frame origin IS the centre.
+  REQUIRE(brep::MakeSphere(f, 15, &s, &why));
+  CHECK(CentroidError(s, f.origin) < 1e-9);
+  REQUIRE(brep::MakeTorus(f, 20, 5, &s, &why));
+  CHECK(CentroidError(s, f.origin) < 1e-9);
+}
+
+TEST_CASE("A centroid survives a tilted frame - the case a per-face frame gets wrong",
+          "[brep][req334][req149]") {
+  // With the moment accumulated in each face's own frame and rotated afterwards, the box below is
+  // out by 3.2 ft and the pyramid by 2.3 ft, while every axis-aligned case above still passes. This
+  // is the assertion that keeps that bug out.
+  Problem why = Problem::Ok;
+  const ucs::Ucs t = TiltedAt(0, 0, 0);
+  Solid s;
+
+  REQUIRE(brep::MakeBox(t, 30, 20, 12, &s, &why));
+  CHECK(CentroidError(s, InFrame(t, 0, 0, 6)) < 1e-9);
+
+  REQUIRE(brep::MakePyramid(t, 6, 10, 0.0, 18, &s, &why));
+  CHECK(CentroidError(s, InFrame(t, 0, 0, 18.0 / 4.0)) < 1e-9);
+
+  REQUIRE(brep::MakeCone(t, 9, 0.0, 20, &s, &why));
+  CHECK(CentroidError(s, InFrame(t, 0, 0, 5.0)) < 1e-9);
+
+  REQUIRE(brep::MakeSphere(t, 15, &s, &why));
+  CHECK(CentroidError(s, t.origin) < 1e-9);
+}
+
+TEST_CASE("A centroid holds at survey coordinate magnitudes", "[brep][req334][req149][req101]") {
+  // GitHub #149 acceptance 8. The centroid is where this is easiest to lose: integrating about the
+  // world origin instead of a point on the solid was measured at 46 to 6,978 ft of error out here,
+  // and it looks perfect at (0,0,0). REQ-101 is +/-0.002 ft; these assert five orders inside it.
+  Problem why = Problem::Ok;
+  Solid s;
+
+  const ucs::Ucs at = At(2196000.0, 1400000.0, 1035.0);
+  REQUIRE(brep::MakeCylinder(at, 8, 25, &s, &why));
+  CHECK(CentroidError(s, InFrame(at, 0, 0, 12.5)) < 1e-7);
+
+  {
+    const double r1 = 9, r2 = 4, h = 20;
+    const double zbar = h / 4.0 * (r1 * r1 + 2 * r1 * r2 + 3 * r2 * r2) / (r1 * r1 + r1 * r2 + r2 * r2);
+    REQUIRE(brep::MakeCone(at, r1, r2, h, &s, &why));
+    CHECK(CentroidError(s, InFrame(at, 0, 0, zbar)) < 1e-7);
+
+    // Tilted AND at magnitude, which is what a real drawing on a state plane actually looks like.
+    const ucs::Ucs tilted = TiltedAt(2196000.0, 1400000.0, 1035.0);
+    REQUIRE(brep::MakeCone(tilted, r1, r2, h, &s, &why));
+    CHECK(CentroidError(s, InFrame(tilted, 0, 0, zbar)) < 1e-7);
+  }
+
+  REQUIRE(brep::MakeSphere(at, 15, &s, &why));
+  CHECK(CentroidError(s, at.origin) < 1e-7);
+}
+
+TEST_CASE("A centroid is invariant under translation, and moves exactly with the solid",
+          "[brep][req334][req149]") {
+  // Independent of the closed forms above: whatever the centroid of this wedge is, translating the
+  // solid must translate it by the same vector and nothing else. A formula that quietly referenced
+  // the world origin would fail this even where a symmetric primitive passed.
+  Problem why = Problem::Ok;
+  Solid a, b;
+  REQUIRE(brep::MakeWedge(World(), 30, 20, 12, &a, &why));
+  REQUIRE(brep::MakeWedge(At(1234.5, -678.25, 90.125), 30, 20, 12, &b, &why));
+
+  const brep::MassProperties ma = brep::ComputeMassProperties(a);
+  const brep::MassProperties mb = brep::ComputeMassProperties(b);
+  REQUIRE(ma.centroidValid);
+  REQUIRE(mb.centroidValid);
+  const Vec3 moved = ray3d::Add(ma.centroid, Vec3{1234.5, -678.25, 90.125});
+  CHECK(ray3d::Length(ray3d::Sub(mb.centroid, moved)) < 1e-9);
+}
+
+TEST_CASE("A solid that does not validate reports no centroid", "[brep][req334][req149][req201]") {
+  Problem why = Problem::Ok;
+  Solid good;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &good, &why));
+  REQUIRE(brep::ComputeMassProperties(good).centroidValid);
+
+  Solid broken = good;
+  REQUIRE_FALSE(broken.shells.empty());
+  broken.shells[0].faces.pop_back();
+  const brep::MassProperties mp = brep::ComputeMassProperties(broken);
+  CHECK_FALSE(mp.valid);
+  CHECK_FALSE(mp.centroidValid);
+}
+
+TEST_CASE("A self-intersecting solid reports no centroid, as it reports no volume",
+          "[brep][req334][req149][req201]") {
+  // The centroid follows the VOLUME's contract, and deliberately not the one `FaceArea` will have
+  // once D-2026-09-09-g lands: a centroid is a volume-WEIGHTED quantity, so a shell that encloses
+  // part of space twice makes it exactly as meaningless as the volume it is weighted by, where a
+  // single face's area stays perfectly well defined. Two neighbouring functions, two different
+  // answers, each for a stated reason. (Asserted here on the volume side only, because this branch
+  // sits on `beta` and `FaceArea` is still in flight — see ADR-055's note.)
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeTorus(World(), 5.0, 8.0, &s, &why));  // tube > ring
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  CHECK_FALSE(mp.valid);
+  CHECK_FALSE(mp.centroidValid);
+}
+
+TEST_CASE("A Boolean result's centroid matches the composite of its parts", "[brep][req334][req149]") {
+  // GitHub #149 acceptance 4 names a Boolean result explicitly, and it is the case a symmetric
+  // fixture cannot check: subtracting an off-centre pocket moves the centroid along X only, by an
+  // amount the composite formula predicts exactly.
+  //
+  //     c = (V_box * c_box - V_cut * c_cut) / (V_box - V_cut)
+  //
+  // A rectangular through-cut is used rather than a bore, because a box-minus-box leaves planar
+  // faces bounded by lines -- the shapes this increment's integrator covers. A CYLINDRICAL bore
+  // produces `Intersection` edges, which are refused by name (ADR-055 (d)) rather than
+  // approximated; the case below pins that refusal.
+  Problem why = Problem::Ok;
+  Solid box, cut;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &box, &why));
+  // 6 x 6 through-cut, offset +9 in X, running past both faces in Z so the result is one shell.
+  REQUIRE(brep::MakeBox(At(9, 0, -1), 6, 6, 14, &cut, &why));
+
+  std::vector<Solid> out;
+  REQUIRE(brep::BooleanSubtract(box, cut, &out, &why));
+  REQUIRE(out.size() == 1);
+
+  const double vBox = 30.0 * 20.0 * 12.0;
+  const double vCut = 6.0 * 6.0 * 12.0;  // only the part inside the box counts
+  const double cx = (vBox * 0.0 - vCut * 9.0) / (vBox - vCut);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(out[0]);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Approx(vBox - vCut).epsilon(1e-12));
+  REQUIRE(mp.centroidValid);
+  CHECK(mp.centroid.x == Approx(cx).margin(1e-9));
+  CHECK(mp.centroid.y == Approx(0.0).margin(1e-9));
+  CHECK(mp.centroid.z == Approx(6.0).margin(1e-9));
+}
+
+TEST_CASE("A solid whose faces this increment does not cover reports no centroid, and still reports "
+          "its volume", "[brep][req334][req149][req201]") {
+  // ADR-055 (d). A cylindrical bore meets the box along `Intersection` curves, and a face bounded by
+  // one has a domain this increment's integrator does not describe. The refusal is the point: the
+  // volume and surface area stay exactly as trustworthy as they were, and only the figure that was
+  // not computed is withheld. Reporting a centroid here as though the face were simple would be the
+  // plausible-wrong-number failure REQ-201 exists to prevent.
+  Problem why = Problem::Ok;
+  Solid box, bore;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &box, &why));
+  REQUIRE(brep::MakeCylinder(At(8, 0, -1), 4, 14, &bore, &why));
+
+  std::vector<Solid> out;
+  if (!brep::BooleanSubtract(box, bore, &out, &why) || out.size() != 1)
+    return;  // the boolean itself is Phase 4's; if it declines, there is nothing to assert here
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(out[0]);
+  REQUIRE(mp.valid);           // volume and area are unaffected ...
+  CHECK(mp.volume > 0.0);
+  CHECK(mp.surfaceArea > 0.0);
+  CHECK_FALSE(mp.centroidValid);  // ... and only the centroid is withheld
+}
+
+// ================================================================================================
+// Per-face area (REQ-313 as amended, D-2026-09-09-g, TASK-236) — GitHub #149 acceptance 2.
+//
+// `MassProperties` reports the area of the WHOLE shell. #149 asks for a face's area as well, which
+// the kernel has always computed per face internally and never exposed. These cases pin three
+// things: each face's closed form, that the parts sum to the whole, and that the answer does NOT
+// come from the display mesh.
+//
+// The last one is why this exists at all, rather than the caller summing triangles by
+// `Tessellation::triFace`: at the display chord tolerance that route reports a cylinder cap of
+// r = 8 as 200.7391 against a true 201.0619 — 0.16% light, because a `Plane` face bounded by an
+// ARC is triangulated as an inscribed polygon. `Tessellate`'s "plane faces are exact at any
+// tolerance" holds for a straight-edged plane and not for that cap. It is a plausible wrong answer
+// of exactly the kind #149's tessellation note exists to keep out of a reported figure.
+// ================================================================================================
+
+TEST_CASE("A cylinder's cap and wall each report their closed-form area", "[brep][req313][req149]") {
+  const double r = 8.0, h = 25.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), r, h, &s, &why));
+
+  // A cylinder is two caps and a wall; the wall is split at its seam, so it is TWO faces of half
+  // the lateral area each. Classify by surface kind rather than by index, so the assertion does not
+  // silently start checking a different face if the builder's ordering ever changes.
+  double capTotal = 0.0, wallTotal = 0.0;
+  int caps = 0, walls = 0;
+  for (int i = 0; i < static_cast<int>(s.faces.size()); ++i) {
+    double a = 0.0;
+    REQUIRE(brep::FaceArea(s, i, &a, &why));
+    REQUIRE(a > 0.0);
+    if (s.faces[static_cast<std::size_t>(i)].surface.kind == brep::SurfaceKind::Plane) {
+      capTotal += a;
+      ++caps;
+    } else {
+      wallTotal += a;
+      ++walls;
+    }
+  }
+  REQUIRE(caps == 2);
+  REQUIRE(walls >= 1);
+  // Each cap is pi r^2 = 201.06193, and the two together are twice that. The MESH route reports
+  // 200.7391 per cap - the number this assertion exists to exclude.
+  CHECK(capTotal == Approx(2.0 * kPi * r * r).epsilon(1e-12));
+  CHECK(wallTotal == Approx(kTwoPiTest * r * h).epsilon(1e-12));
+}
+
+TEST_CASE("Per-face areas sum to the solid's surface area, for every primitive",
+          "[brep][req313][req149]") {
+  // The identity that makes the new accessor trustworthy: it is the same integrator over the same
+  // faces, so the parts must reconstruct the whole exactly rather than nearly. A cone, a sphere and
+  // a torus are in the list because they are the three #149 names as the tessellation-error cases.
+  struct Case {
+    const char* name;
+    Solid s;
+  };
+  std::vector<Case> cases;
+  Problem why = Problem::Ok;
+  {
+    Solid s;
+    REQUIRE(brep::MakeBox(World(), 30, 20, 12, &s, &why));
+    cases.push_back({"box", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeWedge(World(), 30, 20, 12, &s, &why));
+    cases.push_back({"wedge", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakePyramid(World(), 6, 10, 0.0, 18, &s, &why));
+    cases.push_back({"pyramid", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 9, 0.0, 20, &s, &why));
+    cases.push_back({"cone", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 9, 4, 20, &s, &why));
+    cases.push_back({"frustum", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeSphere(World(), 15, &s, &why));
+    cases.push_back({"sphere", std::move(s)});
+  }
+  {
+    Solid s;
+    REQUIRE(brep::MakeTorus(World(), 20, 5, &s, &why));
+    cases.push_back({"torus", std::move(s)});
+  }
+
+  for (const Case& c : cases) {
+    INFO("primitive: " << c.name);
+    const brep::MassProperties mp = brep::ComputeMassProperties(c.s);
+    REQUIRE(mp.valid);
+    double sum = 0.0;
+    for (int i = 0; i < static_cast<int>(c.s.faces.size()); ++i) {
+      double a = 0.0;
+      Problem w = Problem::Ok;
+      REQUIRE(brep::FaceArea(c.s, i, &a, &w));
+      sum += a;
+    }
+    CHECK(sum == Approx(mp.surfaceArea).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("A face's area is invariant under placement, including at survey magnitudes",
+          "[brep][req313][req149][req101]") {
+  // #149 acceptance 8 in miniature. A face's area is a property of the patch, so moving and tilting
+  // the solid must not move the number - and the interesting placement is the one at easting 2e6,
+  // where a formula referenced to the world origin instead of the solid loses its low bits.
+  const double r = 8.0, h = 25.0;
+  Solid atOrigin, placed;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), r, h, &atOrigin, &why));
+  REQUIRE(brep::MakeCylinder(TiltedAt(2196000.0, 1400000.0, 1035.0), r, h, &placed, &why));
+  REQUIRE(atOrigin.faces.size() == placed.faces.size());
+
+  for (int i = 0; i < static_cast<int>(atOrigin.faces.size()); ++i) {
+    INFO("face " << i);
+    double a0 = 0.0, a1 = 0.0;
+    Problem w = Problem::Ok;
+    REQUIRE(brep::FaceArea(atOrigin, i, &a0, &w));
+    REQUIRE(brep::FaceArea(placed, i, &a1, &w));
+    CHECK(a1 == Approx(a0).epsilon(1e-10));
+  }
+}
+
+TEST_CASE("FaceArea refuses a face index that is not there, and a null out", "[brep][req313][req149]") {
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &s, &why));
+
+  double a = 0.0;
+  Problem w = Problem::Ok;
+  CHECK_FALSE(brep::FaceArea(s, -1, &a, &w));
+  CHECK(w == Problem::IndexOutOfRange);
+
+  w = Problem::Ok;
+  CHECK_FALSE(brep::FaceArea(s, static_cast<int>(s.faces.size()), &a, &w));
+  CHECK(w == Problem::IndexOutOfRange);
+
+  w = Problem::Ok;
+  CHECK_FALSE(brep::FaceArea(s, 0, nullptr, &w));
+  CHECK(w == Problem::IndexOutOfRange);
+
+  // A null `outWhy` is allowed - the refusal must not require somewhere to put the reason.
+  CHECK_FALSE(brep::FaceArea(s, 99, &a, nullptr));
+}
+
+TEST_CASE("FaceArea reports a broken shell's own validity reason rather than a number",
+          "[brep][req313][req149][req201]") {
+  Solid good;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeBox(World(), 10, 10, 10, &good, &why));
+
+  // Drop a face from the shell: the topology now refers to geometry the shell does not carry, and
+  // the boundary walk cannot be trusted. The reason returned is Validate's, not a generic one.
+  Solid broken = good;
+  REQUIRE_FALSE(broken.shells.empty());
+  REQUIRE_FALSE(broken.shells[0].faces.empty());
+  broken.shells[0].faces.pop_back();
+  REQUIRE(brep::Validate(broken) != Problem::Ok);
+
+  double a = 0.0;
+  Problem w = Problem::Ok;
+  CHECK_FALSE(brep::FaceArea(broken, 0, &a, &w));
+  CHECK(w == brep::Validate(broken));
+  CHECK(a == 0.0);  // untouched on failure
+}
+
+TEST_CASE("A self-intersecting solid still reports a face area, where mass properties will not",
+          "[brep][req313][req149]") {
+  // The one place this accessor's contract deliberately differs from ComputeMassProperties.
+  //
+  // A torus whose tube radius exceeds its ring radius passes Validate - it is legitimate topology -
+  // but its surface encloses part of space twice, so its VOLUME is a number with no meaning and the
+  // mass-property report refuses it by name. A face's area is not that kind of quantity: the face is
+  // one bounded patch of one surface, and REQ-318 lets a user click it. Answering "unavailable" for
+  // a figure that is perfectly well defined would be the worse wrong answer.
+  const double R = 5.0, tube = 8.0;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeTorus(World(), R, tube, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE_FALSE(mp.valid);  // the premise: the whole-solid report declines
+
+  double sum = 0.0;
+  for (int i = 0; i < static_cast<int>(s.faces.size()); ++i) {
+    double a = 0.0;
+    Problem w = Problem::Ok;
+    REQUIRE(brep::FaceArea(s, i, &a, &w));  // ... and the per-face one does not
+    CHECK(a > 0.0);
+    sum += a;
+  }
+  // And the areas are real, not placeholders: a torus' surface is 4 pi^2 R r whether or not the
+  // tube passes through the axis.
+  CHECK(sum == Approx(4.0 * kPi * kPi * R * tube).epsilon(1e-9));
+}
+
+// ================================================================================================
+// Solid validation reports each fault APART (REQ-313 as amended, D-2026-09-09-j, TASK-239)
+// — GitHub #149 acceptance 7.
+//
+// The acceptance asks that validation "detects non-manifold, unclosed and inconsistently oriented
+// solids". `Validate` already did, and already named each apart — but the phase's own earlier probe
+// reported two of them collapsing into one message, and these cases exist so that claim can never
+// be made from a bad fixture again.
+//
+// **The fixtures are the subject here.** `Validate` checks ring closure — each edge use ending
+// where the next begins — BEFORE it tallies edge uses, so a fixture that disturbs the ring never
+// reaches the tally and reports `LoopNotClosed` whatever it was meant to be testing. Two ways to
+// get that wrong, both of which the probe did first:
+//
+//   - flipping `reversed` on a loop's uses while leaving their ORDER alone reverses each edge's
+//     direction of travel without reversing the sequence, so consecutive uses stop meeting;
+//   - duplicating a loop onto an existing face makes that face an outer boundary plus an identical
+//     "hole", so its AREA collapses and `DegenerateFace` fires first.
+//
+// Each case below therefore asserts the SPECIFIC Problem, never merely that validation failed.
+// ================================================================================================
+
+// The inconsistently-oriented fault has no case of its own here: `Validate rejects broken topology`
+// (this file, "two faces agreeing on an edge's direction is not orientable") already covers it with
+// the same fixture, and duplicating it would inflate the count without adding coverage. It is
+// asserted below as one of the four, which is where this section's subject actually lies.
+
+TEST_CASE("Validation names a non-manifold shell, not a degenerate face", "[brep][req313][req149]") {
+  Problem why = Problem::Ok;
+  Solid good;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &good, &why));
+
+  // Duplicate the whole FACE into the shell: every ring still closes, every face still has area,
+  // and each of that face's edges is now used three times.
+  Solid s = good;
+  s.faces.push_back(s.faces[0]);
+  s.shells[0].faces.push_back(static_cast<int>(s.faces.size()) - 1);
+
+  CHECK(brep::Validate(s) == Problem::EdgeNonManifold);
+}
+
+TEST_CASE("Validation names an unclosed shell and a degenerate edge apart", "[brep][req313][req149]") {
+  Problem why = Problem::Ok;
+  Solid good;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &good, &why));
+
+  // Pop the face from BOTH `faces` and the shell. Removing it from the shell alone leaves an
+  // ORPHAN face, which trips the "every face belongs to exactly one shell" check long before the
+  // edge tally — so the fixture would report `IndexOutOfRange` and never build an unclosed shell at
+  // all. That mistake is what let the `ShellOpenAtEdge` / `EdgeNonManifold` collision survive a
+  // slice written to look for exactly it.
+  Solid dropped = good;
+  dropped.shells[0].faces.pop_back();
+  dropped.faces.pop_back();
+  const Problem a = brep::Validate(dropped);
+  CHECK(a == Problem::ShellOpenAtEdge);
+
+  Solid collapsed = good;
+  collapsed.vertices[1].p = collapsed.vertices[0].p;
+  const Problem b = brep::Validate(collapsed);
+  CHECK(b == Problem::DegenerateEdge);
+
+  // The point of the criterion: the faults are DISTINGUISHABLE, not merely all detected.
+  CHECK(a != b);
+}
+
+TEST_CASE("An orphan face is its own fault, not an unclosed shell", "[brep][req313][req149]") {
+  // The fixture mistake, pinned so it cannot be made again silently. Removing a face's index from
+  // the shell while leaving the `Face` behind is neither an unclosed shell nor a non-manifold one —
+  // it is a face belonging to no shell, and `Validate` says so, from a check that runs before the
+  // edge tally. A test aiming at the tally and landing here would pass for the wrong reason.
+  Problem why = Problem::Ok;
+  Solid good;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &good, &why));
+
+  Solid orphan = good;
+  orphan.shells[0].faces.pop_back();
+  CHECK(brep::Validate(orphan) == Problem::IndexOutOfRange);
+
+  Solid reallyUnclosed = good;
+  reallyUnclosed.shells[0].faces.pop_back();
+  reallyUnclosed.faces.pop_back();
+  CHECK(brep::Validate(reallyUnclosed) == Problem::ShellOpenAtEdge);
+
+  CHECK(brep::Validate(orphan) != brep::Validate(reallyUnclosed));
+}
+
+TEST_CASE("The four faults #149 names each report a different reason", "[brep][req313][req149]") {
+  // Four faults, four distinct Problems, four distinct texts — true only since `ShellOpenAtEdge`
+  // and `EdgeNonManifold` were split apart (D-2026-09-09-k). Before that, unclosed and non-manifold
+  // both returned `EdgeNotUsedTwice`, whose text says "not closed" and is therefore wrong for the
+  // non-manifold case.
+  //
+  // **This test passed before the split, on a fixture that was not unclosed at all** — it popped
+  // only the shell's index and tripped the orphan-face check. Each fixture below is now asserted
+  // individually as well, so a repeat cannot hide inside the pairwise loop.
+  Problem why = Problem::Ok;
+  Solid good;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &good, &why));
+
+  Solid unclosed = good;
+  unclosed.shells[0].faces.pop_back();
+  unclosed.faces.pop_back();
+
+  Solid oriented = good;
+  {
+    auto& u = oriented.faces[0].loops[0].uses;
+    std::reverse(u.begin(), u.end());
+    for (auto& x : u)
+      x.reversed = !x.reversed;
+  }
+
+  Solid nonManifold = good;
+  nonManifold.faces.push_back(nonManifold.faces[0]);
+  nonManifold.shells[0].faces.push_back(static_cast<int>(nonManifold.faces.size()) - 1);
+
+  Solid degenerate = good;
+  degenerate.vertices[1].p = degenerate.vertices[0].p;
+
+  // Each fixture asserted by NAME first: pairwise distinctness alone is satisfiable by four
+  // unrelated faults, which is exactly how the earlier version passed while testing the wrong thing.
+  CHECK(brep::Validate(unclosed) == Problem::ShellOpenAtEdge);
+  CHECK(brep::Validate(oriented) == Problem::EdgeOrientationInconsistent);
+  CHECK(brep::Validate(nonManifold) == Problem::EdgeNonManifold);
+  CHECK(brep::Validate(degenerate) == Problem::DegenerateEdge);
+
+  const Problem ps[4] = {brep::Validate(unclosed), brep::Validate(oriented),
+                         brep::Validate(nonManifold), brep::Validate(degenerate)};
+  for (int i = 0; i < 4; ++i) {
+    INFO("fault " << i << " -> " << brep::ProblemText(ps[i]));
+    CHECK(ps[i] != Problem::Ok);
+    for (int j = i + 1; j < 4; ++j)
+      CHECK(ps[i] != ps[j]);
+  }
+
+  // And the two that used to collide describe themselves correctly: the non-manifold one must not
+  // be reported to a user as "not closed", which is what SOLIDCHECK printed before the split.
+  const std::string manifoldText = brep::ProblemText(brep::Validate(nonManifold));
+  CHECK(manifoldText.find("not manifold") != std::string::npos);
+  CHECK(manifoldText.find("not closed") == std::string::npos);
+}
+
+TEST_CASE("A self-intersecting solid is sound topology whose measurements are withheld",
+          "[brep][req313][req149][req201]") {
+  // The case a validity check alone would call fine, and the reason SOLIDCHECK asks two questions
+  // rather than one. `Validate` is right to say Ok -- the topology IS closed, manifold and
+  // orientable -- and `ComputeMassProperties` is right to decline, because the surface encloses
+  // part of space twice. A user told only the first would find a blank Properties panel and no
+  // statement anywhere of why.
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeTorus(World(), 5.0, 8.0, &s, &why));  // tube wider than the ring
+
+  CHECK(brep::Validate(s) == Problem::Ok);
+  CHECK(brep::SelfIntersects(s));
+  CHECK_FALSE(brep::ComputeMassProperties(s).valid);
+}

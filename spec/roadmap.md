@@ -68,7 +68,9 @@ when" and the requirements it closes.
 A lightweight board that complements the milestones. Keep each column honest.
 
 ### Now (in flight — keep short)
-- *(empty)*
+- **REQ-336 — Start Screen Billboard (What's New)** (D-2026-09-10-d, ADR-056). Shipped
+  `resources/whats-new.md`, vendored md4c, auto-open from Start + Help → About, dismiss-per-version,
+  CI presence gate, authoring lock on the notes file.
 
 ### M-PaperSpace — Paper space & plotting (incremental)
 - **Goal:** compose the model onto sheets and plot them.
@@ -267,6 +269,12 @@ A lightweight board that complements the milestones. Keep each column honest.
   true on exit** — no cert was obtained; the no-op signing step is still a no-op.
 
 ### Next (accepted, sequenced, not started)
+- **Curved polyline segments (REQ-316, ADR-047, D-2026-09-02-e).** Four slices, each its own PR:
+  (1) per-vertex bulge storage (parallel `userPolylineVertsBulge` array) +
+  POLYLINE `Arc`/`Line` sub-modes + arc render + DXF/`.gs` round-trip; (2) snap / pick / extents /
+  length / Properties on arc segments; (3) JOIN of lines + arcs, and arc-segment grips;
+  (4) TRIM / OFFSET / FILLET / CHAMFER of bulge polylines. **No code past a slice until its
+  Workshop task cites REQ-316 and passes Verification.**
 - **File Format Specs (REQ-170–REQ-174, ADR-041/042, D-2026-08-29-g).** Matrix:
   `spec/file-format-specs.md`. Order: LibreDWG MSVC link + R2004 write of a tiny drawing →
   map into CAD stores / retire converter from File open-save → point cloud + PTS → PTX/LAS/LAZ/E57
@@ -284,6 +292,11 @@ A lightweight board that complements the milestones. Keep each column honest.
 - Re-run the REQ-100 surface bench case per the roadmap's own sequencing note — and note ADR-036 (e):
   it must prove the display cache **holds across frames**, not merely that one regeneration is fast.
 - REQ-101's reference-dataset half (M2) — the typed-storage half is done; see M2 status above.
+- **REQ-101 ±0.002 ft + `float`→`double` storage migration (D-2026-09-08-i, ADR-054, TASK-228, issue
+  #394).** PR 1 (spec decision + ADR + plan) done. Remaining: one subsystem per PR, each with a full
+  `ctest` gate — core entity stores + undo/tab copies → DWG-trailer serialization → snap/preview/pick
+  read-back → the GPU-upload narrowing point → the test-assertion sweep (`0.01` → `0.002`, audited per
+  site). **No code past a phase until its Workshop sub-task passes Verification.**
 
 ### Later (real but deferred)
 - `<Second file format>` — **closed for the formats in File Format Specs** (D-2026-08-29-g).

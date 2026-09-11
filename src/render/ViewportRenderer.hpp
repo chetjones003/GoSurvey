@@ -3,6 +3,7 @@
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
 #include "PdfAttach.hpp"
+#include "gizmooverlay.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -44,7 +45,7 @@ public:
   ///            parameter reduction rather than an addition to an already long signature.
   ///            A plan-view camera reproduces the pre-3D pipeline exactly.
   void RenderScene(const Camera& cam, int fbWidth, int fbHeight,
-                   const std::vector<float>& userLines, const std::vector<float>& circlesCxCyZR,
+                   const std::vector<double>& userLines, const std::vector<double>& circlesCxCyZR,
                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
                    const std::vector<float>* previewLines,
@@ -67,6 +68,16 @@ public:
                    // is no "mesh wireframe" behaviour any requirement asks for.
                    const std::vector<std::shared_ptr<const CadMesh>>* meshes = nullptr,
                    const std::vector<EntityAttributes>* meshAttrs = nullptr,
+                   // B-rep solids (REQ-313 / ADR-045), as caller-assembled batches: the cached
+                   // tessellation for the faces and the solid's real edges for the wireframe, both
+                   // already filtered for layer visibility and isolation with colours resolved.
+                   //
+                   // Solids draw in EVERY visual style — the opposite of the mesh rule above, and
+                   // for the reason ADR-026 (c) records: a solid HAS edges, where a mesh's "edges"
+                   // are artefacts of an exporter's resolution. In Hidden the faces are written to
+                   // the depth buffer only, which is what makes "Hidden" mean anything for a solid
+                   // rather than being wireframe with extra steps.
+                   const CadSolidDisplayGeometry* solidGeometry = nullptr,
                    // Generated surface display geometry (REQ-068 / REQ-070, ADR-036 (h)) — the
                    // triangle edges, contours and border each visible surface's style asks for, as
                    // coloured batches of flat world-space line vertices (x,y,z per endpoint, two
@@ -105,7 +116,30 @@ public:
                    //
                    // Null means the WCS and takes the original world-XY code path unchanged, which
                    // is what every drawing that never touches UCS continues to get.
-                   const ucs::Ucs* gridFrame = nullptr);
+                   const ucs::Ucs* gridFrame = nullptr,
+                   // REQ-318 items 11 and 14 — the tinted fills over a selected solid FACE and over
+                   // the one a `Ctrl` click WOULD take. Storage coordinates, already filtered and
+                   // resolved by the caller like every other overlay here.
+                   //
+                   // Its own channel, and the only overlays in this signature that are DEPTH-TESTED.
+                   // The blanket rule a few hundred lines down — "overlays are UI, never occluded:
+                   // a selection highlight that hides behind the object it is highlighting is a
+                   // bug" — was written for 2D linework and gives the wrong answer for one face of
+                   // a closed volume: never-occluded, a selected back face glows through the body.
+                   // The sub-object selection's EDGE and VERTEX linework keeps the ordinary
+                   // never-occluded treatment and arrives through \p highlightLines, because a line
+                   // one pixel wide sunk into the surface it lies on is invisible (D-2026-09-04-a).
+                   //
+                   // In 2D Wireframe there is no depth buffer content to be occluded by — solids
+                   // draw no faces there — so the tint simply draws, which is the only way a face
+                   // selection can be shown in the default style.
+                   const CadSubObjectOverlay* subObjectOverlay = nullptr,
+                   // The translate gizmo's handles (REQ-060, GitHub issue #148 Phase 5 slice 4b).
+                   //
+                   // Its own channel because it is the only overlay here that is not one colour:
+                   // X red, Y green, Z blue is what every 3D application already draws, and a widget
+                   // whose three handles shared a colour would have to be read rather than seen.
+                   const CadGizmoOverlay* gizmoOverlay = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
@@ -162,6 +196,29 @@ private:
   };
   std::vector<MeshGpuEntry> meshGpu_;
   void ReleaseMeshGpu();
+
+  /// One coalesced solid batch's GPU residency (REQ-313 / GitHub issue #194). Unlike a mesh, a solid
+  /// batch has no stable pointer identity — `RefreshSolidDisplayGeometry` rebuilds the batch list
+  /// whenever a solid, its appearance or its visibility changes — so the whole set is keyed on the
+  /// assembly signature (\ref solidGpuSig_) rather than per-entry. Within one signature the batches
+  /// are immutable, so the vertex buffers only re-upload when the view ANCHOR drifts far enough to
+  /// cost float precision, exactly as the mesh path does — which is what keeps a 400-solid orbit off
+  /// the per-frame CPU-transform + stream-upload path that missed REQ-100 profile (d).
+  struct SolidGpuBatch {
+    unsigned int faceVao = 0;
+    unsigned int faceVbo = 0;
+    unsigned int edgeVao = 0;
+    unsigned int edgeVbo = 0;
+    int faceVertCount = 0;
+    int edgeVertCount = 0;
+    double anchorX = 0.0;
+    double anchorY = 0.0;
+    float rgba[4] = {1.f, 1.f, 1.f, 1.f};
+    float lineweightMm = -1.f;
+  };
+  std::vector<SolidGpuBatch> solidGpu_;
+  std::uint64_t solidGpuSig_ = 0;  ///< assembly signature solidGpu_ was built from; 0 = not built
+  void ReleaseSolidGpu();
   unsigned int vaoLines_ = 0;
   unsigned int vboLines_ = 0;
 

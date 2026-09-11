@@ -73,7 +73,15 @@ const NamedView* CurrentNamedView(const AppCommandState& st) {
     if (std::fabs(v.zoom - st.viewportZoom) > 1e-6f)
       continue;
     if (std::fabs(v.azimuthDeg - st.viewportAzimuthDeg) > kAngTol ||
-        std::fabs(v.elevationDeg - st.viewportElevationDeg) > kAngTol)
+        std::fabs(v.elevationDeg - st.viewportElevationDeg) > kAngTol ||
+        std::fabs(v.rollDeg - st.viewportRollDeg) > kAngTol)
+      continue;
+    // Projection is part of the view for the same reason the UCS is (REQ-309): the same camera
+    // angles under a different projection are not the view that was saved.
+    if (v.projection != st.viewportProjection)
+      continue;
+    if (v.projection == Camera::Projection::Perspective &&
+        std::fabs(v.fovDeg - st.viewportFovDeg) > kAngTol)
       continue;
     if (!ucs::FramesMatch(v.ucs, st.activeUcs))
       continue;
@@ -95,6 +103,9 @@ NamedView CaptureCurrentView(const AppCommandState& st, const std::string& name)
   v.zoom = st.viewportZoom;
   v.azimuthDeg = st.viewportAzimuthDeg;
   v.elevationDeg = st.viewportElevationDeg;
+  v.rollDeg = st.viewportRollDeg;  // #153
+  v.projection = st.viewportProjection;  // REQ-309
+  v.fovDeg = st.viewportFovDeg;
   v.ucs = st.activeUcs;
   return v;
 }
@@ -114,7 +125,12 @@ void RestoreNamedView(AppCommandState& st, const NamedView& v, std::vector<std::
   // the camera returns but the coordinate frame does not, because the numbers you type afterwards
   // would mean something different from the ones you typed when you saved it.
   SetActiveUcs(st, v.ucs, log);
-  CadStartViewAnimation(st, v.azimuthDeg, v.elevationDeg);
+  // Projection is set directly rather than eased (REQ-309). There is no meaningful interpolation
+  // between a parallel and a perspective projection, and the orientation animation beside it
+  // already carries the sense of movement.
+  st.viewportProjection = v.projection;
+  st.viewportFovDeg = v.fovDeg;
+  CadStartViewAnimation(st, v.azimuthDeg, v.elevationDeg, v.rollDeg);
   st.activeViewName = v.name;
   log.push_back("VIEW - restored " + v.name + ".");
 }
@@ -205,13 +221,66 @@ bool ProcessViewCommandLine(AppCommandState& st, const std::string& rest, std::v
 ray3d::Vec3 ConstrainToUcsOrtho(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target) {
   // ORTHO means "square with the axes" - and once a UCS exists, that means the UCS's axes, not the
   // world's (REQ-047 under REQ-154). Measure the offset in the frame, keep the dominant in-plane
-  // component, drop the other. The out-of-plane component is preserved rather than zeroed: the
-  // caller may be constraining a point an object snap legitimately lifted off the plane, and
-  // flattening it here would move geometry the user had already placed.
+  // component, drop the other.
+  //
+  // issue #371 third follow-up: the out-of-plane component is locked to the ANCHOR's (zero offset),
+  // not preserved from the raw target. An anchor placed by an object snap onto geometry from a
+  // DIFFERENT plane (a very ordinary thing to do — see the real repro this fixes: OSNAP CENTRE onto
+  // a circle drawn under a different coordinate system, then POLYLINE under a Front UCS) commonly
+  // sits nowhere near the active UCS's own plane. The un-snapped cursor's raw ray-plane hit, by
+  // contrast, carries no deliberate 3D intent at all — it is wherever the FIXED work plane happens
+  // to sit, an artifact of geometry, not something the user chose. Preserving that raw offset instead
+  // of the anchor's dragged the whole segment through however many units of unrequested depth
+  // separated the two, which is exactly the "still looks diagonal" defect: REQ-154 states ORTHO
+  // "stays in the UCS plane," and a plane through the anchor (parallel to the UCS) is the only
+  // reading of that which does not also require silently relocating the anchor itself.
   const ray3d::Vec3 d = ucs::WorldVectorToUcs(frame, ray3d::Sub(target, anchor));
-  const ray3d::Vec3 keep =
-      (std::fabs(d.y) > std::fabs(d.x)) ? ray3d::Vec3{0.0, d.y, d.z} : ray3d::Vec3{d.x, 0.0, d.z};
+  const ray3d::Vec3 keep = (std::fabs(d.y) > std::fabs(d.x)) ? ray3d::Vec3{0.0, d.y, 0.0} : ray3d::Vec3{d.x, 0.0, 0.0};
   return ray3d::Add(anchor, ucs::UcsVectorToWorld(frame, keep));
+}
+
+ray3d::Vec3 ConstrainToUcsOrthoOnScreen(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target,
+                                        const Camera& cam, float viewportWidthPx, float viewportHeightPx) {
+  // issue #371 second follow-up: under an ORBITED (non-plan) camera, moving the mouse along ONE
+  // screen direction generally changes BOTH of the UCS's in-plane axes' world coordinates at once —
+  // an oblique view mixes them. ConstrainToUcsOrtho's "whichever raw UCS delta is bigger" test reads
+  // that mixture back as "the user meant to move along whichever axis happens to have the bigger
+  // world delta," which is frequently the WRONG axis relative to what the cursor is actually doing
+  // on screen (confirmed against AutoCAD: a Front-UCS ORTHO drag renders perfectly vertical on
+  // screen from any orbit, because ORTHO's choice there is a SCREEN decision, not a world one).
+  //
+  // So decide on screen instead: build both candidate locked points (free along UCS X, free along
+  // UCS Y), project each and the raw cursor hit to pixels with the SAME camera, and keep whichever
+  // candidate the cursor is actually closer to on screen. This subsumes the plan-view case exactly —
+  // in plan view the two decisions always agree, since UCS deltas and screen deltas are the same
+  // thing up to a uniform scale.
+  //
+  // issue #386: each candidate is the point on its LOCKED AXIS LINE (through the anchor) closest to
+  // the cursor's own camera RAY — not "take target's dominant UCS component," which intersects the
+  // cursor ray with the whole UCS PLANE first and only then discards the other axis. That plane
+  // intersection is fine near-on but goes numerically unstable the moment the plane grazes the
+  // camera ray (an easy thing under an orbited view even when the LOCKED LINE itself is nowhere near
+  // parallel to it) — a tiny mouse move then blows up into an enormous, erratic in-plane swing, which
+  // is exactly the "preview length doesn't track the cursor" defect. Measuring against each candidate
+  // LINE directly sidesteps the plane's conditioning entirely. `target` is already a real point on
+  // the cursor's ray (the caller built it by intersecting that ray with the work plane), so the ray
+  // itself is recovered with no pixel coordinates needed (`Camera::RayThroughWorldPoint`).
+  //
+  // The out-of-plane component locks to the ANCHOR's, not the raw target's, automatically here: both
+  // candidate lines run along in-plane UCS axes, so neither can carry the point off the plane through
+  // the anchor — see ConstrainToUcsOrtho's comment (issue #371 third follow-up) for why that matters.
+  const ray3d::Ray cursorRay = cam.RayThroughWorldPoint(target);
+  const ray3d::Vec3 yDirWorld = ucs::UcsVectorToWorld(frame, ray3d::Vec3{0.0, 1.0, 0.0});
+  const ray3d::Vec3 xDirWorld = ucs::UcsVectorToWorld(frame, ray3d::Vec3{1.0, 0.0, 0.0});
+  const ray3d::Vec3 freeAlongY = ray3d::ClosestPointOnLineToRay(cursorRay, anchor, yDirWorld);
+  const ray3d::Vec3 freeAlongX = ray3d::ClosestPointOnLineToRay(cursorRay, anchor, xDirWorld);
+  float cx = 0.f, cy = 0.f, ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+  cam.WorldToScreen(target.x, target.y, target.z, viewportWidthPx, viewportHeightPx, &cx, &cy);
+  cam.WorldToScreen(freeAlongY.x, freeAlongY.y, freeAlongY.z, viewportWidthPx, viewportHeightPx, &ax, &ay);
+  cam.WorldToScreen(freeAlongX.x, freeAlongX.y, freeAlongX.z, viewportWidthPx, viewportHeightPx, &bx, &by);
+  const double distFreeY = std::hypot(cx - ax, cy - ay);
+  const double distFreeX = std::hypot(cx - bx, cy - by);
+  return (distFreeY <= distFreeX) ? freeAlongY : freeAlongX;
 }
 
 // A one-line description of a frame, for the command log. Coordinates are reported in WORLD, the
@@ -230,15 +299,25 @@ void ApplyPlanViewOf(AppCommandState& st, const ucs::Ucs& frame, std::vector<std
   float az = st.viewportAzimuthDeg;
   float el = st.viewportElevationDeg;
   ucs::PlanViewAngles(frame, &az, &el);
-  CadStartViewAnimation(st, az, el);  // ease, never jump (REQ-059)
-  if (!ucs::PlanViewIsExact(frame)) {
-    // Said out loud at the moment it bites rather than buried in a document nobody reads. The view
-    // DIRECTION is correct; only the spin about it cannot be set, because Camera stores azimuth and
-    // elevation with no roll axis (see ucs::PlanViewAngles).
-    log.push_back("PLAN - looking square at this UCS's XY plane, but its +Y cannot also be placed up "
-                  "the screen: the camera has no roll axis. The view direction is correct; the "
-                  "in-plane rotation is not.");
+  // The roll that also places the UCS +Y up the screen (#153). Zero whenever the frame's Z is world
+  // +Z, so the flat survey case animates exactly as it did before this existed.
+  const float roll = Camera::RollToPlaceUp(az, el, frame.yAxis);
+  // REQ-155 (issue #155): UCSFOLLOW inside floating model space re-plans ONLY that viewport's
+  // REQ-061 camera — never the drawing's model-view camera, and no sibling viewport. A paper
+  // viewport does not animate, so the angles are written straight onto it.
+  if (InFloatingModelSpace(st)) {
+    if (Viewport* vp = CurrentViewport(st)) {
+      vp->camAzimuthDeg = az;
+      vp->camElevationDeg = el;
+      vp->camRollDeg = roll;
+      vp->camPerspective = false;
+      BumpCadGpuCache(st);
+    }
+    (void)log;
+    return;
   }
+  CadStartViewAnimation(st, az, el, roll);  // ease, never jump (REQ-059)
+  (void)log;
 }
 
 void SetActiveUcs(AppCommandState& st, const ucs::Ucs& next, std::vector<std::string>& log, bool pushPrevious) {
@@ -279,10 +358,70 @@ static bool UcsAlignedToDirection(const ray3d::Vec3& origin, const ray3d::Vec3& 
   return ucs::AlignedToDirection(origin, dir, out);
 }
 
+// UCS Object on a planar FACE of a B-rep solid (issue #156, REQ-154). The deferral decision
+// D-2026-08-31-d chose "a real sub-object selection subsystem" over a UCS-local ray-triangle test,
+// so this is the thin consumer that subsystem (REQ-318 / ADR-049) was built to carry — the same
+// pick the hover pre-highlight and PRESSPULL use, with faces only (vertex/edge tolerances zero).
+//
+// \p handled is set when a solid WAS under the cursor: on a curved or degenerate face the caller
+// must refuse rather than fall through to the 2D entity pick, or a click that plainly aimed at the
+// solid would silently select a line behind it.
+static bool UcsFromSolidFacePick(const AppCommandState& st, const ray3d::Ray& ray,
+                                 std::vector<std::string>& log, ucs::Ucs* out, bool* handled) {
+  *handled = false;
+  const solidpick::Tolerance facesOnly{};  // vertex == edge == 0 -> only a face can be reported
+  SelectedSubObject sub;
+  solidpick::Pick pick;
+  if (!PickSubObjectAcrossSolids(st, ray, facesOnly, &sub, &pick))
+    return false;  // no solid under the cursor — the 2D entity pick still applies
+  *handled = true;
+  if (sub.kind != solidpick::Kind::Face)
+    return false;
+
+  const CadSolidPtr sp = sub.owner.lock();
+  if (!sp || sub.index < 0 || static_cast<size_t>(sub.index) >= sp->faces.size()) {
+    log.push_back("UCS Object - that face is no longer there.");
+    return false;
+  }
+  const brep::Face& f = sp->faces[static_cast<size_t>(sub.index)];
+  if (f.surface.kind != brep::SurfaceKind::Plane) {
+    // REQ-201: a curved wall (cylinder, cone, sphere, torus) has a normal that varies across it, so
+    // there is no single frame to align to. Refused with a reason; the current UCS is untouched.
+    log.push_back("UCS Object - that face is curved. Pick a flat face to align the UCS to.");
+    return false;
+  }
+
+  // Face plane -> UCS XY, face outward normal -> UCS +Z, honouring Surface::inward exactly as the
+  // kernel does. A direction is identical in storage and world space (they differ by a translation
+  // only), so the normal needs no rebase; the origin does.
+  ray3d::Vec3 n = f.surface.frame.zAxis;
+  if (f.surface.inward)
+    n = ray3d::Scale(n, -1.0);
+  double wx = 0.;
+  double wy = 0.;
+  CadCoord::WorldFromLocal(st, pick.point.x, pick.point.y, &wx, &wy);
+  const ray3d::Vec3 originWorld{wx, wy, pick.point.z};
+  if (!ucs::FromNormal(originWorld, n, out)) {
+    log.push_back("UCS Object - that face has no usable normal to align to.");
+    return false;
+  }
+  return true;
+}
+
 // Derive a UCS from the entity under \p pickWorld. Returns false, with a reason logged, for the
-// entity kinds whose alignment is not defined here.
+// entity kinds whose alignment is not defined here. \p pickRay, when valid, lets a planar face of a
+// B-rep solid be the target (issue #156) — the true-3D pick a flattened work-plane XY cannot do.
 static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pickWorld,
-                              std::vector<std::string>& log, ucs::Ucs* out) {
+                              std::vector<std::string>& log, ucs::Ucs* out,
+                              const ray3d::Ray* pickRay) {
+  if (pickRay && pickRay->valid()) {
+    bool handledBySolid = false;
+    if (UcsFromSolidFacePick(st, *pickRay, log, out, &handledBySolid))
+      return true;
+    if (handledBySolid)
+      return false;  // a solid face was clicked and refused — do not also try the 2D entity pick
+  }
+
   // The pick runs in storage space, like every other pick in the application.
   float px = 0.f;
   float py = 0.f;
@@ -373,12 +512,13 @@ static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pick
       return true;
     }
     default:
-      // Meshes, surfaces, feature lines, polylines and hatch fills. A mesh or a solid WOULD be the
-      // most useful Object target of all - "align to this face" is the 3D modelling workflow the
-      // issue names - but it needs face-level picking, which does not exist: PickClosestCadEntity
-      // resolves a mesh as one object with no face identity. Refused with a reason, not guessed at.
-      log.push_back("UCS Object - alignment to that object type is not supported yet. Faces of meshes "
-                    "and solids need face-level picking, which this build does not have.");
+      // Meshes, surfaces, feature lines and hatch fills. A planar face of a B-rep SOLID is now a
+      // valid target and is handled above via the sub-object pick (issue #156); a mesh or a
+      // triangulated surface still resolves as one object with no planar-face identity, so there is
+      // nothing here to align to. Refused with a reason, not guessed at (REQ-201).
+      log.push_back("UCS Object - alignment to that object type is not supported. Meshes and "
+                    "surfaces have no face to align to; click a line, arc, circle, ellipse, text, "
+                    "or a flat face of a solid.");
       return false;
   }
 }
@@ -846,7 +986,8 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
   }
 }
 
-bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log) {
+bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, std::vector<std::string>& log,
+                            const ray3d::Ray* pickRay) {
   if (st.active != AppCommandState::Kind::Ucs)
     return false;
   switch (st.ucsPhase) {
@@ -898,7 +1039,7 @@ bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, 
     }
     case AppCommandState::UcsPhase::WaitObjectPick: {
       ucs::Ucs next;
-      if (!UcsFromObjectPick(st, worldPoint, log, &next))
+      if (!UcsFromObjectPick(st, worldPoint, log, &next, pickRay))
         return true;  // stay in the pick phase so the user can try another object
       SetActiveUcs(st, next, log);
       EndUcsCommand(st);

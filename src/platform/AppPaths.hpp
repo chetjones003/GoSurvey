@@ -32,5 +32,5 @@ std::filesystem::path ResolveBundledAssetPath(const std::filesystem::path& relat
 /// beside the exe or cwd.
 std::filesystem::path ResolveAppLogoPngPath();
 
-/// Default startup workspace: `resources/default-template.gs` beside the executable (or cwd).
-[[nodiscard]] std::filesystem::path ResolveDefaultWorkspaceTemplateGsPath();
+/// Default startup workspace template: `resources/default-template.gst` beside the executable (or cwd).
+[[nodiscard]] std::filesystem::path ResolveDefaultWorkspaceTemplateGstPath();

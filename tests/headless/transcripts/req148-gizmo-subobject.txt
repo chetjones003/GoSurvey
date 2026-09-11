@@ -1,0 +1,141 @@
+# GitHub issue #148 acceptance 4 (Phase 5 slice 4c) — the gizmo on a SUB-OBJECT selection.
+#
+#   "The gizmo operates on a sub-object selection and matches the equivalent typed command
+#    within REQ-101."
+#
+# The typed command is PRESSPULL (REQ-319), so this file's central assertion is that a gizmo drag
+# and `PRESSPULL <the same distance>` leave a solid with identical mass properties. They do because
+# there is ONE commit path — `CadApplyPushPull` — not because two implementations agree today. That
+# is the same construction slice 4b used to tie the entity gizmo to typed MOVE.
+#
+# The gizmo has ONE handle on a face, along that face's own normal, because `brep::PushPullFace`
+# takes a distance along the normal and nothing else. `EXPECT GIZMOAXES` is that stated as a number:
+# a second handle would be offering a direction the kernel cannot move a face in.
+#
+# Handle geometry, for the reader checking the arithmetic: zoom 1 gives an ortho half-height of 50
+# world units and the verb gives a windowless run a 1200 x 700 viewport, so the 70-pixel handle is
+# 10 units long and the 7-pixel grab aperture is 1 unit.
+
+# --- The mode is derived from the selection, and says so ------------------------------------------
+
+NEW
+# Orbited FIRST. The box's top face points at the camera in plan view, so its handle would be
+# end-on: every point of it projects to one pixel, no distance is expressible, and the pick refuses
+# it. That is slice 4b's rule and it applies unchanged here.
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# Nothing selected: no gizmo at all.
+EXPECT GIZMO 0
+EXPECT GIZMOAXES 0
+
+# A whole-entity selection: the slice 4b gizmo, three UCS handles.
+BOX -15 -10 15 10
+EXPECT SELECTED 1
+EXPECT GIZMO 1
+EXPECT GIZMOAXES 3
+
+# A Ctrl+click on the top FACE. Explicit zero tolerances so the pick is the face and not the edge a
+# few units away — the same reason req318 and req319 state theirs.
+SUBOBJECT 0 0 8 0 0
+EXPECT SUBOBJECTFACES 1
+# The two selections are mutually exclusive (D-2026-09-04-a), so the entity gizmo is gone and the
+# face gizmo has taken its place: still one gizmo, now with ONE handle.
+EXPECT SELECTED 0
+EXPECT GIZMO 1
+EXPECT GIZMOAXES 1
+
+# --- The drag, and what it must equal --------------------------------------------------------------
+# The top face's centroid is (0,0,8) and its normal is +Z, so the handle runs from (0,0,8) to
+# (0,0,18). GRAB 5 along it, DROP 17 along it: the drag is the DIFFERENCE, 12.
+#
+# A 20 x 10 box pushed from 8 to 20 tall: volume 20*10*20 = 4000, area 2(200 + 400 + 200) = 1600.
+
+GIZMO GRAB 0 0 13
+EXPECT GIZMOAXIS 0
+# Arming is not acting.
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+GIZMO DROP 0 0 25
+EXPECT GIZMOAXIS -1
+EXPECT SOLIDPROPS 0 4000 1600 8 12 6
+
+# One Ctrl+Z, one step — `CadApplyPushPull` owns the snapshot, so the drag inherits the undo
+# behaviour PRESSPULL already had rather than growing its own.
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- The equivalent typed command, on the same solid -----------------------------------------------
+# Issue #148 acceptance 4, stated outright.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 0 8 0 0
+EXPECT SUBOBJECTFACES 1
+CMD PRESSPULL 12
+EXPECT SOLIDPROPS 0 4000 1600 8 12 6
+
+# --- An EDGE gets TWO handles and a VERTEX gets THREE (REQ-333) -------------------------------------
+# This block asserted NO gizmo for either until 2026-09-09, on reasoning that was correct at the
+# time: `brep::PushPullFace` was the only solid edit the kernel had, so a handle on an edge or a
+# vertex would have advertised a move that could not happen (D-2026-09-05-b). `brep::MoveEdge` and
+# `brep::MoveVertex` are now the second and third, so the premise changed and the assertions with it.
+#
+# The COUNTS are the part worth pinning, because each is a statement about degrees of freedom:
+#   * an edge has TWO — the two adjacent planes each slide along their own normal, and together they
+#     span exactly the plane perpendicular to the edge. There is no third, because the along-the-edge
+#     direction is not a motion: an edge slid along its own line is the same edge;
+#   * a vertex has THREE — three planes meet, so every direction is reachable.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+# The top face's near edge, picked by giving the EDGE a tolerance and the face none.
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+EXPECT GIZMO 1
+EXPECT GIZMOAXES 2
+
+# A vertex, on a FRESH drawing. It used to share the block above, and that hid something: a second
+# pick ADDS to the sub-object selection rather than replacing it, so the "vertex" case was really a
+# {edge, vertex} case. The old assertion here was `EXPECT GIZMO 0`, which passed either way, because
+# the pre-REQ-333 code returned None for ANY selection that was not a single face and so could not
+# tell the two apart. Asserting `SUBOBJECTS 1` is what makes this a vertex case at all.
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 10 5 8 0.5 0.5
+EXPECT SUBOBJECTVERTICES 1
+EXPECT SUBOBJECTS 1
+EXPECT GIZMO 1
+EXPECT GIZMOAXES 3
+# And the solid is untouched by any of it.
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- Two sub-objects together get NO gizmo, and that is its own claim -------------------------------
+# There is no single thing to move, so there is nothing for a handle to mean. Worth asserting
+# separately now that a lone edge and a lone vertex each DO get one — before REQ-333 this case and
+# those two were indistinguishable.
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTS 2
+EXPECT GIZMO 0
+EXPECT GIZMOAXES 0
+
+# --- A face drag that goes nowhere is a cancel -----------------------------------------------------
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 0 8 0 0
+GIZMO GRAB 0 0 13
+EXPECT GIZMOAXIS 0
+GIZMO CANCEL
+EXPECT GIZMOAXIS -1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# The face is still selected, so the gizmo is still there to grab again.
+EXPECT SUBOBJECTFACES 1
+EXPECT GIZMO 1
+
+CHECK ALL

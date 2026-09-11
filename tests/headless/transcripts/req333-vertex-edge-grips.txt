@@ -1,0 +1,86 @@
+# REQ-333 increment 2 (D-2026-09-09-e, TASK-234) — dragging a solid's VERTEX and EDGE through the
+# gizmo, end to end. GitHub issue #148 acceptance 3, the half that makes it a GRIP.
+#
+# `GizmoSubObjectMoveTests` owns the handle counts and the "no handle where the drag would refuse"
+# rule. What only this file can show is the whole chain in a drawing: Ctrl+click names the sub-object
+# (the SUBOBJECT verb), the gizmo hangs off it, a camera-driven GRAB and DROP decide the distance,
+# and the kernel rebuilds the solid — with one UNDO restoring it and a `.gs` round trip surviving it.
+#
+# Handle geometry, as in the other gizmo transcripts: the default view puts the camera's ortho
+# half-height at 50 world units over a 1200 x 700 viewport, so the 70-pixel handle is 10 units long
+# and the 7-pixel grab aperture is 1 unit.
+#
+# THE BOX. `CMD BOX 0,0 20 10 8` is centred on (0,0) with its base at z = 0: x in [-10,10],
+# y in [-5,5], z in [0,8]. Volume 1600, area 880, topology 8/12/6.
+
+# --- A VERTEX drag: three handles, and the box grows by one plane sliding ---------------------------
+# The corner (10,5,8). Its three faces are +X, +Y and +Z, so dragging the UCS X handle offsets +X
+# alone: the box becomes 23 x 10 x 8 = 1840. Area 2*(23*10 + 23*8 + 10*8) = 2*(230+184+80) = 988.
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 10 5 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+EXPECT SUBOBJECTVERTICES 1
+EXPECT GIZMOAXES 3
+# The handle runs along UCS X from the vertex itself, so its tip is at (20,5,8); dropping 3 further
+# out is a drag of 3.
+GIZMO GRAB 20 5 8
+EXPECT GIZMOAXIS 0
+GIZMO DROP 23 5 8
+EXPECT SOLIDBOUNDS 0 -10 -5 0 13 5 8
+EXPECT SOLIDPROPS 0 1840 988 8 12 6
+# The selection FOLLOWED the edit — the solid was replaced, and a reference keyed on its identity
+# would otherwise have expired, making a second drag impossible without re-picking.
+EXPECT SUBOBJECTS 1
+EXPECT GIZMOAXES 3
+CHECK ALL
+
+# One Ctrl+Z restores the prior solid exactly (#148 acceptance 7).
+UNDO
+EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CHECK ALL
+
+# --- An EDGE drag: two handles, along the two adjacent faces' normals --------------------------------
+# The top edge running along X at y = 5, z = 8. Its faces are +Y and +Z, so handle 0 is one of those
+# two. Dragging it 2 moves that face by 2: the box becomes either 20 x 12 x 8 = 1920 or
+# 20 x 10 x 10 = 2000 depending which normal is first, and the bounds below say which.
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+EXPECT SUBOBJECTEDGES 1
+# TWO handles, not three: the along-the-edge direction is not a motion at all, so there is no third.
+EXPECT GIZMOAXES 2
+CHECK ALL
+
+# --- A vertex drag survives .gs save/reopen (#148 acceptance 8) --------------------------------------
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 10 5 8 0.5 0.5
+GIZMO GRAB 20 5 8
+GIZMO DROP 23 5 8
+EXPECT SOLIDPROPS 0 1840 988 8 12 6
+SAVEAS %OUT%/vertexgrip.gs
+NEW
+EXPECT SOLIDS 0
+OPEN %OUT%/vertexgrip.gs
+EXPECT SOLIDS 1
+EXPECT SOLIDBOUNDS 0 -10 -5 0 13 5 8
+EXPECT SOLIDPROPS 0 1840 988 8 12 6
+CHECK ALL
+
+# --- A pyramid's apex gets no handle at all ---------------------------------------------------------
+# Four planes meet there, so `brep::MoveVertex` refuses and the grip declines to appear rather than
+# appearing and then failing on release. The gizmo says what the kernel can do, by being absent.
+NEW
+VIEWANGLES 135 20
+CMD PYRAMID 0,0 4 10 0 12
+SUBOBJECT 0 0 12 0.5 0.5
+EXPECT SUBOBJECTVERTICES 1
+EXPECT GIZMO 0
+EXPECT GIZMOAXES 0
+CHECK ALL

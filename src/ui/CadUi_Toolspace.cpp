@@ -28,17 +28,19 @@ constexpr ImGuiTreeNodeFlags kFolder =
 
 constexpr int kTsPopupColors = 7;
 
-// Neutral light panel — no blue cast. Near-black ink on light-gray paper for the tree; the frame
-// and side-tab strip are the app's own achromatic chrome grays; selection is the app amber accent.
-const ImVec4 kTsPaper(0.949f, 0.949f, 0.949f, 1.f);
+// Light paper tree on steel-blue tinted chrome; selection uses product blue.
+// Cool soft gray — readable on dark chrome without a harsh pure-white panel.
+const ImVec4 kTsPaper(0.84f, 0.85f, 0.88f, 1.f);
+const ImVec4 kTsPaperHover(0.87f, 0.88f, 0.91f, 1.f);
+const ImVec4 kTsPaperActive(0.81f, 0.82f, 0.85f, 1.f);
 const ImVec4 kTsInk(0.13f, 0.13f, 0.13f, 1.f);
 const ImVec4 kTsInkMuted(0.42f, 0.42f, 0.42f, 1.f);
-const ImVec4 kTsLines(0.58f, 0.58f, 0.58f, 1.f);       // thin gray tree connector rules
-const ImVec4 kTsChrome(0.184f, 0.184f, 0.184f, 1.f);   // #2F2F2F — app ground
-const ImVec4 kTsChromeHi(0.205f, 0.205f, 0.205f, 1.f); // #343434 — app title/tab strip
-const ImVec4 kTsAccent(0.878f, 0.682f, 0.369f, 1.f);   // #E0AE5E — app accent
-const ImVec4 kTsSel(0.878f, 0.682f, 0.369f, 0.30f);
-const ImVec4 kTsSelHov(0.878f, 0.682f, 0.369f, 0.44f);
+const ImVec4 kTsLines(0.58f, 0.58f, 0.58f, 1.f);
+const ImVec4 kTsChrome = BlueTintNeutral(ImVec4(0.184f, 0.184f, 0.184f, 1.f), kCadThemeBlueTintDark);
+const ImVec4 kTsChromeHi = BlueTintNeutral(ImVec4(0.205f, 0.205f, 0.205f, 1.f), kCadThemeBlueTintDark);
+const ImVec4 kTsAccent(0.26f, 0.56f, 0.86f, 1.f);
+const ImVec4 kTsSel(0.26f, 0.56f, 0.86f, 0.30f);
+const ImVec4 kTsSelHov(0.26f, 0.56f, 0.86f, 0.44f);
 
 // Load-once cache of resources/icons/<name>.png as a GL texture. 0 on failure (row falls back to
 // text only). Needs a live GL context — true during UI draw.
@@ -119,8 +121,9 @@ bool SideTab(const char* id, const char* label, bool selected, float stripW) {
   const bool pressed = ImGui::IsItemClicked();
   const bool hovered = ImGui::IsItemHovered();
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  const ImU32 bg = selected ? IM_COL32(242, 242, 242, 255)
-                            : (hovered ? IM_COL32(72, 72, 72, 255) : IM_COL32(52, 52, 52, 255));
+  const ImU32 bg =
+      selected ? ImGui::ColorConvertFloat4ToU32(kTsPaper)
+               : (hovered ? IM_COL32(72, 72, 72, 255) : IM_COL32(52, 52, 52, 255));
   const ImU32 fg = selected ? IM_COL32(20, 20, 20, 255) : IM_COL32(215, 215, 215, 255);
   dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bg);
   if (selected)
@@ -166,8 +169,8 @@ std::string NextSurfaceName(const AppCommandState& cmd) {
 }
 
 void PushTsPopupColors() {
-  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.97f, 0.97f, 0.97f, 0.99f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.97f, 0.97f, 0.97f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(kTsPaper.x, kTsPaper.y, kTsPaper.z, 0.99f));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, kTsPaper);
   ImGui::PushStyleColor(ImGuiCol_Text, kTsInk);
   ImGui::PushStyleColor(ImGuiCol_TextDisabled, kTsInkMuted);
   ImGui::PushStyleColor(ImGuiCol_Header, kTsSel);
@@ -203,30 +206,31 @@ void ZoomToSurveyPoints(AppCommandState& cmd, std::vector<std::string>* log) {
       log->push_back("TOOLSPACE — no survey points to zoom to.");
     return;
   }
-  float mnX = cmd.surveyPoints[0].easting;
-  float mxX = mnX;
-  float mnY = cmd.surveyPoints[0].northing;
-  float mxY = mnY;
+  double mnX = cmd.surveyPoints[0].easting;
+  double mxX = mnX;
+  double mnY = cmd.surveyPoints[0].northing;
+  double mxY = mnY;
   for (const SurveyPoint& p : cmd.surveyPoints) {
     mnX = std::min(mnX, p.easting);
     mxX = std::max(mxX, p.easting);
     mnY = std::min(mnY, p.northing);
     mxY = std::max(mxY, p.northing);
   }
-  if (mxX - mnX < 1.f) {
-    mnX -= 5.f;
-    mxX += 5.f;
+  if (mxX - mnX < 1.0) {
+    mnX -= 5.0;
+    mxX += 5.0;
   }
-  if (mxY - mnY < 1.f) {
-    mnY -= 5.f;
-    mxY += 5.f;
+  if (mxY - mnY < 1.0) {
+    mnY -= 5.0;
+    mxY += 5.0;
   }
   cmd.pendingZoomExtents = false;
   cmd.pendingZoomWindow = true;
-  cmd.pendingZoomMnX = mnX;
-  cmd.pendingZoomMxX = mxX;
-  cmd.pendingZoomMnY = mnY;
-  cmd.pendingZoomMxY = mxY;
+  // Viewport pan/zoom targets stay float (render-only viewport state) — narrow here.
+  cmd.pendingZoomMnX = static_cast<float>(mnX);
+  cmd.pendingZoomMxX = static_cast<float>(mxX);
+  cmd.pendingZoomMnY = static_cast<float>(mnY);
+  cmd.pendingZoomMxY = static_cast<float>(mxY);
 }
 
 void PanToSurveyPoints(AppCommandState& cmd, std::vector<std::string>* log) {
@@ -260,13 +264,13 @@ void OpenSurfaceProperties(AppCommandState& cmd, int si) {
 bool SurfacePlanBounds(const CadSurface& s, float* mnX, float* mxX, float* mnY, float* mxY) {
   if (!s.tin || s.tin->vertsXyz.size() < 3)
     return false;
-  *mnX = *mxX = s.tin->vertsXyz[0];
-  *mnY = *mxY = s.tin->vertsXyz[1];
+  *mnX = *mxX = static_cast<float>(s.tin->vertsXyz[0]);
+  *mnY = *mxY = static_cast<float>(s.tin->vertsXyz[1]);
   for (size_t i = 0; i + 2 < s.tin->vertsXyz.size(); i += 3) {
-    *mnX = std::min(*mnX, s.tin->vertsXyz[i]);
-    *mxX = std::max(*mxX, s.tin->vertsXyz[i]);
-    *mnY = std::min(*mnY, s.tin->vertsXyz[i + 1]);
-    *mxY = std::max(*mxY, s.tin->vertsXyz[i + 1]);
+    *mnX = std::min(*mnX, static_cast<float>(s.tin->vertsXyz[i]));
+    *mxX = std::max(*mxX, static_cast<float>(s.tin->vertsXyz[i]));
+    *mnY = std::min(*mnY, static_cast<float>(s.tin->vertsXyz[i + 1]));
+    *mxY = std::max(*mxY, static_cast<float>(s.tin->vertsXyz[i + 1]));
   }
   return true;
 }
@@ -1037,16 +1041,21 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
 
   ImGui::SetNextWindowSize(ImVec2(540.f, 520.f), ImGuiCond_FirstUseEver);
   bool open = cmd.showCreateSurfaceWindow;
+  PushProductDialogAccent();
   if (!ImGui::Begin("Create Surface", &open, ImGuiWindowFlags_NoCollapse)) {
     cmd.showCreateSurfaceWindow = open;
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  PaintProductDialogAccentFrame();
   cmd.showCreateSurfaceWindow = open;
   if (!open) {
     ImGui::End();
+    PopProductDialogAccent();
     return;
   }
+  BeginStyledDialog();
 
   ImGui::TextUnformatted("Type");
   ImGui::SameLine(140.f);
@@ -1141,13 +1150,13 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
     ImGui::SetTooltip("Layer manager");
 
   ImGui::Spacing();
-  ImGui::PushStyleColor(ImGuiCol_TableRowBg, ImVec4(1.f, 0.97f, 0.82f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, ImVec4(1.f, 0.99f, 0.90f, 1.f));
+  PushPropertyPaperColors(cmd.displayColorThemeIdx);
   if (ImGui::BeginTable("##csprops", 2,
                         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
     ImGui::TableSetupColumn("Properties", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.62f);
     ImGui::TableHeadersRow();
+    PushPropertyPaperBodyText(cmd.displayColorThemeIdx);
 
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
@@ -1190,9 +1199,10 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
       }
       ImGui::EndCombo();
     }
+    PopPropertyPaperBodyText();
     ImGui::EndTable();
   }
-  ImGui::PopStyleColor(2);
+  PopPropertyPaperColors();
 
   ImGui::Spacing();
   ImGui::TextWrapped("Selecting OK will create a new surface which will appear in the list of surfaces in Prospector.");
@@ -1205,7 +1215,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   const float bw = 88.f;
   ImGui::SetCursorPosX(ImGui::GetWindowWidth() - (bw + 8.f) * 2.f);
   ImGui::BeginDisabled(name.empty());
-  if (ImGui::Button("OK", ImVec2(bw, 0.f))) {
+  if (StyledButton("OK", ImVec2(bw, 0.f), /*primary=*/true)) {
     if (FindSurfaceIndex(cmd, name) >= 0) {
       error = "A surface named \"" + name + "\" already exists.";
     } else if (kind == CreateSurfaceKind::TinVolume || kind == CreateSurfaceKind::GridVolume) {
@@ -1265,10 +1275,11 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(bw, 0.f)))
+  if (StyledButton("Cancel", ImVec2(bw, 0.f)))
     cmd.showCreateSurfaceWindow = false;
 
   ImGui::End();
+  PopProductDialogAccent();
 }
 
 }  // namespace
@@ -1281,9 +1292,9 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
 
   ImGui::SetNextWindowSize(ImVec2(300.f, 640.f), ImGuiCond_FirstUseEver);
   bool open = cmd.showToolspaceWindow;
-  ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.12f, 0.12f, 0.12f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.10f, 0.10f, 0.10f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, ImVec4(0.12f, 0.12f, 0.12f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, BlueTintNeutral(ImVec4(0.12f, 0.12f, 0.12f, 1.f), kCadThemeBlueTintDark));
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, BlueTintNeutral(ImVec4(0.10f, 0.10f, 0.10f, 1.f), kCadThemeBlueTintDark));
+  ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, BlueTintNeutral(ImVec4(0.12f, 0.12f, 0.12f, 1.f), kCadThemeBlueTintDark));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, kTsChrome);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.f, 6.f));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.f, 6.f));
@@ -1307,10 +1318,10 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::BeginChild("##ts_main", ImVec2(-tabW - 4.f, 0.f), false);
 
   ImGui::PushStyleColor(ImGuiCol_FrameBg, kTsPaper);
-  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.91f, 0.91f, 0.91f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.89f, 0.89f, 0.89f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, kTsPaperHover);
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, kTsPaperActive);
   ImGui::PushStyleColor(ImGuiCol_Text, kTsInk);
-  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.97f, 0.97f, 0.97f, 0.99f));
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(kTsPaper.x, kTsPaper.y, kTsPaper.z, 0.99f));
   ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.24f, 0.24f, 1.f));
   ImGui::PushStyleColor(ImGuiCol_Header, kTsSel);
   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kTsSelHov);
@@ -1384,7 +1395,7 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::EndChild();
 
   ImGui::SameLine(0.f, 4.f);
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.14f, 0.14f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, BlueTintNeutral(ImVec4(0.14f, 0.14f, 0.14f, 1.f), kCadThemeBlueTintDark));
   ImGui::BeginChild("##ts_tabs", ImVec2(tabW, 0.f), false, ImGuiWindowFlags_NoScrollbar);
   if (SideTab("##tab_prospector", "Prospector", cmd.toolspaceTab == AppCommandState::ToolspaceTab::Prospector,
               tabW))

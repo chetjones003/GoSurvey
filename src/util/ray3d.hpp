@@ -36,6 +36,48 @@ inline Vec3 Normalize(const Vec3& a) {
   return {a.x / len, a.y / len, a.z / len};
 }
 
+/// Rodrigues' rotation of DIRECTION \p v about UNIT axis \p axisUnit by \p angleRad, radians
+/// positive by the right-hand rule. A direction has no position, so there is no axis-point
+/// parameter here — that is exactly what distinguishes this from \ref RotatePointAboutAxis below,
+/// and why a plane NORMAL (a direction) and a plane's CENTRE (a point) are rotated by two different
+/// calls even though they share one angle and one axis (REQ-328).
+///
+/// \p axisUnit is trusted to already be a unit vector — every call site already has one (a plane
+/// normal, a UCS Z axis) and re-normalizing here would hide a degenerate axis instead of surfacing
+/// it. Equivalent to `brep.cpp`'s file-private `RotateAbout` (SWEEP/LOFT framing) — not merged into
+/// one symbol, since that one has no reason to leave `brep.cpp` and this one has every reason to be
+/// callable without a `Solid` in scope.
+inline Vec3 RotateVectorAboutAxis(const Vec3& v, const Vec3& axisUnit, double angleRad) {
+  const double c = std::cos(angleRad);
+  const double s = std::sin(angleRad);
+  return Add(Add(Scale(v, c), Scale(Cross(axisUnit, v), s)), Scale(axisUnit, Dot(axisUnit, v) * (1.0 - c)));
+}
+
+/// The same rotation, applied to a POINT about the LINE through \p axisPoint with unit direction
+/// \p axisUnit: translate the point so the axis passes through the origin, rotate the resulting
+/// direction, translate back. Reduces to a plain about-the-origin rotation when \p axisPoint is
+/// {0,0,0} — the case \ref RotateVectorAboutAxis already covers directly, which is why direction and
+/// point are not the same function with an ignored parameter: a caller rotating a plane normal has
+/// no axis point to give it, and a caller rotating a centre point always does.
+inline Vec3 RotatePointAboutAxis(const Vec3& p, const Vec3& axisPoint, const Vec3& axisUnit,
+                                 double angleRad) {
+  return Add(axisPoint, RotateVectorAboutAxis(Sub(p, axisPoint), axisUnit, angleRad));
+}
+
+/// Reflect a DIRECTION through a plane with unit normal \p planeUnit (Householder, no translation):
+/// v' = v - 2 (v . n) n. \p planeUnit is trusted to be a unit vector, the same contract
+/// \ref RotateVectorAboutAxis keeps for its axis.
+inline Vec3 ReflectVectorAcrossPlane(const Vec3& v, const Vec3& planeUnit) {
+  return Sub(v, Scale(planeUnit, 2.0 * Dot(v, planeUnit)));
+}
+
+/// Reflect a POINT through the plane { x : (x - \p planePoint) . \p planeUnit = 0 }: subtract the
+/// plane point, reflect the direction, add it back — the point/direction split \ref RotatePointAboutAxis
+/// makes, and for the same reason (a caller reflecting a plane normal has no plane point to give).
+inline Vec3 ReflectPointAcrossPlane(const Vec3& p, const Vec3& planePoint, const Vec3& planeUnit) {
+  return Add(planePoint, ReflectVectorAcrossPlane(Sub(p, planePoint), planeUnit));
+}
+
 /// A ray: a point and a direction. \c dir is expected normalized; a zero \c dir marks it invalid.
 struct Ray {
   Vec3 origin;
@@ -76,6 +118,79 @@ inline bool RayPlaneIntersect(const Ray& ray, const Plane& plane, Vec3* outHit, 
   return true;
 }
 
+/// Intersect \p ray with the triangle \p a → \p b → \p c. Writes the hit point to \p outHit and
+/// returns true only for a real intersection **in front of** the ray origin.
+///
+/// Möller–Trumbore, in `double`. This is the test a solid's FACES are picked with, and it is the
+/// piece REQ-313 deliberately left for its first consumer: a face carries an analytic surface, but
+/// what a cursor can actually be tested against is the tessellation, so the pick finds the triangle
+/// and `brep::Tessellation::triFace` names the face that triangle belongs to.
+///
+/// **The hit must then be projected onto that face's analytic surface**
+/// (`brep::ClosestPointOnSurface`); that step is part of the pick, not a refinement of it. Measured
+/// on a cylinder tessellated at the shipping chord tolerance, the raw triangle hit sits 0.00986 ft
+/// off the true surface — inside REQ-101's ±0.01 ft, but spending 98.6% of the budget before any
+/// other error joins in. The projection takes it to 1e-15 ft at the origin and 1e-10 ft at
+/// state-plane magnitude (the double floor there), which is the difference between a face pick that
+/// merely passes a tolerance test and one that is actually exact.
+///
+/// Returns false — leaving \p outHit untouched — for a degenerate ray, a degenerate triangle, a ray
+/// parallel to the triangle's plane, a miss, and a hit behind the origin. Callers MUST honour the
+/// return value, for the reason \ref RayPlaneIntersect gives: a click that hits nothing has no world
+/// coordinate, and inventing one puts geometry where the user never pointed (REQ-201).
+///
+/// \p outT receives the ray parameter of the hit, which is what depth-orders one candidate triangle
+/// against another; \p outU and \p outV the barycentric coordinates of the hit, free here and needed
+/// by a caller that interpolates a per-vertex normal across the triangle.
+inline bool RayTriangleIntersect(const Ray& ray, const Vec3& a, const Vec3& b, const Vec3& c,
+                                 Vec3* outHit, double* outT = nullptr, double* outU = nullptr,
+                                 double* outV = nullptr) {
+  if (!outHit || !ray.valid())
+    return false;
+  const Vec3 e1 = Sub(b, a);
+  const Vec3 e2 = Sub(c, a);
+  const Vec3 pv = Cross(ray.dir, e2);
+  const double det = Dot(e1, pv);
+  // A near-zero determinant means the ray lies in (or runs parallel to) the triangle's plane, and
+  // the same test catches a degenerate triangle whose two edges are collinear. The threshold is
+  // **scale-relative**: an absolute epsilon would reject a legitimate small triangle at survey
+  // coordinates, which is precisely where a 0.25 ft feature at easting 2e6 lives.
+  const double scale = Length(e1) * Length(e2);
+  if (!(std::fabs(det) > 1e-12 * (scale > 0.0 ? scale : 1.0)))
+    return false;
+  const double inv = 1.0 / det;
+  const Vec3 tv = Sub(ray.origin, a);
+  // The barycentric tests are given a hair of slack rather than being exact. Within one face the
+  // tessellation is indexed, so adjacent triangles share vertices exactly and no slack is needed;
+  // ACROSS faces it is deliberately unwelded ("a solid's edges are creases" — brep.hpp), so a ray
+  // through a shared boundary is decided by two independent evaluations. Erring outward makes such a
+  // ray hit BOTH triangles and lets the nearest win, instead of falling through a hairline crack and
+  // reporting a miss on a solid the user clicked squarely. Any point this admits is off the triangle
+  // by less than the slack and is projected onto the analytic surface afterwards regardless.
+  constexpr double kBaryEps = 1e-9;
+  const double u = Dot(tv, pv) * inv;
+  if (u < -kBaryEps || u > 1.0 + kBaryEps)
+    return false;
+  const Vec3 qv = Cross(tv, e1);
+  const double v = Dot(ray.dir, qv) * inv;
+  if (v < -kBaryEps || u + v > 1.0 + kBaryEps)
+    return false;
+  const double t = Dot(e2, qv) * inv;
+  if (!(t > 0.0) || !std::isfinite(t))
+    return false;  // behind the origin, or non-finite from an extreme input
+  const Vec3 hit = ray.at(t);
+  if (!std::isfinite(hit.x) || !std::isfinite(hit.y) || !std::isfinite(hit.z))
+    return false;
+  *outHit = hit;
+  if (outT)
+    *outT = t;
+  if (outU)
+    *outU = u;
+  if (outV)
+    *outV = v;
+  return true;
+}
+
 /// Shortest distance from \p ray to the finite segment \p a → \p b.
 ///
 /// This is the orbited-camera analogue of "how far is the cursor from this line?": under a plan
@@ -95,7 +210,13 @@ inline double RaySegmentDistance(const Ray& ray, const Vec3& a, const Vec3& b, d
   const double segLen2 = Dot(seg, seg);
   if (segLen2 < 1e-24) {  // the "segment" is a point
     const Vec3 ap = Sub(a, ray.origin);
-    const double t = Dot(ap, ray.dir);
+    double t = Dot(ap, ray.dir);
+    // Clamped for the same reason the non-degenerate path below clamps, and RayPointDistance
+    // with it: a point behind the ray origin must be measured FROM the origin. Left unclamped,
+    // this returned a negative outT, which — per this function's own "useful for
+    // depth-ordering picks" — sorts as nearer than everything actually in front of the camera.
+    if (t < 0.0)
+      t = 0.0;
     const Vec3 closest = ray.at(t);
     if (outT)
       *outT = t;
@@ -134,6 +255,42 @@ inline double RaySegmentDistance(const Ray& ray, const Vec3& a, const Vec3& b, d
   if (outS)
     *outS = s;
   return Length(Sub(onSeg, onRay));
+}
+
+/// The point on the INFINITE line through \p linePoint along \p lineDir closest to \p ray (skew-line
+/// closest approach, unclamped — unlike \ref RaySegmentDistance's segment). \p outDegenerate, if
+/// given, is set true when the line runs parallel to the ray (no well-conditioned closest point
+/// exists), in which case \p linePoint itself is returned unchanged.
+///
+/// This is the ray/PLANE-intersection alternative for a 1-D constraint (e.g. an ORTHO-locked axis):
+/// intersecting the ray with the full plane the line lies in and then projecting onto the line is
+/// numerically unstable whenever the plane grazes the ray, even though the LINE itself is nowhere
+/// near parallel to it — a tiny screen-pixel move blows up into an enormous, erratic in-plane swing
+/// (issue #386). Measuring against the line directly sidesteps that: it degenerates only when the
+/// LINE itself is (nearly) parallel to the ray, an unavoidable case no formulation escapes (looking
+/// straight down the locked axis has no length to show, in this app or in AutoCAD).
+inline Vec3 ClosestPointOnLineToRay(const Ray& ray, const Vec3& linePoint, const Vec3& lineDir,
+                                    bool* outDegenerate = nullptr) {
+  if (outDegenerate)
+    *outDegenerate = false;
+  const Vec3 d = Normalize(lineDir);
+  if (!ray.valid() || Dot(d, d) < 0.5) {
+    if (outDegenerate)
+      *outDegenerate = true;
+    return linePoint;
+  }
+  const Vec3 w0 = Sub(linePoint, ray.origin);
+  const double b = Dot(d, ray.dir);     // ray.dir is unit per the Ray contract
+  const double dDot = Dot(d, w0);
+  const double eDot = Dot(ray.dir, w0);
+  const double denom = 1.0 - b * b;     // == a*c - b*b with a = d.d = 1, c = ray.dir.ray.dir = 1
+  if (!(std::fabs(denom) > 1e-9)) {
+    if (outDegenerate)
+      *outDegenerate = true;
+    return linePoint;
+  }
+  const double t = (b * eDot - dDot) / denom;
+  return Add(linePoint, Scale(d, t));
 }
 
 /// Shortest distance from \p ray to \p p. \p outT receives the ray parameter of closest approach.

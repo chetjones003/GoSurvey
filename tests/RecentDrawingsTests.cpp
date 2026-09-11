@@ -105,6 +105,25 @@ TEST_CASE("Remove drops a path; removing an absent path is a no-op", "[req308]")
   std::filesystem::remove(store);
 }
 
+TEST_CASE("Clear empties a populated store and Note still works after", "[req308]") {
+  const auto store = TempStore("clear");
+  recent::Note(store, "C:/jobs/a.dwg", "", 100);
+  recent::Note(store, "C:/jobs/b.dwg", "", 200);
+  REQUIRE(recent::Load(store).size() == 2);
+
+  recent::Clear(store);
+  CHECK(recent::Load(store).empty());
+
+  recent::Clear(store);  // idempotent
+  CHECK(recent::Load(store).empty());
+
+  recent::Note(store, "C:/jobs/c.dwg", "", 300);
+  auto v = recent::Load(store);
+  REQUIRE(v.size() == 1);
+  CHECK(v[0].path == "C:/jobs/c.dwg");
+  std::filesystem::remove(store);
+}
+
 TEST_CASE("a missing or corrupt store loads as an empty list", "[req308]") {
   const auto missing = TempStore("missing");
   CHECK(recent::Load(missing).empty());

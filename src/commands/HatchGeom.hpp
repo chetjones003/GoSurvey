@@ -82,11 +82,14 @@ inline bool OuterBounds(const CadFilledRegion& fr, float* mnX, float* mnY, float
   return true;
 }
 
-/// Translate every loop vertex by (dx,dy). Z is untouched — a planar move does not change elevation.
-inline void Translate(CadFilledRegion& fr, float dx, float dy) {
+/// Translate every loop vertex by (dx,dy,dz). REQ-320 item 1 names "a filled region's vertices"
+/// among the entity kinds a 3D translate must carry; \p dz defaults to 0 so every 2D-only caller
+/// (MIRROR, ARRAY, STRETCH, and anything predating REQ-320) is unaffected.
+inline void Translate(CadFilledRegion& fr, float dx, float dy, float dz = 0.f) {
   for (std::size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
     fr.vertsXyz[v] += dx;
     fr.vertsXyz[v + 1] += dy;
+    fr.vertsXyz[v + 2] += dz;
   }
 }
 

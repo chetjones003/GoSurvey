@@ -25,7 +25,7 @@
 #  define DISABLE_JSON
 #else
 #  undef DISABLE_JSON
-#endif   
+#endif
 
 /* Number of dxf after-comma places. */
 /* #undef DXF_PRECISION */
@@ -304,7 +304,7 @@
 #define PACKAGE_NAME "LibreDWG"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "LibreDWG 0.13.3"
+#define PACKAGE_STRING "LibreDWG 0.13.4-0-ge3774bd"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "libredwg"
@@ -313,7 +313,10 @@
 #define PACKAGE_URL "https://savannah.gnu.org/projects/libredwg/"
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "0.13.3"
+#define PACKAGE_VERSION "0.13.4-0-ge3774bd"
+
+/* Defined in configure.ac to the libtool version-info of the shared lib. */
+#define LIBREDWG_SO_VERSION ""
 
 /* The size of `size_t', as computed by sizeof. */
 #define SIZEOF_SIZE_T 8
@@ -341,7 +344,7 @@
 #  undef USE_WRITE
 #else
 #  define USE_WRITE
-#endif   
+#endif
 
 /* Needed for strdup */
 #define _POSIX_C_SOURCE 200809L

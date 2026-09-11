@@ -8,6 +8,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 #include "util/meshgeom.hpp"
+#include "BrepJson.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -70,6 +71,41 @@ CadBlockXform CadBlockXformFromJson(const json& o) {
   xf.rotY = o.value("rotY", xf.rotY);
   xf.rotZ = o.value("rotZ", xf.rotZ);
   return xf;
+}
+
+// REQ-155: a UCS frame (origin + basis) as JSON. Shared by the drawing's active UCS, named UCS
+// definitions, saved views, and the per-viewport active UCS (issue #155). A broken/non-orthonormal
+// frame on read is DISCARDED back to World — the one fallback that cannot silently skew coordinates
+// (REQ-201). Kept as free functions (not a BuildRoot-local lambda) so the viewport loop, which runs
+// before that lambda, can call it too.
+inline json UcsFrameToJson(const ucs::Ucs& u) {
+  json j;
+  j["origin"] = {u.origin.x, u.origin.y, u.origin.z};
+  j["xAxis"] = {u.xAxis.x, u.xAxis.y, u.xAxis.z};
+  j["yAxis"] = {u.yAxis.x, u.yAxis.y, u.yAxis.z};
+  j["zAxis"] = {u.zAxis.x, u.zAxis.y, u.zAxis.z};
+  return j;
+}
+inline bool UcsFrameFromJson(const json& j, ucs::Ucs* out) {
+  if (!j.is_object() || !out)
+    return false;
+  auto readVec = [](const json& o, const char* key, ray3d::Vec3 fallback) {
+    const auto it = o.find(key);
+    if (it == o.end() || !it->is_array() || it->size() != 3)
+      return fallback;
+    return ray3d::Vec3{(*it)[0].get<double>(), (*it)[1].get<double>(), (*it)[2].get<double>()};
+  };
+  ucs::Ucs u;
+  u.origin = readVec(j, "origin", {0.0, 0.0, 0.0});
+  u.xAxis = readVec(j, "xAxis", {1.0, 0.0, 0.0});
+  u.yAxis = readVec(j, "yAxis", {0.0, 1.0, 0.0});
+  u.zAxis = readVec(j, "zAxis", {0.0, 0.0, 1.0});
+  if (!std::isfinite(u.origin.x) || !std::isfinite(u.origin.y) || !std::isfinite(u.origin.z))
+    return false;
+  if (!ucs::IsRightHandedOrthonormal(u, 1e-6))
+    return false;
+  *out = u;
+  return true;
 }
 
 // Defined further down (with the main-drawing entity IO); forward-declared so block
@@ -164,6 +200,17 @@ json CadBlockContentToJson(const CadBlockContent& c) {
   o["lineAttrs"] = std::move(la);
   o["lineVis"] = c.lineVis;
   o["circles"] = c.circles;
+  // Block circle normals (REQ-312), omitted when every one is flat so an existing block definition
+  // serializes unchanged. BLOCK and BEDIT both round-trip through here, which is why the field
+  // exists on CadBlockContent at all — without it, editing a block would flatten a tilted circle
+  // inside it on the way out.
+  {
+    bool anyTilted = false;
+    for (size_t i = 0; i * 4 + 3 < c.circles.size(); ++i)
+      anyTilted = anyTilted || !CircleIsFlat(c.circleNormals, i);
+    if (anyTilted)
+      o["circleNormals"] = c.circleNormals;
+  }
   json ca = json::array();
   for (const auto& a : c.circleAttrs) {
     json e;
@@ -197,6 +244,13 @@ json CadBlockContentToJson(const CadBlockContent& c) {
 
   o["polyOffsets"] = c.polyOffsets;
   o["polyVerts"] = c.polyVerts;
+  {
+    bool anyBulge = false;
+    for (float b : c.polyVertsBulge)
+      if (b != 0.0f) { anyBulge = true; break; }
+    if (anyBulge)
+      o["polyVertsBulge"] = c.polyVertsBulge;  // REQ-316 / ADR-047, additive
+  }
   json polyClosed = json::array();
   for (std::uint8_t v : c.polyClosed)
     polyClosed.push_back(static_cast<int>(v));
@@ -242,7 +296,7 @@ json CadBlockContentToJson(const CadBlockContent& c) {
 CadBlockContent CadBlockContentFromJson(const json& o) {
   CadBlockContent c;
   if (o.contains("lines") && o["lines"].is_array())
-    c.lines = o["lines"].get<std::vector<float>>();
+    c.lines = o["lines"].get<std::vector<double>>();
   if (o.contains("lineAttrs") && o["lineAttrs"].is_array()) {
     for (const auto& e : o["lineAttrs"])
       c.lineAttrs.push_back(EntityAttributesFromJson(e));
@@ -250,10 +304,13 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
   if (o.contains("lineVis") && o["lineVis"].is_array())
     c.lineVis = o["lineVis"].get<std::vector<std::string>>();
   if (o.contains("circles") && o["circles"].is_array())
-    c.circles = o["circles"].get<std::vector<float>>();
+    c.circles = o["circles"].get<std::vector<double>>();
   EntityAttrArrayFromJson(o, "circleAttrs", c.circleAttrs);
   if (o.contains("circleVis") && o["circleVis"].is_array())
     c.circleVis = o["circleVis"].get<std::vector<std::string>>();
+  if (o.contains("circleNormals") && o["circleNormals"].is_array())
+    c.circleNormals = o["circleNormals"].get<std::vector<float>>();   // REQ-312
+  EnsureCircleNormals(c.circleNormals, c.circles.size() / 4);   // absent or short → flat default
 
   if (o.contains("arcs") && o["arcs"].is_array())
     for (const auto& aj : o["arcs"])
@@ -268,7 +325,9 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
   if (o.contains("polyOffsets") && o["polyOffsets"].is_array())
     c.polyOffsets = o["polyOffsets"].get<std::vector<int>>();
   if (o.contains("polyVerts") && o["polyVerts"].is_array())
-    c.polyVerts = o["polyVerts"].get<std::vector<float>>();
+    c.polyVerts = o["polyVerts"].get<std::vector<double>>();
+  if (o.contains("polyVertsBulge") && o["polyVertsBulge"].is_array())  // REQ-316 / ADR-047
+    c.polyVertsBulge = o["polyVertsBulge"].get<std::vector<float>>();
   if (o.contains("polyClosed") && o["polyClosed"].is_array())
     for (const auto& v : o["polyClosed"])
       c.polyClosed.push_back(static_cast<std::uint8_t>(std::clamp(v.get<int>(), 0, 1)));
@@ -491,6 +550,19 @@ void CadArcToJson(const CadArc& a, json& o) {
   // serializes byte-identically to a pre-3D one, and older builds ignore the key.
   if (a.z != 0.f)
     o["z"] = a.z;
+  // The plane normal (REQ-312, D-2026-08-31-f), under the same rule and for the same reason: it is
+  // world +Z on every arc that predates the field and on every arc in a flat drawing, so omitting
+  // it there is what makes a legacy drawing re-save byte for byte. `IsFlatNormal` compares exactly,
+  // deliberately — a tolerance here would let a normal 1e-9 off +Z save as flat, which is a silent
+  // edit to the user's file.
+  //
+  // An older build reading this back gets the arc without its plane, which is the ADR-020 (d)
+  // tolerant-key bargain: it draws the arc flat rather than refusing the file.
+  if (!IsFlatNormal(a.nx, a.ny, a.nz)) {
+    o["nx"] = a.nx;
+    o["ny"] = a.ny;
+    o["nz"] = a.nz;
+  }
 }
 
 CadArc CadArcFromJson(const json& o) {
@@ -501,6 +573,9 @@ CadArc CadArcFromJson(const json& o) {
   a.startRad = o.value("startRad", a.startRad);
   a.sweepRad = o.value("sweepRad", a.sweepRad);
   a.z        = o.value("z",        a.z);  // absent → 0: legacy arcs load flat (REQ-057)
+  a.nx       = o.value("nx",       a.nx);  // absent → world +Z: legacy arcs load flat (REQ-312)
+  a.ny       = o.value("ny",       a.ny);
+  a.nz       = o.value("nz",       a.nz);
   return a;
 }
 
@@ -576,6 +651,29 @@ SurveyLabelStyleTemplates SurveyLabelTemplatesFromJson(const json& o) {
   t.numberNorthEastElev = o.value("numberNorthEastElev", t.numberNorthEastElev);
   return t;
 }
+
+
+// ---------------------------------------------------------------------------------------------
+// B-rep solids (REQ-313 / ADR-045). The TOPOLOGY is what is written, not the recipe: a solid's
+// topology is its stored truth (ADR-045 (a)), and rebuilding it from the recipe on load would mean
+// a Phase 4 boolean result — which has no recipe — could not be saved at all.
+//
+// Additive and omitted when there are none, so a drawing written before solids existed still
+// serializes byte-identically and no `kGsFormatVersion` bump is needed (the ADR-020 (d) tolerant-key
+// precedent the mesh and surface sections above both follow).
+//
+// Nothing is rounded on the way out. `nlohmann::json` writes a double in its shortest
+// round-trip-exact form, so a reloaded solid's volume is the volume that was saved — which is the
+// whole reason the analytic faces were worth having (REQ-101).
+//
+// The frames are written by the `UcsFrameToJson` / `UcsFrameFromJson` pair already defined above
+// for REQ-154 rather than by a second encoding of the same four vectors — and the reuse is worth
+// more than the saved lines: that reader REFUSES a frame that is not right-handed orthonormal, so a
+// hand-edited file cannot present a skewed surface frame that would silently shear a solid.
+// ---------------------------------------------------------------------------------------------
+
+// The solid `.gs` encoding lives in BrepJson.hpp (namespace `gsio`) so it is linkable without the
+// command layer this file drags in. `gsio::SolidToJson` / `gsio::SolidFromJson` are used below.
 
 json BuildRoot(const AppCommandState& st) {
   json root;
@@ -714,6 +812,19 @@ json BuildRoot(const AppCommandState& st) {
   }
   // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
   {
+    // REQ-155: while floating model space is entered, the floating viewport's active UCS is held
+    // live in st.activeUcs and has not yet been folded back into its Viewport — serialize the live
+    // one for that viewport so a save mid-float records what the user sees.
+    auto liveViewportUcs = [&](const PaperLayout& l, const Viewport& v) -> const ucs::Ucs& {
+      if (st.floatingUcsSwapActive && st.floatingViewportLayout >= 0 &&
+          static_cast<size_t>(st.floatingViewportLayout) < st.paperLayouts.size() &&
+          &st.paperLayouts[static_cast<size_t>(st.floatingViewportLayout)] == &l &&
+          st.floatingViewportIndex >= 0 &&
+          static_cast<size_t>(st.floatingViewportIndex) < l.viewports.size() &&
+          &l.viewports[static_cast<size_t>(st.floatingViewportIndex)] == &v)
+        return st.activeUcs;
+      return v.activeUcs;
+    };
     json layouts = json::array();
     for (const PaperLayout& l : st.paperLayouts) {
       json o;
@@ -743,6 +854,16 @@ json BuildRoot(const AppCommandState& st) {
         vo["modelCenterX"] = v.modelCenterX;
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
+        vo["camAzimuthDeg"] = v.camAzimuthDeg;      // REQ-061: per-viewport camera (additive)
+        vo["camElevationDeg"] = v.camElevationDeg;
+        vo["camRollDeg"] = v.camRollDeg;
+        vo["camPerspective"] = v.camPerspective;
+        vo["camFovDeg"] = v.camFovDeg;
+        {
+          const ucs::Ucs& vUcs = liveViewportUcs(l, v);  // REQ-155: per-viewport active UCS
+          if (!ucs::IsWorld(vUcs))  // additive; absent on read = World (every legacy .gs)
+            vo["ucs"] = UcsFrameToJson(vUcs);
+        }
         vo["layer"] = v.layer;
         vo["frozenLayers"] = v.frozenLayers;
         vo["vpColorLayers"] = v.vpColorLayers;    // REQ-046: per-viewport layer color override (parallel arrays)
@@ -871,17 +992,32 @@ json BuildRoot(const AppCommandState& st) {
   {
     json cxyr = json::array();
     json cz = json::array();
+    json cn = json::array();
     bool anyZ = false;
+    bool anyTilted = false;
     for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {
       cxyr.push_back(st.userCirclesCxCyZR[i + 0]);
       cxyr.push_back(st.userCirclesCxCyZR[i + 1]);
       cxyr.push_back(st.userCirclesCxCyZR[i + 3]);  // radius
       cz.push_back(st.userCirclesCxCyZR[i + 2]);    // z
       anyZ = anyZ || st.userCirclesCxCyZR[i + 2] != 0.f;
+      // The plane normal (REQ-312), in an additive "circlesN" of 3 floats per circle — the same
+      // shape and the same bargain as "circlesZ" above. Omitted when every circle is flat, which is
+      // every drawing that predates the field, so those still save byte-identically.
+      float nx = kFlatNormalX;
+      float ny = kFlatNormalY;
+      float nz = kFlatNormalZ;
+      CircleNormalAt(st.userCircleNormals, i / 4, &nx, &ny, &nz);
+      cn.push_back(nx);
+      cn.push_back(ny);
+      cn.push_back(nz);
+      anyTilted = anyTilted || !IsFlatNormal(nx, ny, nz);
     }
     doc["circles"] = std::move(cxyr);
     if (anyZ)
       doc["circlesZ"] = std::move(cz);
+    if (anyTilted)
+      doc["circlesN"] = std::move(cn);
   }
   json circleAttrs = json::array();
   for (const auto& a : st.userCircleAttrs) {
@@ -923,6 +1059,15 @@ json BuildRoot(const AppCommandState& st) {
 
   doc["polylineOffsets"] = st.userPolylineOffsets;
   doc["polylineVerts"] = st.userPolylineVerts;
+  // REQ-316 / ADR-047: additive, no kGsFormatVersion bump. Written only when at least one segment
+  // is actually curved, so a drawing with no arcs re-saves byte-identically to a pre-ADR-047 file.
+  {
+    bool anyBulge = false;
+    for (float b : st.userPolylineVertsBulge)
+      if (b != 0.0f) { anyBulge = true; break; }
+    if (anyBulge)
+      doc["polylineVertsBulge"] = st.userPolylineVertsBulge;
+  }
   json polyClosed = json::array();
   for (uint8_t c : st.userPolylineClosed)
     polyClosed.push_back(static_cast<int>(c));
@@ -1091,6 +1236,27 @@ json BuildRoot(const AppCommandState& st) {
       meshAttrs.push_back(std::move(o));
     }
     doc["meshAttrs"] = std::move(meshAttrs);
+  }
+
+  // B-rep solids (REQ-313 / ADR-045). Additive and omitted when there are none, so every drawing
+  // written before solids existed still serializes byte-identically — the same ADR-020 (d)
+  // precedent the mesh section above follows. See SolidToJson for why the topology is written
+  // rather than the recipe.
+  if (!st.cadSolids.empty()) {
+    json solids = json::array();
+    for (const CadSolidPtr& sp : st.cadSolids) {
+      if (!sp)
+        continue;
+      solids.push_back(gsio::SolidToJson(*sp));
+    }
+    doc["solids"] = std::move(solids);
+    json solidAttrs = json::array();
+    for (const auto& a : st.cadSolidAttrs) {
+      json o;
+      EntityAttributesToJson(a, o);
+      solidAttrs.push_back(std::move(o));
+    }
+    doc["solidAttrs"] = std::move(solidAttrs);
   }
 
   // TIN surfaces (REQ-068). Additive and omitted when there are none, so a pre-REQ-068 drawing still
@@ -1297,28 +1463,33 @@ json BuildRoot(const AppCommandState& st) {
     view["azimuthDeg"] = st.viewportAzimuthDeg;
   if (st.viewportElevationDeg != 90.f)
     view["elevationDeg"] = st.viewportElevationDeg;
+  if (st.viewportRollDeg != 0.f)  // #153: screen roll under a tilted-UCS PLAN
+    view["rollDeg"] = st.viewportRollDeg;
+  // Projection (REQ-309), additive and omitted at its default for the same reason as the camera
+  // keys above: a drawing that was never switched to perspective still serializes exactly as
+  // before, and a build that predates this key reads such a file unchanged.
+  if (st.viewportProjection != Camera::Projection::Orthographic)
+    view["projection"] = "perspective";
+  if (st.viewportFovDeg != kDefaultFovDeg)
+    view["fovDeg"] = st.viewportFovDeg;
   // The UCS (REQ-154), additive and omitted at its default for the same reason as the camera keys
   // above: a drawing that never used UCS still serializes byte-for-byte as before.
   //
   // `ucsElevation` is still written whenever the frame is a plain elevation change, so a drawing
   // saved by this build still opens correctly in one that predates the full UCS. Newer builds
   // prefer the `ucs` object and only fall back to `ucsElevation` when it is absent.
-  auto writeUcs = [](const ucs::Ucs& u) {
-    json j;
-    j["origin"] = {u.origin.x, u.origin.y, u.origin.z};
-    j["xAxis"] = {u.xAxis.x, u.xAxis.y, u.xAxis.z};
-    j["yAxis"] = {u.yAxis.x, u.yAxis.y, u.yAxis.z};
-    j["zAxis"] = {u.zAxis.x, u.zAxis.y, u.zAxis.z};
-    return j;
-  };
-  if (!ucs::IsWorld(st.activeUcs)) {
-    view["ucs"] = writeUcs(st.activeUcs);
+  auto writeUcs = [](const ucs::Ucs& u) { return UcsFrameToJson(u); };
+  // REQ-155: while floating model space is entered, st.activeUcs is a VIEWPORT's frame — the
+  // drawing's own UCS is parked in the stash. Persist the drawing-scoped one.
+  const ucs::Ucs& drawUcs = CadDrawingScopedUcs(st);
+  if (!ucs::IsWorld(drawUcs)) {
+    view["ucs"] = writeUcs(drawUcs);
     // A pure elevation change — world axes, origin only in Z — is exactly what the old key meant,
     // so that (and only that) case stays readable by an older build.
-    const bool elevationOnly = ucs::IsWorld(ucs::WithOrigin(st.activeUcs, {0.0, 0.0, 0.0})) &&
-                               st.activeUcs.origin.x == 0.0 && st.activeUcs.origin.y == 0.0;
+    const bool elevationOnly = ucs::IsWorld(ucs::WithOrigin(drawUcs, {0.0, 0.0, 0.0})) &&
+                               drawUcs.origin.x == 0.0 && drawUcs.origin.y == 0.0;
     if (elevationOnly)
-      view["ucsElevation"] = st.activeUcs.origin.z;
+      view["ucsElevation"] = drawUcs.origin.z;
   }
   if (st.ucsFollow)
     view["ucsFollow"] = true;
@@ -1346,6 +1517,14 @@ json BuildRoot(const AppCommandState& st) {
       e["zoom"] = v.zoom;
       e["azimuthDeg"] = v.azimuthDeg;
       e["elevationDeg"] = v.elevationDeg;
+      if (v.rollDeg != 0.f)  // #153
+        e["rollDeg"] = v.rollDeg;
+      // Projection rides with the view too (REQ-309) — without it a view saved in perspective
+      // would silently restore as orthographic. Omitted at the default, like the keys above.
+      if (v.projection != Camera::Projection::Orthographic)
+        e["projection"] = "perspective";
+      if (v.fovDeg != kDefaultFovDeg)
+        e["fovDeg"] = v.fovDeg;
       // The frame rides with the view (REQ-106). Omitted at World so the common case stays compact.
       if (!ucs::IsWorld(v.ucs))
         e["ucs"] = writeUcs(v.ucs);
@@ -1383,6 +1562,15 @@ json BuildRoot(const AppCommandState& st) {
   settings["viewportCrosshairPickHalfPxX"] = st.viewportCrosshairPickHalfPxX;
   settings["viewportCrosshairPickHalfPxY"] = st.viewportCrosshairPickHalfPxY;
   settings["viewportCrosshairHairPx"] = st.viewportCrosshairHairPx;
+  // REQ-310. Written UNCONDITIONALLY, like every other key in this settings block — and unlike the
+  // REQ-309 camera keys in the view block, which are omitted at their defaults to keep an un-orbited
+  // drawing byte-identical.
+  //
+  // The difference matters and was found by a test, not by reading: `b()` below only assigns when
+  // the key is PRESENT, so a conditionally-written key that is absent leaves whatever the current
+  // session already had. Opening a drawing saved with the 3D crosshair OFF, from a session with it
+  // ON, then kept it ON — the file silently failed to describe its own state.
+  settings["viewportCrosshair3d"] = st.viewportCrosshair3d;
 
   settings["viewportTextMinPx"] = st.viewportTextMinPx;
   settings["viewportTextMaxPx"] = st.viewportTextMaxPx;
@@ -1399,6 +1587,7 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapEndpoint"] = st.objectSnapEndpoint;
   settings["objectSnapMidpoint"] = st.objectSnapMidpoint;
   settings["objectSnapCenter"] = st.objectSnapCenter;
+  settings["objectSnapQuadrant"] = st.objectSnapQuadrant;
   settings["objectSnapPerpendicular"] = st.objectSnapPerpendicular;
   settings["objectSnapSurveyPoint"] = st.objectSnapSurveyPoint;
   settings["objectSnapGeometricCenter"] = st.objectSnapGeometricCenter;
@@ -1406,6 +1595,10 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapIntersection"] = st.objectSnapIntersection;
   settings["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   settings["objectSnapSurface"] = st.objectSnapSurface;
+  settings["objectSnapSolid"] = st.objectSnap3dEnabled;  // REQ-325/#395: .gs is deprecated (retired
+                                                          // format); minimal one-field carry-forward
+                                                          // of the master toggle, not a full migration.
+  settings["viewportSolidIsolines"] = st.viewportSolidIsolines;
   settings["objectSnapAperturePx"] = st.objectSnapAperturePx;
   settings["objectSnapGlyphHalfPx"] = st.objectSnapGlyphHalfPx;
 
@@ -1508,6 +1701,13 @@ bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
     log.push_back(".gs: polylineAttrs length must match polyline count.");
     return false;
   }
+  // REQ-316 / ADR-047: optional; when present it is one bulge per vertex (pv.size() / 3).
+  if (doc.contains("polylineVertsBulge")) {
+    if (!doc["polylineVertsBulge"].is_array() || doc["polylineVertsBulge"].size() != pv.size() / 3) {
+      log.push_back(".gs: polylineVertsBulge length must be one entry per polyline vertex.");
+      return false;
+    }
+  }
   if (!doc.contains("annotations") || !doc["annotations"].is_array()) {
     log.push_back(".gs: missing annotations array.");
     return false;
@@ -1555,6 +1755,7 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   num(s, "viewportCrosshairPickHalfPxX", &st.viewportCrosshairPickHalfPxX);
   num(s, "viewportCrosshairPickHalfPxY", &st.viewportCrosshairPickHalfPxY);
   num(s, "viewportCrosshairHairPx", &st.viewportCrosshairHairPx);
+  b(s, "viewportCrosshair3d", &st.viewportCrosshair3d);  // REQ-310; absent = off, as before
 
   num(s, "viewportTextMinPx", &st.viewportTextMinPx);
   num(s, "viewportTextMaxPx", &st.viewportTextMaxPx);
@@ -1580,12 +1781,20 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   b(s, "objectSnapEndpoint", &st.objectSnapEndpoint);
   b(s, "objectSnapMidpoint", &st.objectSnapMidpoint);
   b(s, "objectSnapCenter", &st.objectSnapCenter);
+  b(s, "objectSnapQuadrant", &st.objectSnapQuadrant);
   b(s, "objectSnapPerpendicular", &st.objectSnapPerpendicular);
   b(s, "objectSnapSurveyPoint", &st.objectSnapSurveyPoint);
   b(s, "objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
   b(s, "objectSnapIntersection", &st.objectSnapIntersection);
   b(s, "objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   b(s, "objectSnapSurface", &st.objectSnapSurface);
+  b(s, "objectSnapSolid", &st.objectSnap3dEnabled);  // REQ-325/#395: see save-side comment above.
+  // ISOLINES (REQ-313 as amended). Clamped on read, so a hand-edited file cannot ask for a wireframe
+  // dense enough to cost the frame budget, and an absent key keeps the default rather than zero -
+  // which would silently strip every curved solid back to its edges.
+  if (s.contains("viewportSolidIsolines") && s["viewportSolidIsolines"].is_number_integer())
+    st.viewportSolidIsolines =
+        std::clamp(s["viewportSolidIsolines"].get<int>(), 0, kSolidMaxIsolines);
   num(s, "objectSnapAperturePx", &st.objectSnapAperturePx);
   num(s, "objectSnapGlyphHalfPx", &st.objectSnapGlyphHalfPx);
   st.objectSnapAperturePx = std::clamp(st.objectSnapAperturePx, 4.f, 64.f);
@@ -1661,6 +1870,20 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
+          // REQ-061: per-viewport camera. Absent in a legacy .gs -> the defaults (plan view) stand,
+          // and ModelToPaperInThroughCamera then reproduces the pre-change projection exactly.
+          v.camAzimuthDeg = vo.value("camAzimuthDeg", v.camAzimuthDeg);
+          v.camElevationDeg = vo.value("camElevationDeg", v.camElevationDeg);
+          v.camRollDeg = vo.value("camRollDeg", v.camRollDeg);
+          v.camPerspective = vo.value("camPerspective", v.camPerspective);
+          v.camFovDeg = vo.value("camFovDeg", v.camFovDeg);
+          // REQ-155: per-viewport active UCS. Absent (legacy .gs) or broken -> World, so every
+          // pre-REQ-155 file loads with each viewport on the drawing frame, unchanged.
+          {
+            const auto vu = vo.find("ucs");
+            if (vu != vo.end() && !UcsFrameFromJson(*vu, &v.activeUcs))
+              v.activeUcs = ucs::Ucs{};
+          }
           if (vo.contains("layer") && vo["layer"].is_string())
             v.layer = vo["layer"].get<std::string>();
           if (vo.contains("frozenLayers") && vo["frozenLayers"].is_array()) {
@@ -1775,9 +1998,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
               if (el.contains("verts")) {
                 const auto& pv = el["verts"];
                 for (size_t i = 0; i + 1 < pv.size(); i += 2) {
-                  fr.vertsXyz.push_back(pv[i + 0].get<float>());
-                  fr.vertsXyz.push_back(pv[i + 1].get<float>());
-                  fr.vertsXyz.push_back(0.f);
+                  fr.vertsXyz.push_back(pv[i + 0].get<double>());
+                  fr.vertsXyz.push_back(pv[i + 1].get<double>());
+                  fr.vertsXyz.push_back(0.0);
                 }
               }
               if (el.contains("loops"))
@@ -1968,7 +2191,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 
   st.userLinesFlat.clear();
   for (const auto& v : doc["lineVerts"])
-    st.userLinesFlat.push_back(v.get<float>());
+    st.userLinesFlat.push_back(v.get<double>());
   st.userLineAttrs.clear();
   for (const auto& o : doc["lineAttrs"])
     st.userLineAttrs.push_back(EntityAttributesFromJson(o));
@@ -1982,12 +2205,27 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     const auto& cz = hasZ ? doc["circlesZ"] : cxyr;  // cz unread unless hasZ
     size_t ci = 0;
     for (size_t i = 0; i + 2 < cxyr.size(); i += 3, ++ci) {
-      st.userCirclesCxCyZR.push_back(cxyr[i + 0].get<float>());          // cx
-      st.userCirclesCxCyZR.push_back(cxyr[i + 1].get<float>());          // cy
-      st.userCirclesCxCyZR.push_back(hasZ && ci < cz.size() ? cz[ci].get<float>() : 0.f);
-      st.userCirclesCxCyZR.push_back(cxyr[i + 2].get<float>());          // r
+      st.userCirclesCxCyZR.push_back(cxyr[i + 0].get<double>());          // cx
+      st.userCirclesCxCyZR.push_back(cxyr[i + 1].get<double>());          // cy
+      st.userCirclesCxCyZR.push_back(hasZ && ci < cz.size() ? cz[ci].get<double>() : 0.0);
+      st.userCirclesCxCyZR.push_back(cxyr[i + 2].get<double>());          // r
     }
   }
+  // The plane normals (REQ-312), from the additive "circlesN" written beside "circles". Absent
+  // means every circle is flat, which is exactly how a drawing written before that key existed
+  // loads — as the world-XY circles it has always been.
+  //
+  // CLEARED first, not merely resized. `EnsureCircleNormals` only grows or truncates, so loading a
+  // second document over a first would have kept the first document's normals for every index the
+  // new one also has. Invisible while every normal in every file was +Z; a real cross-document leak
+  // the moment one is not.
+  st.userCircleNormals.clear();
+  if (doc.contains("circlesN") && doc["circlesN"].is_array())
+    for (const auto& v : doc["circlesN"])
+      st.userCircleNormals.push_back(v.get<float>());
+  // Short, long or absent, the side-car ends up matching the circle count, so `docinvariants`
+  // cannot fire on a freshly loaded document (REQ-204).
+  EnsureCircleNormals(st.userCircleNormals, st.userCirclesCxCyZR.size() / 4);
   st.userCircleAttrs.clear();
   for (const auto& o : doc["circleAttrs"])
     st.userCircleAttrs.push_back(EntityAttributesFromJson(o));
@@ -2011,7 +2249,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.userPolylineOffsets.push_back(v.get<int>());
   st.userPolylineVerts.clear();
   for (const auto& v : doc["polylineVerts"])
-    st.userPolylineVerts.push_back(v.get<float>());
+    st.userPolylineVerts.push_back(v.get<double>());
+  // REQ-316 / ADR-047: additive, guarded (no kGsFormatVersion bump) — a pre-ADR-047 file has no
+  // "polylineVertsBulge" key and loads with the array left EMPTY, which every reader treats as
+  // "all segments straight". Kept empty (not zero-filled) so a straight drawing re-saves identically.
+  st.userPolylineVertsBulge.clear();
+  if (doc.contains("polylineVertsBulge"))
+    for (const auto& v : doc["polylineVertsBulge"])
+      st.userPolylineVertsBulge.push_back(v.get<float>());
+  if (!st.userPolylineVertsBulge.empty())
+    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
   st.userPolylineClosed.clear();
   for (const auto& v : doc["polylineClosed"])
     st.userPolylineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
@@ -2033,7 +2280,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.featureLineOffsets.push_back(v.get<int>());
   if (doc.contains("featureLineVerts") && doc["featureLineVerts"].is_array())
     for (const auto& v : doc["featureLineVerts"])
-      st.featureLineVerts.push_back(v.get<float>());
+      st.featureLineVerts.push_back(v.get<double>());
   if (doc.contains("featureLineClosed") && doc["featureLineClosed"].is_array())
     for (const auto& v : doc["featureLineClosed"])
       st.featureLineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
@@ -2161,6 +2408,38 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.cadMeshAttrs.push_back(EntityAttributesFromJson(o));
   st.cadMeshAttrs.resize(st.cadMeshes.size());  // keep the parallel arrays length-locked
 
+  // B-rep solids (REQ-313 / ADR-045). Guarded, so a drawing written before them simply has none.
+  //
+  // Every solid is VALIDATED before it is stored, exactly as a mesh is above and for a sharper
+  // reason: an invalid solid does not crash, it quietly reports a wrong volume and hands a Phase 4
+  // boolean a shape that is not closed. A file that carries one is refused with the kernel's own
+  // reason (REQ-201) rather than partly loaded.
+  st.cadSolids.clear();
+  st.cadSolidAttrs.clear();
+  st.solidDisplayCache.clear();
+  st.solidDisplayGeometry.solids.clear();
+  if (doc.contains("solids") && doc["solids"].is_array()) {
+    int solidIdx = 0;
+    for (const auto& el : doc["solids"]) {
+      ++solidIdx;
+      brep::Solid s;
+      if (!gsio::SolidFromJson(el, &s)) {
+        log.push_back("Solid " + std::to_string(solidIdx) + " skipped — the stored topology is malformed.");
+        continue;
+      }
+      const brep::Problem why = brep::Validate(s);
+      if (why != brep::Problem::Ok) {
+        log.push_back("Solid " + std::to_string(solidIdx) + " skipped — " + brep::ProblemText(why));
+        continue;
+      }
+      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    }
+  }
+  if (doc.contains("solidAttrs") && doc["solidAttrs"].is_array())
+    for (const auto& o : doc["solidAttrs"])
+      st.cadSolidAttrs.push_back(EntityAttributesFromJson(o));
+  st.cadSolidAttrs.resize(st.cadSolids.size());  // keep the parallel arrays length-locked
+
   // TIN surfaces (REQ-068). Guarded, so a drawing written before them simply has none.
   st.cadSurfaces.clear();
   st.cadSurfaceAttrs.clear();
@@ -2210,7 +2489,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         }
       }
       if (el.contains("addedPointXyz") && el["addedPointXyz"].is_array())
-        s.addedPointXyz = el["addedPointXyz"].get<std::vector<float>>();
+        s.addedPointXyz = el["addedPointXyz"].get<std::vector<double>>();
       if (el.contains("deletedPointPicks") && el["deletedPointPicks"].is_array()) {
         for (const auto& dp : el["deletedPointPicks"]) {
           if (!dp.is_object())
@@ -2225,9 +2504,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           CadSurface::MovedPoint m;
           m.fromX = mo.value("fromX", 0.0);
           m.fromY = mo.value("fromY", 0.0);
-          m.toX = mo.value("toX", 0.f);
-          m.toY = mo.value("toY", 0.f);
-          m.toZ = mo.value("toZ", 0.f);
+          m.toX = mo.value("toX", 0.0);
+          m.toY = mo.value("toY", 0.0);
+          m.toZ = mo.value("toZ", 0.0);
           s.movedPoints.push_back(m);
         }
       }
@@ -2313,7 +2592,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (el.contains("verts") && el["verts"].is_array() && el.contains("indices") &&
           el["indices"].is_array()) {
         auto tin = std::make_shared<CadTin>();
-        tin->vertsXyz = el["verts"].get<std::vector<float>>();
+        tin->vertsXyz = el["verts"].get<std::vector<double>>();
         tin->indices = el["indices"].get<std::vector<std::uint32_t>>();
         // A triangulation whose arrays do not agree is corrupt; drop it rather than let the renderer
         // index past the end of the vertex array (REQ-201 — refuse, do not absorb).
@@ -2367,9 +2646,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           const auto& pz = hasZ ? el["vertsZ"] : pv;  // pz unread unless hasZ
           size_t vi = 0;
           for (size_t i = 0; i + 1 < pv.size(); i += 2, ++vi) {
-            fr.vertsXyz.push_back(pv[i + 0].get<float>());
-            fr.vertsXyz.push_back(pv[i + 1].get<float>());
-            fr.vertsXyz.push_back(hasZ && vi < pz.size() ? pz[vi].get<float>() : 0.f);
+            fr.vertsXyz.push_back(pv[i + 0].get<double>());
+            fr.vertsXyz.push_back(pv[i + 1].get<double>());
+            fr.vertsXyz.push_back(hasZ && vi < pz.size() ? pz[vi].get<double>() : 0.0);
           }
         }
         if (el.contains("loops"))
@@ -2384,9 +2663,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       } else if (el.is_array()) {
         // Legacy pre-multi-loop form: a bare flat XY array = one loop. Expand to XYZ at Z = 0.
         for (size_t i = 0; i + 1 < el.size(); i += 2) {
-          fr.vertsXyz.push_back(el[i + 0].get<float>());
-          fr.vertsXyz.push_back(el[i + 1].get<float>());
-          fr.vertsXyz.push_back(0.f);
+          fr.vertsXyz.push_back(el[i + 0].get<double>());
+          fr.vertsXyz.push_back(el[i + 1].get<double>());
+          fr.vertsXyz.push_back(0.0);
         }
       }
       if (fr.loopStart.empty() && fr.vertsXyz.size() >= 9)  // >= 3 vertices × 3 floats
@@ -2411,9 +2690,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["surveyPoints"]) {
       SurveyPoint p;
       p.id = o.value("id", 0);
-      p.easting = o.value("easting", 0.f);
-      p.northing = o.value("northing", 0.f);
-      p.elevation = o.value("elevation", 0.f);
+      p.easting = o.value("easting", 0.0);
+      p.northing = o.value("northing", 0.0);
+      p.elevation = o.value("elevation", 0.0);
       if (o.contains("description") && o["description"].is_string())
         p.description = o["description"].get<std::string>();
       // Absent in every pre-REQ-066 file, which is exactly the "loads empty and falls back to
@@ -2461,6 +2740,19 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.viewportPanZ = view.value("panZ", 0.0);
     st.viewportAzimuthDeg = view.value("azimuthDeg", 0.f);
     st.viewportElevationDeg = std::clamp(view.value("elevationDeg", 90.f), -90.f, 90.f);
+    st.viewportRollDeg = view.value("rollDeg", 0.f);  // #153
+    if (!std::isfinite(st.viewportRollDeg))
+      st.viewportRollDeg = 0.f;
+    // Projection (REQ-309). An absent key — every drawing saved before this build — is
+    // orthographic, which is what makes a legacy file render identically to pre-change. Anything
+    // other than the one recognised spelling is treated as orthographic rather than rejected: a
+    // hand-edited value should degrade to the safe default, not refuse the file (REQ-201).
+    st.viewportProjection = (view.value("projection", std::string()) == "perspective")
+                                ? Camera::Projection::Perspective
+                                : Camera::Projection::Orthographic;
+    st.viewportFovDeg = std::clamp(view.value("fovDeg", kDefaultFovDeg), kMinFovDeg, kMaxFovDeg);
+    if (!std::isfinite(st.viewportFovDeg))
+      st.viewportFovDeg = kDefaultFovDeg;
     // The UCS (REQ-154). A full frame wins; `ucsElevation` alone is what every drawing saved before
     // the UCS command carries, and still loads as the elevated world-parallel plane it described.
     // A frame that does not survive its own validity check is DISCARDED rather than adopted: a
@@ -2528,8 +2820,17 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         v.zoom = entry.value("zoom", 1.f);
         v.azimuthDeg = entry.value("azimuthDeg", 0.f);
         v.elevationDeg = std::clamp(entry.value("elevationDeg", 90.f), -90.f, 90.f);
+        v.rollDeg = entry.value("rollDeg", 0.f);  // #153
+        // REQ-309, same defaulting rule as the active view above.
+        v.projection = (entry.value("projection", std::string()) == "perspective")
+                           ? Camera::Projection::Perspective
+                           : Camera::Projection::Orthographic;
+        v.fovDeg = std::clamp(entry.value("fovDeg", kDefaultFovDeg), kMinFovDeg, kMaxFovDeg);
+        if (!std::isfinite(v.fovDeg))
+          v.fovDeg = kDefaultFovDeg;
         if (!std::isfinite(v.panX) || !std::isfinite(v.panY) || !std::isfinite(v.panZ) ||
-            !std::isfinite(v.zoom) || v.zoom <= 0.f || !std::isfinite(v.azimuthDeg))
+            !std::isfinite(v.zoom) || v.zoom <= 0.f || !std::isfinite(v.azimuthDeg) ||
+            !std::isfinite(v.rollDeg))
           continue;
         const auto vu = entry.find("ucs");
         if (vu != entry.end() && vu->is_object() && !readUcs(*vu, &v.ucs))
@@ -2631,9 +2932,9 @@ std::string SerializeGoSurveyJson(const AppCommandState& st) {
   return BuildRoot(st).dump(2);
 }
 
-bool SaveGoSurveyFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || !pathUtf8[0]) {
-    log.push_back("Save .gs: empty path.");
+    log.push_back("Save .gst: empty path.");
     return false;
   }
   try {
@@ -2643,10 +2944,10 @@ bool SaveGoSurveyFile(const AppCommandState& st, const char* pathUtf8, std::vect
       return false;
     }
     f << SerializeGoSurveyJson(st);
-    log.push_back(std::string("Saved GoSurvey workspace (.gs): ") + pathUtf8);
+    log.push_back(std::string("Saved GoSurvey template (.gst): ") + pathUtf8);
     return true;
   } catch (const std::exception& e) {
-    log.push_back(std::string("Save .gs failed: ") + e.what());
+    log.push_back(std::string("Save .gst failed: ") + e.what());
     return false;
   }
 }
@@ -2732,9 +3033,9 @@ bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, st
   }
 }
 
-bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+bool LoadGoSurveyTemplateFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || !pathUtf8[0]) {
-    log.push_back("Open .gs: empty path.");
+    log.push_back("Open .gst: empty path.");
     return false;
   }
   std::ifstream f(std::filesystem::path(pathUtf8), std::ios::binary);
@@ -2745,6 +3046,6 @@ bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std
   const std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
   if (!LoadGoSurveyFromJsonUtf8(st, bytes, log))
     return false;
-  log.push_back(std::string("Opened GoSurvey workspace (.gs): ") + pathUtf8);
+  log.push_back(std::string("Opened GoSurvey template (.gst): ") + pathUtf8);
   return true;
 }

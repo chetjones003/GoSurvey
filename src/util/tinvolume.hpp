@@ -17,8 +17,8 @@
 ///
 /// An empty result is `TooFewPoints` when fewer than three overlapping samples exist — never a
 /// crash, never a silent zero TIN.
-[[nodiscard]] TinBuildResult BuildTinVolumeSurface(const std::vector<float>& baseVertsXyz,
+[[nodiscard]] TinBuildResult BuildTinVolumeSurface(const std::vector<double>& baseVertsXyz,
                                                    const std::vector<std::uint32_t>& baseIndices,
-                                                   const std::vector<float>& comparisonVertsXyz,
+                                                   const std::vector<double>& comparisonVertsXyz,
                                                    const std::vector<std::uint32_t>& comparisonIndices,
                                                    double originX, double originY);

@@ -1,5 +1,6 @@
 #include "PdfAttachDialog.hpp"
 
+#include "CadUi.hpp"
 #include "PdfAttach.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -202,6 +203,7 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log) {
     CancelPdfAttachCommand(cmd, log);
     return cmd.active == K::PdfAttach;
   }
+  BeginStyledDialog();
 
   // --- File selection row ---
   ImGui::SeparatorText("PDF File");
@@ -356,7 +358,7 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log) {
 
     // While building, disable both action buttons.
     ImGui::BeginDisabled();
-    ImGui::Button("Attach", ImVec2(120.f, 0.f));
+    StyledButton("Attach", ImVec2(120.f, 0.f), /*primary=*/true);
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(80.f, 0.f))) {
@@ -371,7 +373,7 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log) {
       PdfDraftCache_PageCount(cmd.pdfDraftCache) > 0;
 
   if (!canAttach) ImGui::BeginDisabled();
-  if (ImGui::Button("Attach", ImVec2(120.f, 0.f))) {
+  if (StyledButton("Attach", ImVec2(120.f, 0.f), /*primary=*/true)) {
     // Capture params before closing dialog or switching phase.
     const std::string  capturedPath  = cmd.pdfAttachFilePath;
     const int          capturedPage  = cmd.pdfAttachSelectedPage;

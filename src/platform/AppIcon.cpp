@@ -22,7 +22,7 @@
 #endif
 
 // AppExecutableDirectory / UserDataDirectory / ResolveBundledAssetPath / ResolveAppLogoPngPath /
-// ResolveDefaultWorkspaceTemplateGsPath moved to platform/AppPaths.cpp (TASK-056). They are pure
+// ResolveDefaultWorkspaceTemplateGstPath moved to platform/AppPaths.cpp (TASK-056). They are pure
 // path logic and were only here by accident of first use; this file pulls in GLEW and GLFW, which
 // made "where is %APPDATA%?" depend on a GPU. AppIcon.hpp includes AppPaths.hpp, so callers of this
 // header are unaffected.
