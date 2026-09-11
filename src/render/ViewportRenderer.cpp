@@ -2691,41 +2691,111 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     // would change with zoom, and these are built once per frame from world quantities.
     const SectionPlaneGrips& grips = tuning.sectionPlaneGrips;
     if (grips.valid) {
-      ray3d::Vec3 gu{}, gv{};
-      if (SectionClipPlaneBasis(tuning.sectionClip, &gu, &gv)) {
+      ray3d::Vec3 gu{}, gv{}, gn{};
+      if (SectionClipPlaneBasis(tuning.sectionClip, &gu, &gv, &gn)) {
         const ray3d::Vec3 e0 = ray3d::Sub(tuning.sectionClipIndicator.corner[1],
                                           tuning.sectionClipIndicator.corner[0]);
         const ray3d::Vec3 e1 = ray3d::Sub(tuning.sectionClipIndicator.corner[3],
                                           tuning.sectionClipIndicator.corner[0]);
         const double diag = std::sqrt(ray3d::Dot(e0, e0) + ray3d::Dot(e1, e1));
-        const double r = std::max(diag * 0.012, 1e-6);
+        const double r = std::max(diag * 0.014, 1e-6);
         std::vector<float> quads;
         std::vector<float> outlines;
-        quads.reserve(static_cast<size_t>(kSectionPlaneGripCount) * 18);
+        quads.reserve(static_cast<size_t>(kSectionPlaneGripCount) * 36);
+
+        // REQ-340: each handle is drawn as the SHAPE ITS JOB SUGGESTS, not as a generic square.
+        // Six identical squares made the user read the plane to work out which one flipped it; a
+        // symbol that points the way the handle moves does not have to be learned. The shapes
+        // follow AutoCAD's, which is what the user asked for by name.
+        //
+        //   Move   — a diamond with a double-headed arrow along the NORMAL, drawn poking out of
+        //            both faces of the plane. It is the one handle whose travel leaves the plane,
+        //            and the only symbol here that is not flat.
+        //   Flip   — two solid triangles back to back along the normal, pointing away from each
+        //            other: "this side or that side".
+        //   Length — a solid arrowhead at each end of the section line, pointing outward along it.
+        //   Height — a solid triangle on each u-parallel edge, pointing outward across it.
+        //
+        // All in the plane's own basis (bar Move's stem), so they lie ON the plane and cannot be
+        // mistaken for markers floating in front of it.
         for (int i = 0; i < kSectionPlaneGripCount; ++i) {
           const bool lit = (i == tuning.sectionPlaneGripHover) || (i == tuning.sectionPlaneGripDrag);
-          const double s = lit ? r * 1.45 : r;  // the handle that lights up is the one that grabs
+          const double s = lit ? r * 1.5 : r;  // the handle that lights up is the handle that grabs
           const ray3d::Vec3& c = grips.at[i];
-          auto corner = [&](double a, double b) {
-            return ray3d::Vec3{c.x + gu.x * a * s + gv.x * b * s, c.y + gu.y * a * s + gv.y * b * s,
-                               c.z + gu.z * a * s + gv.z * b * s};
+          const auto P = [&](double a, double b, double h) {
+            return ray3d::Vec3{c.x + (gu.x * a + gv.x * b + gn.x * h) * s,
+                               c.y + (gu.y * a + gv.y * b + gn.y * h) * s,
+                               c.z + (gu.z * a + gv.z * b + gn.z * h) * s};
           };
-          const ray3d::Vec3 q[4] = {corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)};
-          const int tri[6] = {0, 1, 2, 0, 2, 3};
-          for (int k = 0; k < 6; ++k) {
-            quads.push_back(static_cast<float>(q[tri[k]].x - viewAnchorX));
-            quads.push_back(static_cast<float>(q[tri[k]].y - viewAnchorY));
-            quads.push_back(static_cast<float>(q[tri[k]].z));
-          }
-          for (int k = 0; k < 4; ++k) {
-            const ray3d::Vec3& a = q[k];
-            const ray3d::Vec3& b = q[(k + 1) & 3];
+          const auto emitTri = [&](const ray3d::Vec3& a, const ray3d::Vec3& b,
+                                   const ray3d::Vec3& d) {
+            for (const ray3d::Vec3* p : {&a, &b, &d}) {
+              quads.push_back(static_cast<float>(p->x - viewAnchorX));
+              quads.push_back(static_cast<float>(p->y - viewAnchorY));
+              quads.push_back(static_cast<float>(p->z));
+            }
+          };
+          const auto emitSeg = [&](const ray3d::Vec3& a, const ray3d::Vec3& b) {
             outlines.push_back(static_cast<float>(a.x - viewAnchorX));
             outlines.push_back(static_cast<float>(a.y - viewAnchorY));
             outlines.push_back(static_cast<float>(a.z));
             outlines.push_back(static_cast<float>(b.x - viewAnchorX));
             outlines.push_back(static_cast<float>(b.y - viewAnchorY));
             outlines.push_back(static_cast<float>(b.z));
+          };
+          /// A solid arrowhead: tip at (tu,tv) in the plane, base a half-width across behind it.
+          const auto emitHead = [&](double tu, double tv, double bu, double bv, double halfW) {
+            const double du = tu - bu, dv = tv - bv;
+            const double len = std::sqrt(du * du + dv * dv);
+            if (len < 1e-12)
+              return;
+            const double pu = -dv / len * halfW, pv = du / len * halfW;  // perpendicular, in-plane
+            const ray3d::Vec3 tip = P(tu, tv, 0.0);
+            const ray3d::Vec3 l = P(bu + pu, bv + pv, 0.0);
+            const ray3d::Vec3 rr = P(bu - pu, bv - pv, 0.0);
+            emitTri(tip, l, rr);
+            emitSeg(tip, l);
+            emitSeg(l, rr);
+            emitSeg(rr, tip);
+          };
+
+          switch (static_cast<SectionPlaneGrip>(i)) {
+          case SectionPlaneGrip::Move: {
+            // The diamond body, flat on the plane.
+            const ray3d::Vec3 n0 = P(0, 1, 0), e = P(1, 0, 0), s0 = P(0, -1, 0), w = P(-1, 0, 0);
+            emitTri(n0, e, s0);
+            emitTri(n0, s0, w);
+            emitSeg(n0, e); emitSeg(e, s0); emitSeg(s0, w); emitSeg(w, n0);
+            // ...and the stem THROUGH it, along the normal, with a head at each end. This is the
+            // one handle that travels out of the plane, and the symbol says so.
+            const ray3d::Vec3 up = P(0, 0, 2.1), dn = P(0, 0, -2.1);
+            emitSeg(dn, up);
+            emitTri(up, P(0.55, 0, 1.25), P(-0.55, 0, 1.25));
+            emitTri(dn, P(0.55, 0, -1.25), P(-0.55, 0, -1.25));
+            break;
+          }
+          case SectionPlaneGrip::Flip: {
+            // Two solid triangles back to back along the normal, pointing apart.
+            emitTri(P(0, 0, 1.9), P(0.8, 0, 0.35), P(-0.8, 0, 0.35));
+            emitTri(P(0, 0, -1.9), P(0.8, 0, -0.35), P(-0.8, 0, -0.35));
+            emitSeg(P(-0.9, 0, 0.0), P(0.9, 0, 0.0));  // the plane they flip about
+            break;
+          }
+          case SectionPlaneGrip::LengthNeg:
+            emitHead(-1.9, 0.0, 0.2, 0.0, 0.85);
+            break;
+          case SectionPlaneGrip::LengthPos:
+            emitHead(1.9, 0.0, -0.2, 0.0, 0.85);
+            break;
+          case SectionPlaneGrip::HeightNeg:
+            emitHead(0.0, -1.9, 0.0, 0.2, 0.85);
+            break;
+          case SectionPlaneGrip::HeightPos:
+            emitHead(0.0, 1.9, 0.0, -0.2, 0.85);
+            break;
+          case SectionPlaneGrip::None:
+          case SectionPlaneGrip::Count:
+            break;
           }
         }
         if (!quads.empty()) {

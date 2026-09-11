@@ -13976,19 +13976,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.gizmoHoverAxis = -1;
         BumpCadGpuCache(cmd);
       }
-      // REQ-339 — the section plane's handles: the live drag, and the pre-highlight.
+      // REQ-339 — the section plane handle under the cursor.
       //
-      // Outside `runHoverPick`, like the gizmo above and for the same two reasons: this is six
-      // ray-to-point tests against widgets whose positions are already known, not a walk of the
-      // drawing; and while a drag is armed the plane has to follow the cursor every frame or the
-      // gesture is not direct manipulation at all — which for THIS widget also means the cut moves,
-      // since the offset the drag writes is the one the shader reads next frame.
+      // Outside `runHoverPick`, like the gizmo above and for the same reason: six ray-to-point
+      // tests against widgets whose positions are already known, not a walk of the drawing.
+      //
+      // The live DRAG is deliberately NOT here. It runs after the object snap is computed, several
+      // hundred lines down, because REQ-340 lets the drag land on a snapped point and reading last
+      // frame's snap would leave the plane one frame behind its own glyph.
       if (modelSpace && cmd.viewportSectionClip) {
-        const ray3d::Ray spRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
-        if (cmd.sectionPlaneGripDrag >= 0) {
-          UpdateSectionPlaneGripDrag(cmd, spRay);
-          BumpCadGpuCache(cmd);
-        } else if (!ImGui::GetIO().KeyCtrl) {
+        if (cmd.sectionPlaneGripDrag < 0 && !ImGui::GetIO().KeyCtrl) {
+          const ray3d::Ray spRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
           const int wasHot = cmd.sectionPlaneGripHover;
           UpdateSectionPlaneGripHover(cmd, spRay,
                                       static_cast<double>(CadSnap::WorldToleranceFromPixels(
@@ -14108,8 +14106,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const auto perfSnapT0 = std::chrono::steady_clock::now();
     {
       cmd.viewportSnapPickValid = false;
+      // REQ-340: a section-plane handle drag counts as mid-command, exactly as the three grip drags
+      // beside it already do. No `Kind` is active during one — the plane is a view state, not a
+      // command — so without this the snap would be computed as though the user were idle, and a
+      // drag that is placing a plane at a midpoint would get neither the marker nor the pull.
       const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
-                          cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
+                          cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
+                          cmd.mtextGripMoveActive || cmd.sectionPlaneGripDrag >= 0;
       // REQ-121 rule (1). During an object-selection step OSNAP has no effect: no marker is drawn
       // and the cursor does not jump, because there is no coordinate being placed. The pick itself
       // was already hit-tested against the raw cursor (`RawEntityPick`'s own comment says why), so
@@ -14189,6 +14192,34 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
     }
+  }
+
+  // REQ-339/340 — the section plane's live handle drag.
+  //
+  // HERE, after the object snap has been computed for this frame, rather than up with the hover.
+  // The drag can land on a snapped point (REQ-340), and the snap the user is looking at is the one
+  // computed just above; reading the previous frame's would leave the plane one frame behind its
+  // own marker, which at drag speed is visible as the plane trailing the glyph it is supposed to be
+  // locked to.
+  //
+  // The plane has to follow the cursor every frame or the gesture is not direct manipulation at
+  // all — and for this widget that also means the CUT moves, since the offset the drag writes is
+  // the uniform the shader reads on the next frame.
+  if (modelSpace && cmd.viewportSectionClip && cmd.sectionPlaneGripDrag >= 0) {
+    const ray3d::Ray spRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+    // The snapped point, when there is one, in WORLD coordinates: the command layer works in world
+    // throughout, and `viewportSnapPickLocal*` is storage-local in XY (Z is already absolute).
+    ray3d::Vec3 snapWorld{};
+    const ray3d::Vec3* snapPtr = nullptr;
+    if (cmd.viewportSnapPickValid) {
+      double swx = 0.0, swy = 0.0;
+      CadCoord::WorldFromLocal(cmd, static_cast<float>(cmd.viewportSnapPickLocalX),
+                               static_cast<float>(cmd.viewportSnapPickLocalY), &swx, &swy);
+      snapWorld = ray3d::Vec3{swx, swy, cmd.viewportSnapPickLocalZ};
+      snapPtr = &snapWorld;
+    }
+    UpdateSectionPlaneGripDrag(cmd, spRay, snapPtr);
+    BumpCadGpuCache(cmd);
   }
 
   // Surface rollover readout (REQ-089): advance the dwell, and on the one frame it elapses, ask what

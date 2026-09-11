@@ -1394,3 +1394,120 @@ TEST_CASE("ESC drops an armed drag and leaves the plane where it was", "[section
   CHECK(st.viewportSectionClipOffset == Catch::Approx(-2.0));
   CHECK(st.viewportSectionClip);
 }
+
+// --- Snapping a section-plane drag (REQ-340, GitHub #479) --------------------------------------
+
+TEST_CASE("A snapped point lands the plane exactly through it", "[sectionplanegrip][req340]") {
+  // The gesture from the user's screenshot: drag the section plane and drop it on a midpoint, with
+  // the Midpoint marker showing. What makes it worth having is that the result is EXACT — the cut
+  // is then a measured thing rather than an eyeballed one, which is the whole difference between a
+  // section drawing and a picture.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);  // plane on the top face, z = 8
+
+  const ray3d::Ray grab = RayAtGrip(st, SectionPlaneGrip::Move);
+  REQUIRE(SubmitSectionPlaneClick(st, grab, 1.0, log));
+
+  // A snapped point out in the model, nowhere near the drag axis: the mid-height of a vertical
+  // edge, at (10, 5, 4). The axis runs vertically through the plane's centre at (0, 0, ...), so
+  // this point is 11.2 ft off it — which is the normal case, not an edge case. A midpoint is
+  // somewhere in the drawing; the axis is a line through the handle.
+  const ray3d::Vec3 snapped{10.0, 5.0, 4.0};
+
+  // The cursor is aimed somewhere else entirely, to prove the SNAP is what decides.
+  const ray3d::Ray elsewhere = RayAt({60, 40, 101}, {0, 0, 1});
+  UpdateSectionPlaneGripDrag(st, elsewhere, &snapped);
+
+  // The plane now passes exactly through the snapped point. That is the only reading of "put the
+  // plane on that midpoint" the one-degree-of-freedom constraint allows, and it is the useful one:
+  // the plane is perpendicular to the axis it slides along, so projecting the point onto the axis
+  // puts the whole plane through it.
+  const SectionClipPlane p = CadSectionClipPlane(st);
+  const double d = p.nx * snapped.x + p.ny * snapped.y + p.nz * snapped.z - p.c;
+  CHECK(d == Catch::Approx(0.0).margin(1e-9));
+  // REQ-101's own tolerance, stated separately: this is a coordinate the user placed.
+  CHECK(std::fabs(d) < 0.002);
+}
+
+TEST_CASE("Without a snap the drag still follows the cursor", "[sectionplanegrip][req340]") {
+  // The snap is an addition, not a replacement. A null snap must leave REQ-339's behaviour exactly
+  // as it was — including the frozen axis, so the held-cursor case stays stable.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  const ray3d::Ray grab = RayAtGrip(st, SectionPlaneGrip::Move);
+  REQUIRE(SubmitSectionPlaneClick(st, grab, 1.0, log));
+
+  const ray3d::Ray move = RayAt({60, 40, 103}, {0, 0, 3});
+  UpdateSectionPlaneGripDrag(st, move, nullptr);
+  CHECK(st.viewportSectionClipOffset == Catch::Approx(-5.0).margin(1e-6));
+  for (int frame = 0; frame < 3; ++frame) {
+    UpdateSectionPlaneGripDrag(st, move, nullptr);
+    INFO("frame " << frame);
+    CHECK(st.viewportSectionClipOffset == Catch::Approx(-5.0).margin(1e-6));
+  }
+}
+
+TEST_CASE("A snap survives being held, and releasing it hands back to the cursor",
+          "[sectionplanegrip][req340]") {
+  // Two frames of the same snap must not drift — the snapped parameter is absolute, not an
+  // accumulating delta, so this would catch a version that added the projection each frame.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  const ray3d::Ray grab = RayAtGrip(st, SectionPlaneGrip::Move);
+  REQUIRE(SubmitSectionPlaneClick(st, grab, 1.0, log));
+
+  const ray3d::Vec3 snapped{10.0, 5.0, 4.0};
+  const ray3d::Ray anywhere = RayAt({60, 40, 101}, {0, 0, 1});
+  for (int frame = 0; frame < 4; ++frame) {
+    UpdateSectionPlaneGripDrag(st, anywhere, &snapped);
+    INFO("frame " << frame);
+    CHECK(st.viewportSectionClipOffset == Catch::Approx(-4.0).margin(1e-6));  // 8 - 4
+  }
+
+  // The cursor leaves the feature: the snap stops being offered, and the plane goes back to
+  // following the pointer from the SAME grab — not from where the snap left it.
+  const ray3d::Ray move = RayAt({60, 40, 103}, {0, 0, 3});
+  UpdateSectionPlaneGripDrag(st, move, nullptr);
+  CHECK(st.viewportSectionClipOffset == Catch::Approx(-5.0).margin(1e-6));
+}
+
+TEST_CASE("A stretch handle snaps too, and still leaves the cut alone", "[sectionplanegrip][req340]") {
+  // Snapping is not special-cased to the Move handle. "Make the plane reach exactly that corner" is
+  // the same kind of request as "cut exactly at that midpoint", and the projection onto the
+  // handle's own axis means the same thing for both.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  st.viewportSectionClipOffset = -4.0;
+  const double offsetBefore = st.viewportSectionClipOffset;
+
+  const SectionPlaneGrips g = CadSectionPlaneGrips(st);
+  REQUIRE(g.valid);
+  const int kLenP = static_cast<int>(SectionPlaneGrip::LengthPos);
+  REQUIRE(SubmitSectionPlaneClick(st, RayAtWorldPoint(g.at[kLenP]), 1.0, log));
+  REQUIRE(st.sectionPlaneGripDrag == kLenP);
+
+  // A point 3 ft beyond the current +u edge, displaced off the axis along the OTHER two axes of
+  // the plane's own frame. Displacing it in world X/Y instead would quietly put some of that
+  // displacement back along u — the plane's u is not a world axis — and the test would then be
+  // measuring its own arithmetic.
+  const SectionClipPlane plane = CadSectionClipPlane(st);
+  ray3d::Vec3 bu{}, bv{}, bn{};
+  REQUIRE(SectionClipPlaneBasis(plane, &bu, &bv, &bn));
+  const ray3d::Vec3 snapped{
+      g.at[kLenP].x + g.dir[kLenP].x * 3.0 + bv.x * 7.0 + bn.x * -5.0,
+      g.at[kLenP].y + g.dir[kLenP].y * 3.0 + bv.y * 7.0 + bn.y * -5.0,
+      g.at[kLenP].z + g.dir[kLenP].z * 3.0 + bv.z * 7.0 + bn.z * -5.0};
+  UpdateSectionPlaneGripDrag(st, RayAt({60, 40, 100}, {0, 0, 0}), &snapped);
+
+  // The edge moved 3 ft, which is the snapped point's projection onto the drag axis.
+  const SectionPlaneGrips g2 = CadSectionPlaneGrips(st);
+  REQUIRE(g2.valid);
+  const double moved = ray3d::Dot(ray3d::Sub(g2.at[kLenP], g.at[kLenP]), g.dir[kLenP]);
+  CHECK(moved == Catch::Approx(3.0).margin(1e-6));
+
+  // And resizing still changes nothing about what is hidden.
+  CHECK(st.viewportSectionClipOffset == Catch::Approx(offsetBefore));
+  const SectionClipPlane p = CadSectionClipPlane(st);
+  CHECK(p.KeepsWorldPoint(0.0, 0.0, 1.0));
+  CHECK_FALSE(p.KeepsWorldPoint(0.0, 0.0, 7.0));
+}

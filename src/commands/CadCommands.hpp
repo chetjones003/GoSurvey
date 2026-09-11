@@ -5950,7 +5950,15 @@ bool SubmitSectionPlaneClick(AppCommandState& st, const ray3d::Ray& ray, double 
                              std::vector<std::string>& log);
 
 /// Refresh the armed drag from the cursor. No-op when nothing is armed.
-void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& ray);
+///
+/// \p snapWorld, when given, is the object-snap point under the cursor in WORLD coordinates
+/// (REQ-340). The handle then lands where that point projects onto its drag axis, so a section
+/// plane can be placed exactly on a midpoint, an endpoint or a face centre instead of wherever the
+/// cursor happened to be — which is what makes the cut a measured thing rather than an eyeballed
+/// one. Ignored when the snapped point is further from the axis than the cursor already is, so a
+/// snap somewhere off in the drawing cannot yank the plane away from the pointer.
+void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& ray,
+                                const ray3d::Vec3* snapWorld = nullptr);
 
 /// Refresh \ref AppCommandState::sectionPlaneGripHover. No-op while a drag is armed.
 void UpdateSectionPlaneGripHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorld);

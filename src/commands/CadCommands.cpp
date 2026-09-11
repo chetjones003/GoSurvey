@@ -33581,7 +33581,8 @@ static bool SectionPlaneGripAxis(const AppCommandState& st, SectionPlaneGrip gri
   return true;
 }
 
-void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& rayIn) {
+void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& rayIn,
+                                const ray3d::Vec3* snapWorld) {
   const ray3d::Ray ray = SectionPlaneUnitRay(rayIn);
   const SectionPlaneGrip grip = static_cast<SectionPlaneGrip>(st.sectionPlaneGripDrag);
   if (grip == SectionPlaneGrip::None)
@@ -33595,6 +33596,23 @@ void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& rayIn) {
   double param = 0.0;
   if (!CadAxisDragParam(anchor, dir, ray, &param))
     return;  // sighting straight down the axis: no distance the gesture could mean
+
+  // REQ-340 — land on the object snap, if the cursor found one.
+  //
+  // The snapped point almost never lies ON the drag axis: the axis is a line through the handle,
+  // and a midpoint is somewhere out in the model. So the handle goes where that point PROJECTS onto
+  // the axis, which is the only reading of "put the plane at that midpoint" the constraint allows —
+  // and it is the reading that makes the plane pass exactly through the snapped point, since the
+  // plane is perpendicular to the axis it slides along.
+  //
+  // No further guard on WHETHER to honour it. `CadSnap::FindBest` only answers at all when the
+  // cursor is inside the snap aperture of a real feature, and that aperture is pixel-derived, so a
+  // point reaching here is by definition one the user is pointing at. A second distance test here
+  // would be this code second-guessing the snap system with a worse rule than the one it already
+  // applied — and the case it would reject is the useful one, a midpoint out in the model that the
+  // user is deliberately reaching for.
+  if (snapWorld)
+    param = ray3d::Dot(ray3d::Sub(*snapWorld, anchor), dir);
 
   // A DELTA from where the grab happened, so the handle does not leap to the cursor on the first
   // frame. `sectionPlaneGripStartParam` was recorded against the same anchor and axis.
