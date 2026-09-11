@@ -1329,6 +1329,59 @@ int main()
     tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
     tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
     tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
+    // REQ-337 — the live section clip. Derived from the ACTIVE UCS every frame rather than stored
+    // as a plane, which is what makes it track the UCS: move or turn the work plane and the cut
+    // follows on the next frame, with no command to re-run and no geometry rebuilt.
+    if (cmd.viewportSectionClip) {
+      tuning.sectionClip = SectionClipFromUcs(CadActiveUcsStorage(cmd), cmd.viewportSectionClipOffset,
+                                              cmd.viewportSectionClipFlip);
+      // REQ-337: and the rectangle that SHOWS where it cuts. Sized here rather than in the renderer
+      // because this is the side that knows how big the drawing is — the renderer is handed four
+      // corners and draws them.
+      //
+      // Sized from the SOLIDS, which are what a section clip is for. A drawing with none still gets
+      // a plane to look at, sized around the UCS origin, so turning the clip on always shows
+      // something: an indicator that appears only once you happen to own a solid would be at its
+      // least helpful exactly when a user is working out what the command does.
+      // Sized from the VISIBLE solids. A solid on a layer that is off, or isolated out under
+      // REQ-084 (d), is not on screen, so stretching the indicator across its extent would size the
+      // rectangle to geometry the user cannot see — it would stop reading as "the plane covers the
+      // model" and could be many times larger than everything drawn. `PickSubObjectAcrossSolids`
+      // and the zoom-extents walk both already filter this way.
+      //
+      // `ComputeBounds` is not free — it marches 64 points along every `CurveKind::Intersection`
+      // edge — and this runs every frame the clip is on, against REQ-100's 16 ms budget. It is kept
+      // per-frame deliberately, because the rectangle must follow the model as it is edited and
+      // there is no invalidation signal here that covers a solid changing shape; skipping the
+      // invisible ones is what keeps the cost proportional to what is actually drawn. If a drawing
+      // of many boolean solids ever makes this measurable, the fix is to cache it against
+      // `cadGpuRevision`, which already bumps on every geometry change.
+      brep::Bounds bb;
+      for (size_t si = 0; si < cmd.cadSolids.size(); ++si) {
+        const CadSolidPtr& sp = cmd.cadSolids[si];
+        if (!sp || !SolidVisible(cmd, si))
+          continue;
+        const brep::Bounds b = brep::ComputeBounds(*sp);
+        if (!b.valid)
+          continue;
+        if (!bb.valid) {
+          bb = b;
+          continue;
+        }
+        bb.mn.x = std::min(bb.mn.x, b.mn.x); bb.mn.y = std::min(bb.mn.y, b.mn.y); bb.mn.z = std::min(bb.mn.z, b.mn.z);
+        bb.mx.x = std::max(bb.mx.x, b.mx.x); bb.mx.y = std::max(bb.mx.y, b.mx.y); bb.mx.z = std::max(bb.mx.z, b.mx.z);
+      }
+      if (!bb.valid) {
+        const ucs::Ucs f = CadActiveUcsStorage(cmd);
+        const double r = std::max(10.0, static_cast<double>(cmd.viewportZoom) > 1e-9
+                                            ? 50.0 / static_cast<double>(cmd.viewportZoom)
+                                            : 50.0);
+        bb.valid = true;
+        bb.mn = ray3d::Vec3{f.origin.x - r, f.origin.y - r, f.origin.z - r};
+        bb.mx = ray3d::Vec3{f.origin.x + r, f.origin.y + r, f.origin.z + r};
+      }
+      tuning.sectionClipIndicator = SectionClipIndicatorQuad(tuning.sectionClip, bb.mn, bb.mx);
+    }
     // Build PDF render list: committed attachments + cursor-follow preview when picking insert point.
     std::vector<PdfAttachment> pdfRenderList;
     if (!cmd.pdfAttachments.empty())
@@ -1504,6 +1557,19 @@ int main()
     // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
+#ifdef GOSURVEY_DEVELOPER_SHELL
+    // REQ-161 (TASK-249): a devshell test capturing the VIEWPORT, serviced here because this is the
+    // one point in the frame where the renderer has just drawn and its framebuffer still holds the
+    // image.
+    //
+    // Separate from `DevShell_RequestScreenshot`, which reads the WINDOW's GL_FRONT buffer, and the
+    // reason is measured rather than assumed: on a window the compositor is not presenting — which
+    // is the normal case for an automated run — that read returns **pure black**, and six
+    // screenshots of a clip plane moving came back byte-identical. Reading the renderer's own
+    // `fbo_` through `CaptureThumbnailBmp` does not depend on the window being composited at all,
+    // so it captures what was actually drawn.
+    DevShell_ServiceViewportCapture(activeRenderer);
+#endif
     }
 
     // Frame profiler overlay (PERFHUD) — after the render so its render-ms is this frame's, not

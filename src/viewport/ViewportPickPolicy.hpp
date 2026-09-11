@@ -42,6 +42,12 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
           cmd.sweepPhase == AppCommandState::SweepPhase::SelectInputs) ||
          (cmd.active == K::Slice &&
           cmd.slicePhase == AppCommandState::SlicePhase::SelectSolids) ||
+         // REQ-335 increment 2: SECTION's selection step, the same accumulate-and-Enter shape as
+         // SLICE's directly above. Missing from this list is the ALIGN accident recorded above,
+         // repeated — a command whose state machine has a selection phase but whose CLICKS were
+         // never routed to it, so the prompt appears and nothing can be picked.
+         (cmd.active == K::Section &&
+          cmd.sectionPhase == AppCommandState::SectionPhase::SelectSolids) ||
          cmd.active == K::Boolean;
 }
 
@@ -217,6 +223,21 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     }
     return R::Ignore;
   }
+  // SECTION (REQ-335 increment 2): select solids, then three snapped points for the plane. The same
+  // shape as SLICE above minus the keep-side step, because SECTION keeps neither piece — it keeps
+  // the outline.
+  case K::Section: {
+    using SecP = AppCommandState::SectionPhase;
+    switch (cmd.sectionPhase) {
+    case SecP::SelectSolids:
+      return R::SelectionAccumulate;
+    case SecP::WaitP1:
+    case SecP::WaitP2:
+    case SecP::WaitP3:
+      return R::SnappedPointPick;
+    }
+    return R::Ignore;
+  }
   case K::Align:
     return cmd.alignPhase == AppCommandState::AlignPhase::PickSelection ? R::SelectionAccumulate
                                                                        : R::SnappedPointPick;
@@ -358,6 +379,12 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::TrimState:
   case K::Elev:
     return R::Ignore;  // system-variable text prompts, answered on the command line
+  case K::SectionClip:
+    // REQ-337. Same shape as the two above: the bare `SECTIONCLIP` prompt is waiting for ON, OFF,
+    // FLIP or a distance, all of which arrive on the command line — a viewport click answers none
+    // of them. Stated rather than left to the tail return, because this switch has no `default:`
+    // precisely so that every Kind carries a decision someone made.
+    return R::Ignore;
   case K::VpFreeze:
   case K::VpThaw:
     return R::Ignore;  // REQ-046: layer freezing is per-viewport, so these pick inside a floating

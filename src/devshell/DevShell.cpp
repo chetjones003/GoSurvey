@@ -5,6 +5,9 @@
 #include "CadUiChrome.hpp"
 #include "CadCommands.hpp"
 #include "AppPaths.hpp"
+// Only the .cpp needs the full type: DevShell.hpp forward-declares it so the render stack does not
+// follow this header everywhere it is included.
+#include "render/ViewportRenderer.hpp"
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -51,6 +54,8 @@ ImGuiTestEngine*        g_engine = nullptr;
 std::string             g_cliTest;
 GLFWwindow*             g_cliWindow = nullptr;
 std::string             g_shotPending;  // path set by DevShell_RequestScreenshot; serviced in PostSwap
+std::string             g_viewportCapPending;   // path set by DevShell_RequestViewportCapture
+int                     g_viewportCapMaxDim = 0;  // serviced in main.cpp right after RenderScene
 int                     g_resizeW = 0;  // set by DevShell_SetWindowSize; serviced in PostSwap
 int                     g_resizeH = 0;
 bool                    g_cliQueued = false;
@@ -814,6 +819,26 @@ void DevShell_RequestScreenshot(const char* pathUtf8)
 {
   if (pathUtf8 && pathUtf8[0] != '\0')
     g_shotPending = pathUtf8;
+}
+
+void DevShell_RequestViewportCapture(const char* pathUtf8, int maxDim)
+{
+  if (pathUtf8 && pathUtf8[0] != '\0' && maxDim >= 8)
+  {
+    g_viewportCapPending = pathUtf8;
+    g_viewportCapMaxDim = maxDim;
+  }
+}
+
+void DevShell_ServiceViewportCapture(const ViewportRenderer& renderer)
+{
+  if (g_viewportCapPending.empty())
+    return;
+  const std::string p = g_viewportCapPending;
+  const int maxDim = g_viewportCapMaxDim;
+  g_viewportCapPending.clear();
+  const bool ok = renderer.CaptureThumbnailBmp(p.c_str(), maxDim);
+  DevShell_Logf("te", "viewport capture %s %s", p.c_str(), ok ? "ok" : "FAILED");
 }
 
 void DevShell_SetWindowSize(int w, int h)

@@ -10,6 +10,9 @@
 
 struct ImGuiTestEngine;
 struct GLFWwindow;
+/// Forward-declared rather than included: `ViewportRenderer.hpp` pulls the whole render stack, and
+/// the capture hook below only ever takes a reference to one.
+class ViewportRenderer;
 
 void DevShell_Log(std::string_view channel, std::string_view message);
 void DevShell_Logf(const char* channel, const char* fmt, ...);
@@ -45,7 +48,25 @@ bool DevShell_CliRunFinished(int* outExitCode);
 
 /// Queue a screenshot to be written on the next presented frame (from the main thread, so it is
 /// safe to call from a Test Engine coroutine). Yield at least 2 frames after calling.
+///
+/// **Captures the WINDOW, and therefore depends on the window being presented.** On a window the
+/// compositor is not showing — the normal case for an automated run — the `GL_FRONT` read this
+/// performs returns pure black. When the evidence wanted is the 3D VIEWPORT, prefer
+/// \ref DevShell_RequestViewportCapture, which does not have that dependency.
 void DevShell_RequestScreenshot(const char* pathUtf8);
+
+/// Queue a capture of the 3D VIEWPORT's own framebuffer, written after the next `RenderScene`
+/// (REQ-161, TASK-249). Yield at least 2 frames after calling.
+///
+/// Unlike \ref DevShell_RequestScreenshot this reads the renderer's `fbo_` rather than the window's
+/// front buffer, so it captures what was actually drawn whether or not the window is composited —
+/// which is what makes it usable as evidence from a headless-ish automated run. `maxDim` bounds the
+/// longer side; the image is never upscaled.
+void DevShell_RequestViewportCapture(const char* pathUtf8, int maxDim);
+
+/// Serviced by the main loop immediately after `RenderScene`, while the renderer's framebuffer still
+/// holds this frame. No-op unless a capture is pending.
+void DevShell_ServiceViewportCapture(const ViewportRenderer& renderer);
 
 /// Resize the GLFW window (Debug driver / responsive-layout evidence). Yield a few frames after.
 void DevShell_SetWindowSize(int w, int h);

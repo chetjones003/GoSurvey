@@ -795,3 +795,107 @@ TEST_CASE("A face drag applies to the face GRABBED, not to whatever is selected 
   // 20 x 10, pushed from 8 to 20 tall.
   REQUIRE(brep::ComputeMassProperties(*st.cadSolids[0]).volume == Catch::Approx(4000.0));
 }
+
+// --- A whole SOLID as a pickable, highlightable entity (REQ-318 amended, #149 follow-up) --------
+//
+// Reported twice in one session, as two separate complaints that turned out to be one gap: a solid
+// could not be selected by clicking, and nothing lit up under the cursor before selecting it.
+//
+// Both had the same cause. `PickClosestCadEntity` — the function behind click-to-select AND the
+// hover pre-highlight — returns only `LineSeg`, `Arc`, `Circle`, `Ellipse` and `Polyline`, and
+// `AppendEntityHighlight` draws exactly those five. So `ComputeSelectionFromRect` was the only
+// thing in the application that ever put a solid in a selection: a solid could be chosen by
+// dragging a rectangle around it and by no other gesture, in any command or idle, with no
+// highlight beforehand.
+//
+// These pin the two halves that close it.
+
+TEST_CASE("A whole solid is picked by a ray, as a Solid entity", "[subobject][solidentity]") {
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  AddBox(st, World(), 20.0, 10.0, 8.0);  // x [-10,10], y [-5,5], z [0,8]
+
+  SECTION("a ray onto the top face names the solid") {
+    SelectedEntity e{};
+    REQUIRE(PickClosestSolidEntity(st, RayAt({0, 0, 100}, {0, 0, 8}), 0.5f, &e));
+    CHECK(e.type == SelectedEntity::Type::Solid);
+    CHECK(e.index == 0);
+  }
+
+  SECTION("an edge and a vertex name the solid too, not just a face") {
+    // Any sub-object hit names the solid — that is what makes "click anywhere on it" work rather
+    // than only "click exactly on an edge".
+    SelectedEntity e{};
+    REQUIRE(PickClosestSolidEntity(st, RayAt({0, -40, 40}, {0, -5, 8}), 0.5f, &e));  // top-front edge
+    CHECK(e.index == 0);
+    REQUIRE(PickClosestSolidEntity(st, RayAt({-40, -40, 40}, {-10, -5, 8}), 0.5f, &e));  // corner
+    CHECK(e.index == 0);
+  }
+
+  SECTION("a ray that misses picks nothing") {
+    SelectedEntity e{};
+    CHECK_FALSE(PickClosestSolidEntity(st, RayAt({100, 100, 100}, {200, 200, 200}), 0.5f, &e));
+  }
+
+  SECTION("the NEAREST solid wins when two are in line") {
+    ucs::Ucs far = World();
+    far.origin = {0.0, 0.0, 40.0};
+    AddBox(st, far, 20.0, 10.0, 8.0);  // a second box directly above the first
+    SelectedEntity e{};
+    // Looking down from high above, the upper box is nearer the eye and must be the one named.
+    REQUIRE(PickClosestSolidEntity(st, RayAt({0, 0, 200}, {0, 0, 0}), 0.5f, &e));
+    CHECK(e.index == 1);
+    // ...and looking UP from below, the lower one is.
+    REQUIRE(PickClosestSolidEntity(st, RayAt({0, 0, -200}, {0, 0, 0}), 0.5f, &e));
+    CHECK(e.index == 0);
+  }
+
+  SECTION("a null out is refused rather than crashed on") {
+    CHECK_FALSE(PickClosestSolidEntity(st, RayAt({0, 0, 100}, {0, 0, 8}), 0.5f, nullptr));
+  }
+}
+
+TEST_CASE("A hovered solid draws a highlight", "[subobject][solidentity]") {
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  AddBox(st, World(), 20.0, 10.0, 8.0);
+
+  std::vector<float> hoverLines;
+  std::vector<float> hoverCircles;
+
+  SECTION("nothing hovered draws nothing") {
+    st.viewportHoverEntityValid = false;
+    BuildHoverHighlight(st, &hoverLines, &hoverCircles);
+    CHECK(hoverLines.empty());
+  }
+
+  SECTION("a hovered solid draws its wireframe edges") {
+    st.viewportHoverEntityValid = true;
+    st.viewportHoverEntity.type = SelectedEntity::Type::Solid;
+    st.viewportHoverEntity.index = 0;
+    BuildHoverHighlight(st, &hoverLines, &hoverCircles);
+    // A box has twelve edges, each two xyz endpoints: 12 * 6 floats. Asserted as a count rather
+    // than "non-empty", because half a wireframe is the failure that looks like success.
+    CHECK(hoverLines.size() == static_cast<std::size_t>(12 * 6));
+    CHECK(hoverCircles.empty());
+  }
+
+  SECTION("an ALREADY SELECTED solid draws no hover — selection takes precedence") {
+    SelectedEntity sel{};
+    sel.type = SelectedEntity::Type::Solid;
+    sel.index = 0;
+    st.selection.push_back(sel);
+    st.viewportHoverEntityValid = true;
+    st.viewportHoverEntity = sel;
+    BuildHoverHighlight(st, &hoverLines, &hoverCircles);
+    CHECK(hoverLines.empty());
+  }
+
+  SECTION("a solid index that is not there draws nothing rather than reading past the end") {
+    st.viewportHoverEntityValid = true;
+    st.viewportHoverEntity.type = SelectedEntity::Type::Solid;
+    st.viewportHoverEntity.index = 7;
+    BuildHoverHighlight(st, &hoverLines, &hoverCircles);
+    CHECK(hoverLines.empty());
+  }
+}
