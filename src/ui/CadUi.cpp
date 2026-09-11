@@ -13976,6 +13976,30 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.gizmoHoverAxis = -1;
         BumpCadGpuCache(cmd);
       }
+      // REQ-339 — the section plane's handles: the live drag, and the pre-highlight.
+      //
+      // Outside `runHoverPick`, like the gizmo above and for the same two reasons: this is six
+      // ray-to-point tests against widgets whose positions are already known, not a walk of the
+      // drawing; and while a drag is armed the plane has to follow the cursor every frame or the
+      // gesture is not direct manipulation at all — which for THIS widget also means the cut moves,
+      // since the offset the drag writes is the one the shader reads next frame.
+      if (modelSpace && cmd.viewportSectionClip) {
+        const ray3d::Ray spRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+        if (cmd.sectionPlaneGripDrag >= 0) {
+          UpdateSectionPlaneGripDrag(cmd, spRay);
+          BumpCadGpuCache(cmd);
+        } else if (!ImGui::GetIO().KeyCtrl) {
+          const int wasHot = cmd.sectionPlaneGripHover;
+          UpdateSectionPlaneGripHover(cmd, spRay,
+                                      static_cast<double>(CadSnap::WorldToleranceFromPixels(
+                                          avail.y, halfH, kGizmoHandleGrabPx)));
+          if (cmd.sectionPlaneGripHover != wasHot)
+            BumpCadGpuCache(cmd);
+        }
+      } else if (cmd.sectionPlaneGripHover >= 0) {
+        cmd.sectionPlaneGripHover = -1;
+        BumpCadGpuCache(cmd);
+      }
       if (blockEntityHover) {
         cmd.viewportHoverEntityValid = false;
         cmd.viewportHoverPickGate.primed = false;
@@ -14837,6 +14861,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                              log)) {
           BumpCadGpuCache(cmd);
           handled = true;  // the click was the gizmo's; nothing below may also act on it
+        }
+      }
+      // REQ-339 — the section plane and its handles, on the same terms as the gizmo above and for
+      // the same reason: a handle sits over the thing it moves, so a click that selected straight
+      // through it would leave the plane undraggable.
+      //
+      // AFTER the gizmo, because the gizmo belongs to a selection the user made deliberately and
+      // the section plane is a view aid that can cover a large part of the drawing. Where both are
+      // reachable, the one the user was already working with wins.
+      //
+      // `SubmitSectionPlaneClick` returns false unless the click actually lands on the plane or one
+      // of its handles, so a click anywhere else means exactly what it always meant.
+      if (!handled && modelSpace && !ImGui::GetIO().KeyCtrl) {
+        const ray3d::Ray spRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        if (SubmitSectionPlaneClick(cmd, spRay,
+                                    static_cast<double>(CadSnap::WorldToleranceFromPixels(
+                                        avail.y, halfH, kGizmoHandleGrabPx)),
+                                    log)) {
+          BumpCadGpuCache(cmd);
+          handled = true;
         }
       }
       const bool subObjectClick = !handled && modelSpace && ImGui::GetIO().KeyCtrl;

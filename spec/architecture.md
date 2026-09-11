@@ -4202,9 +4202,40 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   clean. Caught by reading the switch, not by the compiler — which is the argument for the route
   being a named thing a test can assert rather than a condition spelled out at each gate.
 
+- **(g) A handle's drag axis is FROZEN at the grab** (added 2026-09-11 with REQ-339, D-2026-09-11-c).
+  `sectionPlaneGripAnchor` / `sectionPlaneGripAxis` are recorded when the handle is grabbed, and the
+  live drag measures against those rather than against the handle's current position.
+
+  This is not tidiness. The handle sits **on the plane**, so dragging the plane moves the handle.
+  Re-deriving the axis each frame measures that frame's delta from wherever the plane has already
+  got to — so the delta collapses to zero on the second frame, a HELD cursor snaps the plane back to
+  where it was grabbed, and a moving one oscillates. It is invisible to any test that calls the drag
+  once, which is why the assertion is five no-op frames with the cursor still.
+
+  The same shape applies to the stretch handles, and there it hid a second error: moving an edge by
+  the full drag delta *and* shifting the centre by it moves that edge **twice** as far as the
+  cursor. Both were found by the same test pass, and both are reinstated as mutations in TASK-251.
+
+- **(h) A view state is selected by a bool, not by entering `selection`** (added 2026-09-11).
+  `sectionPlaneSelected` is its own flag.
+
+  The plane has no layer, no attributes, no id and no place in `.gs`. Putting it in
+  `AppCommandState::selection` would put a branch for it in every consumer of that vector — MOVE,
+  DELETE, DXF export, the Properties panel, the highlight walk — and the first one that forgot would
+  be a view setting silently transformed, exported or erased. That is the argument `SelectedSubObject`
+  already records for keeping its own store (D-2026-09-04-a), applied to a second case.
+
+  The cost is that "clear the selection" now has two things to clear, so `ClearCadSelection` handles
+  both. That is one function knowing about two stores, against every consumer knowing about one
+  extra kind.
+
 - **Alternatives considered.** *Store the plane's appearance as geometry when the command runs* —
   breaks (c). *Give SECTIONPLANE its own independent plane* — breaks (a). *Reuse the 2D hatch
   engine* — breaks (d). *Accept any face and project the frame to the nearest plane* — silently
   answers a question the user did not ask; refusing by name is REQ-201's whole point. *Keep the
   `Ctrl` requirement and document it* — a command that asks for a face and then ignores clicks on
-  faces is the bug this slice exists downstream of.
+  faces is the bug this slice exists downstream of. *Commit a drag through the undo stack* — a slide
+  changes no geometry, so there would be nothing to undo but a number; the honest consequence, that
+  `UNDO` does not step a slide back, is written into REQ-339 instead. *Make the section plane a
+  `SelectedEntity`* — breaks (h), and would promise Properties and `.gs` support that slice 2 of
+  this issue does not deliver.

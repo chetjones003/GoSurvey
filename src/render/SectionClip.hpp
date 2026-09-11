@@ -108,32 +108,88 @@ struct SectionClipIndicator {
   ray3d::Vec3 corner[4]{};  ///< world space, wound counter-clockwise about the plane normal
 };
 
+/// The plane's own in-plane axes, as one function so every consumer agrees on them (REQ-339).
+///
+/// The rectangle, the hatch, the grips and the grip PICK all work in this basis. If any two of them
+/// derived it separately and differed, the user would click one place and grab another — so it is
+/// computed once, here, and the fact that its direction is arbitrary becomes harmless.
+///
+/// The helper axis is the one LEAST aligned with the normal, so the cross product never collapses.
+/// A fixed helper breaks precisely when the plane faces along it, which for a level cut (normal =
+/// +Z) is the most common case there is.
+///
+/// False when the normal is not a usable unit vector, in which case there is no plane to speak of.
+[[nodiscard]] inline bool SectionClipPlaneBasis(const SectionClipPlane& p, ray3d::Vec3* outU,
+                                                ray3d::Vec3* outV, ray3d::Vec3* outN = nullptr) {
+  const ray3d::Vec3 n = ray3d::Normalize(ray3d::Vec3{p.nx, p.ny, p.nz});
+  if (!(std::isfinite(n.x) && std::isfinite(n.y) && std::isfinite(n.z)))
+    return false;
+  if (std::fabs(ray3d::Length(n) - 1.0) > 1e-6)
+    return false;
+  const ray3d::Vec3 helper =
+      (std::fabs(n.z) < 0.9) ? ray3d::Vec3{0.0, 0.0, 1.0} : ray3d::Vec3{1.0, 0.0, 0.0};
+  const ray3d::Vec3 u = ray3d::Normalize(ray3d::Cross(helper, n));
+  if (outU)
+    *outU = u;
+  if (outV)
+    *outV = ray3d::Cross(n, u);
+  if (outN)
+    *outN = n;
+  return true;
+}
+
+/// A section plane's rectangle stated in its OWN basis — centre and half-sizes along
+/// \ref SectionClipPlaneBasis's u and v (REQ-339).
+///
+/// Invalid means "derive it from the model", which is what REQ-338 shipped and what a freshly
+/// placed plane uses. It becomes valid the moment a stretch grip is dragged, because from then on
+/// the size is something the user chose and must not be silently re-derived on the next frame.
+///
+/// Stated in the plane's basis rather than as four world corners so that sliding the plane along
+/// its normal — the common gesture — leaves it completely untouched.
+struct SectionPlaneExtent {
+  bool valid = false;
+  double cu = 0.0;
+  double cv = 0.0;
+  double halfU = 0.0;
+  double halfV = 0.0;
+};
+
 /// Build the indicator rectangle for \p p, sized to cover the world box \p bbMin..\p bbMax with a
-/// margin so its edges stand clear of the model rather than coinciding with it.
+/// margin so its edges stand clear of the model rather than coinciding with it — or, when \p ext is
+/// valid, to the size the user stretched it to (REQ-339).
 ///
 /// The rectangle is built in the plane's OWN axes, not in world X/Y, so it stays a rectangle on the
-/// plane under any orientation — a tilted UCS included. The two in-plane axes come from an
-/// orthonormal basis around the normal; which way they point is arbitrary and does not matter,
-/// because the extent is measured from the model's own corners either way.
+/// plane under any orientation — a tilted UCS included.
 [[nodiscard]] inline SectionClipIndicator SectionClipIndicatorQuad(const SectionClipPlane& p,
                                                                    const ray3d::Vec3& bbMin,
                                                                    const ray3d::Vec3& bbMax,
-                                                                   double marginFrac = 0.15) {
+                                                                   double marginFrac = 0.15,
+                                                                   const SectionPlaneExtent& ext = {}) {
   SectionClipIndicator out;
   if (!p.active)
     return out;
-  const ray3d::Vec3 n = ray3d::Normalize(ray3d::Vec3{p.nx, p.ny, p.nz});
-  if (!(std::isfinite(n.x) && std::isfinite(n.y) && std::isfinite(n.z)))
-    return out;
-  if (std::fabs(ray3d::Length(n) - 1.0) > 1e-6)
+  ray3d::Vec3 n{}, u{}, v{};
+  if (!SectionClipPlaneBasis(p, &u, &v, &n))
     return out;  // a degenerate normal has no plane to draw
 
-  // An in-plane basis. The helper axis is chosen to be the one LEAST aligned with the normal, so
-  // the cross product never collapses — picking a fixed axis breaks precisely when the plane faces
-  // along it, which for a level cut (normal = +Z) is the most common case there is.
-  const ray3d::Vec3 helper = (std::fabs(n.z) < 0.9) ? ray3d::Vec3{0.0, 0.0, 1.0} : ray3d::Vec3{1.0, 0.0, 0.0};
-  const ray3d::Vec3 u = ray3d::Normalize(ray3d::Cross(helper, n));
-  const ray3d::Vec3 v = ray3d::Cross(n, u);
+  // Lift a point with the given (u, v) onto the plane: the plane's own offset along the normal is
+  // `c`, because n is a unit vector.
+  auto at = [&](double su, double sv) {
+    return ray3d::Vec3{u.x * su + v.x * sv + n.x * p.c, u.y * su + v.y * sv + n.y * p.c,
+                       u.z * su + v.z * sv + n.z * p.c};
+  };
+
+  // A stretched rectangle is the user's own size and is used verbatim. Nothing about the model
+  // enters here — that is the whole point of the grips.
+  if (ext.valid && ext.halfU > 1e-9 && ext.halfV > 1e-9) {
+    out.corner[0] = at(ext.cu - ext.halfU, ext.cv - ext.halfV);
+    out.corner[1] = at(ext.cu + ext.halfU, ext.cv - ext.halfV);
+    out.corner[2] = at(ext.cu + ext.halfU, ext.cv + ext.halfV);
+    out.corner[3] = at(ext.cu - ext.halfU, ext.cv + ext.halfV);
+    out.valid = true;
+    return out;
+  }
 
   // Measure the model's extent in those axes, from all eight box corners: an oblique plane through
   // a box is not covered by projecting only two of them.
@@ -160,13 +216,6 @@ struct SectionClipIndicator {
   const double padV = std::fmax(spanV * marginFrac, base * 0.02);
   const double u0 = uMin - padU, u1 = uMax + padU;
   const double v0 = vMin - padV, v1 = vMax + padV;
-
-  // Lift the rectangle onto the plane: any point with the right (u, v) plus the plane's own offset
-  // along the normal, which is `c` because n is a unit vector.
-  auto at = [&](double su, double sv) {
-    return ray3d::Vec3{u.x * su + v.x * sv + n.x * p.c, u.y * su + v.y * sv + n.y * p.c,
-                       u.z * su + v.z * sv + n.z * p.c};
-  };
   out.corner[0] = at(u0, v0);
   out.corner[1] = at(u1, v0);
   out.corner[2] = at(u1, v1);
@@ -258,26 +307,140 @@ inline constexpr int kSectionPlaneHatchMaxSegments = 256;
     ++emitted;
   }
 
-  // The section line is the rectangle's LOWEST edge in world Z — "base" meaning what a person
-  // looking at the model would call the bottom. A level plane has four edges at one elevation, so
-  // the comparison is strict and the first edge wins: an arbitrary but stable choice, and a plane
-  // seen face-on has no visible base anyway.
-  int best = 0;
-  double bestZ = 1e300;
-  for (int i = 0; i < 4; ++i) {
-    const ray3d::Vec3& a = ind.corner[i];
-    const ray3d::Vec3& b = ind.corner[(i + 1) & 3];
-    const double midZ = 0.5 * (a.z + b.z);
-    if (midZ < bestZ) {
-      bestZ = midZ;
-      best = i;
-    }
-  }
-  out.lineA = ind.corner[best];
-  out.lineB = ind.corner[(best + 1) & 3];
+  // The section line runs through the MIDDLE of the rectangle, along its u axis — the bright line
+  // across the centre of AutoCAD's section plane, and where its two length grips live (REQ-339,
+  // user request 2026-09-11 with a screenshot).
+  //
+  // REQ-338 put it on the lowest edge instead. That was wrong in the way an edge is always wrong
+  // here: it coincides with the rectangle's own outline, so it adds no information, and it leaves
+  // the middle of the plane — where the grips have to be — unmarked.
+  out.lineA = ray3d::Vec3{org.x + u.x * 0.0 + v.x * (lv * 0.5), org.y + u.y * 0.0 + v.y * (lv * 0.5),
+                          org.z + u.z * 0.0 + v.z * (lv * 0.5)};
+  out.lineB = ray3d::Vec3{out.lineA.x + u.x * lu, out.lineA.y + u.y * lu, out.lineA.z + u.z * lu};
   out.valid = true;
   return out;
 }
+
+/// The handles on a selected section plane (REQ-339, GitHub issue #479 acceptance 5-7).
+///
+/// Deliberately a small fixed set, in the order the user asked for them. `Move` slides the plane
+/// along its own normal, which is the gesture the whole feature exists for; `Flip` reverses which
+/// half survives; the four stretch handles resize the rectangle without changing what is cut.
+enum class SectionPlaneGrip : int {
+  None = -1,
+  Move = 0,    ///< Centre of the section line. Drag along the plane NORMAL.
+  Flip,        ///< A click, not a drag. Sits off the line so it cannot be grabbed by accident.
+  LengthNeg,   ///< The section line's -u end. Drag along u.
+  LengthPos,   ///< The section line's +u end.
+  HeightNeg,   ///< Mid-point of the -v edge. Drag along v.
+  HeightPos,   ///< Mid-point of the +v edge.
+  Count        ///< Not a grip; the size of \ref SectionPlaneGrips::at.
+};
+
+inline constexpr int kSectionPlaneGripCount = static_cast<int>(SectionPlaneGrip::Count);
+
+/// Where each handle sits, in world coordinates.
+struct SectionPlaneGrips {
+  bool valid = false;
+  ray3d::Vec3 at[kSectionPlaneGripCount]{};
+  /// Unit directions the draggable handles move along, parallel to \ref at. The normal for `Move`,
+  /// ±u for the length pair, ±v for the height pair; zero for `Flip`, which is a click.
+  ray3d::Vec3 dir[kSectionPlaneGripCount]{};
+};
+
+/// Build the handles for the rectangle in \p ind on plane \p p (REQ-339).
+///
+/// Positions come from the RECTANGLE, not from the stored extent, so a plane still sized to the
+/// model gets grips in the right place before it has ever been stretched — and so the grip a user
+/// aims at is by construction the grip that is drawn.
+[[nodiscard]] inline SectionPlaneGrips SectionPlaneGripsFor(const SectionClipIndicator& ind,
+                                                            const SectionClipPlane& p) {
+  SectionPlaneGrips g;
+  if (!ind.valid)
+    return g;
+  ray3d::Vec3 n{}, u{}, v{};
+  if (!SectionClipPlaneBasis(p, &u, &v, &n))
+    return g;
+
+  const ray3d::Vec3 eu = ray3d::Sub(ind.corner[1], ind.corner[0]);
+  const ray3d::Vec3 ev = ray3d::Sub(ind.corner[3], ind.corner[0]);
+  const double lu = ray3d::Length(eu);
+  const double lv = ray3d::Length(ev);
+  if (!(lu > 1e-9 && lv > 1e-9))
+    return g;
+  const ray3d::Vec3 centre{ind.corner[0].x + 0.5 * (eu.x + ev.x),
+                           ind.corner[0].y + 0.5 * (eu.y + ev.y),
+                           ind.corner[0].z + 0.5 * (eu.z + ev.z)};
+  auto off = [](const ray3d::Vec3& base, const ray3d::Vec3& d, double s) {
+    return ray3d::Vec3{base.x + d.x * s, base.y + d.y * s, base.z + d.z * s};
+  };
+
+  const int kMove = static_cast<int>(SectionPlaneGrip::Move);
+  const int kFlip = static_cast<int>(SectionPlaneGrip::Flip);
+  const int kLenN = static_cast<int>(SectionPlaneGrip::LengthNeg);
+  const int kLenP = static_cast<int>(SectionPlaneGrip::LengthPos);
+  const int kHgtN = static_cast<int>(SectionPlaneGrip::HeightNeg);
+  const int kHgtP = static_cast<int>(SectionPlaneGrip::HeightPos);
+
+  g.at[kMove] = centre;
+  g.dir[kMove] = n;
+
+  // The flip handle sits a quarter of the way along +u from the centre, ON the section line. Off
+  // the centre so it cannot be confused with the move handle, and on the line so it reads as part
+  // of the same control rather than as a stray marker floating on the plane.
+  g.at[kFlip] = off(centre, u, lu * 0.25);
+  g.dir[kFlip] = ray3d::Vec3{0.0, 0.0, 0.0};  // a click, not a drag
+
+  g.at[kLenN] = off(centre, u, -lu * 0.5);
+  g.dir[kLenN] = ray3d::Vec3{-u.x, -u.y, -u.z};
+  g.at[kLenP] = off(centre, u, lu * 0.5);
+  g.dir[kLenP] = u;
+
+  g.at[kHgtN] = off(centre, v, -lv * 0.5);
+  g.dir[kHgtN] = ray3d::Vec3{-v.x, -v.y, -v.z};
+  g.at[kHgtP] = off(centre, v, lv * 0.5);
+  g.dir[kHgtP] = v;
+
+  g.valid = true;
+  return g;
+}
+
+/// The rectangle in \p ind restated as a stored extent (REQ-339).
+///
+/// Used to SEED the stored extent the first time a stretch grip is dragged: the plane keeps exactly
+/// the size it is showing, and only the dragged edge moves. Without this, the first stretch would
+/// snap the rectangle to some default and then resize it, which reads as the plane jumping.
+[[nodiscard]] inline SectionPlaneExtent SectionPlaneExtentFromQuad(const SectionClipIndicator& ind,
+                                                                   const SectionClipPlane& p) {
+  SectionPlaneExtent e;
+  if (!ind.valid)
+    return e;
+  ray3d::Vec3 n{}, u{}, v{};
+  if (!SectionClipPlaneBasis(p, &u, &v, &n))
+    return e;
+  const ray3d::Vec3 eu = ray3d::Sub(ind.corner[1], ind.corner[0]);
+  const ray3d::Vec3 ev = ray3d::Sub(ind.corner[3], ind.corner[0]);
+  const double lu = ray3d::Length(eu);
+  const double lv = ray3d::Length(ev);
+  if (!(lu > 1e-9 && lv > 1e-9))
+    return e;
+  const ray3d::Vec3 centre{ind.corner[0].x + 0.5 * (eu.x + ev.x),
+                           ind.corner[0].y + 0.5 * (eu.y + ev.y),
+                           ind.corner[0].z + 0.5 * (eu.z + ev.z)};
+  e.cu = ray3d::Dot(centre, u);
+  e.cv = ray3d::Dot(centre, v);
+  e.halfU = lu * 0.5;
+  e.halfV = lv * 0.5;
+  e.valid = true;
+  return e;
+}
+
+/// Smallest half-size a stretch grip may leave, in drawing units (REQ-339).
+///
+/// A rectangle dragged through zero would invert — the corners would cross and the hatch would run
+/// the other way — and a zero-size one cannot be grabbed again to undo the mistake. Clamping is the
+/// behaviour that leaves the user a way back.
+inline constexpr double kSectionPlaneMinHalfExtent = 1.0e-3;
 
 /// A vec4 that keeps every vertex, for the passes that must not clip (the grid, and every UI
 /// overlay). Stated as a function rather than written out at each call site so "what does 'do not

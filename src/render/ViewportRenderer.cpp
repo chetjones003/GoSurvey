@@ -2683,6 +2683,65 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glDrawArrays(GL_LINES, 0, 2);
       glLineWidth(kLwMain);
     }
+    // REQ-339: the handles, when the plane is selected.
+    //
+    // Each is a small square drawn in the PLANE's own axes rather than screen-aligned, so it lies
+    // flat on the plane it belongs to and cannot be mistaken for a marker floating in front of it.
+    // Sized from the rectangle, for the same reason the hatch density is: a screen-derived size
+    // would change with zoom, and these are built once per frame from world quantities.
+    const SectionPlaneGrips& grips = tuning.sectionPlaneGrips;
+    if (grips.valid) {
+      ray3d::Vec3 gu{}, gv{};
+      if (SectionClipPlaneBasis(tuning.sectionClip, &gu, &gv)) {
+        const ray3d::Vec3 e0 = ray3d::Sub(tuning.sectionClipIndicator.corner[1],
+                                          tuning.sectionClipIndicator.corner[0]);
+        const ray3d::Vec3 e1 = ray3d::Sub(tuning.sectionClipIndicator.corner[3],
+                                          tuning.sectionClipIndicator.corner[0]);
+        const double diag = std::sqrt(ray3d::Dot(e0, e0) + ray3d::Dot(e1, e1));
+        const double r = std::max(diag * 0.012, 1e-6);
+        std::vector<float> quads;
+        std::vector<float> outlines;
+        quads.reserve(static_cast<size_t>(kSectionPlaneGripCount) * 18);
+        for (int i = 0; i < kSectionPlaneGripCount; ++i) {
+          const bool lit = (i == tuning.sectionPlaneGripHover) || (i == tuning.sectionPlaneGripDrag);
+          const double s = lit ? r * 1.45 : r;  // the handle that lights up is the one that grabs
+          const ray3d::Vec3& c = grips.at[i];
+          auto corner = [&](double a, double b) {
+            return ray3d::Vec3{c.x + gu.x * a * s + gv.x * b * s, c.y + gu.y * a * s + gv.y * b * s,
+                               c.z + gu.z * a * s + gv.z * b * s};
+          };
+          const ray3d::Vec3 q[4] = {corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)};
+          const int tri[6] = {0, 1, 2, 0, 2, 3};
+          for (int k = 0; k < 6; ++k) {
+            quads.push_back(static_cast<float>(q[tri[k]].x - viewAnchorX));
+            quads.push_back(static_cast<float>(q[tri[k]].y - viewAnchorY));
+            quads.push_back(static_cast<float>(q[tri[k]].z));
+          }
+          for (int k = 0; k < 4; ++k) {
+            const ray3d::Vec3& a = q[k];
+            const ray3d::Vec3& b = q[(k + 1) & 3];
+            outlines.push_back(static_cast<float>(a.x - viewAnchorX));
+            outlines.push_back(static_cast<float>(a.y - viewAnchorY));
+            outlines.push_back(static_cast<float>(a.z));
+            outlines.push_back(static_cast<float>(b.x - viewAnchorX));
+            outlines.push_back(static_cast<float>(b.y - viewAnchorY));
+            outlines.push_back(static_cast<float>(b.z));
+          }
+        }
+        if (!quads.empty()) {
+          glUniform4f(locCol, 0.20f, 0.70f, 1.f, 0.85f);
+          glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(quads.size() * sizeof(float)),
+                       quads.data(), GL_STREAM_DRAW);
+          glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(quads.size() / 3));
+          glUniform4f(locCol, 0.85f, 0.95f, 1.f, 1.f);
+          glLineWidth(kLwHiLine);
+          glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outlines.size() * sizeof(float)),
+                       outlines.data(), GL_STREAM_DRAW);
+          glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(outlines.size() / 3));
+          glLineWidth(kLwMain);
+        }
+      }
+    }
     glBindVertexArray(0);
   }
 

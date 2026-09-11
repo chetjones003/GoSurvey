@@ -8775,20 +8775,90 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-11) — see D-2026-09-11-b.
 - Revisions: 2026-09-11 — proposed and accepted (D-2026-09-11-b, ADR-058, TASK-250). Slice 1 of
   GitHub #479: create-from-face, the hatched plane and the section line. **Three things are
-  increments rather than omissions.** (1) The plane is **not yet an entity** — it cannot be selected,
-  erased, inspected in Properties or saved to `.gs`; slice 2. (2) It has **no grips** — sliding it
-  along its normal and resizing its extent are typed operations for now; slice 3. (3) The section
-  line carries **no direction arrows**; they belong with the grips that move them.
-### REQ-100 — Frame budget
-- Purpose: interactive responsiveness (desktop/OpenGL)
-- Priority: should
-- Type: performance
-- Statement: The viewport holds a **16 ms frame (60 FPS) at the 95th-percentile
-  frame while continuously orbiting a 250,000-line-segment scene** on the
-  reference machine. 250k segments is the density of a real topo with contours;
-  continuous orbit is the worst case, because orbiting defeats any plan-view
-  culling.
+  increments rather than omissions.** (1) The plane is **not yet an entity** — it cannot be
+  inspected in Properties or saved to `.gs`. (2) It has **no grips** — sliding it along its normal
+  and resizing its extent are typed operations for now. (3) The section line carries **no direction
+  arrows**; they belong with the grips that move them.
+  2026-09-11 — **(2) delivered by REQ-339**, which also moved the section line from the lowest edge
+  to the plane's CENTRE, and gave the plane selection and handles. (1) and (3) still stand.
 
+### REQ-339 — The section plane can be grabbed: slide, flip and resize by handle
+- Purpose: move the cut by dragging it, the way it is thought about — not by typing a distance along
+  an axis and re-reading the result
+- Priority: should
+- Type: functional
+- Statement: A section plane placed by `SECTIONPLANE` is **selectable**, carries a **section line
+  through its middle**, and shows handles that slide it along its own normal, flip which half
+  survives, and resize the drawn rectangle.
+
+  **The section line runs through the CENTRE of the plane**, along its u axis, with a handle at each
+  end. REQ-338 put it on the lowest edge; that was wrong in the way an edge always is here — it
+  coincides with the rectangle's own outline, so it adds nothing, and it leaves the middle of the
+  plane, where the handles have to be, unmarked.
+
+  **Six handles**, and no more, because each answers a question a user actually asks:
+
+  | handle | where | gesture |
+  |---|---|---|
+  | Move | the plane's centre | drag **along the plane's own normal** |
+  | Flip | a quarter along the section line | **a click** |
+  | Length ×2 | the section line's two ends | drag along ±u |
+  | Height ×2 | the mid-points of the u-parallel edges | drag along ±v |
+
+  **Sliding is orthographic to the face the plane came from**, because the axis is the plane's own
+  normal — so the cut stays parallel to that face however the view is turned, and however far the
+  plane travels. The cut follows the handle **on the frame it moves**: the drag writes
+  `viewportSectionClipOffset`, which is what the shader reads next frame, so there is no commit step
+  at which the change becomes real. Dropping the drag is therefore only disarming.
+
+  **Flipping is a click, not a drag.** There is no halfway between looking at one half and the
+  other, so a drag would be pretending the gesture has a magnitude. It reverses which half survives
+  and moves the plane not at all.
+
+  **Resizing changes what you SEE of the plane, never what is hidden.** The cut is unbounded; the
+  rectangle is a finite patch of it drawn so it can be found. Geometry appearing or disappearing
+  while a user drags an edge would be the defect. Dragging one edge moves **that** edge: the
+  opposite one stays put, which is what an edge grip means everywhere else in this application. A
+  stretch is clamped so the rectangle cannot be turned inside out — dragged through zero its corners
+  would cross, and a zero-size rectangle cannot be grabbed again to undo the mistake.
+
+  **The size is stored in the plane's OWN basis** (centre and half-sizes along u and v), not as four
+  world corners, so sliding the plane leaves it completely untouched. It is **reset when the plane is
+  re-aimed at a different face**, for the same reason the offset is: it was measured in a basis
+  derived from the old normal.
+
+  **Selection is not a `SelectedEntity`.** The plane remains a view state with no layer, no
+  attributes and no place in `.gs`, so putting it in `selection` would put a branch for it in every
+  consumer of that vector, and the first one that forgot would be a view setting silently exported
+  or erased. It deselects with ESC and with a click away from it, and deselecting is **not** turning
+  the clip off.
+- Acceptance:
+  - the section line passes through the rectangle's centre, spans its full width, and lies on the
+    plane;
+  - a placed plane comes up **selected**, so its handles are usable without a further click;
+  - clicking the rectangle selects it; clicking away deselects and **consumes** the click; ESC
+    deselects and leaves the cut where it is;
+  - handles are pickable only while the plane is selected, and not at all when the clip is off;
+  - dragging the Move handle changes the cut **on the same frame**, along the plane's normal;
+  - **a held cursor does not move the plane** — the drag axis is frozen at the grab, so repeated
+    frames with no cursor movement are a no-op;
+  - a flipped plane still follows the cursor: dragging down moves the plane down;
+  - the Flip handle is a click, arms no drag, reverses which half survives, and moves the plane not
+    at all;
+  - a stretch moves the grabbed edge by the drag distance and leaves the opposite edge unmoved;
+  - a stretch never changes the offset, the flip, or which points survive the clip;
+  - a stretch cannot invert the rectangle, however far it is dragged;
+  - re-aiming the plane at another face resets the stored size;
+  - every handle lies on the plane and within the rectangle, under a tilted frame as well as a level
+    one.
+- Owner-layer: Commands, Render (`src/render/SectionClip.hpp`, `ViewportRenderer`), UI
+- Status: accepted (2026-09-11) — see D-2026-09-11-c.
+- Revisions: 2026-09-11 — proposed and accepted (D-2026-09-11-c, ADR-058 extended, TASK-251).
+  Slice 2 of GitHub #479, delivering acceptance 5, 6 and 7 and the selection half of 4. **Stated
+  increments:** the plane is still **not an entity** — no Properties row, no `.gs`, and its
+  manipulation makes **no undo entry**, which is consistent with it being a view state but means
+  `UNDO` will not step a slide back; the section line carries **no direction arrows**; and there is
+  no contextual ribbon.
   The budget has **four cost profiles**, not one, and the bench carries a case for each:
   (a) **line segments** — 250,000, the original case; (b) **shaded meshes** — the REQ-063 density
   chosen for the bench (ADR-026); (c) **a surface** — **100,000 points / ~200,000 triangles,
@@ -8914,6 +8984,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
   **Resolved the same day:** the budget is judged on the RTX 5060 with the integrated figures kept
   as a documented floor (decision log), and BUG-013 was fixed so the application actually requests
   the device the budget names — the requirement and the binary now agree about the hardware.
+
+### REQ-100 — Frame budget
+- Purpose: interactive responsiveness (desktop/OpenGL)
+- Priority: should
+- Type: performance
+- Statement: The viewport holds a **16 ms frame (60 FPS) at the 95th-percentile
+  frame while continuously orbiting a 250,000-line-segment scene** on the
+  reference machine. 250k segments is the density of a real topo with contours;
+  continuous orbit is the worst case, because orbiting defeats any plan-view
+  culling.
+
 
 ### REQ-101 — Numerical tolerance
 - Purpose: domain correctness (CAD/survey)
@@ -9968,6 +10049,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-336 | UI/IO/Build | planned (D-2026-09-10-d, ADR-056). What's New billboard: `resources/whats-new.md` + vendored md4c + ImGui draw layer; auto-open once per launch from Start unless prefs dismiss version matches; Help → About reopens same window without clearing dismiss; releases-list URL; missing-file fallback; CI presence gate; agent rule + git hook authoring lock | accepted |
 | REQ-341 | Render/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 6 — **the last of that issue's eight criteria**, D-2026-09-10-e, ADR-058, TASK-249). `SECTIONCLIP` — hide the model in front of the **active UCS plane**, offset along its Z, `FLIP` to keep the other half. A **view state**: no geometry, no undo entry, not persisted to `.gs`. **Live means no rebuild** — the plane is a `gl_ClipDistance[0]` uniform re-read every frame, so moving it invalidates no cached geometry; the transcript asserts the display-regeneration counter is unchanged across five plane moves, a flip and an off/on. `uMVP` and every REQ-058 camera path are untouched, which is what keeps plan-view parity intact. **The decision that carries the risk is the anchor rebasing** (ADR-058 (c)): vertices arrive with XY relative to the view anchor and the anchor IS the pan point, so a world-stated plane is **bit-identical to the correct one at the origin**, sits **2,196,000 ft out at easting 2.196e6**, and **moves one foot per foot of pan** — while a horizontal cut is exact in *both*, so neither an origin test nor a level plane can catch it. `SectionClipTests` (9 cases: the UCS plane and its offset, FLIP, a moved-and-turned frame, CPU/shader predicate parity, survey magnitudes on an axis-aligned/oblique/horizontal plane, the origin bit-identity, an anchor sweep, and REQ-101 resolution at 0.002 ft steps on a 2.2e6 constant) **measures where the plane actually lands by bisection** rather than checking that two answers differ — the P3 lesson. **Proven to bite:** removing the anchor term fails 4 of the 9 cases and 13 assertions. Plus `headless.req341-section-clip` (87 steps: every spelling and refusal with the previous state surviving each, UNDO reaching *past* the clip to the previous edit, the solid byte-identical, the no-rebuild sweep, and the clip not surviving a new drawing). Full suite **1451/1451**, up from 1441. **Two limits stated as increments, not gaps:** dimensions, annotation text and line-pattern hatches are ImGui-overlay drawn and **no GPU clip plane can reach them**; and the cut is **uncapped**, so a clipped solid shows its interior — `brep::SectionLoop` (REQ-335) is already the geometry a cap needs. **The GUI check `--devshell-run req341-section-clip-viewport` RAN GREEN** (six viewport captures: the whole box; only the BOTTOM FACE surviving a cut at offset 0, which places the plane exactly where it was asked for; a third and then two thirds of the box at offsets 4 and 8, both open at the top — ADR-058 (f)'s uncapped cut seen directly; the COMPLEMENT slab under FLIP; and `off-again` byte-identical to `off`). **It caught a bug nothing else did: `SECTIONCLIP 0` switched the clip OFF**, because the command had copied `PERSPECTIVE`'s `1`/`0` aliases into a command whose argument is a distance. The numeric aliases are removed and four transcript lines pin `0` and `1` as offsets. It reached the GUI because the transcript's liveness block already typed `SECTIONCLIP 0` and asserted only that nothing was rebuilt — which is trivially true of a command that did nothing. Two harness facts were established getting there and are recorded in TASK-249: the devshell is **compiled out of Release builds** (CMakeLists:148, REQ-161) so it needs `build/debug`, and `DevShell_RequestScreenshot` reads the window's `GL_FRONT` and returns **pure black** on an uncomposited window — six identical black frames that read exactly like "the clip does nothing". `DevShell_RequestViewportCapture` was added, reading the renderer's own framebuffer through `CaptureThumbnailBmp` (REQ-308). **Still correct-by-construction rather than observed:** the unconditional `glDisable(GL_CLIP_DISTANCE0)` at `finish_render` that keeps the clip out of ImGui's draws — the captures hold no UI and the test engine drives items, not pixels. **Amended 2026-09-16 after the code review on #478** (D-2026-09-16-b, TASK-249 §15): the plane is packed against each draw's OWN cached anchor, so a tilted cut no longer slides while the view pans (GUI-measured: a cached frame and a freshly uploaded frame at the same pan differ by 0 px); TIN surfaces clip; the clip is per tab; picks and snaps ignore what it hides; the indicator sizes from the drawing's extents | accepted |
 | REQ-338 | Render/Commands/Viewport | accepted, slice 1 delivered (GitHub issue #479 acceptance 1-3, D-2026-09-11-b, ADR-058, TASK-250). `SECTIONPLANE` — click a flat face, and REQ-337's clip plane is placed on that face's own plane, drawn **hatched with a section line** along its base. **One clip plane, two ways to aim it**: `SECTIONCLIP` still derives it from the active UCS, `SECTIONPLANE` gives it a stored face frame, and `CadEffectiveSectionClipFrame` is the single place that decides — so the offset, `FLIP` and `OFF` act on a face-defined plane without a second vocabulary. **A planar face's frame IS the plane**: `brep::Surface::frame` is a `ucs::Ucs` with its origin on the face and its Z the outward normal, so the conversion is `SectionClipFromUcs(frame, 0, false)` and nothing more — measured in probe P1/P2 (2026-09-11, linking the shipping kernel) across 22 planar faces of BOX/WEDGE/PYRAMID/CYLINDER/CONE with frame-origin deviation exactly `0.000e+00`, and the outward claim holding with **no counterexample** for `BooleanSubtract`, `BooleanUnion` (46 planar faces each) and an oblique `Slice`, identically at the origin and at **E 2,196,000 / N 1,400,000**. The offset starts at **zero**, so creating a plane shows a plane and hides nothing — asserted as "every vertex of the picked solid survives the clip". A **curved** face is refused **by name** ("that is a cylindrical face"), as are an edge, a vertex and a miss, and the command **stays open** after each. Tests: `SectionClipTests` `[sectionplane]` (7 cases / 390 assertions — every hatch endpoint on the plane under a tilted frame, inside the rectangle measured in its own axes, `GL_LINES` pairs with no zero-length segments and a bounded count, density invariant between a 4 ft and a 900 ft rectangle, REQ-101's 0.002 ft at E 2.196e6, and the section line being the lowest real edge); `SubObjectSelectionTests` `[sectionplaneface]` (3 cases / 52 assertions — the face rules, with the pick tolerance **stated**, which the headless driver cannot do because `CadOffsetEntityPickTolWorld` is screen-derived and collapses to ~0.002 ft with no window); `ViewportPickPolicyTests` `[req338]`; and `headless.req338-section-plane` (71 steps, driven with **CLICK** rather than PICK so the routing layer is actually exercised). **Proven to bite:** routing `SectionPlane` to `Ignore` fails the policy tests, removing the hatch clipping puts endpoints 29 ft outside the rectangle, and a world hatch spacing gives 2 lines where 512 are expected. Full suite **1489/1489**, up from 1478. **The routing is the part worth recording**: `ViewportClickRoute::SubObjectFacePick` + `ViewportIsFacePickStep` exist because the sub-object pick had only ever been `Ctrl`+click dispatched *above* the route table, with the hover carrying a **second, separate** gate — the shape that produced two user-reported bugs in one session on the previous slice. It nearly produced a third: the first implementation put the face branch inside the `IdleSelection` case, a **different route**, so the click would have fallen out of the switch silently — and **`/W4` omits MSVC's unhandled-enumerator warning (C4061/C4062)**, so it compiled clean. Caught by reading the switch. **Not yet delivered, as stated increments:** the plane is **not an entity** (no selection, erase, Properties or `.gs` — slice 2), has **no grips** (slice 3), and the section line carries **no direction arrows**. **Not verified by automation:** that any of it is actually drawn — there is no GL context in any test, and the hatch geometry is measured rather than seen | accepted |
+| REQ-339 | Commands/Render/UI | accepted, slice 2 delivered (GitHub issue #479 acceptance 5-7 and the selection half of 4, D-2026-09-11-c, ADR-058 (g)/(h), TASK-251). The section plane is **selectable** and carries a **section line through its centre** — moved from REQ-338's lowest edge, which coincided with the rectangle's own outline and left the middle, where the handles have to be, unmarked. **Six handles:** Move (centre, drags along the plane's **own normal**, so the cut stays parallel to the face it came from however the view turns), Flip (**a click**, since there is no halfway between looking at one half and the other), and two pairs that resize the drawn rectangle. Sliding writes `viewportSectionClipOffset` directly, so **the cut moves on the same frame** and dropping the drag is only disarming — a view state has no geometry to rebuild and therefore no commit step. Resizing writes a `SectionPlaneExtent` stated in the plane's **own basis**, so sliding leaves it untouched, and it is reset when the plane is re-aimed. **Resizing never changes the cut**: the cut is unbounded and the rectangle is a finite patch drawn so the plane can be found, so geometry appearing while a user drags a corner would be the defect — asserted directly. Dragging one edge moves **that** edge; the opposite one stays put; a stretch is clamped so the rectangle cannot be turned inside out. Selection is a **bool, not a `SelectedEntity`** (ADR-058 (h)): the plane has no layer, attributes or `.gs` presence, so entering `selection` would put a branch in every consumer of that vector and the first to forget would silently export or erase a view setting. `CadSectionClipIndicator` is now the **single** source of the rectangle, called by the renderer AND the pick — the bounds walk that `main.cpp` did inline is gone, because two copies of "where is the rectangle?" is how a user clicks the plane they can see and grabs nothing. Tests: `SectionClipTests` `[sectionplane]` (14 cases / 485 assertions — handle placement on a tilted frame, handles inside the rectangle, unit drag directions, opposite-facing pairs, handles following a slide, the stored extent overriding the model bounds and surviving a slide, and a long thin stretched plane still hatching); `SubObjectSelectionTests` `[sectionplanegrip]` (10 cases / 97 assertions — select, deselect, drag, flip, stretch, clamp, re-aim, ESC). Full suite **1506/1506**, up from 1489. **Two real bugs were found by these tests, not by reading:** (1) the drag axis was re-derived each frame from a handle the drag itself had moved, so the delta collapsed to zero on frame 2 — a held cursor snapped the plane back to the grab point and a moving one oscillated; the axis is now **frozen at the grab** and the guard is five no-op frames, which fails on frame 1 when reinstated. (2) A stretch moved the grabbed edge **twice** as far as the cursor, from applying the full delta to both the half-size and the centre. Neither is visible to a test that calls the drag once. **Stated increments:** the plane is still not an entity (no Properties, no `.gs`), its manipulation makes **no undo entry** — consistent with a view state, but `UNDO` will not step a slide back — the section line has **no direction arrows**, and there is no contextual ribbon. **Not verified by automation:** that any of it is drawn or that a real mouse drag reaches it; there is no GL context in any test, and the handles are geometry-checked rather than seen | accepted |
 
 ---
 

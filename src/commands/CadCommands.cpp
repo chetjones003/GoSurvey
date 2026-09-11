@@ -22511,6 +22511,13 @@ void ClearCadSelection(AppCommandState& st) {
   // gone leaves a drag with nothing to move and an anchor pointing at where something used to be.
   CancelGizmoDrag(st);
   st.gizmoHoverAxis = -1;
+  // The section plane's handles too (REQ-339). It is not in `selection` — it is a view state, not
+  // an entity — but every caller here means "nothing is selected now", and a set of handles left
+  // floating after ESC is a selection the user was told they no longer had. The PLANE itself stays
+  // exactly where it is: deselecting is not turning the clip off.
+  st.sectionPlaneSelected = false;
+  CancelSectionPlaneGripDrag(st);
+  st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
   st.selBoxWaitingSecond = false;
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
@@ -33221,9 +33228,10 @@ bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vec
   if (v == "flip" || v == "reverse" || v == "invert") {
     // Flipping while the clip is off would silently change what ON later means, so it turns the
     // clip on as well: the user asked to see the other half, and the other half is a visible thing.
-    st.viewportSectionClipFlip = !st.viewportSectionClipFlip;
-    st.viewportSectionClip = true;
-    log.push_back(SectionClipReport(st));
+    //
+    // Shared with the flip HANDLE (REQ-339) rather than written twice, so the typed command and the
+    // click cannot drift into meaning different things.
+    ToggleSectionClipFlip(st, log);
     return true;
   }
 
@@ -33374,9 +33382,18 @@ static bool ApplySectionPlaneFromFace(AppCommandState& st, const brep::Solid& so
   // next gesture, and the manipulation slice is what makes that direct.
   st.viewportSectionClipOffset = 0.0;
   st.viewportSectionClipFlip = false;
+  // The stretched size goes too (REQ-339). It was stated in the OLD plane's basis, and that basis
+  // is derived from the normal — so keeping it would apply a length measured across one face to a
+  // completely different direction on another.
+  st.viewportSectionClipExtent = SectionPlaneExtent{};
+  st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
+  st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
   st.viewportSectionClip = true;
-  log.push_back("SECTIONPLANE — plane placed on the face. SECTIONCLIP FLIP reverses it, "
-                "SECTIONCLIP <distance> slides it, SECTIONCLIP OFF hides it.");
+  // Selected on creation, so the handles are there to be used immediately — the user placed it in
+  // order to move it, and making them click it again first is a step with no purpose.
+  st.sectionPlaneSelected = true;
+  log.push_back("SECTIONPLANE — plane placed on the face. Drag the centre handle to slide it, the "
+                "arrow to flip it, the end handles to resize it.");
   return true;
 }
 
@@ -33420,6 +33437,290 @@ bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
   }
   CancelSectionPlaneCommand(st);
   return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The section plane as a manipulable object (REQ-339, GitHub issue #479 acceptance 4-7)
+// ---------------------------------------------------------------------------------------------
+
+SectionClipPlane CadSectionClipPlane(const AppCommandState& st) {
+  if (!st.viewportSectionClip)
+    return SectionClipPlane{};
+  return SectionClipFromUcs(CadEffectiveSectionClipFrame(st), st.viewportSectionClipOffset,
+                            st.viewportSectionClipFlip);
+}
+
+SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st) {
+  const SectionClipPlane p = CadSectionClipPlane(st);
+  if (!p.active)
+    return SectionClipIndicator{};
+
+  // Sized as #478 sizes it (D-2026-09-16-a): the drawing extents, else centred on the view.
+  brep::Bounds bb;
+  bb.valid = ComputeSectionClipIndicatorBounds(st, &bb.mn, &bb.mx);
+  if (!bb.valid) {
+    const Camera viewCam = CadViewCamera(st);
+    const double r = std::max(10.0, static_cast<double>(viewCam.orthoHalfH));
+    bb.valid = true;
+    bb.mn = ray3d::Vec3{viewCam.targetX - r, viewCam.targetY - r, viewCam.targetZ};
+    bb.mx = ray3d::Vec3{viewCam.targetX + r, viewCam.targetY + r, viewCam.targetZ};
+  }
+  return SectionClipIndicatorQuad(p, bb.mn, bb.mx, 0.15, st.viewportSectionClipExtent);
+}
+
+SectionPlaneGrips CadSectionPlaneGrips(const AppCommandState& st) {
+  if (!st.viewportSectionClip || !st.sectionPlaneSelected)
+    return SectionPlaneGrips{};
+  return SectionPlaneGripsFor(CadSectionClipIndicator(st), CadSectionClipPlane(st));
+}
+
+/// A ray with a unit direction, whatever the caller handed in.
+///
+/// Normalized ON ENTRY to every section-plane pick, the rule `PickSubObjectAcrossSolids` already
+/// follows: a camera builds unit rays, but a caller that aims one at a point by subtracting two
+/// positions does not, and the projection arithmetic below is silently scaled by the length if it
+/// is not one. Wrong by a factor of the distance to the target, which looks like the handles simply
+/// not being where they are drawn.
+static ray3d::Ray SectionPlaneUnitRay(const ray3d::Ray& in) {
+  ray3d::Ray r = in;
+  r.dir = ray3d::Normalize(in.dir);
+  return r;
+}
+
+SectionPlaneGrip PickSectionPlaneGrip(const AppCommandState& st, const ray3d::Ray& rayIn,
+                                      double tolWorld) {
+  const ray3d::Ray ray = SectionPlaneUnitRay(rayIn);
+  const SectionPlaneGrips g = CadSectionPlaneGrips(st);
+  if (!g.valid || !ray.valid())
+    return SectionPlaneGrip::None;
+  // Nearest handle wins, measured as the true 3D distance from the ray to the handle POINT. The
+  // gizmo measures to a segment because its handles are arrows; these are points, and a point is
+  // what the user aims at.
+  SectionPlaneGrip best = SectionPlaneGrip::None;
+  double bestD = tolWorld;
+  for (int i = 0; i < kSectionPlaneGripCount; ++i) {
+    const ray3d::Vec3 w = ray3d::Sub(g.at[i], ray.origin);
+    const double t = ray3d::Dot(w, ray.dir);
+    if (t < 0.0)
+      continue;  // behind the camera
+    const ray3d::Vec3 onRay{ray.origin.x + ray.dir.x * t, ray.origin.y + ray.dir.y * t,
+                            ray.origin.z + ray.dir.z * t};
+    const double d = ray3d::Length(ray3d::Sub(g.at[i], onRay));
+    if (d <= bestD) {
+      bestD = d;
+      best = static_cast<SectionPlaneGrip>(i);
+    }
+  }
+  return best;
+}
+
+bool PickSectionPlaneQuad(const AppCommandState& st, const ray3d::Ray& rayIn, double* outRayT) {
+  const ray3d::Ray ray = SectionPlaneUnitRay(rayIn);
+  const SectionClipIndicator ind = CadSectionClipIndicator(st);
+  if (!ind.valid || !ray.valid())
+    return false;
+  // Two triangles, the same split the renderer draws. Moller-Trumbore, double-sided: a section
+  // plane is a sheet with no inside, and refusing a click from behind it would make the plane
+  // unselectable from exactly the side a user orbits to when inspecting the cut.
+  const int tri[2][3] = {{0, 1, 2}, {0, 2, 3}};
+  bool hit = false;
+  double bestT = 0.0;
+  for (const auto& idx : tri) {
+    const ray3d::Vec3& a = ind.corner[idx[0]];
+    const ray3d::Vec3 e1 = ray3d::Sub(ind.corner[idx[1]], a);
+    const ray3d::Vec3 e2 = ray3d::Sub(ind.corner[idx[2]], a);
+    const ray3d::Vec3 pv = ray3d::Cross(ray.dir, e2);
+    const double det = ray3d::Dot(e1, pv);
+    if (std::fabs(det) < 1e-12)
+      continue;
+    const double inv = 1.0 / det;
+    const ray3d::Vec3 tv = ray3d::Sub(ray.origin, a);
+    const double u = ray3d::Dot(tv, pv) * inv;
+    if (u < 0.0 || u > 1.0)
+      continue;
+    const ray3d::Vec3 qv = ray3d::Cross(tv, e1);
+    const double v = ray3d::Dot(ray.dir, qv) * inv;
+    if (v < 0.0 || u + v > 1.0)
+      continue;
+    const double t = ray3d::Dot(e2, qv) * inv;
+    if (t <= 1e-9)
+      continue;
+    if (!hit || t < bestT) {
+      hit = true;
+      bestT = t;
+    }
+  }
+  if (hit && outRayT)
+    *outRayT = bestT;
+  return hit;
+}
+
+void ToggleSectionClipFlip(AppCommandState& st, std::vector<std::string>& log) {
+  st.viewportSectionClipFlip = !st.viewportSectionClipFlip;
+  st.viewportSectionClip = true;
+  log.push_back(SectionClipReport(st));
+}
+
+void CancelSectionPlaneGripDrag(AppCommandState& st) {
+  st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
+}
+
+/// The axis a handle drags along, and the point it starts from. False for handles that are clicks.
+static bool SectionPlaneGripAxis(const AppCommandState& st, SectionPlaneGrip grip,
+                                 ray3d::Vec3* outAnchor, ray3d::Vec3* outDir) {
+  const SectionPlaneGrips g = CadSectionPlaneGrips(st);
+  if (!g.valid || grip == SectionPlaneGrip::None || grip == SectionPlaneGrip::Flip)
+    return false;
+  const int i = static_cast<int>(grip);
+  if (i < 0 || i >= kSectionPlaneGripCount)
+    return false;
+  if (ray3d::Length(g.dir[i]) < 0.5)
+    return false;
+  *outAnchor = g.at[i];
+  *outDir = g.dir[i];
+  return true;
+}
+
+void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& rayIn) {
+  const ray3d::Ray ray = SectionPlaneUnitRay(rayIn);
+  const SectionPlaneGrip grip = static_cast<SectionPlaneGrip>(st.sectionPlaneGripDrag);
+  if (grip == SectionPlaneGrip::None)
+    return;
+  // The axis recorded AT THE GRAB, not the live one — see `sectionPlaneGripAnchor` for why
+  // re-deriving it here makes the drag collapse after one frame.
+  const ray3d::Vec3 anchor = st.sectionPlaneGripAnchor;
+  const ray3d::Vec3 dir = st.sectionPlaneGripAxis;
+  if (ray3d::Length(dir) < 0.5)
+    return;
+  double param = 0.0;
+  if (!CadAxisDragParam(anchor, dir, ray, &param))
+    return;  // sighting straight down the axis: no distance the gesture could mean
+
+  // A DELTA from where the grab happened, so the handle does not leap to the cursor on the first
+  // frame. `sectionPlaneGripStartParam` was recorded against the same anchor and axis.
+  const double delta = param - st.sectionPlaneGripStartParam;
+
+  switch (grip) {
+  case SectionPlaneGrip::Move:
+    // The gesture the whole feature exists for: the plane slides along its OWN normal, so it stays
+    // parallel to the face it was created from however the view is turned. A flipped plane has its
+    // normal negated, so the offset moves the other way — negating here keeps "drag towards the
+    // model" meaning "cut deeper" in both states.
+    st.viewportSectionClipOffset =
+        st.sectionPlaneGripStartOffset + (st.viewportSectionClipFlip ? -delta : delta);
+    break;
+  case SectionPlaneGrip::LengthNeg:
+  case SectionPlaneGrip::LengthPos:
+  case SectionPlaneGrip::HeightNeg:
+  case SectionPlaneGrip::HeightPos: {
+    // Resizing moves ONE edge: the opposite edge stays put, so the rectangle grows out from where
+    // it was rather than about its centre. That is what a grip on an edge means everywhere else in
+    // this application, and a centre-symmetric stretch would move an edge the user is not touching.
+    SectionPlaneExtent e = st.sectionPlaneGripStartExtent;
+    if (!e.valid)
+      break;
+    const bool isU =
+        (grip == SectionPlaneGrip::LengthNeg || grip == SectionPlaneGrip::LengthPos);
+    double& half = isU ? e.halfU : e.halfV;
+    double& centre = isU ? e.cu : e.cv;
+    const double half0 = half;
+    // `delta` is how far the DRAGGED EDGE moved, measured along that handle's own outward
+    // direction — so a positive delta always grows the rectangle, whichever of the pair was
+    // grabbed. Moving one edge by `delta` while the opposite one stays put changes the width by
+    // `delta` and therefore the HALF-width by half of it, with the centre following by the same
+    // amount. Using the full delta for both moves the grabbed edge twice as far as the cursor,
+    // which reads as the plane running away from the pointer.
+    half = std::max(kSectionPlaneMinHalfExtent, half0 + delta * 0.5);
+    const double grew = half - half0;
+    const bool positiveSide =
+        (grip == SectionPlaneGrip::LengthPos || grip == SectionPlaneGrip::HeightPos);
+    centre += positiveSide ? grew : -grew;
+    st.viewportSectionClipExtent = e;
+    break;
+  }
+  case SectionPlaneGrip::Flip:
+  case SectionPlaneGrip::None:
+  case SectionPlaneGrip::Count:
+    break;
+  }
+}
+
+void UpdateSectionPlaneGripHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorld) {
+  // PickSectionPlaneGrip normalizes; nothing here touches the direction itself.
+  if (st.sectionPlaneGripDrag != static_cast<int>(SectionPlaneGrip::None))
+    return;  // the grabbed handle stays lit; pre-highlighting one the click cannot reach is a lie
+  st.sectionPlaneGripHover = static_cast<int>(PickSectionPlaneGrip(st, ray, tolWorld));
+}
+
+bool SubmitSectionPlaneClick(AppCommandState& st, const ray3d::Ray& rayIn, double tolWorld,
+                             std::vector<std::string>& log) {
+  const ray3d::Ray ray = SectionPlaneUnitRay(rayIn);
+  if (!st.viewportSectionClip)
+    return false;
+
+  // An armed drag: this click DROPS it. The offset and extent are already live — the drag has been
+  // updating them every frame, which is what makes the cut follow the handle — so committing is
+  // just disarming, and there is nothing to apply. That is a property of the plane being a view
+  // state: there is no geometry to rebuild and so no moment at which the change becomes real.
+  if (st.sectionPlaneGripDrag != static_cast<int>(SectionPlaneGrip::None)) {
+    UpdateSectionPlaneGripDrag(st, ray);
+    CancelSectionPlaneGripDrag(st);
+    log.push_back(SectionClipReport(st));
+    return true;
+  }
+
+  if (st.sectionPlaneSelected) {
+    const SectionPlaneGrip grip = PickSectionPlaneGrip(st, ray, tolWorld);
+    if (grip == SectionPlaneGrip::Flip) {
+      // A click, not a drag. Flipping is a discrete choice — there is no halfway between looking at
+      // one half and the other — so a drag gesture would be pretending it has a magnitude.
+      ToggleSectionClipFlip(st, log);
+      return true;
+    }
+    if (grip != SectionPlaneGrip::None) {
+      ray3d::Vec3 anchor{}, dir{};
+      if (SectionPlaneGripAxis(st, grip, &anchor, &dir)) {
+        double param = 0.0;
+        if (!CadAxisDragParam(anchor, dir, ray, &param)) {
+          log.push_back("Section plane — you are looking straight down that handle; turn the view "
+                        "a little first.");
+          return true;
+        }
+        st.sectionPlaneGripDrag = static_cast<int>(grip);
+        st.sectionPlaneGripAnchor = anchor;
+        st.sectionPlaneGripAxis = dir;
+        st.sectionPlaneGripStartParam = param;
+        st.sectionPlaneGripStartOffset = st.viewportSectionClipOffset;
+        // Seed the stored extent from the rectangle as it is RIGHT NOW, so the first stretch keeps
+        // the size the user is looking at and only moves the edge they grabbed. Without this the
+        // plane would snap to a default size the instant a stretch began.
+        st.sectionPlaneGripStartExtent = st.viewportSectionClipExtent.valid
+                                             ? st.viewportSectionClipExtent
+                                             : SectionPlaneExtentFromQuad(CadSectionClipIndicator(st),
+                                                                          CadSectionClipPlane(st));
+        return true;
+      }
+    }
+  }
+
+  // Not a handle: the rectangle itself selects, and a click that misses it deselects.
+  if (PickSectionPlaneQuad(st, ray)) {
+    if (!st.sectionPlaneSelected) {
+      st.sectionPlaneSelected = true;
+      log.push_back("Section plane selected — drag the centre handle to slide it, the arrow to "
+                    "flip it, the end handles to resize it.");
+    }
+    return true;
+  }
+  if (st.sectionPlaneSelected) {
+    st.sectionPlaneSelected = false;
+    st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
+    // Consumes the click, the way clicking away from any selection does: the click meant "stop
+    // working on this", and letting it also start a new selection behind the plane would act on
+    // something the user cannot see through it.
+    return true;
+  }
+  return false;
 }
 
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
