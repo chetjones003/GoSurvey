@@ -56,7 +56,7 @@ bool DevShell_CliRunFinished(int* outExitCode);
 void DevShell_RequestScreenshot(const char* pathUtf8);
 
 /// Queue a capture of the 3D VIEWPORT's own framebuffer, written after the next `RenderScene`
-/// (REQ-161, TASK-248). Yield at least 2 frames after calling.
+/// (REQ-161, TASK-249). Yield at least 2 frames after calling.
 ///
 /// Unlike \ref DevShell_RequestScreenshot this reads the renderer's `fbo_` rather than the window's
 /// front buffer, so it captures what was actually drawn whether or not the window is composited —

@@ -244,7 +244,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   };
 
 
-  // --- REQ-337 live section clip, driven through the REAL GUI (TASK-248) -------------------------
+  // --- REQ-337 live section clip, driven through the REAL GUI (TASK-249) -------------------------
   //
   // GitHub #149 acceptance 6 is the one criterion in the whole phase that is about PIXELS, and two
   // of its failure modes cannot be reached anywhere else:
@@ -262,7 +262,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   // The screenshots are the evidence for the first; the test surviving to its own end — every
   // `SubmitCad` after the clip is on still finding its widgets and the log still readable — is the
   // assertion for the second.
-  // --- REQ-337: the ON / OFF / FLIP keywords are CLICKABLE (TASK-248 increment) ------------------
+  // --- REQ-337: the ON / OFF / FLIP keywords are CLICKABLE (TASK-249 increment) ------------------
   //
   // The whole point of the prompt is that these three can be clicked instead of typed, and that
   // cannot be checked anywhere but the real GUI: the transcript can only type the tokens the links

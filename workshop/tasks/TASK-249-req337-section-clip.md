@@ -1,4 +1,4 @@
-# TASK-248 — SECTIONCLIP: the live section clip, and the frame the plane has to be stated in
+# TASK-249 — SECTIONCLIP: the live section clip, and the frame the plane has to be stated in
 
 - Type:    feat (new requirement + new ADR)
 - Status:  review
@@ -221,7 +221,7 @@ is a one-line read against a clear rule (an unwritten `gl_ClipDistance` under an
 is undefined), but it has not been *seen* working, and it is named here rather than counted as
 verified.
 
-COMPLETION REPORT — TASK-248 — 2026-09-10
+COMPLETION REPORT — TASK-249 — 2026-09-10
 - Requirements satisfied:  REQ-337 (new, accepted); GitHub #149 acceptance 6
 - Summary:                 SECTIONCLIP — a live clip plane as a per-frame shader uniform, rebased
                            onto the view anchor; GL geometry only, uncapped, both stated in the REQ
