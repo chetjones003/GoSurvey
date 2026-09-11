@@ -7,6 +7,7 @@
 #include "DwgIo.hpp"
 #include "SurveyPoints.hpp"
 #include "TextStyle.hpp"
+#include "util/SaveTrace.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -621,12 +622,20 @@ Dwg_Object_BLOCK_HEADER* ModelHeader(Dwg_Data* dwg) {
 // emitted geometry only, so a saved drawing lost every layer).
 struct TableWriter {
   Dwg_Data* dwg = nullptr;
-  std::unordered_map<std::string, Dwg_Object*> layers;   // lower(name) -> LAYER object
-  std::unordered_map<std::string, Dwg_Object*> ltypes;   // lower(name) -> LTYPE object
+  // Store LibreDWG object indices, not Dwg_Object* — dwg_add_* can reallocate dwg->object and
+  // invalidate raw pointers cached from an earlier BuildLayerTable / EnsureLtype call.
+  std::unordered_map<std::string, BITCODE_BL> layers;  // lower(name) -> parent objid
+  std::unordered_map<std::string, BITCODE_BL> ltypes;  // lower(name) -> parent objid
 
   static bool IsPlainLinetype(const std::string& n) {
     const std::string l = LowerAscii(n);
     return l.empty() || l == "continuous" || l == "bylayer" || l == "byblock";
+  }
+
+  Dwg_Object* ObjectAt(BITCODE_BL objid) const {
+    if (dwg == nullptr || objid < 0 || static_cast<BITCODE_BL>(objid) >= dwg->num_objects)
+      return nullptr;
+    return &dwg->object[objid];
   }
 
   Dwg_Object* EnsureLtype(const std::string& name) {
@@ -635,15 +644,20 @@ struct TableWriter {
     const std::string key = LowerAscii(name);
     auto it = ltypes.find(key);
     if (it != ltypes.end())
-      return it->second;
+      return ObjectAt(it->second);
     Dwg_Object_LTYPE* lt = dwg_add_LTYPE(dwg, name.c_str());
-    Dwg_Object* o = lt != nullptr ? &dwg->object[lt->parent->objid] : nullptr;
-    ltypes[key] = o;
-    return o;
+    if (lt == nullptr || lt->parent == nullptr)
+      return nullptr;
+    ltypes[key] = lt->parent->objid;
+    return ObjectAt(lt->parent->objid);
   }
 
   BITCODE_H Ref(Dwg_Object* o) {
     return o != nullptr ? dwg_add_handleref(dwg, 5, o->handle.value, o) : nullptr;
+  }
+
+  BITCODE_H RefObjId(BITCODE_BL objid) {
+    return Ref(ObjectAt(objid));
   }
 
   void BuildLayerTable(const AppCommandState& st) {
@@ -651,7 +665,7 @@ struct TableWriter {
       if (row.name.empty() || LowerAscii(row.name) == "0")
         continue;
       Dwg_Object_LAYER* ly = dwg_add_LAYER(dwg, row.name.c_str());
-      if (ly == nullptr)
+      if (ly == nullptr || ly->parent == nullptr)
         continue;
       uint32_t rgb = 0;
       const int aci = DxfColorStringToRgbPacked(row.color, &rgb) ? DxfNearestAciFromRgbPacked(rgb) : 7;
@@ -665,7 +679,7 @@ struct TableWriter {
                                          (row.locked ? 8 : 0) | 16);
       if (Dwg_Object* lt = EnsureLtype(row.linetype))
         ly->ltype = Ref(lt);
-      layers[LowerAscii(row.name)] = &dwg->object[ly->parent->objid];
+      layers[LowerAscii(row.name)] = ly->parent->objid;
     }
   }
 
@@ -674,8 +688,8 @@ struct TableWriter {
       return;
     if (!a.layer.empty() && LowerAscii(a.layer) != "0") {
       auto it = layers.find(LowerAscii(a.layer));
-      if (it != layers.end() && it->second != nullptr)
-        ent->layer = Ref(it->second);
+      if (it != layers.end())
+        ent->layer = RefObjId(it->second);
     }
     if (a.color == "ByBlock") {
       ent->color.index = 0;
@@ -1017,22 +1031,28 @@ bool WriteDxfFile(const char* pathUtf8, Dwg_Data* dwg, std::vector<std::string>&
 }
 
 bool WriteDwgFile(const char* pathUtf8, Dwg_Data* dwg, std::vector<std::string>& log) {
-  const std::filesystem::path dst(pathUtf8);
-  const std::filesystem::path tmp = dst.string() + ".gosurvey-tmp.dwg";
+  if (pathUtf8 == nullptr || pathUtf8[0] == '\0')
+    return false;
+  const std::filesystem::path dst = std::filesystem::u8path(pathUtf8);
+  const std::filesystem::path tmp =
+      std::filesystem::path(dst.u8string() + u8".gosurvey-tmp.dwg");
   std::error_code ec;
   std::filesystem::remove(tmp, ec);
-  const int err = dwg_write_file(tmp.string().c_str(), dwg);
+  const std::string tmpUtf8 = tmp.u8string();
+  AppendSaveTrace("export: dwg_write_file");
+  const int err = dwg_write_file(tmpUtf8.c_str(), dwg);
   if (err != DWG_NOERR) {
     log.push_back("DWG export — LibreDWG encode failed.");
     std::filesystem::remove(tmp, ec);
     return false;
   }
+  AppendSaveTrace("export: dwg rename staged");
   std::filesystem::rename(tmp, dst, ec);
   if (ec) {
     std::filesystem::copy_file(tmp, dst, std::filesystem::copy_options::overwrite_existing, ec);
     std::filesystem::remove(tmp, ec);
     if (ec) {
-      log.push_back("DWG export failed: could not write " + dst.string() + ".");
+      log.push_back(std::string("DWG export failed: could not write ") + pathUtf8 + ".");
       return false;
     }
   }
@@ -1161,7 +1181,9 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     log.push_back("CAD export — missing model space.");
     return false;
   }
+  AppendSaveTrace("export: fill from state");
   FillFromState(st, dwg, hdr, log);
+  AppendSaveTrace("export: encode to disk");
 
   bool ok = false;
   if (asDxf) {

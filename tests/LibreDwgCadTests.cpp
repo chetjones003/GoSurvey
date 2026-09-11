@@ -14,13 +14,20 @@
 
 #include <imgui.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 #if defined(__cplusplus) && !defined(restrict)
 #define restrict
@@ -324,6 +331,38 @@ TEST_CASE("DWG save overwrites an existing file with a full GoSurvey document (i
   CHECK(in.surveyPoints[0].description == "IPF");
 }
 
+#if defined(_WIN32)
+// issue #167 follow-up — re-opening the same std::ofstream after a failed append (clear() only)
+// could leave MSVC's stream locale null and crash on write. Hold the staged DWG exclusively,
+// release after the first retry sleep, and assert the trailer still lands.
+TEST_CASE("DWG trailer append retries through a briefly locked staged file", "[dwg][io][issue167]") {
+  ScratchDir dir("append-lock");
+  const std::string stagedUtf8 = (dir.path / "staged.dwg").u8string();
+  AppCommandState st;
+  OneLine(st);
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, stagedUtf8.c_str(), log, false));
+
+  const std::wstring wstaged = std::filesystem::u8path(stagedUtf8).wstring();
+  const HANDLE lock =
+      CreateFileW(wstaged.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                  FILE_ATTRIBUTE_NORMAL, nullptr);
+  REQUIRE(lock != INVALID_HANDLE_VALUE);
+
+  std::thread releaser([lock] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    CloseHandle(lock);
+  });
+
+  REQUIRE(AppendGoSurveyPayloadToDwgFile(stagedUtf8.c_str(), st, log));
+  releaser.join();
+
+  AppCommandState loaded;
+  REQUIRE(ImportDwgFile(loaded, stagedUtf8.c_str(), log));
+  REQUIRE(loaded.userLinesFlat.size() == 6);
+}
+#endif
+
 // issue #140 — the DWG layer table imported with garbled names / wrong colours / no linetypes.
 TEST_CASE("LibreDWG decodes UTF-16LE (R2007+) table strings", "[dwg][libredwg][issue140]") {
   // The pre-fix code did std::string((char*)buf), which truncates a TU buffer at the first
@@ -505,6 +544,52 @@ TEST_CASE("DWG export writes the layer table and per-entity layer (DEBT-151-b)",
 
   REQUIRE(in.userLineAttrs.size() == 1);
   CHECK(in.userLineAttrs[0].layer == "V-CONTOUR");
+}
+
+// Save-As crash (issue #167 follow-up): TableWriter cached Dwg_Object* into dwg->object[], which
+// LibreDWG can reallocate while later dwg_add_ARC calls run. Re-resolve by objid instead.
+TEST_CASE("DWG export keeps layer handles valid after many entities (issue #167)",
+          "[dwg][libredwg][issue140]") {
+  ScratchDir dir("layerexport-realloc");
+  const auto p = (dir.path / "many-arcs.dwg").string();
+
+  AppCommandState st;
+  CadLayerRow contour;
+  contour.name = "V-CONTOUR";
+  contour.color = "#00FF00";
+  contour.linetype = "DASHED";
+  st.drawingLayerTable.push_back(contour);
+  CadLayerRow border;
+  border.name = "BORDER";
+  border.color = "Red";
+  border.linetype = "CENTER";
+  st.drawingLayerTable.push_back(border);
+
+  EntityAttributes at;
+  at.layer = "V-CONTOUR";
+  at.color = "ByLayer";
+  at.linetype = "DASHED";
+
+  for (int i = 0; i < 200; ++i) {
+    CadArc arc;
+    arc.cx = static_cast<double>(i);
+    arc.cy = 0.0;
+    arc.r = 1.0;
+    arc.startRad = 0.f;
+    arc.sweepRad = 3.14159265f;
+    st.userArcs.push_back(arc);
+    st.userArcAttrs.push_back(at);
+  }
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userArcs.size() == 200);
+  REQUIRE(in.userArcAttrs.size() == 200);
+  CHECK(in.userArcAttrs[0].layer == "V-CONTOUR");
+  CHECK(in.userArcAttrs[0].linetype == "DASHED");
 }
 
 // issue #160 / DEBT-151-a — end-to-end against a genuine AutoCAD 2018 (AC1032, from_version

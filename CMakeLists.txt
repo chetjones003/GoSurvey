@@ -418,6 +418,7 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
   src/util/docinvariants.cpp
+  src/util/SaveTrace.cpp
 )
 
 # One static library so CadCommands.cpp (and the rest of the domain list) is compiled
@@ -995,6 +996,7 @@ if(GOSURVEY_BUILD_TESTS)
     # module exist at all under architecture §11.4.
     tests/DocInvariantsTests.cpp
     src/util/docinvariants.cpp
+    src/util/SaveTrace.cpp
     # REQ-069: the background rebuild worker's lifetime. Header-only against CadCommands.hpp (the
     # struct and its destructor), so it needs no extra domain source on the link line.
     tests/SurfaceRebuildLifetimeTests.cpp

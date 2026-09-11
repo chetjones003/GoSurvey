@@ -28,6 +28,7 @@
 #include "CommandBar.hpp"
 #include "NumFormat.hpp"
 #include "util/cadtable.hpp"
+#include "util/SaveTrace.hpp"
 #include "DwgIo.hpp"
 #include "DxfIo.hpp"
 #include "AppIcon.hpp"
@@ -1270,6 +1271,16 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, boo
   ImGui::DockBuilderFinish(dockspace_id);
 }
 
+// GetSaveFileNameW blocks without pumping ImGui; when it returns the tab bar often reports the
+// Start tab (index 0) selected. Re-assert the drawing tab the user was on before the dialog.
+static void RestoreDrawingTabAfterFileDialog(AppCommandState& cmd, int tabIdxBeforeDialog) {
+  if (tabIdxBeforeDialog < FirstDrawingTabIndex())
+    return;
+  cmd.activeDrawingIdx        = tabIdxBeforeDialog;
+  cmd.prevDrawingIdx          = tabIdxBeforeDialog;
+  cmd.pendingDrawingTabSwitch = true;
+}
+
 void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
   char dwgPath[4096]{};
   const std::string& path = cmd.activeDocFilePath;
@@ -1283,14 +1294,18 @@ void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
   // No path yet (a New drawing, or one opened by file association — see BUG-027). Browse,
   // then ADOPT the destination: the tab takes the file's name and every later save is silent, which
   // is what makes a second Ctrl+S mean "save" rather than "ask again".
-  if (!BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg"))
+  const int tabBeforeDialog = cmd.activeDrawingIdx;
+  if (!BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg")) {
+    RestoreDrawingTabAfterFileDialog(cmd, tabBeforeDialog);
     return;
+  }
+  RestoreDrawingTabAfterFileDialog(cmd, tabBeforeDialog);
   if (!SaveDrawingDocument(cmd, dwgPath, log))
     return;
   cmd.activeDocSavedRevision = cmd.cadGpuRevision;
   cmd.activeDocFilePath      = std::string(dwgPath);
   if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
-    cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::path(dwgPath).stem().string();
+    cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::u8path(dwgPath).stem().u8string();
   RecordRecentDrawing(cmd, cmd.activeDocFilePath);
 }
 
@@ -1369,20 +1384,34 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       SaveActiveDocument(cmd, log);
     }
     if (ImGui::MenuItem("Save As...")) {
+      ClearSaveTrace();
+      AppendSaveTrace("ui: save-as menu");
+      const int tabBeforeDialog = cmd.activeDrawingIdx;
       const std::string defName = cmd.activeDocFilePath.empty()
           ? (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size())
                  ? cmd.drawingTabs[cmd.activeDrawingIdx].name + ".dwg"
                  : std::string("drawing.dwg"))
-          : std::filesystem::path(cmd.activeDocFilePath).filename().string();
+          : std::filesystem::u8path(cmd.activeDocFilePath).filename().u8string();
+      AppendSaveTrace("ui: before save dialog");
       if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), defName.c_str())) {
+        RestoreDrawingTabAfterFileDialog(cmd, tabBeforeDialog);
+        AppendSaveTrace("ui: after save dialog");
         if (SaveDrawingDocument(cmd, dwgPath, log)) {
+          AppendSaveTrace("ui: save document ok");
           cmd.activeDocSavedRevision = cmd.cadGpuRevision;
           cmd.activeDocFilePath      = std::string(dwgPath);
           if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
             cmd.drawingTabs[cmd.activeDrawingIdx].name =
-                std::filesystem::path(dwgPath).stem().string();
+                std::filesystem::u8path(dwgPath).stem().u8string();
+          AppendSaveTrace("ui: before record recent");
           RecordRecentDrawing(cmd, cmd.activeDocFilePath);
+          AppendSaveTrace("ui: save-as complete");
+        } else {
+          AppendSaveTrace("ui: save document failed");
         }
+      } else {
+        RestoreDrawingTabAfterFileDialog(cmd, tabBeforeDialog);
+        AppendSaveTrace("ui: save dialog cancelled");
       }
     }
     ImGui::EndDisabled();

@@ -25,6 +25,32 @@
         "CMAKE_C_COMPILER": "cl",
         "CMAKE_CXX_COMPILER": "cl"
       }
+    },
+    {
+      "name": "vs",
+      "displayName": "Visual Studio 18 2026 Solution (x64, multi-config; needs CMake 4.2+)",
+      "generator": "Visual Studio 18 2026",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
+      "binaryDir": "${sourceDir}/build/vs",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "vs2022",
+      "displayName": "Visual Studio 17 2022 Solution (x64; legacy VS 2022 installs)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
+      "binaryDir": "${sourceDir}/build/vs",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -35,6 +61,16 @@
     {
       "name": "ninja-debug",
       "configurePreset": "ninja-debug"
+    },
+    {
+      "name": "vs-release",
+      "configurePreset": "vs",
+      "configuration": "Release"
+    },
+    {
+      "name": "vs-debug",
+      "configurePreset": "vs",
+      "configuration": "Debug"
     }
   ]
 }

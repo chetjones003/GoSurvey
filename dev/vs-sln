@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# dev/vs-sln — generate (and optionally build) the Visual Studio solution.
+#
+#   ./dev/vs-sln                       configure + build Release -> build/vs/
+#   ./dev/vs-sln debug                 configure + build Debug
+#   ./dev/vs-sln --configure-only      generate GoSurvey.sln only
+#
+# Open build/vs/GoSurvey.sln in Visual Studio. Ninja builds are unchanged (build/).
+source "$(dirname "$0")/_common.sh"
+
+info "generating Visual Studio solution (build/vs/GoSurvey.sln) ..."
+win_cmd "call .\\build.bat vs $*"
