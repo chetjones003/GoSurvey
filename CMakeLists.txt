@@ -361,6 +361,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/RecentDrawings.cpp
   # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
   src/io/WhatsNewContent.cpp
+  src/io/WikiContent.cpp
+  src/io/WikiHelp.cpp
   src/util/WhatsNewLogic.cpp
   src/io/SurveyCsv.cpp
   src/io/DxfIo.cpp
@@ -486,6 +488,7 @@ add_executable(GoSurvey
   src/ui/CadUi_SignInGate.cpp
   src/ui/CadUi_StartScreen.cpp
   src/ui/CadUi_WhatsNew.cpp
+  src/ui/CadUi_Wiki.cpp
   src/ui/CadUi_ColorPicker.cpp
   src/ui/MarkdownImGui.cpp
   src/ui/SplashScreen.cpp
@@ -660,6 +663,10 @@ endif()
 if(NOT EXISTS "${GOSURVEY_SPLASH_BG}")
   message(FATAL_ERROR "REQ-093: resources/splash-bg.png is required (startup splash backdrop).")
 endif()
+set(GOSURVEY_WIKI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki")
+if(NOT EXISTS "${GOSURVEY_WIKI_DIR}/Home.md")
+  message(FATAL_ERROR "resources/wiki/Home.md is required (shipped user manual).")
+endif()
 # Stage bundled resources beside the executable. A POST_BUILD hook only runs when GoSurvey is
 # relinked, so changing splash-bg.png (or any other resource) left a stale copy in build/resources/
 # until a code change forced a rebuild. This stamp target re-runs whenever any listed resource
@@ -667,7 +674,9 @@ endif()
 file(GLOB_RECURSE GOSURVEY_RESOURCE_DIR_FILES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/*"
   "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches/*"
-  "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks/*")
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks/*"
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/*"
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki/*")
 set(GOSURVEY_BUNDLED_RESOURCE_FILES
   "${GOSURVEY_DEFAULT_TEMPLATE}"
   "${GOSURVEY_WHATS_NEW_MD}"
@@ -687,6 +696,8 @@ add_custom_command(
           "${CMAKE_CURRENT_BINARY_DIR}/resources/icons"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/hatches"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/blocks"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/fonts"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/wiki"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/default-template.gst"
@@ -708,6 +719,12 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/blocks"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/fonts"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/wiki"
   COMMAND ${CMAKE_COMMAND} -E touch "${_GOSURVEY_RESOURCE_STAMP}"
   COMMENT "Stage bundled resources beside GoSurvey executable")
 add_custom_target(gosurvey_stage_resources DEPENDS "${_GOSURVEY_RESOURCE_STAMP}")

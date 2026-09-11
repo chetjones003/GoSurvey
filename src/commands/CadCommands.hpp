@@ -2561,6 +2561,10 @@ struct AppCommandState {
   std::string whatsNewDismissedVersion;              ///< prefs: suppress auto-open for this version
   bool        whatsNewOpeningPending = false;        ///< auto/manual open requested; spinner until modal shows
   bool        whatsNewModalVisible = false;          ///< set each frame while BeginPopupModal is active
+  /// Shipped user manual (GitHub wiki mirror). F1 and Help → User Manual open this window.
+  bool        showWikiWindow = false;
+  std::string wikiCurrentPage = "Home";
+  std::string wikiScrollToCommand;  ///< lowercase primary; scroll to matching ## heading once
   bool        appWindowFocused = true;               ///< GLFW focused; auto-open What's New waits for this
   /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
   /// launch until this is true. Set true on a successful sign-in (interactive or silent) OR when
@@ -5565,6 +5569,8 @@ void StartDesignateContourCommand(AppCommandState& st, const std::string& surfac
 void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfaceName, CadBoundaryKind kind,
                                    std::vector<std::string>& log);
 
+void StartTraverseEditorCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartOptionsCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDistCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log);

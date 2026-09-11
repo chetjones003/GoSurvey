@@ -30,6 +30,7 @@
 #include "WinFileDialogs.hpp"
 #include "NumFormat.hpp"
 #include "MtextRichFormat.hpp"
+#include "AppPaths.hpp"
 #include "FontRegistry.hpp"
 #include "StringUtil.hpp"
 #include "AppIcon.hpp"
@@ -6496,8 +6497,10 @@ const CmdEntry kRegistry[] = {
     {"viewpoints", "vwpts", "View / edit survey points"},
     {"importpoints", "imppts", "Import survey points"},
     {"exportpoints", "exppts", "Export survey points"},
+    {"traverse", "trav, traverseeditor", "Open the Traverse Editor"},
     {"select", "", "Build a selection set"},
     {"help", "", "Show command help"},
+    {"options", "op, settings", "Open the Options dialog"},
     {"regen", "re", "Regenerate the drawing"},
     {"layer", "la", "Open the Layer manager"},
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
@@ -7128,6 +7131,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     StartExportPointsCommand(st, log);
     return true;
   }
+  if (primary == "traverse" || primary == "trav" || primary == "traverseeditor") {
+    StartTraverseEditorCommand(st, log);
+    return true;
+  }
   if (primary == "pdfattach" || primary == "pdfatt") {
     StartPdfAttachCommand(st, log);
     return true;
@@ -7137,6 +7144,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     ClearSelection(st);
     st.selBoxWaitingSecond = false;
     log.push_back("SELECT — click two corners for a window (default when no command is active).");
+    return true;
+  }
+  if (primary == "options" || primary == "op" || primary == "settings") {
+    StartOptionsCommand(st, log);
     return true;
   }
   if (primary == "help") {
@@ -22330,6 +22341,16 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
   st.active = K::None;
 }
 
+void StartTraverseEditorCommand(AppCommandState& st, std::vector<std::string>& log) {
+  st.showTraverseEditorWindow = true;
+  log.push_back("TRAVERSE — traverse editor opened.");
+}
+
+void StartOptionsCommand(AppCommandState& st, std::vector<std::string>& log) {
+  st.showSettingsWindow = true;
+  log.push_back("OPTIONS — settings dialog opened.");
+}
+
 void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
   using SIP = AppCommandState::SurveyInversePhase;
@@ -36835,6 +36856,18 @@ void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<
   log.push_back(buf);
 }
 
+namespace {
+
+ImFont* LoadBundledUiFont(const char* fileName, const float sizePx, ImFontConfig* cfg) {
+  namespace fs = std::filesystem;
+  const fs::path path = ResolveBundledAssetPath(fs::path("resources") / "fonts" / fileName);
+  if (path.empty())
+    return nullptr;
+  return ImGui::GetIO().Fonts->AddFontFromFileTTF(path.string().c_str(), sizePx, cfg);
+}
+
+}  // namespace
+
 bool LoadApplicationFont() {
   ImGuiIO& io = ImGui::GetIO();
   // Tahoma is the classic nanoCAD / Windows-2000 UI font. Fall back to Segoe UI.
@@ -36895,6 +36928,18 @@ bool LoadApplicationFont() {
       break;
   }
   FontReg::SetBillboard(bbFont != nullptr ? bbFont : (tsFont != nullptr ? tsFont : loaded));
+
+  // In-app wiki reader — same IBM Plex family as the GoSurvey website (site/index.html).
+  ImFontConfig wikiCfg;
+  wikiCfg.OversampleH = 3;
+  wikiCfg.OversampleV = 2;
+  wikiCfg.PixelSnapH  = true;
+  ImFont* wikiBody = LoadBundledUiFont("IBMPlexSans-Regular.ttf", 16.0f, &wikiCfg);
+  FontReg::SetWiki(wikiBody != nullptr ? wikiBody : loaded);
+  ImFont* wikiHeading = LoadBundledUiFont("IBMPlexSansCondensed-SemiBold.ttf", 17.0f, &wikiCfg);
+  FontReg::SetWikiHeading(wikiHeading != nullptr ? wikiHeading : FontReg::Wiki());
+  ImFont* wikiMono = LoadBundledUiFont("IBMPlexMono-Regular.ttf", 15.0f, &wikiCfg);
+  FontReg::SetWikiMono(wikiMono != nullptr ? wikiMono : FontReg::Wiki());
   return true;
 }
 

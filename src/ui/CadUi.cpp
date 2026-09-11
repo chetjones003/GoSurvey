@@ -42,6 +42,7 @@
 #include "render/ViewportProjection.hpp"  // REQ-061: per-viewport camera projection
 #include "CadFontName.hpp"
 #include "StringUtil.hpp"
+#include "WikiHelp.hpp"
 #include "imgui.h"
 
 #include <imgui_internal.h>
@@ -1463,11 +1464,13 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Toolspace", nullptr, cmd.showToolspaceWindow))
       cmd.showToolspaceWindow = !cmd.showToolspaceWindow;
     if (ImGui::MenuItem("Settings...", nullptr))
-      cmd.showSettingsWindow = true;
+      StartOptionsCommand(cmd, log);
     ImGui::EndMenu();
   }
   // REQ-336: Help → About opens the What's New billboard (same window as Start auto-open).
   if (ImGui::BeginMenu("Help")) {
+    if (ImGui::MenuItem("User Manual", "F1"))
+      RequestContextualWikiWindow(cmd, nullptr);
     if (ImGui::MenuItem("About"))
       RequestWhatsNewWindow(cmd);
     ImGui::EndMenu();
@@ -2900,7 +2903,9 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"DELETE", RibbonIconKind::Erase}, {"JOIN", RibbonIconKind::Join}, {"TRIM", RibbonIconKind::Trim},
     {"OFFSET", RibbonIconKind::Offset}, {"ZOOMEXTENTS", RibbonIconKind::ZoomExtents},
     {"ZOOMWINDOW", RibbonIconKind::ZoomWindow}, {"CREATEPOINTS", RibbonIconKind::SurveyPoint},
-    {"VIEWPOINTS", RibbonIconKind::SurveyPoint}, {"LAYER", RibbonIconKind::Layers},
+    {"VIEWPOINTS", RibbonIconKind::SurveyPoint}, {"TRAVERSE", RibbonIconKind::Traverse},
+    {"OPTIONS", RibbonIconKind::Settings}, {"SETTINGS", RibbonIconKind::Settings},
+    {"LAYER", RibbonIconKind::Layers},
     {"PDFATTACH", RibbonIconKind::PdfAttach}, {"PASTE", RibbonIconKind::ClipboardPaste},
     {"PASTEORIG", RibbonIconKind::ClipboardPaste},
   };
@@ -3171,11 +3176,14 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
 // (RibbonIconKind::Nyi is just the placeholder enum value RibbonButtonEx needs when the override
 // is used); an empty iconName falls back to RibbonIconKind::Nyi's own procedural glyph.
 static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | extraFlags) && ImGui::BeginTooltip()) {
-    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26.f);
-    ImGui::TextUnformatted(text);
-    ImGui::PopTextWrapPos();
-    ImGui::EndTooltip();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | extraFlags)) {
+    WikiHelpNotifyUiHover(text);
+    if (ImGui::BeginTooltip()) {
+      ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26.f);
+      ImGui::TextUnformatted(text);
+      ImGui::PopTextWrapPos();
+      ImGui::EndTooltip();
+    }
   }
 }
 
@@ -3848,8 +3856,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                          "Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS", compact),
                   rowBtn("##CgdFeatureLine", -1, "c3d_featureline", "Feature Line", true,
                          "Feature Line — not implemented yet.", compact),
-                  rowBtn("##CgdTraverse", -1, "c3d_traverse2", "Traverse", true,
-                         "Traverse — not implemented yet.", compact),
+                  rowBtn("##CgdTraverse", (int)RibbonIconKind::Traverse, nullptr, "Traverse", false,
+                         "Traverse Editor — raw observations, Face 1/Face 2, least-squares closure.\nCommand bar: TRAVERSE",
+                         compact),
               }),
               columnOfButtons({
                   rowBtn("##CgdSurfaces", -1, "c3d_surfaces", "Surfaces", true,
@@ -3865,6 +3874,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         ribbonSpecs.push_back({w, w, [&, spec]() {
           drawRibbonSectionSpec("RibbonSecGroundData", "Create Ground Data", spec, [&](const std::string& id) {
             if (id == "##CgdPoints") StartCreatePointsCommand(cmd, log);
+            else if (id == "##CgdTraverse") StartTraverseEditorCommand(cmd, log);
           });
         }, "Create Ground Data", RibbonIconKind::SurveyPoint});
       }
@@ -4662,18 +4672,28 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // ---- Launch Pad ---------------------------------------------------
     {
       ribbonlayout::RibbonSectionSpec spec;
-      spec.groups = {columnOfButtons({
-          rowBtn("##SvyQProfile", (int)RibbonIconKind::SurfQuickProfile, nullptr, "Quick Profile", false,
-                 "Quick Profile — sample a surface along two plan points.\nCommand bar: QUICKPROFILE", false),
-          rowBtn("##SvyCreateSurf", (int)RibbonIconKind::SurfAddData, nullptr, "Create Surface", false,
-                 "Create Surface — TIN, grid, corridor, or volume type.\nToolspace: Create Surface...", false),
-          rowBtn("##SvyGrading", (int)RibbonIconKind::SurfGrading, nullptr, "Grading Creation Tools", true,
-                 "Grading Creation Tools — not implemented yet.", false),
-      })};
+      spec.groupGapX = 4.f;
+      ribbonlayout::RibbonGroupSpec traverseGroup;
+      traverseGroup.buttons = {largeBtnSpecEx("##SvyTraverse", (int)RibbonIconKind::Traverse, nullptr, "Traverse\nEditor",
+                                             false,
+                                             "Traverse Editor — raw observations, Face 1/Face 2, least-squares closure.\nCommand bar: TRAVERSE",
+                                             capW("Traverse\nEditor"))};
+      spec.groups = {
+          traverseGroup,
+          columnOfButtons({
+              rowBtn("##SvyQProfile", (int)RibbonIconKind::SurfQuickProfile, nullptr, "Quick Profile", false,
+                     "Quick Profile — sample a surface along two plan points.\nCommand bar: QUICKPROFILE", false),
+              rowBtn("##SvyCreateSurf", (int)RibbonIconKind::SurfAddData, nullptr, "Create Surface", false,
+                     "Create Surface — TIN, grid, corridor, or volume type.\nToolspace: Create Surface...", false),
+              rowBtn("##SvyGrading", (int)RibbonIconKind::SurfGrading, nullptr, "Grading Creation Tools", true,
+                     "Grading Creation Tools — not implemented yet.", false),
+          }),
+      };
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
       ribbonSpecs.push_back({w, w, [&, spec]() {
         drawRibbonSectionSpec("RibbonSecSvyLaunch", "Launch Pad", spec, [&](const std::string& id) {
-          if (id == "##SvyQProfile") {
+          if (id == "##SvyTraverse") StartTraverseEditorCommand(cmd, log);
+          else if (id == "##SvyQProfile") {
             if (!cmd.cadSurfaces.empty())
               StartQuickProfileCommand(cmd, cmd.cadSurfaces[0].name, log);
             else
@@ -5447,14 +5467,14 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ribbonlayout::RibbonSectionSpec spec;
       spec.groups = {gridOfButtons({
           rowBtn("##RibbonSettings", (int)RibbonIconKind::Settings, nullptr, "Settings", false,
-                 "Open application settings (same as View menu → Settings...).", false),
+                 "Open application settings (same as View menu → Settings…).\nCommand bar: OPTIONS", false),
           rowBtn("##RibbonToolspace", (int)RibbonIconKind::Toolspace, nullptr, "Toolspace", false,
                  "Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE", false),
       }, 2, 4.f)};
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
       ribbonSpecs.push_back({w, w, [&, spec]() {
         drawRibbonSectionSpec("RibbonSecViewSettings", "Settings", spec, [&](const std::string& id) {
-          if (id == "##RibbonSettings") cmd.showSettingsWindow = true;
+          if (id == "##RibbonSettings") StartOptionsCommand(cmd, log);
           else if (id == "##RibbonToolspace") cmd.showToolspaceWindow = true;
         });
       }, "Settings", RibbonIconKind::Settings});
@@ -8806,11 +8826,14 @@ void PopModeToggleButtonColors(bool on) {
 }
 
 static void ItemHelpTooltip(const char* text) {
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) && ImGui::BeginTooltip()) {
-    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.f);
-    ImGui::TextUnformatted(text);
-    ImGui::PopTextWrapPos();
-    ImGui::EndTooltip();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+    WikiHelpNotifyUiHover(text);
+    if (ImGui::BeginTooltip()) {
+      ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.f);
+      ImGui::TextUnformatted(text);
+      ImGui::PopTextWrapPos();
+      ImGui::EndTooltip();
+    }
   }
 }
 
@@ -9957,6 +9980,8 @@ static ImVec2 s_lastCrosshairScreen = ImVec2(-1.f, -1.f);
 static bool   s_cmdSugPopupOpen = false;
 static ImVec2 s_cmdSugPopupMin = ImVec2(0.f, 0.f);
 static ImVec2 s_cmdSugPopupMax = ImVec2(0.f, 0.f);
+static bool        s_cmdInputActiveFrame = false;
+static std::string s_cmdFuzzyPrimaryFrame;
 
 // REQ-040/REQ-119: lay out one command prompt — plain text plus clickable variant links —
 // and return the height it occupies. `cmdbar::ParsePromptSegments` decides what is a link;
@@ -10050,7 +10075,18 @@ static float LayoutCommandHint(const char* hint, AppCommandState& cmd, std::vect
          static_cast<float>(lines - 1) * ImGui::GetStyle().ItemSpacing.y;
 }
 
+bool CadUiIsCommandInputActive() { return s_cmdInputActiveFrame; }
+
+const std::string& QueryCommandBarFuzzyPrimary() { return s_cmdFuzzyPrimaryFrame; }
+
+void CadUiBeginHelpFrame() {
+  s_cmdInputActiveFrame  = false;
+  s_cmdFuzzyPrimaryFrame.clear();
+}
+
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd) {
+  s_cmdInputActiveFrame  = false;
+  s_cmdFuzzyPrimaryFrame.clear();
   // Command-line chrome uses the same steel-blue neutral tint as the rest of the shell.
   constexpr float kCmdTint = kCadThemeBlueTintDark;
   const ImVec4 consoleBg = BlueTintHex(0x2F2F2F, kCmdTint);  // ground step — recessed vs the panel surface
@@ -10426,6 +10462,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     cmdInputMin = ImGui::GetItemRectMin();
     cmdInputMax = ImGui::GetItemRectMax();
     const bool inputActive = ImGui::IsItemActive();
+    s_cmdInputActiveFrame  = inputActive;
     ImGui::SetItemDefaultFocus();
     if (floating) {
       ImGui::SameLine(0, 4);
@@ -10505,9 +10542,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       for (char& ch : g_cmdSuggestComplete) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
       cmdShowSug = true;
       s_cmdSugVisible = true;
-      s_cmdHighlight = g_cmdSuggestComplete;
+      s_cmdHighlight  = g_cmdSuggestComplete;
+      s_cmdFuzzyPrimaryFrame = s_cmdHighlight;
     } else {
       g_cmdSuggestComplete.clear();
+      s_cmdFuzzyPrimaryFrame.clear();
       // Clear the persisted highlight only when the user is actively in the field with no list (e.g. a
       // full/multi-token command). On the Enter frame the input is already inactive, so the highlight
       // survives to be consumed by the submit branch below.
@@ -18468,7 +18507,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // item would be a control that does nothing, which is the failure REQ-201 forbids. Recorded
       // in REQ-084 and as TASK-070 DEBT-3; it returns when drawing-wide FIND is a requirement.
       if (ImGui::MenuItem("Options...")) {
-        cmd.showSettingsWindow = true;
+        StartOptionsCommand(cmd, log);
         ImGui::CloseCurrentPopup();
       }
 

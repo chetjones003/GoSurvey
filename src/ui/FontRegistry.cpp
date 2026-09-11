@@ -12,6 +12,9 @@ namespace {
 ImFont* g_default = nullptr;
 ImFont* g_toolspace = nullptr;
 ImFont* g_billboard = nullptr;
+ImFont* g_wiki = nullptr;
+ImFont* g_wikiHeading = nullptr;
+ImFont* g_wikiMono = nullptr;
 // Cache key "family|b|i" → resolved font + which styles it actually carries (so callers can apply faux
 // bold/italic). A null font means "tried, unavailable" → use default. Cached to avoid per-frame disk I/O.
 struct CachedFont {
@@ -215,6 +218,36 @@ ImFont* Billboard() {
   if (g_billboard)
     return g_billboard;
   return Toolspace();
+}
+
+void SetWiki(ImFont* f) {
+  g_wiki = f;
+}
+
+ImFont* Wiki() {
+  if (g_wiki)
+    return g_wiki;
+  return Billboard();
+}
+
+void SetWikiHeading(ImFont* f) {
+  g_wikiHeading = f;
+}
+
+ImFont* WikiHeading() {
+  if (g_wikiHeading)
+    return g_wikiHeading;
+  return Wiki();
+}
+
+void SetWikiMono(ImFont* f) {
+  g_wikiMono = f;
+}
+
+ImFont* WikiMono() {
+  if (g_wikiMono)
+    return g_wikiMono;
+  return Wiki();
 }
 
 }  // namespace FontReg

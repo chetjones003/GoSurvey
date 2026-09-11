@@ -18,6 +18,7 @@
 #include "util/gizmooverlay.hpp"  // CadGizmoOverlay, constructed here (REQ-060)
 #include "TransformPreview.hpp"
 #include "CadUi.hpp"
+#include "WikiHelp.hpp"
 #include "util/framewatch.hpp"
 #include "PdfAttachDialog.hpp"
 #include "ViewportRenderer.hpp"
@@ -727,6 +728,9 @@ int main()
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    WikiHelpBeginFrame();
+    CadUiBeginHelpFrame();
+
     cmd.whatsNewModalVisible = false;
     if (cmd.activeDrawingIdx == 0)
       MaybeAutoOpenWhatsNew(cmd);
@@ -1070,6 +1074,11 @@ int main()
                           CadCoord::WorldYFromLocal(cmd, static_cast<float>(curY)), cmd.uiCursorWorldZ,
                           &orthoEnabled, &gridVisible);
 
+    // Contextual F1: after ribbon, command bar, and status bar so hover + fuzzy autocomplete state
+    // are from this frame (WikiHelpBeginFrame clears hover at frame start).
+    if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
+      RequestContextualWikiWindow(cmd, cmdBuf);
+
     // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
     // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.
     {
@@ -1087,6 +1096,7 @@ int main()
     DrawSettingsPanel(cmd, &cmdLog);
     DrawAccountDetailsWindow(cmd);
     DrawWhatsNewWindow(cmd);  // REQ-336
+    DrawWikiWindow(cmd);
     DrawUnitsDialog(cmd, &cmdLog);
     DrawRightClickCustomizationDialog(cmd, &cmdLog);  // REQ-084 (a)
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);

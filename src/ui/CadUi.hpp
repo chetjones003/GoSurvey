@@ -6,6 +6,7 @@
 #include <imgui.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 void ApplyCadDarkTheme();
@@ -169,6 +170,16 @@ void DrawLaunchSequenceOverlay(AppCommandState& cmd, bool updateOfferBlocks);
 bool LaunchSequenceOverlayActive(const AppCommandState& cmd, bool updateOfferBlocks);
 void MaybeAutoOpenWhatsNew(AppCommandState& cmd);
 void RequestWhatsNewWindow(AppCommandState& cmd);
+
+/// Shipped user manual (resources/wiki). F1 and Help → User Manual.
+void RequestWikiWindow(AppCommandState& cmd, std::string_view pageSlug = "Home");
+void RequestContextualWikiWindow(AppCommandState& cmd, const char* cmdBuf);
+void DrawWikiWindow(AppCommandState& cmd);
+/// Clears per-frame command-bar help state (call once at frame start; Start tab skips DrawCommandLinePanel).
+void CadUiBeginHelpFrame();
+bool CadUiIsCommandInputActive();
+/// Lowercase primary from the command-bar fuzzy suggestion list, or empty.
+const std::string& QueryCommandBarFuzzyPrimary();
 
 /// Drawing Units dialog (UNITS command). REQ-020. Owns displayLinearPrecision.
 void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
