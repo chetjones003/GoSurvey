@@ -186,9 +186,9 @@ void DrawLaunchSpinnerForeground(ImGuiViewport* vp, const char* statusLine) {
 
   dl->AddRectFilled(layout.barMin, barMax, IM_COL32(255, 255, 255, 26), rounding);
 
-  // Match ImGui::ProgressBar(-time): indeterminate segment sweeps the track.
+  // Match ImGui::ProgressBar(+time): indeterminate segment sweeps left to right.
   const float t     = static_cast<float>(ImGui::GetTime());
-  float       fill0 = std::fmod(-t, 1.0f);
+  float       fill0 = std::fmod(t, 1.0f);
   if (fill0 < 0.f)
     fill0 += 1.f;
   const float fill1  = (std::min)(1.f, fill0 + 0.35f);
@@ -377,14 +377,15 @@ void DrawLaunchSequenceOverlay(AppCommandState& cmd, const bool updateOfferBlock
   const ImGuiWindowFlags wf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
-                            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings |
-                            ImGuiWindowFlags_NoInputs;
+                            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings;
 
   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.f, 0.f, 0.f, 0.f));
   ImGui::Begin("##LaunchSequence336", nullptr, wf);
+  // Full-viewport invisible hit target — blocks clicks to docked chrome and the viewport below.
+  ImGui::InvisibleButton("##LaunchSequenceBlocker", ImGui::GetContentRegionAvail());
   ImGui::End();
   ImGui::PopStyleColor();
   ImGui::PopStyleVar(3);
