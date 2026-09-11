@@ -1,4 +1,4 @@
-# REQ-337 / ADR-057 (D-2026-09-10-e, TASK-248) — SECTIONCLIP, live section clipping.
+# REQ-337 / ADR-057 (D-2026-09-10-e, TASK-249) — SECTIONCLIP, live section clipping.
 #
 # GitHub #149 (3D Phase 6 — Analysis) acceptance 6: "Section clipping updates live as the plane
 # moves." The LAST of #149's eight criteria.

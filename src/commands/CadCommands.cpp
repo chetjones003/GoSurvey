@@ -32714,7 +32714,7 @@ bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vec
   // command's main argument is a DISTANCE, and `SECTIONCLIP 0` — the most natural way to ask for a
   // cut exactly at the UCS plane — would otherwise be read as "off" and switch the feature off
   // instead. For a command that takes a number, digits mean the number. Caught in the real GUI
-  // (TASK-248); a transcript had typed `SECTIONCLIP 0` and only checked that nothing was rebuilt.
+  // (TASK-249); a transcript had typed `SECTIONCLIP 0` and only checked that nothing was rebuilt.
   if (v == "on" || v == "yes") {
     st.viewportSectionClip = true;
     log.push_back(SectionClipReport(st));
