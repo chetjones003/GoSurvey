@@ -5961,14 +5961,24 @@ bool SubmitSectionPlaneClick(AppCommandState& st, const ray3d::Ray& ray, double 
 
 /// Refresh the armed drag from the cursor. No-op when nothing is armed.
 ///
-/// \p snapWorld, when given, is the object-snap point under the cursor in WORLD coordinates
-/// (REQ-340). The handle then lands where that point projects onto its drag axis, so a section
-/// plane can be placed exactly on a midpoint, an endpoint or a face centre instead of wherever the
-/// cursor happened to be — which is what makes the cut a measured thing rather than an eyeballed
-/// one. Ignored when the snapped point is further from the axis than the cursor already is, so a
-/// snap somewhere off in the drawing cannot yank the plane away from the pointer.
+/// \p snapPoint, when given, is the object-snap point under the cursor (REQ-340). The handle then
+/// lands where that point projects onto its drag axis, so a section plane can be placed exactly on
+/// a midpoint, an endpoint or a face centre instead of wherever the cursor happened to be — which
+/// is what makes the cut a measured thing rather than an eyeballed one.
+///
+/// **In STORAGE coordinates, like \p ray and like the plane itself** — `local = world - origin`.
+/// Everything in this drag is in that frame: the clip frame comes from a solid's face, solids are
+/// stored local like every other store, and the camera ray is the same one the sub-object pick
+/// casts at them. Passing a world point here puts the snap a whole `worldDocumentOrigin` away from
+/// the anchor it is measured against; it was documented as world and called with world until a user
+/// reported the plane "snapping too far the other direction" (2026-09-11).
+///
+/// Only a NAMED feature should be passed. `Surface`, `Edge` and `Face` answer with the point
+/// nearest the cursor, so under 3D OSNAP one is available almost everywhere on a solid, and an
+/// absolute placement driven by those makes the plane skate across the model — see
+/// `CadSnap::SnapClass`, and the gate in `CadUi.cpp` that applies it.
 void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& ray,
-                                const ray3d::Vec3* snapWorld = nullptr);
+                                const ray3d::Vec3* snapPoint = nullptr);
 
 /// Refresh \ref AppCommandState::sectionPlaneGripHover. No-op while a drag is armed.
 void UpdateSectionPlaneGripHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorld);

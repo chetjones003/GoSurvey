@@ -14208,9 +14208,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // the uniform the shader reads on the next frame.
   if (modelSpace && cmd.viewportSectionClip && cmd.sectionPlaneGripDrag >= 0) {
     const ray3d::Ray spRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
-    // The snapped point, when there is one, in WORLD coordinates: the command layer works in world
-    // throughout, and `viewportSnapPickLocal*` is storage-local in XY (Z is already absolute).
-    ray3d::Vec3 snapWorld{};
+    // The snapped point in **STORAGE** coordinates — the frame everything else in this drag is
+    // already in, and the frame `CadSnap` answers in.
+    //
+    // This converted to world first, which was simply wrong and is the bug behind "it is snapping
+    // too far the other direction". A section plane's frame comes from a solid's face
+    // (`brep::Surface::frame`), and solids are stored in the local frame like every other store —
+    // nothing in the section-plane path converts by `worldDocumentOrigin`. So the anchor, the drag
+    // axis and the camera ray were all storage-space while the snapped point alone had the document
+    // origin added to it, putting the two a whole origin apart. It reads as "close but wrong, and
+    // wrong the other way when the axis points the other way", which is exactly what was reported.
+    ray3d::Vec3 snapLocal{};
     const ray3d::Vec3* snapPtr = nullptr;
     // ONLY a named feature steers the plane (REQ-340 amended, user report 2026-09-11).
     //
@@ -14229,11 +14237,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.viewportSnapPickValid &&
         CadSnap::SnapClass(static_cast<CadSnap::Kind>(cmd.viewportSnapPickKind)) == 1;
     if (namedFeature) {
-      double swx = 0.0, swy = 0.0;
-      CadCoord::WorldFromLocal(cmd, static_cast<float>(cmd.viewportSnapPickLocalX),
-                               static_cast<float>(cmd.viewportSnapPickLocalY), &swx, &swy);
-      snapWorld = ray3d::Vec3{swx, swy, cmd.viewportSnapPickLocalZ};
-      snapPtr = &snapWorld;
+      // Taken straight through, at full precision. The old conversion also narrowed X and Y to
+      // `float` on the way — the very thing the `double` widening of these fields (ADR-054 Phase C)
+      // exists to prevent, and which breaks the snap's bit-exactness above about 10,000 ft local.
+      snapLocal = ray3d::Vec3{cmd.viewportSnapPickLocalX, cmd.viewportSnapPickLocalY,
+                              cmd.viewportSnapPickLocalZ};
+      snapPtr = &snapLocal;
     }
     UpdateSectionPlaneGripDrag(cmd, spRay, snapPtr);
     BumpCadGpuCache(cmd);

@@ -33582,7 +33582,7 @@ static bool SectionPlaneGripAxis(const AppCommandState& st, SectionPlaneGrip gri
 }
 
 void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& rayIn,
-                                const ray3d::Vec3* snapWorld) {
+                                const ray3d::Vec3* snapPoint) {
   const ray3d::Ray ray = SectionPlaneUnitRay(rayIn);
   const SectionPlaneGrip grip = static_cast<SectionPlaneGrip>(st.sectionPlaneGripDrag);
   if (grip == SectionPlaneGrip::None)
@@ -33596,7 +33596,7 @@ void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& rayIn,
   // How far the HANDLE should travel from where it was grabbed. The two ways of asking are
   // different in kind, and conflating them is the bug this shape exists to prevent.
   double delta = 0.0;
-  if (snapWorld) {
+  if (snapPoint) {
     // REQ-340 — land on the object snap.
     //
     // **ABSOLUTE, and that is the whole point.** `anchor` IS the handle's position at the grab, so
@@ -33623,7 +33623,7 @@ void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& rayIn,
     // a point reaching here is by definition one the user is pointing at. A second distance test
     // would be this code second-guessing the snap system with a worse rule — and the case it would
     // reject is the useful one, a midpoint out in the model deliberately reached for.
-    delta = ray3d::Dot(ray3d::Sub(*snapWorld, anchor), dir);
+    delta = ray3d::Dot(ray3d::Sub(*snapPoint, anchor), dir);
   } else {
     // RELATIVE: a delta from where the grab happened, so the handle does not leap to the cursor on
     // the first frame. `sectionPlaneGripStartParam` was recorded against the same anchor and axis,

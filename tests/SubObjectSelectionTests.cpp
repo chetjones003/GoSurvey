@@ -1639,3 +1639,58 @@ TEST_CASE("A nearest-on-face snap is not a placement", "[sectionplanegrip][req34
   CHECK(CadSnap::SnapClass(CadSnap::Kind::CenterOfFace) == 1);
   CHECK(CadSnap::SnapClass(CadSnap::Kind::Knot) == 1);
 }
+
+TEST_CASE("The snapped point is read in STORAGE coordinates, not world",
+          "[sectionplanegrip][req340]") {
+  // The bug behind "it is snapping too far the other direction" (2026-09-11). The viewport was
+  // converting the snapped point to WORLD before handing it to the drag, but every other quantity
+  // in that drag is in the LOCAL storage frame — the clip frame comes from a solid's face, solids
+  // are stored local like every other store, and the camera ray is the one the sub-object pick
+  // casts at them. The snap alone had `worldDocumentOrigin` added to it, so it landed a whole
+  // origin from the anchor it is measured against.
+  //
+  // The document origin is ZERO in a fresh drawing, which is why this survived three rounds of
+  // testing: at the origin the wrong frame and the right one are the same frame — the same shape as
+  // the anchor-rebasing hazard REQ-337 records. So this case sets one.
+  std::vector<std::string> log;
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  // A survey-magnitude document origin: the drawing is stored around zero and lives at state-plane
+  // coordinates, which is the arrangement `worldDocumentOrigin` exists for.
+  st.worldDocumentOriginX = 2196000.0;
+  st.worldDocumentOriginY = 1400000.0;
+  AddBox(st, World(), 20.0, 10.0, 8.0);  // stored at x [-10,10], y [-5,5], z [0,8]
+
+  // A SIDE face, so the plane's normal is horizontal. On a level plane the normal is +Z while the
+  // document origin offsets X and Y, so the wrong frame and the right one give the same answer and
+  // this case would prove nothing — the same blind spot REQ-337 records for its own anchor
+  // rebasing, where "a horizontal cut is exact in both versions".
+  StartSectionPlaneCommand(st, log);
+  REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({-100, 0, 4}, {-10, 0, 4}), Tol(0.5, 0.5), log));
+  REQUIRE(st.viewportSectionClipFrame.zAxis.x == Catch::Approx(-1.0));
+
+  const ray3d::Ray grab = RayAtGrip(st, SectionPlaneGrip::Move);
+  REQUIRE(SubmitSectionPlaneClick(st, grab, 1.0, log));
+
+  // A snapped point as `CadSnap` reports one: STORAGE coordinates. Mid-height of a vertical edge.
+  const ray3d::Vec3 snapped{10.0, 5.0, 4.0};
+  UpdateSectionPlaneGripDrag(st, RayAt({60, 40, 101}, {0, 0, 1}), &snapped);
+
+  const SectionClipPlane p = CadSectionClipPlane(st);
+  const double d = p.nx * snapped.x + p.ny * snapped.y + p.nz * snapped.z - p.c;
+  CHECK(std::fabs(d) < 0.002);  // REQ-101, at a document origin 2.2 million feet out
+
+  // And the WORLD-coordinate version of that same point — what the viewport used to pass — must not
+  // give the same answer, or this case would pass against the very bug it exists to catch. The drag
+  // is still armed against the same anchor, so feeding it the other frame is the whole experiment.
+  const double rightOffset = st.viewportSectionClipOffset;
+  const ray3d::Vec3 asWorld{snapped.x + st.worldDocumentOriginX,
+                            snapped.y + st.worldDocumentOriginY, snapped.z};
+  UpdateSectionPlaneGripDrag(st, RayAt({60, 40, 101}, {0, 0, 1}), &asWorld);
+  const double wrongOffset = st.viewportSectionClipOffset;
+  INFO("storage frame gave " << rightOffset << ", world frame gave " << wrongOffset);
+  // Not merely different — different by the document origin's component along the plane's normal,
+  // which here is the whole 2,196,000 ft easting. That is the size of the mistake, and stating it
+  // as a magnitude rather than an inequality is what stops the case passing on a rounding wobble.
+  CHECK(std::fabs(wrongOffset - rightOffset) == Catch::Approx(2196000.0).margin(1e-3));
+}

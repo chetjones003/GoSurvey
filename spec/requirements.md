@@ -8951,6 +8951,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
   nearest-on-object snap family was steering the drag: with 3D OSNAP on, `Face` answers at
   essentially every cursor position on a solid, so an absolute placement made the plane skate across
   the model with the pointer. Only `SnapClass == 1` — a named feature — places it now.
+  2026-09-11 (third report, "snapping too far the other direction") — **the snapped point was being
+  read in the wrong COORDINATE FRAME.** The viewport converted it to world before handing it to the
+  drag, but every other quantity there is in the LOCAL storage frame: the clip frame comes from a
+  solid's face, solids are stored local like every other store, and the camera ray is the one the
+  sub-object pick casts at them. The snap alone had `worldDocumentOrigin` added, putting it a whole
+  origin from the anchor it is measured against. Taken straight through now, at full precision — the
+  conversion also narrowed X and Y to `float`, which is what ADR-054 Phase C widened these fields to
+  `double` to prevent. **Invisible in a fresh drawing**, where the origin is zero and the two frames
+  coincide — and invisible again on a LEVEL plane, whose normal is +Z while the origin offsets X and
+  Y, which is the same blind spot REQ-337 records for its own anchor rebasing. The regression case
+  therefore sets a state-plane origin AND uses a side face, and measures the error as
+  **2,196,000 ft** rather than asserting the two answers merely differ.
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

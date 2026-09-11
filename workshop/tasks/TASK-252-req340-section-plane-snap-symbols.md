@@ -144,17 +144,52 @@ the state recorded where the snap was but not what it was.
 The two compounded: B put the plane in the wrong place during the drag, and A moved it again on
 release, so neither symptom looked like a clean miss.
 
+## 5c. The third report — the wrong coordinate frame
+
+> now it is snapping too far the other direction
+
+**Cause.** The viewport converted the snapped point to **world** before handing it to the drag. Every
+other quantity in that drag is in the **local storage** frame: the clip frame comes from a solid's
+face (`brep::Surface::frame`), solids are stored local like every other store — nothing in the
+section-plane path converts by `worldDocumentOrigin` — and the camera ray is the same one the
+sub-object pick casts at them. So the snapped point alone had the document origin added to it, and
+sat a whole origin away from the anchor it is measured against.
+
+The function's own documentation said `snapWorld ... in WORLD coordinates`, and the call site
+obeyed it. The doc comment was the bug; both are now explicit that this is storage space, and the
+parameter is renamed `snapPoint`.
+
+The conversion also narrowed X and Y through a `float` overload — the exact thing ADR-054 Phase C
+widened these fields to `double` to prevent, and which breaks the snap's bit-exactness above about
+10,000 ft local. Taken straight through now.
+
+**Why it took three rounds to surface.** It is invisible twice over:
+
+1. **In a fresh drawing the origin is zero**, so the wrong frame and the right one are the same
+   frame. Every test and every quick check had a zero origin.
+2. **On a LEVEL plane it is invisible even with an origin set** — the normal is +Z while the origin
+   offsets X and Y, so the projection along the normal is unaffected. This is the same blind spot
+   REQ-337 records for its own anchor rebasing, in the same words: *a horizontal cut is exact in
+   both versions*.
+
+The first draft of the regression case fell into (2) and passed against the bug. It now sets a
+state-plane origin **and** uses a side face, and measures the error as **2,196,000 ft** rather than
+asserting the two answers merely differ — the P3 lesson this repository keeps relearning: measure
+where it lands, do not check that two numbers are unequal.
+
 ## 6. Verification
 
-**Full suite 1514/1514**, up from 1506.
+**Full suite 1515/1515**, up from 1506.
 
-`SubObjectSelectionTests` `[req340]`, 8 cases inside `[sectionplanegrip]` (18 cases / 176
+`SubObjectSelectionTests` `[req340]`, 9 cases inside `[sectionplanegrip]` (19 cases / 183
 assertions):
 
 - **an off-centre grab lands the plane in the same place as a dead-centre one** — §5a, the case that
   was missing;
 - an off-centre grab with no snap still drags relatively;
 - **releasing the mouse keeps the snapped placement** — §5b BUG-A;
+- **the snapped point is read in STORAGE coordinates** — §5c, at a state-plane document origin and
+  on a side face, measuring the error as 2,196,000 ft;
 - **`SnapClass` still separates the named features from the nearest-anywhere family** — §5b BUG-B;
   kept beside the drag tests because a change there that reclassified `Face` would break the section
   plane with nothing else to notice;
