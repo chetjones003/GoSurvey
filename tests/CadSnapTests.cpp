@@ -1470,4 +1470,48 @@ TEST_CASE("A named feature beats nearest-on-face, which is a fallback and not a 
     REQUIRE(hit.valid);
     CHECK(hit.kind == Kind::Face);
   }
+
+  SECTION("EDGE is demoted too, and must also stay reachable") {
+    // `SnapClass` puts `Edge` in the same nearest-anywhere class as `Face`, which is right — it
+    // answers with the nearest point ALONG an edge, not a named point on it — but it means the
+    // precedence change reaches further than the `Face` bug that prompted it. A named feature now
+    // beats `Edge` whenever one is inside the aperture, so the question worth pinning is that
+    // `Edge` is still returned when none is.
+    //
+    // Aimed a quarter of the way along a top edge: far from both endpoints and from the midpoint at
+    // a realistic aperture, which is exactly where `Edge` is the right answer.
+    //
+    // `objectSnap3dNearestFace` stays ON — it is the flag that produces `Kind::Edge` as well as
+    // `Kind::Face` (CadSnap.cpp:1331), so switching it off to "isolate" Edge removes Edge. The two
+    // then compete at the same class, and `Priority` gives Edge the tie: a real curve beats
+    // anywhere-on-a-face.
+    //
+    // A 3 ft aperture, not the 1 ft the face case uses: at this camera and this target the solid
+    // pick finds nothing at 1 ft. Still comfortably inside the 5 ft to the nearest named feature —
+    // the edge's own midpoint — so the precedence rule is not what is being dodged.
+    float px = 0.f, py = 0.f;
+    cam.WorldToScreen(-5.0, -7.0, 12.0, kW, kH, &px, &py);
+    const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+    const double t = (0.0 - ray.origin.z) / ray.dir.z;
+    const CadSnap::Hit hit = CadSnap::FindBest(ray.origin.x + t * ray.dir.x,
+                                               ray.origin.y + t * ray.dir.y, st,
+                                               /*commandActive=*/true, /*tolWorld=*/3.f, {}, &ray);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Edge);
+  }
+
+  SECTION("a named feature still wins over EDGE when one is in reach") {
+    // The other half: at the midpoint of that same edge, the named point takes it. Together with
+    // the case above this states the whole rule for `Edge` — fallback, not rival — rather than
+    // leaving it to be inferred from the `Face` cases.
+    float px = 0.f, py = 0.f;
+    cam.WorldToScreen(0.0, -7.0, 12.0, kW, kH, &px, &py);
+    const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+    const double t = (0.0 - ray.origin.z) / ray.dir.z;
+    const CadSnap::Hit hit = CadSnap::FindBest(ray.origin.x + t * ray.dir.x,
+                                               ray.origin.y + t * ray.dir.y, st,
+                                               /*commandActive=*/true, /*tolWorld=*/1.f, {}, &ray);
+    REQUIRE(hit.valid);
+    CHECK(CadSnap::SnapClass(hit.kind) == 1);  // a named point, not nearest-anywhere
+  }
 }

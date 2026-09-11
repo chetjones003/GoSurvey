@@ -28710,6 +28710,15 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
   std::vector<Cut> cuts;
   cuts.reserve(solids.size());
   for (const int idx : solids) {
+    // Bounds-checked, and not defensively. These indices were resolved at the SELECTION step, one
+    // to three picks before this runs, and `cadSolids` can be a different vector by now — switching
+    // drawing tabs swaps the store through `RestoreDocumentFromSnapshot` without touching
+    // `st.active`, `st.sectionPhase` or `st.sectionSolidIndices`. An out-of-range `operator[]` is
+    // undefined behaviour that the `!sp` test below cannot catch, because the read has already
+    // happened. `CommitSlice` guards the identical situation the identical way; this function was
+    // split out of the selection path and lost it on the way.
+    if (idx < 0 || static_cast<std::size_t>(idx) >= st.cadSolids.size())
+      continue;
     const CadSolidPtr& sp = st.cadSolids[static_cast<std::size_t>(idx)];
     if (!sp)
       continue;
@@ -28813,6 +28822,14 @@ static void SectionEnterPlanePhase(AppCommandState& st, std::vector<std::string>
   for (const SelectedEntity& e : st.selection)
     if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < nSolid)
       st.sectionSolidIndices.push_back(e.index);
+  // Deduplicated, as SLICE does with the same data. A solid can reach `selection` twice — a
+  // rectangle merged into an existing selection, or a pick-first set carried in from another
+  // command — and without this SECTION would cut the same solid twice and lay two identical closed
+  // polylines on top of each other, then report "2 section outlines created" for one solid.
+  std::sort(st.sectionSolidIndices.begin(), st.sectionSolidIndices.end());
+  st.sectionSolidIndices.erase(
+      std::unique(st.sectionSolidIndices.begin(), st.sectionSolidIndices.end()),
+      st.sectionSolidIndices.end());
   if (st.sectionSolidIndices.empty()) {
     // Stays in the selection phase rather than ending: the user picked something, it just was not
     // a solid, and throwing them out of the command for that is the behaviour this increment exists
@@ -32682,10 +32699,16 @@ bool ApplyFovValue(AppCommandState& st, const std::string& raw, std::vector<std:
 std::string SectionClipReport(const AppCommandState& st) {
   if (!st.viewportSectionClip)
     return "Section clip = OFF.";
-  char buf[192];
-  std::snprintf(buf, sizeof(buf), "Section clip = ON at offset %.4g along the UCS Z%s.",
-                st.viewportSectionClipOffset, st.viewportSectionClipFlip ? ", flipped" : "");
-  return buf;
+  // The drawing's own linear precision, through the shared formatter — NOT `%.4g`, which was four
+  // significant figures and therefore threw away exactly the precision the parser is careful to
+  // keep. `SECTIONCLIP 200000.01` reported "offset 2e+05": an offset stated to 0.01 ft read back
+  // with about 10 ft of error, on the one line that tells a user where the plane is. Any offset
+  // above 9999.5 was reported wrong. The parse comment a few functions down argues for `double`
+  // because REQ-101 is +/-0.002 ft; printing it at four figures contradicted that in the same
+  // breath.
+  return std::string("Section clip = ON at offset ") +
+         FormatLinear(st.viewportSectionClipOffset, st.displayLinearPrecision) +
+         " along the UCS Z" + (st.viewportSectionClipFlip ? ", flipped" : "") + ".";
 }
 
 /// `SECTIONCLIP` — hide everything in front of a plane so the inside of a model can be looked at
@@ -32705,9 +32728,9 @@ std::string SectionClipReport(const AppCommandState& st) {
 /// A number is accepted with or without `OFFSET` in front of it, because "SECTIONCLIP 12" is what a
 /// user types once they know the command; the keyword exists so the help line can name the unit.
 bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
-  std::string v = StringUtil::trimCopy(raw);
-  for (char& ch : v)
-    ch = static_cast<char>((ch >= 'A' && ch <= 'Z') ? (ch - 'A' + 'a') : ch);
+  // The shared helper, not a hand-rolled loop — `HandleSectionTextInput`, added in this same
+  // change, already uses it for the identical job a few hundred lines up.
+  const std::string v = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(raw));
 
   // **No numeric aliases for ON and OFF here**, unlike `PERSPECTIVE` and `CROSSHAIR3D` which accept
   // `1` and `0`. Those two have nothing but on and off to say, so a digit is unambiguous. This
@@ -32745,8 +32768,19 @@ bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vec
   // precisely the one-narrowing-point defect ADR-054 Phase D audited out.
   double parsed = 0.0;
   {
-    std::istringstream ns(numTok);
-    if (numTok.empty() || !(ns >> parsed) || !std::isfinite(parsed)) {
+    // `strtod` with an end pointer, not `istringstream >> double`: the stream stops at the first
+    // character it cannot use and reports success for whatever it managed to read, so `12abc` set
+    // the offset to 12, `4 8` set it to 4, and `12,5` — an ordinary decimal comma outside the US —
+    // silently set 12 instead of 12.5. Each reported "Section clip = ON at offset ..." as though it
+    // had understood. Every other refusal in this function leaves the previous state alone and says
+    // why; this one committed a wrong number and claimed success.
+    //
+    // The whole token must be consumed, which is the pattern `ParseSolidBasePoint` already uses.
+    const char* first = numTok.c_str();
+    char* end = nullptr;
+    parsed = std::strtod(first, &end);
+    const bool consumedAll = (end != first) && (*end == '\0');
+    if (numTok.empty() || !consumedAll || !std::isfinite(parsed)) {
       log.push_back("SECTIONCLIP - enter ON, OFF, FLIP, or an offset distance along the UCS Z.");
       return false;
     }

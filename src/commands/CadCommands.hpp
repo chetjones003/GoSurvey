@@ -4831,10 +4831,6 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
 
-/// REQ-335 — SECTION: the cross-section of every selected solid by the active UCS plane, drawn as a
-/// closed polyline. Non-destructive: the solids are left exactly as they were.
-void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log);
-
 /// REQ-313 as amended (D-2026-09-09-j) — SOLIDCHECK: report each solid's validity, and separately
 /// whether its surface passes through itself. Read-only; nothing is repaired.
 void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log);

@@ -1343,9 +1343,23 @@ int main()
       // a plane to look at, sized around the UCS origin, so turning the clip on always shows
       // something: an indicator that appears only once you happen to own a solid would be at its
       // least helpful exactly when a user is working out what the command does.
+      // Sized from the VISIBLE solids. A solid on a layer that is off, or isolated out under
+      // REQ-084 (d), is not on screen, so stretching the indicator across its extent would size the
+      // rectangle to geometry the user cannot see — it would stop reading as "the plane covers the
+      // model" and could be many times larger than everything drawn. `PickSubObjectAcrossSolids`
+      // and the zoom-extents walk both already filter this way.
+      //
+      // `ComputeBounds` is not free — it marches 64 points along every `CurveKind::Intersection`
+      // edge — and this runs every frame the clip is on, against REQ-100's 16 ms budget. It is kept
+      // per-frame deliberately, because the rectangle must follow the model as it is edited and
+      // there is no invalidation signal here that covers a solid changing shape; skipping the
+      // invisible ones is what keeps the cost proportional to what is actually drawn. If a drawing
+      // of many boolean solids ever makes this measurable, the fix is to cache it against
+      // `cadGpuRevision`, which already bumps on every geometry change.
       brep::Bounds bb;
-      for (const CadSolidPtr& sp : cmd.cadSolids) {
-        if (!sp)
+      for (size_t si = 0; si < cmd.cadSolids.size(); ++si) {
+        const CadSolidPtr& sp = cmd.cadSolids[si];
+        if (!sp || !SolidVisible(cmd, si))
           continue;
         const brep::Bounds b = brep::ComputeBounds(*sp);
         if (!b.valid)
@@ -1544,7 +1558,7 @@ int main()
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
 #ifdef GOSURVEY_DEVELOPER_SHELL
-    // REQ-161 (TASK-248): a devshell test capturing the VIEWPORT, serviced here because this is the
+    // REQ-161 (TASK-249): a devshell test capturing the VIEWPORT, serviced here because this is the
     // one point in the frame where the renderer has just drawn and its framebuffer still holds the
     // image.
     //
