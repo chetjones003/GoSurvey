@@ -38,7 +38,9 @@
 #include "UpdateService.hpp"
 #include "TelemetryService.hpp"
 #include "AuthService.hpp"
+#include "HttpFetch.hpp"  // HasInternetConnectivity — launch auth spinner timer
 #include "Version.hpp"
+#include "WhatsNewLogic.hpp"
 
 #include <chrono>
 #include <ctime>
@@ -365,13 +367,25 @@ int main()
   GlfwPlatformApplySplashRoundedRegion(
       window, 8.f * std::max(1.f, static_cast<float>(kSplashWinH) / 320.f));
 
+  // REQ-077: the update check runs during the splash so the main window (and REQ-336 What's New)
+  // is never blocked by a "Checking for updates" modal. Only the persisted settings live in
+  // AppCommandState; the worker state is owned here.
+  update::UpdateState updateState;
+  updateState.prefs = cmd.updatePrefs;
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  if (!devshellCli)
+#endif
+    update::BeginStartupCheck(updateState, "chetjones003/GoSurvey");
+
   // REQ-093: hardcoded 5 s regardless of how fast the real preload below finishes — the app is
   // still low-resource enough that the actual load is imperceptible, so the splash's duration is
-  // deliberately decoupled from it rather than trying to track real progress.
+  // deliberately decoupled from it rather than trying to track real progress. When the update
+  // check is still in flight after 5 s, the splash stays up until it resolves (bounded by the
+  // check timeout in UpdateService).
 #ifdef GOSURVEY_DEVELOPER_SHELL
-  RunStartupSplash(window, devshellCli ? 0.0 : 5.0);
+  RunStartupSplash(window, devshellCli ? 0.0 : 5.0, &updateState);
 #else
-  RunStartupSplash(window, 5.0);
+  RunStartupSplash(window, 5.0, &updateState);
 #endif
   // The splash ran in a small (~880x640) window. Maximizing it for the main stage leaves the stale
   // splash front buffer stretched fullscreen for the frames it takes DWM to catch up — the "glitchy
@@ -388,16 +402,13 @@ int main()
   glfwPollEvents();
   bool mainWindowShown = false;
 
-  // REQ-077: the update check. Only the persisted settings live in AppCommandState; the worker
-  // state is owned here, so no drawing state is ever touched from a background thread.
-  update::UpdateState updateState;
-  updateState.prefs = cmd.updatePrefs;
-  // Runs on EVERY launch (no throttle) and gates the session: the dialog stays modal until it
-  // resolves. Does nothing at all when the user has switched the check off.
-#ifdef GOSURVEY_DEVELOPER_SHELL
-  if (!devshellCli)
-#endif
-  update::BeginStartupCheck(updateState, "chetjones003/GoSurvey");
+  // REQ-078 before REQ-336: if the splash check found an update, do not auto-open What's New.
+  if (updateState.phase == update::Phase::UpdateReady)
+    cmd.whatsNewAutoOpenedThisLaunch = true;
+  else if (cmd.activeDrawingIdx == 0 &&
+           WhatsNewShouldAutoOpen(GOSURVEY_VERSION_FULL, cmd.whatsNewDismissedVersion, false))
+    cmd.whatsNewOpeningPending = true;
+
   /// Set once the user has confirmed an update and the app is exiting to hand over to the
   /// installer, so the normal quit path can tell the two cases apart.
   bool updateExitPending = false;
@@ -422,8 +433,8 @@ int main()
   // and it failed" (REQ-201: shown, not swallowed) — both complete through the same poll below.
   std::unique_ptr<auth::AuthTask> authTask;
   bool                            authLastAttemptInteractive = false;
-  authTask                                                   = auth::BeginSilentRefresh();
-  cmd.authBusy                                                = true;
+  authTask     = auth::BeginSilentRefresh();
+  cmd.authBusy = true;
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
   cmdLog.push_back("Regenerating model.");
@@ -529,9 +540,17 @@ int main()
 
   auto perfPrevFrame = std::chrono::steady_clock::now();
   framewatch::FrameWatch frameWatch;
+  bool launchAuthTimerArmed = false;
   while (true)
   {
     glfwPollEvents();
+
+    cmd.appWindowFocused = (glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE);
+
+    if (!launchAuthTimerArmed && HasInternetConnectivity() && !cmd.authGateResolved) {
+      BeginLaunchAuthOverlayTimer();
+      launchAuthTimerArmed = true;
+    }
 
     // Frame-time HUD (issue #166 investigation, PERFHUD command). Frame-to-frame wall clock,
     // measured at the top so it is the whole cost — poll, UI, render, swap, vsync wait.
@@ -709,6 +728,10 @@ int main()
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+
+    cmd.whatsNewModalVisible = false;
+    if (cmd.activeDrawingIdx == 0)
+      MaybeAutoOpenWhatsNew(cmd);
 
     // REQ-047: F3 (object snap) and F8 (ortho) are MODE toggles — like AutoCAD they must work even while
     // the command bar has keyboard focus. They are not text characters, so handling them during
@@ -1117,7 +1140,9 @@ int main()
     // REQ-091 (amended): blocks every launch until authGateResolved — signed in, or no internet
     // at all to sign in with. Stacks beneath the update dialog's modal (both gate the session;
     // ImGui's modal stack lets whichever opened first take input priority).
-    DrawSignInGate(cmd);
+    const bool updateOfferBlocks = (updateState.phase == update::Phase::UpdateReady);
+    if (!LaunchSequenceOverlayActive(cmd, updateOfferBlocks))
+      DrawSignInGate(cmd);
     // The dialog writes skip state into cmd.updatePrefs; the throttle anchor is written by the
     // check itself. Sync the rest back so SaveUserStartupPrefs persists both.
     cmd.updatePrefs.enabled        = updateState.prefs.enabled;
@@ -1481,6 +1506,10 @@ int main()
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.
     DrawFloatingWindowChrome();
+
+    // REQ-336 / REQ-091: last UI — launch spinner over the shell; sign-in (when required) sits
+    // beneath this overlay until the user is signed in, then What's New opens.
+    DrawLaunchSequenceOverlay(cmd, updateOfferBlocks);
 
     ImGui::Render();
     int displayW = 0;

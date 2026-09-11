@@ -17,7 +17,7 @@ namespace update {
 /// Where the flow currently is. The UI reads this each frame; nothing else drives the dialog.
 enum class Phase {
   Idle,          ///< nothing running, nothing to show
-  Checking,      ///< manifest fetch in flight (silent — the user is not told this is happening)
+  Checking,      ///< manifest fetch in flight (shown on the splash, not as a main-window modal)
   UpdateReady,   ///< a newer version exists; the REQ-078 dialog is showing
   /// User chose to install; the installer is coming down AND being hashed. Hashing is not its
   /// own phase because it happens in the same worker and takes milliseconds on a ~5 MB file —
@@ -66,9 +66,8 @@ struct UpdateState {
 
 /// Starts the REQ-077 check. Runs on every launch; does nothing at all when the setting is off.
 ///
-/// Returns immediately — the fetch is on a worker. The caller is expected to keep
-/// `Phase::Checking` modal until `PollUpdateTask` resolves it, which is what makes the check
-/// gate the session (REQ-077 amended) without freezing the UI thread.
+/// Returns immediately — the fetch is on a worker. The caller polls `PollUpdateTask` during the
+/// startup splash until `Phase::Checking` resolves, so the main session is never modal-blocked.
 void BeginStartupCheck(UpdateState& st, const std::string& ownerRepo);
 
 /// Polls the in-flight task and advances `phase`. Call once per frame from the UI thread.

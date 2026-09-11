@@ -7,6 +7,7 @@
 #include "MarkdownImGui.hpp"
 #include "UserPrefs.hpp"
 #include "Version.hpp"
+#include "HttpFetch.hpp"
 #include "WhatsNewContent.hpp"
 #include "WhatsNewLogic.hpp"
 
@@ -20,6 +21,10 @@
 #include <shellapi.h>
 #endif
 
+#include <algorithm>
+#include <cassert>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <string>
 
@@ -33,6 +38,32 @@ ImVec4 Lerp(const ImVec4& a, const ImVec4& b, float t) {
   return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t,
                 a.w + (b.w - a.w) * t);
 }
+
+float EaseOutCubic(const float t) {
+  const float u = 1.f - t;
+  return 1.f - u * u * u;
+}
+
+// Ball-on-floor settle — value approaches 1 with diminishing bounces (CSS ease-out-bounce).
+float EaseOutBounce(const float t) {
+  constexpr float kN1 = 7.5625f;
+  constexpr float kD1 = 2.75f;
+
+  if (t < 1.f / kD1)
+    return kN1 * t * t;
+  if (t < 2.f / kD1) {
+    const float u = t - 1.5f / kD1;
+    return kN1 * u * u + 0.75f;
+  }
+  if (t < 2.5f / kD1) {
+    const float u = t - 2.25f / kD1;
+    return kN1 * u * u + 0.9375f;
+  }
+  const float u = t - 2.625f / kD1;
+  return kN1 * u * u + 0.984375f;
+}
+
+float LerpFloat(const float a, const float b, const float t) { return a + (b - a) * t; }
 ImVec4 Accent()   { return ImVec4(0.26f, 0.56f, 0.86f, 1.f); }
 ImVec4 AccentHi() { return ImVec4(0.34f, 0.64f, 0.95f, 1.f); }
 ImVec4 AccentLo() { return ImVec4(0.20f, 0.45f, 0.72f, 1.f); }
@@ -112,6 +143,82 @@ BackdropTex& WhatsNewBackdrop() {
   return slot;
 }
 
+struct LaunchSpinnerLayout {
+  float  barW = 0.f;
+  float  barH = 0.f;
+  float  blockH = 0.f;
+  ImVec2 barMin {};
+};
+
+LaunchSpinnerLayout ComputeLaunchSpinnerLayout(const ImGuiViewport* vp, const char* statusLine) {
+  assert(vp != nullptr);
+  assert(statusLine != nullptr);
+
+  LaunchSpinnerLayout layout {};
+  // Reference height 720p — scales bar thickness, gaps, and rounding on larger monitors.
+  const float layoutScale = (std::max)(1.f, vp->WorkSize.y / 720.f);
+  layout.barW = (std::clamp)(vp->WorkSize.x * 0.34f, 280.f, 520.f);
+  layout.barH = 10.f * layoutScale;
+
+  const ImVec2 ts = ImGui::CalcTextSize(statusLine);
+  const float  textGap = 12.f * layoutScale;
+  layout.blockH        = layout.barH + textGap + ts.y;
+
+  const ImVec2 center = vp->GetWorkCenter();
+  const float  blockTop = center.y - layout.blockH * 0.5f;
+  layout.barMin         = ImVec2(center.x - layout.barW * 0.5f, blockTop);
+  return layout;
+}
+
+void DrawLaunchSpinnerForeground(ImGuiViewport* vp, const char* statusLine) {
+  assert(vp != nullptr);
+  assert(statusLine != nullptr);
+
+  ImDrawList* dl = ImGui::GetForegroundDrawList(vp);
+  const ImVec2 p0 = vp->WorkPos;
+  const ImVec2 p1(p0.x + vp->WorkSize.x, p0.y + vp->WorkSize.y);
+  dl->AddRectFilled(p0, p1, IM_COL32(5, 13, 26, 240));
+
+  const LaunchSpinnerLayout layout = ComputeLaunchSpinnerLayout(vp, statusLine);
+  const float               layoutScale = (std::max)(1.f, vp->WorkSize.y / 720.f);
+  const float               rounding    = 6.f * layoutScale;
+  const ImVec2              barMax(layout.barMin.x + layout.barW, layout.barMin.y + layout.barH);
+
+  dl->AddRectFilled(layout.barMin, barMax, IM_COL32(255, 255, 255, 26), rounding);
+
+  // Match ImGui::ProgressBar(-time): indeterminate segment sweeps the track.
+  const float t     = static_cast<float>(ImGui::GetTime());
+  float       fill0 = std::fmod(-t, 1.0f);
+  if (fill0 < 0.f)
+    fill0 += 1.f;
+  const float fill1  = (std::min)(1.f, fill0 + 0.35f);
+  const float segMin = layout.barMin.x + fill0 * layout.barW;
+  const float segMax = layout.barMin.x + fill1 * layout.barW;
+  if (segMax > segMin)
+    dl->AddRectFilled(ImVec2(segMin, layout.barMin.y), ImVec2(segMax, barMax.y),
+                      ImGui::ColorConvertFloat4ToU32(AccentHi()), rounding);
+
+  const ImVec2 ts = ImGui::CalcTextSize(statusLine);
+  const ImVec2 center = vp->GetWorkCenter();
+  dl->AddText(ImVec2(center.x - ts.x * 0.5f, barMax.y + 12.f * layoutScale),
+              IM_COL32(224, 235, 247, 255), statusLine);
+}
+
+WhatsNewContent& CachedWhatsNewContent() {
+  static WhatsNewContent content;
+  static bool loaded = false;
+  if (!loaded) {
+    content = LoadWhatsNewContent();
+    loaded  = true;
+  }
+  return content;
+}
+
+void EnsureWhatsNewAssetsLoaded() {
+  (void)CachedWhatsNewContent();
+  (void)WhatsNewBackdrop();
+}
+
 void DrawFaintBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b) {
   const BackdropTex& bg = WhatsNewBackdrop();
   if (bg.tex == 0 || bg.w <= 0 || bg.h <= 0)
@@ -143,6 +250,36 @@ void DrawFaintBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b) {
 
 }  // namespace
 
+// Minimum launch spinner before the sign-in modal (sign-in uses DrawSignInGate, not this overlay).
+static constexpr double kLaunchSpinnerMinSec = 5.0;
+static std::chrono::steady_clock::time_point s_launchAuthOverlayStart {};
+static bool                                    s_launchAuthTimerActive = false;
+
+static bool LaunchSequenceHoldForMinSpinner() {
+  if (!s_launchAuthTimerActive)
+    return false;
+  const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                       s_launchAuthOverlayStart)
+                             .count();
+  return elapsed < kLaunchSpinnerMinSec;
+}
+
+static void ResetLaunchAuthOverlayTimer() {
+  s_launchAuthTimerActive = false;
+}
+
+static bool LaunchSequenceAwaitingSignInGate(const AppCommandState& cmd) {
+  return HasInternetConnectivity() && !cmd.authGateResolved && !cmd.authBusy &&
+         !cmd.authSignedIn;
+}
+
+void BeginLaunchAuthOverlayTimer() {
+  if (!s_launchAuthTimerActive) {
+    s_launchAuthOverlayStart = std::chrono::steady_clock::now();
+    s_launchAuthTimerActive  = true;
+  }
+}
+
 void RequestWhatsNewWindow(AppCommandState& cmd) {
   cmd.showWhatsNewWindow = true;
   cmd.whatsNewDontShowChecked =
@@ -155,40 +292,155 @@ void MaybeAutoOpenWhatsNew(AppCommandState& cmd) {
   if (!WhatsNewShouldAutoOpen(GOSURVEY_VERSION_FULL, cmd.whatsNewDismissedVersion,
                               cmd.whatsNewAutoOpenedThisLaunch))
     return;
+  // REQ-336 + REQ-091: auto-open waits for sign-in when online — offline uses the same skip as
+  // the auth gate (nothing to sign in with).
+  if (!cmd.authGateResolved && HasInternetConnectivity())
+    return;
+  if (LaunchSequenceHoldForMinSpinner())
+    return;
+  // Interactive sign-in completes in the browser while GoSurvey is in the background — defer
+  // auto-open until the user returns so the opening animation is visible.
+  if (!cmd.appWindowFocused)
+    return;
   cmd.whatsNewAutoOpenedThisLaunch = true;
   RequestWhatsNewWindow(cmd);
+}
+
+bool LaunchSequenceOverlayActive(const AppCommandState& cmd, const bool updateOfferBlocks) {
+  if (updateOfferBlocks)
+    return false;
+  if (cmd.whatsNewModalVisible)
+    return false;
+
+  const bool online = HasInternetConnectivity();
+
+  // Hand off to DrawSignInGate once the min spinner elapsed and the silent refresh finished.
+  if (LaunchSequenceAwaitingSignInGate(cmd) && !LaunchSequenceHoldForMinSpinner())
+    return false;
+
+  // Auto-open path: stay up from splash until What's New is on screen.
+  if (cmd.whatsNewOpeningPending || cmd.showWhatsNewWindow)
+    return true;
+
+  // REQ-091: launch spinner while auth is in flight or during the minimum display window.
+  if (online && !cmd.authGateResolved &&
+      (cmd.authBusy || LaunchSequenceHoldForMinSpinner()))
+    return true;
+
+  return false;
+}
+
+void DrawLaunchSequenceOverlay(AppCommandState& cmd, const bool updateOfferBlocks) {
+  if (!LaunchSequenceOverlayActive(cmd, updateOfferBlocks)) {
+    if (cmd.authGateResolved)
+      ResetLaunchAuthOverlayTimer();
+    return;
+  }
+
+  const bool online = HasInternetConnectivity();
+
+  const bool checkingAuth =
+      online && !cmd.authGateResolved && (cmd.authBusy || LaunchSequenceHoldForMinSpinner());
+
+  const char* spinnerStatus =
+      checkingAuth ? (cmd.authInteractiveBusy ? "Waiting for browser…" : "Checking sign-in…")
+                   : "Opening release notes…";
+
+  ImGuiViewport* vp = ImGui::GetMainViewport();
+
+  // Input-blocking shell (transparent). Spinner paints on the foreground draw list below.
+  ImGui::SetNextWindowPos(vp->WorkPos);
+  ImGui::SetNextWindowSize(vp->WorkSize);
+  ImGui::SetNextWindowViewport(vp->ID);
+  ImGui::SetNextWindowFocus();
+
+  const ImGuiWindowFlags wf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
+                            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings |
+                            ImGuiWindowFlags_NoInputs;
+
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+  ImGui::Begin("##LaunchSequence336", nullptr, wf);
+  ImGui::End();
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar(3);
+
+  // Foreground draw list: above docked shell chrome; sign-in uses DrawSignInGate instead.
+  DrawLaunchSpinnerForeground(vp, spinnerStatus);
 }
 
 void DrawWhatsNewWindow(AppCommandState& cmd) {
   const char* kPopupId = "What's New##GoSurvey336";
 
-  static bool contentLoaded = false;
-  static WhatsNewContent cachedContent{};
-  static bool wasOpen = false;
+  static bool   wasOpen              = false;
+  static int    openFrames           = 0;
+  static double whatsNewOpenAnimStart = -1.0;
+  constexpr double kWhatsNewOpenAnimSec = 0.82;
+
   if (!cmd.showWhatsNewWindow) {
-    wasOpen = false;
+    wasOpen               = false;
+    openFrames            = 0;
+    whatsNewOpenAnimStart = -1.0;
     return;
   }
   if (!wasOpen) {
-    cachedContent = LoadWhatsNewContent();
-    contentLoaded = true;
+    wasOpen    = true;
+    openFrames = 0;
   }
-  wasOpen = true;
+
+  // Hold the real modal back so the launch overlay spinner paints for a couple of frames first.
+  ++openFrames;
+  if (openFrames <= 2) {
+    if (openFrames == 2)
+      EnsureWhatsNewAssetsLoaded();
+    return;
+  }
+
+  const WhatsNewContent& cachedContent = CachedWhatsNewContent();
 
   if (!ImGui::IsPopupOpen(kPopupId))
     ImGui::OpenPopup(kPopupId);
 
+  if (whatsNewOpenAnimStart < 0.0)
+    whatsNewOpenAnimStart = ImGui::GetTime();
+
   constexpr ImVec2 kWhatsNewSize(1120.f, 960.f);
-  ImGui::SetNextWindowSize(kWhatsNewSize, ImGuiCond_Always);
-  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always,
-                          ImVec2(0.5f, 0.5f));
+  const float      rawAnimT = static_cast<float>(
+      (ImGui::GetTime() - whatsNewOpenAnimStart) / kWhatsNewOpenAnimSec);
+  const float animT = (std::min)(1.f, (std::max)(0.f, rawAnimT));
+
+  // Scale + fade: slower first half. Drop + bounce: second half, from above center.
+  constexpr float kScaleEndT = 0.54f;
+  constexpr float kFadeEndT  = 0.58f;
+  constexpr float kDropStartT = 0.52f;
+  constexpr float kDropFromY  = -78.f;
+
+  const float scalePhase = (std::min)(1.f, animT / kScaleEndT);
+  const float fadePhase  = (std::min)(1.f, animT / kFadeEndT);
+  const float dropPhase =
+      (std::min)(1.f, (std::max)(0.f, (animT - kDropStartT) / (1.f - kDropStartT)));
+
+  const float scaleEase = EaseOutCubic(scalePhase);
+  const float alphaT    = EaseOutCubic(fadePhase);
+  const float scale     = LerpFloat(0.80f, 1.f, scaleEase);
+  const float yLift     = LerpFloat(kDropFromY, 0.f, EaseOutBounce(dropPhase));
+
+  const ImVec2 animSize(kWhatsNewSize.x * scale, kWhatsNewSize.y * scale);
+  const ImVec2 center   = ImGui::GetMainViewport()->GetCenter();
+  ImGui::SetNextWindowSize(animSize, ImGuiCond_Always);
+  ImGui::SetNextWindowPos(ImVec2(center.x, center.y + yLift), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
   const ImVec4 winBg = IsDark() ? ImVec4(0.14f, 0.16f, 0.19f, 1.f) : ImVec4(0.98f, 0.99f, 1.f, 1.f);
   const ImVec4 titleBg = Lerp(IsDark() ? ImVec4(0.10f, 0.12f, 0.15f, 1.f)
                                        : ImVec4(0.88f, 0.92f, 0.97f, 1.f),
                               Accent(), 0.55f);
+  ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alphaT);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.f);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.5f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, LerpFloat(0.5f, 2.5f, scaleEase));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 12.f));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, winBg);
   ImGui::PushStyleColor(ImGuiCol_ChildBg, IsDark() ? ImVec4(0.11f, 0.12f, 0.14f, 1.f)
@@ -211,9 +463,12 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
 
   if (!ImGui::BeginPopupModal(kPopupId, nullptr, flags)) {
     ImGui::PopStyleColor(10);
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar(4);
     return;
   }
+
+  cmd.whatsNewModalVisible   = true;
+  cmd.whatsNewOpeningPending = false;
 
   ImGui::PushFont(FontReg::Billboard());
 
@@ -222,10 +477,13 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
     const ImVec2 a = ImGui::GetWindowPos();
     const ImVec2 b(a.x + ImGui::GetWindowSize().x, a.y + ImGui::GetWindowSize().y);
     const float rnd = ImGui::GetStyle().WindowRounding;
+    const float glowA = alphaT * LerpFloat(0.f, 1.f, scaleEase);
+    ImVec4 accentGlow = AccentHi();
+    accentGlow.w *= glowA;
     bg->AddRectFilled(ImVec2(a.x + 8.f, a.y + 10.f), ImVec2(b.x + 8.f, b.y + 10.f),
-                      ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.45f)), rnd);
+                      ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.45f * alphaT)), rnd);
     bg->AddRect(ImVec2(a.x - 1.f, a.y - 1.f), ImVec2(b.x + 1.f, b.y + 1.f),
-                ImGui::GetColorU32(AccentHi()), rnd + 1.f, 0, 2.f);
+                ImGui::GetColorU32(accentGlow), rnd + 1.f, 0, LerpFloat(0.5f, 2.f, scaleEase));
   }
 
   // Centered app logo (crisp GS badge — same mark as the Start hero).
@@ -233,13 +491,12 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 logoRow = ImGui::GetCursorScreenPos();
     const float contentW = ImGui::GetContentRegionAvail().x;
-    constexpr float kLogo = 72.f;
-    // Extra top pad so the badge sits clear of the title-bar clip (avoids squared top corners).
-    constexpr float kLogoPadTop = 22.f;
-    constexpr float kLogoPadBot = 16.f;
-    ImGui::Dummy(ImVec2(0.f, kLogoPadTop + kLogo + kLogoPadBot));
-    const ImVec2 logoCenter(logoRow.x + contentW * 0.5f, logoRow.y + kLogoPadTop + kLogo * 0.5f);
-    DrawGsBadge(dl, logoCenter, kLogo);
+    const float logoSz = LerpFloat(52.f, 72.f, scaleEase);
+    const float logoPadTop = LerpFloat(14.f, 22.f, scaleEase);
+    const float logoPadBot = LerpFloat(10.f, 16.f, scaleEase);
+    ImGui::Dummy(ImVec2(0.f, logoPadTop + logoSz + logoPadBot));
+    const ImVec2 logoCenter(logoRow.x + contentW * 0.5f, logoRow.y + logoPadTop + logoSz * 0.5f);
+    DrawGsBadge(dl, logoCenter, logoSz);
   }
 
   const ImVec2 bodySize(0.f, -ImGui::GetFrameHeightWithSpacing() * 2.6f);
@@ -260,9 +517,9 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
 
     // Keep markdown above the backdrop in z-order by drawing text after the image.
     ImGui::SetCursorPos(ImVec2(ImGui::GetStyle().WindowPadding.x, ImGui::GetStyle().WindowPadding.y));
-    if (contentLoaded && cachedContent.ok) {
+    if (cachedContent.ok) {
       DrawMarkdownImGui(cachedContent.markdown);
-    } else if (contentLoaded) {
+    } else {
       ImGui::TextWrapped("%s", cachedContent.fallbackMessage.c_str());
       ImGui::Spacing();
       ImGui::TextDisabled("Full release notes are still available on GitHub.");
@@ -283,13 +540,16 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
   ImGui::SameLine();
   if (AccentButton("Close", false)) {
     ApplyDismissOnClose(cmd);
-    cmd.showWhatsNewWindow = false;
-    wasOpen = false;
+    cmd.showWhatsNewWindow     = false;
+    cmd.whatsNewOpeningPending = false;
+    cmd.whatsNewModalVisible   = false;
+    wasOpen               = false;
+    whatsNewOpenAnimStart = -1.0;
     ImGui::CloseCurrentPopup();
   }
 
   ImGui::PopFont();
   ImGui::EndPopup();
   ImGui::PopStyleColor(10);
-  ImGui::PopStyleVar(3);
+  ImGui::PopStyleVar(4);
 }

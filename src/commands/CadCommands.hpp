@@ -2559,6 +2559,9 @@ struct AppCommandState {
   bool        whatsNewAutoOpenedThisLaunch = false;  ///< suppresses re-auto-open within one launch
   bool        whatsNewDontShowChecked = false;       ///< checkbox state while the window is open
   std::string whatsNewDismissedVersion;              ///< prefs: suppress auto-open for this version
+  bool        whatsNewOpeningPending = false;        ///< auto/manual open requested; spinner until modal shows
+  bool        whatsNewModalVisible = false;          ///< set each frame while BeginPopupModal is active
+  bool        appWindowFocused = true;               ///< GLFW focused; auto-open What's New waits for this
   /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
   /// launch until this is true. Set true on a successful sign-in (interactive or silent) OR when
   /// there is no internet connectivity at all (same offline exception REQ-077's update gate

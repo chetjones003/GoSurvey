@@ -160,6 +160,9 @@ void DrawAccountDetailsWindow(AppCommandState& cmd);
 /// REQ-336 — What's New billboard (also Help → About). Auto-open from Start once per launch when
 /// the running version has not been dismissed.
 void DrawWhatsNewWindow(AppCommandState& cmd);
+void BeginLaunchAuthOverlayTimer();
+void DrawLaunchSequenceOverlay(AppCommandState& cmd, bool updateOfferBlocks);
+bool LaunchSequenceOverlayActive(const AppCommandState& cmd, bool updateOfferBlocks);
 void MaybeAutoOpenWhatsNew(AppCommandState& cmd);
 void RequestWhatsNewWindow(AppCommandState& cmd);
 
@@ -247,7 +250,10 @@ void DrawSelectColorPopup(AppCommandState& cmd);
 /// Layer-manager / properties cell: colour swatch + `"Color N"` label; returns true when clicked.
 bool DrawColorStorageCell(const std::string& storage, float defaultR, float defaultG, float defaultB);
 
-namespace update { struct UpdateState; }
+namespace update {
+struct UpdateState;
+enum class Phase;
+}
 /// REQ-078: presents an available update and waits for an explicit choice. Draws nothing while
 /// the background check is running — the check itself is never shown to the user.
 void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd);
@@ -256,6 +262,7 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd);
 /// or no internet connectivity at all (REQ-077's same offline exception). Draws nothing once
 /// resolved; never re-opens later in the same session (e.g. after a manual sign-out).
 void DrawSignInGate(AppCommandState& cmd);
+void DrawSignInGateBody(AppCommandState& cmd);
 
 /// Confirms a DWG export before anything is written, stating LibreDWG R2000 encode limits
 /// (REQ-170). Writes to \c cmd.dwgPendingExportPath only when the user accepts.

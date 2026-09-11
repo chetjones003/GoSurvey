@@ -3,6 +3,7 @@
 #include "AppIcon.hpp"
 #include "AppPaths.hpp"
 #include "CadUi.hpp"
+#include "UpdateService.hpp"
 #include "Version.hpp"
 #include "WinFrameControls.hpp"
 
@@ -302,10 +303,17 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
 #endif
 }
 
-void RunStartupSplash(GLFWwindow* window, double durationSec) {
-  if (!window || durationSec <= 0.0)
+void RunStartupSplash(GLFWwindow* window, double durationSec, update::UpdateState* updateState) {
+  if (!window)
     return;
 
+  const auto updateCheckInFlight = [&]() {
+    return updateState && updateState->phase == update::Phase::Checking;
+  };
+
+  // Developer-shell fast path: zero duration and no update wait.
+  if (durationSec <= 0.0 && !updateCheckInFlight())
+    return;
 
   // REQ-093 (amended): per-pixel window transparency is not reliable across compositors/drivers —
   // where it isn't actually honored, clearing alpha 0 paints solid black instead of showing the
@@ -317,7 +325,11 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
   while (!glfwWindowShouldClose(window)) {
     const double now = glfwGetTime();
     const double elapsed = now - t0;
-    if (elapsed >= durationSec)
+    if (updateState)
+      update::PollUpdateTask(*updateState);
+    const bool minDurationMet = elapsed >= durationSec;
+    const bool updateDone     = !updateCheckInFlight();
+    if (minDurationMet && updateDone)
       break;
 
     glfwPollEvents();
@@ -455,12 +467,14 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
                              "Preparing workspace…",    "Loading blocks…",    "Almost ready…"};
     constexpr int kPhaseCount = static_cast<int>(sizeof(phases) / sizeof(phases[0]));
     const int phaseIdx = std::min(kPhaseCount - 1, static_cast<int>(raw * static_cast<float>(kPhaseCount)));
+    const char* statusLine =
+        updateCheckInFlight() ? "Checking for updates…" : phases[phaseIdx];
 
     ImGui::SetCursorPosY(ws.y - 52.f * layoutScale);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.63f, 0.74f, 0.92f * intro));
-    tw = ImGui::CalcTextSize(phases[phaseIdx]).x;
+    tw = ImGui::CalcTextSize(statusLine).x;
     ImGui::SetCursorPosX((ws.x - tw) * 0.5f);
-    ImGui::TextUnformatted(phases[phaseIdx]);
+    ImGui::TextUnformatted(statusLine);
     ImGui::PopStyleColor();
 
     ImGui::SetCursorPosY(ws.y - 26.f * layoutScale);
