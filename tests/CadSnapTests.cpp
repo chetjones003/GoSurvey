@@ -1304,3 +1304,101 @@ TEST_CASE("Quadrant snap obeys its per-type toggle and the snap-once override", 
   CHECK(forced.kind == Kind::Quadrant);
   CHECK(forced.x == Approx(10.f).margin(1e-3));
 }
+
+// --- REQ-335: snapping the SECOND point of a SECTION plane (user report, 2026-09-11) ------------
+//
+// "The 2nd selection point for sections is not wanting to snap to a midpoint right above the first
+// point." Reproduced here rather than reasoned about, because five plausible explanations were
+// each ruled out by reading (solid midpoints exist and are on by default; ConsiderSnap re-ranks in
+// 3D whenever a ray is present, so points stacked in Z are separable; `commandActive` gates only
+// perpendicular; the snap is suppressed only during an object-SELECTION step, which WaitP2 is not;
+// and SECTION commits `CadCommitElevation`, which is the snapped Z). All five were true and none
+// was the answer, which is the point of writing the case instead.
+TEST_CASE("SECTION's second point snaps to the midpoint of the edge above the first",
+          "[CadSnap][req335]") {
+  AppCommandState st;
+  st.objectSnapEnabled = true;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dVertex = true;
+  st.objectSnap3dMidpointEdge = true;
+
+  // The box the report used, and the state SECTION is in at its second point.
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 14.0, 12.0, &box, &why));
+  InstallSolid(st, std::move(box));
+  st.active = AppCommandState::Kind::Section;
+  st.sectionPhase = AppCommandState::SectionPhase::WaitP2;
+  // The solid is SELECTED — SECTION selected it a moment ago, and a selected object is the one
+  // difference between this and the passing `issue395` midpoint case.
+  SelectedEntity sel{};
+  sel.type = SelectedEntity::Type::Solid;
+  sel.index = 0;
+  st.selection.push_back(sel);
+
+  // A vertical edge of a 20 x 14 x 12 box centred on the origin runs x=-10, y=-7, z 0..12, so its
+  // midpoint is (-10, -7, 6) — directly above the bottom corner, which is where the first point is.
+  st.sectionP1 = ray3d::Vec3{-10.0, -7.0, 0.0};
+  const ray3d::Ray ray = RayAt(-10.0, -7.0, 6.0);
+  const CadSnap::Hit hit =
+      CadSnap::FindBest(-10.0, -7.0, st, /*commandActive=*/true, /*tolWorld=*/2.f, {}, &ray);
+
+  REQUIRE(hit.valid);
+  INFO("kind=" << static_cast<int>(hit.kind) << " at (" << hit.x << ", " << hit.y << ", " << hit.z << ")");
+  CHECK(hit.kind == Kind::Midpoint);
+  CHECK(hit.z == Approx(6.f).margin(1e-6));
+}
+
+TEST_CASE("SECTION's second point snaps to a vertical edge's midpoint from an ORBITED camera",
+          "[CadSnap][req335]") {
+  // The faithful version of the case above. The previous one handed `FindBest` the midpoint's own
+  // XY, which is not what the viewport does: it passes the XY where the cursor ray crosses the WORK
+  // PLANE, and the ray is what disambiguates in 3D. For a point six feet up, those two XYs are
+  // several feet apart in an orbited view — so a plan-distance acceptance test would reject the very
+  // point the user is pointing at, and only the ray-distance override saves it.
+  AppCommandState st;
+  st.objectSnapEnabled = true;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dVertex = true;
+  st.objectSnap3dMidpointEdge = true;
+
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 14.0, 12.0, &box, &why));
+  InstallSolid(st, std::move(box));
+  st.active = AppCommandState::Kind::Section;
+  st.sectionPhase = AppCommandState::SectionPhase::WaitP2;
+  SelectedEntity sel{};
+  sel.type = SelectedEntity::Type::Solid;
+  sel.index = 0;
+  st.selection.push_back(sel);
+  st.sectionP1 = ray3d::Vec3{-10.0, -7.0, 0.0};
+
+  constexpr float kW = 1280.f;
+  constexpr float kH = 720.f;
+  Camera cam = Camera::Plan(0.0, 0.0, 30.f);
+  cam.azimuthDeg = 135.f;
+  cam.elevationDeg = 22.f;
+
+  // Point at the midpoint of the vertical edge above the first point: (-10, -7, 6).
+  float px = 0.f, py = 0.f;
+  cam.WorldToScreen(-10.0, -7.0, 6.0, kW, kH, &px, &py);
+  const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+
+  // What the viewport hands FindBest: the ray's crossing of the work plane z = 0, NOT the target's
+  // own XY. This is the line that makes the test faithful.
+  REQUIRE(std::fabs(ray.dir.z) > 1e-9);
+  const double t = (0.0 - ray.origin.z) / ray.dir.z;
+  const double wpX = ray.origin.x + t * ray.dir.x;
+  const double wpY = ray.origin.y + t * ray.dir.y;
+  INFO("work-plane crossing (" << wpX << ", " << wpY << ") vs target XY (-10, -7)");
+
+  const CadSnap::Hit hit =
+      CadSnap::FindBest(wpX, wpY, st, /*commandActive=*/true, /*tolWorld=*/2.f, {}, &ray);
+  REQUIRE(hit.valid);
+  INFO("kind=" << static_cast<int>(hit.kind) << " at (" << hit.x << ", " << hit.y << ", " << hit.z << ")");
+  CHECK(hit.kind == Kind::Midpoint);
+  CHECK(hit.x == Approx(-10.f).margin(1e-4));
+  CHECK(hit.y == Approx(-7.f).margin(1e-4));
+  CHECK(hit.z == Approx(6.f).margin(1e-4));
+}
