@@ -9,7 +9,12 @@
 #include <vector>
 
 void ApplyCadDarkTheme();
-void ApplyCadLightTheme();
+
+/// Shift an achromatic neutral toward product steel-blue while preserving its luminance step.
+ImVec4 BlueTintNeutral(const ImVec4& neutral, float strength);
+
+/// Global neutral blue-tint strength for the Dark theme and chrome that follows it.
+constexpr float kCadThemeBlueTintDark = 0.48f;
 
 /// Optional app logo texture (from \p LoadAppLogoFromPngFile via \ref ResolveAppLogoPngPath). On Windows it appears in the custom title bar;
 /// on other platforms, at the left of the main menu bar.
@@ -85,9 +90,8 @@ void PopProductDialogAccent();
 bool StyledButton(const char* label, const ImVec2& size = ImVec2(0, 0), bool primary = false);
 
 /// Property-grid "paper" styling for the surface dialogs (Create Surface,
-/// Surface Properties). Dark theme → light-gray rows, white bordered fields,
-/// dark body text, dark header strip kept as-is; classic theme → its existing
-/// cream grid, unchanged. `themeIdx` is `cmd.displayColorThemeIdx` (0 = Dark).
+/// Surface Properties): light-gray rows, white bordered fields, dark body text,
+/// dark header strip kept as-is. `themeIdx` is reserved for future themes.
 /// Call order: PushPropertyPaperColors → BeginTable → TableSetupColumn(s) →
 /// TableHeadersRow → PushPropertyPaperBodyText → rows → PopPropertyPaperBodyText
 /// → EndTable → PopPropertyPaperColors.

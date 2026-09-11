@@ -32,7 +32,7 @@ namespace {
 
 constexpr const char* kReleasesUrl = "https://github.com/chetjones003/GoSurvey/releases";
 // Dark slate tint (not white): matches SplashScreen backdrop so launch → What's New reads as one product.
-constexpr ImVec4 kBackdropTint {0.25f, 0.30f, 0.40f, 0.80f};
+constexpr ImVec4 kBackdropTint {0.12f, 0.16f, 0.26f, 0.88f};
 
 ImVec4 Lerp(const ImVec4& a, const ImVec4& b, float t) {
   return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t,
@@ -217,6 +217,26 @@ WhatsNewContent& CachedWhatsNewContent() {
 void EnsureWhatsNewAssetsLoaded() {
   (void)CachedWhatsNewContent();
   (void)WhatsNewBackdrop();
+}
+
+void DrawWhatsNewWindowGradient(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding) {
+  // Full-window dark navy gradient — subtle accent at the top, near-black at the base.
+  // Replaces the flat grey chrome so header/footer match splash and sign-in.
+  const ImVec4 topL = Lerp(ImVec4(0.03f, 0.05f, 0.10f, 1.f), Accent(), 0.07f);
+  const ImVec4 topR = Lerp(ImVec4(0.025f, 0.04f, 0.08f, 1.f), Accent(), 0.05f);
+  const ImVec4 botR = ImVec4(0.008f, 0.012f, 0.028f, 1.f);
+  const ImVec4 botL = ImVec4(0.01f, 0.016f, 0.032f, 1.f);
+  dl->AddRectFilledMultiColor(a, b, ImGui::ColorConvertFloat4ToU32(topL),
+                              ImGui::ColorConvertFloat4ToU32(topR),
+                              ImGui::ColorConvertFloat4ToU32(botR),
+                              ImGui::ColorConvertFloat4ToU32(botL));
+  if (rounding > 0.f)
+    dl->AddRect(a, b, ImGui::GetColorU32(Lerp(AccentLo(), ImVec4(0.f, 0.f, 0.f, 1.f), 0.72f)),
+                rounding, 0, 1.f);
+}
+
+ImVec4 WhatsNewBodyBase() {
+  return IsDark() ? ImVec4(0.02f, 0.04f, 0.08f, 1.f) : ImVec4(0.90f, 0.93f, 0.98f, 1.f);
 }
 
 void DrawFaintBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b) {
@@ -434,8 +454,8 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
   ImGui::SetNextWindowSize(animSize, ImGuiCond_Always);
   ImGui::SetNextWindowPos(ImVec2(center.x, center.y + yLift), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
-  const ImVec4 winBg = IsDark() ? ImVec4(0.14f, 0.16f, 0.19f, 1.f) : ImVec4(0.98f, 0.99f, 1.f, 1.f);
-  const ImVec4 titleBg = Lerp(IsDark() ? ImVec4(0.10f, 0.12f, 0.15f, 1.f)
+  const ImVec4 winBg = IsDark() ? ImVec4(0.03f, 0.05f, 0.10f, 1.f) : ImVec4(0.98f, 0.99f, 1.f, 1.f);
+  const ImVec4 titleBg = Lerp(IsDark() ? ImVec4(0.025f, 0.04f, 0.08f, 1.f)
                                        : ImVec4(0.88f, 0.92f, 0.97f, 1.f),
                               Accent(), 0.55f);
   ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alphaT);
@@ -443,14 +463,13 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, LerpFloat(0.5f, 2.5f, scaleEase));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 12.f));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, winBg);
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, IsDark() ? ImVec4(0.11f, 0.12f, 0.14f, 1.f)
-                                                   : ImVec4(0.94f, 0.96f, 0.99f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, WhatsNewBodyBase());
   ImGui::PushStyleColor(ImGuiCol_Border, Accent());
   ImGui::PushStyleColor(ImGuiCol_TitleBg, titleBg);
   ImGui::PushStyleColor(ImGuiCol_TitleBgActive, AccentLo());
   ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, titleBg);
   ImGui::PushStyleColor(ImGuiCol_CheckMark, AccentHi());
-  ImGui::PushStyleColor(ImGuiCol_FrameBg, IsDark() ? ImVec4(0.18f, 0.20f, 0.24f, 1.f)
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, IsDark() ? ImVec4(0.04f, 0.07f, 0.12f, 1.f)
                                                    : ImVec4(0.90f, 0.93f, 0.97f, 1.f));
   ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Lerp(winBg, Accent(), 0.20f));
   ImGui::PushStyleColor(ImGuiCol_Separator, Lerp(winBg, Accent(), 0.45f));
@@ -471,6 +490,14 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
   cmd.whatsNewOpeningPending = false;
 
   ImGui::PushFont(FontReg::Billboard());
+
+  {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2  a  = ImGui::GetWindowPos();
+    const ImVec2  b(a.x + ImGui::GetWindowSize().x, a.y + ImGui::GetWindowSize().y);
+    const float   rnd = ImGui::GetStyle().WindowRounding;
+    DrawWhatsNewWindowGradient(dl, a, b, rnd);
+  }
 
   {
     ImDrawList* bg = ImGui::GetBackgroundDrawList();
@@ -510,9 +537,7 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 a = ImGui::GetWindowPos();
     const ImVec2 b(a.x + ImGui::GetWindowSize().x, a.y + ImGui::GetWindowSize().y);
-    dl->AddRectFilled(a, b, ImGui::GetColorU32(IsDark() ? ImVec4(0.11f, 0.12f, 0.14f, 1.f)
-                                                         : ImVec4(0.94f, 0.96f, 0.99f, 1.f)),
-                      6.f);
+    dl->AddRectFilled(a, b, ImGui::GetColorU32(WhatsNewBodyBase()), 6.f);
     DrawFaintBackdrop(dl, a, b);
 
     // Keep markdown above the backdrop in z-order by drawing text after the image.

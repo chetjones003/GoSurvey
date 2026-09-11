@@ -45,6 +45,18 @@ struct UiChrome {
   ImU32 axisX, axisY, axisZ;
   ImU32 axisText;
 
+  /// Ribbon band vertical gradient (DrawRibbonBar paints over ChildBg).
+  ImU32 ribbonBandTop;
+  ImU32 ribbonBandBottom;
+  ImU32 ribbonBandEdgeTop;
+  ImU32 ribbonBandEdgeBottom;
+  /// Raised panel tray behind ribbon tool sections.
+  ImU32 ribbonTrayShadow;
+  ImU32 ribbonTrayTop;
+  ImU32 ribbonTrayBottom;
+  ImU32 ribbonTrayHighlight;
+  ImU32 ribbonTrayBorder;
+
   /// Ribbon panel title rule (hairline above "Draw" / "Modify" …).
   ImU32 ribbonPanelRule;
   ImU32 ribbonPanelTitle;

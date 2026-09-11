@@ -143,10 +143,41 @@ ImVec4 Accent()        { return ImVec4(0.26f, 0.56f, 0.86f, 1.f); }
 ImVec4 AccentHi()      { return ImVec4(0.34f, 0.64f, 0.95f, 1.f); }
 ImVec4 AccentLo()      { return ImVec4(0.20f, 0.45f, 0.72f, 1.f); }
 bool   IsDark()        { return ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x < 0.35f; }
-ImVec4 CardBg()        { return IsDark() ? ImVec4(0.17f, 0.18f, 0.20f, 1.f) : ImVec4(0.97f, 0.97f, 0.98f, 1.f); }
-ImVec4 CardBgHover()   { return IsDark() ? ImVec4(0.21f, 0.23f, 0.26f, 1.f) : ImVec4(1.f, 1.f, 1.f, 1.f); }
-ImVec4 CardBorder()    { return IsDark() ? ImVec4(0.30f, 0.32f, 0.36f, 1.f) : ImVec4(0.80f, 0.82f, 0.85f, 1.f); }
-ImVec4 HeroBg()        { return IsDark() ? ImVec4(0.13f, 0.14f, 0.16f, 1.f) : ImVec4(0.93f, 0.94f, 0.96f, 1.f); }
+constexpr float kStartBlueTint = kCadThemeBlueTintDark;
+ImVec4 CardBg() {
+  return IsDark() ? BlueTintNeutral(ImVec4(0.17f, 0.18f, 0.20f, 1.f), kStartBlueTint)
+                  : ImVec4(0.97f, 0.97f, 0.98f, 1.f);
+}
+ImVec4 CardBgHover() {
+  return IsDark() ? BlueTintNeutral(ImVec4(0.21f, 0.23f, 0.26f, 1.f), kStartBlueTint)
+                  : ImVec4(1.f, 1.f, 1.f, 1.f);
+}
+ImVec4 CardBorder() {
+  return IsDark() ? BlueTintNeutral(ImVec4(0.30f, 0.32f, 0.36f, 1.f), kStartBlueTint)
+                  : ImVec4(0.80f, 0.82f, 0.85f, 1.f);
+}
+ImVec4 HeroBg() {
+  return IsDark() ? BlueTintNeutral(ImVec4(0.13f, 0.14f, 0.16f, 1.f), kStartBlueTint)
+                  : ImVec4(0.93f, 0.94f, 0.96f, 1.f);
+}
+
+// Smooth radial wash — stacked rings with quadratic alpha falloff (no hard circle edges).
+void DrawSmoothRadialGlow(ImDrawList* dl, ImVec2 center, float outerRadius, const ImVec4& color,
+                          float peakAlpha) {
+  assert(outerRadius > 0.f);
+  assert(peakAlpha >= 0.f);
+  constexpr int kRings = 36;
+  for (int i = kRings; i >= 0; --i) {
+    const float t     = static_cast<float>(i) / static_cast<float>(kRings);
+    const float radius = outerRadius * t;
+    const float u     = 1.f - t;
+    ImVec4 ring       = color;
+    ring.w            = peakAlpha * u * u;
+    if (ring.w <= 0.001f)
+      continue;
+    dl->AddCircleFilled(center, radius, ImGui::GetColorU32(ring), 64);
+  }
+}
 
 // A rounded shadow cast straight down from a rect — cheap "lift" for cards and the hero band.
 void SoftShadow(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, float drop) {
@@ -195,23 +226,17 @@ void SectionHeading(const char* text) {
   ImGui::Dummy(ImVec2(0.f, 8.f));
 }
 
-// Crisp vector "GS" app badge for the hero — resolution-independent, so it stays sharp at any DPI
-// (the shipped title-bar icon is ~32px and blurs when scaled up here).
+// Crisp GS badge — solid rounded blue only (matches What's New / splash). Do not use
+// AddRectFilledMultiColor here: that API fills a sharp quad, so a top sheen paints
+// whitish square corners outside the rounded blue body.
 void DrawGsBadge(ImDrawList* dl, ImVec2 c, float sz) {
   const ImVec2 a(c.x - sz * 0.5f, c.y - sz * 0.5f);
   const ImVec2 b(c.x + sz * 0.5f, c.y + sz * 0.5f);
   const float rnd = sz * 0.24f;
   dl->AddRectFilled(ImVec2(a.x + 2.f, a.y + 3.f), ImVec2(b.x + 3.f, b.y + 4.f),
-                    ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.35f)), rnd);
-  dl->AddRectFilled(a, b, ImGui::GetColorU32(Accent()), rnd);
-  // Smooth top-down sheen, clipped to the rounded body — no hard midline.
-  dl->PushClipRect(a, b, true);
-  dl->AddRectFilledMultiColor(a, b, ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.16f)),
-                              ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.16f)),
-                              ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.f)),
-                              ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.f)));
-  dl->PopClipRect();
-  dl->AddRect(a, b, ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.30f)), rnd, 0, 1.5f);
+                    ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.35f)), rnd,
+                    ImDrawFlags_RoundCornersAll);
+  dl->AddRectFilled(a, b, ImGui::GetColorU32(Accent()), rnd, ImDrawFlags_RoundCornersAll);
   const float fs = sz / ImGui::GetFontSize() * 0.52f;
   ImGui::SetWindowFontScale(fs);
   const ImVec2 t = ImGui::CalcTextSize("GS");
@@ -540,7 +565,7 @@ void DrawConnectColumn(AppCommandState& cmd) {
 
   if (cmd.authSignedIn) {
     const std::string name = DisplayNameFromEmail(cmd.authEmail);
-    const float cardH = 156.f;  // grew from 108 to seat the Sign Out button (issue #182)
+    const float cardH = 172.f;  // room for Sign Out + bottom padding (issue #182)
     const ImVec2 c1(c0.x + cardW, c0.y + cardH);
     SoftShadow(dl, c0, c1, 8.f, 8.f);
     dl->AddRectFilled(c0, c1, ImGui::GetColorU32(CardBg()), 8.f);
@@ -567,7 +592,7 @@ void DrawConnectColumn(AppCommandState& cmd) {
                   cmd.authEmail.c_str());
 
     // Sign Out — same request path Settings uses (main.cpp: auth::SignOut()).
-    ImGui::SetCursorScreenPos(ImVec2(c0.x + 20.f, c0.y + cardH - 44.f));
+    ImGui::SetCursorScreenPos(ImVec2(c0.x + 20.f, c0.y + cardH - 58.f));
     ImGui::BeginDisabled(cmd.authBusy);
     if (StyledButton("Sign Out", false, ImVec2(cardW - 40.f, 0.f)))
       cmd.authSignOutRequested = true;
@@ -610,7 +635,7 @@ void DrawConnectColumn(AppCommandState& cmd) {
   ImGui::PopTextWrapPos();
   ImGui::PopStyleColor();
   ImGui::Dummy(ImVec2(0.f, 8.f));
-  if (StyledButton("Send Feedback", false, ImVec2(0.f, 0.f)))
+  if (StyledButton("Send Feedback", true, ImVec2(0.f, 0.f)))
     OpenUrl(kFeedbackUrl);
 }
 
@@ -634,40 +659,53 @@ void DrawStartScreen(AppCommandState& cmd, std::vector<std::string>& log) {
                               ImGui::GetColorU32(Lerp(bg, ImVec4(0, 0, 0, 1), IsDark() ? 0.18f : 0.f)));
 
   const float hpad = 28.f;
-  const float heroH = 128.f;
+  const float heroH = 136.f;
 
-  // --- Hero band ---
+  // --- Hero band — stronger accent wash so the brand row reads above the body. ---
   const ImVec2 h0(winMin.x, winMin.y);
   const ImVec2 h1(winMax.x, winMin.y + heroH);
-  dl->AddRectFilledMultiColor(h0, h1, ImGui::GetColorU32(Lerp(HeroBg(), Accent(), 0.10f)),
-                              ImGui::GetColorU32(HeroBg()), ImGui::GetColorU32(HeroBg()),
-                              ImGui::GetColorU32(Lerp(HeroBg(), Accent(), 0.10f)));
-  dl->AddRectFilled(ImVec2(h0.x, h1.y - 3.f), h1, ImGui::GetColorU32(Accent()));
-  dl->AddRectFilled(h0, ImVec2(h0.x + 5.f, h1.y), ImGui::GetColorU32(Accent()));
+  const ImVec4 heroTopL = Lerp(HeroBg(), Accent(), 0.24f);
+  const ImVec4 heroTopR = Lerp(HeroBg(), Accent(), 0.12f);
+  const ImVec4 heroBotL = Lerp(HeroBg(), ImVec4(0.f, 0.f, 0.f, 1.f), IsDark() ? 0.14f : 0.04f);
+  const ImVec4 heroBotR = Lerp(HeroBg(), Accent(), 0.06f);
+  dl->AddRectFilledMultiColor(h0, h1, ImGui::GetColorU32(heroTopL), ImGui::GetColorU32(heroTopR),
+                              ImGui::GetColorU32(heroBotR), ImGui::GetColorU32(heroBotL));
 
   float textX = winMin.x + hpad;
   {
-    const float badge = 60.f;
-    DrawGsBadge(dl, ImVec2(textX + badge * 0.5f, winMin.y + heroH * 0.5f), badge);
-    textX += badge + 22.f;
+    const float badge = 68.f;
+    const ImVec2 badgeCenter(textX + badge * 0.5f, winMin.y + heroH * 0.5f);
+    DrawSmoothRadialGlow(dl, badgeCenter, badge * 0.95f, AccentHi(), 0.20f);
+    DrawGsBadge(dl, badgeCenter, badge);
+    textX += badge + 24.f;
   }
 
   ImGui::SetWindowFontScale(2.6f);
-  dl->AddText(ImVec2(textX, winMin.y + 26.f), ImGui::GetColorU32(ImGuiCol_Text), "GoSurvey");
+  const ImVec2 titlePos(textX, winMin.y + 28.f);
+  dl->AddText(ImVec2(titlePos.x + 1.f, titlePos.y + 1.f), ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.40f)),
+              "GoSurvey");
+  dl->AddText(titlePos, IM_COL32(255, 255, 255, 255), "GoSurvey");
   const float wordW = ImGui::CalcTextSize("GoSurvey").x;
   ImGui::SetWindowFontScale(1.f);
 
-  // Version pill.
+  // Version pill — accent fill + rim so it reads as part of the brand cluster.
   {
     const std::string ver = std::string("v") + GOSURVEY_VERSION_FULL;
     const ImVec2 ts = ImGui::CalcTextSize(ver.c_str());
-    const ImVec2 pillMin(textX + wordW + 14.f, winMin.y + 34.f);
+    const ImVec2 pillMin(textX + wordW + 14.f, winMin.y + 36.f);
     const ImVec2 pillMax(pillMin.x + ts.x + 16.f, pillMin.y + ts.y + 8.f);
-    dl->AddRectFilled(pillMin, pillMax, ImGui::GetColorU32(Lerp(HeroBg(), Accent(), 0.35f)), 10.f);
-    dl->AddText(ImVec2(pillMin.x + 8.f, pillMin.y + 4.f), ImGui::GetColorU32(ImGuiCol_Text), ver.c_str());
+    dl->AddRectFilled(pillMin, pillMax, ImGui::GetColorU32(Lerp(AccentLo(), Accent(), 0.55f)), 10.f);
+    dl->AddRect(pillMin, pillMax, ImGui::GetColorU32(Lerp(Accent(), AccentHi(), 0.65f)), 10.f, 0, 1.5f);
+    dl->AddText(ImVec2(pillMin.x + 8.f, pillMin.y + 4.f), IM_COL32(255, 255, 255, 255), ver.c_str());
   }
-  dl->AddText(ImVec2(textX + 2.f, winMin.y + 78.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
-              "Land surveying \xC2\xB7 civil drafting \xC2\xB7 CAD");
+  {
+    const ImVec4 tagCol = Lerp(ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled), AccentHi(), 0.42f);
+    dl->AddText(ImVec2(textX + 2.f, winMin.y + 84.f), ImGui::GetColorU32(tagCol),
+                "Land surveying \xC2\xB7 civil drafting \xC2\xB7 CAD");
+  }
+
+  // Light accent rim on all four sides — drawn last so it sits on top of the band fill.
+  dl->AddRect(h0, h1, ImGui::GetColorU32(AccentHi()), 0.f, 0, 2.f);
 
   // --- Body: three columns below the hero. ---
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + heroH + 18.f);

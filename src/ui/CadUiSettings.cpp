@@ -61,15 +61,13 @@ static void DrawSettingsHeader(const AppCommandState& cmd) {
 }
 
 static void DrawDisplayWindowElements(AppCommandState& cmd) {
-  const char* themes[] = {"Dark", "Light"};
+  cmd.displayColorThemeIdx = 0;
+  const char* themes[] = {"Dark"};
+  ImGui::BeginDisabled();
   ImGui::SetNextItemWidth(150.f);
-  if (ImGui::Combo("Color theme:", &cmd.displayColorThemeIdx, themes, IM_ARRAYSIZE(themes))) {
-    cmd.displayColorThemeIdx = std::clamp(cmd.displayColorThemeIdx, 0, 1);
-    if (cmd.displayColorThemeIdx == 0)
-      ApplyCadDarkTheme();
-    else
-      ApplyCadLightTheme();
-  }
+  int themeIdx = 0;
+  ImGui::Combo("Color theme:", &themeIdx, themes, IM_ARRAYSIZE(themes));
+  ImGui::EndDisabled();
   {
     float bg[3] = {cmd.viewportBgR, cmd.viewportBgG, cmd.viewportBgB};
     ImGui::SetNextItemWidth(150.f);
@@ -79,7 +77,7 @@ static void DrawDisplayWindowElements(AppCommandState& cmd) {
     ItemHelpTooltip("Model-space background (clear) color for the drawing viewport.");
     ImGui::SameLine();
     if (ImGui::SmallButton("Reset##bgReset")) {
-      cmd.viewportBgR = 0.1f; cmd.viewportBgG = 0.1f; cmd.viewportBgB = 0.1f;
+      cmd.viewportBgR = 0.08f; cmd.viewportBgG = 0.10f; cmd.viewportBgB = 0.14f;
     }
   }
   ImGui::Spacing();

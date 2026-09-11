@@ -2477,43 +2477,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
   }
 
-  // --- Axes gizmo (screen-fixed pixels: ignores pan/zoom) ---
-  float overlayProj[16];
-  Ortho(0.f, static_cast<float>(fbW_), 0.f, static_cast<float>(fbH_), -1000.f, 1000.f, overlayProj);
-  constexpr float kGizmoMarginPx = 5.f;
-  constexpr float kAxisLenPx = 70.f;
-  float gizmoModel[16];
-  TranslateMat(kGizmoMarginPx, kGizmoMarginPx, 0.f, gizmoModel);
-  float gizmoMvp[16];
-  MulMat4(overlayProj, gizmoModel, gizmoMvp);
-  glUniformMatrix4fv(locMvp, 1, GL_FALSE, gizmoMvp);
-
-  const float axisVerts[] = {
-      0.f, 0.f, 0.f, kAxisLenPx, 0.f, 0.f,
-      0.f, 0.f, 0.f, 0.f, kAxisLenPx, 0.f,
-      0.f, 0.f, 0.f, 0.f, 0.f, kAxisLenPx,
-  };
-  glBufferData(GL_ARRAY_BUFFER, sizeof(axisVerts), axisVerts, GL_STREAM_DRAW);
-
-  glLineWidth(kLwGizmo);
-  glUniform4f(locCol, 0.9f, 0.2f, 0.2f, 1.f);
-  glDrawArrays(GL_LINES, 0, 2);
-  glUniform4f(locCol, 0.2f, 0.85f, 0.35f, 1.f);
-  glDrawArrays(GL_LINES, 2, 2);
-  glUniform4f(locCol, 0.25f, 0.55f, 1.f, 1.f);
-  glDrawArrays(GL_LINES, 4, 2);
-  glLineWidth(kLwMain);
-
   // --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) --------------------------
   //
-  // LAST, so it sits on top of everything including the corner axis triad above: it is the one
-  // overlay the user is about to click, and a handle hidden behind the geometry it manipulates is
-  // not a handle. Never depth-tested, for the same reason.
+  // LAST, so it sits on top of everything: it is the one overlay the user is about to click, and a
+  // handle hidden behind the geometry it manipulates is not a handle. Never depth-tested, for the
+  // same reason.
   //
-  // The three colours are the triad's OWN colours, taken literally from the block above rather than
-  // chosen again here: the corner icon has been telling this user which way X, Y and Z point since
-  // long before there was a gizmo, and two widgets disagreeing about that would be worse than
-  // either being wrong.
+  // Handle colours match the REQ-154 UCS icon / REQ-310 crosshair axis hues so the gizmo and the
+  // on-screen frame indicator never disagree about which axis is which.
   if (gizmoOverlay && !gizmoOverlay->empty()) {
     depthForOverlay();
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);  // back to WORLD space, off the triad's screen matrix

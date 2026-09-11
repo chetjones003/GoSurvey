@@ -43,7 +43,7 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
 
   // --- Display / System settings ---
   if (s.contains("displayColorThemeIdx") && s["displayColorThemeIdx"].is_number_integer())
-    st.displayColorThemeIdx = std::clamp(s["displayColorThemeIdx"].get<int>(), 0, 1);
+    st.displayColorThemeIdx = 0;  // only Dark; legacy Light (1) migrates to 0
   if (s.contains("settingsActiveTabIdx") && s["settingsActiveTabIdx"].is_number_integer())
     st.settingsActiveTabIdx = std::clamp(s["settingsActiveTabIdx"].get<int>(), 0, 10);
   if (s.contains("displayArcCircleSmoothness") && s["displayArcCircleSmoothness"].is_number_integer())

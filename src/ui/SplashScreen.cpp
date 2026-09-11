@@ -199,7 +199,7 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
   const ImGuiStyle& st = ImGui::GetStyle();
   float rowH = ImGui::GetFrameHeight() + 8.f;
   // Title bar is always dark regardless of the active application theme.
-  const ImVec4 barBg     = ImVec4(0.10f, 0.10f, 0.10f, 1.f);  // neutral gray — matches the viewport background
+  const ImVec4 barBg     = BlueTintNeutral(ImVec4(0.10f, 0.10f, 0.10f, 1.f), kCadThemeBlueTintDark);
   const ImU32  iconCol   = IM_COL32(199, 207, 219, 255);           // resting icon color
   const ImU32  iconColHov = IM_COL32(255, 255, 255, 255);          // brighter on hover / press
 

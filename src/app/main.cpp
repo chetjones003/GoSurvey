@@ -333,7 +333,7 @@ int main()
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
 
-  ApplyCadLightTheme();
+  ApplyCadDarkTheme();
   if (!LoadApplicationFont())
     std::fprintf(stderr, "Calibri not found; using ImGui default font.\n");
   io.FontGlobalScale = 1.35f;
@@ -504,10 +504,8 @@ int main()
   // Re-apply user preferences so they override any template defaults (crosshair, snap, survey, etc.).
   LoadUserStartupPrefSettings(cmd);
   // Re-apply theme now that displayColorThemeIdx is known from saved prefs.
-  if (cmd.displayColorThemeIdx == 0)
-    ApplyCadDarkTheme();
-  else
-    ApplyCadLightTheme();
+  cmd.displayColorThemeIdx = 0;
+  ApplyCadDarkTheme();
   if (!cmd.surveyPoints.empty())
   {
     RepositionAllSurveyPointLabels(cmd);

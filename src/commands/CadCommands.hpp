@@ -1754,7 +1754,7 @@ struct AppCommandState {
   bool cmdBarVisible = true;          ///< floating bar shown; × hides, Ctrl+9 restores. Persisted.
   bool cmdBarAnchorValid = false;     ///< false → place at the default bottom-left this frame. Persisted.
   float cmdBarAnchorX = 0.f;          ///< persisted floating-bar bottom-LEFT x anchor (screen px); Y is pinned to the bottom.
-  float cmdBarTopYPx = 0.f;           ///< floating bar's top edge this frame (screen px); 0 = not floating/not drawn. NOT persisted — recomputed every frame, and read by the UCS icon so it can stay clear of the bar.
+  float cmdBarTopYPx = 0.f;           ///< floating bar's top edge this frame (screen px); 0 = not floating/not drawn. NOT persisted — recomputed every frame.
   float cmdBarAnchorY = 0.f;          ///< (legacy/unused: the bar is always pinned to the viewport bottom).
   float cmdBarWidth = 0.f;            ///< user-resized bar width (px); 0 → default. Persisted.
   float cmdConsoleHeight = 0.f;       ///< user-resized F2 console height (px); 0 → default. Persisted.
@@ -3607,10 +3607,10 @@ struct AppCommandState {
   /// UCS. **Off by default** — on, the cursor changes colour and orientation, and a display change
   /// no one asked for is the one thing REQ-064 was careful to avoid when it added visual styles.
   bool viewportCrosshair3d = false;
-  /// Viewport background (model-space clear color): RGB 0–1. Default #1F1F2A dark gray.
-  float viewportBgR = 0.1f;
-  float viewportBgG = 0.1f;
-  float viewportBgB = 0.1f;
+  /// Viewport background (model-space clear color): RGB 0–1. Default #141A24 steel-blue tint.
+  float viewportBgR = 0.08f;
+  float viewportBgG = 0.10f;
+  float viewportBgB = 0.14f;
 
   // ---------------------------------------------------------------------------------------------------------
   // Settings (AutoCAD-style Options dialog). Live tab is preserved across opens/closes via settingsActiveTabIdx.
@@ -3633,7 +3633,7 @@ struct AppCommandState {
   bool displayDrawTrueSilhouettes = false;
 
   // Display tab — Window Elements (placeholders + theme tag).
-  int displayColorThemeIdx = 1; ///< 0=Dark, 1=Light.
+  int displayColorThemeIdx = 0; ///< 0=Dark (only theme for now).
   bool displayScrollbars = false;
   bool displayLargeToolbarButtons = false;
   bool displayResizeRibbonIcons = true;
