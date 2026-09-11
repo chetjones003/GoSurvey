@@ -5326,10 +5326,6 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             cmd.viewportFovDeg = std::clamp(fov, kMinFovDeg, kMaxFovDeg);
           RibbonItemHelp("Perspective field of view, in degrees.\nCommand bar: FOV <1-179>");
         }
-        RibbonItemHelp("Import a DWG drawing (LibreDWG, no converter).\nSame as File menu → Import DWG...");
-        if (insRow("##RibbonImportPdf", "PDF_Import", "Import PDF", cA))
-          StartPdfAttachCommand(cmd, log);
-        RibbonItemHelp("Attach a PDF page as a raster underlay.\nCommand bar: PDFATTACH");
         ImGui::EndGroup();
         RibbonSectionEnd();
       }});
