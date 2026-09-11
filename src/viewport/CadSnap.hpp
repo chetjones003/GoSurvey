@@ -105,6 +105,31 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
 [[nodiscard]] bool CommandHasPerpendicularSnapReference(const AppCommandState& cmd, bool commandActive,
                                                         bool ignoreToggle = false);
 
+/// Which CLASS of claim a snap kind makes: 1 = a discrete feature, 0 = "anywhere on the object".
+///
+/// `Surface`, `Edge` and `Face` answer with the point nearest the cursor ON something — so their
+/// candidate always sits essentially under the cursor and their distance is always ~0. Ranked by
+/// distance alone they therefore beat every discrete feature except when the cursor is within a
+/// hair of it, which made a solid's MIDPOINT and even its VERTEX effectively unreachable: measured
+/// on a box, aiming 0.2 ft off an edge's midpoint returned `Face` at the cursor's own height rather
+/// than the midpoint, and it kept doing so at 0.5 and 1.0 ft (user report, 2026-09-11 — "some
+/// midpoints just do not want to snap", and Shift+right-click Midpoint worked because the override
+/// removes the competitor).
+///
+/// So a feature within the aperture wins over a nearest-anywhere point REGARDLESS of distance,
+/// which is what AutoCAD's NEArest does — the weakest snap, and a fallback rather than a rival.
+/// Distance and \ref Priority still decide between two candidates of the same class.
+[[nodiscard]] inline int SnapClass(Kind k) {
+  switch (k) {
+  case Kind::Surface:
+  case Kind::Edge:
+  case Kind::Face:
+    return 0;
+  default:
+    return 1;  // a named point: an endpoint, a midpoint, a centre, a knot, a face centroid, a grip
+  }
+}
+
 [[nodiscard]] inline int Priority(Kind k) {
   switch (k) {
   case Kind::Endpoint:

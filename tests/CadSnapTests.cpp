@@ -818,6 +818,15 @@ TEST_CASE("3D Object Snap Nearest-to-face still works under the renamed flag", "
   AppCommandState st;
   st.objectSnap3dEnabled = true;
   st.objectSnap3dNearestFace = true;
+  // The two feature snaps are turned OFF so this case tests the one thing its name claims: that the
+  // renamed flag still reaches nearest-to-face. They used to be irrelevant — `Face` sits under the
+  // cursor, so it won on distance no matter what else was enabled. Since `SnapClass`, a named
+  // feature inside the aperture beats a nearest-anywhere point, and this case runs with a 60 ft
+  // tolerance (three times the cylinder's radius) which puts an edge midpoint well inside it. That
+  // precedence has its own case below; leaving it in play here would only test it twice and stop
+  // testing the flag.
+  st.objectSnap3dVertex = false;
+  st.objectSnap3dMidpointEdge = false;
 
   brep::Solid cyl;
   brep::Problem why = brep::Problem::Ok;
@@ -1401,4 +1410,64 @@ TEST_CASE("SECTION's second point snaps to a vertical edge's midpoint from an OR
   CHECK(hit.x == Approx(-10.f).margin(1e-4));
   CHECK(hit.y == Approx(-7.f).margin(1e-4));
   CHECK(hit.z == Approx(6.f).margin(1e-4));
+}
+
+TEST_CASE("A named feature beats nearest-on-face, which is a fallback and not a rival",
+          "[CadSnap][req313][snapclass]") {
+  // The bug this closes, reported 2026-09-11: "some midpoints just do not want to snap", and
+  // Shift+right-click Midpoint worked — which is the tell, because the override removes every
+  // competing kind.
+  //
+  // `Face` answers with the point on the surface nearest the cursor, so its candidate is ALWAYS
+  // essentially under the cursor and always at ray distance ~0. Ranked by distance first it beat
+  // every discrete feature, and a solid's midpoints and vertices could only be hit by landing on
+  // them to within an epsilon. Measured before the fix, on this exact box and camera: 0.2 ft off
+  // the midpoint returned `Face` at z 6.2, then 6.5 at half a foot and 7.0 at a foot — the cursor's
+  // own height, projected onto the solid, every time.
+  AppCommandState st;  // every 3D snap left at its shipped default, which is how it was reported
+  st.objectSnapEnabled = true;
+  REQUIRE(st.objectSnap3dNearestFace);   // the competitor is on by default...
+  REQUIRE(st.objectSnap3dMidpointEdge);  // ...and so is the feature it was swamping
+
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 14.0, 12.0, &box, &why));
+  InstallSolid(st, std::move(box));
+
+  constexpr float kW = 1280.f;
+  constexpr float kH = 720.f;
+  Camera cam = Camera::Plan(0.0, 0.0, 30.f);
+  cam.azimuthDeg = 135.f;
+  cam.elevationDeg = 22.f;
+
+  // The vertical edge at (-10,-7) runs z 0..12, so its midpoint is (-10,-7,6). Aim AT it and then
+  // progressively off it: the answer must stay the midpoint, not slide with the cursor.
+  for (const double dz : {0.0, 0.2, 0.5, 1.0}) {
+    float px = 0.f, py = 0.f;
+    cam.WorldToScreen(-10.0, -7.0, 6.0 + dz, kW, kH, &px, &py);
+    const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+    REQUIRE(std::fabs(ray.dir.z) > 1e-9);
+    const double t = (0.0 - ray.origin.z) / ray.dir.z;
+    const CadSnap::Hit hit = CadSnap::FindBest(ray.origin.x + t * ray.dir.x,
+                                               ray.origin.y + t * ray.dir.y, st,
+                                               /*commandActive=*/true, /*tolWorld=*/2.f, {}, &ray);
+    INFO("aiming " << dz << " ft above the midpoint");
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Midpoint);
+    CHECK(hit.z == Approx(6.f).margin(1e-4));  // the MIDPOINT's height, never the cursor's
+  }
+
+  SECTION("with no feature in reach, nearest-on-face still answers") {
+    // The fallback has to remain reachable, or this fix would have removed a snap rather than
+    // ordered it. Aimed at the middle of a large face, far from any edge or vertex.
+    float px = 0.f, py = 0.f;
+    cam.WorldToScreen(0.0, -7.0, 6.0, kW, kH, &px, &py);
+    const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+    const double t = (0.0 - ray.origin.z) / ray.dir.z;
+    const CadSnap::Hit hit = CadSnap::FindBest(ray.origin.x + t * ray.dir.x,
+                                               ray.origin.y + t * ray.dir.y, st,
+                                               /*commandActive=*/true, /*tolWorld=*/1.f, {}, &ray);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Face);
+  }
 }

@@ -561,3 +561,71 @@ Full suite **1472/1472**.
 click. `ViewportPickPolicyTests` pins the routing decision and these pin the pick, but the wire
 between a mouse button and those two is checked by a person. The devshell cannot synthesize a
 viewport click that reaches the selection code — tried, and it reaches nothing, idle or in-command.
+
+---
+
+## 14. Snap: a named feature beats nearest-on-face (2026-09-11, REQ-326 amended)
+
+Reported while testing SECTION's plane points: *"the 2nd selection point is not wanting to snap to a
+midpoint right above the first point"*, then, after more looking, *"it's not just the 2nd point —
+some of the midpoints just do not want to snap"*, and crucially: **"I can force the snap by using
+shift+right click and selecting midpoint."**
+
+**That last sentence is what solved it.** The one-shot override restricts `FindBest` to a single
+kind. If the midpoint is reachable when it is the ONLY candidate but not otherwise, the midpoint was
+never missing — something else was winning. That reframed the question from "why is this snap
+absent" to "what beats it", and the answer fell out immediately.
+
+`Surface`, `Edge` and `Face` answer with **the point on the object nearest the cursor**. Their
+candidate therefore always sits essentially under the cursor, at ray distance ~0. Ranked by distance
+first — which is how every candidate was ranked — they beat every discrete feature, and a solid's
+midpoints and vertices could only be reached by landing on them to within `eps`.
+
+**Measured** on a 20 × 14 × 12 box from an orbited camera, aiming at a vertical edge's midpoint
+(z = 6) and then progressively off it:
+
+| aimed | before | after |
+|---|---|---|
+| exactly on it | `Midpoint`, z 6 | `Midpoint`, z 6 |
+| 0.2 ft off | `Face`, z **6.2** | `Midpoint`, z 6 |
+| 0.5 ft off | `Face`, z **6.5** | `Midpoint`, z 6 |
+| 1.0 ft off | `Face`, z **7.0** | `Midpoint`, z 6 |
+
+`Face` was handing back the cursor's own height projected onto the solid — which looks like a snap,
+lands somewhere plausible, and is not the midpoint. That is why it read as "sometimes works": where
+the wanted point happened to be where the cursor already was, the answer looked right.
+
+`SnapClass` separates the two classes at the single funnel point every candidate passes through.
+A named point inside the aperture wins **regardless of distance**; a nearest-anywhere point never
+displaces one; distance and `Priority` still order candidates of the same class, so nothing else
+about the ordering moves. This is AutoCAD's rule — NEArest is the weakest snap and a fallback.
+
+### Five wrong answers first, and why that is worth writing down
+
+Before the override clue landed, five plausible causes were each checked by reading and each was
+**true and irrelevant**: solid midpoints exist and default on; `ConsiderSnap` already re-ranks in 3D
+whenever a ray exists, so points stacked in Z are separable; `commandActive` gates only perpendicular
+snaps; the snap is suppressed only during an object-SELECTION step, which a point step is not; and
+SECTION commits `CadCommitElevation`, which IS the snapped Z. Two tests written from those readings
+both passed, including a faithful one using a real orbited camera and the work-plane crossing the
+viewport actually passes in.
+
+The lesson is not "read more carefully" — the reading was right every time. It is that **a
+user-supplied workaround is diagnostic evidence.** "Shift+right-click works" ruled out five
+hypotheses at once and pointed at the sixth, which no amount of reading the midpoint path would have
+found, because the midpoint path was never broken.
+
+### Tests
+
+- **A named feature beats nearest-on-face** — the case above, all four offsets, asserting the
+  MIDPOINT's height and never the cursor's; plus a section asserting the fallback is still
+  reachable, so this ordered a snap rather than removing one.
+- Two SECTION-specific cases from the earlier investigation are kept: they pass, and the second is
+  the one that hands `FindBest` the work-plane crossing rather than the target's own XY, which is
+  the fragile part of the elevated-snap path.
+- *"Nearest-to-face still works under the renamed flag"* now disables the two feature snaps. Its
+  subject is the FLAG; it runs a 60 ft tolerance, three times its cylinder's radius, which puts an
+  edge midpoint inside the aperture where the new rule legitimately prefers it.
+
+Full suite **1475/1475**. This changes snapping for **every** command, not only the one that
+surfaced it — recorded as D-2026-09-11-a for that reason.

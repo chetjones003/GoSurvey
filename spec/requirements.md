@@ -8597,6 +8597,32 @@ capability that does not exist. They are recorded here rather than quietly dropp
   GitHub issue #395, PR (this branch).
 - Revisions: 2026-09-07 — initial, supersedes REQ-301's single solid-snap toggle.
 
+  **2026-09-11 — a named feature beats nearest-on-face, which is a FALLBACK and not a rival**
+  (D-2026-09-11-a, TASK-248). Reported from the real app: *"some midpoints just do not want to
+  snap"*, while Shift+right-click → Midpoint always worked — which is the tell, because the
+  one-shot override removes every competing kind.
+
+  `Surface`, `Edge` and `Face` answer with the point on the object nearest the cursor, so their
+  candidate always sits essentially under the cursor and its ray distance is always ~0. Ranked by
+  distance first, as every candidate was, they beat every discrete feature: a solid's midpoints and
+  vertices could only be reached by landing on them to within an epsilon. **Measured** on a
+  20 × 14 × 12 box from an orbited camera, aiming at the midpoint of a vertical edge and then off
+  it: exactly on it returned `Midpoint` at z 6; 0.2 ft off returned `Face` at z **6.2**, 0.5 ft off
+  z **6.5**, 1 ft off z **7.0** — the cursor's own height projected onto the solid, every time.
+
+  So `SnapClass` now separates the two: a named point inside the aperture wins over a
+  nearest-anywhere point **regardless of distance**, and a nearest-anywhere point never displaces
+  one. Distance and `Priority` still decide between candidates of the same class, so nothing else
+  about the ordering moves. This is AutoCAD's rule — NEArest is the weakest snap and a fallback.
+  The fallback stays reachable and is asserted: aimed at the middle of a face with no feature in
+  range, `Face` still answers.
+
+  One existing case, *"Nearest-to-face still works under the renamed flag"*, now turns the two
+  feature snaps off. It runs a 60 ft tolerance — three times its cylinder's radius — which puts an
+  edge midpoint well inside the aperture, so under the new rule the midpoint legitimately wins. Its
+  subject is the FLAG, and precedence has its own case; leaving both in play would test precedence
+  twice and stop testing the flag.
+
 ### REQ-327 — TRIM resolves through the pick ray and finds true 3D crossings (issue #399)
 
 - Purpose: TRIM's target pick, cutting-edge selection, and pick-side math (`CollectCutSegments`,
