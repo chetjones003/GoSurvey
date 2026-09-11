@@ -1,6 +1,7 @@
 #include "CadUi.hpp"
 #include "CadBlocks.hpp"
 #include "NumFormat.hpp"
+#include "StringUtil.hpp"
 
 #include <imgui.h>
 
