@@ -1775,6 +1775,16 @@ struct AppCommandState {
   /// ELEV is 5 must give you that endpoint, not a point 5 above it (AutoCAD-faithful, REQ-058).
   /// Only meaningful while \ref viewportSnapPickValid.
   double viewportSnapPickLocalZ = 0.0;
+  /// WHICH snap answered, as a `CadSnap::Kind` (REQ-340 amended). Only meaningful while
+  /// \ref viewportSnapPickValid.
+  ///
+  /// Stored as an `int` because `CadSnap::Kind` lives in a Viewport header and Commands may not
+  /// include one (architecture §11.1) — the same reason `objectSnapKindOverrideKind` beside it is
+  /// an `int`. Added because a caller can need to know not just WHERE the snap is but whether it is
+  /// a **named feature** or one of the "anywhere on the object" family: a section-plane drag
+  /// honours the first and must ignore the second, or `Face` — which answers at essentially every
+  /// cursor position on a solid — drags the plane across the model continuously.
+  int viewportSnapPickKind = 0;
   /// Command-line log cache for the selectable read-only multiline (rebuilt each frame from \ref log).
   std::vector<char> commandLogCacheBytes;
   size_t commandLogLastSizeForAutoscroll = 0;

@@ -33697,7 +33697,15 @@ bool SubmitSectionPlaneClick(AppCommandState& st, const ray3d::Ray& rayIn, doubl
   // just disarming, and there is nothing to apply. That is a property of the plane being a view
   // state: there is no geometry to rebuild and so no moment at which the change becomes real.
   if (st.sectionPlaneGripDrag != static_cast<int>(SectionPlaneGrip::None)) {
-    UpdateSectionPlaneGripDrag(st, ray);
+    // Disarm, and ONLY disarm. This used to re-run the drag from the drop click's ray — which had
+    // no snapped point, because the click path is not given one — so releasing the mouse recomputed
+    // the placement from the raw cursor and threw the snap away. The plane visibly jumped off the
+    // feature it had just locked onto at the instant the user let go (reported 2026-09-11).
+    //
+    // There was never anything for it to do: the live drag has been writing the offset and the
+    // extent every frame, which is what makes the cut follow the handle, so the state is already
+    // exactly what the user is looking at. Re-applying it could only ever differ from what is on
+    // screen, and the comment above said as much while the code did the opposite.
     CancelSectionPlaneGripDrag(st);
     log.push_back(SectionClipReport(st));
     return true;

@@ -8912,6 +8912,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - **the result does not depend on where inside the grab aperture the handle was clicked** — a
     snap is an absolute placement, so an off-centre grab must land the plane in exactly the same
     place as a dead-centre one;
+  - **releasing the mouse keeps the snapped placement** — the click that drops a drag disarms and
+    does nothing else, since the live drag has already written what is on screen;
+  - **only a NAMED feature places the plane.** `Surface`, `Edge` and `Face` answer with the point on
+    the object nearest the cursor, so with 3D OSNAP on one is under the cursor at essentially every
+    position on a solid; fed to an absolute placement they stop being snaps and become "put the
+    plane wherever the pointer is touching the model". `CadSnap::SnapClass` — the distinction
+    D-2026-09-11-a already drew for this family — is what separates them, and the nearest-anywhere
+    family leaves the drag following the cursor instead;
   - holding on one snapped point across frames does not drift — the snapped parameter is absolute,
     not an accumulating delta;
   - leaving the feature hands control back to the cursor, measured from the original grab rather
@@ -8934,6 +8942,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
   is going to snap too far and then snaps too close". Every existing case missed it because every
   fixture aimed its grab ray straight at the handle, making that term exactly zero; `[req340]` now
   grabs off-centre by design, and asserts the answer is identical for three different grabs.
+  2026-09-11 (same day, second report) — **two more, from "it is cutting off more of the box than it
+  needs to now and the plane is not snapping to the section quite right".** (1) The click that
+  DROPPED a drag re-ran it from its own ray, and a click path is never given a snapped point, so
+  releasing the mouse recomputed the placement unsnapped and the plane jumped off the feature it had
+  just locked onto. It now disarms and nothing else — the live drag has already written what is on
+  screen, which is what the code's own comment claimed while it did the opposite. (2) The
+  nearest-on-object snap family was steering the drag: with 3D OSNAP on, `Face` answers at
+  essentially every cursor position on a solid, so an absolute placement made the plane skate across
+  the model with the pointer. Only `SnapClass == 1` — a named feature — places it now.
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

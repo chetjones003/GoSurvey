@@ -14143,6 +14143,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.viewportSnapPickLocalX = snap.x;
           cmd.viewportSnapPickLocalY = snap.y;
           cmd.viewportSnapPickLocalZ = snap.z;  // osnap overrides the work-plane elevation (REQ-058)
+          cmd.viewportSnapPickKind = static_cast<int>(snap.kind);  // REQ-340: named feature, or not
           if (out_snap)
             *out_snap = snap;
           const double dx = static_cast<double>(snap.x) - rawX;
@@ -14211,7 +14212,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // throughout, and `viewportSnapPickLocal*` is storage-local in XY (Z is already absolute).
     ray3d::Vec3 snapWorld{};
     const ray3d::Vec3* snapPtr = nullptr;
-    if (cmd.viewportSnapPickValid) {
+    // ONLY a named feature steers the plane (REQ-340 amended, user report 2026-09-11).
+    //
+    // `Surface`, `Edge` and `Face` answer with the point on the object nearest the cursor, so with
+    // 3D OSNAP on there is a snap under the cursor at essentially every position on a solid. Fed to
+    // an ABSOLUTE placement, that stops being a snap at all and becomes "put the plane wherever the
+    // cursor happens to be touching the model" — the plane skates across the box as the pointer
+    // moves, ending up well past what was aimed at. Reported as the plane "cutting off more of the
+    // box than it needs to" and "not snapping to the section quite right".
+    //
+    // `SnapClass` is the distinction D-2026-09-11-a already drew for exactly this family, reused
+    // rather than restated. A midpoint, endpoint, centre, quadrant, intersection, face centroid or
+    // knot places the plane; "somewhere on that face" does not, and the drag follows the cursor
+    // instead — which is what the user is doing when no feature is under it.
+    const bool namedFeature =
+        cmd.viewportSnapPickValid &&
+        CadSnap::SnapClass(static_cast<CadSnap::Kind>(cmd.viewportSnapPickKind)) == 1;
+    if (namedFeature) {
       double swx = 0.0, swy = 0.0;
       CadCoord::WorldFromLocal(cmd, static_cast<float>(cmd.viewportSnapPickLocalX),
                                static_cast<float>(cmd.viewportSnapPickLocalY), &swx, &swy);

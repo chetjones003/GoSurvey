@@ -113,16 +113,51 @@ under the cursor.
 makes them all blind to the same thing. `RayAtGrip` was written to make the tests readable, and it
 silently fixed one of the inputs at the single value that hid the defect.
 
+## 5b. Two more from the second report
+
+> it is cutting off more of the box than it needs to now and the plane is not snapping to the
+> section quite right
+
+**BUG-A — releasing the mouse threw the snap away.** `SubmitSectionPlaneClick`'s drop path called
+`UpdateSectionPlaneGripDrag` from its own ray. A click path is never given a snapped point — the
+snap is a viewport quantity, computed per frame — so that call recomputed the placement *unsnapped*,
+and the plane jumped off the feature at the instant the user let go.
+
+There was never anything for it to do: the live drag writes the offset and the extent every frame,
+so the state already is what is on screen. The block's own comment said exactly that
+(*"committing is just disarming, and there is nothing to apply"*) while the code did the opposite —
+a comment and its code disagreeing, with the comment right.
+
+**BUG-B — the nearest-on-object snaps were steering the drag.** `Surface`, `Edge` and `Face` answer
+with the point on the object nearest the cursor. With 3D OSNAP on, that means there is a snap under
+the cursor at essentially *every* position on a solid. Fed to an **absolute** placement, they stop
+being snaps at all and become "put the plane wherever the pointer is touching the model" — so the
+plane skates across the box as the cursor moves, landing well past what was aimed at. That is the
+over-cutting.
+
+The fix reuses the distinction **D-2026-09-11-a** already drew for this exact family:
+`CadSnap::SnapClass` returns 0 for the nearest-anywhere kinds and 1 for a named point. Only a named
+feature places the plane; under the others the drag simply follows the cursor, which is what the
+user is doing when no feature is under it. `viewportSnapPickKind` was added to carry the kind, since
+the state recorded where the snap was but not what it was.
+
+The two compounded: B put the plane in the wrong place during the drag, and A moved it again on
+release, so neither symptom looked like a clean miss.
+
 ## 6. Verification
 
-**Full suite 1512/1512**, up from 1506.
+**Full suite 1514/1514**, up from 1506.
 
-`SubObjectSelectionTests` `[req340]`, 6 cases inside `[sectionplanegrip]` (16 cases / 157
+`SubObjectSelectionTests` `[req340]`, 8 cases inside `[sectionplanegrip]` (18 cases / 176
 assertions):
 
 - **an off-centre grab lands the plane in the same place as a dead-centre one** — §5a, the case that
   was missing;
 - an off-centre grab with no snap still drags relatively;
+- **releasing the mouse keeps the snapped placement** — §5b BUG-A;
+- **`SnapClass` still separates the named features from the nearest-anywhere family** — §5b BUG-B;
+  kept beside the drag tests because a change there that reclassified `Face` would break the section
+  plane with nothing else to notice;
 - the plane lands **exactly** through a snapped point while the cursor ray is aimed elsewhere,
   asserted both at 1e-9 and separately at REQ-101's 0.002 ft;
 - four held frames on one snapped point do not drift — which would catch a version that accumulated
@@ -132,7 +167,8 @@ assertions):
 - a stretch handle snaps on the same terms and still changes nothing about what the cut hides.
 
 **Proven to bite:** ignoring the snapped point fails 3 cases and 7 assertions; reinstating the
-relative-instead-of-absolute placement fails the off-centre case with the plane 2.25 ft out.
+relative-instead-of-absolute placement fails the off-centre case with the plane 2.25 ft out; putting
+the drop click's re-apply back moves the plane 3 ft off the snap on release.
 
 ## 7. Assumptions and debt
 

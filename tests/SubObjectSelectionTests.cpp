@@ -20,6 +20,7 @@
 #include "CadCommands.hpp"
 #include "viewport/TransformPreview.hpp"  // BuildSubObjectHighlight
 #include "render/SectionClip.hpp"       // SectionClipPlane, for REQ-338's keep-side check
+#include "viewport/CadSnap.hpp"         // CadSnap::SnapClass, for REQ-340's named-feature rule
 
 namespace {
 
@@ -1580,4 +1581,61 @@ TEST_CASE("An off-centre grab still drags relatively when there is no snap",
   const ray3d::Vec3 moved{handle.x + axis.x * 5.0, handle.y + axis.y * 5.0, handle.z + axis.z * 5.0};
   UpdateSectionPlaneGripDrag(st, RayAtWorldPoint(moved), nullptr);
   CHECK(st.viewportSectionClipOffset == Catch::Approx(3.0).margin(1e-6));
+}
+
+TEST_CASE("Releasing the mouse keeps the snapped placement", "[sectionplanegrip][req340]") {
+  // The bug: the drop click re-ran the drag from its own ray, and the click path is never given a
+  // snapped point — so letting go recomputed the placement from the raw cursor and threw the snap
+  // away. The plane jumped off the feature it had just locked onto, at the instant of release.
+  //
+  // The sequence below is the real one: grab, drag onto a snap, then release with the cursor
+  // somewhere that is NOT the snapped point — which is always true, since the snap pulls the plane
+  // to a feature the cursor is merely near.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);  // plane on the top face, z = 8
+
+  const ray3d::Ray grab = RayAtGrip(st, SectionPlaneGrip::Move);
+  REQUIRE(SubmitSectionPlaneClick(st, grab, 1.0, log));
+
+  const ray3d::Vec3 snapped{10.0, 5.0, 4.0};
+  const ray3d::Ray cursor = RayAt({60, 40, 101}, {0, 0, 1});  // aimed well away from the snap
+  UpdateSectionPlaneGripDrag(st, cursor, &snapped);
+  const double heldOffset = st.viewportSectionClipOffset;
+  REQUIRE(heldOffset == Catch::Approx(-4.0).margin(1e-9));
+
+  // Release. The click carries no snap — it cannot; the snap is a viewport quantity — so anything
+  // it recomputes is by definition the unsnapped answer.
+  REQUIRE(SubmitSectionPlaneClick(st, cursor, 1.0, log));
+  CHECK(st.sectionPlaneGripDrag == static_cast<int>(SectionPlaneGrip::None));
+  CHECK(st.viewportSectionClipOffset == Catch::Approx(heldOffset).margin(1e-9));
+
+  // And the plane still passes through the snapped point, which is the promise the user cares about.
+  const SectionClipPlane p = CadSectionClipPlane(st);
+  const double d = p.nx * snapped.x + p.ny * snapped.y + p.nz * snapped.z - p.c;
+  CHECK(std::fabs(d) < 0.002);
+}
+
+TEST_CASE("A nearest-on-face snap is not a placement", "[sectionplanegrip][req340]") {
+  // `Surface`, `Edge` and `Face` answer with the point on the object nearest the cursor, so with 3D
+  // OSNAP on there is one under the cursor at essentially every position on a solid. Fed to an
+  // absolute placement they stop being snaps and become "put the plane wherever the pointer is
+  // touching the model" — the plane skates across the box as the cursor moves.
+  //
+  // The gate lives in the viewport, which is where the snap KIND is known, so what is asserted here
+  // is the rule it applies: `SnapClass` separates a named feature from the nearest-anywhere family,
+  // and only the first may steer a drag. Kept beside the drag tests because this is the reason the
+  // drag behaves, and a change to `SnapClass` that silently reclassified `Face` would break the
+  // section plane with nothing else to notice.
+  CHECK(CadSnap::SnapClass(CadSnap::Kind::Face) == 0);
+  CHECK(CadSnap::SnapClass(CadSnap::Kind::Surface) == 0);
+  CHECK(CadSnap::SnapClass(CadSnap::Kind::Edge) == 0);
+
+  // The ones that MUST place it — the whole point of the feature.
+  CHECK(CadSnap::SnapClass(CadSnap::Kind::Midpoint) == 1);
+  CHECK(CadSnap::SnapClass(CadSnap::Kind::Endpoint) == 1);
+  CHECK(CadSnap::SnapClass(CadSnap::Kind::Center) == 1);
+  CHECK(CadSnap::SnapClass(CadSnap::Kind::Quadrant) == 1);
+  CHECK(CadSnap::SnapClass(CadSnap::Kind::Intersection) == 1);
+  CHECK(CadSnap::SnapClass(CadSnap::Kind::CenterOfFace) == 1);
+  CHECK(CadSnap::SnapClass(CadSnap::Kind::Knot) == 1);
 }
