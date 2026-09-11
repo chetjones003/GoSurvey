@@ -77,13 +77,52 @@ Displacements in these fixtures are now stated in the plane's own basis, taken f
 has quietly meant something else in the plane's; the first two were rays lying *in* a horizontal
 plane and grazing every handle at once.
 
+## 5a. The bug this shipped with, and why no test saw it
+
+Reported from the app the same day, after the first build:
+
+> when trying to snap to the section with the sectionplane it seems to be a little off ... it looks
+> like it is going to snap too far and then snaps too close
+
+**Cause.** The snapped point's projection onto the drag axis is the distance the handle must travel
+— an **absolute** placement, measured from the anchor, which *is* the handle's position at the grab.
+The code then subtracted `sectionPlaneGripStartParam` from it, as the cursor path rightly does. That
+value is where the **cursor** crossed the axis when the handle was grabbed, and it is zero only when
+the click lands exactly on the handle's centre. Anywhere else inside the grab aperture and the plane
+came out wrong by precisely that much, in whichever direction the click was off — which is exactly
+"too far" one way and "too close" the other.
+
+Two kinds of quantity sharing one variable. The fix is to branch: absolute when snapping, relative
+when following the cursor, with the reason written at both.
+
+**Why every test passed.** Every fixture aimed its grab ray straight at the handle
+(`RayAtGrip` targets `g.at[k]`), which makes the offending term exactly zero. A whole family of
+cases — six of them, 60 assertions — was blind to it in the same way, because they all built their
+rays the same way.
+
+`[req340]` now grabs **off-centre on purpose**, at 0, +1.5 and −2.25 ft along the drag axis, and
+asserts all three land the plane in exactly the same place: where the grab landed carries no
+information about where the snap is, so it must not influence the result at all. Reinstated, the bug
+puts the plane 2.25 ft out on the 2.25 ft grab — the reported symptom, reproduced to the foot.
+
+A companion case pins the other half of the distinction: with **no** snap, an off-centre grab must
+still drag *relatively*, moving the plane by how far the cursor moved rather than jumping the handle
+under the cursor.
+
+**The lesson, which generalises past this bug:** a fixture helper shared by every case in a family
+makes them all blind to the same thing. `RayAtGrip` was written to make the tests readable, and it
+silently fixed one of the inputs at the single value that hid the defect.
+
 ## 6. Verification
 
-**Full suite 1510/1510**, up from 1506.
+**Full suite 1512/1512**, up from 1506.
 
-`SubObjectSelectionTests` `[req340]`, 4 cases inside `[sectionplanegrip]` (14 cases / 131
+`SubObjectSelectionTests` `[req340]`, 6 cases inside `[sectionplanegrip]` (16 cases / 157
 assertions):
 
+- **an off-centre grab lands the plane in the same place as a dead-centre one** — §5a, the case that
+  was missing;
+- an off-centre grab with no snap still drags relatively;
 - the plane lands **exactly** through a snapped point while the cursor ray is aimed elsewhere,
   asserted both at 1e-9 and separately at REQ-101's 0.002 ft;
 - four held frames on one snapped point do not drift — which would catch a version that accumulated
@@ -92,7 +131,8 @@ assertions):
   where the snap left the plane;
 - a stretch handle snaps on the same terms and still changes nothing about what the cut hides.
 
-**Proven to bite:** ignoring the snapped point fails 3 of the 4 cases and 7 assertions.
+**Proven to bite:** ignoring the snapped point fails 3 cases and 7 assertions; reinstating the
+relative-instead-of-absolute placement fails the off-centre case with the plane 2.25 ft out.
 
 ## 7. Assumptions and debt
 

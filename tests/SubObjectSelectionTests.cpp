@@ -1511,3 +1511,73 @@ TEST_CASE("A stretch handle snaps too, and still leaves the cut alone", "[sectio
   CHECK(p.KeepsWorldPoint(0.0, 0.0, 1.0));
   CHECK_FALSE(p.KeepsWorldPoint(0.0, 0.0, 7.0));
 }
+
+TEST_CASE("A snap lands on the point however off-centre the handle was grabbed",
+          "[sectionplanegrip][req340]") {
+  // The bug this pins, reported from the real app 2026-09-11: "when trying to snap to the section
+  // with the sectionplane it seems to be a little off ... it looks like it is going to snap too far
+  // and then snaps too close."
+  //
+  // The snapped parameter is ABSOLUTE — the distance the handle must travel — but the code was
+  // subtracting `sectionPlaneGripStartParam` from it, which is where the CURSOR crossed the drag
+  // axis at the grab. That term is zero only when the click lands exactly on the handle's centre,
+  // so the plane came out wrong by however far off-centre the grab was, in whichever direction.
+  //
+  // Every existing case missed it because every fixture aimed its grab ray straight at the handle.
+  // These deliberately do not — which is the whole test.
+  std::vector<std::string> log;
+
+  // Three grabs, at increasing distances ALONG the drag axis from the handle's centre. The plane
+  // must end up in exactly the same place every time: where the grab landed is not information
+  // about where the snap is.
+  for (const double offCentre : {0.0, 1.5, -2.25}) {
+    AppCommandState st = SectionPlaneOnBoxTop(log);  // plane on the top face, z = 8
+    const SectionPlaneGrips g = CadSectionPlaneGrips(st);
+    REQUIRE(g.valid);
+    const int kMove = static_cast<int>(SectionPlaneGrip::Move);
+    const ray3d::Vec3 handle = g.at[kMove];
+    const ray3d::Vec3 axis = g.dir[kMove];
+
+    // Aim the grab at a point displaced along the axis from the handle — a click inside the grab
+    // aperture but not dead centre, which is every real click.
+    const ray3d::Vec3 aim{handle.x + axis.x * offCentre, handle.y + axis.y * offCentre,
+                          handle.z + axis.z * offCentre};
+    REQUIRE(SubmitSectionPlaneClick(st, RayAtWorldPoint(aim), 5.0, log));
+    REQUIRE(st.sectionPlaneGripDrag == kMove);
+
+    const ray3d::Vec3 snapped{10.0, 5.0, 4.0};  // mid-height of a vertical edge of the box
+    UpdateSectionPlaneGripDrag(st, RayAt({60, 40, 101}, {0, 0, 1}), &snapped);
+
+    const SectionClipPlane p = CadSectionClipPlane(st);
+    const double d = p.nx * snapped.x + p.ny * snapped.y + p.nz * snapped.z - p.c;
+    INFO("grabbed " << offCentre << " ft off the handle's centre");
+    CHECK(std::fabs(d) < 0.002);  // REQ-101: the plane passes THROUGH the snapped point
+    // Same answer every time, which is the property that matters: the grab position carries no
+    // information about where the snap is, so it must not influence the result at all.
+    CHECK(st.viewportSectionClipOffset == Catch::Approx(-4.0).margin(1e-9));
+  }
+}
+
+TEST_CASE("An off-centre grab still drags relatively when there is no snap",
+          "[sectionplanegrip][req340]") {
+  // The other half of the same distinction. Without a snap the drag IS relative, and subtracting
+  // the grab's own parameter is exactly right — the plane must move by how far the cursor moved,
+  // not jump so the handle lands under the cursor.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  const SectionPlaneGrips g = CadSectionPlaneGrips(st);
+  REQUIRE(g.valid);
+  const int kMove = static_cast<int>(SectionPlaneGrip::Move);
+  const ray3d::Vec3 handle = g.at[kMove];
+  const ray3d::Vec3 axis = g.dir[kMove];
+
+  // Grab 2 ft off centre along the axis...
+  const ray3d::Vec3 aim{handle.x + axis.x * 2.0, handle.y + axis.y * 2.0, handle.z + axis.z * 2.0};
+  REQUIRE(SubmitSectionPlaneClick(st, RayAtWorldPoint(aim), 5.0, log));
+
+  // ...then move the cursor 3 ft further along it. The plane moves 3 ft — not 5, which is what a
+  // version that treated the cursor position as absolute would give.
+  const ray3d::Vec3 moved{handle.x + axis.x * 5.0, handle.y + axis.y * 5.0, handle.z + axis.z * 5.0};
+  UpdateSectionPlaneGripDrag(st, RayAtWorldPoint(moved), nullptr);
+  CHECK(st.viewportSectionClipOffset == Catch::Approx(3.0).margin(1e-6));
+}

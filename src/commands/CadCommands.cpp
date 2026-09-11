@@ -33593,30 +33593,46 @@ void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& rayIn,
   const ray3d::Vec3 dir = st.sectionPlaneGripAxis;
   if (ray3d::Length(dir) < 0.5)
     return;
-  double param = 0.0;
-  if (!CadAxisDragParam(anchor, dir, ray, &param))
-    return;  // sighting straight down the axis: no distance the gesture could mean
-
-  // REQ-340 — land on the object snap, if the cursor found one.
-  //
-  // The snapped point almost never lies ON the drag axis: the axis is a line through the handle,
-  // and a midpoint is somewhere out in the model. So the handle goes where that point PROJECTS onto
-  // the axis, which is the only reading of "put the plane at that midpoint" the constraint allows —
-  // and it is the reading that makes the plane pass exactly through the snapped point, since the
-  // plane is perpendicular to the axis it slides along.
-  //
-  // No further guard on WHETHER to honour it. `CadSnap::FindBest` only answers at all when the
-  // cursor is inside the snap aperture of a real feature, and that aperture is pixel-derived, so a
-  // point reaching here is by definition one the user is pointing at. A second distance test here
-  // would be this code second-guessing the snap system with a worse rule than the one it already
-  // applied — and the case it would reject is the useful one, a midpoint out in the model that the
-  // user is deliberately reaching for.
-  if (snapWorld)
-    param = ray3d::Dot(ray3d::Sub(*snapWorld, anchor), dir);
-
-  // A DELTA from where the grab happened, so the handle does not leap to the cursor on the first
-  // frame. `sectionPlaneGripStartParam` was recorded against the same anchor and axis.
-  const double delta = param - st.sectionPlaneGripStartParam;
+  // How far the HANDLE should travel from where it was grabbed. The two ways of asking are
+  // different in kind, and conflating them is the bug this shape exists to prevent.
+  double delta = 0.0;
+  if (snapWorld) {
+    // REQ-340 — land on the object snap.
+    //
+    // **ABSOLUTE, and that is the whole point.** `anchor` IS the handle's position at the grab, so
+    // the snapped point's projection onto the axis is already the distance the handle must travel
+    // to put the plane through that point. Nothing is subtracted.
+    //
+    // Subtracting `sectionPlaneGripStartParam` here — as this did until a user reported the plane
+    // landing beside the snap rather than on it — mixes the two kinds. That value is where the
+    // CURSOR crossed the axis when the handle was grabbed, which is only zero if the click landed
+    // exactly on the handle's centre. Anywhere else inside the grab aperture and the plane ends up
+    // wrong by precisely that much, in whichever direction the click was off: "it looks like it is
+    // going to snap too far and then snaps too close" (2026-09-11).
+    //
+    // Every test missed it because every fixture aimed its grab ray straight at the handle, which
+    // makes that term exactly zero. `[req340]` now grabs off-centre on purpose.
+    //
+    // The snapped point almost never lies ON the axis — the axis is a line through the handle, a
+    // midpoint is out in the model — so the handle goes where it PROJECTS. That is the only reading
+    // a one-degree-of-freedom drag allows, and it is the one that puts the plane exactly through
+    // the point, because the plane is perpendicular to the axis it slides along.
+    //
+    // No further guard on WHETHER to honour it. `CadSnap::FindBest` only answers at all when the
+    // cursor is inside the snap aperture of a real feature, and that aperture is pixel-derived, so
+    // a point reaching here is by definition one the user is pointing at. A second distance test
+    // would be this code second-guessing the snap system with a worse rule — and the case it would
+    // reject is the useful one, a midpoint out in the model deliberately reached for.
+    delta = ray3d::Dot(ray3d::Sub(*snapWorld, anchor), dir);
+  } else {
+    // RELATIVE: a delta from where the grab happened, so the handle does not leap to the cursor on
+    // the first frame. `sectionPlaneGripStartParam` was recorded against the same anchor and axis,
+    // and subtracting it is exactly right HERE — both terms are cursor positions.
+    double param = 0.0;
+    if (!CadAxisDragParam(anchor, dir, ray, &param))
+      return;  // sighting straight down the axis: no distance the gesture could mean
+    delta = param - st.sectionPlaneGripStartParam;
+  }
 
   switch (grip) {
   case SectionPlaneGrip::Move:
