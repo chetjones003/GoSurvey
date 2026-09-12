@@ -36555,6 +36555,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return "INSERT: Scale point — click or X,Y | ESC cancel";
     if (st.insertBlockPhase == IPh::WaitRotation)
       return "INSERT: Specify rotation angle <0d0'0\"> — click or type | ESC cancel";
+    if (st.insertBlockPhase == IPh::WaitAlignFace)
+      return "INSERT: Pick a flat face to align the fitting | ESC cancel";
     if (st.insertBlockPhase == IPh::WaitAttributes)
       return "INSERT: Enter attribute values in the dialog | ESC cancel";
     return "INSERT: Configure in the Insert dialog";

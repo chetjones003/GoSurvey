@@ -95,6 +95,8 @@ enum class ViewportClickRoute : std::uint8_t {
   PdfAttachInsertPoint,
   /// INSERT's on-screen insertion point, scale, or rotation pick.
   InsertBlockPick,
+  /// INSERT align-to-face: ray pick on a planar solid face (issue #475 inc3).
+  InsertBlockAlignFacePick,
 };
 
 /// \see ViewportClickRoute. Model space (and floating model space) only — pure paper space has its
@@ -345,6 +347,8 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
                : R::Ignore;  // dialog / async build / scale / rotation phases take no viewport click
   case K::InsertBlock: {
     using IPh = AppCommandState::InsertBlockPhase;
+    if (cmd.insertBlockPhase == IPh::WaitAlignFace)
+      return R::InsertBlockAlignFacePick;
     return (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
             cmd.insertBlockPhase == IPh::WaitRotation)
                ? R::InsertBlockPick
@@ -431,6 +435,7 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::HatchPick:
   case R::PdfAttachInsertPoint:
   case R::InsertBlockPick:
+  case R::InsertBlockAlignFacePick:
   case R::Ignore:
     return false;
   }

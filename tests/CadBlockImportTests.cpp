@@ -587,6 +587,38 @@ TEST_CASE("BLOCKIMPORT of a standalone ACIS .sat drops the solid on the origin",
   const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
   REQUIRE(di >= 0);
   REQUIRE(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].units == CadDrawingInsUnitsName(st.drawingInsUnits));
+}
+
+TEST_CASE("INSERT of a SAT block in a feet drawing keeps native scale", "[issue475][block][insert][units]") {
+  const std::string sat = std::string(GOSURVEY_SAMPLES_DIR) + "/CJ_4in_WELD_NECK_FLANGE.sat";
+  REQUIRE(std::filesystem::exists(sat));
+
+  AppCommandState st;
+  st.drawingInsUnits = 2;  // feet
+  std::vector<std::string> log;
+  REQUIRE(ImportCadBlocksFromPath(st, sat.c_str(), log));
+  st.cadSolids.clear();
+  st.cadSolidAttrs.clear();
+
+  CadBlockXform xf;
+  xf.x = 10.f;
+  xf.y = 20.f;
+  xf.z = 0.f;
+  xf.sx = xf.sy = xf.sz = 1.f;
+  REQUIRE(CadBlockPlaceInsert(st, "CJ_4in_WELD_NECK_FLANGE", xf, false, log));
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].xf.sx == Catch::Approx(1.f));
+
+  std::vector<CadBlockWorldSolid> ws;
+  CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[0], EntityAttributes{}, &ws);
+  REQUIRE(ws.size() == 1);
+  REQUIRE(ws[0].solid);
+  const brep::Bounds bb = brep::ComputeBounds(*ws[0].solid);
+  REQUIRE(bb.valid);
+  CHECK(bb.mx.x - bb.mn.x == Catch::Approx(0.75006).margin(0.02));
+  CHECK(bb.mx.y - bb.mn.y == Catch::Approx(0.75006).margin(0.02));
+  CHECK(bb.mx.z - bb.mn.z == Catch::Approx(0.25).margin(0.02));
 }
 
 TEST_CASE("BLOCKIMPORT rejects a malformed .sat file with a message, no crash",
@@ -703,6 +735,88 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
     CHECK(s4.cadBlockRefs[0].xf.y == Catch::Approx(0.f).margin(1e-4));
     CHECK(s4.cadBlockRefs[0].xf.z == Catch::Approx(3.f).margin(1e-4));
   }
+}
+
+TEST_CASE("INSERT 3D scale preview uses true 3D distance", "[issue475][block][insert][3d][scale]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "POST";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.content.lines = {0.f, 0.f, 0.f, 0.f, 0.f, 1.f};
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "POST");
+  st.insertBlockSpecifyPoint = true;
+  st.insertBlockSpecifyScale = true;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockUniformScale = true;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+
+  SubmitInsertBlockPick(st, 0.f, 0.f, 0.f, log);
+  REQUIRE(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitScale);
+
+  CadBlockXform pv;
+  REQUIRE(CadBlockInsertPreviewXform(st, 0.f, 0.f, 3.f, &pv));
+  CHECK(pv.sx == Catch::Approx(3.f));
+
+  SubmitInsertBlockPick(st, 0.f, 0.f, 3.f, log);
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].xf.sx == Catch::Approx(3.f));
+}
+
+TEST_CASE("INSERT dialog rotX and rotY apply on place", "[issue475][block][insert][orient]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "FIT");
+  st.insertBlockSpecifyPoint = false;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyAlignFace = false;
+  st.insertBlockRotXDeg = 90.f;
+  st.insertBlockRotYDeg = 0.f;
+  std::snprintf(st.insertBlockRotXBuf, sizeof(st.insertBlockRotXBuf), "90");
+  CadBlocksCommitInsertDialog(st, log);
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].xf.rotX == Catch::Approx(CadBlockRotDegToRad(90.f)).margin(1e-4));
+}
+
+TEST_CASE("INSERT ghost rubber includes solid block wireframe edges", "[issue475][block][insert][preview][solid]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 1.0, 1.0, 2.0, &box, &why));
+
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "SOLIDGHOST";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  st.blockDefs.push_back(def);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "SOLIDGHOST");
+
+  CadBlockXform xf;
+  xf.x = 5.f;
+  xf.y = 5.f;
+  xf.z = 2.f;
+  std::vector<float> rubber;
+  AppendInsertBlockGhostRubber(st, xf, rubber);
+  REQUIRE(rubber.size() >= 12u);
+  bool sawElevatedZ = false;
+  for (size_t i = 0; i + 2 < rubber.size(); i += 6) {
+    if (rubber[i + 2] > 1.5f || rubber[i + 5] > 1.5f)
+      sawElevatedZ = true;
+  }
+  CHECK(sawElevatedZ);
 }
 
 TEST_CASE("INSERT explode copies block solid into cadSolids", "[issue475][block][solid][explode]") {

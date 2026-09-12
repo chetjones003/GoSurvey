@@ -455,30 +455,27 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
   if (cmd.active == AppCommandState::Kind::InsertBlock) {
     using IPh = AppCommandState::InsertBlockPhase;
     if (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
-        cmd.insertBlockPhase == IPh::WaitRotation) {
-      // Drag indicator from the fixed insertion point to the cursor during the scale/rotation picks.
+        cmd.insertBlockPhase == IPh::WaitRotation || cmd.insertBlockPhase == IPh::WaitAlignFace) {
+      float pickZ = zc;
+      if (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale) {
+        pickZ = cmd.uiCursorWorldZ;
+        if (cmd.viewportSnapPickValid)
+          pickZ = cmd.viewportSnapPickLocalZ;
+      }
+      // Drag indicator from the fixed insertion point to the cursor during scale/rotation/align picks.
       if (cmd.insertBlockPhase != IPh::WaitInsertPoint) {
         float lx = curXf;
         float ly = curYf;
-        float lz = zc;
-        // lz picks up the ortho-locked Z (issue #371 follow-up) — see the LINE branch above. The
-        // scale/rotation VALUES (InsertLiveScaleDist/InsertLiveRotDeg) are X/Y-only and unaffected,
-        // but the drag-indicator segment itself should render where ORTHO actually locked it.
+        float lz = pickZ;
         ApplyOrthoConstrainFromAnchor(cmd, cmd.insertBlockX, cmd.insertBlockY, &lx, &ly, orthoEnabled,
                                       cmd.insertBlockZ, cmd.uiCursorWorldZ, &lz);
-        PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0., zc, lz);
+        PushRubberSegViewRel(rubberLines, cmd.insertBlockX, cmd.insertBlockY, lx, ly, 0., 0.,
+                             cmd.insertBlockZ, lz);
       }
-      // Live ghost of the block at the transform this pick would commit (REQ-107, D-2026-08-29-i).
+      // Live ghost: 2D linework + B-rep wireframe edges at the committed transform (issue #475 inc3).
       CadBlockXform gxf;
-      if (CadBlockInsertPreviewXform(cmd, curXf, curYf, zc, &gxf)) {
-        CadBlockRef ghost;
-        ghost.defName = cmd.insertBlockName;
-        ghost.xf = gxf;
-        std::vector<CadBlockWorldSeg> segs;
-        CadBlockCollectWorldLines(cmd.blockDefs, ghost, EntityAttributes{}, &segs);
-        for (const CadBlockWorldSeg& s : segs)
-          PushRubberSegViewRel(rubberLines, s.x0, s.y0, s.x1, s.y1, 0., 0., s.z0, s.z1);
-      }
+      if (CadBlockInsertPreviewXform(cmd, curXf, curYf, pickZ, &gxf))
+        AppendInsertBlockGhostRubber(cmd, gxf, rubberLines);
     }
   }
 

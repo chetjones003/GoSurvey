@@ -60,6 +60,11 @@ TEST_CASE("Inch-to-foot insert scale is 1/12", "[issue124][block]") {
   CHECK(CadBlockUnitsScale("inches", "feet") == Catch::Approx(1.f / 12.f));
 }
 
+TEST_CASE("Unitless block units insert without conversion", "[issue475][block][units]") {
+  CHECK(CadBlockUnitsScale("unitless", "feet") == Catch::Approx(1.f));
+  CHECK(CadBlockUnitsScale("unitless", "inches") == Catch::Approx(1.f));
+}
+
 TEST_CASE("ByBlock color resolves from the insert", "[issue124][block]") {
   EntityAttributes prim;
   prim.color = "ByBlock";
@@ -219,6 +224,23 @@ TEST_CASE("CadBlockCollectWorldSolids applies INSERT transform to block solids",
   CHECK(bb.mx.z == Catch::Approx(9.0).margin(0.05));
   CHECK(bb.mn.x == Catch::Approx(9.0).margin(0.05));
   CHECK(bb.mx.x == Catch::Approx(11.0).margin(0.05));
+}
+
+TEST_CASE("CadBlockSetLocalZAxis orients local +Z to the target normal", "[issue475][block][orient]") {
+  CadBlockXform xf;
+  CadBlockSetLocalZAxis(&xf, 1.f, 0.f, 0.f);
+  float wx = 0.f, wy = 0.f, wz = 0.f;
+  CadBlockXformPoint(xf, 0.f, 0.f, 1.f, &wx, &wy, &wz);
+  CHECK(wx == Catch::Approx(1.f).margin(1e-3));
+  CHECK(std::fabs(wy) < 1e-3f);
+  CHECK(std::fabs(wz) < 1e-3f);
+
+  CadBlockXform up;
+  CadBlockSetLocalZAxis(&up, 0.f, 0.f, 1.f);
+  CadBlockXformPoint(up, 0.f, 0.f, 1.f, &wx, &wy, &wz);
+  CHECK(std::fabs(wx) < 1e-3f);
+  CHECK(std::fabs(wy) < 1e-3f);
+  CHECK(wz == Catch::Approx(1.f).margin(1e-3));
 }
 
 TEST_CASE("CadBlockCollectWorldSolids refuses non-uniform scale on solids", "[issue475][block][solid]") {

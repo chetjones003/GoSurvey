@@ -727,6 +727,28 @@ inline void CadBlockCollectWorldAnnotations(const std::vector<CadBlockDefinition
   return std::fabs(xf.sx - xf.sy) <= tol && std::fabs(xf.sx - xf.sz) <= tol && std::fabs(xf.sy - xf.sz) <= tol;
 }
 
+/// Set \p xf's rotX/rotY/rotZ (rotZ unchanged) so local +Z aligns with unit \p nx,ny,nz after the
+/// same Z→Y→X order \ref CadBlockXformPoint uses (issue #475 increment 3, align-to-face).
+inline void CadBlockSetLocalZAxis(CadBlockXform* xf, float nx, float ny, float nz) {
+  assert(xf != nullptr);
+  const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+  if (len <= 1.e-8f)
+    return;
+  nx /= len;
+  ny /= len;
+  nz /= len;
+  const float cy = std::sqrt(std::max(0.f, 1.f - nx * nx));
+  if (cy > 1.e-5f) {
+    xf->rotY = std::asin(std::clamp(nx, -1.f, 1.f));
+    xf->rotX = std::atan2(-ny / cy, nz / cy);
+  } else {
+    xf->rotY = nx >= 0.f ? 1.5707963f : -1.5707963f;
+    xf->rotX = 0.f;
+  }
+}
+
+[[nodiscard]] inline float CadBlockRotDegToRad(float deg) { return deg * 0.01745329252f; }
+
 /// Apply a block INSERT transform to a solid. Refuses non-uniform or non-positive scale because
 /// `brep::Scale` is uniform-only (REQ-332 / issue #475 increment 2).
 [[nodiscard]] inline bool CadBlockTransformSolid(const brep::Solid& s, const CadBlockXform& xf, brep::Solid* out) {
@@ -1005,6 +1027,10 @@ inline void CadBlockParamSet(CadBlockRef* r, std::string name, float value) {
 }
 
 [[nodiscard]] inline float CadBlockUnitsScale(std::string_view fromUnits, std::string_view toUnits) {
+  // "unitless" means the geometry is already in the drawing's model-unit system (ACIS `.sat`
+  // imports, issue #473/#475) — do not infer inches and apply a feet conversion.
+  if (fromUnits.empty() || CadBlockEqCi(fromUnits, "unitless"))
+    return 1.f;
   auto u = [](std::string_view s) {
     if (CadBlockEqCi(s, "inches") || CadBlockEqCi(s, "in") || CadBlockEqCi(s, "inch"))
       return 1.f;
