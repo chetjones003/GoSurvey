@@ -1,4 +1,6 @@
 #include "util/cadblock.hpp"
+#include "util/brep.hpp"
+#include "util/ucs.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -189,4 +191,52 @@ TEST_CASE("annotation overlay is active for a drawing that only has block INSERT
   CHECK_FALSE(CadNeedsAnnotationOverlay(0, 0, 0, false, false));
   CHECK(CadNeedsAnnotationOverlay(0, 0, 1, false, false));
   CHECK(CadNeedsAnnotationOverlay(1, 0, 0, false, false));
+}
+
+TEST_CASE("CadBlockCollectWorldSolids applies INSERT transform to block solids", "[issue475][block][solid]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 2.0, 2.0, 4.0, &box, &why));
+
+  std::vector<CadBlockDefinition> defs(1);
+  defs[0].name = "FLANGE";
+  defs[0].content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+
+  CadBlockRef r;
+  r.defName = "FLANGE";
+  r.xf.x = 10.f;
+  r.xf.y = 20.f;
+  r.xf.z = 5.f;
+
+  std::vector<CadBlockWorldSolid> ws;
+  CadBlockCollectWorldSolids(defs, r, EntityAttributes{}, &ws);
+  REQUIRE(ws.size() == 1);
+  REQUIRE(ws[0].solid);
+  const brep::Bounds bb = brep::ComputeBounds(*ws[0].solid);
+  REQUIRE(bb.valid);
+  CHECK(bb.mn.z == Catch::Approx(5.0).margin(0.05));
+  CHECK(bb.mx.z == Catch::Approx(9.0).margin(0.05));
+  CHECK(bb.mn.x == Catch::Approx(9.0).margin(0.05));
+  CHECK(bb.mx.x == Catch::Approx(11.0).margin(0.05));
+}
+
+TEST_CASE("CadBlockCollectWorldSolids refuses non-uniform scale on solids", "[issue475][block][solid]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 1.0, 1.0, 1.0, &box, &why));
+
+  std::vector<CadBlockDefinition> defs(1);
+  defs[0].name = "SOL";
+  defs[0].content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+
+  CadBlockRef r;
+  r.defName = "SOL";
+  r.xf.sx = 2.f;
+  r.xf.sy = 1.f;
+
+  std::vector<CadBlockWorldSolid> ws;
+  CadBlockCollectWorldSolids(defs, r, EntityAttributes{}, &ws);
+  CHECK(ws.empty());
 }

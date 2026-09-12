@@ -3,6 +3,7 @@
 #include "CadRubberPreview.hpp"
 #include "HeadlessFileDialogs.hpp"
 #include "util/brep.hpp"
+#include "util/ucs.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -702,5 +703,30 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
     CHECK(s4.cadBlockRefs[0].xf.y == Catch::Approx(0.f).margin(1e-4));
     CHECK(s4.cadBlockRefs[0].xf.z == Catch::Approx(3.f).margin(1e-4));
   }
+}
+
+TEST_CASE("INSERT explode copies block solid into cadSolids", "[issue475][block][solid][explode]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 1.0, 1.0, 2.0, &box, &why));
+
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "SOLIDBLK";
+  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  st.blockDefs.push_back(def);
+
+  CadBlockXform xf;
+  xf.x = 3.f;
+  xf.y = 4.f;
+  xf.z = 5.f;
+  std::vector<std::string> log;
+  REQUIRE(CadBlockPlaceInsert(st, "SOLIDBLK", xf, true, log));
+  CHECK(st.cadBlockRefs.empty());
+  REQUIRE(st.cadSolids.size() == 1);
+  const brep::Bounds bb = brep::ComputeBounds(*st.cadSolids[0]);
+  REQUIRE(bb.valid);
+  CHECK(bb.mn.z == Catch::Approx(5.0).margin(0.05));
 }
 

@@ -2641,6 +2641,11 @@ struct AppCommandState {
   /// frame; `BENCH SOLID` takes a baseline at the first timed frame and this must not grow during a
   /// scripted orbit.
   std::uint64_t solidDisplayRegenCount = 0;
+  /// Transformed B-rep solids from model-space block references (issue #475 increment 2). Derived
+  /// display data — not snapshotted on undo, like \ref solidDisplayCache.
+  std::vector<CadSolidPtr> blockRefWorldSolids;
+  std::vector<EntityAttributes> blockRefWorldSolidAttrs;
+  std::uint64_t blockRefWorldSolidsSig = 0;
 
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
