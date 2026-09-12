@@ -173,6 +173,13 @@ struct CadBlockWorldPoint {
   float x = 0.f, y = 0.f, z = 0.f;
 };
 
+/// A B-rep solid from a placed block reference, transformed into world/storage coordinates (issue #475
+/// increment 2). The definition's payload is never mutated — this is a linked, instanced view.
+struct CadBlockWorldSolid {
+  CadSolidPtr solid;
+  EntityAttributes attr;
+};
+
 [[nodiscard]] inline bool CadBlockEqCi(std::string_view a, std::string_view b) {
   if (a.size() != b.size())
     return false;
@@ -716,6 +723,98 @@ inline void CadBlockCollectWorldAnnotations(const std::vector<CadBlockDefinition
   }
 }
 
+[[nodiscard]] inline bool CadBlockXformScaleIsUniform(const CadBlockXform& xf, float tol = 1.e-5f) {
+  return std::fabs(xf.sx - xf.sy) <= tol && std::fabs(xf.sx - xf.sz) <= tol && std::fabs(xf.sy - xf.sz) <= tol;
+}
+
+/// Apply a block INSERT transform to a solid. Refuses non-uniform or non-positive scale because
+/// `brep::Scale` is uniform-only (REQ-332 / issue #475 increment 2).
+[[nodiscard]] inline bool CadBlockTransformSolid(const brep::Solid& s, const CadBlockXform& xf, brep::Solid* out) {
+  assert(out != nullptr);
+  if (!CadBlockXformScaleIsUniform(xf))
+    return false;
+  const double sc = static_cast<double>(xf.sx);
+  if (!(sc > 0.0) || !std::isfinite(sc))
+    return false;
+
+  brep::Solid work = s;
+  brep::Problem why = brep::Problem::Ok;
+  if (std::fabs(sc - 1.0) > 1.e-10) {
+    brep::Solid scaled;
+    if (!brep::Scale(work, ray3d::Vec3{0.0, 0.0, 0.0}, sc, &scaled, &why))
+      return false;
+    work = std::move(scaled);
+  }
+
+  const auto rotAbout = [&](const ray3d::Vec3& axis, float angRad) -> bool {
+    if (std::fabs(angRad) <= 1.e-8f)
+      return true;
+    brep::Solid rotated;
+    if (!brep::Rotate(work, ray3d::Vec3{0.0, 0.0, 0.0}, axis, static_cast<double>(angRad), &rotated, &why))
+      return false;
+    work = std::move(rotated);
+    return true;
+  };
+  if (!rotAbout(ray3d::Vec3{0.0, 0.0, 1.0}, xf.rotZ))
+    return false;
+  if (!rotAbout(ray3d::Vec3{0.0, 1.0, 0.0}, xf.rotY))
+    return false;
+  if (!rotAbout(ray3d::Vec3{1.0, 0.0, 0.0}, xf.rotX))
+    return false;
+
+  *out = brep::Translate(work, ray3d::Vec3{static_cast<double>(xf.x), static_cast<double>(xf.y),
+                                             static_cast<double>(xf.z)});
+  return true;
+}
+
+inline void CadBlockCollectWorldSolids(const std::vector<CadBlockDefinition>& defs, const CadBlockRef& rootRef,
+                                       const EntityAttributes& insertAttr, std::vector<CadBlockWorldSolid>* out) {
+  assert(out != nullptr);
+  const int root = CadBlockFindDef(defs, rootRef.defName);
+  if (root < 0)
+    return;
+  std::array<CadBlockWalkFrame, kCadBlockMaxNest> stack{};
+  int n = 0;
+  stack[static_cast<size_t>(n++)] = CadBlockWalkFrame{root, rootRef.xf, rootRef.visState, &rootRef};
+  int steps = 0;
+  while (n > 0 && steps < kCadBlockMaxWalk) {
+    ++steps;
+    const CadBlockWalkFrame fr = stack[static_cast<size_t>(--n)];
+    if (fr.defIndex < 0)
+      continue;
+    const CadBlockDefinition& def = defs[static_cast<size_t>(fr.defIndex)];
+    const CadBlockContent& c = def.content;
+    for (size_t si = 0; si < c.solids.size(); ++si) {
+      const CadSolidPtr& src = c.solids[si];
+      if (!src)
+        continue;
+      brep::Solid world;
+      if (!CadBlockTransformSolid(*src, fr.xf, &world))
+        continue;
+      EntityAttributes pa{};
+      if (si < c.solidAttrs.size())
+        pa = c.solidAttrs[si];
+      CadBlockWorldSolid ws;
+      ws.solid = std::make_shared<const brep::Solid>(std::move(world));
+      ws.attr = CadBlockResolveAttr(pa, insertAttr);
+      out->push_back(std::move(ws));
+    }
+    for (const CadBlockNested& child : c.nested) {
+      if (n >= kCadBlockMaxNest)
+        break;
+      const int ci = CadBlockFindDef(defs, child.defName);
+      if (ci < 0)
+        continue;
+      CadBlockWalkFrame nf;
+      nf.defIndex = ci;
+      nf.xf = CadBlockCompose(fr.xf, child.xf);
+      nf.vis = child.visState.empty() ? fr.vis : child.visState;
+      nf.ref = nullptr;
+      stack[static_cast<size_t>(n++)] = nf;
+    }
+  }
+}
+
 inline void CadBlockCollectSnapPoints(const std::vector<CadBlockDefinition>& defs, const CadBlockRef& rootRef,
                                       std::vector<CadBlockWorldPoint>* out) {
   assert(out != nullptr);
@@ -759,6 +858,19 @@ inline void CadBlockWorldAabb(const std::vector<CadBlockDefinition>& defs, const
       *mnY = std::min(*mnY, a.boxMinY);
       *mxY = std::max(*mxY, a.boxMaxY);
     }
+  }
+  std::vector<CadBlockWorldSolid> solids;
+  CadBlockCollectWorldSolids(defs, ref, dummy, &solids);
+  for (const CadBlockWorldSolid& ws : solids) {
+    if (!ws.solid)
+      continue;
+    const brep::Bounds bb = brep::ComputeBounds(*ws.solid);
+    if (!bb.valid)
+      continue;
+    *mnX = std::min(*mnX, static_cast<float>(bb.mn.x));
+    *mxX = std::max(*mxX, static_cast<float>(bb.mx.x));
+    *mnY = std::min(*mnY, static_cast<float>(bb.mn.y));
+    *mxY = std::max(*mxY, static_cast<float>(bb.mx.y));
   }
 }
 

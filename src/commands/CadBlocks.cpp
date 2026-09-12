@@ -555,6 +555,16 @@ void ExplodeRef(AppCommandState& st, const CadBlockRef& ref, const EntityAttribu
     a.id = 0;
     st.cadAnnotationAttrs.push_back(std::move(a));
   }
+  std::vector<CadBlockWorldSolid> solids;
+  CadBlockCollectWorldSolids(st.blockDefs, ref, insertAttr, &solids);
+  for (const CadBlockWorldSolid& ws : solids) {
+    if (!ws.solid)
+      continue;
+    st.cadSolids.push_back(ws.solid);
+    EntityAttributes a = ws.attr;
+    a.id = 0;
+    st.cadSolidAttrs.push_back(std::move(a));
+  }
 }
 
 bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
@@ -595,14 +605,9 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
       st.cadBlockRefAttrs.pop_back();
     }
   }
-  // A block that carries a B-rep solid (a `.sat` import) has no path through the block-reference
-  // renderer for that solid, and INSERT is a 2D command (no Z pick) so it cannot place one in a 3D
-  // scene anyway. Such a block is imported straight into the drawing by BLOCKIMPORT instead
-  // (issue #473); the reference placed above still carries any 2D content it also has.
-  if (!def.content.solids.empty())
+  if (!def.content.solids.empty() && !CadBlockXformScaleIsUniform(r.xf))
     log.push_back("INSERT — \"" + def.name +
-                  "\" carries a 3D solid, which INSERT cannot place; use the solid BLOCKIMPORT "
-                  "dropped in the drawing and MOVE it into position.");
+                  "\" carries a 3D solid; non-uniform scale is not supported for solid blocks.");
   NoteRecent(st, r.defName);
   EnsureEntityIds(st);
   BumpCadGpuCache(st);

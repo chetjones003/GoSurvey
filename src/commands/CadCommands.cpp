@@ -20305,6 +20305,24 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     consider(sb.mx.x, sb.mx.y);
   }
 
+  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+    if (EntityHiddenInViewport(vpFilter, st.cadBlockRefAttrs, bi))
+      continue;
+    std::vector<CadBlockWorldSolid> ws;
+    CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[bi],
+                               bi < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[bi] : EntityAttributes{},
+                               &ws);
+    for (const CadBlockWorldSolid& w : ws) {
+      if (!w.solid)
+        continue;
+      const brep::Bounds sb = brep::ComputeBounds(*w.solid);
+      if (!sb.valid)
+        continue;
+      consider(sb.mn.x, sb.mn.y);
+      consider(sb.mx.x, sb.mx.y);
+    }
+  }
+
   // TIN surfaces (REQ-068: "surfaces are included in zoom-extents and in the drawing's bounding
   // box"). Their bounds, not their vertices, for the same reason meshes use theirs above — a single
   // surface can hold 200k triangles.
@@ -23201,6 +23219,9 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadSolidAttrs.clear();
   st.solidDisplayCache.clear();
   st.solidDisplayGeometry.solids.clear();
+  st.blockRefWorldSolids.clear();
+  st.blockRefWorldSolidAttrs.clear();
+  st.blockRefWorldSolidsSig = 0;
   st.cadTables.clear();
   st.cadTableAttrs.clear();
   st.blockDefs.clear();
@@ -28207,6 +28228,60 @@ bool SolidVisible(const AppCommandState& st, size_t solidIndex) {
   return !(lr && (!lr->on || lr->frozen));
 }
 
+static bool BlockRefWorldSolidVisible(const AppCommandState& st, size_t solidIndex) {
+  if (solidIndex >= st.blockRefWorldSolids.size())
+    return false;
+  if (!st.blockRefWorldSolids[solidIndex])
+    return false;
+  if (solidIndex >= st.blockRefWorldSolidAttrs.size())
+    return true;
+  const EntityAttributes& a = st.blockRefWorldSolidAttrs[solidIndex];
+  if (CadEntityIdHidden(&st.hiddenEntityIds, a.id))
+    return false;
+  const CadLayerRow* lr = FindDrawingLayerRowCi(st, a.layer);
+  return !(lr && (!lr->on || lr->frozen));
+}
+
+static std::uint64_t BlockRefWorldSolidsSig(const AppCommandState& st) {
+  std::uint64_t sig = 1469598103934665603ull;
+  const auto mix = [&sig](std::uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
+  mix(st.cadBlockRefs.size());
+  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+    const CadBlockRef& r = st.cadBlockRefs[bi];
+    for (float v : {r.xf.x, r.xf.y, r.xf.z, r.xf.sx, r.xf.sy, r.xf.sz, r.xf.rotX, r.xf.rotY, r.xf.rotZ}) {
+      std::uint32_t bits = 0;
+      std::memcpy(&bits, &v, sizeof(bits));
+      mix(bits);
+    }
+    for (unsigned char c : r.defName)
+      mix(c);
+  }
+  for (const CadBlockDefinition& d : st.blockDefs)
+    mix(d.content.solids.size());
+  return sig;
+}
+
+static void RebuildBlockRefWorldSolids(AppCommandState& st) {
+  const std::uint64_t sig = BlockRefWorldSolidsSig(st);
+  if (sig == st.blockRefWorldSolidsSig)
+    return;
+  st.blockRefWorldSolidsSig = sig;
+  st.blockRefWorldSolids.clear();
+  st.blockRefWorldSolidAttrs.clear();
+  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+    const EntityAttributes insertAttr =
+        bi < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[bi] : EntityAttributes{};
+    std::vector<CadBlockWorldSolid> ws;
+    CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[bi], insertAttr, &ws);
+    for (CadBlockWorldSolid& w : ws) {
+      if (!w.solid)
+        continue;
+      st.blockRefWorldSolids.push_back(std::move(w.solid));
+      st.blockRefWorldSolidAttrs.push_back(std::move(w.attr));
+    }
+  }
+}
+
 namespace {
 
 /// The default colour a solid draws in when nothing overrides it — a mid grey that reads as a
@@ -28273,12 +28348,14 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
                                             [](const CadSolidTessellation& e) { return e.key.expired(); }),
                              st.solidDisplayCache.end());
 
+  RebuildBlockRefWorldSolids(st);
+
   const double tol = kSolidChordToleranceFt;
   const int isolines = std::clamp(st.viewportSolidIsolines, 0, kSolidMaxIsolines);
 
-  for (const CadSolidPtr& sp : st.cadSolids) {
+  auto tessellateSolidPtr = [&](const CadSolidPtr& sp) {
     if (!sp)
-      continue;
+      return;
     auto it = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
                            [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
     // The staleness key is (solid, tolerance) and nothing else. That is #120's "do not regenerate a
@@ -28287,7 +28364,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // is before any allocation — a `clear()` above it would still cost the frame it was written to
     // save (the §11 invariant 7 lesson the surface cache already learned).
     if (it != st.solidDisplayCache.end() && it->chordTolerance == tol && it->isolineCount == isolines)
-      continue;
+      return;
 
     if (it == st.solidDisplayCache.end()) {
       st.solidDisplayCache.push_back(CadSolidTessellation{});
@@ -28319,7 +28396,12 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // A solid that fails to tessellate leaves EMPTY buffers rather than stale ones. It cannot
     // normally happen — nothing stores a solid that does not validate (REQ-201) — and drawing the
     // previous solid's triangles under this one's identity would be far worse than drawing nothing.
-  }
+  };
+
+  for (const CadSolidPtr& sp : st.cadSolids)
+    tessellateSolidPtr(sp);
+  for (const CadSolidPtr& sp : st.blockRefWorldSolids)
+    tessellateSolidPtr(sp);
 
   // ----- Assembly: coalesce visible solids into a handful of draw batches (GitHub issue #194) -----
   //
@@ -28355,6 +28437,34 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // create an entity attribute — with a fresh id — from a display refresh, which is the last place
     // that should be minting them.
     const EntityAttributes& attr = i < st.cadSolidAttrs.size() ? st.cadSolidAttrs[i] : kDefaultSolidAttrs;
+    const CadLayerRow* lr = FindDrawingLayerRowCi(st, attr.layer);
+    VisibleSolid vs;
+    vs.tess = &*it;
+    ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
+    vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
+    visible.push_back(vs);
+    mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
+    mix(it->triVerts.size());
+    mix(it->edgeVerts.size());
+    for (float c : vs.rgba) {
+      std::uint32_t bits;
+      std::memcpy(&bits, &c, sizeof(bits));
+      mix(bits);
+    }
+    std::uint32_t lwBits;
+    std::memcpy(&lwBits, &vs.lineweightMm, sizeof(lwBits));
+    mix(lwBits);
+  }
+  for (size_t i = 0; i < st.blockRefWorldSolids.size(); ++i) {
+    if (!BlockRefWorldSolidVisible(st, i))
+      continue;
+    const CadSolidPtr& sp = st.blockRefWorldSolids[i];
+    const auto it = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
+                                 [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+    if (it == st.solidDisplayCache.end() || it->empty())
+      continue;
+    const EntityAttributes& attr =
+        i < st.blockRefWorldSolidAttrs.size() ? st.blockRefWorldSolidAttrs[i] : kDefaultSolidAttrs;
     const CadLayerRow* lr = FindDrawingLayerRowCi(st, attr.layer);
     VisibleSolid vs;
     vs.tess = &*it;
