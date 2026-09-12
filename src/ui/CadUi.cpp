@@ -14375,6 +14375,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     case ViewportClickRoute::InsertBlockPick:
       SubmitInsertBlockPick(cmd, static_cast<float>(commitX), static_cast<float>(commitY), static_cast<float>(commitZ), log);
       break;
+    case ViewportClickRoute::InsertBlockAlignFacePick: {
+      solidpick::Tolerance tol;
+      tol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
+      tol.edge = tol.vertex;
+      // Face pick always needs a true 3D ray through the cursor — the plan-view work-plane
+      // intersection alone cannot hit a vertical pipe wall (issue #475 inc3).
+      const ray3d::Ray alignRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+      SubmitInsertBlockAlignFacePick(cmd, alignRay, tol, log);
+      BumpCadGpuCache(cmd);
+      break;
+    }
     case ViewportClickRoute::HatchPick: {
       // HATCH (REQ-043): trace the region under the click and fill it; the command stays active on a miss
       // so the user can click another spot (REQ-201 — nothing placed when no closed boundary is found).

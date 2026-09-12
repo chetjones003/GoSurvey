@@ -26,6 +26,8 @@ void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) 
       hint = "INSERT — click to set scale (ESC cancels).";
     else if (cmd.insertBlockPhase == Ph::WaitRotation)
       hint = "Specify rotation angle — type degrees (matchline default 90) or click:";
+    else if (cmd.insertBlockPhase == Ph::WaitAlignFace)
+      hint = "INSERT — pick a flat face to align the fitting (ESC cancels).";
     if (cmd.insertBlockAttrDialogOpen) {
       const int di = CadBlockFindDef(cmd.blockDefs, cmd.insertBlockName);
       ImGui::OpenPopup("Edit Attributes");
@@ -165,11 +167,27 @@ void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::EndDisabled();
 
   ImGui::Spacing();
+  ImGui::TextUnformatted("Orientation");
+  if (ImGui::Checkbox("Align to face##InsAlign", &cmd.insertBlockSpecifyAlignFace) &&
+      cmd.insertBlockSpecifyAlignFace)
+    cmd.insertBlockSpecifyRot = false;
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(
+        "After the insertion point, pick a flat solid face to orient the fitting. "
+        "Turns off on-screen rotation — use the Angle field for plan rotation if needed.");
+
+  ImGui::Spacing();
   ImGui::TextUnformatted("Rotation");
   ImGui::Checkbox("Specify On-screen##InsRot", &cmd.insertBlockSpecifyRot);
-  ImGui::BeginDisabled(cmd.insertBlockSpecifyRot);
-  ImGui::SetNextItemWidth(160.f);
+  ImGui::BeginDisabled(cmd.insertBlockSpecifyRot || cmd.insertBlockSpecifyAlignFace);
+  ImGui::SetNextItemWidth(90.f);
   ImGui::InputText("Angle##InsAng", cmd.insertBlockAngleBuf, sizeof(cmd.insertBlockAngleBuf));
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90.f);
+  ImGui::InputText("X##InsRotX", cmd.insertBlockRotXBuf, sizeof(cmd.insertBlockRotXBuf));
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(90.f);
+  ImGui::InputText("Y##InsRotY", cmd.insertBlockRotYBuf, sizeof(cmd.insertBlockRotYBuf));
   ImGui::EndDisabled();
 
   ImGui::Spacing();

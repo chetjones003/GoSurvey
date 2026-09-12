@@ -1,6 +1,8 @@
 #pragma once
 
 #include "util/cadblock.hpp"
+#include "util/ray3d.hpp"
+#include "util/solidpick.hpp"
 
 #include <istream>
 #include <string>
@@ -43,6 +45,12 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
 /// when no definition is selected or no on-screen pick is in progress.
 bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float curY, CadBlockXform* out);
 bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float curY, float curZ, CadBlockXform* out);
+/// Wireframe ghost for INSERT on-screen picks: 2D linework + transformed B-rep edges (issue #475).
+void AppendInsertBlockGhostRubber(const AppCommandState& st, const CadBlockXform& xf,
+                                  std::vector<float>& rubberLines);
+/// Face pick during WaitAlignFace — sets rotX/rotY from the face outward normal (planar faces only).
+bool SubmitInsertBlockAlignFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
+                                    std::vector<std::string>& log);
 /// OK on the Insert dialog: place now, or start on-screen point/scale/rotation picks.
 void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& log);
 void CadBlocksCommitInsertAttrDialog(AppCommandState& st, std::vector<std::string>& log);

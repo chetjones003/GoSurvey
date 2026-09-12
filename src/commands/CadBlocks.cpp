@@ -1,6 +1,9 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
+#include "CadRubberPreview.hpp"
 #include "StringUtil.hpp"
+#include "util/cadsolid.hpp"
+#include "util/solidpick.hpp"
 #include "GsIo.hpp"
 #include "DxfIo.hpp"
 #include "DwgIo.hpp"
@@ -26,16 +29,19 @@ namespace {
 /// inserts the definition exactly as authored.
 float InsertRotZFromCwNorthDeg(float deg) { return -deg * 0.01745329252f; }
 
-/// Distance from the committed insertion point to \p wx,\p wy after ORTHO, used for the live
-/// on-screen scale pick. Shared by the commit path and the preview ghost so they cannot drift.
-float InsertLiveScaleDist(const AppCommandState& st, float wx, float wy) {
+/// Distance from the committed insertion point to \p wx,\p wy,\p wz after ORTHO, used for the live
+/// on-screen scale pick. Uses true 3D distance so a solid fitting scaled along a pipe axis matches
+/// the cursor (issue #475 increment 3).
+float InsertLiveScaleDist(const AppCommandState& st, float wx, float wy, float wz) {
   float lx = wx;
   float ly = wy;
+  float lz = wz;
   ApplyOrthoConstrainFromAnchor(st, st.insertBlockX, st.insertBlockY, &lx, &ly, st.orthoMode, st.insertBlockZ,
-                                st.uiCursorWorldZ);
+                                st.uiCursorWorldZ, &lz);
   const float dx = lx - st.insertBlockX;
   const float dy = ly - st.insertBlockY;
-  return std::sqrt(dx * dx + dy * dy);
+  const float dz = lz - st.insertBlockZ;
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
 /// Bearing from the committed insertion point to \p wx,\p wy in the clockwise-from-north
@@ -315,7 +321,9 @@ int MergeBlockDef(AppCommandState& dest, CadBlockDefinition def, std::vector<std
     const bool upgradeMatchline =
         CadBlockNameIsMatchline(def.name) &&
         (have.attrDefs.size() < def.attrDefs.size() || have.content.texts.size() < def.content.texts.size());
-    if (!upgradeMatchline) {
+    const bool upgradeSatSolid = !def.content.solids.empty() &&
+                                 (have.content.solids.empty() || have.units != def.units);
+    if (!upgradeMatchline && !upgradeSatSolid) {
       log.push_back("BLOCKIMPORT — skipped duplicate \"" + def.name + "\".");
       return 0;
     }
@@ -388,7 +396,11 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   if (DrawingHasCaptureableGeometry(scratch)) {
     CadBlockDefinition wrap;
     wrap.name = FileStemUtf8(pathUtf8);
-    wrap.units = CadDrawingInsUnitsName(scratch.drawingInsUnits);
+    // A standalone `.sat` is re-based into the current drawing's model units (feet for a feet
+    // drawing). Tag the block the same way so INSERT does not apply an inch→foot rescale (issue
+    // #475). DXF/DWG keep the imported file's $INSUNITS when present.
+    wrap.units = (ext == ".sat") ? CadDrawingInsUnitsName(dest.drawingInsUnits)
+                                 : CadDrawingInsUnitsName(scratch.drawingInsUnits);
     wrap.attrDefs = scratch.importedDxfAttrDefs;
     CadBlockCaptureDrawing(scratch, &wrap.content);
     CadBlockBakeBasePoint(&wrap);
@@ -693,6 +705,11 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   st.insertBlockSy = 1.f;
   st.insertBlockSz = 1.f;
   st.insertBlockRotDeg = 0.f;
+  st.insertBlockRotXDeg = 0.f;
+  st.insertBlockRotYDeg = 0.f;
+  st.insertBlockRotXBuf[0] = '\0';
+  st.insertBlockRotYBuf[0] = '\0';
+  st.insertBlockSpecifyAlignFace = false;
   st.insertBlockPath[0] = '\0';
   st.insertBlockName[0] = '\0';
   if (!st.blockRecent.empty())
@@ -864,6 +881,13 @@ bool TryParseF(const std::string& s, float& out) {
   }
 }
 
+void ApplyInsertDialogRotations(const AppCommandState& st, CadBlockXform* xf) {
+  assert(xf != nullptr);
+  xf->rotX = CadBlockRotDegToRad(st.insertBlockRotXDeg);
+  xf->rotY = CadBlockRotDegToRad(st.insertBlockRotYDeg);
+  xf->rotZ = InsertRotZFromCwNorthDeg(st.insertBlockRotDeg);
+}
+
 CadBlockXform InsertDialogXform(const AppCommandState& st) {
   CadBlockXform xf;
   xf.x = st.insertBlockX;
@@ -872,8 +896,52 @@ CadBlockXform InsertDialogXform(const AppCommandState& st) {
   xf.sx = st.insertBlockSx;
   xf.sy = st.insertBlockSy;
   xf.sz = st.insertBlockSz;
-  xf.rotZ = InsertRotZFromCwNorthDeg(st.insertBlockRotDeg);
+  ApplyInsertDialogRotations(st, &xf);
   return xf;
+}
+
+void CadBlocksAfterPlace(AppCommandState& st, std::vector<std::string>& log);
+
+void InsertAdvanceAfterPoint(AppCommandState& st, std::vector<std::string>& log) {
+  using Ph = AppCommandState::InsertBlockPhase;
+  if (st.insertBlockSpecifyAlignFace) {
+    st.insertBlockPhase = Ph::WaitAlignFace;
+    log.push_back("INSERT — pick a flat face to align the fitting (ESC cancels).");
+    return;
+  }
+  if (st.insertBlockSpecifyScale) {
+    st.insertBlockPhase = Ph::WaitScale;
+    log.push_back("INSERT — specify scale (click a point).");
+    return;
+  }
+  if (st.insertBlockSpecifyRot) {
+    st.insertBlockPhase = Ph::WaitRotation;
+    log.push_back("INSERT — specify rotation angle <0d0'0\"> (type degrees or click).");
+    return;
+  }
+  if (CadBlockPlaceInsert(st, st.insertBlockName, InsertDialogXform(st), st.insertBlockExplode, log))
+    CadBlocksAfterPlace(st, log);
+}
+
+void InsertAdvanceAfterScaleOrRot(AppCommandState& st, std::vector<std::string>& log) {
+  using Ph = AppCommandState::InsertBlockPhase;
+  if (st.insertBlockSpecifyRot) {
+    st.insertBlockPhase = Ph::WaitRotation;
+    log.push_back("INSERT — specify rotation angle <0d0'0\"> (type degrees or click).");
+    return;
+  }
+  if (CadBlockPlaceInsert(st, st.insertBlockName, InsertDialogXform(st), st.insertBlockExplode, log))
+    CadBlocksAfterPlace(st, log);
+}
+
+void InsertAdvanceAfterAlignFace(AppCommandState& st, std::vector<std::string>& log) {
+  using Ph = AppCommandState::InsertBlockPhase;
+  if (st.insertBlockSpecifyScale) {
+    st.insertBlockPhase = Ph::WaitScale;
+    log.push_back("INSERT — specify scale (click a point).");
+    return;
+  }
+  InsertAdvanceAfterScaleOrRot(st, log);
 }
 
 void FinishInsertCommand(AppCommandState& st) {
@@ -945,6 +1013,124 @@ void CadBlocksAfterPlace(AppCommandState& st, std::vector<std::string>& log) {
 
 } // namespace
 
+namespace {
+
+bool PickSolidFaceAcrossDrawing(const AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
+                                SelectedSubObject* out, solidpick::Pick* outPick) {
+  if (!out)
+    return false;
+  bool any = false;
+  double bestT = 0.0;
+  SelectedSubObject best{};
+  solidpick::Pick bestPick{};
+  const auto trySolid = [&](const CadSolidPtr& sp, int solidIndex) {
+    if (!sp)
+      return;
+    const auto ce = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
+                                 [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+    if (ce == st.solidDisplayCache.end() || ce->empty())
+      return;
+    solidpick::Pick p;
+    if (!solidpick::PickSubObject(*sp, ce->triVerts, ce->triFaceIds, ray, tol, &p))
+      return;
+    if (p.kind != solidpick::Kind::Face)
+      return;
+    if (any && !(p.rayT < bestT))
+      return;
+    any = true;
+    bestT = p.rayT;
+    bestPick = p;
+    best.solidIndex = solidIndex;
+    best.kind = p.kind;
+    best.index = p.index;
+    best.owner = sp;
+  };
+  for (size_t i = 0; i < st.cadSolids.size(); ++i)
+    trySolid(st.cadSolids[i], static_cast<int>(i));
+  for (size_t i = 0; i < st.blockRefWorldSolids.size(); ++i)
+    trySolid(st.blockRefWorldSolids[i], static_cast<int>(i));
+  if (!any)
+    return false;
+  *out = best;
+  if (outPick)
+    *outPick = bestPick;
+  return true;
+}
+
+} // namespace
+
+void AppendInsertBlockGhostRubber(const AppCommandState& st, const CadBlockXform& xf,
+                                  std::vector<float>& rubberLines) {
+  CadBlockRef ghost;
+  ghost.defName = st.insertBlockName;
+  ghost.xf = xf;
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(st.blockDefs, ghost, EntityAttributes{}, &segs);
+  for (const CadBlockWorldSeg& s : segs)
+    PushRubberSegViewRel(rubberLines, s.x0, s.y0, s.x1, s.y1, 0., 0., s.z0, s.z1);
+
+  std::vector<CadBlockWorldSolid> ws;
+  CadBlockCollectWorldSolids(st.blockDefs, ghost, EntityAttributes{}, &ws);
+  brep::Problem why = brep::Problem::Ok;
+  for (const CadBlockWorldSolid& w : ws) {
+    if (!w.solid)
+      continue;
+    std::vector<double> edges;
+    if (!brep::TessellateEdges(*w.solid, kSolidChordToleranceFt, &edges, &why))
+      continue;
+    for (std::size_t i = 0; i + 5 < edges.size(); i += 6)
+      PushRubberSegViewRel(rubberLines, edges[i], edges[i + 1], edges[i + 3], edges[i + 4], 0., 0.,
+                           static_cast<float>(edges[i + 2]), static_cast<float>(edges[i + 5]));
+  }
+}
+
+bool SubmitInsertBlockAlignFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
+                                    std::vector<std::string>& log) {
+  using Ph = AppCommandState::InsertBlockPhase;
+  if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitAlignFace)
+    return false;
+
+  RefreshSolidDisplayGeometry(st);
+
+  SelectedSubObject sub;
+  solidpick::Pick pick;
+  if (!PickSolidFaceAcrossDrawing(st, ray, tol, &sub, &pick)) {
+    log.push_back("INSERT — no flat solid face under the cursor.");
+    return false;
+  }
+  const CadSolidPtr sp = sub.owner.lock();
+  if (!sp || sub.index < 0 || static_cast<size_t>(sub.index) >= sp->faces.size()) {
+    log.push_back("INSERT — that face is no longer there.");
+    return false;
+  }
+  const brep::Face& f = sp->faces[static_cast<size_t>(sub.index)];
+  if (f.surface.kind != brep::SurfaceKind::Plane) {
+    log.push_back("INSERT — pick a flat face to align the fitting.");
+    return false;
+  }
+  ray3d::Vec3 n = f.surface.frame.zAxis;
+  if (f.surface.inward)
+    n = ray3d::Scale(n, -1.0);
+
+  CadBlockXform orient;
+  orient.x = st.insertBlockX;
+  orient.y = st.insertBlockY;
+  orient.z = st.insertBlockZ;
+  orient.sx = st.insertBlockSx;
+  orient.sy = st.insertBlockSy;
+  orient.sz = st.insertBlockSz;
+  orient.rotZ = -st.insertBlockRotDeg * 0.01745329252f;
+  CadBlockSetLocalZAxis(&orient, static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z));
+  st.insertBlockRotXDeg = orient.rotX * 57.2957795f;
+  st.insertBlockRotYDeg = orient.rotY * 57.2957795f;
+  std::snprintf(st.insertBlockRotXBuf, sizeof(st.insertBlockRotXBuf), "%.4f", static_cast<double>(st.insertBlockRotXDeg));
+  std::snprintf(st.insertBlockRotYBuf, sizeof(st.insertBlockRotYBuf), "%.4f", static_cast<double>(st.insertBlockRotYDeg));
+
+  log.push_back("INSERT — face aligned.");
+  InsertAdvanceAfterAlignFace(st, log);
+  return true;
+}
+
 void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& log) {
   if (st.insertBlockName[0] == '\0') {
     log.push_back("INSERT — choose a block name.");
@@ -961,10 +1147,32 @@ void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& 
   }
   if (st.insertBlockAngleBuf[0] != '\0')
     st.insertBlockRotDeg = ang;
+  if (st.insertBlockRotXBuf[0] != '\0') {
+    float rx = 0.f;
+    if (!TryParseF(st.insertBlockRotXBuf, rx)) {
+      log.push_back("INSERT — could not parse X rotation angle.");
+      return;
+    }
+    st.insertBlockRotXDeg = rx;
+  }
+  if (st.insertBlockRotYBuf[0] != '\0') {
+    float ry = 0.f;
+    if (!TryParseF(st.insertBlockRotYBuf, ry)) {
+      log.push_back("INSERT — could not parse Y rotation angle.");
+      return;
+    }
+    st.insertBlockRotYDeg = ry;
+  }
   if (st.insertBlockSpecifyPoint) {
     st.insertBlockDialogOpen = false;
     st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
     log.push_back("INSERT — specify insertion point.");
+    return;
+  }
+  if (st.insertBlockSpecifyAlignFace) {
+    st.insertBlockDialogOpen = false;
+    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitAlignFace;
+    log.push_back("INSERT — pick a flat face to align the fitting (ESC cancels).");
     return;
   }
   if (st.insertBlockSpecifyScale) {
@@ -1044,7 +1252,7 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
   assert(out != nullptr);
   using Ph = AppCommandState::InsertBlockPhase;
   if (st.insertBlockPhase != Ph::WaitInsertPoint && st.insertBlockPhase != Ph::WaitScale &&
-      st.insertBlockPhase != Ph::WaitRotation)
+      st.insertBlockPhase != Ph::WaitRotation && st.insertBlockPhase != Ph::WaitAlignFace)
     return false;
   const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
   if (di < 0)
@@ -1065,7 +1273,7 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
   float sy = st.insertBlockSy;
   float sz = st.insertBlockSz;
   if (st.insertBlockPhase == Ph::WaitScale && st.insertBlockSpecifyScale) {
-    const float d = InsertLiveScaleDist(st, curX, curY);
+    const float d = InsertLiveScaleDist(st, curX, curY, curZ);
     if (d > 1.e-8f) {
       sx = d;
       if (st.insertBlockUniformScale) {
@@ -1086,7 +1294,9 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
   xf.sx = sx * us;
   xf.sy = sy * us;
   xf.sz = sz * us;
-  xf.rotZ = InsertRotZFromCwNorthDeg(rotDeg);
+  ApplyInsertDialogRotations(st, &xf);
+  if (st.insertBlockPhase == Ph::WaitRotation && st.insertBlockSpecifyRot)
+    xf.rotZ = InsertRotZFromCwNorthDeg(rotDeg);
   *out = xf;
   return true;
 }
@@ -1103,22 +1313,11 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
     st.insertBlockX = wx;
     st.insertBlockY = wy;
     st.insertBlockZ = wz;
-    if (st.insertBlockSpecifyScale) {
-      st.insertBlockPhase = Ph::WaitScale;
-      log.push_back("INSERT — specify scale (click a point).");
-      return;
-    }
-    if (st.insertBlockSpecifyRot) {
-      st.insertBlockPhase = Ph::WaitRotation;
-      log.push_back("INSERT — specify rotation angle <0d0'0\"> (type degrees or click).");
-      return;
-    }
-    if (CadBlockPlaceInsert(st, st.insertBlockName, InsertDialogXform(st), st.insertBlockExplode, log))
-      CadBlocksAfterPlace(st, log);
+    InsertAdvanceAfterPoint(st, log);
     return;
   }
   if (st.insertBlockPhase == Ph::WaitScale) {
-    const float dist = InsertLiveScaleDist(st, wx, wy);
+    const float dist = InsertLiveScaleDist(st, wx, wy, wz);
     if (dist < 1.e-8f) {
       log.push_back("INSERT — scale point must be away from the insertion point.");
       return;
@@ -1128,13 +1327,7 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
       st.insertBlockSy = dist;
       st.insertBlockSz = dist;
     }
-    if (st.insertBlockSpecifyRot) {
-      st.insertBlockPhase = Ph::WaitRotation;
-      log.push_back("INSERT — specify rotation angle <0d0'0\"> (type degrees or click).");
-      return;
-    }
-    if (CadBlockPlaceInsert(st, st.insertBlockName, InsertDialogXform(st), st.insertBlockExplode, log))
-      CadBlocksAfterPlace(st, log);
+    InsertAdvanceAfterScaleOrRot(st, log);
     return;
   }
   if (st.insertBlockPhase == Ph::WaitRotation) {

@@ -3874,6 +3874,7 @@ struct AppCommandState {
     WaitInsertPoint,
     WaitScale,
     WaitRotation,
+    WaitAlignFace,  ///< Pick a planar solid face to orient the fitting (issue #475 inc3)
     WaitAttributes,
   } insertBlockPhase = InsertBlockPhase::WaitDialog;
 
@@ -3888,9 +3889,14 @@ struct AppCommandState {
   float insertBlockSy = 1.f;
   float insertBlockSz = 1.f;
   float insertBlockRotDeg = 0.f;
+  float insertBlockRotXDeg = 0.f;
+  float insertBlockRotYDeg = 0.f;
+  char insertBlockRotXBuf[64]{};
+  char insertBlockRotYBuf[64]{};
   bool insertBlockSpecifyPoint = true;
   bool insertBlockSpecifyScale = false;
   bool insertBlockSpecifyRot = true;
+  bool insertBlockSpecifyAlignFace = false;
   bool insertBlockUniformScale = true;
   bool insertBlockExplode = false;
   bool insertBlockAttrDialogOpen = false;
