@@ -5,6 +5,7 @@
 
 #include "CadEntities.hpp"
 #include "cadsolid.hpp"
+#include "ray3d.hpp"
 
 #include <algorithm>
 #include <array>
@@ -105,6 +106,32 @@ struct CadBlockNested {
   std::string visState;
 };
 
+/// Pipe/fitting connection port on a block definition (issue #475 increment 5). Local point and
+/// outward unit direction in block space; nominal size is a tag only, not parametric.
+struct CadBlockConnection {
+  std::string name;
+  float x = 0.f;
+  float y = 0.f;
+  float z = 0.f;
+  float nx = 0.f;
+  float ny = 0.f;
+  float nz = 1.f;
+  std::string nominalSize;
+};
+
+/// A definition connection transformed into world/storage coordinates for a placed reference.
+struct CadBlockWorldConnection {
+  float x = 0.f;
+  float y = 0.f;
+  float z = 0.f;
+  float nx = 0.f;
+  float ny = 0.f;
+  float nz = 1.f;
+  std::string name;
+  std::string nominalSize;
+  int blockRefIndex = -1;
+};
+
 struct CadBlockContent {
   std::vector<double> lines;
   std::vector<EntityAttributes> lineAttrs;
@@ -152,6 +179,7 @@ struct CadBlockDefinition {
   std::vector<CadBlockParameter> parameters;
   std::vector<CadBlockAction> actions;
   std::vector<std::string> visibilityStates;
+  std::vector<CadBlockConnection> connections;
   std::string metadata;
 };
 
@@ -231,6 +259,137 @@ inline void CadBlockXformPoint(const CadBlockXform& xf, float lx, float ly, floa
     *wz = z + xf.z;
 }
 
+/// Rotation part of \ref CadBlockXformPoint — scale then rotZ/rotY/rotX, no translation.
+inline void CadBlockXformDirection(const CadBlockXform& xf, float lx, float ly, float lz, float* wx, float* wy,
+                                   float* wz) {
+  assert(wx != nullptr);
+  assert(wy != nullptr);
+  float x = lx * xf.sx;
+  float y = ly * xf.sy;
+  float z = lz * xf.sz;
+  if (xf.rotZ != 0.f) {
+    const float c = std::cos(xf.rotZ);
+    const float s = std::sin(xf.rotZ);
+    const float nx = x * c - y * s;
+    const float ny = x * s + y * c;
+    x = nx;
+    y = ny;
+  }
+  if (xf.rotY != 0.f) {
+    const float c = std::cos(xf.rotY);
+    const float s = std::sin(xf.rotY);
+    const float nx = x * c + z * s;
+    const float nz = -x * s + z * c;
+    x = nx;
+    z = nz;
+  }
+  if (xf.rotX != 0.f) {
+    const float c = std::cos(xf.rotX);
+    const float s = std::sin(xf.rotX);
+    const float ny = y * c - z * s;
+    const float nz = y * s + z * c;
+    y = ny;
+    z = nz;
+  }
+  *wx = x;
+  *wy = y;
+  if (wz)
+    *wz = z;
+}
+
+namespace cadblock_detail {
+
+inline void RotationFromUnitToUnit(float ax, float ay, float az, float bx, float by, float bz, CadBlockXform* xf) {
+  assert(xf != nullptr);
+  using ray3d::Cross;
+  using ray3d::Dot;
+  using ray3d::Length;
+  using ray3d::Normalize;
+  using ray3d::RotateVectorAboutAxis;
+  using ray3d::Vec3;
+  const Vec3 a = Normalize({static_cast<double>(ax), static_cast<double>(ay), static_cast<double>(az)});
+  const Vec3 b = Normalize({static_cast<double>(bx), static_cast<double>(by), static_cast<double>(bz)});
+  if (Length(a) < 0.5 || Length(b) < 0.5)
+    return;
+  Vec3 axis = Cross(a, b);
+  const double cl = Dot(a, b);
+  double angle = 0.0;
+  if (Length(axis) < 1e-12) {
+    if (cl > 0.999999) {
+      xf->rotX = 0.f;
+      xf->rotY = 0.f;
+      xf->rotZ = 0.f;
+      return;
+    }
+    angle = 3.141592653589793;
+    const Vec3 perp = std::fabs(a.x) < 0.9 ? Vec3{1.0, 0.0, 0.0} : Vec3{0.0, 1.0, 0.0};
+    axis = Normalize(Cross(a, perp));
+  } else {
+    axis = Normalize(axis);
+    angle = std::acos(std::clamp(cl, -1.0, 1.0));
+  }
+  const auto rotCol = [&](float vx, float vy, float vz, int col, double m[3][3]) {
+    const Vec3 v = RotateVectorAboutAxis({static_cast<double>(vx), static_cast<double>(vy), static_cast<double>(vz)},
+                                         axis, angle);
+    m[0][col] = v.x;
+    m[1][col] = v.y;
+    m[2][col] = v.z;
+  };
+  double m[3][3]{};
+  rotCol(1.f, 0.f, 0.f, 0, m);
+  rotCol(0.f, 1.f, 0.f, 1, m);
+  rotCol(0.f, 0.f, 1.f, 2, m);
+  const double sy = std::sqrt(m[0][0] * m[0][0] + m[1][0] * m[1][0]);
+  if (sy > 1e-6) {
+    xf->rotZ = static_cast<float>(std::atan2(m[1][0], m[0][0]));
+    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
+    xf->rotX = static_cast<float>(std::atan2(m[2][1], m[2][2]));
+  } else {
+    xf->rotZ = static_cast<float>(std::atan2(-m[0][1], m[1][1]));
+    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
+    xf->rotX = 0.f;
+  }
+}
+
+} // namespace cadblock_detail
+
+/// Orient \p xf so the source connection direction anti-aligns with the target outward normal, then
+/// translate so the source connection point coincides with the target (issue #475 increment 5).
+inline void CadBlockSnapInsertToConnection(const CadBlockConnection& src, float tgtX, float tgtY, float tgtZ,
+                                           float tgtNx, float tgtNy, float tgtNz, CadBlockXform* xf) {
+  assert(xf != nullptr);
+  float snx = src.nx;
+  float sny = src.ny;
+  float snz = src.nz;
+  const float sl = std::sqrt(snx * snx + sny * sny + snz * snz);
+  if (sl > 1.e-8f) {
+    snx /= sl;
+    sny /= sl;
+    snz /= sl;
+  }
+  float antiX = -tgtNx;
+  float antiY = -tgtNy;
+  float antiZ = -tgtNz;
+  const float tl = std::sqrt(antiX * antiX + antiY * antiY + antiZ * antiZ);
+  if (tl > 1.e-8f) {
+    antiX /= tl;
+    antiY /= tl;
+    antiZ /= tl;
+  }
+  cadblock_detail::RotationFromUnitToUnit(snx, sny, snz, antiX, antiY, antiZ, xf);
+  float wx = 0.f;
+  float wy = 0.f;
+  float wz = 0.f;
+  CadBlockXform tmp = *xf;
+  tmp.x = 0.f;
+  tmp.y = 0.f;
+  tmp.z = 0.f;
+  CadBlockXformPoint(tmp, src.x, src.y, src.z, &wx, &wy, &wz);
+  xf->x = tgtX - wx;
+  xf->y = tgtY - wy;
+  xf->z = tgtZ - wz;
+}
+
 [[nodiscard]] inline CadBlockXform CadBlockCompose(const CadBlockXform& parent, const CadBlockXform& child) {
   float wx = 0.f, wy = 0.f, wz = 0.f;
   CadBlockXformPoint(parent, child.x, child.y, child.z, &wx, &wy, &wz);
@@ -259,6 +418,38 @@ inline bool CadBlockNameIsMatchline(std::string_view name) {
       return i;
   }
   return -1;
+}
+
+[[nodiscard]] inline int CadBlockFindConnection(const CadBlockDefinition& def, std::string_view name) {
+  for (int i = 0; i < static_cast<int>(def.connections.size()); ++i) {
+    if (CadBlockEqCi(def.connections[static_cast<size_t>(i)].name, name))
+      return i;
+  }
+  return -1;
+}
+
+inline void CadBlockCollectWorldConnections(const std::vector<CadBlockDefinition>& defs, const CadBlockRef& ref,
+                                            int refIndex, std::vector<CadBlockWorldConnection>* out) {
+  assert(out != nullptr);
+  const int di = CadBlockFindDef(defs, ref.defName);
+  if (di < 0)
+    return;
+  const CadBlockDefinition& def = defs[static_cast<size_t>(di)];
+  for (const CadBlockConnection& c : def.connections) {
+    CadBlockWorldConnection wc;
+    wc.name = c.name;
+    wc.nominalSize = c.nominalSize;
+    wc.blockRefIndex = refIndex;
+    CadBlockXformPoint(ref.xf, c.x, c.y, c.z, &wc.x, &wc.y, &wc.z);
+    CadBlockXformDirection(ref.xf, c.nx, c.ny, c.nz, &wc.nx, &wc.ny, &wc.nz);
+    const float dl = std::sqrt(wc.nx * wc.nx + wc.ny * wc.ny + wc.nz * wc.nz);
+    if (dl > 1.e-8f) {
+      wc.nx /= dl;
+      wc.ny /= dl;
+      wc.nz /= dl;
+    }
+    out->push_back(std::move(wc));
+  }
 }
 
 [[nodiscard]] inline float CadBlockParamValue(const CadBlockRef& ref, const CadBlockDefinition& def,
@@ -454,6 +645,11 @@ inline void CadBlockBakeBasePoint(CadBlockDefinition* def) {
     a.localX -= def->baseX;
     a.localY -= def->baseY;
     a.localZ -= def->baseZ;
+  }
+  for (CadBlockConnection& c : def->connections) {
+    c.x -= def->baseX;
+    c.y -= def->baseY;
+    c.z -= def->baseZ;
   }
   def->baseX = 0.f;
   def->baseY = 0.f;

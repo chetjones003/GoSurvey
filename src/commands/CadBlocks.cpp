@@ -732,6 +732,8 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   st.insertBlockRotXBuf[0] = '\0';
   st.insertBlockRotYBuf[0] = '\0';
   st.insertBlockSpecifyAlignFace = false;
+  st.insertBlockSpecifyConnectorSnap = false;
+  st.insertBlockConnectorName[0] = '\0';
   st.insertBlockPath[0] = '\0';
   st.insertBlockName[0] = '\0';
   if (!st.blockRecent.empty())
@@ -924,6 +926,24 @@ CadBlockXform InsertDialogXform(const AppCommandState& st) {
 
 void CadBlocksAfterPlace(AppCommandState& st, std::vector<std::string>& log);
 
+void ApplyInsertXformToDialog(const CadBlockXform& xf, AppCommandState& st) {
+  st.insertBlockX = xf.x;
+  st.insertBlockY = xf.y;
+  st.insertBlockZ = xf.z;
+  st.insertBlockSx = xf.sx;
+  st.insertBlockSy = xf.sy;
+  st.insertBlockSz = xf.sz;
+  st.insertBlockRotXDeg = xf.rotX * 57.2957795f;
+  st.insertBlockRotYDeg = xf.rotY * 57.2957795f;
+  st.insertBlockRotDeg = -xf.rotZ * 57.2957795f;
+  std::snprintf(st.insertBlockRotXBuf, sizeof(st.insertBlockRotXBuf), "%.4f",
+                static_cast<double>(st.insertBlockRotXDeg));
+  std::snprintf(st.insertBlockRotYBuf, sizeof(st.insertBlockRotYBuf), "%.4f",
+                static_cast<double>(st.insertBlockRotYDeg));
+  std::snprintf(st.insertBlockAngleBuf, sizeof(st.insertBlockAngleBuf), "%.4f",
+                static_cast<double>(st.insertBlockRotDeg));
+}
+
 void InsertAdvanceAfterPoint(AppCommandState& st, std::vector<std::string>& log) {
   using Ph = AppCommandState::InsertBlockPhase;
   if (st.insertBlockSpecifyAlignFace) {
@@ -1081,6 +1101,135 @@ bool PickSolidFaceAcrossDrawing(const AppCommandState& st, const ray3d::Ray& ray
 
 } // namespace
 
+bool FindNearestDrawingConnector(const AppCommandState& st, float px, float py, float pz, float maxDist,
+                                 CadBlockWorldConnection* out) {
+  if (!out)
+    return false;
+  bool any = false;
+  float bestD = maxDist * maxDist;
+  CadBlockWorldConnection best{};
+  std::vector<CadBlockWorldConnection> world;
+  for (int i = 0; i < static_cast<int>(st.cadBlockRefs.size()); ++i) {
+    world.clear();
+    CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[static_cast<size_t>(i)], i, &world);
+    for (const CadBlockWorldConnection& wc : world) {
+      const float dx = wc.x - px;
+      const float dy = wc.y - py;
+      const float dz = wc.z - pz;
+      const float d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 <= bestD) {
+        bestD = d2;
+        best = wc;
+        any = true;
+      }
+    }
+  }
+  if (!any)
+    return false;
+  *out = best;
+  return true;
+}
+
+const CadBlockConnection* InsertSourceConnection(const AppCommandState& st) {
+  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+  if (di < 0)
+    return nullptr;
+  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  if (def.connections.empty())
+    return nullptr;
+  if (st.insertBlockConnectorName[0] != '\0') {
+    const int ci = CadBlockFindConnection(def, st.insertBlockConnectorName);
+    if (ci >= 0)
+      return &def.connections[static_cast<size_t>(ci)];
+    return nullptr;
+  }
+  return &def.connections.front();
+}
+
+bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
+  using Ph = AppCommandState::InsertBlockPhase;
+  if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitConnectorTarget)
+    return false;
+
+  constexpr float kSnap = 2.f;
+  CadBlockWorldConnection tgt;
+  if (!FindNearestDrawingConnector(st, wx, wy, wz, kSnap, &tgt)) {
+    log.push_back("INSERT — no connection port near that point (within 2 ft).");
+    return false;
+  }
+  const CadBlockConnection* src = InsertSourceConnection(st);
+  if (!src) {
+    log.push_back("INSERT — the block being inserted has no connection ports.");
+    return false;
+  }
+
+  CadBlockXform xf;
+  xf.sx = st.insertBlockSx;
+  xf.sy = st.insertBlockSy;
+  xf.sz = st.insertBlockSz;
+  ApplyInsertDialogRotations(st, &xf);
+  CadBlockSnapInsertToConnection(*src, tgt.x, tgt.y, tgt.z, tgt.nx, tgt.ny, tgt.nz, &xf);
+  ApplyInsertXformToDialog(xf, st);
+  log.push_back("INSERT — snapped to connection \"" + tgt.name + "\".");
+  InsertAdvanceAfterPoint(st, log);
+  return true;
+}
+
+bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
+                            std::vector<std::string>& log) {
+  if (!st.blockEditActive || !st.bconnectAwaitingFace)
+    return false;
+  if (st.bconnectNameBuf[0] == '\0') {
+    log.push_back("BCONNECT — internal error: missing connection name.");
+    st.bconnectAwaitingFace = false;
+    return false;
+  }
+
+  RefreshSolidDisplayGeometry(st);
+
+  SelectedSubObject sub;
+  solidpick::Pick pick;
+  if (!PickSolidFaceAcrossDrawing(st, ray, tol, &sub, &pick)) {
+    log.push_back("BCONNECT — no flat solid face under the cursor.");
+    return false;
+  }
+  const CadSolidPtr sp = sub.owner.lock();
+  if (!sp || sub.index < 0 || static_cast<size_t>(sub.index) >= sp->faces.size()) {
+    log.push_back("BCONNECT — that face is no longer there.");
+    return false;
+  }
+  const brep::Face& f = sp->faces[static_cast<size_t>(sub.index)];
+  if (f.surface.kind != brep::SurfaceKind::Plane) {
+    log.push_back("BCONNECT — pick a flat face for the connection port.");
+    return false;
+  }
+  const brep::Vec3 centre = brep::PlanarFaceCentroid(*sp, f);
+  ray3d::Vec3 n = f.surface.frame.zAxis;
+  if (f.surface.inward)
+    n = ray3d::Scale(n, -1.0);
+
+  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  if (di < 0)
+    return false;
+  CadBlockConnection conn;
+  conn.name = st.bconnectNameBuf;
+  conn.nominalSize = st.bconnectSizeBuf;
+  conn.x = static_cast<float>(centre.x);
+  conn.y = static_cast<float>(centre.y);
+  conn.z = static_cast<float>(centre.z);
+  conn.nx = static_cast<float>(n.x);
+  conn.ny = static_cast<float>(n.y);
+  conn.nz = static_cast<float>(n.z);
+  const std::string addedName = conn.name;
+  st.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
+  st.blockEditorDirty = true;
+  st.bconnectAwaitingFace = false;
+  st.bconnectNameBuf[0] = '\0';
+  st.bconnectSizeBuf[0] = '\0';
+  log.push_back("BCONNECT — added connection \"" + addedName + "\".");
+  return true;
+}
+
 void AppendInsertBlockGhostRubber(const AppCommandState& st, const CadBlockXform& xf,
                                   std::vector<float>& rubberLines) {
   CadBlockRef ghost;
@@ -1185,6 +1334,17 @@ void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& 
     }
     st.insertBlockRotYDeg = ry;
   }
+  if (st.insertBlockSpecifyConnectorSnap) {
+    const int cdi = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+    if (cdi < 0 || st.blockDefs[static_cast<size_t>(cdi)].connections.empty()) {
+      log.push_back("INSERT — the block has no connection ports to snap from.");
+      return;
+    }
+    st.insertBlockDialogOpen = false;
+    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+    log.push_back("INSERT — pick the target connection port to snap to.");
+    return;
+  }
   if (st.insertBlockSpecifyPoint) {
     st.insertBlockDialogOpen = false;
     st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
@@ -1274,7 +1434,8 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
   assert(out != nullptr);
   using Ph = AppCommandState::InsertBlockPhase;
   if (st.insertBlockPhase != Ph::WaitInsertPoint && st.insertBlockPhase != Ph::WaitScale &&
-      st.insertBlockPhase != Ph::WaitRotation && st.insertBlockPhase != Ph::WaitAlignFace)
+      st.insertBlockPhase != Ph::WaitRotation && st.insertBlockPhase != Ph::WaitAlignFace &&
+      st.insertBlockPhase != Ph::WaitConnectorTarget)
     return false;
   const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
   if (di < 0)
@@ -1331,6 +1492,10 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
   using Ph = AppCommandState::InsertBlockPhase;
   if (st.active != AppCommandState::Kind::InsertBlock)
     return;
+  if (st.insertBlockPhase == Ph::WaitConnectorTarget) {
+    SubmitInsertBlockConnectorPick(st, wx, wy, wz, log);
+    return;
+  }
   if (st.insertBlockPhase == Ph::WaitInsertPoint) {
     st.insertBlockX = wx;
     st.insertBlockY = wy;
@@ -1831,6 +1996,84 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     st.blockDefs[static_cast<size_t>(di)].attrDefs.push_back(std::move(d));
     st.blockEditorDirty = true;
     log.push_back("ATTDEF — tag " + f[0] + ".");
+    return true;
+  }
+
+  if (tok == "bconnect") {
+    if (st.blockEditorName.empty()) {
+      log.push_back("BCONNECT — open a block with BEDIT first.");
+      return true;
+    }
+    const std::vector<std::string> f = SplitCommaRest(args);
+    if (f.empty()) {
+      log.push_back("BCONNECT — usage: BCONNECT <name>[, <nominalSize>][, <x>, <y>, <z>, <nx>, <ny>, <nz>].");
+      return true;
+    }
+    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    if (di < 0)
+      return true;
+    if (f.size() >= 8) {
+      CadBlockConnection conn;
+      conn.name = f[0];
+      if (f.size() >= 2)
+        conn.nominalSize = f[1];
+      if (!TryParseF(f[2], conn.x) || !TryParseF(f[3], conn.y) || !TryParseF(f[4], conn.z) ||
+          !TryParseF(f[5], conn.nx) || !TryParseF(f[6], conn.ny) || !TryParseF(f[7], conn.nz)) {
+        log.push_back("BCONNECT — coordinates and normal must be numbers.");
+        return true;
+      }
+      st.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
+      st.blockEditorDirty = true;
+      log.push_back("BCONNECT — added connection \"" + f[0] + "\".");
+      return true;
+    }
+    std::snprintf(st.bconnectNameBuf, sizeof(st.bconnectNameBuf), "%s", f[0].c_str());
+    st.bconnectSizeBuf[0] = '\0';
+    if (f.size() >= 2)
+      std::snprintf(st.bconnectSizeBuf, sizeof(st.bconnectSizeBuf), "%s", f[1].c_str());
+    st.bconnectAwaitingFace = true;
+    log.push_back("BCONNECT — pick a flat solid face for connection \"" + f[0] + "\".");
+    return true;
+  }
+
+  if (tok == "bconnectedit") {
+    if (st.blockEditorName.empty()) {
+      log.push_back("BCONNECTEDIT — open a block with BEDIT first.");
+      return true;
+    }
+    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    if (di < 0)
+      return true;
+    CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    const std::vector<std::string> f = SplitCommaRest(args);
+    if (f.empty()) {
+      if (def.connections.empty()) {
+        log.push_back("BCONNECTEDIT — no connections on this block.");
+        return true;
+      }
+      std::ostringstream oss;
+      oss << "BCONNECTEDIT";
+      for (const CadBlockConnection& c : def.connections)
+        oss << "\n" << c.name << "," << c.nominalSize << "," << c.x << "," << c.y << "," << c.z << "," << c.nx << ","
+            << c.ny << "," << c.nz;
+      log.push_back(oss.str());
+      return true;
+    }
+    const int ci = CadBlockFindConnection(def, f[0]);
+    if (ci < 0) {
+      log.push_back("BCONNECTEDIT — no connection named \"" + f[0] + "\".");
+      return true;
+    }
+    if (f.size() >= 2 && CadBlockEqCi(f[1], "remove")) {
+      def.connections.erase(def.connections.begin() + ci);
+      st.blockEditorDirty = true;
+      log.push_back("BCONNECTEDIT — removed \"" + f[0] + "\".");
+      return true;
+    }
+    if (f.size() >= 2)
+      def.connections[static_cast<size_t>(ci)].nominalSize = f[1];
+    st.blockEditorDirty = true;
+    log.push_back("BCONNECTEDIT — updated \"" + f[0] + "\".");
     return true;
   }
 

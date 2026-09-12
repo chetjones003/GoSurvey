@@ -33204,6 +33204,13 @@ void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.bconnectAwaitingFace) {
+    st.bconnectAwaitingFace = false;
+    st.bconnectNameBuf[0] = '\0';
+    st.bconnectSizeBuf[0] = '\0';
+    log.push_back("BCONNECT canceled.");
+    return;
+  }
   if (st.active == AppCommandState::Kind::None)
     return;
   ClearPendingOneShotObjectSnap(st);
@@ -36557,6 +36564,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return "INSERT: Specify rotation angle <0d0'0\"> — click or type | ESC cancel";
     if (st.insertBlockPhase == IPh::WaitAlignFace)
       return "INSERT: Pick a flat face to align the fitting | ESC cancel";
+    if (st.insertBlockPhase == IPh::WaitConnectorTarget)
+      return "INSERT: Pick target connection port — click near port | ESC cancel";
     if (st.insertBlockPhase == IPh::WaitAttributes)
       return "INSERT: Enter attribute values in the dialog | ESC cancel";
     return "INSERT: Configure in the Insert dialog";

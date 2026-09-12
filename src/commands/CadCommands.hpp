@@ -2663,6 +2663,9 @@ struct AppCommandState {
   /// definition's primitive geometry in local coords and \c blockEditModelStash holds the real
   /// drawing. Session-only — never in \ref DrawingDocument, never in `.gs`.
   bool blockEditActive = false;
+  bool bconnectAwaitingFace = false;
+  char bconnectNameBuf[128]{};
+  char bconnectSizeBuf[64]{};
   DrawingGeometrySnapshot blockEditModelStash;
   /// \c cadGpuRevision at the last clean point of the session (enter / BSAVE). A different value
   /// means unsaved edits — drives the BCLOSE Save/Don't-Save/Cancel prompt.
@@ -3874,7 +3877,8 @@ struct AppCommandState {
     WaitInsertPoint,
     WaitScale,
     WaitRotation,
-    WaitAlignFace,  ///< Pick a planar solid face to orient the fitting (issue #475 inc3)
+    WaitAlignFace,       ///< Pick a planar solid face to orient the fitting (issue #475 inc3)
+    WaitConnectorTarget, ///< Pick a target connection port on a placed block (issue #475 inc5)
     WaitAttributes,
   } insertBlockPhase = InsertBlockPhase::WaitDialog;
 
@@ -3897,6 +3901,8 @@ struct AppCommandState {
   bool insertBlockSpecifyScale = false;
   bool insertBlockSpecifyRot = true;
   bool insertBlockSpecifyAlignFace = false;
+  bool insertBlockSpecifyConnectorSnap = false;
+  char insertBlockConnectorName[64]{};
   bool insertBlockUniformScale = true;
   bool insertBlockExplode = false;
   bool insertBlockAttrDialogOpen = false;

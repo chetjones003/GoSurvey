@@ -14386,6 +14386,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       BumpCadGpuCache(cmd);
       break;
     }
+    case ViewportClickRoute::BconnectFacePick: {
+      solidpick::Tolerance tol;
+      tol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
+      tol.edge = tol.vertex;
+      const ray3d::Ray bconnRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+      SubmitBconnectFacePick(cmd, bconnRay, tol, log);
+      BumpCadGpuCache(cmd);
+      break;
+    }
     case ViewportClickRoute::HatchPick: {
       // HATCH (REQ-043): trace the region under the click and fill it; the command stays active on a miss
       // so the user can click another spot (REQ-201 — nothing placed when no closed boundary is found).

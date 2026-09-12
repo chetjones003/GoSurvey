@@ -453,6 +453,75 @@ TEST_CASE("BEDIT loads and BSAVE harvests a block solid", "[issue475][block][bed
   CHECK(bb.mn.z == Catch::Approx(7.0).margin(0.05));
 }
 
+TEST_CASE("INSERT connector snap places the fitting port on the target", "[issue475][block][connector][insert]") {
+  AppCommandState st;
+
+  CadBlockDefinition host;
+  host.name = "HOST";
+  CadBlockConnection hc;
+  hc.name = "P1";
+  hc.nominalSize = "4in";
+  host.connections.push_back(hc);
+  st.blockDefs.push_back(host);
+
+  CadBlockDefinition tail;
+  tail.name = "TAIL";
+  CadBlockConnection tc;
+  tc.name = "P1";
+  tc.x = 0.f;
+  tc.y = 0.f;
+  tc.z = 2.f;
+  tc.nx = 0.f;
+  tc.ny = 0.f;
+  tc.nz = 1.f;
+  tail.connections.push_back(tc);
+  st.blockDefs.push_back(tail);
+
+  std::vector<std::string> log;
+  CadBlockXform hostXf;
+  REQUIRE(CadBlockPlaceInsert(st, "HOST", hostXf, false, log));
+  REQUIRE(st.cadBlockRefs.size() == 1);
+
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "TAIL");
+  st.insertBlockSpecifyConnectorSnap = true;
+  st.insertBlockSpecifyPoint = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+
+  REQUIRE(SubmitInsertBlockConnectorPick(st, 0.f, 0.f, 0.f, log));
+  REQUIRE(st.cadBlockRefs.size() == 2);
+
+  std::vector<CadBlockWorldConnection> world;
+  CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[1], 1, &world);
+  REQUIRE(world.size() == 1);
+  CHECK(world[0].x == Catch::Approx(0.f).margin(0.002));
+  CHECK(world[0].y == Catch::Approx(0.f).margin(0.002));
+  CHECK(world[0].z == Catch::Approx(0.f).margin(0.002));
+  const float dot = world[0].nx * 0.f + world[0].ny * 0.f + world[0].nz * 1.f;
+  CHECK(dot == Catch::Approx(-1.f).margin(0.02));
+}
+
+TEST_CASE("BEDIT BCONNECT typed coords persist on the definition", "[issue475][block][connector][bedit]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  std::istringstream bconnArgs("P1, 4in, 0, 0, 0, 0, 0, 1");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnect", bconnArgs, log));
+  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  REQUIRE(di >= 0);
+  REQUIRE(st.blockDefs[static_cast<size_t>(di)].connections.size() == 1);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].name == "P1");
+  CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].nz == Catch::Approx(1.f));
+}
+
 TEST_CASE("BEDIT with a name skips the picker", "[issue124][block][bedit]") {
   AppCommandState st;
   CadBlockDefinition def;
