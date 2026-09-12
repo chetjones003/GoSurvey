@@ -1139,6 +1139,7 @@ int main()
     DrawBatchPlotDialog(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
     DrawInsertBlockDialog(cmd, cmdLog);
+    DrawBlockCreateDialog(cmd, cmdLog);
     DrawEditBlockDefinitionDialog(cmd, cmdLog);
     DrawBlockAuthoringPalettes(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);

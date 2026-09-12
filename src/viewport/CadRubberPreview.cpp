@@ -470,7 +470,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       }
       // Live ghost of the block at the transform this pick would commit (REQ-107, D-2026-08-29-i).
       CadBlockXform gxf;
-      if (CadBlockInsertPreviewXform(cmd, curXf, curYf, &gxf)) {
+      if (CadBlockInsertPreviewXform(cmd, curXf, curYf, zc, &gxf)) {
         CadBlockRef ghost;
         ghost.defName = cmd.insertBlockName;
         ghost.xf = gxf;

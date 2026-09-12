@@ -5596,8 +5596,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           if (id == "##RibbonInsInsert") {
             StartInsertBlockCommand(cmd, log);
           } else if (id == "##RibbonInsCreate") {
-            char buf[8] = "BLOCK";
-            ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+            StartBlockCreateDialog(cmd, log);
           } else if (id == "##RibbonInsEdit") {
             CadBlocksOpenEditPicker(cmd, log);
           }
@@ -14271,6 +14270,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const bool haveSnapPick = outCursorX && outCursorY && cmd.viewportSnapPickValid;
     const double commitX = haveSnapPick ? cmd.viewportSnapPickLocalX : *outCursorX;
     const double commitY = haveSnapPick ? cmd.viewportSnapPickLocalY : *outCursorY;
+    const double commitZ = haveSnapPick ? cmd.viewportSnapPickLocalZ : cmd.uiCursorWorldZ;
 
     // Mouse -> world for CLICK handling. This is a second, independent conversion from the hover
     // seam above and must branch the same way, or hover highlights an entity that the click then
@@ -14321,6 +14321,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else {
         TryPlaceSurveyPoint(cmd, commitX, commitY, cmd.createPointsOpts.defaultElevation, log);
       }
+    } else if (cmd.blockCreatePhase == AppCommandState::BlockCreatePhase::WaitBasePoint) {
+      SubmitBlockCreateBasePointPick(cmd, static_cast<float>(commitX), static_cast<float>(commitY), static_cast<float>(commitZ), log);
     } else {
     // TASK-099. One authority decides what a click means here: ViewportClickRouteFor
     // (viewport/ViewportPickPolicy.hpp). This was an if/else-if whitelist on cmd.active, and a
@@ -14371,7 +14373,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);
       break;
     case ViewportClickRoute::InsertBlockPick:
-      SubmitInsertBlockPick(cmd, commitX, commitY, log);
+      SubmitInsertBlockPick(cmd, static_cast<float>(commitX), static_cast<float>(commitY), static_cast<float>(commitZ), log);
       break;
     case ViewportClickRoute::HatchPick: {
       // HATCH (REQ-043): trace the region under the click and fill it; the command stays active on a miss

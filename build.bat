@@ -159,6 +159,11 @@ if "%NEEDCONFIG%"=="1" if errorlevel 1 (
 )
 if "%NEEDCONFIG%"=="1" if errorlevel 1 exit /b 1
 
+rem --- fixup VS CMake path quoting for Ninja POST_BUILD (space in Program Files) ---
+if exist "%BUILDDIR%\build.ninja" (
+  where python >nul 2>&1 && python "%~dp0dev\fix-ninja-quoting.py" "%BUILDDIR%\build.ninja" >nul 2>&1
+)
+
 if "%VSMULTI%"=="1" (
   echo.
   echo Visual Studio solution: %CD%\%BUILDDIR%\GoSurvey.sln

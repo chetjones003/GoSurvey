@@ -3893,6 +3893,18 @@ struct AppCommandState {
   bool insertBlockAttrPaper = false;
   char insertBlockAttrBuf[8][128]{};
 
+  // Block Create dialog (ribbon Create button) — mirrors Insert dialog (issue #475 follow-up)
+  enum class BlockCreatePhase { WaitDialog, WaitBasePoint } blockCreatePhase = BlockCreatePhase::WaitDialog;
+  bool blockCreateDialogOpen = false;
+  char blockCreateName[256]{};
+  float blockCreateBaseX = 0.f;
+  float blockCreateBaseY = 0.f;
+  float blockCreateBaseZ = 0.f;
+  bool blockCreateSpecifyBase = true;
+  int blockCreateConvertMode = 1; // 0 retain, 1 convert, 2 delete
+  char blockCreateDescription[256]{};
+  char blockCreateUnits[32]{};
+
   char pdfAttachFilePath[1024]{};
   int  pdfAttachSelectedPage = 0;
   float pdfAttachInsertX  = 0.f;
