@@ -173,6 +173,20 @@ void CaptureSelectionInto(const AppCommandState& st, CadBlockContent* c, float b
       if (static_cast<size_t>(e.index) < st.cadMeshAttrs.size())
         a = st.cadMeshAttrs[static_cast<size_t>(e.index)];
       c->meshAttrs.push_back(a);
+    } else if (e.type == SelectedEntity::Type::Solid) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadSolids.size())
+        continue;
+      const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
+      if (!sp)
+        continue;
+      brep::Solid local =
+          brep::Translate(*sp, brep::Vec3{-static_cast<double>(bx), -static_cast<double>(by),
+                                           -static_cast<double>(bz)});
+      c->solids.push_back(std::make_shared<const brep::Solid>(std::move(local)));
+      EntityAttributes a{};
+      if (static_cast<size_t>(e.index) < st.cadSolidAttrs.size())
+        a = st.cadSolidAttrs[static_cast<size_t>(e.index)];
+      c->solidAttrs.push_back(a);
     }
   }
 }
@@ -239,15 +253,17 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadAnnotations       = c.texts;
   st.cadAnnotationAttrs   = c.textAttrs;
   st.cadAnnotationAttrs.resize(c.texts.size());
+  st.cadMeshes            = c.meshes;
+  st.cadMeshAttrs         = c.meshAttrs;
+  st.cadMeshAttrs.resize(st.cadMeshes.size());
+  st.cadSolids            = c.solids;
+  st.cadSolidAttrs        = c.solidAttrs;
+  st.cadSolidAttrs.resize(st.cadSolids.size());
   // Hide everything that is not the block being edited.
   st.cadFilledRegions.clear();
   st.cadFilledRegionAttrs.clear();
-  st.cadMeshes.clear();
-  st.cadMeshAttrs.clear();
   st.cadSurfaces.clear();
   st.cadSurfaceAttrs.clear();
-  st.cadSolids.clear();
-  st.cadSolidAttrs.clear();
   st.cadTables.clear();
   st.cadTableAttrs.clear();
   st.cadBlockRefs.clear();
@@ -262,8 +278,8 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
 }
 
 /// ADR-043: harvest the model arrays back into a definition's primitive geometry on Save. Leaves
-/// \c nested / \c meshes and the dynamic-block authoring model (parameters/actions/attrDefs)
-/// untouched — those are edited through their own commands, not this surface.
+/// \c nested and the dynamic-block authoring model (parameters/actions/attrDefs) untouched — those
+/// are edited through their own commands, not this surface.
 void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockContent* c) {
   assert(c != nullptr);
   c->lines = st.userLinesFlat;
@@ -290,6 +306,12 @@ void HarvestDrawingPrimitivesIntoContent(const AppCommandState& st, CadBlockCont
   c->texts = st.cadAnnotations;
   c->textAttrs = st.cadAnnotationAttrs;
   c->textAttrs.resize(st.cadAnnotations.size());
+  c->meshes = st.cadMeshes;
+  c->meshAttrs = st.cadMeshAttrs;
+  c->meshAttrs.resize(st.cadMeshes.size());
+  c->solids = st.cadSolids;
+  c->solidAttrs = st.cadSolidAttrs;
+  c->solidAttrs.resize(st.cadSolids.size());
 }
 
 bool DrawingHasCaptureableGeometry(const AppCommandState& st) {
@@ -1754,7 +1776,7 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
   if (tok == "blockredef" || tok == "redefine") {
     const std::vector<std::string> f = SplitCommaRest(args);
     if (f.size() < 3) {
-      log.push_back("BLOCKREDEF — usage: BLOCKREDEF <name>, <baseX>, <baseY>.");
+      log.push_back("BLOCKREDEF — usage: BLOCKREDEF <name>, <baseX>, <baseY>[, <baseZ>].");
       return true;
     }
     const int di = CadBlockFindDef(st.blockDefs, f[0]);
@@ -1762,17 +1784,22 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BLOCKREDEF — no block named \"" + f[0] + "\".");
       return true;
     }
-    float bx = 0.f, by = 0.f;
+    float bx = 0.f, by = 0.f, bz = 0.f;
     if (!TryParseF(f[1], bx) || !TryParseF(f[2], by)) {
       log.push_back("BLOCKREDEF — base point must be numbers.");
       return true;
     }
+    if (f.size() >= 4 && !TryParseF(f[3], bz)) {
+      log.push_back("BLOCKREDEF — base Z must be a number.");
+      return true;
+    }
     PushUndoSnapshot(st, "Blockredef");
     CadBlockContent c;
-    CaptureSelectionInto(st, &c, bx, by, 0.f);
+    CaptureSelectionInto(st, &c, bx, by, bz);
     st.blockDefs[static_cast<size_t>(di)].content = std::move(c);
     st.blockDefs[static_cast<size_t>(di)].baseX = 0.f;
     st.blockDefs[static_cast<size_t>(di)].baseY = 0.f;
+    st.blockDefs[static_cast<size_t>(di)].baseZ = 0.f;
     BumpCadGpuCache(st);
     log.push_back("BLOCKREDEF — updated \"" + f[0] + "\". References keep their transforms.");
     return true;

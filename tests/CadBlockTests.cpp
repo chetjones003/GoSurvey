@@ -226,6 +226,29 @@ TEST_CASE("CadBlockCollectWorldSolids applies INSERT transform to block solids",
   CHECK(bb.mx.x == Catch::Approx(11.0).margin(0.05));
 }
 
+TEST_CASE("CadBlockBakeBasePoint shifts solid content by the base point", "[issue475][block][solid][bedit]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 2.0, 2.0, 2.0, &box, &why));
+
+  CadBlockDefinition def;
+  def.name = "FIT";
+  def.baseX = 1.f;
+  def.baseY = 2.f;
+  def.baseZ = 3.f;
+  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  CadBlockBakeBasePoint(&def);
+  REQUIRE(def.baseX == 0.f);
+  REQUIRE(def.baseY == 0.f);
+  REQUIRE(def.baseZ == 0.f);
+  REQUIRE(def.content.solids.size() == 1);
+  const brep::Bounds b = brep::ComputeBounds(*def.content.solids[0]);
+  REQUIRE(b.valid);
+  CHECK(b.mn.z == Catch::Approx(-3.0).margin(0.05));
+  CHECK(b.mx.z == Catch::Approx(-1.0).margin(0.05));
+}
+
 TEST_CASE("CadBlockSetLocalZAxis orients local +Z to the target normal", "[issue475][block][orient]") {
   CadBlockXform xf;
   CadBlockSetLocalZAxis(&xf, 1.f, 0.f, 0.f);
