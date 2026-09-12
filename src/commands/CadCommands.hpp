@@ -1526,6 +1526,19 @@ struct AppCommandState {
     Plan,
     /// INSERT dialog (GitHub issue #124): pick a definition, then optional on-screen point/scale/rotation.
     InsertBlock,
+    /// BCONNECT (issue #486 inc A2), prompted: whatever the command line omitted (name, nominal
+    /// size, role, engagement length) is asked for one field at a time instead of requiring the
+    /// whole line typed at once. The face pick itself still happens outside this Kind (it is
+    /// gated on \ref bconnectAwaitingFace so the general viewport click handler can see it); this
+    /// Kind covers the text prompts that come before AND after that pick.
+    BConnectPrompt,
+    /// BCONNECTEDIT (issue #486 inc A2), prompted: editing an existing connection's nominal
+    /// size/role/engagement/compat tag one field at a time, each defaulting to (blank Enter keeps)
+    /// the connection's current value.
+    BConnectEditPrompt,
+    /// BLOCKFITTING (issue #486 inc A1), prompted: setting a block's fitting metadata one field at
+    /// a time, each defaulting to (blank Enter keeps) the block's current value.
+    BlockFittingPrompt,
     /// The seven B-rep primitives, driven as a prompted command (REQ-313 as amended): pick or type
     /// the base point, then set each named dimension by its letter — `R` radius, `H` height, and so
     /// on — before Enter creates it.
@@ -1627,6 +1640,9 @@ struct AppCommandState {
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     case Kind::InsertBlock:        return "INSERT";
+    case Kind::BConnectPrompt:     return "BCONNECT";
+    case Kind::BConnectEditPrompt: return "BCONNECTEDIT";
+    case Kind::BlockFittingPrompt: return "BLOCKFITTING";
     case Kind::Solid:              return "SOLID";  // REQ-313: one Kind, all seven primitives
     case Kind::Extrude:           return "EXTRUDE";
     case Kind::Revolve:          return "REVOLVE";
@@ -2667,9 +2683,34 @@ struct AppCommandState {
   char bconnectNameBuf[128]{};
   char bconnectSizeBuf[64]{};
   /// Pending role/engagement for the pick-a-face BCONNECT flow (issue #486 increment A2), set
-  /// alongside \ref bconnectNameBuf / \ref bconnectSizeBuf before the face pick.
+  /// alongside \ref bconnectNameBuf / \ref bconnectSizeBuf before the face pick, and again after it
+  /// (via \ref BConnectPrompt) to fill in whatever the command line didn't already give.
   CadBlockConnectionRole bconnectRolePending = CadBlockConnectionRole::None;
   float bconnectEngagementPending = 0.f;
+  /// True once BCONNECT's short form was given a role/engagement length inline (issue #486
+  /// increment A2 follow-up) — skips the corresponding post-pick prompt since it is already known.
+  bool bconnectRoleGivenInline = false;
+  bool bconnectEngagementGivenInline = false;
+  /// Index into the definition's `connections` the pick just added, so the post-pick role/
+  /// engagement prompts (\ref BConnectPrompt) know which connection to fill in.
+  int bconnectLastAddedIndex = -1;
+  /// BCONNECT's prompted flow (Kind::BConnectPrompt): which field is being asked for next.
+  enum class BConnectPromptPhase { WaitName, WaitNominalSize, WaitRole, WaitEngagement };
+  BConnectPromptPhase bconnectPromptPhase = BConnectPromptPhase::WaitName;
+
+  /// BCONNECTEDIT's prompted flow (Kind::BConnectEditPrompt).
+  enum class BConnectEditPromptPhase { WaitConnectionName, WaitNominalSize, WaitRole, WaitEngagement, WaitCompatTag };
+  BConnectEditPromptPhase bconnectEditPromptPhase = BConnectEditPromptPhase::WaitConnectionName;
+  int bconnectEditIndex = -1;
+
+  /// BLOCKFITTING's prompted flow (Kind::BlockFittingPrompt).
+  enum class BlockFittingPromptPhase { WaitPartType, WaitNominalSize, WaitPressureClass, WaitPartNumber };
+  BlockFittingPromptPhase blockFittingPromptPhase = BlockFittingPromptPhase::WaitPartType;
+  std::string blockFittingPromptName;
+  CadFittingPartType blockFittingPartTypePending = CadFittingPartType::None;
+  std::string blockFittingNominalSizePending;
+  CadPipePressureClass blockFittingPressureClassPending = CadPipePressureClass::None;
+  std::string blockFittingPartNumberPending;
   DrawingGeometrySnapshot blockEditModelStash;
   /// \c cadGpuRevision at the last clean point of the session (enter / BSAVE). A different value
   /// means unsaved edits — drives the BCLOSE Save/Don't-Save/Cancel prompt.

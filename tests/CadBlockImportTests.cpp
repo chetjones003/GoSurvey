@@ -633,6 +633,161 @@ TEST_CASE("BCONNECTEDIT updates role, engagement length, and compat tag", "[issu
   CHECK(c.compatTag == "weldNeck");
 }
 
+TEST_CASE("Bare BCONNECT prompts for name then nominal size before the face pick",
+          "[issue486][block][connector][bedit][interactive]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+
+  std::istringstream bareArgs("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnect", bareArgs, log));
+  CHECK(st.active == AppCommandState::Kind::BConnectPrompt);
+  CHECK(st.bconnectPromptPhase == AppCommandState::BConnectPromptPhase::WaitName);
+  CHECK_FALSE(st.bconnectAwaitingFace);
+
+  HandleBConnectPromptText(st, "P1", log);
+  CHECK(st.active == AppCommandState::Kind::BConnectPrompt);
+  CHECK(st.bconnectPromptPhase == AppCommandState::BConnectPromptPhase::WaitNominalSize);
+  CHECK(std::string(st.bconnectNameBuf) == "P1");
+
+  HandleBConnectPromptText(st, "4in", log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK(st.bconnectAwaitingFace);
+  CHECK(std::string(st.bconnectSizeBuf) == "4in");
+}
+
+TEST_CASE("Bare BCONNECT name prompt refuses a blank line", "[issue486][block][connector][bedit][interactive]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  std::istringstream bareArgs("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnect", bareArgs, log));
+
+  HandleBConnectPromptText(st, "", log);
+  CHECK(st.active == AppCommandState::Kind::BConnectPrompt);
+  CHECK(st.bconnectPromptPhase == AppCommandState::BConnectPromptPhase::WaitName);
+}
+
+TEST_CASE("BCONNECT prompts for role and engagement after the face pick",
+          "[issue486][block][connector][bedit][interactive]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+
+  // Simulate the outcome of a successful face pick (SubmitBconnectFacePick's geometry path is
+  // covered separately by the "typed coords persist" test; here the interest is the follow-up
+  // prompt it leaves behind, so a connection is added directly and the prompt state set up by
+  // hand exactly as SubmitBconnectFacePick would).
+  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  REQUIRE(di >= 0);
+  CadBlockConnection conn;
+  conn.name = "P1";
+  st.blockDefs[static_cast<size_t>(di)].connections.push_back(conn);
+  st.bconnectLastAddedIndex = 0;
+  st.active = AppCommandState::Kind::BConnectPrompt;
+  st.bconnectPromptPhase = AppCommandState::BConnectPromptPhase::WaitRole;
+
+  HandleBConnectPromptText(st, "inlet", log);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].role == CadBlockConnectionRole::Inlet);
+  CHECK(st.bconnectPromptPhase == AppCommandState::BConnectPromptPhase::WaitEngagement);
+
+  HandleBConnectPromptText(st, "0.25", log);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].engagementLength == Catch::Approx(0.25f));
+  CHECK(st.active == AppCommandState::Kind::None);
+}
+
+TEST_CASE("BCONNECT role prompt rejects an unrecognized token and re-asks",
+          "[issue486][block][connector][bedit][interactive]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  st.blockDefs.push_back(def);
+  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  REQUIRE(di >= 0);
+  CadBlockConnection conn;
+  conn.name = "P1";
+  st.blockDefs[static_cast<size_t>(di)].connections.push_back(conn);
+  st.bconnectLastAddedIndex = 0;
+  st.active = AppCommandState::Kind::BConnectPrompt;
+  st.bconnectPromptPhase = AppCommandState::BConnectPromptPhase::WaitRole;
+  std::vector<std::string> log;
+
+  HandleBConnectPromptText(st, "supply", log);
+  CHECK(st.bconnectPromptPhase == AppCommandState::BConnectPromptPhase::WaitRole);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].role == CadBlockConnectionRole::None);
+}
+
+TEST_CASE("Bare BCONNECTEDIT lists connections then prompts for a name to edit",
+          "[issue486][block][connector][bedit][interactive]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  std::istringstream bconnArgs("P1, 4in, 0, 0, 0, 0, 0, 1");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnect", bconnArgs, log));
+
+  std::istringstream bareEdit("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectedit", bareEdit, log));
+  CHECK(st.active == AppCommandState::Kind::BConnectEditPrompt);
+  CHECK(st.bconnectEditPromptPhase == AppCommandState::BConnectEditPromptPhase::WaitConnectionName);
+
+  HandleBConnectEditPromptText(st, "P1", log);
+  CHECK(st.active == AppCommandState::Kind::BConnectEditPrompt);
+  CHECK(st.bconnectEditPromptPhase == AppCommandState::BConnectEditPromptPhase::WaitNominalSize);
+
+  HandleBConnectEditPromptText(st, "", log);  // blank keeps current nominal size
+  HandleBConnectEditPromptText(st, "outlet", log);
+  HandleBConnectEditPromptText(st, "0.75", log);
+  HandleBConnectEditPromptText(st, "weldNeck", log);
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  REQUIRE(di >= 0);
+  const CadBlockConnection& c = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  CHECK(c.nominalSize == "4in");  // unchanged by the blank line
+  CHECK(c.role == CadBlockConnectionRole::Outlet);
+  CHECK(c.engagementLength == Catch::Approx(0.75f));
+  CHECK(c.compatTag == "weldNeck");
+}
+
+TEST_CASE("BCONNECTEDIT continues interactively when only the nominal size is given inline",
+          "[issue486][block][connector][bedit][interactive]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  std::istringstream bconnArgs("P1, 4in, 0, 0, 0, 0, 0, 1");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnect", bconnArgs, log));
+
+  std::istringstream editArgs("P1, 6in");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectedit", editArgs, log));
+  CHECK(st.active == AppCommandState::Kind::BConnectEditPrompt);
+  CHECK(st.bconnectEditPromptPhase == AppCommandState::BConnectEditPromptPhase::WaitRole);
+
+  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  REQUIRE(di >= 0);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].nominalSize == "6in");
+}
+
 TEST_CASE("BLOCKFITTING sets, reports, and clears fitting metadata", "[issue486][block][fitting][bedit]") {
   AppCommandState st;
   CadBlockDefinition def;
@@ -677,6 +832,86 @@ TEST_CASE("BLOCKFITTING rejects an unrecognized part type or pressure class", "[
   std::istringstream badClass("ELBOW4, elbow90, 4in, cs999");
   REQUIRE(CadBlocksTryIdleCommand(st, "blockfitting", badClass, log));
   CHECK(st.blockDefs[static_cast<size_t>(di)].fitting.partType == CadFittingPartType::None);
+}
+
+TEST_CASE("Bare BLOCKFITTING in BEDIT starts the interactive wizard on the open block",
+          "[issue486][block][fitting][bedit][interactive]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "ELBOW4";
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+  std::istringstream beditArgs("ELBOW4");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+
+  std::istringstream bareArgs("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "blockfitting", bareArgs, log));
+  CHECK(st.active == AppCommandState::Kind::BlockFittingPrompt);
+  CHECK(st.blockFittingPromptPhase == AppCommandState::BlockFittingPromptPhase::WaitPartType);
+  CHECK(st.blockFittingPromptName == "ELBOW4");
+
+  HandleBlockFittingPromptText(st, "elbow90", log);
+  CHECK(st.blockFittingPromptPhase == AppCommandState::BlockFittingPromptPhase::WaitNominalSize);
+
+  HandleBlockFittingPromptText(st, "4in", log);
+  CHECK(st.blockFittingPromptPhase == AppCommandState::BlockFittingPromptPhase::WaitPressureClass);
+
+  HandleBlockFittingPromptText(st, "cs150", log);
+  CHECK(st.blockFittingPromptPhase == AppCommandState::BlockFittingPromptPhase::WaitPartNumber);
+
+  HandleBlockFittingPromptText(st, "ACME-4E90", log);
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  const int di = CadBlockFindDef(st.blockDefs, "ELBOW4");
+  REQUIRE(di >= 0);
+  const CadBlockFittingMeta& fm = st.blockDefs[static_cast<size_t>(di)].fitting;
+  CHECK(fm.partType == CadFittingPartType::Elbow90);
+  CHECK(fm.nominalSize == "4in");
+  CHECK(fm.pressureClass == CadPipePressureClass::CS150);
+  CHECK(fm.partNumber == "ACME-4E90");
+}
+
+TEST_CASE("BLOCKFITTING part-type prompt rejects an unrecognized token and re-asks",
+          "[issue486][block][fitting][bedit][interactive]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "ELBOW4";
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+  std::istringstream beditArgs("ELBOW4");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  std::istringstream bareArgs("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "blockfitting", bareArgs, log));
+
+  HandleBlockFittingPromptText(st, "spigot", log);
+  CHECK(st.blockFittingPromptPhase == AppCommandState::BlockFittingPromptPhase::WaitPartType);
+  CHECK(st.active == AppCommandState::Kind::BlockFittingPrompt);
+}
+
+TEST_CASE("BLOCKFITTING continues interactively when only part type and size are given inline",
+          "[issue486][block][fitting][bedit][interactive]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "ELBOW4";
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+
+  std::istringstream partialArgs("ELBOW4, elbow90, 4in");
+  REQUIRE(CadBlocksTryIdleCommand(st, "blockfitting", partialArgs, log));
+  CHECK(st.active == AppCommandState::Kind::BlockFittingPrompt);
+  CHECK(st.blockFittingPromptPhase == AppCommandState::BlockFittingPromptPhase::WaitPressureClass);
+
+  HandleBlockFittingPromptText(st, "cs300", log);
+  HandleBlockFittingPromptText(st, "", log);  // blank part number
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  const int di = CadBlockFindDef(st.blockDefs, "ELBOW4");
+  REQUIRE(di >= 0);
+  const CadBlockFittingMeta& fm = st.blockDefs[static_cast<size_t>(di)].fitting;
+  CHECK(fm.partType == CadFittingPartType::Elbow90);
+  CHECK(fm.nominalSize == "4in");
+  CHECK(fm.pressureClass == CadPipePressureClass::CS300);
+  CHECK(fm.partNumber.empty());
 }
 
 TEST_CASE("BEDIT with a name skips the picker", "[issue124][block][bedit]") {
