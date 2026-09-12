@@ -4,7 +4,7 @@ Things that are visible in the interface but do not work yet, and things a CAD u
 expect that GoSurvey does not have. This page exists so you find out here rather than halfway
 through a deadline.
 
-Current as of **version 0.5.3**.
+Current as of **version 0.6.0**.
 
 ---
 

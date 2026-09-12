@@ -1,0 +1,51 @@
+# A block definition's non-line geometry must survive a `.gs` save/reopen.
+#
+# CadBlockContentToJson / ...FromJson once serialized only lines, circles(+attrs),
+# nested and texts — arcs, ellipses, polylines, meshes, per-text attrs and the
+# circle/vis lists were captured in memory but never written. A block holding a
+# polyline or a circle therefore lost that content after one save/reopen cycle.
+#
+# BEDIT swaps the model store for the definition's own primitives (ADR-043), so
+# inside a BEDIT session the model-space EXPECT counts read the definition — which
+# is how this transcript inspects block content without a bespoke EXPECT verb.
+
+NEW
+CMD MKLINE 0,0, 10,0
+CMD SELLINE
+CMD BLOCK SHAPE, 0, 0, CONVERT
+EXPECT LOG "BLOCK — created"
+
+# add a polyline and a circle straight into the definition
+CMD BEDIT SHAPE
+EXPECT LOG "editing"
+EXPECT LINES 1
+CMD POLYLINE
+CMD 0,0
+CMD 0,5
+CMD 5,5
+CMD END
+EXPECT POLYLINES 1
+CMD CIRCLE
+CMD 2,2
+CMD 1
+ESC
+EXPECT CIRCLES 1
+CMD BCLOSE SAVE
+EXPECT LOG "BCLOSE — closed"
+
+# save, drop the document, reload
+SAVEAS %OUT%/blk-content-1.gs
+NEW
+OPEN %OUT%/blk-content-1.gs
+
+# the reloaded definition still carries all three entities
+CMD BEDIT SHAPE
+EXPECT LOG "editing"
+EXPECT LINES 1
+EXPECT POLYLINES 1
+EXPECT CIRCLES 1
+CMD BCLOSE
+
+# and an idempotent re-save reproduces the file byte-for-byte
+SAVEAS %OUT%/blk-content-2.gs
+EXPECT SAMEFILE %OUT%/blk-content-1.gs %OUT%/blk-content-2.gs

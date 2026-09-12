@@ -7,7 +7,7 @@ and it exchanges drawings with AutoCAD and Civil 3D through DXF, DWG, and CSV.
 This wiki is the **end-user manual**. It documents what the program actually does today, including
 the places where a feature is present but not finished.
 
-> **Current version:** 0.5.3 · Windows x64 · [Releases](https://github.com/chetjones003/GoSurvey/releases)
+> **Current version:** 0.6.0 · Windows x64 · [Releases](https://github.com/chetjones003/GoSurvey/releases)
 
 ---
 

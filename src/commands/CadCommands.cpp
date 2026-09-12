@@ -10064,6 +10064,20 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
     // dx/dy exactly as it does for every other entity type in this function.
     CadBlockTranslate(&st.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, dz);
   }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Table)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
+      continue;
+    CadTableTranslate(&st.cadTables[static_cast<size_t>(e.index)], dx, dy);
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::BlockRef)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadBlockRefs.size())
+      continue;
+    CadBlockTranslate(&st.cadBlockRefs[static_cast<size_t>(e.index)], dx, dy, 0.f);
+  }
   // Feature lines (REQ-087) — see ApplyRotationToSelection.
   TransformSelectedFeatureLinesInPlace(
       st, [&](auto* x, auto* y) {

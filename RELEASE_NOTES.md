@@ -16,6 +16,44 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.6.0
+
+**3D solids — new**
+- Draw and edit **3D solids** — boxes, cylinders, spheres, cones, tori, wedges, pyramids, and
+  polysolids — with **FILLET**, **CHAMFER**, **SECTION**, and **SOLIDCHECK**.
+- **Rotate** and **scale** a solid about any axis; **move** a vertex or edge with grips and the
+  gizmo.
+- **UCS Object** aligns the working plane to a flat face on a solid.
+- Import standalone **ACIS `.sat`** files as solid blocks.
+
+**Precision and coordinates**
+- Survey coordinates and drawing geometry are stored at **full double precision** (±0.002 ft),
+  so state-plane work and large-coordinate imports stay exact through save and reopen.
+
+**Modify commands in 3D**
+- **MOVE**, **COPY**, **ROTATE**, **SCALE**, **MIRROR**, **STRETCH**, **OFFSET**, and **ARRAY**
+  honour the active UCS and work in 3D model space.
+- **TRIM** drawn-line mode resolves cuts in true 3D.
+- **EXPLODE** breaks a polyline into its individual segments.
+
+**Snapping and inquiry**
+- **Quadrant** object snap for circles and arcs.
+- **DIST** reports horizontal distance and grade between two picks.
+
+**Help and interface**
+- Press **F1** (or type **HELP**) for the full in-app user manual with command reference.
+- Refreshed **start screen**, splash, and **What's New** billboard; blue theme across dialogs
+  and the viewport chrome.
+- **Multi Selection** disambiguates overlapping picks at the cursor.
+- Improved ribbon layout and a clearer launch flow with update check on startup.
+
+**Drawing exchange**
+- **Save As** no longer crashes or drops you off the drawing tab.
+- DWG import skips Civil 3D parts-catalog solids that cannot be represented, keeping the rest
+  of the drawing.
+
+---
+
 ## 0.5.6
 
 **A tabbed ribbon**

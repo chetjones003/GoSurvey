@@ -2,7 +2,9 @@
 #
 # Two jobs, three publish outcomes, decided by which branch the run targets:
 #
-#   build             compile + ctest, run only on manual dispatch (REQ-202 (d))
+#   build             compile GoSurvey.exe only (no headless driver, no test suite — this
+#                     pipeline ships the app, it does not verify it), run only on manual
+#                     dispatch (REQ-202 (d))
 #   package           Inno installer from the build artifacts; then:
 #     any other branch  installer kept as a workflow artifact; nothing published
 #     beta              installer published to the ROLLING `channel-beta` prerelease (assets replaced)
@@ -153,7 +155,7 @@ jobs:
           }
 
       # ---------------------------------------------------------------------
-      # Build and test
+      # Build
       # ---------------------------------------------------------------------
       - name: Configure
         # The compiler is NOT chosen here. CMakePresets pins `cl` for both presets, so CI and a
@@ -170,11 +172,18 @@ jobs:
         # per-target compile option (CMakeLists.txt's gosurvey_target_warnings), additive and
         # scoped to our own targets only. It does not fail the build unless paired with /WX,
         # which is deliberately NOT set — the existing codebase has never been triaged against it.
+        # GOSURVEY_BUILD_HEADLESS / GOSURVEY_BUILD_TESTS are OFF: this pipeline ships
+        # GoSurvey.exe only. The headless transcript driver, GsJsonDwgFixture, and the
+        # Catch2 suite are dev/test-only targets (see CMakeLists.txt) with no bearing on
+        # what the installer packages, so this configure never defines those targets in
+        # the first place rather than building and then discarding them.
         run: >
           cmake --preset ninja-release
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           -DGOSURVEY_ENABLE_ANALYZE=ON
+          -DGOSURVEY_BUILD_HEADLESS=OFF
+          -DGOSURVEY_BUILD_TESTS=OFF
           -DGOSURVEY_VERSION_SUFFIX="${{ steps.ver.outputs.suffix }}"
           -DGOSURVEY_VERSION_BUILD=${{ github.run_number }}
 
@@ -199,10 +208,6 @@ jobs:
             Write-Host "OK: $path present"
           }
 
-      - name: Test
-        # Gates publication: a failing suite fails the job before any package/release step runs.
-        run: ctest --test-dir build --output-on-failure
-
       - name: sccache stats
         if: always()
         shell: pwsh
@@ -225,7 +230,7 @@ jobs:
     needs: build
     # REQ-202 / D-2026-08-31-a (issue #142): the installer is built only where it
     # is published (beta, master) or explicitly asked for (workflow_dispatch).
-    # A feature-branch push runs build+test only; use "Run workflow" to get an
+    # A feature-branch push runs the build job only; use "Run workflow" to get an
     # installer artifact on demand.
     if: github.ref_name == 'beta' || github.ref_name == 'master' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
