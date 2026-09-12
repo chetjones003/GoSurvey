@@ -670,9 +670,12 @@ TEST_CASE("Tessellation agrees with the analytic figures and winds outward", "[b
 }
 
 TEST_CASE("Tessellation quality does not change the solid", "[brep][req313]") {
+  // Radius 50, not 5 (issue #486 GUI pass) — same reasoning as the cylinder edge test above: the
+  // new full-circle segment floor would otherwise flatten both tolerances to the same floored
+  // count on a small radius.
   Solid s;
   Problem why = Problem::Ok;
-  REQUIRE(brep::MakeSphere(World(), 5.0, &s, &why));
+  REQUIRE(brep::MakeSphere(World(), 50.0, &s, &why));
   const brep::MassProperties before = brep::ComputeMassProperties(s);
 
   brep::Tessellation coarse;
@@ -885,10 +888,51 @@ TEST_CASE("Every triangle knows which face it came from", "[brep][req313]") {
   }
 }
 
-TEST_CASE("Edge tessellation follows the same chord rule as the faces", "[brep][req313]") {
+TEST_CASE("A small-radius cylinder still tessellates smooth at the app's own chord tolerance",
+          "[brep][req313][issue486]") {
+  // GUI pass (issue #486 follow-up, first pass then a second GUI pass asking for "way more
+  // segmentation"): a 4" pipe fitting (~0.167 ft radius) extruded/PRESSPULLed from a circle
+  // rendered as a visible octagon, and even an ordinary few-foot cylinder still looked faceted at
+  // this same tolerance. `SegmentsForArc` now floors a (near-)full turn at `kMinFullCircleSegments`
+  // (128) regardless of `tol/radius`, so this holds at any radius, not just a small one.
+  constexpr double kAppChordToleranceFt = 0.01;  // cadsolid::kSolidChordToleranceFt (D-2026-09-08-i)
   Solid s;
   Problem why = Problem::Ok;
-  REQUIRE(brep::MakeCylinder(World(), 5.0, 9.0, &s, &why));
+  REQUIRE(brep::MakeCylinder(World(), 0.167, 0.5, &s, &why));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, kAppChordToleranceFt, &t, &why));
+
+  // The side wall alone contributes 2 triangles per angular segment; caps add more on top, so a
+  // wall with fewer than 128 segments cannot reach 256 side-wall triangles no matter what the caps
+  // contribute — this is a coarse but tolerance-tolerant floor, not a triangle-count exact match.
+  CHECK(t.triangleCount() >= 256);
+}
+
+TEST_CASE("An ordinary few-foot-radius cylinder gets the same full-circle floor",
+          "[brep][req313][issue486]") {
+  // The complaint was not only about tiny pipes: a 5 ft cylinder at the app's own chord tolerance
+  // (0.01 ft) previously worked out to only ~45 segments (tol/radius = 0.002) — noticeably less
+  // than the 128-segment floor this pins now.
+  constexpr double kAppChordToleranceFt = 0.01;
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), 5.0, 3.0, &s, &why));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, kAppChordToleranceFt, &t, &why));
+  CHECK(t.triangleCount() >= 256);
+}
+
+TEST_CASE("Edge tessellation follows the same chord rule as the faces", "[brep][req313]") {
+  // Radius 50, not 5 (issue #486 GUI pass): the full-circle segment floor `SegmentsForArc` now
+  // applies (128) would otherwise flatten BOTH the 0.5 and 0.001 tolerances to the same floored
+  // count on a small radius, making them indistinguishable — a large radius keeps both requests
+  // meaningfully above that floor, which is what this test is actually checking (that a finer
+  // tolerance asks for more segments), not the floor itself (covered separately, [issue486]).
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), 50.0, 9.0, &s, &why));
 
   std::vector<double> coarse;
   std::vector<double> fine;
@@ -916,6 +960,24 @@ TEST_CASE("Edge tessellation follows the same chord rule as the faces", "[brep][
   broken.shells[0].faces.pop_back();
   REQUIRE_FALSE(brep::TessellateEdges(broken, 0.01, &fine, &why));
   REQUIRE(why == Problem::ShellOpenAtEdge);
+}
+
+TEST_CASE("Edge (rubber-band preview) tessellation gets the same full-circle floor as the faces",
+          "[brep][req313][issue486]") {
+  // Issue #486 GUI pass: "include the rubber band previews". Every EXTRUDE/PRESSPULL/CYLINDER/
+  // REVOLVE/LOFT/SWEEP ghost in CadRubberPreview.cpp draws through `TessellateEdges`, not
+  // `Tessellate` — a separate call path, so the face floor above does not automatically cover it.
+  // `SegmentsForArc`'s floor lives underneath both, so fixing it there is what keeps a live-drag
+  // ghost as smooth as the solid it is about to commit.
+  constexpr double kAppChordToleranceFt = 0.01;  // cadsolid::kSolidChordToleranceFt
+  Solid s;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::MakeCylinder(World(), 0.167, 0.5, &s, &why));
+
+  std::vector<double> edges;
+  REQUIRE(brep::TessellateEdges(s, kAppChordToleranceFt, &edges, &why));
+  REQUIRE(edges.size() % 6 == 0);
+  CHECK(edges.size() / 6 >= 128);
 }
 
 TEST_CASE("Tessellation refuses a bad tolerance and a bad solid", "[brep][req313]") {
@@ -6571,3 +6633,59 @@ TEST_CASE("A self-intersecting solid is sound topology whose measurements are wi
   CHECK(brep::SelfIntersects(s));
   CHECK_FALSE(brep::ComputeMassProperties(s).valid);
 }
+
+TEST_CASE("3D subtraction with circles as cylindrical cutters", "[brep][circle-subtract]") {
+  brep::Problem why = brep::Problem::Ok;
+  brep::Solid box;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 10, 10, 10, &box, &why));
+  const double r = 2.0;
+  brep::Vec3 centre{0, 0, 5};
+  brep::Vec3 normal{0, 0, 1};
+  brep::Solid holed;
+  REQUIRE(brep::SubtractCircleThrough(box, centre, normal, r, &holed, &why));
+  REQUIRE(brep::Validate(holed) == brep::Problem::Ok);
+  const double vol = brep::ComputeMassProperties(holed).volume;
+  const double boxVol = 10 * 10 * 10;
+  // Hole is through the top/bottom faces: cylinder of radius r through height 10
+  const double holeVol = 3.141592653589793 * r * r * 10.0;
+  REQUIRE(vol == Catch::Approx(boxVol - holeVol).epsilon(0.02));
+
+  SECTION("tilted circle normal") {
+    brep::Vec3 nTilt{0.3, 0.4, 0.8660254};
+    brep::Solid holedTilt;
+    REQUIRE(brep::SubtractCircleThrough(box, centre, nTilt, r, &holedTilt, &why));
+    REQUIRE(brep::Validate(holedTilt) == brep::Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(holedTilt).valid);
+  }
+
+  SECTION("invalid radius refused") {
+    brep::Solid bad;
+    REQUIRE_FALSE(brep::SubtractCircleThrough(box, centre, normal, -1.0, &bad, &why));
+    REQUIRE(why == brep::Problem::NonPositiveRadius);
+  }
+
+  SECTION("explicit depth variant") {
+    brep::Solid holed2;
+    brep::Vec3 c2{0,0,0};
+    REQUIRE(brep::SubtractCircle(box, c2, normal, r, 10.0, &holed2, &why));
+    REQUIRE(brep::Validate(holed2) == brep::Problem::Ok);
+  }
+}
+
+TEST_CASE("SUBTRACT short PRESSPULL cylinder via through-hole fallback", "[brep][circle-subtract]") {
+  brep::Problem why;
+  brep::Solid box;
+  REQUIRE(brep::MakeBox(ucs::Ucs{},10,10,10,&box,&why));
+  ucs::Ucs fr; REQUIRE(ucs::FromNormal(brep::Vec3{0,0,5}, brep::Vec3{0,0,1}, &fr));
+  brep::Solid cyl;
+  REQUIRE(brep::MakeCylinder(fr, 2.0, 0.005, &cyl, &why));
+  std::vector<brep::Solid> r;
+  REQUIRE_FALSE(brep::BooleanSubtract(box,cyl,&r,&why));
+  REQUIRE(why==brep::Problem::BooleanCurvedFace);
+  brep::Solid cut;
+  REQUIRE(brep::SubtractCircleThrough(box, brep::Vec3{0,0,5}, brep::Vec3{0,0,1}, 2.0, &cut, &why));
+  REQUIRE(brep::Validate(cut)==brep::Problem::Ok);
+  double vol = brep::ComputeMassProperties(cut).volume;
+  REQUIRE(vol == Catch::Approx(1000 - 3.141592653589793*4*10).epsilon(0.02));
+}
+

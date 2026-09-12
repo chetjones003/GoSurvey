@@ -333,3 +333,79 @@ TEST_CASE("CadBlockCollectWorldSolids refuses non-uniform scale on solids", "[is
   CadBlockCollectWorldSolids(defs, r, EntityAttributes{}, &ws);
   CHECK(ws.empty());
 }
+
+TEST_CASE("Fitting part type string round-trips and rejects unknown tokens", "[issue486][fitting]") {
+  CadFittingPartType t{};
+  CHECK(CadFittingPartTypeFromString("elbow90", &t));
+  CHECK(t == CadFittingPartType::Elbow90);
+  CHECK(std::string(CadFittingPartTypeToString(t)) == "Elbow90");
+
+  CHECK(CadFittingPartTypeFromString("ELBOW45", &t));
+  CHECK(t == CadFittingPartType::Elbow45);
+
+  CHECK(CadFittingPartTypeFromString("Tee", &t));
+  CHECK(t == CadFittingPartType::Tee);
+  CHECK(CadFittingPartTypeFromString("cross", &t));
+  CHECK(t == CadFittingPartType::Cross);
+  CHECK(CadFittingPartTypeFromString("reducer", &t));
+  CHECK(t == CadFittingPartType::Reducer);
+  CHECK(CadFittingPartTypeFromString("flange", &t));
+  CHECK(t == CadFittingPartType::Flange);
+  CHECK(CadFittingPartTypeFromString("valve", &t));
+  CHECK(t == CadFittingPartType::Valve);
+  CHECK(CadFittingPartTypeFromString("cap", &t));
+  CHECK(t == CadFittingPartType::Cap);
+  CHECK(CadFittingPartTypeFromString("coupling", &t));
+  CHECK(t == CadFittingPartType::Coupling);
+  CHECK(CadFittingPartTypeFromString("other", &t));
+  CHECK(t == CadFittingPartType::Other);
+  CHECK(CadFittingPartTypeFromString("none", &t));
+  CHECK(t == CadFittingPartType::None);
+
+  CadFittingPartType unchanged = CadFittingPartType::Valve;
+  CHECK_FALSE(CadFittingPartTypeFromString("bogus", &unchanged));
+  CHECK(unchanged == CadFittingPartType::Valve);
+}
+
+TEST_CASE("Pressure class string round-trips and rejects unknown tokens", "[issue486][fitting]") {
+  CadPipePressureClass c{};
+  CHECK(CadPipePressureClassFromString("cs150", &c));
+  CHECK(c == CadPipePressureClass::CS150);
+  CHECK(std::string(CadPipePressureClassToString(c)) == "CS150");
+  CHECK(CadPipePressureClassFromString("CS300", &c));
+  CHECK(c == CadPipePressureClass::CS300);
+
+  CadPipePressureClass unchanged = CadPipePressureClass::CS150;
+  CHECK_FALSE(CadPipePressureClassFromString("cs600", &unchanged));
+  CHECK(unchanged == CadPipePressureClass::CS150);
+}
+
+TEST_CASE("Connection role string round-trips and rejects unknown tokens", "[issue486][fitting]") {
+  CadBlockConnectionRole r{};
+  CHECK(CadBlockConnectionRoleFromString("inlet", &r));
+  CHECK(r == CadBlockConnectionRole::Inlet);
+  CHECK(std::string(CadBlockConnectionRoleToString(r)) == "Inlet");
+  CHECK(CadBlockConnectionRoleFromString("OUTLET", &r));
+  CHECK(r == CadBlockConnectionRole::Outlet);
+  CHECK(CadBlockConnectionRoleFromString("branch", &r));
+  CHECK(r == CadBlockConnectionRole::Branch);
+
+  CadBlockConnectionRole unchanged = CadBlockConnectionRole::Inlet;
+  CHECK_FALSE(CadBlockConnectionRoleFromString("supply", &unchanged));
+  CHECK(unchanged == CadBlockConnectionRole::Inlet);
+}
+
+TEST_CASE("A default-constructed block definition is not a fitting", "[issue486][fitting]") {
+  CadBlockDefinition def;
+  CHECK(def.fitting.partType == CadFittingPartType::None);
+  CHECK(def.fitting.pressureClass == CadPipePressureClass::None);
+  CHECK(def.fitting.nominalSize.empty());
+  CHECK(def.fitting.partNumber.empty());
+}
+
+TEST_CASE("A default-constructed connection has no role and zero engagement", "[issue486][fitting]") {
+  CadBlockConnection c;
+  CHECK(c.role == CadBlockConnectionRole::None);
+  CHECK(c.engagementLength == Catch::Approx(0.f));
+  CHECK(c.compatTag.empty());
+}

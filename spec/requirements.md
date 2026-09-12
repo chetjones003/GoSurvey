@@ -8098,6 +8098,74 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-09-10 — accepted (D-2026-09-10-d, ADR-056). Content is shipped Markdown (not
   fetched); link is always the releases list; About *is* the billboard; md4c vendored for CommonMark.
 
+### REQ-337 — Fitting metadata and connection port roles/engagement (GitHub issue #486, Track A1+A2)
+- Purpose: Before a piping/routing engine can consume a fittings library at scale, a block
+  definition must be able to declare that it *is* a pipe fitting (part type, nominal size, pressure
+  class, part number) and its connection ports must say more than a bare point + normal — which port
+  is the inlet vs. outlet vs. a branch, an optional compatibility tag, and how far a pipe engages
+  into the port. This is the smallest first increment of issue #486 (its own recommendation), and
+  unblocks a user tagging fittings entirely inside GoSurvey while the routing engine (Track B) is
+  specced separately.
+- Priority: should
+- Type: functional
+- Statement: `CadBlockDefinition` gains an optional **fitting metadata** record: `partType` (a fixed
+  enum — `Elbow90`, `Elbow45`, `Tee`, `Cross`, `Reducer`, `Flange`, `Valve`, `Cap`, `Coupling`,
+  `Other`, or unset/`None` for a non-fitting block), `nominalSize` (an NPS inch label such as
+  `"4in"`, matching the existing `CadBlockConnection::nominalSize` label convention — D-2026-09-12
+  (4): display/catalog/matching stays in NPS inches, not feet), `pressureClass` (a fixed enum —
+  `CS150`, `CS300`, or unset/`None` — D-2026-09-12 (1): no free text), and an optional `partNumber`
+  string. A block with `partType == None` is not a fitting and the other fields are ignored.
+
+  `CadBlockConnection` gains a **role** (`Inlet`, `Outlet`, `Branch`, or unset/`None`), an optional
+  **compatibility tag** (free-text string; empty means "matches by nominal size alone"), and an
+  **engagement length** (`float`, drawing units/feet — how far a pipe slides into this port before
+  it is cut, per D-2026-09-12 (2): metadata cutback, not overlap-then-boolean-trim). Engagement
+  length defaults to `0.f` (no cutback) so existing connections round-trip unchanged.
+
+  Both records serialize through the existing block-definition JSON path (`GsIo.cpp`) alongside
+  `connections`/`metadata` — omitted fields default to `None`/empty/`0.f` so a block saved before
+  this requirement loads unchanged. Enum values serialize as their string names (`"Elbow90"`,
+  `"CS150"`, `"Inlet"`, …), never raw integers, so the JSON stays readable and stable if the enum's
+  underlying order ever changes.
+
+  Authoring happens through the existing command-line BEDIT toolchain (no new palette/gizmo — the
+  block editor has none for connections today, and REQ-301 disfavors adding UI infrastructure two
+  increments ahead of the feature that needs it):
+  - `BLOCKFITTING <name>` (no other args) reports the block's current fitting metadata, or that it
+    has none.
+  - `BLOCKFITTING <name>, <partType>, <nominalSize>, <pressureClass>[, <partNumber>]` sets it.
+    `BLOCKFITTING <name>, none` clears it (`partType` back to `None`).
+  - `BCONNECT` (both the argument form and the pick-a-face form) accepts optional trailing
+    `<role>` and `<engagementLength>` fields after the existing `<name>[, <nominalSize>]`, keeping
+    every existing shorter invocation valid.
+  - `BCONNECTEDIT <name>, <nominalSize>[, <role>[, <engagementLength>[, <compatTag>]]]` updates a
+    named connection's fields (any trailing fields omitted are left unchanged); the no-argument
+    report form prints role, engagement length, and compat tag alongside the fields it already
+    prints.
+  - Unrecognized `partType`/`pressureClass`/`role` tokens (case-insensitive) are refused with a
+    named-choices error message rather than silently defaulting or crashing.
+- Acceptance:
+  - `BLOCKFITTING <name>, elbow90, 4in, cs150, ACME-4E90` sets fitting metadata on an open or named
+    block; `BLOCKFITTING <name>` reports it back; `BLOCKFITTING <name>, none` clears it;
+  - an unrecognized part type or pressure class is refused by name and leaves the block's existing
+    metadata untouched;
+  - `BCONNECT portA, 4in, inlet, 0.25` (and the equivalent pick-a-face flow) records role `Inlet`
+    and an engagement length of `0.25` ft on the new connection; a bare `BCONNECT portA, 4in` (the
+    pre-existing short form) still works and leaves role/engagement/compat at their defaults;
+  - `BCONNECTEDIT` with no arguments lists every connection's name, nominal size, role, engagement
+    length, and compat tag;
+  - saving and reloading a block (`.gs` JSON round-trip) preserves fitting metadata and every
+    connection's role/compat tag/engagement length exactly; a block saved by an older build (no
+    `fitting` field, connections without role/engagement/compat) still loads with those fields at
+    their documented defaults.
+- Owner-layer: Domain (`CadBlockDefinition`/`CadBlockConnection` fields, enums); IO (`GsIo.cpp`
+  JSON read/write); Commands (`BLOCKFITTING`, extended `BCONNECT`/`BCONNECTEDIT` in
+  `CadBlocks.cpp`)
+- Status: accepted (2026-09-12)
+- Revisions: 2026-09-12 — accepted (D-2026-09-12). Scoped to issue #486 Track A increments A1+A2
+  only; the routing engine (Track B), library export workflow (A3), in-editor solid authoring
+  polish (A4), and library browser grouping (A5) are explicitly out of scope for this requirement.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -9248,6 +9316,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-334 | Domain | accepted, increment 1 delivered (GitHub issue #149 acceptance 4, D-2026-09-09-h, ADR-055, TASK-237). The volume **centroid**, the first of #120's mass properties that needed a genuinely new integrand — the first moments of volume, with no closed form previously written for any surface kind. Integrated by 16-point Gauss-Legendre over the **exact analytic** surfaces (never the display mesh), in **world axes** because the integrand `1/2 r_k^2 n_k` is not frame-covariant, about a **solid-local** reference point because otherwise it loses its low bits at survey magnitude. Planar faces go through Green's theorem along the boundary with quadrature per edge, which is what makes one path cover a straight-edged face and an **arc-bounded** cap alike. Reported through its own `centroidValid` flag: a `Nurbs` face, a general trim loop, a face with holes or an `Ellipse`/`Intersection` boundary edge is **refused by name** (increment 2's work) while the volume and surface area stay untouched. Two errors were measured out during development and are now pinned by tests that would otherwise pass: a per-face-frame moment rotated into world is exact for every axis-aligned solid and **3.2 ft wrong on a tilted box**, and a symmetric primitive's centroid comes out right even from a badly wrong integrand, so the wedge, pyramid and frustum carry the load. `BrepTests [req334]` — 8 cases: seven primitives against closed forms, a tilted frame, survey magnitudes (tilted included), translation covariance, a Boolean result against the composite of its parts, the two refusals, and the uncovered-face case that keeps its volume | accepted |
 | REQ-335 | Domain/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 5, D-2026-09-09-i, TASK-238). `SECTION` — the cross-section of the selected solids by the **active UCS plane**, as a closed polyline, leaving the solids alone. `brep::SectionLoop` returns the section as a closed `brep::Path` of lines and arcs — the kernel's existing vocabulary, so no new type and no knowledge of document entities (ADR-048 (a)) — and arcs reach the drawing as **bulges** (REQ-316/ADR-047), so a cylinder's circular section is a circle and not a polygon. **The cut is `Slice`'s, unchanged**: sectioning asks the same question and keeps a different answer, so the accepted set is inherited rather than restated and a refusal carries `Slice`'s own `Problem` — asserted by a test that reads the reason off `Slice` and compares. Non-destructive is structural (const reference in, pieces discarded) and asserted byte-for-byte anyway. Refused by name: an oblique cylinder cut (`Ellipse` boundary), a section with holes, a plane that misses, a degenerate normal. `BrepTests [req335]` — 9 cases incl. the `A/cos θ` oblique-area check that a plan projection would fail, and `headless.req335-section`, which pins the command's one-undo-step behaviour and that a refusal leaves the document unchanged. **Increment 2**: a three-point plane form matching SLICE's, elliptical boundaries, sections with holes | accepted |
 | REQ-336 | UI/IO/Build | planned (D-2026-09-10-d, ADR-056). What's New billboard: `resources/whats-new.md` + vendored md4c + ImGui draw layer; auto-open once per launch from Start unless prefs dismiss version matches; Help → About reopens same window without clearing dismiss; releases-list URL; missing-file fallback; CI presence gate; agent rule + git hook authoring lock | accepted |
+| REQ-337 | Domain/IO/Commands | accepted (D-2026-09-12, GitHub issue #486 Track A1+A2). Fitting metadata (partType/nominalSize/pressureClass/partNumber) on `CadBlockDefinition`; connection port role/compatTag/engagementLength on `CadBlockConnection`; `BLOCKFITTING` command; extended `BCONNECT`/`BCONNECTEDIT`; JSON round-trip with backward-compatible defaults. Routing engine and library export/browser (Track A3-A5, B, C) explicitly out of scope | accepted |
 
 ---
 

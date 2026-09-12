@@ -443,9 +443,20 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
       cj["ny"] = c.ny;
       cj["nz"] = c.nz;
       cj["nominalSize"] = c.nominalSize;
+      cj["role"] = CadBlockConnectionRoleToString(c.role);
+      cj["compatTag"] = c.compatTag;
+      cj["engagementLength"] = c.engagementLength;
       conns.push_back(std::move(cj));
     }
     o["connections"] = std::move(conns);
+  }
+  if (d.fitting.partType != CadFittingPartType::None) {
+    json fj;
+    fj["partType"] = CadFittingPartTypeToString(d.fitting.partType);
+    fj["nominalSize"] = d.fitting.nominalSize;
+    fj["pressureClass"] = CadPipePressureClassToString(d.fitting.pressureClass);
+    fj["partNumber"] = d.fitting.partNumber;
+    o["fitting"] = std::move(fj);
   }
   return o;
 }
@@ -513,8 +524,18 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
       c.ny = cj.value("ny", 0.f);
       c.nz = cj.value("nz", 1.f);
       c.nominalSize = cj.value("nominalSize", "");
+      (void)CadBlockConnectionRoleFromString(cj.value("role", "None"), &c.role);
+      c.compatTag = cj.value("compatTag", "");
+      c.engagementLength = cj.value("engagementLength", 0.f);
       d.connections.push_back(std::move(c));
     }
+  }
+  if (o.contains("fitting")) {
+    const json& fj = o["fitting"];
+    (void)CadFittingPartTypeFromString(fj.value("partType", "None"), &d.fitting.partType);
+    d.fitting.nominalSize = fj.value("nominalSize", "");
+    (void)CadPipePressureClassFromString(fj.value("pressureClass", "None"), &d.fitting.pressureClass);
+    d.fitting.partNumber = fj.value("partNumber", "");
   }
   return d;
 }

@@ -56,6 +56,12 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
 /// Face pick during BCONNECT authoring in BEDIT.
 bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                             std::vector<std::string>& log);
+/// Continuation of an interactive BCONNECT/BCONNECTEDIT/BLOCKFITTING prompt (issue #486 inc A1+A2):
+/// one typed line answers whichever field the last prompt asked for. Blank keeps the current/
+/// default value; an out-of-range token reprompts the same field with a "must be one of" message.
+void HandleBConnectPromptText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+void HandleBConnectEditPromptText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+void HandleBlockFittingPromptText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
 /// OK on the Insert dialog: place now, or start on-screen point/scale/rotation picks.
 void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& log);
 void CadBlocksCommitInsertAttrDialog(AppCommandState& st, std::vector<std::string>& log);

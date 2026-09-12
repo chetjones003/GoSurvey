@@ -26,6 +26,25 @@ constexpr double kHalfPi = 0.5 * kPi;
 constexpr int kMinArcSegments = 2;
 constexpr int kMaxArcSegments = 512;
 
+/// A (near-)full turn gets a much higher segment floor than a small arc sliver needs, independent
+/// of `tol/radius` (issue #486 GUI pass): the app's chord tolerance is a fixed absolute distance
+/// (`kSolidChordToleranceFt`), so `tol/radius` — and with it the segment count — shrinks for any
+/// small-to-moderate-radius circle, not just tiny ones; even an ordinary few-foot cylinder read as
+/// visibly faceted. A short arc (a fillet corner, an intersection sliver) does not carry this
+/// complaint — it is already a small fraction of a turn, so it stays on the ordinary floor above.
+/// This is the ONE place a circle or a near-closed arc's parametrisation is turned into a segment
+/// count (`SegmentsForArc`/`SegmentsForEdge`), so raising the floor here reaches every curved solid
+/// face, every curved B-rep edge, AND the rubber-band edge preview (`TessellateEdges`, which every
+/// EXTRUDE/PRESSPULL/CYLINDER/REVOLVE/LOFT/SWEEP ghost in CadRubberPreview.cpp draws through) in one
+/// place, so none of them can drift back out of sync with each other.
+// A cylinder's curved wall is built as TWO half-turn faces (see BuildConical's `sideFace(0, kPi,
+// ...)` / `sideFace(kPi, kTwoPi, ...)` — the seamed-sphere pattern, needed so a boolean/slice
+// operation always has an edge to cut at), so "the whole circle" shows up here as a `kPi` span
+// twice over, not one `kTwoPi` span. The threshold has to catch that half-turn case too, or this
+// floor never engages for the ordinary EXTRUDE/PRESSPULL cylinder it exists for.
+constexpr double kFullTurnSpanThreshold = kPi * 0.999;
+constexpr int kMinFullCircleSegments = 16;
+
 [[nodiscard]] bool AllFinite(std::initializer_list<double> vs) {
   for (double v : vs) {
     if (!std::isfinite(v))
@@ -1333,13 +1352,14 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
   const double span = std::fabs(spanRad);
   if (!(radius > 0.0) || !(span > 0.0))
     return 1;
+  const int minSegs = span >= kFullTurnSpanThreshold ? kMinFullCircleSegments : kMinArcSegments;
   if (tol >= radius)
-    return kMinArcSegments;
+    return minSegs;
   const double maxStep = 2.0 * std::acos(1.0 - tol / radius);
   if (!(maxStep > 0.0))
     return kMaxArcSegments;
   const int n = static_cast<int>(std::ceil(span / maxStep));
-  return std::clamp(n, kMinArcSegments, kMaxArcSegments);
+  return std::clamp(n, minSegs, kMaxArcSegments);
 }
 
 /// Segment count to walk a curved edge (Arc / Ellipse / Intersection) within \p tol; 1 for a line.
@@ -11919,23 +11939,51 @@ struct GeneralBranchSeams {
     if (std::fabs(std::fabs(dn) - 1.0) > 1e-6)
       continue;
     const std::vector<Vec3> ring = FaceRing(planar, f);
-    if (ring.size() < 3)
-      continue;
-    const double t = ray3d::Dot(ray3d::Sub(ring[0], C.axis.origin), n) / dn;
+    // Disk cap (cylinder top/bottom) has 2 arc edges, not a polygon. Handle separately.
+    bool isDisk = false;
+    Vec3 diskCentre{};
+    double diskRadius = 0;
+    if (ring.size() < 3) {
+      if (f.loops.size() == 1 && f.loops[0].uses.size() == 2) {
+        const Edge& e0 = planar.edges[static_cast<size_t>(f.loops[0].uses[0].edge)];
+        const Edge& e1 = planar.edges[static_cast<size_t>(f.loops[0].uses[1].edge)];
+        if (e0.kind == CurveKind::Arc && e1.kind == CurveKind::Arc) {
+          if (std::fabs(e0.radius - e1.radius) < 1e-9 * std::max(e0.radius, 1.0) &&
+              ray3d::Length(ray3d::Sub(e0.frame.origin, e1.frame.origin)) < 1e-9 * std::max(e0.radius, 1.0)) {
+            isDisk = true;
+            diskCentre = e0.frame.origin;
+            diskRadius = e0.radius;
+          }
+        }
+      }
+      if (!isDisk) continue;
+    }
+    const double t = isDisk ? ray3d::Dot(ray3d::Sub(diskCentre, C.axis.origin), n) / dn : ray3d::Dot(ray3d::Sub(ring[0], C.axis.origin), n) / dn;
     const Vec3 hp = ray3d::Add(C.axis.origin, ray3d::Scale(az, t));
     bool onEdge = false;
-    if (!PointInPolygon3D(hp, ring, n, eps, &onEdge))
-      continue;
+    if (isDisk) {
+      double d = ray3d::Length(ray3d::Sub(hp, diskCentre));
+      if (d > diskRadius + eps) continue;
+      onEdge = std::fabs(d - diskRadius) <= eps;
+    } else {
+      if (!PointInPolygon3D(hp, ring, n, eps, &onEdge))
+        continue;
+    }
     anyPerp = true;
     double clr = std::numeric_limits<double>::max();
-    for (std::size_t i = 0; i < ring.size(); ++i) {
-      const Vec3& p0 = ring[i];
-      const Vec3& p1 = ring[(i + 1) % ring.size()];
-      const Vec3 e = ray3d::Sub(p1, p0);
-      const double len2 = ray3d::Dot(e, e);
-      double u = len2 > 1e-24 ? ray3d::Dot(ray3d::Sub(hp, p0), e) / len2 : 0.0;
-      u = std::clamp(u, 0.0, 1.0);
-      clr = std::min(clr, ray3d::Length(ray3d::Sub(hp, ray3d::Add(p0, ray3d::Scale(e, u)))));
+    if (isDisk) {
+      double d = ray3d::Length(ray3d::Sub(hp, diskCentre));
+      clr = diskRadius - d;
+    } else {
+      for (std::size_t i = 0; i < ring.size(); ++i) {
+        const Vec3& p0 = ring[i];
+        const Vec3& p1 = ring[(i + 1) % ring.size()];
+        const Vec3 e = ray3d::Sub(p1, p0);
+        const double len2 = ray3d::Dot(e, e);
+        double u = len2 > 1e-24 ? ray3d::Dot(ray3d::Sub(hp, p0), e) / len2 : 0.0;
+        u = std::clamp(u, 0.0, 1.0);
+        clr = std::min(clr, ray3d::Length(ray3d::Sub(hp, ray3d::Add(p0, ray3d::Scale(e, u)))));
+      }
     }
     if (clr < C.radius + eps)
       continue;  // the footprint crosses this face's edge — a mixed arc/line intersection (B2)
@@ -12331,6 +12379,133 @@ bool BooleanSubtract(const Solid& a, const Solid& b, std::vector<Solid>* out, Pr
 }
 bool BooleanIntersect(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy) {
   return BooleanPlanar(a, b, BoolOp::Intersect, out, outWhy);
+}
+
+bool SubtractCircle(const Solid& base, const Vec3& centre, const Vec3& normal, double radius,
+                    double depth, Solid* out, Problem* outWhy) {
+  if (!out) return Fail(Problem::NonPositiveRadius, outWhy);
+  if (!(radius > 0.0) || !std::isfinite(radius)) return Fail(Problem::NonPositiveRadius, outWhy);
+  if (!(depth > 0.0) || !std::isfinite(depth)) return Fail(Problem::NonPositiveHeight, outWhy);
+  if (!FinitePoint(centre) || !AllFinite({normal.x, normal.y, normal.z}))
+    return Fail(Problem::NonFiniteParameter, outWhy);
+  const double nLen = ray3d::Length(normal);
+  if (!(nLen > 1e-12)) return Fail(Problem::SliceDegeneratePlane, outWhy);
+  const Vec3 nHat = ray3d::Scale(normal, 1.0 / nLen);
+  ucs::Ucs fr;
+  if (!ucs::FromNormal(centre, nHat, &fr)) return Fail(Problem::DegenerateFrame, outWhy);
+  Solid cutter;
+  if (!MakeCylinder(fr, radius, depth, &cutter, outWhy)) return false;
+  std::vector<Solid> r;
+  if (!BooleanSubtract(base, cutter, &r, outWhy)) return false;
+  if (r.size() != 1) return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(r[0]);
+  return Succeed(outWhy);
+}
+
+// Try to build a through-hole bore directly without a cutter solid. Handles both polygonal
+// caps (boxes) and circular disk caps (cylinders) via the same disk-aware hit test used in
+// TryBooleanCylinderThroughPlanar. This is what makes flange bolt holes work when the base
+// itself is a cylinder.
+bool TryBoreThroughDirect(const Solid& base, const Vec3& centre, const Vec3& nHat, double radius, Solid* out, Problem* outWhy) {
+  double scale = 0;
+  for (auto &v: base.vertices) scale = std::max(scale, std::fabs(v.p.x)+std::fabs(v.p.y)+std::fabs(v.p.z));
+  scale = std::max(scale, radius+1.0);
+  double eps = 1e-7 * std::max(scale, 1.0);
+  struct Hit { int face=-1; Vec3 point; Vec3 n; };
+  Hit entry, exitH;
+  bool haveEntry=false, haveExit=false;
+  for (int fi=0; fi<(int)base.faces.size(); ++fi){
+    const Face& f = base.faces[static_cast<size_t>(fi)];
+    if (f.surface.kind != SurfaceKind::Plane) continue;
+    Vec3 n = f.surface.frame.zAxis;
+    double dn = ray3d::Dot(n, nHat);
+    if (std::fabs(std::fabs(dn)-1.0) > 1e-6) continue;
+    bool isDisk=false; Vec3 diskC{}; double diskR=0;
+    std::vector<Vec3> ring = FaceRing(base, f);
+    if (ring.size() < 3){
+      if (f.loops.size()>=1 && f.loops[0].uses.size()==2){
+        const Edge& e0 = base.edges[static_cast<size_t>(f.loops[0].uses[0].edge)];
+        const Edge& e1 = base.edges[static_cast<size_t>(f.loops[0].uses[1].edge)];
+        if (e0.kind==CurveKind::Arc && e1.kind==CurveKind::Arc && std::fabs(e0.radius-e1.radius)<1e-9*std::max(e0.radius,1.0) && ray3d::Length(ray3d::Sub(e0.frame.origin,e1.frame.origin))<1e-9*std::max(e0.radius,1.0)){
+          isDisk=true; diskC=e0.frame.origin; diskR=e0.radius;
+        }
+      }
+      if(!isDisk) continue;
+    }
+    Vec3 hp;
+    if (isDisk){
+      double t = ray3d::Dot(ray3d::Sub(diskC, centre), n) / dn;
+      hp = ray3d::Add(centre, ray3d::Scale(nHat, t));
+      double d = ray3d::Length(ray3d::Sub(hp, diskC));
+      if (d > diskR + eps) continue;
+      if (diskR - d < radius + eps) continue;
+      // Also check inner holes (already drilled) – hp must not be inside any existing hole
+      bool insideHole=false;
+      for(size_t li=1; li<f.loops.size(); ++li){
+        if(f.loops[li].uses.size()!=2) continue;
+        const Edge& he0 = base.edges[static_cast<size_t>(f.loops[li].uses[0].edge)];
+        const Edge& he1 = base.edges[static_cast<size_t>(f.loops[li].uses[1].edge)];
+        if(he0.kind!=CurveKind::Arc || he1.kind!=CurveKind::Arc) continue;
+        Vec3 hc = he0.frame.origin; double hr = he0.radius;
+        double hd = ray3d::Length(ray3d::Sub(hp, hc));
+        if(hd < hr + radius + eps){ insideHole=true; break; }
+      }
+      if(insideHole) continue;
+    } else {
+      double t = ray3d::Dot(ray3d::Sub(ring[0], centre), n) / dn;
+      hp = ray3d::Add(centre, ray3d::Scale(nHat, t));
+      bool onEdge=false;
+      if(!PointInPolygon3D(hp, ring, n, eps, &onEdge)) continue;
+      double clr = std::numeric_limits<double>::max();
+      for(size_t i=0;i<ring.size();++i){
+        Vec3 p0=ring[i], p1=ring[(i+1)%ring.size()];
+        Vec3 e=ray3d::Sub(p1,p0); double len2=ray3d::Dot(e,e);
+        double u=len2>1e-24 ? ray3d::Dot(ray3d::Sub(hp,p0),e)/len2 : 0; u=std::clamp(u,0.0,1.0);
+        clr=std::min(clr, ray3d::Length(ray3d::Sub(hp, ray3d::Add(p0, ray3d::Scale(e,u)))));
+      }
+      if(clr < radius + eps) continue;
+    }
+    Hit h; h.face=fi; h.point=hp; h.n=n;
+    if(dn < 0){ if(!haveEntry){ entry=h; haveEntry=true; } } else { if(!haveExit){ exitH=h; haveExit=true; } }
+  }
+  if(!haveEntry || !haveExit) return false;
+  Solid r;
+  if(!BuildBore(base, entry.face, entry.point, entry.n, radius, true, exitH.face, exitH.point, 0, &r, outWhy)) return false;
+  *out = std::move(r);
+  return true;
+}
+
+bool SubtractCircleThrough(const Solid& base, const Vec3& centre, const Vec3& normal, double radius,
+                           Solid* out, Problem* outWhy) {
+  if (base.vertices.empty()) return Fail(Problem::NoShell, outWhy);
+  if (!(radius > 0.0) || !std::isfinite(radius)) return Fail(Problem::NonPositiveRadius, outWhy);
+  if (!FinitePoint(centre) || !AllFinite({normal.x, normal.y, normal.z}))
+    return Fail(Problem::NonFiniteParameter, outWhy);
+  const double nLen = ray3d::Length(normal);
+  if (!(nLen > 1e-12)) return Fail(Problem::SliceDegeneratePlane, outWhy);
+  const Vec3 nHat = ray3d::Scale(normal, 1.0 / nLen);
+  // First try direct bore (handles cylinder caps as well as boxes)
+  {
+    Solid bore;
+    if (TryBoreThroughDirect(base, centre, nHat, radius, &bore, outWhy)) {
+      *out = std::move(bore);
+      return Succeed(outWhy);
+    }
+  }
+  Vec3 mn, mx;
+  SolidAabb(base, &mn, &mx);
+  const double diag = ray3d::Length(ray3d::Sub(mx, mn));
+  const double depth = diag * 2.0 + 20.0 * std::max(radius, 1.0);
+  const Vec3 baseOrigin = ray3d::Sub(centre, ray3d::Scale(nHat, depth * 0.5));
+  ucs::Ucs fr;
+  if (!ucs::FromNormal(baseOrigin, nHat, &fr)) return Fail(Problem::DegenerateFrame, outWhy);
+  Solid cutter;
+  if (!MakeCylinder(fr, radius, depth, &cutter, outWhy)) return false;
+  std::vector<Solid> r;
+  if (!BooleanSubtract(base, cutter, &r, outWhy)) return false;
+  if (r.size() != 1) return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(r[0]);
+  return Succeed(outWhy);
 }
 // ---------------------------------------------------------------------------------------------
 // REQ-317 POLYSOLID: a wall swept along a path (ADR-050).
@@ -13882,8 +14057,29 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     }
     switch (sf.kind) {
     case SurfaceKind::Plane: {
-      if (f.loops.size() > 2)
-        return Fail(Problem::PlaneFaceNotSimple, outWhy);
+      if (f.loops.size() > 2) {
+        // Multi-hole planar face (e.g. flange with 4 bolt holes) – convert 3D loops to 2D paramLoops
+        // and use the general even-odd tessellator which already handles any number of loops.
+        Face tmp = f;
+        tmp.paramLoops.clear();
+        tmp.paramLoops.reserve(f.loops.size());
+        for (const Loop& lp : f.loops) {
+          std::vector<curveisect::Vec2> poly;
+          for (const EdgeUse& u : lp.uses) {
+            const Edge& e = s.edges[static_cast<size_t>(u.edge)];
+            int segs = SegmentsForEdge(e, chordTolerance);
+            for (int i = 0; i < segs; ++i) {
+              double t = double(i) / double(segs);
+              Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+              ucs::Point2D q = ucs::WorldToPlane(sf.frame, p);
+              poly.push_back(curveisect::Vec2{q.x, q.y});
+            }
+          }
+          tmp.paramLoops.push_back(std::move(poly));
+        }
+        TessellateGeneralLoopFace(tmp, chordTolerance, &mb);
+        break;
+      }
       // Walk each loop into a polyline. Arc edges are subdivided by the same chord rule the curved
       // faces use, so the cap and the wall it meets do not disagree.
       auto sampleLoop = [&](const Loop& lp) {
@@ -14078,10 +14274,14 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const bool isect = sf.kind == SurfaceKind::Cylinder && FaceLoopHasIntersectionEdge(s, f);
       const bool coneCut = sf.kind == SurfaceKind::Cone &&
                           (FaceLoopHasEllipseEdge(s, f) || FaceLoopHasIntersectionEdge(s, f));
-      const int nu = (isect || coneCut) ? std::clamp(SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart,
-                                                                    0.25 * chordTolerance),
-                                                    24, 256)
-                                       : SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart, chordTolerance);
+      // The plain unclipped cylinder/cone wall — EXTRUDE or PRESSPULL of an ordinary circle, the
+      // common case — is a (near-)full turn, so `SegmentsForArc`'s own `kMinFullCircleSegments`
+      // floor already keeps it smooth; no separate clamp needed here (issue #486 GUI pass). The
+      // isect/coneCut case additionally floors at 24, since its face is CUT to a partial sweep by
+      // an intersection or ellipse edge and so would not otherwise reach the full-turn floor above.
+      const int nu = (isect || coneCut)
+                        ? std::clamp(SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart, 0.25 * chordTolerance), 24, 256)
+                        : SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart, chordTolerance);
       CylinderCut cc;
       const bool cut = sf.kind == SurfaceKind::Cylinder && !isect && CylinderCutZExtent(s, f, &cc);
       const IsectStrip strip = isect ? MakeIsectStrip(s, f) : IsectStrip{};
@@ -14278,6 +14478,36 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       break;
     }
     }
+  }
+
+  // Weld duplicate vertices that share position AND normal (smooth seams, e.g. cylinder halves).
+  // Keep hard edges (cap ↔ wall, 90°) separate by requiring normal match, so wall/cap seams stay hard.
+  {
+    const double posEps = 1e-9;
+    const double nrmEps = 1e-6;
+    std::vector<uint32_t> remap(mesh.vertsXyz.size()/3, 0xFFFFFFFFu);
+    std::vector<double> newVerts, newNorms;
+    newVerts.reserve(mesh.vertsXyz.size());
+    newNorms.reserve(mesh.normalsXyz.size());
+    for(size_t i=0;i<mesh.vertsXyz.size()/3;++i){
+      double x=mesh.vertsXyz[i*3], y=mesh.vertsXyz[i*3+1], z=mesh.vertsXyz[i*3+2];
+      double nx=mesh.normalsXyz[i*3], ny=mesh.normalsXyz[i*3+1], nz=mesh.normalsXyz[i*3+2];
+      uint32_t found=0xFFFFFFFFu;
+      for(size_t j=0;j<newVerts.size()/3;++j){
+        double dx=newVerts[j*3]-x, dy=newVerts[j*3+1]-y, dz=newVerts[j*3+2]-z;
+        double dnx=newNorms[j*3]-nx, dny=newNorms[j*3+1]-ny, dnz=newNorms[j*3+2]-nz;
+        if(dx*dx+dy*dy+dz*dz < posEps*posEps && dnx*dnx+dny*dny+dnz*dnz < nrmEps*nrmEps){ found=(uint32_t)j; break; }
+      }
+      if(found==0xFFFFFFFFu){
+        found=(uint32_t)(newVerts.size()/3);
+        newVerts.push_back(x); newVerts.push_back(y); newVerts.push_back(z);
+        newNorms.push_back(nx); newNorms.push_back(ny); newNorms.push_back(nz);
+      }
+      remap[i]=found;
+    }
+    for(auto &idx: mesh.indices) idx = remap[idx];
+    mesh.vertsXyz.swap(newVerts);
+    mesh.normalsXyz.swap(newNorms);
   }
 
   *out = std::move(mesh);
