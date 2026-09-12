@@ -1842,7 +1842,7 @@ struct AppCommandState {
     int meshTriangleCount = 0;
 
     /// Solids in the B-rep profile (REQ-313 / REQ-100). 0 = not the solid profile; at most one
-    /// of this, ef meshTriangleCount and ef surfacePointCount is non-zero.
+    /// of this, \ref meshTriangleCount and \ref surfacePointCount is non-zero.
     ///
     /// A profile of its OWN rather than an assumption that the mesh number covers it, for the
     /// same reason the surface profile is not implied by the mesh one: a solid's cost is not one

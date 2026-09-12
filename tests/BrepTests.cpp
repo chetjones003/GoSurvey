@@ -6633,3 +6633,59 @@ TEST_CASE("A self-intersecting solid is sound topology whose measurements are wi
   CHECK(brep::SelfIntersects(s));
   CHECK_FALSE(brep::ComputeMassProperties(s).valid);
 }
+
+TEST_CASE("3D subtraction with circles as cylindrical cutters", "[brep][circle-subtract]") {
+  brep::Problem why = brep::Problem::Ok;
+  brep::Solid box;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 10, 10, 10, &box, &why));
+  const double r = 2.0;
+  brep::Vec3 centre{0, 0, 5};
+  brep::Vec3 normal{0, 0, 1};
+  brep::Solid holed;
+  REQUIRE(brep::SubtractCircleThrough(box, centre, normal, r, &holed, &why));
+  REQUIRE(brep::Validate(holed) == brep::Problem::Ok);
+  const double vol = brep::ComputeMassProperties(holed).volume;
+  const double boxVol = 10 * 10 * 10;
+  // Hole is through the top/bottom faces: cylinder of radius r through height 10
+  const double holeVol = 3.141592653589793 * r * r * 10.0;
+  REQUIRE(vol == Catch::Approx(boxVol - holeVol).epsilon(0.02));
+
+  SECTION("tilted circle normal") {
+    brep::Vec3 nTilt{0.3, 0.4, 0.8660254};
+    brep::Solid holedTilt;
+    REQUIRE(brep::SubtractCircleThrough(box, centre, nTilt, r, &holedTilt, &why));
+    REQUIRE(brep::Validate(holedTilt) == brep::Problem::Ok);
+    REQUIRE(brep::ComputeMassProperties(holedTilt).valid);
+  }
+
+  SECTION("invalid radius refused") {
+    brep::Solid bad;
+    REQUIRE_FALSE(brep::SubtractCircleThrough(box, centre, normal, -1.0, &bad, &why));
+    REQUIRE(why == brep::Problem::NonPositiveRadius);
+  }
+
+  SECTION("explicit depth variant") {
+    brep::Solid holed2;
+    brep::Vec3 c2{0,0,0};
+    REQUIRE(brep::SubtractCircle(box, c2, normal, r, 10.0, &holed2, &why));
+    REQUIRE(brep::Validate(holed2) == brep::Problem::Ok);
+  }
+}
+
+TEST_CASE("SUBTRACT short PRESSPULL cylinder via through-hole fallback", "[brep][circle-subtract]") {
+  brep::Problem why;
+  brep::Solid box;
+  REQUIRE(brep::MakeBox(ucs::Ucs{},10,10,10,&box,&why));
+  ucs::Ucs fr; REQUIRE(ucs::FromNormal(brep::Vec3{0,0,5}, brep::Vec3{0,0,1}, &fr));
+  brep::Solid cyl;
+  REQUIRE(brep::MakeCylinder(fr, 2.0, 0.005, &cyl, &why));
+  std::vector<brep::Solid> r;
+  REQUIRE_FALSE(brep::BooleanSubtract(box,cyl,&r,&why));
+  REQUIRE(why==brep::Problem::BooleanCurvedFace);
+  brep::Solid cut;
+  REQUIRE(brep::SubtractCircleThrough(box, brep::Vec3{0,0,5}, brep::Vec3{0,0,1}, 2.0, &cut, &why));
+  REQUIRE(brep::Validate(cut)==brep::Problem::Ok);
+  double vol = brep::ComputeMassProperties(cut).volume;
+  REQUIRE(vol == Catch::Approx(1000 - 3.141592653589793*4*10).epsilon(0.02));
+}
+

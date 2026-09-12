@@ -30069,6 +30069,49 @@ std::vector<int> SelectedSolidIndices(const AppCommandState& st) {
   return idx;
 }
 
+std::vector<int> SelectedCircleIndices(const AppCommandState& st) {
+  const int n = static_cast<int>(st.userCirclesCxCyZR.size() / 4);
+  std::vector<int> idx;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type == SelectedEntity::Type::Circle && e.index >= 0 && e.index < n &&
+        std::find(idx.begin(), idx.end(), e.index) == idx.end())
+      idx.push_back(e.index);
+  }
+  return idx;
+}
+
+// If s is a right circular cylinder (2 half-cylinder faces + 2 caps, as built by MakeCylinder/PRESSPULL),
+// extract its axis midpoint, direction and radius. Used to turn a short PRESSPULL cylinder into a
+// through-hole cutter when BooleanSubtract would otherwise refuse "only partly enters".
+bool TryGetCylinderInfo(const brep::Solid& s, brep::Vec3* outCentre, brep::Vec3* outNormal, double* outRadius) {
+  if (!outCentre || !outNormal || !outRadius) return false;
+  if (s.faces.size() != 4 || s.vertices.size() != 4 || s.edges.size() != 6) return false;
+  int cylIdx = -1;
+  int cylCount = 0, planeCount = 0;
+  for (int i = 0; i < 4; ++i) {
+    auto k = s.faces[static_cast<size_t>(i)].surface.kind;
+    if (k == brep::SurfaceKind::Cylinder) { ++cylCount; if (cylIdx < 0) cylIdx = i; }
+    else if (k == brep::SurfaceKind::Plane) ++planeCount;
+    else return false;
+  }
+  if (cylCount != 2 || planeCount != 2) return false;
+  const auto& sf = s.faces[static_cast<size_t>(cylIdx)].surface;
+  if (!(sf.radius > 0) || !(sf.height > 0)) return false;
+  // Use the cylinder face's frame: origin is base centre, zAxis is axis direction.
+  brep::Vec3 base = sf.frame.origin;
+  brep::Vec3 dir = sf.frame.zAxis;
+  double len = sf.height;
+  double r = sf.radius;
+  double dlen = ray3d::Length(dir);
+  if (!(dlen > 1e-12)) return false;
+  dir = ray3d::Scale(dir, 1.0/dlen);
+  *outCentre = ray3d::Add(base, ray3d::Scale(dir, len*0.5));
+  *outNormal = dir;
+  *outRadius = r;
+  return true;
+}
+
+
 bool ApplyOnePair(CadBooleanOp op, const brep::Solid& x, const brep::Solid& y,
                   std::vector<brep::Solid>* r, brep::Problem* w) {
   switch (op) {
@@ -30148,7 +30191,8 @@ void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>&
     if (!FoldBoolean(op, grab(minuend), &result, log))
       return;
   } else {
-    // Fold-union the minuend set, then subtract each subtrahend solid from every piece.
+    // Fold-union the minuend set, then subtract each subtrahend solid and each
+    // selected circle (as a cylindrical through-hole, issue #486 follow-up) from every piece.
     if (!FoldBoolean(CadBooleanOp::Union, grab(minuend), &result, log))
       return;
     for (const brep::Solid& sub : grab(subtrahend)) {
@@ -30157,11 +30201,56 @@ void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>&
         std::vector<brep::Solid> r;
         brep::Problem why = brep::Problem::Ok;
         if (!brep::BooleanSubtract(piece, sub, &r, &why)) {
+          // If a short PRESSPULL cylinder only partly enters, retry as a through-hole
+          // using its axis/radius with auto-depth (common UX: user pulls a small nub to
+          // indicate a hole location, not the exact depth).
+          brep::Vec3 cc, nn; double rr;
+          if (why == brep::Problem::BooleanCurvedFace && TryGetCylinderInfo(sub, &cc, &nn, &rr)) {
+            brep::Solid cut;
+            brep::Problem why2 = brep::Problem::Ok;
+            if (brep::SubtractCircleThrough(piece, cc, nn, rr, &cut, &why2)) {
+              next.push_back(std::move(cut));
+              continue;
+            }
+            why = why2;
+          }
           log.push_back(verb + " — " + brep::ProblemText(why) + " Nothing changed.");
           return;
         }
         for (brep::Solid& x : r)
           next.push_back(std::move(x));
+      }
+      result = std::move(next);
+    }
+    // Circles as cylindrical cutters (centre+normal+radius, auto-depth through hole)
+    const std::vector<int> circleCutters = SelectedCircleIndices(st);
+    for (int ci : circleCutters) {
+      const size_t base = static_cast<size_t>(ci) * 4;
+      if (base + 3 >= st.userCirclesCxCyZR.size()) continue;
+      const double cx = st.userCirclesCxCyZR[base + 0];
+      const double cy = st.userCirclesCxCyZR[base + 1];
+      const double cz = st.userCirclesCxCyZR[base + 2];
+      const double r = st.userCirclesCxCyZR[base + 3];
+      double nx = 0, ny = 0, nz = 1;
+      const size_t ni = static_cast<size_t>(ci) * 3;
+      if (ni + 2 < st.userCircleNormals.size()) {
+        nx = st.userCircleNormals[ni + 0];
+        ny = st.userCircleNormals[ni + 1];
+        nz = st.userCircleNormals[ni + 2];
+      }
+      if (!(r > 0.0) || !std::isfinite(r)) {
+        log.push_back(verb + " — circle " + std::to_string(ci) + " has invalid radius. Nothing changed.");
+        return;
+      }
+      std::vector<brep::Solid> next;
+      for (const brep::Solid& piece : result) {
+        brep::Solid cut;
+        brep::Problem why = brep::Problem::Ok;
+        if (!brep::SubtractCircleThrough(piece, brep::Vec3{cx, cy, cz}, brep::Vec3{nx, ny, nz}, r, &cut, &why)) {
+          log.push_back(verb + " — " + brep::ProblemText(why) + " Nothing changed.");
+          return;
+        }
+        next.push_back(std::move(cut));
       }
       result = std::move(next);
     }
@@ -30218,7 +30307,7 @@ std::string CadBooleanPromptText(const AppCommandState& st) {
   case AppCommandState::BooleanPhase::SelectMinuend:
     return "SUBTRACT — select solids to subtract FROM, Enter when done. ESC cancels.";
   case AppCommandState::BooleanPhase::SelectSubtrahend:
-    return "SUBTRACT — select solids to subtract, Enter when done. ESC cancels.";
+    return "SUBTRACT — select solids/circles to subtract, Enter when done. ESC cancels.";
   }
   return "BOOLEAN";
 }
@@ -30273,8 +30362,9 @@ bool HandleBooleanTextInput(const std::string& lineIn, AppCommandState& st, std:
     return true;
   }
   if (st.booleanPhase == BP::SelectSubtrahend) {
-    if (sel.empty()) {
-      log.push_back("SUBTRACT — select the solids to subtract, or ESC.");
+    const std::vector<int> selCircles = SelectedCircleIndices(st);
+    if (sel.empty() && selCircles.empty()) {
+      log.push_back("SUBTRACT — select the solids/circles to subtract, or ESC.");
       return true;
     }
     CommitBoolean(st, CadBooleanOp::Subtract, st.booleanMinuend, sel, log);
