@@ -35115,7 +35115,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       float py = 0.f;
       float wz = 0.f;
       bool consumed = false;
-      if (!ResolveTypedModifyPoint(st, line, false, 0.f, 0.f, 0.f, "INSERT", &px, &py, &wz, &consumed, log)) {
+      if (!ResolveTypedModifyPoint(st, line, true, 0.f, 0.f, 0.f, "INSERT", &px, &py, &wz, &consumed, log)) {
         if (consumed)
           return;
         log.push_back("INSERT — type X,Y or X,Y,Z or pick in the viewport.");

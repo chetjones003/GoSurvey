@@ -679,5 +679,28 @@ TEST_CASE("INSERT 3D insertion point stores Z and preview matches commit", "[iss
     REQUIRE(s3.cadBlockRefs.size() == 1);
     CHECK(s3.cadBlockRefs[0].xf.z == Catch::Approx(7.5f).margin(1e-4));
   }
+
+  // --- Relative @X,Y,Z from origin (WCS) ---
+  {
+    AppCommandState s4;
+    s4.blockDefs = st.blockDefs;
+    s4.drawingInsUnits = st.drawingInsUnits;
+    s4.cadBlockRefs.clear();
+    StartInsertBlockCommand(s4, log);
+    std::snprintf(s4.insertBlockName, sizeof(s4.insertBlockName), "TEST3D");
+    s4.insertBlockSpecifyPoint = true;
+    s4.insertBlockSpecifyScale = false;
+    s4.insertBlockSpecifyRot = false;
+    s4.insertBlockDialogOpen = false;
+    s4.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+    s4.active = AppCommandState::Kind::InsertBlock;
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "@5,0,3");
+    ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), s4, log);
+    REQUIRE(s4.cadBlockRefs.size() == 1);
+    CHECK(s4.cadBlockRefs[0].xf.x == Catch::Approx(5.f).margin(1e-4));
+    CHECK(s4.cadBlockRefs[0].xf.y == Catch::Approx(0.f).margin(1e-4));
+    CHECK(s4.cadBlockRefs[0].xf.z == Catch::Approx(3.f).margin(1e-4));
+  }
 }
 
