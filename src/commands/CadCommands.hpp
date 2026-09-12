@@ -3903,6 +3903,8 @@ struct AppCommandState {
   bool insertBlockSpecifyAlignFace = false;
   bool insertBlockSpecifyConnectorSnap = false;
   char insertBlockConnectorName[64]{};
+  /// INSERT dialog override for block insertion units (issue #475 inc6). Empty uses the definition.
+  char insertBlockUnitsBuf[32]{};
   bool insertBlockUniformScale = true;
   bool insertBlockExplode = false;
   bool insertBlockAttrDialogOpen = false;

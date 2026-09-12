@@ -67,6 +67,20 @@ void CadBlockRestoreDynGripOrig(AppCommandState& st, CadBlockRef* r);
 /// Merge bundled `resources/blocks/*.{gs,dxf}` into \p dest. Skips names that already exist.
 void LoadBundledBlockLibrary(AppCommandState& dest, std::vector<std::string>& log);
 
+/// One row in the INSERT dialog library pane (drawing defs + bundled files not yet imported).
+struct CadBlockLibraryEntry {
+  std::string name;
+  std::string path;
+  bool imported = false;
+  bool isFitting = false;
+};
+
+void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out);
+/// Import a bundled library file when the user picks an entry that is not yet in \p st.blockDefs.
+bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry& entry, std::vector<std::string>& log);
+/// Block-unit scale for INSERT: honours \c insertBlockUnitsBuf when set (issue #475 inc6).
+[[nodiscard]] float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefinition& def);
+
 /// Civil 3D-style “Edit Block Definition” picker (BEDIT with no name, ribbon BEDIT).
 void CadBlocksCollectEditPickerNames(const AppCommandState& st, std::vector<std::string>* names);
 void CadBlocksOpenEditPicker(AppCommandState& st, std::vector<std::string>& log);

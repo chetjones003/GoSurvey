@@ -390,7 +390,8 @@ bool ImportSatFileToScratch(AppCommandState& scratch, const char* pathUtf8, std:
   return true;
 }
 
-int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std::vector<std::string>& log) {
+int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std::vector<std::string>& log,
+                                bool dropLooseSatGeometry) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
     log.push_back("BLOCKIMPORT — no path.");
     return -1;
@@ -431,7 +432,7 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   // A `.sat` is a single model, not a block library, and INSERT cannot place a 3D solid (issue
   // #473). Drop its solid straight into the drawing, re-based onto the origin, so the user can see
   // it and MOVE it into position; the block definition above is kept for a future 3D INSERT.
-  if (ext == ".sat") {
+  if (ext == ".sat" && dropLooseSatGeometry) {
     for (std::size_t i = 0; i < scratch.cadSolids.size(); ++i) {
       dest.cadSolids.push_back(scratch.cadSolids[i]);
       dest.cadSolidAttrs.push_back(i < scratch.cadSolidAttrs.size() ? scratch.cadSolidAttrs[i]
@@ -468,11 +469,23 @@ void LoadBundledBlockLibraryImpl(AppCommandState& dest, std::vector<std::string>
     if (ext == ".dxf" || ext == ".dwg")
       files.push_back(e.path());
   }
+  const fs::path fitDir = dir / "fittings";
+  if (fs::is_directory(fitDir, ec)) {
+    for (const fs::directory_entry& e : fs::directory_iterator(fitDir, ec)) {
+      if (ec)
+        break;
+      if (!e.is_regular_file(ec))
+        continue;
+      if (LowerExt(e.path().u8string().c_str()) == ".sat")
+        files.push_back(e.path());
+    }
+  }
   std::sort(files.begin(), files.end());
   int n = 0;
   for (const fs::path& p : files) {
     std::vector<std::string> ignored;
-    const int k = ImportCadBlocksFromPathImpl(dest, p.u8string().c_str(), ignored);
+    const bool dropLoose = LowerExt(p.u8string().c_str()) != ".sat";
+    const int k = ImportCadBlocksFromPathImpl(dest, p.u8string().c_str(), ignored, dropLoose);
     if (k > 0)
       n += k;
   }
@@ -612,8 +625,7 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
   r.defName = st.blockDefs[static_cast<size_t>(di)].name;
   r.xf = xf;
   PushUndoSnapshot(st, "Insert");
-  const float us = CadBlockUnitsScale(st.blockDefs[static_cast<size_t>(di)].units,
-                                      CadDrawingInsUnitsName(st.drawingInsUnits));
+  const float us = CadBlockInsertUnitsScale(st, st.blockDefs[static_cast<size_t>(di)]);
   r.xf.sx *= us;
   r.xf.sy *= us;
   r.xf.sz *= us;
@@ -687,7 +699,83 @@ CadBlockActionKind ParseActionKind(const std::string& s) {
 } // namespace
 
 bool ImportCadBlocksFromPath(AppCommandState& dest, const char* pathUtf8, std::vector<std::string>& log) {
-  return ImportCadBlocksFromPathImpl(dest, pathUtf8, log) >= 0;
+  return ImportCadBlocksFromPathImpl(dest, pathUtf8, log, true) >= 0;
+}
+
+float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefinition& def) {
+  if (st.insertBlockUnitsBuf[0] != '\0')
+    return CadBlockUnitsScale(st.insertBlockUnitsBuf, CadDrawingInsUnitsName(st.drawingInsUnits));
+  return CadBlockUnitsScale(def.units, CadDrawingInsUnitsName(st.drawingInsUnits));
+}
+
+void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out) {
+  assert(out != nullptr);
+  out->clear();
+  for (const CadBlockDefinition& d : st.blockDefs) {
+    if (d.name.empty())
+      continue;
+    CadBlockLibraryEntry e;
+    e.name = d.name;
+    e.imported = true;
+    out->push_back(std::move(e));
+  }
+  namespace fs = std::filesystem;
+  fs::path dir = ResolveBundledAssetPath(fs::path("resources") / "blocks");
+  if (dir.empty())
+    return;
+  if (fs::is_regular_file(dir))
+    dir = dir.parent_path();
+  std::error_code ec;
+  if (!fs::is_directory(dir, ec))
+    return;
+  const auto addFile = [&](const fs::path& p, bool fitting) {
+    if (!fs::is_regular_file(p, ec))
+      return;
+    std::string ext = p.extension().u8string();
+    ext = StringUtil::toLowerAsciiCopy(ext);
+    if (ext != ".dxf" && ext != ".dwg" && ext != ".sat")
+      return;
+    const std::string stem = p.stem().u8string();
+    if (stem.empty() || CadBlockFindDef(st.blockDefs, stem) >= 0)
+      return;
+    CadBlockLibraryEntry e;
+    e.name = stem;
+    e.path = p.u8string();
+    e.imported = false;
+    e.isFitting = fitting;
+    out->push_back(std::move(e));
+  };
+  for (const fs::directory_entry& ent : fs::directory_iterator(dir, ec)) {
+    if (ec)
+      break;
+    if (ent.is_regular_file(ec))
+      addFile(ent.path(), false);
+  }
+  const fs::path fitDir = dir / "fittings";
+  if (fs::is_directory(fitDir, ec)) {
+    for (const fs::directory_entry& ent : fs::directory_iterator(fitDir, ec)) {
+      if (ec)
+        break;
+      if (ent.is_regular_file(ec))
+        addFile(ent.path(), true);
+    }
+  }
+  std::sort(out->begin(), out->end(), [](const CadBlockLibraryEntry& a, const CadBlockLibraryEntry& b) {
+    if (a.imported != b.imported)
+      return a.imported > b.imported;
+    return StringUtil::toLowerAsciiCopy(a.name) < StringUtil::toLowerAsciiCopy(b.name);
+  });
+}
+
+bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry& entry,
+                                 std::vector<std::string>& log) {
+  if (entry.imported || entry.path.empty())
+    return CadBlockFindDef(st.blockDefs, entry.name) >= 0;
+  const int nBefore = static_cast<int>(st.blockDefs.size());
+  const bool dropLoose = !entry.isFitting;
+  if (ImportCadBlocksFromPathImpl(st, entry.path.c_str(), log, dropLoose) < 0)
+    return false;
+  return CadBlockFindDef(st.blockDefs, entry.name) >= 0 || static_cast<int>(st.blockDefs.size()) > nBefore;
 }
 
 bool CadBlocksImportWithPicker(AppCommandState& dest, std::vector<std::string>& log) {
@@ -711,6 +799,7 @@ bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXfo
 void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::None && st.active != AppCommandState::Kind::InsertBlock)
     CancelActiveCommand(st, log);
+  LoadBundledBlockLibrary(st, log);
   st.active = AppCommandState::Kind::InsertBlock;
   st.lastCommand = AppCommandState::Kind::InsertBlock;
   st.insertBlockDialogOpen = true;
@@ -734,6 +823,7 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   st.insertBlockSpecifyAlignFace = false;
   st.insertBlockSpecifyConnectorSnap = false;
   st.insertBlockConnectorName[0] = '\0';
+  st.insertBlockUnitsBuf[0] = '\0';
   st.insertBlockPath[0] = '\0';
   st.insertBlockName[0] = '\0';
   if (!st.blockRecent.empty())
@@ -878,11 +968,14 @@ void CancelBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log)
 }
 
 void CadBlocksApplyInsertNameDefaults(AppCommandState& st) {
-  // Previously forced 90° for matchline blocks — a workaround for INSERT applying rotation
-  // counter-clockwise. The bundled matchline definitions are authored pointing north, and INSERT
-  // now honours the clockwise-from-north convention (InsertRotZFromCwNorthDeg), so rotation 0
-  // places them exactly as authored. No name needs a non-zero default any more.
-  (void)st;
+  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+  if (di < 0) {
+    st.insertBlockUnitsBuf[0] = '\0';
+    return;
+  }
+  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  std::string units = def.units.empty() ? CadDrawingInsUnitsName(st.drawingInsUnits) : def.units;
+  std::snprintf(st.insertBlockUnitsBuf, sizeof(st.insertBlockUnitsBuf), "%s", units.c_str());
 }
 
 namespace {
@@ -1472,8 +1565,7 @@ bool CadBlockInsertPreviewXform(const AppCommandState& st, float curX, float cur
 
   // CadBlockPlaceInsert multiplies the transform by the block-unit scale after building it from
   // the dialog; fold the same factor in here so the ghost matches the commit within REQ-101.
-  const float us = CadBlockUnitsScale(st.blockDefs[static_cast<size_t>(di)].units,
-                                      CadDrawingInsUnitsName(st.drawingInsUnits));
+  const float us = CadBlockInsertUnitsScale(st, st.blockDefs[static_cast<size_t>(di)]);
   xf.sx = sx * us;
   xf.sy = sy * us;
   xf.sz = sz * us;
