@@ -106,6 +106,149 @@ struct CadBlockNested {
   std::string visState;
 };
 
+[[nodiscard]] inline bool CadBlockEqCi(std::string_view a, std::string_view b) {
+  if (a.size() != b.size())
+    return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    const unsigned char ca = static_cast<unsigned char>(a[i]);
+    const unsigned char cb = static_cast<unsigned char>(b[i]);
+    const char la = static_cast<char>((ca >= 'A' && ca <= 'Z') ? (ca - 'A' + 'a') : ca);
+    const char lb = static_cast<char>((cb >= 'A' && cb <= 'Z') ? (cb - 'A' + 'a') : cb);
+    if (la != lb)
+      return false;
+  }
+  return true;
+}
+
+/// Fitting part type tag on a block definition (issue #486 increment A1). `None` means the block
+/// is not tagged as a fitting at all.
+enum class CadFittingPartType : std::uint8_t {
+  None = 0,
+  Elbow90,
+  Elbow45,
+  Tee,
+  Cross,
+  Reducer,
+  Flange,
+  Valve,
+  Cap,
+  Coupling,
+  Other
+};
+
+/// Pressure class tag (issue #486, D-2026-09-12 (1)): a fixed enum, not free text, so library
+/// lookup and UI pickers can match exactly.
+enum class CadPipePressureClass : std::uint8_t { None = 0, CS150, CS300 };
+
+/// Connection port role (issue #486 increment A2).
+enum class CadBlockConnectionRole : std::uint8_t { None = 0, Inlet, Outlet, Branch };
+
+[[nodiscard]] inline const char* CadFittingPartTypeToString(CadFittingPartType t) {
+  switch (t) {
+    case CadFittingPartType::Elbow90: return "Elbow90";
+    case CadFittingPartType::Elbow45: return "Elbow45";
+    case CadFittingPartType::Tee: return "Tee";
+    case CadFittingPartType::Cross: return "Cross";
+    case CadFittingPartType::Reducer: return "Reducer";
+    case CadFittingPartType::Flange: return "Flange";
+    case CadFittingPartType::Valve: return "Valve";
+    case CadFittingPartType::Cap: return "Cap";
+    case CadFittingPartType::Coupling: return "Coupling";
+    case CadFittingPartType::Other: return "Other";
+    case CadFittingPartType::None:
+    default: return "None";
+  }
+}
+
+/// Case-insensitive parse. Returns false (leaving \p out untouched) for an unrecognized token so
+/// callers can refuse by name rather than silently defaulting (REQ-201).
+[[nodiscard]] inline bool CadFittingPartTypeFromString(std::string_view s, CadFittingPartType* out) {
+  assert(out != nullptr);
+  static constexpr std::pair<std::string_view, CadFittingPartType> kMap[] = {
+      {"none", CadFittingPartType::None},       {"elbow90", CadFittingPartType::Elbow90},
+      {"elbow45", CadFittingPartType::Elbow45}, {"tee", CadFittingPartType::Tee},
+      {"cross", CadFittingPartType::Cross},     {"reducer", CadFittingPartType::Reducer},
+      {"flange", CadFittingPartType::Flange},   {"valve", CadFittingPartType::Valve},
+      {"cap", CadFittingPartType::Cap},         {"coupling", CadFittingPartType::Coupling},
+      {"other", CadFittingPartType::Other},
+  };
+  for (const auto& [name, val] : kMap) {
+    if (CadBlockEqCi(s, name)) {
+      *out = val;
+      return true;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] inline const char* CadPipePressureClassToString(CadPipePressureClass c) {
+  switch (c) {
+    case CadPipePressureClass::CS150: return "CS150";
+    case CadPipePressureClass::CS300: return "CS300";
+    case CadPipePressureClass::None:
+    default: return "None";
+  }
+}
+
+[[nodiscard]] inline bool CadPipePressureClassFromString(std::string_view s, CadPipePressureClass* out) {
+  assert(out != nullptr);
+  if (CadBlockEqCi(s, "none")) {
+    *out = CadPipePressureClass::None;
+    return true;
+  }
+  if (CadBlockEqCi(s, "cs150")) {
+    *out = CadPipePressureClass::CS150;
+    return true;
+  }
+  if (CadBlockEqCi(s, "cs300")) {
+    *out = CadPipePressureClass::CS300;
+    return true;
+  }
+  return false;
+}
+
+[[nodiscard]] inline const char* CadBlockConnectionRoleToString(CadBlockConnectionRole r) {
+  switch (r) {
+    case CadBlockConnectionRole::Inlet: return "Inlet";
+    case CadBlockConnectionRole::Outlet: return "Outlet";
+    case CadBlockConnectionRole::Branch: return "Branch";
+    case CadBlockConnectionRole::None:
+    default: return "None";
+  }
+}
+
+[[nodiscard]] inline bool CadBlockConnectionRoleFromString(std::string_view s, CadBlockConnectionRole* out) {
+  assert(out != nullptr);
+  if (CadBlockEqCi(s, "none")) {
+    *out = CadBlockConnectionRole::None;
+    return true;
+  }
+  if (CadBlockEqCi(s, "inlet")) {
+    *out = CadBlockConnectionRole::Inlet;
+    return true;
+  }
+  if (CadBlockEqCi(s, "outlet")) {
+    *out = CadBlockConnectionRole::Outlet;
+    return true;
+  }
+  if (CadBlockEqCi(s, "branch")) {
+    *out = CadBlockConnectionRole::Branch;
+    return true;
+  }
+  return false;
+}
+
+/// Fitting metadata on a block definition (issue #486 increment A1). `partType == None` means the
+/// block is not tagged as a fitting; the other fields are then meaningless and ignored.
+struct CadBlockFittingMeta {
+  CadFittingPartType partType = CadFittingPartType::None;
+  /// NPS inch label (e.g. "4in"), matching CadBlockConnection::nominalSize's convention
+  /// (D-2026-09-12 (4)) — display/catalog/matching stays in NPS inches, not feet.
+  std::string nominalSize;
+  CadPipePressureClass pressureClass = CadPipePressureClass::None;
+  std::string partNumber;
+};
+
 /// Pipe/fitting connection port on a block definition (issue #475 increment 5). Local point and
 /// outward unit direction in block space; nominal size is a tag only, not parametric.
 struct CadBlockConnection {
@@ -117,6 +260,13 @@ struct CadBlockConnection {
   float ny = 0.f;
   float nz = 1.f;
   std::string nominalSize;
+  /// issue #486 increment A2:
+  CadBlockConnectionRole role = CadBlockConnectionRole::None;
+  /// Empty means "matches by nominal size alone".
+  std::string compatTag;
+  /// Drawing units (feet) — how far a pipe slides into this port before being cut back
+  /// (D-2026-09-12 (2): metadata cutback, not overlap-then-boolean-trim). 0.f = no cutback.
+  float engagementLength = 0.f;
 };
 
 /// A definition connection transformed into world/storage coordinates for a placed reference.
@@ -181,6 +331,8 @@ struct CadBlockDefinition {
   std::vector<std::string> visibilityStates;
   std::vector<CadBlockConnection> connections;
   std::string metadata;
+  /// issue #486 increment A1. `fitting.partType == None` means "not a fitting".
+  CadBlockFittingMeta fitting;
 };
 
 struct CadBlockRef {
@@ -208,19 +360,6 @@ struct CadBlockWorldSolid {
   EntityAttributes attr;
 };
 
-[[nodiscard]] inline bool CadBlockEqCi(std::string_view a, std::string_view b) {
-  if (a.size() != b.size())
-    return false;
-  for (size_t i = 0; i < a.size(); ++i) {
-    const unsigned char ca = static_cast<unsigned char>(a[i]);
-    const unsigned char cb = static_cast<unsigned char>(b[i]);
-    const char la = static_cast<char>((ca >= 'A' && ca <= 'Z') ? (ca - 'A' + 'a') : ca);
-    const char lb = static_cast<char>((cb >= 'A' && cb <= 'Z') ? (cb - 'A' + 'a') : cb);
-    if (la != lb)
-      return false;
-  }
-  return true;
-}
 
 inline void CadBlockXformPoint(const CadBlockXform& xf, float lx, float ly, float lz, float* wx, float* wy,
                                float* wz) {
