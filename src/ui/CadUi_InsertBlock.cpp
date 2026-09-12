@@ -1,7 +1,9 @@
 #include "CadUi.hpp"
 #include "CadBlocks.hpp"
+#include "CadRubberPreview.hpp"
 #include "NumFormat.hpp"
 #include "StringUtil.hpp"
+#include "util/brep.hpp"
 
 #include <imgui.h>
 
@@ -11,6 +13,59 @@
 #include <cstring>
 #include <string>
 #include <vector>
+
+namespace {
+
+void DrawInsertLibraryPreview(const AppCommandState& cmd, std::string_view blockName) {
+  const int di = CadBlockFindDef(cmd.blockDefs, blockName);
+  if (di < 0)
+    return;
+  CadBlockRef r;
+  r.defName = cmd.blockDefs[static_cast<size_t>(di)].name;
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(cmd.blockDefs, r, EntityAttributes{}, &segs);
+  std::vector<CadBlockWorldSolid> ws;
+  CadBlockCollectWorldSolids(cmd.blockDefs, r, EntityAttributes{}, &ws);
+  brep::Problem why = brep::Problem::Ok;
+  for (const CadBlockWorldSolid& w : ws) {
+    if (!w.solid)
+      continue;
+    std::vector<double> edges;
+    if (!brep::TessellateEdges(*w.solid, kSolidChordToleranceFt, &edges, &why))
+      continue;
+    for (std::size_t i = 0; i + 5 < edges.size(); i += 6)
+      segs.push_back(CadBlockWorldSeg{static_cast<float>(edges[i]), static_cast<float>(edges[i + 1]),
+                                      static_cast<float>(edges[i + 2]), static_cast<float>(edges[i + 3]),
+                                      static_cast<float>(edges[i + 4]), static_cast<float>(edges[i + 5]),
+                                      EntityAttributes{}});
+  }
+  float minX = 1.e9f;
+  float minY = 1.e9f;
+  float maxX = -1.e9f;
+  float maxY = -1.e9f;
+  for (const CadBlockWorldSeg& s : segs) {
+    minX = std::min(minX, std::min(s.x0, s.x1));
+    minY = std::min(minY, std::min(s.y0, s.y1));
+    maxX = std::max(maxX, std::max(s.x0, s.x1));
+    maxY = std::max(maxY, std::max(s.y0, s.y1));
+  }
+  const ImVec2 a = ImGui::GetCursorScreenPos();
+  const ImVec2 sz = ImGui::GetContentRegionAvail();
+  if (segs.empty() || maxX <= minX || maxY <= minY || sz.x <= 8.f || sz.y <= 8.f)
+    return;
+  const float pad = 8.f;
+  const float sx = (sz.x - pad * 2.f) / (maxX - minX);
+  const float sy = (sz.y - pad * 2.f) / (maxY - minY);
+  const float sc = std::min(sx, sy);
+  auto toPx = [&](float x, float y) {
+    return ImVec2(a.x + pad + (x - minX) * sc, a.y + sz.y - pad - (y - minY) * sc);
+  };
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  for (const CadBlockWorldSeg& seg : segs)
+    dl->AddLine(toPx(seg.x0, seg.y0), toPx(seg.x1, seg.y1), IM_COL32(40, 40, 40, 255), 1.f);
+}
+
+} // namespace
 
 void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
@@ -75,9 +130,9 @@ void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) 
     return;
   }
 
-  ImGui::SetNextWindowSize(ImVec2(420.f, 0.f), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(560.f, 520.f), ImGuiCond_FirstUseEver);
   bool open = true;
-  if (!ImGui::Begin("Insert", &open, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize)) {
+  if (!ImGui::Begin("Insert", &open, ImGuiWindowFlags_NoDocking)) {
     ImGui::End();
     if (!open)
       CancelActiveCommand(cmd, log);
@@ -88,6 +143,39 @@ void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) 
     CancelActiveCommand(cmd, log);
     return;
   }
+
+  ImGui::BeginChild("##InsertLibCols", ImVec2(0.f, 180.f), false);
+  ImGui::BeginChild("##InsertLibList", ImVec2(ImGui::GetContentRegionAvail().x * 0.45f, 0.f), true);
+  ImGui::TextUnformatted("Library");
+  std::vector<CadBlockLibraryEntry> lib;
+  CadBlocksCollectLibraryEntries(cmd, &lib);
+  for (const CadBlockLibraryEntry& entry : lib) {
+    const bool sel = CadBlockEqCi(entry.name, cmd.insertBlockName);
+    std::string label = entry.name;
+    if (entry.isFitting)
+      label += "  (fitting)";
+    else if (!entry.imported)
+      label += "  (file)";
+    if (ImGui::Selectable(label.c_str(), sel)) {
+      if (!entry.imported)
+        CadBlocksImportLibraryEntry(cmd, entry, log);
+      std::snprintf(cmd.insertBlockName, sizeof(cmd.insertBlockName), "%s", entry.name.c_str());
+      CadBlocksApplyInsertNameDefaults(cmd);
+    }
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+      if (!entry.imported)
+        CadBlocksImportLibraryEntry(cmd, entry, log);
+      std::snprintf(cmd.insertBlockName, sizeof(cmd.insertBlockName), "%s", entry.name.c_str());
+      CadBlocksApplyInsertNameDefaults(cmd);
+    }
+  }
+  ImGui::EndChild();
+  ImGui::SameLine();
+  ImGui::BeginChild("##InsertLibPrev", ImVec2(0.f, 0.f), true);
+  ImGui::TextUnformatted("Preview");
+  DrawInsertLibraryPreview(cmd, cmd.insertBlockName);
+  ImGui::EndChild();
+  ImGui::EndChild();
 
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("Name:");
@@ -114,14 +202,6 @@ void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) 
       CadBlocksApplyInsertNameDefaults(cmd);
     }
   }
-
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("Path:");
-  ImGui::SameLine(90.f);
-  ImGui::SetNextItemWidth(300.f);
-  ImGui::BeginDisabled();
-  ImGui::InputText("##InsertPath", cmd.insertBlockPath, sizeof(cmd.insertBlockPath));
-  ImGui::EndDisabled();
 
   ImGui::Spacing();
   ImGui::Separator();
@@ -205,19 +285,38 @@ void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::EndDisabled();
 
   ImGui::Spacing();
-  ImGui::TextUnformatted("Block Unit");
+  ImGui::TextUnformatted("Units");
   const int di = CadBlockFindDef(cmd.blockDefs, cmd.insertBlockName);
-  std::string unitName = "(none)";
-  float factor = 1.f;
-  if (di >= 0) {
-    unitName = cmd.blockDefs[static_cast<size_t>(di)].units;
-    if (unitName.empty())
-      unitName = CadDrawingInsUnitsName(cmd.drawingInsUnits);
-    factor = CadBlockUnitsScale(cmd.blockDefs[static_cast<size_t>(di)].units,
-                                CadDrawingInsUnitsName(cmd.drawingInsUnits));
+  const char* unitChoices[] = {"unitless", "inches", "feet", "meters", "millimeters"};
+  int unitIdx = 0;
+  if (cmd.insertBlockUnitsBuf[0] != '\0') {
+    for (int i = 0; i < 5; ++i) {
+      if (CadBlockEqCi(cmd.insertBlockUnitsBuf, unitChoices[i])) {
+        unitIdx = i;
+        break;
+      }
+    }
   }
-  ImGui::Text("Unit:  %s", unitName.c_str());
-  ImGui::Text("Factor:  %.4f", static_cast<double>(factor));
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Block unit:");
+  ImGui::SameLine(90.f);
+  ImGui::SetNextItemWidth(140.f);
+  if (ImGui::BeginCombo("##InsBlockUnit", unitChoices[unitIdx])) {
+    for (int i = 0; i < 5; ++i) {
+      if (ImGui::Selectable(unitChoices[i], unitIdx == i)) {
+        std::snprintf(cmd.insertBlockUnitsBuf, sizeof(cmd.insertBlockUnitsBuf), "%s", unitChoices[i]);
+      }
+    }
+    ImGui::EndCombo();
+  }
+  const std::string drawUnits = CadDrawingInsUnitsName(cmd.drawingInsUnits);
+  float factor = 1.f;
+  if (di >= 0)
+    factor = CadBlockInsertUnitsScale(cmd, cmd.blockDefs[static_cast<size_t>(di)]);
+  ImGui::Text("Drawing unit:  %s", drawUnits.c_str());
+  ImGui::Text("Unit scale factor:  %.4f", static_cast<double>(factor));
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Applied to scale on insert (multiplied with the Scale fields above).");
 
   ImGui::Spacing();
   ImGui::Checkbox("Explode", &cmd.insertBlockExplode);

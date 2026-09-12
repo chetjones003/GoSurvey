@@ -453,6 +453,41 @@ TEST_CASE("BEDIT loads and BSAVE harvests a block solid", "[issue475][block][bed
   CHECK(bb.mn.z == Catch::Approx(7.0).margin(0.05));
 }
 
+TEST_CASE("Bundled fittings library imports SAT as block defs only", "[issue475][block][library][fitting]") {
+  namespace fs = std::filesystem;
+  const fs::path sat =
+      fs::exists(fs::path("resources") / "blocks" / "fittings" / "CJ_4in_WELD_NECK_FLANGE.sat")
+          ? fs::path("resources") / "blocks" / "fittings" / "CJ_4in_WELD_NECK_FLANGE.sat"
+          : fs::path("..") / "resources" / "blocks" / "fittings" / "CJ_4in_WELD_NECK_FLANGE.sat";
+  if (!fs::exists(sat)) {
+    WARN("Bundled flange SAT not present — skip.");
+    return;
+  }
+  AppCommandState st;
+  std::vector<std::string> log;
+  CadBlockLibraryEntry entry;
+  entry.name = "CJ_4in_WELD_NECK_FLANGE";
+  entry.path = sat.u8string();
+  entry.isFitting = true;
+  REQUIRE(CadBlocksImportLibraryEntry(st, entry, log));
+  const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
+  REQUIRE(di >= 0);
+  REQUIRE_FALSE(st.blockDefs[static_cast<size_t>(di)].content.solids.empty());
+  CHECK(st.cadSolids.empty());
+}
+
+TEST_CASE("CadBlockInsertUnitsScale honours the INSERT dialog unit override", "[issue475][block][units]") {
+  AppCommandState st;
+  st.drawingInsUnits = 2;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  def.units = "inches";
+  std::snprintf(st.insertBlockUnitsBuf, sizeof(st.insertBlockUnitsBuf), "unitless");
+  CHECK(CadBlockInsertUnitsScale(st, def) == Catch::Approx(1.f));
+  std::snprintf(st.insertBlockUnitsBuf, sizeof(st.insertBlockUnitsBuf), "inches");
+  CHECK(CadBlockInsertUnitsScale(st, def) == Catch::Approx(1.f / 12.f));
+}
+
 TEST_CASE("INSERT connector snap places the fitting port on the target", "[issue475][block][connector][insert]") {
   AppCommandState st;
 
