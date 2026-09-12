@@ -431,6 +431,22 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
   }
   o["actions"] = std::move(acts);
   o["visibilityStates"] = d.visibilityStates;
+  if (!d.connections.empty()) {
+    json conns = json::array();
+    for (const CadBlockConnection& c : d.connections) {
+      json cj;
+      cj["name"] = c.name;
+      cj["x"] = c.x;
+      cj["y"] = c.y;
+      cj["z"] = c.z;
+      cj["nx"] = c.nx;
+      cj["ny"] = c.ny;
+      cj["nz"] = c.nz;
+      cj["nominalSize"] = c.nominalSize;
+      conns.push_back(std::move(cj));
+    }
+    o["connections"] = std::move(conns);
+  }
   return o;
 }
 
@@ -486,6 +502,20 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
   }
   if (o.contains("visibilityStates") && o["visibilityStates"].is_array())
     d.visibilityStates = o["visibilityStates"].get<std::vector<std::string>>();
+  if (o.contains("connections") && o["connections"].is_array()) {
+    for (const auto& cj : o["connections"]) {
+      CadBlockConnection c;
+      c.name = cj.value("name", "");
+      c.x = cj.value("x", 0.f);
+      c.y = cj.value("y", 0.f);
+      c.z = cj.value("z", 0.f);
+      c.nx = cj.value("nx", 0.f);
+      c.ny = cj.value("ny", 0.f);
+      c.nz = cj.value("nz", 1.f);
+      c.nominalSize = cj.value("nominalSize", "");
+      d.connections.push_back(std::move(c));
+    }
+  }
   return d;
 }
 

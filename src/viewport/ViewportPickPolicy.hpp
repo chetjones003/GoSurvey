@@ -97,6 +97,8 @@ enum class ViewportClickRoute : std::uint8_t {
   InsertBlockPick,
   /// INSERT align-to-face: ray pick on a planar solid face (issue #475 inc3).
   InsertBlockAlignFacePick,
+  /// BCONNECT face pick while BEDIT is open (issue #475 inc5).
+  BconnectFacePick,
 };
 
 /// \see ViewportClickRoute. Model space (and floating model space) only — pure paper space has its
@@ -105,6 +107,9 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   using K = AppCommandState::Kind;
   using R = ViewportClickRoute;
   using MP = AppCommandState::ModifyPhase;
+
+  if (cmd.blockEditActive && cmd.bconnectAwaitingFace)
+    return R::BconnectFacePick;
 
   switch (cmd.active) {
   case K::None:
@@ -350,7 +355,7 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     if (cmd.insertBlockPhase == IPh::WaitAlignFace)
       return R::InsertBlockAlignFacePick;
     return (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
-            cmd.insertBlockPhase == IPh::WaitRotation)
+            cmd.insertBlockPhase == IPh::WaitRotation || cmd.insertBlockPhase == IPh::WaitConnectorTarget)
                ? R::InsertBlockPick
                : R::Ignore;  // dialog / attribute prompt — clicks go to ImGui
   }
@@ -436,6 +441,7 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::PdfAttachInsertPoint:
   case R::InsertBlockPick:
   case R::InsertBlockAlignFacePick:
+  case R::BconnectFacePick:
   case R::Ignore:
     return false;
   }

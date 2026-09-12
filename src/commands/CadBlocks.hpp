@@ -51,6 +51,11 @@ void AppendInsertBlockGhostRubber(const AppCommandState& st, const CadBlockXform
 /// Face pick during WaitAlignFace — sets rotX/rotY from the face outward normal (planar faces only).
 bool SubmitInsertBlockAlignFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                                     std::vector<std::string>& log);
+/// Target connection pick during WaitConnectorTarget (issue #475 inc5).
+bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log);
+/// Face pick during BCONNECT authoring in BEDIT.
+bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
+                            std::vector<std::string>& log);
 /// OK on the Insert dialog: place now, or start on-screen point/scale/rotation picks.
 void CadBlocksCommitInsertDialog(AppCommandState& st, std::vector<std::string>& log);
 void CadBlocksCommitInsertAttrDialog(AppCommandState& st, std::vector<std::string>& log);

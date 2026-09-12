@@ -28,6 +28,8 @@ void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) 
       hint = "Specify rotation angle — type degrees (matchline default 90) or click:";
     else if (cmd.insertBlockPhase == Ph::WaitAlignFace)
       hint = "INSERT — pick a flat face to align the fitting (ESC cancels).";
+    else if (cmd.insertBlockPhase == Ph::WaitConnectorTarget)
+      hint = "INSERT — click near a target connection port (ESC cancels).";
     if (cmd.insertBlockAttrDialogOpen) {
       const int di = CadBlockFindDef(cmd.blockDefs, cmd.insertBlockName);
       ImGui::OpenPopup("Edit Attributes");
@@ -128,8 +130,20 @@ void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) 
   const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
 
   ImGui::TextUnformatted("Insertion point");
+  if (ImGui::Checkbox("Snap to connector##InsConn", &cmd.insertBlockSpecifyConnectorSnap) &&
+      cmd.insertBlockSpecifyConnectorSnap) {
+    cmd.insertBlockSpecifyPoint = false;
+    cmd.insertBlockSpecifyAlignFace = false;
+    cmd.insertBlockSpecifyRot = false;
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip(
+        "Pick a connection port on a block already in the drawing. "
+        "The fitting orients so its connection anti-aligns with the target.");
   ImGui::Checkbox("Specify On-screen##InsPt", &cmd.insertBlockSpecifyPoint);
-  ImGui::BeginDisabled(cmd.insertBlockSpecifyPoint);
+  if (ImGui::IsItemActivated() && cmd.insertBlockSpecifyPoint)
+    cmd.insertBlockSpecifyConnectorSnap = false;
+  ImGui::BeginDisabled(cmd.insertBlockSpecifyPoint || cmd.insertBlockSpecifyConnectorSnap);
   ImGui::SetNextItemWidth(90.f);
   ImGui::InputFloat("X##InsX", &cmd.insertBlockX, 0.f, 0.f, cfmt.c_str());
   ImGui::SameLine();

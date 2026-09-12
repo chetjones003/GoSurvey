@@ -249,6 +249,54 @@ TEST_CASE("CadBlockBakeBasePoint shifts solid content by the base point", "[issu
   CHECK(b.mx.z == Catch::Approx(-1.0).margin(0.05));
 }
 
+TEST_CASE("CadBlockSnapInsertToConnection coincides ports and anti-aligns normals", "[issue475][block][connector]") {
+  CadBlockConnection src;
+  src.x = 0.f;
+  src.y = 0.f;
+  src.z = 2.f;
+  src.nx = 0.f;
+  src.ny = 0.f;
+  src.nz = 1.f;
+
+  CadBlockXform xf;
+  xf.sx = xf.sy = xf.sz = 1.f;
+  CadBlockSnapInsertToConnection(src, 10.f, 20.f, 5.f, 0.f, 0.f, 1.f, &xf);
+
+  float wx = 0.f;
+  float wy = 0.f;
+  float wz = 0.f;
+  CadBlockXformPoint(xf, src.x, src.y, src.z, &wx, &wy, &wz);
+  CHECK(wx == Catch::Approx(10.f).margin(0.002));
+  CHECK(wy == Catch::Approx(20.f).margin(0.002));
+  CHECK(wz == Catch::Approx(5.f).margin(0.002));
+
+  float dx = 0.f;
+  float dy = 0.f;
+  float dz = 0.f;
+  CadBlockXformDirection(xf, src.nx, src.ny, src.nz, &dx, &dy, &dz);
+  const float dot = dx * 0.f + dy * 0.f + dz * 1.f;
+  CHECK(dot == Catch::Approx(-1.f).margin(0.01));
+}
+
+TEST_CASE("CadBlockBakeBasePoint shifts connection points", "[issue475][block][connector]") {
+  CadBlockDefinition def;
+  def.name = "FIT";
+  def.baseX = 1.f;
+  def.baseY = 2.f;
+  def.baseZ = 3.f;
+  CadBlockConnection c;
+  c.name = "P1";
+  c.x = 4.f;
+  c.y = 5.f;
+  c.z = 6.f;
+  def.connections.push_back(c);
+  CadBlockBakeBasePoint(&def);
+  REQUIRE(def.connections.size() == 1);
+  CHECK(def.connections[0].x == Catch::Approx(3.f));
+  CHECK(def.connections[0].y == Catch::Approx(3.f));
+  CHECK(def.connections[0].z == Catch::Approx(3.f));
+}
+
 TEST_CASE("CadBlockSetLocalZAxis orients local +Z to the target normal", "[issue475][block][orient]") {
   CadBlockXform xf;
   CadBlockSetLocalZAxis(&xf, 1.f, 0.f, 0.f);
