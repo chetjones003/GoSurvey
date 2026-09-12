@@ -428,6 +428,23 @@ inline void CadBlockShiftContent(CadBlockContent* c, float dx, float dy, float d
     n.xf.y += dy;
     n.xf.z += dz;
   }
+  const brep::Vec3 dvec{static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)};
+  for (CadSolidPtr& sp : c->solids) {
+    if (!sp)
+      continue;
+    sp = std::make_shared<const brep::Solid>(brep::Translate(*sp, dvec));
+  }
+  for (std::shared_ptr<const CadMesh>& mp : c->meshes) {
+    if (!mp)
+      continue;
+    auto m = std::make_shared<CadMesh>(*mp);
+    for (size_t i = 0; i + 2 < m->vertsXyz.size(); i += 3) {
+      m->vertsXyz[i] += dx;
+      m->vertsXyz[i + 1] += dy;
+      m->vertsXyz[i + 2] += dz;
+    }
+    mp = std::move(m);
+  }
 }
 
 inline void CadBlockBakeBasePoint(CadBlockDefinition* def) {

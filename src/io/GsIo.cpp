@@ -269,6 +269,18 @@ json CadBlockContentToJson(const CadBlockContent& c) {
   EntityAttrArrayToJson(c.meshAttrs, meshAttrs);
   o["meshAttrs"] = std::move(meshAttrs);
 
+  if (!c.solids.empty()) {
+    json solids = json::array();
+    for (const CadSolidPtr& sp : c.solids) {
+      if (sp)
+        solids.push_back(gsio::SolidToJson(*sp));
+    }
+    o["solids"] = std::move(solids);
+    json solidAttrs;
+    EntityAttrArrayToJson(c.solidAttrs, solidAttrs);
+    o["solidAttrs"] = std::move(solidAttrs);
+  }
+
   json nested = json::array();
   for (const CadBlockNested& n : c.nested) {
     json nj;
@@ -340,6 +352,16 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
         c.meshes.push_back(std::move(m));
     }
   EntityAttrArrayFromJson(o, "meshAttrs", c.meshAttrs);
+
+  if (o.contains("solids") && o["solids"].is_array()) {
+    for (const auto& el : o["solids"]) {
+      brep::Solid s;
+      if (gsio::SolidFromJson(el, &s))
+        c.solids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    }
+  }
+  EntityAttrArrayFromJson(o, "solidAttrs", c.solidAttrs);
+  c.solidAttrs.resize(c.solids.size());
 
   if (o.contains("nested") && o["nested"].is_array()) {
     for (const auto& nj : o["nested"]) {

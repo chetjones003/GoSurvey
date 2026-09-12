@@ -406,6 +406,53 @@ TEST_CASE("BEDIT picker OK starts the editor", "[issue124][block][bedit]") {
   CHECK_FALSE(st.blockEditPickerOpen);
 }
 
+TEST_CASE("BEDIT loads and BSAVE harvests a block solid", "[issue475][block][bedit][solid]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 1.0, 1.0, 2.0, &box, &why));
+
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "SOLFIT";
+  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  def.content.solidAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream beditArgs("SOLFIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  REQUIRE(st.blockEditActive);
+  REQUIRE(st.cadSolids.size() == 1);
+  REQUIRE(st.cadSolids[0]);
+  CHECK(st.cadSolids[0]->faces.size() == 6);
+
+  std::istringstream bsaveArgs("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveArgs, log));
+  const int di = CadBlockFindDef(st.blockDefs, "SOLFIT");
+  REQUIRE(di >= 0);
+  REQUIRE(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
+
+  std::istringstream bcloseArgs("save");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bclose", bcloseArgs, log));
+  CHECK_FALSE(st.blockEditActive);
+
+  CadBlockXform xf;
+  xf.x = 5.f;
+  xf.y = 6.f;
+  xf.z = 7.f;
+  st.cadBlockRefs.clear();
+  REQUIRE(CadBlockPlaceInsert(st, "SOLFIT", xf, false, log));
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  std::vector<CadBlockWorldSolid> ws;
+  CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[0], EntityAttributes{}, &ws);
+  REQUIRE(ws.size() == 1);
+  REQUIRE(ws[0].solid);
+  const brep::Bounds bb = brep::ComputeBounds(*ws[0].solid);
+  REQUIRE(bb.valid);
+  CHECK(bb.mn.z == Catch::Approx(7.0).margin(0.05));
+}
+
 TEST_CASE("BEDIT with a name skips the picker", "[issue124][block][bedit]") {
   AppCommandState st;
   CadBlockDefinition def;
