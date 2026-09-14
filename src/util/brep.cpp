@@ -11573,6 +11573,186 @@ struct GeneralBranchSeams {
   return Succeed(outWhy);
 }
 
+/// One physical cylindrical band of a coaxial stack (issue #495 / REQ-338 338c), position along the
+/// stack's own shared axis line (not a length).
+struct CoaxialSeg {
+  double z0 = 0.0;
+  double z1 = 0.0;
+  double radius = 0.0;
+};
+
+/// Recognise \p s as N>=1 coaxial cylindrical segments sharing one axis line, contiguous end to end
+/// (a stepped/shouldered stack, or — the N==1 case — a single plain cylinder): the general-purpose
+/// counterpart of REQ-337's `TryDecomposeCoaxialCylinderStack` (`CadCommands.cpp`), which requires
+/// N>=2 and a non-increasing radius sequence (its own SUBTRACT-cutter scope). This one places no
+/// such restriction — 338c's UNION-folding use needs any contiguous coaxial run, monotonic or not,
+/// and N==1 so a bare cylinder and a stack can be merged through the same code path. Only Plane and
+/// Cylinder faces are tolerated (a Cone/Sphere/Torus/Nurbs face anywhere refuses); \p segs comes back
+/// sorted by \p CoaxialSeg::z0, \p axisPoint/\p axisDir describe the shared line.
+[[nodiscard]] bool ExtractCoaxialStack(const Solid& s, Vec3* axisPoint, Vec3* axisDir,
+                                       std::vector<CoaxialSeg>* segs) {
+  if (!axisPoint || !axisDir || !segs)
+    return false;
+  constexpr double kAxisAngTol = 1e-6;
+  constexpr double kAxisDistTol = 1e-6;
+
+  struct RawSpan { double z0, z1, radius; };
+  std::vector<RawSpan> raw;
+  Vec3 dirAxis{}, ptAxis{};
+  bool haveAxis = false;
+  int planeCount = 0;
+
+  for (const Face& f : s.faces) {
+    if (f.surface.kind == SurfaceKind::Plane) {
+      ++planeCount;
+      continue;
+    }
+    if (f.surface.kind != SurfaceKind::Cylinder)
+      return false;  // a cone/sphere/torus/nurbs face — not this shape
+    Vec3 dir = f.surface.frame.zAxis;
+    const double dlen = ray3d::Length(dir);
+    if (!(dlen > 1e-12))
+      return false;
+    dir = ray3d::Scale(dir, 1.0 / dlen);
+    if (!haveAxis) {
+      dirAxis = dir;
+      ptAxis = f.surface.frame.origin;
+      haveAxis = true;
+    } else {
+      double d = ray3d::Dot(dir, dirAxis);
+      if (std::fabs(d) < 1.0 - kAxisAngTol)
+        return false;  // not parallel to the running axis
+      if (d < 0.0)
+        dir = ray3d::Scale(dir, -1.0);
+      const Vec3 toP = ray3d::Sub(f.surface.frame.origin, ptAxis);
+      const double along = ray3d::Dot(toP, dirAxis);
+      const Vec3 perp = ray3d::Sub(toP, ray3d::Scale(dirAxis, along));
+      if (ray3d::Length(perp) > kAxisDistTol)
+        return false;  // parallel but not the same line
+    }
+    if (!(f.surface.radius > 0.0) || !(f.surface.height > 0.0))
+      return false;
+    const double z0 = ray3d::Dot(ray3d::Sub(f.surface.frame.origin, ptAxis), dirAxis);
+    raw.push_back({z0, z0 + f.surface.height, f.surface.radius});
+  }
+  if (!haveAxis || raw.empty() || planeCount < 2)
+    return false;
+
+  std::vector<RawSpan> uniqSpans;
+  for (const RawSpan& r : raw) {
+    bool merged = false;
+    for (RawSpan& g : uniqSpans) {
+      if (std::fabs(g.z0 - r.z0) < kAxisDistTol && std::fabs(g.z1 - r.z1) < kAxisDistTol &&
+          std::fabs(g.radius - r.radius) < kAxisDistTol) {
+        merged = true;
+        break;
+      }
+    }
+    if (!merged)
+      uniqSpans.push_back(r);
+  }
+
+  std::sort(uniqSpans.begin(), uniqSpans.end(),
+           [](const RawSpan& a, const RawSpan& b) { return a.z0 < b.z0; });
+  for (size_t i = 0; i + 1 < uniqSpans.size(); ++i) {
+    if (std::fabs(uniqSpans[i].z1 - uniqSpans[i + 1].z0) > kAxisDistTol)
+      return false;  // a gap or an overlap — not one contiguous run
+  }
+
+  *axisPoint = ptAxis;
+  *axisDir = dirAxis;
+  segs->clear();
+  segs->reserve(uniqSpans.size());
+  for (const RawSpan& g : uniqSpans)
+    segs->push_back({g.z0, g.z1, g.radius});
+  return true;
+}
+
+/// UNION of two coaxial stacks (issue #495 / REQ-338 338c) — the N-segment generalisation of
+/// `TryBooleanCoaxialCylinders`'s own single-interval UNION merge below: every breakpoint from
+/// either side's segment list becomes a candidate stack boundary, and each resulting band's radius
+/// is the max of whichever side(s) cover it there (0 where neither does — a gap, kept disjoint by
+/// returning both solids unchanged if the two runs don't overlap or touch at all). This is the
+/// closed-form fix for "extend an existing coaxial stack with one more coaxial piece" — reuses
+/// `BuildCoaxialStack` exactly as the two-operand case already does, never a general stitch of two
+/// independently-built solids.
+[[nodiscard]] bool TryBooleanCoaxialStackUnion(const Solid& a, const Solid& b, const Vec3& axisPoint,
+                                               const Vec3& axisDir, const std::vector<CoaxialSeg>& segsA,
+                                               const std::vector<CoaxialSeg>& segsBraw,
+                                               std::vector<Solid>* out, Problem* outWhy) {
+  double sc = 1.0;
+  for (const CoaxialSeg& s : segsA)
+    sc = std::max({sc, std::fabs(s.z0), std::fabs(s.z1), s.radius});
+  for (const CoaxialSeg& s : segsBraw)
+    sc = std::max({sc, std::fabs(s.z0), std::fabs(s.z1), s.radius});
+  const double eps = 1e-7 * sc;
+
+  // Both extraction runs are individually contiguous (ExtractCoaxialStack guarantees it); the two
+  // combined can only be merged into ONE stack if their overall extents overlap or touch. Otherwise
+  // they are two physically separate pieces on the same axis line — the ordinary disjoint-UNION
+  // result, same convention as BooleanPlanar's own `if (!overlap) { push a; push b; }`.
+  const double aLo = segsA.front().z0, aHi = segsA.back().z1;
+  const double bLo = segsBraw.front().z0, bHi = segsBraw.back().z1;
+  if (std::max(aLo, bLo) > std::min(aHi, bHi) + eps) {
+    out->push_back(a);
+    out->push_back(b);
+    return Succeed(outWhy);
+  }
+
+  std::vector<double> brk;
+  for (const CoaxialSeg& s : segsA) { brk.push_back(s.z0); brk.push_back(s.z1); }
+  for (const CoaxialSeg& s : segsBraw) { brk.push_back(s.z0); brk.push_back(s.z1); }
+  std::sort(brk.begin(), brk.end());
+  std::vector<double> uniq;
+  for (double v : brk)
+    if (uniq.empty() || v - uniq.back() > eps)
+      uniq.push_back(v);
+  if (uniq.size() < 2)
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+
+  auto radiusAt = [&](const std::vector<CoaxialSeg>& segs, double mid) {
+    for (const CoaxialSeg& s : segs)
+      if (mid > s.z0 - eps && mid < s.z1 + eps)
+        return s.radius;
+    return 0.0;
+  };
+
+  std::vector<double> zs{uniq.front()};
+  std::vector<double> rs;
+  for (size_t i = 0; i + 1 < uniq.size(); ++i) {
+    const double m = 0.5 * (uniq[i] + uniq[i + 1]);
+    const double rr = std::max(radiusAt(segsA, m), radiusAt(segsBraw, m));
+    if (!(rr > 0.0))
+      continue;  // a gap between the two runs
+    if (!rs.empty() && std::fabs(rs.back() - rr) <= eps) {
+      zs.back() = uniq[i + 1];
+    } else {
+      rs.push_back(rr);
+      zs.push_back(uniq[i + 1]);
+    }
+  }
+  if (rs.empty())
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  if (rs.size() == 1) {
+    ucs::Ucs fr;
+    if (!ucs::FromNormal(ray3d::Add(axisPoint, ray3d::Scale(axisDir, zs.front())), axisDir, &fr))
+      return Fail(Problem::DegenerateFrame, outWhy);
+    Solid r;
+    if (!MakeCylinder(fr, rs.front(), zs.back() - zs.front(), &r, outWhy))
+      return false;
+    out->push_back(std::move(r));
+    return Succeed(outWhy);
+  }
+  ucs::Ucs fr;
+  if (!ucs::FromNormal(ray3d::Add(axisPoint, ray3d::Scale(axisDir, zs.front())), axisDir, &fr))
+    return Fail(Problem::DegenerateFrame, outWhy);
+  Solid r;
+  if (!BuildCoaxialStack(fr, zs, rs, /*rIn=*/{}, &r, outWhy))
+    return false;
+  out->push_back(std::move(r));
+  return Succeed(outWhy);
+}
+
 [[nodiscard]] bool TryBooleanCoaxialCylinders(const Solid& a, const Solid& b, const CylinderShape& A,
                                               const CylinderShape& B, BoolOp op, std::vector<Solid>* out,
                                               bool* handled, Problem* outWhy) {
@@ -12403,6 +12583,44 @@ struct GeneralBranchSeams {
     return TryBooleanCylinderThroughPlanar(b, a, ca, op, /*cylIsMinuend=*/true, out, handled, outWhy);
   if (bCyl && AllFacesPlanar(a))
     return TryBooleanCylinderThroughPlanar(a, b, cb, op, /*cylIsMinuend=*/false, out, handled, outWhy);
+
+  // issue #495 / REQ-338 338c — general coaxial multi-segment stack folding, UNION only. Neither
+  // operand classified as one bare cylinder above (that pair is already handled by aCyl&&bCyl), so
+  // try recognising either or both as an already-stepped coaxial stack (REQ-337's own composite
+  // cutter, or a target left over from a prior 338a/UNION step) sharing one axis line, and fold the
+  // new piece onto it via the same closed-form interval-merge `TryBooleanCoaxialCylinders`'s own
+  // UNION branch already uses for a single pair, generalised to N segments per side.
+  if (op == BoolOp::Union) {
+    Vec3 apA{}, adA{};
+    Vec3 apB{}, adB{};
+    std::vector<CoaxialSeg> segsA, segsB;
+    const bool aStack = ExtractCoaxialStack(a, &apA, &adA, &segsA);
+    const bool bStack = ExtractCoaxialStack(b, &apB, &adB, &segsB);
+    if (aStack && bStack && (segsA.size() > 1 || segsB.size() > 1)) {
+      const double sc = std::max(ModelScale(a), ModelScale(b));
+      const Vec3 d = ray3d::Sub(apB, apA);
+      const double perp = ray3d::Length(ray3d::Sub(d, ray3d::Scale(adA, ray3d::Dot(d, adA))));
+      if (std::fabs(std::fabs(ray3d::Dot(adA, adB)) - 1.0) <= 1e-7 && perp <= 1e-6 * sc) {
+        // Re-express B's segments along A's own axis parametrisation (same line, opposite-facing
+        // axis direction flips the sign) before merging.
+        const double dOnA = ray3d::Dot(d, adA);
+        const double sign = ray3d::Dot(adA, adB) >= 0.0 ? 1.0 : -1.0;
+        std::vector<CoaxialSeg> segsBonA;
+        segsBonA.reserve(segsB.size());
+        for (const CoaxialSeg& s : segsB) {
+          double z0 = dOnA + sign * s.z0;
+          double z1 = dOnA + sign * s.z1;
+          if (z0 > z1)
+            std::swap(z0, z1);
+          segsBonA.push_back({z0, z1, s.radius});
+        }
+        std::sort(segsBonA.begin(), segsBonA.end(),
+                 [](const CoaxialSeg& x, const CoaxialSeg& y) { return x.z0 < y.z0; });
+        *handled = true;
+        return TryBooleanCoaxialStackUnion(a, b, apA, adA, segsA, segsBonA, out, outWhy);
+      }
+    }
+  }
 
   SphereShape sa;
   SphereShape sb;
