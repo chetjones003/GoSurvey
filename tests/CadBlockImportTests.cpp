@@ -991,6 +991,53 @@ TEST_CASE("BLOCKIMPORT of a standalone ACIS .sat drops the solid on the origin",
   CHECK(st.blockDefs[static_cast<size_t>(di)].units == CadDrawingInsUnitsName(st.drawingInsUnits));
 }
 
+// issue #486 increment A4 — importing a standalone .sat while BEDIT is open used to also spawn a
+// second, unrelated block definition (the same wrap-and-drop behavior as the plain-drawing case
+// above), even though the solid already lands directly in the block being authored (ADR-043
+// aliases the model arrays to its content during the session). That was surprising duplication,
+// not something the author asked for.
+TEST_CASE("BLOCKIMPORT of a standalone ACIS .sat during BEDIT lands in the block being edited, no stray definition",
+          "[issue486][blockimport][sat][bedit]") {
+  namespace fs = std::filesystem;
+  const std::string satSrc = std::string(GOSURVEY_SAMPLES_DIR) + "/CJ_4in_WELD_NECK_FLANGE.sat";
+  REQUIRE(fs::exists(satSrc));
+  // A renamed copy, not present in the bundled fittings library BEDIT preloads on entry, so its
+  // absence/presence in blockDefs unambiguously reflects what THIS BLOCKIMPORT call did.
+  const fs::path dir = fs::temp_directory_path() / "gosurvey-libexport-a4";
+  fs::create_directories(dir);
+  const fs::path sat = dir / "GS_TEST_A4_UNIQUE_SAT.sat";
+  std::error_code cpEc;
+  fs::copy_file(satSrc, sat, fs::copy_options::overwrite_existing, cpEc);
+  REQUIRE_FALSE(cpEc);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  REQUIRE(st.blockEditActive);
+  const size_t defCountBefore = st.blockDefs.size();
+  REQUIRE(CadBlockFindDef(st.blockDefs, "GS_TEST_A4_UNIQUE_SAT") < 0);
+
+  REQUIRE(ImportCadBlocksFromPath(st, sat.u8string().c_str(), log));
+
+  // The solid landed directly in the block being edited (the model arrays ARE its content while
+  // BEDIT is open), not floating loose in some other drawing space.
+  REQUIRE(st.cadSolids.size() == 1);
+  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+
+  // No new "GS_TEST_A4_UNIQUE_SAT" definition was spawned alongside it, and the definition count
+  // did not grow at all.
+  CHECK(CadBlockFindDef(st.blockDefs, "GS_TEST_A4_UNIQUE_SAT") < 0);
+  CHECK(st.blockDefs.size() == defCountBefore);
+
+  // BSAVE harvests the solid into the definition actually being edited.
+  std::istringstream bsaveArgs("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveArgs, log));
+  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  REQUIRE(di >= 0);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
+}
+
 TEST_CASE("INSERT of a SAT block in a feet drawing keeps native scale", "[issue475][block][insert][units]") {
   const std::string sat = std::string(GOSURVEY_SAMPLES_DIR) + "/CJ_4in_WELD_NECK_FLANGE.sat";
   REQUIRE(std::filesystem::exists(sat));

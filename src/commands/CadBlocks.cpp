@@ -415,10 +415,16 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   }
   if (!ok)
     return -1;
+  // Importing a standalone `.sat` while BEDIT is open (issue #486 increment A4) is authoring INTO
+  // the block already being edited, not adding a new library part — the loose-geometry drop below
+  // already delivers the solid straight into that block's content (ADR-043 aliases dest.cadSolids
+  // to it during a block-edit session). Skipping the wrap-definition branch below avoids also
+  // spawning a redundant second, unrelated block definition with the same content every time.
+  const bool skipWrapDuringBedit = ext == ".sat" && dest.blockEditActive && dropLooseSatGeometry;
   int n = 0;
   for (CadBlockDefinition& d : scratch.blockDefs)
     n += MergeBlockDef(dest, std::move(d), log);
-  if (DrawingHasCaptureableGeometry(scratch)) {
+  if (DrawingHasCaptureableGeometry(scratch) && !skipWrapDuringBedit) {
     CadBlockDefinition wrap;
     wrap.name = FileStemUtf8(pathUtf8);
     // A standalone `.sat` is re-based into the current drawing's model units (feet for a feet
@@ -434,6 +440,7 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   // A `.sat` is a single model, not a block library, and INSERT cannot place a 3D solid (issue
   // #473). Drop its solid straight into the drawing, re-based onto the origin, so the user can see
   // it and MOVE it into position; the block definition above is kept for a future 3D INSERT.
+  // During BEDIT this instead lands the solid directly in the block being authored (see above).
   if (ext == ".sat" && dropLooseSatGeometry) {
     for (std::size_t i = 0; i < scratch.cadSolids.size(); ++i) {
       dest.cadSolids.push_back(scratch.cadSolids[i]);
