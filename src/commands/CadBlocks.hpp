@@ -4,6 +4,7 @@
 #include "util/ray3d.hpp"
 #include "util/solidpick.hpp"
 
+#include <filesystem>
 #include <istream>
 #include <string>
 #include <string_view>
@@ -76,6 +77,9 @@ struct CadBlockLibraryEntry {
 };
 
 void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out);
+/// `<UserDataDirectory>/blocks/fittings` — where LIBEXPORT writes user-authored fitting parts
+/// (issue #486 increment A3). Empty if the user data directory cannot be determined.
+[[nodiscard]] std::filesystem::path CadFittingLibraryExportDir();
 /// Import a bundled library file when the user picks an entry that is not yet in \p st.blockDefs.
 bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry& entry, std::vector<std::string>& log);
 /// Block-unit scale for INSERT: honours \c insertBlockUnitsBuf when set (issue #475 inc6).
