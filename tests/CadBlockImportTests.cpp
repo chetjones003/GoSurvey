@@ -1625,3 +1625,110 @@ TEST_CASE("SUBTRACT with one unresolvable cutter refuses the whole command (issu
       refused = true;
   CHECK(refused);
 }
+
+// issue #495 / REQ-338 increment 338c — general multi-solid folding. The concrete gap: `FoldBoolean`
+// (`CadCommands.cpp`) already retries a multi-piece UNION selection against every accumulated piece,
+// but each retry called the kernel's `BooleanUnion` pairwise, and the kernel itself only recognised
+// TWO bare single-primitive cylinders as "coaxial" — extending an already-built multi-segment stack
+// with one more coaxial piece fell straight through to `Problem::BooleanCurvedFace`, even though
+// each individual piece was, on its own, a shape REQ-314 already handles. Fixed in `brep.cpp` by
+// generalising `TryBooleanCoaxialCylinders`'s own single-interval UNION merge (`ExtractCoaxialStack`
+// + `TryBooleanCoaxialStackUnion`, reusing the existing `BuildCoaxialStack`) to N segments per side —
+// closed-form 1D interval arithmetic along the shared axis, never a general solid-to-solid stitch.
+TEST_CASE("UNION extends an existing coaxial stack with a third cylinder (issue #495 338c)",
+         "[issue495][boolean][brep]") {
+  brep::Problem why = brep::Problem::Ok;
+  ucs::Ucs fA;
+  fA.origin = brep::Vec3{0, 0, 0};
+  brep::Solid a;
+  REQUIRE(brep::MakeCylinder(fA, 2.0, 4.0, &a, &why));  // z[0,4] r2
+  ucs::Ucs fB;
+  fB.origin = brep::Vec3{0, 0, 4};
+  brep::Solid b;
+  REQUIRE(brep::MakeCylinder(fB, 1.0, 4.0, &b, &why));  // z[4,8] r1
+
+  std::vector<brep::Solid> u1;
+  REQUIRE(brep::BooleanUnion(a, b, &u1, &why));
+  REQUIRE(u1.size() == 1);
+  brep::Solid ab = std::move(u1[0]);  // a genuine 2-segment stack, no longer a single primitive
+
+  ucs::Ucs fC;
+  fC.origin = brep::Vec3{0, 0, 8};
+  brep::Solid c;
+  REQUIRE(brep::MakeCylinder(fC, 2.0, 2.0, &c, &why));  // z[8,10] r2 — widens back out
+
+  std::vector<brep::Solid> u2;
+  const bool ok = brep::BooleanUnion(ab, c, &u2, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(u2.size() == 1);
+  CHECK(brep::Validate(u2[0]) == brep::Problem::Ok);
+  const double pi = 3.141592653589793;
+  const double vol = brep::ComputeMassProperties(u2[0]).volume;
+  const double expected = pi * 2 * 2 * 4 + pi * 1 * 1 * 4 + pi * 2 * 2 * 2;
+  CHECK(vol == Catch::Approx(expected).epsilon(1e-6));
+}
+
+TEST_CASE("UNION of a coaxial stack with a genuinely disjoint cylinder stays two pieces "
+         "(issue #495 338c)",
+         "[issue495][boolean][brep]") {
+  brep::Problem why = brep::Problem::Ok;
+  ucs::Ucs fA;
+  fA.origin = brep::Vec3{0, 0, 0};
+  brep::Solid a;
+  REQUIRE(brep::MakeCylinder(fA, 2.0, 4.0, &a, &why));
+  ucs::Ucs fB;
+  fB.origin = brep::Vec3{0, 0, 4};
+  brep::Solid b;
+  REQUIRE(brep::MakeCylinder(fB, 1.0, 4.0, &b, &why));
+  std::vector<brep::Solid> u1;
+  REQUIRE(brep::BooleanUnion(a, b, &u1, &why));
+  brep::Solid stack = std::move(u1[0]);
+
+  ucs::Ucs fC;
+  fC.origin = brep::Vec3{0, 0, 20};  // far away, no touch
+  brep::Solid c;
+  REQUIRE(brep::MakeCylinder(fC, 2.0, 2.0, &c, &why));
+
+  std::vector<brep::Solid> u2;
+  const bool ok = brep::BooleanUnion(stack, c, &u2, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  CHECK(u2.size() == 2);  // disjoint, not silently merged or dropped (REQ-201)
+}
+
+TEST_CASE("UNION command folds a three-piece coaxial selection into one solid (issue #495 338c)",
+         "[issue495][boolean][brep]") {
+  AppCommandState st;
+  brep::Problem why = brep::Problem::Ok;
+  ucs::Ucs fA;
+  fA.origin = brep::Vec3{0, 0, 0};
+  brep::Solid a;
+  REQUIRE(brep::MakeCylinder(fA, 2.0, 4.0, &a, &why));
+  ucs::Ucs fB;
+  fB.origin = brep::Vec3{0, 0, 4};
+  brep::Solid b;
+  REQUIRE(brep::MakeCylinder(fB, 1.0, 4.0, &b, &why));
+  ucs::Ucs fC;
+  fC.origin = brep::Vec3{0, 0, 8};
+  brep::Solid c;
+  REQUIRE(brep::MakeCylinder(fC, 2.0, 2.0, &c, &why));
+
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(a)));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(b)));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(c)));
+  SelectedEntity e0, e1, e2;
+  e0.type = e1.type = e2.type = SelectedEntity::Type::Solid;
+  e0.index = 0;
+  e1.index = 1;
+  e2.index = 2;
+  st.selection = {e0, e1, e2};
+
+  std::vector<std::string> log;
+  StartBooleanCommand(st, CadBooleanOp::Union, log);  // pre-selected 3 solids commits immediately
+  for (auto& l : log) UNSCOPED_INFO(l);
+
+  REQUIRE(st.cadSolids.size() == 1);
+  REQUIRE(st.cadSolids[0]);
+  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+}

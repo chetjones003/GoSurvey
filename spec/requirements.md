@@ -6539,7 +6539,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain (`src/util/brep.{hpp,cpp}`) for decomposition/folding logic; Commands
   (`src/commands/CadCommands.cpp`) for wiring each increment into `CommitBoolean`/`FoldBoolean`.
 - Status: **accepted (2026-09-14)** — D-2026-09-14-b. **338a and 338b verified satisfied by
-  existing code (2026-09-14)** — see revisions below; 338c–338d remain open.
+  existing code, 338c implemented (2026-09-14)** — see revisions below; 338d remains open.
 - Revisions:
   - 2026-09-14 — proposed and accepted as written (D-2026-09-14-b). Filed from issue #495
     (found while verifying issue #493); increment order 338a → 338b → 338c → 338d confirmed by the
@@ -6584,6 +6584,40 @@ capability that does not exist. They are recorded here rather than quietly dropp
     **whole** command by name with the document completely untouched (REQ-201) rather than applying
     the first two cuts and only failing on the third. No code change was needed or made for this
     acceptance criterion.
+  - 2026-09-14 — **338c implemented: coaxial multi-segment stack UNION folding.** The concrete gap
+    (found while probing 338a): `FoldBoolean`'s own multi-piece UNION retry (`CadCommands.cpp`)
+    already calls the kernel pairwise for every accumulated piece, but the kernel's
+    `TryBooleanCoaxialCylinders` only recognised TWO bare single-primitive cylinders as coaxial —
+    extending an already-built 2-segment stack with a third coaxial piece fell through to
+    `Problem::BooleanCurvedFace`, even though every individual piece was independently a shape
+    REQ-314 already handles (exactly what 338c's acceptance names). Fixed in `src/util/brep.cpp` by
+    adding `ExtractCoaxialStack` (a general N>=1-segment coaxial-run classifier, unlike REQ-337's own
+    `TryDecomposeCoaxialCylinderStack` which requires N>=2 and non-increasing radius — this one
+    places neither restriction, since UNION folding needs any contiguous run including a bare
+    N==1 cylinder) and `TryBooleanCoaxialStackUnion`, which generalises
+    `TryBooleanCoaxialCylinders`'s own single-interval UNION merge to N segments per side: every
+    breakpoint from either side's segment list becomes a candidate stack boundary, each resulting
+    band's radius is the max of whichever side(s) cover it, and the result is built in one shot via
+    the existing `BuildCoaxialStack` — closed-form 1D interval arithmetic along the shared axis line,
+    **never** a general two-solid stitch (unlike the radial-cross-hole gap in issue #497, this one
+    stayed inside the same closed-form-recogniser pattern REQ-314/337 already established, so it
+    carries none of that gap's silent-wrong-topology risk). Wired into `TryBooleanCurved`'s dispatch,
+    UNION only, gated behind axis-alignment (parallel + colinear, same tolerance
+    `TryBooleanCoaxialCylinders` already uses) and a genuine disjoint-extent check (two runs that
+    don't overlap or touch stay two separate solids, the ordinary disjoint-UNION result — never
+    silently merged or dropped). Verified with four new regression tests in
+    `tests/CadBlockImportTests.cpp` (issue #495 338c): extending a 2-segment stack with a third
+    (wider) coaxial cylinder, with correct resulting volume; two coaxial stacks with no shared or
+    touching extent staying two disjoint solids; and the full three-piece selection folding into one
+    solid through the real `StartBooleanCommand`/`FoldBoolean` UNION command flow, not just the
+    kernel API directly. Full `[brep]` suite (166 cases) re-run clean — no regression to any existing
+    REQ-314/REQ-337 recogniser, satisfying 338c's own "every test that passes today keeps passing"
+    acceptance line. A box (planar) target unioned directly with a coaxial stack — found during the
+    same investigation, e.g. building a flanged shaft from a box plus two cylinders in one UNION step
+    — is a DIFFERENT, unfixed gap: it needs `TryBooleanCylinderThroughPlanar` (a much larger,
+    special-cased box-cutting recogniser with no equivalent closed-form safety net) taught to accept
+    a coaxial stack operand, not this increment's interval-arithmetic extension. Not filed as its own
+    issue — 338c's acceptance criteria name only the coaxial-stack-folding gap this revision closes.
 
 ### REQ-315 — Sweep and loft on the solid kernel (GitHub issue #147, split from REQ-314)
 - Purpose: issue #147's acceptance names sweep and loft alongside extrude and revolve. A general
