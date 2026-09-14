@@ -26,6 +26,25 @@ constexpr double kHalfPi = 0.5 * kPi;
 constexpr int kMinArcSegments = 2;
 constexpr int kMaxArcSegments = 512;
 
+/// A (near-)full turn gets a much higher segment floor than a small arc sliver needs, independent
+/// of `tol/radius` (issue #486 GUI pass): the app's chord tolerance is a fixed absolute distance
+/// (`kSolidChordToleranceFt`), so `tol/radius` — and with it the segment count — shrinks for any
+/// small-to-moderate-radius circle, not just tiny ones; even an ordinary few-foot cylinder read as
+/// visibly faceted. A short arc (a fillet corner, an intersection sliver) does not carry this
+/// complaint — it is already a small fraction of a turn, so it stays on the ordinary floor above.
+/// This is the ONE place a circle or a near-closed arc's parametrisation is turned into a segment
+/// count (`SegmentsForArc`/`SegmentsForEdge`), so raising the floor here reaches every curved solid
+/// face, every curved B-rep edge, AND the rubber-band edge preview (`TessellateEdges`, which every
+/// EXTRUDE/PRESSPULL/CYLINDER/REVOLVE/LOFT/SWEEP ghost in CadRubberPreview.cpp draws through) in one
+/// place, so none of them can drift back out of sync with each other.
+// A cylinder's curved wall is built as TWO half-turn faces (see BuildConical's `sideFace(0, kPi,
+// ...)` / `sideFace(kPi, kTwoPi, ...)` — the seamed-sphere pattern, needed so a boolean/slice
+// operation always has an edge to cut at), so "the whole circle" shows up here as a `kPi` span
+// twice over, not one `kTwoPi` span. The threshold has to catch that half-turn case too, or this
+// floor never engages for the ordinary EXTRUDE/PRESSPULL cylinder it exists for.
+constexpr double kFullTurnSpanThreshold = kPi * 0.999;
+constexpr int kMinFullCircleSegments = 128;
+
 [[nodiscard]] bool AllFinite(std::initializer_list<double> vs) {
   for (double v : vs) {
     if (!std::isfinite(v))
@@ -1333,13 +1352,14 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
   const double span = std::fabs(spanRad);
   if (!(radius > 0.0) || !(span > 0.0))
     return 1;
+  const int minSegs = span >= kFullTurnSpanThreshold ? kMinFullCircleSegments : kMinArcSegments;
   if (tol >= radius)
-    return kMinArcSegments;
+    return minSegs;
   const double maxStep = 2.0 * std::acos(1.0 - tol / radius);
   if (!(maxStep > 0.0))
     return kMaxArcSegments;
   const int n = static_cast<int>(std::ceil(span / maxStep));
-  return std::clamp(n, kMinArcSegments, kMaxArcSegments);
+  return std::clamp(n, minSegs, kMaxArcSegments);
 }
 
 /// Segment count to walk a curved edge (Arc / Ellipse / Intersection) within \p tol; 1 for a line.
@@ -14078,10 +14098,14 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const bool isect = sf.kind == SurfaceKind::Cylinder && FaceLoopHasIntersectionEdge(s, f);
       const bool coneCut = sf.kind == SurfaceKind::Cone &&
                           (FaceLoopHasEllipseEdge(s, f) || FaceLoopHasIntersectionEdge(s, f));
-      const int nu = (isect || coneCut) ? std::clamp(SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart,
-                                                                    0.25 * chordTolerance),
-                                                    24, 256)
-                                       : SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart, chordTolerance);
+      // The plain unclipped cylinder/cone wall — EXTRUDE or PRESSPULL of an ordinary circle, the
+      // common case — is a (near-)full turn, so `SegmentsForArc`'s own `kMinFullCircleSegments`
+      // floor already keeps it smooth; no separate clamp needed here (issue #486 GUI pass). The
+      // isect/coneCut case additionally floors at 24, since its face is CUT to a partial sweep by
+      // an intersection or ellipse edge and so would not otherwise reach the full-turn floor above.
+      const int nu = (isect || coneCut)
+                        ? std::clamp(SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart, 0.25 * chordTolerance), 24, 256)
+                        : SegmentsForArc(std::max(r0, r1), f.uEnd - f.uStart, chordTolerance);
       CylinderCut cc;
       const bool cut = sf.kind == SurfaceKind::Cylinder && !isect && CylinderCutZExtent(s, f, &cc);
       const IsectStrip strip = isect ? MakeIsectStrip(s, f) : IsectStrip{};

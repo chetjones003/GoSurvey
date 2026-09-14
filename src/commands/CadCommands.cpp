@@ -25132,14 +25132,32 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
         const double dr = d - r;
         consider(e, dr * dr);
       } else {
-        // Orbited: sample the circumference on the circle's own plane, matching how arcs and
-        // ellipses are already picked in this function.
+        // Orbited: sample the circumference on the circle's own plane. A tilted circle
+        // (userCircleNormals) was being sampled as if it lay flat in world XY regardless — the
+        // sample ring landed nowhere near the circle actually on screen, so a cursor visibly over
+        // a tilted circle in a 3D view never hit it (GUI pass, issue #486 follow-up).
         double bestD2 = 1e300;
         constexpr int n = 48;
         constexpr double twopi = 6.28318530717958647692;
+        const size_t nIdx = (ci / 4) * 3;
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        if (nIdx + 2 < st.userCircleNormals.size()) {
+          nx = st.userCircleNormals[nIdx];
+          ny = st.userCircleNormals[nIdx + 1];
+          nz = st.userCircleNormals[nIdx + 2];
+        }
+        ucs::Ucs plane;
+        const bool tilted = !IsFlatNormal(nx, ny, nz) &&
+                            ucs::FromNormal({cx, cy, cz}, {static_cast<double>(nx), static_cast<double>(ny),
+                                                            static_cast<double>(nz)}, &plane);
         for (int i = 0; i < n; ++i) {
           const double ang = twopi * static_cast<double>(i) / static_cast<double>(n);
-          bestD2 = std::min(bestD2, d2Point(cx + r * std::cos(ang), cy + r * std::sin(ang), cz));
+          if (tilted) {
+            const ucs::Vec3 p = ucs::PointOnPlaneCircle(plane, r, ang);
+            bestD2 = std::min(bestD2, d2Point(p.x, p.y, p.z));
+          } else {
+            bestD2 = std::min(bestD2, d2Point(cx + r * std::cos(ang), cy + r * std::sin(ang), cz));
+          }
         }
         consider(e, bestD2);
       }
@@ -25162,13 +25180,25 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       span.sweep = a.sweepRad;
       bestD2 = PointArcDistanceSq(wx, wy, span);
     } else {
+      // Orbited: same tilted-plane fix as the circle branch above — a tilted arc (a.nx/ny/nz) was
+      // being sampled flat in world XY, missing it entirely under an orbited view.
+      ucs::Ucs plane;
+      const bool tilted =
+          !IsFlatNormal(a.nx, a.ny, a.nz) &&
+          ucs::FromNormal({a.cx, a.cy, a.z},
+                          {static_cast<double>(a.nx), static_cast<double>(a.ny), static_cast<double>(a.nz)}, &plane);
       constexpr int n = 36;
       for (int i = 0; i <= n; ++i) {
         const double u = static_cast<double>(i) / static_cast<double>(n);
         const double ang = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
-        const double x = static_cast<double>(a.cx) + static_cast<double>(a.r) * std::cos(ang);
-        const double y = static_cast<double>(a.cy) + static_cast<double>(a.r) * std::sin(ang);
-        bestD2 = std::min(bestD2, d2Point(x, y, static_cast<double>(a.z)));
+        if (tilted) {
+          const ucs::Vec3 p = ucs::PointOnPlaneCircle(plane, a.r, ang);
+          bestD2 = std::min(bestD2, d2Point(p.x, p.y, p.z));
+        } else {
+          const double x = static_cast<double>(a.cx) + static_cast<double>(a.r) * std::cos(ang);
+          const double y = static_cast<double>(a.cy) + static_cast<double>(a.r) * std::sin(ang);
+          bestD2 = std::min(bestD2, d2Point(x, y, static_cast<double>(a.z)));
+        }
       }
     }
     consider(e, bestD2);

@@ -1304,3 +1304,46 @@ TEST_CASE("Quadrant snap obeys its per-type toggle and the snap-once override", 
   CHECK(forced.kind == Kind::Quadrant);
   CHECK(forced.x == Approx(10.f).margin(1e-3));
 }
+
+TEST_CASE("A tilted circle is ray-picked on its own plane, not flat world XY",
+          "[CadCommands][pick][issue486]") {
+  // GUI pass (issue #486 follow-up): a circle drawn under a tilted work plane (e.g. while viewing
+  // Front) is stored with a real plane normal (userCircleNormals), but the orbited-view ray pick
+  // was sampling its circumference as if every circle lay flat in world XY — so a cursor visibly
+  // over the circle in a 3D view never hit it. Circle centred at (10,0,0), radius 2, normal +X (a
+  // vertical plane facing along X, as a circle drawn in a "Front" view would be).
+  AppCommandState st;
+  st.userCirclesCxCyZR = {10.0, 0.0, 0.0, 2.0};
+  st.userCircleNormals = {1.f, 0.f, 0.f};
+
+  // The true rim point at angle 90 deg in the circle's OWN plane is (10, 0, 2) -- not (10, 2, 0),
+  // which is what the flat-XY assumption would have tested against instead.
+  const ray3d::Ray ray{ray3d::Vec3{1000.0, 0.0, 2.0}, ray3d::Vec3{-1.0, 0.0, 0.0}};
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  REQUIRE(PickClosestCadEntity(st, 0.0, 0.0, 0.05f, &hit, &d2, &ray));
+  CHECK(hit.type == SelectedEntity::Type::Circle);
+  CHECK(hit.index == 0);
+}
+
+TEST_CASE("A tilted arc is ray-picked on its own plane, not flat world XY", "[CadCommands][pick][issue486]") {
+  AppCommandState st;
+  CadArc a;
+  a.cx = 10.0;
+  a.cy = 0.0;
+  a.z = 0.0;
+  a.r = 2.0;
+  a.startRad = 0.f;
+  a.sweepRad = static_cast<float>(2.0 * 3.14159265358979323846);  // full turn, so any angle is on it
+  a.nx = 1.f;
+  a.ny = 0.f;
+  a.nz = 0.f;
+  st.userArcs.push_back(a);
+
+  const ray3d::Ray ray{ray3d::Vec3{1000.0, 0.0, 2.0}, ray3d::Vec3{-1.0, 0.0, 0.0}};
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  REQUIRE(PickClosestCadEntity(st, 0.0, 0.0, 0.1f, &hit, &d2, &ray));
+  CHECK(hit.type == SelectedEntity::Type::Arc);
+  CHECK(hit.index == 0);
+}
