@@ -2,6 +2,7 @@
 #include "CadCommands.hpp"
 #include "CadRubberPreview.hpp"
 #include "HeadlessFileDialogs.hpp"
+#include "io/GsIo.hpp"
 #include "util/brep.hpp"
 #include "util/ucs.hpp"
 
@@ -555,6 +556,119 @@ TEST_CASE("BEDIT BCONNECT typed coords persist on the definition", "[issue475][b
   REQUIRE(st.blockDefs[static_cast<size_t>(di)].connections.size() == 1);
   CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].name == "P1");
   CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].nz == Catch::Approx(1.f));
+}
+
+TEST_CASE("BEDIT BCONNECT typed coords accept role, engagement, and compatibility tag",
+          "[issue486][block][connector][bedit]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  std::istringstream bconnArgs("P1, 4in, 0, 0, 0, 0, 0, 1, branch, 0.25, class150");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnect", bconnArgs, log));
+  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  REQUIRE(di >= 0);
+  const CadBlockConnection& c = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  CHECK(c.role == CadBlockConnectionRole::Branch);
+  CHECK(c.engagementLength == Catch::Approx(0.25f));
+  CHECK(c.compatibilityTag == "class150");
+}
+
+TEST_CASE("BCONNECTEDIT updates role, engagement, and compatibility tag on an existing port",
+          "[issue486][block][connector][bedit]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  CadBlockConnection c;
+  c.name = "P1";
+  c.nominalSize = "4in";
+  def.connections.push_back(c);
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  std::istringstream editArgs("P1, 4in, outlet, 0.5, ansi150");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectedit", editArgs, log));
+  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  REQUIRE(di >= 0);
+  const CadBlockConnection& out = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  CHECK(out.role == CadBlockConnectionRole::Outlet);
+  CHECK(out.engagementLength == Catch::Approx(0.5f));
+  CHECK(out.compatibilityTag == "ansi150");
+}
+
+TEST_CASE("BLOCKFITTING tags a block definition with piping metadata", "[issue486][block][fitting][bedit]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "ELBOW90-4IN";
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream beditArgs("ELBOW90-4IN");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  std::istringstream fittingArgs("elbow-90, 4in, CS150, ACME-E90-4");
+  REQUIRE(CadBlocksTryIdleCommand(st, "blockfitting", fittingArgs, log));
+  const int di = CadBlockFindDef(st.blockDefs, "ELBOW90-4IN");
+  REQUIRE(di >= 0);
+  const CadBlockDefinition& out = st.blockDefs[static_cast<size_t>(di)];
+  CHECK(out.partType == CadPipePartType::Elbow90);
+  CHECK(out.nominalSize == "4in");
+  CHECK(out.pressureClass == CadPipePressureClass::CS150);
+  CHECK(out.partNumber == "ACME-E90-4");
+}
+
+TEST_CASE("BLOCKFITTING refuses without an open block editor", "[issue486][block][fitting][bedit]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  std::istringstream fittingArgs("elbow-90");
+  REQUIRE(CadBlocksTryIdleCommand(st, "blockfitting", fittingArgs, log));
+  CHECK_FALSE(log.empty());
+  CHECK(log.back().find("BEDIT") != std::string::npos);
+}
+
+TEST_CASE("Fitting metadata and connection role/engagement/compat round-trip through .gs JSON",
+          "[issue486][block][fitting][connector][gsio]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "ELBOW90-4IN";
+  def.partType = CadPipePartType::Elbow90;
+  def.nominalSize = "4in";
+  def.pressureClass = CadPipePressureClass::CS150;
+  def.partNumber = "ACME-E90-4";
+  CadBlockConnection a;
+  a.name = "P1";
+  a.nominalSize = "4in";
+  a.role = CadBlockConnectionRole::Inlet;
+  a.engagementLength = 0.2f;
+  a.compatibilityTag = "class150";
+  def.connections.push_back(a);
+  CadBlockConnection b;
+  b.name = "P2";
+  b.role = CadBlockConnectionRole::Branch;
+  def.connections.push_back(b);
+  st.blockDefs.push_back(def);
+
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState loaded;
+  std::vector<std::string> log;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, json, log));
+  const int di = CadBlockFindDef(loaded.blockDefs, "ELBOW90-4IN");
+  REQUIRE(di >= 0);
+  const CadBlockDefinition& out = loaded.blockDefs[static_cast<size_t>(di)];
+  CHECK(out.partType == CadPipePartType::Elbow90);
+  CHECK(out.nominalSize == "4in");
+  CHECK(out.pressureClass == CadPipePressureClass::CS150);
+  CHECK(out.partNumber == "ACME-E90-4");
+  REQUIRE(out.connections.size() == 2);
+  CHECK(out.connections[0].role == CadBlockConnectionRole::Inlet);
+  CHECK(out.connections[0].engagementLength == Catch::Approx(0.2f));
+  CHECK(out.connections[0].compatibilityTag == "class150");
+  CHECK(out.connections[1].role == CadBlockConnectionRole::Branch);
 }
 
 TEST_CASE("BEDIT with a name skips the picker", "[issue124][block][bedit]") {

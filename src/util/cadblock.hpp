@@ -106,8 +106,30 @@ struct CadBlockNested {
   std::string visState;
 };
 
-/// Pipe/fitting connection port on a block definition (issue #475 increment 5). Local point and
-/// outward unit direction in block space; nominal size is a tag only, not parametric.
+/// Piping role of a connection port (issue #486 increment A2). Drives auto-fitting routing: an
+/// `Inlet`/`Outlet` pair is a straight through-run port, `Branch` is a tee/cross side takeoff.
+enum class CadBlockConnectionRole : std::uint8_t { Inlet = 0, Outlet, Branch };
+
+[[nodiscard]] inline std::string_view CadBlockConnectionRoleTag(CadBlockConnectionRole r) {
+  switch (r) {
+    case CadBlockConnectionRole::Outlet: return "outlet";
+    case CadBlockConnectionRole::Branch: return "branch";
+    case CadBlockConnectionRole::Inlet:
+    default: return "inlet";
+  }
+}
+
+[[nodiscard]] inline CadBlockConnectionRole ParseCadBlockConnectionRole(std::string_view s) {
+  if (s == "outlet") return CadBlockConnectionRole::Outlet;
+  if (s == "branch") return CadBlockConnectionRole::Branch;
+  return CadBlockConnectionRole::Inlet;
+}
+
+/// Pipe/fitting connection port on a block definition (issue #475 increment 5, extended by #486
+/// increment A2). Local point and outward unit direction in block space; nominal size is a tag
+/// only, not parametric. `engagementLength` is how far a mating pipe end slides into this port
+/// (drawing units) — auto-fitting insertion shortens the pipe segment by this amount instead of
+/// overlap-then-boolean trim (D-2026-09-12 decision 2).
 struct CadBlockConnection {
   std::string name;
   float x = 0.f;
@@ -117,6 +139,11 @@ struct CadBlockConnection {
   float ny = 0.f;
   float nz = 1.f;
   std::string nominalSize;
+  CadBlockConnectionRole role = CadBlockConnectionRole::Inlet;
+  /// Optional tag restricting which ports this one may mate with (e.g. a flange face class).
+  /// Empty = no restriction beyond nominalSize matching.
+  std::string compatibilityTag;
+  float engagementLength = 0.f;
 };
 
 /// A definition connection transformed into world/storage coordinates for a placed reference.
@@ -166,6 +193,72 @@ struct CadBlockContent {
   std::vector<EntityAttributes> solidAttrs;
 };
 
+/// Piping catalog part type (issue #486 increment A1). `None` = not a piping fitting (ordinary
+/// block). Kept a closed enum, tagged as a string in .gs so the library/lookup keys stay stable.
+enum class CadPipePartType : std::uint8_t {
+  None = 0,
+  Elbow90,
+  Elbow45,
+  Tee,
+  Cross,
+  Reducer,
+  Flange,
+  Valve,
+  Coupling,
+  Cap,
+  Other
+};
+
+[[nodiscard]] inline std::string_view CadPipePartTypeTag(CadPipePartType t) {
+  switch (t) {
+    case CadPipePartType::Elbow90: return "elbow-90";
+    case CadPipePartType::Elbow45: return "elbow-45";
+    case CadPipePartType::Tee: return "tee";
+    case CadPipePartType::Cross: return "cross";
+    case CadPipePartType::Reducer: return "reducer";
+    case CadPipePartType::Flange: return "flange";
+    case CadPipePartType::Valve: return "valve";
+    case CadPipePartType::Coupling: return "coupling";
+    case CadPipePartType::Cap: return "cap";
+    case CadPipePartType::Other: return "other";
+    case CadPipePartType::None:
+    default: return "";
+  }
+}
+
+[[nodiscard]] inline CadPipePartType ParseCadPipePartType(std::string_view s) {
+  if (s == "elbow-90") return CadPipePartType::Elbow90;
+  if (s == "elbow-45") return CadPipePartType::Elbow45;
+  if (s == "tee") return CadPipePartType::Tee;
+  if (s == "cross") return CadPipePartType::Cross;
+  if (s == "reducer") return CadPipePartType::Reducer;
+  if (s == "flange") return CadPipePartType::Flange;
+  if (s == "valve") return CadPipePartType::Valve;
+  if (s == "coupling") return CadPipePartType::Coupling;
+  if (s == "cap") return CadPipePartType::Cap;
+  if (s == "other") return CadPipePartType::Other;
+  return CadPipePartType::None;
+}
+
+/// Pressure class tag (issue #486, D-2026-09-12 decision 1). Fixed enum, not free text, so
+/// library lookup and UI pickers use exact matches.
+enum class CadPipePressureClass : std::uint8_t { None = 0, CS150, CS300 };
+
+[[nodiscard]] inline std::string_view CadPipePressureClassTag(CadPipePressureClass c) {
+  switch (c) {
+    case CadPipePressureClass::CS150: return "CS150";
+    case CadPipePressureClass::CS300: return "CS300";
+    case CadPipePressureClass::None:
+    default: return "";
+  }
+}
+
+[[nodiscard]] inline CadPipePressureClass ParseCadPipePressureClass(std::string_view s) {
+  if (s == "CS150") return CadPipePressureClass::CS150;
+  if (s == "CS300") return CadPipePressureClass::CS300;
+  return CadPipePressureClass::None;
+}
+
 struct CadBlockDefinition {
   std::uint64_t id = 0;
   std::string name;
@@ -181,6 +274,13 @@ struct CadBlockDefinition {
   std::vector<std::string> visibilityStates;
   std::vector<CadBlockConnection> connections;
   std::string metadata;
+  /// Piping fitting metadata (issue #486 increment A1). `partType == None` means this block is
+  /// not tagged as a piping catalog part; `nominalSize`/`pressureClass`/`partNumber` are then
+  /// ignored by the library lookup.
+  CadPipePartType partType = CadPipePartType::None;
+  std::string nominalSize;
+  CadPipePressureClass pressureClass = CadPipePressureClass::None;
+  std::string partNumber;
 };
 
 struct CadBlockRef {

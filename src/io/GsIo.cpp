@@ -391,6 +391,14 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
   o["baseZ"] = d.baseZ;
   o["units"] = d.units;
   o["metadata"] = d.metadata;
+  if (d.partType != CadPipePartType::None) {
+    o["partType"] = std::string(CadPipePartTypeTag(d.partType));
+    o["nominalSize"] = d.nominalSize;
+    if (d.pressureClass != CadPipePressureClass::None)
+      o["pressureClass"] = std::string(CadPipePressureClassTag(d.pressureClass));
+    if (!d.partNumber.empty())
+      o["partNumber"] = d.partNumber;
+  }
   o["content"] = CadBlockContentToJson(d.content);
   json ads = json::array();
   for (const CadBlockAttrDef& a : d.attrDefs) {
@@ -443,6 +451,10 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
       cj["ny"] = c.ny;
       cj["nz"] = c.nz;
       cj["nominalSize"] = c.nominalSize;
+      cj["role"] = std::string(CadBlockConnectionRoleTag(c.role));
+      if (!c.compatibilityTag.empty())
+        cj["compatibilityTag"] = c.compatibilityTag;
+      cj["engagementLength"] = c.engagementLength;
       conns.push_back(std::move(cj));
     }
     o["connections"] = std::move(conns);
@@ -460,6 +472,10 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
   d.baseZ = o.value("baseZ", d.baseZ);
   d.units = o.value("units", d.units);
   d.metadata = o.value("metadata", d.metadata);
+  d.partType = ParseCadPipePartType(o.value("partType", std::string()));
+  d.nominalSize = o.value("nominalSize", d.nominalSize);
+  d.pressureClass = ParseCadPipePressureClass(o.value("pressureClass", std::string()));
+  d.partNumber = o.value("partNumber", d.partNumber);
   if (o.contains("content"))
     d.content = CadBlockContentFromJson(o["content"]);
   if (o.contains("attrDefs") && o["attrDefs"].is_array()) {
@@ -513,6 +529,9 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
       c.ny = cj.value("ny", 0.f);
       c.nz = cj.value("nz", 1.f);
       c.nominalSize = cj.value("nominalSize", "");
+      c.role = ParseCadBlockConnectionRole(cj.value("role", std::string()));
+      c.compatibilityTag = cj.value("compatibilityTag", "");
+      c.engagementLength = cj.value("engagementLength", 0.f);
       d.connections.push_back(std::move(c));
     }
   }

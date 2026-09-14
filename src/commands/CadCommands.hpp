@@ -2666,6 +2666,10 @@ struct AppCommandState {
   bool bconnectAwaitingFace = false;
   char bconnectNameBuf[128]{};
   char bconnectSizeBuf[64]{};
+  /// Role/engagement queued from a prompt-form BCONNECT, applied once the face pick resolves
+  /// (issue #486 increment A2).
+  CadBlockConnectionRole bconnectRolePending = CadBlockConnectionRole::Inlet;
+  float bconnectEngagementPending = 0.f;
   DrawingGeometrySnapshot blockEditModelStash;
   /// \c cadGpuRevision at the last clean point of the session (enter / BSAVE). A different value
   /// means unsaved edits — drives the BCLOSE Save/Don't-Save/Cancel prompt.
