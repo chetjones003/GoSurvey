@@ -6688,3 +6688,108 @@ TEST_CASE("SUBTRACT short PRESSPULL cylinder via through-hole fallback", "[brep]
   double vol = brep::ComputeMassProperties(cut).volume;
   REQUIRE(vol == Catch::Approx(1000 - 3.141592653589793*4*10).epsilon(0.02));
 }
+
+// issue #497 / REQ-339, ADR-057: a radial cross-hole through a coaxial cylinder stack — the gap
+// left after 338a (which covers only an AXIAL bore through a composite target). The cutter's axis
+// is perpendicular to the stack's own axis and passes through it.
+TEST_CASE("Radial cross-hole entirely inside one segment of a coaxial stack (issue #497)",
+         "[brep][req339][issue497]") {
+  brep::Problem why = brep::Problem::Ok;
+  // A 3-segment stack: r1[0,4], r2[4,8] (wide), r3[8,12] — the hole sits fully inside the middle,
+  // wide segment, far from both shoulders.
+  ucs::Ucs f1; f1.origin = brep::Vec3{0, 0, 0};
+  brep::Solid s1; REQUIRE(brep::MakeCylinder(f1, 1.0, 4.0, &s1, &why));
+  ucs::Ucs f2; f2.origin = brep::Vec3{0, 0, 4};
+  brep::Solid s2; REQUIRE(brep::MakeCylinder(f2, 2.0, 4.0, &s2, &why));
+  ucs::Ucs f3; f3.origin = brep::Vec3{0, 0, 8};
+  brep::Solid s3; REQUIRE(brep::MakeCylinder(f3, 1.5, 4.0, &s3, &why));
+
+  std::vector<brep::Solid> u1;
+  REQUIRE(brep::BooleanUnion(s1, s2, &u1, &why));
+  REQUIRE(u1.size() == 1);
+  std::vector<brep::Solid> u2;
+  REQUIRE(brep::BooleanUnion(u1[0], s3, &u2, &why));
+  REQUIRE(u2.size() == 1);
+  brep::Solid stack = std::move(u2[0]);
+  REQUIRE(brep::Validate(stack) == brep::Problem::Ok);
+
+  const double r = 0.5;
+  const brep::Vec3 centre{0.0, 0.0, 6.0};  // z=6, mid-way through the wide segment [4,8]
+  const brep::Vec3 axis{1.0, 0.0, 0.0};    // perpendicular to the stack's Z axis, zero offset
+
+  brep::Solid cut;
+  REQUIRE(brep::SubtractRadialCrossHoleThroughStack(stack, centre, axis, r, &cut, &why));
+  CHECK(brep::Validate(cut) == brep::Problem::Ok);
+  CHECK_FALSE(brep::SelfIntersects(cut));
+
+  // Ground truth for the drilled middle segment: reuse the EXISTING, already-proven bare-cylinder
+  // branch-pipe recogniser directly, rather than re-deriving the removed volume by hand.
+  ucs::Ucs midFrame; midFrame.origin = brep::Vec3{0, 0, 4};
+  brep::Solid midBare;
+  REQUIRE(brep::MakeCylinder(midFrame, 2.0, 4.0, &midBare, &why));
+  ucs::Ucs cutterFrame;
+  REQUIRE(ucs::FromNormal(brep::Vec3{-4.0, 0.0, 6.0}, brep::Vec3{1.0, 0.0, 0.0}, &cutterFrame));
+  brep::Solid cutter;
+  REQUIRE(brep::MakeCylinder(cutterFrame, r, 8.0, &cutter, &why));
+  std::vector<brep::Solid> drilledMid;
+  REQUIRE(brep::BooleanSubtract(midBare, cutter, &drilledMid, &why));
+  REQUIRE(drilledMid.size() == 1);
+  const double midDrilledVol = brep::ComputeMassProperties(drilledMid[0]).volume;
+
+  const double pi = 3.141592653589793;
+  const double expected = pi * 1.0 * 1.0 * 4.0 + midDrilledVol + pi * 1.5 * 1.5 * 4.0;
+  const double vol = brep::ComputeMassProperties(cut).volume;
+  CHECK(vol == Catch::Approx(expected).epsilon(1e-4));
+}
+
+// A hole crossing the shoulder between two differently-radiused segments is explicitly OUT of
+// REQ-339's scope (see the requirement's revision note): the wall's own mouth curve there would need
+// to be clipped by a THIRD surface (the shoulder plane), which the kernel's existing
+// `IntegrateCylinderFaceNumeric` numeric area integrator has no way to express — it searches only for
+// where the cutter crosses ONE wall surface. Building the topology anyway risks exactly the
+// silently-wrong-measurement failure REQ-201 exists to prevent, so this recogniser refuses by
+// returning false (not a `Problem`) rather than guess, leaving the caller's own ordinary
+// `Problem::BooleanCurvedFace` refusal to stand, unchanged and by name.
+TEST_CASE("Radial cross-hole crossing a shoulder still refuses, not silently wrong (issue #497)",
+         "[brep][req339][issue497]") {
+  brep::Problem why = brep::Problem::Ok;
+  ucs::Ucs f1; f1.origin = brep::Vec3{0, 0, 0};
+  brep::Solid s1; REQUIRE(brep::MakeCylinder(f1, 1.5, 4.0, &s1, &why));
+  ucs::Ucs f2; f2.origin = brep::Vec3{0, 0, 4};
+  brep::Solid s2; REQUIRE(brep::MakeCylinder(f2, 2.5, 4.0, &s2, &why));
+  std::vector<brep::Solid> u1;
+  REQUIRE(brep::BooleanUnion(s1, s2, &u1, &why));
+  REQUIRE(u1.size() == 1);
+  brep::Solid stack = std::move(u1[0]);
+  REQUIRE(brep::Validate(stack) == brep::Problem::Ok);
+
+  const double r = 0.8;
+  const double zh = 3.5;  // shoulder at z=4 falls inside [zh-r, zh+r] = [2.7, 4.3]
+  const brep::Vec3 centre{0.0, 0.0, zh};
+  const brep::Vec3 axis{1.0, 0.0, 0.0};
+
+  brep::Solid cut;
+  CHECK_FALSE(brep::SubtractRadialCrossHoleThroughStack(stack, centre, axis, r, &cut, &why));
+}
+
+TEST_CASE("Radial cross-hole through a coaxial stack refuses when out of scope (issue #497)",
+         "[brep][req339][issue497]") {
+  brep::Problem why = brep::Problem::Ok;
+  ucs::Ucs f1; f1.origin = brep::Vec3{0, 0, 0};
+  brep::Solid s1; REQUIRE(brep::MakeCylinder(f1, 1.0, 4.0, &s1, &why));
+  ucs::Ucs f2; f2.origin = brep::Vec3{0, 0, 4};
+  brep::Solid s2; REQUIRE(brep::MakeCylinder(f2, 1.5, 4.0, &s2, &why));
+  std::vector<brep::Solid> u1;
+  REQUIRE(brep::BooleanUnion(s1, s2, &u1, &why));
+  brep::Solid stack = std::move(u1[0]);
+
+  brep::Solid cut;
+  SECTION("offset cutter axis (does not pass through the stack axis)") {
+    CHECK_FALSE(brep::SubtractRadialCrossHoleThroughStack(
+        stack, brep::Vec3{0.5, 0.0, 2.0}, brep::Vec3{1, 0, 0}, 0.3, &cut, &why));
+  }
+  SECTION("cutter axis not perpendicular to the stack axis") {
+    CHECK_FALSE(brep::SubtractRadialCrossHoleThroughStack(
+        stack, brep::Vec3{0.0, 0.0, 2.0}, brep::Vec3{1, 0, 1}, 0.3, &cut, &why));
+  }
+}
