@@ -6538,8 +6538,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
     until 338d.
 - Owner-layer: Domain (`src/util/brep.{hpp,cpp}`) for decomposition/folding logic; Commands
   (`src/commands/CadCommands.cpp`) for wiring each increment into `CommitBoolean`/`FoldBoolean`.
-- Status: **accepted (2026-09-14)** — D-2026-09-14-b. **338a verified satisfied by existing code
-  (2026-09-14)** — see revision below; 338b–338d remain open.
+- Status: **accepted (2026-09-14)** — D-2026-09-14-b. **338a and 338b verified satisfied by
+  existing code (2026-09-14)** — see revisions below; 338c–338d remain open.
 - Revisions:
   - 2026-09-14 — proposed and accepted as written (D-2026-09-14-b). Filed from issue #495
     (found while verifying issue #493); increment order 338a → 338b → 338c → 338d confirmed by the
@@ -6570,6 +6570,20 @@ capability that does not exist. They are recorded here rather than quietly dropp
     the confirmed axial case, and chose (b). Filed as GitHub issue #497 for its own future scoping
     pass; not folded into 338a, 338b, or 338c as written above, since none of their acceptance
     criteria name the radial case.
+  - 2026-09-14 — **338b investigated and found already satisfied for its literal acceptance
+    criterion.** `CommitBoolean`'s existing SUBTRACT loop (`src/commands/CadCommands.cpp`) applies
+    each selected subtrahend to the result of the previous one, and the REQ-337 short-cylinder
+    fallback (`TryGetCylinderInfo` → `SubtractCircleThrough` → `TryBoreThroughDirect`) already
+    re-scans the CURRENT (already-cut) target's faces fresh on every call rather than assuming
+    anything about its prior shape — so a later cutter landing near, touching, or even overlapping
+    an earlier cut's own inward face was never actually a problem. Confirmed with three new
+    regression tests in `tests/CadBlockImportTests.cpp` (issue #495 338b): an 8-hole bolt-circle
+    pattern cut in one SUBTRACT command with correct resulting volume; two holes whose cutting
+    disks overlap (a genuinely merged cavity) both succeeding in sequence; and a three-cutter
+    SUBTRACT where the third cutter is a REQ-337-widening-boundary unresolvable shape, refusing the
+    **whole** command by name with the document completely untouched (REQ-201) rather than applying
+    the first two cuts and only failing on the third. No code change was needed or made for this
+    acceptance criterion.
 
 ### REQ-315 — Sweep and loft on the solid kernel (GitHub issue #147, split from REQ-314)
 - Purpose: issue #147's acceptance names sweep and loft alongside extrude and revolve. A general

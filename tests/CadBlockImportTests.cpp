@@ -1490,3 +1490,138 @@ TEST_CASE("SUBTRACT still refuses when the bore is wider than the narrow section
   }
   CHECK(refused);
 }
+
+// issue #495 / REQ-338 increment 338b — sequential same-command cutters. Investigation found
+// CommitBoolean's existing per-piece SUBTRACT loop (each subtrahend applied to the result of the
+// previous one, with the TryGetCylinderInfo/SubtractCircleThrough short-cylinder fallback already
+// in place from REQ-337) already handles this correctly: a later cutter lands fine in a target that
+// already carries an earlier cut nearby, including touching and overlapping holes. These are
+// regression tests locking that behaviour in, not a new code path.
+TEST_CASE("SUBTRACT cuts a bolt-circle of holes in one command (issue #495 338b)", "[issue495][boolean][brep]") {
+  AppCommandState st;
+  brep::Problem why = brep::Problem::Ok;
+  brep::Solid flange;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 10.0, 10.0, 2.0, &flange, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
+
+  std::vector<int> subIdx;
+  const double pi = 3.141592653589793;
+  const int N = 8;
+  for (int i = 0; i < N; ++i) {
+    const double ang = 2.0 * pi * static_cast<double>(i) / N;
+    const double cx = 3.5 * std::cos(ang);
+    const double cy = 3.5 * std::sin(ang);
+    ucs::Ucs cf;
+    ucs::FromNormal(brep::Vec3{cx, cy, 1.0}, brep::Vec3{0, 0, 1}, &cf);
+    brep::Solid hole;
+    REQUIRE(brep::MakeCylinder(cf, 0.4, 1.0, &hole, &why));  // short PRESSPULL-style nub
+    st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole)));
+    subIdx.push_back(static_cast<int>(st.cadSolids.size()) - 1);
+  }
+
+  std::vector<std::string> log;
+  StartBooleanCommand(st, CadBooleanOp::Subtract, log);
+  SelectedEntity minuend;
+  minuend.type = SelectedEntity::Type::Solid;
+  minuend.index = 0;
+  st.selection = {minuend};
+  REQUIRE(HandleBooleanTextInput("", st, log));
+  st.selection.clear();
+  for (int idx : subIdx) {
+    SelectedEntity e;
+    e.type = SelectedEntity::Type::Solid;
+    e.index = idx;
+    st.selection.push_back(e);
+  }
+  REQUIRE(HandleBooleanTextInput("", st, log));
+
+  REQUIRE(st.cadSolids.size() == 1);
+  REQUIRE(st.cadSolids[0]);
+  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+  const double removed = pi * 0.4 * 0.4 * 2.0 * N;
+  const double vol = brep::ComputeMassProperties(*st.cadSolids[0]).volume;
+  CHECK(vol == Catch::Approx(200.0 - removed).epsilon(1e-6));
+}
+
+TEST_CASE("SUBTRACT handles touching and overlapping holes in one command (issue #495 338b)",
+         "[issue495][boolean][brep]") {
+  brep::Problem why = brep::Problem::Ok;
+  brep::Solid flange;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 10.0, 10.0, 2.0, &flange, &why));
+
+  // Hole 1, then hole 2 whose disk overlaps hole 1's (0.6 apart, radius 0.5 each) — the merged-
+  // cavity case, landing the second cut directly against the first cut's own inward face.
+  brep::Solid afterHole1;
+  REQUIRE(brep::SubtractCircleThrough(flange, brep::Vec3{-0.3, 0, 1.0}, brep::Vec3{0, 0, 1}, 0.5,
+                                     &afterHole1, &why));
+  brep::Solid afterHole2;
+  const bool ok2 = brep::SubtractCircleThrough(afterHole1, brep::Vec3{0.3, 0, 1.0}, brep::Vec3{0, 0, 1},
+                                              0.5, &afterHole2, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok2);
+  CHECK(brep::Validate(afterHole2) == brep::Problem::Ok);
+}
+
+TEST_CASE("SUBTRACT with one unresolvable cutter refuses the whole command (issue #495 338b)",
+         "[issue495][boolean][brep]") {
+  AppCommandState st;
+  brep::Problem why = brep::Problem::Ok;
+  brep::Solid flange;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 10.0, 10.0, 2.0, &flange, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
+  std::vector<int> subIdx;
+
+  ucs::Ucs cf1;
+  ucs::FromNormal(brep::Vec3{-2.5, -2.5, 1.0}, brep::Vec3{0, 0, 1}, &cf1);
+  brep::Solid hole1;
+  REQUIRE(brep::MakeCylinder(cf1, 0.4, 1.0, &hole1, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole1)));
+  subIdx.push_back(static_cast<int>(st.cadSolids.size()) - 1);
+
+  ucs::Ucs cf2;
+  ucs::FromNormal(brep::Vec3{2.5, -2.5, 1.0}, brep::Vec3{0, 0, 1}, &cf2);
+  brep::Solid hole2;
+  REQUIRE(brep::MakeCylinder(cf2, 0.4, 1.0, &hole2, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole2)));
+  subIdx.push_back(static_cast<int>(st.cadSolids.size()) - 1);
+
+  // Third cutter: a WIDENING coaxial 2-cylinder stack — REQ-337's own scope boundary, genuinely
+  // unresolvable. The whole multi-cutter SUBTRACT must refuse, not apply the first two and choke
+  // on the third (REQ-201: named refusal, document untouched).
+  ucs::Ucs aFrame;
+  aFrame.origin = brep::Vec3{0.0, 2.5, -1.0};
+  brep::Solid a;
+  REQUIRE(brep::MakeCylinder(aFrame, 1.0, 3.0, &a, &why));
+  ucs::Ucs bFrame;
+  bFrame.origin = brep::Vec3{0.0, 2.5, 2.0};
+  brep::Solid b;
+  REQUIRE(brep::MakeCylinder(bFrame, 1.5, 4.0, &b, &why));
+  std::vector<brep::Solid> unioned;
+  REQUIRE(brep::BooleanUnion(a, b, &unioned, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(unioned[0])));
+  subIdx.push_back(static_cast<int>(st.cadSolids.size()) - 1);
+
+  const size_t before = st.cadSolids.size();
+  std::vector<std::string> log;
+  StartBooleanCommand(st, CadBooleanOp::Subtract, log);
+  SelectedEntity minuend;
+  minuend.type = SelectedEntity::Type::Solid;
+  minuend.index = 0;
+  st.selection = {minuend};
+  REQUIRE(HandleBooleanTextInput("", st, log));
+  st.selection.clear();
+  for (int idx : subIdx) {
+    SelectedEntity e;
+    e.type = SelectedEntity::Type::Solid;
+    e.index = idx;
+    st.selection.push_back(e);
+  }
+  REQUIRE(HandleBooleanTextInput("", st, log));
+
+  CHECK(st.cadSolids.size() == before);
+  bool refused = false;
+  for (const std::string& line : log)
+    if (line.find("cannot combine these curved solids") != std::string::npos)
+      refused = true;
+  CHECK(refused);
+}
