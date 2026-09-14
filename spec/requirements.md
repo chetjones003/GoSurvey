@@ -6509,10 +6509,23 @@ capability that does not exist. They are recorded here rather than quietly dropp
     axes, any prior-Boolean history on either operand — via true surface-pair intersection curves,
     face classification of each operand against the other, trim, and re-stitch: full split/classify/
     merge CSG, not a per-configuration recogniser or decomposition. This is a multi-session kernel
-    undertaking on the scale of REQ-314's B1 through B2b-2 combined; 338d is recorded here as the
-    named future direction only. It needs its own sub-ADR (mirroring how B2b got one inside ADR-046)
-    before any of it is implemented, and is not accepted as a concrete design by this requirement.
-  Acceptance (338a–338c; 338d is out of scope for acceptance until its own sub-ADR lands):
+    undertaking on the scale of REQ-314's B1 through B2b-2 combined. Rather than design the whole
+    engine up front (the same reasoning ADR-046 used for B1→B2b-2), 338d ships as its own sequence of
+    named sub-increments, each independently shippable, starting with:
+    - **338d-1 — Coaxial composite stacks may include a conical (tapered) segment** (found live
+      2026-09-14, verifying a stepped-shaft-with-taper repro). 338c's coaxial-stack folding
+      (`ExtractCoaxialStack`/`BuildCoaxialStack`/`TryBooleanCoaxialStackUnion`) recognises only
+      `SurfaceKind::Cylinder` bands; a `SurfaceKind::Cone` band coaxial with the same shared axis
+      (a straight taper between two different radii) still refuses by name, even though ADR-045's
+      kernel already has an exact, closed-form representation for a cone — no new surface or curve
+      type is needed, only teaching the existing extractor/builder/merger to carry a per-band
+      (radius-at-z0, radius-at-z1) pair instead of one constant radius, and building a `Cone` wall
+      when the pair differs (a `Cylinder` wall, unchanged, when it doesn't).
+    - Later 338d sub-increments (general skew/oblique operands, sphere/torus composite pieces, a true
+      general surface-pair classification/trim/restitch engine) remain unscoped future direction only,
+      each needing its own proposal and acceptance before implementation, the same as 338d-1 above.
+  Acceptance (338a–338c, and 338d-1 below; the rest of 338d is out of scope for acceptance until its
+  own sub-proposal lands):
   - **338a**: the necked/flanged-shaft repro from issue #495 Case A subtracts as one valid bore;
     REQ-101 volume/area agreement holds; a target piece that genuinely can't carry the bore (drill
     radius exceeds the narrowest point) still refuses by name (REQ-201), not silently.
@@ -6522,6 +6535,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - **338c**: every REQ-314/REQ-337 test that passes today keeps passing unchanged (composability
     increments are additive, never a rewrite of an existing recogniser); a general multi-solid
     selection succeeds whenever 338a/338b/existing REQ-314 recognisers can resolve every piece.
+  - **338d-1**: a coaxial stack containing one or more `Cone` bands (straight taper, axis-aligned with
+    the rest of the stack) folds through UNION exactly like an all-`Cylinder` stack does today; a
+    subsequent SUBTRACT bore through the resulting composite (338a's case, now with a taper present)
+    still succeeds when the drill stays inside material along its whole path, and still refuses by
+    name (REQ-201) when it doesn't; every 338c test keeps passing unchanged (cylinder-only stacks are
+    the `radius-at-z0 == radius-at-z1` case of the same band representation, not a separate path).
   - Every increment stays one undoable step, `.gs` round-trips unchanged (no new `Solid` field, no
     `kGsFormatVersion` bump — composability results are topology exactly like any other Boolean
     result).
@@ -6530,17 +6549,31 @@ capability that does not exist. They are recorded here rather than quietly dropp
     recognised that REQ-314 doesn't already handle for a single primitive pair. They only make
     existing recognisers reachable through decomposition/folding when an operand or intermediate
     result is a composite of pieces each individually already resolvable.
-  - **338d is not scoped by this requirement.** Its acceptance criteria, delivery increments, and
-    kernel design are deferred to a future sub-ADR, the same way B2b was carved out inside ADR-046
-    rather than designed up front.
-  - **Non-cylinder composite pieces** (cone/sphere/torus segments joined into one operand) remain out
-    of scope through 338a–338c, matching REQ-337's own boundary — only cylindrical pieces decompose
-    until 338d.
+  - **338d beyond 338d-1 is not scoped by this requirement.** Its acceptance criteria, delivery
+    increments, and kernel design are deferred to future sub-proposals, the same way B2b was carved
+    out inside ADR-046 rather than designed up front. 338d-1 alone (the coaxial-cone-band case) is
+    accepted and scoped by the acceptance line above.
+  - **Non-cylinder composite pieces** remain out of scope through 338a–338c, matching REQ-337's own
+    boundary — only cylindrical pieces decompose there. **338d-1 lifts this for one case only**: a
+    coaxial, axis-aligned `Cone` band mixed into an otherwise-cylindrical stack. Sphere/torus pieces,
+    and a cone at any angle other than coaxial with the stack's own shared axis, remain refused by
+    name pending a later 338d sub-increment.
 - Owner-layer: Domain (`src/util/brep.{hpp,cpp}`) for decomposition/folding logic; Commands
   (`src/commands/CadCommands.cpp`) for wiring each increment into `CommitBoolean`/`FoldBoolean`.
 - Status: **accepted (2026-09-14)** — D-2026-09-14-b. **338a and 338b verified satisfied by
-  existing code, 338c implemented (2026-09-14)** — see revisions below; 338d remains open.
+  existing code, 338c implemented (2026-09-14), 338d-1 proposed and accepted (2026-09-14) —
+  see revisions below; 338d beyond 338d-1 remains open.**
 - Revisions:
+  - 2026-09-14 — **338d-1 proposed and accepted (D-2026-09-14-c).** Found live while manually testing
+    338c: a stepped shaft with a straight-taper (conical) transition, built from a LOFT solid unioned
+    into an otherwise-cylindrical coaxial stack, still refused with `Problem::BooleanCurvedFace`
+    because `ExtractCoaxialStack` tolerates only `Plane`/`Cylinder` faces by name. Rather than design
+    the whole 338d general engine up front, the user was offered (a) this one narrow coaxial-cone-band
+    slice, (b) the full general classification engine in one attempt, or (c) issue #497 (radial
+    cross-hole) instead, chose (b) initially, then — once shown that a real general engine is a
+    multi-session undertaking needing its own kernel design — accepted starting 338d's own increment
+    sequence with this narrow slice as 338d-1, the same delivery-order reasoning already used for
+    338a-c and, before that, ADR-046's B1→B2b-2. Scope, acceptance, and boundary recorded above.
   - 2026-09-14 — proposed and accepted as written (D-2026-09-14-b). Filed from issue #495
     (found while verifying issue #493); increment order 338a → 338b → 338c → 338d confirmed by the
     user as proposed, with 338d recorded as a named future direction rather than a committed design —

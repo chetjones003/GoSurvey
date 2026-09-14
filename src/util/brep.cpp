@@ -7634,11 +7634,15 @@ struct CylinderShape {
 /// axis; band `i` (between `z[i]` and `z[i+1]`) is the annulus `[rIn[i], rOut[i]]`. `rIn` may be
 /// empty (a solid stack) or parallel to `rOut` with a 0 meaning "solid". An `rIn[i] > 0` band gets
 /// an **inward** inner wall — a bore. Built canonically and placed into \p frame (origin at `z[0]`).
+// \p rOutLo / \p rOutHi are the outer radius at each band's z0 / z1 — equal for a cylindrical band,
+// different for a conical/tapered one (338d-1). Inner bore walls (\p rIn) stay cylindrical only:
+// no case in this kernel yet needs a tapered bore.
 [[nodiscard]] bool BuildCoaxialStack(const ucs::Ucs& frame, const std::vector<double>& z,
-                                     const std::vector<double>& rOut, const std::vector<double>& rIn,
-                                     Solid* out, Problem* outWhy) {
-  const int n = static_cast<int>(rOut.size());
-  if (n < 1 || static_cast<int>(z.size()) != n + 1 ||
+                                     const std::vector<double>& rOutLo,
+                                     const std::vector<double>& rOutHi,
+                                     const std::vector<double>& rIn, Solid* out, Problem* outWhy) {
+  const int n = static_cast<int>(rOutLo.size());
+  if (n < 1 || static_cast<int>(rOutHi.size()) != n || static_cast<int>(z.size()) != n + 1 ||
       (!rIn.empty() && static_cast<int>(rIn.size()) != n))
     return Fail(Problem::BooleanResultInvalid, outWhy);
   auto inAt = [&](int i) { return rIn.empty() ? 0.0 : rIn[static_cast<std::size_t>(i)]; };
@@ -7671,22 +7675,23 @@ struct CylinderShape {
     const int e1 = AddArc(&s, v.second, v.first, c, up, kPi);   // -x -> +x
     return ec[k] = {e0, e1};
   };
-  // A cylinder wall (outer, +radial) or a bore wall (inner, −radial/inward), radius rr, z in
-  // [zl,zh]. `inwardWall` picks which.
-  auto addWall = [&](double zl, double zh, double rr, bool inwardWall) {
-    const auto cb = circle(zl, rr);
-    const auto ct = circle(zh, rr);
-    const auto vb = verts(zl, rr);
-    const auto vt = verts(zh, rr);
+  // A cylinder wall (rLo == rHi) or cone wall (rLo != rHi, straight taper) when outer/+radial, or a
+  // bore wall (inner, −radial/inward, always cylindrical — rLo == rHi there), z in [zl,zh].
+  // `inwardWall` picks which.
+  auto addWall = [&](double zl, double zh, double rLo, double rHi, bool inwardWall) {
+    const auto cb = circle(zl, rLo);
+    const auto ct = circle(zh, rHi);
+    const auto vb = verts(zl, rLo);
+    const auto vt = verts(zh, rHi);
     const int sm0 = AddLine(&s, vb.first, vt.first);
     const int sm1 = AddLine(&s, vb.second, vt.second);
     auto wall = [&](double u0, double u1, std::vector<EdgeUse> uses) {
       Face f;
-      f.surface.kind = SurfaceKind::Cylinder;
+      f.surface.kind = std::fabs(rLo - rHi) <= 1e-9 ? SurfaceKind::Cylinder : SurfaceKind::Cone;
       f.surface.frame = ucs::Ucs{};
       f.surface.frame.origin = Vec3{0.0, 0.0, zl - z0};
-      f.surface.radius = rr;
-      f.surface.radius2 = rr;
+      f.surface.radius = rLo;
+      f.surface.radius2 = rHi;
       f.surface.height = zh - zl;
       f.surface.inward = inwardWall;
       f.uStart = u0;
@@ -7706,9 +7711,10 @@ struct CylinderShape {
   };
   for (int i = 0; i < n; ++i) {
     addWall(z[static_cast<std::size_t>(i)], z[static_cast<std::size_t>(i + 1)],
-            rOut[static_cast<std::size_t>(i)], /*inwardWall=*/false);
+            rOutLo[static_cast<std::size_t>(i)], rOutHi[static_cast<std::size_t>(i)],
+            /*inwardWall=*/false);
     if (inAt(i) > 0.0)
-      addWall(z[static_cast<std::size_t>(i)], z[static_cast<std::size_t>(i + 1)], inAt(i),
+      addWall(z[static_cast<std::size_t>(i)], z[static_cast<std::size_t>(i + 1)], inAt(i), inAt(i),
               /*inwardWall=*/true);
   }
   // A horizontal annular face between radii [inner, outer] at height zz; `matBelow` true when the
@@ -7739,8 +7745,11 @@ struct CylinderShape {
   };
   for (int k = 0; k <= n; ++k) {
     const double zz = z[static_cast<std::size_t>(k)];
-    const double outL = (k > 0) ? rOut[static_cast<std::size_t>(k - 1)] : 0.0;
-    const double outH = (k < n) ? rOut[static_cast<std::size_t>(k)] : 0.0;
+    // The radius each neighbouring band actually reaches AT this boundary — its own r1 for the band
+    // below, its own r0 for the band above (equal to the flat mid-band radius for a cylinder, and
+    // the taper's near-end radius for a cone), so a step is detected even when one side is tapering.
+    const double outL = (k > 0) ? rOutHi[static_cast<std::size_t>(k - 1)] : 0.0;
+    const double outH = (k < n) ? rOutLo[static_cast<std::size_t>(k)] : 0.0;
     const double inL = (k > 0) ? inAt(k - 1) : 0.0;
     const double inH = (k < n) ? inAt(k) : 0.0;
     if (k == 0) {
@@ -11573,22 +11582,25 @@ struct GeneralBranchSeams {
   return Succeed(outWhy);
 }
 
-/// One physical cylindrical band of a coaxial stack (issue #495 / REQ-338 338c), position along the
-/// stack's own shared axis line (not a length).
+/// One physical band of a coaxial stack (issue #495 / REQ-338 338c/338d-1), position along the
+/// stack's own shared axis line (not a length). \p r0 is the radius at \p z0, \p r1 the radius at
+/// \p z1 — equal for a cylindrical band, different for a conical (tapered) one (338d-1).
 struct CoaxialSeg {
   double z0 = 0.0;
   double z1 = 0.0;
-  double radius = 0.0;
+  double r0 = 0.0;
+  double r1 = 0.0;
 };
 
-/// Recognise \p s as N>=1 coaxial cylindrical segments sharing one axis line, contiguous end to end
-/// (a stepped/shouldered stack, or — the N==1 case — a single plain cylinder): the general-purpose
-/// counterpart of REQ-337's `TryDecomposeCoaxialCylinderStack` (`CadCommands.cpp`), which requires
-/// N>=2 and a non-increasing radius sequence (its own SUBTRACT-cutter scope). This one places no
-/// such restriction — 338c's UNION-folding use needs any contiguous coaxial run, monotonic or not,
-/// and N==1 so a bare cylinder and a stack can be merged through the same code path. Only Plane and
-/// Cylinder faces are tolerated (a Cone/Sphere/Torus/Nurbs face anywhere refuses); \p segs comes back
-/// sorted by \p CoaxialSeg::z0, \p axisPoint/\p axisDir describe the shared line.
+/// Recognise \p s as N>=1 coaxial cylindrical-or-conical segments sharing one axis line, contiguous
+/// end to end (a stepped/shouldered/tapered stack, or — the N==1 case — a single plain cylinder or
+/// cone): the general-purpose counterpart of REQ-337's `TryDecomposeCoaxialCylinderStack`
+/// (`CadCommands.cpp`), which requires N>=2, cylindrical bands only, and a non-increasing radius
+/// sequence (its own SUBTRACT-cutter scope). This one places no such restriction — 338c/338d-1's
+/// UNION-folding use needs any contiguous coaxial run, monotonic or not, and N==1 so a bare
+/// cylinder/cone and a stack can be merged through the same code path. Only Plane, Cylinder, and (as
+/// of 338d-1) Cone faces are tolerated (a Sphere/Torus/Nurbs face anywhere still refuses); \p segs
+/// comes back sorted by \p CoaxialSeg::z0, \p axisPoint/\p axisDir describe the shared line.
 [[nodiscard]] bool ExtractCoaxialStack(const Solid& s, Vec3* axisPoint, Vec3* axisDir,
                                        std::vector<CoaxialSeg>* segs) {
   if (!axisPoint || !axisDir || !segs)
@@ -11596,7 +11608,7 @@ struct CoaxialSeg {
   constexpr double kAxisAngTol = 1e-6;
   constexpr double kAxisDistTol = 1e-6;
 
-  struct RawSpan { double z0, z1, radius; };
+  struct RawSpan { double z0, z1, r0, r1; };
   std::vector<RawSpan> raw;
   Vec3 dirAxis{}, ptAxis{};
   bool haveAxis = false;
@@ -11607,33 +11619,38 @@ struct CoaxialSeg {
       ++planeCount;
       continue;
     }
-    if (f.surface.kind != SurfaceKind::Cylinder)
-      return false;  // a cone/sphere/torus/nurbs face — not this shape
+    if (f.surface.kind != SurfaceKind::Cylinder && f.surface.kind != SurfaceKind::Cone)
+      return false;  // a sphere/torus/nurbs face — not this shape
     Vec3 dir = f.surface.frame.zAxis;
     const double dlen = ray3d::Length(dir);
     if (!(dlen > 1e-12))
       return false;
     dir = ray3d::Scale(dir, 1.0 / dlen);
+    double d = 1.0;
     if (!haveAxis) {
       dirAxis = dir;
       ptAxis = f.surface.frame.origin;
       haveAxis = true;
     } else {
-      double d = ray3d::Dot(dir, dirAxis);
+      d = ray3d::Dot(dir, dirAxis);
       if (std::fabs(d) < 1.0 - kAxisAngTol)
         return false;  // not parallel to the running axis
-      if (d < 0.0)
-        dir = ray3d::Scale(dir, -1.0);
       const Vec3 toP = ray3d::Sub(f.surface.frame.origin, ptAxis);
       const double along = ray3d::Dot(toP, dirAxis);
       const Vec3 perp = ray3d::Sub(toP, ray3d::Scale(dirAxis, along));
       if (ray3d::Length(perp) > kAxisDistTol)
         return false;  // parallel but not the same line
     }
-    if (!(f.surface.radius > 0.0) || !(f.surface.height > 0.0))
+    // Cone: radius at the face's own local z=0 (frame.origin) vs. local z=height (ADR-045's
+    // BuildConical convention — `radius`/`radius2`). Cylinder: both equal by construction.
+    double r0 = f.surface.radius;
+    double r1 = f.surface.radius2;
+    if (!(r0 > 0.0) || r1 < 0.0 || !(f.surface.height > 0.0))
       return false;
+    if (d < 0.0)  // this face's local +z runs opposite the running shared axis: its low/high ends flip
+      std::swap(r0, r1);
     const double z0 = ray3d::Dot(ray3d::Sub(f.surface.frame.origin, ptAxis), dirAxis);
-    raw.push_back({z0, z0 + f.surface.height, f.surface.radius});
+    raw.push_back({z0, z0 + f.surface.height, r0, r1});
   }
   if (!haveAxis || raw.empty() || planeCount < 2)
     return false;
@@ -11643,7 +11660,7 @@ struct CoaxialSeg {
     bool merged = false;
     for (RawSpan& g : uniqSpans) {
       if (std::fabs(g.z0 - r.z0) < kAxisDistTol && std::fabs(g.z1 - r.z1) < kAxisDistTol &&
-          std::fabs(g.radius - r.radius) < kAxisDistTol) {
+          std::fabs(g.r0 - r.r0) < kAxisDistTol && std::fabs(g.r1 - r.r1) < kAxisDistTol) {
         merged = true;
         break;
       }
@@ -11664,7 +11681,7 @@ struct CoaxialSeg {
   segs->clear();
   segs->reserve(uniqSpans.size());
   for (const RawSpan& g : uniqSpans)
-    segs->push_back({g.z0, g.z1, g.radius});
+    segs->push_back({g.z0, g.z1, g.r0, g.r1});
   return true;
 }
 
@@ -11682,9 +11699,9 @@ struct CoaxialSeg {
                                                std::vector<Solid>* out, Problem* outWhy) {
   double sc = 1.0;
   for (const CoaxialSeg& s : segsA)
-    sc = std::max({sc, std::fabs(s.z0), std::fabs(s.z1), s.radius});
+    sc = std::max({sc, std::fabs(s.z0), std::fabs(s.z1), s.r0, s.r1});
   for (const CoaxialSeg& s : segsBraw)
-    sc = std::max({sc, std::fabs(s.z0), std::fabs(s.z1), s.radius});
+    sc = std::max({sc, std::fabs(s.z0), std::fabs(s.z1), s.r0, s.r1});
   const double eps = 1e-7 * sc;
 
   // Both extraction runs are individually contiguous (ExtractCoaxialStack guarantees it); the two
@@ -11710,35 +11727,74 @@ struct CoaxialSeg {
   if (uniq.size() < 2)
     return Fail(Problem::BooleanResultInvalid, outWhy);
 
-  auto radiusAt = [&](const std::vector<CoaxialSeg>& segs, double mid) {
-    for (const CoaxialSeg& s : segs)
-      if (mid > s.z0 - eps && mid < s.z1 + eps)
-        return s.radius;
-    return 0.0;
+  // 338d-1: a covering segment's radius is no longer necessarily constant across it (a Cone band
+  // tapers linearly from r0 at z0 to r1 at z1). `profileAt` returns the segment's own radius,
+  // linearly interpolated, at each end of a candidate output band [z0,z1] — valid only when that one
+  // segment covers the whole band (ExtractCoaxialStack's own per-operand contiguity means a band
+  // never needs a THIRD segment from the same side).
+  auto profileAt = [&](const std::vector<CoaxialSeg>& segs, double z0, double z1, double* rAt0,
+                       double* rAt1) {
+    for (const CoaxialSeg& s : segs) {
+      if (z0 > s.z0 - eps && z1 < s.z1 + eps) {
+        const double span = s.z1 - s.z0;
+        auto interp = [&](double z) {
+          return span > 1e-12 ? s.r0 + (z - s.z0) / span * (s.r1 - s.r0) : s.r0;
+        };
+        *rAt0 = interp(z0);
+        *rAt1 = interp(z1);
+        return true;
+      }
+    }
+    return false;
   };
 
   std::vector<double> zs{uniq.front()};
-  std::vector<double> rs;
+  std::vector<double> rLo, rHi;
   for (size_t i = 0; i + 1 < uniq.size(); ++i) {
-    const double m = 0.5 * (uniq[i] + uniq[i + 1]);
-    const double rr = std::max(radiusAt(segsA, m), radiusAt(segsBraw, m));
-    if (!(rr > 0.0))
-      continue;  // a gap between the two runs
-    if (!rs.empty() && std::fabs(rs.back() - rr) <= eps) {
-      zs.back() = uniq[i + 1];
+    const double z0 = uniq[i], z1 = uniq[i + 1];
+    double aR0 = 0.0, aR1 = 0.0, bR0 = 0.0, bR1 = 0.0;
+    const bool aHas = profileAt(segsA, z0, z1, &aR0, &aR1);
+    const bool bHas = profileAt(segsBraw, z0, z1, &bR0, &bR1);
+    double bandR0, bandR1;
+    if (aHas && bHas) {
+      // Both sides cover this band. Only combine when one side's radius profile dominates the
+      // other's at BOTH ends (sufficient for two linear profiles never to cross in between) — the
+      // ordinary "wider piece wins" UNION rule, generalised from a constant radius to a taper.
+      // Two profiles that genuinely cross inside the band would need a real surface-pair
+      // intersection curve to represent correctly (338d's later, unscoped general case) — refused
+      // by name here rather than approximated.
+      if (aR0 >= bR0 - eps && aR1 >= bR1 - eps) {
+        bandR0 = aR0;
+        bandR1 = aR1;
+      } else if (bR0 >= aR0 - eps && bR1 >= aR1 - eps) {
+        bandR0 = bR0;
+        bandR1 = bR1;
+      } else {
+        return Fail(Problem::BooleanCurvedFace, outWhy);
+      }
+    } else if (aHas) {
+      bandR0 = aR0;
+      bandR1 = aR1;
+    } else if (bHas) {
+      bandR0 = bR0;
+      bandR1 = bR1;
     } else {
-      rs.push_back(rr);
-      zs.push_back(uniq[i + 1]);
+      continue;  // a gap between the two runs
     }
+    if (!(bandR0 > 0.0) && !(bandR1 > 0.0))
+      continue;  // a gap between the two runs
+    rLo.push_back(bandR0);
+    rHi.push_back(bandR1);
+    zs.push_back(z1);
   }
-  if (rs.empty())
+  if (rLo.empty())
     return Fail(Problem::BooleanResultInvalid, outWhy);
-  if (rs.size() == 1) {
+  if (rLo.size() == 1 && std::fabs(rLo.front() - rHi.front()) <= eps) {
     ucs::Ucs fr;
     if (!ucs::FromNormal(ray3d::Add(axisPoint, ray3d::Scale(axisDir, zs.front())), axisDir, &fr))
       return Fail(Problem::DegenerateFrame, outWhy);
     Solid r;
-    if (!MakeCylinder(fr, rs.front(), zs.back() - zs.front(), &r, outWhy))
+    if (!MakeCylinder(fr, rLo.front(), zs.back() - zs.front(), &r, outWhy))
       return false;
     out->push_back(std::move(r));
     return Succeed(outWhy);
@@ -11747,7 +11803,7 @@ struct CoaxialSeg {
   if (!ucs::FromNormal(ray3d::Add(axisPoint, ray3d::Scale(axisDir, zs.front())), axisDir, &fr))
     return Fail(Problem::DegenerateFrame, outWhy);
   Solid r;
-  if (!BuildCoaxialStack(fr, zs, rs, /*rIn=*/{}, &r, outWhy))
+  if (!BuildCoaxialStack(fr, zs, rLo, rHi, /*rIn=*/{}, &r, outWhy))
     return false;
   out->push_back(std::move(r));
   return Succeed(outWhy);
@@ -11828,7 +11884,7 @@ struct CoaxialSeg {
     ucs::Ucs fr = A.axis;
     fr.origin = ray3d::Add(A.axis.origin, ray3d::Scale(az, zs.front()));
     Solid r;
-    if (!BuildCoaxialStack(fr, zs, rOut, rIn, &r, outWhy))
+    if (!BuildCoaxialStack(fr, zs, rOut, rOut, rIn, &r, outWhy))
       return false;
     out->push_back(std::move(r));
     return Succeed(outWhy);
@@ -11899,7 +11955,7 @@ struct CoaxialSeg {
   ucs::Ucs fr = A.axis;
   fr.origin = ray3d::Add(A.axis.origin, ray3d::Scale(az, zs.front()));
   Solid r;
-  if (!BuildCoaxialStack(fr, zs, rs, /*rIn=*/{}, &r, outWhy))
+  if (!BuildCoaxialStack(fr, zs, rs, rs, /*rIn=*/{}, &r, outWhy))
     return false;
   out->push_back(std::move(r));
   return Succeed(outWhy);
@@ -12584,19 +12640,31 @@ struct CoaxialSeg {
   if (bCyl && AllFacesPlanar(a))
     return TryBooleanCylinderThroughPlanar(a, b, cb, op, /*cylIsMinuend=*/false, out, handled, outWhy);
 
-  // issue #495 / REQ-338 338c — general coaxial multi-segment stack folding, UNION only. Neither
-  // operand classified as one bare cylinder above (that pair is already handled by aCyl&&bCyl), so
-  // try recognising either or both as an already-stepped coaxial stack (REQ-337's own composite
-  // cutter, or a target left over from a prior 338a/UNION step) sharing one axis line, and fold the
-  // new piece onto it via the same closed-form interval-merge `TryBooleanCoaxialCylinders`'s own
-  // UNION branch already uses for a single pair, generalised to N segments per side.
+  // issue #495 / REQ-338 338c (338d-1 adds Cone bands) — general coaxial multi-segment stack
+  // folding, UNION only. Neither operand classified as one bare cylinder above (that pair is already
+  // handled by aCyl&&bCyl), so try recognising either or both as an already-stepped/tapered coaxial
+  // stack (REQ-337's own composite cutter, or a target left over from a prior 338a/UNION step)
+  // sharing one axis line, and fold the new piece onto it via the same closed-form interval-merge
+  // `TryBooleanCoaxialCylinders`'s own UNION branch already uses for a single pair, generalised to N
+  // segments per side.
   if (op == BoolOp::Union) {
     Vec3 apA{}, adA{};
     Vec3 apB{}, adB{};
     std::vector<CoaxialSeg> segsA, segsB;
     const bool aStack = ExtractCoaxialStack(a, &apA, &adA, &segsA);
     const bool bStack = ExtractCoaxialStack(b, &apB, &adB, &segsB);
-    if (aStack && bStack && (segsA.size() > 1 || segsB.size() > 1)) {
+    // Enter this general path once either side is more than a single bare cylinder: an existing
+    // multi-segment stack (338c), or — 338d-1 — a single Cone band (a plain cone isn't `aCyl`, so a
+    // bare cylinder + bare cone pair never reaches `TryBooleanCoaxialCylinders` above and needs this
+    // path even at N==1 segment per side).
+    auto hasTaper = [](const std::vector<CoaxialSeg>& segs) {
+      for (const CoaxialSeg& s : segs)
+        if (std::fabs(s.r0 - s.r1) > 1e-9 * std::max({1.0, s.r0, s.r1}))
+          return true;
+      return false;
+    };
+    if (aStack && bStack &&
+       (segsA.size() > 1 || segsB.size() > 1 || hasTaper(segsA) || hasTaper(segsB))) {
       const double sc = std::max(ModelScale(a), ModelScale(b));
       const Vec3 d = ray3d::Sub(apB, apA);
       const double perp = ray3d::Length(ray3d::Sub(d, ray3d::Scale(adA, ray3d::Dot(d, adA))));
@@ -12610,9 +12678,12 @@ struct CoaxialSeg {
         for (const CoaxialSeg& s : segsB) {
           double z0 = dOnA + sign * s.z0;
           double z1 = dOnA + sign * s.z1;
-          if (z0 > z1)
+          double r0 = s.r0, r1 = s.r1;
+          if (z0 > z1) {
             std::swap(z0, z1);
-          segsBonA.push_back({z0, z1, s.radius});
+            std::swap(r0, r1);  // B's own low/high ends flip along A's parametrisation too
+          }
+          segsBonA.push_back({z0, z1, r0, r1});
         }
         std::sort(segsBonA.begin(), segsBonA.end(),
                  [](const CoaxialSeg& x, const CoaxialSeg& y) { return x.z0 < y.z0; });
