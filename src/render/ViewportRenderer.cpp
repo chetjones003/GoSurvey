@@ -1675,9 +1675,11 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glBindVertexArray(0);
     }
 
-    // The edges, in every style — including 2D Wireframe, where they are the only thing a solid
-    // draws at all.
-    {
+    // The edges, in every style EXCEPT Shaded — 2D Wireframe needs them (they are the only thing a
+    // solid draws at all there) and Hidden keeps them (it occludes without painting, so the edges
+    // ARE the drawing), but Shaded lights the faces and a wireframe/isoline overlay on top of a
+    // shaded surface is exactly the artifact the GUI pass flagged (issue #486 follow-up).
+    if (tuning.visualStyle != VisualStyle::Shaded) {
       glUseProgram(lineProgram_);
       for (const SolidGpuBatch& e : solidGpu_) {
         if (e.edgeVertCount <= 0)
