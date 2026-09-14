@@ -1396,3 +1396,97 @@ TEST_CASE("SUBTRACT still refuses a widening coaxial composite cutter by name", 
   CHECK(refused);
 }
 
+
+// issue #495 / REQ-338 increment 338a — the mirror image of REQ-337: the TARGET (not the cutter)
+// is a coaxial stepped-cylinder stack, and the cutter is a single plain cylinder. Verified during
+// #495 that `SubtractCircleThrough`/`TryBoreThroughDirect` already handles this correctly today —
+// it doesn't special-case the two end faces at all, it just adds tunnel geometry between whichever
+// two planar faces it finds, so an unrelated step boundary in between is never even consulted.
+// These are regression tests locking that behaviour in, not a new code path.
+TEST_CASE("SUBTRACT bores axially through a composite coaxial target (issue #495 338a)", "[issue495][boolean][brep]") {
+  AppCommandState st;
+  brep::Problem why = brep::Problem::Ok;
+
+  ucs::Ucs wideFrame;
+  wideFrame.origin = brep::Vec3{0.0, 0.0, 0.0};
+  brep::Solid wide;
+  REQUIRE(brep::MakeCylinder(wideFrame, 2.0, 4.0, &wide, &why));  // z[0,4] r2
+
+  ucs::Ucs narrowFrame;
+  narrowFrame.origin = brep::Vec3{0.0, 0.0, 4.0};
+  brep::Solid narrow;
+  REQUIRE(brep::MakeCylinder(narrowFrame, 1.0, 4.0, &narrow, &why));  // z[4,8] r1, narrower
+
+  std::vector<brep::Solid> unioned;
+  REQUIRE(brep::BooleanUnion(wide, narrow, &unioned, &why));
+  REQUIRE(unioned.size() == 1);
+  brep::Solid target = std::move(unioned[0]);
+  REQUIRE(brep::Validate(target) == brep::Problem::Ok);
+
+  // A short PRESSPULL-style nub cylinder near the middle, radius well under the narrow section's
+  // r1.0 — this is the same short-cylinder-through-hole-fallback shape TryGetCylinderInfo already
+  // recognises (see the "SUBTRACT short PRESSPULL cylinder" test in BrepTests.cpp).
+  ucs::Ucs nubFrame;
+  ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame);
+  brep::Solid nub;
+  REQUIRE(brep::MakeCylinder(nubFrame, 0.5, 1.0, &nub, &why));
+
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
+
+  std::vector<std::string> log;
+  RunSubtractCommand(st, 0, 1, log);
+
+  REQUIRE(st.cadSolids.size() == 1);
+  REQUIRE(st.cadSolids[0]);
+  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+  // Removed: a clean r0.5 through-bore, the full z[0,8] length of the composite target.
+  const double removed = 3.141592653589793 * 0.5 * 0.5 * 8.0;
+  const double wideVol = 3.141592653589793 * 2.0 * 2.0 * 4.0;
+  const double narrowVol = 3.141592653589793 * 1.0 * 1.0 * 4.0;
+  const double vol = brep::ComputeMassProperties(*st.cadSolids[0]).volume;
+  CHECK(vol == Catch::Approx(wideVol + narrowVol - removed).epsilon(1e-6));
+}
+
+TEST_CASE("SUBTRACT still refuses when the bore is wider than the narrow section (issue #495 338a)",
+         "[issue495][boolean][brep]") {
+  // Same composite target as above, but the cutter radius (1.3) fits the wide section (r2) and
+  // does NOT fit the narrow one (r1) — REQ-201: refused by name, never a silently wrong result.
+  AppCommandState st;
+  brep::Problem why = brep::Problem::Ok;
+
+  ucs::Ucs wideFrame;
+  wideFrame.origin = brep::Vec3{0.0, 0.0, 0.0};
+  brep::Solid wide;
+  REQUIRE(brep::MakeCylinder(wideFrame, 2.0, 4.0, &wide, &why));  // z[0,4] r2
+
+  ucs::Ucs narrowFrame;
+  narrowFrame.origin = brep::Vec3{0.0, 0.0, 4.0};
+  brep::Solid narrow;
+  REQUIRE(brep::MakeCylinder(narrowFrame, 1.0, 4.0, &narrow, &why));  // z[4,8] r1
+
+  std::vector<brep::Solid> unioned;
+  REQUIRE(brep::BooleanUnion(wide, narrow, &unioned, &why));
+  REQUIRE(unioned.size() == 1);
+  brep::Solid target = std::move(unioned[0]);
+
+  ucs::Ucs nubFrame;
+  ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame);
+  brep::Solid nub;
+  REQUIRE(brep::MakeCylinder(nubFrame, 1.3, 1.0, &nub, &why));
+
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
+
+  std::vector<std::string> log;
+  RunSubtractCommand(st, 0, 1, log);
+
+  // Refused: both solids untouched.
+  REQUIRE(st.cadSolids.size() == 2);
+  bool refused = false;
+  for (const std::string& line : log) {
+    if (line.find("cannot combine these curved solids") != std::string::npos)
+      refused = true;
+  }
+  CHECK(refused);
+}
