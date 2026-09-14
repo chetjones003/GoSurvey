@@ -93,6 +93,95 @@ TEST_CASE("WBLOCK refuses a missing block name", "[issue284][wblock]") {
   CHECK(refused);
 }
 
+TEST_CASE("LIBEXPORT writes a tagged fitting to .dwg plus a metadata sidecar",
+          "[issue486][libexport][blockimport]") {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "gosurvey-libexport";
+  fs::create_directories(dir);
+  const fs::path dwg = dir / "ELBOW90-4IN.dwg";
+  const fs::path sidecar = dir / "ELBOW90-4IN.json";
+  std::error_code rmEc;
+  fs::remove(dwg, rmEc);
+  fs::remove(sidecar, rmEc);
+
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "ELBOW90-4IN";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.partType = CadPipePartType::Elbow90;
+  def.nominalSize = "4in";
+  def.pressureClass = CadPipePressureClass::CS150;
+  def.partNumber = "ACME-E90-4";
+  CadBlockConnection a;
+  a.name = "P1";
+  a.nominalSize = "4in";
+  a.role = CadBlockConnectionRole::Inlet;
+  def.connections.push_back(a);
+  CadBlockConnection b;
+  b.name = "P2";
+  b.nominalSize = "4in";
+  b.role = CadBlockConnectionRole::Outlet;
+  def.connections.push_back(b);
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream args(std::string("ELBOW90-4IN, ") + dwg.u8string());
+  REQUIRE(CadBlocksTryIdleCommand(st, "libexport", args, log));
+  REQUIRE(fs::exists(dwg));
+  REQUIRE(fs::exists(sidecar));
+
+  // The DWG trailer round-trips every A1/A2 field, same mechanism as WBLOCK.
+  AppCommandState dest;
+  std::vector<std::string> importLog;
+  REQUIRE(ImportCadBlocksFromPath(dest, dwg.u8string().c_str(), importLog));
+  const int di = CadBlockFindDef(dest.blockDefs, "ELBOW90-4IN");
+  REQUIRE(di >= 0);
+  const CadBlockDefinition& out = dest.blockDefs[static_cast<size_t>(di)];
+  CHECK(out.partType == CadPipePartType::Elbow90);
+  CHECK(out.pressureClass == CadPipePressureClass::CS150);
+  CHECK(out.partNumber == "ACME-E90-4");
+  REQUIRE(out.connections.size() == 2);
+  CHECK(out.connections[1].role == CadBlockConnectionRole::Outlet);
+
+  // Sidecar is a plain-text catalog index carrying the same headline fields.
+  std::ifstream sideIn(sidecar);
+  std::string sideJson((std::istreambuf_iterator<char>(sideIn)), std::istreambuf_iterator<char>());
+  CHECK(sideJson.find("\"elbow-90\"") != std::string::npos);
+  CHECK(sideJson.find("\"CS150\"") != std::string::npos);
+  CHECK(sideJson.find("ACME-E90-4") != std::string::npos);
+  CHECK(sideJson.find("\"outlet\"") != std::string::npos);
+}
+
+TEST_CASE("LIBEXPORT refuses a block with no fitting metadata", "[issue486][libexport]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "PLAIN";
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream args("PLAIN, C:/does/not/matter.dwg");
+  REQUIRE(CadBlocksTryIdleCommand(st, "libexport", args, log));
+  bool refused = false;
+  for (const std::string& line : log) {
+    if (line.find("no fitting metadata") != std::string::npos)
+      refused = true;
+  }
+  CHECK(refused);
+}
+
+TEST_CASE("LIBEXPORT refuses a missing block name", "[issue486][libexport]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  std::istringstream args("MISSING, C:/does/not/matter.dwg");
+  REQUIRE(CadBlocksTryIdleCommand(st, "libexport", args, log));
+  bool refused = false;
+  for (const std::string& line : log) {
+    if (line.find("no block named") != std::string::npos)
+      refused = true;
+  }
+  CHECK(refused);
+}
+
 TEST_CASE("bare BLOCKIMPORT opens the file picker", "[issue124][blockimport]") {
   namespace fs = std::filesystem;
   const fs::path dir = fs::temp_directory_path() / "gosurvey-blockimport";

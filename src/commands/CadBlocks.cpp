@@ -11,6 +11,8 @@
 #include "WinFileDialogs.hpp"
 #include "AcisSatParser.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <cctype>
@@ -702,6 +704,13 @@ bool ImportCadBlocksFromPath(AppCommandState& dest, const char* pathUtf8, std::v
   return ImportCadBlocksFromPathImpl(dest, pathUtf8, log, true) >= 0;
 }
 
+std::filesystem::path CadFittingLibraryExportDir() {
+  const std::filesystem::path base = UserDataDirectory();
+  if (base.empty())
+    return {};
+  return base / "blocks" / "fittings";
+}
+
 float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefinition& def) {
   if (st.insertBlockUnitsBuf[0] != '\0')
     return CadBlockUnitsScale(st.insertBlockUnitsBuf, CadDrawingInsUnitsName(st.drawingInsUnits));
@@ -754,6 +763,17 @@ void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBl
   const fs::path fitDir = dir / "fittings";
   if (fs::is_directory(fitDir, ec)) {
     for (const fs::directory_entry& ent : fs::directory_iterator(fitDir, ec)) {
+      if (ec)
+        break;
+      if (ent.is_regular_file(ec))
+        addFile(ent.path(), true);
+    }
+  }
+  // User-authored fittings exported via LIBEXPORT (issue #486 increment A3) — a second location
+  // beside the bundled `resources/blocks/fittings`, so exporting a part makes it show up here too.
+  const fs::path userFitDir = CadFittingLibraryExportDir();
+  if (!userFitDir.empty() && fs::is_directory(userFitDir, ec)) {
+    for (const fs::directory_entry& ent : fs::directory_iterator(userFitDir, ec)) {
       if (ec)
         break;
       if (ent.is_regular_file(ec))
@@ -2672,6 +2692,77 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       return true;
     }
     log.push_back("WBLOCK — wrote \"" + f[0] + "\" to " + f[1] + ".");
+    return true;
+  }
+
+  if (tok == "libexport") {
+    // Fittings library export workflow (issue #486 increment A3). Writes the definition as a
+    // .dwg (same ADR-044 trailer WBLOCK uses, so partType/pressureClass/partNumber and every
+    // connection's role/engagementLength/compatibilityTag already round-trip — see #488) plus a
+    // small .json sidecar summarizing that same metadata, so a future library browser (A5) can
+    // filter by size/class/type without opening the DWG. The DWG trailer stays authoritative;
+    // the sidecar is a convenience index only.
+    const std::vector<std::string> f = SplitCommaRest(args);
+    if (f.empty()) {
+      log.push_back("LIBEXPORT — usage: LIBEXPORT <name>[, <path.dwg>].");
+      return true;
+    }
+    const int di = CadBlockFindDef(st.blockDefs, f[0]);
+    if (di < 0) {
+      log.push_back("LIBEXPORT — no block named \"" + f[0] + "\".");
+      return true;
+    }
+    const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    if (def.partType == CadPipePartType::None) {
+      log.push_back("LIBEXPORT — \"" + f[0] + "\" has no fitting metadata; tag it with BLOCKFITTING first.");
+      return true;
+    }
+    namespace fs = std::filesystem;
+    fs::path dwgPath;
+    if (f.size() >= 2 && !f[1].empty()) {
+      dwgPath = fs::u8path(f[1]);
+    } else {
+      const fs::path dir = CadFittingLibraryExportDir();
+      if (dir.empty()) {
+        log.push_back("LIBEXPORT — could not determine the user library directory; pass an explicit path.");
+        return true;
+      }
+      std::error_code mkEc;
+      fs::create_directories(dir, mkEc);
+      dwgPath = dir / (def.name + ".dwg");
+    }
+    AppCommandState tmp;
+    tmp.blockDefs.push_back(def);
+    if (!ExportDwgFile(tmp, dwgPath.u8string().c_str(), log)) {
+      log.push_back("LIBEXPORT — could not write " + dwgPath.u8string() + ".");
+      return true;
+    }
+    fs::path sidecar = dwgPath;
+    sidecar.replace_extension(".json");
+    std::ofstream out(sidecar, std::ios::binary);
+    if (out) {
+      nlohmann::json j;
+      j["name"] = def.name;
+      j["partType"] = std::string(CadPipePartTypeTag(def.partType));
+      j["nominalSize"] = def.nominalSize;
+      if (def.pressureClass != CadPipePressureClass::None)
+        j["pressureClass"] = std::string(CadPipePressureClassTag(def.pressureClass));
+      if (!def.partNumber.empty())
+        j["partNumber"] = def.partNumber;
+      nlohmann::json conns = nlohmann::json::array();
+      for (const CadBlockConnection& c : def.connections) {
+        nlohmann::json cj;
+        cj["name"] = c.name;
+        cj["role"] = std::string(CadBlockConnectionRoleTag(c.role));
+        cj["nominalSize"] = c.nominalSize;
+        conns.push_back(std::move(cj));
+      }
+      j["connections"] = std::move(conns);
+      out << j.dump(2);
+    } else {
+      log.push_back("LIBEXPORT — wrote the DWG but could not write the metadata sidecar " + sidecar.u8string() + ".");
+    }
+    log.push_back("LIBEXPORT — wrote \"" + def.name + "\" to " + dwgPath.u8string() + ".");
     return true;
   }
 
