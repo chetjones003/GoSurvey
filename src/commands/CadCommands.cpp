@@ -30121,6 +30121,113 @@ bool TryGetCylinderInfo(const brep::Solid& s, brep::Vec3* outCentre, brep::Vec3*
   return true;
 }
 
+/// One physical cylindrical segment of a coaxial stepped stack — \ref base is the cutter's base
+/// point (matching \ref brep::SubtractCircle's own "base + depth along +normal" convention), not a
+/// midpoint (issue #493 / REQ-337).
+struct CylinderStackPiece {
+  brep::Vec3 base;
+  brep::Vec3 normal;  ///< Shared unit axis direction, same for every piece in a stack.
+  double radius = 0.0;
+  double axialLen = 0.0;
+};
+
+/// Recognise \p s as a stepped/shouldered coaxial cylinder stack — two or more cylinders sharing one
+/// axis line, touching end-to-end with no gap or overlap (a shouldered shaft, a from-both-sides
+/// counterbored pin) — the composite-operand case \ref TryGetCylinderInfo does not cover because it
+/// only matches a single bare-cylinder primitive (issue #493 / REQ-337). On success, \p outPieces is
+/// the stack in axis order, each ready for its own \ref brep::SubtractCircle call.
+///
+/// A physical cylindrical segment is usually TWO faces (MakeCylinder/PRESSPULL split a full turn
+/// into two half-turn faces — see the `brep.cpp` comment on `kMinFullCircleSegments`), so cylinder
+/// faces are grouped by matching (axial start, axial end, radius) into segments before the tiling
+/// check; a segment built some other way, with more or fewer than two faces at the same span, groups
+/// the same way. A single physical segment (one group) is a plain cylinder, not a stack — refused
+/// here so the existing \ref TryGetCylinderInfo retry (the N==1 case) keeps owning it unchanged.
+///
+/// This is deliberately narrow: only Plane and Cylinder faces are tolerated (a Cone/Sphere/Torus/
+/// Nurbs face anywhere refuses immediately), and only a coaxial run, not an off-axis or angled
+/// composite cutter — the scope REQ-337 recorded, not a general classification engine.
+bool TryDecomposeCoaxialCylinderStack(const brep::Solid& s, std::vector<CylinderStackPiece>* outPieces) {
+  if (!outPieces) return false;
+  constexpr double kAxisAngTol = 1e-6;   // 1 - |dot| tolerance for "parallel axis"
+  constexpr double kAxisDistTol = 1e-6;  // ft: axis-line coincidence and end-to-end tiling tolerance
+
+  struct RawSpan { double z0, z1, radius; };
+  std::vector<RawSpan> raw;
+  brep::Vec3 axisDir{}, axisPoint{};
+  bool haveAxis = false;
+  int planeCount = 0;
+
+  for (const brep::Face& f : s.faces) {
+    if (f.surface.kind == brep::SurfaceKind::Plane) {
+      ++planeCount;
+      continue;
+    }
+    if (f.surface.kind != brep::SurfaceKind::Cylinder)
+      return false;  // a cone/sphere/torus/nurbs face — not this case
+    brep::Vec3 dir = f.surface.frame.zAxis;
+    const double dlen = ray3d::Length(dir);
+    if (!(dlen > 1e-12))
+      return false;
+    dir = ray3d::Scale(dir, 1.0 / dlen);
+    if (!haveAxis) {
+      axisDir = dir;
+      axisPoint = f.surface.frame.origin;
+      haveAxis = true;
+    } else {
+      double d = ray3d::Dot(dir, axisDir);
+      if (std::fabs(d) < 1.0 - kAxisAngTol)
+        return false;  // not parallel to the running axis
+      if (d < 0.0)
+        dir = ray3d::Scale(dir, -1.0);
+      const brep::Vec3 toP = ray3d::Sub(f.surface.frame.origin, axisPoint);
+      const double along = ray3d::Dot(toP, axisDir);
+      const brep::Vec3 perp = ray3d::Sub(toP, ray3d::Scale(axisDir, along));
+      if (ray3d::Length(perp) > kAxisDistTol)
+        return false;  // parallel but not the same line
+    }
+    if (!(f.surface.radius > 0.0) || !(f.surface.height > 0.0))
+      return false;
+    const double z0 = ray3d::Dot(ray3d::Sub(f.surface.frame.origin, axisPoint), axisDir);
+    raw.push_back({z0, z0 + f.surface.height, f.surface.radius});
+  }
+  if (!haveAxis || raw.size() < 2 || planeCount < 2)
+    return false;
+
+  std::vector<RawSpan> segs;
+  for (const RawSpan& r : raw) {
+    bool merged = false;
+    for (RawSpan& g : segs) {
+      if (std::fabs(g.z0 - r.z0) < kAxisDistTol && std::fabs(g.z1 - r.z1) < kAxisDistTol &&
+          std::fabs(g.radius - r.radius) < kAxisDistTol) {
+        merged = true;
+        break;
+      }
+    }
+    if (!merged)
+      segs.push_back(r);
+  }
+  if (segs.size() < 2)
+    return false;  // one physical cylinder — TryGetCylinderInfo's case, not this one
+
+  std::sort(segs.begin(), segs.end(), [](const RawSpan& a, const RawSpan& b) { return a.z0 < b.z0; });
+  for (size_t i = 0; i + 1 < segs.size(); ++i) {
+    if (std::fabs(segs[i].z1 - segs[i + 1].z0) > kAxisDistTol)
+      return false;  // a gap or an overlap — not one contiguous stack
+  }
+
+  outPieces->clear();
+  outPieces->reserve(segs.size());
+  for (const RawSpan& g : segs) {
+    CylinderStackPiece p;
+    p.base = ray3d::Add(axisPoint, ray3d::Scale(axisDir, g.z0));
+    p.normal = axisDir;
+    p.radius = g.radius;
+    p.axialLen = g.z1 - g.z0;
+    outPieces->push_back(p);
+  }
+  return true;
+}
 
 bool ApplyOnePair(CadBooleanOp op, const brep::Solid& x, const brep::Solid& y,
                   std::vector<brep::Solid>* r, brep::Problem* w) {
@@ -30223,6 +30330,35 @@ void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>&
               continue;
             }
             why = why2;
+          }
+          // A stepped/shouldered coaxial cylinder stack (issue #493 / REQ-337) — built directly as
+          // one shouldered bore, base to tip, rather than cut piece-by-piece: a sequential retry
+          // (subtract each segment in turn into the solid the previous cut left behind) was tried
+          // first and found unreliable — the general classifier every ordinary SUBTRACT retry above
+          // goes through refuses once the target already carries an inward cylindrical face from a
+          // prior cut nearby, which is exactly every internal step boundary. TrySteppedBoreThroughDirect
+          // builds the whole tunnel's topology in one pass instead (only for a non-increasing radius
+          // sequence — entry to exit no wider than the step before it, a real counterbore shape; a
+          // widening stack still refuses here, by name, same as before this increment).
+          std::vector<CylinderStackPiece> stack;
+          if (why == brep::Problem::BooleanCurvedFace && TryDecomposeCoaxialCylinderStack(sub, &stack)) {
+            std::vector<double> radii;
+            std::vector<brep::Vec3> internalShoulders;
+            radii.reserve(stack.size());
+            internalShoulders.reserve(stack.size() > 0 ? stack.size() - 1 : 0);
+            for (size_t i = 0; i < stack.size(); ++i) {
+              radii.push_back(stack[i].radius);
+              if (i > 0)
+                internalShoulders.push_back(stack[i].base);
+            }
+            brep::Solid cut;
+            brep::Problem why3 = brep::Problem::Ok;
+            if (brep::TrySteppedBoreThroughDirect(piece, stack.front().base, stack.front().normal, radii,
+                                                  internalShoulders, &cut, &why3)) {
+              next.push_back(std::move(cut));
+              continue;
+            }
+            why = why3;
           }
           log.push_back(verb + " — " + brep::ProblemText(why) + " Nothing changed.");
           return;
