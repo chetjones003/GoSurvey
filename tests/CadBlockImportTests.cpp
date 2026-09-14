@@ -1848,3 +1848,46 @@ TEST_CASE("SUBTRACT bores axially through a composite target that includes a tap
   REQUIRE(st.cadSolids[0]);
   CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
 }
+
+TEST_CASE("SUBTRACT still refuses when the bore is wider than the cone's narrow end "
+         "(issue #495 338d-1)",
+         "[issue495][boolean][brep]") {
+  // Same tapered target as above, but the cutter (r1.3) fits the wide cylinder (r2) and does NOT
+  // fit the cone's narrow end (r1) — REQ-201: refused by name, never a silently wrong result.
+  AppCommandState st;
+  brep::Problem why = brep::Problem::Ok;
+
+  ucs::Ucs fA;
+  fA.origin = brep::Vec3{0.0, 0.0, 0.0};
+  brep::Solid a;
+  REQUIRE(brep::MakeCylinder(fA, 2.0, 4.0, &a, &why));  // z[0,4] r2
+  ucs::Ucs fB;
+  fB.origin = brep::Vec3{0.0, 0.0, 4.0};
+  brep::Solid b;
+  REQUIRE(brep::MakeCone(fB, 2.0, 1.0, 3.0, &b, &why));  // z[4,7] r2 -> r1
+
+  std::vector<brep::Solid> unioned;
+  REQUIRE(brep::BooleanUnion(a, b, &unioned, &why));
+  REQUIRE(unioned.size() == 1);
+  brep::Solid target = std::move(unioned[0]);
+
+  ucs::Ucs nubFrame;
+  ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame);
+  brep::Solid nub;
+  REQUIRE(brep::MakeCylinder(nubFrame, 1.3, 1.0, &nub, &why));
+
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
+
+  std::vector<std::string> log;
+  RunSubtractCommand(st, 0, 1, log);
+
+  // Refused: both solids untouched.
+  REQUIRE(st.cadSolids.size() == 2);
+  bool refused = false;
+  for (const std::string& line : log) {
+    if (line.find("cannot combine these curved solids") != std::string::npos)
+      refused = true;
+  }
+  CHECK(refused);
+}
