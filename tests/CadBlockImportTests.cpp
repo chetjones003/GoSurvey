@@ -9,6 +9,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -180,6 +181,52 @@ TEST_CASE("LIBEXPORT refuses a missing block name", "[issue486][libexport]") {
       refused = true;
   }
   CHECK(refused);
+}
+
+TEST_CASE("LIBEXPORT default path lands in CadFittingLibraryExportDir and lists with sidecar metadata",
+          "[issue486][libexport][library]") {
+  namespace fs = std::filesystem;
+  const fs::path dir = CadFittingLibraryExportDir();
+  if (dir.empty())
+    return; // No %APPDATA% (or equivalent) in this environment — nothing to verify.
+  const std::string name = "GS_TEST_LIBEXPORT_A5_ELBOW";
+  const fs::path dwg = dir / (name + ".dwg");
+  const fs::path sidecar = dir / (name + ".json");
+  std::error_code rmEc;
+  fs::remove(dwg, rmEc);
+  fs::remove(sidecar, rmEc);
+
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = name;
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.partType = CadPipePartType::Tee;
+  def.nominalSize = "6in";
+  def.pressureClass = CadPipePressureClass::CS300;
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream args(name);
+  const bool ok = CadBlocksTryIdleCommand(st, "libexport", args, log);
+  const bool wrote = fs::exists(dwg) && fs::exists(sidecar);
+  if (wrote) {
+    AppCommandState fresh; // Empty blockDefs — the entry must come from disk, not memory.
+    std::vector<CadBlockLibraryEntry> lib;
+    CadBlocksCollectLibraryEntries(fresh, &lib);
+    const auto it = std::find_if(lib.begin(), lib.end(),
+                                 [&](const CadBlockLibraryEntry& e) { return e.name == name; });
+    REQUIRE(it != lib.end());
+    CHECK(it->isFitting);
+    CHECK_FALSE(it->imported);
+    CHECK(it->partType == CadPipePartType::Tee);
+    CHECK(it->nominalSize == "6in");
+    CHECK(it->pressureClass == CadPipePressureClass::CS300);
+  }
+
+  fs::remove(dwg, rmEc);
+  fs::remove(sidecar, rmEc);
+  REQUIRE(ok);
+  REQUIRE(wrote);
 }
 
 TEST_CASE("bare BLOCKIMPORT opens the file picker", "[issue124][blockimport]") {

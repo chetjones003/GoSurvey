@@ -726,6 +726,10 @@ void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBl
     CadBlockLibraryEntry e;
     e.name = d.name;
     e.imported = true;
+    e.isFitting = d.partType != CadPipePartType::None;
+    e.partType = d.partType;
+    e.nominalSize = d.nominalSize;
+    e.pressureClass = d.pressureClass;
     out->push_back(std::move(e));
   }
   namespace fs = std::filesystem;
@@ -752,6 +756,25 @@ void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBl
     e.path = p.u8string();
     e.imported = false;
     e.isFitting = fitting;
+    // LIBEXPORT (issue #486 increment A3) writes a same-stem `.json` sidecar summarizing the
+    // fitting metadata — read it here so the library pane can filter/label without importing.
+    fs::path sidecar = p;
+    sidecar.replace_extension(".json");
+    std::error_code sideEc;
+    if (fitting && fs::is_regular_file(sidecar, sideEc)) {
+      std::ifstream in(sidecar, std::ios::binary);
+      if (in) {
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        try {
+          const nlohmann::json j = nlohmann::json::parse(text);
+          e.partType = ParseCadPipePartType(j.value("partType", std::string()));
+          e.nominalSize = j.value("nominalSize", std::string());
+          e.pressureClass = ParseCadPipePressureClass(j.value("pressureClass", std::string()));
+        } catch (...) {
+          // Malformed/missing sidecar — the entry still lists, just without filter metadata.
+        }
+      }
+    }
     out->push_back(std::move(e));
   };
   for (const fs::directory_entry& ent : fs::directory_iterator(dir, ec)) {

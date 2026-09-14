@@ -69,11 +69,17 @@ void CadBlockRestoreDynGripOrig(AppCommandState& st, CadBlockRef* r);
 void LoadBundledBlockLibrary(AppCommandState& dest, std::vector<std::string>& log);
 
 /// One row in the INSERT dialog library pane (drawing defs + bundled files not yet imported).
+/// `partType`/`nominalSize`/`pressureClass` (issue #486 increment A5) come from the definition
+/// itself when already imported, or from a LIBEXPORT `.json` sidecar beside an unimported file —
+/// read without importing, so the library pane can filter before the user picks anything.
 struct CadBlockLibraryEntry {
   std::string name;
   std::string path;
   bool imported = false;
   bool isFitting = false;
+  CadPipePartType partType = CadPipePartType::None;
+  std::string nominalSize;
+  CadPipePressureClass pressureClass = CadPipePressureClass::None;
 };
 
 void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out);
