@@ -6652,6 +6652,110 @@ capability that does not exist. They are recorded here rather than quietly dropp
     a coaxial stack operand, not this increment's interval-arithmetic extension. Not filed as its own
     issue — 338c's acceptance criteria name only the coaxial-stack-folding gap this revision closes.
 
+### REQ-339 — Radial cross-hole through a coaxial cylinder stack, including across a shoulder (GitHub issue #497, continues REQ-338)
+- Purpose: verifying REQ-338 338a found that an **axial** bore through a composite (multi-segment)
+  coaxial cylinder target already worked, but a **radial** cross-hole — a cutter perpendicular to the
+  stack's own axis, entering and exiting through the curved wall — still refuses with
+  `Problem::BooleanCurvedFace` even when the cutter touches only material that is, piece by piece,
+  already a shape REQ-314 can cut. Unlike every REQ-337/338a-c increment, this cannot be solved by
+  closed-form interval arithmetic along the shared axis (REQ-338's `BuildCoaxialStack`/
+  `TryBooleanCoaxialStackUnion` model each z-slice as a full disk of one radius, which a cross-hole
+  destroys) — it needs the kernel's first general **"weld two solids at a shared boundary face"**
+  primitive, scoped narrowly enough to ship without inheriting the open-ended risk of REQ-338's 338d.
+- Priority: should
+- Type: functional
+- Depends on: REQ-314 (the recognisers this reuses per isolated segment, unchanged); REQ-337/REQ-338
+  (the coaxial-stack decomposition and folding this extends, in particular `ExtractCoaxialStack`);
+  REQ-101 (±0.01 ft); REQ-201 (no silent failure — a refusal is named, the document untouched);
+  REQ-300 (no new third-party dependency); ADR-045 (no `Solid` invariant bent to make this land);
+  ADR-057 (the weld primitive's design).
+- Statement: A cylindrical cutter whose axis is perpendicular to (or merely not parallel/colinear
+  with) a coaxial cylinder stack's shared axis, entering and exiting through the stack's curved wall,
+  subtracts correctly, including when the hole crosses one or more shoulders between segments of
+  different radius. The kernel gains:
+  - **A shared-boundary weld primitive** (`brep::WeldAtSharedFace` or equivalent, ADR-057) that joins
+    two solids known to meet at one exactly congruent, coplanar, interior-to-neither-otherwise face
+    (the flat disk/annulus where two coaxial-stack segments meet) into one valid manifold solid, by
+    removing that shared face from both sides and merging the remaining topology at its boundary loop.
+  - **A stack-spanning radial-cutter recogniser** that, given a coaxial stack and a cutter crossing
+    one or more segment boundaries, isolates the minimal contiguous run of affected segments, applies
+    the existing curved-cylinder-cutter recognisers to that isolated sub-stack (built once via
+    `BuildCoaxialStack`, cut as a single solid whose wall radius steps at the shoulder), and welds the
+    drilled result back onto whichever untouched segments remain, using the new weld primitive.
+  Acceptance:
+  - A radial cross-hole entirely inside one segment of a coaxial stack, touching no shoulder, cuts
+    correctly (the issue #497 repro): result volume matches the segment's own bare-cylinder cross-hole
+    volume minus nothing else, within REQ-101.
+  - A radial cross-hole that crosses exactly one shoulder (partly in each of two adjacent segments of
+    different radius) cuts correctly as one solid, with the correct stepped-wall geometry on both
+    sides of the shoulder.
+  - A radial cross-hole that would leave a segment with zero or negative remaining wall thickness at
+    any point along its path is refused by name (REQ-201), not silently, exactly like the axial 338a
+    boundary case.
+  - An axial bore (338a) and every existing REQ-314/337/338 configuration keep passing unchanged —
+    the new recogniser is additive and reached only when the existing dispatch (`TryBooleanCurved`,
+    `TryBoreThroughDirect`) does not already resolve the cutter.
+  - Every operation stays one undoable step, `.gs` round-trips unchanged (no new `Solid` field, no
+    `kGsFormatVersion` bump), and REQ-101 volume/area agreement holds on the welded result.
+- Scope boundaries, stated rather than left silent:
+  - **Coaxial cylinder stacks only.** The weld primitive is built and proven against exactly one
+    shared-face shape: a flat disk or annulus perpendicular to a shared straight axis, the shape every
+    REQ-337/338 coaxial-stack segment boundary already is. A general "weld any two solids at any
+    matching face" capability — the primitive REQ-338's own 338d would eventually need — is explicitly
+    NOT delivered here; extending the weld primitive beyond flat coaxial boundaries is future work,
+    scoped and accepted on its own when a concrete case needs it (the same delivery-order reasoning
+    REQ-337/338 already used).
+  - **The cutter itself must be a plain circular cylinder** (REQ-314/337's own existing recogniser
+    shapes) — a cone, sphere, torus, or skew/non-perpendicular cutter through a stack is not covered.
+  - **A cross-hole spanning more than two segments** (crossing two or more shoulders in one cutter
+    pass) is out of scope for this requirement's acceptance; the isolate/cut/weld primitive is built
+    so it is not structurally excluded, but is not tested or claimed working beyond one shoulder.
+  - **Sphere/torus/cone pieces inside a stack, and non-coaxial composite operands**, remain out of
+    scope, matching every prior REQ-337/338 boundary.
+  - **A cross-hole crossing a shoulder (the second acceptance line above) is NOT delivered by this
+    requirement** — see the 2026-09-14 revision below. Only the single-segment case (the first
+    acceptance line) is accepted and shipped.
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`) for the weld primitive and the single-segment
+  recogniser; Commands (`src/commands/CadCommands.cpp`) wiring is unchanged (`FoldBoolean`/
+  `CommitBoolean` already dispatch through `TryBooleanCurved`, which gains the new recogniser).
+- Status: **accepted, single-segment case only (2026-09-14)** — D-2026-09-14-d/e. The shoulder-
+  crossing acceptance line is explicitly unmet; see the revision below.
+- Revisions:
+  - 2026-09-14 — **scope narrowed to the single-segment case (D-2026-09-14-e), found during
+    implementation.** Building the shoulder-crossing shape (`BuildCoaxialStepRadialSubtract`,
+    attempted) produced a topologically valid, manifold, `Validate`-passing solid — the derivation
+    (a wall's mouth curve split into two Hi/Lo arcs joined by straight cutter-generatrix edges at the
+    shoulder, the shoulder's own ring split into two disconnected remnants) checked out down to the
+    Euler characteristic (20v/30e/10f, χ=0, correctly genus-1) — but its **measured volume disagreed
+    between two independent reference points** (REQ-201's own closure probe), i.e. `Validate` itself
+    caught a real defect rather than passing a wrong answer. Root cause: the kernel's existing
+    `IntegrateCylinderFaceNumeric`/`IsectStripAt` (the numeric area integrator every prior
+    Intersection-edge cylinder face already relies on, REQ-314 B2b-2) finds a mouth curve's extent by
+    searching for where the CUTTER surface alone crosses the WALL surface — it has no way to
+    additionally clip that search by a THIRD bounding surface (the shoulder plane), which is exactly
+    what a shoulder-crossing mouth needs. This is a real, general kernel-integrator limitation, not a
+    defect specific to this recogniser's own topology — extending `IsectStripAt` to accept an
+    optional clipping surface is its own future kernel task, out of scope here. Rather than ship a
+    shape whose measurement the kernel cannot yet verify (violating the same REQ-201 spirit this
+    requirement itself exists to serve), the shoulder-crossing acceptance line is withdrawn from this
+    requirement; `SubtractRadialCrossHoleThroughStack` returns `false` (not a named `Problem`) for a
+    cutter that would cross a shoulder, leaving the caller's ordinary `Problem::BooleanCurvedFace`
+    refusal to stand, unchanged and by name (never silent, never a guess). The single-segment case
+    (already fully working, using `BuildBranchPipeSubtract` unmodified) IS delivered, including
+    welding to neighbours of a **different** radius — which needed `WeldCoaxialCap` (ADR-057
+    amendment below) rather than the originally-proposed pure `WeldAtSharedFace`, since real
+    coaxial-stack neighbours almost never share a radius at their join (that is what makes a stack a
+    stack). `BrepTests.cpp [req339][issue497]` — 3 cases: single-segment cross-hole through the
+    middle of a 3-segment stack with differently-radiused neighbours on both sides (volume
+    cross-checked against `BuildBranchPipeSubtract` applied directly to the isolated bare segment);
+    a shoulder-crossing attempt confirmed to refuse (not silently wrong); two out-of-scope-pose
+    refusals (offset axis, non-perpendicular axis). Full suite 1115/1115 test cases, all green.
+  - 2026-09-14 — proposed as written (D-2026-09-14-d). Filed from issue #497 (found while
+    verifying issue #495/REQ-338 338a); the user was offered the narrowest single-segment slice, this
+    wider single-shoulder-spanning slice, or deferring #497 unscoped, and chose the wider slice —
+    narrowed back to the single-segment slice per the revision above once the wider slice's kernel
+    dependency was found mid-implementation.
+
 ### REQ-315 — Sweep and loft on the solid kernel (GitHub issue #147, split from REQ-314)
 - Purpose: issue #147's acceptance names sweep and loft alongside extrude and revolve. A general
   swept or lofted surface is a freeform surface that REQ-313's original kernel — five analytic

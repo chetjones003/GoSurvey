@@ -3820,6 +3820,103 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
 - **Out of scope:** fetching notes from GitHub; a second About dialog; rich HTML/CSS; images inside
   the markdown body beyond what a minimal ImGui layer can reasonably show (links open externally).
 
+### ADR-057 — Shared-boundary weld: a bounded first B-rep stitching primitive, flat coaxial faces only   (2026-09-14, accepted, narrowed)
+
+- **Status:** accepted, single-segment scope (2026-09-14, D-2026-09-14-d/e). Backs REQ-339. Decision
+  (c) below (the shoulder-crossing cut) was attempted and withdrawn — see the amendment at the end;
+  decisions (a), (b), (d) stand as implemented, decision (e) reads unchanged.
+- **Context.** REQ-337/338 gave the Boolean engine a way to decompose and fold a *coaxial cylinder
+  stack* using closed-form interval arithmetic along the shared axis — every increment stays valid
+  because a stack's cross-section at any z is always a full disk of one radius. Issue #497 breaks that
+  assumption: a radial cross-hole through one or more segments removes material from the *side* of a
+  segment, which the interval-arithmetic model has no way to represent. The only way to cut it
+  correctly is to isolate the affected segment(s) as their own solid, cut that solid with the
+  existing curved-cylinder recognisers (which already handle a cross-hole through a bare cylinder),
+  and then re-attach the drilled result to whatever untouched segments remain. That last step —
+  joining two independently valid solids back into one manifold solid — has no primitive anywhere in
+  the kernel. `WeldPlanarSolid` (the closest existing thing) only merges flat polygon fragments
+  produced by the planar Boolean clipper; it knows nothing about a general solid's faces, edges, or
+  vertices.
+- **Decision:**
+  (a) **Scope the weld to exactly one shared-face shape.** The two solids being welded are known, by
+      construction (they came from splitting one coaxial stack), to share one face that is flat,
+      perpendicular to the stack's axis, and bit-for-bit congruent between the two sides — a plain
+      disk or annulus at the exact z where the split happened. `WeldAtSharedFace` is written and
+      tested against exactly this shape. It is not a general "find where two arbitrary solids touch"
+      routine — the caller supplies the shared face identity, it does not discover it.
+  (b) **The weld removes the shared face from both solids and merges the remainder.** Because the
+      face is congruent on both sides, its boundary loop (and every vertex/edge on it) is identified
+      pairwise between the two solids; the merged solid's face list is the union of both sides' other
+      faces, re-pointed at the shared vertices/edges instead of each side's own duplicate copies. No
+      new geometry is computed — every remaining face's surface and boundary are copied verbatim from
+      whichever side produced them.
+  (c) **The stack-spanning cutter recogniser drives the weld, not the other way around.** Given a
+      cutter crossing one shoulder, the affected two (or more, though only one shoulder is accepted
+      per REQ-339's scope) segments are rebuilt as their own temporary coaxial-stack solid via the
+      existing `BuildCoaxialStack`, cut with the existing curved recognisers (extended only enough to
+      accept a stepped-radius wall rather than a bare cylinder — no new surface kind), then welded
+      onto the stack's remaining untouched segment(s) at the (now single) shoulder that still needs
+      joining.
+  (d) **Anything that is not this exact shape refuses by name**, the same REQ-201 discipline every
+      prior increment used. A caller asking to weld two solids whose claimed shared face is not flat,
+      not congruent, or not axis-perpendicular is a programming error inside this increment's own
+      code, not a user-facing refusal — it is guarded by an assertion, not a `Problem::`, because no
+      code path in REQ-339's scope can produce that call.
+  (e) **Not a general B-rep stitcher.** REQ-338's 338d (the eventual general classification-based
+      engine) will need real surface-pair intersection curves and arbitrary-shape face trimming to
+      join solids that don't share a pre-known congruent face. `WeldAtSharedFace` does not attempt
+      that and is not a stepping-stone implementation of it beyond "a weld primitive exists in the
+      codebase at all" — 338d, if and when it is scoped, is expected to need its own, more general
+      joining logic.
+- **Consequences:** one new Domain primitive (`brep::WeldAtSharedFace`) and one new stack-spanning
+  cutter recogniser in `src/util/brep.cpp`; no new `Solid` field, no `.gs` format change (the result
+  is topology exactly like any other Boolean result); no Commands-layer change (existing
+  `FoldBoolean`/`CommitBoolean` dispatch is unchanged, the new recogniser is reached through
+  `TryBooleanCurved`'s existing dispatch). Establishes the pattern (isolate affected sub-solid, cut,
+  weld back at a known-congruent boundary) that a future, more general weld would extend rather than
+  replace.
+- **Out of scope:** welding at a non-flat or non-axis-perpendicular boundary; discovering a shared
+  face rather than being told it; a cross-hole spanning more than one shoulder; cone/sphere/torus
+  pieces in the stack; the general classification-based engine (REQ-338 338d).
+- **Amendment (2026-09-14, D-2026-09-14-e) — decision (c) withdrawn; `WeldCoaxialCap` added in its
+  place.** Two problems surfaced during implementation, both found by the kernel's own checks rather
+  than by inspection — exactly the outcome REQ-201 is there to guarantee:
+  - **The shoulder-crossing cut itself.** `BuildCoaxialStepRadialSubtract` (decision (c)'s
+    stack-spanning cutter) produced a combinatorially sound, manifold topology — right vertex/edge/
+    face counts, every edge used exactly twice in opposite directions, Euler characteristic 0
+    (correctly genus-1) — but `Validate`'s own two-reference-point volume-closure probe caught a real
+    defect: the measured volume disagreed depending on which point it was measured about. Root cause:
+    the wall's mouth curve there needs clipping by a THIRD surface (the shoulder plane) in addition to
+    the cutter, but `IntegrateCylinderFaceNumeric`/`IsectStripAt` — the numeric area integrator every
+    Intersection-edge cylinder face already goes through, unchanged since REQ-314 B2b-2 — only ever
+    searches for where ONE other surface (the cutter) crosses the wall. This is a genuine gap in that
+    shared numeric integrator, not a defect specific to this recogniser's topology, and fixing it
+    (letting `IsectStripAt` accept an optional clipping surface) is its own future kernel task.
+    Decision (c) is withdrawn rather than shipped with a measurement the kernel cannot itself verify;
+    `SubtractRadialCrossHoleThroughStack` refuses (returns `false`, not a `Problem`) a cutter that
+    would cross a shoulder, so the caller's ordinary `Problem::BooleanCurvedFace` refusal stands.
+  - **`WeldAtSharedFace` alone could not join the single-segment case's own neighbours.** Decision (a)
+    assumed the two solids being welded share an EXACTLY congruent cap — true only when the
+    neighbouring segment happens to have the same radius as the drilled one, which is the exception,
+    not the rule, for a real stepped stack (a uniform-radius "stack" is just one segment). The fallback
+    (`BuildBranchPipeSubtract`, decision (c)'s single-segment case) also turned up a second, unrelated
+    mismatch: it places its own two cap-rim vertices at local `(0, ±R, z)` while `BuildCoaxialStack`
+    places its at `(±R, 0, z)` — both correct in isolation, simply disagreeing about which axis carries
+    the seam, so position-matching between them never finds a coincidence regardless of which frame
+    axis the caller picks. **`WeldCoaxialCap`** replaces `WeldAtSharedFace` for this join: equal radii
+    (the rare case) fall through to `WeldAtSharedFace` unchanged (with the caller now aligning the
+    seam axis so it actually works); unequal radii (the common case) drop both caps and connect the
+    two solids with one new annular ring face, reusing each side's own two existing rim edges VERBATIM
+    — no new vertex/edge matching, no recomputed geometry. This works because a solid's top-cap and
+    bottom-cap winding conventions (`BuildCoaxialStack`'s own `matBelow` rule) already happen to be
+    exactly the winding the new ring's inner-or-outer role needs, in both of the two cases that can
+    arise — verified by construction/testing, not merely asserted.
+- **Consequences of the amendment:** `WeldCoaxialCap` (with its own equal-radius fallback to
+  `WeldAtSharedFace`) is the primitive actually used by `SubtractRadialCrossHoleThroughStack`;
+  `BuildCoaxialStepRadialSubtract` was written, found to fail the kernel's own volume-closure check,
+  and removed rather than left in the tree half-working. `WeldAtSharedFace` itself is unchanged and
+  still exists as the equal-radius primitive `WeldCoaxialCap` delegates to.
+
 ### ADR-055 — The centroid is integrated by quadrature over the exact surfaces, in world axes, about a solid-local origin   (2026-09-09, accepted)
 
 - **Status:** accepted (2026-09-09, D-2026-09-09-h, GitHub issue #149 acceptance 4). Backs REQ-334.

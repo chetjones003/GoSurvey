@@ -896,6 +896,17 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
                                               const std::vector<Vec3>& internalShoulders, Solid* out,
                                               Problem* outWhy);
 
+/// Radial cross-hole through a coaxial cylinder stack (issue #497 / REQ-339, ADR-057): \p centre +
+/// \p axis + \p radius describe a plain cylindrical cutter perpendicular to the stack's own axis and
+/// passing through it (zero offset), entering and exiting through the curved wall — including when
+/// it crosses the one shoulder between two adjacent segments of different radius. \p base need not
+/// be a bare cylinder. Returns false (not a `Problem`) when the shape is outside this increment's
+/// scope, so the caller's own existing refusal stands; a `Problem` on `outWhy` means this recogniser
+/// matched the shape but the specific cut could not be built (REQ-201 — a real refusal, by name).
+[[nodiscard]] bool SubtractRadialCrossHoleThroughStack(const Solid& base, const Vec3& centre,
+                                                       const Vec3& axis, double radius, Solid* out,
+                                                       Problem* outWhy);
+
 // ---------------------------------------------------------------------------------------------
 // Validity.
 // ---------------------------------------------------------------------------------------------

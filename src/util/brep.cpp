@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <initializer_list>
 #include <limits>
@@ -11961,6 +11962,183 @@ struct CoaxialSeg {
   return Succeed(outWhy);
 }
 
+/// Weld two solids at one exactly congruent, flat, coplanar shared face (REQ-339/ADR-057): \p faceA
+/// in \p a and \p faceB in \p b are known — by construction, not discovered — to be the same disk or
+/// annulus in world space, material on opposite sides. The weld removes both copies of that face and
+/// merges everything else into one manifold solid, identifying every vertex/edge \p b shares with
+/// \p a by world position/geometry (to \p a and \p b's own model scale) rather than recomputing any
+/// geometry — no surface-pair intersection, no trim, nothing beyond topology. Scoped exactly to
+/// REQ-339's own use: a bare flat coaxial-stack boundary, never a general "find where two arbitrary
+/// solids touch" primitive — the caller supplies the two face indices, this never searches for them.
+[[nodiscard]] bool WeldAtSharedFace(const Solid& a, int faceA, const Solid& b, int faceB, Solid* out,
+                                    Problem* outWhy) {
+  if (faceA < 0 || static_cast<std::size_t>(faceA) >= a.faces.size() || faceB < 0 ||
+      static_cast<std::size_t>(faceB) >= b.faces.size())
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Face& fa = a.faces[static_cast<std::size_t>(faceA)];
+  const Face& fb = b.faces[static_cast<std::size_t>(faceB)];
+  if (fa.surface.kind != SurfaceKind::Plane || fb.surface.kind != SurfaceKind::Plane)
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const double sc = std::max({1.0, ModelScale(a), ModelScale(b)});
+  const double eps = 1e-6 * sc;
+  if (ray3d::Length(ray3d::Sub(fa.surface.frame.origin, fb.surface.frame.origin)) > eps ||
+      ray3d::Dot(fa.surface.frame.zAxis, fb.surface.frame.zAxis) > -1.0 + 1e-9)
+    return Fail(Problem::BooleanResultInvalid, outWhy);  // not the same face, opposite-facing
+
+  Solid s = a;
+  std::vector<int> vmap(b.vertices.size(), -1);
+  auto sameV = [&](const Vec3& p, const Vec3& q) { return ray3d::Length(ray3d::Sub(p, q)) <= eps; };
+  const std::size_t aVertN = a.vertices.size();
+  for (std::size_t i = 0; i < b.vertices.size(); ++i) {
+    for (std::size_t j = 0; j < aVertN; ++j) {
+      if (sameV(b.vertices[i].p, s.vertices[j].p)) {
+        vmap[i] = static_cast<int>(j);
+        break;
+      }
+    }
+    if (vmap[i] < 0)
+      vmap[i] = AddVertex(&s, b.vertices[i].p);
+  }
+  auto sameEdgeGeom = [&](const Edge& x, const Edge& y) {
+    if (x.kind != y.kind)
+      return false;
+    if (x.kind == CurveKind::Arc || x.kind == CurveKind::Ellipse)
+      return ray3d::Length(ray3d::Sub(x.frame.origin, y.frame.origin)) <= eps &&
+             std::fabs(std::fabs(ray3d::Dot(x.frame.zAxis, y.frame.zAxis)) - 1.0) <= 1e-9 &&
+             std::fabs(x.radius - y.radius) <= eps && std::fabs(x.radius2 - y.radius2) <= eps;
+    return x.kind == CurveKind::Line;  // fully described by its (already-matched) endpoints
+  };
+  std::vector<int> emap(b.edges.size(), -1);
+  std::vector<bool> eflip(b.edges.size(), false);
+  const std::size_t aEdgeN = a.edges.size();
+  for (std::size_t i = 0; i < b.edges.size(); ++i) {
+    const Edge& be = b.edges[i];
+    const int nv0 = vmap[static_cast<std::size_t>(be.v0)];
+    const int nv1 = vmap[static_cast<std::size_t>(be.v1)];
+    if (static_cast<std::size_t>(nv0) < aVertN && static_cast<std::size_t>(nv1) < aVertN) {
+      for (std::size_t j = 0; j < aEdgeN; ++j) {
+        const Edge& ae = s.edges[j];
+        const bool fwd = ae.v0 == nv0 && ae.v1 == nv1;
+        const bool rev = ae.v0 == nv1 && ae.v1 == nv0;
+        if ((fwd || rev) && be.kind != CurveKind::Intersection && sameEdgeGeom(ae, be)) {
+          emap[i] = static_cast<int>(j);
+          eflip[i] = rev;
+          break;
+        }
+      }
+    }
+    if (emap[i] < 0) {
+      Edge ne = be;
+      ne.v0 = nv0;
+      ne.v1 = nv1;
+      s.edges.push_back(std::move(ne));
+      emap[i] = static_cast<int>(s.edges.size()) - 1;
+    }
+  }
+  for (std::size_t i = 0; i < b.faces.size(); ++i) {
+    if (static_cast<int>(i) == faceB)
+      continue;
+    Face nf = b.faces[i];
+    for (Loop& lp : nf.loops)
+      for (EdgeUse& u : lp.uses) {
+        const std::size_t bi = static_cast<std::size_t>(u.edge);
+        u.edge = emap[bi];
+        if (eflip[bi])
+          u.reversed = !u.reversed;
+      }
+    s.faces.push_back(std::move(nf));
+  }
+  s.faces.erase(s.faces.begin() + faceA);
+  s.shells.clear();
+  s.recipe = Recipe{};
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+/// The radius of a circular cap's rim, read from either of its (assumed exactly two) boundary arcs.
+/// Returns 0 if the face is not a plain circular cap in this shape.
+[[nodiscard]] double CapRimRadius(const Solid& s, const Face& f) {
+  if (f.loops.size() != 1)
+    return 0.0;
+  for (const EdgeUse& u : f.loops.front().uses) {
+    const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+    if (e.kind == CurveKind::Arc)
+      return e.radius;
+  }
+  return 0.0;
+}
+
+/// Join two coaxial solids at a pair of circular caps that may have DIFFERENT radii (a genuine
+/// shoulder, not just a flat splice) — the general case `WeldAtSharedFace` does not cover, needed
+/// because \p a and \p b are independently-built neighbours of a drilled piece and generally do not
+/// share a radius at the join (issue #497 / REQ-339). \p a's cap is the LOWER one (the solid whose
+/// material sits below the join, matching \ref BuildCoaxialStack's own `matBelow` convention for a
+/// top cap); \p b's is the upper. Equal radii fall through to \ref WeldAtSharedFace unchanged (no
+/// ring would have any width). Unequal radii drop both caps and connect the two solids' now-open rims
+/// with one new annular ring face — reusing each cap's own two rim edges with their **own original
+/// winding** verbatim: a solid's top cap and bottom cap are already wound so that whichever role
+/// (inner or outer boundary of the new ring) a given radius turns out to play, the existing winding
+/// is already the one the ring's own outward-normal convention (away from the wider side, exactly
+/// `BuildCoaxialStack`'s `addRing`) needs — verified by cases, not asserted.
+[[nodiscard]] bool WeldCoaxialCap(const Solid& a, int faceA, const Solid& b, int faceB, Solid* out,
+                                  Problem* outWhy) {
+  if (faceA < 0 || static_cast<std::size_t>(faceA) >= a.faces.size() || faceB < 0 ||
+      static_cast<std::size_t>(faceB) >= b.faces.size())
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  const Face& fa = a.faces[static_cast<std::size_t>(faceA)];
+  const Face& fb = b.faces[static_cast<std::size_t>(faceB)];
+  const double ra = CapRimRadius(a, fa);
+  const double rb = CapRimRadius(b, fb);
+  const double sc = std::max({1.0, ModelScale(a), ModelScale(b)});
+  if (!(ra > 0.0) || !(rb > 0.0))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  if (std::fabs(ra - rb) <= 1e-6 * sc)
+    return WeldAtSharedFace(a, faceA, b, faceB, out, outWhy);
+
+  Solid s = a;
+  const int vOff = static_cast<int>(s.vertices.size());
+  for (const Vertex& v : b.vertices)
+    s.vertices.push_back(v);
+  const int eOff = static_cast<int>(s.edges.size());
+  for (const Edge& e : b.edges) {
+    Edge ne = e;
+    ne.v0 += vOff;
+    ne.v1 += vOff;
+    s.edges.push_back(ne);
+  }
+  Loop ringLoopA = fa.loops.front();  // copy before erasing fa below
+  Loop ringLoopB = fb.loops.front();
+  for (EdgeUse& u : ringLoopB.uses)
+    u.edge += eOff;
+  for (std::size_t i = 0; i < b.faces.size(); ++i) {
+    if (static_cast<int>(i) == faceB)
+      continue;
+    Face nf = b.faces[i];
+    for (Loop& lp : nf.loops)
+      for (EdgeUse& u : lp.uses)
+        u.edge += eOff;
+    s.faces.push_back(std::move(nf));
+  }
+  s.faces.erase(s.faces.begin() + faceA);
+  const Vec3 ringNormal = ra > rb ? fa.surface.frame.zAxis : ray3d::Scale(fa.surface.frame.zAxis, -1.0);
+  Face ring;
+  ring.surface = PlaneSurface(fa.surface.frame.origin, ringNormal);
+  ring.loops = ra > rb ? std::vector<Loop>{std::move(ringLoopA), std::move(ringLoopB)}
+                       : std::vector<Loop>{std::move(ringLoopB), std::move(ringLoopA)};
+  s.faces.push_back(std::move(ring));
+  s.shells.clear();
+  s.recipe = Recipe{};
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+
 /// A right circular cylinder (base at \p axisFrame.origin, height \p h, radius \p r) with one planar
 /// flat milled the full length parallel to the axis: the cut plane sits at local x = \p px
 /// (`-r < px < r`), the material with x > px removed, the flat's outward normal along local +x. The
@@ -12977,6 +13155,157 @@ bool TrySteppedBoreThroughDirect(const Solid& base, const Vec3& centre, const Ve
   *out = std::move(r);
   return true;
 }
+
+/// Radial cross-hole entirely inside ONE segment of a coaxial cylinder stack (issue #497 / REQ-339,
+/// ADR-057, scope narrowed by the D-2026-09-14 revision below): a plain cylindrical cutter whose axis
+/// is perpendicular to the stack's own axis and passes through it (zero offset, matching
+/// \ref BuildBranchPipeSubtract's own pose), entering and exiting through the curved wall of a
+/// single segment. \p base need not be a bare cylinder — this is exactly the case that still refuses
+/// when the target is an N-segment coaxial stack: the affected segment is isolated (via
+/// \ref BuildBranchPipeSubtract, unchanged), cut, and welded (\ref WeldCoaxialCap, which also
+/// inserts the connecting shoulder ring when the neighbour's radius differs) back onto whichever
+/// untouched segments remain. Returns false (not a refusal by name) when the shape falls outside
+/// this increment's scope — a Cone band, an offset or non-perpendicular cutter, or a cut spanning
+/// more than one segment — so the caller's own ordinary refusal stands.
+bool SubtractRadialCrossHoleThroughStack(const Solid& base, const Vec3& centre,
+                                                       const Vec3& axis, double radius, Solid* out,
+                                                       Problem* outWhy) {
+  Vec3 axisPoint{}, axisDir{};
+  std::vector<CoaxialSeg> segs;
+  if (!ExtractCoaxialStack(base, &axisPoint, &axisDir, &segs) || segs.size() < 2 || !(radius > 0.0))
+    return false;  // not a multi-segment stack — the ordinary recognisers already cover N==1
+  const double sc = std::max(1.0, ModelScale(base));
+  const Vec3 cutDirRaw = ray3d::Normalize(axis);
+  if (!(ray3d::Length(cutDirRaw) > 0.5) || std::fabs(ray3d::Dot(cutDirRaw, axisDir)) > 1e-6)
+    return false;  // degenerate, or not perpendicular to the stack axis — out of scope
+  const Vec3 toC = ray3d::Sub(centre, axisPoint);
+  const double zh = ray3d::Dot(toC, axisDir);
+  const Vec3 perp = ray3d::Sub(toC, ray3d::Scale(axisDir, zh));
+  if (ray3d::Length(perp) > 1e-6 * sc)
+    return false;  // the cutter axis does not pass through the stack's own axis — offset, not covered
+
+  int loIdx = -1, hiIdx = -1;
+  for (int i = 0; i < static_cast<int>(segs.size()); ++i) {
+    if (segs[static_cast<std::size_t>(i)].z1 > zh - radius + 1e-7 * sc &&
+        segs[static_cast<std::size_t>(i)].z0 < zh + radius - 1e-7 * sc) {
+      if (loIdx < 0)
+        loIdx = i;
+      hiIdx = i;
+    }
+  }
+  // A cut spanning a shoulder (loIdx != hiIdx) needs the target wall's own mouth curve clipped by a
+  // THIRD surface (the shoulder plane) — `IntegrateCylinderFaceNumeric`'s existing
+  // wall-cutter-only root search (`IsectStripAt`) has no way to express that third bound, so an
+  // otherwise-correct topology for that shape still reports a wrong area/volume. Filed as its own
+  // follow-up (needing that numeric integrator extended, not just this recogniser) rather than
+  // shipped with a silently-wrong measurement — see the revision note on REQ-339's Statement.
+  if (loIdx < 0 || hiIdx != loIdx)
+    return false;
+  if (std::fabs(segs[static_cast<std::size_t>(loIdx)].r0 - segs[static_cast<std::size_t>(loIdx)].r1) >
+      1e-7 * sc)
+    return false;  // a Cone band — out of scope
+
+  // A right-handed frame: Z the stack axis, Y the cutter's own direction, X the seam direction.
+  ucs::Ucs fr;
+  fr.origin = axisPoint;
+  fr.zAxis = axisDir;
+  fr.yAxis = cutDirRaw;
+  fr.xAxis = ray3d::Normalize(ray3d::Cross(fr.yAxis, fr.zAxis));
+  if (!(ray3d::Length(fr.xAxis) > 0.5))
+    return false;
+  fr.yAxis = ray3d::Normalize(ray3d::Cross(fr.zAxis, fr.xAxis));
+
+  auto capFaceAt = [&](const Solid& piece, double z, bool top) -> int {
+    const Vec3 want = ray3d::Add(axisPoint, ray3d::Scale(axisDir, z));
+    for (int i = 0; i < static_cast<int>(piece.faces.size()); ++i) {
+      const Face& f = piece.faces[static_cast<std::size_t>(i)];
+      if (f.surface.kind != SurfaceKind::Plane ||
+          ray3d::Length(ray3d::Sub(f.surface.frame.origin, want)) > 1e-6 * sc)
+        continue;
+      const double d = ray3d::Dot(f.surface.frame.zAxis, axisDir);
+      if (top ? d > 1.0 - 1e-6 : d < -1.0 + 1e-6)
+        return i;
+    }
+    return -1;
+  };
+
+  Solid result;
+  Problem whyMid = Problem::Ok;
+  {
+    ucs::Ucs bfr;
+    bfr.origin = ray3d::Add(axisPoint, ray3d::Scale(axisDir, zh));  // its cutter sits at local z=0
+    bfr.zAxis = axisDir;
+    bfr.xAxis = fr.yAxis;
+    bfr.yAxis = ray3d::Scale(fr.xAxis, -1.0);
+    const double zB0 = segs[static_cast<std::size_t>(loIdx)].z0 - zh;
+    const double zB1 = segs[static_cast<std::size_t>(loIdx)].z1 - zh;
+    if (!BuildBranchPipeSubtract(bfr, radius, segs[static_cast<std::size_t>(loIdx)].r0, zB0, zB1,
+                                 &result, &whyMid))
+      return Fail(whyMid, outWhy);
+  }
+
+  // `BuildBranchPipeSubtract` places its own two cap rims' pair of vertices at LOCAL (0, +-R, z) —
+  // its own frame's +-Y — while `BuildCoaxialStack` places them at +-X. Both are proven-correct on
+  // their own; they simply disagree about which axis carries the cap seam. `WeldCoaxialCap`'s equal-
+  // radius fallback (`WeldAtSharedFace`) matches vertices by position, so on the rare occasion a
+  // neighbour's radius happens to equal `result`'s own, the neighbour pieces built here must use
+  // whichever axis `result`'s own two cap-rim vertices actually sit on (unequal radii, the common
+  // case, do not need this — `WeldCoaxialCap` reuses each side's rim edges directly, no matching).
+  const Vec3 capXAxis = ray3d::Scale(fr.xAxis, -1.0);
+  if (loIdx > 0) {
+    std::vector<double> zb, rb0, rb1;
+    for (int i = 0; i < loIdx; ++i) {
+      zb.push_back(segs[static_cast<std::size_t>(i)].z0);
+      rb0.push_back(segs[static_cast<std::size_t>(i)].r0);
+      rb1.push_back(segs[static_cast<std::size_t>(i)].r1);
+    }
+    zb.push_back(segs[static_cast<std::size_t>(loIdx - 1)].z1);
+    ucs::Ucs bfr = fr;
+    bfr.xAxis = capXAxis;
+    bfr.yAxis = ray3d::Normalize(ray3d::Cross(bfr.zAxis, bfr.xAxis));
+    bfr.origin = ray3d::Add(axisPoint, ray3d::Scale(axisDir, zb.front()));
+    Solid below;
+    Problem whyB = Problem::Ok;
+    if (!BuildCoaxialStack(bfr, zb, rb0, rb1, {}, &below, &whyB))
+      return Fail(whyB, outWhy);
+    const int fBelow = capFaceAt(below, zb.back(), /*top=*/true);
+    const int fMid = capFaceAt(result, segs[static_cast<std::size_t>(loIdx)].z0, /*top=*/false);
+    if (fBelow < 0 || fMid < 0)
+      return Fail(Problem::BooleanResultInvalid, outWhy);
+    Solid welded;
+    if (!WeldCoaxialCap(below, fBelow, result, fMid, &welded, outWhy))
+      return false;
+    result = std::move(welded);
+  }
+  if (hiIdx + 1 < static_cast<int>(segs.size())) {
+    std::vector<double> za, ra0, ra1;
+    za.push_back(segs[static_cast<std::size_t>(hiIdx + 1)].z0);
+    for (int i = hiIdx + 1; i < static_cast<int>(segs.size()); ++i) {
+      ra0.push_back(segs[static_cast<std::size_t>(i)].r0);
+      ra1.push_back(segs[static_cast<std::size_t>(i)].r1);
+      za.push_back(segs[static_cast<std::size_t>(i)].z1);
+    }
+    ucs::Ucs afr = fr;
+    afr.xAxis = capXAxis;
+    afr.yAxis = ray3d::Normalize(ray3d::Cross(afr.zAxis, afr.xAxis));
+    afr.origin = ray3d::Add(axisPoint, ray3d::Scale(axisDir, za.front()));
+    Solid above;
+    Problem whyA = Problem::Ok;
+    if (!BuildCoaxialStack(afr, za, ra0, ra1, {}, &above, &whyA))
+      return Fail(whyA, outWhy);
+    const int fAbove = capFaceAt(above, za.front(), /*top=*/false);
+    const int fMid = capFaceAt(result, segs[static_cast<std::size_t>(hiIdx)].z1, /*top=*/true);
+    if (fAbove < 0 || fMid < 0)
+      return Fail(Problem::BooleanResultInvalid, outWhy);
+    Solid welded;
+    if (!WeldCoaxialCap(result, fMid, above, fAbove, &welded, outWhy))
+      return false;
+    result = std::move(welded);
+  }
+  *out = std::move(result);
+  return Succeed(outWhy);
+}
+
 
 bool SubtractCircleThrough(const Solid& base, const Vec3& centre, const Vec3& normal, double radius,
                            Solid* out, Problem* outWhy) {
