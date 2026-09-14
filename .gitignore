@@ -90,3 +90,11 @@ desktop.ini
 
 # REQ-336 — one-time unlock for pushing resources/whats-new.md (tools/approve-whats-new.ps1)
 .whats-new-push-unlock
+# Screenshots and viewport captures land in the process CWD, which is the repo root when a devshell
+# test is run from here. They are evidence, not source: a handful are ~2 MB each and a `git add -A`
+# sweeps them straight into a commit (it did, once).
+/devshell-*.bmp
+/repro-*.bmp
+/devshell-activity.log
+/devshell-command.log
+/devshell-testengine.log

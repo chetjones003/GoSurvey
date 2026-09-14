@@ -3883,3 +3883,91 @@ an area.** Deliberately different answers from two neighbouring functions. A cen
 volume-**weighted**, so a shell enclosing part of space twice makes it exactly as meaningless as the
 volume it is weighted by; a single face's area is a property of one bounded patch and stays well
 defined. The rule is the quantity's own nature, not consistency for its own sake.
+
+### ADR-057 — The section clip is a shader uniform, rebased onto the view anchor by the renderer   (2026-09-10, accepted)
+
+- **Status:** accepted (2026-09-10, D-2026-09-10-e, GitHub issue #149 acceptance 6). Backs REQ-337.
+- **Context.** `#149` acceptance 6 asks that "section clipping updates live as the plane moves". No
+  clip-plane machinery existed anywhere in `src/render/` — the whole directory is `Camera.hpp`,
+  `ViewportProjection.hpp` and `ViewportRenderer.{hpp,cpp}` — so unlike the four criteria before it,
+  this one had no foundation to extend. Probe P7 established the shape before any code was written.
+- **Decision.**
+
+  **(a) The plane is a `gl_ClipDistance[0]` uniform, not a change to the camera or the geometry.**
+  Every vertex shader that draws model geometry gains one `uniform vec4 uClipPlane` and one line
+  writing `gl_ClipDistance[0]`. `uMVP` and every path that builds it are untouched, which is what
+  keeps REQ-058's plan-view parity guarantee intact — the alternative, folding a clip into the
+  projection, would put this feature inside the one matrix the whole 3D programme rests on. Measured
+  as available: `GL_MAX_CLIP_DISTANCES` is 8 on the reference machine, and all four of the app's
+  vertex shaders compile with the edit applied.
+
+  **(b) The clip is applied per FRAME, never by regenerating geometry.** This is what "live" means
+  in the acceptance criterion, and it is why the plane is a uniform rather than a filter over the
+  display cache: moving the plane changes the next frame and invalidates nothing —
+  `cadGpuRevision`, the mesh cache and the solid batch signature are all untouched. A clip that
+  re-tessellated would be correct and useless, since the thing being asked for is a boundary the
+  user drags.
+
+  **(c) The command layer states the plane in WORLD coordinates; the RENDERER rebases it.** This is
+  the load-bearing decision. `ViewportRenderer` does not upload world coordinates: vertices arrive
+  with XY relative to the view anchor and Z absolute, and the anchor **is the pan point**
+  (`viewAnchorX = panX = cam.targetX`), so it moves whenever the user pans. The rebasing therefore
+  belongs to the renderer, because the anchor is the renderer's own float-precision device and no
+  caller should have to know it exists.
+
+  **What the wrong version looks like, measured rather than argued** (probe P7, 2026-09-10):
+  a plane handed to the shader in world coordinates is **exact at the origin**, sits at
+  `anchor + c` instead of `c` — **2,196,000 ft out at easting 2.196e6**, 2,542,755.99 ft out on an
+  oblique plane there — and **moves one foot for every foot the view pans**. A *horizontal* cut is
+  exact in both versions, because the anchoring covers X and Y only. So the first plane anyone tries
+  (a level cut) and any test written at the origin both pass a badly wrong implementation. Pinned by
+  `SectionClipTests`, which measures where the plane actually lands by bisection rather than
+  asserting that two answers merely differ.
+
+  The rebased constant is computed in **double and narrowed once**: at survey magnitude `c` and the
+  anchor term are both ~2.2e6 and their difference is small, so the float that reaches the GPU
+  carries the offset at full precision. Computed in float, `c` would quantize to about 0.25 ft —
+  125x REQ-101's ±0.002 ft.
+
+  **(d) Model geometry clips; UI overlays do not.** The renderer already draws that distinction for
+  depth (`depthForGeometry` / `depthForOverlay`, "overlays are UI, never occluded"), and the clip
+  follows the same line for a related reason: a selection highlight or a snap marker that vanished
+  into the cut would be hiding the very thing the user is pointing at. The **grid** is excluded as
+  well, being a drafting aid drawn *on* the UCS plane and therefore coincident with the clip plane at
+  offset 0.
+
+  `GL_CLIP_DISTANCE0` is disabled unconditionally at the end of `RenderScene`. ImGui draws the whole
+  interface immediately afterwards with shaders that never write `gl_ClipDistance`, and a shader that
+  leaves it unwritten while the state is enabled has **undefined** clip distances — so a missing
+  disable can delete arbitrary parts of the UI. For the same reason the geometry shaders write
+  `gl_ClipDistance[0]` unconditionally and the plane is *neutralised* to `(0,0,0,1)` when inactive,
+  rather than the shaders branching or being permuted.
+
+  **(e) Increment 1 clips GL geometry only, and REQ-337 says so.** Dimensions, annotation text and
+  line-pattern hatches are drawn by the ImGui overlay through `Camera::WorldToScreen`, not by the
+  renderer, and no GPU clip plane can reach them. Three options were weighed: state the limit;
+  clip those on the CPU at each `WorldToScreen` site; or move them into GL. The first was chosen —
+  the acceptance criterion is met as written, and the other two are a rendering-architecture change
+  disproportionate to one criterion of one phase. **Recorded as a stated limit so it reads as a
+  decision rather than an oversight**, and so the cost of closing it is written down before anyone
+  meets it as a surprise.
+
+  **(f) The cut is not capped, and that is deferred by name.** A clip plane removes fragments; it
+  does not close the hole it leaves. With no face culling anywhere in the renderer, a clipped solid
+  shows its interior surfaces rather than a cut face — measured, not assumed: the centre-pixel depth
+  moves by exactly the box's own depth extent when the near half is cut away. Capping is REQ-337
+  increment 2, and `brep::SectionLoop` (REQ-335, shipped in the previous slice) already returns
+  precisely the cross-section geometry a cap needs.
+- **Consequences.** One uniform on four programs, one GL-free header (`src/render/SectionClip.hpp`)
+  holding all the arithmetic so it is unit-testable without a window — the same reason `Camera.hpp`
+  is header-only (ADR-002) — and no change to the camera, the geometry pipeline, the display caches
+  or any document type. The feature's whole risk sits in one function, `SectionClipToShaderVec4`,
+  which is why that function carries the measured numbers in its comment and has a test per failure
+  mode.
+- **Alternatives rejected.** *Fold the clip into the projection matrix* — puts a view toggle inside
+  the matrix REQ-058's parity guarantee depends on. *Clip on the CPU by filtering the display cache*
+  — correct, and it rebuilds geometry on every drag, which is the one thing (b) exists to avoid.
+  *Discard in the fragment shader* — works, costs a branch on every fragment of every pass, and
+  `gl_ClipDistance` is the hardware path built for exactly this. *Let the caller pass an
+  anchor-relative plane* — spreads knowledge of a renderer-private precision device to every call
+  site, and would have to be recomputed by the caller on every pan.
