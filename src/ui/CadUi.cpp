@@ -18242,6 +18242,43 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
   }
 
+  // ---- Piping connection port gizmo (issue #486 increment A2) ----------------------------------
+  // While BEDIT is open, mark each connection port on the block-being-edited so the author can see
+  // the ports they've placed without a separate list command. Colored by role: inlet=green,
+  // outlet=blue, branch=orange. Drawn at the port's local point (the block's own geometry currently
+  // sits directly in the model arrays during a block-edit session — ADR-043).
+  if (modelSpace && cmd.blockEditActive && !cmd.blockEditorName.empty() && !InFloatingModelSpace(cmd)) {
+    const int di = CadBlockFindDef(cmd.blockDefs, cmd.blockEditorName);
+    if (di >= 0) {
+      const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+      if (!def.connections.empty()) {
+        const Camera portCam = CadViewCamera(cmd);
+        ImDrawList* portDl = ImGui::GetWindowDrawList();
+        portDl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
+        for (const CadBlockConnection& c : def.connections) {
+          float sx = 0.f, sy = 0.f;
+          portCam.WorldToScreen(static_cast<double>(c.x), static_cast<double>(c.y), static_cast<double>(c.z),
+                                avail.x, avail.y, &sx, &sy);
+          const ImVec2 p(imgPos.x + sx, imgPos.y + sy);
+          ImU32 col = IM_COL32(90, 220, 120, 255);
+          if (c.role == CadBlockConnectionRole::Outlet)
+            col = IM_COL32(90, 160, 240, 255);
+          else if (c.role == CadBlockConnectionRole::Branch)
+            col = IM_COL32(240, 160, 60, 255);
+          portDl->AddCircleFilled(p, 5.f, col);
+          portDl->AddCircle(p, 5.f, IM_COL32(20, 20, 20, 220), 0, 1.2f);
+          // Outward-normal tick so the port's mating direction is visible, not just its location.
+          float nsx = 0.f, nsy = 0.f;
+          portCam.WorldToScreen(static_cast<double>(c.x + c.nx * 0.15f), static_cast<double>(c.y + c.ny * 0.15f),
+                                static_cast<double>(c.z + c.nz * 0.15f), avail.x, avail.y, &nsx, &nsy);
+          portDl->AddLine(p, ImVec2(imgPos.x + nsx, imgPos.y + nsy), col, 1.5f);
+          portDl->AddText(ImVec2(p.x + 7.f, p.y - 6.f), IM_COL32(230, 230, 230, 255), c.name.c_str());
+        }
+        portDl->PopClipRect();
+      }
+    }
+  }
+
   // ---- REQ-072 analysis legend (TASK-086 §6 (4)) ------------------------------------------------
   DrawSurfaceAnalysisLegend(cmd, imgPos, avail);
   if (cmd.activeSpaceIndex == kModelSpaceIndex) {

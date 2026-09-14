@@ -1313,12 +1313,16 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
   conn.nx = static_cast<float>(n.x);
   conn.ny = static_cast<float>(n.y);
   conn.nz = static_cast<float>(n.z);
+  conn.role = st.bconnectRolePending;
+  conn.engagementLength = st.bconnectEngagementPending;
   const std::string addedName = conn.name;
   st.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
   st.blockEditorDirty = true;
   st.bconnectAwaitingFace = false;
   st.bconnectNameBuf[0] = '\0';
   st.bconnectSizeBuf[0] = '\0';
+  st.bconnectRolePending = CadBlockConnectionRole::Inlet;
+  st.bconnectEngagementPending = 0.f;
   log.push_back("BCONNECT — added connection \"" + addedName + "\".");
   return true;
 }
@@ -2098,7 +2102,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     }
     const std::vector<std::string> f = SplitCommaRest(args);
     if (f.empty()) {
-      log.push_back("BCONNECT — usage: BCONNECT <name>[, <nominalSize>][, <x>, <y>, <z>, <nx>, <ny>, <nz>].");
+      log.push_back("BCONNECT — usage: BCONNECT <name>[, <nominalSize>][, <x>, <y>, <z>, <nx>, <ny>, <nz>]"
+                    "[, <role>][, <engagementLength>][, <compatibilityTag>]. role = inlet|outlet|branch.");
       return true;
     }
     const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
@@ -2114,6 +2119,14 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
         log.push_back("BCONNECT — coordinates and normal must be numbers.");
         return true;
       }
+      if (f.size() >= 9)
+        conn.role = ParseCadBlockConnectionRole(f[8]);
+      if (f.size() >= 10 && !TryParseF(f[9], conn.engagementLength)) {
+        log.push_back("BCONNECT — engagement length must be a number.");
+        return true;
+      }
+      if (f.size() >= 11)
+        conn.compatibilityTag = f[10];
       st.blockDefs[static_cast<size_t>(di)].connections.push_back(std::move(conn));
       st.blockEditorDirty = true;
       log.push_back("BCONNECT — added connection \"" + f[0] + "\".");
@@ -2123,6 +2136,14 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     st.bconnectSizeBuf[0] = '\0';
     if (f.size() >= 2)
       std::snprintf(st.bconnectSizeBuf, sizeof(st.bconnectSizeBuf), "%s", f[1].c_str());
+    st.bconnectRolePending = CadBlockConnectionRole::Inlet;
+    if (f.size() >= 3)
+      st.bconnectRolePending = ParseCadBlockConnectionRole(f[2]);
+    st.bconnectEngagementPending = 0.f;
+    if (f.size() >= 4 && !TryParseF(f[3], st.bconnectEngagementPending)) {
+      log.push_back("BCONNECT — engagement length must be a number.");
+      return true;
+    }
     st.bconnectAwaitingFace = true;
     log.push_back("BCONNECT — pick a flat solid face for connection \"" + f[0] + "\".");
     return true;
@@ -2147,7 +2168,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       oss << "BCONNECTEDIT";
       for (const CadBlockConnection& c : def.connections)
         oss << "\n" << c.name << "," << c.nominalSize << "," << c.x << "," << c.y << "," << c.z << "," << c.nx << ","
-            << c.ny << "," << c.nz;
+            << c.ny << "," << c.nz << "," << CadBlockConnectionRoleTag(c.role) << "," << c.engagementLength << ","
+            << c.compatibilityTag;
       log.push_back(oss.str());
       return true;
     }
@@ -2162,10 +2184,55 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BCONNECTEDIT — removed \"" + f[0] + "\".");
       return true;
     }
+    CadBlockConnection& c = def.connections[static_cast<size_t>(ci)];
     if (f.size() >= 2)
-      def.connections[static_cast<size_t>(ci)].nominalSize = f[1];
+      c.nominalSize = f[1];
+    if (f.size() >= 3)
+      c.role = ParseCadBlockConnectionRole(f[2]);
+    if (f.size() >= 4 && !TryParseF(f[3], c.engagementLength)) {
+      log.push_back("BCONNECTEDIT — engagement length must be a number.");
+      return true;
+    }
+    if (f.size() >= 5)
+      c.compatibilityTag = f[4];
     st.blockEditorDirty = true;
     log.push_back("BCONNECTEDIT — updated \"" + f[0] + "\".");
+    return true;
+  }
+
+  if (tok == "blockfitting") {
+    if (st.blockEditorName.empty()) {
+      log.push_back("BLOCKFITTING — open a block with BEDIT first.");
+      return true;
+    }
+    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    if (di < 0)
+      return true;
+    CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    const std::vector<std::string> f = SplitCommaRest(args);
+    if (f.empty()) {
+      log.push_back("BLOCKFITTING — part=" +
+                    (def.partType == CadPipePartType::None ? std::string("(none)")
+                                                            : std::string(CadPipePartTypeTag(def.partType))) +
+                    " size=" + (def.nominalSize.empty() ? "(none)" : def.nominalSize) +
+                    " class=" + (def.pressureClass == CadPipePressureClass::None
+                                     ? std::string("(none)")
+                                     : std::string(CadPipePressureClassTag(def.pressureClass))) +
+                    " partNo=" + (def.partNumber.empty() ? "(none)" : def.partNumber));
+      log.push_back("BLOCKFITTING — usage: BLOCKFITTING <partType>[, <nominalSize>][, <pressureClass>]"
+                    "[, <partNumber>]. partType = elbow-90|elbow-45|tee|cross|reducer|flange|valve|"
+                    "coupling|cap|other|none.");
+      return true;
+    }
+    def.partType = CadBlockEqCi(f[0], "none") ? CadPipePartType::None : ParseCadPipePartType(f[0]);
+    if (f.size() >= 2)
+      def.nominalSize = f[1];
+    if (f.size() >= 3)
+      def.pressureClass = CadBlockEqCi(f[2], "none") ? CadPipePressureClass::None : ParseCadPipePressureClass(f[2]);
+    if (f.size() >= 4)
+      def.partNumber = f[3];
+    st.blockEditorDirty = true;
+    log.push_back("BLOCKFITTING — updated \"" + def.name + "\".");
     return true;
   }
 
