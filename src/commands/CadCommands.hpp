@@ -3912,6 +3912,11 @@ struct AppCommandState {
   bool insertBlockUniformScale = true;
   bool insertBlockExplode = false;
   bool insertBlockAttrDialogOpen = false;
+  /// Library pane filters (issue #486 increment A5). `None` = no filter on that axis. Size is a
+  /// free-text substring match against \ref CadBlockLibraryEntry::nominalSize.
+  CadPipePartType insertLibFilterPartType = CadPipePartType::None;
+  CadPipePressureClass insertLibFilterPressureClass = CadPipePressureClass::None;
+  char insertLibFilterSizeBuf[32]{};
   int insertBlockAttrRefIndex = -1;
   bool insertBlockAttrPaper = false;
   char insertBlockAttrBuf[8][128]{};

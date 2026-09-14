@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -63,6 +64,38 @@ void DrawInsertLibraryPreview(const AppCommandState& cmd, std::string_view block
   ImDrawList* dl = ImGui::GetWindowDrawList();
   for (const CadBlockWorldSeg& seg : segs)
     dl->AddLine(toPx(seg.x0, seg.y0), toPx(seg.x1, seg.y1), IM_COL32(40, 40, 40, 255), 1.f);
+  // Connection ports (issue #486 increment A5): same role coloring as the BEDIT gizmo, so the
+  // library preview shows where — and how — a fitting mates before it's placed.
+  const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+  for (const CadBlockConnection& c : def.connections) {
+    if (c.x < minX || c.x > maxX || c.y < minY || c.y > maxY)
+      continue;
+    ImU32 col = IM_COL32(90, 220, 120, 255);
+    if (c.role == CadBlockConnectionRole::Outlet)
+      col = IM_COL32(90, 160, 240, 255);
+    else if (c.role == CadBlockConnectionRole::Branch)
+      col = IM_COL32(240, 160, 60, 255);
+    dl->AddCircleFilled(toPx(c.x, c.y), 3.5f, col);
+  }
+}
+
+/// True when \p entry passes the library pane's part-type/pressure-class/size filters (issue
+/// #486 increment A5). A part-tagged-`None` (ordinary, non-fitting) entry always passes, so
+/// filters only ever narrow the fittings, never hide the rest of the library.
+[[nodiscard]] bool CadBlockLibraryEntryPassesFilter(const AppCommandState& cmd, const CadBlockLibraryEntry& entry) {
+  if (!entry.isFitting)
+    return true;
+  if (cmd.insertLibFilterPartType != CadPipePartType::None && entry.partType != cmd.insertLibFilterPartType)
+    return false;
+  if (cmd.insertLibFilterPressureClass != CadPipePressureClass::None &&
+      entry.pressureClass != cmd.insertLibFilterPressureClass)
+    return false;
+  const std::string sizeQuery = StringUtil::trimCopy(std::string(cmd.insertLibFilterSizeBuf));
+  if (!sizeQuery.empty() &&
+      StringUtil::toLowerAsciiCopy(entry.nominalSize).find(StringUtil::toLowerAsciiCopy(sizeQuery)) ==
+          std::string::npos)
+    return false;
+  return true;
 }
 
 } // namespace
@@ -144,12 +177,63 @@ void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) 
     return;
   }
 
+  // Library filters (issue #486 increment A5): part type / pressure class / nominal size. Only
+  // fitting entries are ever filtered out — ordinary blocks and drawing defs always show.
+  ImGui::TextUnformatted("Filter:");
+  ImGui::SameLine();
+  static const char* kPartTypeFilterChoices[] = {"(any part)",  "elbow-90", "elbow-45", "tee",   "cross",
+                                                  "reducer",     "flange",   "valve",    "coupling", "cap", "other"};
+  static const CadPipePartType kPartTypeFilterValues[] = {
+      CadPipePartType::None,  CadPipePartType::Elbow90, CadPipePartType::Elbow45, CadPipePartType::Tee,
+      CadPipePartType::Cross, CadPipePartType::Reducer, CadPipePartType::Flange,  CadPipePartType::Valve,
+      CadPipePartType::Coupling, CadPipePartType::Cap,  CadPipePartType::Other};
+  int partTypeIdx = 0;
+  for (int i = 0; i < static_cast<int>(std::size(kPartTypeFilterValues)); ++i) {
+    if (kPartTypeFilterValues[i] == cmd.insertLibFilterPartType) {
+      partTypeIdx = i;
+      break;
+    }
+  }
+  ImGui::SetNextItemWidth(120.f);
+  if (ImGui::BeginCombo("##InsLibFilterPart", kPartTypeFilterChoices[partTypeIdx])) {
+    for (int i = 0; i < static_cast<int>(std::size(kPartTypeFilterValues)); ++i) {
+      if (ImGui::Selectable(kPartTypeFilterChoices[i], partTypeIdx == i))
+        cmd.insertLibFilterPartType = kPartTypeFilterValues[i];
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::SameLine();
+  static const char* kClassFilterChoices[] = {"(any class)", "CS150", "CS300"};
+  static const CadPipePressureClass kClassFilterValues[] = {CadPipePressureClass::None, CadPipePressureClass::CS150,
+                                                             CadPipePressureClass::CS300};
+  int classIdx = 0;
+  for (int i = 0; i < static_cast<int>(std::size(kClassFilterValues)); ++i) {
+    if (kClassFilterValues[i] == cmd.insertLibFilterPressureClass) {
+      classIdx = i;
+      break;
+    }
+  }
+  ImGui::SetNextItemWidth(100.f);
+  if (ImGui::BeginCombo("##InsLibFilterClass", kClassFilterChoices[classIdx])) {
+    for (int i = 0; i < static_cast<int>(std::size(kClassFilterValues)); ++i) {
+      if (ImGui::Selectable(kClassFilterChoices[i], classIdx == i))
+        cmd.insertLibFilterPressureClass = kClassFilterValues[i];
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(80.f);
+  ImGui::InputTextWithHint("##InsLibFilterSize", "size", cmd.insertLibFilterSizeBuf,
+                           sizeof(cmd.insertLibFilterSizeBuf));
+
   ImGui::BeginChild("##InsertLibCols", ImVec2(0.f, 180.f), false);
   ImGui::BeginChild("##InsertLibList", ImVec2(ImGui::GetContentRegionAvail().x * 0.45f, 0.f), true);
   ImGui::TextUnformatted("Library");
   std::vector<CadBlockLibraryEntry> lib;
   CadBlocksCollectLibraryEntries(cmd, &lib);
   for (const CadBlockLibraryEntry& entry : lib) {
+    if (!CadBlockLibraryEntryPassesFilter(cmd, entry))
+      continue;
     const bool sel = CadBlockEqCi(entry.name, cmd.insertBlockName);
     std::string label = entry.name;
     if (entry.isFitting)
