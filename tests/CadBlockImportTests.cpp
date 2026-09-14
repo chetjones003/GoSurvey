@@ -1732,3 +1732,119 @@ TEST_CASE("UNION command folds a three-piece coaxial selection into one solid (i
   REQUIRE(st.cadSolids[0]);
   CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
 }
+
+// issue #495 / REQ-338 increment 338d-1 — coaxial composite stacks may include a conical (tapered)
+// segment. Found live testing 338c: a shaft with a straight-taper transition (a LOFT-built cone
+// unioned into an otherwise-cylindrical stack) still refused with Problem::BooleanCurvedFace because
+// ExtractCoaxialStack tolerated only Plane/Cylinder faces. Fixed by widening ExtractCoaxialStack /
+// BuildCoaxialStack / TryBooleanCoaxialStackUnion to carry a per-band (radius-at-z0, radius-at-z1)
+// pair instead of one constant radius, building a Cone wall when the pair differs (Cylinder,
+// unchanged, when it doesn't) — no new surface or curve type, ADR-045's kernel already has an exact
+// closed-form Cone.
+TEST_CASE("UNION merges a coaxial cylinder with a coaxial cone into one tapered stack "
+         "(issue #495 338d-1)",
+         "[issue495][boolean][brep]") {
+  brep::Problem why = brep::Problem::Ok;
+  ucs::Ucs fA;
+  fA.origin = brep::Vec3{0, 0, 0};
+  brep::Solid a;
+  REQUIRE(brep::MakeCylinder(fA, 2.0, 4.0, &a, &why));  // z[0,4] r2
+
+  ucs::Ucs fB;
+  fB.origin = brep::Vec3{0, 0, 4};
+  brep::Solid b;
+  REQUIRE(brep::MakeCone(fB, 2.0, 1.0, 3.0, &b, &why));  // z[4,7] tapers r2 -> r1
+
+  std::vector<brep::Solid> u;
+  const bool ok = brep::BooleanUnion(a, b, &u, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(u.size() == 1);
+  CHECK(brep::Validate(u[0]) == brep::Problem::Ok);
+
+  const double pi = 3.141592653589793;
+  const double cylVol = pi * 2.0 * 2.0 * 4.0;
+  const double coneVol = (pi * 3.0 / 3.0) * (2.0 * 2.0 + 2.0 * 1.0 + 1.0 * 1.0);  // frustum
+  const double vol = brep::ComputeMassProperties(u[0]).volume;
+  CHECK(vol == Catch::Approx(cylVol + coneVol).epsilon(1e-6));
+}
+
+TEST_CASE("UNION extends a cylinder+cone stack with a further coaxial cylinder "
+         "(issue #495 338d-1)",
+         "[issue495][boolean][brep]") {
+  brep::Problem why = brep::Problem::Ok;
+  ucs::Ucs fA;
+  fA.origin = brep::Vec3{0, 0, 0};
+  brep::Solid a;
+  REQUIRE(brep::MakeCylinder(fA, 2.0, 4.0, &a, &why));  // z[0,4] r2
+  ucs::Ucs fB;
+  fB.origin = brep::Vec3{0, 0, 4};
+  brep::Solid b;
+  REQUIRE(brep::MakeCone(fB, 2.0, 1.0, 3.0, &b, &why));  // z[4,7] r2 -> r1
+
+  std::vector<brep::Solid> u1;
+  REQUIRE(brep::BooleanUnion(a, b, &u1, &why));
+  REQUIRE(u1.size() == 1);
+  brep::Solid stack = std::move(u1[0]);  // cylinder + cone, no longer a single primitive
+
+  ucs::Ucs fC;
+  fC.origin = brep::Vec3{0, 0, 7};
+  brep::Solid c;
+  REQUIRE(brep::MakeCylinder(fC, 1.0, 2.0, &c, &why));  // z[7,9] r1 — matches the cone's narrow end
+
+  std::vector<brep::Solid> u2;
+  const bool ok = brep::BooleanUnion(stack, c, &u2, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(u2.size() == 1);
+  CHECK(brep::Validate(u2[0]) == brep::Problem::Ok);
+
+  const double pi = 3.141592653589793;
+  const double cylVol = pi * 2.0 * 2.0 * 4.0;
+  const double coneVol = (pi * 3.0 / 3.0) * (2.0 * 2.0 + 2.0 * 1.0 + 1.0 * 1.0);
+  const double tailVol = pi * 1.0 * 1.0 * 2.0;
+  const double vol = brep::ComputeMassProperties(u2[0]).volume;
+  CHECK(vol == Catch::Approx(cylVol + coneVol + tailVol).epsilon(1e-6));
+}
+
+TEST_CASE("SUBTRACT bores axially through a composite target that includes a tapered segment "
+         "(issue #495 338d-1)",
+         "[issue495][boolean][brep]") {
+  // 338a's own reasoning (SubtractCircleThrough/TryBoreThroughDirect never special-cases anything
+  // but the two outer planar faces) should already cover a target with a cone segment in the middle,
+  // once that target can even be BUILT via UNION (338d-1's own fix) — this locks that in.
+  AppCommandState st;
+  brep::Problem why = brep::Problem::Ok;
+
+  ucs::Ucs fA;
+  fA.origin = brep::Vec3{0.0, 0.0, 0.0};
+  brep::Solid a;
+  REQUIRE(brep::MakeCylinder(fA, 2.0, 4.0, &a, &why));  // z[0,4] r2
+  ucs::Ucs fB;
+  fB.origin = brep::Vec3{0.0, 0.0, 4.0};
+  brep::Solid b;
+  REQUIRE(brep::MakeCone(fB, 2.0, 1.0, 3.0, &b, &why));  // z[4,7] r2 -> r1
+
+  std::vector<brep::Solid> unioned;
+  REQUIRE(brep::BooleanUnion(a, b, &unioned, &why));
+  REQUIRE(unioned.size() == 1);
+  brep::Solid target = std::move(unioned[0]);
+  REQUIRE(brep::Validate(target) == brep::Problem::Ok);
+
+  // A drill well under the narrowest radius anywhere on the taper (r1 at the cone's top).
+  ucs::Ucs nubFrame;
+  ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame);
+  brep::Solid nub;
+  REQUIRE(brep::MakeCylinder(nubFrame, 0.5, 1.0, &nub, &why));
+
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(target)));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(nub)));
+
+  std::vector<std::string> log;
+  RunSubtractCommand(st, 0, 1, log);
+  for (auto& l : log) UNSCOPED_INFO(l);
+
+  REQUIRE(st.cadSolids.size() == 1);
+  REQUIRE(st.cadSolids[0]);
+  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+}
