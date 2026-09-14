@@ -6469,6 +6469,108 @@ capability that does not exist. They are recorded here rather than quietly dropp
   direction while accepting that only the decomposition increment above ships now — the same
   delivery-order reasoning REQ-314 itself used throughout ADR-046's increment list.
 
+### REQ-338 — General Boolean composability engine (GitHub issue #495, continues REQ-337)
+- Purpose: REQ-337 fixed one narrow direction of the composability gap it named as future work — a
+  coaxial, non-widening stepped-cylinder **cutter** against a simple target. Issue #495, filed while
+  verifying #493, found the same underlying limitation recurs in every direction: a composite
+  (multi-piece-union) **target** with a simple cutter, several cutters applied sequentially in one
+  command, and general multi-solid selections on either side of UNION/SUBTRACT/INTERSECT all still
+  refuse with `Problem::BooleanCurvedFace` whenever an intermediate operand or fold result isn't one
+  of REQ-314's named single-primitive-pair configurations. REQ-338 records the increment order for
+  closing this gap, ending with the general classification-based engine REQ-337 named but explicitly
+  deferred.
+- Priority: should
+- Type: functional
+- Depends on: REQ-314 (the recogniser-per-configuration Boolean architecture, its `Problem::` refusal
+  contract, and every named `TryBoolean*` recogniser); REQ-337 (the coaxial-cutter decomposition
+  pattern increments 338a/338b/338c generalize); REQ-101 (±0.01 ft); REQ-201 (no silent failure — a
+  refusal is named, the document untouched); REQ-300 (no new third-party dependency); ADR-045 (no
+  `Solid` invariant bent to make any increment land).
+- Statement: General Boolean composability ships as four ordered increments, each independently
+  shippable and each its own verification pass, in this order:
+  - **338a — Composite target, simple cutter** (issue #495 Case A). A plain circle/uniform-cylinder
+    cutter subtracted through a target that is itself a coaxial, non-narrowing union of cylindrical
+    pieces (e.g. a necked/flanged shaft) produces one valid bore, instead of `TryBoreThroughDirect`
+    refusing because it only checks clearance at the two outer planar faces and never verifies the
+    drill path stays inside solid material along its whole length. Mirrors REQ-337's decomposition
+    pattern, applied to the target side.
+  - **338b — Sequential same-command cutters** (Case B). `CommitBoolean`'s SUBTRACT fold
+    (`FoldBoolean`, `CadCommands.cpp`) already applies multiple selected cutters one at a time, but
+    each cut lands in the solid the previous cut produced; a cutter placed near an existing cut must
+    not hit the "target already carries an inward face nearby" refusal the way a naive per-piece
+    retry did during #493's investigation (PR #494). Concretely: several bolt holes cut into one
+    flange face in a single SUBTRACT must all succeed.
+  - **338c — General multi-solid folding** (Case C). Extends 338a/338b's robustness so `FoldBoolean`
+    folding an arbitrary multi-solid selection on either side of UNION/SUBTRACT/INTERSECT succeeds
+    whenever every individual piece is independently resolvable, not only in the coaxial/sequential
+    special cases 338a/338b name.
+  - **338d — General classification-based engine** (Case D, the direction REQ-337 named and
+    deferred). Arbitrary curved solid vs. arbitrary curved solid — cones, spheres, tori, skew/oblique
+    axes, any prior-Boolean history on either operand — via true surface-pair intersection curves,
+    face classification of each operand against the other, trim, and re-stitch: full split/classify/
+    merge CSG, not a per-configuration recogniser or decomposition. This is a multi-session kernel
+    undertaking on the scale of REQ-314's B1 through B2b-2 combined; 338d is recorded here as the
+    named future direction only. It needs its own sub-ADR (mirroring how B2b got one inside ADR-046)
+    before any of it is implemented, and is not accepted as a concrete design by this requirement.
+  Acceptance (338a–338c; 338d is out of scope for acceptance until its own sub-ADR lands):
+  - **338a**: the necked/flanged-shaft repro from issue #495 Case A subtracts as one valid bore;
+    REQ-101 volume/area agreement holds; a target piece that genuinely can't carry the bore (drill
+    radius exceeds the narrowest point) still refuses by name (REQ-201), not silently.
+  - **338b**: a multi-hole SUBTRACT (e.g. 4+ bolt holes in one flange, adjacent holes included)
+    completes as one undo step with every hole present; an individually-unresolvable cutter still
+    refuses by name without touching the document.
+  - **338c**: every REQ-314/REQ-337 test that passes today keeps passing unchanged (composability
+    increments are additive, never a rewrite of an existing recogniser); a general multi-solid
+    selection succeeds whenever 338a/338b/existing REQ-314 recognisers can resolve every piece.
+  - Every increment stays one undoable step, `.gs` round-trips unchanged (no new `Solid` field, no
+    `kGsFormatVersion` bump — composability results are topology exactly like any other Boolean
+    result).
+- Scope boundaries, stated rather than left silent:
+  - **338a–338c do not add any new geometric capability** — no new curved-pair configuration is
+    recognised that REQ-314 doesn't already handle for a single primitive pair. They only make
+    existing recognisers reachable through decomposition/folding when an operand or intermediate
+    result is a composite of pieces each individually already resolvable.
+  - **338d is not scoped by this requirement.** Its acceptance criteria, delivery increments, and
+    kernel design are deferred to a future sub-ADR, the same way B2b was carved out inside ADR-046
+    rather than designed up front.
+  - **Non-cylinder composite pieces** (cone/sphere/torus segments joined into one operand) remain out
+    of scope through 338a–338c, matching REQ-337's own boundary — only cylindrical pieces decompose
+    until 338d.
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`) for decomposition/folding logic; Commands
+  (`src/commands/CadCommands.cpp`) for wiring each increment into `CommitBoolean`/`FoldBoolean`.
+- Status: **accepted (2026-09-14)** — D-2026-09-14-b. **338a verified satisfied by existing code
+  (2026-09-14)** — see revision below; 338b–338d remain open.
+- Revisions:
+  - 2026-09-14 — proposed and accepted as written (D-2026-09-14-b). Filed from issue #495
+    (found while verifying issue #493); increment order 338a → 338b → 338c → 338d confirmed by the
+    user as proposed, with 338d recorded as a named future direction rather than a committed design —
+    the same delivery-order reasoning ADR-046 used throughout REQ-314's increment list.
+  - 2026-09-14 — **338a investigated and found already satisfied for its literal acceptance
+    criterion.** `SubtractCircleThrough`/`TryBoreThroughDirect` never special-cases the two end
+    faces — it scans `base.faces` for whichever pair of planar faces the drill axis meets and adds
+    tunnel geometry between them, so an untouched internal step boundary in between was never
+    consulted in the first place; `BuildBore`'s own `Validate`/`SelfIntersects` call already refuses
+    correctly (not silently) when the drill is too wide for the narrowest section. Confirmed with two
+    new regression tests in `tests/CadBlockImportTests.cpp` — "SUBTRACT bores axially through a
+    composite coaxial target" and "SUBTRACT still refuses when the bore is wider than the narrow
+    section" (issue #495 338a) — both passing against the existing, unmodified kernel. No code
+    change was needed or made for this acceptance criterion.
+  - 2026-09-14 — **A different, unaddressed gap found during the same investigation, out of scope
+    for 338a as written and NOT fixed by this revision**: a **radial** cross-hole cutter (axis
+    perpendicular to the stack's own axis, entering/exiting through the curved wall of a single
+    segment, touching no other segment) still refuses with `Problem::BooleanCurvedFace`, because
+    `TryBooleanCurved`'s dispatch requires the whole target to classify as one bare cylinder
+    (`ClassifyCylinder`) or be `AllFacesPlanar` — a multi-segment stack is neither. Unlike the axial
+    case, fixing this needs a genuine "isolate one segment, cut it, stitch it back into one manifold
+    solid with its untouched neighbours" capability that does not exist anywhere in the kernel today
+    (checked: `WeldPlanarSolid` only merges flat polygon fragments from the planar clipper, not
+    general B-rep shells) — real, multi-session kernel work carrying the same silent-wrong-topology
+    risk (REQ-201) that justified deferring 338d rather than designing it up front. The user was
+    offered (a) implement it now accepting that risk, (b) scope it properly first, or (c) ship only
+    the confirmed axial case, and chose (b). Filed as GitHub issue #497 for its own future scoping
+    pass; not folded into 338a, 338b, or 338c as written above, since none of their acceptance
+    criteria name the radial case.
+
 ### REQ-315 — Sweep and loft on the solid kernel (GitHub issue #147, split from REQ-314)
 - Purpose: issue #147's acceptance names sweep and loft alongside extrude and revolve. A general
   swept or lofted surface is a freeform surface that REQ-313's original kernel — five analytic
