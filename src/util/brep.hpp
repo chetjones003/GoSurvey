@@ -5,6 +5,7 @@
 #include "ucs.hpp"
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 /// The boundary-representation solid kernel (REQ-313 / ADR-045, GitHub issue #146 — Phase 3 of #120).
@@ -880,6 +881,20 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 /// cutter always punches clean through regardless of where the circle sits.
 [[nodiscard]] bool SubtractCircleThrough(const Solid& base, const Vec3& centre, const Vec3& normal,
                                         double radius, Solid* out, Problem* outWhy);
+
+/// Stepped/shouldered coaxial through-bore in one pass (issue #493 / REQ-337 — a composite-operand
+/// SUBTRACT, e.g. a stepped shaft/counterbore). \p radii is one entry per segment, entry-to-exit
+/// order along \p nHat, and must be **non-increasing** (the wide end faces the entry) — a widening
+/// sequence is refused. \p internalShoulders is the absolute world position of each radius change
+/// (size `radii.size() - 1`) — the true boundary between two cylinder pieces in the caller's own
+/// cutter solid, NOT a length: the entry and exit segments are clipped to wherever this function
+/// itself finds the target's own planar faces, which will generally sit inside the cutter's own
+/// overhanging extent (a through-cutter is deliberately longer than what it bores, same as every
+/// other through-bore builder here already assumes).
+[[nodiscard]] bool TrySteppedBoreThroughDirect(const Solid& base, const Vec3& centre, const Vec3& nHat,
+                                              const std::vector<double>& radii,
+                                              const std::vector<Vec3>& internalShoulders, Solid* out,
+                                              Problem* outWhy);
 
 // ---------------------------------------------------------------------------------------------
 // Validity.

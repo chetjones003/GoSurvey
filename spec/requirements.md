@@ -6398,6 +6398,77 @@ capability that does not exist. They are recorded here rather than quietly dropp
   dimple, counterbore) and B2b (general analytic intersection curve — ellipse / quartic). The
   curved-SUBTRACT acceptance lines deferred by D-2026-09-02-b are met in B2a. ADR-045 (d) amended.
 
+### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
+- Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
+  work tracked on #242/#283) already recognise a wide set of *single-primitive-pair* curved
+  configurations by name — coaxial cylinder∩box, Steinmetz (equal-radius perpendicular cylinders),
+  the general tilted/skew branch-pipe family (unequal-radius cylinder∩cylinder at any pose), and the
+  centred sphere∩cylinder intersection. What none of those recognisers handle is an operand that is
+  itself a **union of two or more already-recognised primitive shapes** — a stepped/shouldered shaft
+  (two coaxial cylinders of different radius joined end-to-end), for instance — which today falls
+  straight through every `TryBoolean*` recogniser and refuses with `Problem::BooleanCurvedFace`, even
+  though every individual piece of it, taken alone, already has a working code path. GitHub issue
+  #493 filed this gap; the user asked for it to be scoped as a step toward eventual general
+  any-curved-solid-vs-any-curved-solid support rather than a one-off patch.
+- Priority: should
+- Type: functional
+- Depends on: REQ-314 (the recogniser-per-configuration Boolean architecture and its `Problem::`
+  refusal contract; every increment below reuses `TryBooleanSteinmetz`, `TryBooleanBranchPipe`,
+  `TryBooleanSphereCylinder`, `TryBooleanCylinderThroughPlanar`, and the rest of REQ-314's named
+  recognisers exactly as they stand today — this requirement decomposes an operand down to the
+  primitives those recognisers already accept, it does not replace them).
+- Constraints in force: REQ-101 (±0.01 ft), REQ-201 (no silent failure — a refusal is named, the
+  document is untouched), REQ-300 (no new third-party dependency), ADR-045 (no `Solid` invariant
+  bent to make this land).
+
+- Statement: Boolean operand resolution gains a **decomposition step** that runs before a pairwise
+  `TryBoolean*` recogniser is asked to refuse. A solid whose own construction history (or, absent
+  that, its topology) shows it to be the union of two or more solids each individually recognised by
+  an existing REQ-314 `TryBoolean*` case is decomposed into that sequence of pieces, and the
+  requested operation (UNION / SUBTRACT / INTERSECT) is applied against each piece in turn — folding
+  left, exactly as `FoldBoolean` (`src/commands/CadCommands.cpp`) already folds a multi-solid
+  selection today, just applied one level deeper, to a single operand's own internal structure.
+  Acceptance:
+  - **A stepped coaxial cylindrical cutter subtracts as a compound through-hole.** Two (or more)
+    cylinders sharing one axis, unioned end-to-end into one solid (a shouldered shaft, a
+    counterbored-from-both-sides pin), subtracted from a planar or box-like target, produces one
+    valid closed result — each step bored through in sequence, not refused as a single opaque
+    curved solid.
+  - **A refusal is still named and the document is untouched** when any piece of the decomposition
+    cannot itself be resolved by an existing recogniser (REQ-201) — decomposition narrows what gets
+    refused, it does not add a new silent-failure path.
+  - **Every operation stays one undoable step**, `.gs` round-trips unchanged (no new `Solid` field,
+    no `kGsFormatVersion` bump — a decomposed result is topology exactly like any other Boolean
+    result), and REQ-101 volume/area agreement holds on the folded result.
+  - **A single-primitive cutter is unaffected** — decomposition is a no-op when the cutter already
+    matches one existing recogniser directly; every REQ-314/#242/#283 test that passes today keeps
+    passing unchanged.
+- Scope boundaries, stated rather than left silent:
+  - **This is not a general classification-based Boolean engine.** A true "any curved solid against
+    any other curved solid" engine would compute arbitrary surface-pair intersection curves, classify
+    every face of both operands against the other solid, trim, and re-stitch — full split/classify/
+    merge CSG, not a per-configuration recogniser. That is a multi-session kernel undertaking on the
+    scale of REQ-314's B1 through B2b-2 combined (each of which was its own task and PR), and was
+    explicitly discussed with and chosen by the user (2026-09-14) as the eventual direction — but it
+    is **not** implemented by this requirement, which covers ONLY the decomposition-of-a-known-union
+    case above. A future requirement (REQ-338 or later, unassigned as of this writing) would need to
+    scope that engine the way ADR-046 scoped REQ-314 itself: sliced into named increments, each its
+    own accepted requirement, in delivery order chosen so a working, verifiable Boolean ships at
+    every step rather than attempting the whole engine at once.
+  - **Non-coaxial composite operands** (two cylinders at different angles unioned into one cutter,
+    for instance) are not decomposed by this requirement — only a coaxial stepped stack, the concrete
+    case #493 was filed against. A skew or oblique composite cutter still refuses by name.
+  - **Cone, sphere, and torus pieces inside a composite operand** are out of scope here; only
+    cylinder pieces (the shape REQ-314's existing recognisers cover most completely) decompose.
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`) for decomposition; Commands
+  (`src/commands/CadCommands.cpp`) for wiring it into `CommitBoolean`'s existing fold.
+- Status: **accepted (2026-09-14)** — D-2026-09-14-a.
+- Revisions: 2026-09-14 — proposed and accepted as written (D-2026-09-14-a). Filed from issue #493
+  (found while verifying issue #486); the user was offered a narrower "coaxial decomposition only"
+  scope and a full general-engine scope, and chose to record the full engine as the eventual
+  direction while accepting that only the decomposition increment above ships now — the same
+  delivery-order reasoning REQ-314 itself used throughout ADR-046's increment list.
+
 ### REQ-315 — Sweep and loft on the solid kernel (GitHub issue #147, split from REQ-314)
 - Purpose: issue #147's acceptance names sweep and loft alongside extrude and revolve. A general
   swept or lofted surface is a freeform surface that REQ-313's original kernel — five analytic

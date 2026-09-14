@@ -7895,6 +7895,137 @@ struct BossStub {
   return Succeed(outWhy);
 }
 
+/// \p planar with a **stepped, coaxial, through** bore removed in one pass — a shouldered/counter-
+/// bored hole (issue #493 / REQ-337), generalizing \ref BuildBore's single-radius tunnel to an
+/// ordered list of radius/length segments along one axis. Scoped to a **non-increasing** radius
+/// sequence from entry to exit (the wide end always faces the entry, narrowing or holding steady
+/// deeper in — a real counterbore/shouldered-pin shape) so every internal transition's shoulder
+/// ring has one, unambiguous, always-correct winding; a widening sequence is the caller's job to
+/// refuse before calling this (REQ-337's own scope boundary, not a bug here).
+///
+/// `BuildBore`'s sequential-cut alternative — subtracting each segment's own cylinder one at a time
+/// into the solid the previous cut already produced — was tried first and found to be unreliable:
+/// the general Boolean classifier that \ref SubtractCircle ultimately calls refuses once the target
+/// already carries an inward cylindrical face from a prior cut nearby, which is exactly every
+/// internal segment boundary. Building the whole stepped tunnel's topology directly, the same way
+/// \ref BuildBore already does for one radius, sidesteps that composability gap entirely.
+/// \p radii has N entries (one per segment); \p internalShoulders has N-1 **absolute** positions,
+/// entry-to-exit order — the true world point of each radius change, independent of where the
+/// cutter's OWN geometry started or ended (the entry/exit segments are clipped to \p entryC / the
+/// found exit point, which will generally sit inside the cutter's own overhanging extent — a
+/// through-cutter is deliberately longer than the target it bores, exactly like every other bore
+/// builder here already assumes). Passing lengths instead of absolute shoulder positions was the
+/// first attempt and was wrong for exactly this reason: it silently used the cutter's OWN full
+/// segment length as the entry segment's cut depth, which is longer than the target actually needs
+/// wherever the cutter overhangs the entry face — REQ-337.
+[[nodiscard]] bool BuildSteppedBore(const Solid& planar, int entryFace, const Vec3& entryC,
+                                    const Vec3& nEntry, const std::vector<double>& radii,
+                                    const std::vector<Vec3>& internalShoulders, int exitFace,
+                                    const Vec3& exitC, Solid* out, Problem* outWhy) {
+  if (radii.empty() || internalShoulders.size() + 1 != radii.size())
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  for (size_t i = 1; i < radii.size(); ++i) {
+    if (radii[i] > radii[i - 1] + 1e-9)
+      return Fail(Problem::BooleanCurvedFace, outWhy);  // widening — outside this builder's scope
+  }
+  const Vec3 nE = ray3d::Normalize(nEntry);
+  const Vec3 dir = ray3d::Scale(nE, -1.0);  // into the solid, entry toward exit
+  Solid s = planar;
+  s.recipe = Recipe{};
+  Vec3 xa = s.faces[static_cast<std::size_t>(entryFace)].surface.frame.xAxis;
+  xa = ray3d::Sub(xa, ray3d::Scale(nE, ray3d::Dot(xa, nE)));
+  if (!(ray3d::Length(xa) > 1e-9))
+    xa = s.faces[static_cast<std::size_t>(entryFace)].surface.frame.yAxis;
+  xa = ray3d::Normalize(xa);
+
+  const size_t N = radii.size();
+  std::vector<Vec3> boundary(N + 1);
+  boundary[0] = entryC;
+  for (size_t i = 0; i + 1 < N; ++i)
+    boundary[i + 1] = internalShoulders[i];
+  boundary[N] = exitC;
+  std::vector<std::pair<double, double>> segs(N);
+  for (size_t i = 0; i < N; ++i) {
+    segs[i].first = radii[i];
+    segs[i].second = ray3d::Length(ray3d::Sub(boundary[i + 1], boundary[i]));
+    if (!(segs[i].first > 0.0) || !(segs[i].second > 1e-9))
+      return Fail(Problem::BooleanResultInvalid, outWhy);
+  }
+
+  struct Rim {
+    int v0 = -1, v1 = -1, arcFwd = -1, arcBack = -1;
+  };
+  auto makeRim = [&](const Vec3& c, double r) -> Rim {
+    Rim rim;
+    rim.v0 = AddVertex(&s, ray3d::Add(c, ray3d::Scale(xa, r)));
+    rim.v1 = AddVertex(&s, ray3d::Add(c, ray3d::Scale(xa, -r)));
+    rim.arcFwd = AddArc(&s, rim.v0, rim.v1, c, nE, kPi);
+    rim.arcBack = AddArc(&s, rim.v1, rim.v0, c, nE, kPi);
+    return rim;
+  };
+
+  const Rim entryRim = makeRim(boundary[0], segs[0].first);
+  s.faces[static_cast<std::size_t>(entryFace)].loops.push_back(
+      Loop{{{entryRim.arcBack, true}, {entryRim.arcFwd, true}}});
+  const Rim exitRim = makeRim(boundary[N], segs[N - 1].first);
+  s.faces[static_cast<std::size_t>(exitFace)].loops.push_back(
+      Loop{{{exitRim.arcFwd, false}, {exitRim.arcBack, false}}});
+
+  Rim prevRim = entryRim;
+  double prevRadius = segs[0].first;
+  for (size_t i = 0; i < N; ++i) {
+    const double r = segs[i].first;
+    Rim nearRim;
+    if (i == 0) {
+      nearRim = prevRim;
+    } else if (std::fabs(prevRadius - r) < 1e-9) {
+      nearRim = prevRim;
+    } else {
+      nearRim = makeRim(boundary[i], r);
+      // Shoulder ring at boundary[i]: outer boundary at the WIDER (previous) radius, a hole at
+      // this (narrower) radius. True outward normal is nE — the same "back toward entry" side as
+      // the entry face itself, so the outer loop takes the OPPOSITE winding from a hole loop on a
+      // same-normal face (entry's own hole above is reversed, so a brand-new face's own outer
+      // boundary here is forward).
+      Face shoulder = MakePlaneFace(boundary[i], nE, {{prevRim.arcFwd, false}, {prevRim.arcBack, false}});
+      shoulder.loops.push_back(Loop{{{nearRim.arcBack, true}, {nearRim.arcFwd, true}}});
+      s.faces.push_back(std::move(shoulder));
+    }
+    const Rim farRim = (i + 1 == N) ? exitRim : makeRim(boundary[i + 1], r);
+    const int sm0 = AddLine(&s, nearRim.v0, farRim.v0);
+    const int sm1 = AddLine(&s, nearRim.v1, farRim.v1);
+    auto wallFace = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+      Face fc;
+      fc.surface.kind = SurfaceKind::Cylinder;
+      fc.surface.frame.origin = boundary[i];
+      fc.surface.frame.xAxis = xa;
+      fc.surface.frame.yAxis = ray3d::Normalize(ray3d::Cross(dir, xa));
+      fc.surface.frame.zAxis = dir;
+      fc.surface.radius = r;
+      fc.surface.radius2 = r;
+      fc.surface.height = segs[i].second;
+      fc.surface.inward = true;
+      fc.uStart = u0;
+      fc.uEnd = u1;
+      Loop lp;
+      lp.uses = std::move(uses);
+      fc.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(fc));
+    };
+    wallFace(0.0, kPi, {{nearRim.arcFwd, false}, {sm1, false}, {farRim.arcFwd, true}, {sm0, true}});
+    wallFace(kPi, kTwoPi, {{nearRim.arcBack, false}, {sm0, false}, {farRim.arcBack, true}, {sm1, true}});
+    prevRim = farRim;
+    prevRadius = r;
+  }
+
+  for (int i = static_cast<int>(planar.faces.size()); i < static_cast<int>(s.faces.size()); ++i)
+    s.shells[0].faces.push_back(i);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// The ellipse where a plane (through \p planePt, unit normal \p pn) cuts the cylinder of radius
 /// \p r about \p axisFrame. Fills the world centre / major direction / oriented normal / semi-axes.
 struct CylEllipse {
@@ -12471,6 +12602,89 @@ bool TryBoreThroughDirect(const Solid& base, const Vec3& centre, const Vec3& nHa
   if(!haveEntry || !haveExit) return false;
   Solid r;
   if(!BuildBore(base, entry.face, entry.point, entry.n, radius, true, exitH.face, exitH.point, 0, &r, outWhy)) return false;
+  *out = std::move(r);
+  return true;
+}
+
+/// \ref TryBoreThroughDirect's own entry/exit planar-face search, generalized to a stepped bore
+/// (issue #493 / REQ-337): the entry side is cleared against \p radii.front() (the widest, by
+/// \ref BuildSteppedBore's own non-increasing scope) and the exit side against \p radii.back().
+/// \p internalShoulders is the same absolute-position list \ref BuildSteppedBore takes — the found
+/// entry/exit hit points become \p entryC / the exit point passed on to it, never the caller's own
+/// (possibly overhanging) cutter extent.
+bool TrySteppedBoreThroughDirect(const Solid& base, const Vec3& centre, const Vec3& nHat,
+                                 const std::vector<double>& radii,
+                                 const std::vector<Vec3>& internalShoulders, Solid* out,
+                                 Problem* outWhy) {
+  if (radii.empty() || internalShoulders.size() + 1 != radii.size())
+    return false;
+  const double entryRadius = radii.front();
+  const double exitRadius = radii.back();
+  double scale = 0;
+  for (auto &v: base.vertices) scale = std::max(scale, std::fabs(v.p.x)+std::fabs(v.p.y)+std::fabs(v.p.z));
+  scale = std::max(scale, std::max(entryRadius, exitRadius)+1.0);
+  double eps = 1e-7 * std::max(scale, 1.0);
+  struct Hit { int face=-1; Vec3 point; Vec3 n; };
+  Hit entry, exitH;
+  bool haveEntry=false, haveExit=false;
+  for (int fi=0; fi<(int)base.faces.size(); ++fi){
+    const Face& f = base.faces[static_cast<size_t>(fi)];
+    if (f.surface.kind != SurfaceKind::Plane) continue;
+    Vec3 n = f.surface.frame.zAxis;
+    double dn = ray3d::Dot(n, nHat);
+    if (std::fabs(std::fabs(dn)-1.0) > 1e-6) continue;
+    const double radius = dn < 0 ? entryRadius : exitRadius;  // which side this face could be
+    bool isDisk=false; Vec3 diskC{}; double diskR=0;
+    std::vector<Vec3> ring = FaceRing(base, f);
+    if (ring.size() < 3){
+      if (f.loops.size()>=1 && f.loops[0].uses.size()==2){
+        const Edge& e0 = base.edges[static_cast<size_t>(f.loops[0].uses[0].edge)];
+        const Edge& e1 = base.edges[static_cast<size_t>(f.loops[0].uses[1].edge)];
+        if (e0.kind==CurveKind::Arc && e1.kind==CurveKind::Arc && std::fabs(e0.radius-e1.radius)<1e-9*std::max(e0.radius,1.0) && ray3d::Length(ray3d::Sub(e0.frame.origin,e1.frame.origin))<1e-9*std::max(e0.radius,1.0)){
+          isDisk=true; diskC=e0.frame.origin; diskR=e0.radius;
+        }
+      }
+      if(!isDisk) continue;
+    }
+    Vec3 hp;
+    if (isDisk){
+      double t = ray3d::Dot(ray3d::Sub(diskC, centre), n) / dn;
+      hp = ray3d::Add(centre, ray3d::Scale(nHat, t));
+      double d = ray3d::Length(ray3d::Sub(hp, diskC));
+      if (d > diskR + eps) continue;
+      if (diskR - d < radius + eps) continue;
+      bool insideHole=false;
+      for(size_t li=1; li<f.loops.size(); ++li){
+        if(f.loops[li].uses.size()!=2) continue;
+        const Edge& he0 = base.edges[static_cast<size_t>(f.loops[li].uses[0].edge)];
+        const Edge& he1 = base.edges[static_cast<size_t>(f.loops[li].uses[1].edge)];
+        if(he0.kind!=CurveKind::Arc || he1.kind!=CurveKind::Arc) continue;
+        Vec3 hc = he0.frame.origin; double hr = he0.radius;
+        double hd = ray3d::Length(ray3d::Sub(hp, hc));
+        if(hd < hr + radius + eps){ insideHole=true; break; }
+      }
+      if(insideHole) continue;
+    } else {
+      double t = ray3d::Dot(ray3d::Sub(ring[0], centre), n) / dn;
+      hp = ray3d::Add(centre, ray3d::Scale(nHat, t));
+      bool onEdge=false;
+      if(!PointInPolygon3D(hp, ring, n, eps, &onEdge)) continue;
+      double clr = std::numeric_limits<double>::max();
+      for(size_t i=0;i<ring.size();++i){
+        Vec3 p0=ring[i], p1=ring[(i+1)%ring.size()];
+        Vec3 e=ray3d::Sub(p1,p0); double len2=ray3d::Dot(e,e);
+        double u=len2>1e-24 ? ray3d::Dot(ray3d::Sub(hp,p0),e)/len2 : 0; u=std::clamp(u,0.0,1.0);
+        clr=std::min(clr, ray3d::Length(ray3d::Sub(hp, ray3d::Add(p0, ray3d::Scale(e,u)))));
+      }
+      if(clr < radius + eps) continue;
+    }
+    Hit h; h.face=fi; h.point=hp; h.n=n;
+    if(dn < 0){ if(!haveEntry){ entry=h; haveEntry=true; } } else { if(!haveExit){ exitH=h; haveExit=true; } }
+  }
+  if(!haveEntry || !haveExit) return false;
+  Solid r;
+  if(!BuildSteppedBore(base, entry.face, entry.point, entry.n, radii, internalShoulders, exitH.face,
+                       exitH.point, &r, outWhy)) return false;
   *out = std::move(r);
   return true;
 }

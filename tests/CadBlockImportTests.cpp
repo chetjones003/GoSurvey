@@ -995,3 +995,107 @@ TEST_CASE("INSERT explode copies block solid into cadSolids", "[issue475][block]
   CHECK(bb.mn.z == Catch::Approx(5.0).margin(0.05));
 }
 
+// issue #493 / REQ-337 — drives the real two-phase SUBTRACT command flow (StartBooleanCommand /
+// HandleBooleanTextInput), the same path a user's click-select-Enter-select-Enter takes, since the
+// retry-on-refusal wiring itself lives in an internal-linkage CommitBoolean inside CadCommands.cpp
+// and isn't reachable directly from another translation unit.
+void RunSubtractCommand(AppCommandState& st, int minuendSolidIdx, int subtrahendSolidIdx,
+                        std::vector<std::string>& log) {
+  StartBooleanCommand(st, CadBooleanOp::Subtract, log);
+  SelectedEntity minuend;
+  minuend.type = SelectedEntity::Type::Solid;
+  minuend.index = minuendSolidIdx;
+  st.selection = {minuend};
+  REQUIRE(HandleBooleanTextInput("", st, log));
+  SelectedEntity subtrahend;
+  subtrahend.type = SelectedEntity::Type::Solid;
+  subtrahend.index = subtrahendSolidIdx;
+  st.selection = {subtrahend};
+  REQUIRE(HandleBooleanTextInput("", st, log));
+}
+
+TEST_CASE("SUBTRACT bores a stepped coaxial cylinder stack through a flange", "[issue493][boolean][brep]") {
+  // A 10x10x4 flange (z 0..4) and a two-step shaft coaxial on Z: the wide step (r 1.5) spans
+  // z[-1,2], the narrow step (r 1.0) continues z[2,6] — so the flange sees r 1.5 for z[0,2] and
+  // r 1.0 for z[2,4], a genuine counterbore-shaped compound cutter, not a single primitive.
+  AppCommandState st;
+  brep::Problem why = brep::Problem::Ok;
+  brep::Solid flange;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 10.0, 10.0, 4.0, &flange, &why));
+
+  ucs::Ucs wideFrame;
+  wideFrame.origin = brep::Vec3{0.0, 0.0, -1.0};
+  brep::Solid wide;
+  REQUIRE(brep::MakeCylinder(wideFrame, 1.5, 3.0, &wide, &why));  // z[-1,2]
+
+  ucs::Ucs narrowFrame;
+  narrowFrame.origin = brep::Vec3{0.0, 0.0, 2.0};
+  brep::Solid narrow;
+  REQUIRE(brep::MakeCylinder(narrowFrame, 1.0, 4.0, &narrow, &why));  // z[2,6]
+
+  std::vector<brep::Solid> unioned;
+  REQUIRE(brep::BooleanUnion(wide, narrow, &unioned, &why));
+  REQUIRE(unioned.size() == 1);
+  brep::Solid shaft = std::move(unioned[0]);
+
+  // A single-cylinder cutter (TryGetCylinderInfo's own case) still fails the direct kernel call
+  // the same way — confirms the fixture setup, not the new decomposition, produced this refusal.
+  std::vector<brep::Solid> direct;
+  REQUIRE_FALSE(brep::BooleanSubtract(flange, shaft, &direct, &why));
+  CHECK(why == brep::Problem::BooleanCurvedFace);
+
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(shaft)));
+
+  std::vector<std::string> log;
+  RunSubtractCommand(st, 0, 1, log);
+
+  REQUIRE(st.cadSolids.size() == 1);
+  REQUIRE(st.cadSolids[0]);
+  CHECK(brep::Validate(*st.cadSolids[0]) == brep::Problem::Ok);
+  // Removed: r1.5 across z[0,2] (2 ft) + r1.0 across z[2,4] (2 ft).
+  const double removed = 3.141592653589793 * (1.5 * 1.5 * 2.0 + 1.0 * 1.0 * 2.0);
+  const double vol = brep::ComputeMassProperties(*st.cadSolids[0]).volume;
+  CHECK(vol == Catch::Approx(400.0 - removed).epsilon(1e-6));
+}
+
+TEST_CASE("SUBTRACT still refuses a widening coaxial composite cutter by name", "[issue493][boolean][brep]") {
+  // Same coaxial two-cylinder union as the success case above, but with the radii swapped — narrow
+  // (r 1.0) at the entry end, wide (r 1.5) continuing deeper. REQ-337's own scope boundary is a
+  // NON-increasing radius sequence (the wide end faces the entry, a real counterbore); a widening
+  // stack must still refuse by name, not silently misbehave or produce a wrong result.
+  AppCommandState st;
+  brep::Problem why = brep::Problem::Ok;
+  brep::Solid flange;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 10.0, 10.0, 4.0, &flange, &why));
+
+  ucs::Ucs aFrame;
+  aFrame.origin = brep::Vec3{0.0, 0.0, -1.0};
+  brep::Solid a;
+  REQUIRE(brep::MakeCylinder(aFrame, 1.0, 3.0, &a, &why));  // z[-1,2], narrow
+
+  ucs::Ucs bFrame;
+  bFrame.origin = brep::Vec3{0.0, 0.0, 2.0};
+  brep::Solid b;
+  REQUIRE(brep::MakeCylinder(bFrame, 1.5, 4.0, &b, &why));  // z[2,6], wide — widening from a
+
+  std::vector<brep::Solid> unioned;
+  REQUIRE(brep::BooleanUnion(a, b, &unioned, &why));
+  REQUIRE(unioned.size() == 1);
+
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(flange)));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(unioned[0])));
+
+  std::vector<std::string> log;
+  RunSubtractCommand(st, 0, 1, log);
+
+  // Refused: both solids are untouched (still 2 in the array, geometry unchanged).
+  REQUIRE(st.cadSolids.size() == 2);
+  bool refused = false;
+  for (const std::string& line : log) {
+    if (line.find("cannot combine these curved solids") != std::string::npos)
+      refused = true;
+  }
+  CHECK(refused);
+}
+
