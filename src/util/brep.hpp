@@ -869,6 +869,18 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 [[nodiscard]] bool BooleanSubtract(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy);
 [[nodiscard]] bool BooleanIntersect(const Solid& a, const Solid& b, std::vector<Solid>* out, Problem* outWhy);
 
+/// 3D subtraction for circular profiles (issue #486 follow-up): build a cylindrical cutter from
+/// a circle (centre, normal, radius) extruded by depth and subtract it from base. Depth is the
+/// extrusion length along +normal from the cutter base; caller chooses it to guarantee a through
+/// hole or a blind pocket. The circle plane is defined by centre+normal (normal need not be unit).
+[[nodiscard]] bool SubtractCircle(const Solid& base, const Vec3& centre, const Vec3& normal,
+                                 double radius, double depth, Solid* out, Problem* outWhy);
+
+/// Auto-depth variant: depth is chosen to span the base solid bounds plus a margin so the
+/// cutter always punches clean through regardless of where the circle sits.
+[[nodiscard]] bool SubtractCircleThrough(const Solid& base, const Vec3& centre, const Vec3& normal,
+                                        double radius, Solid* out, Problem* outWhy);
+
 // ---------------------------------------------------------------------------------------------
 // Validity.
 // ---------------------------------------------------------------------------------------------
