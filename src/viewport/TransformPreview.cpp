@@ -445,7 +445,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   using MirP = AppCommandState::MirrorPhase;
 
   if (cmd.active == K::Offset && cmd.offsetEntityValid &&
-      (cmd.offsetPhase == OP::WaitDistanceOrThrough || cmd.offsetPhase == OP::WaitSidePick)) {
+      (cmd.offsetPhase == OP::WaitThroughPick || cmd.offsetPhase == OP::WaitSidePick)) {
     CadOffsetAppendLivePreview(cmd, curX, curY, prevLines, prevCircles);
     return;
   }

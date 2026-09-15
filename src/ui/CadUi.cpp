@@ -9294,10 +9294,12 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   }
   if (cmd.active == AppCommandState::Kind::Offset) {
     using OP = AppCommandState::OffsetPhase;
+    if (cmd.offsetPhase == OP::WaitDistanceOrThrough)
+      return "OFFSET — distance (or T for through-point):";
     if (cmd.offsetPhase == OP::WaitSelectEntity)
       return "OFFSET — pick object:";
-    if (cmd.offsetPhase == OP::WaitDistanceOrThrough)
-      return "OFFSET — distance (or through-click):";
+    if (cmd.offsetPhase == OP::WaitThroughPick)
+      return "OFFSET — click through point:";
     return "OFFSET — pick side:";
   }
   if (cmd.active == AppCommandState::Kind::Zoom)

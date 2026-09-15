@@ -1185,6 +1185,11 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
     # StartDistCommand, like TrimLinePreviewTests above.
     tests/DistCommandTests.cpp
+    # OFFSET distance-first flow + select/side loop (REQ-103), and double-precision offset math at
+    # state-plane coordinate magnitude. Needs gosurvey_domain for ProcessCommandLineSubmit /
+    # SubmitViewportPick, like DistCommandTests above.
+    tests/OffsetCommandTests.cpp
+    tests/DefaultTemplateOriginTests.cpp
     # GitHub issue #396 — EXTRUDE's typed height must take its sign from the live preview
     # direction. Needs gosurvey_domain for HandleExtrudeTextInput, like DistCommandTests above.
     tests/ExtrudeTypedHeightDirectionTests.cpp
