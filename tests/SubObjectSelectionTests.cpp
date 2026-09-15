@@ -1694,3 +1694,86 @@ TEST_CASE("The snapped point is read in STORAGE coordinates, not world",
   // as a magnitude rather than an inequality is what stops the case passing on a rounding wobble.
   CHECK(std::fabs(wrongOffset - rightOffset) == Catch::Approx(2196000.0).margin(1e-3));
 }
+
+TEST_CASE("DELETE erases a selected section plane", "[sectionplanegrip][req339]") {
+  // Reported 2026-09-15: "it will not let me use the delete command or button ... to delete it."
+  //
+  // The plane is deliberately not in `st.selection` (ADR-058 (h)), which is what keeps every
+  // consumer of that vector free of a branch for a view state — and the cost, unnoticed until
+  // someone tried it, was that DELETE walked past a plane the user could see was selected and
+  // opened a "click objects" prompt instead. The flag has to be tested somewhere, and DELETE is
+  // where "erase what is selected" is decided.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  st.viewportSectionClipOffset = -4.0;
+  REQUIRE(st.sectionPlaneSelected);
+  REQUIRE(st.viewportSectionClip);
+  REQUIRE(CadSectionClipPlane(st).KeepsWorldPoint(0.0, 0.0, 1.0));
+  REQUIRE_FALSE(CadSectionClipPlane(st).KeepsWorldPoint(0.0, 0.0, 7.0));  // the top half is hidden
+
+  StartDeleteCommand(st, log);
+
+  // The clip is off and the whole model is visible again — "deleted" for a thing whose only
+  // manifestation is the cut.
+  CHECK_FALSE(st.viewportSectionClip);
+  CHECK_FALSE(st.sectionPlaneSelected);
+  CHECK_FALSE(CadSectionClipPlane(st).active);
+  CHECK(CadSectionClipPlane(st).KeepsWorldPoint(0.0, 0.0, 7.0));
+  CHECK_FALSE(CadSectionClipIndicator(st).valid);   // nothing left to draw
+  CHECK_FALSE(CadSectionPlaneGrips(st).valid);      // and no handles
+
+  // DELETE must NOT have fallen through to its selection prompt, which is the reported symptom.
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  // The SOLID is untouched. Deleting the plane deletes the plane.
+  CHECK(st.cadSolids.size() == 1u);
+}
+
+TEST_CASE("A deleted section plane does not come back on SECTIONCLIP ON",
+          "[sectionplanegrip][req339]") {
+  // The frame and the stretched size are cleared too. Leaving them would make the next
+  // `SECTIONCLIP ON` resurrect the plane in its old place on its old face, which is not what
+  // "delete" means anywhere else in the application.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  st.viewportSectionClipOffset = -4.0;
+  st.viewportSectionClipFlip = true;
+  st.viewportSectionClipExtent.valid = true;
+  st.viewportSectionClipExtent.halfU = 3.0;
+  st.viewportSectionClipExtent.halfV = 3.0;
+  REQUIRE(st.viewportSectionClipFrameValid);
+
+  StartDeleteCommand(st, log);
+  CHECK_FALSE(st.viewportSectionClipFrameValid);
+  CHECK_FALSE(st.viewportSectionClipExtent.valid);
+  CHECK(st.viewportSectionClipOffset == Catch::Approx(0.0));
+  CHECK_FALSE(st.viewportSectionClipFlip);
+
+  // Turning the clip back on gives the UCS plane, not the old face. Driven through the state the
+  // way `SECTIONCLIP ON` sets it — `ApplySectionClipValue` is deliberately not in the header, and
+  // widening its visibility for a test would be the test changing the design to suit itself.
+  st.viewportSectionClip = true;
+  CHECK_FALSE(st.viewportSectionClipFrameValid);
+  const ucs::Ucs effective = CadEffectiveSectionClipFrame(st);
+  const ucs::Ucs worldUcs = CadActiveUcsStorage(st);
+  CHECK(effective.zAxis.z == Catch::Approx(worldUcs.zAxis.z));  // the UCS plane, not the -Z face
+  CHECK(CadSectionClipPlane(st).nz == Catch::Approx(1.0));
+}
+
+TEST_CASE("DELETE with no section plane selected behaves exactly as before",
+          "[sectionplanegrip][req339]") {
+  // The new branch must not shadow DELETE's existing behaviour. Two cases: a plane that exists but
+  // is NOT selected is left alone, and an empty selection still opens the selection step.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  st.viewportSectionClipOffset = -4.0;
+  ClearCadSelection(st);  // deselects the plane; the CUT stays, which is REQ-339's own rule
+  REQUIRE_FALSE(st.sectionPlaneSelected);
+  REQUIRE(st.viewportSectionClip);
+
+  StartDeleteCommand(st, log);
+  // The plane survives — an unselected thing is not what DELETE acts on...
+  CHECK(st.viewportSectionClip);
+  // ...and DELETE opened its ordinary selection step instead.
+  CHECK(st.active == AppCommandState::Kind::Delete);
+}

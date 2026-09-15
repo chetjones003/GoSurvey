@@ -33784,6 +33784,38 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
+  // A SELECTED SECTION PLANE is what DELETE means first (REQ-339 amended, user report 2026-09-15:
+  // "it will not let me use the delete command or button ... to delete it").
+  //
+  // It is not in `st.selection` — ADR-058 (h) keeps a view state out of that vector so no consumer
+  // of it needs a branch for one — and the consequence, unnoticed until someone tried it, is that
+  // DELETE walked straight past a plane the user could plainly see was selected and opened a
+  // "click objects" prompt instead. The flag has to be tested somewhere; here is the only place
+  // that means "erase what is selected".
+  //
+  // Deleting it turns the clip OFF rather than erasing geometry, because there is no geometry: the
+  // plane IS the clip. And it makes no undo entry, for the same reason the slide does not —
+  // consistent with REQ-337's view-state decision, and stated in REQ-339 rather than left to be
+  // discovered.
+  //
+  // Before the survey-point branch, and above the selection branch, because the two are mutually
+  // exclusive in practice: selecting the plane clears the entity selection and vice versa. If both
+  // were somehow live, the plane is the thing the user was last working with and the thing whose
+  // handles are on screen.
+  if (st.sectionPlaneSelected) {
+    st.sectionPlaneSelected = false;
+    CancelSectionPlaneGripDrag(st);
+    st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
+    st.viewportSectionClip = false;
+    // The frame and the stretched size go too. Keeping them would leave a plane that reappears in
+    // its old place on the next `SECTIONCLIP ON` — which is not what "delete" means anywhere else.
+    st.viewportSectionClipFrameValid = false;
+    st.viewportSectionClipExtent = SectionPlaneExtent{};
+    st.viewportSectionClipOffset = 0.0;
+    st.viewportSectionClipFlip = false;
+    log.push_back("Section plane deleted — the clip is off and the whole model is visible again.");
+    return;
+  }
   // Survey points take priority: deleting a point also removes its linked label.
   // Checking selection first caused the label annotation to be deleted on the first
   // keypress (since SyncSurveyPointLinkedMtextSelection adds the label to st.selection),

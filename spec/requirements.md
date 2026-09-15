@@ -8839,6 +8839,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - clicking the rectangle selects it; clicking away deselects and **consumes** the click; ESC
     deselects and leaves the cut where it is;
   - handles are pickable only while the plane is selected, and not at all when the clip is off;
+  - **`DELETE` erases a selected section plane** — the command and the Delete key alike — turning
+    the clip off and restoring the whole model, clearing the face frame and any stretched size so
+    it does not reappear on the next `SECTIONCLIP ON`, and leaving the solids untouched. With no
+    plane selected, `DELETE` behaves exactly as it did;
   - dragging the Move handle changes the cut **on the same frame**, along the plane's normal;
   - **a held cursor does not move the plane** — the drag axis is frozen at the grab, so repeated
     frames with no cursor movement are a no-op;
@@ -8854,7 +8858,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Commands, Render (`src/render/SectionClip.hpp`, `ViewportRenderer`), UI
 - Status: accepted (2026-09-11) — see D-2026-09-11-c.
 - Revisions: 2026-09-11 — proposed and accepted (D-2026-09-11-c, ADR-058 extended, TASK-251).
-  Slice 2 of GitHub #479, delivering acceptance 5, 6 and 7 and the selection half of 4. **Stated
+  Slice 2 of GitHub #479, delivering acceptance 5, 6 and 7 and the selection half of 4.
+  2026-09-15 — **DELETE now erases a selected plane** (user report: "it will not let me use the
+  delete command or button ... to delete it"). It was not in `st.selection` by design, so DELETE
+  walked past a plane the user could see was selected and opened a "click objects" prompt instead —
+  the cost of ADR-058 (h), unnoticed until someone tried it. The flag is tested in `StartDeleteCommand`,
+  which is the one place that means "erase what is selected". **Stated
   increments:** the plane is still **not an entity** — no Properties row, no `.gs`, and its
   manipulation makes **no undo entry**, which is consistent with it being a view state but means
   `UNDO` will not step a slide back; the section line carries **no direction arrows**; and there is
