@@ -12480,7 +12480,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // only `imgPos` says where the image is. No-op in Release.
   DevShell_OnViewportRect(imgPos.x, imgPos.y, avail.x, avail.y);
 
-  const bool hovered = ImGui::IsItemHovered();
+  // AllowWhenBlockedByActiveItem: without it, IsItemHovered() reads false for the WHOLE viewport
+  // image any time some OTHER widget (the classic/floating command line's InputText, still holding
+  // ActiveId right after Enter) is active elsewhere — which silently starved the dynamic-input
+  // palette's `inImage` visibility gate of ever going true until an unrelated event (e.g. the
+  // command bar losing focus on its own) cleared that ActiveId. A command typed there should show
+  // its dynamic input the instant it starts, not wait on that.
+  const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
   // ImGui's GLFW backend snaps io.MousePos to (-FLT_MAX,-FLT_MAX) on OS focus loss (e.g. Alt+Tab
   // away) and GLFW does not re-emit a cursor-position event on focus regain without an actual
   // mouse move, so the sentinel value would otherwise survive into the first several frames after
@@ -17780,7 +17786,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // it makes no sense floating over the ribbon, a docked panel, the command line, or the ViewCube
   // once the mouse actually leaves the viewport — it hides there and reappears the instant the
   // mouse re-enters, with no re-engagement delay since readiness (above) never left.
-  const bool inImage = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
+  // `overViewCube` (computed above) is a plain screen-rect test, not a widget hover — the cube is
+  // drawn straight to this same window's draw list rather than as its own interactive item, so
+  // IsItemHovered() on the background image reads true right through it. Exclude it explicitly.
+  const bool inImage =
+      hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y && !overViewCube;
 
   const bool showViewportCmdPalette =
       (cmd.active != VK::None || paperSelStep) && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged &&
