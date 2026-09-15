@@ -9556,6 +9556,22 @@ static bool CadAnchoredDistanceAnglePrompt(const AppCommandState& cmd, ray3d::Ve
   return true;
 }
 
+// A multi-field dynamic-input group (REQ-024's 2026-09-15 amendment) reads as ONE box unless each
+// field is visibly its own — the global theme leaves ImGuiCol_FrameBg close to the floating
+// palette's own window background (fields there are "read by their recess, not by an outline"),
+// which is fine for a single field but lets two of them melt into one strip with a stray "<" in the
+// middle. A short, explicit border + a background a step darker than the window gives each field
+// its own edge, the way AutoCAD's own boxes read. Used at all three two/three-field groups below.
+static void PushDynFieldGroupStyle() {
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.2f);
+  ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(132, 136, 144, 190));
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(38, 40, 46, 255));
+}
+static void PopDynFieldGroupStyle() {
+  ImGui::PopStyleColor(2);
+  ImGui::PopStyleVar(1);
+}
+
 // AutoCAD-style "Specify … :" label for the dynamic-input point prompt (REQ-024).
 // Only meaningful when CommandExpectsPointEntry(cmd) is true. Multi-point chains
 // (LINE, POLYLINE) count the point being specified: first, second, third, …
@@ -17885,19 +17901,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::SetKeyboardFocusHere();
       }
 
+      PushDynFieldGroupStyle();
       ImGui::SetNextItemWidth(boxW);
       const bool distEnter = ImGui::InputText("##ucsDist", distBuf, sizeof(distBuf), pf, CommandLineInputCallback);
       if (ImGui::IsItemActivated() && !polarLocked) { distBuf[0] = '\0'; polarLocked = true; }
       if (ImGui::IsItemEdited()) polarLocked = true;
-      ImGui::SameLine(0.f, 6.f);
+      ImGui::SameLine(0.f, 8.f);
       // The angle box wears its own "<", so the pair reads as the polar notation it produces rather
       // than as two unrelated numbers.
       ImGui::TextUnformatted("<");
-      ImGui::SameLine(0.f, 4.f);
+      ImGui::SameLine(0.f, 8.f);
       ImGui::SetNextItemWidth(boxW);
       const bool angEnter = ImGui::InputText("##ucsAng", angBuf, sizeof(angBuf), pf, CommandLineInputCallback);
       if (ImGui::IsItemActivated() && !polarLocked) { angBuf[0] = '\0'; polarLocked = true; }
       if (ImGui::IsItemEdited()) polarLocked = true;
+      PopDynFieldGroupStyle();
 
       if (distEnter || angEnter) {
         // An angle ALONE is a complete answer at these prompts, and the commonest one: the X-axis
@@ -17969,17 +17987,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::SetKeyboardFocusHere();
       }
 
+      PushDynFieldGroupStyle();
       ImGui::SetNextItemWidth(boxW);
       const bool distEnter2 = ImGui::InputText("##anchDist", distBuf2, sizeof(distBuf2), pf, CommandLineInputCallback);
       if (ImGui::IsItemActivated() && !anchLocked) { distBuf2[0] = '\0'; anchLocked = true; }
       if (ImGui::IsItemEdited()) anchLocked = true;
-      ImGui::SameLine(0.f, 6.f);
+      ImGui::SameLine(0.f, 8.f);
       ImGui::TextUnformatted("<");
-      ImGui::SameLine(0.f, 4.f);
+      ImGui::SameLine(0.f, 8.f);
       ImGui::SetNextItemWidth(boxW);
       const bool angEnter2 = ImGui::InputText("##anchAng", angBuf2, sizeof(angBuf2), pf, CommandLineInputCallback);
       if (ImGui::IsItemActivated() && !anchLocked) { angBuf2[0] = '\0'; anchLocked = true; }
       if (ImGui::IsItemEdited()) anchLocked = true;
+      PopDynFieldGroupStyle();
 
       if (distEnter2 || angEnter2) {
         double useDist = 0.0;
@@ -18043,15 +18063,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::SetKeyboardFocusHere();
       }
 
+      PushDynFieldGroupStyle();
       ImGui::SetNextItemWidth(boxW);
       const bool xEnter = ImGui::InputText("##dynX", xBuf, sizeof(xBuf), pf, CommandLineInputCallback);
       if (ImGui::IsItemActivated() && !xyLocked) { xBuf[0] = '\0'; xyLocked = true; }
       if (ImGui::IsItemEdited()) xyLocked = true;
-      ImGui::SameLine(0.f, 10.f);
+      ImGui::SameLine(0.f, 12.f);
       ImGui::SetNextItemWidth(boxW);
       const bool yEnter = ImGui::InputText("##dynY", yBuf, sizeof(yBuf), pf, CommandLineInputCallback);
       if (ImGui::IsItemActivated() && !xyLocked) { yBuf[0] = '\0'; xyLocked = true; }
       if (ImGui::IsItemEdited()) xyLocked = true;
+      PopDynFieldGroupStyle();
 
       if (xEnter || yEnter) {
         const std::string xText = StringUtil::trimCopy(std::string(xBuf));
