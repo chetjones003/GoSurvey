@@ -219,6 +219,13 @@ static void MtextRichWrapSelection(AppCommandState& cmd, const char* open, const
 // Tab in the command input completes the buffer to this.
 std::string g_cmdSuggestComplete;
 
+/// One-shot: set true immediately before a SetKeyboardFocusHere() that SHOULD keep the standard
+/// blue select-all ImGui gives a freshly focused field — the dynamic-input group's first field on
+/// a fresh prompt (REQ-024), which AutoCAD shows pre-selected rather than with a bare cursor.
+/// Consumed (reset false) by the very next activation the callback below sees, so it only affects
+/// the field it was set for.
+bool g_keepSelectAllOnActivate = false;
+
 int CommandLineInputCallback(ImGuiInputTextCallbackData* data) {
   if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion) {
     if (!g_cmdSuggestComplete.empty()) {
@@ -236,8 +243,12 @@ int CommandLineInputCallback(ImGuiInputTextCallbackData* data) {
       data->BufTextLen > 0 && data->SelectionStart == 0 && data->SelectionEnd == data->BufTextLen;
 
   if (justActivated && fullBufSelected) {
-    data->CursorPos = data->BufTextLen;
-    data->SelectionStart = data->SelectionEnd = data->CursorPos;
+    if (g_keepSelectAllOnActivate)
+      g_keepSelectAllOnActivate = false;  // consumed: leave the field's default select-all in place
+    else {
+      data->CursorPos = data->BufTextLen;
+      data->SelectionStart = data->SelectionEnd = data->CursorPos;
+    }
   }
   return 0;
 }
@@ -9535,6 +9546,43 @@ static bool CadUcsPolarPromptBase(const AppCommandState& cmd, ray3d::Vec3* baseW
   }
 }
 
+// REQ-024 (2026-09-15 amendment). LINE's and POLYLINE's second point onward follow an established
+// anchor (the previous vertex), so — like the UCS directional prompts above — a distance/angle pair
+// answers what the prompt is actually asking ("how far, which way from here") better than an x,y
+// readout does. Kept as its own predicate rather than folded into CadUcsPolarPromptBase: that one is
+// REQ-154's own narrow, stated exception, and this is a separate generalization of the same idea to
+// ordinary drawing prompts. Returns false, and leaves the output alone, for every other point prompt
+// — including LINE/POLYLINE's OWN first point, which has no anchor yet.
+static bool CadAnchoredDistanceAnglePrompt(const AppCommandState& cmd, ray3d::Vec3* baseWorld) {
+  if (!baseWorld) return false;
+  using K = AppCommandState::Kind;
+  using LP = AppCommandState::LinePhase;
+  using PP = AppCommandState::PolylinePhase;
+  const bool lineNext = cmd.active == K::Line && cmd.linePhase == LP::NeedNextPoint;
+  const bool polyNext = cmd.active == K::Polyline && cmd.polylinePhase == PP::NeedNextPoint;
+  if (!lineNext && !polyNext) return false;
+  double bx = 0.0, by = 0.0;
+  CadCoord::WorldFromLocal(cmd, cmd.anchorX, cmd.anchorY, &bx, &by);
+  *baseWorld = ray3d::Vec3{bx, by, cmd.anchorZ};
+  return true;
+}
+
+// A multi-field dynamic-input group (REQ-024's 2026-09-15 amendment) reads as ONE box unless each
+// field is visibly its own — the global theme leaves ImGuiCol_FrameBg close to the floating
+// palette's own window background (fields there are "read by their recess, not by an outline"),
+// which is fine for a single field but lets two of them melt into one strip with a stray "<" in the
+// middle. A short, explicit border + a background a step darker than the window gives each field
+// its own edge, the way AutoCAD's own boxes read. Used at all three two/three-field groups below.
+static void PushDynFieldGroupStyle() {
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.2f);
+  ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(132, 136, 144, 190));
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(38, 40, 46, 255));
+}
+static void PopDynFieldGroupStyle() {
+  ImGui::PopStyleColor(2);
+  ImGui::PopStyleVar(1);
+}
+
 // AutoCAD-style "Specify … :" label for the dynamic-input point prompt (REQ-024).
 // Only meaningful when CommandExpectsPointEntry(cmd) is true. Multi-point chains
 // (LINE, POLYLINE) count the point being specified: first, second, third, …
@@ -12432,7 +12480,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // only `imgPos` says where the image is. No-op in Release.
   DevShell_OnViewportRect(imgPos.x, imgPos.y, avail.x, avail.y);
 
-  const bool hovered = ImGui::IsItemHovered();
+  // AllowWhenBlockedByActiveItem: without it, IsItemHovered() reads false for the WHOLE viewport
+  // image any time some OTHER widget (the classic/floating command line's InputText, still holding
+  // ActiveId right after Enter) is active elsewhere — which silently starved the dynamic-input
+  // palette's `inImage` visibility gate of ever going true until an unrelated event (e.g. the
+  // command bar losing focus on its own) cleared that ActiveId.
+  // AllowWhenOverlappedByWindow: the command-autocomplete popup (`##CmdSuggestPopup`, drawn right at
+  // the crosshair position so it's exactly where the mouse sits while typing a command name) is a
+  // real separate window layered on top of the viewport image at that spot. Without this flag,
+  // IsItemHovered() reads false wherever that popup visually overlaps the image — which is right
+  // under the cursor — so the palette stayed hidden after Enter until the mouse moved somewhere the
+  // (by-then-closed) popup never covered. A command typed with the mouse already in the viewport
+  // should show its dynamic input the instant it starts, not wait on either of these.
+  const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+                                             ImGuiHoveredFlags_AllowWhenOverlappedByWindow);
   // ImGui's GLFW backend snaps io.MousePos to (-FLT_MAX,-FLT_MAX) on OS focus loss (e.g. Alt+Tab
   // away) and GLFW does not re-emit a cursor-position event on focus regain without an actual
   // mouse move, so the sentinel value would otherwise survive into the first several frames after
@@ -12462,6 +12523,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const ImVec2 vcMouse = ImGui::GetIO().MousePos;
   const bool overViewCube = modelSpace && vcMouse.x >= viewCubeX && vcMouse.x <= viewCubeX + kViewCubeSize &&
                             vcMouse.y >= viewCubeY && vcMouse.y <= viewCubeY + kViewCubeSize;
+
+  // UCS dropdown geometry (REQ-154), computed here for the same reason the ViewCube's is: the
+  // button itself is drawn as its own overlay window much later in this function, but the crosshair
+  // and the dynamic-input palette both need to know its bounds early so the drawn crosshair (and the
+  // palette) can get out of the way of a real clickable control — the system cursor belongs there,
+  // not the CAD one. Geometry duplicated from the drawing site below; it must match.
+  const std::string ucsDropActiveName = CadUcsFrameLabel(cmd);
+  constexpr float kUcsDropChevronReserve = 22.f;
+  const float ucsDropW =
+      std::max(96.f, ImGui::CalcTextSize(ucsDropActiveName.c_str()).x + 16.f + kUcsDropChevronReserve);
+  const float ucsDropH = ImGui::GetTextLineHeight() + 10.f;  // FramePadding.y == 5 at the drawing site
+  const float ucsDropX = viewCubeX + kViewCubeSize - ucsDropW;
+  const float ucsDropY = viewCubeY + kViewCubeSize + 8.f;
+  const bool overUcsDropdown = modelSpace && avail.x > 200.f && avail.y > 200.f && vcMouse.x >= ucsDropX &&
+                               vcMouse.x <= ucsDropX + ucsDropW && vcMouse.y >= ucsDropY &&
+                               vcMouse.y <= ucsDropY + ucsDropH;
 
   // Advance any in-flight ViewCube animation (REQ-059).
   CadTickViewAnimation(cmd, ImGui::GetIO().DeltaTime);
@@ -14275,7 +14352,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   const bool overCmdSugPopup =
       s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
-  if (modelSpace && hovered && !overCmdSugPopup && !overViewCube &&
+  if (modelSpace && hovered && !overCmdSugPopup && !overViewCube && !overUcsDropdown &&
       cmd.active != AppCommandState::Kind::Pan && cmd.active != AppCommandState::Kind::Orbit &&
       ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
       mx < avail.x && my >= 0 && my < avail.y) {
@@ -17710,7 +17787,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   using VK = AppCommandState::Kind;
-  const bool inImage = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
 
   // REQ-307 (GitHub #106): the paper-space selection step keeps cmd.active == None throughout (it
   // is not a model-space command), so the engagement gate below — keyed on cmd.active — would never
@@ -17718,23 +17794,35 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // avoids touching the huge existing Kind-keyed switches this whole file consults elsewhere.
   const bool paperSelStep = PaperIsObjectSelectionStep(cmd);
 
-  if (cmd.active == VK::None && !paperSelStep) {
-    cmd.viewportCmdPaletteEngaged = false;
+  // AutoCAD's dynamic input is READY for the whole time a command is prompting — it does not wait
+  // for a hover event to become usable, because a command very often STARTS from somewhere that is
+  // not "hovering the drawing" (the classic command line, an autocomplete pick, a ribbon button).
+  // Tying readiness to hover made the palette wait for the next mouse MOVE over the drawing before
+  // it would show at ALL, even once the mouse came back to the viewport. Readiness now simply
+  // mirrors "is a command (or the paper selection step) active", full stop.
+  const bool cmdActiveNow = cmd.active != VK::None || paperSelStep;
+  cmd.viewportCmdPaletteEngaged = cmdActiveNow;
+  if (!cmdActiveNow)
     cmd.viewportDrawingHovered = false;
-  } else {
-    ImGuiIO& ioEng = ImGui::GetIO();
-    if (inImage)
-      cmd.viewportCmdPaletteEngaged = true;
-    else if (cmd.viewportCmdPaletteEngaged) {
-      const bool hasDraft = cmdBuf && cmdBuf[0] != '\0';
-      if (!hasDraft && !ioEng.WantTextInput && ImGui::GetActiveID() == 0)
-        cmd.viewportCmdPaletteEngaged = false;
-    }
-  }
+
+  // But VISIBILITY is a separate question from readiness: the palette is drawn at the cursor, so it
+  // makes no sense floating over the ribbon, a docked panel, the command line, or the ViewCube/UCS
+  // dropdown once the mouse actually leaves the viewport — it hides there and reappears the instant
+  // the mouse re-enters, with no re-engagement delay since readiness (above) never left.
+  //
+  // A pure screen-rect containment test, deliberately NOT `hovered` (IsItemHovered on the
+  // background image): that reads false whenever ANY other window merely overlaps this screen
+  // region — the command-autocomplete popup drawn right at the crosshair, the UCS dropdown, a
+  // lingering ActiveId elsewhere — each of which cost a round of "doesn't show until the mouse
+  // moves" bug reports chasing IsItemHovered's exact blocking rules one at a time. Whether the
+  // mouse is over the viewport's own rectangle does not depend on what else ImGui drew on top of it
+  // this frame, so it is not susceptible to any of that.
+  const bool inImage = mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y && !overViewCube &&
+                       !overUcsDropdown;
 
   const bool showViewportCmdPalette =
       (cmd.active != VK::None || paperSelStep) && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged &&
-      cmdBuf && cmdBufSize > 0 && !cmd.mtextRichEditorOpen && !cmd.tableCellEditorOpen;
+      inImage && cmdBuf && cmdBufSize > 0 && !cmd.mtextRichEditorOpen && !cmd.tableCellEditorOpen;
   cmd.viewportDrawingHovered = showViewportCmdPalette;
 
   // Detect the palette's open edge so the two-field coordinate input resets its
@@ -17793,11 +17881,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                       mainViewport->WorkPos.y + mainViewport->WorkSize.y - estH - 8.f);
 
     ImGui::SetNextWindowPos(wp, ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.94f);
+    // No filled card behind the label/fields — AutoCAD's own dynamic input has none: the label
+    // floats directly on the drawing and each field carries its own box (PushDynFieldGroupStyle /
+    // the single field's own FrameBg). A window is still used for layout and auto-resize, it just
+    // paints nothing of its own.
+    ImGui::SetNextWindowBgAlpha(0.f);
     ImGuiWindowFlags wf = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
-                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+                          ImGuiWindowFlags_NoBackground;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, winPad);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
     ImGui::Begin("##ViewportCommandInput", nullptr, wf);
 
     // Prompt label: a muted/secondary tone with a little gap below it, so it reads
@@ -17811,6 +17903,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     ray3d::Vec3 polarBase{};
     const bool polarPrompt = pointEntry && CadUcsPolarPromptBase(cmd, &polarBase);
+    ray3d::Vec3 anchorBase{};
+    const bool anchoredPrompt = pointEntry && !polarPrompt && CadAnchoredDistanceAnglePrompt(cmd, &anchorBase);
     if (polarPrompt) {
       // Distance + angle, AutoCAD's UCS form (REQ-154; the stated exception to REQ-024's single
       // field). Both track the cursor until typed; either one's Enter commits the pair, assembled
@@ -17855,26 +17949,37 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // The first keystroke seeds the DISTANCE box, which is the one you land on. Tab then moves to
       // the angle (ImGui's own next-item behaviour, so no key handling of ours), which is how you
       // reach "I only care about the angle".
-      if (activeIdP != idDist && activeIdP != idAng && !io.WantTextInput && io.InputQueueCharacters.Size > 0) {
-        distBuf[0] = '\0';
-        polarLocked = true;
-        RouteQueuedCharsToCmdBuf(distBuf, static_cast<int>(sizeof(distBuf)), io);
+      if (promptChanged) {
+        g_keepSelectAllOnActivate = true;
         ImGui::SetKeyboardFocusHere();
+      } else if (activeIdP != idDist && activeIdP != idAng && !io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+          // Tab with neither box focused jumps into the distance box without typing anything —
+          // the live tracked value stays live (not locked), same as clicking in without editing.
+          ImGui::SetKeyboardFocusHere();
+        } else if (io.InputQueueCharacters.Size > 0) {
+          distBuf[0] = '\0';
+          polarLocked = true;
+          RouteQueuedCharsToCmdBuf(distBuf, static_cast<int>(sizeof(distBuf)), io);
+          ImGui::SetKeyboardFocusHere();
+        }
       }
 
+      PushDynFieldGroupStyle();
       ImGui::SetNextItemWidth(boxW);
       const bool distEnter = ImGui::InputText("##ucsDist", distBuf, sizeof(distBuf), pf, CommandLineInputCallback);
       if (ImGui::IsItemActivated() && !polarLocked) { distBuf[0] = '\0'; polarLocked = true; }
       if (ImGui::IsItemEdited()) polarLocked = true;
-      ImGui::SameLine(0.f, 6.f);
+      ImGui::SameLine(0.f, 8.f);
       // The angle box wears its own "<", so the pair reads as the polar notation it produces rather
       // than as two unrelated numbers.
       ImGui::TextUnformatted("<");
-      ImGui::SameLine(0.f, 4.f);
+      ImGui::SameLine(0.f, 8.f);
       ImGui::SetNextItemWidth(boxW);
       const bool angEnter = ImGui::InputText("##ucsAng", angBuf, sizeof(angBuf), pf, CommandLineInputCallback);
       if (ImGui::IsItemActivated() && !polarLocked) { angBuf[0] = '\0'; polarLocked = true; }
       if (ImGui::IsItemEdited()) polarLocked = true;
+      PopDynFieldGroupStyle();
 
       if (distEnter || angEnter) {
         // An angle ALONE is a complete answer at these prompts, and the commonest one: the X-axis
@@ -17905,38 +18010,165 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         std::snprintf(polarBuf, sizeof(polarBuf), "@%.6f<%s", useDist, angText.c_str());
         ProcessCommandLineSubmit(polarBuf, static_cast<int>(sizeof(polarBuf)), cmd, log);
       }
-    } else if (pointEntry) {
-      // Single live coordinate field: tracks the crosshair's world X,Y at the
-      // display precision until the user types (which locks it). The field accepts
-      // absolute "x,y", relative "@dx,dy", bearings, distances, or any other input
-      // ProcessCommandLineSubmit understands. Enter — or a viewport click —
-      // commits. REQ-024.
-      const ImGuiID idDyn = ImGui::GetID("##dynPt");
-      const ImGuiID activeId = ImGui::GetActiveID();
+    } else if (anchoredPrompt) {
+      // Distance + angle from the established anchor (REQ-024's 2026-09-15 amendment): LINE's and
+      // POLYLINE's second point and later. Same construction as the UCS polar pair above — kept as
+      // its own block rather than shared, since that one is REQ-154's own narrow, stated exception
+      // and this is a separate generalization to ordinary drawing prompts.
+      static char distBuf2[48] = {0};
+      static char angBuf2[48] = {0};
+      static bool anchLocked = false;
+      if (promptChanged) anchLocked = false;
 
-      // Type-to-start: the first keystroke with the field unfocused begins fresh
-      // entry immediately — clear the live value, capture the typed char, then lock
-      // and focus the field. (Without seeding, ImGui's first key only grabs focus,
-      // so it took two presses to start typing.)
-      if (activeId != idDyn && !io.WantTextInput && io.InputQueueCharacters.Size > 0) {
-        dynBuf[0] = '\0';
-        dynLocked = true;
-        RouteQueuedCharsToCmdBuf(dynBuf, static_cast<int>(sizeof(dynBuf)), io);
-        ImGui::SetKeyboardFocusHere();
+      double liveWx = 0.0, liveWy = 0.0;
+      if (outCursorX && outCursorY)
+        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
+                                 &liveWy);
+      const ray3d::Vec3 cursorWorld{liveWx, liveWy, anchorBase.z};
+      const ray3d::Vec3 dir = ray3d::Sub(cursorWorld, anchorBase);
+      const int prec = cmd.displayLinearPrecision;
+      if (!anchLocked) {
+        std::snprintf(distBuf2, sizeof(distBuf2), "%s", FormatLinear(ray3d::Length(dir), prec).c_str());
+        double angDeg = 0.0;
+        if (ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &angDeg)) {
+          while (angDeg < 0.0) angDeg += 360.0;
+          std::snprintf(angBuf2, sizeof(angBuf2), "%.0f", angDeg);
+        } else {
+          std::snprintf(angBuf2, sizeof(angBuf2), "0");
+        }
       }
 
-      // CallbackAlways + CommandLineInputCallback collapses the select-all ImGui
-      // applies when SetKeyboardFocusHere takes the field — otherwise the seeded
-      // first character stays highlighted and the next keystroke replaces it.
       const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-      ImGui::SetNextItemWidth(fieldW);
-      const bool dynEnter = ImGui::InputText("##dynPt", dynBuf, sizeof(dynBuf), pf, CommandLineInputCallback);
-      // Clicking into the field clears its live readout for fresh entry.
-      if (ImGui::IsItemActivated() && !dynLocked) { dynBuf[0] = '\0'; dynLocked = true; }
-      if (ImGui::IsItemEdited()) dynLocked = true;
+      const float boxW = 74.f * io.FontGlobalScale;
+      const ImGuiID idDist2 = ImGui::GetID("##anchDist");
+      const ImGuiID idAng2 = ImGui::GetID("##anchAng");
+      const ImGuiID activeIdA = ImGui::GetActiveID();
 
-      if (dynEnter)
-        ProcessCommandLineSubmit(dynBuf, static_cast<int>(sizeof(dynBuf)), cmd, log);
+      if (promptChanged) {
+        g_keepSelectAllOnActivate = true;
+        ImGui::SetKeyboardFocusHere();
+      } else if (activeIdA != idDist2 && activeIdA != idAng2 && !io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+          ImGui::SetKeyboardFocusHere();
+        } else if (io.InputQueueCharacters.Size > 0) {
+          distBuf2[0] = '\0';
+          anchLocked = true;
+          RouteQueuedCharsToCmdBuf(distBuf2, static_cast<int>(sizeof(distBuf2)), io);
+          ImGui::SetKeyboardFocusHere();
+        }
+      }
+
+      PushDynFieldGroupStyle();
+      ImGui::SetNextItemWidth(boxW);
+      const bool distEnter2 = ImGui::InputText("##anchDist", distBuf2, sizeof(distBuf2), pf, CommandLineInputCallback);
+      if (ImGui::IsItemActivated() && !anchLocked) { distBuf2[0] = '\0'; anchLocked = true; }
+      if (ImGui::IsItemEdited()) anchLocked = true;
+      ImGui::SameLine(0.f, 8.f);
+      ImGui::TextUnformatted("<");
+      ImGui::SameLine(0.f, 8.f);
+      ImGui::SetNextItemWidth(boxW);
+      const bool angEnter2 = ImGui::InputText("##anchAng", angBuf2, sizeof(angBuf2), pf, CommandLineInputCallback);
+      if (ImGui::IsItemActivated() && !anchLocked) { angBuf2[0] = '\0'; anchLocked = true; }
+      if (ImGui::IsItemEdited()) anchLocked = true;
+      PopDynFieldGroupStyle();
+
+      if (distEnter2 || angEnter2) {
+        double useDist = 0.0;
+        {
+          std::istringstream di{std::string(distBuf2)};
+          if (!(di >> useDist) || !std::isfinite(useDist) || useDist == 0.0)
+            useDist = ray3d::Length(dir);
+          if (!std::isfinite(useDist) || useDist == 0.0)
+            useDist = 1.0;
+        }
+        std::string angText = StringUtil::trimCopy(std::string(angBuf2));
+        if (angText.empty()) {
+          double liveAng = 0.0;
+          if (ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &liveAng)) {
+            while (liveAng < 0.0) liveAng += 360.0;
+          }
+          char ab[32];
+          std::snprintf(ab, sizeof(ab), "%.4f", liveAng);
+          angText = ab;
+        }
+        char anchBuf[160];
+        std::snprintf(anchBuf, sizeof(anchBuf), "@%.6f<%s", useDist, angText.c_str());
+        ProcessCommandLineSubmit(anchBuf, static_cast<int>(sizeof(anchBuf)), cmd, log);
+      }
+    } else if (pointEntry) {
+      // Two-field x,y group (REQ-024, 2026-09-15 amendment): AutoCAD splits an ordinary point
+      // prompt into separate X and Y boxes, Tab moving between them (native ImGui next-item
+      // behavior) without committing. A value that carries its own syntax — relative "@dx,dy", a
+      // bearing/distance, or a bare "x,y" — typed into the X field does not split into two
+      // independent numbers, so it is submitted whole from that field and locks both boxes; this is
+      // exactly how the pre-amendment single field accepted the same input, just landing in the
+      // first box of the pair instead of the only one.
+      static char xBuf[80] = {0};
+      static char yBuf[80] = {0};
+      static bool xyLocked = false;
+      if (promptChanged) xyLocked = false;
+
+      double liveWx = 0.0, liveWy = 0.0;
+      if (outCursorX && outCursorY)
+        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
+                                 &liveWy);
+      const int prec = cmd.displayLinearPrecision;
+      if (!xyLocked) {
+        std::snprintf(xBuf, sizeof(xBuf), "%s", FormatLinear(liveWx, prec).c_str());
+        std::snprintf(yBuf, sizeof(yBuf), "%s", FormatLinear(liveWy, prec).c_str());
+      }
+
+      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
+      const float boxW = std::max(56.f * io.FontGlobalScale,
+                                  DynamicCursorFieldWidth(xBuf, nullptr, 56.f * io.FontGlobalScale, maxFieldPx * 0.5f));
+      const ImGuiID idX = ImGui::GetID("##dynX");
+      const ImGuiID idY = ImGui::GetID("##dynY");
+      const ImGuiID activeIdXY = ImGui::GetActiveID();
+
+      // The X box is focused-and-selected the moment this prompt appears — AutoCAD's own dynamic
+      // input always lands there first, so Tab goes straight to Y on the very first press instead
+      // of a first Tab merely focusing X and a second one being needed to actually move on.
+      if (promptChanged) {
+        g_keepSelectAllOnActivate = true;
+        ImGui::SetKeyboardFocusHere();
+      }
+      // Type-to-start / cold-Tab fallback: if the user clicked away and back with neither box
+      // focused, the first keystroke seeds the X box (a typed relative/bearing/distance expression
+      // fills both fields at once and lands there) and a cold Tab still focuses it.
+      else if (activeIdXY != idX && activeIdXY != idY && !io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+          ImGui::SetKeyboardFocusHere();
+        } else if (io.InputQueueCharacters.Size > 0) {
+          xBuf[0] = '\0';
+          xyLocked = true;
+          RouteQueuedCharsToCmdBuf(xBuf, static_cast<int>(sizeof(xBuf)), io);
+          ImGui::SetKeyboardFocusHere();
+        }
+      }
+
+      PushDynFieldGroupStyle();
+      ImGui::SetNextItemWidth(boxW);
+      const bool xEnter = ImGui::InputText("##dynX", xBuf, sizeof(xBuf), pf, CommandLineInputCallback);
+      if (ImGui::IsItemActivated() && !xyLocked) { xBuf[0] = '\0'; xyLocked = true; }
+      if (ImGui::IsItemEdited()) xyLocked = true;
+      ImGui::SameLine(0.f, 12.f);
+      ImGui::SetNextItemWidth(boxW);
+      const bool yEnter = ImGui::InputText("##dynY", yBuf, sizeof(yBuf), pf, CommandLineInputCallback);
+      if (ImGui::IsItemActivated() && !xyLocked) { yBuf[0] = '\0'; xyLocked = true; }
+      if (ImGui::IsItemEdited()) xyLocked = true;
+      PopDynFieldGroupStyle();
+
+      if (xEnter || yEnter) {
+        const std::string xText = StringUtil::trimCopy(std::string(xBuf));
+        const bool xIsCompound = xText.find(',') != std::string::npos || xText.find('@') != std::string::npos ||
+                                  xText.find('<') != std::string::npos;
+        char submitBuf[176];
+        if (xIsCompound)
+          std::snprintf(submitBuf, sizeof(submitBuf), "%s", xText.c_str());
+        else
+          std::snprintf(submitBuf, sizeof(submitBuf), "%s,%s", xBuf, yBuf);
+        ProcessCommandLineSubmit(submitBuf, static_cast<int>(sizeof(submitBuf)), cmd, log);
+      }
     } else {
       // Single field for non-point prompts (bearing/angle/distance/option/command).
       if (!io.WantTextInput && io.InputQueueCharacters.Size > 0) {
@@ -17952,7 +18184,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
     }
     ImGui::End();
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(1);
   }
 
   // Grip stretch dynamic input (REQ-024 / REQ-047). A grip drag runs with no active command, so the
@@ -18075,7 +18307,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // or cancelled (buffer cleared on Esc).
   const bool typingCommand =
       (cmd.active == AppCommandState::Kind::None) && cmdBuf && cmdBuf[0] != '\0';
-  const bool liveHover = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
+  // Excludes the ViewCube and the UCS dropdown (plain screen-rect tests, not widget hovers — see
+  // `overViewCube`/`overUcsDropdown` above): both are their own clickable navigation controls, so
+  // the system cursor belongs there, not the drawn crosshair.
+  const bool liveHover = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y &&
+                         !overViewCube && !overUcsDropdown;
   const bool frozenHair = typingCommand && s_lastCrosshairScreen.x >= 0.f;
   // PAN command (REQ-045): show a hand instead of the CAD crosshair while pan mode is active.
   // ORBIT (REQ-084 (c)) is a drag mode too: the crosshair would say "pick a point", which is not
@@ -18211,6 +18447,43 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     wdl->AddLine(ImVec2(r, t), ImVec2(r, b), kCad, hair);
     wdl->AddLine(ImVec2(r, b), ImVec2(l, b), kCad, hair);
     wdl->AddLine(ImVec2(l, b), ImVec2(l, t), kCad, hair);
+    // REQ-340: two contextual glyphs beyond the crosshair/pickbox above, telling the user what the
+    // current pick means without reading the command line — AutoCAD's cursor carries the same cue.
+    // REQ-121's pickbox takes precedence (an object-selection step never shows either glyph, hence
+    // the `!pickboxCursor` guard matching the crosshair-arm suppression above).
+    if (!pickboxCursor) {
+      using MK = AppCommandState::Kind;
+      using MP = AppCommandState::ModifyPhase;
+      const bool modifyKind = cmd.active == MK::Move || cmd.active == MK::Copy || cmd.active == MK::Rotate ||
+                               cmd.active == MK::Scale;
+      // Base-point marker: a filled green triangle at the hovered snap candidate (the crosshair has
+      // already jumped there — REQ-121's own note that a snap "visibly jumps to a snap point").
+      // Drawn only while an actual candidate is hovered, not at every raw cursor position.
+      if (modifyKind && cmd.modifyPhase == MP::NeedBase && cmd.viewportSnapPickValid) {
+        const float tr = 6.5f;
+        const ImU32 baseCol = IM_COL32(0x2e, 0xcc, 0x40, 255);
+        wdl->AddTriangleFilled(ImVec2(cx, cy - tr), ImVec2(cx - tr * 0.87f, cy + tr * 0.6f),
+                                ImVec2(cx + tr * 0.87f, cy + tr * 0.6f), baseCol);
+      }
+      // Move-transform icon: a four-directional arrow once the base point is set and the command is
+      // dragging a translation preview (MOVE/COPY's second point).
+      if ((cmd.active == MK::Move || cmd.active == MK::Copy) && cmd.modifyPhase == MP::NeedDestination) {
+        const ImU32 arrCol = IM_COL32(255, 255, 255, 235);
+        const float armLen = 11.f, headW = 4.5f, headL = 5.f, gapPx = 3.f;
+        auto arrowHead = [&](float dx, float dy) {
+          const float tipx = cx + dx * armLen, tipy = cy + dy * armLen;
+          const float baseCx = cx + dx * (armLen - headL), baseCy = cy + dy * (armLen - headL);
+          const float px = -dy, py = dx;  // perpendicular unit for the head's width
+          wdl->AddLine(ImVec2(cx + dx * gapPx, cy + dy * gapPx), ImVec2(baseCx, baseCy), arrCol, 1.4f);
+          wdl->AddTriangleFilled(ImVec2(tipx, tipy), ImVec2(baseCx + px * headW, baseCy + py * headW),
+                                  ImVec2(baseCx - px * headW, baseCy - py * headW), arrCol);
+        };
+        arrowHead(0.f, -1.f);
+        arrowHead(0.f, 1.f);
+        arrowHead(-1.f, 0.f);
+        arrowHead(1.f, 0.f);
+      }
+    }
     // Overlapping pick marker: two offset squares beside the pick aperture when Multi Selection is on.
     if (cmd.multiSelectionEnabled && cmd.viewportPickAmbiguous && cmd.active == AppCommandState::Kind::None &&
         !InFloatingModelSpace(cmd)) {
