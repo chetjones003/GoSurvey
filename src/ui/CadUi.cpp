@@ -7251,9 +7251,24 @@ static char PropRowAxis(const char* label) {
   return (c == 'X' || c == 'Y' || c == 'Z') ? c : 0;
 }
 
+// REQ-101: `v` points at LOCAL storage (world = local + worldDocumentOrigin). `originOffset`
+// lets an X/Y row display and edit the WORLD value a user actually typed/expects, while the
+// pointed-to storage keeps holding the precision-safe local one — pass `cmd.worldDocumentOriginX`
+// / `Y` for a positional X/Y row, and leave it at the default 0.0 for Z, radius, angles, and any
+// other non-positional scalar (REQ-057/ADR-025 D2: Z never carries a document origin).
+//
+// Before this, every X/Y row bound `v` straight into ImGui::InputScalar with no offset, so once a
+// drawing's origin was ever rebased (REQ-101 — routine at survey/state-plane coordinate magnitude)
+// the Properties panel silently showed and edited LOCAL coordinates instead of the WORLD ones the
+// rest of the app (CIRCLE's own prompt, DIST, INVERSE, the status-bar readout, survey points'
+// Easting/Northing) already shows. It went unnoticed because a since-fixed bug in the shipped
+// template (a stray nonzero worldDocumentOriginX/Y) meant the rebase essentially never actually
+// ran in practice — local and world stayed only ~13 units apart. Fixing that exposed this: local
+// and world now legitimately diverge by the full coordinate magnitude, and typing an X here has to
+// mean "put this in world space," matching the CIRCLE center prompt REQ-101 note describes.
 template <class T>
 static void PropGeomRow(AppCommandState& cmd, const char* label, const char* id, T* v,
-                        const char* fmt, const char* undoLabel) {
+                        const char* fmt, const char* undoLabel, double originOffset = 0.0) {
   ImGui::TableNextRow();
   ImGui::TableNextColumn();
   ImGui::TextUnformatted(label);
@@ -7277,12 +7292,17 @@ static void PropGeomRow(AppCommandState& cmd, const char* label, const char* id,
   }
 
   ImGui::SetNextItemWidth(-1);
-  ImGui::InputScalar(id, sizeof(T) == sizeof(double) ? ImGuiDataType_Double : ImGuiDataType_Float, v,
-                     nullptr, nullptr, fmt);
+  // Staged through a double regardless of T: when originOffset is 0.0 (every non-X/Y row) this is
+  // exactly the value that was there before, just carried through double instead of narrowing a
+  // `float` T mid-flight — a strict precision improvement, not a behavior change.
+  double display = static_cast<double>(*v) + originOffset;
+  ImGui::InputScalar(id, ImGuiDataType_Double, &display, nullptr, nullptr, fmt);
   if (ImGui::IsItemActivated())
     PushUndoSnapshot(cmd, undoLabel);
-  if (ImGui::IsItemDeactivatedAfterEdit())
+  if (ImGui::IsItemDeactivatedAfterEdit()) {
+    *v = static_cast<T>(display - originOffset);
     BumpCadGpuCache(cmd);
+  }
 }
 
 void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
@@ -7304,11 +7324,11 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
 
     // Per-endpoint Z (REQ-057): a line may be genuinely sloped, so each end carries its own.
-    PropGeomRow(cmd, "Start X", "##lsx", x0, cfmt.c_str(), "Edit line X");
-    PropGeomRow(cmd, "Start Y", "##lsy", y0, cfmt.c_str(), "Edit line Y");
+    PropGeomRow(cmd, "Start X", "##lsx", x0, cfmt.c_str(), "Edit line X", cmd.worldDocumentOriginX);
+    PropGeomRow(cmd, "Start Y", "##lsy", y0, cfmt.c_str(), "Edit line Y", cmd.worldDocumentOriginY);
     PropGeomRow(cmd, "Start Z", "##lsz", z0, cfmt.c_str(), "Edit line Z");
-    PropGeomRow(cmd, "End X", "##lex", x1, cfmt.c_str(), "Edit line X");
-    PropGeomRow(cmd, "End Y", "##ley", y1, cfmt.c_str(), "Edit line Y");
+    PropGeomRow(cmd, "End X", "##lex", x1, cfmt.c_str(), "Edit line X", cmd.worldDocumentOriginX);
+    PropGeomRow(cmd, "End Y", "##ley", y1, cfmt.c_str(), "Edit line Y", cmd.worldDocumentOriginY);
     PropGeomRow(cmd, "End Z", "##lez", z1, cfmt.c_str(), "Edit line Z");
 
     ImGui::EndTable();
@@ -7362,8 +7382,8 @@ void DrawSingleCircleGeometryEditable(AppCommandState& cmd, int circleIdx) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
 
-    PropGeomRow(cmd, "Center X", "##cx", cx, cfmt.c_str(), "Edit circle X");
-    PropGeomRow(cmd, "Center Y", "##cy", cy, cfmt.c_str(), "Edit circle Y");
+    PropGeomRow(cmd, "Center X", "##cx", cx, cfmt.c_str(), "Edit circle X", cmd.worldDocumentOriginX);
+    PropGeomRow(cmd, "Center Y", "##cy", cy, cfmt.c_str(), "Edit circle Y", cmd.worldDocumentOriginY);
     PropGeomRow(cmd, "Center Z", "##cz", cz, cfmt.c_str(), "Edit circle Z");
     PropGeomRow(cmd, "Radius", "##cr", r, cfmt.c_str(), "Edit circle radius");
     if (*r < 1e-6f)
@@ -7524,20 +7544,28 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
     ImGui::TableNextColumn();
     ImGui::TextUnformatted(kindLabel);
 
+    // REQ-101: displayed/edited in WORLD (local + worldDocumentOrigin), same reasoning as
+    // PropGeomRow's originOffset above — `ann.insX/Y` storage stays local. The MTEXT box-sync delta
+    // is computed from the OLD local value captured before the field's new value overwrites it, so
+    // it is unaffected by the origin (a difference of two world values equals the same difference
+    // in local values).
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::TextUnformatted("Insertion X");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##ainsx", &ann.insX, 0.f, 0.f, cfmt.c_str());
+    double ainsxDisp = static_cast<double>(ann.insX) + cmd.worldDocumentOriginX;
+    ImGui::InputScalar("##ainsx", ImGuiDataType_Double, &ainsxDisp, nullptr, nullptr, cfmt.c_str());
     if (ImGui::IsItemActivated())
       PushUndoSnapshot(cmd, "Edit text X");
     if (ImGui::IsItemDeactivatedAfterEdit()) {
+      const float newInsX = static_cast<float>(ainsxDisp - cmd.worldDocumentOriginX);
       if (ann.kind == CadAnnotation::Kind::Mtext) {
-        const float dx = ann.insX - ann.boxMinX;
+        const float dx = newInsX - ann.insX;
         ann.boxMinX += dx;
         ann.boxMaxX += dx;
       }
+      ann.insX = newInsX;
       BumpCadGpuCache(cmd);
     }
 
@@ -7546,15 +7574,18 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
     ImGui::TextUnformatted("Insertion Y");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##ainsy", &ann.insY, 0.f, 0.f, cfmt.c_str());
+    double ainsyDisp = static_cast<double>(ann.insY) + cmd.worldDocumentOriginY;
+    ImGui::InputScalar("##ainsy", ImGuiDataType_Double, &ainsyDisp, nullptr, nullptr, cfmt.c_str());
     if (ImGui::IsItemActivated())
       PushUndoSnapshot(cmd, "Edit text Y");
     if (ImGui::IsItemDeactivatedAfterEdit()) {
+      const float newInsY = static_cast<float>(ainsyDisp - cmd.worldDocumentOriginY);
       if (ann.kind == CadAnnotation::Kind::Mtext) {
-        const float dy = ann.insY - ann.boxMinY;
+        const float dy = newInsY - ann.insY;
         ann.boxMinY += dy;
         ann.boxMaxY += dy;
       }
+      ann.insY = newInsY;
       BumpCadGpuCache(cmd);
     }
 
@@ -7673,8 +7704,8 @@ void DrawSingleTableGeometryEditable(AppCommandState& cmd, int tableIdx) {
   if (ImGui::BeginTable("props_geom_tbl_ed", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
-    PropGeomRow(cmd, "Insertion X", "##tblinsx", &t.insX, cfmt.c_str(), "Edit table X");
-    PropGeomRow(cmd, "Insertion Y", "##tblinsy", &t.insY, cfmt.c_str(), "Edit table Y");
+    PropGeomRow(cmd, "Insertion X", "##tblinsx", &t.insX, cfmt.c_str(), "Edit table X", cmd.worldDocumentOriginX);
+    PropGeomRow(cmd, "Insertion Y", "##tblinsy", &t.insY, cfmt.c_str(), "Edit table Y", cmd.worldDocumentOriginY);
     PropGeomRow(cmd, "Insertion Z", "##tblinsz", &t.insZ, cfmt.c_str(), "Edit table Z");
     PropGeomRow(cmd, "Width", "##tblw", &t.width, cfmt.c_str(), "Edit table width");
     if (t.width < 1.e-3f)
@@ -7715,8 +7746,9 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
                                                               : "?");
     phIn.push_back(a.plottedHeightInches);
     mwHeight.push_back(CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch));
-    insX.push_back(a.insX);
-    insY.push_back(a.insY);
+    // REQ-101: local storage, shown in world (same reasoning as PropGeomRow's originOffset).
+    insX.push_back(CadCoord::WorldXFromLocal(cmd, a.insX));
+    insY.push_back(CadCoord::WorldYFromLocal(cmd, a.insY));
     rotDeg.push_back(BearingCwNorthDegFromMathAngleRad(a.rotationRad));
   }
 
@@ -9294,10 +9326,12 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   }
   if (cmd.active == AppCommandState::Kind::Offset) {
     using OP = AppCommandState::OffsetPhase;
+    if (cmd.offsetPhase == OP::WaitDistanceOrThrough)
+      return "OFFSET — distance (or T for through-point):";
     if (cmd.offsetPhase == OP::WaitSelectEntity)
       return "OFFSET — pick object:";
-    if (cmd.offsetPhase == OP::WaitDistanceOrThrough)
-      return "OFFSET — distance (or through-click):";
+    if (cmd.offsetPhase == OP::WaitThroughPick)
+      return "OFFSET — click through point:";
     return "OFFSET — pick side:";
   }
   if (cmd.active == AppCommandState::Kind::Zoom)

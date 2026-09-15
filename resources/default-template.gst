@@ -39205,12 +39205,12 @@
       }
     ],
     "view": {
-      "panWorldX": 13.607424821993376,
-      "panWorldY": 0.30805350816929256,
+      "panWorldX": 0.0,
+      "panWorldY": 0.0,
       "zoom": 1.0
     },
-    "worldDocumentOriginX": 13.607424821993376,
-    "worldDocumentOriginY": 0.30805350816929256
+    "worldDocumentOriginX": 0.0,
+    "worldDocumentOriginY": 0.0
   },
   "format": "gosurvey",
   "settings": {

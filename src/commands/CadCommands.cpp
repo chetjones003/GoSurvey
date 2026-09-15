@@ -12059,11 +12059,34 @@ static void ResetOffsetDraft(AppCommandState& st) {
   st.offsetEntityValid = false;
   st.offsetEntity = {};
   st.offsetTypedDistance = 0.f;
+  st.offsetThroughMode = false;
+  st.offsetPhase = AppCommandState::OffsetPhase::WaitDistanceOrThrough;
+  st.offsetHoverHighlightValid = false;
+  st.offsetHoverEntity = {};
+}
+
+/// Loop-back reset used between offsets within one OFFSET invocation (REQ-103): clears only the
+/// picked entity, keeping the typed distance / through-mode so the next pick reuses it, matching
+/// TRIM's own per-target loop.
+static void ResetOffsetSelectionForNextPick(AppCommandState& st) {
+  st.offsetEntityValid = false;
+  st.offsetEntity = {};
   st.offsetPhase = AppCommandState::OffsetPhase::WaitSelectEntity;
   st.offsetHoverHighlightValid = false;
   st.offsetHoverEntity = {};
 }
 
+// Every function below (except ClosestPointOnSegment, kept `float` — it is also reused by BREAK
+// via `using OffsetCmd::ClosestPointOnSegment` at this file's BREAK section, so widening it would
+// ripple into an unrelated command) works in `double`, matching the `double` storage of
+// userLinesFlat / userCirclesCxCyZR / userPolylineVerts / CadArc::cx,cy,r / CadEllipse::cx,cy
+// (REQ-101). Reading those into `float` locals here used to narrow to ~float32 precision (~0.1-0.2
+// units at state-plane / UTM magnitudes of 1e6+) BEFORE doing the perpendicular-offset math, so
+// every repeated OFFSET rebuilt its normal from an already-truncated previous line and the error
+// compounded in a consistent direction across a chain of offsets (issue: OFFSET distance drift /
+// skew on non-axis-aligned geometry at large coordinate magnitude). The typed offset distance
+// itself stays `float` — it is always a small number, so it loses no meaningful precision being
+// added to a `double` base coordinate.
 static void ClosestPointOnSegment(float ax, float ay, float bx, float by, float px, float py, float* qx,
                                   float* qy) {
   const float vx = bx - ax;
@@ -12079,14 +12102,14 @@ static void ClosestPointOnSegment(float ax, float ay, float bx, float by, float 
   *qy = ay + t * vy;
 }
 
-static bool LineLineIntersectInf(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy,
-                                 float* ox, float* oy) {
-  const float rx = bx - ax, ry = by - ay;
-  const float sx = dx - cx, sy = dy - cy;
-  const float det = rx * sy - ry * sx;
-  if (std::fabs(det) < 1e-12f * std::max(1.f, std::hypot(rx, ry) * std::hypot(sx, sy)))
+static bool LineLineIntersectInf(double ax, double ay, double bx, double by, double cx, double cy, double dx,
+                                 double dy, double* ox, double* oy) {
+  const double rx = bx - ax, ry = by - ay;
+  const double sx = dx - cx, sy = dy - cy;
+  const double det = rx * sy - ry * sx;
+  if (std::fabs(det) < 1e-12 * std::max(1.0, std::hypot(rx, ry) * std::hypot(sx, sy)))
     return false;
-  const float t = ((cx - ax) * sy - (cy - ay) * sx) / det;
+  const double t = ((cx - ax) * sy - (cy - ay) * sx) / det;
   *ox = ax + t * rx;
   *oy = ay + t * ry;
   return true;
@@ -12094,18 +12117,17 @@ static bool LineLineIntersectInf(float ax, float ay, float bx, float by, float c
 
 /// REQ-329 increment 7: project a point into the active UCS plane's local 2D frame, so an OFFSET
 /// side / through pick on a tilted work plane is decided in that plane rather than in world XY.
-static ucs::Point2D OffsetPlaneLocal(const AppCommandState& st, float x, float y, float z) {
-  return ucs::WorldToPlane(CadActiveUcsStorage(st),
-                           {static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)});
+static ucs::Point2D OffsetPlaneLocal(const AppCommandState& st, double x, double y, double z) {
+  return ucs::WorldToPlane(CadActiveUcsStorage(st), {x, y, z});
 }
 
-static void UnitLeftNormal(float ax, float ay, float bx, float by, float* nx, float* ny) {
-  float vx = bx - ax;
-  float vy = by - ay;
-  const float len = std::hypot(vx, vy);
-  if (len < 1e-12f) {
-    *nx = 0.f;
-    *ny = 1.f;
+static void UnitLeftNormal(double ax, double ay, double bx, double by, double* nx, double* ny) {
+  double vx = bx - ax;
+  double vy = by - ay;
+  const double len = std::hypot(vx, vy);
+  if (len < 1e-12) {
+    *nx = 0.0;
+    *ny = 1.0;
     return;
   }
   vx /= len;
@@ -12114,16 +12136,18 @@ static void UnitLeftNormal(float ax, float ay, float bx, float by, float* nx, fl
   *ny = vx;
 }
 
-static float SignedSideLine(float ax, float ay, float bx, float by, float px, float py) {
-  float qx = 0.f, qy = 0.f;
-  ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
-  float nx = 0.f, ny = 0.f;
+// The signed perpendicular distance from (px,py) to the infinite line through (ax,ay)-(bx,by).
+// Deliberately does NOT clamp to a closest point on the segment first (unlike the shared
+// ClosestPointOnSegment): the normal component of (p - q) is the same for every q on the line, so
+// projecting straight off (ax,ay) gives the identical answer with one less double round-trip.
+static double SignedSideLine(double ax, double ay, double bx, double by, double px, double py) {
+  double nx = 0.0, ny = 0.0;
   UnitLeftNormal(ax, ay, bx, by, &nx, &ny);
-  return (px - qx) * nx + (py - qy) * ny;
+  return (px - ax) * nx + (py - ay) * ny;
 }
 
-static float SignedSideCircle(float cx, float cy, float r, float px, float py) {
-  const float d = std::hypot(px - cx, py - cy);
+static double SignedSideCircle(double cx, double cy, double r, double px, double py) {
+  const double d = std::hypot(px - cx, py - cy);
   return d - r;
 }
 
@@ -12158,16 +12182,16 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   if (k + 5 >= st.userLinesFlat.size())
     return false;
   PushUndoSnapshot(st, "Offset line");
-  const float x0 = st.userLinesFlat[k];
-  const float y0 = st.userLinesFlat[k + 1];
-  const float z0 = st.userLinesFlat[k + 2];  // read before push_back may reallocate
-  const float x1 = st.userLinesFlat[k + 3];
-  const float y1 = st.userLinesFlat[k + 4];
-  const float z1 = st.userLinesFlat[k + 5];
-  const float dx = x1 - x0;
-  const float dy = y1 - y0;
-  const float dz = z1 - z0;
-  if (std::hypot(std::hypot(dx, dy), dz) < 1e-8f) {
+  const double x0 = st.userLinesFlat[k];
+  const double y0 = st.userLinesFlat[k + 1];
+  const double z0 = st.userLinesFlat[k + 2];  // read before push_back may reallocate
+  const double x1 = st.userLinesFlat[k + 3];
+  const double y1 = st.userLinesFlat[k + 4];
+  const double z1 = st.userLinesFlat[k + 5];
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double dz = z1 - z0;
+  if (std::hypot(std::hypot(dx, dy), dz) < 1e-8) {
     log.push_back("OFFSET — zero-length line.");
     return false;
   }
@@ -12175,20 +12199,20 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   // active work plane (`UCS-Z × lineDir` — the same left-normal handedness `UnitLeftNormal` gives,
   // which under the World UCS reduces to exactly it). The offset copy then stays in the work plane
   // rather than sliding along world XY off it.
-  float ox0 = 0.f, oy0 = 0.f, ox1 = 0.f, oy1 = 0.f, oz0 = z0, oz1 = z1;
+  double ox0 = 0.0, oy0 = 0.0, ox1 = 0.0, oy1 = 0.0, oz0 = z0, oz1 = z1;
   if (!CadWorkPlaneIsWorldXy(st)) {
     const ucs::Ucs u = CadActiveUcsStorage(st);
-    const ray3d::Vec3 dir = ray3d::Normalize({static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)});
+    const ray3d::Vec3 dir = ray3d::Normalize({dx, dy, dz});
     const ray3d::Vec3 perp = ray3d::Normalize(
         ray3d::Cross({u.zAxis.x, u.zAxis.y, u.zAxis.z}, dir));
-    ox0 = x0 + static_cast<float>(perp.x) * signedD;
-    oy0 = y0 + static_cast<float>(perp.y) * signedD;
-    oz0 = z0 + static_cast<float>(perp.z) * signedD;
-    ox1 = x1 + static_cast<float>(perp.x) * signedD;
-    oy1 = y1 + static_cast<float>(perp.y) * signedD;
-    oz1 = z1 + static_cast<float>(perp.z) * signedD;
+    ox0 = x0 + perp.x * signedD;
+    oy0 = y0 + perp.y * signedD;
+    oz0 = z0 + perp.z * signedD;
+    ox1 = x1 + perp.x * signedD;
+    oy1 = y1 + perp.y * signedD;
+    oz1 = z1 + perp.z * signedD;
   } else {
-    float nx = 0.f, ny = 0.f;
+    double nx = 0.0, ny = 0.0;
     UnitLeftNormal(x0, y0, x1, y1, &nx, &ny);
     ox0 = x0 + nx * signedD;
     oy0 = y0 + ny * signedD;
@@ -12223,12 +12247,12 @@ static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::
   if (k + 3 >= st.userCirclesCxCyZR.size())
     return false;
   PushUndoSnapshot(st, "Offset circle");
-  const float cx = st.userCirclesCxCyZR[k];
-  const float cy = st.userCirclesCxCyZR[k + 1];
-  const float cz = st.userCirclesCxCyZR[k + 2];  // read before any push_back reallocates
-  const float r = st.userCirclesCxCyZR[k + 3];
-  const float nr = r + signedD;
-  if (nr <= 1e-6f) {
+  const double cx = st.userCirclesCxCyZR[k];
+  const double cy = st.userCirclesCxCyZR[k + 1];
+  const double cz = st.userCirclesCxCyZR[k + 2];  // read before any push_back reallocates
+  const double r = st.userCirclesCxCyZR[k + 3];
+  const double nr = r + signedD;
+  if (nr <= 1e-6) {
     log.push_back("OFFSET — resulting circle radius too small.");
     return false;
   }
@@ -12249,8 +12273,8 @@ static bool CommitOffsetArc(AppCommandState& st, int ai, float signedD, std::vec
     return false;
   PushUndoSnapshot(st, "Offset arc");
   const CadArc& a = st.userArcs[static_cast<size_t>(ai)];
-  const float nr = a.r + signedD;
-  if (nr <= 1e-6f) {
+  const double nr = a.r + signedD;
+  if (nr <= 1e-6) {
     log.push_back("OFFSET — resulting arc radius too small.");
     return false;
   }
@@ -12299,7 +12323,7 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
   const bool closed =
       static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
 
-  std::vector<std::pair<float, float>> v;
+  std::vector<std::pair<double, double>> v;
   v.reserve(static_cast<size_t>(nv));
   for (int i = v0; i < v1; ++i) {
     v.push_back({st.userPolylineVerts[static_cast<size_t>(i * 3)], st.userPolylineVerts[static_cast<size_t>(i * 3 + 1)]});
@@ -12312,21 +12336,21 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
     return false;
   }
 
-  std::vector<std::pair<float, float>> pa(static_cast<size_t>(nEdges)), pb(static_cast<size_t>(nEdges));
+  std::vector<std::pair<double, double>> pa(static_cast<size_t>(nEdges)), pb(static_cast<size_t>(nEdges));
   for (int ei = 0; ei < nEdges; ++ei) {
     const int ia = ei;
     const int ib = closed ? (ei + 1) % n : ei + 1;
-    const float ax = v[static_cast<size_t>(ia)].first;
-    const float ay = v[static_cast<size_t>(ia)].second;
-    const float bx = v[static_cast<size_t>(ib)].first;
-    const float by = v[static_cast<size_t>(ib)].second;
-    float nx = 0.f, ny = 0.f;
+    const double ax = v[static_cast<size_t>(ia)].first;
+    const double ay = v[static_cast<size_t>(ia)].second;
+    const double bx = v[static_cast<size_t>(ib)].first;
+    const double by = v[static_cast<size_t>(ib)].second;
+    double nx = 0.0, ny = 0.0;
     UnitLeftNormal(ax, ay, bx, by, &nx, &ny);
     pa[static_cast<size_t>(ei)] = {ax + nx * signedD, ay + ny * signedD};
     pb[static_cast<size_t>(ei)] = {bx + nx * signedD, by + ny * signedD};
   }
 
-  std::vector<std::pair<float, float>> out;
+  std::vector<std::pair<double, double>> out;
   if (!closed) {
     if (nEdges == 1) {
       out.push_back(pa[0]);
@@ -12338,13 +12362,13 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
         const auto& b0 = pb[static_cast<size_t>(ei)];
         const auto& a1 = pa[static_cast<size_t>(ei + 1)];
         const auto& b1 = pb[static_cast<size_t>(ei + 1)];
-        float ix = 0.f, iy = 0.f;
+        double ix = 0.0, iy = 0.0;
         if (LineLineIntersectInf(a0.first, a0.second, b0.first, b0.second, a1.first, a1.second, b1.first, b1.second,
                                   &ix, &iy))
           out.push_back({ix, iy});
         else {
-          const float mx = 0.5f * (b0.first + a1.first);
-          const float my = 0.5f * (b0.second + a1.second);
+          const double mx = 0.5 * (b0.first + a1.first);
+          const double my = 0.5 * (b0.second + a1.second);
           out.push_back({mx, my});
         }
       }
@@ -12358,12 +12382,12 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
       const auto& b0 = pb[static_cast<size_t>(ei)];
       const auto& a1 = pa[static_cast<size_t>(en)];
       const auto& b1 = pb[static_cast<size_t>(en)];
-      float ix = 0.f, iy = 0.f;
+      double ix = 0.0, iy = 0.0;
       if (LineLineIntersectInf(a0.first, a0.second, b0.first, b0.second, a1.first, a1.second, b1.first, b1.second, &ix,
                                &iy))
         out[static_cast<size_t>(ei)] = {ix, iy};
       else
-        out[static_cast<size_t>(ei)] = {0.5f * (b0.first + a1.first), 0.5f * (b0.second + a1.second)};
+        out[static_cast<size_t>(ei)] = {0.5 * (b0.first + a1.first), 0.5 * (b0.second + a1.second)};
     }
   }
 
@@ -12434,53 +12458,61 @@ static void FinishOffsetAndIdle(AppCommandState& st, std::vector<std::string>& l
   st.active = AppCommandState::Kind::None;
 }
 
-static void HandleOffsetThroughPick(AppCommandState& st, float px, float py, std::vector<std::string>& log) {
+/// REQ-103's documented TRIM/OFFSET per-target loop: after a successful offset, go back to
+/// "select object" with the same typed distance / through-mode still armed, instead of ending the
+/// command. The caller only reaches here after a successful CommitOffsetSigned.
+static void LoopOffsetBackToSelect(AppCommandState& st, std::vector<std::string>& log) {
+  ResetOffsetSelectionForNextPick(st);
+  log.push_back("OFFSET — select next object to offset (same distance), or Enter/Esc to finish.");
+}
+
+static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, std::vector<std::string>& log) {
   if (!st.offsetEntityValid)
     return;
   const SelectedEntity& e = st.offsetEntity;
   const bool tilted = !CadWorkPlaneIsWorldXy(st);  // REQ-329 increment 7
   const ucs::Point2D cur = tilted ? OffsetPlaneLocal(st, px, py, CadCommitElevation(st))
-                                  : ucs::Point2D{static_cast<double>(px), static_cast<double>(py)};
+                                  : ucs::Point2D{px, py};
   float signedD = 0.f;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(e.index) * 6;
     if (k + 5 >= st.userLinesFlat.size())
       return;
-    float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
-    float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    double x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    double x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
     if (tilted) {
       const ucs::Point2D a = OffsetPlaneLocal(st, x0, y0, st.userLinesFlat[k + 2]);
       const ucs::Point2D b = OffsetPlaneLocal(st, x1, y1, st.userLinesFlat[k + 5]);
-      x0 = static_cast<float>(a.x); y0 = static_cast<float>(a.y);
-      x1 = static_cast<float>(b.x); y1 = static_cast<float>(b.y);
+      x0 = a.x; y0 = a.y;
+      x1 = b.x; y1 = b.y;
     }
-    signedD = SignedSideLine(x0, y0, x1, y1, static_cast<float>(cur.x), static_cast<float>(cur.y));
+    signedD = static_cast<float>(SignedSideLine(x0, y0, x1, y1, cur.x, cur.y));
     break;
   }
   case SelectedEntity::Type::Circle: {
     const size_t k = static_cast<size_t>(e.index) * 4;
     if (k + 3 >= st.userCirclesCxCyZR.size())
       return;
-    float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
-    const float r = st.userCirclesCxCyZR[k + 3];
+    double cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
+    const double r = st.userCirclesCxCyZR[k + 3];
     if (tilted) {
       const ucs::Point2D c = OffsetPlaneLocal(st, cx, cy, st.userCirclesCxCyZR[k + 2]);
-      cx = static_cast<float>(c.x); cy = static_cast<float>(c.y);
+      cx = c.x; cy = c.y;
     }
-    signedD = SignedSideCircle(cx, cy, r, static_cast<float>(cur.x), static_cast<float>(cur.y));
+    signedD = static_cast<float>(SignedSideCircle(cx, cy, r, cur.x, cur.y));
     break;
   }
   case SelectedEntity::Type::Arc: {
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
       return;
     const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
-    float cx = a.cx, cy = a.cy;
+    double cx = a.cx, cy = a.cy;
     if (tilted) {
       const ucs::Point2D c = OffsetPlaneLocal(st, a.cx, a.cy, a.z);
-      cx = static_cast<float>(c.x); cy = static_cast<float>(c.y);
+      cx = c.x; cy = c.y;
     }
-    signedD = SignedSideCircle(cx, cy, a.r, static_cast<float>(cur.x), static_cast<float>(cur.y));
+    signedD = static_cast<float>(SignedSideCircle(cx, cy, a.r, cur.x, cur.y));
     break;
   }
   case SelectedEntity::Type::Polyline:
@@ -12497,10 +12529,10 @@ static void HandleOffsetThroughPick(AppCommandState& st, float px, float py, std
     return;
   }
   if (CommitOffsetSigned(st, signedD, log))
-    FinishOffsetAndIdle(st, log);
+    LoopOffsetBackToSelect(st, log);
 }
 
-static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::vector<std::string>& log) {
+static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std::vector<std::string>& log) {
   if (!st.offsetEntityValid || st.offsetTypedDistance <= 0.f)
     return;
   const float d = st.offsetTypedDistance;
@@ -12508,50 +12540,50 @@ static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::v
   const bool tilted = !CadWorkPlaneIsWorldXy(st);
   // REQ-329 increment 7: on a tilted work plane the pick is resolved in the plane's own 2D frame.
   const ucs::Point2D cur = tilted ? OffsetPlaneLocal(st, px, py, CadCommitElevation(st))
-                                  : ucs::Point2D{static_cast<double>(px), static_cast<double>(py)};
+                                  : ucs::Point2D{px, py};
   float sgn = 1.f;
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(e.index) * 6;
     if (k + 5 >= st.userLinesFlat.size())
       return;
-    float ax = st.userLinesFlat[k], ay = st.userLinesFlat[k + 1];
-    float bx = st.userLinesFlat[k + 3], by = st.userLinesFlat[k + 4];
+    double ax = st.userLinesFlat[k], ay = st.userLinesFlat[k + 1];
+    double bx = st.userLinesFlat[k + 3], by = st.userLinesFlat[k + 4];
     if (tilted) {
       const ucs::Point2D a = OffsetPlaneLocal(st, ax, ay, st.userLinesFlat[k + 2]);
       const ucs::Point2D b = OffsetPlaneLocal(st, bx, by, st.userLinesFlat[k + 5]);
-      ax = static_cast<float>(a.x); ay = static_cast<float>(a.y);
-      bx = static_cast<float>(b.x); by = static_cast<float>(b.y);
+      ax = a.x; ay = a.y;
+      bx = b.x; by = b.y;
     }
-    const float sd = SignedSideLine(ax, ay, bx, by, static_cast<float>(cur.x), static_cast<float>(cur.y));
-    sgn = sd >= 0.f ? 1.f : -1.f;
+    const double sd = SignedSideLine(ax, ay, bx, by, cur.x, cur.y);
+    sgn = sd >= 0.0 ? 1.f : -1.f;
     break;
   }
   case SelectedEntity::Type::Circle: {
     const size_t k = static_cast<size_t>(e.index) * 4;
     if (k + 3 >= st.userCirclesCxCyZR.size())
       return;
-    float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
-    const float r = st.userCirclesCxCyZR[k + 3];
+    double cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
+    const double r = st.userCirclesCxCyZR[k + 3];
     if (tilted) {
       const ucs::Point2D c = OffsetPlaneLocal(st, cx, cy, st.userCirclesCxCyZR[k + 2]);
-      cx = static_cast<float>(c.x); cy = static_cast<float>(c.y);
+      cx = c.x; cy = c.y;
     }
-    const float side = SignedSideCircle(cx, cy, r, static_cast<float>(cur.x), static_cast<float>(cur.y));
-    sgn = side >= 0.f ? 1.f : -1.f;
+    const double side = SignedSideCircle(cx, cy, r, cur.x, cur.y);
+    sgn = side >= 0.0 ? 1.f : -1.f;
     break;
   }
   case SelectedEntity::Type::Arc: {
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
       return;
     const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
-    float cx = a.cx, cy = a.cy;
+    double cx = a.cx, cy = a.cy;
     if (tilted) {
       const ucs::Point2D c = OffsetPlaneLocal(st, a.cx, a.cy, a.z);
-      cx = static_cast<float>(c.x); cy = static_cast<float>(c.y);
+      cx = c.x; cy = c.y;
     }
-    const float side = SignedSideCircle(cx, cy, a.r, static_cast<float>(cur.x), static_cast<float>(cur.y));
-    sgn = side >= 0.f ? 1.f : -1.f;
+    const double side = SignedSideCircle(cx, cy, a.r, cur.x, cur.y);
+    sgn = side >= 0.0 ? 1.f : -1.f;
     break;
   }
   case SelectedEntity::Type::Ellipse:
@@ -12568,22 +12600,26 @@ static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::v
       if (pi >= 0 && static_cast<size_t>(pi + 1) < st.userPolylineOffsets.size()) {
         const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
         const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-        float best = 1e30f;
+        double best = 1e30;
         float bestS = 1.f;
         for (int vi = v0; vi + 1 < v1; ++vi) {
-          const float ax = st.userPolylineVerts[static_cast<size_t>(vi * 3)];
-          const float ay = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-          const float bx = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
-          const float by = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+          const double ax = st.userPolylineVerts[static_cast<size_t>(vi * 3)];
+          const double ay = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+          const double bx = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
+          const double by = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+          const double sd = SignedSideLine(ax, ay, bx, by, px, py);
+          // Closest point on the SEGMENT (clamped), only to pick which edge is nearest the click —
+          // this only decides which edge's sign wins, never a stored coordinate, so the shared
+          // (float) ClosestPointOnSegment is precise enough here.
           float qx = 0.f, qy = 0.f;
-          ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
-          const float sd = SignedSideLine(ax, ay, bx, by, px, py);
-          const float dx = px - qx;
-          const float dy = py - qy;
-          const float dist2 = dx * dx + dy * dy;
+          ClosestPointOnSegment(static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(bx),
+                                static_cast<float>(by), static_cast<float>(px), static_cast<float>(py), &qx, &qy);
+          const double dx = px - qx;
+          const double dy = py - qy;
+          const double dist2 = dx * dx + dy * dy;
           if (dist2 < best) {
             best = dist2;
-            bestS = sd >= 0.f ? 1.f : -1.f;
+            bestS = sd >= 0.0 ? 1.f : -1.f;
           }
         }
         sgn = bestS;
@@ -12598,28 +12634,28 @@ static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::v
         const float pyn = ux;
         const float mb = ma * el.ratio;
         constexpr float twopi = 6.28318530718f;
-        float best = 1e30f;
-        float bx = el.cx, by = el.cy;
+        double best = 1e30;
+        double bx = el.cx, by = el.cy;
         for (int i = 0; i <= 48; ++i) {
           const float ang = twopi * static_cast<float>(i) / 48.f;
           const float c0 = std::cos(ang);
           const float s0 = std::sin(ang);
-          const float ex = el.cx + ux * (ma * c0) + pxn * (mb * s0);
-          const float ey = el.cy + uy * (ma * c0) + pyn * (mb * s0);
-          const float dx = px - ex;
-          const float dy = py - ey;
-          const float dist2 = dx * dx + dy * dy;
+          const double ex = el.cx + static_cast<double>(ux * (ma * c0) + pxn * (mb * s0));
+          const double ey = el.cy + static_cast<double>(uy * (ma * c0) + pyn * (mb * s0));
+          const double dx = px - ex;
+          const double dy = py - ey;
+          const double dist2 = dx * dx + dy * dy;
           if (dist2 < best) {
             best = dist2;
             bx = ex;
             by = ey;
           }
         }
-        const float ox = bx - el.cx;
-        const float oy = by - el.cy;
-        const float inX = px - el.cx;
-        const float inY = py - el.cy;
-        sgn = (inX * ox + inY * oy) >= 0.f ? 1.f : -1.f;
+        const double ox = bx - el.cx;
+        const double oy = by - el.cy;
+        const double inX = px - el.cx;
+        const double inY = py - el.cy;
+        sgn = (inX * ox + inY * oy) >= 0.0 ? 1.f : -1.f;
       }
     }
     break;
@@ -12629,12 +12665,17 @@ static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::v
   }
   const float signedD = d * sgn;
   if (CommitOffsetSigned(st, signedD, log))
-    FinishOffsetAndIdle(st, log);
+    LoopOffsetBackToSelect(st, log);
 }
 
-static void HandleOffsetViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+static void HandleOffsetViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
   using OP = AppCommandState::OffsetPhase;
   switch (st.offsetPhase) {
+  case OP::WaitDistanceOrThrough:
+    // REQ-103: distance/through-mode is specified BEFORE an object is picked, matching AutoCAD's
+    // own OFFSET order. A viewport click here isn't a valid answer to that prompt.
+    log.push_back("OFFSET — type a positive offset distance, or T for through-point mode.");
+    return;
   case OP::WaitSelectEntity: {
     SelectedEntity hit{};
     float d2 = 0.f;
@@ -12664,12 +12705,16 @@ static void HandleOffsetViewportPick(AppCommandState& st, float wx, float wy, st
     }
     st.offsetEntity = hit;
     st.offsetEntityValid = true;
-    st.offsetPhase = OP::WaitDistanceOrThrough;
-    st.offsetTypedDistance = 0.f;
-    log.push_back("OFFSET — distance (number) + pick side, or click through point for line / circle / arc.");
+    if (st.offsetThroughMode) {
+      st.offsetPhase = OP::WaitThroughPick;
+      log.push_back("OFFSET — click the through point (line / circle / arc).");
+    } else {
+      st.offsetPhase = OP::WaitSidePick;
+      log.push_back("OFFSET — pick which side of the object to offset.");
+    }
     return;
   }
-  case OP::WaitDistanceOrThrough:
+  case OP::WaitThroughPick:
     HandleOffsetThroughPick(st, wx, wy, log);
     return;
   case OP::WaitSidePick:
@@ -14898,7 +14943,7 @@ void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log) {
   OffsetCmd::ResetOffsetDraft(st);
   st.active = K::Offset;
   st.selBoxWaitingSecond = false;
-  log.push_back("OFFSET — select line, circle, arc, ellipse, or polyline. ESC cancels.");
+  log.push_back("OFFSET — specify offset distance, or T for through-point mode. ESC cancels.");
 }
 
 // ============================================================================================
@@ -25782,7 +25827,7 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
     *signedDOut = d * sgn;
     return true;
   }
-  if (st.offsetPhase == OP::WaitDistanceOrThrough) {
+  if (st.offsetPhase == OP::WaitThroughPick) {
     float signedD = 0.f;
     switch (e.type) {
     case T::LineSeg: {
@@ -34347,12 +34392,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandleBooleanTextInput("", st, log);
     } else if (st.active == K::Offset) {
       using OP = AppCommandState::OffsetPhase;
-      if (st.offsetPhase == OP::WaitDistanceOrThrough)
-        log.push_back("OFFSET — type a positive distance, or pick a through point (line / circle / arc).");
+      if (st.offsetPhase == OP::WaitSelectEntity) {
+        // REQ-103: Enter at "select object" (with no object picked yet) ends OFFSET — the same
+        // "<Enter to exit>" TRIM/OFFSET's per-target loop supports, not just a hint message.
+        log.push_back("OFFSET complete.");
+        OffsetCmd::FinishOffsetAndIdle(st, log);
+      } else if (st.offsetPhase == OP::WaitDistanceOrThrough)
+        log.push_back("OFFSET — type a positive distance, or T for through-point mode.");
       else if (st.offsetPhase == OP::WaitSidePick)
         log.push_back("OFFSET — pick which side to offset.");
       else
-        log.push_back("OFFSET — select an entity in the viewport.");
+        log.push_back("OFFSET — click the through point.");
     } else if (st.active == K::Move || st.active == K::Copy) {
       // This fix: PickSelection no longer auto-advances when a box finishes (SubmitViewportPickImpl
       // above), so Enter is what confirms the accumulated selection and moves on — same shape ALIGN
@@ -35394,21 +35444,30 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   if (st.active == K::Offset) {
     using OP = AppCommandState::OffsetPhase;
     if (st.offsetPhase != OP::WaitDistanceOrThrough) {
-      log.push_back("OFFSET — use viewport picks; type a distance only after selecting the object.");
+      log.push_back("OFFSET — use viewport picks to select the object and its side.");
+      return;
+    }
+    const std::string trimmed = StringUtil::trimCopy(line);
+    if (StringUtil::toLowerAsciiCopy(trimmed) == "t" || StringUtil::toLowerAsciiCopy(trimmed) == "through") {
+      st.offsetThroughMode = true;
+      st.offsetTypedDistance = 0.f;
+      st.offsetPhase = OP::WaitSelectEntity;
+      log.push_back("OFFSET — through-point mode. Select line, circle, arc, ellipse, or polyline.");
       return;
     }
     float d = 0.f;
-    if (!ParseOneFloat(StringUtil::trimCopy(line), &d)) {
-      log.push_back("OFFSET — type a positive offset distance (model units), then pick a side.");
+    if (!ParseOneFloat(trimmed, &d)) {
+      log.push_back("OFFSET — type a positive offset distance (model units), or T for through-point mode.");
       return;
     }
     if (d <= 0.f) {
       log.push_back("OFFSET — distance must be positive.");
       return;
     }
+    st.offsetThroughMode = false;
     st.offsetTypedDistance = d;
-    st.offsetPhase = OP::WaitSidePick;
-    log.push_back("OFFSET — pick which side of the object to offset.");
+    st.offsetPhase = OP::WaitSelectEntity;
+    log.push_back("OFFSET — select line, circle, arc, ellipse, or polyline.");
     return;
   }
 
@@ -36692,12 +36751,14 @@ const char* OffsetCommandFooterHint(const AppCommandState& st) {
   if (st.active != K::Offset)
     return "";
   switch (st.offsetPhase) {
-  case OP::WaitSelectEntity:
-    return "OFFSET: Pick line, circle, arc, ellipse, or polyline | ESC cancel";
   case OP::WaitDistanceOrThrough:
-    return "OFFSET: Type distance then pick side — or through-click (line / circle / arc) | ESC cancel";
+    return "OFFSET: Type offset distance, or T for through-point mode | ESC cancel";
+  case OP::WaitSelectEntity:
+    return "OFFSET: Pick line, circle, arc, ellipse, or polyline | Enter to finish | ESC cancel";
   case OP::WaitSidePick:
     return "OFFSET: Pick side of object (polyline/ellipse use closest edge) | ESC cancel";
+  case OP::WaitThroughPick:
+    return "OFFSET: Click the through point (line / circle / arc) | ESC cancel";
   }
   return "";
 }

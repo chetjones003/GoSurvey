@@ -2579,16 +2579,23 @@ struct AppCommandState {
   /// the same way the classic "click the piece to remove" path already does. Left 0 on the plan-view
   /// path, which is byte-for-byte unchanged.
   float trimCutInfP1z = 0.f, trimCutInfP2z = 0.f;
-  /// OFFSET: pick entity, then type distance + pick side, or click a through point (line / circle / arc).
+  /// OFFSET: distance (or T for a through point) first, then select object, then side/through pick;
+  /// on a successful commit it loops back to WaitSelectEntity with the same distance/mode retained,
+  /// until Enter/Esc ends the command (REQ-103's documented TRIM/OFFSET per-target loop pattern).
   enum class OffsetPhase {
-    WaitSelectEntity,
     WaitDistanceOrThrough,
+    WaitSelectEntity,
     WaitSidePick,
-  } offsetPhase = OffsetPhase::WaitSelectEntity;
+    WaitThroughPick,
+  } offsetPhase = OffsetPhase::WaitDistanceOrThrough;
   bool offsetEntityValid = false;
   SelectedEntity offsetEntity{};
-  /// Typed offset distance (always positive); combined with side pick for sign.
+  /// Typed offset distance (always positive); combined with side pick for sign. Persists across the
+  /// select/side loop until OFFSET ends or a new distance is typed.
   float offsetTypedDistance = 0.f;
+  /// True once the user has typed T for through-point mode instead of a fixed distance; persists
+  /// across the loop the same way offsetTypedDistance does.
+  bool offsetThroughMode = false;
   /// While OFFSET waits for the first pick, entity under cursor (for highlight).
   bool offsetHoverHighlightValid = false;
   SelectedEntity offsetHoverEntity{};
