@@ -12524,6 +12524,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const bool overViewCube = modelSpace && vcMouse.x >= viewCubeX && vcMouse.x <= viewCubeX + kViewCubeSize &&
                             vcMouse.y >= viewCubeY && vcMouse.y <= viewCubeY + kViewCubeSize;
 
+  // UCS dropdown geometry (REQ-154), computed here for the same reason the ViewCube's is: the
+  // button itself is drawn as its own overlay window much later in this function, but the crosshair
+  // and the dynamic-input palette both need to know its bounds early so the drawn crosshair (and the
+  // palette) can get out of the way of a real clickable control — the system cursor belongs there,
+  // not the CAD one. Geometry duplicated from the drawing site below; it must match.
+  const std::string ucsDropActiveName = CadUcsFrameLabel(cmd);
+  constexpr float kUcsDropChevronReserve = 22.f;
+  const float ucsDropW =
+      std::max(96.f, ImGui::CalcTextSize(ucsDropActiveName.c_str()).x + 16.f + kUcsDropChevronReserve);
+  const float ucsDropH = ImGui::GetTextLineHeight() + 10.f;  // FramePadding.y == 5 at the drawing site
+  const float ucsDropX = viewCubeX + kViewCubeSize - ucsDropW;
+  const float ucsDropY = viewCubeY + kViewCubeSize + 8.f;
+  const bool overUcsDropdown = modelSpace && avail.x > 200.f && avail.y > 200.f && vcMouse.x >= ucsDropX &&
+                               vcMouse.x <= ucsDropX + ucsDropW && vcMouse.y >= ucsDropY &&
+                               vcMouse.y <= ucsDropY + ucsDropH;
+
   // Advance any in-flight ViewCube animation (REQ-059).
   CadTickViewAnimation(cmd, ImGui::GetIO().DeltaTime);
 
@@ -17789,15 +17805,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (!cmdActiveNow)
     cmd.viewportDrawingHovered = false;
 
-  // But VISIBILITY is a separate question from readiness: the palette is drawn at the cursor, so
-  // it makes no sense floating over the ribbon, a docked panel, the command line, or the ViewCube
-  // once the mouse actually leaves the viewport — it hides there and reappears the instant the
-  // mouse re-enters, with no re-engagement delay since readiness (above) never left.
-  // `overViewCube` (computed above) is a plain screen-rect test, not a widget hover — the cube is
-  // drawn straight to this same window's draw list rather than as its own interactive item, so
-  // IsItemHovered() on the background image reads true right through it. Exclude it explicitly.
-  const bool inImage =
-      hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y && !overViewCube;
+  // But VISIBILITY is a separate question from readiness: the palette is drawn at the cursor, so it
+  // makes no sense floating over the ribbon, a docked panel, the command line, or the ViewCube/UCS
+  // dropdown once the mouse actually leaves the viewport — it hides there and reappears the instant
+  // the mouse re-enters, with no re-engagement delay since readiness (above) never left.
+  //
+  // A pure screen-rect containment test, deliberately NOT `hovered` (IsItemHovered on the
+  // background image): that reads false whenever ANY other window merely overlaps this screen
+  // region — the command-autocomplete popup drawn right at the crosshair, the UCS dropdown, a
+  // lingering ActiveId elsewhere — each of which cost a round of "doesn't show until the mouse
+  // moves" bug reports chasing IsItemHovered's exact blocking rules one at a time. Whether the
+  // mouse is over the viewport's own rectangle does not depend on what else ImGui drew on top of it
+  // this frame, so it is not susceptible to any of that.
+  const bool inImage = mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y && !overViewCube &&
+                       !overUcsDropdown;
 
   const bool showViewportCmdPalette =
       (cmd.active != VK::None || paperSelStep) && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged &&
@@ -18286,11 +18307,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // or cancelled (buffer cleared on Esc).
   const bool typingCommand =
       (cmd.active == AppCommandState::Kind::None) && cmdBuf && cmdBuf[0] != '\0';
-  // Excludes the ViewCube (a plain screen-rect test, not a widget hover — see `overViewCube` above):
-  // it is its own clickable navigation control, so the system cursor belongs there, not the drawn
-  // crosshair.
-  const bool liveHover =
-      hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y && !overViewCube;
+  // Excludes the ViewCube and the UCS dropdown (plain screen-rect tests, not widget hovers — see
+  // `overViewCube`/`overUcsDropdown` above): both are their own clickable navigation controls, so
+  // the system cursor belongs there, not the drawn crosshair.
+  const bool liveHover = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y &&
+                         !overViewCube && !overUcsDropdown;
   const bool frozenHair = typingCommand && s_lastCrosshairScreen.x >= 0.f;
   // PAN command (REQ-045): show a hand instead of the CAD crosshair while pan mode is active.
   // ORBIT (REQ-084 (c)) is a drag mode too: the crosshair would say "pick a point", which is not
