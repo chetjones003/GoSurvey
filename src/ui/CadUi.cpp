@@ -17765,22 +17765,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // avoids touching the huge existing Kind-keyed switches this whole file consults elsewhere.
   const bool paperSelStep = PaperIsObjectSelectionStep(cmd);
 
-  // AutoCAD's dynamic input is visible for the whole time a command is prompting, wherever the
-  // cursor last was — it does not wait for a hover event, because a command very often STARTS
-  // from somewhere that is not "hovering the drawing" (the classic command line, an autocomplete
-  // pick, a ribbon button) and the palette still has to appear at the crosshair immediately. Tying
-  // engagement to hover made the palette wait for the next mouse MOVE over the drawing before it
-  // would show at all — the cursor sat there with a live command and no dynamic input until the
-  // user nudged the mouse. Engagement now simply mirrors "is a command (or the paper selection
-  // step) active", full stop; `inImage`/`hovered` play no part in it.
+  // AutoCAD's dynamic input is READY for the whole time a command is prompting — it does not wait
+  // for a hover event to become usable, because a command very often STARTS from somewhere that is
+  // not "hovering the drawing" (the classic command line, an autocomplete pick, a ribbon button).
+  // Tying readiness to hover made the palette wait for the next mouse MOVE over the drawing before
+  // it would show at ALL, even once the mouse came back to the viewport. Readiness now simply
+  // mirrors "is a command (or the paper selection step) active", full stop.
   const bool cmdActiveNow = cmd.active != VK::None || paperSelStep;
   cmd.viewportCmdPaletteEngaged = cmdActiveNow;
   if (!cmdActiveNow)
     cmd.viewportDrawingHovered = false;
 
+  // But VISIBILITY is a separate question from readiness: the palette is drawn at the cursor, so
+  // it makes no sense floating over the ribbon, a docked panel, the command line, or the ViewCube
+  // once the mouse actually leaves the viewport — it hides there and reappears the instant the
+  // mouse re-enters, with no re-engagement delay since readiness (above) never left.
+  const bool inImage = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
+
   const bool showViewportCmdPalette =
       (cmd.active != VK::None || paperSelStep) && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged &&
-      cmdBuf && cmdBufSize > 0 && !cmd.mtextRichEditorOpen && !cmd.tableCellEditorOpen;
+      inImage && cmdBuf && cmdBufSize > 0 && !cmd.mtextRichEditorOpen && !cmd.tableCellEditorOpen;
   cmd.viewportDrawingHovered = showViewportCmdPalette;
 
   // Detect the palette's open edge so the two-field coordinate input resets its
