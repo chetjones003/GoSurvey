@@ -17747,7 +17747,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   using VK = AppCommandState::Kind;
-  const bool inImage = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
 
   // REQ-307 (GitHub #106): the paper-space selection step keeps cmd.active == None throughout (it
   // is not a model-space command), so the engagement gate below — keyed on cmd.active — would never
@@ -17755,29 +17754,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // avoids touching the huge existing Kind-keyed switches this whole file consults elsewhere.
   const bool paperSelStep = PaperIsObjectSelectionStep(cmd);
 
-  // A command typed while the mouse sits over the classic command line (not the viewport) starts
-  // with `inImage` false, so the palette otherwise waited for the next mouse MOVE over the drawing
-  // before engaging — the cursor sat there with no dynamic input until the user nudged it. Force
-  // engagement on the frame a command (or the paper selection step) actually starts, regardless of
-  // where the mouse happens to be that frame.
+  // AutoCAD's dynamic input is visible for the whole time a command is prompting, wherever the
+  // cursor last was — it does not wait for a hover event, because a command very often STARTS
+  // from somewhere that is not "hovering the drawing" (the classic command line, an autocomplete
+  // pick, a ribbon button) and the palette still has to appear at the crosshair immediately. Tying
+  // engagement to hover made the palette wait for the next mouse MOVE over the drawing before it
+  // would show at all — the cursor sat there with a live command and no dynamic input until the
+  // user nudged the mouse. Engagement now simply mirrors "is a command (or the paper selection
+  // step) active", full stop; `inImage`/`hovered` play no part in it.
   const bool cmdActiveNow = cmd.active != VK::None || paperSelStep;
-  static bool s_cmdActivePrevForEngage = false;
-  const bool cmdJustStarted = cmdActiveNow && !s_cmdActivePrevForEngage;
-  s_cmdActivePrevForEngage = cmdActiveNow;
-
-  if (!cmdActiveNow) {
-    cmd.viewportCmdPaletteEngaged = false;
+  cmd.viewportCmdPaletteEngaged = cmdActiveNow;
+  if (!cmdActiveNow)
     cmd.viewportDrawingHovered = false;
-  } else {
-    ImGuiIO& ioEng = ImGui::GetIO();
-    if (inImage || cmdJustStarted)
-      cmd.viewportCmdPaletteEngaged = true;
-    else if (cmd.viewportCmdPaletteEngaged) {
-      const bool hasDraft = cmdBuf && cmdBuf[0] != '\0';
-      if (!hasDraft && !ioEng.WantTextInput && ImGui::GetActiveID() == 0)
-        cmd.viewportCmdPaletteEngaged = false;
-    }
-  }
 
   const bool showViewportCmdPalette =
       (cmd.active != VK::None || paperSelStep) && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged &&
