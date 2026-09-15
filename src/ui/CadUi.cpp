@@ -219,6 +219,13 @@ static void MtextRichWrapSelection(AppCommandState& cmd, const char* open, const
 // Tab in the command input completes the buffer to this.
 std::string g_cmdSuggestComplete;
 
+/// One-shot: set true immediately before a SetKeyboardFocusHere() that SHOULD keep the standard
+/// blue select-all ImGui gives a freshly focused field — the dynamic-input group's first field on
+/// a fresh prompt (REQ-024), which AutoCAD shows pre-selected rather than with a bare cursor.
+/// Consumed (reset false) by the very next activation the callback below sees, so it only affects
+/// the field it was set for.
+bool g_keepSelectAllOnActivate = false;
+
 int CommandLineInputCallback(ImGuiInputTextCallbackData* data) {
   if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion) {
     if (!g_cmdSuggestComplete.empty()) {
@@ -236,8 +243,12 @@ int CommandLineInputCallback(ImGuiInputTextCallbackData* data) {
       data->BufTextLen > 0 && data->SelectionStart == 0 && data->SelectionEnd == data->BufTextLen;
 
   if (justActivated && fullBufSelected) {
-    data->CursorPos = data->BufTextLen;
-    data->SelectionStart = data->SelectionEnd = data->CursorPos;
+    if (g_keepSelectAllOnActivate)
+      g_keepSelectAllOnActivate = false;  // consumed: leave the field's default select-all in place
+    else {
+      data->CursorPos = data->BufTextLen;
+      data->SelectionStart = data->SelectionEnd = data->CursorPos;
+    }
   }
   return 0;
 }
@@ -17896,7 +17907,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // The first keystroke seeds the DISTANCE box, which is the one you land on. Tab then moves to
       // the angle (ImGui's own next-item behaviour, so no key handling of ours), which is how you
       // reach "I only care about the angle".
-      if (activeIdP != idDist && activeIdP != idAng && !io.WantTextInput) {
+      if (promptChanged) {
+        g_keepSelectAllOnActivate = true;
+        ImGui::SetKeyboardFocusHere();
+      } else if (activeIdP != idDist && activeIdP != idAng && !io.WantTextInput) {
         if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
           // Tab with neither box focused jumps into the distance box without typing anything —
           // the live tracked value stays live (not locked), same as clicking in without editing.
@@ -17988,7 +18002,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const ImGuiID idAng2 = ImGui::GetID("##anchAng");
       const ImGuiID activeIdA = ImGui::GetActiveID();
 
-      if (activeIdA != idDist2 && activeIdA != idAng2 && !io.WantTextInput) {
+      if (promptChanged) {
+        g_keepSelectAllOnActivate = true;
+        ImGui::SetKeyboardFocusHere();
+      } else if (activeIdA != idDist2 && activeIdA != idAng2 && !io.WantTextInput) {
         if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
           ImGui::SetKeyboardFocusHere();
         } else if (io.InputQueueCharacters.Size > 0) {
@@ -18066,9 +18083,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const ImGuiID idY = ImGui::GetID("##dynY");
       const ImGuiID activeIdXY = ImGui::GetActiveID();
 
-      // Type-to-start: the first keystroke with neither box focused seeds the X box, since a typed
-      // relative/bearing/distance expression (which fills both fields at once) lands there.
-      if (activeIdXY != idX && activeIdXY != idY && !io.WantTextInput) {
+      // The X box is focused-and-selected the moment this prompt appears — AutoCAD's own dynamic
+      // input always lands there first, so Tab goes straight to Y on the very first press instead
+      // of a first Tab merely focusing X and a second one being needed to actually move on.
+      if (promptChanged) {
+        g_keepSelectAllOnActivate = true;
+        ImGui::SetKeyboardFocusHere();
+      }
+      // Type-to-start / cold-Tab fallback: if the user clicked away and back with neither box
+      // focused, the first keystroke seeds the X box (a typed relative/bearing/distance expression
+      // fills both fields at once and lands there) and a cold Tab still focuses it.
+      else if (activeIdXY != idX && activeIdXY != idY && !io.WantTextInput) {
         if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
           ImGui::SetKeyboardFocusHere();
         } else if (io.InputQueueCharacters.Size > 0) {
