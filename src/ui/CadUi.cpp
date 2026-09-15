@@ -17830,11 +17830,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                       mainViewport->WorkPos.y + mainViewport->WorkSize.y - estH - 8.f);
 
     ImGui::SetNextWindowPos(wp, ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.94f);
+    // No filled card behind the label/fields — AutoCAD's own dynamic input has none: the label
+    // floats directly on the drawing and each field carries its own box (PushDynFieldGroupStyle /
+    // the single field's own FrameBg). A window is still used for layout and auto-resize, it just
+    // paints nothing of its own.
+    ImGui::SetNextWindowBgAlpha(0.f);
     ImGuiWindowFlags wf = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
-                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+                          ImGuiWindowFlags_NoBackground;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, winPad);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
     ImGui::Begin("##ViewportCommandInput", nullptr, wf);
 
     // Prompt label: a muted/secondary tone with a little gap below it, so it reads
@@ -18101,7 +18105,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
     }
     ImGui::End();
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(1);
   }
 
   // Grip stretch dynamic input (REQ-024 / REQ-047). A grip drag runs with no active command, so the
