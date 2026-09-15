@@ -13453,6 +13453,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // snapped point drives the pick, exactly as the model path feeds CadSnap into SubmitViewportPick.
         double curMX = mLocalX, curMY = mLocalY;
         cmd.viewportSnapPickValid = false;
+        cmd.viewportSnapPickKind = -1;  // REQ-340: no kind recorded yet this frame
         const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                             cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
         // REQ-121 rule (1), floating model space (REQ-036). The same suppression as the model-space
@@ -13722,6 +13723,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // floating hover/snap/cursor (REQ-036).
   if (!InFloatingModelSpace(cmd)) {
     cmd.viewportSnapPickValid = false;
+    cmd.viewportSnapPickKind = -1;  // REQ-340: no kind recorded yet this frame
   }
   // THE model-space input seam (REQ-058). Everything downstream — snap, hover, entity picking,
   // hatch tracing, command submission — consumes rawX/rawY, so orbit-awareness is this one
@@ -13984,8 +13986,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // The live DRAG is deliberately NOT here. It runs after the object snap is computed, several
       // hundred lines down, because REQ-340 lets the drag land on a snapped point and reading last
       // frame's snap would leave the plane one frame behind its own glyph.
-      if (modelSpace && cmd.viewportSectionClip) {
-        if (cmd.sectionPlaneGripDrag < 0 && !ImGui::GetIO().KeyCtrl) {
+      // Gated on the same conditions the CLICK is, so the two cannot disagree. A handle that lights
+      // up must be a handle that grabs (`ViewportRenderer.hpp`), and the click only reaches
+      // `SubmitSectionPlaneClick` from the `IdleSelection` route with Ctrl up — so during LINE, or a
+      // re-run of SECTIONPLANE, a lit handle was a lie: the click placed a vertex or a face pick
+      // instead. Ctrl is part of the gate rather than a skip, so releasing it inside the block
+      // clears a stale highlight instead of stranding one.
+      const bool spHoverEligible = modelSpace && cmd.viewportSectionClip &&
+                                   cmd.sectionPlaneGripDrag < 0 && !ImGui::GetIO().KeyCtrl &&
+                                   ViewportClickRouteFor(cmd) == ViewportClickRoute::IdleSelection;
+      if (spHoverEligible) {
+        {
           const ray3d::Ray spRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
           const int wasHot = cmd.sectionPlaneGripHover;
           UpdateSectionPlaneGripHover(cmd, spRay,
@@ -13994,7 +14005,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (cmd.sectionPlaneGripHover != wasHot)
             BumpCadGpuCache(cmd);
         }
-      } else if (cmd.sectionPlaneGripHover >= 0) {
+      } else if (cmd.sectionPlaneGripHover >= 0 && cmd.sectionPlaneGripDrag < 0) {
         cmd.sectionPlaneGripHover = -1;
         BumpCadGpuCache(cmd);
       }
@@ -14106,6 +14117,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const auto perfSnapT0 = std::chrono::steady_clock::now();
     {
       cmd.viewportSnapPickValid = false;
+      cmd.viewportSnapPickKind = -1;  // REQ-340: no kind recorded yet this frame
       // REQ-340: a section-plane handle drag counts as mid-command, exactly as the three grip drags
       // beside it already do. No `Kind` is active during one — the plane is a view state, not a
       // command — so without this the snap would be computed as though the user were idle, and a
@@ -14233,8 +14245,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // rather than restated. A midpoint, endpoint, centre, quadrant, intersection, face centroid or
     // knot places the plane; "somewhere on that face" does not, and the drag follows the cursor
     // instead — which is what the user is doing when no feature is under it.
+    //
+    // The `>= 0` is not belt-and-braces. Three places set `viewportSnapPickValid` and only the
+    // block above records a kind — the grip magnet sets the flag from a 2D grip with no kind and no
+    // Z, and `Kind::Endpoint` is 0, so a missing kind would read as a named feature and place the
+    // plane absolutely through a point the user never aimed at, at a stale elevation.
     const bool namedFeature =
-        cmd.viewportSnapPickValid &&
+        cmd.viewportSnapPickValid && cmd.viewportSnapPickKind >= 0 &&
         CadSnap::SnapClass(static_cast<CadSnap::Kind>(cmd.viewportSnapPickKind)) == 1;
     if (namedFeature) {
       // Taken straight through, at full precision. The old conversion also narrowed X and Y to

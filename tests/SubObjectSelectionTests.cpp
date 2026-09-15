@@ -1151,23 +1151,54 @@ TEST_CASE("A placed section plane comes up selected, with handles", "[sectionpla
   CHECK(st.viewportSectionClipOffset == Catch::Approx(0.0));
 }
 
-TEST_CASE("The rectangle itself is what selects the plane", "[sectionplanegrip][req339]") {
+TEST_CASE("The SECTION LINE is what selects the plane, not the rectangle",
+          "[sectionplanegrip][req339]") {
+  // The rectangle is sized to the model plus a margin, so in plan view its screen projection covers
+  // everything in the drawing. Treating its whole interior as a click target consumed every click
+  // that landed inside it, and while the clip was on no solid, grip, survey point or selection
+  // window could be reached at all. Depth arbitration does not save it either: a plane on a box's
+  // top face is genuinely nearer the camera than the box.
+  //
+  // So the target is the LINE — thin, deliberate, drawn heavier than anything else on the plane,
+  // and what AutoCAD uses.
   std::vector<std::string> log;
   AppCommandState st = SectionPlaneOnBoxTop(log);
   ClearCadSelection(st);
   REQUIRE_FALSE(st.sectionPlaneSelected);
 
-  // Straight down at the middle of the plane, which sits on the box's top face at z = 8.
-  CHECK(PickSectionPlaneQuad(st, RayAt({0, 0, 100}, {0, 0, 8})));
-  REQUIRE(SubmitSectionPlaneClick(st, RayAt({0, 0, 100}, {0, 0, 8}), 0.5, log));
+  const SectionPlaneGraphics gfx = SectionPlaneGraphicsFor(CadSectionClipIndicator(st));
+  REQUIRE(gfx.valid);
+  const ray3d::Vec3 onLine{0.5 * (gfx.lineA.x + gfx.lineB.x), 0.5 * (gfx.lineA.y + gfx.lineB.y),
+                           0.5 * (gfx.lineA.z + gfx.lineB.z)};
+
+  REQUIRE(SubmitSectionPlaneClick(st, RayAtWorldPoint(onLine), 1.0, log));
   CHECK(st.sectionPlaneSelected);
 
-  // A click well outside the rectangle deselects, and CONSUMES the click — letting it also start a
-  // new selection behind the plane would act on something the user cannot see through it.
-  REQUIRE(SubmitSectionPlaneClick(st, RayAt({500, 500, 100}, {500, 500, 8}), 0.5, log));
+  // A click on the rectangle's INTERIOR but away from the line is not the plane's. This is the
+  // whole fix: it must fall through so whatever is under it can be selected.
+  ClearCadSelection(st);
+  REQUIRE_FALSE(st.sectionPlaneSelected);
+  ray3d::Vec3 bu{}, bv{};
+  REQUIRE(SectionClipPlaneBasis(CadSectionClipPlane(st), &bu, &bv));
+  const ray3d::Vec3 offLine{onLine.x + bv.x * 6.0, onLine.y + bv.y * 6.0, onLine.z + bv.z * 6.0};
+  CHECK_FALSE(SubmitSectionPlaneClick(st, RayAtWorldPoint(offLine), 1.0, log));
   CHECK_FALSE(st.sectionPlaneSelected);
-  // ...and once nothing is selected, a miss is not the section plane's click at all.
-  CHECK_FALSE(SubmitSectionPlaneClick(st, RayAt({500, 500, 100}, {500, 500, 8}), 0.5, log));
+
+  // Selecting the plane clears the ENTITY selection: the two are mutually exclusive, which is what
+  // lets DELETE act on one without guessing. Asserted because `StartDeleteCommand` states it as a
+  // premise, and it was false until the line pick made it true.
+  SelectedEntity e{};
+  e.type = SelectedEntity::Type::Solid;
+  e.index = 0;
+  st.selection.push_back(e);
+  REQUIRE(SubmitSectionPlaneClick(st, RayAtWorldPoint(onLine), 1.0, log));
+  CHECK(st.sectionPlaneSelected);
+  CHECK(st.selection.empty());
+
+  // A click away from the plane deselects it WITHOUT consuming — the click still means whatever it
+  // would have meant, so clicking from the plane straight onto another object takes one click.
+  CHECK_FALSE(SubmitSectionPlaneClick(st, RayAt({500, 500, 100}, {500, 500, 8}), 1.0, log));
+  CHECK_FALSE(st.sectionPlaneSelected);
 }
 
 TEST_CASE("Dragging the centre handle slides the plane along its normal", "[sectionplanegrip][req339]") {
@@ -1776,4 +1807,114 @@ TEST_CASE("DELETE with no section plane selected behaves exactly as before",
   CHECK(st.viewportSectionClip);
   // ...and DELETE opened its ordinary selection step instead.
   CHECK(st.active == AppCommandState::Kind::Delete);
+}
+
+TEST_CASE("Flipping a stretched plane leaves it where it is", "[sectionplanegrip][req339]") {
+  // `SectionClipPlaneBasis` derives u from the normal, so flipping — which negates the normal —
+  // negates u while leaving v alone. The stored extent's `cu` is an ABSOLUTE `dot(centre, u)`, so
+  // leaving it untouched mirrors the rectangle about the STORAGE ORIGIN.
+  //
+  // Measured on a model 400 ft out: the plane jumped 800 ft, off screen, taking every handle with
+  // it and leaving a cut that was still correct with no visible plane to grab. Invisible at the
+  // origin, which is where every other flip case runs — the same blind spot REQ-337 records.
+  std::vector<std::string> log;
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  ucs::Ucs farFrame;
+  farFrame.origin = ray3d::Vec3{0.0, 400.0, 0.0};
+  AddBox(st, farFrame, 20.0, 10.0, 8.0);  // centred on y = 400
+
+  StartSectionPlaneCommand(st, log);
+  REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({0, 400, 100}, {0, 400, 8}), Tol(0.5, 0.5), log));
+
+  // Stretch it, so the extent is stored rather than derived.
+  st.viewportSectionClipExtent = SectionPlaneExtentFromQuad(CadSectionClipIndicator(st),
+                                                            CadSectionClipPlane(st));
+  REQUIRE(st.viewportSectionClipExtent.valid);
+  st.viewportSectionClipExtent.halfU = 14.0;
+  st.viewportSectionClipExtent.halfV = 9.0;
+
+  const SectionClipIndicator before = CadSectionClipIndicator(st);
+  REQUIRE(before.valid);
+  const ray3d::Vec3 cBefore{
+      0.25 * (before.corner[0].x + before.corner[1].x + before.corner[2].x + before.corner[3].x),
+      0.25 * (before.corner[0].y + before.corner[1].y + before.corner[2].y + before.corner[3].y),
+      0.25 * (before.corner[0].z + before.corner[1].z + before.corner[2].z + before.corner[3].z)};
+
+  ToggleSectionClipFlip(st, log);
+
+  const SectionClipIndicator after = CadSectionClipIndicator(st);
+  REQUIRE(after.valid);
+  const ray3d::Vec3 cAfter{
+      0.25 * (after.corner[0].x + after.corner[1].x + after.corner[2].x + after.corner[3].x),
+      0.25 * (after.corner[0].y + after.corner[1].y + after.corner[2].y + after.corner[3].y),
+      0.25 * (after.corner[0].z + after.corner[1].z + after.corner[2].z + after.corner[3].z)};
+
+  // The rectangle has not moved. Flip changes which HALF survives, never where the plane is.
+  INFO("centre before (" << cBefore.x << ", " << cBefore.y << ", " << cBefore.z << ") after ("
+                         << cAfter.x << ", " << cAfter.y << ", " << cAfter.z << ")");
+  CHECK(ray3d::Length(ray3d::Sub(cAfter, cBefore)) == Catch::Approx(0.0).margin(1e-6));
+  // ...and it is still the size the user stretched it to.
+  CHECK(ray3d::Length(ray3d::Sub(after.corner[1], after.corner[0])) == Catch::Approx(28.0));
+}
+
+TEST_CASE("ESC puts an aborted drag back where it was grabbed", "[sectionplanegrip][req339]") {
+  // A section-plane drag writes the live offset every frame — that is what makes the cut follow the
+  // handle — so by the time ESC is pressed the plane has already moved. Disarming alone would
+  // COMMIT it, and REQ-339 records that a slide makes no undo entry, so there is no way back.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  st.viewportSectionClipOffset = -2.0;
+
+  const ray3d::Ray grab = RayAtGrip(st, SectionPlaneGrip::Move);
+  REQUIRE(SubmitSectionPlaneClick(st, grab, 1.0, log));
+  UpdateSectionPlaneGripDrag(st, RayAt({60, 40, 103}, {0, 0, 3}), nullptr);
+  REQUIRE(st.viewportSectionClipOffset != Catch::Approx(-2.0));  // it really did move
+
+  AbortSectionPlaneGripDrag(st);
+  CHECK(st.sectionPlaneGripDrag == static_cast<int>(SectionPlaneGrip::None));
+  CHECK(st.viewportSectionClipOffset == Catch::Approx(-2.0));  // ...and it is back
+  CHECK(st.viewportSectionClip);                               // the plane is still there
+}
+
+TEST_CASE("An aborted first stretch does not pin the plane's size", "[sectionplanegrip][req339]") {
+  // The stretch arithmetic needs a valid extent to work from, so a FIRST stretch seeds one from the
+  // drawn rectangle. Restoring that on abort would leave the plane user-sized and no longer
+  // tracking the model — a state the user never asked for and cannot see, since the size is
+  // identical at the moment it happens.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  REQUIRE_FALSE(st.viewportSectionClipExtent.valid);
+
+  const SectionPlaneGrips g = CadSectionPlaneGrips(st);
+  REQUIRE(g.valid);
+  const int kLenP = static_cast<int>(SectionPlaneGrip::LengthPos);
+  REQUIRE(SubmitSectionPlaneClick(st, RayAtWorldPoint(g.at[kLenP]), 1.0, log));
+  const ray3d::Vec3 pulled{g.at[kLenP].x + g.dir[kLenP].x * 6.0, g.at[kLenP].y + g.dir[kLenP].y * 6.0,
+                           g.at[kLenP].z + g.dir[kLenP].z * 6.0};
+  UpdateSectionPlaneGripDrag(st, RayAtWorldPoint(pulled), nullptr);
+  REQUIRE(st.viewportSectionClipExtent.valid);  // the stretch made it user-sized
+
+  AbortSectionPlaneGripDrag(st);
+  CHECK_FALSE(st.viewportSectionClipExtent.valid);  // ...and the abort took that back too
+}
+
+TEST_CASE("Starting a command disarms a live section-plane drag", "[sectionplanegrip][req339]") {
+  // The drag runs off the frame loop, gated only on the clip being on. Left armed it kept rewriting
+  // the offset while the NEXT command took its picks: grab the Move handle, type LINE, and the cut
+  // slid across the model as the line was drawn.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  REQUIRE(SubmitSectionPlaneClick(st, RayAtGrip(st, SectionPlaneGrip::Move), 1.0, log));
+  REQUIRE(st.sectionPlaneGripDrag >= 0);
+
+  StartLineCommand(st, log);
+  CHECK(st.sectionPlaneGripDrag == static_cast<int>(SectionPlaneGrip::None));
+
+  // And re-running SECTIONPLANE, which had the same hole: a refused face pick used to leave the
+  // plane tracking the cursor while the user hunted for a flat face.
+  REQUIRE(SubmitSectionPlaneClick(st, RayAtGrip(st, SectionPlaneGrip::Move), 1.0, log));
+  REQUIRE(st.sectionPlaneGripDrag >= 0);
+  StartSectionPlaneCommand(st, log);
+  CHECK(st.sectionPlaneGripDrag == static_cast<int>(SectionPlaneGrip::None));
 }

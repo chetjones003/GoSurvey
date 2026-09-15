@@ -2799,10 +2799,17 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           }
         }
         if (!quads.empty()) {
+          // Blending back ON for the fill: the hatch block above turns it off when it finishes, and
+          // the outline and section line in between are opaque so neither noticed. Without it the
+          // 0.85 alpha below is simply discarded and the six symbols paint as solid blocks over the
+          // hatch they sit on — the opposite of the translucent widget the code describes.
+          glEnable(GL_BLEND);
+          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
           glUniform4f(locCol, 0.20f, 0.70f, 1.f, 0.85f);
           glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(quads.size() * sizeof(float)),
                        quads.data(), GL_STREAM_DRAW);
           glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(quads.size() / 3));
+          glDisable(GL_BLEND);
           glUniform4f(locCol, 0.85f, 0.95f, 1.f, 1.f);
           glLineWidth(kLwHiLine);
           glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outlines.size() * sizeof(float)),

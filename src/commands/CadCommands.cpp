@@ -6286,6 +6286,18 @@ void ResetDistDraft(AppCommandState& st) {
 }
 
 void ResetAllCadDraftTools(AppCommandState& st) {
+  // An armed section-plane handle drag (REQ-339). Every command start calls this, which is exactly
+  // where a live drag has to end: the drag runs off the frame loop and is gated only on the clip
+  // being on, so a drag left armed kept rewriting the clip offset while the NEXT command took its
+  // picks — grab the Move handle, type LINE, and the cut slides across the model as the line is
+  // drawn. `SECTIONPLANE` itself had the same hole: a refused face pick left the plane tracking the
+  // cursor while the user hunted for a flat face.
+  //
+  // The plane stays where the drag had already put it — the drag has been writing the live value
+  // all along, so there is nothing to restore and this is a disarm, not a cancel. ESC is where a
+  // true cancel lives.
+  st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
+  st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
   // UCS / PLAN prompt state (REQ-154). Reset here with every other draft so a cancelled UCS cannot
   // leave a half-collected origin behind for the next command to pick up.
   //
@@ -33514,54 +33526,48 @@ SectionPlaneGrip PickSectionPlaneGrip(const AppCommandState& st, const ray3d::Ra
   return best;
 }
 
-bool PickSectionPlaneQuad(const AppCommandState& st, const ray3d::Ray& rayIn, double* outRayT) {
-  const ray3d::Ray ray = SectionPlaneUnitRay(rayIn);
-  const SectionClipIndicator ind = CadSectionClipIndicator(st);
-  if (!ind.valid || !ray.valid())
-    return false;
-  // Two triangles, the same split the renderer draws. Moller-Trumbore, double-sided: a section
-  // plane is a sheet with no inside, and refusing a click from behind it would make the plane
-  // unselectable from exactly the side a user orbits to when inspecting the cut.
-  const int tri[2][3] = {{0, 1, 2}, {0, 2, 3}};
-  bool hit = false;
-  double bestT = 0.0;
-  for (const auto& idx : tri) {
-    const ray3d::Vec3& a = ind.corner[idx[0]];
-    const ray3d::Vec3 e1 = ray3d::Sub(ind.corner[idx[1]], a);
-    const ray3d::Vec3 e2 = ray3d::Sub(ind.corner[idx[2]], a);
-    const ray3d::Vec3 pv = ray3d::Cross(ray.dir, e2);
-    const double det = ray3d::Dot(e1, pv);
-    if (std::fabs(det) < 1e-12)
-      continue;
-    const double inv = 1.0 / det;
-    const ray3d::Vec3 tv = ray3d::Sub(ray.origin, a);
-    const double u = ray3d::Dot(tv, pv) * inv;
-    if (u < 0.0 || u > 1.0)
-      continue;
-    const ray3d::Vec3 qv = ray3d::Cross(tv, e1);
-    const double v = ray3d::Dot(ray.dir, qv) * inv;
-    if (v < 0.0 || u + v > 1.0)
-      continue;
-    const double t = ray3d::Dot(e2, qv) * inv;
-    if (t <= 1e-9)
-      continue;
-    if (!hit || t < bestT) {
-      hit = true;
-      bestT = t;
-    }
-  }
-  if (hit && outRayT)
-    *outRayT = bestT;
-  return hit;
-}
 
 void ToggleSectionClipFlip(AppCommandState& st, std::vector<std::string>& log) {
   st.viewportSectionClipFlip = !st.viewportSectionClipFlip;
+  // The stored extent has to follow the basis, and this is not a detail.
+  //
+  // `SectionClipPlaneBasis` derives u from the normal — `u = normalize(cross(helper, n))` — and
+  // flipping negates n, so **u negates and v does not**. The extent's `cu` is an ABSOLUTE
+  // `dot(centre, u)`, so leaving it alone mirrors the rectangle about the storage origin: a plane
+  // stretched over a model at y = 400 jumps to y = -400 on flip, 800 ft away, taking every handle
+  // with it and leaving a cut that is still correct with no visible plane to grab.
+  //
+  // Negating `cu` keeps the same world centre through the sign change: `u_new * (-cu) == u_old * cu`
+  // because `u_new == -u_old`. `cv` is untouched because `v` is.
+  if (st.viewportSectionClipExtent.valid)
+    st.viewportSectionClipExtent.cu = -st.viewportSectionClipExtent.cu;
   st.viewportSectionClip = true;
   log.push_back(SectionClipReport(st));
 }
 
 void CancelSectionPlaneGripDrag(AppCommandState& st) {
+  st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
+}
+
+void AbortSectionPlaneGripDrag(AppCommandState& st) {
+  if (st.sectionPlaneGripDrag == static_cast<int>(SectionPlaneGrip::None))
+    return;
+  // A TRUE cancel, not a disarm — the wording the gizmo's own ESC branch uses, and the same
+  // reasoning. The drag writes the offset and the extent on every frame, so by the time ESC is
+  // pressed the plane is already 40 ft into the model; disarming alone would COMMIT that, and
+  // REQ-339 records that a slide makes no undo entry, so there would be no way back at all.
+  //
+  // `sectionPlaneGripStartOffset` and `sectionPlaneGripStartExtent` were recorded at the grab
+  // precisely so this can put them back. Until now nothing read them.
+  st.viewportSectionClipOffset = st.sectionPlaneGripStartOffset;
+  // The extent goes back to what it was BEFORE the grab, which is not always what was recorded:
+  // the stretch arithmetic needs a valid extent to work from, so a first stretch seeds one from the
+  // drawn rectangle. Restoring that would leave an aborted first stretch with the plane pinned at
+  // its then-current size and no longer following the model — invisible, and never asked for.
+  if (st.sectionPlaneGripStartExtentWasValid)
+    st.viewportSectionClipExtent = st.sectionPlaneGripStartExtent;
+  else
+    st.viewportSectionClipExtent = SectionPlaneExtent{};
   st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
 }
 
@@ -33736,6 +33742,7 @@ bool SubmitSectionPlaneClick(AppCommandState& st, const ray3d::Ray& rayIn, doubl
         // Seed the stored extent from the rectangle as it is RIGHT NOW, so the first stretch keeps
         // the size the user is looking at and only moves the edge they grabbed. Without this the
         // plane would snap to a default size the instant a stretch began.
+        st.sectionPlaneGripStartExtentWasValid = st.viewportSectionClipExtent.valid;
         st.sectionPlaneGripStartExtent = st.viewportSectionClipExtent.valid
                                              ? st.viewportSectionClipExtent
                                              : SectionPlaneExtentFromQuad(CadSectionClipIndicator(st),
@@ -33745,22 +33752,36 @@ bool SubmitSectionPlaneClick(AppCommandState& st, const ray3d::Ray& rayIn, doubl
     }
   }
 
-  // Not a handle: the rectangle itself selects, and a click that misses it deselects.
-  if (PickSectionPlaneQuad(st, ray)) {
+  // Not a handle: the SECTION LINE selects the plane.
+  //
+  // **The line, not the rectangle interior.** The rectangle is sized to the model plus a margin, so
+  // in plan view its screen projection covers everything in the drawing — and consuming every click
+  // that landed inside it made every solid, grip, survey point and selection window unreachable for
+  // as long as the clip was on. Depth arbitration does not rescue that: a plane sitting on a box's
+  // top face is genuinely NEARER the camera than the box, so it would still win.
+  //
+  // A thin, deliberate target is also what AutoCAD uses, and it is why the line is drawn heavier
+  // and brighter than everything else on the plane. The handles keep their own aperture above.
+  const SectionPlaneGraphics gfx = SectionPlaneGraphicsFor(CadSectionClipIndicator(st));
+  if (gfx.valid && ray3d::RaySegmentDistance(ray, gfx.lineA, gfx.lineB) <= tolWorld) {
     if (!st.sectionPlaneSelected) {
       st.sectionPlaneSelected = true;
+      // Mutually exclusive with the entity selection, the rule REQ-318 item 9 already applies to
+      // sub-objects. Without this the two are simultaneously live and DELETE has to guess which the
+      // user meant — it took the plane, silently, while a selected solid survived.
+      st.selection.clear();
+      st.subObjectSelection.clear();
       log.push_back("Section plane selected — drag the centre handle to slide it, the arrow to "
                     "flip it, the end handles to resize it.");
     }
     return true;
   }
   if (st.sectionPlaneSelected) {
+    // Deselect, but do NOT consume: the click still means whatever it would have meant. Consuming
+    // it cost the user a second click for every "click away from the plane onto something else",
+    // and with the rectangle as the target that was most clicks in the drawing.
     st.sectionPlaneSelected = false;
     st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
-    // Consumes the click, the way clicking away from any selection does: the click meant "stop
-    // working on this", and letting it also start a new selection behind the plane would act on
-    // something the user cannot see through it.
-    return true;
   }
   return false;
 }

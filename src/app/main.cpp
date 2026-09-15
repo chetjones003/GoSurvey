@@ -804,6 +804,21 @@ int main()
         CancelPickDisambiguationPopup(cmd);
         cmdBuf[0] = '\0';
       }
+      else if (cmd.sectionPlaneGripDrag >= 0)
+      {
+        // A TRUE cancel, and here it is load-bearing rather than a courtesy (REQ-339). Unlike the
+        // gizmo below, a section-plane drag writes the live offset on EVERY frame — that is what
+        // makes the cut follow the handle — so by the time ESC is pressed the plane has already
+        // moved, and merely disarming would commit it. REQ-339 also records that a slide makes no
+        // undo entry, so there would be no way back at all. `AbortSectionPlaneGripDrag` restores
+        // the offset and extent recorded at the grab.
+        //
+        // First in the chain because it is the gesture in progress, the rule the gizmo states.
+        AbortSectionPlaneGripDrag(cmd);
+        BumpCadGpuCache(cmd);
+        cmdLog.push_back("Section plane drag cancelled.");
+        cmdBuf[0] = '\0';
+      }
       else if (cmd.gizmoDragActive)
       {
         // A TRUE cancel, not an undo: a live gizmo drag changes nothing in the store until it is

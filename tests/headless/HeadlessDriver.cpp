@@ -2026,7 +2026,11 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "parse", "EXPECT SECTIONCLIPNORMAL needs <nx> <ny> <nz>", sourceLine);
         return false;
       }
-      const ray3d::Vec3 got = run.st.viewportSectionClipFrame.zAxis;
+      // The EFFECTIVE frame, the single decider ADR-058 (a) names — not the raw stored one, which
+      // is never written in UCS-aimed mode and reads as a default (0,0,1). A transcript asserting
+      // the true normal under a rotated UCS would have failed, and one asserting (0,0,1) would have
+      // passed while proving nothing, which is the failure this verb exists to prevent.
+      const ray3d::Vec3 got = CadEffectiveSectionClipFrame(run.st).zAxis;
       if (std::fabs(got.x - wx) > 1e-6 || std::fabs(got.y - wy) > 1e-6 ||
           std::fabs(got.z - wz) > 1e-6) {
         char buf[224];

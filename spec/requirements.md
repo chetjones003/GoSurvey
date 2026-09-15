@@ -8839,6 +8839,20 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - clicking the rectangle selects it; clicking away deselects and **consumes** the click; ESC
     deselects and leaves the cut where it is;
   - handles are pickable only while the plane is selected, and not at all when the clip is off;
+  - **the SECTION LINE selects the plane, not the rectangle interior.** The rectangle is sized to
+    the model and in plan view covers the whole drawing; treating its interior as a click target
+    made every solid, grip and selection window unreachable while the clip was on. A click away
+    from the line deselects and does **not** consume, so moving from the plane to another object
+    takes one click;
+  - selecting the plane **clears the entity selection**, and vice versa — mutually exclusive, the
+    rule REQ-318 item 9 already applies to sub-objects, and what lets `DELETE` act without guessing;
+  - **flipping a stretched plane leaves it exactly where it is** — the basis u negates with the
+    normal, so the stored extent negates with it;
+  - **ESC cancels a live drag and restores the plane**, rather than committing wherever the cursor
+    last left it — the drag writes the offset every frame and there is no undo entry to recover it;
+  - **starting any command disarms a live drag**, so it cannot keep sliding the cut through the
+    next command's picks;
+  - a handle pre-highlights **only when a click would actually grab it**;
   - **`DELETE` erases a selected section plane** — the command and the Delete key alike — turning
     the clip off and restoring the whole model, clearing the face frame and any stretched size so
     it does not reappear on the next `SECTIONCLIP ON`, and leaving the solids untouched. With no

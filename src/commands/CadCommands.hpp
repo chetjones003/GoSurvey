@@ -1784,7 +1784,14 @@ struct AppCommandState {
   /// a **named feature** or one of the "anywhere on the object" family: a section-plane drag
   /// honours the first and must ignore the second, or `Face` — which answers at essentially every
   /// cursor position on a solid — drags the plane across the model continuously.
-  int viewportSnapPickKind = 0;
+  ///
+  /// **-1 means "no kind was recorded", and is the value every frame starts at.** Three separate
+  /// places set \ref viewportSnapPickValid and only one of them knows a `CadSnap::Kind` — the grip
+  /// magnet sets the flag from a 2D grip position with no kind and no Z at all. `Kind::Endpoint` is
+  /// 0, so a default-initialised field reads as a named feature and would let one of those drive an
+  /// absolute plane placement through a point the user never aimed at. Starting at -1 makes the
+  /// omission fail closed instead: a consumer that needs the kind checks for it.
+  int viewportSnapPickKind = -1;
   /// Command-line log cache for the selectable read-only multiline (rebuilt each frame from \ref log).
   std::vector<char> commandLogCacheBytes;
   size_t commandLogLastSizeForAutoscroll = 0;
@@ -3754,6 +3761,14 @@ struct AppCommandState {
   double sectionPlaneGripStartParam = 0.0;
   double sectionPlaneGripStartOffset = 0.0;
   SectionPlaneExtent sectionPlaneGripStartExtent{};
+  /// Whether the plane was ALREADY user-sized when the handle was grabbed (REQ-339).
+  ///
+  /// \ref sectionPlaneGripStartExtent is seeded from the drawn rectangle when there was no stored
+  /// extent, because the stretch arithmetic needs a valid one to work from — so it cannot itself
+  /// answer "was this plane user-sized before?". ESC needs that answer: restoring the seeded extent
+  /// after an aborted first stretch would leave the plane pinned at that size and no longer
+  /// tracking the model, which is a state the user never asked for and cannot see.
+  bool sectionPlaneGripStartExtentWasValid = false;
   /// The drag axis, FROZEN at the moment of the grab (REQ-339).
   ///
   /// It has to be frozen, and this is not a refinement. The handle sits on the plane, so dragging
@@ -5945,12 +5960,6 @@ bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
 [[nodiscard]] SectionPlaneGrip PickSectionPlaneGrip(const AppCommandState& st, const ray3d::Ray& ray,
                                                     double tolWorld);
 
-/// True when \p ray passes through the drawn rectangle itself — how the plane gets selected.
-/// \p outRayT, when given, receives the ray parameter of the hit, so a caller can decide whether
-/// geometry in front of the plane should win the click instead.
-[[nodiscard]] bool PickSectionPlaneQuad(const AppCommandState& st, const ray3d::Ray& ray,
-                                        double* outRayT = nullptr);
-
 /// One click on the section plane or its handles, in the command layer where a test can drive it.
 ///
 /// Grabs a handle, commits an armed drag, toggles the flip handle, or selects/deselects the plane.
@@ -5983,8 +5992,17 @@ void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& ray,
 /// Refresh \ref AppCommandState::sectionPlaneGripHover. No-op while a drag is armed.
 void UpdateSectionPlaneGripHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorld);
 
-/// Disarm without moving anything. Safe at any time; ESC and a right-click both do it.
+/// Disarm and leave the plane where the drag has already put it. Every command start does this,
+/// through `ResetAllCadDraftTools` — a drag left armed keeps rewriting the clip offset while the
+/// NEXT command takes its picks.
 void CancelSectionPlaneGripDrag(AppCommandState& st);
+
+/// A TRUE cancel: put the plane back where it was when the handle was grabbed, then disarm.
+///
+/// What ESC means. The drag writes the offset and the extent every frame, so disarming alone would
+/// COMMIT whatever the cursor last did — and REQ-339 records that a slide makes no undo entry, so
+/// there would be no way back.
+void AbortSectionPlaneGripDrag(AppCommandState& st);
 
 /// Reverse which half of the model survives, and say so. Also what the flip handle does.
 void ToggleSectionClipFlip(AppCommandState& st, std::vector<std::string>& log);
