@@ -316,37 +316,59 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: should
 - Type: functional
 - Statement: When the active command prompt expects a coordinate point, the
-  cursor dynamic-input shows a prompt label plus a **single coordinate field**
+  cursor dynamic-input shows a prompt label plus a **coordinate field group**
   that continuously displays the crosshair's current **world** coordinates
-  (`x,y`) at the configured display precision (REQ-020 `displayLinearPrecision`).
-  Typing overrides (locks) the field to the typed value; the field accepts any
-  point input the command line understands — absolute `x,y`, relative `@dx,dy`,
-  bearing/distance, etc. Enter — or a viewport click — commits the point. Prompts
-  that do not expect a point (bearing/angle/distance/option/command-name entry)
-  likewise keep a single input field. There is no Send button; commit is by Enter
-  or click.
+  at the configured display precision (REQ-020 `displayLinearPrecision`), styled
+  after AutoCAD's dynamic input: the active field highlighted (filled background,
+  contrasting text), and **Tab** moving the highlight to the next field in the
+  group without committing the point. Typing overrides (locks) the active field
+  to the typed value; **Tab from a locked field** carries the lock forward and
+  moves the highlight on, so a full multi-field value can be typed one field at a
+  time exactly as AutoCAD's dynamic input does. Enter — or a viewport click —
+  commits the point (typed/locked fields win over the live cursor value; an
+  unlocked field commits at the cursor's current reading). Prompts that do not
+  expect a point (option/command-name entry) keep a single input field.
+  There is no Send button; commit is by Enter or click.
 
-  **One stated exception — directional prompts (REQ-154).** The UCS X-axis and
-  XY-plane prompts, and the second point of `UCS <axis> 2P`, show a **polar pair**
-  instead: a distance field and an angle field, rendered as `<distance> < <angle>`.
-  Those prompts ask for a DIRECTION, and an `x,y` readout answers a different
-  question — the user would have to do the subtraction themselves to learn the
-  angle the prompt is about. The pair assembles `@<distance><<angle>`, which is
-  real syntax the command line accepts, so the two forms describe the same thing
-  and either can be typed. The angle is measured in the active UCS's XY plane from
-  its +X, the same reference `UCS <axis> 2P` uses. This exception is deliberately
-  narrow: it does not reopen the 2026-06-19 decision for any other prompt.
-- Acceptance: starting LINE shows the "first point" prompt with a single box that
-  tracks the cursor's easting/northing as `x,y`; typing locks the field; entering
-  `@dx,dy` or a bearing/distance places the relative point; Enter commits the
-  shown/typed value and a viewport click still places the point; a non-point
-  prompt (e.g. circle radius, bearing entry) also shows a single field.
+  **The field group's shape follows the prompt's own geometry**, not one fixed
+  layout:
+  - An ordinary point prompt (first point of LINE, CIRCLE's center, etc.) shows
+    **two fields, `x` and `y`**, each independently lockable/tabbable. A relative
+    (`@dx,dy`) or bearing/distance value typed into the `x` field (mirroring the
+    single-field form's accepted syntax) fills and locks both fields at once and
+    Tab still moves on to whichever the syntax left open.
+  - A prompt that follows an established anchor point (LINE's second point and
+    later, POLYLINE, and any other rubber-banded segment) shows **two fields,
+    distance and angle**, rendered `<distance> < <angle>`, matching AutoCAD's
+    length/direction dynamic input for a drawn segment. The angle is measured
+    from the active UCS's +X the same way REQ-154's polar pair already is.
+  - The UCS directional prompts and `UCS <axis> 2P`'s second point (REQ-154's
+    2026-08-29 exception) keep their existing distance/angle pair — this
+    amendment generalizes that pair to ordinary drawing prompts rather than
+    replacing it.
+  - A non-point prompt (radius, single bearing, a plain distance) keeps a single
+    field, as before.
+- Acceptance: starting LINE shows the "first point" prompt with `x`/`y` fields,
+  the `x` field pre-highlighted; Tab moves the highlight to `y` without
+  committing; typing a value locks the highlighted field and Tab carries the lock
+  forward; typing `@dx,dy` or a bearing/distance into the `x` field locks both
+  fields; Enter commits the shown/typed values and a viewport click still places
+  the point. Placing the first point and moving to LINE's second point switches
+  the field group to distance/angle, `<distance> < <angle>`, distance
+  pre-highlighted; the same Tab/lock/commit rules apply. CIRCLE's center prompt
+  shows `x`/`y` fields. A non-point prompt (e.g. circle radius) still shows a
+  single field. The UCS directional prompts (REQ-154) are unchanged.
 - Owner-layer: UI
 - Status: accepted
 - Revisions: 2026-06-12 — initial; 2026-06-19 — single coordinate field instead
   of two X/Y boxes, so relative/bearing/distance entry works in the same field.
   2026-08-29 — a stated exception for the UCS directional prompts (REQ-154): a
-  polar distance/angle pair there, single field everywhere else.
+  polar distance/angle pair there, single field everywhere else. 2026-09-15
+  (D-2026-09-15-a) — reopens the 2026-06-19 decision: point prompts become a
+  **tabbable multi-field group** (x/y for an absolute point, distance/angle for
+  a prompt following an anchor), matching AutoCAD's dynamic input; single-field
+  entry (`@dx,dy`, bearing/distance) is preserved by locking both fields from
+  one typed value.
 
 ### REQ-025 — Model and Paper space with layout tabs and a space toggle
 - Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
@@ -2120,6 +2142,51 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: util (pure intersection math), viewport (snap), UI (toggles, menu, glyph)
 - Status: accepted
 - Revisions: 2026-08-12 — initial.
+
+### REQ-340 — Contextual cursor glyphs for base-point and move-transform command states
+- Purpose: AutoCAD's cursor carries a small icon of its own alongside the dynamic
+  input tooltip, telling the user what the current pick means (a base point, an
+  in-progress translation) without reading the command line; GoSurvey's cursor
+  today gives that cue nowhere except REQ-121's pickbox during selection.
+- Priority: should
+- Type: functional
+- Statement: Two new per-command cursor glyphs, drawn at the crosshair (or at the
+  hovered snap candidate, where noted), in addition to the existing crosshair —
+  which this requirement does not change:
+  1. **Base-point marker.** While a command is at a "specify base point" (or
+     equivalent single-point anchor) prompt — MOVE, COPY, ROTATE, SCALE's base
+     point today — hovering a snap candidate draws a small filled **green
+     triangle** at that candidate point, replacing the ordinary snap-glyph shape
+     for the duration of the hover. It disappears when the base point is picked
+     or the command ends, and follows REQ-330's precedent of drawing at the snap
+     candidate rather than at the raw cursor.
+  2. **Move-transform icon.** Once a base point has been picked and the command
+     is dragging a translation preview (MOVE's second point; COPY's) the cursor
+     shows a small **four-directional arrow icon** centered on the crosshair for
+     the remainder of that pick, replacing no existing glyph (today nothing is
+     drawn there beyond the crosshair and rubber-band preview).
+  Neither glyph applies outside its named command state; REQ-121's pickbox rule
+  for object-selection steps is unchanged and takes precedence where the two
+  could otherwise overlap (a selection step never shows either new glyph).
+- Acceptance:
+  - starting MOVE and hovering a snap candidate at the "Specify base point"
+    prompt shows a green triangle at that candidate; moving off it removes the
+    triangle; picking the base point or pressing Esc removes it;
+  - after MOVE's base point is picked, the cursor shows the four-arrow icon
+    through the second-point prompt, and it is gone once the point is committed
+    or the command ends;
+  - COPY shows the same two glyphs at its equivalent prompts;
+  - ROTATE and SCALE show the base-point triangle at their base-point prompt;
+    neither shows the move icon (they have no translation preview);
+  - an object-selection step (e.g. MOVE's "Select objects") shows the REQ-121
+    pickbox, never either new glyph;
+  - with no command running, neither glyph is drawn;
+  - the crosshair itself is pixel-identical to before this requirement.
+- Owner-layer: UI (cursor/glyph rendering), Commands (per-command state already
+  exposed for REQ-304's cursor-text drive)
+- Status: accepted
+- Revisions: 2026-09-15 (D-2026-09-15-a) — initial, split out of the AutoCAD
+  dynamic-input cursor feature request alongside REQ-024's amendment.
 
 ### REQ-330 — Quadrant object snap for circles and arcs (GitHub issue #401)
 - Purpose: give users the AutoCAD `QUA` snap — the four "compass" points of a circle or arc — which
@@ -9450,7 +9517,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-021 | Domain/UI | `AngleFormatTests` (DD/DMS/Surveyor's, direction/base, default parity) | accepted |
 | REQ-022 | UI/IO | manual (insertion units stored + sampled; survey precision independent) | accepted |
 | REQ-023 | IO | runtime DXF round-trip (survey points reconstructed via XDATA; existing points preserved + merged, id conflict → overwrite/offset prompt; foreign POINT → cross-lines) | accepted |
-| REQ-024 | UI | manual (LINE shows one live coord box tracking x,y; type locks it; @dx,dy / bearing accepted; Enter/click commits; non-point prompt single field) | accepted |
+| REQ-024 | UI | manual (LINE first point shows x/y field pair, x highlighted; Tab moves highlight without committing; typed value locks a field and Tab carries the lock forward; @dx,dy / bearing locks both fields; Enter/click commits; LINE second point shows distance/angle pair; CIRCLE center shows x/y; non-point prompt single field; REQ-154 UCS directional prompts unchanged) | accepted |
+| REQ-340 | UI/Commands | manual (MOVE/COPY base-point hover shows green triangle at the snap candidate, gone on move-off/pick/Esc; four-arrow icon shown from base point picked through second-point commit; ROTATE/SCALE show the triangle, not the arrow icon; object-selection steps show only the REQ-121 pickbox; no glyph with no command running; crosshair unchanged) | accepted |
 | REQ-025 | UI/Domain | manual (Model + Paper layout tabs; add/rename/delete; MODEL/PAPER status button toggles) | accepted |
 | REQ-026 | UI/Domain | manual (paper size + orientation render the sheet outline at physical size) | accepted |
 | REQ-027 | UI/Domain/Renderer | manual (≥2 viewports at different scales; create/move/resize/scale) | accepted |
