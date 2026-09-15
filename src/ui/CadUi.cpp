@@ -17755,12 +17755,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // avoids touching the huge existing Kind-keyed switches this whole file consults elsewhere.
   const bool paperSelStep = PaperIsObjectSelectionStep(cmd);
 
-  if (cmd.active == VK::None && !paperSelStep) {
+  // A command typed while the mouse sits over the classic command line (not the viewport) starts
+  // with `inImage` false, so the palette otherwise waited for the next mouse MOVE over the drawing
+  // before engaging — the cursor sat there with no dynamic input until the user nudged it. Force
+  // engagement on the frame a command (or the paper selection step) actually starts, regardless of
+  // where the mouse happens to be that frame.
+  const bool cmdActiveNow = cmd.active != VK::None || paperSelStep;
+  static bool s_cmdActivePrevForEngage = false;
+  const bool cmdJustStarted = cmdActiveNow && !s_cmdActivePrevForEngage;
+  s_cmdActivePrevForEngage = cmdActiveNow;
+
+  if (!cmdActiveNow) {
     cmd.viewportCmdPaletteEngaged = false;
     cmd.viewportDrawingHovered = false;
   } else {
     ImGuiIO& ioEng = ImGui::GetIO();
-    if (inImage)
+    if (inImage || cmdJustStarted)
       cmd.viewportCmdPaletteEngaged = true;
     else if (cmd.viewportCmdPaletteEngaged) {
       const bool hasDraft = cmdBuf && cmdBuf[0] != '\0';
@@ -17898,11 +17908,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // The first keystroke seeds the DISTANCE box, which is the one you land on. Tab then moves to
       // the angle (ImGui's own next-item behaviour, so no key handling of ours), which is how you
       // reach "I only care about the angle".
-      if (activeIdP != idDist && activeIdP != idAng && !io.WantTextInput && io.InputQueueCharacters.Size > 0) {
-        distBuf[0] = '\0';
-        polarLocked = true;
-        RouteQueuedCharsToCmdBuf(distBuf, static_cast<int>(sizeof(distBuf)), io);
-        ImGui::SetKeyboardFocusHere();
+      if (activeIdP != idDist && activeIdP != idAng && !io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+          // Tab with neither box focused jumps into the distance box without typing anything —
+          // the live tracked value stays live (not locked), same as clicking in without editing.
+          ImGui::SetKeyboardFocusHere();
+        } else if (io.InputQueueCharacters.Size > 0) {
+          distBuf[0] = '\0';
+          polarLocked = true;
+          RouteQueuedCharsToCmdBuf(distBuf, static_cast<int>(sizeof(distBuf)), io);
+          ImGui::SetKeyboardFocusHere();
+        }
       }
 
       PushDynFieldGroupStyle();
@@ -17984,11 +18000,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const ImGuiID idAng2 = ImGui::GetID("##anchAng");
       const ImGuiID activeIdA = ImGui::GetActiveID();
 
-      if (activeIdA != idDist2 && activeIdA != idAng2 && !io.WantTextInput && io.InputQueueCharacters.Size > 0) {
-        distBuf2[0] = '\0';
-        anchLocked = true;
-        RouteQueuedCharsToCmdBuf(distBuf2, static_cast<int>(sizeof(distBuf2)), io);
-        ImGui::SetKeyboardFocusHere();
+      if (activeIdA != idDist2 && activeIdA != idAng2 && !io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+          ImGui::SetKeyboardFocusHere();
+        } else if (io.InputQueueCharacters.Size > 0) {
+          distBuf2[0] = '\0';
+          anchLocked = true;
+          RouteQueuedCharsToCmdBuf(distBuf2, static_cast<int>(sizeof(distBuf2)), io);
+          ImGui::SetKeyboardFocusHere();
+        }
       }
 
       PushDynFieldGroupStyle();
@@ -18060,11 +18080,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
       // Type-to-start: the first keystroke with neither box focused seeds the X box, since a typed
       // relative/bearing/distance expression (which fills both fields at once) lands there.
-      if (activeIdXY != idX && activeIdXY != idY && !io.WantTextInput && io.InputQueueCharacters.Size > 0) {
-        xBuf[0] = '\0';
-        xyLocked = true;
-        RouteQueuedCharsToCmdBuf(xBuf, static_cast<int>(sizeof(xBuf)), io);
-        ImGui::SetKeyboardFocusHere();
+      if (activeIdXY != idX && activeIdXY != idY && !io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+          ImGui::SetKeyboardFocusHere();
+        } else if (io.InputQueueCharacters.Size > 0) {
+          xBuf[0] = '\0';
+          xyLocked = true;
+          RouteQueuedCharsToCmdBuf(xBuf, static_cast<int>(sizeof(xBuf)), io);
+          ImGui::SetKeyboardFocusHere();
+        }
       }
 
       PushDynFieldGroupStyle();
