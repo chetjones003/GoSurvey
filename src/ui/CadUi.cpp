@@ -14352,7 +14352,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   const bool overCmdSugPopup =
       s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
-  if (modelSpace && hovered && !overCmdSugPopup && !overViewCube &&
+  if (modelSpace && hovered && !overCmdSugPopup && !overViewCube && !overUcsDropdown &&
       cmd.active != AppCommandState::Kind::Pan && cmd.active != AppCommandState::Kind::Orbit &&
       ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
       mx < avail.x && my >= 0 && my < avail.y) {
