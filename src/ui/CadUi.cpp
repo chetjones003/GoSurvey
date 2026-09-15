@@ -12484,9 +12484,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // image any time some OTHER widget (the classic/floating command line's InputText, still holding
   // ActiveId right after Enter) is active elsewhere — which silently starved the dynamic-input
   // palette's `inImage` visibility gate of ever going true until an unrelated event (e.g. the
-  // command bar losing focus on its own) cleared that ActiveId. A command typed there should show
-  // its dynamic input the instant it starts, not wait on that.
-  const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+  // command bar losing focus on its own) cleared that ActiveId.
+  // AllowWhenOverlappedByWindow: the command-autocomplete popup (`##CmdSuggestPopup`, drawn right at
+  // the crosshair position so it's exactly where the mouse sits while typing a command name) is a
+  // real separate window layered on top of the viewport image at that spot. Without this flag,
+  // IsItemHovered() reads false wherever that popup visually overlaps the image — which is right
+  // under the cursor — so the palette stayed hidden after Enter until the mouse moved somewhere the
+  // (by-then-closed) popup never covered. A command typed with the mouse already in the viewport
+  // should show its dynamic input the instant it starts, not wait on either of these.
+  const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+                                             ImGuiHoveredFlags_AllowWhenOverlappedByWindow);
   // ImGui's GLFW backend snaps io.MousePos to (-FLT_MAX,-FLT_MAX) on OS focus loss (e.g. Alt+Tab
   // away) and GLFW does not re-emit a cursor-position event on focus regain without an actual
   // mouse move, so the sentinel value would otherwise survive into the first several frames after
