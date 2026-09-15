@@ -18279,7 +18279,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // or cancelled (buffer cleared on Esc).
   const bool typingCommand =
       (cmd.active == AppCommandState::Kind::None) && cmdBuf && cmdBuf[0] != '\0';
-  const bool liveHover = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
+  // Excludes the ViewCube (a plain screen-rect test, not a widget hover — see `overViewCube` above):
+  // it is its own clickable navigation control, so the system cursor belongs there, not the drawn
+  // crosshair.
+  const bool liveHover =
+      hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y && !overViewCube;
   const bool frozenHair = typingCommand && s_lastCrosshairScreen.x >= 0.f;
   // PAN command (REQ-045): show a hand instead of the CAD crosshair while pan mode is active.
   // ORBIT (REQ-084 (c)) is a drag mode too: the crosshair would say "pick a point", which is not
