@@ -12433,7 +12433,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   DevShell_OnViewportRect(imgPos.x, imgPos.y, avail.x, avail.y);
 
   const bool hovered = ImGui::IsItemHovered();
-  const ImVec2 mouse = ImGui::GetIO().MousePos;
+  // ImGui's GLFW backend snaps io.MousePos to (-FLT_MAX,-FLT_MAX) on OS focus loss (e.g. Alt+Tab
+  // away) and GLFW does not re-emit a cursor-position event on focus regain without an actual
+  // mouse move, so the sentinel value would otherwise survive into the first several frames after
+  // tabbing back. Anything below keyed off `mouse` (in particular the dynamic-input palette's
+  // window position, REQ-024) would then be pinned to a viewport corner instead of the cursor's
+  // last known location, reading as a lost/reset input. Hold the last valid position instead.
+  static ImVec2 s_lastValidMouse(0.f, 0.f);
+  const ImVec2 rawMouse = ImGui::GetIO().MousePos;
+  const bool mouseValid = rawMouse.x > -FLT_MAX / 2.f && rawMouse.y > -FLT_MAX / 2.f;
+  if (mouseValid) s_lastValidMouse = rawMouse;
+  const ImVec2 mouse = mouseValid ? rawMouse : s_lastValidMouse;
   const float mx = mouse.x - imgPos.x;
   const float my = mouse.y - imgPos.y;
   // In paper space, model-entity picking/selection is suppressed (pan/zoom still work); paper-space
