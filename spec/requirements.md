@@ -368,7 +368,14 @@ requirements is a planning failure, not a sign of rigor.
   **tabbable multi-field group** (x/y for an absolute point, distance/angle for
   a prompt following an anchor), matching AutoCAD's dynamic input; single-field
   entry (`@dx,dy`, bearing/distance) is preserved by locking both fields from
-  one typed value.
+  one typed value. 2026-09-16 — each field in a multi-field group carries a
+  colored border band matching its value's meaning: X/Y use the same
+  `g_chrome.axisX`/`axisY` colors as the Properties panel's axis badges
+  (REQ-024's field-group boxes and the Properties panel now share one visual
+  vocabulary for axis identity), distance/angle use new distinct
+  `g_chrome.axisDistance` (amber) / `axisAngle` (violet) colors. Live-updating
+  the unlocked field from the cursor position every frame was already true of
+  the existing implementation; this revision only adds the color bands.
 
 ### REQ-025 — Model and Paper space with layout tabs and a space toggle
 - Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
