@@ -5249,6 +5249,23 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }});
     }
     {
+      // Smart connection modes (issue #496): starts the prompted BCONNECTMODE wizard, which asks
+      // for the connection point, then walks one field at a time rather than a comma-separated line.
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {columnOfButtons({
+          rowBtn("##BeConnMode", (int)RibbonIconKind::BeParameters, nullptr, "Connection Modes", false,
+                 "Connection Modes — BCONNECTMODE. Add/edit/remove a snap-target-specific mode on a "
+                 "connection point, and set its default.",
+                 false),
+      })};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecBeConn", "Piping", spec, [&](const std::string& id) {
+          if (id == "##BeConnMode") beditSubmit("BCONNECTMODE");
+        });
+      }});
+    }
+    {
       // Every button here dispatches the same BPARAM command shape, differing only in the parameter
       // kind keyword and the on-screen label used as BPARAM's name argument.
       auto beParam = [](const char* id, int iconKind, const char* label, const char* kind) {

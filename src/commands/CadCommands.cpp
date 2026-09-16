@@ -6557,6 +6557,10 @@ const CmdEntry kRegistry[] = {
     {"attedit", "", "Edit attribute values on selected inserts"},
     {"attsync", "", "Synchronize attributes from definitions"},
     {"attext", "", "Extract attributes to the command log / file"},
+    {"bconnect", "", "Add a connection port (in BEDIT): pick a face, or type its values"},
+    {"bconnectedit", "", "Edit or remove a connection port's role/engagement/tag (in BEDIT)"},
+    {"bconnectmode", "", "Add/edit/remove a smart connection mode on a port (in BEDIT)"},
+    {"blockfitting", "", "Tag the block being edited as a piping fitting (in BEDIT)"},
     {"blocklist", "", "List block definitions"},
     {"blockstats", "", "Definition statistics"},
     {"purge", "-purge", "Purge unused block definitions"},
@@ -34594,6 +34598,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.paperVpPhase = 0;
     log.push_back("Rectangular viewport canceled.");
   }
+  else if (st.active == AppCommandState::Kind::BConnectMode)
+    log.push_back("BCONNECTMODE canceled.");
   else if (st.active == AppCommandState::Kind::Align) {
     st.alignControlPts.clear();
     st.alignSelectionSnapshot.clear();
@@ -36517,6 +36523,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     CommitDistSecondPoint(st, st.distFromX, st.distFromY, st.distFromZ, px, py, CadCommitElevation(st), log);
+    return;
+  }
+
+  if (st.active == K::BConnectMode) {
+    BConnectModeSubmitLine(st, line, log);
     return;
   }
 

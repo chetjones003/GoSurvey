@@ -752,36 +752,81 @@ TEST_CASE("BCONNECTMODE adds two modes with a single default on a connection poi
   std::istringstream beditArgs("FIT");
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
 
-  std::istringstream m1("P1, pipe, pipe-end, inlet, 0.25, , 1");
-  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectmode", m1, log));
-  std::istringstream m2("P1, flange, flange-face, inlet, 0, class150, 0");
-  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectmode", m2, log));
-
   const int di = CadBlockFindDef(st.blockDefs, "FIT");
   REQUIRE(di >= 0);
+
+  // Add mode "pipe": connection name, mode name, target, role, engagement, compat tag, default.
+  BConnectModeStart(st, "P1", log);
+  REQUIRE(st.active == AppCommandState::Kind::BConnectMode);
+  BConnectModeSubmitLine(st, "pipe", log);
+  BConnectModeSubmitLine(st, "pipe-end", log);
+  BConnectModeSubmitLine(st, "inlet", log);
+  BConnectModeSubmitLine(st, "0.25", log);
+  BConnectModeSubmitLine(st, "", log);   // no compatibility tag
+  BConnectModeSubmitLine(st, "y", log);  // make default
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  // Add mode "flange", not default.
+  BConnectModeStart(st, "P1", log);
+  BConnectModeSubmitLine(st, "flange", log);
+  BConnectModeSubmitLine(st, "flange-face", log);
+  BConnectModeSubmitLine(st, "inlet", log);
+  BConnectModeSubmitLine(st, "0", log);
+  BConnectModeSubmitLine(st, "class150", log);
+  BConnectModeSubmitLine(st, "n", log);
+
   const CadBlockConnection& out = st.blockDefs[static_cast<size_t>(di)].connections[0];
   REQUIRE(out.modes.size() == 2);
+  CHECK(out.modes[0].name == "pipe");
   CHECK(out.modes[0].target == CadConnectionModeTarget::PipeEnd);
   CHECK(out.modes[0].isDefault);
+  CHECK(out.modes[1].name == "flange");
   CHECK(out.modes[1].target == CadConnectionModeTarget::FlangeFace);
   CHECK(out.modes[1].compatibilityTag == "class150");
   CHECK_FALSE(out.modes[1].isDefault);
 
-  // Setting a new default clears the previous one, so exactly one mode stays default.
-  std::istringstream m1Again("P1, pipe, pipe-end, inlet, 0.25, , 0");
-  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectmode", m1Again, log));
-  std::istringstream m2Default("P1, flange, flange-face, inlet, 0, class150, 1");
-  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectmode", m2Default, log));
+  // Editing an existing mode name walks the same prompts, prefilled with its current values;
+  // making it the new default clears the previous default so exactly one mode stays default.
+  BConnectModeStart(st, "P1", log);
+  BConnectModeSubmitLine(st, "flange", log);
+  BConnectModeSubmitLine(st, "n", log); // don't remove — proceed to edit
+  BConnectModeSubmitLine(st, "", log);  // keep target
+  BConnectModeSubmitLine(st, "", log);  // keep role
+  BConnectModeSubmitLine(st, "", log);  // keep engagement
+  BConnectModeSubmitLine(st, "", log);  // keep compat tag
+  BConnectModeSubmitLine(st, "y", log); // now default
   const CadBlockConnection& out2 = st.blockDefs[static_cast<size_t>(di)].connections[0];
   REQUIRE(out2.modes.size() == 2);
   CHECK_FALSE(out2.modes[0].isDefault);
   CHECK(out2.modes[1].isDefault);
 
-  std::istringstream removeArgs("P1, pipe, remove");
-  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectmode", removeArgs, log));
+  // Typing an existing mode name and confirming removal deletes just that mode.
+  BConnectModeStart(st, "P1", log);
+  BConnectModeSubmitLine(st, "pipe", log);
+  BConnectModeSubmitLine(st, "y", log);
   const CadBlockConnection& out3 = st.blockDefs[static_cast<size_t>(di)].connections[0];
   REQUIRE(out3.modes.size() == 1);
   CHECK(out3.modes[0].name == "flange");
+}
+
+TEST_CASE("BCONNECTMODE cancels cleanly on an unknown connection or ESC", "[issue496][block][connector][bedit]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  st.blockDefs.push_back(def);
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+
+  BConnectModeStart(st, "", log);
+  REQUIRE(st.active == AppCommandState::Kind::BConnectMode);
+  BConnectModeSubmitLine(st, "NOPE", log);
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  CancelActiveCommand(st, log);
+  BConnectModeStart(st, "", log);
+  CancelActiveCommand(st, log);
+  CHECK(st.active == AppCommandState::Kind::None);
 }
 
 TEST_CASE("BLOCKFITTING tags a block definition with piping metadata", "[issue486][block][fitting][bedit]") {

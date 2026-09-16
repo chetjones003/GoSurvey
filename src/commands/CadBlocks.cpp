@@ -1388,6 +1388,237 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   return true;
 }
 
+namespace {
+
+std::string BConnectModeTargetPromptList() {
+  return "pipe-end, flange-face, or generic-port";
+}
+
+std::string BConnectModeRolePromptList() {
+  return "inlet, outlet, or branch";
+}
+
+/// Writes \p pending (with any fields left as-typed) into the named mode on \p conn, adding it if
+/// new, and enforces the single-default invariant (issue #496 AC: exactly one default per point).
+void BConnectModeCommit(AppCommandState& st, CadBlockConnection& conn) {
+  CadBlockConnectionMode mode;
+  mode.name = st.bconnectModeModeName;
+  mode.target = st.bconnectModeTargetPending;
+  mode.role = st.bconnectModeRolePending;
+  mode.engagementLength = st.bconnectModeEngagementPending;
+  mode.compatibilityTag = st.bconnectModeCompatTagPending;
+  int mi = -1;
+  for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
+    if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, mode.name)) {
+      mi = i;
+      break;
+    }
+  }
+  mode.isDefault = mi >= 0 ? conn.modes[static_cast<size_t>(mi)].isDefault : false;
+  if (mi >= 0)
+    conn.modes[static_cast<size_t>(mi)] = mode;
+  else
+    conn.modes.push_back(mode);
+  st.blockEditorDirty = true;
+}
+
+} // namespace
+
+void BConnectModeStart(AppCommandState& st, const std::string& connNameArg, std::vector<std::string>& log) {
+  using Ph = AppCommandState::BConnectModePhase;
+  if (st.blockEditorName.empty()) {
+    log.push_back("BCONNECTMODE — open a block with BEDIT first.");
+    return;
+  }
+  st.active = AppCommandState::Kind::BConnectMode;
+  st.bconnectModePhase = Ph::WaitConnName;
+  st.bconnectModeConnName.clear();
+  st.bconnectModeModeName.clear();
+  st.bconnectModeEditingExisting = false;
+  st.bconnectModeTargetPending = CadConnectionModeTarget::GenericPort;
+  st.bconnectModeRolePending = CadBlockConnectionRole::Inlet;
+  st.bconnectModeEngagementPending = 0.f;
+  st.bconnectModeCompatTagPending.clear();
+  if (!connNameArg.empty()) {
+    // Power-user shortcut (also how the ribbon button and BCONNECTMODE <name> jump straight past
+    // the first prompt): reuse the phase handler itself so the two entry points can't drift apart.
+    BConnectModeSubmitLine(st, connNameArg, log);
+    return;
+  }
+  log.push_back("BCONNECTMODE — connection point name:");
+}
+
+void BConnectModeSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  using Ph = AppCommandState::BConnectModePhase;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+  if (di < 0) {
+    log.push_back("BCONNECTMODE — the block being edited no longer exists.");
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
+  CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+
+  if (st.bconnectModePhase == Ph::WaitConnName) {
+    if (line.empty()) {
+      log.push_back("BCONNECTMODE — connection point name:");
+      return;
+    }
+    const int ci = CadBlockFindConnection(def, line);
+    if (ci < 0) {
+      log.push_back("BCONNECTMODE — no connection named \"" + line + "\" on \"" + st.blockEditorName + "\".");
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    st.bconnectModeConnName = line;
+    const CadBlockConnection& conn = def.connections[static_cast<size_t>(ci)];
+    if (!conn.modes.empty()) {
+      std::string existing = "BCONNECTMODE — \"" + line + "\" already has: ";
+      for (size_t i = 0; i < conn.modes.size(); ++i) {
+        if (i)
+          existing += ", ";
+        existing += conn.modes[i].name;
+        if (conn.modes[i].isDefault)
+          existing += " (default)";
+      }
+      log.push_back(existing);
+    }
+    st.bconnectModePhase = Ph::WaitModeName;
+    log.push_back("BCONNECTMODE — mode name (existing name to edit/remove, new name to add):");
+    return;
+  }
+
+  const int ci = CadBlockFindConnection(def, st.bconnectModeConnName);
+  if (ci < 0) {
+    log.push_back("BCONNECTMODE — connection \"" + st.bconnectModeConnName + "\" is gone; canceled.");
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
+  CadBlockConnection& conn = def.connections[static_cast<size_t>(ci)];
+
+  if (st.bconnectModePhase == Ph::WaitModeName) {
+    if (line.empty()) {
+      log.push_back("BCONNECTMODE — mode name (existing name to edit/remove, new name to add):");
+      return;
+    }
+    st.bconnectModeModeName = line;
+    int mi = -1;
+    for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
+      if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, line)) {
+        mi = i;
+        break;
+      }
+    }
+    st.bconnectModeEditingExisting = mi >= 0;
+    if (mi >= 0) {
+      const CadBlockConnectionMode& m = conn.modes[static_cast<size_t>(mi)];
+      st.bconnectModeTargetPending = m.target;
+      st.bconnectModeRolePending = m.role;
+      st.bconnectModeEngagementPending = m.engagementLength;
+      st.bconnectModeCompatTagPending = m.compatibilityTag;
+      st.bconnectModePhase = Ph::WaitRemoveConfirm;
+      log.push_back("BCONNECTMODE — remove mode \"" + line + "\"? (y/N):");
+      return;
+    }
+    st.bconnectModePhase = Ph::WaitTarget;
+    log.push_back("BCONNECTMODE — snap target for \"" + line + "\" (" + BConnectModeTargetPromptList() + "):");
+    return;
+  }
+
+  if (st.bconnectModePhase == Ph::WaitRemoveConfirm) {
+    if (CadBlockEqCi(line, "y") || CadBlockEqCi(line, "yes")) {
+      int mi = -1;
+      for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
+        if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, st.bconnectModeModeName)) {
+          mi = i;
+          break;
+        }
+      }
+      if (mi >= 0) {
+        conn.modes.erase(conn.modes.begin() + mi);
+        st.blockEditorDirty = true;
+        log.push_back("BCONNECTMODE — removed mode \"" + st.bconnectModeModeName + "\".");
+      }
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    st.bconnectModePhase = Ph::WaitTarget;
+    log.push_back("BCONNECTMODE — snap target for \"" + st.bconnectModeModeName + "\" [" +
+                  std::string(CadConnectionModeTargetTag(st.bconnectModeTargetPending)) + "] (" +
+                  BConnectModeTargetPromptList() + ", Enter to keep current):");
+    return;
+  }
+
+  if (st.bconnectModePhase == Ph::WaitTarget) {
+    if (!line.empty())
+      st.bconnectModeTargetPending = ParseCadConnectionModeTarget(line);
+    st.bconnectModePhase = Ph::WaitRole;
+    log.push_back("BCONNECTMODE — role [" + std::string(CadBlockConnectionRoleTag(st.bconnectModeRolePending)) +
+                  "] (" + BConnectModeRolePromptList() + ", Enter to keep current):");
+    return;
+  }
+
+  if (st.bconnectModePhase == Ph::WaitRole) {
+    if (!line.empty())
+      st.bconnectModeRolePending = ParseCadBlockConnectionRole(line);
+    st.bconnectModePhase = Ph::WaitEngagement;
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%g", st.bconnectModeEngagementPending);
+    log.push_back(std::string("BCONNECTMODE — engagement length [") + buf + "] (Enter to keep current):");
+    return;
+  }
+
+  if (st.bconnectModePhase == Ph::WaitEngagement) {
+    if (!line.empty()) {
+      float v = 0.f;
+      if (!TryParseF(line, v)) {
+        log.push_back("BCONNECTMODE — engagement length must be a number.");
+        return;
+      }
+      st.bconnectModeEngagementPending = v;
+    }
+    st.bconnectModePhase = Ph::WaitCompatTag;
+    log.push_back("BCONNECTMODE — compatibility tag [" + st.bconnectModeCompatTagPending +
+                  "] (Enter to keep current, type \"-\" to clear):");
+    return;
+  }
+
+  if (st.bconnectModePhase == Ph::WaitCompatTag) {
+    if (line == "-")
+      st.bconnectModeCompatTagPending.clear();
+    else if (!line.empty())
+      st.bconnectModeCompatTagPending = line;
+    st.bconnectModePhase = Ph::WaitIsDefault;
+    log.push_back("BCONNECTMODE — make \"" + st.bconnectModeModeName + "\" the default mode? (y/N):");
+    return;
+  }
+
+  if (st.bconnectModePhase == Ph::WaitIsDefault) {
+    const bool makeDefault = (CadBlockEqCi(line, "y") || CadBlockEqCi(line, "yes"));
+    BConnectModeCommit(st, conn);
+    int mi = -1;
+    for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
+      if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, st.bconnectModeModeName)) {
+        mi = i;
+        break;
+      }
+    }
+    if (makeDefault && mi >= 0) {
+      for (CadBlockConnectionMode& m : conn.modes)
+        m.isDefault = false;
+      conn.modes[static_cast<size_t>(mi)].isDefault = true;
+    }
+    // Exactly one default per connection point once any modes exist (issue #496 AC).
+    if (!conn.modes.empty() &&
+        std::none_of(conn.modes.begin(), conn.modes.end(), [](const CadBlockConnectionMode& m) { return m.isDefault; }))
+      conn.modes.front().isDefault = true;
+    log.push_back("BCONNECTMODE — set mode \"" + st.bconnectModeModeName + "\" on \"" + st.bconnectModeConnName +
+                  "\".");
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
+}
+
 bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                             std::vector<std::string>& log) {
   if (!st.blockEditActive || !st.bconnectAwaitingFace)
@@ -2321,88 +2552,9 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
   }
 
   if (tok == "bconnectmode") {
-    if (st.blockEditorName.empty()) {
-      log.push_back("BCONNECTMODE — open a block with BEDIT first.");
-      return true;
-    }
-    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
-    if (di < 0)
-      return true;
-    CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    // Prompted, one-value-at-a-time wizard (issue #496) — see BConnectModeStart/-SubmitLine below.
     const std::vector<std::string> f = SplitCommaRest(args);
-    if (f.empty()) {
-      log.push_back("BCONNECTMODE — usage: BCONNECTMODE <connName>[, <modeName>, remove]"
-                    "[, <modeName>, <target>, <role>, <engagementLength>, <compatibilityTag>, <isDefault:0|1>]. "
-                    "target = pipe-end|flange-face|generic-port.");
-      return true;
-    }
-    const int ci = CadBlockFindConnection(def, f[0]);
-    if (ci < 0) {
-      log.push_back("BCONNECTMODE — no connection named \"" + f[0] + "\".");
-      return true;
-    }
-    CadBlockConnection& conn = def.connections[static_cast<size_t>(ci)];
-    if (f.size() == 1) {
-      if (conn.modes.empty()) {
-        log.push_back("BCONNECTMODE — \"" + f[0] + "\" has no modes (legacy single-mode connection).");
-        return true;
-      }
-      std::ostringstream oss;
-      oss << "BCONNECTMODE " << f[0];
-      for (const CadBlockConnectionMode& m : conn.modes)
-        oss << "\n" << m.name << "," << CadConnectionModeTargetTag(m.target) << ","
-            << CadBlockConnectionRoleTag(m.role) << "," << m.engagementLength << "," << m.compatibilityTag << ","
-            << (m.isDefault ? 1 : 0);
-      log.push_back(oss.str());
-      return true;
-    }
-    // f[1] = mode name
-    int mi = -1;
-    for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
-      if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, f[1])) {
-        mi = i;
-        break;
-      }
-    }
-    if (f.size() >= 3 && CadBlockEqCi(f[2], "remove")) {
-      if (mi < 0) {
-        log.push_back("BCONNECTMODE — no mode named \"" + f[1] + "\" on \"" + f[0] + "\".");
-        return true;
-      }
-      conn.modes.erase(conn.modes.begin() + mi);
-      st.blockEditorDirty = true;
-      log.push_back("BCONNECTMODE — removed mode \"" + f[1] + "\" from \"" + f[0] + "\".");
-      return true;
-    }
-    if (f.size() < 7) {
-      log.push_back("BCONNECTMODE — usage: BCONNECTMODE <connName>, <modeName>, <target>, <role>, "
-                    "<engagementLength>, <compatibilityTag>, <isDefault:0|1>.");
-      return true;
-    }
-    CadBlockConnectionMode mode;
-    mode.name = f[1];
-    mode.target = ParseCadConnectionModeTarget(f[2]);
-    mode.role = ParseCadBlockConnectionRole(f[3]);
-    if (!TryParseF(f[4], mode.engagementLength)) {
-      log.push_back("BCONNECTMODE — engagement length must be a number.");
-      return true;
-    }
-    mode.compatibilityTag = f[5];
-    mode.isDefault = (f[6] == "1");
-    if (mode.isDefault) {
-      // Exactly one default per connection point (issue #496 AC: "one mode ... designated default").
-      for (CadBlockConnectionMode& other : conn.modes)
-        other.isDefault = false;
-    }
-    if (mi >= 0)
-      conn.modes[static_cast<size_t>(mi)] = mode;
-    else
-      conn.modes.push_back(mode);
-    if (!conn.modes.empty() && std::none_of(conn.modes.begin(), conn.modes.end(),
-                                            [](const CadBlockConnectionMode& m) { return m.isDefault; }))
-      conn.modes.front().isDefault = true;
-    st.blockEditorDirty = true;
-    log.push_back("BCONNECTMODE — set mode \"" + f[1] + "\" on \"" + f[0] + "\".");
+    BConnectModeStart(st, f.empty() ? std::string() : f[0], log);
     return true;
   }
 

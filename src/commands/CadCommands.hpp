@@ -1594,6 +1594,11 @@ struct AppCommandState {
     /// distance phase with a live cursor-driven pick, neither of which the old one-shot
     /// `CadPressPull(st, args, log)` free function had.
     PressPull,
+    /// BCONNECTMODE (issue #496): prompted, one-value-at-a-time authoring of a connection point's
+    /// smart connection modes — connection name, then mode name, then (for a new/edited mode)
+    /// target/role/engagement/compatibility/default, each its own phase/prompt rather than one
+    /// comma-separated line.
+    BConnectMode,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1666,6 +1671,7 @@ struct AppCommandState {
     case Kind::Boolean:          return "BOOLEAN";
     case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
     case Kind::PressPull:          return "PRESSPULL";
+    case Kind::BConnectMode:       return "BCONNECTMODE";
     default:                  return "";
     }
   }
@@ -2755,6 +2761,29 @@ struct AppCommandState {
   /// (issue #486 increment A2).
   CadBlockConnectionRole bconnectRolePending = CadBlockConnectionRole::Inlet;
   float bconnectEngagementPending = 0.f;
+
+  // -------------------------------------------------------------------------
+  // BCONNECTMODE wizard (issue #496): one value prompted per step, instead of a
+  // single comma-separated command line.
+  // -------------------------------------------------------------------------
+  enum class BConnectModePhase {
+    WaitConnName,
+    WaitModeName,
+    WaitRemoveConfirm, ///< Only reached when the typed mode name already exists.
+    WaitTarget,
+    WaitRole,
+    WaitEngagement,
+    WaitCompatTag,
+    WaitIsDefault,
+  } bconnectModePhase = BConnectModePhase::WaitConnName;
+  std::string bconnectModeConnName;
+  std::string bconnectModeModeName;
+  bool bconnectModeEditingExisting = false;
+  CadConnectionModeTarget bconnectModeTargetPending = CadConnectionModeTarget::GenericPort;
+  CadBlockConnectionRole bconnectModeRolePending = CadBlockConnectionRole::Inlet;
+  float bconnectModeEngagementPending = 0.f;
+  std::string bconnectModeCompatTagPending;
+
   DrawingGeometrySnapshot blockEditModelStash;
   /// \c cadGpuRevision at the last clean point of the session (enter / BSAVE). A different value
   /// means unsaved edits — drives the BCLOSE Save/Don't-Save/Cancel prompt.
