@@ -225,3 +225,27 @@ the drop click's re-apply back moves the plane 3 ft off the snap on release.
 
 **PASS** for the two things asked for. Remaining on #479: direction arrows, the plane as a real
 entity (Properties, `.gs`, undo), and the contextual ribbon.
+
+## 9. Rebased onto #478, and the flip handle enlarged (2026-09-16)
+
+Rebased onto `feat/req336-section-clip` after #478's second review. `beta` had claimed REQ-338..340
+while this work was local, and #478 had taken ADR-058, so the ids are now **REQ-342/343/344,
+ADR-059, TASK-258/259/260** — rewritten only on lines this branch adds, so `beta`'s REQ-339/340 and
+#478's ADR-058 are untouched.
+
+Two integration points with #478:
+
+- `CadActiveSectionClip` — the plane #478's picks and snaps honour — now derives from
+  `CadEffectiveSectionClipFrame`, so a plane placed on a face is honoured the same as a UCS plane.
+- `CadSectionClipIndicator` sizes from `ComputeSectionClipIndicatorBounds` and centres on the view
+  when the drawing is empty (D-2026-09-16-b), so the rectangle drawn and the rectangle whose handles
+  are picked stay one rectangle.
+
+One existing case changed: *"a different face re-aims the same plane"* slid the plane +4 and flipped
+it, which clips the whole box away — and since #478 a hidden face cannot be picked. It turns the clip
+off before aiming at the new face; the reset of offset and flip is still what it checks.
+
+**Flip handle 1.6× larger** — user GUI pass: "at times it can be hard to see the flip option".
+`kSectionPlaneFlipScale` scales the symbol and the grab distance together. New unit case (a 1.3
+miss at tolerance 1.0 grabs Flip and misses a length handle) and a GUI capture test,
+`req344-section-plane-handles`. The user tested it in the app and kept 1.6.

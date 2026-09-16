@@ -8986,6 +8986,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
   Y, which is the same blind spot REQ-341 records for its own anchor rebasing. The regression case
   therefore sets a state-plane origin AND uses a side face, and measures the error as
   **2,196,000 ft** rather than asserting the two answers merely differ.
+  2026-09-16 — **the FLIP handle is drawn and grabbed 1.6× larger** (`kSectionPlaneFlipScale`),
+  from the user's GUI pass after the rebase onto #478: every other handle was easy to find, the flip
+  symbol "at times hard to see". Size and grab zone share one number, so what looks bigger is also
+  easier to click; pinned by `[req344]` *"The flip handle is grabbed from further away"*, and
+  captured by `--devshell-run req344-section-plane-handles` for judging by eye. The user confirmed
+  1.6 as the size. Rebased onto #478 the same day, which also brought two consequences with it: the
+  plane's rectangle is sized from the drawing's extents (D-2026-09-16-b) rather than from solids with
+  a frame-origin fallback, and a face the clip is hiding can no longer be picked — so re-aiming
+  SECTIONPLANE at a face needs that face visible.
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
