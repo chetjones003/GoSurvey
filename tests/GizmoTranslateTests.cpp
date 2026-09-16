@@ -230,6 +230,27 @@ TEST_CASE("Gizmo/MOVE: a block reference's insertion carries its elevation", "[g
   CHECK(st.cadBlockRefs[0].xf.z == Approx(33.0));
 }
 
+TEST_CASE("Gizmo/MOVE: a selected table is translated exactly once", "[gizmo][req322]") {
+  // Issue #510: ApplyTranslationToSelection once had two separate loops both matching
+  // SelectedEntity::Type::Table and both calling CadTableTranslate on the same selected table —
+  // the same duplicate-loop shape issue #503 fixed for BlockRef — so a table's dx/dy was applied
+  // twice.
+  AppCommandState st;
+  CadTable tbl;
+  tbl.insX = 1.f;
+  tbl.insY = 2.f;
+  st.cadTables.push_back(tbl);
+  SelectedEntity e;
+  e.type = SelectedEntity::Type::Table;
+  e.index = 0;
+  st.selection.push_back(e);
+
+  std::vector<std::string> log;
+  ApplyTranslationToSelection(st, 10.f, 20.f, 30.f, log);
+  CHECK(st.cadTables[0].insX == Approx(11.0));
+  CHECK(st.cadTables[0].insY == Approx(22.0));
+}
+
 TEST_CASE("Gizmo/MOVE: a filled region's vertices carry their elevation", "[gizmo][req322]") {
   // REQ-322 item 1 names "a filled region's vertices" explicitly — `hatchgeom::Translate` used to
   // take no dz at all, so a filled region moved with the rest of a selection stayed at its old Z.
