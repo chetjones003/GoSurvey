@@ -3822,9 +3822,10 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
 
 ### ADR-057 — Shared-boundary weld: a bounded first B-rep stitching primitive, flat coaxial faces only   (2026-09-14, accepted, narrowed)
 
-- **Status:** accepted, single-segment scope (2026-09-14, D-2026-09-14-d/e). Backs REQ-339. Decision
-  (c) below (the shoulder-crossing cut) was attempted and withdrawn — see the amendment at the end;
-  decisions (a), (b), (d) stand as implemented, decision (e) reads unchanged.
+- **Status:** accepted, full scope (2026-09-16, D-2026-09-14-d/e, D-2026-09-16-a). Backs REQ-339.
+  Decision (c) below (the shoulder-crossing cut) was attempted and withdrawn 2026-09-14, then
+  delivered 2026-09-16 via a kernel-integrator extension — see both amendments at the end; decisions
+  (a), (b), (d) stand as implemented, decision (e) reads unchanged.
 - **Context.** REQ-337/338 gave the Boolean engine a way to decompose and fold a *coaxial cylinder
   stack* using closed-form interval arithmetic along the shared axis — every increment stays valid
   because a stack's cross-section at any z is always a full disk of one radius. Issue #497 breaks that
@@ -3916,6 +3917,34 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   `BuildCoaxialStepRadialSubtract` was written, found to fail the kernel's own volume-closure check,
   and removed rather than left in the tree half-working. `WeldAtSharedFace` itself is unchanged and
   still exists as the equal-radius primitive `WeldCoaxialCap` delegates to.
+- **Second amendment (2026-09-16, D-2026-09-16-a) — decision (c) re-delivered, via `IsectStripAt`
+  itself rather than a recogniser-local workaround.** GitHub issue #504 continued from where the
+  first amendment left off: `IsectStrip` (`src/util/brep.cpp`) gained an optional second bound
+  (`other2`/`clipZ`) alongside the existing single `other` — used two ways, both driven by the same
+  underlying data (no new `Solid`/`Edge` field; the second bound is inferred from a loop whose
+  Intersection edges already reference two distinct "other" surfaces, or a loop mixing Intersection
+  and plain edges where the curve meets a rim at exactly one end). A coaxial-stack wall band's own
+  bite clips to the shoulder rather than running past it into the neighbour segment's territory; a
+  cutter-lining face spanning the shoulder picks the nearer wall's own crossing per longitude. Three
+  further defects surfaced and were fixed during implementation (all caught by REQ-201's own
+  volume-closure probe, never shipped): the root-search window, sized from the face's own vertex
+  span, could fall short of a wall band's far root (which can sit as far as the cutter's own radius
+  from the cutter's axis, unrelated to the face's own dimensions) — widened to always reach it; the
+  found interval was being used as material directly rather than as the interval to SUBTRACT from
+  the (mostly full) band, silently keeping too little; and Gauss quadrature converges slowly across
+  the kink where the bite starts or the active wall switches, so the integrator now locates that
+  kink and integrates each smooth side separately rather than adding panels.
+  `BuildCoaxialStepRadialSubtract` is back in the tree, its topology unchanged from the withdrawn
+  attempt (20v/30e/10f, χ=0) — only the integrator it relies on needed the fix.
+  `SubtractRadialCrossHoleThroughStack` dispatches to it for the `hiIdx == loIdx + 1` case.
+- **Consequences of the second amendment:** `IsectStrip`/`IsectStripAt`/`MakeIsectStrip` gain the
+  `other2`/`hasClip` machinery, used by every existing Intersection-edge cylinder face only when
+  its own narrow trigger conditions hold (a single-loop face with two distinct "other" surfaces, or
+  a curve meeting a rim at exactly one end of a single loop) — every pre-existing shape (REQ-314
+  B2b-2's lens/branch-pipe faces, which mix a curve with two seams in one loop but close on
+  themselves at BOTH ends) is unaffected, verified by the full suite passing unchanged. No new
+  `Solid`/`Edge` field, no `.gs` version bump — the extension reads structure the topology already
+  carries.
 
 ### ADR-055 — The centroid is integrated by quadrature over the exact surfaces, in world axes, about a solid-local origin   (2026-09-09, accepted)
 
