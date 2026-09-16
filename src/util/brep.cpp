@@ -681,6 +681,26 @@ struct IsectStrip {
   double zSearchHi = 0.0;
   bool oneSided = false;  ///< the loop has ONE Intersection edge: the strip runs curve <-> `rimZ`.
   double rimZ = 0.0;      ///< the constant axial bound (a flat rim) opposite the curve, if `oneSided`.
+
+  /// REQ-339 shoulder-crossing extension (GitHub issue #504). Set only when the loop's Intersection
+  /// edges reference TWO distinct "other" surfaces rather than one — a coaxial-stack wall or a
+  /// cutter face whose mouth curve is clipped by a shoulder plane partway along. `other` is
+  /// whichever of the two governs the side with the smaller `clipZ`-frame coordinate, `other2` the
+  /// side with the larger. `hasClip`/`clipKeepBelow` additionally clip a computed `[zLo, zHi]` strip
+  /// to one side of `clipZ` — used by a coaxial-stack WALL face's own bite (its mouth curve search
+  /// against the cutter alone would otherwise overshoot past the shoulder into the neighbour
+  /// segment's territory, per the root-cause note on REQ-339's 2026-09-14 revision).
+  const Surface* other2 = nullptr;
+  double clipZ = 0.0;
+  bool hasClip = false;
+  bool clipKeepBelow = true;
+  /// Set alongside `hasClip`: the face's own full (untouched-by-the-notch) axial span, in `sf`'s own
+  /// frame — a coaxial-stack wall band is FULL height at most longitudes, dipping to the notch only
+  /// near the cutter; where `IsectStripAt` finds no crossing at all (outside the notch), that full
+  /// span is the face's real material there, not nothing.
+  double fullLo = 0.0;
+  double fullHi = 0.0;
+
   [[nodiscard]] bool valid() const { return sf && other && zSearchHi > zSearchLo; }
 };
 
@@ -694,6 +714,13 @@ struct IsectStrip {
   double curveZHi = -1e300;   // z of vertices that ARE on an Intersection edge
   double plainZLo = 1e300;
   double plainZHi = -1e300;   // z of vertices on Line / Arc edges only
+  // REQ-339 (issue #504): track up to two DISTINCT "other" surfaces among this loop's Intersection
+  // edges, each with its own near-boundary coordinate (in that surface's own frame, which for a
+  // coaxial-stack wall/cutter pair always shares the stack's axis) — see the IsectStrip comment.
+  const Surface* group1 = nullptr;
+  double group1Min = 1e300, group1Max = -1e300;
+  const Surface* group2 = nullptr;
+  double group2Min = 1e300, group2Max = -1e300;
   for (const Loop& lp : f.loops)
     for (const EdgeUse& u : lp.uses) {
       const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
@@ -712,15 +739,104 @@ struct IsectStrip {
       }
       if (isI && e.isectSurfaces.size() == 2) {
         ++nIsect;
+        const Surface* thisOther = nullptr;
         for (std::size_t k = 0; k < 2; ++k)
           if (!SameSurfaceApprox(e.isectSurfaces[k], f.surface))
-            st.other = &e.isectSurfaces[k];
+            thisOther = &e.isectSurfaces[k];
+        if (thisOther == nullptr)
+          continue;
+        st.other = thisOther;
+        if (group1 == nullptr || SameSurfaceApprox(*thisOther, *group1)) {
+          group1 = thisOther;
+          for (const int vi : {e.v0, e.v1}) {
+            const double gz = ucs::WorldToUcs(group1->frame, s.vertices[static_cast<std::size_t>(vi)].p).z;
+            group1Min = std::min(group1Min, gz);
+            group1Max = std::max(group1Max, gz);
+          }
+        } else if (group2 == nullptr || SameSurfaceApprox(*thisOther, *group2)) {
+          group2 = thisOther;
+          for (const int vi : {e.v0, e.v1}) {
+            const double gz = ucs::WorldToUcs(group2->frame, s.vertices[static_cast<std::size_t>(vi)].p).z;
+            group2Min = std::min(group2Min, gz);
+            group2Max = std::max(group2Max, gz);
+          }
+        }
       }
     }
+  // Every existing (pre-REQ-339) `IsectStrip` shape keeps its mouth curve either alone in the loop
+  // (`oneSided`) or in a loop separate from the plain rim it is bitten out of (the `!inOuter` full-
+  // minus-bite path in `IntegrateFace`, which calls this same function for the bite ALONE, on an
+  // inner loop with no plain edges of its own). A coaxial-stack wall band's own notch (issue #504)
+  // is the one case where curve and plain edges share a SINGLE loop — restricting both the shoulder-
+  // crossing `other2` detection and the `hasClip` detection below to that shape keeps this addition
+  // from ever firing on a pre-existing multi-loop face where the plain edges belong to the OUTER
+  // loop and the curve to an unrelated INNER one.
+  if (f.loops.size() == 1 && group1 != nullptr && group2 != nullptr) {
+    // Two distinct "other" surfaces touch this loop: a shoulder crossing (issue #504). Whichever
+    // pairing (group1's top against group2's bottom, or the reverse) actually meets — the smaller
+    // gap — says which group is the low side; `clipZ` is their shared meeting point. Encounter
+    // order in the loop says nothing about which side is which, so both pairings must be tried.
+    const double gap12 = std::fabs(group1Max - group2Min);  // group1 low, group2 high
+    const double gap21 = std::fabs(group2Max - group1Min);  // group2 low, group1 high
+    if (gap12 <= gap21) {
+      st.other = group1;
+      st.other2 = group2;
+      st.clipZ = 0.5 * (group1Max + group2Min);
+    } else {
+      st.other = group2;
+      st.other2 = group1;
+      st.clipZ = 0.5 * (group2Max + group1Min);
+    }
+  }
+  if (f.loops.size() == 1 && !st.oneSided && st.other2 == nullptr && nIsect >= 2 &&
+      plainZLo <= plainZHi) {
+    // REQ-339 (issue #504): a coaxial-stack wall band's own bite against the cutter, where the
+    // mouth curve's near end already lands exactly on a plain rim (the shoulder) rather than
+    // closing back on itself. Left unclipped, the root search's margin can run past that rim and
+    // pick up the OTHER wall's own crossing (irrelevant to this face) as a spurious second root —
+    // exactly the silently-wrong-volume failure the withdrawn 2026-09-14 attempt hit. Clipping the
+    // computed strip to the rim, on whichever side the curve and a plain edge already coincide,
+    // is the "stop at whichever comes first" rule from that revision's own root-cause note.
+    // A pre-existing lens/branch-pipe face (REQ-314 B2b-2) also mixes a curve with two plain seams
+    // in one loop, but BOTH seams land on the curve's own two extremes (the mouth loop closes on
+    // itself, seam-to-curve, at both ends) — that is genuinely the "curve defines the material
+    // directly" shape, not a notch. Only a genuine one-sided notch (the curve meets a plain rim at
+    // exactly ONE end, and is nowhere near one at the other) gets the bite treatment below.
+    const double tol = 1e-6 * (1.0 + std::fabs(zMax));
+    const bool hiMatches = std::fabs(plainZHi - curveZHi) < tol;
+    const bool loMatches = std::fabs(plainZLo - curveZLo) < tol;
+    if (hiMatches && !loMatches) {
+      st.hasClip = true;
+      st.clipZ = plainZHi;
+      st.clipKeepBelow = true;
+      st.fullLo = plainZLo;
+      st.fullHi = plainZHi;
+    } else if (loMatches && !hiMatches) {
+      st.hasClip = true;
+      st.clipZ = plainZLo;
+      st.clipKeepBelow = false;
+      st.fullLo = plainZLo;
+      st.fullHi = plainZHi;
+    }
+  }
   if (zMax > zMin) {
     const double margin = 0.3 * (zMax - zMin) + 1e-6 * (1.0 + std::fabs(zMax));
     st.zSearchLo = zMin - margin;
     st.zSearchHi = zMax + margin;
+  }
+  if (st.hasClip) {
+    // REQ-339 (issue #504): the far (clipped-away) root can sit as far as the CUTTER's own radius
+    // from the CUTTER's OWN axis — nothing to do with this face's own vertex span, which the margin
+    // above is sized from, and which starts (or ends) exactly AT the shoulder for a wall band (so
+    // the vertex-based window can fall short of the cutter's full reach on that side, as it does
+    // whenever the wall's OTHER end is not comfortably farther away than the cutter radius).
+    const double cutterCenterZ = ucs::WorldToUcs(f.surface.frame, st.other->frame.origin).z;
+    // A small overshoot past the cutter's own radius, so a root that happens to sit exactly at the
+    // window edge (u = the wall's own longitude, i.e. the plane through the cutter axis) is safely
+    // inside it rather than coincident with the first scan sample.
+    const double reach = st.other->radius * 1.05 + 1e-6 * (1.0 + std::fabs(cutterCenterZ));
+    st.zSearchLo = std::min(st.zSearchLo, cutterCenterZ - reach);
+    st.zSearchHi = std::max(st.zSearchHi, cutterCenterZ + reach);
   }
   if (nIsect == 1 && plainZHi >= plainZLo) {
     // A stub band: one quartic edge, and a flat rim on the far side. The rim is whichever plain
@@ -735,8 +851,20 @@ struct IsectStrip {
 /// lens-shaped face). Scans for the two crossings of the other surface and bisects each.
 [[nodiscard]] bool IsectStripAt(const IsectStrip& st, double u, double* zLo, double* zHi) {
   const double r = st.sf->radius;
+  const Surface* activeOther = st.other;
+  if (st.other2 != nullptr) {
+    // REQ-339 (issue #504): this longitude's own transverse position (independent of the axial `z`
+    // being searched for — a cylinder's radial position at a given `u` does not move along its own
+    // axis) decides which of the two walls a cutter-lining face's mouth curve is actually bounded
+    // by here: whichever side of the shoulder height `clipZ` it falls on, read through that
+    // surface's own frame (both share the stack's axis by this increment's own scope).
+    const Vec3 probe = ucs::UcsToWorld(st.sf->frame, Vec3{r * std::cos(u), r * std::sin(u), 0.0});
+    const double side = ucs::WorldToUcs(st.other2->frame, probe).z;
+    if (side >= st.clipZ)
+      activeOther = st.other2;
+  }
   auto g = [&](double z) {
-    return SignedDistToSurface(*st.other,
+    return SignedDistToSurface(*activeOther,
                                ucs::UcsToWorld(st.sf->frame, Vec3{r * std::cos(u), r * std::sin(u), z}));
   };
   double first = 0.0;
@@ -778,13 +906,22 @@ struct IsectStrip {
     const double cross = std::fabs(first - st.rimZ) <= std::fabs(last - st.rimZ) ? first : last;
     *zLo = std::min(cross, st.rimZ);
     *zHi = std::max(cross, st.rimZ);
-    return *zHi > *zLo;
+  } else {
+    if (roots < 2)
+      return false;
+    *zLo = first;
+    *zHi = last;
   }
-  if (roots < 2)
-    return false;
-  *zLo = first;
-  *zHi = last;
-  return true;
+  if (st.hasClip) {
+    // Stop the strip at whichever comes first, the cutter crossing or the shoulder plane (REQ-339,
+    // issue #504) — the far root can legitimately fall beyond the shoulder (it is the OTHER wall's
+    // own crossing, irrelevant to this face), so clip rather than trust it.
+    if (st.clipKeepBelow)
+      *zHi = std::min(*zHi, st.clipZ);
+    else
+      *zLo = std::max(*zLo, st.clipZ);
+  }
+  return *zHi > *zLo;
 }
 
 /// Numerical area / volume term of a **cylinder** face whose boundary loop contains a procedural
@@ -798,18 +935,68 @@ struct IsectStrip {
   FaceIntegrals out;
   if (!st.valid())
     return out;
-  out.area = GradedGaussIntegrate(f.uStart, f.uEnd, 48, [&](double u) {
-    double a = 0.0;
-    double b = 0.0;
-    return IsectStripAt(st, u, &a, &b) ? r * (b - a) : 0.0;
-  });
-  out.volTerm = GradedGaussIntegrate(f.uStart, f.uEnd, 48, [&](double u) {
-    double a = 0.0;
-    double b = 0.0;
-    if (!IsectStripAt(st, u, &a, &b))
-      return 0.0;
-    return r * (r - qL.x * std::cos(u) - qL.y * std::sin(u)) * (b - a);
-  });
+  // `st.hasClip` faces (a coaxial-stack wall band's own bite) are FULL height almost everywhere,
+  // with the found `[a, b]` interval the REMOVED bite to subtract from that full span — unlike
+  // every other `IsectStrip` user (`oneSided`, or a cutter-lining face via `other2`), where the
+  // found interval already IS the face's own surviving material band, used directly.
+  auto widthAt = [&](double u) {
+    double a = 0.0, b = 0.0;
+    if (IsectStripAt(st, u, &a, &b))
+      return st.hasClip ? (st.fullHi - st.fullLo) - (b - a) : (b - a);
+    return st.hasClip ? (st.fullHi - st.fullLo) : 0.0;
+  };
+  auto areaAt = [&](double u) { return r * widthAt(u); };
+  auto volAt = [&](double u) {
+    return r * (r - qL.x * std::cos(u) - qL.y * std::sin(u)) * widthAt(u);
+  };
+  // REQ-339 (issue #504): a shoulder-crossing face (a coaxial-stack wall band's own bite, `hasClip`,
+  // or a cutter-lining face switching between the two walls, `other2`) has a real kink where the
+  // notch pinches to nothing or the active wall switches — continuous, but not differentiable,
+  // unlike every other `IsectStrip` user (a smooth lens curve throughout). Gauss quadrature
+  // converges slowly across a kink no matter how many panels, so rather than throw panels at it,
+  // locate it (bisecting on a signature that changes exactly there) and integrate each smooth side
+  // separately.
+  if (!st.hasClip && st.other2 == nullptr) {
+    out.area = GradedGaussIntegrate(f.uStart, f.uEnd, 48, areaAt);
+    out.volTerm = GradedGaussIntegrate(f.uStart, f.uEnd, 48, volAt);
+    return out;
+  }
+  // A signature that is continuous everywhere EXCEPT exactly at a kink: whether a crossing exists
+  // (the `hasClip` pinch), XORed with which side of `clipZ` this longitude's own transverse position
+  // falls on (the `other2` wall switch) — either changing indicates a kink between two samples.
+  auto signature = [&](double u) {
+    double a = 0.0, b = 0.0;
+    const bool has = IsectStripAt(st, u, &a, &b);
+    bool hiSide = false;
+    if (st.other2 != nullptr) {
+      const Vec3 probe = ucs::UcsToWorld(st.sf->frame, Vec3{r * std::cos(u), r * std::sin(u), 0.0});
+      hiSide = ucs::WorldToUcs(st.other2->frame, probe).z >= st.clipZ;
+    }
+    return has != hiSide;
+  };
+  std::vector<double> bounds{f.uStart};
+  const int scan = 200;
+  bool prevSig = signature(f.uStart);
+  double prevU = f.uStart;
+  for (int i = 1; i <= scan; ++i) {
+    const double u = f.uStart + (f.uEnd - f.uStart) * i / scan;
+    const bool sig = signature(u);
+    if (sig != prevSig) {
+      double lo = prevU, hi = u;
+      for (int k = 0; k < 60; ++k) {
+        const double m = 0.5 * (lo + hi);
+        (signature(m) == prevSig ? lo : hi) = m;
+      }
+      bounds.push_back(0.5 * (lo + hi));
+    }
+    prevSig = sig;
+    prevU = u;
+  }
+  bounds.push_back(f.uEnd);
+  for (std::size_t i = 0; i + 1 < bounds.size(); ++i) {
+    out.area += GradedGaussIntegrate(bounds[i], bounds[i + 1], 48, areaAt);
+    out.volTerm += GradedGaussIntegrate(bounds[i], bounds[i + 1], 48, volAt);
+  }
   return out;
 }
 
@@ -9821,6 +10008,179 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
   return Succeed(outWhy);
 }
 
+/// `Blo ∪ Bhi − A`: a radial cross-hole (thin cylinder `A`, radius \p r, axis `fr.xAxis`) drilled
+/// through a two-segment coaxial stack that steps from radius \p Ra (below \p Zs) to \p Rb (above),
+/// where the hole crosses that one shoulder (REQ-339, GitHub issue #504 — the shape the 2026-09-14
+/// revision withdrew, re-enabled once \ref IsectStripAt could take a second clipping bound).
+/// `fr.zAxis` is the stack axis, `fr.origin` the point on it level with the hole's own centre
+/// (so `-r < Zs < r`, and `zB0 < Zs < zB1` bound the two segments' own caps).
+///
+/// 20 vertices, 30 edges, 10 faces (verified against the withdrawn attempt's own topology count,
+/// which was already correct — only the numeric integrator was not): the mouth curve on each of the
+/// two wall radii is split into a Hi arc (crossing `Bhi`) and a Lo arc (crossing `Blo`), joined by a
+/// straight generatrix on `A` itself where the mouth crosses the shoulder plane; the shoulder's own
+/// annulus is left as two disconnected remnants (front/back of the hole) rather than a full ring.
+[[nodiscard]] bool BuildCoaxialStepRadialSubtract(const ucs::Ucs& fr, double r, double Ra, double Rb,
+                                                  double zB0, double Zs, double zB1, Solid* out,
+                                                  Problem* outWhy) {
+  if (!(r > 0.0) || !(Ra > r) || !(Rb > r) || std::fabs(Ra - Rb) < 1e-9 * std::max(Ra, Rb))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  if (!(zB0 < Zs) || !(Zs < zB1) || !(-r < Zs) || !(Zs < r))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  auto W = [&](const Vec3& l) { return ucs::UcsToWorld(fr, l); };
+
+  Surface aSurf;
+  aSurf.kind = SurfaceKind::Cylinder;
+  aSurf.frame.origin = fr.origin;
+  aSurf.frame.zAxis = fr.xAxis;
+  aSurf.frame.xAxis = fr.zAxis;
+  aSurf.frame.yAxis = ray3d::Scale(fr.yAxis, -1.0);
+  aSurf.radius = r;
+  aSurf.height = 4.0 * std::max(Ra, Rb);
+  Surface raSurf;
+  raSurf.kind = SurfaceKind::Cylinder;
+  raSurf.frame.origin = fr.origin;
+  raSurf.frame.zAxis = fr.zAxis;
+  raSurf.frame.xAxis = fr.xAxis;
+  raSurf.frame.yAxis = fr.yAxis;
+  raSurf.radius = Ra;
+  raSurf.height = Zs - zB0;
+  Surface rbSurf = raSurf;
+  rbSurf.radius = Rb;
+  rbSurf.height = zB1 - Zs;
+
+  auto cpt = [&](double phi, int sign, double R) {
+    const double x = std::sqrt(std::max(0.0, R * R - r * r * std::sin(phi) * std::sin(phi))) * sign;
+    return W(Vec3{x, -r * std::sin(phi), r * std::cos(phi)});
+  };
+  const double phiS = std::acos(std::clamp(Zs / r, -1.0, 1.0));
+  const double Yh = r * std::sin(phiS);
+
+  Solid s;
+  const int P0 = AddVertex(&s, cpt(0.0, 1, Rb));
+  const int Vb = AddVertex(&s, cpt(phiS, 1, Rb));
+  const int Va = AddVertex(&s, cpt(phiS, 1, Ra));
+  const int P1 = AddVertex(&s, cpt(kPi, 1, Ra));
+  const int Va2 = AddVertex(&s, cpt(kTwoPi - phiS, 1, Ra));
+  const int Vb2 = AddVertex(&s, cpt(kTwoPi - phiS, 1, Rb));
+  const int N0 = AddVertex(&s, cpt(0.0, -1, Rb));
+  const int Nb = AddVertex(&s, cpt(phiS, -1, Rb));
+  const int Na = AddVertex(&s, cpt(phiS, -1, Ra));
+  const int N1 = AddVertex(&s, cpt(kPi, -1, Ra));
+  const int Na2 = AddVertex(&s, cpt(kTwoPi - phiS, -1, Ra));
+  const int Nb2 = AddVertex(&s, cpt(kTwoPi - phiS, -1, Rb));
+  const int Bp = AddVertex(&s, W(Vec3{0.0, Ra, zB0}));
+  const int Bm = AddVertex(&s, W(Vec3{0.0, -Ra, zB0}));
+  const int Tp = AddVertex(&s, W(Vec3{0.0, Rb, zB1}));
+  const int Tm = AddVertex(&s, W(Vec3{0.0, -Rb, zB1}));
+  const int RaTopP = AddVertex(&s, W(Vec3{0.0, Ra, Zs}));
+  const int RaTopM = AddVertex(&s, W(Vec3{0.0, -Ra, Zs}));
+  const int RbBotP = AddVertex(&s, W(Vec3{0.0, Rb, Zs}));
+  const int RbBotM = AddVertex(&s, W(Vec3{0.0, -Rb, Zs}));
+
+  auto isect = [&](int v0, int v1, double witnessPhi, int sign, const Surface& wall) {
+    Edge e;
+    e.kind = CurveKind::Intersection;
+    e.v0 = v0;
+    e.v1 = v1;
+    e.frame.origin = cpt(witnessPhi, sign, wall.radius);
+    e.isectSurfaces = {aSurf, wall};
+    s.edges.push_back(e);
+    return static_cast<int>(s.edges.size()) - 1;
+  };
+  const int hiF_R = isect(P0, Vb, 0.5 * phiS, 1, rbSurf);
+  const int loF_R = isect(Va, P1, 0.5 * (phiS + kPi), 1, raSurf);
+  const int loF_L = isect(P1, Va2, 0.5 * (kPi + kTwoPi - phiS), 1, raSurf);
+  const int hiF_L = isect(Vb2, P0, 0.5 * (kTwoPi - phiS + kTwoPi), 1, rbSurf);
+  const int hiB_R = isect(N0, Nb, 0.5 * phiS, -1, rbSurf);
+  const int loB_R = isect(Na, N1, 0.5 * (phiS + kPi), -1, raSurf);
+  const int loB_L = isect(N1, Na2, 0.5 * (kPi + kTwoPi - phiS), -1, raSurf);
+  const int hiB_L = isect(Nb2, N0, 0.5 * (kTwoPi - phiS + kTwoPi), -1, rbSurf);
+
+  const int genF1 = AddLine(&s, Va, Vb);
+  const int genF2 = AddLine(&s, Va2, Vb2);
+  const int genB1 = AddLine(&s, Na, Nb);
+  const int genB2 = AddLine(&s, Na2, Nb2);
+  const int seamTop = AddLine(&s, N0, P0);
+  const int seamBot = AddLine(&s, N1, P1);
+
+  const Vec3 botC = W(Vec3{0.0, 0.0, zB0});
+  const Vec3 topC = W(Vec3{0.0, 0.0, zB1});
+  const Vec3 shoulderC = W(Vec3{0.0, 0.0, Zs});
+  const Vec3 Zax = fr.zAxis;
+  const int botRimF = AddArc(&s, Bm, Bp, botC, Zax, kPi);
+  const int botRimB = AddArc(&s, Bp, Bm, botC, Zax, kPi);
+  const int topRimF = AddArc(&s, Tm, Tp, topC, Zax, kPi);
+  const int topRimB = AddArc(&s, Tp, Tm, topC, Zax, kPi);
+  const int seamRaP = AddLine(&s, Bp, RaTopP);
+  const int seamRaM = AddLine(&s, Bm, RaTopM);
+  const int seamRbP = AddLine(&s, RbBotP, Tp);
+  const int seamRbM = AddLine(&s, RbBotM, Tm);
+
+  const double flankRa = kHalfPi - std::asin(std::clamp(Yh / Ra, -1.0, 1.0));
+  const double flankRb = kHalfPi - std::asin(std::clamp(Yh / Rb, -1.0, 1.0));
+  const int topFlatRaRight = AddArc(&s, RaTopM, Va, shoulderC, Zax, flankRa);
+  const int topFlatRaLeft = AddArc(&s, Va2, RaTopP, shoulderC, Zax, flankRa);
+  const int topFlatRaBackRight = AddArc(&s, RaTopP, Na2, shoulderC, Zax, flankRa);
+  const int topFlatRaBackLeft = AddArc(&s, Na, RaTopM, shoulderC, Zax, flankRa);
+  const int botFlatRbRight = AddArc(&s, RbBotM, Vb, shoulderC, Zax, flankRb);
+  const int botFlatRbLeft = AddArc(&s, Vb2, RbBotP, shoulderC, Zax, flankRb);
+  const int botFlatRbBackRight = AddArc(&s, RbBotP, Nb2, shoulderC, Zax, flankRb);
+  const int botFlatRbBackLeft = AddArc(&s, Nb, RbBotM, shoulderC, Zax, flankRb);
+
+  auto cylFace = [&](const Surface& surf, double u0, double u1, std::vector<EdgeUse> uses) {
+    Face f;
+    f.surface = surf;
+    f.uStart = u0;
+    f.uEnd = u1;
+    f.loops.push_back(Loop{std::move(uses)});
+    s.faces.push_back(std::move(f));
+  };
+  cylFace(raSurf, -kHalfPi, kHalfPi,
+          {{botRimF, false}, {seamRaP, false}, {topFlatRaLeft, true}, {loF_L, true}, {loF_R, true},
+           {topFlatRaRight, true}, {seamRaM, true}});
+  cylFace(raSurf, kHalfPi, kHalfPi + kPi,
+          {{botRimB, false}, {seamRaM, false}, {topFlatRaBackLeft, true}, {loB_R, false},
+           {loB_L, false}, {topFlatRaBackRight, true}, {seamRaP, true}});
+  cylFace(rbSurf, -kHalfPi, kHalfPi,
+          {{botFlatRbRight, false}, {hiF_R, true}, {hiF_L, true}, {botFlatRbLeft, false},
+           {seamRbP, false}, {topRimF, true}, {seamRbM, true}});
+  cylFace(rbSurf, kHalfPi, kHalfPi + kPi,
+          {{botFlatRbBackRight, false}, {hiB_L, false}, {hiB_R, false}, {botFlatRbBackLeft, false},
+           {seamRbM, false}, {topRimB, true}, {seamRbP, true}});
+  s.faces.push_back(MakePlaneFace(botC, ray3d::Scale(Zax, -1.0), {{botRimF, true}, {botRimB, true}}));
+  s.faces.push_back(MakePlaneFace(topC, Zax, {{topRimF, false}, {topRimB, false}}));
+
+  Surface aIn = aSurf;
+  aIn.inward = true;
+  cylFace(aIn, 0.0, kPi,
+          {{hiF_R, false}, {genF1, true}, {loF_R, false}, {seamBot, true}, {loB_R, true},
+           {genB1, false}, {hiB_R, true}, {seamTop, false}});
+  cylFace(aIn, kPi, kTwoPi,
+          {{loF_L, false}, {genF2, false}, {hiF_L, false}, {seamTop, true}, {hiB_L, true},
+           {genB2, true}, {loB_L, true}, {seamBot, false}});
+
+  // The shoulder faces away from whichever segment is narrower here: if Rb is the wider one, the
+  // ring is the underside of its own extra material (normal -Z); if Ra is wider, it is the topside
+  // of Ra's own material (normal +Z) — both remnants share the same shoulder plane, so both share
+  // this same outward normal.
+  const Vec3 shoulderN = Rb > Ra ? ray3d::Scale(Zax, -1.0) : Zax;
+  s.faces.push_back(MakePlaneFace(
+      shoulderC, shoulderN,
+      {{topFlatRaLeft, false}, {topFlatRaBackRight, false}, {genB2, false}, {botFlatRbBackRight, true},
+       {botFlatRbLeft, true}, {genF2, true}}));
+  s.faces.push_back(MakePlaneFace(
+      shoulderC, shoulderN,
+      {{genF1, false}, {botFlatRbRight, true}, {botFlatRbBackLeft, true}, {genB1, true},
+       {topFlatRaBackLeft, false}, {topFlatRaRight, false}}));
+
+  AddSingleShell(&s);
+  if (Validate(s) != Problem::Ok || SelfIntersects(s))
+    return Fail(Problem::BooleanResultInvalid, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 /// `A ∩ B` for a **non-perpendicular** branch pipe (REQ-314 B2b-2, GitHub issue #242): the thin
 /// cylinder `A` (radius \p r) crosses the thick `B` (radius \p R) with their axes coplanar and
 /// crossing at `fr.origin`, but tilted by \p alpha off perpendicular (`|alpha| < π/2`; `alpha = 0`
@@ -13193,17 +13553,11 @@ bool SubtractRadialCrossHoleThroughStack(const Solid& base, const Vec3& centre,
       hiIdx = i;
     }
   }
-  // A cut spanning a shoulder (loIdx != hiIdx) needs the target wall's own mouth curve clipped by a
-  // THIRD surface (the shoulder plane) — `IntegrateCylinderFaceNumeric`'s existing
-  // wall-cutter-only root search (`IsectStripAt`) has no way to express that third bound, so an
-  // otherwise-correct topology for that shape still reports a wrong area/volume. Filed as its own
-  // follow-up (needing that numeric integrator extended, not just this recogniser) rather than
-  // shipped with a silently-wrong measurement — see the revision note on REQ-339's Statement.
-  if (loIdx < 0 || hiIdx != loIdx)
+  // A cut spanning MORE than one shoulder (two or more segment boundaries) is out of REQ-339's own
+  // scope boundaries — the isolate/cut/weld primitive is not structurally excluded from it, but is
+  // not tested or claimed working beyond one shoulder.
+  if (loIdx < 0 || hiIdx > loIdx + 1)
     return false;
-  if (std::fabs(segs[static_cast<std::size_t>(loIdx)].r0 - segs[static_cast<std::size_t>(loIdx)].r1) >
-      1e-7 * sc)
-    return false;  // a Cone band — out of scope
 
   // A right-handed frame: Z the stack axis, Y the cutter's own direction, X the seam direction.
   ucs::Ucs fr;
@@ -13231,7 +13585,10 @@ bool SubtractRadialCrossHoleThroughStack(const Solid& base, const Vec3& centre,
 
   Solid result;
   Problem whyMid = Problem::Ok;
-  {
+  if (hiIdx == loIdx) {
+    if (std::fabs(segs[static_cast<std::size_t>(loIdx)].r0 - segs[static_cast<std::size_t>(loIdx)].r1) >
+        1e-7 * sc)
+      return false;  // a Cone band — out of scope
     ucs::Ucs bfr;
     bfr.origin = ray3d::Add(axisPoint, ray3d::Scale(axisDir, zh));  // its cutter sits at local z=0
     bfr.zAxis = axisDir;
@@ -13241,6 +13598,28 @@ bool SubtractRadialCrossHoleThroughStack(const Solid& base, const Vec3& centre,
     const double zB1 = segs[static_cast<std::size_t>(loIdx)].z1 - zh;
     if (!BuildBranchPipeSubtract(bfr, radius, segs[static_cast<std::size_t>(loIdx)].r0, zB0, zB1,
                                  &result, &whyMid))
+      return Fail(whyMid, outWhy);
+  } else {
+    // Exactly one shoulder crossed (REQ-339, GitHub issue #504): isolate the two affected segments
+    // and cut them as a single stepped-wall solid rather than two independently-cut bare cylinders,
+    // so the mouth curve on each side of the shoulder is built (and, via `IsectStripAt`'s clipping
+    // extension, measured) correctly.
+    if (std::fabs(segs[static_cast<std::size_t>(loIdx)].r0 - segs[static_cast<std::size_t>(loIdx)].r1) >
+            1e-7 * sc ||
+        std::fabs(segs[static_cast<std::size_t>(hiIdx)].r0 - segs[static_cast<std::size_t>(hiIdx)].r1) >
+            1e-7 * sc)
+      return false;  // a Cone band on either side of the shoulder — out of scope
+    ucs::Ucs bfr;
+    bfr.origin = ray3d::Add(axisPoint, ray3d::Scale(axisDir, zh));  // its cutter sits at local z=0
+    bfr.zAxis = axisDir;
+    bfr.xAxis = fr.yAxis;
+    bfr.yAxis = ray3d::Scale(fr.xAxis, -1.0);
+    const double zB0 = segs[static_cast<std::size_t>(loIdx)].z0 - zh;
+    const double shoulderZ = segs[static_cast<std::size_t>(hiIdx)].z0 - zh;
+    const double zB1 = segs[static_cast<std::size_t>(hiIdx)].z1 - zh;
+    if (!BuildCoaxialStepRadialSubtract(bfr, radius, segs[static_cast<std::size_t>(loIdx)].r0,
+                                        segs[static_cast<std::size_t>(hiIdx)].r0, zB0, shoulderZ, zB1,
+                                        &result, &whyMid))
       return Fail(whyMid, outWhy);
   }
 

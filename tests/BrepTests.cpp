@@ -6742,30 +6742,90 @@ TEST_CASE("Radial cross-hole entirely inside one segment of a coaxial stack (iss
   CHECK(vol == Catch::Approx(expected).epsilon(1e-4));
 }
 
-// A hole crossing the shoulder between two differently-radiused segments is explicitly OUT of
-// REQ-339's scope (see the requirement's revision note): the wall's own mouth curve there would need
-// to be clipped by a THIRD surface (the shoulder plane), which the kernel's existing
-// `IntegrateCylinderFaceNumeric` numeric area integrator has no way to express — it searches only for
-// where the cutter crosses ONE wall surface. Building the topology anyway risks exactly the
-// silently-wrong-measurement failure REQ-201 exists to prevent, so this recogniser refuses by
-// returning false (not a `Problem`) rather than guess, leaving the caller's own ordinary
-// `Problem::BooleanCurvedFace` refusal to stand, unchanged and by name.
-TEST_CASE("Radial cross-hole crossing a shoulder still refuses, not silently wrong (issue #497)",
-         "[brep][req339][issue497]") {
+// A hole crossing the shoulder between two differently-radiused segments (REQ-339, GitHub issue
+// #504, continuing #497): the wall's own mouth curve there is clipped by a second bound (the
+// shoulder plane) via `IsectStripAt`'s extension, and the shape is cut as one welded solid.
+TEST_CASE("Radial cross-hole crossing exactly one shoulder cuts correctly (issue #504)",
+         "[brep][req339][issue504]") {
   brep::Problem why = brep::Problem::Ok;
+  // A 3-segment stack: r1[0,4]=1.5, r2[4,8]=2.5 (wide), r3[8,12]=1.0 — the hole crosses the FIRST
+  // shoulder (z=4), sitting partly in segment 1 and partly in segment 2, clear of the second.
   ucs::Ucs f1; f1.origin = brep::Vec3{0, 0, 0};
   brep::Solid s1; REQUIRE(brep::MakeCylinder(f1, 1.5, 4.0, &s1, &why));
   ucs::Ucs f2; f2.origin = brep::Vec3{0, 0, 4};
   brep::Solid s2; REQUIRE(brep::MakeCylinder(f2, 2.5, 4.0, &s2, &why));
+  ucs::Ucs f3; f3.origin = brep::Vec3{0, 0, 8};
+  brep::Solid s3; REQUIRE(brep::MakeCylinder(f3, 1.0, 4.0, &s3, &why));
   std::vector<brep::Solid> u1;
   REQUIRE(brep::BooleanUnion(s1, s2, &u1, &why));
   REQUIRE(u1.size() == 1);
-  brep::Solid stack = std::move(u1[0]);
+  std::vector<brep::Solid> u2;
+  REQUIRE(brep::BooleanUnion(u1[0], s3, &u2, &why));
+  REQUIRE(u2.size() == 1);
+  brep::Solid stack = std::move(u2[0]);
   REQUIRE(brep::Validate(stack) == brep::Problem::Ok);
 
   const double r = 0.8;
   const double zh = 3.5;  // shoulder at z=4 falls inside [zh-r, zh+r] = [2.7, 4.3]
   const brep::Vec3 centre{0.0, 0.0, zh};
+  const brep::Vec3 axis{1.0, 0.0, 0.0};
+
+  brep::Solid cut;
+  REQUIRE(brep::SubtractRadialCrossHoleThroughStack(stack, centre, axis, r, &cut, &why));
+  CHECK(brep::Validate(cut) == brep::Problem::Ok);
+  CHECK_FALSE(brep::SelfIntersects(cut));
+
+  // Ground truth (REQ-101), by an INDEPENDENT method entirely outside the kernel's own integrator:
+  // slice along the stack axis and integrate the remaining cross-sectional area at each z with a
+  // plain Simpson's rule, using elementary circular-segment geometry rather than anything from
+  // `brep.cpp`. At a given z, the wall radius is 1.5 below the shoulder (z=4) and 2.5 above it; the
+  // radial hole (centred at zh, radius r, running along X) removes the |Y| < sqrt(r^2-(z-zh)^2)
+  // strip, leaving the two circular segments beyond it.
+  auto circularSegmentArea = [](double R, double h) {  // area where Y >= h inside a disk of radius R
+    if (h >= R) return 0.0;
+    if (h <= -R) return 3.141592653589793 * R * R;
+    return R * R * std::acos(h / R) - h * std::sqrt(std::max(0.0, R * R - h * h));
+  };
+  auto crossSectionArea = [&](double z) {
+    const double R = z < 4.0 ? 1.5 : (z < 8.0 ? 2.5 : 1.0);
+    const double dz = z - zh;
+    if (std::fabs(dz) >= r) return 3.141592653589793 * R * R;
+    const double yh = std::sqrt(std::max(0.0, r * r - dz * dz));
+    return 2.0 * circularSegmentArea(R, yh);
+  };
+  const int n = 40000;  // even, for Simpson's rule
+  const double z0 = 0.0, z1 = 12.0;
+  double expected = crossSectionArea(z0) + crossSectionArea(z1);
+  for (int i = 1; i < n; ++i) {
+    const double z = z0 + (z1 - z0) * i / n;
+    expected += crossSectionArea(z) * (i % 2 == 0 ? 2.0 : 4.0);
+  }
+  expected *= (z1 - z0) / n / 3.0;
+
+  const double vol = brep::ComputeMassProperties(cut).volume;
+  CHECK(vol == Catch::Approx(expected).epsilon(1e-4));
+}
+
+TEST_CASE("Radial cross-hole spanning more than one shoulder still refuses (issue #504)",
+         "[brep][req339][issue504]") {
+  brep::Problem why = brep::Problem::Ok;
+  ucs::Ucs f1; f1.origin = brep::Vec3{0, 0, 0};
+  brep::Solid s1; REQUIRE(brep::MakeCylinder(f1, 1.0, 3.0, &s1, &why));
+  ucs::Ucs f2; f2.origin = brep::Vec3{0, 0, 3};
+  brep::Solid s2; REQUIRE(brep::MakeCylinder(f2, 2.0, 1.0, &s2, &why));  // thin middle segment
+  ucs::Ucs f3; f3.origin = brep::Vec3{0, 0, 4};
+  brep::Solid s3; REQUIRE(brep::MakeCylinder(f3, 1.5, 3.0, &s3, &why));
+  std::vector<brep::Solid> u1;
+  REQUIRE(brep::BooleanUnion(s1, s2, &u1, &why));
+  REQUIRE(u1.size() == 1);
+  std::vector<brep::Solid> u2;
+  REQUIRE(brep::BooleanUnion(u1[0], s3, &u2, &why));
+  REQUIRE(u2.size() == 1);
+  brep::Solid stack = std::move(u2[0]);
+  REQUIRE(brep::Validate(stack) == brep::Problem::Ok);
+
+  const double r = 0.9;  // wide enough to reach both shoulders (z=3 and z=4) from the middle
+  const brep::Vec3 centre{0.0, 0.0, 3.5};
   const brep::Vec3 axis{1.0, 0.0, 0.0};
 
   brep::Solid cut;

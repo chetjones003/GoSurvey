@@ -6779,15 +6779,49 @@ capability that does not exist. They are recorded here rather than quietly dropp
     so it is not structurally excluded, but is not tested or claimed working beyond one shoulder.
   - **Sphere/torus/cone pieces inside a stack, and non-coaxial composite operands**, remain out of
     scope, matching every prior REQ-337/338 boundary.
-  - **A cross-hole crossing a shoulder (the second acceptance line above) is NOT delivered by this
-    requirement** — see the 2026-09-14 revision below. Only the single-segment case (the first
-    acceptance line) is accepted and shipped.
-- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`) for the weld primitive and the single-segment
-  recogniser; Commands (`src/commands/CadCommands.cpp`) wiring is unchanged (`FoldBoolean`/
-  `CommitBoolean` already dispatch through `TryBooleanCurved`, which gains the new recogniser).
-- Status: **accepted, single-segment case only (2026-09-14)** — D-2026-09-14-d/e. The shoulder-
-  crossing acceptance line is explicitly unmet; see the revision below.
+  - **A cross-hole spanning more than one shoulder** remains out of scope — the caller's ordinary
+    `Problem::BooleanCurvedFace` refusal stands, unchanged and by name. The single-shoulder case
+    (exactly one shoulder crossed) IS now delivered — see the 2026-09-16 revision below.
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`) for the weld primitive and the single-segment and
+  single-shoulder-crossing recognisers; Commands (`src/commands/CadCommands.cpp`) wiring is
+  unchanged (`FoldBoolean`/`CommitBoolean` already dispatch through `TryBooleanCurved`, which gains
+  the new recogniser).
+- Status: **accepted, full scope (2026-09-16)** — D-2026-09-14-d/e, D-2026-09-16-a. Both acceptance
+  lines (single-segment and single-shoulder-crossing) are met; only a cross-hole spanning MORE than
+  one shoulder remains out of scope, per the requirement's own scope boundaries.
 - Revisions:
+  - 2026-09-16 — **the shoulder-crossing acceptance line, withdrawn 2026-09-14, delivered**
+    (D-2026-09-16-a, GitHub issue #504, continuing #497). `IsectStripAt` (`src/util/brep.cpp`) gained
+    the optional second clipping bound the 2026-09-14 revision identified as missing: a coaxial-stack
+    wall band's own bite against the cutter now clips to the shoulder plane where the mouth curve's
+    near end already lands on it (rather than closing back on itself), and a cutter-lining face that
+    itself switches between two wall radii picks the correct one per longitude via the same
+    mechanism (`IsectStrip::other2`/`clipZ`). `BuildCoaxialStepRadialSubtract` — the shape whose
+    topology was already correct in the withdrawn 2026-09-14 attempt (20v/30e/10f, χ=0) — is
+    re-added using that extension, and `SubtractRadialCrossHoleThroughStack` now dispatches to it
+    for the `hiIdx == loIdx + 1` (exactly one shoulder) case, welding the result to any untouched
+    neighbours exactly as the single-segment case already did. Three defects surfaced and were fixed
+    during implementation, each caught by REQ-201's own volume-closure probe rather than passing
+    silently: (1) `IsectStripAt`'s fixed 96-sample scan window, sized from the face's own vertex
+    span, could fall short of a wall band's far (clipped-away) root, which can sit as far as the
+    cutter's own radius from the cutter's axis — widened to always reach it when a clip is active;
+    (2) the found interval was being used as the face's own material directly, the correct
+    interpretation for every PRE-EXISTING `IsectStrip` user, but for a wall band's bite it is the
+    REMOVED interval to subtract from the (mostly full) band — conflating the two silently kept far
+    too little material; (3) Gauss quadrature converges slowly across the kink where a notch pinches
+    to nothing or the active wall switches, so the integrator now locates that kink (bisection on a
+    signature that changes exactly there) and integrates each smooth side separately, rather than
+    throwing more panels at it. The one-sided detection is deliberately narrow — it fires only for a
+    single-loop face where the curve meets a plain rim at exactly ONE end (a genuine notch), never
+    when both ends coincide (the pre-existing REQ-314 B2b-2 lens/branch-pipe shapes, which mix a
+    curve with two seams in one loop but close on themselves at both ends) — an early, looser version
+    regressed four B2b-2 tests before this was narrowed. `BrepTests.cpp [req339][issue504]` — 2 new
+    cases: a cross-hole through the middle segment's shoulder-crossing case with differently-radiused
+    neighbours (volume cross-checked against an independent per-z-slice Simpson's-rule integration,
+    entirely outside the kernel's own integrator, using elementary circular-segment geometry); a
+    cross-hole spanning two shoulders confirmed to still refuse. Full suite 1116/1116 test cases, all
+    green (`GoSurveySnapTests`' one pre-existing, unrelated gizmo-translate failure predates this
+    branch).
   - 2026-09-14 — **scope narrowed to the single-segment case (D-2026-09-14-e), found during
     implementation.** Building the shoulder-crossing shape (`BuildCoaxialStepRadialSubtract`,
     attempted) produced a topologically valid, manifold, `Validate`-passing solid — the derivation
