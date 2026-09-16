@@ -5036,6 +5036,162 @@ namespace {
 
 } // namespace
 
+
+// ---------------------------------------------------------------------------------------------
+// Recognising a feature result that IS a cylinder or cone (GitHub issue #515, D-2026-09-16-c).
+//
+// `Slice` — and so `SectionLoop` — can cut a curved solid only through the cylinder/cone
+// recognisers, which read the RECIPE. A circle extruded along its normal, a rectangle revolved a
+// full turn about one of its edges and a loft between two coaxial circles are exactly the solids
+// `MakeCylinder` / `MakeCone` build, yet carried no recipe, so the same shape cut or was refused
+// depending on the command that made it. These helpers let those three operations describe a
+// result that is exactly that primitive. They run only AFTER the operation has built and validated
+// its own result, so every refusal the operation makes is unchanged, and a profile that merely
+// resembles one of these shapes fails a test here and keeps `PrimitiveKind::None`.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// A profile that is exactly one full circle: every edge an arc about ONE centre, all sweeping the
+/// same way, every vertex at the same distance from it, the sweeps totalling one turn.
+[[nodiscard]] bool ProfileIsFullCircle(const Profile& profile, Vec3* outCentre, double* outRadius) {
+  const std::size_t n = profile.vertices.size();
+  if (n < 2 || profile.edges.size() != n)
+    return false;
+  const Vec3 c = profile.edges.front().centre;
+  const double r = ray3d::Length(ray3d::Sub(profile.vertices.front(), c));
+  if (!(r > 0.0) || !std::isfinite(r))
+    return false;
+  const double tol = 1e-6 * std::max(r, 1.0);  // the kernel's own planeEps scale
+  double total = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    const ProfileEdge& e = profile.edges[i];
+    if (!e.arc || ray3d::Length(ray3d::Sub(e.centre, c)) > tol)
+      return false;
+    if ((e.sweep > 0.0) != (profile.edges.front().sweep > 0.0))
+      return false;
+    if (std::fabs(ray3d::Length(ray3d::Sub(profile.vertices[i], c)) - r) > tol)
+      return false;
+    total += e.sweep;
+  }
+  if (std::fabs(std::fabs(total) - kTwoPi) > 1e-7)
+    return false;
+  *outCentre = c;
+  *outRadius = r;
+  return true;
+}
+
+/// The right circular solid with a circle of \p rA at \p centreA and one of \p rB at \p centreB,
+/// stated the way `MakeCylinder` / `MakeCone` state it: the LARGER circle is the base (which is what
+/// `MakeCone` requires), the frame's Z runs from it to the other. False when degenerate.
+struct Conical {
+  ucs::Ucs frame;
+  double rBase = 0.0;
+  double rTop = 0.0;
+  double height = 0.0;
+  bool cylinder = false;
+};
+[[nodiscard]] bool ConicalBetween(const Vec3& centreA, double rA, const Vec3& centreB, double rB, Conical* out) {
+  const Vec3 axis = ray3d::Sub(centreB, centreA);
+  const double h = ray3d::Length(axis);
+  const double scale = std::max({h, rA, rB, 1.0});
+  if (!(h > 1e-9 * scale) || rA < 0.0 || rB < 0.0 || !(std::max(rA, rB) > 1e-9 * scale))
+    return false;
+  const bool aIsBase = rA >= rB;
+  if (!ucs::FromNormal(aIsBase ? centreA : centreB, aIsBase ? axis : ray3d::Scale(axis, -1.0), &out->frame))
+    return false;
+  out->rBase = aIsBase ? rA : rB;
+  out->rTop = aIsBase ? rB : rA;
+  out->height = h;
+  out->cylinder = std::fabs(out->rBase - out->rTop) <= 1e-6 * scale;  // the recognisers' own tolerance
+  return true;
+}
+
+/// Describe \p s as the Cylinder / Cone \p c. The topology is untouched: the recipe is description.
+void StampConicalRecipe(Solid* s, const Conical& c) {
+  s->recipe = Recipe{};
+  s->recipe.kind = c.cylinder ? PrimitiveKind::Cylinder : PrimitiveKind::Cone;
+  s->recipe.frame = c.frame;
+  s->recipe.radius = c.rBase;
+  s->recipe.radius2 = c.cylinder ? c.rBase : c.rTop;  // what BuildConical stores for a cylinder
+  s->recipe.height = c.height;
+}
+
+/// A full-turn revolve that is exactly a cylinder or cone: an all-straight profile of three or four
+/// edges with ONE edge on the axis, the profile edges leaving its ends perpendicular to the axis (the
+/// caps; a three-edge profile has one cap and an apex), and the far edge joining the rim points.
+/// Writes the two circles as (centre, radius); the apex is a circle of radius zero.
+[[nodiscard]] bool RevolveProfileIsConical(const Profile& profile, const Vec3& axisPoint, const Vec3& axisUnit,
+                                           Vec3* outCentreA, double* outRA, Vec3* outCentreB, double* outRB) {
+  const int n = static_cast<int>(profile.vertices.size());
+  if ((n != 3 && n != 4) || static_cast<int>(profile.edges.size()) != n)
+    return false;
+  for (const ProfileEdge& e : profile.edges)
+    if (e.arc)
+      return false;
+  std::vector<double> t(static_cast<std::size_t>(n));
+  std::vector<double> d(static_cast<std::size_t>(n));
+  double tMin = 1e300, tMax = -1e300, dMax = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const std::size_t k = static_cast<std::size_t>(i);
+    const Vec3 w = ray3d::Sub(profile.vertices[k], axisPoint);
+    t[k] = ray3d::Dot(w, axisUnit);
+    d[k] = ray3d::Length(ray3d::Sub(w, ray3d::Scale(axisUnit, t[k])));
+    tMin = std::min(tMin, t[k]);
+    tMax = std::max(tMax, t[k]);
+    dMax = std::max(dMax, d[k]);
+  }
+  // Scaled by the PROFILE's own extent, as Revolve's axisEps is — not by how far along the axis the
+  // picked axis point happens to lie, which would loosen the test for a point clicked far away.
+  const double tol = 1e-6 * std::max({tMax - tMin, dMax, 1e-9});
+  const auto on = [&](int i) { return d[static_cast<std::size_t>((i % n + n) % n)] <= tol; };
+  const auto tt = [&](int i) { return t[static_cast<std::size_t>((i % n + n) % n)]; };
+  const auto dd = [&](int i) { return d[static_cast<std::size_t>((i % n + n) % n)]; };
+  const auto centreAt = [&](double tv) { return ray3d::Add(axisPoint, ray3d::Scale(axisUnit, tv)); };
+
+  int onCount = 0;
+  int a = -1;  // the axis edge runs a -> a+1
+  for (int i = 0; i < n; ++i) {
+    if (on(i))
+      ++onCount;
+    if (on(i) && on(i + 1))
+      a = i;
+  }
+  if (onCount != 2 || a < 0)
+    return false;
+  const int b = a + 1;
+  if (std::fabs(tt(a) - tt(b)) <= tol)
+    return false;
+
+  if (n == 4) {
+    // b -> b+1 is one cap, a-1 -> a the other, and b+1 -> a-1 the side.
+    if (std::fabs(tt(b + 1) - tt(b)) > tol || std::fabs(tt(a - 1) - tt(a)) > tol)
+      return false;
+    *outCentreA = centreAt(tt(a));
+    *outRA = dd(a - 1);
+    *outCentreB = centreAt(tt(b));
+    *outRB = dd(b + 1);
+    return *outRA > tol && *outRB > tol;
+  }
+  // n == 3: the rim vertex shares its axial position with exactly one axis vertex; the other is
+  // the apex.
+  const int rim = b + 1;
+  if (std::fabs(tt(rim) - tt(b)) <= tol) {
+    *outCentreA = centreAt(tt(b));
+    *outCentreB = centreAt(tt(a));
+  } else if (std::fabs(tt(rim) - tt(a)) <= tol) {
+    *outCentreA = centreAt(tt(a));
+    *outCentreB = centreAt(tt(b));
+  } else {
+    return false;
+  }
+  *outRA = dd(rim);
+  *outRB = 0.0;
+  return *outRA > tol;
+}
+
+}  // namespace
+
 bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWhy) {
   if (!out)
     return false;  // a null output is a caller bug, not a user-facing reason
@@ -5213,12 +5369,22 @@ bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWh
   }
 
   AddSingleShell(&s);
-  // A feature result carries no recipe: the topology is the stored truth (ADR-046 (e)). An extrude
-  // recipe is permitted but deferred to the increment that first persists one.
+  // The topology is the stored truth (ADR-046 (e)); a recipe is added below only when the result is
+  // exactly a cylinder (ADR-046 amendment (o)).
 
   const Problem why = Validate(s);
   if (why != Problem::Ok)
     return Fail(why, outWhy);
+  // Issue #515: a circle extruded along its own normal IS a cylinder. Say so, so Slice and
+  // SectionLoop cut it the way they cut the primitive; the topology is untouched.
+  {
+    Vec3 cc{};
+    double rr = 0.0;
+    Conical c;
+    if (ProfileIsFullCircle(profile, &cc, &rr) &&
+        ConicalBetween(cc, rr, ray3d::Add(cc, ray3d::Scale(ray3d::Normalize(pl.zAxis), distance)), rr, &c))
+      StampConicalRecipe(&s, c);
+  }
   *out = std::move(s);
   return Succeed(outWhy);
 }
@@ -5430,11 +5596,33 @@ bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy) {
       s.faces.push_back(std::move(f));
     }
 
-  AddSingleShell(&s);  // one shell, no recipe — the topology is the stored truth (ADR-046 (e))
+  AddSingleShell(&s);  // one shell, no recipe — the topology is the stored truth (ADR-046 (e)); see below
 
   const Problem why = Validate(s);
   if (why != Problem::Ok)
     return Fail(why, outWhy);
+  // Issue #515: a loft between two coaxial circles on parallel planes IS a cylinder or cone. It is
+  // BUILT as one — analytic cylinder / cone faces rather than the NURBS ribbons above, with the
+  // primitive's recipe — so every planar-and-conical operation treats it as the shape it is. Only a
+  // loft that has already validated reaches this, so every refusal above stands.
+  if (profiles.size() == 2) {
+    Vec3 c0{}, c1{};
+    double r0 = 0.0, r1 = 0.0;
+    Conical c;
+    if (ProfileIsFullCircle(profiles[0], &c0, &r0) && ProfileIsFullCircle(profiles[1], &c1, &r1) &&
+        ConicalBetween(c0, r0, c1, r1, &c)) {
+      const double h = c.height;
+      const Vec3 axisU = c.frame.zAxis;
+      const Vec3 n0 = ray3d::Normalize(profiles[0].plane.zAxis);
+      const Vec3 n1 = ray3d::Normalize(profiles[1].plane.zAxis);
+      const bool coaxial = ray3d::Length(ray3d::Cross(n0, n1)) <= 1e-9 && ray3d::Length(ray3d::Cross(axisU, n0)) <= 1e-9 && h > 0.0;
+      Solid prim;
+      Problem pw = Problem::Ok;
+      if (coaxial && (c.cylinder ? MakeCylinder(c.frame, c.rBase, h, &prim, &pw)
+                                 : MakeCone(c.frame, c.rBase, c.rTop, h, &prim, &pw)))
+        s = std::move(prim);
+    }
+  }
   *out = std::move(s);
   return Succeed(outWhy);
 }
@@ -6285,6 +6473,15 @@ bool Revolve(const Profile& profile, const Vec3& axisPoint, const Vec3& axisDir,
   const Problem why = Validate(s);
   if (why != Problem::Ok)
     return Fail(why, outWhy);
+  // Issue #515: a full-turn revolve of a rectangle / right trapezoid / right triangle about one of
+  // its edges IS a cylinder or cone. Say so, so Slice and SectionLoop cut it the way they cut the primitive.
+  if (full) {
+    Vec3 ca{}, cb{};
+    double ra = 0.0, rb = 0.0;
+    Conical c;
+    if (RevolveProfileIsConical(profile, axisPoint, adir, &ca, &ra, &cb, &rb) && ConicalBetween(ca, ra, cb, rb, &c))
+      StampConicalRecipe(&s, c);
+  }
   *out = std::move(s);
   return Succeed(outWhy);
 }

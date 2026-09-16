@@ -197,7 +197,9 @@ TEST_CASE("A face with an empty general trim loop serializes without the paramLo
 TEST_CASE("A version-4 file with a malformed NURBS patch is refused, not loaded", "[brepjson][req315]") {
   brep::Solid loft;
   brep::Problem why = brep::Problem::Ok;
-  REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAt(6.0), 5.0)}, &loft, &why));
+  // Three circles: a two-circle coaxial loft is an analytic cylinder since issue #515, with no patch.
+  REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAt(6.0), 5.0), CircleProfile(PlaneAt(9.0), 4.0)},
+                     &loft, &why));
   nlohmann::json j = gsio::SolidToJson(loft);
 
   // Corrupt the first NURBS patch: a weight of zero is not a usable rational surface.

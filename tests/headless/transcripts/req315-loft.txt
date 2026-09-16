@@ -33,7 +33,9 @@ BOX -8 -8 8 8
 EXPECT SELECTED 2
 CMD LOFT
 EXPECT SOLIDS 1
-EXPECT SOLIDKIND 0 Solid
+# Issue #515 (D-2026-09-16-c): two coaxial circles loft to exactly the cylinder CYLINDER builds, and
+# say so — built with analytic faces and the primitive's recipe, so SECTION and SLICE cut it alike.
+EXPECT SOLIDKIND 0 Cylinder
 EXPECT SOLIDPROPS 0 628.3185307179587 408.4070449666731 4 6 4
 EXPECT LOG "Solid created"
 # the source circles are left in place
@@ -98,7 +100,8 @@ CLICK 303 0
 CLICK 307 0
 CMD
 EXPECT SOLIDS 3
-EXPECT SOLIDKIND 2 Solid
+# r 3 at z 0 to r 7 at z 10 on one axis: a cone frustum (issue #515).
+EXPECT SOLIDKIND 2 Cone
 EXPECT LOG "Solid created"
 
 # --- A single profile is refused, not silently swallowed -------------------------------------
