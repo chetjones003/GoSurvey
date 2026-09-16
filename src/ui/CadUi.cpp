@@ -10218,12 +10218,20 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     cmd.cmdLogLastSizeForFade = log.size();
     cmd.cmdLogLastChangeTime = ImGui::GetTime();
   }
+  // Set when F2 just opened the console this frame, so the console block below knows to jump
+  // to the newest lines immediately rather than showing wherever InputTextMultiline's internal
+  // scroll happened to be left (its default is the top, since the child window is freshly
+  // recreated open with no prior scroll position of its own).
+  bool cmdConsoleJustOpened = false;
   {
     // F2 toggles the expanded console; Ctrl+9 hides/restores the bar. ESC is left to
     // command-cancel (handled elsewhere) and never closes the console.
     ImGuiIO& iok = ImGui::GetIO();
-    if (floating && ImGui::IsKeyPressed(ImGuiKey_F2, false))
+    if (floating && ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
       cmd.cmdConsoleOpen = !cmd.cmdConsoleOpen;
+      if (cmd.cmdConsoleOpen)
+        cmdConsoleJustOpened = true;
+    }
     if (floating && iok.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_9, false))
       cmd.cmdBarVisible = !cmd.cmdBarVisible;
   }
@@ -10240,25 +10248,33 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     // Width is user-resizable (default ~half the viewport); the bar is pinned to the viewport
     // bottom (Y locked) and only slides left/right (X). Anchor is the bottom-LEFT corner.
+    // `barW`/`anchorX` are the values used to lay out THIS frame only. They must not be written
+    // back into cmd.cmdBarWidth/cmd.cmdBarAnchorX (the persisted fields) except when the user
+    // actually drags/resizes the bar (handled further below) or on first-ever init. Doing that
+    // clamp-and-store unconditionally used to corrupt the saved position/size: a transient small
+    // ImGui viewport on an early startup frame (before the window finishes async-maximizing, see
+    // the glfwMaximizeWindow comment in main.cpp) clamped the stored width/anchor down to fit
+    // that tiny frame, and the shrunken value then got written to gosurvey-user.json at exit —
+    // so the bar could drift smaller/off-center a little more on every launch.
     const float barW = std::clamp(cmd.cmdBarWidth > 1.f ? cmd.cmdBarWidth : vp->WorkSize.x * 0.5f, 320.f,
                                   std::max(360.f, vp->WorkSize.x - 16.f));
-    cmd.cmdBarWidth = barW;
     if (!cmd.cmdBarAnchorValid) {
       cmd.cmdBarAnchorX = vp->WorkPos.x + (vp->WorkSize.x - barW) * 0.5f;
       cmd.cmdBarAnchorValid = true;
     }
-    // Clamp X on-screen. Guard the upper bound: when the bar is wider than the viewport
-    // (or WorkSize is tiny on the first frame) the max would fall below the min, which is
-    // undefined for std::clamp (and asserts in debug).
+    // Clamp X on-screen for THIS frame's draw only (`anchorX`); the stored cmd.cmdBarAnchorX is
+    // left untouched so a transient small viewport cannot permanently corrupt it. Guard the upper
+    // bound: when the bar is wider than the viewport (or WorkSize is tiny on the first frame) the
+    // max would fall below the min, which is undefined for std::clamp (and asserts in debug).
     const float xMin = vp->WorkPos.x + 4.f;
     const float xMax = vp->WorkPos.x + vp->WorkSize.x - barW - 4.f;
-    cmd.cmdBarAnchorX = std::clamp(cmd.cmdBarAnchorX, xMin, std::max(xMin, xMax));
+    const float anchorX = std::clamp(cmd.cmdBarAnchorX, xMin, std::max(xMin, xMax));
     // Pin the bar's bottom edge just above the status-bar strip (Y locked) — never below it.
     // The gap matters: with the bar's bottom flush on the strip the two read as one
     // welded block, and the bar stops looking like it floats over the drawing.
     constexpr float kCmdBarLift = 10.f;
     const float bottomY = vp->WorkPos.y + vp->WorkSize.y - CadStatusBarStripHeightPx() - kCmdBarLift;
-    ImGui::SetNextWindowPos(ImVec2(cmd.cmdBarAnchorX, bottomY), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowPos(ImVec2(anchorX, bottomY), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(barW, 0.f), ImVec2(barW, FLT_MAX));  // fixed width, auto height
     ImGui::SetNextWindowBgAlpha(0.f);  // transparent; the bar background and history chips are painted manually
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 4.f));
@@ -10402,15 +10418,34 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       ImGui::GetWindowDrawList()->AddLine(ImVec2(gmx - 18.f, gy), ImVec2(gmx + 18.f, gy), gc, 1.4f);
     }
 
+    // Jump to the newest lines: on the frame the console opens (its InputTextMultiline child is
+    // freshly created with no scroll history of its own, and defaults to the top) and whenever
+    // the log grows while it stays open. SetNextWindowScroll targets the very next Begin — which
+    // InputTextMultiline's internal child window is — so this must be called right before it.
+    const bool cmdConsoleLogGrew = log.size() != cmd.commandLogLastSizeForAutoscroll;
+    if (cmdConsoleLogGrew)
+      cmd.commandLogLastSizeForAutoscroll = log.size();
+    if (cmdConsoleJustOpened || cmdConsoleLogGrew)
+      ImGui::SetNextWindowScroll(ImVec2(0.0f, FLT_MAX));
+
     ImGui::PushStyleColor(ImGuiCol_FrameBg, barFieldBg);  // the field step
     ImGui::InputTextMultiline("##CmdConsole", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
                               ImVec2(-FLT_MIN, consoleH), ImGuiInputTextFlags_ReadOnly);
     ImGui::PopStyleColor();
-  } else {
+  } else if (!log.empty()) {
     // --- Recent-history chips floating above the bar; fade out after the idle delay. ---
+    // Layout (the Dummy calls that reserve each chip's screen space) runs unconditionally
+    // whenever there is history to show, independent of `alpha`: gating the loop itself on
+    // alpha (as before) made the floating window's AlwaysAutoResize height flip between
+    // "chips shown" and "chips gone" for one frame right as each fade finished. Because
+    // SetNextWindowPos anchors this window by its BOTTOM-left corner, that one-frame height
+    // change (computed a frame late, as ImGui only knows a new AlwaysAutoResize size after
+    // End()) visibly popped the whole bar up then back down — the reported fade-out
+    // "blink"/stutter. Only the drawing below (rect + text) is gated on alpha now, so the
+    // window's height no longer moves as part of the fade itself.
     const float alpha = cmdbar::HistoryAlpha(ImGui::GetTime() - cmd.cmdLogLastChangeTime,
                                              static_cast<double>(cmd.cmdBarFadeDelaySec), 0.8);
-    if (alpha > 0.004f && !log.empty()) {
+    {
       ImDrawList* dl = ImGui::GetWindowDrawList();
       const size_t startIx = cmdbar::LogTailStart(log.size(), cmd.cmdBarHistoryLines);
       for (size_t i = startIx; i < log.size(); ++i) {
@@ -10418,9 +10453,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
         const ImVec2 ts = ImGui::CalcTextSize(s.c_str());
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float padx = 6.f, pady = 2.f;
-        dl->AddRectFilled(ImVec2(p.x - padx + 4.f, p.y - pady), ImVec2(p.x + ts.x + padx, p.y + ts.y + pady),
-                          ImGui::GetColorU32(BlueTintHex(0x222222, kCmdTint, 0.55f * alpha)), 3.f);
-        dl->AddText(p, ImGui::GetColorU32(BlueTintNeutral(ImVec4(0.86f, 0.88f, 0.92f, alpha), kCmdTint)), s.c_str());
+        if (alpha > 0.004f) {
+          dl->AddRectFilled(ImVec2(p.x - padx + 4.f, p.y - pady), ImVec2(p.x + ts.x + padx, p.y + ts.y + pady),
+                            ImGui::GetColorU32(BlueTintHex(0x222222, kCmdTint, 0.55f * alpha)), 3.f);
+          dl->AddText(p, ImGui::GetColorU32(BlueTintNeutral(ImVec4(0.86f, 0.88f, 0.92f, alpha), kCmdTint)), s.c_str());
+        }
         ImGui::Dummy(ImVec2(ts.x + padx, ts.y + pady));
       }
     }
